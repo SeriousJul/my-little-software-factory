@@ -30,7 +30,7 @@ import type {
 	TicketObligation,
 	TicketState,
 } from "./domain/ticket.ts";
-import { ignoreRefusal, obligationOf } from "./domain/ticket.ts";
+import { ignoreRefusal, ignoreWithholdsRow, obligationOf } from "./domain/ticket.ts";
 import type { HandoffChoice } from "./handoff.ts";
 import { agentNameFor, identifyHandoffAgentName } from "./naming.ts";
 import { selectTaskType } from "./task-selection.ts";
@@ -368,6 +368,78 @@ export interface HandoffTicket {
 	handoffAttemptId: string;
 	/** When the handoff's agent started, in ISO time. */
 	startedAt: string;
+}
+
+/**
+ * What one Ticket-list read gives the screen (ADR 0042, ADR 0060).
+ *
+ * One projection read serves the drawn rows, the active view the section's
+ * counts and the held-count bell take, the pile the ignore withholds, and the
+ * projection before the list rule that resolves a Ticket by identity. The
+ * list rule lives in the state module alone: no screen re-applies either cause.
+ */
+export interface TicketListViews {
+	/** The rows the Ticket section draws, in the operator's List filter. */
+	rows: Ticket[];
+	/** The active view: the machine's rows, the header's counts, and the bell. */
+	active: Ticket[];
+	/** The rows the flag names: the pile the `ignored` view shows and the header counts. */
+	ignored: Ticket[];
+	/** How many rows the ignore withholds from the active view: the hidden pile. */
+	withheld: number;
+	/** Every projected row, before the list rule: the reads that resolve a Ticket by identity. */
+	all: Ticket[];
+}
+
+/**
+ * The Ticket section's list rule, in one step over one projection (ADR 0042,
+ * ADR 0060).
+ *
+ * Two causes take a row away: a covered open Ticket - one an open fixing pull
+ * request fixes - and an ignored Ticket at rest - one the operator has judged
+ * out of the factory's way. Neither touches a Ticket with live work or a
+ * decision owed, so the row the operator reaches the Live view, the Close, and
+ * the decision from is never the one the list rule hides. What is left keeps
+ * the attention band order: the group first, then the newest external update,
+ * then the ticket identity (ADR 0050) - the order the ignored view shares and
+ * never replaces.
+ *
+ * The state's read and the in-memory shell that holds no SQLite state both
+ * come through here, so the rule is one rule and no screen re-applies either
+ * cause.
+ */
+export function listTicketViews(
+	projection: readonly Ticket[],
+	filter: TicketListFilter,
+): TicketListViews {
+	const listed = projection
+		.filter((ticket) => !isCoveredByFixingPullRequest(projection, ticket))
+		.sort(
+			(left, right) =>
+				attentionGroup(left) - attentionGroup(right) ||
+				right.externalUpdatedAt.localeCompare(left.externalUpdatedAt) ||
+				left.identity.localeCompare(right.identity),
+		);
+	const active: Ticket[] = [];
+	const ignored: Ticket[] = [];
+	let withheld = 0;
+	for (const ticket of listed) {
+		// The pile is every row the flag stands on: the ledger of what the operator
+		// put away, including a Ticket the list shows again while its work is live or
+		// its decision stays owed. The active view is the machine's read: every row
+		// the list rule leaves, which is the pile's rows except the ones the ignore
+		// withholds while they rest.
+		if (ticket.ignored) ignored.push(ticket);
+		if (ignoreWithholdsRow(ticket)) withheld += 1;
+		else active.push(ticket);
+	}
+	return {
+		rows: filter === "active" ? active : filter === "ignored" ? ignored : listed,
+		active,
+		ignored,
+		withheld,
+		all: [...projection],
+	};
 }
 
 /** The version 1 schema, kept verbatim for the v1 to v2 migration test. */
@@ -1214,42 +1286,31 @@ export class FactoryState {
 	/**
 	 * Current visible ticket projection, ordered for operator attention.
 	 *
-	 * The list rule has two causes that take a row away, read in one step
-	 * (ADR 0042, ADR 0060): a covered open ticket - one an open fixing pull
-	 * request fixes - and an ignored one - one the operator has judged out of
-	 * the factory's way. Both leave the section's counts the same way, and both
-	 * leave the attention band order the same way. The in-flight states are never
-	 * covered, so live work stays listed whatever pull requests exist.
-	 *
-	 * The List filter is the operator's view of the pile the ignore made: the
-	 * active rows, the ignored rows, or both. It is a view and says nothing about
-	 * any Ticket, so its default is the active view, and every machine read - the
-	 * Auto-handoff Top-up, the Pickup, the detail panes - reads that default
-	 * whatever the operator's screen shows.
-	 *
-	 * Within its attention group, the list orders by attention, not by rank
-	 * (ADR 0050): the newest external update first, then the ticket identity, the
-	 * order that stood before the rank. The group stays ahead, so an awaiting
-	 * decision never waits behind open work. The ignored view keeps that order
-	 * and carries no order of its own.
+	 * The one list rule, in one read: see `listTicketViews`.
 	 */
 	visibleTickets(
 		states: readonly WorkflowState[],
 		fallbackTaskType: string,
 		filter: TicketListFilter = "active",
 	): Ticket[] {
-		const tickets = this.projectedTickets(states, fallbackTaskType);
-		return tickets
-			.filter((ticket) => !isCoveredByFixingPullRequest(tickets, ticket))
-			.filter((ticket) =>
-				filter === "active" ? !ticket.ignored : filter === "ignored" ? ticket.ignored : true,
-			)
-			.sort(
-				(left, right) =>
-					attentionGroup(left) - attentionGroup(right) ||
-					right.externalUpdatedAt.localeCompare(left.externalUpdatedAt) ||
-					left.identity.localeCompare(right.identity),
-			);
+		return this.ticketListViews(states, fallbackTaskType, filter).rows;
+	}
+
+	/**
+	 * The Ticket section's list, in one projection read (ADR 0042, ADR 0060).
+	 *
+	 * `listTicketViews` holds the rule; this is the read that feeds it. The List
+	 * filter is the operator's view of the pile the ignore made, so its default
+	 * is the active view, and every machine read - the Auto-handoff Top-up, the
+	 * Pickup, the section's counts, and the held-count bell - takes that default
+	 * whatever the operator's screen shows.
+	 */
+	ticketListViews(
+		states: readonly WorkflowState[],
+		fallbackTaskType: string,
+		filter: TicketListFilter = "active",
+	): TicketListViews {
+		return listTicketViews(this.projectedTickets(states, fallbackTaskType), filter);
 	}
 
 	private membershipsFor(identity: string, state: TicketState): StoredMembership[] {
@@ -1634,13 +1695,16 @@ export class FactoryState {
 	}
 
 	/**
-	 * Whether the operator has ignored the ticket (ADR 0060).
+	 * The ignore's own gate (ADR 0060): the flag the Top-up's walks hold out.
 	 *
 	 * The one test of the flag, read from the ticket row by its identity. It
-	 * stands beside the Same-type hold as an automatic gate: the four Top-up
-	 * walks call it, and no hard start gate does - the Pickup, the start asked
-	 * for by hand, and the force-dispatch all run an ignored ticket's item, the
-	 * way they run past the hold and the cap.
+	 * stands beside the Same-type hold as an automatic gate and never as a hard
+	 * start gate - the Pickup, the start asked for by hand, and the
+	 * force-dispatch all run an ignored Ticket's item, the way they run past the
+	 * hold and the cap. The gate takes the flag, not the row's face: an ignored
+	 * Ticket whose row the list reveals for its live work is still no automatic
+	 * start, so `ticket.ignored` on a row the caller already holds answers the
+	 * same question this read does.
 	 */
 	ticketIgnored(identity: string): boolean {
 		const row = this.db.prepare("SELECT ignored FROM tickets WHERE identity = ?").get(identity) as
@@ -1706,22 +1770,19 @@ export class FactoryState {
 	}
 
 	/**
-	 * The lift (ADR 0060): the plane withdraws an ignore the Ticket has outgrown.
+	 * The pile, in one read (ADR 0060): every Ticket identity the flag stands on.
 	 *
-	 * An ignored Ticket that starts owing a decision returns to the list on its
-	 * own, because a stalled factory must never be an invisible one: the Dispatch
-	 * pause reads the completion traces and asks nothing about the list, while the
-	 * held count reads the list. The answer names the cause that pulled the row
-	 * back, or null when the Ticket stands ignored and owes nothing.
+	 * The observation cycle asks this once per cycle for the rows its walks read
+	 * by identity alone - the in-flight tickets carry no projection - and the
+	 * answer is the same flag the row's own face wears. The gate takes the flag,
+	 * not the row's face: an ignored Ticket whose row the list reveals for its
+	 * live work is still no automatic start.
 	 */
-	liftTicketIgnore(identity: string, marker: TicketMarker | null): TicketObligation | null {
-		if (!this.ticketIgnored(identity)) return null;
-		const obligation = this.ticketObligation(identity, marker);
-		if (obligation === null) return null;
-		this.db
-			.prepare("UPDATE tickets SET ignored = 0, ignored_at = NULL WHERE identity = ?")
-			.run(identity);
-		return obligation;
+	ignoredTickets(): Set<string> {
+		const rows = this.db.prepare("SELECT identity FROM tickets WHERE ignored = 1").all() as Array<{
+			identity: string;
+		}>;
+		return new Set(rows.map((row) => row.identity));
 	}
 
 	/**

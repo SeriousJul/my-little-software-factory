@@ -23,8 +23,7 @@
  * never disagree about the count.
  */
 import type { TicketState } from "./domain/ticket.ts";
-import type { HerdrAgent } from "./herdr.ts";
-import { identifyHandoffAgentName } from "./naming.ts";
+import { type HerdrAgent, ownAgentInPane } from "./herdr.ts";
 import type { ConsultationState, FactoryState } from "./state.ts";
 
 /** The Consultation states that hold a Parallel limit seat. */
@@ -56,20 +55,18 @@ export function parallelSeatCount(input: ParallelSeatCountInput): number {
 	const counted = new Set<string>();
 	let count = 0;
 	for (const ticket of inFlight) {
-		const listedAgent = ticket.paneId === null ? undefined : listedAgents.get(ticket.paneId);
-		// The ticket's own agent is the one that runs under the name the
-		// ticket's handoff expects. A different agent in the same pane id -
-		// herdr handed the closed pane's id out again - holds no seat for the
-		// ticket, the way a missing agent holds none. A name the reader
-		// cannot read keeps the pane the count has always trusted.
-		const listed =
-			listedAgent !== undefined &&
-			identifyHandoffAgentName(
-				listedAgent.name,
-				input.state.agentNameForTicket(ticket.ticketIdentity),
-			) !== "foreign";
-		const booting = !listed && input.now - Date.parse(ticket.startedAt) < input.startupGraceMs;
-		if (listed || booting) {
+		// One seat per ticket at most: the ticket's own in-flight seat counts
+		// for every unresolved claim it carries. The one missing-Agent rule the
+		// observation cycle and the list's failure badge read: the ticket's own
+		// agent is the one that runs under the name the ticket's handoff expects.
+		// A different agent in the same pane id - herdr handed the closed pane's
+		// id out again - holds no seat for the ticket, the way a missing one does.
+		const own = ownAgentInPane(
+			ticket.paneId === null ? undefined : listedAgents.get(ticket.paneId),
+			input.state.agentNameForTicket(ticket.ticketIdentity),
+		);
+		const booting = own === null && input.now - Date.parse(ticket.startedAt) < input.startupGraceMs;
+		if (own !== null || booting) {
 			count += 1;
 			counted.add(ticket.ticketIdentity);
 		}

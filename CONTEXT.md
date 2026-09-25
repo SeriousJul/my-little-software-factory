@@ -148,7 +148,8 @@ _Avoid_: disabled source, dropped source
 
 **Ignored ticket**:
 A Ticket the operator has judged out of the factory's way for the foreseeable future by their own act, until they take it back.
-Its Ticket state, its Parallel limit seat, and its source facts are unchanged: the ignore says only that the plane lists it nowhere and starts no Agent on it by itself.
+Its Ticket state, its Parallel limit seat, and its source facts are unchanged: the ignore says only that the plane starts no Agent on it by itself, and lists it nowhere while it rests.
+The ignore hides a resting row and never a live one: a Ticket with work in flight or a decision owed keeps its row beside its own marker, and it goes back into the pile when its cycle ends (ADR 0060).
 _Avoid_: hidden ticket, shelved ticket, buried, wontfix, archived, dismissed
 
 **Attention band**:

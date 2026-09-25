@@ -454,6 +454,7 @@ function decisionModalRegions(
 function sampleTicket(
 	state: "running" | "awaiting" | "open",
 	environment: "worktree" | "live-worktree" = "worktree",
+	ignored = false,
 ): Ticket {
 	const now = "2026-02-17T10:00:00.000Z";
 	return {
@@ -515,8 +516,8 @@ function sampleTicket(
 		suggestedTaskType: "implement",
 		actionable: true,
 		handoffRecoveryRequired: false,
-		ignored: false,
-		ignoredAt: null,
+		ignored,
+		ignoredAt: ignored ? "2026-02-17T10:00:00.000Z" : null,
 		leftover: null,
 	};
 }
@@ -530,6 +531,46 @@ function ticketGotoContext(paneAlive: boolean): ControlContext {
 		sourceCount: 0,
 		refreshingSourceCount: 0,
 		ticketPaneAlive: paneAlive,
+		handoffActive: false,
+		messageTruncated: false,
+		consultationTypesConfigured: true,
+	});
+}
+
+/** The Ticket-base-mode context the Ticket-ignore example runs on (ADR 0060).
+ *
+ * One row the operator can put away, one row they already put away, and the
+ * obligation the key refuses: the row's own facts answer all three, so the
+ * example shows the bar's flip beside the refusals the same key states.
+ */
+function ticketIgnoreContext(
+	state: "open" | "awaiting" | "running",
+	ignored: boolean,
+	marker: "missing" | null = null,
+): ControlContext {
+	return contextFor(ignored ? "ticket-detail" : "ticket-list", {
+		selectedTicket: sampleTicket(state, "worktree", ignored),
+		selectedTicketMarker: marker,
+		listCanMove: true,
+		detailCanScroll: true,
+		sourceCount: 0,
+		refreshingSourceCount: 0,
+		handoffActive: false,
+		messageTruncated: false,
+		consultationTypesConfigured: true,
+	});
+}
+
+/** The context the List-filter example runs on (ADR 0060): the filter's own
+ * value is what the hint reads, so one helper draws all three states. */
+function ticketFilterContext(filter: "active" | "ignored" | "all"): ControlContext {
+	return contextFor(filter === "ignored" ? "ticket-detail" : "ticket-list", {
+		selectedTicket: sampleTicket("open", "worktree", filter === "ignored"),
+		ticketListFilter: filter,
+		listCanMove: true,
+		detailCanScroll: true,
+		sourceCount: 0,
+		refreshingSourceCount: 0,
 		handoffActive: false,
 		messageTruncated: false,
 		consultationTypesConfigured: true,
@@ -843,6 +884,135 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 				),
 			];
 		},
+	},
+	{
+		// The Ticket section's `i` (ADR 0060): the bar's label flips between the
+		// Ignore an active row offers and the Un-ignore a piled row offers, and the
+		// three obligations the key refuses state their reasons on the Message line.
+		id: "ticket-ignore",
+		state: "Ticket ignore: the flip, and the three obligations the key refuses",
+		render: (columns, _holds, _inputActive, _wiring) => [
+			// The bar beside an active row: the key puts the Ticket away.
+			createElement(ActionBar, {
+				key: "ignore-bar",
+				mode: "ticket-list",
+				context: ticketIgnoreContext("open", false),
+				width: columns.contentWidth,
+			}),
+			// The bar beside a piled row: the same key takes it back.
+			createElement(ActionBar, {
+				key: "unignore-bar",
+				mode: "ticket-detail",
+				context: ticketIgnoreContext("open", true),
+				width: columns.contentWidth,
+			}),
+			// A piled row's own face: the marker rides the trailing lane beside the
+			// state badge, in the written word the no-color frame keeps.
+			createElement(SectionHeader, {
+				key: "tickets-header",
+				section: "tickets",
+				active: true,
+				terminalWidth: columns.contentWidth,
+				width: columns.contentWidth,
+				expanded: true,
+				open: 0,
+				running: 0,
+				awaiting: 0,
+				ignored: 1,
+				onToggle: () => undefined,
+			}),
+			// The three refusals, in the one sentence the key and the write share.
+			messageRowElement(
+				{
+					severity: "warning",
+					text: "the selected Ticket cannot be ignored: it awaits a decision",
+				},
+				columns.contentWidth,
+			),
+			messageRowElement(
+				{
+					severity: "warning",
+					text: "the selected Ticket cannot be ignored: its held turn awaits a decision",
+				},
+				columns.contentWidth,
+			),
+			// The awaiting and held rows, on the bars that refuse them: the key is
+			// there, dimmed, and the reason is one press away.
+			createElement(ActionBar, {
+				key: "awaiting-refused",
+				mode: "ticket-list",
+				context: ticketIgnoreContext("awaiting", false),
+				width: columns.contentWidth,
+			}),
+			// The missing Agent's refusal reads the marker the row's own badge
+			// wears, and the refused key leaves no hint on the bar.
+			messageRowElement(
+				{
+					severity: "warning",
+					text: "the selected Ticket cannot be ignored: its Agent is missing",
+				},
+				columns.contentWidth,
+			),
+			messageRowElement(
+				{
+					severity: "warning",
+					text: "the selected Ticket cannot be ignored: its Agent is missing",
+				},
+				columns.contentWidth,
+			),
+			createElement(
+				"text",
+				{ key: "ticket-ignore-note", fg: paint("subtext0") },
+				truncateToWidth(
+					"the flag is factory state on the state file, and the plane writes nothing to the source",
+					columns.contentWidth,
+				),
+			),
+		],
+	},
+	{
+		// The Ticket section's `f` (ADR 0060): the hint names the view the cycle
+		// moves to, the way the queue pause flips between Pause and Resume, and the
+		// Work queue states the two lists that own the key.
+		id: "ticket-filter",
+		state: "List filter: Show ignored, Show all, Show active, and the queue's refusal",
+		render: (columns, _holds, _inputActive, _wiring) => [
+			createElement(ActionBar, {
+				key: "filter-from-active",
+				mode: "ticket-list",
+				context: ticketFilterContext("active"),
+				width: columns.contentWidth,
+			}),
+			createElement(ActionBar, {
+				key: "filter-from-ignored",
+				mode: "ticket-detail",
+				context: ticketFilterContext("ignored"),
+				width: columns.contentWidth,
+			}),
+			createElement(ActionBar, {
+				key: "filter-from-all",
+				mode: "ticket-list",
+				context: ticketFilterContext("all"),
+				width: columns.contentWidth,
+			}),
+			// The refusal the Work queue owns: `f` answers in two lists, and this
+			// section in neither of them.
+			messageRowElement(
+				{
+					severity: "warning",
+					text: "this control is available only in the Ticket section and the Consultation section",
+				},
+				columns.contentWidth,
+			),
+			createElement(
+				"text",
+				{ key: "ticket-filter-note", fg: paint("subtext0") },
+				truncateToWidth(
+					"the filter is a session view fact: it opens on the active rows at every boot",
+					columns.contentWidth,
+				),
+			),
+		],
 	},
 	{
 		// The Consultation detail's own bodies (ADR 0025): the Session view

@@ -77,9 +77,11 @@ cursor and its focused pane.
 The Ticket header always shows the pipeline counts - open, running, and
 awaiting - with the held count appended only when it is non-zero, and the
 ignored count appended beside it, also only when it is non-zero (ADR 0060).
-The ignored cell counts the rows the List filter hides, so the header says
-the list is filtered before the operator looks for a row that is not there,
-and the pipeline counts drop the ignored rows with the list. The
+The ignored cell counts the Tickets the flag names, so the header says
+the list is filtered before the operator looks for a row that is not there.
+All four counts, and the held-count bell, read the machine's active view rather
+than the operator's List filter, so a cycle of `f` moves none of them and rings
+nothing. The
 Consultation header carries its attention facts (awaiting response,
 recovery). Both counts are computed from the in-memory projection on each
 render; neither queries the state.
@@ -112,23 +114,27 @@ auto-handoff, `r` refreshes, `g` goes to the agent's pane, `w` closes the work
 cycle of the selected ticket behind a confirmation (ADR 0031), `i` ignores the
 selected ticket or takes it back, and `f` cycles the Ticket section's List
 filter (ADR 0060), and `q` quits.
-The list rule that takes a row away has two causes in one read (ADR 0042,
-ADR 0060): a covered open ticket - one an open fixing pull request fixes - and
-an ignored one - one the operator judged out of the factory's way. The ignore
-is the operator's act on one ticket, and the flag is factory state on the state
-file: the plane writes nothing to the source for it. The ticket keeps its
-state, its Parallel limit seat, and its source facts; the row, the section's
-counts, and every automatic start - the Top-up's continuation, its re-fired
-skip, its restart, and its open-ticket add - leave it out. A start the operator
-asks for by hand still runs, and the waiting start an ignore finds in the Work
-queue leaves with the row. The key refuses a ticket that owes a decision now -
-one `awaiting`, one whose newest settled turn is held, and one whose agent is
-missing - and states that reason on the Message line; the plane lifts an ignore
-by itself when one appears, and the line names the cause that pulled the row
-back. `f` cycles the list through the active rows, the ignored rows, and both,
-and the filter opens on the active rows at every boot. An ignored row keeps its
-state badge and wears `ignored` as a trailing marker, and the detail pane names
-the ignore, the moment it was set, and the key that clears it.
+The list rule that takes a row away has two causes in one read, in the state
+module alone (ADR 0042, ADR 0060): a covered open ticket - one an open fixing
+pull request fixes - and an ignored ticket at rest - one the operator judged out
+of the factory's way. The ignore is the operator's act on one ticket, and the
+flag is factory state on the state file: the plane writes nothing to the source
+for it, and nothing clears the flag but that same key. The ticket keeps its
+state, its Parallel limit seat, and its source facts; every automatic start - the
+Top-up's continuation, its re-fired skip, its restart, and its open-ticket add -
+leaves it out. A start the operator asks for by hand still runs, and the waiting
+start an ignore finds in the Work queue leaves with the row. The key refuses a
+ticket that owes a decision now - one `awaiting`, one whose newest settled turn is
+held, and one whose agent is missing - and states that reason on the Message line.
+The ignore then hides a resting row and never a live one: an ignored ticket whose
+agent works keeps its row because there is live work to reach, one whose turn
+settled keeps its row because a decision is owed, and the row goes back into the
+pile when the cycle ends and the ticket rests. The flag stays set under both, so
+the row wears `ignored` beside its own state badge while its work runs, and the
+`i` line says whether the act took the row or kept it. `f` cycles the list through
+the active rows, the pile the flag names, and both, and the filter opens on the
+active rows at every boot. The detail pane names the ignore, the moment it was
+set, and the key that clears it.
 The ticket list no longer carries a rank: the ticket priority is retired in
 favor of the queue's order (ADR 0050), and the detail pane holds no priority
 row and the list no key that raises, lowers, or clears a rank. `+` and `-`

@@ -3,6 +3,7 @@
  * the observation loop, the Consultation operations, the app's mode line,
  * and the Parallel limit seat count.
  */
+import { identifyHandoffAgentName } from "./naming.ts";
 
 /** One agent herdr reports for a pane. */
 export interface HerdrAgent {
@@ -29,4 +30,24 @@ export interface HerdrAgent {
 	 * none. The turn log is read from it on settle (ADR 0008).
 	 */
 	sessionId: string;
+}
+
+/**
+ * The Ticket's own Agent in the pane its handoff records, as one poll's agent
+ * list reports it, or null when the pane holds none of its own (ADR 0043).
+ *
+ * Herdr hands the id of a closed pane out again: a pane the list does not
+ * report, or reports under another Agent's name, holds no Agent of the
+ * Ticket's own, the way an empty one does. A name the reader cannot read keeps
+ * the pane the reader has always trusted. This is the one rule behind the
+ * observation cycle's in-flight pass, the Top-up's Restart walk, the Parallel
+ * limit seat count, and the list's failure badge, so the four cannot drift
+ * apart about the same pane (ADR 0060).
+ */
+export function ownAgentInPane(
+	agent: HerdrAgent | undefined,
+	expectedName: string,
+): HerdrAgent | null {
+	if (agent === undefined) return null;
+	return identifyHandoffAgentName(agent.name, expectedName) === "foreign" ? null : agent;
 }

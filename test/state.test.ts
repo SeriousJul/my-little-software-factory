@@ -1875,7 +1875,7 @@ describe("factory SQLite state", () => {
 			state.close();
 		});
 
-		test("a missing Agent refuses the ignore, and the lift names the cause", () => {
+		test("a missing Agent refuses the ignore, and the flag never leaves by itself", () => {
 			const state = openFactoryState(":memory:");
 			state.initializeSources([sourceA]);
 			state.applyFetch(sourceA, success([fetched()]));
@@ -1897,14 +1897,77 @@ describe("factory SQLite state", () => {
 				reason: "the selected Ticket cannot be ignored: its Agent is missing",
 			});
 			expect(state.setTicketIgnored(ticket.identity, true, "blocked").ok).toBe(true);
-			// The lift clears the flag the moment the obligation stands, and
-			// answers with the cause; a Ticket that owes nothing keeps the flag.
-			expect(state.liftTicketIgnore(ticket.identity, null)).toBeNull();
+			// ADR 0060: nothing but the operator's own key clears the flag. The row's
+			// face is what the list rule reads, so a live or awaiting Ticket keeps its
+			// row while the flag stands, and a resting one loses it again.
 			expect(state.ticketIgnored(ticket.identity)).toBe(true);
-			expect(state.liftTicketIgnore(ticket.identity, "missing")).toBe("missing");
-			expect(state.ticketIgnored(ticket.identity)).toBe(false);
-			// A Ticket that stands unignored answers nothing at all.
-			expect(state.liftTicketIgnore(ticket.identity, "missing")).toBeNull();
+			expect(state.visibleTickets([], "implement").map((row) => row.identity)).toEqual([
+				ticket.identity,
+			]);
+			state.closeWorkCycle(ticket.identity);
+			expect(state.ticketIgnored(ticket.identity)).toBe(true);
+			expect(state.visibleTickets([], "implement")).toEqual([]);
+			// Taking the Ticket back is never refused, and it costs the flag.
+			expect(state.setTicketIgnored(ticket.identity, false, "missing")).toEqual({ ok: true });
+			expect(state.visibleTickets([], "implement").map((row) => row.identity)).toEqual([
+				ticket.identity,
+			]);
+			state.close();
+		});
+
+		/**
+		 * ADR 0060: the ignore hides a resting Ticket and never live work or a
+		 * decision owed, so no obligation is ever out of the list the counts, the
+		 * bell, and the Decision surface read. The pile the `ignored` view shows is
+		 * every row the flag stands on.
+		 */
+		test("the ignore withholds a resting row and reveals a live or awaiting one", () => {
+			const state = openFactoryState(":memory:");
+			state.initializeSources([sourceA]);
+			const rest = fetched();
+			const live = fetched("github:github.com:I_6");
+			state.applyFetch(sourceA, success([rest, live]));
+			expect(state.setTicketIgnored(rest.identity, true, null).ok).toBe(true);
+			const claim = state.claimHandoff(live.identity, choice, "open");
+			if (!claim.ok) throw new Error(claim.reason);
+			state.settleHandoff(claim.claim.attemptId, true, undefined, {
+				paneId: "pane-1",
+				tabId: "tab-1",
+				workspaceId: "ws-1",
+			});
+			expect(state.setTicketIgnored(live.identity, true, null).ok).toBe(true);
+			const identities = (filter: "active" | "ignored" | "all") =>
+				state.visibleTickets([], "implement", filter).map((ticket) => ticket.identity);
+			// The resting row leaves the active view; the live one stays for its work.
+			expect(identities("active")).toEqual([live.identity]);
+			// The pile names both: the ledger of what the operator put away.
+			expect(identities("ignored")).toEqual([live.identity, rest.identity]);
+			expect(identities("all")).toEqual([live.identity, rest.identity]);
+			// Settle the live turn: awaiting owes a decision, so its row stays in the
+			// active view, and the flag still stands on it.
+			state.settleTurn({
+				ticketIdentity: live.identity,
+				handoffId: claim.claim.attemptId,
+				taskType: "implement",
+				agentType: "pi",
+				message: "the turn is done",
+				turnLog: textLog("the turn is done"),
+				completedAt: "2026-08-31T11:00:00Z",
+			});
+			expect(identities("active")).toEqual([live.identity]);
+			expect(state.ticketObligation(live.identity, null)).toBe("awaiting");
+			expect(state.ticketIgnored(live.identity)).toBe(true);
+			// Close its cycle: the Ticket rests, and the same flag takes the row back.
+			state.applyCompletionDecision({
+				ticketIdentity: live.identity,
+				handoffId: claim.claim.attemptId,
+				decision: "closed",
+				decidedAt: "2026-08-31T11:30:00Z",
+			});
+			expect(identities("active")).toEqual([]);
+			// Both rest, and the pile keeps the list's own order: the attention group,
+			// then the newest external update (ADR 0050).
+			expect(identities("ignored")).toEqual([rest.identity, live.identity]);
 			state.close();
 		});
 

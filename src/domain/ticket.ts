@@ -339,13 +339,12 @@ export type TicketObligation = "awaiting" | "held" | "missing";
  * `obligationOf` is the one predicate: the control's availability calls it with
  * the row's facts in hand, and the state's write calls it again as the authority.
  *
- * The ignore ends where an obligation begins: the plane refuses to hide a row
- * the operator still has to act on, and it lifts an ignore that stands when
- * one appears. The facts are the ones the row's own face reads - the Ticket
- * state, the newest settled turn and its decision, and the latest poll's
- * missing-Agent marker - so the control's availability and the write's refusal
- * can never disagree. The marker is not a Ticket state: the caller passes the
- * same fact the list's failure badge wears.
+ * The ignore ends where an obligation begins: the plane refuses to put away a
+ * row the operator still has to act on. The facts are the ones the row's own
+ * face reads - the Ticket state, the newest settled turn and its decision, and
+ * the latest poll's missing-Agent marker - so the control's availability and
+ * the write's refusal can never disagree. The marker is not a Ticket state:
+ * the caller passes the same fact the list's failure badge wears.
  */
 export function obligationOf(
 	ticket: { state: TicketState; lastCompletion: Completion | null },
@@ -376,16 +375,25 @@ export function ignoreRefusal(obligation: TicketObligation | null): string | nul
 		: `the selected Ticket cannot be ignored: ${OBLIGATION_WORDS[obligation]}`;
 }
 
-/** The cause the lift names when an obligation pulls an ignored row back. */
-const OBLIGATION_CAUSES: Record<TicketObligation, string> = {
-	awaiting: "its turn settled",
-	held: "its turn is held",
-	missing: "its Agent went missing",
-};
-
-/** The cause one obligation gives, as the Message line states it. */
-export function obligationCause(obligation: TicketObligation): string {
-	return OBLIGATION_CAUSES[obligation];
+/**
+ * Whether the ignore takes this Ticket's row out of the list (ADR 0060).
+ *
+ * The ignore hides a resting Ticket and never a live one: a Ticket with an
+ * Agent in flight keeps the row its Live view, Goto, and Close hang from,
+ * because there is live work to reach, and a Ticket whose turn settled keeps
+ * the row its decision lives on. The flag stays set under both - only the
+ * operator's own key clears it - so the row wears its `ignored` marker beside
+ * its own state badge while the work runs, and goes back into the pile when
+ * the cycle ends and the Ticket rests `open` again.
+ *
+ * This is ADR 0042's shape for the same reason: the in-flight states are never
+ * covered, so live work stays listed whatever pull requests exist. Because
+ * every obligation the refusal predicate names lives on a non-`open` Ticket,
+ * the rule hides no obligation at all: an ignored Held turn never stalls the
+ * factory behind an empty list.
+ */
+export function ignoreWithholdsRow(ticket: { ignored: boolean; state: TicketState }): boolean {
+	return ticket.ignored && ticket.state === "open";
 }
 
 /**

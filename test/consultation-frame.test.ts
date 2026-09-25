@@ -65,6 +65,7 @@ import {
 	worktreeCreateJson,
 } from "./fake-runner.ts";
 import { FakeSource } from "./fake-source.ts";
+import { issueTicket, success } from "./state-fixture.ts";
 
 /** The canonical ids ConsultationRunner rewrites random launch ids to. */
 const AGENT = "consultation-00000000";
@@ -2089,6 +2090,91 @@ describe("Consultation live-worktree launch through the UI", () => {
 					expect(consultation.state).toBe("working");
 					expect(consultation.paneId).toBe("pane-c1");
 					expect(consultation.workspaceId).toBe("ws-new");
+				},
+				WIDTH,
+				32,
+				{ state, runner, config: liveConfigFor(), home },
+			);
+		} finally {
+			state.close();
+		}
+	});
+
+	/**
+	 * ADR 0060: the ignore moves a resting row, and it changes no fact. A Ticket
+	 * the operator judged out can still hold live work they asked for by hand, and
+	 * the safety read that names who owns the live checkout takes the rows the
+	 * machine reads - never the rows the Ticket list happens to draw - so the
+	 * conflict keeps naming that Ticket instead of degrading to a bare Herdr Agent.
+	 */
+	test("an ignored Ticket with live work is still named as the checkout conflict", async () => {
+		const state = openFactoryState(join(home, "state.sqlite"));
+		const inner = new FakeRunner();
+		stubLiveCheckout(inner, false);
+		stubLiveLaunchExisting(inner);
+		stubPaneReadText(inner, "pane-c1", "Agent: live answer");
+		// The Ticket's own Agent works in this exact checkout, and the Ticket is
+		// ignored: the row leaves the list, the Agent does not.
+		const ticketIdentity = "github:github.com:I_9";
+		const fetchedTicket = issueTicket(ticketIdentity, { title: "Watch agent turns" });
+		state.initializeSources([{ name: "issues", kind: "github-issues" }]);
+		state.applyFetch({ name: "issues", kind: "github-issues" }, success([fetchedTicket]));
+		const claim = state.claimHandoff(
+			ticketIdentity,
+			{
+				agentType: "pi",
+				environment: "live-worktree",
+				taskType: "implement",
+				model: "",
+				thinking: "",
+				contextWindow: "",
+			},
+			"open",
+		);
+		if (!claim.ok) throw new Error(claim.reason);
+		state.settleHandoff(claim.claim.attemptId, true, undefined, {
+			paneId: "pane-tick",
+			tabId: "tab-tick",
+			workspaceId: "ws-tick",
+		});
+		expect(state.setTicketIgnored(ticketIdentity, true, null)).toEqual({ ok: true });
+		const conflictList = JSON.stringify({
+			result: {
+				agents: [
+					{
+						pane_id: "pane-tick",
+						tab_id: "tab-tick",
+						workspace_id: "ws-tick",
+						agent: "pi",
+						agent_status: "working",
+						name: "watch-agent-turns",
+						checkout_path: checkout,
+					},
+				],
+			},
+		});
+		const runner = new ConsultationRunner(inner, conflictList);
+		try {
+			await withApp(
+				async (setup) => {
+					// The ignored Ticket holds no row in the active list the operator sees,
+					// and its Agent still holds the checkout.
+					await openLauncher(setup);
+					await awaitFrame(
+						setup,
+						(f) => f.includes("acme/factory"),
+						"the verified Repository option",
+					);
+					await launchConsultationDraft(setup, "review auth");
+					const panel = await awaitFrame(
+						setup,
+						(f) => f.includes("Live checkout conflict"),
+						"the live checkout conflict panel",
+					);
+					// The conflict names the Ticket, not a bare Herdr Agent: the identity the
+					// confirmation records is the same one the operator would read.
+					expect(frameText(panel)).toContain(`Conflict: Ticket ${ticketIdentity}`);
+					expect(frameText(panel)).not.toContain("Conflict: Herdr Agent pi (pane-tick)");
 				},
 				WIDTH,
 				32,

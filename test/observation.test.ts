@@ -1904,8 +1904,8 @@ describe("the awaiting rule", () => {
 			const { state, intents, coordinator } = rig({ autoOn: true, agents: [] });
 			state.applyFetch(source, success([fetched("github:github.com:I_6"), fetched()]));
 			// The operator ignores the Ticket while its turn is in flight, and the
-			// turn settles after: the flag stands on the awaiting row until a cycle
-			// lifts it, and the walk holds the route out either way.
+			// turn settles after: the flag stands on the awaiting row, which the list
+			// reveals because it owes a decision, and the walk holds the route out.
 			const attempt = handOut(state, "github:github.com:I_5");
 			ignore(state, "github:github.com:I_5");
 			state.settleTurn({
@@ -1923,7 +1923,7 @@ describe("the awaiting rule", () => {
 			state.close();
 		});
 
-		test("the restart walk holds an ignored in-flight Ticket out", async () => {
+		test("the restart walk holds an ignored in-flight Ticket out, and keeps holding it", async () => {
 			const { state, intents, coordinator, advance, statuses } = rig({
 				autoOn: true,
 				agents: [],
@@ -1938,23 +1938,33 @@ describe("the awaiting rule", () => {
 			// though this walk reads the in-flight tickets, not the list.
 			expect(intents.filter((intent) => intent.origin === "restart")).toEqual([]);
 			expect(state.workQueue()).toEqual([]);
-			// The cycle lifts the ignore itself, and names the cause that pulled the
-			// row back: the restart-or-abandon needs a surface the operator can reach.
-			expect(statuses.slice(before).map((status) => status.text)).toContain(
-				'"Persist source facts" is no longer ignored: its Agent went missing',
-			);
-			expect(state.ticketIgnored("github:github.com:I_5")).toBe(false);
+			// The flag is the operator's own and the plane never clears it (ADR 0060):
+			// the row is listed again because its work is live, and the gate keeps
+			// holding the automatic Restart out cycle after cycle until the operator
+			// takes the Ticket back or decides it by hand.
+			expect(state.ticketIgnored("github:github.com:I_5")).toBe(true);
+			expect(statuses.slice(before).map((status) => status.text)).toEqual([]);
+			expect(
+				state.visibleTickets([], "implement").map((ticket) => `${ticket.identity}:${ticket.state}`),
+			).toEqual(["github:github.com:I_5:handed-off"]);
+			await coordinator.tick();
+			await coordinator.tick();
+			expect(intents.filter((intent) => intent.origin === "restart")).toEqual([]);
+			// Take it back: the same walk asks for the restart in the next cycle.
+			takeBack(state, "github:github.com:I_5");
 			await coordinator.tick();
 			expect(intents.filter((intent) => intent.origin === "restart")).toHaveLength(1);
 			state.close();
 		});
 
 		/**
-		 * The lift's own seam: the observation cycle withdraws an ignore the
-		 * Ticket has outgrown, in the pass that writes the settle and the missing
-		 * facts, and names the cause on its status line.
+		 * The reveal's own seam (ADR 0060): the ignore hides a resting Ticket and
+		 * never live work or a decision owed, so a flag the operator set on a Ticket
+		 * stands through its settle and its list never holds an obligation hidden away
+		 * for the automatic walks to read - and the row goes back into the pile when
+		 * the cycle ends.
 		 */
-		test("a settle lifts the ignore, and the cycle names the cause", async () => {
+		test("a settle keeps the ignore and reveals the row the held count reads", async () => {
 			const { state, coordinator, advance, statuses } = rig({
 				autoOn: false,
 				agents: [agent("pane-implement", "idle")],
@@ -1966,29 +1976,25 @@ describe("the awaiting rule", () => {
 			const before = statuses.length;
 			await coordinator.tick();
 			expect(state.ticketState("github:github.com:I_5")).toBe("awaiting");
-			expect(state.ticketIgnored("github:github.com:I_5")).toBe(false);
-			expect(statuses.slice(before).map((status) => status.text)).toContain(
-				'"Persist source facts" is no longer ignored: its turn settled',
-			);
+			// Nothing cleared the flag: the row is listed because it owes a decision,
+			// and the obligation reads the same facts the row's face wears.
+			expect(state.ticketIgnored("github:github.com:I_5")).toBe(true);
+			expect(state.visibleTickets([], "implement").map((ticket) => ticket.identity)).toEqual([
+				"github:github.com:I_5",
+			]);
+			expect(state.ticketObligation("github:github.com:I_5", null)).toBe("awaiting");
+			// The cycle's own settle line is the news; the ignore says nothing twice.
+			expect(
+				statuses
+					.slice(before)
+					.map((status) => status.text)
+					.some((text) => text.includes("ignored")),
+			).toBe(false);
 			state.close();
 		});
 
-		test("a missing Agent lifts the ignore, and the cycle names the cause", async () => {
-			const { state, coordinator, advance, statuses } = rig({ autoOn: false, agents: [] });
-			handOut(state, "github:github.com:I_5");
-			advance(STARTUP_GRACE_MS + 1);
-			ignore(state, "github:github.com:I_5");
-			const before = statuses.length;
-			await coordinator.tick();
-			expect(state.ticketIgnored("github:github.com:I_5")).toBe(false);
-			expect(statuses.slice(before).map((status) => status.text)).toContain(
-				'"Persist source facts" is no longer ignored: its Agent went missing',
-			);
-			state.close();
-		});
-
-		test("a held settle lifts the ignore too, and names the hold", async () => {
-			const { state, coordinator, statuses } = rig({
+		test("a held settle keeps the ignore, and the row the bell reads", async () => {
+			const { state, coordinator } = rig({
 				autoOn: false,
 				agents: [agent("pane-implement", "done", "session-1")],
 				// The session record ends the turn failed: the settle rests held.
@@ -2003,12 +2009,16 @@ describe("the awaiting rule", () => {
 			});
 			handOut(state, "github:github.com:I_5");
 			ignore(state, "github:github.com:I_5");
-			const before = statuses.length;
 			await coordinator.tick();
-			expect(state.ticketIgnored("github:github.com:I_5")).toBe(false);
-			expect(statuses.slice(before).map((status) => status.text)).toContain(
-				'"Persist source facts" is no longer ignored: its turn is held',
-			);
+			// A held turn is the fact the Dispatch pause stalls every automatic start
+			// on, and the held count reads the list: an ignored held Ticket stays in
+			// that list, so the stall is never invisible (ADR 0060).
+			expect(state.ticketIgnored("github:github.com:I_5")).toBe(true);
+			expect(state.dispatchPauseActive()).toBe(true);
+			expect(state.visibleTickets([], "implement").map((ticket) => ticket.identity)).toEqual([
+				"github:github.com:I_5",
+			]);
+			expect(state.ticketObligation("github:github.com:I_5", null)).toBe("held");
 			state.close();
 		});
 
@@ -2044,16 +2054,16 @@ describe("the awaiting rule", () => {
 			// outcome stands on the trace.
 			expect(fires).toEqual(["github:github.com:I_5"]);
 			expect(state.lastCompletion("github:github.com:I_5")?.transition).toEqual(written);
-			// The settle left the Ticket awaiting a decision, so the same cycle
-			// lifted the ignore and the row is listed again.
-			expect(state.ticketIgnored("github:github.com:I_5")).toBe(false);
+			// The settle left the Ticket awaiting a decision, so its row stands in the
+			// list while the flag stays set underneath it (ADR 0060).
+			expect(state.ticketIgnored("github:github.com:I_5")).toBe(true);
 			expect(state.visibleTickets([], "implement").map((ticket) => ticket.identity)).toEqual([
 				"github:github.com:I_5",
 			]);
 			state.close();
 		});
 
-		test("an in-flight Ticket the operator ignores stays ignored while its Agent works", async () => {
+		test("an ignored resting Ticket leaves the list, and a live one keeps it", async () => {
 			const { state, coordinator } = rig({
 				autoOn: false,
 				agents: [agent("pane-implement", "working")],
@@ -2061,10 +2071,24 @@ describe("the awaiting rule", () => {
 			handOut(state, "github:github.com:I_5");
 			ignore(state, "github:github.com:I_5");
 			await coordinator.tick();
-			// Live work owes no decision yet: the flag stands, and the seat stays
-			// counted, so the Parallel limit keeps telling the truth.
+			// Live work owes no decision yet, and the flag stands on it: the row stays
+			// listed because there is live work to reach, and the seat stays counted,
+			// so the Parallel limit keeps telling the truth.
 			expect(state.ticketIgnored("github:github.com:I_5")).toBe(true);
 			expect(state.ticketState("github:github.com:I_5")).toBe("running");
+			expect(state.visibleTickets([], "implement").map((ticket) => ticket.identity)).toEqual([
+				"github:github.com:I_5",
+			]);
+			expect(state.visibleTickets([], "implement", "ignored").map((t) => t.identity)).toEqual([
+				"github:github.com:I_5",
+			]);
+			// End the cycle with the Close the row reaches: the Ticket rests `open`,
+			// and the same flag takes the row out of the active view at once.
+			state.closeWorkCycle("github:github.com:I_5");
+			expect(state.visibleTickets([], "implement")).toEqual([]);
+			expect(state.visibleTickets([], "implement", "ignored").map((t) => t.identity)).toEqual([
+				"github:github.com:I_5",
+			]);
 			state.close();
 		});
 	});
@@ -2074,7 +2098,8 @@ describe("the awaiting rule", () => {
 	 * too. Auto mode is on, the queue is empty, and an eligible ticket stands
 	 * ready - the pause alone is what keeps the cycle from adding. The resume
 	 * frees the adds again.
-	 */ test("the queue pause holds the top-up's add, and the resume adds", async () => {
+	 */
+	test("the queue pause holds the top-up's add, and the resume adds", async () => {
 		const { state, intents, coordinator } = rig({ autoOn: true, agents: [] });
 		state.setQueuePaused(true);
 		await coordinator.tick();
