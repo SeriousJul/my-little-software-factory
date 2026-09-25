@@ -1068,7 +1068,7 @@ herdr moves that client, because the workspace it was looking at no longer
 exists.
 
 `bun run lint` and `bun run typecheck` pass. `bun run test` passes in full at
-the pushed state: 2026 pass, 0 skip, 0 fail, 85 files, on Bun 1.4.2, with no
+the pushed state: 2028 pass, 0 skip, 0 fail, 85 files, on Bun 1.4.2, with no
 other `bun test` process on the machine. The screen-reader target remains
 unverified, and the terminal walks recorded earlier in this file have not been
 re-run.
