@@ -23,7 +23,7 @@ An independently collapsable list in the Main view. The Ticket section holds the
 _Avoid_: tab, pane, view, accordion, group
 
 **Section header**:
-The row that names one section of the Main view. A collapsed section is nothing but its header row. The Ticket section's header carries the pipeline counts (open, running, awaiting) and the conditional held count. The Consultation section's header carries that section's attention facts (awaiting response, recovery). The Work section's header carries the queue's depth. A click on the header toggles that section.
+The row that names one section of the Main view. A collapsed section is nothing but its header row. The Ticket section's header carries the pipeline counts (open, running, awaiting) with the conditional held count and the conditional ignored count. The Consultation section's header carries that section's attention facts (awaiting response, recovery). The Work section's header carries the queue's depth. A click on the header toggles that section.
 _Avoid_: title bar, tab label, accordion toggle, group header
 
 **List filter**:

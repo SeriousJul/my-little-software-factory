@@ -12,7 +12,7 @@ import {
 	controlsForMode,
 	guideControls,
 } from "../src/components/controls.ts";
-import type { Ticket } from "../src/domain/ticket.ts";
+import type { Ticket, TicketListFilter } from "../src/domain/ticket.ts";
 import type { Consultation } from "../src/state.ts";
 
 const values: Omit<ControlContext, "mode"> = {
@@ -62,6 +62,8 @@ const awaitingTicketWithPane = {
 	handoff: { paneId: "pane-1" },
 } as unknown as Ticket;
 const openTicket = { state: "open", handoff: null } as unknown as Ticket;
+/** A row of the state the ignore reads, with only the facts the predicate takes. */
+const rowTicket = (over: Record<string, unknown>): Ticket => ({ ...over }) as unknown as Ticket;
 
 /** The guide groups that list one control for one context. */
 function guideGroupsFor(context: ControlContext, id: string): string[] {
@@ -110,20 +112,24 @@ describe("the shared control catalogue", () => {
 			expect(controlForKey({ name: "z" }, contextFor(mode, values))).toBeUndefined();
 	});
 
-	test("d and f refuse in both Ticket modes, in the Consultation section's words", () => {
+	test("d refuses in both Ticket modes, and f cycles the Ticket section's own filter", () => {
 		for (const mode of ["ticket-list", "ticket-detail"] as const) {
 			const context = contextFor(mode, values);
 			const deleteControl = controlForKey({ name: "d" }, context);
-			const historyControl = controlForKey({ name: "f" }, context);
 			expect(deleteControl?.id).toBe("consultation-delete");
-			expect(historyControl?.id).toBe("history");
-			if (deleteControl === undefined || historyControl === undefined)
-				throw new Error("Delete and History are missing from the catalogue");
+			if (deleteControl === undefined) throw new Error("Delete is missing from the catalogue");
 			expect(availabilityFor(deleteControl, context)).toEqual({
 				available: false,
 				reason: "this control is available only in the Consultation section",
 			});
-			expect(availabilityFor(historyControl, context)).toEqual({
+			// The Ticket section owns `f` in its own modes now (ADR 0060): the key
+			// cycles the List filter, and the Consultation section's History keeps
+			// its section-only place behind it.
+			const filterControl = controlForKey({ name: "f" }, context);
+			expect(filterControl?.id).toBe("ticket-filter");
+			if (filterControl === undefined) throw new Error("the Ticket section lost its filter");
+			expect(availabilityFor(filterControl, context)).toEqual({ available: true });
+			expect(availabilityFor(controlById("history"), context)).toEqual({
 				available: false,
 				reason: "this control is available only in the Consultation section",
 			});
@@ -142,6 +148,123 @@ describe("the shared control catalogue", () => {
 			throw new Error("Delete and History are missing from the catalogue");
 		expect(availabilityFor(closedDelete, closed).available).toBe(true);
 		expect(availabilityFor(closedHistory, closed).available).toBe(true);
+	});
+
+	// The ignore's gate is one predicate (ADR 0060): the availability answers with
+	// the obligation's words, and the write reads the same rule. The catalogue
+	// test takes the facts the row's own face carries - the Ticket state, the
+	// newest settled turn, and the poll's missing marker - so the refusal cannot
+	// drift from what the list shows.
+	test("i ignores in both Ticket panes, and refuses a Ticket that owes a decision", () => {
+		for (const mode of ["ticket-list", "ticket-detail"] as const) {
+			const open = contextFor(mode, { ...values, selectedTicket: openTicket });
+			const ignore = controlForKey({ name: "i" }, open);
+			expect(ignore?.id).toBe("ticket-ignore");
+			if (ignore === undefined) throw new Error("the Ticket section lost its ignore");
+			expect(availabilityFor(ignore, open)).toEqual({ available: true });
+			// The same key on an ignored row takes the Ticket back, whatever state
+			// it rests in: clearing hides nothing.
+			const ignoredRow = contextFor(mode, {
+				...values,
+				selectedTicket: { ...openTicket, ignored: true, ignoredAt: "2026-09-24T10:00:00Z" },
+			});
+			expect(availabilityFor(ignore, ignoredRow)).toEqual({ available: true });
+			expect(controlById("ticket-ignore").barLabel?.(ignoredRow)).toBe("Un-ignore");
+			expect(controlById("ticket-ignore").barLabel?.(open)).toBe("Ignore");
+			// The three obligations, in the Message line's own words.
+			const awaiting = contextFor(mode, {
+				...values,
+				selectedTicket: rowTicket({ state: "awaiting", ignored: false, lastCompletion: null }),
+			});
+			expect(availabilityFor(ignore, awaiting)).toEqual({
+				available: false,
+				reason: "the selected Ticket cannot be ignored: it awaits a decision",
+			});
+			const held = contextFor(mode, {
+				...values,
+				selectedTicket: rowTicket({
+					state: "awaiting",
+					ignored: false,
+					lastCompletion: { cause: "failed", decision: null },
+				}),
+			});
+			expect(availabilityFor(ignore, held)).toEqual({
+				available: false,
+				reason: "the selected Ticket cannot be ignored: its held turn awaits a decision",
+			});
+			const missing = contextFor(mode, {
+				...values,
+				selectedTicket: rowTicket({ state: "running", ignored: false, lastCompletion: null }),
+				selectedTicketMarker: "missing",
+			});
+			expect(availabilityFor(ignore, missing)).toEqual({
+				available: false,
+				reason: "the selected Ticket cannot be ignored: its Agent is missing",
+			});
+			// A blocked Agent owes no decision, so the key stands.
+			const blocked = contextFor(mode, {
+				...values,
+				selectedTicket: rowTicket({ state: "running", ignored: false, lastCompletion: null }),
+				selectedTicketMarker: "blocked",
+			});
+			expect(availabilityFor(ignore, blocked)).toEqual({ available: true });
+			// No row under the cursor: the key says so, like the section's other keys.
+			expect(availabilityFor(ignore, contextFor(mode, values))).toEqual({
+				available: false,
+				reason: "no Ticket is selected",
+			});
+		}
+	});
+
+	// Story 25: the sections that do not own the keys refuse them in the
+	// catalogue's words and name them nowhere - each section's guide keeps its
+	// own shape (ADR 0060).
+	test("i and f refuse outside the Ticket section, and every other guide omits them", () => {
+		for (const mode of [
+			"consultation-list",
+			"consultation-detail",
+			"work-queue-list",
+			"work-queue-detail",
+		] as const) {
+			const context = contextFor(mode, queueValues);
+			const ignore = controlForKey({ name: "i" }, context);
+			expect(ignore?.id).toBe("ticket-ignore");
+			if (ignore === undefined) throw new Error("i answers nothing outside the Ticket section");
+			expect(availabilityFor(ignore, context)).toEqual({
+				available: false,
+				reason: "this control is available only in the Ticket section",
+			});
+			const ids = guideControls(context).map(({ control }) => control.id);
+			expect(ids).not.toContain("ticket-ignore");
+			expect(ids).not.toContain("ticket-filter");
+			const hinted = actionBarControls(mode, context).map((control) => control.id);
+			expect(hinted).not.toContain("ticket-ignore");
+			expect(hinted).not.toContain("ticket-filter");
+		}
+		// The Ticket section's own guide and bar name both keys, in each pane.
+		for (const mode of ["ticket-list", "ticket-detail"] as const) {
+			const context = contextFor(mode, { ...values, selectedTicket: openTicket });
+			const ids = guideControls(context).map(({ control }) => control.id);
+			expect(ids).toContain("ticket-ignore");
+			expect(ids).toContain("ticket-filter");
+			const hinted = actionBarControls(mode, context).map((control) => control.id);
+			expect(hinted).toContain("ticket-ignore");
+			expect(hinted).toContain("ticket-filter");
+		}
+	});
+
+	// The `f` cycle names the state it moves to, so the hint says what the key
+	// will show before the operator presses it (ADR 0060).
+	test("f names the state the Ticket section's filter moves to", () => {
+		const labels: Array<[TicketListFilter, string]> = [
+			["active", "Show ignored"],
+			["ignored", "Show all"],
+			["all", "Show active"],
+		];
+		for (const [filter, label] of labels) {
+			const context = contextFor("ticket-list", { ...values, ticketListFilter: filter });
+			expect(controlById("ticket-filter").barLabel?.(context)).toBe(label);
+		}
 	});
 
 	test("a refused key is never hinted by the bar unless the guide names it, in every base mode", () => {
@@ -254,13 +377,20 @@ describe("the shared control catalogue", () => {
 	test("d and f refuse in both Work queue modes, and its guide and bar omit them", () => {
 		for (const mode of ["work-queue-list", "work-queue-detail"] as const) {
 			const context = contextFor(mode, queueValues);
-			const historyControl = controlForKey({ name: "f" }, context);
-			expect(historyControl?.id).toBe("history");
-			if (historyControl === undefined)
+			// `f` now belongs to two lists, so the queue's refusal names both
+			// owners instead of the Consultation section alone (ADR 0060).
+			const filterControl = controlForKey({ name: "f" }, context);
+			if (filterControl === undefined)
 				throw new Error("History is missing from the Work queue modes");
-			expect(availabilityFor(historyControl, context)).toEqual({
+			expect(availabilityFor(filterControl, context)).toEqual({
 				available: false,
-				reason: "this control is available only in the Consultation section",
+				reason: "this control is available only in the Ticket section and the Consultation section",
+			});
+			// Either owner may answer the key, and the words are the same: the
+			// refusal cannot depend on which candidate the catalogue reaches first.
+			expect(availabilityFor(controlById("history"), context)).toEqual({
+				available: false,
+				reason: "this control is available only in the Ticket section and the Consultation section",
 			});
 			// The queue's own `u` and `d` reorder keys are gone (ADR 0049), so no
 			// queue key answers `d`: the Consultation's Delete resolves there and

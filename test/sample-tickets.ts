@@ -57,6 +57,8 @@ function sample(
 		handoffRecoveryRequired: false,
 		handoffCount,
 		lastCompletion,
+		ignored: false,
+		ignoredAt: null,
 		leftover: null,
 	};
 }

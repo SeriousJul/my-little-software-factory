@@ -936,6 +936,8 @@ describe("Consultation operations: live checkout confirmation lifetime", () => {
 			suggestedTaskType: "implement",
 			actionable: true,
 			handoffRecoveryRequired: false,
+			ignored: false,
+			ignoredAt: null,
 			leftover: null,
 		};
 	}

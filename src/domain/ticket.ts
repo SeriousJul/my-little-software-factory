@@ -256,8 +256,19 @@ export interface LeftoverEnvironment {
 	at: string;
 }
 
+/**
+ * Whether the operator has ignored this Ticket (ADR 0060), and the moment the
+ * ignore was set in ISO time (null while the Ticket is not ignored). The flag
+ * is factory state on the state file, written by the operator's `i` key alone:
+ * the plane writes nothing to the source.
+ */
+export interface TicketIgnoreFacts {
+	ignored: boolean;
+	ignoredAt: string | null;
+}
+
 /** The factory projection used by the control plane and handoff boundary. */
-export interface Ticket {
+export interface Ticket extends TicketIgnoreFacts {
 	/** Stable external ticket identity. */
 	identity: string;
 	title: string;
@@ -298,6 +309,84 @@ export interface Ticket {
 
 /** The marker an observation poll sets on an in-flight ticket. */
 export type TicketMarker = "blocked" | "missing";
+
+/**
+ * The Ticket section's List filter (ADR 0060): the operator's view of which
+ * rows exist in the list.
+ *
+ * It is a view fact, not factory state, and it says nothing about any Ticket:
+ * the machine's reads always take the active view, whatever the operator's
+ * screen shows, and the filter opens on `active` at every boot.
+ */
+export type TicketListFilter = "active" | "ignored" | "all";
+
+/** The next value of the Ticket section's `f` cycle. */
+export function nextTicketListFilter(filter: TicketListFilter): TicketListFilter {
+	return filter === "active" ? "ignored" : filter === "ignored" ? "all" : "active";
+}
+
+/**
+ * The decision a Ticket owes the operator right now (ADR 0060), or null when
+ * it owes none: `awaiting` for the resting state a settled turn leaves, `held`
+ * for the newest settled turn that holds its decision, and `missing` for the
+ * Agent herdr no longer reports.
+ */
+export type TicketObligation = "awaiting" | "held" | "missing";
+
+/**
+ * Whether a Ticket owes the operator a decision, in one read (ADR 0060).
+ *
+ * `obligationOf` is the one predicate: the control's availability calls it with
+ * the row's facts in hand, and the state's write calls it again as the authority.
+ *
+ * The ignore ends where an obligation begins: the plane refuses to hide a row
+ * the operator still has to act on, and it lifts an ignore that stands when
+ * one appears. The facts are the ones the row's own face reads - the Ticket
+ * state, the newest settled turn and its decision, and the latest poll's
+ * missing-Agent marker - so the control's availability and the write's refusal
+ * can never disagree. The marker is not a Ticket state: the caller passes the
+ * same fact the list's failure badge wears.
+ */
+export function obligationOf(
+	ticket: { state: TicketState; lastCompletion: Completion | null },
+	marker: TicketMarker | null,
+): TicketObligation | null {
+	if (ticket.state === "awaiting")
+		return isHeldCompletion(ticket.lastCompletion) ? "held" : "awaiting";
+	if (marker === "missing") return "missing";
+	return null;
+}
+
+/** The obligation's own fact, as one clause of the refusal's sentence. */
+const OBLIGATION_WORDS: Record<TicketObligation, string> = {
+	awaiting: "it awaits a decision",
+	held: "its held turn awaits a decision",
+	missing: "its Agent is missing",
+};
+
+/**
+ * Why a Ticket cannot be ignored, in one sentence, or null when it can (ADR 0060).
+ *
+ * The refusal's words live beside the predicate, so the control's availability
+ * and the write's authority state one sentence and cannot drift from it.
+ */
+export function ignoreRefusal(obligation: TicketObligation | null): string | null {
+	return obligation === null
+		? null
+		: `the selected Ticket cannot be ignored: ${OBLIGATION_WORDS[obligation]}`;
+}
+
+/** The cause the lift names when an obligation pulls an ignored row back. */
+const OBLIGATION_CAUSES: Record<TicketObligation, string> = {
+	awaiting: "its turn settled",
+	held: "its turn is held",
+	missing: "its Agent went missing",
+};
+
+/** The cause one obligation gives, as the Message line states it. */
+export function obligationCause(obligation: TicketObligation): string {
+	return OBLIGATION_CAUSES[obligation];
+}
 
 /**
  * The state line and its moves.

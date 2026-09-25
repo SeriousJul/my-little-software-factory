@@ -14,7 +14,8 @@
  * only aliases that mode dispatches, and they are what its hints and guide
  * rows may name.
  */
-import type { Ticket } from "../domain/ticket.ts";
+import type { Ticket, TicketListFilter, TicketMarker } from "../domain/ticket.ts";
+import { ignoreRefusal, nextTicketListFilter, obligationOf } from "../domain/ticket.ts";
 import type { Consultation, WorkQueueItem } from "../state.ts";
 import { widthOf } from "./text.ts";
 
@@ -82,6 +83,7 @@ type ControlKey =
 	| "m"
 	| "c"
 	| "f"
+	| "i"
 	| "g"
 	| "s"
 	| "p"
@@ -178,6 +180,18 @@ export interface ControlContext {
 	 * standing gives way to the agent's identity).
 	 */
 	ticketPaneForeign?: boolean;
+	/**
+	 * The failure marker the last poll set on the selected Ticket (ADR 0060):
+	 * the same fact the list row's failure badge wears. The ignore's obligation
+	 * predicate reads it, because a missing Agent is not a Ticket state, and the
+	 * refusal must name what the row's own face names.
+	 */
+	selectedTicketMarker?: TicketMarker | null;
+	/**
+	 * The Ticket section's List filter (ADR 0060): the `f` hint names the state
+	 * the cycle moves to, so the bar reads the filter that stands.
+	 */
+	ticketListFilter?: TicketListFilter;
 	handoffActive: boolean;
 	messageTruncated: boolean;
 	/** Whether the config defines any [consultation-types.<name>] block. */
@@ -313,6 +327,24 @@ export interface ControlDefinition {
 	 * the bar read the same words.
 	 */
 	queueSectionOnly?: true;
+	/**
+	 * The control belongs to the Ticket section alone (ADR 0060).
+	 *
+	 * The mirror of the two markers above, and read by the same three rules: the
+	 * other sections' modes state the Ticket section's refusal, and their guides
+	 * and bars name the control nowhere.
+	 */
+	ticketSectionOnly?: true;
+	/**
+	 * The words a section-only control states where no section owns its key.
+	 *
+	 * The standing sentence names one owning section, and that holds while one
+	 * list owns the key. The Ticket section's List filter and the Consultation
+	 * section's History answer `f` in two lists, so the Work queue - which owns
+	 * neither - states the two owners instead of one (ADR 0060). Omitted: the
+	 * marker's own sentence stands.
+	 */
+	sectionRefusal?: (mode: InteractionMode) => string;
 	/** Larger values survive narrow Action bar packing first. */
 	priority: number;
 	modes: readonly InteractionMode[];
@@ -453,6 +485,17 @@ const QUEUE_ONLY = "this control is available only in the Work queue section";
  * nothing at all.
  */
 const CONSULTATION_ONLY = "this control is available only in the Consultation section";
+/**
+ * Why `f` answers nothing in the Work queue (ADR 0060).
+ *
+ * The key has two list owners now - the Ticket section cycles its List filter,
+ * the Consultation section cycles its history - and the Work queue has neither.
+ * The standing one-section sentence is untrue for it, so both controls state
+ * these words there: the refusal cannot depend on which candidate the
+ * catalogue reaches first.
+ */
+const LIST_SECTIONS_ONLY =
+	"this control is available only in the Ticket section and the Consultation section";
 /**
  * Why a Ticket-section control answers nothing in the Consultation section.
  *
@@ -660,6 +703,31 @@ const ticketClose = (context: ControlContext): ControlAvailability => {
 		return unavailable("the selected Ticket is open: no work is in flight to close");
 	return available();
 };
+/**
+ * Why `i` answers nothing (ADR 0060): the ignore ends where an obligation
+ * begins.
+ *
+ * One predicate answers this moment and the write's refusal, so the control and
+ * the plane cannot tell the operator two stories about the same Ticket. The row
+ * reads it from its own facts: the Ticket state, the newest settled turn, and
+ * the last poll's missing-Agent marker. Taking a Ticket back is never refused -
+ * it hides nothing, and it costs the same effort as putting one away.
+ */
+const ticketIgnore = (context: ControlContext): ControlAvailability => {
+	const ticket = context.selectedTicket;
+	if (ticket === undefined) return unavailable("no Ticket is selected");
+	if (ticket.ignored) return available();
+	const refusal = ignoreRefusal(obligationOf(ticket, context.selectedTicketMarker ?? null));
+	return refusal === null ? available() : unavailable(refusal);
+};
+/**
+ * The state the Ticket section's `f` moves the List filter to (ADR 0060).
+ *
+ * The hint names the next view, the way the queue pause flips between Pause and
+ * Resume, so the key says what it shows before the operator presses it.
+ */
+const ticketFilterLabel = (context: ControlContext): string =>
+	`Show ${nextTicketListFilter(context.ticketListFilter ?? "active")}`;
 const consultationClose = (context: ControlContext): ControlAvailability => {
 	const consultation = context.selectedConsultation;
 	if (consultation === undefined) return unavailable("no Consultation is selected");
@@ -1065,6 +1133,52 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		availability: ticketClose,
 	},
 	{
+		// `i` takes the selected Ticket out of the factory's way (ADR 0060): the
+		// flag is factory state on the state file, the plane writes nothing to the
+		// source, and the same key on an ignored row puts the Ticket back.
+		id: "ticket-ignore",
+		label: "Ignore",
+		barLabel: (context) => (context.selectedTicket?.ignored === true ? "Un-ignore" : "Ignore"),
+		keys: () => ["i"],
+		keyLabel: "i",
+		scope: "control-plane",
+		actionBar: true,
+		// One rung below the section toggle and above the Launch: the ignore is a
+		// row key of the Ticket section, and the bar's ladder keeps the section's
+		// own navigation ahead of it, so a Ticket bar of 100 columns and wider
+		// names the key (ADR 0060, user story 24).
+		priority: 44,
+		modes: [...baseModes],
+		ticketSectionOnly: true,
+		availability: ticketIgnore,
+		guideNote: "hides the Ticket from the list and every automatic start",
+	},
+	{
+		// `f` cycles the Ticket section's List filter (ADR 0060): the pile the
+		// ignore made is one keypress from view in either direction. The filter
+		// is a view, not factory state, and it opens on the active rows at every
+		// boot. The Consultation section's history answers the same key in its own
+		// section, the way `w` and `g` carry one meaning per section.
+		id: "ticket-filter",
+		label: "Filter",
+		barLabel: ticketFilterLabel,
+		// The filter answers even when its own view holds nothing: an empty
+		// active list is exactly when the operator reaches for the pile.
+		keys: () => ["f"],
+		keyLabel: "f",
+		scope: "control-plane",
+		actionBar: true,
+		// The lowest rung the Ticket section's keys hold: the reveal is the rarest
+		// ask of the section's row keys, so a narrow bar packs it away before it
+		// touches the Launch, the section toggle, or the Close (ADR 0060).
+		priority: 38,
+		modes: [...baseModes],
+		ticketSectionOnly: true,
+		sectionRefusal: (mode) => (workQueueMode(mode) ? LIST_SECTIONS_ONLY : TICKET_ONLY),
+		availability: available,
+		guideNote: "cycles the Ticket list: active, ignored, all",
+	},
+	{
 		id: "section-toggle",
 		label: "Section",
 		// `x` collapses the section the cursor is in, or expands it back. The
@@ -1187,7 +1301,10 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		availability: available,
 		// A Consultation-section control: in the Ticket section the key states
 		// the section refusal, and the Ticket guide and bar omit the control.
+		// The Work queue owns neither meaning of `f`, so it states the two lists
+		// that own the key (ADR 0060).
 		consultationSectionOnly: true,
+		sectionRefusal: (mode) => (workQueueMode(mode) ? LIST_SECTIONS_ONLY : CONSULTATION_ONLY),
 	},
 	{
 		id: "consultation-close",
@@ -1775,6 +1892,7 @@ const KEY_NAMES: Record<string, string> = {
 	q: "q",
 	e: "e",
 	f: "f",
+	i: "i",
 	x: "x",
 	d: "d",
 	r: "r",
@@ -1872,9 +1990,11 @@ export function availabilityFor(
 	// same words. The Work queue's own keys state their refusal in the same
 	// way (ADR 0049, ADR 0052).
 	if (control.consultationSectionOnly === true && otherSectionMode(context.mode))
-		return unavailable(CONSULTATION_ONLY);
+		return unavailable(control.sectionRefusal?.(context.mode) ?? CONSULTATION_ONLY);
 	if (control.queueSectionOnly === true && !workQueueMode(context.mode))
 		return unavailable(QUEUE_ONLY);
+	if (control.ticketSectionOnly === true && !ticketBaseMode(context.mode))
+		return unavailable(control.sectionRefusal?.(context.mode) ?? TICKET_ONLY);
 	return control.availability(context);
 }
 
@@ -1915,7 +2035,8 @@ function omitFromGuide(mode: InteractionMode, control: ControlDefinition): boole
 function omitFromOtherSection(mode: InteractionMode, control: ControlDefinition): boolean {
 	return (
 		(otherSectionMode(mode) && control.consultationSectionOnly === true) ||
-		(!workQueueMode(mode) && control.queueSectionOnly === true)
+		(!workQueueMode(mode) && control.queueSectionOnly === true) ||
+		(!ticketBaseMode(mode) && control.ticketSectionOnly === true)
 	);
 }
 

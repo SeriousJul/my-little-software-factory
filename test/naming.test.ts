@@ -39,6 +39,8 @@ const ticket = (title: string, externalKey = "#1"): Ticket => ({
 	suggestedTaskType: "implement",
 	actionable: true,
 	handoffRecoveryRequired: false,
+	ignored: false,
+	ignoredAt: null,
 	handoffCount: 0,
 	lastCompletion: null,
 	leftover: null,

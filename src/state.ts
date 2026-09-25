@@ -25,8 +25,12 @@ import type {
 	LeftoverEnvironment,
 	SourceMembership,
 	Ticket,
+	TicketListFilter,
+	TicketMarker,
+	TicketObligation,
 	TicketState,
 } from "./domain/ticket.ts";
+import { ignoreRefusal, obligationOf } from "./domain/ticket.ts";
 import type { HandoffChoice } from "./handoff.ts";
 import { agentNameFor, identifyHandoffAgentName } from "./naming.ts";
 import { selectTaskType } from "./task-selection.ts";
@@ -41,7 +45,7 @@ import { isCoveredByFixingPullRequest, NO_LINKED_PULL_REQUEST_SKIP } from "./wor
 
 /** The schema every state file the plane opens is brought to. Exported so a
  * test can assert the stamp a migration left instead of copying the number. */
-export const SCHEMA_VERSION = 20;
+export const SCHEMA_VERSION = 21;
 type Health = SourceMembership["health"];
 
 export class StateError extends Error {
@@ -810,6 +814,20 @@ const MIGRATION_V14_TO_V15 = `
 	${WORK_QUEUE_TABLE}
 `;
 
+/**
+ * The v21 step: the ignored ticket (ADR 0060).
+ *
+ * The flag and the moment it was set ride on the ticket row, keyed by the
+ * ticket's stable identity: the operator's judgment belongs to the Ticket, not
+ * to one source's membership of it, so a refresh that drops the item and brings
+ * it back keeps the ignore, and a second plane on the same state file reads the
+ * same answer. Nothing prunes the flags: the plane already never deletes a
+ * ticket row.
+ */
+const MIGRATION_V20_TO_V21_IGNORED =
+	"ALTER TABLE tickets ADD COLUMN ignored INTEGER NOT NULL DEFAULT 0;";
+const MIGRATION_V20_TO_V21_IGNORED_AT = "ALTER TABLE tickets ADD COLUMN ignored_at TEXT;";
+
 /** Open state synchronously after creating its parent directory. */
 export function openFactoryState(path: string, now?: () => number): FactoryState {
 	try {
@@ -965,6 +983,11 @@ export class FactoryState {
 			if (this.hasColumn("tickets", "priority_override"))
 				this.db.exec(MIGRATION_V19_TO_V20_DROP_PRIORITY);
 			if (this.hasTable("referenced_issues")) this.db.exec(MIGRATION_V19_TO_V20_DROP_REFERENCED);
+			// Ask the file, not the stamp: the same build-early risk the queue's own
+			// columns carry, and each half asks on its own, so a file that holds one
+			// of the two cells heals the missing half and keeps the other.
+			if (!this.hasColumn("tickets", "ignored")) this.db.exec(MIGRATION_V20_TO_V21_IGNORED);
+			if (!this.hasColumn("tickets", "ignored_at")) this.db.exec(MIGRATION_V20_TO_V21_IGNORED_AT);
 			this.db.exec("DELETE FROM schema_version");
 			this.db.prepare("INSERT INTO schema_version(version) VALUES (?)").run(SCHEMA_VERSION);
 			this.db.exec("COMMIT");
@@ -1120,10 +1143,14 @@ export class FactoryState {
 	 * works, and the ticket must stay visible for the decision.
 	 */
 	projectedTickets(states: readonly WorkflowState[], fallbackTaskType: string): Ticket[] {
-		const rows = this.db.prepare("SELECT identity, state, work_cycle FROM tickets").all() as Array<{
+		const rows = this.db
+			.prepare("SELECT identity, state, work_cycle, ignored, ignored_at FROM tickets")
+			.all() as Array<{
 			identity: string;
 			state: TicketState;
 			work_cycle: number;
+			ignored: number;
+			ignored_at: string | null;
 		}>;
 		const tickets: Ticket[] = [];
 		for (const row of rows) {
@@ -1136,6 +1163,7 @@ export class FactoryState {
 				row.state === "open" &&
 				!pending &&
 				active.some((membership) => membership.health === "healthy");
+			const ignored = row.ignored === 1;
 			if (
 				storedMemberships.length === 0 &&
 				row.state !== "handed-off" &&
@@ -1176,6 +1204,8 @@ export class FactoryState {
 				actionable,
 				handoffRecoveryRequired: pending,
 				leftover: this.leftoverEnvironment(row.identity),
+				ignored,
+				ignoredAt: ignored ? row.ignored_at : null,
 			});
 		}
 		return tickets;
@@ -1184,20 +1214,36 @@ export class FactoryState {
 	/**
 	 * Current visible ticket projection, ordered for operator attention.
 	 *
-	 * A covered open ticket - one an open fixing pull request fixes (ADR
-	 * 0042) - leaves the list; the in-flight states are never covered, so
-	 * live work stays listed whatever pull requests exist. Within its
-	 * attention group, the list orders by attention, not by rank (ADR 0050):
-	 * the newest external update first, then the ticket identity, the order
-	 * that stood before the rank. The queue order the operator steers is the
-	 * order of work; the list shows where the operator's attention goes.
-	 * The group stays ahead, so an awaiting decision never waits behind open
-	 * work.
+	 * The list rule has two causes that take a row away, read in one step
+	 * (ADR 0042, ADR 0060): a covered open ticket - one an open fixing pull
+	 * request fixes - and an ignored one - one the operator has judged out of
+	 * the factory's way. Both leave the section's counts the same way, and both
+	 * leave the attention band order the same way. The in-flight states are never
+	 * covered, so live work stays listed whatever pull requests exist.
+	 *
+	 * The List filter is the operator's view of the pile the ignore made: the
+	 * active rows, the ignored rows, or both. It is a view and says nothing about
+	 * any Ticket, so its default is the active view, and every machine read - the
+	 * Auto-handoff Top-up, the Pickup, the detail panes - reads that default
+	 * whatever the operator's screen shows.
+	 *
+	 * Within its attention group, the list orders by attention, not by rank
+	 * (ADR 0050): the newest external update first, then the ticket identity, the
+	 * order that stood before the rank. The group stays ahead, so an awaiting
+	 * decision never waits behind open work. The ignored view keeps that order
+	 * and carries no order of its own.
 	 */
-	visibleTickets(states: readonly WorkflowState[], fallbackTaskType: string): Ticket[] {
+	visibleTickets(
+		states: readonly WorkflowState[],
+		fallbackTaskType: string,
+		filter: TicketListFilter = "active",
+	): Ticket[] {
 		const tickets = this.projectedTickets(states, fallbackTaskType);
 		return tickets
 			.filter((ticket) => !isCoveredByFixingPullRequest(tickets, ticket))
+			.filter((ticket) =>
+				filter === "active" ? !ticket.ignored : filter === "ignored" ? ticket.ignored : true,
+			)
 			.sort(
 				(left, right) =>
 					attentionGroup(left) - attentionGroup(right) ||
@@ -1584,8 +1630,98 @@ export class FactoryState {
 	 */
 	sameTypeHoldActive(identity: string, suggestedTaskType: string | null): boolean {
 		const ended = this.lastCycleEnd(identity);
-		if (ended === null) return false;
-		return ended.cause === "completed" && ended.taskType === suggestedTaskType;
+		return ended !== null && ended.cause === "completed" && ended.taskType === suggestedTaskType;
+	}
+
+	/**
+	 * Whether the operator has ignored the ticket (ADR 0060).
+	 *
+	 * The one test of the flag, read from the ticket row by its identity. It
+	 * stands beside the Same-type hold as an automatic gate: the four Top-up
+	 * walks call it, and no hard start gate does - the Pickup, the start asked
+	 * for by hand, and the force-dispatch all run an ignored ticket's item, the
+	 * way they run past the hold and the cap.
+	 */
+	ticketIgnored(identity: string): boolean {
+		const row = this.db.prepare("SELECT ignored FROM tickets WHERE identity = ?").get(identity) as
+			| { ignored: number }
+			| undefined;
+		return row?.ignored === 1;
+	}
+
+	/**
+	 * The decision one Ticket owes the operator now (ADR 0060), or null.
+	 *
+	 * The state's half of the one obligation predicate: the Ticket state, the
+	 * newest settled turn's cause and its undecided decision, and the missing-
+	 * Agent marker the caller reads from the last poll. The marker is not a
+	 * Ticket state, so it comes in as an argument - the same fact the list's
+	 * failure badge wears. The control's availability answers from the row's own
+	 * facts, and the write answers from this read, and both call one predicate.
+	 */
+	ticketObligation(identity: string, marker: TicketMarker | null = null): TicketObligation | null {
+		const row = this.db.prepare("SELECT state FROM tickets WHERE identity = ?").get(identity) as
+			| { state: TicketState }
+			| undefined;
+		if (row === undefined) return null;
+		// The marker is the row's face: only an in-flight Ticket reads a missing
+		// Agent, exactly as the list's failure badge does, so a caller that hands
+		// the poll's fact in cannot make a resting Ticket owe what it does not.
+		const inFlight = row.state === "handed-off" || row.state === "running";
+		return obligationOf(
+			{ state: row.state, lastCompletion: this.lastCompletion(identity) },
+			inFlight ? marker : null,
+		);
+	}
+
+	/**
+	 * The ignore act (ADR 0060): the flag the operator's `i` key sets and clears.
+	 *
+	 * The write is the authority, not the gate: it re-reads the obligation the
+	 * control's availability already judged, so the two moments cannot disagree
+	 * the way the claim's check and its gate cannot. Setting the flag on a Ticket
+	 * that owes a decision refuses with the obligation's own words; clearing it
+	 * always runs, because taking a Ticket back costs the same effort as putting
+	 * it away and never hides work.
+	 *
+	 * The moment the flag was set is stored with it, so the detail pane names it.
+	 */
+	setTicketIgnored(
+		identity: string,
+		ignored: boolean,
+		marker: TicketMarker | null = null,
+	): { ok: true } | { ok: false; reason: string } {
+		if (ignored) {
+			const refusal = ignoreRefusal(this.ticketObligation(identity, marker));
+			if (refusal !== null) return { ok: false, reason: refusal };
+		}
+		const row = this.db.prepare("SELECT 1 FROM tickets WHERE identity = ?").get(identity) as
+			| { 1: number }
+			| undefined;
+		if (row === undefined) return { ok: false, reason: "the ticket no longer exists" };
+		this.db
+			.prepare("UPDATE tickets SET ignored = ?, ignored_at = ? WHERE identity = ?")
+			.run(ignored ? 1 : 0, ignored ? new Date(this.now()).toISOString() : null, identity);
+		return { ok: true };
+	}
+
+	/**
+	 * The lift (ADR 0060): the plane withdraws an ignore the Ticket has outgrown.
+	 *
+	 * An ignored Ticket that starts owing a decision returns to the list on its
+	 * own, because a stalled factory must never be an invisible one: the Dispatch
+	 * pause reads the completion traces and asks nothing about the list, while the
+	 * held count reads the list. The answer names the cause that pulled the row
+	 * back, or null when the Ticket stands ignored and owes nothing.
+	 */
+	liftTicketIgnore(identity: string, marker: TicketMarker | null): TicketObligation | null {
+		if (!this.ticketIgnored(identity)) return null;
+		const obligation = this.ticketObligation(identity, marker);
+		if (obligation === null) return null;
+		this.db
+			.prepare("UPDATE tickets SET ignored = 0, ignored_at = NULL WHERE identity = ?")
+			.run(identity);
+		return obligation;
 	}
 
 	/**

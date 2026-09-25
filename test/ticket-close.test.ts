@@ -54,6 +54,8 @@ function ticket(state: TicketState, environment: (typeof ENVIRONMENT_KINDS)[numb
 		suggestedTaskType: "implement",
 		actionable: true,
 		handoffRecoveryRequired: false,
+		ignored: false,
+		ignoredAt: null,
 		leftover: null,
 	};
 }

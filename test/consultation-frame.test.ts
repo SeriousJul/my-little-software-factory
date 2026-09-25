@@ -130,6 +130,8 @@ const selectedTicket: Ticket = {
 	suggestedTaskType: "implement",
 	actionable: true,
 	handoffRecoveryRequired: false,
+	ignored: false,
+	ignoredAt: null,
 	leftover: null,
 };
 

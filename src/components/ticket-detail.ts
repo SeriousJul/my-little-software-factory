@@ -250,6 +250,16 @@ export function detailContent(
 		for (const cell of leftFacts) lines.push({ text: cell.text, fg: cell.fg });
 		for (const cell of rightFacts) lines.push({ text: cell.text, fg: cell.fg });
 	}
+	// The ignore is the operator's own fact on this Ticket (ADR 0060): the pane
+	// names it, names the moment the key wrote it, and names the key that clears
+	// it, so a row that says what it says never leaves the operator guessing.
+	// It stands in the detail even though the active list holds no row for it.
+	if (ticket.ignored) {
+		const at =
+			ticket.ignoredAt === null ? "" : ` ${ticket.ignoredAt.slice(0, 16).replace("T", " ")}`;
+		pushWrapped(`Ignored${at}: no row in the list, no automatic start`, paint("subtext0"));
+		pushWrapped("press i to take this Ticket back", paint("subtext0"));
+	}
 	// A leftover environment is what a closed cycle still has running in
 	// herdr. The detail names it, says when the control plane learned of it,
 	// and says where its cleanup lives - in herdr, not in the control plane

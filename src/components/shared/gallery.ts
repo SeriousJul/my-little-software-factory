@@ -515,6 +515,8 @@ function sampleTicket(
 		suggestedTaskType: "implement",
 		actionable: true,
 		handoffRecoveryRequired: false,
+		ignored: false,
+		ignoredAt: null,
 		leftover: null,
 	};
 }

@@ -36,6 +36,13 @@ interface SectionHeaderProps {
 	/** The held count: shown only when it is above zero (user story 15). */
 	held?: number;
 	/**
+	 * The ignored count (ADR 0060): the rows the List filter hides. Shown only
+	 * when it is above zero, the way the held count is, and it carries no bell and
+	 * no click - the header's click already toggles the section, and the held bell
+	 * carries a fact the ignore cannot hold.
+	 */
+	ignored?: number;
+	/**
 	 * The Consultation attention bell, set by the observation coordinator: a
 	 * Consultation moved to awaiting response while this app ran, or a
 	 * recovery became possible.
@@ -65,8 +72,9 @@ interface SectionHeaderProps {
  *
  * The row carries the section name, the count facts the section reports, and
  * the marker that says the section is expanded. The Tickets section reports
- * steady counts - open, running, awaiting - plus the held count with its
- * bell, and the Consultations section reports the Consultation facts with
+ * steady counts - open, running, awaiting - plus the conditional ignored count
+ * the List filter hides (ADR 0060) and the held count with its bell, and the
+ * Consultations section reports the Consultation facts with
  * their bell and the new-output fact (user stories 11 through 16). The row
  * truncates at the end rather than wrapping: the Main view's rows are fixed,
  * and a truncation must never hide the section name at the row's start. A
@@ -88,6 +96,7 @@ export function SectionHeader({
 	waiting = 0,
 	paused = false,
 	held = 0,
+	ignored = 0,
 	bell = false,
 	heldBell = false,
 	newOutput = false,
@@ -109,13 +118,14 @@ export function SectionHeader({
 					? `awaiting response: ${awaitingResponse}  recovery: ${recovery}`
 					: `awaiting ${awaitingResponse}  recovery ${recovery}`;
 	// The section name leads so a truncation never hides it, the held count
-	// shows only when it is above zero (a steady zero holds no row), and the
-	// bells sit by the facts they ring on.
+	// shows only when it is above zero (a steady zero holds no row), the ignored
+	// count shows beside it for the same reason (ADR 0060), and the bells sit by
+	// the facts they ring on.
 	const facts =
 		section === "tickets"
-			? `  ${counts}${held > 0 ? `  ${wide ? `held: ${held}` : `held ${held}`}` : ""}${
-					heldBell ? "  !!!" : ""
-				}`
+			? `  ${counts}${ignored > 0 ? `  ${wide ? `ignored: ${ignored}` : `ignored ${ignored}`}` : ""}${
+					held > 0 ? `  ${wide ? `held: ${held}` : `held ${held}`}` : ""
+				}${heldBell ? "  !!!" : ""}`
 			: section === "work"
 				? `  ${counts}`
 				: `  ${counts}${bell ? "  !!!" : ""}${newOutput ? "  new output" : ""}`;
