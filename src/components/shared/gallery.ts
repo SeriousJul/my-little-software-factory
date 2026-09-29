@@ -1754,15 +1754,14 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 				automatic: false,
 			};
 			// The Consultation item's row (issue #90): its force-dispatch runs its
-			// own pickup seam and never parks on the herdr seat, so the bar stands
-			// on it while a Handoff runs.
+			// own pickup seam and never parks on the herdr seat.
 			const consultation: WorkQueueItem = {
 				kind: "consultation",
 				position: 1,
 				consultationId: "c1c1c1c1-1111-4111-8111-111111111111",
 				enqueuedAt: "2026-02-17T10:01:00.000Z",
 			};
-			const bar = (key: string, handoffActive: boolean, selected: WorkQueueItem | null) =>
+			const bar = (key: string, selected: WorkQueueItem | null) =>
 				createElement(ActionBar, {
 					key,
 					mode: "work-queue-list",
@@ -1773,28 +1772,24 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 						workQueueDepth: selected === null ? 0 : 1,
 						sourceCount: 0,
 						refreshingSourceCount: 0,
-						handoffActive,
+						handoffActive: false,
 						messageTruncated: false,
 						consultationTypesConfigured: true,
 					}),
 					width: columns.contentWidth,
 				});
 			return [
-				// The hint in its states: available on an item, dimmed while a
-				// Handoff holds the environment seat for a Handoff item, standing on
-				// a Consultation item in the same moment, and dimmed on an empty
-				// queue.
-				bar("force-dispatch-available", false, item),
-				bar("force-dispatch-busy", true, item),
-				bar("force-dispatch-consultation-busy", true, consultation),
-				bar("force-dispatch-empty", false, null),
-				// The words the refusals carry on the Message line: a refused key
+				// The hint in its states: available on an item, standing on a
+				// Consultation item in the same moment, and dimmed on an empty
+				// queue. A Handoff in flight holds no force-dispatch (ADR 0064):
+				// the seat it runs on answers by the module's own seat rules, so
+				// the hint stands while one runs.
+				bar("force-dispatch-available", item),
+				bar("force-dispatch-consultation", consultation),
+				bar("force-dispatch-empty", null),
+				// The words the refusal carries on the Message line: a refused key
 				// says its catalogue reason on the line the operator already
 				// watches.
-				messageRowElement(
-					{ severity: "warning", text: "a Handoff is active" },
-					columns.contentWidth,
-				),
 				messageRowElement(
 					{ severity: "warning", text: "no queue item is under the cursor" },
 					columns.contentWidth,

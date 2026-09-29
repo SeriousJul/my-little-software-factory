@@ -500,6 +500,70 @@ describe("the decision modal's region and the log's floor", () => {
 		);
 	});
 
+	// The route's standing fact (ADR 0064): while the route is alive, the row
+	// reads as the fact line that names where it stands, and the live
+	// confirmable row stands again the moment the route dies.
+	describe("the route's standing on the region (ADR 0064)", () => {
+		/** The position the dense turn's route hands off to, by state. */
+		const positionOf = (state: Ticket["state"]): Ticket => {
+			const ticket = SAMPLE_TICKETS.find(
+				(candidate) => candidate.state === state && candidate.identity !== awaitingTicket.identity,
+			);
+			if (ticket === undefined) throw new Error(`sample tickets lost their ${state} position`);
+			return ticket;
+		};
+
+		/** The dense turn's route pointed at the position of the given state. */
+		const routedAt = (state: Ticket["state"]): Ticket => {
+			const transition = denseTicket.lastCompletion?.transition;
+			if (transition === null || transition === undefined)
+				throw new Error("the dense ticket lost its transition");
+			return {
+				...denseTicket,
+				lastCompletion: {
+					...shortLogCompletion,
+					transition: { ...transition, positionTicketIdentity: positionOf(state).identity },
+				},
+			};
+		};
+
+		test("a living route reads as the fact line, not the row", async () => {
+			const position = positionOf("running");
+			await withApp(
+				async (setup) => {
+					const frame = await openSettled(setup);
+					// The route runs on its position ticket: the row reads as the
+					// fact line that names the standing, and takes no key.
+					expect(frame).toContain("the route is running on its position ticket");
+					expect(frame).not.toContain("Handoff: fix");
+					// The region holds the rows that stand always: Close, selected
+					// by default, then Goto.
+					expect(frame).toContain("❯ Close");
+					expect(frame).toContain("Goto");
+				},
+				FLOOR_WIDTH,
+				21,
+				{ initialTickets: [routedAt("running"), position] },
+			);
+		});
+
+		test("a dead route stands as the live row again", async () => {
+			const position = positionOf("open");
+			await withApp(
+				async (setup) => {
+					const frame = await openSettled(setup);
+					// The position holds no handoff and nothing waits for it: the
+					// route is dead, and the confirmable row stands again.
+					expect(frame).not.toContain("the route is running on its position ticket");
+					expect(frame).toContain("Handoff: fix");
+				},
+				FLOOR_WIDTH,
+				21,
+				{ initialTickets: [routedAt("open"), position] },
+			);
+		});
+	});
+
 	test("a transition that did not complete stands the Re-fire row on the region (ADR 0054)", async () => {
 		const noFireTicket: Ticket = {
 			...awaitingTicket,

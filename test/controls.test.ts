@@ -500,30 +500,33 @@ describe("the shared control catalogue", () => {
 
 	test("Enter is the force-dispatch on a queue row, and it keeps its refusals", () => {
 		// The force-dispatch (issue #89) is the queue's only meaning of Enter, in
-		// the pane that holds the rows. For a Handoff item it refuses while a
-		// Handoff holds the environment seat, the way the Ticket section's Hand
-		// off does; a Consultation item never parks on that seat, so the refusal
-		// does not reach it (issue #90). On an empty queue it carries the
-		// queue's row keys' one reason.
+		// the pane that holds the rows. A Handoff in flight holds no
+		// force-dispatch (ADR 0064): the seat it runs on answers by the
+		// module's own seat rules, the way the pickup's does, and a Consultation
+		// item runs its own pickup seam and never parks on the herdr seat
+		// (issue #90). On an empty queue it carries the queue's row keys' one
+		// reason.
 		const control = controlForKey({ name: "return" }, contextFor("work-queue-list", queueValues));
 		expect(control?.id).toBe("queue-force-dispatch");
 		if (control === undefined) throw new Error("the queue lost its force-dispatch");
 		expect(availabilityFor(control, contextFor("work-queue-list", queueValues))).toEqual({
 			available: true,
 		});
-		const busy = contextFor("work-queue-list", { ...queueValues, handoffActive: true });
-		expect(availabilityFor(control, busy)).toEqual({
-			available: false,
-			reason: "a Handoff is active",
-		});
-		// The Consultation item stands in the same moment: its start runs its
-		// own pickup seam, the way a launcher submit does, and a Handoff in
-		// flight holds no seat it waits on.
-		const busyConsultation = contextFor("work-queue-list", {
-			...queueConsultationValues,
-			handoffActive: true,
-		});
-		expect(availabilityFor(control, busyConsultation)).toEqual({ available: true });
+		// The ask never waits on a run (ADR 0064): a Handoff in flight holds no
+		// Handoff item, and the Consultation item stands in the same moment, the
+		// way a launcher submit does.
+		expect(
+			availabilityFor(
+				control,
+				contextFor("work-queue-list", { ...queueValues, handoffActive: true }),
+			),
+		).toEqual({ available: true });
+		expect(
+			availabilityFor(
+				control,
+				contextFor("work-queue-list", { ...queueConsultationValues, handoffActive: true }),
+			),
+		).toEqual({ available: true });
 		expect(
 			availabilityFor(control, contextFor("work-queue-list", queueConsultationValues)),
 		).toEqual({ available: true });
@@ -554,6 +557,46 @@ describe("the shared control catalogue", () => {
 		expect(entry?.control.guideNote).toBe(
 			"starts the item over a full Parallel limit; a failure leaves the queue",
 		);
+	});
+
+	test("the ask controls never wait on a run, and the normal Quit does (ADR 0064)", () => {
+		// A Handoff in flight holds no ask: Hand off, Decide, the route edit,
+		// and the queue force-dispatch each answer by their own rules - the
+		// claim, the state, the seat - and only the normal Quit, which tears
+		// the process down mid-run, gates on the fact.
+		const busy = { handoffActive: true };
+		const open = rowTicket({ state: "open", handoff: null, actionable: true });
+		expect(
+			availabilityFor(
+				controlById("handoff"),
+				contextFor("ticket-list", { ...values, ...busy, selectedTicket: open }),
+			),
+		).toEqual({ available: true });
+		expect(
+			availabilityFor(
+				controlById("decide-completion"),
+				contextFor("ticket-list", { ...values, ...busy, selectedTicket: awaitingTicketWithPane }),
+			),
+		).toEqual({ available: true });
+		expect(
+			availabilityFor(
+				controlById("override"),
+				contextFor("ticket-list", { ...values, ...busy, selectedTicket: open }),
+			),
+		).toEqual({ available: true });
+		expect(
+			availabilityFor(
+				controlById("queue-force-dispatch"),
+				contextFor("work-queue-list", { ...queueValues, ...busy }),
+			),
+		).toEqual({ available: true });
+		// The Quit is the one control that waits on a run, with its own words.
+		const quit = controlById("quit");
+		expect(availabilityFor(quit, contextFor("ticket-list", { ...values, ...busy }))).toEqual({
+			available: false,
+			reason: "normal Quit is unavailable during a Handoff",
+		});
+		expect(availabilityFor(quit, contextFor("ticket-list", values))).toEqual({ available: true });
 	});
 
 	test("the Ticket guide omits Delete and History, and the Consultation guide keeps them", () => {

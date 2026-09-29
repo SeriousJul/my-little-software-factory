@@ -2190,7 +2190,7 @@ describe("the override panel", () => {
 			props,
 		);
 	});
-	test("e while a handoff is in flight is refused on the Message line", async () => {
+	test("e opens the Override panel while a handoff is in flight (ADR 0064)", async () => {
 		const runner = new FakeRunner();
 		stubCheckout(runner);
 		stubLiveHandoff(runner);
@@ -2199,20 +2199,24 @@ describe("the override panel", () => {
 		await withApp(
 			async (setup) => {
 				await pressEnter(setup, "the in-flight status", "handing off");
-				// The panel is refused while the handoff is in flight. The
-				// refusal is an operation Warning, and active progress
-				// outranks it (user story 51), so the Handoff's own Working
-				// keeps the line: the run in flight is never erased by an
-				// answer. The refresh variant in test/message-line.test.ts
-				// reads the refusal itself once the progress clears.
+				// The ask never waits on a run (ADR 0064): the Override panel
+				// opens while the handoff runs, and the run in flight keeps its
+				// Working line beside it: the answer never erases the work in
+				// flight (user story 51).
 				setup.mockInput.pressKey("e");
-				await awaitFrame(setup, (f) => !frameText(f).includes("❯ Agent"), "the refusal to run");
-				const refused = setup.captureCharFrame();
-				expect(messageRowOf(refused)).toContain("Working: handing off");
-				// The panel never opens: the Action bar's dimmed Override hint is
-				// permanent, so the refusal is read from the panel's row.
-				expect(refused).not.toContain("❯ Agent");
-				// The first handoff still settles.
+				const opened = await awaitFrame(
+					setup,
+					(f) => frameText(f).includes("❯ Agent"),
+					"the override panel",
+				);
+				expect(messageRowOf(opened)).toContain("Working: handing off");
+				// Esc gives the bar back, and the first handoff still settles.
+				await press(
+					setup,
+					"escape",
+					"the panel to close",
+					(f) => !frameText(f).includes("❯ Agent"),
+				);
 				await awaitFrame(setup, handoffSettled, "the handoff to settle");
 			},
 			WIDTH,

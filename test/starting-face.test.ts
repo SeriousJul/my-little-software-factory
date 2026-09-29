@@ -431,7 +431,7 @@ describe("the Starting window's timeline", () => {
 		app.state.close();
 	});
 
-	test("a workflow route over a held turn wears the face, and a failed start gives the held face back", async () => {
+	test("a workflow route over a held turn wears the face, and a failed start ends the held face (ADR 0064)", async () => {
 		// The settled turn's transition wrote the position on this ticket: the
 		// decision modal offers its handoff as the last row (ADR 0027).
 		const outcome: TransitionOutcome = {
@@ -505,19 +505,26 @@ describe("the Starting window's timeline", () => {
 				// The claim's face outranks the held badge while the start
 				// stands...
 				expect(badgeRow(claimed)).not.toContain("held");
-				// ...and a failed start gives the held face back: the window
-				// closed, and the state rules decide the resting face.
+				// ...and a failed start closes the window: the state rules decide
+				// the resting face, and it is no longer the held one. The
+				// decision recorded at the ask (ADR 0064), so the turn is decided
+				// and the ticket wears the plain awaiting badge: the operator
+				// already chose.
 				await releaseHeld(gate);
 				const back = await awaitFrame(
 					setup,
-					(f) => badgeRow(f).includes("held") && face(f) === null,
-					"the held face to return",
+					(f) => face(f) === null && messageRowOf(f).includes("was not run"),
+					"the face to return",
 				);
 				// The route's failed start drops through the queue's drop
 				// (ADR 0049), with the herdr reason behind it.
 				expect(messageRowOf(back)).toContain(
 					'Warning: queued handoff for "Persist source facts" was not run: error: the pane is gone',
 				);
+				expect(badgeRow(back)).toContain("[awaiting]");
+				expect(badgeRow(back)).not.toContain("held");
+				// And the decision stands where the ask put it.
+				expect(app.state.lastCompletion(identity)?.decision).toBe("handed-off");
 			},
 			WIDTH,
 			HEIGHT,

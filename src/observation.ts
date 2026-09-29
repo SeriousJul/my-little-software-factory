@@ -1504,7 +1504,14 @@ export class ObservationCoordinator {
 	private continuationPosition(ticket: Ticket): Ticket | null {
 		const config = this.config();
 		const completion = this.state.lastCompletion(ticket.identity);
-		if (completion === null || completion.decision !== null) return null;
+		if (completion === null) return null;
+		// A decided turn decides nothing - except an auto route whose start
+		// dropped (ADR 0064): the decision stands at the ask, and a drop left
+		// the route unrun, so the walk re-offers the same turn and the existing
+		// position checks below answer the rest. Every other decision holds the
+		// turn: the route's position is in flight, and its state and handoff
+		// checks hold it out.
+		if (completion.decision !== null && completion.decision !== "auto-handed-off") return null;
 		if (isHeldCompletion(completion)) return null;
 		const outcome = completion.transition ?? null;
 		if (this.decideAwaiting(this.state.handoffCount(ticket.identity), outcome) !== "route")

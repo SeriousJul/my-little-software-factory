@@ -220,6 +220,11 @@ export interface ControlContext {
 	 * the cycle moves to, so the bar reads the filter that stands.
 	 */
 	ticketListFilter?: TicketListFilter;
+	/**
+	 * True while a Handoff holds the seat. The fact the normal Quit gates on
+	 * (ADR 0064): the ask controls no longer wait on a run, and the Quit is
+	 * the one control that tears the process down mid-run.
+	 */
 	handoffActive: boolean;
 	messageTruncated: boolean;
 	/** Whether the config defines any [consultation-types.<name>] block. */
@@ -413,12 +418,12 @@ const panelMode = (mode: InteractionMode) =>
  * step, so it names that step instead of the state rule. In the panel's own
  * modes, Enter confirms the panel's ticket, not the list's selection, so the
  * state rule belongs to the claim: it re-checks the panel's ticket when the
- * confirm lands.
+ * confirm lands. A Handoff in flight holds no ask (ADR 0064): the start it
+ * guards answers by its own claim, seat, and cleanup rules.
  */
 const handoffEligibility =
 	(awaitingReason?: string) =>
 	(context: ControlContext): ControlAvailability => {
-		if (context.handoffActive) return unavailable("a Handoff is active");
 		if (panelMode(context.mode)) return available();
 		const ticket = context.selectedTicket;
 		if (ticket === undefined) return unavailable("no Ticket is selected");
@@ -434,9 +439,12 @@ const handoffEligibility =
 		return available();
 	};
 
-/** A settled Ticket uses Enter to decide its completed work, not to hand it off. */
+/**
+ * A settled Ticket uses Enter to decide its completed work, not to hand it
+ * off. A Handoff in flight holds no decision (ADR 0064): the decision rows
+ * answer by their own rules, and the turn decides through its own close.
+ */
 const completionEligibility = (context: ControlContext): ControlAvailability => {
-	if (context.handoffActive) return unavailable("a Handoff is active");
 	// A Group header holds no Ticket (issue #159), and the refusal is this
 	// catalogue's own words, not a surface that swallows the key.
 	if (context.selectedTicket === undefined) return unavailable("no Ticket is selected");
@@ -600,22 +608,16 @@ const queueRemove = (context: ControlContext): ControlAvailability =>
  *
  * The force-dispatch is the queue's only meaning of Enter, and it starts the
  * item now, over a full Parallel limit: every hard start check the pickup
- * runs still runs, only the cap is skipped. For a Handoff item, a Handoff
- * already in flight holds the shared environment seat, and the key refuses
- * rather than queue the item behind it, the way the Ticket section's Hand off
- * refuses the same fact. A cleanup that holds the seat while a Handoff does
- * not still lets the key through: the module parks the claim, and the item
- * leaves the queue when that parked start settles. A Consultation item runs
- * its own pickup seam and never parks on the herdr seat, so the refusal does
- * not reach it: a Consultation start stands while a Handoff is active, the
- * way a launcher submit does (ADR 0034, issue #90). An empty queue refuses
- * with the one reason the operator can act on, like the queue's other row
- * keys.
+ * runs still runs, only the cap is skipped. A Handoff in flight holds no
+ * force-dispatch (ADR 0064): the seat it runs on answers by the module's own
+ * seat and cleanup rules, the way the pickup's does, and a Consultation item
+ * runs its own pickup seam and never parks on the herdr seat (ADR 0034,
+ * issue #90). An empty queue refuses with the one reason the operator can
+ * act on, like the queue's other row keys.
  */
 const queueForceDispatch = (context: ControlContext): ControlAvailability => {
 	const item = context.selectedWorkQueueItem;
 	if (item === null || item === undefined) return unavailable("no queue item is under the cursor");
-	if (item.kind === "handoff" && context.handoffActive) return unavailable("a Handoff is active");
 	return available();
 };
 const refresh = (context: ControlContext): ControlAvailability => {
