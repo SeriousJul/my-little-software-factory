@@ -11,8 +11,15 @@ import { isHeldCause, type TurnEndCause, type TurnLogEntry } from "../turn-log.t
  * completion for a decision. The operator or an auto-close decision closes
  * the ticket back to `open` with the work cycle incremented, so the cycle
  * never ends in a resting `done` (ADR 0005).
+ *
+ * A route ask leaves `awaiting` for `queued`, the state where the turn is
+ * decided and the route's start waits in the Work queue for its pickup or
+ * runs on its position ticket. The pickup's start settles it: to
+ * `handed-off` in its own cycle when the route runs on the ticket's own new
+ * position, and to `open` with the cycle incremented when the route runs on
+ * a different ticket (ADR 0067).
  */
-export const TICKET_STATES = ["open", "handed-off", "running", "awaiting"] as const;
+export const TICKET_STATES = ["open", "handed-off", "running", "awaiting", "queued"] as const;
 export type TicketState = (typeof TICKET_STATES)[number];
 
 export const ENVIRONMENT_KINDS = ["live-worktree", "worktree", "container"] as const;
@@ -430,19 +437,20 @@ export function ignoreWithholdsRow(ticket: TicketIgnoreFacts & { state: TicketSt
  *
  * It is the invisible rank the ticket list and its Groups both read, never a
  * visible thing: a Group presents this order and never makes a new one
- * (ADR 0059). Awaiting work comes first, then the states an Agent holds in
- * flight with the running turn ahead of the handoff that started it, then open
- * work the factory can act on, then open work it cannot. A state the plane has
- * no band for stands last, so a fact it does not know cannot outrank a
- * decision.
+ * (ADR 0059). Awaiting work comes first, then the in-flight states with the
+ * queued wait ahead of the running turn and the running turn ahead of the
+ * handoff that started it (ADR 0067), then open work the factory can act on,
+ * then open work it cannot. A state the plane has no band for stands last, so
+ * a fact it does not know cannot outrank a decision.
  */
 export function attentionBand(ticket: Ticket): number {
 	if (ticket.state === "awaiting") return 0;
-	if (ticket.state === "running") return 1;
-	if (ticket.state === "handed-off") return 2;
-	if (ticket.state === "open" && ticket.actionable) return 3;
-	if (ticket.state === "open") return 4;
-	return 5;
+	if (ticket.state === "queued") return 1;
+	if (ticket.state === "running") return 2;
+	if (ticket.state === "handed-off") return 3;
+	if (ticket.state === "open" && ticket.actionable) return 4;
+	if (ticket.state === "open") return 5;
+	return 6;
 }
 
 /**
@@ -458,18 +466,23 @@ export function externalKeyNumber(key: string): number | null {
  * The ticket's second rank inside its Attention band, smaller stands first
  * (ADR 0050 for the live bands, ADR 0065 for the open ones).
  *
- * The live bands - awaiting, running, and handed-off - keep the rank ADR 0050
- * made: the newest external update first, the update as a negative epoch so
- * the newest is the smallest. The open bands order by the ticket number
- * ascending, the ticket whose key names no number after every numbered one:
- * the number never changes under a refresh, so the rows of the open pile hold
- * their place. The live ranks are negative and the open ranks non-negative,
- * so a Group's smallest rank always stands in the regime of its best band
- * (ADR 0059's Group reads the rank of the best row it holds through this one
- * number).
+ * The live bands - awaiting, queued, running, and handed-off - keep the rank
+ * ADR 0050 made: the newest external update first, the update as a negative
+ * epoch so the newest is the smallest. The open bands order by the ticket
+ * number ascending, the ticket whose key names no number after every numbered
+ * one: the number never changes under a refresh, so the rows of the open pile
+ * hold their place. The live ranks are negative and the open ranks
+ * non-negative, so a Group's smallest rank always stands in the regime of its
+ * best band (ADR 0059's Group reads the rank of the best row it holds through
+ * this one number).
  */
 export function ticketListRank(ticket: Ticket): number {
-	if (ticket.state === "awaiting" || ticket.state === "running" || ticket.state === "handed-off") {
+	if (
+		ticket.state === "awaiting" ||
+		ticket.state === "queued" ||
+		ticket.state === "running" ||
+		ticket.state === "handed-off"
+	) {
 		const ms = Date.parse(ticket.externalUpdatedAt);
 		return -(Number.isNaN(ms) ? 0 : ms);
 	}
@@ -507,6 +520,12 @@ export function holdsDecision(ticket: Ticket): boolean {
  *   turn in the same cycle.
  * - awaiting -> running: the poll saw the agent working again on its
  *   still-pending turn.
+ * - awaiting -> queued: the route ask landed the decision and enqueued the
+ *   start (ADR 0067).
+ * - queued -> open: the close ended the cycle the route routed from, or the
+ *   route's start went live on a different ticket (ADR 0067).
+ * - queued -> handed-off: the route's start went live on the ticket's own
+ *   new position, in its own cycle (ADR 0067).
  *
  * A settle may land directly from handed-off: an agent can finish inside
  * one poll interval, before a working observation ever saw it. The settle
@@ -522,7 +541,8 @@ const TRANSITIONS: Record<TicketState, readonly TicketState[]> = {
 	open: ["handed-off"],
 	"handed-off": ["running", "awaiting", "open"],
 	running: ["awaiting", "open"],
-	awaiting: ["open", "handed-off", "running"],
+	awaiting: ["open", "handed-off", "running", "queued"],
+	queued: ["open", "handed-off"],
 };
 
 /** Whether a ticket may move from one state to another. */

@@ -460,7 +460,7 @@ function groupTicket(
 	number: number,
 	repository: string,
 	title: string,
-	state: "open" | "running" | "awaiting",
+	state: "open" | "running" | "awaiting" | "queued",
 	taskType: string,
 ): Ticket {
 	const base = sampleTicket(state);
@@ -503,7 +503,7 @@ function heldCompletion(): Completion {
 
 /** The Ticket the Ticket-Goto and Ticket-Close examples render under. */
 function sampleTicket(
-	state: "running" | "awaiting" | "open",
+	state: "running" | "awaiting" | "open" | "queued",
 	environment: "worktree" | "live-worktree" = "worktree",
 	ignored = false,
 ): Ticket {
@@ -534,12 +534,15 @@ function sampleTicket(
 						workspaceId: "ws-t",
 						herdrName: "fix-the-layout-math",
 					},
-		workCycle: 1,
+		workCycle: state === "queued" ? 2 : 1,
 		handoffCount: 1,
 		// An `awaiting` Ticket holds the settled turn the Close decision records
 		// on, so the confirmation's first line can name the turn that settled.
+		// A `queued` Ticket holds the same settled turn with the route's
+		// decision recorded on it (ADR 0067): the wait is the route's start,
+		// and the turn is decided while it waits.
 		lastCompletion:
-			state === "awaiting"
+			state === "awaiting" || state === "queued"
 				? {
 						taskType: "implement",
 						transition: null,
@@ -553,7 +556,7 @@ function sampleTicket(
 						turnLog: [{ kind: "text", text: "The turn is done." }],
 						cause: "completed",
 						detail: "",
-						decision: null,
+						decision: state === "queued" ? "auto-handed-off" : null,
 					}
 				: null,
 		description: "",
@@ -1315,6 +1318,25 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 		],
 	},
 	{
+		// Ticket Close on a routed ticket (ADR 0067): the turn is decided, and
+		// its route stands in the queue. The close ends the cycle the route
+		// routed from and takes the waiting item with it, so the cancel row
+		// names the route it keeps.
+		id: "ticket-close-queued",
+		state: "Ticket Close: the turn is decided, and the route stands queued",
+		rows: 17,
+		render: (_columns, _holds, _inputActive, _wiring) => [
+			createElement(ActionPanel, {
+				key: "close-queued",
+				message: null,
+				inputActive: false,
+				...ticketCloseDialog(sampleTicket("queued")),
+				onAction: () => undefined,
+				onCancel: () => undefined,
+			}),
+		],
+	},
+	{
 		// Enter on an interrupted opening: the panel offers the retry of the
 		// opening this run left behind, and the close that confirms first
 		// because the Agent may still be alive.
@@ -1511,7 +1533,7 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 		// header, where the bar names the fold and no Ticket is selected.
 		id: "ticket-groups",
 		state: "grouped list, collapsed Group with a held count, and the cursor on a header",
-		rows: 26,
+		rows: 29,
 		render: (columns) => {
 			const listed = [
 				groupTicket(1, "acme/billing", "Webhook retry policy", "open", "implement"),
@@ -1519,8 +1541,12 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 					...groupTicket(2, "acme/billing", "Hold the failed turn", "awaiting", "implement"),
 					lastCompletion: heldCompletion(),
 				},
-				groupTicket(3, "acme/factory", "Split the gallery view", "open", "review"),
-				groupTicket(4, "acme/factory", "Park the legacy importer", "running", "fix"),
+				// The queued row is the routed ticket's wait (ADR 0067): the turn
+				// is decided, the route's start stands in the queue, and the row
+				// reads the state itself.
+				groupTicket(3, "acme/factory", "Route the settled review", "queued", "review"),
+				groupTicket(4, "acme/factory", "Split the gallery view", "open", "review"),
+				groupTicket(5, "acme/factory", "Park the legacy importer", "running", "fix"),
 			];
 			const bar = (key: string, header: boolean) =>
 				createElement(ActionBar, {
@@ -1550,7 +1576,7 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 					rows: ticketRows(listed, "repository", {}),
 					selectedIndex: 1,
 					focused: true,
-					height: 9,
+					height: 12,
 					markerOf: () => null,
 					limitReached: () => false,
 					starting: () => false,

@@ -54,10 +54,14 @@ const SETTLE_GRACE_MS = 30;
  * never drawn, and the ticket's Starting window wears the spinner face in
  * its place instead. The frames the sample data carries a `handed-off`
  * ticket, so a frame with every badge also carries one face.
+ *
+ * `queued` is not among them either: the sample data holds no queued
+ * ticket, and the badge the state paints stands in the gallery's queued
+ * example, the way the plane's own control states stand (ADR 0067).
  */
-const STATE_BADGES = TICKET_STATES.filter((state) => state !== "handed-off").map(
-	(state) => `[${state}]`,
-);
+const STATE_BADGES = TICKET_STATES.filter(
+	(state) => state !== "handed-off" && state !== "queued",
+).map((state) => `[${state}]`);
 
 /**
  * The spinner face a ticket's Starting window wears in place of its state

@@ -201,6 +201,11 @@ interface HandoffDetails {
 	workspaceId?: string | null;
 	/** The herdr name the agent started under. */
 	agentName?: string | null;
+	/**
+	 * The ticket the started handoff routes from, or null when the start is no
+	 * route or its position is the started ticket itself (ADR 0067).
+	 */
+	routeFromIdentity?: string | null;
 }
 
 export const CONSULTATION_STATES = [
@@ -1278,10 +1283,11 @@ export class FactoryState {
 	 * from this projection: the rule that withholds a covered ticket's row
 	 * applies to the operator's list alone.
 	 *
-	 * Tickets that hold in-flight work or a pending decision (handed-off,
-	 * running, awaiting) keep their memberships even when every source has
-	 * gone inactive: an agent can close or change its source item while it
-	 * works, and the ticket must stay visible for the decision.
+	 * Tickets that hold in-flight work, a pending decision, or a route's wait
+	 * (handed-off, running, awaiting, queued) keep their memberships even when
+	 * every source has gone inactive: an agent can close or change its source
+	 * item while it works, and the ticket must stay visible for the decision
+	 * or the wait (ADR 0067).
 	 */
 	projectedTickets(states: readonly WorkflowState[], fallbackTaskType: string): Ticket[] {
 		const rows = this.db
@@ -1309,7 +1315,8 @@ export class FactoryState {
 				storedMemberships.length === 0 &&
 				row.state !== "handed-off" &&
 				row.state !== "running" &&
-				row.state !== "awaiting"
+				row.state !== "awaiting" &&
+				row.state !== "queued"
 			)
 				continue;
 			const facts = [...storedMemberships].sort(
@@ -1389,7 +1396,7 @@ export class FactoryState {
 
 	private membershipsFor(identity: string, state: TicketState): StoredMembership[] {
 		const where =
-			state === "handed-off" || state === "running" || state === "awaiting"
+			state === "handed-off" || state === "running" || state === "awaiting" || state === "queued"
 				? ""
 				: "AND m.active = 1";
 		const rows = this.db
@@ -2698,11 +2705,12 @@ export class FactoryState {
 			// recorded its decision when it started, and this close ends the
 			// cycle the turn routed from. The recorded decision stands - a fact
 			// is not rewritten - but the cycle still ends. The move runs only
-			// from awaiting, so a repeated close changes nothing.
+			// from the resting or waiting states the decision leaves, so a
+			// repeated close changes nothing (ADR 0067).
 			if (input.decision === "closed" || input.decision === "auto-closed") {
 				const ended = this.db
 					.prepare(
-						"UPDATE tickets SET state = 'open', work_cycle = work_cycle + 1 WHERE identity = ? AND state = 'awaiting'",
+						"UPDATE tickets SET state = 'open', work_cycle = work_cycle + 1 WHERE identity = ? AND state IN ('awaiting', 'queued')",
 					)
 					.run(input.ticketIdentity);
 				if (Number(ended.changes) > 0) return true;
@@ -2760,7 +2768,36 @@ export class FactoryState {
 				)
 				.run(input.ticketIdentity);
 		}
-		// handed-off and auto-handed-off: the handoff's settle moves the state.
+		// A route decision lands its wait (ADR 0067): the settled ticket leaves
+		// awaiting for queued in the same write that lands the decision, and the
+		// guard on awaiting keeps a re-confirm of a dead route a no-op.
+		if (input.decision === "handed-off" || input.decision === "auto-handed-off") {
+			this.db
+				.prepare("UPDATE tickets SET state = 'queued' WHERE identity = ? AND state = 'awaiting'")
+				.run(input.ticketIdentity);
+		}
+		// The other handoff decisions move nothing: the handoff's settle moves
+		// the state.
+	}
+
+	/**
+	 * Remove the route's waiting item for one settled ticket (ADR 0067): the
+	 * workflow-origin item that names the ticket as its route from, or, for a
+	 * route onto the ticket's own position, the item the ticket names itself.
+	 * The open-origin item the ticket may also wait with is not a route's, and
+	 * stays. Returns whether an item left the queue.
+	 */
+	removeWorkflowRouteItem(settledTicketIdentity: string): boolean {
+		return this.transaction(() => {
+			const result = this.db
+				.prepare(
+					"DELETE FROM work_queue WHERE origin = 'workflow' AND (route_from_identity = ? OR ticket_identity = ?)",
+				)
+				.run(settledTicketIdentity, settledTicketIdentity);
+			if (result.changes === 0) return false;
+			this.repackWorkQueuePositions();
+			return true;
+		});
 	}
 
 	/**
@@ -2876,10 +2913,15 @@ export class FactoryState {
 						"the ticket's source has not been re-read since its last cycle ended; wait for the source refresh",
 				};
 		}
-		if (origin === "workflow" && ticket.state !== "awaiting" && ticket.state !== "open")
+		if (
+			origin === "workflow" &&
+			ticket.state !== "awaiting" &&
+			ticket.state !== "open" &&
+			ticket.state !== "queued"
+		)
 			return {
 				ok: false,
-				reason: `only open or awaiting tickets can be handed off along a workflow (this one is ${ticket.state})`,
+				reason: `only open, awaiting, or queued tickets can be handed off along a workflow (this one is ${ticket.state})`,
 			};
 		if (origin === "restart" && ticket.state !== "handed-off" && ticket.state !== "running")
 			return {
@@ -2966,9 +3008,21 @@ export class FactoryState {
 			if (agentStarted) {
 				this.db
 					.prepare(
-						"UPDATE tickets SET state = 'handed-off' WHERE identity = ? AND state IN ('open', 'awaiting')",
+						"UPDATE tickets SET state = 'handed-off' WHERE identity = ? AND state IN ('open', 'awaiting', 'queued')",
 					)
 					.run(attempt.ticket_identity);
+				// The route's settled ticket ends its cycle at the start (ADR 0067):
+				// a route to a different ticket returns it to open with the cycle
+				// incremented, in the same write that hands the started ticket off.
+				// The move is guarded on queued, so a double settle changes nothing.
+				const routeFrom = details?.routeFromIdentity ?? null;
+				if (routeFrom !== null) {
+					this.db
+						.prepare(
+							"UPDATE tickets SET state = 'open', work_cycle = work_cycle + 1 WHERE identity = ? AND state = 'queued'",
+						)
+						.run(routeFrom);
+				}
 				this.db
 					.prepare(
 						"INSERT OR REPLACE INTO handoffs(attempt_id, ticket_identity, work_cycle, choice_json, started_at, pane_id, tab_id, workspace_id, herdr_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",

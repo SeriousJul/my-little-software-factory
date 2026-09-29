@@ -1928,13 +1928,15 @@ export function App({
 	};
 
 	/**
-	 * Close the work cycle of an `awaiting` Ticket: the `closed` decision on its
-	 * settled turn, then the Close cleanup.
+	 * Close the work cycle of an `awaiting` or `queued` Ticket: the `closed`
+	 * decision on its settled turn, then the Close cleanup.
 	 *
 	 * One function runs the close the Decision modal's Close row offers and the
 	 * one key `w` confirms (ADR 0031): the two routes are the same operation, so
 	 * they cannot drift. The Close cleanup goes through the dispatch seat, which
-	 * already holds it behind a Handoff of the same ticket.
+	 * already holds it behind a Handoff of the same ticket. A queued ticket
+	 * loses its waiting route item in the same answer: a closed cycle never
+	 * leaves a live start in the queue (ADR 0067).
 	 */
 	const closeDecidedCycle = (ticket: Ticket) => {
 		if (state === undefined) return;
@@ -1944,6 +1946,7 @@ export function App({
 			decision: "closed",
 			decidedAt: new Date().toISOString(),
 		});
+		if (applied && ticket.state === "queued") state.removeWorkflowRouteItem(ticket.identity);
 		replaceTickets();
 		if (!applied) {
 			setWarningMessage(`ticket ${ticket.identity} already decided`);
@@ -2006,7 +2009,7 @@ export function App({
 		// The projection before the list rule: the row can leave the list while the
 		// confirmation stands, and the Close still runs on the Ticket it named.
 		const ticket = findTicket(asked.identity) ?? asked;
-		if (ticket.state === "awaiting") {
+		if (ticket.state === "awaiting" || ticket.state === "queued") {
 			closeDecidedCycle(ticket);
 			return;
 		}
@@ -3190,6 +3193,14 @@ export function App({
 	const decideCompletion = (context: ControlContext) => {
 		const ticket = context.selectedTicket;
 		if (ticket === undefined) return;
+		if (ticket.state === "queued") {
+			// The decision is already recorded: the factory decides nothing more,
+			// in auto mode or in manual. The screen shows where the route stands
+			// and the turn log, the way it shows them on an awaiting ticket
+			// (ADR 0067).
+			setPanel({ kind: "decision", identity: ticket.identity });
+			return;
+		}
 		const taskType = taskTypeOf(ticket);
 		if (autoModeRef.current) {
 			// The factory decides the ticket itself: the operator gets the
@@ -3899,15 +3910,20 @@ export function App({
 		panel?.kind === "live" && panelTicket !== undefined
 			? panelTicket.state === "open"
 				? "closed"
-				: panelTicket.state === "awaiting"
-					? autoMode ||
-						(panelTicket.lastCompletion?.transition?.fired === true &&
-							panelTicket.lastCompletion?.transition?.autoAdvance === true)
-						? "stream"
-						: "decision"
-					: markerOf(panelTicket) === "missing"
-						? "missing"
-						: "stream"
+				: panelTicket.state === "queued"
+					? // The route confirm moves the ticket under this screen, and the
+						// screen reads the decision body it left behind, in auto mode
+						// or in manual alike (ADR 0067).
+						"decision"
+					: panelTicket.state === "awaiting"
+						? autoMode ||
+							(panelTicket.lastCompletion?.transition?.fired === true &&
+								panelTicket.lastCompletion?.transition?.autoAdvance === true)
+							? "stream"
+							: "decision"
+						: markerOf(panelTicket) === "missing"
+							? "missing"
+							: "stream"
 			: "closed";
 	const liveDecision =
 		panelTicket !== undefined && liveMode === "decision" ? decisionFor(panelTicket) : undefined;

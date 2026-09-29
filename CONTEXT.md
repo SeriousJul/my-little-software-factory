@@ -23,7 +23,7 @@ An independently collapsable list in the Main view. The Ticket section holds the
 _Avoid_: tab, pane, view, accordion, group
 
 **Section header**:
-The row that names one section of the Main view. A collapsed section is nothing but its header row. The Ticket section's header carries the pipeline counts (open, running, awaiting) with the conditional held count and its bell, then the conditional ignored count - the machine's own fact first, so a short row cuts the count of the pile and never a decision the operator owes. The Consultation section's header carries that section's attention facts (awaiting response, recovery). The Work section's header carries the queue's depth. A click on the header toggles that section.
+The row that names one section of the Main view. A collapsed section is nothing but its header row. The Ticket section's header carries the pipeline counts (open, running, awaiting) with the conditional held count and its bell, then the conditional ignored count - the machine's own fact first, so a short row cuts the count of the pile and never a decision the operator owes. A `queued` ticket takes no count of its own: it has left the awaiting count at the route ask, and the waiting fact is the Work section's own depth (ADR 0067). The Consultation section's header carries that section's attention facts (awaiting response, recovery). The Work section's header carries the queue's depth. A click on the header toggles that section.
 _Avoid_: title bar, tab label, accordion toggle, group header
 
 **List filter**:
@@ -68,8 +68,8 @@ The control plane copies a mouse selection to the clipboard when the operator re
 _Avoid_: copy-on-select, select-to-copy, clipboard selection
 
 **Decision modal**:
-The near-fullscreen Interaction mode above an awaiting ticket: the turn log, the label facts the Transition wrote, and the rows the operator confirms: close, goto, and, when the ticket's new position offers a task, the handoff of that task.
-The route row stands live while its route is dead and reads as a fact line while the route lives: waiting in the Work queue, starting, or running on its position ticket (ADR 0064).
+The near-fullscreen Interaction mode above an awaiting or queued ticket: the turn log, the label facts the Transition wrote, and the rows the operator confirms: close, goto, and, when the ticket's new position offers a task, the handoff of that task.
+The route row stands live while its route is dead and reads as a fact line while the route lives: waiting in the Work queue, starting, or running on its position ticket (ADR 0064). A ticket the route confirm moves to `queued` keeps this screen open on its own surface (ADR 0067).
 `e` on a handoff row edits that route's settings before it starts.
 _Avoid_: action panel, decision popup
 
@@ -86,6 +86,7 @@ _Avoid_: action bar, action region, button row, footer
 **Live view**:
 The near-fullscreen Interaction mode above a `handed-off` or `running` ticket: the live Agent view of the ticket's agent, streamed, and the one row it proposes: Goto.
 When the turn settles for the operator, the same screen carries the decision: the border re-titles from `Live:` to `Decision:` in place, the Body pane holds the Turn log, and the Decision region stands at the box's floor. When the agent goes missing it carries the Missing modal. A settled turn the factory decides for itself keeps the streaming body under the `Live:` border.
+The route confirm moves the ticket to `queued` under this screen, and the screen then reads the decision body in both modes; the missing, closed, and stream modes never read a `queued` ticket (ADR 0067).
 _Avoid_: watch, live log, agent stream
 
 **Missing modal**:
@@ -155,7 +156,7 @@ The pile is the ledger of the operator's own acts: every flagged Ticket stands i
 _Avoid_: hidden ticket, shelved ticket, buried, wontfix, archived, dismissed
 
 **Attention band**:
-The ticket list's first sort: awaiting tickets first, then the in-flight states, running before handed-off, then open actionable tickets, then open tickets that are not actionable.
+The ticket list's first sort: awaiting tickets first, then the in-flight states, queued before running and running before handed-off, then open actionable tickets, then open tickets that are not actionable. The `queued` ticket rides the in-flight band: its decision is made, and its work is on its way (ADR 0067).
 Within its band the list sorts by the band's own second rank (ADR 0050, ADR 0065): the live bands by newest external update, the open bands by ticket number ascending with the no-number ticket last, and the ticket identity breaks the tie.
 _Avoid_: attention group, list bucket, triage group
 
@@ -188,13 +189,16 @@ A cycle can hold several handoffs. Close or abandon ends the cycle and returns t
 _Avoid_: ticket generation, run
 
 **Ticket state**:
-The position of a ticket in the factory: `open`, `handed-off`, `running`, `awaiting`.
+The position of a ticket in the factory: `open`, `handed-off`, `running`, `awaiting`, `queued`.
 The external source's own state is a separate source fact, not a ticket state.
 _Avoid_: status, phase
 
 **Awaiting**:
 The ticket state where the agent has settled its turn, the last message is captured, and no completion decision is made yet.
+A route ask leaves this state for `queued` in the same write that lands the decision (ADR 0067).
 _Avoid_: finished, pending review
+
+
 
 **Agent**:
 An autonomous program that executes a Ticket or leads a Consultation.
@@ -246,6 +250,7 @@ _Avoid_: blocked, idle, done
 
 **Queued**:
 The Consultation state where the Consultation waits in the Work queue for its pickup: a free Parallel limit seat, or the queue's resume while the queue pause stands. It holds no environment and no Agent until the pickup starts it (ADR 0049, ADR 0052).
+The ticket's routed wait takes this word (ADR 0067): the ticket state where the ticket's turn is decided and its route's start waits in the Work queue for its pickup, or runs on its position ticket. It holds no Agent and wears no missing marker: the pickup's start settles it, to `handed-off` in its own cycle when the route runs on its own new position, and to `open` with an incremented cycle when the route runs on a different ticket.
 _Avoid_: pending, waiting to start
 
 **Unscheduled**:
@@ -308,7 +313,8 @@ The ticket's row and detail wear the spinner face in place of their state badge 
 _Avoid_: boot, launch, pending, startup
 
 **Queue wait**:
-The window in which a ticket's start waits in the Work queue for its pickup: a free Parallel limit seat, or the queue's resume while the queue pause stands. The settled ticket's route takes the wait too: the item the route's ask enqueues holds its place there, and the settled ticket wears the window while it waits (ADR 0064).
+The window in which a ticket's start waits in the Work queue for its pickup: a free Parallel limit seat, or the queue's resume while the queue pause stands.
+The open ticket's manual start takes the window: the item the ask enqueues holds its place there, and the ticket keeps its `open` state and wears the `queued` badge in place of the state badge while it waits (ADR 0064, ADR 0067). The routed ticket's wait is the `queued` state itself, not a window over another state (ADR 0067).
 Every start takes the wait before the pickup starts it, and a free seat starts it in the same tick (ADR 0049).
 The ticket keeps its state, and its row and detail wear the `queued` badge in place of their state badge, the way the Starting window wears the spinner face. The badge is not a ticket state: the section counts, the pickup gate, and the state file all keep the ticket's state.
 _Avoid_: queued state, pending, on hold
@@ -345,7 +351,7 @@ _Avoid_: error dialog, retry box, close panel
 
 **Close**:
 The operator action that ends live work, key `w` in both sections.
-On a Ticket it ends the work cycle, runs the Close cleanup, and returns the ticket to `open` with an incremented cycle number. A Close on a settled turn records the `closed` decision on its trace; a Close on an in-flight turn ends the cycle with no completion trace, because the turn never settled (ADR 0031).
+On a Ticket it ends the work cycle, runs the Close cleanup, and returns the ticket to `open` with an incremented cycle number. A Close on a settled turn records the `closed` decision on its trace; a Close on an in-flight turn ends the cycle with no completion trace, because the turn never settled (ADR 0031). A Close on a `queued` ticket ends the cycle the way the close on a settled turn does, and removes the waiting item when one stands: a closed cycle never leaves a live start in the queue (ADR 0067).
 On a Consultation it verifies the Agent's identity, then stops the Agent and cleans up the environment the Agent holds, keeping the worktree and branch. When no Agent is found it issues no command and retires the record, its owned resources recorded as remaining (ADR 0044).
 It asks for confirmation when it stops a live agent.
 _Avoid_: stop, kill, abort, cancel
@@ -385,7 +391,7 @@ It gates every start: a start that cannot take a seat waits in the Work queue fo
 _Avoid_: concurrency cap, max agents
 
 **Work queue**:
-The ordered, durable list through which every start passes: a manual Handoff the operator asked for, a Consultation in `queued` state, and the automatic adds the auto top-up makes (ADR 0049, ADR 0051). The queue holds at most one item per ticket: a second add of a ticket that already waits is refused, and the first item keeps its place.
+The ordered, durable list through which every start passes: a manual Handoff the operator asked for, a routed ticket's start, a Consultation in `queued` state, and the automatic adds the auto top-up makes (ADR 0049, ADR 0051). The routed item is the ticket's own waiting fact: while it stands, the routed ticket's state reads `queued` (ADR 0067). The queue holds at most one item per ticket: a second add of a ticket that already waits is refused, and the first item keeps its place.
 The pickup is the only starter of a queued start, and a pickup attempt ends in start or drop, never in stay: a dropped item leaves the queue with its warning, and the queue never holds a failing item, so it cannot jam (ADR 0049). A pickup is a claim like any other: it puts the ticket in the Starting window, and it holds its seat even while the herdr seat keeps the work parked. The operator promotes and demotes an item with `+` and `-`, force-dispatches it over the cap, removes it, or pauses the queue itself: a removed Handoff item is cancelled and its ticket keeps its state, a removed Consultation item is unscheduled and keeps its record, and the queue pause holds the drain while it stands (ADR 0052). A removal ends the whole waiting start, including a claim the pickup already made and parked.
 _Avoid_: dispatch queue, pending list, execution queue
 
@@ -402,7 +408,7 @@ A force-dispatch that fails leaves the item out of the queue, as a pickup failur
 _Avoid_: manual override, bypass
 
 **Continuation**:
-The next step of a ticket's finished work: an awaiting ticket whose newest settled turn's Transition fired, wrote its label facts, and whose new position offers a task.
+The next step of a ticket's finished work: an awaiting or queued ticket whose newest settled turn's Transition fired, wrote its label facts, and whose new position offers a task (ADR 0067 extends the read from the awaiting ticket to the queued one, so a dropped automatic route re-offers).
 The auto top-up adds a continuation before a restart or a new open ticket (ADR 0051).
 _Avoid_: workflow advance, follow-up, next task
 

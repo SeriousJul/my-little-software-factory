@@ -70,12 +70,12 @@ run one at a time, and the Agents work in parallel afterward.
 
 ## Consequences
 
-- The settled ticket leaves its decision-owed face at the confirm. It keeps
-  its `awaiting` state, and the Queue wait window covers it: while its route
-  item waits in the Work queue, its row and detail wear the `queued` badge
-  in place of the state badge, the way an open ticket does with its own
-  item. The CONTEXT.md entry for the Queue wait extends from the open
-  ticket to the route's.
+- The settled ticket leaves its decision-owed face at the confirm. ADR 0067
+  corrects the rest of this consequence: the ask now moves the ticket to
+  the `queued` state in the same write that lands the decision, and the
+  state itself reads `queued` while the route stands. This ADR's rule that
+  stood - the ticket leaves the decision-owed face at the confirm - holds;
+  the face it wears is the state's, not a badge over `awaiting`.
 - The trace's decision line carries the ask's time, not the start's time. A
   turn whose route is confirmed but not yet started reads as decided to the
   observation's walks: the awaiting walk skips it, the continuation walk
