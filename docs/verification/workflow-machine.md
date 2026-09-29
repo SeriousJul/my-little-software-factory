@@ -9,7 +9,7 @@ required check that could not run is recorded as incomplete. It is not a pass,
 and it is not silently dropped.
 
 See [ADR 0027](../adr/0027-the-plane-owns-the-workflow-machine-and-label-transitions.md)
-for the machine, and [the label reference](../labels.md) for the labels it owns.
+for the machine, and [the label reference](../development/labels.md) for the labels it owns.
 
 ## What is verified automatically
 

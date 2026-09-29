@@ -4,8 +4,11 @@ Status: the site build passes, and the built output was verified locally on
 2026-09-15, after the sidebar restructure (the Getting Started steps, the
 explicit page order, the Development group, the compact ADR group, the larger
 screenshots, the theme, and the image lightbox). The GitHub Pages deploy has
-not run yet: it is triggered by the push to `main` that merges the change,
-and the manual checks on the published URL below are incomplete until it has.
+run: the site is live at
+<https://seriousjul.github.io/my-little-software-factory/>, and the static
+structure of the published home page was checked on 2026-09-29. What has not
+been measured is the interactive lightbox flow, for the reason the section
+below states.
 
 This record states what was measured, on what, and what was not measured. A
 check that could not run is recorded as incomplete. It is not a pass, and it
@@ -22,7 +25,7 @@ branch, on 2026-09-15.
 
 | Requirement | How it was checked | Result |
 | --- | --- | --- |
-| The build publishes the published subset: the home page, the five guide subfolders (Getting Started, Operation, Work flow, Configuration, Development), and the 28 ADRs plus the ADR index | `npm run docs:build`, then the file list of `docs/.vitepress/dist` | Passed |
+| The build publishes the published subset: the home page, the five guide subfolders (Getting Started, Operation, Work flow, Configuration, Development), and the 63 ADRs plus the ADR index | `npm run docs:build`, then the file list of `docs/.vitepress/dist` | Passed |
 | The excluded folders (agents, research, verification) are absent from the built site | The file list of `docs/.vitepress/dist` contains none of them | Passed |
 | The sidebar groups the published pages in the order Getting Started, Operation, Work flow, Configuration, Development, ADR, and the ADR group lists the single index entry rather than one row per ADR | The built HTML sidebar of a doc page, read in document order | Passed |
 | The home page renders a text-only hero (name, tagline, two actions), the full-width herdr screenshot below it, and the six-card guide grid, in that order | The built home page HTML, landmarks read in document order | Passed |
@@ -54,6 +57,22 @@ after the checks, and the final build was rerun clean.
   `npm run docs:build` command on the pull request head (`2de11ac`) and
   passed, alongside the lint, typecheck, and test jobs.
 
+## What was verified on the deployed site
+
+Measured on 2026-09-29, by reading the HTML the live site serves.
+
+| Requirement | How it was checked | Result |
+| --- | --- | --- |
+| The deploy has run and the site is public | The repository's Pages state reports `built` on the latest `gh-pages` build (commit `8cf9a7f`, 2026-09-29), and the home page returns HTTP 200 at the project base | Passed |
+| The home page carries the herdr hero shot and the "Get started" action into the prerequisites step | The served home page HTML holds the hero image reference and a link into the prerequisites page | Passed |
+| The sidebar lists the six published groups | The served home page HTML carries the Getting Started, Operation, Work flow, Configuration, Development, and ADR group names | Passed |
+
+The full hand checklist for the deploy - the guide cards in order, one
+Development page and one ADR page each rendered, the screenshots reading large
+on a wide display, and the excluded folders absent - stays open until it is
+checked by hand in a browser; the rows above cover what a read of the served
+HTML can establish.
+
 ## What has not been measured
 
 - The interactive image lightbox flow. The lightbox code and CSS are in the
@@ -62,15 +81,4 @@ after the checks, and the final build was rerun clean.
   tested only at the unit layer and no desktop browser is driven in this
   environment. Record the result here when it has been checked by hand.
 
-- The GitHub Pages deploy. The site deploy workflow builds on push to `main`
-  and publishes to the `gh-pages` branch. It has not run, because the change
-  is not merged yet. After the merge, open
-  <https://seriousjul.github.io/my-little-software-factory/> and check by hand:
-  the home page shows the text hero, the large herdr screenshot, and the guide
-  cards, and "Get started" opens the prerequisites step; the sidebar lists the
-  six groups in order with the Getting Started steps in reading order and the
-  ADR group collapsed to its index; one Development page and one ADR page each
-  render; a screenshot opens the lightbox full-bleed and closes on Escape, the
-  backdrop, or the close button; the screenshots read large on a wide display;
-  and the excluded folders are absent. Record the result in this section when
-  it has run.
+

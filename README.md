@@ -12,7 +12,7 @@ The guides on the site hold everything this screen used to hold:
 
 | Guide                                        | What it covers                                                       |
 | -------------------------------------------- | -------------------------------------------------------------------- |
-| [Getting started](./docs/getting-started/index.md) | Requirements, install, first screen, and the commands         |
+| [Getting started](./docs/getting-started/prerequisites.md) | Requirements, install, first screen, and the commands         |
 | [Operation](./docs/operation/main-view.md)       | The Main view, Consultation, the modals, and the Live view     |
 | [Work flow](./docs/work-flow/handoffs.md)        | Handoffs, model discovery, repository resolution, and completion |
 | [Configuration](./docs/configuration/index.md)   | The complete example, the key reference, and the notes         |
@@ -27,21 +27,22 @@ The guides on the site hold everything this screen used to hold:
 Bun `1.3.0` or newer is a development requirement: it runs the control plane
 from source, runs the tests, and compiles the prebuilt binary.
 
-[The Getting started guide](./docs/getting-started/index.md) covers the rest:
+[The Getting started guide](./docs/getting-started/prerequisites.md) covers the rest:
 where each requirement comes from and how to get it, the config file, the
 ticket sources, and the commands.
 
 ## Quick start
 
 ```bash
-npx SeriousJul/my-little-software-factory
+npx my-little-software-factory
 ```
 
 The control plane reads `~/.config/my-little-software-factory/config.toml`.
-The shipped default carries no ticket sources, no repository mappings, and no
-workflow edges: it holds the three agent types, the four workflow task types,
-the three task rules, and the `consult` Consultation type. The
-[Getting started guide](./docs/getting-started/index.md) shows how to add your
+The shipped default carries no ticket sources and no repository mappings: it
+holds the three agent types, the four workflow task types, the three security
+task types, the workflow's states, and the `consult` and `pair` Consultation
+types. The
+[Getting started guide](./docs/getting-started/prerequisites.md) shows how to add your
 first ticket source. See [the Configuration guide](./docs/configuration/index.md)
 for the complete example and the key reference.
 
@@ -68,7 +69,7 @@ for the complete example and the key reference.
 The standards are the contracts a control screen must keep; ADRs are the
 design decisions behind this one.
 
-- [The shared control standard](./docs/shared-controls.md)
+- [The shared control standard](./docs/development/shared-controls.md)
 - [The architecture decision records](./docs/adr/)
 
 ## Contributing
@@ -76,6 +77,6 @@ design decisions behind this one.
 For changes to controls, follow the shared control standard: use and extend
 the shared modules in `src/components/shared`, and run `bun run gallery` to
 see a control. See [CONTEXT.md](./CONTEXT.md),
-[the shared control standard](./docs/shared-controls.md), and
+[the shared control standard](./docs/development/shared-controls.md), and
 [the verification record](./docs/verification/shared-controls.md) for the open
 items.

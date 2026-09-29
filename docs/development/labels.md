@@ -1,3 +1,8 @@
+---
+title: Ticket labels
+description: The labels the workflow machine reads and writes, and the labels the operator uses.
+---
+
 # Ticket labels
 
 The control plane reads labels as source facts, and it writes them through

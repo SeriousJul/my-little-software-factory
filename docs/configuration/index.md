@@ -576,8 +576,9 @@ the `needs-work`, `ready-for-review`, and `ready-to-ship` pull requests to
 `rework`, `review`, and `merge`, one state per security source kind pointing
 at its task type, and one parking state for a pull request that carries none
 of them - with the transitions that move a ticket between them. They also
-define one `consult` Consultation type that passes your input straight
-through. They have no ticket sources and no repository mappings: uncommenting one
+define the `consult` and `pair` Consultation types: `consult` passes your
+input straight through, and `pair` runs a pair programming session with the
+agent as the driver. They have no ticket sources and no repository mappings: uncommenting one
 security source block is the only setup a fresh install needs. The security
 task types carry `thinking = "high"` and a transition that writes
 `ready-for-review` on the opened pull request with `auto-advance = true`: the

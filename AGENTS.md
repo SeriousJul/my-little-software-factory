@@ -3,7 +3,7 @@
 ## Shared controls
 
 - Read [CONTEXT.md](CONTEXT.md) for domain terms before changing control behavior.
-- Follow [the shared control standard](docs/shared-controls.md) and
+- Follow [the shared control standard](docs/development/shared-controls.md) and
   [ADR 0014](docs/adr/0014-shared-modules-own-control-behavior.md) for all controls
   owned by the control plane.
 - Use and extend the shared control library in

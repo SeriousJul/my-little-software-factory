@@ -575,7 +575,7 @@ _Avoid_: settings file, preferences
 
 **Default configuration**:
 The TOML the package ships, used to seed the Config file on first run.
-It carries the Workflow machine (its states and the task types with their Transitions) and one Consultation type, and it is meant to be extended by the operator.
+It carries the Workflow machine (its states and the task types with their Transitions) and the `consult` and `pair` Consultation types, and it is meant to be extended by the operator.
 _Avoid_: built-in defaults, factory settings
 
 **Repository identity**:

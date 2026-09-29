@@ -51,11 +51,13 @@ handing the narrow header's budget a floor of one cell leaves "a Group header at
 the minimum width drops its value before it wraps" red on a header that wrapped
 its held count onto a second window row.
 
-ADR 0060's Ignored ticket is recorded as sitting in no Group and counted by no
-Group header. The ignore is not implemented on this branch, so nothing here
-measures it; what the grouping leaves for it is a construction rather than a
-gate: the axis slices the rows the list already shows, so a Ticket that leaves
-those rows leaves every Group and every header count with no rule to write.
+ADR 0060's Ignored ticket sits in no Group and is counted by no Group header.
+At the time this section was written the ignore was not implemented, so
+nothing here measures it; what the grouping leaves for it is a construction
+rather than a gate: the axis slices the rows the list already shows, so a
+Ticket that leaves those rows leaves every Group and every header count with
+no rule to write. ADR 0060 is since accepted and implemented, and the
+ignore's own checks run in `test/ignored-ticket.test.ts`.
 
 What was not measured: no terminal walk of the grouped list was run in Ghostty
 or foot. The keyboard targets below were verified on the flat list before this

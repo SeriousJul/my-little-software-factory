@@ -220,7 +220,7 @@ the axis a press chose yields its place on the line to a fact an operation wrote
 - which is why the split also stands in the headers themselves and in the hint.
 
 The axis is **factory state on the state file**, stored per section the way the
-Auto-handoff mode (ADR 0036) and the queue pause (ADR 0052) are (ADR 0058): a
+Auto-handoff mode (ADR 0036) and the queue pause (ADR 0052) are stored (ADR 0058): a
 restart and a dev reload find the split where the operator left it, and a fresh
 file starts at `none`. A state file that will not take the write is reported on
 the Message line, and the view the operator asked for still stands for the run.

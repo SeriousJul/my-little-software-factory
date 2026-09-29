@@ -1,3 +1,8 @@
+---
+title: Shared control standard
+description: The standard the shared control library answers for, its acceptance targets, and its verification record.
+---
+
 # Shared control standard
 
 Status: accepted, and the baseline is implemented for every editable field,

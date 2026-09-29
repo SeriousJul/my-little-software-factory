@@ -13,7 +13,7 @@ the current published version. Before the first start, the machine needs:
   Node, downloads the prebuilt binary for the machine from the release, and
   hands it the command. The binary itself needs neither Node nor Bun: it
   carries its own runtime.
-- [herdr](https://github.com/seriousjul/herdr) on the `PATH`. The control
+- [herdr](https://herdr.dev) on the `PATH`. The control
   plane drives it through its CLI and never starts an agent process itself.
 - The agent CLI of each agent type you use, with its own provider auth
   applied.

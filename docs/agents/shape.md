@@ -29,8 +29,17 @@ description: The module map of the source tree, for agents working in this repos
 	the runtimes it refuses.
 - `src/config.ts`: config types, strict startup validation, state path
 	resolution, and atomic TOML write-back.
+- `src/config-migration.ts`: the one-shot config migration to the workflow
+	machine (ADR 0027). A pre-machine config is rewritten at load: rules become
+	states, expressible edges become transitions, and the file is backed up and
+	reported before the rewrite; load stops with the file unchanged on any
+	failure.
 - `src/ticket-source.ts`: the ticket-source seam and built-in GitHub Issues
 	and Pull Requests adapters.
+- `src/security-source.ts`: the built-in GitHub security ticket sources
+	(issue #73). The three kinds - security advisories, Dependabot alerts, and
+	secret scanning - read the repository security feeds as `gh api` REST calls,
+	one call set per configured repository.
 - `src/refresh.ts`: independent source refresh scheduling.
 - `src/observation.ts`: the herdr observation loop. Polls the agent list,
 	reads the settled agent's last message, marks blocked and missing agents,
@@ -40,6 +49,10 @@ description: The module map of the source tree, for agents working in this repos
 - `src/state.ts`: SQLite migrations, source reconciliation, work cycles,
 	completion traces, completion decisions, handoff attempts, the Auto-handoff
 	mode, and the process lease.
+- `src/workflow.ts`: the workflow machine's transition (ADR 0027). A completed
+	turn fires the task type's transition once: the plane writes the label facts
+	on the ticket and its fixing pull request, and the machine converges every
+	surface to the transition's facts.
 - `src/task-selection.ts`: ordered task-rule selection.
 - `src/setting-resolution.ts`: the handoff setting chains (ADR 0009). The Task
 	profile of each task type, and the agent, model, and thinking one handoff
@@ -50,9 +63,25 @@ description: The module map of the source tree, for agents working in this repos
 - `src/model-settings.ts`: the Model list startup orchestration (ADR 0010).
 	It checks determinate config values with one list query per Agent kind and
 	warns when a list is unavailable.
+- `src/herdr.ts`: the agent facts herdr reports, shared by every reader of an
+	agent list: the observation loop, the Consultation operations, the app's
+	mode line, and the Parallel limit seat count.
+- `src/parallel.ts`: the shared Parallel limit seat count (ADR 0034), the one
+	source the Work queue's pickup and the mode line read.
+- `src/placement.ts`: the ticket placement on the chosen task's state
+	(ADR 0045). A manual handoff whose final task type differs from the
+	ticket's current suggestion writes the ticket's labels before the agent
+	starts.
+- `src/theme-source.ts`: the startup theme resolution the application runs
+	(ADR 0024). The pure rules live in the shared theme module; this module owns
+	the one place the resolution touches the machine: the in-herdr fact, the
+	herdr config read, and the `NO_COLOR` presentation.
+- `src/turn-log.ts`: the turn log and the turn end cause, read from the
+	agent's session record (ADR 0008), not from the terminal.
 - `src/domain/`: the Ticket type and its state machine, the agent-side facts
-	every Agent type shares (the standard Thinking level set), and the handoff
-	environment kinds.
+	every Agent type shares (the standard Thinking level set), the handoff
+	environment kinds, and the Grouping axis that splits a section's list into
+	Groups (ADR 0058).
 - `src/handoff.ts`: the handoff. Resolves the repository, runs the pinned
 	command sequence through herdr, starts the agent, and sends the prompt.
 - `src/consultation.ts`: the Consultation rules that need no terminal. The input
@@ -106,6 +135,23 @@ description: The module map of the source tree, for agents working in this repos
 	found a foreign core would ship a different artifact under the release's name -
 	stamps the package version into the binary, and names the asset through the
 	shared `assetFileName` the installer reads.
+- `scripts/generate-screenshots.ts`: the operation screenshot capture.
+	`npm run screenshots` builds the fixture world - a config, a seeded state
+	file, and stub executables for the world's external commands - runs the
+	real control plane on a pseudo-terminal through the six screens the guides
+	show, and writes the PNGs into `docs/operation/images/`. The drift test in
+	the suite reruns it into a temporary tree and rejects any committed PNG that
+	no longer matches the screen.
+- `scripts/screenshot-fixture.ts`: the shared fixture world both the doc
+	screenshots and the home page hero run on: the config, the seeded state,
+	and the stub executables.
+- `scripts/generate-herdr-hero.ts`: the home page hero's capture. It drives
+	an isolated herdr - a fresh server in a temporary directory with its own
+	socket and home - and renders the workspace with the same ANSI renderer as
+	the doc screenshots. Refreshed by hand; it is outside the drift test.
+- `scripts/generate-screen-font.ts` and `scripts/screen-font.ts`: the per-cell
+	coverage bitmaps the screenshot renderer paints from, rasterized from the
+	vendored terminal font by `npm run font`.
 - `test/sample-tickets.ts`: deterministic data used by legacy frame tests only.
 - `src/components/`: the app shell, the ticket list pane, the ticket detail
 	pane, the native ticket detail viewport, the override panel, the decision
