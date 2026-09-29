@@ -247,7 +247,7 @@ describe("the steps that run a binary on its own operating system", () => {
 			RELEASE_YML.indexOf("  smoke-darwin:"),
 			RELEASE_YML.indexOf("  smoke-windows:"),
 		);
-		expect(leg).toContain("actions/download-artifact@v7");
+		expect(leg).toContain("actions/download-artifact@v8");
 		expect(leg).toContain("chmod +x");
 		expect(leg.indexOf("chmod +x")).toBeLessThan(leg.indexOf('"$asset" --version'));
 	});
