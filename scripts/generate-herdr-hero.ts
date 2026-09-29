@@ -4,16 +4,17 @@
  *
  * The capture drives an isolated herdr: a fresh server in a temporary
  * directory with its own socket and home, so the operator's live herdr
- * session is never touched. The control plane runs in one pane of a
- * workspace, the world outside it comes from the same fixture the doc
- * screenshots use (the fixture's stub executables stand first on the
- * panes' PATH, so the plane's data stays deterministic), and an attached
- * herdr client renders the workspace. The client's screen renders with
- * the same ANSI renderer as the doc screenshots.
- *
- * The shot selects the running ticket, so the Detail pane shows the ticket
- * the agent pane works, and it reports the agent pane to herdr as a working
- * agent, so herdr's sidebar carries the running state the ticket's row reads.
+ * session is never touched. The control plane runs full width in its own
+ * workspace, the way the operator runs it, and the world outside it comes
+ * from the same fixture the doc screenshots use (the fixture's stub
+ * executables stand first on the panes' PATH, so the plane's data stays
+ * deterministic). The running ticket's agent lives in its own workspace on
+ * its own checkout, the way a real handoff environment stands: the shot
+ * shows the plane, and herdr's sidebar carries the agent's workspace and
+ * its working state. The shot selects the running ticket, so the Detail
+ * pane shows the ticket the agent works. An attached herdr client renders
+ * the workspace, and the client's screen renders with the same ANSI
+ * renderer as the doc screenshots.
  *
  * This shot is refreshed by hand (`npm run hero`). It is not in the
  * drift test: herdr's chrome belongs to herdr, and it changes when
@@ -42,7 +43,7 @@ const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const CONTROLLER_BIN = join(ROOT, "bin", "factory.mjs");
 const OUT = join(ROOT, "docs", "public", "hero.png");
 
-/** The screen the hero shot shows: wide enough for two panes. */
+/** The screen the hero shot shows: the plane full width, plus herdr's sidebar. */
 const SCREEN = { cols: 256, rows: 56 } as const;
 
 /** Resolve the real herdr binary from the operator's PATH. */
@@ -52,21 +53,10 @@ function herdrBin(): string {
 	return out;
 }
 
-/** The fake agent's pane: a static session screen that stays alive. */
+/** The agent workspace's pane: a process that stays alive while the capture runs. */
 const AGENT_PANE_SCRIPT = `#!/bin/sh
-# Clear the pane so the shot shows the session, not the launch line.
-printf '\\033[2J\\033[H'
-printf '%s\\n' \\
-	"pi  anthropic/claude-sonnet-4-5" \\
-	"" \\
-	"Reading the webhook handler to find the delivery path." \\
-	"  read_file src/webhooks/handler.ts" \\
-	"  read_file src/webhooks/queue.ts" \\
-	"Adding a retry queue with a bounded backoff:" \\
-	"  edit_file src/webhooks/queue.ts" \\
-	"  edit_file src/webhooks/handler.ts" \\
-	"Writing the delivery tests." \\
-	"  write_file src/webhooks/queue.test.ts"
+# The agent workspace's pane stays alive while the capture runs. The
+# workspace stays unfocused, so the pane never shows in the shot.
 sleep 3600
 `;
 
@@ -130,16 +120,25 @@ async function main(): Promise<void> {
 			"my-little-software-factory",
 		]);
 		paneA = rootPane.result.root_pane.pane_id as string;
-		const split = await cliJson(bin, isoEnv, [
-			"pane",
-			"split",
-			paneA,
-			"--direction",
-			"right",
-			"--ratio",
-			"0.74",
+		// The running ticket's handoff environment: its own workspace on its
+		// own checkout, the way a real handoff stands (one workspace per
+		// repository checkout, never a pane beside the plane). The workspace
+		// stays unfocused, so the shot shows the plane, and the sidebar
+		// carries the agent's workspace and state.
+		const agentCheckout = join(
+			fixture,
+			"checkouts",
+			"52-retry-failed-webhook-deliveries-with-a-bounded-backoff",
+		);
+		mkdirSync(agentCheckout, { recursive: true });
+		const agentWorkspace = await cliJson(bin, isoEnv, [
+			"workspace",
+			"create",
+			"--cwd",
+			agentCheckout,
+			"--no-focus",
 		]);
-		paneB = split.result.pane.pane_id as string;
+		paneB = agentWorkspace.result.root_pane.pane_id as string;
 
 		// Attach the client first, so the panes size to its window
 		// before the app renders.
@@ -193,24 +192,24 @@ async function main(): Promise<void> {
 			await sleep(250);
 		}
 		// Select the running ticket: the Detail pane shows the ticket the
-		// agent pane works, so the two panes read as one scene. The cursor
-		// starts on the first row, so step with `j` until the Detail shows
-		// the ticket's full title. The list column truncates titles, and the
-		// Detail holds the title whole, so the full title is the settle signal
-		// (the same reason the header wait above settles on the grid, not the
-		// byte stream). Keys go through the CLI to the pane directly: client
-		// keystrokes land on whichever pane holds the focus.
-		const detailTitle = "Retry failed webhook deliveries";
-		const hasDetailTitle = (grid: Grid): boolean =>
+		// agent works. The cursor starts on the first row, so step with `j`
+		// until the Detail shows the ticket's description. The description
+		// stands nowhere in the list, whatever the list's width truncates,
+		// so it is the settle signal (the same reason the header wait above
+		// settles on the grid, not the byte stream). Keys go through the CLI
+		// to the pane directly: client keystrokes land on whichever pane
+		// holds the focus.
+		const detailText = "Deliveries that fail with a 5xx are dropped.";
+		const hasDetailText = (grid: Grid): boolean =>
 			grid.some((row) =>
 				row
 					.map((c) => c.char)
 					.join("")
-					.includes(detailTitle),
+					.includes(detailText),
 			);
 		const detailDeadline = Date.now() + 30000;
 		for (;;) {
-			if (hasDetailTitle(parseScreen(client.output(), SCREEN.cols, SCREEN.rows))) break;
+			if (hasDetailText(parseScreen(client.output(), SCREEN.cols, SCREEN.rows))) break;
 			if (Date.now() >= detailDeadline) {
 				throw new Error(
 					`hero: the Detail pane never showed the running ticket\ncaptured output:\n${preview(client.output())}`,
@@ -219,9 +218,9 @@ async function main(): Promise<void> {
 			cli(bin, isoEnv, ["pane", "send-keys", paneA, "j"]);
 			await sleep(250);
 		}
-		// The agent pane runs a static script, so herdr's own detection names
-		// no agent in it. Report the pane's state so the sidebar shows the
-		// agent working, matching the ticket's running row.
+		// The agent workspace's pane holds a static process, so herdr's own
+		// detection names no agent in it. Report the pane's state so the
+		// sidebar shows the agent working, matching the ticket's running row.
 		cli(bin, isoEnv, [
 			"pane",
 			"report-agent",
