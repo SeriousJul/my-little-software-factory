@@ -761,7 +761,15 @@ export class ObservationCoordinator {
 	 */
 	private reclaimLiveAgents(byPane: ReadonlyMap<string, HerdrAgent>): boolean {
 		const held = new Set<string>();
-		for (const ticket of this.state.ticketsByState(["handed-off", "running", "awaiting"])) {
+		// A queued ticket's recorded pane is held the way any non-open ticket's
+		// is (ADR 0067): the ticket still names the handoff that ran its settled
+		// turn, and the pane is not handed to a stranger while the route stands.
+		for (const ticket of this.state.ticketsByState([
+			"handed-off",
+			"running",
+			"awaiting",
+			"queued",
+		])) {
 			if (ticket.paneId !== null) held.add(ticket.paneId);
 		}
 		let changed = false;
@@ -1218,11 +1226,13 @@ export class ObservationCoordinator {
 		// an accident of which view it happens to read.
 		const list = this.state.ticketListViews(config.workflowStates, config.defaultTaskType, "all");
 		const tickets = list.active;
-		// 1. Continuation: the awaiting tickets whose latest settled turn
-		// fired a transition that auto-advances into a position the machine
-		// still offers a task for, in the ticket list's order.
+		// 1. Continuation: the awaiting and queued tickets whose latest settled
+		// turn fired a transition that auto-advances into a position the machine
+		// still offers a task for, in the ticket list's order. A queued ticket
+		// whose automatic route died re-offers here (ADR 0067): the decision
+		// stands at the ask, and a drop left the route unrun.
 		for (const ticket of tickets) {
-			if (ticket.state !== "awaiting") continue;
+			if (ticket.state !== "awaiting" && ticket.state !== "queued") continue;
 			// The ignore gate (ADR 0060): an ignored Ticket is no automatic start.
 			// The row is here in the active view the whole time its Agent works or
 			// its decision stays owed, so this test - not the filter - is what holds
@@ -1497,6 +1507,9 @@ export class ObservationCoordinator {
 	 * handoff, no queue item, and no unfinished attempt, under its handoff
 	 * limit, and past the Same-type hold.
 	 *
+	 * The position may be open, awaiting, or queued (ADR 0067): a route onto the
+	 * ticket's own new position finds its ticket in the wait the ask put it in.
+	 *
 	 * The route itself is never re-derived here. `decideAwaiting` is the one
 	 * rule both walks read: the awaiting walk that closes what the machine
 	 * resolves, and this walk that enqueues what it does not.
@@ -1527,7 +1540,8 @@ export class ObservationCoordinator {
 		// and the position is read from the projection before the list rule, so the
 		// one gate predicate on the row this walk holds is what answers.
 		if (ticketIgnored(position)) return null;
-		if (position.state !== "open" && position.state !== "awaiting") return null;
+		if (position.state !== "open" && position.state !== "awaiting" && position.state !== "queued")
+			return null;
 		if (position.suggestedTaskType !== outcome.positionTaskType) return null;
 		// The actionable fact is the open position's: an awaiting position is
 		// the ticket whose turn just settled, and the claim check owns its

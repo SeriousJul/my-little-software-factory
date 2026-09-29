@@ -3230,6 +3230,12 @@ describe("the decision screen's route close", () => {
 		return answer;
 	}
 
+	/** Pump the microtasks and timers until the queue holds nothing again. */
+	async function untilDrains(rigRef: Rig): Promise<void> {
+		for (let turn = 0; turn < 200 && rigRef.state.workQueue().length > 0; turn += 1)
+			await new Promise((resolve) => setTimeout(resolve, 5));
+	}
+
 	test("a direct route closes the settled workspace, and the handoff reopens the worktree beside it", async () => {
 		const rigRef = rig();
 		const stored = seedHandoff(rigRef, FIRST, worktreeChoice);
@@ -3320,7 +3326,9 @@ describe("the decision screen's route close", () => {
 			rigRef.commands().filter((command) => command.startsWith("herdr agent start")),
 		).toHaveLength(0);
 		expect(rigRef.state.workQueue()).toHaveLength(1);
-		expect(rigRef.state.ticketState(FIRST.identity)).toBe("awaiting");
+		// The ask moved the ticket with the decision it recorded (ADR 0067):
+		// while the item waits, the ticket reads queued.
+		expect(rigRef.state.ticketState(FIRST.identity)).toBe("queued");
 		// A clean close says nothing on the line: the queue's notice stands.
 		expect(rigRef.events.filter((event) => event.startsWith("warning:"))).toHaveLength(0);
 	});
@@ -3348,6 +3356,93 @@ describe("the decision screen's route close", () => {
 		expect(
 			rigRef.commands().filter((command) => command.startsWith("herdr agent start")),
 		).toHaveLength(0);
+	});
+
+	test("a cross-position pickup ends the settled ticket's cycle at the start (ADR 0067)", async () => {
+		const rigRef = rig([ROUTE_SETTLED, ROUTE_TARGET]);
+		settleRoutePair(rigRef);
+		// Every seat is held: the route waits in the Work queue, and the ask
+		// moves the settled ticket to the wait with the decision it records.
+		const capped = withRunner(rigRef, rigRef.runner, {
+			seatCount: () => rigRef.config.maxParallelAgents,
+		});
+		await expect(
+			capped.dispatch({
+				origin: "workflow",
+				ticketIdentity: ROUTE_TARGET.identity,
+				routeFromIdentity: ROUTE_SETTLED.identity,
+				choice: liveChoice,
+				previousMessage: "the turn is done",
+			}),
+		).resolves.toEqual({ ok: true });
+		await seatReleased();
+		expect(rigRef.state.workQueue()).toHaveLength(1);
+		expect(rigRef.state.ticketState(ROUTE_SETTLED.identity)).toBe("queued");
+		// One seat frees: the pickup starts the position, and the start report
+		// moves both tickets in the same write: the position is handed off, and
+		// the settled ticket's cycle ends at the start, not at a later top-up.
+		const picking = withRunner(rigRef, rigRef.runner, {
+			seatCount: () => rigRef.config.maxParallelAgents - 1,
+		});
+		expect(await picking.pickupWorkQueue()).toBe(1);
+		await untilDrains(rigRef);
+		expect(rigRef.state.workQueue()).toHaveLength(0);
+		expect(rigRef.state.ticketState(ROUTE_TARGET.identity)).toBe("handed-off");
+		const settled = rigRef.state
+			.visibleTickets(rigRef.config.workflowStates, rigRef.config.defaultTaskType)
+			.find((candidate) => candidate.identity === ROUTE_SETTLED.identity);
+		expect(settled?.state).toBe("open");
+		expect(settled?.workCycle).toBe(2);
+		// The decision stands on the settled turn whatever the move says.
+		expect(settled?.lastCompletion?.decision).toBe("handed-off");
+	});
+
+	test("a same-position pickup hands the queued ticket off in its own cycle (ADR 0067)", async () => {
+		const rigRef = rig();
+		const stored = seedHandoff(rigRef, FIRST, worktreeChoice);
+		settleTurn(rigRef, FIRST, stored.handoffId);
+		// The pickup reopens the worktree on the ticket's branch, beside the
+		// workspace the ask closed.
+		const branch = "factory/5-add-a-webhook-retry-policy";
+		rigRef.runner.set("git", ["-C", rigRef.checkout, "branch", "--list", branch], {
+			stdout: `* ${branch}\n`,
+		});
+		rigRef.runner.set(
+			"herdr",
+			["worktree", "open", "--cwd", rigRef.checkout, "--branch", branch, "--no-focus"],
+			{
+				stdout: worktreeOpenJson("ws-route", "pane-route", {
+					alreadyOpen: false,
+					worktreePath: join(rigRef.checkout, "wt"),
+				}),
+			},
+		);
+		const capped = withRunner(rigRef, rigRef.runner, {
+			seatCount: () => rigRef.config.maxParallelAgents,
+		});
+		await expect(
+			capped.dispatch({
+				origin: "workflow",
+				ticketIdentity: FIRST.identity,
+				routeFromIdentity: FIRST.identity,
+				choice: worktreeChoice,
+				previousMessage: "the turn is done",
+			}),
+		).resolves.toEqual({ ok: true });
+		await seatReleased();
+		expect(rigRef.state.ticketState(FIRST.identity)).toBe("queued");
+		const picking = withRunner(rigRef, rigRef.runner, {
+			seatCount: () => rigRef.config.maxParallelAgents - 1,
+		});
+		expect(await picking.pickupWorkQueue()).toBe(1);
+		await untilDrains(rigRef);
+		expect(rigRef.state.workQueue()).toHaveLength(0);
+		expect(rigRef.state.ticketState(FIRST.identity)).toBe("handed-off");
+		// The rework continues into the ticket's own cycle: the number holds.
+		const ticket = rigRef.state
+			.visibleTickets(rigRef.config.workflowStates, rigRef.config.defaultTaskType)
+			.find((candidate) => candidate.identity === FIRST.identity);
+		expect(ticket?.workCycle).toBe(1);
 	});
 
 	test("the automatic route keeps the stored workspace, and closes nothing at the ask", async () => {

@@ -809,7 +809,9 @@ describe("factory SQLite state", () => {
 			turnLog: textLog("Done."),
 			completedAt: "2026-08-31T11:00:00Z",
 		});
-		// The route decides the turn when the routed handoff starts...
+		// The route decides the turn when the route is asked for: the decision
+		// lands and the ticket leaves awaiting for queued in the same write
+		// (ADR 0067)...
 		expect(
 			state.applyCompletionDecision({
 				ticketIdentity: ticket.identity,
@@ -818,7 +820,7 @@ describe("factory SQLite state", () => {
 				decidedAt: "2026-08-31T11:10:00Z",
 			}),
 		).toBe(true);
-		expect(state.visibleTickets([], "implement")[0].state).toBe("awaiting");
+		expect(state.visibleTickets([], "implement")[0].state).toBe("queued");
 		// ...and the operator's close ends the cycle the turn routed from: the
 		// recorded decision is not rewritten, and the cycle still ends.
 		expect(
@@ -946,6 +948,233 @@ describe("factory SQLite state", () => {
 		state.close();
 	});
 
+	// The routed ticket's queued wait (ADR 0067): the ask moves the ticket
+	// to queued with the decision it records, the pickup's start settles the
+	// wait in the same write as the started ticket's handoff, and the close
+	// takes the waiting item with the cycle it ends.
+	describe("the routed ticket's queued wait (ADR 0067)", () => {
+		/** One ticket with its turn settled, and the attempt the turn ran on. */
+		function settledTurn(state: FactoryState): { identity: string; attemptId: string } {
+			const [ticket] = state.visibleTickets([], "implement");
+			if (ticket === undefined) throw new Error("the fixture holds no ticket");
+			const claim = state.claimHandoff(ticket.identity, choice, "open");
+			if (!claim.ok) throw new Error(claim.reason);
+			state.settleHandoff(claim.claim.attemptId, true);
+			state.settleTurn({
+				ticketIdentity: ticket.identity,
+				handoffId: claim.claim.attemptId,
+				taskType: "implement",
+				agentType: "pi",
+				message: "Done.",
+				turnLog: textLog("Done."),
+				completedAt: "2026-08-31T11:00:00Z",
+			});
+			return { identity: ticket.identity, attemptId: claim.claim.attemptId };
+		}
+
+		const ticketState = (state: FactoryState, identity: string) =>
+			state.visibleTickets([], "implement").find((t) => t.identity === identity);
+
+		test("the route ask moves the ticket to queued, and the re-confirm stands a no-op", () => {
+			const state = openFactoryState(":memory:");
+			state.initializeSources([sourceA]);
+			state.applyFetch(sourceA, success([fetched()]));
+			const { identity, attemptId } = settledTurn(state);
+			expect(
+				state.applyCompletionDecision({
+					ticketIdentity: identity,
+					handoffId: attemptId,
+					decision: "handed-off",
+					decidedAt: "2026-08-31T11:10:00Z",
+				}),
+			).toBe(true);
+			expect(state.ticketState(identity)).toBe("queued");
+			// A re-confirm of a dead route re-lands the same decision as a no-op,
+			// and the ticket keeps the wait its first ask put it in.
+			expect(
+				state.applyCompletionDecision({
+					ticketIdentity: identity,
+					handoffId: attemptId,
+					decision: "handed-off",
+					decidedAt: "2026-08-31T11:11:00Z",
+				}),
+			).toBe(false);
+			expect(state.ticketState(identity)).toBe("queued");
+			state.close();
+		});
+
+		test("the cross-position start ends the settled ticket's cycle in the same write", () => {
+			const state = openFactoryState(":memory:");
+			state.initializeSources([sourceA]);
+			state.applyFetch(sourceA, success([fetched("github:github.com:I_6"), fetched()]));
+			const { identity, attemptId } = settledTurn(state);
+			expect(
+				state.applyCompletionDecision({
+					ticketIdentity: identity,
+					handoffId: attemptId,
+					decision: "handed-off",
+					decidedAt: "2026-08-31T11:10:00Z",
+				}),
+			).toBe(true);
+			expect(state.ticketState(identity)).toBe("queued");
+			expect(
+				state.enqueueWork({
+					ticketIdentity: "github:github.com:I_6",
+					routeFromIdentity: identity,
+					origin: "workflow",
+					choice,
+					previousMessage: "settled the turn",
+				}),
+			).toEqual({ ok: true });
+			const claim = state.claimHandoff("github:github.com:I_6", choice, "workflow");
+			if (!claim.ok) throw new Error(claim.reason);
+			state.settleHandoff(claim.claim.attemptId, true, undefined, { routeFromIdentity: identity });
+			// The started ticket is handed off, and the settled ticket returns to
+			// open with its cycle incremented: the routed close that used to rest
+			// in the top band lands at the start.
+			expect(state.ticketState("github:github.com:I_6")).toBe("handed-off");
+			const settled = ticketState(state, identity);
+			if (settled === undefined) throw new Error("the settled ticket left the list");
+			expect(settled.state).toBe("open");
+			expect(settled.workCycle).toBe(2);
+			expect(state.lastCompletion(identity)?.decision).toBe("handed-off");
+			state.close();
+		});
+
+		test("the same-position start hands the queued ticket off in its own cycle", () => {
+			const state = openFactoryState(":memory:");
+			state.initializeSources([sourceA]);
+			state.applyFetch(sourceA, success([fetched()]));
+			const { identity, attemptId } = settledTurn(state);
+			expect(
+				state.applyCompletionDecision({
+					ticketIdentity: identity,
+					handoffId: attemptId,
+					decision: "handed-off",
+					decidedAt: "2026-08-31T11:10:00Z",
+				}),
+			).toBe(true);
+			expect(state.ticketState(identity)).toBe("queued");
+			// A route onto the ticket's own new position names itself, and the
+			// normalization leaves its item without a route from.
+			expect(
+				state.enqueueWork({
+					ticketIdentity: identity,
+					routeFromIdentity: identity,
+					origin: "workflow",
+					choice,
+					previousMessage: "settled the turn",
+				}),
+			).toEqual({ ok: true });
+			const waiting = state.workQueue()[0];
+			if (waiting?.kind !== "handoff") throw new Error("the waiting item is not a handoff");
+			expect(waiting.routeFromIdentity).toBe(null);
+			const claim = state.claimHandoff(identity, choice, "workflow");
+			if (!claim.ok) throw new Error(claim.reason);
+			state.settleHandoff(claim.claim.attemptId, true, undefined, { routeFromIdentity: null });
+			const moved = ticketState(state, identity);
+			if (moved === undefined) throw new Error("the ticket left the list");
+			// The passage continues into the rework: the cycle number holds.
+			expect(moved.state).toBe("handed-off");
+			expect(moved.workCycle).toBe(1);
+			state.close();
+		});
+
+		test("a close on a queued ticket ends the cycle and takes the route's item", () => {
+			const state = openFactoryState(":memory:");
+			state.initializeSources([sourceA]);
+			state.applyFetch(sourceA, success([fetched("github:github.com:I_6"), fetched()]));
+			const { identity, attemptId } = settledTurn(state);
+			expect(
+				state.applyCompletionDecision({
+					ticketIdentity: identity,
+					handoffId: attemptId,
+					decision: "handed-off",
+					decidedAt: "2026-08-31T11:10:00Z",
+				}),
+			).toBe(true);
+			expect(state.ticketState(identity)).toBe("queued");
+			expect(
+				state.enqueueWork({
+					ticketIdentity: "github:github.com:I_6",
+					routeFromIdentity: identity,
+					origin: "workflow",
+					choice,
+					previousMessage: "settled the turn",
+				}),
+			).toEqual({ ok: true });
+			expect(state.workQueue()).toHaveLength(1);
+			// The close takes the two moves in one answer: the cycle ends on the
+			// settled trace, and the waiting item leaves the queue. A closed
+			// cycle never leaves a live start in the queue.
+			expect(
+				state.applyCompletionDecision({
+					ticketIdentity: identity,
+					handoffId: attemptId,
+					decision: "closed",
+					decidedAt: "2026-08-31T11:30:00Z",
+				}),
+			).toBe(true);
+			expect(state.removeWorkflowRouteItem(identity)).toBe(true);
+			const settled = ticketState(state, identity);
+			if (settled === undefined) throw new Error("the settled ticket left the list");
+			expect(settled.state).toBe("open");
+			expect(settled.workCycle).toBe(2);
+			expect(state.workQueue()).toHaveLength(0);
+			// A repeated close changes nothing.
+			expect(
+				state.applyCompletionDecision({
+					ticketIdentity: identity,
+					handoffId: attemptId,
+					decision: "closed",
+					decidedAt: "2026-08-31T11:31:00Z",
+				}),
+			).toBe(false);
+			state.close();
+		});
+
+		test("removeWorkflowRouteItem takes the route's item and leaves the open wait", () => {
+			const state = openFactoryState(":memory:");
+			state.initializeSources([sourceA]);
+			state.applyFetch(sourceA, success([fetched("github:github.com:I_6"), fetched()]));
+			const { identity, attemptId } = settledTurn(state);
+			expect(
+				state.applyCompletionDecision({
+					ticketIdentity: identity,
+					handoffId: attemptId,
+					decision: "handed-off",
+					decidedAt: "2026-08-31T11:10:00Z",
+				}),
+			).toBe(true);
+			// The ticket's own open-origin wait is not the route's item.
+			expect(
+				state.enqueueWork({
+					ticketIdentity: identity,
+					origin: "open",
+					choice,
+					previousMessage: "asked by hand",
+				}),
+			).toEqual({ ok: true });
+			expect(
+				state.enqueueWork({
+					ticketIdentity: "github:github.com:I_6",
+					routeFromIdentity: identity,
+					origin: "workflow",
+					choice,
+					previousMessage: "the route",
+				}),
+			).toEqual({ ok: true });
+			expect(state.workQueue()).toHaveLength(2);
+			expect(state.removeWorkflowRouteItem(identity)).toBe(true);
+			expect(state.workQueue()).toHaveLength(1);
+			const waiting = state.workQueue()[0];
+			if (waiting?.kind !== "handoff") throw new Error("the waiting item is not a handoff");
+			expect(waiting.ticketIdentity).toBe(identity);
+			expect(waiting.origin).toBe("open");
+			state.close();
+		});
+	});
+
 	test("only a cycle end moves the work cycle, the fact the gates count on (ADR 0031)", () => {
 		// `lastCycleEnd` reads the end row of `work_cycle - 1`, so the two gates
 		// name the newest ended cycle exactly. That holds only while nothing else
@@ -965,14 +1194,17 @@ describe("factory SQLite state", () => {
 			),
 		].map((match) => match[0]);
 		// The ends: the decided close of a settled turn, the in-flight Close
-		// that writes no trace, and the close of a turn the route decided -
-		// the last runs only from awaiting, so it too moves the number on an
-		// end, exactly once.
+		// that writes no trace, the close of a turn the route decided - the
+		// last runs only from awaiting or queued, so it too moves the number on
+		// an end, exactly once - and the route's start that ends the settled
+		// ticket's cycle on a different ticket (ADR 0067), which runs only from
+		// queued.
 		expect([...new Set(statements)].sort()).toEqual([
-			"\"UPDATE tickets SET state = 'open', work_cycle = work_cycle + 1 WHERE identity = ? AND state = 'awaiting'\"",
+			"\"UPDATE tickets SET state = 'open', work_cycle = work_cycle + 1 WHERE identity = ? AND state = 'queued'\"",
+			"\"UPDATE tickets SET state = 'open', work_cycle = work_cycle + 1 WHERE identity = ? AND state IN ('awaiting', 'queued')\"",
 			"\"UPDATE tickets SET state = 'open', work_cycle = work_cycle + 1 WHERE identity = ?\"",
 		]);
-		expect(statements.length).toBe(3);
+		expect(statements.length).toBe(4);
 		// A cycle's moves that end nothing hold the number: the handoff that starts
 		// a cycle, the running mark, a settled turn, and a reclaimed handoff.
 		const state = openFactoryState(":memory:");

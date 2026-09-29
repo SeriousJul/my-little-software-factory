@@ -101,6 +101,7 @@ describe("the shared control gallery", () => {
 			"close-panel-closing",
 			"ticket-close",
 			"ticket-close-live-worktree",
+			"ticket-close-queued",
 			"recovery-panel-opening",
 			"recovery-panel-missing",
 			"recovery-panel-failed",
@@ -166,13 +167,15 @@ describe("the shared control gallery", () => {
 		// A Group header stands above each run, and it carries the count of the
 		// rows it holds and the held count above zero.
 		expect(text).toContain("▾ acme/billing 2 held 1");
-		expect(text).toContain("▾ acme/factory 2");
+		expect(text).toContain("▾ acme/factory 3");
 		// A collapsed Group shows nothing but its header, and the fold rides on
 		// the glyph: the header still names what the fold hides.
 		expect(text).toContain("▸ acme/billing 2 held 1");
 		// The cursor rests on a Group header, and the marker column reads the
 		// same at either kind of row.
-		expect(text).toContain("❯ ▾ implement 3 held 1");
+		expect(text).toContain("❯ ▾ implement 4 held 1");
+		// The routed ticket's row wears its wait's own badge (ADR 0067).
+		expect(text).toContain("[queued]");
 		// The axis names itself in the hint the bar carries, and the Message
 		// lines are the words the press leaves on the line.
 		expect(text).toContain("Ticket list grouped by repository");

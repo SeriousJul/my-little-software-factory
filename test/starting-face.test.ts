@@ -511,8 +511,8 @@ describe("the Starting window's timeline", () => {
 				// ...and a failed start closes the window: the state rules decide
 				// the resting face, and it is no longer the held one. The
 				// decision recorded at the ask (ADR 0064), so the turn is decided
-				// and the ticket wears the plain awaiting badge: the operator
-				// already chose.
+				// and the ticket stands queued while its dropped route's
+				// re-confirm stands (ADR 0067): the operator already chose.
 				await releaseHeld(gate);
 				const back = await awaitFrame(
 					setup,
@@ -524,7 +524,7 @@ describe("the Starting window's timeline", () => {
 				expect(messageRowOf(back)).toContain(
 					'Warning: queued handoff for "Persist source facts" was not run: error: the pane is gone',
 				);
-				expect(badgeRow(back)).toContain("[awaiting]");
+				expect(badgeRow(back)).toContain("[queued]");
 				expect(badgeRow(back)).not.toContain("held");
 				// And the decision stands where the ask put it.
 				expect(app.state.lastCompletion(identity)?.decision).toBe("handed-off");

@@ -75,3 +75,4 @@ body states the context, the decision, and the consequences.
 - [ADR 0064: The route's decision records at the ask, and the ask never waits on a run](./0064-the-route-decision-records-at-the-ask-and-the-ask-never-waits-on-a-run.md)
 - [ADR 0065: The open ticket bands order by ticket number](./0065-the-open-ticket-bands-order-by-ticket-number.md)
 - [ADR 0066: A fresh state file starts the Ticket list grouped by repository](./0066-a-fresh-state-file-starts-the-ticket-list-grouped-by-repository.md)
+- [ADR 0067: The routed ticket stands queued while its route stands](./0067-the-routed-ticket-stands-queued-while-its-route-stands.md)

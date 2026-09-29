@@ -778,8 +778,9 @@ class HandoffDispatchModule implements HandoffDispatch {
 		const currentState = this.state.ticketState(item.ticketIdentity);
 		// A queued route is the operator's decision on the turn the route's
 		// settled ticket awaited when the route was asked for: it stands while
-		// that ticket keeps awaiting the decision, and a ticket that closed the
-		// turn - back to open - or moved on leaves the route stale, so the item
+		// that ticket keeps the decision's wait - queued since the ask (ADR 0067)
+		// or awaiting where an earlier ask left it - and a ticket that closed the
+		// turn, back to open, or moved on leaves the route stale, so the item
 		// keeps its place with the state it moved to. A route that lands on the
 		// position's own ticket names its settled ticket in `routeFromIdentity`;
 		// the position's own state is where the facts sit, not where the
@@ -787,8 +788,8 @@ class HandoffDispatchModule implements HandoffDispatch {
 		const routeStillStands =
 			item.origin !== "workflow" ||
 			(item.routeFromIdentity !== null
-				? this.state.ticketState(item.routeFromIdentity) === "awaiting"
-				: currentState !== undefined && currentState === "awaiting");
+				? ["awaiting", "queued"].includes(this.state.ticketState(item.routeFromIdentity) ?? "")
+				: currentState !== undefined && (currentState === "awaiting" || currentState === "queued"));
 		if (
 			currentState === undefined ||
 			!handoffAllowsState(item.origin, currentState) ||
@@ -1186,7 +1187,15 @@ class HandoffDispatchModule implements HandoffDispatch {
 		})();
 
 		void run
-			.then((outcome) => this.finishHandoff(ticket.identity, claim, outcome, reportStarted))
+			.then((outcome) =>
+				this.finishHandoff(
+					ticket.identity,
+					claim,
+					outcome,
+					reportStarted,
+					claimed.routeFromIdentity,
+				),
+			)
 			.catch((error) => this.failHandoff(ticket.identity, claim, reportStarted, error));
 	}
 
@@ -1297,6 +1306,8 @@ class HandoffDispatchModule implements HandoffDispatch {
 		claim: HandoffClaim,
 		outcome: HandoffOutcome,
 		reportStarted: (started: DispatchResult) => void,
+		/** The ticket the started handoff routes from; null for a no-route start (ADR 0067). */
+		routeFromIdentity: string | null,
 	): Promise<void> {
 		if (this.stopped) return;
 		if (outcome.collision !== undefined) this.recordNameCollision(identity, outcome.collision);
@@ -1314,6 +1325,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 						tabId: outcome.agent.tabId,
 						workspaceId: outcome.agent.workspaceId,
 						agentName: outcome.agent.name,
+						routeFromIdentity,
 					},
 		);
 		this.reports.starting(identity, false);
@@ -1563,10 +1575,12 @@ function handoffAllowsState(origin: HandoffOrigin, state: TicketState): boolean 
 		case "open":
 			return state === "open";
 		case "workflow":
-			// A transition route may land on the position's own ticket, open
-			// or awaiting alike: the machine re-derives the position, so the
-			// routed ticket is the surface the facts now sit on (ADR 0027).
-			return state === "open" || state === "awaiting";
+			// A transition route may land on the position's own ticket, open,
+			// awaiting, or queued alike: the machine re-derives the position, so
+			// the routed ticket is the surface the facts now sit on (ADR 0027),
+			// and a route onto its own new position claims the ticket the ask
+			// moved to queued (ADR 0067).
+			return state === "open" || state === "awaiting" || state === "queued";
 		case "restart":
 			return state === "handed-off" || state === "running";
 	}

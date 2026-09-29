@@ -1072,14 +1072,15 @@ describe("the Work queue section", () => {
 					);
 					expect(frameText(queued)).toContain("waiting: 1");
 					expect(runner.commands().filter((c) => c.startsWith("herdr agent start"))).toEqual([]);
-					// The item carries the route's origin and the edge's resolved choice,
-					// and the ticket keeps the state it wears while it waits.
+					// The item carries the route's origin and the edge's resolved
+					// choice, and the ask moves the ticket to the wait it wears
+					// (ADR 0067): queued while its route stands.
 					const items = state.workQueue();
 					expect(items.map(workQueueIdentityOf)).toEqual([FIRST]);
 					if (items[0]?.kind !== "handoff") throw new Error("the waiting item is not a handoff");
 					expect(items[0].origin).toBe("workflow");
 					expect(items[0].choice.taskType).toBe("review");
-					expect(state.ticketState(FIRST)).toBe("awaiting");
+					expect(state.ticketState(FIRST)).toBe("queued");
 					// The decision records at the ask (ADR 0064): the routed
 					// handoff records its handed-off decision the moment it takes
 					// the queue, not when a seat frees it.
