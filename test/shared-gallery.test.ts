@@ -671,15 +671,14 @@ describe("the shared control gallery", () => {
 		// The available bar states the hint the Work section's bar states: Enter
 		// on a queue row force-dispatches the item under the cursor.
 		expect(frame).toContain("Enter Force-dispatch");
-		// The two refusals the catalogue carries, on the bars that refuse them.
-		expect(frame).toContain("a Handoff is active");
+		// The refusal the catalogue carries, on the bar that refuses it.
 		expect(frame).toContain("no queue item is under the cursor");
 		// The failure path: the warning a failed force-dispatch leaves on the
 		// Message line, the item leaving the queue behind it.
 		expect(frame).toContain("Warning:");
 		expect(frame).toContain(`force-dispatch of "Add a webhook retry policy" failed`);
 		// The Consultation item's line (issue #90): the item's own force-
-		// dispatch names the cap it ran over, standing while a Handoff runs.
+		// dispatch names the cap it ran over.
 		expect(frame).toContain("force-dispatched Consultation c1c1c1c1 over the Parallel limit");
 	});
 

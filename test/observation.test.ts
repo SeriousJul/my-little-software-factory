@@ -256,6 +256,19 @@ function rig(options: {
 				automatic: intent.automatic === true,
 			});
 			if (enqueued.ok !== true) return { ok: false, reason: enqueued.reason };
+			// The route's decision lands at the ask (ADR 0064): the module
+			// records it on the settled turn's trace at the enqueue, so the rig
+			// mirrors the fact the walk and the frame read beside the queue.
+			if (intent.origin === "workflow" && intent.routeFromIdentity !== undefined) {
+				const previous = state.latestHandoff(intent.routeFromIdentity);
+				if (previous !== null)
+					state.applyCompletionDecision({
+						ticketIdentity: intent.routeFromIdentity,
+						handoffId: previous.handoffId,
+						decision: intent.automatic === true ? "auto-handed-off" : "handed-off",
+						decidedAt: new Date(nowMs).toISOString(),
+					});
+			}
 			if (options.dispatchClaims) {
 				const claim = state.claimHandoff(intent.ticketIdentity, intent.choice, intent.origin);
 				if (claim.ok) claims.push(claim.claim.attemptId);
@@ -1536,8 +1549,9 @@ describe("the awaiting rule", () => {
 		await coordinator.tick();
 		// The route enters the queue as the top-up's continuation item, the
 		// way the Decision screen's route enters it: the item rests in the
-		// queue and the turn rests in awaiting, undecided until the pickup
-		// starts it.
+		// queue, and the ask records the factory's decision on the settled
+		// turn, so the turn rests in awaiting, decided while it waits (ADR
+		// 0064).
 		expect(intents).toEqual([
 			expect.objectContaining({
 				origin: "workflow",
@@ -1553,7 +1567,7 @@ describe("the awaiting rule", () => {
 		expect(ticket).toEqual(
 			expect.objectContaining({
 				state: "awaiting",
-				lastCompletion: expect.objectContaining({ decision: null }),
+				lastCompletion: expect.objectContaining({ decision: "auto-handed-off" }),
 			}),
 		);
 		state.close();
@@ -1599,7 +1613,7 @@ describe("the awaiting rule", () => {
 		state.close();
 	});
 
-	test("a decided turn routes no second time: the routed turn rests for the close", async () => {
+	test("a dropped auto route re-offers the same turn, and the decision re-lands as a no-op (ADR 0064)", async () => {
 		const { state, intents, coordinator } = rig({ autoOn: true, agents: [] });
 		state.applyFetch(source, success([fetched("github:github.com:I_6"), fetched()]));
 		const attempt = settleFor(
@@ -1609,26 +1623,32 @@ describe("the awaiting rule", () => {
 			routeOutcome("github:github.com:I_6"),
 		);
 		await coordinator.tick();
-		// The route to the position enqueues, the way the pickup's start would.
+		// The route to the position enqueues, and the ask records the
+		// factory's decision on the settled turn: the turn is decided while
+		// the item waits, the way the module's enqueue records it.
 		expect(intents).toHaveLength(1);
 		expect(intents[0]).toEqual(
 			expect.objectContaining({ origin: "workflow", ticketIdentity: "github:github.com:I_6" }),
 		);
-		// The pickup's start lands the decision on the settled turn (ADR 0049),
-		// and the item leaves the queue with it.
+		expect(state.lastCompletion("github:github.com:I_5")?.decision).toBe("auto-handed-off");
+		// The route's start dropped: the item leaves the queue, and the
+		// decision keeps its place - a second record of the same decision
+		// re-lands on the decided trace as a no-op, so the original ask's
+		// stamp holds.
 		state.removeWorkItem("github:github.com:I_6");
-		state.applyCompletionDecision({
-			ticketIdentity: "github:github.com:I_5",
-			handoffId: attempt,
-			decision: "auto-handed-off",
-			decidedAt: "2026-08-31T11:01:00Z",
-		});
-		// The decided turn offers no second continuation: the empty-queue
-		// cycles add no second route, and the turn rests in awaiting for the
-		// operator's close.
+		expect(
+			state.applyCompletionDecision({
+				ticketIdentity: "github:github.com:I_5",
+				handoffId: attempt,
+				decision: "auto-handed-off",
+				decidedAt: "2026-08-31T11:02:00Z",
+			}),
+		).toBe(false);
+		// The dropped auto route re-offers: the empty-queue cycle walks the
+		// auto-handed-off turn again, the position still offers the task, and
+		// the route enqueues a second time.
 		await coordinator.tick();
-		await coordinator.tick();
-		expect(intents.filter((intent) => intent.origin === "workflow")).toHaveLength(1);
+		expect(intents.filter((intent) => intent.origin === "workflow")).toHaveLength(2);
 		const [resting] = state.visibleTickets([], "implement");
 		expect(resting.state).toBe("awaiting");
 		expect(resting.lastCompletion?.decision).toBe("auto-handed-off");
@@ -2240,7 +2260,9 @@ describe("the awaiting rule", () => {
 		settleFor(state, "github:github.com:I_5", "route", routeOutcome("github:github.com:I_6"));
 		await coordinator.tick();
 		// The wait lives at the queue, not in the seat (ADR 0051): the route
-		// enters the queue, and the item rests until a seat frees.
+		// enters the queue, and the item rests until a seat frees. The ask
+		// records the factory's decision on the settled turn, so the turn
+		// waits decided (ADR 0064).
 		expect(intents).toEqual([
 			expect.objectContaining({
 				origin: "workflow",
@@ -2253,7 +2275,7 @@ describe("the awaiting rule", () => {
 		expect(ticket).toEqual(
 			expect.objectContaining({
 				state: "awaiting",
-				lastCompletion: expect.objectContaining({ decision: null }),
+				lastCompletion: expect.objectContaining({ decision: "auto-handed-off" }),
 			}),
 		);
 		state.close();
@@ -2298,16 +2320,18 @@ describe("the awaiting rule", () => {
 		state.close();
 	});
 
-	test("a route whose start never lands leaves the turn undecided, and the top-up asks again", async () => {
+	test("a route whose start never lands keeps the decision the ask made, and the top-up asks again (ADR 0064)", async () => {
 		const { state, intents, coordinator } = rig({ autoOn: true, agents: [] });
 		state.applyFetch(source, success([fetched("github:github.com:I_6"), fetched()]));
 		settleFor(state, "github:github.com:I_5", "route", routeOutcome("github:github.com:I_6"));
 		await coordinator.tick();
 		expect(intents).toHaveLength(1);
 		// The start never went live: the pickup drops the item with its
-		// warning (ADR 0049) and the queue drains. The record holds no
-		// decision the handoff never made, so the top-up's next empty-queue
-		// cycle asks again: the failed start consumed nothing.
+		// warning (ADR 0049) and the queue drains. The drop keeps the
+		// decision the ask recorded, and the position still offers the task,
+		// so the top-up's next empty-queue cycle asks again: the failed start
+		// consumed nothing, and the second ask re-lands the decision as a
+		// no-op beside the first.
 		state.removeWorkItem("github:github.com:I_6");
 		await coordinator.tick();
 		expect(intents.filter((intent) => intent.origin === "workflow")).toHaveLength(2);
@@ -2315,7 +2339,7 @@ describe("the awaiting rule", () => {
 		expect(ticket).toEqual(
 			expect.objectContaining({
 				state: "awaiting",
-				lastCompletion: expect.objectContaining({ decision: null }),
+				lastCompletion: expect.objectContaining({ decision: "auto-handed-off" }),
 			}),
 		);
 		state.close();

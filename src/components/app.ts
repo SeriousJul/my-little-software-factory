@@ -1196,19 +1196,24 @@ export function App({
 		inStartingWindow(ticket, startingTickets.has(ticket.identity));
 	/**
 	 * The Queue wait (CONTEXT.md) one ticket reads from the app's facts: its
-	 * open-origin item in the Work queue while the ticket rests open. The row
-	 * and the detail state line wear the `queued` badge in place of their
-	 * state badge, and the Starting window rules it out before it is read.
-	 * The ticket keeps its open state, so the counts and the state file
-	 * never learn the badge.
+	 * open-origin item in the Work queue while the ticket rests open, or the
+	 * item the ticket's route ask enqueued while the ticket rests awaiting
+	 * (ADR 0064). The row and the detail state line wear the `queued` badge
+	 * in place of their state badge, and the Starting window rules it out
+	 * before it is read, so the spinner face takes over when the run begins.
+	 * The ticket keeps its state, so the counts and the state file never
+	 * learn the badge.
 	 */
 	const queueWait = (ticket: Ticket): boolean =>
-		ticket.state === "open" &&
 		workQueue.some(
 			(item) =>
 				item.kind === "handoff" &&
-				item.origin === "open" &&
-				item.ticketIdentity === ticket.identity,
+				((item.origin === "open" &&
+					item.ticketIdentity === ticket.identity &&
+					ticket.state === "open") ||
+					(item.origin === "workflow" &&
+						item.routeFromIdentity === ticket.identity &&
+						ticket.state === "awaiting")),
 		);
 	const persistMapping = async (mapping: RepositoryMapping): Promise<string | undefined> => {
 		const write = configWriteQueue.current
@@ -1399,11 +1404,17 @@ export function App({
 			return;
 		}
 		// The no-state test projection: no claim, and the settle patches the
-		// ticket list by hand instead of reading it back from SQLite. It has no
-		// queue, so it refuses to run behind a handoff already in flight. The
-		// Starting window (ADR 0030) is the in-flight handoff itself here: the
-		// add lands on the keypress, and the settle leaves the face to the
-		// `handed-off` state on a start and drops it on a failure.
+		// ticket list by hand instead of reading it back from SQLite. It holds
+		// no attempt ledger, so the ref plays the ledger's role (ADR 0064): the
+		// shell refuses a second start while one stands in flight, the way the
+		// state-backed claim refuses it. The Starting window (ADR 0030) is the
+		// in-flight handoff itself here: the add lands on the keypress, and the
+		// settle leaves the face to the `handed-off` state on a start and drops
+		// it on a failure.
+		if (noStateHandoffInFlightRef.current) {
+			setWarningMessage("handoff in flight");
+			return;
+		}
 		noStateHandoffInFlightRef.current = true;
 		setStartingTickets((current) => {
 			if (current.has(ticket.identity)) return current;
@@ -1629,24 +1640,32 @@ export function App({
 			if (outcome.writeFailure !== "")
 				factLines.push(`label write failed: ${outcome.writeFailure}`);
 			if (outcome.positionTaskType !== null) {
-				// The position is derived, never stored (ADR 0027): the ticket
-				// it sits on can leave its source between the fire and the
-				// decision. No list holds such a ticket, and no task can host
-				// on it, so the offer stands withdrawn: a route would start a
-				// turn on an item every source has dropped.
-				const positionListed =
-					state === undefined ||
-					outcome.positionTicketIdentity === null ||
-					state.stillListed(outcome.positionTicketIdentity);
-				if (positionListed) {
-					actions.push({
-						key: "route",
-						label: `Handoff: ${outcome.positionTaskType}`,
-						detail: routeDetail(outcome, outcome.positionTaskType),
-						editable: true,
-					});
+				// While the route is alive, the row reads as the fact line that
+				// names where it stands, and takes no key (ADR 0064): Close and
+				// Goto stand always, and the confirm waits with the route.
+				const routeStanding = routeStandingLine(ticket, outcome);
+				if (routeStanding !== null) {
+					factLines.push(routeStanding);
 				} else {
-					factLines.push("the position's ticket left its source; no handoff stands");
+					// The position is derived, never stored (ADR 0027): the ticket
+					// it sits on can leave its source between the fire and the
+					// decision. No list holds such a ticket, and no task can host
+					// on it, so the offer stands withdrawn: a route would start a
+					// turn on an item every source has dropped.
+					const positionListed =
+						state === undefined ||
+						outcome.positionTicketIdentity === null ||
+						state.stillListed(outcome.positionTicketIdentity);
+					if (positionListed) {
+						actions.push({
+							key: "route",
+							label: `Handoff: ${outcome.positionTaskType}`,
+							detail: routeDetail(outcome, outcome.positionTaskType),
+							editable: true,
+						});
+					} else {
+						factLines.push("the position's ticket left its source; no handoff stands");
+					}
 				}
 			}
 			// The re-fire row stands on an outcome the fire did not complete
@@ -1670,6 +1689,34 @@ export function App({
 			cause: completion?.cause ?? null,
 			detail: completion?.detail ?? "",
 		};
+	};
+
+	/**
+	 * Where a living route stands (ADR 0064), or null while the route is dead:
+	 * no queue item waits for it, and its position holds no handoff. The
+	 * decision row reads the answer as the fact line it names - waiting in the
+	 * Work queue, starting, or running on its position ticket - and the live
+	 * route row stands again the moment the route dies, so the operator can
+	 * ask the same route for the next ticket.
+	 */
+	const routeStandingLine = (ticket: Ticket, outcome: TransitionOutcome): string | null => {
+		const positionIdentity = outcome.positionTicketIdentity ?? ticket.identity;
+		const waiting = workQueue.some(
+			(item) =>
+				item.kind === "handoff" &&
+				item.origin === "workflow" &&
+				item.routeFromIdentity === ticket.identity,
+		);
+		if (waiting) return "the route is waiting in the Work queue";
+		if (startingTickets.has(positionIdentity)) return "the route is starting";
+		const position = findTicket(positionIdentity);
+		if (
+			position !== undefined &&
+			(position.state === "handed-off" || position.state === "running")
+		) {
+			return "the route is running on its position ticket";
+		}
+		return null;
 	};
 
 	/** One surface's label write as the decision's fact line. */
@@ -2010,11 +2057,11 @@ export function App({
 		choice: HandoffChoice,
 	) => {
 		if (handoffDispatch === undefined) return;
-		// Claim first: a refused claim leaves the ticket where it was. The
-		// turn's decision is not recorded here: it lands when the routed
-		// handoff starts, on the settled turn's trace, and a route that never
-		// started leaves the trace pending, so Close and Goto keep working.
-		const previousHandoffId = ticket.handoff?.attemptId ?? "";
+		// The turn's decision lands at the ask (ADR 0064): the dispatch module
+		// records it when the route enqueues, on the state's clock, so the ask
+		// never waits on a run. A refusal before the enqueue - the claim, the
+		// one-item-per-ticket rule - records nothing, and the trace stays
+		// pending, so Close and Goto keep working.
 		const targetIdentity = outcome?.positionTicketIdentity ?? ticket.identity;
 		void handoffDispatch
 			.dispatch({
@@ -2027,17 +2074,9 @@ export function App({
 				routeFromIdentity: ticket.identity,
 				choice,
 				previousMessage: ticket.lastCompletion?.message ?? "",
-				// The routed handoff started: the operator's decision on the turn
-				// it routes from is `handed-off`, and the ticket reads as
-				// handed-off where the agent is. The dispatch module holds that one
-				// fact (`recordRoutedDecision`): the queue pickup of a start that
-				// waited for a seat records the same decision through it, on the
-				// same clock, so the two paths cannot drift.
-				onStarted: (started) => {
-					if (!started.ok || previousHandoffId === "") return;
-					handoffDispatch.recordRoutedDecision(ticket.identity, previousHandoffId);
-					replaceTickets();
-				},
+				// The start answers the ask's refresh only: the decision stands
+				// at the ask (ADR 0064), and the drop warning answers itself.
+				onStarted: () => replaceTickets(),
 			})
 			.then((result) => {
 				if (!result.ok) setWarningMessage(result.reason);
@@ -2085,10 +2124,9 @@ export function App({
 	 * the target Task profile, and the config defaults.
 	 */
 	const openRouteOverride = (ticket: Ticket, key: string) => {
-		if ((handoffDispatch?.handoffActive() ?? noStateHandoffInFlightRef.current) === true) {
-			setWarningMessage("handoff in flight");
-			return;
-		}
+		// The ask never waits on a run (ADR 0064): the edit stands while a
+		// Handoff is active, and the start it confirms answers by its own
+		// rules, like every other ask.
 		const choice = routeChoiceOf(ticket, key);
 		if (choice === null) return;
 		// The panel opens on this choice's agent: fetch its Model list (ADR 0010).

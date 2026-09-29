@@ -2220,7 +2220,7 @@ describe("the decision modal", () => {
 		app.state.close();
 	});
 
-	test("a failed route leaves the trace pending, and Close still ends the cycle", async () => {
+	test("a failed route keeps the decision the ask recorded, and Close still ends the cycle (ADR 0064)", async () => {
 		const app = seededApp("awaiting", {}, success, "live-worktree", { transition: reviewRoute() });
 		stubCheckout(app);
 		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
@@ -2246,14 +2246,16 @@ describe("the decision modal", () => {
 				await pressReturn(setup, "the failed route", (f) => f.includes("the workspace is gone"));
 
 				// The handoff never started: the ticket still awaits, and the
-				// turn's trace is still pending, so the decision modal keeps
-				// working on it.
+				// drop keeps the decision the ask recorded (ADR 0064), so the
+				// decision modal keeps working on the decided turn.
 				expect(app.state.ticketState(identity)).toBe("awaiting");
-				expect(app.state.lastCompletion(identity)?.decision).toBeNull();
+				expect(app.state.lastCompletion(identity)?.decision).toBe("handed-off");
 				await pressReturn(setup, "the decision modal again", (f) => f.includes("Decision:"));
 				await pressReturn(setup, "the close", (f) => ticketRow(f).includes("[open]"));
 				expect(app.state.ticketState(identity)).toBe("open");
-				expect(app.state.lastCompletion(identity)?.decision).toBe("closed");
+				// The Close ends the cycle the turn routed from, and the recorded
+				// decision stands: a fact is not rewritten.
+				expect(app.state.lastCompletion(identity)?.decision).toBe("handed-off");
 			},
 			WIDTH,
 			HEIGHT,
@@ -3720,12 +3722,12 @@ describe("the auto decision", () => {
 		app.state.close();
 	});
 
-	test("an auto route its agent cannot take starts nothing and decides nothing", async () => {
+	test("an auto route its agent cannot take starts nothing, and the decision stands at the ask (ADR 0064)", async () => {
 		// The review's own setup: the transition's position names a task type
 		// whose profile names an agent that maps no Model setting, beside a
 		// configured default model. The route can only fail, and it fails before
-		// any external step, so it must leave the turn as undecided as it was:
-		// the trace records a route only once an agent runs.
+		// any external step: the ask still recorded its decision, and the drop
+		// keeps it (ADR 0064).
 		const app = seededAppInAutoMode(
 			"awaiting",
 			{
@@ -3761,18 +3763,15 @@ describe("the auto decision", () => {
 					"the failed automatic route",
 				);
 				expect(frameText(failed)).toContain("no model setting");
-				// Nothing the record claims happened did happen: no agent started,
-				// and the settled turn holds no decision at all.
+				// Nothing the record claims started did start: no agent ran, and
+				// the drop keeps the decision the ask recorded.
 				expect(app.runner.commands().some((c) => c.startsWith("herdr agent start"))).toBe(false);
 				expect(app.state.ticketState(identity)).toBe("awaiting");
-				expect(app.state.lastCompletion(identity)?.decision).toBe(null);
-				expect(failed).not.toContain("auto-handed-off");
+				expect(app.state.lastCompletion(identity)?.decision).toBe("auto-handed-off");
 
-				// The ticket stayed awaiting, so the live agent that finished the
-				// turn reopens it as it always does, and the undecided trace keeps
-				// Close and Goto offered beside it. A route that consumed its own
-				// decision would leave the operator with a settled turn that could
-				// be neither routed nor closed.
+				// The live agent that finished the turn does not reopen the decided
+				// turn: the trace holds a decision, so the ticket rests in awaiting
+				// until the operator decides it.
 				app.runner.set("herdr", ["agent", "list"], {
 					stdout: agentListJson([
 						{
@@ -3784,16 +3783,9 @@ describe("the auto decision", () => {
 						},
 					]),
 				});
-				const reopened = await awaitFrame(
-					setup,
-					(f) => ticketRow(f).includes("[running]"),
-					"the reopened turn",
-				);
-				expect(ticketRow(reopened)).toContain("[running]");
-				// And the turn it reopened is the same undecided turn: the record
-				// still holds no decision for a route that never started.
-				expect(app.state.ticketState(identity)).toBe("running");
-				expect(app.state.lastCompletion(identity)?.decision).toBe(null);
+				await sleep(300);
+				expect(app.state.ticketState(identity)).toBe("awaiting");
+				expect(app.state.lastCompletion(identity)?.decision).toBe("auto-handed-off");
 			},
 			WIDTH,
 			HEIGHT,

@@ -1166,7 +1166,7 @@ describe("the contextual Action bar", () => {
 		}
 	});
 
-	test("an in-flight handoff dims its controls and explains the refusal", async () => {
+	test("an in-flight handoff keeps its hints, and the second ask refuses once (ADR 0064)", async () => {
 		const runner = new FakeRunner();
 		stubCheckout(runner);
 		stubLiveHandoff(runner);
@@ -1185,12 +1185,18 @@ describe("the contextual Action bar", () => {
 				);
 				const frame = await settle(setup);
 				const barRow = rowsOf(frame).length - 1;
-				expect(spanColorAt(setup, barRow, "Enter Hand off")).toEqual(rgb(roleColor("subtext0")));
-				expect(spanColorAt(setup, barRow, "e Override")).toEqual(rgb(roleColor("subtext0")));
-				// The second Enter is refused as a Hand off. The refusal is
-				// an operation Warning, and active progress outranks it
-				// (user story 51), so the Handoff's own Working keeps the
-				// line: an answer never erases the work in flight.
+				// The ask never waits on a run (ADR 0064): the hints stay lit
+				// while a Handoff runs, and a second ask answers with the
+				// shell's own words. The key paints the accent and the label the
+				// text: the hint the operator sees is the hint that runs.
+				expect(spanColorAt(setup, barRow, "Enter ")).toEqual(rgb(roleColor("accent")));
+				expect(spanColorAt(setup, barRow, "Hand off")).toEqual(rgb(roleColor("text")));
+				expect(spanColorAt(setup, barRow, "e ")).toEqual(rgb(roleColor("accent")));
+				expect(spanColorAt(setup, barRow, "Override")).toEqual(rgb(roleColor("text")));
+				// The second Enter is refused. The refusal is an operation
+				// Warning, and active progress outranks it (user story 51), so
+				// the Handoff's own Working keeps the line: an answer never
+				// erases the work in flight.
 				setup.mockInput.pressEnter();
 				await sleep(400);
 				expect(messageRowOf(setup.captureCharFrame())).toContain("handing off");
@@ -1198,7 +1204,7 @@ describe("the contextual Action bar", () => {
 				// operator drew during the flight then takes the line.
 				await awaitFrame(
 					setup,
-					(f) => messageRowOf(f).includes("a Handoff is active"),
+					(f) => messageRowOf(f).includes("handoff in flight"),
 					"the handoff to settle",
 					8000,
 				);

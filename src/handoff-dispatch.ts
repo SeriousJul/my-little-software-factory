@@ -91,8 +91,8 @@ export interface HandoffIntent {
 	 * The result of the handoff's own start, reported once when the claimed
 	 * handoff settles: `{ ok: true }` when the agent is live, `{ ok: false,
 	 * reason }` when it never started. The claim says the dispatch took the
-	 * work; only the start says the agent runs, so a route's decision waits for
-	 * this. An intent that records nothing on a start omits it.
+	 * work; only the start says the agent runs. An intent that records nothing
+	 * on a start omits it.
 	 */
 	onStarted?: (started: DispatchResult) => void;
 	/**
@@ -303,16 +303,6 @@ export interface HandoffDispatch {
 	 */
 	removeConsultationQueueItem(consultationId: string): boolean;
 	/**
-	 * Record the operator's `handed-off` decision on the turn a routed start came
-	 * from (ADR 0034). One implementation holds both paths of the same fact:
-	 * `runRouteHandoff` in the Main view for a route that starts in its own seat
-	 * at once, and the queue pickup for a route whose start waited for a seat. It
-	 * stamps the state's clock, so the two paths cannot disagree about when the
-	 * decision landed, and a blank predecessor - a turn that never settled -
-	 * records nothing.
-	 */
-	recordRoutedDecision(ticketIdentity: string, previousHandoffId: string): void;
-	/**
 	 * The Close cleanup of one ended cycle. Returns the failure reason, or
 	 * undefined. `end` stays on the seam so manual and observation callers share
 	 * the same operation shape; the caller owns the wording of the answer.
@@ -336,7 +326,11 @@ export interface HandoffDispatch {
 	 * `closeCleanup`.
 	 */
 	closeWorkCycle(identity: string): Promise<CloseCycleOutcome>;
-	/** True while a Handoff holds the seat. The catalogue fact and the route edit guard. */
+	/**
+	 * True while a Handoff holds the seat. The catalogue fact the normal Quit
+	 * gates on (ADR 0064): the ask controls no longer wait on a run, and the
+	 * Quit is the one control that tears down the process mid-run.
+	 */
 	handoffActive(): boolean;
 	/**
 	 * Stop the module. A handoff run still in flight settles neither state nor
@@ -494,6 +488,12 @@ class HandoffDispatchModule implements HandoffDispatch {
 			automatic: intent.automatic === true,
 		});
 		if (!enqueued.ok) return { ok: false, reason: enqueued.reason };
+		// The route's decision lands at the ask (ADR 0064): a workflow-origin
+		// ask records it on the settled turn's trace the moment it enqueues, so
+		// the ask never waits on a run. A refusal before the enqueue - the
+		// claim, the one-item-per-ticket rule - records nothing, so a route
+		// that never enqueued leaves the turn pending.
+		this.recordRouteDecision(intent);
 		this.log?.info(
 			`handoff queued: ${this.ticketName(intent.ticketIdentity)} (origin ${intent.origin})`,
 		);
@@ -626,16 +626,23 @@ class HandoffDispatchModule implements HandoffDispatch {
 	}
 
 	/**
-	 * Write the routed start's decision on the turn it routes from. One copy of
-	 * the fact serves both paths that route: the Main view's own start and the
-	 * queue pickup of a start that waited for a seat.
+	 * Record the decision of a routed ask on the settled turn's trace (ADR
+	 * 0064): `handed-off` for the operator's route, `auto-handed-off` for the
+	 * factory's. The record reads the settled ticket's latest handoff, the same
+	 * fact the claim reads at the claim, so the two moments cannot disagree,
+	 * and it reuses the state's one decision writer. The writer takes the first
+	 * decision on a turn, so a re-enqueued route re-lands the same decision as a
+	 * no-op and keeps the original ask's time. An ask with no route, a turn
+	 * that never settled, or a turn already decided records nothing.
 	 */
-	recordRoutedDecision(ticketIdentity: string, previousHandoffId: string): void {
+	private recordRouteDecision(intent: HandoffIntent) {
+		if (intent.origin !== "workflow" || intent.routeFromIdentity === undefined) return;
+		const previousHandoffId = this.state.latestHandoff(intent.routeFromIdentity)?.handoffId ?? "";
 		if (previousHandoffId === "") return;
 		this.state.applyCompletionDecision({
-			ticketIdentity,
+			ticketIdentity: intent.routeFromIdentity,
 			handoffId: previousHandoffId,
-			decision: "handed-off",
+			decision: intent.automatic === true ? "auto-handed-off" : "handed-off",
 			decidedAt: new Date(this.state.now()).toISOString(),
 		});
 	}
@@ -854,21 +861,11 @@ class HandoffDispatchModule implements HandoffDispatch {
 			this.reports.refresh();
 			return { ok: false, reason: "the ticket is no longer visible" };
 		}
-		// The decision lands on the settled turn: for a route that crosses to
-		// the position's own ticket, that is the settled ticket's latest
-		// handoff, not the position's. A crossed route whose settled ticket
-		// holds no handoff names an empty id, and the record waits for a fact
-		// that never stands.
-		const routeFrom = item.routeFromIdentity;
 		return {
 			ok: true,
 			ticket,
 			claim: claim.claim,
-			routeFromIdentity: routeFrom,
-			previousHandoffId:
-				routeFrom !== null
-					? (this.state.latestHandoff(routeFrom)?.handoffId ?? "")
-					: (ticket.handoff?.attemptId ?? ""),
+			routeFromIdentity: item.routeFromIdentity,
 		};
 	}
 
@@ -912,23 +909,8 @@ class HandoffDispatchModule implements HandoffDispatch {
 					// "started from the Work queue" line for a start the operator ended.
 					const rowStands = this.state.hasWorkItem(item.ticketIdentity);
 					if (rowStands) this.removeQueueRow(item.ticketIdentity);
-					// The route the item carries lands on the settled turn's trace
-					// once the pickup's handoff is live. The operator's route records
-					// its decision; the top-up's route (ADR 0051) lands it the
-					// automatic way the direct starts did.
-					if (item.origin === "workflow") {
-						if (item.automatic === true) {
-							this.recordAutoRouteDecision(
-								claimed.routeFromIdentity ?? item.ticketIdentity,
-								claimed.previousHandoffId,
-							);
-						} else {
-							this.recordRoutedDecision(
-								claimed.routeFromIdentity ?? item.ticketIdentity,
-								claimed.previousHandoffId,
-							);
-						}
-					}
+					// The route's decision stands at the ask (ADR 0064); the start
+					// answers the ask's refresh and start report only.
 					this.reports.refresh();
 					if (rowStands) {
 						this.reports.notice(
@@ -959,22 +941,6 @@ class HandoffDispatchModule implements HandoffDispatch {
 		this.reports.warning(
 			`queued handoff for ${this.ticketName(item.ticketIdentity)} was not run: ${reason}`,
 		);
-	}
-
-	/**
-	 * The decision the top-up's route lands on the settled turn it routes from
-	 * (ADR 0051): `auto-handed-off`, the way the automatic starts the factory
-	 * retired recorded it. One copy of the fact and one clock serve a route
-	 * that starts in its seat and one that waited in the queue.
-	 */
-	private recordAutoRouteDecision(ticketIdentity: string, previousHandoffId: string): void {
-		if (previousHandoffId === "") return;
-		this.state.applyCompletionDecision({
-			ticketIdentity,
-			handoffId: previousHandoffId,
-			decision: "auto-handed-off",
-			decidedAt: new Date(this.state.now()).toISOString(),
-		});
 	}
 
 	/**
@@ -1046,19 +1012,8 @@ class HandoffDispatchModule implements HandoffDispatch {
 					// second line: the run it ended earns no start line of its own.
 					const rowStands = this.state.hasWorkItem(item.ticketIdentity);
 					if (rowStands) this.removeQueueRow(item.ticketIdentity);
-					if (item.origin === "workflow") {
-						if (item.automatic === true) {
-							this.recordAutoRouteDecision(
-								claimed.routeFromIdentity ?? item.ticketIdentity,
-								claimed.previousHandoffId,
-							);
-						} else {
-							this.recordRoutedDecision(
-								claimed.routeFromIdentity ?? item.ticketIdentity,
-								claimed.previousHandoffId,
-							);
-						}
-					}
+					// The route's decision stands at the ask (ADR 0064); the start
+					// answers the ask's refresh and start report only.
 					this.reports.refresh();
 					if (rowStands)
 						this.reports.notice(
@@ -1598,8 +1553,6 @@ type QueueItemClaimResult =
 			claim: HandoffClaim;
 			/** The route's settled ticket, as the queue row names it; null for a no-route start. */
 			routeFromIdentity: string | null;
-			/** The handoff id the route's decision lands on, empty when it lands on none. */
-			previousHandoffId: string;
 	  }
 	| { ok: false; reason: string }
 	| { ok: "cancelled" };

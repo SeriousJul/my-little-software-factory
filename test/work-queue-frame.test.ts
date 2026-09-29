@@ -692,6 +692,58 @@ describe("the Work queue section", () => {
 		}
 	});
 
+	/**
+	 * The Queue wait of a route (ADR 0064): the settled ticket whose route
+	 * waits in the queue keeps its awaiting state, and its row wears the
+	 * `queued` badge in the state badge's place, the way the open ticket's
+	 * waiting start already does.
+	 */
+	test("the settled ticket whose route waits wears the queued badge (ADR 0064)", async () => {
+		const state = openFactoryState(join(home, "state.sqlite"));
+		const { source, runner } = queuedFixture(state, false);
+		const outcome = success(twoTickets());
+		// The first ticket's turn rests awaiting its decision: the settled
+		// state the route stands on. The second ticket's own durable claim
+		// holds the factory's one seat, so the queued route waits.
+		seedAwaitingTurn(state, outcome, FIRST);
+		const held = state.claimHandoff(SECOND, baseChoice("pi", "live-worktree", "implement"), "open");
+		if (!held.ok) throw new Error(held.reason);
+		const enqueued = state.enqueueWork({
+			ticketIdentity: SECOND,
+			routeFromIdentity: FIRST,
+			origin: "workflow",
+			choice: baseChoice("pi", "live-worktree", "implement"),
+			previousMessage: "the turn is done",
+		});
+		if (!enqueued.ok) throw new Error(enqueued.reason);
+		try {
+			await booted(
+				async (setup) => {
+					source.settle(outcome);
+					const frame = await awaitFrame(
+						setup,
+						(f) => f.includes("Work") && frameText(f).includes("awaiting: 1"),
+						"the settled ticket's count",
+					);
+					const rows = rowsOf(stripAnsi(frame));
+					// The settled ticket keeps its awaiting state, and its row
+					// wears the queued badge in the state badge's place.
+					const settledRow = rows.find((row) => row.includes("Add a webhook retry policy"));
+					expect(settledRow).toContain("[queued]");
+					// The position ticket without a waiting start of its own
+					// keeps its open badge.
+					const resting = rows.find((row) => row.includes("Close the stale"));
+					expect(resting).toContain("[open]");
+				},
+				state,
+				source,
+				runner,
+			);
+		} finally {
+			state.close();
+		}
+	});
+
 	test("+ and - reorder the waiting starts, and the captured choice stays put", async () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
 		const { source, enqueue, runner } = queuedFixture(state);
@@ -996,9 +1048,10 @@ describe("the Work queue section", () => {
 					expect(items[0].origin).toBe("workflow");
 					expect(items[0].choice.taskType).toBe("review");
 					expect(state.ticketState(FIRST)).toBe("awaiting");
-					// The trace the route came from is still undecided: the routed
-					// handoff never started.
-					expect(state.lastCompletion(FIRST)?.decision).toBeNull();
+					// The decision records at the ask (ADR 0064): the routed
+					// handoff records its handed-off decision the moment it takes
+					// the queue, not when a seat frees it.
+					expect(state.lastCompletion(FIRST)?.decision).toBe("handed-off");
 				},
 				WIDTH,
 				34,
