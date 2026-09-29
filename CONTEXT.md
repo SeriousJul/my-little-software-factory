@@ -68,7 +68,7 @@ The control plane copies a mouse selection to the clipboard when the operator re
 _Avoid_: copy-on-select, select-to-copy, clipboard selection
 
 **Decision modal**:
-The near-fullscreen Interaction mode above an awaiting or queued ticket: the turn log, the label facts the Transition wrote, and the rows the operator confirms: close, goto, and, when the ticket's new position offers a task, the handoff of that task.
+The near-fullscreen Interaction mode above an awaiting or queued ticket: the turn log, the label facts the Transition wrote, and the rows the operator confirms: close, goto, and, when the ticket's new position offers a task, the handoff of that task, or its Plane action (ADR 0068).
 The route row stands live while its route is dead and reads as a fact line while the route lives: waiting in the Work queue, starting, or running on its position ticket (ADR 0064). A ticket the route confirm moves to `queued` keeps this screen open on its own surface (ADR 0067).
 `e` on a handoff row edits that route's settings before it starts.
 _Avoid_: action panel, decision popup
@@ -250,7 +250,7 @@ _Avoid_: blocked, idle, done
 
 **Queued**:
 The Consultation state where the Consultation waits in the Work queue for its pickup: a free Parallel limit seat, or the queue's resume while the queue pause stands. It holds no environment and no Agent until the pickup starts it (ADR 0049, ADR 0052).
-The ticket's routed wait takes this word (ADR 0067): the ticket state where the ticket's turn is decided and its route's start waits in the Work queue for its pickup, or runs on its position ticket. It holds no Agent and wears no missing marker: the pickup's start settles it, to `handed-off` in its own cycle when the route runs on its own new position, and to `open` with an incremented cycle when the route runs on a different ticket.
+The ticket's routed wait takes this word (ADR 0067): the ticket state where the ticket's turn is decided and its route's start waits in the Work queue for its pickup, or runs on its position ticket. It holds no Agent and wears no missing marker: the pickup's start settles it, to `handed-off` in its own cycle when the route runs on its own new position, and to `open` with an incremented cycle when the route runs on a different ticket. A route whose task is a Plane action settles it to `open` without a cycle, because the action opens no handoff (ADR 0068).
 _Avoid_: pending, waiting to start
 
 **Unscheduled**:
@@ -371,6 +371,13 @@ Assigning a ticket to an agent type and an environment with a task type, and sta
 It asks Herdr for the ticket's stable Agent name, and takes the name of its work cycle when the ticket's own Leftover environment still holds the stable one.
 _Avoid_: assign, dispatch, launch
 
+**Plane action**:
+The work of an action task type, which the control plane executes itself through the Command runner. It holds no Agent and takes no Environment, so it opens no work cycle, holds no Parallel limit seat, and settles no turn.
+The plane action is a named built-in with its own typed settings, and the shipped set holds the merge of a pull request. Its start is a Work queue item like any start, and the queue pause holds it while it stands. The Dispatch pause holds its automatic add, and the Handoff limit counts its attempts.
+Its attempt is a fact on the ticket, outside any work cycle: the time, the task type, the outcome, and the reason. A merge that finds its pull request already merged settles `merged`.
+Its outcome fires the task type's Transition the way a `completed` settle does, on both outcomes alike, and the fire's fact lands on the attempt's record, because no Completion trace stands for it.
+_Avoid_: handoff, automation, command
+
 **Route close**:
 The act the handoff ask of the Decision screen makes on the settled turn's environment, at the ask: a direct start closes it before the handoff builds its own, and a start that waits in the Work queue closes it at the enqueue. It is non-destructive: a worktree environment loses its herdr workspace, and the checkout and the branch stay, so the handoff reopens the worktree in a fresh workspace - on its branch when a worktree holds it, or by the path it stands in, on the branch the agent left it, when no worktree holds the branch - and a live-worktree environment loses its tab beside its shared workspace. It is the ask's act: the automatic route and the Restart keep the stored workspace and reuse it. A refused close is a line, not a failure: the handoff runs on the stored workspace it could not take down (ADR 0046).
 _Avoid_: workspace cleanup, environment teardown
@@ -387,11 +394,11 @@ _Avoid_: auto dispatch, dispatch mode
 
 **Parallel limit**:
 The maximum number of works in flight, counting a ticket Handoff and a Consultation alike. A seat is held by an in-flight ticket whose agent the latest poll listed, by every in-progress handoff, by a started agent still inside its Startup grace (ADR 0021), and by a Consultation in `opening` or `working`.
-It gates every start: a start that cannot take a seat waits in the Work queue for its pickup (ADR 0049).
+It gates every start: a start that cannot take a seat waits in the Work queue for its pickup (ADR 0049). A Plane action's start takes no seat, because it holds no agent: the pickup runs it whatever the limit reads (ADR 0068).
 _Avoid_: concurrency cap, max agents
 
 **Work queue**:
-The ordered, durable list through which every start passes: a manual Handoff the operator asked for, a routed ticket's start, a Consultation in `queued` state, and the automatic adds the auto top-up makes (ADR 0049, ADR 0051). The routed item is the ticket's own waiting fact: while it stands, the routed ticket's state reads `queued` (ADR 0067). The queue holds at most one item per ticket: a second add of a ticket that already waits is refused, and the first item keeps its place.
+The ordered, durable list through which every start passes: a manual Handoff the operator asked for, a routed ticket's start, a Consultation in `queued` state, a Plane action's start, and the automatic adds the auto top-up makes (ADR 0049, ADR 0051). The routed item is the ticket's own waiting fact: while it stands, the routed ticket's state reads `queued` (ADR 0067). The queue holds at most one item per ticket: a second add of a ticket that already waits is refused, and the first item keeps its place.
 The pickup is the only starter of a queued start, and a pickup attempt ends in start or drop, never in stay: a dropped item leaves the queue with its warning, and the queue never holds a failing item, so it cannot jam (ADR 0049). A pickup is a claim like any other: it puts the ticket in the Starting window, and it holds its seat even while the herdr seat keeps the work parked. The operator promotes and demotes an item with `+` and `-`, force-dispatches it over the cap, removes it, or pauses the queue itself: a removed Handoff item is cancelled and its ticket keeps its state, a removed Consultation item is unscheduled and keeps its record, and the queue pause holds the drain while it stands (ADR 0052). A removal ends the whole waiting start, including a claim the pickup already made and parked.
 _Avoid_: dispatch queue, pending list, execution queue
 
@@ -424,8 +431,8 @@ It is distinct from the Dispatch pause, which is automatic and holds the top-up'
 _Avoid_: dispatch pause, queue stop, brake
 
 **Handoff limit**:
-The per-ticket cap on started handoffs that stops the close-and-rehandoff loop.
-It gates auto-handoff only; a manual handoff may pass it.
+The per-ticket cap on started handoffs and plane action attempts that stops the close-and-rehandoff loop.
+It gates auto-handoff only; a manual handoff or a manual plane action confirm may pass it (ADR 0068).
 _Avoid_: turn counter, dispatch budget
 
 **Dispatch pause**:
@@ -440,7 +447,8 @@ A completed work needs no repeat, and progress needs a new signal. It is derived
 _Avoid_: dispatch block, retry gate, backoff
 
 **Task type**:
-The named description of a kind of work: its prompt template, the Task profile its handoffs start on, and its Transition, the label facts a completed turn of it writes.
+The named description of a kind of work and its Transition, the label facts a completed turn of it writes, or a Plane action's outcome, fires (ADR 0068).
+A prompt task type holds its prompt template and the Task profile its handoffs start on. An action task type holds a Plane action instead of the template and the profile, and the two forms never mix on one type.
 A Workflow state offers a task type, and the default task type offers one when no state matches. The completion behavior follows the task type to whatever ticket it runs on.
 _Avoid_: prompt, template, task
 
@@ -467,7 +475,7 @@ Its match spec is also the ticket's entry to it: the all and any labels are the 
 _Avoid_: status, phase, stage, ticket state
 
 **Transition**:
-The label facts a completed turn of a task type writes. It fires on a `completed` settle, before the Completion decision, in manual mode and in auto mode alike, and it is idempotent.
+The label facts a completed turn of a task type writes. It fires on a `completed` settle, before the Completion decision, and on a Plane action's outcome (ADR 0068), in manual mode and in auto mode alike, and it is idempotent.
 It adds and removes labels on the ticket and on its fixing pull request, and a branch chooses between alternative fact sets on a Judgment. After it runs, the label set matches its spec whatever writers ran before, and the tickets' new positions derive from the written labels.
 It is the settle-time write; the handoff-time write is the Placement (ADR 0045).
 _Avoid_: handoff, label flip, workflow edge
@@ -484,9 +492,9 @@ A transition whose new position offers no task on this ticket closes the cycle: 
 _Avoid_: auto complete, auto done, auto close
 
 **Completion decision**:
-The choice made on a settled agent turn: close the cycle, go to the agent, or hand off with the task the ticket's new position offers.
+The choice made on a settled agent turn: close the cycle, go to the agent, or run the task the ticket's new position offers: a handoff when the task type is a prompt task, a Plane action when it is an action task (ADR 0068).
 On a task type that carries a Transition, the Transition has written its label facts before this choice.
-_Avoid_: action, verdict
+_Avoid_: verdict, outcome
 
 **Turn log**:
 The agent's messages of one settled turn, in order: the agent's text, and one short note per tool call.
@@ -568,7 +576,7 @@ _Avoid_: entry label, position label, workflow label
 
 **Override**:
 A one-shot change to the settings of a single Handoff, made in the override panel before the Handoff starts.
-The panel edits an open Ticket's next Handoff and a handoff the Workflow position suggests alike: `e` on a decision row opens the panel on the settings that row resolved.
+The panel edits an open Ticket's next Handoff and a handoff the Workflow position suggests alike: `e` on a decision row opens the panel on the settings that row resolved. A decision row that offers a Plane action offers no override, because the action holds no settings the panel can edit (ADR 0068).
 It applies to that Handoff only and never becomes a new default; a later handoff the Workflow position suggests resolves its own profile instead of inheriting one.
 A Restart repeats the interrupted Handoff's choices as recovery.
 The settings are: Agent type, Environment kind, Task type, Model, Thinking level, and Context window.
