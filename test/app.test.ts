@@ -85,6 +85,8 @@ const SPINNER_GLYPH = `[${SPINNER_FRAMES.join("")}]`;
 describe("the control plane", () => {
 	test("production starts with no configured ticket sources instead of sample data", async () => {
 		const state = openFactoryState(":memory:");
+		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
+		state.setGroupingAxis("tickets", "none");
 		try {
 			await withApp(
 				async (setup) => {
@@ -110,6 +112,8 @@ describe("the control plane", () => {
 		// stored handle still names that id, so the pane reads as missing - the
 		// row wears the failure badge, and Goto focuses nothing.
 		const state = openFactoryState(":memory:");
+		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
+		state.setGroupingAxis("tickets", "none");
 		const runner = new FakeRunner();
 		const source = { name: "issues", kind: "github-issues" as const };
 		const identity = "github:github.com:I_5";
@@ -211,6 +215,8 @@ describe("the control plane", () => {
 		// recorded-pane standing gives way to the identity: the base key
 		// refuses, and the decision's Goto row refuses the same focus.
 		const state = openFactoryState(":memory:");
+		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
+		state.setGroupingAxis("tickets", "none");
 		const runner = new FakeRunner();
 		const source = { name: "issues", kind: "github-issues" as const };
 		const identity = "github:github.com:I_5";
@@ -1401,6 +1407,8 @@ describe("the control plane", () => {
 		// the ordering the app computes is the ordering on screen. A hint
 		// priority that moves reorders these rows.
 		const state = openFactoryState(":memory:");
+		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
+		state.setGroupingAxis("tickets", "none");
 		try {
 			await withApp(
 				async (setup) => {

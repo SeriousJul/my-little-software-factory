@@ -218,6 +218,9 @@ function seed(
 	const dir = mkdtempSync(join(tmpdir(), "factory-auto-state-"));
 	paths.push(dir);
 	const state = openFactoryState(join(dir, "state.sqlite"), detail.stateNow);
+	// The frames assert the unsplit list: a fresh file opens grouped by
+	// repository (ADR 0066), so the fixture holds the flat axis.
+	state.setGroupingAxis("tickets", "none");
 	state.initializeSources([source]);
 	state.applyFetch(source, outcome);
 	if (shape !== "open") {
@@ -3908,6 +3911,9 @@ describe("the handoff queue", () => {
 			],
 		};
 		const state = openFactoryState(join(dir, "state.sqlite"));
+		// The test reads the list unsplit: a fresh file opens grouped by
+		// repository (ADR 0066), so the fixture holds the flat axis.
+		state.setGroupingAxis("tickets", "none");
 		state.initializeSources([source]);
 		state.applyFetch(source, pairMoved);
 		// The second ticket starts in flight, with the stored herdr handles.

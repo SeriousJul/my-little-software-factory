@@ -103,6 +103,8 @@ function rig(
 	over: { autoMode?: boolean; config?: Partial<FactoryConfig>; pollIntervalMs?: number } = {},
 ): Rig {
 	const state = openFactoryState(statePath());
+	// Hold the flat axis: the frames read the unsplit list (ADR 0066).
+	state.setGroupingAxis("tickets", "none");
 	state.initializeSources([{ name: "issues", kind: "github-issues" }]);
 	state.applyFetch({ name: "issues", kind: "github-issues" }, success(twoTickets()));
 	if (over.autoMode === true) state.setAutoHandoffMode(true);
@@ -403,6 +405,8 @@ describe("the ignore key", () => {
 	 */
 	test("cycling the filter moves no count and rings no bell", async () => {
 		const state = openFactoryState(statePath());
+		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
+		state.setGroupingAxis("tickets", "none");
 		const outcome = success(twoTickets());
 		state.initializeSources([{ name: "issues", kind: "github-issues" }]);
 		state.applyFetch({ name: "issues", kind: "github-issues" }, outcome);
@@ -727,6 +731,8 @@ test("the no-state shell refuses i and f with the same missing fact", async () =
 describe("the obligation gate", () => {
 	test("the key refuses an awaiting Ticket and states its reason", async () => {
 		const state = openFactoryState(statePath());
+		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
+		state.setGroupingAxis("tickets", "none");
 		const outcome = success([issueTicket(FIRST)]);
 		// A settled turn rests on the operator's decision: the row is the way to
 		// the Decision modal, so the ignore cannot take it away.
@@ -777,6 +783,8 @@ describe("the obligation gate", () => {
 
 	test("the key refuses a missing Agent, and its row keeps the badge the choice lives on", async () => {
 		const state = openFactoryState(statePath());
+		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
+		state.setGroupingAxis("tickets", "none");
 		const outcome = success([issueTicket(FIRST)]);
 		seedInFlightTurn(state, outcome);
 		const runner = emptyAgentRunner();
@@ -814,6 +822,8 @@ describe("the obligation gate", () => {
 describe("the ignore and the machine", () => {
 	test("a live Agent keeps its seat, its row, and its badge under the ignored marker", async () => {
 		const state = openFactoryState(statePath());
+		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
+		state.setGroupingAxis("tickets", "none");
 		const outcome = success([issueTicket(FIRST)]);
 		seedInFlightTurn(state, outcome);
 		const runner = emptyAgentRunner();
@@ -870,6 +880,8 @@ describe("the ignore and the machine", () => {
 		// operator asked for waits in the Work queue for the seat, which is the
 		// waiting item the ignore takes away with the row.
 		const state = openFactoryState(statePath());
+		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
+		state.setGroupingAxis("tickets", "none");
 		const outcome = success(twoTickets());
 		state.initializeSources([{ name: "issues", kind: "github-issues" }]);
 		state.applyFetch({ name: "issues", kind: "github-issues" }, outcome);
@@ -964,6 +976,8 @@ describe("the ignore and the machine", () => {
 		// Ticket's asked-for start stays in the queue: the row must name its
 		// ticket by title, not by the raw identity the list rule left behind.
 		const state = openFactoryState(statePath());
+		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
+		state.setGroupingAxis("tickets", "none");
 		const outcome = success(twoTickets());
 		state.initializeSources([{ name: "issues", kind: "github-issues" }]);
 		state.applyFetch({ name: "issues", kind: "github-issues" }, outcome);
@@ -1043,6 +1057,8 @@ describe("the ignore and the machine", () => {
 		// One seat, held by the second Ticket's own Agent: the ignored Ticket's
 		// asked-for start waits in the queue, and its row is nowhere in the list.
 		const state = openFactoryState(statePath());
+		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
+		state.setGroupingAxis("tickets", "none");
 		const outcome = success(twoTickets());
 		state.initializeSources([{ name: "issues", kind: "github-issues" }]);
 		state.applyFetch({ name: "issues", kind: "github-issues" }, outcome);
@@ -1225,6 +1241,8 @@ describe("the ignore and the machine", () => {
 	 */
 	test("an ignored Ticket whose Agent goes missing keeps its row and its flag", async () => {
 		const state = openFactoryState(statePath());
+		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
+		state.setGroupingAxis("tickets", "none");
 		const outcome = success([issueTicket(FIRST)]);
 		seedInFlightTurn(state, outcome);
 		// Auto mode from the boot: the Restart is the machine's own move, and the
@@ -1353,6 +1371,8 @@ describe("the ignored marker's frame", () => {
 	 */
 	test("the pile reaches a Ticket the covered rule also hides", async () => {
 		const state = openFactoryState(statePath());
+		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
+		state.setGroupingAxis("tickets", "none");
 		const pull = (closes: boolean): FetchedTicket => ({
 			identity: "github:github.com:P_9",
 			sourceKind: "github-pull-request",
@@ -1444,6 +1464,8 @@ describe("the ignored marker's frame", () => {
 	 */
 	test("a narrow frame cuts the ignored cell before the held count", async () => {
 		const state = openFactoryState(statePath());
+		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
+		state.setGroupingAxis("tickets", "none");
 		const outcome = success(twoTickets());
 		state.initializeSources([{ name: "issues", kind: "github-issues" }]);
 		state.applyFetch({ name: "issues", kind: "github-issues" }, outcome);

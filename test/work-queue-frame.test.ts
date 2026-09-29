@@ -73,6 +73,8 @@ const forceCheckout = () => join(home, "src", "billing");
  */
 function forcedFixture() {
 	const state = openFactoryState(join(home, "state.sqlite"));
+	// Hold the flat axis: the frames read the unsplit list (ADR 0066).
+	state.setGroupingAxis("tickets", "none");
 	const heldTicket = issueTicket(HELD);
 	const forcedTicket = issueTicket(FORCED, {
 		externalKey: "#6",
@@ -289,6 +291,8 @@ describe("the Work queue section", () => {
 	 */
 	test("the detail says whose start a waiting row is", async () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
+		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
+		state.setGroupingAxis("tickets", "none");
 		const { source, enqueue, runner } = queuedFixture(state);
 		enqueue(FIRST, "workflow", true);
 		enqueue(SECOND, "workflow");
@@ -331,6 +335,8 @@ describe("the Work queue section", () => {
 	 */
 	test("p reports a state file that will not take the write, and moves nothing", async () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
+		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
+		state.setGroupingAxis("tickets", "none");
 		const { source, enqueue, runner } = queuedFixture(state);
 		enqueue(FIRST);
 		try {
@@ -367,6 +373,8 @@ describe("the Work queue section", () => {
 
 	test("p pauses the queue's drain, and p again resumes it", async () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
+		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
+		state.setGroupingAxis("tickets", "none");
 		const { source, enqueue, runner } = queuedFixture(state);
 		enqueue(FIRST);
 		try {
@@ -430,6 +438,8 @@ describe("the Work queue section", () => {
 	 */
 	test("p behind a standing warning keeps the warning on the line and the pause on the header", async () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
+		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
+		state.setGroupingAxis("tickets", "none");
 		const { source, enqueue, runner } = queuedFixture(state);
 		enqueue(FIRST);
 		try {
@@ -480,6 +490,8 @@ describe("the Work queue section", () => {
 	 */
 	test("x collapses the Work section, and the header keeps its count", async () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
+		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
+		state.setGroupingAxis("tickets", "none");
 		const { source, enqueue, runner } = queuedFixture(state);
 		enqueue(FIRST);
 		try {
@@ -523,6 +535,8 @@ describe("the Work queue section", () => {
 	 */
 	test("a stray u press is silent in the queue and in the Ticket list", async () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
+		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
+		state.setGroupingAxis("tickets", "none");
 		const { source, enqueue, runner } = queuedFixture(state);
 		enqueue(FIRST);
 		enqueue(SECOND, "workflow");
@@ -553,6 +567,8 @@ describe("the Work queue section", () => {
 
 	test("an idle factory keeps the three-section frame", async () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
+		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
+		state.setGroupingAxis("tickets", "none");
 		const { source, runner } = queuedFixture(state);
 		try {
 			await booted(
@@ -580,6 +596,8 @@ describe("the Work queue section", () => {
 
 	test("the Work header appears with its count, and the rows carry the origin and the title", async () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
+		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
+		state.setGroupingAxis("tickets", "none");
 		const { source, enqueue, runner } = queuedFixture(state);
 		enqueue(FIRST);
 		enqueue(SECOND, "workflow");
@@ -631,6 +649,8 @@ describe("the Work queue section", () => {
 	 */
 	test("the waiting ticket wears the queued badge in row and detail, and the cancel gives the open badge back", async () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
+		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
+		state.setGroupingAxis("tickets", "none");
 		const { source, enqueue, runner } = queuedFixture(state, false);
 		// Seed the tickets into the state before the app boots, then hold the
 		// one seat with this test's own durable claim for the second ticket.
@@ -700,6 +720,8 @@ describe("the Work queue section", () => {
 	 */
 	test("the settled ticket whose route waits wears the queued badge (ADR 0064)", async () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
+		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
+		state.setGroupingAxis("tickets", "none");
 		const { source, runner } = queuedFixture(state, false);
 		const outcome = success(twoTickets());
 		// The first ticket's turn rests awaiting its decision: the settled
@@ -746,6 +768,8 @@ describe("the Work queue section", () => {
 
 	test("+ and - reorder the waiting starts, and the captured choice stays put", async () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
+		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
+		state.setGroupingAxis("tickets", "none");
 		const { source, enqueue, runner } = queuedFixture(state);
 		enqueue(FIRST);
 		enqueue(SECOND, "workflow");
@@ -791,6 +815,8 @@ describe("the Work queue section", () => {
 
 	test("Delete cancels the waiting start, and the Message line names the ticket", async () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
+		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
+		state.setGroupingAxis("tickets", "none");
 		const { source, enqueue, runner } = queuedFixture(state);
 		enqueue(FIRST);
 		enqueue(SECOND, "workflow");
@@ -840,6 +866,8 @@ describe("the Work queue section", () => {
 	 */
 	test("the Consultation's keys refuse in both Work queue modes, and nothing moves", async () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
+		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
+		state.setGroupingAxis("tickets", "none");
 		const { source, enqueue, runner } = queuedFixture(state);
 		enqueue(FIRST);
 		enqueue(SECOND, "workflow");
@@ -923,6 +951,8 @@ describe("the Work queue section", () => {
 	 */
 	test("a cancel that meets a row its pickup already took claims no removal", async () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
+		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
+		state.setGroupingAxis("tickets", "none");
 		const { source, enqueue, runner } = queuedFixture(state);
 		enqueue(FIRST);
 		enqueue(SECOND, "workflow");
@@ -972,6 +1002,8 @@ describe("the Work queue section", () => {
 	 */
 	test("a decision-row route at a full cap waits in the Work queue with its choice", async () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
+		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
+		state.setGroupingAxis("tickets", "none");
 		const tickets = twoTickets();
 		const outcome = success(tickets);
 		// The first ticket ends its turn and awaits its route; the second holds the
@@ -1188,6 +1220,8 @@ describe("the Work queue section", () => {
 
 	test("the emptied section keeps its header with its count, and down crosses into it while it stands", async () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
+		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
+		state.setGroupingAxis("tickets", "none");
 		const { source, enqueue, runner } = queuedFixture(state);
 		enqueue(FIRST);
 		enqueue(SECOND, "workflow");
@@ -1241,6 +1275,8 @@ describe("the Work queue section", () => {
 	 */
 	test("a one-row queue still crosses up after a direct click on its header", async () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
+		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
+		state.setGroupingAxis("tickets", "none");
 		const { source, enqueue, runner } = queuedFixture(state);
 		enqueue(FIRST);
 		try {

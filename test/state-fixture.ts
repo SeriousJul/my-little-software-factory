@@ -10,6 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import type { FactoryConfig, TransitionOutcome } from "../src/config.ts";
+import type { GroupingAxis } from "../src/domain/grouping.ts";
 import type { EnvironmentKind, FetchedTicket } from "../src/domain/ticket.ts";
 import { type FactoryState, openFactoryState } from "../src/state.ts";
 import type { FetchOutcome } from "../src/ticket-source.ts";
@@ -19,11 +20,20 @@ import type { FakeSource } from "./fake-source.ts";
 
 const paths: string[] = [];
 
-/** Open a fresh state database, registered for cleanup by `cleanupStateFixtures`. */
-export function freshState(): FactoryState {
+/**
+ * Open a fresh state database, registered for cleanup by `cleanupStateFixtures`.
+ *
+ * The Ticket section holds the flat axis the frame tests read the list on: a
+ * truly fresh file opens grouped by repository (ADR 0066), so a frame that
+ * wants that split names it, and the frames that assert the unsplit list
+ * keep the axis they were written against.
+ */
+export function freshState(axis: GroupingAxis = "none"): FactoryState {
 	const dir = mkdtempSync(join(tmpdir(), "factory-fixture-state-"));
 	paths.push(dir);
-	return openFactoryState(join(dir, "state.sqlite"));
+	const state = openFactoryState(join(dir, "state.sqlite"));
+	state.setGroupingAxis("tickets", axis);
+	return state;
 }
 
 /** Remove every state directory opened by `freshState`. */

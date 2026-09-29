@@ -175,6 +175,9 @@ function dropOneModalFrame(stream: Buffer): { screen: string; droppedFrameBytes:
 /** Seed the state DB with one awaiting ticket and a settled rework turn. */
 function seedAwaitingTicket(statePath: string): string {
 	const state = openFactoryState(statePath, () => Date.parse("2026-09-02T22:29:00Z"));
+	// The test's keys assume the flat list: a fresh file opens grouped by
+	// repository (ADR 0066), so the seed holds the flat axis.
+	state.setGroupingAxis("tickets", "none");
 	const source = { name: "factory-pull-requests", kind: "github-pull-requests" as const };
 	state.initializeSources([source]);
 	const identity = "github.com/SeriousJul/my-little-software-factory/pull/14";

@@ -149,6 +149,8 @@ function routeConfig(): FactoryConfig {
 describe("the route close moves no view", () => {
 	test("the Decision screen's route closes the settled workspace and sends no focus", async () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
+		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
+		state.setGroupingAxis("tickets", "none");
 		const outcome = success([issueTicket(FIRST)]);
 		seedAwaitingTurn(state, outcome, FIRST, reviewRoute, "worktree");
 		const runner = routeRunner();
@@ -195,6 +197,8 @@ describe("the route close moves no view", () => {
 		// The worst case has no keypress beside it: the close runs when a seat
 		// frees, so the view must be untouchable at that moment.
 		const state = openFactoryState(join(home, "state.sqlite"), () => Date.now() - 600_000);
+		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
+		state.setGroupingAxis("tickets", "none");
 		const outcome = success(twoTickets());
 		seedAwaitingTurn(state, outcome, FIRST, reviewRoute, "worktree");
 		// The second ticket holds the factory's one seat with a live agent. Its
@@ -283,6 +287,8 @@ describe("the route close moves no view", () => {
 describe("the Close cleanup moves no view", () => {
 	test("the Close action on a worktree cycle removes the checkout and sends no focus", async () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
+		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
+		state.setGroupingAxis("tickets", "none");
 		const outcome = success([issueTicket(FIRST)]);
 		seedInFlightTurn(state, outcome, FIRST, "worktree");
 		const runner = new FakeRunner();
@@ -322,6 +328,8 @@ describe("the Close cleanup moves no view", () => {
 		// still one line on the Message line and a surviving environment on the
 		// ticket's facts.
 		const state = openFactoryState(join(home, "state.sqlite"));
+		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
+		state.setGroupingAxis("tickets", "none");
 		const outcome = success([issueTicket(FIRST)]);
 		seedInFlightTurn(state, outcome, FIRST, "worktree");
 		const runner = new FakeRunner();
@@ -375,6 +383,8 @@ describe("Goto stays the one focus move", () => {
 		// ADR 0061): the Goto is the plane's only focus command, and its
 		// confirmation still names the workspace it moved the view into.
 		const state = openFactoryState(join(home, "state.sqlite"));
+		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
+		state.setGroupingAxis("tickets", "none");
 		const outcome = success([issueTicket(FIRST)]);
 		seedAwaitingTurn(state, outcome, FIRST, null, "worktree");
 		const runner = new FakeRunner();
@@ -430,6 +440,8 @@ describe("the environment a handoff builds stays out of the view", () => {
 		// herdr's changelog records the create-focus default regressing once
 		// (#3766, v0.9.1), so the flag is a contract, not noise (story 13).
 		const state = openFactoryState(join(home, "state.sqlite"));
+		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
+		state.setGroupingAxis("tickets", "none");
 		const outcome = success([issueTicket(SECOND)]);
 		const runner = new FakeRunner();
 		runner.set("git", ["-C", checkout, "rev-parse", "--git-dir"], { stdout: ".git\n" });

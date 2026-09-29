@@ -82,6 +82,9 @@ function seededState(): FactoryState {
 	const dir = mkdtempSync(join(tmpdir(), "factory-hold-state-"));
 	paths.push(dir);
 	const state = openFactoryState(join(dir, "state.sqlite"));
+	// The frames assert the unsplit list: a fresh file opens grouped by
+	// repository (ADR 0066), so the fixture holds the flat axis.
+	state.setGroupingAxis("tickets", "none");
 	state.initializeSources([source]);
 	const success: FetchOutcome = {
 		status: "success",

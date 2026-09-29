@@ -47,7 +47,11 @@ afterEach(() => {
 function freshState(): FactoryState {
 	const dir = mkdtempSync(join(tmpdir(), "factory-frame-state-"));
 	paths.push(dir);
-	return openFactoryState(join(dir, "state.sqlite"));
+	const state = openFactoryState(join(dir, "state.sqlite"));
+	// The frames assert the unsplit list: a fresh file opens grouped by
+	// repository (ADR 0066), so the fixture holds the flat axis.
+	state.setGroupingAxis("tickets", "none");
+	return state;
 }
 
 /** A source whose fetches stay in flight until the test settles them. */

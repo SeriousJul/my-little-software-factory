@@ -131,6 +131,9 @@ function seed(shape: "open" | "in-flight" | "awaiting", detail: SeedDetail = {})
 	const dir = mkdtempSync(join(tmpdir(), "factory-face-state-"));
 	paths.push(dir);
 	const state = openFactoryState(join(dir, "state.sqlite"), detail.stateNow);
+	// The frames assert the unsplit list: a fresh file opens grouped by
+	// repository (ADR 0066), so the fixture holds the flat axis.
+	state.setGroupingAxis("tickets", "none");
 	state.initializeSources([source]);
 	state.applyFetch(source, success);
 	if (shape !== "open") {
