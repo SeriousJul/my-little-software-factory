@@ -4,16 +4,23 @@
  *
  * The world is a temporary directory holding a config, a seeded state file,
  * and three stub executables the production binary resolves through PATH:
- * `gh` answers the ticket source's search query with a fixed page, `pi`
- * reports a fixed model list, and `herdr` reports two live agent panes -
- * one working on the in-flight ticket, one holding a Consultation. The
- * screenshots are the production renderer's bytes over this world: real
- * frames, canned facts.
+ * `gh` answers the ticket source's search query with one fixed page per
+ * fixture repository, `pi` reports a fixed model list, and `herdr` reports
+ * three live agent panes - one working on the in-flight ticket, one holding
+ * the working Consultation, one idle beside the Consultation that awaits its
+ * answer. The screenshots are the production renderer's bytes over this
+ * world: real frames, canned facts.
+ *
+ * The world holds two repositories, the way the operator's real one does:
+ * the factory itself, with a ticket in each state the Main view shows, and
+ * `SeriousJul/pi-extensions`, with two open issues, one of which waits in
+ * the Work queue. The ticket list stands grouped by repository (the axis the
+ * operator chose, ADR 0058), so the two repositories read as two Groups.
  *
  * The screens one session walks:
  *
- * 1. `main-view` - the Main view: both sections open, one ticket in each
- *    state, the detail pane on the open ticket.
+ * 1. `main-view` - the Main view: the ticket list grouped by repository,
+ *    the queue holding one start, the detail pane on the awaiting ticket.
  * 2. `override-panel` - the Override panel on the open ticket.
  * 3. `decision-modal` - the decision modal on the ticket awaiting a
  *    decision, its turn log below the decision.
@@ -57,8 +64,10 @@ export const SCREENSHOTS: readonly ScreenshotTarget[] = [
 	{ name: "turn-log", file: "turn-log.png", docDir: "operation/images" },
 ];
 
-const REPO = "SeriousJul/my-little-software-factory";
-const REPO_URL = `https://github.com/${REPO}`;
+const REPO_A = "SeriousJul/my-little-software-factory";
+const REPO_A_URL = `https://github.com/${REPO_A}`;
+const REPO_B = "SeriousJul/pi-extensions";
+const REPO_B_URL = `https://github.com/${REPO_B}`;
 const NOW = "2026-07-07T09:00:00.000Z";
 
 const issue = (
@@ -67,51 +76,79 @@ const issue = (
 	body: string,
 	labels: string[],
 	updatedAt: string,
+	repository: string,
+	repositoryUrl: string,
 ): FetchedTicket => ({
 	identity: `github:github.com:I_fixture${number}`,
 	sourceKind: "github-issue",
 	externalKey: `#${number}`,
 	sourceState: "open",
-	url: `${REPO_URL}/issues/${number}`,
+	url: `${repositoryUrl}/issues/${number}`,
 	title,
 	description: body,
 	labels,
 	externalUpdatedAt: updatedAt,
 	repository: {
-		identity: `github.com/${REPO.toLowerCase()}`,
-		displayName: REPO,
-		cloneUrl: `${REPO_URL}.git`,
+		identity: `github.com/${repository.toLowerCase()}`,
+		displayName: repository,
+		cloneUrl: `${repositoryUrl}.git`,
 	},
 	attributes: {},
 });
 
-/** The three tickets, one per ticket state the Main view shows. */
+/** The tickets: three in the factory repository, two in pi-extensions. */
+const OPEN_TICKET = issue(
+	53,
+	"Split the README into published guides",
+	"Move the long README sections into the documentation site and keep the\nREADME a short landing page.",
+	["ready-for-agent"],
+	"2026-07-07T08:41:00Z",
+	REPO_A,
+	REPO_A_URL,
+);
+const RUNNING_TICKET = issue(
+	52,
+	"Retry failed webhook deliveries with a bounded backoff",
+	"Deliveries that fail with a 5xx are dropped. Retry them with a bounded\nexponential backoff and give up after the third attempt.",
+	["ready-for-agent", "needs-work"],
+	"2026-07-07T07:58:00Z",
+	REPO_A,
+	REPO_A_URL,
+);
+const AWAITING_TICKET = issue(
+	51,
+	"Rank tickets by priority label",
+	"Ranked tickets stay ahead of unranked ones. The operator bumps a\npriority with =, +, and -.",
+	["ready-for-agent"],
+	"2026-07-07T06:12:00Z",
+	REPO_A,
+	REPO_A_URL,
+);
+const SKILL_REPORT_TICKET = issue(
+	87,
+	"Give the code review skill a shared report format",
+	"The code review skill prints its findings in its own shape. Give it one\nshared report format the operator can file.",
+	["ready-for-agent"],
+	"2026-07-07T08:55:00Z",
+	REPO_B,
+	REPO_B_URL,
+);
+const SKILL_INDEX_TICKET = issue(
+	88,
+	"Let find-skills index the local skill directories",
+	"The find-skills search covers installed skills only. Let it index the\nlocal skill directories too.",
+	[],
+	"2026-07-07T08:20:00Z",
+	REPO_B,
+	REPO_B_URL,
+);
 const TICKETS: readonly FetchedTicket[] = [
-	issue(
-		53,
-		"Split the README into published guides",
-		"Move the long README sections into the documentation site and keep the\nREADME a short landing page.",
-		["ready-for-agent"],
-		"2026-07-07T08:41:00Z",
-	),
-	issue(
-		52,
-		"Retry failed webhook deliveries with a bounded backoff",
-		"Deliveries that fail with a 5xx are dropped. Retry them with a bounded\nexponential backoff and give up after the third attempt.",
-		["ready-for-agent", "needs-work"],
-		"2026-07-07T07:58:00Z",
-	),
-	issue(
-		51,
-		"Rank tickets by priority label",
-		"Ranked tickets stay ahead of unranked ones. The operator bumps a\npriority with =, +, and -.",
-		["ready-for-agent"],
-		"2026-07-07T06:12:00Z",
-	),
+	OPEN_TICKET,
+	RUNNING_TICKET,
+	AWAITING_TICKET,
+	SKILL_REPORT_TICKET,
+	SKILL_INDEX_TICKET,
 ];
-const RUNNING_TICKET = TICKETS[1].identity;
-const AWAITING_TICKET = TICKETS[2].identity;
-
 /** The turn log the settled turn of the awaiting ticket carries. */
 // The awaiting ticket's completed turn: a review of its ranking change. The
 // seed stores the review transition's outcome on it, so its decision offers
@@ -143,7 +180,7 @@ const RUNNING_PANE_TEXT = [
 	"  write_file src/webhooks/queue.test.ts",
 ].join("\n");
 
-/** The Consultation's terminal, as `herdr agent read` reports it. */
+/** The working Consultation's terminal, as `herdr agent read` reports it. */
 const CONSULTATION_PANE_TEXT = [
 	"codex  gpt-5.6-codex",
 	"",
@@ -153,6 +190,16 @@ const CONSULTATION_PANE_TEXT = [
 	"1. Who owns the retry budget across an agent restart?",
 	"2. Is the backoff base a config value or a constant?",
 	"3. What does the ticket carry when retries exhaust?",
+].join("\n");
+
+/** The idle Consultation's terminal, as `herdr agent read` reports it. */
+const IDLE_PANE_TEXT = [
+	"codex  gpt-5.6-codex",
+	"",
+	"Reading the find-skills index before I answer.",
+	"  read skills/local/find-skills/SKILL.md",
+	"Paths or copies: one question before this holds.",
+	"1. Should the index store paths to local skills, or copies of them?",
 ].join("\n");
 
 /** The config the fixture world runs on. */
@@ -283,76 +330,63 @@ labels-any = ["ready-for-agent"]
 name = "issues"
 kind = "github-issues"
 refresh-interval-seconds = 30
-repositories = ["${REPO}"]
+repositories = ["${REPO_A}", "${REPO_B}"]
 `;
 }
 
-/** The `gh` stub: the ticket source's search query, answered with a fixed page. */
-const ghNode = (
-	number: number,
-	title: string,
-	body: string,
-	labels: string[],
-	updatedAt: string,
-): Record<string, unknown> => ({
+/** One search node, the shape the GraphQL query asks for. */
+const ghNode = (ticket: FetchedTicket): Record<string, unknown> => ({
 	__typename: "Issue",
-	id: `I_fixture${number}`,
-	number,
-	title,
-	body,
-	url: `${REPO_URL}/issues/${number}`,
+	id: `I_fixture${ticket.externalKey.slice(1)}`,
+	number: Number(ticket.externalKey.slice(1)),
+	title: ticket.title,
+	body: ticket.description,
+	url: ticket.url,
 	state: "OPEN",
-	updatedAt,
-	labels: { nodes: labels.map((name) => ({ name })) },
+	updatedAt: ticket.externalUpdatedAt,
+	labels: { nodes: ticket.labels.map((name) => ({ name })) },
 	repository: {
-		name: "my-little-software-factory",
-		nameWithOwner: REPO,
-		url: REPO_URL,
+		name: ticket.repository.displayName.split("/")[1],
+		nameWithOwner: ticket.repository.displayName,
+		url: ticket.repository.cloneUrl.replace(/\.git$/, ""),
 	},
 });
 
 /**
- * The `gh` stub: the ticket source's search query, answered with a fixed
- * page. The page is one single-quoted shell string, so the stub itself holds
- * no quotes of its own.
+ * The `gh` stub: the ticket source's search queries, answered with one fixed
+ * page per fixture repository. The source issues one query per repository,
+ * and the stub matches the query's `repo:` qualifier to pick the page. Each
+ * page is one single-quoted shell string, so the stub itself holds no quotes
+ * of its own.
  */
-const GH_STUB = [
-	"#!/bin/sh",
-	"# Screenshot stub for gh: one fixed search page for the fixture repository,",
-	"# and the transition label writes, accepted.",
-	"# Shell builtins only: the fixture PATH holds this bin dir and nothing else.",
-	'[ "$1" = "api" ] || [ "$1" = "issue" ] || exit 1',
-	`printf '%s' '${JSON.stringify({
+const ghPage = (repository: string): string =>
+	JSON.stringify({
 		data: {
 			search: {
-				issueCount: 3,
+				issueCount: TICKETS.filter((ticket) => ticket.repository.displayName === repository).length,
 				pageInfo: { hasNextPage: false, endCursor: null },
-				nodes: [
-					ghNode(
-						53,
-						"Split the README into published guides",
-						"Move the long README sections into the documentation site and keep the README a short landing page.",
-						["ready-for-agent"],
-						"2026-07-07T08:41:00Z",
-					),
-					ghNode(
-						52,
-						"Retry failed webhook deliveries with a bounded backoff",
-						"Deliveries that fail with a 5xx are dropped. Retry them with a bounded exponential backoff and give up after the third attempt.",
-						["ready-for-agent", "needs-work"],
-						"2026-07-07T07:58:00Z",
-					),
-					ghNode(
-						51,
-						"Rank tickets by priority label",
-						"Ranked tickets stay ahead of unranked ones. The operator bumps a priority with =, +, and -.",
-						["ready-for-agent"],
-						"2026-07-07T06:12:00Z",
-					),
-				],
+				nodes: TICKETS.filter((ticket) => ticket.repository.displayName === repository).map(ghNode),
 			},
 		},
-	})}'`,
+	});
+
+const GH_STUB = [
+	"#!/bin/sh",
+	"# Screenshot stub for gh: one fixed search page per fixture repository,",
+	"and the transition label writes, accepted.",
+	"# Shell builtins only: the fixture PATH holds this bin dir and nothing else.",
+	// A label write is a success: the plane reads no body of it.
+	'[ "$1" = "issue" ] && exit 0',
+	'[ "$1" = "pr" ] && exit 0',
+	'[ "$1" = "api" ] || exit 1',
+	"printed=0",
+	'for a in "$@"; do',
+	'  case "$a" in',
+	`    *"repo:${REPO_A}"*) printf '%s' '${ghPage(REPO_A)}'; printed=1 ;;`,
+	`    *"repo:${REPO_B}"*) printf '%s' '${ghPage(REPO_B)}'; printed=1 ;;`,
+	"  esac",
+	"done",
+	'[ "$printed" = "1" ] || exit 1',
 	"exit 0",
 	"",
 ].join("\n");
@@ -370,14 +404,15 @@ exit 0
 `;
 
 /**
- * The `herdr` stub: two live panes. `pane-2` works the in-flight ticket and
+ * The `herdr` stub: three live panes. `pane-2` works the in-flight ticket and
  * reports working until the capture touches `done.flag`; `pane-3` holds the
- * Consultation. `pane-2` reports a session record: its settled turn reads
- * its log and its `completed` cause from it, so the plane fires the
- * implement transition on the settle.
+ * working Consultation; `pane-4` is idle beside the Consultation that awaits
+ * its answer. `pane-2` reports a session record: its settled turn reads its
+ * log and its `completed` cause from it, so the plane fires the implement
+ * transition on the settle.
  */
 const HERDR_STUB = `#!/bin/sh
-# Screenshot stub for herdr: the fixture's two live agent panes.
+# Screenshot stub for herdr: the fixture's three live agent panes.
 # Shell builtins only: the fixture PATH holds this bin dir and nothing else.
 dir="\${0%/*}/.."
 [ "$1" = "agent" ] || exit 1
@@ -389,7 +424,7 @@ list)
   printf '%s' "$dir"
   printf '%s' '/session.jsonl"},"agent_status":"'
   printf '%s' "$status"
-  printf '%s' '"},{"pane_id":"pane-3","tab_id":"tab-3","workspace_id":"ws-3","agent":"codex","checkout_path":"/home/seriousjul/src/my-little-software-factory","agent_status":"working"}]}}'
+  printf '%s' '"},{"pane_id":"pane-3","tab_id":"tab-3","workspace_id":"ws-3","agent":"codex","checkout_path":"/home/seriousjul/src/my-little-software-factory","agent_status":"working"},{"pane_id":"pane-4","tab_id":"tab-4","workspace_id":"ws-4","agent":"codex","checkout_path":"/home/seriousjul/src/pi-extensions","agent_status":"idle"}]}}'
   ;;
 read)
   case "$3" in
@@ -398,6 +433,9 @@ read)
     ;;
   pane-3)
     printf '%s' '{"result":{"output":"${CONSULTATION_PANE_TEXT.replace(/"/g, '\\"').replace(/\n/g, "\\n")}"}}'
+    ;;
+  pane-4)
+    printf '%s' '{"result":{"output":"${IDLE_PANE_TEXT.replace(/"/g, '\\"').replace(/\n/g, "\\n")}"}}'
     ;;
   *)
     exit 1
@@ -410,7 +448,10 @@ read)
 esac
 `;
 
-/** Seed the state file: three tickets in three states, one Consultation. */
+/**
+ * Seed the state file: five tickets across two repositories, the ticket list
+ * grouped by repository, one queue item, and two Consultations.
+ */
 function seedState(path: string): void {
 	const state = openFactoryState(path, () => Date.parse(NOW));
 	const source: SourceDefinition = { name: "issues", kind: "github-issues" };
@@ -419,7 +460,7 @@ function seedState(path: string): void {
 
 	// The in-flight ticket: claimed and started, its agent working in pane-2.
 	const runningClaim = state.claimHandoff(
-		RUNNING_TICKET,
+		RUNNING_TICKET.identity,
 		{
 			agentType: "pi",
 			environment: "live-worktree",
@@ -439,7 +480,7 @@ function seedState(path: string): void {
 
 	// The awaiting ticket: claimed, started, and its turn settled.
 	const awaitingClaim = state.claimHandoff(
-		AWAITING_TICKET,
+		AWAITING_TICKET.identity,
 		{
 			agentType: "pi",
 			environment: "live-worktree",
@@ -457,7 +498,7 @@ function seedState(path: string): void {
 		workspaceId: "ws-1",
 	});
 	state.settleTurn({
-		ticketIdentity: AWAITING_TICKET,
+		ticketIdentity: AWAITING_TICKET.identity,
 		handoffId: awaitingClaim.claim.attemptId,
 		taskType: "review",
 		agentType: "pi",
@@ -481,12 +522,37 @@ function seedState(path: string): void {
 			pullRequestKey: null,
 			writeFailure: "",
 			positionTaskType: "merge",
-			positionTicketIdentity: AWAITING_TICKET,
+			positionTicketIdentity: AWAITING_TICKET.identity,
 		},
 	});
 
-	// The Consultation: launched and working in pane-3.
-	const consultation = state.createConsultation({
+	// The pi-extensions ticket that waits in the Work queue (ADR 0049): the
+	// queue holds the start, and the ticket's row wears the `queued` badge
+	// under the open state. The queue pause (ADR 0052) holds the drain, so
+	// the item stands in the queue for the shot instead of its pickup trying
+	// to start it on the boot pass.
+	state.setQueuePaused(true);
+	const queued = state.enqueueWork({
+		ticketIdentity: SKILL_INDEX_TICKET.identity,
+		origin: "open",
+		choice: {
+			agentType: "pi",
+			environment: "live-worktree",
+			taskType: "implement",
+			model: "anthropic/claude-sonnet-4-5",
+			thinking: "medium",
+			contextWindow: "",
+		},
+		previousMessage: "",
+	});
+	if (!queued.ok) throw new Error(`fixture: queue item: ${queued.reason}`);
+
+	// The grouping axis the operator chose (ADR 0058): the ticket list splits
+	// by repository, so the two repositories stand as two Groups.
+	state.setGroupingAxis("tickets", "repository");
+
+	// The working Consultation: launched, its agent working in pane-3.
+	const retryConsultation = state.createConsultation({
 		typeName: "grill-with-docs",
 		agentType: "codex",
 		environment: "live-worktree",
@@ -495,19 +561,46 @@ function seedState(path: string): void {
 		renderedOpeningPrompt:
 			"/skill:grill-with-docs The webhook retry policy: who owns the retry budget across an agent restart?",
 		repository: {
-			identity: `github.com/${REPO.toLowerCase()}`,
-			displayName: REPO,
-			cloneUrl: `${REPO_URL}.git`,
+			identity: `github.com/${REPO_A.toLowerCase()}`,
+			displayName: REPO_A,
+			cloneUrl: `${REPO_A_URL}.git`,
 			path: "/home/seriousjul/src/my-little-software-factory",
 		},
 		agentName: "consult-retry-budget",
 		createdAt: NOW,
 	});
-	state.setConsultationAgent(consultation.id, {
+	state.setConsultationAgent(retryConsultation.id, {
 		paneId: "pane-3",
 		tabId: "tab-3",
 		workspaceId: "ws-3",
 	});
+
+	// The Consultation that awaits its answer: its agent is idle in pane-4,
+	// and the section header's attention count reads it.
+	const indexConsultation = state.createConsultation({
+		typeName: "grill-with-docs",
+		agentType: "codex",
+		environment: "live-worktree",
+		template: "/skill:grill-with-docs {input}",
+		initialInput:
+			"The skill index: should find-skills store paths to local skills, or copies of them?",
+		renderedOpeningPrompt:
+			"/skill:grill-with-docs The skill index: should find-skills store paths to local skills, or copies of them?",
+		repository: {
+			identity: `github.com/${REPO_B.toLowerCase()}`,
+			displayName: REPO_B,
+			cloneUrl: `${REPO_B_URL}.git`,
+			path: "/home/seriousjul/src/pi-extensions",
+		},
+		agentName: "consult-skill-index",
+		createdAt: NOW,
+	});
+	state.setConsultationAgent(indexConsultation.id, {
+		paneId: "pane-4",
+		tabId: "tab-4",
+		workspaceId: "ws-4",
+	});
+	state.setConsultationState(indexConsultation.id, "awaiting-response");
 	state.close();
 }
 
@@ -549,7 +642,10 @@ export function buildFixture(root: string): string {
  * Walk one PTY session through the six screens and return each as a PNG.
  *
  * The session accumulates bytes; each capture renders the stream so far into
- * the grid the PTY holds, so a capture is the screen as it stands then.
+ * the grid the PTY holds, so a capture is the screen as it stands then. The
+ * cursor starts on the first row, the first Group's header, so the walk steps
+ * with `j` and `k` and settles each stop on the text the Detail pane shows
+ * for the row the cursor holds.
  */
 export async function captureScreens(fixtureDir: string): Promise<Map<string, Buffer>> {
 	const out = new Map<string, Buffer>();
@@ -577,24 +673,59 @@ export async function captureScreens(fixtureDir: string): Promise<Map<string, Bu
 	const key = (bytes: string) => {
 		session.write(bytes);
 	};
+	// The parsed grid, as lines. The raw stream accumulates every redraw, so
+	// a cursor question must be asked of the screen as it stands, not of the
+	// bytes it ever held.
+	const gridText = (): string =>
+		parseScreen(session.output(), SCREEN.cols, SCREEN.rows)
+			.map((row) => row.map((cell) => cell.char).join(""))
+			.join("\n");
+	// The row the keyboard cursor holds. Every section's list keeps its own
+	// remembered cursor mark, so the mark alone does not name the keyboard's
+	// row: the keyboard's row is the mark inside the box whose border carries
+	// the section-focus mark.
+	const focusRow = (): string => {
+		const rows = gridText().split("\n");
+		const border = rows.findIndex((line) => line.includes("─❯"));
+		if (border === -1) return "";
+		for (let i = border + 1; i < rows.length; i++) {
+			const line = rows[i];
+			if (line.startsWith("└")) break;
+			if (line.includes("❯")) return line.replace("❯", " ").trim();
+		}
+		return "";
+	};
+	// Step one row at a time until the cursor holds a row that carries the
+	// match, so the walk holds its aim across the Group headers, the blank
+	// row between Groups, and the section borders without counting rows.
+	const stepUntilRow = async (match: string, keyName: string, maxSteps: number): Promise<void> => {
+		for (let steps = 0; steps < maxSteps; steps++) {
+			if (focusRow().includes(match)) return;
+			key(keyName);
+			await sleep(150);
+		}
+		if (!focusRow().includes(match)) {
+			throw new Error(
+				`screenshots: the cursor never reached a row matching "${match}" within ${maxSteps} "${keyName}" steps\n${gridText()}`,
+			);
+		}
+	};
 
 	try {
 		// 1. The Main view, once the fetch lands its tickets and the observation
-		// marks the in-flight one running. The cursor rests on the first row,
-		// the ticket awaiting a decision.
+		// marks the in-flight one running. One step down from the first Group's
+		// header, onto the ticket awaiting a decision.
 		await session.waitFor(
-			(data) => data.includes("open: 1  running: 1  awaiting: 1"),
+			(data) => data.includes("open: 3  running: 1  awaiting: 1"),
 			"the full ticket list",
 			30000,
 		);
 		log("main view ready");
+		await stepUntilRow("Rank tickets by priori", "j", 3);
 		await capture("main-view");
 
-		// 2. The Override panel on the open ticket (third row).
-		key("j");
-		await sleep(120);
-		key("j");
-		await sleep(120);
+		// 2. The Override panel on the open ticket.
+		await stepUntilRow("Split the README into", "j", 4);
 		key("e");
 		log("pressed e for the override panel");
 		await session.waitFor((data) => data.includes("Task type"), "the override panel", 15000);
@@ -606,12 +737,9 @@ export async function captureScreens(fixtureDir: string): Promise<Map<string, Bu
 		key("\x1b");
 		await sleep(250);
 
-		// 3. The decision modal on the awaiting ticket (first row): Enter on it
-		// is Decide, and the modal opens with the turn log as its body.
-		key("k");
-		await sleep(120);
-		key("k");
-		await sleep(120);
+		// 3. The decision modal on the awaiting ticket: Enter on it is Decide,
+		// and the modal opens with the turn log as its body.
+		await stepUntilRow("Rank tickets by priori", "k", 4);
 		key("\r");
 		log("pressed Enter for the decision modal");
 		await session.waitFor((data) => data.includes("Decision: "), "the decision modal", 15000);
@@ -619,28 +747,17 @@ export async function captureScreens(fixtureDir: string): Promise<Map<string, Bu
 		key("\x1b");
 		await sleep(250);
 
-		// 4. The Consultation: three rows down, past the ticket section, into
-		// the Consultations section. The detail pane shows its input.
-		key("j");
-		await sleep(120);
-		key("j");
-		await sleep(120);
-		key("j");
+		// 4. The working Consultation: step down through the ticket section and
+		// the blank row between Groups, into the Consultations section, until
+		// the detail pane shows its input.
 		log("moving into the consultations section");
-		await session.waitFor(
-			(data) => data.includes("retry budget"),
-			"the consultation detail",
-			15000,
-		);
+		await stepUntilRow("working", "j", 8);
 		await sleep(1200);
 		await capture("consultation");
 
-		// 5. The Live view on the in-flight ticket (second row): two rows up,
-		// Enter opens the agent's stream in the left box.
-		key("k");
-		await sleep(120);
-		key("k");
-		await sleep(120);
+		// 5. The Live view on the in-flight ticket: step up to it, and Enter
+		// opens the agent's stream in the left box.
+		await stepUntilRow("Retry failed webhook", "k", 8);
 		key("\r");
 		log("opened the live view");
 		await session.waitFor((data) => data.includes("bounded backoff"), "the live stream", 20000);

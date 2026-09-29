@@ -170,7 +170,7 @@ async function main(): Promise<void> {
 		// is a full-screen TUI: it redraws with cursor moves and SGR codes
 		// between characters, so a multi-word string never appears contiguous
 		// in the raw byte stream. Settle on the parsed grid instead.
-		const header = "open: 1  running: 1  awaiting: 1";
+		const header = "open: 3  running: 1  awaiting: 1";
 		const hasHeader = (grid: Grid): boolean =>
 			grid.some((row) =>
 				row
