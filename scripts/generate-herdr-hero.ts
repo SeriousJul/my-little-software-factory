@@ -30,7 +30,7 @@ import { fileURLToPath } from "node:url";
 
 import { openPty } from "../test/executable-pty.ts";
 import { parseScreen, renderPng } from "./ansi-render.ts";
-import { buildFixture } from "./screenshot-fixture.ts";
+import { buildFixture, HERDR_THEME_NAME } from "./screenshot-fixture.ts";
 
 type Grid = ReturnType<typeof parseScreen>;
 
@@ -92,12 +92,14 @@ async function main(): Promise<void> {
 	// client attach. Suppress it so the shot is the workspace, not the tour.
 	// Name the theme explicitly: inside herdr the plane reads this same config
 	// to inherit the theme (ADR 0024), and a config with no [theme] section
-	// falls back with a warning on its Message line.
+	// falls back with a warning on its Message line. The isolated herdr stands
+	// on the theme the operator's herdr stands on, so the shot and the
+	// screenshots paint one theme.
 	const herdrConfigDir = join(home, ".config", "herdr");
 	mkdirSync(herdrConfigDir, { recursive: true });
 	writeFileSync(
 		join(herdrConfigDir, "config.toml"),
-		'onboarding = false\n\n[theme]\nname = "catppuccin"\n',
+		`onboarding = false\n\n[theme]\nname = "${HERDR_THEME_NAME}"\n`,
 	);
 
 	const serverLog = openSync(join(tmp, "herdr-server.log"), "a");

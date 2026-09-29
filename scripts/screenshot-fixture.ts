@@ -47,6 +47,17 @@ import { parseScreen, renderPng } from "./ansi-render.ts";
 /** The screen the screenshots show: the size the PTY opens with. */
 export const SCREEN = { cols: 180, rows: 40 } as const;
 
+/**
+ * The herdr theme the screenshots render with: the theme the operator's
+ * herdr stands on, pinned so the committed images are byte-stable on every
+ * machine (the drift test regenerates them outside the operator's herdr).
+ * The fixture world stands inside a herdr pane, so the plane resolves the
+ * theme through the same herdr-config path a live run takes (ADR 0024).
+ * Update it when the operator's herdr changes theme, and re-run
+ * `npm run screenshots` and `npm run hero`.
+ */
+export const HERDR_THEME_NAME = "one-dark";
+
 /** The six screens, in capture order, with the doc page each belongs to. */
 export interface ScreenshotTarget {
 	name: string;
@@ -609,6 +620,16 @@ export function buildFixture(root: string): string {
 	const dir = mkdtempSync(join(root, "factory-screenshots-"));
 	mkdirSync(join(dir, "bin"), { recursive: true });
 	writeFileSync(join(dir, "config.toml"), configToml(dir));
+	// The herdr config the plane's theme path reads: the fixture world stands
+	// inside a herdr pane (the capture sets HERDR_ENV), so the plane resolves
+	// its theme the way a live run does (ADR 0024), on the theme the
+	// operator's herdr stands on.
+	const herdrConfigDir = join(dir, ".config", "herdr");
+	mkdirSync(herdrConfigDir, { recursive: true });
+	writeFileSync(
+		join(herdrConfigDir, "config.toml"),
+		`onboarding = false\n\n[theme]\nname = "${HERDR_THEME_NAME}"\n`,
+	);
 	// The in-flight agent's session record: one completed turn, stamped on the
 	// fixture clock so the staleness guard reads it as this run's. The
 	// settled turn's log and its `completed` cause come from it.
@@ -652,6 +673,9 @@ export async function captureScreens(fixtureDir: string): Promise<Map<string, Bu
 	const session = await openControlPlanePty(
 		["--config", join(fixtureDir, "config.toml")],
 		{
+			// The mark of a herdr child pane (ADR 0024): with it, the plane
+			// resolves its theme from the herdr config the fixture holds.
+			HERDR_ENV: "1",
 			HOME: fixtureDir,
 			XDG_CONFIG_HOME: join(fixtureDir, ".config"),
 			XDG_STATE_HOME: join(fixtureDir, ".state"),

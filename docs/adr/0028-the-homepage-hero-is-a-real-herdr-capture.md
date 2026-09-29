@@ -21,9 +21,13 @@ plane; the agent is a fact of herdr's sidebar, not a pane beside the plane.
 The script selects the running ticket in the control plane, so the Detail
 pane shows the ticket the agent works, and it reports the agent's pane to
 herdr as a working agent, so the sidebar carries the agent's workspace and
-the running state the ticket's row reads. An attached herdr client renders
-the plane's workspace, and the script captures the client's screen with the
-shared ANSI renderer into `docs/public/hero.png`.
+the running state the ticket's row reads. The isolated herdr stands on the
+theme the operator's herdr stands on, so the shot paints the theme the
+operator runs: the theme name is pinned in the screenshot fixture's script,
+shared with this one, because a capture must stand on a theme every machine
+resolves to the same bytes. An attached herdr client renders the plane's
+workspace, and the script captures the client's screen with the shared ANSI
+renderer into `docs/public/hero.png`.
 
 The hero is refreshed by hand. It is not in the drift test.
 
@@ -45,6 +49,10 @@ The hero is refreshed by hand. It is not in the drift test.
   chrome varies, and it varies with herdr.
 - The hero is a manual artifact. Refresh it when herdr changes or when the
   main view changes in a way the homepage should reflect.
+- The theme is a pinned input, not a live read: when the operator's herdr
+  changes theme, update `HERDR_THEME_NAME` in
+  `scripts/screenshot-fixture.ts` and re-run both `npm run screenshots` and
+  `npm run hero`, so the shot and the operation screenshots stay on one theme.
 - The capture is isolated. A failed or interrupted run leaves no herdr state
   outside the temporary directory, and the operator's session is never read or
   written.
