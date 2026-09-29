@@ -74,3 +74,4 @@ body states the context, the decision, and the consequences.
 - [ADR 0063: The review score read takes the verdict under its label line](./0063-the-review-score-read-takes-the-verdict-under-its-label-line.md)
 - [ADR 0064: The route's decision records at the ask, and the ask never waits on a run](./0064-the-route-decision-records-at-the-ask-and-the-ask-never-waits-on-a-run.md)
 - [ADR 0065: The open ticket bands order by ticket number](./0065-the-open-ticket-bands-order-by-ticket-number.md)
+- [ADR 0066: The routed ticket stands queued while its route stands](./0066-the-routed-ticket-stands-queued-while-its-route-stands.md)

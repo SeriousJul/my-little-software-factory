@@ -46,12 +46,13 @@ record keeps the first ask's time.
 
 **A dropped or cancelled start keeps the decision.** A drop or a cancel
 removes the item, not the decision: a fact is not rewritten. The ticket
-rests in `awaiting` with the decision recorded. The operator re-confirms the
-route from the decision modal or closes the cycle, and both paths stand as
-before. The top-up's continuation walk re-offers a turn whose decision is
-`auto-handed-off` and whose route is dead - no handoff on its position, no
-waiting item - the way it re-offers a pending turn, so a dropped auto route
-re-enqueues on the next empty-queue cycle as it does today.
+rests in `queued` with the decision recorded (ADR 0066). The operator
+re-confirms the route from the decision modal or closes the cycle, and both
+paths stand as before. The top-up's continuation walk re-offers a turn
+whose decision is `auto-handed-off` and whose route is dead - no handoff on
+its position, no waiting item - the way it re-offers a pending turn, so a
+dropped auto route re-enqueues on the next empty-queue cycle as it does
+today.
 
 **The decision modal presents the route's fact.** The route row stands live
 only when the route is dead: no queue item waits for it, and its position
@@ -70,12 +71,12 @@ run one at a time, and the Agents work in parallel afterward.
 
 ## Consequences
 
-- The settled ticket leaves its decision-owed face at the confirm. It keeps
-  its `awaiting` state, and the Queue wait window covers it: while its route
-  item waits in the Work queue, its row and detail wear the `queued` badge
-  in place of the state badge, the way an open ticket does with its own
-  item. The CONTEXT.md entry for the Queue wait extends from the open
-  ticket to the route's.
+- The settled ticket leaves its decision-owed face at the confirm. ADR 0066
+  supersedes the consequence stated here: the ticket leaves `awaiting` for
+  the `queued` state at the same ask, and its row and detail wear the
+  state's own badge, while the Queue wait window keeps its badge for the
+  manual start alone. The CONTEXT.md entry for the Queue wait names both
+  waits.
 - The trace's decision line carries the ask's time, not the start's time. A
   turn whose route is confirmed but not yet started reads as decided to the
   observation's walks: the awaiting walk skips it, the continuation walk
