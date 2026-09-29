@@ -223,7 +223,8 @@ the axis a press chose yields its place on the line to a fact an operation wrote
 The axis is **factory state on the state file**, stored per section the way the
 Auto-handoff mode (ADR 0036) and the queue pause (ADR 0052) are stored (ADR 0058): a
 restart and a dev reload find the split where the operator left it, and a fresh
-file starts at `none`. A state file that will not take the write is reported on
+file starts at `repository` (ADR 0066). A stored axis always wins: a file that
+already holds a row keeps the axis the operator left there. A state file that will not take the write is reported on
 the Message line, and the view the operator asked for still stands for the run.
 **Collapsed Groups are session facts**: they live in memory for the run, keyed by
 the axis and the Group value, so an axis visited twice comes back as it was left

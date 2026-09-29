@@ -937,15 +937,17 @@ const MIGRATION_V14_TO_V15 = `
  * answers "how did this plane last look". The table is keyed by section rather
  * than named for one section, so a second list that takes grouping later lands
  * its own row with no new schema version; the Ticket section is the only row
- * today. A fresh file starts every section at `none`, the flat list, so no
- * plane comes up grouped before the operator asks.
+ * today. A fresh file starts every section at `repository`, so a newly
+ * configured plane comes up grouped by the repository its tickets belong to
+ * (ADR 0066); the axis cycle to `none` is the one press back to the flat
+ * list.
  */
 const MIGRATION_V20_TO_V21_GROUPING_AXIS = `
 	CREATE TABLE grouping_axis (
 		section TEXT PRIMARY KEY,
 		axis TEXT NOT NULL
 	);
-	INSERT INTO grouping_axis(section, axis) VALUES ('tickets', 'none');
+	INSERT INTO grouping_axis(section, axis) VALUES ('tickets', 'repository');
 `;
 
 /**
@@ -1113,7 +1115,8 @@ export class FactoryState {
 			if (!this.hasTable("queue_pause")) this.db.exec(MIGRATION_V19_TO_V20_QUEUE_PAUSE);
 			// The axis table is asked for by name, the way the queue pause is: a
 			// file the step already seeded keeps its stored answer, and an older
-			// file opens grouped at `none` (user story 57).
+			// file opens grouped at the fresh default, `repository` (ADR 0066;
+			// user story 57).
 			if (!this.hasTable("grouping_axis")) this.db.exec(MIGRATION_V20_TO_V21_GROUPING_AXIS);
 			// Ask the file, not the stamp: a re-labeled newer file already lacks
 			// the retired column and the referenced-issues table, so each drop

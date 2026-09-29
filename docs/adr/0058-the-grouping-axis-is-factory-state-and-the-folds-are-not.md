@@ -1,6 +1,6 @@
 # ADR 0058: The grouping axis is factory state and the folds are not
 
-Status: accepted
+Status: accepted, with the fresh-file default superseded by ADR 0066
 Date: 2026-09-24
 
 ## Context

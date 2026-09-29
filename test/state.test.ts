@@ -2349,9 +2349,9 @@ describe("factory SQLite state", () => {
 		test("the write is durable: a fresh open of the same file reads it back", () => {
 			const path = statePath();
 			const state = openFactoryState(path);
-			// A fresh state file starts at `none`: no plane comes up grouped
-			// before the operator asks (user story 52).
-			expect(state.groupingAxis("tickets")).toBe("none");
+			// A fresh state file starts at `repository`, so a newly configured
+			// plane comes up grouped before any press (ADR 0066, user story 52).
+			expect(state.groupingAxis("tickets")).toBe("repository");
 			state.setGroupingAxis("tickets", "repository");
 			expect(state.groupingAxis("tickets")).toBe("repository");
 			state.close();
@@ -2429,7 +2429,7 @@ describe("factory SQLite state", () => {
 			db.close();
 
 			const reopened = openFactoryState(path);
-			expect(reopened.groupingAxis("tickets")).toBe("none");
+			expect(reopened.groupingAxis("tickets")).toBe("repository");
 			// The work the v20 file held still reads: the migration added a row
 			// and moved nothing else.
 			expect(reopened.visibleTickets([], "implement")[0].sourceKind).toBe("github-issue");

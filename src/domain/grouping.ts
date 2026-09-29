@@ -26,7 +26,13 @@ export type GroupingAxis = (typeof GROUPING_AXES)[number];
  */
 export type SplitGroupingAxis = Exclude<GroupingAxis, "none">;
 
-/** The axis a fresh state file starts with, and one with no stored row reads as. */
+/**
+ * The axis a plane reads when the state file names no row for the section,
+ * or names a value the plane does not: the flat list, the list the plane
+ * drew before the split existed (ADR 0058). A fresh state file does not read
+ * this: the migration seeds it at `repository`, so a newly configured plane
+ * comes up grouped (ADR 0066).
+ */
 export const DEFAULT_GROUPING_AXIS: GroupingAxis = "none";
 
 /**
