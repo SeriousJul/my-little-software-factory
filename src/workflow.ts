@@ -183,6 +183,38 @@ const SCORE_LINE =
 	/(?:^|[\d)\]}>:;,-]\s*)(?:(?:review|total|final|overall|combined|verdict)\s+)?score\s*[:=|]\s*(\d{1,3}(?:\.\d+)?)(?:\s*(?:%|\/\s*(\d{1,3}(?:\.\d+)?)))?(?=\s*(?:$|[,.;:!)[\]}|_-]))/gi;
 
 /**
+ * The verdict line the label stands alone on its line (ADR 0063): the line
+ * is the score label - an optional lead-in that ends in a mark and an
+ * optional separator - and nothing else, so the number the line below it
+ * opens carries the verdict the label names.
+ */
+const SCORE_LABEL_LINE = /^(?:^|[\d)\]}>:;,-]\s+)score\s*[:=|]?\s*$/i;
+
+/**
+ * The number line under the label line (ADR 0063): the line opens with its
+ * number, the number carries its own scale - a percent or a total - and
+ * what follows the scale is the line's end or its punctuation, never a
+ * word. The scale is the line's own: a bare number under the label is prose
+ * the label does not make a verdict of, and a numbered list under it keeps
+ * its list.
+ */
+const SCORE_NUMBER_LINE =
+	/^(\d{1,3}(?:\.\d+)?)\s*(?:%|\/\s*(\d{1,3}(?:\.\d+)?))(?=\s*(?:$|[,.;:!)[\]}|_-]))/i;
+
+/**
+ * The value one scored number reports on the 100 scale: the number with no
+ * scale, or its / 100 scale, stands as it is; a number out of the 0 to 100
+ * range is not a score; and a number that names its own total scales to
+ * the 100 the threshold stands on, so 18 of 20 is 90.
+ */
+function scoredValue(value: number, denominator: number | undefined): number | null {
+	if (!Number.isFinite(value) || value < 0 || value > 100) return null;
+	if (denominator === undefined || denominator === 100) return value;
+	if (denominator > 0 && value <= denominator) return (value * 100) / denominator;
+	return null;
+}
+
+/**
  * The review score a posted verdict reports; null when it carries none. The
  * seed review template's fixed line is `- **Score:** 85 / 100`, and the line
  * is the contract: the score label, its separator, and its number. The read
@@ -201,21 +233,47 @@ const SCORE_LINE =
  * When the line appears more than once, the last one is the verdict: the
  * agent restates the score after the final pass, and the earlier lines are
  * scratch.
+ *
+ * The label also stands alone on its line: the line is the label - an
+ * optional lead-in that ends in a mark and an optional separator - and
+ * nothing else, and the number the next spoken line opens carries its own
+ * scale, a percent or a total. That is the verdict the agent posts under a
+ * Score heading, the number bolded and the prose after it (ADR 0063). The
+ * number line must carry its own scale: a bare number under the label is
+ * prose, a scale written in words is not the line's own form, and a
+ * numbered list under the label keeps its list.
  */
 export function scoreFromMessage(message: string): number | null {
 	let score: number | null = null;
-	for (const rawLine of message.split("\n")) {
-		const line = withoutMarkdown(rawLine);
+	const lines = message.split("\n");
+	for (let i = 0; i < lines.length; i += 1) {
+		const line = withoutMarkdown(lines[i]);
 		for (const match of line.matchAll(SCORE_LINE)) {
-			const value = Number(match[1]);
-			if (!Number.isFinite(value) || value < 0 || value > 100) continue;
-			const denominator = match[2] === undefined ? undefined : Number(match[2]);
-			if (denominator === undefined || denominator === 100) {
-				score = value;
-				continue;
+			const value = scoredValue(
+				Number(match[1]),
+				match[2] === undefined ? undefined : Number(match[2]),
+			);
+			if (value !== null) score = value;
+		}
+		// The verdict under its label line (ADR 0063): the line is the label
+		// alone, and the number the next spoken line opens carries its own
+		// scale. Blank lines part the pair; a spoken line between the label
+		// and its number breaks it. The pair decides on its number line, so
+		// the last verdict in the body stands in either shape.
+		if (SCORE_LABEL_LINE.test(line)) {
+			for (let j = i + 1; j < lines.length; j += 1) {
+				const next = withoutMarkdown(lines[j]);
+				if (next.trim() === "") continue;
+				const match = SCORE_NUMBER_LINE.exec(next);
+				if (match !== null) {
+					const value = scoredValue(
+						Number(match[1]),
+						match[2] === undefined ? undefined : Number(match[2]),
+					);
+					if (value !== null) score = value;
+				}
+				break;
 			}
-			// The line names its own scale: a score of 18 out of 20 is 90.
-			if (denominator > 0 && value <= denominator) score = (value * 100) / denominator;
 		}
 	}
 	return score === null || Number.isInteger(score) ? score : Math.round(score);

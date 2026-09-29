@@ -71,3 +71,4 @@ body states the context, the decision, and the consequences.
 - [ADR 0060: An operator ignores a ticket out of the factory's way](./0060-an-operator-ignores-a-ticket-out-of-the-factorys-way.md)
 - [ADR 0061: The control plane never moves herdr's view on its own](./0061-the-control-plane-never-moves-herdr-s-view-on-its-own.md)
 - [ADR 0062: The plane moves a leftover worktree directory aside, and never deletes it](./0062-the-plane-moves-a-leftover-worktree-directory-aside-and-never-deletes-it.md)
+- [ADR 0063: The review score read takes the verdict under its label line](./0063-the-review-score-read-takes-the-verdict-under-its-label-line.md)

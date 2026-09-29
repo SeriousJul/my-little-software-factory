@@ -517,6 +517,40 @@ describe("the review score", () => {
 		expect(scoreFromMessage("- **Score:** 40 / 100\nOn re-check: **Score:** 92 / 100")).toBe(92);
 	});
 
+	test("the verdict under its label line is read", () => {
+		// The agent names the score as a heading and writes its number on the
+		// line below (ADR 0063): the pair is the verdict, whatever markdown
+		// the two lines wear, and the number line names its own scale.
+		expect(
+			scoreFromMessage(
+				"### 3. Score\n\n**92 / 100** - spec-faithful, well tested, verified green. The four nits above are the cost of the remaining 8.",
+			),
+		).toBe(92);
+		expect(scoreFromMessage("### Score\n\n92 / 100.")).toBe(92);
+		expect(scoreFromMessage("Score:\n\n92%")).toBe(92);
+		expect(scoreFromMessage("### Score\n\n18 / 20")).toBe(90);
+	});
+
+	test("a number line without its own scale is not the verdict", () => {
+		// Under the label line the number must carry its own scale: a bare
+		// number is prose the label does not make a verdict of, a scale
+		// written in words is not the line's own form, a number that does not
+		// open the line is a sentence, and a numbered list under the label
+		// keeps its list.
+		expect(scoreFromMessage("### Score\n\n**92** - spec-faithful, well tested.")).toBeNull();
+		expect(scoreFromMessage("### Score\n\n92 out of 100.")).toBeNull();
+		expect(scoreFromMessage("### Score\n\nThe result: 92 / 100")).toBeNull();
+		expect(scoreFromMessage("### Score\n\n1. Fix the tabs\n2. Widen the declaration")).toBeNull();
+		expect(scoreFromMessage("### Score notes\n\n92 / 100")).toBeNull();
+	});
+
+	test("the last verdict stands, in either shape", () => {
+		// The label-line pair and the fixed line are one timeline: the later
+		// verdict, whatever shape it wears, is what the read takes.
+		expect(scoreFromMessage("- **Score:** 40 / 100\n### Score\n\n92 / 100")).toBe(92);
+		expect(scoreFromMessage("### Score\n\n40 / 100\nOn re-check: - **Score:** 95 / 100")).toBe(95);
+	});
+
 	test("no score, and a number out of range, read as no score", () => {
 		expect(scoreFromMessage("The work is done.")).toBeNull();
 		expect(scoreFromMessage("- **Score:** 140 / 100")).toBeNull();

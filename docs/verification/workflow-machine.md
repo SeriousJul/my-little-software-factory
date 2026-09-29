@@ -142,6 +142,21 @@ attempted.
   three reviews of pull request #157 and its three comments each came back
   oldest first, which is why the read now walks every page of its list.
 
+## The score read on pi-extensions pull request #114 (2026-09-29)
+
+The review turn on `SeriousJul/pi-extensions` pull request #114, "harden
+edit and bash behavior for local models", posted its verdict under a
+heading: `### 3. Score`, a blank line, then `**92 / 100** - spec-faithful,
+well tested, verified green.`. The read took nothing, the settle recorded
+the no-fire "the pull request carries no review score", and the ticket
+rested in its awaiting state. The operator re-posted the verdict in the
+template's fixed line, and the machine routed it on the re-fire. ADR 0063
+widened the read to the two-line shape. Measured against the live records
+of the pull request: the posted review now reads 92, and the prose guards
+of the record above - `Score: 92 out of 100.`, `The review score is 91 of
+100.`, `My score note stays at 74 / 100.`, and the mutation-score counts -
+still report nothing.
+
 ## What is not verified
 
 | Requirement | How it would be measured | Result |
