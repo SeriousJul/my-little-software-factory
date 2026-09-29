@@ -156,7 +156,7 @@ _Avoid_: hidden ticket, shelved ticket, buried, wontfix, archived, dismissed
 
 **Attention band**:
 The ticket list's first sort: awaiting tickets first, then the in-flight states, running before handed-off, then open actionable tickets, then open tickets that are not actionable.
-Within its band the list sorts by newest external update, then ticket identity (ADR 0050).
+Within its band the list sorts by the band's own second rank (ADR 0050, ADR 0065): the live bands by newest external update, the open bands by ticket number ascending with the no-number ticket last, and the ticket identity breaks the tie.
 _Avoid_: attention group, list bucket, triage group
 
 **Group**:

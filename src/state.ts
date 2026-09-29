@@ -32,7 +32,13 @@ import type {
 	TicketObligation,
 	TicketState,
 } from "./domain/ticket.ts";
-import { attentionBand, ignoreRefusal, ignoreWithholdsRow, obligationOf } from "./domain/ticket.ts";
+import {
+	attentionBand,
+	ignoreRefusal,
+	ignoreWithholdsRow,
+	obligationOf,
+	ticketListRank,
+} from "./domain/ticket.ts";
 import type { HandoffChoice } from "./handoff.ts";
 import { agentNameFor, identifyHandoffAgentName } from "./naming.ts";
 import { matchState, taskTypeOfMatch } from "./task-selection.ts";
@@ -429,8 +435,10 @@ export function inMemoryTicketViews(projection: readonly Ticket[]): TicketListVi
  * out of the factory's way. Neither touches a Ticket with live work or a
  * decision owed, so the row the operator reaches the Live view, the Close, and
  * the decision from is never the one the list rule hides. What is left keeps
- * the attention band order: the group first, then the newest external update,
- * then the ticket identity (ADR 0050) - the order every view shares and never
+ * the attention band order: the band first, then the band's own second rank -
+ * the newest external update in the live bands, the ticket number ascending in
+ * the open bands, the ticket whose key names no number last - then the ticket
+ * identity (ADR 0050, ADR 0065) - the order every view shares and never
  * replaces.
  *
  * The four views answer four different questions, and only the first two apply
@@ -456,7 +464,7 @@ export function listTicketViews(
 	const ordered = [...projection].sort(
 		(left, right) =>
 			attentionBand(left) - attentionBand(right) ||
-			right.externalUpdatedAt.localeCompare(left.externalUpdatedAt) ||
+			ticketListRank(left) - ticketListRank(right) ||
 			left.identity.localeCompare(right.identity),
 	);
 	const listed = ordered.filter((ticket) => !isCoveredByFixingPullRequest(projection, ticket));

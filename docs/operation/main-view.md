@@ -167,8 +167,9 @@ both the axis control and the fold.
 
 A **Group is a presentation of the list order and never a new sort** (ADR 0059).
 The Groups stand by the best Attention band among the tickets they hold, then by
-the newest external update in the Group, then by the Group value; the order
-inside a Group is the order the flat list holds, band rules and all. A group key
+the Group's smallest second rank - the newest external update in the live bands,
+the lowest ticket number in the open bands (ADR 0065) - then by the Group value;
+the order inside a Group is the order the flat list holds, band rules and all. A group key
 is a fact of the ticket, never a face the row wears: a Queue wait's `queued`
 badge groups under `open`, a Starting window's spinner under `handed-off`, and a
 held turn under `awaiting`, because the badge is a presentation. The Task axis

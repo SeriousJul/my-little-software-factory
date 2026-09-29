@@ -446,6 +446,37 @@ export function attentionBand(ticket: Ticket): number {
 }
 
 /**
+ * The number a source-visible external key carries (`#5` is 5), or null when
+ * the key names none.
+ */
+export function externalKeyNumber(key: string): number | null {
+	const match = /^#(\d+)$/.exec(key);
+	return match === null ? null : Number(match[1]);
+}
+
+/**
+ * The ticket's second rank inside its Attention band, smaller stands first
+ * (ADR 0050 for the live bands, ADR 0065 for the open ones).
+ *
+ * The live bands - awaiting, running, and handed-off - keep the rank ADR 0050
+ * made: the newest external update first, the update as a negative epoch so
+ * the newest is the smallest. The open bands order by the ticket number
+ * ascending, the ticket whose key names no number after every numbered one:
+ * the number never changes under a refresh, so the rows of the open pile hold
+ * their place. The live ranks are negative and the open ranks non-negative,
+ * so a Group's smallest rank always stands in the regime of its best band
+ * (ADR 0059's Group reads the rank of the best row it holds through this one
+ * number).
+ */
+export function ticketListRank(ticket: Ticket): number {
+	if (ticket.state === "awaiting" || ticket.state === "running" || ticket.state === "handed-off") {
+		const ms = Date.parse(ticket.externalUpdatedAt);
+		return -(Number.isNaN(ms) ? 0 : ms);
+	}
+	return externalKeyNumber(ticket.externalKey) ?? Number.MAX_SAFE_INTEGER;
+}
+
+/**
  * Whether a Ticket holds a decision the operator owes (ADR 0016, ADR 0017).
  *
  * The held turn is an awaiting ticket whose last settled turn ended failed,

@@ -278,6 +278,55 @@ describe("factory SQLite state", () => {
 		state.close();
 	});
 
+	test("the list orders the open bands by ticket number and the live bands by update", () => {
+		// ADR 0065: the open pile reads by ticket number ascending, not by the
+		// update that moved newest on the last refresh, so the rows hold their
+		// place across a re-read. The no-number ticket stands last in its band,
+		// a tie breaks by identity, and the live bands keep the newest-update
+		// rank they always held (ADR 0050).
+		const state = openFactoryState(":memory:");
+		state.initializeSources([sourceA]);
+		const ticket = (identity: string, key: string, at: string): FetchedTicket => ({
+			...fetched(identity),
+			externalKey: key,
+			externalUpdatedAt: at,
+		});
+		state.applyFetch(
+			sourceA,
+			success([
+				ticket("github:github.com:I_5", "#5", "2026-08-31T09:00:00Z"),
+				ticket("github:github.com:I_6a", "#6", "2026-08-31T12:00:00Z"),
+				ticket("github:github.com:I_6b", "#6", "2026-08-31T08:00:00Z"),
+				ticket("github:github.com:I_7", "#7", "2026-08-31T11:00:00Z"),
+				ticket("github:github.com:G_1", "ghsa-abc-123", "2026-08-31T13:00:00Z"),
+			]),
+		);
+		const identities = () =>
+			state.visibleTickets([], "implement", "active").map((row) => row.identity);
+		expect(identities()).toEqual([
+			"github:github.com:I_5",
+			"github:github.com:I_6a",
+			"github:github.com:I_6b",
+			"github:github.com:I_7",
+			"github:github.com:G_1",
+		]);
+		// Live work leaves the pile and keeps the rank it always held: the
+		// newest update first, then identity.
+		for (const identity of ["github:github.com:I_7", "github:github.com:I_5"]) {
+			const claim = state.claimHandoff(identity, choice, "open");
+			if (!claim.ok) throw new Error(claim.reason);
+			state.settleHandoff(claim.claim.attemptId, true);
+		}
+		expect(identities()).toEqual([
+			"github:github.com:I_7",
+			"github:github.com:I_5",
+			"github:github.com:I_6a",
+			"github:github.com:I_6b",
+			"github:github.com:G_1",
+		]);
+		state.close();
+	});
+
 	test("merges overlapping memberships, lets a healthy source act, and preserves durable handoff state", () => {
 		const path = statePath();
 		const state = openFactoryState(path);
@@ -2109,8 +2158,8 @@ describe("factory SQLite state", () => {
 				decidedAt: "2026-08-31T11:30:00Z",
 			});
 			expect(identities("active")).toEqual([]);
-			// Both rest, and the pile keeps the list's own order: the attention group,
-			// then the newest external update (ADR 0050).
+			// Both rest, and the pile keeps the list's own order: the attention band,
+			// then the band's own second rank (ADR 0050, ADR 0065).
 			expect(identities("ignored")).toEqual([rest.identity, live.identity]);
 			state.close();
 		});
@@ -2194,22 +2243,24 @@ describe("factory SQLite state", () => {
 			state.close();
 		});
 
-		test("the ignored view keeps the attention bands and the newest-external-update order", () => {
+		test("the ignored view keeps the attention bands and the open bands' number order", () => {
 			const state = openFactoryState(":memory:");
 			state.initializeSources([sourceA]);
-			// Three open Tickets with three external update times: the pile reads
-			// by the attention band first and the newest update after, the order
-			// the active list holds (ADR 0059's one rule for the ignored view).
-			const dated = (identity: string, at: string): FetchedTicket => ({
+			// Three Tickets with three external update times that disagree with
+			// the numbers: the pile reads by the attention band first and the
+			// open bands' ticket number after, the order the active list holds
+			// (ADR 0059's one rule for the ignored view, ADR 0065's second rank).
+			const dated = (identity: string, key: string, at: string): FetchedTicket => ({
 				...fetched(identity),
+				externalKey: key,
 				externalUpdatedAt: at,
 			});
 			state.applyFetch(
 				sourceA,
 				success([
-					dated("github:github.com:I_5", "2026-08-31T09:00:00Z"),
-					dated("github:github.com:I_6", "2026-08-31T12:00:00Z"),
-					dated("github:github.com:I_7", "2026-08-31T10:00:00Z"),
+					dated("github:github.com:I_5", "#5", "2026-08-31T09:00:00Z"),
+					dated("github:github.com:I_6", "#6", "2026-08-31T09:30:00Z"),
+					dated("github:github.com:I_7", "#7", "2026-08-31T12:00:00Z"),
 				]),
 			);
 			for (const identity of [
@@ -2219,8 +2270,9 @@ describe("factory SQLite state", () => {
 			]) {
 				expect(state.setTicketIgnored(identity, true, null).ok).toBe(true);
 			}
-			// I_5 runs an Agent, so it leads the pile; the rest read by the newest
-			// external update, exactly as the active list sorts them.
+			// I_5 runs an Agent, so it leads the pile; the rest read by ticket
+			// number ascending, exactly as the active list sorts them, and the
+			// newest update (I_7) does not pull its row ahead of I_6.
 			const running = state.claimHandoff("github:github.com:I_5", choice, "open");
 			if (!running.ok) throw new Error(running.reason);
 			state.settleHandoff(running.claim.attemptId, true);

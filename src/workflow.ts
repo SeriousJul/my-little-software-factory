@@ -22,6 +22,7 @@ import type {
 } from "./config.ts";
 import {
 	type EnvironmentKind,
+	externalKeyNumber,
 	headBranchOf,
 	issueReferencesOf,
 	type SourceMembership,
@@ -500,15 +501,6 @@ export function transitionLabelSet(config: FactoryConfig): ReadonlySet<string> {
 			labels.add(label.toLocaleLowerCase());
 	}
 	return labels;
-}
-
-/**
- * The number a source-visible external key carries (`#5` is 5), or null
- * when the key names none.
- */
-export function externalKeyNumber(key: string): number | null {
-	const match = /^#(\d+)$/.exec(key);
-	return match === null ? null : Number(match[1]);
 }
 
 /** Whether the ticket's newest membership reads draft. */

@@ -505,7 +505,8 @@ describe("source-driven frames", () => {
 		await withApp(
 			async (setup) => {
 				// While both sources still load, both open tickets are not
-				// actionable, and the newer pending ticket sorts first.
+				// actionable, and the open band reads them by ticket number
+				// ascending (ADR 0065), not by the update that moved newest.
 				const loading = await awaitFrame(
 					setup,
 					(f) =>
@@ -514,8 +515,8 @@ describe("source-driven frames", () => {
 						),
 					"all five tickets",
 				);
-				expect(listRowOf(loading, "Pending ticket")).toBeLessThan(
-					listRowOf(loading, "Open ticket"),
+				expect(listRowOf(loading, "Open ticket")).toBeLessThan(
+					listRowOf(loading, "Pending ticket"),
 				);
 
 				// Settle the issues source: the fetch carries its whole ticket
@@ -546,13 +547,12 @@ describe("source-driven frames", () => {
 		state.close();
 	});
 
-	test("preserves the selection by identity when a refresh reorders the list", async () => {
+	test("preserves the selection by identity when a state change reorders the list", async () => {
 		const state = freshState();
 		const first = ticket("github:github.com:I_5", { title: "First ticket" });
 		const second = ticket("github:github.com:I_6", {
 			externalKey: "#6",
 			title: "Second ticket",
-			externalUpdatedAt: "2026-08-31T09:00:00Z",
 		});
 		const source = new FakeSource("issues", "github-issues", success([first, second]));
 		try {
@@ -561,10 +561,18 @@ describe("source-driven frames", () => {
 					source.settle(success([first, second]));
 					await awaitFrame(setup, (f) => listRowOf(f, "First ticket") >= 0, "the first ticket");
 
-					// The manual refresh makes the other ticket newer: the list reorders.
+					// A refresh alone no longer reorders the open band: the tickets
+					// read by ticket number (ADR 0065), and a number never changes.
+					// A state change still reorders the list, and the selection must
+					// ride the ticket, not the row.
+					const db = new Database(state.path);
+					db.prepare(
+						"UPDATE tickets SET state = 'running' WHERE identity = 'github:github.com:I_6'",
+					).run();
+					db.close();
 					setup.mockInput.pressKey("r");
 					await callsReached(source, 2);
-					source.settle(success([first, { ...second, externalUpdatedAt: "2026-08-31T11:00:00Z" }]));
+					source.settle(success([first, second]));
 					await awaitFrame(
 						setup,
 						(f) => listRowOf(f, "Second ticket") < listRowOf(f, "First ticket"),

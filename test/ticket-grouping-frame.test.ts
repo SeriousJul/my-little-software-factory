@@ -432,7 +432,9 @@ describe("the Ticket section's Groups", () => {
 			const frame = await settle(setup);
 			// Every ticket shows, no header stands above any run, and the bar
 			// states no axis: `none` is the list exactly as it was (story 46).
-			expect(ticketRows(frame)).toContain("[open] [implement] Webhook retry acme/factory");
+			// The cursor rests on the list's first row, so the check reads a row
+			// the marker does not touch.
+			expect(ticketRows(frame)).toContain("[open] [review] Deploy gate acme/factory");
 			expect(headers(frame)).toEqual([]);
 			expect(actionBarRowOf(frame)).not.toContain("Tab Group");
 		});
@@ -486,10 +488,9 @@ describe("the Ticket section's Groups", () => {
 		await bootGrouped(async (setup) => {
 			const frame = await pressTab(setup, "the repository Groups", (f) => headers(f).length === 2);
 			expect(headers(frame)).toEqual(["▾ acme/factory 3", "▾ acme/billing 2"]);
-			// The order inside a Group is the flat list's order, untouched.
-
-			// The newest update leads: the Review ticket's own listing is the
-			// newest of the run, and the flat list already put it first.
+			// The Group stands by its lowest ticket number in the open band
+			// (ADR 0065), and the order inside a Group is the flat list's order,
+			// untouched.
 			expect(frame).toContain("Legacy import");
 		});
 	});
@@ -501,10 +502,12 @@ describe("the Ticket section's Groups", () => {
 				/Group: source/.test(actionBarRowOf(f)),
 			);
 			// The ticket two feeds list appears once, under the source its row's
-			// facts come from (story 13).
+			// facts come from (story 13). The Group stands by its lowest ticket
+			// number in the open band (ADR 0065), so the feed that holds the lower
+			// numbers stands first.
 			const listed = ticketRows(frame).filter((row) => row.includes("Deploy gate"));
 			expect(listed).toHaveLength(1);
-			expect(headers(frame)).toEqual(["▾ triage 1", "▾ issues 4"]);
+			expect(headers(frame)).toEqual(["▾ issues 4", "▾ triage 1"]);
 		});
 	});
 
@@ -518,10 +521,9 @@ describe("the Ticket section's Groups", () => {
 			// The badge's own words head the runs, and the ticket on the parking
 			// State stands in `parked` where it is hidden rather than lost
 			// (stories 15 and 16).
-			// The runs stand by the best band they hold and then by the newest
-			// update inside them, so the Review ticket's newer listing leads its
-			// own Group ahead of the fallback task's run (ADR 0059).
-			expect(headers(frame)).toEqual(["▾ review 1", "▾ implement 3", "▾ parked 1"]);
+			// The runs stand by the best band they hold and then by their lowest
+			// ticket number in the open band (ADR 0059, ADR 0065).
+			expect(headers(frame)).toEqual(["▾ implement 3", "▾ review 1", "▾ parked 1"]);
 		});
 	});
 
@@ -551,10 +553,12 @@ describe("the Ticket section's Groups", () => {
 				const frame = await pressTab(setup, "the position axis", (f) =>
 					/Group: position/.test(actionBarRowOf(f)),
 				);
+				// The runs stand by their lowest ticket number in the open band
+				// (ADR 0065), so the ready-for-agent run leads on its #1.
 				expect(headers(frame)).toEqual([
+					"▾ ready-for-agent 2",
 					"▾ awaiting-review 1",
 					"▾ on-hold 1",
-					"▾ ready-for-agent 2",
 					"▾ unmatched 1",
 				]);
 				// Exactly one blank row parts each pair of Groups and none stands
@@ -583,7 +587,7 @@ describe("the Ticket section's Groups", () => {
 			expect(sectionHeader(folded)).toContain("open: 5");
 			// The cursor rests on the header, and the detail kept its ticket.
 			expect(rowsOf(folded)[markerRowOf(folded)]).toContain("▸ acme/factory");
-			expect(detailPaneText(folded)).toContain("The description of Deploy gate.");
+			expect(detailPaneText(folded)).toContain("The description of Webhook retry.");
 			const opened = await press(setup, "x", "the fold back", (f) => /▾ acme\/factory/.test(f));
 			expect(ticketRows(opened).some((row) => row.includes("Webhook retry"))).toBe(true);
 		});
@@ -637,12 +641,12 @@ describe("the Ticket section's Groups", () => {
 		await bootGrouped(async (setup) => {
 			await pressTab(setup, "the repository Groups", (f) => headers(f).length === 2);
 			const held = detailPaneText(setup.captureCharFrame());
-			expect(held).toContain("Deploy gate");
+			expect(held).toContain("Webhook retry");
 			await pressArrow(setup, "up", "the header", (f) =>
 				(rowsOf(f)[markerRowOf(f)] ?? "").includes("▾ acme/factory"),
 			);
 			// The pane did not blank out under the operator (story 40).
-			expect(detailPaneText(setup.captureCharFrame())).toContain("Deploy gate");
+			expect(detailPaneText(setup.captureCharFrame())).toContain("Webhook retry");
 			for (const key of ["w", "g", "e"] as const) {
 				const refused = await press(setup, key, "the refusal", (f) =>
 					messageRowOf(f).includes("no Ticket is selected"),
@@ -677,12 +681,12 @@ describe("the Ticket section's Groups", () => {
 		await bootGrouped(async (setup) => {
 			await pressTab(setup, "the repository Groups", (f) => headers(f).length === 2);
 			await pressArrow(setup, "down", "the second row", (f) =>
-				(rowsOf(f)[markerRowOf(f)] ?? "").includes("Webhook retry"),
+				(rowsOf(f)[markerRowOf(f)] ?? "").includes("Deploy gate"),
 			);
 			const moved = await pressTab(setup, "the source axis", (f) =>
 				/Group: source/.test(actionBarRowOf(f)),
 			);
-			expect(rowsOf(moved)[markerRowOf(moved)]).toContain("Webhook retry");
+			expect(rowsOf(moved)[markerRowOf(moved)]).toContain("Deploy gate");
 		});
 	});
 
@@ -749,9 +753,11 @@ describe("the Ticket section's Groups", () => {
 	test("the cursor steps over the blank row and never rests on it", async () => {
 		await bootGrouped(async (setup) => {
 			await pressTab(setup, "the repository Groups", (f) => headers(f).length === 2);
-			// Down through the first Group's rows, one press per row.
+			// Down through the first Group's rows, one press per row: the list
+			// opens on the Group's header, and the cursor starts on the Group's
+			// first ticket, the lowest number in the open band (ADR 0065).
 			await pressArrow(setup, "down", "the second row", (f) =>
-				(rowsOf(f)[markerRowOf(f)] ?? "").includes("Webhook retry"),
+				(rowsOf(f)[markerRowOf(f)] ?? "").includes("Deploy gate"),
 			);
 			await pressArrow(setup, "down", "the Group's last row", (f) =>
 				(rowsOf(f)[markerRowOf(f)] ?? "").includes("Held turn"),
@@ -815,7 +821,7 @@ describe("the Ticket section's Groups", () => {
 				}
 				const frame = setup.captureCharFrame();
 				expect(ticketRows(frame)).toEqual([]);
-				expect(headers(frame)).toEqual(["▸ review 1", "▸ implement 3", "▸ parked 1"]);
+				expect(headers(frame)).toEqual(["▸ implement 3", "▸ review 1", "▸ parked 1"]);
 			},
 			{ size: [WIDTH, 27] },
 		);
@@ -1091,7 +1097,9 @@ describe("the Ticket section's Groups", () => {
 				(f) => headers(f).some((row) => row.startsWith("▸ acme/billing 3")),
 				"the folded Group's new count",
 			);
-			expect(headers(moved)).toEqual(["▾ acme/factory 2", "▸ acme/billing 3"]);
+			// The Groups stand by their lowest ticket number in the open band
+			// (ADR 0065): the billing run now holds #1, so it leads.
+			expect(headers(moved)).toEqual(["▸ acme/billing 3", "▾ acme/factory 2"]);
 
 			// The last billing ticket leaves the list, and its header leaves with
 			// it: a stale fold costs nothing (story 64).

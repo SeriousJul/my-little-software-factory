@@ -4,11 +4,11 @@
  * A **Group** is a run of rows that share one value of one **Grouping axis**,
  * under one **Group header** the operator can collapse. The whole shape is
  * presentation of the order the list already holds (ADR 0059): the Groups stand
- * by the best Attention band among the rows they hold, then by the newest
- * external update in the Group, then by the Group value, and the order *inside*
- * a Group is exactly the order the flat list holds. Nothing here re-sorts work,
- * and nothing here reaches the queue order, the Top-up's choice, or a detail
- * pane.
+ * by the best Attention band among the rows they hold, then by the smallest
+ * second rank of the rows they hold, then by the Group value, and the order
+ * *inside* a Group is exactly the order the flat list holds. Nothing here
+ * re-sorts work, and nothing here reaches the queue order, the Top-up's choice,
+ * or a detail pane.
  *
  * The mechanism is shared; the facts a section's rows carry come in through
  * `GroupingOf`, so a second list that takes grouping later supplies its own key
@@ -25,7 +25,7 @@ import { createElement } from "@opentui/react";
 import type { ReactElement } from "react";
 
 import type { GroupingAxis, SplitGroupingAxis } from "../../domain/grouping.ts";
-import { attentionBand, holdsDecision, type Ticket } from "../../domain/ticket.ts";
+import { attentionBand, holdsDecision, type Ticket, ticketListRank } from "../../domain/ticket.ts";
 import { newestMembership } from "../../task-selection.ts";
 import { truncateTailToWidth, widthOf } from "../text.ts";
 import { paint, ticketTaskType } from "../theme.ts";
@@ -240,8 +240,8 @@ export interface GroupingOf<T> {
 	keyOf: (item: T) => string;
 	/** The row's Attention band: the list's first sort (ADR 0050). */
 	bandOf: (item: T) => number;
-	/** The row's newest external update, the Group's second rank. */
-	updatedOf: (item: T) => string;
+	/** The row's second rank inside its band, smaller stands first (ADR 0065). */
+	rankOf: (item: T) => number;
 	/** Whether the row holds a decision the operator owes. */
 	heldOf: (item: T) => boolean;
 	/** Whether the Group under this value stands collapsed. */
@@ -264,7 +264,7 @@ export function groupedRows<T>(
 		value: string;
 		items: T[];
 		band: number;
-		updated: string;
+		rank: number;
 		held: number;
 	}
 	const byValue = new Map<string, Running>();
@@ -277,7 +277,7 @@ export function groupedRows<T>(
 				value,
 				items: [],
 				band: grouping.bandOf(item),
-				updated: grouping.updatedOf(item),
+				rank: grouping.rankOf(item),
 				held: 0,
 			};
 			byValue.set(value, group);
@@ -288,8 +288,8 @@ export function groupedRows<T>(
 		// met: a run that gains an awaiting ticket moves with it (story 47).
 		const band = grouping.bandOf(item);
 		if (band < group.band) group.band = band;
-		const updated = grouping.updatedOf(item);
-		if (updated > group.updated) group.updated = updated;
+		const rank = grouping.rankOf(item);
+		if (rank < group.rank) group.rank = rank;
 		if (grouping.heldOf(item)) group.held += 1;
 	}
 	// A Group with no tickets cannot come from the rows, so no stale header
@@ -297,9 +297,7 @@ export function groupedRows<T>(
 	// (story 26, story 64).
 	groups.sort(
 		(left, right) =>
-			left.band - right.band ||
-			right.updated.localeCompare(left.updated) ||
-			left.value.localeCompare(right.value),
+			left.band - right.band || left.rank - right.rank || left.value.localeCompare(right.value),
 	);
 	const rows: ListedRow<T>[] = [];
 	for (const group of groups) {
@@ -358,7 +356,7 @@ export function ticketRows(
 		axis,
 		keyOf: (ticket) => ticketGroupKey(axis, ticket),
 		bandOf: attentionBand,
-		updatedOf: (ticket) => ticket.externalUpdatedAt,
+		rankOf: (ticket) => ticketListRank(ticket),
 		heldOf: holdsDecision,
 		isFolded: (value) => folded.has(value),
 	});

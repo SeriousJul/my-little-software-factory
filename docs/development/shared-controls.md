@@ -229,12 +229,14 @@ Two rules are the standard, not the surface's choice:
 - **A Group presents the list order and never sorts it** ([ADR
   0059](../adr/0059-a-group-presents-the-attention-order-and-never-a-new-sort.md)).
   The Groups stand by the best Attention band among the rows they hold, then the
-  newest external update in the Group, then the Group value; the order inside a
-  Group is the flat list's order, unchanged, and `none` is the flat list row for
-  row. The grouping code is presentation: it reaches no queue order, no Top-up
-  choice, no gate, no count, and no detail pane, and the plane's one band rule
-  (`attentionBand` in [domain/ticket.ts](../../src/domain/ticket.ts)) stays the
-  single source both the projection's sort and the Group order read. The held
+  Group's smallest second rank - the newest external update in the live bands,
+  the lowest ticket number in the open bands (ADR 0065) - then the Group value;
+  the order inside a Group is the flat list's order, unchanged, and `none` is the
+  flat list row for row. The grouping code is presentation: it reaches no queue
+  order, no Top-up choice, no gate, no count, and no detail pane, and the plane's
+  band rule and second-rank rule (`attentionBand` and `ticketListRank` in
+  [domain/ticket.ts](../../src/domain/ticket.ts)) stay the single source both the
+  projection's sort and the Group order read. The held
   count a header carries comes from the same file's one held-turn rule
   (`holdsDecision`), so a Group's count can never disagree with the Section
   header's, a row's badge, or the detail pane's warning.
