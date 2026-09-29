@@ -50,6 +50,12 @@ step.
   not into an excluded folder is a site path, so it must name a published
   page or the build fails; a file outside `docs/` is not a site path, so link
   to it with a relative path instead.
+- Raw HTML links on a page (the home page's guide cards are hand-written
+  `<a>` tags) use a target relative to the page, like
+  `./operation/main-view.html`, not a site path with a leading `/`.
+  VitePress applies the project base to markdown links, but it leaves an
+  `href` written in raw HTML untouched, so an absolute target misses the
+  project base and the link breaks on the Pages site.
 - Do not write pages into `agents/`, `verification/`, or `research/` expecting
   them to appear on the site.
 - Static site assets (images and other files served as-is by site path) go in

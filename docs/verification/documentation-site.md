@@ -6,9 +6,12 @@ explicit page order, the Development group, the compact ADR group, the larger
 screenshots, the theme, and the image lightbox). The GitHub Pages deploy has
 run: the site is live at
 <https://seriousjul.github.io/my-little-software-factory/>, and the static
-structure of the published home page was checked on 2026-09-29. What has not
-been measured is the interactive lightbox flow, for the reason the section
-below states.
+structure of the published home page was checked on 2026-09-29. The home
+page's guide cards stood on absolute site paths that missed the project base
+on the Pages site, and the links broke there; the cards now use relative
+targets, and the built links were checked on 2026-09-29. What has not been
+measured is the interactive lightbox flow, for the reason the section below
+states.
 
 This record states what was measured, on what, and what was not measured. A
 check that could not run is recorded as incomplete. It is not a pass, and it
@@ -32,6 +35,7 @@ branch, on 2026-09-15.
 | The screenshots are the larger sizes: the six operation shots are 1620 by 800 and the hero is 2304 by 1120 | The PNG header dimensions of the built assets | Passed |
 | The pages inside a group show in explicit reading order; Getting Started is prerequisites, first launch, minimal config, with no landing row | The built HTML sidebar of a doc page, read in document order | Passed |
 | The home page "Get started" action and the Getting started card link to the first step (prerequisites), not to a landing page | The built home page HTML | Passed |
+| Every home page link resolves under the project base on the Pages site: the two hero actions and the six guide cards | The built home page HTML, read on 2026-09-29: the hero actions carry the project base, the guide cards carry relative targets, and each target names a page the build publishes | Passed |
 | The image lightbox code and styles are bundled into the site build | The built theme chunk contains the lightbox bindings (the `.vp-doc img` selector, the Escape and close handling, the overlay) and the built CSS contains the overlay styles | Passed |
 | A broken internal link fails the build with a readable error naming the page and the link, for a link in the same folder and for a link into a parent folder | A temporary guide page was built with each shape: `[x](./does-not-exist.md)` fails with `Found dead link ./does-not-exist in file temp-guide/intro.md`, and `[x](../does-not-exist.md)` fails with `Found dead link ./../does-not-exist in file temp-guide/intro.md`; both builds exit nonzero | Passed |
 | A newly written guide folder appears in the sidebar without a config edit | A temporary guide folder was built: its pages appeared as a new sidebar group, and the build needed no config change | Passed |

@@ -11,6 +11,10 @@
  * herdr client renders the workspace. The client's screen renders with
  * the same ANSI renderer as the doc screenshots.
  *
+ * The shot selects the running ticket, so the Detail pane shows the ticket
+ * the agent pane works, and it reports the agent pane to herdr as a working
+ * agent, so herdr's sidebar carries the running state the ticket's row reads.
+ *
  * This shot is refreshed by hand (`npm run hero`). It is not in the
  * drift test: herdr's chrome belongs to herdr, and it changes when
  * herdr changes.
@@ -188,6 +192,47 @@ async function main(): Promise<void> {
 			}
 			await sleep(250);
 		}
+		// Select the running ticket: the Detail pane shows the ticket the
+		// agent pane works, so the two panes read as one scene. The cursor
+		// starts on the first row, so step with `j` until the Detail shows
+		// the ticket's full title. The list column truncates titles, and the
+		// Detail holds the title whole, so the full title is the settle signal
+		// (the same reason the header wait above settles on the grid, not the
+		// byte stream). Keys go through the CLI to the pane directly: client
+		// keystrokes land on whichever pane holds the focus.
+		const detailTitle = "Retry failed webhook deliveries";
+		const hasDetailTitle = (grid: Grid): boolean =>
+			grid.some((row) =>
+				row
+					.map((c) => c.char)
+					.join("")
+					.includes(detailTitle),
+			);
+		const detailDeadline = Date.now() + 30000;
+		for (;;) {
+			if (hasDetailTitle(parseScreen(client.output(), SCREEN.cols, SCREEN.rows))) break;
+			if (Date.now() >= detailDeadline) {
+				throw new Error(
+					`hero: the Detail pane never showed the running ticket\ncaptured output:\n${preview(client.output())}`,
+				);
+			}
+			cli(bin, isoEnv, ["pane", "send-keys", paneA, "j"]);
+			await sleep(250);
+		}
+		// The agent pane runs a static script, so herdr's own detection names
+		// no agent in it. Report the pane's state so the sidebar shows the
+		// agent working, matching the ticket's running row.
+		cli(bin, isoEnv, [
+			"pane",
+			"report-agent",
+			paneB,
+			"--source",
+			"custom:hero",
+			"--agent",
+			"pi",
+			"--state",
+			"working",
+		]);
 		// The client redraws its chrome on a timer, so the byte stream never
 		// rests. Settle on the parsed screen grid instead: capture, re-capture
 		// once the grid stops changing, and render that.

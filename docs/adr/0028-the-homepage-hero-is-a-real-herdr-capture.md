@@ -15,9 +15,13 @@ isolated herdr: a fresh server in a temporary directory with its own socket,
 home, and config. It never touches the operator's live herdr session. The
 script makes one workspace, splits it into two panes, and runs the control
 plane in the left pane over the same deterministic fixture the operation
-screenshots use. A stub agent session runs in the right pane. An attached
-herdr client renders the workspace, and the script captures the client's
-screen with the shared ANSI renderer into `docs/public/hero.png`.
+screenshots use. A stub agent session runs in the right pane. The script
+selects the running ticket in the control plane, so the Detail pane shows the
+ticket the agent pane works, and it reports the agent pane to herdr as a
+working agent, so herdr's sidebar carries the running state the ticket's row
+reads. An attached herdr client renders the workspace, and the script
+captures the client's screen with the shared ANSI renderer into
+`docs/public/hero.png`.
 
 The hero is refreshed by hand. It is not in the drift test.
 
