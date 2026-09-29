@@ -69,6 +69,7 @@ _Avoid_: copy-on-select, select-to-copy, clipboard selection
 
 **Decision modal**:
 The near-fullscreen Interaction mode above an awaiting ticket: the turn log, the label facts the Transition wrote, and the rows the operator confirms: close, goto, and, when the ticket's new position offers a task, the handoff of that task.
+The route row stands live while its route is dead and reads as a fact line while the route lives: waiting in the Work queue, starting, or running on its position ticket (ADR 0064).
 `e` on a handoff row edits that route's settings before it starts.
 _Avoid_: action panel, decision popup
 
@@ -307,7 +308,7 @@ The ticket's row and detail wear the spinner face in place of their state badge 
 _Avoid_: boot, launch, pending, startup
 
 **Queue wait**:
-The window in which a ticket's start waits in the Work queue for its pickup: a free Parallel limit seat, or the queue's resume while the queue pause stands.
+The window in which a ticket's start waits in the Work queue for its pickup: a free Parallel limit seat, or the queue's resume while the queue pause stands. The settled ticket's route takes the wait too: the item the route's ask enqueues holds its place there, and the settled ticket wears the window while it waits (ADR 0064).
 Every start takes the wait before the pickup starts it, and a free seat starts it in the same tick (ADR 0049).
 The ticket keeps its state, and its row and detail wear the `queued` badge in place of their state badge, the way the Starting window wears the spinner face. The badge is not a ticket state: the section counts, the pickup gate, and the state file all keep the ticket's state.
 _Avoid_: queued state, pending, on hold
