@@ -166,7 +166,7 @@ A collapsed group shows nothing but its header. A group is a presentation of the
 _Avoid_: bucket, category, folder, section
 
 **Group header**:
-The row that names one Group, its count, and the count of held decisions it hides. The cursor can rest on it, and no ticket is selected there.
+The row that names one Group, its count, and the count of held decisions it hides. The cursor can rest on it, and no ticket is selected there. Space or a click on it folds the Group, and opens it back when it is folded.
 _Avoid_: section header, divider, group row
 
 **Grouping axis**:
