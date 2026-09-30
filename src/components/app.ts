@@ -1261,22 +1261,24 @@ export function App({
 	 * route item the ticket's own turn or another's route enqueued on it
 	 * (ADR 0064, ADR 0072): the route's ask ends the source's cycle and the
 	 * wait stands on the item alone, so the badge wears on the item's position
-	 * while the item stands, open or awaiting alike. The row and the detail
-	 * state line wear the `queued` badge in place of their state badge, and
-	 * the Starting window rules it out before it is read, so the spinner face
-	 * takes over when the run begins. The ticket keeps its state, so the
-	 * counts and the state file never learn the badge.
+	 * while the item stands, open or awaiting alike, the route's item and the
+	 * Plane action's merge item alike, the wait the position takes the same
+	 * way (ADR 0068). The row and the detail state line wear the `queued`
+	 * badge in place of their state badge, and the Starting window rules it
+	 * out before it is read, so the spinner face takes over when the run
+	 * begins. The ticket keeps its state, so the counts and the state file
+	 * never learn the badge.
 	 */
 	const queueWait = (ticket: Ticket): boolean =>
 		workQueue.some(
 			(item) =>
-				item.kind === "handoff" &&
+				(item.kind === "handoff" || item.kind === "plane-action") &&
 				((item.origin === "open" &&
 					item.ticketIdentity === ticket.identity &&
 					ticket.state === "open") ||
 					(item.origin === "workflow" &&
 						item.ticketIdentity === ticket.identity &&
-					(ticket.state === "open" || ticket.state === "awaiting"))),
+						(ticket.state === "open" || ticket.state === "awaiting"))),
 		);
 	const persistMapping = async (mapping: RepositoryMapping): Promise<string | undefined> => {
 		const write = configWriteQueue.current

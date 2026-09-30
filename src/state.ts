@@ -2849,20 +2849,25 @@ export class FactoryState {
 	/**
 	 * Cancel the ticket's waiting item by the operator's hand (ADR 0072): the
 	 * row leaves the queue, and the route the row carries takes its mark on
-	 * the turn's trace in the same write. The source's cycle already ended at
-	 * the ask, so the item is the whole of the wait, and the removal takes the
-	 * item alone. The mark stands on the outcome the trace holds, the way the
-	 * re-fired skip's mark stands (ADR 0042): the machine's re-offer skips the
-	 * marked trace, so a route the operator removed is not re-offered. A start
-	 * with no route takes the item alone, the way the row's removal always did.
+	 * the trace the item's decision answers in the same write. The source's
+	 * cycle already ended at the ask, so the item is the whole of the wait,
+	 * and the removal takes the item alone. The mark stands on the outcome the
+	 * trace holds, the way the re-fired skip's mark stands (ADR 0042): the
+	 * machine's re-offer skips the marked trace, so a route the operator
+	 * removed is not re-offered. A start with no route takes the item alone,
+	 * the way the row's removal always did.
 	 */
 	cancelWorkItem(ticketIdentity: string): boolean {
 		return this.transaction(() => {
 			const row = this.db
-				.prepare("SELECT origin, route_from_identity FROM work_queue WHERE ticket_identity = ?")
+				.prepare(
+					"SELECT origin, route_from_identity, is_automatic, action_task_type FROM work_queue WHERE ticket_identity = ?",
+				)
 				.get(ticketIdentity) as {
 				origin: string | null;
 				route_from_identity: string | null;
+				is_automatic: number;
+				action_task_type: string | null;
 			} | null;
 			if (row === null) return false;
 			this.db.prepare("DELETE FROM work_queue WHERE ticket_identity = ?").run(ticketIdentity);
@@ -2871,36 +2876,42 @@ export class FactoryState {
 				// The source the route routed from: the item's route from, or the
 				// item's own ticket for a route onto the ticket's own position.
 				const source = row.route_from_identity ?? ticketIdentity;
-				this.writeRouteRemovedMark(source);
+				// The decision word the item's ask landed on its trace (ADR 0064):
+				// the mark answers the same decision, so a turn that settled
+				// behind the wait takes no mark from the removal.
+				const decision =
+					row.action_task_type !== null
+						? row.is_automatic === 1
+							? "auto-merged"
+							: "merged"
+						: row.is_automatic === 1
+							? "auto-handed-off"
+							: "handed-off";
+				this.writeRouteRemovedMark(source, decision);
 			}
 			return true;
 		});
 	}
 
 	/**
-	 * Mark the route on the ticket's newest completion trace (ADR 0072): the
-	 * operator removed the route's item from the Work queue, and the machine's
-	 * re-offer skips the marked trace. The mark stands on the outcome the
-	 * trace holds, the way the re-fired skip's mark stands (ADR 0042): the
-	 * outcome takes the flag in place of the fact it recorded, and nothing
-	 * else moves. A trace that already holds the mark, or one that carries no
-	 * outcome, changes nothing.
+	 * The mark's write, inside a transaction the caller holds (ADR 0072): the
+	 * same write as the mark alone, without its own transaction, so the
+	 * cancel's single write takes the item and the mark together. The mark
+	 * stands on the trace the item's decision answers - the source's newest
+	 * trace that carries the decision word the ask landed (ADR 0064) - and a
+	 * turn that settled behind the wait, whose trace carries no decision yet,
+	 * keeps the removal off of it. The mark stands on the outcome the trace
+	 * holds, the way the re-fired skip's mark stands (ADR 0042): the outcome
+	 * takes the flag in place of the fact it recorded, and nothing else moves.
+	 * A trace that already holds the mark, or one that carries no outcome,
+	 * changes nothing.
 	 */
-	markRouteRemoved(ticketIdentity: string): boolean {
-		return this.transaction(() => this.writeRouteRemovedMark(ticketIdentity));
-	}
-
-	/**
-	 * The mark's write, inside a transaction the caller holds (ADR 0072):
-	 * the same write as the mark alone, without its own transaction, so the
-	 * cancel's single write takes the item and the mark together.
-	 */
-	private writeRouteRemovedMark(ticketIdentity: string): boolean {
+	private writeRouteRemovedMark(ticketIdentity: string, decision: string): boolean {
 		const row = this.db
 			.prepare(
-				"SELECT id, transition_json FROM completion_traces WHERE ticket_identity = ? ORDER BY completed_at DESC, rowid DESC LIMIT 1",
+				"SELECT id, transition_json FROM completion_traces WHERE ticket_identity = ? AND decision = ? ORDER BY completed_at DESC, rowid DESC LIMIT 1",
 			)
-			.get(ticketIdentity) as { id: string; transition_json: string | null } | null;
+			.get(ticketIdentity, decision) as { id: string; transition_json: string | null } | null;
 		if (row == null || row.transition_json === null) return false;
 		const recorded = transitionOf(row.transition_json);
 		if (recorded === null || recorded.routeRemoved === true) return false;

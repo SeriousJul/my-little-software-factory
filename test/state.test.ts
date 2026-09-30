@@ -1248,6 +1248,76 @@ describe("factory SQLite state", () => {
 			state.close();
 		});
 
+		test("the cancel marks the trace the item's decision answers, not a newer turn (ADR 0072)", () => {
+			const path = statePath();
+			const state = openFactoryState(path);
+			state.initializeSources([sourceA]);
+			state.applyFetch(sourceA, success([fetched("github:github.com:I_6"), fetched()]));
+			const { identity, attemptId } = settledTurn(state, routeOutcome("github:github.com:I_6"));
+			expect(
+				state.applyCompletionDecision({
+					ticketIdentity: identity,
+					handoffId: attemptId,
+					decision: "auto-handed-off",
+					decidedAt: "2026-08-31T11:10:00Z",
+				}),
+			).toBe(true);
+			expect(
+				state.enqueueWork({
+					ticketIdentity: "github:github.com:I_6",
+					routeFromIdentity: identity,
+					origin: "workflow",
+					choice,
+					previousMessage: "the automatic route",
+					automatic: true,
+				}),
+			).toEqual({ ok: true });
+			// The source settles a new turn while the route's item waits: a
+			// manual start on the source can do it, and the queue holds only the
+			// automatic adds.
+			const claim = state.claimHandoff(identity, choice, "open");
+			if (!claim.ok) throw new Error(claim.reason);
+			state.settleHandoff(claim.claim.attemptId, true);
+			state.settleTurn({
+				ticketIdentity: identity,
+				handoffId: claim.claim.attemptId,
+				taskType: "implement",
+				agentType: "pi",
+				message: "The new turn is done.",
+				turnLog: textLog("The new turn is done."),
+				completedAt: "2026-08-31T12:00:00Z",
+				transition: routeOutcome("github:github.com:I_6"),
+			});
+			expect(state.ticketState(identity)).toBe("awaiting");
+			// The operator removes the item: the mark stands on the trace the
+			// item's decision answers - the turn that recorded the automatic
+			// route - and the newer turn's trace keeps the removal off of it.
+			expect(state.cancelWorkItem("github:github.com:I_6")).toBe(true);
+			const db = new Database(path, { readonly: true });
+			const traces = db
+				.prepare(
+					"SELECT decision, transition_json FROM completion_traces WHERE ticket_identity = ? ORDER BY completed_at DESC, rowid DESC",
+				)
+				.all(identity) as Array<{ decision: string | null; transition_json: string | null }>;
+			db.close();
+			expect(traces).toHaveLength(2);
+			// The newer turn's trace carries no mark: its route still stands for
+			// the operator's decision.
+			const [newer, older] = traces;
+			expect(newer.decision).toBeNull();
+			expect(
+				newer.transition_json === null
+					? undefined
+					: (JSON.parse(newer.transition_json) as { routeRemoved?: boolean }).routeRemoved,
+			).toBeUndefined();
+			// The settled turn the item's decision answers carries the mark.
+			expect(older.decision).toBe("auto-handed-off");
+			expect(
+				(JSON.parse(older.transition_json ?? "") as { routeRemoved?: boolean }).routeRemoved,
+			).toBe(true);
+			state.close();
+		});
+
 		test("a cancel takes the item alone when the row names no route (ADR 0072)", () => {
 			const state = openFactoryState(":memory:");
 			state.initializeSources([sourceA]);
@@ -1388,6 +1458,7 @@ describe("factory SQLite state", () => {
 					routeFromIdentity: identity,
 					origin: "workflow",
 					taskType: "merge",
+					automatic: true,
 				}),
 			).toEqual({ ok: true });
 			// The operator removes the item: the row leaves, the merge's own
@@ -2406,6 +2477,44 @@ describe("factory SQLite state", () => {
 			(check.prepare("SELECT version FROM schema_version").get() as { version: number }).version,
 		).toBe(SCHEMA_VERSION);
 		check.close();
+	});
+
+	test("the heal on open ends the cycle of a ticket the file still holds queued (ADR 0072)", () => {
+		// The retired wait stood in the ticket's state before this rule: a file
+		// the old rule wrote may still hold a ticket in it. The open heals
+		// those cycles the way a close ends one - the ticket rests open with
+		// the cycle counted once - in one state write, the way the legacy
+		// `done` heal ran. The state is unreachable now, so the step is a no-op
+		// on a file the new rule wrote.
+		const path = statePath();
+		const state = openFactoryState(path);
+		state.initializeSources([sourceA]);
+		state.applyFetch(sourceA, success([fetched(), fetched("github:github.com:I_6")]));
+		state.close();
+
+		// The file the old rule wrote: the routed ticket stands in the retired
+		// wait, beside a ticket that stands open.
+		const db = new Database(path);
+		db.prepare("UPDATE tickets SET state = 'queued' WHERE identity = ?").run(
+			"github:github.com:I_6",
+		);
+		db.close();
+
+		const reopened = openFactoryState(path);
+		// The heal moves the ticket to open with the cycle counted once, the
+		// way a close ends the cycle, and the ticket the file held open keeps
+		// the cycle it wore.
+		expect(reopened.ticketState("github:github.com:I_6")).toBe("open");
+		const healed = reopened
+			.visibleTickets([], "implement")
+			.find((candidate) => candidate.identity === "github:github.com:I_6");
+		expect(healed?.workCycle).toBe(2);
+		const resting = reopened
+			.visibleTickets([], "implement")
+			.find((candidate) => candidate.identity === "github:github.com:I_5");
+		expect(resting?.state).toBe("open");
+		expect(resting?.workCycle).toBe(1);
+		reopened.close();
 	});
 
 	describe("the queue pause (ADR 0052)", () => {

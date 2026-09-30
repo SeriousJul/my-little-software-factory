@@ -1881,6 +1881,64 @@ describe("the auto top-up merge", () => {
 		state.close();
 	});
 
+	test("the merge's wait wears the queued badge on the position's row (ADR 0072)", async () => {
+		// The wait is the position's own fact: the ask enqueues the item on the
+		// position, the position's row wears the queue-wait badge in the state
+		// badge's place, and the position keeps the state the ask left it,
+		// the way the route's wait wears the badge on the position's row.
+		const state = await topUpApp(
+			async (setup) => {
+				const frame = await awaitFrame(
+					setup,
+					(f) => {
+						const rows = rowsOf(f);
+						return rows.some(
+							(row) => row.includes(pullTitle.slice(0, 3)) && row.includes("[queued]"),
+						);
+					},
+					"the position's row",
+				);
+				const row = rowsOf(frame).find((row) => row.includes(pullTitle.slice(0, 3))) ?? "";
+				expect(row).toContain("[queued]");
+				expect(row).not.toContain("[open]");
+			},
+			() => {},
+			{},
+			(s) => {
+				// The pull request's own turn settles on its own position: the
+				// ask records the decision and ends the cycle in the same
+				// write, so the position rests open, and the wait stands on the
+				// item alone. The pause holds the pickup.
+				seed(s, "awaiting", mergeRoute());
+				const handoffId = s.latestHandoff(pullIdentity)?.handoffId ?? "";
+				if (handoffId === "") throw new Error("the seeded turn left no handoff");
+				expect(
+					s.applyCompletionDecision({
+						ticketIdentity: pullIdentity,
+						handoffId,
+						decision: "auto-merged",
+						decidedAt: "2026-08-31T11:10:00Z",
+					}),
+				).toBe(true);
+				expect(s.ticketState(pullIdentity)).toBe("open");
+				expect(
+					s.enqueuePlaneActionWork({
+						ticketIdentity: pullIdentity,
+						origin: "workflow",
+						automatic: true,
+						taskType: "merge",
+					}),
+				).toEqual({ ok: true });
+				s.setQueuePaused(true);
+			},
+		);
+		// The pause held the pickup: no command ran on the item, and the
+		// position kept the open state the ask left it.
+		expect(state.latestPlaneActionAttempt(pullIdentity)).toBeNull();
+		expect(state.ticketState(pullIdentity)).toBe("open");
+		state.close();
+	});
+
 	test("the Dispatch pause holds the automatic merge add, and the release runs it", async () => {
 		let failedHandoffId = "";
 		let held: FactoryState;

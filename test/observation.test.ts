@@ -1677,6 +1677,42 @@ describe("the awaiting rule", () => {
 		state.close();
 	});
 
+	test("the top-up skips the route's marked trace, the way the removal's mark stands (ADR 0072)", async () => {
+		const { state, intents, coordinator } = rig({ autoOn: true, agents: [] });
+		state.applyFetch(source, success([fetched("github:github.com:I_6"), fetched()]));
+		settleFor(state, "github:github.com:I_5", "route", routeOutcome("github:github.com:I_6"));
+		await coordinator.tick();
+		// The route to the position enqueues, and the ask records the
+		// factory's decision on the settled turn, the way the drop's test
+		// leaves it.
+		expect(intents).toHaveLength(1);
+		expect(state.lastCompletion("github:github.com:I_5")?.decision).toBe("auto-handed-off");
+		// The operator removes the item: the row leaves, and the settled
+		// turn's trace takes the removal's mark in the same write.
+		expect(state.cancelWorkItem("github:github.com:I_6")).toBe(true);
+		expect(state.lastCompletion("github:github.com:I_5")?.transition?.routeRemoved).toBe(true);
+		// The marked trace is not re-offered: the empty-queue cycle walks the
+		// decided turn, the mark holds it out, and the removal stands - the
+		// machine does not bring the operator's removal back.
+		await coordinator.tick();
+		expect(intents.filter((intent) => intent.origin === "workflow")).toHaveLength(1);
+		// The route's item is the one that stays out: the queue may hold the
+		// position's own open add, never the marked route's re-offer.
+		expect(
+			state
+				.workQueue()
+				.filter((item) => item.kind !== "consultation" && item.origin === "workflow"),
+		).toHaveLength(0);
+		const [resting] = state.visibleTickets([], "implement");
+		expect(resting).toEqual(
+			expect.objectContaining({
+				state: "open",
+				lastCompletion: expect.objectContaining({ decision: "auto-handed-off" }),
+			}),
+		);
+		state.close();
+	});
+
 	/**
 	 * ADR 0051's gate list, read by the continuation walk through
 	 * `continuationPosition`. Each guard holds the position instead of adding
