@@ -973,7 +973,7 @@ describe("the Live view against a running factory", () => {
 		app.state.close();
 	});
 
-	test("a routed handoff from the decision sub-mode keeps the screen and streams the new pane", async () => {
+	test("a routed handoff from the decision sub-mode falls back to the list, and the Live view follows the new pane (ADR 0072)", async () => {
 		const app = seededApp();
 		stubCheckout(app);
 		const checkoutPath = Object.values(app.config.repos)[0];
@@ -1029,16 +1029,31 @@ describe("the Live view against a running factory", () => {
 				await pressArrow(setup, "down", "the handoff row", (f) =>
 					frameText(f).includes("❯ Handoff: review"),
 				);
-				// The routed handoff starts in the new tab; the screen stays
-				// open and its stream moves to the new pane.
-				await pressReturn(setup, "the routed handoff", (f) => f.includes("the reviewer is on it"));
-				expect(frameText(setup.captureCharFrame())).toContain("Live: Persist source facts");
+				// The confirm ended the ticket's cycle in the same write that
+				// landed the decision (ADR 0072): the screen reads the list, the
+				// start runs in the new tab, and the row stands with the start's
+				// face.
+				await press(
+					setup,
+					"return",
+					"the confirmed route",
+					(f) =>
+						f.includes("Persist source facts") && !f.includes("Decision: Persist source facts"),
+				);
+				const listFrame = await settle(setup);
+				expect(listFrame).not.toContain("Live: Persist source facts");
+				expect(app.state.lastCompletion(identity)?.decision).toBe("handed-off");
 				// The new agent is live: the observation loop may already have
 				// marked the in-flight ticket running.
 				expect(["handed-off", "running"]).toContain(app.state.ticketState(identity) ?? "");
-				expect(app.state.lastCompletion(identity)?.decision).toBe("handed-off");
-				// The stream follows the handoff: the new pane's read, and no
-				// focus, which is the Goto's alone.
+				// The Live view reopens on the row and streams the new pane: the
+				// stream follows the handoff, and no focus, which is the Goto's
+				// alone.
+				await pressReturn(
+					setup,
+					"the Live view again",
+					(f) => f.includes("Live: Persist source facts") && f.includes("the reviewer is on it"),
+				);
 				expect(app.runner.commands()).toContain(READ_COMMAND("pane-9"));
 				expect(app.runner.commands().join("\n")).not.toContain("agent focus");
 			},
@@ -1120,7 +1135,7 @@ describe("the Live view against a running factory", () => {
 		app.state.close();
 	});
 
-	test("a route confirmed through the override keeps the screen and streams the new pane", async () => {
+	test("a route confirmed through the override falls back to the list, and the Live view follows the new pane (ADR 0072)", async () => {
 		const app = seededApp();
 		stubCheckout(app);
 		const checkoutPath = Object.values(app.config.repos)[0];
@@ -1171,16 +1186,27 @@ describe("the Live view against a running factory", () => {
 				// e opens the override on the route's choice; Enter confirms it
 				// from the panel.
 				await openPanel(setup);
-				// The screen keeps the box: the stream moves to the new pane,
-				// and the route's decision lands on the settled turn.
-				const frame = await pressReturn(
+				// The confirm ended the ticket's cycle in the same write that
+				// landed the decision (ADR 0072): the screen reads the list, and
+				// the start runs in the new tab.
+				await press(
 					setup,
+					"return",
 					"the confirmed route",
-					(f) => f.includes("Live: Persist source facts") && f.includes("the reviewer is on it"),
+					(f) =>
+						f.includes("Persist source facts") && !f.includes("Decision: Persist source facts"),
 				);
-				expect(frame).not.toContain("Override");
+				const listFrame = await settle(setup);
+				expect(listFrame).not.toContain("Live: Persist source facts");
+				expect(listFrame).not.toContain("Edit handoff");
 				expect(app.state.lastCompletion(identity)?.decision).toBe("handed-off");
 				expect(["handed-off", "running"]).toContain(app.state.ticketState(identity) ?? "");
+				// The Live view reopens on the row and streams the new pane.
+				await pressReturn(
+					setup,
+					"the Live view again",
+					(f) => f.includes("Live: Persist source facts") && f.includes("the reviewer is on it"),
+				);
 				expect(app.runner.commands()).toContain(READ_COMMAND("pane-9"));
 			},
 			WIDTH,

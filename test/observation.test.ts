@@ -1015,20 +1015,20 @@ describe("the observation cycle", () => {
 		advance(30_001);
 		await coordinator.tick();
 		expect(state.ticketsByState(["awaiting"])).toHaveLength(1);
-		// The turn is decided: the ask moves the ticket to queued with the
-		// decision it records (ADR 0067).
+		// The turn is decided: the ask ends the cycle in the same write and
+		// records the decision (ADR 0072).
 		state.applyCompletionDecision({
 			ticketIdentity: "github:github.com:I_5",
 			handoffId: attempt,
 			decision: "handed-off",
 			decidedAt: "2026-08-31T11:01:00Z",
 		});
-		expect(state.ticketsByState(["queued"])).toHaveLength(1);
+		expect(state.ticketsByState(["open"])).toHaveLength(1);
 		setAgents([agent("pane-implement", "working")]);
 		await coordinator.tick();
-		// The working agent does not reopen a decided turn: the ticket keeps
-		// the queued wait, and the pending-turn resume reads awaiting alone.
-		expect(state.ticketsByState(["queued"])).toHaveLength(1);
+		// The working agent does not reopen a decided turn: the ticket rests
+		// open, and the pending-turn resume reads awaiting alone.
+		expect(state.ticketsByState(["open"])).toHaveLength(1);
 		state.close();
 	});
 
@@ -1570,8 +1570,8 @@ describe("the awaiting rule", () => {
 		// The route enters the queue as the top-up's continuation item, the
 		// way the Decision screen's route enters it: the item rests in the
 		// queue, and the ask records the factory's decision on the settled
-		// turn, so the ticket stands queued while the route stands (ADR 0064,
-		// ADR 0067).
+		// turn and ends its cycle in the same write, so the ticket rests
+		// open behind the item (ADR 0064, ADR 0072).
 		expect(intents).toEqual([
 			expect.objectContaining({
 				origin: "workflow",
@@ -1586,7 +1586,7 @@ describe("the awaiting rule", () => {
 		const [ticket] = state.visibleTickets([], "implement");
 		expect(ticket).toEqual(
 			expect.objectContaining({
-				state: "queued",
+				state: "open",
 				lastCompletion: expect.objectContaining({ decision: "auto-handed-off" }),
 			}),
 		);
@@ -1670,10 +1670,46 @@ describe("the awaiting rule", () => {
 		await coordinator.tick();
 		expect(intents.filter((intent) => intent.origin === "workflow")).toHaveLength(2);
 		const [resting] = state.visibleTickets([], "implement");
-		// The second ask re-lands the decision as a no-op, and the ticket keeps
-		// the queued wait its first ask put it in (ADR 0067).
-		expect(resting.state).toBe("queued");
+		// The second ask re-lands the decision as a no-op, and the ticket rests
+		// open, the state the first ask left (ADR 0072).
+		expect(resting.state).toBe("open");
 		expect(resting.lastCompletion?.decision).toBe("auto-handed-off");
+		state.close();
+	});
+
+	test("the top-up skips the route's marked trace, the way the removal's mark stands (ADR 0072)", async () => {
+		const { state, intents, coordinator } = rig({ autoOn: true, agents: [] });
+		state.applyFetch(source, success([fetched("github:github.com:I_6"), fetched()]));
+		settleFor(state, "github:github.com:I_5", "route", routeOutcome("github:github.com:I_6"));
+		await coordinator.tick();
+		// The route to the position enqueues, and the ask records the
+		// factory's decision on the settled turn, the way the drop's test
+		// leaves it.
+		expect(intents).toHaveLength(1);
+		expect(state.lastCompletion("github:github.com:I_5")?.decision).toBe("auto-handed-off");
+		// The operator removes the item: the row leaves, and the settled
+		// turn's trace takes the removal's mark in the same write.
+		expect(state.cancelWorkItem("github:github.com:I_6")).toBe(true);
+		expect(state.lastCompletion("github:github.com:I_5")?.transition?.routeRemoved).toBe(true);
+		// The marked trace is not re-offered: the empty-queue cycle walks the
+		// decided turn, the mark holds it out, and the removal stands - the
+		// machine does not bring the operator's removal back.
+		await coordinator.tick();
+		expect(intents.filter((intent) => intent.origin === "workflow")).toHaveLength(1);
+		// The route's item is the one that stays out: the queue may hold the
+		// position's own open add, never the marked route's re-offer.
+		expect(
+			state
+				.workQueue()
+				.filter((item) => item.kind !== "consultation" && item.origin === "workflow"),
+		).toHaveLength(0);
+		const [resting] = state.visibleTickets([], "implement");
+		expect(resting).toEqual(
+			expect.objectContaining({
+				state: "open",
+				lastCompletion: expect.objectContaining({ decision: "auto-handed-off" }),
+			}),
+		);
 		state.close();
 	});
 
@@ -2284,8 +2320,9 @@ describe("the awaiting rule", () => {
 		await coordinator.tick();
 		// The wait lives at the queue, not in the seat (ADR 0051): the route
 		// enters the queue, and the item rests until a seat frees. The ask
-		// records the factory's decision on the settled turn, so the ticket
-		// stands queued while the route stands (ADR 0064, ADR 0067).
+		// records the factory's decision on the settled turn and ends its
+		// cycle in the same write, so the ticket rests open behind the item
+		// (ADR 0064, ADR 0072).
 		expect(intents).toEqual([
 			expect.objectContaining({
 				origin: "workflow",
@@ -2297,7 +2334,7 @@ describe("the awaiting rule", () => {
 		const [ticket] = state.visibleTickets([], "implement");
 		expect(ticket).toEqual(
 			expect.objectContaining({
-				state: "queued",
+				state: "open",
 				lastCompletion: expect.objectContaining({ decision: "auto-handed-off" }),
 			}),
 		);
@@ -2361,7 +2398,7 @@ describe("the awaiting rule", () => {
 		const [ticket] = state.visibleTickets([], "implement");
 		expect(ticket).toEqual(
 			expect.objectContaining({
-				state: "queued",
+				state: "open",
 				lastCompletion: expect.objectContaining({ decision: "auto-handed-off" }),
 			}),
 		);

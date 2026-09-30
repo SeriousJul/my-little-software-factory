@@ -460,16 +460,17 @@ const handoffEligibility =
 /**
  * A settled Ticket uses Enter to decide its completed work, not to hand it
  * off. A Handoff in flight holds no decision (ADR 0064): the decision rows
- * answer by their own rules, and the turn decides through its own close. The
- * decision screen widens to the queued Ticket (ADR 0067): its decision is
- * recorded, and the screen shows where the route stands while it waits.
+ * answer by their own rules, and the turn decides through its own close. A
+ * routed Ticket has decided its turn at the ask (ADR 0072) and rests open
+ * behind the wait, so the screen refuses it, and the wait is the Work queue's
+ * to show.
  */
 const completionEligibility = (context: ControlContext): ControlAvailability => {
 	// A Group header holds no Ticket (issue #159), and the refusal is this
 	// catalogue's own words, not a surface that swallows the key.
 	if (context.selectedTicket === undefined) return unavailable("no Ticket is selected");
 	const state = context.selectedTicket.state;
-	return state === "awaiting" || state === "queued"
+	return state === "awaiting"
 		? available()
 		: unavailable("the selected Ticket has no completion to decide");
 };
@@ -747,12 +748,10 @@ const ticketGoto = (context: ControlContext): ControlAvailability => {
 	const paneId = ticket.handoff?.paneId;
 	if (paneId === null || paneId === undefined)
 		return unavailable("the Agent's pane is not alive in the last poll");
-	// The recorded pane stands for an awaiting or queued Ticket, except when
-	// herdr has handed the closed pane's id out again: the live agent in the
-	// pane that is not the Ticket's own is not the agent the operator went to
-	// look at. A queued Ticket keeps its recorded pane the way an awaiting
-	// one does (ADR 0067).
-	if (ticket.state === "awaiting" || ticket.state === "queued")
+	// The recorded pane stands for an awaiting Ticket, except when herdr has
+	// handed the closed pane's id out again: the live agent in the pane that
+	// is not the Ticket's own is not the agent the operator went to look at.
+	if (ticket.state === "awaiting")
 		return context.ticketPaneForeign === true
 			? unavailable("the Agent's pane is not alive in the last poll")
 			: available();
@@ -766,10 +765,11 @@ const ticketGoto = (context: ControlContext): ControlAvailability => {
 /**
  * Why Close answers nothing on a Ticket (ADR 0031). Key `w` ends the work
  * cycle of the selected Ticket, in both Ticket base modes. An `open` Ticket
- * holds no work in flight, so the close refuses it with that reason; every
- * state the close runs on - `handed-off`, `running`, `awaiting`, and
- * `queued` - has a live agent, a settled turn, or a waiting route behind it,
- * and all open the confirmation dialog before anything moves (ADR 0067).
+ * holds no work in flight, so the close refuses it with that reason, a routed
+ * Ticket among them (ADR 0072): the wait is the Work queue's to remove. Every
+ * state the close runs on - `handed-off`, `running`, and `awaiting` - has a
+ * live agent or a settled turn behind it, and all open the confirmation
+ * dialog before anything moves (ADR 0067).
  *
  * A Handoff in flight is no refusal here: the close takes the shared
  * environment seat and queues behind that Handoff, so a hung start still ends

@@ -52,26 +52,20 @@ function ticket(state: TicketState, externalUpdatedAt = "2026-01-01T00:00:00Z"):
 }
 
 describe("the ticket state machine", () => {
-	test("the state line is open, handed-off, running, awaiting, queued", () => {
-		expect(TICKET_STATES).toEqual(["open", "handed-off", "running", "awaiting", "queued"]);
+	test("the state line is open, handed-off, running, awaiting", () => {
+		expect(TICKET_STATES).toEqual(["open", "handed-off", "running", "awaiting"]);
 	});
 
-	test("the route ask moves a settled ticket to queued (ADR 0067)", () => {
-		expect(canTransition("awaiting", "queued")).toBe(true);
-	});
-
-	test("the pickup's start settles a queued ticket (ADR 0067)", () => {
-		// The same-position route hands the ticket off in its own cycle.
-		expect(canTransition("queued", "handed-off")).toBe(true);
-		// The cross-position route ends the cycle and returns the ticket to
-		// open, and the close does the same.
-		expect(canTransition("queued", "open")).toBe(true);
-	});
-
-	test("a queued ticket rests: nothing else moves it", () => {
-		expect(canTransition("queued", "awaiting")).toBe(false);
-		expect(canTransition("queued", "running")).toBe(false);
-		expect(canTransition("open", "queued")).toBe(false);
+	test("the route ask ends the source's cycle at the ask (ADR 0072)", () => {
+		// The ask moves the source to open with the cycle incremented, and the
+		// wait stands on the Work queue's item, not on a ticket state.
+		expect(canTransition("awaiting", "open")).toBe(true);
+		// The route's start is the ticket's next cycle, so it starts from open
+		// the way any handoff does.
+		expect(canTransition("open", "handed-off")).toBe(true);
+		// The ask never waits on a run: it does not hold the source in a wait
+		// state.
+		expect(canTransition("open", "awaiting")).toBe(false);
 	});
 
 	test("a work cycle walks open to handed-off to running to awaiting", () => {
@@ -113,24 +107,21 @@ describe("the ticket state machine", () => {
 		for (const state of TICKET_STATES) expect(canTransition(state, state)).toBe(false);
 	});
 
-	test("the attention band rides the queued wait into the in-flight band (ADR 0067)", () => {
-		// The wait reads as the earliest stage of in-flight work: the awaiting
-		// band holds only the turns that still owe a decision, and the queued
-		// ticket stands before the running turn and the handoff that started
-		// it.
-		expect(attentionBand(ticket("awaiting"))).toBeLessThan(attentionBand(ticket("queued")));
-		expect(attentionBand(ticket("queued"))).toBeLessThan(attentionBand(ticket("running")));
+	test("the attention band holds the in-flight band and the open band (ADR 0072)", () => {
+		// The awaiting band holds only the turns that still owe a decision. A
+		// routed ticket rests open behind the wait (ADR 0072), so it stands in
+		// the open band with the rows it belongs to, not in the in-flight band.
+		expect(attentionBand(ticket("awaiting"))).toBeLessThan(attentionBand(ticket("running")));
 		expect(attentionBand(ticket("running"))).toBeLessThan(attentionBand(ticket("handed-off")));
 		expect(attentionBand(ticket("handed-off"))).toBeLessThan(attentionBand(ticket("open")));
 	});
 
-	test("the list rank reads a queued ticket into the live band (ADR 0067)", () => {
-		// The live ranks are negative and the open ranks non-negative, and the
-		// newest external update is the smallest rank, so the queued ticket
-		// ranks among the in-flight rows it belongs to.
-		expect(ticketListRank(ticket("queued"))).toBeLessThan(0);
-		const newer = ticket("queued", "2026-02-01T00:00:00Z");
-		const older = ticket("queued", "2026-01-01T00:00:00Z");
-		expect(ticketListRank(newer)).toBeLessThan(ticketListRank(older));
+	test("the list rank reads a routed ticket into the open band (ADR 0072)", () => {
+		// The wait is the item's, not a ticket state, so the routed ticket ranks
+		// among the open rows it belongs to, by the open band's external key
+		// order, the way any open row does.
+		expect(ticketListRank({ ...ticket("open"), externalKey: "#5" })).toBeLessThan(
+			ticketListRank({ ...ticket("open"), externalKey: "#10" }),
+		);
 	});
 });

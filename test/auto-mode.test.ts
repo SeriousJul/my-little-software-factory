@@ -2248,16 +2248,16 @@ describe("the decision modal", () => {
 				);
 				await pressReturn(setup, "the failed route", (f) => f.includes("the workspace is gone"));
 
-				// The handoff never started: the ticket stands queued with the
-				// drop keeping the decision the ask recorded (ADR 0064), so the
-				// decision modal keeps working on the decided turn (ADR 0067).
-				expect(app.state.ticketState(identity)).toBe("queued");
-				expect(app.state.lastCompletion(identity)?.decision).toBe("handed-off");
-				await pressReturn(setup, "the decision modal again", (f) => f.includes("Decision:"));
-				await pressReturn(setup, "the close", (f) => ticketRow(f).includes("[open]"));
+				// The handoff never started: the ask ended the cycle in the
+				// same write that landed the decision (ADR 0064, ADR 0072), so
+				// the ticket rests open behind the fact, and the Decision
+				// screen - an awaiting screen again - fell back to the list.
+				const list = await settle(setup);
+				expect(list).not.toContain("Decision:");
+				expect(ticketRow(list)).toContain("[open]");
 				expect(app.state.ticketState(identity)).toBe("open");
-				// The Close ends the cycle the turn routed from, and the recorded
-				// decision stands: a fact is not rewritten.
+				// The decision the ask recorded stands: a fact is not
+				// rewritten.
 				expect(app.state.lastCompletion(identity)?.decision).toBe("handed-off");
 			},
 			WIDTH,
@@ -3768,14 +3768,14 @@ describe("the auto decision", () => {
 				expect(frameText(failed)).toContain("no model setting");
 				// Nothing the record claims started did start: no agent ran, and
 				// the drop keeps the decision the ask recorded, with the ticket
-				// standing queued beside its dropped route (ADR 0067).
+				// resting open beside its dropped route (ADR 0064, ADR 0072).
 				expect(app.runner.commands().some((c) => c.startsWith("herdr agent start"))).toBe(false);
-				expect(app.state.ticketState(identity)).toBe("queued");
+				expect(app.state.ticketState(identity)).toBe("open");
 				expect(app.state.lastCompletion(identity)?.decision).toBe("auto-handed-off");
 
 				// The live agent that finished the turn does not reopen the decided
-				// turn: the trace holds a decision, so the ticket stands queued on
-				// its dead route until the operator acts on it (ADR 0067).
+				// turn: the trace holds a decision, so the ticket rests open on
+				// its dead route until the operator acts on it (ADR 0072).
 				app.runner.set("herdr", ["agent", "list"], {
 					stdout: agentListJson([
 						{
@@ -3788,7 +3788,7 @@ describe("the auto decision", () => {
 					]),
 				});
 				await sleep(300);
-				expect(app.state.ticketState(identity)).toBe("queued");
+				expect(app.state.ticketState(identity)).toBe("open");
 				expect(app.state.lastCompletion(identity)?.decision).toBe("auto-handed-off");
 			},
 			WIDTH,

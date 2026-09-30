@@ -460,7 +460,7 @@ function groupTicket(
 	number: number,
 	repository: string,
 	title: string,
-	state: "open" | "running" | "awaiting" | "queued",
+	state: "open" | "running" | "awaiting",
 	taskType: string,
 ): Ticket {
 	const base = sampleTicket(state);
@@ -503,7 +503,7 @@ function heldCompletion(): Completion {
 
 /** The Ticket the Ticket-Goto and Ticket-Close examples render under. */
 function sampleTicket(
-	state: "running" | "awaiting" | "open" | "queued",
+	state: "running" | "awaiting" | "open",
 	environment: "worktree" | "live-worktree" = "worktree",
 	ignored = false,
 	muted = false,
@@ -535,15 +535,12 @@ function sampleTicket(
 						workspaceId: "ws-t",
 						herdrName: "fix-the-layout-math",
 					},
-		workCycle: state === "queued" ? 2 : 1,
+		workCycle: 1,
 		handoffCount: 1,
 		// An `awaiting` Ticket holds the settled turn the Close decision records
 		// on, so the confirmation's first line can name the turn that settled.
-		// A `queued` Ticket holds the same settled turn with the route's
-		// decision recorded on it (ADR 0067): the wait is the route's start,
-		// and the turn is decided while it waits.
 		lastCompletion:
-			state === "awaiting" || state === "queued"
+			state === "awaiting"
 				? {
 						taskType: "implement",
 						transition: null,
@@ -557,7 +554,7 @@ function sampleTicket(
 						turnLog: [{ kind: "text", text: "The turn is done." }],
 						cause: "completed",
 						detail: "",
-						decision: state === "queued" ? "auto-handed-off" : null,
+						decision: null,
 					}
 				: null,
 		description: "",
@@ -1462,25 +1459,6 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 		],
 	},
 	{
-		// Ticket Close on a routed ticket (ADR 0067): the turn is decided, and
-		// its route stands in the queue. The close ends the cycle the route
-		// routed from and takes the waiting item with it, so the cancel row
-		// names the route it keeps.
-		id: "ticket-close-queued",
-		state: "Ticket Close: the turn is decided, and the route stands queued",
-		rows: 17,
-		render: (_columns, _holds, _inputActive, _wiring) => [
-			createElement(ActionPanel, {
-				key: "close-queued",
-				message: null,
-				inputActive: false,
-				...ticketCloseDialog(sampleTicket("queued")),
-				onAction: () => undefined,
-				onCancel: () => undefined,
-			}),
-		],
-	},
-	{
 		// Enter on an interrupted opening: the panel offers the retry of the
 		// opening this run left behind, and the close that confirms first
 		// because the Agent may still be alive.
@@ -1685,10 +1663,10 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 					...groupTicket(2, "acme/billing", "Hold the failed turn", "awaiting", "implement"),
 					lastCompletion: heldCompletion(),
 				},
-				// The queued row is the routed ticket's wait (ADR 0067): the turn
-				// is decided, the route's start stands in the queue, and the row
-				// reads the state itself.
-				groupTicket(3, "acme/factory", "Route the settled review", "queued", "review"),
+				// The routed row is an open ticket that wears the Queue wait
+				// badge (ADR 0072): the route's ask ended the cycle and the
+				// wait stands on the item alone.
+				groupTicket(3, "acme/factory", "Route the settled review", "open", "review"),
 				groupTicket(4, "acme/factory", "Split the gallery view", "open", "review"),
 				groupTicket(5, "acme/factory", "Park the legacy importer", "running", "fix"),
 			];
@@ -1724,7 +1702,9 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 					markerOf: () => null,
 					limitReached: () => false,
 					starting: () => false,
-					queueWait: () => false,
+					// The routed row wears its badge: the wait is the item's, and
+					// the ticket keeps its open state (ADR 0072).
+					queueWait: (ticket) => ticket.identity === "github:github.com:I_3",
 					active: true,
 					onFocus: () => undefined,
 					onSelect: () => undefined,

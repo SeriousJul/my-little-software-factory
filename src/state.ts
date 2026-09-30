@@ -1311,6 +1311,14 @@ export class FactoryState {
 				this.db.exec(MIGRATION_V24_TO_V25_QUEUE_ACTION);
 			if (!this.hasTable("plane_action_attempts"))
 				this.db.exec(MIGRATION_V25_TO_V26_PLANE_ACTION_ATTEMPTS);
+			// The `queued` state the retired route wait stood in (ADR 0072): a
+			// file that still carries it ends those cycles the way a close does -
+			// the ticket rests open with the cycle counted once - in one state
+			// write, the way the legacy `done` heal ran. The state is unreachable
+			// now, so the step is a no-op on a file the new rule wrote.
+			this.db.exec(
+				"UPDATE tickets SET state = 'open', work_cycle = work_cycle + 1 WHERE state = 'queued'",
+			);
 			this.db.exec("DELETE FROM schema_version");
 			this.db.prepare("INSERT INTO schema_version(version) VALUES (?)").run(SCHEMA_VERSION);
 			this.db.exec("COMMIT");
@@ -1464,11 +1472,12 @@ export class FactoryState {
 	 * from this projection: the rule that withholds a covered ticket's row
 	 * applies to the operator's list alone.
 	 *
-	 * Tickets that hold in-flight work, a pending decision, or a route's wait
-	 * (handed-off, running, awaiting, queued) keep their memberships even when
+	 * Tickets that hold in-flight work or a pending decision
+	 * (handed-off, running, awaiting) keep their memberships even when
 	 * every source has gone inactive: an agent can close or change its source
-	 * item while it works, and the ticket must stay visible for the decision
-	 * or the wait (ADR 0067).
+	 * item while it works, and the ticket must stay visible for the decision.
+	 * A routed ticket rests `open` with the wait on its Work queue's item
+	 * (ADR 0072), so the wait holds no ticket out of the list rule.
 	 */
 	projectedTickets(states: readonly WorkflowState[], fallbackTaskType: string): Ticket[] {
 		const rows = this.db
@@ -1496,8 +1505,7 @@ export class FactoryState {
 				storedMemberships.length === 0 &&
 				row.state !== "handed-off" &&
 				row.state !== "running" &&
-				row.state !== "awaiting" &&
-				row.state !== "queued"
+				row.state !== "awaiting"
 			)
 				continue;
 			const facts = [...storedMemberships].sort(
@@ -1597,7 +1605,7 @@ export class FactoryState {
 
 	private membershipsFor(identity: string, state: TicketState): StoredMembership[] {
 		const where =
-			state === "handed-off" || state === "running" || state === "awaiting" || state === "queued"
+			state === "handed-off" || state === "running" || state === "awaiting"
 				? ""
 				: "AND m.active = 1";
 		const rows = this.db
@@ -1780,32 +1788,6 @@ export class FactoryState {
 	}
 
 	/**
-	 * Land the plane action's wait on the open ticket (ADR 0068): the direct
-	 * add from an open position asks for the merge before the ticket ever
-	 * settled a turn, so the decision write has no pending row to land on and
-	 * the wait lands on the open state alone. A ticket that left open behind
-	 * the add changes nothing.
-	 */
-	queuePlaneActionRoute(ticketIdentity: string): boolean {
-		return this.transaction(() => {
-			const result = this.db
-				.prepare("UPDATE tickets SET state = 'queued' WHERE identity = ? AND state = 'open'")
-				.run(ticketIdentity);
-			return Number(result.changes) > 0;
-		});
-	}
-
-	/**
-	 * Settle the queued merge route without a work cycle (ADR 0068): the
-	 * pickup ran the action, the merge settles, and the ticket returns to
-	 * open without a cycle increment, because no work cycle ran for it. A
-	 * ticket that left queued behind the settle changes nothing.
-	 */
-	settleQueuedPlaneActionRoute(ticketIdentity: string): boolean {
-		return this.transaction(() => Number(this.settleQueuedNoCycle(ticketIdentity).changes) > 0);
-	}
-
-	/**
 	 * Retire the membership a merged pull request leaves behind (ADR 0068):
 	 * the source stops returning the pull request at its next refresh, and the
 	 * merged ticket leaves the projection the moment the merge lands instead
@@ -1819,37 +1801,6 @@ export class FactoryState {
 					"UPDATE memberships SET active = 0 WHERE source_name = ? AND ticket_identity = ? AND active = 1",
 				)
 				.run(sourceName, ticketIdentity);
-			return Number(result.changes) > 0;
-		});
-	}
-
-	/**
-	 * The settle's own statement: the queued wait returns to open without a
-	 * work cycle. The route's settle wraps it in its own write, and the
-	 * cancel's plane branch runs it inside the cancel's write, so both settle
-	 * the same wait through this one statement (ADR 0068, ADR 0069).
-	 */
-	private settleQueuedNoCycle(ticketIdentity: string) {
-		return this.db
-			.prepare("UPDATE tickets SET state = 'open' WHERE identity = ? AND state = 'queued'")
-			.run(ticketIdentity);
-	}
-
-	/**
-	 * End the cycle of the source a dropped plane action row named (ADR
-	 * 0069, beside ADR 0068): the drop, like the cancel, leaves a route that
-	 * decided its turn and then lost its start without a run, so the source
-	 * rests open with the cycle counted once, the way a close ends the cycle
-	 * the turn routed from. A source that left the queued wait behind the
-	 * settle changes nothing.
-	 */
-	settleDroppedPlaneActionRouteSource(routeFromIdentity: string): boolean {
-		return this.transaction(() => {
-			const result = this.db
-				.prepare(
-					"UPDATE tickets SET state = 'open', work_cycle = work_cycle + 1 WHERE identity = ? AND state = 'queued'",
-				)
-				.run(routeFromIdentity);
 			return Number(result.changes) > 0;
 		});
 	}
@@ -1915,8 +1866,8 @@ export class FactoryState {
 				.prepare(
 					"SELECT id, transition_json FROM completion_traces WHERE ticket_identity = ? ORDER BY completed_at DESC, rowid DESC LIMIT 1",
 				)
-				.get(ticketIdentity) as { id: string; transition_json: string | null } | undefined;
-			if (row === undefined || row.transition_json === null) return false;
+				.get(ticketIdentity) as { id: string; transition_json: string | null } | null;
+			if (row == null || row.transition_json === null) return false;
 			const recorded = transitionOf(row.transition_json);
 			if (
 				recorded === null ||
@@ -1970,8 +1921,8 @@ export class FactoryState {
 				.prepare(
 					"SELECT id, transition_json FROM completion_traces WHERE ticket_identity = ? ORDER BY completed_at DESC, rowid DESC LIMIT 1",
 				)
-				.get(ticketIdentity) as { id: string; transition_json: string | null } | undefined;
-			if (row === undefined || row.transition_json !== recordedJson) return false;
+				.get(ticketIdentity) as { id: string; transition_json: string | null } | null;
+			if (row == null || row.transition_json !== recordedJson) return false;
 			const result = this.db
 				.prepare(
 					"UPDATE completion_traces SET transition_json = ? WHERE id = ? AND transition_json = ?",
@@ -2565,11 +2516,12 @@ export class FactoryState {
 	 * act and the rows it takes away ride on one transaction, so the plane's
 	 * state and the list rule never diverge in between. Muting removes every
 	 * Work queue item of the source's tickets - the waiting starts the operator
-	 * asked or the machine routed never run for a source judged out - and it
-	 * settles the routed tickets of the removed items, and the queued tickets
-	 * of the source whose route no longer stands, to `open` with their cycle
-	 * incremented, the way the operator's own removal of a queue item already
-	 * settles. Nothing about the ticket's own flag, its parallel-limit seat, or
+	 * asked or the machine routed never run for a source judged out - and the
+	 * routes the items carried keep the decision the ask recorded on the turn's
+	 * trace, their wait standing on the item alone (ADR 0072). The source
+	 * tickets rest `open` behind the removal, and the machine's re-offer holds
+	 * on the gate, the way the ignore holds it. Nothing about the ticket's own
+	 * flag, its parallel-limit seat, or
 	 * its source facts moves: the row the Live view and the Close reach from
 	 * keeps its facts while the flag stands. Clearing the flag writes nothing
 	 * but the flag: the rows come back from the next read, the way a clear of
@@ -2582,7 +2534,7 @@ export class FactoryState {
 	setSourceMuted(
 		sourceName: string,
 		muted: boolean,
-	): { ok: true; removed: number; settled: number } | { ok: false; reason: string } {
+	): { ok: true; removed: number } | { ok: false; reason: string } {
 		return this.transaction(() => {
 			const row = this.db
 				.prepare("SELECT 1 AS known FROM source_health WHERE source_name = ?")
@@ -2594,11 +2546,12 @@ export class FactoryState {
 			this.db
 				.prepare("UPDATE source_health SET muted = ?, muted_at = ? WHERE source_name = ?")
 				.run(muted ? 1 : 0, muted ? at : null, sourceName);
-			if (!muted) return { ok: true as const, removed: 0, settled: 0 };
+			if (!muted) return { ok: true as const, removed: 0 };
 
-			// The settle the act causes: the source's tickets, their waiting starts
-			// out of the queue, and the queued ones whose route died with them or
-			// before the act.
+			// The settle the act causes: the source's tickets, their waiting
+			// starts out of the queue. The routes the removed items carried keep
+			// the decision the ask recorded, their wait standing on the item alone
+			// (ADR 0072), and the machine's re-offer holds on the gate.
 			const ticketIdentities = new Set(
 				(
 					this.db
@@ -2613,30 +2566,7 @@ export class FactoryState {
 			const deleteItem = this.db.prepare("DELETE FROM work_queue WHERE ticket_identity = ?");
 			for (const item of queueRows) deleteItem.run(item.ticketIdentity);
 			if (queueRows.length > 0) this.repackWorkQueuePositions();
-			const settled = new Set<string>();
-			// A removed item's routed ticket, in `queued`, settles to `open`, the
-			// way the operator's own removal of the item already does.
-			for (const item of queueRows) {
-				if (item.routeFromIdentity !== null) settled.add(item.routeFromIdentity);
-			}
-			// A queued ticket of the source whose route no longer stands - its
-			// position's item removed by this act, or gone before it - settles too,
-			// so the act leaves nothing stuck in the route's wait.
-			const stands = this.db.prepare(
-				"SELECT 1 AS stands FROM work_queue WHERE ticket_identity = ? OR route_from_identity = ?",
-			);
-			const states = this.db.prepare("SELECT state FROM tickets WHERE identity = ?");
-			for (const identity of ticketIdentities) {
-				const state = states.get(identity) as { state: string } | null;
-				if (state?.state !== "queued") continue;
-				if (stands.get(identity, identity) !== null) continue;
-				settled.add(identity);
-			}
-			const settle = this.db.prepare(
-				"UPDATE tickets SET state = 'open', work_cycle = work_cycle + 1 WHERE identity = ? AND state = 'queued'",
-			);
-			for (const identity of settled) settle.run(identity);
-			return { ok: true as const, removed: queueRows.length, settled: settled.size };
+			return { ok: true as const, removed: queueRows.length };
 		});
 	}
 
@@ -2917,57 +2847,106 @@ export class FactoryState {
 	}
 
 	/**
-	 * Cancel the ticket's waiting item by the operator's hand (ADR 0069): the
-	 * row leaves the queue in the same write that ends the cycle of the route
-	 * the row named. A route the row carries has decided its turn and then lost
-	 * its start, so the source rests `open` with the cycle counted once, the
-	 * way a close ends the cycle the turn routed from, and the decision the
-	 * ask recorded stands on the trace. A start with no route keeps the
-	 * ticket's state, the way the row's removal always did, and a route whose
-	 * source already left the queued wait behind the removal moves nothing.
-	 *
-	 * The plane action's row (ADR 0068) settles its own ticket the way the
-	 * run's answer does: back to open without a work cycle, because the merge
-	 * action opens no cycle and the cap counts the work a ticket carried, not
-	 * its merges. The route the row carries still ends its cycle with the
-	 * count, the way a cancelled handoff route does.
+	 * Cancel the ticket's waiting item by the operator's hand (ADR 0072): the
+	 * row leaves the queue, and the route the row carries takes its mark on
+	 * the trace the item's decision answers in the same write. The source's
+	 * cycle already ended at the ask, so the item is the whole of the wait,
+	 * and the removal takes the item alone. The mark stands on the outcome the
+	 * trace holds, the way the re-fired skip's mark stands (ADR 0042): the
+	 * machine's re-offer skips the marked trace, so a route the operator
+	 * removed is not re-offered. A start with no route takes the item alone,
+	 * the way the row's removal always did.
 	 */
 	cancelWorkItem(ticketIdentity: string): boolean {
 		return this.transaction(() => {
 			const row = this.db
 				.prepare(
-					"SELECT route_from_identity, action_task_type FROM work_queue WHERE ticket_identity = ?",
+					"SELECT origin, route_from_identity, is_automatic, action_task_type FROM work_queue WHERE ticket_identity = ?",
 				)
 				.get(ticketIdentity) as {
+				origin: string | null;
 				route_from_identity: string | null;
+				is_automatic: number;
 				action_task_type: string | null;
 			} | null;
 			if (row === null) return false;
 			this.db.prepare("DELETE FROM work_queue WHERE ticket_identity = ?").run(ticketIdentity);
 			this.repackWorkQueuePositions();
-			if (row.action_task_type !== null) {
-				this.settleQueuedNoCycle(ticketIdentity);
-			}
-			if (row.route_from_identity !== null) {
-				this.db
-					.prepare(
-						"UPDATE tickets SET state = 'open', work_cycle = work_cycle + 1 WHERE identity = ? AND state = 'queued'",
-					)
-					.run(row.route_from_identity);
+			if (row.origin === "workflow") {
+				// The source the route routed from: the item's route from, or the
+				// item's own ticket for a route onto the ticket's own position.
+				const source = row.route_from_identity ?? ticketIdentity;
+				// The decision word the item's ask landed on its trace (ADR 0064):
+				// the mark answers the same decision, so a turn that settled
+				// behind the wait takes no mark from the removal.
+				const decision =
+					row.action_task_type !== null
+						? row.is_automatic === 1
+							? "auto-merged"
+							: "merged"
+						: row.is_automatic === 1
+							? "auto-handed-off"
+							: "handed-off";
+				this.writeRouteRemovedMark(source, decision);
 			}
 			return true;
 		});
 	}
 
 	/**
-	 * Remove the Consultation's item from the shared order (ADR 0034, issue
-	 * #90, unscheduled by issue #91). The removal is the item's, not the
-	 * record's: the ask stands behind the pointer it loses, and a record that
-	 * was still `queued` moves to `unscheduled` in the same write, so the
-	 * operator finds it in the Consultation section with its type, repository,
-	 * and initial input. A record that left `queued` behind the removal - a
-	 * close or a delete that won the race - keeps the state it holds.
+	 * The mark's write, inside a transaction the caller holds (ADR 0072): the
+	 * same write as the mark alone, without its own transaction, so the
+	 * cancel's single write takes the item and the mark together. The mark
+	 * stands on the trace the item's decision answers - the source's newest
+	 * trace that carries the decision word the ask landed (ADR 0064) - and a
+	 * turn that settled behind the wait, whose trace carries no decision yet,
+	 * keeps the removal off of it. The mark stands on the outcome the trace
+	 * holds, the way the re-fired skip's mark stands (ADR 0042): the outcome
+	 * takes the flag in place of the fact it recorded, and nothing else moves.
+	 * A trace that already holds the mark, or one that carries no outcome,
+	 * changes nothing.
 	 */
+	private writeRouteRemovedMark(ticketIdentity: string, decision: string): boolean {
+		const row = this.db
+			.prepare(
+				"SELECT id, transition_json FROM completion_traces WHERE ticket_identity = ? AND decision = ? ORDER BY completed_at DESC, rowid DESC LIMIT 1",
+			)
+			.get(ticketIdentity, decision) as { id: string; transition_json: string | null } | null;
+		if (row == null || row.transition_json === null) return false;
+		const recorded = transitionOf(row.transition_json);
+		if (recorded === null || recorded.routeRemoved === true) return false;
+		const result = this.db
+			.prepare(
+				"UPDATE completion_traces SET transition_json = ? WHERE id = ? AND transition_json = ?",
+			)
+			.run(JSON.stringify({ ...recorded, routeRemoved: true }), row.id, row.transition_json);
+		return Number(result.changes) > 0;
+	}
+
+	/**
+	 * Remove the ticket's own waiting route starts: the Work queue rows whose
+	 * route carries its identity, as the position the route names, or as the
+	 * source it settled (ADR 0072). The close of the turn they waited on
+	 * calls this: a closed cycle never leaves a live start in the queue, and
+	 * the removal takes the item alone. The drop leaves no mark, the way a
+	 * mute's drop does.
+	 *
+	 * @returns the number of rows removed.
+	 */
+	removeWorkflowRouteItem(ticketIdentity: string): number {
+		return this.transaction(() => {
+			const result = this.db
+				.prepare(
+					`DELETE FROM work_queue
+					WHERE origin = 'workflow'
+						AND (ticket_identity = ? OR route_from_identity = ?)`,
+				)
+				.run(ticketIdentity, ticketIdentity);
+			if (result.changes > 0) this.repackWorkQueuePositions();
+			return result.changes;
+		});
+	}
+
 	removeConsultationWorkItem(consultationId: string): boolean {
 		return this.transaction(() => {
 			const result = this.db
@@ -3334,16 +3313,16 @@ export class FactoryState {
 				this.applyDecisionStateChange(input);
 				return true;
 			}
-			// A cycle-end decision on a turn that already decided: the route
-			// recorded its decision when it started, and this close ends the
-			// cycle the turn routed from. The recorded decision stands - a fact
-			// is not rewritten - but the cycle still ends. The move runs only
-			// from the resting or waiting states the decision leaves, so a
-			// repeated close changes nothing (ADR 0067).
+			// A cycle-end decision on a turn that already decided: this close
+			// ends the cycle the decision left. The recorded decision stands -
+			// a fact is not rewritten - but the cycle still ends. The move runs
+			// only from the resting state the decision leaves, so a repeated
+			// close changes nothing. A routed ticket's cycle already ended at
+			// the ask (ADR 0072), so a close on it moves nothing here.
 			if (input.decision === "closed" || input.decision === "auto-closed") {
 				const ended = this.db
 					.prepare(
-						"UPDATE tickets SET state = 'open', work_cycle = work_cycle + 1 WHERE identity = ? AND state IN ('awaiting', 'queued')",
+						"UPDATE tickets SET state = 'open', work_cycle = work_cycle + 1 WHERE identity = ? AND state = 'awaiting'",
 					)
 					.run(input.ticketIdentity);
 				if (Number(ended.changes) > 0) return true;
@@ -3401,12 +3380,13 @@ export class FactoryState {
 				)
 				.run(input.ticketIdentity);
 		}
-		// A route decision lands its wait (ADR 0067): the settled ticket leaves
-		// awaiting for queued in the same write that lands the decision, and the
-		// guard on awaiting keeps a re-confirm of a dead route a no-op. The
-		// plane action's merge decisions wait the same way (ADR 0068): the
-		// settled ticket leaves awaiting for queued with its merge waiting in
-		// the Work queue.
+		// A route decision ends the cycle in the same write that lands the
+		// decision (ADR 0072): the settled ticket leaves awaiting for open
+		// with the cycle incremented, and the wait stands on the Work
+		// queue's item the ask enqueued. The guard on awaiting keeps a re-ask
+		// of a dead route a no-op. The plane action's merge decisions end the
+		// cycle the same way (ADR 0068): the settled ticket leaves awaiting
+		// for open with its merge waiting in the Work queue.
 		if (
 			input.decision === "handed-off" ||
 			input.decision === "auto-handed-off" ||
@@ -3414,31 +3394,13 @@ export class FactoryState {
 			input.decision === "auto-merged"
 		) {
 			this.db
-				.prepare("UPDATE tickets SET state = 'queued' WHERE identity = ? AND state = 'awaiting'")
+				.prepare(
+					"UPDATE tickets SET state = 'open', work_cycle = work_cycle + 1 WHERE identity = ? AND state = 'awaiting'",
+				)
 				.run(input.ticketIdentity);
 		}
 		// The other handoff decisions move nothing: the handoff's settle moves
 		// the state.
-	}
-
-	/**
-	 * Remove the route's waiting item for one settled ticket (ADR 0067): the
-	 * workflow-origin item that names the ticket as its route from, or, for a
-	 * route onto the ticket's own position, the item the ticket names itself.
-	 * The open-origin item the ticket may also wait with is not a route's, and
-	 * stays. Returns whether an item left the queue.
-	 */
-	removeWorkflowRouteItem(settledTicketIdentity: string): boolean {
-		return this.transaction(() => {
-			const result = this.db
-				.prepare(
-					"DELETE FROM work_queue WHERE origin = 'workflow' AND (route_from_identity = ? OR ticket_identity = ?)",
-				)
-				.run(settledTicketIdentity, settledTicketIdentity);
-			if (result.changes === 0) return false;
-			this.repackWorkQueuePositions();
-			return true;
-		});
 	}
 
 	/**
@@ -3554,15 +3516,10 @@ export class FactoryState {
 						"the ticket's source has not been re-read since its last cycle ended; wait for the source refresh",
 				};
 		}
-		if (
-			origin === "workflow" &&
-			ticket.state !== "awaiting" &&
-			ticket.state !== "open" &&
-			ticket.state !== "queued"
-		)
+		if (origin === "workflow" && ticket.state !== "awaiting" && ticket.state !== "open")
 			return {
 				ok: false,
-				reason: `only open, awaiting, or queued tickets can be handed off along a workflow (this one is ${ticket.state})`,
+				reason: `only open or awaiting tickets can be handed off along a workflow (this one is ${ticket.state})`,
 			};
 		if (origin === "restart" && ticket.state !== "handed-off" && ticket.state !== "running")
 			return {
@@ -3649,21 +3606,12 @@ export class FactoryState {
 			if (agentStarted) {
 				this.db
 					.prepare(
-						"UPDATE tickets SET state = 'handed-off' WHERE identity = ? AND state IN ('open', 'awaiting', 'queued')",
+						"UPDATE tickets SET state = 'handed-off' WHERE identity = ? AND state IN ('open', 'awaiting')",
 					)
 					.run(attempt.ticket_identity);
-				// The route's settled ticket ends its cycle at the start (ADR 0067):
-				// a route to a different ticket returns it to open with the cycle
-				// incremented, in the same write that hands the started ticket off.
-				// The move is guarded on queued, so a double settle changes nothing.
-				const routeFrom = details?.routeFromIdentity ?? null;
-				if (routeFrom !== null) {
-					this.db
-						.prepare(
-							"UPDATE tickets SET state = 'open', work_cycle = work_cycle + 1 WHERE identity = ? AND state = 'queued'",
-						)
-						.run(routeFrom);
-				}
+				// The route's source ended its cycle at the ask (ADR 0072), so the
+				// start moves the started ticket alone: the source rests open
+				// behind the wait, and the wait is the item's, not a ticket state.
 				this.db
 					.prepare(
 						"INSERT OR REPLACE INTO handoffs(attempt_id, ticket_identity, work_cycle, choice_json, started_at, pane_id, tab_id, workspace_id, herdr_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",

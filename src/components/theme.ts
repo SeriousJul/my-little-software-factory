@@ -53,9 +53,6 @@ const STATE_ROLES: Record<TicketState, ThemeRole> = {
 	"handed-off": "yellow",
 	running: "green",
 	awaiting: "mauve",
-	// The queued wait paints the open role's color, the way the queue wait
-	// badge painted it (ADR 0067).
-	queued: "blue",
 };
 
 /** The color a ticket state badge paints in. */
