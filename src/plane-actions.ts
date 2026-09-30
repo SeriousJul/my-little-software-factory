@@ -16,7 +16,7 @@
  */
 
 import type { TaskTypeConfig, TicketSourceConfig } from "./config.ts";
-import { externalKeyNumber, type Ticket } from "./domain/ticket.ts";
+import type { Ticket } from "./domain/ticket.ts";
 import { firstNonEmptyLine } from "./lines.ts";
 import type { CommandOptions, CommandResult, CommandRunner } from "./runner.ts";
 import { GhAuthenticator } from "./ticket-source.ts";
@@ -205,24 +205,4 @@ async function postBlockedComment(run: MergeRun, reason: string): Promise<void> 
 		// The comment is the block's note, not the block: a refused post
 		// leaves the outcome standing with the source's reason.
 	}
-}
-
-/**
- * Whether the value names the merge method the config takes: the named
- * check the config's validation runs, with the registry's list in its
- * refusal.
- */
-export function mergeMethodList(): string {
-	return MERGE_METHODS.join(", ");
-}
-
-/**
- * Whether the task type's pull request number names a mergeable pull
- * request: the key must carry a number the `gh` command can aim at. The
- * check the dispatch runs at the pickup, beside the ticket's standing, so
- * a row no merge can aim at drops with a named reason instead of running
- * a command the source would refuse.
- */
-export function pullRequestNumberOf(pullRequest: Ticket): number | null {
-	return externalKeyNumber(newestMembershipOf(pullRequest).externalKey);
 }

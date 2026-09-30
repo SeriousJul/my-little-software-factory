@@ -352,7 +352,8 @@ export interface HandoffDispatch {
 	 * The plane action's ask (ADR 0068): the merge of the ticket's pull
 	 * request, entered in the Work queue like every other start. The item
 	 * takes no seat from the Parallel limit: the action holds no agent, and
-	 * its pickup runs it whatever the limit reads. The ask's gates are the
+	 * the pickup's walk runs it when it reaches it, whatever the cap bounds.
+	 * The ask's gates are the
 	 * route's: the ticket still holds the state the ask asked from, the one
 	 * item per ticket rule holds, and the task type must carry the action
 	 * form the registry names. The decision word lands at the ask, the way
@@ -511,9 +512,9 @@ class HandoffDispatchModule implements HandoffDispatch {
 	/**
 	 * The plane action's ask (ADR 0068): the merge of the ticket's pull
 	 * request, entered in the Work queue like every other start. The item
-	 * takes no seat from the Parallel limit, so the immediate pickup pass runs
-	 * it whatever the limit reads, and the queue pause holds it the way it
-	 * holds every item: the ask sits in the queue until the resume.
+	 * takes no seat from the Parallel limit, so the pickup's walk runs it
+	 * when it reaches it, and the queue pause holds it the way it holds
+	 * every item: the ask sits in the queue until the resume.
 	 */
 	dispatchPlaneAction(intent: PlaneActionIntent): Promise<DispatchResult> {
 		if (this.stopped)
@@ -571,9 +572,9 @@ class HandoffDispatchModule implements HandoffDispatch {
 			);
 			return Promise.resolve({ ok: true });
 		}
-		// The item takes no seat, so the pickup runs it whatever the limit
-		// reads (ADR 0068); the pass runs on behind the answer, the way every
-		// other pickup does.
+		// The item takes no seat, so the pickup's walk runs it when it
+		// reaches it, whatever the limit reads (ADR 0068); the pass runs on
+		// behind the answer, the way every other pickup does.
 		void this.pickupWorkQueue();
 		return Promise.resolve({ ok: true });
 	}
@@ -634,17 +635,18 @@ class HandoffDispatchModule implements HandoffDispatch {
 	/**
 	 * The plane action's item pickup (ADR 0068): the merge of the ticket's
 	 * pull request, run through the command runner. The item takes no seat and
-	 * is not held by the cap: a pickup under a full limit runs it, and the
-	 * run's gates are the route's - the ticket still stands, and the task
-	 * type still carries the action form the registry names. The run reads
-	 * the pull request fresh before it runs, so an already-merged pull
-	 * request settles as merged without a command, and the run's outcome
-	 * records the attempt, fires the task type's transition on the outcome
-	 * alike for a merge and a block, and settles the route without a work
-	 * cycle. Every pickup ends in run or drop: a refused claim drops the item
-	 * with its warning, and the queued route settles to open on it, because a
-	 * dropped merge leaves no re-offer standing and no machine path back to
-	 * the wait.
+	 * is not held by the cap: the pickup's walk runs it when it reaches it, and
+	 * a full limit only holds it behind a seats-bound item the walk breaks
+	 * at, the way it holds everything behind. The run's gates are the
+	 * route's - the ticket still stands, and the task type still carries the
+	 * action form the registry names. The run reads the pull request fresh
+	 * before it runs, so an already-merged pull request settles as merged
+	 * without a command, and the run's outcome records the attempt, fires the
+	 * task type's transition on the outcome alike for a merge and a block, and
+	 * settles the route without a work cycle. Every pickup ends in run or
+	 * drop: a refused claim drops the item with its warning, and the queued
+	 * route settles to open on it, because a dropped merge leaves no
+	 * re-offer standing and no machine path back to the wait.
 	 */
 	private async pickupPlaneActionItem(
 		item: WorkQueuePlaneActionItem,
@@ -653,11 +655,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 		const check = this.planeActionClaimCheck(item.ticketIdentity, item.routeFromIdentity);
 		if (!check.ok) {
 			this.removeQueueRow(item.ticketIdentity);
-			// The drop leaves no machine path back to the wait: the decision
-			// word a merge ask lands is no re-offer standing, so the queued
-			// route settles to open, the way the run's own answer does.
-			// A ticket that already left queued changes nothing.
-			this.state.settleQueuedPlaneActionRoute(item.ticketIdentity);
+			this.settlePlaneActionDrops(item);
 			this.settleIntentOnStarted(item.ticketIdentity, { ok: false, reason: check.reason });
 			this.reports.refresh();
 			this.reports.warning(
@@ -669,6 +667,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 		const setting = planeActionSettingOf(config.taskTypes, item.taskType);
 		if (setting === null) {
 			this.removeQueueRow(item.ticketIdentity);
+			this.settlePlaneActionDrops(item);
 			this.settleIntentOnStarted(item.ticketIdentity, {
 				ok: false,
 				reason: `task type ${item.taskType} carries no plane action`,
@@ -685,6 +684,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 		const ticket = projection.find((candidate) => candidate.identity === item.ticketIdentity);
 		if (ticket === undefined) {
 			this.removeQueueRow(item.ticketIdentity);
+			this.settlePlaneActionDrops(item);
 			this.settleIntentOnStarted(item.ticketIdentity, {
 				ok: false,
 				reason: "the ticket is no longer visible",
@@ -706,7 +706,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 			// No attempt for a merge that could not aim: the row drops with its
 			// warning, and the route settles back to open without it.
 			this.removeQueueRow(item.ticketIdentity);
-			this.state.settleQueuedPlaneActionRoute(item.ticketIdentity);
+			this.settlePlaneActionDrops(item);
 			this.settleIntentOnStarted(item.ticketIdentity, {
 				ok: false,
 				reason: "no linked pull request was found for the ticket",
@@ -773,6 +773,20 @@ class HandoffDispatchModule implements HandoffDispatch {
 				`the merge of ${this.ticketName(item.ticketIdentity)} was blocked: ${result.reason}`,
 			);
 		}
+	}
+
+	/**
+	 * Settle the waits a dropped plane action item leaves (ADR 0068): the
+	 * item's own ticket returns to open without a work cycle, the way the
+	 * run's answer does, and the source the route carried ends its cycle
+	 * with the count, the way the cancel settles the same row (ADR 0069).
+	 * The drop leaves no re-offer standing, so the waits cannot stand; a
+	 * ticket that already left its wait changes nothing.
+	 */
+	private settlePlaneActionDrops(item: WorkQueuePlaneActionItem): void {
+		this.state.settleQueuedPlaneActionRoute(item.ticketIdentity);
+		if (item.routeFromIdentity !== null)
+			this.state.settleDroppedPlaneActionRouteSource(item.routeFromIdentity);
 	}
 
 	/**
@@ -863,8 +877,9 @@ class HandoffDispatchModule implements HandoffDispatch {
 		if (items.length === 0) return 0;
 		const freeSeats = limit === 0 ? items.length : limit - this.seatCount();
 		// The plane action's items take no seat and are not held by the cap
-		// (ADR 0068): a pickup under a full limit still runs them, and only a
-		// queue of seats-bound items under a full cap stands.
+		// (ADR 0068): the walk runs them when it reaches them, and a queue
+		// that stands under a full cap is one whose first plane item sits
+		// behind a seats-bound item the walk breaks at.
 		const hasPlaneAction = items.some((candidate) => candidate.kind === "plane-action");
 		if (freeSeats <= 0 && !hasPlaneAction) return 0;
 		// One count for the whole call, on purpose: the loop takes at most
@@ -879,8 +894,10 @@ class HandoffDispatchModule implements HandoffDispatch {
 			if (this.stopped) break;
 			if (item.kind === "plane-action") {
 				// The shared order is one across kinds, and the plane action's item
-				// runs in place, whatever the limit reads: it takes no seat, so it
-				// counts against nothing the cap bounds (ADR 0068).
+				// takes no seat, so the walk runs it when it reaches it, whatever
+				// the cap bounds (ADR 0068) - and a cap that breaks the walk at a
+				// held seats-bound item holds it, the way it holds every item
+				// behind.
 				await this.pickupPlaneActionItem(item, false);
 				continue;
 			}

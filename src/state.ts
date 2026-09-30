@@ -1810,6 +1810,25 @@ export class FactoryState {
 		});
 	}
 
+	/**
+	 * End the cycle of the source a dropped plane action row named (ADR
+	 * 0069, beside ADR 0068): the drop, like the cancel, leaves a route that
+	 * decided its turn and then lost its start without a run, so the source
+	 * rests open with the cycle counted once, the way a close ends the cycle
+	 * the turn routed from. A source that left the queued wait behind the
+	 * settle changes nothing.
+	 */
+	settleDroppedPlaneActionRouteSource(routeFromIdentity: string): boolean {
+		return this.transaction(() => {
+			const result = this.db
+				.prepare(
+					"UPDATE tickets SET state = 'open', work_cycle = work_cycle + 1 WHERE identity = ? AND state = 'queued'",
+				)
+				.run(routeFromIdentity);
+			return Number(result.changes) > 0;
+		});
+	}
+
 	/** The ticket's latest settled turn, or null when none settled yet. */
 	lastCompletion(identity: string): Completion | null {
 		const row = this.db

@@ -1812,9 +1812,10 @@ export function App({
 	): string | null => {
 		const positionIdentity = outcome.positionTicketIdentity ?? ticket.identity;
 		if (mergeRoute) {
-			// The merge's route stands in the Work queue's row (ADR 0068): the
-			// item takes no seat, so it runs whatever the limit reads, and the
-			// line names the wait the way the handoff's line does.
+			// The merge's route stands in the Work queue's row (ADR 0068):
+			// the item takes no seat, so the pickup's walk runs it when it
+			// reaches it, and the line names the wait the way the handoff's
+			// line does.
 			const waiting = workQueue.some(
 				(item) => item.kind === "plane-action" && item.ticketIdentity === positionIdentity,
 			);

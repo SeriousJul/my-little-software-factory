@@ -26,6 +26,7 @@ import {
 	validateConfig,
 } from "../src/config.ts";
 import type { FetchedTicket, Ticket } from "../src/domain/ticket.ts";
+import { resolveHandoffChoice } from "../src/handoff.ts";
 import { createHandoffDispatch, type HandoffDispatchReports } from "../src/handoff-dispatch.ts";
 import { planeActionSettingOf, runMergePullRequest } from "../src/plane-actions.ts";
 import type { CommandOptions, CommandResult } from "../src/runner.ts";
@@ -129,6 +130,57 @@ function pullTicket(over: Partial<FetchedTicket> = {}): FetchedTicket {
 		attributes: {},
 		...over,
 	};
+}
+
+// The issue the pull request fixes, on the second source the cross-route
+// tests boot beside the pulls source.
+const issueIdentity = "github:github.com:I_11";
+const issueTitle = "Keep state independent from GitHub";
+
+const issuesSource = { name: "issues", kind: "github-issues" as const };
+
+/** The issue source's config, beside the pulls source's. */
+const issuesConfig = {
+	name: "issues",
+	kind: "github-issues" as const,
+	refreshIntervalSeconds: 60,
+	repositories: ["acme/factory"],
+	host: "github.com",
+};
+
+/** A fetched ticket of the issues source: the ticket the pull request fixes. */
+function issueTicket(over: Partial<FetchedTicket> = {}): FetchedTicket {
+	return {
+		identity: issueIdentity,
+		sourceKind: "github-issue",
+		externalKey: "#11",
+		sourceState: "open",
+		url: "https://github.com/acme/factory/issues/11",
+		title: issueTitle,
+		description: "Keep state independent from GitHub.",
+		labels: [],
+		externalUpdatedAt: "2026-08-31T09:00:00Z",
+		repository: {
+			identity: repoIdentity,
+			displayName: "acme/factory",
+			cloneUrl: "https://github.com/acme/factory.git",
+		},
+		attributes: {},
+		...over,
+	};
+}
+
+/** The source's success for the issue, the way it stands for the pull request. */
+const issueSuccess = (at = new Date(Date.now() - 60_000).toISOString()): FetchOutcome => ({
+	status: "success",
+	fetchedAt: at,
+	tickets: [issueTicket()],
+});
+
+/** Boot the state with the issue beside the pull request. */
+function withIssueSource(state: FactoryState): void {
+	state.initializeSources([pullsSource, issuesSource]);
+	state.applyFetch(issuesSource, issueSuccess());
 }
 
 /**
@@ -802,6 +854,162 @@ describe("the dispatch's ask and pickup", () => {
 		// The run's own line stands: the pickup did not ask the cap, because
 		// the action takes no seat from it.
 		expect(events).toContain(`notice: the merge of "${pullTitle}" ran from the Work queue`);
+		state.close();
+	});
+
+	test("a full limit holds the plane item behind a seats-bound item, the way it holds every item", async () => {
+		const state = planeState();
+		withIssueSource(state);
+		const runner = new FakeRunner();
+		const events: string[] = [];
+		const dispatch = createHandoffDispatch({
+			state,
+			runner,
+			config: () => ({
+				...PLANE_CONFIG,
+				sources: [pullsConfig, issuesConfig],
+				maxParallelAgents: 1,
+			}),
+			// The limit reads full: the seat is held by the seats-bound item
+			// that stands first in the shared order.
+			seatCount: () => 1,
+			home: home(),
+			...recorder(events),
+		});
+		// The seats-bound item stands first, and a full cap holds it the way
+		// it always has: the pickup's walk breaks at it.
+		const handoffAsk = await dispatch.dispatch({
+			origin: "open",
+			automatic: true,
+			ticketIdentity: issueIdentity,
+			choice: resolveHandoffChoice(
+				{ ...PLANE_CONFIG, sources: [pullsConfig, issuesConfig], maxParallelAgents: 1 },
+				"rework",
+			),
+			previousMessage: "",
+		});
+		expect(handoffAsk).toEqual({ ok: true });
+		const result = await dispatch.dispatchPlaneAction({
+			origin: "open",
+			automatic: true,
+			ticketIdentity: pullIdentity,
+			taskType: "merge",
+		});
+		expect(result).toEqual({ ok: true });
+		// The walk broke at the held seats-bound item, before it reached the
+		// plane item: the item stands behind it in the shared order, with no
+		// command run and no attempt recorded, and the route's wait stands.
+		const queue = state.workQueue();
+		expect(queue).toHaveLength(2);
+		expect(queue[0]?.kind).toBe("handoff");
+		expect(queue[1]?.kind).toBe("plane-action");
+		expect(state.latestPlaneActionAttempt(pullIdentity)).toBeNull();
+		expect(runner.commands()).toEqual([]);
+		expect(state.ticketState(pullIdentity)).toBe("queued");
+		state.close();
+	});
+
+	test("a dropped merge settles its route's source, the way the cancel does", async () => {
+		const state = planeState();
+		withIssueSource(state);
+		// The issue stands awaiting with its settled turn: the cross route's
+		// source, the way the top-up's continuation ask finds it.
+		const claim = state.claimHandoff(
+			issueIdentity,
+			{
+				agentType: "pi",
+				environment: "live-worktree",
+				taskType: "rework",
+				model: "",
+				thinking: "",
+				contextWindow: "",
+			},
+			"open",
+		);
+		if (!claim.ok) throw new Error(claim.reason);
+		state.settleHandoff(claim.claim.attemptId, true, undefined, {
+			paneId: "pane-1",
+			tabId: "tab-1",
+			workspaceId: "ws-1",
+		});
+		state.settleTurn({
+			ticketIdentity: issueIdentity,
+			handoffId: claim.claim.attemptId,
+			taskType: "rework",
+			agentType: "pi",
+			message: "The turn is done.",
+			turnLog: [{ kind: "text", text: "The turn is done." }],
+			completedAt: "2026-08-31T11:00:00Z",
+			cause: "completed",
+			transition: {
+				fired: false,
+				when: null,
+				reason: "",
+				ticketFacts: [],
+				pullRequestFacts: [],
+				autoAdvance: true,
+				ticketWrite: null,
+				pullRequestWrite: null,
+				pullRequestIdentity: null,
+				pullRequestKey: null,
+				writeFailure: "",
+				positionTaskType: "merge",
+				positionTicketIdentity: pullIdentity,
+			},
+		});
+		const runner = new FakeRunner();
+		const events: string[] = [];
+		let config = PLANE_CONFIG;
+		const dispatch = createHandoffDispatch({
+			state,
+			runner,
+			config: () => config,
+			seatCount: () => 0,
+			home: home(),
+			...recorder(events),
+		});
+		state.setQueuePaused(true);
+		const result = await dispatch.dispatchPlaneAction({
+			origin: "workflow",
+			automatic: true,
+			ticketIdentity: pullIdentity,
+			routeFromIdentity: issueIdentity,
+			taskType: "merge",
+		});
+		expect(result).toEqual({ ok: true });
+		// Both waits stand: the item's own ticket took the queued wait, and
+		// the decision the ask landed moved the source from awaiting to
+		// queued, the way the route's decision does.
+		expect(state.ticketState(pullIdentity)).toBe("queued");
+		expect(state.ticketState(issueIdentity)).toBe("queued");
+		const tickets = state.visibleTickets(
+			PLANE_WORKFLOW_STATES,
+			PLANE_CONFIG.defaultTaskType,
+			"all",
+		);
+		const issueBefore = tickets.find((t) => t.identity === issueIdentity);
+		if (issueBefore === undefined) throw new Error("the issue is not in the read");
+		const cycleBefore = issueBefore.workCycle;
+		// The pickup drops the item: the task type's action form is gone from
+		// the config, and the drop settles both waits it leaves.
+		config = { ...PLANE_CONFIG, taskTypes: { ...PLANE_TASK_TYPES, merge: { template: "x" } } };
+		state.setQueuePaused(false);
+		await dispatch.pickupWorkQueue();
+		expect(state.workQueue()).toEqual([]);
+		expect(state.latestPlaneActionAttempt(pullIdentity)).toBeNull();
+		expect(runner.commands()).toEqual([]);
+		// The waits settle: the item's ticket back to open without a work
+		// cycle, and the route's source open with its cycle counted once,
+		// the way the cancel settles the same row (ADR 0069).
+		expect(state.ticketState(pullIdentity)).toBe("open");
+		expect(state.ticketState(issueIdentity)).toBe("open");
+		const after = state.visibleTickets(PLANE_WORKFLOW_STATES, PLANE_CONFIG.defaultTaskType, "all");
+		expect(after.find((t) => t.identity === issueIdentity)?.workCycle).toBe(cycleBefore + 1);
+		const pullAfter = after.find((t) => t.identity === pullIdentity);
+		expect(pullAfter?.workCycle).toBe(tickets.find((t) => t.identity === pullIdentity)?.workCycle);
+		expect(events).toContain(
+			`warning: the merge of "${pullTitle}" was not run: task type merge carries no plane action`,
+		);
 		state.close();
 	});
 });

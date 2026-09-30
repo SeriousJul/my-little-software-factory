@@ -1399,11 +1399,12 @@ describe("factory SQLite state", () => {
 		// last runs only from awaiting or queued, so it too moves the number on
 		// an end, exactly once - the route's start that ends the settled
 		// ticket's cycle on a different ticket (ADR 0067), which runs only from
-		// queued - the operator's cancel of a route item that ends the cycle the
-		// route named (ADR 0069), which runs only from queued as well - and the
-		// source's mute that settles the queued tickets whose route died with its
-		// items (ADR 0070), which runs the same queued-end statement, only from
-		// queued.
+		// queued - the two settles of a route item lost without a run,
+		// the operator's cancel (ADR 0069) and the pickup's drop of the plane
+		// action's row (ADR 0069, beside ADR 0068), each of which ends the cycle
+		// the route named and runs only from queued - and the source's mute that
+		// settles the queued tickets whose route died with its items (ADR 0070),
+		// which runs the same queued-end statement, only from queued.
 		expect([...new Set(statements)].sort()).toEqual([
 			"\"UPDATE tickets SET state = 'open', work_cycle = work_cycle + 1 WHERE identity = ? AND state = 'queued'\"",
 			"\"UPDATE tickets SET state = 'open', work_cycle = work_cycle + 1 WHERE identity = ? AND state IN ('awaiting', 'queued')\"",
