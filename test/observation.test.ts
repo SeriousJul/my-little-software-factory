@@ -1872,14 +1872,15 @@ describe("the awaiting rule", () => {
 
 	/**
 	 * ADR 0060: an ignored Ticket is out of every automatic start. The rule is one
-	 * predicate, `ticketIgnored`, and each of the four Top-up walks calls it on the
-	 * row it holds: the continuation, the re-fired skip, the restart, and the
-	 * open-ticket add each hold the Ticket out, and each reconsider it after the
-	 * un-ignore. The open-ticket add reads the list with the ignore's withhold
-	 * lifted, so its own call is what holds the row out - the gate is never a side
-	 * effect of the view a walk happens to read. The restart walk is the one that
-	 * needs its own test the most: it reads the in-flight tickets directly, not the
-	 * list, so it asks the cycle's one read of the pile.
+	 * predicate, `automaticStartBlocked` (widened to the source's mute by ADR 0070),
+	 * and each of the four Top-up walks calls it on the row it holds: the
+	 * continuation, the re-fired skip, the restart, and the open-ticket add each
+	 * hold the Ticket out, and each reconsider it after the un-ignore. The
+	 * open-ticket add reads the list with the withhold lifted, so its own call is
+	 * what holds the row out - the gate is never a side effect of the view a walk
+	 * happens to read. The restart walk is the one that needs its own test the
+	 * most: it reads the in-flight tickets directly, not the list, so it asks the
+	 * cycle's one read of the wider pile, `automaticStartBlockedTickets`.
 	 */
 	describe("the ignored ticket holds every automatic start (ADR 0060)", () => {
 		const ignore = (state: FactoryState, identity: string): void => {

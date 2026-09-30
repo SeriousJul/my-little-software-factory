@@ -457,8 +457,8 @@ describe("the in-app Key guide", () => {
 					}
 				};
 				note(await settle(setup));
-				const ladder = Array.from({ length: 40 }, (_, step) => step + 2).map(
-					(row) => `${row}-${row + 18}/59`,
+				const ladder = Array.from({ length: 41 }, (_, step) => step + 2).map(
+					(row) => `${row}-${row + 18}/60`,
 				);
 				for (const range of ladder) note(await scrollGuide(setup, "j", range));
 				// The Control plane section names the merged Main view's controls -
@@ -491,7 +491,10 @@ describe("the in-app Key guide", () => {
 					// two keys (ADR 0060); the section's guide holds them and the
 					// Consultation section's guide holds nothing of either.
 					"i Ignore - hides a resting row and stops every automatic start",
-					"f Filter - cycles the Ticket list: active, ignored, all",
+					// The mute joins the Ticket section's own keys (ADR 0070), beside
+					// the ignore and ahead of the filter it rides with in the cycle.
+					"u Mute - mutes the source the Ticket came in on, and the key un-mutes",
+					"f Filter - cycles the Ticket list: active, ignored, muted, all",
 					// The axis row wraps: its note names the whole cycle, and the
 					// label column is sized to the longest reason.
 					"Tab Group - cycles the grouping axis: none, repository, source, task,",
@@ -838,6 +841,13 @@ describe("the in-app Key guide", () => {
 				const moveRow = rowOf("Move");
 				expect(spanColorAt(setup, moveRow, "↑↓/jk")).toEqual(rgb(roleColor("accent")));
 				expect(spanColorAt(setup, moveRow, "Move")).toEqual(rgb(roleColor("text")));
+				// The mute row pushed Refresh below the first fold (ADR 0070):
+				// step the guide down until its row is color-checkable.
+				for (let step = 0; step < 4; step += 1) {
+					setup.mockInput.pressKey("j");
+					if ((await settle(setup)).includes("r Refresh")) break;
+				}
+				rows = rowsOf(setup.captureCharFrame());
 				// Unavailable: the key and the label are dim, the reason dim.
 				const refreshRow = rowOf("r Refresh");
 				expect(spanColorAt(setup, refreshRow, "r")).toEqual(rgb(roleColor("subtext0")));
@@ -879,6 +889,12 @@ describe("the in-app Key guide", () => {
 					await awaitFrame(setup, (f) => f.includes("loading tickets..."), "loading");
 					await openGuide(setup, "?");
 					await settle(setup);
+					// The mute row pushed Refresh below the first fold (ADR 0070):
+					// step the guide down until its row is color-checkable.
+					for (let step = 0; step < 4; step += 1) {
+						setup.mockInput.pressKey("j");
+						if ((await settle(setup)).includes("r Refresh")) break;
+					}
 					let rows = rowsOf(setup.captureCharFrame());
 					let refreshRow = rows.findIndex((row) => norm(row).includes("r Refresh"));
 					expect(rows[refreshRow]).toContain("every Ticket source is already refreshing");
@@ -920,23 +936,23 @@ describe("the in-app Key guide", () => {
 		await withApp(
 			async (setup) => {
 				await openGuide(setup, "?");
-				expect(actionBarRowOf(await settle(setup))).toContain("1-19/59");
+				expect(actionBarRowOf(await settle(setup))).toContain("1-19/60");
 
-				await scrollGuide(setup, "j", "2-20/59");
-				await scrollGuide(setup, "j", "3-21/59");
-				await scrollGuide(setup, "k", "2-20/59");
-				await scrollGuide(setup, "k", "1-19/59");
+				await scrollGuide(setup, "j", "2-20/60");
+				await scrollGuide(setup, "j", "3-21/60");
+				await scrollGuide(setup, "k", "2-20/60");
+				await scrollGuide(setup, "k", "1-19/60");
 				// Top boundary: k holds the range.
 				setup.mockInput.pressKey("k");
-				expect(await settle(setup, 500)).toContain("1-19/59");
+				expect(await settle(setup, 500)).toContain("1-19/60");
 				// Walk to the bottom, one step per frame.
 				const ladder = Array.from({ length: 40 }, (_, step) => step + 2).map(
-					(row) => `${row}-${row + 18}/59`,
+					(row) => `${row}-${row + 18}/60`,
 				);
 				for (const range of ladder) await scrollGuide(setup, "j", range);
 				// Bottom boundary: j holds the range.
 				setup.mockInput.pressKey("j");
-				expect(await settle(setup, 500)).toContain("41-59/59");
+				expect(await settle(setup, 500)).toContain("42-60/60");
 			},
 			WIDTH,
 			HEIGHT,
@@ -1041,7 +1057,7 @@ describe("the in-app Key guide", () => {
 				setup.mockInput.pressKey("j");
 				await awaitFrame(
 					setup,
-					(f) => actionBarRowOf(f).includes("2-20/59"),
+					(f) => actionBarRowOf(f).includes("2-20/60"),
 					"the guide to scroll",
 				);
 				// e opens no panel, r warns no refresh, q quits nothing,
@@ -1144,7 +1160,7 @@ describe("the in-app Key guide", () => {
 				await openGuide(setup, "?");
 				const bar = actionBarRowOf(await settle(setup));
 				expect(bar).toContain("↑↓/jk Scroll");
-				expect(bar).toContain("1-19/59");
+				expect(bar).toContain("1-19/60");
 				expect(bar).toContain("Esc/F1/? Close");
 				expect(bar).not.toContain("Help");
 				expect(bar).not.toContain("Message");
@@ -1160,7 +1176,7 @@ describe("the in-app Key guide", () => {
 		await withApp(
 			async (setup) => {
 				await openGuide(setup, "?");
-				expect(actionBarRowOf(await settle(setup))).toContain("1-19/59");
+				expect(actionBarRowOf(await settle(setup))).toContain("1-19/60");
 
 				// A short, wide terminal: four visible rows, the full title
 				// still fitting, and more total rows because the reason column is
@@ -1172,13 +1188,13 @@ describe("the in-app Key guide", () => {
 				// The selector's note, the Close reason, the Grouping axis note,
 				// and the Recovery note wrap on this narrow terminal, so the guide
 				// runs longer than at the full width.
-				expect(actionBarRowOf(frame)).toContain("1-4/88");
+				expect(actionBarRowOf(frame)).toContain("1-4/91");
 
-				await scrollGuide(setup, "j", "2-5/88");
+				await scrollGuide(setup, "j", "2-5/91");
 				// Back to size: the scroll the terminal gave back is kept.
 				setup.resize(WIDTH, HEIGHT);
 				frame = await settle(setup);
-				expect(actionBarRowOf(frame)).toContain("2-20/59");
+				expect(actionBarRowOf(frame)).toContain("2-20/60");
 
 				// Below the useful size the terminal takes its compact frame:
 				// the modal caps at the terminal, the title falls back to the
@@ -1196,7 +1212,7 @@ describe("the in-app Key guide", () => {
 				setup.resize(WIDTH, HEIGHT);
 				frame = await settle(setup);
 				expect(frame).toContain("Key guide - Ticket list");
-				expect(actionBarRowOf(frame)).toContain("2-20/59");
+				expect(actionBarRowOf(frame)).toContain("2-20/60");
 			},
 			WIDTH,
 			HEIGHT,

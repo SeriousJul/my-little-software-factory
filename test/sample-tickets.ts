@@ -60,6 +60,8 @@ function sample(
 		lastCompletion,
 		ignored: false,
 		ignoredAt: null,
+		muted: false,
+		mutedAt: null,
 		leftover: null,
 	};
 }

@@ -44,6 +44,13 @@ interface SectionHeaderProps {
 	 */
 	ignored?: number;
 	/**
+	 * The muted count (ADR 0070): the ledger of the source acts, every row any of
+	 * whose sources' mute stands. Shown only when it is above zero, the way the
+	 * ignored count is, and it stands beside it: one count per flag, held
+	 * first, then the ticket's pile, then the source's ledger.
+	 */
+	muted?: number;
+	/**
 	 * The Consultation attention bell, set by the observation coordinator: a
 	 * Consultation moved to awaiting response while this app ran, or a
 	 * recovery became possible.
@@ -98,6 +105,7 @@ export function SectionHeader({
 	paused = false,
 	held = 0,
 	ignored = 0,
+	muted = 0,
 	bell = false,
 	heldBell = false,
 	newOutput = false,
@@ -128,7 +136,9 @@ export function SectionHeader({
 		section === "tickets"
 			? `  ${counts}${held > 0 ? `  ${wide ? `held: ${held}` : `held ${held}`}` : ""}${
 					heldBell ? "  !!!" : ""
-				}${ignored > 0 ? `  ${wide ? `ignored: ${ignored}` : `ignored ${ignored}`}` : ""}`
+				}${ignored > 0 ? `  ${wide ? `ignored: ${ignored}` : `ignored ${ignored}`}` : ""}${
+					muted > 0 ? `  ${wide ? `muted: ${muted}` : `muted ${muted}`}` : ""
+				}`
 			: section === "work"
 				? `  ${counts}`
 				: `  ${counts}${bell ? "  !!!" : ""}${newOutput ? "  new output" : ""}`;

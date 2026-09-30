@@ -1000,6 +1000,8 @@ describe("Consultation operations: live checkout confirmation lifetime", () => {
 			handoffRecoveryRequired: false,
 			ignored: false,
 			ignoredAt: null,
+			muted: false,
+			mutedAt: null,
 			leftover: null,
 		};
 	}

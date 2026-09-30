@@ -472,17 +472,61 @@ describe("the shared control catalogue", () => {
 	});
 
 	// The `f` cycle names the state it moves to, so the hint says what the key
-	// will show before the operator presses it (ADR 0060).
+	// will show before the operator presses it (ADR 0060, widened by ADR 0070).
 	test("f names the state the Ticket section's filter moves to", () => {
 		const labels: Array<[TicketListFilter, string]> = [
 			["active", "Show ignored"],
-			["ignored", "Show all"],
+			["ignored", "Show muted"],
+			["muted", "Show all"],
 			["all", "Show active"],
 		];
 		for (const [filter, label] of labels) {
 			const context = contextFor("ticket-list", { ...values, ticketListFilter: filter });
 			expect(controlById("ticket-filter").barLabel?.(context)).toBe(label);
 		}
+	});
+
+	// The `u` act on the source flips between Mute and Un-mute, and names the
+	// source the act reaches, the way the ignore's word reads its own state
+	// (ADR 0070).
+	test("u mutes and un-mutes the row's source, and names it on the bar", () => {
+		const withSource = (muted: boolean) =>
+			contextFor("ticket-list", {
+				...values,
+				selectedTicket: {
+					...openTicket,
+					muted,
+					memberships: [{ sourceName: "acme/factory-issues" }],
+				} as unknown as Ticket,
+			});
+		expect(controlById("ticket-mute").barLabel?.(withSource(false))).toBe(
+			"Mute acme/factory-issues",
+		);
+		expect(controlById("ticket-mute").barLabel?.(withSource(true))).toBe(
+			"Un-mute acme/factory-issues",
+		);
+	});
+
+	// The mute rides on the row in both of the Ticket section's modes, the way
+	// the ignore does, and nowhere else (ADR 0070).
+	test("u reaches the row in both Ticket panes, and nowhere else", () => {
+		for (const mode of ["ticket-list", "ticket-detail", "work-queue-list"] as const) {
+			const context = contextFor(mode, { ...values, selectedTicket: openTicket });
+			const availability = availabilityFor(controlById("ticket-mute"), context);
+			const inTicketSection = mode === "ticket-list" || mode === "ticket-detail";
+			expect(availability.available, `${mode}: the mute reaches the row`).toBe(inTicketSection);
+			if (!inTicketSection) {
+				expect(availability.reason).toContain("Ticket");
+			}
+		}
+		// The row that names no source still rides the act: the key mutes the
+		// source the Ticket came in on, and the bar names the act's object alone.
+		const bare = contextFor("ticket-list", {
+			...values,
+			selectedTicket: { ...openTicket, memberships: [] },
+		});
+		expect(availabilityFor(controlById("ticket-mute"), bare).available).toBe(true);
+		expect(controlById("ticket-mute").barLabel?.(bare)).toBe("Mute source");
 	});
 
 	test("a refused key is never hinted by the bar unless the guide names it, in every base mode", () => {

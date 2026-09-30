@@ -34,8 +34,8 @@ import type {
 } from "./domain/ticket.ts";
 import {
 	attentionBand,
+	flagWithholdsRow,
 	ignoreRefusal,
-	ignoreWithholdsRow,
 	obligationOf,
 	ticketListRank,
 } from "./domain/ticket.ts";
@@ -53,7 +53,7 @@ import { isCoveredByFixingPullRequest, NO_LINKED_PULL_REQUEST_SKIP } from "./wor
 
 /** The schema every state file the plane opens is brought to. Exported so a
  * test can assert the stamp a migration left instead of copying the number. */
-export const SCHEMA_VERSION = 22;
+export const SCHEMA_VERSION = 23;
 type Health = SourceMembership["health"];
 
 export class StateError extends Error {
@@ -339,11 +339,19 @@ export interface ConsultationAgentDetails {
 
 interface StoredMembership extends SourceMembership {
 	active: boolean;
+	/** The mute of the membership's source (ADR 0070), folded from the join. */
+	sourceMuted: boolean;
+	/** The moment the membership's source's mute was set, null while down. */
+	sourceMutedAt: string | null;
 }
 
 interface MembershipRow {
 	source_name: string;
 	health: Health;
+	/** The source's mute flag (ADR 0070): the join reads it beside the health. */
+	muted: number;
+	/** The moment the source's mute was set, null while the flag is down. */
+	muted_at: string | null;
 	active: number;
 	source_kind: string;
 	external_key: string;
@@ -399,11 +407,21 @@ export interface TicketListViews {
 	/** The rows the flag names: the pile the `ignored` view shows and the header count. */
 	ignored: readonly Ticket[];
 	/**
+	 * The rows the mute names (ADR 0070): the ledger of the source acts, every
+	 * ticket of a muted source, and the header's `muted` count.
+	 *
+	 * It is read over the projection before the list rule, the way the pile
+	 * reads the ticket flag: it is the ledger of the source acts, live rows and
+	 * covered rows alike, because the only key that ends a mute rides on a row
+	 * the operator can reach.
+	 */
+	muted: readonly Ticket[];
+	/**
 	 * The whole projection, before the list rule: the reads that resolve a Ticket
 	 * by identity, never the rows the operator happens to be shown.
 	 *
 	 * It is not the `all` value of the List filter. That view is the *list*: the
-	 * covered rule still holds its rows out, and only the ignore's withhold is
+	 * covered rule still holds its rows out, and only the flags' withhold is
 	 * lifted. This is the projection the list rule is applied to.
 	 */
 	projection: readonly Ticket[];
@@ -427,39 +445,41 @@ export function inMemoryTicketViews(projection: readonly Ticket[]): TicketListVi
 		rows,
 		active: [...rows],
 		ignored: [],
+		muted: [],
 		projection: [...rows],
 	};
 }
 
 /**
  * The Ticket section's list rule, in one step over one projection (ADR 0042,
- * ADR 0060).
+ * ADR 0060, ADR 0070).
  *
- * Two causes take a row away: a covered open Ticket - one an open fixing pull
- * request fixes - and an ignored Ticket at rest - one the operator has judged
- * out of the factory's way. Neither touches a Ticket with live work or a
- * decision owed, so the row the operator reaches the Live view, the Close, and
- * the decision from is never the one the list rule hides. What is left keeps
- * the attention band order: the band first, then the band's own second rank -
- * the newest external update in the live bands, the ticket number ascending in
- * the open bands, the ticket whose key names no number last - then the ticket
- * identity (ADR 0050, ADR 0065) - the order every view shares and never
- * replaces.
+ * Three causes take a row away: a covered open Ticket - one an open fixing pull
+ * request fixes - and a Ticket at rest the operator has judged out of the
+ * factory's way, by the ticket's own flag or by the mute of any of its
+ * sources. None of them touches a Ticket with live work or a decision owed, so
+ * the row the operator reaches the Live view, the Close, and the decision from
+ * is never the one the list rule hides. What is left keeps the attention band
+ * order: the band first, then the band's own second rank - the newest external
+ * update in the live bands, the ticket number ascending in the open bands, the
+ * ticket whose key names no number last - then the ticket identity (ADR 0050,
+ * ADR 0065) - the order every view shares and never replaces.
  *
  * The four views answer four different questions, and only the first two apply
  * the covered rule. The drawn rows and the active view are the list, so a
- * covered row stands in neither. The pile is the ledger of the operator's own
- * acts: every row the flag stands on, covered or not, live or at rest, because
- * the only way to clear an ignore is to reach the row and press the key, and a
+ * covered row stands in neither. The `ignored` view is the ledger of the
+ * ticket acts and the `muted` view the ledger of the source acts: each holds
+ * every row its flag stands on, covered or not, live or at rest, because the
+ * only way to clear either flag is to reach the row and press the key, and a
  * Ticket that is both flagged and covered would otherwise stand in no view at
- * all. The header's ignored count names that ledger, so the number and the
- * `ignored` view always hold the same rows. The fourth view is the projection
- * itself, the read every identity-resolving read takes, and the `all` value of
- * the List filter is not it: `all` is the list with the ignore's withhold
- * lifted, so a covered row stays out of it.
+ * all. The header's ignored count and muted count name those ledgers, so each
+ * number and its view always hold the same rows. The fifth view is the
+ * projection itself, the read every identity-resolving read takes, and the
+ * `all` value of the List filter is not it: `all` is the list with the flags'
+ * withhold lifted, so a covered row stays out of it.
  *
  * The state's read and the in-memory shell that holds no SQLite state both
- * come through here, so the rule is one rule and no screen re-applies either
+ * come through here, so the rule is one rule and no screen re-applies any
  * cause.
  */
 export function listTicketViews(
@@ -473,18 +493,31 @@ export function listTicketViews(
 			left.identity.localeCompare(right.identity),
 	);
 	const listed = ordered.filter((ticket) => !isCoveredByFixingPullRequest(projection, ticket));
-	// The pile is every row the flag stands on - the ledger of what the operator
-	// put away, including a Ticket the list shows again while its work is live or
-	// its decision stays owed, and one the covered rule takes out of the list.
+	// The pile is every row the ticket flag stands on - the ledger of what the
+	// operator put away ticket by ticket, including a Ticket the list shows
+	// again while its work is live or its decision stays owed, and one the
+	// covered rule takes out of the list.
 	const ignored = ordered.filter((ticket) => ticket.ignored);
+	// The muted view reads the source flag over the projection before the list
+	// rule, the way the pile reads the ticket flag: the ledger of the source
+	// acts, live and covered tickets of a muted source alike (ADR 0070).
+	const muted = ordered.filter((ticket) => ticket.muted);
 	// The active view is the machine's read: every row the list rule leaves,
-	// which is the drawn rows except the ones the ignore withholds while they
+	// which is the drawn rows except the ones the flags withhold while they
 	// rest.
-	const active = listed.filter((ticket) => !ignoreWithholdsRow(ticket));
+	const active = listed.filter((ticket) => !flagWithholdsRow(ticket));
 	return {
-		rows: filter === "active" ? active : filter === "ignored" ? ignored : listed,
+		rows:
+			filter === "active"
+				? active
+				: filter === "ignored"
+					? ignored
+					: filter === "muted"
+						? muted
+						: listed,
 		active,
 		ignored,
+		muted,
 		projection: [...projection],
 	};
 }
@@ -969,6 +1002,20 @@ const MIGRATION_V21_TO_V22_IGNORED =
 	"ALTER TABLE tickets ADD COLUMN ignored INTEGER NOT NULL DEFAULT 0;";
 const MIGRATION_V21_TO_V22_IGNORED_AT = "ALTER TABLE tickets ADD COLUMN ignored_at TEXT;";
 
+/**
+ * The v23 step: the muted source (ADR 0070).
+ *
+ * The flag and the moment it was set ride on the source's row, keyed by the
+ * source's name: the operator's judgment belongs to the source, not to one
+ * ticket's membership of it, so a refresh that drops the item and brings it
+ * back keeps the mute, and a second plane on the same state file reads the
+ * same answer. The per-ticket flag stays on the ticket rows beside it, and
+ * nothing prunes either: the plane already never deletes a source row.
+ */
+const MIGRATION_V22_TO_V23_MUTED =
+	"ALTER TABLE source_health ADD COLUMN muted INTEGER NOT NULL DEFAULT 0;";
+const MIGRATION_V22_TO_V23_MUTED_AT = "ALTER TABLE source_health ADD COLUMN muted_at TEXT;";
+
 /** Open state synchronously after creating its parent directory. */
 export function openFactoryState(path: string, now?: () => number): FactoryState {
 	try {
@@ -1134,6 +1181,11 @@ export class FactoryState {
 			// of the two cells heals the missing half and keeps the other.
 			if (!this.hasColumn("tickets", "ignored")) this.db.exec(MIGRATION_V21_TO_V22_IGNORED);
 			if (!this.hasColumn("tickets", "ignored_at")) this.db.exec(MIGRATION_V21_TO_V22_IGNORED_AT);
+			// Ask the file, not the stamp: the same build-early risk the ignore's own
+			// columns carry, and a sound file keeps the column, so the step stays a
+			// no-op for it.
+			if (!this.hasColumn("source_health", "muted")) this.db.exec(MIGRATION_V22_TO_V23_MUTED);
+			if (!this.hasColumn("source_health", "muted_at")) this.db.exec(MIGRATION_V22_TO_V23_MUTED_AT);
 			this.db.exec("DELETE FROM schema_version");
 			this.db.prepare("INSERT INTO schema_version(version) VALUES (?)").run(SCHEMA_VERSION);
 			this.db.exec("COMMIT");
@@ -1153,9 +1205,13 @@ export class FactoryState {
 				source_name: string;
 			}>) {
 				if (!names.has(row.source_name)) {
+					// The removal wins over the mute (ADR 0070): the stronger act is a
+					// statement to the config, and it clears the operator's judgment on
+					// the source's row in the same pass, so a re-added source comes
+					// back clean.
 					this.db
 						.prepare(
-							"UPDATE source_health SET health = 'removed', error = 'source removed from config' WHERE source_name = ?",
+							"UPDATE source_health SET health = 'removed', error = 'source removed from config', muted = 0, muted_at = NULL WHERE source_name = ?",
 						)
 						.run(row.source_name);
 					this.db
@@ -1332,6 +1388,21 @@ export class FactoryState {
 			// reads it (issue #159).
 			const listed = storedMemberships.filter((membership) => membership.active);
 			const matched = matchState(listed, states);
+			// The mute of the ticket's sources, folded into the row's facts in this
+			// one read (ADR 0070): the gate and the list rule both read the facts,
+			// and a ticket is withheld and blocked while any of its sources' mute
+			// stands. The moment any of them was set is the newest of them.
+			let muted = false;
+			let mutedAt: string | null = null;
+			for (const membership of storedMemberships) {
+				if (!membership.sourceMuted) continue;
+				muted = true;
+				if (
+					mutedAt === null ||
+					(membership.sourceMutedAt !== null && membership.sourceMutedAt > mutedAt)
+				)
+					mutedAt = membership.sourceMutedAt;
+			}
 			tickets.push({
 				identity: row.identity,
 				title: facts.title,
@@ -1349,7 +1420,10 @@ export class FactoryState {
 				labels: facts.labels,
 				externalUpdatedAt: facts.externalUpdatedAt,
 				repositoryRef: facts.repository,
-				memberships: storedMemberships.map(({ active: _active, ...membership }) => membership),
+				memberships: storedMemberships.map(
+					({ active: _active, sourceMuted: _muted, sourceMutedAt: _mutedAt, ...membership }) =>
+						membership,
+				),
 				suggestedTaskType: taskTypeOfMatch(matched, fallbackTaskType),
 				matchedStateName: matched === null ? null : matched.name,
 				actionable,
@@ -1357,6 +1431,8 @@ export class FactoryState {
 				leftover: this.leftoverEnvironment(row.identity),
 				ignored,
 				ignoredAt: ignored ? row.ignored_at : null,
+				muted,
+				mutedAt: muted ? mutedAt : null,
 			});
 		}
 		return tickets;
@@ -1401,7 +1477,7 @@ export class FactoryState {
 				: "AND m.active = 1";
 		const rows = this.db
 			.prepare(`
-			SELECT m.*, h.health FROM memberships m JOIN source_health h ON h.source_name = m.source_name
+			SELECT m.*, h.health, h.muted, h.muted_at FROM memberships m JOIN source_health h ON h.source_name = m.source_name
 			WHERE m.ticket_identity = ? ${where}
 		`)
 			.all(identity) as unknown as MembershipRow[];
@@ -1409,6 +1485,8 @@ export class FactoryState {
 			active: row.active === 1,
 			sourceName: row.source_name,
 			health: row.health,
+			sourceMuted: row.muted === 1,
+			sourceMutedAt: row.muted_at,
 			identity,
 			sourceKind: row.source_kind,
 			externalKey: row.external_key,
@@ -1816,11 +1894,13 @@ export class FactoryState {
 	/**
 	 * The pile, in one read (ADR 0060): every Ticket identity the flag stands on.
 	 *
-	 * The identity form of `ticketIgnored`, and the gate's one read for a walk
-	 * whose rows carry no flag of their own: the Restart walk walks the in-flight
-	 * tickets, which the projection does not reach, so it asks this once per cycle
-	 * instead of one query per candidate. The header's ignored count and the
-	 * `ignored` view take the same flag off the projection in `listTicketViews`.
+	 * The pile, in identity form (ADR 0060): the Ticket's own flag, and nothing
+	 * wider. It is the pile the `ignored` view shows and the header's ignored
+	 * cell names, read in `listTicketViews`. The gate's one read for a walk whose
+	 * rows carry no flag of their own is the wider `automaticStartBlockedTickets`
+	 * (ADR 0070): the Restart walk walks the in-flight tickets, which the
+	 * projection does not reach, so it asks that once per cycle instead of one
+	 * query per candidate.
 	 */
 	ignoredTickets(): Set<string> {
 		const rows = this.db.prepare("SELECT identity FROM tickets WHERE ignored = 1").all() as Array<{
@@ -1866,7 +1946,7 @@ export class FactoryState {
 	 *
 	 * Nothing else clears the flag: the row's own facts decide whether the list
 	 * shows the Ticket, and an ignored Ticket with live work or a decision owed
-	 * keeps its row while the flag stays set (see `ignoreWithholdsRow`).
+	 * keeps its row while the flag stays set (see `flagWithholdsRow`).
 	 *
 	 * The moment the flag was set is stored with it, so the detail pane names it.
 	 */
@@ -2120,6 +2200,110 @@ export class FactoryState {
 							)
 							.run(at, identity, ended.handoffId);
 		return Number(cleared.changes);
+	}
+
+	/**
+	 * The identities the automatic-start gate holds back (ADR 0060, widened by
+	 * ADR 0070): every ticket whose flag stands, its own or its source's.
+	 *
+	 * The reads the gate takes that cannot hold a projected row - the Restart
+	 * walk's one per-cycle read, the Top-up's identity-resolving read - ask
+	 * this, the same columns on the same rows that the row's facts fold, so the
+	 * widened gate never pays a second projection read. The pile the `ignored`
+	 * view shows and the machine's set are separate answers, and this is the
+	 * machine's.
+	 */
+	automaticStartBlockedTickets(): Set<string> {
+		const rows = this.db
+			.prepare(
+				"SELECT DISTINCT t.identity FROM tickets t WHERE t.ignored = 1 OR EXISTS (SELECT 1 FROM memberships m JOIN source_health h ON h.source_name = m.source_name WHERE m.ticket_identity = t.identity AND h.muted = 1)",
+			)
+			.all() as Array<{ identity: string }>;
+		return new Set(rows.map((row) => row.identity));
+	}
+
+	/**
+	 * The mute of one source (ADR 0070): the act on the source, written on the
+	 * source's own row keyed by its name, the way the ticket's flag is written
+	 * on the ticket's row.
+	 *
+	 * Setting the flag and the settle it causes are one write: the operator's
+	 * act and the rows it takes away ride on one transaction, so the plane's
+	 * state and the list rule never diverge in between. Muting removes every
+	 * Work queue item of the source's tickets - the waiting starts the operator
+	 * asked or the machine routed never run for a source judged out - and it
+	 * settles the routed tickets of the removed items, and the queued tickets
+	 * of the source whose route no longer stands, to `open` with their cycle
+	 * incremented, the way the operator's own removal of a queue item already
+	 * settles. Nothing about the ticket's own flag, its parallel-limit seat, or
+	 * its source facts moves: the row the Live view and the Close reach from
+	 * keeps its facts while the flag stands. Clearing the flag writes nothing
+	 * but the flag: the rows come back from the next read, the way a clear of
+	 * the ticket's flag does.
+	 *
+	 * The refuse names the source, and a source the file does not know refuses
+	 * the act, so a key pressed on a stale row states its reason rather than
+	 * writing a flag the list rule cannot reach.
+	 */
+	setSourceMuted(
+		sourceName: string,
+		muted: boolean,
+	): { ok: true; removed: number; settled: number } | { ok: false; reason: string } {
+		return this.transaction(() => {
+			const row = this.db
+				.prepare("SELECT 1 AS known FROM source_health WHERE source_name = ?")
+				.get(sourceName) as { known: number } | null;
+			if (row === null) {
+				return { ok: false as const, reason: `the source ${sourceName} is not in the state file` };
+			}
+			const at = new Date(this.now()).toISOString();
+			this.db
+				.prepare("UPDATE source_health SET muted = ?, muted_at = ? WHERE source_name = ?")
+				.run(muted ? 1 : 0, muted ? at : null, sourceName);
+			if (!muted) return { ok: true as const, removed: 0, settled: 0 };
+
+			// The settle the act causes: the source's tickets, their waiting starts
+			// out of the queue, and the queued ones whose route died with them or
+			// before the act.
+			const ticketIdentities = new Set(
+				(
+					this.db
+						.prepare("SELECT DISTINCT ticket_identity FROM memberships WHERE source_name = ?")
+						.all(sourceName) as Array<{ ticket_identity: string }>
+				).map((row) => row.ticket_identity),
+			);
+			const queueRows = this.workQueue().filter(
+				(item): item is WorkQueueHandoffItem =>
+					item.kind === "handoff" && ticketIdentities.has(item.ticketIdentity),
+			);
+			const deleteItem = this.db.prepare("DELETE FROM work_queue WHERE ticket_identity = ?");
+			for (const item of queueRows) deleteItem.run(item.ticketIdentity);
+			if (queueRows.length > 0) this.repackWorkQueuePositions();
+			const settled = new Set<string>();
+			// A removed item's routed ticket, in `queued`, settles to `open`, the
+			// way the operator's own removal of the item already does.
+			for (const item of queueRows) {
+				if (item.routeFromIdentity !== null) settled.add(item.routeFromIdentity);
+			}
+			// A queued ticket of the source whose route no longer stands - its
+			// position's item removed by this act, or gone before it - settles too,
+			// so the act leaves nothing stuck in the route's wait.
+			const stands = this.db.prepare(
+				"SELECT 1 AS stands FROM work_queue WHERE ticket_identity = ? OR route_from_identity = ?",
+			);
+			const states = this.db.prepare("SELECT state FROM tickets WHERE identity = ?");
+			for (const identity of ticketIdentities) {
+				const state = states.get(identity) as { state: string } | null;
+				if (state?.state !== "queued") continue;
+				if (stands.get(identity, identity) !== null) continue;
+				settled.add(identity);
+			}
+			const settle = this.db.prepare(
+				"UPDATE tickets SET state = 'open', work_cycle = work_cycle + 1 WHERE identity = ? AND state = 'queued'",
+			);
+			for (const identity of settled) settle.run(identity);
+			return { ok: true as const, removed: queueRows.length, settled: settled.size };
+		});
 	}
 
 	/**

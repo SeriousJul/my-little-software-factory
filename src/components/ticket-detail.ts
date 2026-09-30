@@ -265,6 +265,20 @@ export function detailContent(
 		);
 		pushWrapped("press i to take this Ticket back", paint("subtext0"));
 	}
+	// The mute of the Ticket's sources is the operator's own act on the source,
+	// and the pane states it beside the ignore it rides with: the mute, the
+	// moment any of the sources' mutes was set, and the key that takes it back
+	// (ADR 0070). The fact stands in the detail whatever the list does with the
+	// row, the way the ignore's does: a muted ticket with live work keeps its
+	// row while the flag stands.
+	if (ticket.muted) {
+		const at = ticket.mutedAt === null ? "" : ` ${ticket.mutedAt.slice(0, 16).replace("T", " ")}`;
+		pushWrapped(
+			`Muted source${at}: no automatic start, and no row while the Ticket rests`,
+			paint("subtext0"),
+		);
+		pushWrapped("press u to take the mute back", paint("subtext0"));
+	}
 	// A leftover environment is what a closed cycle still has running in
 	// herdr. The detail names it, says when the control plane learned of it,
 	// and says where its cleanup lives - in herdr, not in the control plane
