@@ -25,7 +25,11 @@ import {
 } from "./handoff.ts";
 import type { Logger } from "./logging.ts";
 import { evaluatePlacement } from "./placement.ts";
-import { planeActionSettingOf, runMergePullRequest } from "./plane-actions.ts";
+import {
+	isPlaneActionTaskType,
+	planeActionSettingOf,
+	runMergePullRequest,
+} from "./plane-actions.ts";
 import type { RepositoryMapping } from "./repo.ts";
 import { type CommandRunner, errorMessage } from "./runner.ts";
 import type {
@@ -42,6 +46,7 @@ import {
 	findFixingPullRequest,
 	firePlaneActionOutcome,
 	isCoveredByFixingPullRequest,
+	newestMembershipOf,
 	writeMembershipLabels,
 } from "./workflow.ts";
 
@@ -476,6 +481,21 @@ class HandoffDispatchModule implements HandoffDispatch {
 	dispatch(intent: HandoffIntent): Promise<DispatchResult> {
 		if (this.stopped)
 			return Promise.resolve({ ok: false, reason: "the dispatch has been stopped" });
+		// A start on a plane action's task type crosses the plane action's
+		// channel, not the handoff's (ADR 0068): the action form holds no
+		// template and no profile, so the handoff's pickup would refuse it with
+		// `carries no prompt template`. The route keeps the Work queue as its
+		// one channel, and the plane action's own gates run on its own ask.
+		if (isPlaneActionTaskType(this.config().taskTypes, intent.choice.taskType)) {
+			return this.dispatchPlaneAction({
+				origin: intent.origin,
+				ticketIdentity: intent.ticketIdentity,
+				taskType: intent.choice.taskType,
+				routeFromIdentity: intent.routeFromIdentity,
+				automatic: intent.automatic,
+				onStarted: intent.onStarted,
+			});
+		}
 		// The Work queue is the single start channel (ADR 0049): every start,
 		// manual or automatic, enters the queue first, and the immediate pickup
 		// pass takes it when a seat is free. The claim's hard gates run before
@@ -703,6 +723,14 @@ class HandoffDispatchModule implements HandoffDispatch {
 			);
 			return;
 		}
+		// The name the run's line words the ticket by, read while the ticket
+		// still stands: the merged ticket's retirement leaves it from the
+		// projection before the line lands (ADR 0068).
+		const name = this.ticketName(item.ticketIdentity);
+		// The Starting window the row's spinner face reads (ADR 0030, beside
+		// ADR 0068): the merge wears the same face the start wears while its
+		// command runs, so the operator sees the plane at work.
+		this.reports.starting(item.ticketIdentity, true);
 		const result = await runMergePullRequest({
 			runner: this.runner,
 			sources: config.sources,
@@ -735,27 +763,31 @@ class HandoffDispatchModule implements HandoffDispatch {
 			taskType: item.taskType,
 			attempt: { id: attempt.id, ticketIdentity: item.ticketIdentity, taskType: item.taskType },
 		});
+		// The merged pull request leaves the projection the moment the merge
+		// lands: its source stops returning it at the next refresh, and the
+		// retirement does that now, the way that refresh would (ADR 0068).
+		if (result.outcome === "merged")
+			this.state.retireMembership(pullRequest.identity, newestMembershipOf(pullRequest).sourceName);
 		// The row left at the claim, the way the Consultation's pickup
 		// leaves it. The tickets keep the states the ask left them in
 		// (ADR 0072): the source ended its cycle at the ask, and the open
 		// position's wait was the item's alone.
 		if (!this.stopped) this.settleIntentOnStarted(item.ticketIdentity, { ok: true });
 		this.reports.refresh();
+		this.reports.starting(item.ticketIdentity, false);
 		if (this.stopped) return;
 		if (result.outcome === "merged") {
 			this.reports.notice(
 				overCap
-					? `force-dispatched the merge of ${this.ticketName(item.ticketIdentity)} over the Parallel limit`
-					: `the merge of ${this.ticketName(item.ticketIdentity)} ran from the Work queue`,
+					? `force-dispatched the merge of ${name} over the Parallel limit`
+					: `the merge of ${name} ran from the Work queue`,
 			);
 		} else {
 			// The block stands on the Message line in the warning voice, with
 			// no bell (ADR 0068): the pull request's comment carries the fact
 			// to the source, and the needs-work label the fire wrote carries it
 			// to the machine.
-			this.reports.warning(
-				`the merge of ${this.ticketName(item.ticketIdentity)} was blocked: ${result.reason}`,
-			);
+			this.reports.warning(`the merge of ${name} was blocked: ${result.reason}`);
 		}
 	}
 

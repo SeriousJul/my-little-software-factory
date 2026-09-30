@@ -146,14 +146,19 @@ async function withPanel(
 	modelList: AgentModelList,
 	initial: HandoffChoice,
 	body: (setup: Awaited<ReturnType<typeof testRender>>) => Promise<void>,
-	options: { width?: number; height?: number } = {},
+	options: {
+		width?: number;
+		height?: number;
+		taskTypes?: readonly string[];
+		planeActionTaskTypes?: readonly string[];
+	} = {},
 ): Promise<void> {
 	refusals = [];
 	const setup = await testRender(
 		createElement(OverridePanel, {
 			agents: AGENTS,
 			environments: ["live-worktree", "worktree"],
-			taskTypes: ["implement"],
+			taskTypes: options.taskTypes ?? ["implement"],
 			profiles: PROFILES,
 			modelList,
 			onAgentChange: () => undefined,
@@ -165,6 +170,7 @@ async function withPanel(
 			onUnavailable: (reason: string) => refusals.push(reason),
 			onCopy: () => undefined,
 			onEmergencyExit: () => undefined,
+			planeActionTaskTypes: options.planeActionTaskTypes,
 		}),
 		{ width: options.width ?? WIDTH, height: options.height ?? HEIGHT },
 	);
@@ -937,6 +943,52 @@ describe("the Context row refuses an entry it cannot take", () => {
 				);
 				expect(frameText(taken)).toContain("Model 1e3");
 				expect(refusals).toEqual([]);
+			},
+		);
+	});
+});
+
+describe("the plane action's task type states that no Agent runs", () => {
+	test("the setting rows wear the written refusal while the Task row stands on a plane action's type", async () => {
+		await withPanel(
+			{ agentType: "pilot", status: NO_LIST },
+			{
+				...INITIAL,
+				taskType: "merge",
+				model: "pilot/model",
+				thinking: "low",
+				contextWindow: "1000",
+			},
+			async (setup) => {
+				const frame = await awaitFrame(
+					setup,
+					(f) => frameText(f).includes("the plane action holds no settings"),
+					"the Task row's fact",
+				);
+				// The Task row states the fact, and no placement note stands
+				// beside it: the plane action runs no placement write.
+				expect(frameText(frame)).toContain("the plane action holds no settings");
+				// The values ride on the ask and go unrun, so every setting row
+				// wears the same refusal the decision screen's edit key states:
+				// the tone on the unselected list row, the written note under
+				// every row.
+				await setup.mockInput.pressKey("j");
+				await awaitFrame(
+					setup,
+					(f) => rowSelected(f, "Environment"),
+					"the Environment row to be selected",
+				);
+				expect(spanColors(setup, "worktree")).toEqual([tone("warning")]);
+				for (const label of ["Agent", "Environment", "Model", "Thinking", "Context"]) {
+					const note = reasonOf(setup.captureCharFrame(), label);
+					expect(note).toContain(`Error: ${label}:`);
+					expect(note).toContain("the plane action holds no settings");
+				}
+			},
+			{
+				taskTypes: ["implement", "merge"],
+				planeActionTaskTypes: ["merge"],
+				width: WIDE,
 			},
 		);
 	});

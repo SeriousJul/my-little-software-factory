@@ -167,15 +167,16 @@ export async function runMergePullRequest(run: MergeRun): Promise<MergeRunResult
 	const fresh = await readPullRequestOpenRecord(run.runner, run.sources, run.pullRequest);
 	if (fresh?.merged === true) return { outcome: "merged", reason: "", alreadyMerged: true };
 	const ghOptions = await ghOptionsFor(run.runner, source);
+	// The repository identity carries the host (`<host>/<owner>/<name>`), which
+	// is the form `gh --repo` takes: `gh pr merge` maps no `--hostname` (the
+	// `gh api` read above keeps its own flag).
 	const args = [
 		"pr",
 		"merge",
 		membership.externalKey,
 		mergeFlag(run.method),
-		"--hostname",
-		source.host,
 		"--repo",
-		membership.repository.displayName,
+		membership.repository.identity,
 	];
 	let result: CommandResult;
 	try {
@@ -198,14 +199,14 @@ async function postBlockedComment(run: MergeRun, reason: string): Promise<void> 
 	const source = sourceOf(run.sources, membership.sourceName);
 	if (source === undefined) return;
 	const ghOptions = await ghOptionsFor(run.runner, source);
+	// The host rides in the repository identity the same way the merge's does:
+	// `gh pr comment` maps no `--hostname`.
 	const args = [
 		"pr",
 		"comment",
 		membership.externalKey,
-		"--hostname",
-		source.host,
 		"--repo",
-		membership.repository.displayName,
+		membership.repository.identity,
 		"--body",
 		blockedMergeComment(reason),
 	];
