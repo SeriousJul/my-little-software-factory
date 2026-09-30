@@ -399,30 +399,40 @@ async function readVerdictList(
 }
 
 /**
- * Whether the pull request is still open, read straight from the source: the
- * pull's own REST record, live the moment a merge or close lands. The
+ * The pull request's open and merged facts, read straight from the source:
+ * the pull's own REST record, live the moment a merge or close lands. The
  * projection's state is the last refresh's, and the search index still lists
  * a merged pull request as open for a while after the merge: the judgment of
- * the turn that merged the pull request must not decide on that. Null when
- * the key names no number, the source cannot be resolved, the read fails, or
- * the answer carries no state the judgment reads; the fire falls back to the
- * projection's fact for a null.
+ * the turn that merged the pull request must not decide on that, and the
+ * merge action's fresh read must not run a merge on a pull request that is
+ * already merged (ADR 0068). Null when the key names no number, the source
+ * cannot be resolved, the read fails, or the answer carries no state the
+ * readers take: the fire falls back to the projection's fact for a null, and
+ * the merge runs its command for one.
  */
-async function readPullRequestOpen(
-	request: FireTransitionRequest,
+export interface PullRequestOpenRead {
+	/** Whether the pull request is open. */
+	open: boolean;
+	/** Whether the pull request is merged. */
+	merged: boolean;
+}
+
+export async function readPullRequestOpenRecord(
+	runner: CommandRunner,
+	sources: readonly TicketSourceConfig[],
 	pullRequest: Ticket,
-): Promise<boolean | null> {
+): Promise<PullRequestOpenRead | null> {
 	const membership = newestMembershipOf(pullRequest);
 	const number = externalKeyNumber(membership.externalKey);
 	if (number === null) return null;
-	const source = request.config.sources.find((item) => item.name === membership.sourceName);
+	const source = sources.find((item) => item.name === membership.sourceName);
 	if (source === undefined) return null;
 	let ghOptions: CommandOptions = {};
 	if (source.auth !== undefined) {
 		const resolved = await new GhAuthenticator(
 			source.host,
 			source.auth,
-			request.runner,
+			runner,
 			process.env,
 		).resolve();
 		if (!resolved.ok) return null;
@@ -431,7 +441,7 @@ async function readPullRequestOpen(
 	const path = `repos/${membership.repository.displayName}/pulls/${number}`;
 	let result: CommandResult;
 	try {
-		result = await request.runner.run("gh", ["api", "--hostname", source.host, path], ghOptions);
+		result = await runner.run("gh", ["api", "--hostname", source.host, path], ghOptions);
 	} catch {
 		return null;
 	}
@@ -443,10 +453,22 @@ async function readPullRequestOpen(
 		return null;
 	}
 	const item = record as { state?: unknown; merged?: unknown };
-	if (item.merged === true) return false;
-	if (item.state === "open") return true;
-	if (item.state === "closed") return false;
+	if (item.merged === true) return { open: false, merged: true };
+	if (item.state === "open") return { open: true, merged: false };
+	if (item.state === "closed") return { open: false, merged: false };
 	return null;
+}
+
+/**
+ * Whether the pull request is still open, read straight from the source: the
+ * direct read's open fact, the way the record read carries it.
+ */
+async function readPullRequestOpen(
+	request: FireTransitionRequest,
+	pullRequest: Ticket,
+): Promise<boolean | null> {
+	const read = await readPullRequestOpenRecord(request.runner, request.config.sources, pullRequest);
+	return read === null ? null : read.open;
 }
 
 /**
@@ -733,6 +755,34 @@ export async function fireTransition(
 			}
 		}
 	}
+	return outcome;
+}
+
+/** The request the plane action's outcome fire needs (ADR 0068). */
+export interface FirePlaneActionOutcomeRequest extends FireTransitionRequest {
+	/** The attempt the fire's fact lands on. */
+	attempt: { id: string; ticketIdentity: string; taskType: string };
+}
+
+/**
+ * Fire the plane action's task type transition on the action's outcome
+ * (ADR 0068).
+ *
+ * The merge runs with no agent, so no Completion trace stands for it: the
+ * fire is the action's own, and its fact lands on the attempt's record. The
+ * fire runs on both outcomes alike - a merged pull request and a blocked
+ * one - through the same path a settle-time fire takes: the fresh source
+ * read with the projection's last refresh as the fallback, the branch
+ * selection on the read's facts, and the label writes. The record is
+ * conditional: an attempt that already carries its outcome keeps it, so a
+ * fire that runs twice - the crash-restart of a blocked merge - writes the
+ * fact once, the way the label writes it converges.
+ */
+export async function firePlaneActionOutcome(
+	request: FirePlaneActionOutcomeRequest,
+): Promise<TransitionOutcome | null> {
+	const outcome = await fireTransition(request);
+	if (outcome !== null) request.state.recordPlaneActionAttemptOutcome(request.attempt.id, outcome);
 	return outcome;
 }
 

@@ -32,8 +32,10 @@ the config sets one.
 The shipped Default configuration carries a working control plane and the
 parts it cannot know about your machine: no ticket sources, no repository
 mappings, and no `state-file` key. Everything else is on: the `pi`, `codex`,
-and `claude` agent types, the four workflow task types, the three security
-task types, the states of the label workflow plus one state per security
+and `claude` agent types, the four workflow task types - `implement`,
+`review`, `rework`, and `merge`, the last a plane action (ADR 0068) that runs
+without an agent - the three security task types, the states of the label
+workflow plus one state per security
 source kind, and the `consult` and `pair` Consultation types: `consult`
 passes your input straight through, and `pair` runs a pair programming
 session with the agent as the driver.
@@ -119,7 +121,8 @@ transition or a human puts it in the machine. A completed security turn rests
 its ticket on the same-type hold while the finding still lists upstream.
 
 A `[task-types.<name>.transition]` table is what happens when a turn of that
-type completes: the plane writes the transition's labels on the ticket, and on
+type completes - or, for the action form, when the action's run answers: the
+plane writes the transition's labels on the ticket, and on
 the pull request the ticket links, and the machine re-derives every position
 from the labels it wrote. The write is a convergence of the machine's own
 labels: it adds the named facts and removes the labels the machine's writes
@@ -134,10 +137,13 @@ that number lives), send a blocked merge back to `needs-work`, and move an
 opened security fix's pull request to `ready-for-review` and into its review
 position.
 
-Add your own task type with a `[task-types.<name>]` table. The `template`
-carries the prompt body, and the `{placeholders}` name the ticket facts the
-control plane fills in. Add a state that routes a ticket to it, and a
-transition on the type that completes it:
+Add your own task type with a `[task-types.<name>]` table. Exactly one of
+`template` or `action` is required: the `template` carries the prompt body,
+and the `{placeholders}` name the ticket facts the control plane fills in.
+The `action` names a plane action the type runs without an agent (ADR 0068)
+- the registry holds one, `merge-pull-request`, with its `method` - and the
+action form takes no profile keys. Add a state that routes a ticket to it, and
+a transition on the type that completes it:
 
 ```toml
 [task-types.my-type]

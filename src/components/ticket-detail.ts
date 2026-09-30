@@ -18,6 +18,7 @@ import {
 	type TicketMarker,
 } from "../domain/ticket.ts";
 import type { HandoffChoice } from "../handoff.ts";
+import type { PlaneActionAttempt } from "../state.ts";
 import { maxScrollOf, usePaneGeometry } from "./geometry.ts";
 import { paneMouse } from "./pane-mouse.ts";
 import { turnEndCauseLine } from "./shared/presentation.ts";
@@ -127,6 +128,7 @@ export function detailContent(
 	starting: boolean = false,
 	marker: TicketMarker | null = null,
 	queueWait: boolean = false,
+	mergeAttempt: PlaneActionAttempt | null = null,
 ): DetailContent {
 	if (ticket === undefined)
 		return {
@@ -336,6 +338,20 @@ export function detailContent(
 				lines.push({ text: indent + wrapped, fg: paint("subtext0") });
 		}
 	}
+	// The latest plane action attempt (ADR 0068): the merge the plane ran on
+	// the ticket's pull request. No Completion trace stands for the action, so
+	// the attempt's record is the fact the detail reads: the merged outcome in
+	// the turn's green, the block in the needs-work yellow, with the reason it
+	// names beside it.
+	if (mergeAttempt !== null) {
+		const date = mergeAttempt.at.slice(0, 16).replace("T", " ");
+		if (mergeAttempt.outcome === "merged")
+			pushWrapped(
+				`Merge: ${date} merged by ${mergeAttempt.decision === "auto-merged" ? "the factory's auto top-up" : "the operator"}`,
+				paint("green"),
+			);
+		else pushWrapped(`Merge: ${date} blocked - ${mergeAttempt.reason}`, paint("yellow"));
+	}
 	if (ticket.handoffRecoveryRequired) pushWrapped("Handoff: recovery required", paint("yellow"));
 	// The link to the ticket's GitHub page wears the blue role: the one row
 	// the operator opens in a browser, kept out of the flat fact rows. It
@@ -501,9 +517,19 @@ export function detailScrollRoom(
 	usableCols: number,
 	visibleRows: number,
 	handoffLimit: number,
+	mergeAttempt: PlaneActionAttempt | null = null,
 ): number {
 	return maxScrollOf(
-		detailContent(ticket, detailTextCols(usableCols), handoffLimit).rows,
+		detailContent(
+			ticket,
+			detailTextCols(usableCols),
+			handoffLimit,
+			undefined,
+			false,
+			null,
+			false,
+			mergeAttempt,
+		).rows,
 		visibleRows,
 	);
 }
@@ -544,6 +570,8 @@ interface TicketDetailProps {
 	 * trip, and ScrollBox clamps a stale offset to the new viewport.
 	 */
 	scrollSlot: RefObject<{ identity: string; top: number } | null>;
+	/** The ticket's latest plane action attempt, for the merge's fact line (ADR 0068). */
+	mergeAttempt?: PlaneActionAttempt | null;
 }
 
 /**
@@ -565,6 +593,7 @@ export const TicketDetail = forwardRef<TicketDetailHandle, TicketDetailProps>(fu
 		scroll,
 		onFocus,
 		scrollSlot,
+		mergeAttempt = null,
 	},
 	ref,
 ) {
@@ -583,6 +612,7 @@ export const TicketDetail = forwardRef<TicketDetailHandle, TicketDetailProps>(fu
 		starting,
 		marker,
 		queueWait,
+		mergeAttempt,
 	);
 	const lines = content.lines;
 	const hasOverflow = content.rows > geometry.visibleRows;

@@ -135,7 +135,9 @@ context-window = "--autocompact {value}"
 
 # --- Task types -----------------------------------------------------------
 
-# template is required. Placeholders: {repository}, {title},
+# Exactly one of template and action is required: the prompt the type's
+# turns run on, or the plane action the type runs without an agent (ADR
+# 0068). Placeholders in a template: {repository}, {title},
 # {description}, {source-kind}, {external-key}, {source-url}, {labels},
 # {previous-message}. Any other brace pair is a startup error.
 # agent, model, thinking, and context-window are the Task profile: the
@@ -146,9 +148,10 @@ context-window = "--autocompact {value}"
 # leaves the agent to default-agent, an omitted model leaves the model to
 # default-model, and an omitted level or window leaves it to the agent. The
 # override panel prefills all four, and each one applies to its own setting
-# only.
+# only. The action form takes no profile keys.
 # A [task-types.X.transition] table fires when a turn of this type
-# completes: it writes the label facts on the ticket and its linked pull
+# completes - or, for the action form, when the action's run answers:
+# it writes the label facts on the ticket and its linked pull
 # request, and the machine re-derives every position from the written labels
 # (ADR 0027). The agents never write workflow labels.
 [task-types.implement]
@@ -214,25 +217,24 @@ Description:
 [task-types.rework.transition]
 ticket-facts = []
 pull-request-facts = ["ready-for-review"]
+auto-advance = true
 agent = "pi"
 environment = "worktree"
 
+# The merge is a plane action (ADR 0068): the plane runs it without an
+# agent and without a worktree, and its transition takes the needs-work
+# path on a blocked merge and the empty facts on a landed one.
 [task-types.merge]
-template = '''
-Merge pull request {external-key}: {title}.
-
-Repository: {repository}
-Pull request: {source-url}
-
-Labels: {labels}
-
-Description:
-{description}'''
-thinking = "low"
+action = "merge-pull-request"
+method = "squash"
 [task-types.merge.transition]
 ticket-facts = []
 pull-request-facts = []
-auto-advance = true
+[[task-types.merge.transition.branches]]
+when = "pull-request-open"
+pull-request-facts = ["needs-work"]
+[[task-types.merge.transition.branches]]
+pull-request-facts = []
 
 # --- Consultation types ----------------------------------------------------
 
@@ -395,7 +397,9 @@ host = "github.com"
 
 | Key | Required | Default | What it does |
 | --- | --- | --- | --- |
-| `template` | yes | - | The prompt. Placeholders: `{repository}`, `{title}`, `{description}`, `{source-kind}`, `{external-key}`, `{source-url}`, `{labels}`, `{previous-message}`. Any other brace pair is a startup error, so an unknown name cannot stay literal in the prompt an agent receives. `{previous-message}` is empty on a first handoff and carries the previous agent's last message on a workflow handoff. |
+| `template` | exactly one of `template` or `action` | - | The prompt. Placeholders: `{repository}`, `{title}`, `{description}`, `{source-kind}`, `{external-key}`, `{source-url}`, `{labels}`, `{previous-message}`. Any other brace pair is a startup error, so an unknown name cannot stay literal in the prompt an agent receives. `{previous-message}` is empty on a first handoff and carries the previous agent's last message on a workflow handoff. |
+| `action` | exactly one of `template` or `action` | - | The plane action the type runs instead of an agent's turn (ADR 0068): the plane starts it with no agent and no worktree, and the Handoff limit counts its attempts. The registry holds one action, `merge-pull-request`: the squash merge of the ticket's pull request. The action form takes no profile keys. |
+| `method` | no | `squash` | The merge method the `merge-pull-request` action runs with: `squash`, `merge`, or `rebase`. An omitted method takes the default. |
 | `agent` | no | `default-agent` | The Task profile's agent type: the agent a handoff of this type starts on. It must name an `[agents.*]` table. A transition's pin beats it. |
 | `model` | no | `default-model` | The Task profile's model: free text the resolved agent's model template renders, so that agent must define one. The override panel prefills it, and clearing that row leaves the model to the agent. |
 | `thinking` | no | - | The Task profile's thinking level: the level this task type's handoffs start on, and the starting value of the override panel's thinking row. It must be one of the profile agent's `thinking-values`. |

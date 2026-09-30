@@ -408,6 +408,11 @@ export async function handOffTicket(
 	const unfit = await settingFitFailure(choice, checked.agent, runner);
 	if (unfit !== null) return unfit;
 
+	// The action form holds no template (ADR 0068): a handoff never starts on a
+	// plane action's task type, so a profile missing its template is a refusal,
+	// not an empty prompt.
+	if (checked.taskType.template === undefined)
+		return { status: "failed", reason: "the task type carries no prompt template" };
 	onStage?.("resolving-repository");
 	const resolved = await resolveRepository(ticket.repositoryRef, config, { runner, home });
 	if (!resolved.ok) {
@@ -750,6 +755,11 @@ export async function handOffStoredWorkspace({
 	if (unfit !== null) return unfit;
 	const agent = checked.agent;
 	const taskType = checked.taskType;
+	// The action form holds no template (ADR 0068): a handoff never starts on a
+	// plane action's task type, so a profile missing its template is a refusal,
+	// not an empty prompt.
+	if (taskType.template === undefined)
+		return { status: "failed", reason: "the task type carries no prompt template" };
 
 	onStage?.("resolving-repository");
 	const resolved = await resolveRepository(ticket.repositoryRef, config, { runner, home });

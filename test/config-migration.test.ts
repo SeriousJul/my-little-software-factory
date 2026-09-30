@@ -122,11 +122,25 @@ describe("the pure rewrite", () => {
 		expect(config.taskTypes.implement.transition).toMatchObject({
 			pullRequestFacts: ["ready-for-review"],
 		});
+		// The seed's merge template matched the shipped seed exactly, so the
+		// rewrite took the action form in its place (ADR 0068): the template
+		// and the profile keys are gone, and the plane runs the merge.
+		expect(config.taskTypes.merge).toMatchObject({
+			action: "merge-pull-request",
+			method: "squash",
+		});
+		expect(config.taskTypes.merge?.template).toBeUndefined();
+		expect(config.taskTypes.merge?.agent).toBeUndefined();
+		expect(result.reportText).toContain(
+			"`merge`: converted to the action form (the template matched the shipped seed exactly)",
+		);
 		// The clean templates carry no workflow label for the agents to obey.
-		for (const task of Object.values(config.taskTypes))
+		for (const task of Object.values(config.taskTypes)) {
+			if (task.template === undefined) continue;
 			expect(task.template).not.toMatch(
 				/ready-for-agent|ready-for-review|ready-to-ship|needs-work/,
 			);
+		}
 		expect(result.configText).toContain("# Migrated to the workflow machine on 2026-09-17");
 		// The report names the behavior changes the rewrite carries: the
 		// dropped comments and the wider default source list.
@@ -247,6 +261,26 @@ describe("the pure rewrite", () => {
 		// The customized template keeps its own label prose, so the migration
 		// installs no transition over it: the two writers would fight.
 		expect(config.taskTypes.rework.transition).toBeUndefined();
+	});
+
+	test("a customized merge template stays a prompt task type (ADR 0068)", () => {
+		const text = PRE_MACHINE_SEED.replace(
+			"Merge pull request {external-key}: {title}.",
+			"Merge my pull request {external-key}: {title}.",
+		);
+		const result = migrate(text);
+		const config = validateConfig(parseToml(result.configText));
+		// The template does not match the shipped seed exactly, so the load
+		// leaves the prompt form standing: the operator's merge agent keeps
+		// running, with its profile, and no action and no method come over.
+		expect(config.taskTypes.merge?.template).toContain("Merge my pull request");
+		expect(config.taskTypes.merge?.action).toBeUndefined();
+		expect(config.taskTypes.merge?.method).toBeUndefined();
+		expect(config.taskTypes.merge?.thinking).toBe("low");
+		// The customized template keeps its own label prose, so the migration
+		// installs no transition over it, the way it leaves rework's.
+		expect(config.taskTypes.merge?.transition).toBeUndefined();
+		expect(result.reportText).toContain("`merge`: left untouched");
 	});
 
 	test("an auto-close flag is dropped and named, and its replacement is pointed at", () => {

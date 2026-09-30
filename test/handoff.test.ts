@@ -120,8 +120,13 @@ function stubLiveWorkspace(runner: FakeRunner): void {
 	});
 }
 
+/** The task type's prompt template, asserted: the test's task types carry the prompt form. */
+function templateOf(taskType: { template?: string }): string {
+	return taskType.template as string;
+}
+
 /** The exact prompt the implement task type renders for this ticket. */
-const PROMPT = renderPrompt(BASE_CONFIG.taskTypes.implement.template, ticket);
+const PROMPT = renderPrompt(templateOf(BASE_CONFIG.taskTypes.implement), ticket);
 const EXPECTED_IMPLEMENT_PROMPT =
 	"Implement the following github-issue.\n\nRepository: acme/billing\n\n" +
 	"#7: Retry policy for webhooks\n\nURL: https://github.com/acme/billing/issues/7\n\n" +

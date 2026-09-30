@@ -252,6 +252,12 @@ export interface ControlContext {
 	 */
 	editableActionSelected?: boolean;
 	/**
+	 * The decision modal's row under the cursor asks for the plane action, which
+	 * holds no settings to edit (ADR 0068): the surface states it from its own
+	 * rows, and the catalogue keeps the one gate with the reason it names.
+	 */
+	planeActionSelected?: boolean;
+	/**
 	 * Whether the surface's Body pane scrolls: the body holds more rows than
 	 * its window. The surface states it from its own rows, and the catalogue
 	 * gates the body's scroll on it, so the bar never hints a scroll that
@@ -1971,11 +1977,14 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		priority: 72,
 		modes: ["decision-modal"],
 		// Only a Handoff row carries settings to edit: Close and Goto decide
-		// about the turn that ended, not about a new Agent.
+		// about the turn that ended, not about a new Agent. The plane action's
+		// row carries none at all, and the reason says so (ADR 0068).
 		availability: (context) =>
-			context.editableActionSelected === true
-				? available()
-				: unavailable("the selected action has no settings to edit"),
+			context.planeActionSelected === true
+				? unavailable("the plane action holds no settings")
+				: context.editableActionSelected === true
+					? available()
+					: unavailable("the selected action has no settings to edit"),
 	},
 	{
 		id: "confirm-action",

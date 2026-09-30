@@ -293,9 +293,13 @@ export function DecisionModal({
 	// control dimmed and say why when it is pressed.
 	const editableActionSelected =
 		onEditAction !== undefined && actions[region.at]?.editable === true;
+	// The plane action's row holds no settings (ADR 0068): the surface states
+	// it, and the catalogue keeps the one gate with the reason it names.
+	const planeActionSelected = actions[region.at]?.planeAction === true;
 	const modalContext = {
 		...context,
 		editableActionSelected,
+		planeActionSelected,
 		bodyScrollable: !emptyLog && maxBodyScroll > 0,
 		bodyEmpty: emptyLog,
 		actionRowCount: actions.length,

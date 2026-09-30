@@ -68,9 +68,10 @@ import {
 	type Ticket,
 } from "./domain/ticket.ts";
 import { baseChoice, resolveHandoffChoice } from "./handoff.ts";
-import type { DispatchResult, HandoffIntent } from "./handoff-dispatch.ts";
+import type { DispatchResult, HandoffIntent, PlaneActionIntent } from "./handoff-dispatch.ts";
 import { type HerdrAgent, ownAgentInPane } from "./herdr.ts";
 import { identifyHandoffAgentName } from "./naming.ts";
+import { isPlaneActionTaskType } from "./plane-actions.ts";
 import { type RefreshClock, SYSTEM_CLOCK } from "./refresh.ts";
 import { type CommandRunner, commandFailureText } from "./runner.ts";
 import type { Consultation, FactoryState, HandoffTicket } from "./state.ts";
@@ -322,6 +323,13 @@ interface ObservationOptions {
 	 */
 	dispatch: (intent: HandoffIntent) => Promise<DispatchResult>;
 	/**
+	 * The app's plane action path (ADR 0068): the merge of the ticket's pull
+	 * request, entered in the Work queue like every other start. The top-up's
+	 * walks cross it for the positions their task type resolves on the plane
+	 * action instead of an agent.
+	 */
+	dispatchPlaneAction: (intent: PlaneActionIntent) => Promise<DispatchResult>;
+	/**
 	 * The Work queue's pickup (ADR 0034): the queue items the free seats take
 	 * this cycle, run before auto-dispatch, in queue order. Returns the items
 	 * that claimed a seat. Absent where the app has no Work queue.
@@ -398,6 +406,7 @@ export class ObservationCoordinator {
 	private readonly herdr: AgentReader;
 	private readonly config: () => FactoryConfig;
 	private readonly dispatch: (intent: HandoffIntent) => Promise<DispatchResult>;
+	private readonly dispatchPlaneAction: (intent: PlaneActionIntent) => Promise<DispatchResult>;
 	private readonly pickupWorkQueue?: () => Promise<number>;
 	private readonly onCycleEnd?: (ticketIdentity: string) => void;
 	private readonly cleanup: (
@@ -457,6 +466,7 @@ export class ObservationCoordinator {
 		this.herdr = options.herdr;
 		this.config = options.config;
 		this.dispatch = options.dispatch;
+		this.dispatchPlaneAction = options.dispatchPlaneAction;
 		this.pickupWorkQueue = options.pickupWorkQueue;
 		this.onCycleEnd = options.onCycleEnd;
 		this.cleanup = options.cleanup;
@@ -1247,6 +1257,27 @@ export class ObservationCoordinator {
 			if (automaticStartBlocked(ticket)) continue;
 			const position = this.continuationPosition(ticket);
 			if (position === null) continue;
+			// The merged position the turn routes to (ADR 0068): the task type
+			// resolves on the plane action, so the top-up asks for the merge,
+			// not for a handoff, and the item takes no seat when it runs.
+			if (
+				position.suggestedTaskType !== null &&
+				isPlaneActionTaskType(config.taskTypes, position.suggestedTaskType)
+			) {
+				const added = await this.topUpPlaneActionAsk(
+					{
+						origin: "workflow",
+						automatic: true,
+						ticketIdentity: position.identity,
+						routeFromIdentity: ticket.identity,
+						taskType: position.suggestedTaskType,
+					},
+					`work queue top-up: merging ${this.ticketName(position.identity)}`,
+					`work queue top-up could not merge ${this.ticketName(position.identity)}`,
+				);
+				if (added !== "refused") return true;
+				continue;
+			}
 			const completion = this.state.lastCompletion(ticket.identity);
 			const outcome = completion?.transition ?? null;
 			const added = await this.topUpAsk(
@@ -1330,7 +1361,29 @@ export class ObservationCoordinator {
 			// has already run this route's task, and the add waits for the moved
 			// labels to land instead of starting it twice.
 			if (this.state.sameTypeHoldActive(position.identity, position.suggestedTaskType)) continue;
+			// The loop guard the handoff's add ran: the merge-to-needs-work loop
+			// stops at the cap, and the ask takes no seat when it runs.
 			if (position.handoffCount >= config.maxHandoffsPerTicket) continue;
+			// The merged position the skip routes to (ADR 0068): the plane
+			// action's merge stands for the handoff the skip would start, and
+			// the standing, hold, and limit guards the handoff's add ran ran on
+			// it above: an automatic merge add holds wherever the handoff's add
+			// would have held.
+			if (isPlaneActionTaskType(config.taskTypes, position.suggestedTaskType)) {
+				const added = await this.topUpPlaneActionAsk(
+					{
+						origin: "workflow",
+						automatic: true,
+						ticketIdentity: position.identity,
+						routeFromIdentity: ticket.identity,
+						taskType: outcome.positionTaskType,
+					},
+					`work queue top-up: merging ${this.ticketName(position.identity)}`,
+					`work queue top-up could not merge ${this.ticketName(position.identity)}`,
+				);
+				if (added !== "refused") return true;
+				continue;
+			}
 			const added = await this.topUpAsk(
 				{
 					origin: "workflow",
@@ -1450,6 +1503,24 @@ export class ObservationCoordinator {
 			if (ticket.suggestedTaskType === null) continue;
 			if (this.state.sameTypeHoldActive(ticket.identity, ticket.suggestedTaskType)) continue;
 			if (this.state.hasWorkItem(ticket.identity)) continue;
+			// The ready position the list offers (ADR 0068): the task type
+			// resolves on the plane action, so the top-up asks for the merge,
+			// not for a handoff. The guards the handoff's add ran still ran
+			// above, and the item takes no seat when it runs.
+			if (isPlaneActionTaskType(config.taskTypes, ticket.suggestedTaskType)) {
+				const added = await this.topUpPlaneActionAsk(
+					{
+						origin: "open",
+						automatic: true,
+						ticketIdentity: ticket.identity,
+						taskType: ticket.suggestedTaskType,
+					},
+					`work queue top-up: merging ${this.ticketName(ticket.identity)}`,
+					`work queue top-up could not merge ${this.ticketName(ticket.identity)}`,
+				);
+				if (added !== "refused") return true;
+				continue;
+			}
 			// The configured settings of the ticket's task profile (ADR 0009): an
 			// unattended handoff starts with the same resolution chain a manual
 			// one sees in the panel, and the fit check guards what it starts with.
@@ -1498,6 +1569,28 @@ export class ObservationCoordinator {
 		refusedPrefix: string,
 	): Promise<"added" | "refused" | "stopped"> {
 		const result = await this.dispatch(intent);
+		if (this.stopped) return "stopped";
+		if (!result.ok) {
+			this.onStatus("warning", `${refusedPrefix}: ${result.reason}`);
+			return "refused";
+		}
+		this.onStatus("info", addedLine);
+		return "added";
+	}
+
+	/**
+	 * The top-up's plane action ask-and-report step (ADR 0068), the same step
+	 * the handoff's ask runs on the merge seam: the enqueue through the
+	 * dispatch, the refusal warning on a rejected ask, and the add line on the
+	 * Message when the item took its place. The answer says what the cycle
+	 * does next, the way the handoff's answer does.
+	 */
+	private async topUpPlaneActionAsk(
+		intent: PlaneActionIntent,
+		addedLine: string,
+		refusedPrefix: string,
+	): Promise<"added" | "refused" | "stopped"> {
+		const result = await this.dispatchPlaneAction(intent);
 		if (this.stopped) return "stopped";
 		if (!result.ok) {
 			this.onStatus("warning", `${refusedPrefix}: ${result.reason}`);

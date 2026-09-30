@@ -526,12 +526,12 @@ describe("validateConfig", () => {
 					autoAdvance: true,
 				});
 			}
-			// The merge task type runs its handoffs on a low thinking level,
-			// and its transition returns a pull request that did not merge to
-			// the needs-work state.
+			// The merge runs on the plane, with no agent (ADR 0068): the task
+			// type is the action form, and its transition returns a pull request
+			// the merge blocked to the needs-work state.
 			expect(config.taskTypes.merge).toEqual({
-				template: expect.stringContaining("Squash and merge"),
-				thinking: "low",
+				action: "merge-pull-request",
+				method: "squash",
 				transition: {
 					ticketFacts: [],
 					pullRequestFacts: [],

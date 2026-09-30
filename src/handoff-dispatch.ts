@@ -25,6 +25,7 @@ import {
 } from "./handoff.ts";
 import type { Logger } from "./logging.ts";
 import { evaluatePlacement } from "./placement.ts";
+import { planeActionSettingOf, runMergePullRequest } from "./plane-actions.ts";
 import type { RepositoryMapping } from "./repo.ts";
 import { type CommandRunner, errorMessage } from "./runner.ts";
 import type {
@@ -33,9 +34,16 @@ import type {
 	HandoffOrigin,
 	WorkQueueConsultationItem,
 	WorkQueueHandoffItem,
+	WorkQueuePlaneActionItem,
 } from "./state.ts";
 import { workQueueIdentityOf } from "./state.ts";
-import { editCommandFor, isCoveredByFixingPullRequest, writeMembershipLabels } from "./workflow.ts";
+import {
+	editCommandFor,
+	findFixingPullRequest,
+	firePlaneActionOutcome,
+	isCoveredByFixingPullRequest,
+	writeMembershipLabels,
+} from "./workflow.ts";
 
 /** A renderer callback must not strand a durable claim or the dispatch seat. */
 function safeReport(report: () => void): void {
@@ -117,6 +125,34 @@ export interface HandoffIntent {
  * when the start failed or the row was cancelled.
  */
 export type DispatchResult = { ok: true } | { ok: false; reason: string };
+
+/**
+ * The plane action's request crossing the dispatch seam (ADR 0068): the merge
+ * of the ticket's pull request, asked for by the operator's confirm on the
+ * decision screen, by the automatic top-up of a merged position, or by the
+ * operator's force-dispatch of the waiting row. The ask owns no settings: the
+ * task type's action form carries the method, and the pickup re-reads it from
+ * the config when it runs, the way the Consultation's pickup re-reads the
+ * type's settings.
+ */
+export interface PlaneActionIntent {
+	/** Where the ask comes from: the decision screen's route, or the open position the top-up asks from. */
+	origin: HandoffOrigin;
+	/** The ticket whose pull request the merge runs on. */
+	ticketIdentity: string;
+	/** The task type whose action form the pickup runs. */
+	taskType: string;
+	/** True for the automatic ask the top-up makes. */
+	automatic?: boolean;
+	/**
+	 * The ticket this route's action continues: the settled ticket whose turn
+	 * the route is the decision of. Omitted for a start that is no route, and
+	 * for a route that stays on its own ticket.
+	 */
+	routeFromIdentity?: string;
+	/** The result of the action's own run, reported once when the row leaves the queue. */
+	onStarted?: (started: DispatchResult) => void;
+}
 
 /**
  * The Message and projection callbacks the module may call.
@@ -313,6 +349,20 @@ export interface HandoffDispatch {
 		end: "closed" | "abandoned",
 	): Promise<string | undefined>;
 	/**
+	 * The plane action's ask (ADR 0068): the merge of the ticket's pull
+	 * request, entered in the Work queue like every other start. The item
+	 * takes no seat from the Parallel limit: the action holds no agent, and
+	 * the pickup's walk runs it when it reaches it, whatever the cap bounds.
+	 * The ask's gates are the
+	 * route's: the ticket still holds the state the ask asked from, the one
+	 * item per ticket rule holds, and the task type must carry the action
+	 * form the registry names. The decision word lands at the ask, the way
+	 * the route's does: `merged` for the operator's confirm, `auto-merged`
+	 * for the top-up's. Returns whether the ask enqueued; the run's answer
+	 * arrives on the intent's `onStarted`.
+	 */
+	dispatchPlaneAction(intent: PlaneActionIntent): Promise<DispatchResult>;
+	/**
 	 * Close the work cycle of a ticket whose turn never settled (ADR 0031).
 	 *
 	 * The cycle's end and the Close cleanup of the environment it ran in are one
@@ -460,6 +510,288 @@ class HandoffDispatchModule implements HandoffDispatch {
 	}
 
 	/**
+	 * The plane action's ask (ADR 0068): the merge of the ticket's pull
+	 * request, entered in the Work queue like every other start. The item
+	 * takes no seat from the Parallel limit, so the pickup's walk runs it
+	 * when it reaches it, and the queue pause holds it the way it holds
+	 * every item: the ask sits in the queue until the resume.
+	 */
+	dispatchPlaneAction(intent: PlaneActionIntent): Promise<DispatchResult> {
+		if (this.stopped)
+			return Promise.resolve({ ok: false, reason: "the dispatch has been stopped" });
+		// The registry is the one home of the names the config may name (ADR
+		// 0068): a task type the registry does not hold is a refusal, not a
+		// queued item.
+		if (planeActionSettingOf(this.config().taskTypes, intent.taskType) === null)
+			return Promise.resolve({
+				ok: false,
+				reason: `task type ${intent.taskType} carries no plane action`,
+			});
+		const check = this.planeActionClaimCheck(
+			intent.ticketIdentity,
+			intent.routeFromIdentity ?? null,
+		);
+		if (!check.ok) {
+			this.log?.warn(`merge refused: ${check.reason} (${this.ticketName(intent.ticketIdentity)})`);
+			return Promise.resolve({ ok: false, reason: check.reason });
+		}
+		if (this.state.hasWorkItem(intent.ticketIdentity))
+			return Promise.resolve({
+				ok: false,
+				reason:
+					`${this.ticketName(intent.ticketIdentity)} already has a waiting queue item; ` +
+					"the first item keeps its place",
+			});
+		const enqueued = this.state.enqueuePlaneActionWork({
+			ticketIdentity: intent.ticketIdentity,
+			routeFromIdentity: intent.routeFromIdentity ?? null,
+			origin: intent.origin,
+			taskType: intent.taskType,
+			automatic: intent.automatic === true,
+		});
+		if (!enqueued.ok) return Promise.resolve(enqueued);
+		if (intent.onStarted !== undefined)
+			this.intentOnStarted.set(intent.ticketIdentity, intent.onStarted);
+		// The decision word lands at the ask, the way the route's does (ADR
+		// 0064): the settled turn leaves awaiting for queued in the same write
+		// that lands the decision, and the open position's wait lands on the
+		// open state alone.
+		this.recordPlaneActionDecision(intent);
+		this.log?.info(
+			`merge queued: ${this.ticketName(intent.ticketIdentity)} (origin ${intent.origin})`,
+		);
+		this.reports.refresh();
+		this.reports.notice(
+			`the merge of ${this.ticketName(intent.ticketIdentity)} is in the Work queue`,
+		);
+		// The queue pause (ADR 0052): the ask sits in the queue until the
+		// resume, and the resume starts the pickup that takes it.
+		if (this.state.queuePaused()) {
+			this.reports.notice(
+				`the merge of ${this.ticketName(intent.ticketIdentity)} waits in the Work queue; the queue is paused`,
+			);
+			return Promise.resolve({ ok: true });
+		}
+		// The item takes no seat, so the pickup's walk runs it when it
+		// reaches it, whatever the limit reads (ADR 0068); the pass runs on
+		// behind the answer, the way every other pickup does.
+		void this.pickupWorkQueue();
+		return Promise.resolve({ ok: true });
+	}
+
+	/**
+	 * The route's gates for the plane action's ask and its pickup (ADR 0068):
+	 * the ticket still exists, and the route still stands - the settled ticket
+	 * the route continues keeps its decision's wait, or the ticket itself does
+	 * when the route stays on its own position. A ticket that closed the turn,
+	 * back to open, or moved on leaves the route stale, the way the handoff's
+	 * pickup reads it.
+	 */
+	private planeActionClaimCheck(
+		ticketIdentity: string,
+		routeFromIdentity: string | null,
+	): { ok: true } | { ok: false; reason: string } {
+		const currentState = this.state.ticketState(ticketIdentity);
+		if (currentState === undefined) return { ok: false, reason: "the ticket no longer exists" };
+		const routeStillStands =
+			routeFromIdentity !== null
+				? ["awaiting", "queued"].includes(this.state.ticketState(routeFromIdentity) ?? "")
+				: ["open", "awaiting", "queued"].includes(currentState);
+		if (!routeStillStands)
+			return {
+				ok: false,
+				reason:
+					routeFromIdentity !== null
+						? `the settled ticket ${this.ticketName(routeFromIdentity)} is now ${this.state.ticketState(routeFromIdentity) ?? "gone"}`
+						: `the ticket is now ${currentState}`,
+			};
+		return { ok: true };
+	}
+
+	/**
+	 * Land the plane action's decision word at the ask (ADR 0068, ADR 0064):
+	 * `merged` for the operator's confirm, `auto-merged` for the top-up's. The
+	 * record reads the settled ticket's latest handoff, the same fact the
+	 * claim reads at the claim, and reuses the state's one decision writer:
+	 * the writer takes the first decision on a turn, so a re-asked route
+	 * re-lands the same decision as a no-op. A route with no settled turn has
+	 * no pending row to land on, and its wait lands on the open state alone.
+	 */
+	private recordPlaneActionDecision(intent: PlaneActionIntent): void {
+		if (intent.origin === "workflow") {
+			const routeFrom = intent.routeFromIdentity ?? intent.ticketIdentity;
+			const previousHandoffId = this.state.latestHandoff(routeFrom)?.handoffId ?? "";
+			if (previousHandoffId !== "")
+				this.state.applyCompletionDecision({
+					ticketIdentity: routeFrom,
+					handoffId: previousHandoffId,
+					decision: intent.automatic === true ? "auto-merged" : "merged",
+					decidedAt: new Date(this.state.now()).toISOString(),
+				});
+		}
+		this.state.queuePlaneActionRoute(intent.ticketIdentity);
+	}
+
+	/**
+	 * The plane action's item pickup (ADR 0068): the merge of the ticket's
+	 * pull request, run through the command runner. The item takes no seat and
+	 * is not held by the cap: the pickup's walk runs it when it reaches it, and
+	 * a full limit only holds it behind a seats-bound item the walk breaks
+	 * at, the way it holds everything behind. The claim is the row's removal,
+	 * taken before the run starts: the item takes no seat to hold the start,
+	 * so the row is the claim, and two walks that both read the queue before
+	 * either claims cannot both run the merge - the second claim finds no row
+	 * and leaves, and the run stands once. The run's gates are the route's -
+	 * the ticket still stands, and the task type still carries the action
+	 * form the registry names. The run reads the pull request fresh before
+	 * it runs, so an already-merged pull request settles as merged without a
+	 * command, and the run's outcome records the attempt, fires the task
+	 * type's transition on the outcome alike for a merge and a block, and
+	 * settles the route without a work cycle. Every pickup ends in run or
+	 * drop: a refused claim drops the item with its warning, and the queued
+	 * route settles to open on it, because a dropped merge leaves no
+	 * re-offer standing and no machine path back to the wait.
+	 */
+	private async pickupPlaneActionItem(
+		item: WorkQueuePlaneActionItem,
+		overCap: boolean,
+	): Promise<void> {
+		// The claim: the row leaves the queue before the run starts, the way
+		// the handoff pickup's seat claim takes the start. A row another walk
+		// already took leaves, and its run stands.
+		if (!this.removeQueueRow(item.ticketIdentity)) return;
+		const check = this.planeActionClaimCheck(item.ticketIdentity, item.routeFromIdentity);
+		if (!check.ok) {
+			this.settlePlaneActionDrops(item);
+			this.settleIntentOnStarted(item.ticketIdentity, { ok: false, reason: check.reason });
+			this.reports.refresh();
+			this.reports.warning(
+				`the merge of ${this.ticketName(item.ticketIdentity)} was not run: ${check.reason}`,
+			);
+			return;
+		}
+		const config = this.config();
+		const setting = planeActionSettingOf(config.taskTypes, item.taskType);
+		if (setting === null) {
+			this.settlePlaneActionDrops(item);
+			this.settleIntentOnStarted(item.ticketIdentity, {
+				ok: false,
+				reason: `task type ${item.taskType} carries no plane action`,
+			});
+			this.reports.refresh();
+			this.reports.warning(
+				`the merge of ${this.ticketName(item.ticketIdentity)} was not run: task type ${item.taskType} carries no plane action`,
+			);
+			return;
+		}
+		// The projection before the list rule, the way the pickup's covered gate
+		// reads it: the rule withholds exactly the ticket this pickup asked for.
+		const projection = this.state.projectedTickets(config.workflowStates, config.defaultTaskType);
+		const ticket = projection.find((candidate) => candidate.identity === item.ticketIdentity);
+		if (ticket === undefined) {
+			this.settlePlaneActionDrops(item);
+			this.settleIntentOnStarted(item.ticketIdentity, {
+				ok: false,
+				reason: "the ticket is no longer visible",
+			});
+			this.reports.refresh();
+			this.reports.warning(
+				`the merge of ${this.ticketName(item.ticketIdentity)} was not run: the ticket is no longer visible`,
+			);
+			return;
+		}
+		// The merge runs on the ticket's pull request: the position's own pull
+		// request when the position is one, and its fixing pull request when
+		// the position is the ticket the pull request fixes.
+		const pullRequest =
+			ticket.sourceKind === "github-pull-request"
+				? ticket
+				: findFixingPullRequest(projection, ticket);
+		if (pullRequest === null) {
+			// No attempt for a merge that could not aim: the row drops with its
+			// warning, and the route settles back to open without it.
+			this.settlePlaneActionDrops(item);
+			this.settleIntentOnStarted(item.ticketIdentity, {
+				ok: false,
+				reason: "no linked pull request was found for the ticket",
+			});
+			this.reports.refresh();
+			this.reports.warning(
+				`the merge of ${this.ticketName(item.ticketIdentity)} was not run: no linked pull request was found for the ticket`,
+			);
+			return;
+		}
+		const result = await runMergePullRequest({
+			runner: this.runner,
+			sources: config.sources,
+			pullRequest,
+			method: setting.method,
+		});
+		// The attempt is the durable record of the merge the plane ran (ADR
+		// 0068): the row stands for the Handoff limit's count, and the
+		// outcome's fire lands its fact on the row, because no Completion
+		// trace stands for the action. No durable row stands before the
+		// external change: the row is the record of the run, written after the
+		// run, and a crash between the change and the record settles the same
+		// way on the restart, through the fresh read.
+		const attempt = this.state.recordPlaneActionAttempt({
+			ticketIdentity: item.ticketIdentity,
+			taskType: item.taskType,
+			decision: item.automatic ? "auto-merged" : "merged",
+			outcome: result.outcome,
+			reason: result.reason,
+			at: new Date(this.state.now()).toISOString(),
+		});
+		// The fire runs on both outcomes alike, and its fact lands on the
+		// attempt's record; the label writes it converges, the way a blocked
+		// merge's needs-work label does on the crash-restart.
+		await firePlaneActionOutcome({
+			config,
+			state: this.state,
+			runner: this.runner,
+			ticketIdentity: item.ticketIdentity,
+			taskType: item.taskType,
+			attempt: { id: attempt.id, ticketIdentity: item.ticketIdentity, taskType: item.taskType },
+		});
+		// The row left at the claim, the way the Consultation's pickup
+		// leaves it, and the route settles back to open without a work cycle:
+		// no work cycle ran for the action.
+		this.state.settleQueuedPlaneActionRoute(item.ticketIdentity);
+		if (!this.stopped) this.settleIntentOnStarted(item.ticketIdentity, { ok: true });
+		this.reports.refresh();
+		if (this.stopped) return;
+		if (result.outcome === "merged") {
+			this.reports.notice(
+				overCap
+					? `force-dispatched the merge of ${this.ticketName(item.ticketIdentity)} over the Parallel limit`
+					: `the merge of ${this.ticketName(item.ticketIdentity)} ran from the Work queue`,
+			);
+		} else {
+			// The block stands on the Message line in the warning voice, with
+			// no bell (ADR 0068): the pull request's comment carries the fact
+			// to the source, and the needs-work label the fire wrote carries it
+			// to the machine.
+			this.reports.warning(
+				`the merge of ${this.ticketName(item.ticketIdentity)} was blocked: ${result.reason}`,
+			);
+		}
+	}
+
+	/**
+	 * Settle the waits a dropped plane action item leaves (ADR 0068): the
+	 * item's own ticket returns to open without a work cycle, the way the
+	 * run's answer does, and the source the route carried ends its cycle
+	 * with the count, the way the cancel settles the same row (ADR 0069).
+	 * The drop leaves no re-offer standing, so the waits cannot stand; a
+	 * ticket that already left its wait changes nothing.
+	 */
+	private settlePlaneActionDrops(item: WorkQueuePlaneActionItem): void {
+		this.state.settleQueuedPlaneActionRoute(item.ticketIdentity);
+		if (item.routeFromIdentity !== null)
+			this.state.settleDroppedPlaneActionRouteSource(item.routeFromIdentity);
+	}
+
+	/**
 	 * The cap-full answer for a manual start (ADR 0034): the start waits in the
 	 * Work queue with its origin and captured choice, and the ticket keeps its
 	 * state. The queue holds at most one item per ticket: a second enqueue for
@@ -546,7 +878,12 @@ class HandoffDispatchModule implements HandoffDispatch {
 		const items = this.state.workQueue();
 		if (items.length === 0) return 0;
 		const freeSeats = limit === 0 ? items.length : limit - this.seatCount();
-		if (freeSeats <= 0) return 0;
+		// The plane action's items take no seat and are not held by the cap
+		// (ADR 0068): the walk runs them when it reaches them, and a queue
+		// that stands under a full cap is one whose first plane item sits
+		// behind a seats-bound item the walk breaks at.
+		const hasPlaneAction = items.some((candidate) => candidate.kind === "plane-action");
+		if (freeSeats <= 0 && !hasPlaneAction) return 0;
 		// One count for the whole call, on purpose: the loop takes at most
 		// `freeSeats` items, so it cannot start more than the cap allows even when
 		// a claim dedups to a seat the ticket already holds. That dedup is real and
@@ -557,9 +894,20 @@ class HandoffDispatchModule implements HandoffDispatch {
 		let claimed = 0;
 		for (const item of items) {
 			if (this.stopped) break;
+			if (item.kind === "plane-action") {
+				// The shared order is one across kinds, and the plane action's item
+				// takes no seat, so the walk runs it when it reaches it, whatever
+				// the cap bounds (ADR 0068) - and a cap that breaks the walk at a
+				// held seats-bound item holds it, the way it holds every item
+				// behind.
+				await this.pickupPlaneActionItem(item, false);
+				continue;
+			}
 			// In-flight items skip without taking a free seat, so the walk reaches
 			// the starts that wait behind them; the cap still bounds how many the
-			// pickup starts, not how many it reads.
+			// pickup starts, not how many it reads. A full cap bounds the whole
+			// seats-bound walk the same way, the moment its early return was
+			// lifted for the plane action's items.
 			if (claimed >= freeSeats) break;
 			if (item.kind === "consultation") {
 				// The shared order is one across kinds (ADR 0034, issue #90): a
@@ -979,6 +1327,16 @@ class HandoffDispatchModule implements HandoffDispatch {
 			const limit = this.config().maxParallelAgents;
 			const overCap = limit > 0 && this.seatCount() >= limit;
 			void this.pickupConsultationItem(item, overCap);
+			return;
+		}
+		if (item.kind === "plane-action") {
+			// The plane action's item takes no seat (ADR 0068), so the force-
+			// dispatch's one ask - start it now - is the pickup's own: the run's
+			// gates run, the item leaves the queue on every answer, and the line
+			// names the cap when it stood over it at the key.
+			const limit = this.config().maxParallelAgents;
+			const overCap = limit > 0 && this.seatCount() >= limit;
+			void this.pickupPlaneActionItem(item, overCap);
 			return;
 		}
 		// Measured before the claim, on the shared count: the line states the

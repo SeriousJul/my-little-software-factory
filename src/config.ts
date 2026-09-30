@@ -16,6 +16,15 @@ import { fileExists } from "./fs.ts";
 import { firstNonEmptyLine } from "./lines.ts";
 import type { LogLevel } from "./logging.ts";
 import {
+	DEFAULT_MERGE_METHOD,
+	isMergeMethod,
+	isPlaneActionName,
+	MERGE_METHODS,
+	type MergeMethod,
+	PLANE_ACTION_NAMES,
+	type PlaneActionName,
+} from "./plane-actions.ts";
+import {
 	contextSettingFit,
 	modelSettingFit,
 	type ResolvedAgentType,
@@ -41,7 +50,13 @@ export interface AgentTypeConfig {
 }
 
 export interface TaskTypeConfig {
-	template: string;
+	/**
+	 * The prompt form: the template its handoffs render. Exactly one of
+	 * `template` or `action` is required (ADR 0068): a type in the prompt
+	 * form starts an agent, and a type in the action form resolves on the
+	 * plane action it names, with no agent at all.
+	 */
+	template?: string;
 	/** The Task profile's agent type. Omitted leaves the agent to `default-agent`. */
 	agent?: string;
 	/** The Task profile's model. Omitted leaves the model to `default-model`. */
@@ -56,9 +71,18 @@ export interface TaskTypeConfig {
 	 */
 	contextWindow?: string;
 	/**
+	 * The action form (ADR 0068): the plane action the task type resolves on,
+	 * by the name the plane action registry holds. The form takes no profile
+	 * keys: the action holds no settings an operator edits before a run.
+	 */
+	action?: PlaneActionName;
+	/** The merge method the action form runs with; omitted takes the registry's default. */
+	method?: MergeMethod;
+	/**
 	 * The Transition that hangs off this task type (ADR 0027): the label facts
 	 * a completed turn of it writes, and where the ticket goes by judgment.
-	 * Omitted: the type completes without a transition.
+	 * Omitted: the type completes without a transition. On the action form
+	 * the transition fires on the action's outcome, not on a completed turn.
 	 */
 	transition?: WorkflowTransition;
 }
@@ -873,6 +897,50 @@ function validateTaskTypes(
 		const where = `task-types.${name}`;
 		if (/\s/.test(name)) throw new ConfigError(`config: ${where}: must be a one-word name`);
 		if (!isRecord(raw)) throw new ConfigError(`config: ${where}: must be a table`);
+		if (raw["auto-close"] !== undefined) {
+			// The retired completion flag (ADR 0027): the auto-advance flag on
+			// the task type's transition is the replacement.
+			throw new ConfigError(
+				`config: ${where}: "auto-close" is a pre-workflow-machine key; use auto-advance on ${where}.transition (see the .bak backup and the migration report)`,
+			);
+		}
+		// The form of the task type (ADR 0068): the prompt form starts an
+		// agent on its template, and the action form resolves on the plane
+		// action it names, with no template and no profile keys.
+		const hasAction = raw.action !== undefined;
+		const hasTemplate = raw.template !== undefined;
+		if (hasAction === hasTemplate)
+			throw new ConfigError(`config: ${where}: exactly one of "template" or "action" is required`);
+		const transition = validateTransition(raw.transition, agents, where);
+		if (hasAction) {
+			// The action form's whole surface: the action's name, its method,
+			// and the transition its outcome fires. No profile keys: the
+			// action holds no settings an operator edits before a run.
+			for (const key of Object.keys(raw))
+				if (!["action", "method", "transition"].includes(key))
+					throw new ConfigError(
+						`config: ${where}: unknown key "${key}"; the action form takes no profile keys`,
+					);
+			const action = stringField(raw, "action", where);
+			if (!isPlaneActionName(action))
+				throw new ConfigError(
+					`config: ${where}.action: "${action}" is not a known plane action (${PLANE_ACTION_NAMES.join(", ")})`,
+				);
+			let method = DEFAULT_MERGE_METHOD;
+			if (raw.method !== undefined) {
+				const named = stringField(raw, "method", where);
+				if (!isMergeMethod(named))
+					throw new ConfigError(
+						`config: ${where}.method: "${named}" is not a merge method (${MERGE_METHODS.join(", ")})`,
+					);
+				method = named;
+			}
+			out[name] = { action, method, ...(transition === undefined ? {} : { transition }) };
+			continue;
+		}
+		for (const key of Object.keys(raw))
+			if (!["template", "agent", "model", "thinking", "context-window", "transition"].includes(key))
+				throw new ConfigError(`config: ${where}: unknown key "${key}"`);
 		const template = stringField(raw, "template", where);
 		for (const placeholder of placeholderNames(template)) {
 			if (!PROMPT_PLACEHOLDERS.includes(placeholder)) {
@@ -907,17 +975,6 @@ function validateTaskTypes(
 		// transition can reroute the handoff onto another agent later; that
 		// pair is caught at handoff time by the same module.
 		const contextWindow = tokenCountField(raw, "context-window", where, profileAgent);
-		if (raw["auto-close"] !== undefined) {
-			// The retired completion flag (ADR 0027): the auto-advance flag on
-			// the task type's transition is the replacement.
-			throw new ConfigError(
-				`config: ${where}: "auto-close" is a pre-workflow-machine key; use auto-advance on ${where}.transition (see the .bak backup and the migration report)`,
-			);
-		}
-		for (const key of Object.keys(raw))
-			if (!["template", "agent", "model", "thinking", "context-window", "transition"].includes(key))
-				throw new ConfigError(`config: ${where}: unknown key "${key}"`);
-		const transition = validateTransition(raw.transition, agents, where);
 		out[name] = {
 			template,
 			...(agent === undefined ? {} : { agent }),
@@ -1548,7 +1605,9 @@ export function configToToml(config: FactoryConfig): string {
 			Object.entries(config.taskTypes).map(([name, task]) => [
 				name,
 				{
-					template: task.template,
+					...(task.template === undefined ? {} : { template: task.template }),
+					...(task.action === undefined ? {} : { action: task.action }),
+					...(task.method === undefined ? {} : { method: task.method }),
 					...(task.agent === undefined ? {} : { agent: task.agent }),
 					...(task.model === undefined ? {} : { model: task.model }),
 					...(task.thinking === undefined ? {} : { thinking: task.thinking }),

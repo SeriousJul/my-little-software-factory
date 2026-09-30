@@ -53,7 +53,7 @@ import { isCoveredByFixingPullRequest, NO_LINKED_PULL_REQUEST_SKIP } from "./wor
 
 /** The schema every state file the plane opens is brought to. Exported so a
  * test can assert the stamp a migration left instead of copying the number. */
-export const SCHEMA_VERSION = 24;
+export const SCHEMA_VERSION = 26;
 type Health = SourceMembership["health"];
 
 export class StateError extends Error {
@@ -118,17 +118,82 @@ export interface WorkQueueConsultationItem {
 	enqueuedAt: string;
 }
 
-/** The two kinds of starts the Work queue holds, in one shared order. */
-export type WorkQueueItem = WorkQueueHandoffItem | WorkQueueConsultationItem;
+/**
+ * A plane action's item in the Work queue (ADR 0068): the merge of the
+ * ticket's pull request, waiting for its pickup. The item takes no seat
+ * from the Parallel limit and no place in the Handoff limit's reads: the
+ * action holds no agent, and the limit counts the starts the plane asked
+ * for, which the plane action's attempt record stands for on its own.
+ * The row's cells mirror a handoff row's: the ticket identity, the route
+ * it continues, and the origin the pickup re-checks, and the action cell
+ * names the task type whose action form the pickup runs.
+ */
+export interface WorkQueuePlaneActionItem {
+	kind: "plane-action";
+	position: number;
+	ticketIdentity: string;
+	routeFromIdentity: string | null;
+	/** True for the automatic adds the top-up makes. */
+	automatic: boolean;
+	origin: HandoffOrigin;
+	/** The task type whose action form the pickup runs. */
+	taskType: string;
+	enqueuedAt: string;
+}
+
+/**
+ * The outcome the plane action's attempt records (ADR 0068): the merge ran
+ * and landed, or the source refused it and the reason it gave stands on the
+ * row beside the comment it posted.
+ */
+export type PlaneActionOutcome = "merged" | "blocked";
+
+/**
+ * One plane action attempt of one ticket, as the control plane stored it
+ * (ADR 0068). The attempt stands where the Completion trace stands for the
+ * work: the decision word that asked for it, the outcome, the reason, and
+ * the transition fact the outcome's fire wrote on the row, null until the
+ * fire lands it.
+ */
+export interface PlaneActionAttempt {
+	id: string;
+	ticketIdentity: string;
+	taskType: string;
+	decision: CompletionDecision;
+	outcome: PlaneActionOutcome;
+	/** The reason the source gave for the block; empty when the merge landed. */
+	reason: string;
+	/** The transition fact the outcome's fire wrote; null until it lands. */
+	transition: TransitionOutcome | null;
+	at: string;
+}
+
+/** The attempt's row in the table. */
+interface PlaneActionAttemptRow {
+	id: string;
+	ticket_identity: string;
+	task_type: string;
+	decision: string;
+	outcome: string;
+	reason: string;
+	transition_json: string | null;
+	at: string;
+}
+
+/** The three kinds of starts the Work queue holds, in one shared order. */
+export type WorkQueueItem =
+	| WorkQueueHandoffItem
+	| WorkQueueConsultationItem
+	| WorkQueuePlaneActionItem;
 
 /** The identity a Work queue row names: the ticket or the Consultation. */
 export function workQueueIdentityOf(item: WorkQueueItem): string {
-	return item.kind === "handoff" ? item.ticketIdentity : item.consultationId;
+	return item.kind === "consultation" ? item.consultationId : item.ticketIdentity;
 }
 
 /** The identity's column in the table, by the row's kind. */
 function identityColumn(item: WorkQueueItem): string {
-	return item.kind === "handoff" ? "ticket_identity" : "consultation_id";
+	return item.kind === "consultation" ? "consultation_id" : "ticket_identity";
 }
 
 /**
@@ -1036,6 +1101,35 @@ CREATE TABLE group_order(
 );
 `;
 
+/**
+ * The plane action's attempt (ADR 0068): the durable record of the merge the
+ * plane ran. The row stands for the Handoff limit's count of the ticket's
+ * merge attempts, and the outcome's fire writes its fact on the row, because
+ * no Completion trace stands for the action. The table is new, so it is asked
+ * for by name, the way the queue pause and the grouping axis are.
+ */
+const MIGRATION_V25_TO_V26_PLANE_ACTION_ATTEMPTS = `
+CREATE TABLE IF NOT EXISTS plane_action_attempts (
+	id TEXT PRIMARY KEY,
+	ticket_identity TEXT NOT NULL,
+	task_type TEXT NOT NULL,
+	decision TEXT NOT NULL,
+	outcome TEXT NOT NULL,
+	reason TEXT NOT NULL,
+	transition_json TEXT,
+	at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_plane_action_attempts_ticket ON plane_action_attempts (ticket_identity, at);
+`;
+/**
+ * The action cell of the Work queue (ADR 0068): the task type whose action
+ * form the row's pickup runs. Null on every row the cell predates, and the
+ * only row it stands for is a plane action's. Asked for by column, the way
+ * the route's cell is.
+ */
+const MIGRATION_V24_TO_V25_QUEUE_ACTION =
+	"ALTER TABLE work_queue ADD COLUMN action_task_type TEXT;";
+
 /** Open state synchronously after creating its parent directory. */
 export function openFactoryState(path: string, now?: () => number): FactoryState {
 	try {
@@ -1210,6 +1304,13 @@ export class FactoryState {
 			// ran keeps its stored order, and an older file opens with no order,
 			// which the read answers with the axis' default (ADR 0071).
 			if (!this.hasTable("group_order")) this.db.exec(MIGRATION_V23_TO_V24_GROUP_ORDER);
+			// Ask the file, not the stamp: the queue's action cell is asked by
+			// column, the way the route's cell is, and the attempt table is
+			// asked by name, the way the queue pause is.
+			if (!this.hasColumn("work_queue", "action_task_type"))
+				this.db.exec(MIGRATION_V24_TO_V25_QUEUE_ACTION);
+			if (!this.hasTable("plane_action_attempts"))
+				this.db.exec(MIGRATION_V25_TO_V26_PLANE_ACTION_ATTEMPTS);
 			this.db.exec("DELETE FROM schema_version");
 			this.db.prepare("INSERT INTO schema_version(version) VALUES (?)").run(SCHEMA_VERSION);
 			this.db.exec("COMMIT");
@@ -1582,12 +1683,157 @@ export class FactoryState {
 		};
 	}
 
-	/** The total handoffs ever recorded for a ticket, across work cycles. */
+	/**
+	 * The total handoffs ever recorded for a ticket, across work cycles - and
+	 * the plane action's attempts count with them (ADR 0068): the Handoff
+	 * limit's read counts the starts the plane asked for, and a merge attempt
+	 * is the plane's ask for the merge, the way a handoff is the plane's ask
+	 * for the work.
+	 */
 	handoffCount(identity: string): number {
 		const row = this.db
-			.prepare("SELECT COUNT(*) AS count FROM handoffs WHERE ticket_identity = ?")
+			.prepare(
+				"SELECT (SELECT COUNT(*) FROM handoffs WHERE ticket_identity = ?) + (SELECT COUNT(*) FROM plane_action_attempts WHERE ticket_identity = ?) AS count",
+			)
+			.get(identity, identity) as { count: number };
+		return row.count;
+	}
+
+	/**
+	 * Record the plane action's attempt on the ticket (ADR 0068). The row
+	 * stands for the merge the plane ran, with its outcome, its reason, and
+	 * the decision word that asked for it: the attempt is the durable record
+	 * the Handoff limit counts, and the outcome's fire lands its fact on the
+	 * row, because no Completion trace stands for the action.
+	 */
+	recordPlaneActionAttempt(input: {
+		ticketIdentity: string;
+		taskType: string;
+		decision: CompletionDecision;
+		outcome: "merged" | "blocked";
+		reason: string;
+		at: string;
+	}): { id: string } {
+		const id = randomUUID();
+		this.transaction(() => {
+			this.db
+				.prepare(
+					"INSERT INTO plane_action_attempts (id, ticket_identity, task_type, decision, outcome, reason, at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+				)
+				.run(
+					id,
+					input.ticketIdentity,
+					input.taskType,
+					input.decision,
+					input.outcome,
+					input.reason,
+					input.at,
+				);
+		});
+		return { id };
+	}
+
+	/**
+	 * Land the outcome's fire fact on the attempt's record (ADR 0068). The
+	 * write is conditional on the cell being empty: an attempt that already
+	 * carries its outcome keeps it, so a fire that runs twice - the
+	 * crash-restart of a blocked merge - writes the fact once, the way the
+	 * label write it converges. Returns whether the fact landed.
+	 */
+	recordPlaneActionAttemptOutcome(attemptId: string, outcome: TransitionOutcome): boolean {
+		return this.transaction(() => {
+			const result = this.db
+				.prepare(
+					"UPDATE plane_action_attempts SET transition_json = ? WHERE id = ? AND transition_json IS NULL",
+				)
+				.run(JSON.stringify(outcome), attemptId);
+			return Number(result.changes) > 0;
+		});
+	}
+
+	/** The ticket's plane action attempts, newest first. */
+	planeActionAttempts(identity: string): PlaneActionAttempt[] {
+		const rows = this.db
+			.prepare(
+				"SELECT id, ticket_identity, task_type, decision, outcome, reason, transition_json, at FROM plane_action_attempts WHERE ticket_identity = ? ORDER BY at DESC, rowid DESC",
+			)
+			.all(identity) as Array<PlaneActionAttemptRow>;
+		return rows.map((row) => planeActionAttemptOf(row));
+	}
+
+	/** The ticket's latest plane action attempt, or null when none ran. */
+	latestPlaneActionAttempt(identity: string): PlaneActionAttempt | null {
+		const rows = this.db
+			.prepare(
+				"SELECT id, ticket_identity, task_type, decision, outcome, reason, transition_json, at FROM plane_action_attempts WHERE ticket_identity = ? ORDER BY at DESC, rowid DESC LIMIT 1",
+			)
+			.all(identity) as Array<PlaneActionAttemptRow>;
+		return rows.length === 0 ? null : planeActionAttemptOf(rows[0]);
+	}
+
+	/** The total plane action attempts recorded for a ticket. */
+	planeActionAttemptCount(identity: string): number {
+		const row = this.db
+			.prepare("SELECT COUNT(*) AS count FROM plane_action_attempts WHERE ticket_identity = ?")
 			.get(identity) as { count: number };
 		return row.count;
+	}
+
+	/**
+	 * Land the plane action's wait on the open ticket (ADR 0068): the direct
+	 * add from an open position asks for the merge before the ticket ever
+	 * settled a turn, so the decision write has no pending row to land on and
+	 * the wait lands on the open state alone. A ticket that left open behind
+	 * the add changes nothing.
+	 */
+	queuePlaneActionRoute(ticketIdentity: string): boolean {
+		return this.transaction(() => {
+			const result = this.db
+				.prepare("UPDATE tickets SET state = 'queued' WHERE identity = ? AND state = 'open'")
+				.run(ticketIdentity);
+			return Number(result.changes) > 0;
+		});
+	}
+
+	/**
+	 * Settle the queued merge route without a work cycle (ADR 0068): the
+	 * pickup ran the action, the merge settles, and the ticket returns to
+	 * open without a cycle increment, because no work cycle ran for it. A
+	 * ticket that left queued behind the settle changes nothing.
+	 */
+	settleQueuedPlaneActionRoute(ticketIdentity: string): boolean {
+		return this.transaction(() => Number(this.settleQueuedNoCycle(ticketIdentity).changes) > 0);
+	}
+
+	/**
+	 * The settle's own statement: the queued wait returns to open without a
+	 * work cycle. The route's settle wraps it in its own write, and the
+	 * cancel's plane branch runs it inside the cancel's write, so both settle
+	 * the same wait through this one statement (ADR 0068, ADR 0069).
+	 */
+	private settleQueuedNoCycle(ticketIdentity: string) {
+		return this.db
+			.prepare("UPDATE tickets SET state = 'open' WHERE identity = ? AND state = 'queued'")
+			.run(ticketIdentity);
+	}
+
+	/**
+	 * End the cycle of the source a dropped plane action row named (ADR
+	 * 0069, beside ADR 0068): the drop, like the cancel, leaves a route that
+	 * decided its turn and then lost its start without a run, so the source
+	 * rests open with the cycle counted once, the way a close ends the cycle
+	 * the turn routed from. A source that left the queued wait behind the
+	 * settle changes nothing.
+	 */
+	settleDroppedPlaneActionRouteSource(routeFromIdentity: string): boolean {
+		return this.transaction(() => {
+			const result = this.db
+				.prepare(
+					"UPDATE tickets SET state = 'open', work_cycle = work_cycle + 1 WHERE identity = ? AND state = 'queued'",
+				)
+				.run(routeFromIdentity);
+			return Number(result.changes) > 0;
+		});
 	}
 
 	/** The ticket's latest settled turn, or null when none settled yet. */
@@ -2426,7 +2672,7 @@ export class FactoryState {
 	workQueue(): WorkQueueItem[] {
 		const rows = this.db
 			.prepare(
-				"SELECT position, ticket_identity, consultation_id, origin, choice_json, previous_message, enqueued_at, route_from_identity, is_automatic FROM work_queue ORDER BY position ASC",
+				"SELECT position, ticket_identity, consultation_id, origin, choice_json, previous_message, enqueued_at, route_from_identity, is_automatic, action_task_type FROM work_queue ORDER BY position ASC",
 			)
 			.all() as Array<{
 			position: number;
@@ -2438,6 +2684,7 @@ export class FactoryState {
 			enqueued_at: string;
 			route_from_identity: string | null;
 			is_automatic: number;
+			action_task_type: string | null;
 		}>;
 		const items: WorkQueueItem[] = [];
 		for (const row of rows) {
@@ -2446,6 +2693,24 @@ export class FactoryState {
 					row.origin === "open" || row.origin === "workflow" || row.origin === "restart"
 						? (row.origin as HandoffOrigin)
 						: undefined;
+				// The action cell stands for the plane action's row (ADR 0068):
+				// the task type whose action form the pickup runs, and no choice
+				// to lose, so a row the reader cannot read as one is a row the
+				// schema never committed.
+				if (row.action_task_type !== null) {
+					if (origin === undefined) continue;
+					items.push({
+						kind: "plane-action",
+						position: row.position,
+						ticketIdentity: row.ticket_identity,
+						routeFromIdentity: row.route_from_identity,
+						automatic: row.is_automatic === 1,
+						origin,
+						taskType: row.action_task_type,
+						enqueuedAt: row.enqueued_at,
+					});
+					continue;
+				}
 				const choice = row.choice_json === null ? undefined : jsonChoice(row.choice_json);
 				if (origin === undefined || choice === undefined) continue;
 				items.push({
@@ -2537,6 +2802,57 @@ export class FactoryState {
 	}
 
 	/**
+	 * Add the plane action's item to the end of the queue (ADR 0068). The item
+	 * is the merge of the ticket's pull request, and the action cell names the
+	 * task type whose action form the pickup runs: the pickup re-reads the
+	 * type's settings from the config when it runs, the way the Consultation's
+	 * pickup does. The queue holds at most one item per ticket across kinds:
+	 * a second add for a ticket that already waits is refused, the way the
+	 * handoff's add is.
+	 */
+	enqueuePlaneActionWork(entry: {
+		ticketIdentity: string;
+		/** The ticket the route's action continues; null for a start that is no route. */
+		routeFromIdentity?: string | null;
+		origin: HandoffOrigin;
+		/** The task type whose action form the pickup runs. */
+		taskType: string;
+		/** True for the automatic add the top-up makes. */
+		automatic?: boolean;
+	}): { ok: true } | { ok: false; reason: string } {
+		try {
+			return this.transaction(() => {
+				const existing = this.db
+					.prepare("SELECT 1 FROM work_queue WHERE ticket_identity = ?")
+					.get(entry.ticketIdentity);
+				if (existing !== null && existing !== undefined)
+					return {
+						ok: false,
+						reason: `ticket ${entry.ticketIdentity} already has a waiting queue item`,
+					};
+				this.db
+					.prepare(
+						"INSERT INTO work_queue(position, ticket_identity, route_from_identity, origin, choice_json, previous_message, enqueued_at, is_automatic, action_task_type) VALUES (COALESCE((SELECT MAX(position) FROM work_queue), -1) + 1, ?, ?, ?, NULL, '', ?, ?, ?)",
+					)
+					.run(
+						entry.ticketIdentity,
+						normalizeRouteFromIdentity(entry.ticketIdentity, entry.routeFromIdentity),
+						entry.origin,
+						new Date(this.now()).toISOString(),
+						entry.automatic === true ? 1 : 0,
+						entry.taskType,
+					);
+				return { ok: true };
+			});
+		} catch (error) {
+			return {
+				ok: false,
+				reason: `cannot enqueue the plane action: ${error instanceof Error ? error.message : String(error)}`,
+			};
+		}
+	}
+
+	/**
 	 * Add the `queued` Consultation's item to the end of the queue (ADR 0034,
 	 * issue #90). The item is the pointer to the record: the record holds the
 	 * operator's ask, and the pickup re-reads the type's settings when it
@@ -2591,15 +2907,29 @@ export class FactoryState {
 	 * ask recorded stands on the trace. A start with no route keeps the
 	 * ticket's state, the way the row's removal always did, and a route whose
 	 * source already left the queued wait behind the removal moves nothing.
+	 *
+	 * The plane action's row (ADR 0068) settles its own ticket the way the
+	 * run's answer does: back to open without a work cycle, because the merge
+	 * action opens no cycle and the cap counts the work a ticket carried, not
+	 * its merges. The route the row carries still ends its cycle with the
+	 * count, the way a cancelled handoff route does.
 	 */
 	cancelWorkItem(ticketIdentity: string): boolean {
 		return this.transaction(() => {
 			const row = this.db
-				.prepare("SELECT route_from_identity FROM work_queue WHERE ticket_identity = ?")
-				.get(ticketIdentity) as { route_from_identity: string | null } | null;
+				.prepare(
+					"SELECT route_from_identity, action_task_type FROM work_queue WHERE ticket_identity = ?",
+				)
+				.get(ticketIdentity) as {
+				route_from_identity: string | null;
+				action_task_type: string | null;
+			} | null;
 			if (row === null) return false;
 			this.db.prepare("DELETE FROM work_queue WHERE ticket_identity = ?").run(ticketIdentity);
 			this.repackWorkQueuePositions();
+			if (row.action_task_type !== null) {
+				this.settleQueuedNoCycle(ticketIdentity);
+			}
 			if (row.route_from_identity !== null) {
 				this.db
 					.prepare(
@@ -3055,8 +3385,16 @@ export class FactoryState {
 		}
 		// A route decision lands its wait (ADR 0067): the settled ticket leaves
 		// awaiting for queued in the same write that lands the decision, and the
-		// guard on awaiting keeps a re-confirm of a dead route a no-op.
-		if (input.decision === "handed-off" || input.decision === "auto-handed-off") {
+		// guard on awaiting keeps a re-confirm of a dead route a no-op. The
+		// plane action's merge decisions wait the same way (ADR 0068): the
+		// settled ticket leaves awaiting for queued with its merge waiting in
+		// the Work queue.
+		if (
+			input.decision === "handed-off" ||
+			input.decision === "auto-handed-off" ||
+			input.decision === "merged" ||
+			input.decision === "auto-merged"
+		) {
 			this.db
 				.prepare("UPDATE tickets SET state = 'queued' WHERE identity = ? AND state = 'awaiting'")
 				.run(input.ticketIdentity);
@@ -4552,6 +4890,22 @@ function isRecordOutcome(value: unknown): value is TransitionOutcome {
 	if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
 	const outcome = value as Record<string, unknown>;
 	return typeof outcome.fired === "boolean" && typeof outcome.writeFailure === "string";
+}
+
+/** The attempt a row holds, or null when the row's cells carry no readable attempt. */
+function planeActionAttemptOf(row: PlaneActionAttemptRow): PlaneActionAttempt {
+	const decision: CompletionDecision =
+		row.decision === "merged" || row.decision === "auto-merged" ? row.decision : "merged";
+	return {
+		id: row.id,
+		ticketIdentity: row.ticket_identity,
+		taskType: row.task_type,
+		decision,
+		outcome: row.outcome === "blocked" ? "blocked" : "merged",
+		reason: row.reason,
+		transition: transitionOf(row.transition_json),
+		at: row.at,
+	};
 }
 
 function jsonChoice(value: string): HandoffChoice | undefined {

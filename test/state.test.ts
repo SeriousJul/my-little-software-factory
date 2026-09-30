@@ -1307,6 +1307,73 @@ describe("factory SQLite state", () => {
 			expect(ticketState(state, identity)?.workCycle).toBe(2);
 			state.close();
 		});
+
+		test("the cancel of the merge's item settles the route without a work cycle (ADR 0068, ADR 0069)", () => {
+			const state = openFactoryState(":memory:");
+			state.initializeSources([sourceA]);
+			state.applyFetch(sourceA, success([fetched()]));
+			const identity = "github:github.com:I_5";
+			// The merge route stands: the ticket waits in queued for its
+			// pickup, the wait the route's ask lands.
+			expect(state.queuePlaneActionRoute(identity)).toBe(true);
+			expect(
+				state.enqueuePlaneActionWork({
+					ticketIdentity: identity,
+					origin: "open",
+					taskType: "merge",
+				}),
+			).toEqual({ ok: true });
+			// The operator removes the item: the row leaves, and the route
+			// settles back to open without a work cycle, the way the run's
+			// answer does. The cap counts the work a ticket carried, not its
+			// merges, and the choice to run or to cancel changes nothing.
+			expect(state.cancelWorkItem(identity)).toBe(true);
+			expect(state.ticketState(identity)).toBe("open");
+			expect(ticketState(state, identity)?.workCycle).toBe(1);
+			expect(state.workQueue()).toHaveLength(0);
+			state.close();
+		});
+
+		test("the cancel of the merge's item still ends the cycle the route named (ADR 0069)", () => {
+			const state = openFactoryState(":memory:");
+			state.initializeSources([sourceA]);
+			state.applyFetch(sourceA, success([fetched("github:github.com:I_6"), fetched()]));
+			const { identity, attemptId } = settledTurn(state);
+			expect(
+				state.applyCompletionDecision({
+					ticketIdentity: identity,
+					handoffId: attemptId,
+					decision: "auto-merged",
+					decidedAt: "2026-08-31T11:10:00Z",
+				}),
+			).toBe(true);
+			expect(state.ticketState(identity)).toBe("queued");
+			// The merge's item crosses to the fixing pull request's ticket:
+			// its wait stands under that ticket's name, beside the settled
+			// ticket's own wait.
+			expect(state.queuePlaneActionRoute("github:github.com:I_6")).toBe(true);
+			expect(
+				state.enqueuePlaneActionWork({
+					ticketIdentity: "github:github.com:I_6",
+					routeFromIdentity: identity,
+					origin: "workflow",
+					taskType: "merge",
+				}),
+			).toEqual({ ok: true });
+			// The operator removes the item: the row leaves, the merge's own
+			// wait settles back to open without a work cycle, and the route's
+			// source ends its cycle with the count, the way a cancelled
+			// handoff route does.
+			expect(state.cancelWorkItem("github:github.com:I_6")).toBe(true);
+			expect(state.ticketState("github:github.com:I_6")).toBe("open");
+			expect(ticketState(state, "github:github.com:I_6")?.workCycle).toBe(1);
+			const settled = ticketState(state, identity);
+			if (settled === undefined) throw new Error("the settled ticket left the list");
+			expect(settled.state).toBe("open");
+			expect(settled.workCycle).toBe(2);
+			expect(state.workQueue()).toHaveLength(0);
+			state.close();
+		});
 	});
 
 	test("only a cycle end moves the work cycle, the fact the gates count on (ADR 0031)", () => {
@@ -1332,17 +1399,18 @@ describe("factory SQLite state", () => {
 		// last runs only from awaiting or queued, so it too moves the number on
 		// an end, exactly once - the route's start that ends the settled
 		// ticket's cycle on a different ticket (ADR 0067), which runs only from
-		// queued - the operator's cancel of a route item that ends the cycle the
-		// route named (ADR 0069), which runs only from queued as well - and the
-		// source's mute that settles the queued tickets whose route died with its
-		// items (ADR 0070), which runs the same queued-end statement, only from
-		// queued.
+		// queued - the two settles of a route item lost without a run,
+		// the operator's cancel (ADR 0069) and the pickup's drop of the plane
+		// action's row (ADR 0069, beside ADR 0068), each of which ends the cycle
+		// the route named and runs only from queued - and the source's mute that
+		// settles the queued tickets whose route died with its items (ADR 0070),
+		// which runs the same queued-end statement, only from queued.
 		expect([...new Set(statements)].sort()).toEqual([
 			"\"UPDATE tickets SET state = 'open', work_cycle = work_cycle + 1 WHERE identity = ? AND state = 'queued'\"",
 			"\"UPDATE tickets SET state = 'open', work_cycle = work_cycle + 1 WHERE identity = ? AND state IN ('awaiting', 'queued')\"",
 			"\"UPDATE tickets SET state = 'open', work_cycle = work_cycle + 1 WHERE identity = ?\"",
 		]);
-		expect(statements.length).toBe(6);
+		expect(statements.length).toBe(7);
 		// A cycle's moves that end nothing hold the number: the handoff that starts
 		// a cycle, the running mark, a settled turn, and a reclaimed handoff.
 		const state = openFactoryState(":memory:");

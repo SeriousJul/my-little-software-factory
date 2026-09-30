@@ -57,6 +57,16 @@ continuation walk reads only `awaiting` and `queued` tickets: the operator
 took the route away, and the machine does not bring it back. A new start of
 the ticket opens a new cycle, and its own turn decides again.
 
+**The plane action's row settles without a work cycle (ADR 0068).** The
+merge row's own ticket wears `queued` for the route the merge waits on, and
+the run's answer settles that wait back to open without a work cycle,
+because the merge action opens no cycle and the cap counts the work a
+ticket carried, not its merges. The cancel's answer settles the same wait
+the same way, so the operator's choice to run or to cancel does not change
+the cycle the ticket carries. The route the row carries still ends its
+cycle with the count, the way a cancelled handoff route does: that ticket
+decided a turn, and the turn's start was lost.
+
 The same write hygiene lands on the Consultation's pointer removal: the
 pickup's start, the close, and the delete each repack the queue's places
 behind the pointer they take, the way every other removal does, so a queue
