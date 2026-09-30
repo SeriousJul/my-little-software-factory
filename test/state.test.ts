@@ -1173,6 +1173,140 @@ describe("factory SQLite state", () => {
 			expect(waiting.origin).toBe("open");
 			state.close();
 		});
+
+		test("the cancel of the route's item ends the cycle it routed from (ADR 0069)", () => {
+			const state = openFactoryState(":memory:");
+			state.initializeSources([sourceA]);
+			state.applyFetch(sourceA, success([fetched("github:github.com:I_6"), fetched()]));
+			const { identity, attemptId } = settledTurn(state);
+			expect(
+				state.applyCompletionDecision({
+					ticketIdentity: identity,
+					handoffId: attemptId,
+					decision: "handed-off",
+					decidedAt: "2026-08-31T11:10:00Z",
+				}),
+			).toBe(true);
+			expect(state.ticketState(identity)).toBe("queued");
+			expect(
+				state.enqueueWork({
+					ticketIdentity: "github:github.com:I_6",
+					routeFromIdentity: identity,
+					origin: "workflow",
+					choice,
+					previousMessage: "settled the turn",
+				}),
+			).toEqual({ ok: true });
+			// The operator removes the item: the row leaves, and the source
+			// ends its cycle in the same write. The ticket rests open with the
+			// cycle counted once, the way a close ends it, and the decision the
+			// ask recorded stands on the trace.
+			expect(state.cancelWorkItem("github:github.com:I_6")).toBe(true);
+			const settled = ticketState(state, identity);
+			if (settled === undefined) throw new Error("the settled ticket left the list");
+			expect(settled.state).toBe("open");
+			expect(settled.workCycle).toBe(2);
+			expect(state.workQueue()).toHaveLength(0);
+			expect(state.lastCompletion(identity)?.decision).toBe("handed-off");
+			// The cancelled start may enqueue again for its ticket.
+			expect(
+				state.enqueueWork({
+					ticketIdentity: identity,
+					origin: "open",
+					choice,
+					previousMessage: "asked by hand",
+				}),
+			).toEqual({ ok: true });
+			expect(state.workQueue().map(workQueueIdentityOf)).toEqual([identity]);
+			state.close();
+		});
+
+		test("a cancel keeps the ticket's state when the row names no route (ADR 0069)", () => {
+			const state = openFactoryState(":memory:");
+			state.initializeSources([sourceA]);
+			state.applyFetch(sourceA, success([fetched("github:github.com:I_6"), fetched()]));
+			const { identity, attemptId } = settledTurn(state);
+			expect(
+				state.applyCompletionDecision({
+					ticketIdentity: identity,
+					handoffId: attemptId,
+					decision: "handed-off",
+					decidedAt: "2026-08-31T11:10:00Z",
+				}),
+			).toBe(true);
+			// The ticket's own open-origin wait stands beside the route's item
+			// under the position's name.
+			expect(
+				state.enqueueWork({
+					ticketIdentity: identity,
+					origin: "open",
+					choice,
+					previousMessage: "asked by hand",
+				}),
+			).toEqual({ ok: true });
+			expect(
+				state.enqueueWork({
+					ticketIdentity: "github:github.com:I_6",
+					routeFromIdentity: identity,
+					origin: "workflow",
+					choice,
+					previousMessage: "the route",
+				}),
+			).toEqual({ ok: true });
+			// The operator removes the ticket's own wait: the row leaves, the
+			// route's item stands, and the ticket keeps the queued wait its
+			// route holds.
+			expect(state.cancelWorkItem(identity)).toBe(true);
+			expect(state.workQueue()).toHaveLength(1);
+			expect(state.ticketState(identity)).toBe("queued");
+			expect(ticketState(state, identity)?.workCycle).toBe(1);
+			// A second cancel answers false and moves nothing.
+			expect(state.cancelWorkItem(identity)).toBe(false);
+			expect(state.ticketState(identity)).toBe("queued");
+			state.close();
+		});
+
+		test("a cancel of a route whose source already left the wait moves nothing (ADR 0069)", () => {
+			const state = openFactoryState(":memory:");
+			state.initializeSources([sourceA]);
+			state.applyFetch(sourceA, success([fetched("github:github.com:I_6"), fetched()]));
+			const { identity, attemptId } = settledTurn(state);
+			expect(
+				state.applyCompletionDecision({
+					ticketIdentity: identity,
+					handoffId: attemptId,
+					decision: "handed-off",
+					decidedAt: "2026-08-31T11:10:00Z",
+				}),
+			).toBe(true);
+			expect(
+				state.enqueueWork({
+					ticketIdentity: "github:github.com:I_6",
+					routeFromIdentity: identity,
+					origin: "workflow",
+					choice,
+					previousMessage: "the route",
+				}),
+			).toEqual({ ok: true });
+			// The close ends the cycle the turn routed from, and the route's
+			// item stands until the close takes it.
+			expect(
+				state.applyCompletionDecision({
+					ticketIdentity: identity,
+					handoffId: attemptId,
+					decision: "closed",
+					decidedAt: "2026-08-31T11:20:00Z",
+				}),
+			).toBe(true);
+			expect(ticketState(state, identity)?.state).toBe("open");
+			expect(ticketState(state, identity)?.workCycle).toBe(2);
+			// The cancel that lands on the item after the move takes the row
+			// and nothing else.
+			expect(state.cancelWorkItem("github:github.com:I_6")).toBe(true);
+			expect(state.workQueue()).toHaveLength(0);
+			expect(ticketState(state, identity)?.workCycle).toBe(2);
+			state.close();
+		});
 	});
 
 	test("only a cycle end moves the work cycle, the fact the gates count on (ADR 0031)", () => {
@@ -1196,15 +1330,16 @@ describe("factory SQLite state", () => {
 		// The ends: the decided close of a settled turn, the in-flight Close
 		// that writes no trace, the close of a turn the route decided - the
 		// last runs only from awaiting or queued, so it too moves the number on
-		// an end, exactly once - and the route's start that ends the settled
+		// an end, exactly once - the route's start that ends the settled
 		// ticket's cycle on a different ticket (ADR 0067), which runs only from
-		// queued.
+		// queued - and the operator's cancel of a route item that ends the cycle
+		// the route named (ADR 0069), which runs only from queued as well.
 		expect([...new Set(statements)].sort()).toEqual([
 			"\"UPDATE tickets SET state = 'open', work_cycle = work_cycle + 1 WHERE identity = ? AND state = 'queued'\"",
 			"\"UPDATE tickets SET state = 'open', work_cycle = work_cycle + 1 WHERE identity = ? AND state IN ('awaiting', 'queued')\"",
 			"\"UPDATE tickets SET state = 'open', work_cycle = work_cycle + 1 WHERE identity = ?\"",
 		]);
-		expect(statements.length).toBe(4);
+		expect(statements.length).toBe(5);
 		// A cycle's moves that end nothing hold the number: the handoff that starts
 		// a cycle, the running mark, a settled turn, and a reclaimed handoff.
 		const state = openFactoryState(":memory:");
@@ -3834,10 +3969,14 @@ describe("the Work queue's Consultation items (ADR 0034, issue #90)", () => {
 		// The pickup's seat: the claim and the pointer's removal are one write,
 		// so no cycle that dies between them leaves an item behind.
 		expect(state.beginConsultationStart(claimed.id)).toBe(true);
+		// The pointer's removal repacks the places behind it, the way every
+		// other removal does: the queue never holds a number it does not use.
+		expect(state.workQueue().map((item) => item.position)).toEqual([0, 1]);
 		// The close: the operator abandoned the ask, so its item goes with it.
 		expect(state.beginConsultationClose(closed.id)).toBe(true);
 		state.finishConsultationClose(closed.id);
 		expect(state.workQueue().map(workQueueIdentityOf)).toEqual([deleted.id]);
+		expect(state.workQueue().map((item) => item.position)).toEqual([0]);
 		// The delete of a record whose pointer outlived it takes that pointer
 		// too: the queue never lists an item that names no record.
 		expect(state.beginConsultationClose(deleted.id)).toBe(true);

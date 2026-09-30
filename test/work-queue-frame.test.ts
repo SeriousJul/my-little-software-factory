@@ -857,6 +857,87 @@ describe("the Work queue section", () => {
 	});
 
 	/**
+	 * ADR 0069: the operator's Delete on a route item ends the cycle the turn
+	 * routed from. The row leaves the queue, and the ticket the row named as
+	 * the route's source rests `open` with the cycle counted once, so the
+	 * `[queued]` badge leaves the row in the same frame the item leaves the
+	 * queue, and the decision the ask recorded stands on the trace.
+	 */
+	test("Delete on the route item ends the settled ticket's cycle (ADR 0069)", async () => {
+		const state = openFactoryState(join(home, "state.sqlite"));
+		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
+		state.setGroupingAxis("tickets", "none");
+		const { source, runner } = queuedFixture(state, false);
+		const outcome = success(twoTickets());
+		// The first ticket's turn settles and routes to the second's position:
+		// the decision records at the ask and moves the ticket to the queued
+		// wait, and the second ticket's durable claim holds the one seat, so
+		// the route's item waits in the queue.
+		const attemptId = seedAwaitingTurn(state, outcome, FIRST);
+		expect(
+			state.applyCompletionDecision({
+				ticketIdentity: FIRST,
+				handoffId: attemptId,
+				decision: "handed-off",
+				decidedAt: "2026-08-31T11:10:00Z",
+			}),
+		).toBe(true);
+		const held = state.claimHandoff(SECOND, baseChoice("pi", "live-worktree", "implement"), "open");
+		if (!held.ok) throw new Error(held.reason);
+		const enqueued = state.enqueueWork({
+			ticketIdentity: SECOND,
+			routeFromIdentity: FIRST,
+			origin: "workflow",
+			choice: baseChoice("pi", "live-worktree", "implement"),
+			previousMessage: "the turn is done",
+		});
+		if (!enqueued.ok) throw new Error(enqueued.reason);
+		try {
+			await booted(
+				async (setup) => {
+					source.settle(outcome);
+					const waiting = await awaitFrame(
+						setup,
+						(f) => f.includes("Work") && f.includes("waiting: 1"),
+						"the queue's wait",
+					);
+					// The settled ticket stands queued while its route waits: the
+					// badge is the state badge, the wait its own row.
+					expect(frameText(waiting)).toContain("[queued]");
+					// The operator's Delete takes the route's item.
+					await clickWorkHeader(setup);
+					await awaitFrame(setup, (f) => f.includes("▾ Work"), "the expanded Work section");
+					await press(setup, "delete", "the route item to cancel", (f) =>
+						f.includes(`waiting start for "Close the stale deploy branch"`),
+					);
+					const after = await settle(setup);
+					// The ticket's row rests open with the state badge again, and
+					// the queue stands empty behind it.
+					const row = rowsOf(stripAnsi(after)).find(
+						(candidate) =>
+							candidate.includes("Add a webhook") && /\[(open|queued)\]/.test(candidate),
+					);
+					expect(row).toContain("[open]");
+					expect(frameText(after)).not.toContain("[queued]");
+					// The cycle counted once, and the decision stands where the
+					// ask put it.
+					const ticket = state
+						.visibleTickets([], "implement")
+						.find((candidate) => candidate.identity === FIRST);
+					expect(ticket?.state).toBe("open");
+					expect(ticket?.workCycle).toBe(2);
+					expect(state.lastCompletion(FIRST)?.decision).toBe("handed-off");
+				},
+				state,
+				source,
+				runner,
+			);
+		} finally {
+			state.close();
+		}
+	});
+
+	/**
 	 * The Consultation section's keys refuse the Work queue too (issue #85,
 	 * ADR 0034). The Work queue shares the list surface and the base modes with
 	 * the other two sections, so `f` History and the detail pane's `d` reach a

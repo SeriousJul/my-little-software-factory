@@ -3397,6 +3397,39 @@ describe("the decision screen's route close", () => {
 		expect(settled?.lastCompletion?.decision).toBe("handed-off");
 	});
 
+	test("a cancel of the route item ends the settled ticket's cycle (ADR 0069)", async () => {
+		const rigRef = rig([ROUTE_SETTLED, ROUTE_TARGET]);
+		settleRoutePair(rigRef);
+		// Every seat is held: the route waits in the Work queue, and the ask
+		// moves the settled ticket to the wait with the decision it records.
+		const capped = withRunner(rigRef, rigRef.runner, {
+			seatCount: () => rigRef.config.maxParallelAgents,
+		});
+		await expect(
+			capped.dispatch({
+				origin: "workflow",
+				ticketIdentity: ROUTE_TARGET.identity,
+				routeFromIdentity: ROUTE_SETTLED.identity,
+				choice: liveChoice,
+				previousMessage: "the turn is done",
+			}),
+		).resolves.toEqual({ ok: true });
+		await seatReleased();
+		expect(rigRef.state.workQueue()).toHaveLength(1);
+		expect(rigRef.state.ticketState(ROUTE_SETTLED.identity)).toBe("queued");
+		// The operator removes the item: the row leaves, and the settled
+		// ticket's cycle ends in the same write, the way a close ends it.
+		expect(capped.removeQueueItem(ROUTE_TARGET.identity)).toBe(true);
+		expect(rigRef.state.workQueue()).toHaveLength(0);
+		const settled = rigRef.state
+			.visibleTickets(rigRef.config.workflowStates, rigRef.config.defaultTaskType)
+			.find((candidate) => candidate.identity === ROUTE_SETTLED.identity);
+		expect(settled?.state).toBe("open");
+		expect(settled?.workCycle).toBe(2);
+		// The decision stands on the settled turn whatever the move says.
+		expect(settled?.lastCompletion?.decision).toBe("handed-off");
+	});
+
 	test("a same-position pickup hands the queued ticket off in its own cycle (ADR 0067)", async () => {
 		const rigRef = rig();
 		const stored = seedHandoff(rigRef, FIRST, worktreeChoice);

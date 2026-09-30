@@ -576,14 +576,20 @@ class HandoffDispatchModule implements HandoffDispatch {
 	}
 
 	/**
-	 * Drop one ticket's waiting start and forget everything the module holds for
-	 * it: the Work queue's row, the claim a pickup parked behind the held herdr
-	 * seat, and the start report the ask handed the module. The row, the parked
-	 * claim, and the held intent are one waiting start seen three ways, so the
-	 * cancel ends all three together: the operator's cancel, the successful
-	 * pickup, and the restart-race cancellation all clear the same way, and a
-	 * run already inside herdr cannot be recalled, so it finishes, keeps the row
-	 * gone, and answers its own ask (ADR 0049).
+	 * Cancel one ticket's waiting start by the operator's hand and forget
+	 * everything the module holds for it: the Work queue's row, the claim a
+	 * pickup parked behind the held herdr seat, and the start report the ask
+	 * handed the module. The row, the parked claim, and the held intent are one
+	 * waiting start seen three ways, so the cancel ends all three together, and
+	 * a run already inside herdr cannot be recalled, so it finishes, keeps the
+	 * row gone, and answers its own ask (ADR 0049).
+	 *
+	 * The cancel is the operator's act on the row the queue shows, so it carries
+	 * the row's own consequence: a route the row named has decided its turn and
+	 * then lost its start, so the source rests `open` with the cycle counted
+	 * once, the way a close ends the cycle the turn routed from, and the
+	 * decision the ask recorded stands on the trace (ADR 0069). A start with no
+	 * route leaves the ticket in the state it wears.
 	 *
 	 * The false answer is a fact too: the row had already left, which is how the
 	 * answer of a pickup whose work was already inside herdr knows the operator
@@ -592,7 +598,8 @@ class HandoffDispatchModule implements HandoffDispatch {
 	 * stood when the keypress ran.
 	 */
 	removeQueueItem(ticketIdentity: string): boolean {
-		const removed = this.removeQueueRow(ticketIdentity);
+		const removed = this.state.cancelWorkItem(ticketIdentity);
+		this.cancelParkedPickup(ticketIdentity);
 		// A row that leaves without a claim still holds the ask's start report:
 		// the cancel answers it here, once, with the cancellation. Without this
 		// settle the held callback would survive the row and answer the next
@@ -611,9 +618,12 @@ class HandoffDispatchModule implements HandoffDispatch {
 
 	/**
 	 * The row's removal and the parked claim's cancellation, without the ask's
-	 * answer. Every internal path that drops a row settles the held intent
-	 * with its own reason around this call, so the ask hears the reason that
-	 * ended its item, not the cancel's.
+	 * answer. This is the claim's and the drop's removal: the pickup that takes
+	 * the row, the drop that leaves it with its warning, and the restart race
+	 * that clears it, and the ticket keeps the state it wore while it waited
+	 * (ADR 0049, ADR 0067). Every internal path that drops a row settles the
+	 * held intent with its own reason around this call, so the ask hears the
+	 * reason that ended its item, not the cancel's.
 	 */
 	private removeQueueRow(ticketIdentity: string): boolean {
 		const removed = this.state.removeWorkItem(ticketIdentity);

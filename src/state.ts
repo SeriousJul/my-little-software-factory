@@ -2329,6 +2329,35 @@ export class FactoryState {
 	}
 
 	/**
+	 * Cancel the ticket's waiting item by the operator's hand (ADR 0069): the
+	 * row leaves the queue in the same write that ends the cycle of the route
+	 * the row named. A route the row carries has decided its turn and then lost
+	 * its start, so the source rests `open` with the cycle counted once, the
+	 * way a close ends the cycle the turn routed from, and the decision the
+	 * ask recorded stands on the trace. A start with no route keeps the
+	 * ticket's state, the way the row's removal always did, and a route whose
+	 * source already left the queued wait behind the removal moves nothing.
+	 */
+	cancelWorkItem(ticketIdentity: string): boolean {
+		return this.transaction(() => {
+			const row = this.db
+				.prepare("SELECT route_from_identity FROM work_queue WHERE ticket_identity = ?")
+				.get(ticketIdentity) as { route_from_identity: string | null } | null;
+			if (row === null) return false;
+			this.db.prepare("DELETE FROM work_queue WHERE ticket_identity = ?").run(ticketIdentity);
+			this.repackWorkQueuePositions();
+			if (row.route_from_identity !== null) {
+				this.db
+					.prepare(
+						"UPDATE tickets SET state = 'open', work_cycle = work_cycle + 1 WHERE identity = ? AND state = 'queued'",
+					)
+					.run(row.route_from_identity);
+			}
+			return true;
+		});
+	}
+
+	/**
 	 * Remove the Consultation's item from the shared order (ADR 0034, issue
 	 * #90, unscheduled by issue #91). The removal is the item's, not the
 	 * record's: the ask stands behind the pointer it loses, and a record that
@@ -2393,10 +2422,12 @@ export class FactoryState {
 	 * The record and its item are created in one write, and every write that
 	 * ends the record's wait breaks them together here: the queue never keeps
 	 * an item for a record that no longer waits, and never lists an item that
-	 * names no record.
+	 * names no record. The places repack behind the pointer, the way every
+	 * other removal does, so the queue never holds a number it does not use.
 	 */
 	private dropConsultationWorkItem(consultationId: string): void {
 		this.db.prepare("DELETE FROM work_queue WHERE consultation_id = ?").run(consultationId);
+		this.repackWorkQueuePositions();
 	}
 
 	/**
