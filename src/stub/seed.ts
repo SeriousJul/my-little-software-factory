@@ -53,6 +53,7 @@ export function stubWorldSeed(): StubWorld {
 						labels: ["ready-for-agent"],
 						state: "open",
 						updatedAt: minutes(0),
+						comments: [],
 					},
 					{
 						number: 2,
@@ -61,6 +62,7 @@ export function stubWorldSeed(): StubWorld {
 						labels: [],
 						state: "open",
 						updatedAt: minutes(5),
+						comments: [],
 					},
 				],
 				pullRequests: [
@@ -124,6 +126,7 @@ export function stubWorldSeed(): StubWorld {
 						labels: ["ready-for-agent"],
 						state: "open",
 						updatedAt: minutes(25),
+						comments: [],
 					},
 					{
 						number: 2,
@@ -132,6 +135,7 @@ export function stubWorldSeed(): StubWorld {
 						labels: ["ready-for-agent"],
 						state: "open",
 						updatedAt: minutes(30),
+						comments: [],
 					},
 				],
 				pullRequests: [

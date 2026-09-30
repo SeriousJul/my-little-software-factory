@@ -2,10 +2,11 @@
  * The world CLI (issue #178, ADR 0073).
  *
  * The operator's hand on the Stub world between turns: add an issue, add a
- * pull request, set labels, add a comment, set the merge gate, and reset to
- * the seed. The world file path is an argument, and a direct hand edit of
- * the file stays legal: the CLI and the edit meet on the file, and the run
- * reads what the file holds on its next refresh.
+ * pull request, undraft a pull request, set labels, add a comment, set the
+ * merge gate, and reset to the seed. The world file path is an argument,
+ * and a direct hand edit of the file stays legal: the CLI, the edit, and the
+ * run meet on the file, and the run re-reads it on every command, so an edit
+ * stands for the run on its next command.
  */
 import { stubWorldSeed } from "./seed.ts";
 import { StubWorldStore } from "./world.ts";
@@ -17,7 +18,7 @@ export interface WorldCliResult {
 
 /** The verbs the world CLI answers, in its usage line. */
 export const WORLD_CLI_USAGE =
-	"usage: stub-world <world-file> <add-issue|add-pull-request|set-labels|add-comment|set-merge-gate|set-auto-score|reset>";
+	"usage: stub-world <world-file> <add-issue|add-pull-request|undraft|set-labels|add-comment|set-merge-gate|set-auto-score|reset>";
 
 interface ParsedArgs {
 	positionals: string[];
@@ -80,6 +81,8 @@ export async function worldCli(argv: readonly string[]): Promise<WorldCliResult>
 				return addIssue(store, args);
 			case "add-pull-request":
 				return addPullRequest(store, args);
+			case "undraft":
+				return undraft(store, args);
 			case "set-labels":
 				return setLabels(store, args);
 			case "add-comment":
@@ -123,6 +126,7 @@ function addIssue(store: StubWorldStore, args: ParsedArgs): WorldCliResult {
 		labels,
 		state: "open",
 		updatedAt: new Date().toISOString(),
+		comments: [],
 	});
 	store.save();
 	return ok([`issue #${number} ${title} stands in ${repository.name}`]);
@@ -204,9 +208,22 @@ function addComment(store: StubWorldStore, args: ParsedArgs): WorldCliResult {
 	}
 	const issue = repository.issues.find((entry) => entry.number === number);
 	if (issue === undefined) throw new Error(`no issue #${number} in ${repository.name}`);
+	issue.comments.push({ body, createdAt: new Date().toISOString() });
 	issue.updatedAt = new Date().toISOString();
 	store.save();
 	return ok([`the comment stands on issue #${number} in ${repository.name}`]);
+}
+
+function undraft(store: StubWorldStore, args: ParsedArgs): WorldCliResult {
+	const repository = requireRepo(store, args.flags);
+	const number = itemNumber(args.flags);
+	if (number === null) throw new Error("the verb needs --pr");
+	const pull = repository.pullRequests.find((entry) => entry.number === number);
+	if (pull === undefined) throw new Error(`no pull request #${number} in ${repository.name}`);
+	pull.draft = false;
+	pull.updatedAt = new Date().toISOString();
+	store.save();
+	return ok([`pull request #${number} in ${repository.name} is not a draft`]);
 }
 
 function setMergeGate(store: StubWorldStore, args: ParsedArgs): WorldCliResult {
@@ -236,11 +253,18 @@ function setAutoScore(store: StubWorldStore, args: ParsedArgs): WorldCliResult {
 	const inherit = args.booleans.has("inherit");
 	const target = args.flags.get("pr")?.[0];
 	if (target !== undefined) {
-		const cut = target.lastIndexOf("/");
-		if (cut <= 0 || !/^\d+$/.test(target.slice(cut + 1)))
+		const cut = target.lastIndexOf(":");
+		const numberPart = cut > 0 ? target.slice(cut + 1) : "";
+		if (cut <= 0 || !/^\d+$/.test(numberPart))
 			throw new Error("the --pr target has the form owner/name:N");
-		const repository = repoOf(store, target.slice(0, cut));
-		const number = Number(target.slice(cut + 1));
+		const parts = target.slice(0, cut).split("/");
+		if (parts.length !== 2 || parts[0] === "" || parts[1] === "")
+			throw new Error("the --pr target has the form owner/name:N");
+		const repository =
+			parts[0].toLowerCase() === store.world.owner.toLowerCase()
+				? repoOf(store, parts[1])
+				: undefined;
+		const number = Number(numberPart);
 		const pull = repository?.pullRequests.find((item) => item.number === number);
 		if (repository === undefined || pull === undefined)
 			throw new Error(`no pull request ${target} in the world`);

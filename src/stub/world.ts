@@ -4,8 +4,10 @@
  * The Stub world is a JSON file and the source of truth of the stub side:
  * repositories, issues, pull requests, the merge gate fact of each pull
  * request, and the security feeds. Every mutation a plane write or a world
- * CLI verb makes goes through this store and writes the file atomically, so
- * a restart finds the world where the operator left it.
+ * CLI verb makes goes through this store and writes the file atomically,
+ * and the store re-reads the file before every answer, so a CLI or hand
+ * edit stands for the run on the next command, and a restart finds the
+ * world where the operator left it.
  *
  * The store answers the closed `gh` surface the plane issues: the GraphQL
  * search the sources fetch, the comments and reviews reads the score
@@ -41,6 +43,7 @@ export interface StubIssue {
 	labels: string[];
 	state: "open" | "closed";
 	updatedAt: string;
+	comments: StubComment[];
 }
 
 /** One pull request in the world. */
@@ -131,7 +134,8 @@ function hasVerdict(pr: StubPullRequest): boolean {
 
 export class StubWorldStore {
 	readonly path: string;
-	readonly world: StubWorld;
+	/** The world the store answers from: the file's contents, re-read on every command. */
+	world: StubWorld;
 	/**
 	 * The `gh` command shapes the world refused, in the order they came.
 	 * In memory only: the refusal is the closed-surface check's fact, not
@@ -146,19 +150,7 @@ export class StubWorldStore {
 
 	/** Read and validate the world file. A missing or malformed file is an error. */
 	static load(path: string): StubWorldStore {
-		let text: string;
-		try {
-			text = readFileSync(path, "utf8");
-		} catch (error) {
-			throw new StubWorldError(`the stub world at ${path} cannot be read: ${String(error)}`);
-		}
-		let raw: unknown;
-		try {
-			raw = JSON.parse(text);
-		} catch {
-			throw new StubWorldError(`the stub world at ${path} is not valid JSON`);
-		}
-		return new StubWorldStore(path, validateWorld(raw));
+		return new StubWorldStore(path, readWorld(path));
 	}
 
 	/** Write the world to its file atomically: temp file, then rename. */
@@ -172,10 +164,21 @@ export class StubWorldStore {
 	 * Answer one `gh` command from the world. Commands outside the closed
 	 * surface are refused and recorded; a command inside it gets the
 	 * GitHub-shaped answer the plane's readers take.
+	 *
+	 * The answer starts from a re-read of the file: the file is the source
+	 * of truth, so a world CLI or hand edit made between commands stands on
+	 * the next command, and a mutation the store writes through does not
+	 * clobber an edit that landed before the store read the file.
 	 */
 	answerGh(args: readonly string[]): Answer {
+		try {
+			this.world = readWorld(this.path);
+		} catch (error) {
+			const reason = error instanceof StubWorldError ? error.message : String(error);
+			return { code: 1, stdout: "", stderr: `the stub world cannot be read: ${reason}\n` };
+		}
 		if (args[0] === "auth") return this.answerAuth(args);
-		if (args[0] === "api") return this.answerApi(args.slice(1));
+		if (args[0] === "api") return this.answerApi(args);
 		if (args[0] === "issue" || args[0] === "pr") return this.answerItem(args);
 		return this.refusal(args, "an unknown GitHub command");
 	}
@@ -198,55 +201,55 @@ export class StubWorldStore {
 
 	// One `gh api` call. The positional is the endpoint, the flags carry the
 	// hostname, the method, the pagination, and the form fields.
-	private answerApi(tokens: readonly string[]): Answer {
+	private answerApi(args: readonly string[]): Answer {
+		const tokens = args.slice(1);
 		let endpoint: string | null = null;
 		let hostname: string | null = null;
 		const fields = new Map<string, string>();
 		for (let i = 0; i < tokens.length; i += 1) {
 			const token = tokens[i];
 			if (token === "--hostname") {
-				if (i + 1 >= tokens.length) return this.refusal(tokens, "the hostname flag has no value");
+				if (i + 1 >= tokens.length) return this.refusal(args, "the hostname flag has no value");
 				i += 1;
 				hostname = tokens[i];
 			} else if (token === "--paginate" || token === "--method") {
 				if (token === "--method" && i + 1 >= tokens.length)
-					return this.refusal(tokens, "the method flag has no value");
+					return this.refusal(args, "the method flag has no value");
 				if (token === "--method") i += 1;
 			} else if (token === "-f") {
-				if (i + 1 >= tokens.length) return this.refusal(tokens, "the field flag has no value");
+				if (i + 1 >= tokens.length) return this.refusal(args, "the field flag has no value");
 				const value = tokens[i + 1];
 				const cut = value.indexOf("=");
-				if (cut <= 0) return this.refusal(tokens, `an unreadable field: ${value}`);
+				if (cut <= 0) return this.refusal(args, `an unreadable field: ${value}`);
 				fields.set(value.slice(0, cut), value.slice(cut + 1));
 				i += 1;
 			} else if (token.startsWith("-")) {
-				return this.refusal(tokens, `an unknown api flag: ${token}`);
+				return this.refusal(args, `an unknown api flag: ${token}`);
 			} else {
-				if (endpoint !== null) return this.refusal(tokens, "two endpoints on one call");
+				if (endpoint !== null) return this.refusal(args, "two endpoints on one call");
 				endpoint = token;
 			}
 		}
-		if (endpoint === null) return this.refusal(tokens, "no endpoint");
+		if (endpoint === null) return this.refusal(args, "no endpoint");
 		if (hostname !== this.world.host)
-			return this.refusal(tokens, `a host the world does not serve: ${hostname ?? ""}`);
+			return this.refusal(args, `a host the world does not serve: ${hostname ?? ""}`);
 		const path = endpoint.split("?")[0];
-		if (path === "graphql") return this.answerSearch(fields);
-		if (path.startsWith("repos/")) return this.answerRepo(tokens, path, fields);
-		return this.refusal(tokens, `an endpoint the world does not know: ${path}`);
+		if (path === "graphql") return this.answerSearch(fields, args);
+		if (path.startsWith("repos/")) return this.answerRepo(args, path, fields);
+		return this.refusal(args, `an endpoint the world does not know: ${path}`);
 	}
 
 	// The GraphQL search the sources fetch: the fixed document, the search
 	// query string, and the cursor.
-	private answerSearch(fields: Map<string, string>): Answer {
+	private answerSearch(fields: Map<string, string>, shape: readonly string[]): Answer {
 		const query = fields.get("query");
 		const searchQuery = fields.get("searchQuery");
-		const graphql: readonly string[] = ["api", "graphql"];
 		if (query === undefined || searchQuery === undefined)
-			return this.refusal(graphql, "no search query field");
+			return this.refusal(shape, "no search query field");
 		if (query !== SEARCH_QUERY)
-			return this.refusal(graphql, "a search document the world does not know");
+			return this.refusal(shape, "a search document the world does not know");
 		const nodes = this.searchNodes(searchQuery);
-		if (nodes === null) return this.refusal(graphql, `a search query the world cannot answer`);
+		if (nodes === null) return this.refusal(shape, `a search query the world cannot answer`);
 		return {
 			code: 0,
 			stdout: JSON.stringify({
@@ -383,9 +386,6 @@ export class StubWorldStore {
 			// The plane reads a pull request's verdicts on the issues path with
 			// the pull request's number, so the pull request wins the match.
 			const pull = repository.pullRequests.find((item) => item.number === number);
-			const issue = repository.issues.find((item) => item.number === number);
-			if (pull === undefined && issue === undefined)
-				return { code: 1, stdout: "", stderr: "HTTP 404: Not Found (stub world)\n" };
 			if (pull !== undefined) {
 				this.applyAutoScore(pull);
 				return {
@@ -399,7 +399,19 @@ export class StubWorldStore {
 					stderr: "",
 				};
 			}
-			return { code: 0, stdout: "[]", stderr: "" };
+			const issue = repository.issues.find((item) => item.number === number);
+			if (issue === undefined)
+				return { code: 1, stdout: "", stderr: "HTTP 404: Not Found (stub world)\n" };
+			return {
+				code: 0,
+				stdout: JSON.stringify(
+					issue.comments.map((comment) => ({
+						body: comment.body,
+						created_at: comment.createdAt,
+					})),
+				),
+				stderr: "",
+			};
 		}
 		if (rest[0] === "pulls" && rest[1] !== undefined && rest[2] === "reviews") {
 			const number = Number(rest[1]);
@@ -671,7 +683,7 @@ export class StubWorldStore {
 		return this.repositoryOf(parts[1], parts[2]);
 	}
 
-	/** Record the refusal and answer it. */
+	/** Record the refusal and answer it. `shape` is the command that met the refusal. */
 	private refusal(shape: readonly string[], reason: string): Answer {
 		const line = `gh ${shape.join(" ")}`;
 		this.refusals.push(line);
@@ -693,8 +705,110 @@ function externalKeyNumber(key: string | undefined): number | null {
 	return Number(value);
 }
 
+/** Read, parse, and validate the world file. A missing or malformed file is an error. */
+function readWorld(path: string): StubWorld {
+	let text: string;
+	try {
+		text = readFileSync(path, "utf8");
+	} catch (error) {
+		throw new StubWorldError(`the stub world at ${path} cannot be read: ${String(error)}`);
+	}
+	let raw: unknown;
+	try {
+		raw = JSON.parse(text);
+	} catch {
+		throw new StubWorldError(`the stub world at ${path} is not valid JSON`);
+	}
+	return validateWorld(raw);
+}
+
+/** Whether a value is a plain object the file's fields may stand in. */
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+/** Whether a value is a list of strings. */
+function isStringList(value: unknown): value is string[] {
+	return Array.isArray(value) && value.every((item) => typeof item === "string");
+}
+
+/** The comments of one item, checked. A bad entry fails the load. */
+function validateComments(raw: unknown, label: string): StubComment[] {
+	if (!Array.isArray(raw)) throw new StubWorldError(`${label} has a bad comment list`);
+	return raw.map((entry, index) => {
+		const item = entry as Record<string, unknown>;
+		if (!isRecord(item) || typeof item.body !== "string" || typeof item.createdAt !== "string")
+			throw new StubWorldError(`${label} has a bad comment at index ${index}`);
+		return { body: item.body as string, createdAt: item.createdAt as string };
+	});
+}
+
+/** The reviews of one pull request, checked. A bad entry fails the load. */
+function validateReviews(raw: unknown, label: string): StubReview[] {
+	if (!Array.isArray(raw)) throw new StubWorldError(`${label} has a bad review list`);
+	return raw.map((entry, index) => {
+		const item = entry as Record<string, unknown>;
+		if (!isRecord(item) || typeof item.body !== "string" || typeof item.submittedAt !== "string")
+			throw new StubWorldError(`${label} has a bad review at index ${index}`);
+		return { body: item.body as string, submittedAt: item.submittedAt as string };
+	});
+}
+
+/** One issue's fields, checked. A hand-edited file with a bad item fails here, at load. */
+function validateIssue(raw: unknown, label: string): StubIssue {
+	const item = raw as Record<string, unknown>;
+	if (!isRecord(item)) throw new StubWorldError(`${label} is not an object`);
+	if (typeof item.number !== "number" || !Number.isInteger(item.number))
+		throw new StubWorldError(`${label} has a bad number`);
+	if (typeof item.title !== "string") throw new StubWorldError(`${label} has no title`);
+	if (typeof item.body !== "string") throw new StubWorldError(`${label} has no body`);
+	if (!isStringList(item.labels)) throw new StubWorldError(`${label} has a bad label list`);
+	if (item.state !== "open" && item.state !== "closed")
+		throw new StubWorldError(`${label} has a bad state`);
+	if (typeof item.updatedAt !== "string") throw new StubWorldError(`${label} has no updatedAt`);
+	return {
+		number: item.number,
+		title: item.title,
+		body: item.body,
+		labels: item.labels,
+		state: item.state as StubIssue["state"],
+		updatedAt: item.updatedAt,
+		comments: validateComments(item.comments ?? [], label),
+	};
+}
+
+/** One pull request's fields, checked. The issue's fields plus its own. */
+function validatePullRequest(raw: unknown, label: string): StubPullRequest {
+	const item = raw as Record<string, unknown>;
+	if (!isRecord(item)) throw new StubWorldError(`${label} is not an object`);
+	const issue = validateIssue(item, label);
+	if (typeof item.merged !== "boolean") throw new StubWorldError(`${label} has a bad merged fact`);
+	if (typeof item.draft !== "boolean") throw new StubWorldError(`${label} has a bad draft fact`);
+	if (typeof item.headBranch !== "string") throw new StubWorldError(`${label} has no head branch`);
+	if (
+		!Array.isArray(item.closingIssueNumbers) ||
+		!item.closingIssueNumbers.every((number) => typeof number === "number")
+	)
+		throw new StubWorldError(`${label} has a bad closing issue list`);
+	if (item.autoScore !== undefined && typeof item.autoScore !== "boolean")
+		throw new StubWorldError(`${label} has a bad auto score override`);
+	if (item.scorePosted !== undefined && typeof item.scorePosted !== "boolean")
+		throw new StubWorldError(`${label} has a bad score posted fact`);
+	return {
+		...issue,
+		merged: item.merged,
+		draft: item.draft,
+		headBranch: item.headBranch,
+		closingIssueNumbers: item.closingIssueNumbers as number[],
+		reviews: validateReviews(item.reviews ?? [], label),
+		...(item.autoScore !== undefined ? { autoScore: item.autoScore } : {}),
+		...(item.scorePosted !== undefined ? { scorePosted: item.scorePosted } : {}),
+	};
+}
+
 // The world file's document, checked. A malformed file is an error the
-// startup report takes, not a silent empty world.
+// startup report takes, not a silent empty world. A hand-edited file with a
+// bad item fails here, at load, not later in an answer.
 function validateWorld(raw: unknown): StubWorld {
 	const record = raw as Record<string, unknown>;
 	if (record === null || typeof record !== "object" || Array.isArray(record))
@@ -704,19 +818,29 @@ function validateWorld(raw: unknown): StubWorld {
 		throw new StubWorldError("the world file has no host");
 	if (typeof record.owner !== "string" || record.owner === "")
 		throw new StubWorldError("the world file has no owner");
-	const autoScore = record.autoScore as Record<string, unknown> | undefined;
+	const autoScore = record.autoScore;
 	if (
-		autoScore === undefined ||
+		!isRecord(autoScore) ||
 		typeof autoScore.enabled !== "boolean" ||
 		typeof autoScore.score !== "number"
 	)
 		throw new StubWorldError("the world file has no auto score setting");
 	if (!Array.isArray(record.repositories))
 		throw new StubWorldError("the world file has no repositories");
-	const securityOf = (entry: Record<string, unknown>) =>
-		typeof entry.security === "object" && entry.security !== null
-			? (entry.security as Record<string, unknown>)
-			: {};
+	const securityOf = (entry: Record<string, unknown>, label: string): StubSecurity => {
+		const security = isRecord(entry.security) ? entry.security : {};
+		const listOf = (name: string): Array<Record<string, unknown>> => {
+			const value = security[name] ?? [];
+			if (!Array.isArray(value) || !value.every(isRecord))
+				throw new StubWorldError(`${label} has a bad ${name} list`);
+			return value as Array<Record<string, unknown>>;
+		};
+		return {
+			advisories: listOf("advisories"),
+			dependabotAlerts: listOf("dependabotAlerts"),
+			secretScanningAlerts: listOf("secretScanningAlerts"),
+		};
+	};
 	const repositories: StubRepository[] = [];
 	for (const entry of record.repositories as unknown[]) {
 		const item = entry as Record<string, unknown>;
@@ -724,20 +848,26 @@ function validateWorld(raw: unknown): StubWorld {
 			throw new StubWorldError("a repository in the world file has no name");
 		if (!Array.isArray(item.issues) || !Array.isArray(item.pullRequests))
 			throw new StubWorldError(`repository ${item.name} has no items`);
+		const label = `repository ${item.name}`;
+		const mergeGates: Record<string, StubMergeGate> = {};
+		const gates = item.mergeGates ?? {};
+		if (!isRecord(gates)) throw new StubWorldError(`${label} has a bad merge gate table`);
+		for (const [key, value] of Object.entries(gates)) {
+			const gate = value as Record<string, unknown>;
+			if (!isRecord(gate) || typeof gate.passing !== "boolean" || typeof gate.reason !== "string")
+				throw new StubWorldError(`${label} has a bad merge gate for pull request ${key}`);
+			mergeGates[key] = { passing: gate.passing, reason: gate.reason };
+		}
 		repositories.push({
 			name: item.name,
-			issues: item.issues as StubIssue[],
-			pullRequests: item.pullRequests as StubPullRequest[],
-			mergeGates: (item.mergeGates ?? {}) as Record<string, StubMergeGate>,
-			security: {
-				advisories: (securityOf(item).advisories ?? []) as Array<Record<string, unknown>>,
-				dependabotAlerts: (securityOf(item).dependabotAlerts ?? []) as Array<
-					Record<string, unknown>
-				>,
-				secretScanningAlerts: (securityOf(item).secretScanningAlerts ?? []) as Array<
-					Record<string, unknown>
-				>,
-			},
+			issues: item.issues.map((entry, index) =>
+				validateIssue(entry, `${label} issue at index ${index}`),
+			),
+			pullRequests: item.pullRequests.map((entry, index) =>
+				validatePullRequest(entry, `${label} pull request at index ${index}`),
+			),
+			mergeGates,
+			security: securityOf(item, label),
 		});
 	}
 	return {

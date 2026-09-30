@@ -241,6 +241,102 @@ describe("the sources read the world", () => {
 	});
 });
 
+describe("the run reads the world file on every command", () => {
+	test("a gate flip made by the world CLI stands for the run's next answer", async () => {
+		const dir = tempDir();
+		const store = seededStore(dir);
+		const flip = await worldCli([
+			store.path,
+			"set-merge-gate",
+			"--repo",
+			"beta",
+			"--pr",
+			"1",
+			"--pass",
+		]);
+		expect(flip.ok).toBe(true);
+		const merged = await store.answerGh([
+			"pr",
+			"merge",
+			"#1",
+			"--squash",
+			"--repo",
+			"github.com/stub/beta",
+		]);
+		expect(merged.code).toBe(0);
+		expect(store.world.repositories[1].pullRequests[0].merged).toBe(true);
+	});
+
+	test("a hand edit of the file stands for the run's next answer", async () => {
+		const dir = tempDir();
+		const store = seededStore(dir);
+		const raw = JSON.parse(readFileSync(store.path, "utf8")) as {
+			repositories: Array<Record<string, unknown>>;
+		};
+		(raw.repositories[0].pullRequests as Array<Record<string, unknown>>)[0].draft = false;
+		writeFileSync(store.path, `${JSON.stringify(raw, null, 2)}\n`);
+		const result = await store.answerGh([
+			"api",
+			"graphql",
+			"--hostname",
+			"github.com",
+			"-f",
+			`query=${SEARCH_QUERY}`,
+			"-f",
+			"searchQuery=is:open is:pr repo:stub/alpha no:draft",
+		]);
+		expect(result.code).toBe(0);
+		const nodes = (JSON.parse(result.stdout) as { data: { search: { nodes: unknown[] } } }).data
+			.search.nodes;
+		expect(nodes).toHaveLength(1);
+		expect(store.refusals).toEqual([]);
+	});
+
+	test("a label write after a CLI edit keeps the edit in the file", async () => {
+		const dir = tempDir();
+		const store = seededStore(dir);
+		const flip = await worldCli([
+			store.path,
+			"set-merge-gate",
+			"--repo",
+			"beta",
+			"--pr",
+			"1",
+			"--pass",
+		]);
+		expect(flip.ok).toBe(true);
+		const edit = await store.answerGh([
+			"issue",
+			"edit",
+			"#1",
+			"--repo",
+			"github.com/stub/beta",
+			"--add-label",
+			"ready-for-agent",
+		]);
+		expect(edit.code).toBe(0);
+		const reloaded = StubWorldStore.load(store.path);
+		expect(reloaded.world.repositories[1].mergeGates["1"].passing).toBe(true);
+	});
+
+	test("an unreadable file is an error answer, not a throw", async () => {
+		const dir = tempDir();
+		const store = seededStore(dir);
+		rmSync(store.path);
+		const result = await store.answerGh([
+			"issue",
+			"edit",
+			"#1",
+			"--repo",
+			"github.com/stub/alpha",
+			"--add-label",
+			"ready-for-agent",
+		]);
+		expect(result.code).toBe(1);
+		expect(result.stderr).toContain("cannot be read");
+	});
+});
+
 describe("the verdict read and the auto score", () => {
 	const commentRead = (repository: string, number: number): string[] => [
 		"api",
@@ -278,6 +374,7 @@ describe("the verdict read and the auto score", () => {
 		const dir = tempDir();
 		const store = seededStore(dir);
 		store.world.autoScore.enabled = false;
+		store.save();
 		const off = await store.answerGh(commentRead("stub/beta", 1));
 		expect(JSON.parse(off.stdout)).toEqual([]);
 		expect(store.world.repositories[1].pullRequests[0].scorePosted).toBe(true);
@@ -286,11 +383,13 @@ describe("the verdict read and the auto score", () => {
 		// on over an off world.
 		const store2 = seededStore(dir);
 		store2.world.repositories[0].pullRequests[0].autoScore = false;
+		store2.save();
 		const overrideOff = await store2.answerGh(commentRead("stub/alpha", 1));
 		expect(JSON.parse(overrideOff.stdout)).toEqual([]);
 		store2.world.autoScore.enabled = false;
 		const beta2 = store2.world.repositories[1].pullRequests[1];
 		beta2.autoScore = true;
+		store2.save();
 		const overrideOn = await store2.answerGh(commentRead("stub/beta", 2));
 		const posted = JSON.parse(overrideOn.stdout) as Array<{ body: string }>;
 		expect(posted).toHaveLength(1);
@@ -302,6 +401,7 @@ describe("the verdict read and the auto score", () => {
 		const store = seededStore(dir);
 		const pull = store.world.repositories[0].pullRequests[0];
 		pull.comments.push({ body: autoScoreBody(40), createdAt: "2026-09-30T00:00:00.000Z" });
+		store.save();
 		const read = await store.answerGh(commentRead("stub/alpha", 1));
 		const comments = JSON.parse(read.stdout) as Array<{ body: string }>;
 		expect(comments).toHaveLength(1);
@@ -315,6 +415,7 @@ describe("the verdict read and the auto score", () => {
 			body: "- **Score:** 55 / 100",
 			submittedAt: "2026-09-30T00:05:00.000Z",
 		});
+		store.save();
 		const read = await store.answerGh([
 			"api",
 			"--paginate",
@@ -355,6 +456,7 @@ describe("the label writes", () => {
 		const pull = store.world.repositories[1].pullRequests[0];
 		pull.draft = false;
 		pull.labels = ["ready-for-review"];
+		store.save();
 		const result = await store.answerGh([
 			"pr",
 			"edit",
@@ -367,7 +469,7 @@ describe("the label writes", () => {
 			"ready-for-review",
 		]);
 		expect(result.code).toBe(0);
-		expect(pull.labels).toEqual(["ready-to-ship"]);
+		expect(store.world.repositories[1].pullRequests[0].labels).toEqual(["ready-to-ship"]);
 	});
 
 	test("a number that names no item fails the write without recording a refusal", async () => {
@@ -445,8 +547,9 @@ describe("the merge", () => {
 			"--pass",
 		]);
 		expect(flip.ok).toBe(true);
-		const reloaded = StubWorldStore.load(store.path);
-		const merged = await reloaded.answerGh([
+		// The run's store stands throughout: the flip is in the file, and the
+		// store's next answer re-reads it.
+		const merged = await store.answerGh([
 			"pr",
 			"merge",
 			"#1",
@@ -455,10 +558,10 @@ describe("the merge", () => {
 			"github.com/stub/beta",
 		]);
 		expect(merged.code).toBe(0);
-		const pull = reloaded.world.repositories[1].pullRequests[0];
+		const pull = store.world.repositories[1].pullRequests[0];
 		expect(pull.merged).toBe(true);
 		expect(pull.state).toBe("closed");
-		expect(reloaded.world.repositories[1].issues[0].state).toBe("closed");
+		expect(store.world.repositories[1].issues[0].state).toBe("closed");
 
 		// On disk, for the restart: both tickets leave the list.
 		const persisted = StubWorldStore.load(store.path);
@@ -688,6 +791,9 @@ describe("the closed surface", () => {
 		const unknown = await store.answerGh(["release", "create", "--repo", "github.com/stub/alpha"]);
 		expect(unknown.code).toBe(1);
 		expect(store.refusals).toHaveLength(2);
+		// The refusal records the command shape that met it, not a constant line.
+		expect(store.refusals[0]).toContain("gh api graphql");
+		expect(store.refusals[0]).toContain("searchQuery=is:open is:issue repo:stub/alpha");
 	});
 
 	test("a search qualifier the world does not know is refused", async () => {
@@ -810,6 +916,87 @@ describe("the world cli", () => {
 			reason: "the gate turns",
 		});
 		expect(reloaded.world.autoScore).toEqual({ enabled: false, score: 40 });
+	});
+
+	test("undrafts a pull request, and a number that names no pull request fails", async () => {
+		const dir = tempDir();
+		const store = seededStore(dir);
+		const undrafted = await worldCli([store.path, "undraft", "--repo", "alpha", "--pr", "1"]);
+		expect(undrafted.ok).toBe(true);
+		const reloaded = StubWorldStore.load(store.path);
+		expect(reloaded.world.repositories[0].pullRequests[0].draft).toBe(false);
+		const missing = await worldCli([store.path, "undraft", "--repo", "alpha", "--pr", "9"]);
+		expect(missing.ok).toBe(false);
+		expect(missing.lines[0]).toContain("no pull request #9");
+	});
+
+	test("stores the issue comment the verb adds, and the run's read answers it", async () => {
+		const dir = tempDir();
+		const store = seededStore(dir);
+		// alpha's issue 2: no pull request shadows its number on the read path.
+		const added = await worldCli([
+			store.path,
+			"add-comment",
+			"--repo",
+			"alpha",
+			"--issue",
+			"2",
+			"--body",
+			"the operator's note",
+		]);
+		expect(added.ok).toBe(true);
+		const reloaded = StubWorldStore.load(store.path);
+		expect(
+			reloaded.world.repositories[0].issues[1].comments.map((comment) => comment.body),
+		).toEqual(["the operator's note"]);
+		const read = await store.answerGh([
+			"api",
+			"--paginate",
+			"--hostname",
+			"github.com",
+			"repos/stub/alpha/issues/2/comments?per_page=100",
+		]);
+		expect(read.code).toBe(0);
+		const comments = JSON.parse(read.stdout) as Array<{ body: string }>;
+		expect(comments.map((comment) => comment.body)).toEqual(["the operator's note"]);
+	});
+
+	test("sets the per pull request auto score rule on the owner/name:N target", async () => {
+		const dir = tempDir();
+		const store = seededStore(dir);
+		const pullAutoScore = (): boolean | undefined =>
+			StubWorldStore.load(store.path).world.repositories[0].pullRequests[0].autoScore;
+		expect(
+			(await worldCli([store.path, "set-auto-score", "--pr", "stub/alpha:1", "--on"])).ok,
+		).toBe(true);
+		expect(pullAutoScore()).toBe(true);
+		expect(
+			(await worldCli([store.path, "set-auto-score", "--pr", "stub/alpha:1", "--off"])).ok,
+		).toBe(true);
+		expect(pullAutoScore()).toBe(false);
+		expect(
+			(await worldCli([store.path, "set-auto-score", "--pr", "stub/alpha:1", "--inherit"])).ok,
+		).toBe(true);
+		expect(pullAutoScore()).toBeUndefined();
+		const badNumber = await worldCli([
+			store.path,
+			"set-auto-score",
+			"--pr",
+			"stub/alpha:one",
+			"--on",
+		]);
+		expect(badNumber.ok).toBe(false);
+		expect(badNumber.lines[0]).toContain("owner/name:N");
+		const badOwner = await worldCli([
+			store.path,
+			"set-auto-score",
+			"--pr",
+			"wrong/alpha:1",
+			"--on",
+		]);
+		expect(badOwner.ok).toBe(false);
+		const noRule = await worldCli([store.path, "set-auto-score", "--pr", "stub/alpha:1"]);
+		expect(noRule.ok).toBe(false);
 	});
 
 	test("resets to the seed, and a broken world is disposable", async () => {
@@ -939,5 +1126,44 @@ describe("the world file", () => {
 		store.save();
 		const text = readFileSync(store.path, "utf8");
 		expect(JSON.parse(text)).toEqual(store.world);
+	});
+
+	test("a hand-edited file with a bad item fails the load, at the file", () => {
+		const dir = tempDir();
+		const store = seededStore(dir);
+		type ItemRaw = Record<string, unknown>;
+		const breakItem = (
+			mutate: (repo: {
+				issues: ItemRaw[];
+				pullRequests: ItemRaw[];
+				mergeGates: Record<string, unknown>;
+				security: Record<string, unknown>;
+			}) => void,
+		): void => {
+			const raw = JSON.parse(readFileSync(store.path, "utf8")) as Record<string, unknown>;
+			const repositories = raw.repositories as Array<Record<string, unknown>>;
+			mutate({
+				issues: repositories[0].issues as ItemRaw[],
+				pullRequests: repositories[0].pullRequests as ItemRaw[],
+				mergeGates: repositories[0].mergeGates as Record<string, unknown>,
+				security: repositories[0].security as Record<string, unknown>,
+			});
+			writeFileSync(store.path, `${JSON.stringify(raw, null, 2)}\n`);
+			expect(() => StubWorldStore.load(store.path)).toThrow(StubWorldError);
+			// Restore the good file, so the next case breaks one thing only.
+			store.save();
+		};
+		breakItem((repo) => {
+			repo.issues[0].number = "one";
+		});
+		breakItem((repo) => {
+			repo.pullRequests[0].draft = "yes";
+		});
+		breakItem((repo) => {
+			repo.mergeGates["1"] = { passing: "yes", reason: "" };
+		});
+		breakItem((repo) => {
+			repo.security.advisories = { not: "a list" };
+		});
 	});
 });
