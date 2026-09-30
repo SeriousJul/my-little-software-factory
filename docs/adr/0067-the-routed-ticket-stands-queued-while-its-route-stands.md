@@ -3,6 +3,8 @@
 Status: accepted
 Date: 2026-09-30
 
+Corrected in part by ADR 0072: the ask ends the cycle at the ask, and the `queued` state retires. This ADR stands for the face the routed ticket wore while its route stood, and for the recovery paths that stood on it.
+
 ## Context
 
 ADR 0064 recorded the route's decision at the ask: the operator's

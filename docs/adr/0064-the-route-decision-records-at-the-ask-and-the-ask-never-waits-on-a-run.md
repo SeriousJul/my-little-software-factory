@@ -75,7 +75,11 @@ run one at a time, and the Agents work in parallel afterward.
   the `queued` state in the same write that lands the decision, and the
   state itself reads `queued` while the route stands. This ADR's rule that
   stood - the ticket leaves the decision-owed face at the confirm - holds;
-  the face it wears is the state's, not a badge over `awaiting`.
+  the face it wears is the state's, not a badge over `awaiting`. ADR 0072
+  corrects the correction: the ask ends the cycle - the ticket goes `open`
+  with an incremented cycle number in the same write that lands the
+  decision - and the trace keeps the decision the way this ADR always
+  stood.
 - The trace's decision line carries the ask's time, not the start's time. A
   turn whose route is confirmed but not yet started reads as decided to the
   observation's walks: the awaiting walk skips it, the continuation walk

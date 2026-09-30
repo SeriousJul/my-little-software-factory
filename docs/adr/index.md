@@ -80,3 +80,4 @@ body states the context, the decision, and the consequences.
 - [ADR 0069: A cancelled route ends its ticket's cycle](./0069-a-cancelled-route-ends-its-tickets-cycle.md)
 - [ADR 0070: An operator mutes a source out of the factory's way](./0070-an-operator-mutes-a-source-out-of-the-factorys-way.md)
 - [ADR 0071: The Groups stand in the axis' own order, and the operator owns it](./0071-the-groups-stand-in-the-axis-own-order-and-the-operator-owns-it.md)
+- [ADR 0072: The route's ask ends the source ticket's cycle](./0072-the-route-ask-ends-the-source-tickets-cycle.md)
