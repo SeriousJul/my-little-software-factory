@@ -506,6 +506,7 @@ function sampleTicket(
 	state: "running" | "awaiting" | "open" | "queued",
 	environment: "worktree" | "live-worktree" = "worktree",
 	ignored = false,
+	muted = false,
 ): Ticket {
 	const now = "2026-02-17T10:00:00.000Z";
 	return {
@@ -573,8 +574,73 @@ function sampleTicket(
 		handoffRecoveryRequired: false,
 		ignored,
 		ignoredAt: ignored ? "2026-02-17T10:00:00.000Z" : null,
+		muted,
+		mutedAt: muted ? "2026-02-17T10:00:00.000Z" : null,
 		leftover: null,
 	};
+}
+
+/** The source name the mute examples act on (ADR 0070). */
+const MUTE_SOURCE_NAME = "acme/factory-issues";
+
+/** The Ticket-base-mode context the Source-mute example runs on (ADR 0070).
+ *
+ * One row the operator can put a source out of the way, one row whose source
+ * is already out of the way, the live row that keeps its face under the flag,
+ * and the header's cell for the ledger. The row names its source, the way the
+ * bar's word does: the act rides on the row and acts on the source.
+ */
+function ticketMuteContext(mode: "ticket-list" | "ticket-detail", muted: boolean): ControlContext {
+	const now = "2026-02-17T10:00:00.000Z";
+	const ticket = sampleTicket(
+		mode === "ticket-detail" ? "running" : "open",
+		"worktree",
+		false,
+		muted,
+	);
+	return contextFor(mode, {
+		selectedTicket: {
+			...ticket,
+			memberships: [
+				{
+					identity: ticket.identity,
+					sourceKind: ticket.sourceKind,
+					externalKey: ticket.externalKey,
+					sourceState: ticket.sourceState,
+					url: ticket.url,
+					title: ticket.title,
+					description: ticket.description,
+					labels: ticket.labels,
+					externalUpdatedAt: now,
+					repository: ticket.repositoryRef,
+					attributes: {},
+					sourceName: MUTE_SOURCE_NAME,
+					health: "healthy",
+				},
+			],
+		},
+		listCanMove: true,
+		detailCanScroll: true,
+		sourceCount: 0,
+		refreshingSourceCount: 0,
+		handoffActive: false,
+		messageTruncated: false,
+		consultationTypesConfigured: true,
+	});
+}
+
+/** One row the mute example draws: the resting row the list withholds and the
+ * live row that keeps its face under the flag, both wearing the marker.
+ */
+function mutedRowTicket(state: "open" | "running"): Ticket {
+	const base = groupTicket(
+		state === "open" ? 11 : 12,
+		"acme/factory",
+		state === "open" ? "Watch agent turns" : "Fix the layout math",
+		state,
+		"implement",
+	);
+	return { ...base, muted: true, mutedAt: "2026-02-17T10:00:00.000Z" };
 }
 
 /** The Ticket-base-mode context the Ticket-Goto example runs on (ADR 0033). */
@@ -627,11 +693,12 @@ function ticketIgnoreRefusal(context: ControlContext): string {
 	return refusalText(control, availabilityFor(control, context));
 }
 
-/** The context the List-filter example runs on (ADR 0060): the filter's own
- * value is what the hint reads, so one helper draws all three states. */
-function ticketFilterContext(filter: "active" | "ignored" | "all"): ControlContext {
-	return contextFor(filter === "ignored" ? "ticket-detail" : "ticket-list", {
-		selectedTicket: sampleTicket("open", "worktree", filter === "ignored"),
+/** The context the List-filter example runs on (ADR 0060, widened by ADR
+ * 0070): the filter's own value is what the hint reads, so one helper draws
+ * all four states. */
+function ticketFilterContext(filter: "active" | "ignored" | "muted" | "all"): ControlContext {
+	return contextFor(filter === "ignored" || filter === "muted" ? "ticket-detail" : "ticket-list", {
+		selectedTicket: sampleTicket("open", "worktree", filter === "ignored", filter === "muted"),
 		ticketListFilter: filter,
 		listCanMove: true,
 		detailCanScroll: true,
@@ -1059,11 +1126,82 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 		},
 	},
 	{
-		// The Ticket section's `f` (ADR 0060): the hint names the view the cycle
-		// moves to, the way the queue pause flips between Pause and Resume, and the
-		// Work queue states the two lists that own the key.
+		// The Ticket section's `u` (ADR 0070): the act on the source, beside the
+		// act on the ticket. The bar's word flips between the Mute the key beside
+		// an un-muted row offers and the Un-mute a muted row offers, and it names
+		// the source the act reaches; the header carries the ledger's count; the
+		// resting row the list withholds and the live row that keeps its face both
+		// wear the marker, the way the ignore's does.
+		id: "ticket-mute",
+		state: "Source mute: the flip, the header's cell, and the marker on a live row",
+		render: (columns, _holds, _inputActive, _wiring) => [
+			// The bar beside an un-muted row: the key puts the source out of the way.
+			createElement(ActionBar, {
+				key: "mute-bar",
+				mode: "ticket-list",
+				context: ticketMuteContext("ticket-list", false),
+				width: columns.contentWidth,
+			}),
+			// The bar beside a muted row: the same key takes the source back.
+			createElement(ActionBar, {
+				key: "unmute-bar",
+				mode: "ticket-detail",
+				context: ticketMuteContext("ticket-detail", true),
+				width: columns.contentWidth,
+			}),
+			// The ledger the header names: the cell stands only while it is above
+			// zero, beside the ignored count it rides with.
+			createElement(SectionHeader, {
+				key: "muted-header",
+				section: "tickets",
+				active: true,
+				terminalWidth: columns.contentWidth,
+				width: columns.contentWidth,
+				expanded: true,
+				open: 2,
+				running: 1,
+				awaiting: 0,
+				ignored: 1,
+				muted: 2,
+				onToggle: () => undefined,
+			}),
+			// The rows the mute rides on: the resting row the list withholds, and
+			// the live row that keeps its face under the flag, each wearing the
+			// marker beside its own state badge.
+			createElement(TicketList, {
+				key: "muted-rows",
+				rows: [
+					{ kind: "item", item: mutedRowTicket("open") },
+					{ kind: "item", item: mutedRowTicket("running") },
+				],
+				selectedIndex: 1,
+				focused: true,
+				height: 6,
+				markerOf: () => null,
+				limitReached: () => false,
+				starting: () => false,
+				queueWait: () => false,
+				active: true,
+				onFocus: () => undefined,
+				onSelect: () => undefined,
+				onMove: () => undefined,
+			}),
+			createElement(
+				"text",
+				{ key: "ticket-mute-note", fg: paint("subtext0") },
+				truncateToWidth(
+					"the flag is factory state on the source's row, and the plane writes nothing to the source",
+					columns.contentWidth,
+				),
+			),
+		],
+	},
+	{
+		// The Ticket section's `f` (ADR 0060, widened by ADR 0070): the hint names
+		// the view the cycle moves to, the way the queue pause flips between Pause
+		// and Resume, and the Work queue states the two lists that own the key.
 		id: "ticket-filter",
-		state: "List filter: Show ignored, Show all, Show active, and the queue's refusal",
+		state: "List filter: Show ignored, Show muted, Show all, Show active, and the queue's refusal",
 		render: (columns, _holds, _inputActive, _wiring) => [
 			createElement(ActionBar, {
 				key: "filter-from-active",
@@ -1075,6 +1213,12 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 				key: "filter-from-ignored",
 				mode: "ticket-detail",
 				context: ticketFilterContext("ignored"),
+				width: columns.contentWidth,
+			}),
+			createElement(ActionBar, {
+				key: "filter-from-muted",
+				mode: "ticket-detail",
+				context: ticketFilterContext("muted"),
 				width: columns.contentWidth,
 			}),
 			createElement(ActionBar, {

@@ -48,10 +48,10 @@ import {
 import type { GroupingAxis } from "../domain/grouping.ts";
 import { DEFAULT_GROUPING_AXIS, nextGroupingAxis } from "../domain/grouping.ts";
 import {
+	flagWithholdsRow,
 	HANDOFF_ENVIRONMENT_KINDS,
 	type Handoff,
 	holdsDecision,
-	ignoreWithholdsRow,
 	nextTicketListFilter,
 	type Ticket,
 	type TicketListFilter,
@@ -784,6 +784,11 @@ export function App({
 	// names exactly the rows the `ignored` view shows and nothing re-applies the
 	// covered rule or the ignore rule in the screen.
 	const ignoredCount = listViews.ignored.length;
+	// The muted count the Ticket header carries (ADR 0070): the ledger of the
+	// source acts, read from the same list step as the rows themselves, so the
+	// number names exactly the rows the `muted` view shows and nothing
+	// re-applies the covered rule or the mute rule in the screen.
+	const mutedCount = listViews.muted.length;
 	// The held count the bell compares against: a rise rings the terminal bell
 	// and flashes the Tickets header, a fall or a steady count does not.
 	useEffect(() => {
@@ -2439,7 +2444,7 @@ export function App({
 		// either way. `active` is the list rule's own answer - the covered rule beside
 		// the ignore's - so a clear that returns no row says which rule still holds it
 		// out instead of promising a row the list does not draw (ADR 0042, ADR 0060).
-		const resting = ignoreWithholdsRow({ ...ticket, ignored: true });
+		const resting = flagWithholdsRow({ ...ticket, ignored: true });
 		replaceTickets();
 		const backInList = listViewsRef.current.active.some((row) => row.identity === ticket.identity);
 		const name = `"${ticket.title}"`;
@@ -2462,6 +2467,68 @@ export function App({
 						: `${name} is not ignored: an open fixing pull request still holds its row out of the list`,
 			});
 		}
+	};
+	/**
+	 * `u` mutes the source the row's Ticket came in on, or takes the mute back
+	 * (ADR 0070).
+	 *
+	 * The act is the operator's judgment on the source, written on the source's
+	 * own row, and the plane writes nothing to the source: no label, no close,
+	 * no comment. The row's facts carry the flag folded in - the mute of any of
+	 * the Ticket's sources - so the key flips on the flag, and it mutes or
+	 * un-mutes every source the Ticket's memberships name together, the way the
+	 * act rides on the row and acts on the source. The state's write settles
+	 * what the act takes away in the same transaction: the source's waiting
+	 * starts leave the Work queue, and the queued tickets whose route died with
+	 * them or before it rest `open` with their cycle incremented.
+	 */
+	const toggleSourceMute = () => {
+		// The Ticket under the cursor, read the way every Ticket control reads
+		// it (issue #159): a Group header holds no Ticket, and the catalogue
+		// refused the key with its own words before this ran.
+		const ticket = ticketAtCursor();
+		if (ticket === undefined) return;
+		if (state === undefined) {
+			// The mute is durable factory state on the source's row: the
+			// in-memory projection this shell holds has nowhere to keep it, so
+			// the key says so instead of acting as a view switch the operator
+			// would read as a mute (ADR 0070).
+			setWarningMessage("muting a source needs SQLite state");
+			return;
+		}
+		const sources = [
+			...new Set(ticket.memberships.map((membership) => membership.sourceName)),
+		].sort();
+		if (sources.length === 0) {
+			setWarningMessage("the selected Ticket names no source to mute");
+			return;
+		}
+		const muted = ticket.muted !== true;
+		let removed = 0;
+		let settled = 0;
+		for (const sourceName of sources) {
+			const result = state.setSourceMuted(sourceName, muted);
+			if (!result.ok) {
+				setWarningMessage(result.reason);
+				return;
+			}
+			removed += result.removed;
+			settled += result.settled;
+		}
+		replaceTickets();
+		const label = sources.join(", ");
+		const queueNote =
+			removed > 0
+				? `; ${removed} waiting start${removed === 1 ? "" : "s"} left the Work queue`
+				: "";
+		const restNote =
+			settled > 0 ? `; ${settled} queued Ticket${settled === 1 ? "" : "s"} rest open` : "";
+		reportMessage({
+			severity: "info",
+			text: muted
+				? `source ${label} is muted: no row while its tickets rest, no automatic start${queueNote}${restNote}`
+				: `source ${label} is not muted: its rows come back from the list, and the machine may start them`,
+		});
 	};
 	const cycleConsultationHistory = () => {
 		const next =
@@ -2985,6 +3052,7 @@ export function App({
 				// Ticket section's List filter (ADR 0060). The catalogue gated the
 				// obligation and the section, so both run the act and nothing else.
 				"ticket-ignore": () => toggleTicketIgnore(),
+				"ticket-mute": () => toggleSourceMute(),
 				"ticket-filter": () => cycleTicketFilter(),
 				"consultation-recovery": () => {
 					const selected = consultationsRef.current[consultationIndexRef.current];
@@ -4033,17 +4101,23 @@ export function App({
 						? "no ticket sources configured"
 						: healths.length === 0 || healths.some((health) => health.health === "loading")
 							? "loading tickets..."
-							: // A hidden pile is not an idle factory (ADR 0060): the empty active
-								// view points at the key that shows the rows the ignore took away, and
-								// a filtered view with no rows names the view the operator is in. The
-								// number is the pile itself, the same one the header's `ignored` cell
-								// names: where the active view stands empty, every flagged row is out
-								// of it, because a row with live work or a decision owed stays in.
-								ignoredCount > 0 && ticketFilter === "active"
-								? `no active Tickets; ${ignoredCount} ignored - press f`
+							: // A hidden pile is not an idle factory (ADR 0060, widened by ADR 0070):
+								// the empty active view points at the key that shows the rows the
+								// flags took away, and a filtered view with no rows names the view the
+								// operator is in. Each number is its ledger itself, the same one its
+								// header cell names: where the active view stands empty, every flagged
+								// row is out of it, because a row with live work or a decision owed
+								// stays in.
+								(ignoredCount > 0 || mutedCount > 0) && ticketFilter === "active"
+								? `no active Tickets; ${[
+										...(ignoredCount > 0 ? [`${ignoredCount} ignored`] : []),
+										...(mutedCount > 0 ? [`${mutedCount} muted`] : []),
+									].join(", ")} - press f`
 								: ticketFilter === "ignored"
 									? "no ignored Tickets - press f"
-									: "no tickets match the configured sources",
+									: ticketFilter === "muted"
+										? "no muted Tickets - press f"
+										: "no tickets match the configured sources",
 					groupingAxis,
 				);
 	const replacementConsultation =
@@ -4179,6 +4253,7 @@ export function App({
 						awaiting: awaitingCount,
 						held: heldCount,
 						ignored: ignoredCount,
+						muted: mutedCount,
 						heldBell,
 						active: mainSurfaceActive,
 						onToggle: () => clickSection("tickets"),

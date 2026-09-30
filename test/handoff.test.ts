@@ -93,6 +93,8 @@ const ticket: Ticket = {
 	handoffRecoveryRequired: false,
 	ignored: false,
 	ignoredAt: null,
+	muted: false,
+	mutedAt: null,
 	handoffCount: 0,
 	lastCompletion: null,
 	leftover: null,

@@ -1082,6 +1082,8 @@ function stubTicket(
 		handoffRecoveryRequired: false,
 		ignored: false,
 		ignoredAt: null,
+		muted: false,
+		mutedAt: null,
 		leftover: null,
 		...over,
 	};

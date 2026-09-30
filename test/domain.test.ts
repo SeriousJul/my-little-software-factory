@@ -44,6 +44,8 @@ function ticket(state: TicketState, externalUpdatedAt = "2026-01-01T00:00:00Z"):
 		handoffRecoveryRequired: false,
 		ignored: false,
 		ignoredAt: null,
+		muted: false,
+		mutedAt: null,
 		leftover: null,
 		matchedStateName: null,
 	};

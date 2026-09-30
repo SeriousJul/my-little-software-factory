@@ -57,6 +57,8 @@ function ticket(state: TicketState, environment: (typeof ENVIRONMENT_KINDS)[numb
 		handoffRecoveryRequired: false,
 		ignored: false,
 		ignoredAt: null,
+		muted: false,
+		mutedAt: null,
 		leftover: null,
 	};
 }

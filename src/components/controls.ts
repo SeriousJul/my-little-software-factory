@@ -94,6 +94,7 @@ type ControlKey =
 	| "x"
 	| "d"
 	| "w"
+	| "u"
 	| "delete"
 	| "f1"
 	| "f2"
@@ -765,8 +766,46 @@ const ticketIgnore = (context: ControlContext): ControlAvailability => {
  * The hint names the next view, the way the queue pause flips between Pause and
  * Resume, so the key says what it shows before the operator presses it.
  */
+/**
+ * Why `u` answers nothing (ADR 0070): the mute is the operator's act on the
+ * source, and it acts on no ticket of the source in particular, so the row's
+ * facts refuse it nowhere. A ticket that owes a decision now, or whose Agent
+ * is missing, mutes its source all the same - the act rides on the row and
+ * acts on the source - and the same key on a muted row takes the mute back.
+ * What it asks is the row itself: a selected Ticket.
+ */
+const ticketMute = (context: ControlContext): ControlAvailability => {
+	if (context.selectedTicket === undefined) return unavailable("no Ticket is selected");
+	return available();
+};
+/**
+ * The state the Ticket section's `f` moves the List filter to (ADR 0060,
+ * widened by ADR 0070).
+ *
+ * The hint names the next view, the way the queue pause flips between Pause and
+ * Resume, so the key says what it shows before the operator presses it. The
+ * mute's ledger stands beside the ignore's in the same cycle, so the hint
+ * names the muted view too.
+ */
 const ticketFilterLabel = (context: ControlContext): string =>
 	`Show ${nextTicketListFilter(context.ticketListFilter ?? "active")}`;
+/**
+ * The source the `u` act reaches on one row (ADR 0070).
+ *
+ * The bar names the source the act will act on: every source the row's Ticket
+ * came in on, the way the act mutes and un-mutes them together, so the key
+ * says what it reaches before the operator presses it. A row that names no
+ * source names the act's object alone.
+ */
+const ticketMuteLabel = (context: ControlContext): string => {
+	const ticket = context.selectedTicket;
+	if (ticket === undefined) return "Mute";
+	const sources = [
+		...new Set(ticket.memberships.map((membership) => membership.sourceName)),
+	].sort();
+	const name = sources.length === 0 ? "source" : sources.join(", ");
+	return ticket.muted === true ? `Un-mute ${name}` : `Mute ${name}`;
+};
 const consultationClose = (context: ControlContext): ControlAvailability => {
 	const consultation = context.selectedConsultation;
 	if (consultation === undefined) return unavailable("no Consultation is selected");
@@ -1208,11 +1247,34 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		guideNote: "hides a resting row and stops every automatic start",
 	},
 	{
-		// `f` cycles the Ticket section's List filter (ADR 0060): the pile the
-		// ignore made is one keypress from view in either direction. The filter
-		// is a view, not factory state, and it opens on the active rows at every
-		// boot. The Consultation section's history answers the same key in its own
-		// section, the way `w` and `g` carry one meaning per section.
+		// `u` takes a source out of the factory's way (ADR 0070): the flag is
+		// factory state on the source's row, the same key on a muted row takes
+		// it back, and the bar names the source the act will reach. The act
+		// settles the rows it takes away in the same write, the way the ignore
+		// settles the waiting start it hides.
+		id: "ticket-mute",
+		label: "Mute",
+		barLabel: ticketMuteLabel,
+		keys: () => ["u"],
+		keyLabel: "u",
+		scope: "control-plane",
+		actionBar: true,
+		// Beside the ignore: the mute is a row key of the Ticket section too, and
+		// the bar packs the rarer reveals - the `f` cycle, then the mute - away
+		// before they touch the measured ladder's Launch rung (ADR 0070).
+		priority: 39,
+		modes: [...baseModes],
+		ticketSectionOnly: true,
+		availability: ticketMute,
+		guideNote: "mutes the source the Ticket came in on, and the key un-mutes",
+	},
+	{
+		// `f` cycles the Ticket section's List filter (ADR 0060, widened by ADR
+		// 0070): the pile the ignore made and the ledger the mute names are each
+		// one keypress from view in either direction. The filter is a view, not
+		// factory state, and it opens on the active rows at every boot. The
+		// Consultation section's history answers the same key in its own section,
+		// the way `w` and `g` carry one meaning per section.
 		id: "ticket-filter",
 		label: "Filter",
 		barLabel: ticketFilterLabel,
@@ -1230,7 +1292,7 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		ticketSectionOnly: true,
 		sectionRefusal: (mode) => (workQueueMode(mode) ? LIST_SECTIONS_ONLY : TICKET_ONLY),
 		availability: available,
-		guideNote: "cycles the Ticket list: active, ignored, all",
+		guideNote: "cycles the Ticket list: active, ignored, muted, all",
 	},
 	{
 		// The Grouping axis (issue #159): one press steps the Ticket section's list

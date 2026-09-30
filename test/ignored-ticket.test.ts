@@ -326,12 +326,14 @@ describe("the ignore key", () => {
 					);
 					expect(messageRowOf(cleared)).toContain(`"${firstTitle}" is not ignored`);
 					expect(state.ignoredTickets().has(FIRST)).toBe(false);
-					// Back on the active rows, the Ticket is listed again.
+					// The cycle walks the ledger it passes: the empty muted view, then the
+					// every-row view where the Ticket is listed again.
+					await press(setup, "f", "the muted view", (f) => !headerRow(f).includes("muted: "));
 					const active = await press(
 						setup,
 						"f",
-						"the active view",
-						(f) => listRowOf(f, FIRST_LEAD) >= 0,
+						"the all view",
+						(f) => listRowOf(f, FIRST_LEAD) >= 0 && listRowOf(f, SECOND_LEAD) >= 0,
 					);
 					expect(listRowOf(active, SECOND_LEAD)).toBeGreaterThanOrEqual(0);
 				},
@@ -344,7 +346,7 @@ describe("the ignore key", () => {
 		}
 	});
 
-	test("f cycles the filter through active, ignored, and all, and opens on active", async () => {
+	test("f cycles the filter through active, ignored, muted, and all, and opens on active", async () => {
 		const { state, src, props } = rig();
 		try {
 			await withApp(
@@ -366,6 +368,17 @@ describe("the ignore key", () => {
 					expect(
 						rowsOf(pile).filter((r) => r.startsWith("│") && r.includes("ignored")),
 					).toHaveLength(1);
+					// muted: the ledger of the source acts, empty here, and it names its
+					// own emptiness once the last act never stood.
+					await press(
+						setup,
+						"f",
+						"the muted view",
+						(f) =>
+							listRowOf(f, FIRST_LEAD) < 0 &&
+							listRowOf(f, SECOND_LEAD) < 0 &&
+							rowsOf(f).some((r) => r.startsWith("│") && r.includes("no muted Tickets")),
+					);
 					// all: the pile and the rest, in the list's own order.
 					const every = await press(
 						setup,
@@ -440,12 +453,11 @@ describe("the ignore key", () => {
 					expect(headerRow(active)).toContain("open: 0");
 					// The boot's own rise rings; the cycle below must add nothing.
 					const bellsAfterBoot = bells.count();
-					for (const what of ["the pile", "every row", "the active rows"]) {
-						const frame = await press(
-							setup,
-							"f",
-							what,
-							(f) => listRowOf(f, what === "every row" ? SECOND_LEAD : FIRST_LEAD) >= 0,
+					for (const what of ["the pile", "the muted view", "every row", "the active rows"]) {
+						const frame = await press(setup, "f", what, (f) =>
+							what === "the muted view"
+								? listRowOf(f, FIRST_LEAD) < 0 && listRowOf(f, SECOND_LEAD) < 0
+								: listRowOf(f, what === "every row" ? SECOND_LEAD : FIRST_LEAD) >= 0,
 						);
 						// The same counts in every view: the ignored row leaves the open
 						// count, and the held turn is counted wherever the screen stands.
@@ -477,6 +489,8 @@ describe("the ignore key", () => {
 					await press(setup, "i", "the ignore", (f) => headerRow(f).includes("ignored: 1"));
 					expect(actionBarRowOf(await settle(setup))).toContain("f Show ignored");
 					await press(setup, "f", "the pile", (f) => listRowOf(f, FIRST_LEAD) >= 0);
+					expect(actionBarRowOf(await settle(setup))).toContain("f Show muted");
+					await press(setup, "f", "the muted view", (f) => listRowOf(f, FIRST_LEAD) < 0);
 					expect(actionBarRowOf(await settle(setup))).toContain("f Show all");
 					await press(setup, "f", "every row", (f) => listRowOf(f, SECOND_LEAD) >= 0);
 					expect(actionBarRowOf(await settle(setup))).toContain("f Show active");
@@ -518,8 +532,16 @@ describe("the ignore key", () => {
 						(f) => listRowOf(f, FIRST_LEAD) >= 0 && listRowOf(f, SECOND_LEAD) < 0,
 					);
 					expect(detailPaneText(pile)).toContain(firstTitle);
-					// ignored to all: the pile's Ticket is still shown, so the cursor
-					// keeps it - reading the pile does not lose the place.
+					// ignored to muted: the empty ledger holds no row, so the cursor has
+					// no place there and the detail pane stands empty.
+					await press(
+						setup,
+						"f",
+						"the muted view",
+						(f) => listRowOf(f, FIRST_LEAD) < 0 && listRowOf(f, SECOND_LEAD) < 0,
+					);
+					// muted to all: the pile's Ticket is still shown, so the cursor keeps
+					// it - reading the pile does not lose the place.
 					const every = await press(
 						setup,
 						"f",
@@ -572,11 +594,13 @@ describe("the ignore key", () => {
 						rowsOf(f).some((r) => r.startsWith("│") && r.includes("no ignored Tickets")),
 					);
 					expect(cleared).toContain("no ignored Tickets - press f");
-					// And the active view holds both rows again.
+					// The cycle walks the empty muted ledger past, and the every-row view
+					// holds both rows again.
+					await press(setup, "f", "the muted view", (f) => listRowOf(f, FIRST_LEAD) < 0);
 					const back = await press(
 						setup,
 						"f",
-						"the active view",
+						"the all view",
 						(f) => listRowOf(f, SECOND_LEAD) >= 0,
 					);
 					expect(listRowOf(back, FIRST_LEAD)).toBeGreaterThanOrEqual(0);
@@ -666,6 +690,15 @@ describe("the ignore key", () => {
 				async (setup) => {
 					const frame = await listed(setup, src);
 					expect(actionBarRowOf(frame)).toContain("i Ignore");
+					// The mute names the source the act reaches (ADR 0070): the bar's
+					// measured ladder keeps the Launch rung at 120, so the mute stands
+					// where the row holds one more hint.
+					setup.resize(150, HEIGHT);
+					await awaitFrame(
+						setup,
+						(f) => actionBarRowOf(f).includes("u Mute issues"),
+						"the bar to name the mute",
+					);
 					// The detail pane's bar names it too.
 					setup.mockInput.pressKey("l");
 					await awaitFrame(
@@ -677,7 +710,8 @@ describe("the ignore key", () => {
 					setup.mockInput.pressKey("?");
 					const guide = await awaitFrame(setup, (f) => f.includes("Key guide"), "the Key guide");
 					expect(guide).toContain("hides a resting row and stops every automatic start");
-					expect(guide).toContain("cycles the Ticket list: active, ignored, all");
+					expect(guide).toContain("mutes the source the Ticket came in on, and the key un-mutes");
+					expect(guide).toContain("cycles the Ticket list: active, ignored, muted, all");
 				},
 				WIDTH,
 				HEIGHT,
@@ -1014,7 +1048,14 @@ describe("the ignore and the machine", () => {
 					);
 					await press(setup, "return", "the start to wait", (f) => f.includes("waiting: 1"));
 					// Back to the active rows: the Ticket is nowhere in the list the
-					// operator sees, and its waiting start is the queue's own row.
+					// operator sees, and its waiting start is the queue's own row. The
+					// cycle walks the empty muted ledger past on the way.
+					await press(
+						setup,
+						"f",
+						"the muted view",
+						(f) => !ticketRowHolds(f, FIRST_LEAD) && !ticketRowHolds(f, SECOND_LEAD),
+					);
 					await press(
 						setup,
 						"f",
@@ -1096,7 +1137,13 @@ describe("the ignore and the machine", () => {
 					// Back to the active rows before the removal: the list rule withholds the
 					// Ticket's own row there, so the line has to name the Ticket from the
 					// projection before the rule, not from the rows the section draws
-					// (ADR 0042, ADR 0060).
+					// (ADR 0042, ADR 0060). The cycle walks the empty muted ledger past.
+					await press(
+						setup,
+						"f",
+						"the muted view",
+						(f) => !ticketRowHolds(f, FIRST_LEAD) && !ticketRowHolds(f, SECOND_LEAD),
+					);
 					await press(setup, "f", "every row", (f) => ticketRowHolds(f, FIRST_LEAD));
 					await press(setup, "f", "the active rows", (f) => !ticketRowHolds(f, FIRST_LEAD));
 					// The cursor walks out of the Ticket list and down the visible flow: the
@@ -1422,16 +1469,27 @@ describe("the ignored marker's frame", () => {
 					expect(pile).toContain("ignored");
 					expect(detailPaneText(pile)).toContain(firstTitle);
 					expect(actionBarRowOf(pile)).toContain("i Un-ignore");
-					// And `all` does not show it: the covered rule still holds the list.
+					// The cycle walks the empty muted ledger past, and `all` does not show
+					// it: the covered rule still holds the list.
+					await press(
+						setup,
+						"f",
+						"the muted view",
+						(f) => !ticketRowHolds(f, FIRST_LEAD) && !ticketRowHolds(f, SECOND_LEAD),
+					);
 					await press(setup, "f", "every row", (f) => ticketRowHolds(f, SECOND_LEAD));
 					const every = await settle(setup);
 					expect(ticketRowHolds(every, FIRST_LEAD)).toBe(false);
 					expect(headerRow(every)).toContain("ignored: 1");
 					// The same key on that piled row takes the Ticket back, and the row
 					// returns to standing under the covered rule alone. The cycle runs
-					// active, ignored, all, so two presses walk from `all` back to the pile.
+					// active, ignored, muted, all, so two presses walk from `all` back to
+					// the pile: the active view holds no covered row, and the next press
+					// is the pile itself, past the empty muted ledger.
 					await press(setup, "f", "the active rows", (f) => !ticketRowHolds(f, FIRST_LEAD));
-					await press(setup, "f", "the pile again", (f) => ticketRowHolds(f, FIRST_LEAD));
+					await press(setup, "f", "the pile again, past the muted ledger", (f) =>
+						ticketRowHolds(f, FIRST_LEAD),
+					);
 					const cleared = await press(setup, "i", "the clear", (f) =>
 						messageRowOf(f).includes("is not ignored"),
 					);

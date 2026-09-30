@@ -60,6 +60,11 @@ const LEFTOVER_TEXT = "leftover";
  * so it stands in the no-color presentation and under an inherited Theme alike.
  */
 const IGNORED_TEXT = "ignored";
+/**
+ * The marker a ticket of a muted source wears (ADR 0070), beside the
+ * ignore's: one word per flag, the way the header names one count per flag.
+ */
+const MUTED_TEXT = "muted";
 const MARKER_GAP = 1;
 /** Two cells: "❯ " when the row is selected, two spaces otherwise. */
 const SELECTION_WIDTH = 2;
@@ -246,8 +251,10 @@ function rowSpans(
 	if (atLimit) trailing.push({ text: LIMIT_TEXT, fg: paint("yellow") });
 	if (ticket.leftover !== null) trailing.push({ text: LEFTOVER_TEXT, fg: paint("yellow") });
 	// The ignore rides the same lane: the state badge keeps its own slot, so an
-	// ignored Ticket whose Agent works still reads `running` (ADR 0060).
+	// ignored Ticket whose Agent works still reads `running` (ADR 0060), and the
+	// mute of the Ticket's sources rides it the same way (ADR 0070).
 	if (ticket.ignored) trailing.push({ text: IGNORED_TEXT, fg: paint("subtext0") });
+	if (ticket.muted) trailing.push({ text: MUTED_TEXT, fg: paint("subtext0") });
 
 	if (budget >= SELECTION_WIDTH) {
 		// The selected row's marker and title wear bold: the emphasis the
