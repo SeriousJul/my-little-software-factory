@@ -207,16 +207,9 @@ function planeState(): FactoryState {
 
 // The `gh` commands the merge runs, in the exact order the runner takes them.
 const PR_READ_ARGS = ["api", "--hostname", "github.com", "repos/acme/factory/pulls/12"];
-const PR_MERGE_ARGS = [
-	"pr",
-	"merge",
-	"#12",
-	"--squash",
-	"--hostname",
-	"github.com",
-	"--repo",
-	"acme/factory",
-];
+// The host rides in the repository identity: `gh pr merge` maps no
+// `--hostname`, and the identity is the form its `--repo` takes.
+const PR_MERGE_ARGS = ["pr", "merge", "#12", "--squash", "--repo", repoIdentity];
 
 /** The source's answer that the pull request still reads open. */
 function stubOpenRead(runner: FakeRunner): void {
@@ -468,9 +461,7 @@ describe("the merge run through the command runner", () => {
 			method: "squash",
 		});
 		expect(result).toEqual({ outcome: "merged", reason: "", alreadyMerged: false });
-		expect(runner.commands()).toContain(
-			"gh pr merge #12 --squash --hostname github.com --repo acme/factory",
-		);
+		expect(runner.commands()).toContain("gh pr merge #12 --squash --repo github.com/acme/factory");
 
 		const attempt = state.recordPlaneActionAttempt({
 			ticketIdentity: pullIdentity,
@@ -534,7 +525,7 @@ describe("the merge run through the command runner", () => {
 		});
 		const commands = runner.commands();
 		expect(commands).toContain(
-			`gh pr comment #12 --hostname github.com --repo acme/factory --body ` +
+			`gh pr comment #12 --repo github.com/acme/factory --body ` +
 				`The factory's merge was blocked: GraphQL: PullRequest is not mergeable.`,
 		);
 		// The comment posts after the refused merge: the merge's command
@@ -693,9 +684,66 @@ describe("the dispatch's ask and pickup", () => {
 		expect(ticket.workCycle).toBe(1);
 		expect(state.workQueue()).toEqual([]);
 		expect(events).toContain(`notice: the merge of "${pullTitle}" ran from the Work queue`);
-		expect(runner.commands()).toContain(
-			"gh pr merge #12 --squash --hostname github.com --repo acme/factory",
-		);
+		expect(runner.commands()).toContain("gh pr merge #12 --squash --repo github.com/acme/factory");
+		// No agent: the run took no herdr command at all.
+		expect(runner.commands().filter((command) => command.startsWith("herdr"))).toEqual([]);
+		state.close();
+	});
+
+	test("a dispatch on a plane action's task type crosses the plane action's channel", async () => {
+		const state = planeState();
+		const runner = new FakeRunner();
+		// The run's fresh read finds the pull request open, the merge lands,
+		// and the fire's fresh read finds it merged.
+		stubReadSequence(runner, [{ state: "open" }, { merged: true }]);
+		stubMerge(runner, 0);
+		const events: string[] = [];
+		let resolveStarted: () => void = () => {};
+		const startedSettled = new Promise<void>((resolve) => {
+			resolveStarted = resolve;
+		});
+		const dispatch = createHandoffDispatch({
+			state,
+			runner,
+			config: () => PLANE_CONFIG,
+			seatCount: () => 0,
+			home: home(),
+			...recorder(events),
+		});
+
+		// The ask enters through the handoff's own seam: the ticket list's
+		// start, with the merge's task type on its choice.
+		const result = await dispatch.dispatch({
+			origin: "open",
+			ticketIdentity: pullIdentity,
+			choice: {
+				agentType: "pi",
+				environment: "worktree",
+				taskType: "merge",
+				model: "",
+				thinking: "",
+				contextWindow: "",
+			},
+			previousMessage: "",
+			onStarted: (started) => {
+				expect(started).toEqual({ ok: true });
+				resolveStarted();
+			},
+		});
+		expect(result).toEqual({ ok: true });
+		await startedSettled;
+
+		// The ask crossed the plane action's channel: its attempt record
+		// holds the merged outcome, the queue is clear, and no handoff item
+		// ever stood on it.
+		const attempt = state.latestPlaneActionAttempt(pullIdentity);
+		expect(attempt?.outcome).toBe("merged");
+		expect(attempt?.decision).not.toBeNull();
+		expect(state.ticketState(pullIdentity)).toBe("open");
+		expect(state.workQueue()).toEqual([]);
+		// The merge command carries no `--hostname`: the host rides in the
+		// repository identity its `--repo` takes.
+		expect(runner.commands()).toContain("gh pr merge #12 --squash --repo github.com/acme/factory");
 		// No agent: the run took no herdr command at all.
 		expect(runner.commands().filter((command) => command.startsWith("herdr"))).toEqual([]);
 		state.close();
@@ -1128,9 +1176,7 @@ describe("the decision screen's merge", () => {
 		expect(attempt?.outcome).toBe("merged");
 		expect(attempt?.decision).toBe("merged");
 		expect(state.lastCompletion(pullIdentity)?.decision).toBe("merged");
-		expect(runner.commands()).toContain(
-			"gh pr merge #12 --squash --hostname github.com --repo acme/factory",
-		);
+		expect(runner.commands()).toContain("gh pr merge #12 --squash --repo github.com/acme/factory");
 		// No agent, no worktree: the run started no herdr command.
 		expect(
 			runner

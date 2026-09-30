@@ -158,7 +158,10 @@ type DerivedKey = Exclude<RowKey, "environment" | "taskType">;
  * has no face. Both state the one sentence the start answers with, so the
  * row never carries its meaning on the tone alone.
  */
-type RowRefusal = UnfitVerdict | { ok: false; reason: string; placement: true };
+type RowRefusal =
+	| UnfitVerdict
+	| { ok: false; reason: string; placement: true }
+	| { ok: false; reason: string; plane: true };
 
 interface PanelRow {
 	label: string;
@@ -215,6 +218,14 @@ interface OverridePanelProps {
 	 * holds no ticket to place, and the row stays plain.
 	 */
 	taskPlacements?: Record<string, PlacementEvaluation>;
+	/**
+	 * The task types whose action form the start crosses the plane action's
+	 * channel with (ADR 0068): the start runs no Agent, so while the Task row
+	 * stands on one of them, every setting row wears the written refusal the
+	 * decision screen's edit key states - the values ride on the ask and go
+	 * unrun.
+	 */
+	planeActionTaskTypes?: readonly string[];
 	/** The base control facts, preserved when this overlay owns input. */
 	context: ControlContext;
 	/** False while a Key guide or Message view is above this panel. */
@@ -251,6 +262,8 @@ const CONTEXT_REFUSALS = {
 const UNSET_HINT = "(unset)";
 const LOADING_HINT = "(loading...)";
 const NO_MODELS_HINT = "(no models available)";
+/** The refusal a setting row wears on a plane action's task type (ADR 0068). */
+const PLANE_ACTION_SETTINGS = "the plane action holds no settings";
 /** The panel's columns, within the rows and width the shared chrome leaves. */
 interface PanelGeometry {
 	markerWidth: number;
@@ -331,6 +344,7 @@ export function OverridePanel({
 	onConfirm,
 	onCancel,
 	taskPlacements,
+	planeActionTaskTypes,
 	context,
 	inputActive = true,
 	onHelp,
@@ -373,7 +387,15 @@ export function OverridePanel({
 	const [hasSelection, setHasSelection] = useState(false);
 
 	const rowsForChoice = (value: HandoffChoice): PanelRow[] =>
-		rowsFor(value, agents, environments, taskTypes, listFor(value, modelList), taskPlacements);
+		rowsFor(
+			value,
+			agents,
+			environments,
+			taskTypes,
+			listFor(value, modelList),
+			taskPlacements,
+			planeActionTaskTypes,
+		);
 	const allRows = rowsForChoice(choice);
 	const focus = useFormSlots(
 		allRows.map((item, index) => ({
@@ -649,6 +671,7 @@ function rowsFor(
 	taskTypes: readonly string[],
 	modelStatus: ModelListStatus,
 	taskPlacements: Record<string, PlacementEvaluation> | undefined,
+	planeActionTaskTypes: readonly string[] | undefined,
 ): PanelRow[] {
 	// An Agent type the config no longer names reads as one that maps nothing:
 	// every value the choice carries then shows in its warning row, where the
@@ -723,6 +746,21 @@ function rowsFor(
 			digits: true,
 			unfit: unfitVerdict(staticVerdicts.contextWindow),
 		});
+	}
+	// A start on a plane action's task type runs no Agent (ADR 0068): the
+	// values on the setting rows ride on the ask and go unrun, so the Task
+	// row states the fact and every setting row wears the written refusal the
+	// decision screen's edit key states.
+	if (planeActionTaskTypes?.includes(choice.taskType) === true) {
+		// The plane action runs no placement write, so the Task row's own
+		// placement note and refusal give way to the fact that the start runs
+		// no Agent at all.
+		taskRow.unfit = undefined;
+		taskRow.placement = PLANE_ACTION_SETTINGS;
+		for (const row of rows) {
+			if (row.key !== "taskType")
+				row.unfit = { ok: false, reason: PLANE_ACTION_SETTINGS, plane: true };
+		}
 	}
 	return rows;
 }

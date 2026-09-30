@@ -4795,6 +4795,9 @@ export function App({
 				taskTypes: Object.keys(config.taskTypes),
 				profiles,
 				taskPlacements: taskPlacementsFor(override),
+				planeActionTaskTypes: Object.keys(config.taskTypes).filter((name) =>
+					isPlaneActionTaskType(config.taskTypes, name),
+				),
 				onCopy: reportMessage,
 				modelList,
 				onAgentChange: requestModelList,

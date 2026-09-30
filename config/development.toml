@@ -14,6 +14,7 @@ max-handoffs-per-ticket = 20
 "github.com/SeriousJul/my-little-software-factory" = "/home/seriousjul/src/my-little-software-factory"
 "github.com/seriousjul/pi-extensions" = "/home/seriousjul/src/pi-extensions"
 "github.com/SeriousJul/seriousjul.github.io" = "/home/seriousjul/src/seriousjul.github.io"
+"github.com/SeriousJul/yapdf" = "/home/seriousjul/src/yapdf2"
 
 [scroll]
 speed = 1
@@ -447,33 +448,33 @@ auto-advance = true
 name = "factory-issues"
 kind = "github-issues"
 refresh-interval-seconds = 60
-repositories = ["SeriousJul/my-little-software-factory", "SeriousJul/pi-extensions", "SeriousJul/seriousjul.github.io"]
+repositories = ["SeriousJul/my-little-software-factory", "SeriousJul/pi-extensions", "SeriousJul/seriousjul.github.io", "SeriousJul/yapdf"]
 host = "github.com"
 
 [[sources]]
 name = "factory-pull-requests"
 kind = "github-pull-requests"
 refresh-interval-seconds = 60
-repositories = ["SeriousJul/my-little-software-factory", "SeriousJul/pi-extensions", "SeriousJul/seriousjul.github.io"]
+repositories = ["SeriousJul/my-little-software-factory", "SeriousJul/pi-extensions", "SeriousJul/seriousjul.github.io", "SeriousJul/yapdf"]
 host = "github.com"
 
 [[sources]]
 name = "my-security-advisories"
 kind = "github-security-advisories"
 refresh-interval-seconds = 300
-repositories = ["SeriousJul/my-little-software-factory", "SeriousJul/pi-extensions", "SeriousJul/seriousjul.github.io"]
+repositories = ["SeriousJul/my-little-software-factory", "SeriousJul/pi-extensions", "SeriousJul/seriousjul.github.io", "SeriousJul/yapdf"]
 host = "github.com"
 
 [[sources]]
 name = "my-dependabot-alerts"
 kind = "github-dependabot-alerts"
 refresh-interval-seconds = 300
-repositories = ["SeriousJul/my-little-software-factory", "SeriousJul/pi-extensions", "SeriousJul/seriousjul.github.io"]
+repositories = ["SeriousJul/my-little-software-factory", "SeriousJul/pi-extensions", "SeriousJul/seriousjul.github.io", "SeriousJul/yapdf"]
 host = "github.com"
 
 [[sources]]
 name = "my-secret-alerts"
 kind = "github-secret-scanning-alerts"
 refresh-interval-seconds = 300
-repositories = ["SeriousJul/my-little-software-factory", "SeriousJul/pi-extensions", "SeriousJul/seriousjul.github.io"]
+repositories = ["SeriousJul/my-little-software-factory", "SeriousJul/pi-extensions", "SeriousJul/seriousjul.github.io", "SeriousJul/yapdf"]
 host = "github.com"

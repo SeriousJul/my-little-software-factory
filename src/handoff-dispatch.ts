@@ -25,7 +25,11 @@ import {
 } from "./handoff.ts";
 import type { Logger } from "./logging.ts";
 import { evaluatePlacement } from "./placement.ts";
-import { planeActionSettingOf, runMergePullRequest } from "./plane-actions.ts";
+import {
+	isPlaneActionTaskType,
+	planeActionSettingOf,
+	runMergePullRequest,
+} from "./plane-actions.ts";
 import type { RepositoryMapping } from "./repo.ts";
 import { type CommandRunner, errorMessage } from "./runner.ts";
 import type {
@@ -476,6 +480,21 @@ class HandoffDispatchModule implements HandoffDispatch {
 	dispatch(intent: HandoffIntent): Promise<DispatchResult> {
 		if (this.stopped)
 			return Promise.resolve({ ok: false, reason: "the dispatch has been stopped" });
+		// A start on a plane action's task type crosses the plane action's
+		// channel, not the handoff's (ADR 0068): the action form holds no
+		// template and no profile, so the handoff's pickup would refuse it with
+		// `carries no prompt template`. The route keeps the Work queue as its
+		// one channel, and the plane action's own gates run on its own ask.
+		if (isPlaneActionTaskType(this.config().taskTypes, intent.choice.taskType)) {
+			return this.dispatchPlaneAction({
+				origin: intent.origin,
+				ticketIdentity: intent.ticketIdentity,
+				taskType: intent.choice.taskType,
+				routeFromIdentity: intent.routeFromIdentity,
+				automatic: intent.automatic,
+				onStarted: intent.onStarted,
+			});
+		}
 		// The Work queue is the single start channel (ADR 0049): every start,
 		// manual or automatic, enters the queue first, and the immediate pickup
 		// pass takes it when a seat is free. The claim's hard gates run before
