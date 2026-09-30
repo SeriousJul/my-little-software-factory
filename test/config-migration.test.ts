@@ -122,11 +122,25 @@ describe("the pure rewrite", () => {
 		expect(config.taskTypes.implement.transition).toMatchObject({
 			pullRequestFacts: ["ready-for-review"],
 		});
+		// The seed's merge template matched the shipped seed exactly, so the
+		// rewrite took the action form in its place (ADR 0068): the template
+		// and the profile keys are gone, and the plane runs the merge.
+		expect(config.taskTypes.merge).toMatchObject({
+			action: "merge-pull-request",
+			method: "squash",
+		});
+		expect(config.taskTypes.merge?.template).toBeUndefined();
+		expect(config.taskTypes.merge?.agent).toBeUndefined();
+		expect(result.reportText).toContain(
+			"`merge`: converted to the action form (the template matched the shipped seed exactly)",
+		);
 		// The clean templates carry no workflow label for the agents to obey.
-		for (const task of Object.values(config.taskTypes))
+		for (const task of Object.values(config.taskTypes)) {
+			if (task.template === undefined) continue;
 			expect(task.template).not.toMatch(
 				/ready-for-agent|ready-for-review|ready-to-ship|needs-work/,
 			);
+		}
 		expect(result.configText).toContain("# Migrated to the workflow machine on 2026-09-17");
 		// The report names the behavior changes the rewrite carries: the
 		// dropped comments and the wider default source list.

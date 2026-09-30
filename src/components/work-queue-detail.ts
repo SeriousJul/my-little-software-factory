@@ -38,21 +38,23 @@ export function workQueueDetailLines(
 	const lines: WorkQueueDetailLine[] = [
 		{ text: title, fg: paint("text"), bold: true },
 		{
-			text: item.kind === "handoff" ? item.ticketIdentity : item.consultationId,
+			text: item.kind === "consultation" ? item.consultationId : item.ticketIdentity,
 			fg: paint("subtext0"),
 		},
 		{
-			text: `Origin: ${item.kind === "handoff" ? item.origin : "consultation"}   place ${item.position + 1} of ${workQueueDepth}`,
+			text: `Origin: ${item.kind === "plane-action" ? "merge" : item.kind === "handoff" ? item.origin : "consultation"}   place ${item.position + 1} of ${workQueueDepth}`,
 			fg: paint("text"),
 		},
-		// Who asked for the start (ADR 0051): the operator staged this row, or
-		// the factory's top-up added it. The origin word alone cannot tell them
-		// apart - the operator's route and the factory's continuation are both
-		// `workflow` - and the queue's depth is the operator's queue, not the
-		// factory's noise, so the detail says whose start this is.
+		// Who asked for the start (ADR 0051, ADR 0068): the operator staged
+		// this row, or the factory's top-up added it. The origin word alone
+		// cannot tell them apart - the operator's route and the factory's
+		// continuation are both `workflow` - and the queue's depth is the
+		// operator's queue, not the factory's noise, so the detail says whose
+		// start this is.
 		{
 			text:
-				item.kind === "handoff" && item.automatic
+				(item.kind === "handoff" && item.automatic) ||
+				(item.kind === "plane-action" && item.automatic)
 					? "Asked by: the factory's auto top-up"
 					: "Asked by: the operator",
 			fg: paint("subtext0"),
@@ -72,6 +74,17 @@ export function workQueueDetailLines(
 			// queue with the fact that its record is not there to read.
 			lines.push({ text: "Record: not found", fg: paint("yellow") });
 		}
+	} else if (item.kind === "plane-action") {
+		// The plane action's item carries the action form's facts (ADR 0068):
+		// the task type whose action form the pickup runs, and the method the
+		// form names. The item holds no settings of its own: the action form
+		// stands in its place, and the run re-reads the form when it starts.
+		lines.push({ text: `Task type: ${item.taskType}`, fg: paint("text") });
+		lines.push({ text: `Method: ${row.method ?? "squash"}`, fg: paint("text") });
+		lines.push({
+			text: "The action holds no settings to edit: the merge runs on the task type's action form",
+			fg: paint("subtext0"),
+		});
 	} else {
 		lines.push({ text: `Agent: ${item.choice.agentType}`, fg: paint("text") });
 		lines.push({ text: `Environment: ${item.choice.environment}`, fg: paint("text") });

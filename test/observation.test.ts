@@ -276,6 +276,23 @@ function rig(options: {
 			if (intent.onStarted !== undefined) pending.push(intent.onStarted);
 			return { ok: true };
 		},
+		// The plane action's ask rides the same rig seam (ADR 0068): the walk's
+		// add lands in the state's queue, the way the handoff's add does.
+		dispatchPlaneAction: async (intent) => {
+			order?.push(`dispatch-plane-action:${intent.origin}`);
+			if (options.refuseDispatch !== undefined)
+				return { ok: false, reason: options.refuseDispatch };
+			const enqueued = state.enqueuePlaneActionWork({
+				ticketIdentity: intent.ticketIdentity,
+				routeFromIdentity: intent.routeFromIdentity ?? null,
+				origin: intent.origin,
+				taskType: intent.taskType,
+				automatic: intent.automatic === true,
+			});
+			if (enqueued.ok !== true) return { ok: false, reason: enqueued.reason };
+			if (intent.onStarted !== undefined) pending.push(intent.onStarted);
+			return { ok: true };
+		},
 		pickupWorkQueue:
 			pickup === undefined
 				? undefined
@@ -1058,6 +1075,7 @@ describe("the observation cycle", () => {
 			},
 			config: () => config,
 			dispatch: mock().mockResolvedValue({ ok: true }),
+			dispatchPlaneAction: mock().mockResolvedValue({ ok: true }),
 			cleanup: async () => undefined,
 			now: () => Date.parse("2026-08-31T11:00:00Z"),
 			mode: () => true,
@@ -2857,8 +2875,8 @@ describe("the open dispatch", () => {
 				// The pickup's pass: the items take their seats and leave.
 				const items = state.workQueue();
 				for (const item of items) {
-					if (item.kind === "handoff") state.removeWorkItem(item.ticketIdentity);
-					else state.removeConsultationWorkItem(item.consultationId);
+					if (item.kind === "consultation") state.removeConsultationWorkItem(item.consultationId);
+					else state.removeWorkItem(item.ticketIdentity);
 				}
 				return items.length;
 			},
@@ -3383,6 +3401,7 @@ describe("the injectable clock", () => {
 			},
 			config: () => config,
 			dispatch: async () => ({ ok: true }),
+			dispatchPlaneAction: async () => ({ ok: true }),
 			cleanup: async () => undefined,
 			now: () => Date.parse("2026-08-31T11:00:00Z"),
 			mode: () => false,
@@ -4134,6 +4153,7 @@ describe("an agent that outlives its work cycle", () => {
 			},
 			config: () => config,
 			dispatch: async () => ({ ok: true }),
+			dispatchPlaneAction: async () => ({ ok: true }),
 			cleanup: async () => undefined,
 			now: () => Date.parse("2026-08-31T11:05:00Z"),
 			mode: () => false,

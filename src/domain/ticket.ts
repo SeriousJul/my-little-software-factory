@@ -31,17 +31,20 @@ export const HANDOFF_ENVIRONMENT_KINDS = ["live-worktree", "worktree"] as const;
  *
  * The trace records the decisions that decide the settled turn:
  * `handed-off` and `auto-handed-off` started a workflow handoff from the
- * awaiting state; `closed` and `auto-closed` ended the work cycle;
- * `abandoned` ended a cycle whose agent went missing. Goto is navigation,
- * not a decision (ADR 0033): it focuses the agent's pane and records
- * nothing here.
+ * awaiting state; `merged` and `auto-merged` started the plane action's
+ * merge route from the awaiting state (ADR 0068); `closed` and `auto-closed`
+ * ended the work cycle; `abandoned` ended a cycle whose agent went
+ * missing. Goto is navigation, not a decision (ADR 0033): it focuses the
+ * agent's pane and records nothing here.
  */
 export type CompletionDecision =
 	| "closed"
 	| "auto-closed"
 	| "abandoned"
 	| "handed-off"
-	| "auto-handed-off";
+	| "auto-handed-off"
+	| "merged"
+	| "auto-merged";
 
 /** One settled turn of one handoff, as the control plane stored it. */
 export interface Completion {

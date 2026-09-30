@@ -18,6 +18,11 @@ const SHIPPED_DEFAULT_CONFIG = fileURLToPath(new URL("../config/default.toml", i
 
 const config = validateConfig(parseToml(readFileSync(SHIPPED_DEFAULT_CONFIG, "utf8")));
 
+/** The task type's prompt template, asserted: the security types carry the prompt form. */
+function templateOf(taskType: { template?: string }): string {
+	return taskType.template as string;
+}
+
 /** The ticket facts of one ticket of each kind. */
 const tickets: Record<"advisory" | "dependabot" | "secret", Partial<Ticket>> = {
 	advisory: {
@@ -90,7 +95,7 @@ function noLiteralPlaceholders(prompt: string): void {
 
 describe("the resolve-security-advisory template", () => {
 	const prompt = renderPrompt(
-		config.taskTypes["resolve-security-advisory"].template,
+		templateOf(config.taskTypes["resolve-security-advisory"]),
 		ticketOf("advisory"),
 	);
 
@@ -146,7 +151,7 @@ describe("the security transitions hand the opened pull request to review", () =
 
 describe("the resolve-dependabot-alert template", () => {
 	const prompt = renderPrompt(
-		config.taskTypes["resolve-dependabot-alert"].template,
+		templateOf(config.taskTypes["resolve-dependabot-alert"]),
 		ticketOf("dependabot"),
 	);
 
@@ -189,7 +194,7 @@ describe("the resolve-dependabot-alert template", () => {
 
 describe("the resolve-secret-scanning-alert template", () => {
 	const prompt = renderPrompt(
-		config.taskTypes["resolve-secret-scanning-alert"].template,
+		templateOf(config.taskTypes["resolve-secret-scanning-alert"]),
 		ticketOf("secret"),
 	);
 

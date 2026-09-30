@@ -52,10 +52,45 @@ export function hasOldWorkflowMachineKeys(data: unknown): boolean {
 	const taskTypes = data["task-types"];
 	if (!isRecord(taskTypes)) return false;
 	for (const task of Object.values(taskTypes)) {
-		if (isRecord(task) && "auto-close" in task) return true;
+		if (isRecord(task) && ("auto-close" in task || oldMergeSeedMatch(task))) return true;
 	}
 	return false;
 }
+
+/**
+ * Whether the task type carries the pre-action merge seed template exactly
+ * (ADR 0068). A merge type in the prompt form whose template matches the
+ * shipped seed exactly is the seed the plane shipped, and the load takes the
+ * action form it was replaced by, the way the seed templates migrate.
+ */
+function oldMergeSeedMatch(task: Record<string, unknown>): boolean {
+	return task.template === OLD_SEED_TEMPLATES.merge || task.template === MERGE_PROMPT_SEED_TEMPLATE;
+}
+
+/**
+ * The shipped machine-era merge seed template, beside the pre-machine one:
+ * a seeded machine-era config carries the clean template, and its exact
+ * match converts to the action form the same way.
+ */
+const MERGE_PROMPT_SEED_TEMPLATE = `Merge pull request {external-key}: {title}.
+
+### Instructions
+
+1. **Squash and Merge**
+   - Squash and merge the pull request into its base branch.
+   - Close the related ticket if all acceptance criteria are satisfied.
+
+2. **On a Blocked Merge**
+   - If the pull request has a merge conflict or a failing CI check, do not merge.
+   - Post a comment explaining the reason for the blocked merge.
+
+Repository: {repository}
+Pull request: {source-url}
+
+Labels: {labels}
+
+Description:
+{description}`;
 
 /**
  * Migrate a pre-workflow-machine config to the machine. Pure: the result's
@@ -192,6 +227,7 @@ export function migrateWorkflowMachineConfig(
 		}
 		const task: Record<string, unknown> = {};
 		let seedTemplateMatched = false;
+		let actionFormReplaced = false;
 		for (const [key, value] of Object.entries(rawTask)) {
 			if (key === "auto-close") {
 				if (value === true) {
@@ -216,15 +252,39 @@ export function migrateWorkflowMachineConfig(
 			}
 			task[key] = value;
 		}
+		// The merge's conversion to the action form (ADR 0068): a prompt-form
+		// type whose template matched the shipped merge seed exactly takes the
+		// action form the seed was replaced by, with its profile keys dropped -
+		// the plane runs the merge, and the action holds no settings the
+		// profile keys would edit. A customized template stays a prompt task
+		// type, named in the report.
+		if (
+			name === "merge" &&
+			typeof task.template === "string" &&
+			(task.template === OLD_SEED_TEMPLATES.merge || task.template === MERGE_PROMPT_SEED_TEMPLATE)
+		) {
+			const shippedTask = shippedTaskTypes.merge;
+			if (isRecord(shippedTask) && typeof shippedTask.action === "string") {
+				const previousTransition = task.transition;
+				for (const key of Object.keys(task)) delete task[key];
+				task.action = shippedTask.action;
+				if (typeof shippedTask.method === "string") task.method = shippedTask.method;
+				if (previousTransition !== undefined) task.transition = previousTransition;
+				actionFormReplaced = true;
+				templateLines.push(
+					`\`merge\`: converted to the action form (the template matched the shipped seed exactly). The merge runs on the plane, with no agent, and the action form's profile keys are dropped.`,
+				);
+			}
+		}
 		const transition = transitions.get(name);
 		if (transition !== undefined) {
 			task.transition = transition.transition;
-		} else if (seedTemplateMatched) {
+		} else if (seedTemplateMatched || actionFormReplaced) {
 			const shippedTransition = shippedSeedTransition(name, shippedTaskTypes);
 			if (shippedTransition !== undefined) {
 				task.transition = shippedTransition;
 				installedTransitions.push(
-					`\`${name}\`: the shipped seed's transition, installed with the clean template (no pre-migration edge expressed it).`,
+					`\`${name}\`: the shipped seed's transition, installed with the clean template or action form (no pre-migration edge expressed it).`,
 				);
 			}
 		}
@@ -267,11 +327,19 @@ export function migrateWorkflowMachineConfig(
 	if (newData.states === undefined) newData.states = states;
 	if (newData["task-types"] === undefined) newData["task-types"] = newTaskTypes;
 
-	// A file the machine keys alone mark is a workflow machine migration; a
-	// file only the retired Priority table marks is a priority retirement
-	// (ADR 0050), and the two word their own header and report title.
+	// A file the machine keys mark is a workflow machine migration: the
+	// pre-machine keys, and the pre-action merge seed template, which rides
+	// the same rewrite (ADR 0068). A file only the retired Priority table
+	// marks is a priority retirement (ADR 0050), and the two word their own
+	// header and report title.
 	const machineMigrated =
-		"task-rules" in originalData || "workflows" in originalData || autoCloseLines.length > 0;
+		"task-rules" in originalData ||
+		"workflows" in originalData ||
+		autoCloseLines.length > 0 ||
+		(isRecord(originalData["task-types"]) &&
+			Object.values(originalData["task-types"]).some(
+				(task) => isRecord(task) && oldMergeSeedMatch(task),
+			));
 	const migrationHeader = machineMigrated
 		? `# Migrated to the workflow machine on ${date} (ADR 0027).`
 		: `# The retired [priority] table was removed on ${date} (ADR 0050).`;
@@ -364,7 +432,7 @@ export function migrateWorkflowMachineConfig(
 		`comments in the file are dropped. The backup at \`${backupFileName}\` keeps`,
 		"them.",
 		"",
-		...(machineMigrated
+		...(machineMigrated && ("task-rules" in originalData || "workflows" in originalData)
 			? [
 					"The default source list is wider than the pre-migration default. The",
 					"issue source now lists every open issue that is not `blocked`, and",

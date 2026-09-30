@@ -73,9 +73,14 @@ afterEach(() => {
 const checkout = () => join(home, "src", "billing");
 
 /** The first sample ticket, the one Enter acts on by default. */
+/** The task type's prompt template, asserted: the test's task types carry the prompt form. */
+function templateOf(taskType: { template?: string }): string {
+	return taskType.template as string;
+}
+
 const first = SAMPLE_TICKETS[0];
 const firstAgent = "retry-policy-for-webhooks";
-const firstPrompt = renderPrompt(BASE_CONFIG.taskTypes.implement.template, first);
+const firstPrompt = renderPrompt(templateOf(BASE_CONFIG.taskTypes.implement), first);
 
 /** Stub the git answers for a healthy convention checkout. */
 function stubCheckout(runner: FakeRunner): void {
@@ -789,7 +794,7 @@ describe("the override panel", () => {
 				expect(settledRow).not.toContain("[implement]");
 				expect(detailPaneText(settled)).toContain("Handoff task type: fix");
 				// The override drove the prompt too.
-				const fixPrompt = renderPrompt(BASE_CONFIG.taskTypes.fix.template, first);
+				const fixPrompt = renderPrompt(templateOf(BASE_CONFIG.taskTypes.fix), first);
 				expect(runner.commands()).toContain(`herdr agent prompt ${firstAgent} ${fixPrompt}`);
 			},
 			WIDTH,
@@ -801,7 +806,7 @@ describe("the override panel", () => {
 		const runner = new FakeRunner();
 		stubCheckout(runner);
 		stubLiveHandoff(runner);
-		const fixPrompt = renderPrompt(BASE_CONFIG.taskTypes.fix.template, first);
+		const fixPrompt = renderPrompt(templateOf(BASE_CONFIG.taskTypes.fix), first);
 		runner.set("herdr", ["agent", "prompt", firstAgent, fixPrompt], {
 			code: 1,
 			stderr: "error: the agent is not accepting prompts\n",

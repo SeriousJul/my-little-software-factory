@@ -81,6 +81,7 @@ import {
 } from "../observation.ts";
 import { parallelSeatCount } from "../parallel.ts";
 import { evaluatePlacement, type PlacementEvaluation } from "../placement.ts";
+import { isPlaneActionTaskType, planeActionSettingOf } from "../plane-actions.ts";
 
 import { RefreshCoordinator } from "../refresh.ts";
 import type { RepositoryMapping } from "../repo.ts";
@@ -602,6 +603,9 @@ export function App({
 					// start of an ignored or covered Ticket still names its ticket, not
 					// the raw identity the row would fall back to.
 					(findTicket(item.ticketIdentity)?.title ?? item.ticketIdentity),
+		...(item.kind === "plane-action"
+			? { method: planeActionSettingOf(configRef.current.taskTypes, item.taskType)?.method }
+			: {}),
 	}));
 	// The cursor never rests on a queue that no longer holds its row: a pickup
 	// or a cancel that empties the section sends the selection home, and the
@@ -956,6 +960,9 @@ export function App({
 		detailGeometry.usableCols,
 		detailGeometry.visibleRows,
 		config.maxHandoffsPerTicket,
+		detailTicket === undefined || state === undefined
+			? null
+			: state.latestPlaneActionAttempt(detailTicket.identity),
 	);
 	// The write of the render's own answer, for the next render and for the key
 	// handlers; the read above is the one this frame's pane paints with.
@@ -1619,6 +1626,10 @@ export function App({
 		}
 	};
 
+	/** The method the merge action runs with, from the task type's action form (ADR 0068). */
+	const mergeMethodOf = (taskType: string): string =>
+		planeActionSettingOf(configRef.current.taskTypes, taskType)?.method ?? "squash";
+
 	/** The task type of the ticket's current turn: the settled turn's, else the handoff's, else the ticket's suggestion. */
 	const taskTypeOf = (ticket: Ticket): string =>
 		ticket.lastCompletion?.taskType ??
@@ -1689,12 +1700,41 @@ export function App({
 			if (outcome.writeFailure !== "")
 				factLines.push(`label write failed: ${outcome.writeFailure}`);
 			if (outcome.positionTaskType !== null) {
+				// The merged position the transition offers (ADR 0068): the task
+				// type resolves on the plane action, so the row asks for the
+				// merge, not for a handoff. The row carries no settings to edit:
+				// the action form holds no profile keys, and the override key is
+				// unavailable on it with the reason the catalogue states.
+				const mergePosition = isPlaneActionTaskType(
+					configRef.current.taskTypes,
+					outcome.positionTaskType,
+				);
 				// While the route is alive, the row reads as the fact line that
 				// names where it stands, and takes no key (ADR 0064): Close and
-				// Goto stand always, and the confirm waits with the route.
-				const routeStanding = routeStandingLine(ticket, outcome);
+				// Goto stand always, and the confirm waits with the route. The
+				// merge's route stands the same way, and the attempt's record
+				// states the outcome that settled it, beside what the transition
+				// wrote, because no Completion trace stands for the action.
+				const attempt =
+					state?.latestPlaneActionAttempt(outcome.positionTicketIdentity ?? ticket.identity) ??
+					null;
+				const routeStanding =
+					attempt === null ? routeStandingLine(ticket, outcome, mergePosition) : null;
 				if (routeStanding !== null) {
 					factLines.push(routeStanding);
+				} else if (attempt !== null) {
+					// The outcome stands where the row stood (ADR 0068): the
+					// attempt's record is the fact the decision screen reads, and
+					// the transition's write stands on it beside the outcome.
+					factLines.push(
+						attempt.outcome === "merged"
+							? `the merge ${attempt.decision === "auto-merged" ? "ran" : "landed"}`
+							: `the merge was blocked: ${attempt.reason}`,
+					);
+					if (attempt.transition !== null) {
+						const write = attempt.transition.pullRequestWrite;
+						if (write !== null) factLines.push(transitionFactLine("pull request", write));
+					}
 				} else {
 					// The position is derived, never stored (ADR 0027): the ticket
 					// it sits on can leave its source between the fire and the
@@ -1706,14 +1746,27 @@ export function App({
 						outcome.positionTicketIdentity === null ||
 						state.stillListed(outcome.positionTicketIdentity);
 					if (positionListed) {
-						actions.push({
-							key: "route",
-							label: `Handoff: ${outcome.positionTaskType}`,
-							detail: routeDetail(outcome, outcome.positionTaskType),
-							editable: true,
-						});
+						if (mergePosition) {
+							actions.push({
+								key: "merge",
+								label: "Merge pull request",
+								detail: `runs the merge now, with no agent and no worktree (method ${mergeMethodOf(outcome.positionTaskType)})`,
+								planeAction: true,
+							});
+						} else {
+							actions.push({
+								key: "route",
+								label: `Handoff: ${outcome.positionTaskType}`,
+								detail: routeDetail(outcome, outcome.positionTaskType),
+								editable: true,
+							});
+						}
 					} else {
-						factLines.push("the position's ticket left its source; no handoff stands");
+						factLines.push(
+							mergePosition
+								? "the position's ticket left its source; no merge stands"
+								: "the position's ticket left its source; no handoff stands",
+						);
 					}
 				}
 			}
@@ -1748,8 +1801,22 @@ export function App({
 	 * route row stands again the moment the route dies, so the operator can
 	 * ask the same route for the next ticket.
 	 */
-	const routeStandingLine = (ticket: Ticket, outcome: TransitionOutcome): string | null => {
+	const routeStandingLine = (
+		ticket: Ticket,
+		outcome: TransitionOutcome,
+		mergeRoute: boolean,
+	): string | null => {
 		const positionIdentity = outcome.positionTicketIdentity ?? ticket.identity;
+		if (mergeRoute) {
+			// The merge's route stands in the Work queue's row (ADR 0068): the
+			// item takes no seat, so it runs whatever the limit reads, and the
+			// line names the wait the way the handoff's line does.
+			const waiting = workQueue.some(
+				(item) => item.kind === "plane-action" && item.ticketIdentity === positionIdentity,
+			);
+			if (waiting) return "the merge is waiting in the Work queue";
+			return null;
+		}
 		const waiting = workQueue.some(
 			(item) =>
 				item.kind === "handoff" &&
@@ -1865,10 +1932,13 @@ export function App({
 	// missing modal) restart and abandon.
 	const runDecisionAction = (ticket: Ticket, key: string) => {
 		// A routed handoff from the Live view keeps the screen open: the
-		// stream resumes for the new agent pane on its next tick. A re-fire
-		// keeps its own screen open the same way: the operator confirms on it,
-		// and the fact lines the fire writes land on the open rows.
-		if (!(panel?.kind === "live" && key === "route") && key !== "refire") {
+		// stream resumes for the new agent pane on its next tick. A merge
+		// confirmed there keeps the screen open the same way: the stream stays
+		// on the pane it watches, and the run's line lands on the Message line.
+		// A re-fire keeps its own screen open the same way: the operator
+		// confirms on it, and the fact lines the fire writes land on the open
+		// rows.
+		if (!(panel?.kind === "live" && (key === "route" || key === "merge")) && key !== "refire") {
 			setPanel(null);
 		}
 		if (state === undefined) return;
@@ -1882,6 +1952,15 @@ export function App({
 		}
 		if (key === "refire") {
 			void runRefire(ticket);
+			return;
+		}
+		if (key === "merge") {
+			// The manual confirm of the merged position (ADR 0068): the merge
+			// runs as a plane action, with no agent and no worktree, and the
+			// decision word lands at the ask, the way the route's does. The
+			// confirm bypasses the Handoff limit: the operator asked for it,
+			// and the limit holds the machine's automatic asks.
+			runMerge(ticket);
 			return;
 		}
 		const choice = routeChoiceOf(ticket, key);
@@ -2094,6 +2173,37 @@ export function App({
 			...(outcome.agent === undefined ? {} : { agent: outcome.agent }),
 			...(outcome.environment === undefined ? {} : { environment: outcome.environment }),
 		});
+	};
+
+	/**
+	 * Ask for the merge of the position's pull request (ADR 0068): the plane
+	 * action's ask through the dispatch seam, the decision word landing at the
+	 * ask and the item entering the Work queue. The ask takes no settings: the
+	 * task type's action form carries the method, and the run re-reads it when
+	 * it starts. A refusal before the enqueue - the claim, the one-item-per-
+	 * ticket rule - records nothing, and the row stands again.
+	 */
+	const runMerge = (ticket: Ticket) => {
+		if (handoffDispatch === undefined) return;
+		const outcome = ticket.lastCompletion?.transition ?? null;
+		if (outcome === null || outcome.positionTaskType === null) {
+			setWarningMessage(`no transition position is recorded for ticket ${ticket.identity}`);
+			return;
+		}
+		const targetIdentity = outcome.positionTicketIdentity ?? ticket.identity;
+		void handoffDispatch
+			.dispatchPlaneAction({
+				origin: "workflow",
+				ticketIdentity: targetIdentity,
+				taskType: outcome.positionTaskType,
+				routeFromIdentity: ticket.identity,
+				// The start answers the ask's refresh only: the decision stands
+				// at the ask (ADR 0064), and the run's line answers itself.
+				onStarted: () => replaceTickets(),
+			})
+			.then((result) => {
+				if (!result.ok) setWarningMessage(result.reason);
+			});
 	};
 
 	/**
@@ -2654,7 +2764,7 @@ export function App({
 		if (item === undefined) return;
 		if (
 			!state.moveWorkItem(
-				item.kind === "handoff" ? item.ticketIdentity : item.consultationId,
+				item.kind === "consultation" ? item.consultationId : item.ticketIdentity,
 				direction,
 			)
 		) {
@@ -3523,6 +3633,9 @@ export function App({
 			herdr: new HerdrAgentReader(commandRunner),
 			config: () => configRef.current,
 			dispatch: (intent) => dispatch.dispatch(intent),
+			// The plane action's ask (ADR 0068): the top-up's walks cross it for
+			// the positions their task type resolves on the plane action.
+			dispatchPlaneAction: (intent) => dispatch.dispatchPlaneAction(intent),
 			// The transition fire of a completed settle (ADR 0027): pull the
 			// pull request sources fresh - the agent's new pull request must
 			// be in the list before the machine can find it - and fire the
@@ -4580,6 +4693,10 @@ export function App({
 										scroll: config.scroll,
 										onFocus: () => focusPane("detail"),
 										scrollSlot: detailScrollSlot,
+										mergeAttempt:
+											selectedTicket === undefined || state === undefined
+												? null
+												: state.latestPlaneActionAttempt(selectedTicket.identity),
 									})
 								: createElement(
 										"box",

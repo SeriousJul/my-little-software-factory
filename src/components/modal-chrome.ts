@@ -60,6 +60,8 @@ export interface ActionRow {
 	detail?: string;
 	/** The row starts a Handoff whose settings `e` edits before it starts. */
 	editable?: boolean;
+	/** The row asks for the plane action, which holds no settings to edit (ADR 0068). */
+	planeAction?: boolean;
 }
 
 /**

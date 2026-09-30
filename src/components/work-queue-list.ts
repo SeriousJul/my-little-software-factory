@@ -19,6 +19,8 @@ export interface WorkQueueRow {
 	item: WorkQueueItem;
 	/** The ticket's title while it is still in the projection, its identity once it is gone. */
 	title: string;
+	/** The method the plane action's item runs with, from its task type's action form (ADR 0068). */
+	method?: string;
 }
 
 interface WorkQueueListProps {
@@ -107,13 +109,15 @@ export function WorkQueueList({
 
 /** The one identity that stands in the row's key and its selection check. */
 function rowKey(item: WorkQueueItem): string {
-	return item.kind === "handoff" ? item.ticketIdentity : item.consultationId;
+	return item.kind === "consultation" ? item.consultationId : item.ticketIdentity;
 }
 
-/** The word a row stands under, in the cell before its identity (ADR 0034):
- * the handoff's origin the pickup re-checks, and the Consultation item's
- * kind, the record the pointer names (issue #90). */
+/** The word a row stands under, in the cell before its identity (ADR 0034,
+ * ADR 0068): the handoff's origin the pickup re-checks, the Consultation
+ * item's kind, the record the pointer names (issue #90), and the plane
+ * action's kind, the merge the action runs. */
 function originWord(item: WorkQueueItem): string {
+	if (item.kind === "plane-action") return "merge";
 	return item.kind === "handoff" ? `[${item.origin}]` : "consultation";
 }
 

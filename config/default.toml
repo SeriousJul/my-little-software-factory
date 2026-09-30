@@ -203,10 +203,12 @@ source-kind = "github-pull-request"
 labels-none = ["needs-work", "ready-for-review", "ready-to-ship"]
 
 # --- The task types --------------------------------------------------------
-# Each task type is work only: a prompt template and a task profile. The
-# transition hangs off the type that completes it and writes the label facts
-# the machine then reads. The templates carry no label instructions: the
-# plane owns the labels.
+# Each task type carries exactly one form (ADR 0068): the prompt form, a
+# prompt template and a task profile, or the action form, the plane action it
+# resolves on and the method that action runs with. The transition hangs off
+# the type that completes it and writes the label facts the machine then
+# reads. The templates carry no label instructions: the plane owns the
+# labels.
 
 [task-types.implement]
 template = '''
@@ -310,28 +312,15 @@ Description:
 ticket-facts = []
 pull-request-facts = ["ready-for-review"]
 
+# The merge is a plane action (ADR 0068): the plane runs it through the
+# command runner, with no agent and no worktree. The action form takes no
+# prompt template and no profile keys; the method is the flag the action
+# runs with, and the transition is the outcome's fire: it writes
+# `needs-work` on the pull request the merge blocked, and no fact on the
+# one that merged.
 [task-types.merge]
-thinking = "low"
-template = '''
-Merge pull request {external-key}: {title}.
-
-### Instructions
-
-1. **Squash and Merge**
-   - Squash and merge the pull request into its base branch.
-   - Close the related ticket if all acceptance criteria are satisfied.
-
-2. **On a Blocked Merge**
-   - If the pull request has a merge conflict or a failing CI check, do not merge.
-   - Post a comment explaining the reason for the blocked merge.
-
-Repository: {repository}
-Pull request: {source-url}
-
-Labels: {labels}
-
-Description:
-{description}'''
+action = "merge-pull-request"
+method = "squash"
 [task-types.merge.transition]
 ticket-facts = []
 pull-request-facts = []

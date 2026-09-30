@@ -198,6 +198,9 @@ export function LiveView({
 			: body.lines.length === 0 && body.note === null;
 	const editableActionSelected =
 		decideable && onEditAction !== undefined && actions[region.at]?.editable === true;
+	// The plane action's row holds no settings (ADR 0068): the surface states
+	// it, and the catalogue keeps the one gate with the reason it names.
+	const planeActionSelected = decideable && actions[region.at]?.planeAction === true;
 	// The sub-mode dispatches from the catalogue: the streaming sub-mode
 	// answers to a live-view mode of its own, the settled sub-mode to the
 	// decision-modal mode the glossary already names.
@@ -205,6 +208,7 @@ export function LiveView({
 	const surfaceContext = {
 		...context,
 		editableActionSelected,
+		planeActionSelected,
 		bodyScrollable: maxBodyScroll > 0,
 		bodyEmpty,
 		actionRowCount: regionRows,
