@@ -81,7 +81,7 @@ import {
 } from "../observation.ts";
 import { parallelSeatCount } from "../parallel.ts";
 import { evaluatePlacement, type PlacementEvaluation } from "../placement.ts";
-import { isPlaneActionTaskType, planeActionSettingOf } from "../plane-actions.ts";
+import { DEFAULT_MERGE_METHOD, isPlaneActionTaskType, planeActionSettingOf } from "../plane-actions.ts";
 
 import { RefreshCoordinator } from "../refresh.ts";
 import type { RepositoryMapping } from "../repo.ts";
@@ -1628,7 +1628,7 @@ export function App({
 
 	/** The method the merge action runs with, from the task type's action form (ADR 0068). */
 	const mergeMethodOf = (taskType: string): string =>
-		planeActionSettingOf(configRef.current.taskTypes, taskType)?.method ?? "squash";
+		planeActionSettingOf(configRef.current.taskTypes, taskType)?.method ?? DEFAULT_MERGE_METHOD;
 
 	/** The task type of the ticket's current turn: the settled turn's, else the handoff's, else the ticket's suggestion. */
 	const taskTypeOf = (ticket: Ticket): string =>

@@ -7,6 +7,7 @@
  * App's pane read the same lines from the same function, the way the other
  * shared controls do.
  */
+import { DEFAULT_MERGE_METHOD } from "../plane-actions.ts";
 import type { Consultation } from "../state.ts";
 import { paint } from "./theme.ts";
 import type { WorkQueueRow } from "./work-queue-list.ts";
@@ -80,7 +81,7 @@ export function workQueueDetailLines(
 		// form names. The item holds no settings of its own: the action form
 		// stands in its place, and the run re-reads the form when it starts.
 		lines.push({ text: `Task type: ${item.taskType}`, fg: paint("text") });
-		lines.push({ text: `Method: ${row.method ?? "squash"}`, fg: paint("text") });
+		lines.push({ text: `Method: ${row.method ?? DEFAULT_MERGE_METHOD}`, fg: paint("text") });
 		lines.push({
 			text: "The action holds no settings to edit: the merge runs on the task type's action form",
 			fg: paint("subtext0"),

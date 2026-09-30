@@ -349,19 +349,6 @@ export interface HandoffDispatch {
 		end: "closed" | "abandoned",
 	): Promise<string | undefined>;
 	/**
-	 * Close the work cycle of a ticket whose turn never settled (ADR 0031).
-	 *
-	 * The cycle's end and the Close cleanup of the environment it ran in are one
-	 * operation on the shared seat: a close that meets a Handoff of the same
-	 * ticket runs after that Handoff settles, so no cleanup tears down an
-	 * environment herdr is still building, and a hung start still ends in the
-	 * close the operator asked for. The durable end writes no completion trace,
-	 * because the turn never settled.
-	 *
-	 * The caller owns the wording of the answer, exactly as it does for
-	 * `closeCleanup`.
-	 */
-	/**
 	 * The plane action's ask (ADR 0068): the merge of the ticket's pull
 	 * request, entered in the Work queue like every other start. The item
 	 * takes no seat from the Parallel limit: the action holds no agent, and
@@ -655,8 +642,9 @@ class HandoffDispatchModule implements HandoffDispatch {
 	 * records the attempt, fires the task type's transition on the outcome
 	 * alike for a merge and a block, and settles the route without a work
 	 * cycle. Every pickup ends in run or drop: a refused claim drops the item
-	 * with its warning, and the ticket keeps the state it wore while it
-	 * waited.
+	 * with its warning, and the queued route settles to open on it, because a
+	 * dropped merge leaves no re-offer standing and no machine path back to
+	 * the wait.
 	 */
 	private async pickupPlaneActionItem(
 		item: WorkQueuePlaneActionItem,
@@ -665,6 +653,11 @@ class HandoffDispatchModule implements HandoffDispatch {
 		const check = this.planeActionClaimCheck(item.ticketIdentity, item.routeFromIdentity);
 		if (!check.ok) {
 			this.removeQueueRow(item.ticketIdentity);
+			// The drop leaves no machine path back to the wait: the decision
+			// word a merge ask lands is no re-offer standing, so the queued
+			// route settles to open, the way the run's own answer does.
+			// A ticket that already left queued changes nothing.
+			this.state.settleQueuedPlaneActionRoute(item.ticketIdentity);
 			this.settleIntentOnStarted(item.ticketIdentity, { ok: false, reason: check.reason });
 			this.reports.refresh();
 			this.reports.warning(

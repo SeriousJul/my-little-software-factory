@@ -1348,9 +1348,27 @@ export class ObservationCoordinator {
 			// the row the walk holds is what answers.
 			if (automaticStartBlocked(position)) continue;
 			if (position.suggestedTaskType !== outcome.positionTaskType) continue;
+			// One test of the position's standing. The projection builds
+			// `actionable` from the open state, so it holds every position that
+			// left the list - in flight, awaiting, or gone - as well as one the
+			// source cannot read, and an open ticket with an unresolved attempt is
+			// not actionable either. The queue's one-item-per-ticket rule is this
+			// cycle's own gate above: the walk adds only into an empty queue
+			// (ADR 0051).
+			if (!position.actionable) continue;
+			// The Same-type hold over the refresh lag: a position whose newest
+			// closed cycle completed the task it still suggests by stale labels
+			// has already run this route's task, and the add waits for the moved
+			// labels to land instead of starting it twice.
+			if (this.state.sameTypeHoldActive(position.identity, position.suggestedTaskType)) continue;
+			// The loop guard the handoff's add ran: the merge-to-needs-work loop
+			// stops at the cap, and the ask takes no seat when it runs.
+			if (position.handoffCount >= config.maxHandoffsPerTicket) continue;
 			// The merged position the skip routes to (ADR 0068): the plane
 			// action's merge stands for the handoff the skip would start, and
-			// the guards the handoff's add ran still run on it above.
+			// the standing, hold, and limit guards the handoff's add ran ran on
+			// it above: an automatic merge add holds wherever the handoff's add
+			// would have held.
 			if (isPlaneActionTaskType(config.taskTypes, position.suggestedTaskType)) {
 				const added = await this.topUpPlaneActionAsk(
 					{
@@ -1366,20 +1384,6 @@ export class ObservationCoordinator {
 				if (added !== "refused") return true;
 				continue;
 			}
-			// One test of the position's standing. The projection builds
-			// `actionable` from the open state, so it holds every position that
-			// left the list - in flight, awaiting, or gone - as well as one the
-			// source cannot read, and an open ticket with an unresolved attempt is
-			// not actionable either. The queue's one-item-per-ticket rule is this
-			// cycle's own gate above: the walk adds only into an empty queue
-			// (ADR 0051).
-			if (!position.actionable) continue;
-			// The Same-type hold over the refresh lag: a position whose newest
-			// closed cycle completed the task it still suggests by stale labels
-			// has already run this route's task, and the add waits for the moved
-			// labels to land instead of starting it twice.
-			if (this.state.sameTypeHoldActive(position.identity, position.suggestedTaskType)) continue;
-			if (position.handoffCount >= config.maxHandoffsPerTicket) continue;
 			const added = await this.topUpAsk(
 				{
 					origin: "workflow",
