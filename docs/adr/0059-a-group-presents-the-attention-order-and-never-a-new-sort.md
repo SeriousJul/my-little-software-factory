@@ -1,6 +1,6 @@
 # ADR 0059: A Group presents the attention order and never a new sort
 
-Status: accepted
+Status: accepted, with the order of its Groups superseded by ADR 0070
 Date: 2026-09-24
 
 ## Context
@@ -26,6 +26,10 @@ then by the newest external update in the Group, then by the group
 value. Inside a Group the order is exactly the order the flat list
 holds, band rules and all. The axis at `none` is the list as it stands
 today, row for row.
+
+The order of the Groups is superseded: ADR 0070 stands them in the
+axis' own order of its values, and gives the operator the move. The
+order inside a Group, the fold, and the group key stand as written.
 
 **A fold hides rows, never facts.** The Section header's counts, the
 held count, the Parallel limit, the Pickup, the Top-up, the handoff

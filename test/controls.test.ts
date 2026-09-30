@@ -692,10 +692,13 @@ describe("the shared control catalogue", () => {
 
 	/**
 	 * Story 48 (ADR 0049, ADR 0052): the queue's own keys refuse outside the
-	 * queue. `p`, `+`, and `-` belong to the Work queue alone, so in the
-	 * Ticket and Consultation sections the catalogue resolves the key, states
-	 * the queue's ownership words, and the guide and bar of each other
-	 * section name none of the three.
+	 * queue. `p` belongs to the Work queue alone, so in every other section
+	 * the catalogue resolves the key and states the queue's ownership words,
+	 * and the guide and bar of each other section name none of the queue's
+	 * controls. The `+` and `-` keys are the Ticket section's own there (ADR
+	 * 0070): the Group's order keys resolve them and refuse on a row that
+	 * holds no Group header, the way the queue's order keys refuse in the
+	 * Consultation section's words.
 	 */
 	test("p, +, and - refuse outside the Work queue, in the queue's words", () => {
 		for (const mode of [
@@ -705,16 +708,38 @@ describe("the shared control catalogue", () => {
 			"consultation-detail",
 		] as const) {
 			const context = contextFor(mode, values);
-			for (const key of ["p", "+", "-"] as const) {
-				const control = controlForKey({ name: key }, context);
-				const expected =
-					key === "p" ? "queue-pause" : key === "+" ? "queue-promote" : "queue-demote";
-				if (control === undefined || control.id !== expected)
-					throw new Error(`${key} does not resolve to ${expected} in ${mode}`);
-				expect(availabilityFor(control, context)).toEqual({
-					available: false,
-					reason: "this control is available only in the Work queue section",
-				});
+			const pause = controlForKey({ name: "p" }, context);
+			if (pause === undefined || pause.id !== "queue-pause")
+				throw new Error(`p does not resolve to queue-pause in ${mode}`);
+			expect(availabilityFor(pause, context)).toEqual({
+				available: false,
+				reason: "this control is available only in the Work queue section",
+			});
+			if (mode === "ticket-list" || mode === "ticket-detail") {
+				// The Ticket section's own order keys: the Group move owns the
+				// key, and it refuses on a row that holds no Group header.
+				expect(controlForKey({ name: "+" }, context)?.id).toBe("group-move-up");
+				expect(controlForKey({ name: "=" }, context)?.id).toBe("group-move-up");
+				expect(controlForKey({ name: "-" }, context)?.id).toBe("group-move-down");
+				for (const key of ["+", "-"] as const) {
+					const control = controlForKey({ name: key }, context);
+					if (control === undefined) throw new Error(`${key} answers nothing in ${mode}`);
+					expect(availabilityFor(control, context)).toEqual({
+						available: false,
+						reason: "no Group header is under the cursor",
+					});
+				}
+			} else {
+				for (const key of ["+", "-"] as const) {
+					const control = controlForKey({ name: key }, context);
+					const expected = key === "+" ? "queue-promote" : "queue-demote";
+					if (control === undefined || control.id !== expected)
+						throw new Error(`${key} does not resolve to ${expected} in ${mode}`);
+					expect(availabilityFor(control, context)).toEqual({
+						available: false,
+						reason: "this control is available only in the Work queue section",
+					});
+				}
 			}
 			const ids = guideControls(context).map(({ control }) => control.id);
 			expect(ids).not.toContain("queue-pause");

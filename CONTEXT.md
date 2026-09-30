@@ -162,15 +162,20 @@ _Avoid_: attention group, list bucket, triage group
 
 **Group**:
 A run of ticket rows in the Ticket section's list that share one value of the Grouping axis, under its own Group header.
-A collapsed group shows nothing but its header. A group is a presentation of the list order and never a new one: the order inside it is the order the flat list holds, and the groups stand by the best attention band among the tickets they hold (ADR 0059).
+A collapsed group shows nothing but its header. The order inside a group is the order the flat list holds, band rules and all (ADR 0059), and the groups themselves stand in the group order (ADR 0070).
 _Avoid_: bucket, category, folder, section
 
 **Group header**:
-The row that names one Group, its count, and the count of held decisions it hides. The cursor can rest on it, and no ticket is selected there. Space or a click on it folds the Group, and opens it back when it is folded.
+The row that names one Group, its count, and the count of held decisions it hides. The cursor can rest on it, and no ticket is selected there. `x` or a click on it folds the Group, and opens it back when it is folded. On it, `+` and `-` move the Group to its visible neighbor (ADR 0070).
 _Avoid_: section header, divider, group row
 
+**Group order**:
+The order of one section's Groups on one axis: the axis' own order of its values, marked by the operator's moves. Factory state on the state file, per section and per axis, the way the axis' value is; a plane with no state file keeps it for the run and writes to nothing.
+The axis' defaults: `position` reads the Workflow's own order of its positions with the unmatched position last, `state` reads the Ticket states in the plane's own order, and `repository`, `source`, and `task` read the values by their name with the special value last. A move trades a Group with the visible neighbor above or below it, and one move stores the whole computed order, so a Group the filter hides keeps its slot.
+_Avoid_: group sort, group rank, shelf order
+
 **Grouping axis**:
-The one fact that splits the Ticket section's list into groups: `none`, `repository`, `source`, `task`, `state`, or `position`. Its value is factory state on the state file; which groups stand collapsed is not (ADR 0058).
+The one fact that splits the Ticket section's list into groups: `none`, `repository`, `source`, `task`, `state`, or `position`. Its value is factory state on the state file, and so is the group order the operator's moves write on it; which groups stand collapsed is not (ADR 0058, ADR 0070).
 _Avoid_: group-by field, sort key, filter, view mode
 
 **Issue reference**:

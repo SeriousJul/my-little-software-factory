@@ -435,13 +435,14 @@ export function ignoreWithholdsRow(ticket: TicketIgnoreFacts & { state: TicketSt
 /**
  * The Attention band of a ticket: the list's first sort (ADR 0050).
  *
- * It is the invisible rank the ticket list and its Groups both read, never a
- * visible thing: a Group presents this order and never makes a new one
- * (ADR 0059). Awaiting work comes first, then the in-flight states with the
- * queued wait ahead of the running turn and the running turn ahead of the
- * handoff that started it (ADR 0067), then open work the factory can act on,
- * then open work it cannot. A state the plane has no band for stands last, so
- * a fact it does not know cannot outrank a decision.
+ * It is the invisible rank the rows read, never a visible thing: the flat
+ * list orders by it, and a Group's rows stand in it inside the Group
+ * (ADR 0070 orders the Groups themselves, by the axis' own values). Awaiting
+ * work comes first, then the in-flight states with the queued wait ahead of
+ * the running turn and the running turn ahead of the handoff that started it
+ * (ADR 0067), then open work the factory can act on, then open work it cannot.
+ * A state the plane has no band for stands last, so a fact it does not know
+ * cannot outrank a decision.
  */
 export function attentionBand(ticket: Ticket): number {
 	if (ticket.state === "awaiting") return 0;
@@ -472,9 +473,8 @@ export function externalKeyNumber(key: string): number | null {
  * number ascending, the ticket whose key names no number after every numbered
  * one: the number never changes under a refresh, so the rows of the open pile
  * hold their place. The live ranks are negative and the open ranks
- * non-negative, so a Group's smallest rank always stands in the regime of its
- * best band (ADR 0059's Group reads the rank of the best row it holds through
- * this one number).
+ * non-negative, so the rank of a ticket's best band always stands in the
+ * regime of that band.
  */
 export function ticketListRank(ticket: Ticket): number {
 	if (

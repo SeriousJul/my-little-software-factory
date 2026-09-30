@@ -15,12 +15,12 @@ See [the shared control standard](../development/shared-controls.md) for what th
 requires, and [ADR 0014](../adr/0014-shared-modules-own-control-behavior.md) for
 who owns control behavior.
 
-## The grouped Ticket list (issue #159, ADR 0058 and ADR 0059)
+## The grouped Ticket list (issue #159, ADR 0058, ADR 0059, and ADR 0070)
 
 Status: the automated checks pass. The `Tab` axis cycle, each axis's Groups, the
 flat `none` list, the fold by key and by mouse, the cursor at rest on a Group
 header and every refusal there, the detail pane holding its ticket, the Group
-order against the attention order, the counts on a header and on the Section
+order against the axis' own order, the counts on a header and on the Section
 header, the header-only short frame, the Group header at the plane's minimum
 width - where the marker column and a double-digit count with a held turn spend
 the pane's whole budget, in the open and the folded frame, and again with a
@@ -39,6 +39,24 @@ for every split axis, its refusal of the bar's hint at `none`, and its refusals
 on a header in `test/controls.test.ts`; the axis control's and the fold's guide
 rows in `test/key-guide.test.ts`; and the two rows' presence in the mode's own
 Key guide frame in `test/app.test.ts`.
+
+The operator's group order (ADR 0070) is measured in the same frame file:
+the move up and down and by the unshifted plus, the cursor resting on the
+Group the move ran on, the edge refusals in the queue's own words, each axis
+keeping its own order across the cycle, the move standing after a restart on
+the same state file, the refused write reporting while the view follows the
+press, the stateless plane keeping the move for the run, and the slot a Group
+the filter hides keeps. The order rule itself - the full order an axis keeps,
+the swap the move makes, and each axis' default order - is unit-tested in
+`test/ticket-grouping-order.test.ts`. The `group_order` table's round trip, its
+per-axis separation, the v22 to v23 step, and the heal on open are measured in
+`test/state.test.ts`. The move's two guide rows stand in the mode's own Key
+guide frame in `test/key-guide.test.ts`, beside the move's catalogue
+resolution and refusals in `test/controls.test.ts`. The frames that above read the
+Group order against the attention order now read the axis' own order: the
+headers no longer follow the tickets' facts (ADR 0070 supersedes the rule),
+and the slot that a Group keeps when the tickets' facts change around it is
+one of the frames measured there.
 
 `bun run lint`, `bun run typecheck`, and one full `bun run test` ran on this
 change with no other `bun test` process on the machine (load average 3.1, the

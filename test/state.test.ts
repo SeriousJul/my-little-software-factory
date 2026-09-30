@@ -2826,6 +2826,91 @@ describe("factory SQLite state", () => {
 		});
 	});
 
+	// ADR 0070: the operator's order of one axis' Group values is factory state
+	// on the state file, per section and axis, the way the axis itself is.
+	describe("the Group order (ADR 0070)", () => {
+		test("a fresh file answers no order: the default order stands", () => {
+			const state = openFactoryState(statePath());
+			expect(state.groupOrder("tickets", "repository")).toEqual([]);
+			state.close();
+		});
+
+		test("the write is durable, and each axis keeps its own order", () => {
+			const path = statePath();
+			const state = openFactoryState(path);
+			state.setGroupOrder("tickets", "repository", ["acme/factory", "acme/billing"]);
+			expect(state.groupOrder("tickets", "repository")).toEqual(["acme/factory", "acme/billing"]);
+			// The other axis has no order until a move writes one.
+			expect(state.groupOrder("tickets", "task")).toEqual([]);
+			state.close();
+
+			const reopened = openFactoryState(path);
+			expect(reopened.groupOrder("tickets", "repository")).toEqual([
+				"acme/factory",
+				"acme/billing",
+			]);
+			reopened.setGroupOrder("tickets", "task", ["implement", "review"]);
+			expect(reopened.groupOrder("tickets", "task")).toEqual(["implement", "review"]);
+			// The repository order the file held still stands beside it.
+			expect(reopened.groupOrder("tickets", "repository")).toEqual([
+				"acme/factory",
+				"acme/billing",
+			]);
+			reopened.close();
+		});
+
+		test("a write stores the order whole: the old rows leave with it", () => {
+			const state = openFactoryState(statePath());
+			state.setGroupOrder("tickets", "repository", ["acme/a", "acme/b", "acme/c"]);
+			state.setGroupOrder("tickets", "repository", ["acme/c", "acme/a"]);
+			expect(state.groupOrder("tickets", "repository")).toEqual(["acme/c", "acme/a"]);
+			state.close();
+		});
+
+		test("a v22 file migrates to v23: no order stands, and the work keeps its state", () => {
+			const path = statePath();
+			const state = openFactoryState(path);
+			state.initializeSources([sourceA]);
+			state.applyFetch(sourceA, success([fetched()]));
+			state.setGroupingAxis("tickets", "source");
+			state.close();
+
+			const db = new Database(path);
+			db.exec("DROP TABLE group_order");
+			db.prepare("UPDATE schema_version SET version = 22").run();
+			db.close();
+
+			const reopened = openFactoryState(path);
+			expect(reopened.groupOrder("tickets", "repository")).toEqual([]);
+			reopened.setGroupOrder("tickets", "repository", ["acme/a"]);
+			// The work the v22 file held still reads: the migration added a table
+			// and moved nothing else.
+			expect(reopened.visibleTickets([], "implement")[0].sourceKind).toBe("github-issue");
+			const check = new Database(path, { readonly: true });
+			expect(
+				(check.prepare("SELECT version FROM schema_version").get() as { version: number }).version,
+			).toBe(SCHEMA_VERSION);
+			check.close();
+			reopened.close();
+		});
+
+		test("a file stamped at the target without the table heals on open", () => {
+			const path = statePath();
+			const state = openFactoryState(path);
+			state.close();
+
+			const db = new Database(path);
+			db.exec("DROP TABLE group_order");
+			db.close();
+
+			const reopened = openFactoryState(path);
+			expect(reopened.groupOrder("tickets", "repository")).toEqual([]);
+			reopened.setGroupOrder("tickets", "repository", ["acme/a"]);
+			expect(reopened.groupOrder("tickets", "repository")).toEqual(["acme/a"]);
+			reopened.close();
+		});
+	});
+
 	test("a settled turn stores its log and a re-settle refreshes it in place", () => {
 		const state = openFactoryState(":memory:");
 		state.initializeSources([sourceA]);

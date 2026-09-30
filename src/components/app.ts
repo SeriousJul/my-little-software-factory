@@ -45,7 +45,7 @@ import {
 	type ConsultationOperations,
 	createConsultationOperations,
 } from "../consultation-operations.ts";
-import type { GroupingAxis } from "../domain/grouping.ts";
+import type { GroupingAxis, SplitGroupingAxis } from "../domain/grouping.ts";
 import { DEFAULT_GROUPING_AXIS, nextGroupingAxis } from "../domain/grouping.ts";
 import {
 	HANDOFF_ENVIRONMENT_KINDS,
@@ -153,10 +153,12 @@ import {
 	groupingAxisNotice,
 	groupingEmptyMessage,
 	type ListedRow,
+	movedGroupOrder,
 	NO_GROUP_FOLDS,
 	rowAnchorOf,
 	settleRowIndex,
 	stepRowIndex,
+	ticketGroupCompare,
 	ticketRowIndexForAnchor,
 	ticketRows,
 	toggleFold,
@@ -362,6 +364,40 @@ export function App({
 	);
 	const groupingAxisRef = useRef(groupingAxis);
 	/**
+	 * The operator's stored order of the Group values of the axis in effect
+	 * (ADR 0070): factory state, read back at boot the way the axis itself is,
+	 * and written whole on the operator's own move. Empty where the operator
+	 * has moved no Group on the axis, and the list then stands the axis' own
+	 * default order.
+	 *
+	 * Each axis keeps its own order, so this value is the stored order of the
+	 * axis in effect alone; the orders of the other axes a plane with no state
+	 * file stands for the run keep in the run map below.
+	 */
+	const [groupOrderList, setGroupOrderList] = useState<string[]>(() =>
+		state !== undefined && groupingAxis !== "none"
+			? state.groupOrder(TICKET_GROUP_SECTION, groupingAxis)
+			: [],
+	);
+	const groupOrderListRef = useRef(groupOrderList);
+	/**
+	 * The stored orders of this run for the axes the plane does not read back
+	 * from a state file (ADR 0070): a plane with no state file keeps its group
+	 * orders for the run, the way it keeps its axis, and a move on an axis the
+	 * operator visits twice comes back where they left it.
+	 */
+	const groupOrdersForRunRef = useRef<Partial<Record<SplitGroupingAxis, string[]>>>({});
+	/** The Workflow's own order of its positions, the `position` axis' default order. */
+	const positionOrderOf = useCallback(
+		(): string[] => config.workflowStates.map((w) => w.name),
+		[config],
+	);
+	/** The stored order of one axis: the run map's where there is no state file, the file's where there is one. */
+	const storedGroupOrderOf = (axis: SplitGroupingAxis): string[] =>
+		state === undefined
+			? (groupOrdersForRunRef.current[axis] ?? [])
+			: state.groupOrder(TICKET_GROUP_SECTION, axis);
+	/**
 	 * The Groups the operator folded: session facts, keyed by the axis and the
 	 * Group value, and never written to disk (ADR 0058). The plane comes up with
 	 * every Group open so a restart cannot hide a decision the operator owes, and
@@ -483,6 +519,8 @@ export function App({
 		tickets,
 		groupingAxis,
 		groupFolds,
+		groupOrderList,
+		positionOrderOf(),
 	);
 	const ticketRowsRef = useRef<readonly ListedRow<Ticket>[]>(ticketRowsState);
 	ticketRowsRef.current = ticketRowsState;
@@ -1069,7 +1107,13 @@ export function App({
 		);
 		const currentIndex = selectedIndexRef.current;
 		const anchor = rowAnchorOf(ticketRowsRef.current, currentIndex);
-		const nextRows = ticketRows(next.rows, groupingAxisRef.current, groupFoldsRef.current);
+		const nextRows = ticketRows(
+			next.rows,
+			groupingAxisRef.current,
+			groupFoldsRef.current,
+			groupOrderListRef.current,
+			positionOrderOf(),
+		);
 		// The cursor keeps the ticket it held through a re-read and through a change
 		// of the operator's List filter; a ticket that left the row list lands the
 		// cursor on the row nearest the one it held (issue #159, user story 43).
@@ -1091,7 +1135,7 @@ export function App({
 		// removal all report their refresh through here, so the section never
 		// shows a row the durable queue no longer holds.
 		setWorkQueue(state.workQueue());
-	}, [state]);
+	}, [state, positionOrderOf]);
 	const replaceConsultations = useCallback(() => {
 		if (state === undefined) return;
 		const next = state.consultations(historyFilterRef.current);
@@ -2666,6 +2710,19 @@ export function App({
 			groupingAxis: groupingAxisRef.current,
 			groupHeaderSelected: groupHeaderAtCursor() !== undefined,
 			selectedGroupHeader: groupHeaderAtCursor() ?? null,
+			// The facts the Group's move reads (ADR 0070): the position of the
+			// Group under the cursor among the visible Group headers, and their
+			// count. The move's edge refusal stands in the catalogue's words.
+			selectedGroupPosition: (() => {
+				const rows = ticketRowsRef.current;
+				let position = 0;
+				for (let i = 0; i < selectedIndexRef.current; i += 1) {
+					const row = rows[i];
+					if (row !== undefined && row.kind === "group") position += 1;
+				}
+				return position;
+			})(),
+			visibleGroupHeaderCount: ticketRowsRef.current.filter((row) => row.kind === "group").length,
 			selectedConsultation:
 				selectionRef.current === "consultation"
 					? consultationsRef.current[consultationIndexRef.current]
@@ -2962,6 +3019,12 @@ export function App({
 				// The shared `x` on a Group header folds that Group; the
 				// catalogue resolved the key here on the facts under the cursor.
 				"group-fold": () => foldGroupAtCursor(),
+				// `+` (or `=`, its unshifted form) and `-` move the Group under the
+				// cursor to its visible neighbor (ADR 0070): the same keys the
+				// queue's promote and demote read, scoped by the catalogue to the
+				// Ticket section's Group headers.
+				"group-move-up": () => moveGroupAtCursor("up"),
+				"group-move-down": () => moveGroupAtCursor("down"),
 				launch: () => {
 					if (Object.keys(configRef.current.consultationTypes).length === 0)
 						setWarningMessage(
@@ -3572,7 +3635,14 @@ export function App({
 						}
 					})();
 		const anchor = rowAnchorOf(ticketRowsRef.current, selectedIndexRef.current);
-		const nextRows = ticketRows(ticketsRef.current, next, groupFoldsRef.current);
+		const nextOrder = next === "none" ? [] : storedGroupOrderOf(next);
+		const nextRows = ticketRows(
+			ticketsRef.current,
+			next,
+			groupFoldsRef.current,
+			nextOrder,
+			positionOrderOf(),
+		);
 		const nextIndex = ticketRowIndexForAnchor(
 			nextRows,
 			anchor,
@@ -3582,6 +3652,8 @@ export function App({
 		);
 		groupingAxisRef.current = next;
 		setGroupingAxis(next);
+		groupOrderListRef.current = nextOrder;
+		setGroupOrderList(nextOrder);
 		ticketRowsRef.current = nextRows;
 		selectedIndexRef.current = nextIndex;
 		setSelectedIndex(nextIndex);
@@ -3601,7 +3673,13 @@ export function App({
 		const axis = groupingAxisRef.current;
 		const nextFolds = toggleFold(groupFoldsRef.current, axis, value);
 		const anchor = rowAnchorOf(ticketRowsRef.current, selectedIndexRef.current);
-		const nextRows = ticketRows(ticketsRef.current, axis, nextFolds);
+		const nextRows = ticketRows(
+			ticketsRef.current,
+			axis,
+			nextFolds,
+			groupOrderListRef.current,
+			positionOrderOf(),
+		);
 		const headerIndex = nextRows.findIndex(
 			(row) => row.kind === "group" && row.group.value === value,
 		);
@@ -3630,6 +3708,89 @@ export function App({
 		const row = ticketRowsRef.current[selectedIndexRef.current];
 		if (row === undefined || row.kind !== "group") return;
 		toggleGroupFold(row.group.value);
+	}
+	/**
+	 * Move the Group under the cursor to its visible neighbor above or below
+	 * it (ADR 0070).
+	 *
+	 * The two Group values trade their places in the axis' full order, and the
+	 * full order is the write: the operator's fact, durable the moment the
+	 * press returns, and the order every later read stands in. A Group the
+	 * filter hides keeps its slot in the order, so the visible list stands
+	 * exactly as the press asked for. At the first or the last visible Group
+	 * the press runs no move and the Message line says so, the queue's own
+	 * refusal. The cursor lands on the Group the move ran on, so the operator
+	 * can press again without hunting, and a write that fails is reported the
+	 * way the axis' own is, with the view following the press (user story 56).
+	 */
+	function moveGroupAtCursor(direction: "up" | "down") {
+		const axis = groupingAxisRef.current;
+		if (axis === "none") return;
+		const rows = ticketRowsRef.current;
+		const index = selectedIndexRef.current;
+		const row = rows[index];
+		if (row === undefined || row.kind !== "group") return;
+		const value = row.group.value;
+		// The neighbor is the next visible Group header in the direction, the
+		// way the cursor itself crosses the blank rows between the Groups.
+		const step = direction === "up" ? -1 : 1;
+		let cursor = index + step;
+		while (cursor >= 0 && cursor < rows.length) {
+			const candidate = rows[cursor];
+			if (candidate !== undefined && candidate.kind === "group" && candidate.group.value !== value)
+				break;
+			cursor += step;
+		}
+		const neighborRow = cursor >= 0 && cursor < rows.length ? rows[cursor] : undefined;
+		if (neighborRow === undefined || neighborRow.kind !== "group") {
+			setWarningMessage(
+				direction === "up" ? "the group is first in the list" : "the group is last in the list",
+			);
+			return;
+		}
+		const present = rows
+			.filter((r) => r.kind === "group")
+			.map((r) => (r.kind === "group" ? r.group.value : ""));
+		const compare = ticketGroupCompare(axis, positionOrderOf());
+		const moved = movedGroupOrder(
+			groupOrderListRef.current,
+			present,
+			compare,
+			value,
+			neighborRow.group.value,
+		);
+		if (moved === null) return;
+		const writeFailure =
+			state === undefined
+				? undefined
+				: ((): string | undefined => {
+						try {
+							state.setGroupOrder(TICKET_GROUP_SECTION, axis, moved);
+							return undefined;
+						} catch (error) {
+							return errorMessage(error);
+						}
+					})();
+		if (state === undefined)
+			groupOrdersForRunRef.current = {
+				...groupOrdersForRunRef.current,
+				[axis]: [...moved],
+			};
+		const nextRows = ticketRows(
+			ticketsRef.current,
+			axis,
+			groupFoldsRef.current,
+			moved,
+			positionOrderOf(),
+		);
+		const headerIndex = nextRows.findIndex((r) => r.kind === "group" && r.group.value === value);
+		groupOrderListRef.current = [...moved];
+		setGroupOrderList([...moved]);
+		ticketRowsRef.current = nextRows;
+		selectedIndexRef.current = headerIndex >= 0 ? headerIndex : index;
+		setSelectedIndex(selectedIndexRef.current);
+		if (writeFailure !== undefined)
+			setErrorMessage(`the group order did not save: ${writeFailure}`);
 	}
 	function selectWorkQueue(index: number) {
 		const next = clamp(index, 0, Math.max(0, workQueueRef.current.length - 1));

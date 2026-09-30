@@ -165,6 +165,16 @@ export interface ControlContext {
 	 */
 	groupHeaderSelected?: boolean;
 	/**
+	 * The position of the Group under the cursor among the visible Group
+	 * headers, zero-based, and their count beside it (ADR 0070).
+	 *
+	 * The move control gates on both: a Group at the top of its axis has no
+	 * visible neighbor above to trade places with, and the catalogue states
+	 * that refusal in its own words, the way the queue's order keys do.
+	 */
+	selectedGroupPosition?: number;
+	visibleGroupHeaderCount?: number;
+	/**
 	 * The Work queue's item under the cursor, with the queue's depth beside it
 	 * (ADR 0034). The item's own position is the queue order's.
 	 */
@@ -599,6 +609,29 @@ const queueOrderMove =
 		if (direction === "down" && item.position < depth - 1) return available();
 		return unavailable(
 			direction === "up" ? "the item is first in the queue" : "the item is last in the queue",
+		);
+	};
+/**
+ * Why the Group's move answers the way it does (ADR 0070).
+ *
+ * The move trades the Group under the cursor with its visible neighbor in the
+ * direction, so it stands available while a visible neighbor stands there, and
+ * refuses at the edge of the list in the catalogue's own words. A Group the
+ * filter hides is no neighbor at all: the position and the count read the
+ * visible headers, and the hidden Group keeps its slot in the stored order
+ * under the move the operator runs on the visible ones.
+ */
+const groupOrderMove =
+	(direction: "up" | "down") =>
+	(context: ControlContext): ControlAvailability => {
+		if (context.selectedGroupHeader === null || context.selectedGroupHeader === undefined)
+			return unavailable("no Group header is under the cursor");
+		const position = context.selectedGroupPosition ?? 0;
+		const count = context.visibleGroupHeaderCount ?? 1;
+		if (direction === "up" && position > 0) return available();
+		if (direction === "down" && position < count - 1) return available();
+		return unavailable(
+			direction === "up" ? "the group is first in the list" : "the group is last in the list",
 		);
 	};
 const queueRemove = (context: ControlContext): ControlAvailability =>
@@ -1298,6 +1331,48 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		availability: (context) =>
 			groupFoldOwnsX(context) ? available() : unavailable("no Group header is under the cursor"),
 		guideNote: "folds the Group under the cursor, or opens it back",
+	},
+	{
+		// The Group's order keys (ADR 0070): `+` (or `=`, its unshifted form)
+		// moves the Group under the cursor to the visible header above it, `-`
+		// to the one below it. The queue's own promote and demote read the same
+		// keys, and the catalogue keeps the two meanings apart the way it keeps
+		// them apart in the queue: by the section the cursor stands in. The
+		// move is the operator's fact, written whole to the state file, and the
+		// Group's slot never moves on a refresh of the tickets' facts.
+		id: "group-move-up",
+		label: "Move group up",
+		keys: () => ["=", "+"],
+		keyLabel: "+",
+		scope: "control-plane",
+		actionBar: true,
+		barLabel: () => "Move group up",
+		// The bar states only the meaning the facts under the cursor run: the
+		// move names itself on a Group header, and a ticket row keeps the bar's
+		// old hints, the axis hint among them.
+		showInBar: (context) =>
+			context.selectedGroupHeader !== undefined && context.selectedGroupHeader !== null,
+		// Beside the fold it shares the cursor with: the move runs only on a
+		// Group header, the way the fold does.
+		priority: 46,
+		modes: [...ticketBaseModes],
+		availability: groupOrderMove("up"),
+		guideNote: "moves the Group under the cursor toward the top of the list",
+	},
+	{
+		id: "group-move-down",
+		label: "Move group down",
+		keys: () => ["-"],
+		keyLabel: "-",
+		scope: "control-plane",
+		actionBar: true,
+		barLabel: () => "Move group down",
+		showInBar: (context) =>
+			context.selectedGroupHeader !== undefined && context.selectedGroupHeader !== null,
+		priority: 44,
+		modes: [...ticketBaseModes],
+		availability: groupOrderMove("down"),
+		guideNote: "moves the Group under the cursor toward the bottom of the list",
 	},
 	{
 		id: "section-toggle",

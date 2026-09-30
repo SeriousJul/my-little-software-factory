@@ -2,13 +2,14 @@
  * The Groups a section's list splits into: the shared grouping mechanism.
  *
  * A **Group** is a run of rows that share one value of one **Grouping axis**,
- * under one **Group header** the operator can collapse. The whole shape is
- * presentation of the order the list already holds (ADR 0059): the Groups stand
- * by the best Attention band among the rows they hold, then by the smallest
- * second rank of the rows they hold, then by the Group value, and the order
- * *inside* a Group is exactly the order the flat list holds. Nothing here
- * re-sorts work, and nothing here reaches the queue order, the Top-up's choice,
- * or a detail pane.
+ * under one **Group header** the operator can collapse. The Groups stand in
+ * the order the axis names (ADR 0070): the operator's own order of the Group
+ * values, kept in the state file per axis, and the axis' fixed default order
+ * where the operator has moved no Group. A Group's slot moves only on the
+ * operator's own press, never on a refresh of the tickets' facts, and the
+ * order *inside* a Group is exactly the order the flat list holds. Nothing
+ * here re-sorts work, and nothing here reaches the queue order, the Top-up's
+ * choice, or a detail pane.
  *
  * The mechanism is shared; the facts a section's rows carry come in through
  * `GroupingOf`, so a second list that takes grouping later supplies its own key
@@ -25,7 +26,7 @@ import { createElement } from "@opentui/react";
 import type { ReactElement } from "react";
 
 import type { GroupingAxis, SplitGroupingAxis } from "../../domain/grouping.ts";
-import { attentionBand, holdsDecision, type Ticket, ticketListRank } from "../../domain/ticket.ts";
+import { holdsDecision, TICKET_STATES, type Ticket } from "../../domain/ticket.ts";
 import { newestMembership } from "../../task-selection.ts";
 import { truncateTailToWidth, widthOf } from "../text.ts";
 import { paint, ticketTaskType } from "../theme.ts";
@@ -238,14 +239,121 @@ export interface GroupingOf<T> {
 	axis: GroupingAxis;
 	/** The Group value one row belongs to on the axis in effect. */
 	keyOf: (item: T) => string;
-	/** The row's Attention band: the list's first sort (ADR 0050). */
-	bandOf: (item: T) => number;
-	/** The row's second rank inside its band, smaller stands first (ADR 0065). */
-	rankOf: (item: T) => number;
 	/** Whether the row holds a decision the operator owes. */
 	heldOf: (item: T) => boolean;
 	/** Whether the Group under this value stands collapsed. */
 	isFolded: (value: string) => boolean;
+	/**
+	 * The Group values the operator ordered on the axis in effect, in the
+	 * stored order (ADR 0070). It may name values no row carries today: the
+	 * render drops them, and a move keeps their slots for the value's return.
+	 */
+	storedOrder?: readonly string[];
+	/**
+	 * The default order of Group values on the axis in effect (ADR 0070),
+	 * smaller stands first. Only the split axes read it: `none` returns before
+	 * the sort, and a caller that names none falls back to the value's name.
+	 */
+	defaultCompare?: (a: string, b: string) => number;
+}
+
+/**
+ * The full order one axis keeps in its store (ADR 0070): every stored value,
+ * in the stored order, then every value a row carries that the operator never
+ * ordered, in the axis' default order.
+ *
+ * The store is the operator's fact, so it is never pruned here: a value no row
+ * carries keeps its slot, and a move that trades two values trades them in
+ * this order, which is what lets a Group the filter hides keep the slot it
+ * held while the visible list stands exactly as the press asked for.
+ */
+function fullOrderOf(
+	stored: readonly string[],
+	present: readonly string[],
+	defaultCompare: (a: string, b: string) => number,
+): string[] {
+	const storedSet = new Set(stored);
+	const rest = present
+		.filter((value) => !storedSet.has(value))
+		.sort((a, b) => defaultCompare(a, b) || a.localeCompare(b));
+	return [...stored, ...rest];
+}
+
+/**
+ * The Group order the render reads under the axis in effect (ADR 0070): the
+ * stored order, only the values a row carries today, then the values the
+ * operator never ordered, in the axis' default order.
+ *
+ * The render and the move both read the same rule, so a refresh and a press
+ * can never disagree on where a Group stands, and a value the operator moved
+ * comes back to the slot the move wrote when its rows return.
+ */
+export function groupOrderOf(
+	stored: readonly string[],
+	present: readonly string[],
+	defaultCompare: (a: string, b: string) => number,
+): readonly string[] {
+	const presentSet = new Set(present);
+	return fullOrderOf(stored, present, defaultCompare).filter((value) => presentSet.has(value));
+}
+
+/**
+ * The stored order after the operator's move of one Group next to its visible
+ * neighbor (ADR 0070): the two values trade their places in the full order,
+ * and the answer is the order to store whole.
+ *
+ * One small table, one write rule: the store gains every value the list holds
+ * on the first move of an axis, and a value the operator never moves again
+ * keeps the slot the first move wrote. Null is the answer where either value
+ * stands nowhere in the full order, the refusal the caller states on the
+ * Message line.
+ */
+export function movedGroupOrder(
+	stored: readonly string[],
+	present: readonly string[],
+	defaultCompare: (a: string, b: string) => number,
+	value: string,
+	neighbor: string,
+): readonly string[] | null {
+	const full = fullOrderOf(stored, present, defaultCompare);
+	const from = full.indexOf(value);
+	const to = full.indexOf(neighbor);
+	if (from < 0 || to < 0) return null;
+	const swap = full[from];
+	full[from] = full[to];
+	full[to] = swap;
+	return full;
+}
+
+/**
+ * The default order of one axis' Group values (ADR 0070): the order the
+ * operator's own facts name, the one a Group stands in while the operator has
+ * moved no Group on the axis.
+ *
+ * `position` reads the Workflow's own order of its positions, the order the
+ * config's states stand in, with `unmatched` last and a position the config no
+ * longer names after every named one. `state` reads the Ticket states in their
+ * declared order. The name axes read the name, and `unknown` stands last the
+ * way `unmatched` does. A value the axis does not name loses to the one it
+ * does, and two values the axis names alike stand by their name.
+ */
+export function ticketGroupCompare(
+	axis: SplitGroupingAxis,
+	positionOrder: readonly string[],
+): (a: string, b: string) => number {
+	const rank = (value: string): number => {
+		if (axis === "position") {
+			if (value === UNMATCHED_GROUP) return Number.MAX_SAFE_INTEGER;
+			const index = positionOrder.indexOf(value);
+			return index >= 0 ? index : positionOrder.length;
+		}
+		if (axis === "state") {
+			const index = (TICKET_STATES as readonly string[]).indexOf(value);
+			return index >= 0 ? index : TICKET_STATES.length;
+		}
+		return value === UNKNOWN_GROUP ? Number.MAX_SAFE_INTEGER : 0;
+	};
+	return (a, b) => rank(a) - rank(b) || a.localeCompare(b);
 }
 
 /**
@@ -263,8 +371,6 @@ export function groupedRows<T>(
 	interface Running {
 		value: string;
 		items: T[];
-		band: number;
-		rank: number;
 		held: number;
 	}
 	const byValue = new Map<string, Running>();
@@ -273,32 +379,25 @@ export function groupedRows<T>(
 		const value = grouping.keyOf(item);
 		let group = byValue.get(value);
 		if (group === undefined) {
-			group = {
-				value,
-				items: [],
-				band: grouping.bandOf(item),
-				rank: grouping.rankOf(item),
-				held: 0,
-			};
+			group = { value, items: [], held: 0 };
 			byValue.set(value, group);
 			groups.push(group);
 		}
 		group.items.push(item);
-		// The Group ranks by the best row it holds, never by the first one it
-		// met: a run that gains an awaiting ticket moves with it (story 47).
-		const band = grouping.bandOf(item);
-		if (band < group.band) group.band = band;
-		const rank = grouping.rankOf(item);
-		if (rank < group.rank) group.rank = rank;
 		if (grouping.heldOf(item)) group.held += 1;
 	}
 	// A Group with no tickets cannot come from the rows, so no stale header
 	// ever stands: the header set is derived from the rows on every read
-	// (story 26, story 64).
-	groups.sort(
-		(left, right) =>
-			left.band - right.band || left.rank - right.rank || left.value.localeCompare(right.value),
+	// (story 26, story 64). The order the Groups stand in is the order the axis
+	// names (ADR 0070), and it reads no ticket's facts, so a refresh of the
+	// facts cannot move a slot.
+	const order = groupOrderOf(
+		grouping.storedOrder ?? [],
+		groups.map((group) => group.value),
+		grouping.defaultCompare ?? ((a, b) => a.localeCompare(b)),
 	);
+	const slot = new Map(order.map((value, index) => [value, index]));
+	groups.sort((left, right) => (slot.get(left.value) ?? 0) - (slot.get(right.value) ?? 0));
 	const rows: ListedRow<T>[] = [];
 	for (const group of groups) {
 		const collapsed = grouping.isFolded(group.value);
@@ -345,20 +444,26 @@ export function toggleFold(folds: GroupFolds, axis: GroupingAxis, value: string)
 	return { ...folds, [axis]: next };
 }
 
-/** The Ticket list's rows under the axis in effect. */
+/**
+ * The Ticket list's rows under the axis in effect, with the operator's stored
+ * order of the axis' Group values, and the Workflow's own order of its
+ * positions for the `position` axis' default (ADR 0070).
+ */
 export function ticketRows(
 	tickets: readonly Ticket[],
 	axis: GroupingAxis,
 	folds: GroupFolds,
+	storedOrder: readonly string[],
+	positionOrder: readonly string[],
 ): readonly ListedRow<Ticket>[] {
 	const folded = foldedValues(folds, axis);
 	return groupedRows(tickets, {
 		axis,
 		keyOf: (ticket) => ticketGroupKey(axis, ticket),
-		bandOf: attentionBand,
-		rankOf: (ticket) => ticketListRank(ticket),
 		heldOf: holdsDecision,
 		isFolded: (value) => folded.has(value),
+		storedOrder,
+		defaultCompare: axis === "none" ? undefined : ticketGroupCompare(axis, positionOrder),
 	});
 }
 

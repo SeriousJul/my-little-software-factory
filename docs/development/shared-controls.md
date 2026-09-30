@@ -227,16 +227,20 @@ rules to the same mechanism.
 Two rules are the standard, not the surface's choice:
 
 - **A Group presents the list order and never sorts it** ([ADR
-  0059](../adr/0059-a-group-presents-the-attention-order-and-never-a-new-sort.md)).
-  The Groups stand by the best Attention band among the rows they hold, then the
-  Group's smallest second rank - the newest external update in the live bands,
-  the lowest ticket number in the open bands (ADR 0065) - then the Group value;
-  the order inside a Group is the flat list's order, unchanged, and `none` is the
-  flat list row for row. The grouping code is presentation: it reaches no queue
-  order, no Top-up choice, no gate, no count, and no detail pane, and the plane's
-  band rule and second-rank rule (`attentionBand` and `ticketListRank` in
-  [domain/ticket.ts](../../src/domain/ticket.ts)) stay the single source both the
-  projection's sort and the Group order read. The held
+  0059](../adr/0059-a-group-presents-the-attention-order-and-never-a-new-sort.md),
+  [ADR 0070](../adr/0070-the-groups-stand-in-the-axis-own-order-and-the-operator-owns-it.md)).
+  The order inside a Group is the flat list's order, unchanged - the Attention
+  band, then the band's second rank, the newest external update in the live
+  bands and the lowest ticket number in the open bands (ADR 0065) - and `none`
+  is the flat list row for row. The Groups themselves stand in the axis' own
+  order of its values - the Workflow's order on `position`, the states' own
+  order on `state`, the name order on the rest, the special value last - marked
+  by the operator's move, which the plane stores per section and axis and the
+  ticket facts do not move. The grouping code is presentation: it reaches no
+  queue order, no Top-up choice, no gate, no count, and no detail pane, and the
+  plane's band rule and second-rank rule (`attentionBand` and `ticketListRank`
+  in [domain/ticket.ts](../../src/domain/ticket.ts)) stay the single source
+  both the projection's sort and the order inside a Group read. The held
   count a header carries comes from the same file's one held-turn rule
   (`holdsDecision`), so a Group's count can never disagree with the Section
   header's, a row's badge, or the detail pane's warning.

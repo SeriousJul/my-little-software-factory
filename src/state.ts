@@ -18,7 +18,7 @@ import {
 	STALE_AGENT_OUTPUT_WARNING,
 	turnEndWarning,
 } from "./consultation.ts";
-import type { GroupedSection, GroupingAxis } from "./domain/grouping.ts";
+import type { GroupedSection, GroupingAxis, SplitGroupingAxis } from "./domain/grouping.ts";
 import { DEFAULT_GROUPING_AXIS, isGroupingAxis } from "./domain/grouping.ts";
 import type {
 	Completion,
@@ -53,7 +53,7 @@ import { isCoveredByFixingPullRequest, NO_LINKED_PULL_REQUEST_SKIP } from "./wor
 
 /** The schema every state file the plane opens is brought to. Exported so a
  * test can assert the stamp a migration left instead of copying the number. */
-export const SCHEMA_VERSION = 22;
+export const SCHEMA_VERSION = 23;
 type Health = SourceMembership["health"];
 
 export class StateError extends Error {
@@ -969,6 +969,26 @@ const MIGRATION_V21_TO_V22_IGNORED =
 	"ALTER TABLE tickets ADD COLUMN ignored INTEGER NOT NULL DEFAULT 0;";
 const MIGRATION_V21_TO_V22_IGNORED_AT = "ALTER TABLE tickets ADD COLUMN ignored_at TEXT;";
 
+/**
+ * The v23 step: the stored Group order (ADR 0070).
+ *
+ * The table holds one row per Group value the operator has ordered on one
+ * section's axis, in the stored order: the operator's fact, kept the way the
+ * axis itself is kept. Nothing seeds it: a section and axis with no row read
+ * the axis' default order, the way a section with no axis row reads `none`,
+ * and a move of one Group writes the full order for the axis, so the table
+ * gains its values on the first move of an axis and only on a move.
+ */
+const MIGRATION_V22_TO_V23_GROUP_ORDER = `
+CREATE TABLE group_order(
+	section TEXT NOT NULL,
+	axis TEXT NOT NULL,
+	value TEXT NOT NULL,
+	pos INTEGER NOT NULL,
+	PRIMARY KEY(section, axis, value)
+);
+`;
+
 /** Open state synchronously after creating its parent directory. */
 export function openFactoryState(path: string, now?: () => number): FactoryState {
 	try {
@@ -1134,6 +1154,10 @@ export class FactoryState {
 			// of the two cells heals the missing half and keeps the other.
 			if (!this.hasColumn("tickets", "ignored")) this.db.exec(MIGRATION_V21_TO_V22_IGNORED);
 			if (!this.hasColumn("tickets", "ignored_at")) this.db.exec(MIGRATION_V21_TO_V22_IGNORED_AT);
+			// Asked for by name, the way the axis table is: a file the step already
+			// ran keeps its stored order, and an older file opens with no order,
+			// which the read answers with the axis' default (ADR 0070).
+			if (!this.hasTable("group_order")) this.db.exec(MIGRATION_V22_TO_V23_GROUP_ORDER);
 			this.db.exec("DELETE FROM schema_version");
 			this.db.prepare("INSERT INTO schema_version(version) VALUES (?)").run(SCHEMA_VERSION);
 			this.db.exec("COMMIT");
@@ -1733,6 +1757,52 @@ export class FactoryState {
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
 			throw new StateError(`cannot store the grouping axis at ${this.path}: ${message}`);
+		}
+	}
+
+	/**
+	 * The operator's stored order of one section's axis' Group values
+	 * (ADR 0070), top to bottom: the fact the next startup and the next dev
+	 * reload read back.
+	 *
+	 * The answer is empty where the operator has moved no Group on the axis,
+	 * and the caller then stands the axis' default order: the plane never
+	 * invents an order the operator never wrote.
+	 */
+	groupOrder(section: GroupedSection, axis: SplitGroupingAxis): string[] {
+		const rows = this.db
+			.prepare("SELECT value FROM group_order WHERE section = ? AND axis = ? ORDER BY pos")
+			.all(section, axis) as Array<{ value: string }>;
+		return rows.map((row) => row.value);
+	}
+
+	/**
+	 * Store the operator's order of one section's axis' Group values: the full
+	 * order, written whole on every move (ADR 0070). One move, one write, no
+	 * partial state: the old rows leave and the new order stands in one
+	 * transaction, so a crash mid-move never leaves a half-swapped axis.
+	 *
+	 * A write that fails throws a StateError naming the state file; the caller
+	 * decides what the operator sees, and the in-session view still stands.
+	 */
+	setGroupOrder(section: GroupedSection, axis: SplitGroupingAxis, values: readonly string[]): void {
+		try {
+			this.transaction(() => {
+				this.db
+					.prepare("DELETE FROM group_order WHERE section = ? AND axis = ?")
+					.run(section, axis);
+				const insert = this.db.prepare(
+					"INSERT INTO group_order(section, axis, value, pos) VALUES (?, ?, ?, ?)",
+				);
+				let pos = 0;
+				for (const value of values) {
+					insert.run(section, axis, value, pos);
+					pos += 1;
+				}
+			});
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			throw new StateError(`cannot store the group order at ${this.path}: ${message}`);
 		}
 	}
 
