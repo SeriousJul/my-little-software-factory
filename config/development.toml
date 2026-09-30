@@ -469,7 +469,7 @@ host = "github.com"
 name = "my-dependabot-alerts"
 kind = "github-dependabot-alerts"
 refresh-interval-seconds = 300
-repositories = ["SeriousJul/my-little-software-factory", "SeriousJul/pi-extensions", "SeriousJul/seriousjul.github.io", "SeriousJul/yapdf"]
+repositories = ["SeriousJul/my-little-software-factory", "SeriousJul/pi-extensions", "SeriousJul/seriousjul.github.io"]
 host = "github.com"
 
 [[sources]]
