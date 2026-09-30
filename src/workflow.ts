@@ -628,6 +628,12 @@ export interface FireTransitionRequest {
 	taskType: string;
 	/** The forced refresh of the pull request sources; omitted in tests. */
 	refresh?: () => Promise<void>;
+	/**
+	 * The stop the fire's owner checks between its reads (ADR 0068): a stop
+	 * over the fire's commands closes the state behind it, and a projection
+	 * the fire reads after the stop is a closed database.
+	 */
+	stopped?: () => boolean;
 }
 
 /**
@@ -643,6 +649,10 @@ export async function fireTransition(
 	const transition = request.config.taskTypes[request.taskType]?.transition;
 	if (transition === undefined) return null;
 	await request.refresh?.();
+	// The stop over the fire's refresh: the state closed behind it, and the
+	// projection read below is a closed database. The check and the read are
+	// one synchronous step, so a stop between them cannot land.
+	if (request.stopped?.() === true) return null;
 	// The fire reads the projection before the list rule (ADR 0042): the rule
 	// withholds a covered ticket's row from the operator's list, and the
 	// machine's fire must still reach the ticket it acts on.
@@ -782,7 +792,10 @@ export async function firePlaneActionOutcome(
 	request: FirePlaneActionOutcomeRequest,
 ): Promise<TransitionOutcome | null> {
 	const outcome = await fireTransition(request);
-	if (outcome !== null) request.state.recordPlaneActionAttemptOutcome(request.attempt.id, outcome);
+	// The stop over the fire's label reads: the fact lands on the attempt's
+	// record only while the state stands, the way the fire's reads do.
+	if (outcome !== null && request.stopped?.() !== true)
+		request.state.recordPlaneActionAttemptOutcome(request.attempt.id, outcome);
 	return outcome;
 }
 

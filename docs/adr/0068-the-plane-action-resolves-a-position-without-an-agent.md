@@ -76,6 +76,21 @@ command and the record leaves no row, and a merged pull request leaves the
 feed. The one idempotency rule: a merge that finds its pull request already
 merged settles `merged`.
 
+**The merged pull request leaves the projection at once.** The source stops
+returning the merged pull request at the next refresh, and the retirement
+does it now, the way that refresh would: the pull request's memberships
+retire, and so do the memberships of every issue the pull request closed on
+the merge, because GitHub closes those issues at merge time. The issue's row
+never stands again behind the merged pull request, and the next refresh
+finds nothing new.
+
+**The confirm closes the settled turn's environment.** The Decision
+screen's merge ask makes the route close at the ask, the way its handoff ask
+does (ADR 0046): the confirm closes the environment the settled turn stored,
+and the automatic ask keeps it, the way the automatic route does. The merge
+run builds no environment of its own, so the close is the ask's whole act on
+the environment.
+
 **The close-ticket judgment drops.** GitHub closes the issues a pull request
 references at merge time, and the re-verify gate reads a closed issue after
 the merge. The agent's judgment to close a related ticket by its own reading

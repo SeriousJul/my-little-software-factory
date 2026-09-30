@@ -26,6 +26,7 @@ import {
 	validateConfig,
 } from "../src/config.ts";
 import type { FetchedTicket, Ticket } from "../src/domain/ticket.ts";
+import { withIssueReferences } from "../src/domain/ticket.ts";
 import { resolveHandoffChoice } from "../src/handoff.ts";
 import { createHandoffDispatch, type HandoffDispatchReports } from "../src/handoff-dispatch.ts";
 import { planeActionSettingOf, runMergePullRequest } from "../src/plane-actions.ts";
@@ -192,6 +193,25 @@ const pullSuccess = (at = new Date(Date.now() - 60_000).toISOString()): FetchOut
 	status: "success",
 	fetchedAt: at,
 	tickets: [pullTicket()],
+});
+
+/**
+ * The pull request's success with its closing reference to the issue: the
+ * reference is a source fact on the membership, and the merge closes the
+ * issue on GitHub when it lands.
+ */
+const pullClosingIssueSuccess = (
+	at = new Date(Date.now() - 60_000).toISOString(),
+): FetchOutcome => ({
+	status: "success",
+	fetchedAt: at,
+	tickets: [
+		pullTicket({
+			attributes: withIssueReferences({}, [
+				{ identity: issueIdentity, number: 11, repository: "acme/factory" },
+			]),
+		}),
+	],
 });
 
 /** A fresh state with the pull request settled open on its source. */
@@ -418,7 +438,7 @@ describe("the attempt record in the state", () => {
 		state.close();
 	});
 
-	test("the merged pull request's membership retires, and the ticket leaves the projection", () => {
+	test("the merged ticket's retirement leaves it from the projection at once", () => {
 		const state = planeState();
 		withIssueSource(state);
 		const before = state.visibleTickets(PLANE_WORKFLOW_STATES, PLANE_CONFIG.defaultTaskType);
@@ -427,11 +447,14 @@ describe("the attempt record in the state", () => {
 		);
 		// The retirement is the source's own move, done now: the source stops
 		// returning the pull request at its next refresh.
-		expect(state.retireMembership(pullIdentity, "pulls")).toBe(true);
+		expect(state.retireTicket(pullIdentity)).toBe(true);
 		const after = state.visibleTickets(PLANE_WORKFLOW_STATES, PLANE_CONFIG.defaultTaskType);
 		expect(after.map((ticket) => ticket.identity)).toEqual([issueIdentity]);
-		// A membership that already retired leaves no write behind.
-		expect(state.retireMembership(pullIdentity, "pulls")).toBe(false);
+		// The issue the pull request closes retires with it, and an identity
+		// that already retired leaves no write behind.
+		expect(state.retireTicket(issueIdentity)).toBe(true);
+		expect(state.visibleTickets(PLANE_WORKFLOW_STATES, PLANE_CONFIG.defaultTaskType)).toEqual([]);
+		expect(state.retireTicket(issueIdentity)).toBe(false);
 		state.close();
 	});
 });
@@ -1088,9 +1111,12 @@ describe("the dispatch's ask and pickup", () => {
 		state.close();
 	});
 
-	test("a merged pull request on the cross route leaves the projection, and the issue stays", async () => {
+	test("a merged pull request on the cross route leaves the projection with the issue it fixes", async () => {
 		const state = planeState();
 		withIssueSource(state);
+		// The pull request closes the issue on the merge: the closing
+		// reference is a source fact on the pull request's membership.
+		state.applyFetch(pullsSource, pullClosingIssueSuccess());
 		// The issue stands awaiting with its settled turn: the cross route's
 		// source, the way the top-up's continuation ask finds it.
 		const claim = state.claimHandoff(
@@ -1141,6 +1167,21 @@ describe("the dispatch's ask and pickup", () => {
 			...recorder(events),
 		});
 
+		// While the pull request stands open, the issue rests behind it: the
+		// list rule withholds a ticket its open fixing pull request covers,
+		// and the row the operator sees is the pull request's alone.
+		// The issue stands awaiting with its settled turn: the await is never
+		// covered, so the issue's row stands beside the pull request's while
+		// the merge waits. The ask ends the wait, and the issue rests open
+		// behind the open pull request it is fixed by: the list rule withholds
+		// it while the merge runs, and the merge's retirement leaves it with
+		// the pull request, so it does not stand again behind it.
+		const listed = state.visibleTickets(PLANE_WORKFLOW_STATES, PLANE_CONFIG.defaultTaskType);
+		expect(listed.map((ticket) => ticket.identity).sort()).toEqual(
+			[issueIdentity, pullIdentity].sort(),
+		);
+		expect(state.ticketState(issueIdentity)).toBe("awaiting");
+
 		// The route's ask: the issue's settled turn offers the merge of the
 		// pull request it fixes.
 		const result = await dispatch.dispatchPlaneAction({
@@ -1158,12 +1199,156 @@ describe("the dispatch's ask and pickup", () => {
 		await startedSettled;
 
 		// The merged pull request left the projection the moment the run
-		// settled, and the issue the route rode from stays listed: its
-		// membership never retired.
+		// settled, and so did the issue it closed on the merge: the sources
+		// stop returning both at the next refresh, and the retirement does it
+		// now (ADR 0068).
 		const after = state.visibleTickets(PLANE_WORKFLOW_STATES, PLANE_CONFIG.defaultTaskType);
 		expect(after.find((candidate) => candidate.identity === pullIdentity)).toBeUndefined();
-		expect(after.find((candidate) => candidate.identity === issueIdentity)).toBeDefined();
+		expect(after.find((candidate) => candidate.identity === issueIdentity)).toBeUndefined();
 		expect(state.latestPlaneActionAttempt(pullIdentity)?.outcome).toBe("merged");
+		state.close();
+	});
+
+	test(
+		"the decision screen's merge ask closes the settled turn's environment at the ask",
+		async () => {
+			const state = planeState();
+			withIssueSource(state);
+			// The issue's settled turn stored its environment: the environment
+			// the decision screen's ask asks to close, the way the route's ask
+			// does (ADR 0046).
+			const claim = state.claimHandoff(
+				issueIdentity,
+				{
+					agentType: "pi",
+					environment: "live-worktree",
+					taskType: "rework",
+					model: "",
+					thinking: "",
+					contextWindow: "",
+				},
+				"open",
+			);
+			if (!claim.ok) throw new Error(claim.reason);
+			state.settleHandoff(claim.claim.attemptId, true, undefined, {
+				paneId: "pane-1",
+				tabId: "tab-1",
+				workspaceId: "ws-1",
+			});
+			state.settleTurn({
+				ticketIdentity: issueIdentity,
+				handoffId: claim.claim.attemptId,
+				taskType: "rework",
+				agentType: "pi",
+				message: "The turn is done.",
+				turnLog: [{ kind: "text", text: "The turn is done." }],
+				completedAt: "2026-08-31T11:00:00Z",
+				cause: "completed",
+				transition: mergeRoute(),
+			});
+			const runner = new FakeRunner();
+			stubReadSequence(runner, [{ state: "open" }, { merged: true }]);
+			stubMerge(runner, 0);
+			const events: string[] = [];
+			const dispatch = createHandoffDispatch({
+				state,
+				runner,
+				config: () => PLANE_CONFIG,
+				seatCount: () => 0,
+				home: home(),
+				...recorder(events),
+			});
+			// The operator's ask: no `automatic` word, the way the decision
+			// screen's confirm dispatches it.
+			const result = await dispatch.dispatchPlaneAction({
+				origin: "workflow",
+				ticketIdentity: pullIdentity,
+				routeFromIdentity: issueIdentity,
+				taskType: "merge",
+			});
+			expect(result).toEqual({ ok: true });
+			// The close takes the seat, the way every environment change does,
+			// so it lands behind the ask's answer, on the cleanup's own pass.
+			const deadline = Date.now() + 5000;
+			while (
+				!runner.commands().includes("herdr tab close tab-1") ||
+				!events.some((event) => event.startsWith(`starting off: ${pullIdentity}`))
+			) {
+				// The Starting window's close stands behind the run's whole
+				// settle: the state's writes are all in when it lands, and the
+				// state may close behind it.
+				if (Date.now() >= deadline) throw new Error("the ask did not settle");
+				await new Promise((resolve) => setTimeout(resolve, 20));
+			}
+			state.close();
+		},
+		{ timeout: 15_000 },
+	);
+
+	test("the automatic merge ask keeps the settled turn's environment, the way the automatic route does", async () => {
+		const state = planeState();
+		withIssueSource(state);
+		const claim = state.claimHandoff(
+			issueIdentity,
+			{
+				agentType: "pi",
+				environment: "live-worktree",
+				taskType: "rework",
+				model: "",
+				thinking: "",
+				contextWindow: "",
+			},
+			"open",
+		);
+		if (!claim.ok) throw new Error(claim.reason);
+		state.settleHandoff(claim.claim.attemptId, true, undefined, {
+			paneId: "pane-1",
+			tabId: "tab-1",
+			workspaceId: "ws-1",
+		});
+		state.settleTurn({
+			ticketIdentity: issueIdentity,
+			handoffId: claim.claim.attemptId,
+			taskType: "rework",
+			agentType: "pi",
+			message: "The turn is done.",
+			turnLog: [{ kind: "text", text: "The turn is done." }],
+			completedAt: "2026-08-31T11:00:00Z",
+			cause: "completed",
+			transition: mergeRoute(),
+		});
+		const runner = new FakeRunner();
+		stubReadSequence(runner, [{ state: "open" }, { merged: true }]);
+		stubMerge(runner, 0);
+		const events: string[] = [];
+		let resolveStarted: () => void = () => {};
+		const startedSettled = new Promise<void>((resolve) => {
+			resolveStarted = resolve;
+		});
+		const dispatch = createHandoffDispatch({
+			state,
+			runner,
+			config: () => PLANE_CONFIG,
+			seatCount: () => 0,
+			home: home(),
+			...recorder(events),
+		});
+		const result = await dispatch.dispatchPlaneAction({
+			origin: "workflow",
+			automatic: true,
+			ticketIdentity: pullIdentity,
+			routeFromIdentity: issueIdentity,
+			taskType: "merge",
+			onStarted: (started) => {
+				expect(started).toEqual({ ok: true });
+				resolveStarted();
+			},
+		});
+		expect(result).toEqual({ ok: true });
+		await startedSettled;
+		// The automatic ask keeps the stored environment, the way the
+		// automatic route does: the run takes no herdr command at all.
+		expect(runner.commands().filter((command) => command.startsWith("herdr"))).toEqual([]);
 		state.close();
 	});
 

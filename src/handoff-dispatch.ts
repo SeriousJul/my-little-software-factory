@@ -11,6 +11,7 @@
 import type { FactoryConfig } from "./config.ts";
 import type { ConsultationPickupOutcome } from "./consultation-operations.ts";
 import type { EnvironmentKind, Ticket, TicketState } from "./domain/ticket.ts";
+import { issueReferencesOf } from "./domain/ticket.ts";
 import {
 	type CloseCleanupOptions,
 	closeCleanupReach,
@@ -46,7 +47,6 @@ import {
 	findFixingPullRequest,
 	firePlaneActionOutcome,
 	isCoveredByFixingPullRequest,
-	newestMembershipOf,
 	writeMembershipLabels,
 } from "./workflow.ts";
 
@@ -574,6 +574,21 @@ class HandoffDispatchModule implements HandoffDispatch {
 		// the decision (ADR 0072), and the open position keeps its open state,
 		// the wait standing on the item alone.
 		this.recordPlaneActionDecision(intent);
+		if (intent.origin === "workflow" && intent.automatic !== true) {
+			// The decision screen's ask: the settled turn's environment goes at
+			// the ask, the way the route's ask closes it (ADR 0046): the close
+			// takes the seat, the way every environment change does, so it runs
+			// the moment the seat is free and never under a run. The merge run
+			// builds no environment of its own, so the close is the ask's whole
+			// act on the environment.
+			const closeIdentity = intent.routeFromIdentity ?? intent.ticketIdentity;
+			void this.queueCleanup(async () => {
+				const failure = await this.closePreviousHandoffEnvironment(closeIdentity);
+				if (failure !== undefined)
+					this.reports.warning(`the previous handoff's environment did not close: ${failure}`);
+				this.reports.refresh();
+			});
+		}
 		this.log?.info(
 			`merge queued: ${this.ticketName(intent.ticketIdentity)} (origin ${intent.origin})`,
 		);
@@ -737,6 +752,12 @@ class HandoffDispatchModule implements HandoffDispatch {
 			pullRequest,
 			method: setting.method,
 		});
+		// A stop over the run's commands: the app closed or is closing the
+		// state behind the run, and a settle it writes into it reads a closed
+		// database. The run's settle stands on the restart the way a crash
+		// does: the fresh read finds the merge landed, and the source leaves
+		// the merged pull request at its next refresh.
+		if (this.stopped) return;
 		// The attempt is the durable record of the merge the plane ran (ADR
 		// 0068): the row stands for the Handoff limit's count, and the
 		// outcome's fire lands its fact on the row, because no Completion
@@ -762,20 +783,31 @@ class HandoffDispatchModule implements HandoffDispatch {
 			ticketIdentity: item.ticketIdentity,
 			taskType: item.taskType,
 			attempt: { id: attempt.id, ticketIdentity: item.ticketIdentity, taskType: item.taskType },
+			stopped: () => this.stopped,
 		});
+		// The stop over the fire's label reads: the retirement writes into the
+		// state the stop closed, and a settle it skips stands on the restart
+		// the same way.
+		if (this.stopped) return;
 		// The merged pull request leaves the projection the moment the merge
-		// lands: its source stops returning it at the next refresh, and the
-		// retirement does that now, the way that refresh would (ADR 0068).
-		if (result.outcome === "merged")
-			this.state.retireMembership(pullRequest.identity, newestMembershipOf(pullRequest).sourceName);
+		// lands, and so does every issue it closed on the merge: the sources
+		// stop returning them at the next refresh, and the retirement does it
+		// now, the way that refresh would (ADR 0068).
+		if (result.outcome === "merged") {
+			const closedIssueIdentities = new Set<string>();
+			for (const membership of pullRequest.memberships)
+				for (const reference of issueReferencesOf(membership.attributes))
+					if (reference.identity !== null) closedIssueIdentities.add(reference.identity);
+			this.state.retireTicket(pullRequest.identity);
+			for (const identity of closedIssueIdentities) this.state.retireTicket(identity);
+		}
 		// The row left at the claim, the way the Consultation's pickup
 		// leaves it. The tickets keep the states the ask left them in
 		// (ADR 0072): the source ended its cycle at the ask, and the open
 		// position's wait was the item's alone.
-		if (!this.stopped) this.settleIntentOnStarted(item.ticketIdentity, { ok: true });
+		this.settleIntentOnStarted(item.ticketIdentity, { ok: true });
 		this.reports.refresh();
 		this.reports.starting(item.ticketIdentity, false);
-		if (this.stopped) return;
 		if (result.outcome === "merged") {
 			this.reports.notice(
 				overCap

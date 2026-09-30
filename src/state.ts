@@ -1788,19 +1788,19 @@ export class FactoryState {
 	}
 
 	/**
-	 * Retire the membership a merged pull request leaves behind (ADR 0068):
-	 * the source stops returning the pull request at its next refresh, and the
-	 * merged ticket leaves the projection the moment the merge lands instead
-	 * of waiting for that refresh. A membership that already retired changes
-	 * nothing, and the ticket's other memberships ride out the next refresh.
+	 * Retire a ticket the merge leaves behind (ADR 0068): the source stops
+	 * returning it at its next refresh - the merged pull request, and every
+	 * issue the pull request closed on the merge - and the ticket leaves the
+	 * projection the moment the merge lands instead of waiting for that
+	 * refresh. Every active membership of the identity retires, the way every
+	 * source listing the ticket stops returning it, and an identity that
+	 * already retired changes nothing.
 	 */
-	retireMembership(ticketIdentity: string, sourceName: string): boolean {
+	retireTicket(ticketIdentity: string): boolean {
 		return this.transaction(() => {
 			const result = this.db
-				.prepare(
-					"UPDATE memberships SET active = 0 WHERE source_name = ? AND ticket_identity = ? AND active = 1",
-				)
-				.run(sourceName, ticketIdentity);
+				.prepare("UPDATE memberships SET active = 0 WHERE ticket_identity = ? AND active = 1")
+				.run(ticketIdentity);
 			return Number(result.changes) > 0;
 		});
 	}
