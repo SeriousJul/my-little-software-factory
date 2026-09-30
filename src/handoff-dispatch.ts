@@ -647,10 +647,12 @@ class HandoffDispatchModule implements HandoffDispatch {
 	 * it runs, so an already-merged pull request settles as merged without a
 	 * command, and the run's outcome records the attempt, fires the task
 	 * type's transition on the outcome alike for a merge and a block, and
-	 * settles the route without a work cycle. Every pickup ends in run or
-	 * drop: a refused claim drops the item with its warning, and the queued
-	 * route settles to open on it, because a dropped merge leaves no
-	 * re-offer standing and no machine path back to the wait.
+	 * settles the route without a work cycle: a cross-ticket route's source
+	 * ends its cycle on the answer, the way the drop and the cancel do.
+	 * Every pickup ends in run or drop: a refused claim drops the item with
+	 * its warning, and the queued route settles to open on it, because a
+	 * dropped merge leaves no re-offer standing and no machine path back to
+	 * the wait.
 	 */
 	private async pickupPlaneActionItem(
 		item: WorkQueuePlaneActionItem,
@@ -757,6 +759,12 @@ class HandoffDispatchModule implements HandoffDispatch {
 		// leaves it, and the route settles back to open without a work cycle:
 		// no work cycle ran for the action.
 		this.state.settleQueuedPlaneActionRoute(item.ticketIdentity);
+		// The route's source ends its cycle when the run answers, the way the
+		// drop and the cancel end it: a cross-ticket route leaves the source
+		// in the queued wait, and the run's answer is the one that settles
+		// it out, so a finished route never leaves its source behind.
+		if (item.routeFromIdentity !== null)
+			this.state.settleFinishedPlaneActionRouteSource(item.routeFromIdentity);
 		if (!this.stopped) this.settleIntentOnStarted(item.ticketIdentity, { ok: true });
 		this.reports.refresh();
 		if (this.stopped) return;
@@ -788,7 +796,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 	private settlePlaneActionDrops(item: WorkQueuePlaneActionItem): void {
 		this.state.settleQueuedPlaneActionRoute(item.ticketIdentity);
 		if (item.routeFromIdentity !== null)
-			this.state.settleDroppedPlaneActionRouteSource(item.routeFromIdentity);
+			this.state.settleFinishedPlaneActionRouteSource(item.routeFromIdentity);
 	}
 
 	/**

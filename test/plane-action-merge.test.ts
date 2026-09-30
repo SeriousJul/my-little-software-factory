@@ -1061,6 +1061,126 @@ describe("the dispatch's ask and pickup", () => {
 		);
 		state.close();
 	});
+
+	test("a cross-ticket route that runs to the answer settles its source out of queued", async () => {
+		const state = planeState();
+		withIssueSource(state);
+		// The issue stands awaiting with its settled turn: the cross route's
+		// source, the way the top-up's continuation ask finds it.
+		const claim = state.claimHandoff(
+			issueIdentity,
+			{
+				agentType: "pi",
+				environment: "live-worktree",
+				taskType: "rework",
+				model: "",
+				thinking: "",
+				contextWindow: "",
+			},
+			"open",
+		);
+		if (!claim.ok) throw new Error(claim.reason);
+		state.settleHandoff(claim.claim.attemptId, true, undefined, {
+			paneId: "pane-1",
+			tabId: "tab-1",
+			workspaceId: "ws-1",
+		});
+		state.settleTurn({
+			ticketIdentity: issueIdentity,
+			handoffId: claim.claim.attemptId,
+			taskType: "rework",
+			agentType: "pi",
+			message: "The turn is done.",
+			turnLog: [{ kind: "text", text: "The turn is done." }],
+			completedAt: "2026-08-31T11:00:00Z",
+			cause: "completed",
+			transition: {
+				fired: false,
+				when: null,
+				reason: "",
+				ticketFacts: [],
+				pullRequestFacts: [],
+				autoAdvance: true,
+				ticketWrite: null,
+				pullRequestWrite: null,
+				pullRequestIdentity: null,
+				pullRequestKey: null,
+				writeFailure: "",
+				positionTaskType: "merge",
+				positionTicketIdentity: pullIdentity,
+			},
+		});
+		const ticketsBefore = state.visibleTickets(
+			PLANE_WORKFLOW_STATES,
+			PLANE_CONFIG.defaultTaskType,
+			"all",
+		);
+		const issueBefore = ticketsBefore.find((t) => t.identity === issueIdentity);
+		if (issueBefore === undefined) throw new Error("the issue is not in the read");
+		const cycleBefore = issueBefore.workCycle;
+		const runner = new FakeRunner();
+		// The run's fresh read finds the pull request open, the merge lands,
+		// and the fire's fresh read finds it merged.
+		stubReadSequence(runner, [{ state: "open" }, { merged: true }]);
+		stubMerge(runner, 0);
+		const events: string[] = [];
+		let resolveStarted: () => void = () => {};
+		const startedSettled = new Promise<void>((resolve) => {
+			resolveStarted = resolve;
+		});
+		const dispatch = createHandoffDispatch({
+			state,
+			runner,
+			config: () => PLANE_CONFIG,
+			seatCount: () => 0,
+			home: home(),
+			...recorder(events),
+		});
+		state.setQueuePaused(true);
+		const result = await dispatch.dispatchPlaneAction({
+			origin: "workflow",
+			automatic: true,
+			ticketIdentity: pullIdentity,
+			routeFromIdentity: issueIdentity,
+			taskType: "merge",
+			onStarted: (started) => {
+				expect(started).toEqual({ ok: true });
+				resolveStarted();
+			},
+		});
+		expect(result).toEqual({ ok: true });
+		// Both waits stand: the item's own ticket took the queued wait, and
+		// the decision the ask landed moved the source from awaiting to
+		// queued, the way the route's decision does.
+		expect(state.ticketState(pullIdentity)).toBe("queued");
+		expect(state.ticketState(issueIdentity)).toBe("queued");
+		state.setQueuePaused(false);
+		await dispatch.pickupWorkQueue();
+		await startedSettled;
+		// The run stands: one merge command, one attempt row, and the fire's
+		// merged read wrote no facts.
+		expect(runner.commands()).toContain(
+			"gh pr merge #12 --squash --hostname github.com --repo acme/factory",
+		);
+		const attempt = state.latestPlaneActionAttempt(pullIdentity);
+		expect(attempt?.outcome).toBe("merged");
+		expect(attempt?.decision).toBe("auto-merged");
+		expect(state.workQueue()).toEqual([]);
+		// The waits settle on the run's answer alike: the item's ticket back
+		// to open without a work cycle, and the route's source open with its
+		// cycle counted once, the way the drop and the cancel settle the same
+		// row (ADR 0069) - so a finished route never leaves its source in the
+		// wait with no machine path back.
+		expect(state.ticketState(pullIdentity)).toBe("open");
+		expect(state.ticketState(issueIdentity)).toBe("open");
+		const after = state.visibleTickets(PLANE_WORKFLOW_STATES, PLANE_CONFIG.defaultTaskType, "all");
+		expect(after.find((t) => t.identity === issueIdentity)?.workCycle).toBe(cycleBefore + 1);
+		expect(after.find((t) => t.identity === pullIdentity)?.workCycle).toBe(
+			ticketsBefore.find((t) => t.identity === pullIdentity)?.workCycle,
+		);
+		expect(events).toContain(`notice: the merge of "${pullTitle}" ran from the Work queue`);
+		state.close();
+	});
 });
 
 /** Whether the merge row stands focused in the decision surface. */

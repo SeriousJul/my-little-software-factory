@@ -81,12 +81,7 @@ import {
 } from "../observation.ts";
 import { parallelSeatCount } from "../parallel.ts";
 import { evaluatePlacement, type PlacementEvaluation } from "../placement.ts";
-import {
-	DEFAULT_MERGE_METHOD,
-	isPlaneActionTaskType,
-	planeActionLabel,
-	planeActionSettingOf,
-} from "../plane-actions.ts";
+import { DEFAULT_MERGE_METHOD, planeActionLabel, planeActionSettingOf } from "../plane-actions.ts";
 
 import { RefreshCoordinator } from "../refresh.ts";
 import type { RepositoryMapping } from "../repo.ts";
@@ -1710,10 +1705,14 @@ export function App({
 				// merge, not for a handoff. The row carries no settings to edit:
 				// the action form holds no profile keys, and the override key is
 				// unavailable on it with the reason the catalogue states.
-				const mergePosition = isPlaneActionTaskType(
+				// The registry is the one home of the action's name (ADR 0068):
+				// the row's label reads the setting it offers, so a second
+				// action's row stands with its own name.
+				const mergeSetting = planeActionSettingOf(
 					configRef.current.taskTypes,
 					outcome.positionTaskType,
 				);
+				const mergePosition = mergeSetting !== null;
 				// While the route is alive, the row reads as the fact line that
 				// names where it stands, and takes no key (ADR 0064): Close and
 				// Goto stand always, and the confirm waits with the route. The
@@ -1758,7 +1757,7 @@ export function App({
 						if (mergePosition) {
 							actions.push({
 								key: "merge",
-								label: planeActionLabel("merge-pull-request"),
+								label: planeActionLabel(mergeSetting.name),
 								detail: `runs the merge now, with no agent and no worktree (method ${mergeMethodOf(outcome.positionTaskType)})`,
 								planeAction: true,
 							});

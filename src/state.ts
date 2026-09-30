@@ -1818,14 +1818,14 @@ export class FactoryState {
 	}
 
 	/**
-	 * End the cycle of the source a dropped plane action row named (ADR
-	 * 0069, beside ADR 0068): the drop, like the cancel, leaves a route that
-	 * decided its turn and then lost its start without a run, so the source
-	 * rests open with the cycle counted once, the way a close ends the cycle
-	 * the turn routed from. A source that left the queued wait behind the
-	 * settle changes nothing.
+	 * End the cycle of the source a plane action row named, when the row
+	 * leaves the queue (ADR 0069, beside ADR 0068): the drop, like the
+	 * run's answer and the cancel, leaves a route that decided its turn, so
+	 * the source rests open with the cycle counted once, the way a close
+	 * ends the cycle the turn routed from. A source that left the queued
+	 * wait behind the settle changes nothing.
 	 */
-	settleDroppedPlaneActionRouteSource(routeFromIdentity: string): boolean {
+	settleFinishedPlaneActionRouteSource(routeFromIdentity: string): boolean {
 		return this.transaction(() => {
 			const result = this.db
 				.prepare(
