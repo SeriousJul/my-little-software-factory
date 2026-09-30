@@ -1,4 +1,4 @@
-# ADR 0070: The Groups stand in the axis' own order, and the operator owns it
+# ADR 0071: The Groups stand in the axis' own order, and the operator owns it
 
 Status: accepted
 Date: 2026-09-30
@@ -99,7 +99,7 @@ never opens a Group by itself, and a group key is a fact of the ticket.
 - The key guide carries the two move rows, and the bar states the move the
   facts under the cursor run: the move hints stand where the cursor is on a
   Group header, and the axis' own hint stands where it is on a ticket row.
-- The state file gains the `group_order` table at the schema step to 23,
+- The state file gains the `group_order` table at the schema step to 24,
   with the standing rule the other tables carry: a file stamped at the
   target without the table heals on open, and an older file migrates to it
   with the work it held.

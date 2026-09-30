@@ -481,6 +481,9 @@ function scrollKeyInput(key: string): string {
 	// The mock types a word it does not know as literal text, so the Delete
 	// key goes out as its escape sequence like the page keys do.
 	if (key === "delete") return "\u001b[3~";
+	// The space key's word types the word "space", so it goes out as its one
+	// character.
+	if (key === "space") return " ";
 	return key;
 }
 

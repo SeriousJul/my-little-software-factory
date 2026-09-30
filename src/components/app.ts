@@ -48,10 +48,10 @@ import {
 import type { GroupingAxis, SplitGroupingAxis } from "../domain/grouping.ts";
 import { DEFAULT_GROUPING_AXIS, nextGroupingAxis } from "../domain/grouping.ts";
 import {
+	flagWithholdsRow,
 	HANDOFF_ENVIRONMENT_KINDS,
 	type Handoff,
 	holdsDecision,
-	ignoreWithholdsRow,
 	nextTicketListFilter,
 	type Ticket,
 	type TicketListFilter,
@@ -365,7 +365,7 @@ export function App({
 	const groupingAxisRef = useRef(groupingAxis);
 	/**
 	 * The operator's stored order of the Group values of the axis in effect
-	 * (ADR 0070): factory state, read back at boot the way the axis itself is,
+	 * (ADR 0071): factory state, read back at boot the way the axis itself is,
 	 * and written whole on the operator's own move. Empty where the operator
 	 * has moved no Group on the axis, and the list then stands the axis' own
 	 * default order.
@@ -382,7 +382,7 @@ export function App({
 	const groupOrderListRef = useRef(groupOrderList);
 	/**
 	 * The stored orders of this run for the axes the plane does not read back
-	 * from a state file (ADR 0070): a plane with no state file keeps its group
+	 * from a state file (ADR 0071): a plane with no state file keeps its group
 	 * orders for the run, the way it keeps its axis, and a move on an axis the
 	 * operator visits twice comes back where they left it.
 	 */
@@ -822,6 +822,11 @@ export function App({
 	// names exactly the rows the `ignored` view shows and nothing re-applies the
 	// covered rule or the ignore rule in the screen.
 	const ignoredCount = listViews.ignored.length;
+	// The muted count the Ticket header carries (ADR 0070): the ledger of the
+	// source acts, read from the same list step as the rows themselves, so the
+	// number names exactly the rows the `muted` view shows and nothing
+	// re-applies the covered rule or the mute rule in the screen.
+	const mutedCount = listViews.muted.length;
 	// The held count the bell compares against: a rise rings the terminal bell
 	// and flashes the Tickets header, a fall or a steady count does not.
 	useEffect(() => {
@@ -2483,7 +2488,7 @@ export function App({
 		// either way. `active` is the list rule's own answer - the covered rule beside
 		// the ignore's - so a clear that returns no row says which rule still holds it
 		// out instead of promising a row the list does not draw (ADR 0042, ADR 0060).
-		const resting = ignoreWithholdsRow({ ...ticket, ignored: true });
+		const resting = flagWithholdsRow({ ...ticket, ignored: true });
 		replaceTickets();
 		const backInList = listViewsRef.current.active.some((row) => row.identity === ticket.identity);
 		const name = `"${ticket.title}"`;
@@ -2506,6 +2511,68 @@ export function App({
 						: `${name} is not ignored: an open fixing pull request still holds its row out of the list`,
 			});
 		}
+	};
+	/**
+	 * `u` mutes the source the row's Ticket came in on, or takes the mute back
+	 * (ADR 0070).
+	 *
+	 * The act is the operator's judgment on the source, written on the source's
+	 * own row, and the plane writes nothing to the source: no label, no close,
+	 * no comment. The row's facts carry the flag folded in - the mute of any of
+	 * the Ticket's sources - so the key flips on the flag, and it mutes or
+	 * un-mutes every source the Ticket's memberships name together, the way the
+	 * act rides on the row and acts on the source. The state's write settles
+	 * what the act takes away in the same transaction: the source's waiting
+	 * starts leave the Work queue, and the queued tickets whose route died with
+	 * them or before it rest `open` with their cycle incremented.
+	 */
+	const toggleSourceMute = () => {
+		// The Ticket under the cursor, read the way every Ticket control reads
+		// it (issue #159): a Group header holds no Ticket, and the catalogue
+		// refused the key with its own words before this ran.
+		const ticket = ticketAtCursor();
+		if (ticket === undefined) return;
+		if (state === undefined) {
+			// The mute is durable factory state on the source's row: the
+			// in-memory projection this shell holds has nowhere to keep it, so
+			// the key says so instead of acting as a view switch the operator
+			// would read as a mute (ADR 0070).
+			setWarningMessage("muting a source needs SQLite state");
+			return;
+		}
+		const sources = [
+			...new Set(ticket.memberships.map((membership) => membership.sourceName)),
+		].sort();
+		if (sources.length === 0) {
+			setWarningMessage("the selected Ticket names no source to mute");
+			return;
+		}
+		const muted = ticket.muted !== true;
+		let removed = 0;
+		let settled = 0;
+		for (const sourceName of sources) {
+			const result = state.setSourceMuted(sourceName, muted);
+			if (!result.ok) {
+				setWarningMessage(result.reason);
+				return;
+			}
+			removed += result.removed;
+			settled += result.settled;
+		}
+		replaceTickets();
+		const label = sources.join(", ");
+		const queueNote =
+			removed > 0
+				? `; ${removed} waiting start${removed === 1 ? "" : "s"} left the Work queue`
+				: "";
+		const restNote =
+			settled > 0 ? `; ${settled} queued Ticket${settled === 1 ? "" : "s"} rest open` : "";
+		reportMessage({
+			severity: "info",
+			text: muted
+				? `source ${label} is muted: no row while its tickets rest, no automatic start${queueNote}${restNote}`
+				: `source ${label} is not muted: its rows come back from the list, and the machine may start them`,
+		});
 	};
 	const cycleConsultationHistory = () => {
 		const next =
@@ -2705,12 +2772,12 @@ export function App({
 		contextFor(mode, {
 			selectedTicket: ticketAtCursor(),
 			// The facts the grouping controls read: the axis in effect names the
-			// Action bar hint, and a cursor on a Group header is what turns the
-			// shared `x` from the section toggle into the fold (issue #159).
+			// Action bar hint, and a cursor on a Group header is what opens the
+			// `Space` key to the fold (issue #159, issue #170).
 			groupingAxis: groupingAxisRef.current,
 			groupHeaderSelected: groupHeaderAtCursor() !== undefined,
 			selectedGroupHeader: groupHeaderAtCursor() ?? null,
-			// The facts the Group's move reads (ADR 0070): the position of the
+			// The facts the Group's move reads (ADR 0071): the position of the
 			// Group under the cursor among the visible Group headers, and their
 			// count. The move's edge refusal stands in the catalogue's words.
 			selectedGroupPosition: (() => {
@@ -3016,11 +3083,11 @@ export function App({
 				// shell writes the durable value and states the axis on the
 				// Message line, and the list redraws with its Group headers.
 				"group-axis": () => cycleGroupingAxis(),
-				// The shared `x` on a Group header folds that Group; the
-				// catalogue resolved the key here on the facts under the cursor.
+				// `Space` on a Group header folds that Group; the catalogue
+				// resolved the key here on the facts under the cursor (issue #170).
 				"group-fold": () => foldGroupAtCursor(),
 				// `+` (or `=`, its unshifted form) and `-` move the Group under the
-				// cursor to its visible neighbor (ADR 0070): the same keys the
+				// cursor to its visible neighbor (ADR 0071): the same keys the
 				// queue's promote and demote read, scoped by the catalogue to the
 				// Ticket section's Group headers.
 				"group-move-up": () => moveGroupAtCursor("up"),
@@ -3048,6 +3115,7 @@ export function App({
 				// Ticket section's List filter (ADR 0060). The catalogue gated the
 				// obligation and the section, so both run the act and nothing else.
 				"ticket-ignore": () => toggleTicketIgnore(),
+				"ticket-mute": () => toggleSourceMute(),
 				"ticket-filter": () => cycleTicketFilter(),
 				"consultation-recovery": () => {
 					const selected = consultationsRef.current[consultationIndexRef.current];
@@ -3596,7 +3664,7 @@ export function App({
 	 *
 	 * The index is a place in the row list, so it can name a Group header: the
 	 * cursor rests there, the Ticket controls refuse it in the catalogue's
-	 * words, and the fold takes the shared `x`. It can also name the blank row
+	 * words, and the fold takes the `Space` key there. It can also name the blank row
 	 * between two Groups, which holds no cursor: the click lands on the Group
 	 * that row parts, and never folds it.
 	 */
@@ -3700,8 +3768,8 @@ export function App({
 		setSelectedIndex(nextIndex);
 	}
 	/**
-	 * Fold or open the Group under the cursor, the shared `x` route (user
-	 * story 32). A press anywhere else keeps the Section toggle: the catalogue
+	 * Fold or open the Group under the cursor, the `Space` route (issue #170).
+	 * A press anywhere else answers the catalogue's refusal: the catalogue
 	 * resolved the key to this route on the facts under the cursor.
 	 */
 	function foldGroupAtCursor() {
@@ -3711,7 +3779,7 @@ export function App({
 	}
 	/**
 	 * Move the Group under the cursor to its visible neighbor above or below
-	 * it (ADR 0070).
+	 * it (ADR 0071).
 	 *
 	 * The two Group values trade their places in the axis' full order, and the
 	 * full order is the write: the operator's fact, durable the moment the
@@ -4194,17 +4262,23 @@ export function App({
 						? "no ticket sources configured"
 						: healths.length === 0 || healths.some((health) => health.health === "loading")
 							? "loading tickets..."
-							: // A hidden pile is not an idle factory (ADR 0060): the empty active
-								// view points at the key that shows the rows the ignore took away, and
-								// a filtered view with no rows names the view the operator is in. The
-								// number is the pile itself, the same one the header's `ignored` cell
-								// names: where the active view stands empty, every flagged row is out
-								// of it, because a row with live work or a decision owed stays in.
-								ignoredCount > 0 && ticketFilter === "active"
-								? `no active Tickets; ${ignoredCount} ignored - press f`
+							: // A hidden pile is not an idle factory (ADR 0060, widened by ADR 0070):
+								// the empty active view points at the key that shows the rows the
+								// flags took away, and a filtered view with no rows names the view the
+								// operator is in. Each number is its ledger itself, the same one its
+								// header cell names: where the active view stands empty, every flagged
+								// row is out of it, because a row with live work or a decision owed
+								// stays in.
+								(ignoredCount > 0 || mutedCount > 0) && ticketFilter === "active"
+								? `no active Tickets; ${[
+										...(ignoredCount > 0 ? [`${ignoredCount} ignored`] : []),
+										...(mutedCount > 0 ? [`${mutedCount} muted`] : []),
+									].join(", ")} - press f`
 								: ticketFilter === "ignored"
 									? "no ignored Tickets - press f"
-									: "no tickets match the configured sources",
+									: ticketFilter === "muted"
+										? "no muted Tickets - press f"
+										: "no tickets match the configured sources",
 					groupingAxis,
 				);
 	const replacementConsultation =
@@ -4340,6 +4414,7 @@ export function App({
 						awaiting: awaitingCount,
 						held: heldCount,
 						ignored: ignoredCount,
+						muted: mutedCount,
 						heldBell,
 						active: mainSurfaceActive,
 						onToggle: () => clickSection("tickets"),

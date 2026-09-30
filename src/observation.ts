@@ -49,10 +49,10 @@
  *    empty, the cycle adds exactly one item - a continuation first, then a
  *    restart, then a new open ticket, else nothing. A queue that holds even
  *    one item holds the automatic adds until it drains, so the queue never
- *    piles. An ignored ticket (ADR 0060) is out of every one of those walks,
- *    and it stays out while its row shows again for live work or a decision
- *    owed: the flag holds the machine out, and only the operator's own key
- *    clears it.
+ *    piles. A flagged ticket (ADR 0060, widened by ADR 0070) is out of every
+ *    one of those walks, its own flag or its source's mute, and it stays out
+ *    while its row shows again for live work or a decision owed: the flag
+ *    holds the machine out, and only the operator's own key clears it.
  *
  * When herdr cannot be listed at all, the loop pauses and holds: the last
  * known facts stay, and the UI warns. Nothing is re-run blindly on
@@ -61,7 +61,12 @@
  */
 
 import type { FactoryConfig, TransitionOutcome } from "./config.ts";
-import { type Completion, isHeldCompletion, type Ticket, ticketIgnored } from "./domain/ticket.ts";
+import {
+	automaticStartBlocked,
+	type Completion,
+	isHeldCompletion,
+	type Ticket,
+} from "./domain/ticket.ts";
 import { baseChoice, resolveHandoffChoice } from "./handoff.ts";
 import type { DispatchResult, HandoffIntent } from "./handoff-dispatch.ts";
 import { type HerdrAgent, ownAgentInPane } from "./herdr.ts";
@@ -1215,10 +1220,12 @@ export class ObservationCoordinator {
 		if (this.state.workQueue().length > 0) return false;
 		const config = this.config();
 		// The pile, in one read for the walk that holds an identity and no row
-		// (ADR 0060): the in-flight tickets the Restart walk reads carry no flag of
-		// their own, so one read answers the whole cycle in place of one query per
-		// candidate. Every other walk asks `ticketIgnored` of the row it holds.
-		const ignored = this.state.ignoredTickets();
+		// (ADR 0060, widened by ADR 0070): the in-flight tickets the Restart walk
+		// reads carry no facts of their own, and the flag may be the ticket's own
+		// or its source's, so one read answers the whole cycle in place of one
+		// query per candidate. Every other walk asks `automaticStartBlocked` of
+		// the row it holds, and the row's facts fold the same flag.
+		const blocked = this.state.automaticStartBlockedTickets();
 		// The list, in one read. The continuation and re-fired-skip walks take the
 		// active view: the rows the whole list rule leaves. The open-ticket add takes
 		// the `all` view instead - every row the covered rule leaves, the ignore aside
@@ -1237,7 +1244,7 @@ export class ObservationCoordinator {
 			// The row is here in the active view the whole time its Agent works or
 			// its decision stays owed, so this test - not the filter - is what holds
 			// the machine out, and it is the one gate predicate on the row's flag.
-			if (ticketIgnored(ticket)) continue;
+			if (automaticStartBlocked(ticket)) continue;
 			const position = this.continuationPosition(ticket);
 			if (position === null) continue;
 			const completion = this.state.lastCompletion(ticket.identity);
@@ -1308,7 +1315,7 @@ export class ObservationCoordinator {
 			// even when the row is withheld, and a resting ignored position is
 			// withheld while a live one is listed. Either way the one gate predicate on
 			// the row the walk holds is what answers.
-			if (ticketIgnored(position)) continue;
+			if (automaticStartBlocked(position)) continue;
 			if (position.suggestedTaskType !== outcome.positionTaskType) continue;
 			// One test of the position's standing. The projection builds
 			// `actionable` from the open state, so it holds every position that
@@ -1350,13 +1357,14 @@ export class ObservationCoordinator {
 		const byPane = new Map<string, HerdrAgent>();
 		for (const agent of agents) byPane.set(agent.paneId, agent);
 		for (const ticket of this.state.ticketsByState(["handed-off", "running"])) {
-			// The ignore gate (ADR 0060): this walk reads the in-flight tickets
-			// directly, not the list, and an ignored Ticket whose Agent is missing is
-			// listed all the same because its work is live - so without the test the
-			// plane would start an Agent on work the operator judged out, and it would
-			// keep starting it for as long as the flag stood. The identity is all this
-			// walk holds, so it asks the cycle's own read of the pile.
-			if (ignored.has(ticket.ticketIdentity)) continue;
+			// The gate (ADR 0060, widened by ADR 0070): this walk reads the
+			// in-flight tickets directly, not the list, and a flagged Ticket whose
+			// Agent is missing is listed all the same because its work is live - so
+			// without the test the plane would start an Agent on work the operator
+			// judged out, and it would keep starting it for as long as the flag
+			// stood. The identity is all this walk holds, so it asks the cycle's
+			// own read of the pile, the ticket's flag or its source's.
+			if (blocked.has(ticket.ticketIdentity)) continue;
 			if (this.now() - Date.parse(ticket.startedAt) < this.startupGraceMs) continue;
 			if (ticket.paneId === null) continue;
 			// The one missing-Agent rule, read the way the in-flight pass reads it.
@@ -1424,7 +1432,7 @@ export class ObservationCoordinator {
 			// every row the covered rule leaves, so a resting ignored row stands here
 			// and this test is the one that holds it out. The gate is the flag on the
 			// row, never the filter that drew it.
-			if (ticketIgnored(ticket)) continue;
+			if (automaticStartBlocked(ticket)) continue;
 			if (ticket.handoffCount >= config.maxHandoffsPerTicket) continue;
 			// The ticket's last cycle may have ended on a source change the agent
 			// made (a merged pull request, a closed issue). Its membership still
@@ -1539,7 +1547,7 @@ export class ObservationCoordinator {
 		// The ignore gate (ADR 0060): the route starts an Agent on the position,
 		// and the position is read from the projection before the list rule, so the
 		// one gate predicate on the row this walk holds is what answers.
-		if (ticketIgnored(position)) return null;
+		if (automaticStartBlocked(position)) return null;
 		if (position.state !== "open" && position.state !== "awaiting" && position.state !== "queued")
 			return null;
 		if (position.suggestedTaskType !== outcome.positionTaskType) return null;

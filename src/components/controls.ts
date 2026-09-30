@@ -75,6 +75,7 @@ type ControlKey =
 	| "home"
 	| "end"
 	| "tab"
+	| "space"
 	| "j"
 	| "k"
 	| "h"
@@ -93,6 +94,7 @@ type ControlKey =
 	| "x"
 	| "d"
 	| "w"
+	| "u"
 	| "delete"
 	| "f1"
 	| "f2"
@@ -152,21 +154,21 @@ export interface ControlContext {
 	 * Ticket row (issue #159).
 	 *
 	 * The list states it from the row under the cursor, and the fold control
-	 * gates on it: the shared `x` key folds a Group under a header and folds the
-	 * Section everywhere else, and the Action bar names only the meaning the
-	 * facts under the cursor run.
+	 * gates on it: `Space` folds the Group under a header and answers nothing
+	 * anywhere else, and the Action bar names the key the facts under the
+	 * cursor run.
 	 */
 	selectedGroupHeader?: GroupHeader | null;
 	/**
 	 * Whether the Ticket cursor stands on a Group header (issue #159).
 	 *
 	 * No Ticket is selected there, so every Ticket control refuses with the
-	 * catalogue's own words and the fold control takes the shared `x` key.
+	 * catalogue's own words, and the fold control takes the `Space` key.
 	 */
 	groupHeaderSelected?: boolean;
 	/**
 	 * The position of the Group under the cursor among the visible Group
-	 * headers, zero-based, and their count beside it (ADR 0070).
+	 * headers, zero-based, and their count beside it (ADR 0071).
 	 *
 	 * The move control gates on both: a Group at the top of its axis has no
 	 * visible neighbor above to trade places with, and the catalogue states
@@ -511,16 +513,6 @@ const workQueueMode = (mode: InteractionMode): boolean =>
 const ticketBaseMode = (mode: InteractionMode): boolean =>
 	mode === "ticket-list" || mode === "ticket-detail";
 /**
- * Whether the shared `x` belongs to the Group fold right now (issue #159).
- *
- * The fact is the Ticket list's: a Group header exists in no other section, and
- * the other two sections own no fold, so the mode decides before the row does.
- * A cursor that happens to rest on a header while the Consultation section
- * holds the focus leaves the other sections' Section toggle untouched.
- */
-const groupFoldOwnsX = (context: ControlContext): boolean =>
-	ticketBaseMode(context.mode) && context.groupHeaderSelected === true;
-/**
  * The base modes of a section other than the Consultation section.
  *
  * The plane has three sections that share one list surface, and a control one
@@ -612,7 +604,7 @@ const queueOrderMove =
 		);
 	};
 /**
- * Why the Group's move answers the way it does (ADR 0070).
+ * Why the Group's move answers the way it does (ADR 0071).
  *
  * The move trades the Group under the cursor with its visible neighbor in the
  * direction, so it stands available while a visible neighbor stands there, and
@@ -807,8 +799,46 @@ const ticketIgnore = (context: ControlContext): ControlAvailability => {
  * The hint names the next view, the way the queue pause flips between Pause and
  * Resume, so the key says what it shows before the operator presses it.
  */
+/**
+ * Why `u` answers nothing (ADR 0070): the mute is the operator's act on the
+ * source, and it acts on no ticket of the source in particular, so the row's
+ * facts refuse it nowhere. A ticket that owes a decision now, or whose Agent
+ * is missing, mutes its source all the same - the act rides on the row and
+ * acts on the source - and the same key on a muted row takes the mute back.
+ * What it asks is the row itself: a selected Ticket.
+ */
+const ticketMute = (context: ControlContext): ControlAvailability => {
+	if (context.selectedTicket === undefined) return unavailable("no Ticket is selected");
+	return available();
+};
+/**
+ * The state the Ticket section's `f` moves the List filter to (ADR 0060,
+ * widened by ADR 0070).
+ *
+ * The hint names the next view, the way the queue pause flips between Pause and
+ * Resume, so the key says what it shows before the operator presses it. The
+ * mute's ledger stands beside the ignore's in the same cycle, so the hint
+ * names the muted view too.
+ */
 const ticketFilterLabel = (context: ControlContext): string =>
 	`Show ${nextTicketListFilter(context.ticketListFilter ?? "active")}`;
+/**
+ * The source the `u` act reaches on one row (ADR 0070).
+ *
+ * The bar names the source the act will act on: every source the row's Ticket
+ * came in on, the way the act mutes and un-mutes them together, so the key
+ * says what it reaches before the operator presses it. A row that names no
+ * source names the act's object alone.
+ */
+const ticketMuteLabel = (context: ControlContext): string => {
+	const ticket = context.selectedTicket;
+	if (ticket === undefined) return "Mute";
+	const sources = [
+		...new Set(ticket.memberships.map((membership) => membership.sourceName)),
+	].sort();
+	const name = sources.length === 0 ? "source" : sources.join(", ");
+	return ticket.muted === true ? `Un-mute ${name}` : `Mute ${name}`;
+};
 const consultationClose = (context: ControlContext): ControlAvailability => {
 	const consultation = context.selectedConsultation;
 	if (consultation === undefined) return unavailable("no Consultation is selected");
@@ -1250,11 +1280,34 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		guideNote: "hides a resting row and stops every automatic start",
 	},
 	{
-		// `f` cycles the Ticket section's List filter (ADR 0060): the pile the
-		// ignore made is one keypress from view in either direction. The filter
-		// is a view, not factory state, and it opens on the active rows at every
-		// boot. The Consultation section's history answers the same key in its own
-		// section, the way `w` and `g` carry one meaning per section.
+		// `u` takes a source out of the factory's way (ADR 0070): the flag is
+		// factory state on the source's row, the same key on a muted row takes
+		// it back, and the bar names the source the act will reach. The act
+		// settles the rows it takes away in the same write, the way the ignore
+		// settles the waiting start it hides.
+		id: "ticket-mute",
+		label: "Mute",
+		barLabel: ticketMuteLabel,
+		keys: () => ["u"],
+		keyLabel: "u",
+		scope: "control-plane",
+		actionBar: true,
+		// Beside the ignore: the mute is a row key of the Ticket section too, and
+		// the bar packs the rarer reveals - the `f` cycle, then the mute - away
+		// before they touch the measured ladder's Launch rung (ADR 0070).
+		priority: 39,
+		modes: [...baseModes],
+		ticketSectionOnly: true,
+		availability: ticketMute,
+		guideNote: "mutes the source the Ticket came in on, and the key un-mutes",
+	},
+	{
+		// `f` cycles the Ticket section's List filter (ADR 0060, widened by ADR
+		// 0070): the pile the ignore made and the ledger the mute names are each
+		// one keypress from view in either direction. The filter is a view, not
+		// factory state, and it opens on the active rows at every boot. The
+		// Consultation section's history answers the same key in its own section,
+		// the way `w` and `g` carry one meaning per section.
 		id: "ticket-filter",
 		label: "Filter",
 		barLabel: ticketFilterLabel,
@@ -1272,7 +1325,7 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		ticketSectionOnly: true,
 		sectionRefusal: (mode) => (workQueueMode(mode) ? LIST_SECTIONS_ONLY : TICKET_ONLY),
 		availability: available,
-		guideNote: "cycles the Ticket list: active, ignored, all",
+		guideNote: "cycles the Ticket list: active, ignored, muted, all",
 	},
 	{
 		// The Grouping axis (issue #159): one press steps the Ticket section's list
@@ -1311,29 +1364,36 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		guideNote: "cycles the grouping axis: none, repository, source, task, state, position",
 	},
 	{
-		// The fold that shares the `x` key with the section toggle (issue #159):
-		// the facts under the cursor decide which meaning a press runs, so the
-		// plane spends no new letter on a second idea. A fold hides rows and never
+		// The Group fold (issue #159): `Space` is free in every Main view list
+		// mode, and it answers only on a Group header row, where it is the only
+		// meaning the key holds (issue #170). `Space` is bound in no other mode
+		// here, so no surface spends it twice. A fold hides rows and never
 		// facts (ADR 0059), and it lives in memory for the run alone (ADR 0058).
 		id: "group-fold",
 		label: "Fold",
-		keys: () => ["x"],
-		keyLabel: "x",
+		keys: () => ["space"],
+		keyLabel: "Space",
 		scope: "control-plane",
 		actionBar: true,
 		barLabel: (context) =>
 			context.selectedGroupHeader?.collapsed === true ? "Unfold group" : "Fold group",
-		// Just above the section toggle it shares the key with: where the cursor
-		// stands on a Group header this is the meaning that runs, and the bar
-		// states only that one.
+		// The bar names the fold where its key runs: on a Group header row. On
+		// any other row the key refuses, and the bar spends its cells on the
+		// keys the rows under the cursor answer, the way the bar spent them
+		// before the fold shared its key.
+		showInBar: (context) => context.groupHeaderSelected === true,
+		// The fold outranks the section toggle in the bar, so a header row
+		// names both keys, each with its one meaning.
 		priority: 47,
 		modes: [...ticketBaseModes],
 		availability: (context) =>
-			groupFoldOwnsX(context) ? available() : unavailable("no Group header is under the cursor"),
+			context.groupHeaderSelected === true
+				? available()
+				: unavailable("no Group header is under the cursor"),
 		guideNote: "folds the Group under the cursor, or opens it back",
 	},
 	{
-		// The Group's order keys (ADR 0070): `+` (or `=`, its unshifted form)
+		// The Group's order keys (ADR 0071): `+` (or `=`, its unshifted form)
 		// moves the Group under the cursor to the visible header above it, `-`
 		// to the one below it. The queue's own promote and demote read the same
 		// keys, and the catalogue keeps the two meanings apart the way it keeps
@@ -1346,7 +1406,7 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		keyLabel: "+",
 		scope: "control-plane",
 		actionBar: true,
-		barLabel: () => "Move group up",
+		barLabel: () => "Move up",
 		// The bar states only the meaning the facts under the cursor run: the
 		// move names itself on a Group header, and a ticket row keeps the bar's
 		// old hints, the axis hint among them.
@@ -1366,7 +1426,7 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		keyLabel: "-",
 		scope: "control-plane",
 		actionBar: true,
-		barLabel: () => "Move group down",
+		barLabel: () => "Move down",
 		showInBar: (context) =>
 			context.selectedGroupHeader !== undefined && context.selectedGroupHeader !== null,
 		priority: 44,
@@ -1379,20 +1439,15 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		label: "Section",
 		// `x` collapses the section the cursor is in, or expands it back. The
 		// sections stay visible as long as the frame can hold them, so the
-		// toggle is a matter of room, not of access. The key is shared with the
-		// Group fold (issue #159), which owns it wherever the cursor stands on a
-		// Group header; the fold owns that fact, and the two refusals are the
-		// catalogue's, so one key keeps one meaning per moment.
+		// toggle is a matter of room, not of access. One key, one meaning, on
+		// every row of a section, a Group header row included (issue #170).
 		keys: () => ["x"],
 		keyLabel: "x",
 		scope: "control-plane",
 		actionBar: true,
 		priority: 45,
 		modes: [...baseModes],
-		availability: (context) =>
-			groupFoldOwnsX(context)
-				? unavailable("the cursor stands on a Group header: x folds that Group")
-				: available(),
+		availability: available,
 		guideNote: SECTION_TOGGLE_NOTE,
 	},
 	{
@@ -2087,6 +2142,7 @@ const KEY_NAMES: Record<string, string> = {
 	home: "Home",
 	end: "End",
 	tab: "Tab",
+	space: "Space",
 	j: "j",
 	k: "k",
 	h: "h",

@@ -130,7 +130,7 @@ test("Tab cycles the Grouping axis in both Ticket modes, and refuses nowhere", (
 
 // The header fact is the Ticket list's own: a cursor resting on a Group header
 // while another section holds the focus leaves that section's `x` the Section
-// toggle, in its own words, and no fold anywhere (issue #159).
+// toggle, in its own words, and no fold anywhere (issue #159, issue #170).
 test("a Group header under the Ticket cursor gives no other section a fold", () => {
 	for (const mode of [
 		"consultation-list",
@@ -148,6 +148,9 @@ test("a Group header under the Ticket cursor gives no other section a fold", () 
 		expect(availabilityFor(controlById("section-toggle"), context)).toEqual({
 			available: true,
 		});
+		// `Space` is the Ticket section's fold key alone: the other sections
+		// hold no Groups and answer it nowhere (issue #170).
+		expect(controlForKey({ name: "space" }, context)).toBeUndefined();
 	}
 });
 
@@ -159,22 +162,22 @@ test("the flat list hints no axis, and a grouped list names its own", () => {
 });
 
 /**
- * Story 31 and 32: one `x`, two meanings, resolved by the facts under the
- * cursor. On a Group header the fold runs and the Section toggle stands
- * down; on a ticket row the toggle runs and the fold states its reason.
- * The Action bar states only the meaning the current facts run, and the
- * Key guide names both, the way it names every meaning of Enter.
+ * Issue #170: one key, one meaning, on every row. `Space` is the Group
+ * fold's own key, and it answers only on a Group header row; `x` is the
+ * Section toggle on every row, a Group header row included. The Action bar
+ * states only the meaning the current facts run, and the Key guide names
+ * both controls, the way it names every meaning of Enter.
  */
-test("x folds the Group under the cursor, and toggles the Section everywhere else", () => {
+test("Space folds the Group under the cursor, and x toggles the Section on every row", () => {
 	const onHeader = contextFor("ticket-list", {
 		...values,
 		groupingAxis: "repository",
 		groupHeaderSelected: true,
 		selectedGroupHeader: { value: "acme/factory", count: 3, held: 0, collapsed: false },
 	});
-	const fold = controlForKey({ name: "x" }, onHeader);
+	const fold = controlForKey({ name: "space" }, onHeader);
 	expect(fold?.id).toBe("group-fold");
-	if (fold === undefined) throw new Error("x answers nothing on a Group header");
+	if (fold === undefined) throw new Error("Space answers nothing on a Group header");
 	expect(availabilityFor(fold, onHeader)).toEqual({ available: true });
 	expect(fold.barLabel?.(onHeader)).toBe("Fold group");
 	const collapsed = contextFor("ticket-list", {
@@ -182,28 +185,40 @@ test("x folds the Group under the cursor, and toggles the Section everywhere els
 		selectedGroupHeader: { value: "acme/factory", count: 3, held: 0, collapsed: true },
 	});
 	expect(controlById("group-fold").barLabel?.(collapsed)).toBe("Unfold group");
-	// The bar names the fold and not the section toggle it replaces.
+	// The bar names both keys, each with its one meaning: the fold by `Space`
+	// and the section toggle by `x` (issue #170).
 	const hinted = actionBarControls("ticket-list", onHeader).map((control) => control.id);
 	expect(hinted).toContain("group-fold");
-	expect(hinted).not.toContain("section-toggle");
-	// The guide of the same mode still names both meanings of the key.
+	expect(hinted).toContain("section-toggle");
+	// The guide of the same mode names both controls the same way.
 	const ids = guideControls(onHeader).map(({ control }) => control.id);
 	expect(ids).toContain("section-toggle");
 	expect(ids).toContain("group-fold");
 
-	// On a ticket row the toggle keeps the key and the fold refuses.
+	// `x` keeps its one meaning on the header row: the Section toggle.
+	expect(controlForKey({ name: "x" }, onHeader)?.id).toBe("section-toggle");
+	expect(availabilityFor(controlById("section-toggle"), onHeader)).toEqual({
+		available: true,
+	});
+
+	// On a ticket row the fold refuses in its own words, and the toggle keeps
+	// its key.
 	const onRow = contextFor("ticket-list", {
 		...values,
 		groupingAxis: "repository",
 		groupHeaderSelected: false,
 		selectedGroupHeader: null,
 	});
-	expect(controlForKey({ name: "x" }, onRow)?.id).toBe("section-toggle");
-	expect(availabilityFor(controlById("section-toggle"), onRow)).toEqual({ available: true });
+	expect(controlForKey({ name: "space" }, onRow)?.id).toBe("group-fold");
 	expect(availabilityFor(controlById("group-fold"), onRow)).toEqual({
 		available: false,
 		reason: "no Group header is under the cursor",
 	});
+	expect(controlForKey({ name: "x" }, onRow)?.id).toBe("section-toggle");
+	expect(availabilityFor(controlById("section-toggle"), onRow)).toEqual({ available: true });
+	// The bar of a ticket row names the toggle and not the fold: the fold's
+	// key refuses there, and the bar spends its cells on the keys the row
+	// under the cursor answers.
 	const rowHints = actionBarControls("ticket-list", onRow).map((control) => control.id);
 	expect(rowHints).toContain("section-toggle");
 	expect(rowHints).not.toContain("group-fold");
@@ -457,17 +472,61 @@ describe("the shared control catalogue", () => {
 	});
 
 	// The `f` cycle names the state it moves to, so the hint says what the key
-	// will show before the operator presses it (ADR 0060).
+	// will show before the operator presses it (ADR 0060, widened by ADR 0070).
 	test("f names the state the Ticket section's filter moves to", () => {
 		const labels: Array<[TicketListFilter, string]> = [
 			["active", "Show ignored"],
-			["ignored", "Show all"],
+			["ignored", "Show muted"],
+			["muted", "Show all"],
 			["all", "Show active"],
 		];
 		for (const [filter, label] of labels) {
 			const context = contextFor("ticket-list", { ...values, ticketListFilter: filter });
 			expect(controlById("ticket-filter").barLabel?.(context)).toBe(label);
 		}
+	});
+
+	// The `u` act on the source flips between Mute and Un-mute, and names the
+	// source the act reaches, the way the ignore's word reads its own state
+	// (ADR 0070).
+	test("u mutes and un-mutes the row's source, and names it on the bar", () => {
+		const withSource = (muted: boolean) =>
+			contextFor("ticket-list", {
+				...values,
+				selectedTicket: {
+					...openTicket,
+					muted,
+					memberships: [{ sourceName: "acme/factory-issues" }],
+				} as unknown as Ticket,
+			});
+		expect(controlById("ticket-mute").barLabel?.(withSource(false))).toBe(
+			"Mute acme/factory-issues",
+		);
+		expect(controlById("ticket-mute").barLabel?.(withSource(true))).toBe(
+			"Un-mute acme/factory-issues",
+		);
+	});
+
+	// The mute rides on the row in both of the Ticket section's modes, the way
+	// the ignore does, and nowhere else (ADR 0070).
+	test("u reaches the row in both Ticket panes, and nowhere else", () => {
+		for (const mode of ["ticket-list", "ticket-detail", "work-queue-list"] as const) {
+			const context = contextFor(mode, { ...values, selectedTicket: openTicket });
+			const availability = availabilityFor(controlById("ticket-mute"), context);
+			const inTicketSection = mode === "ticket-list" || mode === "ticket-detail";
+			expect(availability.available, `${mode}: the mute reaches the row`).toBe(inTicketSection);
+			if (!inTicketSection) {
+				expect(availability.reason).toContain("Ticket");
+			}
+		}
+		// The row that names no source still rides the act: the key mutes the
+		// source the Ticket came in on, and the bar names the act's object alone.
+		const bare = contextFor("ticket-list", {
+			...values,
+			selectedTicket: { ...openTicket, memberships: [] },
+		});
+		expect(availabilityFor(controlById("ticket-mute"), bare).available).toBe(true);
+		expect(controlById("ticket-mute").barLabel?.(bare)).toBe("Mute source");
 	});
 
 	test("a refused key is never hinted by the bar unless the guide names it, in every base mode", () => {

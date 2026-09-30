@@ -1,5 +1,5 @@
 /**
- * The Group order rule (ADR 0070), unit-tested at the shared module: the full
+ * The Group order rule (ADR 0071), unit-tested at the shared module: the full
  * order an axis keeps, the move that trades two visible Groups, and the
  * default order each axis names for its values.
  *

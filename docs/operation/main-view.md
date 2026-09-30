@@ -75,13 +75,15 @@ The mode the bar and the guide state derives from the section that holds the
 cursor and its focused pane.
 
 The Ticket header always shows the pipeline counts - open, running, and
-awaiting - then the held count with its bell marker and then the ignored count,
-each of the last two only when it is non-zero (ADR 0060). The order is the
-machine's: a held turn is a decision the plane waits on and an ignore is a
-judgment it does not, so a row too short for both conditional cells spends its
-last cells on the pile and never on the held count or its bell. The ignored cell
-counts the Tickets the flag names, so the header says the list is filtered before
-the operator looks for a row that is not there.
+awaiting - then the held count with its bell marker and then the ignored and
+muted counts, each of the last three only when it is non-zero (ADR 0060,
+ADR 0070). The order is the
+machine's: a held turn is a decision the plane waits on and the flags are
+judgments it does not, so a row too short for all three conditional cells spends
+its last cells on the ledgers and never on the held count or its bell. The
+ignored cell counts the Tickets the per-ticket flag names, and the muted cell
+counts the Tickets a muted source brings in, so the header says the list is
+filtered before the operator looks for a row that is not there.
 All four counts, and the held-count bell, read the machine's active view rather
 than the operator's List filter, so a cycle of `f` moves none of them and rings
 nothing. The
@@ -115,8 +117,9 @@ missing modal on a ticket whose agent is gone, and the override panel with
 `e`. `a` toggles
 auto-handoff, `r` refreshes, `g` goes to the agent's pane, `w` closes the work
 cycle of the selected ticket behind a confirmation (ADR 0031), `i` ignores the
-selected ticket or takes it back, and `f` cycles the Ticket section's List
-filter (ADR 0060), and `q` quits.
+selected ticket or takes it back, `u` mutes the source the selected ticket came
+in on or takes the mute back (ADR 0070), and `f` cycles the Ticket section's
+List filter (ADR 0060), and `q` quits.
 The list rule that takes a row away has two causes in one read, in the state
 module alone (ADR 0042, ADR 0060): a covered open ticket - one an open fixing
 pull request fixes - and an ignored ticket at rest - one the operator judged out
@@ -136,9 +139,32 @@ pile when the cycle ends and the ticket rests. The flag stays set under both, so
 the row wears `ignored` beside its own state badge while its work runs, and the
 `i` line states the row's place from the read the act caused: a resting row is
 gone, a live row stays, and a clear that leaves the row to the covered rule says
-so instead of promising a row. `f` cycles the list through
-the active rows, the pile the flag names, and both, and the filter opens on the
-active rows at every boot; without a state file the list rule has no pile to
+so instead of promising a row. The mute is the same act on one source, from the
+same row keys (ADR 0070): `u` mutes or unmutes the source the selected ticket
+came in on, and the Action bar names the source it will act on. The flag and the
+moment it was set stand on the source's row in the state file, beside the
+per-ticket flag, and the plane writes nothing to the source for it. The mute is
+retroactive: every ticket of the source - the ones already brought in and the
+ones to come - leaves the active list while it rests and takes no automatic
+start, and the source keeps refreshing, so an unmute brings the rows back
+current. The act takes no refusal: it acts on the source, not on one ticket, so
+a ticket of the muted source whose Agent works keeps its row, one whose turn
+settled keeps its row because a decision is owed, and the row wears a trailing
+`muted` marker beside the `ignored` one while the flag stands on it and the row
+still shows. At the moment the mute lands, the plane also settles what waits:
+every Work queue item of a ticket of the source is removed, a removal settles
+its routed ticket to open with an incremented cycle, and a queued ticket whose
+route already died settles the same way, so the mute leaves no ticket standing
+queued. The operator's own hand is never stopped: a manual Handoff, a manual
+route, and the pickup of a queue item the operator asked for by hand all pass
+the flag, the way they pass the ignore. The per-ticket flags are untouched: the
+pile stays the ledger of the ticket acts, and an unmute takes no flag the
+operator set on a row. A source removed from the Config clears its mute: the
+stronger act wins, and a re-added source comes back clean. The detail pane names
+the mute, the moment it was set, and the key that takes it back. `f` cycles the
+list through the active rows, the pile the ticket flags name, the ledger the
+source flags name, and both, and the filter opens on the active rows at every
+boot; without a state file the list rule has no pile to
 lift, so `f` states that in the same words `i` states the missing fact in. The
 section's counts and the held-count bell read the active view, never the drawn
 rows, and every read that resolves a ticket by identity - a Work queue row and
@@ -146,8 +172,10 @@ the line that cancels its item, an open panel and the Live view's pane read -
 reads the whole projection, so a cycle of `f` moves none of them. The pile is the ledger of the operator's own acts: it
 holds every row the flag stands on, so a ticket that is ignored *and* covered -
 one whose fixing pull request appeared after the ignore - stands in the pile and
-in no other view, and the same key reaches it there. The detail pane names the
-ignore, the moment it was set, and the key that clears it.
+in no other view, and the same key reaches it there. The muted ledger reads the
+source flag over the projection before the list rule, so it holds every ticket
+of a muted source - the live ones whose rows the active view still shows, and
+the covered ones the list rule takes away - and the same key reaches them there.
 The ticket list no longer carries a rank: the ticket priority is retired in
 favor of the queue's order (ADR 0050), and the detail pane holds no priority
 row and the list no key that raises, lowers, or clears a rank. `+` and `-`
@@ -185,12 +213,13 @@ wrapped. Where the pane is too narrow for everything, the Group's value gives up
 its tail and then its last cell, and the ticket count gives up before the held
 count does, because a wrapped header would cost the window a row and split the
 count a fold exists to keep. Member
-rows keep every cell they had in the flat list. `x` is resolved by the facts
-under the cursor: on a Group header it folds that Group and lands the cursor
-there, and anywhere else in the Ticket section - and in any other section - it
-keeps the Section toggle. A collapsed Ticket section draws no header, so there
-its `x` is the Section toggle and the Ticket controls keep working on the ticket
-the detail pane shows. A left click on a header folds the same Group. Every
+rows keep every cell they had in the flat list. `Space` answers only on a Group
+header row: it folds that Group and lands the cursor there, and on any other
+row the catalogue refuses it in its own words. `x` is the Section toggle on
+every row, a Group header row included, in every section. A collapsed Ticket
+section draws no header, so `Space` answers nothing there and the Ticket
+controls keep working on the ticket the detail pane shows. A left click on a
+header folds the same Group. Every
 Ticket control refuses where the cursor stands on a header, in the catalogue's
 own words for no selection, and the detail pane keeps the last ticket it showed.
 

@@ -264,14 +264,28 @@ export interface LeftoverEnvironment {
 }
 
 /**
- * Whether the operator has ignored this Ticket (ADR 0060), and the moment the
- * ignore was set in ISO time (null while the Ticket is not ignored). The flag
- * is factory state on the state file, written by the operator's `i` key alone:
- * the plane writes nothing to the source.
+ * The gate's facts on one Ticket's row (ADR 0060, widened by ADR 0070).
+ *
+ * The ignore is the operator's act on this Ticket: the flag and the moment it
+ * was set are factory state on the ticket row, written by the operator's `i`
+ * key alone, and the plane writes nothing to the source. The mute is the
+ * operator's act on a source, on the source's row, and the facts widen with it
+ * (ADR 0070): a Ticket is withheld and blocked while any of its sources' mute
+ * stands, and the moment any of them was set is the newest of them. The state
+ * module folds the source flag into these facts in its one read per cycle, so
+ * a walk never pays a second projection read for the cause that widened the
+ * gate.
  */
 export interface TicketIgnoreFacts {
 	ignored: boolean;
 	ignoredAt: string | null;
+	/** Whether any of the Ticket's sources stands muted (ADR 0070). */
+	muted: boolean;
+	/**
+	 * The newest moment any of the Ticket's sources' mute was set (ADR 0070),
+	 * null while none of them is muted.
+	 */
+	mutedAt: string | null;
 }
 
 /** The factory projection used by the control plane and handoff boundary. */
@@ -328,18 +342,25 @@ export interface Ticket extends TicketIgnoreFacts {
 export type TicketMarker = "blocked" | "missing";
 
 /**
- * The Ticket section's List filter (ADR 0060): the operator's view of which
- * rows exist in the list.
+ * The Ticket section's List filter (ADR 0060, widened by ADR 0070): the
+ * operator's view of which rows exist in the list.
  *
  * It is a view fact, not factory state, and it says nothing about any Ticket:
  * the machine's reads always take the active view, whatever the operator's
  * screen shows, and the filter opens on `active` at every boot.
  */
-export type TicketListFilter = "active" | "ignored" | "all";
+export type TicketListFilter = "active" | "ignored" | "muted" | "all";
 
-/** The next value of the Ticket section's `f` cycle. */
+/**
+ * The next value of the Ticket section's `f` cycle (ADR 0070): the mute's
+ * ledger stands beside the ignore's in the same key, so the cycle reads
+ * active, ignored, muted, all.
+ */
 export function nextTicketListFilter(filter: TicketListFilter): TicketListFilter {
-	return filter === "active" ? "ignored" : filter === "ignored" ? "all" : "active";
+	if (filter === "active") return "ignored";
+	if (filter === "ignored") return "muted";
+	if (filter === "muted") return "all";
+	return "active";
 }
 
 /**
@@ -393,43 +414,54 @@ export function ignoreRefusal(obligation: TicketObligation | null): string | nul
 }
 
 /**
- * Whether the operator has judged this Ticket out of the factory's way (ADR 0060).
+ * Whether the operator has judged this Ticket out of the factory's way
+ * (ADR 0060, widened by ADR 0070).
  *
- * The one gate on automatic work, named: `ignored means no automatic start, no
- * exception`, and every Top-up walk that holds a projected row asks this
- * predicate instead of re-stating the rule at its own site. It takes the flag
- * and never the row's face - an ignored Ticket whose row the list reveals for
- * its live work is still no automatic start - and it is a gate on the
+ * The one gate on automatic work, named: `judged out means no automatic start,
+ * no exception`, and every Top-up walk that holds a projected row asks this
+ * predicate instead of re-stating the rule at its own site. It takes the facts
+ * and never the row's face - a judged-out Ticket whose row the list reveals
+ * for its live work is still no automatic start - and it is a gate on the
  * machine's own starts only: the Pickup, the asked-for start, and the
- * force-dispatch run past it.
+ * force-dispatch run past it. The operator's own hand is not blocked: a manual
+ * start, a manual route, and the pickup of an operator ask all pass the gate,
+ * the way they pass the ignore.
  *
- * The Restart walk reads the in-flight rows, which carry no flag of their own,
- * so it asks `FactoryState.ignoredTickets` once per cycle: the same column on
- * the same row, read by identity instead of by row.
+ * The facts the predicate reads are the Ticket's flag and the mute of the
+ * Ticket's sources (ADR 0070): the act on the source withholds and blocks the
+ * same way the act on the ticket does, and the state module folds both into
+ * the row's facts in its one read per cycle, so no walk pays a second
+ * projection read for the widened gate. The Restart walk reads the in-flight
+ * rows, which carry no facts of their own, so it asks
+ * `FactoryState.automaticStartBlockedTickets` once per cycle: the same columns
+ * on the same rows, read by identity instead of by row.
  */
-export function ticketIgnored(ticket: TicketIgnoreFacts): boolean {
-	return ticket.ignored;
+export function automaticStartBlocked(ticket: TicketIgnoreFacts): boolean {
+	return ticket.ignored || ticket.muted;
 }
 
 /**
- * Whether the ignore takes this Ticket's row out of the list (ADR 0060).
+ * Whether a flag takes this Ticket's row out of the list (ADR 0060, widened
+ * by ADR 0070).
  *
- * The ignore hides a resting Ticket and never a live one: a Ticket with an
- * Agent in flight keeps the row its Live view, Goto, and Close hang from,
- * because there is live work to reach, and a Ticket whose turn settled keeps
- * the row its decision lives on. The flag stays set under both - only the
- * operator's own key clears it - so the row wears its `ignored` marker beside
- * its own state badge while the work runs, and goes back into the pile when
- * the cycle ends and the Ticket rests `open` again.
+ * The flag withholds a resting Ticket and never a live one, the ignore and
+ * the mute alike: a Ticket with an Agent in flight keeps the row its Live
+ * view, Goto, and Close hang from, because there is live work to reach, and a
+ * Ticket whose turn settled keeps the row its decision lives on. The flags
+ * stay set under both - only the operator's own keys clear them - so the row
+ * wears its `ignored` and `muted` markers beside its own state badge while
+ * the work runs, and goes back into the list when the cycle ends and the
+ * Ticket rests `open` again, the flag's view aside.
  *
  * This is ADR 0042's shape for the same reason: the in-flight states are never
- * covered, so live work stays listed whatever pull requests exist. Because
+ * covered, so live work stays listed whatever pull requests exist, and the
+ * mute ends where an obligation begins in the ignore's own shape. Because
  * every obligation the refusal predicate names lives on a non-`open` Ticket,
- * the rule hides no obligation at all: an ignored Held turn never stalls the
+ * the rule hides no obligation at all: a flagged Held turn never stalls the
  * factory behind an empty list.
  */
-export function ignoreWithholdsRow(ticket: TicketIgnoreFacts & { state: TicketState }): boolean {
-	return ticketIgnored(ticket) && ticket.state === "open";
+export function flagWithholdsRow(ticket: TicketIgnoreFacts & { state: TicketState }): boolean {
+	return automaticStartBlocked(ticket) && ticket.state === "open";
 }
 
 /**

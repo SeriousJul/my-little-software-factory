@@ -78,4 +78,5 @@ body states the context, the decision, and the consequences.
 - [ADR 0067: The routed ticket stands queued while its route stands](./0067-the-routed-ticket-stands-queued-while-its-route-stands.md)
 - [ADR 0068: The plane action resolves a position without an agent](./0068-the-plane-action-resolves-a-position-without-an-agent.md)
 - [ADR 0069: A cancelled route ends its ticket's cycle](./0069-a-cancelled-route-ends-its-tickets-cycle.md)
-- [ADR 0070: The Groups stand in the axis' own order, and the operator owns it](./0070-the-groups-stand-in-the-axis-own-order-and-the-operator-owns-it.md)
+- [ADR 0070: An operator mutes a source out of the factory's way](./0070-an-operator-mutes-a-source-out-of-the-factorys-way.md)
+- [ADR 0071: The Groups stand in the axis' own order, and the operator owns it](./0071-the-groups-stand-in-the-axis-own-order-and-the-operator-owns-it.md)

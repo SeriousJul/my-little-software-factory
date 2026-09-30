@@ -3,7 +3,7 @@
  *
  * A **Group** is a run of rows that share one value of one **Grouping axis**,
  * under one **Group header** the operator can collapse. The Groups stand in
- * the order the axis names (ADR 0070): the operator's own order of the Group
+ * the order the axis names (ADR 0071): the operator's own order of the Group
  * values, kept in the state file per axis, and the axis' fixed default order
  * where the operator has moved no Group. A Group's slot moves only on the
  * operator's own press, never on a refresh of the tickets' facts, and the
@@ -245,12 +245,12 @@ export interface GroupingOf<T> {
 	isFolded: (value: string) => boolean;
 	/**
 	 * The Group values the operator ordered on the axis in effect, in the
-	 * stored order (ADR 0070). It may name values no row carries today: the
+	 * stored order (ADR 0071). It may name values no row carries today: the
 	 * render drops them, and a move keeps their slots for the value's return.
 	 */
 	storedOrder?: readonly string[];
 	/**
-	 * The default order of Group values on the axis in effect (ADR 0070),
+	 * The default order of Group values on the axis in effect (ADR 0071),
 	 * smaller stands first. Only the split axes read it: `none` returns before
 	 * the sort, and a caller that names none falls back to the value's name.
 	 */
@@ -258,7 +258,7 @@ export interface GroupingOf<T> {
 }
 
 /**
- * The full order one axis keeps in its store (ADR 0070): every stored value,
+ * The full order one axis keeps in its store (ADR 0071): every stored value,
  * in the stored order, then every value a row carries that the operator never
  * ordered, in the axis' default order.
  *
@@ -280,7 +280,7 @@ function fullOrderOf(
 }
 
 /**
- * The Group order the render reads under the axis in effect (ADR 0070): the
+ * The Group order the render reads under the axis in effect (ADR 0071): the
  * stored order, only the values a row carries today, then the values the
  * operator never ordered, in the axis' default order.
  *
@@ -299,7 +299,7 @@ export function groupOrderOf(
 
 /**
  * The stored order after the operator's move of one Group next to its visible
- * neighbor (ADR 0070): the two values trade their places in the full order,
+ * neighbor (ADR 0071): the two values trade their places in the full order,
  * and the answer is the order to store whole.
  *
  * One small table, one write rule: the store gains every value the list holds
@@ -326,7 +326,7 @@ export function movedGroupOrder(
 }
 
 /**
- * The default order of one axis' Group values (ADR 0070): the order the
+ * The default order of one axis' Group values (ADR 0071): the order the
  * operator's own facts name, the one a Group stands in while the operator has
  * moved no Group on the axis.
  *
@@ -389,7 +389,7 @@ export function groupedRows<T>(
 	// A Group with no tickets cannot come from the rows, so no stale header
 	// ever stands: the header set is derived from the rows on every read
 	// (story 26, story 64). The order the Groups stand in is the order the axis
-	// names (ADR 0070), and it reads no ticket's facts, so a refresh of the
+	// names (ADR 0071), and it reads no ticket's facts, so a refresh of the
 	// facts cannot move a slot.
 	const order = groupOrderOf(
 		grouping.storedOrder ?? [],
@@ -447,7 +447,7 @@ export function toggleFold(folds: GroupFolds, axis: GroupingAxis, value: string)
 /**
  * The Ticket list's rows under the axis in effect, with the operator's stored
  * order of the axis' Group values, and the Workflow's own order of its
- * positions for the `position` axis' default (ADR 0070).
+ * positions for the `position` axis' default (ADR 0071).
  */
 export function ticketRows(
 	tickets: readonly Ticket[],

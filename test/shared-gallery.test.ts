@@ -88,6 +88,7 @@ describe("the shared control gallery", () => {
 			"spinner",
 			"queue-order",
 			"ticket-ignore",
+			"ticket-mute",
 			"ticket-filter",
 			"session-view",
 			"agent-view-fallback",
@@ -452,20 +453,48 @@ describe("the shared control gallery", () => {
 		expect(lines.filter((line) => line.includes("i Ignore")).length).toBe(4);
 	});
 
-	test("the List filter example holds the cycle's three hints and the queue refusal", async () => {
-		const setup = await gallery("ticket-filter", 150, 24);
+	test("the List filter example holds the cycle's four hints and the queue refusal", async () => {
+		const setup = await gallery("ticket-filter", 160, 28);
 		const text = frameText(setup.captureCharFrame());
 		expect(text).toContain(stateLine("ticket-filter"));
-		// The hint names the view the cycle moves to, in all three states. The
+		// The hint names the view the cycle moves to, in all four states. The
 		// example opens wide: the filter is the section's lowest rung, so a narrow
-		// bar packs it away before it touches the Launch or the Close.
+		// bar packs it away before it touches the Launch or the Close, and the
+		// mute's hint rides beside it only on the width the example stands on
+		// (ADR 0070).
 		expect(text).toContain("f Show ignored");
+		expect(text).toContain("f Show muted");
 		expect(text).toContain("f Show all");
 		expect(text).toContain("f Show active");
 		// The Work queue owns neither meaning of the key, and says so.
 		expect(text).toContain(
 			"this control is available only in the Ticket section and the Consultation section",
 		);
+	});
+
+	/**
+	 * The Ticket source-mute example (ADR 0070): the bar's flip between Mute and
+	 * Un-mute beside its source's name, the header's cell for the ledger, and the
+	 * marker the row wears while the flag stands beside its own state badge.
+	 */
+	test("the Ticket mute example holds the flip, the header's cell, and the marker", async () => {
+		const setup = await gallery("ticket-mute", 160, 30);
+		const text = frameText(setup.captureCharFrame());
+		expect(text).toContain(stateLine("ticket-mute"));
+		// The flip, in the words the two rows read: the key beside an un-muted row
+		// puts the source out of the way, and the key beside a muted row takes it
+		// back, both naming the source the act reaches.
+		expect(text).toContain("u Mute acme/factory-issues");
+		expect(text).toContain("u Un-mute acme/factory-issues");
+		// The header's conditional cell for the ledger the filter hides.
+		expect(text).toContain("muted: 2");
+		// The marker rides on the row beside its own state badge: the resting row
+		// the list withholds and the live row that keeps its face under the flag.
+		const lines = rowsOf(setup.captureCharFrame());
+		const openRow = lines.find((line) => line.includes("[open]") && line.includes("muted"));
+		const runningRow = lines.find((line) => line.includes("[running]") && line.includes("muted"));
+		expect(openRow).toBeDefined();
+		expect(runningRow).toBeDefined();
 	});
 
 	test("the Consultation detail example shows the Session view and its fallbacks", async () => {

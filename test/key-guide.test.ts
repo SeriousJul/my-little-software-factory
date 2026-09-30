@@ -457,8 +457,8 @@ describe("the in-app Key guide", () => {
 					}
 				};
 				note(await settle(setup));
-				const ladder = Array.from({ length: 42 }, (_, step) => step + 2).map(
-					(row) => `${row}-${row + 18}/61`,
+				const ladder = Array.from({ length: 43 }, (_, step) => step + 2).map(
+					(row) => `${row}-${row + 18}/62`,
 				);
 				for (const range of ladder) note(await scrollGuide(setup, "j", range));
 				// The Control plane section names the merged Main view's controls -
@@ -472,10 +472,10 @@ describe("the in-app Key guide", () => {
 				// The current section holds exactly this mode's controls, in
 				// catalogue order, with every alias valid in the list mode and
 				// this mode's reasons on the unavailable ones. The Grouping axis,
-				// the Group fold, and the Group's order keys join it (issue #159,
-				// ADR 0070): the axis names its whole cycle in the note, and the
-				// fold and the moves state the reason a cursor on a Ticket row
-				// gives them.
+				// the Group fold - `Space` since the key split (issue #170) - and
+				// the Group's order keys join it (issue #159, ADR 0071): the axis
+				// names its whole cycle in the note, and the fold and the moves
+				// state the reason a cursor on a Ticket row gives them.
 				const globalStart = shown.indexOf("Global controls");
 				expect(shown.slice(currentStart + 1, globalStart)).toEqual([
 					"↑↓/jk Move",
@@ -492,12 +492,15 @@ describe("the in-app Key guide", () => {
 					// two keys (ADR 0060); the section's guide holds them and the
 					// Consultation section's guide holds nothing of either.
 					"i Ignore - hides a resting row and stops every automatic start",
-					"f Filter - cycles the Ticket list: active, ignored, all",
+					// The mute joins the Ticket section's own keys (ADR 0070), beside
+					// the ignore and ahead of the filter it rides with in the cycle.
+					"u Mute - mutes the source the Ticket came in on, and the key un-mutes",
+					"f Filter - cycles the Ticket list: active, ignored, muted, all",
 					// The axis row wraps: its note names the whole cycle, and the
 					// label column is sized to the longest reason.
 					"Tab Group - cycles the grouping axis: none, repository, source, task,",
 					"state, position",
-					"x Fold - no Group header is under the cursor",
+					"Space Fold - no Group header is under the cursor",
 					"+ Move group up - no Group header is under the cursor",
 					"- Move group down - no Group header is under the cursor",
 					"x Section - collapses the section the cursor is in, or expands it back",
@@ -841,11 +844,13 @@ describe("the in-app Key guide", () => {
 				const moveRow = rowOf("Move");
 				expect(spanColorAt(setup, moveRow, "↑↓/jk")).toEqual(rgb(roleColor("accent")));
 				expect(spanColorAt(setup, moveRow, "Move")).toEqual(rgb(roleColor("text")));
-				// The Refresh row stands below the opening window: step the guide
-				// down until it is on screen, then read it.
-				setup.mockInput.pressKey("j");
-				setup.mockInput.pressKey("j");
-				await settle(setup);
+				// The mute and the move rows pushed Refresh below the opening
+				// window: step the guide down until its row is on screen, then
+				// read it.
+				for (let step = 0; step < 4; step += 1) {
+					setup.mockInput.pressKey("j");
+					if ((await settle(setup)).includes("r Refresh")) break;
+				}
 				rows = rowsOf(setup.captureCharFrame());
 				// Unavailable: the key and the label are dim, the reason dim.
 				const refreshRow = rowOf("r Refresh");
@@ -888,10 +893,12 @@ describe("the in-app Key guide", () => {
 					await awaitFrame(setup, (f) => f.includes("loading tickets..."), "loading");
 					await openGuide(setup, "?");
 					await settle(setup);
-					// The Refresh row stands below the opening window.
-					setup.mockInput.pressKey("j");
-					setup.mockInput.pressKey("j");
-					await settle(setup);
+					// The mute and the move rows pushed Refresh below the opening
+					// window: step the guide down until its row is on screen.
+					for (let step = 0; step < 4; step += 1) {
+						setup.mockInput.pressKey("j");
+						if ((await settle(setup)).includes("r Refresh")) break;
+					}
 					let rows = rowsOf(setup.captureCharFrame());
 					let refreshRow = rows.findIndex((row) => norm(row).includes("r Refresh"));
 					expect(rows[refreshRow]).toContain("every Ticket source is already refreshing");
@@ -933,23 +940,23 @@ describe("the in-app Key guide", () => {
 		await withApp(
 			async (setup) => {
 				await openGuide(setup, "?");
-				expect(actionBarRowOf(await settle(setup))).toContain("1-19/61");
+				expect(actionBarRowOf(await settle(setup))).toContain("1-19/62");
 
-				await scrollGuide(setup, "j", "2-20/61");
-				await scrollGuide(setup, "j", "3-21/61");
-				await scrollGuide(setup, "k", "2-20/61");
-				await scrollGuide(setup, "k", "1-19/61");
+				await scrollGuide(setup, "j", "2-20/62");
+				await scrollGuide(setup, "j", "3-21/62");
+				await scrollGuide(setup, "k", "2-20/62");
+				await scrollGuide(setup, "k", "1-19/62");
 				// Top boundary: k holds the range.
 				setup.mockInput.pressKey("k");
-				expect(await settle(setup, 500)).toContain("1-19/61");
+				expect(await settle(setup, 500)).toContain("1-19/62");
 				// Walk to the bottom, one step per frame.
-				const ladder = Array.from({ length: 42 }, (_, step) => step + 2).map(
-					(row) => `${row}-${row + 18}/61`,
+				const ladder = Array.from({ length: 43 }, (_, step) => step + 2).map(
+					(row) => `${row}-${row + 18}/62`,
 				);
 				for (const range of ladder) await scrollGuide(setup, "j", range);
 				// Bottom boundary: j holds the range.
 				setup.mockInput.pressKey("j");
-				expect(await settle(setup, 500)).toContain("43-61/61");
+				expect(await settle(setup, 500)).toContain("44-62/62");
 			},
 			WIDTH,
 			HEIGHT,
@@ -1054,7 +1061,7 @@ describe("the in-app Key guide", () => {
 				setup.mockInput.pressKey("j");
 				await awaitFrame(
 					setup,
-					(f) => actionBarRowOf(f).includes("2-20/61"),
+					(f) => actionBarRowOf(f).includes("2-20/62"),
 					"the guide to scroll",
 				);
 				// e opens no panel, r warns no refresh, q quits nothing,
@@ -1157,7 +1164,7 @@ describe("the in-app Key guide", () => {
 				await openGuide(setup, "?");
 				const bar = actionBarRowOf(await settle(setup));
 				expect(bar).toContain("↑↓/jk Scroll");
-				expect(bar).toContain("1-19/61");
+				expect(bar).toContain("1-19/62");
 				expect(bar).toContain("Esc/F1/? Close");
 				expect(bar).not.toContain("Help");
 				expect(bar).not.toContain("Message");
@@ -1173,7 +1180,7 @@ describe("the in-app Key guide", () => {
 		await withApp(
 			async (setup) => {
 				await openGuide(setup, "?");
-				expect(actionBarRowOf(await settle(setup))).toContain("1-19/61");
+				expect(actionBarRowOf(await settle(setup))).toContain("1-19/62");
 
 				// A short, wide terminal: four visible rows, the full title
 				// still fitting, and more total rows because the reason column is
@@ -1185,13 +1192,13 @@ describe("the in-app Key guide", () => {
 				// The selector's note, the Close reason, the Grouping axis note,
 				// and the Recovery note wrap on this narrow terminal, so the guide
 				// runs longer than at the full width.
-				expect(actionBarRowOf(frame)).toContain("1-4/92");
+				expect(actionBarRowOf(frame)).toContain("1-4/95");
 
-				await scrollGuide(setup, "j", "2-5/92");
+				await scrollGuide(setup, "j", "2-5/95");
 				// Back to size: the scroll the terminal gave back is kept.
 				setup.resize(WIDTH, HEIGHT);
 				frame = await settle(setup);
-				expect(actionBarRowOf(frame)).toContain("2-20/61");
+				expect(actionBarRowOf(frame)).toContain("2-20/62");
 
 				// Below the useful size the terminal takes its compact frame:
 				// the modal caps at the terminal, the title falls back to the
@@ -1209,7 +1216,7 @@ describe("the in-app Key guide", () => {
 				setup.resize(WIDTH, HEIGHT);
 				frame = await settle(setup);
 				expect(frame).toContain("Key guide - Ticket list");
-				expect(actionBarRowOf(frame)).toContain("2-20/61");
+				expect(actionBarRowOf(frame)).toContain("2-20/62");
 			},
 			WIDTH,
 			HEIGHT,

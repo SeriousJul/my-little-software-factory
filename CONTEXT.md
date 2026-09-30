@@ -27,7 +27,7 @@ The row that names one section of the Main view. A collapsed section is nothing 
 _Avoid_: title bar, tab label, accordion toggle, group header
 
 **List filter**:
-A section's view control over which of its own rows exist in the view: the Ticket section's cycle is active, ignored, all, and the Consultation section's is open, closed, all.
+A section's view control over which of its own rows exist in the view: the Ticket section's cycle is active, ignored, muted, all, and the Consultation section's is open, closed, all.
 It is a view, not factory state, and it says nothing about any Ticket or Consultation. It is not the Grouping axis, which slices the rows that show, and not a fold, which shuts a Group's rows and no more.
 _Avoid_: search, hide toggle, view mode, grouping, fold
 
@@ -155,6 +155,15 @@ The ignore hides a resting row and never a live one: a Ticket with work in fligh
 The pile is the ledger of the operator's own acts: every flagged Ticket stands in it, the covered ones included, because only the key on the row ends an ignore.
 _Avoid_: hidden ticket, shelved ticket, buried, wontfix, archived, dismissed
 
+**Muted source**:
+A ticket source the operator has judged out of the factory's way by their own act, until they take it back.
+The plane keeps reading it, and withholds its tickets: a resting ticket of a muted source leaves the list, and the plane starts no Agent on one by itself (ADR 0070).
+The mute is retroactive and reaches the tickets the source brings in after the act, and it is a source's fact, not a ticket's: it stands on the source's row in the state file, and the per-ticket flags of the pile stay their own.
+A ticket that works keeps its row beside its own marker, the way the ignore keeps it, and the operator's own hand still starts one.
+The `muted` view of the List filter is the ledger of the mute: every ticket of a muted source stands in it, the covered ones included, because only the key on the row ends a mute.
+Removing the source from the Config clears the mute: the stronger act wins, and a re-added source comes back clean.
+_Avoid_: hidden source, silenced source, muted repository
+
 **Attention band**:
 The ticket list's first sort: awaiting tickets first, then the in-flight states, queued before running and running before handed-off, then open actionable tickets, then open tickets that are not actionable. The `queued` ticket rides the in-flight band: its decision is made, and its work is on its way (ADR 0067).
 Within its band the list sorts by the band's own second rank (ADR 0050, ADR 0065): the live bands by newest external update, the open bands by ticket number ascending with the no-number ticket last, and the ticket identity breaks the tie.
@@ -162,11 +171,11 @@ _Avoid_: attention group, list bucket, triage group
 
 **Group**:
 A run of ticket rows in the Ticket section's list that share one value of the Grouping axis, under its own Group header.
-A collapsed group shows nothing but its header. The order inside a group is the order the flat list holds, band rules and all (ADR 0059), and the groups themselves stand in the group order (ADR 0070).
+A collapsed group shows nothing but its header. The order inside a group is the order the flat list holds, band rules and all (ADR 0059), and the groups themselves stand in the group order (ADR 0071).
 _Avoid_: bucket, category, folder, section
 
 **Group header**:
-The row that names one Group, its count, and the count of held decisions it hides. The cursor can rest on it, and no ticket is selected there. `x` or a click on it folds the Group, and opens it back when it is folded. On it, `+` and `-` move the Group to its visible neighbor (ADR 0070).
+The row that names one Group, its count, and the count of held decisions it hides. The cursor can rest on it, and no ticket is selected there. Space or a click on it folds the Group, and opens it back when it is folded. On it, `+` and `-` move the Group to its visible neighbor (ADR 0071).
 _Avoid_: section header, divider, group row
 
 **Group order**:
@@ -175,7 +184,7 @@ The axis' defaults: `position` reads the Workflow's own order of its positions w
 _Avoid_: group sort, group rank, shelf order
 
 **Grouping axis**:
-The one fact that splits the Ticket section's list into groups: `none`, `repository`, `source`, `task`, `state`, or `position`. Its value is factory state on the state file, and so is the group order the operator's moves write on it; which groups stand collapsed is not (ADR 0058, ADR 0070).
+The one fact that splits the Ticket section's list into groups: `none`, `repository`, `source`, `task`, `state`, or `position`. Its value is factory state on the state file, and so is the group order the operator's moves write on it; which groups stand collapsed is not (ADR 0058, ADR 0071).
 _Avoid_: group-by field, sort key, filter, view mode
 
 **Issue reference**:
