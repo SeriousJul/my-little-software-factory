@@ -118,7 +118,7 @@ function secretToken(token: string): {
 	return { ok: true, options: { env: { GH_TOKEN: token }, secretEnv: ["GH_TOKEN"] } };
 }
 
-const SEARCH_QUERY = `query FactorySearch($searchQuery: String!, $after: String) {
+export const SEARCH_QUERY = `query FactorySearch($searchQuery: String!, $after: String) {
   search(query: $searchQuery, type: ISSUE, first: 100, after: $after) {
     issueCount
     pageInfo { hasNextPage endCursor }
