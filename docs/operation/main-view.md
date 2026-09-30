@@ -185,12 +185,13 @@ wrapped. Where the pane is too narrow for everything, the Group's value gives up
 its tail and then its last cell, and the ticket count gives up before the held
 count does, because a wrapped header would cost the window a row and split the
 count a fold exists to keep. Member
-rows keep every cell they had in the flat list. `x` is resolved by the facts
-under the cursor: on a Group header it folds that Group and lands the cursor
-there, and anywhere else in the Ticket section - and in any other section - it
-keeps the Section toggle. A collapsed Ticket section draws no header, so there
-its `x` is the Section toggle and the Ticket controls keep working on the ticket
-the detail pane shows. A left click on a header folds the same Group. Every
+rows keep every cell they had in the flat list. `Space` answers only on a Group
+header row: it folds that Group and lands the cursor there, and on any other
+row the catalogue refuses it in its own words. `x` is the Section toggle on
+every row, a Group header row included, in every section. A collapsed Ticket
+section draws no header, so `Space` answers nothing there and the Ticket
+controls keep working on the ticket the detail pane shows. A left click on a
+header folds the same Group. Every
 Ticket control refuses where the cursor stands on a header, in the catalogue's
 own words for no selection, and the detail pane keeps the last ticket it showed.
 

@@ -75,6 +75,7 @@ type ControlKey =
 	| "home"
 	| "end"
 	| "tab"
+	| "space"
 	| "j"
 	| "k"
 	| "h"
@@ -152,16 +153,16 @@ export interface ControlContext {
 	 * Ticket row (issue #159).
 	 *
 	 * The list states it from the row under the cursor, and the fold control
-	 * gates on it: the shared `x` key folds a Group under a header and folds the
-	 * Section everywhere else, and the Action bar names only the meaning the
-	 * facts under the cursor run.
+	 * gates on it: `Space` folds the Group under a header and answers nothing
+	 * anywhere else, and the Action bar names the key the facts under the
+	 * cursor run.
 	 */
 	selectedGroupHeader?: GroupHeader | null;
 	/**
 	 * Whether the Ticket cursor stands on a Group header (issue #159).
 	 *
 	 * No Ticket is selected there, so every Ticket control refuses with the
-	 * catalogue's own words and the fold control takes the shared `x` key.
+	 * catalogue's own words, and the fold control takes the `Space` key.
 	 */
 	groupHeaderSelected?: boolean;
 	/**
@@ -500,16 +501,6 @@ const workQueueMode = (mode: InteractionMode): boolean =>
 	mode === "work-queue-list" || mode === "work-queue-detail";
 const ticketBaseMode = (mode: InteractionMode): boolean =>
 	mode === "ticket-list" || mode === "ticket-detail";
-/**
- * Whether the shared `x` belongs to the Group fold right now (issue #159).
- *
- * The fact is the Ticket list's: a Group header exists in no other section, and
- * the other two sections own no fold, so the mode decides before the row does.
- * A cursor that happens to rest on a header while the Consultation section
- * holds the focus leaves the other sections' Section toggle untouched.
- */
-const groupFoldOwnsX = (context: ControlContext): boolean =>
-	ticketBaseMode(context.mode) && context.groupHeaderSelected === true;
 /**
  * The base modes of a section other than the Consultation section.
  *
@@ -1278,25 +1269,32 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		guideNote: "cycles the grouping axis: none, repository, source, task, state, position",
 	},
 	{
-		// The fold that shares the `x` key with the section toggle (issue #159):
-		// the facts under the cursor decide which meaning a press runs, so the
-		// plane spends no new letter on a second idea. A fold hides rows and never
+		// The Group fold (issue #159): `Space` is free in every Main view list
+		// mode, and it answers only on a Group header row, where it is the only
+		// meaning the key holds (issue #170). `Space` is bound in no other mode
+		// here, so no surface spends it twice. A fold hides rows and never
 		// facts (ADR 0059), and it lives in memory for the run alone (ADR 0058).
 		id: "group-fold",
 		label: "Fold",
-		keys: () => ["x"],
-		keyLabel: "x",
+		keys: () => ["space"],
+		keyLabel: "Space",
 		scope: "control-plane",
 		actionBar: true,
 		barLabel: (context) =>
 			context.selectedGroupHeader?.collapsed === true ? "Unfold group" : "Fold group",
-		// Just above the section toggle it shares the key with: where the cursor
-		// stands on a Group header this is the meaning that runs, and the bar
-		// states only that one.
+		// The bar names the fold where its key runs: on a Group header row. On
+		// any other row the key refuses, and the bar spends its cells on the
+		// keys the rows under the cursor answer, the way the bar spent them
+		// before the fold shared its key.
+		showInBar: (context) => context.groupHeaderSelected === true,
+		// The fold outranks the section toggle in the bar, so a header row
+		// names both keys, each with its one meaning.
 		priority: 47,
 		modes: [...ticketBaseModes],
 		availability: (context) =>
-			groupFoldOwnsX(context) ? available() : unavailable("no Group header is under the cursor"),
+			context.groupHeaderSelected === true
+				? available()
+				: unavailable("no Group header is under the cursor"),
 		guideNote: "folds the Group under the cursor, or opens it back",
 	},
 	{
@@ -1304,20 +1302,15 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		label: "Section",
 		// `x` collapses the section the cursor is in, or expands it back. The
 		// sections stay visible as long as the frame can hold them, so the
-		// toggle is a matter of room, not of access. The key is shared with the
-		// Group fold (issue #159), which owns it wherever the cursor stands on a
-		// Group header; the fold owns that fact, and the two refusals are the
-		// catalogue's, so one key keeps one meaning per moment.
+		// toggle is a matter of room, not of access. One key, one meaning, on
+		// every row of a section, a Group header row included (issue #170).
 		keys: () => ["x"],
 		keyLabel: "x",
 		scope: "control-plane",
 		actionBar: true,
 		priority: 45,
 		modes: [...baseModes],
-		availability: (context) =>
-			groupFoldOwnsX(context)
-				? unavailable("the cursor stands on a Group header: x folds that Group")
-				: available(),
+		availability: available,
 		guideNote: SECTION_TOGGLE_NOTE,
 	},
 	{
@@ -2012,6 +2005,7 @@ const KEY_NAMES: Record<string, string> = {
 	home: "Home",
 	end: "End",
 	tab: "Tab",
+	space: "Space",
 	j: "j",
 	k: "k",
 	h: "h",

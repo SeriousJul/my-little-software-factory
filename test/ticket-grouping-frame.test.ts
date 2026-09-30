@@ -499,7 +499,7 @@ describe("the Ticket section's Groups", () => {
 				);
 				expect(messageRowOf(grouped)).toContain("Ticket list grouped by repository");
 				// The detail mode's bar names the axis in effect as the list's
-				// does, and the fold keeps the shared `x` there too (story 5).
+				// does, and the fold keeps its `Space` key there too (story 5).
 				expect(actionBarRowOf(grouped)).toContain("Tab Group: repository");
 				await press(setup, "h", "the list", (f) => f.includes("❯ Tickets"));
 			},
@@ -605,7 +605,7 @@ describe("the Ticket section's Groups", () => {
 		);
 	});
 
-	test("x on a Group header folds that Group, and x again opens it", async () => {
+	test("Space on a Group header folds that Group, and Space again opens it", async () => {
 		await bootGrouped(
 			async (setup) => {
 				await pressTab(setup, "the repository Groups", (f) => headers(f).length === 2);
@@ -614,10 +614,12 @@ describe("the Ticket section's Groups", () => {
 					(rowsOf(f)[markerRowOf(f)] ?? "").includes("▾ acme/factory"),
 				);
 				const onHeader = setup.captureCharFrame();
-				expect(actionBarRowOf(onHeader)).toContain("x Fold group");
-				expect(actionBarRowOf(onHeader)).not.toContain("x Section");
+				// The bar names the key the fold will run, beside the toggle's
+				// own: one meaning per key (issue #170).
+				expect(actionBarRowOf(onHeader)).toContain("Space Fold group");
+				expect(actionBarRowOf(onHeader)).toContain("x Section");
 				// The fold: the Group's rows leave, its header stays and turns.
-				const folded = await press(setup, "x", "the fold", (f) => /▸ acme\/factory/.test(f));
+				const folded = await press(setup, "space", "the fold", (f) => /▸ acme\/factory/.test(f));
 				expect(ticketRows(folded).some((row) => row.includes("Webhook retry"))).toBe(false);
 				expect(headers(folded)).toContain("▸ acme/factory 3");
 				// The Section header's counts stand: a fold hides rows, not facts.
@@ -625,8 +627,69 @@ describe("the Ticket section's Groups", () => {
 				// The cursor rests on the header, and the detail kept its ticket.
 				expect(rowsOf(folded)[markerRowOf(folded)]).toContain("▸ acme/factory");
 				expect(detailPaneText(folded)).toContain("The description of Webhook retry.");
-				const opened = await press(setup, "x", "the fold back", (f) => /▾ acme\/factory/.test(f));
+				const opened = await press(setup, "space", "the fold back", (f) =>
+					/▾ acme\/factory/.test(f),
+				);
 				expect(ticketRows(opened).some((row) => row.includes("Webhook retry"))).toBe(true);
+				// No fold leaves a Message line: the routine move stays quiet
+				// (issue #170, user story 17).
+				expect(messageRowOf(setup.captureCharFrame())).not.toContain("Group");
+			},
+			{ axis: "none" },
+		);
+	});
+
+	// Issue #170: `x` drops its second meaning. On a Group header row it runs
+	// the Section toggle, the one meaning it holds on every row, and the fold
+	// the operator made stands where it was made.
+	test("x on a Group header runs the Section toggle, its one meaning", async () => {
+		await bootGrouped(
+			async (setup) => {
+				await pressTab(setup, "the repository Groups", (f) => headers(f).length === 2);
+				await pressArrow(setup, "up", "the header", (f) =>
+					(rowsOf(f)[markerRowOf(f)] ?? "").includes("▾ acme/factory"),
+				);
+				// The fold stands first, so the collapse shows the header stays.
+				await press(setup, "space", "the fold", (f) => /▸ acme\/factory/.test(f));
+				const collapsed = await press(setup, "x", "the Section collapse", (f) =>
+					/▸ Tickets/.test(f),
+				);
+				expect(headers(collapsed)).toEqual([]);
+				// The Section back on the header the cursor retained, and the
+				// fold the operator made still stands on it.
+				const back = await press(setup, "x", "the Section back", (f) => /▾ Tickets/.test(f));
+				expect(headers(back)).toEqual(["▸ acme/factory 3", "▾ acme/billing 2"]);
+			},
+			{ axis: "none" },
+		);
+	});
+
+	// Issue #170: `Space` answers only on a Group header row. On a ticket row
+	// - and in the flat list, where no header stands at all - it refuses in
+	// the catalogue's own words on the Message line, and moves nothing.
+	test("Space off a Group header row is refused in the catalogue's words", async () => {
+		await bootGrouped(
+			async (setup) => {
+				// The flat list holds no Group header at all (issue #170,
+				// user story 13).
+				await settle(setup);
+				setup.mockInput.pressKey(" ");
+				const refusedFlat = await awaitFrame(
+					setup,
+					(f) => messageRowOf(f).includes("no Group header is under the cursor"),
+					"the refusal in the flat list",
+				);
+				expect(headers(refusedFlat)).toEqual([]);
+				// On a ticket row of the grouped list the refusal says the same
+				// thing, and the row under the cursor never moves.
+				await pressTab(setup, "the repository Groups", (f) => headers(f).length === 2);
+				const rowBefore = setup.captureCharFrame();
+				const refused = await press(setup, "space", "the refusal on a ticket row", (f) =>
+					messageRowOf(f).includes("no Group header is under the cursor"),
+				);
+				expect(rowsOf(refused)[markerRowOf(refused)]).toBe(
+					rowsOf(rowBefore)[markerRowOf(rowBefore)],
+				);
 			},
 			{ axis: "none" },
 		);
@@ -639,7 +702,7 @@ describe("the Ticket section's Groups", () => {
 				await pressArrow(setup, "up", "the header", (f) =>
 					(rowsOf(f)[markerRowOf(f)] ?? "").includes("▾ acme/factory"),
 				);
-				const folded = await press(setup, "x", "the fold", (f) => /▸ acme\/factory/.test(f));
+				const folded = await press(setup, "space", "the fold", (f) => /▸ acme\/factory/.test(f));
 				expect(headers(folded)).toContain("▸ acme/factory 3 held 1");
 				// The fold carries its glyph, not a color: the no-color frame
 				// would lose nothing (story 27, ADR 0059).
@@ -756,7 +819,7 @@ describe("the Ticket section's Groups", () => {
 				await pressArrow(setup, "up", "the header", (f) =>
 					(rowsOf(f)[markerRowOf(f)] ?? "").includes("▾ acme/factory"),
 				);
-				const folded = await press(setup, "x", "the fold", (f) => /▸ acme\/factory/.test(f));
+				const folded = await press(setup, "space", "the fold", (f) => /▸ acme\/factory/.test(f));
 				expect(sectionHeader(folded)).toBe(counts);
 				expect(rowsOf(folded)[0]).toBe(mode);
 			},
@@ -827,7 +890,7 @@ describe("the Ticket section's Groups", () => {
 				const onHeader = await pressArrow(setup, "down", "the next Group's header", (f) =>
 					(rowsOf(f)[markerRowOf(f)] ?? "").includes("▾ acme/billing"),
 				);
-				expect(actionBarRowOf(onHeader)).toContain("x Fold group");
+				expect(actionBarRowOf(onHeader)).toContain("Space Fold group");
 				// The step back crosses the same air the other way.
 				await pressArrow(setup, "up", "the row above the air", (f) =>
 					(rowsOf(f)[markerRowOf(f)] ?? "").includes("Held turn"),
@@ -861,7 +924,7 @@ describe("the Ticket section's Groups", () => {
 					(f) => (rowsOf(f)[markerRowOf(f)] ?? "").includes("▾ acme/billing"),
 					"the Group the air parts",
 				);
-				expect(actionBarRowOf(landed)).toContain("x Fold group");
+				expect(actionBarRowOf(landed)).toContain("Space Fold group");
 				// And the Group stays open: a click on air folds nothing.
 				expect(headers(landed)).toContain("▾ acme/billing 2");
 				expect(ticketRows(landed).some((row) => row.includes("Legacy import"))).toBe(true);
@@ -916,7 +979,7 @@ describe("the Ticket section's Groups", () => {
 				expect(ticketRows(frame).length).toBeGreaterThan(1);
 				// The case the counts exist for: folded, the header still carries
 				// both counts whole, in its one row and with the fold on its glyph.
-				const folded = await press(setup, "x", "the fold", (f) => paneHolds(f, /▸/u));
+				const folded = await press(setup, "space", "the fold", (f) => paneHolds(f, /▸/u));
 				const foldedHeader = listPaneRows(folded).filter((row) => row.includes("▸"));
 				expect(foldedHeader).toHaveLength(1);
 				expect(foldedHeader[0]).toContain("11  held 1");
@@ -996,7 +1059,7 @@ describe("the Ticket section's Groups", () => {
 				await pressArrow(setup, "up", "the header", (f) =>
 					(rowsOf(f)[markerRowOf(f)] ?? "").includes("▾ acme/factory"),
 				);
-				await press(setup, "x", "the fold", (f) => /▸ acme\/factory/.test(f));
+				await press(setup, "space", "the fold", (f) => /▸ acme\/factory/.test(f));
 			},
 			WIDTH,
 			34,
@@ -1192,19 +1255,20 @@ describe("the Ticket section's Groups", () => {
 		);
 	});
 
-	// A collapsed Ticket section draws no Group header, so the shared `x` keeps
-	// the Section toggle there and the Ticket controls keep working on the
-	// ticket the detail pane shows (issue #159).
+	// A collapsed Ticket section draws no Group header, so `x` keeps the
+	// Section toggle there, `Space` has no header to answer, and the Ticket
+	// controls keep working on the ticket the detail pane shows (issue #159,
+	// issue #170).
 	test("a collapsed Ticket section keeps x the Section toggle", async () => {
 		await bootGrouped(
 			async (setup) => {
 				await pressTab(setup, "the repository Groups", (f) => headers(f).length === 2);
-				// The cursor stands on a Group header: the fold owns the key.
+				// The cursor stands on a Group header: the fold owns `Space` there.
 				await pressArrow(setup, "up", "the header", (f) =>
 					(rowsOf(f)[markerRowOf(f)] ?? "").includes("▾ acme/factory"),
 				);
-				expect(actionBarRowOf(setup.captureCharFrame())).toContain("x Fold group");
-				await press(setup, "x", "the fold", (f) => /▸ acme\/factory/.test(f));
+				expect(actionBarRowOf(setup.captureCharFrame())).toContain("Space Fold group");
+				await press(setup, "space", "the fold", (f) => /▸ acme\/factory/.test(f));
 				// Step down onto a ticket row, then collapse the Section: its headers
 				// leave the frame, so `x` expands the Section back rather than
 				// folding a header nobody can see.
@@ -1219,6 +1283,15 @@ describe("the Ticket section's Groups", () => {
 				const collapsed = await settle(setup);
 				expect(actionBarRowOf(collapsed)).toContain("x Section");
 				expect(actionBarRowOf(collapsed)).not.toContain("Fold group");
+				// With no header on screen `Space` refuses in the catalogue's
+				// words and moves nothing (issue #170).
+				setup.mockInput.pressKey(" ");
+				await awaitFrame(
+					setup,
+					(f) => messageRowOf(f).includes("no Group header is under the cursor"),
+					"the Space refusal in the collapsed section",
+				);
+				expect(actionBarRowOf(setup.captureCharFrame())).toContain("x Section");
 				// The Ticket controls keep working on the ticket the pane shows: the
 				// one the cursor stood on when the Section closed.
 				expect(detailPaneText(collapsed)).toContain("Legacy import");

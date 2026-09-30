@@ -1636,7 +1636,7 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 						fg: controlInk().detail.fg ?? undefined,
 					},
 					truncateToWidth(
-						"Tab cycles the grouping axis; x on a Group header folds that Group, and x anywhere else folds the Section",
+						"Tab cycles the grouping axis; Space on a Group header folds that Group, and x folds the Section on every row",
 						columns.contentWidth,
 					),
 				),

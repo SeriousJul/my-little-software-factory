@@ -474,7 +474,7 @@ describe("the in-app Key guide", () => {
 				// this mode's reasons on the unavailable ones. The Grouping axis
 				// and the Group fold join it (issue #159): the axis names its
 				// whole cycle in the note, and the fold states the reason a cursor
-				// on a Ticket row gives it.
+				// on a Ticket row gives it (issue #170).
 				const globalStart = shown.indexOf("Global controls");
 				expect(shown.slice(currentStart + 1, globalStart)).toEqual([
 					"↑↓/jk Move",
@@ -496,7 +496,7 @@ describe("the in-app Key guide", () => {
 					// label column is sized to the longest reason.
 					"Tab Group - cycles the grouping axis: none, repository, source, task,",
 					"state, position",
-					"x Fold - no Group header is under the cursor",
+					"Space Fold - no Group header is under the cursor",
 					"x Section - collapses the section the cursor is in, or expands it back",
 					// The reason is the longest in the guide: the label column
 					// is sized to its content, and what still does not fit
