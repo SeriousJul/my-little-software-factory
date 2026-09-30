@@ -3781,7 +3781,13 @@ export class FactoryState {
 		return row == null ? undefined : this.consultationFromRow(row);
 	}
 
-	/** List Consultations by operator priority. Closed records are opt-in. */
+	/**
+	 * List Consultations by operator priority. Closed records are opt-in.
+	 * Within a state group the order is the record's own activity time -
+	 * `updated_at`, which only a state change or an accepted turn advances -
+	 * so the order the operator browses in moves only when the record's
+	 * position in the machine's attention actually changes.
+	 */
 	consultations(filter: "open" | "closed" | "all" = "open"): Consultation[] {
 		const where =
 			filter === "open"
@@ -3984,25 +3990,32 @@ export class FactoryState {
 			.run(reason, new Date().toISOString(), id);
 	}
 
-	/** Set a durable warning without changing the Consultation lifecycle. */
+	/**
+	 * Set a durable warning without changing the Consultation lifecycle. A
+	 * warning is a note, not activity: it does not advance the record's
+	 * activity time, so a warning the observation loop sets or clears never
+	 * moves the record in the Consultation list's order.
+	 */
 	setConsultationWarning(id: string, warning: string | null): void {
-		this.db
-			.prepare("UPDATE consultations SET warning = ?, updated_at = ? WHERE id = ?")
-			.run(warning, new Date().toISOString(), id);
+		this.db.prepare("UPDATE consultations SET warning = ? WHERE id = ?").run(warning, id);
 	}
 
-	/** Save Agent handles before prompt delivery completes, for crash recovery. */
+	/**
+	 * Save Agent handles before prompt delivery completes, for crash
+	 * recovery. Handles are bookkeeping: they do not advance the record's
+	 * activity time, so the launch's handle writes never move the record in
+	 * the Consultation list's order.
+	 */
 	recordConsultationAgentHandles(id: string, details: ConsultationAgentDetails): void {
 		this.db
 			.prepare(
-				"UPDATE consultations SET pane_id = ?, tab_id = ?, workspace_id = ?, session_id = ?, updated_at = ? WHERE id = ? AND state = 'opening'",
+				"UPDATE consultations SET pane_id = ?, tab_id = ?, workspace_id = ?, session_id = ? WHERE id = ? AND state = 'opening'",
 			)
 			.run(
 				details.paneId,
 				details.tabId ?? null,
 				details.workspaceId ?? null,
 				details.sessionId ?? null,
-				new Date().toISOString(),
 				id,
 			);
 	}
@@ -4067,13 +4080,18 @@ export class FactoryState {
 		return Number(result.changes) > 0;
 	}
 
-	/** Save an unsent Response draft. It remains when the Agent rejects input. */
+	/**
+	 * Save an unsent Response draft. It remains when the Agent rejects
+	 * input. A draft is not activity: the record's own draft time carries the
+	 * fact, and typing must not move the record in the Consultation list's
+	 * order.
+	 */
 	setConsultationDraft(id: string, draft: string, old = false): void {
 		this.db
 			.prepare(
-				"UPDATE consultations SET draft = ?, draft_updated_at = ?, draft_old = ?, updated_at = ? WHERE id = ?",
+				"UPDATE consultations SET draft = ?, draft_updated_at = ?, draft_old = ? WHERE id = ?",
 			)
-			.run(draft, new Date().toISOString(), old ? 1 : 0, new Date().toISOString(), id);
+			.run(draft, new Date().toISOString(), old ? 1 : 0, id);
 	}
 
 	/** Save a response delivery operation before asking Herdr to accept it. */
@@ -4517,16 +4535,17 @@ export class FactoryState {
 						"UPDATE consultation_resources SET details = REPLACE(details, ?, ?) WHERE consultation_id = ? AND kind = 'agent' AND owned = 1 AND confirmed_closed = 0",
 					)
 					.run(details.paneId, current.paneId, id);
+			// Follow-up handle writes are bookkeeping and, like the launch's,
+			// do not advance the record's activity time.
 			this.db
 				.prepare(
-					"UPDATE consultations SET pane_id = ?, tab_id = ?, workspace_id = ?, session_id = ?, updated_at = ? WHERE id = ?",
+					"UPDATE consultations SET pane_id = ?, tab_id = ?, workspace_id = ?, session_id = ? WHERE id = ?",
 				)
 				.run(
 					details.paneId,
 					details.tabId ?? null,
 					details.workspaceId ?? null,
 					details.sessionId ?? current.sessionId,
-					new Date().toISOString(),
 					id,
 				);
 		});
