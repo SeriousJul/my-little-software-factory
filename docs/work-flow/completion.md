@@ -78,7 +78,7 @@ hung start still ends in the close the operator asked for.
 Auto-handoff mode decides without the operator, within the configured
 limits:
 
-	- A fired transition that carries `auto-advance` routes the task of the
+- A fired transition that carries `auto-advance` routes the task of the
 	position it derived. The route is the auto top-up's continuation: it enters
 	the Work queue like every other start (ADR 0049, ADR 0051), so a full
 	parallel limit is no longer a wait in awaiting - the item waits in the
@@ -94,8 +94,8 @@ limits:
 	At the per-ticket handoff limit the route degrades to close. The route's
 	`auto-handed-off` decision lands the same way the operator's does: only
 	once the routed handoff has started the agent. A route that cannot start -
-	because its Agent takes one of the settings its target Task profile names
-	- records nothing on the turn, says why on the status line, and leaves the
+	because its Agent takes one of the settings its target Task profile names -
+	records nothing on the turn, says why on the status line, and leaves the
 	turn undecided, so the next empty-queue cycle can route it once the config
 	or the panel fixes the pair.
 - Manual mode runs no top-up (ADR 0051). A settled turn that offers a

@@ -1020,13 +1020,18 @@ const mergeRowFocused = (frame: string): boolean =>
 
 describe("the decision screen's merge", () => {
 	/** The props the decision tests boot on: the pull request, seeded. */
-	function decisionProps(state: FactoryState, runner: FakeRunner, src: FakeSource): AppProps {
+	function decisionProps(
+		state: FactoryState,
+		runner: FakeRunner,
+		src: FakeSource,
+		extra: Partial<FactoryConfig> = {},
+	): AppProps {
 		const home = mkdtempSync(join(tmpdir(), "factory-plane-home-"));
 		paths.push(home);
 		const configPath = join(home, "config.toml");
 		writeFileSync(configPath, "agent-poll-interval-seconds = 60\n");
 		return {
-			config: PLANE_CONFIG,
+			config: { ...PLANE_CONFIG, ...extra },
 			state,
 			runner,
 			configPath,
@@ -1167,6 +1172,95 @@ describe("the decision screen's merge", () => {
 			30,
 			props,
 		);
+		state.close();
+	});
+
+	test("a blocked attempt from an earlier turn does not hold the row the newer turn offers", async () => {
+		const state = planeState();
+		seed(state, "awaiting", mergeRoute());
+		// An earlier turn of the ticket already ran the merge, and it was
+		// blocked: the attempt stands in the state with an at that predates
+		// this turn's completion.
+		state.recordPlaneActionAttempt({
+			ticketIdentity: pullIdentity,
+			taskType: "merge",
+			decision: "merged",
+			outcome: "blocked",
+			reason: "GraphQL: PullRequest is not mergeable.",
+			at: "2026-08-31T10:00:00Z",
+		});
+		const runner = new FakeRunner();
+		runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+		const src = new FakeSource("pulls", "github-pull-requests", pullSuccess());
+		const props = decisionProps(state, runner, src);
+
+		await withApp(
+			async (setup) => {
+				await awaitFrame(setup, (f) => f.includes(pullTitle.slice(0, 3)), "the row");
+				// The decision modal re-stands the merge row for the newer turn,
+				// and the earlier block's line does not stand in its place.
+				const frame = await press(
+					setup,
+					"return",
+					"the decision modal",
+					(f) => f.includes("Decision:") && f.includes("Merge pull request"),
+				);
+				expect(frame).not.toContain("the merge was blocked");
+			},
+			WIDTH,
+			30,
+			props,
+		);
+		state.close();
+	});
+
+	test("the operator's confirm passes the Handoff limit the top-up's ask obeys", async () => {
+		const state = planeState();
+		seed(state, "awaiting", mergeRoute());
+		// The ledger stands full for the ticket: one attempt already recorded
+		// and the limit is one, the standing that holds the top-up's ask.
+		state.recordPlaneActionAttempt({
+			ticketIdentity: pullIdentity,
+			taskType: "merge",
+			decision: "auto-merged",
+			outcome: "merged",
+			reason: "",
+			at: "2026-08-31T09:00:00Z",
+		});
+		const runner = new FakeRunner();
+		runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+		stubReadSequence(runner, [{ state: "open" }, { merged: true }]);
+		stubMerge(runner, 0);
+		const src = new FakeSource("pulls", "github-pull-requests", pullSuccess());
+		const props = decisionProps(state, runner, src, { maxHandoffsPerTicket: 1 });
+
+		await withApp(
+			async (setup) => {
+				await awaitFrame(setup, (f) => f.includes(pullTitle.slice(0, 3)), "the row");
+				await press(
+					setup,
+					"return",
+					"the decision modal",
+					(f) => f.includes("Decision:") && f.includes("Merge pull request"),
+				);
+				await pressArrow(setup, "down", "the Goto row", () => true);
+				await pressArrow(setup, "down", "the merge row's focus", mergeRowFocused);
+				// The confirm enters the queue like any start, and the run's
+				// line lands on the Message line past the full count.
+				await press(setup, "return", "the run's line", (f) =>
+					messageRowOf(f).includes(`the merge of "${pullTitle}" ran from the Work queue`),
+				);
+			},
+			WIDTH,
+			30,
+			props,
+		);
+
+		// The confirm passed the full count: the run's attempt stands as the
+		// ticket's latest, with the operator's decision word.
+		const attempt = state.latestPlaneActionAttempt(pullIdentity);
+		expect(attempt?.outcome).toBe("merged");
+		expect(attempt?.decision).toBe("merged");
 		state.close();
 	});
 
@@ -1460,6 +1554,89 @@ describe("the auto top-up merge", () => {
 		);
 		// The pause held the pickup: no command ran on the item.
 		expect(state.latestPlaneActionAttempt(pullIdentity)).toBeNull();
+		state.close();
+	});
+
+	test("the Dispatch pause holds the automatic merge add, and the release runs it", async () => {
+		let failedHandoffId = "";
+		let held: FactoryState;
+		const state = await topUpApp(
+			async (setup) => {
+				// Cycles run with the pause held: the held failed trace stops
+				// the top-up before the walks, so the open walk's merge add
+				// never asks and the queue stays empty, the hold standing on
+				// the Message line in the warning voice.
+				await settle(setup);
+				await new Promise((resolve) => setTimeout(resolve, 400));
+				expect(held.dispatchPauseActive()).toBe(true);
+				expect(held.workQueue()).toEqual([]);
+				expect(held.latestPlaneActionAttempt(pullIdentity)).toBeNull();
+				expect(messageRowOf(setup.captureCharFrame())).toContain("Dispatch pause");
+				// The release: the decision on the held failed trace ends the
+				// pause, and the next cycle's open walk adds and runs the merge,
+				// the way the unheld run does. The released ticket's source is
+				// stale behind its cycle end, so the re-verify gate holds it out
+				// of the same walk that adds the merge.
+				held.applyCompletionDecision({
+					ticketIdentity: issueIdentity,
+					handoffId: failedHandoffId,
+					decision: "closed",
+					decidedAt: new Date().toISOString(),
+				});
+				await awaitFrame(
+					setup,
+					() => held.latestPlaneActionAttempt(pullIdentity)?.outcome === "merged",
+					"the merge run",
+				);
+			},
+			(runner) => {
+				stubReadSequence(runner, [{ state: "open" }, { merged: true }]);
+				stubMerge(runner, 0);
+			},
+			{},
+			(s) => {
+				held = s;
+				// The pause comes from the issue's held failed turn, beside the
+				// open pull request the merge add would run on.
+				withIssueSource(s);
+				const claim = s.claimHandoff(
+					issueIdentity,
+					{
+						agentType: "pi",
+						environment: "live-worktree",
+						taskType: "rework",
+						model: "",
+						thinking: "",
+						contextWindow: "",
+					},
+					"open",
+				);
+				if (!claim.ok) throw new Error(claim.reason);
+				s.settleHandoff(claim.claim.attemptId, true, undefined, {
+					paneId: "pane-2",
+					tabId: "tab-2",
+					workspaceId: "ws-2",
+				});
+				s.settleTurn({
+					ticketIdentity: issueIdentity,
+					handoffId: claim.claim.attemptId,
+					taskType: "rework",
+					agentType: "pi",
+					message: "The turn failed.",
+					turnLog: [{ kind: "text", text: "The turn failed." }],
+					completedAt: "2026-08-31T11:00:00Z",
+					cause: "failed",
+				});
+				failedHandoffId = claim.claim.attemptId;
+			},
+		);
+
+		// The release let the add through: the attempt stands with the
+		// top-up's decision word, the way the unheld run records it.
+		const attempt = state.latestPlaneActionAttempt(pullIdentity);
+		expect(attempt?.outcome).toBe("merged");
+		expect(attempt?.decision).toBe("auto-merged");
+		expect(state.dispatchPauseActive()).toBe(false);
 		state.close();
 	});
 });

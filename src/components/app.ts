@@ -1718,15 +1718,19 @@ export function App({
 				// Goto stand always, and the confirm waits with the route. The
 				// merge's route stands the same way, and the attempt's record
 				// states the outcome that settled it, beside what the transition
-				// wrote, because no Completion trace stands for the action.
+				// wrote, because no Completion trace stands for the action. The
+				// record settles only the turn that ran it: it stands while it
+				// postdates the turn's completion, and a newer turn that re-offers
+				// the position re-stands the row, so a blocked merge never hides
+				// the re-merge the following review asks for.
 				const attempt =
 					state?.latestPlaneActionAttempt(outcome.positionTicketIdentity ?? ticket.identity) ??
 					null;
-				const routeStanding =
-					attempt === null ? routeStandingLine(ticket, outcome, mergePosition) : null;
+				const attemptStands = attempt !== null && attempt.at >= (completion?.completedAt ?? "");
+				const routeStanding = routeStandingLine(ticket, outcome, mergePosition);
 				if (routeStanding !== null) {
 					factLines.push(routeStanding);
-				} else if (attempt !== null) {
+				} else if (attemptStands) {
 					// The outcome stands where the row stood (ADR 0068): the
 					// attempt's record is the fact the decision screen reads, and
 					// the transition's write stands on it beside the outcome.
