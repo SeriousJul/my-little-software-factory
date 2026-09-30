@@ -38,9 +38,12 @@ the auto top-up's add. It takes no Parallel limit seat, because it holds no
 agent, and the pickup's walk runs it when it reaches it, whatever the cap
 bounds: a full cap breaks the walk at the first seats-bound item that cannot
 start, and the item behind that break waits the way every item does. The
-queue pause holds it while it stands, the Dispatch pause holds its automatic
-add, and the Handoff limit counts its attempts. A manual confirm passes the
-limit, the way a manual handoff does.
+item takes no seat to hold its start, so the row is the claim: the pickup
+removes it before the run starts, and two pickups that read the queue together
+cannot both run the merge - the second claim finds no row and leaves, and the
+attempt row stands once. The queue pause holds it while it stands, the
+Dispatch pause holds its automatic add, and the Handoff limit counts its
+attempts. A manual confirm passes the limit, the way a manual handoff does.
 
 **Manual mode keeps its gate.** Nothing ships without the operator's key:
 the Decision screen's row offers the merge of the pull request, and the

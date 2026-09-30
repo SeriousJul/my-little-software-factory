@@ -637,12 +637,16 @@ class HandoffDispatchModule implements HandoffDispatch {
 	 * pull request, run through the command runner. The item takes no seat and
 	 * is not held by the cap: the pickup's walk runs it when it reaches it, and
 	 * a full limit only holds it behind a seats-bound item the walk breaks
-	 * at, the way it holds everything behind. The run's gates are the
-	 * route's - the ticket still stands, and the task type still carries the
-	 * action form the registry names. The run reads the pull request fresh
-	 * before it runs, so an already-merged pull request settles as merged
-	 * without a command, and the run's outcome records the attempt, fires the
-	 * task type's transition on the outcome alike for a merge and a block, and
+	 * at, the way it holds everything behind. The claim is the row's removal,
+	 * taken before the run starts: the item takes no seat to hold the start,
+	 * so the row is the claim, and two walks that both read the queue before
+	 * either claims cannot both run the merge - the second claim finds no row
+	 * and leaves, and the run stands once. The run's gates are the route's -
+	 * the ticket still stands, and the task type still carries the action
+	 * form the registry names. The run reads the pull request fresh before
+	 * it runs, so an already-merged pull request settles as merged without a
+	 * command, and the run's outcome records the attempt, fires the task
+	 * type's transition on the outcome alike for a merge and a block, and
 	 * settles the route without a work cycle. Every pickup ends in run or
 	 * drop: a refused claim drops the item with its warning, and the queued
 	 * route settles to open on it, because a dropped merge leaves no
@@ -652,9 +656,12 @@ class HandoffDispatchModule implements HandoffDispatch {
 		item: WorkQueuePlaneActionItem,
 		overCap: boolean,
 	): Promise<void> {
+		// The claim: the row leaves the queue before the run starts, the way
+		// the handoff pickup's seat claim takes the start. A row another walk
+		// already took leaves, and its run stands.
+		if (!this.removeQueueRow(item.ticketIdentity)) return;
 		const check = this.planeActionClaimCheck(item.ticketIdentity, item.routeFromIdentity);
 		if (!check.ok) {
-			this.removeQueueRow(item.ticketIdentity);
 			this.settlePlaneActionDrops(item);
 			this.settleIntentOnStarted(item.ticketIdentity, { ok: false, reason: check.reason });
 			this.reports.refresh();
@@ -666,7 +673,6 @@ class HandoffDispatchModule implements HandoffDispatch {
 		const config = this.config();
 		const setting = planeActionSettingOf(config.taskTypes, item.taskType);
 		if (setting === null) {
-			this.removeQueueRow(item.ticketIdentity);
 			this.settlePlaneActionDrops(item);
 			this.settleIntentOnStarted(item.ticketIdentity, {
 				ok: false,
@@ -683,7 +689,6 @@ class HandoffDispatchModule implements HandoffDispatch {
 		const projection = this.state.projectedTickets(config.workflowStates, config.defaultTaskType);
 		const ticket = projection.find((candidate) => candidate.identity === item.ticketIdentity);
 		if (ticket === undefined) {
-			this.removeQueueRow(item.ticketIdentity);
 			this.settlePlaneActionDrops(item);
 			this.settleIntentOnStarted(item.ticketIdentity, {
 				ok: false,
@@ -705,7 +710,6 @@ class HandoffDispatchModule implements HandoffDispatch {
 		if (pullRequest === null) {
 			// No attempt for a merge that could not aim: the row drops with its
 			// warning, and the route settles back to open without it.
-			this.removeQueueRow(item.ticketIdentity);
 			this.settlePlaneActionDrops(item);
 			this.settleIntentOnStarted(item.ticketIdentity, {
 				ok: false,
@@ -749,11 +753,9 @@ class HandoffDispatchModule implements HandoffDispatch {
 			taskType: item.taskType,
 			attempt: { id: attempt.id, ticketIdentity: item.ticketIdentity, taskType: item.taskType },
 		});
-		// The row leaves on every answer, the way the Consultation's pickup
+		// The row left at the claim, the way the Consultation's pickup
 		// leaves it, and the route settles back to open without a work cycle:
 		// no work cycle ran for the action.
-		const rowStands = this.state.hasWorkItem(item.ticketIdentity);
-		if (rowStands) this.removeQueueRow(item.ticketIdentity);
 		this.state.settleQueuedPlaneActionRoute(item.ticketIdentity);
 		if (!this.stopped) this.settleIntentOnStarted(item.ticketIdentity, { ok: true });
 		this.reports.refresh();

@@ -33,6 +33,16 @@ export type MergeMethod = (typeof MERGE_METHODS)[number];
 /** The method a merge action runs with when its settings name none. */
 export const DEFAULT_MERGE_METHOD: MergeMethod = "squash";
 
+/** The name the surfaces give the built-in plane actions. */
+export const PLANE_ACTION_LABELS: Readonly<Record<PlaneActionName, string>> = {
+	"merge-pull-request": "Merge pull request",
+};
+
+/** The name the surfaces give the named plane action, from the registry. */
+export function planeActionLabel(name: PlaneActionName): string {
+	return PLANE_ACTION_LABELS[name];
+}
+
 /**
  * The named settings of the one plane action: the merge of the ticket's
  * pull request, with the method it runs with. A task type in the action

@@ -1802,12 +1802,19 @@ export class FactoryState {
 	 * ticket that left queued behind the settle changes nothing.
 	 */
 	settleQueuedPlaneActionRoute(ticketIdentity: string): boolean {
-		return this.transaction(() => {
-			const result = this.db
-				.prepare("UPDATE tickets SET state = 'open' WHERE identity = ? AND state = 'queued'")
-				.run(ticketIdentity);
-			return Number(result.changes) > 0;
-		});
+		return this.transaction(() => Number(this.settleQueuedNoCycle(ticketIdentity).changes) > 0);
+	}
+
+	/**
+	 * The settle's own statement: the queued wait returns to open without a
+	 * work cycle. The route's settle wraps it in its own write, and the
+	 * cancel's plane branch runs it inside the cancel's write, so both settle
+	 * the same wait through this one statement (ADR 0068, ADR 0069).
+	 */
+	private settleQueuedNoCycle(ticketIdentity: string) {
+		return this.db
+			.prepare("UPDATE tickets SET state = 'open' WHERE identity = ? AND state = 'queued'")
+			.run(ticketIdentity);
 	}
 
 	/**
@@ -2921,9 +2928,7 @@ export class FactoryState {
 			this.db.prepare("DELETE FROM work_queue WHERE ticket_identity = ?").run(ticketIdentity);
 			this.repackWorkQueuePositions();
 			if (row.action_task_type !== null) {
-				this.db
-					.prepare("UPDATE tickets SET state = 'open' WHERE identity = ? AND state = 'queued'")
-					.run(ticketIdentity);
+				this.settleQueuedNoCycle(ticketIdentity);
 			}
 			if (row.route_from_identity !== null) {
 				this.db

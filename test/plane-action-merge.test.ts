@@ -857,6 +857,55 @@ describe("the dispatch's ask and pickup", () => {
 		state.close();
 	});
 
+	test("two pickups that read the queue together run the merge once, on the claim", async () => {
+		const state = planeState();
+		// The pause holds the ask in the queue without the dispatch's own
+		// pickup, so the two pickups the test starts read the queue together,
+		// before either claims the row.
+		state.setQueuePaused(true);
+		const runner = new FakeRunner();
+		stubReadSequence(runner, [{ state: "open" }, { merged: true }]);
+		stubMerge(runner, 0);
+		const events: string[] = [];
+		let resolveStarted: () => void = () => {};
+		const startedSettled = new Promise<void>((resolve) => {
+			resolveStarted = resolve;
+		});
+		const dispatch = createHandoffDispatch({
+			state,
+			runner,
+			config: () => PLANE_CONFIG,
+			seatCount: () => 0,
+			home: home(),
+			...recorder(events),
+		});
+		const result = await dispatch.dispatchPlaneAction({
+			origin: "open",
+			automatic: true,
+			ticketIdentity: pullIdentity,
+			taskType: "merge",
+			onStarted: (started) => {
+				expect(started).toEqual({ ok: true });
+				resolveStarted();
+			},
+		});
+		expect(result).toEqual({ ok: true });
+		state.setQueuePaused(false);
+		await Promise.all([dispatch.pickupWorkQueue(), dispatch.pickupWorkQueue()]);
+		await startedSettled;
+		// The claim is the row's removal, taken before the run: the second
+		// pickup finds no row and leaves, and the run stands once - one merge
+		// command, one attempt row for the Handoff limit's count.
+		expect(runner.commands().filter((command) => command.startsWith("gh pr merge"))).toHaveLength(
+			1,
+		);
+		expect(state.planeActionAttemptCount(pullIdentity)).toBe(1);
+		expect(state.latestPlaneActionAttempt(pullIdentity)?.outcome).toBe("merged");
+		expect(state.workQueue()).toEqual([]);
+		expect(state.ticketState(pullIdentity)).toBe("open");
+		state.close();
+	});
+
 	test("a full limit holds the plane item behind a seats-bound item, the way it holds every item", async () => {
 		const state = planeState();
 		withIssueSource(state);

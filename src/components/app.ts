@@ -84,6 +84,7 @@ import { evaluatePlacement, type PlacementEvaluation } from "../placement.ts";
 import {
 	DEFAULT_MERGE_METHOD,
 	isPlaneActionTaskType,
+	planeActionLabel,
 	planeActionSettingOf,
 } from "../plane-actions.ts";
 
@@ -1757,7 +1758,7 @@ export function App({
 						if (mergePosition) {
 							actions.push({
 								key: "merge",
-								label: "Merge pull request",
+								label: planeActionLabel("merge-pull-request"),
 								detail: `runs the merge now, with no agent and no worktree (method ${mergeMethodOf(outcome.positionTaskType)})`,
 								planeAction: true,
 							});
