@@ -34,8 +34,7 @@ export interface TicketCloseDialog {
 function aliveLine(ticket: Ticket, marker: TicketMarker | null): string {
 	if (marker === "missing") return "Herdr no longer lists the Agent's pane.";
 	if (marker === "blocked") return "The Agent works, and waits for input.";
-	if (ticket.state === "awaiting" || ticket.state === "queued")
-		return "The turn has settled, and no Agent works.";
+	if (ticket.state === "awaiting") return "The turn has settled, and no Agent works.";
 	if (ticket.state === "running") return "The Agent is working.";
 	if (ticket.state === "handed-off") return "The Agent has started, and its work is not seen yet.";
 	return "No Agent works on this Ticket.";
@@ -71,7 +70,6 @@ function survivesLines(ticket: Ticket): string[] {
  * Cancel detail cannot serve every in-flight Ticket (ADR 0031).
  */
 function cancelDetail(ticket: Ticket, marker: TicketMarker | null): string {
-	if (ticket.state === "queued") return "keep the cycle, and its waiting route";
 	if (ticket.state !== "handed-off" && ticket.state !== "running") return "keep the turn undecided";
 	if (marker === "missing") return "keep the cycle, and its missing pane";
 	return "keep the Agent and its work running";

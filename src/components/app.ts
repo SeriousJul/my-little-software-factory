@@ -1258,12 +1258,14 @@ export function App({
 	/**
 	 * The Queue wait (CONTEXT.md) one ticket reads from the app's facts: its
 	 * open-origin item in the Work queue while the ticket rests open, or the
-	 * item the ticket's route ask enqueued while the ticket rests awaiting
-	 * (ADR 0064). The row and the detail state line wear the `queued` badge
-	 * in place of their state badge, and the Starting window rules it out
-	 * before it is read, so the spinner face takes over when the run begins.
-	 * The ticket keeps its state, so the counts and the state file never
-	 * learn the badge.
+	 * route item the ticket's own turn or another's route enqueued on it
+	 * (ADR 0064, ADR 0072): the route's ask ends the source's cycle and the
+	 * wait stands on the item alone, so the badge wears on the item's position
+	 * while the item stands, open or awaiting alike. The row and the detail
+	 * state line wear the `queued` badge in place of their state badge, and
+	 * the Starting window rules it out before it is read, so the spinner face
+	 * takes over when the run begins. The ticket keeps its state, so the
+	 * counts and the state file never learn the badge.
 	 */
 	const queueWait = (ticket: Ticket): boolean =>
 		workQueue.some(
@@ -1273,8 +1275,8 @@ export function App({
 					item.ticketIdentity === ticket.identity &&
 					ticket.state === "open") ||
 					(item.origin === "workflow" &&
-						item.routeFromIdentity === ticket.identity &&
-						ticket.state === "awaiting")),
+						item.ticketIdentity === ticket.identity &&
+						(ticket.state === "open" || ticket.state === "awaiting"))),
 		);
 	const persistMapping = async (mapping: RepositoryMapping): Promise<string | undefined> => {
 		const write = configWriteQueue.current
@@ -2066,15 +2068,15 @@ export function App({
 	};
 
 	/**
-	 * Close the work cycle of an `awaiting` or `queued` Ticket: the `closed`
-	 * decision on its settled turn, then the Close cleanup.
+	 * Close the work cycle of an `awaiting` Ticket: the `closed` decision on
+	 * its settled turn, then the Close cleanup.
 	 *
 	 * One function runs the close the Decision modal's Close row offers and the
 	 * one key `w` confirms (ADR 0031): the two routes are the same operation, so
 	 * they cannot drift. The Close cleanup goes through the dispatch seat, which
-	 * already holds it behind a Handoff of the same ticket. A queued ticket
-	 * loses its waiting route item in the same answer: a closed cycle never
-	 * leaves a live start in the queue (ADR 0067).
+	 * already holds it behind a Handoff of the same ticket. A ticket that stands
+	 * for a route item loses it in the same answer: a closed cycle never
+	 * leaves a live start in the queue (ADR 0067, ADR 0072).
 	 */
 	const closeDecidedCycle = (ticket: Ticket) => {
 		if (state === undefined) return;
@@ -2084,7 +2086,7 @@ export function App({
 			decision: "closed",
 			decidedAt: new Date().toISOString(),
 		});
-		if (applied && ticket.state === "queued") state.removeWorkflowRouteItem(ticket.identity);
+		if (applied && ticket.state === "awaiting") state.removeWorkflowRouteItem(ticket.identity);
 		replaceTickets();
 		if (!applied) {
 			setWarningMessage(`ticket ${ticket.identity} already decided`);
@@ -2147,7 +2149,7 @@ export function App({
 		// The projection before the list rule: the row can leave the list while the
 		// confirmation stands, and the Close still runs on the Ticket it named.
 		const ticket = findTicket(asked.identity) ?? asked;
-		if (ticket.state === "awaiting" || ticket.state === "queued") {
+		if (ticket.state === "awaiting") {
 			closeDecidedCycle(ticket);
 			return;
 		}
@@ -2643,8 +2645,9 @@ export function App({
 	 * un-mutes every source the Ticket's memberships name together, the way the
 	 * act rides on the row and acts on the source. The state's write settles
 	 * what the act takes away in the same transaction: the source's waiting
-	 * starts leave the Work queue, and the queued tickets whose route died with
-	 * them or before it rest `open` with their cycle incremented.
+	 * starts leave the Work queue, and the machine's re-offer of a route the
+	 * mute took drops out of the list where the mute dropped its ticket
+	 * (ADR 0070, ADR 0072).
 	 */
 	const toggleSourceMute = () => {
 		// The Ticket under the cursor, read the way every Ticket control reads
@@ -2669,7 +2672,6 @@ export function App({
 		}
 		const muted = ticket.muted !== true;
 		let removed = 0;
-		let settled = 0;
 		for (const sourceName of sources) {
 			const result = state.setSourceMuted(sourceName, muted);
 			if (!result.ok) {
@@ -2677,7 +2679,6 @@ export function App({
 				return;
 			}
 			removed += result.removed;
-			settled += result.settled;
 		}
 		replaceTickets();
 		const label = sources.join(", ");
@@ -2685,12 +2686,10 @@ export function App({
 			removed > 0
 				? `; ${removed} waiting start${removed === 1 ? "" : "s"} left the Work queue`
 				: "";
-		const restNote =
-			settled > 0 ? `; ${settled} queued Ticket${settled === 1 ? "" : "s"} rest open` : "";
 		reportMessage({
 			severity: "info",
 			text: muted
-				? `source ${label} is muted: no row while its tickets rest, no automatic start${queueNote}${restNote}`
+				? `source ${label} is muted: no row while its tickets rest, no automatic start${queueNote}`
 				: `source ${label} is not muted: its rows come back from the list, and the machine may start them`,
 		});
 	};
@@ -3444,14 +3443,6 @@ export function App({
 	const decideCompletion = (context: ControlContext) => {
 		const ticket = context.selectedTicket;
 		if (ticket === undefined) return;
-		if (ticket.state === "queued") {
-			// The decision is already recorded: the factory decides nothing more,
-			// in auto mode or in manual. The screen shows where the route stands
-			// and the turn log, the way it shows them on an awaiting ticket
-			// (ADR 0067).
-			setPanel({ kind: "decision", identity: ticket.identity });
-			return;
-		}
 		const taskType = taskTypeOf(ticket);
 		if (autoModeRef.current) {
 			// The factory decides the ticket itself: the operator gets the
@@ -4261,21 +4252,19 @@ export function App({
 	const liveMode: "stream" | "decision" | "missing" | "closed" =
 		panel?.kind === "live" && panelTicket !== undefined
 			? panelTicket.state === "open"
-				? "closed"
-				: panelTicket.state === "queued"
-					? // The route confirm moves the ticket under this screen, and the
-						// screen reads the decision body it left behind, in auto mode
-						// or in manual alike (ADR 0067).
-						"decision"
-					: panelTicket.state === "awaiting"
-						? autoMode ||
-							(panelTicket.lastCompletion?.transition?.fired === true &&
-								panelTicket.lastCompletion?.transition?.autoAdvance === true)
-							? "stream"
-							: "decision"
-						: markerOf(panelTicket) === "missing"
-							? "missing"
-							: "stream"
+				? // The route confirm ends the ticket's cycle on its own surface and
+					// the screen reads the list when the ticket leaves the stream's
+					// states (ADR 0072).
+					"closed"
+				: panelTicket.state === "awaiting"
+					? autoMode ||
+						(panelTicket.lastCompletion?.transition?.fired === true &&
+							panelTicket.lastCompletion?.transition?.autoAdvance === true)
+						? "stream"
+						: "decision"
+					: markerOf(panelTicket) === "missing"
+						? "missing"
+						: "stream"
 			: "closed";
 	const liveDecision =
 		panelTicket !== undefined && liveMode === "decision" ? decisionFor(panelTicket) : undefined;

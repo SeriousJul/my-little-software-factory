@@ -791,7 +791,7 @@ describe("factory SQLite state", () => {
 		state.close();
 	});
 
-	test("a close on a turn the route decided ends the cycle, and the decision stands", () => {
+	test("the route ask ends the cycle, and a close on the decided turn stands a no-op", () => {
 		const state = openFactoryState(":memory:");
 		state.initializeSources([sourceA]);
 		state.applyFetch(sourceA, success([fetched()]));
@@ -810,8 +810,8 @@ describe("factory SQLite state", () => {
 			completedAt: "2026-08-31T11:00:00Z",
 		});
 		// The route decides the turn when the route is asked for: the decision
-		// lands and the ticket leaves awaiting for queued in the same write
-		// (ADR 0067)...
+		// lands and the cycle ends in the same write, the ticket leaving
+		// awaiting for open with the cycle incremented (ADR 0072).
 		expect(
 			state.applyCompletionDecision({
 				ticketIdentity: ticket.identity,
@@ -820,9 +820,11 @@ describe("factory SQLite state", () => {
 				decidedAt: "2026-08-31T11:10:00Z",
 			}),
 		).toBe(true);
-		expect(state.visibleTickets([], "implement")[0].state).toBe("queued");
-		// ...and the operator's close ends the cycle the turn routed from: the
-		// recorded decision is not rewritten, and the cycle still ends.
+		expect(state.visibleTickets([], "implement")[0].state).toBe("open");
+		expect(state.visibleTickets([], "implement")[0].workCycle).toBe(2);
+		// The turn is decided, so a close on it rewrites nothing and ends
+		// nothing: the cycle already ended at the ask, and the recorded
+		// decision stands.
 		expect(
 			state.applyCompletionDecision({
 				ticketIdentity: ticket.identity,
@@ -830,26 +832,15 @@ describe("factory SQLite state", () => {
 				decision: "closed",
 				decidedAt: "2026-08-31T11:30:00Z",
 			}),
-		).toBe(true);
+		).toBe(false);
 		const [returned] = state.visibleTickets([], "implement");
 		expect(returned.state).toBe("open");
 		expect(returned.workCycle).toBe(2);
 		expect(returned.lastCompletion?.decision).toBe("handed-off");
-		// A repeated close changes nothing: the ticket left awaiting, so the
-		// cycle number moves exactly once for the one end.
-		expect(
-			state.applyCompletionDecision({
-				ticketIdentity: ticket.identity,
-				handoffId: claim.claim.attemptId,
-				decision: "closed",
-				decidedAt: "2026-08-31T11:31:00Z",
-			}),
-		).toBe(false);
-		expect(state.visibleTickets([], "implement")[0].workCycle).toBe(2);
 		state.close();
 	});
 
-	test("the automatic close on a decided turn ends the cycle too", () => {
+	test("the auto close on a turn the auto route decided stands a no-op", () => {
 		const state = openFactoryState(":memory:");
 		state.initializeSources([sourceA]);
 		state.applyFetch(sourceA, success([fetched()]));
@@ -867,8 +858,9 @@ describe("factory SQLite state", () => {
 			turnLog: textLog("Done."),
 			completedAt: "2026-08-31T11:00:00Z",
 		});
-		// The automatic route at the handoff limit degrades to the close after
-		// the auto route has recorded its decision: the end still runs.
+		// The auto route ends the cycle at the ask (ADR 0072), and a close on
+		// the decided turn rewrites nothing: the recorded decision stands, and
+		// the cycle already ended.
 		expect(
 			state.applyCompletionDecision({
 				ticketIdentity: ticket.identity,
@@ -884,7 +876,7 @@ describe("factory SQLite state", () => {
 				decision: "auto-closed",
 				decidedAt: "2026-08-31T11:30:00Z",
 			}),
-		).toBe(true);
+		).toBe(false);
 		const [returned] = state.visibleTickets([], "implement");
 		expect(returned.state).toBe("open");
 		expect(returned.workCycle).toBe(2);
@@ -948,13 +940,16 @@ describe("factory SQLite state", () => {
 		state.close();
 	});
 
-	// The routed ticket's queued wait (ADR 0067): the ask moves the ticket
-	// to queued with the decision it records, the pickup's start settles the
-	// wait in the same write as the started ticket's handoff, and the close
-	// takes the waiting item with the cycle it ends.
-	describe("the routed ticket's queued wait (ADR 0067)", () => {
+	// The routed ticket's wait (ADR 0072): the ask ends the cycle in the same
+	// write that lands the decision, the ticket rests open behind the item,
+	// the operator's removal takes the item and marks the trace, and the
+	// pickup's start runs in the started ticket's own cycle.
+	describe("the routed ticket's wait (ADR 0072)", () => {
 		/** One ticket with its turn settled, and the attempt the turn ran on. */
-		function settledTurn(state: FactoryState): { identity: string; attemptId: string } {
+		function settledTurn(
+			state: FactoryState,
+			transition?: TransitionOutcome,
+		): { identity: string; attemptId: string } {
 			const [ticket] = state.visibleTickets([], "implement");
 			if (ticket === undefined) throw new Error("the fixture holds no ticket");
 			const claim = state.claimHandoff(ticket.identity, choice, "open");
@@ -968,14 +963,34 @@ describe("factory SQLite state", () => {
 				message: "Done.",
 				turnLog: textLog("Done."),
 				completedAt: "2026-08-31T11:00:00Z",
+				transition,
 			});
 			return { identity: ticket.identity, attemptId: claim.claim.attemptId };
+		}
+
+		/** The settled turn's transition, routing to the named position. */
+		function routeOutcome(positionIdentity: string): TransitionOutcome {
+			return {
+				fired: false,
+				when: null,
+				reason: "",
+				ticketFacts: [],
+				pullRequestFacts: [],
+				autoAdvance: true,
+				ticketWrite: null,
+				pullRequestWrite: null,
+				pullRequestIdentity: null,
+				pullRequestKey: null,
+				writeFailure: "",
+				positionTaskType: "review",
+				positionTicketIdentity: positionIdentity,
+			};
 		}
 
 		const ticketState = (state: FactoryState, identity: string) =>
 			state.visibleTickets([], "implement").find((t) => t.identity === identity);
 
-		test("the route ask moves the ticket to queued, and the re-confirm stands a no-op", () => {
+		test("the route ask ends the cycle at the ask, and the re-confirm stands a no-op", () => {
 			const state = openFactoryState(":memory:");
 			state.initializeSources([sourceA]);
 			state.applyFetch(sourceA, success([fetched()]));
@@ -988,9 +1003,14 @@ describe("factory SQLite state", () => {
 					decidedAt: "2026-08-31T11:10:00Z",
 				}),
 			).toBe(true);
-			expect(state.ticketState(identity)).toBe("queued");
+			// The decision lands and the cycle ends in the same write: the
+			// ticket rests open with the cycle incremented, and the wait is the
+			// item's, not a ticket state (ADR 0072).
+			expect(state.ticketState(identity)).toBe("open");
+			expect(ticketState(state, identity)?.workCycle).toBe(2);
+			expect(state.lastCompletion(identity)?.decision).toBe("handed-off");
 			// A re-confirm of a dead route re-lands the same decision as a no-op,
-			// and the ticket keeps the wait its first ask put it in.
+			// and the cycle number holds.
 			expect(
 				state.applyCompletionDecision({
 					ticketIdentity: identity,
@@ -999,11 +1019,12 @@ describe("factory SQLite state", () => {
 					decidedAt: "2026-08-31T11:11:00Z",
 				}),
 			).toBe(false);
-			expect(state.ticketState(identity)).toBe("queued");
+			expect(state.ticketState(identity)).toBe("open");
+			expect(ticketState(state, identity)?.workCycle).toBe(2);
 			state.close();
 		});
 
-		test("the cross-position start ends the settled ticket's cycle in the same write", () => {
+		test("the cross-position start runs in the started ticket's own cycle", () => {
 			const state = openFactoryState(":memory:");
 			state.initializeSources([sourceA]);
 			state.applyFetch(sourceA, success([fetched("github:github.com:I_6"), fetched()]));
@@ -1016,7 +1037,10 @@ describe("factory SQLite state", () => {
 					decidedAt: "2026-08-31T11:10:00Z",
 				}),
 			).toBe(true);
-			expect(state.ticketState(identity)).toBe("queued");
+			// The source ended its cycle at the ask and rests open behind the
+			// wait, so the start moves the started ticket alone.
+			expect(state.ticketState(identity)).toBe("open");
+			expect(ticketState(state, identity)?.workCycle).toBe(2);
 			expect(
 				state.enqueueWork({
 					ticketIdentity: "github:github.com:I_6",
@@ -1029,9 +1053,6 @@ describe("factory SQLite state", () => {
 			const claim = state.claimHandoff("github:github.com:I_6", choice, "workflow");
 			if (!claim.ok) throw new Error(claim.reason);
 			state.settleHandoff(claim.claim.attemptId, true, undefined, { routeFromIdentity: identity });
-			// The started ticket is handed off, and the settled ticket returns to
-			// open with its cycle incremented: the routed close that used to rest
-			// in the top band lands at the start.
 			expect(state.ticketState("github:github.com:I_6")).toBe("handed-off");
 			const settled = ticketState(state, identity);
 			if (settled === undefined) throw new Error("the settled ticket left the list");
@@ -1041,7 +1062,7 @@ describe("factory SQLite state", () => {
 			state.close();
 		});
 
-		test("the same-position start hands the queued ticket off in its own cycle", () => {
+		test("the same-position start hands the open ticket off in its next cycle", () => {
 			const state = openFactoryState(":memory:");
 			state.initializeSources([sourceA]);
 			state.applyFetch(sourceA, success([fetched()]));
@@ -1054,9 +1075,11 @@ describe("factory SQLite state", () => {
 					decidedAt: "2026-08-31T11:10:00Z",
 				}),
 			).toBe(true);
-			expect(state.ticketState(identity)).toBe("queued");
+			expect(state.ticketState(identity)).toBe("open");
 			// A route onto the ticket's own new position names itself, and the
-			// normalization leaves its item without a route from.
+			// normalization leaves its item without a route from. The start is
+			// the ticket's next cycle, so it runs from the open state the ask
+			// left.
 			expect(
 				state.enqueueWork({
 					ticketIdentity: identity,
@@ -1074,13 +1097,12 @@ describe("factory SQLite state", () => {
 			state.settleHandoff(claim.claim.attemptId, true, undefined, { routeFromIdentity: null });
 			const moved = ticketState(state, identity);
 			if (moved === undefined) throw new Error("the ticket left the list");
-			// The passage continues into the rework: the cycle number holds.
 			expect(moved.state).toBe("handed-off");
-			expect(moved.workCycle).toBe(1);
+			expect(moved.workCycle).toBe(2);
 			state.close();
 		});
 
-		test("a close on a queued ticket ends the cycle and takes the route's item", () => {
+		test("the close of a routed ticket's position takes the route's item", () => {
 			const state = openFactoryState(":memory:");
 			state.initializeSources([sourceA]);
 			state.applyFetch(sourceA, success([fetched("github:github.com:I_6"), fetched()]));
@@ -1093,7 +1115,7 @@ describe("factory SQLite state", () => {
 					decidedAt: "2026-08-31T11:10:00Z",
 				}),
 			).toBe(true);
-			expect(state.ticketState(identity)).toBe("queued");
+			expect(state.ticketState(identity)).toBe("open");
 			expect(
 				state.enqueueWork({
 					ticketIdentity: "github:github.com:I_6",
@@ -1104,32 +1126,35 @@ describe("factory SQLite state", () => {
 				}),
 			).toEqual({ ok: true });
 			expect(state.workQueue()).toHaveLength(1);
-			// The close takes the two moves in one answer: the cycle ends on the
-			// settled trace, and the waiting item leaves the queue. A closed
-			// cycle never leaves a live start in the queue.
+			// The position's own turn is the one the close runs on: the position
+			// rests awaiting with no decision, and the close ends its cycle and
+			// takes the item that waited on it. A closed cycle never leaves a
+			// live start in the queue.
+			const positionClaim = state.claimHandoff("github:github.com:I_6", choice, "open");
+			if (!positionClaim.ok) throw new Error(positionClaim.reason);
+			state.settleHandoff(positionClaim.claim.attemptId, true);
+			state.settleTurn({
+				ticketIdentity: "github:github.com:I_6",
+				handoffId: positionClaim.claim.attemptId,
+				taskType: "implement",
+				agentType: "pi",
+				message: "Done.",
+				turnLog: textLog("Done."),
+				completedAt: "2026-08-31T11:20:00Z",
+			});
+			expect(state.ticketState("github:github.com:I_6")).toBe("awaiting");
 			expect(
 				state.applyCompletionDecision({
-					ticketIdentity: identity,
-					handoffId: attemptId,
+					ticketIdentity: "github:github.com:I_6",
+					handoffId: positionClaim.claim.attemptId,
 					decision: "closed",
 					decidedAt: "2026-08-31T11:30:00Z",
 				}),
 			).toBe(true);
-			expect(state.removeWorkflowRouteItem(identity)).toBe(true);
-			const settled = ticketState(state, identity);
-			if (settled === undefined) throw new Error("the settled ticket left the list");
-			expect(settled.state).toBe("open");
-			expect(settled.workCycle).toBe(2);
+			expect(state.removeWorkflowRouteItem("github:github.com:I_6")).toBe(1);
+			expect(state.ticketState("github:github.com:I_6")).toBe("open");
+			expect(ticketState(state, "github:github.com:I_6")?.workCycle).toBe(2);
 			expect(state.workQueue()).toHaveLength(0);
-			// A repeated close changes nothing.
-			expect(
-				state.applyCompletionDecision({
-					ticketIdentity: identity,
-					handoffId: attemptId,
-					decision: "closed",
-					decidedAt: "2026-08-31T11:31:00Z",
-				}),
-			).toBe(false);
 			state.close();
 		});
 
@@ -1165,7 +1190,7 @@ describe("factory SQLite state", () => {
 				}),
 			).toEqual({ ok: true });
 			expect(state.workQueue()).toHaveLength(2);
-			expect(state.removeWorkflowRouteItem(identity)).toBe(true);
+			expect(state.removeWorkflowRouteItem(identity)).toBe(1);
 			expect(state.workQueue()).toHaveLength(1);
 			const waiting = state.workQueue()[0];
 			if (waiting?.kind !== "handoff") throw new Error("the waiting item is not a handoff");
@@ -1174,11 +1199,11 @@ describe("factory SQLite state", () => {
 			state.close();
 		});
 
-		test("the cancel of the route's item ends the cycle it routed from (ADR 0069)", () => {
+		test("the cancel of the route's item takes the mark on the turn (ADR 0072)", () => {
 			const state = openFactoryState(":memory:");
 			state.initializeSources([sourceA]);
 			state.applyFetch(sourceA, success([fetched("github:github.com:I_6"), fetched()]));
-			const { identity, attemptId } = settledTurn(state);
+			const { identity, attemptId } = settledTurn(state, routeOutcome("github:github.com:I_6"));
 			expect(
 				state.applyCompletionDecision({
 					ticketIdentity: identity,
@@ -1187,7 +1212,7 @@ describe("factory SQLite state", () => {
 					decidedAt: "2026-08-31T11:10:00Z",
 				}),
 			).toBe(true);
-			expect(state.ticketState(identity)).toBe("queued");
+			expect(state.ticketState(identity)).toBe("open");
 			expect(
 				state.enqueueWork({
 					ticketIdentity: "github:github.com:I_6",
@@ -1197,10 +1222,11 @@ describe("factory SQLite state", () => {
 					previousMessage: "settled the turn",
 				}),
 			).toEqual({ ok: true });
-			// The operator removes the item: the row leaves, and the source
-			// ends its cycle in the same write. The ticket rests open with the
-			// cycle counted once, the way a close ends it, and the decision the
-			// ask recorded stands on the trace.
+			// The operator removes the item: the row leaves, and the source's
+			// trace takes the removal's mark, the way the re-fired skip's mark
+			// stands. The source's cycle already ended at the ask, so the
+			// removal takes the item alone, and the decision the ask recorded
+			// stands on the trace.
 			expect(state.cancelWorkItem("github:github.com:I_6")).toBe(true);
 			const settled = ticketState(state, identity);
 			if (settled === undefined) throw new Error("the settled ticket left the list");
@@ -1208,6 +1234,7 @@ describe("factory SQLite state", () => {
 			expect(settled.workCycle).toBe(2);
 			expect(state.workQueue()).toHaveLength(0);
 			expect(state.lastCompletion(identity)?.decision).toBe("handed-off");
+			expect(state.lastCompletion(identity)?.transition?.routeRemoved).toBe(true);
 			// The cancelled start may enqueue again for its ticket.
 			expect(
 				state.enqueueWork({
@@ -1221,7 +1248,7 @@ describe("factory SQLite state", () => {
 			state.close();
 		});
 
-		test("a cancel keeps the ticket's state when the row names no route (ADR 0069)", () => {
+		test("a cancel takes the item alone when the row names no route (ADR 0072)", () => {
 			const state = openFactoryState(":memory:");
 			state.initializeSources([sourceA]);
 			state.applyFetch(sourceA, success([fetched("github:github.com:I_6"), fetched()]));
@@ -1235,7 +1262,7 @@ describe("factory SQLite state", () => {
 				}),
 			).toBe(true);
 			// The ticket's own open-origin wait stands beside the route's item
-			// under the position's name.
+			// under the ticket's own name.
 			expect(
 				state.enqueueWork({
 					ticketIdentity: identity,
@@ -1254,23 +1281,24 @@ describe("factory SQLite state", () => {
 				}),
 			).toEqual({ ok: true });
 			// The operator removes the ticket's own wait: the row leaves, the
-			// route's item stands, and the ticket keeps the queued wait its
-			// route holds.
+			// route's item stands, and no mark is written: the row named no
+			// route, so the removal is the item's alone.
 			expect(state.cancelWorkItem(identity)).toBe(true);
 			expect(state.workQueue()).toHaveLength(1);
-			expect(state.ticketState(identity)).toBe("queued");
-			expect(ticketState(state, identity)?.workCycle).toBe(1);
+			expect(state.ticketState(identity)).toBe("open");
+			expect(ticketState(state, identity)?.workCycle).toBe(2);
+			expect(state.lastCompletion(identity)?.transition?.routeRemoved).toBeUndefined();
 			// A second cancel answers false and moves nothing.
 			expect(state.cancelWorkItem(identity)).toBe(false);
-			expect(state.ticketState(identity)).toBe("queued");
+			expect(state.ticketState(identity)).toBe("open");
 			state.close();
 		});
 
-		test("a cancel of a route whose source already left the wait moves nothing (ADR 0069)", () => {
+		test("a cancel of a route whose turn already decided moves no cycle (ADR 0072)", () => {
 			const state = openFactoryState(":memory:");
 			state.initializeSources([sourceA]);
 			state.applyFetch(sourceA, success([fetched("github:github.com:I_6"), fetched()]));
-			const { identity, attemptId } = settledTurn(state);
+			const { identity, attemptId } = settledTurn(state, routeOutcome("github:github.com:I_6"));
 			expect(
 				state.applyCompletionDecision({
 					ticketIdentity: identity,
@@ -1288,8 +1316,9 @@ describe("factory SQLite state", () => {
 					previousMessage: "the route",
 				}),
 			).toEqual({ ok: true });
-			// The close ends the cycle the turn routed from, and the route's
-			// item stands until the close takes it.
+			// The close on the decided turn stands a no-op: the cycle already
+			// ended at the ask, and the route's item stands until the cancel
+			// takes it.
 			expect(
 				state.applyCompletionDecision({
 					ticketIdentity: identity,
@@ -1297,25 +1326,25 @@ describe("factory SQLite state", () => {
 					decision: "closed",
 					decidedAt: "2026-08-31T11:20:00Z",
 				}),
-			).toBe(true);
+			).toBe(false);
 			expect(ticketState(state, identity)?.state).toBe("open");
 			expect(ticketState(state, identity)?.workCycle).toBe(2);
 			// The cancel that lands on the item after the move takes the row
-			// and nothing else.
+			// and takes the mark on the turn's trace.
 			expect(state.cancelWorkItem("github:github.com:I_6")).toBe(true);
 			expect(state.workQueue()).toHaveLength(0);
 			expect(ticketState(state, identity)?.workCycle).toBe(2);
+			expect(state.lastCompletion(identity)?.transition?.routeRemoved).toBe(true);
 			state.close();
 		});
 
-		test("the cancel of the merge's item settles the route without a work cycle (ADR 0068, ADR 0069)", () => {
+		test("the cancel of the merge's item takes the item alone (ADR 0068, ADR 0072)", () => {
 			const state = openFactoryState(":memory:");
 			state.initializeSources([sourceA]);
 			state.applyFetch(sourceA, success([fetched()]));
 			const identity = "github:github.com:I_5";
-			// The merge route stands: the ticket waits in queued for its
-			// pickup, the wait the route's ask lands.
-			expect(state.queuePlaneActionRoute(identity)).toBe(true);
+			// The merge's wait stands in the Work queue under the ticket's own
+			// name, and the ticket keeps its open state behind it.
 			expect(
 				state.enqueuePlaneActionWork({
 					ticketIdentity: identity,
@@ -1323,10 +1352,9 @@ describe("factory SQLite state", () => {
 					taskType: "merge",
 				}),
 			).toEqual({ ok: true });
-			// The operator removes the item: the row leaves, and the route
-			// settles back to open without a work cycle, the way the run's
-			// answer does. The cap counts the work a ticket carried, not its
-			// merges, and the choice to run or to cancel changes nothing.
+			// The operator removes the item: the row leaves, and the ticket
+			// keeps the state it wears: the row named no route, so no mark is
+			// written and no cycle moves.
 			expect(state.cancelWorkItem(identity)).toBe(true);
 			expect(state.ticketState(identity)).toBe("open");
 			expect(ticketState(state, identity)?.workCycle).toBe(1);
@@ -1334,11 +1362,11 @@ describe("factory SQLite state", () => {
 			state.close();
 		});
 
-		test("the cancel of the merge's item still ends the cycle the route named (ADR 0069)", () => {
+		test("the cancel of the merge's item marks the route and leaves the source (ADR 0069, ADR 0072)", () => {
 			const state = openFactoryState(":memory:");
 			state.initializeSources([sourceA]);
 			state.applyFetch(sourceA, success([fetched("github:github.com:I_6"), fetched()]));
-			const { identity, attemptId } = settledTurn(state);
+			const { identity, attemptId } = settledTurn(state, routeOutcome("github:github.com:I_6"));
 			expect(
 				state.applyCompletionDecision({
 					ticketIdentity: identity,
@@ -1347,11 +1375,13 @@ describe("factory SQLite state", () => {
 					decidedAt: "2026-08-31T11:10:00Z",
 				}),
 			).toBe(true);
-			expect(state.ticketState(identity)).toBe("queued");
+			// The auto merge ends the source's cycle at the ask, the way the
+			// auto route does.
+			expect(state.ticketState(identity)).toBe("open");
+			expect(ticketState(state, identity)?.workCycle).toBe(2);
 			// The merge's item crosses to the fixing pull request's ticket:
-			// its wait stands under that ticket's name, beside the settled
-			// ticket's own wait.
-			expect(state.queuePlaneActionRoute("github:github.com:I_6")).toBe(true);
+			// its wait stands under that ticket's name, beside the source's
+			// row.
 			expect(
 				state.enqueuePlaneActionWork({
 					ticketIdentity: "github:github.com:I_6",
@@ -1361,9 +1391,8 @@ describe("factory SQLite state", () => {
 				}),
 			).toEqual({ ok: true });
 			// The operator removes the item: the row leaves, the merge's own
-			// wait settles back to open without a work cycle, and the route's
-			// source ends its cycle with the count, the way a cancelled
-			// handoff route does.
+			// wait keeps the state it wears, and the source's trace takes the
+			// removal's mark, the way the cancelled handoff route does.
 			expect(state.cancelWorkItem("github:github.com:I_6")).toBe(true);
 			expect(state.ticketState("github:github.com:I_6")).toBe("open");
 			expect(ticketState(state, "github:github.com:I_6")?.workCycle).toBe(1);
@@ -1371,6 +1400,7 @@ describe("factory SQLite state", () => {
 			if (settled === undefined) throw new Error("the settled ticket left the list");
 			expect(settled.state).toBe("open");
 			expect(settled.workCycle).toBe(2);
+			expect(state.lastCompletion(identity)?.transition?.routeRemoved).toBe(true);
 			expect(state.workQueue()).toHaveLength(0);
 			state.close();
 		});
@@ -1394,23 +1424,18 @@ describe("factory SQLite state", () => {
 				/"UPDATE tickets SET[^"]*work_cycle[^"]*"/gu,
 			),
 		].map((match) => match[0]);
-		// The ends: the decided close of a settled turn, the in-flight Close
-		// that writes no trace, the close of a turn the route decided - the
-		// last runs only from awaiting or queued, so it too moves the number on
-		// an end, exactly once - the route's start that ends the settled
-		// ticket's cycle on a different ticket (ADR 0067), which runs only from
-		// queued - the two settles of a route item lost without a run,
-		// the operator's cancel (ADR 0069) and the pickup's drop of the plane
-		// action's row (ADR 0069, beside ADR 0068), each of which ends the cycle
-		// the route named and runs only from queued - and the source's mute that
-		// settles the queued tickets whose route died with its items (ADR 0070),
-		// which runs the same queued-end statement, only from queued.
+		// The ends: the route's ask that ends the settled turn's cycle in the
+		// same write that lands the decision, guarded on awaiting (ADR 0072),
+		// the decided close of a settled turn, guarded on awaiting, the
+		// abandoned close that writes no trace, and the in-flight Close that
+		// writes no trace. The heal-at-open migration of a file still carrying
+		// the retired state stands alone on the state gate (ADR 0072).
 		expect([...new Set(statements)].sort()).toEqual([
-			"\"UPDATE tickets SET state = 'open', work_cycle = work_cycle + 1 WHERE identity = ? AND state = 'queued'\"",
-			"\"UPDATE tickets SET state = 'open', work_cycle = work_cycle + 1 WHERE identity = ? AND state IN ('awaiting', 'queued')\"",
+			"\"UPDATE tickets SET state = 'open', work_cycle = work_cycle + 1 WHERE identity = ? AND state = 'awaiting'\"",
 			"\"UPDATE tickets SET state = 'open', work_cycle = work_cycle + 1 WHERE identity = ?\"",
+			"\"UPDATE tickets SET state = 'open', work_cycle = work_cycle + 1 WHERE state = 'queued'\"",
 		]);
-		expect(statements.length).toBe(7);
+		expect(statements.length).toBe(5);
 		// A cycle's moves that end nothing hold the number: the handoff that starts
 		// a cycle, the running mark, a settled turn, and a reclaimed handoff.
 		const state = openFactoryState(":memory:");
@@ -2793,7 +2818,6 @@ describe("factory SQLite state", () => {
 			expect(state.setSourceMuted("issues-a", true)).toEqual({
 				ok: true,
 				removed: 0,
-				settled: 0,
 			});
 			expect(state.projectedTickets([], "implement")[0]).toEqual(
 				expect.objectContaining({
@@ -2817,7 +2841,6 @@ describe("factory SQLite state", () => {
 			expect(reopened.setSourceMuted("issues-a", false)).toEqual({
 				ok: true,
 				removed: 0,
-				settled: 0,
 			});
 			expect(reopened.projectedTickets([], "implement")[0]).toEqual(
 				expect.objectContaining({ muted: false, mutedAt: null }),
@@ -2940,9 +2963,9 @@ describe("factory SQLite state", () => {
 					decidedAt: "2026-08-31T11:05:00Z",
 				}),
 			).toBe(true);
-			expect(state.ticketState(routed.identity)).toBe("queued");
-			// The route's item lands with the decision, and it leaves, so the
-			// queued wait stands with nothing to start it.
+			// The ask ends the cycle in the same write: the routed ticket rests
+			// open, and the route's item lands with the decision.
+			expect(state.ticketState(routed.identity)).toBe("open");
 			expect(
 				state.enqueueWork({
 					ticketIdentity: routed.identity,
@@ -2952,26 +2975,24 @@ describe("factory SQLite state", () => {
 					previousMessage: "",
 				}),
 			).toEqual({ ok: true });
-			expect(state.removeWorkflowRouteItem(routed.identity)).toBe(true);
+			expect(state.removeWorkflowRouteItem(routed.identity)).toBe(1);
 			const cycleBefore = state
 				.projectedTickets([], "implement")
 				.find((ticket) => ticket.identity === routed.identity)?.workCycle;
-			// The act and its settle are one write: the waiting start is removed
-			// and the dead-route queued ticket settles to open, cycle incremented.
+			// The act is one write: the waiting start is removed. The routed
+			// ticket's cycle already ended at its ask, and its item left already,
+			// so the mute takes nothing from it.
 			expect(state.setSourceMuted("issues-a", true)).toEqual({
 				ok: true,
 				removed: 1,
-				settled: 1,
 			});
 			expect(state.workQueue()).toEqual([]);
 			expect(state.ticketState(rest.identity)).toBe("open");
-			// The routed ticket settled to open with its cycle incremented, the way
-			// the operator's own removal of the item already settles.
 			expect(state.ticketState(routed.identity)).toBe("open");
 			const routedAfter = state
 				.projectedTickets([], "implement")
 				.find((ticket) => ticket.identity === routed.identity);
-			expect(routedAfter?.workCycle).toBe((cycleBefore ?? 0) + 1);
+			expect(routedAfter?.workCycle).toBe(cycleBefore);
 			// And the muted ticket's resting row is nowhere in the active view.
 			expect(state.visibleTickets([], "implement")).toEqual([]);
 			state.close();

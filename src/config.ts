@@ -233,6 +233,14 @@ export interface TransitionOutcome {
 	 * records none.
 	 */
 	refired?: boolean;
+	/**
+	 * Whether the operator removed the route this turn's decision routed
+	 * (ADR 0072): the removal takes the route's Work queue item and stands
+	 * the mark on the outcome the trace holds, the way the re-fired skip's
+	 * mark stands. A fire records none, and the machine's re-offer skips a
+	 * trace that carries it.
+	 */
+	routeRemoved?: boolean;
 }
 
 export type GitHubSourceKind =

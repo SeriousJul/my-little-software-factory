@@ -713,21 +713,31 @@ describe("the Work queue section", () => {
 	});
 
 	/**
-	 * The Queue wait of a route (ADR 0064): the settled ticket whose route
-	 * waits in the queue keeps its awaiting state, and its row wears the
-	 * `queued` badge in the state badge's place, the way the open ticket's
-	 * waiting start already does.
+	 * The Queue wait of a route (ADR 0064, ADR 0072): the ask ends the
+	 * source's cycle on its own write, and the wait is the position's own
+	 * fact: the item the ask enqueues names its position, and the position's
+	 * row wears the `queued` badge in the state badge's place, the way the
+	 * open ticket's waiting start already does.
 	 */
-	test("the settled ticket whose route waits wears the queued badge (ADR 0064)", async () => {
+	test("the route's wait wears the queued badge on the position's row (ADR 0072)", async () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
 		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
 		state.setGroupingAxis("tickets", "none");
 		const { source, runner } = queuedFixture(state, false);
 		const outcome = success(twoTickets());
-		// The first ticket's turn rests awaiting its decision: the settled
-		// state the route stands on. The second ticket's own durable claim
-		// holds the factory's one seat, so the queued route waits.
-		seedAwaitingTurn(state, outcome, FIRST);
+		// The first ticket's turn settles and routes to the second's position:
+		// the decision records at the ask and ends the source's cycle in the
+		// same write, so the source rests open. The second ticket's own
+		// durable claim holds the factory's one seat, so the route waits.
+		const attemptId = seedAwaitingTurn(state, outcome, FIRST);
+		expect(
+			state.applyCompletionDecision({
+				ticketIdentity: FIRST,
+				handoffId: attemptId,
+				decision: "handed-off",
+				decidedAt: "2026-08-31T11:10:00Z",
+			}),
+		).toBe(true);
 		const held = state.claimHandoff(SECOND, baseChoice("pi", "live-worktree", "implement"), "open");
 		if (!held.ok) throw new Error(held.reason);
 		const enqueued = state.enqueueWork({
@@ -744,18 +754,18 @@ describe("the Work queue section", () => {
 					source.settle(outcome);
 					const frame = await awaitFrame(
 						setup,
-						(f) => f.includes("Work") && frameText(f).includes("awaiting: 1"),
-						"the settled ticket's count",
+						(f) => f.includes("Work") && f.includes("waiting: 1"),
+						"the queue's wait",
 					);
 					const rows = rowsOf(stripAnsi(frame));
-					// The settled ticket keeps its awaiting state, and its row
-					// wears the queued badge in the state badge's place.
+					// The source rests open behind the wait: its row wears the
+					// open badge, and no awaiting stands.
 					const settledRow = rows.find((row) => row.includes("Add a webhook retry policy"));
-					expect(settledRow).toContain("[queued]");
-					// The position ticket without a waiting start of its own
-					// keeps its open badge.
-					const resting = rows.find((row) => row.includes("Close the stale"));
-					expect(resting).toContain("[open]");
+					expect(settledRow).toContain("[open]");
+					// The wait is the position's own fact: its row wears the
+					// queued badge in the state badge's place.
+					const positionRow = rows.find((row) => row.includes("Close the stale"));
+					expect(positionRow).toContain("[queued]");
 				},
 				state,
 				source,
@@ -857,23 +867,40 @@ describe("the Work queue section", () => {
 	});
 
 	/**
-	 * ADR 0069: the operator's Delete on a route item ends the cycle the turn
-	 * routed from. The row leaves the queue, and the ticket the row named as
-	 * the route's source rests `open` with the cycle counted once, so the
-	 * `[queued]` badge leaves the row in the same frame the item leaves the
-	 * queue, and the decision the ask recorded stands on the trace.
+	 * ADR 0072: the cycle already ended at the ask, so the operator's Delete
+	 * on a route item takes the item and marks the route on the turn's trace,
+	 * the way the re-fired skip marks its trace. The row leaves the queue, and
+	 * the `[queued]` badge the position's row wore leaves in the same frame
+	 * the item leaves, while the source keeps the open state the ask left
+	 * and the decision the ask recorded.
 	 */
-	test("Delete on the route item ends the settled ticket's cycle (ADR 0069)", async () => {
+	test("Delete on the route item takes the item and marks the turn (ADR 0072)", async () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
 		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
 		state.setGroupingAxis("tickets", "none");
 		const { source, runner } = queuedFixture(state, false);
 		const outcome = success(twoTickets());
 		// The first ticket's turn settles and routes to the second's position:
-		// the decision records at the ask and moves the ticket to the queued
-		// wait, and the second ticket's durable claim holds the one seat, so
-		// the route's item waits in the queue.
-		const attemptId = seedAwaitingTurn(state, outcome, FIRST);
+		// the decision records at the ask and ends the source's cycle in the
+		// same write, and the second ticket's durable claim holds the one
+		// seat, so the route's item waits in the queue. The settled turn's
+		// transition carries the route the ask decides, which the Delete's
+		// mark lands on.
+		const attemptId = seedAwaitingTurn(state, outcome, FIRST, {
+			fired: true,
+			when: null,
+			reason: "",
+			ticketFacts: [],
+			pullRequestFacts: [],
+			autoAdvance: false,
+			ticketWrite: null,
+			pullRequestWrite: null,
+			pullRequestIdentity: null,
+			pullRequestKey: null,
+			writeFailure: "",
+			positionTaskType: "implement",
+			positionTicketIdentity: SECOND,
+		});
 		expect(
 			state.applyCompletionDecision({
 				ticketIdentity: FIRST,
@@ -901,8 +928,8 @@ describe("the Work queue section", () => {
 						(f) => f.includes("Work") && f.includes("waiting: 1"),
 						"the queue's wait",
 					);
-					// The settled ticket stands queued while its route waits: the
-					// badge is the state badge, the wait its own row.
+					// The position's row stands with the queued badge while the
+					// route waits, and the source rests open behind it.
 					expect(frameText(waiting)).toContain("[queued]");
 					// The operator's Delete takes the route's item.
 					await clickWorkHeader(setup);
@@ -919,14 +946,15 @@ describe("the Work queue section", () => {
 					);
 					expect(row).toContain("[open]");
 					expect(frameText(after)).not.toContain("[queued]");
-					// The cycle counted once, and the decision stands where the
-					// ask put it.
+					// The cycle ended once at the ask, the decision stands where
+					// the ask put it, and the removal's mark stands on the trace.
 					const ticket = state
 						.visibleTickets([], "implement")
 						.find((candidate) => candidate.identity === FIRST);
 					expect(ticket?.state).toBe("open");
 					expect(ticket?.workCycle).toBe(2);
 					expect(state.lastCompletion(FIRST)?.decision).toBe("handed-off");
+					expect(state.lastCompletion(FIRST)?.transition?.routeRemoved).toBe(true);
 				},
 				state,
 				source,
@@ -1154,14 +1182,14 @@ describe("the Work queue section", () => {
 					expect(frameText(queued)).toContain("waiting: 1");
 					expect(runner.commands().filter((c) => c.startsWith("herdr agent start"))).toEqual([]);
 					// The item carries the route's origin and the edge's resolved
-					// choice, and the ask moves the ticket to the wait it wears
-					// (ADR 0067): queued while its route stands.
+					// choice, and the ask ends the ticket's cycle in the same
+					// write (ADR 0072): open behind the item it waits on.
 					const items = state.workQueue();
 					expect(items.map(workQueueIdentityOf)).toEqual([FIRST]);
 					if (items[0]?.kind !== "handoff") throw new Error("the waiting item is not a handoff");
 					expect(items[0].origin).toBe("workflow");
 					expect(items[0].choice.taskType).toBe("review");
-					expect(state.ticketState(FIRST)).toBe("queued");
+					expect(state.ticketState(FIRST)).toBe("open");
 					// The decision records at the ask (ADR 0064): the routed
 					// handoff records its handed-off decision the moment it takes
 					// the queue, not when a seat frees it.

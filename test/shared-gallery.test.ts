@@ -102,7 +102,6 @@ describe("the shared control gallery", () => {
 			"close-panel-closing",
 			"ticket-close",
 			"ticket-close-live-worktree",
-			"ticket-close-queued",
 			"recovery-panel-opening",
 			"recovery-panel-missing",
 			"recovery-panel-failed",
@@ -174,8 +173,9 @@ describe("the shared control gallery", () => {
 		expect(text).toContain("▸ acme/billing 2 held 1");
 		// The cursor rests on a Group header, and the marker column reads the
 		// same at either kind of row.
-		expect(text).toContain("❯ ▾ implement 4 held 1");
-		// The routed ticket's row wears its wait's own badge (ADR 0067).
+		expect(text).toContain("❯ ▾ implement 3 held 1");
+		// The routed ticket's row stands open and wears its wait's own badge
+		// (ADR 0072): the ask ended the cycle, and the wait is the item's.
 		expect(text).toContain("[queued]");
 		// The axis names itself in the hint the bar carries, and the Message
 		// lines are the words the press leaves on the line.

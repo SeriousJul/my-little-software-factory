@@ -358,20 +358,70 @@ describe("the attempt record in the state", () => {
 		state.close();
 	});
 
-	test("the queued route settles the ticket to open without a work cycle", () => {
+	test("the merge's decision ends the settled turn's cycle, the way the route's does (ADR 0072)", () => {
 		const state = planeState();
-		const before = state.visibleTickets(PLANE_WORKFLOW_STATES, PLANE_CONFIG.defaultTaskType);
-		expect(before[0].state).toBe("open");
-		expect(before[0].workCycle).toBe(1);
-
-		expect(state.queuePlaneActionRoute(pullIdentity)).toBe(true);
-		expect(state.ticketState(pullIdentity)).toBe("queued");
-
-		expect(state.settleQueuedPlaneActionRoute(pullIdentity)).toBe(true);
-		const after = state.visibleTickets(PLANE_WORKFLOW_STATES, PLANE_CONFIG.defaultTaskType);
-		expect(after[0].state).toBe("open");
-		// No work cycle ran for the action: the count never moved.
-		expect(after[0].workCycle).toBe(1);
+		withIssueSource(state);
+		const claim = state.claimHandoff(
+			issueIdentity,
+			{
+				agentType: "pi",
+				environment: "live-worktree",
+				taskType: "rework",
+				model: "",
+				thinking: "",
+				contextWindow: "",
+			},
+			"open",
+		);
+		if (!claim.ok) throw new Error(claim.reason);
+		state.settleHandoff(claim.claim.attemptId, true, undefined, {
+			paneId: "pane-1",
+			tabId: "tab-1",
+			workspaceId: "ws-1",
+		});
+		state.settleTurn({
+			ticketIdentity: issueIdentity,
+			handoffId: claim.claim.attemptId,
+			taskType: "rework",
+			agentType: "pi",
+			message: "The turn is done.",
+			turnLog: [{ kind: "text", text: "The turn is done." }],
+			completedAt: "2026-08-31T11:00:00Z",
+			cause: "completed",
+			transition: {
+				fired: false,
+				when: null,
+				reason: "",
+				ticketFacts: [],
+				pullRequestFacts: [],
+				autoAdvance: true,
+				ticketWrite: null,
+				pullRequestWrite: null,
+				pullRequestIdentity: null,
+				pullRequestKey: null,
+				writeFailure: "",
+				positionTaskType: "merge",
+				positionTicketIdentity: pullIdentity,
+			},
+		});
+		expect(state.ticketState(issueIdentity)).toBe("awaiting");
+		// The merge's ask records the decision on the settled turn, and the
+		// cycle ends in the same write, the way the route's ask does: the
+		// wait stands on the item, not on a ticket state.
+		expect(
+			state.applyCompletionDecision({
+				ticketIdentity: issueIdentity,
+				handoffId: claim.claim.attemptId,
+				decision: "auto-merged",
+				decidedAt: "2026-08-31T11:10:00Z",
+			}),
+		).toBe(true);
+		expect(state.ticketState(issueIdentity)).toBe("open");
+		const ticket = state
+			.visibleTickets(PLANE_WORKFLOW_STATES, PLANE_CONFIG.defaultTaskType, "all")
+			.find((candidate) => candidate.identity === issueIdentity);
+		expect(ticket?.workCycle).toBe(2);
+		expect(state.lastCompletion(issueIdentity)?.decision).toBe("auto-merged");
 		state.close();
 	});
 });
@@ -687,7 +737,7 @@ describe("the dispatch's ask and pickup", () => {
 		expect(attempt?.outcome).toBe("merged");
 		expect(attempt?.decision).toBe("auto-merged");
 		expect(attempt?.transition).not.toBeNull();
-		// The route settled back to open without a work cycle.
+		// The position kept the state it wears: the merge runs no work cycle.
 		expect(state.ticketState(pullIdentity)).toBe("open");
 		const ticket = state.visibleTickets(PLANE_WORKFLOW_STATES, PLANE_CONFIG.defaultTaskType)[0];
 		expect(ticket.workCycle).toBe(1);
@@ -725,9 +775,10 @@ describe("the dispatch's ask and pickup", () => {
 		expect(events).toContain(
 			`notice: the merge of "${pullTitle}" waits in the Work queue; the queue is paused`,
 		);
-		// The item stands: the route took the queued wait, and the second
-		// ask refuses with the one-item rule.
-		expect(state.ticketState(pullIdentity)).toBe("queued");
+		// The item stands behind the pause, and the position keeps the state
+		// it wears (ADR 0072), so the second ask refuses with the one-item
+		// rule.
+		expect(state.ticketState(pullIdentity)).toBe("open");
 		const queue = state.workQueue();
 		expect(queue).toHaveLength(1);
 		const item = queue[0];
@@ -954,7 +1005,9 @@ describe("the dispatch's ask and pickup", () => {
 		expect(queue[1]?.kind).toBe("plane-action");
 		expect(state.latestPlaneActionAttempt(pullIdentity)).toBeNull();
 		expect(runner.commands()).toEqual([]);
-		expect(state.ticketState(pullIdentity)).toBe("queued");
+		// The item stands behind the held seats, and the position keeps the
+		// state it wears (ADR 0072).
+		expect(state.ticketState(pullIdentity)).toBe("open");
 		state.close();
 	});
 
@@ -1026,11 +1079,11 @@ describe("the dispatch's ask and pickup", () => {
 			taskType: "merge",
 		});
 		expect(result).toEqual({ ok: true });
-		// Both waits stand: the item's own ticket took the queued wait, and
-		// the decision the ask landed moved the source from awaiting to
-		// queued, the way the route's decision does.
-		expect(state.ticketState(pullIdentity)).toBe("queued");
-		expect(state.ticketState(issueIdentity)).toBe("queued");
+		// Both waits stand: the ask ended the source's cycle with the decision
+		// it landed (ADR 0072), the way the route's decision does, and the
+		// item's own ticket keeps the state it wears.
+		expect(state.ticketState(pullIdentity)).toBe("open");
+		expect(state.ticketState(issueIdentity)).toBe("open");
 		const tickets = state.visibleTickets(
 			PLANE_WORKFLOW_STATES,
 			PLANE_CONFIG.defaultTaskType,
@@ -1040,22 +1093,23 @@ describe("the dispatch's ask and pickup", () => {
 		if (issueBefore === undefined) throw new Error("the issue is not in the read");
 		const cycleBefore = issueBefore.workCycle;
 		// The pickup drops the item: the task type's action form is gone from
-		// the config, and the drop settles both waits it leaves.
+		// the config, and the row leaves: no settle stands for the machine's
+		// drop, the waits are the items', not the tickets'.
 		config = { ...PLANE_CONFIG, taskTypes: { ...PLANE_TASK_TYPES, merge: { template: "x" } } };
 		state.setQueuePaused(false);
 		await dispatch.pickupWorkQueue();
 		expect(state.workQueue()).toEqual([]);
 		expect(state.latestPlaneActionAttempt(pullIdentity)).toBeNull();
 		expect(runner.commands()).toEqual([]);
-		// The waits settle: the item's ticket back to open without a work
-		// cycle, and the route's source open with its cycle counted once,
-		// the way the cancel settles the same row (ADR 0069).
+		// The cycles hold: the source's cycle ended at its ask, the position's
+		// never ran, and the machine's drop writes no mark.
 		expect(state.ticketState(pullIdentity)).toBe("open");
 		expect(state.ticketState(issueIdentity)).toBe("open");
 		const after = state.visibleTickets(PLANE_WORKFLOW_STATES, PLANE_CONFIG.defaultTaskType, "all");
-		expect(after.find((t) => t.identity === issueIdentity)?.workCycle).toBe(cycleBefore + 1);
+		expect(after.find((t) => t.identity === issueIdentity)?.workCycle).toBe(cycleBefore);
 		const pullAfter = after.find((t) => t.identity === pullIdentity);
 		expect(pullAfter?.workCycle).toBe(tickets.find((t) => t.identity === pullIdentity)?.workCycle);
+		expect(state.lastCompletion(issueIdentity)?.transition?.routeRemoved).toBeUndefined();
 		expect(events).toContain(
 			`warning: the merge of "${pullTitle}" was not run: task type merge carries no plane action`,
 		);
@@ -1314,7 +1368,7 @@ describe("the decision screen's merge", () => {
 	});
 
 	test(
-		"the outcome stands on the screen where the row stood",
+		"the outcome settles on the list, and the screen fell back at the ask (ADR 0072)",
 		async () => {
 			// A runner that delays the pull request's fresh read, so the window
 			// between the attempt's record and the route's settle stands long
@@ -1363,13 +1417,17 @@ describe("the decision screen's merge", () => {
 					);
 					await pressArrow(setup, "down", "the Goto row", () => true);
 					await pressArrow(setup, "down", "the merge row's focus", mergeRowFocused);
-					// The confirm closes the modal: the ticket keeps its decision's
-					// wait in queued, and the ask's line stands on the Message line.
-					await press(setup, "return", "the ask's line", (f) =>
+					// The confirm ended the ticket's cycle in the same write (ADR
+					// 0072): the ticket rests open, the wait stands in the Work
+					// queue, and the Decision screen - an awaiting screen again -
+					// fell back to the list with the ask's line on the Message line.
+					const fallback = await press(setup, "return", "the ask's line", (f) =>
 						messageRowOf(f).includes(`the merge of "${pullTitle}" is in the Work queue`),
 					);
+					expect(fallback).not.toContain("Decision:");
+					expect(state.ticketState(pullIdentity)).toBe("open");
 					// The attempt stands in the state before the fire's fresh read
-					// answers, and the route's settle waits on that read.
+					// answers, and the run's settle waits on that read.
 					const attemptDeadline = Date.now() + 5000;
 					for (;;) {
 						if (state.latestPlaneActionAttempt(pullIdentity) !== null) break;
@@ -1377,16 +1435,11 @@ describe("the decision screen's merge", () => {
 							throw new Error("the attempt did not stand in the state");
 						await new Promise((resolve) => setTimeout(resolve, 20));
 					}
-					// The decision screen opens again on the queued ticket: the
-					// outcome stands where the row stood, and no row waits for a
-					// confirm.
-					const frame = await press(
-						setup,
-						"return",
-						"the outcome's line",
-						(f) => f.includes("Decision:") && f.includes("the merge landed"),
-					);
-					expect(frame).not.toContain("Merge pull request");
+					// The run settles on the list, the way every other settle does:
+					// the outcome's line stands, and no decision screen stands for
+					// the open ticket.
+					const list = await settle(setup);
+					expect(list).not.toContain("Decision:");
 				},
 				WIDTH,
 				30,
@@ -1471,7 +1524,7 @@ describe("the auto top-up merge", () => {
 		expect(attempt).not.toBeNull();
 		expect(attempt?.outcome).toBe("merged");
 		expect(attempt?.decision).toBe("auto-merged");
-		// The route settled back to open without a work cycle.
+		// The position kept the state it wears: the merge runs no work cycle.
 		expect(state.ticketState(pullIdentity)).toBe("open");
 		const ticket = state.visibleTickets(PLANE_WORKFLOW_STATES, PLANE_CONFIG.defaultTaskType)[0];
 		expect(ticket.workCycle).toBe(1);

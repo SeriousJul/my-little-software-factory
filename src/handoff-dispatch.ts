@@ -527,10 +527,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 				ok: false,
 				reason: `task type ${intent.taskType} carries no plane action`,
 			});
-		const check = this.planeActionClaimCheck(
-			intent.ticketIdentity,
-			intent.routeFromIdentity ?? null,
-		);
+		const check = this.planeActionClaimCheck(intent.ticketIdentity);
 		if (!check.ok) {
 			this.log?.warn(`merge refused: ${check.reason} (${this.ticketName(intent.ticketIdentity)})`);
 			return Promise.resolve({ ok: false, reason: check.reason });
@@ -553,9 +550,9 @@ class HandoffDispatchModule implements HandoffDispatch {
 		if (intent.onStarted !== undefined)
 			this.intentOnStarted.set(intent.ticketIdentity, intent.onStarted);
 		// The decision word lands at the ask, the way the route's does (ADR
-		// 0064): the settled turn leaves awaiting for queued in the same write
-		// that lands the decision, and the open position's wait lands on the
-		// open state alone.
+		// 0064): the settled turn ends its cycle in the same write that lands
+		// the decision (ADR 0072), and the open position keeps its open state,
+		// the wait standing on the item alone.
 		this.recordPlaneActionDecision(intent);
 		this.log?.info(
 			`merge queued: ${this.ticketName(intent.ticketIdentity)} (origin ${intent.origin})`,
@@ -580,31 +577,20 @@ class HandoffDispatchModule implements HandoffDispatch {
 	}
 
 	/**
-	 * The route's gates for the plane action's ask and its pickup (ADR 0068):
-	 * the ticket still exists, and the route still stands - the settled ticket
-	 * the route continues keeps its decision's wait, or the ticket itself does
-	 * when the route stays on its own position. A ticket that closed the turn,
-	 * back to open, or moved on leaves the route stale, the way the handoff's
-	 * pickup reads it.
+	 * The position's gates for the plane action's ask and its pickup (ADR
+	 * 0068, ADR 0072): the ticket still exists, and the position the action
+	 * runs on stands open or awaiting, the way the continuation's position
+	 * check reads it. The claim does not ask the source ticket's state
+	 * whether the route stands: the source ends its cycle at the ask and rests
+	 * open behind the wait, and the wait is the item's, not a ticket state.
 	 */
 	private planeActionClaimCheck(
 		ticketIdentity: string,
-		routeFromIdentity: string | null,
 	): { ok: true } | { ok: false; reason: string } {
 		const currentState = this.state.ticketState(ticketIdentity);
 		if (currentState === undefined) return { ok: false, reason: "the ticket no longer exists" };
-		const routeStillStands =
-			routeFromIdentity !== null
-				? ["awaiting", "queued"].includes(this.state.ticketState(routeFromIdentity) ?? "")
-				: ["open", "awaiting", "queued"].includes(currentState);
-		if (!routeStillStands)
-			return {
-				ok: false,
-				reason:
-					routeFromIdentity !== null
-						? `the settled ticket ${this.ticketName(routeFromIdentity)} is now ${this.state.ticketState(routeFromIdentity) ?? "gone"}`
-						: `the ticket is now ${currentState}`,
-			};
+		if (currentState !== "open" && currentState !== "awaiting")
+			return { ok: false, reason: `the ticket is now ${currentState}` };
 		return { ok: true };
 	}
 
@@ -615,7 +601,8 @@ class HandoffDispatchModule implements HandoffDispatch {
 	 * claim reads at the claim, and reuses the state's one decision writer:
 	 * the writer takes the first decision on a turn, so a re-asked route
 	 * re-lands the same decision as a no-op. A route with no settled turn has
-	 * no pending row to land on, and its wait lands on the open state alone.
+	 * no pending row to land on, and the open position keeps its open state,
+	 * the wait standing on the item alone (ADR 0072).
 	 */
 	private recordPlaneActionDecision(intent: PlaneActionIntent): void {
 		if (intent.origin === "workflow") {
@@ -629,7 +616,6 @@ class HandoffDispatchModule implements HandoffDispatch {
 					decidedAt: new Date(this.state.now()).toISOString(),
 				});
 		}
-		this.state.queuePlaneActionRoute(intent.ticketIdentity);
 	}
 
 	/**
@@ -660,9 +646,8 @@ class HandoffDispatchModule implements HandoffDispatch {
 		// the handoff pickup's seat claim takes the start. A row another walk
 		// already took leaves, and its run stands.
 		if (!this.removeQueueRow(item.ticketIdentity)) return;
-		const check = this.planeActionClaimCheck(item.ticketIdentity, item.routeFromIdentity);
+		const check = this.planeActionClaimCheck(item.ticketIdentity);
 		if (!check.ok) {
-			this.settlePlaneActionDrops(item);
 			this.settleIntentOnStarted(item.ticketIdentity, { ok: false, reason: check.reason });
 			this.reports.refresh();
 			this.reports.warning(
@@ -673,7 +658,6 @@ class HandoffDispatchModule implements HandoffDispatch {
 		const config = this.config();
 		const setting = planeActionSettingOf(config.taskTypes, item.taskType);
 		if (setting === null) {
-			this.settlePlaneActionDrops(item);
 			this.settleIntentOnStarted(item.ticketIdentity, {
 				ok: false,
 				reason: `task type ${item.taskType} carries no plane action`,
@@ -689,7 +673,6 @@ class HandoffDispatchModule implements HandoffDispatch {
 		const projection = this.state.projectedTickets(config.workflowStates, config.defaultTaskType);
 		const ticket = projection.find((candidate) => candidate.identity === item.ticketIdentity);
 		if (ticket === undefined) {
-			this.settlePlaneActionDrops(item);
 			this.settleIntentOnStarted(item.ticketIdentity, {
 				ok: false,
 				reason: "the ticket is no longer visible",
@@ -709,8 +692,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 				: findFixingPullRequest(projection, ticket);
 		if (pullRequest === null) {
 			// No attempt for a merge that could not aim: the row drops with its
-			// warning, and the route settles back to open without it.
-			this.settlePlaneActionDrops(item);
+			// warning.
 			this.settleIntentOnStarted(item.ticketIdentity, {
 				ok: false,
 				reason: "no linked pull request was found for the ticket",
@@ -754,9 +736,9 @@ class HandoffDispatchModule implements HandoffDispatch {
 			attempt: { id: attempt.id, ticketIdentity: item.ticketIdentity, taskType: item.taskType },
 		});
 		// The row left at the claim, the way the Consultation's pickup
-		// leaves it, and the route settles back to open without a work cycle:
-		// no work cycle ran for the action.
-		this.state.settleQueuedPlaneActionRoute(item.ticketIdentity);
+		// leaves it. The tickets keep the states the ask left them in
+		// (ADR 0072): the source ended its cycle at the ask, and the open
+		// position's wait was the item's alone.
 		if (!this.stopped) this.settleIntentOnStarted(item.ticketIdentity, { ok: true });
 		this.reports.refresh();
 		if (this.stopped) return;
@@ -775,20 +757,6 @@ class HandoffDispatchModule implements HandoffDispatch {
 				`the merge of ${this.ticketName(item.ticketIdentity)} was blocked: ${result.reason}`,
 			);
 		}
-	}
-
-	/**
-	 * Settle the waits a dropped plane action item leaves (ADR 0068): the
-	 * item's own ticket returns to open without a work cycle, the way the
-	 * run's answer does, and the source the route carried ends its cycle
-	 * with the count, the way the cancel settles the same row (ADR 0069).
-	 * The drop leaves no re-offer standing, so the waits cannot stand; a
-	 * ticket that already left its wait changes nothing.
-	 */
-	private settlePlaneActionDrops(item: WorkQueuePlaneActionItem): void {
-		this.state.settleQueuedPlaneActionRoute(item.ticketIdentity);
-		if (item.routeFromIdentity !== null)
-			this.state.settleDroppedPlaneActionRouteSource(item.routeFromIdentity);
 	}
 
 	/**
@@ -933,11 +901,12 @@ class HandoffDispatchModule implements HandoffDispatch {
 	 * row gone, and answers its own ask (ADR 0049).
 	 *
 	 * The cancel is the operator's act on the row the queue shows, so it carries
-	 * the row's own consequence: a route the row named has decided its turn and
-	 * then lost its start, so the source rests `open` with the cycle counted
-	 * once, the way a close ends the cycle the turn routed from, and the
-	 * decision the ask recorded stands on the trace (ADR 0069). A start with no
-	 * route leaves the ticket in the state it wears.
+	 * the row's own consequence: a route the row named takes its mark on the
+	 * turn's trace in the same write, and the machine's re-offer skips the
+	 * marked trace, the way the re-fired skip's mark stands (ADR 0042,
+	 * ADR 0072). The source's cycle already ended at the ask, so the removal
+	 * takes the item alone. A start with no route leaves the ticket in the
+	 * state it wears.
 	 *
 	 * The false answer is a fact too: the row had already left, which is how the
 	 * answer of a pickup whose work was already inside herdr knows the operator
@@ -1134,35 +1103,18 @@ class HandoffDispatchModule implements HandoffDispatch {
 			}
 		}
 		const currentState = this.state.ticketState(item.ticketIdentity);
-		// A queued route is the operator's decision on the turn the route's
-		// settled ticket awaited when the route was asked for: it stands while
-		// that ticket keeps the decision's wait - queued since the ask (ADR 0067)
-		// or awaiting where an earlier ask left it - and a ticket that closed the
-		// turn, back to open, or moved on leaves the route stale, so the item
-		// keeps its place with the state it moved to. A route that lands on the
-		// position's own ticket names its settled ticket in `routeFromIdentity`;
-		// the position's own state is where the facts sit, not where the
-		// decision stands or falls.
-		const routeStillStands =
-			item.origin !== "workflow" ||
-			(item.routeFromIdentity !== null
-				? ["awaiting", "queued"].includes(this.state.ticketState(item.routeFromIdentity) ?? "")
-				: currentState !== undefined && (currentState === "awaiting" || currentState === "queued"));
-		if (
-			currentState === undefined ||
-			!handoffAllowsState(item.origin, currentState) ||
-			!routeStillStands
-		) {
+		// The state gate reads the position the item names (ADR 0072): the
+		// position stands open or awaiting, the way the continuation's position
+		// check reads it. The claim does not ask the source ticket's state
+		// whether a route stands: the source ends its cycle at the ask and rests
+		// open behind the wait, and the race check above stands on its own.
+		if (currentState === undefined || !handoffAllowsState(item.origin, currentState)) {
 			return {
 				ok: false,
 				reason:
 					currentState === undefined
 						? "the ticket no longer exists"
-						: !routeStillStands && item.routeFromIdentity !== null
-							? `the settled ticket ${this.ticketName(
-									item.routeFromIdentity,
-								)} is now ${this.state.ticketState(item.routeFromIdentity) ?? "gone"}`
-							: `the ticket is now ${currentState}`,
+						: `the ticket is now ${currentState}`,
 			};
 		}
 		// The covered gate (ADR 0042): a queued start whose open ticket gained
@@ -1943,12 +1895,13 @@ function handoffAllowsState(origin: HandoffOrigin, state: TicketState): boolean 
 		case "open":
 			return state === "open";
 		case "workflow":
-			// A transition route may land on the position's own ticket, open,
-			// awaiting, or queued alike: the machine re-derives the position, so
-			// the routed ticket is the surface the facts now sit on (ADR 0027),
-			// and a route onto its own new position claims the ticket the ask
-			// moved to queued (ADR 0067).
-			return state === "open" || state === "awaiting" || state === "queued";
+			// A transition route may land on the position's own ticket, open or
+			// awaiting alike: the machine re-derives the position, so the routed
+			// ticket is the surface the facts now sit on (ADR 0027). The source
+			// the route continues ended its cycle at the ask and rests open
+			// behind the wait, so the claim reads the position's state alone
+			// (ADR 0072).
+			return state === "open" || state === "awaiting";
 		case "restart":
 			return state === "handed-off" || state === "running";
 	}

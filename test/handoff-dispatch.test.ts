@@ -16,7 +16,7 @@ import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import type { FactoryConfig } from "../src/config.ts";
+import type { FactoryConfig, TransitionOutcome } from "../src/config.ts";
 import type { FetchedTicket } from "../src/domain/ticket.ts";
 import { baseChoice, type HandoffChoice, type NameCollision } from "../src/handoff.ts";
 import type { HandoffDispatchOptions } from "../src/handoff-dispatch.ts";
@@ -117,9 +117,10 @@ function settleRoutePair(
 	holders: { paneId: string; workspaceId: string }[] = [
 		{ paneId: ROUTE_SETTLED.paneId, workspaceId: ROUTE_SETTLED.workspaceId },
 	],
+	transition?: TransitionOutcome,
 ): StoredHandoffFacts {
 	const settled = seedHandoff(rigRef, ROUTE_SETTLED);
-	settleTurn(rigRef, ROUTE_SETTLED, settled.handoffId);
+	settleTurn(rigRef, ROUTE_SETTLED, settled.handoffId, transition);
 	rigRef.runner.set(
 		"herdr",
 		["agent", "start", ROUTE_TARGET.name, "--kind", "pi", "--pane", "pane-agent"],
@@ -470,7 +471,7 @@ function seedClosedHandoff(
 }
 
 /** Rest the ticket on its settled turn, awaiting a route, without closing it. */
-function settleTurn(rig: Rig, seed: Seed, handoffId: string): void {
+function settleTurn(rig: Rig, seed: Seed, handoffId: string, transition?: TransitionOutcome): void {
 	rig.state.settleTurn({
 		ticketIdentity: seed.identity,
 		handoffId,
@@ -479,7 +480,27 @@ function settleTurn(rig: Rig, seed: Seed, handoffId: string): void {
 		message: "the turn is done",
 		turnLog: [{ kind: "text", text: "the turn is done" }],
 		completedAt: "2026-09-01T01:00:00Z",
+		transition,
 	});
+}
+
+/** The settled turn's transition, routing to the named position. */
+function routeOutcome(positionIdentity: string): TransitionOutcome {
+	return {
+		fired: false,
+		when: null,
+		reason: "",
+		ticketFacts: [],
+		pullRequestFacts: [],
+		autoAdvance: true,
+		ticketWrite: null,
+		pullRequestWrite: null,
+		pullRequestIdentity: null,
+		pullRequestKey: null,
+		writeFailure: "",
+		positionTaskType: liveChoice.taskType,
+		positionTicketIdentity: positionIdentity,
+	};
 }
 
 /** The Message line a handoff of this ticket writes when it starts. */
@@ -1842,7 +1863,7 @@ describe("the Parallel limit and the Work queue", () => {
 		expect(settledTicket?.lastCompletion?.decision).toBe("handed-off");
 	});
 
-	test("a queued route whose settled ticket closed stays waiting, and the warning names that ticket", async () => {
+	test("a close on the source after the ask moves nothing, and the pickup starts the route (ADR 0072)", async () => {
 		const rigRef = rig([ROUTE_SETTLED, ROUTE_TARGET]);
 		const settled = settleRoutePair(rigRef);
 		const capped = withRunner(rigRef, rigRef.runner, {
@@ -1857,20 +1878,32 @@ describe("the Parallel limit and the Work queue", () => {
 				previousMessage: "the turn is done",
 			}),
 		).resolves.toEqual({ ok: true });
-		// The operator closed the settled turn while the route waited: the
-		// route is stale, and the item drops with the pickup (ADR 0049).
-		closeCycle(rigRef, ROUTE_SETTLED, settled.handoffId);
+		// The ask ended the source's cycle: it rests open behind the item, the
+		// way a closed cycle's ticket does.
+		expect(rigRef.state.ticketState(ROUTE_SETTLED.identity)).toBe("open");
+		// A close that lands on the turn the ask decided moves nothing: the
+		// cycle already ended at the ask, so the route is not stale, and the
+		// pickup starts it with the decision the ask recorded.
+		expect(
+			rigRef.state.applyCompletionDecision({
+				ticketIdentity: ROUTE_SETTLED.identity,
+				handoffId: settled.handoffId,
+				decision: "closed",
+				decidedAt: "2026-09-01T02:00:00Z",
+			}),
+		).toBe(false);
+		rigRef.state.applyFetch(source, {
+			status: "success",
+			fetchedAt: "2026-09-01T02:01:00Z",
+			tickets: rigRef.seeds.map(issueTicket),
+		});
 		const picking = withRunner(rigRef, rigRef.runner, {
 			seatCount: () => rigRef.config.maxParallelAgents - 1,
 		});
-		expect(await picking.pickupWorkQueue()).toBe(0);
+		expect(await picking.pickupWorkQueue()).toBe(1);
 		await untilQueueDrains(rigRef);
 		expect(rigRef.state.workQueue()).toHaveLength(0);
-		// The warning names the ticket that left the decision, not the position
-		// ticket that kept its state.
-		expect(rigRef.events).toContain(
-			`warning:queued handoff for "${ROUTE_TARGET.title}" was not run: the settled ticket "${ROUTE_SETTLED.title}" is now open`,
-		);
+		expect(rigRef.state.lastCompletion(ROUTE_SETTLED.identity)?.decision).toBe("handed-off");
 	});
 
 	test("the operator's route records handed-off on the settled turn at the ask (ADR 0064)", async () => {
@@ -1893,16 +1926,21 @@ describe("the Parallel limit and the Work queue", () => {
 		).resolves.toEqual({ ok: true });
 		expect(rigRef.state.workQueue()).toHaveLength(1);
 		expect(rigRef.state.lastCompletion(ROUTE_SETTLED.identity)?.decision).toBe("handed-off");
-		// A drop keeps the decision: the operator closed the settled turn while
-		// the route waited, the way the Decision modal's close does. The close
-		// re-lands on the trace the ask decided, so the recorded decision
-		// stands, the cycle ends once, and the item drops with the pickup.
-		rigRef.state.applyCompletionDecision({
-			ticketIdentity: ROUTE_SETTLED.identity,
-			handoffId: settled.handoffId,
-			decision: "closed",
-			decidedAt: "2026-09-01T02:00:00Z",
-		});
+		// The source rests open behind the item: the ask ended the cycle in the
+		// same write that landed the decision (ADR 0072).
+		expect(rigRef.state.ticketState(ROUTE_SETTLED.identity)).toBe("open");
+		// A close that lands on the turn the ask decided is refused: the cycle
+		// already ended at the ask, the recorded decision stands, and the item
+		// waits on for the pickup.
+		expect(
+			rigRef.state.applyCompletionDecision({
+				ticketIdentity: ROUTE_SETTLED.identity,
+				handoffId: settled.handoffId,
+				decision: "closed",
+				decidedAt: "2026-09-01T02:00:00Z",
+			}),
+		).toBe(false);
+		expect(rigRef.state.lastCompletion(ROUTE_SETTLED.identity)?.decision).toBe("handed-off");
 		rigRef.state.applyFetch(source, {
 			status: "success",
 			fetchedAt: "2026-09-01T02:01:00Z",
@@ -1911,30 +1949,9 @@ describe("the Parallel limit and the Work queue", () => {
 		const picking = withRunner(rigRef, rigRef.runner, {
 			seatCount: () => rigRef.config.maxParallelAgents - 1,
 		});
-		expect(await picking.pickupWorkQueue()).toBe(0);
+		expect(await picking.pickupWorkQueue()).toBe(1);
 		await untilQueueDrains(rigRef);
 		expect(rigRef.state.workQueue()).toHaveLength(0);
-		expect(rigRef.state.lastCompletion(ROUTE_SETTLED.identity)?.decision).toBe("handed-off");
-		// A re-enqueued route re-lands the same decision as a no-op: the writer
-		// takes the first decision on a turn, so the original ask's stamp holds
-		// - a second record of a different decision is refused on the trace.
-		await expect(
-			capped.dispatch({
-				origin: "workflow",
-				ticketIdentity: ROUTE_TARGET.identity,
-				routeFromIdentity: ROUTE_SETTLED.identity,
-				choice: liveChoice,
-				previousMessage: "the turn is done",
-			}),
-		).resolves.toEqual({ ok: true });
-		expect(
-			rigRef.state.applyCompletionDecision({
-				ticketIdentity: ROUTE_SETTLED.identity,
-				handoffId: settled.handoffId,
-				decision: "closed",
-				decidedAt: "2026-09-02T00:00:00Z",
-			}),
-		).toBe(false);
 		expect(rigRef.state.lastCompletion(ROUTE_SETTLED.identity)?.decision).toBe("handed-off");
 	});
 
@@ -1956,15 +1973,18 @@ describe("the Parallel limit and the Work queue", () => {
 		).resolves.toEqual({ ok: true });
 		expect(rigRef.state.workQueue()).toHaveLength(1);
 		expect(rigRef.state.lastCompletion(ROUTE_SETTLED.identity)?.decision).toBe("auto-handed-off");
-		// A drop keeps the decision, the way the operator's route's does: the
-		// close re-lands on the decided trace as a no-op, and the re-offer of
-		// the same turn re-lands the decision as a no-op beside it.
-		rigRef.state.applyCompletionDecision({
-			ticketIdentity: ROUTE_SETTLED.identity,
-			handoffId: settled.handoffId,
-			decision: "closed",
-			decidedAt: "2026-09-01T02:00:00Z",
-		});
+		// The source rests open behind the item, the way the operator's route's
+		// does (ADR 0072), and a close on the decided trace moves nothing, so
+		// the pickup starts the route with the ask's decision standing.
+		expect(rigRef.state.ticketState(ROUTE_SETTLED.identity)).toBe("open");
+		expect(
+			rigRef.state.applyCompletionDecision({
+				ticketIdentity: ROUTE_SETTLED.identity,
+				handoffId: settled.handoffId,
+				decision: "closed",
+				decidedAt: "2026-09-01T02:00:00Z",
+			}),
+		).toBe(false);
 		rigRef.state.applyFetch(source, {
 			status: "success",
 			fetchedAt: "2026-09-01T02:01:00Z",
@@ -1973,7 +1993,7 @@ describe("the Parallel limit and the Work queue", () => {
 		const picking = withRunner(rigRef, rigRef.runner, {
 			seatCount: () => rigRef.config.maxParallelAgents - 1,
 		});
-		expect(await picking.pickupWorkQueue()).toBe(0);
+		expect(await picking.pickupWorkQueue()).toBe(1);
 		await untilQueueDrains(rigRef);
 		expect(rigRef.state.workQueue()).toHaveLength(0);
 		expect(rigRef.state.lastCompletion(ROUTE_SETTLED.identity)?.decision).toBe("auto-handed-off");
@@ -3326,9 +3346,9 @@ describe("the decision screen's route close", () => {
 			rigRef.commands().filter((command) => command.startsWith("herdr agent start")),
 		).toHaveLength(0);
 		expect(rigRef.state.workQueue()).toHaveLength(1);
-		// The ask moved the ticket with the decision it recorded (ADR 0067):
-		// while the item waits, the ticket reads queued.
-		expect(rigRef.state.ticketState(FIRST.identity)).toBe("queued");
+		// The ask ended the cycle with the decision it recorded (ADR 0072):
+		// while the item waits, the ticket rests open.
+		expect(rigRef.state.ticketState(FIRST.identity)).toBe("open");
 		// A clean close says nothing on the line: the queue's notice stands.
 		expect(rigRef.events.filter((event) => event.startsWith("warning:"))).toHaveLength(0);
 	});
@@ -3358,11 +3378,11 @@ describe("the decision screen's route close", () => {
 		).toHaveLength(0);
 	});
 
-	test("a cross-position pickup ends the settled ticket's cycle at the start (ADR 0067)", async () => {
+	test("a cross-position pickup starts the position while the source rests (ADR 0072)", async () => {
 		const rigRef = rig([ROUTE_SETTLED, ROUTE_TARGET]);
 		settleRoutePair(rigRef);
 		// Every seat is held: the route waits in the Work queue, and the ask
-		// moves the settled ticket to the wait with the decision it records.
+		// ends the settled ticket's cycle with the decision it records.
 		const capped = withRunner(rigRef, rigRef.runner, {
 			seatCount: () => rigRef.config.maxParallelAgents,
 		});
@@ -3377,10 +3397,9 @@ describe("the decision screen's route close", () => {
 		).resolves.toEqual({ ok: true });
 		await seatReleased();
 		expect(rigRef.state.workQueue()).toHaveLength(1);
-		expect(rigRef.state.ticketState(ROUTE_SETTLED.identity)).toBe("queued");
-		// One seat frees: the pickup starts the position, and the start report
-		// moves both tickets in the same write: the position is handed off, and
-		// the settled ticket's cycle ends at the start, not at a later top-up.
+		expect(rigRef.state.ticketState(ROUTE_SETTLED.identity)).toBe("open");
+		// One seat frees: the pickup starts the position in the position's own
+		// cycle, and the source keeps the state the ask left it.
 		const picking = withRunner(rigRef, rigRef.runner, {
 			seatCount: () => rigRef.config.maxParallelAgents - 1,
 		});
@@ -3397,11 +3416,15 @@ describe("the decision screen's route close", () => {
 		expect(settled?.lastCompletion?.decision).toBe("handed-off");
 	});
 
-	test("a cancel of the route item ends the settled ticket's cycle (ADR 0069)", async () => {
+	test("a cancel of the route item marks the turn and leaves the source (ADR 0072)", async () => {
 		const rigRef = rig([ROUTE_SETTLED, ROUTE_TARGET]);
-		settleRoutePair(rigRef);
+		settleRoutePair(
+			rigRef,
+			[{ paneId: ROUTE_SETTLED.paneId, workspaceId: ROUTE_SETTLED.workspaceId }],
+			routeOutcome(ROUTE_TARGET.identity),
+		);
 		// Every seat is held: the route waits in the Work queue, and the ask
-		// moves the settled ticket to the wait with the decision it records.
+		// ends the settled ticket's cycle with the decision it records.
 		const capped = withRunner(rigRef, rigRef.runner, {
 			seatCount: () => rigRef.config.maxParallelAgents,
 		});
@@ -3416,9 +3439,9 @@ describe("the decision screen's route close", () => {
 		).resolves.toEqual({ ok: true });
 		await seatReleased();
 		expect(rigRef.state.workQueue()).toHaveLength(1);
-		expect(rigRef.state.ticketState(ROUTE_SETTLED.identity)).toBe("queued");
-		// The operator removes the item: the row leaves, and the settled
-		// ticket's cycle ends in the same write, the way a close ends it.
+		expect(rigRef.state.ticketState(ROUTE_SETTLED.identity)).toBe("open");
+		// The operator removes the item: the row leaves, the source keeps the
+		// state the ask left it, and the turn's trace takes the mark.
 		expect(capped.removeQueueItem(ROUTE_TARGET.identity)).toBe(true);
 		expect(rigRef.state.workQueue()).toHaveLength(0);
 		const settled = rigRef.state
@@ -3428,9 +3451,10 @@ describe("the decision screen's route close", () => {
 		expect(settled?.workCycle).toBe(2);
 		// The decision stands on the settled turn whatever the move says.
 		expect(settled?.lastCompletion?.decision).toBe("handed-off");
+		expect(settled?.lastCompletion?.transition?.routeRemoved).toBe(true);
 	});
 
-	test("a same-position pickup hands the queued ticket off in its own cycle (ADR 0067)", async () => {
+	test("a same-position pickup hands the open ticket off in its next cycle (ADR 0072)", async () => {
 		const rigRef = rig();
 		const stored = seedHandoff(rigRef, FIRST, worktreeChoice);
 		settleTurn(rigRef, FIRST, stored.handoffId);
@@ -3463,7 +3487,7 @@ describe("the decision screen's route close", () => {
 			}),
 		).resolves.toEqual({ ok: true });
 		await seatReleased();
-		expect(rigRef.state.ticketState(FIRST.identity)).toBe("queued");
+		expect(rigRef.state.ticketState(FIRST.identity)).toBe("open");
 		const picking = withRunner(rigRef, rigRef.runner, {
 			seatCount: () => rigRef.config.maxParallelAgents - 1,
 		});
@@ -3471,11 +3495,12 @@ describe("the decision screen's route close", () => {
 		await untilDrains(rigRef);
 		expect(rigRef.state.workQueue()).toHaveLength(0);
 		expect(rigRef.state.ticketState(FIRST.identity)).toBe("handed-off");
-		// The rework continues into the ticket's own cycle: the number holds.
+		// The rework is the ticket's next cycle, the one the ask ended at its
+		// write.
 		const ticket = rigRef.state
 			.visibleTickets(rigRef.config.workflowStates, rigRef.config.defaultTaskType)
 			.find((candidate) => candidate.identity === FIRST.identity);
-		expect(ticket?.workCycle).toBe(1);
+		expect(ticket?.workCycle).toBe(2);
 	});
 
 	test("the automatic route keeps the stored workspace, and closes nothing at the ask", async () => {
