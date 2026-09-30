@@ -43,7 +43,10 @@ both halves of the external world.
 
 The Stub world is a JSON file, and it is the source of truth of the stub
 side. The plane's own label writes, merges, and comments mutate it with
-write-through, and a restart reads it back. The seed is the world's
+write-through, and a restart reads it back. The run re-reads the file before
+every answer, so a world CLI or hand edit made between commands stands on
+the run's next command, and a write-through does not clobber an edit that
+landed before the run read the file. The seed is the world's
 initial content, and the seed script creates the local checkouts besides
 it: small git repositories with no origin, for which the worktree base
 falls back to the checkout's HEAD.
@@ -117,9 +120,10 @@ Verified on herdr 0.9.1 on 2026-09-30: a spike ran a real pi agent in a
 no-origin local checkout from worktree create through prompt to settle to
 read, and the removal needed the force flag.
 
-The world file is written by the running plane and edited by the
-operator's CLI. Concurrent writers are not supported, and the walk is one
-operator.
+The world file is read by the running plane on every command, written by it
+with write-through, and edited by the operator's CLI and by hand. A write
+that lands between the run's read and its own write-through is overwritten:
+concurrent writers are not supported, and the walk is one operator.
 
 The `gh` surface the world must answer is closed and small. A plane change
 that adds a new `gh` command must extend the world, and a test that walks

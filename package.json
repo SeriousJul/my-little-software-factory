@@ -15,6 +15,8 @@
 		"build": "bun run scripts/build-binary.ts",
 		"dev": "bun --watch src/factory.ts --config config/development.toml",
 		"gallery": "bun bin/factory-gallery.mjs",
+		"stub:seed": "bun scripts/stub-seed.ts",
+		"stub-world": "bun bin/stub-world.mjs",
 		"test": "bun test --parallel --isolate --timeout=$([ -n \"$CI\" ] && printf 60000 || printf 30000)",
 		"test:changed": "bun test --changed=${TEST_CHANGED_BASE:-origin/main} --isolate --timeout=$([ -n \"$CI\" ] && printf 60000 || printf 30000)",
 		"docs:dev": "vitepress dev docs",

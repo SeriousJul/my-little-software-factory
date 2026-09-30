@@ -35,9 +35,9 @@ if (decision.kind === "usage") {
 	process.stderr.write(`${decision.reason}\n`);
 	process.exit(1);
 }
-// The boot loads the path this decision settled: the argument list is parsed
-// once, here.
-const startup = await runStartup(decision.configPath);
+// The boot loads the paths this decision settled: the argument list is
+// parsed once, here. The world path is the Stub run's (issue #178).
+const startup = await runStartup(decision.configPath, decision.worldPath);
 for (const line of startup.ok ? startup.notes : startup.lines) {
 	process.stderr.write(`${line}\n`);
 }

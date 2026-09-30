@@ -32,18 +32,27 @@ import type { CommandRunner } from "./runner.ts";
 import { createChildProcessRunner } from "./runner.ts";
 import type { FactoryState } from "./state.ts";
 import { openFactoryState, StateError } from "./state.ts";
+import { createStubRunner } from "./stub/runner.ts";
+import { StubWorldError, StubWorldStore } from "./stub/world.ts";
 import type { TicketSource } from "./ticket-source.ts";
 import { createTicketSource } from "./ticket-source.ts";
 
-/** The argument list, or the one usage line the operator reads instead. */
-export type StartupArgsResult = { ok: true; configPath: string } | { ok: false; reason: string };
+/**
+ * The argument list, or the one usage line the operator reads instead.
+ * The `worldPath` is the Stub run's world file (issue #178, ADR 0073): the
+ * startup wiring learns that a stub is in play through this one flag beside
+ * the config path, and no other module learns it.
+ */
+export type StartupArgsResult =
+	| { ok: true; configPath: string; worldPath?: string }
+	| { ok: false; reason: string };
 
 /**
  * The argument list as a decision: run the plane on a config path, print the
  * plane's version, or show the usage line.
  */
 export type StartupDecision =
-	| { kind: "run"; configPath: string }
+	| { kind: "run"; configPath: string; worldPath?: string }
 	| { kind: "version" }
 	| { kind: "usage"; reason: string };
 
@@ -101,28 +110,54 @@ export function startupLogger(config: FactoryConfig, configPath: string): Logger
 }
 
 /** The usage line the argument handling shows for anything it does not take. */
-export const USAGE = "usage: factory [--config <path>] | factory --version";
+export const USAGE = "usage: factory [--config <path>] [--world <path>] | factory --version";
 
 /**
- * The argument list: no argument is the shipped default path, and
- * `--config <path>` names one. Anything else is the usage line.
+ * The argument list: no argument is the shipped default path, `--config
+ * <path>` names one, and `--world <path>` names the Stub run's world file. A
+ * flag without a value, a repeated flag, or anything else is the usage line.
  */
 export function configPathFromArgs(args: readonly string[]): StartupArgsResult {
-	if (args.length === 0) return { ok: true, configPath: defaultConfigPath() };
-	if (args.length === 2 && args[0] === "--config" && args[1] !== "")
-		return { ok: true, configPath: args[1] };
-	return { ok: false, reason: USAGE };
+	let configPath: string | undefined;
+	let worldPath: string | undefined;
+	for (let i = 0; i < args.length; i += 1) {
+		const arg = args[i];
+		if (arg === "--config" || arg === "--world") {
+			const value = args[i + 1];
+			if (value === undefined || value === "") return { ok: false, reason: USAGE };
+			if (arg === "--config") {
+				if (configPath !== undefined) return { ok: false, reason: USAGE };
+				configPath = value;
+			} else {
+				if (worldPath !== undefined) return { ok: false, reason: USAGE };
+				worldPath = value;
+			}
+			i += 1;
+		} else {
+			return { ok: false, reason: USAGE };
+		}
+	}
+	return {
+		ok: true,
+		configPath: configPath ?? defaultConfigPath(),
+		...(worldPath !== undefined ? { worldPath } : {}),
+	};
 }
 
 /**
  * The argument list as a decision: `--version` prints the plane's version
  * (the entry answers it before any boot), and every other list is the config
- * path or the usage line.
+ * path, the world path, or the usage line.
  */
 export function startupArgs(args: readonly string[]): StartupDecision {
 	if (args.length === 1 && args[0] === "--version") return { kind: "version" };
 	const parsed = configPathFromArgs(args);
-	if (parsed.ok) return { kind: "run", configPath: parsed.configPath };
+	if (parsed.ok)
+		return {
+			kind: "run",
+			configPath: parsed.configPath,
+			...(parsed.worldPath !== undefined ? { worldPath: parsed.worldPath } : {}),
+		};
 	return { kind: "usage", reason: parsed.reason };
 }
 
@@ -247,7 +282,7 @@ export function installStateShutdown(
  * the path the boot loads cannot drift. A usage line stays the argument
  * decision's answer, not a second parse in here.
  */
-export async function runStartup(configPath: string): Promise<StartupResult> {
+export async function runStartup(configPath: string, worldPath?: string): Promise<StartupResult> {
 	const loaded = await loadStartupConfig(configPath);
 	if (!loaded.ok) {
 		return { ok: false, lines: [loaded.reason], exitCode: 1 };
@@ -258,7 +293,27 @@ export async function runStartup(configPath: string): Promise<StartupResult> {
 
 	const statePath = statePathFor(loaded.config, configPath);
 	const logger = startupLogger(loaded.config, configPath);
-	const runner = createChildProcessRunner();
+	// The Stub run (issue #178, ADR 0073): the world file flag wraps the real
+	// runner in the stub runner, which serves only the `gh` commands from the
+	// world and passes every other command to the real binaries. A world file
+	// that cannot be read stops the boot before it opens anything.
+	const realRunner = createChildProcessRunner();
+	let runner: CommandRunner = realRunner;
+	if (worldPath !== undefined) {
+		let world: StubWorldStore;
+		try {
+			world = StubWorldStore.load(worldPath);
+		} catch (error) {
+			const reason =
+				error instanceof StubWorldError
+					? error.message
+					: `the stub world could not be loaded: ${String(error)}`;
+			logger.error(`startup failed: ${reason}`);
+			return { ok: false, lines: [...notes, reason], exitCode: 1 };
+		}
+		runner = createStubRunner(realRunner, world);
+		notes.push(`the stub world answers the GitHub commands from ${worldPath}`);
+	}
 	// The config's model values, checked against what the agent runtimes
 	// actually offer. An unavailable list only warns: one agent kind that
 	// cannot answer must not block the control plane.
@@ -284,7 +339,7 @@ export async function runStartup(configPath: string): Promise<StartupResult> {
 
 	const sources = loaded.config.sources.map((source) => createTicketSource(source, runner));
 	logger.info(
-		`boot: bun ${typeof Bun !== "undefined" ? Bun.version : "unknown"}, config ${configPath}, state ${statePath}, sources ${sources.length}`,
+		`boot: bun ${typeof Bun !== "undefined" ? Bun.version : "unknown"}, config ${configPath}, world ${worldPath ?? "none"}, state ${statePath}, sources ${sources.length}`,
 	);
 	return {
 		ok: true,

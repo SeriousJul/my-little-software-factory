@@ -28,7 +28,7 @@ import {
 } from "../src/startup.ts";
 import { stubEnv, unstubAllEnvs } from "./env-stub.ts";
 
-const USAGE_EXPECTED = "usage: factory [--config <path>] | factory --version";
+const USAGE_EXPECTED = "usage: factory [--config <path>] [--world <path>] | factory --version";
 
 /** The checked-in Default configuration the package ships. */
 const SHIPPED_DEFAULT_CONFIG = fileURLToPath(new URL("../config/default.toml", import.meta.url));
@@ -105,6 +105,24 @@ describe("the startup argument handling", () => {
 		});
 	});
 
+	test("--world with a path names the Stub run's world file", () => {
+		expect(
+			configPathFromArgs(["--config", "/tmp/one/config.toml", "--world", "/tmp/one/world.json"]),
+		).toEqual({
+			ok: true,
+			configPath: "/tmp/one/config.toml",
+			worldPath: "/tmp/one/world.json",
+		});
+	});
+
+	test("--world alone keeps the shipped default config path", () => {
+		expect(configPathFromArgs(["--world", "/tmp/one/world.json"])).toEqual({
+			ok: true,
+			configPath: defaultConfigPath(),
+			worldPath: "/tmp/one/world.json",
+		});
+	});
+
 	test.each([
 		["an unknown argument", ["--unknown"]],
 		["the --version flag, which the boot does not take", ["--version"]],
@@ -112,6 +130,16 @@ describe("the startup argument handling", () => {
 		["an empty config path", ["--config", ""]],
 		["a different flag with a value", ["--other", "/tmp/one/config.toml"]],
 		["a trailing extra argument", ["--config", "/tmp/one/config.toml", "extra"]],
+		["a --world flag with no path", ["--world"]],
+		["an empty world path", ["--world", ""]],
+		[
+			"a repeated --config flag",
+			["--config", "/tmp/one/config.toml", "--config", "/tmp/two/config.toml"],
+		],
+		[
+			"a repeated --world flag",
+			["--world", "/tmp/one/world.json", "--world", "/tmp/two/world.json"],
+		],
 	])("any other argument list yields the usage line: %s", (_name, args) => {
 		expect(configPathFromArgs(args)).toEqual({ ok: false, reason: USAGE_EXPECTED });
 	});
@@ -125,6 +153,13 @@ describe("the startup argument handling", () => {
 		expect(startupArgs(["--config", "/tmp/one/config.toml"])).toEqual({
 			kind: "run",
 			configPath: "/tmp/one/config.toml",
+		});
+		expect(
+			startupArgs(["--config", "/tmp/one/config.toml", "--world", "/tmp/one/world.json"]),
+		).toEqual({
+			kind: "run",
+			configPath: "/tmp/one/config.toml",
+			worldPath: "/tmp/one/world.json",
 		});
 		expect(startupArgs(["--unknown"])).toEqual({ kind: "usage", reason: USAGE_EXPECTED });
 	});
