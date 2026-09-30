@@ -642,3 +642,16 @@ It is the remote default branch of the repository's origin after a fresh fetch, 
 The default branch comes from the `origin/HEAD` symref, then `origin/main`, then `origin/master`.
 The same rule serves a ticket handoff worktree and a Consultation worktree.
 _Avoid_: base commit, starting point, worktree origin
+
+**Stub run**:
+A control plane run that plays the factory flow against a Stub world, with no real GitHub.
+Its Command runner serves every GitHub command from the Stub world, and runs every other command - git, herdr, and the agent runtimes - for real.
+The real TUI, the real state file, and the real agents run in it, so a human operator walks the flow the way the factory walks it.
+_Avoid_: mock run, dry run, simulation
+
+**Stub world**:
+The file-backed stand-in for the GitHub side that a Stub run plays against.
+It holds the stub repositories and their issues and pull requests, the labels, the comments, the review verdicts, and the merge gate fact of each pull request.
+The plane's own label writes, merges, and comments mutate it, and a restart reads it back.
+The world file is the source of truth of the Stub run, and the seed is its initial content.
+_Avoid_: mock server, fake GitHub, test double
