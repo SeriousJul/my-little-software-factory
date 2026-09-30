@@ -29,7 +29,6 @@ import type { FetchedTicket, Ticket } from "../src/domain/ticket.ts";
 import { resolveHandoffChoice } from "../src/handoff.ts";
 import { createHandoffDispatch, type HandoffDispatchReports } from "../src/handoff-dispatch.ts";
 import { planeActionSettingOf, runMergePullRequest } from "../src/plane-actions.ts";
-import type { CommandOptions, CommandResult } from "../src/runner.ts";
 import { type FactoryState, openFactoryState } from "../src/state.ts";
 import type { FetchOutcome } from "../src/ticket-source.ts";
 import { firePlaneActionOutcome } from "../src/workflow.ts";
@@ -367,6 +366,23 @@ describe("the attempt record in the state", () => {
 		expect(after[0].workCycle).toBe(1);
 		state.close();
 	});
+
+	test("the merged pull request's membership retires, and the ticket leaves the projection", () => {
+		const state = planeState();
+		withIssueSource(state);
+		const before = state.visibleTickets(PLANE_WORKFLOW_STATES, PLANE_CONFIG.defaultTaskType);
+		expect(before.map((ticket) => ticket.identity).sort()).toEqual(
+			[issueIdentity, pullIdentity].sort(),
+		);
+		// The retirement is the source's own move, done now: the source stops
+		// returning the pull request at its next refresh.
+		expect(state.retireMembership(pullIdentity, "pulls")).toBe(true);
+		const after = state.visibleTickets(PLANE_WORKFLOW_STATES, PLANE_CONFIG.defaultTaskType);
+		expect(after.map((ticket) => ticket.identity)).toEqual([issueIdentity]);
+		// A membership that already retired leaves no write behind.
+		expect(state.retireMembership(pullIdentity, "pulls")).toBe(false);
+		state.close();
+	});
 });
 
 describe("the action form in the config", () => {
@@ -628,7 +644,7 @@ describe("the dispatch's ask and pickup", () => {
 			notice: (text) => events.push(`notice: ${text}`),
 			clearWorking: () => {},
 			refresh: () => {},
-			starting: () => {},
+			starting: (identity, active) => events.push(`starting ${active ? "on" : "off"}: ${identity}`),
 		};
 	}
 
@@ -678,13 +694,24 @@ describe("the dispatch's ask and pickup", () => {
 		expect(attempt?.outcome).toBe("merged");
 		expect(attempt?.decision).toBe("auto-merged");
 		expect(attempt?.transition).not.toBeNull();
-		// The route settled back to open without a work cycle.
+		// The route settled back to open without a work cycle, and the merged
+		// pull request left the projection the moment the run settled: its
+		// membership retired now, the way the source's next refresh would do.
 		expect(state.ticketState(pullIdentity)).toBe("open");
-		const ticket = state.visibleTickets(PLANE_WORKFLOW_STATES, PLANE_CONFIG.defaultTaskType)[0];
-		expect(ticket.workCycle).toBe(1);
+		expect(
+			state
+				.visibleTickets(PLANE_WORKFLOW_STATES, PLANE_CONFIG.defaultTaskType)
+				.find((candidate) => candidate.identity === pullIdentity),
+		).toBeUndefined();
 		expect(state.workQueue()).toEqual([]);
 		expect(events).toContain(`notice: the merge of "${pullTitle}" ran from the Work queue`);
 		expect(runner.commands()).toContain("gh pr merge #12 --squash --repo github.com/acme/factory");
+		// The run wore the start's spinner face on the ticket's row: the
+		// Starting window opened before the run and closed behind the settle.
+		const onAt = events.indexOf(`starting on: ${pullIdentity}`);
+		const offAt = events.indexOf(`starting off: ${pullIdentity}`);
+		expect(onAt).toBeGreaterThanOrEqual(0);
+		expect(offAt).toBeGreaterThan(onAt);
 		// No agent: the run took no herdr command at all.
 		expect(runner.commands().filter((command) => command.startsWith("herdr"))).toEqual([]);
 		state.close();
@@ -1003,6 +1030,85 @@ describe("the dispatch's ask and pickup", () => {
 		expect(state.latestPlaneActionAttempt(pullIdentity)).toBeNull();
 		expect(runner.commands()).toEqual([]);
 		expect(state.ticketState(pullIdentity)).toBe("queued");
+		state.close();
+	});
+
+	test("a merged pull request on the cross route leaves the projection, and the issue stays", async () => {
+		const state = planeState();
+		withIssueSource(state);
+		// The issue stands awaiting with its settled turn: the cross route's
+		// source, the way the top-up's continuation ask finds it.
+		const claim = state.claimHandoff(
+			issueIdentity,
+			{
+				agentType: "pi",
+				environment: "live-worktree",
+				taskType: "rework",
+				model: "",
+				thinking: "",
+				contextWindow: "",
+			},
+			"open",
+		);
+		if (!claim.ok) throw new Error(claim.reason);
+		state.settleHandoff(claim.claim.attemptId, true, undefined, {
+			paneId: "pane-1",
+			tabId: "tab-1",
+			workspaceId: "ws-1",
+		});
+		state.settleTurn({
+			ticketIdentity: issueIdentity,
+			handoffId: claim.claim.attemptId,
+			taskType: "rework",
+			agentType: "pi",
+			message: "The turn is done.",
+			turnLog: [{ kind: "text", text: "The turn is done." }],
+			completedAt: "2026-08-31T11:00:00Z",
+			cause: "completed",
+			transition: mergeRoute(),
+		});
+		const runner = new FakeRunner();
+		// The run's fresh read finds the pull request open, the merge lands,
+		// and the fire's fresh read finds it merged.
+		stubReadSequence(runner, [{ state: "open" }, { merged: true }]);
+		stubMerge(runner, 0);
+		const events: string[] = [];
+		let resolveStarted: () => void = () => {};
+		const startedSettled = new Promise<void>((resolve) => {
+			resolveStarted = resolve;
+		});
+		const dispatch = createHandoffDispatch({
+			state,
+			runner,
+			config: () => PLANE_CONFIG,
+			seatCount: () => 0,
+			home: home(),
+			...recorder(events),
+		});
+
+		// The route's ask: the issue's settled turn offers the merge of the
+		// pull request it fixes.
+		const result = await dispatch.dispatchPlaneAction({
+			origin: "workflow",
+			automatic: true,
+			ticketIdentity: pullIdentity,
+			routeFromIdentity: issueIdentity,
+			taskType: "merge",
+			onStarted: (started) => {
+				expect(started).toEqual({ ok: true });
+				resolveStarted();
+			},
+		});
+		expect(result).toEqual({ ok: true });
+		await startedSettled;
+
+		// The merged pull request left the projection the moment the run
+		// settled, and the issue the route rode from stays listed: its
+		// membership never retired.
+		const after = state.visibleTickets(PLANE_WORKFLOW_STATES, PLANE_CONFIG.defaultTaskType);
+		expect(after.find((candidate) => candidate.identity === pullIdentity)).toBeUndefined();
+		expect(after.find((candidate) => candidate.identity === issueIdentity)).toBeDefined();
+		expect(state.latestPlaneActionAttempt(pullIdentity)?.outcome).toBe("merged");
 		state.close();
 	});
 
@@ -1359,95 +1465,62 @@ describe("the decision screen's merge", () => {
 		state.close();
 	});
 
-	test(
-		"the outcome stands on the screen where the row stood",
-		async () => {
-			// A runner that delays the pull request's fresh read, so the window
-			// between the attempt's record and the route's settle stands long
-			// enough for the decision screen to open on it.
-			class SlowReadRunner extends FakeRunner {
-				private readonly delayMs: number;
+	test("the outcome stands on the Message line, and the merged row leaves the list", async () => {
+		const state = planeState();
+		seed(state, "awaiting", mergeRoute());
+		const runner = new FakeRunner();
+		runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+		// The run's fresh read finds the pull request open, the merge lands,
+		// and the fire's fresh read finds it merged: the run and the fire
+		// each take one read, in that order.
+		stubReadSequence(runner, [{ state: "open" }, { merged: true }]);
+		stubMerge(runner, 0);
+		const src = new FakeSource("pulls", "github-pull-requests", pullSuccess());
+		const props = decisionProps(state, runner, src);
 
-				constructor(delayMs: number) {
-					super();
-					this.delayMs = delayMs;
-				}
+		await withApp(
+			async (setup) => {
+				await awaitFrame(setup, (f) => f.includes(pullTitle.slice(0, 3)), "the row");
+				// The decision modal: the merge row stands beside Close and Goto.
+				await press(
+					setup,
+					"return",
+					"the decision modal",
+					(f) => f.includes("Decision:") && f.includes("Merge pull request"),
+				);
+				await pressArrow(setup, "down", "the Goto row", () => true);
+				await pressArrow(setup, "down", "the merge row's focus", mergeRowFocused);
+				// The confirm closes the modal and the run settles behind it:
+				// the run's line stands on the Message line, and the merged
+				// ticket's row leaves the list the moment the run settles.
+				const frame = await press(setup, "return", "the run's line", (f) =>
+					messageRowOf(f).includes(`the merge of "${pullTitle}" ran from the Work queue`),
+				);
+				// The run's line alone names the ticket still: the row and the
+				// detail pane both left it.
+				const naming = rowsOf(frame).filter((row) => row.includes(pullTitle.slice(0, 3)));
+				expect(naming).toHaveLength(1);
+				expect(naming[0]).toContain("ran from the Work queue");
+			},
+			WIDTH,
+			30,
+			props,
+		);
 
-				async run(
-					command: string,
-					args: readonly string[],
-					options?: CommandOptions,
-				): Promise<CommandResult> {
-					if (command === "gh" && args.slice(0, 2).join(" ") === "api --hostname") {
-						await new Promise((resolve) => setTimeout(resolve, this.delayMs));
-					}
-					return super.run(command, args, options);
-				}
-			}
-
-			const state = planeState();
-			seed(state, "awaiting", mergeRoute());
-			const runner = new SlowReadRunner(1500);
-			runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
-			// The run's fresh read finds the pull request open, the merge lands,
-			// and the fire's fresh read finds it merged: the run and the fire
-			// each take one read, in that order.
-			stubReadSequence(runner, [{ state: "open" }, { merged: true }]);
-			stubMerge(runner, 0);
-			const src = new FakeSource("pulls", "github-pull-requests", pullSuccess());
-			const props = decisionProps(state, runner, src);
-
-			await withApp(
-				async (setup) => {
-					await awaitFrame(setup, (f) => f.includes(pullTitle.slice(0, 3)), "the row");
-					// The decision modal: the merge row stands beside Close and Goto.
-					await press(
-						setup,
-						"return",
-						"the decision modal",
-						(f) => f.includes("Decision:") && f.includes("Merge pull request"),
-					);
-					await pressArrow(setup, "down", "the Goto row", () => true);
-					await pressArrow(setup, "down", "the merge row's focus", mergeRowFocused);
-					// The confirm closes the modal: the ticket keeps its decision's
-					// wait in queued, and the ask's line stands on the Message line.
-					await press(setup, "return", "the ask's line", (f) =>
-						messageRowOf(f).includes(`the merge of "${pullTitle}" is in the Work queue`),
-					);
-					// The attempt stands in the state before the fire's fresh read
-					// answers, and the route's settle waits on that read.
-					const attemptDeadline = Date.now() + 5000;
-					for (;;) {
-						if (state.latestPlaneActionAttempt(pullIdentity) !== null) break;
-						if (Date.now() >= attemptDeadline)
-							throw new Error("the attempt did not stand in the state");
-						await new Promise((resolve) => setTimeout(resolve, 20));
-					}
-					// The decision screen opens again on the queued ticket: the
-					// outcome stands where the row stood, and no row waits for a
-					// confirm.
-					const frame = await press(
-						setup,
-						"return",
-						"the outcome's line",
-						(f) => f.includes("Decision:") && f.includes("the merge landed"),
-					);
-					expect(frame).not.toContain("Merge pull request");
-				},
-				WIDTH,
-				30,
-				props,
-			);
-
-			// The record stands for the outcome the screen read: the operator's
-			// decision word on the merged outcome.
-			const attempt = state.latestPlaneActionAttempt(pullIdentity);
-			expect(attempt?.outcome).toBe("merged");
-			expect(attempt?.decision).toBe("merged");
-			state.close();
-		},
-		{ timeout: 20_000 },
-	);
+		// The record stands for the outcome the line read: the operator's
+		// decision word on the merged outcome, and the ticket's membership
+		// retired with the settle, the way the source's next refresh would
+		// leave it.
+		const attempt = state.latestPlaneActionAttempt(pullIdentity);
+		expect(attempt?.outcome).toBe("merged");
+		expect(attempt?.decision).toBe("merged");
+		expect(
+			state
+				.visibleTickets(PLANE_WORKFLOW_STATES, PLANE_CONFIG.defaultTaskType)
+				.find((candidate) => candidate.identity === pullIdentity),
+		).toBeUndefined();
+		state.close();
+	});
 });
 
 describe("the auto top-up merge", () => {
@@ -1517,10 +1590,14 @@ describe("the auto top-up merge", () => {
 		expect(attempt).not.toBeNull();
 		expect(attempt?.outcome).toBe("merged");
 		expect(attempt?.decision).toBe("auto-merged");
-		// The route settled back to open without a work cycle.
+		// The route settled back to open without a work cycle, and the merged
+		// pull request left the projection the moment the run settled.
 		expect(state.ticketState(pullIdentity)).toBe("open");
-		const ticket = state.visibleTickets(PLANE_WORKFLOW_STATES, PLANE_CONFIG.defaultTaskType)[0];
-		expect(ticket.workCycle).toBe(1);
+		expect(
+			state
+				.visibleTickets(PLANE_WORKFLOW_STATES, PLANE_CONFIG.defaultTaskType)
+				.find((candidate) => candidate.identity === pullIdentity),
+		).toBeUndefined();
 		state.close();
 	});
 
@@ -1561,8 +1638,14 @@ describe("the auto top-up merge", () => {
 				added: ["needs-work"],
 				removed: [],
 			});
-			// The ticket keeps the open state it wore: no cycle ran for it.
+			// The ticket keeps the open state it wore: no cycle ran for it, and
+			// the block ran no retirement, so the ticket stays listed.
 			expect(state.ticketState(pullIdentity)).toBe("open");
+			expect(
+				state
+					.visibleTickets(PLANE_WORKFLOW_STATES, PLANE_CONFIG.defaultTaskType)
+					.find((candidate) => candidate.identity === pullIdentity),
+			).toBeDefined();
 			state.close();
 		} finally {
 			bellSpy.mockRestore();

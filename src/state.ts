@@ -1806,6 +1806,24 @@ export class FactoryState {
 	}
 
 	/**
+	 * Retire the membership a merged pull request leaves behind (ADR 0068):
+	 * the source stops returning the pull request at its next refresh, and the
+	 * merged ticket leaves the projection the moment the merge lands instead
+	 * of waiting for that refresh. A membership that already retired changes
+	 * nothing, and the ticket's other memberships ride out the next refresh.
+	 */
+	retireMembership(ticketIdentity: string, sourceName: string): boolean {
+		return this.transaction(() => {
+			const result = this.db
+				.prepare(
+					"UPDATE memberships SET active = 0 WHERE source_name = ? AND ticket_identity = ? AND active = 1",
+				)
+				.run(sourceName, ticketIdentity);
+			return Number(result.changes) > 0;
+		});
+	}
+
+	/**
 	 * The settle's own statement: the queued wait returns to open without a
 	 * work cycle. The route's settle wraps it in its own write, and the
 	 * cancel's plane branch runs it inside the cancel's write, so both settle

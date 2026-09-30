@@ -46,6 +46,7 @@ import {
 	findFixingPullRequest,
 	firePlaneActionOutcome,
 	isCoveredByFixingPullRequest,
+	newestMembershipOf,
 	writeMembershipLabels,
 } from "./workflow.ts";
 
@@ -740,6 +741,14 @@ class HandoffDispatchModule implements HandoffDispatch {
 			);
 			return;
 		}
+		// The name the run's line words the ticket by, read while the ticket
+		// still stands: the merged ticket's retirement leaves it from the
+		// projection before the line lands (ADR 0068).
+		const name = this.ticketName(item.ticketIdentity);
+		// The Starting window the row's spinner face reads (ADR 0030, beside
+		// ADR 0068): the merge wears the same face the start wears while its
+		// command runs, so the operator sees the plane at work.
+		this.reports.starting(item.ticketIdentity, true);
 		const result = await runMergePullRequest({
 			runner: this.runner,
 			sources: config.sources,
@@ -772,27 +781,31 @@ class HandoffDispatchModule implements HandoffDispatch {
 			taskType: item.taskType,
 			attempt: { id: attempt.id, ticketIdentity: item.ticketIdentity, taskType: item.taskType },
 		});
+		// The merged pull request leaves the projection the moment the merge
+		// lands: its source stops returning it at the next refresh, and the
+		// retirement does that now, the way that refresh would (ADR 0068).
+		if (result.outcome === "merged")
+			this.state.retireMembership(pullRequest.identity, newestMembershipOf(pullRequest).sourceName);
 		// The row left at the claim, the way the Consultation's pickup
 		// leaves it, and the route settles back to open without a work cycle:
 		// no work cycle ran for the action.
 		this.state.settleQueuedPlaneActionRoute(item.ticketIdentity);
 		if (!this.stopped) this.settleIntentOnStarted(item.ticketIdentity, { ok: true });
 		this.reports.refresh();
+		this.reports.starting(item.ticketIdentity, false);
 		if (this.stopped) return;
 		if (result.outcome === "merged") {
 			this.reports.notice(
 				overCap
-					? `force-dispatched the merge of ${this.ticketName(item.ticketIdentity)} over the Parallel limit`
-					: `the merge of ${this.ticketName(item.ticketIdentity)} ran from the Work queue`,
+					? `force-dispatched the merge of ${name} over the Parallel limit`
+					: `the merge of ${name} ran from the Work queue`,
 			);
 		} else {
 			// The block stands on the Message line in the warning voice, with
 			// no bell (ADR 0068): the pull request's comment carries the fact
 			// to the source, and the needs-work label the fire wrote carries it
 			// to the machine.
-			this.reports.warning(
-				`the merge of ${this.ticketName(item.ticketIdentity)} was blocked: ${result.reason}`,
-			);
+			this.reports.warning(`the merge of ${name} was blocked: ${result.reason}`);
 		}
 	}
 
