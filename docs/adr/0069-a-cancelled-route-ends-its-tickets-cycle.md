@@ -3,6 +3,8 @@
 Status: accepted
 Date: 2026-09-30
 
+Corrected in part by ADR 0072: the cycle the removal ended ended at the ask, and the removal's fact is the mark on the trace. This ADR stands for the operator's act: the removal is final, and the machine does not bring the route back.
+
 ## Context
 
 ADR 0067 lets a routed ticket stand `queued` while its route stands: the
