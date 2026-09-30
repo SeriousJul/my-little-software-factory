@@ -2661,8 +2661,8 @@ export function App({
 		contextFor(mode, {
 			selectedTicket: ticketAtCursor(),
 			// The facts the grouping controls read: the axis in effect names the
-			// Action bar hint, and a cursor on a Group header is what turns the
-			// shared `x` from the section toggle into the fold (issue #159).
+			// Action bar hint, and a cursor on a Group header is what opens the
+			// `Space` key to the fold (issue #159, issue #170).
 			groupingAxis: groupingAxisRef.current,
 			groupHeaderSelected: groupHeaderAtCursor() !== undefined,
 			selectedGroupHeader: groupHeaderAtCursor() ?? null,
@@ -2959,8 +2959,8 @@ export function App({
 				// shell writes the durable value and states the axis on the
 				// Message line, and the list redraws with its Group headers.
 				"group-axis": () => cycleGroupingAxis(),
-				// The shared `x` on a Group header folds that Group; the
-				// catalogue resolved the key here on the facts under the cursor.
+				// `Space` on a Group header folds that Group; the catalogue
+				// resolved the key here on the facts under the cursor (issue #170).
 				"group-fold": () => foldGroupAtCursor(),
 				launch: () => {
 					if (Object.keys(configRef.current.consultationTypes).length === 0)
@@ -3533,7 +3533,7 @@ export function App({
 	 *
 	 * The index is a place in the row list, so it can name a Group header: the
 	 * cursor rests there, the Ticket controls refuse it in the catalogue's
-	 * words, and the fold takes the shared `x`. It can also name the blank row
+	 * words, and the fold takes the `Space` key there. It can also name the blank row
 	 * between two Groups, which holds no cursor: the click lands on the Group
 	 * that row parts, and never folds it.
 	 */
@@ -3622,8 +3622,8 @@ export function App({
 		setSelectedIndex(nextIndex);
 	}
 	/**
-	 * Fold or open the Group under the cursor, the shared `x` route (user
-	 * story 32). A press anywhere else keeps the Section toggle: the catalogue
+	 * Fold or open the Group under the cursor, the `Space` route (issue #170).
+	 * A press anywhere else answers the catalogue's refusal: the catalogue
 	 * resolved the key to this route on the facts under the cursor.
 	 */
 	function foldGroupAtCursor() {

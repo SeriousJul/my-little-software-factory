@@ -260,8 +260,9 @@ exists to keep over two window rows. The plane never folds or unfolds on its own
 press or click is the only mover - and a fold never changes what is selected:
 where the cursor stands on a Group header no row is selected, so every control
 that needs one refuses with the catalogue's own reason, and the fold takes the
-shared `x` that the Section toggle otherwise runs, resolved by the facts under
-the cursor. The header's glyph is the fold's marker, so the no-color
+`Space` key, which answers nowhere else: on any other row the catalogue
+refuses it, and `x` keeps its one meaning, the Section toggle, on every row a
+Group header row included. The header's glyph is the fold's marker, so the no-color
 presentation keeps every word and the fold needs no palette of its own.
 
 Which Groups stand folded is a session fact and is never written to disk; the
