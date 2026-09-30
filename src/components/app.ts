@@ -81,7 +81,11 @@ import {
 } from "../observation.ts";
 import { parallelSeatCount } from "../parallel.ts";
 import { evaluatePlacement, type PlacementEvaluation } from "../placement.ts";
-import { DEFAULT_MERGE_METHOD, isPlaneActionTaskType, planeActionSettingOf } from "../plane-actions.ts";
+import {
+	DEFAULT_MERGE_METHOD,
+	isPlaneActionTaskType,
+	planeActionSettingOf,
+} from "../plane-actions.ts";
 
 import { RefreshCoordinator } from "../refresh.ts";
 import type { RepositoryMapping } from "../repo.ts";

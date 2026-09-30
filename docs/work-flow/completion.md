@@ -55,9 +55,15 @@ prefix. No pull request body is read for it, and no body is parsed.
 
 In manual mode, `awaiting` waits for the operator. Enter opens the decision
 modal, which states what the transition wrote and offers the handoff of the
-position those labels derived, or the close of the cycle. Key `w` closes it
-too, from either Ticket pane and behind a confirmation, without the turn log
-beside it (ADR 0031): the two routes run one close, so they cannot drift.
+position those labels derived, or the close of the cycle. A position whose
+task type is a plane action - the merge on the `ready-to-ship` position
+(ADR 0068) - stands for the handoff: the modal offers the merge as a
+confirmable row, and the operator's confirm enters the Work queue like every
+start. The merge's outcome stands on the Decision screen where the row stood,
+and the ticket detail shows the latest attempt beside the handoff facts.
+Key `w` closes it too, from either Ticket pane and behind a confirmation,
+without the turn log beside it (ADR 0031): the two routes run one close, so
+they cannot drift.
 
 The same key closes a cycle whose turn never settled. An in-flight ticket -
 `handed-off` or `running` - has no settled turn to decide, so its close ends
@@ -72,13 +78,19 @@ hung start still ends in the close the operator asked for.
 Auto-handoff mode decides without the operator, within the configured
 limits:
 
-- A fired transition that carries `auto-advance` routes the task of the
+	- A fired transition that carries `auto-advance` routes the task of the
 	position it derived. The route is the auto top-up's continuation: it enters
 	the Work queue like every other start (ADR 0049, ADR 0051), so a full
 	parallel limit is no longer a wait in awaiting - the item waits in the
 	queue, and the top-up adds one item at a time into an empty queue. The
 	handoff starts on the ticket that position sits on, which is the fixing
 	pull request when the written labels put the pull request in the machine.
+	A position whose task type is a plane action (ADR 0068) - the merge on the
+	`ready-to-ship` position - enters the queue as the action's item instead:
+	the pickup runs the merge through the command runner with no agent and no
+	worktree, the attempt stands for the Handoff limit's count, and the
+	outcome's fire lands its fact on the attempt's record. The run settles the
+	route back to open without a work cycle: the action never opens a cycle.
 	At the per-ticket handoff limit the route degrades to close. The route's
 	`auto-handed-off` decision lands the same way the operator's does: only
 	once the routed handoff has started the agent. A route that cannot start -

@@ -37,6 +37,13 @@ Agent.
 | The migration backs the old file up, writes its report, keeps the file's mode, validates the rewrite before it writes, and stops the load with the file unchanged on any failure | `test/config-migration.test.ts` | Passed |
 | After the migration the loader is strict: a pre-machine key is one readable config error that points at the backup | `test/config-migration.test.ts`, `test/config.test.ts` | Passed |
 | The shipped Default configuration and the development config carry the machine, its transitions, and templates that name no workflow label | `test/config.test.ts`, `test/configuration-docs.test.ts` | Passed |
+| The task type's action form: exactly one of a template and an action, the registry the one home of the names and methods, the profile keys refused on the action form, and the shipped Default's merge taking the action form | `test/plane-action-merge.test.ts`, `test/config.test.ts` | Passed |
+| The merge's fresh read settles an already merged pull request, a refused merge blocks with the source's reason and its comment posts before the outcome stands, and the outcome fires the task type's transition on the attempt's record | `test/plane-action-merge.test.ts` | Passed |
+| The merge start enters the Work queue from the Decision screen's confirm and the auto top-up's add, the queue pause holds the item standing, the route settles to open without a work cycle, and the Handoff limit counts the attempts beside the handoffs and holds the top-up's ask at the cap | `test/plane-action-merge.test.ts` | Passed |
+| The decision's row names the action, its override key unavailable with the catalogue's reason, the outcome standing on the screen where the row stood, the Message line taking both outcomes without a bell, and the ticket detail showing the latest attempt | `test/plane-action-merge.test.ts` | Passed |
+| The cancel of a plane action's row settles the row's ticket to open without a work cycle, and the route it named still ends the cycle with its decision word (ADR 0069) | `test/state.test.ts` | Passed |
+| The migration moves the seeded merge template to the action form with a report line, and a customized merge template stays a prompt task type through it | `test/config-migration.test.ts`, `test/plane-action-merge.test.ts` | Passed |
+| The plane action's ask from the top-up and the re-fired skip walk runs behind the walk's actionable, hold, and limit guards | `test/plane-action-merge.test.ts` | Passed - the limit hold measured on the top-up's ask; the guard standing is the walk's shared placement |
 
 ## The live development run walk (issue #148)
 

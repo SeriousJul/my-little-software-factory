@@ -2881,15 +2881,31 @@ export class FactoryState {
 	 * ask recorded stands on the trace. A start with no route keeps the
 	 * ticket's state, the way the row's removal always did, and a route whose
 	 * source already left the queued wait behind the removal moves nothing.
+	 *
+	 * The plane action's row (ADR 0068) settles its own ticket the way the
+	 * run's answer does: back to open without a work cycle, because the merge
+	 * action opens no cycle and the cap counts the work a ticket carried, not
+	 * its merges. The route the row carries still ends its cycle with the
+	 * count, the way a cancelled handoff route does.
 	 */
 	cancelWorkItem(ticketIdentity: string): boolean {
 		return this.transaction(() => {
 			const row = this.db
-				.prepare("SELECT route_from_identity FROM work_queue WHERE ticket_identity = ?")
-				.get(ticketIdentity) as { route_from_identity: string | null } | null;
+				.prepare(
+					"SELECT route_from_identity, action_task_type FROM work_queue WHERE ticket_identity = ?",
+				)
+				.get(ticketIdentity) as {
+				route_from_identity: string | null;
+				action_task_type: string | null;
+			} | null;
 			if (row === null) return false;
 			this.db.prepare("DELETE FROM work_queue WHERE ticket_identity = ?").run(ticketIdentity);
 			this.repackWorkQueuePositions();
+			if (row.action_task_type !== null) {
+				this.db
+					.prepare("UPDATE tickets SET state = 'open' WHERE identity = ? AND state = 'queued'")
+					.run(ticketIdentity);
+			}
 			if (row.route_from_identity !== null) {
 				this.db
 					.prepare(

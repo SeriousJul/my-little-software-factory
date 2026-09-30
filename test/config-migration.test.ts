@@ -263,6 +263,26 @@ describe("the pure rewrite", () => {
 		expect(config.taskTypes.rework.transition).toBeUndefined();
 	});
 
+	test("a customized merge template stays a prompt task type (ADR 0068)", () => {
+		const text = PRE_MACHINE_SEED.replace(
+			"Merge pull request {external-key}: {title}.",
+			"Merge my pull request {external-key}: {title}.",
+		);
+		const result = migrate(text);
+		const config = validateConfig(parseToml(result.configText));
+		// The template does not match the shipped seed exactly, so the load
+		// leaves the prompt form standing: the operator's merge agent keeps
+		// running, with its profile, and no action and no method come over.
+		expect(config.taskTypes.merge?.template).toContain("Merge my pull request");
+		expect(config.taskTypes.merge?.action).toBeUndefined();
+		expect(config.taskTypes.merge?.method).toBeUndefined();
+		expect(config.taskTypes.merge?.thinking).toBe("low");
+		// The customized template keeps its own label prose, so the migration
+		// installs no transition over it, the way it leaves rework's.
+		expect(config.taskTypes.merge?.transition).toBeUndefined();
+		expect(result.reportText).toContain("`merge`: left untouched");
+	});
+
 	test("an auto-close flag is dropped and named, and its replacement is pointed at", () => {
 		const report = migrate(withMergeAutoCloseOn()).reportText;
 		expect(report).toContain("`auto-close = true` on `merge`: dropped");

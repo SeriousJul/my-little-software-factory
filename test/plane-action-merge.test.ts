@@ -28,6 +28,7 @@ import {
 import type { FetchedTicket, Ticket } from "../src/domain/ticket.ts";
 import { createHandoffDispatch, type HandoffDispatchReports } from "../src/handoff-dispatch.ts";
 import { planeActionSettingOf, runMergePullRequest } from "../src/plane-actions.ts";
+import type { CommandOptions, CommandResult } from "../src/runner.ts";
 import { type FactoryState, openFactoryState } from "../src/state.ts";
 import type { FetchOutcome } from "../src/ticket-source.ts";
 import { firePlaneActionOutcome } from "../src/workflow.ts";
@@ -805,6 +806,10 @@ describe("the dispatch's ask and pickup", () => {
 	});
 });
 
+/** Whether the merge row stands focused in the decision surface. */
+const mergeRowFocused = (frame: string): boolean =>
+	rowsOf(frame).some((row) => row.includes("❯") && row.includes("Merge pull request"));
+
 describe("the decision screen's merge", () => {
 	/** The props the decision tests boot on: the pull request, seeded. */
 	function decisionProps(state: FactoryState, runner: FakeRunner, src: FakeSource): AppProps {
@@ -821,10 +826,6 @@ describe("the decision screen's merge", () => {
 			pollIntervalMs: 60_000,
 		};
 	}
-
-	/** Whether the merge row stands focused in the decision modal. */
-	const mergeRowFocused = (frame: string): boolean =>
-		rowsOf(frame).some((row) => row.includes("❯") && row.includes("Merge pull request"));
 
 	test("the confirm runs the merge with no agent and no worktree, and the record stands", async () => {
 		const state = planeState();
@@ -877,6 +878,65 @@ describe("the decision screen's merge", () => {
 		state.close();
 	});
 
+	test(
+		"the ticket detail shows the latest attempt beside the handoff facts",
+		async () => {
+			const state = planeState();
+			seed(state, "awaiting", mergeRoute());
+			const runner = new FakeRunner();
+			runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+			// The run's fresh read finds the pull request open, the merge fails, and
+			// the fire's fresh read still reads it open: the needs-work branch holds.
+			stubReadSequence(runner, [{ state: "open" }, { state: "open" }]);
+			stubMerge(runner, 1, "GraphQL: PullRequest is not mergeable.\n");
+			const src = new FakeSource("pulls", "github-pull-requests", pullSuccess());
+			const props = decisionProps(state, runner, src);
+
+			await withApp(
+				async (setup) => {
+					await awaitFrame(setup, (f) => f.includes(pullTitle.slice(0, 3)), "the row");
+					await press(setup, "return", "the decision modal", (f) =>
+						f.includes("Merge pull request"),
+					);
+					await pressArrow(setup, "down", "the Goto row", () => true);
+					await pressArrow(setup, "down", "the merge row's focus", mergeRowFocused);
+					// The block keeps the ticket listed, open with the needs-work
+					// fact, and the run's line lands on the Message line.
+					const frame = await press(setup, "return", "the block's line", (f) =>
+						messageRowOf(f).includes(
+							`the merge of "${pullTitle}" was blocked: GraphQL: PullRequest is not mergeable.`,
+						),
+					);
+					// The ticket's row: the click lands the cursor on it, and the
+					// detail pane stands beside the list.
+					const rows = rowsOf(frame);
+					const rowIndex = rows.findIndex((row) => row.includes(pullTitle.slice(0, 3)));
+					expect(rowIndex).toBeGreaterThanOrEqual(0);
+					await mouseClick(setup, 2, rowIndex);
+					// The reason wraps at the pane's width, so the wait takes the
+					// line's head, and the assertion takes the reason as facts.
+					await awaitFrame(
+						setup,
+						(f) => f.includes("Merge:") && f.includes("blocked - GraphQL: PullRequest"),
+						"the attempt's line",
+					);
+				},
+				WIDTH,
+				30,
+				props,
+			);
+
+			// The line the pane painted is the block the run recorded: the record
+			// beside the handoff facts names the reason the source gave.
+			const attempt = state.latestPlaneActionAttempt(pullIdentity);
+			expect(attempt?.outcome).toBe("blocked");
+			expect(attempt?.reason).toBe("GraphQL: PullRequest is not mergeable.");
+			expect(attempt?.decision).toBe("merged");
+			state.close();
+		},
+		{ timeout: 25_000 },
+	);
+
 	test("the override key is unavailable on the merge row, with the reason the catalogue states", async () => {
 		const state = planeState();
 		seed(state, "awaiting", mergeRoute());
@@ -901,6 +961,96 @@ describe("the decision screen's merge", () => {
 		);
 		state.close();
 	});
+
+	test(
+		"the outcome stands on the screen where the row stood",
+		async () => {
+			// A runner that delays the pull request's fresh read, so the window
+			// between the attempt's record and the route's settle stands long
+			// enough for the decision screen to open on it.
+			class SlowReadRunner extends FakeRunner {
+				private readonly delayMs: number;
+
+				constructor(delayMs: number) {
+					super();
+					this.delayMs = delayMs;
+				}
+
+				async run(
+					command: string,
+					args: readonly string[],
+					options?: CommandOptions,
+				): Promise<CommandResult> {
+					if (command === "gh" && args.slice(0, 2).join(" ") === "api --hostname") {
+						await new Promise((resolve) => setTimeout(resolve, this.delayMs));
+					}
+					return super.run(command, args, options);
+				}
+			}
+
+			const state = planeState();
+			seed(state, "awaiting", mergeRoute());
+			const runner = new SlowReadRunner(1500);
+			runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+			// The run's fresh read finds the pull request open, the merge lands,
+			// and the fire's fresh read finds it merged: the run and the fire
+			// each take one read, in that order.
+			stubReadSequence(runner, [{ state: "open" }, { merged: true }]);
+			stubMerge(runner, 0);
+			const src = new FakeSource("pulls", "github-pull-requests", pullSuccess());
+			const props = decisionProps(state, runner, src);
+
+			await withApp(
+				async (setup) => {
+					await awaitFrame(setup, (f) => f.includes(pullTitle.slice(0, 3)), "the row");
+					// The decision modal: the merge row stands beside Close and Goto.
+					await press(
+						setup,
+						"return",
+						"the decision modal",
+						(f) => f.includes("Decision:") && f.includes("Merge pull request"),
+					);
+					await pressArrow(setup, "down", "the Goto row", () => true);
+					await pressArrow(setup, "down", "the merge row's focus", mergeRowFocused);
+					// The confirm closes the modal: the ticket keeps its decision's
+					// wait in queued, and the ask's line stands on the Message line.
+					await press(setup, "return", "the ask's line", (f) =>
+						messageRowOf(f).includes(`the merge of "${pullTitle}" is in the Work queue`),
+					);
+					// The attempt stands in the state before the fire's fresh read
+					// answers, and the route's settle waits on that read.
+					const attemptDeadline = Date.now() + 5000;
+					for (;;) {
+						if (state.latestPlaneActionAttempt(pullIdentity) !== null) break;
+						if (Date.now() >= attemptDeadline)
+							throw new Error("the attempt did not stand in the state");
+						await new Promise((resolve) => setTimeout(resolve, 20));
+					}
+					// The decision screen opens again on the queued ticket: the
+					// outcome stands where the row stood, and no row waits for a
+					// confirm.
+					const frame = await press(
+						setup,
+						"return",
+						"the outcome's line",
+						(f) => f.includes("Decision:") && f.includes("the merge landed"),
+					);
+					expect(frame).not.toContain("Merge pull request");
+				},
+				WIDTH,
+				30,
+				props,
+			);
+
+			// The record stands for the outcome the screen read: the operator's
+			// decision word on the merged outcome.
+			const attempt = state.latestPlaneActionAttempt(pullIdentity);
+			expect(attempt?.outcome).toBe("merged");
+			expect(attempt?.decision).toBe("merged");
+			state.close();
+		},
+		{ timeout: 20_000 },
+	);
 });
 
 describe("the auto top-up merge", () => {
