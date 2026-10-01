@@ -462,7 +462,7 @@ _Avoid_: dispatch block, retry gate, backoff
 
 **Task type**:
 The named description of a kind of work and its Transition, the label facts a completed turn of it writes, or a Plane action's outcome, fires (ADR 0068).
-A prompt task type holds its prompt template and the Task profile its handoffs start on. An action task type holds a Plane action instead of the template and the profile, and the two forms never mix on one type.
+A prompt task type holds its prompt template and the Task profile its handoffs start on. An action task type holds a Plane action instead of the template and the profile, and the two forms never mix on one type. A prompt task type can open a pull request for its ticket's work: the plane makes the Pull request open of it at the Handoff start, and the Agent works the branch the pull request already stands on.
 A Workflow state offers a task type, and the default task type offers one when no state matches. The completion behavior follows the task type to whatever ticket it runs on.
 _Avoid_: prompt, template, task
 
@@ -591,6 +591,14 @@ _Avoid_: label flip, position edit, entry write
 **Placement label**:
 A label named in a Workflow state's all or any match set. The Placement write owns this set: it adds and removes placement labels, and it never touches a label no state names, such as a severity label. A state's none set names exclusion, not ownership.
 _Avoid_: entry label, position label, workflow label
+
+**Pull request open**:
+The act the control plane makes when it starts a Handoff of a task type that opens a pull request: the pull request of the ticket's factory branch is opened as a draft before the Agent's first commit, with the title and body the plane writes. The Agent never creates the pull request; it works the branch the pull request already stands on. A pull request the branch already carries is reused, and no second one is opened. A failed act refuses the Handoff start with a readable reason, a Handoff that fails after the act closes the pull request it opened and deletes the remote branch it created, and a cycle end closes a draft pull request the ticket still wears, never a pull request the machine has published. It runs only on a worktree environment, because only that environment holds the factory branch.
+_Avoid_: agent pull request, pull request creation, branch open
+
+**Pull request publish**:
+The act the Transition fire makes before its label write when a completed turn of a task type that opens a pull request settles: it marks the ticket's own draft pull request ready for review, so the machine can act on it and the list can hold it. The fire reaches the draft through a direct source read, because a draft pull request the machine has not labeled never stands in the ticket list. A pull request whose head carries no commit ahead of its base is treated as the missing pull request: the fire records the skip on its own reason, publishes nothing, and writes no label, and the re-fire sweep lands the labels when a commit appears.
+_Avoid_: PR ready, draft clear, label flip
 
 **Override**:
 A one-shot change to the settings of a single Handoff, made in the override panel before the Handoff starts.

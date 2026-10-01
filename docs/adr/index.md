@@ -84,3 +84,4 @@ body states the context, the decision, and the consequences.
 - [ADR 0073: The Stub run serves GitHub from the Command runner seam](./0073-the-stub-run-serves-github-from-the-command-runner-seam.md)
 - [ADR 0074: The rework prompt carries the pull request's review verdict](./0074-the-rework-prompt-carries-the-pull-requests-review-verdict.md)
 - [ADR 0075: The plane initializes repositories with its own deterministic generator](./0075-the-plane-initializes-repositories-with-its-own-deterministic-generator.md)
+- [ADR 0076: The plane opens the ticket's pull request as a draft before the agent works](./0076-the-plane-opens-the-tickets-pull-request-before-the-agent-works.md)
