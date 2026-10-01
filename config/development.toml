@@ -464,7 +464,7 @@ host = "github.com"
 name = "my-security-advisories"
 kind = "github-security-advisories"
 refresh-interval-seconds = 300
-repositories = ["SeriousJul/my-little-software-factory", "SeriousJul/pi-extensions", "SeriousJul/seriousjul.github.io", "SeriousJul/yapdf"]
+repositories = ["SeriousJul/my-little-software-factory", "SeriousJul/pi-extensions", "SeriousJul/seriousjul.github.io"]
 host = "github.com"
 
 [[sources]]
