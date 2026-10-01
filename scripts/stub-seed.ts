@@ -9,10 +9,13 @@
  * directory. Direct hand edits of the world file stay legal between seeds:
  * the seed is the reset, not the editor.
  *
- * The local checkouts are small git repositories with no origin, created
- * here: the worktree base falls back to the checkout's HEAD, the existing
- * rule. The repository identities keep the live host form with the stub
- * owner, so the TUI reads them as ordinary repositories.
+ * The local checkouts are small git repositories, created here, with a bare
+ * origin seeded beside them (ADR 0076): the plane's pull request open runs
+ * real git, and its push of the factory branch lands on that origin, so the
+ * walk keeps the live push step. The worktree base falls back to the
+ * checkout's HEAD, the existing rule. The repository identities keep the
+ * live host form with the stub owner, so the TUI reads them as ordinary
+ * repositories.
  */
 import { execFileSync } from "node:child_process";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
@@ -24,8 +27,12 @@ import { renderStubConfig, stubWorldSeed } from "../src/stub/seed.ts";
 const TARGET = process.argv[2] ?? join(homedir(), ".local/share/my-little-software-factory/stub");
 const REPOSITORY_NAMES = ["alpha", "beta"];
 
-/** One seeded checkout: a small git repository with no origin and a first commit. */
-function createCheckout(path: string, name: string): void {
+/**
+ * One seeded checkout: a small git repository with a first commit and a
+ * bare origin seeded beside it (ADR 0076), the place the plane's pull
+ * request open pushes the factory branch.
+ */
+function createCheckout(path: string, name: string, origin: string): void {
 	mkdirSync(path, { recursive: true });
 	writeFileSync(
 		join(path, "README.md"),
@@ -48,12 +55,18 @@ function createCheckout(path: string, name: string): void {
 		"-m",
 		`the ${name} checkout's first commit`,
 	]);
+	// The bare origin beside the checkout: the plane's push of the factory
+	// branch runs real git against it.
+	execFileSync("git", ["init", "--bare", origin], { stdio: ["ignore", "pipe", "pipe"] });
+	git(["remote", "add", "origin", origin]);
+	git(["push", "-u", "origin", "main"]);
 }
 
 rmSync(TARGET, { recursive: true, force: true });
 mkdirSync(join(TARGET, "checkouts"), { recursive: true });
+mkdirSync(join(TARGET, "origins"), { recursive: true });
 for (const name of REPOSITORY_NAMES) {
-	createCheckout(join(TARGET, "checkouts", name), name);
+	createCheckout(join(TARGET, "checkouts", name), name, join(TARGET, "origins", `${name}.git`));
 }
 writeFileSync(join(TARGET, "world.json"), `${JSON.stringify(stubWorldSeed(), null, 2)}\n`);
 writeFileSync(join(TARGET, "config.toml"), renderStubConfig(TARGET));

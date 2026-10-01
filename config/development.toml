@@ -182,8 +182,17 @@ labels-none = ["needs-work", "ready-for-review", "ready-to-ship"]
 # transition hangs off the type that completes it and writes the label facts
 # the machine then reads. The templates carry no label instructions: the
 # plane owns the labels.
+#
+# The pull request open (ADR 0076): a task type that opens a pull request
+# carries `opens-pull-request = true`. At the Handoff start, before the
+# agent's first commit, the plane pushes the ticket's factory branch and
+# opens the pull request on it as a draft; the `{pull-request-url}` in its
+# template is the url of the pull request that stands. The agent commits and
+# pushes and never creates or merges a pull request. A task type without the
+# fact works the branch as before, and the live worktree refuses the open.
 
 [task-types.implement]
+opens-pull-request = true
 template = '''
 Implement the following {source-kind}. 
 
@@ -193,16 +202,20 @@ Implement the following {source-kind}.
    - Implement all acceptance criteria on this branch.
    - Commit all changes to this branch.
 
-2. **Create Pull Request**
-   - Open a new Pull Request.
-   - Link the pull request to the ticket. Successfully merging this pull request may close these issues.
+2. **Work the Pull Request**
+   - The pull request already stands at the url below, opened as a draft on this branch. It links the ticket; merging it closes the issue.
+   - Commit and push your work to this branch. The pull request carries the commits you push.
    - List any technical choices made when specifications were not clear.
+   - Post your notes as a comment on the pull request.
+   - Never create or merge a pull request, and never edit its title or body: the machine owns it.
 
 Repository: {repository}
 
 {external-key}: {title}
 
 URL: {source-url}
+
+Pull request: {pull-request-url}
 
 Labels: {labels}
 
@@ -313,6 +326,7 @@ pull-request-facts = []
 
 [task-types.resolve-security-advisory]
 thinking = "high"
+opens-pull-request = true
 template = '''
 Resolve the following security advisory {external-key}: {title}.
 
@@ -334,9 +348,9 @@ Resolve the following security advisory {external-key}: {title}.
    - Implement the fix.
    - Add a regression test that fails on the vulnerable behavior and passes on the fix.
 
-5. **Commit and Open Pull Request**
-   - Commit all changes to this branch.
-   - Open a pull request linking the source item by its URL.
+5. **Commit the Fix**
+   - Commit all changes to this branch and push them: the pull request that already stands on this branch carries the commits you push. It links the source item by its URL.
+   - Never create or merge a pull request, and never edit its title or body: the machine owns it.
    - Never close, resolve, or withdraw the source item: closing a finding is a maintainer decision made after the fix merges.
 
 Repository: {repository}
@@ -344,6 +358,8 @@ Repository: {repository}
 {external-key}: {title}
 
 URL: {source-url}
+
+Pull request: {pull-request-url}
 
 Labels: {labels}
 
@@ -356,6 +372,7 @@ auto-advance = true
 
 [task-types.resolve-dependabot-alert]
 thinking = "high"
+opens-pull-request = true
 template = '''
 Resolve the following Dependabot alert {external-key}: {title}.
 
@@ -376,11 +393,11 @@ Resolve the following Dependabot alert {external-key}: {title}.
    - On a major bump, apply the minimal breaking migration.
    - Update the lockfile with the project's package manager.
    - Run the test suite.
-   - When no patched version exists, remove or replace the dependency and record the choice in the pull request description.
+   - When no patched version exists, remove or replace the dependency and record the choice in a pull request comment.
 
-5. **Commit and Open Pull Request**
-   - Commit all changes to this branch.
-   - Open a pull request linking the source item by its URL.
+5. **Commit the Fix**
+   - Commit all changes to this branch and push them: the pull request that already stands on this branch carries the commits you push. It links the source item by its URL.
+   - Never create or merge a pull request, and never edit its title or body: the machine owns it.
    - Never close, resolve, or withdraw the source item: closing a finding is a maintainer decision made after the fix merges.
 
 Repository: {repository}
@@ -388,6 +405,8 @@ Repository: {repository}
 {external-key}: {title}
 
 URL: {source-url}
+
+Pull request: {pull-request-url}
 
 Labels: {labels}
 
@@ -400,6 +419,7 @@ auto-advance = true
 
 [task-types.resolve-secret-scanning-alert]
 thinking = "high"
+opens-pull-request = true
 template = '''
 Resolve the following secret scanning alert {external-key}: {title}.
 
@@ -426,9 +446,9 @@ Resolve the following secret scanning alert {external-key}: {title}.
 6. **Never Print the Secret**
    - Never print the secret value in the pull request, in a comment, or in a test.
 
-7. **Commit and Open Pull Request**
-   - Commit all changes to this branch.
-   - Open a pull request linking the source item by its URL.
+7. **Commit the Fix**
+   - Commit all changes to this branch and push them: the pull request that already stands on this branch carries the commits you push. It links the source item by its URL.
+   - Never create or merge a pull request, and never edit its title or body: the machine owns it.
    - Never close, resolve, or withdraw the source item: closing a finding is a maintainer decision made after the fix merges.
 
 Repository: {repository}
@@ -436,6 +456,8 @@ Repository: {repository}
 {external-key}: {title}
 
 URL: {source-url}
+
+Pull request: {pull-request-url}
 
 Labels: {labels}
 

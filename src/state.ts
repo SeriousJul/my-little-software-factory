@@ -49,7 +49,11 @@ import {
 	type TurnLogEntry,
 	turnLogFromCapture,
 } from "./turn-log.ts";
-import { isCoveredByFixingPullRequest, NO_LINKED_PULL_REQUEST_SKIP } from "./workflow.ts";
+import {
+	EMPTY_PULL_REQUEST_SKIP,
+	isCoveredByFixingPullRequest,
+	NO_LINKED_PULL_REQUEST_SKIP,
+} from "./workflow.ts";
 
 /** The schema every state file the plane opens is brought to. Exported so a
  * test can assert the stamp a migration left instead of copying the number. */
@@ -1872,7 +1876,8 @@ export class FactoryState {
 			if (
 				recorded === null ||
 				recorded.fired !== true ||
-				recorded.reason !== NO_LINKED_PULL_REQUEST_SKIP
+				(recorded.reason !== NO_LINKED_PULL_REQUEST_SKIP &&
+					recorded.reason !== EMPTY_PULL_REQUEST_SKIP)
 			)
 				return false;
 			const result = this.db

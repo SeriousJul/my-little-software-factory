@@ -125,8 +125,14 @@ describe("the resolve-security-advisory template", () => {
 		);
 	});
 
-	test("it ends with the pull request step, with no label instruction for the agent", () => {
-		expect(prompt).toContain("Open a pull request linking the source item by its URL");
+	test("it works the pull request the plane opens, with no label instruction for the agent", () => {
+		expect(prompt).toContain(
+			"the pull request that already stands on this branch carries the commits you push",
+		);
+		expect(prompt).toContain("It links the source item by its URL");
+		expect(prompt).toContain("Never create or merge a pull request");
+		expect(prompt).not.toContain("opens-pull-request");
+		expect(prompt).toContain("Pull request: ");
 		expect(prompt).toContain("Never close, resolve, or withdraw the source item");
 		expect(prompt).not.toContain("ready-for-review");
 	});
@@ -185,8 +191,14 @@ describe("the resolve-dependabot-alert template", () => {
 		expect(prompt).toContain("remove or replace the dependency and record the choice");
 	});
 
-	test("it ends with the pull request step, with no label instruction for the agent", () => {
-		expect(prompt).toContain("Open a pull request linking the source item by its URL");
+	test("it works the pull request the plane opens, with no label instruction for the agent", () => {
+		expect(prompt).toContain(
+			"the pull request that already stands on this branch carries the commits you push",
+		);
+		expect(prompt).toContain("It links the source item by its URL");
+		expect(prompt).toContain("Never create or merge a pull request");
+		expect(prompt).not.toContain("opens-pull-request");
+		expect(prompt).toContain("Pull request: ");
 		expect(prompt).toContain("Never close, resolve, or withdraw the source item");
 		expect(prompt).not.toContain("ready-for-review");
 	});
@@ -239,8 +251,14 @@ describe("the resolve-secret-scanning-alert template", () => {
 		);
 	});
 
-	test("it ends with the pull request step, with no label instruction for the agent", () => {
-		expect(prompt).toContain("Open a pull request linking the source item by its URL");
+	test("it works the pull request the plane opens, with no label instruction for the agent", () => {
+		expect(prompt).toContain(
+			"the pull request that already stands on this branch carries the commits you push",
+		);
+		expect(prompt).toContain("It links the source item by its URL");
+		expect(prompt).toContain("Never create or merge a pull request");
+		expect(prompt).not.toContain("opens-pull-request");
+		expect(prompt).toContain("Pull request: ");
 		expect(prompt).toContain("Never close, resolve, or withdraw the source item");
 		expect(prompt).not.toContain("ready-for-review");
 	});

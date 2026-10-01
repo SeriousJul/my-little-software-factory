@@ -3881,3 +3881,398 @@ describe("the review verdict of the rework handoff prompt", () => {
 		);
 	});
 });
+
+// ---------------------------------------------------------------------------
+// ADR 0076: the pull request the plane opens before the agent works.
+// ---------------------------------------------------------------------------
+
+const PR_SOURCE: TicketSourceConfig = {
+	name: "github",
+	kind: "github-issues",
+	refreshIntervalSeconds: 60,
+	repositories: ["acme/billing"],
+	host: "github.com",
+};
+
+/** The handoff ticket with the membership its task type's open step reads. */
+const PR_TICKET: Ticket = {
+	...ticket,
+	memberships: [
+		{
+			sourceName: "github",
+			health: "healthy",
+			identity: "github:github.com:issue-github.com/acme/billing/7",
+			sourceKind: "github-issue",
+			externalKey: "#7",
+			sourceState: "open",
+			url: "https://github.com/acme/billing/issues/7",
+			title: "Retry policy for webhooks",
+			description: "Add a retry policy.",
+			labels: [],
+			externalUpdatedAt: "2026-01-01T00:00:00Z",
+			repository: ticket.repositoryRef,
+			attributes: {},
+		},
+	],
+};
+
+const PR_CONFIG: FactoryConfig = {
+	...BASE_CONFIG,
+	sources: [PR_SOURCE],
+	taskTypes: {
+		...BASE_CONFIG.taskTypes,
+		implement: {
+			opensPullRequest: true,
+			template: "Implement {external-key}.\n\nPull request: {pull-request-url}",
+		},
+	},
+};
+
+const PR_BRANCH = "factory/7-retry-policy-for-webhooks";
+const PR_URL = "https://github.com/acme/billing/pull/42";
+const PR_READ_ARGS = [
+	"api",
+	"--hostname",
+	"github.com",
+	`repos/acme/billing/pulls?state=open&head=${encodeURIComponent(`acme:${PR_BRANCH}`)}`,
+];
+const PR_BODY = `Closes #7\n\n${ticket.url}\n\n${ticket.description}`;
+const PR_CREATE_COMMAND = [
+	"gh",
+	"pr",
+	"create",
+	"--repo",
+	"github.com/acme/billing",
+	"--head",
+	PR_BRANCH,
+	"--draft",
+	"--title",
+	ticket.title,
+	"--body",
+	PR_BODY,
+].join(" ");
+
+/**
+ * Stub the branch push and the branch's pull request read of the open step.
+ * A standing draft stands on a branch the remote already carried, so the
+ * branch read answers it in the standing mode.
+ */
+function stubPullRequestOpenStep(runner: FakeRunner, { standing = false } = {}): void {
+	runner.set("git", ["-C", CHECKOUT, "ls-remote", "--heads", "origin", PR_BRANCH], {
+		stdout: standing ? `abc123\trefs/heads/${PR_BRANCH}\n` : "",
+	});
+	runner.set("git", ["-C", CHECKOUT, "push", "origin", PR_BRANCH], { stdout: "" });
+	if (standing) {
+		runner.set("gh", PR_READ_ARGS, {
+			stdout: JSON.stringify([
+				{
+					number: 42,
+					state: "open",
+					draft: true,
+					html_url: PR_URL,
+					head: { ref: PR_BRANCH },
+					base: { ref: "main" },
+					labels: [],
+				},
+			]),
+		});
+	} else {
+		runner.set("gh", PR_READ_ARGS, { stdout: "[]" });
+		runner.set(
+			"gh",
+			[
+				"pr",
+				"create",
+				"--repo",
+				"github.com/acme/billing",
+				"--head",
+				PR_BRANCH,
+				"--draft",
+				"--title",
+				ticket.title,
+				"--body",
+				PR_BODY,
+			],
+			{ stdout: `${PR_URL}\n` },
+		);
+	}
+}
+
+/** Stub the worktree sequence the open step follows. */
+function stubPrWorktreeHandoff(runner: FakeRunner): void {
+	conventionCheckout(runner);
+	runner.set("git", ["-C", CHECKOUT, "branch", "--list", PR_BRANCH], { stdout: "" });
+	stubRemoteDefaultBranch(runner);
+	runner.set(
+		"herdr",
+		[
+			"worktree",
+			"create",
+			"--cwd",
+			CHECKOUT,
+			"--branch",
+			PR_BRANCH,
+			"--base",
+			"origin/main",
+			"--no-focus",
+		],
+		{ stdout: worktreeCreateJson("ws-wt", "pane-wt") },
+	);
+}
+
+describe("handOffTicket: the pull request the plane opens (ADR 0076)", () => {
+	test("a task type that opens a pull request pushes the branch, opens the draft, and sends the prompt with its url", async () => {
+		const runner = new FakeRunner();
+		stubPrWorktreeHandoff(runner);
+		stubPullRequestOpenStep(runner);
+
+		const outcome = await handOffTicket(
+			PR_TICKET,
+			{ ...defaultChoice, environment: "worktree" },
+			{ config: PR_CONFIG, runner, home: HOME },
+		);
+
+		expect(outcome.status).toBe("ok");
+		// The open step stands between the environment and the agent: the
+		// branch is pushed, the branch's pull requests are read by its head
+		// branch, the draft is opened, and the prompt the agent receives
+		// carries the pull request's url.
+		expect(runner.commands()).toEqual([
+			`git -C ${CHECKOUT} rev-parse --git-dir`,
+			`git -C ${CHECKOUT} remote get-url origin`,
+			`git -C ${CHECKOUT} branch --list ${PR_BRANCH}`,
+			`git -C ${CHECKOUT} remote get-url origin`,
+			`git -C ${CHECKOUT} symbolic-ref refs/remotes/origin/HEAD`,
+			`git -C ${CHECKOUT} fetch origin main`,
+			`herdr worktree create --cwd ${CHECKOUT} --branch ${PR_BRANCH} --base origin/main --no-focus`,
+			`git -C ${CHECKOUT} ls-remote --heads origin ${PR_BRANCH}`,
+			`git -C ${CHECKOUT} push origin ${PR_BRANCH}`,
+			`gh ${PR_READ_ARGS.join(" ")}`,
+			PR_CREATE_COMMAND,
+			`herdr agent start ${AGENT} --kind pi --pane pane-wt`,
+			`herdr agent prompt ${AGENT} Implement #7.\n\nPull request: ${PR_URL}`,
+		]);
+	});
+
+	test("a draft the branch already carries is reused: no second draft is opened", async () => {
+		const runner = new FakeRunner();
+		stubPrWorktreeHandoff(runner);
+		stubPullRequestOpenStep(runner, { standing: true });
+
+		const outcome = await handOffTicket(
+			PR_TICKET,
+			{ ...defaultChoice, environment: "worktree" },
+			{ config: PR_CONFIG, runner, home: HOME },
+		);
+
+		expect(outcome.status).toBe("ok");
+		const commands = runner.commands();
+		expect(commands).toContain(`gh ${PR_READ_ARGS.join(" ")}`);
+		expect(commands).not.toContain(PR_CREATE_COMMAND);
+		// The prompt still carries the standing pull request's url.
+		expect(commands).toContain(
+			`herdr agent prompt ${AGENT} Implement #7.\n\nPull request: ${PR_URL}`,
+		);
+	});
+
+	test("a failed agent start after the open closes the opened draft and deletes the pushed branch", async () => {
+		const runner = new FakeRunner();
+		stubPrWorktreeHandoff(runner);
+		stubPullRequestOpenStep(runner);
+		runner.set("herdr", ["agent", "start", AGENT, "--kind", "pi", "--pane", "pane-wt"], {
+			code: 1,
+			stderr: '{"error":{"code":"agent_name_taken","message":"agent name is already used"}}\n',
+		});
+
+		const outcome = await handOffTicket(
+			PR_TICKET,
+			{ ...defaultChoice, environment: "worktree" },
+			{ config: PR_CONFIG, runner, home: HOME },
+		);
+
+		expect(outcome.status).toBe("failed");
+		expect(reasonOf(outcome)).toContain("agent_name_taken");
+		const commands = runner.commands();
+		const openedAt = commands.indexOf(PR_CREATE_COMMAND);
+		const closedAt = commands.indexOf(`gh pr close 42 --repo github.com/acme/billing`);
+		const deletedAt = commands.indexOf(`git -C ${CHECKOUT} push origin --delete ${PR_BRANCH}`);
+		const removedAt = commands.indexOf(`herdr worktree remove --workspace ws-wt`);
+		expect(openedAt).toBeGreaterThanOrEqual(0);
+		// The no-residue contract: the attempt closes the pull request it
+		// opened, deletes the remote branch it pushed, and removes the
+		// environment it created, in that order, after the failure.
+		expect(closedAt).toBeGreaterThan(openedAt);
+		expect(deletedAt).toBeGreaterThan(closedAt);
+		expect(removedAt).toBeGreaterThan(deletedAt);
+		expect(commands).toContain(`git -C ${CHECKOUT} branch -D ${PR_BRANCH}`);
+	});
+
+	test("a reused draft is not closed when the agent start fails after it", async () => {
+		const runner = new FakeRunner();
+		stubPrWorktreeHandoff(runner);
+		stubPullRequestOpenStep(runner, { standing: true });
+		runner.set("herdr", ["agent", "start", AGENT, "--kind", "pi", "--pane", "pane-wt"], {
+			code: 1,
+			stderr: '{"error":{"code":"agent_name_taken","message":"agent name is already used"}}\n',
+		});
+
+		const outcome = await handOffTicket(
+			PR_TICKET,
+			{ ...defaultChoice, environment: "worktree" },
+			{ config: PR_CONFIG, runner, home: HOME },
+		);
+
+		expect(outcome.status).toBe("failed");
+		const commands = runner.commands();
+		// The standing draft pre-dates the attempt: the attempt closes
+		// nothing and deletes nothing of the branch it did not push.
+		expect(commands).not.toContain(`gh pr close 42 --repo github.com/acme/billing`);
+		expect(commands).not.toContain(`git -C ${CHECKOUT} push origin --delete ${PR_BRANCH}`);
+		expect(commands).toContain(`herdr worktree remove --workspace ws-wt`);
+	});
+
+	test("a failed push leaves no residue of its own to clean up", async () => {
+		const runner = new FakeRunner();
+		stubPrWorktreeHandoff(runner);
+		runner.set("git", ["-C", CHECKOUT, "ls-remote", "--heads", "origin", PR_BRANCH], {
+			stdout: "",
+		});
+		runner.set("git", ["-C", CHECKOUT, "push", "origin", PR_BRANCH], {
+			code: 128,
+			stderr: "fatal: unable to access: Network is down\n",
+		});
+
+		const outcome = await handOffTicket(
+			PR_TICKET,
+			{ ...defaultChoice, environment: "worktree" },
+			{ config: PR_CONFIG, runner, home: HOME },
+		);
+
+		expect(outcome.status).toBe("failed");
+		expect(reasonOf(outcome)).toContain("pushing the factory branch");
+		const commands = runner.commands();
+		expect(commands).not.toContain(`gh ${PR_READ_ARGS.join(" ")}`);
+		expect(commands).not.toContain(PR_CREATE_COMMAND);
+		expect(commands).not.toContain(`gh pr close 42 --repo github.com/acme/billing`);
+		// The environment is removed, and the branch the remote never carried
+		// is never deleted.
+		expect(commands).toContain(`herdr worktree remove --workspace ws-wt`);
+		expect(commands).not.toContain(`git -C ${CHECKOUT} push origin --delete ${PR_BRANCH}`);
+	});
+
+	test("a branch the remote already carries is not deleted on a later failure", async () => {
+		const runner = new FakeRunner();
+		stubPrWorktreeHandoff(runner);
+		runner.set("git", ["-C", CHECKOUT, "ls-remote", "--heads", "origin", PR_BRANCH], {
+			stdout: "abc123\trefs/heads/factory/7-retry-policy-for-webhooks\n",
+		});
+		runner.set("git", ["-C", CHECKOUT, "push", "origin", PR_BRANCH], { stdout: "" });
+		runner.set("gh", PR_READ_ARGS, { stdout: "[]" });
+		runner.set(
+			"gh",
+			[
+				"pr",
+				"create",
+				"--repo",
+				"github.com/acme/billing",
+				"--head",
+				PR_BRANCH,
+				"--draft",
+				"--title",
+				ticket.title,
+				"--body",
+				PR_BODY,
+			],
+			{ stdout: `${PR_URL}\n` },
+		);
+		runner.set("herdr", ["agent", "start", AGENT, "--kind", "pi", "--pane", "pane-wt"], {
+			code: 1,
+			stderr: '{"error":{"code":"agent_name_taken","message":"agent name is already used"}}\n',
+		});
+
+		const outcome = await handOffTicket(
+			PR_TICKET,
+			{ ...defaultChoice, environment: "worktree" },
+			{ config: PR_CONFIG, runner, home: HOME },
+		);
+
+		expect(outcome.status).toBe("failed");
+		const commands = runner.commands();
+		// The attempt opened a draft on a branch it did not create: it closes
+		// its draft and deletes nothing.
+		expect(commands).toContain(`gh pr close 42 --repo github.com/acme/billing`);
+		expect(commands).not.toContain(`git -C ${CHECKOUT} push origin --delete ${PR_BRANCH}`);
+	});
+
+	test("a task type that opens a pull request refuses the live worktree before it acts", async () => {
+		const runner = new FakeRunner();
+		conventionCheckout(runner);
+
+		const outcome = await handOffTicket(
+			PR_TICKET,
+			{ ...defaultChoice, environment: "live-worktree" },
+			{ config: PR_CONFIG, runner, home: HOME },
+		);
+
+		expect(outcome.status).toBe("failed");
+		expect(reasonOf(outcome)).toContain("opens a pull request");
+		expect(reasonOf(outcome)).toContain("worktree environment");
+		// The refusal is a pre-flight: the repository resolves, and nothing
+		// else touches the remote.
+		expect(runner.commands()).toEqual([
+			`git -C ${CHECKOUT} rev-parse --git-dir`,
+			`git -C ${CHECKOUT} remote get-url origin`,
+		]);
+	});
+
+	test("a ticket that lists on no source the task type can read fails the open's pre-flight", async () => {
+		const runner = new FakeRunner();
+		conventionCheckout(runner);
+
+		const outcome = await handOffTicket(
+			ticket,
+			{ ...defaultChoice, environment: "worktree" },
+			{ config: PR_CONFIG, runner, home: HOME },
+		);
+
+		expect(outcome.status).toBe("failed");
+		expect(reasonOf(outcome)).toContain("opens a pull request");
+		expect(runner.commands()).toEqual([
+			`git -C ${CHECKOUT} rev-parse --git-dir`,
+			`git -C ${CHECKOUT} remote get-url origin`,
+		]);
+	});
+
+	test("a task type that opens no pull request runs no open step", async () => {
+		const runner = new FakeRunner();
+		conventionCheckout(runner);
+		runner.set("git", ["-C", CHECKOUT, "branch", "--list", PR_BRANCH], { stdout: "" });
+		stubRemoteDefaultBranch(runner);
+		runner.set(
+			"herdr",
+			[
+				"worktree",
+				"create",
+				"--cwd",
+				CHECKOUT,
+				"--branch",
+				PR_BRANCH,
+				"--base",
+				"origin/main",
+				"--no-focus",
+			],
+			{ stdout: worktreeCreateJson("ws-wt", "pane-wt") },
+		);
+
+		const outcome = await handOffTicket(
+			PR_TICKET,
+			{ ...defaultChoice, environment: "worktree" },
+			{ config: BASE_CONFIG, runner, home: HOME },
+		);
+
+		expect(outcome.status).toBe("ok");
+		const commands = runner.commands();
+		expect(commands).not.toContain(`git -C ${CHECKOUT} push origin ${PR_BRANCH}`);
+		expect(commands).not.toContain(`gh ${PR_READ_ARGS.join(" ")}`);
+	});
+});

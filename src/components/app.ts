@@ -87,7 +87,7 @@ import {
 	planeActionLabel,
 	planeActionSettingOf,
 } from "../plane-actions.ts";
-
+import { closeCycleEndDraftPullRequest } from "../pull-request.ts";
 import { RefreshCoordinator } from "../refresh.ts";
 import type { RepositoryMapping } from "../repo.ts";
 import {
@@ -1988,6 +1988,16 @@ export function App({
 		runRouteHandoff(ticket, ticket.lastCompletion?.transition ?? null, choice);
 	};
 
+	// The forced refresh of the pull request sources, the one seam the fires
+	// read the projection through (ADR 0027, ADR 0076): the settle-time fire,
+	// the manual re-fire, and the recorded skip's sweep all pull the pull
+	// request sources the way this answers it.
+	const refreshPullRequestSources = useCallback(async (): Promise<void> => {
+		for (const source of configRef.current.sources) {
+			if (source.kind === "github-pull-requests")
+				await coordinatorRef.current?.refreshAndWait(source.name);
+		}
+	}, []);
 	/**
 	 * The manual re-fire of a settled turn's transition (ADR 0054).
 	 *
@@ -2028,19 +2038,13 @@ export function App({
 			}
 			// Read the source as it stands now: the fire reads the projection
 			// the refresh just landed, the way the settle-time fire does.
-			const refresh = async () => {
-				for (const source of configRef.current.sources) {
-					if (source.kind === "github-pull-requests")
-						await coordinatorRef.current?.refreshAndWait(source.name);
-				}
-			};
 			const outcome = await fireTransition({
 				config: configRef.current,
 				state,
 				runner: commandRunner,
 				ticketIdentity: ticket.identity,
 				taskType: completion.taskType,
-				refresh,
+				refresh: refreshPullRequestSources,
 			});
 			if (outcome === null) {
 				reportMessage({
@@ -2101,12 +2105,34 @@ export function App({
 			return;
 		}
 		refreshTicketSources(ticket.identity);
+		closeCycleEndDraft(ticket.identity);
 		// The Close cleanup: the environment of the handoff the decision ends.
 		const stored = state.latestHandoff(ticket.identity);
 		if (stored !== null) runCloseCleanup(ticket.identity, stored, "closed");
 		// The Close action writes no progress line of its own.
 		clearOperationMessage("none");
 	};
+
+	/**
+	 * The cycle-end draft close (ADR 0076): when the cycle ends - the Close of
+	 * a decided cycle, the Abandon, the handoff limit, the auto-close - the
+	 * draft the ticket still wears is read off the factory branch and closed.
+	 * It runs best-effort, after the close: a failure is a warning on the
+	 * line, and a branch that carries no draft - or nothing at all - closes
+	 * nothing and says nothing.
+	 */
+	const closeCycleEndDraft = useCallback(
+		(identity: string): void => {
+			const ticket = findTicket(identity);
+			if (ticket === undefined) return;
+			void closeCycleEndDraftPullRequest(commandRunner, configRef.current.sources, ticket).then(
+				(failure) => {
+					if (failure !== null) setWarningMessage(failure);
+				},
+			);
+		},
+		[commandRunner, findTicket, setWarningMessage],
+	);
 
 	/**
 	 * Close the work cycle of an in-flight Ticket (ADR 0031).
@@ -2739,6 +2765,7 @@ export function App({
 				return;
 			}
 			refreshTicketSources(ticket.identity);
+			closeCycleEndDraft(ticket.identity);
 			const stored = state.latestHandoff(ticket.identity);
 			if (stored !== null) runCloseCleanup(ticket.identity, stored, "abandoned");
 			setWarningMessage(`ticket ${ticket.identity} abandoned`);
@@ -3650,32 +3677,29 @@ export function App({
 			// be in the list before the machine can find it - and fire the
 			// task type's transition through the command runner.
 			fireCompleted: async (ticket) => {
-				const refresh = async () => {
-					for (const source of configRef.current.sources) {
-						if (source.kind === "github-pull-requests")
-							await coordinatorRef.current?.refreshAndWait(source.name);
-					}
-				};
 				return await fireTransition({
 					config: configRef.current,
 					state,
 					runner: commandRunner,
 					ticketIdentity: ticket.ticketIdentity,
 					taskType: ticket.taskType,
-					refresh,
+					refresh: refreshPullRequestSources,
 				});
 			},
 			// The re-fire of the recorded skips (ADR 0042): a refresh that found
 			// the fixing pull request re-fires the transition the ticket's
 			// newest completion trace recorded as the skip. The sweep reads the
 			// projection the refresh just landed, so it takes no refresh of its
-			// own, and the fire it runs writes through the command runner, the
-			// way the settle-time fire does.
+			// own, but the fire it runs carries the settle-time fire's refresh
+			// (ADR 0076), so the publish it runs lands the pull request the
+			// fire's position resolves on, and the fire writes through the
+			// command runner, the way the settle-time fire does.
 			refireRecordedSkips: () =>
 				refireRecordedSkips({
 					config: configRef.current,
 					state,
 					runner: commandRunner,
+					refresh: refreshPullRequestSources,
 				}),
 			// The Work queue's pickup (ADR 0034): the cycle starts the waiting
 			// manual starts before auto-dispatch, in queue order.
@@ -3684,7 +3708,10 @@ export function App({
 			// pull request, a closed issue): re-read the sources now, so the
 			// ticket is re-verified - or drops off the list - before the next
 			// automatic dispatch of it.
-			onCycleEnd: (identity) => refreshTicketSources(identity),
+			onCycleEnd: (identity) => {
+				refreshTicketSources(identity);
+				closeCycleEndDraft(identity);
+			},
 			// The Close cleanup of an auto-ended cycle: the environment of the
 			// handoff the decision ends. A cleanup that cannot remove the
 			// checkout leaves a leftover the ticket carries as a fact, so the
@@ -3763,6 +3790,8 @@ export function App({
 		clearOperationMessage,
 		setStatus,
 		refreshTicketSources,
+		closeCycleEndDraft,
+		refreshPullRequestSources,
 	]);
 	function focusPane(pane: Pane) {
 		focusedPaneRef.current = pane;
