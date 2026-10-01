@@ -27,6 +27,7 @@ import {
 	githubCloneUrl,
 	matchesGitHubRepository,
 	matchesRepository,
+	repositoryInitCheckoutPath,
 	resolveRepository,
 } from "../src/repo.ts";
 import { commandFailureText } from "../src/runner.ts";
@@ -115,6 +116,61 @@ describe("githubCloneUrl and expandHome", () => {
 		expect(expandHome("~/src/billing", "/home/op")).toBe("/home/op/src/billing");
 		expect(expandHome("~", "/home/op")).toBe("/home/op");
 		expect(expandHome("/abs/billing", "/home/op")).toBe("/abs/billing");
+	});
+});
+
+describe("repositoryInitCheckoutPath", () => {
+	const identity = "github.com/acme/billing";
+	const displayName = "acme/billing";
+
+	test("the documented owner/name key form finds the checkout", () => {
+		expect(
+			repositoryInitCheckoutPath(
+				{ "acme/billing": "/home/op/checkout/billing" },
+				identity,
+				displayName,
+				"/home/op",
+			),
+		).toBe("/home/op/checkout/billing");
+	});
+
+	test("the host-qualified identity key also matches", () => {
+		expect(
+			repositoryInitCheckoutPath(
+				{ "github.com/acme/billing": "/home/op/checkout/billing" },
+				identity,
+				displayName,
+				"/home/op",
+			),
+		).toBe("/home/op/checkout/billing");
+	});
+
+	test("the lookup is case-insensitive, a sibling clone key included", () => {
+		expect(
+			repositoryInitCheckoutPath(
+				{ "Acme/Billing": "/home/op/checkout/billing" },
+				identity,
+				displayName,
+				"/home/op",
+			),
+		).toBe("/home/op/checkout/billing");
+	});
+
+	test("a ~ path in the mapping is expanded to the home", () => {
+		expect(
+			repositoryInitCheckoutPath(
+				{ "acme/billing": "~/src/billing" },
+				identity,
+				displayName,
+				"/home/op",
+			),
+		).toBe("/home/op/src/billing");
+	});
+
+	test("an unmapped repository resolves to the ~/src/<name> convention", () => {
+		expect(repositoryInitCheckoutPath({}, identity, displayName, "/home/op")).toBe(
+			"/home/op/src/billing",
+		);
 	});
 });
 

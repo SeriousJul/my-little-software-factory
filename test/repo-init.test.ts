@@ -564,14 +564,10 @@ describe("the init fact (ADR 0075)", () => {
 			pushedCommit: "commit-a",
 			at: expect.any(String),
 		});
-		// A second repository is its own row.
+		// A second repository is its own row: each read stands its own fact.
 		state.setRepositoryInitFact("acme/other", "hash-b", "commit-b");
-		expect(
-			state
-				.repositoryInitFacts()
-				.map((f) => f.repository)
-				.sort(),
-		).toEqual(["acme/factory", "acme/other"]);
+		expect(state.repositoryInitFact("acme/factory")?.settingsHash).toBe("hash-a");
+		expect(state.repositoryInitFact("acme/other")?.settingsHash).toBe("hash-b");
 		// The drift helper: the stored hash against the current settings' hash.
 		const fact = state.repositoryInitFact("acme/factory");
 		if (fact === null) throw new Error("expected a stored init fact");
@@ -584,10 +580,10 @@ describe("the init fact (ADR 0075)", () => {
 		const state = openFactoryState(":memory:");
 		state.setRepositoryInitFact("acme/factory", "hash-a", "commit-a");
 		state.setRepositoryInitFact("acme/factory", "hash-b", "commit-b");
-		const facts = state.repositoryInitFacts().filter((f) => f.repository === "acme/factory");
-		expect(facts).toHaveLength(1);
-		expect(facts[0].settingsHash).toBe("hash-b");
-		expect(facts[0].pushedCommit).toBe("commit-b");
+		const fact = state.repositoryInitFact("acme/factory");
+		expect(fact).not.toBe(null);
+		expect(fact?.settingsHash).toBe("hash-b");
+		expect(fact?.pushedCommit).toBe("commit-b");
 	});
 });
 

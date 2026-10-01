@@ -56,6 +56,7 @@ import {
 	type Ticket,
 	type TicketListFilter,
 } from "../domain/ticket.ts";
+import { fileExists } from "../fs.ts";
 import {
 	baseChoice,
 	type HandoffChoice,
@@ -90,13 +91,18 @@ import {
 import { closeCycleEndDraftPullRequest } from "../pull-request.ts";
 import { RefreshCoordinator } from "../refresh.ts";
 import type { RepositoryMapping } from "../repo.ts";
+import { repositoryInitCheckoutPath } from "../repo.ts";
 import {
 	type InstructionFileName,
 	planRepositoryInit,
 	type RepositoryInitPlan,
 	repositoryInitSettingsHash,
 } from "../repo-init.ts";
-import { commitRepositoryInit, type RepositoryInitRepository } from "../repo-init-flow.ts";
+import {
+	commitRepositoryInit,
+	type RepositoryInitRepository,
+	repositoryInitStanding,
+} from "../repo-init-flow.ts";
 import type { CommandOptions } from "../runner.ts";
 import {
 	type CommandRunner,
@@ -547,15 +553,16 @@ export function App({
 	// on maps to the identity the fact keys on through a ticket the Group holds.
 	// On every axis but repository the marker is absent, so the column never
 	// stands where the init does not act.
+	// The current settings' hash, computed once per render so the marker below
+	// compares each Group's fact against it without re-hashing the config per
+	// Group (ADR 0075): the hash moves only when the config does.
+	const currentInitHash = repositoryInitSettingsHash(config.workflowStates, config.taskTypes);
 	const repositoryInitMarkerOf = (value: string): string | null => {
 		if (groupingAxis !== "repository") return null;
 		const ticket = tickets.find((item) => item.repository === value);
 		const identity = ticket?.repositoryRef.identity ?? value;
 		const fact = state === undefined ? null : state.repositoryInitFact(identity);
-		if (fact === null) return "uninit";
-		if (fact.settingsHash !== repositoryInitSettingsHash(config.workflowStates, config.taskTypes))
-			return "drift";
-		return null;
+		return repositoryInitStanding(fact, currentInitHash);
 	};
 	const ticketRowsState: readonly ListedRow<Ticket>[] = ticketRows(
 		tickets,
@@ -3569,7 +3576,10 @@ export function App({
 			return;
 		initNoteShownRef.current = true;
 		// The repositories that stand uninitialized or in Init drift on this read,
-		// once per repository the list carries.
+		// once per repository the list carries. The hash is hoisted out of the
+		// loop, the way the marker hoists it, so the note re-hashes the config
+		// once, not per repository.
+		const currentHash = repositoryInitSettingsHash(config.workflowStates, config.taskTypes);
 		const seen = new Set<string>();
 		const unprepared: { name: string; marker: "uninit" | "drift" }[] = [];
 		for (const ticket of machineTickets) {
@@ -3577,14 +3587,7 @@ export function App({
 			if (seen.has(name)) continue;
 			seen.add(name);
 			const identity = ticket.repositoryRef.identity;
-			const fact = state.repositoryInitFact(identity);
-			const marker: "uninit" | "drift" | null =
-				fact === null
-					? "uninit"
-					: fact.settingsHash !==
-							repositoryInitSettingsHash(config.workflowStates, config.taskTypes)
-						? "drift"
-						: null;
+			const marker = repositoryInitStanding(state.repositoryInitFact(identity), currentHash);
 			if (marker !== null) unprepared.push({ name, marker });
 		}
 		if (unprepared.length === 0) return;
@@ -4126,9 +4129,16 @@ export function App({
 			setErrorMessage(`no source is configured for ${ref.displayName}`);
 			return;
 		}
-		const checkout = cfg.repos[ref.identity];
-		if (checkout === undefined) {
-			setErrorMessage(`${ref.displayName} has no local checkout to work a throwaway worktree in`);
+		// The act's checkout: the plane's own repository resolution rule, the
+		// case-insensitive mapping lookup over the identity and the display name,
+		// then the ~/src/<name> convention - the same rule the sources resolve
+		// through, so a documented owner/name key, a sibling clone, a ~ path, and
+		// an unmapped convention all find the checkout the operator already has.
+		const checkout = repositoryInitCheckoutPath(cfg.repos, ref.identity, ref.displayName, homeDir);
+		if (!(await fileExists(checkout))) {
+			setErrorMessage(
+				`${ref.displayName} has no local checkout at ${checkout} to work a throwaway worktree in`,
+			);
 			return;
 		}
 		let ghOptions: CommandOptions = {};

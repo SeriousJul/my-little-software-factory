@@ -2175,26 +2175,6 @@ export class FactoryState {
 		};
 	}
 
-	/** Every stored init fact, keyed by repository: the set the plane reads to
-	 * tell which repositories are Initialized and, against the current
-	 * settings' hash, which of them have drifted (ADR 0075). */
-	repositoryInitFacts(): RepositoryInitFact[] {
-		const rows = this.db
-			.prepare("SELECT repository, settings_hash, pushed_commit, at FROM repository_init")
-			.all() as Array<{
-			repository: string;
-			settings_hash: string;
-			pushed_commit: string;
-			at: string;
-		}>;
-		return rows.map((row) => ({
-			repository: row.repository,
-			settingsHash: row.settings_hash,
-			pushedCommit: row.pushed_commit,
-			at: row.at,
-		}));
-	}
-
 	/**
 	 * Store the init fact of one repository (ADR 0075): the settings hash the
 	 * generator stood the content under, the commit the act pushed, and the

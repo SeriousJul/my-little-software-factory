@@ -97,6 +97,25 @@ export function lookupRepositoryMapping(
 	return undefined;
 }
 
+/**
+ * The checkout path the Repository init works in (ADR 0075): the explicit
+ * mapping the operator wrote, expanded, then the ~/src/<name> convention. It
+ * reads the same rule the repository resolution reads - the case-insensitive
+ * lookup over the identity and the display name, then `expandHome` - minus the
+ * clone: the init act works in one existing checkout and refuses where there is
+ * none, so a missing path is the caller's to name, not a reason to bend here.
+ */
+export function repositoryInitCheckoutPath(
+	repos: Record<string, string>,
+	identity: string,
+	displayName: string,
+	home: string,
+): string {
+	const name = displayName.split("/").pop() ?? displayName;
+	const mapped = lookupRepositoryMapping(repos, [identity, displayName]);
+	return mapped !== undefined ? expandHome(mapped, home) : join(home, "src", name);
+}
+
 /** Resolve the checkout for one repository, cloning when it is missing. */
 export async function resolveRepository(
 	repository: string | RepositoryRef,

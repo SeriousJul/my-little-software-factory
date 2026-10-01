@@ -1321,11 +1321,10 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		// marker the uninit or drifted repository's Group header wears. The bar
 		// spends its cells on the keys the rows answer.
 		actionBar: false,
-		// Out of the Key guide and the Action bar: the operator finds the init
-		// on the marker the uninit or drifted repository's Group header wears,
-		// not in the catalog of row keys. The key still resolves through the
-		// catalogue's availability, so the guide's completeness is not spent on
-		// a contextual act.
+		// Guide-only, out of the Action bar: the operator finds the init on the
+		// marker the uninit or drifted repository's Group header wears, so the
+		// bar spends no cell on a contextual act. The guide still lists the key,
+		// and the key resolves through the catalogue's availability.
 		guideOnly: true,
 		priority: 43,
 		modes: [...ticketBaseModes],

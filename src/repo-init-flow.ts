@@ -31,7 +31,7 @@ import {
 	sourceNameCollision,
 } from "./repo-init.ts";
 import type { CommandOptions, CommandRunner } from "./runner.ts";
-import type { FactoryState } from "./state.ts";
+import type { FactoryState, RepositoryInitFact } from "./state.ts";
 import { GhAuthenticator } from "./ticket-source.ts";
 
 /**
@@ -161,6 +161,21 @@ export async function commitRepositoryInit(
 }
 
 /**
+ * The standing one repository's init fact stands on against the current
+ * settings (ADR 0075): `uninit` where the plane has never init'd it, `drift`
+ * where it init'd it under settings that have since changed, and null where the
+ * stored fact matches. The plane's Group marker and the one-time note both read
+ * it, and pass the hash they hoist so a render computes it once, not per Group.
+ */
+export function repositoryInitStanding(
+	fact: RepositoryInitFact | null,
+	currentHash: string,
+): "uninit" | "drift" | null {
+	if (fact === null) return "uninit";
+	return fact.settingsHash !== currentHash ? "drift" : null;
+}
+
+/**
  * Whether the operator's current settings drifted from the fact recorded when
  * the repository was init'd, so the plane can name it for a re-init. A missing
  * fact is not drift: the repository has never been init'd.
@@ -171,7 +186,10 @@ export function repositoryInitDrifted(
 	workflowStates: readonly WorkflowState[],
 	taskTypes: Record<string, TaskTypeConfig>,
 ): boolean {
-	const fact = state.repositoryInitFact(identity);
-	if (fact === null) return false;
-	return fact.settingsHash !== repositoryInitSettingsHash(workflowStates, taskTypes);
+	return (
+		repositoryInitStanding(
+			state.repositoryInitFact(identity),
+			repositoryInitSettingsHash(workflowStates, taskTypes),
+		) === "drift"
+	);
 }
