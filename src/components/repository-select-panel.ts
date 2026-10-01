@@ -68,6 +68,12 @@ const SEARCH_ROWS = 2;
 const NOTE_ROWS = 1;
 /** The list window the box wants at its full size. */
 const PREFERRED_LIST_ROWS = 12;
+/**
+ * The list area always holds at least one row: the loading face, the
+ * failure line, and the empty word all stand in it, so the box never asks
+ * for less room than its own content paints.
+ */
+const MIN_LIST_ROWS = 1;
 
 export function RepositorySelectPanel({
 	fetchRepositories,
@@ -109,11 +115,13 @@ export function RepositorySelectPanel({
 			? repositories
 			: repositories.filter((item) => item.displayName.toLowerCase().includes(query.toLowerCase()));
 
+	const listRows = Math.max(MIN_LIST_ROWS, Math.min(PREFERRED_LIST_ROWS, filtered.length));
 	const frame = modalFrame(terminalWidth, terminalHeight, {
 		maxWidth: CONTENT_WIDTH + 4,
-		rows: SEARCH_ROWS + NOTE_ROWS + Math.min(PREFERRED_LIST_ROWS, filtered.length),
-		// The search and the note are the part that stays: the list scrolls.
-		minRows: SEARCH_ROWS + NOTE_ROWS,
+		rows: SEARCH_ROWS + NOTE_ROWS + listRows,
+		// The search, the note, and the one row the state stands on are the
+		// part that stays: the list scrolls.
+		minRows: SEARCH_ROWS + NOTE_ROWS + MIN_LIST_ROWS,
 	});
 	const visibleRows = Math.max(0, frame.contentRows - SEARCH_ROWS - NOTE_ROWS);
 	const rows: readonly ActionRow[] = filtered.map((item) => ({

@@ -13,8 +13,13 @@ import { describe, expect, test } from "bun:test";
 import { mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createElement } from "@opentui/react";
+import { testRender } from "@opentui/react/test-utils";
 
-import { VIEWER_REPOSITORIES_QUERY } from "../src/repository-list.ts";
+import { contextFor } from "../src/components/controls.ts";
+import { RepositorySelectPanel } from "../src/components/repository-select-panel.ts";
+import { SPINNER_FRAMES } from "../src/components/shared/spinner.ts";
+import { type InitableRepository, VIEWER_REPOSITORIES_QUERY } from "../src/repository-list.ts";
 import {
 	awaitFrame,
 	closeOverlay,
@@ -258,6 +263,53 @@ describe("the repository select panel", () => {
 			HEIGHT,
 			{ config: BASE_CONFIG, runner },
 		);
+	});
+
+	// The read's frame stands on its own (ADR 0082): the face keeps its row,
+	// the note keeps its row, and the box asks for the room its content paints.
+	// The app settles the read in a microtask, so the state this test holds is
+	// the component's: the read never settles, and the face stands where the
+	// operator finds it.
+	test("the loading frame holds the face and the note in their own rows", async () => {
+		const setup = await testRender(
+			createElement(RepositorySelectPanel, {
+				fetchRepositories: () =>
+					new Promise<
+						| { status: "success"; repositories: readonly InitableRepository[] }
+						| { status: "failed"; reason: string }
+					>(() => undefined),
+				onSelect: () => undefined,
+				onCancel: () => undefined,
+				context: contextFor("repository-select", {
+					listCanMove: false,
+					detailCanScroll: false,
+					sourceCount: 0,
+					refreshingSourceCount: 0,
+					handoffActive: false,
+					messageTruncated: false,
+					consultationTypesConfigured: true,
+				}),
+				message: null,
+				onEmergencyExit: () => undefined,
+			}),
+			{ width: WIDTH, height: HEIGHT, exitOnCtrlC: false },
+		);
+		try {
+			await setup.flush();
+			const rows = rowsOf(setup.captureCharFrame());
+			const faceRow = rows.findIndex((row) => row.includes("Reading repositories"));
+			const noteRow = rows.findIndex((row) => row.includes("Enter selects. Esc closes."));
+			expect(faceRow).toBeGreaterThan(-1);
+			// The note stands below the face, whole: neither cuts the other.
+			expect(noteRow).toBeGreaterThan(faceRow);
+			// The face wears a glyph of its own frames beside its word.
+			const glyph = SPINNER_FRAMES.find((candidate) =>
+				rows[faceRow]?.includes(`${candidate} Reading`),
+			);
+			expect(glyph).toBeDefined();
+		} finally {
+			await setup.renderer.destroy();
+		}
 	});
 
 	test("Enter on a row runs the plan and opens the confirmation panel", async () => {
