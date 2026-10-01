@@ -40,6 +40,8 @@ export type InteractionMode =
 	| "action-panel"
 	| "decision-modal"
 	| "missing-modal"
+	/** The modal that selects the repository to init (ADR 0082). */
+	| "repository-select"
 	/** The Live view's streaming sub-mode (ADR 0040). */
 	| "live-view"
 	| "key-guide"
@@ -85,6 +87,7 @@ type ControlKey =
 	| "r"
 	| "a"
 	| "m"
+	| "o"
 	| "c"
 	| "f"
 	| "i"
@@ -194,6 +197,15 @@ export interface ControlContext {
 	 * the item instead of starting or deciding.
 	 */
 	queueItemForSelectedRow?: WorkQueueItem | null;
+	/**
+	 * The count of repositories in the init's select list (ADR 0082).
+	 *
+	 * The confirm control reads the fact: while the list is loading or holds
+	 * nothing, Enter is refused in the catalogue's words.
+	 */
+	repositoryCount?: number;
+	/** The text of the init's select list's search (ADR 0082). */
+	searchText?: string;
 	listCanMove: boolean;
 	detailCanScroll: boolean;
 	sourceCount: number;
@@ -572,11 +584,13 @@ const listMove = (context: ControlContext): ControlAvailability =>
 	context.listCanMove
 		? available()
 		: unavailable(
-				consultationMode(context.mode)
-					? "the Consultation list has nowhere to move"
-					: workQueueMode(context.mode)
-						? "the Work queue has nowhere to move"
-						: "the Ticket list has nowhere to move",
+				context.mode === "repository-select"
+					? "the repository list has nowhere to move"
+					: consultationMode(context.mode)
+						? "the Consultation list has nowhere to move"
+						: workQueueMode(context.mode)
+							? "the Work queue has nowhere to move"
+							: "the Ticket list has nowhere to move",
 			);
 const detailScroll = (context: ControlContext): ControlAvailability =>
 	context.detailCanScroll
@@ -953,6 +967,7 @@ const planeModes: readonly InteractionMode[] = [
 	...formModes,
 	"action-panel",
 	...modalModes,
+	"repository-select",
 	"live-view",
 	"key-guide",
 	"message-view",
@@ -1036,7 +1051,9 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 						? ["up", "down", "j", "k", "pageup", "pagedown", "home", "end"]
 						: mode === "work-queue-list"
 							? ["up", "down", "j", "k", "pageup", "pagedown", "home", "end"]
-							: ["up", "down", "tab"],
+							: mode === "repository-select"
+								? ["up", "down", "j", "k"]
+								: ["up", "down", "tab"],
 		keyLabel: "↑↓/jk",
 		scope: "control-plane",
 		actionBar: true,
@@ -1048,6 +1065,7 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 			"override-list",
 			"override-model",
 			"override-text",
+			"repository-select",
 		],
 		availability: listMove,
 	},
@@ -1329,6 +1347,70 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		priority: 43,
 		modes: [...ticketBaseModes],
 		availability: repositoryInit,
+	},
+	{
+		// The init's select list (ADR 0082): `o` opens the list of the
+		// repositories the operator's gh identity can init - the user's own,
+		// and those of their organizations - from any base pane. The list is
+		// the bootstrap path for a repository that has no ticket and no source
+		// yet, the case the Group header's `i` cannot reach. The bar names it,
+		// because the operator has no row the cursor stands on there.
+		id: "repository-select-open",
+		label: "Select repository",
+		keys: () => ["o"],
+		keyLabel: "o",
+		scope: "control-plane",
+		actionBar: true,
+		priority: 38,
+		modes: [...baseModes],
+		availability: available,
+	},
+	{
+		// The select list's confirm (ADR 0082): Enter hands the row under the
+		// cursor to the init's planning, and the confirmation panel the
+		// operator reads next is the one the Group header's `i` opens.
+		id: "select-repository",
+		label: "Select",
+		keys: () => ["return"],
+		keyLabel: "Enter",
+		scope: "control-plane",
+		actionBar: true,
+		priority: 70,
+		modes: ["repository-select"],
+		availability: (context) =>
+			context.repositoryCount !== undefined && context.repositoryCount > 0
+				? available()
+				: unavailable("the list holds no repository"),
+	},
+	{
+		// The select list's explicit clear (ADR 0082): Backspace edits the
+		// search text character by character, and Del takes the whole query
+		// back in one key, the way the Model row's clear does.
+		id: "repository-select-clear",
+		label: "Clear search",
+		keys: () => ["delete"],
+		keyLabel: "Del",
+		scope: "control-plane",
+		actionBar: true,
+		priority: 60,
+		modes: ["repository-select"],
+		availability: (context) =>
+			context.searchText !== undefined && context.searchText !== ""
+				? available()
+				: unavailable("the search holds no text"),
+	},
+	{
+		// The select list's way out (ADR 0082): closing discards nothing,
+		// because the list keeps no draft.
+		id: "repository-select-cancel",
+		label: "Cancel",
+		keys: () => ["escape"],
+		keyLabel: "Esc",
+		scope: "control-plane",
+		actionBar: true,
+		priority: 90,
+		modes: ["repository-select"],
+		availability: available,
 	},
 	{
 		// `u` takes a source out of the factory's way (ADR 0070): the flag is
@@ -2461,6 +2543,8 @@ export function modeTitle(mode: InteractionMode): string {
 			return "Form action";
 		case "action-panel":
 			return "Action panel";
+		case "repository-select":
+			return "Repository select";
 		case "consultation-interaction":
 			return "Agent terminal";
 		case "key-guide":

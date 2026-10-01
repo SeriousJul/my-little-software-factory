@@ -16,6 +16,7 @@ import { createElement, useTerminalDimensions } from "@opentui/react";
 import type { ReactElement } from "react";
 import { useRef, useState } from "react";
 import type { Completion, Ticket } from "../../domain/ticket.ts";
+import type { InitableRepository } from "../../repository-list.ts";
 import type { Consultation, WorkQueueItem } from "../../state.ts";
 import { currentThemeResolution } from "../../theme-source.ts";
 import type { TurnLogEntry } from "../../turn-log.ts";
@@ -37,6 +38,7 @@ import {
 	paneElement,
 	TURN_LOG_PANE,
 } from "../modal-chrome.ts";
+import { RepositorySelectPanel } from "../repository-select-panel.ts";
 import { SectionHeader } from "../section-header.ts";
 import { truncateToWidth } from "../text.ts";
 import { paint } from "../theme.ts";
@@ -742,6 +744,65 @@ function gotoContext(paneAlive: boolean): ControlContext {
 		handoffActive: false,
 		messageTruncated: false,
 		consultationTypesConfigured: true,
+	});
+}
+
+/** The list the repository select example stands on: an organization pair and the operator's own. */
+const GALLERY_REPOSITORIES: readonly InitableRepository[] = [
+	{
+		identity: "github.com/acme/factory",
+		displayName: "acme/factory",
+		owner: "acme",
+		name: "factory",
+		htmlUrl: "https://github.com/acme/factory",
+	},
+	{
+		identity: "github.com/acme/billing",
+		displayName: "acme/billing",
+		owner: "acme",
+		name: "billing",
+		htmlUrl: "https://github.com/acme/billing",
+	},
+	{
+		identity: "github.com/jul/notes",
+		displayName: "jul/notes",
+		owner: "jul",
+		name: "notes",
+		htmlUrl: "https://github.com/jul/notes",
+	},
+];
+
+/**
+ * The repository select example draws the production panel (ADR 0082) with its
+ * read answered at once, so the settled frame holds the list the operator
+ * chooses from. The gallery owns the keyboard here, so the panel's dispatch
+ * sits inactive, the way the dialog examples sit.
+ */
+function GalleryRepositorySelect(): ReactElement {
+	// The base facts the panel's bar reads, in the state the gallery holds:
+	// the gallery's own bar stands on the same facts.
+	const context = contextFor("repository-select", {
+		listCanMove: false,
+		detailCanScroll: false,
+		sourceCount: 0,
+		refreshingSourceCount: 0,
+		handoffActive: false,
+		messageTruncated: false,
+		consultationTypesConfigured: true,
+		repositoryCount: GALLERY_REPOSITORIES.length,
+	});
+	const read: { status: "success"; repositories: readonly InitableRepository[] } = {
+		status: "success",
+		repositories: GALLERY_REPOSITORIES,
+	};
+	return createElement(RepositorySelectPanel, {
+		fetchRepositories: () => Promise.resolve(read),
+		onSelect: () => undefined,
+		onCancel: () => undefined,
+		inputActive: false,
+		context,
+		message: null,
+		onEmergencyExit: () => undefined,
 	});
 }
 
@@ -1457,6 +1518,15 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 				onCancel: () => undefined,
 			}),
 		],
+	},
+	{
+		// The select list that opens the init of a repository the factory has
+		// never seen (ADR 0082): the search, the list rows, and the note stand
+		// in the one frame the operator reads before choosing.
+		id: "repository-select",
+		state: "Repository select: the list the init stands on",
+		rows: 12,
+		render: () => [createElement(GalleryRepositorySelect, { key: "repository-select" })],
 	},
 	{
 		// Enter on an interrupted opening: the panel offers the retry of the

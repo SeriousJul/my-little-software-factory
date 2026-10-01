@@ -95,6 +95,12 @@ factory-ready: it creates the labels your machine writes, writes the convention
 files, and registers the repository's sources, all from the factory's own
 settings.
 
+A repository the factory has not seen yet stands in no Group. Start its init
+from the select list instead: press `o` in the main view, type to find the
+repository, and press Enter. The list shows your GitHub repositories and the
+repositories of the organizations you belong to. The repository needs a local
+clone on the path the plane names; the plane never clones.
+
 ## Extend the workflow machine
 
 The states and the task-type transitions of the Default configuration are the

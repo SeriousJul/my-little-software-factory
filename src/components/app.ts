@@ -103,6 +103,7 @@ import {
 	type RepositoryInitRepository,
 	repositoryInitStanding,
 } from "../repo-init-flow.ts";
+import { type InitableRepository, listInitableRepositories } from "../repository-list.ts";
 import type { CommandOptions } from "../runner.ts";
 import {
 	type CommandRunner,
@@ -165,6 +166,7 @@ import { MissingModal } from "./missing-modal.ts";
 import { type ActionRow, belowMinimum, TOO_SMALL_TEXT } from "./modal-chrome.ts";
 import { type AgentModelList, type ModelListStatus, OverridePanel } from "./override-panel.ts";
 import { repositoryInitPanel } from "./repository-init-panel.ts";
+import { RepositorySelectPanel } from "./repository-select-panel.ts";
 import { RESPONSE_EDITOR_ROWS, ResponseEditor } from "./response-editor.ts";
 import { type MainSection, SectionHeader } from "./section-header.ts";
 import { COPY_REFUSED_REASON } from "./shared/fields.ts";
@@ -211,6 +213,7 @@ type Panel =
 	| { kind: "consultation-delete"; identity: string }
 	| { kind: "consultation-safety"; identity: string }
 	| { kind: "live"; identity: string }
+	| { kind: "repository-select" }
 	| {
 			kind: "repository-init";
 			identity: string;
@@ -3285,6 +3288,10 @@ export function App({
 				// Repository init's confirmation panel (ADR 0075); the catalogue
 				// splits it from the ignore's `i` on the row the cursor stands on.
 				"repository-init": () => openRepositoryInit(),
+				// `o` opens the select list of the repositories the operator's
+				// gh identity can init (ADR 0082): the bootstrap path for a
+				// repository that has no ticket and no source yet.
+				"repository-select-open": () => setPanel({ kind: "repository-select" }),
 				// `Space` on a Group header folds that Group; the catalogue
 				// resolved the key here on the facts under the cursor (issue #170).
 				"group-fold": () => foldGroupAtCursor(),
@@ -4190,6 +4197,56 @@ export function App({
 			plan,
 		});
 	}
+	// The one read the select list stands on (ADR 0082): the operator's own
+	// repositories and those of their organizations, on the ambient gh
+	// identity, which is the identity the operator logs in to work.
+	const fetchInitableRepositories = () => listInitableRepositories(commandRunner, "github.com");
+	// The chosen repository from the select list: the checkout resolves by the
+	// plane's own rule, the plan runs the way the Group header's `i` runs it,
+	// and the confirmation panel opens. A repository without a local checkout
+	// gets the refusal that names the path it needs (ADR 0082).
+	async function openRepositorySelectFor(choice: InitableRepository) {
+		if (state === undefined) {
+			setErrorMessage("the repository init needs SQLite state");
+			return;
+		}
+		const cfg = configRef.current;
+		const checkout = repositoryInitCheckoutPath(
+			cfg.repos,
+			choice.identity,
+			choice.displayName,
+			homeDir,
+		);
+		if (!(await fileExists(checkout))) {
+			setErrorMessage(
+				`${choice.displayName} has no local checkout at ${checkout} to work a throwaway worktree in`,
+			);
+			return;
+		}
+		const plan = await planRepositoryInit({
+			runner: commandRunner,
+			checkout,
+			identity: choice.identity,
+			displayName: choice.displayName,
+			taskTypes: cfg.taskTypes,
+		});
+		if ("reason" in plan) {
+			setErrorMessage(plan.reason);
+			return;
+		}
+		setPanel({
+			kind: "repository-init",
+			identity: choice.identity,
+			repository: {
+				identity: choice.identity,
+				displayName: choice.displayName,
+				host: "github.com",
+				cloneUrl: choice.htmlUrl,
+				checkout,
+			},
+			plan,
+		});
+	}
 	// The confirmed init: runs the act, registers the sources, and writes the
 	// init fact, then adds the sources to the config and reports the result on
 	// the Message line. A refusal stands with its reason and changes nothing.
@@ -4500,7 +4557,11 @@ export function App({
 				// row left the view the operator happens to be in.
 				findTicket(ticketPanel.identity);
 	const panelConsultation =
-		panel !== null && ticketPanel === null
+		panel !== null &&
+		ticketPanel === null &&
+		// The init's select list names no Consultation, and it holds no
+		// identity to look one up by (ADR 0082).
+		panel.kind !== "repository-select"
 			? consultationsRef.current.find((item) => item.id === panel.identity)
 			: undefined;
 	// The open close panel's own copy, re-derived from the record on every
@@ -5199,6 +5260,25 @@ export function App({
 				onHelp: () => openGuide("action-panel"),
 				onMessage: () => openMessage("action-panel"),
 				onUnavailable: setWarningMessage,
+				onEmergencyExit: () => renderer.destroy(),
+			}),
+		panel !== null &&
+			panel.kind === "repository-select" &&
+			createElement(RepositorySelectPanel, {
+				fetchRepositories: fetchInitableRepositories,
+				onSelect: (choice) => {
+					setPanel(null);
+					void openRepositorySelectFor(choice).catch((error) =>
+						setErrorMessage(errorMessage(error)),
+					);
+				},
+				onCancel: () => setPanel(null),
+				context: ticketContext,
+				inputActive: utility === null,
+				onHelp: () => openGuide("repository-select"),
+				onMessage: () => openMessage("repository-select"),
+				onUnavailable: setWarningMessage,
+				message: visibleMessage,
 				onEmergencyExit: () => renderer.destroy(),
 			}),
 		panel !== null &&

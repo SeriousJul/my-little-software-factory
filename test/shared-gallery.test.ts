@@ -102,6 +102,7 @@ describe("the shared control gallery", () => {
 			"close-panel-closing",
 			"ticket-close",
 			"ticket-close-live-worktree",
+			"repository-select",
 			"recovery-panel-opening",
 			"recovery-panel-missing",
 			"recovery-panel-failed",
@@ -198,6 +199,32 @@ describe("the shared control gallery", () => {
 		expect(text).toContain("▾ acme/ledger 1");
 		expect(text).not.toContain("▾ acme/ledger 1 drift");
 		expect(text).not.toContain("▾ acme/ledger 1 uninit");
+	});
+
+	// Issue #189's bootstrap: a repository the factory has never seen stands in
+	// no Group, so the select list is the init's entry for it (ADR 0082). The
+	// reviewer's states are the search, the list's rows, and the note that
+	// names the keys the list answers to.
+	test("the repository select example holds its search, its rows, and its note", async () => {
+		const setup = await gallery("repository-select", 120, 34);
+		const frame = await awaitFrame(setup, (f) => f.includes("jul/notes"), "the list rows");
+		expect(frame).toContain("Init a repository");
+		expect(frame).toContain("acme/factory");
+		expect(frame).toContain("acme/billing");
+		expect(frame).toContain("Enter selects. Esc closes.");
+	});
+
+	test("the gallery walks past the select list without losing its keys", async () => {
+		const setup = await gallery("repository-select");
+		await awaitFrame(setup, (f) => f.includes("jul/notes"), "the list rows");
+		// Tab is the gallery's own key: the panel sits with its dispatch
+		// inactive, so the walk passes it the way it passes every other example.
+		setup.mockInput.pressTab();
+		await awaitFrame(
+			setup,
+			(f) => f.includes(stateLine("recovery-panel-opening")),
+			"the next example's state word",
+		);
 	});
 
 	test("the Type-ahead example shows its search and answers a query", async () => {
