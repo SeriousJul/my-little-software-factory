@@ -1988,6 +1988,16 @@ export function App({
 		runRouteHandoff(ticket, ticket.lastCompletion?.transition ?? null, choice);
 	};
 
+	// The forced refresh of the pull request sources, the one seam the fires
+	// read the projection through (ADR 0027, ADR 0076): the settle-time fire,
+	// the manual re-fire, and the recorded skip's sweep all pull the pull
+	// request sources the way this answers it.
+	const refreshPullRequestSources = useCallback(async (): Promise<void> => {
+		for (const source of configRef.current.sources) {
+			if (source.kind === "github-pull-requests")
+				await coordinatorRef.current?.refreshAndWait(source.name);
+		}
+	}, []);
 	/**
 	 * The manual re-fire of a settled turn's transition (ADR 0054).
 	 *
@@ -2002,16 +2012,6 @@ export function App({
 	 * the read and the write; the fire's labels stand either way, because a
 	 * fire writes convergent facts.
 	 */
-	// The forced refresh of the pull request sources, the one seam the fires
-	// read the projection through (ADR 0027, ADR 0076): the settle-time fire,
-	// the manual re-fire, and the recorded skip's sweep all pull the pull
-	// request sources the way this answers it.
-	const refreshPullRequestSources = useCallback(async (): Promise<void> => {
-		for (const source of configRef.current.sources) {
-			if (source.kind === "github-pull-requests")
-				await coordinatorRef.current?.refreshAndWait(source.name);
-		}
-	}, []);
 	const runRefire = async (ticket: Ticket): Promise<void> => {
 		if (
 			state === undefined ||
