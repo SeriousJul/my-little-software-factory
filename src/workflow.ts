@@ -884,6 +884,22 @@ export async function fireTransition(
 	// A failed write stands as the failure fact; the plane does not re-derive
 	// a position from labels it did not manage to write.
 	if (outcome.writeFailure !== "") return outcome;
+	// The fire's convergence (ADR 0079): a write that took lands on the
+	// projection's labels at once, so the position the machine derives stands
+	// on the labels the machine wrote, not on the labels the source last
+	// fetched. The blocked merge is the case the convergence exists for: the
+	// block's `needs-work` write leaves the position offering the merge for a
+	// whole refresh without it, and the top-up and the operator both read
+	// that position. The source's next refresh overwrites the set with its
+	// own truth, the way it overwrites every fact the projection holds.
+	for (const target of surfaces) {
+		const write = target.kind === "ticket" ? outcome.ticketWrite : outcome.pullRequestWrite;
+		if (write !== null)
+			request.state.convergeMembershipLabels(
+				target.ticket.identity,
+				postWriteLabels(target.ticket.labels, write),
+			);
+	}
 	const surface = pullRequest ?? ticket;
 	const surfaceWrite = pullRequest !== null ? outcome.pullRequestWrite : outcome.ticketWrite;
 	const postLabels = postWriteLabels(surface.labels, surfaceWrite);

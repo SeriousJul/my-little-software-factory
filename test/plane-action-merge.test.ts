@@ -230,6 +230,9 @@ const PR_READ_ARGS = ["api", "--hostname", "github.com", "repos/acme/factory/pul
 // The host rides in the repository identity: `gh pr merge` maps no
 // `--hostname`, and the identity is the form its `--repo` takes.
 const PR_MERGE_ARGS = ["pr", "merge", "#12", "--squash", "--repo", repoIdentity];
+// The outcome fire's label write on the pull request, in the fire's exact
+// argument order: the branch's facts over the projection's labels.
+const PR_EDIT_ARGS = ["pr", "edit", "#12", "--repo", repoIdentity, "--add-label", "needs-work"];
 
 /** The source's answer that the pull request still reads open. */
 function stubOpenRead(runner: FakeRunner): void {
@@ -423,6 +426,32 @@ describe("the attempt record in the state", () => {
 		expect(state.planeActionBlockedUnrefreshed(pullIdentity)).toBe(true);
 		state.applyFetch(pullsSource, pullSuccess(reread));
 		expect(state.planeActionBlockedUnrefreshed(pullIdentity)).toBe(false);
+		state.close();
+	});
+
+	test("the fire's convergence lands the written labels on the newest membership", () => {
+		const state = planeState();
+		const ticketOf = () =>
+			state
+				.visibleTickets(PLANE_WORKFLOW_STATES, PLANE_CONFIG.defaultTaskType, "all")
+				.find((candidate) => candidate.identity === pullIdentity);
+		expect(ticketOf()?.labels).toEqual(["ready-to-ship"]);
+		// The write's answer lands on the projection at once, and the
+		// position the machine derives stands on it: needs-work offers the
+		// rework, not the merge the block moved off.
+		state.convergeMembershipLabels(pullIdentity, ["needs-work"]);
+		const after = ticketOf();
+		expect(after?.labels).toEqual(["needs-work"]);
+		expect(after?.suggestedTaskType).toBe("rework");
+		// A ticket no source lists answers nothing: the draft the machine
+		// just made ready is not listed yet, and there is no row for the
+		// write to land on.
+		state.convergeMembershipLabels("github:github.com:P_999", ["no-listing"]);
+		expect(
+			state
+				.visibleTickets(PLANE_WORKFLOW_STATES, PLANE_CONFIG.defaultTaskType, "all")
+				.find((candidate) => candidate.identity === "github:github.com:P_999"),
+		).toBeUndefined();
 		state.close();
 	});
 
@@ -1996,15 +2025,17 @@ describe("the auto top-up merge", () => {
 			return true;
 		}) as typeof process.stdout.write);
 		try {
+			let held: FactoryState;
 			const { state } = await topUpApp(
 				async (setup) => {
+					// The block's line on the Message line races the rework
+					// handoff's working line, which the converged position asks
+					// on the next cycle, so the wait reads the attempt from the
+					// state the line would state.
 					await awaitFrame(
 						setup,
-						(f) =>
-							messageRowOf(f).includes(
-								`the merge of "${pullTitle}" was blocked: GraphQL: PullRequest is not mergeable.`,
-							),
-						"the block's line",
+						() => held.latestPlaneActionAttempt(pullIdentity)?.outcome === "blocked",
+						"the block's attempt",
 					);
 				},
 				(runner) => {
@@ -2013,6 +2044,15 @@ describe("the auto top-up merge", () => {
 					// open: the needs-work branch holds.
 					stubReadSequence(runner, [{ state: "open" }, { state: "open" }]);
 					stubMerge(runner, 1, "GraphQL: PullRequest is not mergeable.\n");
+				},
+				{
+					// The converged position asks the rework handoff on every
+					// cycle, and the unstubbed herdr refuses each start: the cap
+					// must not engage while the test reads the block's facts.
+					maxHandoffsPerTicket: 1000,
+				},
+				(s) => {
+					held = s;
 				},
 			);
 
@@ -2024,14 +2064,19 @@ describe("the auto top-up merge", () => {
 				added: ["needs-work"],
 				removed: [],
 			});
+			// The fire's convergence (ADR 0079): the block's labels stand on
+			// the projection at once, no refresh between the block and the
+			// read, and the position stands on them: needs-work offers the
+			// rework, not the merge the block already moved off.
+			const position = state
+				.visibleTickets(PLANE_WORKFLOW_STATES, PLANE_CONFIG.defaultTaskType, "all")
+				.find((candidate) => candidate.identity === pullIdentity);
+			expect(position?.labels).toEqual(["ready-to-ship", "needs-work"]);
+			expect(position?.suggestedTaskType).toBe("rework");
 			// The ticket keeps the open state it wore: no cycle ran for it, and
 			// the block ran no retirement, so the ticket stays listed.
 			expect(state.ticketState(pullIdentity)).toBe("open");
-			expect(
-				state
-					.visibleTickets(PLANE_WORKFLOW_STATES, PLANE_CONFIG.defaultTaskType)
-					.find((candidate) => candidate.identity === pullIdentity),
-			).toBeDefined();
+			expect(position).toBeDefined();
 			state.close();
 		} finally {
 			bellSpy.mockRestore();
@@ -2041,19 +2086,25 @@ describe("the auto top-up merge", () => {
 		expect(bells).toBe(0);
 	});
 
-	test("a blocked merge holds the top-up's re-ask until the source re-reads the ticket", async () => {
+	test("a blocked merge whose label write failed keeps the merge position, and the hold stands until the source re-reads", async () => {
 		let held: FactoryState;
 		let heldRunner: FakeRunner;
 		const { state, runner } = await topUpApp(
 			async (setup) => {
 				await awaitFrame(
 					setup,
-					(f) =>
-						messageRowOf(f).includes(
-							`the merge of "${pullTitle}" was blocked: GraphQL: PullRequest is not mergeable.`,
-						),
-					"the block's line",
+					() => held.latestPlaneActionAttempt(pullIdentity)?.outcome === "blocked",
+					"the block's attempt",
 				);
+				// The failed write converged nothing (ADR 0079): the labels the
+				// source last fetched still wear the merge position, and the
+				// hold is the one gate between the top-up and the re-ask.
+				const position = held
+					.visibleTickets(PLANE_WORKFLOW_STATES, PLANE_CONFIG.defaultTaskType, "all")
+					.find((candidate) => candidate.identity === pullIdentity);
+				expect(position?.labels).toEqual(["ready-to-ship"]);
+				expect(position?.suggestedTaskType).toBe("merge");
+				expect(held.planeActionBlockedUnrefreshed(pullIdentity)).toBe(true);
 				// The hold's window: the cycles keep running with the queue
 				// empty, and the position still reads the labels the source
 				// last fetched. A re-ask the hold failed to stop would run the
@@ -2062,7 +2113,7 @@ describe("the auto top-up merge", () => {
 				await settle(setup);
 				await new Promise((resolve) => setTimeout(resolve, 600));
 				// The release: the source re-reads the ticket, and the read
-				// still wears the ready position, the way a block whose label
+				// still wears the merge position, the way a block whose label
 				// write failed stands. The next cycle's walk asks the merge
 				// again.
 				held.applyFetch(pullsSource, pullSuccess(new Date(Date.now() + 60_000).toISOString()));
@@ -2075,11 +2126,17 @@ describe("the auto top-up merge", () => {
 				);
 			},
 			(runner) => {
-				// The run's fresh read, then the fire's: the reads a re-ask
-				// past the hold would spend, running on the fallback answer
-				// beside them.
-				stubReadSequence(runner, [{ state: "open" }, { state: "open" }]);
+				// The run's fresh read, then the fire's, for both attempts:
+				// the label write fails on the stubbed edit, so the fire
+				// converges nothing and the position keeps its merge.
+				stubReadSequence(runner, [
+					{ state: "open" },
+					{ state: "open" },
+					{ state: "open" },
+					{ state: "open" },
+				]);
 				stubMerge(runner, 1, "GraphQL: PullRequest is not mergeable.\n");
+				runner.set("gh", PR_EDIT_ARGS, { code: 1, stderr: "the label write was refused\n" });
 			},
 			{},
 			(s, r) => {
@@ -2089,14 +2146,22 @@ describe("the auto top-up merge", () => {
 		);
 
 		// The re-ask ran on the refresh, and only on it: the hold stood while
-		// the cycles ran with the stale position, and the second attempt is
-		// the read that carried the labels the fire wrote.
+		// the cycles ran with the merge position the failed write never moved,
+		// and the second attempt is the read that carried the labels.
 		const mergeCommands = runner.commands().filter((command) => command.startsWith("gh pr merge "));
 		expect(mergeCommands).toHaveLength(2);
 		expect(state.planeActionAttempts(pullIdentity)).toHaveLength(2);
 		expect(
 			runner.commands().filter((command) => command.startsWith("gh pr comment ")),
 		).toHaveLength(2);
+		// The failed write converged nothing on either attempt: the position
+		// still wears the labels the source last fetched and offers the merge
+		// the hold keeps checking.
+		const position = state
+			.visibleTickets(PLANE_WORKFLOW_STATES, PLANE_CONFIG.defaultTaskType, "all")
+			.find((candidate) => candidate.identity === pullIdentity);
+		expect(position?.labels).toEqual(["ready-to-ship"]);
+		expect(position?.suggestedTaskType).toBe("merge");
 		state.close();
 	});
 

@@ -86,3 +86,4 @@ body states the context, the decision, and the consequences.
 - [ADR 0075: The plane initializes repositories with its own deterministic generator](./0075-the-plane-initializes-repositories-with-its-own-deterministic-generator.md)
 - [ADR 0076: The plane opens the ticket's pull request as a draft before the agent works](./0076-the-plane-opens-the-tickets-pull-request-before-the-agent-works.md)
 - [ADR 0077: The blocked plane action holds its automatic re-ask](./0077-the-blocked-plane-action-holds-its-automatic-re-ask.md)
+- [ADR 0079: The fire's successful label write converges the projection at once](./0079-the-fires-successful-label-write-converges-the-projection-at-once.md)

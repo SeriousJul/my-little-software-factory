@@ -2190,6 +2190,31 @@ export class FactoryState {
 	}
 
 	/**
+	 * The fire's convergence (ADR 0079): a label write that took lands on the
+	 * projection at once, so the position the machine derives stands on the
+	 * labels the machine wrote, not on the labels the source last fetched.
+	 * The write ran on the ticket's newest active membership, the row the
+	 * convergence updates the way `newestMembership` orders them, and the
+	 * source's next refresh overwrites the set with the source's own truth,
+	 * the way it overwrites every other fact the projection holds. A ticket
+	 * the sources do not list answers nothing: a draft the machine just made
+	 * ready is not listed yet, and the row the write would land on comes with
+	 * the refresh that lists it.
+	 */
+	convergeMembershipLabels(ticketIdentity: string, labels: readonly string[]): void {
+		this.transaction(() => {
+			this.db
+				.prepare(
+					`UPDATE memberships SET labels_json = ? WHERE ticket_identity = ? AND source_name = (
+						SELECT source_name FROM memberships
+						WHERE ticket_identity = ? AND active = 1
+						ORDER BY external_updated_at DESC, source_name ASC LIMIT 1)`,
+				)
+				.run(JSON.stringify(labels), ticketIdentity, ticketIdentity);
+		});
+	}
+
+	/**
 	 * The Same-type hold (ADR 0026): the open auto-handoff does not repeat
 	 * completed work. The ticket's newest closed cycle settled a `completed`
 	 * turn of exactly the task type the ticket now suggests: the agent

@@ -390,7 +390,8 @@ The plane action is a named built-in with its own typed settings, and the shippe
 Its attempt is a fact on the ticket, outside any work cycle: the time, the task type, the outcome, and the reason. A merge that finds its pull request already merged settles `merged`.
 Its outcome fires the task type's Transition the way a `completed` settle does, on both outcomes alike, and the fire's fact lands on the attempt's record, because no Completion trace stands for it.
 The successful merge leaves the projection at once: the merged pull request retires, and so does every issue it closed on the merge, the way the next source refresh would (ADR 0068).
-A blocked attempt holds the auto top-up's re-ask of the action until one of the ticket's active sources re-reads the ticket after the attempt: the attempt's fire wrote the block's labels on the source, and the position stands on the read the source last landed, the one the written labels outran. The hold is silent, and it holds the automatic adds only: the operator's confirm passes it (ADR 0077).
+The fire's successful label write converges the projection at once: the ticket's newest membership wears the labels the fire wrote, and the position the machine derives stands on them without waiting for the source's next read (ADR 0079).
+A blocked attempt whose label write failed holds the auto top-up's re-ask of the action until one of the ticket's active sources re-reads the ticket after the attempt: the fire could not move the labels, the position still offers the merge the block could not move, and only the read that outruns the attempt settles the position on the source's own labels. The hold is silent, and it holds the automatic adds only: the operator's confirm passes it (ADR 0077).
 _Avoid_: handoff, automation, command
 
 **Route close**:
