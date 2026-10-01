@@ -24,7 +24,7 @@ import {
 	repositoryInitSettingsHash,
 	runRepositoryInit,
 } from "../src/repo-init.ts";
-import { createChildProcessRunner } from "../src/runner.ts";
+import { type CommandRunner, createChildProcessRunner } from "../src/runner.ts";
 import { type FactoryState, openFactoryState } from "../src/state.ts";
 import { createStubRunner } from "../src/stub/runner.ts";
 import type { StubWorld } from "../src/stub/world.ts";
@@ -39,6 +39,7 @@ import {
 	pressEnterQuiet,
 	withApp,
 } from "./app-harness.ts";
+import { agentListJson } from "./fake-runner.ts";
 
 const paths: string[] = [];
 afterEach(() => {
@@ -368,7 +369,19 @@ host = "github.com"
 		};
 		writeFileSync(join(dir, "world.json"), `${JSON.stringify(world, null, 2)}\n`);
 		const store = StubWorldStore.load(join(dir, "world.json"));
-		const runner = createStubRunner(real, store);
+		// The stub answers the plane's gh over the world. The observation
+		// loop's herdr probe stays hermetic, the way the harness default
+		// keeps it: the empty agent list. Left to the stub's pass-through the
+		// walk would read the machine's real herdr, and a machine without
+		// one holds the warning on the Message line the note must stand on.
+		const stubRunner = createStubRunner(real, store);
+		const runner: CommandRunner = {
+			run: (command, args, options) =>
+				command === "herdr"
+					? Promise.resolve({ code: 0, stdout: agentListJson([]), stderr: "" })
+					: stubRunner.run(command, args, options),
+			listModels: (kind) => stubRunner.listModels(kind),
+		};
 
 		const configPath = join(dir, "config.toml");
 		writeFileSync(configPath, walkConfig(checkout));
