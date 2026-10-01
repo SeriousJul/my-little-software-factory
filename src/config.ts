@@ -891,6 +891,7 @@ const PROMPT_PLACEHOLDERS = [
 	"source-url",
 	"labels",
 	"previous-message",
+	"review-verdict",
 ];
 function validateTaskTypes(
 	value: unknown,

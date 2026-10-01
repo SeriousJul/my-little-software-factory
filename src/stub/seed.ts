@@ -329,7 +329,16 @@ when = "score-below-threshold"
 pull-request-facts = ["needs-work"]
 
 [task-types.rework]
-template = "Rework {external-key}: {title}. Post a summary comment."
+template = """
+Rework {external-key}: {title}.
+
+### Review verdict
+
+{review-verdict}
+
+Correct the code according to the verdict above. When the verdict section carries no verdict, read the pull request's last review comments yourself.
+
+Post a summary comment."""
 [task-types.rework.transition]
 ticket-facts = []
 pull-request-facts = ["ready-for-review"]

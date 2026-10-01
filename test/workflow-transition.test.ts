@@ -34,6 +34,7 @@ import {
 	isDraft,
 	NO_LINKED_PULL_REQUEST_SKIP,
 	pullRequestFixesTicket,
+	readReviewVerdict,
 	refireRecordedSkips,
 	scoreFromMessage,
 	transitionLabelSet,
@@ -801,6 +802,141 @@ describe("the review score read from the pull request's comments and reviews", (
 		expect(runner.commands()).toContain(STATE_READ_COMMAND);
 		expect(runner.commands().some((command) => command.includes("comments"))).toBe(false);
 		expect(runner.commands().some((command) => command.includes("reviews"))).toBe(false);
+	});
+});
+
+describe("the shared review verdict read", () => {
+	// The extraction of ADR 0074: the judgment's score read and the handoff's
+	// verdict read run this one rule, so the two points never decide on
+	// different records for the same posts. The extracted record carries its
+	// posting timeline beside its body and its time: the handoff's header
+	// needs the name, and the judgment ignores it.
+	function loadPull(): ReturnType<typeof seededState> {
+		return seededState(issueTicketData(), pullTicketData({ labels: ["ready-for-review"] }));
+	}
+
+	test("the newest record carrying the score line stands, with its timeline and its time", async () => {
+		const runner = new FakeRunner();
+		const state = loadPull();
+		setReviewComments(runner, [
+			{ body: "- **Score:** 40 / 100", created_at: "2026-08-31T11:00:00Z" },
+		]);
+		setReviewBodies(runner, [
+			{ body: "On re-check, higher:\n- **Score:** 95 / 100", submitted_at: "2026-08-31T12:00:00Z" },
+		]);
+		const read = await readReviewVerdict(
+			runner,
+			MACHINE_CONFIG.sources,
+			ticketAt(state, pullIdentity),
+		);
+		expect(read).toEqual({
+			kind: "verdict",
+			verdict: {
+				timeline: "review",
+				at: "2026-08-31T12:00:00Z",
+				body: "On re-check, higher:\n- **Score:** 95 / 100",
+			},
+		});
+	});
+
+	test("a later comment over an earlier review stands on the comment timeline", async () => {
+		const runner = new FakeRunner();
+		const state = loadPull();
+		setReviewComments(runner, [
+			{ body: "- **Score:** 95 / 100", created_at: "2026-08-31T12:00:00Z" },
+		]);
+		setReviewBodies(runner, [
+			{ body: "- **Score:** 40 / 100", submitted_at: "2026-08-31T11:00:00Z" },
+		]);
+		const read = await readReviewVerdict(
+			runner,
+			MACHINE_CONFIG.sources,
+			ticketAt(state, pullIdentity),
+		);
+		expect(read).toEqual({
+			kind: "verdict",
+			verdict: {
+				timeline: "comment",
+				at: "2026-08-31T12:00:00Z",
+				body: "- **Score:** 95 / 100",
+			},
+		});
+	});
+
+	test("no record carrying the score line is the none fact", async () => {
+		const runner = new FakeRunner();
+		const state = loadPull();
+		setReviewComments(runner, [
+			{ body: "The total score is 61.", created_at: "2026-08-31T12:00:00Z" },
+		]);
+		setReviewBodies(runner, [{ body: "Approved.", submitted_at: "2026-08-31T13:00:00Z" }]);
+		const read = await readReviewVerdict(
+			runner,
+			MACHINE_CONFIG.sources,
+			ticketAt(state, pullIdentity),
+		);
+		expect(read).toEqual({ kind: "none" });
+	});
+
+	test("every timeline failing is the failed fact with the read's reasons", async () => {
+		const runner = new FakeRunner();
+		const state = loadPull();
+		runner.set("gh", COMMENT_READ_ARGS, { code: 1, stderr: "the comment read failed\n" });
+		runner.set("gh", REVIEW_READ_ARGS, { code: 1, stderr: "the review read failed\n" });
+		const read = await readReviewVerdict(
+			runner,
+			MACHINE_CONFIG.sources,
+			ticketAt(state, pullIdentity),
+		);
+		expect(read).toEqual({
+			kind: "failed",
+			reason:
+				"the comment read failed (the comment read failed); the review read failed (the review read failed)",
+		});
+	});
+
+	test("one timeline failing leaves the standing records to decide", async () => {
+		const runner = new FakeRunner();
+		const state = loadPull();
+		setReviewComments(runner, [
+			{ body: "- **Score:** 95 / 100", created_at: "2026-08-31T12:00:00Z" },
+		]);
+		runner.set("gh", REVIEW_READ_ARGS, { code: 1, stderr: "the review read failed\n" });
+		const read = await readReviewVerdict(
+			runner,
+			MACHINE_CONFIG.sources,
+			ticketAt(state, pullIdentity),
+		);
+		expect(read).toEqual({
+			kind: "verdict",
+			verdict: {
+				timeline: "comment",
+				at: "2026-08-31T12:00:00Z",
+				body: "- **Score:** 95 / 100",
+			},
+		});
+	});
+
+	test("a ticket that lists on no source and a key that names no number find no verdict", async () => {
+		const runner = new FakeRunner();
+		const state = loadPull();
+		const ticket = ticketAt(state, pullIdentity);
+		expect(
+			await readReviewVerdict(runner, MACHINE_CONFIG.sources, { ...ticket, memberships: [] }),
+		).toEqual({
+			kind: "none",
+		});
+		expect(
+			await readReviewVerdict(runner, MACHINE_CONFIG.sources, {
+				...ticket,
+				externalKey: "PR-12",
+				memberships: ticket.memberships.map((membership) => ({
+					...membership,
+					externalKey: "PR-12",
+				})),
+			}),
+		).toEqual({ kind: "none" });
+		expect(runner.commands()).toEqual([]);
 	});
 });
 

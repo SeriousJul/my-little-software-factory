@@ -21,7 +21,10 @@
  * it, reopens a worktree on its branch when the worktree is gone, and
  * closes the previous handoff's tab once the new agent has started. Its
  * prompt carries the last captured message through the {previous-message}
- * placeholder.
+ * placeholder. A template that references the {review-verdict} placeholder
+ * carries the pull request's review verdict: the handoff reads the verdict
+ * straight from the source, through the command runner, before the render,
+ * and fills the placeholder with the verdict or the read's fact (ADR 0074).
  *
  * The sequence of external commands is the contract the fake runner tests
  * pin; the herdr CLI contract was verified against herdr 0.8.2, and the
@@ -49,7 +52,7 @@
  * there: it starts under its cycle name, and the leftover environment stays
  * a fact on the ticket for the operator to clear in herdr (ADR 0012, ADR 0032).
  */
-import type { FactoryConfig, TransitionPin } from "./config.ts";
+import type { FactoryConfig, TicketSourceConfig, TransitionPin } from "./config.ts";
 import type { EnvironmentKind, Ticket } from "./domain/ticket.ts";
 import { fileExists, movePath, readDirectoryNames } from "./fs.ts";
 import { failureLine } from "./lines.ts";
@@ -69,6 +72,7 @@ import { type CommandResult, type CommandRunner, commandFailureText } from "./ru
 import { fitSettings } from "./setting-fit.ts";
 import { resolveEnvironment, resolveSettings } from "./setting-resolution.ts";
 import type { Consultation } from "./state.ts";
+import { type ReviewVerdictRead, readReviewVerdict } from "./workflow.ts";
 
 /** A fresh pane can need a short time to reach its shell prompt. */
 const AGENT_PANE_BUSY_RETRY_DELAY_MS = 100;
@@ -427,7 +431,12 @@ export async function handOffTicket(
 	};
 	const checkout = resolved.repository.path;
 	const args = settingArgs(checked.agent, choice);
-	const prompt = renderPrompt(checked.taskType.template, ticket);
+	const prompt = await renderTicketPrompt(
+		checked.taskType.template,
+		ticket,
+		runner,
+		config.sources,
+	);
 
 	if (choice.environment === "live-worktree") {
 		return startLiveHandoff(checkout, checked.agent, args, prompt, ctx);
@@ -775,7 +784,13 @@ export async function handOffStoredWorkspace({
 	};
 	const checkout = resolved.repository.path;
 	const args = settingArgs(agent, choice);
-	const prompt = renderPrompt(taskType.template, ticket, previousMessage);
+	const prompt = await renderTicketPrompt(
+		taskType.template,
+		ticket,
+		runner,
+		config.sources,
+		previousMessage,
+	);
 
 	const storedMatches = workspaceId !== null && environment === choice.environment;
 	if (storedMatches) {
@@ -2107,9 +2122,16 @@ export function renderSettingArgs(template: string, value: string): string[] {
  * Fill prompt placeholders with source facts, never the internal identity.
  *
  * `previousMessage` fills {previous-message} for workflow handoffs and
- * restarts; an open-ticket handoff leaves it empty.
+ * restarts; an open-ticket handoff leaves it empty. `reviewVerdict` fills
+ * {review-verdict} from the verdict read the ticket prompt runs (ADR 0074);
+ * a template the read did not fill leaves it empty.
  */
-export function renderPrompt(template: string, ticket: Ticket, previousMessage = ""): string {
+export function renderPrompt(
+	template: string,
+	ticket: Ticket,
+	previousMessage = "",
+	reviewVerdict = "",
+): string {
 	const values: Record<string, string> = {
 		repository: ticket.repository,
 		title: ticket.title,
@@ -2119,11 +2141,50 @@ export function renderPrompt(template: string, ticket: Ticket, previousMessage =
 		"source-url": ticket.url,
 		labels: ticket.labels.join(", "),
 		"previous-message": previousMessage,
+		"review-verdict": reviewVerdict,
 	};
 	return template.replace(
-		/\{(repository|title|description|source-kind|external-key|source-url|labels|previous-message)\}/g,
+		/\{(repository|title|description|source-kind|external-key|source-url|labels|previous-message|review-verdict)\}/g,
 		(_match, name) => values[name],
 	);
+}
+
+/**
+ * The {review-verdict} fill the rework prompt leads with (ADR 0074): the
+ * verdict's body unchanged, under a one-line header naming the posting
+ * timeline and the post's time - the agent's staleness cue against the
+ * branch head - the fact line when no verdict stands, and the failure fact
+ * with the read's reason when every timeline's read failed.
+ */
+export function reviewVerdictFill(read: ReviewVerdictRead): string {
+	switch (read.kind) {
+		case "verdict":
+			return `Posted as a ${read.verdict.timeline} at ${read.verdict.at}:\n${read.verdict.body}`;
+		case "none":
+			return "No review verdict found on the pull request.";
+		case "failed":
+			return `The review verdict read failed: ${read.reason}.`;
+	}
+}
+
+/**
+ * The ticket prompt with the review verdict read (ADR 0074): when the
+ * template references the {review-verdict} placeholder, the verdict stands
+ * on the source read, run through the command runner, before the render -
+ * the same read the score judgment runs at settle. A template without the
+ * reference issues no read and renders the prompt as before.
+ */
+async function renderTicketPrompt(
+	template: string,
+	ticket: Ticket,
+	runner: CommandRunner,
+	sources: readonly TicketSourceConfig[],
+	previousMessage = "",
+): Promise<string> {
+	let reviewVerdict = "";
+	if (template.includes("{review-verdict}"))
+		reviewVerdict = reviewVerdictFill(await readReviewVerdict(runner, sources, ticket));
+	return renderPrompt(template, ticket, previousMessage, reviewVerdict);
 }
 
 /**
