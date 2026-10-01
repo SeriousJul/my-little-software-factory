@@ -19,7 +19,11 @@
  * suite pins the exact command stream with a fake and never touches a real
  * repository or GitHub. The plane never gates on, moves, or dirties the
  * operator's checkout: it pushes through a throwaway worktree on the remote
- * default branch, the same default-branch rule as the Worktree base.
+ * default branch, the same default-branch rule as the Worktree base. A
+ * throwaway worktree the removal cannot take - the plane dies between the
+ * add and the remove, or the removal fails - leaves an entry in the
+ * checkout's worktree registry that stands until `git worktree prune`;
+ * the path is a fresh temp directory, so the entry is inert.
  */
 import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
@@ -321,6 +325,11 @@ export function repositoryInitSources(
  * collision: the re-init stands its fact over it without re-registering it,
  * while a source the operator named under the same name with any other fact is
  * the collision the act refuses (story 15).
+ *
+ * An operator's edit to a plane-registered source - its filter or its refresh
+ * interval - survives the re-init: re-registering would duplicate the row, so
+ * the test compares the four facts above alone, and the plane never repairs
+ * the source's edited facts.
  */
 export function isPlaneInitSource(
 	configured: TicketSourceConfig,
@@ -448,9 +457,9 @@ export async function existingRepositoryLabels(
 
 /**
  * Create every missing label in the repository (step 1 of the act, ADR
- * 0075). A refused label write fails the act with the reason, so a partial
- * init never presents as a success: the labels created so far are named in the
- * answer, and the caller reports them.
+ * 0075). A refused label write fails the act: the reason names the refused
+ * label and the labels created before it, so a partial init never presents as
+ * a success and the operator sees which labels already stand.
  */
 export async function createMissingLabels(
 	runner: CommandRunner,
@@ -468,9 +477,13 @@ export async function createMissingLabels(
 		if (description !== "") args.push("--description", description);
 		const result = await runner.run("gh", args, ghOptions);
 		if (result.code !== 0) {
+			const soFar =
+				created.length === 0
+					? "no labels had been created"
+					: `created before the refusal: ${created.join(", ")}`;
 			return {
 				ok: false,
-				reason: `could not create label ${label} in ${identity}: ${commandFailureText(result)}`,
+				reason: `could not create label ${label} in ${identity} (${soFar}): ${commandFailureText(result)}`,
 			};
 		}
 		created.push(label);

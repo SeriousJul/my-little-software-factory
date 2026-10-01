@@ -83,24 +83,34 @@ export type RepositoryInitFlowResult =
 	| { ok: true; message: string; newSources: readonly TicketSourceConfig[] }
 	| { ok: false; reason: string };
 
+/** The command options the source auth resolves to, or the reason it did not. */
+type GhOptionsResolution = { ok: true; options: CommandOptions } | { ok: false; reason: string };
+
 /**
  * The command options the repository's source auth resolves to; empty when it
  * names none. The resolution is the source's own, so the act runs with the
- * auth the operator configured for that host.
+ * auth the operator configured for that host. A configured auth that fails to
+ * resolve refuses the flow with the reason: ambient auth is the fallback for
+ * a source that names no auth, never for an auth the operator configured, so
+ * the label pass and the push never run against the wrong account.
  */
 async function ghOptionsFor(
 	runner: CommandRunner,
 	repository: RepositoryInitRepository,
-): Promise<CommandOptions> {
-	if (repository.auth === undefined) return {};
+): Promise<GhOptionsResolution> {
+	if (repository.auth === undefined) return { ok: true, options: {} };
 	const resolved = await new GhAuthenticator(
 		repository.host,
 		repository.auth,
 		runner,
 		process.env,
 	).resolve();
-	if (!resolved.ok) return {};
-	return resolved.options;
+	if (!resolved.ok)
+		return {
+			ok: false,
+			reason: `the source's auth for ${repository.host} did not resolve: ${resolved.reason}`,
+		};
+	return { ok: true, options: resolved.options };
 }
 
 /**
@@ -131,7 +141,8 @@ export async function commitRepositoryInit(
 		}
 	}
 
-	const ghOptions = await ghOptionsFor(input.runner, input.repository);
+	const ghResolution = await ghOptionsFor(input.runner, input.repository);
+	if (ghResolution.ok === false) return { ok: false, reason: ghResolution.reason };
 	const outcome = await runRepositoryInit({
 		runner: input.runner,
 		checkout: input.repository.checkout,
@@ -141,7 +152,7 @@ export async function commitRepositoryInit(
 		workflowStates: input.workflowStates,
 		taskTypes: input.taskTypes,
 		instructionFile: input.plan.instructionFile,
-		ghOptions,
+		ghOptions: ghResolution.options,
 		worktreePath: input.worktreePath,
 	});
 	if (outcome.ok === false) return { ok: false, reason: outcome.reason };

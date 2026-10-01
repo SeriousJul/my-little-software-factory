@@ -4155,7 +4155,14 @@ export function App({
 				commandRunner,
 				process.env,
 			).resolve();
-			if (resolved.ok) ghOptions = resolved.options;
+			// A configured auth that fails to resolve refuses the open: the
+			// plan and the confirmed act would then run on the ambient gh
+			// identity, which may be the wrong account.
+			if (!resolved.ok) {
+				setErrorMessage(`the source's auth for ${source.host} did not resolve: ${resolved.reason}`);
+				return;
+			}
+			ghOptions = resolved.options;
 		}
 		const plan = await planRepositoryInit({
 			runner: commandRunner,

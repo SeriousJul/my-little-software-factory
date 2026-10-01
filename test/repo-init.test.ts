@@ -366,21 +366,22 @@ describe("the Repository init act (ADR 0075)", () => {
 		expect(agents).toContain(AGENT_SKILLS_HEADING);
 	});
 
-	test("a refused label write fails the act and names the label", async () => {
+	test("a refused label write fails the act and names the refused label and the ones created before it", async () => {
 		const worktree = tempDir("factory-init-wt-");
 		const runner = runnerWith("main", []);
+		// The third label in the set's order is refused, so two stand already.
 		runner.set(
 			"gh",
 			[
 				"label",
 				"create",
-				"needs-info",
+				"needs-work",
 				"--repo",
 				identity,
 				"--color",
-				"c2e0c6",
+				DEFAULT_LABEL_COLOR,
 				"--description",
-				"Needs information",
+				"Factory workflow label",
 			],
 			{ code: 1, stderr: "label already exists or was refused\n" },
 		);
@@ -397,7 +398,10 @@ describe("the Repository init act (ADR 0075)", () => {
 		});
 		expect(result.ok).toBe(false);
 		if (result.ok) return;
-		expect(result.reason).toContain("needs-info");
+		// The reason names the refused label and the labels created before it,
+		// so the operator sees which labels already stand.
+		expect(result.reason).toContain("needs-work");
+		expect(result.reason).toContain("created before the refusal: needs-info, needs-triage");
 		// The worktree was never opened: no push, no file writes.
 		expect(runner.commands().find((c) => c.includes("worktree add"))).toBe(undefined);
 	});
@@ -734,6 +738,32 @@ describe("the repository init's commit flow", () => {
 		// single command (ADR 0075, story 15): no fetch, label, or worktree ran.
 		expect(state.repositoryInitFact(identity)).toBe(null);
 		expect(runner.commands()).toEqual([]);
+	});
+
+	test("a configured auth that fails to resolve refuses before the act issues a command", async () => {
+		// Ambient auth is the fallback for a source that names no auth, never for
+		// an auth the operator configured that failed to resolve: the label pass
+		// and the push must not run against the wrong account.
+		const state = openFactoryState(":memory:");
+		const worktree = tempDir("factory-init-flow-");
+		const runner = commitRunner(worktree);
+		const result = await commitRepositoryInit({
+			runner,
+			state,
+			config: { sources: [] } as unknown as FactoryConfig,
+			repository: { ...repository, auth: { tokenEnv: "MLSF_TEST_NO_SUCH_VAR" } },
+			workflowStates: statesFixture(),
+			taskTypes: taskTypesFixture(),
+			plan: { instructionFile: "AGENTS.md", labelsToCreate: [], fileActions: [] },
+			worktreePath: worktree,
+		});
+		expect(result.ok).toBe(false);
+		if (result.ok) throw new Error("expected the commit to refuse");
+		expect(result.reason).toContain("did not resolve");
+		expect(result.reason).toContain("MLSF_TEST_NO_SUCH_VAR");
+		// The refusal stands before the act: no fetch, label, or worktree ran.
+		expect(runner.commands()).toEqual([]);
+		expect(state.repositoryInitFact(identity)).toBe(null);
 	});
 
 	test("the re-init stands over the sources the plane already registered", async () => {
