@@ -31,6 +31,11 @@ import {
 import { firstNonEmptyLine } from "./lines.ts";
 import { ticketBranchPrefix } from "./naming.ts";
 import {
+	markPullRequestReady,
+	pullRequestCommitsAhead,
+	readTicketOwnPullRequest,
+} from "./pull-request.ts";
+import {
 	type CommandOptions,
 	type CommandResult,
 	type CommandRunner,
@@ -48,6 +53,15 @@ import { GhAuthenticator } from "./ticket-source.ts";
  * fact re-fires nothing.
  */
 export const NO_LINKED_PULL_REQUEST_SKIP = "no linked pull request was found for the ticket";
+
+/**
+ * The reason the fire records when the ticket's own pull request stands on
+ * the branch with a head that carries no commit ahead of its base
+ * (ADR 0076): the work has not landed, so nothing is published and no label
+ * is written, and the ticket rests where the missing pull request rests.
+ * The re-fire sweep lands the labels when a commit appears.
+ */
+export const EMPTY_PULL_REQUEST_SKIP = "the pull request carries no commit ahead of its base";
 
 /** The inputs the transition's judgments read. */
 export interface TransitionJudgmentInput {
@@ -734,8 +748,36 @@ export async function fireTransition(
 	);
 	const ticket = tickets.find((item) => item.identity === request.ticketIdentity);
 	if (ticket === undefined) return null;
-	const pullRequest =
+	let pullRequest =
 		ticket.sourceKind === "github-pull-request" ? ticket : findFixingPullRequest(tickets, ticket);
+	// The pull request publish (ADR 0076): a completed turn of a task type
+	// that opens a pull request reaches the ticket's own draft through the
+	// direct head-branch read, because a draft the machine has not labeled
+	// never stands in the ticket list. The read of the head against the base
+	// comes before the publish: a head with no commit ahead of its base is
+	// the missing pull request, on the skip's own reason.
+	const opensPullRequest =
+		request.config.taskTypes[request.taskType]?.opensPullRequest === true &&
+		ticket.sourceKind !== "github-pull-request";
+	let emptyOwnPullRequest = false;
+	if (opensPullRequest) {
+		const own = await readTicketOwnPullRequest(request.runner, request.config.sources, ticket);
+		const ownHead = own === null ? null : headBranchOf(own.memberships[0]?.attributes ?? {});
+		const ownBase = own === null ? null : (own.memberships[0]?.attributes.baseBranch ?? null);
+		const checkout = request.config.repos[ticket.repositoryRef.identity];
+		const ahead =
+			own === null || ownHead === null || ownBase === null || checkout === undefined
+				? null
+				: await pullRequestCommitsAhead(request.runner, checkout, ownHead, ownBase);
+		if (own === null) {
+			pullRequest = null;
+		} else if (ahead === null || ahead === 0) {
+			emptyOwnPullRequest = true;
+			pullRequest = null;
+		} else {
+			pullRequest = own;
+		}
+	}
 	// The review verdict is the pull request's own post, the place the review
 	// template names for the score: a comment or a review body. It is read
 	// only when this transition tests a score judgment and only for a pull
@@ -765,6 +807,29 @@ export async function fireTransition(
 		positionTicketIdentity: null,
 	};
 	if (!evaluation.fired) return outcome;
+	// The publish stands before the label write (ADR 0076): the draft the
+	// plane opened is marked ready for review, so the machine can act on it
+	// and the list can hold it, before the fire writes the facts it named.
+	// The act runs only for a task type that opens a pull request, and only
+	// on a draft: a pull request that is not a draft stands as it stands,
+	// and the fire never converts a pull request back to a draft.
+	if (opensPullRequest && pullRequest !== null && isDraft(pullRequest)) {
+		const number = externalKeyNumber(pullRequest.externalKey);
+		const membership = newestMembershipOf(pullRequest);
+		const source = request.config.sources.find((item) => item.name === membership.sourceName);
+		if (number !== null && source !== undefined) {
+			const readyFailure = await markPullRequestReady(
+				request.runner,
+				source,
+				pullRequest.repositoryRef,
+				number,
+			);
+			if (readyFailure !== null) {
+				outcome.writeFailure = `marking the pull request ready for review failed: ${readyFailure}`;
+				return outcome;
+			}
+		}
+	}
 	const machine = transitionLabelSet(request.config);
 	// The two surfaces the facts name. A pull request ticket is its own fixing
 	// pull request, so one surface carries both fact lists and the plane
@@ -806,6 +871,10 @@ export async function fireTransition(
 	// missing.
 	const missingPullRequest = pullRequest === null && evaluation.pullRequestFacts.length > 0;
 	if (missingPullRequest) outcome.reason = NO_LINKED_PULL_REQUEST_SKIP;
+	// The empty pull request records its own reason: the Decision screen
+	// states why nothing was published, and the re-fire sweep re-fires this
+	// skip the way it re-fires the missing one (ADR 0076).
+	if (emptyOwnPullRequest) outcome.reason = EMPTY_PULL_REQUEST_SKIP;
 	for (const target of surfaces) {
 		const write = await writeSurfaceLabels(request, target, machine);
 		const applied = applyWrite(outcome, write);
@@ -964,7 +1033,11 @@ export async function refireRecordedSkips(
 		const completion = ticket.lastCompletion;
 		const skip = completion?.transition ?? null;
 		if (completion === null || skip === null) continue;
-		if (skip.fired !== true || skip.reason !== NO_LINKED_PULL_REQUEST_SKIP) continue;
+		if (
+			skip.fired !== true ||
+			(skip.reason !== NO_LINKED_PULL_REQUEST_SKIP && skip.reason !== EMPTY_PULL_REQUEST_SKIP)
+		)
+			continue;
 		// A pull request ticket is its own fixing pull request: its fire can
 		// never record the skip, and the re-fire reads the issue side of the
 		// link only.
@@ -974,9 +1047,18 @@ export async function refireRecordedSkips(
 		// ticket its source no longer lists, the way the fire refuses a
 		// ticket that left the list.
 		if (!request.state.stillListed(ticket.identity)) continue;
-		// The machine acts on the newest non-draft open pull request that fixes
-		// the ticket: without one standing now, the skip stands as recorded.
-		if (findFixingPullRequest(tickets, ticket) === null) continue;
+		if (request.config.taskTypes[completion.taskType]?.opensPullRequest === true) {
+			// The sweep's existence check is the direct head-branch read for a
+			// task type that opens a pull request (ADR 0076): a draft with
+			// commits still never stands in any projection, labeled or not.
+			const own = await readTicketOwnPullRequest(request.runner, request.config.sources, ticket);
+			if (own === null) continue;
+		} else {
+			// The machine acts on the newest non-draft open pull request that
+			// fixes the ticket: without one standing now, the skip stands as
+			// recorded.
+			if (findFixingPullRequest(tickets, ticket) === null) continue;
+		}
 		const outcome = await fireTransition({
 			config: request.config,
 			state: request.state,

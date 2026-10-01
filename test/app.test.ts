@@ -71,7 +71,9 @@ import {
 } from "./app-harness.ts";
 import { BASE_CONFIG } from "./base-config.ts";
 import { agentListJson, FakeRunner } from "./fake-runner.ts";
+import { FakeSource } from "./fake-source.ts";
 import { SAMPLE_TICKETS } from "./sample-tickets.ts";
+import { issueTicket, success } from "./state-fixture.ts";
 
 /**
  * The braille glyph the spinner face stands on, as a character class.
@@ -320,6 +322,120 @@ describe("the control plane", () => {
 				WIDTH,
 				30,
 				{ state, runner, pollIntervalMs: 100 },
+			);
+		} finally {
+			state.close();
+		}
+	});
+
+	test("the Close of a decided cycle closes the draft the ticket still wears (ADR 0076)", async () => {
+		// The cycle-end draft close: the decided cycle's Close reads the
+		// ticket's factory branch and closes the draft it carries. A published
+		// pull request is never touched: only a draft closes, and a branch
+		// that carries no draft closes nothing and says nothing.
+		const state = openFactoryState(":memory:");
+		state.setGroupingAxis("tickets", "none");
+		const runner = new FakeRunner();
+		const source = new FakeSource("issues", "github-issues", success([issueTicket()]));
+		const sourceConfig = {
+			name: "issues",
+			kind: "github-issues" as const,
+			refreshIntervalSeconds: 60,
+			repositories: ["acme/factory"],
+			host: "github.com",
+		};
+		const config = {
+			...BASE_CONFIG,
+			sources: [sourceConfig],
+			taskTypes: {
+				...BASE_CONFIG.taskTypes,
+				implement: { ...BASE_CONFIG.taskTypes.implement, opensPullRequest: true },
+			},
+		};
+		const identity = "github:github.com:I_5";
+		const branch = "factory/5-add-a-webhook-retry-policy";
+		// The direct read of the branch's open pull request: a draft stands
+		// on it, the way the plane opened it at the handoff's start.
+		runner.set(
+			"gh",
+			[
+				"api",
+				"--hostname",
+				"github.com",
+				`repos/acme/factory/pulls?state=open&head=${encodeURIComponent(`acme:${branch}`)}`,
+			],
+			{
+				stdout: JSON.stringify([
+					{
+						number: 12,
+						state: "open",
+						draft: true,
+						html_url: "https://github.com/acme/factory/pulls/12",
+						head: { ref: branch },
+						base: { ref: "main" },
+						labels: [],
+					},
+				]),
+			},
+		);
+		try {
+			state.initializeSources([sourceConfig]);
+			state.applyFetch(sourceConfig, success([issueTicket()]));
+			const claim = state.claimHandoff(
+				identity,
+				{
+					agentType: "pi",
+					environment: "worktree",
+					taskType: "implement",
+					model: "",
+					thinking: "",
+					contextWindow: "",
+				},
+				"open",
+			);
+			if (!claim.ok) throw new Error(claim.reason);
+			state.settleHandoff(claim.claim.attemptId, true, undefined, {
+				paneId: "pane-1",
+				tabId: "tab-1",
+				workspaceId: "ws-1",
+			});
+			state.markTicketRunning(identity);
+			state.settleTurn({
+				ticketIdentity: identity,
+				handoffId: claim.claim.attemptId,
+				taskType: "implement",
+				agentType: "pi",
+				message: "settled the turn",
+				turnLog: [{ kind: "text", text: "settled the turn" }],
+				completedAt: "2026-08-31T12:00:00Z",
+			});
+
+			await withApp(
+				async (setup) => {
+					await awaitFrame(
+						setup,
+						(candidate) => frameText(candidate).includes("[awaiting]"),
+						"the awaiting state badge",
+					);
+					// The Close row: the decision's first row, selected by default.
+					await press(setup, "return", "the decision to open", (candidate) =>
+						candidate.includes("Decision:"),
+					);
+					setup.mockInput.pressEnter();
+					await settle(setup);
+					// The cycle ends decided: the draft the ticket still wears is
+					// read off its factory branch and closed.
+					const commands = runner.commands();
+					expect(commands).toContain(
+						`gh api --hostname github.com repos/acme/factory/pulls?state=open&head=${encodeURIComponent(
+							`acme:${branch}`,
+						)}`,
+					);
+					expect(commands).toContain("gh pr close 12 --repo github.com/acme/factory");
+				},
+				WIDTH,
+				30,
+				{ state, runner, sources: [source], config, pollIntervalMs: 100 },
 			);
 		} finally {
 			state.close();

@@ -1167,3 +1167,142 @@ describe("the world file", () => {
 		});
 	});
 });
+
+describe("the pull request lifecycle the plane owns (ADR 0076)", () => {
+	test("pr create opens the draft on its head branch and answers its url", async () => {
+		const dir = tempDir();
+		const store = seededStore(dir);
+		const runner = createStubRunner(new FakeRunner(), store);
+		const result = await runner.run("gh", [
+			"pr",
+			"create",
+			"--repo",
+			"github.com/stub/alpha",
+			"--head",
+			"factory/3-new-branch",
+			"--draft",
+			"--title",
+			"The new pull request",
+			"--body",
+			"Closes #1\n\nhttps://github.com/stub/alpha/issues/1\n\nThe description.",
+		]);
+		expect(result.code).toBe(0);
+		const alpha = store.world.repositories[0];
+		const created = alpha.pullRequests.find((item) => item.headBranch === "factory/3-new-branch");
+		expect(created).toBeDefined();
+		expect(created?.draft).toBe(true);
+		expect(created?.state).toBe("open");
+		expect(created?.merged).toBe(false);
+		expect(created?.base).toBe("main");
+		expect(created?.closingIssueNumbers).toEqual([1]);
+		// The url the open step's prompt fill reads off the answer.
+		expect(result.stdout).toBe(`https://github.com/stub/alpha/pull/${created?.number}\n`);
+		expect(store.refusals).toEqual([]);
+	});
+
+	test("the api pulls list answers by state and head, and lists a draft no policy applies to", async () => {
+		const dir = tempDir();
+		const store = seededStore(dir);
+		const runner = createStubRunner(new FakeRunner(), store);
+		// The pre-provisioned draft stands on its factory branch: the direct
+		// head-branch read reaches it, the way the ticket projection's
+		// no:draft policy withholds it.
+		const head = `repos/stub/alpha/pulls?state=open&head=${encodeURIComponent(
+			"stub:factory/1-add-a-greeting-command",
+		)}`;
+		const standing = await runner.run("gh", ["api", "--hostname", "github.com", head]);
+		expect(standing.code).toBe(0);
+		const list = JSON.parse(standing.stdout) as unknown;
+		expect(Array.isArray(list)).toBe(true);
+		expect(
+			(list as Array<{ draft: boolean; head: { ref: string } }>).map((item) => item.draft),
+		).toEqual([true]);
+		// A head no pull request stands on answers an empty list, not a failure.
+		const empty = await runner.run("gh", [
+			"api",
+			"--hostname",
+			"github.com",
+			"repos/stub/alpha/pulls?state=open&head=stub:factory/none",
+		]);
+		expect(empty.code).toBe(0);
+		expect(JSON.parse(empty.stdout)).toEqual([]);
+		expect(store.refusals).toEqual([]);
+	});
+
+	test("pr ready undrafts the open pull request, and refuses the merged and the closed", async () => {
+		const dir = tempDir();
+		const store = seededStore(dir);
+		const runner = createStubRunner(new FakeRunner(), store);
+		const draft = store.world.repositories[0].pullRequests[0];
+		const ready = await runner.run("gh", [
+			"pr",
+			"ready",
+			String(draft.number),
+			"--repo",
+			"github.com/stub/alpha",
+		]);
+		expect(ready.code).toBe(0);
+		expect(
+			store.world.repositories[0].pullRequests.find((item) => item.number === draft.number)?.draft,
+		).toBe(false);
+
+		const merged = store.world.repositories[0].pullRequests[0];
+		merged.state = "open";
+		merged.merged = true;
+		store.save();
+		const refused = await runner.run("gh", [
+			"pr",
+			"ready",
+			String(merged.number),
+			"--repo",
+			"github.com/stub/alpha",
+		]);
+		expect(refused.code).toBe(1);
+		expect(refused.stderr).toContain("already merged");
+		expect(store.refusals).toEqual([]);
+	});
+
+	test("pr close leaves the pull request's open state, and refuses the already closed", async () => {
+		const dir = tempDir();
+		const store = seededStore(dir);
+		const runner = createStubRunner(new FakeRunner(), store);
+		const pull = store.world.repositories[0].pullRequests[0];
+		const closed = await runner.run("gh", [
+			"pr",
+			"close",
+			String(pull.number),
+			"--repo",
+			"github.com/stub/alpha",
+		]);
+		expect(closed.code).toBe(0);
+		expect(
+			store.world.repositories[0].pullRequests.find((item) => item.number === pull.number)?.state,
+		).toBe("closed");
+		// The labels the closed draft carried stay with it: the close writes
+		// no label.
+		const again = await runner.run("gh", [
+			"pr",
+			"close",
+			String(pull.number),
+			"--repo",
+			"github.com/stub/alpha",
+		]);
+		expect(again.code).toBe(1);
+		expect(again.stderr).toContain("already closed");
+		expect(store.refusals).toEqual([]);
+	});
+
+	test("the closed surface: a draft closed at the cycle end no longer stands on its head branch", async () => {
+		const dir = tempDir();
+		const store = seededStore(dir);
+		const runner = createStubRunner(new FakeRunner(), store);
+		const pull = store.world.repositories[0].pullRequests[0];
+		await runner.run("gh", ["pr", "close", String(pull.number), "--repo", "github.com/stub/alpha"]);
+		const head = `repos/stub/alpha/pulls?state=open&head=${encodeURIComponent(
+			`stub:${pull.headBranch}`,
+		)}`;
+		const answer = await runner.run("gh", ["api", "--hostname", "github.com", head]);
+		expect(JSON.parse(answer.stdout)).toEqual([]);
+		expect(store.refusals).toEqual([]);
+	});
+});

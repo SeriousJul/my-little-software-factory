@@ -308,9 +308,12 @@ labels-none = ["needs-work", "ready-for-review", "ready-to-ship"]
 
 # --- The task types: trivial one-line templates that keep the external key
 # and the title line, so the ticket and the pull request stay linkable.
+# The pull request open (ADR 0076): the four task types that open one carry
+# the fact, and the template names the pull request the plane opens.
 
 [task-types.implement]
-template = "Do the work: {external-key}: {title}"
+opens-pull-request = true
+template = "Do the work: {external-key}: {title}. The pull request already stands at: {pull-request-url}"
 [task-types.implement.transition]
 ticket-facts = []
 pull-request-facts = ["ready-for-review"]
@@ -356,21 +359,24 @@ pull-request-facts = ["needs-work"]
 pull-request-facts = []
 
 [task-types.resolve-security-advisory]
-template = "Resolve {external-key}: {title}. Open a pull request."
+opens-pull-request = true
+template = "Resolve {external-key}: {title}. The pull request already stands at: {pull-request-url}"
 [task-types.resolve-security-advisory.transition]
 ticket-facts = []
 pull-request-facts = ["ready-for-review"]
 auto-advance = true
 
 [task-types.resolve-dependabot-alert]
-template = "Resolve {external-key}: {title}. Open a pull request."
+opens-pull-request = true
+template = "Resolve {external-key}: {title}. The pull request already stands at: {pull-request-url}"
 [task-types.resolve-dependabot-alert.transition]
 ticket-facts = []
 pull-request-facts = ["ready-for-review"]
 auto-advance = true
 
 [task-types.resolve-secret-scanning-alert]
-template = "Resolve {external-key}: {title}. Open a pull request."
+opens-pull-request = true
+template = "Resolve {external-key}: {title}. The pull request already stands at: {pull-request-url}"
 [task-types.resolve-secret-scanning-alert.transition]
 ticket-facts = []
 pull-request-facts = ["ready-for-review"]

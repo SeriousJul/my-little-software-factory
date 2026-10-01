@@ -63,6 +63,12 @@ import {
 	ticketAgentNames,
 } from "./naming.ts";
 import {
+	closePullRequest,
+	listOpenPullRequestsByHeadBranch,
+	openDraftPullRequest,
+	pullRequestBodyFor,
+} from "./pull-request.ts";
+import {
 	type ResolutionNotes,
 	type ResolvedRepository,
 	realPathOf,
@@ -72,6 +78,7 @@ import { type CommandResult, type CommandRunner, commandFailureText } from "./ru
 import { fitSettings } from "./setting-fit.ts";
 import { resolveEnvironment, resolveSettings } from "./setting-resolution.ts";
 import type { Consultation } from "./state.ts";
+import { newestMembership } from "./task-selection.ts";
 import { type ReviewVerdictRead, readReviewVerdict } from "./workflow.ts";
 
 /** A fresh pane can need a short time to reach its shell prompt. */
@@ -339,7 +346,34 @@ interface HandoffContext {
 	notes?: ResolutionNotes;
 	/** The agent names the handoff may ask herdr for, in preference order. */
 	names: NamePlan;
+	/**
+	 * The pull request open the handoff runs before its agent starts
+	 * (ADR 0076): set for a worktree handoff of a task type that opens a
+	 * pull request, and null on every other handoff.
+	 */
+	pullRequestOpen?: PullRequestOpenPlan;
 }
+
+/**
+ * The facts the pull request open of one handoff needs (ADR 0076): the
+ * ticket whose branch the pull request stands on, the checkout the branch
+ * is pushed from, the branch the naming rule gives the ticket, and the
+ * source the pull request opens on, with its own auth.
+ */
+interface PullRequestOpenPlan {
+	ticket: Ticket;
+	checkout: string;
+	branch: string;
+	source: TicketSourceConfig;
+}
+
+/**
+ * The prompt the handoff sends (ADR 0076): the rendered text - or, for a
+ * task type that opens a pull request, the render the pull request open
+ * fills with the pull request's url before the prompt is sent, so the
+ * prompt the agent gets stands on the pull request that stands.
+ */
+type HandoffPrompt = string | ((pullRequestUrl: string) => Promise<string>);
 
 /**
  * Validate a handoff's choices. A failure comes back as its own outcome;
@@ -431,17 +465,68 @@ export async function handOffTicket(
 	};
 	const checkout = resolved.repository.path;
 	const args = settingArgs(checked.agent, choice);
-	const prompt = await renderTicketPrompt(
-		checked.taskType.template,
+	// The pull request open runs only in the worktree environment: only that
+	// environment holds the factory branch the pull request stands on
+	// (ADR 0076). The refusal is a pre-flight, before any external step.
+	if (checked.taskType.opensPullRequest === true && choice.environment === "live-worktree")
+		return {
+			status: "failed",
+			reason: `the task type ${choice.taskType} opens a pull request, which runs only in the worktree environment: the live worktree holds no factory branch`,
+		};
+	const promptAnswer = await ticketPrompt(
+		checked.taskType,
+		choice.taskType,
 		ticket,
 		runner,
 		config.sources,
+		ctx,
+		checkout,
 	);
+	if ("fail" in promptAnswer) return { status: "failed", reason: promptAnswer.fail };
+	const prompt = promptAnswer.prompt;
 
 	if (choice.environment === "live-worktree") {
 		return startLiveHandoff(checkout, checked.agent, args, prompt, ctx);
 	}
 	return startWorktreeHandoff(ticket, checkout, checked.agent, args, prompt, ctx);
+}
+
+/**
+ * The prompt of one ticket handoff (ADR 0076): the rendered template for
+ * every task type, and - for a task type that opens a pull request - the
+ * render the pull request open fills with the pull request's url before the
+ * prompt is sent. The open's plan stands on the context, so the start
+ * sequence runs it between the environment's creation and the agent's start.
+ * The answer is tagged, the way the handoff's own answers are: a pass
+ * carries the prompt to send, a failure its reason.
+ */
+async function ticketPrompt(
+	taskType: FactoryConfig["taskTypes"][string],
+	taskTypeName: string,
+	ticket: Ticket,
+	runner: CommandRunner,
+	sources: readonly TicketSourceConfig[],
+	ctx: HandoffContext,
+	checkout: string,
+	previousMessage?: string,
+): Promise<{ prompt: HandoffPrompt } | { fail: string }> {
+	const template = taskType.template;
+	if (template === undefined) return { fail: "the task type carries no prompt template" };
+	if (taskType.opensPullRequest !== true)
+		return { prompt: await renderTicketPrompt(template, ticket, runner, sources, previousMessage) };
+	const membership = newestMembership(ticket.memberships);
+	const source =
+		membership === undefined
+			? undefined
+			: sources.find((item) => item.name === membership.sourceName);
+	if (source === undefined)
+		return {
+			fail: `the task type ${taskTypeName} opens a pull request, but the ticket lists on no source that could open it`,
+		};
+	ctx.pullRequestOpen = { ticket, checkout, branch: branchNameFor(ticket), source };
+	return {
+		prompt: (url) => renderTicketPrompt(template, ticket, runner, sources, previousMessage, url),
+	};
 }
 
 /**
@@ -784,13 +869,26 @@ export async function handOffStoredWorkspace({
 	};
 	const checkout = resolved.repository.path;
 	const args = settingArgs(agent, choice);
-	const prompt = await renderTicketPrompt(
-		taskType.template,
+	// The pull request open runs only in the worktree environment: only that
+	// environment holds the factory branch the pull request stands on
+	// (ADR 0076). The refusal is a pre-flight, before any external step.
+	if (taskType.opensPullRequest === true && choice.environment === "live-worktree")
+		return {
+			status: "failed",
+			reason: `the task type ${choice.taskType} opens a pull request, which runs only in the worktree environment: the live worktree holds no factory branch`,
+		};
+	const promptAnswer = await ticketPrompt(
+		taskType,
+		choice.taskType,
 		ticket,
 		runner,
 		config.sources,
+		ctx,
+		checkout,
 		previousMessage,
 	);
+	if ("fail" in promptAnswer) return { status: "failed", reason: promptAnswer.fail };
+	const prompt = promptAnswer.prompt;
 
 	const storedMatches = workspaceId !== null && environment === choice.environment;
 	if (storedMatches) {
@@ -841,7 +939,7 @@ async function startLiveHandoff(
 	checkout: string,
 	agent: FactoryConfig["agents"][string],
 	args: string[],
-	prompt: string,
+	prompt: HandoffPrompt,
 	ctx: HandoffContext,
 	extra: { previousTabId?: string | null } = {},
 ): Promise<HandoffOutcome> {
@@ -889,7 +987,7 @@ async function startAgentInNewTab(
 	checkout: string | null,
 	agent: FactoryConfig["agents"][string],
 	args: string[],
-	prompt: string,
+	prompt: HandoffPrompt,
 	ctx: HandoffContext,
 	options: NewTabOptions = {},
 ): Promise<HandoffOutcome> {
@@ -908,16 +1006,27 @@ async function startAgentInNewTab(
 	if (paneId === null || tabId === null) {
 		return failed("herdr tab create returned no pane id", ctx);
 	}
-	const outcome = await startAgentAndPrompt(agent, args, prompt, ctx, {
+	// The pull request open stands between the environment and the agent
+	// (ADR 0076): the prompt the agent gets carries the pull request's url.
+	const pre = await promptBeforeAgent(ctx, prompt);
+	if ("fail" in pre) {
+		await pre.cleanup();
+		if (options.closeTabOnFailure) await ctx.runner.run("herdr", ["tab", "close", tabId]);
+		return failed(pre.fail, ctx);
+	}
+	const outcome = await startAgentAndPrompt(agent, args, pre.text, ctx, {
 		paneId,
 		tabId,
 		workspaceId,
 		previousTabId: options.previousTabId,
 	});
-	if (outcome.status === "failed" && options.closeTabOnFailure) {
-		// The agent never started: the tab the handoff just created would
-		// sit empty in the stored workspace. Close it, best effort.
-		await ctx.runner.run("herdr", ["tab", "close", tabId]);
+	if (outcome.status === "failed") {
+		if (pre.cleanup !== null) await pre.cleanup();
+		if (options.closeTabOnFailure) {
+			// The agent never started: the tab the handoff just created would
+			// sit empty in the stored workspace. Close it, best effort.
+			await ctx.runner.run("herdr", ["tab", "close", tabId]);
+		}
 	}
 	return outcome;
 }
@@ -1029,7 +1138,7 @@ async function startWorktreeHandoff(
 	checkout: string,
 	agent: FactoryConfig["agents"][string],
 	args: string[],
-	prompt: string,
+	prompt: HandoffPrompt,
 	ctx: HandoffContext,
 	extra: { previousTabId?: string | null } = {},
 ): Promise<HandoffOutcome> {
@@ -1112,7 +1221,7 @@ async function startReusedBranchHandoff(
 	branch: string,
 	agent: FactoryConfig["agents"][string],
 	args: string[],
-	prompt: string,
+	prompt: HandoffPrompt,
 	ctx: HandoffContext,
 	extra: { previousTabId?: string | null } = {},
 ): Promise<HandoffOutcome> {
@@ -1416,7 +1525,7 @@ async function startInOpenedWorktree(
 	opened: CommandResult,
 	agent: FactoryConfig["agents"][string],
 	args: string[],
-	prompt: string,
+	prompt: HandoffPrompt,
 	ctx: HandoffContext,
 	extra: { previousTabId?: string | null } = {},
 ): Promise<HandoffOutcome> {
@@ -1491,22 +1600,191 @@ async function startInOpenedWorktree(
  * Start the agent in the pane. When it never starts, run the cleanup for
  * the residue the handoff just created. A started agent is never rolled
  * back: even a failed prompt settles the ticket as handed off.
+ *
+ * The step before the agent starts is the pull request open of a task type
+ * that opens one (ADR 0076): the environment stands, the branch is pushed,
+ * the draft stands or is reused, and only then does the prompt - filled with
+ * the pull request's url - go out. A handoff that fails after the open runs
+ * the open's cleanup: it closes the pull request it opened and deletes the
+ * remote branch it created, the residue contract of the open.
  */
 async function startAgentOrCleanUp(
 	agent: FactoryConfig["agents"][string],
 	args: string[],
-	prompt: string,
+	prompt: HandoffPrompt,
 	ctx: HandoffContext,
 	handles: AgentHandles,
 	cleanup: () => Promise<void>,
 ): Promise<HandoffOutcome> {
-	const outcome = await startAgentAndPrompt(agent, args, prompt, ctx, handles);
+	const pre = await promptBeforeAgent(ctx, prompt);
+	if ("fail" in pre) {
+		await pre.cleanup();
+		await cleanup();
+		return failed(pre.fail, ctx);
+	}
+	const outcome = await startAgentAndPrompt(agent, args, pre.text, ctx, handles);
 	if (outcome.status === "failed") {
-		// The agent never started: remove what the handoff created, so a
-		// retry can run instead of failing on the first attempt's residue.
+		// The agent never started: remove what the handoff created - the
+		// environment, and the residue of the pull request open when it ran -
+		// so a retry can run instead of failing on the first attempt's residue.
+		if (pre.cleanup !== null) await pre.cleanup();
 		await cleanup();
 	}
 	return outcome;
+}
+
+/**
+ * The answer the pull request open gives (ADR 0076): the pull request that
+ * stands on the branch - reused, or opened as a draft - with the facts the
+ * cleanup needs to tell what this attempt created from what pre-dates it.
+ */
+type PullRequestOpenAnswer =
+	| { url: string; number: number; opened: boolean; createdRemoteBranch: boolean }
+	| { fail: string; cleanup: () => Promise<void> };
+
+/**
+ * The pull request open (ADR 0076): the ticket's factory branch is pushed
+ * to its remote, the open pull request the branch already carries is read by
+ * its head branch, and a draft is opened when none stands. A pull request
+ * the branch already carries is reused, and no second one is opened.
+ *
+ * The no-residue contract (ADR 0076): a failure answers with the reason it
+ * reports and the cleanup of what the attempt created - the remote branch it
+ * pushed when the branch did not stand on the remote before, and the pull
+ * request it opened. What pre-dates the attempt is never touched: a branch
+ * the remote already carried is not deleted, and a pull request the read
+ * found is not closed.
+ */
+async function runPullRequestOpen(
+	ctx: HandoffContext,
+	plan: PullRequestOpenPlan,
+): Promise<PullRequestOpenAnswer> {
+	const noopCleanup = async (): Promise<void> => {};
+	// The branch, before the push: the attempt deletes only a remote branch
+	// it created, never one the remote already carried.
+	const listed = await ctx.runner.run(
+		"git",
+		["-C", plan.checkout, "ls-remote", "--heads", "origin", plan.branch],
+		{ env: { GIT_TERMINAL_PROMPT: "0" } },
+	);
+	if (listed.code !== 0)
+		return {
+			fail: `the pull request open could not read the factory branch from origin: ${commandFailureText(listed)}`,
+			cleanup: noopCleanup,
+		};
+	const existedBefore = listed.stdout.trim() !== "";
+	const pushCleanup = existedBefore
+		? noopCleanup
+		: () => deleteRemoteBranch(ctx, plan.checkout, plan.branch);
+	const pushed = await ctx.runner.run("git", ["-C", plan.checkout, "push", "origin", plan.branch], {
+		env: { GIT_TERMINAL_PROMPT: "0" },
+	});
+	if (pushed.code !== 0)
+		return {
+			fail: `pushing the factory branch ${plan.branch} failed: ${commandFailureText(pushed)}`,
+			// A failed push creates no remote branch: the attempt owns nothing
+			// of its own to delete, and a branch the remote pre-carried is never
+			// touched.
+			cleanup: noopCleanup,
+		};
+	const createdRemoteBranch = !existedBefore;
+	const records = await listOpenPullRequestsByHeadBranch(
+		ctx.runner,
+		plan.source,
+		plan.ticket.repositoryRef,
+		plan.branch,
+	);
+	if ("fail" in records)
+		return {
+			fail: `the pull request open could not read the branch's pull requests: ${records.fail}`,
+			cleanup: pushCleanup,
+		};
+	const standing = records[0];
+	if (standing !== undefined)
+		return {
+			url: standing.url,
+			number: standing.number,
+			opened: false,
+			createdRemoteBranch,
+		};
+	const opened = await openDraftPullRequest(
+		ctx.runner,
+		plan.source,
+		plan.ticket.repositoryRef,
+		plan.branch,
+		plan.ticket.title,
+		pullRequestBodyFor(plan.ticket),
+	);
+	if ("fail" in opened)
+		return {
+			fail: `the pull request open could not open the draft pull request: ${opened.fail}`,
+			cleanup: pushCleanup,
+		};
+	return { url: opened.url, number: opened.number, opened: true, createdRemoteBranch };
+}
+
+/**
+ * The best-effort delete of a remote branch the attempt created (ADR 0076):
+ * the delete runs only in a cleanup, and a cleanup that cannot delete leaves
+ * nothing behind to report: the handoff's reason is the fact the operator
+ * sees, and the branch the remote carries stays readable in its own right.
+ */
+async function deleteRemoteBranch(
+	ctx: HandoffContext,
+	checkout: string,
+	branch: string,
+): Promise<void> {
+	await ctx.runner.run("git", ["-C", checkout, "push", "origin", "--delete", branch], {
+		env: { GIT_TERMINAL_PROMPT: "0" },
+	});
+}
+
+/**
+ * The cleanup of the residue of one pull request open (ADR 0076): the pull
+ * request the attempt opened is closed, and the remote branch the attempt
+ * created is deleted. Null when the attempt created nothing of its own - a
+ * reuse on a branch the remote already carried - and a handoff that fails
+ * after the open never touches what pre-dated it.
+ */
+function pullRequestOpenCleanup(
+	ctx: HandoffContext,
+	plan: PullRequestOpenPlan,
+	opened: { url: string; number: number; opened: boolean; createdRemoteBranch: boolean },
+): (() => Promise<void>) | null {
+	if (!opened.opened && !opened.createdRemoteBranch) return null;
+	return async () => {
+		if (opened.opened)
+			await closePullRequest(ctx.runner, plan.source, plan.ticket.repositoryRef, opened.number);
+		if (opened.createdRemoteBranch) await deleteRemoteBranch(ctx, plan.checkout, plan.branch);
+	};
+}
+
+/**
+ * The step between the environment's creation and the agent's start
+ * (ADR 0076): the pull request open for a task type that opens one, and the
+ * prompt the start sends. A failure answers with the reason and the cleanup
+ * of what the attempt created; a pass carries the prompt to send - filled
+ * with the pull request's url where the open ran - and the cleanup a later
+ * failure runs.
+ */
+async function promptBeforeAgent(
+	ctx: HandoffContext,
+	prompt: HandoffPrompt,
+): Promise<
+	| { text: string; cleanup: (() => Promise<void>) | null }
+	| { fail: string; cleanup: () => Promise<void> }
+> {
+	if (typeof prompt === "string") return { text: prompt, cleanup: null };
+	const plan = ctx.pullRequestOpen;
+	if (plan === undefined)
+		return {
+			fail: "the handoff prompt asks for the pull request url, but the handoff opens no pull request",
+			cleanup: async () => {},
+		};
+	const opened = await runPullRequestOpen(ctx, plan);
+	if ("fail" in opened) return { fail: opened.fail, cleanup: opened.cleanup };
+	const text = await prompt(opened.url);
+	return { text, cleanup: pullRequestOpenCleanup(ctx, plan, opened) };
 }
 
 /**
@@ -2131,6 +2409,7 @@ export function renderPrompt(
 	ticket: Ticket,
 	previousMessage = "",
 	reviewVerdict = "",
+	pullRequestUrl = "",
 ): string {
 	const values: Record<string, string> = {
 		repository: ticket.repository,
@@ -2142,9 +2421,13 @@ export function renderPrompt(
 		labels: ticket.labels.join(", "),
 		"previous-message": previousMessage,
 		"review-verdict": reviewVerdict,
+		// The url the pull request open fills (ADR 0076): empty on every
+		// handoff that opens no pull request, where the placeholder stands
+		// unrendered in no template.
+		"pull-request-url": pullRequestUrl,
 	};
 	return template.replace(
-		/\{(repository|title|description|source-kind|external-key|source-url|labels|previous-message|review-verdict)\}/g,
+		/\{(repository|title|description|source-kind|external-key|source-url|labels|previous-message|review-verdict|pull-request-url)\}/g,
 		(_match, name) => values[name],
 	);
 }
@@ -2180,11 +2463,12 @@ async function renderTicketPrompt(
 	runner: CommandRunner,
 	sources: readonly TicketSourceConfig[],
 	previousMessage = "",
+	pullRequestUrl = "",
 ): Promise<string> {
 	let reviewVerdict = "";
 	if (template.includes("{review-verdict}"))
 		reviewVerdict = reviewVerdictFill(await readReviewVerdict(runner, sources, ticket));
-	return renderPrompt(template, ticket, previousMessage, reviewVerdict);
+	return renderPrompt(template, ticket, previousMessage, reviewVerdict, pullRequestUrl);
 }
 
 /**

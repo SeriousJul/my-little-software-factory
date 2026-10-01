@@ -51,6 +51,8 @@ export interface StubPullRequest extends StubIssue {
 	merged: boolean;
 	draft: boolean;
 	headBranch: string;
+	/** The branch the pull request merges into; absent worlds read as `main`. */
+	base?: string;
 	closingIssueNumbers: number[];
 	comments: StubComment[];
 	reviews: StubReview[];
@@ -233,9 +235,26 @@ export class StubWorldStore {
 		if (endpoint === null) return this.refusal(args, "no endpoint");
 		if (hostname !== this.world.host)
 			return this.refusal(args, `a host the world does not serve: ${hostname ?? ""}`);
-		const path = endpoint.split("?")[0];
+		// The query the direct read rides on (ADR 0076): the state and head
+		// filters of the pull request list, read off the endpoint.
+		const queryIndex = endpoint.indexOf("?");
+		const path = queryIndex === -1 ? endpoint : endpoint.slice(0, queryIndex);
+		const query = new Map<string, string>();
+		if (queryIndex !== -1) {
+			for (const pair of endpoint.slice(queryIndex + 1).split("&")) {
+				if (pair === "") continue;
+				const equals = pair.indexOf("=");
+				const key = equals === -1 ? pair : pair.slice(0, equals);
+				const value = equals === -1 ? "" : pair.slice(equals + 1);
+				try {
+					query.set(decodeURIComponent(key), decodeURIComponent(value));
+				} catch {
+					return this.refusal(args, `an unreadable query in the endpoint: ${pair}`);
+				}
+			}
+		}
 		if (path === "graphql") return this.answerSearch(fields, args);
-		if (path.startsWith("repos/")) return this.answerRepo(args, path, fields);
+		if (path.startsWith("repos/")) return this.answerRepo(args, path, fields, query);
 		return this.refusal(args, `an endpoint the world does not know: ${path}`);
 	}
 
@@ -375,7 +394,12 @@ export class StubWorldStore {
 	}
 
 	// One REST endpoint under a repository.
-	private answerRepo(tokens: readonly string[], path: string, fields: Map<string, string>): Answer {
+	private answerRepo(
+		tokens: readonly string[],
+		path: string,
+		fields: Map<string, string>,
+		query: Map<string, string>,
+	): Answer {
 		const parts = path.split("/");
 		const repository = this.repositoryOf(parts[1], parts[2]);
 		if (repository === null)
@@ -426,6 +450,33 @@ export class StubWorldStore {
 						submitted_at: review.submittedAt,
 					})),
 				),
+				stderr: "",
+			};
+		}
+		if (rest[0] === "pulls" && rest.length === 1) {
+			// The direct read of the open pull requests of one head branch
+			// (ADR 0076): the plane reaches the draft the projection hides
+			// through this list, by the branch the head parameter names.
+			const state = query.get("state") ?? "open";
+			const head = query.get("head");
+			let headOwner: string | null = null;
+			let headBranch: string | null = null;
+			if (head !== undefined) {
+				const colon = head.indexOf(":");
+				if (colon <= 0) return this.refusal(tokens, `an unreadable head parameter: ${head}`);
+				headOwner = head.slice(0, colon);
+				headBranch = head.slice(colon + 1);
+			}
+			const matches = repository.pullRequests.filter((pull) => {
+				if (pull.state !== state) return false;
+				if (headOwner !== null && headOwner.toLowerCase() !== this.world.owner.toLowerCase())
+					return false;
+				if (headBranch !== null && pull.headBranch !== headBranch) return false;
+				return true;
+			});
+			return {
+				code: 0,
+				stdout: JSON.stringify(matches.map((pull) => this.pullRest(repository, pull))),
 				stderr: "",
 			};
 		}
@@ -484,6 +535,21 @@ export class StubWorldStore {
 		return this.refusal(tokens, `an endpoint the world does not know: ${path}`);
 	}
 
+	// The pull request record the direct read answers (ADR 0076): the shape
+	// of the REST list entry, the draft fact and the head and base branches
+	// the open and the commit count read.
+	private pullRest(repository: StubRepository, pull: StubPullRequest): Record<string, unknown> {
+		return {
+			number: pull.number,
+			state: pull.state,
+			draft: pull.draft,
+			html_url: `https://${this.world.host}/${this.world.owner}/${repository.name}/pull/${pull.number}`,
+			head: { ref: pull.headBranch },
+			base: { ref: pull.base ?? "main" },
+			labels: pull.labels.map((name) => ({ name })),
+		};
+	}
+
 	// The auto score rule: the first comment read on a pull request that
 	// carries no verdict posts the configured score. The post is the world's,
 	// and it is the durable record the score Judgment reads.
@@ -501,9 +567,152 @@ export class StubWorldStore {
 	private answerItem(args: readonly string[]): Answer {
 		const [kind, verb, ...rest] = args;
 		if ((kind === "issue" || kind === "pr") && verb === "edit") return this.answerEdit(kind, rest);
+		if (kind === "pr" && verb === "create") return this.answerPullCreate(rest);
+		if (kind === "pr" && verb === "ready") return this.answerPullReady(rest);
+		if (kind === "pr" && verb === "close") return this.answerPullClose(rest);
 		if (kind === "pr" && verb === "merge") return this.answerMerge(rest);
 		if (kind === "pr" && verb === "comment") return this.answerComment(rest);
 		return this.refusal(args, `an unknown item command: ${kind} ${verb}`);
+	}
+
+	// The open of the ticket's pull request (ADR 0076): the draft the plane
+	// puts on the branch before the agent works. The world numbers it after
+	// its own items and takes the closing references the body carries.
+	private answerPullCreate(rest: string[]): Answer {
+		let repositoryIdentity: string | null = null;
+		let head: string | null = null;
+		let draft = false;
+		let title = "";
+		let body = "";
+		for (let i = 0; i < rest.length; i += 1) {
+			const token = rest[i];
+			if (token === "--repo") {
+				if (i + 1 >= rest.length) return this.refusal(rest, "the repo flag has no value");
+				repositoryIdentity = rest[i + 1];
+				i += 1;
+			} else if (token === "--head") {
+				if (i + 1 >= rest.length) return this.refusal(rest, "the head flag has no value");
+				head = rest[i + 1];
+				i += 1;
+			} else if (token === "--draft") {
+				draft = true;
+			} else if (token === "--title") {
+				if (i + 1 >= rest.length) return this.refusal(rest, "the title flag has no value");
+				title = rest[i + 1];
+				i += 1;
+			} else if (token === "--body") {
+				if (i + 1 >= rest.length) return this.refusal(rest, "the body flag has no value");
+				body = rest[i + 1];
+				i += 1;
+			} else {
+				return this.refusal(rest, `an unknown create flag: ${token}`);
+			}
+		}
+		if (repositoryIdentity === null || head === null || title === "")
+			return this.refusal(rest, "no repository, no head, or no title");
+		const repository = this.repositoryOfIdentity(repositoryIdentity);
+		if (repository === null)
+			return { code: 1, stdout: "", stderr: "GraphQL: Could not resolve the repository.\n" };
+		const numbers = [
+			...repository.issues.map((item) => item.number),
+			...repository.pullRequests.map((item) => item.number),
+		];
+		const number = numbers.length === 0 ? 1 : Math.max(...numbers) + 1;
+		const closing = [...body.matchAll(/(?:Closes|Fixes|Resolves)\s+#(\d+)/gi)].map((item) =>
+			Number(item[1]),
+		);
+		repository.pullRequests.push({
+			number,
+			title,
+			body,
+			labels: [],
+			state: "open",
+			updatedAt: now(),
+			merged: false,
+			draft,
+			headBranch: head,
+			base: "main",
+			closingIssueNumbers: closing,
+			comments: [],
+			reviews: [],
+		});
+		this.save();
+		return { code: 0, stdout: `${this.itemUrl(repository, "pr", number)}\n`, stderr: "" };
+	}
+
+	// The publish (ADR 0076): the draft the plane opened is marked ready for
+	// review. A pull request that is not a draft stands as it stands, and the
+	// act is never a conversion back to a draft.
+	private answerPullReady(rest: string[]): Answer {
+		const number = externalKeyNumber(rest[0]);
+		let repositoryIdentity: string | null = null;
+		for (let i = 1; i < rest.length; i += 1) {
+			const token = rest[i];
+			if (token === "--repo") {
+				if (i + 1 >= rest.length) return this.refusal(rest, "the repo flag has no value");
+				repositoryIdentity = rest[i + 1];
+				i += 1;
+			} else {
+				return this.refusal(rest, `an unknown ready flag: ${token}`);
+			}
+		}
+		if (number === null || repositoryIdentity === null)
+			return this.refusal(rest, "no item or no repository");
+		const repository = this.repositoryOfIdentity(repositoryIdentity);
+		if (repository === null)
+			return { code: 1, stdout: "", stderr: "GraphQL: Could not resolve the repository.\n" };
+		const pull = repository.pullRequests.find((entry) => entry.number === number);
+		if (pull === undefined)
+			return {
+				code: 1,
+				stdout: "",
+				stderr: `GraphQL: Could not resolve to a PullRequest with the number of ${number}.\n`,
+			};
+		if (pull.merged)
+			return { code: 1, stdout: "", stderr: "GraphQL: Pull request is already merged.\n" };
+		if (pull.state === "closed")
+			return { code: 1, stdout: "", stderr: "GraphQL: Pull request is closed.\n" };
+		pull.draft = false;
+		pull.updatedAt = now();
+		this.save();
+		return { code: 0, stdout: this.itemUrl(repository, "pr", number), stderr: "" };
+	}
+
+	// The close the cycle end and the no-residue cleanup run (ADR 0076): the
+	// draft leaves the open state, and the labels it carried stay with it.
+	private answerPullClose(rest: string[]): Answer {
+		const number = externalKeyNumber(rest[0]);
+		let repositoryIdentity: string | null = null;
+		for (let i = 1; i < rest.length; i += 1) {
+			const token = rest[i];
+			if (token === "--repo") {
+				if (i + 1 >= rest.length) return this.refusal(rest, "the repo flag has no value");
+				repositoryIdentity = rest[i + 1];
+				i += 1;
+			} else {
+				return this.refusal(rest, `an unknown close flag: ${token}`);
+			}
+		}
+		if (number === null || repositoryIdentity === null)
+			return this.refusal(rest, "no item or no repository");
+		const repository = this.repositoryOfIdentity(repositoryIdentity);
+		if (repository === null)
+			return { code: 1, stdout: "", stderr: "GraphQL: Could not resolve the repository.\n" };
+		const pull = repository.pullRequests.find((entry) => entry.number === number);
+		if (pull === undefined)
+			return {
+				code: 1,
+				stdout: "",
+				stderr: `GraphQL: Could not resolve to a PullRequest with the number of ${number}.\n`,
+			};
+		if (pull.merged)
+			return { code: 1, stdout: "", stderr: "GraphQL: Pull request is already merged.\n" };
+		if (pull.state === "closed")
+			return { code: 1, stdout: "", stderr: "GraphQL: Pull request is already closed.\n" };
+		pull.state = "closed";
+		pull.updatedAt = now();
+		this.save();
+		return { code: 0, stdout: this.itemUrl(repository, "pr", number), stderr: "" };
 	}
 
 	private answerEdit(kind: "issue" | "pr", rest: string[]): Answer {

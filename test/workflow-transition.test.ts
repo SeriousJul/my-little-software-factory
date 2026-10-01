@@ -1952,3 +1952,293 @@ describe("the recorded skip's re-fire", () => {
 		state.close();
 	});
 });
+
+// ---------------------------------------------------------------------------
+// ADR 0076: the pull request the plane opens, and the fire's publish.
+// ---------------------------------------------------------------------------
+
+/** The machine with the implement type opening the ticket's pull request. */
+const OPEN_CONFIG: FactoryConfig = {
+	...MACHINE_CONFIG,
+	repos: { "github.com/acme/factory": "/acme/factory" },
+	taskTypes: {
+		...MACHINE_CONFIG.taskTypes,
+		implement: {
+			...MACHINE_CONFIG.taskTypes.implement,
+			opensPullRequest: true,
+		},
+	},
+};
+
+const OWN_PULLS_ARGS = [
+	"api",
+	"--hostname",
+	"github.com",
+	`repos/acme/factory/pulls?state=open&head=${encodeURIComponent(
+		"acme:factory/5-persist-source-facts",
+	)}`,
+];
+
+/** The identity the fire synthesizes for the draft the read finds. */
+const OWN_PULL_IDENTITY = "github:github.com:pull-github.com/acme/factory/12";
+
+/** Make the runner answer the direct head-branch read with this draft record. */
+function setOwnDraft(runner: FakeRunner, over: { draft?: boolean; labels?: string[] } = {}): void {
+	runner.set("gh", OWN_PULLS_ARGS, {
+		stdout: JSON.stringify([
+			{
+				number: 12,
+				state: "open",
+				draft: over.draft ?? true,
+				html_url: "https://github.com/acme/factory/pulls/12",
+				head: { ref: "factory/5-persist-source-facts" },
+				base: { ref: "main" },
+				labels: (over.labels ?? []).map((name) => ({ name })),
+			},
+		]),
+	});
+}
+
+/** Make the runner answer the direct head-branch read with no open pull request. */
+function setNoOwnPull(runner: FakeRunner): void {
+	runner.set("gh", OWN_PULLS_ARGS, { stdout: "[]" });
+}
+
+/** Stub the commit count read of the head against the base: the fetch and the count it carries. */
+function stubCommitsAhead(runner: FakeRunner, count: string): void {
+	runner.set(
+		"git",
+		["-C", "/acme/factory", "fetch", "origin", "factory/5-persist-source-facts", "main"],
+		{ stdout: "" },
+	);
+	runner.set(
+		"git",
+		[
+			"-C",
+			"/acme/factory",
+			"rev-list",
+			"--count",
+			"origin/main..origin/factory/5-persist-source-facts",
+		],
+		{ stdout: `${count}\n` },
+	);
+}
+
+describe("the pull request the plane opens (ADR 0076)", () => {
+	test("a completed turn of an opening type marks the standing draft ready before it writes the facts", async () => {
+		const state = seededState(issueTicketData());
+		const runner = new FakeRunner();
+		setOwnDraft(runner);
+		stubCommitsAhead(runner, "3\n");
+		runner.set("gh", ["pr", "ready", "12", "--repo", "github.com/acme/factory"], { stdout: "" });
+
+		const outcome = await fireTransition({
+			config: OPEN_CONFIG,
+			state,
+			runner,
+			ticketIdentity: issueIdentity,
+			taskType: "implement",
+		});
+
+		expect(outcome).toMatchObject({
+			fired: true,
+			pullRequestFacts: ["ready-for-review"],
+			pullRequestIdentity: OWN_PULL_IDENTITY,
+			pullRequestKey: "#12",
+			writeFailure: "",
+			positionTaskType: "review",
+			positionTicketIdentity: OWN_PULL_IDENTITY,
+		});
+		expect(outcome?.ticketWrite).toBeNull();
+		expect(outcome?.pullRequestWrite).toEqual({ added: ["ready-for-review"], removed: [] });
+		// The publish stands before the label write: the read, the commit
+		// count, the ready, then the fact.
+		expect(runner.commands()).toEqual([
+			`gh ${OWN_PULLS_ARGS.join(" ")}`,
+			"git -C /acme/factory fetch origin factory/5-persist-source-facts main",
+			"git -C /acme/factory rev-list --count origin/main..origin/factory/5-persist-source-facts",
+			"gh pr ready 12 --repo github.com/acme/factory",
+			"gh pr edit #12 --repo github.com/acme/factory --add-label ready-for-review",
+		]);
+	});
+
+	test("a draft with no commit ahead of its base skips on its own reason, and publishes nothing", async () => {
+		const state = seededState(issueTicketData());
+		const runner = new FakeRunner();
+		setOwnDraft(runner);
+		stubCommitsAhead(runner, "0\n");
+
+		const outcome = await fireTransition({
+			config: OPEN_CONFIG,
+			state,
+			runner,
+			ticketIdentity: issueIdentity,
+			taskType: "implement",
+		});
+
+		expect(outcome).toMatchObject({
+			fired: true,
+			reason: "the pull request carries no commit ahead of its base",
+			pullRequestIdentity: null,
+			positionTaskType: null,
+			ticketWrite: null,
+			pullRequestWrite: null,
+		});
+		// No publish, no label: the work has not landed, and the ticket rests
+		// where the missing pull request rests.
+		expect(runner.commands()).toEqual([
+			`gh ${OWN_PULLS_ARGS.join(" ")}`,
+			"git -C /acme/factory fetch origin factory/5-persist-source-facts main",
+			"git -C /acme/factory rev-list --count origin/main..origin/factory/5-persist-source-facts",
+		]);
+	});
+
+	test("a head-branch read that finds no open pull request skips on the missing reason", async () => {
+		const state = seededState(issueTicketData());
+		const runner = new FakeRunner();
+		setNoOwnPull(runner);
+
+		const outcome = await fireTransition({
+			config: OPEN_CONFIG,
+			state,
+			runner,
+			ticketIdentity: issueIdentity,
+			taskType: "implement",
+		});
+
+		expect(outcome).toMatchObject({
+			fired: true,
+			reason: NO_LINKED_PULL_REQUEST_SKIP,
+			pullRequestIdentity: null,
+			positionTaskType: null,
+		});
+		expect(runner.commands()).toEqual([`gh ${OWN_PULLS_ARGS.join(" ")}`]);
+	});
+
+	test("a commit count that cannot be read skips on the empty reason: nothing uncertain is published", async () => {
+		const state = seededState(issueTicketData());
+		const runner = new FakeRunner();
+		setOwnDraft(runner);
+		runner.set(
+			"git",
+			["-C", "/acme/factory", "fetch", "origin", "factory/5-persist-source-facts", "main"],
+			{ code: 128, stderr: "fatal: unable to access\n" },
+		);
+
+		const outcome = await fireTransition({
+			config: OPEN_CONFIG,
+			state,
+			runner,
+			ticketIdentity: issueIdentity,
+			taskType: "implement",
+		});
+
+		expect(outcome).toMatchObject({
+			fired: true,
+			reason: "the pull request carries no commit ahead of its base",
+			pullRequestIdentity: null,
+		});
+		expect(runner.commands()).toEqual([
+			`gh ${OWN_PULLS_ARGS.join(" ")}`,
+			"git -C /acme/factory fetch origin factory/5-persist-source-facts main",
+		]);
+	});
+
+	test("a pull request that is not a draft stands as it stands: the facts are written, no ready is sent", async () => {
+		const state = seededState(issueTicketData());
+		const runner = new FakeRunner();
+		setOwnDraft(runner, { draft: false });
+		stubCommitsAhead(runner, "3\n");
+
+		const outcome = await fireTransition({
+			config: OPEN_CONFIG,
+			state,
+			runner,
+			ticketIdentity: issueIdentity,
+			taskType: "implement",
+		});
+
+		expect(outcome).toMatchObject({
+			fired: true,
+			pullRequestIdentity: OWN_PULL_IDENTITY,
+			writeFailure: "",
+		});
+		expect(runner.commands()).toEqual([
+			`gh ${OWN_PULLS_ARGS.join(" ")}`,
+			"git -C /acme/factory fetch origin factory/5-persist-source-facts main",
+			"git -C /acme/factory rev-list --count origin/main..origin/factory/5-persist-source-facts",
+			"gh pr edit #12 --repo github.com/acme/factory --add-label ready-for-review",
+		]);
+	});
+
+	test("a failed ready is the fire's failure fact, and no label is written", async () => {
+		const state = seededState(issueTicketData());
+		const runner = new FakeRunner();
+		setOwnDraft(runner);
+		stubCommitsAhead(runner, "3\n");
+		runner.set("gh", ["pr", "ready", "12", "--repo", "github.com/acme/factory"], {
+			code: 1,
+			stderr: "GraphQL: Not ready for review (already merged)\n",
+		});
+
+		const outcome = await fireTransition({
+			config: OPEN_CONFIG,
+			state,
+			runner,
+			ticketIdentity: issueIdentity,
+			taskType: "implement",
+		});
+
+		expect(outcome).toMatchObject({
+			fired: true,
+			pullRequestWrite: null,
+			positionTaskType: null,
+		});
+		expect(outcome?.writeFailure).toContain("marking the pull request ready for review failed");
+		expect(runner.commands()).toEqual([
+			`gh ${OWN_PULLS_ARGS.join(" ")}`,
+			"git -C /acme/factory fetch origin factory/5-persist-source-facts main",
+			"git -C /acme/factory rev-list --count origin/main..origin/factory/5-persist-source-facts",
+			"gh pr ready 12 --repo github.com/acme/factory",
+		]);
+	});
+
+	test("an opening type fires its turn with no read of the projection's pull requests: a draft stands outside the list", async () => {
+		// The draft never stands in the projection the machine's fire reads,
+		// because the source's no:draft policy withholds it. The opening
+		// type's fire reaches its own draft by the direct head-branch read
+		// alone, so a world where the projection carries the ticket's pull
+		// request changes nothing for it.
+		const state = seededState(
+			issueTicketData(),
+			pullTicketData({
+				attributes: withIssueReferences({ draft: "false" }, [
+					{
+						identity: issueIdentity,
+						number: 5,
+						repository: "acme/factory",
+					},
+				]),
+				externalKey: "#12",
+			}),
+		);
+		const runner = new FakeRunner();
+		setOwnDraft(runner);
+		stubCommitsAhead(runner, "3\n");
+		runner.set("gh", ["pr", "ready", "12", "--repo", "github.com/acme/factory"], { stdout: "" });
+
+		const outcome = await fireTransition({
+			config: OPEN_CONFIG,
+			state,
+			runner,
+			ticketIdentity: issueIdentity,
+			taskType: "implement",
+		});
+
+		expect(outcome).toMatchObject({
+			fired: true,
+			pullRequestIdentity: OWN_PULL_IDENTITY,
+			pullRequestWrite: { added: ["ready-for-review"], removed: [] },
+		});
+	});
+});

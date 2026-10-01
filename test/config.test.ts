@@ -767,6 +767,43 @@ describe("validateConfig", () => {
 		);
 	});
 
+	test("a task type's opens-pull-request fact is a boolean and its url placeholder is known (ADR 0076)", () => {
+		const base = {
+			"default-agent": "pi",
+			"default-environment": "worktree",
+			"default-task-type": "t",
+			agents: { pi: { kind: "pi" } },
+		};
+		// The fact is read when it is true, and omitted from the profile when
+		// it is false: the default stays off.
+		expect(
+			validateConfig({
+				...base,
+				"task-types": {
+					t: { template: "x {pull-request-url}" },
+				},
+			}).taskTypes.t.opensPullRequest,
+		).toBeUndefined();
+		expect(
+			validateConfig({
+				...base,
+				"task-types": {
+					t: {
+						template: "x {pull-request-url}",
+						"opens-pull-request": true,
+					},
+				},
+			}).taskTypes.t.opensPullRequest,
+		).toBe(true);
+		expectConfigError(
+			{
+				...base,
+				"task-types": { t: { template: "x", "opens-pull-request": "yes" } },
+			},
+			"opens-pull-request: must be a boolean",
+		);
+	});
+
 	test("the default agent must match an agent", () => {
 		expectConfigError(
 			{

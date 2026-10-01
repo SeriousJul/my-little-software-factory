@@ -79,6 +79,16 @@ export interface TaskTypeConfig {
 	/** The merge method the action form runs with; omitted takes the registry's default. */
 	method?: MergeMethod;
 	/**
+	 * The prompt form's pull request open (ADR 0076): when set, the plane
+	 * opens the ticket's pull request as a draft on its factory branch at
+	 * the Handoff start, before the agent's first commit, and publishes it
+	 * ready for review when the turn settles. Omitted or false stands the
+	 * task type where it was: the agent's work finds no pull request of its
+	 * own. The action form takes no profile keys, so it never carries the
+	 * fact.
+	 */
+	opensPullRequest?: boolean;
+	/**
 	 * The Transition that hangs off this task type (ADR 0027): the label facts
 	 * a completed turn of it writes, and where the ticket goes by judgment.
 	 * Omitted: the type completes without a transition. On the action form
@@ -892,6 +902,7 @@ const PROMPT_PLACEHOLDERS = [
 	"labels",
 	"previous-message",
 	"review-verdict",
+	"pull-request-url",
 ];
 function validateTaskTypes(
 	value: unknown,
@@ -948,9 +959,27 @@ function validateTaskTypes(
 			continue;
 		}
 		for (const key of Object.keys(raw))
-			if (!["template", "agent", "model", "thinking", "context-window", "transition"].includes(key))
+			if (
+				![
+					"template",
+					"agent",
+					"model",
+					"thinking",
+					"context-window",
+					"transition",
+					"opens-pull-request",
+				].includes(key)
+			)
 				throw new ConfigError(`config: ${where}: unknown key "${key}"`);
 		const template = stringField(raw, "template", where);
+		// The pull request open fact (ADR 0076): a boolean the prompt form
+		// alone carries; omitted or false stands the task type where it was.
+		let opensPullRequest = false;
+		if (raw["opens-pull-request"] !== undefined) {
+			if (raw["opens-pull-request"] !== true && raw["opens-pull-request"] !== false)
+				throw new ConfigError(`config: ${where}.opens-pull-request: must be a boolean`);
+			opensPullRequest = raw["opens-pull-request"] === true;
+		}
 		for (const placeholder of placeholderNames(template)) {
 			if (!PROMPT_PLACEHOLDERS.includes(placeholder)) {
 				throw new ConfigError(
@@ -991,6 +1020,7 @@ function validateTaskTypes(
 			...(thinking === undefined ? {} : { thinking }),
 			...(contextWindow === undefined ? {} : { contextWindow }),
 			...(transition === undefined ? {} : { transition }),
+			...(opensPullRequest ? { opensPullRequest } : {}),
 		};
 	}
 	return out;
