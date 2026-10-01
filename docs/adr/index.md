@@ -82,3 +82,4 @@ body states the context, the decision, and the consequences.
 - [ADR 0071: The Groups stand in the axis' own order, and the operator owns it](./0071-the-groups-stand-in-the-axis-own-order-and-the-operator-owns-it.md)
 - [ADR 0072: The route's ask ends the source ticket's cycle](./0072-the-route-ask-ends-the-source-tickets-cycle.md)
 - [ADR 0073: The Stub run serves GitHub from the Command runner seam](./0073-the-stub-run-serves-github-from-the-command-runner-seam.md)
+- [ADR 0074: The rework prompt carries the pull request's review verdict](./0074-the-rework-prompt-carries-the-pull-requests-review-verdict.md)

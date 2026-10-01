@@ -499,6 +499,10 @@ The condition a Transition branch tests to choose its fact set: the review score
 The score is read from the pull request's comments and its reviews, and the open state from the pull request's own record, straight from the source at settle time; the projection's last refresh stands as the read's fallback. It is never a stored value, and the read takes the template's fixed score line under whatever markdown the post wears around it (ADR 0057).
 _Avoid_: verdict, score check, gate
 
+**Review verdict**:
+The newest post on a pull request's comment and review timelines that carries the review template's fixed score line. It is the review's feedback to the pull request, read straight from the source, and the record both the score judgment at settle and the rework prompt at handoff decide on.
+_Avoid_: last review comment, review comment, verdict post
+
 **Auto-advance**:
 A property of a Transition. When it is set and Auto-handoff mode is on, the control plane tops up the Work queue with the suggested task of the ticket's new position without the operator: the route enters the queue like every start (ADR 0051). In manual mode the turn rests in awaiting, and the operator's Decision screen routes it.
 An advance at the ticket's handoff limit degrades to close.
