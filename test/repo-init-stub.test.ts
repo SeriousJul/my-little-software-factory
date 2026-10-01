@@ -334,6 +334,12 @@ host = "github.com"
 		]);
 		await real.run("git", ["clone", "--bare", seed, origin]);
 		await real.run("git", ["clone", origin, checkout]);
+		// The act's commit is a plain `git commit`: it takes its identity
+		// from the checkout's config, the way it takes the operator's on a
+		// real machine. The fixture stands that config, so the walk holds on
+		// a machine with no global git identity.
+		await real.run("git", ["-C", checkout, "config", "user.name", "init"]);
+		await real.run("git", ["-C", checkout, "config", "user.email", "init@example.com"]);
 
 		// The world: the repository stands uninitialized, and its one issue
 		// matches no state, so the machine lists it and never starts an Agent.
