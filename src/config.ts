@@ -1620,103 +1620,197 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 export function configToToml(config: FactoryConfig): string {
-	return stringify({
-		"default-agent": config.defaultAgent,
-		...(config.defaultModel === undefined ? {} : { "default-model": config.defaultModel }),
-		"default-environment": config.defaultEnvironment,
-		"default-task-type": config.defaultTaskType,
-		...(config.stateFile === undefined ? {} : { "state-file": config.stateFile }),
-		agents: Object.fromEntries(
-			Object.entries(config.agents).map(([name, agent]) => [
-				name,
-				{
-					kind: agent.kind,
-					...(agent.model === undefined ? {} : { model: agent.model }),
-					...(agent.thinking === undefined ? {} : { thinking: agent.thinking }),
-					...(agent.contextWindow === undefined ? {} : { "context-window": agent.contextWindow }),
-					...(agent.thinkingValues === undefined
-						? {}
-						: { "thinking-values": agent.thinkingValues }),
-				},
-			]),
-		),
-		"task-types": Object.fromEntries(
-			Object.entries(config.taskTypes).map(([name, task]) => [
-				name,
-				{
-					...(task.template === undefined ? {} : { template: task.template }),
-					...(task.action === undefined ? {} : { action: task.action }),
-					...(task.method === undefined ? {} : { method: task.method }),
-					...(task.agent === undefined ? {} : { agent: task.agent }),
-					...(task.model === undefined ? {} : { model: task.model }),
-					...(task.thinking === undefined ? {} : { thinking: task.thinking }),
-					...(task.contextWindow === undefined ? {} : { "context-window": task.contextWindow }),
-					...(task.transition === undefined
-						? {}
-						: { transition: transitionToToml(task.transition) }),
-				},
-			]),
-		),
-		"consultation-types": Object.fromEntries(
-			Object.entries(config.consultationTypes).map(([name, consultation]) => [
-				name,
-				{
-					agent: consultation.agent,
-					environment: consultation.environment,
-					template: consultation.template,
-					...(consultation.model === undefined ? {} : { model: consultation.model }),
-					...(consultation.thinking === undefined ? {} : { thinking: consultation.thinking }),
-					...(consultation.contextWindow === undefined
-						? {}
-						: { "context-window": consultation.contextWindow }),
-				},
-			]),
-		),
-		"attention-bell": config.attentionBell,
-		"interaction-exit-key": config.interactionExitKey,
-		"max-parallel-agents": config.maxParallelAgents,
-		"agent-poll-interval-seconds": config.agentPollIntervalSeconds,
-		"completion-message-lines": config.completionMessageLines,
-		"max-handoffs-per-ticket": config.maxHandoffsPerTicket,
-		...(config.logging === undefined
-			? {}
-			: {
-					logging: {
-						level: config.logging.level,
-						...(config.logging.file === undefined ? {} : { file: config.logging.file }),
-						"max-size-mib": config.logging.maxSizeMib,
-						keep: config.logging.keep,
+	return formatMultilineStrings(
+		stringify({
+			"default-agent": config.defaultAgent,
+			...(config.defaultModel === undefined ? {} : { "default-model": config.defaultModel }),
+			"default-environment": config.defaultEnvironment,
+			"default-task-type": config.defaultTaskType,
+			...(config.stateFile === undefined ? {} : { "state-file": config.stateFile }),
+			agents: Object.fromEntries(
+				Object.entries(config.agents).map(([name, agent]) => [
+					name,
+					{
+						kind: agent.kind,
+						...(agent.model === undefined ? {} : { model: agent.model }),
+						...(agent.thinking === undefined ? {} : { thinking: agent.thinking }),
+						...(agent.contextWindow === undefined ? {} : { "context-window": agent.contextWindow }),
+						...(agent.thinkingValues === undefined
+							? {}
+							: { "thinking-values": agent.thinkingValues }),
 					},
-				}),
-		scroll: {
-			speed: config.scroll.speed,
-			acceleration: config.scroll.acceleration,
-			"maximum-speed": config.scroll.maximumSpeed,
-		},
-		repos: config.repos,
-		sources: config.sources.map((source) => ({
-			name: source.name,
-			kind: source.kind,
-			"refresh-interval-seconds": source.refreshIntervalSeconds,
-			repositories: source.repositories,
-			...(source.host === "github.com" ? {} : { host: source.host }),
-			...(source.filter === undefined ? {} : { filter: source.filter }),
-			...(source.auth === undefined
+				]),
+			),
+			"task-types": Object.fromEntries(
+				Object.entries(config.taskTypes).map(([name, task]) => [
+					name,
+					{
+						...(task.template === undefined ? {} : { template: task.template }),
+						...(task.action === undefined ? {} : { action: task.action }),
+						...(task.method === undefined ? {} : { method: task.method }),
+						...(task.agent === undefined ? {} : { agent: task.agent }),
+						...(task.model === undefined ? {} : { model: task.model }),
+						...(task.thinking === undefined ? {} : { thinking: task.thinking }),
+						...(task.contextWindow === undefined ? {} : { "context-window": task.contextWindow }),
+						...(task.opensPullRequest === undefined
+							? {}
+							: { "opens-pull-request": task.opensPullRequest }),
+						...(task.transition === undefined
+							? {}
+							: { transition: transitionToToml(task.transition) }),
+					},
+				]),
+			),
+			"consultation-types": Object.fromEntries(
+				Object.entries(config.consultationTypes).map(([name, consultation]) => [
+					name,
+					{
+						agent: consultation.agent,
+						environment: consultation.environment,
+						template: consultation.template,
+						...(consultation.model === undefined ? {} : { model: consultation.model }),
+						...(consultation.thinking === undefined ? {} : { thinking: consultation.thinking }),
+						...(consultation.contextWindow === undefined
+							? {}
+							: { "context-window": consultation.contextWindow }),
+					},
+				]),
+			),
+			"attention-bell": config.attentionBell,
+			"interaction-exit-key": config.interactionExitKey,
+			"max-parallel-agents": config.maxParallelAgents,
+			"agent-poll-interval-seconds": config.agentPollIntervalSeconds,
+			"completion-message-lines": config.completionMessageLines,
+			"max-handoffs-per-ticket": config.maxHandoffsPerTicket,
+			...(config.logging === undefined
 				? {}
 				: {
-						auth: {
-							...(source.auth.token === undefined ? {} : { token: source.auth.token }),
-							...(source.auth.tokenEnv === undefined ? {} : { "token-env": source.auth.tokenEnv }),
-							...(source.auth.account === undefined ? {} : { account: source.auth.account }),
+						logging: {
+							level: config.logging.level,
+							...(config.logging.file === undefined ? {} : { file: config.logging.file }),
+							"max-size-mib": config.logging.maxSizeMib,
+							keep: config.logging.keep,
 						},
 					}),
-		})),
-		states: config.workflowStates.map((state) => ({
-			name: state.name,
-			...(state.taskType === undefined ? {} : { "task-type": state.taskType }),
-			match: stateMatchToToml(state.match),
-		})),
-	});
+			scroll: {
+				speed: config.scroll.speed,
+				acceleration: config.scroll.acceleration,
+				"maximum-speed": config.scroll.maximumSpeed,
+			},
+			repos: config.repos,
+			sources: config.sources.map((source) => ({
+				name: source.name,
+				kind: source.kind,
+				"refresh-interval-seconds": source.refreshIntervalSeconds,
+				repositories: source.repositories,
+				...(source.host === "github.com" ? {} : { host: source.host }),
+				...(source.filter === undefined ? {} : { filter: source.filter }),
+				...(source.auth === undefined
+					? {}
+					: {
+							auth: {
+								...(source.auth.token === undefined ? {} : { token: source.auth.token }),
+								...(source.auth.tokenEnv === undefined
+									? {}
+									: { "token-env": source.auth.tokenEnv }),
+								...(source.auth.account === undefined ? {} : { account: source.auth.account }),
+							},
+						}),
+			})),
+			states: config.workflowStates.map((state) => ({
+				name: state.name,
+				...(state.taskType === undefined ? {} : { "task-type": state.taskType }),
+				match: stateMatchToToml(state.match),
+			})),
+		}),
+	);
+}
+
+/**
+ * smol-toml collapses every string onto one line of escape sequences. That
+ * form buries a multiline prompt in a wall the operator cannot read. A value
+ * that holds newlines takes the multiline basic string instead, so a template
+ * stands in the file as the prompt it sends. A value that cannot take that
+ * form keeps the single line.
+ */
+function formatMultilineStrings(text: string): string {
+	return text
+		.split("\n")
+		.map((line) => {
+			const match = line.match(/^(\s*[\w-]+ = )"(.*)"$/);
+			if (match == null) return line;
+			const value = decodeBasicString(match[2]);
+			if (value == null) return line;
+			const encoded = encodeMultilineBasicString(value);
+			if (encoded == null) return line;
+			return `${match[1]}"""${encoded}"""`;
+		})
+		.join("\n");
+}
+
+/** Decode the content smol-toml put in a single-line basic string. */
+function decodeBasicString(content: string): string | null {
+	let out = "";
+	for (let i = 0; i < content.length; i++) {
+		const ch = content[i];
+		if (ch !== "\\") {
+			out += ch;
+			continue;
+		}
+		const next = content[i + 1];
+		switch (next) {
+			case "n":
+				out += "\n";
+				break;
+			case "t":
+				out += "\t";
+				break;
+			case "r":
+				out += "\r";
+				break;
+			case "b":
+				out += "\b";
+				break;
+			case "f":
+				out += "\f";
+				break;
+			case '"':
+				out += '"';
+				break;
+			case "\\":
+				out += "\\";
+				break;
+			case "u": {
+				const hex = content.slice(i + 2, i + 6);
+				if (!/^[0-9a-fA-F]{4}$/.test(hex)) return null;
+				out += String.fromCodePoint(Number.parseInt(hex, 16));
+				i += 4;
+				break;
+			}
+			default:
+				return null;
+		}
+		i += 1;
+	}
+	return out;
+}
+
+/**
+ * The multiline basic string, or null when the value cannot take it: no
+ * newline in the value, the triple quote inside it, a newline at either
+ * end (the parser strips one), a backslash at the end (it would escape the
+ * closing delimiter), or a control character the form does not allow raw.
+ */
+function encodeMultilineBasicString(value: string): string | null {
+	if (!value.includes("\n")) return null;
+	if (value.includes('"""')) return null;
+	if (value.startsWith("\n") || value.endsWith("\n")) return null;
+	if (value.endsWith("\\")) return null;
+	for (const ch of value) {
+		const code = ch.codePointAt(0);
+		if (code !== undefined && code < 0x20 && ch !== "\t" && ch !== "\n") return null;
+	}
+	return value.replace(/\\/g, "\\\\");
 }
 
 function stateMatchToToml(match: StateMatch): Record<string, unknown> {

@@ -1,8 +1,7 @@
-# Live development path. It uses normal gh authentication and separate state.
-state-file = ".factory-development.sqlite"
 default-agent = "pi"
 default-environment = "worktree"
 default-task-type = "implement"
+state-file = ".factory-development.sqlite"
 attention-bell = true
 interaction-exit-key = "f12"
 max-parallel-agents = 1
@@ -10,54 +9,306 @@ agent-poll-interval-seconds = 5
 completion-message-lines = 200
 max-handoffs-per-ticket = 20
 
-[repos]
-"github.com/SeriousJul/my-little-software-factory" = "/home/seriousjul/src/my-little-software-factory"
-"github.com/seriousjul/pi-extensions" = "/home/seriousjul/src/pi-extensions"
-"github.com/SeriousJul/seriousjul.github.io" = "/home/seriousjul/src/seriousjul.github.io"
-"github.com/SeriousJul/yapdf" = "/home/seriousjul/src/yapdf2"
-
-[scroll]
-speed = 1
-acceleration = 0.8
-maximum-speed = 6
-
-[logging]
-level = "debug"
-file = ".factory-development.log"
-max-size-mib = 10
-keep = 5
-
 [agents.pi]
 kind = "pi"
 model = "--model {value}"
 thinking = "--thinking {value}"
-thinking-values = ["off", "minimal", "low", "medium", "high", "xhigh", "max"]
+thinking-values = [ "off", "minimal", "low", "medium", "high", "xhigh", "max" ]
 
 [agents.codex]
 kind = "codex"
 model = "--model {value}"
 thinking = "-c model_reasoning_effort={value}"
-thinking-values = ["minimal", "low", "medium", "high"]
 context-window = "-c model_context_window={value}"
+thinking-values = [ "minimal", "low", "medium", "high" ]
 
 [agents.claude]
 kind = "claude"
 model = "--model {value}"
 thinking = "--effort {value}"
-thinking-values = ["low", "medium", "high", "xhigh", "max"]
 context-window = "--autocompact {value}"
+thinking-values = [ "low", "medium", "high", "xhigh", "max" ]
+
+[task-types.implement]
+template = """Implement the following {source-kind}. 
+
+### Instructions
+
+1. **Develop Code**
+   - Implement all acceptance criteria on this branch.
+   - Commit all changes to this branch.
+
+2. **Work the Pull Request**
+   - The pull request already stands at the url below, opened as a draft on this branch. It links the ticket; merging it closes the issue.
+   - Commit and push your work to this branch. The pull request carries the commits you push.
+   - List any technical choices made when specifications were not clear.
+   - Post your notes as a comment on the pull request.
+   - Never create or merge a pull request, and never edit its title or body: the machine owns it.
+
+Repository: {repository}
+
+{external-key}: {title}
+
+URL: {source-url}
+
+Pull request: {pull-request-url}
+
+Labels: {labels}
+
+Description:
+{description}"""
+opens-pull-request = true
+
+[task-types.implement.transition]
+ticket-facts = []
+pull-request-facts = [ "ready-for-review" ]
+
+[task-types.review]
+template = """Review pull request {external-key}: {title}.
+
+### Rules
+1. **Verify Specification**
+   - Check if the code satisfies all acceptance criteria in the ticket.
+   - List missing requirements or incorrect behavior.
+
+2. **Assess Code Quality**
+   - Check design, modularity, readability, and testing standards.
+   - List maintainability, security, or performance issues.
+
+3. **Calculate Score**
+   - Give a total score from 0 to 100 based on both areas.
+
+### Output Format
+
+- **Score:** [0-100] / 100
+- **Specification Check:** [Pass/Fail - Details]
+- **Quality Check:** [Pass/Fail - Details]
+- **Required Changes:** [Bullet points]
+
+### Outcome
+- Post the output on the pull request, as a comment or a review.
+
+Repository: {repository}
+Pull request: {source-url}
+
+Labels: {labels}
+
+Description:
+{description}"""
+
+[task-types.review.transition]
+ticket-facts = []
+pull-request-facts = []
+score-threshold = 90
+
+[[task-types.review.transition.branches]]
+when = "score-above-threshold"
+pull-request-facts = [ "ready-to-ship" ]
+
+[[task-types.review.transition.branches]]
+when = "score-below-threshold"
+pull-request-facts = [ "needs-work" ]
+
+[task-types.rework]
+template = """Rework pull request {external-key}: {title}.
+
+### Review verdict
+
+{review-verdict}
+
+### Instructions
+
+1. **Make Changes**
+   - Correct the code according to the verdict above.
+   - When the verdict section carries no verdict, read the pull request's last review comments yourself.
+
+2. **Update Repository**
+   - Commit and push changes to this branch.
+
+3. **Update Pull Request**
+   - Write a summary of your changes in a new comment.
+
+Repository: {repository}
+Pull request: {source-url}
+
+Labels: {labels}
+
+Description:
+{description}"""
+
+[task-types.rework.transition]
+ticket-facts = []
+pull-request-facts = [ "ready-for-review" ]
+
+[task-types.merge]
+action = "merge-pull-request"
+method = "squash"
+
+[task-types.merge.transition]
+ticket-facts = []
+pull-request-facts = []
+
+[[task-types.merge.transition.branches]]
+when = "pull-request-open"
+pull-request-facts = [ "needs-work" ]
+
+[[task-types.merge.transition.branches]]
+pull-request-facts = []
+
+[task-types.resolve-security-advisory]
+template = """Resolve the following security advisory {external-key}: {title}.
+
+### Instructions
+
+1. **Understand the Advisory**
+   - Read the advisory in full: severity, CWEs, affected component, vulnerable range, patched version, CVSS score, and proof of concept.
+
+2. **Verify the Report**
+   - Confirm the vulnerable code exists in this repository and the vulnerable range applies to the code in use.
+   - When the report is invalid or does not apply to this code, stop: open no pull request and explain in your final message exactly why.
+
+3. **Design the Fix**
+   - Make the smallest change that removes the root cause.
+   - Follow the upstream fix where it fits this code.
+   - Fix sibling call sites that carry the same flaw in the same pull request.
+
+4. **Develop**
+   - Implement the fix.
+   - Add a regression test that fails on the vulnerable behavior and passes on the fix.
+
+5. **Commit the Fix**
+   - Commit all changes to this branch and push them: the pull request that already stands on this branch carries the commits you push. It links the source item by its URL.
+   - Never create or merge a pull request, and never edit its title or body: the machine owns it.
+   - Never close, resolve, or withdraw the source item: closing a finding is a maintainer decision made after the fix merges.
+
+Repository: {repository}
+
+{external-key}: {title}
+
+URL: {source-url}
+
+Pull request: {pull-request-url}
+
+Labels: {labels}
+
+Description:
+{description}"""
+thinking = "high"
+opens-pull-request = true
+
+[task-types.resolve-security-advisory.transition]
+ticket-facts = []
+pull-request-facts = [ "ready-for-review" ]
+auto-advance = true
+
+[task-types.resolve-dependabot-alert]
+template = """Resolve the following Dependabot alert {external-key}: {title}.
+
+### Instructions
+
+1. **Read the Alert**
+   - Note the package, the ecosystem, the manifest, the vulnerable range, and the first patched version.
+
+2. **Verify the Alert**
+   - Find the package at a vulnerable version in this repository.
+   - A transitive dependency lands on the direct dependency or the lockfile; fix it there.
+
+3. **Check for an Existing Pull Request**
+   - If a pull request already fixes this alert, do not open a competing one; explain in your final message which pull request covers it.
+
+4. **Upgrade**
+   - Upgrade to the first patched version with the smallest change that leaves the vulnerable range.
+   - On a major bump, apply the minimal breaking migration.
+   - Update the lockfile with the project's package manager.
+   - Run the test suite.
+   - When no patched version exists, remove or replace the dependency and record the choice in a pull request comment.
+
+5. **Commit the Fix**
+   - Commit all changes to this branch and push them: the pull request that already stands on this branch carries the commits you push. It links the source item by its URL.
+   - Never create or merge a pull request, and never edit its title or body: the machine owns it.
+   - Never close, resolve, or withdraw the source item: closing a finding is a maintainer decision made after the fix merges.
+
+Repository: {repository}
+
+{external-key}: {title}
+
+URL: {source-url}
+
+Pull request: {pull-request-url}
+
+Labels: {labels}
+
+Description:
+{description}"""
+thinking = "high"
+opens-pull-request = true
+
+[task-types.resolve-dependabot-alert.transition]
+ticket-facts = []
+pull-request-facts = [ "ready-for-review" ]
+auto-advance = true
+
+[task-types.resolve-secret-scanning-alert]
+template = """Resolve the following secret scanning alert {external-key}: {title}.
+
+### Instructions
+
+1. **Read the Alert**
+   - Note the secret type, the file, the lines, and the commit.
+
+2. **Rotate First**
+   - Rotate the exposed credential from your environment when you can, and record in the pull request description exactly what was rotated.
+   - When you cannot rotate it, state in the pull request description exactly which credential to rotate: the alert stays live until rotation, and a human finishes the fix.
+
+3. **Remove the Secret**
+   - Remove the secret from the current state of the code and replace it with the project's environment variable or secret store reference.
+   - When the project has neither, introduce the smallest convention that fits.
+
+4. **Find Every Copy**
+   - Search the repository for every other copy of the secret and report each one in the pull request description.
+
+5. **History**
+   - Do not rewrite git history in the pull request.
+   - Note in the pull request description that history must be purged after rotation, for example with git filter-repo.
+
+6. **Never Print the Secret**
+   - Never print the secret value in the pull request, in a comment, or in a test.
+
+7. **Commit the Fix**
+   - Commit all changes to this branch and push them: the pull request that already stands on this branch carries the commits you push. It links the source item by its URL.
+   - Never create or merge a pull request, and never edit its title or body: the machine owns it.
+   - Never close, resolve, or withdraw the source item: closing a finding is a maintainer decision made after the fix merges.
+
+Repository: {repository}
+
+{external-key}: {title}
+
+URL: {source-url}
+
+Pull request: {pull-request-url}
+
+Labels: {labels}
+
+Description:
+{description}"""
+thinking = "high"
+opens-pull-request = true
+
+[task-types.resolve-secret-scanning-alert.transition]
+ticket-facts = []
+pull-request-facts = [ "ready-for-review" ]
+auto-advance = true
 
 [consultation-types.grill-with-docs]
 agent = "pi"
-thinking = "xhigh"
+environment = "worktree"
 template = "/skill:grill-with-docs {input}"
+thinking = "xhigh"
 
 [consultation-types.pair]
 agent = "pi"
 environment = "live-worktree"
-thinking = "xhigh"
-template = '''
-You are the driver in a pair programming session. The operator is the navigator: they set the direction, give feedback, and run the real-life tests. You write the code and verify what you can.
+template = """You are the driver in a pair programming session. The operator is the navigator: they set the direction, give feedback, and run the real-life tests. You write the code and verify what you can.
 
 ### Rules
 
@@ -104,401 +355,130 @@ You are the driver in a pair programming session. The operator is the navigator:
 
 ### First instruction
 
-{input}'''
+{input}"""
+thinking = "xhigh"
 
 [consultation-types.free]
 agent = "pi"
+environment = "worktree"
 template = "{input}"
 
-# --- The workflow machine (ADR 0027) --------------------------------------
-# The states of the label workflow. A state's match names the labels
-# that put a ticket on it; its task is what the plane suggests for a ticket
-# that sits there. Order decides: the first matching state wins.
+[logging]
+level = "debug"
+file = ".factory-development.log"
+max-size-mib = 10
+keep = 5
+
+[scroll]
+speed = 1
+acceleration = 0.8
+maximum-speed = 6
+
+[repos]
+"github.com/SeriousJul/my-little-software-factory" = "/home/seriousjul/src/my-little-software-factory"
+"github.com/seriousjul/pi-extensions" = "/home/seriousjul/src/pi-extensions"
+"github.com/SeriousJul/seriousjul.github.io" = "/home/seriousjul/src/seriousjul.github.io"
+"github.com/SeriousJul/yapdf" = "/home/seriousjul/src/yapdf2"
+
+[[sources]]
+name = "factory-issues"
+kind = "github-issues"
+refresh-interval-seconds = 60
+repositories = [ "SeriousJul/my-little-software-factory", "SeriousJul/pi-extensions", "SeriousJul/seriousjul.github.io", "SeriousJul/yapdf" ]
+
+[[sources]]
+name = "factory-pull-requests"
+kind = "github-pull-requests"
+refresh-interval-seconds = 60
+repositories = [ "SeriousJul/my-little-software-factory", "SeriousJul/pi-extensions", "SeriousJul/seriousjul.github.io", "SeriousJul/yapdf" ]
+
+[[sources]]
+name = "my-security-advisories"
+kind = "github-security-advisories"
+refresh-interval-seconds = 300
+repositories = [ "SeriousJul/my-little-software-factory", "SeriousJul/pi-extensions", "SeriousJul/seriousjul.github.io" ]
+
+[[sources]]
+name = "my-dependabot-alerts"
+kind = "github-dependabot-alerts"
+refresh-interval-seconds = 300
+repositories = [ "SeriousJul/my-little-software-factory", "SeriousJul/pi-extensions", "SeriousJul/seriousjul.github.io" ]
+
+[[sources]]
+name = "my-secret-alerts"
+kind = "github-secret-scanning-alerts"
+refresh-interval-seconds = 300
+repositories = [ "SeriousJul/my-little-software-factory", "SeriousJul/pi-extensions", "SeriousJul/seriousjul.github.io" ]
+
+[[sources]]
+name = "SeriousJul/my-little-software-factory-issues"
+kind = "github-issues"
+refresh-interval-seconds = 60
+repositories = [ "SeriousJul/my-little-software-factory" ]
+filter = "label:ready-for-agent"
+
+[[sources]]
+name = "SeriousJul/my-little-software-factory-pull-requests"
+kind = "github-pull-requests"
+refresh-interval-seconds = 60
+repositories = [ "SeriousJul/my-little-software-factory" ]
 
 [[states]]
 name = "ready-for-agent"
 task-type = "implement"
+
 [states.match]
 source-kind = "github-issue"
-labels-any = ["ready-for-agent"]
+labels-any = [ "ready-for-agent" ]
 
 [[states]]
 name = "needs-work"
 task-type = "rework"
+
 [states.match]
 source-kind = "github-pull-request"
-labels-any = ["needs-work"]
+labels-any = [ "needs-work" ]
 
 [[states]]
 name = "ready-for-review"
 task-type = "review"
+
 [states.match]
 source-kind = "github-pull-request"
-labels-any = ["ready-for-review"]
+labels-any = [ "ready-for-review" ]
 
 [[states]]
 name = "ready-to-ship"
 task-type = "merge"
+
 [states.match]
 source-kind = "github-pull-request"
-labels-any = ["ready-to-ship"]
+labels-any = [ "ready-to-ship" ]
 
-# The security feeds: one state per source kind, matching without a label
-# condition. The severity label is ranking data, not a gate. A finding that
-# its task completes rests on the same-type hold while the item still lists
-# upstream, the way a closed issue rests off the issue list.
 [[states]]
 name = "security-advisory"
 task-type = "resolve-security-advisory"
+
 [states.match]
 source-kind = "github-security-advisory"
 
 [[states]]
 name = "security-dependabot-alert"
 task-type = "resolve-dependabot-alert"
+
 [states.match]
 source-kind = "github-dependabot-alert"
 
 [[states]]
 name = "security-secret-alert"
 task-type = "resolve-secret-scanning-alert"
+
 [states.match]
 source-kind = "github-secret-scanning-alert"
 
-# A pull request the plane has not put in the machine parks: the plane offers
-# no task for it, so it hands off nothing, and a label write is the only
-# engine that moves it. That holds a stranger's pull request, and one an agent
-# opened but has not finished with, out of the queue; the implement transition
-# still reaches such a pull request as its ticket's linked pull request and
-# labels it from there. It sits last because the states match in order.
 [[states]]
 name = "pull-request-unlabeled"
+
 [states.match]
 source-kind = "github-pull-request"
-labels-none = ["needs-work", "ready-for-review", "ready-to-ship"]
-
-# --- The task types --------------------------------------------------------
-# Each task type is work only: a prompt template and a task profile. The
-# transition hangs off the type that completes it and writes the label facts
-# the machine then reads. The templates carry no label instructions: the
-# plane owns the labels.
-#
-# The pull request open (ADR 0076): a task type that opens a pull request
-# carries `opens-pull-request = true`. At the Handoff start, before the
-# agent's first commit, the plane pushes the ticket's factory branch and
-# opens the pull request on it as a draft; the `{pull-request-url}` in its
-# template is the url of the pull request that stands. The agent commits and
-# pushes and never creates or merges a pull request. A task type without the
-# fact works the branch as before, and the live worktree refuses the open.
-
-[task-types.implement]
-opens-pull-request = true
-template = '''
-Implement the following {source-kind}. 
-
-### Instructions
-
-1. **Develop Code**
-   - Implement all acceptance criteria on this branch.
-   - Commit all changes to this branch.
-
-2. **Work the Pull Request**
-   - The pull request already stands at the url below, opened as a draft on this branch. It links the ticket; merging it closes the issue.
-   - Commit and push your work to this branch. The pull request carries the commits you push.
-   - List any technical choices made when specifications were not clear.
-   - Post your notes as a comment on the pull request.
-   - Never create or merge a pull request, and never edit its title or body: the machine owns it.
-
-Repository: {repository}
-
-{external-key}: {title}
-
-URL: {source-url}
-
-Pull request: {pull-request-url}
-
-Labels: {labels}
-
-Description:
-{description}'''
-[task-types.implement.transition]
-ticket-facts = []
-pull-request-facts = ["ready-for-review"]
-
-[task-types.review]
-template = '''
-Review pull request {external-key}: {title}.
-
-### Rules
-1. **Verify Specification**
-   - Check if the code satisfies all acceptance criteria in the ticket.
-   - List missing requirements or incorrect behavior.
-
-2. **Assess Code Quality**
-   - Check design, modularity, readability, and testing standards.
-   - List maintainability, security, or performance issues.
-
-3. **Calculate Score**
-   - Give a total score from 0 to 100 based on both areas.
-
-### Output Format
-
-- **Score:** [0-100] / 100
-- **Specification Check:** [Pass/Fail - Details]
-- **Quality Check:** [Pass/Fail - Details]
-- **Required Changes:** [Bullet points]
-
-### Outcome
-- Post the output on the pull request, as a comment or a review.
-
-Repository: {repository}
-Pull request: {source-url}
-
-Labels: {labels}
-
-Description:
-{description}'''
-[task-types.review.transition]
-ticket-facts = []
-pull-request-facts = []
-score-threshold = 90
-[[task-types.review.transition.branches]]
-when = "score-above-threshold"
-pull-request-facts = ["ready-to-ship"]
-[[task-types.review.transition.branches]]
-when = "score-below-threshold"
-pull-request-facts = ["needs-work"]
-
-[task-types.rework]
-template = '''
-Rework pull request {external-key}: {title}.
-
-### Review verdict
-
-{review-verdict}
-
-### Instructions
-
-1. **Make Changes**
-   - Correct the code according to the verdict above.
-   - When the verdict section carries no verdict, read the pull request's last review comments yourself.
-
-2. **Update Repository**
-   - Commit and push changes to this branch.
-
-3. **Update Pull Request**
-   - Write a summary of your changes in a new comment.
-
-Repository: {repository}
-Pull request: {source-url}
-
-Labels: {labels}
-
-Description:
-{description}'''
-[task-types.rework.transition]
-ticket-facts = []
-pull-request-facts = ["ready-for-review"]
-
-# The merge runs on the plane, with no agent (ADR 0068): the task type is the
-# action form, and its transition returns a pull request the merge blocked
-# to the needs-work state.
-[task-types.merge]
-action = "merge-pull-request"
-method = "squash"
-[task-types.merge.transition]
-ticket-facts = []
-pull-request-facts = []
-[[task-types.merge.transition.branches]]
-when = "pull-request-open"
-pull-request-facts = ["needs-work"]
-[[task-types.merge.transition.branches]]
-pull-request-facts = []
-
-# --- Security task types ----------------------------------------------------
-# One task type per security ticket source, a sibling of implement. Each one
-# carries a template that resolves its kind of finding: verify the finding,
-# make the fix, and open a pull request. From there the review, rework, and
-# merge workflow takes over. The transition writes ready-for-review on the
-# opened pull request and auto-advances into its review position; a turn
-# that opened no pull request settles closed, and the completed task type
-# rests the ticket while the item still lists upstream.
-
-[task-types.resolve-security-advisory]
-thinking = "high"
-opens-pull-request = true
-template = '''
-Resolve the following security advisory {external-key}: {title}.
-
-### Instructions
-
-1. **Understand the Advisory**
-   - Read the advisory in full: severity, CWEs, affected component, vulnerable range, patched version, CVSS score, and proof of concept.
-
-2. **Verify the Report**
-   - Confirm the vulnerable code exists in this repository and the vulnerable range applies to the code in use.
-   - When the report is invalid or does not apply to this code, stop: open no pull request and explain in your final message exactly why.
-
-3. **Design the Fix**
-   - Make the smallest change that removes the root cause.
-   - Follow the upstream fix where it fits this code.
-   - Fix sibling call sites that carry the same flaw in the same pull request.
-
-4. **Develop**
-   - Implement the fix.
-   - Add a regression test that fails on the vulnerable behavior and passes on the fix.
-
-5. **Commit the Fix**
-   - Commit all changes to this branch and push them: the pull request that already stands on this branch carries the commits you push. It links the source item by its URL.
-   - Never create or merge a pull request, and never edit its title or body: the machine owns it.
-   - Never close, resolve, or withdraw the source item: closing a finding is a maintainer decision made after the fix merges.
-
-Repository: {repository}
-
-{external-key}: {title}
-
-URL: {source-url}
-
-Pull request: {pull-request-url}
-
-Labels: {labels}
-
-Description:
-{description}'''
-[task-types.resolve-security-advisory.transition]
-ticket-facts = []
-pull-request-facts = ["ready-for-review"]
-auto-advance = true
-
-[task-types.resolve-dependabot-alert]
-thinking = "high"
-opens-pull-request = true
-template = '''
-Resolve the following Dependabot alert {external-key}: {title}.
-
-### Instructions
-
-1. **Read the Alert**
-   - Note the package, the ecosystem, the manifest, the vulnerable range, and the first patched version.
-
-2. **Verify the Alert**
-   - Find the package at a vulnerable version in this repository.
-   - A transitive dependency lands on the direct dependency or the lockfile; fix it there.
-
-3. **Check for an Existing Pull Request**
-   - If a pull request already fixes this alert, do not open a competing one; explain in your final message which pull request covers it.
-
-4. **Upgrade**
-   - Upgrade to the first patched version with the smallest change that leaves the vulnerable range.
-   - On a major bump, apply the minimal breaking migration.
-   - Update the lockfile with the project's package manager.
-   - Run the test suite.
-   - When no patched version exists, remove or replace the dependency and record the choice in a pull request comment.
-
-5. **Commit the Fix**
-   - Commit all changes to this branch and push them: the pull request that already stands on this branch carries the commits you push. It links the source item by its URL.
-   - Never create or merge a pull request, and never edit its title or body: the machine owns it.
-   - Never close, resolve, or withdraw the source item: closing a finding is a maintainer decision made after the fix merges.
-
-Repository: {repository}
-
-{external-key}: {title}
-
-URL: {source-url}
-
-Pull request: {pull-request-url}
-
-Labels: {labels}
-
-Description:
-{description}'''
-[task-types.resolve-dependabot-alert.transition]
-ticket-facts = []
-pull-request-facts = ["ready-for-review"]
-auto-advance = true
-
-[task-types.resolve-secret-scanning-alert]
-thinking = "high"
-opens-pull-request = true
-template = '''
-Resolve the following secret scanning alert {external-key}: {title}.
-
-### Instructions
-
-1. **Read the Alert**
-   - Note the secret type, the file, the lines, and the commit.
-
-2. **Rotate First**
-   - Rotate the exposed credential from your environment when you can, and record in the pull request description exactly what was rotated.
-   - When you cannot rotate it, state in the pull request description exactly which credential to rotate: the alert stays live until rotation, and a human finishes the fix.
-
-3. **Remove the Secret**
-   - Remove the secret from the current state of the code and replace it with the project's environment variable or secret store reference.
-   - When the project has neither, introduce the smallest convention that fits.
-
-4. **Find Every Copy**
-   - Search the repository for every other copy of the secret and report each one in the pull request description.
-
-5. **History**
-   - Do not rewrite git history in the pull request.
-   - Note in the pull request description that history must be purged after rotation, for example with git filter-repo.
-
-6. **Never Print the Secret**
-   - Never print the secret value in the pull request, in a comment, or in a test.
-
-7. **Commit the Fix**
-   - Commit all changes to this branch and push them: the pull request that already stands on this branch carries the commits you push. It links the source item by its URL.
-   - Never create or merge a pull request, and never edit its title or body: the machine owns it.
-   - Never close, resolve, or withdraw the source item: closing a finding is a maintainer decision made after the fix merges.
-
-Repository: {repository}
-
-{external-key}: {title}
-
-URL: {source-url}
-
-Pull request: {pull-request-url}
-
-Labels: {labels}
-
-Description:
-{description}'''
-[task-types.resolve-secret-scanning-alert.transition]
-ticket-facts = []
-pull-request-facts = ["ready-for-review"]
-auto-advance = true
-
-[[sources]]
-name = "factory-issues"
-kind = "github-issues"
-refresh-interval-seconds = 60
-repositories = ["SeriousJul/my-little-software-factory", "SeriousJul/pi-extensions", "SeriousJul/seriousjul.github.io", "SeriousJul/yapdf"]
-host = "github.com"
-
-[[sources]]
-name = "factory-pull-requests"
-kind = "github-pull-requests"
-refresh-interval-seconds = 60
-repositories = ["SeriousJul/my-little-software-factory", "SeriousJul/pi-extensions", "SeriousJul/seriousjul.github.io", "SeriousJul/yapdf"]
-host = "github.com"
-
-[[sources]]
-name = "my-security-advisories"
-kind = "github-security-advisories"
-refresh-interval-seconds = 300
-repositories = ["SeriousJul/my-little-software-factory", "SeriousJul/pi-extensions", "SeriousJul/seriousjul.github.io"]
-host = "github.com"
-
-[[sources]]
-name = "my-dependabot-alerts"
-kind = "github-dependabot-alerts"
-refresh-interval-seconds = 300
-repositories = ["SeriousJul/my-little-software-factory", "SeriousJul/pi-extensions", "SeriousJul/seriousjul.github.io"]
-host = "github.com"
-
-[[sources]]
-name = "my-secret-alerts"
-kind = "github-secret-scanning-alerts"
-refresh-interval-seconds = 300
-repositories = ["SeriousJul/my-little-software-factory", "SeriousJul/pi-extensions", "SeriousJul/seriousjul.github.io"]
-host = "github.com"
+labels-none = [ "needs-work", "ready-for-review", "ready-to-ship" ]

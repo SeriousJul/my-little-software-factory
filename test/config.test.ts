@@ -31,6 +31,7 @@ import {
 	defaultConfigPath,
 	defaultStatePath,
 	type FactoryConfig,
+	type GitHubSourceKind,
 	loadConfigFile,
 	logPathFor,
 	persistConfig,
@@ -483,20 +484,48 @@ describe("validateConfig", () => {
 			// The dev feed: both adapters and the three security feeds, all
 			// tracking this repository. A local development setup may add more
 			// repositories to the same sources, so track membership rather than
-			// the exact list.
-			expect(config.sources.map(({ name, kind }) => ({ name, kind }))).toEqual([
+			// the exact list. After the feed stand the sources the plane itself
+			// registered through repository init (ADR 0075): one issues and one
+			// pull request source per initialized repository, appended in init
+			// order.
+			const devFeeds: Array<{ name: string; kind: GitHubSourceKind }> = [
 				{ name: "factory-issues", kind: "github-issues" },
 				{ name: "factory-pull-requests", kind: "github-pull-requests" },
 				{ name: "my-security-advisories", kind: "github-security-advisories" },
 				{ name: "my-dependabot-alerts", kind: "github-dependabot-alerts" },
 				{ name: "my-secret-alerts", kind: "github-secret-scanning-alerts" },
-			]);
+			];
+			expect(
+				config.sources.slice(0, devFeeds.length).map(({ name, kind }) => ({ name, kind })),
+			).toEqual(devFeeds);
+			const feedNames = new Set(devFeeds.map(({ name }) => name));
 			for (const source of config.sources) {
-				expect(source.refreshIntervalSeconds, `${source.name} keeps its refresh interval`).toBe(
-					source.kind === "github-issues" || source.kind === "github-pull-requests" ? 60 : 300,
-				);
 				expect(source.host).toBe("github.com");
-				expect(source.repositories).toContain("SeriousJul/my-little-software-factory");
+				expect(source.auth).toBeUndefined();
+				if (feedNames.has(source.name)) {
+					// Normal gh authentication and no explicit filter: the feed
+					// reads neither an auth table nor a filter, so no token is
+					// committed.
+					expect(source.refreshIntervalSeconds, `${source.name} keeps its refresh interval`).toBe(
+						source.kind === "github-issues" || source.kind === "github-pull-requests" ? 60 : 300,
+					);
+					expect(source.repositories).toContain("SeriousJul/my-little-software-factory");
+					expect(source.filter).toBeUndefined();
+				} else {
+					// The init flow's naming, one pair per initialized
+					// repository: the issues side on the ready-for-agent filter,
+					// the pull request side on the default policy.
+					const match = source.name.match(/^(.+)-(issues|pull-requests)$/);
+					expect(match, `${source.name} follows the init source naming`).not.toBeNull();
+					const repository = match === null ? source.name : match[1];
+					const isIssues = match !== null && match[2] === "issues";
+					expect(source.kind).toBe(isIssues ? "github-issues" : "github-pull-requests");
+					expect(source.refreshIntervalSeconds, `${source.name} keeps its refresh interval`).toBe(
+						60,
+					);
+					expect(source.repositories).toEqual([repository]);
+					expect(source.filter).toBe(isIssues ? "label:ready-for-agent" : undefined);
+				}
 			}
 			// The dev path records its run in a log the git tree ignores.
 			expect(config.logging).toMatchObject({
@@ -505,12 +534,6 @@ describe("validateConfig", () => {
 				maxSizeMib: 10,
 				keep: 5,
 			});
-			// Normal gh authentication and no explicit filters: the file reads
-			// neither an auth table nor a filter, so no token is committed.
-			for (const source of config.sources) {
-				expect(source.auth).toBeUndefined();
-				expect(source.filter).toBeUndefined();
-			}
 			// The machine carries the shipped security half (ADR 0029, ADR 0042):
 			// one state per security source kind, and one resolve task type per
 			// kind, each auto-advancing into its review position.
@@ -795,6 +818,21 @@ describe("validateConfig", () => {
 				},
 			}).taskTypes.t.opensPullRequest,
 		).toBe(true);
+		// The write path must mirror the read path: a persist rewrites the
+		// whole file, so the fact must survive the round trip or the rewrite
+		// silently drops it.
+		const withFact = validateConfig({
+			...base,
+			"task-types": {
+				t: {
+					template: "x {pull-request-url}",
+					"opens-pull-request": true,
+				},
+			},
+		});
+		expect(validateConfig(parseToml(configToToml(withFact))).taskTypes.t.opensPullRequest).toBe(
+			true,
+		);
 		expectConfigError(
 			{
 				...base,
@@ -1894,6 +1932,30 @@ describe("configToToml and persistConfig", () => {
 	test("the shipped defaults round-trip through TOML", () => {
 		const config = validateConfig(parseToml(configToToml(BASE_CONFIG)));
 		expect(config).toEqual(BASE_CONFIG);
+	});
+
+	test("a string that holds newlines lands as a multiline basic string", () => {
+		// The operator reads the config file: a prompt the plane sends must
+		// stand as the prompt, not as one line of \n escapes.
+		const text = configToToml(BASE_CONFIG);
+		expect(text).toContain(
+			'template = """Implement the following {source-kind}.\n\nRepository: {repository}\n\n',
+		);
+		expect(text).not.toContain("Implement the following {source-kind}. \\n");
+		expect(validateConfig(parseToml(text))).toEqual(BASE_CONFIG);
+	});
+
+	test("a value that cannot take the multiline form keeps its single line", () => {
+		const config: FactoryConfig = {
+			...BASE_CONFIG,
+			taskTypes: {
+				...BASE_CONFIG.taskTypes,
+				implement: { template: "Ends with a newline.\n" },
+			},
+		};
+		const text = configToToml(config);
+		expect(text).toContain('template = "Ends with a newline.\\n"');
+		expect(validateConfig(parseToml(text))).toEqual(config);
 	});
 
 	test("persistConfig writes a file the loader reads back", async () => {
