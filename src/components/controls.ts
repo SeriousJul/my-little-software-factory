@@ -800,6 +800,21 @@ const ticketIgnore = (context: ControlContext): ControlAvailability => {
 	return refusal === null ? available() : unavailable(refusal);
 };
 /**
+ * Why `i` answers the Repository init on a Group header (ADR 0075). The key
+ * already hides a resting Ticket on a Ticket row, so the two meanings split on
+ * the row the cursor stands on: a Group header under the repository axis runs
+ * the init, and everywhere else the catalogue states the refusal in its own
+ * words. On any other axis the repository the header names is not the split
+ * that init acts on, so the key refuses there too.
+ */
+const repositoryInit = (context: ControlContext): ControlAvailability => {
+	if (context.groupingAxis !== "repository")
+		return unavailable("init is available on the repository axis only");
+	if (context.groupHeaderSelected !== true)
+		return unavailable("no Group header is under the cursor");
+	return available();
+};
+/**
  * The state the Ticket section's `f` moves the List filter to (ADR 0060).
  *
  * The hint names the next view, the way the queue pause flips between Pause and
@@ -1284,6 +1299,36 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		// the flag hides a resting row, while a row with live work or a decision owed
 		// stays listed under it (ADR 0060).
 		guideNote: "hides a resting row and stops every automatic start",
+	},
+	{
+		// The Repository init (ADR 0075): `i` on a Group header under the
+		// repository axis makes that repository factory-ready from the
+		// factory's own settings, with no agent. The catalogue splits it from
+		// the ignore's `i` on the row the cursor stands on, the way it splits
+		// the fold's `Space` from the row keys. It stands behind the ignore in
+		// the catalogue: on a Group header under the repository axis the init is
+		// available and wins the key outright, while on a Ticket row and on any
+		// other axis the ignore - first in the list - supplies the refusal, so a
+		// press on a resting row or a non-repository header never reads as an init
+		// refusal. The handler opens the panel that shows what the act will
+		// change before the operator confirms.
+		id: "repository-init",
+		label: "Init repository",
+		keys: () => ["i"],
+		keyLabel: "i",
+		scope: "control-plane",
+		// The init is not a row key the bar names: the operator finds it on the
+		// marker the uninit or drifted repository's Group header wears. The bar
+		// spends its cells on the keys the rows answer.
+		actionBar: false,
+		// Guide-only, out of the Action bar: the operator finds the init on the
+		// marker the uninit or drifted repository's Group header wears, so the
+		// bar spends no cell on a contextual act. The guide still lists the key,
+		// and the key resolves through the catalogue's availability.
+		guideOnly: true,
+		priority: 43,
+		modes: [...ticketBaseModes],
+		availability: repositoryInit,
 	},
 	{
 		// `u` takes a source out of the factory's way (ADR 0070): the flag is

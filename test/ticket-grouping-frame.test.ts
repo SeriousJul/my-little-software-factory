@@ -22,6 +22,7 @@ import { widthOf } from "../src/components/text.ts";
 import type { FactoryConfig } from "../src/config.ts";
 import type { GroupingAxis } from "../src/domain/grouping.ts";
 import type { FetchedTicket } from "../src/domain/ticket.ts";
+import { repositoryInitSettingsHash } from "../src/repo-init.ts";
 import { type FactoryState, openFactoryState } from "../src/state.ts";
 import type { FetchOutcome } from "../src/ticket-source.ts";
 import {
@@ -199,12 +200,28 @@ function groupedState(
 	hold = false,
 	listed: FetchedTicket[] = tickets(),
 	axis?: GroupingAxis,
+	init = true,
 ): { state: FactoryState; sources: FakeSource[] } {
 	const state = openFactoryState(join(home, "state.sqlite"));
 	state.initializeSources([ISSUES, TRIAGE]);
 	// The axis a restart reads back from the state file (ADR 0058), so a frame
 	// can boot on a split instead of stepping the cycle with presses.
 	if (axis !== undefined) state.setGroupingAxis("tickets", axis);
+	// The groups' fixtures stand initialized (ADR 0075) by default, so the init
+	// marker stays out of the grouping's own frame and the one-time note stays
+	// out of the Message line: these tests are the grouping's, and the marker
+	// and the note have their own tests below. A boot that asks for an
+	// uninitialized repository skips the seed and lets the marker and the note
+	// stand.
+	if (init) {
+		const initHash = repositoryInitSettingsHash(groupConfig.workflowStates, groupConfig.taskTypes);
+		const seeded = new Set<string>();
+		for (const ticket of listed) {
+			if (seeded.has(ticket.repository.identity)) continue;
+			seeded.add(ticket.repository.identity);
+			state.setRepositoryInitFact(ticket.repository.identity, initHash, "init-commit");
+		}
+	}
 	state.applyFetch(ISSUES, success(listed));
 	state.applyFetch(TRIAGE, success(triageListing()));
 	if (hold) {
@@ -262,11 +279,15 @@ async function bootGrouped(
 		list?: FetchedTicket[];
 		/** The axis to seed in the state file, so the frame boots on the split. */
 		axis?: GroupingAxis;
+		/** Stand the repositories uninitialized, so the marker and the note stand. */
+		uninit?: boolean;
 	} = {},
 ): Promise<void> {
 	const listed = options.list ?? tickets();
 	const made =
-		options.state === undefined ? groupedState(options.hold === true, listed, options.axis) : null;
+		options.state === undefined
+			? groupedState(options.hold === true, listed, options.axis, options.uninit !== true)
+			: null;
 	const fixture = made ?? { state: options.state as FactoryState, sources: [] };
 	const sources =
 		fixture.sources.length > 0
@@ -1798,6 +1819,85 @@ describe("the operator's Group order (ADR 0071)", () => {
 				expect(groupOrderWords(all)).toEqual(["acme/factory", "acme/billing"]);
 			},
 			{ axis: "repository" },
+		);
+	});
+});
+
+/**
+ * The init marker and the one-time note, through the real app flow (ADR 0075).
+ *
+ * A repository the operator has not initialized wears `uninit` on its Group
+ * header under the repository axis, and a repository whose settings changed
+ * since its fact wears `drift`. At first sight of one, the Message line says
+ * so once. The grouping's own tests stand their repositories initialized and
+ * keep these two behaviors out of their frames; these tests boot them
+ * uninitialized and read exactly what the operator must see.
+ */
+describe("the init marker and the one-time note (ADR 0075)", () => {
+	test("an uninitialized repository wears uninit on its header, and the note stands once", async () => {
+		await bootGrouped(
+			async (setup) => {
+				const frame = await settle(setup);
+				// Both repositories stand uninitialized, so both headers wear the
+				// marker, after the count the header always keeps.
+				expect(headers(frame).sort()).toEqual([
+					"▾ acme/billing 2 uninit",
+					"▾ acme/factory 3 uninit",
+				]);
+				// The one-time note names every repository that stands uninit, in
+				// the order the list names them, on the Message line.
+				const message = messageRowOf(frame);
+				expect(message).toContain("Not initialized:");
+				expect(message).toContain("acme/factory (uninit)");
+				expect(message).toContain("acme/billing (uninit)");
+				expect(message).toContain("Press i on one of their Group headers");
+			},
+			{ axis: "repository", uninit: true },
+		);
+	});
+
+	test("an initialized repository wears no marker, and a drifted one wears drift", async () => {
+		const state = openFactoryState(stateFile());
+		state.initializeSources([ISSUES, TRIAGE]);
+		state.setGroupingAxis("tickets", "repository");
+		state.applyFetch(ISSUES, success(tickets()));
+		state.applyFetch(TRIAGE, success(triageListing()));
+		const hash = repositoryInitSettingsHash(groupConfig.workflowStates, groupConfig.taskTypes);
+		// billing stands initialized at the current settings: no marker.
+		state.setRepositoryInitFact(`github.com/${BILLING}`, hash, "init-commit");
+		// factory stands initialized at a changed settings: the drift.
+		state.setRepositoryInitFact(`github.com/${FACTORY}`, "a-different-hash", "init-commit");
+		await bootGrouped(
+			async (setup) => {
+				const frame = await settle(setup);
+				expect(headers(frame).sort()).toEqual(["▾ acme/billing 2", "▾ acme/factory 3 drift"]);
+				// The note names only the drifted repository, never the one that
+				// stands initialized.
+				const message = messageRowOf(frame);
+				expect(message).toContain("acme/factory (drift)");
+				expect(message).not.toContain("acme/billing");
+			},
+			{ state },
+		);
+	});
+
+	test("every repository stands initialized, so no note stands at first sight", async () => {
+		const state = openFactoryState(stateFile());
+		state.initializeSources([ISSUES, TRIAGE]);
+		state.setGroupingAxis("tickets", "repository");
+		state.applyFetch(ISSUES, success(tickets()));
+		state.applyFetch(TRIAGE, success(triageListing()));
+		const hash = repositoryInitSettingsHash(groupConfig.workflowStates, groupConfig.taskTypes);
+		state.setRepositoryInitFact(`github.com/${BILLING}`, hash, "init-commit");
+		state.setRepositoryInitFact(`github.com/${FACTORY}`, hash, "init-commit");
+		await bootGrouped(
+			async (setup) => {
+				const frame = await settle(setup);
+				// Neither repository stands uninit or in drift: no marker, no note.
+				expect(headers(frame).sort()).toEqual(["▾ acme/billing 2", "▾ acme/factory 3"]);
+				expect(messageRowOf(frame)).not.toContain("Not initialized:");
+			},
+			{ state },
 		);
 	});
 });

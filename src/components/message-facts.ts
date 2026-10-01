@@ -17,7 +17,12 @@ import { type MessageFact, type MessageFacts, selectMessage } from "./messages.t
  * Consultation operation must not erase the progress of the one still running
  * beside it.
  */
-export type WorkingOwner = "refresh" | "handoff" | "refire" | `consultation:${string}`;
+export type WorkingOwner =
+	| "refresh"
+	| "handoff"
+	| "refire"
+	| "repository-init"
+	| `consultation:${string}`;
 
 /** The progress owner of one Consultation operation. */
 export const consultationProgressOwner = (consultationId: string): WorkingOwner =>

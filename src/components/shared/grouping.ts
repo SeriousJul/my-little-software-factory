@@ -143,7 +143,8 @@ export function groupingEmptyMessage(base: string, axis: GroupingAxis): string {
 
 /**
  * One Group as a header row shows it: its value, the rows it holds, the held
- * count among them, and whether it stands collapsed.
+ * count among them, whether it stands collapsed, and the marker the section's
+ * own facts stand on the header.
  */
 export interface GroupHeader {
 	/** The Group's own value word, in the same words the row badge uses. */
@@ -153,6 +154,14 @@ export interface GroupHeader {
 	/** The held turns among them: the decisions the fold cannot hide. */
 	held: number;
 	collapsed: boolean;
+	/**
+	 * The written-word marker the section stands on the header, in the marker
+	 * column a ticket row owns. The section's own facts supply it (ADR 0075
+	 * names the init marker on a repository Group header), and it is absent for
+	 * a Group the section has no marker for. The word, not a color, is the fact,
+	 * so it stands in the no-color presentation and under an inherited Theme.
+	 */
+	marker?: string;
 }
 
 /**
@@ -255,6 +264,13 @@ export interface GroupingOf<T> {
 	 * the sort, and a caller that names none falls back to the value's name.
 	 */
 	defaultCompare?: (a: string, b: string) => number;
+	/**
+	 * The written-word marker the section stands on one Group header, by the
+	 * Group's value, or null for none. The mechanism supplies the column and the
+	 * render; the section supplies the fact (ADR 0075's init marker on a
+	 * repository Group header). Absent for a section that wears no marker.
+	 */
+	groupMarker?: (value: string) => string | null;
 }
 
 /**
@@ -401,13 +417,20 @@ export function groupedRows<T>(
 	const rows: ListedRow<T>[] = [];
 	for (const group of groups) {
 		const collapsed = grouping.isFolded(group.value);
+		const marker = grouping.groupMarker?.(group.value) ?? null;
 		// One blank row parts a Group from the one above it, and none stands
 		// above the first: the list opens on its header exactly as it did before
 		// the spacing, and every Group keeps the same air at its head.
 		if (rows.length > 0) rows.push({ kind: "gap" });
 		rows.push({
 			kind: "group",
-			group: { value: group.value, count: group.items.length, held: group.held, collapsed },
+			group: {
+				value: group.value,
+				count: group.items.length,
+				held: group.held,
+				collapsed,
+				...(marker === null ? {} : { marker }),
+			},
 		});
 		if (collapsed) continue;
 		for (const item of group.items) rows.push({ kind: "item", item });
@@ -455,6 +478,7 @@ export function ticketRows(
 	folds: GroupFolds,
 	storedOrder: readonly string[],
 	positionOrder: readonly string[],
+	groupMarker?: (value: string) => string | null,
 ): readonly ListedRow<Ticket>[] {
 	const folded = foldedValues(folds, axis);
 	return groupedRows(tickets, {
@@ -464,6 +488,7 @@ export function ticketRows(
 		isFolded: (value) => folded.has(value),
 		storedOrder,
 		defaultCompare: axis === "none" ? undefined : ticketGroupCompare(axis, positionOrder),
+		...(groupMarker === undefined ? {} : { groupMarker }),
 	});
 }
 
@@ -532,9 +557,15 @@ export function groupHeaderSpans(
 ): ReactElement[] {
 	const prefix = `${selected ? "❯ " : "  "}${group.collapsed ? "▸" : "▾"} `;
 	const counts = groupCountFields(group);
+	const dim = paint("subtext0");
 	// One budget, spent by the fixed cells first, so the line never costs more
-	// than the `usableCols` it is laid out on.
+	// than the `usableCols` it is laid out on. The section's marker rides at the
+	// row's end the way a ticket's trailing markers do, and it is reserved
+	// before the counts so the value, not the marker, gives up cells.
 	let room = usableCols - widthOf(prefix);
+	const markerWord = group.marker === undefined ? "" : `  ${group.marker}`;
+	const marker = markerWord !== "" && widthOf(markerWord) <= room ? markerWord : "";
+	room -= widthOf(marker);
 	const held = widthOf(counts.held) <= room ? counts.held : "";
 	room -= widthOf(held);
 	const total = widthOf(counts.total) <= room ? counts.total : "";
@@ -542,7 +573,6 @@ export function groupHeaderSpans(
 	// A room below one cell yields no value at all: the Group's words are the
 	// first thing a narrow pane gives up, and its counts are the last.
 	const value = truncateTailToWidth(group.value, room);
-	const dim = paint("subtext0");
 	return [
 		createElement("span", { fg: selected ? paint("text") : dim }, prefix),
 		// The Group's value leads the line the way a section header's name does,
@@ -552,5 +582,9 @@ export function groupHeaderSpans(
 			? [createElement("b", { fg: paint("text") }, value)]
 			: [createElement("span", { fg: dim }, value)]),
 		createElement("span", { fg: dim }, `${total}${held}`),
+		// The marker the section's own facts stand on the header (ADR 0075's
+		// init marker): a written word, so it stands in the no-color
+		// presentation and under an inherited Theme alike.
+		...(marker === "" ? [] : [createElement("span", { fg: paint("yellow") }, marker)]),
 	];
 }

@@ -31,6 +31,14 @@ const SEED_TIME = "2026-09-30T00:00:00.000Z";
 const minutes = (count: number) => new Date(Date.parse(SEED_TIME) + count * 60_000).toISOString();
 
 /**
+ * The machine label set the seed's repositories stand initialized with (ADR
+ * 0075): the labels the stub walk's own transitions write. A repository seeded
+ * with the set enforces the world's item-edit refusal, so the walk runs on the
+ * same closed label surface the init act creates.
+ */
+const SEED_MACHINE_LABELS = ["ready-for-agent", "needs-work", "ready-for-review", "ready-to-ship"];
+
+/**
  * The world the walk starts from: two repositories with their scenario
  * issues, their linked draft pull requests, their merge gate facts, and
  * their security feed items. A fresh document on every call: the seed holds
@@ -45,6 +53,7 @@ export function stubWorldSeed(): StubWorld {
 		repositories: [
 			{
 				name: "alpha",
+				labels: [...SEED_MACHINE_LABELS],
 				issues: [
 					{
 						number: 1,
@@ -118,6 +127,7 @@ export function stubWorldSeed(): StubWorld {
 			},
 			{
 				name: "beta",
+				labels: [...SEED_MACHINE_LABELS],
 				issues: [
 					{
 						number: 1,

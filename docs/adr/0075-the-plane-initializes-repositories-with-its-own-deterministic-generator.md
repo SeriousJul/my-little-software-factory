@@ -61,8 +61,10 @@ write reaches no agent.
 `<repository>-issues` and `<repository>-pull-requests`, each refreshing every
 60 seconds: the issues source carries the `ready-for-agent` rank, and the
 pull request source carries the machine's pull request positions and its
-parking state. The `repos` mapping is written only when the resolution bent to
-a sibling clone, the plane's existing rule. A source name already taken by the
+parking state. The act works in one existing checkout: the plane's repository
+rule resolves it, the operator's explicit mapping then the `~/src/<name>`
+convention, and the act refuses where no checkout stands, so the act never
+clones and never writes the `repos` mapping. A source name already taken by the
 operator's own source, or a refused label write, fails the act with the
 reason. The act reuses the authentication of an existing source on the same
 host, else the ambient `gh` authentication.

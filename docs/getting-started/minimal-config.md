@@ -89,6 +89,12 @@ Repository checkout paths live in the `repos` table, one key per
 "owner/name" = "~/src/name"
 ```
 
+Once a repository is mapped, the [Repository init](../development/labels.md#making-a-repository-factory-ready)
+(`i` on the repository's Group header, grouped by repository) makes it
+factory-ready: it creates the labels your machine writes, writes the convention
+files, and registers the repository's sources, all from the factory's own
+settings.
+
 ## Extend the workflow machine
 
 The states and the task-type transitions of the Default configuration are the

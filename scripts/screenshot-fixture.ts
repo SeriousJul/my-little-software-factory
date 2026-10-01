@@ -38,7 +38,10 @@ import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:f
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
+import { parse } from "smol-toml";
+import { validateConfig } from "../src/config.ts";
 import type { FetchedTicket } from "../src/domain/ticket.ts";
+import { repositoryInitSettingsHash } from "../src/repo-init.ts";
 import type { SourceDefinition } from "../src/state.ts";
 import { openFactoryState } from "../src/state.ts";
 import { openControlPlanePty } from "../test/executable-pty.ts";
@@ -463,11 +466,23 @@ esac
  * Seed the state file: five tickets across two repositories, the ticket list
  * grouped by repository, one queue item, and two Consultations.
  */
-function seedState(path: string): void {
+function seedState(path: string, settingsHash: string): void {
 	const state = openFactoryState(path, () => Date.parse(NOW));
 	const source: SourceDefinition = { name: "issues", kind: "github-issues" };
 	state.initializeSources([source]);
 	state.applyFetch(source, { status: "success", fetchedAt: NOW, tickets: [...TICKETS] });
+	// The guide screens stand on a world the operator has already initialized
+	// (ADR 0075): both repositories carry an init fact at the world's own
+	// settings hash, so the init marker stays off the Group headers and the
+	// one-time note stays off the Message line, and the screens read as the
+	// screens the guides show rather than as an init prompt.
+	for (const repository of [REPO_A, REPO_B]) {
+		state.setRepositoryInitFact(
+			`github.com/${repository.toLowerCase()}`,
+			settingsHash,
+			"fixture-init",
+		);
+	}
 
 	// The in-flight ticket: claimed and started, its agent working in pane-2.
 	const runningClaim = state.claimHandoff(
@@ -655,7 +670,14 @@ export function buildFixture(root: string): string {
 	writeFileSync(join(dir, "bin", "pi"), PI_STUB);
 	writeFileSync(join(dir, "bin", "herdr"), HERDR_STUB);
 	for (const name of ["gh", "pi", "herdr"]) chmodSync(join(dir, "bin", name), 0o755);
-	seedState(join(dir, "state.sqlite"));
+	// The world's own settings hash, so the init facts it seeds match the
+	// config the plane will load from the same file (ADR 0075): the fixtures'
+	// repositories stand initialized, not drifted, on the screen the guide shows.
+	const worldConfig = validateConfig(parse(configToml(dir)));
+	seedState(
+		join(dir, "state.sqlite"),
+		repositoryInitSettingsHash(worldConfig.workflowStates, worldConfig.taskTypes),
+	);
 	return dir;
 }
 

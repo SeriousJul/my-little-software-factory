@@ -85,6 +85,15 @@ export interface StubSecurity {
 /** One repository in the world. */
 export interface StubRepository {
 	name: string;
+	/**
+	 * The repository's label set: the labels that stand in the repository today.
+	 * The `gh label list` answer and the item-edit refusal both read it (ADR
+	 * 0075, the init act's label seam), and `gh label create` adds to it. Where
+	 * it stands unset the world holds no closed surface for the labels: the list
+	 * answers empty and the item edit takes any label, the way the world did
+	 * before the seam. A set that stands enforces the refusal.
+	 */
+	labels?: string[];
 	issues: StubIssue[];
 	pullRequests: StubPullRequest[];
 	mergeGates: Record<string, StubMergeGate>;
@@ -181,8 +190,69 @@ export class StubWorldStore {
 		}
 		if (args[0] === "auth") return this.answerAuth(args);
 		if (args[0] === "api") return this.answerApi(args);
+		if (args[0] === "label") return this.answerLabel(args);
 		if (args[0] === "issue" || args[0] === "pr") return this.answerItem(args);
 		return this.refusal(args, "an unknown GitHub command");
+	}
+
+	// The label commands the init act runs (ADR 0075, stories 6 and 16): the
+	// list reads the repository's label set one name per line, the way the
+	// act's `--jq '.[].name'` parses it, and the create adds a label to the
+	// set the walk keeps. A repository the world does not know is refused.
+	private answerLabel(args: readonly string[]): Answer {
+		const verb = args[1];
+		if (verb === "list") {
+			// The list takes the repository on the `--repo` flag, the way the
+			// act's read issues it.
+			let repositoryIdentity: string | null = null;
+			for (let i = 2; i < args.length; i += 1) {
+				if (args[i] === "--repo") {
+					if (i + 1 >= args.length) return this.refusal(args, "the repo flag has no value");
+					repositoryIdentity = args[i + 1];
+					i += 1;
+				}
+			}
+			const repository =
+				repositoryIdentity === null ? null : this.repositoryOfIdentity(repositoryIdentity);
+			if (repository === null)
+				return this.refusal(
+					args,
+					`the world does not know the repository: ${repositoryIdentity ?? ""}`,
+				);
+			// The act's read takes `--json name` and parses the array of name
+			// objects, so the answer is the real `gh` JSON shape, not one name per line.
+			return {
+				code: 0,
+				stdout: JSON.stringify((repository.labels ?? []).map((name) => ({ name }))),
+				stderr: "",
+			};
+		}
+		if (verb === "create") {
+			const name = args[2];
+			let repositoryIdentity: string | null = null;
+			for (let i = 3; i < args.length; i += 1) {
+				if (args[i] === "--repo") {
+					if (i + 1 >= args.length) return this.refusal(args, "the repo flag has no value");
+					repositoryIdentity = args[i + 1];
+					i += 1;
+				}
+				// The `-y` flag and any other flag the act passes are accepted and ignored.
+			}
+			if (name === undefined || name === "") return this.refusal(args, "no label name");
+			const repository =
+				repositoryIdentity === null ? null : this.repositoryOfIdentity(repositoryIdentity);
+			if (repository === null)
+				return this.refusal(
+					args,
+					`the world does not know the repository: ${repositoryIdentity ?? ""}`,
+				);
+			if (repository.labels === undefined) repository.labels = [];
+			const labels = repository.labels;
+			if (!labels.some((entry) => entry.toLowerCase() === name.toLowerCase())) labels.push(name);
+			this.save();
+			return { code: 0, stdout: `created ${name}\n`, stderr: "" };
+		}
+		return this.refusal(args, `an unknown label command: ${verb ?? ""}`);
 	}
 
 	// The auth token: the stub configuration names no auth, so the plane
@@ -757,6 +827,20 @@ export class StubWorldStore {
 				stdout: "",
 				stderr: `GraphQL: Could not resolve to ${kind === "pr" ? "a PullRequest" : "an Issue"} with the number of ${number}.\n`,
 			};
+		// A label the repository's set does not hold is refused before any change
+		// (ADR 0075, the init act's label seam): the machine labels the transitions
+		// write stand in the set the init created, so a label the operator has not
+		// made stands nowhere. Where the set is unset the world takes any label, the
+		// way it did before the seam.
+		const labelSet = repository.labels;
+		if (labelSet !== undefined)
+			for (const label of added)
+				if (!labelSet.some((entry) => entry.toLowerCase() === label.toLowerCase()))
+					return {
+						code: 1,
+						stdout: "",
+						stderr: `the repository does not hold the label: ${label}\n`,
+					};
 		for (const label of added)
 			if (!item.labels.some((entry) => entry.toLowerCase() === label.toLowerCase()))
 				item.labels.push(label);
@@ -1058,6 +1142,13 @@ function validateWorld(raw: unknown): StubWorld {
 		if (!Array.isArray(item.issues) || !Array.isArray(item.pullRequests))
 			throw new StubWorldError(`repository ${item.name} has no items`);
 		const label = `repository ${item.name}`;
+		// The repository's label set, absent where the file does not name it.
+		let labels: string[] | undefined;
+		if (item.labels !== undefined) {
+			if (!Array.isArray(item.labels) || !item.labels.every((entry) => typeof entry === "string"))
+				throw new StubWorldError(`${label} has a bad label set`);
+			labels = [...item.labels];
+		}
 		const mergeGates: Record<string, StubMergeGate> = {};
 		const gates = item.mergeGates ?? {};
 		if (!isRecord(gates)) throw new StubWorldError(`${label} has a bad merge gate table`);
@@ -1069,6 +1160,7 @@ function validateWorld(raw: unknown): StubWorld {
 		}
 		repositories.push({
 			name: item.name,
+			...(labels === undefined ? {} : { labels }),
 			issues: item.issues.map((entry, index) =>
 				validateIssue(entry, `${label} issue at index ${index}`),
 			),

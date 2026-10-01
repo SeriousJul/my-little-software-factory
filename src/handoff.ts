@@ -93,6 +93,7 @@ import {
 	scoreFromMessage,
 	workflowScoreThreshold,
 } from "./workflow.ts";
+import { remoteDefaultBranch } from "./worktree-base.ts";
 
 /** A fresh pane can need a short time to reach its shell prompt. */
 const AGENT_PANE_BUSY_RETRY_DELAY_MS = 100;
@@ -1097,42 +1098,6 @@ async function freshWorktreeBase(
 			runner,
 		);
 	return { reference: `origin/${branch}` };
-}
-
-/**
- * The remote default branch, detected in the order the rule names: the
- * `origin/HEAD` symref, then `origin/main`, then `origin/master`. No config
- * names the branch. Null when none of the three points at a branch.
- */
-async function remoteDefaultBranch(
-	checkout: string,
-	runner: CommandRunner,
-): Promise<string | null> {
-	const symref = await runner.run("git", [
-		"-C",
-		checkout,
-		"symbolic-ref",
-		"refs/remotes/origin/HEAD",
-	]);
-	if (symref.code === 0) {
-		const target = symref.stdout.trim();
-		const branch = target.startsWith("refs/remotes/origin/")
-			? target.slice("refs/remotes/origin/".length)
-			: "";
-		if (branch !== "") return branch;
-	}
-	for (const candidate of ["main", "master"]) {
-		const check = await runner.run("git", [
-			"-C",
-			checkout,
-			"rev-parse",
-			"--verify",
-			"--quiet",
-			`origin/${candidate}^{commit}`,
-		]);
-		if (check.code === 0) return candidate;
-	}
-	return null;
 }
 
 /**

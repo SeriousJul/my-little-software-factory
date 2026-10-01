@@ -111,6 +111,7 @@ describe("the shared control gallery", () => {
 			"consultation-unscheduled-actions",
 			"consultation-detail-queued",
 			"ticket-groups",
+			"init-marker",
 			"work-queue",
 			"work-force-dispatch",
 			"work-queue-item-consultation",
@@ -181,6 +182,22 @@ describe("the shared control gallery", () => {
 		// lines are the words the press leaves on the line.
 		expect(text).toContain("Ticket list grouped by repository");
 		expect(text).toContain("Ticket list grouping off: the flat list");
+	});
+
+	// Issue #184: the init marker is a state a reviewer must see, so it stands
+	// in its own example and is asserted here rather than in a private sketch
+	// (ADR 0075, stories 19 and 22).
+	test("the init marker example shows drift, uninit, and the repository that wears nothing", async () => {
+		const setup = await gallery("init-marker", 120, 34);
+		const text = frameText(setup.captureCharFrame());
+		// Each repository's header carries the marker word after its count, in
+		// the marker column the header always keeps.
+		expect(text).toContain("▾ acme/billing 1 drift");
+		expect(text).toContain("▾ acme/factory 1 uninit");
+		// The repository that stands initialized wears nothing after its count.
+		expect(text).toContain("▾ acme/ledger 1");
+		expect(text).not.toContain("▾ acme/ledger 1 drift");
+		expect(text).not.toContain("▾ acme/ledger 1 uninit");
 	});
 
 	test("the Type-ahead example shows its search and answers a query", async () => {

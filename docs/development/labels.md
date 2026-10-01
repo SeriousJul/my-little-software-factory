@@ -30,15 +30,24 @@ operator owns: the fire leaves it on the surface, so a state may gate on a
 label the machine never touches, such as a `labels-all = ["factory"]` filter
 that keeps the machine to one project's items.
 
-## Creating the machine's labels
+## Making a repository factory-ready
 
 The plane writes its labels with `gh issue edit` and `gh pr edit`, and GitHub
 refuses a write of a label the repository does not have: a fire that names a
 missing label fails the whole write, records the failure on the turn's trace,
-and routes nothing from it. Create the labels your machine writes before the
-first fire can succeed. The default machine writes `ready-for-review`,
-`ready-to-ship`, and `needs-work` on pull requests; `ready-for-agent` and
-`blocked` stand on the source side and the plane never writes them in the
-default machine. Create them in the repository's labels page, or with `gh label
-create <name> --repo <owner>/<name>` for each one your states or transitions
-name.
+and routes nothing from it. The labels a repository needs stand in its
+repository's label set before the first fire can succeed.
+
+The Repository init makes one repository factory-ready in one confirmed act
+(ADR 0075): it creates the missing labels, writes the convention files and the
+Agent skills block, and registers the repository's sources - all generated
+deterministically from the factory's own settings, with no agent. In the
+Ticket list, group by repository and press `i` on the repository's Group
+header: the panel shows what the act will change, and confirming runs it. The
+act pushes to the remote default branch through a throwaway worktree, so the
+operator's checkout is never moved or dirtied.
+
+`blocked` stands on the source side and the plane never writes it, so the init
+never creates it. If you create labels by hand instead, use the repository's
+labels page or `gh label create <name> --repo <owner>/<name>` for each one your
+states or transitions name.

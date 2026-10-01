@@ -79,6 +79,44 @@ function guideGroupsFor(context: ControlContext, id: string): string[] {
  */
 const SPLIT_AXES = GROUPING_AXES.filter((axis) => axis !== "none");
 
+// Issue #182 (ADR 0075): `i` splits from the ignore on the row the cursor
+// stands on. A Group header under the repository axis runs the Repository
+// init, a Group header under any other axis refuses in the init's own words,
+// and a Ticket row keeps the ignore's `i`.
+test("i runs the Repository init on a repository Group header and refuses elsewhere", () => {
+	const repoHeader = contextFor("ticket-list", {
+		...values,
+		groupingAxis: "repository",
+		groupHeaderSelected: true,
+	});
+	const repoControl = controlForKey({ name: "i" }, repoHeader);
+	expect(repoControl?.id).toBe("repository-init");
+	if (repoControl === undefined) throw new Error("no control resolved for i");
+	expect(availabilityFor(repoControl, repoHeader)).toEqual({ available: true });
+
+	// On any other axis the key is the ignore's: the init refuses, the ignore
+	// first in the catalogue supplies the refusal, and the operator never reads
+	// an init refusal on a row the init does not run on.
+	for (const axis of SPLIT_AXES) {
+		if (axis === "repository") continue;
+		const other = contextFor("ticket-list", {
+			...values,
+			groupingAxis: axis,
+			groupHeaderSelected: true,
+		});
+		expect(controlForKey({ name: "i" }, other)?.id).toBe("ticket-ignore");
+	}
+
+	// On a Ticket row the key is the ignore's, whatever the axis.
+	const row = contextFor("ticket-list", {
+		...values,
+		groupingAxis: "repository",
+		groupHeaderSelected: false,
+		selectedTicket: rowTicket({ state: "open", ignored: false }),
+	});
+	expect(controlForKey({ name: "i" }, row)?.id).toBe("ticket-ignore");
+});
+
 // Issue #159: the Grouping axis is one key that steps a fixed cycle, and it
 // answers in both Ticket panes wherever the plane does, so a press in a
 // collapsed Ticket section still records the operator's choice.

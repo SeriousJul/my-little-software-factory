@@ -15,4 +15,32 @@ declare module "*.toml" {
 	export default file;
 }
 
+/**
+ * One template the deterministic generator writes into a repository (ADR
+ * 0075), imported with `{ type: "text" }`: the default export is the file's
+ * text. The content is resolved in a source run and embedded in a compiled
+ * build, so the generator owns its templates as code, not as a disk read. One
+ * declaration per template, not a `*.md` wildcard: a markdown file the
+ * generator does not own is not typed as its text.
+ */
+declare module "*templates/agents/agent-skills-block.md" {
+	const text: string;
+	export default text;
+}
+
+declare module "*templates/agents/domain.md" {
+	const text: string;
+	export default text;
+}
+
+declare module "*templates/agents/issue-tracker.md" {
+	const text: string;
+	export default text;
+}
+
+declare module "*templates/agents/triage-labels.md" {
+	const text: string;
+	export default text;
+}
+
 declare const FACTORY_BUILD_VERSION: string | undefined;

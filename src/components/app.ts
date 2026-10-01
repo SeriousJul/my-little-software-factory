@@ -56,6 +56,7 @@ import {
 	type Ticket,
 	type TicketListFilter,
 } from "../domain/ticket.ts";
+import { fileExists } from "../fs.ts";
 import {
 	baseChoice,
 	type HandoffChoice,
@@ -90,6 +91,19 @@ import {
 import { closeCycleEndDraftPullRequest } from "../pull-request.ts";
 import { RefreshCoordinator } from "../refresh.ts";
 import type { RepositoryMapping } from "../repo.ts";
+import { repositoryInitCheckoutPath } from "../repo.ts";
+import {
+	type InstructionFileName,
+	planRepositoryInit,
+	type RepositoryInitPlan,
+	repositoryInitSettingsHash,
+} from "../repo-init.ts";
+import {
+	commitRepositoryInit,
+	type RepositoryInitRepository,
+	repositoryInitStanding,
+} from "../repo-init-flow.ts";
+import type { CommandOptions } from "../runner.ts";
 import {
 	type CommandRunner,
 	commandFailureText,
@@ -108,6 +122,7 @@ import {
 } from "../state.ts";
 import { currentThemeResolution } from "../theme-source.ts";
 import type { TicketSource } from "../ticket-source.ts";
+import { GhAuthenticator } from "../ticket-source.ts";
 import {
 	readSessionExchange,
 	type SessionEntry,
@@ -149,6 +164,7 @@ import {
 import { MissingModal } from "./missing-modal.ts";
 import { type ActionRow, belowMinimum, TOO_SMALL_TEXT } from "./modal-chrome.ts";
 import { type AgentModelList, type ModelListStatus, OverridePanel } from "./override-panel.ts";
+import { repositoryInitPanel } from "./repository-init-panel.ts";
 import { RESPONSE_EDITOR_ROWS, ResponseEditor } from "./response-editor.ts";
 import { type MainSection, SectionHeader } from "./section-header.ts";
 import { COPY_REFUSED_REASON } from "./shared/fields.ts";
@@ -194,7 +210,13 @@ type Panel =
 	| { kind: "consultation-force"; identity: string }
 	| { kind: "consultation-delete"; identity: string }
 	| { kind: "consultation-safety"; identity: string }
-	| { kind: "live"; identity: string };
+	| { kind: "live"; identity: string }
+	| {
+			kind: "repository-init";
+			identity: string;
+			repository: RepositoryInitRepository;
+			plan: RepositoryInitPlan;
+	  };
 
 /**
  * The dim note under the last stream lines when the latest read failed:
@@ -369,6 +391,9 @@ export function App({
 		() => state?.groupingAxis(TICKET_GROUP_SECTION) ?? DEFAULT_GROUPING_AXIS,
 	);
 	const groupingAxisRef = useRef(groupingAxis);
+	// The one-time init note stands once per run (ADR 0075, story 20): the flag
+	// is a session fact and never durable, so a restart re-states the note.
+	const initNoteShownRef = useRef(false);
 	/**
 	 * The operator's stored order of the Group values of the axis in effect
 	 * (ADR 0071): factory state, read back at boot the way the axis itself is,
@@ -521,12 +546,31 @@ export function App({
 	 * like a ticket does. `none` draws the tickets alone in the flat list's
 	 * order, which is the list exactly as it stood before grouping.
 	 */
+	// The init marker a repository Group header wears (ADR 0075, stories 19 and
+	// 22): `uninit` where the plane has not init'd the repository, `drift` where
+	// it init'd it under settings that have since changed, and nowhere where the
+	// stored fact matches the current settings. The display name the axis groups
+	// on maps to the identity the fact keys on through a ticket the Group holds.
+	// On every axis but repository the marker is absent, so the column never
+	// stands where the init does not act.
+	// The current settings' hash, computed once per render so the marker below
+	// compares each Group's fact against it without re-hashing the config per
+	// Group (ADR 0075): the hash moves only when the config does.
+	const currentInitHash = repositoryInitSettingsHash(config.workflowStates, config.taskTypes);
+	const repositoryInitMarkerOf = (value: string): string | null => {
+		if (groupingAxis !== "repository") return null;
+		const ticket = tickets.find((item) => item.repository === value);
+		const identity = ticket?.repositoryRef.identity ?? value;
+		const fact = state === undefined ? null : state.repositoryInitFact(identity);
+		return repositoryInitStanding(fact, currentInitHash);
+	};
 	const ticketRowsState: readonly ListedRow<Ticket>[] = ticketRows(
 		tickets,
 		groupingAxis,
 		groupFolds,
 		groupOrderList,
 		positionOrderOf(),
+		repositoryInitMarkerOf,
 	);
 	const ticketRowsRef = useRef<readonly ListedRow<Ticket>[]>(ticketRowsState);
 	ticketRowsRef.current = ticketRowsState;
@@ -3237,6 +3281,10 @@ export function App({
 				// shell writes the durable value and states the axis on the
 				// Message line, and the list redraws with its Group headers.
 				"group-axis": () => cycleGroupingAxis(),
+				// `i` on a Group header under the repository axis opens the
+				// Repository init's confirmation panel (ADR 0075); the catalogue
+				// splits it from the ignore's `i` on the row the cursor stands on.
+				"repository-init": () => openRepositoryInit(),
 				// `Space` on a Group header folds that Group; the catalogue
 				// resolved the key here on the facts under the cursor (issue #170).
 				"group-fold": () => foldGroupAtCursor(),
@@ -3511,6 +3559,49 @@ export function App({
 		// brake where the operator left it.
 		setQueuePaused(state.queuePaused());
 	}, [state, replaceTickets, replaceConsultations]);
+	// The one-time note on the Message line at the first sight of an
+	// uninitialized or drifted repository (ADR 0075, story 20): the operator
+	// learns the act once per run, beside the marker on the repository's Group
+	// header, and the plane does not repeat it on every poll. The marker stands
+	// only on the repository axis, and the note explains it, so the note waits
+	// for the repository axis as well as the first ticket read: it never stands
+	// on an empty list, and it never outlives the axis its marker rides on.
+	useEffect(() => {
+		if (
+			initNoteShownRef.current ||
+			state === undefined ||
+			machineTickets.length === 0 ||
+			groupingAxis !== "repository"
+		)
+			return;
+		// The repositories that stand uninitialized or in Init drift on this read,
+		// once per repository the list carries. The hash is hoisted out of the
+		// loop, the way the marker hoists it, so the note re-hashes the config
+		// once, not per repository.
+		const currentHash = repositoryInitSettingsHash(config.workflowStates, config.taskTypes);
+		const seen = new Set<string>();
+		const unprepared: { name: string; marker: "uninit" | "drift" }[] = [];
+		for (const ticket of machineTickets) {
+			const name = ticket.repository;
+			if (seen.has(name)) continue;
+			seen.add(name);
+			const identity = ticket.repositoryRef.identity;
+			const marker = repositoryInitStanding(state.repositoryInitFact(identity), currentHash);
+			if (marker !== null) unprepared.push({ name, marker });
+		}
+		if (unprepared.length === 0) return;
+		// The note stands at the first sight of one unprepared repository: the
+		// flag is set only when the note actually stands, so an all-prepared
+		// read never consumes the run's one-time note.
+		initNoteShownRef.current = true;
+		const names = unprepared.map((entry) => `${entry.name} (${entry.marker})`).join(", ");
+		// The note stands on the repository axis (the marker rides the Group
+		// header), so its path is the real one: the `i` key on the repository's
+		// own Group header.
+		setNoticeMessage(
+			`Not initialized: ${names}. Press i on one of their Group headers to run the init.`,
+		);
+	}, [machineTickets, state, config, groupingAxis, setNoticeMessage]);
 	// Repository choices are validated before the launcher presents them. A
 	// stale mapping stays hidden instead of letting an operator start in an
 	// unrelated checkout. The active view answers them (ADR 0060): the operator's
@@ -4010,6 +4101,155 @@ export function App({
 		setSelectedIndex(selectedIndexRef.current);
 		if (writeFailure !== undefined)
 			setErrorMessage(`the group order did not save: ${writeFailure}`);
+	}
+	// The Repository init (ADR 0075): `i` on a Group header under the
+	// repository axis opens the confirmation panel. The handler resolves the
+	// repository the cursor names - a ticket in the group gives its identity
+	// and clone URL, the configured source gives its host and auth, and the
+	// mapping gives the checkout the act works in - and plans the change
+	// against the factory's own settings. The plan is the generator's answer,
+	// so the panel states exactly what the confirmed act will change.
+	function openRepositoryInit() {
+		if (groupingAxisRef.current !== "repository") return;
+		const row = ticketRowsRef.current[selectedIndexRef.current];
+		if (row === undefined || row.kind !== "group") return;
+		void openRepositoryInitFor(row.group.value).catch((error) =>
+			setErrorMessage(errorMessage(error)),
+		);
+	}
+	async function openRepositoryInitFor(displayName: string) {
+		const factoryState = state;
+		if (factoryState === undefined) {
+			setErrorMessage("the repository init needs SQLite state");
+			return;
+		}
+		const cfg = configRef.current;
+		const ticket = ticketsRef.current.find((item) => item.repository === displayName);
+		if (ticket === undefined) {
+			setErrorMessage(`no ticket names the repository ${displayName}`);
+			return;
+		}
+		const ref = ticket.repositoryRef;
+		const source = cfg.sources.find((item) => item.repositories.includes(ref.displayName));
+		if (source === undefined) {
+			setErrorMessage(`no source is configured for ${ref.displayName}`);
+			return;
+		}
+		// The act's checkout: the plane's own repository resolution rule, the
+		// case-insensitive mapping lookup over the identity and the display name,
+		// then the ~/src/<name> convention - the same rule the sources resolve
+		// through, so a documented owner/name key, a sibling clone, a ~ path, and
+		// an unmapped convention all find the checkout the operator already has.
+		const checkout = repositoryInitCheckoutPath(cfg.repos, ref.identity, ref.displayName, homeDir);
+		if (!(await fileExists(checkout))) {
+			setErrorMessage(
+				`${ref.displayName} has no local checkout at ${checkout} to work a throwaway worktree in`,
+			);
+			return;
+		}
+		let ghOptions: CommandOptions = {};
+		if (source.auth !== undefined) {
+			const resolved = await new GhAuthenticator(
+				source.host,
+				source.auth,
+				commandRunner,
+				process.env,
+			).resolve();
+			// A configured auth that fails to resolve refuses the open: the
+			// plan and the confirmed act would then run on the ambient gh
+			// identity, which may be the wrong account.
+			if (!resolved.ok) {
+				setErrorMessage(`the source's auth for ${source.host} did not resolve: ${resolved.reason}`);
+				return;
+			}
+			ghOptions = resolved.options;
+		}
+		const plan = await planRepositoryInit({
+			runner: commandRunner,
+			checkout,
+			identity: ref.identity,
+			displayName: ref.displayName,
+			taskTypes: cfg.taskTypes,
+			ghOptions,
+		});
+		if ("reason" in plan) {
+			setErrorMessage(plan.reason);
+			return;
+		}
+		setPanel({
+			kind: "repository-init",
+			identity: ref.identity,
+			repository: {
+				identity: ref.identity,
+				displayName: ref.displayName,
+				host: source.host,
+				auth: source.auth,
+				cloneUrl: ref.cloneUrl,
+				checkout,
+			},
+			plan,
+		});
+	}
+	// The confirmed init: runs the act, registers the sources, and writes the
+	// init fact, then adds the sources to the config and reports the result on
+	// the Message line. A refusal stands with its reason and changes nothing.
+	async function runRepositoryInitConfirm(
+		repository: RepositoryInitRepository,
+		plan: RepositoryInitPlan,
+		instructionFile?: InstructionFileName,
+	) {
+		const factoryState = state;
+		if (factoryState === undefined) {
+			setErrorMessage("the repository init needs SQLite state");
+			return;
+		}
+		// The act's progress on the Message line (ADR 0075, story 27): a word
+		// stands while the commands run, so the operator sees the act in flight
+		// without opening anything.
+		setWorkingMessage(`initializing ${repository.displayName}...`, "repository-init");
+		const flow = await commitRepositoryInit({
+			runner: commandRunner,
+			state: factoryState,
+			config: configRef.current,
+			repository,
+			workflowStates: configRef.current.workflowStates,
+			taskTypes: configRef.current.taskTypes,
+			plan: {
+				instructionFile: instructionFile ?? plan.instructionFile,
+				labelsToCreate: plan.labelsToCreate,
+				fileActions: plan.files.map((file) => ({ path: file.path, action: file.action })),
+			},
+		}).catch((error) => ({ ok: false as const, reason: errorMessage(error) }));
+		clearWorkingMessage("repository-init");
+		if (flow.ok === false) {
+			setErrorMessage(flow.reason);
+			return;
+		}
+		// The sources the flow registered join the config: the operator's pane
+		// shows them the moment the persist lands, the way a repository mapping
+		// does.
+		const write = configWriteQueue.current
+			.catch(() => undefined)
+			.then(async () => {
+				try {
+					const currentConfig = configRef.current;
+					const updated = {
+						...currentConfig,
+						sources: [...currentConfig.sources, ...flow.newSources],
+					};
+					configRef.current = updated;
+					setConfig(updated);
+					await persistConfig(configFile, updated);
+				} catch (error) {
+					setErrorMessage(`the init's sources did not save: ${errorMessage(error)}`);
+				}
+			});
+		configWriteQueue.current = write.then(
+			() => undefined,
+			() => undefined,
+		);
+		await write;
+		setNoticeMessage(flow.message);
 	}
 	function selectWorkQueue(index: number) {
 		const next = clamp(index, 0, Math.max(0, workQueueRef.current.length - 1));
@@ -4929,6 +5169,36 @@ export function App({
 				onMessage: () => openMessage("missing-modal"),
 				onUnavailable: setWarningMessage,
 				message: visibleMessage,
+				onEmergencyExit: () => renderer.destroy(),
+			}),
+		panel !== null &&
+			panel.kind === "repository-init" &&
+			createElement(ActionPanel, {
+				message: visibleMessage,
+				...repositoryInitPanel(panel.plan),
+				onAction: (key) => {
+					setPanel(null);
+					if (key === "init")
+						void runRepositoryInitConfirm(panel.repository, panel.plan).catch((error) =>
+							setErrorMessage(errorMessage(error)),
+						);
+					// The repository owes the choice of which instruction file to create
+					// (ADR 0075, story 12): the pick is the file the act stands the block in.
+					else if (key === "init-claude")
+						void runRepositoryInitConfirm(panel.repository, panel.plan, "CLAUDE.md").catch(
+							(error) => setErrorMessage(errorMessage(error)),
+						);
+					else if (key === "init-agents")
+						void runRepositoryInitConfirm(panel.repository, panel.plan, "AGENTS.md").catch(
+							(error) => setErrorMessage(errorMessage(error)),
+						);
+				},
+				onCancel: () => setPanel(null),
+				context: ticketContext,
+				inputActive: utility === null,
+				onHelp: () => openGuide("action-panel"),
+				onMessage: () => openMessage("action-panel"),
+				onUnavailable: setWarningMessage,
 				onEmergencyExit: () => renderer.destroy(),
 			}),
 		panel !== null &&
