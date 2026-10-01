@@ -39,6 +39,7 @@ import {
 	refireRecordedSkips,
 	scoreFromMessage,
 	transitionLabelSet,
+	workflowScoreThreshold,
 } from "../src/workflow.ts";
 import { BASE_CONFIG } from "./base-config.ts";
 import { FakeRunner } from "./fake-runner.ts";
@@ -467,6 +468,13 @@ describe("the review score", () => {
 		expect(
 			scoreFromMessage("Here is the review.\n- **Score:** 85 / 100\n- **Specification:** Pass"),
 		).toBe(85);
+	});
+
+	test("the workflow's score threshold stands on the score-testing transition", () => {
+		// ADR 0078: the rework prompt decides the pass against the same
+		// threshold the judgment tests at the settle.
+		expect(workflowScoreThreshold(MACHINE_CONFIG)).toBe(90);
+		expect(workflowScoreThreshold(BASE_CONFIG)).toBeUndefined();
 	});
 
 	test("a score named in loose prose is not a score", () => {

@@ -25,6 +25,9 @@
  * carries the pull request's review verdict: the handoff reads the verdict
  * straight from the source, through the command runner, before the render,
  * and fills the placeholder with the verdict or the read's fact (ADR 0074).
+ * A verdict score that stands at or above the workflow's score threshold
+ * fills the gates fact instead: the review passed, so the failure stands in
+ * the pull request's gates and not in the review's feedback (ADR 0078).
  *
  * The sequence of external commands is the contract the fake runner tests
  * pin; the herdr CLI contract was verified against herdr 0.8.2, and the
@@ -84,7 +87,12 @@ import { fitSettings } from "./setting-fit.ts";
 import { resolveEnvironment, resolveSettings } from "./setting-resolution.ts";
 import type { Consultation } from "./state.ts";
 import { newestMembership } from "./task-selection.ts";
-import { type ReviewVerdictRead, readReviewVerdict } from "./workflow.ts";
+import {
+	type ReviewVerdictRead,
+	readReviewVerdict,
+	scoreFromMessage,
+	workflowScoreThreshold,
+} from "./workflow.ts";
 
 /** A fresh pane can need a short time to reach its shell prompt. */
 const AGENT_PANE_BUSY_RETRY_DELAY_MS = 100;
@@ -486,6 +494,8 @@ export async function handOffTicket(
 		config.sources,
 		ctx,
 		checkout,
+		undefined,
+		workflowScoreThreshold(config),
 	);
 	if ("fail" in promptAnswer) return { status: "failed", reason: promptAnswer.fail };
 	const prompt = promptAnswer.prompt;
@@ -514,11 +524,22 @@ async function ticketPrompt(
 	ctx: HandoffContext,
 	checkout: string,
 	previousMessage?: string,
+	scoreThreshold?: number,
 ): Promise<{ prompt: HandoffPrompt } | { fail: string }> {
 	const template = taskType.template;
 	if (template === undefined) return { fail: "the task type carries no prompt template" };
 	if (taskType.opensPullRequest !== true)
-		return { prompt: await renderTicketPrompt(template, ticket, runner, sources, previousMessage) };
+		return {
+			prompt: await renderTicketPrompt(
+				template,
+				ticket,
+				runner,
+				sources,
+				previousMessage,
+				"",
+				scoreThreshold,
+			),
+		};
 	const membership = newestMembership(ticket.memberships);
 	const source =
 		membership === undefined
@@ -530,7 +551,8 @@ async function ticketPrompt(
 		};
 	ctx.pullRequestOpen = { ticket, checkout, branch: branchNameFor(ticket), source };
 	return {
-		prompt: (url) => renderTicketPrompt(template, ticket, runner, sources, previousMessage, url),
+		prompt: (url) =>
+			renderTicketPrompt(template, ticket, runner, sources, previousMessage, url, scoreThreshold),
 	};
 }
 
@@ -891,6 +913,7 @@ export async function handOffStoredWorkspace({
 		ctx,
 		checkout,
 		previousMessage,
+		workflowScoreThreshold(config),
 	);
 	if ("fail" in promptAnswer) return { status: "failed", reason: promptAnswer.fail };
 	const prompt = promptAnswer.prompt;
@@ -2465,11 +2488,27 @@ export function renderPrompt(
  * timeline and the post's time - the agent's staleness cue against the
  * branch head - the fact line when no verdict stands, and the failure fact
  * with the read's reason when every timeline's read failed.
+ *
+ * A verdict score that stands at or above the workflow's score threshold
+ * (ADR 0078) fills the gates fact instead of the verdict's body: the review
+ * passed, so the rework works the pull request's gates - the merge conflict
+ * or the failing CI check - and not the review's feedback. A read that
+ * carries no score, or a handoff whose config names no threshold, keeps the
+ * verdict's body.
  */
-export function reviewVerdictFill(read: ReviewVerdictRead): string {
+export function reviewVerdictFill(read: ReviewVerdictRead, scoreThreshold?: number): string {
 	switch (read.kind) {
-		case "verdict":
+		case "verdict": {
+			const score = scoreFromMessage(read.verdict.body);
+			if (score !== null && scoreThreshold !== undefined && score >= scoreThreshold) {
+				return (
+					`The review passed: the score ${score} stands at or above the threshold ${scoreThreshold}. ` +
+					"The failure stands in the pull request's gates: a merge conflict or a failing CI check. " +
+					"Rebase the branch onto its base and fix what the gates report."
+				);
+			}
 			return `Posted as a ${read.verdict.timeline} at ${read.verdict.at}:\n${read.verdict.body}`;
+		}
 		case "none":
 			return "No review verdict found on the pull request.";
 		case "failed":
@@ -2491,10 +2530,14 @@ async function renderTicketPrompt(
 	sources: readonly TicketSourceConfig[],
 	previousMessage = "",
 	pullRequestUrl = "",
+	scoreThreshold?: number,
 ): Promise<string> {
 	let reviewVerdict = "";
 	if (template.includes("{review-verdict}"))
-		reviewVerdict = reviewVerdictFill(await readReviewVerdict(runner, sources, ticket));
+		reviewVerdict = reviewVerdictFill(
+			await readReviewVerdict(runner, sources, ticket),
+			scoreThreshold,
+		);
 	return renderPrompt(template, ticket, previousMessage, reviewVerdict, pullRequestUrl);
 }
 

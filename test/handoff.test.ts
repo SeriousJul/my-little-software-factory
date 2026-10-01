@@ -398,6 +398,83 @@ describe("reviewVerdictFill", () => {
 			"The review verdict read failed: the comment read failed (x); the review read failed (y).",
 		);
 	});
+
+	const gatesFact = (score: number, threshold: number) =>
+		`The review passed: the score ${score} stands at or above the threshold ${threshold}. ` +
+		"The failure stands in the pull request's gates: a merge conflict or a failing CI check. " +
+		"Rebase the branch onto its base and fix what the gates report.";
+
+	test("a verdict score at or above the workflow threshold fills the gates fact", () => {
+		// ADR 0078: the review passed, so the rework works the gates, not the
+		// review's feedback.
+		expect(
+			reviewVerdictFill(
+				{
+					kind: "verdict",
+					verdict: {
+						timeline: "review",
+						at: "2026-08-31T12:00:00Z",
+						body: `${body}\n- **Score:** 95 / 100`,
+					},
+				},
+				90,
+			),
+		).toBe(gatesFact(95, 90));
+	});
+
+	test("a score exactly at the threshold fills the gates fact, the judgment's rule", () => {
+		expect(
+			reviewVerdictFill(
+				{
+					kind: "verdict",
+					verdict: {
+						timeline: "comment",
+						at: "2026-08-31T12:00:00Z",
+						body: `${body}\n- **Score:** 90 / 100`,
+					},
+				},
+				90,
+			),
+		).toBe(gatesFact(90, 90));
+	});
+
+	test("a score below the threshold keeps the verdict's body", () => {
+		expect(
+			reviewVerdictFill(
+				{
+					kind: "verdict",
+					verdict: {
+						timeline: "review",
+						at: "2026-08-31T12:00:00Z",
+						body: `${body}\n- **Score:** 85 / 100`,
+					},
+				},
+				90,
+			),
+		).toBe(`Posted as a review at 2026-08-31T12:00:00Z:\n${body}\n- **Score:** 85 / 100`);
+	});
+
+	test("a verdict without a score line keeps its body beside a threshold", () => {
+		expect(
+			reviewVerdictFill(
+				{ kind: "verdict", verdict: { timeline: "review", at: "2026-08-31T12:00:00Z", body } },
+				90,
+			),
+		).toBe(`Posted as a review at 2026-08-31T12:00:00Z:\n${body}`);
+	});
+
+	test("no threshold keeps the verdict's body for a passing score", () => {
+		expect(
+			reviewVerdictFill({
+				kind: "verdict",
+				verdict: {
+					timeline: "review",
+					at: "2026-08-31T12:00:00Z",
+					body: `${body}\n- **Score:** 95 / 100`,
+				},
+			}),
+		).toBe(`Posted as a review at 2026-08-31T12:00:00Z:\n${body}\n- **Score:** 95 / 100`);
+	});
 });
 
 describe("settingArgs", () => {
@@ -3712,6 +3789,28 @@ describe("the review verdict of the rework handoff prompt", () => {
 		],
 	};
 
+	// The config the threshold rule decides against (ADR 0078): the review
+	// task type's transition tests the score at the 90 the stub walk stands
+	// on, so a verdict at or above it fills the gates fact.
+	const thresholdConfig: FactoryConfig = {
+		...reviewVerdictConfig,
+		taskTypes: {
+			...reviewVerdictConfig.taskTypes,
+			review: {
+				...reviewVerdictConfig.taskTypes.review,
+				transition: {
+					ticketFacts: [],
+					pullRequestFacts: [],
+					scoreThreshold: 90,
+					branches: [
+						{ when: "score-above-threshold", pullRequestFacts: ["ready-to-ship"] },
+						{ when: "score-below-threshold", pullRequestFacts: ["needs-work"] },
+					],
+				},
+			},
+		},
+	};
+
 	const reworkChoice = { ...defaultChoice, taskType: "rework" };
 
 	const VERDICT_BODY = "Required Changes:\n- Fix the tabs\n- **Score:** 85 / 100";
@@ -3826,6 +3925,40 @@ describe("the review verdict of the rework handoff prompt", () => {
 			"Verdict:\n" +
 				"The review verdict read failed: the comment read failed (rate limited by the source); " +
 				"the review read failed (the source timed out).\n\n" +
+				"Prev: \n\n" +
+				"Body: The implementation of #5.",
+		);
+	});
+
+	test("a verdict score at or above the workflow threshold fills the gates fact", async () => {
+		// ADR 0078: the review passed, so the rework works the gates - the
+		// merge conflict or the failing CI check - not the review's feedback.
+		const runner = new FakeRunner();
+		setComments(runner, []);
+		setReviews(runner, [
+			{ body: "Looks good.\n- **Score:** 95 / 100", submitted_at: "2026-08-31T12:00:00Z" },
+		]);
+		const outcome = await freshRework(runner, thresholdConfig);
+		expect(outcome.status).toBe("ok");
+		expect(promptOf(runner)).toBe(
+			"Verdict:\n" +
+				"The review passed: the score 95 stands at or above the threshold 90. " +
+				"The failure stands in the pull request's gates: a merge conflict or a failing CI check. " +
+				"Rebase the branch onto its base and fix what the gates report.\n\n" +
+				"Prev: \n\n" +
+				"Body: The implementation of #5.",
+		);
+	});
+
+	test("a verdict score below the workflow threshold keeps the verdict's body", async () => {
+		const runner = new FakeRunner();
+		setComments(runner, []);
+		setReviews(runner, [{ body: VERDICT_BODY, submitted_at: "2026-08-31T12:00:00Z" }]);
+		const outcome = await freshRework(runner, thresholdConfig);
+		expect(outcome.status).toBe("ok");
+		expect(promptOf(runner)).toBe(
+			"Verdict:\n" +
+				`Posted as a review at 2026-08-31T12:00:00Z:\n${VERDICT_BODY}\n\n` +
 				"Prev: \n\n" +
 				"Body: The implementation of #5.",
 		);

@@ -306,6 +306,23 @@ function transitionReadsScore(transition: WorkflowTransition): boolean {
 	);
 }
 
+/**
+ * The score threshold the workflow's score judgment stands on (ADR 0078):
+ * the first task type whose transition tests a score judgment carries it,
+ * because config validation makes the threshold present when a transition
+ * tests a score. The rework prompt's verdict read decides the pass against
+ * it. Undefined when no transition tests a score: the verdict fill keeps
+ * the body it stood under before the threshold joined it.
+ */
+export function workflowScoreThreshold(config: FactoryConfig): number | undefined {
+	for (const task of Object.values(config.taskTypes)) {
+		const transition = task.transition;
+		if (transition === undefined) continue;
+		if (transitionReadsScore(transition)) return transition.scoreThreshold;
+	}
+	return undefined;
+}
+
 /** Whether the transition's branches test the pull request's open state. */
 function transitionReadsPullRequestState(transition: WorkflowTransition): boolean {
 	return (transition.branches ?? []).some(
