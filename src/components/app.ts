@@ -90,6 +90,9 @@ import {
 import { closeCycleEndDraftPullRequest } from "../pull-request.ts";
 import { RefreshCoordinator } from "../refresh.ts";
 import type { RepositoryMapping } from "../repo.ts";
+import { planRepositoryInit, type RepositoryInitPlan } from "../repo-init.ts";
+import { commitRepositoryInit, type RepositoryInitRepository } from "../repo-init-flow.ts";
+import type { CommandOptions } from "../runner.ts";
 import {
 	type CommandRunner,
 	commandFailureText,
@@ -108,6 +111,7 @@ import {
 } from "../state.ts";
 import { currentThemeResolution } from "../theme-source.ts";
 import type { TicketSource } from "../ticket-source.ts";
+import { GhAuthenticator } from "../ticket-source.ts";
 import {
 	readSessionExchange,
 	type SessionEntry,
@@ -149,6 +153,7 @@ import {
 import { MissingModal } from "./missing-modal.ts";
 import { type ActionRow, belowMinimum, TOO_SMALL_TEXT } from "./modal-chrome.ts";
 import { type AgentModelList, type ModelListStatus, OverridePanel } from "./override-panel.ts";
+import { repositoryInitPanel } from "./repository-init-panel.ts";
 import { RESPONSE_EDITOR_ROWS, ResponseEditor } from "./response-editor.ts";
 import { type MainSection, SectionHeader } from "./section-header.ts";
 import { COPY_REFUSED_REASON } from "./shared/fields.ts";
@@ -194,7 +199,13 @@ type Panel =
 	| { kind: "consultation-force"; identity: string }
 	| { kind: "consultation-delete"; identity: string }
 	| { kind: "consultation-safety"; identity: string }
-	| { kind: "live"; identity: string };
+	| { kind: "live"; identity: string }
+	| {
+			kind: "repository-init";
+			identity: string;
+			repository: RepositoryInitRepository;
+			plan: RepositoryInitPlan;
+	  };
 
 /**
  * The dim note under the last stream lines when the latest read failed:
@@ -3237,6 +3248,10 @@ export function App({
 				// shell writes the durable value and states the axis on the
 				// Message line, and the list redraws with its Group headers.
 				"group-axis": () => cycleGroupingAxis(),
+				// `i` on a Group header under the repository axis opens the
+				// Repository init's confirmation panel (ADR 0075); the catalogue
+				// splits it from the ignore's `i` on the row the cursor stands on.
+				"repository-init": () => openRepositoryInit(),
 				// `Space` on a Group header folds that Group; the catalogue
 				// resolved the key here on the facts under the cursor (issue #170).
 				"group-fold": () => foldGroupAtCursor(),
@@ -4010,6 +4025,135 @@ export function App({
 		setSelectedIndex(selectedIndexRef.current);
 		if (writeFailure !== undefined)
 			setErrorMessage(`the group order did not save: ${writeFailure}`);
+	}
+	// The Repository init (ADR 0075): `i` on a Group header under the
+	// repository axis opens the confirmation panel. The handler resolves the
+	// repository the cursor names - a ticket in the group gives its identity
+	// and clone URL, the configured source gives its host and auth, and the
+	// mapping gives the checkout the act works in - and plans the change
+	// against the factory's own settings. The plan is the generator's answer,
+	// so the panel states exactly what the confirmed act will change.
+	function openRepositoryInit() {
+		if (groupingAxisRef.current !== "repository") return;
+		const row = ticketRowsRef.current[selectedIndexRef.current];
+		if (row === undefined || row.kind !== "group") return;
+		void openRepositoryInitFor(row.group.value).catch((error) =>
+			setErrorMessage(errorMessage(error)),
+		);
+	}
+	async function openRepositoryInitFor(displayName: string) {
+		const fs = state;
+		if (fs === undefined) {
+			setErrorMessage("the repository init needs SQLite state");
+			return;
+		}
+		const cfg = configRef.current;
+		const ticket = ticketsRef.current.find((item) => item.repository === displayName);
+		if (ticket === undefined) {
+			setErrorMessage(`no ticket names the repository ${displayName}`);
+			return;
+		}
+		const ref = ticket.repositoryRef;
+		const source = cfg.sources.find((item) => item.repositories.includes(ref.displayName));
+		if (source === undefined) {
+			setErrorMessage(`no source is configured for ${ref.displayName}`);
+			return;
+		}
+		const checkout = cfg.repos[ref.identity];
+		if (checkout === undefined) {
+			setErrorMessage(`${ref.displayName} has no local checkout to work a throwaway worktree in`);
+			return;
+		}
+		let ghOptions: CommandOptions = {};
+		if (source.auth !== undefined) {
+			const resolved = await new GhAuthenticator(
+				source.host,
+				source.auth,
+				commandRunner,
+				process.env,
+			).resolve();
+			if (resolved.ok) ghOptions = resolved.options;
+		}
+		const plan = await planRepositoryInit({
+			runner: commandRunner,
+			checkout,
+			identity: ref.identity,
+			displayName: ref.displayName,
+			taskTypes: cfg.taskTypes,
+			ghOptions,
+		});
+		if ("reason" in plan) {
+			setErrorMessage(plan.reason);
+			return;
+		}
+		setPanel({
+			kind: "repository-init",
+			identity: ref.identity,
+			repository: {
+				identity: ref.identity,
+				displayName: ref.displayName,
+				host: source.host,
+				auth: source.auth,
+				cloneUrl: ref.cloneUrl,
+				checkout,
+			},
+			plan,
+		});
+	}
+	// The confirmed init: runs the act, registers the sources, and writes the
+	// init fact, then adds the sources to the config and reports the result on
+	// the Message line. A refusal stands with its reason and changes nothing.
+	async function runRepositoryInitConfirm(
+		repository: RepositoryInitRepository,
+		plan: RepositoryInitPlan,
+	) {
+		const fs = state;
+		if (fs === undefined) {
+			setErrorMessage("the repository init needs SQLite state");
+			return;
+		}
+		const flow = await commitRepositoryInit({
+			runner: commandRunner,
+			state: fs,
+			config: configRef.current,
+			repository,
+			workflowStates: configRef.current.workflowStates,
+			taskTypes: configRef.current.taskTypes,
+			plan: {
+				instructionFile: plan.instructionFile,
+				labelsToCreate: plan.labelsToCreate,
+				fileActions: plan.files.map((file) => ({ path: file.path, action: file.action })),
+			},
+		}).catch((error) => ({ ok: false as const, reason: errorMessage(error) }));
+		if (flow.ok === false) {
+			setErrorMessage(flow.reason);
+			return;
+		}
+		// The sources the flow registered join the config: the operator's pane
+		// shows them the moment the persist lands, the way a repository mapping
+		// does.
+		const write = configWriteQueue.current
+			.catch(() => undefined)
+			.then(async () => {
+				try {
+					const currentConfig = configRef.current;
+					const updated = {
+						...currentConfig,
+						sources: [...currentConfig.sources, ...flow.newSources],
+					};
+					configRef.current = updated;
+					setConfig(updated);
+					await persistConfig(configFile, updated);
+				} catch (error) {
+					setErrorMessage(`the init's sources did not save: ${errorMessage(error)}`);
+				}
+			});
+		configWriteQueue.current = write.then(
+			() => undefined,
+			() => undefined,
+		);
+		await write;
+		setNoticeMessage(flow.message);
 	}
 	function selectWorkQueue(index: number) {
 		const next = clamp(index, 0, Math.max(0, workQueueRef.current.length - 1));
@@ -4929,6 +5073,26 @@ export function App({
 				onMessage: () => openMessage("missing-modal"),
 				onUnavailable: setWarningMessage,
 				message: visibleMessage,
+				onEmergencyExit: () => renderer.destroy(),
+			}),
+		panel !== null &&
+			panel.kind === "repository-init" &&
+			createElement(ActionPanel, {
+				message: visibleMessage,
+				...repositoryInitPanel(panel.plan),
+				onAction: (key) => {
+					setPanel(null);
+					if (key === "init")
+						void runRepositoryInitConfirm(panel.repository, panel.plan).catch((error) =>
+							setErrorMessage(errorMessage(error)),
+						);
+				},
+				onCancel: () => setPanel(null),
+				context: ticketContext,
+				inputActive: utility === null,
+				onHelp: () => openGuide("action-panel"),
+				onMessage: () => openMessage("action-panel"),
+				onUnavailable: setWarningMessage,
 				onEmergencyExit: () => renderer.destroy(),
 			}),
 		panel !== null &&

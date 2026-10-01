@@ -1,0 +1,654 @@
+import { afterEach, describe, expect, test } from "bun:test";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import type { FactoryConfig, TaskTypeConfig, WorkflowState } from "../src/config.ts";
+import {
+	AGENT_SKILLS_HEADING,
+	agentSkillsBlock,
+	applyAgentSkillsBlock,
+	CONVENTION_FILE_PATHS,
+	chooseInstructionFile,
+	conventionFileContent,
+	conventionFiles,
+	DEFAULT_LABEL_COLOR,
+	labelColor,
+	labelDescription,
+	planRepositoryInit,
+	repositoryInitLabelSet,
+	repositoryInitSettingsHash,
+	repositoryInitSources,
+	runRepositoryInit,
+	sourceNameCollision,
+} from "../src/repo-init.ts";
+import { commitRepositoryInit, repositoryInitDrifted } from "../src/repo-init-flow.ts";
+import { openFactoryState } from "../src/state.ts";
+import { FakeRunner } from "./fake-runner.ts";
+
+const paths: string[] = [];
+afterEach(() => {
+	for (const path of paths.splice(0)) rmSync(path, { recursive: true, force: true });
+});
+
+function tempDir(prefix: string): string {
+	const dir = mkdtempSync(join(tmpdir(), prefix));
+	paths.push(dir);
+	return dir;
+}
+
+/** The factory's own workflow machine, in the shape the config parser yields. */
+function taskTypesFixture(): Record<string, TaskTypeConfig> {
+	return {
+		implement: { transition: { ticketFacts: [], pullRequestFacts: ["ready-for-review"] } },
+		review: {
+			transition: {
+				ticketFacts: [],
+				pullRequestFacts: [],
+				branches: [
+					{ when: "score-above-threshold", pullRequestFacts: ["ready-to-ship"] },
+					{ when: "score-below-threshold", pullRequestFacts: ["needs-work"] },
+				],
+			},
+		},
+		rework: {
+			transition: { ticketFacts: ["rework-in-progress"], pullRequestFacts: ["ready-for-review"] },
+		},
+		merge: {
+			transition: {
+				ticketFacts: [],
+				pullRequestFacts: [],
+				branches: [{ when: "pull-request-open", pullRequestFacts: ["needs-work"] }],
+			},
+		},
+	};
+}
+
+/** A state that gates on a scoping label no transition writes. */
+function statesFixture(): WorkflowState[] {
+	return [
+		{
+			name: "ready-for-agent",
+			taskType: "implement",
+			match: { sourceKind: "github-issue", labelsAny: ["ready-for-agent"] },
+		},
+		{
+			name: "scoping-only",
+			taskType: "implement",
+			match: { sourceKind: "github-issue", labelsAny: ["team-core"] },
+		},
+	];
+}
+
+describe("the Repository init generator (ADR 0075)", () => {
+	test("the label set is the transition union plus the triage labels, sorted, without blocked", () => {
+		const set = repositoryInitLabelSet(taskTypesFixture());
+		expect(set).toEqual([
+			"needs-info",
+			"needs-triage",
+			"needs-work",
+			"ready-for-agent",
+			"ready-for-human",
+			"ready-for-review",
+			"ready-to-ship",
+			"rework-in-progress",
+			"wontfix",
+		]);
+	});
+
+	test("the label set excludes blocked and the scoping labels a state match names", () => {
+		const withBlocked: Record<string, TaskTypeConfig> = {
+			implement: { transition: { ticketFacts: ["blocked"], pullRequestFacts: [] } },
+			review: taskTypesFixture()["review"],
+		};
+		const set = repositoryInitLabelSet(withBlocked);
+		expect(set).not.toContain("blocked");
+		expect(set).not.toContain("team-core");
+		expect(set).toContain("ready-for-agent");
+	});
+
+	test("a machine label a transition writes that the palette does not name takes the default", () => {
+		expect(labelColor("rework-in-progress")).toBe(DEFAULT_LABEL_COLOR);
+		expect(labelColor("ready-for-agent")).toBe("0e8a16");
+		expect(labelDescription("ready-for-human")).toBe("Ready for a human");
+	});
+
+	test("every convention file is non-empty, deterministic, and owns the three paths", () => {
+		expect(CONVENTION_FILE_PATHS).toEqual([
+			"docs/agents/issue-tracker.md",
+			"docs/agents/triage-labels.md",
+			"docs/agents/domain.md",
+		]);
+		const files = conventionFiles();
+		for (const path of CONVENTION_FILE_PATHS) {
+			expect(files[path]).toBe(conventionFileContent(path));
+			expect(files[path].length).toBeGreaterThan(0);
+			expect(files[path].trim().length).toBeGreaterThan(10);
+		}
+		// Deterministic: two reads agree to the byte.
+		expect(conventionFiles()["docs/agents/triage-labels.md"]).toBe(
+			conventionFileContent("docs/agents/triage-labels.md"),
+		);
+	});
+
+	test("the Agent skills block names the repository in its own line", () => {
+		const block = agentSkillsBlock("acme/factory");
+		expect(block).toContain("## Agent skills");
+		expect(block).toContain("`acme/factory`");
+		expect(block).toContain("docs/agents/issue-tracker.md");
+	});
+
+	test("the block surgery appends when absent and keeps the file's tail clean", () => {
+		const block = agentSkillsBlock("acme/factory");
+		const existing = "# My Project\n\n## Rules\n\nBe careful.\n";
+		const out = applyAgentSkillsBlock(existing, block);
+		expect(out.startsWith(existing)).toBe(true);
+		expect(out).toContain(AGENT_SKILLS_HEADING);
+	});
+
+	test("the block surgery replaces an existing block and preserves the surrounding sections", () => {
+		const original = agentSkillsBlock("old/repo");
+		const existing = `# My Project\n\n${original}\n\n## Other section\n\nHand-written.\n`;
+		const out = applyAgentSkillsBlock(existing, agentSkillsBlock("new/repo"));
+		expect(out).toContain("`new/repo`");
+		expect(out).not.toContain("`old/repo`");
+		expect(out).toContain("## Other section");
+		expect(out).toContain("Hand-written.");
+		expect(out).toContain("# My Project");
+	});
+
+	test("the block surgery leaves a file without a following section intact at the end", () => {
+		const block = agentSkillsBlock("acme/factory");
+		const existing = `# T\n\nIntro.\n\n${AGENT_SKILLS_HEADING}\n\nold block\n`;
+		const out = applyAgentSkillsBlock(existing, block);
+		expect(out).toBe(`# T\n\nIntro.\n\n${block}`);
+	});
+
+	test("CLAUDE.md wins over AGENTS.md, and neither offers a choice", () => {
+		expect(chooseInstructionFile(true, true)).toBe("CLAUDE.md");
+		expect(chooseInstructionFile(false, true)).toBe("AGENTS.md");
+		expect(chooseInstructionFile(false, false)).toBe(null);
+		expect(chooseInstructionFile(true, false)).toBe("CLAUDE.md");
+	});
+
+	test("the settings hash is stable and changes when a transition or a state changes", () => {
+		const taskTypes = taskTypesFixture();
+		const states = statesFixture();
+		const hash = repositoryInitSettingsHash(states, taskTypes);
+		expect(hash).toBe(repositoryInitSettingsHash(states, taskTypes));
+		// A new transition label changes the hash.
+		const changed: Record<string, TaskTypeConfig> = {
+			...taskTypes,
+			implement: {
+				transition: { ticketFacts: [], pullRequestFacts: ["ready-for-review", "new-fact"] },
+			},
+		};
+		expect(repositoryInitSettingsHash(states, changed)).not.toBe(hash);
+		// A changed state match changes the hash.
+		const statesChanged: WorkflowState[] = [
+			{ name: "ready-for-agent", taskType: "implement", match: { sourceKind: "github-issue" } },
+		];
+		expect(repositoryInitSettingsHash(statesChanged, taskTypes)).not.toBe(hash);
+	});
+
+	test("the registered sources follow the naming scheme and the 60-second refresh", () => {
+		const [issues, pullRequests] = repositoryInitSources("acme/factory", "github.com");
+		expect(issues.name).toBe("acme/factory-issues");
+		expect(issues.kind).toBe("github-issues");
+		expect(issues.refreshIntervalSeconds).toBe(60);
+		expect(issues.repositories).toEqual(["acme/factory"]);
+		expect(issues.host).toBe("github.com");
+		expect(issues.filter).toBe("label:ready-for-agent");
+		expect(pullRequests.name).toBe("acme/factory-pull-requests");
+		expect(pullRequests.kind).toBe("github-pull-requests");
+		expect(pullRequests.refreshIntervalSeconds).toBe(60);
+		expect(pullRequests.repositories).toEqual(["acme/factory"]);
+		expect(pullRequests.host).toBe("github.com");
+	});
+
+	test("a source name collision is named for the operator's own source", () => {
+		const sources = [
+			{
+				name: "acme/factory-issues",
+				kind: "github-issues" as const,
+				repositories: ["acme/factory"],
+				refreshIntervalSeconds: 60,
+				host: "github.com",
+			},
+		];
+		expect(
+			sourceNameCollision(sources, ["acme/factory-issues", "acme/factory-pull-requests"]),
+		).toBe("acme/factory-issues");
+		expect(sourceNameCollision(sources, ["other-issues", "other-pull-requests"])).toBe(null);
+	});
+});
+
+describe("the Repository init act (ADR 0075)", () => {
+	const identity = "github.com/acme/factory";
+	const displayName = "acme/factory";
+	const checkout = "/tmp/checkout";
+
+	function runnerWith(branch: string, existingLabels: string[]): FakeRunner {
+		const runner = new FakeRunner();
+		runner.set("git", ["-C", checkout, "symbolic-ref", "refs/remotes/origin/HEAD"], {
+			stdout: `refs/remotes/origin/${branch}\n`,
+		});
+		runner.set("git", ["-C", checkout, "fetch", "origin", branch], {});
+		runner.set("gh", ["label", "list", "--repo", identity, "--json", "name"], {
+			stdout: JSON.stringify(existingLabels.map((name) => ({ name }))),
+		});
+		runner.setDefault({ code: 0, stdout: "" });
+		return runner;
+	}
+
+	test("a fresh repository: the full command stream, the created labels, and the pushed files", async () => {
+		const worktree = tempDir("factory-init-wt-");
+		const runner = runnerWith("main", []);
+		runner.set("git", ["-C", worktree, "rev-parse", "HEAD"], { stdout: "abc123def\n" });
+
+		const result = await runRepositoryInit({
+			runner,
+			checkout,
+			identity,
+			displayName,
+			host: "github.com",
+			workflowStates: statesFixture(),
+			taskTypes: taskTypesFixture(),
+			instructionFile: "AGENTS.md",
+			worktreePath: worktree,
+		});
+		expect(result).toHaveProperty("ok", true);
+		if (!result.ok) return;
+		expect(result.pushedCommit).toBe("abc123def");
+		expect(result.targetBranch).toBe("main");
+		expect(result.labelsCreated).toEqual(repositoryInitLabelSet(taskTypesFixture()));
+		expect(result.labelsPresent).toEqual([]);
+		expect(result.filesWritten).toEqual([...CONVENTION_FILE_PATHS]);
+
+		// The command stream: fetch, the label pass, the throwaway worktree, the
+		// commit, the push, and the worktree removal - in order.
+		const commands = runner.commands();
+		expect(commands).toContain(`git -C ${checkout} fetch origin main`);
+		expect(commands).toContain(`git -C ${checkout} worktree add --detach ${worktree} origin/main`);
+		expect(commands).toContain(`git -C ${worktree} add -A`);
+		expect(commands).toContain(`git -C ${worktree} push origin HEAD:main`);
+		expect(commands).toContain(`git -C ${checkout} worktree remove --force ${worktree}`);
+		expect(commands).toContain(
+			`gh label create ready-for-agent --repo ${identity} --color 0e8a16 --description Ready for an agent`,
+		);
+		// blocked is never created.
+		expect(commands.find((c) => c.includes("gh label create blocked"))).toBe(undefined);
+
+		// The generated bytes land in the worktree.
+		for (const path of CONVENTION_FILE_PATHS) {
+			expect(readFileSync(join(worktree, path), "utf8")).toBe(conventionFileContent(path));
+		}
+		const agents = readFileSync(join(worktree, "AGENTS.md"), "utf8");
+		expect(agents).toContain(AGENT_SKILLS_HEADING);
+		expect(agents).toContain("`acme/factory`");
+	});
+
+	test("an existing label is not re-created and an existing instruction file keeps its other sections", async () => {
+		const worktree = tempDir("factory-init-wt-");
+		const existing = ["needs-triage", "ready-for-agent"];
+		const runner = runnerWith("main", existing);
+		runner.set("git", ["-C", worktree, "rev-parse", "HEAD"], { stdout: "def456abc\n" });
+		// A pre-existing AGENTS.md with a hand-written section before the block.
+		const preExisting = `# Guide\n\n## Other section\n\nHand-written.\n`;
+		await Promise.resolve();
+		// Seed the worktree with the existing instruction file before the act reads it.
+		const { writeFileSync } = await import("node:fs");
+		writeFileSync(join(worktree, "AGENTS.md"), preExisting, "utf8");
+
+		const result = await runRepositoryInit({
+			runner,
+			checkout,
+			identity,
+			displayName,
+			host: "github.com",
+			workflowStates: statesFixture(),
+			taskTypes: taskTypesFixture(),
+			instructionFile: "AGENTS.md",
+			worktreePath: worktree,
+		});
+		expect(result).toHaveProperty("ok", true);
+		if (!result.ok) return;
+		// The existing labels are not in the created set.
+		expect(result.labelsCreated).not.toContain("needs-triage");
+		expect(result.labelsCreated).not.toContain("ready-for-agent");
+		expect(result.labelsPresent).toEqual(existing);
+		// The hand-written section survives the block-only surgery.
+		const agents = readFileSync(join(worktree, "AGENTS.md"), "utf8");
+		expect(agents).toContain("## Other section");
+		expect(agents).toContain("Hand-written.");
+		expect(agents).toContain(AGENT_SKILLS_HEADING);
+	});
+
+	test("a refused label write fails the act and names the label", async () => {
+		const worktree = tempDir("factory-init-wt-");
+		const runner = runnerWith("main", []);
+		runner.set(
+			"gh",
+			[
+				"label",
+				"create",
+				"needs-info",
+				"--repo",
+				identity,
+				"--color",
+				"c2e0c6",
+				"--description",
+				"Needs information",
+			],
+			{ code: 1, stderr: "label already exists or was refused\n" },
+		);
+		const result = await runRepositoryInit({
+			runner,
+			checkout,
+			identity,
+			displayName,
+			host: "github.com",
+			workflowStates: statesFixture(),
+			taskTypes: taskTypesFixture(),
+			instructionFile: "AGENTS.md",
+			worktreePath: worktree,
+		});
+		expect(result.ok).toBe(false);
+		if (result.ok) return;
+		expect(result.reason).toContain("needs-info");
+		// The worktree was never opened: no push, no file writes.
+		expect(runner.commands().find((c) => c.includes("worktree add"))).toBe(undefined);
+	});
+
+	test("a repository with no default branch refuses before any external change", async () => {
+		const worktree = tempDir("factory-init-wt-");
+		const runner = new FakeRunner();
+		// No symref, and neither candidate branch resolves.
+		runner.set("git", ["-C", checkout, "symbolic-ref", "refs/remotes/origin/HEAD"], { code: 1 });
+		runner.set(
+			"git",
+			["-C", checkout, "rev-parse", "--verify", "--quiet", "origin/main^{commit}"],
+			{ code: 1 },
+		);
+		runner.set(
+			"git",
+			["-C", checkout, "rev-parse", "--verify", "--quiet", "origin/master^{commit}"],
+			{ code: 1 },
+		);
+		const result = await runRepositoryInit({
+			runner,
+			checkout,
+			identity,
+			displayName,
+			host: "github.com",
+			workflowStates: statesFixture(),
+			taskTypes: taskTypesFixture(),
+			instructionFile: "AGENTS.md",
+			worktreePath: worktree,
+		});
+		expect(result.ok).toBe(false);
+		if (result.ok) return;
+		expect(result.reason).toContain("default branch");
+		// Only the branch rule's read ran; nothing external - no fetch, label, worktree, or push.
+		const mutating = runner
+			.commands()
+			.filter(
+				(c) =>
+					c.includes("fetch") ||
+					c.includes("label") ||
+					c.includes("worktree") ||
+					c.includes("push"),
+			);
+		expect(mutating).toEqual([]);
+	});
+
+	test("a refused push fails the act and the worktree is removed", async () => {
+		const worktree = tempDir("factory-init-wt-");
+		const runner = runnerWith("main", []);
+		runner.set("git", ["-C", worktree, "rev-parse", "HEAD"], { stdout: "abc123\n" });
+		runner.set("git", ["-C", worktree, "push", "origin", "HEAD:main"], {
+			code: 1,
+			stderr: "protected branch\n",
+		});
+		const result = await runRepositoryInit({
+			runner,
+			checkout,
+			identity,
+			displayName,
+			host: "github.com",
+			workflowStates: statesFixture(),
+			taskTypes: taskTypesFixture(),
+			instructionFile: "AGENTS.md",
+			worktreePath: worktree,
+		});
+		expect(result.ok).toBe(false);
+		if (result.ok) return;
+		expect(result.reason).toContain("protected branch");
+		expect(runner.commands()).toContain(`git -C ${checkout} worktree remove --force ${worktree}`);
+	});
+});
+
+describe("the Repository init plan (ADR 0075)", () => {
+	const identity = "github.com/acme/factory";
+	const displayName = "acme/factory";
+	const checkout = "/tmp/checkout";
+
+	test("it classifies files, labels, and the instruction file against the target branch", async () => {
+		const runner = new FakeRunner();
+		runner.set("git", ["-C", checkout, "symbolic-ref", "refs/remotes/origin/HEAD"], {
+			stdout: "refs/remotes/origin/main\n",
+		});
+		runner.set("git", ["-C", checkout, "fetch", "origin", "main"], {});
+		// issue-tracker.md is absent (new); triage-labels.md differs; domain.md matches.
+		runner.set("git", ["-C", checkout, "show", "origin/main:docs/agents/issue-tracker.md"], {
+			code: 1,
+		});
+		runner.set("git", ["-C", checkout, "show", "origin/main:docs/agents/triage-labels.md"], {
+			stdout: "stale triage\n",
+		});
+		runner.set("git", ["-C", checkout, "show", "origin/main:docs/agents/domain.md"], {
+			stdout: conventionFileContent("docs/agents/domain.md"),
+		});
+		runner.set("git", ["-C", checkout, "show", "origin/main:CLAUDE.md"], { code: 1 });
+		runner.set("git", ["-C", checkout, "show", "origin/main:AGENTS.md"], {
+			stdout: "existing agents\n",
+		});
+		runner.set("gh", ["label", "list", "--repo", identity, "--json", "name"], {
+			stdout: JSON.stringify([{ name: "needs-triage" }]),
+		});
+		runner.setDefault({ code: 0, stdout: "" });
+
+		const plan = await planRepositoryInit({
+			runner,
+			checkout,
+			identity,
+			displayName,
+			taskTypes: taskTypesFixture(),
+		});
+		expect(plan).not.toHaveProperty("ok");
+		if ("ok" in plan) return;
+		expect(plan.targetBranch).toBe("main");
+		expect(plan.files.find((f) => f.path === "docs/agents/issue-tracker.md")?.action).toBe("new");
+		expect(plan.files.find((f) => f.path === "docs/agents/triage-labels.md")?.action).toBe(
+			"differing",
+		);
+		expect(plan.files.find((f) => f.path === "docs/agents/domain.md")?.action).toBe("unchanged");
+		expect(plan.instructionFile).toBe("AGENTS.md");
+		expect(plan.instructionFileChoiceNeeded).toBe(false);
+		expect(plan.labelsPresent).toEqual(["needs-triage"]);
+		expect(plan.labelsToCreate).toEqual(
+			repositoryInitLabelSet(taskTypesFixture()).filter((l) => l !== "needs-triage"),
+		);
+	});
+
+	test("a repository with neither instruction file offers the choice", async () => {
+		const runner = new FakeRunner();
+		runner.set("git", ["-C", checkout, "symbolic-ref", "refs/remotes/origin/HEAD"], {
+			stdout: "refs/remotes/origin/main\n",
+		});
+		runner.set("git", ["-C", checkout, "fetch", "origin", "main"], {});
+		runner.set("git", ["-C", checkout, "show", "origin/main:CLAUDE.md"], { code: 1 });
+		runner.set("git", ["-C", checkout, "show", "origin/main:AGENTS.md"], { code: 1 });
+		runner.set("gh", ["label", "list", "--repo", identity, "--json", "name"], {
+			stdout: "[]",
+		});
+		runner.setDefault({ code: 0, stdout: "" });
+		const plan = await planRepositoryInit({
+			runner,
+			checkout,
+			identity,
+			displayName,
+			taskTypes: taskTypesFixture(),
+		});
+		expect(plan).not.toHaveProperty("ok");
+		if ("ok" in plan) return;
+		expect(plan.instructionFileChoiceNeeded).toBe(true);
+	});
+});
+
+describe("the init fact (ADR 0075)", () => {
+	test("it stores and reads one fact per repository, and drift is the hash mismatch", () => {
+		const state = openFactoryState(":memory:");
+		expect(state.repositoryInitFact("acme/factory")).toBe(null);
+		state.setRepositoryInitFact("acme/factory", "hash-a", "commit-a");
+		expect(state.repositoryInitFact("acme/factory")).toEqual({
+			repository: "acme/factory",
+			settingsHash: "hash-a",
+			pushedCommit: "commit-a",
+			at: expect.any(String),
+		});
+		// A second repository is its own row.
+		state.setRepositoryInitFact("acme/other", "hash-b", "commit-b");
+		expect(
+			state
+				.repositoryInitFacts()
+				.map((f) => f.repository)
+				.sort(),
+		).toEqual(["acme/factory", "acme/other"]);
+		// The drift helper: the stored hash against the current settings' hash.
+		const fact = state.repositoryInitFact("acme/factory");
+		if (fact === null) throw new Error("expected a stored init fact");
+		const drifted =
+			fact.settingsHash !== repositoryInitSettingsHash(statesFixture(), taskTypesFixture());
+		expect(drifted).toBe(true);
+	});
+
+	test("re-storing a fact for the same repository keeps one row", () => {
+		const state = openFactoryState(":memory:");
+		state.setRepositoryInitFact("acme/factory", "hash-a", "commit-a");
+		state.setRepositoryInitFact("acme/factory", "hash-b", "commit-b");
+		const facts = state.repositoryInitFacts().filter((f) => f.repository === "acme/factory");
+		expect(facts).toHaveLength(1);
+		expect(facts[0].settingsHash).toBe("hash-b");
+		expect(facts[0].pushedCommit).toBe("commit-b");
+	});
+});
+
+describe("the repository init's commit flow", () => {
+	const identity = "github.com/acme/factory";
+	const displayName = "acme/factory";
+	const checkout = "/tmp/checkout";
+
+	function commitRunner(worktree: string): FakeRunner {
+		const runner = new FakeRunner();
+		runner.set("git", ["-C", checkout, "symbolic-ref", "refs/remotes/origin/HEAD"], {
+			stdout: "refs/remotes/origin/main\n",
+		});
+		runner.set("git", ["-C", checkout, "fetch", "origin", "main"], {});
+		runner.set("gh", ["label", "list", "--repo", identity, "--json", "name"], {
+			stdout: "[]",
+		});
+		runner.set("git", ["-C", worktree, "rev-parse", "HEAD"], { stdout: "abc1234\n" });
+		runner.setDefault({ code: 0, stdout: "" });
+		return runner;
+	}
+
+	const repository = {
+		identity,
+		displayName,
+		host: "github.com",
+		cloneUrl: "https://github.com/acme/factory.git",
+		checkout,
+	};
+
+	test("runs the act, registers the sources, and writes the init fact", async () => {
+		const state = openFactoryState(":memory:");
+		const worktree = tempDir("factory-init-flow-");
+		const result = await commitRepositoryInit({
+			runner: commitRunner(worktree),
+			state,
+			config: { sources: [] } as unknown as FactoryConfig,
+			repository,
+			workflowStates: statesFixture(),
+			taskTypes: taskTypesFixture(),
+			plan: {
+				instructionFile: "AGENTS.md",
+				labelsToCreate: repositoryInitLabelSet(taskTypesFixture()),
+				fileActions: CONVENTION_FILE_PATHS.map((path) => ({ path, action: "new" })),
+			},
+			worktreePath: worktree,
+		});
+		expect(result.ok).toBe(true);
+		if (!result.ok) throw new Error("expected the commit to pass");
+		expect(result.newSources.map((s) => s.name)).toEqual([
+			"acme/factory-issues",
+			"acme/factory-pull-requests",
+		]);
+		const fact = state.repositoryInitFact(identity);
+		expect(fact?.pushedCommit).toBe("abc1234");
+		expect(fact?.settingsHash).toBe(
+			repositoryInitSettingsHash(statesFixture(), taskTypesFixture()),
+		);
+	});
+
+	test("a source name the operator already names refuses before the fact is written", async () => {
+		const state = openFactoryState(":memory:");
+		const worktree = tempDir("factory-init-flow-");
+		const busyConfig = {
+			sources: [
+				{ name: "acme/factory-issues", host: "github.com", repositories: ["acme/factory"] },
+			],
+		} as unknown as FactoryConfig;
+		const result = await commitRepositoryInit({
+			runner: commitRunner(worktree),
+			state,
+			config: busyConfig,
+			repository,
+			workflowStates: statesFixture(),
+			taskTypes: taskTypesFixture(),
+			plan: { instructionFile: "AGENTS.md", labelsToCreate: [], fileActions: [] },
+			worktreePath: worktree,
+		});
+		expect(result.ok).toBe(false);
+		if (result.ok) throw new Error("expected the commit to refuse");
+		expect(result.reason).toBe("a source named acme/factory-issues is already configured");
+		// The fact was never written: the collision stops before the state write.
+		expect(state.repositoryInitFact(identity)).toBe(null);
+	});
+});
+
+describe("the init drift", () => {
+	test("a changed setting drifts the fact; a matching setting does not", () => {
+		const state = openFactoryState(":memory:");
+		const base = statesFixture();
+		state.setRepositoryInitFact(
+			"github.com/acme/factory",
+			repositoryInitSettingsHash(base, taskTypesFixture()),
+			"abc1234",
+		);
+		expect(repositoryInitDrifted(state, "github.com/acme/factory", base, taskTypesFixture())).toBe(
+			false,
+		);
+		const changed = base.map((s, i) => (i === 0 ? { ...s, name: "review" } : s));
+		expect(
+			repositoryInitDrifted(state, "github.com/acme/factory", changed, taskTypesFixture()),
+		).toBe(true);
+	});
+
+	test("a repository never init'd is not drifted", () => {
+		const state = openFactoryState(":memory:");
+		expect(
+			repositoryInitDrifted(state, "github.com/acme/other", statesFixture(), taskTypesFixture()),
+		).toBe(false);
+	});
+});

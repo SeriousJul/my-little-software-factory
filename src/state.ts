@@ -57,7 +57,28 @@ import {
 
 /** The schema every state file the plane opens is brought to. Exported so a
  * test can assert the stamp a migration left instead of copying the number. */
-export const SCHEMA_VERSION = 26;
+export const SCHEMA_VERSION = 27;
+
+/**
+ * The stored init fact of one repository (ADR 0075): the durable record of the
+ * Repository init the plane ran on it. The `settingsHash` is the hash of the
+ * settings the generator stood the content under, the `pushedCommit` is the
+ * commit the act pushed to the remote default branch, and `at` is the time the
+ * fact was written. The plane reads it to tell an Initialized repository from
+ * an uninit one and, against the current settings' hash, a drifted one from a
+ * clean one.
+ */
+export interface RepositoryInitFact {
+	/** The repository identity the fact stands for, matching the Config repository key. */
+	repository: string;
+	/** The hash of the settings that generated the content the act pushed. */
+	settingsHash: string;
+	/** The commit the act pushed to the remote default branch. */
+	pushedCommit: string;
+	/** The time the fact was written, an ISO string. */
+	at: string;
+}
+
 type Health = SourceMembership["health"];
 
 export class StateError extends Error {
@@ -1134,6 +1155,25 @@ CREATE INDEX IF NOT EXISTS idx_plane_action_attempts_ticket ON plane_action_atte
 const MIGRATION_V24_TO_V25_QUEUE_ACTION =
 	"ALTER TABLE work_queue ADD COLUMN action_task_type TEXT;";
 
+/**
+ * The init fact (ADR 0075): the durable record of the Repository init the
+ * plane ran on one repository. One row per repository, keyed by the repository
+ * identity: the settings hash the generator stood the content under, the
+ * commit the act pushed, and the time. The plane reads it to tell an
+ * Initialized repository from an uninit one, and the stored hash against the
+ * current settings' hash to tell a drifted one from a clean one - never a read
+ * of the repository. The table is new, so it is asked for by name, the way the
+ * queue pause and the grouping axis are.
+ */
+const MIGRATION_V26_TO_V27_REPOSITORY_INIT = `
+CREATE TABLE IF NOT EXISTS repository_init (
+	repository TEXT PRIMARY KEY,
+	settings_hash TEXT NOT NULL,
+	pushed_commit TEXT NOT NULL,
+	at TEXT NOT NULL
+);
+`;
+
 /** Open state synchronously after creating its parent directory. */
 export function openFactoryState(path: string, now?: () => number): FactoryState {
 	try {
@@ -1315,6 +1355,10 @@ export class FactoryState {
 				this.db.exec(MIGRATION_V24_TO_V25_QUEUE_ACTION);
 			if (!this.hasTable("plane_action_attempts"))
 				this.db.exec(MIGRATION_V25_TO_V26_PLANE_ACTION_ATTEMPTS);
+			// Asked for by name, the way the queue pause and the grouping axis are:
+			// a file the step already ran keeps its stored init facts, and an older
+			// file opens with none, which the read answers as uninit (ADR 0075).
+			if (!this.hasTable("repository_init")) this.db.exec(MIGRATION_V26_TO_V27_REPOSITORY_INIT);
 			// The `queued` state the retired route wait stood in (ADR 0072): a
 			// file that still carries it ends those cycles the way a close does -
 			// the ticket rests open with the cycle counted once - in one state
@@ -2101,6 +2145,73 @@ export class FactoryState {
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
 			throw new StateError(`cannot store the group order at ${this.path}: ${message}`);
+		}
+	}
+
+	/**
+	 * The stored init fact of one repository (ADR 0075), or null when the plane
+	 * has not initialized it: the settings hash the content was stood under, the
+	 * commit the act pushed, and the time. The read is the answer for "is this
+	 * repository Initialized, and under which settings?" with no read of the
+	 * repository itself.
+	 */
+	repositoryInitFact(repository: string): RepositoryInitFact | null {
+		const row = this.db
+			.prepare(
+				"SELECT repository, settings_hash, pushed_commit, at FROM repository_init WHERE repository = ?",
+			)
+			.get(repository) as {
+			repository: string;
+			settings_hash: string;
+			pushed_commit: string;
+			at: string;
+		} | null;
+		if (row === null) return null;
+		return {
+			repository: row.repository,
+			settingsHash: row.settings_hash,
+			pushedCommit: row.pushed_commit,
+			at: row.at,
+		};
+	}
+
+	/** Every stored init fact, keyed by repository: the set the plane reads to
+	 * tell which repositories are Initialized and, against the current
+	 * settings' hash, which of them have drifted (ADR 0075). */
+	repositoryInitFacts(): RepositoryInitFact[] {
+		const rows = this.db
+			.prepare("SELECT repository, settings_hash, pushed_commit, at FROM repository_init")
+			.all() as Array<{
+			repository: string;
+			settings_hash: string;
+			pushed_commit: string;
+			at: string;
+		}>;
+		return rows.map((row) => ({
+			repository: row.repository,
+			settingsHash: row.settings_hash,
+			pushedCommit: row.pushed_commit,
+			at: row.at,
+		}));
+	}
+
+	/**
+	 * Store the init fact of one repository (ADR 0075): the settings hash the
+	 * generator stood the content under, the commit the act pushed, and the
+	 * time. The write is the fact the next startup and the next refresh read
+	 * back, so it is durable the moment it returns. A write that fails throws a
+	 * StateError naming the state file.
+	 */
+	setRepositoryInitFact(repository: string, settingsHash: string, pushedCommit: string): void {
+		try {
+			this.db
+				.prepare(
+					"INSERT INTO repository_init(repository, settings_hash, pushed_commit, at) VALUES (?, ?, ?, ?) ON CONFLICT(repository) DO UPDATE SET settings_hash = excluded.settings_hash, pushed_commit = excluded.pushed_commit, at = excluded.at",
+				)
+				.run(repository, settingsHash, pushedCommit, new Date(this.now()).toISOString());
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			throw new StateError(`cannot store the init fact at ${this.path}: ${message}`);
 		}
 	}
 

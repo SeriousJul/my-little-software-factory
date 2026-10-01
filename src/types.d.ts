@@ -15,4 +15,16 @@ declare module "*.toml" {
 	export default file;
 }
 
+/**
+ * A `*.md` module imported with `{ type: "text" }`: its default export is the
+ * file's text, the byte content the deterministic generator writes into a
+ * repository (ADR 0075). The content is resolved in a source run and embedded
+ * in a compiled build, so the generator owns its templates as code, not as a
+ * disk read.
+ */
+declare module "*.md" {
+	const text: string;
+	export default text;
+}
+
 declare const FACTORY_BUILD_VERSION: string | undefined;
