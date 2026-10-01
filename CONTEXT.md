@@ -49,6 +49,11 @@ _Avoid_: status line, notification bar
 The on-demand, read-only presentation of a full message that does not fit on the Message line.
 _Avoid_: message modal, error popup
 
+**Desktop notification**:
+The out-of-band signal the control plane sends to the operating system when it writes a warning or an error to the Message line. It carries the full text the line truncates, so the operator can read the fact and act on it while away from the terminal, the auto-handoff case first.
+The plane sends one per standing fact: while the same fact stands it sends none, and when the fact stands again after a different one it sends.
+_Avoid_: toast, system alert, popup
+
 **Theme**:
 The set of resolved color roles every control-plane surface paints in. Inside herdr the control plane inherits the Theme from herdr's active theme; outside herdr it keeps its own fixed dark theme. A theme carries an appearance: light or dark. It is distinct from the no-color presentation, which is an axis that works on top of any theme.
 _Avoid_: palette, color scheme, skin
