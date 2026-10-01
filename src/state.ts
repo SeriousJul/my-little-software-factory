@@ -2161,6 +2161,35 @@ export class FactoryState {
 	}
 
 	/**
+	 * Whether the ticket's newest plane action attempt blocked, and one of the
+	 * ticket's active sources has not re-read the ticket since the attempt
+	 * ran (ADR 0077). The attempt's fire wrote the block's labels on the
+	 * source, and the position the projection derives stands on the read the
+	 * source last landed: the one the written labels outran. The attempt's
+	 * row is the cycle end this gate reads, the way `sourceReverifiedSinceCycleEnd`
+	 * reads the decision's: a plane action settles no turn and ends no cycle,
+	 * so the decision's row never stands for its own labels. A ticket with no
+	 * attempt, or whose newest attempt did not block, answers false: a merged
+	 * attempt retires its ticket, and the block is the outcome that leaves a
+	 * position the machine's own write already moved.
+	 */
+	planeActionBlockedUnrefreshed(identity: string): boolean {
+		const latest = this.db
+			.prepare(
+				"SELECT outcome, at FROM plane_action_attempts WHERE ticket_identity = ? ORDER BY at DESC, rowid DESC LIMIT 1",
+			)
+			.get(identity) as { outcome: string; at: string } | null;
+		if (latest === null || latest.outcome !== "blocked") return false;
+		const unrefreshed = this.db
+			.prepare(
+				`SELECT 1 FROM memberships m JOIN source_health h ON h.source_name = m.source_name
+				WHERE m.ticket_identity = ? AND m.active = 1 AND (h.last_success IS NULL OR h.last_success < ?) LIMIT 1`,
+			)
+			.get(identity, latest.at) as { 1: number } | undefined;
+		return unrefreshed != null;
+	}
+
+	/**
 	 * The Same-type hold (ADR 0026): the open auto-handoff does not repeat
 	 * completed work. The ticket's newest closed cycle settled a `completed`
 	 * turn of exactly the task type the ticket now suggests: the agent

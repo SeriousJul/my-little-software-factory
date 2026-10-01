@@ -1598,6 +1598,17 @@ export class ObservationCoordinator {
 		addedLine: string,
 		refusedPrefix: string,
 	): Promise<"added" | "refused" | "stopped"> {
+		// The blocked attempt's hold (ADR 0077): the ticket's newest plane
+		// action attempt blocked, and the source has not re-read the ticket
+		// since the attempt ran. The attempt's fire wrote the block's labels on
+		// the source, and the position the projection derives stands on the
+		// read the source last landed - the one the written labels outran - so
+		// the position still offers the task the block already moved off. The
+		// re-ask waits for the refresh that carries the written labels, the
+		// same wait the cycle-end re-verify gate keeps. The hold is silent:
+		// the re-ask on the refresh is the expected path, not a refusal to
+		// report, and the walk moves on to its next candidate.
+		if (this.state.planeActionBlockedUnrefreshed(intent.ticketIdentity)) return "refused";
 		const result = await this.dispatchPlaneAction(intent);
 		if (this.stopped) return "stopped";
 		if (!result.ok) {

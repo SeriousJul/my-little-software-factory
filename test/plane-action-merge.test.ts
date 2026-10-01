@@ -371,6 +371,61 @@ describe("the attempt record in the state", () => {
 		state.close();
 	});
 
+	test("the blocked attempt's hold stands until the source re-reads the ticket", () => {
+		const state = planeState();
+		// The base state's fetch landed a moment ago, so the attempts stand
+		// after it: the times offset from now the way the live source answers.
+		const base = Date.now();
+		const at1 = new Date(base + 60_000).toISOString();
+		const at2 = new Date(base + 120_000).toISOString();
+		const reread = new Date(base + 180_000).toISOString();
+		// No attempt: the hold answers clear.
+		expect(state.planeActionBlockedUnrefreshed(pullIdentity)).toBe(false);
+		// A merged attempt answers clear beside it: the hold is the block's.
+		state.recordPlaneActionAttempt({
+			ticketIdentity: pullIdentity,
+			taskType: "merge",
+			decision: "auto-merged",
+			outcome: "merged",
+			reason: "",
+			at: at1,
+		});
+		expect(state.planeActionBlockedUnrefreshed(pullIdentity)).toBe(false);
+		// The blocked attempt that posts the source's last read: the hold stands.
+		state.recordPlaneActionAttempt({
+			ticketIdentity: pullIdentity,
+			taskType: "merge",
+			decision: "auto-merged",
+			outcome: "blocked",
+			reason: "GraphQL: PullRequest is not mergeable.",
+			at: at2,
+		});
+		expect(state.planeActionBlockedUnrefreshed(pullIdentity)).toBe(true);
+		// A merged attempt that posts the block lifts the hold on the newest row.
+		state.recordPlaneActionAttempt({
+			ticketIdentity: pullIdentity,
+			taskType: "merge",
+			decision: "auto-merged",
+			outcome: "merged",
+			reason: "",
+			at: reread,
+		});
+		expect(state.planeActionBlockedUnrefreshed(pullIdentity)).toBe(false);
+		// The blocked attempt again, and the re-read that posts it: the hold lifts.
+		state.recordPlaneActionAttempt({
+			ticketIdentity: pullIdentity,
+			taskType: "merge",
+			decision: "auto-merged",
+			outcome: "blocked",
+			reason: "GraphQL: PullRequest is not mergeable.",
+			at: reread,
+		});
+		expect(state.planeActionBlockedUnrefreshed(pullIdentity)).toBe(true);
+		state.applyFetch(pullsSource, pullSuccess(reread));
+		expect(state.planeActionBlockedUnrefreshed(pullIdentity)).toBe(false);
+		state.close();
+	});
+
 	test("the merge's decision ends the settled turn's cycle, the way the route's does (ADR 0072)", () => {
 		const state = planeState();
 		withIssueSource(state);
@@ -1859,13 +1914,13 @@ describe("the auto top-up merge", () => {
 		body: (setup: AppSetup) => Promise<void>,
 		stub: (runner: FakeRunner) => void,
 		extra: Partial<FactoryConfig> = {},
-		prep: (state: FactoryState) => void = () => {},
-	): Promise<FactoryState> {
+		prep: (state: FactoryState, runner: FakeRunner) => void = () => {},
+	): Promise<{ state: FactoryState; runner: FakeRunner }> {
 		const state = planeState();
-		prep(state);
-		state.setAutoHandoffMode(true);
 		const runner = new FakeRunner();
 		runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+		prep(state, runner);
+		state.setAutoHandoffMode(true);
 		stub(runner);
 		const src = new FakeSource("pulls", "github-pull-requests", pullSuccess());
 		const props: AppProps = {
@@ -1895,11 +1950,11 @@ describe("the auto top-up merge", () => {
 			34,
 			props,
 		);
-		return state;
+		return { state, runner };
 	}
 
 	test("the top-up asks for the merge on the ready position, and it runs without an agent", async () => {
-		const state = await topUpApp(
+		const { state } = await topUpApp(
 			async (setup) => {
 				// The open walk's add and the run's line land on the Message
 				// line; the run's line is the one that settles the wait.
@@ -1941,7 +1996,7 @@ describe("the auto top-up merge", () => {
 			return true;
 		}) as typeof process.stdout.write);
 		try {
-			const state = await topUpApp(
+			const { state } = await topUpApp(
 				async (setup) => {
 					await awaitFrame(
 						setup,
@@ -1986,8 +2041,67 @@ describe("the auto top-up merge", () => {
 		expect(bells).toBe(0);
 	});
 
+	test("a blocked merge holds the top-up's re-ask until the source re-reads the ticket", async () => {
+		let held: FactoryState;
+		let heldRunner: FakeRunner;
+		const { state, runner } = await topUpApp(
+			async (setup) => {
+				await awaitFrame(
+					setup,
+					(f) =>
+						messageRowOf(f).includes(
+							`the merge of "${pullTitle}" was blocked: GraphQL: PullRequest is not mergeable.`,
+						),
+					"the block's line",
+				);
+				// The hold's window: the cycles keep running with the queue
+				// empty, and the position still reads the labels the source
+				// last fetched. A re-ask the hold failed to stop would run the
+				// merge again here and post its second comment, which the
+				// count below refuses.
+				await settle(setup);
+				await new Promise((resolve) => setTimeout(resolve, 600));
+				// The release: the source re-reads the ticket, and the read
+				// still wears the ready position, the way a block whose label
+				// write failed stands. The next cycle's walk asks the merge
+				// again.
+				held.applyFetch(pullsSource, pullSuccess(new Date(Date.now() + 60_000).toISOString()));
+				await awaitFrame(
+					setup,
+					() =>
+						heldRunner.commands().filter((command) => command.startsWith("gh pr merge ")).length >=
+						2,
+					"the re-ask's merge",
+				);
+			},
+			(runner) => {
+				// The run's fresh read, then the fire's: the reads a re-ask
+				// past the hold would spend, running on the fallback answer
+				// beside them.
+				stubReadSequence(runner, [{ state: "open" }, { state: "open" }]);
+				stubMerge(runner, 1, "GraphQL: PullRequest is not mergeable.\n");
+			},
+			{},
+			(s, r) => {
+				held = s;
+				heldRunner = r;
+			},
+		);
+
+		// The re-ask ran on the refresh, and only on it: the hold stood while
+		// the cycles ran with the stale position, and the second attempt is
+		// the read that carried the labels the fire wrote.
+		const mergeCommands = runner.commands().filter((command) => command.startsWith("gh pr merge "));
+		expect(mergeCommands).toHaveLength(2);
+		expect(state.planeActionAttempts(pullIdentity)).toHaveLength(2);
+		expect(
+			runner.commands().filter((command) => command.startsWith("gh pr comment ")),
+		).toHaveLength(2);
+		state.close();
+	});
+
 	test("the Handoff limit counts the merge attempts, and a full count holds the top-up", async () => {
-		const state = await topUpApp(
+		const { state } = await topUpApp(
 			async (setup) => {
 				// Let the first observation cycle run, then read the facts.
 				await settle(setup);
@@ -2016,7 +2130,7 @@ describe("the auto top-up merge", () => {
 	});
 
 	test("the queue pause holds the merge item standing, and the row and detail name the action", async () => {
-		const state = await topUpApp(
+		const { state } = await topUpApp(
 			async (setup) => {
 				const frame = await awaitFrame(
 					setup,
@@ -2071,7 +2185,7 @@ describe("the auto top-up merge", () => {
 		// position, the position's row wears the queue-wait badge in the state
 		// badge's place, and the position keeps the state the ask left it,
 		// the way the route's wait wears the badge on the position's row.
-		const state = await topUpApp(
+		const { state } = await topUpApp(
 			async (setup) => {
 				const frame = await awaitFrame(
 					setup,
@@ -2127,7 +2241,7 @@ describe("the auto top-up merge", () => {
 	test("the Dispatch pause holds the automatic merge add, and the release runs it", async () => {
 		let failedHandoffId = "";
 		let held: FactoryState;
-		const state = await topUpApp(
+		const { state } = await topUpApp(
 			async (setup) => {
 				// Cycles run with the pause held: the held failed trace stops
 				// the top-up before the walks, so the open walk's merge add
