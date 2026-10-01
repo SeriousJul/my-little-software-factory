@@ -126,10 +126,35 @@ export async function listOpenPullRequestsByHeadBranch(
 }
 
 /**
+ * The window the draft create retries its one transient answer (ADR 0076).
+ * The handoff's push has reached the source's git server, but the source's
+ * GraphQL layer may not carry the fresh branch's commits yet when the create
+ * runs straight after the push. The create then answers `No commits exist`
+ * on a branch that stands: the read has not caught up, and the answer clears
+ * once it does.
+ */
+const PULL_REQUEST_CREATE_RETRY_DELAY_MS = 500;
+const PULL_REQUEST_CREATE_RETRY_WINDOW_MS = 5_000;
+
+/**
+ * The one failure the draft create retries: the fresh branch's commits not
+ * standing in the source's read yet. Every other answer is final, and keeps
+ * its original failure path and cleanup.
+ */
+function freshBranchNotStanding(result: CommandResult): boolean {
+	return result.code !== 0 && result.stderr.includes("No commits exist");
+}
+
+/**
  * The open of the ticket's pull request as a draft (ADR 0076): the title the
  * ticket carries, the body the plane writes, on the branch the handoff just
  * pushed. The pull request's url comes back the way the command answers it,
  * with its number parsed from the url for the commands that take a number.
+ *
+ * The create that answers the fresh branch's replication lag is retried for
+ * a bounded window, the way a busy fresh pane's start is: only that exact
+ * answer retries, and a create that never clears it fails with the last
+ * answer the source gave.
  */
 export async function openDraftPullRequest(
 	runner: CommandRunner,
@@ -141,27 +166,33 @@ export async function openDraftPullRequest(
 ): Promise<{ number: number; url: string } | { fail: string }> {
 	const auth = await sourceGhOptions(runner, source);
 	if ("fail" in auth) return auth;
+	const args = [
+		"pr",
+		"create",
+		"--repo",
+		repository.identity,
+		"--head",
+		branch,
+		"--draft",
+		"--title",
+		title,
+		"--body",
+		body,
+	];
+	const deadline = Date.now() + PULL_REQUEST_CREATE_RETRY_WINDOW_MS;
 	let result: CommandResult;
-	try {
-		result = await runner.run(
-			"gh",
-			[
-				"pr",
-				"create",
-				"--repo",
-				repository.identity,
-				"--head",
-				branch,
-				"--draft",
-				"--title",
-				title,
-				"--body",
-				body,
-			],
-			auth,
+	while (true) {
+		try {
+			result = await runner.run("gh", args, auth);
+		} catch (error) {
+			return { fail: `the pull request create raised: ${errorMessage(error)}` };
+		}
+		if (result.code === 0 || !freshBranchNotStanding(result)) break;
+		const remaining = deadline - Date.now();
+		if (remaining <= 0) break;
+		await new Promise<void>((resolve) =>
+			setTimeout(resolve, Math.min(PULL_REQUEST_CREATE_RETRY_DELAY_MS, remaining)),
 		);
-	} catch (error) {
-		return { fail: `the pull request create raised: ${errorMessage(error)}` };
 	}
 	if (result.code !== 0) return { fail: firstNonEmptyLine(result.stderr) ?? `exit ${result.code}` };
 	const url = [...result.stdout.split(/\r?\n/)].reverse().find((line) => line.trim() !== "") ?? "";

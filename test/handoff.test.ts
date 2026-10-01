@@ -4187,6 +4187,55 @@ describe("handOffTicket: the pull request the plane opens (ADR 0076)", () => {
 		]);
 	});
 
+	test("a draft create that answers the fresh branch's lag retries, and the prompt still goes out", async () => {
+		const runner = new FakeRunner();
+		stubPrWorktreeHandoff(runner);
+		runner.set("git", ["-C", CHECKOUT, "ls-remote", "--heads", "origin", PR_BRANCH], {
+			stdout: "",
+		});
+		runner.set("git", ["-C", CHECKOUT, "push", "origin", PR_BRANCH], { stdout: "" });
+		runner.set("gh", PR_READ_ARGS, { stdout: "[]" });
+		runner.setSequence(
+			"gh",
+			[
+				"pr",
+				"create",
+				"--repo",
+				"github.com/acme/billing",
+				"--head",
+				PR_BRANCH,
+				"--draft",
+				"--title",
+				ticket.title,
+				"--body",
+				PR_BODY,
+			],
+			[
+				{
+					code: 1,
+					stderr:
+						"GraphQL: No commits exist on github.com:acme/billing:factory/7-retry-policy-for-webhooks. (HTTP 400)\n",
+				},
+				{ stdout: `${PR_URL}\n` },
+			],
+		);
+
+		const outcome = await handOffTicket(
+			PR_TICKET,
+			{ ...defaultChoice, environment: "worktree" },
+			{ config: PR_CONFIG, runner, home: HOME },
+		);
+
+		expect(outcome.status).toBe("ok");
+		// The create is the one command the retry re-runs, and the prompt the
+		// agent receives still carries the pull request's url.
+		const creates = runner.commands().filter((command) => command === PR_CREATE_COMMAND);
+		expect(creates).toHaveLength(2);
+		expect(runner.commands()).toContain(
+			`herdr agent prompt ${AGENT} Implement #7.\n\nPull request: ${PR_URL}`,
+		);
+	});
+
 	test("a draft the branch already carries is reused: no second draft is opened", async () => {
 		const runner = new FakeRunner();
 		stubPrWorktreeHandoff(runner);

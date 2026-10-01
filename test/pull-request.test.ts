@@ -177,6 +177,83 @@ describe("openDraftPullRequest", () => {
 		expect(answer).toEqual({ number: 42, url: "https://github.com/acme/billing/pull/42" });
 	});
 
+	const createArgs = [
+		"pr",
+		"create",
+		"--repo",
+		"github.com/acme/billing",
+		"--head",
+		branch,
+		"--draft",
+		"--title",
+		"Retry policy for webhooks",
+		"--body",
+		"The body",
+	];
+
+	test("a create that answers the fresh branch's lag retries until the branch stands", async () => {
+		const runner = new FakeRunner();
+		runner.setSequence("gh", createArgs, [
+			{
+				code: 1,
+				stderr:
+					"GraphQL: No commits exist on github.com:acme/billing:factory/7-retry-policy-for-webhooks. (HTTP 400)\n",
+			},
+			{ stdout: "https://github.com/acme/billing/pull/42\n" },
+		]);
+		const answer = await openDraftPullRequest(
+			runner,
+			source,
+			repository,
+			branch,
+			"Retry policy for webhooks",
+			"The body",
+		);
+		expect(answer).toEqual({ number: 42, url: "https://github.com/acme/billing/pull/42" });
+		const creates = runner.commands().filter((command) => command === `gh ${createArgs.join(" ")}`);
+		expect(creates).toHaveLength(2);
+	});
+
+	test("a create that never stops answering the fresh branch's lag stops and reports the failure", async () => {
+		const runner = new FakeRunner();
+		runner.set("gh", createArgs, {
+			code: 1,
+			stderr:
+				"GraphQL: No commits exist on github.com:acme/billing:factory/7-retry-policy-for-webhooks. (HTTP 400)\n",
+		});
+		const answer = await openDraftPullRequest(
+			runner,
+			source,
+			repository,
+			branch,
+			"Retry policy for webhooks",
+			"The body",
+		);
+		expect("fail" in answer).toBe(true);
+		if ("fail" in answer) expect(answer.fail).toContain("No commits exist");
+		const creates = runner.commands().filter((command) => command === `gh ${createArgs.join(" ")}`);
+		expect(creates.length).toBeGreaterThan(1);
+	});
+
+	test("a create that answers another failure is not retried", async () => {
+		const runner = new FakeRunner();
+		runner.set("gh", createArgs, {
+			code: 1,
+			stderr: "GraphQL: Pull request already exists: acme/billing#43\n",
+		});
+		const answer = await openDraftPullRequest(
+			runner,
+			source,
+			repository,
+			branch,
+			"Retry policy for webhooks",
+			"The body",
+		);
+		expect("fail" in answer).toBe(true);
+		const creates = runner.commands().filter((command) => command === `gh ${createArgs.join(" ")}`);
+		expect(creates).toHaveLength(1);
+	});
+
 	test("a create that answers no url is a failure with the answer it got", async () => {
 		const runner = new FakeRunner();
 		runner.set(

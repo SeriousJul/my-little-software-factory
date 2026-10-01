@@ -38,6 +38,14 @@ works the branch the pull request already stands on: it commits and pushes,
 it posts its notes as a pull request comment, and it never creates or merges
 a pull request or edits the body.
 
+**The create retries the fresh branch's lag.** The push reaches the source's
+git server, but the source's read may not carry the fresh branch's commits
+yet when the create runs straight after the push. The create then answers
+`No commits exist` on a branch that stands, and the plane retries only that
+answer for a bounded window. A create that never clears the lag fails the
+open with the last answer the source gave, and the no-residue contract of
+the failure is untouched: the attempt deletes the remote branch it created.
+
 **The pull request opens as a draft, and the fire publishes it.** A draft
 keeps the empty pull request out of the ticket list, out of the machine's
 acts, and out of reach of a stray merge, and a draft that dangles after a
