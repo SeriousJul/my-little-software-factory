@@ -88,3 +88,5 @@ body states the context, the decision, and the consequences.
 - [ADR 0077: The blocked plane action holds its automatic re-ask](./0077-the-blocked-plane-action-holds-its-automatic-re-ask.md)
 - [ADR 0078: The rework prompt fills the gates fact when the review passed](./0078-the-rework-prompt-fills-the-gates-fact-when-the-review-passed.md)
 - [ADR 0079: The fire's successful label write converges the projection at once](./0079-the-fires-successful-label-write-converges-the-projection-at-once.md)
+- [ADR 0080: The plane sends a desktop notification per standing warning or error fact](./0080-the-plane-sends-a-desktop-notification-per-standing-warning-or-error-fact.md)
+- [ADR 0081: The operator pages carry usage, and the ADRs carry the mechanics](./0081-the-operator-pages-carry-usage-and-the-adrs-carry-the-mechanics.md)
