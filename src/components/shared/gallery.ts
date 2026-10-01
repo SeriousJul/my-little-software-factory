@@ -1783,6 +1783,49 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 		},
 	},
 	{
+		// The init marker a repository Group header wears (ADR 0075, stories 19
+		// and 22): a repository the operator has not initialized stands `uninit`,
+		// one whose settings changed since its fact stands `drift`, and one that
+		// stands initialized wears nothing. The word rides at the row's end in the
+		// marker column, after the count the header always keeps.
+		id: "init-marker",
+		state: "the init marker: uninit, drift, and a repository that stands initialized",
+		rows: 30,
+		render: (columns) => {
+			const listed = [
+				groupTicket(1, "acme/billing", "Webhook retry policy", "open", "implement"),
+				groupTicket(2, "acme/factory", "Route the settled review", "open", "review"),
+				groupTicket(3, "acme/ledger", "Stand the ship date", "open", "review"),
+			];
+			return [
+				createElement(TicketList, {
+					key: "marker",
+					rows: ticketRows(listed, "repository", {}, [], [], (value) =>
+						value === "acme/billing" ? "drift" : value === "acme/factory" ? "uninit" : null,
+					),
+					selectedIndex: 0,
+					focused: true,
+					height: 16,
+					markerOf: () => null,
+					limitReached: () => false,
+					starting: () => false,
+					queueWait: () => false,
+					active: true,
+					onFocus: () => undefined,
+					onSelect: () => undefined,
+					onMove: () => undefined,
+				}),
+				messageRowElement(
+					{
+						severity: "info",
+						text: "acme/billing stands drift; acme/factory stands uninit; acme/ledger wears nothing",
+					},
+					columns.contentWidth,
+				),
+			];
+		},
+	},
+	{
 		// The Work queue's list (ADR 0034): the rows in the shared order with
 		// the origin word and the place - the handoff's origin and the
 		// Consultation item's kind (issue #90) - the empty state, and the bar

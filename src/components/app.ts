@@ -90,7 +90,12 @@ import {
 import { closeCycleEndDraftPullRequest } from "../pull-request.ts";
 import { RefreshCoordinator } from "../refresh.ts";
 import type { RepositoryMapping } from "../repo.ts";
-import { planRepositoryInit, type RepositoryInitPlan } from "../repo-init.ts";
+import {
+	type InstructionFileName,
+	planRepositoryInit,
+	type RepositoryInitPlan,
+	repositoryInitSettingsHash,
+} from "../repo-init.ts";
 import { commitRepositoryInit, type RepositoryInitRepository } from "../repo-init-flow.ts";
 import type { CommandOptions } from "../runner.ts";
 import {
@@ -380,6 +385,9 @@ export function App({
 		() => state?.groupingAxis(TICKET_GROUP_SECTION) ?? DEFAULT_GROUPING_AXIS,
 	);
 	const groupingAxisRef = useRef(groupingAxis);
+	// The one-time init note stands once per run (ADR 0075, story 20): the flag
+	// is a session fact and never durable, so a restart re-states the note.
+	const initNoteShownRef = useRef(false);
 	/**
 	 * The operator's stored order of the Group values of the axis in effect
 	 * (ADR 0071): factory state, read back at boot the way the axis itself is,
@@ -532,12 +540,30 @@ export function App({
 	 * like a ticket does. `none` draws the tickets alone in the flat list's
 	 * order, which is the list exactly as it stood before grouping.
 	 */
+	// The init marker a repository Group header wears (ADR 0075, stories 19 and
+	// 22): `uninit` where the plane has not init'd the repository, `drift` where
+	// it init'd it under settings that have since changed, and nowhere where the
+	// stored fact matches the current settings. The display name the axis groups
+	// on maps to the identity the fact keys on through a ticket the Group holds.
+	// On every axis but repository the marker is absent, so the column never
+	// stands where the init does not act.
+	const repositoryInitMarkerOf = (value: string): string | null => {
+		if (groupingAxis !== "repository") return null;
+		const ticket = tickets.find((item) => item.repository === value);
+		const identity = ticket?.repositoryRef.identity ?? value;
+		const fact = state === undefined ? null : state.repositoryInitFact(identity);
+		if (fact === null) return "uninit";
+		if (fact.settingsHash !== repositoryInitSettingsHash(config.workflowStates, config.taskTypes))
+			return "drift";
+		return null;
+	};
 	const ticketRowsState: readonly ListedRow<Ticket>[] = ticketRows(
 		tickets,
 		groupingAxis,
 		groupFolds,
 		groupOrderList,
 		positionOrderOf(),
+		repositoryInitMarkerOf,
 	);
 	const ticketRowsRef = useRef<readonly ListedRow<Ticket>[]>(ticketRowsState);
 	ticketRowsRef.current = ticketRowsState;
@@ -3526,6 +3552,47 @@ export function App({
 		// brake where the operator left it.
 		setQueuePaused(state.queuePaused());
 	}, [state, replaceTickets, replaceConsultations]);
+	// The one-time note on the Message line at the first sight of an
+	// uninitialized or drifted repository (ADR 0075, story 20): the operator
+	// learns the act once per run, beside the marker on the repository's Group
+	// header, and the plane does not repeat it on every poll. The marker stands
+	// only on the repository axis, and the note explains it, so the note waits
+	// for the repository axis as well as the first ticket read: it never stands
+	// on an empty list, and it never outlives the axis its marker rides on.
+	useEffect(() => {
+		if (
+			initNoteShownRef.current ||
+			state === undefined ||
+			machineTickets.length === 0 ||
+			groupingAxis !== "repository"
+		)
+			return;
+		initNoteShownRef.current = true;
+		// The repositories that stand uninitialized or in Init drift on this read,
+		// once per repository the list carries.
+		const seen = new Set<string>();
+		const unprepared: { name: string; marker: "uninit" | "drift" }[] = [];
+		for (const ticket of machineTickets) {
+			const name = ticket.repository;
+			if (seen.has(name)) continue;
+			seen.add(name);
+			const identity = ticket.repositoryRef.identity;
+			const fact = state.repositoryInitFact(identity);
+			const marker: "uninit" | "drift" | null =
+				fact === null
+					? "uninit"
+					: fact.settingsHash !==
+							repositoryInitSettingsHash(config.workflowStates, config.taskTypes)
+						? "drift"
+						: null;
+			if (marker !== null) unprepared.push({ name, marker });
+		}
+		if (unprepared.length === 0) return;
+		const names = unprepared.map((entry) => `${entry.name} (${entry.marker})`).join(", ");
+		setNoticeMessage(
+			`Not initialized: ${names}. Press g then i from one of their tickets to run the init.`,
+		);
+	}, [machineTickets, state, config, groupingAxis, setNoticeMessage]);
 	// Repository choices are validated before the launcher presents them. A
 	// stale mapping stays hidden instead of letting an operator start in an
 	// unrelated checkout. The active view answers them (ADR 0060): the operator's
@@ -4106,12 +4173,17 @@ export function App({
 	async function runRepositoryInitConfirm(
 		repository: RepositoryInitRepository,
 		plan: RepositoryInitPlan,
+		instructionFile?: InstructionFileName,
 	) {
 		const fs = state;
 		if (fs === undefined) {
 			setErrorMessage("the repository init needs SQLite state");
 			return;
 		}
+		// The act's progress on the Message line (ADR 0075, story 27): a word
+		// stands while the commands run, so the operator sees the act in flight
+		// without opening anything.
+		setWorkingMessage(`initializing ${repository.displayName}...`, "repository-init");
 		const flow = await commitRepositoryInit({
 			runner: commandRunner,
 			state: fs,
@@ -4120,11 +4192,12 @@ export function App({
 			workflowStates: configRef.current.workflowStates,
 			taskTypes: configRef.current.taskTypes,
 			plan: {
-				instructionFile: plan.instructionFile,
+				instructionFile: instructionFile ?? plan.instructionFile,
 				labelsToCreate: plan.labelsToCreate,
 				fileActions: plan.files.map((file) => ({ path: file.path, action: file.action })),
 			},
 		}).catch((error) => ({ ok: false as const, reason: errorMessage(error) }));
+		clearWorkingMessage("repository-init");
 		if (flow.ok === false) {
 			setErrorMessage(flow.reason);
 			return;
@@ -5085,6 +5158,16 @@ export function App({
 					if (key === "init")
 						void runRepositoryInitConfirm(panel.repository, panel.plan).catch((error) =>
 							setErrorMessage(errorMessage(error)),
+						);
+					// The repository owes the choice of which instruction file to create
+					// (ADR 0075, story 12): the pick is the file the act stands the block in.
+					else if (key === "init-claude")
+						void runRepositoryInitConfirm(panel.repository, panel.plan, "CLAUDE.md").catch(
+							(error) => setErrorMessage(errorMessage(error)),
+						);
+					else if (key === "init-agents")
+						void runRepositoryInitConfirm(panel.repository, panel.plan, "AGENTS.md").catch(
+							(error) => setErrorMessage(errorMessage(error)),
 						);
 				},
 				onCancel: () => setPanel(null),

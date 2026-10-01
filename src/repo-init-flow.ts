@@ -28,6 +28,7 @@ import {
 	repositoryInitSettingsHash,
 	repositoryInitSources,
 	runRepositoryInit,
+	sourceNameCollision,
 } from "./repo-init.ts";
 import type { CommandOptions, CommandRunner } from "./runner.ts";
 import type { FactoryState } from "./state.ts";
@@ -112,6 +113,19 @@ async function ghOptionsFor(
 export async function commitRepositoryInit(
 	input: RepositoryInitFlowInput,
 ): Promise<RepositoryInitFlowResult> {
+	// A source name the operator already names wins before any external change
+	// (ADR 0075, story 15): the init never renames the operator's source, and a
+	// collision found only after the act would stand a pushed commit and created
+	// labels with no sources and no fact. The check reads the config alone, so
+	// it stands before the act issues a single command.
+	const sources = repositoryInitSources(input.repository.displayName, input.repository.host);
+	const collision = sourceNameCollision(
+		input.config.sources ?? [],
+		sources.map((source) => source.name),
+	);
+	if (collision !== null)
+		return { ok: false, reason: `a source named ${collision} is already configured` };
+
 	const ghOptions = await ghOptionsFor(input.runner, input.repository);
 	const outcome = await runRepositoryInit({
 		runner: input.runner,
@@ -126,19 +140,6 @@ export async function commitRepositoryInit(
 		worktreePath: input.worktreePath,
 	});
 	if (outcome.ok === false) return { ok: false, reason: outcome.reason };
-
-	const sources = repositoryInitSources(input.repository.displayName, input.repository.host);
-	// A source name the operator already names wins: the init does not rename
-	// the operator's source, and the collision stands as the reason.
-	const existingNames = new Set((input.config.sources ?? []).map((source) => source.name));
-	for (const source of sources) {
-		if (existingNames.has(source.name)) {
-			return {
-				ok: false,
-				reason: `a source named ${source.name} is already configured`,
-			};
-		}
-	}
 
 	// The fact stands on the settings that generated the labels and the
 	// sources, so the drift the plane reports is a change to those settings.
