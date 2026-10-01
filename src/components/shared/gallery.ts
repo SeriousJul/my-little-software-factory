@@ -1860,11 +1860,14 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 					onSelect: () => undefined,
 					onMove: () => undefined,
 				}),
+				// The empty state with the cursor resting on it (ADR 0049): the
+				// empty message is the row the cursor takes, and the focus holds
+				// there, the way the other sections' empty lists do.
 				createElement(WorkQueueList, {
 					key: "queue-empty",
 					rows: [],
 					selectedIndex: 0,
-					focused: false,
+					focused: true,
 					height: 3,
 					onFocus: () => undefined,
 					onSelect: () => undefined,

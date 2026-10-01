@@ -614,9 +614,15 @@ export function App({
 	}));
 	// The cursor never rests on a queue that no longer holds its row: a pickup
 	// or a cancel that empties the section sends the selection home, and the
-	// retained index clamps to the rows that remain.
+	// retained index clamps to the rows that remain. The bounce fires on the
+	// emptying step alone: a focus the operator lands on a queue that is
+	// already empty stays where they put it, the way the other sections' empty
+	// lists do, where the empty message is the row the cursor rests on (ADR 0049).
+	const workQueueWasNonEmptyRef = useRef(workQueue.length > 0);
 	useEffect(() => {
-		if (workQueue.length === 0 && selection === "queue") {
+		const wasNonEmpty = workQueueWasNonEmptyRef.current;
+		workQueueWasNonEmptyRef.current = workQueue.length > 0;
+		if (workQueue.length === 0 && selection === "queue" && wasNonEmpty) {
 			selectionRef.current = "ticket";
 			setSelection("ticket");
 		}
@@ -2932,9 +2938,9 @@ export function App({
 				const cOpen = consultationsExpandedRef.current;
 				const wOpen = workExpandedRef.current;
 				// A cross reaches an empty section too, so the step into it is
-				// always possible while the other section is expanded. The Work
-				// queue's header row stays visible while it holds a row, so the
-				// cross into it counts while the queue is not empty.
+				// always possible while the other section is expanded: the empty
+				// message is the row the cursor takes, and the Work section keeps
+				// its header while it is empty the same way (ADR 0049).
 				if (selectionRef.current === "queue") {
 					// Up out of the queue crosses into the Consultation section, or into
 					// the Ticket section while the Consultation section is collapsed, and
