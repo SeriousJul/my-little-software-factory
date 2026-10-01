@@ -30,7 +30,12 @@ import {
 } from "./domain/ticket.ts";
 import { firstNonEmptyLine } from "./lines.ts";
 import { ticketBranchPrefix } from "./naming.ts";
-import type { CommandOptions, CommandResult, CommandRunner } from "./runner.ts";
+import {
+	type CommandOptions,
+	type CommandResult,
+	type CommandRunner,
+	errorMessage,
+} from "./runner.ts";
 import type { FactoryState } from "./state.ts";
 import { membershipMatchesState, newestMembership } from "./task-selection.ts";
 import { GhAuthenticator } from "./ticket-source.ts";
@@ -295,107 +300,174 @@ function transitionReadsPullRequestState(transition: WorkflowTransition): boolea
 }
 
 /**
- * The review score the pull request's verdicts carry: the newest record
- * that reports one in the template's fixed line. The verdicts are the pull
- * request's comments and its reviews, read as one list (ADR 0053): a review
- * turn posts its verdict as a comment or through its review, and the
- * judgment decides on what the agent posted, not on the posting path it
- * chose. Null when no record reports a score, when a read fails on every
- * timeline it answers, or when the source cannot be resolved. The records
- * are read straight from the source, not from the projection: the review
- * posts its verdict to the pull request, and that post is the durable record
- * the judgment reads.
+ * The posting timeline a verdict record stands on: the pull request's
+ * issue comments or its reviews.
  */
-async function readPullRequestScore(
-	request: FireTransitionRequest,
+export type VerdictTimeline = "comment" | "review";
+
+/**
+ * The review verdict (ADR 0074): the newest post on a pull request's
+ * comment and review timelines that carries the review template's fixed
+ * score line, with its posting timeline beside its body and its time.
+ */
+export interface ReviewVerdict {
+	/** The posting timeline the record stands on. */
+	timeline: VerdictTimeline;
+	/** The post's time, as the source answers it. */
+	at: string;
+	/** The post's body, unchanged. */
+	body: string;
+}
+
+/**
+ * The outcome of the review verdict read: the record that stands, the fact
+ * that no record carries the fixed score line, or the failure with the
+ * read's reason when every timeline's read fails.
+ */
+export type ReviewVerdictRead =
+	| { kind: "verdict"; verdict: ReviewVerdict }
+	| { kind: "none" }
+	| { kind: "failed"; reason: string };
+
+/**
+ * The review verdict the pull request's posts carry (ADR 0047, ADR 0053,
+ * ADR 0057, ADR 0063, ADR 0074): the newest record that carries the
+ * template's fixed score line on the pull request's comment and review
+ * timelines. The score judgment at settle and the rework prompt at handoff
+ * run this one read, so the two points never decide on different records
+ * for the same posts. A review turn posts its verdict as a comment or
+ * through its review, and the rule decides on what the agent posted, not on
+ * the posting path it chose. The records are read straight from the source,
+ * not from the projection: the review posts its verdict to the pull request,
+ * and that post is the durable record. Each timeline is read whole - the
+ * walk covers every page, because GitHub answers a long thread oldest first
+ * and the verdict is the newest post. A read that fails on one timeline
+ * contributes nothing, and the records that stand decide. Every timeline's
+ * read failing is the failure fact, with the read's reason. No membership,
+ * no pull request number, no resolvable source, or no record carrying the
+ * fixed score line is the none fact: the read found no verdict.
+ */
+export async function readReviewVerdict(
+	runner: CommandRunner,
+	sources: readonly TicketSourceConfig[],
 	pullRequest: Ticket,
-): Promise<number | null> {
-	const membership = newestMembershipOf(pullRequest);
+): Promise<ReviewVerdictRead> {
+	const membership = newestMembership(pullRequest.memberships);
+	if (membership === undefined) return { kind: "none" };
 	const number = externalKeyNumber(membership.externalKey);
-	if (number === null) return null;
-	const source = request.config.sources.find((item) => item.name === membership.sourceName);
-	if (source === undefined) return null;
+	if (number === null) return { kind: "none" };
+	const source = sources.find((item) => item.name === membership.sourceName);
+	if (source === undefined) return { kind: "none" };
 	let ghOptions: CommandOptions = {};
 	if (source.auth !== undefined) {
 		const resolved = await new GhAuthenticator(
 			source.host,
 			source.auth,
-			request.runner,
+			runner,
 			process.env,
 		).resolve();
-		if (!resolved.ok) return null;
+		if (!resolved.ok) return { kind: "none" };
 		ghOptions = resolved.options;
 	}
 	const repository = membership.repository.displayName;
-	// The two timelines the verdict can post to, read together and read whole:
-	// each read walks every page, because GitHub answers a long thread oldest
-	// first and the verdict is the newest post. A read that fails on one
-	// timeline contributes nothing, and the records that stand decide.
 	const [comments, reviews] = await Promise.all([
-		readVerdictList(
-			request,
+		readVerdictTimeline(
+			runner,
 			source,
 			ghOptions,
 			`repos/${repository}/issues/${number}/comments?per_page=100`,
 			"created_at",
+			"comment",
 		),
-		readVerdictList(
-			request,
+		readVerdictTimeline(
+			runner,
 			source,
 			ghOptions,
 			`repos/${repository}/pulls/${number}/reviews?per_page=100`,
 			"submitted_at",
+			"review",
 		),
 	]);
-	const records = [...(comments ?? []), ...(reviews ?? [])];
-	// Newest first across both timelines: the latest verdict is the one the
-	// judgment reads.
-	records.sort((a, b) => b.at.localeCompare(a.at));
-	for (const record of records) {
-		const score = scoreFromMessage(record.body);
-		if (score !== null) return score;
+	if (comments.records === undefined && reviews.records === undefined) {
+		// Every timeline's read failed: the failure is the fact, and the
+		// timelines' read reasons stand beside it.
+		return {
+			kind: "failed",
+			reason: `the comment read failed (${comments.reason}); the review read failed (${reviews.reason})`,
+		};
 	}
-	return null;
+	// Newest first across both timelines: the latest record is the one the
+	// rule reads.
+	const records = [...(comments.records ?? []), ...(reviews.records ?? [])].sort((a, b) =>
+		b.at.localeCompare(a.at),
+	);
+	for (const record of records) {
+		if (scoreFromMessage(record.body) !== null) return { kind: "verdict", verdict: record };
+	}
+	return { kind: "none" };
 }
 
 /**
- * One verdict list the score read collects: the pull request's comments or
- * its reviews, each record as its body and its time. The read walks every
- * page of its timeline, so a verdict on a long thread is in the list the
- * judgment sorts. Null when the read fails or the answer is not a list; the
- * other timeline's records stand.
+ * One verdict timeline the shared read collects: the pull request's
+ * comments or its reviews, each record as its body, its time, and its
+ * posting timeline. The read walks every page of its timeline, so a verdict
+ * on a long thread is in the list the rule sorts. The failure answer
+ * carries the read's reason: the other timeline's records still stand, and
+ * every timeline failing is the failure fact.
  */
-async function readVerdictList(
-	request: FireTransitionRequest,
+async function readVerdictTimeline(
+	runner: CommandRunner,
 	source: TicketSourceConfig,
 	ghOptions: CommandOptions,
 	path: string,
 	timeField: "created_at" | "submitted_at",
-): Promise<{ body: string; at: string }[] | null> {
+	timeline: VerdictTimeline,
+): Promise<{ records?: ReviewVerdict[]; reason?: string }> {
 	let result: CommandResult;
 	try {
-		result = await request.runner.run(
+		result = await runner.run(
 			"gh",
 			["api", "--paginate", "--hostname", source.host, path],
 			ghOptions,
 		);
-	} catch {
-		return null;
+	} catch (error) {
+		return { reason: `the ${timeline} read raised: ${errorMessage(error)}` };
 	}
-	if (result.code !== 0) return null;
+	if (result.code !== 0)
+		return { reason: firstNonEmptyLine(result.stderr) ?? `exit ${result.code}` };
 	let list: unknown;
 	try {
 		list = JSON.parse(result.stdout);
 	} catch {
-		return null;
+		return { reason: `the ${timeline} read answered no list` };
 	}
-	if (!Array.isArray(list)) return null;
-	return (list as Array<{ body?: unknown; created_at?: unknown; submitted_at?: unknown }>)
-		.filter(
-			(record): record is { body: string; created_at?: unknown; submitted_at?: unknown } =>
-				typeof record.body === "string",
-		)
-		.map((record) => ({ body: record.body, at: String(record[timeField] ?? "") }));
+	if (!Array.isArray(list)) return { reason: `the ${timeline} read answered no list` };
+	return {
+		records: (list as Array<{ body?: unknown; created_at?: unknown; submitted_at?: unknown }>)
+			.filter(
+				(record): record is { body: string; created_at?: unknown; submitted_at?: unknown } =>
+					typeof record.body === "string",
+			)
+			.map((record) => ({ timeline, body: record.body, at: String(record[timeField] ?? "") })),
+	};
+}
+
+/**
+ * The review score the pull request's verdicts carry: the score the shared
+ * verdict read's record reports (ADR 0074). Null when the read found no
+ * verdict: no record carries the fixed score line, a read fails on every
+ * timeline it answers, or the source cannot be resolved. The records are
+ * read straight from the source, not from the projection: the review posts
+ * its verdict to the pull request, and that post is the durable record the
+ * judgment reads.
+ */
+async function readPullRequestScore(
+	request: FireTransitionRequest,
+	pullRequest: Ticket,
+): Promise<number | null> {
+	const read = await readReviewVerdict(request.runner, request.config.sources, pullRequest);
+	if (read.kind !== "verdict") return null;
+	return scoreFromMessage(read.verdict.body);
 }
 
 /**

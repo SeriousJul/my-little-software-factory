@@ -139,7 +139,8 @@ context-window = "--autocompact {value}"
 # turns run on, or the plane action the type runs without an agent (ADR
 # 0068). Placeholders in a template: {repository}, {title},
 # {description}, {source-kind}, {external-key}, {source-url}, {labels},
-# {previous-message}. Any other brace pair is a startup error.
+# {previous-message}, {review-verdict}. Any other brace pair is a startup
+# error.
 # agent, model, thinking, and context-window are the Task profile: the
 # settings this task type's handoffs start on. agent must name an
 # [agents.*] table, model is free text the profile agent's model template
@@ -397,7 +398,7 @@ host = "github.com"
 
 | Key | Required | Default | What it does |
 | --- | --- | --- | --- |
-| `template` | exactly one of `template` or `action` | - | The prompt. Placeholders: `{repository}`, `{title}`, `{description}`, `{source-kind}`, `{external-key}`, `{source-url}`, `{labels}`, `{previous-message}`. Any other brace pair is a startup error, so an unknown name cannot stay literal in the prompt an agent receives. `{previous-message}` is empty on a first handoff and carries the previous agent's last message on a workflow handoff. |
+| `template` | exactly one of `template` or `action` | - | The prompt. Placeholders: `{repository}`, `{title}`, `{description}`, `{source-kind}`, `{external-key}`, `{source-url}`, `{labels}`, `{previous-message}`, `{review-verdict}`. Any other brace pair is a startup error, so an unknown name cannot stay literal in the prompt an agent receives. `{previous-message}` is empty on a first handoff and carries the previous agent's last message on a workflow handoff. `{review-verdict}` carries the pull request's review verdict, read live from the source when the handoff renders the prompt: the newest post on the pull request's comment and review timelines that carries the review template's fixed score line, under a one-line header naming its posting timeline and post time. A template without the placeholder issues no read. When no verdict stands or the read fails, the placeholder carries the fact and the agent reads the pull request's comments itself (ADR 0074). |
 | `action` | exactly one of `template` or `action` | - | The plane action the type runs instead of an agent's turn (ADR 0068): the plane starts it with no agent and no worktree, and the Handoff limit counts its attempts. The registry holds one action, `merge-pull-request`: the squash merge of the ticket's pull request. The action form takes no profile keys. |
 | `method` | no | `squash` | The merge method the `merge-pull-request` action runs with: `squash`, `merge`, or `rebase`. An omitted method takes the default. |
 | `agent` | no | `default-agent` | The Task profile's agent type: the agent a handoff of this type starts on. It must name an `[agents.*]` table. A transition's pin beats it. |

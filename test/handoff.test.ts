@@ -12,7 +12,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import type { FactoryConfig } from "../src/config.ts";
+import type { FactoryConfig, TicketSourceConfig } from "../src/config.ts";
 import type { Ticket } from "../src/domain/ticket.ts";
 import {
 	checkConsultationStart,
@@ -24,6 +24,7 @@ import {
 	renderPrompt,
 	renderSettingArgs,
 	resolveHandoffChoice,
+	reviewVerdictFill,
 	settingArgs,
 } from "../src/handoff.ts";
 import type { Consultation } from "../src/state.ts";
@@ -347,6 +348,55 @@ describe("renderPrompt", () => {
 		const prompt = renderPrompt("Prev: {previous-message}\n{description}", ticket, "settled");
 		expect(prompt).toBe("Prev: settled\nAdd a retry policy.");
 		expect(renderPrompt("Prev: {previous-message}", ticket)).toBe("Prev: ");
+	});
+
+	test("{review-verdict} takes the verdict fill, empty for a plain render", () => {
+		const prompt = renderPrompt(
+			"Verdict: {review-verdict}\n{description}",
+			ticket,
+			"settled",
+			"Posted as a review at 2026-08-31T12:00:00Z:\n- **Score:** 85 / 100",
+		);
+		expect(prompt).toBe(
+			"Verdict: Posted as a review at 2026-08-31T12:00:00Z:\n- **Score:** 85 / 100\nAdd a retry policy.",
+		);
+		expect(renderPrompt("Verdict: {review-verdict}", ticket)).toBe("Verdict: ");
+	});
+});
+
+describe("reviewVerdictFill", () => {
+	const body = "Required Changes:\n- Fix the tabs";
+
+	test("the standing verdict stands under its timeline and post time, with its body unchanged", () => {
+		expect(
+			reviewVerdictFill({
+				kind: "verdict",
+				verdict: { timeline: "review", at: "2026-08-31T12:00:00Z", body },
+			}),
+		).toBe(`Posted as a review at 2026-08-31T12:00:00Z:\n${body}`);
+		expect(
+			reviewVerdictFill({
+				kind: "verdict",
+				verdict: { timeline: "comment", at: "2026-08-31T13:00:00Z", body },
+			}),
+		).toBe(`Posted as a comment at 2026-08-31T13:00:00Z:\n${body}`);
+	});
+
+	test("no standing verdict is the fact line", () => {
+		expect(reviewVerdictFill({ kind: "none" })).toBe(
+			"No review verdict found on the pull request.",
+		);
+	});
+
+	test("every timeline failing is the failure fact with the read's reason", () => {
+		expect(
+			reviewVerdictFill({
+				kind: "failed",
+				reason: "the comment read failed (x); the review read failed (y)",
+			}),
+		).toBe(
+			"The review verdict read failed: the comment read failed (x); the review read failed (y).",
+		);
 	});
 });
 
@@ -3584,5 +3634,250 @@ describe("closeHandoffEnvironment: the Close cleanup", () => {
 		// command and still comes back as the reason the caller reports.
 		expect(failure).toBe("the server is down (workspace_close_failed)");
 		expect(runner.commands()).toEqual(["herdr worktree remove --workspace ws-1"]);
+	});
+});
+
+describe("the review verdict of the rework handoff prompt", () => {
+	// The shared seam of the issue: the handoff functions with a faked
+	// command runner. The verdict read's command shapes are the judgment's
+	// shapes, the pull request's two posting timelines, each walked to its
+	// last page (ADR 0047, ADR 0053, ADR 0057, ADR 0063, ADR 0074).
+	const COMMENT_READ: readonly string[] = [
+		"api",
+		"--paginate",
+		"--hostname",
+		"github.com",
+		"repos/acme/billing/issues/12/comments?per_page=100",
+	];
+	const REVIEW_READ: readonly string[] = [
+		"api",
+		"--paginate",
+		"--hostname",
+		"github.com",
+		"repos/acme/billing/pulls/12/reviews?per_page=100",
+	];
+
+	const verdictSource: TicketSourceConfig = {
+		name: "github",
+		kind: "github-pull-requests",
+		refreshIntervalSeconds: 60,
+		repositories: ["github.com/acme/billing"],
+		host: "github.com",
+	};
+
+	const reviewVerdictConfig: FactoryConfig = {
+		...BASE_CONFIG,
+		sources: [verdictSource],
+		taskTypes: {
+			...BASE_CONFIG.taskTypes,
+			rework: {
+				...BASE_CONFIG.taskTypes.rework,
+				template: "Verdict:\n{review-verdict}\n\nPrev: {previous-message}\n\nBody: {description}",
+			},
+		},
+	};
+
+	// The pull request ticket the rework handoff renders: its newest
+	// membership supplies the source name, the repository, and the pull
+	// request number.
+	const pullTicket: Ticket = {
+		...ticket,
+		identity: "github:github.com:P_12",
+		sourceKind: "github-pull-request",
+		externalKey: "#12",
+		title: "Persist source facts",
+		description: "The implementation of #5.",
+		url: "https://github.com/acme/billing/pulls/12",
+		labels: ["needs-work"],
+		memberships: [
+			{
+				identity: "github:github.com:P_12",
+				sourceKind: "github-pull-request",
+				externalKey: "#12",
+				sourceState: "open",
+				url: "https://github.com/acme/billing/pulls/12",
+				title: "Persist source facts",
+				description: "The implementation of #5.",
+				labels: ["needs-work"],
+				externalUpdatedAt: "2026-01-01T00:00:00Z",
+				repository: {
+					identity: "github.com/acme/billing",
+					displayName: "acme/billing",
+					cloneUrl: "https://github.com/acme/billing.git",
+				},
+				attributes: {},
+				sourceName: "github",
+				health: "healthy",
+			},
+		],
+	};
+
+	const reworkChoice = { ...defaultChoice, taskType: "rework" };
+
+	const VERDICT_BODY = "Required Changes:\n- Fix the tabs\n- **Score:** 85 / 100";
+
+	function setComments(
+		runner: FakeRunner,
+		comments: readonly { body: string; created_at?: string }[],
+	): void {
+		runner.set("gh", COMMENT_READ, { stdout: JSON.stringify(comments) });
+	}
+
+	function setReviews(
+		runner: FakeRunner,
+		reviews: readonly { body: string; submitted_at?: string }[],
+	): void {
+		runner.set("gh", REVIEW_READ, { stdout: JSON.stringify(reviews) });
+	}
+
+	/** The prompt string the agent receives, from the herdr prompt send. */
+	function promptOf(runner: FakeRunner): string {
+		const call = runner.calls.find(
+			(item) => item.command === "herdr" && item.args[0] === "agent" && item.args[1] === "prompt",
+		);
+		if (call === undefined) throw new Error("no prompt was sent");
+		return String(call.args[call.args.length - 1]);
+	}
+
+	function freshRework(
+		runner: FakeRunner,
+		config: FactoryConfig = reviewVerdictConfig,
+	): Promise<HandoffOutcome> {
+		conventionCheckout(runner);
+		stubLiveWorkspace(runner);
+		return handOffTicket(pullTicket, reworkChoice, { config, runner, home: HOME });
+	}
+
+	test("a template without the placeholder issues no verdict read", async () => {
+		// The gate: the read is issued only when the template text references
+		// the placeholder, so the command stream of a template that names no
+		// placeholder is unchanged.
+		const runner = new FakeRunner();
+		const outcome = await freshRework(runner, BASE_CONFIG);
+		expect(outcome.status).toBe("ok");
+		expect(runner.commands().filter((command) => command.startsWith("gh "))).toEqual([]);
+	});
+
+	test("a template with the placeholder reads both timelines", async () => {
+		const runner = new FakeRunner();
+		setComments(runner, []);
+		setReviews(runner, []);
+		const outcome = await freshRework(runner);
+		expect(outcome.status).toBe("ok");
+		expect(runner.commands()).toContain(`gh ${COMMENT_READ.join(" ")}`);
+		expect(runner.commands()).toContain(`gh ${REVIEW_READ.join(" ")}`);
+	});
+
+	test("the standing verdict fills the prompt: header and body unchanged", async () => {
+		const runner = new FakeRunner();
+		setComments(runner, []);
+		setReviews(runner, [{ body: VERDICT_BODY, submitted_at: "2026-08-31T12:00:00Z" }]);
+		const outcome = await freshRework(runner);
+		expect(outcome.status).toBe("ok");
+		expect(promptOf(runner)).toBe(
+			"Verdict:\n" +
+				`Posted as a review at 2026-08-31T12:00:00Z:\n${VERDICT_BODY}\n\n` +
+				"Prev: \n\n" +
+				"Body: The implementation of #5.",
+		);
+	});
+
+	test("the newest score-carrying record across both timelines decides", async () => {
+		// The rule is the judgment's: newest first across both timelines, and
+		// the first record that carries the fixed score line stands.
+		const runner = new FakeRunner();
+		setComments(runner, [
+			{ body: "On re-check:\n- **Score:** 95 / 100", created_at: "2026-08-31T13:00:00Z" },
+		]);
+		setReviews(runner, [{ body: VERDICT_BODY, submitted_at: "2026-08-31T12:00:00Z" }]);
+		const outcome = await freshRework(runner);
+		expect(outcome.status).toBe("ok");
+		expect(promptOf(runner)).toBe(
+			"Verdict:\n" +
+				"Posted as a comment at 2026-08-31T13:00:00Z:\nOn re-check:\n- **Score:** 95 / 100\n\n" +
+				"Prev: \n\n" +
+				"Body: The implementation of #5.",
+		);
+	});
+
+	test("no record carrying the score line fills the no-verdict fact", async () => {
+		const runner = new FakeRunner();
+		setComments(runner, [
+			{ body: "Looks good, no score line here.", created_at: "2026-08-31T12:00:00Z" },
+		]);
+		setReviews(runner, [{ body: "Approved.", submitted_at: "2026-08-31T13:00:00Z" }]);
+		const outcome = await freshRework(runner);
+		expect(outcome.status).toBe("ok");
+		expect(promptOf(runner)).toBe(
+			"Verdict:\n" +
+				"No review verdict found on the pull request.\n\n" +
+				"Prev: \n\n" +
+				"Body: The implementation of #5.",
+		);
+	});
+
+	test("every timeline failing fills the failure fact with the read's reason", async () => {
+		const runner = new FakeRunner();
+		runner.set("gh", COMMENT_READ, { code: 1, stderr: "rate limited by the source\n" });
+		runner.set("gh", REVIEW_READ, { code: 1, stderr: "the source timed out\n" });
+		const outcome = await freshRework(runner);
+		expect(outcome.status).toBe("ok");
+		expect(promptOf(runner)).toBe(
+			"Verdict:\n" +
+				"The review verdict read failed: the comment read failed (rate limited by the source); " +
+				"the review read failed (the source timed out).\n\n" +
+				"Prev: \n\n" +
+				"Body: The implementation of #5.",
+		);
+	});
+
+	test("one timeline failing: the standing records decide, no failure fact", async () => {
+		// The per-timeline fail-open the judgment runs: the failing timeline
+		// contributes nothing, and the standing timeline's record decides.
+		const runner = new FakeRunner();
+		setComments(runner, [{ body: VERDICT_BODY, created_at: "2026-08-31T12:00:00Z" }]);
+		runner.set("gh", REVIEW_READ, { code: 1, stderr: "the source timed out\n" });
+		const outcome = await freshRework(runner);
+		expect(outcome.status).toBe("ok");
+		const prompt = promptOf(runner);
+		expect(prompt).toContain(`Posted as a comment at 2026-08-31T12:00:00Z:\n${VERDICT_BODY}`);
+		expect(prompt).not.toContain("review verdict read failed");
+	});
+
+	test("the stored-workspace handoff and the restart carry the fill", async () => {
+		// The restart and the Work queue pickup render through the stored
+		// workspace's render point, the way the workflow handoff does: the
+		// verdict stands in the prompt with the last captured message beside
+		// it, and a new agent session starts with the same context.
+		const runner = new FakeRunner();
+		conventionCheckout(runner);
+		runner.set("herdr", ["workspace", "list"], {
+			stdout: workspaceListJson([{ id: "ws-stored" }]),
+		});
+		runner.set("herdr", ["tab", "create", "--workspace", "ws-stored", "--no-focus"], {
+			stdout: tabCreateJson("pane-2"),
+		});
+		setComments(runner, []);
+		setReviews(runner, [{ body: VERDICT_BODY, submitted_at: "2026-08-31T12:00:00Z" }]);
+
+		const outcome = await handOffStoredWorkspace({
+			ticket: pullTicket,
+			choice: reworkChoice,
+			config: reviewVerdictConfig,
+			runner,
+			home: HOME,
+			workspaceId: "ws-stored",
+			environment: "live-worktree",
+			previousTabId: "tab-prev",
+			previousMessage: "the last message",
+		});
+
+		expect(outcome.status).toBe("ok");
+		expect(promptOf(runner)).toBe(
+			"Verdict:\n" +
+				`Posted as a review at 2026-08-31T12:00:00Z:\n${VERDICT_BODY}\n\n` +
+				"Prev: the last message\n\n" +
+				"Body: The implementation of #5.",
+		);
 	});
 });

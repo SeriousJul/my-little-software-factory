@@ -1486,6 +1486,13 @@ describe("limits config keys", () => {
 		const config = validateConfig(data);
 		expect(config.taskTypes.implement.template).toContain("{previous-message}");
 	});
+
+	test("the review-verdict placeholder is a known prompt placeholder", () => {
+		const data = base();
+		data["task-types"].implement.template = "then: {review-verdict}";
+		const config = validateConfig(data);
+		expect(config.taskTypes.implement.template).toContain("{review-verdict}");
+	});
 });
 
 describe("logging config keys", () => {

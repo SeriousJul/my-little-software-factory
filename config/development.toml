@@ -260,18 +260,20 @@ pull-request-facts = ["needs-work"]
 template = '''
 Rework pull request {external-key}: {title}.
 
+### Review verdict
+
+{review-verdict}
+
 ### Instructions
 
-1. **Read Comments**
-   - Read last review comments.
+1. **Make Changes**
+   - Correct the code according to the verdict above.
+   - When the verdict section carries no verdict, read the pull request's last review comments yourself.
 
-2. **Make Changes**
-   - Correct the code according to the review comments.
-
-3. **Update Repository**
+2. **Update Repository**
    - Commit and push changes to this branch.
 
-4. **Update Pull Request**
+3. **Update Pull Request**
    - Write a summary of your changes in a new comment.
 
 Repository: {repository}

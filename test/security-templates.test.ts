@@ -89,7 +89,7 @@ function ticketOf(kind: keyof typeof tickets): Ticket {
 /** Every security prompt carries the common tail: no placeholder stays literal. */
 function noLiteralPlaceholders(prompt: string): void {
 	expect(prompt).not.toMatch(
-		/\{repository\}|\{title\}|\{description\}|\{source-kind\}|\{external-key\}|\{source-url\}|\{labels\}|\{previous-message\}/,
+		/\{repository\}|\{title\}|\{description\}|\{source-kind\}|\{external-key\}|\{source-url\}|\{labels\}|\{previous-message\}|\{review-verdict\}/,
 	);
 }
 
