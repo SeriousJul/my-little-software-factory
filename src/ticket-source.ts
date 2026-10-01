@@ -243,7 +243,10 @@ class GitHubTicketSource implements TicketSource {
 		const queries: string[] = [];
 		for (const repository of this.config.repositories) {
 			if (this.config.filter !== undefined) {
-				queries.push(`${this.kindQualifier()} repo:${repository} ${this.config.filter}`);
+				// The open scope stands with the filter: a source is the live
+				// snapshot of the work machine, and a closed item the filter
+				// still matches (a label it kept) must not enter the list.
+				queries.push(`is:open ${this.kindQualifier()} repo:${repository} ${this.config.filter}`);
 				continue;
 			}
 			const scope = `is:open ${this.kindQualifier()} repo:${repository} -label:blocked`;

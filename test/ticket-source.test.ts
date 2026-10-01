@@ -263,6 +263,10 @@ describe("GitHub ticket source contract", () => {
 		expect(request).toContain("is:issue repo:acme/factory label:epic author:me");
 		expect(request).not.toContain("ready-for-agent");
 		expect(request).not.toContain("blocked");
+		// A source is the live snapshot of the work machine: the open scope
+		// stands with the filter, so a closed item the filter still matches
+		// (a label it kept) never enters the list.
+		expect(request).toContain("is:open");
 
 		// The same rule holds for pull requests: no draft policy either.
 		const prRunner = new SourceRunner([page([pullRequest()])]);
@@ -271,6 +275,7 @@ describe("GitHub ticket source contract", () => {
 			prRunner,
 		).fetch();
 		const prRequest = searchQueryOf(prRunner.calls[0]);
+		expect(prRequest).toContain("is:open");
 		expect(prRequest).toContain("is:pr repo:acme/factory label:epic");
 		expect(prRequest).not.toContain("ready-for-review");
 		expect(prRequest).not.toContain("draft:false");
