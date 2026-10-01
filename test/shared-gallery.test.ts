@@ -205,13 +205,15 @@ describe("the shared control gallery", () => {
 	// no Group, so the select list is the init's entry for it (ADR 0082). The
 	// reviewer's states are the search, the list's rows, and the note that
 	// names the keys the list answers to.
-	test("the repository select example holds its search, its rows, and its note", async () => {
+	test("the repository select example holds its search, its rows, its mark, and its note", async () => {
 		const setup = await gallery("repository-select", 120, 34);
 		const frame = await awaitFrame(setup, (f) => f.includes("jul/notes"), "the list rows");
 		expect(frame).toContain("Init a repository");
 		expect(frame).toContain("acme/factory");
 		expect(frame).toContain("acme/billing");
-		expect(frame).toContain("Enter selects. Esc closes.");
+		// The marked row wears the queue's badge word at its end (ADR 0083).
+		expect(frame).toContain("queued");
+		expect(frame).toContain("Tab toggles the queue. Enter selects. Esc closes.");
 	});
 
 	test("the gallery walks past the select list without losing its keys", async () => {

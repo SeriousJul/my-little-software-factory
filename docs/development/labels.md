@@ -54,7 +54,9 @@ organizations' repositories on the ambient `gh` credentials, in one read, and
 filters as the operator types. Enter on a row resolves the repository's local
 checkout from the `repos` table or the conventional path and opens the same
 confirmation panel. A repository without a local checkout is refused with the
-path the act needs; the plane never clones.
+path the act needs; the plane never clones. Several repositories at once: mark
+their rows with `Tab`, and Enter runs the queue - one confirmation panel per
+repository, in list order (ADR 0083).
 
 `blocked` stands on the source side and the plane never writes it, so the init
 never creates it. If you create labels by hand instead, use the repository's

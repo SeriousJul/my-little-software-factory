@@ -91,3 +91,4 @@ body states the context, the decision, and the consequences.
 - [ADR 0080: The plane sends a desktop notification per standing warning or error fact](./0080-the-plane-sends-a-desktop-notification-per-standing-warning-or-error-fact.md)
 - [ADR 0081: The operator pages carry usage, and the ADRs carry the mechanics](./0081-the-operator-pages-carry-usage-and-the-adrs-carry-the-mechanics.md)
 - [ADR 0082: The select list opens the init for a repository with no ticket](./0082-the-select-list-opens-the-init-for-a-repository-with-no-ticket.md)
+- [ADR 0083: The select list's queue runs the init per repository](./0083-the-select-lists-queue-runs-the-init-per-repository.md)

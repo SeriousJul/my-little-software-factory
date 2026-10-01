@@ -99,7 +99,10 @@ A repository the factory has not seen yet stands in no Group. Start its init
 from the select list instead: press `o` in the main view, type to find the
 repository, and press Enter. The list shows your GitHub repositories and the
 repositories of the organizations you belong to. The repository needs a local
-clone on the path the plane names; the plane never clones.
+clone on the path the plane names; the plane never clones. To init several
+repositories at once, mark their rows with `Tab` and press Enter: the plane
+runs the init per repository, in list order, one confirmation panel at a
+time (ADR 0083).
 
 ## Extend the workflow machine
 

@@ -32,7 +32,7 @@ import {
 	withApp,
 } from "./app-harness.ts";
 import { BASE_CONFIG } from "./base-config.ts";
-import { FakeRunner } from "./fake-runner.ts";
+import { agentListJson, FakeRunner } from "./fake-runner.ts";
 import { cleanupStateFixtures, freshState } from "./state-fixture.ts";
 
 /** The viewer answer the list stands on in these tests. */
@@ -71,6 +71,26 @@ const VIEWER = {
 };
 
 const viewerJson = () => JSON.stringify({ data: { viewer: VIEWER } });
+
+/**
+ * The planning commands one checkout answers, so the select list's Enter can
+ * reach the confirmation panel: the branch, the fetch, the file reads, the
+ * labels. The instruction file reads out as AGENTS.md, so the panel owes no
+ * choice and its confirm is the plain act.
+ */
+const planCanned = (runner: FakeRunner, checkout: string, identity: string): void => {
+	runner.set("git", ["-C", checkout, "symbolic-ref", "refs/remotes/origin/HEAD"], {
+		stdout: "refs/remotes/origin/main\n",
+	});
+	runner.set("git", ["-C", checkout, "fetch", "origin", "main"], {});
+	runner.set("git", ["-C", checkout, "show", "origin/main:CLAUDE.md"], { code: 1 });
+	runner.set("git", ["-C", checkout, "show", "origin/main:AGENTS.md"], {
+		stdout: "existing agents\n",
+	});
+	runner.set("gh", ["label", "list", "--repo", `github.com/${identity}`, "--json", "name"], {
+		stdout: "[]",
+	});
+};
 
 /** The exact gh call the list read sends, for a canned answer. */
 const viewerArgs = (host = "github.com"): readonly string[] => [
@@ -355,6 +375,246 @@ describe("the repository select panel", () => {
 				WIDTH,
 				HEIGHT,
 				{ config: BASE_CONFIG, runner, home, state },
+			);
+		} finally {
+			cleanupStateFixtures();
+		}
+	});
+
+	// The queue the operator marks with Tab (ADR 0083): one repository per
+	// entry, one confirmation panel per entry, in list order.
+	test("Tab marks the row for the queue, and the key unmarks it", async () => {
+		const runner = new FakeRunner();
+		runner.set("gh", viewerArgs(), { stdout: viewerJson() });
+		await withApp(
+			async (setup) => {
+				setup.mockInput.pressKey("o");
+				await awaitFrame(setup, (f) => f.includes("acme/factory"), "the list rows");
+				setup.mockInput.pressTab();
+				await awaitFrame(setup, (f) => f.includes("queued"), "the queue mark");
+				setup.mockInput.pressTab();
+				await awaitFrame(setup, (f) => !f.includes("queued"), "the mark to lift");
+			},
+			WIDTH,
+			HEIGHT,
+			{ config: BASE_CONFIG, runner },
+		);
+	});
+
+	test("a marking of two runs the queue, one confirmation per row, in list order", async () => {
+		const runner = new FakeRunner();
+		runner.set("gh", viewerArgs(), { stdout: viewerJson() });
+		const home = join(tmpdir(), `factory-select-home-${Date.now()}`);
+		const factory = join(home, "src", "factory");
+		const billing = join(home, "src", "billing");
+		mkdirSync(factory, { recursive: true });
+		mkdirSync(billing, { recursive: true });
+		planCanned(runner, factory, "acme/factory");
+		planCanned(runner, billing, "acme/billing");
+		runner.setDefault({ code: 0, stdout: "" });
+		// A readable agent list keeps the observation quiet, so the
+		// Message line holds the line the queue leaves there.
+		runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+		const state = freshState();
+		try {
+			await withApp(
+				async (setup) => {
+					setup.mockInput.pressKey("o");
+					await awaitFrame(setup, (f) => f.includes("acme/factory"), "the list rows");
+					for (const letter of "acme") setup.mockInput.pressKey(letter);
+					await awaitFrame(
+						setup,
+						(f) => f.includes("acme/factory") && f.includes("acme/billing"),
+						"the filter to settle",
+					);
+					// A short rest lets the last typed character settle before the
+					// Tab: the keys arrive in separate reads, the way an operator's
+					// do. Mark both rows, in list order.
+					await new Promise((r) => setTimeout(r, 25));
+					setup.mockInput.pressTab();
+					await awaitFrame(setup, (f) => f.includes("queued"), "the first mark");
+					setup.mockInput.pressKey("j");
+					await awaitFrame(
+						setup,
+						(f) => f.includes("❯ acme/billing") && f.includes("queued"),
+						"the cursor on the second row",
+					);
+					setup.mockInput.pressTab();
+					await awaitFrame(
+						setup,
+						(f) => (f.match(/queued/gu) ?? []).length === 2,
+						"the second mark",
+					);
+					setup.mockInput.pressEnter();
+					// The queue runs in list order: the first marked row opens first.
+					await awaitFrame(setup, (f) => f.includes("Init acme/factory"), "the first confirmation");
+					// Cancel skips the entry, and the next row's panel stands in its place.
+					setup.mockInput.pressEscape();
+					await awaitFrame(
+						setup,
+						(f) => f.includes("Init acme/billing"),
+						"the second confirmation",
+					);
+					// The drained queue leaves its settled line on the Message line.
+					setup.mockInput.pressEscape();
+					const frame = await awaitFrame(
+						setup,
+						(f) => f.includes("the init queue settled: 0 ran, 2 skipped, 0 refused"),
+						"the settled line",
+					);
+					expect(frame).not.toContain("Init acme");
+				},
+				WIDTH,
+				HEIGHT,
+				{ config: BASE_CONFIG, runner, home, state },
+			);
+		} finally {
+			cleanupStateFixtures();
+		}
+	});
+
+	test("a queue entry without a checkout is refused, and the queue moves on", async () => {
+		const runner = new FakeRunner();
+		runner.set("gh", viewerArgs(), { stdout: viewerJson() });
+		const home = join(tmpdir(), `factory-select-home-${Date.now()}`);
+		// Only the second row holds a checkout; the queue head refuses.
+		const billing = join(home, "src", "billing");
+		mkdirSync(billing, { recursive: true });
+		planCanned(runner, billing, "acme/billing");
+		runner.setDefault({ code: 0, stdout: "" });
+		// A readable agent list keeps the observation quiet, so the
+		// Message line holds the line the queue leaves there.
+		runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+		const state = freshState();
+		try {
+			await withApp(
+				async (setup) => {
+					setup.mockInput.pressKey("o");
+					await awaitFrame(setup, (f) => f.includes("acme/factory"), "the list rows");
+					for (const letter of "acme") setup.mockInput.pressKey(letter);
+					await awaitFrame(
+						setup,
+						(f) => f.includes("acme/factory") && f.includes("acme/billing"),
+						"the filter to settle",
+					);
+					// A short rest lets the last typed character settle before the
+					// Tab: the keys arrive in separate reads, the way an
+					// operator's do.
+					await new Promise((r) => setTimeout(r, 25));
+					setup.mockInput.pressTab();
+					await awaitFrame(setup, (f) => f.includes("queued"), "the first mark");
+					setup.mockInput.pressKey("j");
+					await awaitFrame(
+						setup,
+						(f) => f.includes("❯ acme/billing"),
+						"the cursor on the second row",
+					);
+					setup.mockInput.pressTab();
+					await awaitFrame(
+						setup,
+						(f) => (f.match(/queued/gu) ?? []).length === 2,
+						"the second mark",
+					);
+					setup.mockInput.pressEnter();
+					// The head has no checkout: the refusal names its path, and the
+					// next row's confirmation stands in its place.
+					const frame = await awaitFrame(
+						setup,
+						(f) => f.includes("Init acme/billing"),
+						"the next confirmation",
+					);
+					expect(frame).toContain(
+						`acme/factory has no local checkout at ${join(home, "src", "factory")}`,
+					);
+					setup.mockInput.pressEscape();
+					const settled = await awaitFrame(
+						setup,
+						(f) => f.includes("the init queue settled: 0 ran, 1 skipped, 1 refused"),
+						"the settled line",
+					);
+					expect(settled).not.toContain("Init acme");
+				},
+				WIDTH,
+				HEIGHT,
+				{ config: BASE_CONFIG, runner, home, state },
+			);
+		} finally {
+			cleanupStateFixtures();
+		}
+	});
+
+	test("a failed act stops the queue, and names the repository on the line", async () => {
+		const runner = new FakeRunner();
+		runner.set("gh", viewerArgs(), { stdout: viewerJson() });
+		const home = join(tmpdir(), `factory-select-home-${Date.now()}`);
+		const factory = join(home, "src", "factory");
+		const billing = join(home, "src", "billing");
+		mkdirSync(factory, { recursive: true });
+		mkdirSync(billing, { recursive: true });
+		planCanned(runner, factory, "acme/factory");
+		planCanned(runner, billing, "acme/billing");
+		runner.setDefault({ code: 0, stdout: "" });
+		// A readable agent list keeps the observation quiet, so the
+		// Message line holds the line the queue leaves there.
+		runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+		const state = freshState();
+		// A source the operator named over the act's name stops the commit before
+		// the act issues a command: a deterministic failure of the entry's act.
+		const config: typeof BASE_CONFIG = {
+			...BASE_CONFIG,
+			sources: [
+				{
+					name: "acme/factory-issues",
+					kind: "github-issues",
+					refreshIntervalSeconds: 60,
+					repositories: ["other/elsewhere"],
+					host: "github.com",
+				},
+			],
+		};
+		try {
+			await withApp(
+				async (setup) => {
+					setup.mockInput.pressKey("o");
+					await awaitFrame(setup, (f) => f.includes("acme/factory"), "the list rows");
+					for (const letter of "acme") setup.mockInput.pressKey(letter);
+					await awaitFrame(
+						setup,
+						(f) => f.includes("acme/factory") && f.includes("acme/billing"),
+						"the filter to settle",
+					);
+					// A short rest lets the last typed character settle before the
+					// Tab: the keys arrive in separate reads, the way an
+					// operator's do.
+					await new Promise((r) => setTimeout(r, 25));
+					setup.mockInput.pressTab();
+					await awaitFrame(setup, (f) => f.includes("queued"), "the first mark");
+					setup.mockInput.pressKey("j");
+					await awaitFrame(
+						setup,
+						(f) => f.includes("❯ acme/billing"),
+						"the cursor on the second row",
+					);
+					setup.mockInput.pressTab();
+					await awaitFrame(
+						setup,
+						(f) => (f.match(/queued/gu) ?? []).length === 2,
+						"the second mark",
+					);
+					setup.mockInput.pressEnter();
+					await awaitFrame(setup, (f) => f.includes("Init acme/factory"), "the first confirmation");
+					setup.mockInput.pressEnter();
+					const frame = await awaitFrame(
+						setup,
+						(f) => f.includes("a source named acme/factory-issues is already configured"),
+						"the failure line",
+					);
+					// The queue stopped: the next row's panel never opens.
+					expect(frame).not.toContain("Init acme/billing");
+				},
+				WIDTH,
+				HEIGHT,
+				{ config, runner, home, state },
 			);
 		} finally {
 			cleanupStateFixtures();

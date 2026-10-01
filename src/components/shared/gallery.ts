@@ -795,9 +795,12 @@ function GalleryRepositorySelect(): ReactElement {
 		status: "success",
 		repositories: GALLERY_REPOSITORIES,
 	};
+	// One row stands marked for the queue (ADR 0083), so the reviewer sees the
+	// badge the operator's Tab wears on a row.
 	return createElement(RepositorySelectPanel, {
 		fetchRepositories: () => Promise.resolve(read),
 		onSelect: () => undefined,
+		initialPending: ["github.com/acme/factory"],
 		onCancel: () => undefined,
 		inputActive: false,
 		context,

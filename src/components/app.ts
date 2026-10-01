@@ -222,6 +222,18 @@ type Panel =
 	  };
 
 /**
+ * The init queue (ADR 0083): the repositories the operator marked in the
+ * select list, one entry per repository. The entry under review stands in
+ * the confirmation panel; the rest wait here in list order, and the counts
+ * stand for the settled line the queue leaves when it drains.
+ */
+interface RepositoryInitQueue {
+	remaining: readonly InitableRepository[];
+	ran: number;
+	skipped: number;
+	refused: number;
+}
+/**
  * The dim note under the last stream lines when the latest read failed:
  * the Stale Agent output, the glossary's name for it.
  */
@@ -698,6 +710,10 @@ export function App({
 	const [utility, setUtility] = useState<Utility>(null);
 	const [healths, setHealths] = useState(() => state?.sourceHealths() ?? []);
 	const [panel, setPanel] = useState<Panel>(null);
+	// The queue behind a queued init (ADR 0083): the entries waiting for
+	// their turn stand in the ref, not in state, because no surface renders
+	// them - the confirmation panel names only the entry under review.
+	const repositoryInitQueue = useRef<RepositoryInitQueue | null>(null);
 	/**
 	 * The Live view's stream: the lines of the last pane read, and the stale
 	 * note while the latest read failed. Null while no stream runs.
@@ -4201,13 +4217,62 @@ export function App({
 	// repositories and those of their organizations, on the ambient gh
 	// identity, which is the identity the operator logs in to work.
 	const fetchInitableRepositories = () => listInitableRepositories(commandRunner, "github.com");
+	// The queue the select list's Enter hands over (ADR 0083): one repository
+	// per entry, one confirmation panel per entry, in list order. A single
+	// entry runs the plain select the panel has always run.
+	function startRepositoryInitQueue(queue: readonly InitableRepository[]) {
+		if (queue.length === 0) return;
+		const [head, ...rest] = queue;
+		repositoryInitQueue.current =
+			rest.length > 0 ? { remaining: rest, ran: 0, skipped: 0, refused: 0 } : null;
+		void openRepositorySelectFor(head).catch((error) => setErrorMessage(errorMessage(error)));
+	}
+	// One entry of the queue settles (ADR 0083): the outcome counts, the next
+	// entry's confirmation panel opens in the one under review's place, and
+	// the drained queue leaves its settled line on the Message line. A failed
+	// act stops the queue: the line above already names the repository and
+	// the failure, and the operator takes the rest back by hand when ready.
+	function advanceRepositoryInitQueue(outcome: "ran" | "skipped" | "refused" | "failed") {
+		const queue = repositoryInitQueue.current;
+		if (queue === null) return;
+		if (outcome === "failed") {
+			repositoryInitQueue.current = null;
+			return;
+		}
+		queue[outcome] += 1;
+		if (queue.remaining.length === 0) {
+			repositoryInitQueue.current = null;
+			// The panel under review closes with the last entry: the settle line
+			// stands on the base view's Message line, not behind a panel. A
+			// refusal earlier in the queue left its error on that line, and an
+			// error outranks a notice: the settle line ends the fact it replaces.
+			setPanel(null);
+			clearOperationMessage("none");
+			setNoticeMessage(
+				`the init queue settled: ${queue.ran} ran, ${queue.skipped} skipped, ${queue.refused} refused`,
+			);
+			return;
+		}
+		const [head, ...rest] = queue.remaining;
+		queue.remaining = rest;
+		void openRepositorySelectFor(head).catch((error) => setErrorMessage(errorMessage(error)));
+	}
+	// The cancel of a queued entry (ADR 0083): the entry leaves the queue
+	// untouched, and the next stands in its place. With no queue behind it,
+	// cancel is the way out with nothing changed.
+	function skipRepositoryInitEntry() {
+		if (repositoryInitQueue.current === null) setPanel(null);
+		else advanceRepositoryInitQueue("skipped");
+	}
 	// The chosen repository from the select list: the checkout resolves by the
 	// plane's own rule, the plan runs the way the Group header's `i` runs it,
 	// and the confirmation panel opens. A repository without a local checkout
-	// gets the refusal that names the path it needs (ADR 0082).
+	// gets the refusal that names the path it needs (ADR 0082). A refusal in
+	// a queue skips the entry and moves on (ADR 0083).
 	async function openRepositorySelectFor(choice: InitableRepository) {
 		if (state === undefined) {
 			setErrorMessage("the repository init needs SQLite state");
+			advanceRepositoryInitQueue("failed");
 			return;
 		}
 		const cfg = configRef.current;
@@ -4221,6 +4286,7 @@ export function App({
 			setErrorMessage(
 				`${choice.displayName} has no local checkout at ${checkout} to work a throwaway worktree in`,
 			);
+			advanceRepositoryInitQueue("refused");
 			return;
 		}
 		const plan = await planRepositoryInit({
@@ -4232,6 +4298,7 @@ export function App({
 		});
 		if ("reason" in plan) {
 			setErrorMessage(plan.reason);
+			advanceRepositoryInitQueue("refused");
 			return;
 		}
 		setPanel({
@@ -4258,6 +4325,7 @@ export function App({
 		const factoryState = state;
 		if (factoryState === undefined) {
 			setErrorMessage("the repository init needs SQLite state");
+			advanceRepositoryInitQueue("failed");
 			return;
 		}
 		// The act's progress on the Message line (ADR 0075, story 27): a word
@@ -4280,6 +4348,7 @@ export function App({
 		clearWorkingMessage("repository-init");
 		if (flow.ok === false) {
 			setErrorMessage(flow.reason);
+			advanceRepositoryInitQueue("failed");
 			return;
 		}
 		// The sources the flow registered join the config: the operator's pane
@@ -4307,6 +4376,7 @@ export function App({
 		);
 		await write;
 		setNoticeMessage(flow.message);
+		advanceRepositoryInitQueue("ran");
 	}
 	function selectWorkQueue(index: number) {
 		const next = clamp(index, 0, Math.max(0, workQueueRef.current.length - 1));
@@ -5253,8 +5323,10 @@ export function App({
 						void runRepositoryInitConfirm(panel.repository, panel.plan, "AGENTS.md").catch(
 							(error) => setErrorMessage(errorMessage(error)),
 						);
+					// The cancel of a queued entry skips it and moves on (ADR 0083).
+					else skipRepositoryInitEntry();
 				},
-				onCancel: () => setPanel(null),
+				onCancel: () => skipRepositoryInitEntry(),
 				context: ticketContext,
 				inputActive: utility === null,
 				onHelp: () => openGuide("action-panel"),
@@ -5266,11 +5338,9 @@ export function App({
 			panel.kind === "repository-select" &&
 			createElement(RepositorySelectPanel, {
 				fetchRepositories: fetchInitableRepositories,
-				onSelect: (choice) => {
+				onSelect: (queue) => {
 					setPanel(null);
-					void openRepositorySelectFor(choice).catch((error) =>
-						setErrorMessage(errorMessage(error)),
-					);
+					startRepositoryInitQueue(queue);
 				},
 				onCancel: () => setPanel(null),
 				context: ticketContext,

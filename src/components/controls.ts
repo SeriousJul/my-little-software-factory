@@ -206,6 +206,13 @@ export interface ControlContext {
 	repositoryCount?: number;
 	/** The text of the init's select list's search (ADR 0082). */
 	searchText?: string;
+	/**
+	 * The count of rows the operator marked for the init queue (ADR 0083).
+	 *
+	 * The confirm control reads the fact: a marking of two or more names the
+	 * queue on the bar, because Enter then starts it instead of selecting one.
+	 */
+	pendingCount?: number;
 	listCanMove: boolean;
 	detailCanScroll: boolean;
 	sourceCount: number;
@@ -1375,12 +1382,37 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		keyLabel: "Enter",
 		scope: "control-plane",
 		actionBar: true,
+		// A marking of two or more turns the select into a queue start (ADR
+		// 0083): the hint names the act the key takes then.
+		barLabel: (context) =>
+			context.pendingCount !== undefined && context.pendingCount >= 2 ? "Start queue" : "Select",
 		priority: 70,
 		modes: ["repository-select"],
 		availability: (context) =>
 			context.repositoryCount !== undefined && context.repositoryCount > 0
 				? available()
 				: unavailable("the list holds no repository"),
+	},
+	{
+		// The select list's queue mark (ADR 0083): Tab marks the row under the
+		// cursor for the init queue, and the key unmarks it. A marking of two
+		// or more makes Enter run the queue, one repository per confirmation
+		// panel, in list order.
+		id: "repository-select-toggle",
+		label: "Toggle",
+		keys: () => ["tab"],
+		keyLabel: "Tab",
+		scope: "control-plane",
+		actionBar: true,
+		// Beside the confirm: the mark is the primary act the operator reaches
+		// for, so it outranks the confirm and the clear on the bar.
+		priority: 75,
+		modes: ["repository-select"],
+		availability: (context) =>
+			context.repositoryCount !== undefined && context.repositoryCount > 0
+				? available()
+				: unavailable("the list holds no repository"),
+		guideNote: "marks the row under the cursor for the queue, and unmarks it",
 	},
 	{
 		// The select list's explicit clear (ADR 0082): Backspace edits the

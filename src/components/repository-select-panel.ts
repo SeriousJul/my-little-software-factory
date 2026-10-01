@@ -10,11 +10,17 @@
  * runs, so the confirmation panel the operator reads next is the one they
  * know.
  *
+ * The operator marks rows for the queue with Tab (ADR 0083): a marking of
+ * two or more makes Enter run the queue, one repository per confirmation
+ * panel, in list order. Anything else is the select of the row under the
+ * cursor, the way the panel's single select has always run.
+ *
  * Every control comes from the shared library: the search is the shared Text
  * field, the list is the shared region with its wrap and auto-scroll, and the
  * box is the shared modal chrome. The keys dispatch through the catalogue in
  * the repository-select mode: typing edits the search, up and down and j and
- * k move the cursor, Enter selects the row under the cursor, Del clears the
+ * k move the cursor, Tab marks the row under the cursor for the queue, Enter
+ * selects the row under the cursor or starts the queue, Del clears the
  * search, Esc closes, and the catalogue names them on the Action bar.
  */
 import { createElement, useTerminalDimensions } from "@opentui/react";
@@ -44,7 +50,10 @@ interface RepositorySelectPanelProps {
 		| { status: "success"; repositories: readonly InitableRepository[] }
 		| { status: "failed"; reason: string }
 	>;
-	onSelect: (repository: InitableRepository) => void;
+	/** The queue the Enter hands over: the marked rows, or the cursor's row. */
+	onSelect: (queue: readonly InitableRepository[]) => void;
+	/** The rows a presentation arrives with marked, for the queue's badge. */
+	initialPending?: readonly string[];
 	onCancel: () => void;
 	/** The base control facts, preserved while this panel owns input. */
 	context: ControlContext;
@@ -74,10 +83,13 @@ const PREFERRED_LIST_ROWS = 12;
  * for less room than its own content paints.
  */
 const MIN_LIST_ROWS = 1;
+/** The badge word a row marked for the queue wears at its end (ADR 0083). */
+const QUEUED_BADGE = " queued";
 
 export function RepositorySelectPanel({
 	fetchRepositories,
 	onSelect,
+	initialPending,
 	onCancel,
 	context,
 	inputActive = true,
@@ -90,6 +102,9 @@ export function RepositorySelectPanel({
 	const { width: terminalWidth, height: terminalHeight } = useTerminalDimensions();
 	const [status, setStatus] = useState<RepositorySelectStatus>({ state: "loading" });
 	const [query, setQuery] = useState("");
+	// The rows the operator marked for the queue (ADR 0083). The mark is the
+	// panel's own state: the list keeps no draft, so a close discards it.
+	const [pending, setPending] = useState<ReadonlySet<string>>(() => new Set(initialPending ?? []));
 	// The read runs once per open: the panel unmounts on close, so a new
 	// open is a new read, and the fetch the screen hands in owns the egress.
 	const fetchRef = useRef(fetchRepositories);
@@ -138,6 +153,7 @@ export function RepositorySelectPanel({
 			listCanMove: filtered.length > 0,
 			repositoryCount: filtered.length,
 			searchText: query,
+			pendingCount: pending.size,
 		}),
 		active: inputActive,
 		onUnavailable,
@@ -159,9 +175,32 @@ export function RepositorySelectPanel({
 			},
 			"select-repository": ({ key }) => {
 				key.preventDefault?.();
-				region.confirm((row) => {
-					const chosen = repositories.find((item) => item.identity === row.key);
-					if (chosen !== undefined) onSelect(chosen);
+				region.confirm(() => {
+					// The queue the marking holds, in list order. A marking of two
+					// or more runs the queue; anything else is the select of the
+					// row under the cursor (ADR 0083).
+					const marked = rows
+						.filter((row) => pending.has(row.key))
+						.map((row) => repositories.find((item) => item.identity === row.key))
+						.filter((item): item is InitableRepository => item !== undefined);
+					const queue =
+						marked.length >= 2
+							? marked
+							: [repositories.find((item) => item.identity === rows[region.at]?.key)].filter(
+									(item): item is InitableRepository => item !== undefined,
+								);
+					if (queue.length > 0) onSelect(queue);
+				});
+			},
+			"repository-select-toggle": ({ key }) => {
+				key.preventDefault?.();
+				const row = rows[region.at];
+				if (row === undefined) return;
+				setPending((prev) => {
+					const next = new Set(prev);
+					if (next.has(row.key)) next.delete(row.key);
+					else next.add(row.key);
+					return next;
 				});
 			},
 			"repository-select-clear": ({ key }) => {
@@ -201,33 +240,41 @@ export function RepositorySelectPanel({
 	} else {
 		// The row is the repository's display name, whole: the Action item's
 		// 20-cell label column would cut an owner/name the operator is choosing.
+		// A marked row wears the queue's badge word at its end, the way the
+		// list's state badges stand (ADR 0083).
 		const selectedKey = rows[region.at]?.key;
-		for (const row of region.window)
+		for (const row of region.window) {
+			const isCursor = row.key === selectedKey;
+			const isPending = pending.has(row.key);
+			const name = truncateToWidth(
+				`${isCursor ? "❯ " : "  "}${row.label}`,
+				frame.contentWidth - (isPending ? QUEUED_BADGE.length : 0),
+			);
 			bodyRows.push(
 				createElement(
-					"text",
-					{
-						key: row.key,
-						style: { width: "100%", height: 1 },
-						fg:
-							row.key === selectedKey
-								? (ink.focusedText.fg ?? undefined)
-								: (ink.text.fg ?? undefined),
-					},
-					padToWidth(
-						truncateToWidth(
-							`${row.key === selectedKey ? "❯ " : "  "}${row.label}`,
-							frame.contentWidth,
-						),
-						frame.contentWidth,
+					"box",
+					{ key: row.key, style: { width: "100%", height: 1, flexDirection: "row" } },
+					createElement(
+						"text",
+						{
+							fg: isCursor ? (ink.focusedText.fg ?? undefined) : (ink.text.fg ?? undefined),
+						},
+						padToWidth(name, frame.contentWidth - (isPending ? QUEUED_BADGE.length : 0)),
 					),
+					isPending
+						? createElement("text", { fg: ink.detail.fg ?? undefined }, QUEUED_BADGE)
+						: null,
 				),
 			);
+		}
 	}
 
 	const rangePart = region.rangeText !== undefined ? `${region.rangeText}  ` : "";
 	const note = padToWidth(
-		truncateToWidth(`${rangePart}Enter selects. Esc closes.`, frame.contentWidth),
+		truncateToWidth(
+			`${rangePart}Tab toggles the queue. Enter selects. Esc closes.`,
+			frame.contentWidth,
+		),
 		frame.contentWidth,
 	);
 
@@ -256,7 +303,7 @@ export function RepositorySelectPanel({
 				),
 			],
 			below: [],
-			minRows: SEARCH_ROWS + NOTE_ROWS,
+			minRows: SEARCH_ROWS + NOTE_ROWS + MIN_LIST_ROWS,
 		},
 		message,
 		bar: {
@@ -266,6 +313,7 @@ export function RepositorySelectPanel({
 				listCanMove: filtered.length > 0,
 				repositoryCount: filtered.length,
 				searchText: query,
+				pendingCount: pending.size,
 			}),
 		},
 	});
