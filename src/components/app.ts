@@ -2002,6 +2002,16 @@ export function App({
 	 * the read and the write; the fire's labels stand either way, because a
 	 * fire writes convergent facts.
 	 */
+	// The forced refresh of the pull request sources, the one seam the fires
+	// read the projection through (ADR 0027, ADR 0076): the settle-time fire,
+	// the manual re-fire, and the recorded skip's sweep all pull the pull
+	// request sources the way this answers it.
+	const refreshPullRequestSources = useCallback(async (): Promise<void> => {
+		for (const source of configRef.current.sources) {
+			if (source.kind === "github-pull-requests")
+				await coordinatorRef.current?.refreshAndWait(source.name);
+		}
+	}, []);
 	const runRefire = async (ticket: Ticket): Promise<void> => {
 		if (
 			state === undefined ||
@@ -2028,19 +2038,13 @@ export function App({
 			}
 			// Read the source as it stands now: the fire reads the projection
 			// the refresh just landed, the way the settle-time fire does.
-			const refresh = async () => {
-				for (const source of configRef.current.sources) {
-					if (source.kind === "github-pull-requests")
-						await coordinatorRef.current?.refreshAndWait(source.name);
-				}
-			};
 			const outcome = await fireTransition({
 				config: configRef.current,
 				state,
 				runner: commandRunner,
 				ticketIdentity: ticket.identity,
 				taskType: completion.taskType,
-				refresh,
+				refresh: refreshPullRequestSources,
 			});
 			if (outcome === null) {
 				reportMessage({
@@ -2761,6 +2765,7 @@ export function App({
 				return;
 			}
 			refreshTicketSources(ticket.identity);
+			closeCycleEndDraft(ticket.identity);
 			const stored = state.latestHandoff(ticket.identity);
 			if (stored !== null) runCloseCleanup(ticket.identity, stored, "abandoned");
 			setWarningMessage(`ticket ${ticket.identity} abandoned`);
@@ -3672,32 +3677,29 @@ export function App({
 			// be in the list before the machine can find it - and fire the
 			// task type's transition through the command runner.
 			fireCompleted: async (ticket) => {
-				const refresh = async () => {
-					for (const source of configRef.current.sources) {
-						if (source.kind === "github-pull-requests")
-							await coordinatorRef.current?.refreshAndWait(source.name);
-					}
-				};
 				return await fireTransition({
 					config: configRef.current,
 					state,
 					runner: commandRunner,
 					ticketIdentity: ticket.ticketIdentity,
 					taskType: ticket.taskType,
-					refresh,
+					refresh: refreshPullRequestSources,
 				});
 			},
 			// The re-fire of the recorded skips (ADR 0042): a refresh that found
 			// the fixing pull request re-fires the transition the ticket's
 			// newest completion trace recorded as the skip. The sweep reads the
 			// projection the refresh just landed, so it takes no refresh of its
-			// own, and the fire it runs writes through the command runner, the
-			// way the settle-time fire does.
+			// own, but the fire it runs carries the settle-time fire's refresh
+			// (ADR 0076), so the publish it runs lands the pull request the
+			// fire's position resolves on, and the fire writes through the
+			// command runner, the way the settle-time fire does.
 			refireRecordedSkips: () =>
 				refireRecordedSkips({
 					config: configRef.current,
 					state,
 					runner: commandRunner,
+					refresh: refreshPullRequestSources,
 				}),
 			// The Work queue's pickup (ADR 0034): the cycle starts the waiting
 			// manual starts before auto-dispatch, in queue order.
@@ -3789,6 +3791,7 @@ export function App({
 		setStatus,
 		refreshTicketSources,
 		closeCycleEndDraft,
+		refreshPullRequestSources,
 	]);
 	function focusPane(pane: Pane) {
 		focusedPaneRef.current = pane;

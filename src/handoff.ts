@@ -74,7 +74,12 @@ import {
 	realPathOf,
 	resolveRepository,
 } from "./repo.ts";
-import { type CommandResult, type CommandRunner, commandFailureText } from "./runner.ts";
+import {
+	type CommandResult,
+	type CommandRunner,
+	commandFailureText,
+	errorMessage,
+} from "./runner.ts";
 import { fitSettings } from "./setting-fit.ts";
 import { resolveEnvironment, resolveSettings } from "./setting-resolution.ts";
 import type { Consultation } from "./state.ts";
@@ -1661,12 +1666,24 @@ async function runPullRequestOpen(
 ): Promise<PullRequestOpenAnswer> {
 	const noopCleanup = async (): Promise<void> => {};
 	// The branch, before the push: the attempt deletes only a remote branch
-	// it created, never one the remote already carried.
-	const listed = await ctx.runner.run(
-		"git",
-		["-C", plan.checkout, "ls-remote", "--heads", "origin", plan.branch],
-		{ env: { GIT_TERMINAL_PROMPT: "0" } },
-	);
+	// it created, never one the remote already carried. A command that raises
+	// is a failure the tagged answer carries, the way the module's reads do: an
+	// answer that escaped would skip the cleanup of what the attempt created.
+	let listed: CommandResult;
+	try {
+		listed = await ctx.runner.run(
+			"git",
+			["-C", plan.checkout, "ls-remote", "--heads", "origin", plan.branch],
+			{ env: { GIT_TERMINAL_PROMPT: "0" } },
+		);
+	} catch (error) {
+		return {
+			fail: `the pull request open could not read the factory branch from origin: ${errorMessage(
+				error,
+			)}`,
+			cleanup: noopCleanup,
+		};
+	}
 	if (listed.code !== 0)
 		return {
 			fail: `the pull request open could not read the factory branch from origin: ${commandFailureText(listed)}`,
@@ -1676,9 +1693,19 @@ async function runPullRequestOpen(
 	const pushCleanup = existedBefore
 		? noopCleanup
 		: () => deleteRemoteBranch(ctx, plan.checkout, plan.branch);
-	const pushed = await ctx.runner.run("git", ["-C", plan.checkout, "push", "origin", plan.branch], {
-		env: { GIT_TERMINAL_PROMPT: "0" },
-	});
+	let pushed: CommandResult;
+	try {
+		pushed = await ctx.runner.run("git", ["-C", plan.checkout, "push", "origin", plan.branch], {
+			env: { GIT_TERMINAL_PROMPT: "0" },
+		});
+	} catch (error) {
+		return {
+			fail: `pushing the factory branch ${plan.branch} raised: ${errorMessage(error)}`,
+			// A push that raises may have created the branch: the delete is
+			// best effort, and a branch the remote pre-carried is never touched.
+			cleanup: pushCleanup,
+		};
+	}
 	if (pushed.code !== 0)
 		return {
 			fail: `pushing the factory branch ${plan.branch} failed: ${commandFailureText(pushed)}`,

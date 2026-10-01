@@ -442,6 +442,121 @@ describe("the control plane", () => {
 		}
 	});
 
+	test("the Abandon of a missing cycle closes the draft the ticket still wears (ADR 0076)", async () => {
+		// The cycle-end draft close on the abandon route: the Missing modal's
+		// Abandon ends the cycle of a ticket whose agent herdr no longer
+		// lists, and the draft the ticket still wears is read off its factory
+		// branch and closed, the way the decided cycle's Close does.
+		const state = openFactoryState(":memory:");
+		state.setGroupingAxis("tickets", "none");
+		const runner = new FakeRunner();
+		const source = new FakeSource("issues", "github-issues", success([issueTicket()]));
+		const sourceConfig = {
+			name: "issues",
+			kind: "github-issues" as const,
+			refreshIntervalSeconds: 60,
+			repositories: ["acme/factory"],
+			host: "github.com",
+		};
+		const config = {
+			...BASE_CONFIG,
+			sources: [sourceConfig],
+			taskTypes: {
+				...BASE_CONFIG.taskTypes,
+				implement: { ...BASE_CONFIG.taskTypes.implement, opensPullRequest: true },
+			},
+		};
+		const identity = "github:github.com:I_5";
+		const branch = "factory/5-add-a-webhook-retry-policy";
+		// The direct read of the branch's open pull request: a draft stands
+		// on it, the way the plane opened it at the handoff's start.
+		runner.set(
+			"gh",
+			[
+				"api",
+				"--hostname",
+				"github.com",
+				`repos/acme/factory/pulls?state=open&head=${encodeURIComponent(`acme:${branch}`)}`,
+			],
+			{
+				stdout: JSON.stringify([
+					{
+						number: 12,
+						state: "open",
+						draft: true,
+						html_url: "https://github.com/acme/factory/pulls/12",
+						head: { ref: branch },
+						base: { ref: "main" },
+						labels: [],
+					},
+				]),
+			},
+		);
+		// The agent is gone: herdr lists no agent at all.
+		runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+		try {
+			state.initializeSources([sourceConfig]);
+			state.applyFetch(sourceConfig, success([issueTicket()]));
+			const claim = state.claimHandoff(
+				identity,
+				{
+					agentType: "pi",
+					environment: "worktree",
+					taskType: "implement",
+					model: "",
+					thinking: "",
+					contextWindow: "",
+				},
+				"open",
+			);
+			if (!claim.ok) throw new Error(claim.reason);
+			state.settleHandoff(claim.claim.attemptId, true, undefined, {
+				paneId: "pane-1",
+				tabId: "tab-1",
+				workspaceId: "ws-1",
+			});
+			// The ticket stands running, and herdr lists no agent: the missing
+			// badge the recovery screen offers on.
+			state.markTicketRunning(identity);
+
+			await withApp(
+				async (setup) => {
+					await awaitFrame(
+						setup,
+						(candidate) => frameText(candidate).includes("missing"),
+						"the missing failure badge",
+					);
+					// The missing agent's recovery screen: Enter on the in-flight
+					// ticket opens the modal, down selects the Abandon, and the
+					// confirm ends the cycle.
+					await press(setup, "return", "the missing modal", (candidate) =>
+						candidate.includes("Missing:"),
+					);
+					await pressArrow(setup, "down", "the Abandon row", (candidate) =>
+						candidate.includes("❯ Abandon"),
+					);
+					setup.mockInput.pressEnter();
+					const frame = await settle(setup);
+					// The cycle ends abandoned: the draft the ticket still wears is
+					// read off its factory branch and closed.
+					const commands = runner.commands();
+					expect(commands).toContain(
+						`gh api --hostname github.com repos/acme/factory/pulls?state=open&head=${encodeURIComponent(
+							`acme:${branch}`,
+						)}`,
+					);
+					expect(commands).toContain("gh pr close 12 --repo github.com/acme/factory");
+					expect(messageRowOf(frame)).toContain("abandoned");
+				},
+				WIDTH,
+				30,
+				{ state, runner, sources: [source], config, pollIntervalMs: 100 },
+			);
+		} finally {
+			state.close();
+		}
+	});
+
 	test("list pane shows every sample ticket with its state badge and repository", async () => {
 		await withApp(async (setup) => {
 			const frame = frameText(setup.captureCharFrame());

@@ -901,12 +901,67 @@ export async function fireTransition(
 				if (state.taskType !== undefined) {
 					outcome.positionTaskType = state.taskType;
 					outcome.positionTicketIdentity = surface.identity;
+					// The position stands on the identity the source gives the
+					// pull request (ADR 0076): the identity the direct read
+					// synthesized resolves to the source's, and the consumers
+					// look the position up by it.
+					const sourceIdentity = await sourceIdentityOfOwnPullRequest(
+						request,
+						pullRequest,
+						opensPullRequest,
+					);
+					if (sourceIdentity !== null) outcome.positionTicketIdentity = sourceIdentity;
 				}
 				break;
 			}
 		}
 	}
 	return outcome;
+}
+
+/**
+ * The identity the source gives the pull request the fire's direct read
+ * synthesized (ADR 0076).
+ *
+ * The direct head-branch read builds the pull request's identity from its
+ * own record - a form the Stub source happens to answer, but the source a
+ * real host runs answers its own global id. The consumers that look the
+ * position up in the projection - the auto top-up's walk, the Decision
+ * modal's route and merge rows - read the source's id. The publish's ready
+ * mark made the pull request listable, and the fire's refresh lands it, so
+ * the identity the read gave resolves to the identity the source gives: the
+ * pull request the projection lists on the same repository, read by the head
+ * branch the read carried. Null when the fire read its pull request from the
+ * projection itself - a task type that opens no pull request, or a position
+ * on the ticket - and the position keeps the identity it already carries. Null
+ * also when the projection lists no such pull request - a source that still
+ * withholds it - or a stop closed the state behind the read: the position
+ * keeps the identity the read gave, and the consumers read it as they read it.
+ */
+async function sourceIdentityOfOwnPullRequest(
+	request: FireTransitionRequest,
+	pullRequest: Ticket | null,
+	opensPullRequest: boolean,
+): Promise<string | null> {
+	if (!opensPullRequest || pullRequest === null) return null;
+	if (request.stopped?.() === true) return null;
+	const headBranch = headBranchOf(pullRequest.memberships[0]?.attributes ?? {});
+	if (headBranch === null) return null;
+	// The refresh the position waits on: it lists the pull request the
+	// publish made ready, the way the fire's first refresh listed the ticket.
+	await request.refresh?.();
+	if (request.stopped?.() === true) return null;
+	const tickets = request.state.projectedTickets(
+		request.config.workflowStates,
+		request.config.defaultTaskType,
+	);
+	const listed = tickets.find(
+		(item) =>
+			item.sourceKind === "github-pull-request" &&
+			item.repositoryRef.identity === pullRequest.repositoryRef.identity &&
+			headBranchOf(item.memberships[0]?.attributes ?? {}) === headBranch,
+	);
+	return listed === undefined ? null : listed.identity;
 }
 
 /** The request the plane action's outcome fire needs (ADR 0068). */
@@ -985,6 +1040,13 @@ export interface RefireRecordedSkipsRequest {
 	config: FactoryConfig;
 	state: FactoryState;
 	runner: CommandRunner;
+	/**
+	 * The forced refresh of the pull request sources; omitted in tests. The
+	 * fire the sweep runs is the settle-time fire's kind: it refreshes before
+	 * it reads, and the publish it runs lands the pull request the refresh
+	 * then lists.
+	 */
+	refresh?: () => Promise<void>;
 }
 
 /**
@@ -1017,6 +1079,13 @@ export interface RefiredSkip {
  * transition at all returns nothing and the sweep reads it again next cycle
  * with no command; any outcome the fire produced, a fact it refused with
  * included, lands on the trace once, the way a settle-time outcome does.
+ *
+ * The sweep reads the projection the loop's refresh just landed, so it takes
+ * no refresh of its own: the projection it walks is fresh. The fire it runs
+ * carries the refresh the caller gives it, the way the settle-time fire does
+ * (ADR 0076): the publish the fire runs makes the pull request listable, and
+ * the refresh the fire's position waits on lists it, so the position stands
+ * on the identity the source gives it.
  */
 export async function refireRecordedSkips(
 	request: RefireRecordedSkipsRequest,
@@ -1065,6 +1134,7 @@ export async function refireRecordedSkips(
 			runner: request.runner,
 			ticketIdentity: ticket.identity,
 			taskType: completion.taskType,
+			refresh: request.refresh,
 		});
 		if (outcome === null) continue;
 		const recorded: TransitionOutcome = { ...outcome, refired: true };

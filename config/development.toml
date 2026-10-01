@@ -393,7 +393,7 @@ Resolve the following Dependabot alert {external-key}: {title}.
    - On a major bump, apply the minimal breaking migration.
    - Update the lockfile with the project's package manager.
    - Run the test suite.
-   - When no patched version exists, remove or replace the dependency and record the choice in the pull request description.
+   - When no patched version exists, remove or replace the dependency and record the choice in a pull request comment.
 
 5. **Commit the Fix**
    - Commit all changes to this branch and push them: the pull request that already stands on this branch carries the commits you push. It links the source item by its URL.
