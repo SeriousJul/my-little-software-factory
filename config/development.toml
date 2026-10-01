@@ -423,6 +423,19 @@ kind = "github-pull-requests"
 refresh-interval-seconds = 60
 repositories = [ "SeriousJul/my-little-software-factory" ]
 
+[[sources]]
+name = "SeriousJul/yapdf-issues"
+kind = "github-issues"
+refresh-interval-seconds = 60
+repositories = [ "SeriousJul/yapdf" ]
+filter = "label:ready-for-agent"
+
+[[sources]]
+name = "SeriousJul/yapdf-pull-requests"
+kind = "github-pull-requests"
+refresh-interval-seconds = 60
+repositories = [ "SeriousJul/yapdf" ]
+
 [[states]]
 name = "ready-for-agent"
 task-type = "implement"
