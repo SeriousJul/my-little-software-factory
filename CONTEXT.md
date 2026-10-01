@@ -631,6 +631,36 @@ The clone of a repository to a sibling path (for example `~/src/billing_1`) that
 The handoff runs at the sibling, the control plane warns, and the repository mapping records the path.
 _Avoid_: fallback clone, mirror
 
+**Repository init**:
+The act the operator confirms from a Group header to make one repository factory-ready: it creates the missing machine and triage labels, writes the convention files and the Agent skills block on the remote default branch through a throwaway worktree, and registers the repository's sources in the Config file.
+No Repository init runs by itself: the plane signals the unprepared repository, and the operator's confirm starts the act (ADR 0075).
+_Avoid_: repo setup, bootstrap, provisioning
+
+**Initialized repository**:
+A repository whose init fact stands in the state file: its labels are created, its convention files are written, and its sources are registered.
+The fact holds the hash of the settings that generated the content, the pushed commit, and the time.
+_Avoid_: registered repo, onboarded repo
+
+**Init drift**:
+The condition where an Initialized repository's stored init fact no longer matches the current settings, so its generated content is stale.
+A change of the settings that determine the generated content stands every Initialized repository in drift at once, with no read of the repositories, and the re-init through the same act clears it.
+_Avoid_: out of sync, stale setup, config drift
+
+**Convention files**:
+The repository files the control plane owns and generates for an Initialized repository: `docs/agents/issue-tracker.md`, `docs/agents/triage-labels.md`, and `docs/agents/domain.md`.
+A re-init overwrites them; a hand edit stands until the next re-init overwrites it, and the panel names every differing file before the confirm.
+_Avoid_: agent docs, setup files, skill config
+
+**Agent skills block**:
+The `## Agent skills` section of a repository's agent instruction file: `CLAUDE.md` when it exists, else `AGENTS.md`.
+It is the only region of that file the control plane touches: a re-init updates it in place, from its heading to the next level-two heading or end of file, and never the surrounding sections.
+_Avoid_: skills section, agent instructions
+
+**Repository init panel**:
+The confirm surface the `i` key opens on a Group header of the Ticket section while the Grouping axis is `repository`.
+It states the repository, the labels and files the act will write, the differing files it will overwrite, the target branch, and the rows Init and Cancel.
+_Avoid_: init modal, setup popup
+
 **Command runner**:
 The single egress for external commands: the control plane runs every herdr, git, GitHub CLI, and agent model list command through it.
 The automated tests inject a fake runner that records safe command facts, so no test touches a real herdr session, repository, ticket source, or agent runtime.
