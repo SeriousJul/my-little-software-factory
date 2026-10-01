@@ -51,6 +51,9 @@ export class FakeRunner implements CommandRunner {
 	readonly modelListCalls: string[] = [];
 	private responses = new Map<string, CommandResult>();
 	private sequences = new Map<string, CommandResult[]>();
+	// A delay holds a command's answer, so a test can watch the window an
+	// in-flight operation leaves open.
+	private delays = new Map<string, number>();
 	private modelLists = new Map<string, ModelListResult>();
 	// A held Model list query never answers until `releaseModelLists` runs, so a
 	// test can watch the panel's loading state.
@@ -73,6 +76,11 @@ export class FakeRunner implements CommandRunner {
 			this.key(command, args),
 			results.map((result) => ({ code: 0, stdout: "", stderr: "", ...result })),
 		);
+	}
+
+	/** Answer `command args` after a delay, in milliseconds. */
+	setDelay(command: string, args: readonly string[], delayMs: number): void {
+		this.delays.set(this.key(command, args), delayMs);
 	}
 
 	/** The answer for any command without a specific response. */
@@ -105,6 +113,8 @@ export class FakeRunner implements CommandRunner {
 		void options;
 		this.calls.push({ command, args });
 		const key = this.key(command, args);
+		const delay = this.delays.get(key);
+		if (delay !== undefined) await new Promise((resolve) => setTimeout(resolve, delay));
 		const sequence = this.sequences.get(key);
 		if (sequence !== undefined && sequence.length > 0) return sequence.shift() as CommandResult;
 		return this.responses.get(key) ?? this.fallback;

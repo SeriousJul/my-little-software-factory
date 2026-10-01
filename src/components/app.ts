@@ -714,6 +714,17 @@ export function App({
 	// their turn stand in the ref, not in state, because no surface renders
 	// them - the confirmation panel names only the entry under review.
 	const repositoryInitQueue = useRef<RepositoryInitQueue | null>(null);
+	// The repository whose init plans right now (ADR 0083): the plan runs
+	// async with the base view's keyboard live, and the operator must not
+	// start a second init the first would then overwrite.
+	const repositoryInitInFlight = useRef<string | null>(null);
+	// Refuse a new init while one plans: the line names the init that holds.
+	const refuseInitInFlight = (): boolean => {
+		const inFlight = repositoryInitInFlight.current;
+		if (inFlight === null) return false;
+		setErrorMessage(`the init for ${inFlight} is running`);
+		return true;
+	};
 	/**
 	 * The Live view's stream: the lines of the last pane read, and the stale
 	 * note while the latest read failed. Null while no stream runs.
@@ -3307,7 +3318,10 @@ export function App({
 				// `o` opens the select list of the repositories the operator's
 				// gh identity can init (ADR 0082): the bootstrap path for a
 				// repository that has no ticket and no source yet.
-				"repository-select-open": () => setPanel({ kind: "repository-select" }),
+				"repository-select-open": () => {
+					if (refuseInitInFlight()) return;
+					setPanel({ kind: "repository-select" });
+				},
 				// `Space` on a Group header folds that Group; the catalogue
 				// resolved the key here on the facts under the cursor (issue #170).
 				"group-fold": () => foldGroupAtCursor(),
@@ -4158,6 +4172,10 @@ export function App({
 			setErrorMessage(`no source is configured for ${ref.displayName}`);
 			return;
 		}
+		// The plan runs async with the base view's keyboard live (ADR 0083):
+		// the marker holds until the panel stands or a refusal lands, so no
+		// second init starts the first would then overwrite.
+		repositoryInitInFlight.current = displayName;
 		// The act's checkout: the plane's own repository resolution rule, the
 		// case-insensitive mapping lookup over the identity and the display name,
 		// then the ~/src/<name> convention - the same rule the sources resolve
@@ -4168,6 +4186,7 @@ export function App({
 			setErrorMessage(
 				`${ref.displayName} has no local checkout at ${checkout} to work a throwaway worktree in`,
 			);
+			repositoryInitInFlight.current = null;
 			return;
 		}
 		let ghOptions: CommandOptions = {};
@@ -4183,6 +4202,7 @@ export function App({
 			// identity, which may be the wrong account.
 			if (!resolved.ok) {
 				setErrorMessage(`the source's auth for ${source.host} did not resolve: ${resolved.reason}`);
+				repositoryInitInFlight.current = null;
 				return;
 			}
 			ghOptions = resolved.options;
@@ -4197,8 +4217,10 @@ export function App({
 		});
 		if ("reason" in plan) {
 			setErrorMessage(plan.reason);
+			repositoryInitInFlight.current = null;
 			return;
 		}
+		repositoryInitInFlight.current = null;
 		setPanel({
 			kind: "repository-init",
 			identity: ref.identity,
@@ -4222,6 +4244,7 @@ export function App({
 	// entry runs the plain select the panel has always run.
 	function startRepositoryInitQueue(queue: readonly InitableRepository[]) {
 		if (queue.length === 0) return;
+		if (refuseInitInFlight()) return;
 		const [head, ...rest] = queue;
 		repositoryInitQueue.current =
 			rest.length > 0 ? { remaining: rest, ran: 0, skipped: 0, refused: 0 } : null;
@@ -4259,10 +4282,13 @@ export function App({
 	}
 	// The cancel of a queued entry (ADR 0083): the entry leaves the queue
 	// untouched, and the next stands in its place. With no queue behind it,
-	// cancel is the way out with nothing changed.
+	// cancel is the way out with nothing changed. The panel under review
+	// closes now, not when the next entry's panel opens: the plan runs async
+	// behind it, and a panel the operator can still key into is a stale act
+	// waiting to run twice.
 	function skipRepositoryInitEntry() {
-		if (repositoryInitQueue.current === null) setPanel(null);
-		else advanceRepositoryInitQueue("skipped");
+		setPanel(null);
+		if (repositoryInitQueue.current !== null) advanceRepositoryInitQueue("skipped");
 	}
 	// The chosen repository from the select list: the checkout resolves by the
 	// plane's own rule, the plan runs the way the Group header's `i` runs it,
@@ -4275,6 +4301,10 @@ export function App({
 			advanceRepositoryInitQueue("failed");
 			return;
 		}
+		// The plan runs async with the base view's keyboard live (ADR 0083):
+		// the marker holds until the panel stands or a refusal lands, so no
+		// second init starts the first would then overwrite.
+		repositoryInitInFlight.current = choice.displayName;
 		const cfg = configRef.current;
 		const checkout = repositoryInitCheckoutPath(
 			cfg.repos,
@@ -4286,6 +4316,7 @@ export function App({
 			setErrorMessage(
 				`${choice.displayName} has no local checkout at ${checkout} to work a throwaway worktree in`,
 			);
+			repositoryInitInFlight.current = null;
 			advanceRepositoryInitQueue("refused");
 			return;
 		}
@@ -4298,9 +4329,11 @@ export function App({
 		});
 		if ("reason" in plan) {
 			setErrorMessage(plan.reason);
+			repositoryInitInFlight.current = null;
 			advanceRepositoryInitQueue("refused");
 			return;
 		}
+		repositoryInitInFlight.current = null;
 		setPanel({
 			kind: "repository-init",
 			identity: choice.identity,
@@ -4376,6 +4409,11 @@ export function App({
 		);
 		await write;
 		setNoticeMessage(flow.message);
+		// A queue behind the act closes its panel now, the way the skip does:
+		// the next entry plans async, and the panel under review must not
+		// stand live behind it. A lone init keeps its panel, the way it
+		// always did.
+		if (repositoryInitQueue.current !== null) setPanel(null);
 		advanceRepositoryInitQueue("ran");
 	}
 	function selectWorkQueue(index: number) {

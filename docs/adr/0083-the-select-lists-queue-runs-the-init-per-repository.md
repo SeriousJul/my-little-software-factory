@@ -32,11 +32,13 @@ a different answer.
   cancel skips the entry, and the next stands in its place.
 - A repository without a local checkout, or whose plan refuses, states
   its reason on the Message line, and the queue moves on.
-- A failed act stops the queue. The line the failure leaves already
-  names the repository and the failure, and the operator takes the
-  rest of the marking back by hand when ready.
+- A failed act stops the queue. The failure stands on the panel under
+  review, which names the repository, and the operator takes the rest
+  of the marking back by hand when ready.
 - The drained queue leaves its settled line on the Message line: how
-  many ran, how many skipped, how many refused.
+  many ran, how many skipped, how many refused. The settle line ends
+  the fact it replaces: a refusal earlier in the queue leaves its
+  count on the line, not its specific path.
 
 ## Consequences
 
@@ -53,5 +55,12 @@ a different answer.
   state: no surface renders the waiting entries, and the confirmation
   panel names only the entry under review.
 - The `i` on a Group header opens the init for the repository under the
-  cursor, and it runs outside the queue: a panel owns the keyboard
-  while one stands, so the two paths never interleave.
+  cursor, and it runs outside the queue. The plan behind an open runs
+  async with the base view's keyboard live, and the operator must not
+  start a second init the first would then overwrite: while an init
+  plans, the `o` open, the Group's `i`, and a queue start are each
+  refused with the line that names the init that holds. The marker
+  clears when the panel stands or a refusal lands.
+- The panel under review closes when its entry settles, not when the
+  next entry's panel opens: the plan runs async behind it, and a panel
+  the operator can still key into is a stale act waiting to run twice.

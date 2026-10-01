@@ -381,6 +381,56 @@ describe("the repository select panel", () => {
 		}
 	});
 
+	// While an init plans, the base view's keyboard is live (ADR 0083): the
+	// plane refuses a new open that the in-flight plan would then overwrite.
+	test("a planning init refuses a new open, and opens when the plan lands", async () => {
+		const runner = new FakeRunner();
+		runner.set("gh", viewerArgs(), { stdout: viewerJson() });
+		const home = join(tmpdir(), `factory-select-home-${Date.now()}`);
+		const factory = join(home, "src", "factory");
+		mkdirSync(factory, { recursive: true });
+		planCanned(runner, factory, "acme/factory");
+		// Hold the plan's first read, so the window the plan leaves open stands
+		// long enough for the operator's key to land in it.
+		runner.setDelay("git", ["-C", factory, "symbolic-ref", "refs/remotes/origin/HEAD"], 150);
+		runner.setDefault({ code: 0, stdout: "" });
+		runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+		const state = freshState();
+		try {
+			await withApp(
+				async (setup) => {
+					setup.mockInput.pressKey("o");
+					await awaitFrame(setup, (f) => f.includes("acme/factory"), "the list rows");
+					for (const letter of "acme/factory") setup.mockInput.pressKey(letter);
+					await awaitFrame(
+						setup,
+						(f) => f.includes("acme/factory") && !f.includes("acme/billing"),
+						"the filter to settle",
+					);
+					await new Promise((r) => setTimeout(r, 25));
+					setup.mockInput.pressEnter();
+					// The plan holds on its first read: the open is in flight, and a
+					// new open is refused with the init that holds.
+					await new Promise((r) => setTimeout(r, 25));
+					setup.mockInput.pressKey("o");
+					const frame = await awaitFrame(
+						setup,
+						(f) => f.includes("the init for acme/factory is running"),
+						"the refusal line",
+					);
+					expect(frame).not.toContain("Init a repository");
+					// The plan lands, and the panel stands where the open asked for.
+					await awaitFrame(setup, (f) => f.includes("Init acme/factory"), "the confirmation");
+				},
+				WIDTH,
+				HEIGHT,
+				{ config: BASE_CONFIG, runner, home, state },
+			);
+		} finally {
+			cleanupStateFixtures();
+		}
+	});
+
 	// The queue the operator marks with Tab (ADR 0083): one repository per
 	// entry, one confirmation panel per entry, in list order.
 	test("Tab marks the row for the queue, and the key unmarks it", async () => {
