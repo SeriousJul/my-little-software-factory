@@ -4556,13 +4556,13 @@ export function App({
 				// Ticket across a refresh or a lift, and never tears itself down because the
 				// row left the view the operator happens to be in.
 				findTicket(ticketPanel.identity);
+	// The one identity read for the open panel: the narrowing is the
+	// structure, not a list, so a panel kind that names no identity needs no
+	// guard here, and a kind that names one never reaches a missing field.
+	const panelIdentity = panel !== null && "identity" in panel ? panel.identity : undefined;
 	const panelConsultation =
-		panel !== null &&
-		ticketPanel === null &&
-		// The init's select list names no Consultation, and it holds no
-		// identity to look one up by (ADR 0082).
-		panel.kind !== "repository-select"
-			? consultationsRef.current.find((item) => item.id === panel.identity)
+		panelIdentity !== undefined && ticketPanel === null
+			? consultationsRef.current.find((item) => item.id === panelIdentity)
 			: undefined;
 	// The open close panel's own copy, re-derived from the record on every
 	// render: the record's state picks the shape, so the panel follows the

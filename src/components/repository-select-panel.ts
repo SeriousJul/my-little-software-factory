@@ -138,7 +138,15 @@ export function RepositorySelectPanel({
 			help: () => onHelp?.(),
 			message: () => onMessage?.(),
 			"move-list": ({ key }) => {
-				region.move(key.name === "up" || key.name === "k" ? -1 : 1);
+				// The keys the ticket lists run: a step per row, a page per
+				// window, and the edge to the end, with the region's own window
+				// sliding to keep the row visible.
+				const name = key.name;
+				if (name === "pageup") region.pageMove(-1);
+				else if (name === "pagedown") region.pageMove(1);
+				else if (name === "home") region.moveEdge("start");
+				else if (name === "end") region.moveEdge("end");
+				else region.move(name === "up" || name === "k" ? -1 : 1);
 				key.preventDefault?.();
 			},
 			"select-repository": ({ key }) => {

@@ -20,6 +20,7 @@ import {
 	closeOverlay,
 	HEIGHT,
 	messageRowOf,
+	pressScrollKey,
 	rowsOf,
 	settle,
 	WIDTH,
@@ -197,6 +198,66 @@ describe("the repository select panel", () => {
 		} finally {
 			cleanupStateFixtures();
 		}
+	});
+
+	// The list holds the operator's whole account, so the page and edge keys
+	// run the way the ticket lists run: a step per row, a page per window, an
+	// edge to the end, and the window riding the cursor (ADR 0082).
+	test("the page keys and the edge keys reach the ends of a long list", async () => {
+		const runner = new FakeRunner();
+		const repos = Array.from({ length: 40 }, (_, i) => {
+			const name = `repo-${String(i).padStart(2, "0")}`;
+			return { name, nameWithOwner: `acme/${name}`, url: `https://github.com/acme/${name}` };
+		});
+		const viewer = JSON.stringify({
+			data: {
+				viewer: {
+					login: "seriousjul",
+					repositories: { nodes: [] },
+					organizations: { nodes: [{ login: "acme", repositories: { nodes: repos } }] },
+				},
+			},
+		});
+		runner.set("gh", viewerArgs(), { stdout: viewer });
+		await withApp(
+			async (setup) => {
+				setup.mockInput.pressKey("o");
+				await awaitFrame(setup, (f) => f.includes("1-12/40"), "the list rows");
+				// End lands the cursor on the last row, and the window rides to it.
+				const frame = await pressScrollKey(
+					setup,
+					"end",
+					"the window at the end",
+					(f) => f.includes("acme/repo-39") && !f.includes("acme/repo-00"),
+				);
+				expect(frame).toContain("40/40");
+				// Home takes the cursor back to the first row.
+				await pressScrollKey(
+					setup,
+					"home",
+					"the window at the start",
+					(f) => f.includes("acme/repo-00") && !f.includes("acme/repo-39"),
+				);
+				// A page down is a window of rows: the first row leaves, and the
+				// cursor's row stands on the window's last row.
+				await pressScrollKey(
+					setup,
+					"pagedown",
+					"the window after the page",
+					(f) => !f.includes("acme/repo-00") && f.includes("acme/repo-12"),
+				);
+				// A page up is a window of rows back, clamped at the start.
+				await pressScrollKey(
+					setup,
+					"pageup",
+					"the window back at the start",
+					(f) => f.includes("acme/repo-00") && !f.includes("acme/repo-39"),
+				);
+			},
+			WIDTH,
+			HEIGHT,
+			{ config: BASE_CONFIG, runner },
+		);
 	});
 
 	test("Enter on a row runs the plan and opens the confirmation panel", async () => {

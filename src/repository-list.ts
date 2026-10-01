@@ -9,10 +9,11 @@
  * checkout resolution and the init's planning it already runs.
  *
  * The query reads through the same command shape the ticket sources use
- * (`gh api graphql --hostname <host>`) and honors the source's auth options,
- * so a source that names a token reads the list on that account.
+ * (`gh api graphql --hostname <host>`) on the ambient `gh` identity, the
+ * identity the operator logs in to work (ADR 0082): the plane asks no
+ * credential of its own, and the read stands on whatever account `gh` holds.
  */
-import { type CommandOptions, type CommandRunner, commandFailureText } from "./runner.ts";
+import { type CommandRunner, commandFailureText } from "./runner.ts";
 
 /** One repository the operator can init, normalized to the plane's facts. */
 export interface InitableRepository {
@@ -61,11 +62,10 @@ export const VIEWER_REPOSITORIES_QUERY = `query FactoryInitableRepositories {
 export async function listInitableRepositories(
 	runner: CommandRunner,
 	host: string,
-	options: CommandOptions = {},
 ): Promise<RepositoryListOutcome> {
 	try {
 		const args = ["api", "graphql", "--hostname", host, "-f", `query=${VIEWER_REPOSITORIES_QUERY}`];
-		const result = await runner.run("gh", args, options);
+		const result = await runner.run("gh", args);
 		if (result.code !== 0)
 			return { status: "failed", reason: `GitHub request failed: ${commandFailureText(result)}` };
 		return parseViewerRepositories(result.stdout, host);

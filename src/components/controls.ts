@@ -1052,7 +1052,7 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 						: mode === "work-queue-list"
 							? ["up", "down", "j", "k", "pageup", "pagedown", "home", "end"]
 							: mode === "repository-select"
-								? ["up", "down", "j", "k"]
+								? ["up", "down", "j", "k", "pageup", "pagedown", "home", "end"]
 								: ["up", "down", "tab"],
 		keyLabel: "↑↓/jk",
 		scope: "control-plane",

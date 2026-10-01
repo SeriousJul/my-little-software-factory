@@ -36,6 +36,8 @@ refused with the path the act needs.
 - The read is capped at the first 100 repositories of the account and of each
   of the first 20 organizations, in the API's order.
 - The read runs once when the panel opens. The panel carries no refresh key.
+- The list's movement is the ticket lists' movement: a step per row, a page
+  per window, and the edge keys to the ends, on the shared region's window.
 - The ambient identity is the identity the operator gave `gh`. The plane asks
   no credential of its own.
 - The refusal names the expected checkout path, so the operator can `git clone`

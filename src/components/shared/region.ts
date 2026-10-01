@@ -33,6 +33,10 @@ export interface DecisionRegion {
 	at: number;
 	/** Move by a wrapped step, keeping the cursor's row visible. */
 	move: (delta: number) => void;
+	/** Move the cursor by one visible window, clamped at the region's edges. */
+	pageMove: (direction: 1 | -1) => void;
+	/** Place the cursor on the region's first or last row. */
+	moveEdge: (edge: "start" | "end") => void;
 	/** Confirm the selected row, then clear the selection. */
 	confirm: (run: (row: ActionRow) => void) => void;
 	/** The rows the region shows, in order. */
@@ -66,21 +70,37 @@ export function useDecisionRegion(rows: readonly ActionRow[], visibleRows: numbe
 	const maxTop = Math.max(0, count - limit);
 	const windowTop = Math.min(top, maxTop);
 	const window = limit === 0 ? [] : rows.slice(windowTop, windowTop + limit);
+	// The one place a cursor lands: the index clamps to the region's rows, and
+	// the auto-scroll slides the window to the cursor's row when the step
+	// would leave it, so a scroll the region's own rows ask for never crosses
+	// the cursor.
+	const place = (index: number) => {
+		const clamped = Math.max(0, Math.min(index, last));
+		ref.current = clamped;
+		setSelected(clamped);
+		setTop((current) => {
+			const t = Math.min(current, maxTop);
+			if (clamped < t) return clamped;
+			if (clamped >= t + limit) return clamped - limit + 1;
+			return t;
+		});
+	};
 	return {
 		at,
 		move: (delta: number) => {
 			if (count === 0) return;
-			ref.current = (Math.min(ref.current, last) + delta + count) % count;
-			setSelected(ref.current);
-			// The auto-scroll: the window slides to the cursor's row when the
-			// step would leave it, and stays put otherwise, so a scroll the
-			// region's own rows ask for never crosses the cursor.
-			setTop((current) => {
-				const t = Math.min(current, maxTop);
-				if (ref.current < t) return ref.current;
-				if (ref.current >= t + limit) return ref.current - limit + 1;
-				return t;
-			});
+			place((Math.min(ref.current, last) + delta + count) % count);
+		},
+		// The page and the edge never wrap: the step's wrap keeps every row one
+		// step away, but the page and the edge reach an end, and an end past the
+		// region's last row is the last row.
+		pageMove: (direction: 1 | -1) => {
+			if (count === 0) return;
+			place(ref.current + direction * Math.max(1, limit));
+		},
+		moveEdge: (edge: "start" | "end") => {
+			if (count === 0) return;
+			place(edge === "start" ? 0 : last);
 		},
 		confirm: (run: (row: ActionRow) => void) => {
 			const row = rows[Math.min(ref.current, last)];
