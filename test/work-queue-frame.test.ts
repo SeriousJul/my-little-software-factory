@@ -594,6 +594,89 @@ describe("the Work queue section", () => {
 		}
 	});
 
+	/**
+	 * ADR 0049: the Work section keeps its header row while it is empty, exactly
+	 * as the other two sections do, and the cursor is no exception: the empty
+	 * message is the row the cursor rests on. The cross from the last
+	 * Consultation into an empty queue stays there - the focus marker holds on
+	 * the queue's box in the settled frame - and the detail says that no item
+	 * is selected.
+	 */
+	test("the cursor crosses into the empty Work queue, and the focus stays", async () => {
+		const state = openFactoryState(join(home, "state.sqlite"));
+		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
+		state.setGroupingAxis("tickets", "none");
+		const { source, runner } = queuedFixture(state);
+		try {
+			await booted(
+				async (setup) => {
+					source.settle(success(twoTickets()));
+					await awaitFrame(setup, (f) => f.includes("waiting: 0"), "the empty queue's header");
+					// The walk down: the last Ticket row, the empty Consultation
+					// list, and the empty Work queue, one step each.
+					await press(setup, "j", "the last Ticket row", (f) =>
+						detailPaneText(f).includes("Close the stale deploy branch"),
+					);
+					await press(setup, "j", "the empty Consultation list", (f) =>
+						f.includes("┌─❯ Consultations"),
+					);
+					await press(setup, "j", "the empty Work queue", (f) => f.includes("┌─❯ Work queue"));
+					// The focus holds: the settled frame still marks the queue's
+					// box, and the detail answers for the empty selection.
+					const settled = await settle(setup);
+					expect(settled).toContain("┌─❯ Work queue");
+					expect(detailPaneText(settled)).toContain("no queue item is selected");
+				},
+				state,
+				source,
+				runner,
+			);
+		} finally {
+			state.close();
+		}
+	});
+
+	/**
+	 * The cursor never rests on a queue that no longer holds its row: the
+	 * operator's Delete cancels the one waiting start, the queue empties under
+	 * the cursor, and the selection comes home to the Ticket list, where the
+	 * cursor's box keeps the marker.
+	 */
+	test("a Delete that empties the queue sends the selection home", async () => {
+		const state = openFactoryState(join(home, "state.sqlite"));
+		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
+		state.setGroupingAxis("tickets", "none");
+		const { source, enqueue, runner } = queuedFixture(state);
+		enqueue(FIRST);
+		try {
+			await booted(
+				async (setup) => {
+					source.settle(success(twoTickets()));
+					await awaitFrame(setup, (f) => f.includes("waiting: 1"), "the queue's wait");
+					await clickWorkHeader(setup);
+					await awaitFrame(
+						setup,
+						(f) => f.includes("┌─❯ Work queue"),
+						"the cursor on the queue row",
+					);
+					// Delete cancels the one waiting start: the queue empties
+					// under the cursor, and the selection comes home.
+					await press(setup, "delete", "the one start to cancel", (f) =>
+						f.includes(`waiting start for "Add a webhook retry policy"`),
+					);
+					const settled = await settle(setup);
+					expect(settled).toContain("┌─❯ Tickets");
+					expect(settled).not.toContain("┌─❯ Work queue");
+				},
+				state,
+				source,
+				runner,
+			);
+		} finally {
+			state.close();
+		}
+	});
+
 	test("the Work header appears with its count, and the rows carry the origin and the title", async () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
 		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
