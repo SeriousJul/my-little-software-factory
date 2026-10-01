@@ -3592,8 +3592,11 @@ export function App({
 		}
 		if (unprepared.length === 0) return;
 		const names = unprepared.map((entry) => `${entry.name} (${entry.marker})`).join(", ");
+		// The note stands on the repository axis (the marker rides the Group
+		// header), so its path is the real one: the `i` key on the repository's
+		// own Group header.
 		setNoticeMessage(
-			`Not initialized: ${names}. Press g then i from one of their tickets to run the init.`,
+			`Not initialized: ${names}. Press i on one of their Group headers to run the init.`,
 		);
 	}, [machineTickets, state, config, groupingAxis, setNoticeMessage]);
 	// Repository choices are validated before the launcher presents them. A
@@ -4112,8 +4115,8 @@ export function App({
 		);
 	}
 	async function openRepositoryInitFor(displayName: string) {
-		const fs = state;
-		if (fs === undefined) {
+		const factoryState = state;
+		if (factoryState === undefined) {
 			setErrorMessage("the repository init needs SQLite state");
 			return;
 		}
@@ -4185,8 +4188,8 @@ export function App({
 		plan: RepositoryInitPlan,
 		instructionFile?: InstructionFileName,
 	) {
-		const fs = state;
-		if (fs === undefined) {
+		const factoryState = state;
+		if (factoryState === undefined) {
 			setErrorMessage("the repository init needs SQLite state");
 			return;
 		}
@@ -4196,7 +4199,7 @@ export function App({
 		setWorkingMessage(`initializing ${repository.displayName}...`, "repository-init");
 		const flow = await commitRepositoryInit({
 			runner: commandRunner,
-			state: fs,
+			state: factoryState,
 			config: configRef.current,
 			repository,
 			workflowStates: configRef.current.workflowStates,

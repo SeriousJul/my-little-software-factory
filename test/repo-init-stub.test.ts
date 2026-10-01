@@ -15,18 +15,30 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { TaskTypeConfig, WorkflowState } from "../src/config.ts";
+import { loadConfigFile, type TaskTypeConfig, type WorkflowState } from "../src/config.ts";
 import {
 	AGENT_SKILLS_HEADING,
 	CONVENTION_FILE_PATHS,
 	conventionFileContent,
 	repositoryInitLabelSet,
+	repositoryInitSettingsHash,
 	runRepositoryInit,
 } from "../src/repo-init.ts";
 import { createChildProcessRunner } from "../src/runner.ts";
+import { type FactoryState, openFactoryState } from "../src/state.ts";
 import { createStubRunner } from "../src/stub/runner.ts";
 import type { StubWorld } from "../src/stub/world.ts";
 import { StubWorldStore } from "../src/stub/world.ts";
+import { createTicketSource } from "../src/ticket-source.ts";
+import {
+	awaitFrame,
+	awaitNewKeyHandler,
+	keyHandlerListeners,
+	messageRowOf,
+	press,
+	pressEnterQuiet,
+	withApp,
+} from "./app-harness.ts";
 
 const paths: string[] = [];
 afterEach(() => {
@@ -217,6 +229,245 @@ describe("the label seam (ADR 0075)", () => {
 		]);
 		expect(result.code).toBe(0);
 		expect(store.world.repositories[0].issues[0].labels).toEqual(["anything"]);
+	});
+});
+
+/**
+ * The TUI walk of the init (ADR 0075, testing decision 2): the real App at a
+ * fixed terminal size over the real state file and the real git, with GitHub
+ * served from the Stub world. The operator's path is walked key by key - the
+ * `i` on the Group header, the panel, the confirm - and the run's facts are
+ * read from where the operator would: the labels standing in the world, the
+ * files on the pushed branch through real git, the sources in the config
+ * file, the init fact in the state file, and the marker clearing off the
+ * Group header.
+ */
+describe("the TUI walk of the init (ADR 0075)", () => {
+	/** The config the walk boots with: the operator's feed, the mapping, the machine. */
+	function walkConfig(checkout: string): string {
+		return `state-file = "factory.sqlite"
+default-agent = "pi"
+default-environment = "worktree"
+default-task-type = "implement"
+attention-bell = true
+interaction-exit-key = "f12"
+max-parallel-agents = 2
+agent-poll-interval-seconds = 5
+completion-message-lines = 200
+max-handoffs-per-ticket = 2
+
+[repos]
+"github.com/acme/factory" = "${checkout}"
+
+[scroll]
+speed = 1
+acceleration = 0.8
+maximum-speed = 6
+
+[agents.pi]
+kind = "pi"
+
+[[states]]
+name = "ready-for-agent"
+task-type = "implement"
+[states.match]
+source-kind = "github-issue"
+labels-any = ["ready-for-agent"]
+
+[task-types.implement]
+template = "Do the work: {external-key}: {title}"
+[task-types.implement.transition]
+ticket-facts = []
+pull-request-facts = ["ready-for-review"]
+
+[task-types.review]
+template = "Review {external-key}: {title}."
+[task-types.review.transition]
+ticket-facts = []
+pull-request-facts = []
+
+[task-types.rework]
+template = "Rework {external-key}: {title}."
+[task-types.rework.transition]
+ticket-facts = []
+pull-request-facts = ["ready-for-review"]
+
+[task-types.merge]
+template = "Merge {external-key}: {title}."
+[task-types.merge.transition]
+ticket-facts = []
+pull-request-facts = []
+
+[[sources]]
+name = "acme-issues"
+kind = "github-issues"
+refresh-interval-seconds = 60
+repositories = ["acme/factory"]
+host = "github.com"
+`;
+	}
+
+	test("the key, the panel, the confirm: the sources, the fact, and the marker clearing", async () => {
+		const dir = tempDir();
+		const real = createChildProcessRunner();
+
+		// A real git origin and a clone the act works in: one committed
+		// AGENTS.md on main the block surgery finds, a bare origin, and a
+		// clone that carries the origin/HEAD symref the branch rule reads.
+		const seed = join(dir, "seed");
+		const origin = join(dir, "origin.git");
+		const checkout = join(dir, "checkout");
+		await real.run("git", ["init", "-b", "main", seed]);
+		writeFileSync(join(seed, "AGENTS.md"), "# Factory\n\nIntro.\n", "utf8");
+		await real.run("git", ["-C", seed, "add", "-A"]);
+		await real.run("git", [
+			"-c",
+			"user.name=init",
+			"-c",
+			"user.email=init@example.com",
+			"-C",
+			seed,
+			"commit",
+			"-m",
+			"seed",
+		]);
+		await real.run("git", ["clone", "--bare", seed, origin]);
+		await real.run("git", ["clone", origin, checkout]);
+
+		// The world: the repository stands uninitialized, and its one issue
+		// matches no state, so the machine lists it and never starts an Agent.
+		const world: StubWorld = {
+			version: 1,
+			host: "github.com",
+			owner: "acme",
+			autoScore: { enabled: false, score: 0 },
+			repositories: [
+				{
+					name: "factory",
+					labels: [],
+					issues: [
+						{
+							number: 1,
+							title: "an open issue",
+							body: "",
+							labels: [],
+							state: "open",
+							updatedAt: "2026-01-01T00:00:00.000Z",
+							comments: [],
+						},
+					],
+					pullRequests: [],
+					mergeGates: {},
+					security: {
+						advisories: [],
+						dependabotAlerts: [],
+						secretScanningAlerts: [],
+					},
+				},
+			],
+		};
+		writeFileSync(join(dir, "world.json"), `${JSON.stringify(world, null, 2)}\n`);
+		const store = StubWorldStore.load(join(dir, "world.json"));
+		const runner = createStubRunner(real, store);
+
+		const configPath = join(dir, "config.toml");
+		writeFileSync(configPath, walkConfig(checkout));
+		const { config } = await loadConfigFile(configPath);
+		// The startup wiring's own build: the operator's feed over the stub's
+		// world, the way the entry module composes the plane.
+		const sources = config.sources.map((source) => createTicketSource(source, runner));
+		const state: FactoryState = openFactoryState(join(dir, "factory.sqlite"));
+		state.setGroupingAxis("tickets", "repository");
+
+		const headBefore = (await real.run("git", ["-C", checkout, "rev-parse", "HEAD"])).stdout.trim();
+
+		await withApp(
+			async (setup) => {
+				// The fetch the refresh loop runs through the stub stands the list:
+				// the Group header wears the marker, and the one-time note names the
+				// real path of the act.
+				const marked = await awaitFrame(
+					setup,
+					(f) => f.includes("acme/factory") && f.includes("uninit"),
+					"the uninit marker on the Group header",
+				);
+				expect(marked).toContain("acme/factory");
+				expect(messageRowOf(marked)).toContain("Press i on one of their Group headers");
+
+				// The cursor rests on the first row, the Group header: the `i`
+				// there opens the panel over the generator's plan.
+				const before = keyHandlerListeners(setup);
+				const panel = await press(setup, "i", "the init panel to open", (f) =>
+					f.includes("Init acme/factory"),
+				);
+				await awaitNewKeyHandler(setup, before, "the init panel to take the keys");
+				expect(panel).toContain("Pushes to main with a throwaway worktree.");
+
+				// The confirm runs the act end to end: the result stands on the
+				// Message line.
+				const settled = await pressEnterQuiet(setup, "the init's result", (f) =>
+					f.includes("acme/factory: pushed"),
+				);
+				// The result names the branch and the labels the act created.
+				expect(settled).toContain("to main, created");
+
+				// The world stands the label set the act created, and the refusal
+				// log is empty: the stub answered every command the act issued.
+				expect(store.world.repositories[0].labels).toEqual(
+					repositoryInitLabelSet(config.taskTypes),
+				);
+				expect(store.refusals).toEqual([]);
+
+				// The sources the flow registered stand in the config file on disk,
+				// beside the operator's own feed, with no duplicate of it.
+				const saved = readFileSync(configPath, "utf8");
+				expect(saved).toContain("acme/factory-issues");
+				expect(saved).toContain("acme/factory-pull-requests");
+				expect(saved).toContain("acme-issues");
+
+				// The init fact stands in the state file on the current settings.
+				const fact = state.repositoryInitFact("github.com/acme/factory");
+				expect(fact).not.toBeNull();
+				expect(fact?.settingsHash).toBe(
+					repositoryInitSettingsHash(config.workflowStates, config.taskTypes),
+				);
+
+				// The marker cleared off the Group header in the same read.
+				const cleared = await awaitFrame(
+					setup,
+					(f) => f.includes("acme/factory") && !f.includes("uninit"),
+					"the marker to clear off the Group header",
+				);
+				expect(cleared).toContain("acme/factory");
+
+				// The checkout never moved and never dirtied, and the worktree is
+				// gone: the act pushed from a worktree the plane removed.
+				const headAfter = (
+					await real.run("git", ["-C", checkout, "rev-parse", "HEAD"])
+				).stdout.trim();
+				expect(headAfter).toBe(headBefore);
+				expect((await real.run("git", ["-C", checkout, "status", "--porcelain"])).stdout).toBe("");
+				expect(
+					(await real.run("git", ["-C", checkout, "worktree", "list"])).stdout.trim().split("\n"),
+				).toHaveLength(1);
+
+				// A fresh clone of the branch carries the generated files, and the
+				// block lands in the committed AGENTS.md with the file's section
+				// standing.
+				const verify = join(dir, "verify");
+				await real.run("git", ["clone", origin, verify]);
+				expect(readFileSync(join(verify, "docs/agents/domain.md"), "utf8")).toBe(
+					conventionFileContent("docs/agents/domain.md"),
+				);
+				const agents = readFileSync(join(verify, "AGENTS.md"), "utf8");
+				expect(agents).toContain(AGENT_SKILLS_HEADING);
+				expect(agents).toContain("# Factory");
+			},
+			undefined,
+			undefined,
+			{ config, state, runner, sources, home: dir, configPath },
+		);
+		state.close();
 	});
 });
 

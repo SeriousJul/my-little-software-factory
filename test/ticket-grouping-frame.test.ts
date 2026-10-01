@@ -1850,7 +1850,7 @@ describe("the init marker and the one-time note (ADR 0075)", () => {
 				expect(message).toContain("Not initialized:");
 				expect(message).toContain("acme/factory (uninit)");
 				expect(message).toContain("acme/billing (uninit)");
-				expect(message).toContain("Press g then i");
+				expect(message).toContain("Press i on one of their Group headers");
 			},
 			{ axis: "repository", uninit: true },
 		);

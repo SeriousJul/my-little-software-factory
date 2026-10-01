@@ -221,11 +221,30 @@ export function applyAgentSkillsBlock(existing: string, block: string): string {
 	const nextLevelTwo = tail.search(/\n^##\s(?!##)/m);
 	const end = nextLevelTwo >= 0 ? match.index + match[0].length + nextLevelTwo : existing.length;
 	const before = existing.slice(0, match.index);
+	// The `after` slice starts with the line break the next section's heading
+	// takes, so the block's own trailing line break leaves exactly one blank
+	// line between the block and the next section, and none at the very end of
+	// the file.
 	const after = existing.slice(end);
-	// Keep the gap between the block and the next section: one blank line where
-	// the next section follows, none at the very end of the file.
-	const separator = after === "" ? "" : "\n";
-	return `${before}${blockText}${separator}${after}`;
+	return `${before}${blockText}${after}`;
+}
+
+/**
+ * The level-one heading inside the Agent skills block's run, or null when the
+ * run holds none (ADR 0075): the run ends at the next level-two heading or the
+ * end of the file, so a `#` section inside the run has no level-two boundary
+ * and the block-only surgery swallows it, and everything below, on a re-init.
+ * The plan refuses to stand over such a file, and the operator moves the
+ * heading above the block by hand.
+ */
+export function levelOneHeadingInBlockRun(existing: string): string | null {
+	const match = /^##\s+Agent skills\s*$/m.exec(existing);
+	if (match === null) return null;
+	const tail = existing.slice(match.index + match[0].length);
+	const nextLevelTwo = tail.search(/\n^##\s(?!##)/m);
+	const run = nextLevelTwo >= 0 ? tail.slice(0, nextLevelTwo) : tail;
+	const levelOne = run.match(/\n# [^\n]+/m);
+	return levelOne === null ? null : levelOne[0].trim();
 }
 
 /** A stable JSON form: object keys sorted, arrays kept in order. */
@@ -295,15 +314,25 @@ export function repositoryInitSources(
 	return [issues, pullRequests];
 }
 
-/** The source name the operator's own sources already take, for one of the names the act wants, or null. */
-export function sourceNameCollision(
-	sources: readonly TicketSourceConfig[],
-	names: readonly string[],
-): string | null {
-	for (const source of sources) {
-		if (names.includes(source.name)) return source.name;
-	}
-	return null;
+/**
+ * Whether a configured source is the one the plane itself registered for the
+ * init (ADR 0075): the same name, the same kind, the same host, and the same
+ * repository set. Such a source is the re-init's own standing fact, not a
+ * collision: the re-init stands its fact over it without re-registering it,
+ * while a source the operator named under the same name with any other fact is
+ * the collision the act refuses (story 15).
+ */
+export function isPlaneInitSource(
+	configured: TicketSourceConfig,
+	source: TicketSourceConfig,
+): boolean {
+	return (
+		configured.name === source.name &&
+		configured.kind === source.kind &&
+		configured.host === source.host &&
+		[...configured.repositories].sort().join("\u0000") ===
+			[...source.repositories].sort().join("\u0000")
+	);
 }
 
 // ---------------------------------------------------------------------------
@@ -704,6 +733,17 @@ export async function planRepositoryInit(input: {
 	const choice = chooseInstructionFile(claude !== null, agents !== null);
 	const instructionFile = choice ?? "AGENTS.md";
 	const currentInstruction = choice === "CLAUDE.md" ? claude : agents;
+	// The block's run swallows a level-one section it holds (the run ends at the
+	// next level-two heading or the end of the file), so the plan refuses to
+	// stand over a file whose surgery would take the operator's section with it.
+	if (currentInstruction !== null) {
+		const swallowed = levelOneHeadingInBlockRun(currentInstruction);
+		if (swallowed !== null)
+			return {
+				ok: false,
+				reason: `cannot plan: the Agent skills block of ${instructionFile} runs into the level-one heading "${swallowed}": the re-init would swallow that section and everything below it. Move the heading above the block by hand`,
+			};
+	}
 	const withBlock = applyAgentSkillsBlock(currentInstruction ?? "", agentSkillsBlock(displayName));
 	const instructionFileAction: FileAction =
 		currentInstruction === null

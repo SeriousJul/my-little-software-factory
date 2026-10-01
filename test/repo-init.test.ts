@@ -13,15 +13,16 @@ import {
 	conventionFileContent,
 	conventionFiles,
 	DEFAULT_LABEL_COLOR,
+	isPlaneInitSource,
 	labelColor,
 	labelDescription,
+	levelOneHeadingInBlockRun,
 	planRepositoryInit,
 	type RepositoryInitPlan,
 	repositoryInitLabelSet,
 	repositoryInitSettingsHash,
 	repositoryInitSources,
 	runRepositoryInit,
-	sourceNameCollision,
 } from "../src/repo-init.ts";
 import { commitRepositoryInit, repositoryInitDrifted } from "../src/repo-init-flow.ts";
 import { openFactoryState } from "../src/state.ts";
@@ -165,6 +166,34 @@ describe("the Repository init generator (ADR 0075)", () => {
 		expect(out).toBe(`# T\n\nIntro.\n\n${block}`);
 	});
 
+	test("the block surgery leaves one blank line before a following level-two section", () => {
+		const existing = `# T\n\nIntro.\n\n${AGENT_SKILLS_HEADING}\n\nold block\n\n## Next\n\nHand-written.\n`;
+		const out = applyAgentSkillsBlock(existing, agentSkillsBlock("acme/factory"));
+		// Exactly one blank line stands between the block and the next section, in
+		// either direction: the surgery replaces the old block's run and keeps the
+		// gap the file had.
+		expect(out).toContain(`${AGENT_SKILLS_HEADING}`);
+		expect(out).toMatch(/\n\n## Next\n/);
+		expect(out).not.toMatch(/\n\n\n/);
+		expect(out).toContain("## Next\n\nHand-written.\n");
+	});
+
+	test("a level-one heading inside the block's run is named, and a level-two one is not", () => {
+		// A level-one section after the block has no level-two boundary: the run
+		// swallows it to the end of the file.
+		expect(
+			levelOneHeadingInBlockRun(`${AGENT_SKILLS_HEADING}\n\nold block\n\n# Section\n\nText.\n`),
+		).toBe("# Section");
+		// A level-two section ends the run: what follows it stands untouched.
+		expect(
+			levelOneHeadingInBlockRun(
+				`${AGENT_SKILLS_HEADING}\n\nold\n\n## Next\n\n# Section\n\nText.\n`,
+			),
+		).toBe(null);
+		// No block at all: no run to swallow anything.
+		expect(levelOneHeadingInBlockRun("# Section\n\nText.\n")).toBe(null);
+	});
+
 	test("CLAUDE.md wins over AGENTS.md, and neither offers a choice", () => {
 		expect(chooseInstructionFile(true, true)).toBe("CLAUDE.md");
 		expect(chooseInstructionFile(false, true)).toBe("AGENTS.md");
@@ -207,20 +236,29 @@ describe("the Repository init generator (ADR 0075)", () => {
 		expect(pullRequests.host).toBe("github.com");
 	});
 
-	test("a source name collision is named for the operator's own source", () => {
-		const sources = [
-			{
-				name: "acme/factory-issues",
-				kind: "github-issues" as const,
-				repositories: ["acme/factory"],
-				refreshIntervalSeconds: 60,
-				host: "github.com",
-			},
-		];
+	test("a source the plane registered is its re-init's standing fact, not a collision", () => {
+		const plane = repositoryInitSources("acme/factory", "github.com")[0];
+		// The same name, kind, host, and repository set: the plane's own source.
+		expect(isPlaneInitSource(plane, plane)).toBe(true);
+		// Same name and kind, the operator's own filter: still the plane's source,
+		// the filter the operator tuned is not the collision's fact.
+		expect(isPlaneInitSource({ ...plane, filter: "label:mine" }, plane)).toBe(true);
+		// Same kind, a different name: the operator's own source.
+		expect(isPlaneInitSource({ ...plane, name: "factory-issues" }, plane)).toBe(false);
+		// Same name, a different repository set: the operator's own source.
 		expect(
-			sourceNameCollision(sources, ["acme/factory-issues", "acme/factory-pull-requests"]),
-		).toBe("acme/factory-issues");
-		expect(sourceNameCollision(sources, ["other-issues", "other-pull-requests"])).toBe(null);
+			isPlaneInitSource(
+				{ ...plane, repositories: ["acme/other"] },
+				repositoryInitSources("acme/factory", "github.com")[0],
+			),
+		).toBe(false);
+		// Same name and repository, a different host: the operator's own source.
+		expect(
+			isPlaneInitSource(
+				{ ...plane, host: "git.example.com" },
+				repositoryInitSources("acme/factory", "github.com")[0],
+			),
+		).toBe(false);
 	});
 });
 
@@ -300,7 +338,6 @@ describe("the Repository init act (ADR 0075)", () => {
 		runner.set("git", ["-C", worktree, "rev-parse", "HEAD"], { stdout: "def456abc\n" });
 		// A pre-existing AGENTS.md with a hand-written section before the block.
 		const preExisting = `# Guide\n\n## Other section\n\nHand-written.\n`;
-		await Promise.resolve();
 		// Seed the worktree with the existing instruction file before the act reads it.
 		const { writeFileSync } = await import("node:fs");
 		writeFileSync(join(worktree, "AGENTS.md"), preExisting, "utf8");
@@ -528,6 +565,33 @@ describe("the Repository init plan (ADR 0075)", () => {
 		);
 	});
 
+	test("a block whose run swallows a level-one section refuses the plan", async () => {
+		const runner = new FakeRunner();
+		runner.set("git", ["-C", checkout, "symbolic-ref", "refs/remotes/origin/HEAD"], {
+			stdout: "refs/remotes/origin/main\n",
+		});
+		runner.set("git", ["-C", checkout, "fetch", "origin", "main"], {});
+		runner.set("git", ["-C", checkout, "show", "origin/main:CLAUDE.md"], { code: 1 });
+		runner.set("git", ["-C", checkout, "show", "origin/main:AGENTS.md"], {
+			stdout: `# Guide\n\n${AGENT_SKILLS_HEADING}\n\nold block\n\n# Late section\n\nHand-written.\n`,
+		});
+		runner.set("gh", ["label", "list", "--repo", identity, "--json", "name"], {
+			stdout: "[]",
+		});
+		runner.setDefault({ code: 0, stdout: "" });
+		const plan = await planRepositoryInit({
+			runner,
+			checkout,
+			identity,
+			displayName,
+			taskTypes: taskTypesFixture(),
+		});
+		expect(plan).toHaveProperty("ok", false);
+		if (!("ok" in plan)) throw new Error("expected the plan to refuse");
+		expect(plan.reason).toContain("Late section");
+		expect(plan.reason).toContain("AGENTS.md");
+	});
+
 	test("a repository with neither instruction file offers the choice", async () => {
 		const runner = new FakeRunner();
 		runner.set("git", ["-C", checkout, "symbolic-ref", "refs/remotes/origin/HEAD"], {
@@ -647,10 +711,10 @@ describe("the repository init's commit flow", () => {
 	test("a source name the operator already names refuses before the act issues a command", async () => {
 		const state = openFactoryState(":memory:");
 		const worktree = tempDir("factory-init-flow-");
+		// The operator's source wears the plane's name but no kind and another
+		// repository set: it is the operator's, not the plane's registration.
 		const busyConfig = {
-			sources: [
-				{ name: "acme/factory-issues", host: "github.com", repositories: ["acme/factory"] },
-			],
+			sources: [{ name: "acme/factory-issues", host: "github.com", repositories: ["acme/other"] }],
 		} as unknown as FactoryConfig;
 		const runner = commitRunner(worktree);
 		const result = await commitRepositoryInit({
@@ -670,6 +734,42 @@ describe("the repository init's commit flow", () => {
 		// single command (ADR 0075, story 15): no fetch, label, or worktree ran.
 		expect(state.repositoryInitFact(identity)).toBe(null);
 		expect(runner.commands()).toEqual([]);
+	});
+
+	test("the re-init stands over the sources the plane already registered", async () => {
+		// The drift mechanism's one real use case (ADR 0075, stories 21 to 23):
+		// after the first init, the config carries the plane's two sources, and
+		// a settings change stands the repository in drift. The same key re-runs
+		// the act, and the plane's own registrations are no collision: the
+		// re-init passes them, re-writes the fact on the new settings, and
+		// registers nothing new, so the config gains no duplicate row.
+		const state = openFactoryState(":memory:");
+		const worktree = tempDir("factory-init-reinit-");
+		const plane = repositoryInitSources(displayName, "github.com");
+		const reinitConfig = { sources: [...plane] } as unknown as FactoryConfig;
+		const result = await commitRepositoryInit({
+			runner: commitRunner(worktree),
+			state,
+			config: reinitConfig,
+			repository,
+			workflowStates: statesFixture(),
+			taskTypes: taskTypesFixture(),
+			plan: {
+				instructionFile: "AGENTS.md",
+				labelsToCreate: [],
+				fileActions: CONVENTION_FILE_PATHS.map((path) => ({ path, action: "differing" })),
+			},
+			worktreePath: worktree,
+		});
+		expect(result.ok).toBe(true);
+		if (!result.ok) throw new Error("expected the re-init to pass");
+		// Nothing new registers: the plane's sources already stand in the config.
+		expect(result.newSources).toEqual([]);
+		// The fact re-writes on the current settings: the drift clears.
+		expect(state.repositoryInitFact(identity)?.settingsHash).toBe(
+			repositoryInitSettingsHash(statesFixture(), taskTypesFixture()),
+		);
+		expect(repositoryInitDrifted(state, identity, statesFixture(), taskTypesFixture())).toBe(false);
 	});
 });
 

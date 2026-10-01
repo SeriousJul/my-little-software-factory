@@ -25,10 +25,10 @@ import type {
 } from "./config.ts";
 import type { InstructionFileName } from "./repo-init.ts";
 import {
+	isPlaneInitSource,
 	repositoryInitSettingsHash,
 	repositoryInitSources,
 	runRepositoryInit,
-	sourceNameCollision,
 } from "./repo-init.ts";
 import type { CommandOptions, CommandRunner } from "./runner.ts";
 import type { FactoryState, RepositoryInitFact } from "./state.ts";
@@ -113,18 +113,23 @@ async function ghOptionsFor(
 export async function commitRepositoryInit(
 	input: RepositoryInitFlowInput,
 ): Promise<RepositoryInitFlowResult> {
-	// A source name the operator already names wins before any external change
-	// (ADR 0075, story 15): the init never renames the operator's source, and a
-	// collision found only after the act would stand a pushed commit and created
-	// labels with no sources and no fact. The check reads the config alone, so
-	// it stands before the act issues a single command.
+	// A source the operator named over one of the act's names wins before any
+	// external change (ADR 0075, story 15): the init never renames the
+	// operator's source, and a collision found only after the act would stand a
+	// pushed commit and created labels with no sources and no fact. The check
+	// reads the config alone, so it stands before the act issues a single
+	// command. A source the plane already registered (name plus kind plus the
+	// repository it serves) is no collision: it is the re-init's own standing
+	// fact (story 21), and the re-init stands its fact over it without
+	// re-registering it.
 	const sources = repositoryInitSources(input.repository.displayName, input.repository.host);
-	const collision = sourceNameCollision(
-		input.config.sources ?? [],
-		sources.map((source) => source.name),
-	);
-	if (collision !== null)
-		return { ok: false, reason: `a source named ${collision} is already configured` };
+	const configured = input.config.sources ?? [];
+	for (const source of sources) {
+		for (const held of configured) {
+			if (held.name === source.name && !isPlaneInitSource(held, source))
+				return { ok: false, reason: `a source named ${source.name} is already configured` };
+		}
+	}
 
 	const ghOptions = await ghOptionsFor(input.runner, input.repository);
 	const outcome = await runRepositoryInit({
@@ -149,6 +154,12 @@ export async function commitRepositoryInit(
 		outcome.pushedCommit,
 	);
 
+	// The sources the plane already registered stand in the config: the re-init
+	// re-runs the act and re-writes the fact, but it registers nothing new, so
+	// the config the operator's pane shows gains no duplicate row.
+	const newSources = sources.filter(
+		(source) => !configured.some((held) => isPlaneInitSource(held, source)),
+	);
 	const labels = outcome.labelsCreated.length;
 	const changed = input.plan.fileActions.filter((file) => file.action !== "unchanged").length;
 	return {
@@ -156,7 +167,7 @@ export async function commitRepositoryInit(
 		message: `${input.repository.displayName}: pushed ${outcome.pushedCommit} to ${outcome.targetBranch}, created ${labels} label${
 			labels === 1 ? "" : "s"
 		}, changed ${changed} file${changed === 1 ? "" : "s"}`,
-		newSources: sources,
+		newSources,
 	};
 }
 
