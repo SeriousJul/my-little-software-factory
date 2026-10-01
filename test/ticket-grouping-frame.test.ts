@@ -1880,4 +1880,24 @@ describe("the init marker and the one-time note (ADR 0075)", () => {
 			{ state },
 		);
 	});
+
+	test("every repository stands initialized, so no note stands at first sight", async () => {
+		const state = openFactoryState(stateFile());
+		state.initializeSources([ISSUES, TRIAGE]);
+		state.setGroupingAxis("tickets", "repository");
+		state.applyFetch(ISSUES, success(tickets()));
+		state.applyFetch(TRIAGE, success(triageListing()));
+		const hash = repositoryInitSettingsHash(groupConfig.workflowStates, groupConfig.taskTypes);
+		state.setRepositoryInitFact(`github.com/${BILLING}`, hash, "init-commit");
+		state.setRepositoryInitFact(`github.com/${FACTORY}`, hash, "init-commit");
+		await bootGrouped(
+			async (setup) => {
+				const frame = await settle(setup);
+				// Neither repository stands uninit or in drift: no marker, no note.
+				expect(headers(frame).sort()).toEqual(["▾ acme/billing 2", "▾ acme/factory 3"]);
+				expect(messageRowOf(frame)).not.toContain("Not initialized:");
+			},
+			{ state },
+		);
+	});
 });

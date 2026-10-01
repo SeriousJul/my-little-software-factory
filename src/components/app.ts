@@ -3574,7 +3574,6 @@ export function App({
 			groupingAxis !== "repository"
 		)
 			return;
-		initNoteShownRef.current = true;
 		// The repositories that stand uninitialized or in Init drift on this read,
 		// once per repository the list carries. The hash is hoisted out of the
 		// loop, the way the marker hoists it, so the note re-hashes the config
@@ -3591,6 +3590,10 @@ export function App({
 			if (marker !== null) unprepared.push({ name, marker });
 		}
 		if (unprepared.length === 0) return;
+		// The note stands at the first sight of one unprepared repository: the
+		// flag is set only when the note actually stands, so an all-prepared
+		// read never consumes the run's one-time note.
+		initNoteShownRef.current = true;
 		const names = unprepared.map((entry) => `${entry.name} (${entry.marker})`).join(", ");
 		// The note stands on the repository axis (the marker rides the Group
 		// header), so its path is the real one: the `i` key on the repository's

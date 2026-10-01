@@ -386,6 +386,12 @@ export interface RepositoryInitResult {
 /** The act's answer: the facts on success, the reason on failure. */
 export type RepositoryInitOutcome = RepositoryInitResult | { ok: false; reason: string };
 
+/** The label pass's success: the labels it created and the ones that already stood. */
+export interface LabelCreationResult {
+	created: string[];
+	present: string[];
+}
+
 /** The label list `gh label list --json name` returns, read leniently. */
 function parseLabelList(stdout: string): string[] {
 	const start = stdout.indexOf("[");
@@ -452,7 +458,7 @@ export async function createMissingLabels(
 	labels: readonly string[],
 	existing: readonly string[],
 	ghOptions?: CommandOptions,
-): Promise<RepositoryInitOutcome | { created: string[]; present: string[] }> {
+): Promise<RepositoryInitOutcome | LabelCreationResult> {
 	const presentSet = new Set(existing);
 	const toCreate = labels.filter((label) => !presentSet.has(label));
 	const created: string[] = [];
