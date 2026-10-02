@@ -65,12 +65,17 @@ behavior.
 ## What was verified on the pull request
 
 - The CI `checks` and `site-build` jobs on the pull request head
-  (`34bfa05`): both passed (run 36987582022, 2026-10-02). The `site-build`
+  (`85971d4`): both passed (run 36987889391, 2026-10-02). The `site-build`
   job runs the same `bun run docs:build` command as the local build above.
-  The head is a merge of the branch with `main`, which had moved on after the
-  branch was cut; the one file both sides touched, the completion page, keeps
-  the usage rewrite, since the sentence `main` added there is the polling
-  mechanic that ADR 0084 already carries.
+  The first `checks` attempt flaked: one test in `test/auto-mode.test.ts`
+  (the auto decision model-resolution case) failed under the parallel CI
+  load but passes in isolation and in the local full suite, so it is a load
+  flake, not a regression. A second attempt hung on the runner and was
+  cancelled; the third passed. The head also carries a merge of the branch
+  with `main`, which had moved on after the branch was cut; the one file both
+  sides touched, the completion page, keeps the usage rewrite, since the
+  sentence `main` added there is the polling mechanic that ADR 0084 already
+  carries.
 
 ## What was verified on the deployed site
 
