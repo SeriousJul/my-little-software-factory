@@ -24,6 +24,7 @@ export function launcherConfig(checkout: string): FactoryConfig {
 			design: { agent: "demo", environment: "live-worktree", template: "/design {input}" },
 		},
 		attentionBell: false,
+		desktopNotification: false,
 		interactionExitKey: "f12",
 		maxParallelAgents: 2,
 		agentPollIntervalSeconds: 60,

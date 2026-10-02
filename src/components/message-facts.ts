@@ -1,6 +1,7 @@
 /** The Message line's facts: what kind of message is visible, and why. */
 import { useCallback, useMemo, useRef, useState } from "react";
 
+import type { AttentionService } from "../attention.ts";
 import { type MessageFact, type MessageFacts, selectMessage } from "./messages.ts";
 
 /**
@@ -45,7 +46,16 @@ export type ProgressOwner = WorkingOwner | "none";
 export function useMessageFacts(
 	sourceHealth: string | undefined,
 	/** A notice the app starts with, here the Theme fallback warning. */
-	initialNotice?: string,
+	initialNotice: string | undefined,
+	/**
+	 * The plane's out-of-band attention (ADR 0080): the warning and error
+	 * writers send their fact to the desktop, one notification per standing
+	 * fact, and the `report` path is covered by the same writers. The
+	 * working, news, notice, and source-health facts send nothing: they are
+	 * progress, results, app decisions, and a standing condition, not a
+	 * standing warning or error fact.
+	 */
+	attention: AttentionService,
 ) {
 	const [facts, setFacts] = useState<MessageFacts>(() =>
 		initialNotice === undefined ? {} : { notice: initialNotice },
@@ -121,25 +131,29 @@ export function useMessageFacts(
 	// line and appears when the refresh settles (user story 51). Only a new
 	// operation, which writes its own Working, replaces an outcome.
 	const warning = useCallback(
-		(text: string) =>
+		(text: string) => {
 			setFacts((current) => ({
 				...current,
 				operation: { severity: "warning", text },
 				news: undefined,
 				notice: undefined,
-			})),
-		[],
+			}));
+			attention.notify({ severity: "warning", text });
+		},
+		[attention],
 	);
 
 	const error = useCallback(
-		(text: string) =>
+		(text: string) => {
 			setFacts((current) => ({
 				...current,
 				operation: { severity: "error", text },
 				news: undefined,
 				notice: undefined,
-			})),
-		[],
+			}));
+			attention.notify({ severity: "error", text });
+		},
+		[attention],
 	);
 
 	/**

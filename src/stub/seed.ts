@@ -234,6 +234,8 @@ default-agent = "pi"
 default-environment = "worktree"
 default-task-type = "implement"
 attention-bell = true
+# The Stub run keeps the desktop quiet (issue #190).
+desktop-notification = false
 interaction-exit-key = "f12"
 max-parallel-agents = 2
 agent-poll-interval-seconds = 5

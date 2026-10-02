@@ -25,8 +25,8 @@
 import os from "node:os";
 import type { Selection } from "@opentui/core";
 import { createElement, useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/react";
-import { useCallback, useEffect, useRef, useState } from "react";
-
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { AttentionService } from "../attention.ts";
 import {
 	defaultConfigPath,
 	type FactoryConfig,
@@ -790,6 +790,16 @@ export function App({
 	const commandRunner = runner ?? realRunner();
 	const homeDir = home ?? os.homedir();
 	const configFile = configPath ?? defaultConfigPath();
+	// The plane's out-of-band attention (ADR 0080): the terminal bell and the
+	// desktop notification of a standing warning or error fact, one service
+	// the app creates once per run from the config and the command runner.
+	// The config getter keeps both gates reading the config the app holds
+	// current, and the logger, where there is one, is the record a failed
+	// send leaves a line in.
+	const attention = useMemo(
+		() => new AttentionService(() => configRef.current, commandRunner, { logger }),
+		[commandRunner, logger],
+	);
 	// A stale source is a failed refresh the operator must answer to. A
 	// removed source is the operator's own config decision: the plane stops
 	// reading it and pins no line for it, while its in-flight tickets keep
@@ -820,6 +830,7 @@ export function App({
 	} = useMessageFacts(
 		sourceHealthMessage === "" ? undefined : sourceHealthMessage,
 		currentThemeResolution().warning ?? undefined,
+		attention,
 	);
 	/**
 	 * Write one Consultation outcome onto the shared Message facts.
@@ -920,14 +931,14 @@ export function App({
 	// and flashes the Tickets header, a fall or a steady count does not.
 	useEffect(() => {
 		if (heldCountRef.current >= 0 && heldCount > heldCountRef.current) {
-			if (configRef.current.attentionBell) {
-				setHeldBell(true);
-				setTimeout(() => setHeldBell(false), 250);
-				process.stdout.write("\u0007");
-			}
+			// The flash stays here; the bell write and its attention-bell gate
+			// live in the shared attention service (ADR 0080).
+			setHeldBell(true);
+			setTimeout(() => setHeldBell(false), 250);
+			attention.ring();
 		}
 		heldCountRef.current = heldCount;
-	}, [heldCount]);
+	}, [heldCount, attention]);
 
 	const tooSmall = belowMinimum(terminalWidth, terminalHeight);
 	// The compact frame's own arithmetic. One row holds the Action bar at any
@@ -3868,11 +3879,11 @@ export function App({
 			onAgents: (agents) => setAgents(agents),
 			onConsultationsChanged: replaceConsultations,
 			onConsultationAttention: (_id) => {
-				if (configRef.current.attentionBell) {
-					setBell(true);
-					setTimeout(() => setBell(false), 250);
-					process.stdout.write("\u0007");
-				}
+				// The flash stays here; the bell write and its attention-bell gate
+				// live in the shared attention service (ADR 0080).
+				setBell(true);
+				setTimeout(() => setBell(false), 250);
+				attention.ring();
 			},
 			reconcileOnly: true,
 			onStatus: (kind, text, topic) => {
@@ -3914,6 +3925,7 @@ export function App({
 		replaceTickets,
 		replaceConsultations,
 		commandRunner,
+		attention,
 		onReady,
 		clearOperationMessage,
 		setStatus,

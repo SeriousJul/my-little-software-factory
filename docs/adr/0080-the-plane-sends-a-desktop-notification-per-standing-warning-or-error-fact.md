@@ -43,9 +43,12 @@ Every send runs through the Command runner, the plane's single exit, as one
 fire-and-forget command on the platform's own notification path:
 `notify-send` on Linux with the app name and a critical urgency for errors,
 the built-in `osascript` notification on macOS, and the static PowerShell
-balloon tip on Windows. The platform choice is injectable, so the suite
-exercises every sender branch on any machine, and the runner seam lets a
-test assert the exact command without touching a real notification stack.
+balloon tip on Windows with a sticky timeout for the error and a short
+self-clearing timeout for the warning, so a warning announces itself
+without holding the desktop the way an error does. The platform choice is
+injectable, so the suite exercises every sender branch on any machine, and
+the runner seam lets a test assert the exact command without touching a real
+notification stack.
 
 A send that fails - no notification tool, a nonzero exit - changes nothing
 the operator sees on the plane: the Message line stands as written, the
@@ -95,3 +98,11 @@ only the bell write and its `attention-bell` gate move.
 - The terminal bell keeps its behavior - the held-count bell and the
   Consultation attention bell, each gated by `attention-bell` - with its
   two snippets gathered in the one shared service beside the notification.
+
+- The built-in macOS sender cannot mark an error urgent or sticky:
+  `display notification` carries no urgency, and the notification clears on
+  its own. The error-stands-until-seen story holds on Linux (the critical
+  urgency) and Windows (the sticky Popup), and does not hold on the
+  built-in macOS path. A richer macOS sender is out of scope, so the trade
+  stands: the macOS operator reads the full fact while the notification is
+  up, but not a fact that waits for the operator.

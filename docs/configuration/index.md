@@ -72,6 +72,9 @@ max-handoffs-per-ticket = 10
 # Ring the terminal bell when a Consultation settles.
 attention-bell = true
 
+# Also send a desktop notification per standing warning or error fact.
+desktop-notification = true
+
 # Exit Agent interaction mode. A function key f1 to f24, or ctrl plus
 # one letter, for example "f12" or "ctrl+e".
 interaction-exit-key = "f12"
@@ -357,6 +360,7 @@ host = "github.com"
 | `completion-message-lines` | no | `200` | Lines of the agent last message captured when a turn settles. A whole number of 1 or more. |
 | `max-handoffs-per-ticket` | no | `10` | Handoffs per ticket after which auto-handoff stops dispatching it. A manual handoff may pass the limit. |
 | `attention-bell` | no | `true` | Ring the terminal bell when a Consultation settles. |
+| `desktop-notification` | no | `true` | Send a desktop notification per standing warning or error fact on the Message line, carrying the full text the line truncates (ADR 0080). Switches independently of `attention-bell`. |
 | `interaction-exit-key` | no | `f12` | Exit Agent interaction mode. A function key `f1` to `f24`, or `ctrl` plus one letter. Not `ctrl+c`: the emergency exit owns that key. |
 | `scroll` | no | the `[scroll]` defaults | The detail-pane scroll. |
 | `logging` | no | none | The plane's own file log. Omitted: the run writes no log, the state of a config the plane seeded before logging. |
