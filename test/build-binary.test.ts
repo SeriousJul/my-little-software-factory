@@ -173,7 +173,13 @@ describe("the native cores a build may embed", () => {
 
 describe("the version the build stamps", () => {
 	test("the version comes from the repository's package.json", () => {
-		expect(packageVersion()).toBe("0.1.0");
+		// The release workflow writes the tag's version into the manifest before
+		// any step reads one (ADR 0090), so the test holds the reader to the
+		// manifest's own value instead of a version it would pin.
+		const pkg = JSON.parse(readFileSync(join(import.meta.dir, "..", "package.json"), "utf8")) as {
+			version: string;
+		};
+		expect(packageVersion()).toBe(pkg.version);
 	});
 });
 
