@@ -442,7 +442,7 @@ maximum-speed = 6
 "github.com/seriousjul/my-little-software-factory" = "/home/seriousjul/src/my-little-software-factory"
 "github.com/seriousjul/pi-extensions" = "/home/seriousjul/src/pi-extensions"
 "github.com/seriousjul/seriousjul.github.io" = "/home/seriousjul/src/seriousjul.github.io"
-"github.com/seriousjul/yapdf" = "/home/seriousjul/src/yapdf2"
+"github.com/seriousjul/yapdf" = "/home/seriousjul/src/yapdf"
 
 [[sources]]
 name = "factory-issues"
