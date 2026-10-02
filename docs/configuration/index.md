@@ -110,10 +110,10 @@ keep = 5
 # thinking-values lists the levels this agent supports, in the order the
 # override panel offers them. An agent that maps thinking must declare a
 # non-empty subset of the standard set: off, minimal, low, medium, high,
-# xhigh, max. Thinking is never free text (ADR 0010).
+# xhigh, max. Thinking is never free text.
 # A handoff or a Consultation can pass one of those settings only when the
 # agent defines its template; a setting the agent cannot take fails the
-# handoff with a readable reason (ADR 0009).
+# handoff with a readable reason.
 # The control plane reads the model list of a kind that can report one from
 # the agent's own CLI; the config declares no models.
 [agents.pi]
@@ -139,8 +139,8 @@ context-window = "--autocompact {value}"
 # --- Task types -----------------------------------------------------------
 
 # Exactly one of template and action is required: the prompt the type's
-# turns run on, or the plane action the type runs without an agent (ADR
-# 0068). Placeholders in a template: {repository}, {title},
+# turns run on, or the plane action the type runs without an agent.
+# Placeholders in a template: {repository}, {title},
 # {description}, {source-kind}, {external-key}, {source-url}, {labels},
 # {previous-message}, {review-verdict}. Any other brace pair is a startup
 # error.
@@ -156,8 +156,8 @@ context-window = "--autocompact {value}"
 # A [task-types.X.transition] table fires when a turn of this type
 # completes - or, for the action form, when the action's run answers:
 # it writes the label facts on the ticket and its linked pull
-# request, and the machine re-derives every position from the written labels
-# (ADR 0027). The agents never write workflow labels.
+# request, and the machine re-derives every position from the written labels.
+# The agents never write workflow labels.
 [task-types.implement]
 agent = "pi"
 model = "anthropic/claude-sonnet-4-5"
@@ -225,7 +225,7 @@ auto-advance = true
 agent = "pi"
 environment = "worktree"
 
-# The merge is a plane action (ADR 0068): the plane runs it without an
+# The merge is a plane action: the plane runs it without an
 # agent and without a worktree, and its transition takes the needs-work
 # path on a blocked merge and the empty facts on a landed one.
 [task-types.merge]
@@ -351,7 +351,7 @@ host = "github.com"
 | Key | Required | Default | What it does |
 | --- | --- | --- | --- |
 | `default-agent` | yes | - | The agent type a handoff starts with when neither its Task profile names one nor a transition pins one. It must name an `[agents.*]` table. |
-| `default-model` | no | empty | The model a handoff starts with when its Task profile names none, and the starting value of the Model row. Free text, and it is left to the agent when empty. The resolved agent must map a model for a handoff to carry one. A list the agent reports is checked at startup through every task profile that resolves it (ADR 0010). |
+| `default-model` | no | empty | The model a handoff starts with when its Task profile names none, and the starting value of the Model row. Free text, and it is left to the agent when empty. The resolved agent must map a model for a handoff to carry one. A list the agent reports is checked at startup through every task profile that resolves it. |
 | `default-environment` | yes | - | The environment a handoff starts with when a transition does not pin one. One of `live-worktree` or `worktree`. |
 | `default-task-type` | yes | - | The task type of a handoff when no state matches. It must name a `[task-types.*]` table. |
 | `state-file` | no | `$XDG_STATE_HOME/my-little-software-factory/state.sqlite`, else `~/.local/state/my-little-software-factory/state.sqlite` | The SQLite state file. A relative path resolves against the directory of this config file. |
@@ -360,7 +360,7 @@ host = "github.com"
 | `completion-message-lines` | no | `200` | Lines of the agent last message captured when a turn settles. A whole number of 1 or more. |
 | `max-handoffs-per-ticket` | no | `10` | Handoffs per ticket after which auto-handoff stops dispatching it. A manual handoff may pass the limit. |
 | `attention-bell` | no | `true` | Ring the terminal bell when a Consultation settles. |
-| `desktop-notification` | no | `true` | Send a desktop notification per standing warning or error fact on the Message line, carrying the full text the line truncates (ADR 0080). Switches independently of `attention-bell`. |
+| `desktop-notification` | no | `true` | Send a desktop notification per standing warning or error fact on the Message line, carrying the full text the line truncates. Switches independently of `attention-bell`. |
 | `interaction-exit-key` | no | `f12` | Exit Agent interaction mode. A function key `f1` to `f24`, or `ctrl` plus one letter. Not `ctrl+c`: the emergency exit owns that key. |
 | `scroll` | no | the `[scroll]` defaults | The detail-pane scroll. |
 | `logging` | no | none | The plane's own file log. Omitted: the run writes no log, the state of a config the plane seeded before logging. |
@@ -402,8 +402,8 @@ host = "github.com"
 
 | Key | Required | Default | What it does |
 | --- | --- | --- | --- |
-| `template` | exactly one of `template` or `action` | - | The prompt. Placeholders: `{repository}`, `{title}`, `{description}`, `{source-kind}`, `{external-key}`, `{source-url}`, `{labels}`, `{previous-message}`, `{review-verdict}`. Any other brace pair is a startup error, so an unknown name cannot stay literal in the prompt an agent receives. `{previous-message}` is empty on a first handoff and carries the previous agent's last message on a workflow handoff. `{review-verdict}` carries the pull request's review verdict, read live from the source when the handoff renders the prompt: the newest post on the pull request's comment and review timelines that carries the review template's fixed score line, under a one-line header naming its posting timeline and post time. A template without the placeholder issues no read. When no verdict stands or the read fails, the placeholder carries the fact and the agent reads the pull request's comments itself (ADR 0074). A verdict score that stands at or above the score-threshold of the transition that tests a score judgment fills the gates fact instead: the review passed, so the failure stands in the pull request's gates - a merge conflict or a failing CI check - and the prompt sends the agent to rebase the branch and fix what the gates report (ADR 0078). |
-| `action` | exactly one of `template` or `action` | - | The plane action the type runs instead of an agent's turn (ADR 0068): the plane starts it with no agent and no worktree, and the Handoff limit counts its attempts. The registry holds one action, `merge-pull-request`: the squash merge of the ticket's pull request. The action form takes no profile keys. |
+| `template` | exactly one of `template` or `action` | - | The prompt. Placeholders: `{repository}`, `{title}`, `{description}`, `{source-kind}`, `{external-key}`, `{source-url}`, `{labels}`, `{previous-message}`, `{review-verdict}`. Any other brace pair is a startup error, so an unknown name cannot stay literal in the prompt an agent receives. `{previous-message}` is empty on a first handoff and carries the previous agent's last message on a workflow handoff. `{review-verdict}` carries the pull request's review verdict, read live from the source when the handoff renders the prompt: the newest post on the pull request's comment and review timelines that carries the review template's fixed score line, under a one-line header naming its posting timeline and post time. A template without the placeholder issues no read. When no verdict stands or the read fails, the placeholder carries the fact and the agent reads the pull request's comments itself. A verdict score that stands at or above the score-threshold of the transition that tests a score judgment fills the gates fact instead: the review passed, so the failure stands in the pull request's gates - a merge conflict or a failing CI check - and the prompt sends the agent to rebase the branch and fix what the gates report. |
+| `action` | exactly one of `template` or `action` | - | The plane action the type runs instead of an agent's turn: the plane starts it with no agent and no worktree, and the Handoff limit counts its attempts. The registry holds one action, `merge-pull-request`: the squash merge of the ticket's pull request. The action form takes no profile keys. |
 | `method` | no | `squash` | The merge method the `merge-pull-request` action runs with: `squash`, `merge`, or `rebase`. An omitted method takes the default. |
 | `agent` | no | `default-agent` | The Task profile's agent type: the agent a handoff of this type starts on. It must name an `[agents.*]` table. A transition's pin beats it. |
 | `model` | no | `default-model` | The Task profile's model: free text the resolved agent's model template renders, so that agent must define one. The override panel prefills it, and clearing that row leaves the model to the agent. |
@@ -475,7 +475,7 @@ carries the command that creates them.
 | `ticket-facts` | no | none | The labels the transition writes on the ticket. The plane converges the ticket to its own workflow labels: it removes the workflow labels the ticket no longer holds and adds these. |
 | `pull-request-facts` | no | none | The labels the transition writes on the ticket's fixing pull request, the same convergence. No fixing pull request: the fact is skipped, the ticket's facts still stand, and the skip is a fact on the fire. A pull request ticket is its own fixing pull request: one surface takes both fact lists in one write. |
 | `score-threshold` | no | - | The score a `score-above-threshold` or `score-below-threshold` branch compares the review's score against. The review posts its score on the pull request - a comment or a review body - in the template's fixed line, and the branch reads the newest record that carries one. A whole number from 0 to 100. A score branch requires it. |
-| `auto-advance` | no | `false` | The factory decides the completed turn without the operator, in auto mode: the position it derives enters the Work queue as the top-up's continuation, and a transition that derives no position closes the cycle. Manual mode runs no top-up, so a routable turn rests in awaiting for the operator's Decision screen (ADR 0051). |
+| `auto-advance` | no | `false` | The factory decides the completed turn without the operator, in auto mode: the position it derives enters the Work queue as the top-up's continuation, and a transition that derives no position closes the cycle. Manual mode runs no top-up, so a routable turn rests in awaiting for the operator's Decision screen. |
 | `agent` | no | - | The agent type the route the transition derives runs on. It must name an `[agents.*]` table. |
 | `environment` | no | - | The environment the route the transition derives runs in. One of `live-worktree` or `worktree`. |
 | `branches` | no | none | The judgment branches, in order. The first branch whose `when` holds fires; a branch with no `when` is the fallback the transition fires on when no judgment held. |
@@ -496,26 +496,13 @@ carries the command that creates them.
 A transition's `auto-advance` lets the control plane decide the completions
 of its task type without the operator, while Auto-handoff mode is on. A branch
 carries its own `auto-advance` to decide one judgment's completion and leave
-the others to the transition's. The plane fires the transition on every
-completed turn: it writes the label facts, and the machine re-derives the
-position from the written labels on the ticket and its fixing pull request.
-One ticket that is both the settled ticket and the fixing pull request - a
-pull request ticket - is one surface: the plane converges it to the two fact
-lists at once, in one write. A derived position enters the Work queue as the
-auto top-up's continuation, one item per cycle into an empty queue, and the
-parallel limit is no longer a hold on the add: the seat the item cannot take
-is the wait its row holds (ADR 0049, ADR 0051). A transition that derives no
-position closes the cycle, and a route at the per-ticket handoff limit
-degrades to close. A transition whose label write failed closes nothing: the
-plane does not route from labels it did not write, and the turn rests in
-awaiting for the operator. The agents never write workflow labels (ADR 0027):
-the plane writes them, and a ticket's position is always re-derived from the
-labels it carries.
+the others to the transition's. A transition that derives no position closes
+the cycle, and a route at the per-ticket handoff limit degrades to close.
 
 The `pull-request-open` and `pull-request-closed` judgments read the linked
 pull request's own record straight from the source at fire time, live the
 moment a merge lands, and they fall back to the pull request's state on the
-last refresh when the read fails (ADR 0047).
+last refresh when the read fails.
 
 The `filter` is a GitHub search string. Without one, the source lists what
 the machine needs to see: the plane owns the workflow labels, so an item
@@ -533,66 +520,34 @@ key is rejected at startup instead of misread as applied.
 
 The three security kinds read the repository security tab, one call set per
 configured repository, and each item appears in the ticket list as one
-ticket. The item's severity becomes its single ticket label; an open secret
-scanning alert always carries the label `critical` (ADR 0029).
+ticket, labelled with its severity. An open secret scanning alert always
+carries the label `critical`. The shipped machine already routes each kind to
+its resolve task type, so uncommenting a security source block is the only
+setup it needs.
 
-- `github-security-advisories` lists the repository's security advisories in
-  `triage`, `draft`, and `published` state; `closed` and `withdrawn`
-  advisories stay out. The ticket's external key is the GHSA id, the title
-  the advisory summary, the description the advisory description plus a block
-  listing each named vulnerable component (ecosystem, package, vulnerable
-  range, patched versions) when the advisory carries one, the label the bare
-  severity word, and the URL the advisory page.
+- `github-security-advisories` lists the repository's security advisories;
+  `closed` and `withdrawn` advisories stay out.
 - `github-dependabot-alerts` lists the open Dependabot alerts; `fixed`,
-  `dismissed`, and `auto_dismissed` alerts stay out. The ticket's external
-  key is the alert's per-repository number, the title the CVE id (or the GHSA
-  id when there is no CVE) plus the embedded advisory summary, the
-  description a composed block (package, ecosystem, manifest path, scope,
-  relationship, vulnerable range, first patched version, severity, CVSS
-  score) followed by the embedded advisory's full description, the label the
-  bare severity word from the embedded advisory with the embedded security
-  vulnerability's severity as the fallback, and the URL the alert page.
+  `dismissed`, and `auto_dismissed` alerts stay out.
 - `github-secret-scanning-alerts` lists the open secret scanning alerts;
-  `closed` and `resolved` alerts stay out. The ticket's external key is the
-  alert's per-repository number, the title the word `Exposed` plus the secret
-  type name, the description a composed block (secret type, file path, line
-  range), the label always `critical` while the alert is open, and the URL
-  the alert page.
+  `closed` and `resolved` alerts stay out.
 
 The sources share the auth table of the other kinds, and a token with the
 `repo` or `security_events` scope reads all three feeds. The endpoints need
 administrator access to the repository (advisories: owner or security
-manager): a token without access makes the source stale with the readable
+manager): a token without access makes the source stale with a readable
 reason, like any failed refresh. The control plane is read-only on all three
 feeds: it never writes labels, states, or dismissals to the security items.
-The security task types' transitions write `ready-for-review` on the pull
-request the agent opens for the finding, never on the finding itself.
 
 Repository mappings are the one section the control plane writes back: a
-sibling clone records its path there. The write-back is atomic: the config
-goes to a temp file in the same directory and the rename over the target is
-one step, so a crash leaves either the old file or the new one, never a
-truncated file the next start would reject. The write-back serializes the
-whole config, so operator comments in the file are dropped at the first
-write-back: the data round-trips, the comments do not.
+sibling clone records its path there. The write-back rewrites the whole
+config file, so the data round-trips and your comments in the file do not.
 
 The shipped defaults define the three agent types `pi`, `codex`, and
 `claude`, the four task types `implement`, `review`, `rework`, and
-`merge`, the three security task types `resolve-security-advisory`,
-`resolve-dependabot-alert`, and `resolve-secret-scanning-alert`, and the
-states of the label workflow - the `ready-for-agent` issue to `implement`,
-the `needs-work`, `ready-for-review`, and `ready-to-ship` pull requests to
-`rework`, `review`, and `merge`, one state per security source kind pointing
-at its task type, and one parking state for a pull request that carries none
-of them - with the transitions that move a ticket between them. They also
-define the `consult` and `pair` Consultation types: `consult` passes your
-input straight through, and `pair` runs a pair programming session with the
-agent as the driver. They have no ticket sources and no repository mappings: uncommenting one
-security source block is the only setup a fresh install needs. The security
-task types carry `thinking = "high"` and a transition that writes
-`ready-for-review` on the opened pull request with `auto-advance = true`: the
-turn auto-advances into the pull request's review position, and a turn that
-opened no pull request settles closed, the completed task type resting the
-ticket while the item still lists upstream. `config/development.toml` in
-this repository configures the live development path through `--config`; it
-carries the `grill-with-docs` Consultation type.
+`merge`, the three security task types, and the states of the label workflow
+with the transitions that move a ticket between them. They also define the
+`consult` and `pair` Consultation types. They have no ticket sources and no
+repository mappings, so [the minimal
+config](../getting-started/minimal-config.md) is the only setup a fresh
+install needs.

@@ -3716,7 +3716,16 @@ describe("the auto decision", () => {
 					fetchedAt: "2026-08-31T10:02:00Z",
 					tickets: [fetched(5, "Persist source facts", ["ready-for-review"])],
 				});
-				await awaitFrame(setup, (f) => f.includes("auto-handed-off"), "the automatic route");
+				// Wait for the start command as well as the frame: under load the
+				// route's frame can be captured before the runner records the start,
+				// and asserting on a not-yet-recorded command reads undefined.
+				await awaitFrame(
+					setup,
+					(f) =>
+						f.includes("auto-handed-off") &&
+						app.runner.commands().some((command) => command.startsWith("herdr agent start")),
+					"the automatic route",
+				);
 				const start = app.runner
 					.commands()
 					.find((command) => command.startsWith("herdr agent start"));

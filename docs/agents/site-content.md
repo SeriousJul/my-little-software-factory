@@ -3,9 +3,9 @@
 The Documentation site builds from the `docs/` folder with VitePress, per
 [ADR 0018](../adr/0018-the-documentation-site-builds-from-the-docs-folder-with-vitepress.md).
 The published subset is every guide subfolder (Getting Started, Operation,
-Work flow, Configuration, and Development) and the ADRs. The `agents/`,
-`verification/`, and `research/` folders stay in the repository and out of
-the build; the exclusion is declared once in the site config.
+Work flow, Configuration, Contributing, and Development) and the ADRs. The
+`agents/`, `verification/`, and `research/` folders stay in the repository
+and out of the build; the exclusion is declared once in the site config.
 
 Publishing a page is one action: write the file. The sidebar is generated
 from the folder structure at build time: the group order is the explicit
@@ -15,13 +15,28 @@ still publishes: it appends in name order after the named groups and pages, so
 no configuration edit is ever needed for a new page or a new guide. Renaming
 or reordering a group or a page is a maintainer edit of those lists.
 
-Two folders are special-cased in the site config. The ADR group shows a
-single entry, the `adr/index.md` landing page that lists every ADR, instead of
-one sidebar row per ADR, so the list stays compact; the ADR pages themselves
-are still published and reachable from the index. The Getting Started group is
-the three steps in reading order (prerequisites, first launch, minimal
-config), with no separate landing page: the home page starts from the first
-step.
+Three folders are special-cased in the site config. The contributor content
+- the Development pages and the ADRs - is de-emphasized per
+[ADR 0081](../adr/0081-the-operator-pages-carry-usage-and-the-adrs-carry-the-mechanics.md):
+both folders stay published, but neither takes a sidebar group of its own.
+The sidebar names them once, through the single Contributing entry, the
+`contributing/index.md` landing page that links to the Development pages and
+the ADR index. The Getting Started group is the three steps in reading order
+(prerequisites, first launch, minimal config), with no separate landing
+page: the home page starts from the first step.
+
+## The operator-page rule
+
+Per [ADR 0081](../adr/0081-the-operator-pages-carry-usage-and-the-adrs-carry-the-mechanics.md),
+the operator pages - Getting Started, Operation, Work flow, and Configuration
+- carry usage only: what the operator does, what the operator sees, and at
+most a one-to-two sentence "why" note where the operator gets confused. They
+carry no ADR references and no internal mechanics - the queue's pickup and
+top-up, state-file internals, seat counts, projection reads, label-write
+convergence, layout and size math. The mechanics live in the ADRs, which
+stay published under the Contributing entry, so two copies cannot drift. An
+edit that re-adds an ADR reference or a paragraph of mechanics to an operator
+page is a regression against that ADR, not an improvement.
 
 ## Conventions
 

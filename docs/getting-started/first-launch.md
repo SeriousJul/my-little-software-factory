@@ -1,6 +1,6 @@
 ---
 title: First Launch
-description: Start the control plane with npx; the first start downloads the binary and writes the config file.
+description: Start the control plane with the npx one-liner or from source; the first start downloads the binary and writes the config file.
 ---
 
 # First Launch
@@ -12,45 +12,40 @@ npx my-little-software-factory
 npx mlsf
 ```
 
-The first start installs the prebuilt binary for your machine: the
-installer says it is downloading, takes the binary from the release's GitHub
-Release, verifies its SHA-256 against the release's checksums file, and keeps
-it under your data home, in a directory per target -
-`~/.local/share/my-little-software-factory/bin/<target>/factory`, or
-`%LOCALAPPDATA%\my-little-software-factory\bin\<target>\factory.exe` on
-Windows. The binary's `.install` note beside it names the version, the
-target, and the SHA-256 it was verified against. A second start finds the
-cached binary, checks its bytes against that note, and skips the network; a
-new release version, a note for another target, and a binary someone else
-wrote over all download the right one again.
+The first start downloads the prebuilt binary for your machine and caches it
+under your data home, in a directory per target -
+`~/.local/share/my-little-software-factory/bin/<target>`, or
+`%LOCALAPPDATA%\my-little-software-factory\bin\<target>` on Windows - so a
+second start finds the cache and skips the network. To drop the cache, delete
+the data-home directory: `rm -rf ~/.local/share/my-little-software-factory`.
 
-The download is about 100 MB and has a time bound of its own. On a slow link,
-raise the bound with `MLSF_DOWNLOAD_TIMEOUT_MS`, in milliseconds:
-`MLSF_DOWNLOAD_TIMEOUT_MS=1800000 npx mlsf`.
-
-To drop the cache, delete the data-home directory: `rm -rf
-~/.local/share/my-little-software-factory`.
-
-The control plane then finds no config file, writes the [Default
+With no config file, the start writes the [Default
 configuration](./minimal-config.md#the-config-file) to
-`~/.config/my-little-software-factory/config.toml`, and says so on the start
-lines before the interface appears. The start lines name the path, so you
-know where to edit.
+`~/.config/my-little-software-factory/config.toml` and says so on the start
+lines, so you know where your config file lives and where to edit. A line
+that does not parse or does not validate stops the start with one readable
+error line.
 
-A second start reads the file. A line that does not parse or does not
-validate stops the start with one readable error line. A present file must
-carry every required key, and a key the control plane does not read is an
-error, so a typo surfaces at the start, not at handoff time.
+`factory --version` answers with the version the install carries, and
+`factory --config <path>` starts on the config file you name; both flags work
+before any config exists. An install you keep uses the same launcher:
+`npm install -g my-little-software-factory` puts a `factory` command on your
+`PATH`, and it runs the binary the way `npx` does.
 
-The binary answers `factory --version` with the version the release stamped
-into it, and `factory --config <path>` starts on the config file you name.
-Both flags work before any config exists. `--version` on a machine that has
-not downloaded the binary yet is answered by the installer, from the package
-version, so the flag costs no download; once the binary is cached the same
-flag goes to the binary itself.
+## Run from source
 
-An install you keep uses the same launcher: `npm install -g
-my-little-software-factory` puts a `factory` command on your `PATH`, and it
-installs and runs the binary the way `npx` does.
+To run the plane from source instead of the published binary:
+
+```sh
+git clone https://github.com/SeriousJul/my-little-software-factory
+cd my-little-software-factory
+bun install
+bun run start
+```
+
+This runs the same app the binary runs, with no hot reload and no development
+config, and it reads the same config file the binary uses -
+`~/.config/my-little-software-factory/config.toml` - so your setup is
+identical to a binary install.
 
 Next: [the minimal config](./minimal-config.md).

@@ -6,7 +6,7 @@ titleTemplate: false
 
 hero:
   name: My Little Software Factory
-  text: The control plane of my little software factory
+  text: The one terminal screen that runs coding agents on your real tickets.
   tagline: Watches the tickets. Hands them to agents. Tracks every turn.
   actions:
     - theme: brand
@@ -19,10 +19,23 @@ hero:
 
 ![The control plane running in a herdr workspace](/hero.png)
 
+## What the plane solves
+
+- **Babysitting the agents is over.** The plane watches your tickets, hands
+  them to agents, and tracks every turn. When a turn settles, the decision is
+  yours in manual mode, or made within your limits in auto mode - you are
+  not the one sitting on the agent's output.
+- **One workflow, many repositories.** The same states, task types, and
+  transitions run across every repository you point it at. Configure the
+  machine once; add a repository and it works.
+- **Many agents, one handoff.** Point the handoff at any agent type, any
+  model, any environment, from one screen - and edit the settings for one
+  start without touching your config.
+
 <div class="guide-grid">
   <a class="guide-card" href="./getting-started/prerequisites.html">
     <h3>Getting started</h3>
-    <p>The prerequisites, the first launch, and the minimal config, from a blank machine to a working control plane.</p>
+    <p>The prerequisites, the first launch - the binary one-liner or the from-source path - and the minimal config, from a blank machine to a working control plane.</p>
   </a>
   <a class="guide-card" href="./operation/main-view.html">
     <h3>Operation</h3>
@@ -36,12 +49,8 @@ hero:
     <h3>Configuration</h3>
     <p>The complete config example with every key, the key reference, the notes, and the shipped defaults, in one page.</p>
   </a>
-  <a class="guide-card" href="./development/commands.html">
-    <h3>Development</h3>
-    <p>The repository's commands, mutation testing, the shared control standard, and the ticket labels the control plane reads.</p>
-  </a>
-  <a class="guide-card" href="./adr/index.html">
-    <h3>Architecture decisions</h3>
-    <p>The ADRs record what the project decided and why, in name order. New decisions append to the end of the list.</p>
+  <a class="guide-card" href="./contributing/index.html">
+    <h3>Contributing</h3>
+    <p>The development pages - the commands, the shared control standard, mutation testing, the ticket labels - and the architecture decision records.</p>
   </a>
 </div>
