@@ -98,3 +98,4 @@ body states the context, the decision, and the consequences.
 - [ADR 0087: The Repository init skips the sources an existing source already covers](./0087-the-repository-init-skips-the-sources-an-existing-source-already-covers.md)
 - [ADR 0088: The top-up moves open pull request tickets before fresh open tickets](./0088-the-top-up-moves-open-pull-requests-before-fresh-tickets.md)
 - [ADR 0089: The search source drops the node that left the open work](./0089-the-search-source-drops-the-node-that-left-the-open-work.md)
+- [ADR 0090: The tag's version is the release's version, and the workflow syncs the manifests to it](./0090-the-tags-version-is-the-releases-version-and-the-workflow-syncs-the-manifests-to-it.md)

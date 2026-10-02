@@ -141,7 +141,7 @@ this repository. Until that tag runs, every row below is incomplete.
 | A second start runs the cached binary without the network, and a new version downloads its own binary | Run the command twice; record that the second run makes no download and that a version bump re-downloads. Both decisions are pinned in `test/installer.test.ts` with the network faked | Incomplete |
 | The release job creates the release once and a re-run completes it instead of failing on the name the create step took | The workflow runs on the tag; re-run the release job and record that it uploads | Incomplete |
 | The published package carries provenance naming this repository and the release commit | `npm view` with the attestations for both package versions | Incomplete |
-| A tag whose version does not match the manifests stops before any publish | The workflow's tag check step fails the run | Incomplete |
+| A tag whose version differs from the manifests lands in both manifests before any check, build, or publish, and the sync commit lands on main | The workflow's sync steps run before every version-reading step (`test/release-workflow.test.ts` pins that checks, build, and publish all run the sync, and only checks pushes), and `test/sync-release-version.test.ts` pins the write's own shape | Incomplete |
 
 ## Notes
 
@@ -166,8 +166,13 @@ this repository. Until that tag runs, every row below is incomplete.
   stands in for the signature until then.
 - The one-time trusted publishing setup is interactive on the npm account
   side and is guided by a wizard the maintainer runs before the first tag.
-- The first release is `0.1.0`, the version the package already declares.
-  Both manifests must match the tag; the workflow checks it.
+- The first release is `0.1.0`.
+- The tag is the only place the operator names a release (ADR 0090):
+  the operator cuts it from the GitHub interface, and the workflow writes
+  the tag's version into both manifests before it checks, builds, or
+  publishes. It commits that write to `main` from the tag's tree, and a
+  `main` that moved on since the cut refuses the push and stops the run.
+  The operator then re-cuts the tag from the newer `main`.
 - Every workflow pins the same Bun, `1.4.2`, the compiler this record's
   cross-compile and binary runs were measured on: the release ships from no
   compiler the gates did not run. `test/release-workflow.test.ts` fails if

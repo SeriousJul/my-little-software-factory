@@ -264,6 +264,45 @@ describe("the steps that run a binary on its own operating system", () => {
 	});
 });
 
+describe("the version the tag names is the one the release ships", () => {
+	/** The block of one job, from its name to the next job's name. */
+	function job(name: string): string {
+		const names = ["checks", "publish", "build", "smoke-darwin", "smoke-windows", "release"];
+		const start = RELEASE_YML.indexOf(`  ${name}:`);
+		expect(start, `no job named: ${name}`).toBeGreaterThanOrEqual(0);
+		const ends = names
+			.slice(names.indexOf(name) + 1)
+			.map((later) => RELEASE_YML.indexOf(`  ${later}:`))
+			.filter((end) => end > start);
+		return RELEASE_YML.slice(start, ends.length ? Math.min(...ends) : undefined);
+	}
+
+	test("checks, build, and publish all sync the manifests to the tag before they act", () => {
+		// checks reads the manifests, build stamps the manifest's version into
+		// the binary, and publish publishes the manifest's own version: all
+		// three write the tag's version before they touch one. A job that skips
+		// the sync ships or checks the version the tag's tree declared.
+		for (const name of ["checks", "publish", "build"]) {
+			const text = job(name);
+			expect(text, `${name} does not sync the manifests`).toContain(
+				"scripts/sync-release-version.ts",
+			);
+			expect(text, `${name} does not name the tag's version`).toContain(
+				shellVar("GITHUB_REF_NAME#v"),
+			);
+		}
+	});
+
+	test("only the checks job commits the sync and pushes it to main", () => {
+		// The landing commit goes on main from the tag's tree. Any other job
+		// that pushes writes into a branch the release does not build from.
+		expect(job("checks")).toContain("git push origin HEAD:main");
+		for (const name of ["publish", "build", "smoke-darwin", "smoke-windows", "release"]) {
+			expect(job(name), `${name} must not push`).not.toContain("git push");
+		}
+	});
+});
+
 describe("the compiler the release ships from", () => {
 	test("every workflow pins the same Bun, the one the record measured", () => {
 		const pins = new Map<string, string[]>();

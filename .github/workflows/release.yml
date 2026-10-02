@@ -5,9 +5,10 @@ on:
     tags: ["v*"]
 
 # Trusted publishing: npm identifies this repository through the OIDC token
-# it hands GitHub Actions. No npm token is stored anywhere.
+# it hands GitHub Actions. No npm token is stored anywhere. `contents: write`
+# is the checks job's right to land the version sync as a commit on main.
 permissions:
-  contents: read
+  contents: write
   id-token: write
 
 jobs:
@@ -26,11 +27,34 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 26
+      # The tag is the one place the operator names a version (ADR 0090). The
+      # sync writes the tag's version into both manifests before any step
+      # reads one, and the landing step below commits that write to main so a
+      # later read of the manifests agrees with the release.
+      - name: Sync the package versions to the tag
+        run: bun scripts/sync-release-version.ts "${GITHUB_REF_NAME#v}"
+      - name: Land the version sync on main
+        run: |
+          if git diff --quiet; then
+            echo "the manifests already carry ${GITHUB_REF_NAME#v}; no sync commit"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add package.json packages/mlsf/package.json
+          git commit -m "The release v${GITHUB_REF_NAME} writes the tag's version into both package manifests"
+          # A push that main refuses means main moved on since the tag was
+          # cut, and the tag names a version for a tree main no longer holds.
+          # The release stops instead of merging two histories the operator
+          # never asked for: the operator re-cuts the tag from the newer main.
+          git push origin HEAD:main
       - run: bun install
       - run: bun run lint
       - run: bun run typecheck
       - run: bun run test
       - run: bun run docs:build
+      # A tripwire over the sync: after it, the manifests carry the tag's
+      # version, so this step fails only where the sync itself broke.
       - name: The tag must match the version both packages declare
         run: |
           tag="${GITHUB_REF_NAME#v}"
@@ -55,6 +79,11 @@ jobs:
         with:
           node-version: 26
       - run: bun install
+      # The publish reads the version it publishes from the manifest: without
+      # the sync the tag's release would publish the version the tag's own
+      # tree declared.
+      - name: Sync the package versions to the tag
+        run: bun scripts/sync-release-version.ts "${GITHUB_REF_NAME#v}"
       # The main package first: the alias pins an exact version of it and
       # must find it in the registry.
       - name: Publish my-little-software-factory with provenance
@@ -89,6 +118,11 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.2
+      # The compile stamps the manifest's version into the binary and the
+      # smoke compares the stamp with the tag: the leg writes the tag's
+      # version before it compiles.
+      - name: Sync the package versions to the tag
+        run: bun scripts/sync-release-version.ts "${GITHUB_REF_NAME#v}"
       # The optional platform cores stay out of the plain install: the build
       # adds the cores of its target, and the compile embeds what the install
       # placed.
