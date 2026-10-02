@@ -269,13 +269,21 @@ say "GitHub hands the runner."
 TOKEN_NPMRC="$(mktemp)"
 chmod 600 "$TOKEN_NPMRC"
 note "the token sits in a scratch file the wizard deletes in stage 9; it never touches your npm config"
-open_url "https://www.npmjs.com/settings/tokens"
+ask NPM_USER "Your npm user name, the one on your npmjs.com profile:"
+if [[ -n "${NPM_USER:-}" ]]; then
+  write_env NPM_USER "$NPM_USER"
+  open_url "https://www.npmjs.com/settings/$NPM_USER/tokens"
+else
+  warn "no user name, so open the page by hand: profile picture, upper right, then Access Tokens"
+  open_url "https://www.npmjs.com"
+fi
 step "Sign in to npmjs.com in the browser, if the page asks."
-step "Click Generate New Token and choose the granular token type."
-step "Name: claim-package-names. Expiry: the shortest option the page offers."
-step "Access: Read and write. Package access: All packages."
-step "Enable Bypass two-factor authentication."
-step "Create the token and copy it; the page shows it only once."
+step "Click Generate New Token."
+step "Token name: claim-package-names."
+step "Check Bypass two-factor authentication."
+step "Permissions: Read and write (publish and stage). Select Packages: All Packages."
+step "Expiration: the shortest option; the page needs at least one day."
+step "Click Generate Token and copy the token from the top of the page."
 ask_secret NPM_TOKEN "Paste the token:"
 if [[ -n "${NPM_TOKEN:-}" ]]; then
   printf '//registry.npmjs.org/:_authToken=%s\n' "$NPM_TOKEN" > "$TOKEN_NPMRC"
@@ -355,7 +363,12 @@ done
 
 # ── Stage 9: revoke the token ────────────────────────────────────────────
 stage "Revoke the token"
-open_url "https://www.npmjs.com/settings/tokens"
+if [[ -n "${NPM_USER:-}" ]]; then
+  open_url "https://www.npmjs.com/settings/$NPM_USER/tokens"
+else
+  warn "open the page by hand: profile picture, upper right, then Access Tokens"
+  open_url "https://www.npmjs.com"
+fi
 step "On the tokens page, find claim-package-names and revoke it."
 rm -f "$TOKEN_NPMRC"
 say "the scratch file is deleted; your npm config never held the token"
