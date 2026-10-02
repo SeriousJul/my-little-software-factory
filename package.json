@@ -14,6 +14,7 @@
 	"scripts": {
 		"build": "bun run scripts/build-binary.ts",
 		"dev": "bun --watch src/factory.ts --config config/development.toml",
+		"start": "bun src/factory.ts",
 		"gallery": "bun bin/factory-gallery.mjs",
 		"stub:seed": "bun scripts/stub-seed.ts",
 		"stub-world": "bun bin/stub-world.mjs",

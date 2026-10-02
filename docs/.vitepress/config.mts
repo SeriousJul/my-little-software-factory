@@ -93,19 +93,25 @@ function markdownFiles(dir: string): string[] {
 		.sort((a, b) => a.localeCompare(b));
 }
 
-// The group order the sidebar shows: the guides in the order an operator
-// reads them, the contributor Development pages after, and the ADRs last. A
-// published folder that is not named here still shows: it appends after the
-// named groups, in name order, so a new page or a new guide never requires a
+// The group order the sidebar shows: the operator guides in the order an
+// operator reads them, then the single Contributing entry the contributor
+// content stands under (ADR 0081). A published folder that is not named
+// here and is not de-emphasized still shows: it appends after the named
+// groups, in name order, so a new page or a new guide never requires a
 // config edit.
 const GROUP_ORDER: { folder: string; text: string }[] = [
 	{ folder: "getting-started", text: "Getting Started" },
 	{ folder: "operation", text: "Operation" },
 	{ folder: "work-flow", text: "Work flow" },
 	{ folder: "configuration", text: "Configuration" },
-	{ folder: "development", text: "Development" },
-	{ folder: "adr", text: "ADR" },
+	{ folder: "contributing", text: "Contributing" },
 ];
+
+// The contributor content stays published but is de-emphasized in the
+// sidebar: these folders get no group of their own, and the single
+// Contributing entry (the contributing/index.md landing page) is the one
+// place that names them (ADR 0081).
+const DEEMPHASIZED_FOLDERS = ["development", "adr"];
 
 // The page order inside a group, in the order an operator reads them. A group
 // the list does not name keeps the plain alphabetical order, and a page a
@@ -115,7 +121,6 @@ const PAGE_ORDER: Record<string, string[]> = {
 	"getting-started": ["prerequisites.md", "first-launch.md", "minimal-config.md"],
 	operation: ["main-view.md", "consultation.md", "modals.md", "live-view.md"],
 	"work-flow": ["handoffs.md", "completion.md"],
-	development: ["commands.md", "mutation-testing.md", "shared-controls.md", "labels.md"],
 };
 
 function orderPages(folder: string, files: string[]): string[] {
@@ -140,10 +145,7 @@ function sidebar(): DefaultTheme.Sidebar {
 		// A folder the order does not name keeps the plain rule: an
 		// all-lowercase name is an acronym, shown uppercased.
 		const text = named?.text ?? (/^[a-z]+$/.test(folder) ? folder.toUpperCase() : folder);
-		// The ADR group shows one landing item, not one entry per ADR: the
-		// index lists every ADR, so the sidebar stays compact.
-		const all = folder === "adr" ? ["index.md"] : markdownFiles(folder);
-		const files = orderPages(folder, all);
+		const files = orderPages(folder, markdownFiles(folder));
 		return {
 			text,
 			collapsible: true,
@@ -158,6 +160,9 @@ function sidebar(): DefaultTheme.Sidebar {
 	}
 	for (const folder of folders) {
 		if (GROUP_ORDER.some((named) => named.folder === folder)) continue;
+		// The de-emphasized contributor folders publish but take no sidebar
+		// group of their own.
+		if (DEEMPHASIZED_FOLDERS.includes(folder)) continue;
 		groups.push(groupOf(folder));
 	}
 	return groups;
