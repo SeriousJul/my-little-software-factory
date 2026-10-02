@@ -329,6 +329,8 @@ export interface FactoryConfig {
 	consultationTypes: Record<string, ConsultationTypeConfig>;
 	/** Whether a newly settled Consultation rings the terminal bell. */
 	attentionBell: boolean;
+	/** Whether a standing warning or error fact on the Message line also sends a desktop notification (ADR 0080). */
+	desktopNotification: boolean;
 	/** The semantic key which exits Agent interaction mode. */
 	interactionExitKey: InteractionExitKey;
 	/** Agents the control plane keeps in flight; 0 means unlimited. */
@@ -608,6 +610,7 @@ function parseConfig(data: unknown): FactoryConfig {
 		"task-types",
 		"consultation-types",
 		"attention-bell",
+		"desktop-notification",
 		"interaction-exit-key",
 		"repos",
 		"sources",
@@ -663,6 +666,7 @@ function parseConfig(data: unknown): FactoryConfig {
 	const taskTypes = validateTaskTypes(data["task-types"], agents, defaultAgent);
 	const consultationTypes = validateConsultationTypes(data["consultation-types"], agents);
 	const attentionBell = booleanField(data, "attention-bell", true);
+	const desktopNotification = booleanField(data, "desktop-notification", true);
 	const interactionExitKey = validateInteractionExitKey(
 		data["interaction-exit-key"] === undefined ? "f12" : stringField(data, "interaction-exit-key"),
 	);
@@ -690,6 +694,7 @@ function parseConfig(data: unknown): FactoryConfig {
 		taskTypes,
 		consultationTypes,
 		attentionBell,
+		desktopNotification,
 		interactionExitKey,
 		maxParallelAgents,
 		agentPollIntervalSeconds,
@@ -1677,6 +1682,7 @@ export function configToToml(config: FactoryConfig): string {
 				]),
 			),
 			"attention-bell": config.attentionBell,
+			"desktop-notification": config.desktopNotification,
 			"interaction-exit-key": config.interactionExitKey,
 			"max-parallel-agents": config.maxParallelAgents,
 			"agent-poll-interval-seconds": config.agentPollIntervalSeconds,

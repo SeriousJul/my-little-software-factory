@@ -56,6 +56,23 @@ import {
 } from "./fake-runner.ts";
 import { SAMPLE_TICKETS } from "./sample-tickets.ts";
 
+/**
+ * The runner's commands with the desktop notification's of one standing
+ * warning or error fact left out (ADR 0080): the fact's own command may
+ * ride along with the handoff's, and the pinned sequence is the other
+ * commands, whatever platform the sender branch picked.
+ */
+function handoffCommands(runner: FakeRunner): string[] {
+	return runner.calls
+		.filter(
+			(call) =>
+				call.command !== "notify-send" &&
+				call.command !== "osascript" &&
+				call.command !== "powershell",
+		)
+		.map((call) => `${call.command} ${call.args.join(" ")}`.trim());
+}
+
 let home = "";
 let configPath = "";
 
@@ -561,9 +578,11 @@ describe("the Enter handoff", () => {
 					"the clone failure reason",
 				);
 				// The reason sits on the Message line, the ticket stays open,
-				// and no command ran: the failure is before git clone.
+				// and the handoff ran no command of its own: the failure is
+				// before git clone, and the fact's own desktop notification
+				// (ADR 0080) is the one command it may send.
 				expect(selectedRow(frame)).toContain("[open]");
-				expect(runner.calls).toHaveLength(0);
+				expect(handoffCommands(runner)).toHaveLength(0);
 				// Repair the filesystem: the clone can succeed now.
 				rmSync(join(home, "src"), { recursive: true, force: true });
 				mkdirSync(join(home, "src"));
@@ -615,8 +634,10 @@ describe("the in-flight guard", () => {
 				// The handoff is in flight. Try to start another one.
 				setup.mockInput.pressEnter();
 				const frame = await pressEnterToHandoff(setup);
-				// Exactly one handoff ran, not two.
-				expect(runner.commands()).toHaveLength(7);
+				// Exactly one handoff ran, not two: the refusal's fact sends its
+				// own desktop notification (ADR 0080), and the pinned sequence is
+				// the handoff's own commands.
+				expect(handoffCommands(runner)).toHaveLength(7);
 				// The status cleared after the handoff settled.
 				expect(frame).not.toContain("handing off");
 			},
@@ -1188,8 +1209,9 @@ describe("the override panel", () => {
 				expect(selectedRow(frame)).toContain("[open]");
 				// The handoff failed before its first external step: no workspace,
 				// no agent, so the ticket is ready for a retry once the config is
-				// fixed.
-				expect(runner.calls).toHaveLength(0);
+				// fixed. The fact's own desktop notification (ADR 0080) is the one
+				// command the failure may send.
+				expect(handoffCommands(runner)).toHaveLength(0);
 			},
 			WIDTH,
 			HEIGHT,
@@ -1761,7 +1783,9 @@ describe("the override panel", () => {
 					"the count refusal and the ticket returning open",
 				);
 				expect(selectedRow(failed)).toContain("[open]");
-				expect(runner.calls).toHaveLength(0);
+				// The refusal's fact sends its own desktop notification (ADR 0080),
+				// and the handoff ran none of its own commands.
+				expect(handoffCommands(runner)).toHaveLength(0);
 			},
 			WIDTH,
 			HEIGHT,
@@ -1942,7 +1966,9 @@ describe("the override panel", () => {
 					"the mismatch refusal and the ticket returning open",
 				);
 				expect(selectedRow(failed)).toContain("[open]");
-				expect(runner.calls).toHaveLength(0);
+				// The refusal's fact sends its own desktop notification (ADR 0080),
+				// and nothing of the handoff's started at all.
+				expect(handoffCommands(runner)).toHaveLength(0);
 
 				// The row is reachable, so the value is not stranded: clearing it
 				// hands the level back to the agent, and the handoff starts with no

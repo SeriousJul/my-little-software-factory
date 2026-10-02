@@ -2724,10 +2724,16 @@ describe("the leftover environment", () => {
 				// own words, and no panel opened under it.
 				expect(messageRowOf(frame)).toContain("no work is in flight to close");
 				expect(frame).not.toContain("Close: Persist source facts");
-				// No panel and no reopened decision, and no herdr command ran.
+				// No panel and no reopened decision, and no herdr command ran:
+				// the refusal's fact sends its own desktop notification (ADR 0080),
+				// and the command list before and after holds everything else.
 				expect(frame).not.toContain("Leftover environment");
 				expect(frame).not.toContain("Decision:");
-				expect(app.runner.commands()).toEqual(commandsBefore);
+				const withoutNotification = (commands: string[]) =>
+					commands.filter((command) => !/^(notify-send|osascript|powershell) /u.test(command));
+				expect(withoutNotification(app.runner.commands())).toEqual(
+					withoutNotification(commandsBefore),
+				);
 				// The leftover fact still stands: the marker on the row, the
 				// block in the detail, and its herdr pointer.
 				expect(ticketRow(frame)).toContain("leftover");

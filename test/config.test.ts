@@ -1905,6 +1905,17 @@ describe("consultation configuration", () => {
 		expectConfigError({ ...base(), "attention-bell": "yes" }, "attention-bell: must be a boolean");
 	});
 
+	test("desktop-notification defaults on and keeps an explicit false", () => {
+		expect(validateConfig({ ...base(), "desktop-notification": false }).desktopNotification).toBe(
+			false,
+		);
+		expect(validateConfig(base()).desktopNotification).toBe(true);
+		expectConfigError(
+			{ ...base(), "desktop-notification": "yes" },
+			"desktop-notification: must be a boolean",
+		);
+	});
+
 	test("a Consultation config survives a TOML round-trip", () => {
 		const config = validateConfig({
 			...base(),
@@ -1919,11 +1930,13 @@ describe("consultation configuration", () => {
 				grill: { agent: "pi", environment: "live-worktree", template: "{input}" },
 			},
 			"attention-bell": false,
+			"desktop-notification": false,
 			"interaction-exit-key": "ctrl-q",
 		});
 		const roundTripped = validateConfig(parseToml(configToToml(config)));
 		expect(roundTripped.consultationTypes).toEqual(config.consultationTypes);
 		expect(roundTripped.attentionBell).toBe(false);
+		expect(roundTripped.desktopNotification).toBe(false);
 		expect(roundTripped.interactionExitKey).toBe("ctrl+q");
 	});
 });

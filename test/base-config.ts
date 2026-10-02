@@ -34,6 +34,7 @@ export const BASE_CONFIG: FactoryConfig = {
 	},
 	consultationTypes: {},
 	attentionBell: true,
+	desktopNotification: true,
 	interactionExitKey: "f12",
 	taskTypes: {
 		implement: {
