@@ -24,7 +24,11 @@ import {
 	repositoryInitSources,
 	runRepositoryInit,
 } from "../src/repo-init.ts";
-import { commitRepositoryInit, repositoryInitDrifted } from "../src/repo-init-flow.ts";
+import {
+	commitRepositoryInit,
+	type RepositoryInitFlowPlan,
+	repositoryInitDrifted,
+} from "../src/repo-init-flow.ts";
 import { openFactoryState } from "../src/state.ts";
 import { FakeRunner } from "./fake-runner.ts";
 
@@ -795,11 +799,261 @@ describe("the repository init's commit flow", () => {
 		if (!result.ok) throw new Error("expected the re-init to pass");
 		// Nothing new registers: the plane's sources already stand in the config.
 		expect(result.newSources).toEqual([]);
+		// The skip decision stands on the re-run, naming the covering sources
+		// as the plane's own registrations.
+		expect(result.skippedSources).toEqual([
+			{ name: "acme/factory-issues", coveredBy: "acme/factory-issues" },
+			{
+				name: "acme/factory-pull-requests",
+				coveredBy: "acme/factory-pull-requests",
+			},
+		]);
 		// The fact re-writes on the current settings: the drift clears.
 		expect(state.repositoryInitFact(identity)?.settingsHash).toBe(
 			repositoryInitSettingsHash(statesFixture(), taskTypesFixture()),
 		);
 		expect(repositoryInitDrifted(state, identity, statesFixture(), taskTypesFixture())).toBe(false);
+	});
+
+	describe("the coverage skip (issue 195)", () => {
+		// A hand-written broad source per feed, covering four repositories
+		// including the init's, the shape that doubled every ticket in the
+		// diagnostic session.
+		const broadRepositories = ["acme/factory", "acme/alpha", "acme/beta", "acme/gamma"];
+		function broadConfig(): FactoryConfig {
+			return {
+				sources: [
+					{
+						name: "broad-issues",
+						kind: "github-issues",
+						refreshIntervalSeconds: 300,
+						repositories: broadRepositories,
+						host: "github.com",
+					},
+					{
+						name: "broad-pull-requests",
+						kind: "github-pull-requests",
+						refreshIntervalSeconds: 300,
+						repositories: broadRepositories,
+						host: "github.com",
+					},
+				],
+			} as unknown as FactoryConfig;
+		}
+
+		test("a covering source per feed skips the whole pair, names the skips, and leaves the fact standing", async () => {
+			const state = openFactoryState(":memory:");
+			const worktree = tempDir("factory-init-covered-");
+			const result = await commitRepositoryInit({
+				runner: commitRunner(worktree),
+				state,
+				config: broadConfig(),
+				repository,
+				workflowStates: statesFixture(),
+				taskTypes: taskTypesFixture(),
+				plan: {
+					instructionFile: "AGENTS.md",
+					labelsToCreate: [],
+					fileActions: CONVENTION_FILE_PATHS.map((path) => ({ path, action: "new" })),
+				},
+				worktreePath: worktree,
+			});
+			expect(result.ok).toBe(true);
+			if (!result.ok) throw new Error("expected the commit to pass");
+			// The pair registers nothing: both feeds already stand under the
+			// operator's broad sources.
+			expect(result.newSources).toEqual([]);
+			expect(result.skippedSources).toEqual([
+				{ name: "acme/factory-issues", coveredBy: "broad-issues" },
+				{
+					name: "acme/factory-pull-requests",
+					coveredBy: "broad-pull-requests",
+				},
+			]);
+			// The outcome names what it skipped and why, so the operator reads
+			// the decision in the init answer.
+			expect(result.message).toContain(
+				"skipped acme/factory-issues (covered by broad-issues), acme/factory-pull-requests (covered by broad-pull-requests)",
+			);
+			// The act ran and the fact stands on the current settings: the
+			// drift the plane reports is not about sources.
+			expect(state.repositoryInitFact(identity)?.pushedCommit).toBe("abc1234");
+			expect(repositoryInitDrifted(state, identity, statesFixture(), taskTypesFixture())).toBe(
+				false,
+			);
+		});
+
+		test("a re-run over the same covering config skips again", async () => {
+			const state = openFactoryState(":memory:");
+			const first = tempDir("factory-init-covered-");
+			const second = tempDir("factory-init-covered-");
+			const plan: RepositoryInitFlowPlan = {
+				instructionFile: "AGENTS.md",
+				labelsToCreate: [],
+				fileActions: [],
+			};
+			const run = async (worktree: string) =>
+				commitRepositoryInit({
+					runner: commitRunner(worktree),
+					state,
+					config: broadConfig(),
+					repository,
+					workflowStates: statesFixture(),
+					taskTypes: taskTypesFixture(),
+					plan,
+					worktreePath: worktree,
+				});
+			const once = await run(first);
+			expect(once.ok).toBe(true);
+			if (!once.ok) throw new Error("expected the commit to pass");
+			expect(once.newSources).toEqual([]);
+			// The skip is derived from the current config on every run, so it
+			// stands while the covering config stands.
+			const again = await run(second);
+			expect(again.ok).toBe(true);
+			if (!again.ok) throw new Error("expected the re-run to pass");
+			expect(again.newSources).toEqual([]);
+			expect(again.skippedSources).toEqual(once.skippedSources);
+		});
+
+		test("removing the covering sources re-registers the pair", async () => {
+			const state = openFactoryState(":memory:");
+			const covered = tempDir("factory-init-covered-");
+			const runCovered = await commitRepositoryInit({
+				runner: commitRunner(covered),
+				state,
+				config: broadConfig(),
+				repository,
+				workflowStates: statesFixture(),
+				taskTypes: taskTypesFixture(),
+				plan: { instructionFile: "AGENTS.md", labelsToCreate: [], fileActions: [] },
+				worktreePath: covered,
+			});
+			expect(runCovered.ok).toBe(true);
+			if (!runCovered.ok) throw new Error("expected the commit to pass");
+			expect(runCovered.newSources).toEqual([]);
+			// The operator deleted the covering sources and re-ran the init:
+			// the config holds none of them now, so the pair registers.
+			const restored = tempDir("factory-init-restored-");
+			const runRestored = await commitRepositoryInit({
+				runner: commitRunner(restored),
+				state,
+				config: { sources: [] } as unknown as FactoryConfig,
+				repository,
+				workflowStates: statesFixture(),
+				taskTypes: taskTypesFixture(),
+				plan: { instructionFile: "AGENTS.md", labelsToCreate: [], fileActions: [] },
+				worktreePath: restored,
+			});
+			expect(runRestored.ok).toBe(true);
+			if (!runRestored.ok) throw new Error("expected the re-run to pass");
+			expect(runRestored.newSources.map((s) => s.name)).toEqual([
+				"acme/factory-issues",
+				"acme/factory-pull-requests",
+			]);
+			expect(runRestored.skippedSources).toEqual([]);
+		});
+
+		test("a source covering only the issues feed registers only the pull request feed", async () => {
+			const state = openFactoryState(":memory:");
+			const worktree = tempDir("factory-init-covered-");
+			// The broad source carries a different filter than the init's would
+			// and another refresh interval: the coverage test holds on host,
+			// kind, and repository alone, and the machine's label states, which
+			// derive position from labels, stay intact under the operator's
+			// own filter.
+			const config = {
+				sources: [
+					{
+						name: "broad-issues",
+						kind: "github-issues",
+						refreshIntervalSeconds: 300,
+						repositories: broadRepositories,
+						host: "github.com",
+						filter: "label:team-core",
+					},
+				],
+			} as unknown as FactoryConfig;
+			const result = await commitRepositoryInit({
+				runner: commitRunner(worktree),
+				state,
+				config,
+				repository,
+				workflowStates: statesFixture(),
+				taskTypes: taskTypesFixture(),
+				plan: { instructionFile: "AGENTS.md", labelsToCreate: [], fileActions: [] },
+				worktreePath: worktree,
+			});
+			expect(result.ok).toBe(true);
+			if (!result.ok) throw new Error("expected the commit to pass");
+			// The missing feed completes; the covered feed does not duplicate.
+			expect(result.newSources.map((s) => s.name)).toEqual(["acme/factory-pull-requests"]);
+			expect(result.skippedSources).toEqual([
+				{ name: "acme/factory-issues", coveredBy: "broad-issues" },
+			]);
+			expect(result.message).toContain("skipped acme/factory-issues (covered by broad-issues)");
+		});
+
+		test("a source on another host that names the repository is no coverage", async () => {
+			const state = openFactoryState(":memory:");
+			const worktree = tempDir("factory-init-covered-");
+			// The same owner and name under a different host: coverage is per
+			// host, so the pair registers as on a fresh config.
+			const config = broadConfig();
+			for (const source of config.sources) source.host = "github.example.com";
+			const result = await commitRepositoryInit({
+				runner: commitRunner(worktree),
+				state,
+				config,
+				repository,
+				workflowStates: statesFixture(),
+				taskTypes: taskTypesFixture(),
+				plan: { instructionFile: "AGENTS.md", labelsToCreate: [], fileActions: [] },
+				worktreePath: worktree,
+			});
+			expect(result.ok).toBe(true);
+			if (!result.ok) throw new Error("expected the commit to pass");
+			expect(result.newSources.map((s) => s.name)).toEqual([
+				"acme/factory-issues",
+				"acme/factory-pull-requests",
+			]);
+			expect(result.skippedSources).toEqual([]);
+		});
+
+		test("a same-name collision still refuses where the coverage check would skip", async () => {
+			// The operator took the plane's issues name for a source on the same
+			// host and kind listing the repository: the coverage check would
+			// skip it, but the collision refusal stands first, unchanged.
+			const state = openFactoryState(":memory:");
+			const worktree = tempDir("factory-init-covered-");
+			const config = {
+				sources: [
+					{
+						name: "acme/factory-issues",
+						kind: "github-issues",
+						refreshIntervalSeconds: 300,
+						repositories: broadRepositories,
+						host: "github.com",
+					},
+				],
+			} as unknown as FactoryConfig;
+			const runner = commitRunner(worktree);
+			const result = await commitRepositoryInit({
+				runner,
+				state,
+				config,
+				repository,
+				workflowStates: statesFixture(),
+				taskTypes: taskTypesFixture(),
+				plan: { instructionFile: "AGENTS.md", labelsToCreate: [], fileActions: [] },
+				worktreePath: worktree,
+			});
+			expect(result.ok).toBe(false);
+			if (result.ok) throw new Error("expected the commit to refuse");
+			expect(result.reason).toBe("a source named acme/factory-issues is already configured");
+			expect(runner.commands()).toEqual([]);
+			expect(state.repositoryInitFact(identity)).toBe(null);
+		});
 	});
 });
 

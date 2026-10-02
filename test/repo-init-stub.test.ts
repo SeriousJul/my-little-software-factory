@@ -437,10 +437,15 @@ host = "github.com"
 				);
 				expect(store.refusals).toEqual([]);
 
-				// The sources the flow registered stand in the config file on disk,
-				// beside the operator's own feed, with no duplicate of it.
+				// The sources the flow registered stand in the config file on
+				// disk. The operator's own feed, acme-issues, lists the
+				// repository under the same host and kind as the planned issues
+				// source, so the coverage check (issue 195) skips that feed and
+				// the config gains only the missing pull request feed - the
+				// operator's feed stands untouched, and no duplicate of the
+				// covered feed appears beside it.
 				const saved = readFileSync(configPath, "utf8");
-				expect(saved).toContain("acme/factory-issues");
+				expect(saved).not.toContain("acme/factory-issues");
 				expect(saved).toContain("acme/factory-pull-requests");
 				expect(saved).toContain("acme-issues");
 

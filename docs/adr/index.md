@@ -95,3 +95,4 @@ body states the context, the decision, and the consequences.
 - [ADR 0084: The agent wait wakes the observation cycle](./0084-the-agent-wait-wakes-the-observation-cycle.md)
 - [ADR 0085: A no-auto-decision task type parks its completions for the operator](./0085-a-no-auto-decision-task-type-parks-its-completions-for-the-operator.md)
 - [ADR 0086: The settling agent writes the operator-owned labels](./0086-the-settling-agent-writes-the-operator-owned-labels.md)
+- [ADR 0087: The Repository init skips the sources an existing source already covers](./0087-the-repository-init-skips-the-sources-an-existing-source-already-covers.md)
