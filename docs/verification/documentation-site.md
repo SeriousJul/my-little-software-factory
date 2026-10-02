@@ -64,9 +64,9 @@ behavior.
 
 ## What was verified on the pull request
 
-- The CI site build job on pull requests, running the same docs build
-  command on the pull request head alongside the lint, typecheck, and test
-  jobs.
+- The CI run on the pull request head (`b9055a6`): the `checks` job (lint,
+  typecheck, and the test suite) and the `site-build` job (the same docs
+  build command) both passed (run 36982275463, 2026-10-02).
 
 ## What was verified on the deployed site
 
