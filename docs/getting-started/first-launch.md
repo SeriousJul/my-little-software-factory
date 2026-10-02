@@ -11,6 +11,11 @@ Start the control plane with the one-liner:
 npx my-little-software-factory
 ```
 
+The one-liner is for a machine without a checkout. Inside a checkout, the
+name resolves to the local project, which carries no published bin, and the
+start answers `factory: command not found`. From a checkout, start with
+`bun run start`.
+
 The first start downloads the prebuilt binary for your machine and caches it
 under your data home, in a directory per target -
 `~/.local/share/my-little-software-factory/bin/<target>`, or
