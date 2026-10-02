@@ -45,6 +45,13 @@ export function notificationTitle(fact: AttentionFact): string {
 /** The WScript.Shell.Popup icon: 1 the critical hand, 2 the warning mark. */
 const POWERSHELL_ICON: Record<AttentionSeverity, number> = { error: 1, warning: 2 };
 
+/**
+ * The WScript.Shell.Popup timeout in seconds: 0 the sticky window that
+ * stands until the operator closes it, the few seconds a warning holds
+ * before it clears on its own.
+ */
+const POWERSHELL_TIMEOUT: Record<AttentionSeverity, number> = { error: 0, warning: 5 };
+
 export interface AttentionServiceOptions {
 	/** The platform the senders run on. Default: the runtime's platform. */
 	platform?: string;
@@ -120,11 +127,13 @@ export class AttentionService {
 				return ["osascript", ["-e", script]];
 			}
 			case "win32": {
-				// The static balloon tip: the full text, the title, and the
-				// severity's icon, the text as one argv element.
+				// The static balloon tip: the full text, the title, the
+				// severity's icon, and the timeout the severity earns - the
+				// error stands until closed, the warning clears on its own -
+				// the text as one argv element.
 				const script =
 					`$w = New-Object -ComObject WScript.Shell; ` +
-					`[void]$w.Popup('${powershellString(fact.text)}', 0, '${title}', ${POWERSHELL_ICON[fact.severity]})`;
+					`[void]$w.Popup('${powershellString(fact.text)}', ${POWERSHELL_TIMEOUT[fact.severity]}, '${title}', ${POWERSHELL_ICON[fact.severity]})`;
 				return [
 					"powershell",
 					["-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", script],

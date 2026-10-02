@@ -11,7 +11,7 @@
  * spawns none.
  */
 
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -19,9 +19,11 @@ import { join } from "node:path";
 import { AttentionService, DESKTOP_NOTIFICATION_APP_NAME } from "../src/attention.ts";
 import type { FactoryConfig } from "../src/config.ts";
 import type { CommandOptions, CommandResult, CommandRunner } from "../src/runner.ts";
+import { openFactoryState } from "../src/state.ts";
 import { awaitFrame, HEIGHT, messageRowOf, press, settle, WIDTH, withApp } from "./app-harness.ts";
 import { BASE_CONFIG } from "./base-config.ts";
-import { FakeRunner, type RecordedCommand } from "./fake-runner.ts";
+import { agentListJson, FakeRunner, type RecordedCommand } from "./fake-runner.ts";
+import { FakeSource } from "./fake-source.ts";
 import { SAMPLE_TICKETS } from "./sample-tickets.ts";
 import { cleanupStateFixtures } from "./state-fixture.ts";
 
@@ -149,7 +151,9 @@ describe("the desktop notification's per-platform send", () => {
 		]);
 	});
 
-	test("Windows: the static PowerShell balloon tip with the severity's icon", () => {
+	test("Windows: the static balloon tip with the severity's icon and timeout", () => {
+		// The warning announces and clears on its own, the few seconds the
+		// plane allows a warning to hold the desktop.
 		const warning = makeService("win32");
 		warning.service.notify({ severity: "warning", text: "the merge of #7 is blocked" });
 		void flush();
@@ -163,9 +167,11 @@ describe("the desktop notification's per-platform send", () => {
 			"Hidden",
 			"-Command",
 			`$w = New-Object -ComObject WScript.Shell; ` +
-				`[void]$w.Popup('the merge of #7 is blocked', 0, 'Factory: warning', 2)`,
+				`[void]$w.Popup('the merge of #7 is blocked', 5, 'Factory: warning', 2)`,
 		]);
 
+		// The error stands: timeout 0, the sticky window that waits for the
+		// operator's own close.
 		const error = makeService("win32");
 		error.service.notify({ severity: "error", text: "the agent is missing" });
 		void flush();
@@ -299,11 +305,10 @@ describe("the terminal bell's ring", () => {
 	test("rings through the service, gated by attention-bell read at the ring", () => {
 		const { service, config } = makeService("linux");
 		const writes: string[] = [];
-		const original = process.stdout.write.bind(process.stdout);
-		(process.stdout as { write: (chunk: string) => boolean }).write = (chunk: string) => {
-			writes.push(chunk);
+		const spy = spyOn(process.stdout, "write").mockImplementation(((chunk: Uint8Array | string) => {
+			writes.push(String(chunk));
 			return true;
-		};
+		}) as typeof process.stdout.write);
 		try {
 			config.attentionBell = true;
 			service.ring();
@@ -312,12 +317,58 @@ describe("the terminal bell's ring", () => {
 			service.ring();
 			expect(writes).toEqual(["\u0007"]);
 		} finally {
-			(process.stdout as { write: (chunk: string) => boolean }).write = original;
+			spy.mockRestore();
 		}
 	});
 });
 
 describe("the Message line's fact to the desktop", () => {
+	test("the refresh's own facts send no notification", async () => {
+		// The only fact the manual refresh writes is its Working line, and the
+		// result of a clean refresh stands on the line as nothing at all:
+		// neither is a standing warning or error fact, so the desktop stays
+		// quiet.
+		const state = openFactoryState(join(home, "state.sqlite"));
+		const empty = {
+			status: "success" as const,
+			fetchedAt: "2026-10-01T10:00:00.000Z",
+			tickets: [],
+		};
+		const source = new FakeSource("tickets", "test", empty);
+		const runner = new FakeRunner();
+		// The observation loop's own read stays hermetic: a readable agent
+		// list, so its only fact is the one with no state change at all.
+		runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+		try {
+			await withApp(
+				async (setup) => {
+					// The boot's own refresh runs first; settle it, so the manual
+					// refresh the key starts is the one the test drives.
+					const deadline = Date.now() + 4000;
+					while (source.calls < 1) {
+						if (Date.now() >= deadline) throw new Error("timed out: the initial refresh to start");
+						await new Promise((resolve) => setTimeout(resolve, 5));
+					}
+					source.settle(empty);
+					// The `r` control writes the refresh's Working line...
+					await press(setup, "r", "the refresh's working line", (f) =>
+						f.includes("refreshing 1 sources"),
+					);
+					expect(notificationCalls(runner)).toHaveLength(0);
+					// ...and the clean result leaves no standing fact at all.
+					source.settle(empty);
+					await awaitFrame(setup, (f) => !f.includes("refreshing"), "the working line to clear");
+					expect(notificationCalls(runner)).toHaveLength(0);
+				},
+				WIDTH,
+				HEIGHT,
+				{ config: BASE_CONFIG, runner, state, sources: [source] },
+			);
+		} finally {
+			state.close();
+		}
+	});
+
 	test("a warning fact sends one notification, the identical standing fact none", async () => {
 		const runner = new FakeRunner();
 		await withApp(
