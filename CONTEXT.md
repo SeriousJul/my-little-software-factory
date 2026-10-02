@@ -470,6 +470,7 @@ _Avoid_: dispatch block, retry gate, backoff
 **Task type**:
 The named description of a kind of work and its Transition, the label facts a completed turn of it writes, or a Plane action's outcome, fires (ADR 0068).
 A prompt task type holds its prompt template and the Task profile its handoffs start on. An action task type holds a Plane action instead of the template and the profile, and the two forms never mix on one type. A prompt task type can open a pull request for its ticket's work: the plane makes the Pull request open of it at the Handoff start, and the Agent works the branch the pull request already stands on.
+Either form can carry No-auto-decision, which parks the type's completions for the operator instead of the machine's decision (ADR 0085).
 A Workflow state offers a task type, and the default task type offers one when no state matches. The completion behavior follows the task type to whatever ticket it runs on.
 _Avoid_: prompt, template, task
 
@@ -520,6 +521,11 @@ _Avoid_: auto complete, auto done, auto close
 The choice made on a settled agent turn: close the cycle, go to the agent, or run the task the ticket's new position offers: a handoff when the task type is a prompt task, a Plane action when it is an action task (ADR 0068).
 On a task type that carries a Transition, the Transition has written its label facts before this choice.
 _Avoid_: verdict, outcome
+
+**No-auto-decision**:
+A property of a Task type. When it is set, the control plane never makes the Completion decision on its settled turns in Auto-handoff mode: the turn rests in `awaiting` for the operator, the environment and the agent stay untouched, and the operator's explicit close or route still runs (ADR 0085).
+The auto top-up leaves the ticket alone: a continuation needs a Transition that fired, and a parked ticket is not open.
+_Avoid_: no auto close, manual completion
 
 **Turn log**:
 The agent's messages of one settled turn, in order: the agent's text, and one short note per tool call.

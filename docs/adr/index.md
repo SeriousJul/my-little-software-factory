@@ -93,3 +93,5 @@ body states the context, the decision, and the consequences.
 - [ADR 0082: The select list opens the init for a repository with no ticket](./0082-the-select-list-opens-the-init-for-a-repository-with-no-ticket.md)
 - [ADR 0083: The select list's queue runs the init per repository](./0083-the-select-lists-queue-runs-the-init-per-repository.md)
 - [ADR 0084: The agent wait wakes the observation cycle](./0084-the-agent-wait-wakes-the-observation-cycle.md)
+- [ADR 0085: A no-auto-decision task type parks its completions for the operator](./0085-a-no-auto-decision-task-type-parks-its-completions-for-the-operator.md)
+- [ADR 0086: The settling agent writes the operator-owned labels](./0086-the-settling-agent-writes-the-operator-owned-labels.md)
