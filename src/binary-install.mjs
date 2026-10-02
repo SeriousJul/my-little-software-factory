@@ -73,7 +73,8 @@ export const DOWNLOAD_TIMEOUT_ENV = "MLSF_DOWNLOAD_TIMEOUT_MS";
 /**
  * The answer a cold `--version` gives, without the binary.
  *
- * `npx mlsf --version` on a machine with no cache would otherwise download
+ * `npx my-little-software-factory --version` on a machine with no cache
+ * would otherwise download
  * about 100 MB to print one line (ADR 0056). The installer knows the version
  * it installs, so it answers that flag itself and leaves the cache empty.
  * The line is the text the compiled binary prints, which

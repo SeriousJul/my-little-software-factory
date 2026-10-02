@@ -2,7 +2,7 @@
 
 Status: accepted
 Date: 2026-09-14
-Superseded in part by ADR 0056: the package no longer ships the app's source or the Default configuration inside it, and its bin installs a prebuilt binary instead. The tag as the release trigger, the trusted-publishing grant, the short alias package, and the seeded Default configuration all stand.
+Superseded in part by ADR 0056: the package no longer ships the app's source or the Default configuration inside it, and its bin installs a prebuilt binary instead. The tag as the release trigger, the trusted-publishing grant, and the seeded Default configuration stand. The short alias package stood until ADR 0091 dropped it: the registry would not give the `mlsf` name, and the release now publishes the main package alone.
 Superseded in part by ADR 0090: the tag no longer has to equal the version both manifests declare before it is cut. The workflow writes the tag's version into both manifests, and the tag is the only place the operator names a release.
 
 ## Context

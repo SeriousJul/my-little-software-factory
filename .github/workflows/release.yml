@@ -28,21 +28,21 @@ jobs:
         with:
           node-version: 26
       # The tag is the one place the operator names a version (ADR 0090). The
-      # sync writes the tag's version into both manifests before any step
-      # reads one, and the landing step below commits that write to main so a
-      # later read of the manifests agrees with the release.
+      # sync writes the tag's version into the package manifest before any
+      # step reads it, and the landing step below commits that write to main
+      # so a later read of the manifest agrees with the release.
       - name: Sync the package versions to the tag
         run: bun scripts/sync-release-version.ts "${GITHUB_REF_NAME#v}"
       - name: Land the version sync on main
         run: |
           if git diff --quiet; then
-            echo "the manifests already carry ${GITHUB_REF_NAME#v}; no sync commit"
+            echo "the manifest already carries ${GITHUB_REF_NAME#v}; no sync commit"
             exit 0
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add package.json packages/mlsf/package.json
-          git commit -m "The release v${GITHUB_REF_NAME} writes the tag's version into both package manifests"
+          git add package.json
+          git commit -m "The release v${GITHUB_REF_NAME} writes the tag's version into the package manifest"
           # A push that main refuses means main moved on since the tag was
           # cut, and the tag names a version for a tree main no longer holds.
           # The release stops instead of merging two histories the operator
@@ -53,15 +53,13 @@ jobs:
       - run: bun run typecheck
       - run: bun run test
       - run: bun run docs:build
-      # A tripwire over the sync: after it, the manifests carry the tag's
+      # A tripwire over the sync: after it, the manifest carries the tag's
       # version, so this step fails only where the sync itself broke.
-      - name: The tag must match the version both packages declare
+      - name: The tag must match the version the package declares
         run: |
           tag="${GITHUB_REF_NAME#v}"
           main="$(node -p "require('./package.json').version")"
-          alias="$(node -p "require('./packages/mlsf/package.json').version")"
           test "$tag" = "$main"
-          test "$tag" = "$alias"
           echo "releasing $main"
 
   publish:
@@ -84,12 +82,8 @@ jobs:
       # tree declared.
       - name: Sync the package versions to the tag
         run: bun scripts/sync-release-version.ts "${GITHUB_REF_NAME#v}"
-      # The main package first: the alias pins an exact version of it and
-      # must find it in the registry.
       - name: Publish my-little-software-factory with provenance
         run: npm publish --provenance
-      - name: Publish the mlsf alias with provenance
-        run: npm publish --provenance --prefix packages/mlsf
 
   # One leg per target, each on a clean runner: the leg installs its own
   # operating system's and architecture's OpenTUI cores and no others. A Linux
@@ -294,7 +288,7 @@ jobs:
               --title "v${version}" \
               --notes "The control plane v${version}.
 
-          Install with \`npx mlsf\` (or \`npx my-little-software-factory\`): the package installs the prebuilt binary for your platform from this release and verifies it against \`factory-${version}.sha256sums\`. The binary needs neither Node nor Bun.
+          Install with \`npx my-little-software-factory\`: the package installs the prebuilt binary for your platform from this release and verifies it against \`factory-${version}.sha256sums\`. The binary needs neither Node nor Bun.
 
           Targets: linux-x64, linux-x64-musl, linux-arm64, linux-arm64-musl, darwin-x64, darwin-arm64, windows-x64."
           fi

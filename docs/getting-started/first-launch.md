@@ -5,11 +5,10 @@ description: Start the control plane with the npx one-liner or from source; the 
 
 # First Launch
 
-Run either name; both start the same app:
+Start the control plane with the one-liner:
 
 ```sh
 npx my-little-software-factory
-npx mlsf
 ```
 
 The first start downloads the prebuilt binary for your machine and caches it

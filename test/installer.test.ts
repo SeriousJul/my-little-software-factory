@@ -1112,7 +1112,7 @@ describe("the shipped bin, started the way npm starts it", () => {
 		expect(result.status).toBe(42);
 		expect(result.stdout).toContain(marker);
 		expect(result.stdout).toContain("--config");
-		expect(result.stderr).not.toContain("mlsf:");
+		expect(result.stderr).not.toContain("factory:");
 	});
 
 	test("the same bin by its real path runs the same way", () => {
@@ -1121,7 +1121,7 @@ describe("the shipped bin, started the way npm starts it", () => {
 		const result = runUnderNode(REAL_BIN, ["--version"], home);
 		expect(result.status).toBe(42);
 		expect(result.stdout).toContain(marker);
-		expect(result.stderr).not.toContain("mlsf:");
+		expect(result.stderr).not.toContain("factory:");
 	});
 
 	test("a cold --version answers through the shipped bin, with no cache and no request", () => {

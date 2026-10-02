@@ -12,6 +12,8 @@ The operator cuts the tag from the GitHub interface, and the interface offers no
 
 ## Decision
 
+**Superseded in part by ADR 0091:** the alias package no longer exists, so the sync writes the one manifest and moves its `version` field alone; the alias's pin clause is void.
+
 **The tag's version is the release's version.** The operator's one release action is to cut the tag from the GitHub interface; no manifest is edited by hand first.
 
 The release workflow writes the tag's version into both manifests before any step reads or writes a version. The write is a checked-in script (`scripts/sync-release-version.ts`), and every job that touches a version runs it first: the checks job before its gates, each build leg before it compiles (the compile stamps the manifest's version into the binary and the smoke compares it with the tag), and the publish job before it publishes (the publish reads the version it publishes from the manifest). The write moves exactly two kinds of field: the `version` of each manifest and the alias's exact pin on `my-little-software-factory`. A manifest that already carries the version is left byte-identical, so a re-run re-syncs nothing.

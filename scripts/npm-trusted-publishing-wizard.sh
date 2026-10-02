@@ -184,11 +184,11 @@ finish() {
 # Replace the example below. Set TOTAL_STAGES to match the stages you write.
 # ──────────────────────────────────────────────────────────────────────────
 
-TOTAL_STAGES=10
+TOTAL_STAGES=8
 GITHUB_OWNER="SeriousJul"
 REPO="my-little-software-factory"
 WORKFLOW_FILE="release.yml"
-PACKAGES=("my-little-software-factory" "mlsf")
+PACKAGES=("my-little-software-factory")
 STAGE_TAG="v0.0.2"
 FIRST_RELEASE="v0.1.0"
 
@@ -262,15 +262,15 @@ pause
 # ── Stage 3: create the one-off token ────────────────────────────────────
 stage "Create the one-off token"
 say "npm cannot configure trusted publishing for a name that does not exist,"
-say "so the wizard stages a placeholder under each name first. Staging does"
-say "not need two-factor authentication, and the token below carries no"
-say "two-factor bypass: it can only stage. You approve the placeholders"
-say "yourself, with two-factor, in stage 8. Stage 9 revokes the token, and"
-say "the workflow never sees it: the release authenticates with the OIDC"
-say "token GitHub hands the runner."
+say "so the wizard stages a placeholder under the package name first."
+say "Staging does not need two-factor authentication, and the token below"
+say "carries no two-factor bypass: it can only stage. You approve the"
+say "placeholder yourself, with two-factor, in stage 6. Stage 7 revokes the"
+say "token, and the workflow never sees it: the release authenticates with"
+say "the OIDC token GitHub hands the runner."
 TOKEN_NPMRC="$(mktemp)"
 chmod 600 "$TOKEN_NPMRC"
-note "the token sits in a scratch file the wizard deletes in stage 9; it never touches your npm config"
+note "the token sits in a scratch file the wizard deletes in stage 7; it never touches your npm config"
 ask NPM_USER "Your npm user name, the one on your npmjs.com profile:"
 if [[ -n "${NPM_USER:-}" ]]; then
   write_env NPM_USER "$NPM_USER"
@@ -295,7 +295,7 @@ else
 fi
 pause
 
-# ── Stage 4 and 5: stage a placeholder under both package names ──────────
+# ── Stage 4: stage the placeholder under the package name ───────────────
 for pkg in "${PACKAGES[@]}"; do
   stage "Stage the 0.0.0 placeholder for $pkg"
   if npm view "$pkg" version >/dev/null 2>&1; then
@@ -305,8 +305,8 @@ for pkg in "${PACKAGES[@]}"; do
   fi
   say "Staging a name that does not exist makes it exist: npm puts a public"
   say "0.0.0-stage placeholder on the package page at once, and holds your"
-  say "0.0.0 in the staging area until you approve it in stage 8. Once the"
-  say "name exists, stages 6 and 7 can grant the workflow."
+  say "0.0.0 in the staging area until you approve it in stage 6. Once"
+  say "the name exists, stage 5 can grant the workflow."
   if [[ -z "${NPM_TOKEN:-}" ]]; then
     SKIPPED+=("stage the placeholder for $pkg (run the wizard with the one-off token)")
     warn "no token, so the wizard cannot stage $pkg"
@@ -329,7 +329,7 @@ EOF
   pause
 done
 
-# ── Stage 6 and 7: configure the trusted publisher on each package ──────
+# ── Stage 5: configure the trusted publisher on the package ─────────────
 for pkg in "${PACKAGES[@]}"; do
   stage "Grant trusted publishing to $pkg"
   open_url "https://www.npmjs.com/package/$pkg"
@@ -349,14 +349,14 @@ for pkg in "${PACKAGES[@]}"; do
   pause "Press Enter when you saved the trusted publisher"
 done
 
-# ── Stage 8: approve the staged placeholders, then deprecate them ────────
-stage "Approve the staged placeholders"
+# ── Stage 6: approve the staged placeholder, then deprecate it ───────────
+stage "Approve the staged placeholder"
 say "The approval is the two-factor step of the whole setup. The CLI asks"
 say "for a one-time code for each approval; enter the code from your"
 say "second device."
 step "The wizard signs your CLI in now; the browser opens."
 npm login --registry https://registry.npmjs.org
-step "The wizard lists the staged packages. Read the stage id of each."
+step "The wizard lists the staged package. Read the stage id."
 npm stage list --registry https://registry.npmjs.org
 for pkg in "${PACKAGES[@]}"; do
   say ""
@@ -384,9 +384,9 @@ for pkg in "${PACKAGES[@]}"; do
     note "$pkg@0.0.0 is not public yet; approve it before the deprecate notice can land"
   fi
 done
-pause "Press Enter when both placeholders are public"
+pause "Press Enter when the placeholder is public"
 
-# ── Stage 9: revoke the token and sign out ──────────────────────────────
+# ── Stage 7: revoke the token and sign out ──────────────────────────────
 stage "Revoke the token and sign out"
 step "The wizard signs your CLI out now."
 npm logout --registry https://registry.npmjs.org || true
@@ -402,11 +402,11 @@ say "the scratch file is deleted; your npm config never held the token"
 say "From this point the only publish path is the workflow's OIDC token."
 pause
 
-# ── Stage 10: cut the first release ──────────────────────────────────────
+# ── Stage 8: cut the first release ──────────────────────────────────────
 stage "Cut the first release $FIRST_RELEASE"
 say "This tag is the real test: npm checks the grant when the publish step"
 say "runs, not when you saved it. The tag is the only release action; the"
-say "workflow writes the tag's version into both manifests (ADR 0090)."
+say "workflow writes the tag's version into the package manifest (ADR 0090)."
 open_url "https://github.com/$GITHUB_OWNER/$REPO/releases/new"
 step "In the Choose a tag box, type $FIRST_RELEASE and press Enter."
 step "Set the release title to $FIRST_RELEASE and click Create release."

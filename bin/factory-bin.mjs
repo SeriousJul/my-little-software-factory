@@ -70,10 +70,10 @@ async function main() {
 		argv: process.argv.slice(2),
 		// The first run transfers about 100 MB. Without a line before it the
 		// terminal shows nothing while the download runs, which reads as a hang.
-		report: (line) => process.stderr.write(`mlsf: ${line}\n`),
+		report: (line) => process.stderr.write(`factory: ${line}\n`),
 	});
 	if (outcome.kind === "fail") {
-		process.stderr.write(`mlsf: ${outcome.line}\n`);
+		process.stderr.write(`factory: ${outcome.line}\n`);
 		process.exit(1);
 	}
 	if (outcome.kind === "print") {

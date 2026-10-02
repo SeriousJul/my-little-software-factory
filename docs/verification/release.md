@@ -11,7 +11,7 @@ required check that could not run is recorded as incomplete. It is not a pass,
 and it is not silently dropped.
 
 See [ADR 0020](../adr/0020-the-control-plane-publishes-from-a-version-tag-with-a-short-alias-package.md)
-for the release mechanism and the alias package.
+for the release mechanism.
 
 ## What is verified automatically
 
@@ -43,7 +43,6 @@ These checks run in `bun run test` and the docs build.
 | A Windows rename refused because the binary is running says to close the running control plane | `test/installer.test.ts` pins the line's decision (`renameFailureLine`); the raw `EBUSY` path itself is the operating system's, measured on the first Windows run | Passed (decision), Incomplete (the real busy rename) |
 | The whole install-and-run (`runInstaller`) resolves the target, reuses or installs the cache, hands the arguments to the binary, and returns the line, the exit code, or the signal the entry then acts on | `test/installer.test.ts`, with the fetch and the child process faked | Passed |
 | The published bin, started under Node through the symlink shape npm writes in `node_modules/.bin`, reaches the install step and runs the cached binary | `test/installer.test.ts` spawns `node` on the shipped `bin/factory-bin.mjs` twice: by its real path and through a shim, with a cache seeded so no request is made. It is red on the pre-fix entry guard (exit 0, no output) and green on the realpath'ed guard | Passed |
-| The alias launcher starts the main package's own bin with the operator's arguments, forwards its exit code, and ends a signalled child by that signal rather than by a code of its own | `test/alias-launcher.test.ts` starts the real `packages/mlsf/bin.mjs` under Node in an install-shaped tree with a stand-in main bin. It is red on the pre-fix launcher (exit 1 where the shipped bin died by SIGTERM) and green on the one that drops the listener before the re-raise | Passed |
 | A clean install of the packed tarball installs the installer and nothing else | The author ran `npm pack` and `npm install ./my-little-software-factory-0.1.0.tgz` in an empty project (npm, node 26, 2026-09-24): `added 1 package`, `node_modules` 36 kB, and `./node_modules/.bin/factory --version` reached the install step with its readable incomplete-release line | Passed |
 | The checksums file is read before the asset, a mismatched or missing checksum installs nothing, and a verified asset lands at its cache path with its install note | `test/installer.test.ts`, with the network faked | Passed |
 | The build command compiles the entry per target with the package's version stamped into the binary, and is the command the release leg runs | `test/build-binary.test.ts`, `test/release-workflow.test.ts` | Passed |
@@ -129,19 +128,18 @@ live outside this repository. Their decisions now have a unit seam
 and the entry was run under Node against a seeded cache; what stays here is
 the network's own half and the real asset. They are verified on the first
 `v*` tag, after the one-time npm trusted
-publishing setup that grants publish permission for both package names to
+publishing setup that grants publish permission for the package name to
 this repository. Until that tag runs, every row below is incomplete.
 
 | Requirement | How it is measured | Result |
 | --- | --- | --- |
 | `npx my-little-software-factory` installs the prebuilt binary from the release and starts the control plane on a machine with no repository checkout and no Bun | Run the command in a clean environment; record the start lines and the UI | Incomplete |
-| `npx mlsf` starts the same app, through the alias launcher and the same installer | Run the command in a clean environment; record the start lines and the UI | Incomplete |
 | `npm install -g my-little-software-factory` and the `factory` command it writes start the same app. The packed tarball install and the shim's run path were measured locally on 2026-09-24 against the release that does not exist yet, which is why the incomplete-release line is the recorded answer there | Run the install in a clean environment and start `factory`; record the download, the start lines, and the UI | Incomplete |
 | The first start seeds the Config file at `~/.config/my-little-software-factory/config.toml` and the start lines carry the seed note | Inspect the file and the start lines after the first run. The seed itself is measured on the compiled binary above | Incomplete |
 | A second start runs the cached binary without the network, and a new version downloads its own binary | Run the command twice; record that the second run makes no download and that a version bump re-downloads. Both decisions are pinned in `test/installer.test.ts` with the network faked | Incomplete |
 | The release job creates the release once and a re-run completes it instead of failing on the name the create step took | The workflow runs on the tag; re-run the release job and record that it uploads | Incomplete |
-| The published package carries provenance naming this repository and the release commit | `npm view` with the attestations for both package versions | Incomplete |
-| A tag whose version differs from the manifests lands in both manifests before any check, build, or publish, and the sync commit lands on main | The workflow's sync steps run before every version-reading step (`test/release-workflow.test.ts` pins that checks, build, and publish all run the sync, and only checks pushes), and `test/sync-release-version.test.ts` pins the write's own shape | Incomplete |
+| The published package carries provenance naming this repository and the release commit | `npm view` with the attestation for the package version | Incomplete |
+| A tag whose version differs from the manifest lands in the package manifest before any check, build, or publish, and the sync commit lands on main | The workflow's sync steps run before every version-reading step (`test/release-workflow.test.ts` pins that checks, build, and publish all run the sync, and only checks pushes), and `test/sync-release-version.test.ts` pins the write's own shape | Incomplete |
 
 ## Notes
 
@@ -155,8 +153,12 @@ this repository. Until that tag runs, every row below is incomplete.
   the 96.6 MiB (101,316,064 byte) `linux-x64` binary of this pass that cost
   45 ms under Node 26, and the digest it takes matches `sha256sum` for the
   same file.
-- The npm name `factory` is taken on the public registry. That is why the
-  short access path is the separate `mlsf` alias.
+- The npm names `factory` and `mlsf` are both unusable on the public
+  registry: `factory` is taken, and `mlsf` is frozen - the registry refuses
+  to let anyone claim it, measured 2026-10-02 (staging a fresh sibling name
+  succeeded in the same seconds while `mlsf` failed at every version). The
+  access path is the full package name, and the alias package is gone
+  (ADR 0091).
 - The `linux-arm64` and `darwin-x64` binaries are built by the release but
   take no runner smoke: no runner for them exists in the workflow. They are
   unverified on a machine until one runs them, and this record says so.
@@ -166,17 +168,17 @@ this repository. Until that tag runs, every row below is incomplete.
   stands in for the signature until then.
 - The one-time trusted publishing setup is interactive on the npm account
   side. The wizard in `scripts/npm-trusted-publishing-wizard.sh` guides the
-  maintainer through it: it stages a `0.0.0` placeholder under both package
-  names with a one-off stage-only token (npm cannot grant trusted publishing
-  for a name that does not exist), the maintainer approves both placeholders
-  with two-factor and the wizard deprecates them, it grants the workflow
-  `release.yml` on both packages, revokes the token and the local session,
+  maintainer through it: it stages a `0.0.0` placeholder under the package
+  name with a one-off stage-only token (npm cannot grant trusted publishing
+  for a name that does not exist), the maintainer approves the placeholder
+  with two-factor and the wizard deprecates it, it grants the workflow
+  `release.yml` on the package, revokes the token and the local session,
   and cuts the first tag. The token carries no two-factor bypass, the path
   npm is deprecating.
 - The first release is `0.1.0`.
 - The tag is the only place the operator names a release (ADR 0090):
   the operator cuts it from the GitHub interface, and the workflow writes
-  the tag's version into both manifests before it checks, builds, or
+  the tag's version into the package manifest before it checks, builds, or
   publishes. It commits that write to `main` from the tag's tree, and a
   `main` that moved on since the cut refuses the push and stops the run.
   The operator then re-cuts the tag from the newer `main`.
@@ -258,7 +260,8 @@ this repository. Until that tag runs, every row below is incomplete.
   under Node: pre-fix it answered exit 1 where the shipped bin died by SIGTERM,
   and after it dies by the signal (143) like the shipped bin.
   `test/alias-launcher.test.ts` is red on the pre-fix file and green on the
-  patched one.
+  patched one. The alias package itself was later removed (ADR 0091); this
+  note is the record of the measurement.
 - The Windows busy-rename line is the decision of one pure function; the
   operating system's `EBUSY` behind it was not produced on a Windows
   machine in this pass. It stays the row above rather than a claim here.
