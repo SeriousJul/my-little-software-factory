@@ -505,9 +505,10 @@ describe("validateConfig", () => {
 				if (feedNames.has(source.name)) {
 					// Normal gh authentication and no explicit filter: the feed
 					// reads neither an auth table nor a filter, so no token is
-					// committed.
+					// committed. The checked-in development feed refreshes on
+					// the five-minute interval.
 					expect(source.refreshIntervalSeconds, `${source.name} keeps its refresh interval`).toBe(
-						source.kind === "github-issues" || source.kind === "github-pull-requests" ? 60 : 300,
+						300,
 					);
 					expect(source.repositories).toContain("SeriousJul/my-little-software-factory");
 					expect(source.filter).toBeUndefined();

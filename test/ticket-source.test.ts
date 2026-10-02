@@ -178,6 +178,18 @@ describe("GitHub ticket sources", () => {
 		expect(outcome.tickets.map((ticket) => ticket.externalKey)).toEqual(["#5"]);
 	});
 
+	test("a closed issue the search index still lists leaves the snapshot", async () => {
+		// The search index lags the close: a closed issue still answers the
+		// `is:open` search for a moment, and the node's own state carries
+		// the fact. The snapshot is the live open list, so the node leaves
+		// it the way the blocked link does.
+		const runner = new SourceRunner([page([issue(5, { state: "CLOSED" }), issue(6)])]);
+		const outcome = await createTicketSource(source("github-issues"), runner).fetch();
+		expect(outcome).toMatchObject({ status: "success" });
+		if (outcome.status !== "success") return;
+		expect(outcome.tickets.map((ticket) => ticket.externalKey)).toEqual(["#6"]);
+	});
+
 	test("an unreadable blocked-by link fails the source", async () => {
 		const runner = new SourceRunner([
 			page([{ ...issue(5), blockedBy: { nodes: [{ number: 4 }] } }]),
@@ -406,6 +418,21 @@ describe("GitHub ticket source contract", () => {
 			.replace("query=", "")
 			.replace(/\s+/g, " ");
 		expect(query).toContain("isDraft headRefName");
+	});
+
+	test("a merged pull request the search index still lists leaves the snapshot", async () => {
+		// The search index lags the merge: a pull request merged a moment
+		// ago still answers the `is:open` search, in the state `MERGED`, and
+		// the node's own state carries the fact. The snapshot is the live
+		// open list, so the node leaves it the way the blocked link does -
+		// the plane retires the merged ticket the moment the merge settles,
+		// and the lag must not bring it back.
+		const mergedPage = page([pullRequest(5, { state: "MERGED" })]);
+		const runner = new SourceRunner([mergedPage, mergedPage]);
+		const outcome = await createTicketSource(source("github-pull-requests"), runner).fetch();
+		expect(outcome).toMatchObject({ status: "success" });
+		if (outcome.status !== "success") return;
+		expect(outcome.tickets).toEqual([]);
 	});
 
 	test("a pull request without a head branch is an unreadable failure", async () => {

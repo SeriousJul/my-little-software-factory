@@ -447,14 +447,14 @@ maximum-speed = 6
 [[sources]]
 name = "factory-issues"
 kind = "github-issues"
-refresh-interval-seconds = 60
-repositories = [ "SeriousJul/my-little-software-factory", "SeriousJul/pi-extensions", "SeriousJul/seriousjul.github.io", "SeriousJul/yapdf" ]
+refresh-interval-seconds = 300
+repositories = [ "SeriousJul/my-little-software-factory", "SeriousJul/pi-extensions", "SeriousJul/seriousjul.github.io", "SeriousJul/yapdf", "SeriousJul/yapdf-website" ]
 
 [[sources]]
 name = "factory-pull-requests"
 kind = "github-pull-requests"
-refresh-interval-seconds = 60
-repositories = [ "SeriousJul/my-little-software-factory", "SeriousJul/pi-extensions", "SeriousJul/seriousjul.github.io", "SeriousJul/yapdf" ]
+refresh-interval-seconds = 300
+repositories = [ "SeriousJul/my-little-software-factory", "SeriousJul/pi-extensions", "SeriousJul/seriousjul.github.io", "SeriousJul/yapdf", "SeriousJul/yapdf-website" ]
 
 [[sources]]
 name = "my-security-advisories"
@@ -473,71 +473,6 @@ name = "my-secret-alerts"
 kind = "github-secret-scanning-alerts"
 refresh-interval-seconds = 300
 repositories = [ "SeriousJul/my-little-software-factory", "SeriousJul/pi-extensions", "SeriousJul/seriousjul.github.io" ]
-
-[[sources]]
-name = "SeriousJul/my-little-software-factory-issues"
-kind = "github-issues"
-refresh-interval-seconds = 60
-repositories = [ "SeriousJul/my-little-software-factory" ]
-filter = "label:ready-for-agent,label:ready-for-spec"
-
-[[sources]]
-name = "SeriousJul/my-little-software-factory-pull-requests"
-kind = "github-pull-requests"
-refresh-interval-seconds = 60
-repositories = [ "SeriousJul/my-little-software-factory" ]
-
-[[sources]]
-name = "SeriousJul/yapdf-issues"
-kind = "github-issues"
-refresh-interval-seconds = 60
-repositories = [ "SeriousJul/yapdf" ]
-filter = "label:ready-for-agent,label:ready-for-spec"
-
-[[sources]]
-name = "SeriousJul/yapdf-pull-requests"
-kind = "github-pull-requests"
-refresh-interval-seconds = 60
-repositories = [ "SeriousJul/yapdf" ]
-
-[[sources]]
-name = "SeriousJul/seriousjul.github.io-issues"
-kind = "github-issues"
-refresh-interval-seconds = 60
-repositories = [ "SeriousJul/seriousjul.github.io" ]
-filter = "label:ready-for-agent,label:ready-for-spec"
-
-[[sources]]
-name = "SeriousJul/seriousjul.github.io-pull-requests"
-kind = "github-pull-requests"
-refresh-interval-seconds = 60
-repositories = [ "SeriousJul/seriousjul.github.io" ]
-
-[[sources]]
-name = "SeriousJul/pi-extensions-issues"
-kind = "github-issues"
-refresh-interval-seconds = 60
-repositories = [ "SeriousJul/pi-extensions" ]
-filter = "label:ready-for-agent,label:ready-for-spec"
-
-[[sources]]
-name = "SeriousJul/pi-extensions-pull-requests"
-kind = "github-pull-requests"
-refresh-interval-seconds = 60
-repositories = [ "SeriousJul/pi-extensions" ]
-
-[[sources]]
-name = "SeriousJul/yapdf-website-issues"
-kind = "github-issues"
-refresh-interval-seconds = 60
-repositories = [ "SeriousJul/yapdf-website" ]
-filter = "label:ready-for-agent,label:ready-for-spec"
-
-[[sources]]
-name = "SeriousJul/yapdf-website-pull-requests"
-kind = "github-pull-requests"
-refresh-interval-seconds = 60
-repositories = [ "SeriousJul/yapdf-website" ]
 
 [[states]]
 name = "ready-for-agent"

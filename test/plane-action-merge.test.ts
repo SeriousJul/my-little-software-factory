@@ -32,7 +32,7 @@ import { createHandoffDispatch, type HandoffDispatchReports } from "../src/hando
 import { planeActionSettingOf, runMergePullRequest } from "../src/plane-actions.ts";
 import type { CommandOptions, CommandResult } from "../src/runner.ts";
 import { type FactoryState, openFactoryState } from "../src/state.ts";
-import type { FetchOutcome } from "../src/ticket-source.ts";
+import { createTicketSource, type FetchOutcome, SEARCH_QUERY } from "../src/ticket-source.ts";
 import { firePlaneActionOutcome } from "../src/workflow.ts";
 import {
 	type AppSetup,
@@ -873,6 +873,102 @@ describe("the dispatch's ask and pickup", () => {
 		expect(offAt).toBeGreaterThan(onAt);
 		// No agent: the run took no herdr command at all.
 		expect(runner.commands().filter((command) => command.startsWith("herdr"))).toEqual([]);
+		state.close();
+	});
+
+	test("the lagged refresh that still lists the merged pull request leaves it retired", async () => {
+		const state = planeState();
+		const runner = new FakeRunner();
+		// The run's fresh read finds the pull request open, the merge lands,
+		// and the fire's fresh read finds it merged.
+		stubReadSequence(runner, [{ state: "open" }, { merged: true }]);
+		stubMerge(runner, 0);
+		const events: string[] = [];
+		let resolveStarted: () => void = () => {};
+		const startedSettled = new Promise<void>((resolve) => {
+			resolveStarted = resolve;
+		});
+		const dispatch = createHandoffDispatch({
+			state,
+			runner,
+			config: () => PLANE_CONFIG,
+			seatCount: () => 0,
+			home: home(),
+			...recorder(events),
+		});
+		const result = await dispatch.dispatchPlaneAction({
+			origin: "open",
+			automatic: true,
+			ticketIdentity: pullIdentity,
+			taskType: "merge",
+			onStarted: (started) => {
+				expect(started).toEqual({ ok: true });
+				resolveStarted();
+			},
+		});
+		expect(result).toEqual({ ok: true });
+		await startedSettled;
+
+		// The GitHub search index lags the merge: the next refresh still
+		// answers the pull request on the open search, in the state
+		// `MERGED`, with the labels the index still held. The source drops
+		// the node, the way it drops the blocked one, and the retirement
+		// the pickup ran stands: the ticket does not reappear in the list.
+		const lagRunner = new FakeRunner();
+		const lagNode = {
+			__typename: "PullRequest",
+			id: "P_12",
+			number: 12,
+			title: pullTitle,
+			body: null,
+			url: "https://github.com/acme/factory/pull/12",
+			state: "MERGED",
+			updatedAt: new Date(Date.now() + 60_000).toISOString(),
+			isDraft: false,
+			headRefName: "feature/top-up",
+			labels: { nodes: [{ name: "ready-to-ship" }] },
+			repository: {
+				name: "factory",
+				nameWithOwner: "acme/factory",
+				url: "https://github.com/acme/factory",
+			},
+		};
+		const lagPage = JSON.stringify({
+			data: {
+				search: {
+					issueCount: 1,
+					pageInfo: { hasNextPage: false },
+					nodes: [lagNode],
+				},
+			},
+		});
+		const graphqlArgs = (searchQuery: string): string[] => [
+			"api",
+			"graphql",
+			"--hostname",
+			"github.com",
+			"-f",
+			`query=${SEARCH_QUERY}`,
+			"-f",
+			`searchQuery=${searchQuery}`,
+		];
+		lagRunner.set(
+			"gh",
+			graphqlArgs("is:open is:pr repo:acme/factory -label:blocked label:needs-work"),
+			{ stdout: lagPage },
+		);
+		lagRunner.set("gh", graphqlArgs("is:open is:pr repo:acme/factory -label:blocked no:draft"), {
+			stdout: lagPage,
+		});
+		const outcome = await createTicketSource(pullsConfig, lagRunner).fetch();
+		expect(outcome).toMatchObject({ status: "success" });
+		if (outcome.status !== "success") return;
+		state.applyFetch(pullsSource, outcome);
+		expect(
+			state
+				.visibleTickets(PLANE_WORKFLOW_STATES, PLANE_CONFIG.defaultTaskType, "all")
+				.find((candidate) => candidate.identity === pullIdentity),
+		).toBeUndefined();
 		state.close();
 	});
 

@@ -250,6 +250,14 @@ class GitHubTicketSource implements TicketSource {
 				// source drops it the way the `blocked` label does, so the app
 				// never sees it at all.
 				if (normalized.blocked) continue;
+				// A node the search index still lists but that has stopped being
+				// open - a pull request merged or an issue closed a moment ago,
+				// the index lag the `is:open` scope cannot express - is no work.
+				// The node's own state carries the fact, and the source drops it
+				// the way the blocked link does: the snapshot is the live open
+				// list alone, and a merged ticket the plane just retired does not
+				// reappear on the refresh that follows.
+				if (!normalized.open) continue;
 				tickets.push(normalized.ticket);
 			}
 			if (!page.hasNextPage)
@@ -436,7 +444,9 @@ function parseClosingReferences(raw: unknown, host: string): IssueReference[] {
 function normalizeGitHubNode(
 	node: unknown,
 	config: TicketSourceConfig,
-): { ok: true; ticket: FetchedTicket; blocked: boolean } | { ok: false; reason: string } {
+):
+	| { ok: true; ticket: FetchedTicket; blocked: boolean; open: boolean }
+	| { ok: false; reason: string } {
 	const item = node as Record<string, unknown>;
 	const expectedTypename = config.kind === "github-issues" ? "Issue" : "PullRequest";
 	// The search query and this result check both enforce the configured kind.
@@ -500,6 +510,9 @@ function normalizeGitHubNode(
 		return { ok: false, reason: "GitHub returned an unreadable blocked-by link" };
 	return {
 		ok: true,
+		// The one live state every source lists: a node in any other state
+		// has left the open work, whatever the search index still answers.
+		open: state.toUpperCase() === "OPEN",
 		ticket: {
 			identity: `github:${config.host.toLowerCase()}:${id}`,
 			sourceKind: config.kind === "github-issues" ? "github-issue" : "github-pull-request",
