@@ -2013,8 +2013,8 @@ function setNoOwnPull(runner: FakeRunner): void {
 	runner.set("gh", OWN_PULLS_ARGS, { stdout: "[]" });
 }
 
-/** Stub the commit count read of the head against the base: the fetch and the count it carries. */
-function stubCommitsAhead(runner: FakeRunner, count: string): void {
+/** Stub the work read of the head against the base: the fetch and the tree compare it carries. */
+function stubPullRequestWork(runner: FakeRunner, carriesWork: boolean): void {
 	runner.set(
 		"git",
 		["-C", "/acme/factory", "fetch", "origin", "factory/5-persist-source-facts", "main"],
@@ -2025,11 +2025,12 @@ function stubCommitsAhead(runner: FakeRunner, count: string): void {
 		[
 			"-C",
 			"/acme/factory",
-			"rev-list",
-			"--count",
-			"origin/main..origin/factory/5-persist-source-facts",
+			"diff",
+			"--quiet",
+			"origin/main",
+			"origin/factory/5-persist-source-facts",
 		],
-		{ stdout: `${count}\n` },
+		{ code: carriesWork ? 1 : 0, stdout: "" },
 	);
 }
 
@@ -2038,7 +2039,7 @@ describe("the pull request the plane opens (ADR 0076)", () => {
 		const state = seededState(issueTicketData());
 		const runner = new FakeRunner();
 		setOwnDraft(runner);
-		stubCommitsAhead(runner, "3\n");
+		stubPullRequestWork(runner, true);
 		runner.set("gh", ["pr", "ready", "12", "--repo", "github.com/acme/factory"], { stdout: "" });
 
 		const outcome = await fireTransition({
@@ -2065,17 +2066,17 @@ describe("the pull request the plane opens (ADR 0076)", () => {
 		expect(runner.commands()).toEqual([
 			`gh ${OWN_PULLS_ARGS.join(" ")}`,
 			"git -C /acme/factory fetch origin factory/5-persist-source-facts main",
-			"git -C /acme/factory rev-list --count origin/main..origin/factory/5-persist-source-facts",
+			"git -C /acme/factory diff --quiet origin/main origin/factory/5-persist-source-facts",
 			"gh pr ready 12 --repo github.com/acme/factory",
 			"gh pr edit #12 --repo github.com/acme/factory --add-label ready-for-review",
 		]);
 	});
 
-	test("a draft with no commit ahead of its base skips on its own reason, and publishes nothing", async () => {
+	test("a draft that carries no work against its base skips on its own reason, and publishes nothing", async () => {
 		const state = seededState(issueTicketData());
 		const runner = new FakeRunner();
 		setOwnDraft(runner);
-		stubCommitsAhead(runner, "0\n");
+		stubPullRequestWork(runner, false);
 
 		const outcome = await fireTransition({
 			config: OPEN_CONFIG,
@@ -2087,7 +2088,7 @@ describe("the pull request the plane opens (ADR 0076)", () => {
 
 		expect(outcome).toMatchObject({
 			fired: true,
-			reason: "the pull request carries no commit ahead of its base",
+			reason: EMPTY_PULL_REQUEST_SKIP,
 			pullRequestIdentity: null,
 			positionTaskType: null,
 			ticketWrite: null,
@@ -2098,7 +2099,7 @@ describe("the pull request the plane opens (ADR 0076)", () => {
 		expect(runner.commands()).toEqual([
 			`gh ${OWN_PULLS_ARGS.join(" ")}`,
 			"git -C /acme/factory fetch origin factory/5-persist-source-facts main",
-			"git -C /acme/factory rev-list --count origin/main..origin/factory/5-persist-source-facts",
+			"git -C /acme/factory diff --quiet origin/main origin/factory/5-persist-source-facts",
 		]);
 	});
 
@@ -2124,7 +2125,7 @@ describe("the pull request the plane opens (ADR 0076)", () => {
 		expect(runner.commands()).toEqual([`gh ${OWN_PULLS_ARGS.join(" ")}`]);
 	});
 
-	test("a commit count that cannot be read skips on the empty reason: nothing uncertain is published", async () => {
+	test("a work read that cannot be read skips on the empty reason: nothing uncertain is published", async () => {
 		const state = seededState(issueTicketData());
 		const runner = new FakeRunner();
 		setOwnDraft(runner);
@@ -2144,7 +2145,7 @@ describe("the pull request the plane opens (ADR 0076)", () => {
 
 		expect(outcome).toMatchObject({
 			fired: true,
-			reason: "the pull request carries no commit ahead of its base",
+			reason: EMPTY_PULL_REQUEST_SKIP,
 			pullRequestIdentity: null,
 		});
 		expect(runner.commands()).toEqual([
@@ -2157,7 +2158,7 @@ describe("the pull request the plane opens (ADR 0076)", () => {
 		const state = seededState(issueTicketData());
 		const runner = new FakeRunner();
 		setOwnDraft(runner, { draft: false });
-		stubCommitsAhead(runner, "3\n");
+		stubPullRequestWork(runner, true);
 
 		const outcome = await fireTransition({
 			config: OPEN_CONFIG,
@@ -2175,7 +2176,7 @@ describe("the pull request the plane opens (ADR 0076)", () => {
 		expect(runner.commands()).toEqual([
 			`gh ${OWN_PULLS_ARGS.join(" ")}`,
 			"git -C /acme/factory fetch origin factory/5-persist-source-facts main",
-			"git -C /acme/factory rev-list --count origin/main..origin/factory/5-persist-source-facts",
+			"git -C /acme/factory diff --quiet origin/main origin/factory/5-persist-source-facts",
 			"gh pr edit #12 --repo github.com/acme/factory --add-label ready-for-review",
 		]);
 	});
@@ -2184,7 +2185,7 @@ describe("the pull request the plane opens (ADR 0076)", () => {
 		const state = seededState(issueTicketData());
 		const runner = new FakeRunner();
 		setOwnDraft(runner);
-		stubCommitsAhead(runner, "3\n");
+		stubPullRequestWork(runner, true);
 		runner.set("gh", ["pr", "ready", "12", "--repo", "github.com/acme/factory"], {
 			code: 1,
 			stderr: "GraphQL: Not ready for review (already merged)\n",
@@ -2207,7 +2208,7 @@ describe("the pull request the plane opens (ADR 0076)", () => {
 		expect(runner.commands()).toEqual([
 			`gh ${OWN_PULLS_ARGS.join(" ")}`,
 			"git -C /acme/factory fetch origin factory/5-persist-source-facts main",
-			"git -C /acme/factory rev-list --count origin/main..origin/factory/5-persist-source-facts",
+			"git -C /acme/factory diff --quiet origin/main origin/factory/5-persist-source-facts",
 			"gh pr ready 12 --repo github.com/acme/factory",
 		]);
 	});
@@ -2233,7 +2234,7 @@ describe("the pull request the plane opens (ADR 0076)", () => {
 		);
 		const runner = new FakeRunner();
 		setOwnDraft(runner);
-		stubCommitsAhead(runner, "3\n");
+		stubPullRequestWork(runner, true);
 		runner.set("gh", ["pr", "ready", "12", "--repo", "github.com/acme/factory"], { stdout: "" });
 
 		const outcome = await fireTransition({
@@ -2262,7 +2263,7 @@ describe("the pull request the plane opens (ADR 0076)", () => {
 		const state = seededState(issueTicketData());
 		const runner = new FakeRunner();
 		setOwnDraft(runner);
-		stubCommitsAhead(runner, "3\n");
+		stubPullRequestWork(runner, true);
 		runner.set("gh", ["pr", "ready", "12", "--repo", "github.com/acme/factory"], { stdout: "" });
 
 		const outcome = await fireTransition({
@@ -2310,7 +2311,7 @@ describe("the pull request the plane opens (ADR 0076)", () => {
 		const state = seededState(issueTicketData());
 		const runner = new FakeRunner();
 		setOwnDraft(runner);
-		stubCommitsAhead(runner, "3\n");
+		stubPullRequestWork(runner, true);
 		runner.set("gh", ["pr", "ready", "12", "--repo", "github.com/acme/factory"], { stdout: "" });
 
 		const outcome = await fireTransition({
@@ -2337,7 +2338,7 @@ describe("the pull request the plane opens (ADR 0076)", () => {
 
 describe("the recorded empty skip's re-fire (ADR 0076)", () => {
 	/** The outcome the trace records: the fire found the draft, and its head
-	 * carried no commit ahead of the base when the turn settled. */
+	 * carried no work against the base when the turn settled. */
 	function emptySkipOutcome(): TransitionOutcome {
 		return {
 			fired: true,
@@ -2356,12 +2357,12 @@ describe("the recorded empty skip's re-fire (ADR 0076)", () => {
 		};
 	}
 
-	test("an empty skip with a draft that now carries commits lands its labels through the direct read, and the trace takes the re-fired outcome", async () => {
+	test("an empty skip with a draft that now carries work lands its labels through the direct read, and the trace takes the re-fired outcome", async () => {
 		const state = seededState(issueTicketData());
 		settledTurn(state, issueIdentity, "implement", emptySkipOutcome());
 		const runner = new FakeRunner();
 		setOwnDraft(runner);
-		stubCommitsAhead(runner, "3\n");
+		stubPullRequestWork(runner, true);
 		runner.set("gh", ["pr", "ready", "12", "--repo", "github.com/acme/factory"], { stdout: "" });
 		// The refresh the fire the sweep runs carries lists the pull on its
 		// own global id, the source's form, so the position the fire derives
@@ -2403,13 +2404,13 @@ describe("the recorded empty skip's re-fire (ADR 0076)", () => {
 			},
 		]);
 		// The publish stands before the label write: the sweep's own read, the
-		// fire's read, the count, the ready, then the fact the skip left
+		// fire's read, the work read, the ready, then the fact the skip left
 		// unwritten.
 		expect(runner.commands()).toEqual([
 			`gh ${OWN_PULLS_ARGS.join(" ")}`,
 			`gh ${OWN_PULLS_ARGS.join(" ")}`,
 			"git -C /acme/factory fetch origin factory/5-persist-source-facts main",
-			"git -C /acme/factory rev-list --count origin/main..origin/factory/5-persist-source-facts",
+			"git -C /acme/factory diff --quiet origin/main origin/factory/5-persist-source-facts",
 			"gh pr ready 12 --repo github.com/acme/factory",
 			"gh pr edit #12 --repo github.com/acme/factory --add-label ready-for-review",
 		]);
@@ -2428,12 +2429,12 @@ describe("the recorded empty skip's re-fire (ADR 0076)", () => {
 		state.close();
 	});
 
-	test("an empty skip whose draft still carries no commit re-records the skip: no publish, no label", async () => {
+	test("an empty skip whose draft still carries no work re-records the skip: no publish, no label", async () => {
 		const state = seededState(issueTicketData());
 		settledTurn(state, issueIdentity, "implement", emptySkipOutcome());
 		const runner = new FakeRunner();
 		setOwnDraft(runner);
-		stubCommitsAhead(runner, "0\n");
+		stubPullRequestWork(runner, false);
 
 		const refired = await refireRecordedSkips({ config: OPEN_CONFIG, state, runner });
 
@@ -2462,7 +2463,7 @@ describe("the recorded empty skip's re-fire (ADR 0076)", () => {
 			`gh ${OWN_PULLS_ARGS.join(" ")}`,
 			`gh ${OWN_PULLS_ARGS.join(" ")}`,
 			"git -C /acme/factory fetch origin factory/5-persist-source-facts main",
-			"git -C /acme/factory rev-list --count origin/main..origin/factory/5-persist-source-facts",
+			"git -C /acme/factory diff --quiet origin/main origin/factory/5-persist-source-facts",
 		]);
 		expect(state.lastCompletion(issueIdentity)?.transition?.reason).toBe(EMPTY_PULL_REQUEST_SKIP);
 		state.close();

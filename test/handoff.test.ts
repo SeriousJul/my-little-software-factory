@@ -4167,9 +4167,10 @@ describe("handOffTicket: the pull request the plane opens (ADR 0076)", () => {
 
 		expect(outcome.status).toBe("ok");
 		// The open step stands between the environment and the agent: the
-		// branch is pushed, the branch's pull requests are read by its head
-		// branch, the draft is opened, and the prompt the agent receives
-		// carries the pull request's url.
+		// fresh branch takes the plane's hold commit, the branch is pushed, the
+		// branch's pull requests are read by its head branch, the draft is
+		// opened, and the prompt the agent receives carries the pull
+		// request's url.
 		expect(runner.commands()).toEqual([
 			`git -C ${CHECKOUT} rev-parse --git-dir`,
 			`git -C ${CHECKOUT} remote get-url origin`,
@@ -4179,6 +4180,7 @@ describe("handOffTicket: the pull request the plane opens (ADR 0076)", () => {
 			`git -C ${CHECKOUT} fetch origin main`,
 			`herdr worktree create --cwd ${CHECKOUT} --branch ${PR_BRANCH} --base origin/main --no-focus`,
 			`git -C ${CHECKOUT} ls-remote --heads origin ${PR_BRANCH}`,
+			`git -C ${CHECKOUT} commit --allow-empty -m factory: hold the branch for the pull request`,
 			`git -C ${CHECKOUT} push origin ${PR_BRANCH}`,
 			`gh ${PR_READ_ARGS.join(" ")}`,
 			PR_CREATE_COMMAND,
@@ -4251,6 +4253,11 @@ describe("handOffTicket: the pull request the plane opens (ADR 0076)", () => {
 		const commands = runner.commands();
 		expect(commands).toContain(`gh ${PR_READ_ARGS.join(" ")}`);
 		expect(commands).not.toContain(PR_CREATE_COMMAND);
+		// The standing branch pre-dates the attempt: the attempt commits no
+		// hold on it, the way it opens no second draft.
+		expect(commands).not.toContain(
+			`git -C ${CHECKOUT} commit --allow-empty -m factory: hold the branch for the pull request`,
+		);
 		// The prompt still carries the standing pull request's url.
 		expect(commands).toContain(
 			`herdr agent prompt ${AGENT} Implement #7.\n\nPull request: ${PR_URL}`,

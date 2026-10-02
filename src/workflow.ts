@@ -32,7 +32,7 @@ import { firstNonEmptyLine } from "./lines.ts";
 import { ticketBranchPrefix } from "./naming.ts";
 import {
 	markPullRequestReady,
-	pullRequestCommitsAhead,
+	pullRequestCarriesWork,
 	readTicketOwnPullRequest,
 } from "./pull-request.ts";
 import {
@@ -56,12 +56,14 @@ export const NO_LINKED_PULL_REQUEST_SKIP = "no linked pull request was found for
 
 /**
  * The reason the fire records when the ticket's own pull request stands on
- * the branch with a head that carries no commit ahead of its base
- * (ADR 0076): the work has not landed, so nothing is published and no label
- * is written, and the ticket rests where the missing pull request rests.
- * The re-fire sweep lands the labels when a commit appears.
+ * the branch with a head that carries no work against its base (ADR 0076):
+ * the work has not landed, so nothing is published and no label is written,
+ * and the ticket rests where the missing pull request rests. The test is
+ * the work - the head's tree against the base's - because the plane's hold
+ * commit stands on every fresh factory branch. The re-fire sweep lands the
+ * labels when work appears.
  */
-export const EMPTY_PULL_REQUEST_SKIP = "the pull request carries no commit ahead of its base";
+export const EMPTY_PULL_REQUEST_SKIP = "the pull request carries no change against its base";
 
 /** The inputs the transition's judgments read. */
 export interface TransitionJudgmentInput {
@@ -770,9 +772,10 @@ export async function fireTransition(
 	// The pull request publish (ADR 0076): a completed turn of a task type
 	// that opens a pull request reaches the ticket's own draft through the
 	// direct head-branch read, because a draft the machine has not labeled
-	// never stands in the ticket list. The read of the head against the base
-	// comes before the publish: a head with no commit ahead of its base is
-	// the missing pull request, on the skip's own reason.
+	// never stands in the ticket list. The work test of the head against the
+	// base comes before the publish: a head that carries no work against its
+	// base - the plane's hold commit included - is the missing pull request,
+	// on the skip's own reason.
 	const opensPullRequest =
 		request.config.taskTypes[request.taskType]?.opensPullRequest === true &&
 		ticket.sourceKind !== "github-pull-request";
@@ -782,13 +785,13 @@ export async function fireTransition(
 		const ownHead = own === null ? null : headBranchOf(own.memberships[0]?.attributes ?? {});
 		const ownBase = own === null ? null : (own.memberships[0]?.attributes.baseBranch ?? null);
 		const checkout = request.config.repos[ticket.repositoryRef.identity];
-		const ahead =
+		const work =
 			own === null || ownHead === null || ownBase === null || checkout === undefined
 				? null
-				: await pullRequestCommitsAhead(request.runner, checkout, ownHead, ownBase);
+				: await pullRequestCarriesWork(request.runner, checkout, ownHead, ownBase);
 		if (own === null) {
 			pullRequest = null;
-		} else if (ahead === null || ahead === 0) {
+		} else if (work !== true) {
 			emptyOwnPullRequest = true;
 			pullRequest = null;
 		} else {

@@ -99,6 +99,9 @@ import { remoteDefaultBranch } from "./worktree-base.ts";
 const AGENT_PANE_BUSY_RETRY_DELAY_MS = 100;
 const AGENT_PANE_BUSY_RETRY_WINDOW_MS = 2_000;
 
+/** The message the plane's hold commit carries on a fresh factory branch. */
+const PULL_REQUEST_HOLD_COMMIT_MESSAGE = "factory: hold the branch for the pull request";
+
 /** One handoff's choices: the resolved task profile plus whatever an override changed. */
 export interface HandoffChoice {
 	agentType: string;
@@ -1641,6 +1644,13 @@ type PullRequestOpenAnswer =
  * its head branch, and a draft is opened when none stands. A pull request
  * the branch already carries is reused, and no second one is opened.
  *
+ * A branch the remote did not carry first receives the plane's empty hold
+ * commit, because the source opens no pull request on a head that carries no
+ * commit ahead of its base. The hold stays on the branch: pushing the branch
+ * back to its base after the open closes the pull request, and the agent's
+ * commits stack on the hold. The fire's work test - the head's tree against
+ * the base's, not the commit count - sees through it.
+ *
  * The no-residue contract (ADR 0076): a failure answers with the reason it
  * reports and the cleanup of what the attempt created - the remote branch it
  * pushed when the branch did not stand on the remote before, and the pull
@@ -1681,6 +1691,32 @@ async function runPullRequestOpen(
 	const pushCleanup = existedBefore
 		? noopCleanup
 		: () => deleteRemoteBranch(ctx, plan.checkout, plan.branch);
+	// A branch the remote did not carry stands at its base: the create would
+	// answer "No commits between", and no retry of the create clears it. The
+	// hold commit gives the open a commit to stand on, before the push.
+	if (!existedBefore) {
+		let held: CommandResult;
+		try {
+			held = await ctx.runner.run("git", [
+				"-C",
+				plan.checkout,
+				"commit",
+				"--allow-empty",
+				"-m",
+				PULL_REQUEST_HOLD_COMMIT_MESSAGE,
+			]);
+		} catch (error) {
+			return {
+				fail: `the pull request open could not commit the hold: ${errorMessage(error)}`,
+				cleanup: noopCleanup,
+			};
+		}
+		if (held.code !== 0)
+			return {
+				fail: `the pull request open could not commit the hold: ${commandFailureText(held)}`,
+				cleanup: noopCleanup,
+			};
+	}
 	let pushed: CommandResult;
 	try {
 		pushed = await ctx.runner.run("git", ["-C", plan.checkout, "push", "origin", plan.branch], {

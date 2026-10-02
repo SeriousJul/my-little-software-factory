@@ -46,6 +46,27 @@ answer for a bounded window. A create that never clears the lag fails the
 open with the last answer the source gave, and the no-residue contract of
 the failure is untouched: the attempt deletes the remote branch it created.
 
+**A fresh branch opens with the plane's hold commit.** The source opens no
+pull request on a head that carries no commit ahead of its base: the create
+answers `No commits between`, and no retry of the create clears it, because
+the branch stands at its base until the agent commits. A branch the remote
+did not carry therefore first receives one empty hold commit from the plane,
+and the push carries it. The hold stays on the branch: pushing the branch
+back to its base after the open closes the pull request the source opened,
+and the agent's commits stack on the hold. A squash merge, the merge
+method's default, leaves the hold out of main.
+
+**The pull request without work is the missing pull request.** Before it
+publishes, the fire reads the pull request's head against its base. The test
+is the work - the head's tree against the base's - not the commit count,
+because the hold commit stands on every fresh branch. A head that carries no
+work against its base is treated exactly like the missing pull request: the
+skip is recorded on the completion trace under its own reason, nothing is
+published or labeled, the ticket rests in `awaiting`, and the re-fire sweep
+lands the labels when work appears. Without the guard, a turn that settles
+with no pushed work would publish an empty pull request, label it ready for
+review, and walk it through review and rework until the handoff limit.
+
 **The pull request opens as a draft, and the fire publishes it.** A draft
 keeps the empty pull request out of the ticket list, out of the machine's
 acts, and out of reach of a stray merge, and a draft that dangles after a
@@ -59,15 +80,6 @@ does. No GitHub workflow takes part: "done" is the turn settle, which only
 the plane observes, and the label writer stays the single one the machine
 has.
 
-**The pull request without commits is the missing pull request.** Before it
-publishes, the fire reads the pull request's head against its base. A head
-that carries no commit ahead is treated exactly like the missing pull
-request: the skip is recorded on the completion trace under its own reason,
-nothing is published or labeled, the ticket rests in `awaiting`, and the
-re-fire sweep lands the labels when a commit appears. Without the guard, a
-turn that settles with no pushed work would publish an empty pull request,
-label it ready for review, and walk it through review and rework until the
-handoff limit.
 
 **The open is a hard gate on the start, and the no-residue contract extends
 to it.** A failed open refuses the Handoff start with a readable reason, the

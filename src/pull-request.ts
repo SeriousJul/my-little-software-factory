@@ -262,36 +262,41 @@ export async function closePullRequest(
 }
 
 /**
- * The commits the pull request's head carries ahead of its base, read in the
- * checkout the fire runs from (ADR 0076): the head and the base fetched from
- * the remote, the count between them. Null when the read fails - a remote
- * that refuses, a base the remote does not carry - and the caller treats
- * the null the way it treats an empty head: as the pull request the work
- * has not landed in yet.
+ * The work the pull request's head carries against its base, read in the
+ * checkout the fire runs from (ADR 0076): the head and the base fetched
+ * from the remote, the trees compared. The test is the work, not the commit
+ * count, because the plane's hold commit stands on every fresh factory
+ * branch: a head whose tree equals its base's carries no work, hold commit
+ * or not. True when the trees differ, false when they stand alike, and null
+ * when the read fails - a remote that refuses, a base the remote does not
+ * carry - and the caller treats the null the way it treats an unworked head:
+ * as the pull request the work has not landed in yet.
  */
-export async function pullRequestCommitsAhead(
+export async function pullRequestCarriesWork(
 	runner: CommandRunner,
 	checkout: string,
 	headBranch: string,
 	baseBranch: string,
-): Promise<number | null> {
+): Promise<boolean | null> {
 	const fetched = await runner.run(
 		"git",
 		["-C", checkout, "fetch", "origin", headBranch, baseBranch],
 		{ env: { GIT_TERMINAL_PROMPT: "0" } },
 	);
 	if (fetched.code !== 0) return null;
-	const counted = await runner.run("git", [
+	const diffed = await runner.run("git", [
 		"-C",
 		checkout,
-		"rev-list",
-		"--count",
-		`origin/${baseBranch}..origin/${headBranch}`,
+		"diff",
+		"--quiet",
+		`origin/${baseBranch}`,
+		`origin/${headBranch}`,
 	]);
-	if (counted.code !== 0) return null;
-	const text = counted.stdout.trim();
-	if (!/^\d+$/.test(text)) return null;
-	return Number(text);
+	// git diff --quiet answers 0 when the trees stand alike, 1 when they
+	// differ, and a higher code when the read itself fails.
+	if (diffed.code === 0) return false;
+	if (diffed.code === 1) return true;
+	return null;
 }
 
 /**
