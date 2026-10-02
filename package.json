@@ -1,6 +1,6 @@
 {
 	"name": "my-little-software-factory",
-	"version": "0.1.0",
+	"version": "0.0.2",
 	"description": "The control plane of my little software factory. A terminal app that observes tickets and issues work to agents.",
 	"type": "module",
 	"license": "MIT",

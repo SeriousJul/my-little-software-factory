@@ -190,7 +190,7 @@ REPO="my-little-software-factory"
 WORKFLOW_FILE="release.yml"
 PACKAGES=("my-little-software-factory")
 STAGE_TAG="v0.0.2"
-FIRST_RELEASE="v0.1.0"
+FIRST_RELEASE="v0.0.2"
 
 # The wizard stores its memory outside the repository: no npm value lands in a
 # file a git command could push.
@@ -374,7 +374,7 @@ done
 for pkg in "${PACKAGES[@]}"; do
   if npm view "$pkg@0.0.0" version >/dev/null 2>&1; then
     if npm deprecate "$pkg@0.0.0" \
-      "placeholder staged to configure trusted publishing; install 0.1.0 or later" \
+      "placeholder staged to configure trusted publishing; install 0.0.2 or later" \
       --registry https://registry.npmjs.org 2>/dev/null; then
       say "deprecate notice set on $pkg@0.0.0"
     else

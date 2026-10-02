@@ -175,7 +175,7 @@ this repository. Until that tag runs, every row below is incomplete.
   `release.yml` on the package, revokes the token and the local session,
   and cuts the first tag. The token carries no two-factor bypass, the path
   npm is deprecating.
-- The first release is `0.1.0`.
+- The first release is `0.0.2`, the version after the repository's existing `v0.0.1`.
 - The tag is the only place the operator names a release (ADR 0090):
   the operator cuts it from the GitHub interface, and the workflow writes
   the tag's version into the package manifest before it checks, builds, or
