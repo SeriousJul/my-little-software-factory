@@ -3282,6 +3282,95 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 	});
 
 	/**
+	 * The regression the full-cap pair guards against: the submit used to stand
+	 * its "waits in the Work queue" line before the pickup pass ran, so a launch
+	 * with a free seat claimed a wait the pickup was already taking. The notice
+	 * now waits for the pickup's decision, and a record the pickup started
+	 * stands the pickup's own line with the queue left empty.
+	 */
+	test("a launch with a free seat starts the Consultation and stands no waits line", async () => {
+		const state = openFactoryState(join(home, "state.sqlite"));
+		const inner = new FakeRunner();
+		stubCheckout(inner);
+		stubWorktreeLaunch(inner);
+		stubPaneReadText(inner, "pane-c1", "Agent: opened");
+		const runner = new ConsultationRunner(
+			inner,
+			agentListJson([{ pane: "pane-c1", status: "working", sess: "sess-c1" }]),
+		);
+		try {
+			await withApp(
+				async (setup) => {
+					await openLauncher(setup);
+					await awaitFrame(
+						setup,
+						(f) => f.includes("acme/factory"),
+						"the verified Repository option",
+					);
+					await launchConsultationDraft(setup, "review auth");
+					// The pickup pass runs in the submit itself and takes the free
+					// seat: the record leaves `queued` on the key and settles
+					// `working`, the way a direct start would.
+					await awaitFrame(
+						setup,
+						(f) => detailPaneText(f).includes("State: working"),
+						"the picked-up Consultation working",
+					);
+					// The pickup ran the launch, the way a direct start does.
+					await waitForCommands(
+						runner,
+						[
+							`herdr worktree create --cwd ${checkout} --branch ${BRANCH} --base origin/main --no-focus`,
+							`herdr agent start ${AGENT} --kind pi --pane pane-c1`,
+							`herdr agent prompt ${AGENT} /grill review auth`,
+						],
+						"the pickup's launch sequence",
+					);
+					// The record is not `queued`, and the pickup took its item on the
+					// submit, so the durable queue is empty.
+					const settled = state.consultations("all").find((c) => c.state !== "closed");
+					expect(settled).toBeDefined();
+					if (settled === undefined) throw new Error("the Consultation is not recorded");
+					expect(settled.state).not.toBe("queued");
+					expect(state.workQueue()).toHaveLength(0);
+					// The regression the launch guards: the submit used to stand its
+					// "waits in the Work queue" line before the pickup ran, so a launch
+					// with a free seat could claim a wait the queue no longer held. Walk
+					// the settled frames and hold the invariant the user saw broken -
+					// the waits line never stands over an empty Work queue.
+					let sawWorking = false;
+					for (let step = 0; step < 25; step += 1) {
+						const frame = setup.captureCharFrame();
+						if (detailPaneText(frame).includes("State: working")) sawWorking = true;
+						if (state.workQueue().length === 0) {
+							expect(messageRowOf(frame)).not.toContain("waits in the Work queue");
+						}
+						await settle(setup, 50);
+						if (sawWorking && step > 10) break;
+					}
+					// The line that stands once the record works is the pickup's, not
+					// a waits line the queue no longer holds.
+					const settledFrame = setup.captureCharFrame();
+					expect(settledFrame).not.toContain("waits in the Work queue");
+					expect(messageRowOf(settledFrame)).not.toContain("consultation queued");
+				},
+				WIDTH,
+				32,
+				{
+					state,
+					runner,
+					config: { ...configFor(), maxParallelAgents: 1 },
+					home,
+					pollIntervalMs: 100,
+					initialTickets: [],
+				},
+			);
+		} finally {
+			state.close();
+		}
+	});
+
+	/**
 	 * ADR 0052: the queue pause holds the drain, a Consultation's item and a
 	 * Handoff's alike. The seat stands free here on purpose - the pause, not
 	 * the cap, is what holds the pickup - and the submit's own line says so

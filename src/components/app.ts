@@ -2453,7 +2453,7 @@ export function App({
 		// the fix. The check is async - the Setting fit reads the Agent's Model
 		// list - so the whole submit runs behind it, the way every other start's
 		// ask does.
-		void consultationOperations.checkEnqueue(typeName).then((refusal) => {
+		void consultationOperations.checkEnqueue(typeName).then(async (refusal) => {
 			if (refusal !== undefined) {
 				setErrorMessage(`consultation not queued: ${refusal}`);
 				return;
@@ -2486,15 +2486,22 @@ export function App({
 			// launched Consultation when it replaces nothing.
 			selectConsultationById(consultation.replacementOf ?? consultation.id);
 			// The record and its item committed in one write: the queue re-reads
-			// it through the same refresh a handoff enqueue runs, and the
-			// immediate pickup pass takes the seat when one is free.
+			// it through the same refresh a handoff enqueue runs.
 			replaceTickets();
+			// The immediate pickup pass may take the seat the enqueue just made,
+			// the way every other start's ask does. Run it before choosing the
+			// line, so the notice never claims a wait the queue no longer holds:
+			// a pickup that started the record already stood its own opening line,
+			// and a record that still waits is the one that keeps its queue item.
+			const pickup = handoffDispatchRef.current?.dispatch;
+			if (pickup !== undefined) await pickup.pickupWorkQueue();
+			const settled = state.consultation(consultation.id);
+			if (settled === undefined || settled.state !== "queued") return;
 			setNoticeMessage(
 				state.queuePaused()
 					? `consultation queued: ${consultation.id.slice(0, 8)} waits in the Work queue; the queue is paused`
 					: `consultation queued: ${consultation.id.slice(0, 8)} waits in the Work queue for a free Parallel limit seat`,
 			);
-			void handoffDispatchRef.current?.dispatch.pickupWorkQueue();
 		});
 	};
 	const recoverConsultationOpening = (consultation: Consultation) => {
