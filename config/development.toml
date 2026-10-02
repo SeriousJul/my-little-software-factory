@@ -482,6 +482,11 @@ task-type = "implement"
 source-kind = "github-issue"
 labels-any = [ "ready-for-agent" ]
 
+# The spec position: an agreed ticket that needs a specification before the
+# work is worth implementing (ADR 0085, ADR 0086). It sits after the
+# ready-for-agent state, so a ticket carrying both labels rests at
+# ready-for-agent and is offered for implementation, not re-specified. The
+# ready-for-spec label is operator-owned: no transition writes it.
 [[states]]
 name = "ready-for-spec"
 task-type = "analyze"
