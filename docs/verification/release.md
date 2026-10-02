@@ -166,10 +166,13 @@ this repository. Until that tag runs, every row below is incomplete.
   stands in for the signature until then.
 - The one-time trusted publishing setup is interactive on the npm account
   side. The wizard in `scripts/npm-trusted-publishing-wizard.sh` guides the
-  maintainer through it: it claims both package names with a deprecated
-  `0.0.0` placeholder (npm cannot grant trusted publishing for a name that
-  does not exist), grants the workflow `release.yml` on both packages,
-  revokes the one-time local credential, and cuts the first tag.
+  maintainer through it: it stages a `0.0.0` placeholder under both package
+  names with a one-off stage-only token (npm cannot grant trusted publishing
+  for a name that does not exist), the maintainer approves both placeholders
+  with two-factor and the wizard deprecates them, it grants the workflow
+  `release.yml` on both packages, revokes the token and the local session,
+  and cuts the first tag. The token carries no two-factor bypass, the path
+  npm is deprecating.
 - The first release is `0.1.0`.
 - The tag is the only place the operator names a release (ADR 0090):
   the operator cuts it from the GitHub interface, and the workflow writes

@@ -261,11 +261,13 @@ pause
 
 # ── Stage 3: create the one-off token ────────────────────────────────────
 stage "Create the one-off token"
-say "An npm account with two-factor authentication cannot publish through the"
-say "CLI's browser login. The one-off granular token below carries the"
-say "two-factor bypass for this run alone. Stage 9 revokes it, and the"
-say "workflow never sees it: the release authenticates with the OIDC token"
-say "GitHub hands the runner."
+say "npm cannot configure trusted publishing for a name that does not exist,"
+say "so the wizard stages a placeholder under each name first. Staging does"
+say "not need two-factor authentication, and the token below carries no"
+say "two-factor bypass: it can only stage. You approve the placeholders"
+say "yourself, with two-factor, in stage 8. Stage 9 revokes the token, and"
+say "the workflow never sees it: the release authenticates with the OIDC"
+say "token GitHub hands the runner."
 TOKEN_NPMRC="$(mktemp)"
 chmod 600 "$TOKEN_NPMRC"
 note "the token sits in a scratch file the wizard deletes in stage 9; it never touches your npm config"
@@ -280,8 +282,8 @@ fi
 step "Sign in to npmjs.com in the browser, if the page asks."
 step "Click Generate New Token."
 step "Token name: claim-package-names."
-step "Check Bypass two-factor authentication."
-step "Permissions: Read and write (publish and stage). Select Packages: All Packages."
+step "Permissions: Read and write (stage only). Select Packages: All Packages."
+step "Leave Bypass two-factor authentication unchecked."
 step "Expiration: the shortest option; the page needs at least one day."
 step "Click Generate Token and copy the token from the top of the page."
 ask_secret NPM_TOKEN "Paste the token:"
@@ -293,58 +295,41 @@ else
 fi
 pause
 
-# ── Stage 4 and 5: claim both package names ─────────────────────────────
+# ── Stage 4 and 5: stage a placeholder under both package names ──────────
 for pkg in "${PACKAGES[@]}"; do
-  stage "Claim the name $pkg"
+  stage "Stage the 0.0.0 placeholder for $pkg"
   if npm view "$pkg" version >/dev/null 2>&1; then
-    say "$pkg already exists on the registry (version $(npm view "$pkg" version 2>/dev/null)); no claim needed"
+    say "$pkg already exists on the registry (public version $(npm view "$pkg" version 2>/dev/null)); no staging needed"
     pause
     continue
   fi
-  say "npm cannot configure trusted publishing for a name that does not exist."
-  say "The wizard publishes a 0.0.0 placeholder to claim the name, and stage 6"
-  say "marks the placeholder deprecated. The first real version publishes from"
-  say "the workflow with provenance."
+  say "Staging a name that does not exist makes it exist: npm puts a public"
+  say "0.0.0-stage placeholder on the package page at once, and holds your"
+  say "0.0.0 in the staging area until you approve it in stage 8. Once the"
+  say "name exists, stages 6 and 7 can grant the workflow."
   if [[ -z "${NPM_TOKEN:-}" ]]; then
-    SKIPPED+=("claim the name $pkg (run the wizard with the one-off token)")
-    warn "no token, so the wizard cannot claim $pkg"
-  elif confirm "Claim the public name $pkg with a 0.0.0 placeholder?"; then
+    SKIPPED+=("stage the placeholder for $pkg (run the wizard with the one-off token)")
+    warn "no token, so the wizard cannot stage $pkg"
+  elif confirm "Stage a 0.0.0 placeholder under the public name $pkg?"; then
     stub_dir="$(mktemp -d)"
     cat > "$stub_dir/package.json" <<EOF
 {
   "name": "$pkg",
   "version": "0.0.0",
-  "description": "Placeholder published to configure trusted publishing; install a real version."
+  "description": "Placeholder staged to configure trusted publishing; install a real version."
 }
 EOF
-    ( cd "$stub_dir" && npm publish --access public --registry https://registry.npmjs.org --userconfig "$TOKEN_NPMRC" )
+    ( cd "$stub_dir" && npm stage publish --registry https://registry.npmjs.org --userconfig "$TOKEN_NPMRC" )
     rm -rf "$stub_dir"
-    say "claimed $pkg at 0.0.0"
+    say "staged $pkg at 0.0.0"
   else
-    SKIPPED+=("claim the name $pkg (publish its 0.0.0 placeholder)")
-    warn "skipped; nobody can publish $pkg until the name is claimed"
+    SKIPPED+=("stage the placeholder for $pkg")
+    warn "skipped; the workflow cannot be granted on $pkg until the name exists"
   fi
   pause
 done
 
-# ── Stage 6: deprecate the placeholders ──────────────────────────────────
-stage "Deprecate the 0.0.0 placeholders"
-for pkg in "${PACKAGES[@]}"; do
-  if npm view "$pkg" version >/dev/null 2>&1; then
-    if npm deprecate "$pkg@0.0.0" \
-      "placeholder published to configure trusted publishing; install 0.1.0 or later" \
-      --registry https://registry.npmjs.org --userconfig "$TOKEN_NPMRC" 2>/dev/null; then
-      say "deprecate notice set on $pkg@0.0.0"
-    else
-      note "$pkg@0.0.0 could not be deprecated here; set the notice from npmjs.com"
-    fi
-  else
-    note "$pkg does not exist on the registry; nothing to deprecate"
-  fi
-done
-pause
-
-# ── Stage 7 and 8: configure the trusted publisher on each package ──────
+# ── Stage 6 and 7: configure the trusted publisher on each package ──────
 for pkg in "${PACKAGES[@]}"; do
   stage "Grant trusted publishing to $pkg"
   open_url "https://www.npmjs.com/package/$pkg"
@@ -356,13 +341,55 @@ for pkg in "${PACKAGES[@]}"; do
   step "Workflow filename: $WORKFLOW_FILE  (the bare name, the .yml included)"
   step "Environment name: leave empty."
   step "Allowed actions: select npm publish so the workflow may publish directly."
+  warn "The grant needs no token and no two-factor bypass: the OIDC token"
+  warn "GitHub hands the runner is the credential, and npm never deprecates it"
+  warn "the way it deprecates the two-factor bypass tokens."
   warn "npm does not check these values when you save them."
   warn "A wrong value fails the first real publish, with the error naming the mismatch."
   pause "Press Enter when you saved the trusted publisher"
 done
 
-# ── Stage 9: revoke the token ────────────────────────────────────────────
-stage "Revoke the token"
+# ── Stage 8: approve the staged placeholders, then deprecate them ────────
+stage "Approve the staged placeholders"
+say "The approval is the two-factor step of the whole setup. The CLI asks"
+say "for a one-time code for each approval; enter the code from your"
+say "second device."
+step "The wizard signs your CLI in now; the browser opens."
+npm login --registry https://registry.npmjs.org
+step "The wizard lists the staged packages. Read the stage id of each."
+npm stage list --registry https://registry.npmjs.org
+for pkg in "${PACKAGES[@]}"; do
+  say ""
+  ask STAGE_ID "Stage id of $pkg from the list above:"
+  if [[ -n "${STAGE_ID:-}" ]]; then
+    if npm stage approve "$STAGE_ID" --registry https://registry.npmjs.org; then
+      say "approved; $pkg@0.0.0 is public"
+    else
+      note "the CLI approval failed for $pkg; approve it from the Staged Packages tab of your npmjs.com account"
+    fi
+  else
+    SKIPPED+=("approve the staged $pkg@0.0.0 (Staged Packages tab on npmjs.com)")
+  fi
+done
+for pkg in "${PACKAGES[@]}"; do
+  if npm view "$pkg@0.0.0" version >/dev/null 2>&1; then
+    if npm deprecate "$pkg@0.0.0" \
+      "placeholder staged to configure trusted publishing; install 0.1.0 or later" \
+      --registry https://registry.npmjs.org 2>/dev/null; then
+      say "deprecate notice set on $pkg@0.0.0"
+    else
+      note "$pkg@0.0.0 could not be deprecated from here; set the notice from its package page on npmjs.com"
+    fi
+  else
+    note "$pkg@0.0.0 is not public yet; approve it before the deprecate notice can land"
+  fi
+done
+pause "Press Enter when both placeholders are public"
+
+# ── Stage 9: revoke the token and sign out ──────────────────────────────
+stage "Revoke the token and sign out"
+step "The wizard signs your CLI out now."
+npm logout --registry https://registry.npmjs.org || true
 if [[ -n "${NPM_USER:-}" ]]; then
   open_url "https://www.npmjs.com/settings/$NPM_USER/tokens"
 else
