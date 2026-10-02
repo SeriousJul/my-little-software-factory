@@ -165,7 +165,11 @@ this repository. Until that tag runs, every row below is incomplete.
   until signing lands (ADR 0056); the SHA-256 verification is the check that
   stands in for the signature until then.
 - The one-time trusted publishing setup is interactive on the npm account
-  side and is guided by a wizard the maintainer runs before the first tag.
+  side. The wizard in `scripts/npm-trusted-publishing-wizard.sh` guides the
+  maintainer through it: it claims both package names with a deprecated
+  `0.0.0` placeholder (npm cannot grant trusted publishing for a name that
+  does not exist), grants the workflow `release.yml` on both packages,
+  revokes the one-time local credential, and cuts the first tag.
 - The first release is `0.1.0`.
 - The tag is the only place the operator names a release (ADR 0090):
   the operator cuts it from the GitHub interface, and the workflow writes
