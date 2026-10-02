@@ -259,16 +259,30 @@ else
 fi
 pause
 
-# ── Stage 3: sign in to npm ──────────────────────────────────────────────
-stage "Sign in to npm"
-say "This is the one time the setup uses a local npm credential."
-say "The wizard signs out again in stage 9, and the workflow never sees it:"
-say "the release authenticates with the OIDC token GitHub hands the runner."
-step "The npm CLI opens a browser page. Sign in to your npm account there."
-npm login --registry https://registry.npmjs.org
-NPM_USER="$(npm whoami --registry https://registry.npmjs.org)"
-write_env NPM_USER "$NPM_USER"
-say "signed in as $NPM_USER"
+# ── Stage 3: create the one-off token ────────────────────────────────────
+stage "Create the one-off token"
+say "An npm account with two-factor authentication cannot publish through the"
+say "CLI's browser login. The one-off granular token below carries the"
+say "two-factor bypass for this run alone. Stage 9 revokes it, and the"
+say "workflow never sees it: the release authenticates with the OIDC token"
+say "GitHub hands the runner."
+TOKEN_NPMRC="$(mktemp)"
+chmod 600 "$TOKEN_NPMRC"
+note "the token sits in a scratch file the wizard deletes in stage 9; it never touches your npm config"
+open_url "https://www.npmjs.com/settings/tokens"
+step "Sign in to npmjs.com in the browser, if the page asks."
+step "Click Generate New Token and choose the granular token type."
+step "Name: claim-package-names. Expiry: the shortest option the page offers."
+step "Access: Read and write. Package access: All packages."
+step "Enable Bypass two-factor authentication."
+step "Create the token and copy it; the page shows it only once."
+ask_secret NPM_TOKEN "Paste the token:"
+if [[ -n "${NPM_TOKEN:-}" ]]; then
+  printf '//registry.npmjs.org/:_authToken=%s\n' "$NPM_TOKEN" > "$TOKEN_NPMRC"
+  say "token in hand"
+else
+  warn "no token, so the claim stages will skip; re-run the wizard to do them"
+fi
 pause
 
 # ── Stage 4 and 5: claim both package names ─────────────────────────────
@@ -283,7 +297,10 @@ for pkg in "${PACKAGES[@]}"; do
   say "The wizard publishes a 0.0.0 placeholder to claim the name, and stage 6"
   say "marks the placeholder deprecated. The first real version publishes from"
   say "the workflow with provenance."
-  if confirm "Claim the public name $pkg with a 0.0.0 placeholder?"; then
+  if [[ -z "${NPM_TOKEN:-}" ]]; then
+    SKIPPED+=("claim the name $pkg (run the wizard with the one-off token)")
+    warn "no token, so the wizard cannot claim $pkg"
+  elif confirm "Claim the public name $pkg with a 0.0.0 placeholder?"; then
     stub_dir="$(mktemp -d)"
     cat > "$stub_dir/package.json" <<EOF
 {
@@ -292,7 +309,7 @@ for pkg in "${PACKAGES[@]}"; do
   "description": "Placeholder published to configure trusted publishing; install a real version."
 }
 EOF
-    ( cd "$stub_dir" && npm publish --access public --registry https://registry.npmjs.org )
+    ( cd "$stub_dir" && npm publish --access public --registry https://registry.npmjs.org --userconfig "$TOKEN_NPMRC" )
     rm -rf "$stub_dir"
     say "claimed $pkg at 0.0.0"
   else
@@ -308,7 +325,7 @@ for pkg in "${PACKAGES[@]}"; do
   if npm view "$pkg" version >/dev/null 2>&1; then
     if npm deprecate "$pkg@0.0.0" \
       "placeholder published to configure trusted publishing; install 0.1.0 or later" \
-      --registry https://registry.npmjs.org 2>/dev/null; then
+      --registry https://registry.npmjs.org --userconfig "$TOKEN_NPMRC" 2>/dev/null; then
       say "deprecate notice set on $pkg@0.0.0"
     else
       note "$pkg@0.0.0 could not be deprecated here; set the notice from npmjs.com"
@@ -336,13 +353,12 @@ for pkg in "${PACKAGES[@]}"; do
   pause "Press Enter when you saved the trusted publisher"
 done
 
-# ── Stage 9: sign out and revoke the credential ──────────────────────────
-stage "Sign out and revoke the credential"
-step "The wizard runs npm logout now."
-npm logout --registry https://registry.npmjs.org || true
-open_url "https://www.npmjs.com/settings/$NPM_USER/tokens"
-step "On the tokens page, look for a token this login created."
-step "If one is listed, revoke it. If the list is empty, there is nothing to do."
+# ── Stage 9: revoke the token ────────────────────────────────────────────
+stage "Revoke the token"
+open_url "https://www.npmjs.com/settings/tokens"
+step "On the tokens page, find claim-package-names and revoke it."
+rm -f "$TOKEN_NPMRC"
+say "the scratch file is deleted; your npm config never held the token"
 say "From this point the only publish path is the workflow's OIDC token."
 pause
 
