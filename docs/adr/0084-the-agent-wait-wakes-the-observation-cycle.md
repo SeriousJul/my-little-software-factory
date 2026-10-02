@@ -17,9 +17,9 @@ reach the plane at the moment it happens instead of at the next poll.
 ## Decision
 
 The poll keeps its standing as the single source of truth. On top of it,
-every successful cycle arms, per in-flight ticket whose own agent the
-probe shows working, one `herdr agent wait` on the agent's name, through
-the command runner like every other herdr exchange. The until set is
+every successful cycle arms, per in-flight ticket or working Consultation
+whose own agent the probe shows working, one `herdr agent wait` on the
+agent's name, through the command runner like every other herdr exchange. The until set is
 pinned to idle, done, and blocked, not left to herdr's default. When a
 wait exits with a state match, the loop runs a cycle now, and the settle
 the poll would have made runs at once on the fresh list.
@@ -32,9 +32,9 @@ The arm rules:
   once, in a loop the poll interval never had. A working agent stays
   working until the turn ends, so the wait held from the working report
   blocks exactly until the settle.
-- The wait targets the agent's name, the identity a live agent belongs to
-  by (ADR 0043): a pane id is not an identity, and herdr hands closed ids
-  out again.
+- The wait targets the agent's name: the identity a live agent belongs to
+  by (ADR 0043 for the Ticket, the recorded name for the Consultation). A
+  pane id is not an identity, and herdr hands closed ids out again.
 - Only a state match wakes. A missing agent, a herdr failure, and a
   budget timeout are all unmatched: a wake on none of them would run a
   cycle that re-arms the same failed wait, in a loop. A failed wait is

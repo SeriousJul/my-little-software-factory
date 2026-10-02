@@ -10,7 +10,9 @@ description: "What happens after a turn settles: the completion trace, auto-hand
 The control plane polls herdr for its agents every
 `agent-poll-interval-seconds`. The poll reads the agent list, and it reads
 the last message of an agent that has settled its turn. It never writes to
-herdr.
+herdr. A finished turn does not wait out the interval: the loop holds a
+herdr wait on each working agent, and the wait runs a cycle at the state
+match, so the settle lands at the finish (ADR 0084).
 
 An agent can outlive the work cycle that started it: the Close cleanup cannot
 remove a dirty checkout, and the operator can re-prompt a settled agent in its

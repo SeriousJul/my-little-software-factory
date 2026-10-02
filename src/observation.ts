@@ -750,12 +750,12 @@ export class ObservationCoordinator {
 		const consultationChanged = await this.observeConsultations(probe.agents);
 		changed = consultationChanged || changed;
 
-		// The wake arm (ADR 0084): every in-flight agent the probe shows
-		// working holds a `herdr agent wait` on its name, and the wait's
-		// match runs a cycle now, so a finished turn settles without
-		// waiting out the interval. The poll keeps its standing: a wake
-		// only runs the same cycle on the same facts.
-		this.armAgentWaits(probe.agents);
+		// The wake arm (ADR 0084): every working agent the probe shows on an
+		// in-flight ticket or a working Consultation holds a `herdr agent
+		// wait` on its name, and the wait's match runs a cycle now, so a
+		// finished turn settles without waiting out the interval. The poll
+		// keeps its standing: a wake only runs the same cycle on the same facts.
+		this.armAgentWaits(byPane);
 		// The Dispatch pause is derived from the traces each cycle and never
 		// stored (ADR 0016). The Message line reports it when it trips and when
 		// it clears, so the operator hears about the factory stopping and
@@ -777,9 +777,10 @@ export class ObservationCoordinator {
 	}
 
 	/**
-	 * The wake arm of a successful cycle (ADR 0084): for every in-flight
-	 * ticket whose own agent the probe shows working, hold a `herdr agent
-	 * wait` on the agent's name until the wait answers.
+	 * The wake arm of a successful cycle (ADR 0084): hold a `herdr agent
+	 * wait` on the agent's name until the wait answers, for every in-flight
+	 * ticket and every working Consultation whose own agent the probe shows
+	 * working.
 	 *
 	 * The arm is on the working report, not on the in-flight state: a
 	 * booted agent reports idle before it picks up the prompt, and a wait
@@ -789,38 +790,51 @@ export class ObservationCoordinator {
 	 * working report blocks exactly until the settle.
 	 *
 	 * The wait targets the agent's name, the identity a live agent belongs
-	 * to by (ADR 0043): a pane id is not an identity, herdr hands closed
-	 * ids out again. A missing agent is an unmatched wait: it wakes nothing,
+	 * to by (ADR 0043 for the Ticket, the recorded name for the
+	 * Consultation): a pane id is not an identity, herdr hands closed ids
+	 * out again. A missing agent is an unmatched wait: it wakes nothing,
 	 * and the missing path keeps the poll's own pace.
 	 */
-	private armAgentWaits(agents: readonly HerdrAgent[]): void {
-		const wait = this.herdr.waitAgent;
-		if (wait === undefined || this.stopped) return;
-		const byPane = new Map<string, HerdrAgent>();
-		for (const agent of agents) byPane.set(agent.paneId, agent);
+	private armAgentWaits(byPane: Map<string, HerdrAgent>): void {
+		if (this.herdr.waitAgent === undefined || this.stopped) return;
 		for (const ticket of this.state.ticketsByState(["handed-off", "running"])) {
 			if (ticket.paneId === null) continue;
 			const name = this.state.agentNameForTicket(ticket.ticketIdentity);
 			if (name === "") continue;
-			if (this.agentWaits.has(name)) continue;
 			const own = ownAgentInPane(byPane.get(ticket.paneId), name);
 			if (own === null || normalizeAgentStatus(own.status) !== "working") continue;
-			const entry = (async () => {
-				try {
-					// The call keeps the reader bound: the reader is a class,
-					// and the method reads its runner through the receiver.
-					const result = await wait.call(this.herdr, name, AGENT_WAIT_BUDGET_MS);
-					// Only a state match is a wake: a missing agent, a herdr
-					// failure, and a budget timeout carry no news, and a wake
-					// on none of them would run a cycle that re-arms the same
-					// failed wait, in a loop.
-					if (result.matched && !this.stopped) await this.safeCycle();
-				} finally {
-					this.agentWaits.delete(name);
-				}
-			})();
-			this.agentWaits.set(name, entry);
+			this.armAgentWait(name);
 		}
+		for (const consultation of this.state.consultationsByState(["working"])) {
+			const name = consultation.agentName;
+			if (name === "") continue;
+			const match = matchConsultationAgent(consultation, [...byPane.values()]);
+			if (match === undefined || match === "ambiguous") continue;
+			if (normalizeAgentStatus(match.status) !== "working") continue;
+			this.armAgentWait(name);
+		}
+	}
+
+	/**
+	 * One armed wake (ADR 0084): the wait answers, and only a state match
+	 * runs the cycle. A missing agent, a herdr failure, and a budget timeout
+	 * carry no news, and a wake on none of them would run a cycle that
+	 * re-arms the same failed wait, in a loop.
+	 */
+	private armAgentWait(name: string): void {
+		if (this.herdr.waitAgent === undefined || this.stopped || this.agentWaits.has(name)) return;
+		const entry = (async () => {
+			try {
+				// The optional call keeps the reader as the receiver: the
+				// reader is a class, and the method reads its runner through
+				// the receiver.
+				const result = await this.herdr.waitAgent?.(name, AGENT_WAIT_BUDGET_MS);
+				if (result?.matched === true && !this.stopped) await this.safeCycle();
+			} finally {
+				this.agentWaits.delete(name);
+			}
+		})();
+		this.agentWaits.set(name, entry);
 	}
 
 	/**

@@ -6,6 +6,7 @@ import type { DispatchResult, HandoffIntent } from "../src/handoff-dispatch.ts";
 import type { HerdrAgent } from "../src/herdr.ts";
 import {
 	type AgentReader,
+	type AgentWaitResult,
 	HerdrAgentReader,
 	normalizeAgentStatus,
 	ObservationCoordinator,
@@ -115,7 +116,7 @@ function success(tickets: FetchedTicket[]) {
 function reader(
 	agents: () => HerdrAgent[],
 	readPane?: (paneId: string, lines: number) => Promise<string | null>,
-	waitAgent?: (target: string, budgetMs: number) => Promise<{ matched: boolean }>,
+	waitAgent?: (target: string, budgetMs: number) => Promise<AgentWaitResult>,
 ): AgentReader {
 	return {
 		listAgents: async () => ({ kind: "ok", agents: agents() }),
@@ -219,7 +220,7 @@ function rig(options: {
 	 * The wake wait the reader answers (ADR 0084). Absent: the loop is
 	 * poll-only, and the wake arm stands down.
 	 */
-	waitAgent?: (target: string, budgetMs: number) => Promise<{ matched: boolean }>;
+	waitAgent?: (target: string, budgetMs: number) => Promise<AgentWaitResult>;
 }): Rig {
 	let nowMs = Date.parse("2026-08-31T11:00:00Z");
 	let agents = typeof options.agents === "function" ? [] : [...(options.agents ?? [])];
@@ -4799,7 +4800,7 @@ describe("the agent wake wait (ADR 0084)", () => {
 				next(matched);
 			},
 			option: (target: string) =>
-				new Promise<{ matched: boolean }>((resolve) => {
+				new Promise<AgentWaitResult>((resolve) => {
 					targets.push(target);
 					waiters.push((matched: boolean) => resolve({ matched }));
 				}),
@@ -4909,6 +4910,81 @@ describe("the agent wake wait (ADR 0084)", () => {
 		// The failed wait is down; the next successful cycle re-arms it.
 		await fake.coordinator.tick();
 		expect(wake.targets).toHaveLength(2);
+		fake.coordinator.stop();
+		fake.state.close();
+	});
+
+	/**
+	 * A working Consultation with a pending turn, the way a sent response
+	 * leaves it: opened, the handles recorded, the response begun and
+	 * accepted. The accept moves the record to working and commits the
+	 * turn the settle needs.
+	 */
+	function workingConsultationWithTurn(state: FactoryState, id: string, paneId: string): void {
+		state.createConsultation({
+			id,
+			typeName: "grill",
+			agentType: "pi",
+			environment: "worktree",
+			template: "/grill {input}",
+			initialInput: "review auth",
+			renderedOpeningPrompt: "/grill review auth",
+			repository: { ...fetched().repository, path: "/tmp/factory" },
+			agentName: `consultation-${id}`,
+		});
+		state.recordConsultationAgentHandles(id, {
+			paneId,
+			tabId: "tab-1",
+			workspaceId: "ws-1",
+			sessionId: `session-${id}`,
+		});
+		state.setConsultationState(id, "awaiting-response");
+		const pending = state.beginConsultationResponse(id, "go");
+		if (pending === undefined) throw new Error("the response did not begin");
+		const turn = state.acceptConsultationResponse(id, pending.id);
+		if (turn === undefined) throw new Error("the response did not accept");
+	}
+
+	test("a working Consultation whose agent works arms a wait on the Consultation's name", async () => {
+		const wake = wakeFake();
+		const fake = rig({
+			agents: [agent("pane-consult", "working")],
+			waitAgent: wake.option,
+		});
+		workingConsultationWithTurn(fake.state, "c-arm", "pane-consult");
+		await fake.coordinator.tick();
+		expect(wake.targets).toEqual(["consultation-c-arm"]);
+		fake.coordinator.stop();
+		fake.state.close();
+	});
+
+	test("a Consultation whose agent is not working or not its own arms no wait", async () => {
+		const wake = wakeFake();
+		const fake = rig({
+			agents: [agent("pane-consult", "idle")],
+			waitAgent: wake.option,
+		});
+		workingConsultationWithTurn(fake.state, "c-idle", "pane-consult");
+		await fake.coordinator.tick();
+		expect(wake.targets).toEqual([]);
+		fake.coordinator.stop();
+		fake.state.close();
+	});
+
+	test("a Consultation wait match settles its turn without a poll", async () => {
+		const wake = wakeFake();
+		const fake = rig({
+			agents: [agent("pane-consult", "working")],
+			waitAgent: wake.option,
+		});
+		workingConsultationWithTurn(fake.state, "c-settle", "pane-consult");
+		await fake.coordinator.tick();
+		expect(wake.targets).toEqual(["consultation-c-settle"]);
+		// The agent finishes its answer between polls. The wake is the cycle.
+		fake.setAgents([agent("pane-consult", "idle")]);
+		wake.fire(true);
+		await sleep(10);
+		expect(fake.state.consultation("c-settle")?.state).toBe("awaiting-response");
 		fake.coordinator.stop();
 		fake.state.close();
 	});
