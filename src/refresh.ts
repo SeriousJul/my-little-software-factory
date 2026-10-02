@@ -151,21 +151,27 @@ export class RefreshCoordinator {
 	}
 
 	/**
-	 * The record line a settled fetch leaves: an info with the ticket count,
-	 * a warn with the reason. A stopped coordinator still records: the run
-	 * ended, and the fetch it started is part of the run's record.
+	 * The record line a settled fetch leaves: an info with the ticket count
+	 * and, when the fetch carried one, the GraphQL points its snapshot read
+	 * cost, a warn with the reason. A stopped coordinator still records: the
+	 * run ended, and the fetch it started is part of the run's record.
 	 */
 	private logRefresh(
 		sourceName: string,
-		result: { status: "success"; tickets: unknown[] } | { status: "failed"; reason: string },
+		result:
+			| { status: "success"; tickets: unknown[]; costPoints?: number }
+			| { status: "failed"; reason: string },
 		startedAt: number,
 	): void {
 		if (this.log === undefined) return;
 		const durationMs = Date.now() - startedAt;
 		if (result.status === "success") {
 			const tickets = result.tickets.length;
+			// The meter is a fact, not an estimate: a cost the fetch could not
+			// read leaves the line as it stood before the meter.
+			const cost = result.costPoints !== undefined ? `, ${result.costPoints} points` : "";
 			this.log.info(
-				`${sourceName}: refresh ok, ${tickets} ticket${tickets === 1 ? "" : "s"}, ${durationMs} ms`,
+				`${sourceName}: refresh ok, ${tickets} ticket${tickets === 1 ? "" : "s"}, ${durationMs} ms${cost}`,
 			);
 			return;
 		}

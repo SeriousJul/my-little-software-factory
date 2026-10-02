@@ -343,6 +343,10 @@ export class StubWorldStore {
 			code: 0,
 			stdout: JSON.stringify({
 				data: {
+					// The page cost the sources meter (issue #194): it scales with
+					// the edges the answer returns, the way GitHub's does, so the
+					// meter stands in the stub path with the metered query.
+					rateLimit: { cost: nodes.length },
 					search: {
 						issueCount: nodes.length,
 						pageInfo: { hasNextPage: false },
