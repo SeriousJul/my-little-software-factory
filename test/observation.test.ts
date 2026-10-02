@@ -2563,6 +2563,24 @@ describe("the open dispatch", () => {
 		state.close();
 	});
 
+	// A stopped dispatch is the teardown's fact, not a handoff refusal: the
+	// ask answers the stop, and the cycle ends its walk without a line. A
+	// warning per cycle would pin the Message line while the run ends.
+	test("the top-up's stopped dispatch is a stop, not a refusal", async () => {
+		const { state, coordinator, statuses } = rig({
+			autoOn: true,
+			agents: [],
+			refuseDispatch: "the dispatch has been stopped",
+		});
+		state.applyFetch(source, success([fetched()]));
+		await coordinator.tick();
+		expect(statuses).not.toContainEqual(expect.objectContaining({ kind: "warning" }));
+		expect(statuses).not.toContainEqual(
+			expect.objectContaining({ text: 'work queue top-up: handing off "Persist source facts"' }),
+		);
+		state.close();
+	});
+
 	/**
 	 * Story 24 (ADR 0051): an item the pickup dropped is reconsidered every
 	 * cycle the queue is empty - the restart included. The top-up marks the

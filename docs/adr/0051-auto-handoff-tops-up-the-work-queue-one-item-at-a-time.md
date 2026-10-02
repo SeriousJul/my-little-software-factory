@@ -49,6 +49,14 @@ turn, a Transition whose label write failed, a same-type hold
 operator instead of adding it. The gates hold the automatic adds only:
 a manual handoff and a route the operator confirms pass them, as before.
 
+**The ask's stopped answer is a stop, not a refusal.** The top-up's
+ask reports a refusal with a warning line when the dispatch rejects
+the item, and the run ending is not a rejection of any item. A
+stopped dispatch answers with its own stop fact, and the ask ends the
+walk with no line: the observation's own stop follows in the same
+teardown, and a warning per cycle would pin the Message line while
+the run ends.
+
 **The machine acts only where it is sure.** A completion the machine
 resolves closes as before: a turn whose task type offers no
 continuation closes its cycle, and a Transition that advanced into a

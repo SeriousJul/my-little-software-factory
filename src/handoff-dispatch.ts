@@ -132,6 +132,15 @@ export interface HandoffIntent {
 export type DispatchResult = { ok: true } | { ok: false; reason: string };
 
 /**
+ * The answer's refusal reason where the dispatch has been stopped.
+ *
+ * The reason is a teardown fact, not a handoff refusal: a caller that reads
+ * it must not report it as one. The observation's top-up answers it with its
+ * own stop instead of a warning line (ADR 0051).
+ */
+export const STOPPED_DISPATCH_REASON = "the dispatch has been stopped";
+
+/**
  * The plane action's request crossing the dispatch seam (ADR 0068): the merge
  * of the ticket's pull request, asked for by the operator's confirm on the
  * decision screen, by the automatic top-up of a merged position, or by the
@@ -479,8 +488,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 	}
 
 	dispatch(intent: HandoffIntent): Promise<DispatchResult> {
-		if (this.stopped)
-			return Promise.resolve({ ok: false, reason: "the dispatch has been stopped" });
+		if (this.stopped) return Promise.resolve({ ok: false, reason: STOPPED_DISPATCH_REASON });
 		// A start on a plane action's task type crosses the plane action's
 		// channel, not the handoff's (ADR 0068): the action form holds no
 		// template and no profile, so the handoff's pickup would refuse it with
@@ -537,8 +545,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 	 * every item: the ask sits in the queue until the resume.
 	 */
 	dispatchPlaneAction(intent: PlaneActionIntent): Promise<DispatchResult> {
-		if (this.stopped)
-			return Promise.resolve({ ok: false, reason: "the dispatch has been stopped" });
+		if (this.stopped) return Promise.resolve({ ok: false, reason: STOPPED_DISPATCH_REASON });
 		// The registry is the one home of the names the config may name (ADR
 		// 0068): a task type the registry does not hold is a refusal, not a
 		// queued item.
@@ -1443,8 +1450,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 	}
 
 	closeWorkCycle(identity: string): Promise<CloseCycleOutcome> {
-		if (this.stopped)
-			return Promise.resolve({ ended: false, reason: "the dispatch has been stopped" });
+		if (this.stopped) return Promise.resolve({ ended: false, reason: STOPPED_DISPATCH_REASON });
 		// One seat item holds the whole close: the cycle ends and its environment
 		// goes, in that order, with no handoff of the same ticket in between them.
 		return this.queueCleanup(async () => {

@@ -68,7 +68,12 @@ import {
 	type Ticket,
 } from "./domain/ticket.ts";
 import { baseChoice, resolveHandoffChoice } from "./handoff.ts";
-import type { DispatchResult, HandoffIntent, PlaneActionIntent } from "./handoff-dispatch.ts";
+import {
+	type DispatchResult,
+	type HandoffIntent,
+	type PlaneActionIntent,
+	STOPPED_DISPATCH_REASON,
+} from "./handoff-dispatch.ts";
 import { type HerdrAgent, ownAgentInPane } from "./herdr.ts";
 import { identifyHandoffAgentName } from "./naming.ts";
 import { isPlaneActionTaskType } from "./plane-actions.ts";
@@ -1579,6 +1584,9 @@ export class ObservationCoordinator {
 		const result = await this.dispatch(intent);
 		if (this.stopped) return "stopped";
 		if (!result.ok) {
+			// The stopped dispatch is the teardown's fact, not a handoff
+			// refusal (ADR 0051): the answer ends the walk without a line.
+			if (result.reason === STOPPED_DISPATCH_REASON) return "stopped";
 			this.onStatus("warning", `${refusedPrefix}: ${result.reason}`);
 			return "refused";
 		}
@@ -1612,6 +1620,9 @@ export class ObservationCoordinator {
 		const result = await this.dispatchPlaneAction(intent);
 		if (this.stopped) return "stopped";
 		if (!result.ok) {
+			// The stopped dispatch is the teardown's fact, not a merge refusal
+			// (ADR 0051): the answer ends the walk without a line.
+			if (result.reason === STOPPED_DISPATCH_REASON) return "stopped";
 			this.onStatus("warning", `${refusedPrefix}: ${result.reason}`);
 			return "refused";
 		}
