@@ -51,11 +51,13 @@ function page(
 	nodes: unknown[],
 	hasNextPage = false,
 	endCursor: string | null = null,
+	rateLimitCost?: unknown,
 ): CommandResult {
 	return {
 		code: 0,
 		stdout: JSON.stringify({
 			data: {
+				...(rateLimitCost === undefined ? {} : { rateLimit: { cost: rateLimitCost } }),
 				search: {
 					issueCount: nodes.length,
 					pageInfo: { hasNextPage, endCursor },
@@ -65,6 +67,12 @@ function page(
 		}),
 		stderr: "",
 	};
+}
+
+function sentQueryOf(call: SafeCall): string {
+	return (call.args.find((arg) => arg.startsWith("query=")) ?? "")
+		.replace("query=", "")
+		.replace(/\s+/g, " ");
 }
 
 function searchQueryOf(call: SafeCall): string {
@@ -740,6 +748,69 @@ describe("GitHub ticket source contract", () => {
 			}),
 		);
 		expect(runner.calls).toHaveLength(0);
+	});
+	describe("the GraphQL cost meter", () => {
+		test("the search document reads the cost beside the search, in the same request", async () => {
+			const runner = new SourceRunner([page([issue()], false, null, 2)]);
+			const outcome = await createTicketSource(source("github-issues"), runner).fetch();
+			expect(outcome).toMatchObject({ status: "success", costPoints: 2 });
+			// The cost rides on the request the plane already sends: no probe call
+			// and no second request shape.
+			expect(sentQueryOf(runner.calls[0])).toContain("rateLimit { cost }");
+			expect(runner.calls).toHaveLength(1);
+		});
+
+		test("a settled fetch carries the sum of its pages' costs", async () => {
+			const runner = new SourceRunner([
+				page([issue(1)], true, "cursor-1", 2),
+				page([issue(2)], false, null, 4),
+			]);
+			const outcome = await createTicketSource(source("github-issues"), runner).fetch();
+			expect(outcome).toMatchObject({ status: "success", costPoints: 6 });
+		});
+
+		test("the cost spans every query of the fetch", async () => {
+			const runner = new SourceRunner([
+				page([issue(1)], false, null, 2),
+				page([issue(2)], false, null, 4),
+			]);
+			const outcome = await createTicketSource(
+				{ ...source("github-issues"), repositories: ["acme/factory", "acme/portal"] },
+				runner,
+			).fetch();
+			expect(outcome).toMatchObject({ status: "success", costPoints: 6 });
+		});
+
+		test("a page that omits the cost leaves the fetch succeeding, and the cost withheld", async () => {
+			const runner = new SourceRunner([page([issue(1)], true, "cursor-1", 2), page([issue(2)])]);
+			const outcome = await createTicketSource(source("github-issues"), runner).fetch();
+			expect(outcome).toMatchObject({ status: "success" });
+			// A partial sum is dropped, not reported: the meter that cannot read
+			// is not a meter that fails the source.
+			expect(outcome).not.toHaveProperty("costPoints");
+		});
+
+		test("a cost the answer does not carry as an integer withholds the meter without failing the fetch", async () => {
+			const runner = new SourceRunner([page([issue(1)], false, null, "two")]);
+			const outcome = await createTicketSource(source("github-issues"), runner).fetch();
+			expect(outcome).toMatchObject({ status: "success" });
+			expect(outcome).not.toHaveProperty("costPoints");
+		});
+
+		test("a zero cost is a readable cost", async () => {
+			const runner = new SourceRunner([page([], false, null, 0)]);
+			const outcome = await createTicketSource(source("github-issues"), runner).fetch();
+			expect(outcome).toMatchObject({ status: "success", costPoints: 0 });
+		});
+
+		test("a failed fetch carries no cost, and the reason stands as it did", async () => {
+			const runner = new SourceRunner([{ code: 1, stdout: "", stderr: "HTTP 502: bad gateway\n" }]);
+			const outcome = await createTicketSource(source("github-issues"), runner).fetch();
+			expect(outcome).toEqual({
+				status: "failed",
+				reason: "GitHub request failed: HTTP 502: bad gateway",
+			});
+		});
 	});
 
 	test("account authentication reads the token once and passes it only through the secret environment", async () => {

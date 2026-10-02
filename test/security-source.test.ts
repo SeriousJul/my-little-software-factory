@@ -155,6 +155,8 @@ describe("the security advisory source", () => {
 		]);
 		const outcome = await createTicketSource(advisorySource, runner).fetch();
 		expect(outcome).toMatchObject({ status: "success" });
+		// The feed reads REST, not GraphQL: the meter reports no number for it.
+		expect(outcome).not.toHaveProperty("costPoints");
 		expect(runner.calls).toHaveLength(3);
 		expect(runner.calls[0].args.join(" ")).toBe(
 			"api repos/acme/factory/security-advisories --hostname github.com --method GET -f state=triage -f per_page=100 --paginate",

@@ -676,6 +676,13 @@ describe("the closed surface", () => {
 		for (const kind of kinds) {
 			const result = await createTicketSource(source(kind), runner).fetch();
 			expect(result.status).toBe("success");
+			if (result.status !== "success") continue;
+			// The meter stands in the stub path with the metered query: the search
+			// sources report the points their snapshot read cost, and the REST
+			// feeds read no GraphQL and leave the field absent.
+			if (kind === "github-issues" || kind === "github-pull-requests")
+				expect(result.costPoints).toBeTypeOf("number");
+			else expect(result).not.toHaveProperty("costPoints");
 		}
 
 		// The verdict reads the score Judgment walks, on the seed's items.
@@ -772,6 +779,28 @@ describe("the closed surface", () => {
 		// no command but `gh` reached the real runner.
 		expect(store.refusals).toEqual([]);
 		expect(real.calls).toEqual([]);
+	});
+
+	test("the search answer carries the page cost beside the search", async () => {
+		const dir = tempDir();
+		const store = seededStore(dir);
+		const result = await store.answerGh([
+			"api",
+			"graphql",
+			"--hostname",
+			"github.com",
+			"-f",
+			`query=${SEARCH_QUERY}`,
+			"-f",
+			"searchQuery=is:open is:issue repo:stub/alpha",
+		]);
+		expect(result.code).toBe(0);
+		const body = JSON.parse(result.stdout) as {
+			data: { rateLimit?: { cost?: unknown }; search: { nodes: unknown[] } };
+		};
+		expect(typeof body.data.rateLimit?.cost).toBe("number");
+		// The cost scales with the edges the answer returns, the way GitHub's does.
+		expect(body.data.rateLimit?.cost).toBe(body.data.search.nodes.length);
 	});
 
 	test("a drifted search document and an unknown command are refused", async () => {

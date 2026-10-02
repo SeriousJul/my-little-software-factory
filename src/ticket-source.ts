@@ -22,6 +22,13 @@ export type FetchOutcome =
 			tickets: FetchedTicket[];
 			/** The peripheral failures the refresh absorbed without failing. */
 			warnings?: string[];
+			/**
+			 * The GraphQL points the snapshot read cost (issue #194), the sum of
+			 * the page costs of every page the fetch read. Present only when
+			 * every page carried a readable cost: a partial sum is dropped,
+			 * never reported. REST sources leave it absent.
+			 */
+			costPoints?: number;
 	  }
 	| { status: "failed"; reason: string };
 
@@ -119,6 +126,7 @@ function secretToken(token: string): {
 }
 
 export const SEARCH_QUERY = `query FactorySearch($searchQuery: String!, $after: String) {
+  rateLimit { cost }
   search(query: $searchQuery, type: ISSUE, first: 100, after: $after) {
     issueCount
     pageInfo { hasNextPage endCursor }
@@ -169,13 +177,26 @@ class GitHubTicketSource implements TicketSource {
 			const authentication = await this.authentication();
 			if (!authentication.ok) return { status: "failed", reason: authentication.reason };
 			const byIdentity = new Map<string, FetchedTicket>();
+			// The fetch's cost is the sum of the page costs of every page it
+			// read, across every query. A page that carried no readable cost
+			// withholds the whole meter: the log line never reports a partial
+			// sum as the cost of the snapshot read.
+			let costPoints = 0;
+			let costComplete = true;
 			for (const searchQuery of this.searchQueries()) {
 				const query = await this.fetchQuery(searchQuery, authentication.options);
 				if (query.status === "failed") return query;
+				if (query.costPoints === undefined) costComplete = false;
+				else costPoints += query.costPoints;
 				for (const ticket of query.tickets) byIdentity.set(ticket.identity, ticket);
 			}
 			const tickets = [...byIdentity.values()];
-			return { status: "success", fetchedAt: new Date().toISOString(), tickets };
+			return {
+				status: "success",
+				fetchedAt: new Date().toISOString(),
+				tickets,
+				...(costComplete ? { costPoints } : {}),
+			};
 		} catch (error) {
 			// A source bug must not terminate the control plane. Do not print
 			// auth values: the string is only the error message, never argv/env.
@@ -191,6 +212,10 @@ class GitHubTicketSource implements TicketSource {
 		const tickets: FetchedTicket[] = [];
 		let cursor: string | undefined;
 		let issueCount: number | undefined;
+		// The query's cost: the sum of its pages' costs, complete only when
+		// every page carried a readable one.
+		let costPoints = 0;
+		let costComplete = true;
 		for (;;) {
 			const args = [
 				"api",
@@ -216,6 +241,8 @@ class GitHubTicketSource implements TicketSource {
 					reason: "GitHub search has 1,000 or more results and is incomplete",
 				};
 			}
+			if (page.cost === undefined) costComplete = false;
+			else costPoints += page.cost;
 			for (const node of page.nodes) {
 				const normalized = normalizeGitHubNode(node, this.config);
 				if (!normalized.ok) return { status: "failed", reason: normalized.reason };
@@ -225,7 +252,10 @@ class GitHubTicketSource implements TicketSource {
 				if (normalized.blocked) continue;
 				tickets.push(normalized.ticket);
 			}
-			if (!page.hasNextPage) return { status: "success", tickets };
+			if (!page.hasNextPage)
+				return costComplete
+					? { status: "success", tickets, costPoints }
+					: { status: "success", tickets };
 			if (page.endCursor === undefined)
 				return { status: "failed", reason: "GitHub returned a next page without a cursor" };
 			cursor = page.endCursor;
@@ -285,7 +315,19 @@ class GitHubTicketSource implements TicketSource {
 }
 
 type Page =
-	| { ok: true; issueCount: number; nodes: unknown[]; hasNextPage: boolean; endCursor?: string }
+	| {
+			ok: true;
+			issueCount: number;
+			nodes: unknown[];
+			hasNextPage: boolean;
+			endCursor?: string;
+			/**
+			 * The cost GitHub reports for this page, present only when the
+			 * answer carries a readable one (issue #194). An absent or
+			 * unreadable cost never fails the page; it only withholds the meter.
+			 */
+			cost?: number;
+	  }
 	| { ok: false; reason: string };
 function parseSearchPage(text: string): Page {
 	let raw: unknown;
@@ -300,6 +342,7 @@ function parseSearchPage(text: string): Page {
 	}
 	const data = raw as {
 		data?: {
+			rateLimit?: { cost?: unknown };
 			search?: {
 				issueCount?: unknown;
 				nodes?: unknown;
@@ -322,19 +365,28 @@ function parseSearchPage(text: string): Page {
 	)
 		return { ok: false, reason: "GitHub returned an unreadable search response" };
 	const cursor = search.pageInfo.endCursor;
+	const cost = data.data?.rateLimit?.cost;
 	return {
 		ok: true,
 		issueCount: search.issueCount as number,
 		nodes: search.nodes,
 		hasNextPage: search.pageInfo.hasNextPage,
 		...(typeof cursor === "string" && cursor !== "" ? { endCursor: cursor } : {}),
+		// A page cost GitHub does not report as a non-negative integer withholds
+		// the meter for that page; it never fails the refresh.
+		...(Number.isInteger(cost) && (cost as number) >= 0 ? { cost: cost as number } : {}),
 	};
 }
 
 /** One search page's tickets. The pull request's closing references ride on
  * each ticket's own attributes (ADR 0050): the page carries no separate list. */
 type QueryResult =
-	| { status: "success"; tickets: FetchedTicket[] }
+	| {
+			status: "success";
+			tickets: FetchedTicket[];
+			/** The query's page costs, summed, or absent when a page lacked one. */
+			costPoints?: number;
+	  }
 	| { status: "failed"; reason: string };
 
 /** The labels of one node's label connection, or undefined when unreadable. */

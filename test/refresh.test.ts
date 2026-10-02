@@ -5,6 +5,12 @@ import { openFactoryState } from "../src/state.ts";
 import type { FetchOutcome, TicketSource } from "../src/ticket-source.ts";
 
 const EMPTY: FetchOutcome = { status: "success", fetchedAt: "2026-01-01T00:00:00Z", tickets: [] };
+const COSTED: FetchOutcome = {
+	status: "success",
+	fetchedAt: "2026-01-01T00:00:00Z",
+	tickets: [],
+	costPoints: 6,
+};
 const RATE_LIMITED: FetchOutcome = { status: "failed", reason: "GitHub rate limit exceeded" };
 
 class ControlledSource implements TicketSource {
@@ -324,5 +330,59 @@ describe("refreshAndWait", () => {
 		expect(lines[1]).toMatch(
 			/^warn issues: refresh failed after \d+ ms: GitHub rate limit exceeded$/u,
 		);
+	});
+
+	test("a settled refresh logs the points its snapshot read cost", async () => {
+		const state = openFactoryState(":memory:");
+		const source = new ControlledSource("issues", 60_000);
+		const clock = new FakeClock();
+		const lines: string[] = [];
+		const logger = {
+			level: "info" as const,
+			debug: () => {},
+			info: (message: string) => lines.push(`info ${message}`),
+			warn: (message: string) => lines.push(`warn ${message}`),
+			error: () => {},
+		};
+		const coordinator = new RefreshCoordinator([source], state, () => undefined, clock, {
+			log: logger,
+		});
+		coordinator.start();
+		await turns();
+		source.settle(COSTED);
+		await turns();
+		coordinator.stop();
+		state.close();
+		expect(lines).toHaveLength(1);
+		expect(lines[0]).toMatch(/^info issues: refresh ok, 0 tickets, \d+ ms, 6 points$/u);
+	});
+
+	test("each log line carries only its own source's cost", async () => {
+		const state = openFactoryState(":memory:");
+		const metered = new ControlledSource("metered", 60_000);
+		const bare = new ControlledSource("bare", 60_000);
+		const clock = new FakeClock();
+		const lines: string[] = [];
+		const logger = {
+			level: "info" as const,
+			debug: () => {},
+			info: (message: string) => lines.push(`info ${message}`),
+			warn: (message: string) => lines.push(`warn ${message}`),
+			error: () => {},
+		};
+		const coordinator = new RefreshCoordinator([metered, bare], state, () => undefined, clock, {
+			log: logger,
+		});
+		coordinator.start();
+		await turns();
+		metered.settle(COSTED);
+		bare.settle(EMPTY);
+		await turns();
+		coordinator.stop();
+		state.close();
+		expect(lines).toHaveLength(2);
+		expect(lines[0]).toMatch(/^info metered: refresh ok, 0 tickets, \d+ ms, 6 points$/u);
+		// A fetch that carried no cost keeps the line it stood with before the meter.
+		expect(lines[1]).toMatch(/^info bare: refresh ok, 0 tickets, \d+ ms$/u);
 	});
 });
