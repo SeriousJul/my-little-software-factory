@@ -344,6 +344,27 @@ export function isPlaneInitSource(
 	);
 }
 
+/**
+ * Whether a configured source covers a planned source (issue 195): the host
+ * is equal, the kind is equal, and the configured source's repository set
+ * contains every repository the planned source names - the init's planned
+ * sources each name exactly one. The name, the filter, and the refresh
+ * interval do not count: coverage holds on host, kind, and repository alone,
+ * so a broad operator source listing the repository alongside others covers
+ * the feed with any filter it carries, and a source on another host is no
+ * coverage even when it names the same owner and name.
+ *
+ * The plane-source test implies this one: a source the plane registered
+ * covers itself, so the re-init registers nothing new under either rule.
+ */
+export function sourceCovers(configured: TicketSourceConfig, planned: TicketSourceConfig): boolean {
+	return (
+		configured.host === planned.host &&
+		configured.kind === planned.kind &&
+		planned.repositories.every((repository) => configured.repositories.includes(repository))
+	);
+}
+
 // ---------------------------------------------------------------------------
 // The act: the command stream the plane issues for one Repository init.
 // ---------------------------------------------------------------------------

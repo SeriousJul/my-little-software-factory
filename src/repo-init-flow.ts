@@ -29,6 +29,7 @@ import {
 	repositoryInitSettingsHash,
 	repositoryInitSources,
 	runRepositoryInit,
+	sourceCovers,
 } from "./repo-init.ts";
 import type { CommandOptions, CommandRunner } from "./runner.ts";
 import type { FactoryState, RepositoryInitFact } from "./state.ts";
@@ -73,14 +74,29 @@ export interface RepositoryInitFlowInput {
 	worktreePath?: string;
 }
 
+/** One planned source the commit did not register because a configured source already covers it. */
+export interface SkippedInitSource {
+	/** The planned source's name, the one the config did not gain. */
+	name: string;
+	/** The configured source that covers it, named so the operator reads the decision. */
+	coveredBy: string;
+}
+
 /**
- * The one answer the commit gives: a message the operator reads, and the
- * sources it registered, which the caller adds to the config and persists.
- * The sources come back to the caller rather than persisted here so the
- * config the UI holds stays the one the operator's pane shows.
+ * The one answer the commit gives: a message the operator reads, the sources
+ * it registered, which the caller adds to the config and persists, and the
+ * planned sources it skipped because a configured source already covers them,
+ * with the covering source named. The sources come back to the caller rather
+ * than persisted here so the config the UI holds stays the one the operator's
+ * pane shows.
  */
 export type RepositoryInitFlowResult =
-	| { ok: true; message: string; newSources: readonly TicketSourceConfig[] }
+	| {
+			ok: true;
+			message: string;
+			newSources: readonly TicketSourceConfig[];
+			skippedSources: readonly SkippedInitSource[];
+	  }
 	| { ok: false; reason: string };
 
 /** The command options the source auth resolves to, or the reason it did not. */
@@ -140,6 +156,13 @@ export async function commitRepositoryInit(
 				return { ok: false, reason: `a source named ${source.name} is already configured` };
 		}
 	}
+	// The coverage split (issue 195): a planned source an existing source on
+	// the same host and of the same kind already lists the repository under is
+	// not registered again, so the same ticket is not fetched twice every
+	// refresh. It is derived from the current config alone, so the skip stands
+	// on a re-run while the covering source stands and the pair registers when
+	// the covering source leaves the config. The collision refusal above holds
+	// unchanged: a name the operator took for any other purpose still refuses.
 
 	const ghResolution = await ghOptionsFor(input.runner, input.repository);
 	if (ghResolution.ok === false) return { ok: false, reason: ghResolution.reason };
@@ -167,18 +190,34 @@ export async function commitRepositoryInit(
 
 	// The sources the plane already registered stand in the config: the re-init
 	// re-runs the act and re-writes the fact, but it registers nothing new, so
-	// the config the operator's pane shows gains no duplicate row.
-	const newSources = sources.filter(
-		(source) => !configured.some((held) => isPlaneInitSource(held, source)),
-	);
+	// the config the operator's pane shows gains no duplicate row. The coverage
+	// test subsumes the plane-source test: a plane-registered source covers
+	// itself, so the re-init's split stands on one rule.
+	const newSources: TicketSourceConfig[] = [];
+	const skippedSources: SkippedInitSource[] = [];
+	for (const source of sources) {
+		const cover = configured.find((held) => sourceCovers(held, source));
+		if (cover !== undefined) {
+			skippedSources.push({ name: source.name, coveredBy: cover.name });
+		} else {
+			newSources.push(source);
+		}
+	}
 	const labels = outcome.labelsCreated.length;
 	const changed = input.plan.fileActions.filter((file) => file.action !== "unchanged").length;
+	const skipped =
+		skippedSources.length === 0
+			? ""
+			: `, skipped ${skippedSources
+					.map((skipped) => `${skipped.name} (covered by ${skipped.coveredBy})`)
+					.join(", ")}`;
 	return {
 		ok: true,
 		message: `${input.repository.displayName}: pushed ${outcome.pushedCommit} to ${outcome.targetBranch}, created ${labels} label${
 			labels === 1 ? "" : "s"
-		}, changed ${changed} file${changed === 1 ? "" : "s"}`,
+		}, changed ${changed} file${changed === 1 ? "" : "s"}${skipped}`,
 		newSources,
+		skippedSources,
 	};
 }
 
