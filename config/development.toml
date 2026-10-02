@@ -3,6 +3,7 @@ default-environment = "worktree"
 default-task-type = "implement"
 state-file = ".factory-development.sqlite"
 attention-bell = true
+desktop-notification = true
 interaction-exit-key = "f12"
 max-parallel-agents = 1
 agent-poll-interval-seconds = 5
@@ -121,10 +122,7 @@ pull-request-facts = [ "needs-work" ]
 # operator, so unattended mode keeps the live session alive between the
 # agent's questions and the operator's answers.
 [task-types.analyze]
-thinking = "xhigh"
-no-auto-decision = true
-template = """
-/skill:grill-with-docs
+template = """/skill:grill-with-docs
 
 You are grilling the specification of a ticket into a design the factory can implement. The interview runs in this live session: the operator answers your questions here, in this terminal, and your session continues when they do.
 
@@ -172,6 +170,8 @@ Description:
 Repository: {repository}
 
 Previous session message (empty on a first session): {previous-message}"""
+thinking = "xhigh"
+no-auto-decision = true
 
 [task-types.rework]
 template = """Rework pull request {external-key}: {title}.
@@ -482,11 +482,6 @@ task-type = "implement"
 source-kind = "github-issue"
 labels-any = [ "ready-for-agent" ]
 
-# The spec position: an agreed ticket that needs a specification before the
-# work is worth implementing (ADR 0085, ADR 0086). It sits after the
-# ready-for-agent state, so a ticket carrying both labels rests at
-# ready-for-agent and is offered for implementation, not re-specified. The
-# ready-for-spec label is operator-owned: no transition writes it.
 [[states]]
 name = "ready-for-spec"
 task-type = "analyze"
