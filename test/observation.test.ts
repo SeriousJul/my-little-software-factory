@@ -5048,3 +5048,140 @@ describe("HerdrAgentReader.waitAgent", () => {
 		expect(result).toEqual({ matched: false });
 	});
 });
+
+describe("the open dispatch: the pull request group (ADR 0088)", () => {
+	const pullSource = { name: "pulls", kind: "github-pull-requests" };
+
+	function prFetched(
+		index: number,
+		labels: readonly string[],
+		externalUpdatedAt = "2026-08-31T10:00:00Z",
+	): FetchedTicket {
+		return {
+			identity: `github:github.com:P_${index}`,
+			sourceKind: "github-pull-request",
+			externalKey: `#${index}`,
+			sourceState: "open",
+			url: `https://github.com/acme/factory/pull/${index}`,
+			title: `Pull request ${index}`,
+			description: "The pull request of the factory branch.",
+			labels: [...labels],
+			externalUpdatedAt,
+			repository: {
+				identity: "github.com/acme/factory",
+				displayName: "acme/factory",
+				cloneUrl: "https://github.com/acme/factory.git",
+			},
+			attributes: {},
+		};
+	}
+
+	function successPulls(tickets: FetchedTicket[], fetchedAt = "2026-08-31T10:02:00Z") {
+		return { status: "success" as const, fetchedAt, tickets };
+	}
+
+	test("the top-up moves open pull request tickets before fresh open tickets", async () => {
+		const { state, intents, coordinator } = rig({
+			autoOn: true,
+			agents: [],
+			dispatchClaims: true,
+		});
+		state.initializeSources([source, pullSource]);
+		state.applyFetch(source, success([fetched()]));
+		state.applyFetch(
+			pullSource,
+			successPulls([prFetched(2, ["ready-for-review"]), prFetched(100, ["ready-for-review"])]),
+		);
+		await coordinator.tick();
+		// The pull request group stands first, in the list's order inside it:
+		// the lower-numbered pull request adds, ahead of the fresh issue and
+		// the higher-numbered pull request alike.
+		expect(intents).toEqual([
+			expect.objectContaining({
+				origin: "open",
+				automatic: true,
+				ticketIdentity: "github:github.com:P_2",
+				choice: expect.objectContaining({ taskType: "review" }),
+			}),
+		]);
+		state.removeWorkItem("github:github.com:P_2");
+		await coordinator.tick();
+		// The group's second ticket adds before the fresh one: the walk
+		// before the split took the issue #5 in this seat, the number order
+		// of the list.
+		expect(intents[1]).toEqual(
+			expect.objectContaining({
+				origin: "open",
+				automatic: true,
+				ticketIdentity: "github:github.com:P_100",
+				choice: expect.objectContaining({ taskType: "review" }),
+			}),
+		);
+		state.removeWorkItem("github:github.com:P_100");
+		await coordinator.tick();
+		// The group drains, and the fresh ticket adds on its own.
+		expect(intents[2]).toEqual(
+			expect.objectContaining({
+				origin: "open",
+				automatic: true,
+				ticketIdentity: "github:github.com:I_5",
+				choice: expect.objectContaining({ taskType: "implement" }),
+			}),
+		);
+		state.close();
+	});
+
+	test("a held pull request rests, and the walk falls to the fresh ticket", async () => {
+		const { state, intents, coordinator } = rig({
+			autoOn: true,
+			agents: [],
+			dispatchClaims: true,
+		});
+		state.initializeSources([source, pullSource]);
+		state.applyFetch(source, success([fetched(), fetched("github:github.com:I_6")]));
+		state.applyFetch(pullSource, successPulls([prFetched(100, ["ready-for-review"])]));
+		// The pull request's review completes without an advance: the cycle
+		// closes, and the Same-type hold stands over the position the pull
+		// request still offers.
+		settleForCause(
+			state,
+			"github:github.com:P_100",
+			"review",
+			"completed",
+			"",
+			outcome({ autoAdvance: false }),
+		);
+		await coordinator.tick();
+		// The auto-close ends the cycle, and the re-verify gate holds the
+		// pull request until the source re-reads it. The gate holds the pull
+		// request only: the walk falls to the fresh ticket in the same tick.
+		expect(intents).toHaveLength(1);
+		expect(intents[0]).toEqual(
+			expect.objectContaining({
+				origin: "open",
+				automatic: true,
+				ticketIdentity: "github:github.com:I_5",
+			}),
+		);
+		state.removeWorkItem("github:github.com:I_5");
+		state.applyFetch(
+			pullSource,
+			successPulls([prFetched(100, ["ready-for-review"])], "2026-08-31T11:01:00Z"),
+		);
+		// The re-read landed: the re-verify gate is clear, and the Same-type
+		// hold stands alone on the position.
+		expect(state.sameTypeHoldActive("github:github.com:P_100", "review")).toBe(true);
+		await coordinator.tick();
+		// The hold rests the pull request, and the walk falls to the next
+		// fresh ticket: I_5 stands claimed from its add, so I_6 adds.
+		expect(intents).toHaveLength(2);
+		expect(intents[1]).toEqual(
+			expect.objectContaining({
+				origin: "open",
+				automatic: true,
+				ticketIdentity: "github:github.com:I_6",
+			}),
+		);
+		state.close();
+	});
+});

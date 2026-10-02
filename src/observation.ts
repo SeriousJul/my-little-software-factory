@@ -45,10 +45,11 @@
  * 5. The Work queue's pickup (ADR 0049): the items the free seats take, in
  *    queue order, run before the top-up. Every pickup ends in start or
  *    drop, so the queue never sits stuck.
- * 6. The auto top-up (ADR 0051, ADR 0060): while Auto-handoff mode is on,
- *    the queue pause is down, the Dispatch pause is clear, and the queue is
- *    empty, the cycle adds exactly one item - a continuation first, then a
- *    restart, then a new open ticket, else nothing. A queue that holds even
+ * 6. The auto top-up (ADR 0051, ADR 0060, ADR 0088): while Auto-handoff
+ *    mode is on, the queue pause is down, the Dispatch pause is clear, and
+ *    the queue is empty, the cycle adds exactly one item - a continuation
+ *    first, then a restart, then an open pull request ticket, then a fresh
+ *    open ticket, else nothing. A queue that holds even
  *    one item holds the automatic adds until it drains, so the queue never
  *    piles. A flagged ticket (ADR 0060, widened by ADR 0070) is out of every
  *    one of those walks, its own flag or its source's mute, and it stays out
@@ -1350,10 +1351,11 @@ export class ObservationCoordinator {
 	}
 
 	/**
-	 * The auto top-up (ADR 0051). While Auto-handoff mode is on, the queue
-	 * pause is down, the Dispatch pause is clear, and the queue is empty, the
-	 * cycle adds exactly one item - a continuation first, then a restart, then
-	 * a new open ticket, else nothing. Every add takes the same path every
+	 * The auto top-up (ADR 0051, ADR 0088). While Auto-handoff mode is on,
+	 * the queue pause is down, the Dispatch pause is clear, and the queue is
+	 * empty, the cycle adds exactly one item - a continuation first, then a
+	 * restart, then an open pull request ticket, then a fresh open ticket,
+	 * else nothing. Every add takes the same path every
 	 * other start takes: an enqueue, then the immediate pickup. A queue that
 	 * holds even one item holds the adds until it drains, so the queue never
 	 * piles. A seat the item cannot take yet is the wait the queue item
@@ -1619,71 +1621,94 @@ export class ObservationCoordinator {
 			}
 			return true;
 		}
-		// 4. A new open ticket: the first open ticket in the list's order that
-		// every wait the auto-dispatch checked still passes - actionable, under
-		// the handoff limit, re-verified since its last cycle ended, offering a
-		// task, and past the Same-type hold. A full parallel seat is no longer
-		// a hold here: the item rests in the queue until a seat frees.
-		for (const ticket of list.rows) {
-			if (ticket.state !== "open" || !ticket.actionable) continue;
-			// The ignore gate (ADR 0060), on this walk's own read: the `all` view holds
-			// every row the covered rule leaves, so a resting ignored row stands here
-			// and this test is the one that holds it out. The gate is the flag on the
-			// row, never the filter that drew it.
-			if (automaticStartBlocked(ticket)) continue;
-			if (ticket.handoffCount >= config.maxHandoffsPerTicket) continue;
-			// The ticket's last cycle may have ended on a source change the agent
-			// made (a merged pull request, a closed issue). Its membership still
-			// reads active and healthy on the stale fetch, so the add waits for
-			// the sources to re-read the ticket: a merged item leaves the list
-			// and the ticket does not dispatch, an open one re-verifies and
-			// dispatches. The gate holds the ticket, not a parallel slot.
-			if (!this.state.sourceReverifiedSinceCycleEnd(ticket.identity)) continue;
-			// The Same-type hold (ADR 0026): the ticket's newest closed cycle
-			// completed a turn of the type the ticket now suggests. That work
-			// finished; the item still lists it because no new signal landed.
-			// A parking state offers no task: the plane does nothing on the
-			// ticket, and an external label write is the only engine that moves
-			// it (ADR 0027).
-			if (ticket.suggestedTaskType === null) continue;
-			if (this.state.sameTypeHoldActive(ticket.identity, ticket.suggestedTaskType)) continue;
-			if (this.state.hasWorkItem(ticket.identity)) continue;
-			// The ready position the list offers (ADR 0068): the task type
-			// resolves on the plane action, so the top-up asks for the merge,
-			// not for a handoff. The guards the handoff's add ran still ran
-			// above, and the item takes no seat when it runs.
-			if (isPlaneActionTaskType(config.taskTypes, ticket.suggestedTaskType)) {
-				const added = await this.topUpPlaneActionAsk(
-					{
-						origin: "open",
-						automatic: true,
-						ticketIdentity: ticket.identity,
-						taskType: ticket.suggestedTaskType,
-					},
-					`work queue top-up: merging ${this.ticketName(ticket.identity)}`,
-					`work queue top-up could not merge ${this.ticketName(ticket.identity)}`,
-				);
-				if (added !== "refused") return true;
-				continue;
+		// 4. A new open ticket (ADR 0051, ADR 0088): the first open ticket in
+		// the list's order that every wait the auto-dispatch checked still
+		// passes - actionable, under the handoff limit, re-verified since its
+		// last cycle ended, offering a task, and past the Same-type hold. The
+		// open pull request tickets stand in their own group ahead of the
+		// rest: the work the machine has started on a pull request - the
+		// review, the rework, the merge - moves to the end before the machine
+		// starts work on a ticket it has not started. The list's order holds
+		// inside each group, and a gate that holds one ticket holds that
+		// ticket only: the walk falls to the next candidate, as before. A
+		// full parallel seat is no longer a hold here: the item rests in the
+		// queue until a seat frees.
+		for (const group of [
+			list.rows.filter((ticket) => ticket.sourceKind === "github-pull-request"),
+			list.rows.filter((ticket) => ticket.sourceKind !== "github-pull-request"),
+		]) {
+			for (const ticket of group) {
+				if (await this.topUpOpenTicket(config, ticket)) return true;
 			}
-			// The configured settings of the ticket's task profile (ADR 0009): an
-			// unattended handoff starts with the same resolution chain a manual
-			// one sees in the panel, and the fit check guards what it starts with.
-			const choice = resolveHandoffChoice(config, ticket.suggestedTaskType);
-			const added = await this.topUpAsk(
+		}
+		return false;
+	}
+
+	/**
+	 * The top-up's open-ticket add for one row (ADR 0051, ADR 0088): the
+	 * waits the walk checked, on the row the walk holds, and the ask the
+	 * row's task resolves on: the merge ask of the ready position, or the
+	 * handoff ask of the task profile. It answers whether the queue took the
+	 * item: a taken item ends the walk, and a held or refused row moves the
+	 * walk on to the next candidate, the way the walk did before the split.
+	 */
+	private async topUpOpenTicket(config: FactoryConfig, ticket: Ticket): Promise<boolean> {
+		if (ticket.state !== "open" || !ticket.actionable) return false;
+		// The ignore gate (ADR 0060), on this walk's own read: the `all` view holds
+		// every row the covered rule leaves, so a resting ignored row stands here
+		// and this test is the one that holds it out. The gate is the flag on the
+		// row, never the filter that drew it.
+		if (automaticStartBlocked(ticket)) return false;
+		if (ticket.handoffCount >= config.maxHandoffsPerTicket) return false;
+		// The ticket's last cycle may have ended on a source change the agent
+		// made (a merged pull request, a closed issue). Its membership still
+		// reads active and healthy on the stale fetch, so the add waits for
+		// the sources to re-read the ticket: a merged item leaves the list
+		// and the ticket does not dispatch, an open one re-verifies and
+		// dispatches. The gate holds the ticket, not a parallel slot.
+		if (!this.state.sourceReverifiedSinceCycleEnd(ticket.identity)) return false;
+		// The Same-type hold (ADR 0026): the ticket's newest closed cycle
+		// completed a turn of the type the ticket now suggests. That work
+		// finished; the item still lists it because no new signal landed.
+		// A parking state offers no task: the plane does nothing on the
+		// ticket, and an external label write is the only engine that moves
+		// it (ADR 0027).
+		if (ticket.suggestedTaskType === null) return false;
+		if (this.state.sameTypeHoldActive(ticket.identity, ticket.suggestedTaskType)) return false;
+		if (this.state.hasWorkItem(ticket.identity)) return false;
+		// The ready position the list offers (ADR 0068): the task type
+		// resolves on the plane action, so the top-up asks for the merge,
+		// not for a handoff. The guards the handoff's add ran still ran
+		// above, and the item takes no seat when it runs.
+		if (isPlaneActionTaskType(config.taskTypes, ticket.suggestedTaskType)) {
+			const added = await this.topUpPlaneActionAsk(
 				{
 					origin: "open",
 					automatic: true,
 					ticketIdentity: ticket.identity,
-					choice,
-					previousMessage: "",
+					taskType: ticket.suggestedTaskType,
 				},
-				`work queue top-up: handing off ${this.ticketName(ticket.identity)}`,
-				`work queue top-up could not hand off ${this.ticketName(ticket.identity)}`,
+				`work queue top-up: merging ${this.ticketName(ticket.identity)}`,
+				`work queue top-up could not merge ${this.ticketName(ticket.identity)}`,
 			);
-			if (added !== "refused") return true;
+			return added !== "refused";
 		}
-		return false;
+		// The configured settings of the ticket's task profile (ADR 0009): an
+		// unattended handoff starts with the same resolution chain a manual
+		// one sees in the panel, and the fit check guards what it starts with.
+		const choice = resolveHandoffChoice(config, ticket.suggestedTaskType);
+		const added = await this.topUpAsk(
+			{
+				origin: "open",
+				automatic: true,
+				ticketIdentity: ticket.identity,
+				choice,
+				previousMessage: "",
+			},
+			`work queue top-up: handing off ${this.ticketName(ticket.identity)}`,
+			`work queue top-up could not hand off ${this.ticketName(ticket.identity)}`,
+		);
+		return added !== "refused";
 	}
 
 	/**

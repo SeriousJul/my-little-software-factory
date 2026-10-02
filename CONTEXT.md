@@ -441,7 +441,8 @@ The auto top-up adds a continuation before a restart or a new open ticket (ADR 0
 _Avoid_: workflow advance, follow-up, next task
 
 **Top-up**:
-The one automatic add the observation cycle makes to the Work queue: while Auto-handoff mode is on and the queue is empty, a continuation, else a restart, else an eligible open ticket, else nothing (ADR 0051).
+The one automatic add the observation cycle makes to the Work queue: while Auto-handoff mode is on and the queue is empty, a continuation, else a restart, else an eligible open pull request ticket, else an eligible fresh open ticket, else nothing (ADR 0051, ADR 0088).
+The pull request group stands ahead of the fresh group: the work the machine has started on a pull request moves to the end before the machine starts work on a ticket it has not started. The list's order holds inside each group, and a gate that holds one ticket holds that ticket only: the held ticket rests, and the walk falls to the next candidate, as every gate does.
 It adds one item per cycle, and only into an empty queue, so the queue never piles.
 _Avoid_: refill, auto dispatch, queue feed
 
