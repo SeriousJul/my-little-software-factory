@@ -65,17 +65,23 @@ behavior.
 ## What was verified on the pull request
 
 - The CI `checks` and `site-build` jobs on the pull request head
-  (`85971d4`): both passed (run 36987889391, 2026-10-02). The `site-build`
+  (`f572d45`): both passed (run 36992455764, 2026-10-02). The `site-build`
   job runs the same `bun run docs:build` command as the local build above.
-  The first `checks` attempt flaked: one test in `test/auto-mode.test.ts`
-  (the auto decision model-resolution case) failed under the parallel CI
-  load but passes in isolation and in the local full suite, so it is a load
-  flake, not a regression. A second attempt hung on the runner and was
-  cancelled; the third passed. The head also carries a merge of the branch
-  with `main`, which had moved on after the branch was cut; the one file both
-  sides touched, the completion page, keeps the usage rewrite, since the
-  sentence `main` added there is the polling mechanic that ADR 0084 already
-  carries.
+  The head also carries a merge of the branch with `main`, which had moved on
+  after the branch was cut; the one file both sides touched, the completion
+  page, keeps the usage rewrite, since the sentence `main` added there is the
+  polling mechanic that ADR 0084 already carries.
+- A load flake in `test/auto-mode.test.ts` (the auto decision
+  model-resolution case) was found by CI and fixed on this branch. The test
+  waited for the `auto-handed-off` frame and then read the `herdr agent
+  start` command, but under the parallel CI load the frame can be captured
+  before the runner records the start, so the command read `undefined` and
+  the `toContain` assertion threw a type error. It failed twice in CI on this
+  branch and passed in isolation and in the local full suite, the
+  load-flake signature. The fix makes the `awaitFrame` predicate require the
+  start command as well as the frame, the pattern the sibling route tests
+  already use. The local full suite (2495 pass) and the CI `checks` job both
+  pass after the fix.
 
 ## What was verified on the deployed site
 
