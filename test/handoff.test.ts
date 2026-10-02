@@ -4086,6 +4086,33 @@ const PR_CREATE_COMMAND = [
 ].join(" ");
 
 /**
+ * Stub the hold commit the open steps a fresh branch onto: the refs read,
+ * the empty commit built on them, and the branch moved to it.
+ */
+function stubHoldCommit(runner: FakeRunner): void {
+	runner.set("git", ["-C", CHECKOUT, "rev-parse", PR_BRANCH, `${PR_BRANCH}^{tree}`], {
+		stdout: "abc123\ndef456\n",
+	});
+	runner.set(
+		"git",
+		[
+			"-C",
+			CHECKOUT,
+			"commit-tree",
+			"def456",
+			"-p",
+			"abc123",
+			"-m",
+			"factory: hold the branch for the pull request",
+		],
+		{ stdout: "sha1111\n" },
+	);
+	runner.set("git", ["-C", CHECKOUT, "update-ref", `refs/heads/${PR_BRANCH}`, "sha1111"], {
+		stdout: "",
+	});
+}
+
+/**
  * Stub the branch push and the branch's pull request read of the open step.
  * A standing draft stands on a branch the remote already carried, so the
  * branch read answers it in the standing mode.
@@ -4094,6 +4121,7 @@ function stubPullRequestOpenStep(runner: FakeRunner, { standing = false } = {}):
 	runner.set("git", ["-C", CHECKOUT, "ls-remote", "--heads", "origin", PR_BRANCH], {
 		stdout: standing ? `abc123\trefs/heads/${PR_BRANCH}\n` : "",
 	});
+	if (!standing) stubHoldCommit(runner);
 	runner.set("git", ["-C", CHECKOUT, "push", "origin", PR_BRANCH], { stdout: "" });
 	if (standing) {
 		runner.set("gh", PR_READ_ARGS, {
@@ -4167,9 +4195,10 @@ describe("handOffTicket: the pull request the plane opens (ADR 0076)", () => {
 
 		expect(outcome.status).toBe("ok");
 		// The open step stands between the environment and the agent: the
-		// fresh branch takes the plane's hold commit, the branch is pushed, the
-		// branch's pull requests are read by its head branch, the draft is
-		// opened, and the prompt the agent receives carries the pull
+		// fresh branch takes the plane's hold commit - the branch moved by its
+		// name, the checkout's current branch untouched - the branch is
+		// pushed, the branch's pull requests are read by its head branch, the
+		// draft is opened, and the prompt the agent receives carries the pull
 		// request's url.
 		expect(runner.commands()).toEqual([
 			`git -C ${CHECKOUT} rev-parse --git-dir`,
@@ -4180,7 +4209,9 @@ describe("handOffTicket: the pull request the plane opens (ADR 0076)", () => {
 			`git -C ${CHECKOUT} fetch origin main`,
 			`herdr worktree create --cwd ${CHECKOUT} --branch ${PR_BRANCH} --base origin/main --no-focus`,
 			`git -C ${CHECKOUT} ls-remote --heads origin ${PR_BRANCH}`,
-			`git -C ${CHECKOUT} commit --allow-empty -m factory: hold the branch for the pull request`,
+			`git -C ${CHECKOUT} rev-parse ${PR_BRANCH} ${PR_BRANCH}^{tree}`,
+			`git -C ${CHECKOUT} commit-tree def456 -p abc123 -m factory: hold the branch for the pull request`,
+			`git -C ${CHECKOUT} update-ref refs/heads/${PR_BRANCH} sha1111`,
 			`git -C ${CHECKOUT} push origin ${PR_BRANCH}`,
 			`gh ${PR_READ_ARGS.join(" ")}`,
 			PR_CREATE_COMMAND,
@@ -4195,6 +4226,7 @@ describe("handOffTicket: the pull request the plane opens (ADR 0076)", () => {
 		runner.set("git", ["-C", CHECKOUT, "ls-remote", "--heads", "origin", PR_BRANCH], {
 			stdout: "",
 		});
+		stubHoldCommit(runner);
 		runner.set("git", ["-C", CHECKOUT, "push", "origin", PR_BRANCH], { stdout: "" });
 		runner.set("gh", PR_READ_ARGS, { stdout: "[]" });
 		runner.setSequence(
@@ -4255,9 +4287,7 @@ describe("handOffTicket: the pull request the plane opens (ADR 0076)", () => {
 		expect(commands).not.toContain(PR_CREATE_COMMAND);
 		// The standing branch pre-dates the attempt: the attempt commits no
 		// hold on it, the way it opens no second draft.
-		expect(commands).not.toContain(
-			`git -C ${CHECKOUT} commit --allow-empty -m factory: hold the branch for the pull request`,
-		);
+		expect(commands).not.toContain(`git -C ${CHECKOUT} update-ref refs/heads/${PR_BRANCH} sha1111`);
 		// The prompt still carries the standing pull request's url.
 		expect(commands).toContain(
 			`herdr agent prompt ${AGENT} Implement #7.\n\nPull request: ${PR_URL}`,
@@ -4326,6 +4356,7 @@ describe("handOffTicket: the pull request the plane opens (ADR 0076)", () => {
 		runner.set("git", ["-C", CHECKOUT, "ls-remote", "--heads", "origin", PR_BRANCH], {
 			stdout: "",
 		});
+		stubHoldCommit(runner);
 		runner.set("git", ["-C", CHECKOUT, "push", "origin", PR_BRANCH], {
 			code: 128,
 			stderr: "fatal: unable to access: Network is down\n",

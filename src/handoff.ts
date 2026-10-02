@@ -1693,15 +1693,45 @@ async function runPullRequestOpen(
 		: () => deleteRemoteBranch(ctx, plan.checkout, plan.branch);
 	// A branch the remote did not carry stands at its base: the create would
 	// answer "No commits between", and no retry of the create clears it. The
-	// hold commit gives the open a commit to stand on, before the push.
+	// hold commit gives the open a commit to stand on, before the push. The
+	// commit moves the factory branch by its name - the refs read, the empty
+	// commit built on it, the branch moved to it - and never the checkout's
+	// current branch, which the open runs from and owns no part of.
 	if (!existedBefore) {
+		let refs: CommandResult;
+		try {
+			refs = await ctx.runner.run("git", [
+				"-C",
+				plan.checkout,
+				"rev-parse",
+				plan.branch,
+				`${plan.branch}^{tree}`,
+			]);
+		} catch (error) {
+			return {
+				fail: `the pull request open could not read the factory branch: ${errorMessage(error)}`,
+				cleanup: noopCleanup,
+			};
+		}
+		const refLines = refs.stdout
+			.split(/\r?\n/)
+			.map((line) => line.trim())
+			.filter((line) => line !== "");
+		if (refs.code !== 0 || refLines.length !== 2)
+			return {
+				fail: `the pull request open could not read the factory branch: ${commandFailureText(refs)}`,
+				cleanup: noopCleanup,
+			};
+		const [tip, tree] = refLines as [string, string];
 		let held: CommandResult;
 		try {
 			held = await ctx.runner.run("git", [
 				"-C",
 				plan.checkout,
-				"commit",
-				"--allow-empty",
+				"commit-tree",
+				tree,
+				"-p",
+				tip,
 				"-m",
 				PULL_REQUEST_HOLD_COMMIT_MESSAGE,
 			]);
@@ -1711,9 +1741,30 @@ async function runPullRequestOpen(
 				cleanup: noopCleanup,
 			};
 		}
-		if (held.code !== 0)
+		const holdSha = held.stdout.trim();
+		if (held.code !== 0 || holdSha === "")
 			return {
 				fail: `the pull request open could not commit the hold: ${commandFailureText(held)}`,
+				cleanup: noopCleanup,
+			};
+		let moved: CommandResult;
+		try {
+			moved = await ctx.runner.run("git", [
+				"-C",
+				plan.checkout,
+				"update-ref",
+				`refs/heads/${plan.branch}`,
+				holdSha,
+			]);
+		} catch (error) {
+			return {
+				fail: `the pull request open could not move the factory branch to the hold: ${errorMessage(error)}`,
+				cleanup: noopCleanup,
+			};
+		}
+		if (moved.code !== 0)
+			return {
+				fail: `the pull request open could not move the factory branch to the hold: ${commandFailureText(moved)}`,
 				cleanup: noopCleanup,
 			};
 	}

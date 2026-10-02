@@ -51,7 +51,9 @@ pull request on a head that carries no commit ahead of its base: the create
 answers `No commits between`, and no retry of the create clears it, because
 the branch stands at its base until the agent commits. A branch the remote
 did not carry therefore first receives one empty hold commit from the plane,
-and the push carries it. The hold stays on the branch: pushing the branch
+and the push carries it. The commit moves the factory branch by its name,
+never the checkout's current branch: the open step runs from the source
+checkout, and that checkout's current branch is the operator's. The hold stays on the branch: pushing the branch
 back to its base after the open closes the pull request the source opened,
 and the agent's commits stack on the hold. A squash merge, the merge
 method's default, leaves the hold out of main.
