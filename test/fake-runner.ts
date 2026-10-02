@@ -19,6 +19,15 @@ import type {
 	ModelListResult,
 } from "../src/runner.ts";
 
+/**
+ * A command that holds forever: the fake's answer for a blocking command
+ * the test does not configure. The real `herdr agent wait` blocks until its
+ * state match, and the fallback's code zero must not read as one.
+ */
+function never(): Promise<CommandResult> {
+	return new Promise<CommandResult>(() => undefined);
+}
+
 export interface RecordedCommand {
 	command: string;
 	args: readonly string[];
@@ -117,7 +126,13 @@ export class FakeRunner implements CommandRunner {
 		if (delay !== undefined) await new Promise((resolve) => setTimeout(resolve, delay));
 		const sequence = this.sequences.get(key);
 		if (sequence !== undefined && sequence.length > 0) return sequence.shift() as CommandResult;
-		return this.responses.get(key) ?? this.fallback;
+		if (this.responses.has(key)) return this.responses.get(key) as CommandResult;
+		// A blocking command the test did not configure holds, the way the real
+		// thing blocks: the fallback's code zero would match an `agent wait`
+		// at once and wake the observation cycle on every armed agent, so the
+		// double models the block instead of the success.
+		if (command === "herdr" && args[1] === "wait") return never();
+		return this.fallback;
 	}
 
 	async listModels(kind: string): Promise<ModelListResult> {
