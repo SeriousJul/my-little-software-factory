@@ -38,6 +38,8 @@ const choice = {
  *   limit, in manual mode too.
  * - research never auto-advances: in auto mode the factory still decides
  *   it (close), and in manual mode it waits for a human.
+ * - park carries the No-auto-decision flag: its completions rest in awaiting
+ *   for the operator ahead of every outcome check (ADR 0085).
  * - implement and polish are the open dispatch's types.
  */
 const config: FactoryConfig = {
@@ -48,6 +50,7 @@ const config: FactoryConfig = {
 		route: { template: "route" },
 		research: { template: "research" },
 		polish: { template: "polish" },
+		park: { template: "park", noAutoDecision: true },
 	},
 	maxParallelAgents: 2,
 	maxHandoffsPerTicket: 2,
@@ -1538,7 +1541,7 @@ describe("the awaiting rule", () => {
 	test("an auto-advance with no position closes the cycle in auto mode", async () => {
 		const { state, intents, coordinator } = rig({ autoOn: true, agents: [] });
 		settleFor(state, "github:github.com:I_5", "review", outcome());
-		expect(coordinator.decideAwaiting(0, outcome())).toBe("close");
+		expect(coordinator.decideAwaiting(0, outcome(), "review")).toBe("close");
 		await coordinator.tick();
 		const [ticket] = state.visibleTickets([], "implement");
 		expect(ticket).toEqual(
@@ -1579,7 +1582,9 @@ describe("the awaiting rule", () => {
 		// settled ticket rests in awaiting, and the position offers the task.
 		state.applyFetch(source, success([fetched("github:github.com:I_6"), fetched()]));
 		settleFor(state, "github:github.com:I_5", "route", routeOutcome("github:github.com:I_6"));
-		expect(coordinator.decideAwaiting(0, routeOutcome("github:github.com:I_6"))).toBe("route");
+		expect(coordinator.decideAwaiting(0, routeOutcome("github:github.com:I_6"), "route")).toBe(
+			"route",
+		);
 		await coordinator.tick();
 		// The route enters the queue as the top-up's continuation item, the
 		// way the Decision screen's route enters it: the item rests in the
@@ -1612,7 +1617,7 @@ describe("the awaiting rule", () => {
 		const failed = routeOutcome();
 		failed.writeFailure = "gh: the write failed";
 		settleFor(state, "github:github.com:I_5", "route", failed);
-		expect(coordinator.decideAwaiting(0, failed)).toBe("park");
+		expect(coordinator.decideAwaiting(0, failed, "route")).toBe("park");
 		await coordinator.tick();
 		// The plane does not route from labels it did not write: the ticket
 		// rests in awaiting, undecided, for the operator's Decision screen.
@@ -1623,6 +1628,27 @@ describe("the awaiting rule", () => {
 				lastCompletion: expect.objectContaining({ decision: null }),
 			}),
 		);
+		expect(intents).toHaveLength(0);
+		state.close();
+	});
+
+	test("a No-auto-decision type parks every completion ahead of the outcome checks (ADR 0085)", async () => {
+		const { state, intents, coordinator } = rig({ autoOn: true, agents: [] });
+		settleFor(state, "github:github.com:I_5", "park");
+		// The park stands ahead of the outcome checks: a completion without a
+		// transition - the case that would close - rests in awaiting instead,
+		// undecided, for the operator.
+		expect(coordinator.decideAwaiting(0, null, "park")).toBe("park");
+		await coordinator.tick();
+		const [ticket] = state.visibleTickets([], "implement");
+		expect(ticket).toEqual(
+			expect.objectContaining({
+				state: "awaiting",
+				lastCompletion: expect.objectContaining({ decision: null }),
+			}),
+		);
+		// The top-up adds nothing for the parked turn: a continuation needs a
+		// transition that fired, and a parked ticket is not open.
 		expect(intents).toHaveLength(0);
 		state.close();
 	});
@@ -2306,7 +2332,7 @@ describe("the awaiting rule", () => {
 			completedAt: "2026-08-31T11:00:00Z",
 			transition: routeOutcome(),
 		});
-		expect(coordinator.decideAwaiting(2, routeOutcome())).toBe("close");
+		expect(coordinator.decideAwaiting(2, routeOutcome(), "route")).toBe("close");
 		await coordinator.tick();
 		const [ticket] = state.visibleTickets([], "implement");
 		expect(ticket).toEqual(
@@ -2381,7 +2407,9 @@ describe("the awaiting rule", () => {
 	test("auto mode closes a fired transition that does not auto-advance", async () => {
 		const { state, intents, coordinator } = rig({ autoOn: true, agents: [] });
 		settleFor(state, "github:github.com:I_5", "implement", outcome({ autoAdvance: false }));
-		expect(coordinator.decideAwaiting(0, outcome({ autoAdvance: false }))).toBe("close");
+		expect(coordinator.decideAwaiting(0, outcome({ autoAdvance: false }), "implement")).toBe(
+			"close",
+		);
 		await coordinator.tick();
 		const [ticket] = state.visibleTickets([], "implement");
 		expect(ticket).toEqual(
@@ -2422,7 +2450,7 @@ describe("the awaiting rule", () => {
 	test("auto mode closes a completion whose transition never fired", async () => {
 		const { state, intents, coordinator } = rig({ autoOn: true, agents: [] });
 		settleFor(state, "github:github.com:I_5", "research");
-		expect(coordinator.decideAwaiting(0, null)).toBe("close");
+		expect(coordinator.decideAwaiting(0, null, "research")).toBe("close");
 		await coordinator.tick();
 		const [ticket] = state.visibleTickets([], "implement");
 		expect(ticket).toEqual(
@@ -2541,7 +2569,9 @@ describe("the open dispatch", () => {
 		const { state, coordinator, statuses } = rig({ autoOn: true, agents: [] });
 		state.applyFetch(source, success([fetched("github:github.com:I_6"), fetched()]));
 		settleFor(state, "github:github.com:I_5", "route", routeOutcome("github:github.com:I_6"));
-		expect(coordinator.decideAwaiting(0, routeOutcome("github:github.com:I_6"))).toBe("route");
+		expect(coordinator.decideAwaiting(0, routeOutcome("github:github.com:I_6"), "route")).toBe(
+			"route",
+		);
 		await coordinator.tick();
 		expect(statuses).toContainEqual({
 			kind: "info",

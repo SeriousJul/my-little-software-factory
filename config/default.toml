@@ -20,7 +20,10 @@
 # task completes, the plane fires that task type's transition: it writes the
 # label facts on the ticket and its linked pull request, and the machine
 # re-derives every position from the written labels. The agents never write
-# workflow labels.
+# the labels the machine writes: the one sanctioned exception is the analyze
+# type's settling agent, which applies the operator-owned labels its own
+# template names - ready-for-agent, and spec:<number> on a locked ticket
+# (ADR 0086).
 
 default-agent = "pi"
 default-environment = "worktree"
@@ -148,6 +151,21 @@ task-type = "implement"
 source-kind = "github-issue"
 labels-any = ["ready-for-agent"]
 
+# The analyze position (ADR 0085, ADR 0086): an agreed ticket that needs a
+# specification before the work is worth implementing. It sits after the
+# ready-for-agent state, so a ticket carrying both labels rests at
+# ready-for-agent and is offered for implementation, not re-specified.
+# Uncomment both this state and the analyze task type below when your agents
+# have the grill-with-docs skill, and add `label:ready-for-spec` to the label
+# filter of your filtered issue sources.
+#
+# [[states]]
+# name = "ready-for-spec"
+# task-type = "analyze"
+# [states.match]
+# source-kind = "github-issue"
+# labels-any = ["ready-for-spec"]
+
 [[states]]
 name = "needs-work"
 task-type = "rework"
@@ -208,8 +226,10 @@ labels-none = ["needs-work", "ready-for-review", "ready-to-ship"]
 # prompt template and a task profile, or the action form, the plane action it
 # resolves on and the method that action runs with. The transition hangs off
 # the type that completes it and writes the label facts the machine then
-# reads. The templates carry no label instructions: the plane owns the
-# labels.
+# reads. The agents never write the labels the machine writes: the one
+# sanctioned exception is the analyze type's settling agent, which applies
+# the operator-owned labels its own template names - ready-for-agent, and
+# spec:<number> on a locked ticket (ADR 0086).
 #
 # The pull request open (ADR 0076): a task type that opens a pull request
 # carries `opens-pull-request = true`. At the Handoff start, before the
@@ -226,11 +246,14 @@ Implement the following {source-kind}.
 
 ### Instructions
 
-1. **Develop Code**
+1. **Read the Specification**
+   - When the ticket's labels carry a `spec:<number>` label, read that issue first: it is the ticket's specification.
+
+2. **Develop Code**
    - Implement all acceptance criteria on this branch.
    - Commit all changes to this branch.
 
-2. **Work the Pull Request**
+3. **Work the Pull Request**
    - The pull request already stands at the url below, opened as a draft on this branch. It links the ticket; merging it closes the issue.
    - Commit and push your work to this branch. The pull request carries the commits you push.
    - List any technical choices made when specifications were not clear.
@@ -346,6 +369,70 @@ when = "pull-request-open"
 pull-request-facts = ["needs-work"]
 [[task-types.merge.transition.branches]]
 pull-request-facts = []
+
+# The analyze is the ticket-driven grilling (ADR 0085, ADR 0086): the agent
+# grills the ticket's design with the operator in the live session, writes
+# the specification back into the ticket body, commits the glossary entries
+# and ADRs the interview produced directly to the default branch, and marks
+# the ticket ready-for-agent. It carries no transition and no pull request:
+# the branch stands for the implementation that follows. The no-auto-decision
+# flag parks its completions for the operator, so unattended mode keeps the
+# live session alive between the agent's questions and the operator's
+# answers. Your agents need the grill-with-docs skill for it. Uncomment the
+# block, and the ready-for-spec state above, when the skill is installed.
+#
+# [task-types.analyze]
+# thinking = "xhigh"
+# no-auto-decision = true
+# template = '''
+# /skill:grill-with-docs
+#
+# You are grilling the specification of a ticket into a design the factory can implement. The interview runs in this live session: the operator answers your questions here, in this terminal, and your session continues when they do.
+#
+# ### The ticket
+#
+# {external-key}: {title}
+#
+# URL: {source-url}
+#
+# Labels: {labels}
+#
+# Description:
+# {description}
+#
+# ### Rules
+#
+# 1. **Ground Yourself**
+#    - Read the repository's agent instructions and its domain docs (CONTEXT.md and the ADRs) before your first question.
+#    - Read the ticket in full, comments included, so the agreement behind it stands behind your questions.
+#
+# 2. **Work the Design Tree**
+#    - Every decision branches into the decisions that hang off it. Ask your whole open frontier in one turn, numbered, each question with your recommended answer.
+#    - Finding facts is yours, never the operator's: read the code, the docs, and the source before you ask.
+#    - When the frontier is empty, the design is settled. Never settle it on a guess.
+#
+# 3. **Keep the Session Alive**
+#    - End a turn only to ask the operator a question or to report the settled design. The operator answers here, and your session continues.
+#    - Never post the interview to the ticket. This terminal is the record.
+#
+# 4. **Write the Docs as the Design Settles**
+#    - When a term resolves, update the repository's glossary (CONTEXT.md) right there.
+#    - When a decision is hard to reverse, surprising without context, and the result of a real trade-off, write an ADR.
+#    - Commit the documentation directly to the repository's default branch: fetch the default branch in this checkout, take a short-lived local branch from it, commit the docs there, push it to the default branch, return to the ticket's branch, and discard the short-lived branch.
+#    - Never push anything else to the default branch, never push the ticket's branch, and never create or merge a pull request: the branch stands for the implementation that follows.
+#
+# 5. **Land the Spec on the Ticket**
+#    - When the design is settled, rewrite the ticket's body into the specification: the context, the decisions with their reasons, and the acceptance criteria.
+#    - Keep the original request text, quoted, inside the new body.
+#    - Update the body through gh. When the body cannot be edited, open a new issue in the same repository titled "Spec: <ticket title>" with the full specification and a link to the ticket, apply a spec:<new issue number> label to the ticket, and say so in your final message.
+#
+# 6. **Mark the Ticket Ready**
+#    - When - and only when - the specification is settled and the docs are committed, apply the ready-for-agent label to the ticket through gh.
+#    - In your final message, say the specification is settled, that you applied ready-for-agent, and that the cycle is ready to close: the implementation starts from the ticket's new position.
+#
+# Repository: {repository}
+#
+# Previous session message (empty on a first session): {previous-message}'''
 
 # --- Security task types ----------------------------------------------------
 # One task type per security ticket source, a sibling of implement. Each one

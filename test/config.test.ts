@@ -524,7 +524,9 @@ describe("validateConfig", () => {
 						60,
 					);
 					expect(source.repositories).toEqual([repository]);
-					expect(source.filter).toBe(isIssues ? "label:ready-for-agent" : undefined);
+					expect(source.filter).toBe(
+						isIssues ? "label:ready-for-agent,label:ready-for-spec" : undefined,
+					);
 				}
 			}
 			// The dev path records its run in a log the git tree ignores.
@@ -564,6 +566,14 @@ describe("validateConfig", () => {
 					],
 				},
 			});
+			// The analyze grills the ticket's specification (ADR 0085, ADR 0086):
+			// it carries the no-auto-decision flag that parks its completions for
+			// the operator, a high thinking level, and no transition.
+			expect(config.taskTypes.analyze).toEqual({
+				template: expect.stringContaining("/skill:grill-with-docs"),
+				thinking: "xhigh",
+				noAutoDecision: true,
+			});
 			// The review task type carries a template only: the live development
 			// path pins no Task profile settings in the file. The profile
 			// feature itself is covered by the inline config tests in this file,
@@ -588,6 +598,14 @@ describe("validateConfig", () => {
 					name: "ready-for-agent",
 					taskType: "implement",
 					match: { sourceKind: "github-issue", labelsAny: ["ready-for-agent"] },
+				},
+				{
+					// The spec position: after ready-for-agent, so a ticket
+					// carrying both labels rests at ready-for-agent (ADR 0085,
+					// ADR 0086).
+					name: "ready-for-spec",
+					taskType: "analyze",
+					match: { sourceKind: "github-issue", labelsAny: ["ready-for-spec"] },
 				},
 				{
 					name: "needs-work",
@@ -839,6 +857,60 @@ describe("validateConfig", () => {
 				"task-types": { t: { template: "x", "opens-pull-request": "yes" } },
 			},
 			"opens-pull-request: must be a boolean",
+		);
+	});
+
+	test("a task type's no-auto-decision flag is a boolean and both forms carry it (ADR 0085)", () => {
+		const base = {
+			"default-agent": "pi",
+			"default-environment": "worktree",
+			"default-task-type": "t",
+			agents: { pi: { kind: "pi" } },
+		};
+		// The flag is omitted from the profile when the key is absent, and
+		// read as a boolean when it stands: the default lets the automatic
+		// rule run.
+		expect(
+			validateConfig({
+				...base,
+				"task-types": { t: { template: "x" } },
+			}).taskTypes.t.noAutoDecision,
+		).toBeUndefined();
+		expect(
+			validateConfig({
+				...base,
+				"task-types": { t: { template: "x", "no-auto-decision": true } },
+			}).taskTypes.t.noAutoDecision,
+		).toBe(true);
+		expect(
+			validateConfig({
+				...base,
+				"task-types": { t: { template: "x", "no-auto-decision": false } },
+			}).taskTypes.t.noAutoDecision,
+		).toBe(false);
+		// The write path must mirror the read path: a persist rewrites the
+		// whole file, so the flag must survive the round trip or the rewrite
+		// silently drops it.
+		const withFlag = validateConfig({
+			...base,
+			"task-types": { t: { template: "x", "no-auto-decision": true } },
+		});
+		expect(validateConfig(parseToml(configToToml(withFlag))).taskTypes.t.noAutoDecision).toBe(true);
+		// The action form carries the flag beside its action, method, and
+		// transition.
+		expect(
+			validateConfig({
+				...base,
+				"task-types": { t: { action: "merge-pull-request", "no-auto-decision": true } },
+			}).taskTypes.t.noAutoDecision,
+		).toBe(true);
+		// A value that is not a boolean is a startup error on either form.
+		expectConfigError(
+			{
+				...base,
+				"task-types": { t: { template: "x", "no-auto-decision": "yes" } },
+			},
+			"no-auto-decision: must be a boolean",
 		);
 	});
 

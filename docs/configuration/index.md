@@ -153,11 +153,16 @@ context-window = "--autocompact {value}"
 # default-model, and an omitted level or window leaves it to the agent. The
 # override panel prefills all four, and each one applies to its own setting
 # only. The action form takes no profile keys.
+# no-auto-decision is a boolean either form carries: when set, the automatic
+# Completion rule parks the type's completions for the operator ahead of its
+# outcome checks (ADR 0085).
 # A [task-types.X.transition] table fires when a turn of this type
 # completes - or, for the action form, when the action's run answers:
 # it writes the label facts on the ticket and its linked pull
 # request, and the machine re-derives every position from the written labels.
-# The agents never write workflow labels.
+# The agents never write the labels the machine writes: the one sanctioned
+# exception is the analyze type's settling agent, which applies the
+# operator-owned labels its own template names (ADR 0086).
 [task-types.implement]
 agent = "pi"
 model = "anthropic/claude-sonnet-4-5"
@@ -225,6 +230,60 @@ auto-advance = true
 agent = "pi"
 environment = "worktree"
 
+# The analyze grills the ticket's specification with the operator in the live
+# session and writes it back to the ticket (ADR 0085, ADR 0086). Its
+# no-auto-decision flag parks its completions for the operator, so
+# unattended mode keeps the live session alive between the agent's questions
+# and the operator's answers. It carries no transition and no pull request.
+[task-types.analyze]
+thinking = "xhigh"
+no-auto-decision = true
+template = '''
+/skill:grill-with-docs
+
+### The ticket
+
+{external-key}: {title}
+
+URL: {source-url}
+
+Labels: {labels}
+
+Description:
+{description}
+
+### Rules
+
+1. **Ground Yourself**
+   - Read the repository's agent instructions and its domain docs (CONTEXT.md and the ADRs) before your first question.
+   - Read the ticket in full, comments included, so the agreement behind it stands behind your questions.
+
+2. **Work the Design Tree**
+   - Every decision branches into the decisions that hang off it. Ask your whole open frontier in one turn, numbered, each question with your recommended answer.
+   - Finding facts is yours, never the operator's: read the code, the docs, and the source before you ask.
+   - When the frontier is empty, the design is settled. Never settle it on a guess.
+
+3. **Keep the Session Alive**
+   - End a turn only to ask the operator a question or to report the settled design. The operator answers here, and your session continues.
+   - Never post the interview to the ticket. This terminal is the record.
+
+4. **Write the Docs as the Design Settles**
+   - When a term resolves, update the repository's glossary (CONTEXT.md) right there.
+   - When a decision is hard to reverse, surprising without context, and the result of a real trade-off, write an ADR.
+   - Commit the documentation directly to the repository's default branch, and never push the ticket's branch or create or merge a pull request: the branch stands for the implementation that follows.
+
+5. **Land the Spec on the Ticket**
+   - When the design is settled, rewrite the ticket's body into the specification: the context, the decisions with their reasons, and the acceptance criteria.
+   - Keep the original request text, quoted, inside the new body.
+   - When the body cannot be edited, open a specification issue in the same repository, apply a spec:<new issue number> label to the ticket, and say so in your final message.
+
+6. **Mark the Ticket Ready**
+   - When - and only when - the specification is settled and the docs are committed, apply the ready-for-agent label to the ticket through gh.
+
+Repository: {repository}
+
+Previous session message (empty on a first session): {previous-message}'''
+
 # The merge is a plane action: the plane runs it without an
 # agent and without a worktree, and its transition takes the needs-work
 # path on a blocked merge and the empty facts on a landed one.
@@ -262,6 +321,18 @@ context-window = 272000
 # set conditions must all hold. Order decides: the first matching state
 # wins. A state with no task-type is a parking state: the plane suggests
 # nothing for it.
+# The spec position (ADR 0085, ADR 0086): an agreed ticket that needs a
+# specification before the work is worth implementing. It orders after the
+# ready-for-agent state, so a ticket carrying both labels rests at
+# ready-for-agent and is offered for implementation, not re-specified. The
+# ready-for-spec label is operator-owned: no transition writes it.
+[[states]]
+name = "ready-for-spec"
+task-type = "analyze"
+[states.match]
+source-kind = "github-issue"
+labels-any = ["ready-for-spec"]
+
 [[states]]
 name = "needs-work"
 task-type = "rework"
@@ -409,6 +480,7 @@ host = "github.com"
 | `model` | no | `default-model` | The Task profile's model: free text the resolved agent's model template renders, so that agent must define one. The override panel prefills it, and clearing that row leaves the model to the agent. |
 | `thinking` | no | - | The Task profile's thinking level: the level this task type's handoffs start on, and the starting value of the override panel's thinking row. It must be one of the profile agent's `thinking-values`. |
 | `context-window` | no | - | The Task profile's context window: a whole count of tokens, written as digits with no separators, that this task type's handoffs start their agent with. The profile agent must define a `context-window` template. There is no top-level default: a profile that names none leaves the room to the agent. |
+| `no-auto-decision` | no | `false` | The No-auto-decision flag (ADR 0085). When set, the automatic Completion rule parks every completion of the type for the operator ahead of its outcome checks: the ticket rests in `awaiting` in Auto-handoff mode, the environment and the agent stay untouched, and the operator's explicit close or route still runs. The auto top-up leaves the ticket alone: a continuation needs a transition that fired, and a parked ticket is not open. Allowed on both forms; the shipped `analyze` type is its only user. |
 | `transition` | no | none | The transition that fires when a turn of this type completes. |
 
 **`[consultation-types.<name>]`** (one table per Consultation type).
