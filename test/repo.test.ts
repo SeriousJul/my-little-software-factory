@@ -257,12 +257,34 @@ describe("resolveRepository", () => {
 		}
 		const sibling = join(home, "src", "billing_1");
 		expect(outcome.repository.path).toBe(sibling);
+		// The written key is the canonical identity, lowercase, whatever case
+		// the reference carried in.
 		expect(outcome.repository.notes?.mappingToWrite).toEqual({
-			repository: "acme/billing",
+			repository: "github.com/acme/billing",
 			path: sibling,
 		});
 		expect(outcome.repository.notes?.warning).toContain("acme/portal");
 		expect(runner.commands()).toContain(`git clone https://github.com/acme/billing.git ${sibling}`);
+	});
+
+	test("a mixed-case reference writes the lowercase canonical key", async () => {
+		// The regression of the stuck review (issue #192): a reference whose
+		// case differs from the canonical identity writes the key the sources'
+		// identities and the guide's rule name, not the operator's letters.
+		const home = tempHome();
+		const runner = new FakeRunner();
+		// The convention path stands under the reference's letters, holding a
+		// different tree: the resolver takes the sibling and writes the key.
+		checkout(home, "Billing", runner, "https://github.com/acme/portal.git");
+		const outcome = await resolveRepository("Acme/Billing", BASE_CONFIG, { runner, home });
+		expect(outcome.ok).toBe(true);
+		if (!outcome.ok) {
+			return;
+		}
+		expect(outcome.repository.notes?.mappingToWrite).toEqual({
+			repository: "github.com/acme/billing",
+			path: join(home, "src", "Billing_1"),
+		});
 	});
 
 	test("a convention path with no verifiable remote yields a sibling clone", async () => {
@@ -299,7 +321,7 @@ describe("resolveRepository", () => {
 		if (outcome.ok) {
 			expect(outcome.repository.path).toBe(join(home, "src", "billing_1"));
 			expect(outcome.repository.notes?.mappingToWrite).toEqual({
-				repository: "acme/billing",
+				repository: "github.com/acme/billing",
 				path: join(home, "src", "billing_1"),
 			});
 		}

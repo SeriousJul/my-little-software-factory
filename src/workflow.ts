@@ -35,6 +35,7 @@ import {
 	pullRequestCarriesWork,
 	readTicketOwnPullRequest,
 } from "./pull-request.ts";
+import { lookupRepositoryMapping } from "./repo.ts";
 import {
 	type CommandOptions,
 	type CommandResult,
@@ -784,7 +785,14 @@ export async function fireTransition(
 		const own = await readTicketOwnPullRequest(request.runner, request.config.sources, ticket);
 		const ownHead = own === null ? null : headBranchOf(own.memberships[0]?.attributes ?? {});
 		const ownBase = own === null ? null : (own.memberships[0]?.attributes.baseBranch ?? null);
-		const checkout = request.config.repos[ticket.repositoryRef.identity];
+		// The checkout by the plane's own resolution rule: the case-insensitive
+		// lookup over the identity and the display name the handoff and the
+		// init read, so a key the operator wrote in another case than the
+		// canonical identity still names its checkout.
+		const checkout = lookupRepositoryMapping(request.config.repos, [
+			ticket.repositoryRef.identity,
+			ticket.repositoryRef.displayName,
+		]);
 		const work =
 			own === null || ownHead === null || ownBase === null || checkout === undefined
 				? null

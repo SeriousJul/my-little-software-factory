@@ -2103,6 +2103,48 @@ describe("the pull request the plane opens (ADR 0076)", () => {
 		]);
 	});
 
+	test("a repos key in another case than the canonical identity still resolves the checkout", async () => {
+		// The regression of the stuck review: the operator's [repos] key carried
+		// the owner's letters, the ticket's identity the lowercase form, and the
+		// fire's exact index found no checkout and called the pull request empty.
+		// The fire reads the plane's own resolution rule, the case-insensitive
+		// lookup, so the key's case names its checkout the way every other read
+		// of [repos] does.
+		const mixedCaseConfig: FactoryConfig = {
+			...OPEN_CONFIG,
+			repos: { "github.com/Acme/factory": "/acme/factory" },
+		};
+		const state = seededState(issueTicketData());
+		const runner = new FakeRunner();
+		setOwnDraft(runner);
+		stubPullRequestWork(runner, true);
+		runner.set("gh", ["pr", "ready", "12", "--repo", "github.com/acme/factory"], { stdout: "" });
+
+		const outcome = await fireTransition({
+			config: mixedCaseConfig,
+			state,
+			runner,
+			ticketIdentity: issueIdentity,
+			taskType: "implement",
+		});
+
+		expect(outcome).toMatchObject({
+			fired: true,
+			reason: "",
+			pullRequestIdentity: OWN_PULL_IDENTITY,
+			positionTaskType: "review",
+			positionTicketIdentity: OWN_PULL_IDENTITY,
+		});
+		// The work test ran in the mapped checkout: the key's case cost nothing.
+		expect(runner.commands()).toEqual([
+			`gh ${OWN_PULLS_ARGS.join(" ")}`,
+			"git -C /acme/factory fetch origin factory/5-persist-source-facts main",
+			"git -C /acme/factory diff --quiet origin/main origin/factory/5-persist-source-facts",
+			"gh pr ready 12 --repo github.com/acme/factory",
+			"gh pr edit #12 --repo github.com/acme/factory --add-label ready-for-review",
+		]);
+	});
+
 	test("a head-branch read that finds no open pull request skips on the missing reason", async () => {
 		const state = seededState(issueTicketData());
 		const runner = new FakeRunner();

@@ -126,10 +126,7 @@ export async function resolveRepository(
 	const name = reference.displayName.split("/").pop() ?? reference.displayName;
 	// The short legacy key is accepted for current installations. New source
 	// data writes the host-qualified identity only.
-	const mapped = lookupRepositoryMapping(config.repos, [
-		reference.mappingKey,
-		reference.displayName,
-	]);
+	const mapped = lookupRepositoryMapping(config.repos, [reference.identity, reference.displayName]);
 	const path = mapped !== undefined ? expandHome(mapped, home) : join(home, "src", name);
 	const explicit = mapped !== undefined;
 
@@ -158,17 +155,21 @@ export async function resolveRepository(
 		ok: true,
 		repository: {
 			path: sibling.path,
-			notes: { mappingToWrite: { repository: reference.mappingKey, path: sibling.path }, warning },
+			notes: { mappingToWrite: { repository: reference.identity, path: sibling.path }, warning },
 		},
 	};
 }
 
+/**
+ * The key a new sibling clone writes to config: the canonical identity, the
+ * host, owner, and name in lowercase - the same string the sources write,
+ * so a key the plane generates and a key the operator writes by the guide's
+ * rule are one key.
+ */
 interface RepositoryReference {
 	identity: string;
 	displayName: string;
 	cloneUrl: string;
-	/** The key a new sibling clone writes to config. */
-	mappingKey: string;
 }
 
 function repositoryReference(repository: string | RepositoryRef): RepositoryReference {
@@ -177,14 +178,12 @@ function repositoryReference(repository: string | RepositoryRef): RepositoryRefe
 			identity: repository.identity.toLowerCase(),
 			displayName: repository.displayName,
 			cloneUrl: repository.cloneUrl,
-			mappingKey: repository.identity,
 		};
 	}
 	return {
 		identity: `github.com/${repository}`.toLowerCase(),
 		displayName: repository,
 		cloneUrl: githubCloneUrl(repository),
-		mappingKey: repository,
 	};
 }
 

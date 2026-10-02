@@ -375,10 +375,10 @@ acceleration = 0.8
 maximum-speed = 6
 
 [repos]
-"github.com/SeriousJul/my-little-software-factory" = "/home/seriousjul/src/my-little-software-factory"
+"github.com/seriousjul/my-little-software-factory" = "/home/seriousjul/src/my-little-software-factory"
 "github.com/seriousjul/pi-extensions" = "/home/seriousjul/src/pi-extensions"
-"github.com/SeriousJul/seriousjul.github.io" = "/home/seriousjul/src/seriousjul.github.io"
-"github.com/SeriousJul/yapdf" = "/home/seriousjul/src/yapdf2"
+"github.com/seriousjul/seriousjul.github.io" = "/home/seriousjul/src/seriousjul.github.io"
+"github.com/seriousjul/yapdf" = "/home/seriousjul/src/yapdf2"
 
 [[sources]]
 name = "factory-issues"
@@ -435,6 +435,45 @@ name = "SeriousJul/yapdf-pull-requests"
 kind = "github-pull-requests"
 refresh-interval-seconds = 60
 repositories = [ "SeriousJul/yapdf" ]
+
+[[sources]]
+name = "SeriousJul/seriousjul.github.io-issues"
+kind = "github-issues"
+refresh-interval-seconds = 60
+repositories = [ "SeriousJul/seriousjul.github.io" ]
+filter = "label:ready-for-agent"
+
+[[sources]]
+name = "SeriousJul/seriousjul.github.io-pull-requests"
+kind = "github-pull-requests"
+refresh-interval-seconds = 60
+repositories = [ "SeriousJul/seriousjul.github.io" ]
+
+[[sources]]
+name = "SeriousJul/pi-extensions-issues"
+kind = "github-issues"
+refresh-interval-seconds = 60
+repositories = [ "SeriousJul/pi-extensions" ]
+filter = "label:ready-for-agent"
+
+[[sources]]
+name = "SeriousJul/pi-extensions-pull-requests"
+kind = "github-pull-requests"
+refresh-interval-seconds = 60
+repositories = [ "SeriousJul/pi-extensions" ]
+
+[[sources]]
+name = "SeriousJul/yapdf-website-issues"
+kind = "github-issues"
+refresh-interval-seconds = 60
+repositories = [ "SeriousJul/yapdf-website" ]
+filter = "label:ready-for-agent"
+
+[[sources]]
+name = "SeriousJul/yapdf-website-pull-requests"
+kind = "github-pull-requests"
+refresh-interval-seconds = 60
+repositories = [ "SeriousJul/yapdf-website" ]
 
 [[states]]
 name = "ready-for-agent"
