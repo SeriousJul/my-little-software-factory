@@ -115,12 +115,16 @@ function success(tickets: FetchedTicket[]) {
 function reader(
 	agents: () => HerdrAgent[],
 	readPane?: (paneId: string, lines: number) => Promise<string | null>,
+	waitAgent?: (target: string, budgetMs: number) => Promise<{ matched: boolean }>,
 ): AgentReader {
 	return {
 		listAgents: async () => ({ kind: "ok", agents: agents() }),
 		// The AgentReader contract: pane output comes back ANSI stripped.
 		readPane:
 			readPane ?? (async (paneId) => stripAnsi(`\u001b[1mDone.\u001b[0m message of ${paneId}`)),
+		// Absent by default: the loop the tests drive is the poll-only ADR
+		// 0006 standing, and the wake tests opt in with their own wait.
+		...(waitAgent === undefined ? {} : { waitAgent }),
 	};
 }
 
@@ -165,7 +169,7 @@ function rig(options: {
 	autoOn?: boolean;
 	/** Override a config knob the awaiting and dispatch rules read. */
 	config?: Partial<FactoryConfig>;
-	agents?: HerdrAgent[];
+	agents?: HerdrAgent[] | (() => HerdrAgent[]);
 	readPane?: (paneId: string, lines: number) => Promise<string | null>;
 	/** The turn log the fake session reader returns. Null: no session log. */
 	turnLogs?: (
@@ -211,9 +215,18 @@ function rig(options: {
 		taskType: string;
 		agentType: string;
 	}) => Promise<TransitionOutcome | null>;
+	/**
+	 * The wake wait the reader answers (ADR 0084). Absent: the loop is
+	 * poll-only, and the wake arm stands down.
+	 */
+	waitAgent?: (target: string, budgetMs: number) => Promise<{ matched: boolean }>;
 }): Rig {
 	let nowMs = Date.parse("2026-08-31T11:00:00Z");
-	let agents = [...(options.agents ?? [])];
+	let agents = typeof options.agents === "function" ? [] : [...(options.agents ?? [])];
+	// A function form answers the probe itself, so a test can count its
+	// calls the way the wake tests do.
+	const agentsFn = typeof options.agents === "function" ? options.agents : null;
+	const probeAgents = (): HerdrAgent[] => (agentsFn !== null ? agentsFn() : agents);
 	// The state and the loop share the clock, so a handoff's age is
 	// deterministic: advance() ages it.
 	const state = openFactoryState(":memory:", () => nowMs);
@@ -231,7 +244,7 @@ function rig(options: {
 	const cleanups: Rig["cleanups"] = [];
 	const coordinator = new ObservationCoordinator({
 		state,
-		herdr: reader(() => agents, options.readPane),
+		herdr: reader(probeAgents, options.readPane, options.waitAgent),
 		turnLogs: {
 			read: options.turnLogs ?? (async () => ({ kind: "unavailable" })),
 		},
@@ -4763,5 +4776,169 @@ describe("the re-fired skip's route (ADR 0042)", () => {
 		await coordinator.tick();
 		expect(routeAsks(intents)).toBe(0);
 		state.close();
+	});
+});
+
+describe("the agent wake wait (ADR 0084)", () => {
+	const identity = "github:github.com:I_5";
+	const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+	/**
+	 * One wake fake: the wait targets it was armed on, in arm order, and the
+	 * fires a test answers them in the same order.
+	 */
+	function wakeFake() {
+		const targets: string[] = [];
+		const waiters: Array<(matched: boolean) => void> = [];
+		return {
+			targets,
+			arming: () => waiters.length,
+			fire: (matched: boolean) => {
+				const next = waiters.shift();
+				if (next === undefined) throw new Error("no wake wait is pending");
+				next(matched);
+			},
+			option: (target: string) =>
+				new Promise<{ matched: boolean }>((resolve) => {
+					targets.push(target);
+					waiters.push((matched: boolean) => resolve({ matched }));
+				}),
+		};
+	}
+
+	test("a settle state match runs a cycle now, so the turn settles without a poll", async () => {
+		const wake = wakeFake();
+		const fake = rig({
+			agents: [agent("pane-implement", "working")],
+			waitAgent: wake.option,
+		});
+		handOut(fake.state, identity);
+		fake.advance(STARTUP_GRACE_MS + 1);
+		await fake.coordinator.tick();
+		// The cycle saw the working agent: the wait is armed on the agent's
+		// name, the identity the live agent belongs to by.
+		expect(wake.targets).toEqual([fake.state.agentNameForTicket(identity)]);
+		// The agent finishes its turn between polls. The wake is the cycle.
+		fake.setAgents([agent("pane-implement", "idle")]);
+		wake.fire(true);
+		await sleep(10);
+		expect(fake.state.ticketsByState(["awaiting"]).some((t) => t.ticketIdentity === identity)).toBe(
+			true,
+		);
+		fake.coordinator.stop();
+		fake.state.close();
+	});
+
+	test("the wait arms on the working report only: a booted idle agent holds no wait", async () => {
+		const wake = wakeFake();
+		const fake = rig({
+			agents: [agent("pane-implement", "idle")],
+			waitAgent: wake.option,
+		});
+		handOut(fake.state, identity);
+		fake.advance(STARTUP_GRACE_MS + 1);
+		await fake.coordinator.tick();
+		// An idle report inside the startup grace is a boot, not a settle:
+		// arming on it would match at once, in a loop the poll never had.
+		expect(wake.targets).toEqual([]);
+		fake.setAgents([agent("pane-implement", "working")]);
+		await fake.coordinator.tick();
+		expect(wake.targets).toEqual([fake.state.agentNameForTicket(identity)]);
+		fake.coordinator.stop();
+		fake.state.close();
+	});
+
+	test("a missing agent holds no wait", async () => {
+		const wake = wakeFake();
+		const fake = rig({ agents: [], waitAgent: wake.option });
+		handOut(fake.state, identity);
+		fake.advance(STARTUP_GRACE_MS + 1);
+		await fake.coordinator.tick();
+		expect(wake.targets).toEqual([]);
+		fake.coordinator.stop();
+		fake.state.close();
+	});
+
+	test("one wait per agent across cycles, and a settled ticket drops its arm", async () => {
+		const wake = wakeFake();
+		const fake = rig({
+			agents: [agent("pane-implement", "working")],
+			waitAgent: wake.option,
+		});
+		handOut(fake.state, identity);
+		fake.advance(STARTUP_GRACE_MS + 1);
+		await fake.coordinator.tick();
+		await fake.coordinator.tick();
+		// The armed wait is held, not re-armed: the second cycle adds none.
+		expect(wake.targets).toHaveLength(1);
+		// The wait answers with the settle: the turn settles, and the ticket
+		// rests out of in-flight, so the next cycle arms nothing on it.
+		fake.setAgents([agent("pane-implement", "idle")]);
+		wake.fire(true);
+		await sleep(10);
+		await fake.coordinator.tick();
+		expect(wake.targets).toHaveLength(1);
+		fake.coordinator.stop();
+		fake.state.close();
+	});
+
+	test("a failed wait wakes nothing, and the next cycle re-arms it", async () => {
+		let listCalls = 0;
+		const wake = wakeFake();
+		const fake = rig({
+			agents: () => {
+				listCalls += 1;
+				return [agent("pane-implement", "working")];
+			},
+			waitAgent: wake.option,
+		});
+		handOut(fake.state, identity);
+		fake.advance(STARTUP_GRACE_MS + 1);
+		await fake.coordinator.tick();
+		expect(wake.targets).toHaveLength(1);
+		expect(listCalls).toBe(1);
+		// A missing agent, a herdr failure, and a budget timeout all answer
+		// unmatched: a wake on none of them would run a cycle that re-arms the
+		// same failed wait, in a loop.
+		wake.fire(false);
+		await sleep(10);
+		expect(listCalls).toBe(1);
+		expect(fake.state.ticketsByState(["awaiting"]).some((t) => t.ticketIdentity === identity)).toBe(
+			false,
+		);
+		// The failed wait is down; the next successful cycle re-arms it.
+		await fake.coordinator.tick();
+		expect(wake.targets).toHaveLength(2);
+		fake.coordinator.stop();
+		fake.state.close();
+	});
+});
+
+describe("HerdrAgentReader.waitAgent", () => {
+	const waitArgs = [
+		"agent",
+		"wait",
+		"the-agent",
+		"--until",
+		"idle",
+		"--until",
+		"done",
+		"--until",
+		"blocked",
+	];
+
+	test("pins the herdr wait command and reads the state match", async () => {
+		const runner = new FakeRunner();
+		runner.set("herdr", waitArgs, { stdout: "{}" });
+		const result = await new HerdrAgentReader(runner).waitAgent("the-agent", 1500);
+		expect(result).toEqual({ matched: true });
+		expect(runner.commands()).toEqual([`herdr ${waitArgs.join(" ")}`]);
+	});
+
+	test("an unmatched exit is a failed wait", async () => {
+		const runner = new FakeRunner();
+		runner.set("herdr", waitArgs, { code: 1, stderr: "agent target the-agent not found" });
+		const result = await new HerdrAgentReader(runner).waitAgent("the-agent", 1500);
+		expect(result).toEqual({ matched: false });
 	});
 });

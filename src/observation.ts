@@ -53,6 +53,11 @@
  *    one of those walks, its own flag or its source's mute, and it stays out
  *    while its row shows again for live work or a decision owed: the flag
  *    holds the machine out, and only the operator's own key clears it.
+ * 7. The wake (ADR 0084): an in-flight agent the probe shows working arms
+ *    a blocking `herdr agent wait` on the agent's name, and the wait's
+ *    state match runs a cycle now instead of at the next poll, so a
+ *    finished turn settles without waiting out the interval. A failed
+ *    wait wakes nothing: the poll stands as it always did.
  *
  * When herdr cannot be listed at all, the loop pauses and holds: the last
  * known facts stay, and the UI warns. Nothing is re-run blindly on
@@ -101,14 +106,36 @@ export type AgentStatus = "working" | "done" | "idle" | "blocked" | "unknown";
  */
 export const STARTUP_GRACE_MS = 30_000;
 
+/**
+ * The command budget of one agent wake wait (ADR 0084).
+ *
+ * `herdr agent wait` exits on a state match or on its own error, so the
+ * budget only bounds a wait that runs on after its ticket leaves in-flight
+ * or the plane stops: a bounded orphan. A budget that runs out mid-turn is
+ * an unmatched wait: the next successful cycle re-arms the still-working
+ * agent, so a long turn loses no wake.
+ */
+export const AGENT_WAIT_BUDGET_MS = 15 * 60 * 1000;
+
 /** The result of asking herdr for its agents. */
 export type HerdrProbe = { kind: "ok"; agents: HerdrAgent[] } | { kind: "error"; reason: string };
+
+/** The answer of one agent wake wait (ADR 0084). */
+export type AgentWaitResult = { matched: boolean };
 
 /** The read-side of herdr the loop uses. Tests inject a fake here. */
 export interface AgentReader {
 	listAgents(): Promise<HerdrProbe>;
 	/** The pane's recent output in text format, unwrapped, capped and ANSI stripped. Null when it cannot be read. */
 	readPane(paneId: string, lines: number): Promise<string | null>;
+	/**
+	 * Wait until the agent named `target` reaches a settle state, or the
+	 * budget runs out. `matched` is true only when the wait answered with a
+	 * state match: a missing agent, a herdr failure, and a budget timeout
+	 * are all unmatched. Optional: a reader without it leaves the loop
+	 * poll-only, the ADR 0006 standing (ADR 0084).
+	 */
+	waitAgent?(target: string, budgetMs: number): Promise<AgentWaitResult>;
 }
 
 /**
@@ -204,6 +231,21 @@ export class HerdrAgentReader implements AgentReader {
 
 	async readPane(paneId: string, lines: number): Promise<string | null> {
 		return this.readPaneFormat(paneId, lines, "recent-unwrapped", "text");
+	}
+
+	/**
+	 * The wake wait (ADR 0084): block until the agent named `target` reaches
+	 * one of the settle states. The until set is pinned, not left to herdr's
+	 * default, so a herdr version that changes its default cannot change the
+	 * plane's wake standing.
+	 */
+	async waitAgent(target: string, budgetMs: number): Promise<AgentWaitResult> {
+		const result = await this.runner.run(
+			"herdr",
+			["agent", "wait", target, "--until", "idle", "--until", "done", "--until", "blocked"],
+			{ timeoutMs: budgetMs },
+		);
+		return { matched: result.code === 0 };
 	}
 
 	/** Read the visible ANSI terminal for Agent interaction mode. */
@@ -457,6 +499,12 @@ export class ObservationCoordinator {
 	private lastAgentsList: readonly HerdrAgent[] | null = null;
 	/** In-flight tickets the loop already restarted this episode. */
 	private readonly restarted = new Set<string>();
+	/**
+	 * The armed wake waits, keyed on the agent's name (ADR 0084). A name in
+	 * the set holds a `herdr agent wait`; the entry leaves when the wait
+	 * answers, whatever it answered.
+	 */
+	private readonly agentWaits = new Map<string, Promise<void>>();
 
 	/**
 	 * The agents of the last successful `agent list`, or null before the
@@ -701,6 +749,13 @@ export class ObservationCoordinator {
 		// the shared count above (ADR 0034).
 		const consultationChanged = await this.observeConsultations(probe.agents);
 		changed = consultationChanged || changed;
+
+		// The wake arm (ADR 0084): every in-flight agent the probe shows
+		// working holds a `herdr agent wait` on its name, and the wait's
+		// match runs a cycle now, so a finished turn settles without
+		// waiting out the interval. The poll keeps its standing: a wake
+		// only runs the same cycle on the same facts.
+		this.armAgentWaits(probe.agents);
 		// The Dispatch pause is derived from the traces each cycle and never
 		// stored (ADR 0016). The Message line reports it when it trips and when
 		// it clears, so the operator hears about the factory stopping and
@@ -719,6 +774,53 @@ export class ObservationCoordinator {
 		}
 		if (changed) this.onChanged();
 		this.onAgents?.(probe.agents);
+	}
+
+	/**
+	 * The wake arm of a successful cycle (ADR 0084): for every in-flight
+	 * ticket whose own agent the probe shows working, hold a `herdr agent
+	 * wait` on the agent's name until the wait answers.
+	 *
+	 * The arm is on the working report, not on the in-flight state: a
+	 * booted agent reports idle before it picks up the prompt, and a wait
+	 * on such an agent answers at once, so an arm on the state would run a
+	 * cycle at once, in a loop the poll interval never had. A working
+	 * agent stays working until the turn ends, so the wait held from the
+	 * working report blocks exactly until the settle.
+	 *
+	 * The wait targets the agent's name, the identity a live agent belongs
+	 * to by (ADR 0043): a pane id is not an identity, herdr hands closed
+	 * ids out again. A missing agent is an unmatched wait: it wakes nothing,
+	 * and the missing path keeps the poll's own pace.
+	 */
+	private armAgentWaits(agents: readonly HerdrAgent[]): void {
+		const wait = this.herdr.waitAgent;
+		if (wait === undefined || this.stopped) return;
+		const byPane = new Map<string, HerdrAgent>();
+		for (const agent of agents) byPane.set(agent.paneId, agent);
+		for (const ticket of this.state.ticketsByState(["handed-off", "running"])) {
+			if (ticket.paneId === null) continue;
+			const name = this.state.agentNameForTicket(ticket.ticketIdentity);
+			if (name === "") continue;
+			if (this.agentWaits.has(name)) continue;
+			const own = ownAgentInPane(byPane.get(ticket.paneId), name);
+			if (own === null || normalizeAgentStatus(own.status) !== "working") continue;
+			const entry = (async () => {
+				try {
+					// The call keeps the reader bound: the reader is a class,
+					// and the method reads its runner through the receiver.
+					const result = await wait.call(this.herdr, name, AGENT_WAIT_BUDGET_MS);
+					// Only a state match is a wake: a missing agent, a herdr
+					// failure, and a budget timeout carry no news, and a wake
+					// on none of them would run a cycle that re-arms the same
+					// failed wait, in a loop.
+					if (result.matched && !this.stopped) await this.safeCycle();
+				} finally {
+					this.agentWaits.delete(name);
+				}
+			})();
+			this.agentWaits.set(name, entry);
+		}
 	}
 
 	/**
