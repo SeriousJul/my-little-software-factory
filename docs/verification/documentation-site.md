@@ -64,9 +64,13 @@ behavior.
 
 ## What was verified on the pull request
 
-- The CI `checks` and `site-build` jobs on the pull request head. The
-  `site-build` job runs the same `bun run docs:build` command as the local
-  build above. Recorded here when the run on the current head has passed.
+- The CI `checks` and `site-build` jobs on the pull request head
+  (`34bfa05`): both passed (run 36987582022, 2026-10-02). The `site-build`
+  job runs the same `bun run docs:build` command as the local build above.
+  The head is a merge of the branch with `main`, which had moved on after the
+  branch was cut; the one file both sides touched, the completion page, keeps
+  the usage rewrite, since the sentence `main` added there is the polling
+  mechanic that ADR 0084 already carries.
 
 ## What was verified on the deployed site
 
