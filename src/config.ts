@@ -89,6 +89,15 @@ export interface TaskTypeConfig {
 	 */
 	opensPullRequest?: boolean;
 	/**
+	 * The No-auto-decision flag (ADR 0085): when set, the automatic Completion
+	 * rule parks every completion of the type for the operator ahead of its
+	 * outcome checks: the ticket rests in `awaiting`, the environment and the
+	 * agent stay untouched, and the operator's explicit close or route still
+	 * runs. Allowed on both forms; the action form's standing automatic
+	 * behavior is unused with it in the shipped config.
+	 */
+	noAutoDecision?: boolean;
+	/**
 	 * The Transition that hangs off this task type (ADR 0027): the label facts
 	 * a completed turn of it writes, and where the ticket goes by judgment.
 	 * Omitted: the type completes without a transition. On the action form
@@ -942,7 +951,7 @@ function validateTaskTypes(
 			// and the transition its outcome fires. No profile keys: the
 			// action holds no settings an operator edits before a run.
 			for (const key of Object.keys(raw))
-				if (!["action", "method", "transition"].includes(key))
+				if (!["action", "method", "transition", "no-auto-decision"].includes(key))
 					throw new ConfigError(
 						`config: ${where}: unknown key "${key}"; the action form takes no profile keys`,
 					);
@@ -960,7 +969,13 @@ function validateTaskTypes(
 					);
 				method = named;
 			}
-			out[name] = { action, method, ...(transition === undefined ? {} : { transition }) };
+			const noAutoDecision = optionalBooleanField(raw, "no-auto-decision", where);
+			out[name] = {
+				action,
+				method,
+				...(transition === undefined ? {} : { transition }),
+				...(noAutoDecision === undefined ? {} : { noAutoDecision }),
+			};
 			continue;
 		}
 		for (const key of Object.keys(raw))
@@ -973,6 +988,7 @@ function validateTaskTypes(
 					"context-window",
 					"transition",
 					"opens-pull-request",
+					"no-auto-decision",
 				].includes(key)
 			)
 				throw new ConfigError(`config: ${where}: unknown key "${key}"`);
@@ -985,6 +1001,9 @@ function validateTaskTypes(
 				throw new ConfigError(`config: ${where}.opens-pull-request: must be a boolean`);
 			opensPullRequest = raw["opens-pull-request"] === true;
 		}
+		// The No-auto-decision flag (ADR 0085): a boolean either form carries;
+		// omitted or false lets the automatic rule run as it did.
+		const noAutoDecision = optionalBooleanField(raw, "no-auto-decision", where);
 		for (const placeholder of placeholderNames(template)) {
 			if (!PROMPT_PLACEHOLDERS.includes(placeholder)) {
 				throw new ConfigError(
@@ -1026,6 +1045,7 @@ function validateTaskTypes(
 			...(contextWindow === undefined ? {} : { contextWindow }),
 			...(transition === undefined ? {} : { transition }),
 			...(opensPullRequest ? { opensPullRequest } : {}),
+			...(noAutoDecision === undefined ? {} : { noAutoDecision }),
 		};
 	}
 	return out;
@@ -1601,6 +1621,22 @@ function nonNegativeFiniteNumberField(
 	return value;
 }
 
+/**
+ * An optional boolean field on a named table: absent takes no value, a value
+ * that is not a boolean is a startup error. The No-auto-decision key on the
+ * task type forms reads through it (ADR 0085).
+ */
+function optionalBooleanField(
+	record: Record<string, unknown>,
+	key: string,
+	where: string,
+): boolean | undefined {
+	if (record[key] === undefined) return undefined;
+	if (record[key] !== true && record[key] !== false)
+		throw new ConfigError(`config: ${where}.${key}: must be a boolean`);
+	return record[key] as boolean;
+}
+
 /** A positive-number top-level key; absent takes the default. */
 function positiveNumberField(record: Record<string, unknown>, key: string, def: number): number {
 	const value = record[key];
@@ -1660,6 +1696,9 @@ export function configToToml(config: FactoryConfig): string {
 						...(task.opensPullRequest === undefined
 							? {}
 							: { "opens-pull-request": task.opensPullRequest }),
+						...(task.noAutoDecision === undefined
+							? {}
+							: { "no-auto-decision": task.noAutoDecision }),
 						...(task.transition === undefined
 							? {}
 							: { transition: transitionToToml(task.transition) }),

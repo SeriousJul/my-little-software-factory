@@ -177,6 +177,8 @@ function stubCheckout(app: SeededApp): void {
 interface SeedDetail {
 	/** The transition outcome to store on the settled turn; no transition when absent. */
 	transition?: TransitionOutcome | null;
+	/** The task type the seeded turn ran under; the automatic rule's No-auto-decision check reads it (ADR 0085). */
+	taskType?: string;
 	message?: string;
 	model?: string;
 	thinking?: string;
@@ -230,7 +232,7 @@ function seed(
 			{
 				agentType: "pi",
 				environment,
-				taskType: "implement",
+				taskType: detail.taskType ?? "implement",
 				model: detail.model ?? "",
 				thinking: detail.thinking ?? "",
 				contextWindow: detail.contextWindow ?? "",
@@ -247,7 +249,7 @@ function seed(
 			state.settleTurn({
 				ticketIdentity: identity,
 				handoffId: claim.claim.attemptId,
-				taskType: "implement",
+				taskType: detail.taskType ?? "implement",
 				agentType: "pi",
 				message,
 				turnLog: detail.turnLog ?? [{ kind: "text", text: message }],
@@ -3905,6 +3907,173 @@ describe("the auto decision", () => {
 			WIDTH,
 			HEIGHT,
 			propsOf(app),
+		);
+		app.state.close();
+	});
+});
+
+describe("the no-auto-decision type parks its completions for the operator (ADR 0085)", () => {
+	// The config the park cases run on: the seeded app's own types, with the
+	// analyze type the shipped configuration carries - no transition, the
+	// no-auto-decision flag on - beside the implement control.
+	const withAnalyze: Partial<FactoryConfig> = {
+		taskTypes: {
+			...BASE_CONFIG.taskTypes,
+			implement: {
+				...BASE_CONFIG.taskTypes.implement,
+				transition: { ticketFacts: ["ready-for-review"], pullRequestFacts: [] },
+			},
+			analyze: {
+				template:
+					"Analyze the following {source-kind}.\n\nRepository: {repository}\n\n" +
+					"{external-key}: {title}\n\nURL: {source-url}\n\nLabels: {labels}\n\nDescription:\n{description}",
+				noAutoDecision: true,
+			},
+		},
+	};
+
+	test("a parked turn rests in awaiting across cycles while the session stays alive", async () => {
+		const app = seededAppInAutoMode("awaiting", withAnalyze, success, "live-worktree", {
+			taskType: "analyze",
+		});
+		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+
+		await withApp(
+			async (setup) => {
+				app.src.settle(success);
+				await awaitFrame(setup, (f) => ticketRow(f).includes("[awaiting]"), "the parked ticket");
+				// The park stands ahead of the outcome checks: a completion
+				// without a transition - the case that would close - rests in
+				// awaiting, undecided, and the environment stays untouched.
+				expect(app.state.ticketState(identity)).toBe("awaiting");
+				expect(app.state.lastCompletion(identity)?.decision).toBeNull();
+				// Cycles keep coming, and the parked turn keeps resting: no tab
+				// close kills the live session, no handoff takes the ticket, and
+				// the queue holds nothing for it - a continuation needs a
+				// transition that fired, and a parked ticket is not open.
+				await sleep(150);
+				expect(app.state.ticketState(identity)).toBe("awaiting");
+				expect(app.state.lastCompletion(identity)?.decision).toBeNull();
+				expect(app.state.workQueue()).toHaveLength(0);
+				const commands = app.runner.commands();
+				expect(commands.filter((c) => c.startsWith("herdr tab close"))).toHaveLength(0);
+				expect(commands.filter((c) => c.startsWith("herdr agent start"))).toHaveLength(0);
+			},
+			WIDTH,
+			HEIGHT,
+			{ ...propsOf(app), pollIntervalMs: 40 },
+		);
+		app.state.close();
+	});
+
+	test("a control type with no transition still closes its turn: the flag is the only difference", async () => {
+		const app = seededAppInAutoMode("awaiting", withAnalyze, success, "live-worktree");
+		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+
+		await withApp(
+			async (setup) => {
+				app.src.settle(success);
+				await awaitFrame(setup, (f) => ticketRow(f).includes("[open]"), "the auto-closed ticket");
+				// implement carries the flag off, and no transition fired: the
+				// automatic rule closes the turn, the way it did before the flag
+				// existed, in a config that also carries the analyze type.
+				expect(app.state.ticketState(identity)).toBe("open");
+				expect(app.state.lastCompletion(identity)?.decision).toBe("auto-closed");
+				expect(app.runner.commands()).toContain("herdr tab close tab-1");
+			},
+			WIDTH,
+			HEIGHT,
+			propsOf(app),
+		);
+		app.state.close();
+	});
+
+	test("the operator's explicit close ends the parked turn, and the ticket re-derives to open", async () => {
+		const app = seededAppInAutoMode("awaiting", withAnalyze, success, "live-worktree", {
+			taskType: "analyze",
+		});
+		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+
+		await withApp(
+			async (setup) => {
+				app.src.settle(success);
+				await awaitFrame(setup, (f) => ticketRow(f).includes("[awaiting]"), "the parked ticket");
+				// The operator's close is the gate from the parked turn to
+				// whatever the ticket's new position offers next (ADR 0085): the
+				// refresh after the settle carries the ready-for-agent label the
+				// settling agent applied (ADR 0086), and the ticket's position
+				// re-derives where the machine offers it next - open, and ready
+				// to be offered for implementation.
+				const opened = await openSurface(setup, "w", "the Close confirmation", (f) =>
+					f.includes("Close: Persist source facts"),
+				);
+				expect(frameText(opened)).toContain("The closed decision lands on the settled turn.");
+				await confirmPanel(setup, "the close", (f) => ticketRow(f).includes("[open]"));
+				expect(app.state.lastCompletion(identity)?.decision).toBe("closed");
+				expect(app.state.ticketState(identity)).toBe("open");
+				expect(app.runner.commands()).toContain("herdr tab close tab-1");
+			},
+			WIDTH,
+			HEIGHT,
+			propsOf(app),
+		);
+		app.state.close();
+	});
+
+	test("the awaiting ticket reopens when its agent reports working again, and parks again on the next settle", async () => {
+		const app = seededAppInAutoMode("awaiting", withAnalyze, success, "live-worktree", {
+			taskType: "analyze",
+			stateNow: () => Date.now() - 600_000,
+		});
+		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+
+		await withApp(
+			async (setup) => {
+				app.src.settle(success);
+				await awaitFrame(setup, (f) => ticketRow(f).includes("[awaiting]"), "the parked ticket");
+				// The operator answers the agent's questions in the live
+				// session: the agent works again, and the plane reopens the
+				// ticket - the parked turn's session survived the round.
+				app.runner.set("herdr", ["agent", "list"], {
+					stdout: agentListJson([
+						{
+							paneId: "pane-1",
+							tabId: "tab-1",
+							workspaceId: "ws-1",
+							agent: "persist-source-facts",
+							status: "working",
+						},
+					]),
+				});
+				await awaitFrame(setup, (f) => ticketRow(f).includes("[running]"), "the reopened ticket");
+				expect(app.state.ticketState(identity)).toBe("running");
+				// The session's next settle refreshes the trace in place: still
+				// parked, still undecided, still holding its session.
+				app.runner.set("herdr", ["agent", "list"], {
+					stdout: agentListJson([
+						{
+							paneId: "pane-1",
+							tabId: "tab-1",
+							workspaceId: "ws-1",
+							agent: "persist-source-facts",
+							status: "idle",
+						},
+					]),
+				});
+				await awaitFrame(
+					setup,
+					(f) => ticketRow(f).includes("[awaiting]"),
+					"the settled ticket, parked again",
+				);
+				expect(app.state.ticketState(identity)).toBe("awaiting");
+				expect(app.state.lastCompletion(identity)?.decision).toBeNull();
+				expect(app.runner.commands().filter((c) => c.startsWith("herdr tab close"))).toHaveLength(
+					0,
+				);
+			},
+			WIDTH,
+			HEIGHT,
+			{ ...propsOf(app), pollIntervalMs: 40 },
 		);
 		app.state.close();
 	});

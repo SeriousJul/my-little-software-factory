@@ -39,8 +39,9 @@
  *    awaiting tickets (ADR 0051): the completions the machine resolves
  *    close their cycle, and a completion that offers a continuation rests
  *    in awaiting for the top-up: a held turn, a transition whose label
- *    write failed, and a same-type hold park the ticket for the operator,
- *    and a routable ticket's route is the top-up's continuation item.
+ *    write failed, a same-type hold, and a No-auto-decision type park the
+ *    ticket for the operator (ADR 0085), and a routable ticket's route is
+ *    the top-up's continuation item.
  * 5. The Work queue's pickup (ADR 0049): the items the free seats take, in
  *    queue order, run before the top-up. Every pickup ends in start or
  *    drop, so the queue never sits stuck.
@@ -1241,7 +1242,8 @@ export class ObservationCoordinator {
 	 * machine closes the completions it resolves - a turn whose task type
 	 * offers no continuation, a transition into a parking state, a route
 	 * degraded at the handoff limit - and parks the rest: a held turn, a
-	 * transition whose label write failed, and a same-type hold. A routable
+	 * transition whose label write failed, a same-type hold, and a completion
+	 * of a No-auto-decision type (ADR 0085). A routable
 	 * completion decides nothing here: its route is the top-up's
 	 * continuation, and the top-up's one item at a time is the wait the
 	 * queue holds.
@@ -1259,7 +1261,11 @@ export class ObservationCoordinator {
 		// explicit close or route still works. The ticket rests in awaiting
 		// until then.
 		if (isHeldCompletion(completion)) return false;
-		const decision = this.decideAwaiting(this.state.handoffCount(ticket.ticketIdentity), outcome);
+		const decision = this.decideAwaiting(
+			this.state.handoffCount(ticket.ticketIdentity),
+			outcome,
+			completion?.taskType ?? "",
+		);
 		// The one route rule, read at both walks (ADR 0051): this walk closes
 		// what the machine resolves, and `continuationPosition` asks the same
 		// answer for what it enqueues. A `route` rests for the top-up and a
@@ -1291,6 +1297,11 @@ export class ObservationCoordinator {
 	 * gates it, and a manual completion that is neither auto-advance nor
 	 * auto-handoff rests in awaiting for the operator's decision.
 	 *
+	 * The No-auto-decision type (ADR 0085) parks ahead of every outcome
+	 * check: a live session the parked turn holds stays untouched, and the
+	 * operator's close is the gate from its turn to whatever the ticket's new
+	 * position offers next.
+	 *
 	 * The machine acts only where it is sure: a turn whose task type offers no
 	 * continuation closes its cycle, and a transition that advanced into a
 	 * parking state closes it, leaving the ticket in the state where a human
@@ -1299,7 +1310,12 @@ export class ObservationCoordinator {
 	 * closes: the plane does not route from labels it did not write, and the
 	 * ticket rests in awaiting for the operator's Decision screen.
 	 */
-	decideAwaiting(handoffCount: number, outcome: TransitionOutcome | null): AwaitingDecision {
+	decideAwaiting(
+		handoffCount: number,
+		outcome: TransitionOutcome | null,
+		taskType: string,
+	): AwaitingDecision {
+		if (this.config().taskTypes[taskType]?.noAutoDecision === true) return "park";
 		if (outcome === null || outcome.fired !== true) return "close";
 		// A label write the plane did not make holds the turn for the operator,
 		// whether or not the transition would have advanced.
@@ -1785,7 +1801,13 @@ export class ObservationCoordinator {
 			return null;
 		}
 		if (completion.decision !== null && outcome?.routeRemoved === true) return null;
-		if (this.decideAwaiting(this.state.handoffCount(ticket.identity), outcome) !== "route")
+		if (
+			this.decideAwaiting(
+				this.state.handoffCount(ticket.identity),
+				outcome,
+				completion.taskType,
+			) !== "route"
+		)
 			return null;
 		// The rule says a position exists; only this walk needs its identity to
 		// read the row, so the check stays here.
