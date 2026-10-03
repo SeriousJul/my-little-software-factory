@@ -130,16 +130,23 @@ description: The module map of the source tree, for agents working in this repos
 	command sequence through herdr, starts the agent, and sends the prompt.
 - `src/consultation/`: the Consultation rules that need no terminal, one module
 	per concept (issue #203, ADR 0096). `response-draft.ts` owns the input limit,
-	the emptiness rule, the size reason, the literal-text rule, the paste
-	sanitizing rule, and the bounded text rule a Replacement Consultation's
-	recovery context is built with; the launcher, the Response editor, the Send
-	action, and the Consultation record aggregate's recovery read all ask it, and
-	none of them keeps a copy. `agent-input.ts` owns the Agent interaction key
-	translation and its ordered input queue with its text batching bound.
+	the emptiness rule, the size reason, the literal-text rule, and the bounded
+	text rule a Replacement Consultation's recovery context is built with; the
+	launcher, the Response editor, the Send action, and the Consultation record
+	aggregate's recovery read all ask it, and none of them keeps a copy. The
+	shared field's paste path is not one of its callers: it strips terminal
+	sequences with `stripAnsiSequences` from `@opentui/core`, and ADR 0014 keeps
+	that path in the shared control library (ADR 0096). `agent-input.ts` owns the
+	Agent interaction key translation and its ordered input queue with its text
+	batching bound.
 	`checkout-safety.ts` owns the Repository catalog, the explicit mapping check,
 	and the Live checkout conflict set. `warning-facts.ts` owns the Stale Agent
 	output warning in both spellings and the warning a failed or aborted turn
 	leaves. Each module's interface holds only its concept's rules.
+- `src/text-bounds.ts`: the UTF-8 byte measure and the two cuts that hold a text
+	to a byte bound. The Response draft rules and the Consultation record
+	aggregate's snapshot bound both read them instead of each keeping a copy
+	(issue #203 review).
 - `src/operation-serializer.ts`: the per-Repository lock. Work on one Repository
 	is serialized and work on another never waits behind it. It is a concurrency
 	control, not a Consultation rule, so it stands outside `src/consultation/`.

@@ -2,20 +2,22 @@
  * The Response draft module: the rules one operator draft is judged by.
  *
  * The input limit, the emptiness rule, the size reason, the literal-text rule,
- * the paste sanitizing rule, and the bounded text rule have one owner here. The
- * launcher's initial input, the Response field's own size word, the Send
- * action's refusal, the shared field's paste path, and the state module's
- * recovery read all ask this module, and none of them keeps a copy of a rule
- * (issue #203).
+ * and the bounded text rule have one owner here. The launcher's initial input,
+ * the Response field's own size word, the Send action's refusal, and the state
+ * module's recovery read all ask this module, and none of them keeps a copy of
+ * a rule (issue #203).
+ *
+ * The shared field's paste path is not one of those callers. It removes terminal
+ * sequences with `stripAnsiSequences` from `@opentui/core`, and ADR 0014 keeps
+ * that path inside the shared control library. The plane's literal-text rule and
+ * that library rule are two rules with two owners; ADR 0096 records that this
+ * split did not close it.
  */
+
+import { utf8ByteLength, utf8Prefix } from "../text-bounds.ts";
 
 /** The UTF-8 bound every operator draft is measured against. */
 export const CONSULTATION_INPUT_LIMIT = 64 * 1024;
-
-/** Return the UTF-8 size of operator input. */
-export function utf8ByteLength(value: string): number {
-	return Buffer.byteLength(value, "utf8");
-}
 
 /** Validate input without changing it, so an oversized draft stays editable. */
 export function validateConsultationInput(
@@ -62,30 +64,6 @@ export function isLiteralText(value: string): boolean {
 }
 
 /**
- * A bracketed paste arrives as raw terminal bytes and may carry terminal
- * sequences alongside the text. The sequences are removed first (CSI such as
- * color, OSC such as title, and the other two-byte escapes), then the literal
- * rule applies per character, so a pasted draft keeps its newlines and tabs
- * and never carries terminal control into the agent's prompt.
- */
-const TERMINAL_ESC = String.fromCharCode(27);
-const TERMINAL_BEL = String.fromCharCode(7);
-const CSI_SEQUENCE = new RegExp(`${TERMINAL_ESC}\\[[0-?]*[ -/]*[@-~]`, "gu");
-const OSC_SEQUENCE = new RegExp(
-	`${TERMINAL_ESC}\\][^${TERMINAL_ESC}${TERMINAL_BEL}]*(?:${TERMINAL_ESC}\\\\|${TERMINAL_BEL})?`,
-	"gu",
-);
-const TWO_BYTE_ESCAPE = new RegExp(`${TERMINAL_ESC}[\\u0040-\\u005f]`, "gu");
-
-export function sanitizePastedText(value: string): string {
-	const withoutSequences = value
-		.replace(CSI_SEQUENCE, "")
-		.replace(OSC_SEQUENCE, "")
-		.replace(TWO_BYTE_ESCAPE, "");
-	return [...withoutSequences].filter((character) => isLiteralText(character)).join("");
-}
-
-/**
  * One Consultation turn as the recovery read states it: the operator's own
  * input, and the Agent's settled output when one was captured.
  */
@@ -120,13 +98,4 @@ export function boundedReplacementInput(
 	const marker = "\n[recovery context omitted]\n";
 	if (limit <= utf8ByteLength(marker)) return utf8Prefix(marker, limit);
 	return `${utf8Prefix(full, limit - utf8ByteLength(marker))}${marker}`;
-}
-
-function utf8Prefix(value: string, maxBytes: number): string {
-	if (maxBytes <= 0) return "";
-	const bytes = Buffer.from(value, "utf8");
-	if (bytes.byteLength <= maxBytes) return value;
-	let prefix = bytes.subarray(0, maxBytes).toString("utf8");
-	while (utf8ByteLength(prefix) > maxBytes) prefix = prefix.slice(0, -1);
-	return prefix;
 }

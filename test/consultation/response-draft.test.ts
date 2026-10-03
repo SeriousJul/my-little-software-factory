@@ -11,11 +11,10 @@ import {
 	CONSULTATION_INPUT_LIMIT,
 	isLiteralText,
 	responseOversize,
-	sanitizePastedText,
-	utf8ByteLength,
 	validateConsultationInput,
 	validateResponseInput,
 } from "../../src/consultation/response-draft.ts";
+import { utf8ByteLength } from "../../src/text-bounds.ts";
 
 describe("the Response draft module", () => {
 	test("limits input by UTF-8 bytes and preserves literal Unicode text", () => {
@@ -57,16 +56,6 @@ describe("the Response draft module", () => {
 		expect(responseOversize("a".repeat(CONSULTATION_INPUT_LIMIT))).toBeUndefined();
 	});
 
-	test("sanitizes a bracketed paste of terminal sequences to its literal text", () => {
-		// A color sequence, a title sequence, and a stray carriage return
-		// are removed; the newline and the Unicode survive.
-		expect(sanitizePastedText("a\u001b[31mred\u001b[0m\r\n\ttabé")).toBe("ared\n\ttabé");
-		expect(sanitizePastedText("title\u001b]0;name\u0007end")).toBe("titleend");
-		expect(sanitizePastedText("title\u001b]0;name\u001b\\end")).toBe("titleend");
-		expect(sanitizePastedText("plain")).toBe("plain");
-		expect(sanitizePastedText("\u001b[31m\u001b[0m")).toBe("");
-	});
-
 	test("joins the original input and the newest turns, and states the opening once", () => {
 		const turns = [
 			{ input: "Review this repository", output: "first answer" },
@@ -99,9 +88,17 @@ describe("the Response draft module", () => {
 		expect(utf8ByteLength(cut)).toBe(limit);
 	});
 
-	test("bounds replacement context even when the limit cuts through Unicode", () => {
-		const result = boundedReplacementInput("😀".repeat(100), [{ input: "é".repeat(100) }], 40);
-		expect(Buffer.byteLength(result, "utf8")).toBeLessThanOrEqual(40);
-		expect(result).toContain("recovery context omitted");
+	test("bounds the recovery join on a byte boundary when the limit cuts through Unicode", () => {
+		// Two turns, so the join the rule states is the text the bound cuts.
+		const turns = [{ input: "opening" }, { input: "é".repeat(50) }];
+		const limit = 151;
+		const result = boundedReplacementInput("😀".repeat(20), turns, limit);
+		expect(result.endsWith("\n[recovery context omitted]\n")).toBe(true);
+		expect(utf8ByteLength(result)).toBeLessThanOrEqual(limit);
+		// The cut lands inside the newest turn's text and never splits a
+		// multi-byte character: a whole run survives, the rest is gone.
+		expect(result).toContain("é".repeat(3));
+		expect(result).not.toContain("é".repeat(4));
+		expect(result).not.toContain("\uFFFD");
 	});
 });

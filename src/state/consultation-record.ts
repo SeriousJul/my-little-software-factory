@@ -21,6 +21,7 @@ import {
 	turnEndWarning,
 } from "../consultation/warning-facts.ts";
 import type { EnvironmentKind } from "../domain/ticket.ts";
+import { utf8ByteLength, utf8Prefix, utf8Suffix } from "../text-bounds.ts";
 import type { TurnEndCause } from "../turn-log.ts";
 import type { StateGraph } from "./graph.ts";
 import { turnEndCauseOf } from "./json.ts";
@@ -267,8 +268,8 @@ export function compareConsultations(left: Consultation, right: Consultation): n
 export const SNAPSHOT_LIMIT = 1024 * 1024;
 export const SNAPSHOT_MARKER = "\n[…captured history truncated…]\n";
 export function boundedSnapshot(value: string): { text: string; truncated: boolean } {
-	if (Buffer.byteLength(value, "utf8") <= SNAPSHOT_LIMIT) return { text: value, truncated: false };
-	const markerBytes = Buffer.byteLength(SNAPSHOT_MARKER, "utf8");
+	if (utf8ByteLength(value) <= SNAPSHOT_LIMIT) return { text: value, truncated: false };
+	const markerBytes = utf8ByteLength(SNAPSHOT_MARKER);
 	return {
 		text:
 			markerBytes >= SNAPSHOT_LIMIT
@@ -276,22 +277,6 @@ export function boundedSnapshot(value: string): { text: string; truncated: boole
 				: `${SNAPSHOT_MARKER}${utf8Suffix(value, SNAPSHOT_LIMIT - markerBytes)}`,
 		truncated: true,
 	};
-}
-export function utf8Prefix(value: string, maxBytes: number): string {
-	if (maxBytes <= 0) return "";
-	const bytes = Buffer.from(value, "utf8");
-	if (bytes.byteLength <= maxBytes) return value;
-	let prefix = bytes.subarray(0, maxBytes).toString("utf8");
-	while (Buffer.byteLength(prefix, "utf8") > maxBytes) prefix = prefix.slice(0, -1);
-	return prefix;
-}
-export function utf8Suffix(value: string, maxBytes: number): string {
-	if (maxBytes <= 0) return "";
-	const bytes = Buffer.from(value, "utf8");
-	if (bytes.byteLength <= maxBytes) return value;
-	let suffix = bytes.subarray(bytes.byteLength - maxBytes).toString("utf8");
-	while (Buffer.byteLength(suffix, "utf8") > maxBytes) suffix = suffix.slice(1);
-	return suffix;
 }
 
 export interface ConsultationRecordAggregate {

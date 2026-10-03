@@ -27,9 +27,11 @@ The drawer already held rules with two owners:
   `replacementInput`.
 - The literal-text rule was written twice: in the rules module and again in the
   shared control library's paste path.
-- Four exports had no caller at all: `unconfirmedOwnedResources`,
-  `repositoryMatchesCheckout`, `CONSULTATION_SNAPSHOT_LIMIT`, and
-  `boundedReplacementInput`, which only a test called.
+- Five exports had no caller at all: `unconfirmedOwnedResources`,
+  `repositoryMatchesCheckout`, `CONSULTATION_SNAPSHOT_LIMIT`,
+  `sanitizePastedText`, and `boundedReplacementInput`, which only a test called.
+  The review of the split counted four; `sanitizePastedText` is the fifth the
+  count missed, and the split had kept it.
 
 Its test file mirrored the drawer: 976 lines, nine unrelated blocks, tests for
 the Consultation record aggregate and the ANSI screen renderer - two modules that
@@ -47,12 +49,12 @@ interface, and the plane calls the rule through that interface.**
 
 - **Four rule modules under `src/consultation/`, named for their concept.**
   `response-draft.ts` owns the input limit, the emptiness rule, the size reason,
-  the literal-text rule, the paste sanitizing rule, and the bounded text rule.
-  `agent-input.ts` owns the Agent interaction key translation, the ordered input
-  queue, and its text batching bound. `checkout-safety.ts` owns the Repository
-  catalog, the explicit mapping check, and the Live checkout conflict set.
-  `warning-facts.ts` owns the Stale Agent output warning in both spellings and
-  the warning a failed or aborted turn leaves.
+  the literal-text rule, and the bounded text rule. `agent-input.ts` owns the
+  Agent interaction key translation, the ordered input queue, and its text
+  batching bound. `checkout-safety.ts` owns the Repository catalog, the explicit
+  mapping check, and the Live checkout conflict set. `warning-facts.ts` owns the
+  Stale Agent output warning in both spellings and the warning a failed or
+  aborted turn leaves.
 - **The per-Repository lock leaves the Consultation rules.** It is a concurrency
   control and no Consultation rule reads it, so it stands at
   `src/operation-serializer.ts`. Keeping it inside the Consultation rules would
@@ -71,14 +73,25 @@ interface, and the plane calls the rule through that interface.**
   turn needs no section of its own, because the original input already states it.
 - **The input limit is named once.** The state module reads
   `CONSULTATION_INPUT_LIMIT` from the Response draft module instead of holding
-  its own literal.
-- **A rule shared by two paths is imported, not copied.** The Agent input module
-  takes `isLiteralText` from the Response draft module. The shared control
-  library keeps its own paste path untouched, as ADR 0014 puts it.
+  its own literal. The UTF-8 measure and the two cuts that hold a text to a byte
+  bound stand once in `src/text-bounds.ts`; the Response draft module and the
+  Consultation record aggregate both read them instead of each keeping a copy.
+- **A rule shared by two plane paths is imported, not copied.** The Agent input
+  module takes `isLiteralText` from the Response draft module.
+- **The shared control library's paste path keeps its own owner, and the split
+  does not close the second literal-text owner.** The shared field's paste path
+  removes terminal sequences with `stripAnsiSequences` from `@opentui/core` in
+  `src/components/shared/fields.ts`, and ADR 0014 keeps that path in the library.
+  The plane's `isLiteralText` refuses a control character; the library's rule
+  removes escape sequences. They are two rules with two owners, and the plane
+  never calls a paste rule of its own: the rules module's `sanitizePastedText`
+  had no caller and is removed rather than wired in. Closing this duplicate is
+  open work, not work this split did.
 - **An export with no caller is removed.** `unconfirmedOwnedResources`,
-  `repositoryMatchesCheckout`, and `CONSULTATION_SNAPSHOT_LIMIT` are gone with
-  the second copy of the bounded text rule. A reviewer should be able to tell
-  which rule the plane runs from the interface alone.
+  `repositoryMatchesCheckout`, `CONSULTATION_SNAPSHOT_LIMIT`, and
+  `sanitizePastedText` are gone with the second copy of the bounded text rule. A
+  reviewer should be able to tell which rule the plane runs from the interface
+  alone.
 - **The split moves call sites, not rules.** No rule logic moved into a surface,
   and the shared control library gained none. The launcher, the Response editor,
   the app shell, and the Consultation operations read the rules through the new
@@ -97,11 +110,14 @@ interface, and the plane calls the rule through that interface.**
   option, because there is no drawer.
 - A test file mirrors its module. `test/consultation/response-draft.test.ts`,
   `test/consultation/agent-input.test.ts`, `test/consultation/checkout-safety.test.ts`,
-  `test/consultation/warning-facts.test.ts`, and `test/operation-serializer.test.ts`
-  each hold one concept and assert it through that module's interface. The pure
-  rule tests open no state database and run no real command; the Checkout safety
-  module and the Agent input module use the fake command runner, the suite's
-  second adapter at the CommandRunner seam.
+  `test/consultation/warning-facts.test.ts`, `test/operation-serializer.test.ts`,
+  and `test/text-bounds.test.ts` each hold one concept and assert it through that
+  module's interface. The pure rule tests open no state database and run no real
+  command; the Checkout safety module and the Agent input module use the fake
+  command runner, the suite's second adapter at the CommandRunner seam. The fake
+  holds every command by a delay and reports which commands answered and how many
+  ran at once, so a test that a flow serializes its external work reads the fake
+  instead of building a runner of its own.
 - The tests that were in the wrong file moved to the file that tests the module:
   the ANSI screen renderer's tests to `test/ansi-screen.test.ts`, and the durable
   Consultation record tests to `test/state/consultationRecord.test.ts`, beside the
@@ -129,6 +145,12 @@ interface, and the plane calls the rule through that interface.**
 - **Keep the per-Repository lock beside the rules it serializes.** Rejected: it
   is a concurrency control with no Consultation fact in it, and the issue names
   keeping it out as the point.
+- **Give the plane's paste rule a caller by wiring `sanitizePastedText` into the
+  shared field's paste path.** Rejected: ADR 0014 keeps safe paste in the shared
+  control library, and that path already strips terminal sequences through
+  `stripAnsiSequences`. A rule the plane does not run is the defect this issue
+  was opened to remove, so the split removes it and records the open duplicate
+  instead of hiding it behind a caller.
 - **Keep the tested copy of the bounded text rule and make the state module call
   it.** Rejected as written: the tested copy was not the running copy, so adopting
   it would have changed the recovery text the operator sees. The split keeps the

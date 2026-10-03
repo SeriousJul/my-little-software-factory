@@ -7,7 +7,6 @@
  */
 import { describe, expect, test } from "bun:test";
 import { ConsultationInputQueue, translateAgentKey } from "../../src/consultation/agent-input.ts";
-import type { CommandRunner } from "../../src/runner.ts";
 import { FakeRunner } from "../fake-runner.ts";
 
 describe("the Agent input module's key translation", () => {
@@ -69,49 +68,35 @@ describe("the Agent input queue", () => {
 	});
 
 	test("runs commands in enqueue order, never concurrently", async () => {
-		const events: string[] = [];
-		let active = 0;
-		let peak = 0;
-		const runner: CommandRunner = {
-			run: async (_command, args) => {
-				active += 1;
-				peak = Math.max(peak, active);
-				events.push(args.join(" "));
-				await new Promise((resolve) => setTimeout(resolve, 10));
-				active -= 1;
-				return { code: 0, stdout: "", stderr: "" };
-			},
-			listModels: async () => ({ ok: false, reason: "no model list here" }),
-		};
+		// Every command holds for a moment, so an overlap would show up as two
+		// commands running at once.
+		const runner = new FakeRunner();
+		runner.setDefaultDelay(10);
 		const queue = new ConsultationInputQueue(runner);
 		queue.enqueue("pane-1", { kind: "text", text: "one" });
 		await queue.enqueue("pane-1", { kind: "key", key: "enter" });
 		await queue.enqueue("pane-1", { kind: "key", key: "up" });
 		await queue.flush();
-		expect(events).toEqual([
-			"pane send-text pane-1 one",
-			"pane send-keys pane-1 enter",
-			"pane send-keys pane-1 up",
+		expect(runner.commands()).toEqual([
+			"herdr pane send-text pane-1 one",
+			"herdr pane send-keys pane-1 enter",
+			"herdr pane send-keys pane-1 up",
 		]);
-		expect(peak).toBe(1);
+		expect(runner.peakConcurrency()).toBe(1);
 	});
 
 	test("flush waits until every queued command settles", async () => {
-		let settled = 0;
-		const runner: CommandRunner = {
-			run: async () => {
-				await new Promise((resolve) => setTimeout(resolve, 15));
-				settled += 1;
-				return { code: 0, stdout: "", stderr: "" };
-			},
-			listModels: async () => ({ ok: false, reason: "no model list here" }),
-		};
+		const runner = new FakeRunner();
+		runner.setDefaultDelay(15);
 		const queue = new ConsultationInputQueue(runner);
 		await Promise.all([
 			queue.enqueue("pane-1", { kind: "text", text: "a" }),
 			queue.enqueue("pane-1", { kind: "key", key: "enter" }),
 		]);
 		await queue.flush();
-		expect(settled).toBe(2);
+		// The commands were issued before the flush resolved; what the flush
+		// waits for is the answer to each one.
+		expect(runner.settledCommands()).toEqual(runner.commands());
+		expect(runner.commands().length).toBe(2);
 	});
 });

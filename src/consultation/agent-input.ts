@@ -4,13 +4,16 @@
  * Agent interaction mode forwards the operator's input to the Agent's pane.
  * This module owns the key translation - the semantic keys, the AltGr text, and
  * the exit key that stays the exit key - and the ordered input queue with its
- * text batching bound. It shares the literal-text rule with the Response draft
- * module instead of holding a second copy, so the two paths that refuse terminal
- * control bytes cannot disagree (issue #203).
+ * text batching bound. It takes the literal-text rule from the Response draft
+ * module instead of holding a second copy, so the plane's two paths that refuse
+ * terminal control bytes read one owner. The shared field's paste path is a
+ * third path with its own owner, `stripAnsiSequences` from `@opentui/core`
+ * (issue #203, ADR 0096).
  */
 
 import type { CommandResult, CommandRunner } from "../runner.ts";
-import { isLiteralText, utf8ByteLength } from "./response-draft.ts";
+import { utf8ByteLength } from "../text-bounds.ts";
+import { isLiteralText } from "./response-draft.ts";
 
 /** The UTF-8 bound one batch of consecutive literal text may reach the Agent in. */
 const TEXT_BATCH_BYTES = 4096;

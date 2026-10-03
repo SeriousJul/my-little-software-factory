@@ -32,9 +32,9 @@ import type { ConsultationTypeConfig } from "../config.ts";
 import type { ConsultationRepositoryOption } from "../consultation/checkout-safety.ts";
 import {
 	CONSULTATION_INPUT_LIMIT,
-	utf8ByteLength,
 	validateConsultationInput,
 } from "../consultation/response-draft.ts";
+import { utf8ByteLength } from "../text-bounds.ts";
 import { useControlDispatch } from "./control-dispatch.ts";
 import type { ControlContext, InteractionMode } from "./controls.ts";
 import { contextFor } from "./controls.ts";
