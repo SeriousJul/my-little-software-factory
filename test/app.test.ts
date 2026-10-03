@@ -190,11 +190,16 @@ describe("the control plane", () => {
 						"the missing failure badge",
 					);
 					// The selected list row wears the failure badge in the state
-					// badge's place, so the row holds no [running] badge of its
-					// own (the detail pane beside it may keep the state's).
+					// badge's place, so the row holds no [running] badge of its own. The
+					// detail pane beside it wears the same word: one fact record answers
+					// both surfaces, and a running Ticket whose Agent is gone reads as
+					// missing on both (issue #201, story 5).
 					const listRow = listHalfOf(rowsOf(frame)[markerRowOf(frame)]);
 					expect(listRow).toContain("missing");
 					expect(listRow).not.toContain("[running]");
+					const detail = detailPaneText(frame);
+					expect(detail).toContain("missing");
+					expect(detail).not.toContain("[running]");
 					// Goto refuses: the catalogue reads the pane as not alive, the
 					// refusal stands on the Message line, and the focus never runs.
 					setup.mockInput.pressKey("g");

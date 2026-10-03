@@ -68,18 +68,22 @@ Message line, and `q` quits.
 - A starting ticket wears an animated spinner in place of its state badge.
 - A `blocked` badge means the agent is waiting on your approval; a `missing`
   badge means the agent is gone, and the work stops there until you restart
-  or abandon it.
+  or abandon it. The detail pane wears the same word in the state badge's
+  place, on a `running` ticket and a `handed-off` one alike, so the row and
+  the detail never state two facts about one ticket.
 
-The screen names two task type facts for one ticket, and they stay separate on
-purpose (issue #201, story 18). The row's badge and the detail pane name the
+The screen names two task type facts for one ticket, and they stay separate by
+decision (issue #201, story 18). The row's badge and the detail pane name the
 task type of the turn the ticket is on: the handoff's while a turn runs, and the
 suggested task type for an open ticket, whose handoff record is the closed
 cycle's history. The Decision modal's context row, the Live view's context line,
 and the Work queue's row name the task type of the turn that settled, else the
 handoff's, else the suggestion, else the configured default. While a second turn
 runs on one ticket the two can name different task types, and each surface keeps
-the one its own rows are about. The domain answers both: `rowTaskType` for the
-row and the detail, `turnTaskType` for the context lines.
+the one its own rows are about: the row describes the work the ticket is on, and
+the context line describes the turn the modal is about. The domain answers both
+beside each other, so the two cannot drift: `rowTaskType` for the row and the
+detail, `turnTaskType` for the context lines.
 
 ## Groups
 

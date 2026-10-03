@@ -141,13 +141,14 @@ export function detailContent(
 	lines.push(...identityLines(ticket.title, ticket.repository, usableCols));
 	// The Starting window (ADR 0030) takes the state line's slot in place of
 	// the badge, the same face the list row wears, so the list and the detail
-	// never disagree. The `[handed-off]` badge is never drawn: where the
-	// failure marker rules the face out, the marker's own word holds the
-	// slot, the word the row wears beside it. The Queue wait badge (CONTEXT.md)
-	// takes the slot the same way the list row wears it, so the two surfaces
-	// never disagree there either.
+	// never disagree. The `[handed-off]` and `[running]` badges are never drawn
+	// while a failure marker stands: the marker's own word holds the slot, the
+	// word the row wears beside it, on a resting handoff and on a running turn
+	// alike (issue #201, story 5). The Queue wait badge (CONTEXT.md) takes the
+	// slot the same way the list row wears it, so the two surfaces never
+	// disagree there either.
 	if (fact.starting) lines.push({ text: " ", fg: undefined, spinner: true });
-	else if (fact.failure !== null && ticket.state === "handed-off")
+	else if (fact.failure !== null)
 		lines.push({ text: failureBadge(fact.failure), fg: markerColor(fact.failure) });
 	else if (fact.queueWait)
 		// The Queue wait badge wears the open role: the ticket keeps its

@@ -1171,20 +1171,28 @@ operator sees, and the fact module's interface for the rules themselves.
 The rules are measured one per test at the module's public interface in
 `test/ticket-facts.test.ts`, `test/section-facts.test.ts`,
 `test/decision-facts.test.ts`, and `test/agent-facts.test.ts`. The frame tests
-that already asserted these facts did not change, which is the signal the spec
-named: the rules answer the same facts. `test/ticket-detail.test.ts` reads the
-same fact record the row wears, and `test/shared-gallery.test.ts` drives the
-gallery's `ticket-facts` example - the failure badge, the `queued` badge, the
-spinner face, the header's held cell, and the narrow header that keeps the held
-count and gives up the ignored cell at 54 columns, the same budget
-`test/section-header.test.ts` measures on the component.
+that already asserted these facts kept their assertions - the signal the spec
+named that the rules answer the same facts - with the one exception the story 5
+close below records. `test/ticket-detail.test.ts` reads the same fact record the
+row wears, and `test/shared-gallery.test.ts` drives the gallery's `ticket-facts`
+example - the failure badge, the `queued` badge, the spinner face, the header's
+held cell, and the narrow header that keeps the held count and gives up the
+ignored cell at 54 columns, the same budget `test/section-header.test.ts`
+measures on the component. The gallery's ignored cell is no longer a number the
+example types by hand: the example states the pile as the fact module's input and
+the header wears the count that read answers.
 
 The ownership rule is a guard test in the style of
 `test/shared-control-architecture.test.ts`: `test/ticket-fact-architecture.test.ts`
-refuses a predicate callback prop on a Ticket surface, refuses a screen that
-re-derives the in-flight fact, refuses a second copy of the Missing agent rule
-outside the domain's `agentInPane`, refuses `holdsDecision` on the way to a
-Group header, and refuses a renderer or a palette in a fact module.
+refuses a predicate callback prop on any surface under `src/components`, refuses a
+module anywhere in `src` that re-derives the in-flight fact, refuses a second copy
+of the Missing agent rule outside the domain's `agentInPane`, refuses `holdsDecision`
+on the way to a Group header, and refuses a renderer or a palette in a fact module.
+The in-flight check walks the whole plane, not the screens alone: the domain's
+Ticket module owns `inFlightState`, and the state aggregates, the dispatch claim
+gate, and the Consultation pane walk read it beside the row's badge and the Parallel
+limit seat count. The Handoff limit marker reads the domain's `handoffLimitReached`
+the same way, so the ADR 0005 guard in `test/top-up.test.ts` stays green.
 
 The Consultation Section header's counts read the records the machine holds, not
 the section's History filter (story 14). The first version of this work read
@@ -1198,20 +1206,53 @@ at all - and again to the all view, and reads the same
 What was confirmed by deletion: reading the header's Consultation counts from
 the filtered list leaves the new frame case red and nothing else; re-adding a
 `(fact) => boolean` prop to `TicketListProps` leaves the guard red; and
-re-spelling `state === "handed-off" || state === "running"` inside the App
+re-spelling `state === "handed-off" || state === "running"` in a state aggregate
 leaves the guard red.
 
-The deviation from story 18 is recorded rather than closed. Story 18 asks for
-one task type per Ticket across the whole screen. The frame tests - the
-contract - name the settled turn's task type on the Decision modal's context
-row and the Live view's context line even while a different turn runs, so the
-screen keeps two named facts: `rowTaskType` for the row and the detail pane,
-and `turnTaskType` for the context lines. `docs/operation/main-view.md` states
-the two facts, and issue #201 records the deviation from its own story.
+Story 5 is closed on the detail pane. The pane used to gate its failure word on
+the `handed-off` state, so a `running` Ticket whose Agent the last poll does not
+name wore `missing` on its row and `[running]` in its detail. The pane now wears
+the fact module's word whatever the state, and the frame test that already
+walked this Ticket - `test/app.test.ts`, "the row wears the missing failure
+badge" - now reads the detail half beside the row half. This is the one frame
+assertion this work changed, and it changed because the rule changed: the spec
+names that as the signal, not as a breach.
+
+Story 18 is closed as a decision, not as a note. Story 18 asks for one task type
+per Ticket across the whole screen. The screen keeps two named facts, and the
+decision is to keep them: the frame tests - the operator's contract - name the
+settled turn's task type on the Decision modal's context row and the Live view's
+context line even while a different turn runs, so one rule cannot answer both
+surfaces without moving that contract. `rowTaskType` answers the row and the
+detail pane, `turnTaskType` answers the context lines, and both stand in one
+module beside each other so they cannot drift. `docs/operation/main-view.md`
+states the two facts and why they are two, and issue #201 records the decision
+its own story bends on.
+
+What this work leaves open, stated plainly:
+
+- The Agent poll's pane match went from first match to last match. The domain's
+  `agentInPane` used to return the first entry that held the pane id; it now
+  folds the list and answers the last. The plane's own tests name a pane id that
+  holds one Agent, so no test measures the difference. The last entry is the one
+  the plane's other pane reads use, and the row's badge and the seat count now
+  read the same record, so the two surfaces cannot fall on different entries of
+  one poll.
+- The Parallel limit's seat count reads the poll the observation loop keeps
+  (`src/components/app.ts`), while the row's badge reads the poll copy the render
+  holds. Main moved the seat count onto the observation loop's copy; this rework
+  kept that. The two copies land from the same poll cycle, and no test measures
+  the frame between them.
+- `repositoryInitMarkerOf` still answers inside the App. It is a screen fact with
+  no second copy today, and it is the next candidate for the fact module.
 
 `bun run lint`, `bun run typecheck`, and one full `bun run test` ran on this
-rework with no other `bun test` process on the machine (load average 9.9, the
-suite green at 2608 tests over 103 files, 14307 assertions, 0 fail, no skips).
+rework with no other `bun test` process on the machine (load average 8.2, the
+suite green at 2719 tests over 121 files, 15268 assertions, 0 fail, no skips).
+The earlier run of this rework, before the merge of `main`, failed
+`test/repo-init-stub.test.ts` inside the full suite while the same file passed on
+its own; that is recorded as a load flake, not as a regression, and the gating
+run above was green.
 
 What was not measured: no screen reader has read this application, and no claim
 of screen-reader support is made here or anywhere else in this record. The
