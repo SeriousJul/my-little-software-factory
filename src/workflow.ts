@@ -34,7 +34,7 @@ import {
 } from "./domain/ticket.ts";
 import { firstNonEmptyLine } from "./lines.ts";
 import { ticketBranchPrefix } from "./naming.ts";
-import { isPlaneActionTaskType } from "./plane-actions.ts";
+import { isPlaneActionTaskType } from "./plane-action-registry.ts";
 import {
 	markPullRequestReady,
 	pullRequestCarriesWork,
@@ -1370,17 +1370,15 @@ export interface NextStep {
  * position's standing, its hold, and its limit are the ones that hold it.
  *
  * `tickets` is the projection the caller already read, before the list rule
- * (ADR 0042): the position can be a ticket the operator's list withholds. A
- * caller that holds no read leaves it out, and the derivation pays for its own.
+ * (ADR 0042): the position can be a ticket the operator's list withholds. Every
+ * caller holds a read of its own - the observation cycle reads its pile once and
+ * hands it down - so the derivation never pays for a scan by accident.
  */
 export function deriveNextStep(
 	config: FactoryConfig,
 	state: FactoryState,
 	outcome: TransitionOutcome,
-	tickets: readonly Ticket[] = state.projectedTickets(
-		config.workflowStates,
-		config.defaultTaskType,
-	),
+	tickets: readonly Ticket[],
 ): NextStep | null {
 	if (outcome.fired !== true) return null;
 	// A label write the plane did not make derives no position: the fire returns

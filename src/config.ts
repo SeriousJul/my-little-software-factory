@@ -23,7 +23,7 @@ import {
 	type MergeMethod,
 	PLANE_ACTION_NAMES,
 	type PlaneActionName,
-} from "./plane-actions.ts";
+} from "./plane-action-registry.ts";
 import {
 	contextSettingFit,
 	modelSettingFit,
@@ -934,6 +934,15 @@ function validateTaskTypes(
 				`config: ${where}: "auto-close" is a pre-workflow-machine key; Auto-handoff mode decides the route from the settled turn's Next step (see the .bak backup and the migration report)`,
 			);
 		}
+		if (raw["no-auto-decision"] !== undefined) {
+			// The renamed key (ADR 0092): the property is the same one, its name is
+			// not, and the old name reaches no reader. A config that uncommented the
+			// docs' example fails at load on upgrade, so the error names the new key
+			// instead of stopping at the unknown key. There is no ignore path.
+			throw new ConfigError(
+				`config: ${where}: "no-auto-decision" is renamed "operator-decides" (ADR 0092)`,
+			);
+		}
 		// The form of the task type (ADR 0068): the prompt form starts an
 		// agent on its template, and the action form resolves on the plane
 		// action it names, with no template and no profile keys.
@@ -1594,8 +1603,8 @@ function nonNegativeFiniteNumberField(
 
 /**
  * An optional boolean field on a named table: absent takes no value, a value
- * that is not a boolean is a startup error. The No-auto-decision key on the
- * task type forms reads through it (ADR 0085).
+ * that is not a boolean is a startup error. The Operator-decides key on the
+ * task type forms reads through it (ADR 0085, renamed by ADR 0092).
  */
 function optionalBooleanField(
 	record: Record<string, unknown>,

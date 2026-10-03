@@ -2,92 +2,26 @@
  * The plane actions (ADR 0068): the tasks the machine resolves with no
  * agent, no worktree, and no seat from the Parallel limit.
  *
- * A task type in the action form names one built-in action from this
- * registry and carries its named settings. The registry is the one home of
- * the names the config may name and the methods they accept: the config
- * validation names them here, the dispatch that runs the action reads them
- * here, and the surfaces that name the action read them here, so none of
- * the three can drift. The action form has no template and no profile keys:
- * its settings are the named ones from this registry, never a free string.
- * The merge runs as a control-plane action through the command runner -
- * the `gh` merge, with a comment on a blocked pull request - and its
- * outcome fires the task type's transition, the fact on the attempt's
- * record, because no Completion trace stands for it.
+ * A task type in the action form names one built-in action from the registry
+ * and carries its named settings; the registry
+ * ([plane-action-registry.ts](./plane-action-registry.ts)) is the one home of
+ * the names the config may name and the methods they accept, so the config
+ * validation, the dispatch that runs the action, the surfaces that name the
+ * action, and the machine that derives a Next step all read one place and
+ * none of them can drift. This module holds the run: the merge as a
+ * control-plane action through the command runner - the `gh` merge, with a
+ * comment on a blocked pull request - and its outcome fires the task type's
+ * transition, the fact on the attempt's record, because no Completion trace
+ * stands for it.
  */
 
-import type { TaskTypeConfig, TicketSourceConfig } from "./config.ts";
+import type { TicketSourceConfig } from "./config.ts";
 import type { Ticket } from "./domain/ticket.ts";
 import { firstNonEmptyLine } from "./lines.ts";
+import type { MergeMethod } from "./plane-action-registry.ts";
 import type { CommandOptions, CommandResult, CommandRunner } from "./runner.ts";
 import { GhAuthenticator } from "./ticket-source.ts";
 import { newestMembershipOf, readPullRequestOpenRecord } from "./workflow.ts";
-
-/** The built-in plane actions, by the name the config's action form may use. */
-export const PLANE_ACTION_NAMES = ["merge-pull-request"] as const;
-export type PlaneActionName = (typeof PLANE_ACTION_NAMES)[number];
-
-/** The merge methods the merge action runs with, by their config name. */
-export const MERGE_METHODS = ["squash", "merge", "rebase"] as const;
-export type MergeMethod = (typeof MERGE_METHODS)[number];
-
-/** The method a merge action runs with when its settings name none. */
-export const DEFAULT_MERGE_METHOD: MergeMethod = "squash";
-
-/** The name the surfaces give the built-in plane actions. */
-export const PLANE_ACTION_LABELS: Readonly<Record<PlaneActionName, string>> = {
-	"merge-pull-request": "Merge pull request",
-};
-
-/** The name the surfaces give the named plane action, from the registry. */
-export function planeActionLabel(name: PlaneActionName): string {
-	return PLANE_ACTION_LABELS[name];
-}
-
-/**
- * The named settings of the one plane action: the merge of the ticket's
- * pull request, with the method it runs with. A task type in the action
- * form carries the name in its `action` cell and the method in its
- * `method` cell, and this is the one place that reads the pair back as a
- * setting: an omitted method resolves to the registry's default.
- */
-export interface PlaneActionSetting {
-	readonly name: PlaneActionName;
-	readonly method: MergeMethod;
-}
-
-/** Whether the value names a built-in plane action. */
-export function isPlaneActionName(value: unknown): value is PlaneActionName {
-	return (PLANE_ACTION_NAMES as readonly string[]).includes(value as string);
-}
-
-/** Whether the value names a merge method. */
-export function isMergeMethod(value: unknown): value is MergeMethod {
-	return (MERGE_METHODS as readonly string[]).includes(value as string);
-}
-
-/**
- * The plane action of one task type, from its action form; null when the
- * type carries no action form or names an action the registry does not
- * hold. The config validation holds the form to the registry's names, so a
- * caller that reads a validated config gets the settings it runs.
- */
-export function planeActionSettingOf(
-	taskTypes: Record<string, TaskTypeConfig>,
-	taskType: string,
-): PlaneActionSetting | null {
-	const task = taskTypes[taskType];
-	const name = task?.action;
-	if (name === undefined || !isPlaneActionName(name)) return null;
-	return { name, method: task.method ?? DEFAULT_MERGE_METHOD };
-}
-
-/** Whether the task type carries the plane action form. */
-export function isPlaneActionTaskType(
-	taskTypes: Record<string, TaskTypeConfig>,
-	taskType: string,
-): boolean {
-	return planeActionSettingOf(taskTypes, taskType) !== null;
-}
 
 /** The `gh pr merge` flag of one merge method. */
 export function mergeFlag(method: MergeMethod): string {

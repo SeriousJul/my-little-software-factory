@@ -98,7 +98,10 @@ function ruleFor(
 	coordinator: ObservationCoordinator,
 	identity = "github:github.com:I_5",
 ): AwaitingDecision {
-	return coordinator.decideAwaiting(state.lastCompletion(identity)).decision;
+	return coordinator.decideAwaiting(
+		state.lastCompletion(identity),
+		state.projectedTickets(config.workflowStates, config.defaultTaskType),
+	).decision;
 }
 
 function fetched(
@@ -1634,6 +1637,31 @@ describe("the awaiting rule", () => {
 		// rests in awaiting, undecided, for the operator's Decision screen.
 		const [ticket] = state.visibleTickets([], "implement");
 		expect(ticket).toEqual(
+			expect.objectContaining({
+				state: "awaiting",
+				lastCompletion: expect.objectContaining({ decision: null }),
+			}),
+		);
+		expect(intents).toHaveLength(0);
+		state.close();
+	});
+
+	test("a Next step a gate holds answers hold, not route (ADR 0092)", async () => {
+		// The fired Transition names a review position, and the position's own
+		// labels still offer implement. The machine will not take the step, so the
+		// word says so: the turn rests in awaiting undecided, the top-up adds
+		// nothing, and the Decision screen states the gate beside the row.
+		const { state, intents, coordinator } = rig({ autoOn: true, agents: [] });
+		settleFor(
+			state,
+			"github:github.com:I_5",
+			"route",
+			outcome({ positionTaskType: "review", positionTicketIdentity: "github:github.com:I_5" }),
+		);
+		expect(ruleFor(state, coordinator)).toBe("hold");
+		await coordinator.tick();
+		const [resting] = state.visibleTickets([], "implement");
+		expect(resting).toEqual(
 			expect.objectContaining({
 				state: "awaiting",
 				lastCompletion: expect.objectContaining({ decision: null }),

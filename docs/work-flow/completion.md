@@ -21,9 +21,10 @@ that ends the awaiting state. What happens next depends on your mode:
   ticket that position stands on, and whether the step is a Handoff or a Plane
   action. The mode's one rule is "Auto-handoff mode is on, and the settled turn
   has a Next step" (ADR 0092), so that step routes the ticket to the next kind
-  of work without you. A turn with no Next step - no branch held, a label write
-  that failed, or labels that land on a parking state - closes the cycle, and a
-  step a gate holds rests `awaiting` with the hold stated for you.
+  of work without you. A turn with no Next step - no branch held, or labels
+  that land on a parking state - closes the cycle. A turn whose label write
+  failed parks for you: the plane does not route from labels it did not write.
+  A step a gate holds rests `awaiting` with the hold stated for you.
 - A turn that ended in a failure is never decided for you, in either mode:
   see held turns below.
 

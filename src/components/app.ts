@@ -87,7 +87,7 @@ import {
 	isPlaneActionTaskType,
 	planeActionLabel,
 	planeActionSettingOf,
-} from "../plane-actions.ts";
+} from "../plane-action-registry.ts";
 import { closeCycleEndDraftPullRequest } from "../pull-request.ts";
 import { RefreshCoordinator } from "../refresh.ts";
 import type { RepositoryMapping } from "../repo.ts";
@@ -1820,7 +1820,9 @@ export function App({
 				// own. The operator's own key passes the gates - the Same-type hold
 				// and the Handoff limit brake the automatic route, not the hand.
 				const nextStep =
-					state === undefined ? null : deriveNextStep(configRef.current, state, outcome);
+					state === undefined
+						? null
+						: deriveNextStep(configRef.current, state, outcome, listViews.projection);
 				// While the route is alive, the row reads as the fact line that
 				// names where it stands, and takes no key (ADR 0064): Close and
 				// Goto stand always, and the confirm waits with the route. The

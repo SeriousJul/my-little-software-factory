@@ -914,6 +914,23 @@ describe("validateConfig", () => {
 			},
 			"operator-decides: must be a boolean",
 		);
+		// The old name (ADR 0092) reaches no reader: a config that still carries
+		// it fails at load on either form, with no ignore path, and the error
+		// names the key that replaced it.
+		expectConfigError(
+			{
+				...base,
+				"task-types": { t: { template: "x", "no-auto-decision": true } },
+			},
+			'"no-auto-decision" is renamed "operator-decides"',
+		);
+		expectConfigError(
+			{
+				...base,
+				"task-types": { t: { action: "merge-pull-request", "no-auto-decision": true } },
+			},
+			'"no-auto-decision" is renamed "operator-decides"',
+		);
 	});
 
 	test("the default agent must match an agent", () => {

@@ -567,12 +567,13 @@ step is a Handoff or a Plane action. Auto-handoff mode decides every settled
 turn from that one fact - the mode's rule is "Auto-handoff mode is on, and the
 settled turn has a Next step" - so no config key stands between a Transition
 and the route it derives. A turn with no Next step closes its cycle: the facts
-landed on a parking state, no branch held, or the label write failed. A step a
-gate holds - the position offers no task, the position is not actionable, the
-Same-type hold, or the Handoff limit - rests in `awaiting` for the operator,
-and the Decision screen states the hold; a step the Handoff limit holds closes
-the cycle. Manual mode runs no top-up, so a settled turn rests in `awaiting`
-for the operator's Decision screen in every case.
+landed on a parking state, or no branch held. A turn whose label write failed
+parks for the operator: the plane does not route from labels it did not write.
+A step a gate holds - the position offers no task, the position is not
+actionable, the Same-type hold, or the Handoff limit - rests in `awaiting` for
+the operator, and the Decision screen states the hold; a step the Handoff limit
+holds closes the cycle. Manual mode runs no top-up, so a settled turn rests in
+`awaiting` for the operator's Decision screen in every case.
 
 The `pull-request-open` and `pull-request-closed` judgments read the linked
 pull request's own record straight from the source at fire time, live the

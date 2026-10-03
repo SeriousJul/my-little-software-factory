@@ -83,7 +83,7 @@ import {
 } from "./handoff-dispatch.ts";
 import { type HerdrAgent, ownAgentInPane } from "./herdr.ts";
 import { identifyHandoffAgentName } from "./naming.ts";
-import { isPlaneActionTaskType } from "./plane-actions.ts";
+import { isPlaneActionTaskType } from "./plane-action-registry.ts";
 import { type RefreshClock, SYSTEM_CLOCK } from "./refresh.ts";
 import { type CommandRunner, commandFailureText } from "./runner.ts";
 import type { Consultation, FactoryState, HandoffTicket } from "./state.ts";
@@ -345,14 +345,16 @@ export function stripAnsi(text: string): string {
  * - `close`: the machine resolves the completion and closes the cycle: a turn
  *   with no Next step - no transition, a fire that did not run, a fire that
  *   landed on a parking state - or a Next step the Handoff limit holds.
- * - `route`: the settled turn has a Next step the machine takes on its own:
- *   the top-up's continuation, enqueued while the queue is empty. A step
- *   another gate holds answers the same way and waits in awaiting: the top-up
- *   will not take it, and the Decision screen states the hold.
+ * - `route`: the settled turn has a Next step no gate holds: the top-up's
+ *   continuation, enqueued while the queue is empty.
+ * - `hold`: the turn has a Next step, and a gate holds it - the position offers
+ *   no task, the position is not actionable, or the Same-type hold stands. The
+ *   machine will not take the step, so the ticket rests in awaiting and the
+ *   Decision screen states the gate beside the row the operator can confirm.
  * - `park`: the ticket rests in awaiting for the operator: a transition whose
  *   label write failed, a held turn, or a turn of an Operator-decides type.
  */
-export type AwaitingDecision = "close" | "route" | "park";
+export type AwaitingDecision = "close" | "route" | "hold" | "park";
 
 /**
  * The automatic rule's answer for one settled turn (ADR 0092): what the
@@ -736,10 +738,20 @@ export class ObservationCoordinator {
 
 		// The awaiting walk resolves the completions the machine closes (ADR
 		// 0051): a routable completion rests in awaiting, and its route is the
-		// top-up's continuation.
-		for (const ticket of this.state.ticketsByState(["awaiting"])) {
-			changed = (await this.handleAwaiting(ticket, autoOn)) || changed;
+		// top-up's continuation. One projection read serves the walk's Next step
+		// derivations (ADR 0092): the walk reads the pile once, and re-reads it
+		// only after a close moved a row another turn's derivation reads.
+		const awaiting = this.state.ticketsByState(["awaiting"]);
+		const readAwaitingProjection = (): readonly Ticket[] =>
+			!autoOn || awaiting.length === 0
+				? []
+				: this.state.projectedTickets(this.config().workflowStates, this.config().defaultTaskType);
+		let awaitingProjection = readAwaitingProjection();
+		for (const ticket of awaiting) {
+			const moved = await this.handleAwaiting(ticket, autoOn, awaitingProjection);
+			changed = moved || changed;
 			if (this.stopped) return;
+			if (moved) awaitingProjection = readAwaitingProjection();
 		}
 
 		// The Work queue's pickup runs before the top-up (ADR 0051): the items
@@ -1247,21 +1259,27 @@ export class ObservationCoordinator {
 	}
 
 	/**
-	 * Resolve an awaiting ticket by the automatic rule (ADR 0051). Returns
-	 * whether the cycle changed factory state.
+	 * Resolve an awaiting ticket by the automatic rule (ADR 0051, ADR 0092).
+	 * Returns whether the cycle changed factory state.
 	 *
-	 * Auto mode only: in manual mode a settled turn that offers a continuation
-	 * rests in awaiting, and the operator's Decision screen routes it. The
-	 * machine closes the completions it resolves - a turn whose task type
-	 * offers no continuation, a transition into a parking state, a route
-	 * degraded at the handoff limit - and parks the rest: a held turn, a
-	 * transition whose label write failed, a same-type hold, and a completion
-	 * of a No-auto-decision type (ADR 0085). A routable
-	 * completion decides nothing here: its route is the top-up's
-	 * continuation, and the top-up's one item at a time is the wait the
-	 * queue holds.
+	 * Auto mode only: in manual mode a settled turn rests in awaiting for the
+	 * operator's Decision screen. The machine closes the cycles it resolves - a
+	 * turn with no Next step, a Next step the Handoff limit holds - and rests
+	 * the rest in awaiting: a held turn, a transition whose label write failed,
+	 * a turn of an Operator-decides type (ADR 0085, renamed by ADR 0092), and a
+	 * Next step another gate holds. A step the machine takes decides nothing
+	 * here: it is the top-up's continuation, and the top-up's one item at a time
+	 * is the wait the queue holds.
+	 *
+	 * `tickets` is the cycle's one projection read, before the list rule: the
+	 * Next step derivation reads the position's row, so the walk shares one read
+	 * instead of paying a scan for every awaiting ticket.
 	 */
-	private async handleAwaiting(ticket: HandoffTicket, autoOn: boolean): Promise<boolean> {
+	private async handleAwaiting(
+		ticket: HandoffTicket,
+		autoOn: boolean,
+		tickets: readonly Ticket[],
+	): Promise<boolean> {
 		if (!autoOn) return false;
 		const completion = this.state.lastCompletion(ticket.ticketIdentity);
 		// A decided turn decides nothing more: the route recorded its decision
@@ -1269,11 +1287,11 @@ export class ObservationCoordinator {
 		// and the routed turn rests in awaiting for the operator's close.
 		if (completion !== null && completion.decision !== null) return false;
 		// The one route rule, read at both walks (ADR 0051, ADR 0092): this walk
-		// closes what the machine resolves, and `continuationPosition` asks the
-		// same answer for what it enqueues. A `route` rests for the top-up and a
-		// `park` rests for the operator; neither closes here, and neither
+		// closes what the machine resolves, and `continuationTarget` asks the
+		// same answer for what it enqueues. A `route` rests for the top-up, and a
+		// `hold` or a `park` rests in awaiting; none closes here, and none
 		// re-derives the condition.
-		if (this.decideAwaiting(completion).decision !== "close") return false;
+		if (this.decideAwaiting(completion, tickets).decision !== "close") return false;
 		const decidedAt = new Date(this.now()).toISOString();
 		const applied = this.state.applyCompletionDecision({
 			ticketIdentity: ticket.ticketIdentity,
@@ -1311,15 +1329,10 @@ export class ObservationCoordinator {
 	 * will not take it, and the Decision screen states the hold.
 	 *
 	 * `tickets` is the projection the caller already read, before the list
-	 * rule; a caller that holds none leaves it out.
+	 * rule: the derivation reads the position's row out of it, and no caller
+	 * pays for a scan of its own.
 	 */
-	decideAwaiting(
-		completion: Completion | null,
-		tickets: readonly Ticket[] = this.state.projectedTickets(
-			this.config().workflowStates,
-			this.config().defaultTaskType,
-		),
-	): AwaitingRule {
+	decideAwaiting(completion: Completion | null, tickets: readonly Ticket[]): AwaitingRule {
 		const outcome = completion?.transition ?? null;
 		// The held-turn gate (ADR 0016): a turn that failed, aborted, or was
 		// truncated is held. No automatic decision runs on it; the operator's
@@ -1341,6 +1354,7 @@ export class ObservationCoordinator {
 		// all, so the cycle ends where the machine put the ticket.
 		if (step === null) return { decision: "close", step: null };
 		if (step.gate === "handoff-limit") return { decision: "close", step };
+		if (step.gate !== null) return { decision: "hold", step };
 		return { decision: "route", step };
 	}
 
@@ -1403,6 +1417,11 @@ export class ObservationCoordinator {
 		// an accident of which view it happens to read.
 		const list = this.state.ticketListViews(config.workflowStates, config.defaultTaskType, "all");
 		const tickets = list.active;
+		// The same read's projection before the list rule (ADR 0042): the covered
+		// ticket's row is withheld from the operator's list, and a route must still
+		// reach the position it starts on. Both continuation walks, and the Next
+		// step derivation each of them reads, take this one array.
+		const projection = list.projection;
 		// 1. Continuation: the awaiting ticket whose turn the machine routes, and
 		// the open ticket whose newest settled turn recorded an automatic route -
 		// the route's ask ended the cycle at the ask (ADR 0072), and a drop or
@@ -1415,22 +1434,20 @@ export class ObservationCoordinator {
 			// its decision stays owed, so this test - not the filter - is what holds
 			// the machine out, and it is the one gate predicate on the row's flag.
 			if (automaticStartBlocked(ticket)) continue;
-			const position = this.continuationPosition(ticket);
-			if (position === null) continue;
-			// The merged position the turn routes to (ADR 0068): the task type
-			// resolves on the plane action, so the top-up asks for the merge,
-			// not for a handoff, and the item takes no seat when it runs.
-			if (
-				position.suggestedTaskType !== null &&
-				isPlaneActionTaskType(config.taskTypes, position.suggestedTaskType)
-			) {
+			const target = this.continuationTarget(ticket, projection);
+			if (target === null) continue;
+			const { position, step } = target;
+			// The merged position the turn routes to (ADR 0068): the Next step
+			// resolves on the plane action, so the top-up asks for the merge, not
+			// for a handoff, and the item takes no seat when it runs.
+			if (step.kind === "plane-action") {
 				const added = await this.topUpPlaneActionAsk(
 					{
 						origin: "workflow",
 						automatic: true,
 						ticketIdentity: position.identity,
 						routeFromIdentity: ticket.identity,
-						taskType: position.suggestedTaskType,
+						taskType: step.taskType,
 					},
 					`work queue top-up: merging ${this.ticketName(position.identity)}`,
 					`work queue top-up could not merge ${this.ticketName(position.identity)}`,
@@ -1450,19 +1467,15 @@ export class ObservationCoordinator {
 					// agent still holds falls to the cycle name instead of failing
 					// as a stranger (ADR 0027).
 					routeFromIdentity: ticket.identity,
-					choice: resolveHandoffChoice(
-						config,
-						position.suggestedTaskType ?? config.defaultTaskType,
-						{
-							...(outcome === null || outcome.agent === undefined ? {} : { agent: outcome.agent }),
-							...(outcome === null || outcome.environment === undefined
-								? {}
-								: { environment: outcome.environment }),
-						},
-					),
+					choice: resolveHandoffChoice(config, step.taskType, {
+						...(outcome === null || outcome.agent === undefined ? {} : { agent: outcome.agent }),
+						...(outcome === null || outcome.environment === undefined
+							? {}
+							: { environment: outcome.environment }),
+					}),
 					previousMessage: this.promptPreviousMessage(completion),
 				},
-				`work queue top-up: routing ${this.ticketName(ticket.identity)} to ${position.suggestedTaskType}`,
+				`work queue top-up: routing ${this.ticketName(ticket.identity)} to ${step.taskType}`,
 				`work queue top-up could not route ${this.ticketName(ticket.identity)}`,
 			);
 			// One add per cycle: the walk stops at the first item the queue took,
@@ -1482,14 +1495,12 @@ export class ObservationCoordinator {
 			// is not a state the plane writes. The marker holds the record against
 			// a damaged trace; no walk reaches it on its own.
 			if (outcome === null || outcome.refired !== true) continue;
-			const step = deriveNextStep(config, this.state, outcome);
+			const step = deriveNextStep(config, this.state, outcome, projection);
 			if (step === null || step.gate !== null) continue;
 			// The projection before the list rule (ADR 0042): the rule withholds
 			// a covered ticket's row from the operator's list, and the add must
 			// still reach the position it starts on.
-			const position = this.state
-				.projectedTickets(config.workflowStates, config.defaultTaskType)
-				.find((candidate) => candidate.identity === step.ticketIdentity);
+			const position = projection.find((candidate) => candidate.identity === step.ticketIdentity);
 			if (position === undefined) continue;
 			// The ignore gate (ADR 0060): this walk reads the projection before the
 			// list rule on purpose, because ADR 0042's route must reach its position
@@ -1774,10 +1785,10 @@ export class ObservationCoordinator {
 	}
 
 	/**
-	 * The position a settled turn's Next step stands on, or null when no
-	 * continuation stands: the automatic rule answers `route` for the turn and
-	 * names an unheld step (ADR 0051, ADR 0092), the step's ticket is still in
-	 * the projection, and the operator has not judged the position out.
+	 * The position a settled turn's Next step stands on, with that step, or null
+	 * when no continuation stands: the automatic rule answers `route` for the
+	 * turn and names an unheld step (ADR 0051, ADR 0092), the step's ticket is
+	 * still in the projection, and the operator has not judged the position out.
 	 *
 	 * The position may be open or awaiting (ADR 0072): a route onto the
 	 * ticket's own new position finds its ticket open behind the wait the ask
@@ -1785,11 +1796,18 @@ export class ObservationCoordinator {
 	 *
 	 * The route itself is never re-derived here. `decideAwaiting` is the one
 	 * rule both walks read, and `deriveNextStep` is the one derivation of its
-	 * gates: the awaiting walk that closes what the machine resolves, and this
-	 * walk that enqueues what it does not.
+	 * gates and of the channel the step runs on: the awaiting walk that closes
+	 * what the machine resolves, and this walk that enqueues what it does not.
+	 * The walk reads the step, never the row's own Suggested task type, so the
+	 * two walks cannot disagree about whether the step is a Handoff or a Plane
+	 * action.
+	 *
+	 * `tickets` is the cycle's projection read, before the list rule.
 	 */
-	private continuationPosition(ticket: Ticket): Ticket | null {
-		const config = this.config();
+	private continuationTarget(
+		ticket: Ticket,
+		tickets: readonly Ticket[],
+	): { position: Ticket; step: NextStep } | null {
 		const completion = this.state.lastCompletion(ticket.identity);
 		if (completion === null) return null;
 		const outcome = completion.transition ?? null;
@@ -1810,12 +1828,11 @@ export class ObservationCoordinator {
 			return null;
 		}
 		if (completion.decision !== null && outcome?.routeRemoved === true) return null;
-		// One projection read serves the rule and this walk's row: the list rule
-		// withholds a covered ticket from the operator's view (ADR 0042), and the
-		// add must still reach the position it starts on.
-		const tickets = this.state.projectedTickets(config.workflowStates, config.defaultTaskType);
+		// The cycle's one projection read serves the rule and this walk's row:
+		// the list rule withholds a covered ticket from the operator's view
+		// (ADR 0042), and the add must still reach the position it starts on.
 		const { decision, step } = this.decideAwaiting(completion, tickets);
-		if (decision !== "route" || step === null || step.gate !== null) return null;
+		if (decision !== "route" || step === null) return null;
 		const position = tickets.find((candidate) => candidate.identity === step.ticketIdentity);
 		if (position === undefined) return null;
 		// The ignore gate (ADR 0060): the route starts an Agent on the position,
@@ -1825,6 +1842,6 @@ export class ObservationCoordinator {
 		// The queue's one-item-per-ticket rule is this cycle's own gate above:
 		// the walk adds only into an empty queue, and the claim check at the ask
 		// refuses the same ledger a second time (ADR 0051).
-		return position;
+		return { position, step };
 	}
 }

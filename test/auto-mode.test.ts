@@ -176,7 +176,7 @@ function stubCheckout(app: SeededApp): void {
 interface SeedDetail {
 	/** The transition outcome to store on the settled turn; no transition when absent. */
 	transition?: TransitionOutcome | null;
-	/** The task type the seeded turn ran under; the automatic rule's No-auto-decision check reads it (ADR 0085). */
+	/** The task type the seeded turn ran under; the automatic rule's Operator-decides check reads it (ADR 0085, renamed by ADR 0092). */
 	taskType?: string;
 	message?: string;
 	model?: string;
@@ -1385,6 +1385,36 @@ describe("the decision modal", () => {
 				const panel = frameText(await settle(setup));
 				expect(panel).toContain("Handoff: review");
 				expect(panel).toContain("the Next step is held: the position no longer offers the task");
+			},
+			WIDTH,
+			HEIGHT,
+			propsOf(app),
+		);
+		app.state.close();
+	});
+
+	test("the Decision screen states the Handoff limit that holds the Next step (ADR 0092)", async () => {
+		// The same settled turn on a position that already used its one start: the
+		// limit holds the machine's step, and the screen names the limit beside the
+		// row the operator's own key still confirms.
+		const landed: FetchOutcome = {
+			status: "success",
+			fetchedAt: "2026-08-31T10:01:00Z",
+			tickets: [fetched(5, "Persist source facts", ["ready-for-review"])],
+		};
+		const app = seededApp("awaiting", { maxHandoffsPerTicket: 1 }, landed, "live-worktree", {
+			transition: reviewRoute(),
+		});
+		stubCheckout(app);
+		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+		await withApp(
+			async (setup) => {
+				app.src.settle(landed);
+				await awaitFrame(setup, (f) => ticketRow(f).includes("[awaiting]"), "the awaiting ticket");
+				await pressReturn(setup, "the decision modal", (f) => f.includes("Decision:"));
+				const panel = frameText(await settle(setup));
+				expect(panel).toContain("Handoff: review");
+				expect(panel).toContain("the Next step is held: the position is at the handoff limit");
 			},
 			WIDTH,
 			HEIGHT,
