@@ -20,7 +20,8 @@ import {
 } from "../src/consultation.ts";
 import { expandHome, realPathOf } from "../src/repo.ts";
 import type { CommandRunner } from "../src/runner.ts";
-import { type FactoryState, openFactoryState } from "../src/state.ts";
+import type { FactoryState } from "../src/state.ts";
+import { openFactoryState } from "../src/state.ts";
 import { BASE_CONFIG } from "./base-config.ts";
 import { FakeRunner } from "./fake-runner.ts";
 
@@ -45,7 +46,7 @@ function makeStateFile(): { state: FactoryState; path: string } {
 }
 
 function createConsultation(state: FactoryState, id = "consultation-1") {
-	return state.createConsultation({
+	return state.consultationRecord.createConsultation({
 		id,
 		typeName: "grill-with-docs",
 		agentType: "pi",
@@ -372,211 +373,260 @@ describe("durable Consultation lifecycle", () => {
 	test("stores turns, snapshots, old drafts, partial output, and replacement context", () => {
 		const state = makeState();
 		const consultation = createConsultation(state);
-		state.setConsultationAgent(consultation.id, {
+		state.consultationRecord.setConsultationAgent(consultation.id, {
 			paneId: "pane-1",
 			tabId: "tab-1",
 			workspaceId: "workspace-1",
 			sessionId: "session-1",
 		});
-		expect(state.consultation(consultation.id)?.state).toBe("working");
-		expect(state.settleConsultationTurn(consultation.id, 1, "first answer", "idle")).toBe(true);
-		state.setConsultationDraft(consultation.id, "draft response");
+		expect(state.consultationRecord.consultation(consultation.id)?.state).toBe("working");
+		expect(
+			state.consultationRecord.settleConsultationTurn(consultation.id, 1, "first answer", "idle"),
+		).toBe(true);
+		state.consultationRecord.setConsultationDraft(consultation.id, "draft response");
 		// A response is a durable pending delivery until Herdr accepts it.
-		const pending = state.beginConsultationResponse(consultation.id, "second question", 1);
+		const pending = state.consultationRecord.beginConsultationResponse(
+			consultation.id,
+			"second question",
+			1,
+		);
 		expect(pending).toBeDefined();
 		if (pending === undefined) throw new Error("pending delivery missing");
-		expect(state.consultation(consultation.id)?.state).toBe("awaiting-response");
-		expect(state.consultationTurns(consultation.id)).toHaveLength(1);
-		state.setConsultationDraft(consultation.id, "old draft", true);
-		const turn = state.acceptConsultationResponse(consultation.id, pending.id);
+		expect(state.consultationRecord.consultation(consultation.id)?.state).toBe("awaiting-response");
+		expect(state.consultationRecord.consultationTurns(consultation.id)).toHaveLength(1);
+		state.consultationRecord.setConsultationDraft(consultation.id, "old draft", true);
+		const turn = state.consultationRecord.acceptConsultationResponse(consultation.id, pending.id);
 		expect(turn).toMatchObject({ input: "second question", sequenceBaseline: 1 });
 		// The Consultation is working after accepting its own second turn.
-		expect(state.settleConsultationTurn(consultation.id, 2, "second answer", "blocked")).toBe(true);
-		const stored = state.consultation(consultation.id);
+		expect(
+			state.consultationRecord.settleConsultationTurn(
+				consultation.id,
+				2,
+				"second answer",
+				"blocked",
+			),
+		).toBe(true);
+		const stored = state.consultationRecord.consultation(consultation.id);
 		expect(stored).toMatchObject({ state: "awaiting-response", latestSequence: 2, draft: "" });
-		expect(state.consultationSnapshots(consultation.id)).toHaveLength(2);
-		expect(state.consultationTurns(consultation.id)).toHaveLength(2);
-		expect(state.replacementInput(consultation.id)).toContain("Original input:");
-		expect(state.replacementInput(consultation.id)).toContain(
+		expect(state.consultationRecord.consultationSnapshots(consultation.id)).toHaveLength(2);
+		expect(state.consultationRecord.consultationTurns(consultation.id)).toHaveLength(2);
+		expect(state.consultationRecord.replacementInput(consultation.id)).toContain("Original input:");
+		expect(state.consultationRecord.replacementInput(consultation.id)).toContain(
 			"Operator response:\nsecond question",
 		);
-		expect(state.replacementInput(consultation.id)).not.toContain(
+		expect(state.consultationRecord.replacementInput(consultation.id)).not.toContain(
 			"Operator response:\nReview this repository",
 		);
-		state.captureConsultationPartial(consultation.id, "partial 😀 output");
-		expect(state.consultationSnapshots(consultation.id).some((snapshot) => snapshot.partial)).toBe(
-			true,
-		);
+		state.consultationRecord.captureConsultationPartial(consultation.id, "partial 😀 output");
+		expect(
+			state.consultationRecord
+				.consultationSnapshots(consultation.id)
+				.some((snapshot) => snapshot.partial),
+		).toBe(true);
 		state.close();
 	});
 
 	test("keeps at most one pending response and accepts only its id", () => {
 		const state = makeState();
 		const consultation = createConsultation(state);
-		state.setConsultationAgent(consultation.id, { paneId: "pane-1" });
-		state.settleConsultationTurn(consultation.id, 1, "answer");
-		const first = state.beginConsultationResponse(consultation.id, "a", 1);
+		state.consultationRecord.setConsultationAgent(consultation.id, { paneId: "pane-1" });
+		state.consultationRecord.settleConsultationTurn(consultation.id, 1, "answer");
+		const first = state.consultationRecord.beginConsultationResponse(consultation.id, "a", 1);
 		expect(first).toBeDefined();
 		if (first === undefined) throw new Error("pending delivery missing");
-		expect(state.beginConsultationResponse(consultation.id, "b", 1)).toBeUndefined();
-		expect(state.acceptConsultationResponse(consultation.id, "some-other-id")).toBeUndefined();
-		expect(state.pendingConsultationResponse(consultation.id)?.id).toBe(first.id);
-		expect(state.acceptConsultationResponse(consultation.id, first.id)).toBeDefined();
-		expect(state.pendingConsultationResponse(consultation.id)).toBeNull();
-		expect(state.consultationTurns(consultation.id)).toHaveLength(2);
+		expect(
+			state.consultationRecord.beginConsultationResponse(consultation.id, "b", 1),
+		).toBeUndefined();
+		expect(
+			state.consultationRecord.acceptConsultationResponse(consultation.id, "some-other-id"),
+		).toBeUndefined();
+		expect(state.consultationRecord.pendingConsultationResponse(consultation.id)?.id).toBe(
+			first.id,
+		);
+		expect(
+			state.consultationRecord.acceptConsultationResponse(consultation.id, first.id),
+		).toBeDefined();
+		expect(state.consultationRecord.pendingConsultationResponse(consultation.id)).toBeNull();
+		expect(state.consultationRecord.consultationTurns(consultation.id)).toHaveLength(2);
 		state.close();
 	});
 
 	test("adopts the pending input when the Agent settles the turn externally", () => {
 		const state = makeState();
 		const consultation = createConsultation(state);
-		state.setConsultationAgent(consultation.id, { paneId: "pane-1" });
-		state.settleConsultationTurn(consultation.id, 1, "first answer");
-		const pending = state.beginConsultationResponse(consultation.id, "second question", 1);
+		state.consultationRecord.setConsultationAgent(consultation.id, { paneId: "pane-1" });
+		state.consultationRecord.settleConsultationTurn(consultation.id, 1, "first answer");
+		const pending = state.consultationRecord.beginConsultationResponse(
+			consultation.id,
+			"second question",
+			1,
+		);
 		expect(pending).toBeDefined();
 		if (pending === undefined) throw new Error("pending delivery missing");
-		expect(state.recordExternalConsultationTurn(consultation.id, 2)).toBe(true);
-		const turns = state.consultationTurns(consultation.id);
+		expect(state.consultationRecord.recordExternalConsultationTurn(consultation.id, 2)).toBe(true);
+		const turns = state.consultationRecord.consultationTurns(consultation.id);
 		expect(turns).toHaveLength(2);
 		expect(turns[1]).toMatchObject({ input: "second question", sequenceBaseline: 1 });
-		expect(state.pendingConsultationResponse(consultation.id)).toBeNull();
-		expect(state.consultation(consultation.id)?.state).toBe("working");
+		expect(state.consultationRecord.pendingConsultationResponse(consultation.id)).toBeNull();
+		expect(state.consultationRecord.consultation(consultation.id)?.state).toBe("working");
 		// The delivery is consumed exactly once: a later accept is a no-op.
-		expect(state.acceptConsultationResponse(consultation.id, pending.id)).toBeUndefined();
+		expect(
+			state.consultationRecord.acceptConsultationResponse(consultation.id, pending.id),
+		).toBeUndefined();
 		state.close();
 	});
 
 	test("ignores an external turn for a consultation that does not exist", () => {
 		const state = makeState();
-		expect(state.recordExternalConsultationTurn("no-such-consultation", 1)).toBe(false);
+		expect(state.consultationRecord.recordExternalConsultationTurn("no-such-consultation", 1)).toBe(
+			false,
+		);
 		state.close();
 	});
 
 	test("ignores an external turn while the Agent works on a response", () => {
 		const state = makeState();
 		const consultation = createConsultation(state);
-		state.setConsultationAgent(consultation.id, { paneId: "pane-1" });
-		state.settleConsultationTurn(consultation.id, 1, "answer");
-		const pending = state.beginConsultationResponse(consultation.id, "second question", 1);
+		state.consultationRecord.setConsultationAgent(consultation.id, { paneId: "pane-1" });
+		state.consultationRecord.settleConsultationTurn(consultation.id, 1, "answer");
+		const pending = state.consultationRecord.beginConsultationResponse(
+			consultation.id,
+			"second question",
+			1,
+		);
 		if (pending === undefined) throw new Error("pending delivery missing");
-		state.acceptConsultationResponse(consultation.id, pending.id);
-		expect(state.consultation(consultation.id)?.state).toBe("working");
-		expect(state.recordExternalConsultationTurn(consultation.id, 2)).toBe(false);
+		state.consultationRecord.acceptConsultationResponse(consultation.id, pending.id);
+		expect(state.consultationRecord.consultation(consultation.id)?.state).toBe("working");
+		expect(state.consultationRecord.recordExternalConsultationTurn(consultation.id, 2)).toBe(false);
 		state.close();
 	});
 
 	test("preserves a draft when a pending delivery is rejected", () => {
 		const state = makeState();
 		const consultation = createConsultation(state);
-		state.setConsultationAgent(consultation.id, { paneId: "pane-1" });
-		state.settleConsultationTurn(consultation.id, 1, "answer");
-		state.setConsultationDraft(consultation.id, "follow up");
-		const pending = state.beginConsultationResponse(consultation.id, "follow up", 1);
+		state.consultationRecord.setConsultationAgent(consultation.id, { paneId: "pane-1" });
+		state.consultationRecord.settleConsultationTurn(consultation.id, 1, "answer");
+		state.consultationRecord.setConsultationDraft(consultation.id, "follow up");
+		const pending = state.consultationRecord.beginConsultationResponse(
+			consultation.id,
+			"follow up",
+			1,
+		);
 		expect(pending).toBeDefined();
 		if (pending === undefined) throw new Error("pending delivery missing");
 		// The Consultation still waits for its response; no turn was committed.
-		expect(state.consultation(consultation.id)).toMatchObject({
+		expect(state.consultationRecord.consultation(consultation.id)).toMatchObject({
 			state: "awaiting-response",
 			draft: "follow up",
 		});
-		expect(state.consultationTurns(consultation.id)).toHaveLength(1);
-		expect(state.cancelConsultationResponse(consultation.id, pending.id)).toBe(true);
-		expect(state.consultation(consultation.id)).toMatchObject({
+		expect(state.consultationRecord.consultationTurns(consultation.id)).toHaveLength(1);
+		expect(state.consultationRecord.cancelConsultationResponse(consultation.id, pending.id)).toBe(
+			true,
+		);
+		expect(state.consultationRecord.consultation(consultation.id)).toMatchObject({
 			state: "awaiting-response",
 			draft: "follow up",
 		});
-		expect(state.pendingConsultationResponse(consultation.id)).toBeNull();
-		expect(state.cancelConsultationResponse(consultation.id, pending.id)).toBe(false);
+		expect(state.consultationRecord.pendingConsultationResponse(consultation.id)).toBeNull();
+		expect(state.consultationRecord.cancelConsultationResponse(consultation.id, pending.id)).toBe(
+			false,
+		);
 		state.close();
 	});
 
 	test("keeps a failed opening immutable and recoverable only while opening", () => {
 		const state = makeState();
 		const consultation = createConsultation(state);
-		expect(state.consultation(consultation.id)?.state).toBe("opening");
-		expect(state.canRecoverConsultationOpening(consultation.id)).toBe(true);
-		state.failConsultationOpening(consultation.id, "herdr refused the launch");
-		expect(state.consultation(consultation.id)).toMatchObject({
+		expect(state.consultationRecord.consultation(consultation.id)?.state).toBe("opening");
+		expect(state.consultationRecord.canRecoverConsultationOpening(consultation.id)).toBe(true);
+		state.consultationRecord.failConsultationOpening(consultation.id, "herdr refused the launch");
+		expect(state.consultationRecord.consultation(consultation.id)).toMatchObject({
 			state: "failed",
 			failure: "herdr refused the launch",
 		});
-		expect(state.canRecoverConsultationOpening(consultation.id)).toBe(false);
+		expect(state.consultationRecord.canRecoverConsultationOpening(consultation.id)).toBe(false);
 		// A failed record cannot resume work; only close-family moves remain.
-		expect(state.setConsultationState(consultation.id, "opening")).toBe(false);
-		expect(state.setConsultationState(consultation.id, "working")).toBe(false);
-		expect(state.setConsultationState(consultation.id, "awaiting-response")).toBe(false);
-		expect(state.setConsultationState(consultation.id, "closing")).toBe(true);
+		expect(state.consultationRecord.setConsultationState(consultation.id, "opening")).toBe(false);
+		expect(state.consultationRecord.setConsultationState(consultation.id, "working")).toBe(false);
+		expect(
+			state.consultationRecord.setConsultationState(consultation.id, "awaiting-response"),
+		).toBe(false);
+		expect(state.consultationRecord.setConsultationState(consultation.id, "closing")).toBe(true);
 		state.close();
 	});
 
 	test("backs up a missing snapshot on a later successful read", () => {
 		const state = makeState();
 		const consultation = createConsultation(state);
-		state.setConsultationAgent(consultation.id, { paneId: "pane-1" });
+		state.consultationRecord.setConsultationAgent(consultation.id, { paneId: "pane-1" });
 		// The first poll saw the Agent settle before any output was captured.
-		expect(state.settleConsultationTurn(consultation.id, 1, null, "idle")).toBe(true);
-		expect(state.consultationNeedsSnapshot(consultation.id)).toBe(true);
-		expect(state.fillConsultationSnapshot(consultation.id, "late output")).toBe(true);
-		expect(state.consultationNeedsSnapshot(consultation.id)).toBe(false);
-		const snapshots = state.consultationSnapshots(consultation.id);
+		expect(state.consultationRecord.settleConsultationTurn(consultation.id, 1, null, "idle")).toBe(
+			true,
+		);
+		expect(state.consultationRecord.consultationNeedsSnapshot(consultation.id)).toBe(true);
+		expect(state.consultationRecord.fillConsultationSnapshot(consultation.id, "late output")).toBe(
+			true,
+		);
+		expect(state.consultationRecord.consultationNeedsSnapshot(consultation.id)).toBe(false);
+		const snapshots = state.consultationRecord.consultationSnapshots(consultation.id);
 		expect(snapshots).toHaveLength(1);
 		expect(snapshots[0].text).toBe("late output");
 		// A second backfill has nothing left to fill.
-		expect(state.fillConsultationSnapshot(consultation.id, "again")).toBe(false);
+		expect(state.consultationRecord.fillConsultationSnapshot(consultation.id, "again")).toBe(false);
 		state.close();
 	});
 
 	test("records remaining resources on a forced close", () => {
 		const state = makeState();
 		const consultation = createConsultation(state);
-		state.setConsultationAgent(consultation.id, {
+		state.consultationRecord.setConsultationAgent(consultation.id, {
 			paneId: "pane-1",
 			tabId: "tab-1",
 			workspaceId: "workspace-1",
 		});
-		state.recordConsultationResource(consultation.id, {
+		state.consultationRecord.recordConsultationResource(consultation.id, {
 			kind: "pane",
 			resourceId: "pane-1",
 			owned: true,
 			details: "consultation pane",
 		});
-		state.recordConsultationResource(consultation.id, {
+		state.consultationRecord.recordConsultationResource(consultation.id, {
 			kind: "worktree",
 			resourceId: "worktree-1",
 			owned: true,
 			details: "/tmp/worktree-1",
 		});
-		state.beginConsultationClose(consultation.id);
-		state.finishConsultationClose(
+		state.consultationRecord.beginConsultationClose(consultation.id);
+		state.consultationRecord.finishConsultationClose(
 			consultation.id,
 			"forced close; owned resources were not confirmed closed",
 			true,
 		);
-		expect(state.consultation(consultation.id)?.state).toBe("closed");
-		expect(state.consultationRemainingResources(consultation.id)).toMatchObject([
+		expect(state.consultationRecord.consultation(consultation.id)?.state).toBe("closed");
+		expect(state.consultationRecord.consultationRemainingResources(consultation.id)).toMatchObject([
 			{ kind: "pane", resourceId: "pane-1" },
 			{ kind: "worktree", resourceId: "worktree-1" },
 		]);
 		// A normal close leaves no remaining resources.
 		const other = createConsultation(state, "consultation-2");
-		state.setConsultationAgent(other.id, { paneId: "pane-2" });
-		state.recordConsultationResource(other.id, {
+		state.consultationRecord.setConsultationAgent(other.id, { paneId: "pane-2" });
+		state.consultationRecord.recordConsultationResource(other.id, {
 			kind: "pane",
 			resourceId: "pane-2",
 			owned: true,
 			details: "consultation pane",
 		});
-		state.beginConsultationClose(other.id);
-		state.finishConsultationClose(other.id);
-		expect(state.consultation(other.id)?.state).toBe("closed");
-		expect(state.consultationRemainingResources(other.id)).toEqual([]);
+		state.consultationRecord.beginConsultationClose(other.id);
+		state.consultationRecord.finishConsultationClose(other.id);
+		expect(state.consultationRecord.consultation(other.id)?.state).toBe("closed");
+		expect(state.consultationRecord.consultationRemainingResources(other.id)).toEqual([]);
 		state.close();
 	});
 
 	describe("the Consultation turn end cause", () => {
 		function working(state: FactoryState, id = "consultation-1") {
 			const consultation = createConsultation(state, id);
-			state.setConsultationAgent(consultation.id, { paneId: "pane-1" });
+			state.consultationRecord.setConsultationAgent(consultation.id, { paneId: "pane-1" });
 			return consultation.id;
 		}
 
@@ -584,7 +634,7 @@ describe("durable Consultation lifecycle", () => {
 			const state = makeState();
 			const id = working(state);
 			expect(
-				state.settleConsultationTurn(
+				state.consultationRecord.settleConsultationTurn(
 					id,
 					1,
 					"boom",
@@ -597,11 +647,11 @@ describe("durable Consultation lifecycle", () => {
 			// The turn is not an answer, but the Agent is alive: the Consultation
 			// rests where it can be answered or closed, not the terminal line, and
 			// it names the cause so the failure is not silent.
-			expect(state.consultation(id)?.state).toBe("awaiting-response");
-			expect(state.consultation(id)?.warning).toBe(
+			expect(state.consultationRecord.consultation(id)?.state).toBe("awaiting-response");
+			expect(state.consultationRecord.consultation(id)?.warning).toBe(
 				"Turn ended failed: the API rejected the request",
 			);
-			const turn = state.consultationTurns(id)[0];
+			const turn = state.consultationRecord.consultationTurns(id)[0];
 			expect(turn.cause).toBe("failed");
 			expect(turn.detail).toBe("the API rejected the request");
 			state.close();
@@ -611,27 +661,47 @@ describe("durable Consultation lifecycle", () => {
 			const state = makeState();
 			const id = working(state);
 			expect(
-				state.settleConsultationTurn(id, 1, "", "idle", "2026-09-01T00:01:00Z", "aborted"),
+				state.consultationRecord.settleConsultationTurn(
+					id,
+					1,
+					"",
+					"idle",
+					"2026-09-01T00:01:00Z",
+					"aborted",
+				),
 			).toBe(true);
-			expect(state.consultation(id)?.state).toBe("awaiting-response");
-			expect(state.consultation(id)?.warning).toBe("Turn ended aborted");
-			expect(state.consultationTurns(id)[0].cause).toBe("aborted");
+			expect(state.consultationRecord.consultation(id)?.state).toBe("awaiting-response");
+			expect(state.consultationRecord.consultation(id)?.warning).toBe("Turn ended aborted");
+			expect(state.consultationRecord.consultationTurns(id)[0].cause).toBe("aborted");
 			state.close();
 		});
 
 		test("a settled turn clears a failed turn's warning", () => {
 			const state = makeState();
 			const id = working(state);
-			state.settleConsultationTurn(id, 1, "boom", "idle", "2026-09-01T00:01:00Z", "aborted");
-			expect(state.consultation(id)?.warning).toBe("Turn ended aborted");
+			state.consultationRecord.settleConsultationTurn(
+				id,
+				1,
+				"boom",
+				"idle",
+				"2026-09-01T00:01:00Z",
+				"aborted",
+			);
+			expect(state.consultationRecord.consultation(id)?.warning).toBe("Turn ended aborted");
 			// The Agent answers again: the later turn is quiet, the failure stays on
 			// the turn record, and the Consultation stays awaiting.
-			const pending = state.beginConsultationResponse(id, "try again", null);
+			const pending = state.consultationRecord.beginConsultationResponse(id, "try again", null);
 			if (pending === undefined) throw new Error("no pending response");
-			state.acceptConsultationResponse(id, pending.id);
-			state.settleConsultationTurn(id, 2, "answer", "idle", "2026-09-01T00:02:00Z");
-			expect(state.consultation(id)?.state).toBe("awaiting-response");
-			expect(state.consultation(id)?.warning).toBeNull();
+			state.consultationRecord.acceptConsultationResponse(id, pending.id);
+			state.consultationRecord.settleConsultationTurn(
+				id,
+				2,
+				"answer",
+				"idle",
+				"2026-09-01T00:02:00Z",
+			);
+			expect(state.consultationRecord.consultation(id)?.state).toBe("awaiting-response");
+			expect(state.consultationRecord.consultation(id)?.warning).toBeNull();
 			state.close();
 		});
 
@@ -640,11 +710,18 @@ describe("durable Consultation lifecycle", () => {
 				const state = makeState();
 				const id = working(state, `consultation-${cause}`);
 				expect(
-					state.settleConsultationTurn(id, 1, "answer", "idle", "2026-09-01T00:01:00Z", cause),
+					state.consultationRecord.settleConsultationTurn(
+						id,
+						1,
+						"answer",
+						"idle",
+						"2026-09-01T00:01:00Z",
+						cause,
+					),
 				).toBe(true);
-				expect(state.consultation(id)?.state).toBe("awaiting-response");
-				expect(state.consultation(id)?.warning).toBeNull();
-				expect(state.consultationTurns(id)[0].cause).toBe(cause);
+				expect(state.consultationRecord.consultation(id)?.state).toBe("awaiting-response");
+				expect(state.consultationRecord.consultation(id)?.warning).toBeNull();
+				expect(state.consultationRecord.consultationTurns(id)[0].cause).toBe(cause);
 				state.close();
 			}
 		});
@@ -652,10 +729,10 @@ describe("durable Consultation lifecycle", () => {
 		test("a settle without a cause defaults to unknown and stays awaiting", () => {
 			const state = makeState();
 			const id = working(state);
-			expect(state.settleConsultationTurn(id, 1, "answer", "idle")).toBe(true);
-			expect(state.consultationTurns(id)[0].cause).toBe("unknown");
-			expect(state.consultationTurns(id)[0].detail).toBe("");
-			expect(state.consultation(id)?.state).toBe("awaiting-response");
+			expect(state.consultationRecord.settleConsultationTurn(id, 1, "answer", "idle")).toBe(true);
+			expect(state.consultationRecord.consultationTurns(id)[0].cause).toBe("unknown");
+			expect(state.consultationRecord.consultationTurns(id)[0].detail).toBe("");
+			expect(state.consultationRecord.consultation(id)?.state).toBe("awaiting-response");
 			state.close();
 		});
 	});
@@ -666,10 +743,10 @@ describe("durable Consultation privacy", () => {
 		const state = makeState();
 		const consultation = createConsultation(state, "consultation-1");
 		const id = consultation.id;
-		state.setConsultationAgent(id, { paneId: "pane-11111111" });
-		state.setConsultationState(id, "working");
-		state.settleConsultationTurn(id, 1, "a".repeat(2 * 1024 * 1024), "idle");
-		const [snapshot] = state.consultationSnapshots(id);
+		state.consultationRecord.setConsultationAgent(id, { paneId: "pane-11111111" });
+		state.consultationRecord.setConsultationState(id, "working");
+		state.consultationRecord.settleConsultationTurn(id, 1, "a".repeat(2 * 1024 * 1024), "idle");
+		const [snapshot] = state.consultationRecord.consultationSnapshots(id);
 		expect(snapshot).toBeDefined();
 		expect(snapshot.truncated).toBe(true);
 		expect(Buffer.byteLength(snapshot.text, "utf8")).toBeLessThanOrEqual(1024 * 1024);
@@ -691,7 +768,7 @@ describe("durable Consultation privacy", () => {
 		const { state, path } = makeStateFile();
 		const marker = "UNIQUE-PLAINTEXT-MARKER-4f9c21";
 		const id = "consultation-1";
-		state.createConsultation({
+		state.consultationRecord.createConsultation({
 			id,
 			typeName: "grill-with-docs",
 			agentType: "pi",
@@ -711,14 +788,14 @@ describe("durable Consultation privacy", () => {
 			agentName: "consultation-11111111",
 			createdAt: "2026-09-01T00:00:00.000Z",
 		});
-		state.setConsultationAgent(id, { paneId: "pane-11111111" });
-		state.setConsultationState(id, "working");
-		state.settleConsultationTurn(id, 1, `settled ${marker}`, "idle");
-		state.setConsultationState(id, "closing");
-		state.finishConsultationClose(id);
-		expect(state.consultation(id)).toBeDefined();
-		state.deleteConsultation(id);
-		expect(state.consultation(id)).toBeUndefined();
+		state.consultationRecord.setConsultationAgent(id, { paneId: "pane-11111111" });
+		state.consultationRecord.setConsultationState(id, "working");
+		state.consultationRecord.settleConsultationTurn(id, 1, `settled ${marker}`, "idle");
+		state.consultationRecord.setConsultationState(id, "closing");
+		state.consultationRecord.finishConsultationClose(id);
+		expect(state.consultationRecord.consultation(id)).toBeDefined();
+		state.consultationRecord.deleteConsultation(id);
+		expect(state.consultationRecord.consultation(id)).toBeUndefined();
 		// The checkpoint truncates the WAL: nothing of the history stays in it.
 		expect(statSync(`${path}-wal`).size).toBe(0);
 		// secure_delete zero-fills the released pages: no plaintext in the file.
@@ -731,31 +808,37 @@ describe("pending responses across restart and migration", () => {
 	test("survives a restart and commits exactly one turn on recovery", () => {
 		const { state, path } = makeStateFile();
 		const consultation = createConsultation(state);
-		state.setConsultationAgent(consultation.id, { paneId: "pane-1" });
-		state.settleConsultationTurn(consultation.id, 1, "first answer");
-		const pending = state.beginConsultationResponse(consultation.id, "unaccepted prompt", 1);
+		state.consultationRecord.setConsultationAgent(consultation.id, { paneId: "pane-1" });
+		state.consultationRecord.settleConsultationTurn(consultation.id, 1, "first answer");
+		const pending = state.consultationRecord.beginConsultationResponse(
+			consultation.id,
+			"unaccepted prompt",
+			1,
+		);
 		expect(pending).toBeDefined();
 		if (pending === undefined) throw new Error("pending delivery missing");
 		state.close();
 		// Reopen after a crash between the durable write and the Herdr call.
 		const reopened = openFactoryState(path);
-		expect(reopened.pendingConsultationResponse(consultation.id)).toMatchObject({
+		expect(reopened.consultationRecord.pendingConsultationResponse(consultation.id)).toMatchObject({
 			input: "unaccepted prompt",
 		});
 		// No turn exists for the unaccepted prompt yet.
-		expect(reopened.consultationTurns(consultation.id)).toHaveLength(1);
-		expect(reopened.acceptConsultationResponse(consultation.id, pending.id)).toBeDefined();
-		expect(reopened.consultationTurns(consultation.id)).toHaveLength(2);
-		expect(reopened.pendingConsultationResponse(consultation.id)).toBeNull();
-		expect(reopened.consultation(consultation.id)?.state).toBe("working");
+		expect(reopened.consultationRecord.consultationTurns(consultation.id)).toHaveLength(1);
+		expect(
+			reopened.consultationRecord.acceptConsultationResponse(consultation.id, pending.id),
+		).toBeDefined();
+		expect(reopened.consultationRecord.consultationTurns(consultation.id)).toHaveLength(2);
+		expect(reopened.consultationRecord.pendingConsultationResponse(consultation.id)).toBeNull();
+		expect(reopened.consultationRecord.consultation(consultation.id)?.state).toBe("working");
 		reopened.close();
 	});
 
 	test("migrates a v4 database to v5 and keeps the Consultation history", () => {
 		const { state, path } = makeStateFile();
 		const consultation = createConsultation(state);
-		state.setConsultationAgent(consultation.id, { paneId: "pane-1" });
-		state.settleConsultationTurn(consultation.id, 1, "first answer", "idle");
+		state.consultationRecord.setConsultationAgent(consultation.id, { paneId: "pane-1" });
+		state.consultationRecord.settleConsultationTurn(consultation.id, 1, "first answer", "idle");
 		state.close();
 		// Downgrade the record to the v4 shape.
 		const db = new Database(path);
@@ -795,18 +878,22 @@ describe("pending responses across restart and migration", () => {
 		db.prepare("UPDATE schema_version SET version = 4").run();
 		db.close();
 		const reopened = openFactoryState(path);
-		expect(reopened.consultation(consultation.id)?.state).toBe("awaiting-response");
-		expect(reopened.consultationTurns(consultation.id)).toHaveLength(1);
+		expect(reopened.consultationRecord.consultation(consultation.id)?.state).toBe(
+			"awaiting-response",
+		);
+		expect(reopened.consultationRecord.consultationTurns(consultation.id)).toHaveLength(1);
 		// The pending table is back and usable for the preserved history.
-		expect(reopened.pendingConsultationResponse(consultation.id)).toBeNull();
-		expect(reopened.beginConsultationResponse(consultation.id, "again", 1)).toBeDefined();
+		expect(reopened.consultationRecord.pendingConsultationResponse(consultation.id)).toBeNull();
+		expect(
+			reopened.consultationRecord.beginConsultationResponse(consultation.id, "again", 1),
+		).toBeDefined();
 		reopened.close();
 	});
 
 	test("migrates a v9 database to v10: the override column goes, the checkout set comes", () => {
 		const { state, path } = makeStateFile();
 		const consultation = createConsultation(state);
-		state.setConsultationAgent(consultation.id, { paneId: "pane-1" });
+		state.consultationRecord.setConsultationAgent(consultation.id, { paneId: "pane-1" });
 		state.close();
 		// Downgrade the record to the v9 shape: restore the one-shot override
 		// column the v10 step drops, and drop the checkout's confirmed set.
@@ -828,15 +915,17 @@ describe("pending responses across restart and migration", () => {
 		const reopened = openFactoryState(path);
 		// The Consultation record survives the step, and its row reads back
 		// without the dropped column.
-		expect(reopened.consultation(consultation.id)?.state).toBe("working");
+		expect(reopened.consultationRecord.consultation(consultation.id)?.state).toBe("working");
 		const columns = new Database(path).prepare("PRAGMA table_info(consultations)").all() as Array<{
 			name: string;
 		}>;
 		expect(columns.map((column) => column.name)).not.toContain("live_conflict_override");
 		// The checkout's confirmed set is fresh and usable.
-		expect(reopened.confirmedCheckoutConflicts("/tmp/factory")).toEqual([]);
-		reopened.recordCheckoutConflictConfirmation("/tmp/factory", ["pane-1"]);
-		expect(reopened.confirmedCheckoutConflicts("/tmp/factory")).toEqual(["pane-1"]);
+		expect(reopened.consultationRecord.confirmedCheckoutConflicts("/tmp/factory")).toEqual([]);
+		reopened.consultationRecord.recordCheckoutConflictConfirmation("/tmp/factory", ["pane-1"]);
+		expect(reopened.consultationRecord.confirmedCheckoutConflicts("/tmp/factory")).toEqual([
+			"pane-1",
+		]);
 		reopened.close();
 	});
 });

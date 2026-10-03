@@ -20,7 +20,8 @@ import type { FactoryConfig } from "../src/config.ts";
 import type { FetchedTicket } from "../src/domain/ticket.ts";
 import { withIssueReferences } from "../src/domain/ticket.ts";
 import { agentNameFor } from "../src/naming.ts";
-import { type FactoryState, openFactoryState } from "../src/state.ts";
+import type { FactoryState } from "../src/state.ts";
+import { openFactoryState } from "../src/state.ts";
 import {
 	actionBarRowOf,
 	awaitFrame,
@@ -104,10 +105,10 @@ function rig(
 ): Rig {
 	const state = openFactoryState(statePath());
 	// Hold the flat axis: the frames read the unsplit list (ADR 0066).
-	state.setGroupingAxis("tickets", "none");
-	state.initializeSources([{ name: "issues", kind: "github-issues" }]);
-	state.applyFetch({ name: "issues", kind: "github-issues" }, success(twoTickets()));
-	if (over.autoMode === true) state.setAutoHandoffMode(true);
+	state.grouping.setGroupingAxis("tickets", "none");
+	state.sourceFact.initializeSources([{ name: "issues", kind: "github-issues" }]);
+	state.sourceFact.applyFetch({ name: "issues", kind: "github-issues" }, success(twoTickets()));
+	if (over.autoMode === true) state.handoff.setAutoHandoffMode(true);
 	const runner = emptyAgentRunner();
 	const home = mkdtempSync(join(tmpdir(), "factory-ignore-home-"));
 	paths.push(home);
@@ -276,8 +277,8 @@ describe("the ignore key", () => {
 					).toBe(true);
 					// The flag is factory state on the state file, read back through
 					// the file's own API, and the row's projection carries it.
-					expect(state.ignoredTickets().has(FIRST)).toBe(true);
-					expect(state.projectedTickets([], "implement")).toEqual([
+					expect(state.ticketWorkCycle.ignoredTickets().has(FIRST)).toBe(true);
+					expect(state.ticketWorkCycle.projectedTickets([], "implement")).toEqual([
 						expect.objectContaining({
 							identity: FIRST,
 							ignored: true,
@@ -325,7 +326,7 @@ describe("the ignore key", () => {
 						(f) => !headerRow(f).includes("ignored") && listRowOf(f, FIRST_LEAD) < 0,
 					);
 					expect(messageRowOf(cleared)).toContain(`"${firstTitle}" is not ignored`);
-					expect(state.ignoredTickets().has(FIRST)).toBe(false);
+					expect(state.ticketWorkCycle.ignoredTickets().has(FIRST)).toBe(false);
 					// The cycle walks the ledger it passes: the empty muted view, then the
 					// every-row view where the Ticket is listed again.
 					await press(setup, "f", "the muted view", (f) => !headerRow(f).includes("muted: "));
@@ -397,9 +398,9 @@ describe("the ignore key", () => {
 					// A restart opens on the active rows and never on the pile: the
 					// filter is a session view fact, and the file's own default read
 					// is the active view.
-					expect(state.visibleTickets([], "implement").map((ticket) => ticket.identity)).toEqual([
-						SECOND,
-					]);
+					expect(
+						state.ticketWorkCycle.visibleTickets([], "implement").map((ticket) => ticket.identity),
+					).toEqual([SECOND]);
 				},
 				WIDTH,
 				HEIGHT,
@@ -419,14 +420,14 @@ describe("the ignore key", () => {
 	test("cycling the filter moves no count and rings no bell", async () => {
 		const state = openFactoryState(statePath());
 		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
-		state.setGroupingAxis("tickets", "none");
+		state.grouping.setGroupingAxis("tickets", "none");
 		const outcome = success(twoTickets());
-		state.initializeSources([{ name: "issues", kind: "github-issues" }]);
-		state.applyFetch({ name: "issues", kind: "github-issues" }, outcome);
+		state.sourceFact.initializeSources([{ name: "issues", kind: "github-issues" }]);
+		state.sourceFact.applyFetch({ name: "issues", kind: "github-issues" }, outcome);
 		// One held turn rests on the operator's decision, and one open Ticket is
 		// judged out: the two facts the header carries beside the steady counts.
 		const attempt = seedInFlightTurn(state, outcome, FIRST);
-		state.settleTurn({
+		state.ticketWorkCycle.settleTurn({
 			ticketIdentity: FIRST,
 			handoffId: attempt,
 			taskType: "implement",
@@ -436,7 +437,7 @@ describe("the ignore key", () => {
 			completedAt: "2026-08-31T11:00:00Z",
 			cause: "failed",
 		});
-		expect(state.setTicketIgnored(SECOND, true, null).ok).toBe(true);
+		expect(state.ticketWorkCycle.setTicketIgnored(SECOND, true, null).ok).toBe(true);
 		const runner = emptyAgentRunner();
 		const src = new FakeSource("issues", "github-issues", outcome);
 		const bells = countBells();
@@ -623,8 +624,8 @@ describe("the ignore key", () => {
 	 */
 	test("the axis counts the rows the ignore leaves, and the pile its own", async () => {
 		const { state, src, props } = rig();
-		state.setGroupingAxis("tickets", "repository");
-		expect(state.setTicketIgnored(FIRST, true, null).ok).toBe(true);
+		state.grouping.setGroupingAxis("tickets", "repository");
+		expect(state.ticketWorkCycle.setTicketIgnored(FIRST, true, null).ok).toBe(true);
 		try {
 			await withApp(
 				async (setup) => {
@@ -732,9 +733,9 @@ describe("the ignore key", () => {
  */
 test("the no-state shell refuses i and f with the same missing fact", async () => {
 	const seeded = openFactoryState(statePath());
-	seeded.initializeSources([{ name: "issues", kind: "github-issues" }]);
-	seeded.applyFetch({ name: "issues", kind: "github-issues" }, success(twoTickets()));
-	const projection = seeded.visibleTickets([], "implement");
+	seeded.sourceFact.initializeSources([{ name: "issues", kind: "github-issues" }]);
+	seeded.sourceFact.applyFetch({ name: "issues", kind: "github-issues" }, success(twoTickets()));
+	const projection = seeded.ticketWorkCycle.visibleTickets([], "implement");
 	seeded.close();
 	await withApp(
 		async (setup) => {
@@ -766,12 +767,12 @@ describe("the obligation gate", () => {
 	test("the key refuses an awaiting Ticket and states its reason", async () => {
 		const state = openFactoryState(statePath());
 		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
-		state.setGroupingAxis("tickets", "none");
+		state.grouping.setGroupingAxis("tickets", "none");
 		const outcome = success([issueTicket(FIRST)]);
 		// A settled turn rests on the operator's decision: the row is the way to
 		// the Decision modal, so the ignore cannot take it away.
 		const attemptId = seedInFlightTurn(state, outcome);
-		state.settleTurn({
+		state.ticketWorkCycle.settleTurn({
 			ticketIdentity: FIRST,
 			handoffId: attemptId,
 			taskType: "implement",
@@ -797,7 +798,7 @@ describe("the obligation gate", () => {
 						"the selected Ticket cannot be ignored: it awaits a decision",
 					);
 					// The refusal is a refusal: the flag never lands, and the row stays.
-					expect(state.ignoredTickets().has(FIRST)).toBe(false);
+					expect(state.ticketWorkCycle.ignoredTickets().has(FIRST)).toBe(false);
 					expect(listRowOf(refused, FIRST_LEAD)).toBeGreaterThanOrEqual(0);
 				},
 				WIDTH,
@@ -818,7 +819,7 @@ describe("the obligation gate", () => {
 	test("the key refuses a missing Agent, and its row keeps the badge the choice lives on", async () => {
 		const state = openFactoryState(statePath());
 		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
-		state.setGroupingAxis("tickets", "none");
+		state.grouping.setGroupingAxis("tickets", "none");
 		const outcome = success([issueTicket(FIRST)]);
 		seedInFlightTurn(state, outcome);
 		const runner = emptyAgentRunner();
@@ -840,7 +841,7 @@ describe("the obligation gate", () => {
 					expect(messageRowOf(refused)).toContain(
 						"the selected Ticket cannot be ignored: its Agent is missing",
 					);
-					expect(state.ignoredTickets().has(FIRST)).toBe(false);
+					expect(state.ticketWorkCycle.ignoredTickets().has(FIRST)).toBe(false);
 					expect(refused).toContain("missing");
 				},
 				WIDTH,
@@ -857,7 +858,7 @@ describe("the ignore and the machine", () => {
 	test("a live Agent keeps its seat, its row, and its badge under the ignored marker", async () => {
 		const state = openFactoryState(statePath());
 		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
-		state.setGroupingAxis("tickets", "none");
+		state.grouping.setGroupingAxis("tickets", "none");
 		const outcome = success([issueTicket(FIRST)]);
 		seedInFlightTurn(state, outcome);
 		const runner = emptyAgentRunner();
@@ -890,7 +891,7 @@ describe("the ignore and the machine", () => {
 						`"${firstTitle}" is ignored: no automatic start, and its row stays while its work is live`,
 					);
 					// The flag stands underneath the row, and the same key takes it back.
-					expect(state.ignoredTickets().has(FIRST)).toBe(true);
+					expect(state.ticketWorkCycle.ignoredTickets().has(FIRST)).toBe(true);
 					const taken = await press(setup, "i", "the un-ignore", (f) => {
 						const row = rowsOf(f).find((r) => r.startsWith("│") && r.includes("[running]"));
 						return row !== undefined && !row.includes("ignored");
@@ -898,7 +899,7 @@ describe("the ignore and the machine", () => {
 					expect(messageRowOf(taken)).toContain(
 						`"${firstTitle}" is not ignored: the machine may start it again`,
 					);
-					expect(state.ignoredTickets().has(FIRST)).toBe(false);
+					expect(state.ticketWorkCycle.ignoredTickets().has(FIRST)).toBe(false);
 				},
 				WIDTH,
 				HEIGHT,
@@ -915,10 +916,10 @@ describe("the ignore and the machine", () => {
 		// waiting item the ignore takes away with the row.
 		const state = openFactoryState(statePath());
 		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
-		state.setGroupingAxis("tickets", "none");
+		state.grouping.setGroupingAxis("tickets", "none");
 		const outcome = success(twoTickets());
-		state.initializeSources([{ name: "issues", kind: "github-issues" }]);
-		state.applyFetch({ name: "issues", kind: "github-issues" }, outcome);
+		state.sourceFact.initializeSources([{ name: "issues", kind: "github-issues" }]);
+		state.sourceFact.applyFetch({ name: "issues", kind: "github-issues" }, outcome);
 		seedInFlightTurn(state, outcome, FIRST);
 		const runner = emptyAgentRunner();
 		runner.set("herdr", ["agent", "list"], { stdout: workingAgent() });
@@ -941,8 +942,8 @@ describe("the ignore and the machine", () => {
 					// The row is gone, the queue is empty, and the Ticket keeps its
 					// open state: the cancel's stated semantics.
 					expect(ignored).toContain("waiting: 0");
-					expect(state.ticketState(SECOND)).toBe("open");
-					expect(state.workQueue()).toEqual([]);
+					expect(state.ticketWorkCycle.ticketState(SECOND)).toBe("open");
+					expect(state.workQueue.items()).toEqual([]);
 				},
 				WIDTH,
 				HEIGHT,
@@ -987,13 +988,13 @@ describe("the ignore and the machine", () => {
 						"the Agent start command",
 					);
 					expect(runner.commands().some((c) => c.startsWith("herdr agent start"))).toBe(true);
-					expect(state.ticketState(FIRST)).toBe("handed-off");
+					expect(state.ticketWorkCycle.ticketState(FIRST)).toBe("handed-off");
 					const frame = await settle(setup);
 					// The Ticket the operator judged out is now live work, and the flag
 					// stands under it: the pile still names it, and its row is back in the
 					// active view because there is live work to reach (ADR 0060).
 					expect(headerRow(frame)).toContain("ignored: 1");
-					expect(state.ignoredTickets().has(FIRST)).toBe(true);
+					expect(state.ticketWorkCycle.ignoredTickets().has(FIRST)).toBe(true);
 					expect(listRowOf(frame, FIRST_LEAD)).toBeGreaterThanOrEqual(0);
 				},
 				WIDTH,
@@ -1011,10 +1012,10 @@ describe("the ignore and the machine", () => {
 		// ticket by title, not by the raw identity the list rule left behind.
 		const state = openFactoryState(statePath());
 		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
-		state.setGroupingAxis("tickets", "none");
+		state.grouping.setGroupingAxis("tickets", "none");
 		const outcome = success(twoTickets());
-		state.initializeSources([{ name: "issues", kind: "github-issues" }]);
-		state.applyFetch({ name: "issues", kind: "github-issues" }, outcome);
+		state.sourceFact.initializeSources([{ name: "issues", kind: "github-issues" }]);
+		state.sourceFact.applyFetch({ name: "issues", kind: "github-issues" }, outcome);
 		seedInFlightTurn(state, outcome, SECOND);
 		const runner = emptyAgentRunner();
 		runner.set("herdr", ["agent", "list"], {
@@ -1099,10 +1100,10 @@ describe("the ignore and the machine", () => {
 		// asked-for start waits in the queue, and its row is nowhere in the list.
 		const state = openFactoryState(statePath());
 		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
-		state.setGroupingAxis("tickets", "none");
+		state.grouping.setGroupingAxis("tickets", "none");
 		const outcome = success(twoTickets());
-		state.initializeSources([{ name: "issues", kind: "github-issues" }]);
-		state.applyFetch({ name: "issues", kind: "github-issues" }, outcome);
+		state.sourceFact.initializeSources([{ name: "issues", kind: "github-issues" }]);
+		state.sourceFact.applyFetch({ name: "issues", kind: "github-issues" }, outcome);
 		seedInFlightTurn(state, outcome, SECOND);
 		const runner = emptyAgentRunner();
 		runner.set("herdr", ["agent", "list"], {
@@ -1174,8 +1175,8 @@ describe("the ignore and the machine", () => {
 
 	test("an ignored Ticket is no Top-up candidate, and the un-ignore makes it one", async () => {
 		const { state, src, props } = rig({ autoMode: true });
-		expect(state.setTicketIgnored(FIRST, true, null).ok).toBe(true);
-		expect(state.setTicketIgnored(SECOND, true, null).ok).toBe(true);
+		expect(state.ticketWorkCycle.setTicketIgnored(FIRST, true, null).ok).toBe(true);
+		expect(state.ticketWorkCycle.setTicketIgnored(SECOND, true, null).ok).toBe(true);
 		try {
 			await withApp(
 				async (setup) => {
@@ -1188,14 +1189,14 @@ describe("the ignore and the machine", () => {
 					// Auto-handoff is on, the queue is empty, and two open Tickets
 					// stand: the cycle asks for nothing, because both are judged out.
 					await settle(setup, 500);
-					expect(state.workQueue()).toEqual([]);
-					expect(state.ticketState(FIRST)).toBe("open");
+					expect(state.workQueue.items()).toEqual([]);
+					expect(state.ticketWorkCycle.ticketState(FIRST)).toBe("open");
 					// Take one back: its row returns to the active view the walks read.
-					expect(state.setTicketIgnored(FIRST, false, null).ok).toBe(true);
+					expect(state.ticketWorkCycle.setTicketIgnored(FIRST, false, null).ok).toBe(true);
 					expect(listRowOf(frame, SECOND_LEAD)).toBe(-1);
-					expect(state.visibleTickets([], "implement").map((ticket) => ticket.identity)).toEqual([
-						FIRST,
-					]);
+					expect(
+						state.ticketWorkCycle.visibleTickets([], "implement").map((ticket) => ticket.identity),
+					).toEqual([FIRST]);
 				},
 				WIDTH,
 				HEIGHT,
@@ -1229,7 +1230,7 @@ describe("the ignore and the machine", () => {
 						"the source's drop",
 					);
 					expect(listRowOf(dropped, SECOND_LEAD)).toBeGreaterThanOrEqual(0);
-					expect(state.ignoredTickets().has(FIRST)).toBe(true);
+					expect(state.ticketWorkCycle.ignoredTickets().has(FIRST)).toBe(true);
 					// The item comes back: the flag follows the Ticket, not the
 					// membership, and the row stays out of the active view.
 					await refreshed(setup, src);
@@ -1250,10 +1251,10 @@ describe("the ignore and the machine", () => {
 			const reopened = openFactoryState(path);
 			const secondSrc = new FakeSource("issues", "github-issues", success(twoTickets()));
 			try {
-				expect(reopened.ignoredTickets().has(FIRST)).toBe(true);
-				expect(reopened.visibleTickets([], "implement").map((ticket) => ticket.identity)).toEqual([
-					SECOND,
-				]);
+				expect(reopened.ticketWorkCycle.ignoredTickets().has(FIRST)).toBe(true);
+				expect(
+					reopened.ticketWorkCycle.visibleTickets([], "implement").map((ticket) => ticket.identity),
+				).toEqual([SECOND]);
 				await withApp(
 					async (setup) => {
 						await listed(setup, secondSrc, SECOND_LEAD);
@@ -1289,12 +1290,12 @@ describe("the ignore and the machine", () => {
 	test("an ignored Ticket whose Agent goes missing keeps its row and its flag", async () => {
 		const state = openFactoryState(statePath());
 		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
-		state.setGroupingAxis("tickets", "none");
+		state.grouping.setGroupingAxis("tickets", "none");
 		const outcome = success([issueTicket(FIRST)]);
 		seedInFlightTurn(state, outcome);
 		// Auto mode from the boot: the Restart is the machine's own move, and the
 		// flag is what has to hold it out, cycle after cycle.
-		state.setAutoHandoffMode(true);
+		state.handoff.setAutoHandoffMode(true);
 		const runner = emptyAgentRunner();
 		// The Agent lives while the operator puts the running Ticket away, and
 		// herdr stops listing it after.
@@ -1310,7 +1311,7 @@ describe("the ignore and the machine", () => {
 						"the running badge",
 					);
 					await press(setup, "i", "the ignore", (f) => messageRowOf(f).includes("is ignored"));
-					expect(state.ignoredTickets().has(FIRST)).toBe(true);
+					expect(state.ticketWorkCycle.ignoredTickets().has(FIRST)).toBe(true);
 					runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
 					// The row keeps its badge and its marker, and no line says the flag
 					// moved: the row never left, because its work was live.
@@ -1321,15 +1322,15 @@ describe("the ignore and the machine", () => {
 					);
 					expect(gone).toContain("ignored");
 					expect(messageRowOf(gone)).not.toContain("no longer ignored");
-					expect(state.ignoredTickets().has(FIRST)).toBe(true);
-					expect(state.ticketObligation(FIRST, "missing")).toBe("missing");
+					expect(state.ticketWorkCycle.ignoredTickets().has(FIRST)).toBe(true);
+					expect(state.ticketWorkCycle.ticketObligation(FIRST, "missing")).toBe("missing");
 					// The machine starts nothing on it by itself: auto mode is on, the
 					// seat is free, and after a hundred cycles of the walk that would
 					// otherwise have asked for the restart, the queue is still empty and
 					// the flag still stands.
 					await settle(setup, 500);
-					expect(state.workQueue()).toEqual([]);
-					expect(state.ignoredTickets().has(FIRST)).toBe(true);
+					expect(state.workQueue.items()).toEqual([]);
+					expect(state.ticketWorkCycle.ignoredTickets().has(FIRST)).toBe(true);
 					// The key that put the Ticket away is the key that puts it back: the
 					// row offers Un-ignore beside its own badge, and the restart the flag
 					// held out is the operator's own ask from here.
@@ -1350,7 +1351,7 @@ describe("the ignored marker's frame", () => {
 	test("the no-color presentation keeps the ignored marker as a written word", async () => {
 		process.env.NO_COLOR = "1";
 		const { state, src, props } = rig();
-		expect(state.setTicketIgnored(FIRST, true, null).ok).toBe(true);
+		expect(state.ticketWorkCycle.setTicketIgnored(FIRST, true, null).ok).toBe(true);
 		try {
 			await withApp(
 				async (setup) => {
@@ -1381,7 +1382,7 @@ describe("the ignored marker's frame", () => {
 
 	test("a narrow frame never hides the section's own name behind the ignored cell", async () => {
 		const { state, src, props } = rig();
-		expect(state.setTicketIgnored(FIRST, true, null).ok).toBe(true);
+		expect(state.ticketWorkCycle.setTicketIgnored(FIRST, true, null).ok).toBe(true);
 		try {
 			await withApp(
 				async (setup) => {
@@ -1419,7 +1420,7 @@ describe("the ignored marker's frame", () => {
 	test("the pile reaches a Ticket the covered rule also hides", async () => {
 		const state = openFactoryState(statePath());
 		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
-		state.setGroupingAxis("tickets", "none");
+		state.grouping.setGroupingAxis("tickets", "none");
 		const pull = (closes: boolean): FetchedTicket => ({
 			identity: "github:github.com:P_9",
 			sourceKind: "github-pull-request",
@@ -1440,10 +1441,10 @@ describe("the ignored marker's frame", () => {
 				: {},
 		});
 		const withPull = success([...twoTickets(), pull(true)]);
-		state.initializeSources([{ name: "issues", kind: "github-issues" }]);
-		state.applyFetch({ name: "issues", kind: "github-issues" }, success(twoTickets()));
+		state.sourceFact.initializeSources([{ name: "issues", kind: "github-issues" }]);
+		state.sourceFact.applyFetch({ name: "issues", kind: "github-issues" }, success(twoTickets()));
 		// The ignore lands first, while the Ticket is only ignored.
-		expect(state.setTicketIgnored(FIRST, true, null).ok).toBe(true);
+		expect(state.ticketWorkCycle.setTicketIgnored(FIRST, true, null).ok).toBe(true);
 		const runner = emptyAgentRunner();
 		const src = new FakeSource("issues", "github-issues", success(twoTickets()));
 		try {
@@ -1501,7 +1502,7 @@ describe("the ignored marker's frame", () => {
 						`"${firstTitle}" is not ignored: an open fixing pull request still holds its row out of the list`,
 					);
 					expect(headerRow(cleared)).not.toContain("ignored:");
-					expect(state.ignoredTickets().has(FIRST)).toBe(false);
+					expect(state.ticketWorkCycle.ignoredTickets().has(FIRST)).toBe(false);
 				},
 				WIDTH,
 				HEIGHT,
@@ -1523,14 +1524,14 @@ describe("the ignored marker's frame", () => {
 	test("a narrow frame cuts the ignored cell before the held count", async () => {
 		const state = openFactoryState(statePath());
 		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
-		state.setGroupingAxis("tickets", "none");
+		state.grouping.setGroupingAxis("tickets", "none");
 		const outcome = success(twoTickets());
-		state.initializeSources([{ name: "issues", kind: "github-issues" }]);
-		state.applyFetch({ name: "issues", kind: "github-issues" }, outcome);
+		state.sourceFact.initializeSources([{ name: "issues", kind: "github-issues" }]);
+		state.sourceFact.applyFetch({ name: "issues", kind: "github-issues" }, outcome);
 		// One held turn rests on the operator's decision, and one open Ticket is
 		// judged out of the list: the two conditional cells, side by side.
 		const attempt = seedInFlightTurn(state, outcome, FIRST);
-		state.settleTurn({
+		state.ticketWorkCycle.settleTurn({
 			ticketIdentity: FIRST,
 			handoffId: attempt,
 			taskType: "implement",
@@ -1540,7 +1541,7 @@ describe("the ignored marker's frame", () => {
 			completedAt: "2026-08-31T11:00:00Z",
 			cause: "failed",
 		});
-		expect(state.setTicketIgnored(SECOND, true, null).ok).toBe(true);
+		expect(state.ticketWorkCycle.setTicketIgnored(SECOND, true, null).ok).toBe(true);
 		const src = new FakeSource("issues", "github-issues", outcome);
 		try {
 			await withApp(

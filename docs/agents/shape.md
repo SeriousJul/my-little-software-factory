@@ -46,9 +46,19 @@ description: The module map of the source tree, for agents working in this repos
 	reclaims an agent that outlived its work cycle, settles turns into
 	`awaiting`, applies the automatic completion rule, and dispatches open
 	tickets in auto-handoff mode.
-- `src/state.ts`: SQLite migrations, source reconciliation, work cycles,
-	completion traces, completion decisions, handoff attempts, the Auto-handoff
-	mode, and the process lease.
+- `src/state.ts`: the open seam of the state module (issue #202). It opens the
+	SQLite file, composes the nine aggregates into the graph, and closes the
+	file. It holds no rule of its own.
+- `src/state/`: one module per aggregate, each with its own interface - its
+	facts and its operations. `consultation-record.ts`, `grouping.ts`,
+	`handoff.ts`, `lease.ts`, `plane-action.ts`, `repository-init.ts`,
+	`source-fact.ts`, `ticket-work-cycle.ts`, and `work-queue.ts`. A caller
+	reaches a fact or an operation only through the aggregate that owns it, and
+	an aggregate reaches only the tables it owns; the boundary check in
+	`test/state-architecture.test.ts` holds both rules. `store.ts` owns the path,
+	the connection, the clock, and the transaction; `schema.ts` owns the
+	migration chain; `json.ts` holds the shared decode primitives; `graph.ts`
+	declares the interfaces and lets the aggregates call each other.
 - `src/workflow.ts`: the workflow machine's transition (ADR 0027). A completed
 	turn fires the task type's transition once: the plane writes the label facts
 	on the ticket and its fixing pull request, and the machine converges every

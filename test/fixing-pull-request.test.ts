@@ -122,40 +122,40 @@ function closingPullTicket(over: Partial<FetchedTicket> = {}): FetchedTicket {
 describe("the list rule", () => {
 	test("an open ticket with an open fixing pull request leaves the list, and the pull request stays", () => {
 		const state = openFactoryState(statePath());
-		state.initializeSources([issues, pulls]);
-		state.applyFetch(issues, success([issueTicket(issueIdentity)]));
-		state.applyFetch(pulls, success([closingPullTicket()]));
+		state.sourceFact.initializeSources([issues, pulls]);
+		state.sourceFact.applyFetch(issues, success([issueTicket(issueIdentity)]));
+		state.sourceFact.applyFetch(pulls, success([closingPullTicket()]));
 		// The projection before the list rule holds both; the list withholds
 		// the covered issue's row and keeps the pull request's.
-		const projected = state.projectedTickets([], "implement");
+		const projected = state.ticketWorkCycle.projectedTickets([], "implement");
 		expect(projected.map((ticket) => ticket.identity).sort()).toEqual([
 			issueIdentity,
 			pullIdentity,
 		]);
-		const visible = state.visibleTickets([], "implement");
+		const visible = state.ticketWorkCycle.visibleTickets([], "implement");
 		expect(visible.map((ticket) => ticket.identity)).toEqual([pullIdentity]);
 		state.close();
 	});
 
 	test("the rule holds for every source kind: a security item rests behind its branch-named pull request", () => {
 		const state = openFactoryState(statePath());
-		state.initializeSources([security, pulls]);
-		state.applyFetch(security, success([securityTicket()]));
-		state.applyFetch(pulls, success([securityPullTicket()]));
-		const projected = state.projectedTickets([], "implement");
+		state.sourceFact.initializeSources([security, pulls]);
+		state.sourceFact.applyFetch(security, success([securityTicket()]));
+		state.sourceFact.applyFetch(pulls, success([securityPullTicket()]));
+		const projected = state.ticketWorkCycle.projectedTickets([], "implement");
 		const item = projected.find((ticket) => ticket.identity === securityIdentity);
 		if (item === undefined) throw new Error("the security item is missing from the projection");
 		expect(isCoveredByFixingPullRequest(projected, item)).toBe(true);
-		const visible = state.visibleTickets([], "implement");
+		const visible = state.ticketWorkCycle.visibleTickets([], "implement");
 		expect(visible.map((ticket) => ticket.identity)).toEqual([securityPullIdentity]);
 		state.close();
 	});
 
 	test("a draft fixing pull request covers the ticket", () => {
 		const state = openFactoryState(statePath());
-		state.initializeSources([issues, pulls]);
-		state.applyFetch(issues, success([issueTicket(issueIdentity)]));
-		state.applyFetch(
+		state.sourceFact.initializeSources([issues, pulls]);
+		state.sourceFact.applyFetch(issues, success([issueTicket(issueIdentity)]));
+		state.sourceFact.applyFetch(
 			pulls,
 			success([
 				pullTicket(
@@ -165,7 +165,7 @@ describe("the list rule", () => {
 				),
 			]),
 		);
-		const visible = state.visibleTickets([], "implement");
+		const visible = state.ticketWorkCycle.visibleTickets([], "implement");
 		// The draft's work is in flight: the issue rests, and the draft is the
 		// row that stands for the work.
 		expect(visible.map((ticket) => ticket.identity)).toEqual([pullIdentity]);
@@ -174,12 +174,12 @@ describe("the list rule", () => {
 
 	test("an in-flight ticket stays listed whatever pull requests exist", () => {
 		const state = openFactoryState(statePath());
-		state.initializeSources([issues, pulls]);
-		state.applyFetch(issues, success([issueTicket(issueIdentity)]));
-		state.applyFetch(pulls, success([closingPullTicket()]));
+		state.sourceFact.initializeSources([issues, pulls]);
+		state.sourceFact.applyFetch(issues, success([issueTicket(issueIdentity)]));
+		state.sourceFact.applyFetch(pulls, success([closingPullTicket()]));
 		// The ticket leaves open behind: the rule suppresses only the open
 		// state, and the in-flight ticket stays reachable for its decision.
-		const claim = state.claimHandoff(
+		const claim = state.handoff.claimHandoff(
 			issueIdentity,
 			{
 				agentType: "pi",
@@ -192,13 +192,13 @@ describe("the list rule", () => {
 			"open",
 		);
 		if (!claim.ok) throw new Error(claim.reason);
-		state.settleHandoff(claim.claim.attemptId, true);
-		const handedOff = state.visibleTickets([], "implement");
+		state.handoff.settleHandoff(claim.claim.attemptId, true);
+		const handedOff = state.ticketWorkCycle.visibleTickets([], "implement");
 		expect(handedOff.map((ticket) => ticket.identity).sort()).toEqual([
 			issueIdentity,
 			pullIdentity,
 		]);
-		state.settleTurn({
+		state.ticketWorkCycle.settleTurn({
 			ticketIdentity: issueIdentity,
 			handoffId: claim.claim.attemptId,
 			taskType: "implement",
@@ -207,43 +207,43 @@ describe("the list rule", () => {
 			turnLog: [{ kind: "text", text: "The turn is done." }],
 			completedAt: "2026-08-31T11:00:00Z",
 		});
-		const awaiting = state.visibleTickets([], "implement");
+		const awaiting = state.ticketWorkCycle.visibleTickets([], "implement");
 		expect(awaiting.map((ticket) => ticket.identity).sort()).toEqual([issueIdentity, pullIdentity]);
 		state.close();
 	});
 
 	test("a ticket whose fixing pull request closed unmerged re-enters on the next refresh", () => {
 		const state = openFactoryState(statePath());
-		state.initializeSources([issues, pulls]);
-		state.applyFetch(issues, success([issueTicket(issueIdentity)]));
-		state.applyFetch(pulls, success([closingPullTicket()]));
-		expect(state.visibleTickets([], "implement").map((ticket) => ticket.identity)).toEqual([
-			pullIdentity,
-		]);
+		state.sourceFact.initializeSources([issues, pulls]);
+		state.sourceFact.applyFetch(issues, success([issueTicket(issueIdentity)]));
+		state.sourceFact.applyFetch(pulls, success([closingPullTicket()]));
+		expect(
+			state.ticketWorkCycle.visibleTickets([], "implement").map((ticket) => ticket.identity),
+		).toEqual([pullIdentity]);
 		// The next refresh lists the pull request closed and unmerged: it no
 		// longer fixes the ticket, and the ticket re-enters the list.
-		state.applyFetch(pulls, success([closingPullTicket({ sourceState: "closed" })]));
-		const reentered = state.visibleTickets([], "implement");
+		state.sourceFact.applyFetch(pulls, success([closingPullTicket({ sourceState: "closed" })]));
+		const reentered = state.ticketWorkCycle.visibleTickets([], "implement");
 		expect(reentered.map((ticket) => ticket.identity).sort()).toEqual([
 			issueIdentity,
 			pullIdentity,
 		]);
 		// The next refresh drops the pull request from the source the same way.
-		state.applyFetch(pulls, success([]));
-		const back = state.visibleTickets([], "implement");
+		state.sourceFact.applyFetch(pulls, success([]));
+		const back = state.ticketWorkCycle.visibleTickets([], "implement");
 		expect(back.map((ticket) => ticket.identity)).toEqual([issueIdentity]);
 		state.close();
 	});
 
 	test("the branch link holds across the repository identity casing an older plane stored", () => {
 		const state = openFactoryState(statePath());
-		state.initializeSources([security, pulls]);
-		state.applyFetch(security, success([securityTicket()]));
+		state.sourceFact.initializeSources([security, pulls]);
+		state.sourceFact.applyFetch(security, success([securityTicket()]));
 		// A plane that predates the canonical lowercase identity stored the
 		// pull request's repository with the API's owner casing. The link is
 		// on the same repository, and the repository identity is
 		// case-insensitive on GitHub, so the link still holds (ADR 0042).
-		state.applyFetch(
+		state.sourceFact.applyFetch(
 			pulls,
 			success([
 				securityPullTicket({
@@ -255,16 +255,16 @@ describe("the list rule", () => {
 				}),
 			]),
 		);
-		const visible = state.visibleTickets([], "implement");
+		const visible = state.ticketWorkCycle.visibleTickets([], "implement");
 		expect(visible.map((ticket) => ticket.identity)).toEqual([securityPullIdentity]);
 		state.close();
 	});
 
 	test("a pull request that fixes nothing covers nothing", () => {
 		const state = openFactoryState(statePath());
-		state.initializeSources([issues, pulls]);
-		state.applyFetch(issues, success([issueTicket(issueIdentity)]));
-		state.applyFetch(
+		state.sourceFact.initializeSources([issues, pulls]);
+		state.sourceFact.applyFetch(issues, success([issueTicket(issueIdentity)]));
+		state.sourceFact.applyFetch(
 			pulls,
 			success([
 				pullTicket(
@@ -274,7 +274,7 @@ describe("the list rule", () => {
 				),
 			]),
 		);
-		const visible = state.visibleTickets([], "implement");
+		const visible = state.ticketWorkCycle.visibleTickets([], "implement");
 		expect(visible.map((ticket) => ticket.identity).sort()).toEqual([issueIdentity, pullIdentity]);
 		state.close();
 	});

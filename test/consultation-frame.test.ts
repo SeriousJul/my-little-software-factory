@@ -27,7 +27,9 @@ import type {
 	CommandRunner,
 	ModelListResult,
 } from "../src/runner.ts";
-import { type FactoryState, openFactoryState, workQueueIdentityOf } from "../src/state.ts";
+import { workQueueIdentityOf } from "../src/state/work-queue.ts";
+import type { FactoryState } from "../src/state.ts";
+import { openFactoryState } from "../src/state.ts";
 import {
 	actionBarRowOf,
 	awaitFrame,
@@ -159,7 +161,7 @@ function seed(
 	contextWindow = "",
 	environment: "worktree" | "live-worktree" = "worktree",
 ): void {
-	state.createConsultation({
+	state.consultationRecord.createConsultation({
 		id,
 		typeName: "grill",
 		agentType: "pi",
@@ -175,7 +177,7 @@ function seed(
 		createdAt,
 	});
 	if (agent)
-		state.setConsultationAgent(id, {
+		state.consultationRecord.setConsultationAgent(id, {
 			paneId: `pane-${id.slice(0, 8)}`,
 			tabId: `tab-${id.slice(0, 8)}`,
 			workspaceId: `ws-${id.slice(0, 8)}`,
@@ -186,31 +188,31 @@ function seed(
 /** The herdr handles a worktree launch records for its Consultation. */
 function seedResources(state: FactoryState, id: string): void {
 	const short = id.slice(0, 8);
-	state.recordConsultationResource(id, {
+	state.consultationRecord.recordConsultationResource(id, {
 		kind: "workspace",
 		resourceId: `ws-${short}`,
 		owned: true,
 		details: "Consultation worktree workspace",
 	});
-	state.recordConsultationResource(id, {
+	state.consultationRecord.recordConsultationResource(id, {
 		kind: "worktree",
 		resourceId: `ws-${short}`,
 		owned: true,
 		details: `Consultation worktree checkout for factory/consultation-${short}-grill`,
 	});
-	state.recordConsultationResource(id, {
+	state.consultationRecord.recordConsultationResource(id, {
 		kind: "tab",
 		resourceId: `tab-${short}`,
 		owned: true,
 		details: "Consultation worktree tab",
 	});
-	state.recordConsultationResource(id, {
+	state.consultationRecord.recordConsultationResource(id, {
 		kind: "pane",
 		resourceId: `pane-${short}`,
 		owned: true,
 		details: "Consultation Agent pane",
 	});
-	state.recordConsultationResource(id, {
+	state.consultationRecord.recordConsultationResource(id, {
 		kind: "agent",
 		resourceId: `consultation-${short}`,
 		owned: true,
@@ -541,8 +543,8 @@ describe("Consultation launch and monitoring through the UI", () => {
 				},
 			],
 		};
-		state.initializeSources([ticketSource]);
-		state.applyFetch(ticketSource, ticketOutcome);
+		state.sourceFact.initializeSources([ticketSource]);
+		state.sourceFact.applyFetch(ticketSource, ticketOutcome);
 		const source = new FakeSource(ticketSource.name, ticketSource.kind, ticketOutcome);
 		const inner = new FakeRunner();
 		stubCheckout(inner);
@@ -578,11 +580,11 @@ describe("Consultation launch and monitoring through the UI", () => {
 					expect(startAt).toBeGreaterThan(worktreeAt);
 					expect(promptAt).toBeGreaterThan(startAt);
 					await awaitFrame(setup, (f) => f.includes("Agent: auth review"), "the live Agent output");
-					const started = state.consultations("open");
+					const started = state.consultationRecord.consultations("open");
 					expect(started).toHaveLength(1);
 					expect(started[0].state).toBe("working");
 					expect(started[0].paneId).toBe("pane-c1");
-					expect(state.pendingConsultationResponse(started[0].id)).toBeNull();
+					expect(state.consultationRecord.pendingConsultationResponse(started[0].id)).toBeNull();
 				},
 				WIDTH,
 				32,
@@ -620,9 +622,13 @@ describe("Consultation launch and monitoring through the UI", () => {
 					expect(detail).toContain("Agent view:");
 					expect(detail).toContain("Agent: auth review looks sound");
 					expect(frameText(setup.captureCharFrame())).toContain("awaiting response: 1");
-					expect(state.consultation(WORKING_ID)?.state).toBe("awaiting-response");
-					expect(state.consultationTurns(WORKING_ID)).toHaveLength(1);
-					expect(state.consultationTurns(WORKING_ID)[0].settledAt).not.toBeNull();
+					expect(state.consultationRecord.consultation(WORKING_ID)?.state).toBe(
+						"awaiting-response",
+					);
+					expect(state.consultationRecord.consultationTurns(WORKING_ID)).toHaveLength(1);
+					expect(
+						state.consultationRecord.consultationTurns(WORKING_ID)[0].settledAt,
+					).not.toBeNull();
 				},
 				WIDTH,
 				32,
@@ -668,9 +674,9 @@ test("the mode line counts the ticket seat and the Consultation seat against one
 			},
 		],
 	};
-	state.initializeSources([ticketSource]);
-	state.applyFetch(ticketSource, ticketOutcome);
-	const claim = state.claimHandoff(
+	state.sourceFact.initializeSources([ticketSource]);
+	state.sourceFact.applyFetch(ticketSource, ticketOutcome);
+	const claim = state.handoff.claimHandoff(
 		selectedTicket.identity,
 		{
 			agentType: "pi",
@@ -683,7 +689,7 @@ test("the mode line counts the ticket seat and the Consultation seat against one
 		"open",
 	);
 	if (!claim.ok) throw new Error(claim.reason);
-	state.settleHandoff(claim.claim.attemptId, true, undefined, {
+	state.handoff.settleHandoff(claim.claim.attemptId, true, undefined, {
 		paneId: "pane-ticket",
 		tabId: "tab-ticket",
 		workspaceId: "ws-ticket",
@@ -754,7 +760,7 @@ describe("Consultation recovery and replacement through the UI", () => {
 						],
 						"the recovery launch sequence",
 					);
-					expect(state.consultation(OPENING_ID)?.state).toBe("working");
+					expect(state.consultationRecord.consultation(OPENING_ID)?.state).toBe("working");
 				},
 				WIDTH,
 				32,
@@ -773,7 +779,7 @@ describe("Consultation recovery and replacement through the UI", () => {
 		// context window setting.
 		seed(state, OPENING_ID, false, "2026-09-01T10:00:00.000Z", "131072");
 		const short = OPENING_ID.slice(0, 8);
-		state.recordConsultationAgentHandles(OPENING_ID, {
+		state.consultationRecord.recordConsultationAgentHandles(OPENING_ID, {
 			paneId: `pane-${short}`,
 			tabId: `tab-${short}`,
 			workspaceId: `ws-${short}`,
@@ -788,7 +794,7 @@ describe("Consultation recovery and replacement through the UI", () => {
 						f.includes("State: opening"),
 					);
 					await press(setup, "r", "the refused recovery", (f) => f.includes("State: failed"));
-					const failed = state.consultation(OPENING_ID);
+					const failed = state.consultationRecord.consultation(OPENING_ID);
 					expect(failed?.failure).toContain(
 						'agent type "pi" defines no context window setting, so the count of 131072 tokens cannot reach it',
 					);
@@ -811,13 +817,13 @@ describe("Consultation recovery and replacement through the UI", () => {
 	test("a failed Consultation refuses r and opens a Replacement launcher from c", async () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
 		seed(state, FAILED_ID, false);
-		state.failConsultationOpening(FAILED_ID, "herdr refused the launch");
+		state.consultationRecord.failConsultationOpening(FAILED_ID, "herdr refused the launch");
 		const inner = new FakeRunner();
 		stubCheckout(inner);
 		stubWorktreeLaunch(inner);
 		stubPaneReadText(inner, "pane-c1", "Agent: reviewing");
 		const runner = new ConsultationRunner(inner, agentListJson([]));
-		const expectedInput = state.replacementInput(FAILED_ID);
+		const expectedInput = state.consultationRecord.replacementInput(FAILED_ID);
 		try {
 			await withApp(
 				async (setup) => {
@@ -868,7 +874,9 @@ describe("Consultation recovery and replacement through the UI", () => {
 						f.includes(`Replacement of: ${FAILED_ID.slice(0, 8)}`),
 					);
 					expect(frameText(setup.captureCharFrame())).toContain("State: working");
-					const replacements = state.consultations("open").filter((item) => item.id !== FAILED_ID);
+					const replacements = state.consultationRecord
+						.consultations("open")
+						.filter((item) => item.id !== FAILED_ID);
 					expect(replacements).toHaveLength(1);
 					expect(replacements[0].replacementOf).toBe(FAILED_ID);
 					expect(replacements[0].state).toBe("working");
@@ -926,7 +934,7 @@ describe("Consultation Enter reaches the recovery surface its state needs", () =
 						],
 						"the recovery launch sequence",
 					);
-					expect(state.consultation(OPENING_ID)?.state).toBe("working");
+					expect(state.consultationRecord.consultation(OPENING_ID)?.state).toBe("working");
 				},
 				WIDTH,
 				32,
@@ -959,14 +967,14 @@ describe("Consultation Enter reaches the recovery surface its state needs", () =
 						f.includes("Close Consultation"),
 					);
 					expect(frameText(dialog)).toContain("The Agent is still opening");
-					expect(state.consultation(OPENING_ID)?.state).toBe("opening");
+					expect(state.consultationRecord.consultation(OPENING_ID)?.state).toBe("opening");
 					await press(
 						setup,
 						"escape",
 						"the dialog to close",
 						(f) => !f.includes("Close Consultation"),
 					);
-					expect(state.consultation(OPENING_ID)?.state).toBe("opening");
+					expect(state.consultationRecord.consultation(OPENING_ID)?.state).toBe("opening");
 				},
 				WIDTH,
 				32,
@@ -980,13 +988,13 @@ describe("Consultation Enter reaches the recovery surface its state needs", () =
 	test("Enter on a missing Consultation opens the recovery panel, and Replace links its replacement", async () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
 		seed(state, MISSING_ID, false);
-		state.setConsultationState(MISSING_ID, "missing", "the Agent pane is gone");
+		state.consultationRecord.setConsultationState(MISSING_ID, "missing", "the Agent pane is gone");
 		const inner = new FakeRunner();
 		stubCheckout(inner);
 		stubWorktreeLaunch(inner);
 		stubPaneReadText(inner, "pane-c1", "Agent: reviewing");
 		const runner = new ConsultationRunner(inner, agentListJson([]));
-		const expectedInput = state.replacementInput(MISSING_ID);
+		const expectedInput = state.consultationRecord.replacementInput(MISSING_ID);
 		try {
 			await withApp(
 				async (setup) => {
@@ -1018,10 +1026,12 @@ describe("Consultation Enter reaches the recovery surface its state needs", () =
 						[`herdr agent prompt ${AGENT} /grill ${expectedInput}`],
 						"the replacement prompt",
 					);
-					const replacement = state.consultations("open").find((item) => item.id !== MISSING_ID);
+					const replacement = state.consultationRecord
+						.consultations("open")
+						.find((item) => item.id !== MISSING_ID);
 					expect(replacement?.replacementOf).toBe(MISSING_ID);
 					// The replaced record keeps its own state beside the new one.
-					expect(state.consultation(MISSING_ID)?.state).toBe("missing");
+					expect(state.consultationRecord.consultation(MISSING_ID)?.state).toBe("missing");
 				},
 				WIDTH,
 				32,
@@ -1035,7 +1045,7 @@ describe("Consultation Enter reaches the recovery surface its state needs", () =
 	test("the recovery panel's Close retires a failed record without a dialog", async () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
 		seed(state, FAILED_ID, false);
-		state.failConsultationOpening(FAILED_ID, "herdr refused the launch");
+		state.consultationRecord.failConsultationOpening(FAILED_ID, "herdr refused the launch");
 		const short = FAILED_ID.slice(0, 8);
 		const runner = new ConsultationRunner(new FakeRunner(), agentListJson([]));
 		try {
@@ -1056,7 +1066,7 @@ describe("Consultation Enter reaches the recovery surface its state needs", () =
 						messageRowOf(f).includes(`${short} closed`),
 					);
 					expect(frame).not.toContain("Close Consultation");
-					expect(state.consultation(FAILED_ID)?.state).toBe("closed");
+					expect(state.consultationRecord.consultation(FAILED_ID)?.state).toBe("closed");
 				},
 				WIDTH,
 				32,
@@ -1070,7 +1080,7 @@ describe("Consultation Enter reaches the recovery surface its state needs", () =
 	test("Enter on a closing Consultation opens the close panel's Retry and Force-close", async () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
 		seed(state, CLOSE_A_ID);
-		state.beginConsultationClose(CLOSE_A_ID);
+		state.consultationRecord.beginConsultationClose(CLOSE_A_ID);
 		const runner = new ConsultationRunner(new FakeRunner(), agentListJson([]));
 		try {
 			await withApp(
@@ -1087,7 +1097,7 @@ describe("Consultation Enter reaches the recovery surface its state needs", () =
 					expect(frameText(panel)).toContain("Cleanup is already in progress");
 					expect(frameText(panel)).toContain("Retry");
 					expect(frameText(panel)).toContain("Force-close");
-					expect(state.consultation(CLOSE_A_ID)?.state).toBe("closing");
+					expect(state.consultationRecord.consultation(CLOSE_A_ID)?.state).toBe("closing");
 				},
 				WIDTH,
 				32,
@@ -1101,9 +1111,9 @@ describe("Consultation Enter reaches the recovery surface its state needs", () =
 	test("Enter on a closed Consultation says the record is already closed", async () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
 		seed(state, CLOSED_DIRECT_ID);
-		state.settleConsultationTurn(CLOSED_DIRECT_ID, null, "done", "idle");
-		state.beginConsultationClose(CLOSED_DIRECT_ID);
-		state.finishConsultationClose(CLOSED_DIRECT_ID);
+		state.consultationRecord.settleConsultationTurn(CLOSED_DIRECT_ID, null, "done", "idle");
+		state.consultationRecord.beginConsultationClose(CLOSED_DIRECT_ID);
+		state.consultationRecord.finishConsultationClose(CLOSED_DIRECT_ID);
 		const runner = new ConsultationRunner(new FakeRunner(), agentListJson([]));
 		try {
 			await withApp(
@@ -1115,7 +1125,7 @@ describe("Consultation Enter reaches the recovery surface its state needs", () =
 					await press(setup, "return", "the Enter refusal", (f) =>
 						f.includes("the selected Consultation is already closed"),
 					);
-					expect(state.consultation(CLOSED_DIRECT_ID)?.state).toBe("closed");
+					expect(state.consultationRecord.consultation(CLOSED_DIRECT_ID)?.state).toBe("closed");
 				},
 				WIDTH,
 				32,
@@ -1131,8 +1141,8 @@ describe("Consultation responses through the UI", () => {
 	test("a response becomes a turn only after Herdr accepts the prompt", async () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
 		seed(state, RESPONSE_ID);
-		state.settleConsultationTurn(RESPONSE_ID, null, "first answer", "idle");
-		state.setConsultationDraft(RESPONSE_ID, "follow up");
+		state.consultationRecord.settleConsultationTurn(RESPONSE_ID, null, "first answer", "idle");
+		state.consultationRecord.setConsultationDraft(RESPONSE_ID, "follow up");
 		const inner = new FakeRunner();
 		stubPaneReadText(inner, `pane-${RESPONSE_ID.slice(0, 8)}`, "Agent: waiting");
 		const runner = new ConsultationRunner(inner, agentListJson([]));
@@ -1156,8 +1166,8 @@ describe("Consultation responses through the UI", () => {
 						[`herdr agent prompt ${AGENT} follow up`],
 						"the response prompt",
 					);
-					expect(state.pendingConsultationResponse(RESPONSE_ID)).toBeNull();
-					const turns = state.consultationTurns(RESPONSE_ID);
+					expect(state.consultationRecord.pendingConsultationResponse(RESPONSE_ID)).toBeNull();
+					const turns = state.consultationRecord.consultationTurns(RESPONSE_ID);
 					expect(turns).toHaveLength(2);
 					expect(turns[1].input).toBe("follow up");
 				},
@@ -1173,8 +1183,8 @@ describe("Consultation responses through the UI", () => {
 	test("a rejected prompt keeps the draft and leaves no pending delivery", async () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
 		seed(state, RESPONSE_ID);
-		state.settleConsultationTurn(RESPONSE_ID, null, "first answer", "idle");
-		state.setConsultationDraft(RESPONSE_ID, "follow up");
+		state.consultationRecord.settleConsultationTurn(RESPONSE_ID, null, "first answer", "idle");
+		state.consultationRecord.setConsultationDraft(RESPONSE_ID, "follow up");
 		const inner = new FakeRunner();
 		inner.set("herdr", ["agent", "prompt", AGENT, "follow up"], {
 			code: 1,
@@ -1195,12 +1205,12 @@ describe("Consultation responses through the UI", () => {
 						(f) => f.includes("response failed: refused"),
 						"the failure status and the reopened editor",
 					);
-					expect(state.consultation(RESPONSE_ID)).toMatchObject({
+					expect(state.consultationRecord.consultation(RESPONSE_ID)).toMatchObject({
 						state: "awaiting-response",
 						draft: "follow up",
 					});
-					expect(state.pendingConsultationResponse(RESPONSE_ID)).toBeNull();
-					expect(state.consultationTurns(RESPONSE_ID)).toHaveLength(1);
+					expect(state.consultationRecord.pendingConsultationResponse(RESPONSE_ID)).toBeNull();
+					expect(state.consultationRecord.consultationTurns(RESPONSE_ID)).toHaveLength(1);
 					expect(frameText(setup.captureCharFrame())).toContain("follow up");
 				},
 				WIDTH,
@@ -1215,7 +1225,7 @@ describe("Consultation responses through the UI", () => {
 	test("the settled Agent output stays visible until an accepted response opens the next turn", async () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
 		seed(state, RESPONSE_ID);
-		state.settleConsultationTurn(RESPONSE_ID, null, "the design holds", "idle");
+		state.consultationRecord.settleConsultationTurn(RESPONSE_ID, null, "the design holds", "idle");
 		const paneId = `pane-${RESPONSE_ID.slice(0, 8)}`;
 		const inner = new FakeRunner();
 		stubPaneReadText(inner, paneId, "Agent: the design holds");
@@ -1250,8 +1260,8 @@ describe("Consultation responses through the UI", () => {
 						[`herdr agent prompt ${AGENT} then ship it`],
 						"the operator's response",
 					);
-					expect(state.pendingConsultationResponse(RESPONSE_ID)).toBeNull();
-					const turns = state.consultationTurns(RESPONSE_ID);
+					expect(state.consultationRecord.pendingConsultationResponse(RESPONSE_ID)).toBeNull();
+					const turns = state.consultationRecord.consultationTurns(RESPONSE_ID);
 					expect(turns).toHaveLength(2);
 					expect(turns.at(-1)?.input).toBe("then ship it");
 				},
@@ -1388,7 +1398,7 @@ describe("Consultation close and cleanup through the UI", () => {
 						)?.[1];
 						if (id8 === undefined) throw new Error("no Consultation agent selected");
 						if (i === 0) {
-							const current = state
+							const current = state.consultationRecord
 								.consultations("open")
 								.find((item) => item.id.slice(0, 8) === id8);
 							if (current === undefined) throw new Error(`no record for ${id8}`);
@@ -1408,7 +1418,7 @@ describe("Consultation close and cleanup through the UI", () => {
 								"the panel to close",
 								(f) => !f.includes("Close Consultation"),
 							);
-							expect(state.consultation(current.id)?.state).toBe(current.state);
+							expect(state.consultationRecord.consultation(current.id)?.state).toBe(current.state);
 							// Reopen the dialog for the confirm.
 							await openConsultationPanel(setup, "w", "the close confirmation", (f) =>
 								f.includes("Close Consultation"),
@@ -1435,8 +1445,8 @@ describe("Consultation close and cleanup through the UI", () => {
 					expect(commands.join("\n")).not.toContain("worktree remove");
 					expect(commands.join("\n")).not.toContain("branch -D");
 					for (const id of [CLOSE_A_ID, CLOSE_B_ID, CLOSE_C_ID]) {
-						expect(state.consultation(id)?.state).toBe("closed");
-						const retained = state
+						expect(state.consultationRecord.consultation(id)?.state).toBe("closed");
+						const retained = state.consultationRecord
 							.consultationResources(id)
 							.filter((resource) => resource.kind === "worktree");
 						expect(retained).toHaveLength(1);
@@ -1488,7 +1498,7 @@ describe("Consultation close and cleanup through the UI", () => {
 					await confirmPanel(setup, "the failed cleanup status", (f) =>
 						f.includes("close needs recovery: refused"),
 					);
-					expect(state.consultation(FORCE_ID)?.state).toBe("closing");
+					expect(state.consultationRecord.consultation(FORCE_ID)?.state).toBe("closing");
 					// Retry offers force-close once the cleanup is stuck.
 					await openConsultationPanel(setup, "w", "the recovery close panel", (f) =>
 						f.includes("Close Consultation"),
@@ -1508,7 +1518,7 @@ describe("Consultation close and cleanup through the UI", () => {
 					);
 					expect(frameText(frame)).toContain("Remaining resources");
 					expect(frameText(frame)).toContain(`workspace ws-${short}`);
-					const remaining = state.consultationRemainingResources(FORCE_ID);
+					const remaining = state.consultationRecord.consultationRemainingResources(FORCE_ID);
 					expect(remaining.map((resource) => resource.kind).sort()).toEqual([
 						"agent",
 						"pane",
@@ -1516,7 +1526,7 @@ describe("Consultation close and cleanup through the UI", () => {
 						"workspace",
 					]);
 					// The worktree survives the force close: retained, never deleted.
-					const worktrees = state
+					const worktrees = state.consultationRecord
 						.consultationResources(FORCE_ID)
 						.filter((resource) => resource.kind === "worktree");
 					expect(worktrees[0]).toMatchObject({ owned: false });
@@ -1535,8 +1545,16 @@ describe("Consultation close and cleanup through the UI", () => {
 		// Neither record holds an Agent, so the close has nothing to confirm.
 		seed(state, MISSING_DIRECT_ID, false);
 		seed(state, FAILED_DIRECT_ID, false);
-		state.setConsultationState(MISSING_DIRECT_ID, "missing", "the Agent pane is gone");
-		state.setConsultationState(FAILED_DIRECT_ID, "failed", "herdr refused the launch");
+		state.consultationRecord.setConsultationState(
+			MISSING_DIRECT_ID,
+			"missing",
+			"the Agent pane is gone",
+		);
+		state.consultationRecord.setConsultationState(
+			FAILED_DIRECT_ID,
+			"failed",
+			"herdr refused the launch",
+		);
 		const missing8 = MISSING_DIRECT_ID.slice(0, 8);
 		const failed8 = FAILED_DIRECT_ID.slice(0, 8);
 		const runner = new ConsultationRunner(new FakeRunner(), agentListJson([]));
@@ -1554,7 +1572,8 @@ describe("Consultation close and cleanup through the UI", () => {
 					await press(setup, "w", "the direct close", closed);
 					// The closed row leaves the open list, so the cursor holds the
 					// other one: it closes directly the same way.
-					const otherMissing = state.consultation(MISSING_DIRECT_ID)?.state === "closed";
+					const otherMissing =
+						state.consultationRecord.consultation(MISSING_DIRECT_ID)?.state === "closed";
 					await awaitFrame(
 						setup,
 						(f) => detailPaneText(f).includes(`State: ${otherMissing ? "failed" : "missing"}`),
@@ -1563,8 +1582,8 @@ describe("Consultation close and cleanup through the UI", () => {
 					const frame = await press(setup, "w", "the second direct close", (f) =>
 						messageRowOf(f).includes(`${otherMissing ? failed8 : missing8} closed`),
 					);
-					expect(state.consultation(MISSING_DIRECT_ID)?.state).toBe("closed");
-					expect(state.consultation(FAILED_DIRECT_ID)?.state).toBe("closed");
+					expect(state.consultationRecord.consultation(MISSING_DIRECT_ID)?.state).toBe("closed");
+					expect(state.consultationRecord.consultation(FAILED_DIRECT_ID)?.state).toBe("closed");
 					expect(frame).not.toContain("Close Consultation");
 				},
 				WIDTH,
@@ -1579,9 +1598,9 @@ describe("Consultation close and cleanup through the UI", () => {
 	test("w on a closed Consultation refuses readably", async () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
 		seed(state, CLOSED_DIRECT_ID);
-		state.settleConsultationTurn(CLOSED_DIRECT_ID, null, "done", "idle");
-		state.beginConsultationClose(CLOSED_DIRECT_ID);
-		state.finishConsultationClose(CLOSED_DIRECT_ID);
+		state.consultationRecord.settleConsultationTurn(CLOSED_DIRECT_ID, null, "done", "idle");
+		state.consultationRecord.beginConsultationClose(CLOSED_DIRECT_ID);
+		state.consultationRecord.finishConsultationClose(CLOSED_DIRECT_ID);
 		const runner = new ConsultationRunner(new FakeRunner(), agentListJson([]));
 		try {
 			await withApp(
@@ -1593,7 +1612,7 @@ describe("Consultation close and cleanup through the UI", () => {
 					await press(setup, "w", "the close refusal", (f) =>
 						f.includes("the selected Consultation is already closed"),
 					);
-					expect(state.consultation(CLOSED_DIRECT_ID)?.state).toBe("closed");
+					expect(state.consultationRecord.consultation(CLOSED_DIRECT_ID)?.state).toBe("closed");
 				},
 				WIDTH,
 				32,
@@ -1607,7 +1626,7 @@ describe("Consultation close and cleanup through the UI", () => {
 	test("the close confirmation lets go of the keys when the Agent dies first", async () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
 		seed(state, CONFIRM_GONE_ID);
-		state.setConsultationState(CONFIRM_GONE_ID, "working");
+		state.consultationRecord.setConsultationState(CONFIRM_GONE_ID, "working");
 		const gone8 = CONFIRM_GONE_ID.slice(0, 8);
 		// The Agent is alive at first: the observation loop matches its pane,
 		// so the Consultation stays working until the list loses it.
@@ -1655,7 +1674,7 @@ describe("Consultation close and cleanup through the UI", () => {
 					await press(setup, "w", "the direct close after the panel let go", (f) =>
 						messageRowOf(f).includes(`${gone8} closed`),
 					);
-					expect(state.consultation(CONFIRM_GONE_ID)?.state).toBe("closed");
+					expect(state.consultationRecord.consultation(CONFIRM_GONE_ID)?.state).toBe("closed");
 				},
 				WIDTH,
 				32,
@@ -1704,9 +1723,9 @@ describe("Consultation geometry, privacy, and history through the UI", () => {
 	test("consultation history stays out of the ticket view and delete removes it", async () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
 		seed(state, CLOSED_ID);
-		state.settleConsultationTurn(CLOSED_ID, null, "secret output", "idle");
-		state.beginConsultationClose(CLOSED_ID);
-		state.finishConsultationClose(CLOSED_ID);
+		state.consultationRecord.settleConsultationTurn(CLOSED_ID, null, "secret output", "idle");
+		state.consultationRecord.beginConsultationClose(CLOSED_ID);
+		state.consultationRecord.finishConsultationClose(CLOSED_ID);
 		const inner = new FakeRunner();
 		const runner = new ConsultationRunner(inner, agentListJson([]));
 		try {
@@ -1738,7 +1757,7 @@ describe("Consultation geometry, privacy, and history through the UI", () => {
 					await pressEnter(setup, "the empty closed history", (f) =>
 						f.includes("no closed Consultations"),
 					);
-					expect(state.consultation(CLOSED_ID)).toBeUndefined();
+					expect(state.consultationRecord.consultation(CLOSED_ID)).toBeUndefined();
 				},
 				WIDTH,
 				32,
@@ -1858,10 +1877,10 @@ describe("Consultation attention through the UI", () => {
 		// transitions (now) stay older than every seeded created_at.
 		const t = (minutes: number) => new Date(Date.now() + minutes * 60_000).toISOString();
 		seed(state, FAILED_ID, false, t(1));
-		state.failConsultationOpening(FAILED_ID, "herdr refused the launch");
+		state.consultationRecord.failConsultationOpening(FAILED_ID, "herdr refused the launch");
 		await sleep(20);
 		seed(state, MISSING_ID, true, t(3));
-		state.setConsultationState(MISSING_ID, "missing", "the Agent pane is gone");
+		state.consultationRecord.setConsultationState(MISSING_ID, "missing", "the Agent pane is gone");
 		seed(state, OPENING_ID, false, t(2));
 		const inner = new FakeRunner();
 		const runner = new ConsultationRunner(inner, agentListJson([]));
@@ -1880,7 +1899,7 @@ describe("Consultation attention through the UI", () => {
 					// list; the new row takes the top and the cursor follows its
 					// retained row. One more step up takes it.
 					seed(state, AWAITING_ID, true, t(4));
-					state.settleConsultationTurn(AWAITING_ID, null, "answer", "idle");
+					state.consultationRecord.settleConsultationTurn(AWAITING_ID, null, "answer", "idle");
 					setup.mockInput.pressKey("r");
 					await awaitFrame(setup, (f) => f.includes("awaiting response: 1"), "the awaiting row");
 					// The Refresh re-projection keeps the cursor on its retained
@@ -1911,7 +1930,7 @@ describe("Consultation attention through the UI", () => {
 	test("a Consultation that needs the operator adds no row to the compact frame", async () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
 		seed(state, AWAITING_ID, true);
-		state.settleConsultationTurn(AWAITING_ID, null, "answer", "idle");
+		state.consultationRecord.settleConsultationTurn(AWAITING_ID, null, "answer", "idle");
 		const paneId = `pane-${AWAITING_ID.slice(0, 8)}`;
 		const inner = new FakeRunner();
 		stubPaneReadText(inner, paneId, "Agent: waiting");
@@ -1987,7 +2006,7 @@ describe("Consultation live-worktree launch through the UI", () => {
 					expect(promptAt).toBeGreaterThan(startAt);
 					// The existing workspace is reused, never recreated.
 					expect(commands.join("\n")).not.toContain("workspace create");
-					const [consultation] = state.consultations("open");
+					const [consultation] = state.consultationRecord.consultations("open");
 					expect(consultation.state).toBe("working");
 					expect(consultation.paneId).toBe("pane-c1");
 					expect(consultation.workspaceId).toBe("ws-live");
@@ -2051,7 +2070,7 @@ describe("Consultation live-worktree launch through the UI", () => {
 					);
 					// The record keeps the count the Agent started with, so a
 					// Restart of this Consultation keeps the room it ran in.
-					const [consultation] = state.consultations("open");
+					const [consultation] = state.consultationRecord.consultations("open");
 					expect(consultation.contextWindow).toBe("131072");
 				},
 				WIDTH,
@@ -2093,7 +2112,7 @@ describe("Consultation live-worktree launch through the UI", () => {
 					expect(commands).toContain(`herdr workspace create --cwd ${checkout} --no-focus`);
 					// No empty tab: the Agent takes the workspace root pane.
 					expect(commands.join("\n")).not.toContain("tab create");
-					const [consultation] = state.consultations("open");
+					const [consultation] = state.consultationRecord.consultations("open");
 					expect(consultation.state).toBe("working");
 					expect(consultation.paneId).toBe("pane-c1");
 					expect(consultation.workspaceId).toBe("ws-new");
@@ -2127,8 +2146,8 @@ describe("Consultation live-worktree launch through the UI", () => {
 		// in the filter decides whether the safety read names it.
 		const ignoredTicket = "github:github.com:I_9";
 		const listedTicket = "github:github.com:I_7";
-		state.initializeSources([{ name: "issues", kind: "github-issues" }]);
-		state.applyFetch(
+		state.sourceFact.initializeSources([{ name: "issues", kind: "github-issues" }]);
+		state.sourceFact.applyFetch(
 			{ name: "issues", kind: "github-issues" },
 			success([
 				issueTicket(ignoredTicket, { title: "Watch agent turns" }),
@@ -2139,7 +2158,7 @@ describe("Consultation live-worktree launch through the UI", () => {
 			[ignoredTicket, "pane-tick"],
 			[listedTicket, "pane-rank"],
 		] as const) {
-			const claim = state.claimHandoff(
+			const claim = state.handoff.claimHandoff(
 				identity,
 				{
 					agentType: "pi",
@@ -2152,13 +2171,13 @@ describe("Consultation live-worktree launch through the UI", () => {
 				"open",
 			);
 			if (!claim.ok) throw new Error(claim.reason);
-			state.settleHandoff(claim.claim.attemptId, true, undefined, {
+			state.handoff.settleHandoff(claim.claim.attemptId, true, undefined, {
 				paneId: pane,
 				tabId: `tab-${pane}`,
 				workspaceId: `ws-${pane}`,
 			});
 		}
-		expect(state.setTicketIgnored(ignoredTicket, true, null)).toEqual({ ok: true });
+		expect(state.ticketWorkCycle.setTicketIgnored(ignoredTicket, true, null)).toEqual({ ok: true });
 		const conflictList = JSON.stringify({
 			result: {
 				agents: [
@@ -2242,8 +2261,8 @@ describe("Consultation live-worktree launch through the UI", () => {
 		// one on a settled Ticket the pile leaves out.
 		const judged = "github:github.com:I_9";
 		const settled = "github:github.com:I_7";
-		state.initializeSources([{ name: "issues", kind: "github-issues" }]);
-		state.applyFetch(
+		state.sourceFact.initializeSources([{ name: "issues", kind: "github-issues" }]);
+		state.sourceFact.applyFetch(
 			{ name: "issues", kind: "github-issues" },
 			success([
 				issueTicket(judged, {
@@ -2266,7 +2285,7 @@ describe("Consultation live-worktree launch through the UI", () => {
 			]),
 		);
 		for (const identity of [judged, settled]) {
-			const claim = state.claimHandoff(
+			const claim = state.handoff.claimHandoff(
 				identity,
 				{
 					agentType: "pi",
@@ -2279,7 +2298,7 @@ describe("Consultation live-worktree launch through the UI", () => {
 				"open",
 			);
 			if (!claim.ok) throw new Error(claim.reason);
-			state.settleHandoff(claim.claim.attemptId, true, undefined, {
+			state.handoff.settleHandoff(claim.claim.attemptId, true, undefined, {
 				paneId: `pane-${identity.slice(-1)}`,
 				tabId: `tab-${identity.slice(-1)}`,
 				workspaceId: `ws-${identity.slice(-1)}`,
@@ -2287,7 +2306,7 @@ describe("Consultation live-worktree launch through the UI", () => {
 		}
 		// One row the operator judged out, one row they left in the list: each
 		// carries a repository no other row names.
-		expect(state.setTicketIgnored(judged, true, null)).toEqual({ ok: true });
+		expect(state.ticketWorkCycle.setTicketIgnored(judged, true, null)).toEqual({ ok: true });
 		const runner = new ConsultationRunner(inner, agentListJson([]));
 		try {
 			await withApp(
@@ -2373,7 +2392,7 @@ describe("Consultation live-worktree launch through the UI", () => {
 					expect(frameText(panel)).toContain("Confirm once to share this live checkout");
 					// The Agent never starts while the panel is up.
 					expect(runner.commands().join("\n")).not.toContain("agent start");
-					const [consultation] = state.consultations("open");
+					const [consultation] = state.consultationRecord.consultations("open");
 					expect(consultation.state).toBe("opening");
 					// Confirm once: the launch proceeds and the override is recorded.
 					await pressEnter(setup, "the confirmed launch to reach working", (f) =>
@@ -2387,9 +2406,13 @@ describe("Consultation live-worktree launch through the UI", () => {
 						],
 						"the confirmed launch sequence",
 					);
-					expect(state.consultation(consultation.id)).toMatchObject({ state: "working" });
+					expect(state.consultationRecord.consultation(consultation.id)).toMatchObject({
+						state: "working",
+					});
 					// The confirmation belongs to the checkout, not to the opening.
-					expect(state.confirmedCheckoutConflicts(realpathSync(checkout))).toContain("pane-herdr");
+					expect(
+						state.consultationRecord.confirmedCheckoutConflicts(realpathSync(checkout)),
+					).toContain("pane-herdr");
 				},
 				WIDTH,
 				32,
@@ -2456,8 +2479,8 @@ describe("Consultation live-worktree launch through the UI", () => {
 					);
 					expect(messageRowOf(refused)).toContain('has no model "openai/gpt-4o"');
 					// No record and no queue item: the ask never entered the channel.
-					expect(state.consultations("all")).toEqual([]);
-					expect(state.workQueue()).toEqual([]);
+					expect(state.consultationRecord.consultations("all")).toEqual([]);
+					expect(state.workQueue.items()).toEqual([]);
 					// The launcher stayed open with the operator's form for the fix.
 					expect(frameText(refused)).toContain("Consultation launcher");
 					const joined = runner.commands().join("\n");
@@ -2498,7 +2521,7 @@ describe("Consultation live-worktree launch through the UI", () => {
 					await launchConsultationDraft(setup, "review auth");
 					await awaitFrame(setup, (f) => f.includes("State: working"), "the working state");
 					expect(frameText(setup.captureCharFrame())).not.toContain("Live checkout conflict");
-					const [consultation] = state.consultations("open");
+					const [consultation] = state.consultationRecord.consultations("open");
 					expect(consultation.state).toBe("working");
 					expect(consultation.warning).toBe("the live checkout has uncommitted changes");
 				},
@@ -2517,7 +2540,7 @@ describe("Consultation live-worktree launch through the UI", () => {
 		// confirmation names the checkout as the resource the close keeps,
 		// not the worktree and branch a worktree Consultation keeps.
 		seed(state, LIVE_CLOSE_ID, true, "2026-09-01T10:00:00.000Z", "", "live-worktree");
-		state.setConsultationState(LIVE_CLOSE_ID, "working");
+		state.consultationRecord.setConsultationState(LIVE_CLOSE_ID, "working");
 		// The Agent is alive at the recorded pane: the observation loop keeps
 		// the record working while the dialog stands.
 		const runner = new ConsultationRunner(
@@ -2546,7 +2569,7 @@ describe("Consultation live-worktree launch through the UI", () => {
 						"the panel to close",
 						(f) => !f.includes("Close Consultation"),
 					);
-					expect(state.consultation(LIVE_CLOSE_ID)?.state).toBe("working");
+					expect(state.consultationRecord.consultation(LIVE_CLOSE_ID)?.state).toBe("working");
 				},
 				WIDTH,
 				32,
@@ -2562,7 +2585,12 @@ describe("Consultation response gating by observed Agent status", () => {
 	test("a blocked Agent takes Enter into interaction, with the exit key shown first", async () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
 		seed(state, INTERACTION_ID);
-		state.settleConsultationTurn(INTERACTION_ID, null, "first answer", "blocked");
+		state.consultationRecord.settleConsultationTurn(
+			INTERACTION_ID,
+			null,
+			"first answer",
+			"blocked",
+		);
 		const paneId = `pane-${INTERACTION_ID.slice(0, 8)}`;
 		const inner = new FakeRunner();
 		stubPaneReadText(inner, paneId, "Agent: blocked on approval");
@@ -2615,7 +2643,12 @@ describe("Consultation response gating by observed Agent status", () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
 		seed(state, INTERACTION_ID);
 		// The last settled turn was blocked, but the Agent itself is idle now.
-		state.settleConsultationTurn(INTERACTION_ID, null, "first answer", "blocked");
+		state.consultationRecord.settleConsultationTurn(
+			INTERACTION_ID,
+			null,
+			"first answer",
+			"blocked",
+		);
 		const paneId = `pane-${INTERACTION_ID.slice(0, 8)}`;
 		const inner = new FakeRunner();
 		stubPaneReadText(inner, paneId, "Agent: now idle");
@@ -2785,7 +2818,7 @@ describe("The full Consultation operator flow", () => {
 					);
 					await launchConsultationDraft(setup, "review auth");
 					await awaitFrame(setup, (f) => f.includes("State: working"), "the working state");
-					const id = state.consultations("open")[0].id;
+					const id = state.consultationRecord.consultations("open")[0].id;
 					// The opening turn settles and rings.
 					runner.agentListJson = agentListJson([{ ...launchedAgent, status: "idle", seq: 1 }]);
 					await awaitFrame(
@@ -2815,7 +2848,9 @@ describe("The full Consultation operator flow", () => {
 						(f) => f.includes("State: awaiting-response"),
 						"the blocked settled turn",
 					);
-					expect(state.consultationTurns(id).at(-1)?.settledStatus).toBe("blocked");
+					expect(state.consultationRecord.consultationTurns(id).at(-1)?.settledStatus).toBe(
+						"blocked",
+					);
 					// Enter now opens interaction, not the response editor.
 					await pressEnter(setup, "the blocked interaction mode", (f) =>
 						f.includes("F12 Exit interaction"),
@@ -2830,11 +2865,11 @@ describe("The full Consultation operator flow", () => {
 					runner.agentListJson = agentListJson([{ ...launchedAgent, status: "idle", seq: 3 }]);
 					await waitFor(
 						() =>
-							state.consultationTurns(id).length === 3 &&
-							state.consultationTurns(id).at(-1)?.settledAt !== null,
+							state.consultationRecord.consultationTurns(id).length === 3 &&
+							state.consultationRecord.consultationTurns(id).at(-1)?.settledAt !== null,
 						"the external turn to settle",
 					);
-					expect(state.consultation(id)?.state).toBe("awaiting-response");
+					expect(state.consultationRecord.consultation(id)?.state).toBe("awaiting-response");
 					expect(bells.count()).toBe(3);
 					// Close stops the live Agent, so the confirmation asks first;
 					// the confirm takes down the owned workspace.
@@ -2851,7 +2886,7 @@ describe("The full Consultation operator flow", () => {
 						f.includes(`${id.slice(0, 8)} closed`),
 					);
 					await waitForCommands(runner, ["herdr workspace close ws-new"], "the workspace cleanup");
-					expect(state.consultation(id)?.state).toBe("closed");
+					expect(state.consultationRecord.consultation(id)?.state).toBe("closed");
 					// The captured history keeps every turn in order.
 					await press(setup, "f", "the closed history", (f) => f.includes("State: closed"));
 					const detail = await awaitFrame(
@@ -2882,7 +2917,7 @@ describe("The full Consultation operator flow", () => {
 		// just created.
 		const t = (minutes: number) => new Date(Date.now() + minutes * 60_000).toISOString();
 		seed(state, MISSING_ID, true, t(1));
-		state.setConsultationState(MISSING_ID, "missing", "the Agent pane is gone");
+		state.consultationRecord.setConsultationState(MISSING_ID, "missing", "the Agent pane is gone");
 		const inner = new FakeRunner();
 		stubCheckout(inner);
 		stubWorktreeLaunch(inner);
@@ -2934,8 +2969,8 @@ describe("The full Consultation operator flow", () => {
 			fetchedAt: "2026-09-01T10:00:00.000Z",
 			tickets: [],
 		};
-		state.initializeSources([ticketSource]);
-		state.applyFetch(ticketSource, outcome);
+		state.sourceFact.initializeSources([ticketSource]);
+		state.sourceFact.applyFetch(ticketSource, outcome);
 		const source = new FakeSource(ticketSource.name, ticketSource.kind, outcome);
 		const inner = new FakeRunner();
 		stubCheckout(inner);
@@ -3072,8 +3107,10 @@ describe("the Consultation detail reads the Agent's session record (ADR 0025)", 
 						messageRowOf(f).includes("focused the Agent pane"),
 					);
 					expect(runner.commands()).toContain(`herdr agent focus ${paneId}`);
-					expect(state.consultation(WORKING_ID)?.state).toBe("awaiting-response");
-					expect(state.pendingConsultationResponse(WORKING_ID)).toBeNull();
+					expect(state.consultationRecord.consultation(WORKING_ID)?.state).toBe(
+						"awaiting-response",
+					);
+					expect(state.consultationRecord.pendingConsultationResponse(WORKING_ID)).toBeNull();
 				},
 				WIDTH,
 				32,
@@ -3138,7 +3175,7 @@ describe("the Consultation detail reads the Agent's session record (ADR 0025)", 
 		const state = openFactoryState(join(home, "state.sqlite"));
 		const closedId = uid("9");
 		seed(state, closedId);
-		state.setConsultationState(closedId, "closed");
+		state.consultationRecord.setConsultationState(closedId, "closed");
 		const paneId = `pane-${closedId.slice(0, 8)}`;
 		const { dir, path } = seedRecord(closedId);
 		const inner = new FakeRunner();
@@ -3228,7 +3265,9 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 					// The record is durable in `queued` state: the launcher
 					// closed it, the Consultation list shows it, and the
 					// detail states the wait.
-					const queued = state.consultations("all").find((c) => c.state === "queued");
+					const queued = state.consultationRecord
+						.consultations("all")
+						.find((c) => c.state === "queued");
 					expect(queued).toBeDefined();
 					if (queued === undefined) throw new Error("the queued Consultation is not recorded");
 					expect(queued.paneId).toBeNull();
@@ -3255,7 +3294,7 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 					);
 					// The queue holds the item, and the seat count stayed at
 					// the cap: the record holds no seat until the pickup.
-					const queue = state.workQueue();
+					const queue = state.workQueue.items();
 					expect(queue).toHaveLength(1);
 					expect(queue[0]).toEqual(
 						expect.objectContaining({ kind: "consultation", consultationId: queued.id }),
@@ -3328,11 +3367,13 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 					);
 					// The record is not `queued`, and the pickup took its item on the
 					// submit, so the durable queue is empty.
-					const settled = state.consultations("all").find((c) => c.state !== "closed");
+					const settled = state.consultationRecord
+						.consultations("all")
+						.find((c) => c.state !== "closed");
 					expect(settled).toBeDefined();
 					if (settled === undefined) throw new Error("the Consultation is not recorded");
 					expect(settled.state).not.toBe("queued");
-					expect(state.workQueue()).toHaveLength(0);
+					expect(state.workQueue.items()).toHaveLength(0);
 					// The regression the launch guards: the submit used to stand its
 					// "waits in the Work queue" line before the pickup ran, so a launch
 					// with a free seat could claim a wait the queue no longer held. Walk
@@ -3342,7 +3383,7 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 					for (let step = 0; step < 25; step += 1) {
 						const frame = setup.captureCharFrame();
 						if (detailPaneText(frame).includes("State: working")) sawWorking = true;
-						if (state.workQueue().length === 0) {
+						if (state.workQueue.items().length === 0) {
 							expect(messageRowOf(frame)).not.toContain("waits in the Work queue");
 						}
 						await settle(setup, 50);
@@ -3382,7 +3423,7 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 		const inner = new FakeRunner();
 		stubCheckout(inner);
 		const runner = new ConsultationRunner(inner, agentListJson([]));
-		state.setQueuePaused(true);
+		state.workQueue.setQueuePaused(true);
 		try {
 			await withApp(
 				async (setup) => {
@@ -3398,7 +3439,9 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 						(f) => messageRowOf(f).includes("consultation queued"),
 						"the queued notice",
 					);
-					const queued = state.consultations("all").find((c) => c.state === "queued");
+					const queued = state.consultationRecord
+						.consultations("all")
+						.find((c) => c.state === "queued");
 					expect(queued).toBeDefined();
 					if (queued === undefined) throw new Error("the queued Consultation is not recorded");
 					// The line names the pause as the reason the item waits, not the
@@ -3412,7 +3455,7 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 					expect(frameText(frame)).toContain("paused");
 					// And the pause held it: the record is still `queued`, its item
 					// still stands, and the enqueue ran no external step.
-					expect(state.workQueue()).toEqual([
+					expect(state.workQueue.items()).toEqual([
 						expect.objectContaining({ kind: "consultation", consultationId: queued.id }),
 					]);
 					expect(runner.commands()).not.toContain(expect.stringContaining("worktree create"));
@@ -3458,7 +3501,9 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 						(f) => messageRowOf(f).includes("consultation queued"),
 						"the queued notice",
 					);
-					const queued = state.consultations("all").find((c) => c.state === "queued");
+					const queued = state.consultationRecord
+						.consultations("all")
+						.find((c) => c.state === "queued");
 					expect(queued).toBeDefined();
 					if (queued === undefined) throw new Error("the queued Consultation is not recorded");
 					const gone8 = queued.id.slice(0, 8);
@@ -3470,8 +3515,8 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 					await press(setup, "w", "the queued Consultation closed", (f) =>
 						messageRowOf(f).includes(`${gone8} closed`),
 					);
-					expect(state.consultation(queued.id)?.state).toBe("closed");
-					expect(state.workQueue()).toHaveLength(0);
+					expect(state.consultationRecord.consultation(queued.id)?.state).toBe("closed");
+					expect(state.workQueue.items()).toHaveLength(0);
 					expect(runner.commands()).not.toContain(expect.stringContaining("pane close"));
 					expect(runner.commands()).not.toContain(expect.stringContaining("workspace close"));
 				},
@@ -3517,7 +3562,9 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 						(f) => messageRowOf(f).includes("consultation queued"),
 						"the queued notice",
 					);
-					const queued = state.consultations("all").find((c) => c.state === "queued");
+					const queued = state.consultationRecord
+						.consultations("all")
+						.find((c) => c.state === "queued");
 					expect(queued).toBeDefined();
 					if (queued === undefined) throw new Error("the queued Consultation is not recorded");
 					// The launched Agent's pane joins the poll's list, so the
@@ -3527,7 +3574,7 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 						{ pane: "pane-c1", status: "working", sess: "sess-c1" },
 					]);
 					// Free the seat: the record leaves the states that hold one.
-					state.setConsultationState(seatId, "awaiting-response");
+					state.consultationRecord.setConsultationState(seatId, "awaiting-response");
 					// The pickup crosses to the Consultation operations, the
 					// start runs the opening pipeline, and the detail settles
 					// on the record's new state.
@@ -3546,13 +3593,15 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 						"the pickup's launch sequence",
 					);
 					// The item left the queue with the record out of `queued`.
-					expect(state.workQueue()).toHaveLength(0);
-					expect(queued === undefined ? undefined : state.consultation(queued.id)?.state).toBe(
-						"working",
-					);
+					expect(state.workQueue.items()).toHaveLength(0);
+					expect(
+						queued === undefined
+							? undefined
+							: state.consultationRecord.consultation(queued.id)?.state,
+					).toBe("working");
 					// The seat freed once: the seed's record rests in
 					// awaiting-response and holds none.
-					expect(state.consultation(seatId)?.state).toBe("awaiting-response");
+					expect(state.consultationRecord.consultation(seatId)?.state).toBe("awaiting-response");
 				},
 				WIDTH,
 				32,
@@ -3596,7 +3645,9 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 						(f) => messageRowOf(f).includes("consultation queued"),
 						"the queued notice",
 					);
-					const queued = state.consultations("all").find((c) => c.state === "queued");
+					const queued = state.consultationRecord
+						.consultations("all")
+						.find((c) => c.state === "queued");
 					expect(queued).toBeDefined();
 					if (queued === undefined) throw new Error("the queued Consultation is not recorded");
 					const id8 = queued.id.slice(0, 8);
@@ -3632,9 +3683,9 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 					// The item left the queue with the claim, and the start ran
 					// over the cap, not behind the seed's release: the seed's
 					// seat stood through the whole of it.
-					expect(state.workQueue()).toHaveLength(0);
-					expect(state.consultation(queued.id)?.state).not.toBe("queued");
-					expect(state.consultation(seatId)?.state).toBe("working");
+					expect(state.workQueue.items()).toHaveLength(0);
+					expect(state.consultationRecord.consultation(queued.id)?.state).not.toBe("queued");
+					expect(state.consultationRecord.consultation(seatId)?.state).toBe("working");
 				},
 				WIDTH,
 				32,
@@ -3674,7 +3725,7 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 			(f) => messageRowOf(f).includes("consultation queued"),
 			"the queued notice",
 		);
-		const queued = state.consultations("all").find((c) => c.state === "queued");
+		const queued = state.consultationRecord.consultations("all").find((c) => c.state === "queued");
 		if (queued === undefined) throw new Error("the queued Consultation is not recorded");
 		// The frame holds no room for the Work section's rows, so it rests
 		// collapsed, and Enter on the queued row jumps to its item and
@@ -3694,8 +3745,8 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 		expect(messageRowOf(removed)).toContain(
 			`consultation ${queued.id.slice(0, 8)}: removed from the queue; the record is unscheduled`,
 		);
-		expect(state.workQueue()).toHaveLength(0);
-		expect(state.consultation(queued.id)?.state).toBe("unscheduled");
+		expect(state.workQueue.items()).toHaveLength(0);
+		expect(state.consultationRecord.consultation(queued.id)?.state).toBe("unscheduled");
 		// The record keeps standing in the Consultation section: the row
 		// carries its state, its type, and its repository.
 		await crossToConsultations(setup);
@@ -3767,8 +3818,8 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 					expect(messageRowOf(scheduled)).toContain(
 						`Consultation ${id.slice(0, 8)} scheduled: it waits at the end of the Work queue`,
 					);
-					expect(state.consultation(id)?.state).toBe("queued");
-					expect(state.workQueue().map(workQueueIdentityOf)).toEqual([id]);
+					expect(state.consultationRecord.consultation(id)?.state).toBe("queued");
+					expect(state.workQueue.items().map(workQueueIdentityOf)).toEqual([id]);
 					// The queue rows re-read in the same key: the item stands in
 					// the Work queue section at the place the line names. The
 					// section still stands expanded from the walk, so the
@@ -3799,7 +3850,7 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 					await press(setup, "s", "the already-waiting refusal", (f) =>
 						f.includes("already waits in the Work queue"),
 					);
-					expect(state.consultation(id)?.state).toBe("queued");
+					expect(state.consultationRecord.consultation(id)?.state).toBe("queued");
 				},
 				WIDTH,
 				32,
@@ -3853,8 +3904,8 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 						],
 						"the start-now launch sequence",
 					);
-					expect(state.consultation(id)?.state).not.toBe("unscheduled");
-					expect(state.consultation(seatId)?.state).toBe("working");
+					expect(state.consultationRecord.consultation(id)?.state).not.toBe("unscheduled");
+					expect(state.consultationRecord.consultation(seatId)?.state).toBe("working");
 				},
 				WIDTH,
 				32,
@@ -3897,7 +3948,7 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 					// Free the seat the queue walk held: the line then names no
 					// cap, because the seat count stood under the limit at the
 					// key, the way the queue's force-dispatch line does.
-					state.setConsultationState(seatId, "awaiting-response");
+					state.consultationRecord.setConsultationState(seatId, "awaiting-response");
 					// The write lands in the state the app reads live but re-renders
 					// nothing: step the cursor up to the seed's row and back, so the
 					// mode line re-reads the freed seat count before the key runs.
@@ -3924,8 +3975,8 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 						],
 						"the start-now launch sequence",
 					);
-					expect(state.consultation(id)?.state).not.toBe("unscheduled");
-					expect(state.consultation(seatId)?.state).toBe("awaiting-response");
+					expect(state.consultationRecord.consultation(id)?.state).not.toBe("unscheduled");
+					expect(state.consultationRecord.consultation(seatId)?.state).toBe("awaiting-response");
 				},
 				WIDTH,
 				32,
@@ -3970,7 +4021,7 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 					expect(messageRowOf(frame)).toContain(
 						`Consultation ${id.slice(0, 8)} deleted; backups may retain data`,
 					);
-					expect(state.consultation(id)).toBeUndefined();
+					expect(state.consultationRecord.consultation(id)).toBeUndefined();
 				},
 				WIDTH,
 				32,

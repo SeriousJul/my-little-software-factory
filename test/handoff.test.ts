@@ -27,7 +27,7 @@ import {
 	reviewVerdictFill,
 	settingArgs,
 } from "../src/handoff.ts";
-import type { Consultation } from "../src/state.ts";
+import type { Consultation } from "../src/state/consultation-record.ts";
 import { BASE_CONFIG } from "./base-config.ts";
 import {
 	FakeRunner,

@@ -67,6 +67,7 @@ import {
 import {
 	createHandoffDispatch,
 	type HandoffDispatch,
+	type HandoffDispatchAggregates,
 	reportHandoffOutcome,
 	type StoredHandoffFacts,
 } from "../handoff-dispatch.ts";
@@ -80,7 +81,7 @@ import {
 	ObservationCoordinator,
 	STARTUP_GRACE_MS,
 } from "../observation.ts";
-import { parallelSeatCount } from "../parallel.ts";
+import { parallelSeatCount, TICKET_SEAT_STATES } from "../parallel.ts";
 import { evaluatePlacement, type PlacementEvaluation } from "../placement.ts";
 import {
 	DEFAULT_MERGE_METHOD,
@@ -113,14 +114,16 @@ import {
 	supportsModelList,
 } from "../runner.ts";
 import { type TaskProfileStart, taskProfilesOf } from "../setting-resolution.ts";
-import {
-	type Consultation,
-	type FactoryState,
-	inMemoryTicketViews,
-	type TicketListViews,
-	type WorkQueueItem,
-	workQueueIdentityOf,
-} from "../state.ts";
+import type { Consultation, ConsultationRecordAggregate } from "../state/consultation-record.ts";
+import type { GroupingAggregate } from "../state/grouping.ts";
+import type { HandoffAggregate } from "../state/handoff.ts";
+import type { PlaneActionAggregate } from "../state/plane-action.ts";
+import type { RepositoryInitAggregate } from "../state/repository-init.ts";
+import type { SourceFactAggregate } from "../state/source-fact.ts";
+import type { TicketListViews, TicketWorkCycleAggregate } from "../state/ticket-work-cycle.ts";
+import { inMemoryTicketViews } from "../state/ticket-work-cycle.ts";
+import type { WorkQueueAggregate, WorkQueueItem } from "../state/work-queue.ts";
+import { workQueueIdentityOf } from "../state/work-queue.ts";
 import { currentThemeResolution } from "../theme-source.ts";
 import type { TicketSource } from "../ticket-source.ts";
 import { GhAuthenticator } from "../ticket-source.ts";
@@ -309,6 +312,25 @@ type Utility =
 	| { kind: "guide"; mode: InteractionMode }
 	| { kind: "message"; mode: InteractionMode; fact: MessageFact };
 
+/**
+ * The aggregates the app shell reads, as a list (issue #202), and the clock it
+ * hands to the modules it builds. The shell never reaches the state file: it
+ * reads through these interfaces only, and a plane with no state file has none
+ * of them.
+ */
+export interface AppAggregates {
+	consultationRecord: ConsultationRecordAggregate;
+	grouping: GroupingAggregate;
+	handoff: HandoffAggregate;
+	planeAction: PlaneActionAggregate;
+	repositoryInit: RepositoryInitAggregate;
+	sourceFact: SourceFactAggregate;
+	ticketWorkCycle: TicketWorkCycleAggregate;
+	workQueue: WorkQueueAggregate;
+	/** The state clock, handed to the dispatch module the shell builds. */
+	now(): number;
+}
+
 export interface AppProps {
 	/**
 	 * The validated config. The production entry always supplies it from the
@@ -320,7 +342,7 @@ export interface AppProps {
 	home?: string;
 	configPath?: string;
 	/** SQLite state. The factory entry module owns its process lease. */
-	state?: FactoryState;
+	state?: AppAggregates;
 	/** Bound sources. Tests inject deterministic sources here. */
 	sources?: readonly TicketSource[];
 	/** Test-only deterministic ticket projection. It has no production caller. */
@@ -381,7 +403,11 @@ export function App({
 	// are the rows it was given.
 	const [listViews, setListViews] = useState<TicketListViews>(() => {
 		if (state !== undefined)
-			return state.ticketListViews(config.workflowStates, config.defaultTaskType, "active");
+			return state.ticketWorkCycle.ticketListViews(
+				config.workflowStates,
+				config.defaultTaskType,
+				"active",
+			);
 		return inMemoryTicketViews(initialTickets ?? []);
 	});
 	const tickets = listViews.rows;
@@ -403,7 +429,7 @@ export function App({
 	 * durable to read, keeps the axis for the run, and writes nothing.
 	 */
 	const [groupingAxis, setGroupingAxis] = useState<GroupingAxis>(
-		() => state?.groupingAxis(TICKET_GROUP_SECTION) ?? DEFAULT_GROUPING_AXIS,
+		() => state?.grouping.groupingAxis(TICKET_GROUP_SECTION) ?? DEFAULT_GROUPING_AXIS,
 	);
 	const groupingAxisRef = useRef(groupingAxis);
 	// The one-time init note stands once per run (ADR 0075, story 20): the flag
@@ -422,7 +448,7 @@ export function App({
 	 */
 	const [groupOrderList, setGroupOrderList] = useState<string[]>(() =>
 		state !== undefined && groupingAxis !== "none"
-			? state.groupOrder(TICKET_GROUP_SECTION, groupingAxis)
+			? state.grouping.groupOrder(TICKET_GROUP_SECTION, groupingAxis)
 			: [],
 	);
 	const groupOrderListRef = useRef(groupOrderList);
@@ -442,7 +468,7 @@ export function App({
 	const storedGroupOrderOf = (axis: SplitGroupingAxis): string[] =>
 		state === undefined
 			? (groupOrdersForRunRef.current[axis] ?? [])
-			: state.groupOrder(TICKET_GROUP_SECTION, axis);
+			: state.grouping.groupOrder(TICKET_GROUP_SECTION, axis);
 	/**
 	 * The Groups the operator folded: session facts, keyed by the axis and the
 	 * Group value, and never written to disk (ADR 0058). The plane comes up with
@@ -479,7 +505,7 @@ export function App({
 	const [workQueueDetailScroll, setWorkQueueDetailScroll] = useState(0);
 	const workQueueDetailScrollRef = useRef(0);
 	const [consultations, setConsultations] = useState<Consultation[]>(
-		() => state?.consultations("open") ?? [],
+		() => state?.consultationRecord.consultations("open") ?? [],
 	);
 	const consultationsRef = useRef(consultations);
 	const [consultationIndex, setConsultationIndex] = useState(0);
@@ -576,7 +602,7 @@ export function App({
 		if (groupingAxis !== "repository") return null;
 		const ticket = tickets.find((item) => item.repository === value);
 		const identity = ticket?.repositoryRef.identity ?? value;
-		const fact = state === undefined ? null : state.repositoryInitFact(identity);
+		const fact = state === undefined ? null : state.repositoryInit.repositoryInitFact(identity);
 		return repositoryInitStanding(fact, currentInitHash);
 	};
 	const ticketRowsState: readonly ListedRow<Ticket>[] = ticketRows(
@@ -632,7 +658,7 @@ export function App({
 	// App's own re-read for the reorder and the cancel the operator asked for.
 	// The render never queries the state.
 	const [workQueue, setWorkQueue] = useState<readonly WorkQueueItem[]>(
-		() => state?.workQueue() ?? [],
+		() => state?.workQueue.items() ?? [],
 	);
 	const workQueueRef = useRef<readonly WorkQueueItem[]>(workQueue);
 	workQueueRef.current = workQueue;
@@ -708,7 +734,7 @@ export function App({
 	const overrideRef = useRef<PendingOverride | null>(null);
 	overrideRef.current = override;
 	const [utility, setUtility] = useState<Utility>(null);
-	const [healths, setHealths] = useState(() => state?.sourceHealths() ?? []);
+	const [healths, setHealths] = useState(() => state?.sourceFact.sourceHealths() ?? []);
 	const [panel, setPanel] = useState<Panel>(null);
 	// The queue behind a queued init (ADR 0083): the entries waiting for
 	// their turn stand in the ref, not in state, because no surface renders
@@ -737,7 +763,9 @@ export function App({
 	// operator's last choice back from the state file, so a restart or a dev
 	// reload finds the mode where it was left. A plane with no state has no
 	// durable mode to read, and starts with the mode off.
-	const [autoMode, setAutoMode] = useState<boolean>(() => state?.autoHandoffMode() ?? false);
+	const [autoMode, setAutoMode] = useState<boolean>(
+		() => state?.handoff.autoHandoffMode() ?? false,
+	);
 	const autoModeRef = useRef(autoMode);
 	const [agents, setAgents] = useState<readonly HerdrAgent[] | null>(null);
 	// The key handler outlives the render that made the decision it acts on,
@@ -756,7 +784,16 @@ export function App({
 		state === undefined
 			? 0
 			: parallelSeatCount({
-					state,
+					tickets: state.ticketWorkCycle.ticketsByState(TICKET_SEAT_STATES).map((ticket) => ({
+						ticketIdentity: ticket.ticketIdentity,
+						paneId: ticket.paneId,
+						startedAt: ticket.startedAt,
+						agentName: state.ticketWorkCycle.agentNameForTicket(ticket.ticketIdentity),
+					})),
+					handoffAttemptTickets: state.handoff.openAttemptTickets(),
+					consultations: state.consultationRecord
+						.consultations("all")
+						.map((consultation) => ({ state: consultation.state })),
 					agents: agentsRef.current,
 					now: Date.now(),
 					startupGraceMs: STARTUP_GRACE_MS,
@@ -778,9 +815,9 @@ export function App({
 	// check reads the latest set through the ref.
 	const startingTicketsRef = useRef(startingTickets);
 	startingTicketsRef.current = startingTickets;
-	const handoffDispatchRef = useRef<{ state: FactoryState; dispatch: HandoffDispatch } | undefined>(
-		undefined,
-	);
+	const handoffDispatchRef = useRef<
+		{ state: HandoffDispatchAggregates; dispatch: HandoffDispatch } | undefined
+	>(undefined);
 	const coordinatorRef = useRef<RefreshCoordinator | undefined>(undefined);
 	const observationRef = useRef<ObservationCoordinator | undefined>(undefined);
 	const configWriteQueue = useRef(Promise.resolve());
@@ -888,7 +925,7 @@ export function App({
 	const liveCount = currentSeatCount();
 	// The Dispatch pause (ADR 0016): a held failed trace holds the automatic
 	// handoffs, routes, and restarts until it is decided or a turn completes.
-	const dispatchPause = state?.dispatchPauseActive() ?? false;
+	const dispatchPause = state?.ticketWorkCycle.dispatchPauseActive() ?? false;
 	// The held turns (ADR 0016, ADR 0017): the awaiting tickets whose last turn
 	// ended failed, aborted, truncated, or no-turn with no decision, read
 	// through the domain's one rule so this count and a Group header's agree.
@@ -905,7 +942,10 @@ export function App({
 			: `auto: ${autoMode ? "on" : "off"} ${liveCount}${
 					config.maxParallelAgents === 0 ? "" : `/${config.maxParallelAgents}`
 				}${autoMode && dispatchPause ? " paused" : ""}`;
-	const consultationCounts = state?.consultationCounts() ?? { awaitingResponse: 0, recovery: 0 };
+	const consultationCounts = state?.consultationRecord.consultationCounts() ?? {
+		awaitingResponse: 0,
+		recovery: 0,
+	};
 	// The steady pipeline counts the Ticket header carries (user stories 11
 	// through 16): open, in flight, and awaiting a decision. They come from the
 	// active view on each render, so no query runs for them and the operator's
@@ -1058,7 +1098,7 @@ export function App({
 		config.maxHandoffsPerTicket,
 		detailTicket === undefined || state === undefined
 			? null
-			: state.latestPlaneActionAttempt(detailTicket.identity),
+			: state.planeAction.latestPlaneActionAttempt(detailTicket.identity),
 	);
 	// The write of the render's own answer, for the next render and for the key
 	// handlers; the read above is the one this frame's pane paints with.
@@ -1128,15 +1168,15 @@ export function App({
 	const consultationTurns =
 		selectedConsultation === undefined || state === undefined
 			? []
-			: state.consultationTurns(selectedConsultation.id);
+			: state.consultationRecord.consultationTurns(selectedConsultation.id);
 	const consultationSnapshots =
 		selectedConsultation === undefined || state === undefined
 			? []
-			: state.consultationSnapshots(selectedConsultation.id);
+			: state.consultationRecord.consultationSnapshots(selectedConsultation.id);
 	const replacementIds =
 		selectedConsultation === undefined || state === undefined
 			? []
-			: state
+			: state.consultationRecord
 					.consultations("all")
 					.filter((item) => item.replacementOf === selectedConsultation.id)
 					.map((item) => item.id);
@@ -1146,7 +1186,7 @@ export function App({
 		state === undefined ||
 		selectedConsultation.state !== "closed"
 			? []
-			: state.consultationRemainingResources(selectedConsultation.id);
+			: state.consultationRecord.consultationRemainingResources(selectedConsultation.id);
 	// The body the detail stands under (ADR 0025): the Session view reads
 	// from the Agent's record, the Agent view from the terminal. Interaction
 	// mode shows the live screen, which is the Agent view.
@@ -1208,7 +1248,7 @@ export function App({
 		// the open state by the ticket's own task type, then the newest external
 		// update (ADR 0050); the Ticket section's List filter decides which rows the
 		// operator sees (ADR 0060), and no other read follows it.
-		const next = state.ticketListViews(
+		const next = state.ticketWorkCycle.ticketListViews(
 			currentConfig.workflowStates,
 			currentConfig.defaultTaskType,
 			ticketFilterRef.current,
@@ -1237,16 +1277,16 @@ export function App({
 		ticketRowsRef.current = nextRows;
 		selectedIndexRef.current = nextIndex;
 		setListViews(next);
-		setHealths(state.sourceHealths());
+		setHealths(state.sourceFact.sourceHealths());
 		setSelectedIndex(nextIndex);
 		// The Work queue rides on the same re-read: an enqueue, a pickup, and a
 		// removal all report their refresh through here, so the section never
 		// shows a row the durable queue no longer holds.
-		setWorkQueue(state.workQueue());
+		setWorkQueue(state.workQueue.items());
 	}, [state, positionOrderOf]);
 	const replaceConsultations = useCallback(() => {
 		if (state === undefined) return;
-		const next = state.consultations(historyFilterRef.current);
+		const next = state.consultationRecord.consultations(historyFilterRef.current);
 		const currentIndex = consultationIndexRef.current;
 		const selectedId = consultationsRef.current[currentIndex]?.id;
 		const preserved =
@@ -1397,7 +1437,7 @@ export function App({
 	};
 	const consultationOperationsRef = useRef<ConsultationOperations | undefined>(undefined);
 	// Capture state, replaceConsultations, and persistMapping once per mount.
-	// FactoryState is created once by factory.ts, and the other callbacks read
+	// The state is created once by factory.ts, and the other callbacks read
 	// the current config and projections through refs.
 	if (consultationOperationsRef.current === undefined && state !== undefined) {
 		consultationOperationsRef.current = createConsultationOperations({
@@ -1513,7 +1553,7 @@ export function App({
 			if (state === undefined) return;
 			const coordinator = coordinatorRef.current;
 			if (coordinator === undefined) return;
-			for (const sourceName of state.membershipSourceNames(identity)) {
+			for (const sourceName of state.sourceFact.membershipSourceNames(identity)) {
 				coordinator.refreshNow(sourceName);
 			}
 		},
@@ -1718,7 +1758,7 @@ export function App({
 		setAutoMode(next);
 		if (state === undefined) return;
 		try {
-			state.setAutoHandoffMode(next);
+			state.handoff.setAutoHandoffMode(next);
 		} catch (error) {
 			setErrorMessage(
 				`auto-handoff is ${next ? "on" : "off"} for this session only: ${errorMessage(error)}`,
@@ -1820,8 +1860,9 @@ export function App({
 				// the position re-stands the row, so a blocked merge never hides
 				// the re-merge the following review asks for.
 				const attempt =
-					state?.latestPlaneActionAttempt(outcome.positionTicketIdentity ?? ticket.identity) ??
-					null;
+					state?.planeAction.latestPlaneActionAttempt(
+						outcome.positionTicketIdentity ?? ticket.identity,
+					) ?? null;
 				const attemptStands = attempt !== null && attempt.at >= (completion?.completedAt ?? "");
 				const routeStanding = routeStandingLine(ticket, outcome, mergePosition);
 				if (routeStanding !== null) {
@@ -1848,7 +1889,7 @@ export function App({
 					const positionListed =
 						state === undefined ||
 						outcome.positionTicketIdentity === null ||
-						state.stillListed(outcome.positionTicketIdentity);
+						state.sourceFact.stillListed(outcome.positionTicketIdentity);
 					if (positionListed) {
 						if (mergePosition) {
 							actions.push({
@@ -2113,7 +2154,7 @@ export function App({
 		try {
 			// The outcome the operator acted on, as the state stores it: the
 			// swap conditions on these exact bytes.
-			const recordedJson = state.recordedTransitionJson(ticket.identity);
+			const recordedJson = state.ticketWorkCycle.recordedTransitionJson(ticket.identity);
 			if (recordedJson === null) {
 				reportMessage({
 					severity: "warning",
@@ -2138,7 +2179,11 @@ export function App({
 				});
 				return;
 			}
-			const applied = state.recordRefiredOutcome(ticket.identity, recordedJson, outcome);
+			const applied = state.ticketWorkCycle.recordRefiredOutcome(
+				ticket.identity,
+				recordedJson,
+				outcome,
+			);
 			replaceTickets();
 			if (!applied) {
 				reportMessage({
@@ -2177,13 +2222,14 @@ export function App({
 	 */
 	const closeDecidedCycle = (ticket: Ticket) => {
 		if (state === undefined) return;
-		const applied = state.applyCompletionDecision({
+		const applied = state.ticketWorkCycle.applyCompletionDecision({
 			ticketIdentity: ticket.identity,
 			handoffId: ticket.handoff?.attemptId ?? "",
 			decision: "closed",
 			decidedAt: new Date().toISOString(),
 		});
-		if (applied && ticket.state === "awaiting") state.removeWorkflowRouteItem(ticket.identity);
+		if (applied && ticket.state === "awaiting")
+			state.workQueue.removeWorkflowRouteItem(ticket.identity);
 		replaceTickets();
 		if (!applied) {
 			setWarningMessage(`ticket ${ticket.identity} already decided`);
@@ -2192,7 +2238,7 @@ export function App({
 		refreshTicketSources(ticket.identity);
 		closeCycleEndDraft(ticket.identity);
 		// The Close cleanup: the environment of the handoff the decision ends.
-		const stored = state.latestHandoff(ticket.identity);
+		const stored = state.handoff.latestHandoff(ticket.identity);
 		if (stored !== null) runCloseCleanup(ticket.identity, stored, "closed");
 		// The Close action writes no progress line of its own.
 		clearOperationMessage("none");
@@ -2461,7 +2507,7 @@ export function App({
 			const replaced =
 				replacementConsultationId === null
 					? undefined
-					: state.consultation(replacementConsultationId);
+					: state.consultationRecord.consultation(replacementConsultationId);
 			const consultation =
 				replaced === undefined
 					? consultationOperations.create({
@@ -2495,10 +2541,10 @@ export function App({
 			// and a record that still waits is the one that keeps its queue item.
 			const pickup = handoffDispatchRef.current?.dispatch;
 			if (pickup !== undefined) await pickup.pickupWorkQueue();
-			const settled = state.consultation(consultation.id);
+			const settled = state.consultationRecord.consultation(consultation.id);
 			if (settled === undefined || settled.state !== "queued") return;
 			setNoticeMessage(
-				state.queuePaused()
+				state.workQueue.queuePaused()
 					? `consultation queued: ${consultation.id.slice(0, 8)} waits in the Work queue; the queue is paused`
 					: `consultation queued: ${consultation.id.slice(0, 8)} waits in the Work queue for a free Parallel limit seat`,
 			);
@@ -2588,7 +2634,7 @@ export function App({
 		setResponseEditor(false);
 		void consultationOperations.respond(consultation, draft).then(
 			() => {
-				const current = state.consultation(consultation.id);
+				const current = state.consultationRecord.consultation(consultation.id);
 				// Keep the editor open when delivery was already pending, or when
 				// a failed delivery left the draft awaiting another attempt.
 				if (current?.state === "awaiting-response") setResponseEditor(true);
@@ -2612,7 +2658,7 @@ export function App({
 			selectedConsultation !== undefined &&
 			text !== selectedConsultation.draft
 		)
-			state.setConsultationDraft(selectedConsultation.id, text);
+			state.consultationRecord.setConsultationDraft(selectedConsultation.id, text);
 	};
 	/** Store what the operator last saw, then run the send. */
 	const sendResponseText = (text: string) => {
@@ -2624,7 +2670,7 @@ export function App({
 		responseDraftRef.current = "";
 		setResponseDraft("");
 		if (state !== undefined && selectedConsultation !== undefined)
-			state.setConsultationDraft(selectedConsultation.id, "");
+			state.consultationRecord.setConsultationDraft(selectedConsultation.id, "");
 		setResponseEditor(false);
 		setStatus({ kind: "info", text: "the saved Response draft was discarded" });
 	};
@@ -2721,7 +2767,11 @@ export function App({
 			return;
 		}
 		const ignored = !ticket.ignored;
-		const result = state.setTicketIgnored(ticket.identity, ignored, markerOf(ticket));
+		const result = state.ticketWorkCycle.setTicketIgnored(
+			ticket.identity,
+			ignored,
+			markerOf(ticket),
+		);
 		if (!result.ok) {
 			setWarningMessage(result.reason);
 			return;
@@ -2799,7 +2849,7 @@ export function App({
 		const muted = ticket.muted !== true;
 		let removed = 0;
 		for (const sourceName of sources) {
-			const result = state.setSourceMuted(sourceName, muted);
+			const result = state.sourceFact.setSourceMuted(sourceName, muted);
 			if (!result.ok) {
 				setWarningMessage(result.reason);
 				return;
@@ -2845,7 +2895,7 @@ export function App({
 		if (!(panel?.kind === "live" && key === "restart")) setPanel(null);
 		if (state === undefined) return;
 		if (key === "abandon") {
-			const applied = state.applyCompletionDecision({
+			const applied = state.ticketWorkCycle.applyCompletionDecision({
 				ticketIdentity: ticket.identity,
 				handoffId: ticket.handoff?.attemptId ?? "",
 				decision: "abandoned",
@@ -2858,7 +2908,7 @@ export function App({
 			}
 			refreshTicketSources(ticket.identity);
 			closeCycleEndDraft(ticket.identity);
-			const stored = state.latestHandoff(ticket.identity);
+			const stored = state.handoff.latestHandoff(ticket.identity);
 			if (stored !== null) runCloseCleanup(ticket.identity, stored, "abandoned");
 			setWarningMessage(`ticket ${ticket.identity} abandoned`);
 			return;
@@ -2899,7 +2949,7 @@ export function App({
 		const item = workQueueRef.current[workQueueIndexRef.current];
 		if (item === undefined) return;
 		if (
-			!state.moveWorkItem(
+			!state.workQueue.moveWorkItem(
 				item.kind === "consultation" ? item.consultationId : item.ticketIdentity,
 				direction,
 			)
@@ -3513,7 +3563,7 @@ export function App({
 				// landed.
 				"queue-pause": () => {
 					if (state === undefined) return;
-					const next = !state.queuePaused();
+					const next = !state.workQueue.queuePaused();
 					// The write is guarded the way the Auto-handoff mode's identical
 					// fact is, so two facts of one kind do not fail two ways (ADR
 					// 0052). The difference is what a refused write means: the pickup
@@ -3523,7 +3573,7 @@ export function App({
 					// header, the bar's hint, and the drain all keep reading the
 					// value that stands.
 					try {
-						state.setQueuePaused(next);
+						state.workQueue.setQueuePaused(next);
 					} catch (error) {
 						setErrorMessage(`the queue pause did not move: ${errorMessage(error)}`);
 						return;
@@ -3612,7 +3662,7 @@ export function App({
 		replaceConsultations();
 		// The queue pause is factory state (ADR 0052): a restart finds the
 		// brake where the operator left it.
-		setQueuePaused(state.queuePaused());
+		setQueuePaused(state.workQueue.queuePaused());
 	}, [state, replaceTickets, replaceConsultations]);
 	// The one-time note on the Message line at the first sight of an
 	// uninitialized or drifted repository (ADR 0075, story 20): the operator
@@ -3641,7 +3691,10 @@ export function App({
 			if (seen.has(name)) continue;
 			seen.add(name);
 			const identity = ticket.repositoryRef.identity;
-			const marker = repositoryInitStanding(state.repositoryInitFact(identity), currentHash);
+			const marker = repositoryInitStanding(
+				state.repositoryInit.repositoryInitFact(identity),
+				currentHash,
+			);
 			if (marker !== null) unprepared.push({ name, marker });
 		}
 		if (unprepared.length === 0) return;
@@ -3994,7 +4047,7 @@ export function App({
 				? undefined
 				: ((): string | undefined => {
 						try {
-							state.setGroupingAxis(TICKET_GROUP_SECTION, next);
+							state.grouping.setGroupingAxis(TICKET_GROUP_SECTION, next);
 							return undefined;
 						} catch (error) {
 							return errorMessage(error);
@@ -4131,7 +4184,7 @@ export function App({
 				? undefined
 				: ((): string | undefined => {
 						try {
-							state.setGroupOrder(TICKET_GROUP_SECTION, axis, moved);
+							state.grouping.setGroupOrder(TICKET_GROUP_SECTION, axis, moved);
 							return undefined;
 						} catch (error) {
 							return errorMessage(error);
@@ -4875,7 +4928,7 @@ export function App({
 					{
 						typeName: replacementConsultation.typeName,
 						repositoryIdentity: replacementConsultation.repository.identity,
-						input: state.replacementInput(replacementConsultation.id),
+						input: state.consultationRecord.replacementInput(replacementConsultation.id),
 					}
 				: // A fresh launcher starts on the Repository the operator was looking at.
 					{
@@ -5160,7 +5213,7 @@ export function App({
 										mergeAttempt:
 											selectedTicket === undefined || state === undefined
 												? null
-												: state.latestPlaneActionAttempt(selectedTicket.identity),
+												: state.planeAction.latestPlaneActionAttempt(selectedTicket.identity),
 									})
 								: createElement(
 										"box",
@@ -5450,7 +5503,7 @@ export function App({
 					setPanel(null);
 					setConsultationSafety(null);
 					if (key === "confirm") {
-						const current = state?.consultation(panelConsultation.id);
+						const current = state?.consultationRecord.consultation(panelConsultation.id);
 						if (current !== undefined && consultationSafety !== null)
 							void consultationOperations?.confirmSafetyConflict(
 								current,
@@ -5534,11 +5587,11 @@ export function App({
 				bodyLines: [
 					"Force-close stops the cleanup and closes the record. These owned",
 					"resources remain in herdr and stay recorded for later recovery:",
-					...state
+					...state.consultationRecord
 						.consultationResources(panelConsultation.id)
 						.filter((item) => item.owned && !item.confirmedClosed)
 						.map((item) => `${item.kind} ${item.resourceId} - ${item.details}`),
-					...(state
+					...(state.consultationRecord
 						.consultationResources(panelConsultation.id)
 						.filter((item) => item.owned && !item.confirmedClosed).length === 0
 						? ["No owned resources are recorded."]

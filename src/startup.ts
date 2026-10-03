@@ -30,8 +30,9 @@ import { createLogger, type Logger, NOOP_LOGGER } from "./logging.ts";
 import { validateConfiguredModels } from "./model-settings.ts";
 import type { CommandRunner } from "./runner.ts";
 import { createChildProcessRunner } from "./runner.ts";
+import { StateError } from "./state/store.ts";
 import type { FactoryState } from "./state.ts";
-import { openFactoryState, StateError } from "./state.ts";
+import { openFactoryState } from "./state.ts";
 import { createStubRunner } from "./stub/runner.ts";
 import { StubWorldError, StubWorldStore } from "./stub/world.ts";
 import type { TicketSource } from "./ticket-source.ts";
@@ -201,13 +202,13 @@ export function openStartupState(statePath: string): StartupStateResult {
 	let state: FactoryState | undefined;
 	try {
 		state = openFactoryState(statePath);
-		state.acquireLease();
+		state.lease.acquireLease();
 	} catch (error) {
 		if (state !== undefined) state.close();
 		const message = error instanceof StateError ? error.message : String(error);
 		return { ok: false, reason: message };
 	}
-	const recovered = state.recoverUnsettledHandoffs();
+	const recovered = state.handoff.recoverUnsettledHandoffs();
 	return {
 		ok: true,
 		state,

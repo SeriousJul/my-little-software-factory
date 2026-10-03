@@ -1,0 +1,767 @@
+/**
+ * The ticket work cycle aggregate: the facts it answers and the
+ * operations it runs. It reaches only the tables its aggregate owns.
+ */
+
+import { randomUUID } from "node:crypto";
+import type { TransitionOutcome, WorkflowState } from "../config.ts";
+import type {
+	Completion,
+	CompletionDecision,
+	Ticket,
+	TicketListFilter,
+	TicketMarker,
+	TicketObligation,
+	TicketState,
+} from "../domain/ticket.ts";
+import {
+	attentionBand,
+	flagWithholdsRow,
+	ignoreRefusal,
+	obligationOf,
+	ticketListRank,
+} from "../domain/ticket.ts";
+import { agentNameFor } from "../naming.ts";
+import { matchState, taskTypeOfMatch } from "../task-selection.ts";
+import type { TurnEndCause, TurnLogEntry } from "../turn-log.ts";
+import {
+	EMPTY_PULL_REQUEST_SKIP,
+	isCoveredByFixingPullRequest,
+	NO_LINKED_PULL_REQUEST_SKIP,
+} from "../workflow.ts";
+import type { StateGraph } from "./graph.ts";
+import type { HandoffTicket } from "./handoff.ts";
+import { transitionOf, turnEndCauseOf, turnLogOf } from "./json.ts";
+import type { StateStore } from "./store.ts";
+
+export interface SettleTurnInput {
+	ticketIdentity: string;
+	/** The attempt id of the handoff whose turn settled. */
+	handoffId: string;
+	taskType: string;
+	agentType: string;
+	message: string;
+	/** The agent's messages of the turn, in order, from its session record. */
+	turnLog: TurnLogEntry[];
+	/**
+	 * Why the turn ended, from its session record. Omitted when the settler
+	 * has no record to read, and stored as `unknown`: a settle without a cause
+	 * fails open, so it neither holds nor pauses.
+	 */
+	cause?: TurnEndCause;
+	/** The agent's or the provider's own text for the cause; empty when none. */
+	detail?: string;
+	completedAt: string;
+	/**
+	 * The transition the plane fired on this completed turn (ADR 0027). The
+	 * trace holds its outcome, so the decision modal and the automatic
+	 * decision read the facts the plane wrote, not a re-read of the source.
+	 * Null: the settle fired no transition (not completed, no transition
+	 * configured, or the fire refused).
+	 */
+	transition?: TransitionOutcome | null;
+}
+export interface CompletionDecisionInput {
+	ticketIdentity: string;
+	/** The attempt id of the handoff the decision was made on. */
+	handoffId: string;
+	decision: CompletionDecision;
+	decidedAt: string;
+}
+export interface TicketListViews {
+	/** The rows the Ticket section draws, in the operator's List filter. */
+	rows: readonly Ticket[];
+	/** The active view: the machine's rows, the header's counts, and the bell. */
+	active: readonly Ticket[];
+	/** The rows the flag names: the pile the `ignored` view shows and the header count. */
+	ignored: readonly Ticket[];
+	/**
+	 * The rows the mute names (ADR 0070): the ledger of the source acts, every
+	 * ticket of a muted source, and the header's `muted` count.
+	 *
+	 * It is read over the projection before the list rule, the way the pile
+	 * reads the ticket flag: it is the ledger of the source acts, live rows and
+	 * covered rows alike, because the only key that ends a mute rides on a row
+	 * the operator can reach.
+	 */
+	muted: readonly Ticket[];
+	/**
+	 * The whole projection, before the list rule: the reads that resolve a Ticket
+	 * by identity, never the rows the operator happens to be shown.
+	 *
+	 * It is not the `all` value of the List filter. That view is the *list*: the
+	 * covered rule still holds its rows out, and only the flags' withhold is
+	 * lifted. This is the projection the list rule is applied to.
+	 */
+	projection: readonly Ticket[];
+}
+export function inMemoryTicketViews(projection: readonly Ticket[]): TicketListViews {
+	// Each view is its own array, so an in-place reorder of one can never reach
+	// another: the shell's whole point is that its three views agree, and that
+	// agreement is a fact of the rule, not of an alias.
+	const rows = [...projection];
+	return {
+		rows,
+		active: [...rows],
+		ignored: [],
+		muted: [],
+		projection: [...rows],
+	};
+}
+export function listTicketViews(
+	projection: readonly Ticket[],
+	filter: TicketListFilter,
+): TicketListViews {
+	const ordered = [...projection].sort(
+		(left, right) =>
+			attentionBand(left) - attentionBand(right) ||
+			ticketListRank(left) - ticketListRank(right) ||
+			left.identity.localeCompare(right.identity),
+	);
+	const listed = ordered.filter((ticket) => !isCoveredByFixingPullRequest(projection, ticket));
+	// The pile is every row the ticket flag stands on - the ledger of what the
+	// operator put away ticket by ticket, including a Ticket the list shows
+	// again while its work is live or its decision stays owed, and one the
+	// covered rule takes out of the list.
+	const ignored = ordered.filter((ticket) => ticket.ignored);
+	// The muted view reads the source flag over the projection before the list
+	// rule, the way the pile reads the ticket flag: the ledger of the source
+	// acts, live and covered tickets of a muted source alike (ADR 0070).
+	const muted = ordered.filter((ticket) => ticket.muted);
+	// The active view is the machine's read: every row the list rule leaves,
+	// which is the drawn rows except the ones the flags withhold while they
+	// rest.
+	const active = listed.filter((ticket) => !flagWithholdsRow(ticket));
+	return {
+		rows:
+			filter === "active"
+				? active
+				: filter === "ignored"
+					? ignored
+					: filter === "muted"
+						? muted
+						: listed,
+		active,
+		ignored,
+		muted,
+		projection: [...projection],
+	};
+}
+
+export interface TicketWorkCycleAggregate {
+	projectedTickets(states: readonly WorkflowState[], fallbackTaskType: string): Ticket[];
+	visibleTickets(
+		states: readonly WorkflowState[],
+		fallbackTaskType: string,
+		filter?: TicketListFilter,
+	): readonly Ticket[];
+	ticketListViews(
+		states: readonly WorkflowState[],
+		fallbackTaskType: string,
+		filter?: TicketListFilter,
+	): TicketListViews;
+	lastCompletion(identity: string): Completion | null;
+	recordSkipRefire(ticketIdentity: string, outcome: TransitionOutcome): boolean;
+	recordedTransitionJson(ticketIdentity: string): string | null;
+	recordRefiredOutcome(
+		ticketIdentity: string,
+		recordedJson: string,
+		outcome: TransitionOutcome,
+	): boolean;
+	dispatchPauseActive(): boolean;
+	sourceReverifiedSinceCycleEnd(identity: string): boolean;
+	sameTypeHoldActive(identity: string, suggestedTaskType: string | null): boolean;
+	ignoredTickets(): Set<string>;
+	ticketObligation(identity: string, marker?: TicketMarker | null): TicketObligation | null;
+	setTicketIgnored(
+		identity: string,
+		ignored: boolean,
+		marker?: TicketMarker | null,
+	): { ok: true } | { ok: false; reason: string };
+	ticketState(identity: string): TicketState | undefined;
+	agentNameForTicket(identity: string): string;
+	automaticStartBlockedTickets(): Set<string>;
+	recordRouteRemovedMark(ticketIdentity: string, decision: string): boolean;
+	ticketsByState(states: readonly TicketState[]): HandoffTicket[];
+	markTicketRunning(identity: string): boolean;
+	reopenTurn(identity: string, handoffId: string): boolean;
+	settleTurn(input: SettleTurnInput): void;
+	applyCompletionDecision(input: CompletionDecisionInput): boolean;
+	closeWorkCycle(ticketIdentity: string): boolean;
+	openTicket(identity: string): void;
+	ticketRow(identity: string): { state: TicketState; work_cycle: number } | undefined;
+	moveTicketState(identity: string, from: readonly TicketState[], to: TicketState): boolean;
+}
+
+export class TicketWorkCycleModule implements TicketWorkCycleAggregate {
+	readonly store: StateStore;
+	readonly graph: StateGraph;
+	constructor(store: StateStore, graph: StateGraph) {
+		this.store = store;
+		this.graph = graph;
+	}
+	projectedTickets(states: readonly WorkflowState[], fallbackTaskType: string): Ticket[] {
+		const rows = this.store.db
+			.prepare("SELECT identity, state, work_cycle, ignored, ignored_at FROM tickets")
+			.all() as Array<{
+			identity: string;
+			state: TicketState;
+			work_cycle: number;
+			ignored: number;
+			ignored_at: string | null;
+		}>;
+		const tickets: Ticket[] = [];
+		for (const row of rows) {
+			const storedMemberships = this.graph.sourceFact.membershipsFor(row.identity, row.state);
+			const active = storedMemberships.filter(
+				(membership) => membership.active && membership.health !== "removed",
+			);
+			const pending = this.graph.handoff.hasUnresolvedAttempt(row.identity);
+			const actionable =
+				row.state === "open" &&
+				!pending &&
+				active.some((membership) => membership.health === "healthy");
+			const ignored = row.ignored === 1;
+			if (
+				storedMemberships.length === 0 &&
+				row.state !== "handed-off" &&
+				row.state !== "running" &&
+				row.state !== "awaiting"
+			)
+				continue;
+			const facts = [...storedMemberships].sort(
+				(a, b) =>
+					b.externalUpdatedAt.localeCompare(a.externalUpdatedAt) ||
+					a.sourceName.localeCompare(b.sourceName),
+			)[0];
+			if (facts == null) continue;
+			const handoff = this.graph.handoff.handoffFor(row.identity);
+			// One match answers both facts the list reads: the task the machine
+			// suggests and the name of the position that suggests it. The name is
+			// derived here and never stored, and no rule but the list's grouping
+			// reads it (issue #159).
+			const listed = storedMemberships.filter((membership) => membership.active);
+			const matched = matchState(listed, states);
+			// The mute of the ticket's sources, folded into the row's facts in this
+			// one read (ADR 0070): the gate and the list rule both read the facts,
+			// and a ticket is withheld and blocked while any of its sources' mute
+			// stands. The moment any of them was set is the newest of them.
+			let muted = false;
+			let mutedAt: string | null = null;
+			for (const membership of storedMemberships) {
+				if (!membership.sourceMuted) continue;
+				muted = true;
+				if (
+					mutedAt === null ||
+					(membership.sourceMutedAt !== null && membership.sourceMutedAt > mutedAt)
+				)
+					mutedAt = membership.sourceMutedAt;
+			}
+			tickets.push({
+				identity: row.identity,
+				title: facts.title,
+				repository: facts.repository.displayName,
+				state: row.state,
+				handoff,
+				workCycle: row.work_cycle,
+				handoffCount: this.graph.handoff.handoffCount(row.identity),
+				lastCompletion: this.lastCompletion(row.identity),
+				description: facts.description,
+				sourceKind: facts.sourceKind,
+				externalKey: facts.externalKey,
+				sourceState: facts.sourceState,
+				url: facts.url,
+				labels: facts.labels,
+				externalUpdatedAt: facts.externalUpdatedAt,
+				repositoryRef: facts.repository,
+				memberships: storedMemberships.map(
+					({ active: _active, sourceMuted: _muted, sourceMutedAt: _mutedAt, ...membership }) =>
+						membership,
+				),
+				suggestedTaskType: taskTypeOfMatch(matched, fallbackTaskType),
+				matchedStateName: matched === null ? null : matched.name,
+				actionable,
+				handoffRecoveryRequired: pending,
+				leftover: this.graph.handoff.leftoverEnvironment(row.identity),
+				ignored,
+				ignoredAt: ignored ? row.ignored_at : null,
+				muted,
+				mutedAt: muted ? mutedAt : null,
+			});
+		}
+		return tickets;
+	}
+	visibleTickets(
+		states: readonly WorkflowState[],
+		fallbackTaskType: string,
+		filter: TicketListFilter = "active",
+	): readonly Ticket[] {
+		return this.ticketListViews(states, fallbackTaskType, filter).rows;
+	}
+	ticketListViews(
+		states: readonly WorkflowState[],
+		fallbackTaskType: string,
+		filter: TicketListFilter = "active",
+	): TicketListViews {
+		return listTicketViews(this.projectedTickets(states, fallbackTaskType), filter);
+	}
+	lastCompletion(identity: string): Completion | null {
+		const row = this.store.db
+			.prepare(
+				"SELECT task_type, agent_type, agent_name, model, thinking, context_window, completed_at, last_message, turn_log_json, cause, detail, decision, transition_json FROM completion_traces WHERE ticket_identity = ? ORDER BY completed_at DESC, rowid DESC LIMIT 1",
+			)
+			.get(identity) as
+			| {
+					task_type: string;
+					agent_type: string;
+					agent_name: string;
+					model: string;
+					thinking: string;
+					context_window: string;
+					completed_at: string;
+					last_message: string;
+					turn_log_json: string | null;
+					cause: string | null;
+					detail: string | null;
+					decision: string | null;
+					transition_json: string | null;
+			  }
+			| undefined;
+		if (row == null) return null;
+		return {
+			taskType: row.task_type,
+			agentType: row.agent_type,
+			agentName: row.agent_name,
+			model: row.model,
+			thinking: row.thinking,
+			contextWindow: row.context_window,
+			completedAt: row.completed_at,
+			message: row.last_message,
+			turnLog: turnLogOf(row.turn_log_json, row.last_message),
+			cause: turnEndCauseOf(row.cause),
+			detail: row.detail ?? "",
+			decision: row.decision as CompletionDecision | null,
+			transition: transitionOf(row.transition_json),
+		};
+	}
+	recordSkipRefire(ticketIdentity: string, outcome: TransitionOutcome): boolean {
+		return this.store.transaction(() => {
+			const row = this.store.db
+				.prepare(
+					"SELECT id, transition_json FROM completion_traces WHERE ticket_identity = ? ORDER BY completed_at DESC, rowid DESC LIMIT 1",
+				)
+				.get(ticketIdentity) as { id: string; transition_json: string | null } | null;
+			if (row == null || row.transition_json === null) return false;
+			const recorded = transitionOf(row.transition_json);
+			if (
+				recorded === null ||
+				recorded.fired !== true ||
+				(recorded.reason !== NO_LINKED_PULL_REQUEST_SKIP &&
+					recorded.reason !== EMPTY_PULL_REQUEST_SKIP)
+			)
+				return false;
+			const result = this.store.db
+				.prepare(
+					"UPDATE completion_traces SET transition_json = ? WHERE id = ? AND transition_json = ?",
+				)
+				.run(JSON.stringify(outcome), row.id, row.transition_json);
+			return Number(result.changes) > 0;
+		});
+	}
+	recordedTransitionJson(ticketIdentity: string): string | null {
+		const row = this.store.db
+			.prepare(
+				"SELECT transition_json FROM completion_traces WHERE ticket_identity = ? ORDER BY completed_at DESC, rowid DESC LIMIT 1",
+			)
+			.get(ticketIdentity) as { transition_json: string | null } | undefined;
+		return row?.transition_json ?? null;
+	}
+	recordRefiredOutcome(
+		ticketIdentity: string,
+		recordedJson: string,
+		outcome: TransitionOutcome,
+	): boolean {
+		return this.store.transaction(() => {
+			const row = this.store.db
+				.prepare(
+					"SELECT id, transition_json FROM completion_traces WHERE ticket_identity = ? ORDER BY completed_at DESC, rowid DESC LIMIT 1",
+				)
+				.get(ticketIdentity) as { id: string; transition_json: string | null } | null;
+			if (row == null || row.transition_json !== recordedJson) return false;
+			const result = this.store.db
+				.prepare(
+					"UPDATE completion_traces SET transition_json = ? WHERE id = ? AND transition_json = ?",
+				)
+				.run(JSON.stringify(outcome), row.id, recordedJson);
+			return Number(result.changes) > 0;
+		});
+	}
+	dispatchPauseActive(): boolean {
+		const held = this.store.db
+			.prepare(
+				"SELECT completed_at, rowid FROM completion_traces WHERE cause = 'failed' AND decision IS NULL ORDER BY completed_at DESC, rowid DESC LIMIT 1",
+			)
+			.get() as { completed_at: string; rowid: number } | null;
+		if (held == null) return false;
+		const after = this.store.db
+			.prepare(
+				"SELECT 1 FROM completion_traces WHERE cause = 'completed' AND (completed_at > ? OR (completed_at = ? AND rowid > ?)) LIMIT 1",
+			)
+			.get(held.completed_at, held.completed_at, held.rowid) as { 1: number } | null;
+		return after == null;
+	}
+	sourceReverifiedSinceCycleEnd(identity: string): boolean {
+		const ended = this.lastCycleEnd(identity);
+		if (ended === null) return true;
+		return !this.graph.sourceFact.hasUnrefreshedActiveMembershipSince(identity, ended.decidedAt);
+	}
+	sameTypeHoldActive(identity: string, suggestedTaskType: string | null): boolean {
+		const ended = this.lastCycleEnd(identity);
+		return ended !== null && ended.cause === "completed" && ended.taskType === suggestedTaskType;
+	}
+	ignoredTickets(): Set<string> {
+		const rows = this.store.db
+			.prepare("SELECT identity FROM tickets WHERE ignored = 1")
+			.all() as Array<{
+			identity: string;
+		}>;
+		return new Set(rows.map((row) => row.identity));
+	}
+	ticketObligation(identity: string, marker: TicketMarker | null = null): TicketObligation | null {
+		const row = this.store.db
+			.prepare("SELECT state FROM tickets WHERE identity = ?")
+			.get(identity) as { state: TicketState } | undefined;
+		if (row === undefined) return null;
+		// The marker is the row's face: only an in-flight Ticket reads a missing
+		// Agent, exactly as the list's failure badge does, so a caller that hands
+		// the poll's fact in cannot make a resting Ticket owe what it does not.
+		const inFlight = row.state === "handed-off" || row.state === "running";
+		return obligationOf(
+			{ state: row.state, lastCompletion: this.lastCompletion(identity) },
+			inFlight ? marker : null,
+		);
+	}
+	setTicketIgnored(
+		identity: string,
+		ignored: boolean,
+		marker: TicketMarker | null = null,
+	): { ok: true } | { ok: false; reason: string } {
+		if (ignored) {
+			const refusal = ignoreRefusal(this.ticketObligation(identity, marker));
+			if (refusal !== null) return { ok: false, reason: refusal };
+		}
+		const row = this.store.db.prepare("SELECT 1 FROM tickets WHERE identity = ?").get(identity) as
+			| { 1: number }
+			| undefined;
+		if (row === undefined) return { ok: false, reason: "the ticket no longer exists" };
+		this.store.db
+			.prepare("UPDATE tickets SET ignored = ?, ignored_at = ? WHERE identity = ?")
+			.run(ignored ? 1 : 0, ignored ? new Date(this.store.now()).toISOString() : null, identity);
+		return { ok: true };
+	}
+	ticketState(identity: string): TicketState | undefined {
+		const row = this.store.db
+			.prepare("SELECT state FROM tickets WHERE identity = ?")
+			.get(identity) as { state: TicketState } | undefined;
+		return row?.state;
+	}
+	agentNameForTicket(identity: string): string {
+		const row = this.graph.handoff.newestHandoffRow(identity);
+		if (row !== null && row.herdrName !== null && row.herdrName !== "") {
+			return row.herdrName;
+		}
+		const title = this.graph.sourceFact.newestMembershipTitle(identity);
+		return title == null ? "" : agentNameFor(title);
+	}
+	automaticStartBlockedTickets(): Set<string> {
+		const rows = this.store.db
+			.prepare("SELECT identity FROM tickets WHERE ignored = 1")
+			.all() as Array<{ identity: string }>;
+		const blocked = new Set(rows.map((row) => row.identity));
+		for (const identity of this.graph.sourceFact.ticketsWithMutedSource()) blocked.add(identity);
+		return blocked;
+	}
+	recordRouteRemovedMark(ticketIdentity: string, decision: string): boolean {
+		const row = this.store.db
+			.prepare(
+				"SELECT id, transition_json FROM completion_traces WHERE ticket_identity = ? AND decision = ? ORDER BY completed_at DESC, rowid DESC LIMIT 1",
+			)
+			.get(ticketIdentity, decision) as { id: string; transition_json: string | null } | null;
+		if (row == null || row.transition_json === null) return false;
+		const recorded = transitionOf(row.transition_json);
+		if (recorded === null || recorded.routeRemoved === true) return false;
+		const result = this.store.db
+			.prepare(
+				"UPDATE completion_traces SET transition_json = ? WHERE id = ? AND transition_json = ?",
+			)
+			.run(JSON.stringify({ ...recorded, routeRemoved: true }), row.id, row.transition_json);
+		return Number(result.changes) > 0;
+	}
+	ticketsByState(states: readonly TicketState[]): HandoffTicket[] {
+		const clauses = states.map(() => "?").join(", ");
+		const rows = this.store.db
+			.prepare(
+				`SELECT identity AS ticket_identity, state, work_cycle FROM tickets WHERE state IN (${clauses}) ORDER BY identity`,
+			)
+			.all(...states) as Array<{
+			ticket_identity: string;
+			state: TicketState;
+			work_cycle: number;
+		}>;
+		const out: HandoffTicket[] = [];
+		for (const row of rows) {
+			const handoff = this.graph.handoff.newestHandoffRow(row.ticket_identity);
+			if (handoff === null || handoff.choice === undefined) continue;
+			const choice = handoff.choice;
+			out.push({
+				ticketIdentity: row.ticket_identity,
+				state: row.state,
+				workCycle: row.work_cycle,
+				taskType: choice.taskType,
+				agentType: choice.agentType,
+				environment: choice.environment,
+				model: choice.model,
+				thinking: choice.thinking,
+				contextWindow: choice.contextWindow,
+				paneId: handoff.paneId,
+				tabId: handoff.tabId,
+				workspaceId: handoff.workspaceId,
+				handoffAttemptId: handoff.attemptId,
+				startedAt: handoff.startedAt,
+			});
+		}
+		return out;
+	}
+	markTicketRunning(identity: string): boolean {
+		const result = this.store.db
+			.prepare("UPDATE tickets SET state = 'running' WHERE identity = ? AND state = 'handed-off'")
+			.run(identity);
+		return Number(result.changes) > 0;
+	}
+	reopenTurn(identity: string, handoffId: string): boolean {
+		return this.store.transaction(() => {
+			const pending = this.store.db
+				.prepare("SELECT id FROM completion_traces WHERE handoff_id = ? AND decision IS NULL")
+				.get(handoffId) as { id: string } | undefined;
+			if (pending == null) return false;
+			const moved = this.store.db
+				.prepare("UPDATE tickets SET state = 'running' WHERE identity = ? AND state = 'awaiting'")
+				.run(identity);
+			return Number(moved.changes) > 0;
+		});
+	}
+	settleTurn(input: SettleTurnInput): void {
+		this.store.transaction(() => {
+			// A settle without a read cause is stored as `unknown`, the fail-open
+			// cause: it neither holds a turn nor pauses dispatch.
+			const cause = input.cause ?? "unknown";
+			const detail = input.detail ?? "";
+			this.store.db
+				.prepare(
+					"UPDATE tickets SET state = 'awaiting' WHERE identity = ? AND state IN ('handed-off', 'running', 'awaiting')",
+				)
+				.run(input.ticketIdentity);
+			const handoff = this.graph.handoff.handoffRecord(input.handoffId);
+			const pending = this.store.db
+				.prepare("SELECT id FROM completion_traces WHERE handoff_id = ? AND decision IS NULL")
+				.get(input.handoffId) as { id: string } | undefined;
+			if (handoff == null) return;
+			const choice = handoff.choice;
+			if (pending != null) {
+				// A reopened turn settles again: the same trace is refreshed, its
+				// cause and detail overwritten, so a recovered turn reads as the
+				// turn it became.
+				this.store.db
+					.prepare(
+						"UPDATE completion_traces SET last_message = ?, turn_log_json = ?, completed_at = ?, cause = ?, detail = ?, transition_json = ? WHERE id = ?",
+					)
+					.run(
+						input.message,
+						JSON.stringify(input.turnLog),
+						input.completedAt,
+						cause,
+						detail,
+						input.transition == null ? null : JSON.stringify(input.transition),
+						pending.id,
+					);
+			} else {
+				this.store.db
+					.prepare(
+						"INSERT INTO completion_traces(id, handoff_id, ticket_identity, work_cycle, task_type, agent_type, agent_name, model, thinking, context_window, completed_at, last_message, turn_log_json, cause, detail, transition_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+					)
+					.run(
+						randomUUID(),
+						input.handoffId,
+						input.ticketIdentity,
+						handoff.workCycle,
+						input.taskType,
+						input.agentType,
+						this.agentNameForTicket(input.ticketIdentity),
+						choice?.model ?? "",
+						choice?.thinking ?? "",
+						choice?.contextWindow ?? "",
+						input.completedAt,
+						input.message,
+						JSON.stringify(input.turnLog),
+						cause,
+						detail,
+						input.transition == null ? null : JSON.stringify(input.transition),
+					);
+			}
+		});
+	}
+	applyCompletionDecision(input: CompletionDecisionInput): boolean {
+		return this.store.transaction(() => {
+			const decided = this.store.db
+				.prepare(
+					"UPDATE completion_traces SET decision = ?, decided_at = ? WHERE handoff_id = ? AND decision IS NULL",
+				)
+				.run(input.decision, input.decidedAt, input.handoffId);
+			if (Number(decided.changes) > 0) {
+				this.applyDecisionStateChange(input);
+				return true;
+			}
+			// A cycle-end decision on a turn that already decided: this close
+			// ends the cycle the decision left. The recorded decision stands -
+			// a fact is not rewritten - but the cycle still ends. The move runs
+			// only from the resting state the decision leaves, so a repeated
+			// close changes nothing. A routed ticket's cycle already ended at
+			// the ask (ADR 0072), so a close on it moves nothing here.
+			if (input.decision === "closed" || input.decision === "auto-closed") {
+				const ended = this.store.db
+					.prepare(
+						"UPDATE tickets SET state = 'open', work_cycle = work_cycle + 1 WHERE identity = ? AND state = 'awaiting'",
+					)
+					.run(input.ticketIdentity);
+				if (Number(ended.changes) > 0) return true;
+			}
+			// No pending row: the turn never settled. Abandon records its
+			// decision anyway, once per handoff, so the trace stays complete
+			// and the cycle number moves exactly once.
+			if (input.decision !== "abandoned") return false;
+			const existing = this.store.db
+				.prepare(
+					"SELECT COUNT(*) AS count FROM completion_traces WHERE handoff_id = ? AND decision = ?",
+				)
+				.get(input.handoffId, input.decision) as { count: number };
+			if (existing.count > 0) return false;
+			const handoff = this.graph.handoff.handoffRecord(input.handoffId);
+			if (handoff == null) return false;
+			const choice = handoff.choice;
+			this.store.db
+				.prepare(
+					"INSERT INTO completion_traces(id, handoff_id, ticket_identity, work_cycle, task_type, agent_type, agent_name, model, thinking, context_window, completed_at, last_message, decision, decided_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+				)
+				.run(
+					randomUUID(),
+					input.handoffId,
+					input.ticketIdentity,
+					handoff.workCycle,
+					choice?.taskType ?? "",
+					choice?.agentType ?? "",
+					this.agentNameForTicket(input.ticketIdentity),
+					choice?.model ?? "",
+					choice?.thinking ?? "",
+					choice?.contextWindow ?? "",
+					input.decidedAt,
+					"",
+					input.decision,
+					input.decidedAt,
+				);
+			this.applyDecisionStateChange(input);
+			return true;
+		});
+	}
+	private applyDecisionStateChange(input: CompletionDecisionInput): void {
+		if (
+			input.decision === "closed" ||
+			input.decision === "auto-closed" ||
+			input.decision === "abandoned"
+		) {
+			this.store.db
+				.prepare(
+					"UPDATE tickets SET state = 'open', work_cycle = work_cycle + 1 WHERE identity = ?",
+				)
+				.run(input.ticketIdentity);
+		}
+		// A route decision ends the cycle in the same write that lands the
+		// decision (ADR 0072): the settled ticket leaves awaiting for open
+		// with the cycle incremented, and the wait stands on the Work
+		// queue's item the ask enqueued. The guard on awaiting keeps a re-ask
+		// of a dead route a no-op. The plane action's merge decisions end the
+		// cycle the same way (ADR 0068): the settled ticket leaves awaiting
+		// for open with its merge waiting in the Work queue.
+		if (
+			input.decision === "handed-off" ||
+			input.decision === "auto-handed-off" ||
+			input.decision === "merged" ||
+			input.decision === "auto-merged"
+		) {
+			this.store.db
+				.prepare(
+					"UPDATE tickets SET state = 'open', work_cycle = work_cycle + 1 WHERE identity = ? AND state = 'awaiting'",
+				)
+				.run(input.ticketIdentity);
+		}
+		// The other handoff decisions move nothing: the handoff's settle moves
+		// the state.
+	}
+	closeWorkCycle(ticketIdentity: string): boolean {
+		return this.store.transaction(() => {
+			const ticket = this.store.db
+				.prepare("SELECT state FROM tickets WHERE identity = ?")
+				.get(ticketIdentity) as { state: TicketState } | undefined;
+			if (ticket == null) return false;
+			if (ticket.state !== "handed-off" && ticket.state !== "running") return false;
+			this.store.db
+				.prepare(
+					"UPDATE tickets SET state = 'open', work_cycle = work_cycle + 1 WHERE identity = ?",
+				)
+				.run(ticketIdentity);
+			return true;
+		});
+	}
+	private lastCycleEnd(identity: string): {
+		decidedAt: string;
+		taskType: string;
+		cause: string | null;
+	} | null {
+		const row = this.store.db
+			.prepare(
+				`SELECT decided_at, task_type, cause FROM completion_traces
+				 WHERE ticket_identity = ? AND decision IN ('closed', 'auto-closed', 'abandoned')
+				   AND decided_at IS NOT NULL
+				   AND work_cycle = (SELECT work_cycle - 1 FROM tickets WHERE identity = ?)
+				 ORDER BY decided_at DESC, rowid DESC LIMIT 1`,
+			)
+			.get(identity, identity) as
+			| { decided_at: string; task_type: string; cause: string | null }
+			| undefined;
+		if (row == null) return null;
+		return { decidedAt: row.decided_at, taskType: row.task_type, cause: row.cause };
+	}
+	/** Open the Ticket row for a ticket a source lists for the first time. */
+	openTicket(identity: string): void {
+		this.store.db
+			.prepare(
+				"INSERT INTO tickets(identity, state, work_cycle) VALUES (?, 'open', 1) ON CONFLICT(identity) DO NOTHING",
+			)
+			.run(identity);
+	}
+
+	/** The Ticket row's own facts: its state and the cycle number it is on. */
+	ticketRow(identity: string): { state: TicketState; work_cycle: number } | undefined {
+		return this.store.db
+			.prepare("SELECT state, work_cycle FROM tickets WHERE identity = ?")
+			.get(identity) as { state: TicketState; work_cycle: number } | undefined;
+	}
+
+	/** Move the Ticket state, only from the states the caller names. */
+	moveTicketState(identity: string, from: readonly TicketState[], to: TicketState): boolean {
+		const clauses = from.map(() => "?").join(", ");
+		const result = this.store.db
+			.prepare(`UPDATE tickets SET state = ? WHERE identity = ? AND state IN (${clauses})`)
+			.run(to, identity, ...from);
+		return Number(result.changes) > 0;
+	}
+}

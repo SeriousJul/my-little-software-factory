@@ -4,266 +4,183 @@
  * in-flight ticket whose agent the poll listed or that is still inside its
  * startup grace, by every in-progress handoff, and by every Consultation in
  * opening or working.
+ *
+ * The rule takes its facts as data (issue #202), so the test states the facts
+ * and never opens a state file.
  */
 import { describe, expect, test } from "bun:test";
-import type { FetchedTicket } from "../src/domain/ticket.ts";
 import type { HerdrAgent } from "../src/herdr.ts";
-import { parallelSeatCount } from "../src/parallel.ts";
-import { type ConsultationState, type FactoryState, openFactoryState } from "../src/state.ts";
+import {
+	type ParallelSeatConsultationFact,
+	type ParallelSeatFacts,
+	type ParallelSeatTicketFact,
+	parallelSeatCount,
+} from "../src/parallel.ts";
 
-const source = { name: "issues", kind: "github-issues" };
-const choice = {
-	agentType: "pi",
-	environment: "worktree" as const,
-	taskType: "implement",
-	model: "",
-	thinking: "",
-	contextWindow: "",
-};
 const NOW = Date.parse("2026-08-31T11:00:00Z");
 const GRACE = 30_000;
+/** When the ticket's agent started: ten seconds before the pinned clock. */
+const STARTED_AT = "2026-08-31T10:59:50Z";
 
-function fetched(identity: string): FetchedTicket {
+/** The facts of one in-flight ticket, on the pinned clock. */
+function ticketFact(
+	identity: string,
+	paneId: string | null,
+	agentName: string,
+): ParallelSeatTicketFact {
+	return { ticketIdentity: identity, paneId, startedAt: STARTED_AT, agentName };
+}
+
+/** The seat facts: the empty defaults, plus whatever the test names. */
+function facts(over: Partial<ParallelSeatFacts> = {}): ParallelSeatFacts {
 	return {
-		identity,
-		sourceKind: "github-issue",
-		externalKey: `#${identity.split("I_")[1]}`,
-		sourceState: "open",
-		url: `https://github.com/acme/factory/issues/${identity.split("I_")[1]}`,
-		title: "Persist source facts",
-		description: "Keep state independent from GitHub.",
-		labels: ["ready-for-agent"],
-		externalUpdatedAt: "2026-08-31T10:00:00Z",
-		repository: {
-			identity: "github.com/acme/factory",
-			displayName: "acme/factory",
-			cloneUrl: "https://github.com/acme/factory.git",
-		},
-		attributes: {},
+		tickets: [],
+		handoffAttemptTickets: [],
+		consultations: [],
+		agents: [],
+		now: NOW,
+		startupGraceMs: GRACE,
+		...over,
 	};
 }
 
-/** A state holding three open tickets, on the pinned clock. */
-function freshState(now = NOW): FactoryState {
-	const state = openFactoryState(":memory:", () => now);
-	state.initializeSources([source]);
-	state.applyFetch(source, {
-		status: "success",
-		fetchedAt: "2026-08-31T10:00:00Z",
-		tickets: [
-			fetched("github:github.com:I_5"),
-			fetched("github:github.com:I_6"),
-			fetched("github:github.com:I_7"),
-		],
-	});
-	return state;
+/** One Consultation's fact, as the rule reads it. */
+function consultationFact(
+	state: ParallelSeatConsultationFact["state"],
+): ParallelSeatConsultationFact {
+	return { state };
 }
 
-/** Claim and settle a handoff of the ticket, storing the given pane. */
-function handOut(state: FactoryState, identity: string, paneId: string | null): void {
-	const claim = state.claimHandoff(identity, choice, "open");
-	if (!claim.ok) throw new Error(claim.reason);
-	state.settleHandoff(claim.claim.attemptId, true, undefined, {
-		paneId,
-		tabId: "tab-1",
-		workspaceId: "ws-1",
-	});
-}
-
-/** Leave a handoff claimed and unsettled: an in-progress handoff. */
-function claimOnly(state: FactoryState, identity: string): void {
-	const claim = state.claimHandoff(identity, choice, "open");
-	if (!claim.ok) throw new Error(claim.reason);
-}
-
-function consultationIn(state: FactoryState, id: string, stateName: ConsultationState): void {
-	state.createConsultation({
-		id,
-		typeName: "grill",
-		agentType: "pi",
-		environment: "worktree",
-		template: "/grill {input}",
-		initialInput: "review auth",
-		renderedOpeningPrompt: "/grill review auth",
-		repository: {
-			identity: "github.com/acme/factory",
-			displayName: "acme/factory",
-			cloneUrl: "https://github.com/acme/factory.git",
-			path: "/tmp/factory",
-		},
-		agentName: `consultation-${id}`,
-	});
-	if (stateName !== "opening") state.setConsultationState(id, stateName);
-}
-
-function listed(paneId: string): HerdrAgent {
+/** The agent list's entry for one pane, under the given name. */
+function listed(paneId: string, name: string): HerdrAgent {
 	return {
 		paneId,
 		tabId: "tab-1",
 		workspaceId: "ws-1",
-		agent: "factory-implement",
+		name,
+		agent: "pi",
 		status: "working",
 		sessionId: "",
 	};
 }
 
+const OWN_NAME = "persist-source-facts";
+
 describe("parallelSeatCount", () => {
 	test("holds a seat for an in-flight ticket whose agent the poll listed", () => {
-		const state = freshState();
-		try {
-			handOut(state, "github:github.com:I_5", "pane-5");
-			expect(
-				parallelSeatCount({ state, agents: [listed("pane-5")], now: NOW, startupGraceMs: GRACE }),
-			).toBe(1);
-			// The same poll without the pane: the started agent is inside its
-			// startup grace, so it still holds the seat.
-			expect(parallelSeatCount({ state, agents: [], now: NOW, startupGraceMs: GRACE })).toBe(1);
-			// A started agent with no stored pane holds its in-progress seat
-			// the same way.
-			const bare = freshState();
-			handOut(bare, "github:github.com:I_5", null);
-			expect(parallelSeatCount({ state: bare, agents: [], now: NOW, startupGraceMs: GRACE })).toBe(
-				1,
-			);
-			bare.close();
-		} finally {
-			state.close();
-		}
+		const own = ticketFact("github:github.com:I_5", "pane-5", OWN_NAME);
+		expect(parallelSeatCount(facts({ tickets: [own], agents: [listed("pane-5", OWN_NAME)] }))).toBe(
+			1,
+		);
+		// The same poll without the pane: the started agent is inside its
+		// startup grace, so it still holds the seat.
+		expect(parallelSeatCount(facts({ tickets: [own], agents: [] }))).toBe(1);
+		// A started agent with no stored pane holds its in-progress seat
+		// the same way.
+		expect(
+			parallelSeatCount(facts({ tickets: [ticketFact("github:github.com:I_5", null, OWN_NAME)] })),
+		).toBe(1);
 	});
 
 	test("releases the seat of a missing agent past the startup grace", () => {
-		const state = freshState();
-		try {
-			handOut(state, "github:github.com:I_5", "pane-5");
-			const past = NOW + GRACE + 1;
-			// The state clock is pinned, so age the handoff by reading it
-			// later: a started agent past the grace with no live pane holds
-			// no seat.
-			expect(
-				parallelSeatCount({
-					state,
-					agents: [listed("pane-other")],
-					now: past,
-					startupGraceMs: GRACE,
-				}),
-			).toBe(0);
-		} finally {
-			state.close();
-		}
+		const own = ticketFact("github:github.com:I_5", "pane-5", OWN_NAME);
+		// The poll lists an agent in another pane, so the ticket's own agent is
+		// missing: past the grace, a started agent with no live pane holds no
+		// seat.
+		expect(
+			parallelSeatCount(
+				facts({ tickets: [own], agents: [listed("pane-other", OWN_NAME)], now: NOW + GRACE + 1 }),
+			),
+		).toBe(0);
 	});
 
 	test("releases the seat of a ticket whose pane holds a foreign agent", () => {
-		const state = freshState();
-		try {
-			handOut(state, "github:github.com:I_5", "pane-5");
-			// Herdr handed the closed pane's id out again: another agent works
-			// in the ticket's pane. The ticket's own agent is gone, so past the
-			// startup grace the ticket holds no seat for it, the way a missing
-			// agent holds none.
-			const foreign: HerdrAgent = { ...listed("pane-5"), name: "some-other-agent" };
-			// Inside the startup grace the ticket still boots, so it keeps the
-			// seat.
-			expect(parallelSeatCount({ state, agents: [foreign], now: NOW, startupGraceMs: GRACE })).toBe(
-				1,
-			);
-			expect(
-				parallelSeatCount({
-					state,
-					agents: [foreign],
-					now: NOW + GRACE + 1,
-					startupGraceMs: GRACE,
-				}),
-			).toBe(0);
-			// The ticket's own agent in the pane holds the seat.
-			const own: HerdrAgent = { ...listed("pane-5"), name: "persist-source-facts" };
-			expect(
-				parallelSeatCount({
-					state,
-					agents: [own],
-					now: NOW + GRACE + 1,
-					startupGraceMs: GRACE,
-				}),
-			).toBe(1);
-		} finally {
-			state.close();
-		}
+		const own = ticketFact("github:github.com:I_5", "pane-5", OWN_NAME);
+		// Herdr handed the closed pane's id out again: another agent works
+		// in the ticket's pane. The ticket's own agent is gone, so past the
+		// startup grace the ticket holds no seat for it, the way a missing
+		// agent holds none.
+		const foreign = listed("pane-5", "some-other-agent");
+		// Inside the startup grace the ticket still boots, so it keeps the
+		// seat.
+		expect(parallelSeatCount(facts({ tickets: [own], agents: [foreign] }))).toBe(1);
+		expect(
+			parallelSeatCount(facts({ tickets: [own], agents: [foreign], now: NOW + GRACE + 1 })),
+		).toBe(0);
+		// The ticket's own agent in the pane holds the seat.
+		expect(
+			parallelSeatCount(
+				facts({ tickets: [own], agents: [listed("pane-5", OWN_NAME)], now: NOW + GRACE + 1 }),
+			),
+		).toBe(1);
 	});
 
 	test("counts an in-progress handoff once, even for a counted ticket", () => {
-		const state = freshState();
-		try {
-			claimOnly(state, "github:github.com:I_6");
-			expect(parallelSeatCount({ state, agents: [], now: NOW, startupGraceMs: GRACE })).toBe(1);
-			// A claimed handoff whose ticket also holds a listed seat is one
-			// seat, not two.
-			handOut(state, "github:github.com:I_5", "pane-5");
-			expect(
-				parallelSeatCount({ state, agents: [listed("pane-5")], now: NOW, startupGraceMs: GRACE }),
-			).toBe(2);
-		} finally {
-			state.close();
-		}
+		expect(parallelSeatCount(facts({ handoffAttemptTickets: ["github:github.com:I_6"] }))).toBe(1);
+		// A claimed handoff whose ticket also holds a listed seat is one
+		// seat, not two.
+		const own = ticketFact("github:github.com:I_5", "pane-5", OWN_NAME);
+		const ownAgent = [listed("pane-5", OWN_NAME)];
+		expect(
+			parallelSeatCount(
+				facts({
+					tickets: [own],
+					handoffAttemptTickets: ["github:github.com:I_5"],
+					agents: ownAgent,
+				}),
+			),
+		).toBe(1);
+		// A second ticket's claim adds its own seat.
+		expect(
+			parallelSeatCount(
+				facts({
+					tickets: [own],
+					handoffAttemptTickets: ["github:github.com:I_6"],
+					agents: ownAgent,
+				}),
+			),
+		).toBe(2);
 	});
 
 	test("holds a seat for opening and working Consultations, and for no other state", () => {
-		const state = freshState();
-		try {
-			consultationIn(state, "c-opening", "opening");
-			consultationIn(state, "c-working", "working");
-			const count = parallelSeatCount({ state, agents: [], now: NOW, startupGraceMs: GRACE });
-			expect(count).toBe(2);
-			for (const other of [
-				"awaiting-response",
-				"missing",
-				"failed",
-				"closing",
-				"closed",
-			] as const) {
-				const bare = freshState();
-				try {
-					consultationIn(bare, `c-${other}`, other);
-					expect(
-						parallelSeatCount({ state: bare, agents: [], now: NOW, startupGraceMs: GRACE }),
-					).toBe(0);
-				} finally {
-					bare.close();
-				}
-			}
-		} finally {
-			state.close();
+		expect(
+			parallelSeatCount(
+				facts({ consultations: [consultationFact("opening"), consultationFact("working")] }),
+			),
+		).toBe(2);
+		for (const other of ["awaiting-response", "missing", "failed", "closing", "closed"] as const) {
+			expect(parallelSeatCount(facts({ consultations: [consultationFact(other)] }))).toBe(0);
 		}
 	});
 
 	test("combines the ticket and Consultation seats into one count", () => {
-		const state = freshState();
-		try {
-			handOut(state, "github:github.com:I_5", "pane-5");
-			consultationIn(state, "c-working", "working");
-			// The mode line's own example: one live ticket and one working
-			// Consultation read 2 against a cap of 2.
-			expect(
-				parallelSeatCount({ state, agents: [listed("pane-5")], now: NOW, startupGraceMs: GRACE }),
-			).toBe(2);
-		} finally {
-			state.close();
-		}
+		// The mode line's own example: one live ticket and one working
+		// Consultation read 2 against a cap of 2.
+		expect(
+			parallelSeatCount(
+				facts({
+					tickets: [ticketFact("github:github.com:I_5", "pane-5", OWN_NAME)],
+					consultations: [consultationFact("working")],
+					agents: [listed("pane-5", OWN_NAME)],
+				}),
+			),
+		).toBe(2);
 	});
 
 	test("before the first successful poll only booting, in-progress, and Consultation seats count", () => {
-		const state = freshState();
-		try {
-			handOut(state, "github:github.com:I_5", "pane-5");
-			consultationIn(state, "c-working", "working");
-			// No agent list yet: the ticket holds its booting seat and the
-			// Consultation holds its state seat.
-			expect(parallelSeatCount({ state, agents: null, now: NOW, startupGraceMs: GRACE })).toBe(2);
-			// Past the grace with no live pane: the ticket drops its seat, and
-			// the Consultation's seat alone remains.
-			expect(
-				parallelSeatCount({ state, agents: null, now: NOW + GRACE + 1, startupGraceMs: GRACE }),
-			).toBe(1);
-		} finally {
-			state.close();
-		}
+		const own = ticketFact("github:github.com:I_5", "pane-5", OWN_NAME);
+		const working = [consultationFact("working")];
+		// No agent list yet: the ticket holds its booting seat and the
+		// Consultation holds its state seat.
+		expect(parallelSeatCount(facts({ tickets: [own], consultations: working, agents: null }))).toBe(
+			2,
+		);
+		// Past the grace with no live pane: the ticket drops its seat, and
+		// the Consultation's seat alone remains.
+		expect(
+			parallelSeatCount(
+				facts({ tickets: [own], consultations: working, agents: null, now: NOW + GRACE + 1 }),
+			),
+		).toBe(1);
 	});
 });

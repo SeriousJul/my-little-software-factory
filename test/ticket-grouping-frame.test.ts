@@ -23,7 +23,8 @@ import type { FactoryConfig } from "../src/config.ts";
 import type { GroupingAxis } from "../src/domain/grouping.ts";
 import type { FetchedTicket } from "../src/domain/ticket.ts";
 import { repositoryInitSettingsHash } from "../src/repo-init.ts";
-import { type FactoryState, openFactoryState } from "../src/state.ts";
+import type { FactoryState } from "../src/state.ts";
+import { openFactoryState } from "../src/state.ts";
 import type { FetchOutcome } from "../src/ticket-source.ts";
 import {
 	type AppSetup,
@@ -203,10 +204,10 @@ function groupedState(
 	init = true,
 ): { state: FactoryState; sources: FakeSource[] } {
 	const state = openFactoryState(join(home, "state.sqlite"));
-	state.initializeSources([ISSUES, TRIAGE]);
+	state.sourceFact.initializeSources([ISSUES, TRIAGE]);
 	// The axis a restart reads back from the state file (ADR 0058), so a frame
 	// can boot on a split instead of stepping the cycle with presses.
-	if (axis !== undefined) state.setGroupingAxis("tickets", axis);
+	if (axis !== undefined) state.grouping.setGroupingAxis("tickets", axis);
 	// The groups' fixtures stand initialized (ADR 0075) by default, so the init
 	// marker stays out of the grouping's own frame and the one-time note stays
 	// out of the Message line: these tests are the grouping's, and the marker
@@ -219,13 +220,17 @@ function groupedState(
 		for (const ticket of listed) {
 			if (seeded.has(ticket.repository.identity)) continue;
 			seeded.add(ticket.repository.identity);
-			state.setRepositoryInitFact(ticket.repository.identity, initHash, "init-commit");
+			state.repositoryInit.setRepositoryInitFact(
+				ticket.repository.identity,
+				initHash,
+				"init-commit",
+			);
 		}
 	}
-	state.applyFetch(ISSUES, success(listed));
-	state.applyFetch(TRIAGE, success(triageListing()));
+	state.sourceFact.applyFetch(ISSUES, success(listed));
+	state.sourceFact.applyFetch(TRIAGE, success(triageListing()));
 	if (hold) {
-		const claim = state.claimHandoff(
+		const claim = state.handoff.claimHandoff(
 			"github:github.com:I_5",
 			{
 				agentType: "pi",
@@ -238,12 +243,12 @@ function groupedState(
 			"open",
 		);
 		if (!claim.ok) throw new Error(claim.reason);
-		state.settleHandoff(claim.claim.attemptId, true, undefined, {
+		state.handoff.settleHandoff(claim.claim.attemptId, true, undefined, {
 			paneId: "pane-5",
 			tabId: "tab-5",
 			workspaceId: "ws-5",
 		});
-		state.settleTurn({
+		state.ticketWorkCycle.settleTurn({
 			ticketIdentity: "github:github.com:I_5",
 			handoffId: claim.claim.attemptId,
 			taskType: "implement",
@@ -1053,7 +1058,7 @@ describe("the Ticket section's Groups", () => {
 		// The fresh file boots grouped by repository (ADR 0066): the press the
 		// test makes must start from the flat list to land on the repository
 		// split it checks.
-		state.setGroupingAxis("tickets", "none");
+		state.grouping.setGroupingAxis("tickets", "none");
 		const issues = new FakeSource("issues", "github-issues", success([]));
 		const triage = new FakeSource("triage", "github-issues", success([]));
 		await withApp(
@@ -1102,7 +1107,7 @@ describe("the Ticket section's Groups", () => {
 				sources: first.sources,
 			},
 		);
-		expect(first.state.groupingAxis("tickets")).toBe("repository");
+		expect(first.state.grouping.groupingAxis("tickets")).toBe("repository");
 		first.state.close();
 		opened.splice(opened.indexOf(first.state), 1);
 
@@ -1110,7 +1115,7 @@ describe("the Ticket section's Groups", () => {
 		// left it (story 49), and every Group is open again (story 53).
 		const second = openFactoryState(stateFile());
 		opened.push(second);
-		expect(second.groupingAxis("tickets")).toBe("repository");
+		expect(second.grouping.groupingAxis("tickets")).toBe("repository");
 		await bootGrouped(
 			async (setup) => {
 				const frame = await settle(setup);
@@ -1126,9 +1131,7 @@ describe("the Ticket section's Groups", () => {
 		// refused write would have stored.
 		const fixture = groupedState(false, tickets(), "none");
 		opened.push(fixture.state);
-		const refusing = fixture.state as unknown as {
-			setGroupingAxis(section: string, axis: string): void;
-		};
+		const refusing = fixture.state.grouping as unknown as { setGroupingAxis: () => void };
 		refusing.setGroupingAxis = () => {
 			throw new Error("read-only file system");
 		};
@@ -1187,13 +1190,16 @@ describe("the Ticket section's Groups", () => {
 	test("a Removed source keeps its Group while its in-flight ticket does", async () => {
 		const state = openFactoryState(stateFile());
 		opened.push(state);
-		state.initializeSources([ISSUES, TRIAGE]);
-		state.applyFetch(ISSUES, success([issue(1, "Webhook retry", FACTORY, ["ready-for-agent"])]));
-		state.applyFetch(
+		state.sourceFact.initializeSources([ISSUES, TRIAGE]);
+		state.sourceFact.applyFetch(
+			ISSUES,
+			success([issue(1, "Webhook retry", FACTORY, ["ready-for-agent"])]),
+		);
+		state.sourceFact.applyFetch(
 			TRIAGE,
 			success([issue(2, "Deploy gate", FACTORY, ["needs-review"], "2026-09-02T09:00:00Z")]),
 		);
-		const claim = state.claimHandoff(
+		const claim = state.handoff.claimHandoff(
 			"github:github.com:I_2",
 			{
 				agentType: "pi",
@@ -1206,14 +1212,14 @@ describe("the Ticket section's Groups", () => {
 			"open",
 		);
 		if (!claim.ok) throw new Error(claim.reason);
-		state.settleHandoff(claim.claim.attemptId, true, undefined, {
+		state.handoff.settleHandoff(claim.claim.attemptId, true, undefined, {
 			paneId: "pane-2",
 			tabId: "tab-2",
 			workspaceId: "ws-2",
 		});
 		// The operator deletes the feed from the Config file: the plane stops
 		// reading it, and the membership turns Removed on the state.
-		state.initializeSources([ISSUES]);
+		state.sourceFact.initializeSources([ISSUES]);
 
 		const issues = new FakeSource("issues", "github-issues", success([]));
 		await withApp(
@@ -1688,7 +1694,7 @@ describe("the operator's Group order (ADR 0071)", () => {
 					"the move",
 					(f) => groupOrderWords(f).join() === "acme/factory,acme/billing",
 				);
-				expect(first.state.groupOrder("tickets", "repository")).toEqual([
+				expect(first.state.grouping.groupOrder("tickets", "repository")).toEqual([
 					"acme/factory",
 					"acme/billing",
 				]);
@@ -1720,9 +1726,7 @@ describe("the operator's Group order (ADR 0071)", () => {
 	test("a state file that will not take the move reports it, and the view changes", async () => {
 		const fixture = groupedState(false, tickets(), "repository");
 		opened.push(fixture.state);
-		const refusing = fixture.state as unknown as {
-			setGroupOrder(section: string, axis: string, values: string[]): void;
-		};
+		const refusing = fixture.state.grouping as unknown as { setGroupOrder: () => void };
 		refusing.setGroupOrder = () => {
 			throw new Error("read-only file system");
 		};
@@ -1858,15 +1862,19 @@ describe("the init marker and the one-time note (ADR 0075)", () => {
 
 	test("an initialized repository wears no marker, and a drifted one wears drift", async () => {
 		const state = openFactoryState(stateFile());
-		state.initializeSources([ISSUES, TRIAGE]);
-		state.setGroupingAxis("tickets", "repository");
-		state.applyFetch(ISSUES, success(tickets()));
-		state.applyFetch(TRIAGE, success(triageListing()));
+		state.sourceFact.initializeSources([ISSUES, TRIAGE]);
+		state.grouping.setGroupingAxis("tickets", "repository");
+		state.sourceFact.applyFetch(ISSUES, success(tickets()));
+		state.sourceFact.applyFetch(TRIAGE, success(triageListing()));
 		const hash = repositoryInitSettingsHash(groupConfig.workflowStates, groupConfig.taskTypes);
 		// billing stands initialized at the current settings: no marker.
-		state.setRepositoryInitFact(`github.com/${BILLING}`, hash, "init-commit");
+		state.repositoryInit.setRepositoryInitFact(`github.com/${BILLING}`, hash, "init-commit");
 		// factory stands initialized at a changed settings: the drift.
-		state.setRepositoryInitFact(`github.com/${FACTORY}`, "a-different-hash", "init-commit");
+		state.repositoryInit.setRepositoryInitFact(
+			`github.com/${FACTORY}`,
+			"a-different-hash",
+			"init-commit",
+		);
 		await bootGrouped(
 			async (setup) => {
 				const frame = await settle(setup);
@@ -1883,13 +1891,13 @@ describe("the init marker and the one-time note (ADR 0075)", () => {
 
 	test("every repository stands initialized, so no note stands at first sight", async () => {
 		const state = openFactoryState(stateFile());
-		state.initializeSources([ISSUES, TRIAGE]);
-		state.setGroupingAxis("tickets", "repository");
-		state.applyFetch(ISSUES, success(tickets()));
-		state.applyFetch(TRIAGE, success(triageListing()));
+		state.sourceFact.initializeSources([ISSUES, TRIAGE]);
+		state.grouping.setGroupingAxis("tickets", "repository");
+		state.sourceFact.applyFetch(ISSUES, success(tickets()));
+		state.sourceFact.applyFetch(TRIAGE, success(triageListing()));
 		const hash = repositoryInitSettingsHash(groupConfig.workflowStates, groupConfig.taskTypes);
-		state.setRepositoryInitFact(`github.com/${BILLING}`, hash, "init-commit");
-		state.setRepositoryInitFact(`github.com/${FACTORY}`, hash, "init-commit");
+		state.repositoryInit.setRepositoryInitFact(`github.com/${BILLING}`, hash, "init-commit");
+		state.repositoryInit.setRepositoryInitFact(`github.com/${FACTORY}`, hash, "init-commit");
 		await bootGrouped(
 			async (setup) => {
 				const frame = await settle(setup);

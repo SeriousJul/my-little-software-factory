@@ -34,7 +34,9 @@ import type { Ticket } from "../src/domain/ticket.ts";
 import { consultationBranchName } from "../src/naming.ts";
 import type { RepositoryMapping } from "../src/repo.ts";
 import type { CommandOptions, CommandResult, CommandRunner } from "../src/runner.ts";
-import { type Consultation, type FactoryState, openFactoryState } from "../src/state.ts";
+import type { Consultation } from "../src/state/consultation-record.ts";
+import type { FactoryState } from "../src/state.ts";
+import { openFactoryState } from "../src/state.ts";
 import { BASE_CONFIG } from "./base-config.ts";
 import {
 	agentListJson,
@@ -132,7 +134,7 @@ function seed(state: FactoryState, fixture: Fixture, id: string, over: Seed = {}
 	const repository = over.repository ?? fixture.repository;
 	const typeName = over.typeName ?? (environment === "live-worktree" ? "grill-live" : "grill");
 	const type = fixture.config.consultationTypes[typeName];
-	return state.createConsultation({
+	return state.consultationRecord.createConsultation({
 		id,
 		typeName,
 		agentType: type.agent,
@@ -149,7 +151,7 @@ function seed(state: FactoryState, fixture: Fixture, id: string, over: Seed = {}
 
 /** Move a fresh opening record to `working` with its herdr handles. */
 function startAgent(state: FactoryState, id: string, handles = LAUNCH): void {
-	state.setConsultationAgent(id, {
+	state.consultationRecord.setConsultationAgent(id, {
 		paneId: handles.paneId,
 		tabId: handles.tabId,
 		workspaceId: handles.workspaceId,
@@ -160,31 +162,31 @@ function startAgent(state: FactoryState, id: string, handles = LAUNCH): void {
 /** Record the resources a worktree launch owns, as the module's launch does. */
 function seedResources(state: FactoryState, id: string, handles = LAUNCH): void {
 	const agentName = agentOf(id);
-	state.recordConsultationResource(id, {
+	state.consultationRecord.recordConsultationResource(id, {
 		kind: "workspace",
 		resourceId: handles.workspaceId,
 		owned: true,
 		details: "Consultation worktree workspace",
 	});
-	state.recordConsultationResource(id, {
+	state.consultationRecord.recordConsultationResource(id, {
 		kind: "worktree",
 		resourceId: handles.workspaceId,
 		owned: true,
 		details: `Consultation worktree checkout for ${consultationBranchName(id, "grill")}`,
 	});
-	state.recordConsultationResource(id, {
+	state.consultationRecord.recordConsultationResource(id, {
 		kind: "tab",
 		resourceId: handles.tabId,
 		owned: true,
 		details: "Consultation worktree tab",
 	});
-	state.recordConsultationResource(id, {
+	state.consultationRecord.recordConsultationResource(id, {
 		kind: "pane",
 		resourceId: handles.paneId,
 		owned: true,
 		details: "Consultation Agent pane",
 	});
-	state.recordConsultationResource(id, {
+	state.consultationRecord.recordConsultationResource(id, {
 		kind: "agent",
 		resourceId: agentName,
 		owned: true,
@@ -455,7 +457,7 @@ function stages(progress: readonly ProgressReport[]): string[] {
 
 /** Read back one Consultation, failing loudly when the record is gone. */
 function current(state: FactoryState, id: string): Consultation {
-	const consultation = state.consultation(id);
+	const consultation = state.consultationRecord.consultation(id);
 	if (consultation === undefined) throw new Error(`consultation ${id} is gone`);
 	return consultation;
 }
@@ -472,7 +474,7 @@ describe("Consultation operations: launch", () => {
 				initialInput: "review auth",
 			}),
 		).toBeUndefined();
-		expect(fixture.state.consultations("all")).toHaveLength(0);
+		expect(fixture.state.consultationRecord.consultations("all")).toHaveLength(0);
 		expect(statusTexts(harness).at(-1)).toBe("unknown Consultation type unknown");
 	});
 
@@ -493,8 +495,8 @@ describe("Consultation operations: launch", () => {
 				"unknown Consultation type unknown",
 			);
 			// No row and no record: the ask never entered the channel.
-			expect(fixture.state.workQueue()).toEqual([]);
-			expect(fixture.state.consultations("all")).toEqual([]);
+			expect(fixture.state.workQueue.items()).toEqual([]);
+			expect(fixture.state.consultationRecord.consultations("all")).toEqual([]);
 			expect(runner.commands()).toEqual([]);
 		});
 
@@ -536,7 +538,7 @@ describe("Consultation operations: launch", () => {
 				}),
 			).toBeUndefined();
 
-		expect(fixture.state.consultations("all")).toHaveLength(0);
+		expect(fixture.state.consultationRecord.consultations("all")).toHaveLength(0);
 		expect(statusTexts(harness)).toEqual([
 			"initial input cannot be empty",
 			"initial input is 65537 UTF-8 bytes; the limit is 65536",
@@ -863,9 +865,9 @@ describe("Consultation operations: launch", () => {
 		);
 		await until(() => current(fixture.state, id).state === "working", "the confirmed launch");
 		expect(current(fixture.state, id).state).toBe("working");
-		expect(fixture.state.confirmedCheckoutConflicts(realpathSync(fixture.checkout))).toEqual([
-			"pane-herdr",
-		]);
+		expect(
+			fixture.state.consultationRecord.confirmedCheckoutConflicts(realpathSync(fixture.checkout)),
+		).toEqual(["pane-herdr"]);
 		expect(runner.commands()).toContain(`herdr agent prompt ${agentOf(id)} /grill review auth`);
 	});
 
@@ -900,7 +902,9 @@ describe("Consultation operations: launch", () => {
 
 		expect(harness.conflicts).toHaveLength(2);
 		expect(current(fixture.state, id).state).toBe("opening");
-		expect(fixture.state.confirmedCheckoutConflicts(realpathSync(fixture.checkout))).toEqual([]);
+		expect(
+			fixture.state.consultationRecord.confirmedCheckoutConflicts(realpathSync(fixture.checkout)),
+		).toEqual([]);
 		expect(runner.commands().join("\n")).not.toContain("tab create");
 	});
 
@@ -1077,9 +1081,11 @@ describe("Consultation operations: live checkout confirmation lifetime", () => {
 		// Confirming stores the union of the confirmed set and the new one.
 		await harness.operations.confirmSafetyConflict(second, harness.conflicts[1].safety.conflicts);
 		await until(() => current(fixture.state, id2).state === "working", "the confirmed launch");
-		expect(fixture.state.confirmedCheckoutConflicts(realpathSync(fixture.checkout)).sort()).toEqual(
-			["pane-herdr", "pane-new"],
-		);
+		expect(
+			fixture.state.consultationRecord
+				.confirmedCheckoutConflicts(realpathSync(fixture.checkout))
+				.sort(),
+		).toEqual(["pane-herdr", "pane-new"]);
 	});
 
 	test("does not re-ask when a confirmed identity leaves, and shrinks the stored set", async () => {
@@ -1113,7 +1119,9 @@ describe("Consultation operations: live checkout confirmation lifetime", () => {
 		expect(harness.conflicts).toHaveLength(1);
 		expect(current(fixture.state, id2).state).toBe("working");
 		// The stored set is updated to what the checkout holds now.
-		expect(fixture.state.confirmedCheckoutConflicts(realpathSync(fixture.checkout))).toEqual([]);
+		expect(
+			fixture.state.consultationRecord.confirmedCheckoutConflicts(realpathSync(fixture.checkout)),
+		).toEqual([]);
 	});
 
 	test("does not re-ask a fresh operations instance for a confirmed set", async () => {
@@ -1224,9 +1232,10 @@ describe("Consultation operations: live checkout confirmation lifetime", () => {
 			stdout: busyAgentJson(fixture.checkout, "pane-herdr"),
 		});
 		// The checkout already holds the confirmation, as a previous run left it.
-		fixture.state.recordCheckoutConflictConfirmation(realpathSync(fixture.checkout), [
-			"pane-herdr",
-		]);
+		fixture.state.consultationRecord.recordCheckoutConflictConfirmation(
+			realpathSync(fixture.checkout),
+			["pane-herdr"],
+		);
 		const harness = makeHarness(fixture, runner);
 
 		await harness.operations.launch(consultation);
@@ -1304,9 +1313,9 @@ describe("Consultation operations: live checkout confirmation lifetime", () => {
 
 		expect(harness.conflicts).toHaveLength(1);
 		expect(current(fixture.state, id2).state).toBe("working");
-		expect(fixture.state.confirmedCheckoutConflicts(realpathSync(fixture.checkout))).toEqual([
-			"ACME-42",
-		]);
+		expect(
+			fixture.state.consultationRecord.confirmedCheckoutConflicts(realpathSync(fixture.checkout)),
+		).toEqual(["ACME-42"]);
 	});
 });
 
@@ -1316,7 +1325,7 @@ describe("Consultation operations: recovery", () => {
 		const runner = new LifecycleRunner();
 		const id = uid("9");
 		const consultation = seed(fixture.state, fixture, id);
-		fixture.state.recordConsultationAgentHandles(id, {
+		fixture.state.consultationRecord.recordConsultationAgentHandles(id, {
 			paneId: "pane-old",
 			tabId: "tab-old",
 			workspaceId: "ws-old",
@@ -1351,7 +1360,7 @@ describe("Consultation operations: recovery", () => {
 		const runner = new LifecycleRunner();
 		const id = uid("a");
 		const consultation = seed(fixture.state, fixture, id);
-		fixture.state.recordConsultationAgentHandles(id, { paneId: "pane-gone" });
+		fixture.state.consultationRecord.recordConsultationAgentHandles(id, { paneId: "pane-gone" });
 		runner.inner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
 		const harness = makeHarness(fixture, runner);
 
@@ -1383,7 +1392,7 @@ describe("Consultation operations: recovery", () => {
 		const runner = new LifecycleRunner();
 		const id = uid("c");
 		const consultation = seed(fixture.state, fixture, id);
-		fixture.state.recordConsultationAgentHandles(id, { paneId: "pane-old" });
+		fixture.state.consultationRecord.recordConsultationAgentHandles(id, { paneId: "pane-old" });
 		runner.inner.set("herdr", ["agent", "list"], { code: 1, stderr: "herdr is down\n" });
 		const harness = makeHarness(fixture, runner);
 
@@ -1415,7 +1424,7 @@ describe("Consultation operations: response", () => {
 	function seedAwaiting(fixture: Fixture, id: string): Consultation {
 		const consultation = seed(fixture.state, fixture, id);
 		startAgent(fixture.state, id);
-		fixture.state.settleConsultationTurn(id, null, "first answer");
+		fixture.state.consultationRecord.settleConsultationTurn(id, null, "first answer");
 		return consultation;
 	}
 
@@ -1425,7 +1434,10 @@ describe("Consultation operations: response", () => {
 		const id = uid("0");
 		const consultation = seedAwaiting(fixture, id);
 		const harness = makeHarness(fixture, runner);
-		const write = spyOn(fixture.state, "setConsultationDraft").mockImplementation(() => {
+		const write = spyOn(
+			fixture.state.consultationRecord,
+			"setConsultationDraft",
+		).mockImplementation(() => {
 			throw new Error("SQLITE_BUSY");
 		});
 
@@ -1452,10 +1464,9 @@ describe("Consultation operations: response", () => {
 			draft: "",
 			pendingResponse: null,
 		});
-		expect(fixture.state.consultationTurns(id).map((turn) => turn.input)).toEqual([
-			"review auth",
-			"follow up",
-		]);
+		expect(
+			fixture.state.consultationRecord.consultationTurns(id).map((turn) => turn.input),
+		).toEqual(["review auth", "follow up"]);
 		// A clean delivery clears the Message line.
 		expect(harness.reported.at(-1)).toBeNull();
 	});
@@ -1503,7 +1514,7 @@ describe("Consultation operations: response", () => {
 		const id = uid("4");
 		const consultation = seedAwaiting(fixture, id);
 		// A delivery the last control plane run began, and never settled.
-		fixture.state.beginConsultationResponse(id, "follow up", null);
+		fixture.state.consultationRecord.beginConsultationResponse(id, "follow up", null);
 		const harness = makeHarness(fixture, runner);
 
 		await harness.operations.respond(consultation, "second one");
@@ -1559,7 +1570,9 @@ describe("Consultation operations: close", () => {
 		expect(worktree?.details).toContain("retained after close");
 		for (const resource of closed.resources.filter((item) => item.kind !== "worktree"))
 			expect(resource).toMatchObject({ confirmedClosed: true });
-		expect(fixture.state.consultationSnapshots(id).some((snap) => snap.partial)).toBe(true);
+		expect(
+			fixture.state.consultationRecord.consultationSnapshots(id).some((snap) => snap.partial),
+		).toBe(true);
 		expect(statusTexts(harness).at(-1)).toContain("closed");
 	});
 
@@ -1725,7 +1738,7 @@ describe("Consultation operations: close", () => {
 		const runner = new LifecycleRunner();
 		const id = uid("c");
 		const consultation = seedWorking(fixture, id);
-		fixture.state.beginConsultationClose(id);
+		fixture.state.consultationRecord.beginConsultationClose(id);
 		const harness = makeHarness(fixture, runner);
 
 		harness.operations.forceClose(consultation);
@@ -1735,7 +1748,9 @@ describe("Consultation operations: close", () => {
 			closeResult: "force-closed by operator; owned resources may remain",
 		});
 		expect(
-			fixture.state.consultationRemainingResources(id).map((resource) => resource.kind),
+			fixture.state.consultationRecord
+				.consultationRemainingResources(id)
+				.map((resource) => resource.kind),
 		).toEqual(expect.arrayContaining(["workspace", "tab", "pane", "agent", "worktree"]));
 		expect(runner.commands()).toEqual([]);
 		expect(statusTexts(harness).at(-1)).toContain(
@@ -1781,7 +1796,9 @@ describe("Consultation operations: close", () => {
 			state: "closed",
 			closeResult: "force-closed by operator; owned resources may remain",
 		});
-		expect(fixture.state.consultationRemainingResources(second).length).toBeGreaterThan(0);
+		expect(
+			fixture.state.consultationRecord.consultationRemainingResources(second).length,
+		).toBeGreaterThan(0);
 		expect(current(fixture.state, first).state).toBe("closed");
 	});
 
@@ -1819,7 +1836,9 @@ describe("Consultation operations: close", () => {
 		const closed = current(fixture.state, id);
 		expect(closed.state).toBe("closed");
 		expect(closed.resources.every((resource) => !resource.confirmedClosed)).toBe(true);
-		expect(fixture.state.consultationRemainingResources(id).length).toBeGreaterThan(0);
+		expect(
+			fixture.state.consultationRecord.consultationRemainingResources(id).length,
+		).toBeGreaterThan(0);
 	});
 
 	test("refuses a force-close whose cleanup already finished", () => {
@@ -1828,8 +1847,8 @@ describe("Consultation operations: close", () => {
 		const id = uid("f");
 		const consultation = seed(fixture.state, fixture, id);
 		const harness = makeHarness(fixture, runner);
-		fixture.state.beginConsultationClose(id);
-		fixture.state.finishConsultationClose(id);
+		fixture.state.consultationRecord.beginConsultationClose(id);
+		fixture.state.consultationRecord.finishConsultationClose(id);
 
 		harness.operations.forceClose(consultation);
 
@@ -1845,25 +1864,25 @@ describe("Consultation operations: close", () => {
 		const stale = { workspaceId: "wAR", tabId: "wAR:t29", paneId: "wAR:p29" };
 		const consultation = seed(fixture.state, fixture, id, { environment: "live-worktree" });
 		startAgent(fixture.state, id, stale);
-		fixture.state.recordConsultationResource(id, {
+		fixture.state.consultationRecord.recordConsultationResource(id, {
 			kind: "tab",
 			resourceId: stale.tabId,
 			owned: true,
 			details: "Consultation tab",
 		});
-		fixture.state.recordConsultationResource(id, {
+		fixture.state.consultationRecord.recordConsultationResource(id, {
 			kind: "pane",
 			resourceId: stale.paneId,
 			owned: true,
 			details: "Consultation Agent pane",
 		});
-		fixture.state.recordConsultationResource(id, {
+		fixture.state.consultationRecord.recordConsultationResource(id, {
 			kind: "agent",
 			resourceId: agentOf(id),
 			owned: true,
 			details: `Agent hosted by pane ${stale.paneId}`,
 		});
-		fixture.state.setConsultationState(id, "missing", "Agent is missing");
+		fixture.state.consultationRecord.setConsultationState(id, "missing", "Agent is missing");
 		// herdr restarted and restored the tab under the same ids: the pane now
 		// holds a bare terminal, so the agent list names no one for the record
 		// and the reused pane is a foreign one to the close.
@@ -1891,9 +1910,11 @@ describe("Consultation operations: close", () => {
 		expect(closed.state).toBe("closed");
 		expect(closed.closeResult).toContain("Agent is missing");
 		expect(closed.resources.filter((item) => item.owned && !item.confirmedClosed).length).toBe(3);
-		expect(fixture.state.consultationRemainingResources(id).map((item) => item.resourceId)).toEqual(
-			expect.arrayContaining([stale.tabId, stale.paneId]),
-		);
+		expect(
+			fixture.state.consultationRecord
+				.consultationRemainingResources(id)
+				.map((item) => item.resourceId),
+		).toEqual(expect.arrayContaining([stale.tabId, stale.paneId]));
 		expect(statusTexts(harness).at(-1)).toContain("herdr was left untouched");
 	});
 
@@ -1904,13 +1925,13 @@ describe("Consultation operations: close", () => {
 		const stale = { workspaceId: "wAR", tabId: "wAR:t29", paneId: "wAR:p29" };
 		const consultation = seed(fixture.state, fixture, id, { environment: "live-worktree" });
 		startAgent(fixture.state, id, stale);
-		fixture.state.recordConsultationResource(id, {
+		fixture.state.consultationRecord.recordConsultationResource(id, {
 			kind: "pane",
 			resourceId: stale.paneId,
 			owned: true,
 			details: "Consultation Agent pane",
 		});
-		fixture.state.setConsultationState(id, "missing", "Agent is missing");
+		fixture.state.consultationRecord.setConsultationState(id, "missing", "Agent is missing");
 		// The reused pane now hosts another Consultation's Agent: its name is
 		// the record's own, or nothing like it - never the Consultation's.
 		runner.inner.set("herdr", ["agent", "list"], {
@@ -1945,13 +1966,13 @@ describe("Consultation operations: close", () => {
 		const consultation = seed(fixture.state, fixture, id);
 		// The launch recorded its environment before its Agent started: the
 		// tab and pane stand, and no Agent runs under the record's name.
-		fixture.state.recordConsultationResource(id, {
+		fixture.state.consultationRecord.recordConsultationResource(id, {
 			kind: "tab",
 			resourceId: LAUNCH.tabId,
 			owned: true,
 			details: "Consultation tab",
 		});
-		fixture.state.recordConsultationResource(id, {
+		fixture.state.consultationRecord.recordConsultationResource(id, {
 			kind: "pane",
 			resourceId: LAUNCH.paneId,
 			owned: true,
@@ -2095,18 +2116,26 @@ describe("Consultation operations: replacement and deletion", () => {
 		startAgent(fixture.state, id);
 		// The opening turn settles, then two exchanges follow. Each Agent answer
 		// is 40 KiB, so the whole exchange cannot fit the 64 KiB limit.
-		fixture.state.settleConsultationTurn(id, null, "opening answer".padEnd(40 * 1024, "x"));
+		fixture.state.consultationRecord.settleConsultationTurn(
+			id,
+			null,
+			"opening answer".padEnd(40 * 1024, "x"),
+		);
 		for (const response of ["note: first pass", "note: keep going"]) {
-			const pending = fixture.state.beginConsultationResponse(id, response, null);
+			const pending = fixture.state.consultationRecord.beginConsultationResponse(
+				id,
+				response,
+				null,
+			);
 			if (pending === undefined) throw new Error(`no pending response for ${response}`);
-			fixture.state.acceptConsultationResponse(id, pending.id);
-			fixture.state.settleConsultationTurn(
+			fixture.state.consultationRecord.acceptConsultationResponse(id, pending.id);
+			fixture.state.consultationRecord.settleConsultationTurn(
 				id,
 				null,
 				`answer to ${response}`.padEnd(40 * 1024, "y"),
 			);
 		}
-		fixture.state.setConsultationState(id, "failed", "herdr refused the launch");
+		fixture.state.consultationRecord.setConsultationState(id, "failed", "herdr refused the launch");
 		return consultation;
 	}
 
@@ -2132,7 +2161,7 @@ describe("Consultation operations: replacement and deletion", () => {
 		expect(replacement?.initialInput).toContain("[recovery context omitted]");
 		// US18: the failed record stays visible and keeps its own state.
 		expect(current(fixture.state, id)).toMatchObject({ state: "failed" });
-		expect(fixture.state.consultations("open").map((item) => item.id)).toEqual(
+		expect(fixture.state.consultationRecord.consultations("open").map((item) => item.id)).toEqual(
 			expect.arrayContaining([id, replacement?.id ?? ""]),
 		);
 		// Building a Replacement starts no external work.
@@ -2180,7 +2209,7 @@ describe("Consultation operations: replacement and deletion", () => {
 
 		expect(replacement).toBeUndefined();
 		expect(statusTexts(harness).at(-1)).toContain("not one that is working");
-		expect(fixture.state.consultations("all")).toHaveLength(1);
+		expect(fixture.state.consultationRecord.consultations("all")).toHaveLength(1);
 	});
 
 	test("builds the bounded recovery context the launcher shows", () => {
@@ -2201,11 +2230,11 @@ describe("Consultation operations: replacement and deletion", () => {
 		const id = uid("5");
 		const consultation = seed(fixture.state, fixture, id);
 		const harness = makeHarness(fixture, new LifecycleRunner());
-		fixture.state.beginConsultationClose(id);
-		fixture.state.finishConsultationClose(id);
+		fixture.state.consultationRecord.beginConsultationClose(id);
+		fixture.state.consultationRecord.finishConsultationClose(id);
 
 		expect(harness.operations.delete(consultation)).toBe(true);
-		expect(fixture.state.consultation(id)).toBeUndefined();
+		expect(fixture.state.consultationRecord.consultation(id)).toBeUndefined();
 		expect(statusTexts(harness).at(-1)).toContain("deleted; backups may retain data");
 	});
 
@@ -2216,7 +2245,7 @@ describe("Consultation operations: replacement and deletion", () => {
 		const harness = makeHarness(fixture, new LifecycleRunner());
 
 		expect(harness.operations.delete(consultation)).toBe(false);
-		expect(fixture.state.consultation(id)).toBeDefined();
+		expect(fixture.state.consultationRecord.consultation(id)).toBeDefined();
 		expect(harness.statuses).toHaveLength(0);
 	});
 });
@@ -2248,7 +2277,7 @@ describe("Consultation operations: stale Agent output", () => {
 		const harness = makeHarness(fixture, new LifecycleRunner());
 
 		// The settled turn could not read its output: the warning is recorded.
-		fixture.state.settleConsultationTurn(id, null, null);
+		fixture.state.consultationRecord.settleConsultationTurn(id, null, null);
 		expect(current(fixture.state, id).warning).toBe(STALE_AGENT_OUTPUT_WARNING);
 
 		harness.operations.recordOutputRead(id, "the Agent answered");
@@ -2259,7 +2288,7 @@ describe("Consultation operations: stale Agent output", () => {
 		const fixture = makeFixture();
 		const id = uid("9");
 		seed(fixture.state, fixture, id);
-		fixture.state.setConsultationWarning(id, "Agent output is stale");
+		fixture.state.consultationRecord.setConsultationWarning(id, "Agent output is stale");
 		const harness = makeHarness(fixture, new LifecycleRunner());
 
 		harness.operations.recordOutputRead(id, "the Agent answered");
@@ -2271,7 +2300,10 @@ describe("Consultation operations: stale Agent output", () => {
 		const fixture = makeFixture();
 		const id = uid("9");
 		seed(fixture.state, fixture, id);
-		fixture.state.setConsultationWarning(id, "the live checkout has uncommitted changes");
+		fixture.state.consultationRecord.setConsultationWarning(
+			id,
+			"the live checkout has uncommitted changes",
+		);
 		const harness = makeHarness(fixture, new LifecycleRunner());
 
 		harness.operations.recordOutputRead(id, "fresh lines");
@@ -2511,7 +2543,7 @@ test("a queued submit creates the record and its queue item, and starts nothing"
 	expect(consultation).toEqual(
 		expect.objectContaining({ state: "queued", paneId: null, workspaceId: null }),
 	);
-	const queue = fixture.state.workQueue();
+	const queue = fixture.state.workQueue.items();
 	expect(queue).toHaveLength(1);
 	if (consultation === undefined) throw new Error("the queued submit created no record");
 	expect(queue[0]).toEqual(
@@ -2600,7 +2632,7 @@ test("the pickup re-reads the type's settings from the config before it starts",
 	// record waits, and the loop's own removal covers the answers that
 	// claimed nothing.
 	expect(runner.commands()).toContain(`herdr agent prompt ${agentOf(id)} /re-grill review auth`);
-	expect(fixture.state.workQueue()).toHaveLength(0);
+	expect(fixture.state.workQueue.items()).toHaveLength(0);
 });
 
 test("the pickup answers at the seat and lets the opening run behind it", async () => {
@@ -2713,7 +2745,7 @@ test("a pickup of a record that left the queue's wait starts nothing", async () 
 	expect(runner.commands()).toEqual([]);
 	// A record that is gone answers the same way.
 	expect(await harness.operations.pickup(uid("x"))).toEqual({ kind: "moved" });
-	expect(fixture.state.consultations("all")).toHaveLength(1);
+	expect(fixture.state.consultationRecord.consultations("all")).toHaveLength(1);
 });
 
 test("a pickup whose type left the config fails the record", async () => {
@@ -2747,7 +2779,11 @@ test("a queued Replacement links to its record and waits in the queue", () => {
 	const runner = new LifecycleRunner();
 	const harness = makeHarness(fixture, runner);
 	const failed = seed(fixture.state, fixture, uid("f"));
-	fixture.state.setConsultationState(failed.id, "failed", "the Agent went missing");
+	fixture.state.consultationRecord.setConsultationState(
+		failed.id,
+		"failed",
+		"the Agent went missing",
+	);
 
 	const replacement = harness.operations.replace(failed, {
 		typeName: "grill",
@@ -2761,7 +2797,7 @@ test("a queued Replacement links to its record and waits in the queue", () => {
 		}),
 	);
 	if (replacement === undefined) throw new Error("the queued replacement created no record");
-	const queue = fixture.state.workQueue();
+	const queue = fixture.state.workQueue.items();
 	expect(queue).toHaveLength(1);
 	expect(queue[0]).toEqual(
 		expect.objectContaining({ kind: "consultation", consultationId: replacement.id }),
@@ -2783,7 +2819,7 @@ describe("Consultation operations: the Work queue pickup (ADR 0034, issue #90)",
 		expect(consultation).toEqual(
 			expect.objectContaining({ state: "queued", paneId: null, workspaceId: null }),
 		);
-		const queue = fixture.state.workQueue();
+		const queue = fixture.state.workQueue.items();
 		expect(queue).toHaveLength(1);
 		if (consultation === undefined) throw new Error("the queued submit created no record");
 		expect(queue[0]).toEqual(
@@ -2872,7 +2908,7 @@ describe("Consultation operations: the Work queue pickup (ADR 0034, issue #90)",
 		// record waits, and the loop's own removal covers the answers that
 		// claimed nothing.
 		expect(runner.commands()).toContain(`herdr agent prompt ${agentOf(id)} /re-grill review auth`);
-		expect(fixture.state.workQueue()).toHaveLength(0);
+		expect(fixture.state.workQueue.items()).toHaveLength(0);
 	});
 
 	test("the pickup answers at the seat and lets the opening run behind it", async () => {
@@ -2985,7 +3021,7 @@ describe("Consultation operations: the Work queue pickup (ADR 0034, issue #90)",
 		expect(runner.commands()).toEqual([]);
 		// A record that is gone answers the same way.
 		expect(await harness.operations.pickup(uid("x"))).toEqual({ kind: "moved" });
-		expect(fixture.state.consultations("all")).toHaveLength(1);
+		expect(fixture.state.consultationRecord.consultations("all")).toHaveLength(1);
 	});
 
 	test("a pickup whose type left the config fails the record", async () => {
@@ -3019,7 +3055,11 @@ describe("Consultation operations: the Work queue pickup (ADR 0034, issue #90)",
 		const runner = new LifecycleRunner();
 		const harness = makeHarness(fixture, runner);
 		const failed = seed(fixture.state, fixture, uid("f"));
-		fixture.state.setConsultationState(failed.id, "failed", "the Agent went missing");
+		fixture.state.consultationRecord.setConsultationState(
+			failed.id,
+			"failed",
+			"the Agent went missing",
+		);
 
 		const replacement = harness.operations.replace(failed, {
 			typeName: "grill",
@@ -3033,7 +3073,7 @@ describe("Consultation operations: the Work queue pickup (ADR 0034, issue #90)",
 			}),
 		);
 		if (replacement === undefined) throw new Error("the queued replacement created no record");
-		const queue = fixture.state.workQueue();
+		const queue = fixture.state.workQueue.items();
 		expect(queue).toHaveLength(1);
 		expect(queue[0]).toEqual(
 			expect.objectContaining({ kind: "consultation", consultationId: replacement.id }),

@@ -436,7 +436,7 @@ export function ignoreRefusal(obligation: TicketObligation | null): string | nul
  * the row's facts in its one read per cycle, so no walk pays a second
  * projection read for the widened gate. The Restart walk reads the in-flight
  * rows, which carry no facts of their own, so it asks
- * `FactoryState.automaticStartBlockedTickets` once per cycle: the same columns
+ * `TicketWorkCycleAggregate.automaticStartBlockedTickets` once per cycle: the same columns
  * on the same rows, read by identity instead of by row.
  */
 export function automaticStartBlocked(ticket: TicketIgnoreFacts): boolean {

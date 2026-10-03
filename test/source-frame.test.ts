@@ -22,7 +22,8 @@ import { join } from "node:path";
 
 import type { FactoryConfig } from "../src/config.ts";
 import type { FetchedTicket } from "../src/domain/ticket.ts";
-import { type FactoryState, openFactoryState } from "../src/state.ts";
+import type { FactoryState } from "../src/state.ts";
+import { openFactoryState } from "../src/state.ts";
 import type { FetchOutcome, TicketSource } from "../src/ticket-source.ts";
 import {
 	awaitFrame,
@@ -50,7 +51,7 @@ function freshState(): FactoryState {
 	const state = openFactoryState(join(dir, "state.sqlite"));
 	// The frames assert the unsplit list: a fresh file opens grouped by
 	// repository (ADR 0066), so the fixture holds the flat axis.
-	state.setGroupingAxis("tickets", "none");
+	state.grouping.setGroupingAxis("tickets", "none");
 	return state;
 }
 
@@ -271,20 +272,23 @@ describe("source-driven frames", () => {
 	test("a removed source keeps its handed-off ticket, drops its open ticket, and pins no warning", async () => {
 		const state = freshState();
 		const definition = { name: "issues", kind: "github-issues" };
-		state.initializeSources([definition]);
-		state.applyFetch(
+		state.sourceFact.initializeSources([definition]);
+		state.sourceFact.applyFetch(
 			definition,
 			success([
 				ticket(),
 				ticket("github:github.com:I_9", { externalKey: "#9", title: "Another open item" }),
 			]),
 		);
-		const [first] = state.visibleTickets(BASE_CONFIG.workflowStates, BASE_CONFIG.defaultTaskType);
-		const claim = state.claimHandoff(first.identity, HANDOFF_CHOICE, "open");
+		const [first] = state.ticketWorkCycle.visibleTickets(
+			BASE_CONFIG.workflowStates,
+			BASE_CONFIG.defaultTaskType,
+		);
+		const claim = state.handoff.claimHandoff(first.identity, HANDOFF_CHOICE, "open");
 		if (!claim.ok) throw new Error(claim.reason);
-		state.settleHandoff(claim.claim.attemptId, true);
+		state.handoff.settleHandoff(claim.claim.attemptId, true);
 		// The config no longer lists the source: a restart marks it removed.
-		state.initializeSources([]);
+		state.sourceFact.initializeSources([]);
 
 		await withApp(
 			async (setup) => {
@@ -416,7 +420,7 @@ describe("source-driven frames", () => {
 			externalKey: "#8",
 			title: "Fallback ticket",
 		});
-		state.initializeSources([issues, pulls]);
+		state.sourceFact.initializeSources([issues, pulls]);
 
 		const issuesSource = new FakeSource("issues", "github-issues", success([fallbackTicket]));
 		const pullsSource = new FakeSource("pulls", "github-pull-requests", success([reviewTicket]));
@@ -482,16 +486,16 @@ describe("source-driven frames", () => {
 			sourceKind: "github-pull-request",
 			externalUpdatedAt: "2026-08-31T09:00:00Z",
 		});
-		state.initializeSources([issues, pulls]);
-		state.applyFetch(issues, success([runTicket, offTicket, openTicket, awaitTicket]));
-		state.applyFetch(pulls, success([pendingTicket]));
-		const off = state
+		state.sourceFact.initializeSources([issues, pulls]);
+		state.sourceFact.applyFetch(issues, success([runTicket, offTicket, openTicket, awaitTicket]));
+		state.sourceFact.applyFetch(pulls, success([pendingTicket]));
+		const off = state.ticketWorkCycle
 			.visibleTickets(BASE_CONFIG.workflowStates, "implement")
 			.find((t) => t.title === "Off ticket");
 		if (off === undefined) throw new Error("Off ticket is missing");
-		const claim = state.claimHandoff(off.identity, HANDOFF_CHOICE, "open");
+		const claim = state.handoff.claimHandoff(off.identity, HANDOFF_CHOICE, "open");
 		if (!claim.ok) throw new Error(claim.reason);
-		state.settleHandoff(claim.claim.attemptId, true);
+		state.handoff.settleHandoff(claim.claim.attemptId, true);
 
 		// These transitions are recorded the way the observation loop records
 		// them: state row updates.
@@ -631,10 +635,13 @@ describe("source-driven frames", () => {
 	test("a ticket with an unresolved handoff attempt refuses a new handoff and asks for recovery", async () => {
 		const state = freshState();
 		const definition = { name: "issues", kind: "github-issues" };
-		state.initializeSources([definition]);
-		state.applyFetch(definition, success([ticket()]));
-		const [first] = state.visibleTickets(BASE_CONFIG.workflowStates, BASE_CONFIG.defaultTaskType);
-		const claim = state.claimHandoff(first.identity, HANDOFF_CHOICE, "open");
+		state.sourceFact.initializeSources([definition]);
+		state.sourceFact.applyFetch(definition, success([ticket()]));
+		const [first] = state.ticketWorkCycle.visibleTickets(
+			BASE_CONFIG.workflowStates,
+			BASE_CONFIG.defaultTaskType,
+		);
+		const claim = state.handoff.claimHandoff(first.identity, HANDOFF_CHOICE, "open");
 		if (!claim.ok) throw new Error(claim.reason);
 		// The attempt stays unresolved: the process died before settling it.
 

@@ -150,7 +150,7 @@ describe("the route close moves no view", () => {
 	test("the Decision screen's route closes the settled workspace and sends no focus", async () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
 		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
-		state.setGroupingAxis("tickets", "none");
+		state.grouping.setGroupingAxis("tickets", "none");
 		const outcome = success([issueTicket(FIRST)]);
 		seedAwaitingTurn(state, outcome, FIRST, reviewRoute, "worktree");
 		const runner = routeRunner();
@@ -198,19 +198,19 @@ describe("the route close moves no view", () => {
 		// frees, so the view must be untouchable at that moment.
 		const state = openFactoryState(join(home, "state.sqlite"), () => Date.now() - 600_000);
 		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
-		state.setGroupingAxis("tickets", "none");
+		state.grouping.setGroupingAxis("tickets", "none");
 		const outcome = success(twoTickets());
 		seedAwaitingTurn(state, outcome, FIRST, reviewRoute, "worktree");
 		// The second ticket holds the factory's one seat with a live agent. Its
 		// handoff is aged past the Startup grace, so the seat is the agent's own:
 		// when herdr stops listing it, the seat frees and the queue drains.
-		const held = state.claimHandoff(
+		const held = state.handoff.claimHandoff(
 			SECOND,
 			{ ...baseChoice("pi", "live-worktree", "implement") },
 			"open",
 		);
 		if (!held.ok) throw new Error(held.reason);
-		state.settleHandoff(held.claim.attemptId, true, undefined, {
+		state.handoff.settleHandoff(held.claim.attemptId, true, undefined, {
 			paneId: "pane-9",
 			tabId: "tab-9",
 			workspaceId: "ws-9",
@@ -288,7 +288,7 @@ describe("the Close cleanup moves no view", () => {
 	test("the Close action on a worktree cycle removes the checkout and sends no focus", async () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
 		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
-		state.setGroupingAxis("tickets", "none");
+		state.grouping.setGroupingAxis("tickets", "none");
 		const outcome = success([issueTicket(FIRST)]);
 		seedInFlightTurn(state, outcome, FIRST, "worktree");
 		const runner = new FakeRunner();
@@ -329,7 +329,7 @@ describe("the Close cleanup moves no view", () => {
 		// ticket's facts.
 		const state = openFactoryState(join(home, "state.sqlite"));
 		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
-		state.setGroupingAxis("tickets", "none");
+		state.grouping.setGroupingAxis("tickets", "none");
 		const outcome = success([issueTicket(FIRST)]);
 		seedInFlightTurn(state, outcome, FIRST, "worktree");
 		const runner = new FakeRunner();
@@ -349,7 +349,7 @@ describe("the Close cleanup moves no view", () => {
 						f.includes("Close: Add a webhook retry policy"),
 					);
 					await press(setup, "return", "the close to run", (f) => f.includes("[open]"));
-					expect(state.ticketState(FIRST)).toBe("open");
+					expect(state.ticketWorkCycle.ticketState(FIRST)).toBe("open");
 					// The refusal line names the failure and herdr's own reason, so
 					// the read takes the wide terminal the status row truncates to.
 					const frame = await awaitFrame(
@@ -359,7 +359,7 @@ describe("the Close cleanup moves no view", () => {
 					);
 					expect(messageRowOf(frame)).toContain("dirty_worktree_requires_force");
 					expect(frame).toContain("leftover");
-					expect(state.leftoverEnvironment(FIRST)).toEqual(
+					expect(state.handoff.leftoverEnvironment(FIRST)).toEqual(
 						expect.objectContaining({
 							workspaceId: "ws-1",
 							reason: expect.stringContaining("dirty_worktree_requires_force"),
@@ -384,7 +384,7 @@ describe("Goto stays the one focus move", () => {
 		// confirmation still names the workspace it moved the view into.
 		const state = openFactoryState(join(home, "state.sqlite"));
 		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
-		state.setGroupingAxis("tickets", "none");
+		state.grouping.setGroupingAxis("tickets", "none");
 		const outcome = success([issueTicket(FIRST)]);
 		seedAwaitingTurn(state, outcome, FIRST, null, "worktree");
 		const runner = new FakeRunner();
@@ -441,7 +441,7 @@ describe("the environment a handoff builds stays out of the view", () => {
 		// (#3766, v0.9.1), so the flag is a contract, not noise (story 13).
 		const state = openFactoryState(join(home, "state.sqlite"));
 		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
-		state.setGroupingAxis("tickets", "none");
+		state.grouping.setGroupingAxis("tickets", "none");
 		const outcome = success([issueTicket(SECOND)]);
 		const runner = new FakeRunner();
 		runner.set("git", ["-C", checkout, "rev-parse", "--git-dir"], { stdout: ".git\n" });

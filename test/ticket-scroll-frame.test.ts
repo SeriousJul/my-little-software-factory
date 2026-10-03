@@ -520,7 +520,7 @@ describe("native Ticket detail viewport", () => {
 		const reference: string[] = [];
 		const state = openFactoryState(":memory:");
 		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
-		state.setGroupingAxis("tickets", "none");
+		state.grouping.setGroupingAxis("tickets", "none");
 		const source = new FakeSource("issues", "github-issues", sourceSuccess([longTicket]));
 		try {
 			await withApp(
@@ -588,7 +588,7 @@ describe("native Ticket detail viewport", () => {
 	test("reserves a terminal row for the live mode line through a resize", async () => {
 		const state = openFactoryState(":memory:");
 		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
-		state.setGroupingAxis("tickets", "none");
+		state.grouping.setGroupingAxis("tickets", "none");
 		try {
 			await withApp(
 				async (setup) => {
@@ -642,7 +642,7 @@ describe("native Ticket detail viewport", () => {
 
 		const state = openFactoryState(":memory:");
 		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
-		state.setGroupingAxis("tickets", "none");
+		state.grouping.setGroupingAxis("tickets", "none");
 		const longDescription = `${SAMPLE_TICKETS[0].description} ${SAMPLE_TICKETS[0].description}`;
 		const source = new FakeSource(
 			"issues",
