@@ -154,6 +154,22 @@ export function sameTypeHoldHolds(
 	);
 }
 
+/**
+ * The Handoff limit (CONTEXT.md, ADR 0005): the per-ticket cap on started
+ * handoffs and plane action attempts that stops the close-and-rehandoff loop.
+ *
+ * The rule takes its facts as data (issue #202 review): the count the aggregate
+ * read, and the cap the config resolved. Every gate that holds an automatic add
+ * at the cap - the missing-Agent pass, the auto-advance route, the top-up walk,
+ * the restart pass, the force-dispatch pass, the Work queue's Ticket line -
+ * asks this rule instead of restating the comparison, so the cap means one
+ * thing in one place. A manual handoff or a manual plane action confirm is not
+ * this rule's to hold (ADR 0068).
+ */
+export function handoffLimitReached(handoffCount: number, limit: number): boolean {
+	return handoffCount >= limit;
+}
+
 /** The latest handoff of a ticket, including the herdr handles it started. */
 export interface Handoff {
 	agentType: string;

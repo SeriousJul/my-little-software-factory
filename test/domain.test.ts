@@ -16,6 +16,7 @@ import {
 	canTransition,
 	dispatchPauseHolds,
 	flagWithholdsRow,
+	handoffLimitReached,
 	sameTypeHoldHolds,
 	TICKET_STATES,
 	ticketListRank,
@@ -221,5 +222,26 @@ describe("the Same-type hold (ADR 0026)", () => {
 		expect(sameTypeHoldHolds(cycleEnd("aborted", "implement"), "implement")).toBe(false);
 		expect(sameTypeHoldHolds(cycleEnd(null, "implement"), "implement")).toBe(false);
 		expect(sameTypeHoldHolds(null, "implement")).toBe(false);
+	});
+});
+
+describe("the Handoff limit (ADR 0005)", () => {
+	test("a count under the cap leaves the gate open", () => {
+		expect(handoffLimitReached(0, 10)).toBe(false);
+		expect(handoffLimitReached(9, 10)).toBe(false);
+	});
+
+	test("the count that reaches the cap closes the gate", () => {
+		// The cap counts started handoffs, so the ticket that has started exactly
+		// the cap's worth gets no further automatic add.
+		expect(handoffLimitReached(10, 10)).toBe(true);
+		expect(handoffLimitReached(11, 10)).toBe(true);
+	});
+
+	test("the cap is the fact the config resolved, not a number the rule holds", () => {
+		// The same count answers differently at different caps: the rule reads the
+		// cap it is handed, so a config of one closes at one.
+		expect(handoffLimitReached(1, 1)).toBe(true);
+		expect(handoffLimitReached(1, 2)).toBe(false);
 	});
 });

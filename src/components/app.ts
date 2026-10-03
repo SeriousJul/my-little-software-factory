@@ -51,6 +51,7 @@ import {
 	flagWithholdsRow,
 	HANDOFF_ENVIRONMENT_KINDS,
 	type Handoff,
+	handoffLimitReached,
 	holdsDecision,
 	nextTicketListFilter,
 	type Ticket,
@@ -5098,7 +5099,8 @@ export function App({
 									height: ticketsBoxRows,
 									emptyMessage,
 									markerOf,
-									limitReached: (ticket) => ticket.handoffCount >= config.maxHandoffsPerTicket,
+									limitReached: (ticket) =>
+										handoffLimitReached(ticket.handoffCount, config.maxHandoffsPerTicket),
 									starting: startingWindow,
 									queueWait,
 									active: mainSurfaceActive,

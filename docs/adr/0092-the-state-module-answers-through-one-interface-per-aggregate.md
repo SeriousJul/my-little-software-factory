@@ -43,8 +43,15 @@ that interface draws is the same boundary the running code enforces.**
   keywords in either case - a statement written `from handoffs` reaches
   `handoffs` - and it lets a name the statement binds for itself (a CTE, a
   subquery alias) through, because that name is not a table the statement
-  reaches. The text check reads the module's string literals, not its comments,
-  so a sentence about another aggregate's table is not a reach.
+  reaches. A name may carry its schema: `FROM main.tickets` is read as `tickets`,
+  the table the statement reaches, so the refusal names the table and not the
+  schema that holds it (issue #202 review). A CTE named after a real table is the
+  matcher's one blind spot - every name in `WITH handoffs AS (SELECT * FROM
+  handoffs)` is a name the statement bound for itself - and SQLite closes the one
+  useful form of it, because a CTE that reads the table its own name shadows is a
+  `circular reference`; `test/state/seam.test.ts` states which guard holds. The
+  text check reads the module's string literals, not its comments, so a sentence
+  about another aggregate's table is not a reach.
 - **No caller outside the module imports its plumbing.** `store.ts`, `graph.ts`,
   `tables.ts`, `schema.ts`, `batch.ts`, and `json.ts` are importable only inside
   `src/state/`. `openStore` beside `scopeOf` builds a handle over any table the
@@ -52,18 +59,28 @@ that interface draws is the same boundary the running code enforces.**
   the store itself. `src/state.ts` is the module's open seam and is not a caller;
   a caller that needs `StateError` takes it from `src/state.ts`, which re-exports
   it.
-- **The file holds one write transaction at a time, and an operation an
-  aggregate publishes to the module never opens one.** The plane's atomic facts
-  span aggregates - a handoff that records a start and takes a Work queue item
-  is one fact - so the aggregate that owns the fact opens the transaction and
-  calls the other aggregates' operations inside it. That holds only while every
-  operation an aggregate publishes to the module runs inside the caller's
-  transaction and never opens its own. `store.ts` refuses a nested open and names
-  the aggregate that asked, and the boundary check refuses a published operation,
-  or the private method it can call, whose body opens a transaction, so the
-  invariant is stated and enforced rather than assumed. An aggregate that needs an atomic fact of its own opens the
+- **The file holds one write transaction at a time, and an operation another
+  aggregate calls never opens one.** The plane's atomic facts span aggregates - a
+  handoff that records a start and takes a Work queue item is one fact - so the
+  aggregate that owns the fact opens the transaction and calls the other
+  aggregates' operations inside it. That holds only while every operation the far
+  side of a cross-aggregate call reaches runs inside the caller's transaction and
+  never opens its own. `store.ts` refuses a nested open and names the aggregate
+  that asked, and the boundary check reads the call graph and refuses a
+  transaction inside any method on that far side - the interface method another
+  aggregate calls, the published operation, or the private method it can call
+  (issue #202 review). An aggregate that needs an atomic fact of its own opens the
   transaction at its own interface method, which is the caller's entry point and
-  not a published operation.
+  not a published operation. A write whose rollback fails as well is reported as
+  both failures with the write's own error kept as the cause, so the rollback
+  never hides what the write did (issue #202 review).
+- **A caller holds an aggregate under the aggregate's own name.** The boundary
+  rules read `.<aggregate>.<method>`; a caller that binds `state.sourceFact` to a
+  local name, a field, or a renamed destructuring reaches the aggregate through
+  the alias, and the rules read nothing. The check refuses the binding - a
+  declaration, an assignment, a destructuring rename, or a member typed as an
+  aggregate interface - and refuses a distinctive aggregate method called on any
+  other receiver, so the alias has nowhere to be written (issue #202 review).
 - **A cross-aggregate call is a narrow named operation, never a raw-row helper.**
   The Handoff aggregate answers `ticketsWithUnresolvedAttempts`, the source fact
   aggregate answers `ticketsWithMutedSource`, and the Ticket work cycle aggregate
@@ -121,8 +138,9 @@ that interface draws is the same boundary the running code enforces.**
 ## Consequences
 
 - A caller names the aggregate it reads. `test/state-architecture.test.ts` fails
-  a file that reaches `state.handoff.…` without naming `HandoffAggregate`, and a
-  file that reaches the whole composition instead of an aggregate interface.
+  a file that reaches `state.handoff.…` without naming `HandoffAggregate`, a file
+  that reaches the whole composition instead of an aggregate interface, and a file
+  that holds an aggregate under another name.
   `src/startup.ts` is the one caller allowed to hold the composition, because it
   is the open path.
 - Adding a fact means deciding its owner before writing a query, and adding a
@@ -143,7 +161,16 @@ that interface draws is the same boundary the running code enforces.**
   the Same-type hold are `dispatchPauseHolds` and `sameTypeHoldHolds` in
   `src/domain/ticket.ts`, over the completion trace order and the cycle end; the
   Ticket work cycle aggregate reads the two facts and calls the rule, so the
-  derived fact stays derived.
+  derived fact stays derived. The Handoff limit gate is
+  `handoffLimitReached(handoffCount, limit)` in the same file, where seven sites
+  - six in the observation loop and one on the Handoff panel - each restated
+  `ticket.handoffCount >= config.maxHandoffsPerTicket`; `test/top-up.test.ts`
+  refuses a surface that writes the comparison again (issue #202 review). The auto
+  top-up's gates are `topUpCycleOpen`, `refiredRoute`, `refiredPositionStands`,
+  `restartCandidateHolds`, `openTicketRowGate`, and `openTicketWaitsHold` in
+  `src/domain/top-up.ts`. The observation loop keeps the walk, because the add the
+  walk makes is a call to the dispatch, and keeps the reads, so a row an earlier
+  wait holds out costs no statement; the rules answer (issue #202 review).
 - The state tests split with the modules: `test/state/` holds one file per
   aggregate, files for the behavior that spans two of them (`ignore.test.ts`,
   `mute.test.ts`, `route.test.ts`, `turnCause.test.ts`), `seam.test.ts` for the

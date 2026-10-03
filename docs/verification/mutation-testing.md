@@ -99,13 +99,27 @@ for the question this answers.
   in the `src/**/*.ts` scope, so a future whole-`src` run will instrument them,
   but no mutant has been run against them: this branch was gated by `bun run
   test`, `bun run typecheck`, and `bun run lint` only. The suite it gated is
-  2,565 tests over 113 files, against the 1,919 tests over 79 files this record's
+  2,586 tests over 114 files, against the 1,919 tests over 79 files this record's
   rates were measured on, so every time and mutant-count number above is out of
-  date for the current tree. Four of the branch's new guards - the import door,
-  the table matcher, the one-transaction rule, and the batched seat-name read -
-  were each confirmed by hand: the guard was removed, the named test went red,
-  and the guard was put back. That is not a campaign, and it covers no other
-  module. `test/state-architecture.test.ts` was added to
+  date for the current tree. Nine of the branch's guards were each confirmed by
+  hand - the guard was mutated, the named test went red, and the guard was put
+  back: the import door, the table matcher, the matcher's reading of a
+  schema-qualified name (`FROM main.tickets` read as `tickets`), the
+  one-transaction rule in each of its shapes (a published internal method, an
+  interface method another aggregate calls, and the private method behind them),
+  the two alias rules (an aggregate bound to another name, and a distinctive
+  method called on another receiver), the batched seat-name read, the Handoff
+  limit rule's no-restatement check, and the failed rollback's kept cause. That
+  is not a campaign, and it covers no other module.
+- **One wiring probe survived, and it names a coverage gap.** Dropping the
+  restart walk's read of the queue's own item - `queueItemStands: false` in
+  `src/observation.ts` - leaves the whole suite green. The cycle gate already
+  holds the walk out whenever the queue holds an item, so no test reaches that
+  fact through the walk: `test/top-up.test.ts` covers the fact on the rule, and
+  nothing covers the wiring. The three sibling probes - the episode mark, the
+  ignore flag, and the source re-verify - each turned at least one named test
+  red. `src/domain/top-up.ts`, the top-up's new gate rules, is in the same scope
+  and has had no mutant run against it either. `test/state-architecture.test.ts` was added to
   `ignorePatterns` for the reason the shared control test is there - it reads the
   state modules as text - and that exclusion is a reading of the existing rule,
   not a measured run: no campaign has been executed on this branch to confirm the

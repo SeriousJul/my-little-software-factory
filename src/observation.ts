@@ -71,9 +71,18 @@ import type { FactoryConfig, TransitionOutcome } from "./config.ts";
 import {
 	automaticStartBlocked,
 	type Completion,
+	handoffLimitReached,
 	isHeldCompletion,
 	type Ticket,
 } from "./domain/ticket.ts";
+import {
+	openTicketRowGate,
+	openTicketWaitsHold,
+	refiredPositionStands,
+	refiredRoute,
+	restartCandidateHolds,
+	topUpCycleOpen,
+} from "./domain/top-up.ts";
 import { baseChoice, resolveHandoffChoice } from "./handoff.ts";
 import {
 	type DispatchResult,
@@ -1260,7 +1269,7 @@ export class ObservationCoordinator {
 		const config = this.config();
 		if (this.now() - Date.parse(ticket.startedAt) < this.startupGraceMs) return false;
 		const handoffCount = this.state.handoff.handoffCount(ticket.ticketIdentity);
-		if (handoffCount >= config.maxHandoffsPerTicket) {
+		if (handoffLimitReached(handoffCount, config.maxHandoffsPerTicket)) {
 			const applied = this.state.ticketWorkCycle.applyCompletionDecision({
 				ticketIdentity: ticket.ticketIdentity,
 				handoffId: ticket.handoffAttemptId,
@@ -1374,7 +1383,7 @@ export class ObservationCoordinator {
 		if (outcome.writeFailure !== "") return "park";
 		const autoAdvance = outcome.autoAdvance === true;
 		if (autoAdvance && outcome.positionTaskType !== null) {
-			if (handoffCount >= this.config().maxHandoffsPerTicket) return "close";
+			if (handoffLimitReached(handoffCount, this.config().maxHandoffsPerTicket)) return "close";
 			return "route";
 		}
 		// No advance, or an advance into a parking state: the machine offers no
@@ -1414,18 +1423,19 @@ export class ObservationCoordinator {
 	 * reconsiders every cycle the queue is empty.
 	 */
 	private async topUpQueue(agents: readonly HerdrAgent[]): Promise<boolean> {
-		if (!this.mode()) return false;
-		// The queue pause (ADR 0052): the brake holds the automatic adds; the
-		// queue and the pickup stand still behind it.
-		if (this.state.workQueue.queuePaused()) return false;
-		// The Dispatch pause (ADR 0016): a held failed turn stops new
-		// automatic work from starting until it is decided or a turn
-		// completes. It is checked once per cycle, so a held turn does not
-		// spam the status line.
-		if (this.state.ticketWorkCycle.dispatchPauseActive()) return false;
-		// One item per cycle, and only into an empty queue: the queue's depth
-		// is the top-up's pace.
-		if (this.state.workQueue.items().length > 0) return false;
+		// The cycle gate (ADR 0051, ADR 0052, ADR 0016): the mode, the brake, the
+		// Dispatch pause - checked once per cycle so a held turn does not spam the
+		// status line - and the queue's depth, which is the top-up's pace. The rule
+		// decides, and the walk reads no candidate when it answers no.
+		if (
+			!topUpCycleOpen({
+				modeOn: this.mode(),
+				queuePaused: this.state.workQueue.queuePaused(),
+				dispatchPauseActive: this.state.ticketWorkCycle.dispatchPauseActive(),
+				queueDepth: this.state.workQueue.items().length,
+			})
+		)
+			return false;
 		const config = this.config();
 		// The pile, in one read for the walk that holds an identity and no row
 		// (ADR 0060, widened by ADR 0070): the in-flight tickets the Restart walk
@@ -1519,29 +1529,16 @@ export class ObservationCoordinator {
 		for (const ticket of tickets) {
 			if (ticket.state !== "open") continue;
 			const completion = this.state.ticketWorkCycle.lastCompletion(ticket.identity);
-			const outcome = completion?.transition ?? null;
-			if (
-				outcome === null ||
-				// The marker carries the shape: `refired` is set only on an
-				// outcome that fired and derived a position, so a re-fired trace
-				// with no position or no fire is not a state the plane writes.
-				// These three tests hold the record against a damaged trace, and
-				// no walk reaches them on its own; the marker, the fire, the
-				// advance, and the write are the four this suite measures.
-				outcome.refired !== true ||
-				outcome.fired !== true ||
-				outcome.autoAdvance !== true ||
-				outcome.writeFailure !== "" ||
-				outcome.positionTaskType === null ||
-				outcome.positionTicketIdentity === null
-			)
-				continue;
+			// The re-fired skip's answer (ADR 0042): the marker, the fire, the
+			// advance, and the write, and the position the route starts on.
+			const route = refiredRoute(completion?.transition ?? null);
+			if (!route.stands) continue;
 			// The projection before the list rule (ADR 0042): the rule withholds
 			// a covered ticket's row from the operator's list, and the add must
 			// still reach the position it starts on.
 			const position = this.state.ticketWorkCycle
 				.projectedTickets(config.workflowStates, config.defaultTaskType)
-				.find((candidate) => candidate.identity === outcome.positionTicketIdentity);
+				.find((candidate) => candidate.identity === route.positionTicketIdentity);
 			if (position === undefined) continue;
 			// The ignore gate (ADR 0060): this walk reads the projection before the
 			// list rule on purpose, because ADR 0042's route must reach its position
@@ -1549,26 +1546,22 @@ export class ObservationCoordinator {
 			// withheld while a live one is listed. Either way the one gate predicate on
 			// the row the walk holds is what answers.
 			if (automaticStartBlocked(position)) continue;
-			if (position.suggestedTaskType !== outcome.positionTaskType) continue;
-			// One test of the position's standing. The projection builds
-			// `actionable` from the open state, so it holds every position that
-			// left the list - in flight, awaiting, or gone - as well as one the
-			// source cannot read, and an open ticket with an unresolved attempt is
-			// not actionable either. The queue's one-item-per-ticket rule is this
-			// cycle's own gate above: the walk adds only into an empty queue
-			// (ADR 0051).
-			if (!position.actionable) continue;
-			// The Same-type hold over the refresh lag: a position whose newest
-			// closed cycle completed the task it still suggests by stale labels
-			// has already run this route's task, and the add waits for the moved
-			// labels to land instead of starting it twice.
+			if (position.suggestedTaskType !== route.taskType) continue;
+			// The position's standing, the Same-type hold over the refresh lag, and
+			// the loop guard the handoff's add ran (ADR 0026, ADR 0005): the rule
+			// answers for the position the skip routes to.
 			if (
-				this.state.ticketWorkCycle.sameTypeHoldActive(position.identity, position.suggestedTaskType)
+				!refiredPositionStands({
+					actionable: position.actionable,
+					sameTypeHoldActive: this.state.ticketWorkCycle.sameTypeHoldActive(
+						position.identity,
+						position.suggestedTaskType,
+					),
+					handoffCount: position.handoffCount,
+					handoffLimit: config.maxHandoffsPerTicket,
+				})
 			)
 				continue;
-			// The loop guard the handoff's add ran: the merge-to-needs-work loop
-			// stops at the cap, and the ask takes no seat when it runs.
-			if (position.handoffCount >= config.maxHandoffsPerTicket) continue;
 			// The merged position the skip routes to (ADR 0068): the plane
 			// action's merge stands for the handoff the skip would start, and
 			// the standing, hold, and limit guards the handoff's add ran ran on
@@ -1581,7 +1574,7 @@ export class ObservationCoordinator {
 						automatic: true,
 						ticketIdentity: position.identity,
 						routeFromIdentity: ticket.identity,
-						taskType: outcome.positionTaskType,
+						taskType: route.taskType,
 					},
 					`work queue top-up: merging ${this.ticketName(position.identity)}`,
 					`work queue top-up could not merge ${this.ticketName(position.identity)}`,
@@ -1595,13 +1588,13 @@ export class ObservationCoordinator {
 					automatic: true,
 					ticketIdentity: position.identity,
 					routeFromIdentity: ticket.identity,
-					choice: resolveHandoffChoice(config, outcome.positionTaskType, {
-						...(outcome.agent === undefined ? {} : { agent: outcome.agent }),
-						...(outcome.environment === undefined ? {} : { environment: outcome.environment }),
+					choice: resolveHandoffChoice(config, route.taskType, {
+						...(route.agent === undefined ? {} : { agent: route.agent }),
+						...(route.environment === undefined ? {} : { environment: route.environment }),
 					}),
 					previousMessage: this.promptPreviousMessage(completion),
 				},
-				`work queue top-up: routing ${this.ticketName(ticket.identity)} to ${outcome.positionTaskType}`,
+				`work queue top-up: routing ${this.ticketName(ticket.identity)} to ${route.taskType}`,
 				`work queue top-up could not route ${this.ticketName(ticket.identity)}`,
 			);
 			if (added !== "refused") return true;
@@ -1624,19 +1617,27 @@ export class ObservationCoordinator {
 			// judged out, and it would keep starting it for as long as the flag
 			// stood. The identity is all this walk holds, so it asks the cycle's
 			// own read of the pile, the ticket's flag or its source's.
-			if (blocked.has(ticket.ticketIdentity)) continue;
-			if (this.now() - Date.parse(ticket.startedAt) < this.startupGraceMs) continue;
-			if (ticket.paneId === null) continue;
-			// The one missing-Agent rule, read the way the in-flight pass reads it.
+			// The restart candidate's gate (ADR 0051, ADR 0060, ADR 0070): the flag,
+			// the startup grace, the missing Agent, the loop guard, and the marks
+			// that already stand for this ticket. The rule decides.
 			if (
-				ownAgentInPane(byPane.get(ticket.paneId), restartNames.get(ticket.ticketIdentity) ?? "") !==
-				null
+				!restartCandidateHolds({
+					ignoreBlocked: blocked.has(ticket.ticketIdentity),
+					pastStartupGrace: this.now() - Date.parse(ticket.startedAt) >= this.startupGraceMs,
+					hasPane: ticket.paneId !== null,
+					// The one missing-Agent rule, read the way the in-flight pass reads it.
+					agentMissing:
+						ownAgentInPane(
+							ticket.paneId === null ? undefined : byPane.get(ticket.paneId),
+							restartNames.get(ticket.ticketIdentity) ?? "",
+						) === null,
+					handoffCount: this.state.handoff.handoffCount(ticket.ticketIdentity),
+					handoffLimit: config.maxHandoffsPerTicket,
+					queueItemStands: this.state.workQueue.hasWorkItem(ticket.ticketIdentity),
+					restartMarkStands: this.restarted.has(ticket.ticketIdentity),
+				})
 			)
 				continue;
-			if (this.state.handoff.handoffCount(ticket.ticketIdentity) >= config.maxHandoffsPerTicket)
-				continue;
-			if (this.state.workQueue.hasWorkItem(ticket.ticketIdentity)) continue;
-			if (this.restarted.has(ticket.ticketIdentity)) continue;
 			this.restarted.add(ticket.ticketIdentity);
 			const previous = this.state.ticketWorkCycle.lastCompletion(ticket.ticketIdentity);
 			const added = await this.topUpAsk(
@@ -1712,41 +1713,48 @@ export class ObservationCoordinator {
 	 * walk on to the next candidate, the way the walk did before the split.
 	 */
 	private async topUpOpenTicket(config: FactoryConfig, ticket: Ticket): Promise<boolean> {
-		if (ticket.state !== "open" || !ticket.actionable) return false;
-		// The ignore gate (ADR 0060), on this walk's own read: the `all` view holds
-		// every row the covered rule leaves, so a resting ignored row stands here
-		// and this test is the one that holds it out. The gate is the flag on the
-		// row, never the filter that drew it.
-		if (automaticStartBlocked(ticket)) return false;
-		if (ticket.handoffCount >= config.maxHandoffsPerTicket) return false;
-		// The ticket's last cycle may have ended on a source change the agent
-		// made (a merged pull request, a closed issue). Its membership still
-		// reads active and healthy on the stale fetch, so the add waits for
-		// the sources to re-read the ticket: a merged item leaves the list
-		// and the ticket does not dispatch, an open one re-verifies and
-		// dispatches. The gate holds the ticket, not a parallel slot.
-		if (!this.state.ticketWorkCycle.sourceReverifiedSinceCycleEnd(ticket.identity)) return false;
-		// The Same-type hold (ADR 0026): the ticket's newest closed cycle
-		// completed a turn of the type the ticket now suggests. That work
-		// finished; the item still lists it because no new signal landed.
-		// A parking state offers no task: the plane does nothing on the
-		// ticket, and an external label write is the only engine that moves
-		// it (ADR 0027).
-		if (ticket.suggestedTaskType === null) return false;
-		if (this.state.ticketWorkCycle.sameTypeHoldActive(ticket.identity, ticket.suggestedTaskType))
+		// The row gate (ADR 0051, ADR 0060, ADR 0027): the row's own facts, the
+		// ignore flag read on this walk's own view - the `all` view holds every row
+		// the covered rule leaves, so a resting ignored row stands here and the flag
+		// on the row is what holds it out, never the filter that drew it - and the
+		// task the row offers. A parking state offers none: the plane does nothing on
+		// the ticket, and an external label write is the only engine that moves it.
+		const row = openTicketRowGate({
+			state: ticket.state,
+			actionable: ticket.actionable,
+			ignoreBlocked: automaticStartBlocked(ticket),
+			handoffCount: ticket.handoffCount,
+			handoffLimit: config.maxHandoffsPerTicket,
+			taskType: ticket.suggestedTaskType,
+		});
+		if (!row.stands) return false;
+		const taskType = row.taskType;
+		// The waits the row's own facts cannot answer (ADR 0051, ADR 0026): the
+		// ticket's last cycle may have ended on a source change the agent made, so
+		// the sources must have re-read it; and the Same-type hold must be clear.
+		// The gate holds the ticket, not a parallel slot.
+		if (
+			!openTicketWaitsHold({
+				sourceReverified: this.state.ticketWorkCycle.sourceReverifiedSinceCycleEnd(ticket.identity),
+				sameTypeHoldActive: this.state.ticketWorkCycle.sameTypeHoldActive(
+					ticket.identity,
+					taskType,
+				),
+				queueItemStands: this.state.workQueue.hasWorkItem(ticket.identity),
+			})
+		)
 			return false;
-		if (this.state.workQueue.hasWorkItem(ticket.identity)) return false;
 		// The ready position the list offers (ADR 0068): the task type
 		// resolves on the plane action, so the top-up asks for the merge,
 		// not for a handoff. The guards the handoff's add ran still ran
 		// above, and the item takes no seat when it runs.
-		if (isPlaneActionTaskType(config.taskTypes, ticket.suggestedTaskType)) {
+		if (isPlaneActionTaskType(config.taskTypes, taskType)) {
 			const added = await this.topUpPlaneActionAsk(
 				{
 					origin: "open",
 					automatic: true,
 					ticketIdentity: ticket.identity,
-					taskType: ticket.suggestedTaskType,
+					taskType,
 				},
 				`work queue top-up: merging ${this.ticketName(ticket.identity)}`,
 				`work queue top-up could not merge ${this.ticketName(ticket.identity)}`,
@@ -1756,7 +1764,7 @@ export class ObservationCoordinator {
 		// The configured settings of the ticket's task profile (ADR 0009): an
 		// unattended handoff starts with the same resolution chain a manual
 		// one sees in the panel, and the fit check guards what it starts with.
-		const choice = resolveHandoffChoice(config, ticket.suggestedTaskType);
+		const choice = resolveHandoffChoice(config, taskType);
 		const added = await this.topUpAsk(
 			{
 				origin: "open",
@@ -1924,7 +1932,7 @@ export class ObservationCoordinator {
 			this.state.ticketWorkCycle.sameTypeHoldActive(position.identity, position.suggestedTaskType)
 		)
 			return null;
-		if (position.handoffCount >= config.maxHandoffsPerTicket) return null;
+		if (handoffLimitReached(position.handoffCount, config.maxHandoffsPerTicket)) return null;
 		return position;
 	}
 }

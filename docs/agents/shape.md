@@ -45,7 +45,9 @@ description: The module map of the source tree, for agents working in this repos
 	reads the settled agent's last message, marks blocked and missing agents,
 	reclaims an agent that outlived its work cycle, settles turns into
 	`awaiting`, applies the automatic completion rule, and dispatches open
-	tickets in auto-handoff mode.
+	tickets in auto-handoff mode. The auto top-up's gate rules live in
+	`src/domain/top-up.ts`; the loop keeps the walk and the reads and asks each
+	rule in the order the waits are stated.
 - `src/state.ts`: the open seam of the state module (issue #202). It opens the
 	SQLite file, composes the nine aggregates into the graph, and closes the
 	file. It holds no rule of its own.
@@ -67,8 +69,8 @@ description: The module map of the source tree, for agents working in this repos
 	`batch.ts`, `json.ts` - is importable only inside `src/state/`, and the check
 	refuses a caller that imports it. The file holds one write transaction at a
 	time: the aggregate that owns an atomic fact opens it and calls the other
-	aggregates inside it, and an operation an aggregate publishes to the module
-	never opens one.
+	aggregates inside it, and an operation the far side of a cross-aggregate call
+	reaches never opens one.
 - `src/workflow.ts`: the workflow machine's transition (ADR 0027). A completed
 	turn fires the task type's transition once: the plane writes the label facts
 	on the ticket and its fixing pull request, and the machine converges every
@@ -101,7 +103,11 @@ description: The module map of the source tree, for agents working in this repos
 - `src/domain/`: the Ticket type and its state machine, the agent-side facts
 	every Agent type shares (the standard Thinking level set), the handoff
 	environment kinds, and the Grouping axis that splits a section's list into
-	Groups (ADR 0058).
+	Groups (ADR 0058). `ticket.ts` holds the gate rules the plane states in words:
+	the Dispatch pause, the Same-type hold, and the Handoff limit
+	(`handoffLimitReached`). `top-up.ts` holds the auto top-up's gates (ADR 0051,
+	ADR 0088): the cycle gate, the re-fired skip's route and its position, the
+	restart candidate, and the open ticket's row gate and its waits.
 - `src/handoff.ts`: the handoff. Resolves the repository, runs the pinned
 	command sequence through herdr, starts the agent, and sends the prompt.
 - `src/consultation.ts`: the Consultation rules that need no terminal. The input
