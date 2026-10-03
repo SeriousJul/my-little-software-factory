@@ -15,7 +15,7 @@
  */
 
 import type { TransitionOutcome } from "../config.ts";
-import { type EnvironmentKind, handoffLimitReached } from "./ticket.ts";
+import { type EnvironmentKind, handoffLimitReached, type TicketState } from "./ticket.ts";
 
 /** The facts the top-up asks before it looks for a candidate at all (ADR 0051). */
 export interface TopUpCycleFacts {
@@ -137,7 +137,8 @@ export function restartCandidateHolds(facts: RestartCandidateFacts): boolean {
 
 /** The facts the open-ticket add reads off the row it holds (ADR 0051, ADR 0060, ADR 0027). */
 export interface OpenTicketRowFacts {
-	state: string;
+	/** The row's own state on the walk's view. */
+	state: TicketState;
 	actionable: boolean;
 	ignoreBlocked: boolean;
 	handoffCount: number;
