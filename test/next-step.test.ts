@@ -8,16 +8,11 @@
  * that only notices the route is missing.
  */
 import { describe, expect, test } from "bun:test";
-
+import { NEXT_STEP_GATE_LINES } from "../src/components/shared/presentation.ts";
 import type { FactoryConfig, TransitionOutcome } from "../src/config.ts";
 import type { FetchedTicket } from "../src/domain/ticket.ts";
 import { type FactoryState, openFactoryState } from "../src/state.ts";
-import {
-	deriveNextStep,
-	NEXT_STEP_GATE_LINES,
-	NEXT_STEP_GATES,
-	type NextStepGate,
-} from "../src/workflow.ts";
+import { deriveNextStep, NEXT_STEP_GATES, type NextStepGate } from "../src/workflow.ts";
 import { BASE_CONFIG } from "./base-config.ts";
 
 const source = { name: "issues", kind: "github-issues" };
@@ -283,6 +278,17 @@ describe("deriveNextStep (ADR 0092)", () => {
 		}
 		expect(state.handoffCount(position)).toBe(config.maxHandoffsPerTicket);
 		expect(stepFor(state)?.gate).toBe("handoff-limit");
+		state.close();
+	});
+
+	test("a projection the caller hands down empty answers no step", () => {
+		// The precondition in the derivation's own words: `tickets` is the
+		// projection the caller already read, never a fresh array. A caller that
+		// passes none gets this gate on every step, so the machine routes nothing
+		// and the Decision screen says why. The test is the loud half of the
+		// precondition: a reader that hands down `[]` meets this line.
+		const state = stateWith();
+		expect(deriveNextStep(config, state, fired(), [])?.gate).toBe("position-offers-no-task");
 		state.close();
 	});
 

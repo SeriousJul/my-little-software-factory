@@ -575,6 +575,12 @@ the operator, and the Decision screen states the hold; a step the Handoff limit
 holds closes the cycle. Manual mode runs no top-up, so a settled turn rests in
 `awaiting` for the operator's Decision screen in every case.
 
+Every gate reads the position the step stands on, not the ticket the settled turn
+ran on. When a route crosses from an issue to its linked pull request, the pull
+request's standing, hold, and limit are the ones that hold the step, and a
+position at its Handoff limit closes the settled turn: the top-up's fresh walk
+then re-dispatches the settled ticket as open work (ADR 0092).
+
 The `pull-request-open` and `pull-request-closed` judgments read the linked
 pull request's own record straight from the source at fire time, live the
 moment a merge lands, and they fall back to the pull request's state on the

@@ -1603,15 +1603,16 @@ describe("limits config keys", () => {
 			},
 			"score-threshold: must be a number between 0 and 100",
 		);
-		// The deleted key (ADR 0092) is read by nothing: a config that still
-		// carries it fails startup as the unknown key it is, on the transition
-		// and on a branch.
+		// The deleted key (ADR 0092) is read by nothing, and the load names what
+		// replaced it: both shipped configs carried it on a transition, so an
+		// upgrade reads the retirement, not a bare unknown key. The branch form
+		// answers the same way.
 		expectConfigError(
 			{
 				...withTransition(),
 				"task-types": { implement: { template: "x", transition: { "auto-advance": true } } },
 			},
-			'unknown key "auto-advance"',
+			'"auto-advance" is retired (ADR 0092): Auto-handoff mode decides the route from the settled turn\'s Next step',
 		);
 		expectConfigError(
 			{
@@ -1625,7 +1626,7 @@ describe("limits config keys", () => {
 					},
 				},
 			},
-			'unknown key "auto-advance"',
+			'"auto-advance" is retired (ADR 0092)',
 		);
 		expectConfigError(
 			{

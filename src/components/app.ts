@@ -130,12 +130,7 @@ import {
 	type TurnEndCause,
 	type TurnLogEntry,
 } from "../turn-log.ts";
-import {
-	deriveNextStep,
-	fireTransition,
-	NEXT_STEP_GATE_LINES,
-	refireRecordedSkips,
-} from "../workflow.ts";
+import { deriveNextStep, fireTransition, refireRecordedSkips } from "../workflow.ts";
 import { ActionBar } from "./action-bar.ts";
 import { ActionPanel } from "./action-panel.ts";
 import { renderAnsiScreen } from "./ansi-screen.ts";
@@ -192,6 +187,7 @@ import {
 	ticketRows,
 	toggleFold,
 } from "./shared/grouping.ts";
+import { NEXT_STEP_GATE_LINES } from "./shared/presentation.ts";
 import { padToWidth, truncateToWidth, widthOf } from "./text.ts";
 import { inStartingWindow, paint } from "./theme.ts";
 import { ticketCloseDialog } from "./ticket-close.ts";

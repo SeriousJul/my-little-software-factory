@@ -1169,6 +1169,45 @@ describe("the transition fire of a completed settle", () => {
 		state.close();
 	});
 
+	test("a settle whose label write failed states the failure on the Message line", async () => {
+		// The fault is loud where the operator looks (ADR 0092): the write failed,
+		// so the machine routes nothing from labels it did not write, and the
+		// reason lands on the Message line beside the settle that produced it.
+		const { state, coordinator, advance, statuses, intents } = rig({
+			autoOn: true,
+			agents: [agent("pane-implement", "done", "/tmp/session.jsonl")],
+			turnLogs: async () => ({
+				kind: "ended",
+				turnEnd: {
+					log: [{ kind: "text", text: "Done. The pull request is open." }],
+					cause: "completed",
+					detail: "",
+				},
+			}),
+			fireCompleted: async () =>
+				outcome({
+					ticketWrite: null,
+					writeFailure: "gh pr edit #12 failed: HTTP 403",
+					positionTaskType: "implement",
+					positionTicketIdentity: "github:github.com:I_5",
+				}),
+		});
+		handOut(state, "github:github.com:I_5");
+		advance(30_001);
+		await coordinator.tick();
+		expect(statuses).toContainEqual(
+			expect.objectContaining({
+				kind: "warning",
+				text: "ticket github:github.com:I_5 settled, and its label write failed: gh pr edit #12 failed: HTTP 403",
+			}),
+		);
+		// The turn parks: no route stands, and the ticket keeps its undecided
+		// trace for the operator's Decision screen.
+		expect(intents).toHaveLength(0);
+		expect(state.lastCompletion("github:github.com:I_5")?.decision).toBeNull();
+		state.close();
+	});
+
 	test("a held settle fires no transition: the plane writes no label on a turn that did not complete", async () => {
 		let fired = 0;
 		const { state, coordinator, advance } = rig({

@@ -1323,7 +1323,13 @@ export async function writeMembershipLabels(
  * machine will not take without saying why.
  */
 
-/** Why a Next step stands while the machine will not run it (ADR 0092). */
+/**
+ * Why a Next step stands while the machine will not run it (ADR 0092).
+ *
+ * The keys live here, beside the gates the derivation reads. The sentences a
+ * screen states them in live in the shared presentation module, beside the
+ * labels and the state words.
+ */
 export const NEXT_STEP_GATES = [
 	"position-offers-no-task",
 	"position-not-actionable",
@@ -1332,14 +1338,6 @@ export const NEXT_STEP_GATES = [
 ] as const;
 
 export type NextStepGate = (typeof NEXT_STEP_GATES)[number];
-
-/** The gate as the Decision screen states it. */
-export const NEXT_STEP_GATE_LINES: Readonly<Record<NextStepGate, string>> = {
-	"position-offers-no-task": "the position no longer offers the task",
-	"position-not-actionable": "the position is not actionable",
-	"same-type-hold": "the Same-type hold stands on the position",
-	"handoff-limit": "the position is at the handoff limit",
-};
 
 /** The channel a Next step runs on: the task type's own form (ADR 0068). */
 export const NEXT_STEP_KINDS = ["handoff", "plane-action"] as const;
@@ -1372,7 +1370,10 @@ export interface NextStep {
  * `tickets` is the projection the caller already read, before the list rule
  * (ADR 0042): the position can be a ticket the operator's list withholds. Every
  * caller holds a read of its own - the observation cycle reads its pile once and
- * hands it down - so the derivation never pays for a scan by accident.
+ * hands it down - so the derivation never pays for a scan by accident. It is a
+ * precondition, not an option: an empty array names no position, so every step
+ * answers `position-offers-no-task` and the machine routes nothing. A caller
+ * that has no projection to hand down reads one first.
  */
 export function deriveNextStep(
 	config: FactoryConfig,

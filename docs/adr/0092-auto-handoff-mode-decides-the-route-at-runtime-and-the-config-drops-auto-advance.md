@@ -26,9 +26,14 @@ its review position on the linked pull request, and closed, because the flag was
 
 **Delete `auto-advance`.** The key leaves the parser, both shipped configs, the two
 config docs table rows, the Notes paragraph, and the docs' example config. The parser
-rejects unknown keys in a transition table and in a branch table, so a config that
-still carries the key fails at load with that error. There is no ignore path and no
-migration shim.
+rejects unknown keys in a transition table and in a branch table, and it names this
+key as what it is: a config that still carries it fails at load with `"auto-advance"
+is retired (ADR 0092): Auto-handoff mode decides the route from the settled turn's
+Next step`, the way the renamed `no-auto-decision` names its new key. Both shipped
+configs wrote the key on three transitions, so an install that upgrades from either
+reads the retirement and not a bare unknown key. There is no ignore path and no
+migration shim, and the one-shot config migration does not take the key: a file that
+carries it stops at load instead of migrating.
 
 **The mode decides at runtime.** A settled turn has a Next step when its Transition
 fired, wrote its label facts, and its new position offers a task. In Auto-handoff mode
@@ -63,8 +68,13 @@ considered holding the top-up's restart, open pull request, and fresh walks whil
 a ticket waits, and rejected it: a failed label write never heals by itself, the only
 exits are the operator's close or route, so the hold idles the factory until the
 operator returns. The operator chose an unoptimized workflow over a stopped chain. The
-fault becomes loud instead: a marker on the ticket, a Message line, and the Decision
-screen's fact line.
+fault becomes loud instead, on the two surfaces the plane already has for a settled
+turn: the Message line states it on the settle whose write failed and on the re-fire
+of a recorded skip, and the Decision screen states it as its fact line beside the
+facts the fire did write. No marker stands on the ticket's row: the row's markers are
+the poll-time Agent facts, `blocked` and `missing`, and a failed write is a fact of
+the fire, not of the Agent. The parked row already reads as a decision owed, and the
+Decision screen is where the operator reads the reason.
 
 **A start line names how it started.** The dispatch's start line carries the dispatch
 mode, the item's origin, and the seat count against the Parallel limit at the moment of
@@ -86,8 +96,18 @@ from an operator's hand.
 - The review and rework loop runs unattended up to the Handoff limit, 20 in the dev
   config. The limit is the brake, and the operator accepts it: the models the factory
   runs on may need the extra turns.
+- The Handoff limit gate reads the position the step stands on, not the ticket the
+  settled turn ran on. For the common case - the position is the settled ticket -
+  nothing changes. For a cross-ticket route the rule flips: the old flag read the
+  settled ticket's own count and rested the turn in `awaiting`, and the new rule reads
+  the position's count, closes the settled turn, and the top-up's fresh walk then
+  re-dispatches the settled ticket as open work. A settled ticket whose own routes
+  land on a position at its limit can therefore spend its own handoff budget on those
+  turns. The operator accepts this: the two continuation walks read one rule, and the
+  limit that holds a step is the limit of the ticket the step starts on.
 - The `agent` and `environment` pins on a Transition and its branches stay. They name
   the Agent and Environment the derived route runs on, and they are the route's
   settings, not the deleted flag.
-- A config that carries either deleted key fails at load. Both shipped configs, the
-  docs example, and the docs tables change in the same move.
+- A config that carries either deleted key fails at load, each with the error that
+  names what replaced it. Both shipped configs, the docs example, and the docs tables
+  change in the same move.

@@ -20,6 +20,7 @@
 
 import { currentThemeResolution } from "../../theme-source.ts";
 import type { TurnEndCause } from "../../turn-log.ts";
+import type { NextStepGate } from "../../workflow.ts";
 import type { Theme } from "./theme.ts";
 
 /**
@@ -152,6 +153,22 @@ export const STATE_WORDS = {
 	unavailable: "(unavailable)",
 	notSaved: "not saved across restarts",
 } as const;
+
+/**
+ * The Next step gate as the Decision screen states it (ADR 0092).
+ *
+ * The gate keys stay in the module that owns the machine, beside the gates it
+ * reads; the sentences the operator reads live here, beside the labels and the
+ * state words. The screen names the hold beside the row its operator can
+ * confirm, so a route the machine will not take on its own never stands as a
+ * key that would take it.
+ */
+export const NEXT_STEP_GATE_LINES: Readonly<Record<NextStepGate, string>> = {
+	"position-offers-no-task": "the position no longer offers the task",
+	"position-not-actionable": "the position is not actionable",
+	"same-type-hold": "the Same-type hold stands on the position",
+	"handoff-limit": "the position is at the handoff limit",
+};
 
 /**
  * The line that states why a settled turn ended: `no-turn` states that the

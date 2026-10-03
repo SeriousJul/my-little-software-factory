@@ -1248,6 +1248,26 @@ function validateStateMatch(raw: Record<string, unknown>, where: string): StateM
 	};
 }
 
+/** The deleted machine-era flag (ADR 0092), named so both its tables answer alike. */
+const RETIRED_AUTO_ADVANCE_KEY = "auto-advance";
+
+/**
+ * The retired `auto-advance` key as the load states it (ADR 0092).
+ *
+ * The key is not an unknown key to a config that carried it: both shipped
+ * configs wrote it on three transitions, so an install that upgrades from one
+ * hits this line and nothing else. It names what replaced the flag - the Next
+ * step Auto-handoff mode reads - the way the renamed `no-auto-decision` error
+ * names its new key. The key still reaches no reader, and there is no ignore
+ * path.
+ */
+function retiredAutoAdvance(where: string): string {
+	return (
+		`config: ${where}: "auto-advance" is retired (ADR 0092): Auto-handoff mode decides ` +
+		"the route from the settled turn's Next step"
+	);
+}
+
 /**
  * The Transition that hangs off one task type (ADR 0027). Facts are lists
  * of workflow label names; a score judgment is only legal with a threshold;
@@ -1261,7 +1281,8 @@ function validateTransition(
 ): WorkflowTransition | undefined {
 	if (value === undefined) return undefined;
 	if (!isRecord(value)) throw new ConfigError(`config: ${where}.transition: must be a table`);
-	for (const key of Object.keys(value))
+	for (const key of Object.keys(value)) {
+		if (key === RETIRED_AUTO_ADVANCE_KEY) throw new ConfigError(retiredAutoAdvance(where));
 		if (
 			![
 				"ticket-facts",
@@ -1273,6 +1294,7 @@ function validateTransition(
 			].includes(key)
 		)
 			throw new ConfigError(`config: ${where}.transition: unknown key "${key}"`);
+	}
 	const facts = (key: "ticket-facts" | "pull-request-facts") => {
 		const rawFacts = value[key];
 		if (rawFacts === undefined) return [] as string[];
@@ -1323,13 +1345,16 @@ function validateTransition(
 						const branchWhere = `${where}.transition.branches[${index}]`;
 						if (!isRecord(rawBranch))
 							throw new ConfigError(`config: ${branchWhere}: must be a table`);
-						for (const key of Object.keys(rawBranch))
+						for (const key of Object.keys(rawBranch)) {
+							if (key === RETIRED_AUTO_ADVANCE_KEY)
+								throw new ConfigError(retiredAutoAdvance(branchWhere));
 							if (
 								!["when", "ticket-facts", "pull-request-facts", "agent", "environment"].includes(
 									key,
 								)
 							)
 								throw new ConfigError(`config: ${branchWhere}: unknown key "${key}"`);
+						}
 						let when: TransitionJudgment | undefined;
 						if (rawBranch.when !== undefined) {
 							const judgment = stringField(rawBranch, "when", branchWhere);

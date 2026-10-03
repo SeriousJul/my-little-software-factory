@@ -353,6 +353,10 @@ export function stripAnsi(text: string): string {
  *   Decision screen states the gate beside the row the operator can confirm.
  * - `park`: the ticket rests in awaiting for the operator: a transition whose
  *   label write failed, a held turn, or a turn of an Operator-decides type.
+ *
+ * `hold` and `park` move the ticket the same way, and no reader acts on the
+ * difference: the words name which fact stopped the machine, so a test can say
+ * whether a gate held the step or an operator's brake parked the turn.
  */
 export type AwaitingDecision = "close" | "route" | "hold" | "park";
 
@@ -1206,6 +1210,18 @@ export class ObservationCoordinator {
 			);
 		} else {
 			this.onStatus("info", `agent settled a turn on ticket ${ticket.ticketIdentity}`);
+		}
+		// The failed label write is loud on the line the operator already watches
+		// (ADR 0092): the turn parks for the operator, the machine routes nothing
+		// from labels it did not write, and the reason stands on the cycle that
+		// produced it. The Decision screen states the same fact as its fact line,
+		// and the re-fire of a recorded skip states it again when the write fails
+		// a second time.
+		if (transition !== null && transition.writeFailure !== "") {
+			this.onStatus(
+				"warning",
+				`ticket ${ticket.ticketIdentity} settled, and its label write failed: ${transition.writeFailure}`,
+			);
 		}
 		return true;
 	}
