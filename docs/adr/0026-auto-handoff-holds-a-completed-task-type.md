@@ -3,6 +3,7 @@
 Status: accepted
 Date: 2026-09-15
 Superseded in part by ADR 0051: the hold gates the auto top-up's adds instead of the direct open dispatch. Its rule is unchanged.
+Superseded in part by ADR 0093: what the hold reads. Its rule, its purpose, and its brake on the open auto-handoff are unchanged.
 
 ## Context
 

@@ -1,6 +1,6 @@
 /**
  * The state module's boundary: one interface per aggregate (issue #202,
- * ADR 0092).
+ * ADR 0095).
  *
  * Ten declared dependency rules hold it:
  *
@@ -42,7 +42,7 @@
  *    The rule reads the whole far side of a `graph().<aggregate>.<method>` call
  *    - the method's own body, every method it calls on itself through `this.`,
  *    and every method it reaches in a third aggregate through `graph()`
- *    (issue #202, ADR 0092).
+ *    (issue #202, ADR 0095).
  * 8. An operation an aggregate publishes to the module never opens a
  *    transaction, read the same transitive way.
  * 9. Every method an aggregate's interface declares is reached - by a caller in
@@ -53,7 +53,7 @@
  * 10. The auto top-up's walk takes a fact it cannot read off the row it holds as
  *    one read for the list it walks. A per-candidate read of the state module
  *    costs a statement for every Ticket the walk passes, which is the read-shape
- *    line ADR 0092 holds (issue #202 review).
+ *    line ADR 0095 holds (issue #202 review).
  *
  * The open path is the one exception to the first two rules: it opens the file,
  * takes the lease, and closes it, so it holds the whole composition.
@@ -454,7 +454,7 @@ function namingOffenders(file: string, source: string, shapes: AggregateShape[])
 			// method, so the two names may have whitespace between them.
 			const through = countMatches(
 				source,
-				new RegExp(`\\.${shape.key}\\s*\\.\\s*${method}\\s*\\(`, "gu"),
+				new RegExp(`\\b${shape.key}\\s*\\.\\s*${method}\\s*\\(`, "gu"),
 			);
 			if (bare === through) continue;
 			reads.add(`${file} reads ${shape.key}`);
@@ -682,7 +682,7 @@ function transactionOffenders(
 			}
 		}
 		// A published operation, and the private method it can call, both run
-		// inside whoever opened the write (issue #202, ADR 0092).
+		// inside whoever opened the write (issue #202, ADR 0095).
 		for (const method of [...shape.internalMethods, ...shape.privateMethods]) {
 			publishedCovered.add(`${shape.key}.${method}`);
 			for (const reached of methodReaches(shape.key, method, read)) {
@@ -1015,16 +1015,16 @@ describe("the state module's boundary", () => {
 		// it and call another aggregate's operations inside it. A published
 		// operation that opened one of its own would fail inside the caller's -
 		// `store.ts` refuses the nested open, and this rule keeps it from being
-		// written at all (issue #202, ADR 0092). The rule follows the published
+		// written at all (issue #202, ADR 0095). The rule follows the published
 		// method's own calls, so a transaction two calls away is read too.
 		const facts = transactionOffenders();
 		expect(facts.publishedCovered.size).toBeGreaterThan(10);
 		expect(facts.publishedOffenders).toEqual([]);
 	});
 
-	test("the auto top-up's walk takes its per-Ticket facts from one read of the list", () => {
+	test("the auto top-up's walks take their per-Ticket facts from one read of the list", () => {
 		// The top-up's gate reads the Ticket's start count and the queue's own item for
-		// the candidate it holds. Asked of the state module per candidate, each costs a
+		// the candidate it holds. Asked of the aggregate per candidate, each costs a
 		// statement for every Ticket the walk passes (issue #202 review): the restart
 		// walk holds no row of its own, so its facts arrive as one read for the whole
 		// in-flight list - the Handoff aggregate's `handoffCountsFor` and the Work
@@ -1032,7 +1032,7 @@ describe("the state module's boundary", () => {
 		// The open-ticket walk reads the start count off the row it holds.
 		const source = codeOnly(readFileSync("src/observation.ts", "utf8"));
 		const offenders: string[] = [];
-		for (const member of ["topUpQueue", "topUpOpenTicket"]) {
+		for (const member of ["topUpFreshWork", "topUpOpenTicket", "askContinuations"]) {
 			const body = memberChunk(source, member);
 			if (body === null) {
 				offenders.push(`src/observation.ts holds no ${member} for the rule to read`);
@@ -1041,16 +1041,16 @@ describe("the state module's boundary", () => {
 			for (const perTicket of [/\.handoff\.handoffCount\s*\(/u, /\.workQueue\.hasWorkItem\s*\(/u]) {
 				if (!perTicket.test(body)) continue;
 				offenders.push(
-					`src/observation.ts ${member} asks the state module for one Ticket's fact instead of the list's`,
+					`src/observation.ts ${member} asks the aggregate for one Ticket's fact instead of the list's`,
 				);
 			}
 		}
-		// The restart walk names the two batched answers it takes in their place.
-		const walk = memberChunk(source, "topUpQueue") ?? "";
+		// The fresh-work walk names the two batched answers it takes in their place.
+		const walk = memberChunk(source, "topUpFreshWork") ?? "";
 		if (!/\.handoff\.handoffCountsFor\s*\(/u.test(walk))
-			offenders.push("src/observation.ts topUpQueue names no handoffCountsFor read");
+			offenders.push("src/observation.ts topUpFreshWork names no handoffCountsFor read");
 		if (!/\.workQueue\.items\s*\(/u.test(walk))
-			offenders.push("src/observation.ts topUpQueue names no workQueue items read");
+			offenders.push("src/observation.ts topUpFreshWork names no workQueue items read");
 		expect(offenders).toEqual([]);
 	});
 
@@ -1262,7 +1262,7 @@ describe("the state module's boundary", () => {
 
 /**
  * The interface methods with no caller in the plane today, recorded beside the
- * reason (issue #202 review, ADR 0092). Each one answers a fact or runs an
+ * reason (issue #202 review, ADR 0095). Each one answers a fact or runs an
  * operation the aggregate owns, and the aggregate's tests cross it, so it stays
  * on the interface as the aggregate's answer surface. A method no caller and no
  * test reaches fails the rule above instead of standing here.

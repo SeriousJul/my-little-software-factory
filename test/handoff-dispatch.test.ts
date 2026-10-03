@@ -495,7 +495,6 @@ function routeOutcome(positionIdentity: string): TransitionOutcome {
 		reason: "",
 		ticketFacts: [],
 		pullRequestFacts: [],
-		autoAdvance: true,
 		ticketWrite: null,
 		pullRequestWrite: null,
 		pullRequestIdentity: null,

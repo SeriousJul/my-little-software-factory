@@ -45,7 +45,6 @@ describe("the routed Ticket's wait (ADR 0072)", () => {
 			reason: "",
 			ticketFacts: [],
 			pullRequestFacts: [],
-			autoAdvance: true,
 			ticketWrite: null,
 			pullRequestWrite: null,
 			pullRequestIdentity: null,

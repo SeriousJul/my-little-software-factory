@@ -27,11 +27,8 @@ import {
 import type { Logger } from "./logging.ts";
 import { overParallelLimit } from "./parallel.ts";
 import { evaluatePlacement } from "./placement.ts";
-import {
-	isPlaneActionTaskType,
-	planeActionSettingOf,
-	runMergePullRequest,
-} from "./plane-actions.ts";
+import { isPlaneActionTaskType, planeActionSettingOf } from "./plane-action-registry.ts";
+import { runMergePullRequest } from "./plane-actions.ts";
 import type { RepositoryMapping } from "./repo.ts";
 import { type CommandRunner, errorMessage } from "./runner.ts";
 import type { ConsultationRecordAggregate } from "./state/consultation-record.ts";

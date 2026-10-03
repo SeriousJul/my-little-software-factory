@@ -128,29 +128,30 @@ export function dispatchPauseHolds(
 }
 
 /**
- * The cycle end the Same-type hold reads: the cause that ended the ticket's
- * newest closed cycle, and the task type the turn that ended it ran.
+ * The turn the Same-type hold reads (ADR 0093): the cause that settled the
+ * ticket's newest turn, and the task type that turn ran. The turn stands in the
+ * cycle the ticket is in now, or in the closed cycle behind it.
  */
-export interface CycleEndFact {
+export interface HoldTurnFact {
 	cause: string | null;
 	taskType: string;
 }
 
 /**
- * The Same-type hold (ADR 0026): the ticket's newest closed cycle ended on a
- * `completed` turn of exactly the task type the ticket now suggests, so the
- * plane starts no repeat of work that already completed.
+ * The Same-type hold (ADR 0026, read as ADR 0093 states it): the ticket's
+ * newest turn settled `completed` on exactly the task type the ticket now
+ * suggests, so the plane starts no repeat of work that already completed.
  *
- * The rule takes the cycle end as data (issue #202). Which trace is the cycle
- * end is the aggregate's read; what a cycle end means for a suggested task
- * type is this rule.
+ * The rule takes the turn as data (issue #202). Which trace is the ticket's
+ * newest turn is the aggregate's read; what that turn means for a suggested
+ * task type is this rule.
  */
 export function sameTypeHoldHolds(
-	cycleEnd: CycleEndFact | null,
+	holdTurn: HoldTurnFact | null,
 	suggestedTaskType: string | null,
 ): boolean {
 	return (
-		cycleEnd !== null && cycleEnd.cause === "completed" && cycleEnd.taskType === suggestedTaskType
+		holdTurn !== null && holdTurn.cause === "completed" && holdTurn.taskType === suggestedTaskType
 	);
 }
 

@@ -59,7 +59,7 @@ export default {
 		// inflate the score it reports. It stays in `bun run test`, which reads the
 		// uninstrumented tree.
 		"test/shared-control-architecture.test.ts",
-		// The state architecture test (issue #202, ADR 0092) reads the nine
+		// The state architecture test (issue #202, ADR 0095) reads the nine
 		// aggregate modules and the composition as text: it counts the interface
 		// methods a module publishes, the tables each statement names, and the
 		// `key: new ` shapes the graph is built with. Instrumentation rewrites the

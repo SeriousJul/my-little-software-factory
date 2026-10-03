@@ -19,90 +19,60 @@
  * The rules decide; the walk decides nothing.
  */
 
-import type { TransitionOutcome } from "../config.ts";
-import { type EnvironmentKind, handoffLimitReached, type TicketState } from "./ticket.ts";
+import { handoffLimitReached, type TicketState } from "./ticket.ts";
 
-/** The facts the top-up asks before it looks for a candidate at all (ADR 0051). */
-export interface TopUpCycleFacts {
+/** The gates every automatic add reads (ADR 0051, ADR 0052, ADR 0016). */
+export interface AutomaticAddFacts {
 	/** Auto-handoff mode is on. */
 	modeOn: boolean;
 	/** The operator's queue pause stands (ADR 0052). */
 	queuePaused: boolean;
 	/** A held failed turn holds new automatic work (ADR 0016). */
 	dispatchPauseActive: boolean;
-	/** How many items the queue holds. The top-up adds into an empty queue only. */
+}
+
+/** The facts the fresh-work walk asks before it looks for a candidate at all. */
+export interface TopUpCycleFacts extends AutomaticAddFacts {
+	/** How many items the queue holds. The fresh-work add enters an empty queue. */
 	queueDepth: number;
 }
 
 /**
- * Whether this cycle may add at all. The mode is off, the brake is on, a held
- * turn stands undecided, or the queue already holds an item: in every one of
- * those the walk reads no candidate and adds nothing.
+ * Whether the cycle's standing gates hold every automatic add: the mode is off,
+ * the brake is on, or a held turn stands undecided. In every one of those the
+ * walk reads no candidate and adds nothing.
+ */
+export function automaticAddsHold(facts: AutomaticAddFacts): boolean {
+	return !facts.modeOn || facts.queuePaused || facts.dispatchPauseActive;
+}
+
+/**
+ * Whether the fresh-work add may enter: the cycle's gates, and a queue with no
+ * row in it (ADR 0051). The continuation add reads the same gates and its own
+ * queue rule instead, because ADR 0094 lets it enter ahead of a standing
+ * fresh-work row.
  */
 export function topUpCycleOpen(facts: TopUpCycleFacts): boolean {
-	return facts.modeOn && !facts.queuePaused && !facts.dispatchPauseActive && facts.queueDepth === 0;
+	return !automaticAddsHold(facts) && facts.queueDepth === 0;
+}
+
+/** One row the Work queue holds, as the continuation's gate reads it (ADR 0094). */
+export interface ContinuationRowFacts {
+	/** The row is the operator's own staging: a Consultation, or a hand the plane took. */
+	operatorStaged: boolean;
+	/** The row is a continuation the queue already holds. */
+	continuation: boolean;
 }
 
 /**
- * The re-fired skip's answer (ADR 0042): the settled turn is a re-fire the
- * top-up must route, together with the position it routes to, or it is not.
- * The marker carries the shape: `refired` is set only on an outcome that fired
- * and derived a position, so these tests hold the record against a damaged
- * trace, and no walk reaches them on its own. The position the answer names is
- * part of it so the walk never re-tests the marker's fields.
+ * Whether the queue holds a row the continuation add must not jump (ADR 0051,
+ * ADR 0094): the operator's staging always starts first, and one continuation
+ * per cycle is the queue's own pace. A standing fresh-work row is not one of
+ * them - the continuation outranks it, and ADR 0094 reads that rank across
+ * cycles instead of inside one top-up call.
  */
-export type RefiredRoute =
-	| {
-			stands: true;
-			taskType: string;
-			positionTicketIdentity: string;
-			/** The Agent and environment the settled turn ran with. */
-			agent: string | undefined;
-			environment: EnvironmentKind | undefined;
-	  }
-	| { stands: false };
-
-export function refiredRoute(outcome: TransitionOutcome | null): RefiredRoute {
-	if (
-		outcome === null ||
-		outcome.refired !== true ||
-		outcome.fired !== true ||
-		outcome.autoAdvance !== true ||
-		outcome.writeFailure !== "" ||
-		outcome.positionTaskType === null ||
-		outcome.positionTicketIdentity === null
-	)
-		return { stands: false };
-	return {
-		stands: true,
-		taskType: outcome.positionTaskType,
-		positionTicketIdentity: outcome.positionTicketIdentity,
-		agent: outcome.agent,
-		environment: outcome.environment,
-	};
-}
-
-/** The facts the re-fired skip's walk reads for the position it routes to. */
-export interface RefiredPositionFacts {
-	/** The projection's own standing: not in flight, not awaiting, not gone. */
-	actionable: boolean;
-	/** The position's newest closed cycle completed the task it still suggests. */
-	sameTypeHoldActive: boolean;
-	handoffCount: number;
-	handoffLimit: number;
-}
-
-/**
- * Whether the position the skip routes to still stands for the add: the
- * standing, the hold, and the loop guard the handoff's add ran (ADR 0042,
- * ADR 0026, ADR 0005).
- */
-export function refiredPositionStands(facts: RefiredPositionFacts): boolean {
-	return (
-		facts.actionable &&
-		!facts.sameTypeHoldActive &&
-		!handoffLimitReached(facts.handoffCount, facts.handoffLimit)
-	);
+export function continuationQueueHolds(rows: readonly ContinuationRowFacts[]): boolean {
+	return rows.some((row) => row.operatorStaged || row.continuation);
 }
 
 /** The facts the restart walk reads for one in-flight Ticket (ADR 0051, ADR 0060, ADR 0070). */

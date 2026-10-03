@@ -123,7 +123,7 @@ Three files stay out of the campaign on purpose:
   would kill mutants for the wrong reason and inflate the score. It stays in
   `bun run test`, which reads the uninstrumented tree.
 - `test/state-architecture.test.ts` does the same job for the state aggregates
-  (ADR 0092): it reads the nine aggregate modules, the composition, and the
+  (ADR 0095): it reads the nine aggregate modules, the composition, and the
   callers as text, and counts the interface methods, the tables each statement
   names, and the shapes the graph is built with. Instrumentation rewrites the
   method bodies and the query strings it reads, so it would kill every mutant in

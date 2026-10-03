@@ -5,7 +5,7 @@
  * The methods on `PlaneActionAggregate` are the aggregate's interface: what a
  * caller outside the module may reach. The other public methods are the narrow
  * operations this aggregate publishes to the module for another aggregate to
- * call (issue #202, ADR 0092). No caller outside the module reaches them, and
+ * call (issue #202, ADR 0095). No caller outside the module reaches them, and
  * the boundary check refuses one that does.
  */
 

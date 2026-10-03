@@ -1,4 +1,4 @@
-# ADR 0092: The state module answers through one interface per aggregate
+# ADR 0095: The state module answers through one interface per aggregate
 
 **Status:** accepted
 **Date:** 2026-10-03
@@ -136,9 +136,9 @@ that interface draws is the same boundary the running code enforces.**
   start counts, and the Work queue's `items` for the standing item - the same read
   the cycle gate already pays for the queue's depth, so the walk costs no statement
   for it. Asked per candidate these cost three statements for every in-flight
-  Ticket on every cycle the walk ran (issue #202 review). The check reads the two
-  walk members in `src/observation.ts` and refuses a per-candidate read of either
-  fact.
+  Ticket on every cycle the walk ran (issue #202 review). The check reads the three
+  walk members in `src/observation.ts` - `topUpFreshWork`, `topUpOpenTicket`, and
+  `askContinuations` - and refuses a per-candidate read of either fact.
 - **The Leftover environment fact stays with the Handoff aggregate.** Issue #202
   listed it under the Ticket work cycle. It lives on the `handoffs` row -
   `leftover_reason`, `leftover_at`, `leftover_cleared_at` - it is written when a
@@ -236,14 +236,14 @@ that interface draws is the same boundary the running code enforces.**
   `src/parallel.ts`, where the force-dispatch's three sites and the mode line's
   start-now each restated `limit > 0 && count >= limit`. The Dispatch pause and
   the Same-type hold are `dispatchPauseHolds` and `sameTypeHoldHolds` in
-  `src/domain/ticket.ts`, over the completion trace order and the cycle end; the
-  Ticket work cycle aggregate reads the two facts and calls the rule, so the
-  derived fact stays derived. The Handoff limit gate is
+  `src/domain/ticket.ts`, over the completion trace order and the ticket's newest
+  settled turn (ADR 0093); the Ticket work cycle aggregate reads the two facts and
+  calls the rule, so the derived fact stays derived. The Handoff limit gate is
   `handoffLimitReached(handoffCount, limit)` in the same file, where seven sites
   - six in the observation loop and one on the Handoff panel - each restated
   `ticket.handoffCount >= config.maxHandoffsPerTicket`; `test/top-up.test.ts`
   refuses a surface that writes the comparison again (issue #202 review). The auto
-  top-up's gates are `topUpCycleOpen`, `refiredRoute`, `refiredPositionStands`,
+  top-up's gates are `topUpCycleOpen`, `automaticAddsHold`, `continuationQueueHolds`,
   `restartCandidateHolds`, `openTicketRowGate`, and `openTicketWaitsHold` in
   `src/domain/top-up.ts`. The observation loop keeps the walk, because the add the
   walk makes is a call to the dispatch, and keeps the reads, so a row an earlier

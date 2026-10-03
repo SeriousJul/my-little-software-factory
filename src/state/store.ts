@@ -4,7 +4,7 @@
  *
  * The store is the only place that holds the raw database handle. An aggregate
  * never sees that handle: `scopeOf` hands it a statement handle bound to the
- * tables that aggregate owns (issue #202, ADR 0092), and the handle refuses a
+ * tables that aggregate owns (issue #202, ADR 0095), and the handle refuses a
  * statement that names a table outside its scope when the statement is
  * prepared. So the boundary the architecture check reads off the source text
  * is the same boundary the file enforces at runtime, and a statement built
@@ -16,7 +16,7 @@
  * inside it. That only works while the operations an aggregate publishes to the
  * module never open a transaction of their own: `transaction` refuses a nested
  * open and names the aggregate that asked, and the boundary check refuses a
- * published operation that opens one (issue #202, ADR 0092). A write whose
+ * published operation that opens one (issue #202, ADR 0095). A write whose
  * rollback fails as well is reported as both failures, with the write's own
  * error kept as the cause (issue #202 review).
  */

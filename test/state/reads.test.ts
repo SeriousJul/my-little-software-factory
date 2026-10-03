@@ -1,6 +1,6 @@
 /**
  * The reads the observation loop runs every cycle, measured by the statements
- * they prepare (issue #202, ADR 0092).
+ * they prepare (issue #202, ADR 0095).
  *
  * A split that reads one Ticket at a time shows up here as a count that grows
  * with the Ticket count. These counts are the guard: a read the loop runs on
@@ -133,7 +133,7 @@ describe("the state module's batched reads", () => {
 	test("the seat count's Agent names cost one read per chunk, not two per Ticket", () => {
 		// The Parallel limit count the mode line and every start gate run each
 		// cycle reads the in-flight Tickets and each Ticket's Agent name (issue
-		// #202, ADR 0092). The names arrive in the same batched shape as the rows.
+		// #202, ADR 0095). The names arrive in the same batched shape as the rows.
 		const small = fileWithTickets(5);
 		const large = fileWithTickets(300);
 		handOffAll(small, 5, (index) => `github:github.com:I_${index}`);

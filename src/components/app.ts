@@ -94,7 +94,7 @@ import {
 	isPlaneActionTaskType,
 	planeActionLabel,
 	planeActionSettingOf,
-} from "../plane-actions.ts";
+} from "../plane-action-registry.ts";
 import { closeCycleEndDraftPullRequest } from "../pull-request.ts";
 import { RefreshCoordinator } from "../refresh.ts";
 import type { RepositoryMapping } from "../repo.ts";
@@ -132,14 +132,19 @@ import type { WorkQueueAggregate, WorkQueueItem } from "../state/work-queue.ts";
 import { workQueueIdentityOf } from "../state/work-queue.ts";
 import { currentThemeResolution } from "../theme-source.ts";
 import type { TicketSource } from "../ticket-source.ts";
-import { GhAuthenticator } from "../ticket-source.ts";
+import { createTicketSource, GhAuthenticator } from "../ticket-source.ts";
 import {
 	readSessionExchange,
 	type SessionEntry,
 	type TurnEndCause,
 	type TurnLogEntry,
 } from "../turn-log.ts";
-import { fireTransition, refireRecordedSkips } from "../workflow.ts";
+import {
+	deriveNextStep,
+	fireTransition,
+	NEXT_STEP_GATE_LINES,
+	refireRecordedSkips,
+} from "../workflow.ts";
 import { ActionBar } from "./action-bar.ts";
 import { ActionPanel } from "./action-panel.ts";
 import { renderAnsiScreen } from "./ansi-screen.ts";
@@ -683,8 +688,7 @@ export function App({
 	// so a surface that takes it as an effect dependency re-runs on the facts it
 	// watches, not on every render.
 	const findTicket = useCallback(
-		(identity: string): Ticket | undefined =>
-			listViewsRef.current.projection.find((ticket) => ticket.identity === identity),
+		(identity: string): Ticket | undefined => listViewsRef.current.projection.rowFor(identity),
 		[],
 	);
 	// The row the list draws: the item's ticket by its title while the ticket
@@ -778,6 +782,11 @@ export function App({
 	// so the marker it re-checks reads the latest list through a ref.
 	const agentsRef = useRef<readonly HerdrAgent[] | null>(null);
 	agentsRef.current = agents;
+	// The observation loop, held in a ref the seat count reads (ADR 0021).
+	// The loop is the plane's only herdr reader, and its poll is the fact the
+	// Parallel limit counts against, so the ref stands beside the count that
+	// reads it.
+	const observationRef = useRef<ObservationCoordinator | undefined>(undefined);
 	/**
 	 * The one count the Parallel limit reads (issue #87, ADR 0034): the shared
 	 * seat count of the in-flight tickets, the in-progress handoffs, and the
@@ -787,7 +796,7 @@ export function App({
 	 * it, so the three never disagree.
 	 *
 	 * The tickets and their Agent names each arrive in one batched read (issue
-	 * #202, ADR 0092): the count costs a constant number of statements whatever
+	 * #202, ADR 0095): the count costs a constant number of statements whatever
 	 * the file holds, never a lookup per in-flight Ticket.
 	 */
 	const currentSeatCount = (): number => {
@@ -807,7 +816,7 @@ export function App({
 			consultations: state.consultationRecord
 				.consultationsByState(CONSULTATION_SEAT_STATES)
 				.map((consultation) => ({ state: consultation.state })),
-			agents: agentsRef.current,
+			agents: observationRef.current?.lastAgents() ?? null,
 			now: Date.now(),
 			startupGraceMs: STARTUP_GRACE_MS,
 		});
@@ -833,7 +842,6 @@ export function App({
 		{ state: HandoffDispatchAggregates; dispatch: HandoffDispatch } | undefined
 	>(undefined);
 	const coordinatorRef = useRef<RefreshCoordinator | undefined>(undefined);
-	const observationRef = useRef<ObservationCoordinator | undefined>(undefined);
 	const configWriteQueue = useRef(Promise.resolve());
 	// The selected Agent pane's refresh, callable the moment a forwarded
 	// input lands: the operator should not wait out the refresh interval.
@@ -841,6 +849,27 @@ export function App({
 	const commandRunner = runner ?? realRunner();
 	const homeDir = home ?? os.homedir();
 	const configFile = configPath ?? defaultConfigPath();
+	/**
+	 * The Ticket sources this run polls.
+	 *
+	 * The entry binds the config's feeds at boot and hands them in, and that
+	 * binding is the whole live set only until the config gains a feed. The
+	 * Repository init registers one (ADR 0075), and a source that stands in the
+	 * config with no bound instance is bound here through the entry's own rule,
+	 * so the plane starts fetching it in this run instead of at the next
+	 * restart. An injected instance stands for the definition it names, so a
+	 * test's fake stays the source the coordinator polls, and a source the
+	 * harness injects beside the config keeps its place.
+	 */
+	const liveSources = useMemo<readonly TicketSource[]>(() => {
+		const bound = new Set(sources.map((source) => source.name));
+		return [
+			...sources,
+			...config.sources
+				.filter((definition) => !bound.has(definition.name))
+				.map((definition) => createTicketSource(definition, commandRunner)),
+		];
+	}, [sources, config.sources, commandRunner]);
 	// The plane's out-of-band attention (ADR 0080): the terminal bell and the
 	// desktop notification of a standing warning or error fact, one service
 	// the app creates once per run from the config and the command runner.
@@ -1660,7 +1689,7 @@ export function App({
 					// remembered by hand here.
 					setListViews((current) => {
 						const next = inMemoryTicketViews(
-							current.projection.map((row: Ticket) =>
+							current.projection.rows.map((row: Ticket) =>
 								row.identity === ticket.identity
 									? { ...row, state: "handed-off" as const, handoff }
 									: row,
@@ -1863,6 +1892,20 @@ export function App({
 					configRef.current.taskTypes,
 					outcome.positionTaskType,
 				);
+				// The Next step the settled turn's Transition derived (ADR 0092):
+				// the screen states the gate that holds it, so a row the operator
+				// can confirm never hides a step the factory will not take on its
+				// own. The operator's own key passes the gates - the Same-type hold
+				// and the Handoff limit brake the automatic route, not the hand.
+				const nextStep =
+					state === undefined
+						? null
+						: deriveNextStep(
+								configRef.current,
+								state.ticketWorkCycle,
+								outcome,
+								listViews.projection,
+							);
 				// While the route is alive, the row reads as the fact line that
 				// names where it stands, and takes no key (ADR 0064): Close and
 				// Goto stand always, and the confirm waits with the route. The
@@ -1919,6 +1962,11 @@ export function App({
 								detail: routeDetail(outcome, outcome.positionTaskType),
 								editable: true,
 							});
+						}
+						// The hold on the machine's own step, stated beside the key
+						// the operator still holds (ADR 0092).
+						if (nextStep !== null && nextStep.gate !== null) {
+							factLines.push(`the Next step is held: ${NEXT_STEP_GATE_LINES[nextStep.gate]}`);
 						}
 					} else {
 						factLines.push(
@@ -3179,8 +3227,8 @@ export function App({
 				}
 				return null;
 			})(),
-			sourceCount: sources.length,
-			refreshingSourceCount: sources.filter(
+			sourceCount: liveSources.length,
+			refreshingSourceCount: liveSources.filter(
 				(source) => coordinatorRef.current?.isFetching(source.name) === true,
 			).length,
 			handoffActive: handoffDispatch?.handoffActive() ?? noStateHandoffInFlightRef.current,
@@ -3226,7 +3274,7 @@ export function App({
 		manualRefreshPending.current = new Set(started);
 		if (started.length === 0) {
 			setWarningMessage(
-				sources.length === 0
+				liveSources.length === 0
 					? "no Ticket sources exist"
 					: "every Ticket source is already refreshing",
 			);
@@ -3639,13 +3687,12 @@ export function App({
 	const isInFlight = (ticket: Ticket) =>
 		ticket.state === "handed-off" || ticket.state === "running";
 	/**
-	 * Enter on a settled Ticket: decide its completion, or tell the operator
-	 * why the factory decides it alone.
+	 * Enter on a settled Ticket: open the decision screen on the turn the
+	 * factory left for the operator to decide.
 	 */
 	const decideCompletion = (context: ControlContext) => {
 		const ticket = context.selectedTicket;
 		if (ticket === undefined) return;
-		const taskType = taskTypeOf(ticket);
 		if (autoModeRef.current) {
 			// The factory decides the ticket itself: the operator gets the
 			// notice on the Message line, and the observation makes the
@@ -3654,18 +3701,10 @@ export function App({
 			setNoticeMessage("auto-handoff is on: the factory decides this ticket");
 			return;
 		}
-		// The factory's own decisions - an auto-advance transition or
-		// auto-handoff - run on the observation's tick; the decision modal
-		// shows what the transition wrote (ADR 0027).
-		const outcome = ticket.lastCompletion?.transition ?? null;
-		// Gate the notice on the fire as well as the flag: a transition whose
-		// branch did not hold auto-advances nothing, so the factory decides
-		// nothing and the decision modal opens (ADR 0027).
-		if (outcome?.fired === true && outcome.autoAdvance) {
-			setNoticeMessage(`task type ${taskType} auto-advances: the factory decides this ticket`);
-			observationRef.current?.tick();
-			return;
-		}
+		// The mode decides the route at runtime (ADR 0092), so in manual mode the
+		// operator's key opens the screen on the settled turn in every case: the
+		// screen reads the turn's derived Next step and states the gate that
+		// holds it.
 		setPanel({ kind: "decision", identity: ticket.identity });
 	};
 	// A state may already hold tickets when the app boots: read them once at
@@ -3833,7 +3872,7 @@ export function App({
 	useEffect(() => {
 		if (state === undefined) return;
 		const coordinator = new RefreshCoordinator(
-			sources,
+			liveSources,
 			state,
 			(outcome) => {
 				// The pull request source's one warning line surfaces on the
@@ -3864,7 +3903,7 @@ export function App({
 		};
 	}, [
 		state,
-		sources,
+		liveSources,
 		replaceTickets,
 		replaceConsultations,
 		clearWorkingMessage,
@@ -4789,9 +4828,10 @@ export function App({
 					// states (ADR 0072).
 					"closed"
 				: panelTicket.state === "awaiting"
-					? autoMode ||
-						(panelTicket.lastCompletion?.transition?.fired === true &&
-							panelTicket.lastCompletion?.transition?.autoAdvance === true)
+					? // Auto-handoff mode decides the settled turn on its own, so
+						// the ticket keeps streaming; manual mode waits for the
+						// operator's hand (ADR 0092).
+						autoMode
 						? "stream"
 						: "decision"
 					: markerOf(panelTicket) === "missing"

@@ -7,14 +7,13 @@
  */
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
-import type { TransitionOutcome } from "../src/config.ts";
 import {
+	automaticAddsHold,
+	continuationQueueHolds,
 	type OpenTicketRowFacts,
 	openTicketRowGate,
 	openTicketWaitsHold,
 	type RestartCandidateFacts,
-	refiredPositionStands,
-	refiredRoute,
 	restartCandidateHolds,
 	type TopUpCycleFacts,
 	topUpCycleOpen,
@@ -28,27 +27,6 @@ function cycle(overrides: Partial<TopUpCycleFacts> = {}): TopUpCycleFacts {
 		queuePaused: false,
 		dispatchPauseActive: false,
 		queueDepth: 0,
-		...overrides,
-	};
-}
-
-/** One transition outcome, with the re-fired skip's shape by default. */
-function outcome(overrides: Partial<TransitionOutcome> = {}): TransitionOutcome {
-	return {
-		fired: true,
-		when: null,
-		reason: "",
-		ticketFacts: [],
-		pullRequestFacts: [],
-		autoAdvance: true,
-		ticketWrite: null,
-		pullRequestWrite: null,
-		pullRequestIdentity: null,
-		pullRequestKey: null,
-		writeFailure: "",
-		positionTaskType: "implement",
-		positionTicketIdentity: "github:github.com:I_1",
-		refired: true,
 		...overrides,
 	};
 }
@@ -99,77 +77,43 @@ describe("the top-up's cycle gate (ADR 0051)", () => {
 	});
 });
 
-describe("the re-fired skip's route (ADR 0042)", () => {
-	test("a re-fired fire with a position answers with the position it routes to", () => {
-		const route = refiredRoute(outcome({ agent: "herdr-coder", environment: "worktree" }));
-		expect(route).toEqual({
-			stands: true,
-			taskType: "implement",
-			positionTicketIdentity: "github:github.com:I_1",
-			agent: "herdr-coder",
-			environment: "worktree",
-		});
+describe("the gates every automatic add reads (ADR 0051, ADR 0052, ADR 0016)", () => {
+	test("mode on, brake down, no held turn: the gates hold nothing", () => {
+		expect(automaticAddsHold(cycle())).toBe(false);
 	});
 
-	test("a turn that settled without a transition is no route", () => {
-		expect(refiredRoute(null)).toEqual({ stands: false });
+	test("each single wait holds every add", () => {
+		expect(automaticAddsHold(cycle({ modeOn: false }))).toBe(true);
+		expect(automaticAddsHold(cycle({ queuePaused: true }))).toBe(true);
+		expect(automaticAddsHold(cycle({ dispatchPauseActive: true }))).toBe(true);
 	});
 
-	test("a damaged record is no route", () => {
-		// `refired` is set only on an outcome that fired and derived a position,
-		// so each of these is a state the plane does not write.
-		expect(refiredRoute(outcome({ refired: undefined }))).toEqual({ stands: false });
-		expect(refiredRoute(outcome({ refired: false }))).toEqual({ stands: false });
-		expect(refiredRoute(outcome({ fired: false }))).toEqual({ stands: false });
-		expect(refiredRoute(outcome({ autoAdvance: false }))).toEqual({ stands: false });
-		expect(refiredRoute(outcome({ writeFailure: "label write failed" }))).toEqual({
-			stands: false,
-		});
-		expect(refiredRoute(outcome({ positionTaskType: null }))).toEqual({ stands: false });
-		expect(refiredRoute(outcome({ positionTicketIdentity: null }))).toEqual({
-			stands: false,
-		});
+	test("the fresh-work add enters an empty queue only (ADR 0051)", () => {
+		expect(topUpCycleOpen(cycle())).toBe(true);
+		// One item is enough: the queue's depth is the top-up's pace.
+		expect(topUpCycleOpen(cycle({ queueDepth: 1 }))).toBe(false);
+		expect(topUpCycleOpen(cycle({ queueDepth: 4 }))).toBe(false);
+		// The depth is the fresh-work walk's own gate. The standing gates above
+		// hold the continuation add too, and ADR 0094 lets that add enter a queue
+		// that already holds fresh work.
+		expect(automaticAddsHold(cycle({ queueDepth: 1 }))).toBe(false);
 	});
 });
 
-describe("the position the re-fired skip routes to (ADR 0042)", () => {
-	test("an actionable position under the limit with the hold clear stands", () => {
+describe("the row a continuation must not jump (ADR 0051, ADR 0094)", () => {
+	test("an empty queue, or a queue of fresh work alone, holds nothing", () => {
+		expect(continuationQueueHolds([])).toBe(false);
 		expect(
-			refiredPositionStands({
-				actionable: true,
-				sameTypeHoldActive: false,
-				handoffCount: 3,
-				handoffLimit: 10,
-			}),
-		).toBe(true);
+			continuationQueueHolds([
+				{ operatorStaged: false, continuation: false },
+				{ operatorStaged: false, continuation: false },
+			]),
+		).toBe(false);
 	});
 
-	test("each single guard holds the position out", () => {
-		expect(
-			refiredPositionStands({
-				actionable: false,
-				sameTypeHoldActive: false,
-				handoffCount: 3,
-				handoffLimit: 10,
-			}),
-		).toBe(false);
-		expect(
-			refiredPositionStands({
-				actionable: true,
-				sameTypeHoldActive: true,
-				handoffCount: 3,
-				handoffLimit: 10,
-			}),
-		).toBe(false);
-		// The loop guard is the same rule the handoff's add ran (ADR 0005).
-		expect(
-			refiredPositionStands({
-				actionable: true,
-				sameTypeHoldActive: false,
-				handoffCount: 10,
-				handoffLimit: 10,
-			}),
-		).toBe(false);
+	test("the operator's staging, and a continuation already standing, hold the add", () => {
+		expect(continuationQueueHolds([{ operatorStaged: true, continuation: false }])).toBe(true);
+		expect(continuationQueueHolds([{ operatorStaged: false, continuation: true }])).toBe(true);
 	});
 });
 

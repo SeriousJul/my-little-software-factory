@@ -1,5 +1,5 @@
 /**
- * The batch reads' shared shape (issue #202, ADR 0092).
+ * The batch reads' shared shape (issue #202, ADR 0095).
  *
  * A projection that reads one Ticket at a time runs one statement per Ticket:
  * the observation loop pays it every cycle. A batch read runs one statement

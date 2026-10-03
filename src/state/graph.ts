@@ -1,5 +1,5 @@
 /**
- * The composition of the nine aggregates (issue #202, ADR 0092).
+ * The composition of the nine aggregates (issue #202, ADR 0095).
  *
  * The graph is the module's internal wiring: each key holds the aggregate's
  * module, so an aggregate reaches the narrow operations another aggregate

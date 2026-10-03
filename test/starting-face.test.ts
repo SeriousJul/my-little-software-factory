@@ -443,7 +443,6 @@ describe("the Starting window's timeline", () => {
 			reason: "",
 			ticketFacts: [],
 			pullRequestFacts: [],
-			autoAdvance: false,
 			ticketWrite: null,
 			pullRequestWrite: null,
 			pullRequestIdentity: null,

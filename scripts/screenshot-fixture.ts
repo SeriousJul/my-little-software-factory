@@ -129,11 +129,13 @@ const RUNNING_TICKET = issue(
 	REPO_A,
 	REPO_A_URL,
 );
+// The source's own truth after the review's write: the ticket wears the ship
+// fact the machine landed on it, the way GitHub does once the write lands.
 const AWAITING_TICKET = issue(
 	51,
 	"Rank tickets by priority label",
 	"Ranked tickets stay ahead of unranked ones. The operator bumps a\npriority with =, +, and -.",
-	["ready-for-agent"],
+	["ready-to-ship"],
 	"2026-07-07T06:12:00Z",
 	REPO_A,
 	REPO_A_URL,
@@ -303,7 +305,6 @@ thinking = "low"
 [task-types.merge.transition]
 ticket-facts = []
 pull-request-facts = []
-auto-advance = true
 
 [consultation-types.grill-with-docs]
 agent = "codex"
@@ -541,7 +542,6 @@ function seedState(path: string, settingsHash: string): void {
 			reason: "",
 			ticketFacts: ["ready-to-ship"],
 			pullRequestFacts: [],
-			autoAdvance: false,
 			ticketWrite: { added: ["ready-to-ship"], removed: ["ready-for-agent"] },
 			pullRequestWrite: null,
 			pullRequestIdentity: null,

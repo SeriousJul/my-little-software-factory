@@ -7,7 +7,7 @@
  * App's pane read the same lines from the same function, the way the other
  * shared controls do.
  */
-import { DEFAULT_MERGE_METHOD } from "../plane-actions.ts";
+import { DEFAULT_MERGE_METHOD } from "../plane-action-registry.ts";
 import type { Consultation } from "../state/consultation-record.ts";
 import { paint } from "./theme.ts";
 import type { WorkQueueRow } from "./work-queue-list.ts";

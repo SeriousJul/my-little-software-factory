@@ -12,10 +12,10 @@ import {
 	attentionBand,
 	automaticStartBlocked,
 	type CompletionTraceOrder,
-	type CycleEndFact,
 	canTransition,
 	dispatchPauseHolds,
 	flagWithholdsRow,
+	type HoldTurnFact,
 	handoffLimitReached,
 	sameTypeHoldHolds,
 	TICKET_STATES,
@@ -205,22 +205,22 @@ describe("the Dispatch pause (ADR 0016)", () => {
 
 describe("the Same-type hold (ADR 0026)", () => {
 	/** One cycle end: the cause that ended it and the task type its turn ran. */
-	function cycleEnd(cause: string | null, taskType: string): CycleEndFact {
+	function holdTurn(cause: string | null, taskType: string): HoldTurnFact {
 		return { cause, taskType };
 	}
 
 	test("a completed cycle end of the suggested task type holds the repeat", () => {
-		expect(sameTypeHoldHolds(cycleEnd("completed", "implement"), "implement")).toBe(true);
+		expect(sameTypeHoldHolds(holdTurn("completed", "implement"), "implement")).toBe(true);
 	});
 
 	test("a new signal ends the hold", () => {
 		// The suggested task type changed, the cycle did not end completed, or
 		// the ticket has no closed cycle yet.
-		expect(sameTypeHoldHolds(cycleEnd("completed", "implement"), "review")).toBe(false);
-		expect(sameTypeHoldHolds(cycleEnd("completed", "implement"), null)).toBe(false);
-		expect(sameTypeHoldHolds(cycleEnd("failed", "implement"), "implement")).toBe(false);
-		expect(sameTypeHoldHolds(cycleEnd("aborted", "implement"), "implement")).toBe(false);
-		expect(sameTypeHoldHolds(cycleEnd(null, "implement"), "implement")).toBe(false);
+		expect(sameTypeHoldHolds(holdTurn("completed", "implement"), "review")).toBe(false);
+		expect(sameTypeHoldHolds(holdTurn("completed", "implement"), null)).toBe(false);
+		expect(sameTypeHoldHolds(holdTurn("failed", "implement"), "implement")).toBe(false);
+		expect(sameTypeHoldHolds(holdTurn("aborted", "implement"), "implement")).toBe(false);
+		expect(sameTypeHoldHolds(holdTurn(null, "implement"), "implement")).toBe(false);
 		expect(sameTypeHoldHolds(null, "implement")).toBe(false);
 	});
 });

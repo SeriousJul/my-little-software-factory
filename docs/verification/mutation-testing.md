@@ -94,7 +94,7 @@ for the question this answers.
   children of `test/crash-guard.test.ts`, which the initial run was executing
   when the cancel landed, and the guard's own grace period was cut short with
   them. No `bun test` child of the harness itself survived any recorded run.
-- **The state split (issue #202, ADR 0092) has had no campaign at all.** The
+- **The state split (issue #202, ADR 0095) has had no campaign at all.** The
   nine aggregate modules, `store.ts`, `graph.ts`, `tables.ts`, and `batch.ts` are
   in the `src/**/*.ts` scope, so a future whole-`src` run will instrument them,
   but no mutant has been run against them: this branch was gated by `bun run

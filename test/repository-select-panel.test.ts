@@ -603,7 +603,22 @@ describe("the repository select panel", () => {
 		mkdirSync(billing, { recursive: true });
 		planCanned(runner, factory, "acme/factory");
 		planCanned(runner, billing, "acme/billing");
-		runner.setDefault({ code: 0, stdout: "" });
+		// The colliding source the config names below is a live feed: the plane
+		// polls the sources the config names. A readable empty search page keeps
+		// it quiet, so the Message line holds the queue's own line.
+		runner.setDefault({
+			code: 0,
+			stdout: JSON.stringify({
+				data: {
+					rateLimit: { cost: 1 },
+					search: {
+						issueCount: 0,
+						nodes: [],
+						pageInfo: { hasNextPage: false, endCursor: null },
+					},
+				},
+			}),
+		});
 		// A readable agent list keeps the observation quiet, so the
 		// Message line holds the line the queue leaves there.
 		runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });

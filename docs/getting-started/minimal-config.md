@@ -20,7 +20,10 @@ npx my-little-software-factory --config /path/to/config.toml
 ```
 
 A config file from an older install migrates once at load, and the start line
-says so when it runs.
+says so when it runs. A key the machine retired is not migrated: a config that
+carries `auto-advance`, deleted by [ADR 0092](../adr/0092-auto-handoff-mode-decides-the-route-at-runtime-and-the-config-drops-auto-advance.md),
+stops at load with the error that names the retirement, and you remove the key
+yourself.
 
 The shipped Default configuration is a working control plane with the parts
 it cannot know about your machine left out - no ticket sources and no

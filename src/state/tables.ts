@@ -1,5 +1,5 @@
 /**
- * The tables each aggregate owns (issue #202, ADR 0092).
+ * The tables each aggregate owns (issue #202, ADR 0095).
  *
  * One map, read three ways: the store hands each aggregate a statement handle
  * scoped to its own entries, so a statement that names another aggregate's

@@ -286,7 +286,10 @@ describe("the pure rewrite", () => {
 	test("an auto-close flag is dropped and named, and its replacement is pointed at", () => {
 		const report = migrate(withMergeAutoCloseOn()).reportText;
 		expect(report).toContain("`auto-close = true` on `merge`: dropped");
-		expect(report).toContain("auto-advance");
+		// ADR 0092 deleted the flag this drop once pointed at, so the report
+		// names the runtime rule instead and names no flag.
+		expect(report).toContain("the settled turn's Next step");
+		expect(report).not.toContain("auto-advance");
 		expect(migrate(PRE_MACHINE_SEED).reportText).toContain("No `auto-close` flags were set.");
 	});
 

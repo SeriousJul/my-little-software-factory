@@ -5,7 +5,7 @@
  * The methods on `HandoffAggregate` are the aggregate's interface: what a
  * caller outside the module may reach. The other public methods are the narrow
  * operations this aggregate publishes to the module for another aggregate to
- * call (issue #202, ADR 0092). No caller outside the module reaches them, and
+ * call (issue #202, ADR 0095). No caller outside the module reaches them, and
  * the boundary check refuses one that does.
  */
 
@@ -89,7 +89,7 @@ export interface HandoffAggregate {
 	handoffCount(identity: string): number;
 	/**
 	 * The start count of every Ticket in the list, in one grouped statement per
-	 * aggregate the count adds (issue #202, ADR 0092). A walk that holds a list
+	 * aggregate the count adds (issue #202, ADR 0095). A walk that holds a list
 	 * of Tickets takes this instead of `handoffCount` per Ticket.
 	 */
 	handoffCountsFor(identities: readonly string[]): Map<string, number>;
@@ -220,7 +220,7 @@ export class HandoffModule implements HandoffAggregate {
 		return Number(row.count) + this.graph().planeAction.planeActionAttemptCount(identity);
 	}
 	/**
-	 * The start count of every Ticket in the list (issue #202, ADR 0092). The
+	 * The start count of every Ticket in the list (issue #202, ADR 0095). The
 	 * two tables the count adds belong to two aggregates, so the batch is two
 	 * grouped statements rather than one statement that reaches past the
 	 * Handoff aggregate's own tables.
@@ -520,7 +520,7 @@ export class HandoffModule implements HandoffAggregate {
 	}
 	/**
 	 * The newest handoff of every Ticket in the list, in one statement per
-	 * chunk (issue #202, ADR 0092). The observation loop reads it for the seats
+	 * chunk (issue #202, ADR 0095). The observation loop reads it for the seats
 	 * every cycle, so the read is batched: the statements it costs follow the
 	 * chunk count and not the Ticket count.
 	 */

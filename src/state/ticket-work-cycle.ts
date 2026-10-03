@@ -5,7 +5,7 @@
  * The methods on `TicketWorkCycleAggregate` are the aggregate's interface: what a
  * caller outside the module may reach. The other public methods are the narrow
  * operations this aggregate publishes to the module for another aggregate to
- * call (issue #202, ADR 0092). No caller outside the module reaches them, and
+ * call (issue #202, ADR 0095). No caller outside the module reaches them, and
  * the boundary check refuses one that does.
  */
 
@@ -83,7 +83,7 @@ export interface CompletionDecisionInput {
  * The work cycle's own two facts about a Ticket: where the cycle stands and
  * how many cycles have run. The Handoff gates read them through
  * `ticketCycleFacts`, the narrow operation the Ticket work cycle publishes to
- * the module (issue #202, ADR 0092).
+ * the module (issue #202, ADR 0095).
  */
 export interface TicketCycle {
 	state: TicketState;
@@ -114,7 +114,36 @@ export interface TicketListViews {
 	 * covered rule still holds its rows out, and only the flags' withhold is
 	 * lifted. This is the projection the list rule is applied to.
 	 */
-	projection: readonly Ticket[];
+	projection: TicketProjection;
+}
+/**
+ * One Ticket projection read, held as a value (ADR 0042, ADR 0093).
+ *
+ * The aggregate makes every one: `ticketListViews`'s own `projection` view, and
+ * `ticketProjection` for a caller that holds no read of its own. No caller
+ * builds one by hand, so the read a derivation takes is always a read the
+ * aggregate actually ran. The Next step derivation reads the position's row out
+ * of it, and a value a caller made up - an empty list, a partial list - silently
+ * answers `position-offers-no-task` for every step and routes nothing.
+ */
+export interface TicketProjection {
+	/** The projected rows, before the list rule. */
+	readonly rows: readonly Ticket[];
+	/** The row of one identity, or undefined when the projection holds none. */
+	rowFor(identity: string): Ticket | undefined;
+}
+
+/**
+ * The read value over rows the aggregate just read.
+ *
+ * Private to this module: the only way to hold a projection is to ask the
+ * aggregate for one.
+ */
+function ticketProjectionOf(rows: readonly Ticket[]): TicketProjection {
+	return {
+		rows,
+		rowFor: (identity: string) => rows.find((candidate) => candidate.identity === identity),
+	};
 }
 export function inMemoryTicketViews(projection: readonly Ticket[]): TicketListViews {
 	// Each view is its own array, so an in-place reorder of one can never reach
@@ -126,7 +155,7 @@ export function inMemoryTicketViews(projection: readonly Ticket[]): TicketListVi
 		active: [...rows],
 		ignored: [],
 		muted: [],
-		projection: [...rows],
+		projection: ticketProjectionOf([...rows]),
 	};
 }
 export function listTicketViews(
@@ -165,12 +194,19 @@ export function listTicketViews(
 		active,
 		ignored,
 		muted,
-		projection: [...projection],
+		projection: ticketProjectionOf([...projection]),
 	};
 }
 
 export interface TicketWorkCycleAggregate {
 	projectedTickets(states: readonly WorkflowState[], fallbackTaskType: string): Ticket[];
+	/**
+	 * The projection read a derivation takes (ADR 0042, ADR 0093): one
+	 * `projectedTickets` read held as the value the Next step derivation asks its
+	 * gates of. A caller that holds no read of its own asks here; a caller that
+	 * already read the pile hands its own value down.
+	 */
+	ticketProjection(states: readonly WorkflowState[], fallbackTaskType: string): TicketProjection;
 	ticketListViews(
 		states: readonly WorkflowState[],
 		fallbackTaskType: string,
@@ -259,7 +295,7 @@ export class TicketWorkCycleModule implements TicketWorkCycleAggregate {
 			ignored_at: string | null;
 		}>;
 		// Every fact the row carries is read once for the whole list (issue
-		// #202, ADR 0092): the memberships, the unresolved attempts, the newest
+		// #202, ADR 0095): the memberships, the unresolved attempts, the newest
 		// handoffs, the start counts, the completion traces, and the leftover
 		// environments each cost one statement per chunk of Tickets, not one per
 		// Ticket. The observation loop runs this read every cycle.
@@ -353,6 +389,14 @@ export class TicketWorkCycleModule implements TicketWorkCycleAggregate {
 		}
 		return tickets;
 	}
+	/**
+	 * The projection read a derivation takes (ADR 0042, ADR 0093): one
+	 * `projectedTickets` read held as the value the Next step derivation asks its
+	 * gates of.
+	 */
+	ticketProjection(states: readonly WorkflowState[], fallbackTaskType: string): TicketProjection {
+		return ticketProjectionOf(this.projectedTickets(states, fallbackTaskType));
+	}
 	ticketListViews(
 		states: readonly WorkflowState[],
 		fallbackTaskType: string,
@@ -370,7 +414,7 @@ export class TicketWorkCycleModule implements TicketWorkCycleAggregate {
 	}
 	/**
 	 * The newest completion trace of every Ticket in the list, in one statement
-	 * per chunk (issue #202, ADR 0092). The rows arrive newest first within
+	 * per chunk (issue #202, ADR 0095). The rows arrive newest first within
 	 * each Ticket, so the first row seen for an identity is its newest trace.
 	 */
 	lastCompletionsFor(identities: readonly string[]): Map<string, Completion | null> {
@@ -445,7 +489,7 @@ export class TicketWorkCycleModule implements TicketWorkCycleAggregate {
 	 * The Dispatch pause (ADR 0016). The aggregate answers the two facts the
 	 * traces hold - the newest held `failed` turn, and the newest `completed`
 	 * turn - and the domain rule says whether the pause stands on them. The
-	 * pause is never stored (issue #202, ADR 0092).
+	 * pause is never stored (issue #202, ADR 0095).
 	 */
 	dispatchPauseActive(): boolean {
 		return dispatchPauseHolds(this.heldFailureTrace(), this.newestCompletedTrace());
@@ -474,7 +518,7 @@ export class TicketWorkCycleModule implements TicketWorkCycleAggregate {
 		return !this.graph().sourceFact.hasUnrefreshedActiveMembershipSince(identity, ended.decidedAt);
 	}
 	sameTypeHoldActive(identity: string, suggestedTaskType: string | null): boolean {
-		return sameTypeHoldHolds(this.lastCycleEnd(identity), suggestedTaskType);
+		return sameTypeHoldHolds(this.holdTurn(identity), suggestedTaskType);
 	}
 	ignoredTickets(): Set<string> {
 		const rows = this.db.prepare("SELECT identity FROM tickets WHERE ignored = 1").all() as Array<{
@@ -533,7 +577,7 @@ export class TicketWorkCycleModule implements TicketWorkCycleAggregate {
 	}
 	/**
 	 * The Agent name of every Ticket the caller names, in one batched read
-	 * (issue #202, ADR 0092). The name is the same fact `agentNameForTicket`
+	 * (issue #202, ADR 0095). The name is the same fact `agentNameForTicket`
 	 * answers - the herdr name the newest handoff recorded, else the name the
 	 * ticket's newest source title gives - so the seat count the observation
 	 * loop and the mode line read costs one statement per chunk of Tickets and
@@ -595,7 +639,7 @@ export class TicketWorkCycleModule implements TicketWorkCycleAggregate {
 		}>;
 		// The newest handoff of every row arrives in one batch read, so the
 		// seat count the observation loop runs every cycle costs two statements
-		// and not one per Ticket (issue #202, ADR 0092).
+		// and not one per Ticket (issue #202, ADR 0095).
 		const newestHandoffs = this.graph().handoff.newestHandoffsFor(
 			rows.map((row) => row.ticket_identity),
 		);
@@ -830,6 +874,44 @@ export class TicketWorkCycleModule implements TicketWorkCycleAggregate {
 			| undefined;
 		if (row == null) return null;
 		return { decidedAt: row.decided_at, taskType: row.task_type, cause: row.cause };
+	}
+	/**
+	 * The turn the Same-type hold reads (ADR 0026, ADR 0093): the current cycle's
+	 * settled turn, or the newest closed cycle's row when the current cycle has
+	 * settled none.
+	 *
+	 * The cycle-end read alone answers the open ticket, whose current cycle has
+	 * settled no turn yet. It does not answer a settled turn's Next step: that
+	 * turn stands in the cycle the ticket is in now, and it is the newest fact
+	 * about the ticket. A review that finished and wrote `needs-work` is a new
+	 * signal whatever the cycle before it finished, so the hold reads the review
+	 * and stands clear of the rework the review asks for. Reading the older
+	 * closed cycle instead holds the rework on the ticket forever, and the review
+	 * and rework loop Auto-handoff mode runs unattended never runs.
+	 *
+	 * The window stays two cycles wide, the way the cycle-end read is: a cycle
+	 * that settled no turn - the in-flight Close (ADR 0031), an abandon over a
+	 * turn that never settled - asserts nothing and clears the hold, and the read
+	 * never reaches back past the cycle before the current one.
+	 */
+	private holdTurn(identity: string): { taskType: string; cause: string | null } | null {
+		const row = this.db
+			.prepare(
+				`SELECT task_type, cause FROM completion_traces
+				 WHERE ticket_identity = ?
+				   AND (
+				     work_cycle = (SELECT work_cycle FROM tickets WHERE identity = ?)
+				     OR (
+				       work_cycle = (SELECT work_cycle - 1 FROM tickets WHERE identity = ?)
+				       AND decision IN ('closed', 'auto-closed', 'abandoned')
+				       AND decided_at IS NOT NULL
+				     )
+				   )
+				 ORDER BY work_cycle DESC, decided_at DESC, rowid DESC LIMIT 1`,
+			)
+			.get(identity, identity, identity) as { task_type: string; cause: string | null } | undefined;
+		if (row == null) return null;
+		return { taskType: row.task_type, cause: row.cause };
 	}
 	/** Open the Ticket row for a ticket a source lists for the first time. */
 	openTicket(identity: string): void {

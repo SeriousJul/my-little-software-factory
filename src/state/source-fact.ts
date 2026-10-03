@@ -5,7 +5,7 @@
  * The methods on `SourceFactAggregate` are the aggregate's interface: what a
  * caller outside the module may reach. The other public methods are the narrow
  * operations this aggregate publishes to the module for another aggregate to
- * call (issue #202, ADR 0092). No caller outside the module reaches them, and
+ * call (issue #202, ADR 0095). No caller outside the module reaches them, and
  * the boundary check refuses one that does.
  */
 
@@ -379,7 +379,7 @@ export class SourceFactModule implements SourceFactAggregate {
 
 	/**
 	 * The same title for every Ticket the caller names, in one statement per
-	 * chunk (issue #202, ADR 0092). The rows arrive in the single read's own
+	 * chunk (issue #202, ADR 0095). The rows arrive in the single read's own
 	 * order - active first, then the source name - so the first row seen for an
 	 * identity is that Ticket's newest title.
 	 */

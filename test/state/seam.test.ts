@@ -96,7 +96,7 @@ describe("the seam aggregate", () => {
 	});
 	test("refuses a statement that names a table the aggregate does not own", () => {
 		// The boundary the architecture check reads off the source text stands at
-		// runtime too (issue #202, ADR 0092): the scoped handle refuses when the
+		// runtime too (issue #202, ADR 0095): the scoped handle refuses when the
 		// statement is prepared, so a statement built from a variable cannot slip
 		// past it.
 		const store = openStore(statePath());
@@ -254,7 +254,7 @@ describe("the seam aggregate", () => {
 	test("holds one write transaction at a time and names the aggregate that asked for a second", () => {
 		// The plane's atomic facts span aggregates, so an aggregate opens the
 		// transaction and calls the other aggregates inside it. A published
-		// operation that opened its own would fail here (issue #202, ADR 0092).
+		// operation that opened its own would fail here (issue #202, ADR 0095).
 		const store = openStore(statePath());
 		const tickets = store.scopeOf("ticketWorkCycle", TABLES_OWNED.ticketWorkCycle);
 		expect(tickets.transaction(() => 7)).toBe(7);

@@ -153,9 +153,9 @@ context-window = "--autocompact {value}"
 # default-model, and an omitted level or window leaves it to the agent. The
 # override panel prefills all four, and each one applies to its own setting
 # only. The action form takes no profile keys.
-# no-auto-decision is a boolean either form carries: when set, the automatic
+# operator-decides is a boolean either form carries: when set, the automatic
 # Completion rule parks the type's completions for the operator ahead of its
-# outcome checks (ADR 0085).
+# outcome checks (ADR 0085, renamed by ADR 0092).
 # A [task-types.X.transition] table fires when a turn of this type
 # completes - or, for the action form, when the action's run answers:
 # it writes the label facts on the ticket and its linked pull
@@ -204,7 +204,6 @@ score-threshold = 90
 [[task-types.review.transition.branches]]
 when = "score-above-threshold"
 pull-request-facts = ["ready-to-ship"]
-auto-advance = true
 agent = "codex"
 environment = "worktree"
 [[task-types.review.transition.branches]]
@@ -226,18 +225,17 @@ Description:
 [task-types.rework.transition]
 ticket-facts = []
 pull-request-facts = ["ready-for-review"]
-auto-advance = true
 agent = "pi"
 environment = "worktree"
 
 # The analyze grills the ticket's specification with the operator in the live
 # session and writes it back to the ticket (ADR 0085, ADR 0086). Its
-# no-auto-decision flag parks its completions for the operator, so
+# operator-decides flag parks its completions for the operator, so
 # unattended mode keeps the live session alive between the agent's questions
 # and the operator's answers. It carries no transition and no pull request.
 [task-types.analyze]
 thinking = "xhigh"
-no-auto-decision = true
+operator-decides = true
 template = '''
 /skill:grill-with-docs
 
@@ -480,7 +478,7 @@ host = "github.com"
 | `model` | no | `default-model` | The Task profile's model: free text the resolved agent's model template renders, so that agent must define one. The override panel prefills it, and clearing that row leaves the model to the agent. |
 | `thinking` | no | - | The Task profile's thinking level: the level this task type's handoffs start on, and the starting value of the override panel's thinking row. It must be one of the profile agent's `thinking-values`. |
 | `context-window` | no | - | The Task profile's context window: a whole count of tokens, written as digits with no separators, that this task type's handoffs start their agent with. The profile agent must define a `context-window` template. There is no top-level default: a profile that names none leaves the room to the agent. |
-| `no-auto-decision` | no | `false` | The No-auto-decision flag (ADR 0085). When set, the automatic Completion rule parks every completion of the type for the operator ahead of its outcome checks: the ticket rests in `awaiting` in Auto-handoff mode, the environment and the agent stay untouched, and the operator's explicit close or route still runs. The auto top-up leaves the ticket alone: a continuation needs a transition that fired, and a parked ticket is not open. Allowed on both forms; the shipped `analyze` type is its only user. |
+| `operator-decides` | no | `false` | The Operator-decides flag (ADR 0085, renamed by ADR 0092). When set, the automatic Completion rule parks every completion of the type for the operator ahead of its outcome checks: the ticket rests in `awaiting` in Auto-handoff mode, the environment and the agent stay untouched, and the operator's explicit close or route still runs. The auto top-up leaves the ticket alone: a Next step needs a transition that fired, and a parked ticket is not open. Allowed on both forms; the shipped `analyze` type is its only user. |
 | `transition` | no | none | The transition that fires when a turn of this type completes. |
 
 **`[consultation-types.<name>]`** (one table per Consultation type).
@@ -547,7 +545,6 @@ carries the command that creates them.
 | `ticket-facts` | no | none | The labels the transition writes on the ticket. The plane converges the ticket to its own workflow labels: it removes the workflow labels the ticket no longer holds and adds these. |
 | `pull-request-facts` | no | none | The labels the transition writes on the ticket's fixing pull request, the same convergence. No fixing pull request: the fact is skipped, the ticket's facts still stand, and the skip is a fact on the fire. A pull request ticket is its own fixing pull request: one surface takes both fact lists in one write. |
 | `score-threshold` | no | - | The score a `score-above-threshold` or `score-below-threshold` branch compares the review's score against. The review posts its score on the pull request - a comment or a review body - in the template's fixed line, and the branch reads the newest record that carries one. A whole number from 0 to 100. A score branch requires it. |
-| `auto-advance` | no | `false` | The factory decides the completed turn without the operator, in auto mode: the position it derives enters the Work queue as the top-up's continuation, and a transition that derives no position closes the cycle. Manual mode runs no top-up, so a routable turn rests in awaiting for the operator's Decision screen. |
 | `agent` | no | - | The agent type the route the transition derives runs on. It must name an `[agents.*]` table. |
 | `environment` | no | - | The environment the route the transition derives runs in. One of `live-worktree` or `worktree`. |
 | `branches` | no | none | The judgment branches, in order. The first branch whose `when` holds fires; a branch with no `when` is the fallback the transition fires on when no judgment held. |
@@ -559,17 +556,30 @@ carries the command that creates them.
 | `when` | no | fallback | The judgment: `score-above-threshold`, `score-below-threshold`, `pull-request-open`, or `pull-request-closed`. Omitted: the fallback branch, which fires when no judgment branch did. |
 | `ticket-facts` | no | the transition's | The labels this branch writes on the ticket, overriding the transition's when the branch fires. |
 | `pull-request-facts` | no | the transition's | The labels this branch writes on the fixing pull request, overriding the transition's when the branch fires. |
-| `auto-advance` | no | the transition's | This branch's auto-advance, overriding the transition's when the branch fires. |
 | `agent` | no | the transition's | This branch's agent pin, overriding the transition's when the branch fires. |
 | `environment` | no | the transition's | This branch's environment pin, overriding the transition's when the branch fires. |
 
 ## Notes
 
-A transition's `auto-advance` lets the control plane decide the completions
-of its task type without the operator, while Auto-handoff mode is on. A branch
-carries its own `auto-advance` to decide one judgment's completion and leave
-the others to the transition's. A transition that derives no position closes
-the cycle, and a route at the per-ticket handoff limit degrades to close.
+A fired Transition leaves a Next step (ADR 0092): the task type the written
+labels put the ticket on, the ticket that position stands on, and whether the
+step is a Handoff or a Plane action. Auto-handoff mode decides every settled
+turn from that one fact - the mode's rule is "Auto-handoff mode is on, and the
+settled turn has a Next step" - so no config key stands between a Transition
+and the route it derives. A turn with no Next step closes its cycle: the facts
+landed on a parking state, or no branch held. A turn whose label write failed
+parks for the operator: the plane does not route from labels it did not write.
+A step a gate holds - the position offers no task, the position is not
+actionable, the Same-type hold, or the Handoff limit - rests in `awaiting` for
+the operator, and the Decision screen states the hold; a step the Handoff limit
+holds closes the cycle. Manual mode runs no top-up, so a settled turn rests in
+`awaiting` for the operator's Decision screen in every case.
+
+Every gate reads the position the step stands on, not the ticket the settled turn
+ran on. When a route crosses from an issue to its linked pull request, the pull
+request's standing, hold, and limit are the ones that hold the step, and a
+position at its Handoff limit closes the settled turn: the top-up's fresh walk
+then re-dispatches the settled ticket as open work (ADR 0092).
 
 The `pull-request-open` and `pull-request-closed` judgments read the linked
 pull request's own record straight from the source at fire time, live the
