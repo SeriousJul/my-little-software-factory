@@ -376,4 +376,26 @@ export class SourceFactModule implements SourceFactAggregate {
 			.get(identity) as { title: string } | undefined;
 		return row?.title ?? null;
 	}
+
+	/**
+	 * The same title for every Ticket the caller names, in one statement per
+	 * chunk (issue #202, ADR 0092). The rows arrive in the single read's own
+	 * order - active first, then the source name - so the first row seen for an
+	 * identity is that Ticket's newest title.
+	 */
+	newestMembershipTitlesFor(identities: readonly string[]): Map<string, string> {
+		const titles = new Map<string, string>();
+		for (const chunk of identityChunks(identities)) {
+			const rows = this.db
+				.prepare(
+					`SELECT ticket_identity, title FROM memberships WHERE ticket_identity IN (${placeholders(chunk.length)}) ORDER BY ticket_identity, active DESC, source_name`,
+				)
+				.all(...chunk) as Array<{ ticket_identity: string; title: string }>;
+			for (const row of rows) {
+				if (titles.has(row.ticket_identity)) continue;
+				titles.set(row.ticket_identity, row.title);
+			}
+		}
+		return titles;
+	}
 }

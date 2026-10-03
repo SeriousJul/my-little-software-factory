@@ -22,9 +22,12 @@ import type {
 } from "../domain/ticket.ts";
 import {
 	attentionBand,
+	type CompletionTraceOrder,
+	dispatchPauseHolds,
 	flagWithholdsRow,
 	ignoreRefusal,
 	obligationOf,
+	sameTypeHoldHolds,
 	ticketListRank,
 } from "../domain/ticket.ts";
 import { agentNameFor } from "../naming.ts";
@@ -198,6 +201,7 @@ export interface TicketWorkCycleAggregate {
 	): { ok: true } | { ok: false; reason: string };
 	ticketState(identity: string): TicketState | undefined;
 	agentNameForTicket(identity: string): string;
+	agentNamesForTickets(identities: readonly string[]): Map<string, string>;
 	automaticStartBlockedTickets(): Set<string>;
 	ticketsByState(states: readonly TicketState[]): HandoffTicket[];
 	markTicketRunning(identity: string): boolean;
@@ -450,19 +454,32 @@ export class TicketWorkCycleModule implements TicketWorkCycleAggregate {
 			return Number(result.changes) > 0;
 		});
 	}
+	/**
+	 * The Dispatch pause (ADR 0016). The aggregate answers the two facts the
+	 * traces hold - the newest held `failed` turn, and the newest `completed`
+	 * turn - and the domain rule says whether the pause stands on them. The
+	 * pause is never stored (issue #202, ADR 0092).
+	 */
 	dispatchPauseActive(): boolean {
-		const held = this.db
+		return dispatchPauseHolds(this.heldFailureTrace(), this.newestCompletedTrace());
+	}
+	/** The newest trace whose turn settled `failed` and owes its decision. */
+	private heldFailureTrace(): CompletionTraceOrder | null {
+		const row = this.db
 			.prepare(
 				"SELECT completed_at, rowid FROM completion_traces WHERE cause = 'failed' AND decision IS NULL ORDER BY completed_at DESC, rowid DESC LIMIT 1",
 			)
 			.get() as { completed_at: string; rowid: number } | null;
-		if (held == null) return false;
-		const after = this.db
+		return row == null ? null : { completedAt: row.completed_at, rowId: row.rowid };
+	}
+	/** The newest trace whose turn settled `completed`. */
+	private newestCompletedTrace(): CompletionTraceOrder | null {
+		const row = this.db
 			.prepare(
-				"SELECT 1 FROM completion_traces WHERE cause = 'completed' AND (completed_at > ? OR (completed_at = ? AND rowid > ?)) LIMIT 1",
+				"SELECT completed_at, rowid FROM completion_traces WHERE cause = 'completed' ORDER BY completed_at DESC, rowid DESC LIMIT 1",
 			)
-			.get(held.completed_at, held.completed_at, held.rowid) as { 1: number } | null;
-		return after == null;
+			.get() as { completed_at: string; rowid: number } | null;
+		return row == null ? null : { completedAt: row.completed_at, rowId: row.rowid };
 	}
 	sourceReverifiedSinceCycleEnd(identity: string): boolean {
 		const ended = this.lastCycleEnd(identity);
@@ -470,8 +487,7 @@ export class TicketWorkCycleModule implements TicketWorkCycleAggregate {
 		return !this.graph().sourceFact.hasUnrefreshedActiveMembershipSince(identity, ended.decidedAt);
 	}
 	sameTypeHoldActive(identity: string, suggestedTaskType: string | null): boolean {
-		const ended = this.lastCycleEnd(identity);
-		return ended !== null && ended.cause === "completed" && ended.taskType === suggestedTaskType;
+		return sameTypeHoldHolds(this.lastCycleEnd(identity), suggestedTaskType);
 	}
 	ignoredTickets(): Set<string> {
 		const rows = this.db.prepare("SELECT identity FROM tickets WHERE ignored = 1").all() as Array<{
@@ -524,6 +540,33 @@ export class TicketWorkCycleModule implements TicketWorkCycleAggregate {
 		}
 		const title = this.graph().sourceFact.newestMembershipTitle(identity);
 		return title == null ? "" : agentNameFor(title);
+	}
+	/**
+	 * The Agent name of every Ticket the caller names, in one batched read
+	 * (issue #202, ADR 0092). The name is the same fact `agentNameForTicket`
+	 * answers - the herdr name the newest handoff recorded, else the name the
+	 * ticket's newest source title gives - so the seat count the observation
+	 * loop and the mode line read costs one statement per chunk of Tickets and
+	 * not two per Ticket.
+	 */
+	agentNamesForTickets(identities: readonly string[]): Map<string, string> {
+		const newestHandoffs = this.graph().handoff.newestHandoffsFor(identities);
+		const needsTitle = identities.filter((identity) => {
+			const handoff = newestHandoffs.get(identity);
+			return handoff === undefined || handoff.herdrName === null || handoff.herdrName === "";
+		});
+		const titles = this.graph().sourceFact.newestMembershipTitlesFor(needsTitle);
+		const names = new Map<string, string>();
+		for (const identity of identities) {
+			const handoff = newestHandoffs.get(identity);
+			if (handoff !== undefined && handoff.herdrName !== null && handoff.herdrName !== "") {
+				names.set(identity, handoff.herdrName);
+				continue;
+			}
+			const title = titles.get(identity) ?? null;
+			names.set(identity, title === null ? "" : agentNameFor(title));
+		}
+		return names;
 	}
 	automaticStartBlockedTickets(): Set<string> {
 		const rows = this.db.prepare("SELECT identity FROM tickets WHERE ignored = 1").all() as Array<{

@@ -81,7 +81,12 @@ import {
 	ObservationCoordinator,
 	STARTUP_GRACE_MS,
 } from "../observation.ts";
-import { CONSULTATION_SEAT_STATES, parallelSeatCount, TICKET_SEAT_STATES } from "../parallel.ts";
+import {
+	CONSULTATION_SEAT_STATES,
+	overParallelLimit,
+	parallelSeatCount,
+	TICKET_SEAT_STATES,
+} from "../parallel.ts";
 import { evaluatePlacement, type PlacementEvaluation } from "../placement.ts";
 import {
 	DEFAULT_MERGE_METHOD,
@@ -779,25 +784,33 @@ export function App({
 	 * dispatch module gates a manual start on it, the observation loop gates the
 	 * automatic starts on the same facts each cycle, and the mode line displays
 	 * it, so the three never disagree.
+	 *
+	 * The tickets and their Agent names each arrive in one batched read (issue
+	 * #202, ADR 0092): the count costs a constant number of statements whatever
+	 * the file holds, never a lookup per in-flight Ticket.
 	 */
-	const currentSeatCount = (): number =>
-		state === undefined
-			? 0
-			: parallelSeatCount({
-					tickets: state.ticketWorkCycle.ticketsByState(TICKET_SEAT_STATES).map((ticket) => ({
-						ticketIdentity: ticket.ticketIdentity,
-						paneId: ticket.paneId,
-						startedAt: ticket.startedAt,
-						agentName: state.ticketWorkCycle.agentNameForTicket(ticket.ticketIdentity),
-					})),
-					handoffAttemptTickets: state.handoff.openAttemptTickets(),
-					consultations: state.consultationRecord
-						.consultationsByState(CONSULTATION_SEAT_STATES)
-						.map((consultation) => ({ state: consultation.state })),
-					agents: agentsRef.current,
-					now: Date.now(),
-					startupGraceMs: STARTUP_GRACE_MS,
-				});
+	const currentSeatCount = (): number => {
+		if (state === undefined) return 0;
+		const inFlight = state.ticketWorkCycle.ticketsByState(TICKET_SEAT_STATES);
+		const names = state.ticketWorkCycle.agentNamesForTickets(
+			inFlight.map((ticket) => ticket.ticketIdentity),
+		);
+		return parallelSeatCount({
+			tickets: inFlight.map((ticket) => ({
+				ticketIdentity: ticket.ticketIdentity,
+				paneId: ticket.paneId,
+				startedAt: ticket.startedAt,
+				agentName: names.get(ticket.ticketIdentity) ?? "",
+			})),
+			handoffAttemptTickets: state.handoff.openAttemptTickets(),
+			consultations: state.consultationRecord
+				.consultationsByState(CONSULTATION_SEAT_STATES)
+				.map((consultation) => ({ state: consultation.state })),
+			agents: agentsRef.current,
+			now: Date.now(),
+			startupGraceMs: STARTUP_GRACE_MS,
+		});
+	};
 	// The herdr seat: one external change to a ticket's environment at a time.
 	// A handoff holds it while herdr builds the environment and starts the
 	// agent. Close cleanups queue behind that work, and a queued cleanup
@@ -3494,7 +3507,7 @@ export function App({
 					// queue's force-dispatch line does: the cap stands when the
 					// seat count stood over the limit at the key.
 					const cap = configRef.current.maxParallelAgents;
-					const overCap = cap > 0 && currentSeatCount() >= cap;
+					const overCap = overParallelLimit(cap, currentSeatCount());
 					void consultationOperations.pickup(selected.id).then((outcome) => {
 						if (outcome.kind === "moved") {
 							setWarningMessage(

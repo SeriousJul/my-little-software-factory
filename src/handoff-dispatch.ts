@@ -25,6 +25,7 @@ import {
 	type OwnNameKnowledge,
 } from "./handoff.ts";
 import type { Logger } from "./logging.ts";
+import { overParallelLimit } from "./parallel.ts";
 import { evaluatePlacement } from "./placement.ts";
 import {
 	isPlaneActionTaskType,
@@ -1378,7 +1379,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 			// check the pickup runs and skips only the cap, and the item leaves
 			// the queue on every answer, the way its pickup does.
 			const limit = this.config().maxParallelAgents;
-			const overCap = limit > 0 && this.seatCount() >= limit;
+			const overCap = overParallelLimit(limit, this.seatCount());
 			void this.pickupConsultationItem(item, overCap);
 			return;
 		}
@@ -1388,14 +1389,14 @@ class HandoffDispatchModule implements HandoffDispatch {
 			// gates run, the item leaves the queue on every answer, and the line
 			// names the cap when it stood over it at the key.
 			const limit = this.config().maxParallelAgents;
-			const overCap = limit > 0 && this.seatCount() >= limit;
+			const overCap = overParallelLimit(limit, this.seatCount());
 			void this.pickupPlaneActionItem(item, overCap);
 			return;
 		}
 		// Measured before the claim, on the shared count: the line states the
 		// start over the cap only when the cap was full at the dispatch.
 		const limit = this.config().maxParallelAgents;
-		const overCap = limit > 0 && this.seatCount() >= limit;
+		const overCap = overParallelLimit(limit, this.seatCount());
 		const claimed = this.claimQueueItem(item);
 		if (claimed.ok === "cancelled") return;
 		if (claimed.ok === false) {

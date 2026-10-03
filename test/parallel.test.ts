@@ -11,6 +11,7 @@
 import { describe, expect, test } from "bun:test";
 import type { HerdrAgent } from "../src/herdr.ts";
 import {
+	overParallelLimit,
 	type ParallelSeatConsultationFact,
 	type ParallelSeatFacts,
 	type ParallelSeatTicketFact,
@@ -182,5 +183,30 @@ describe("parallelSeatCount", () => {
 				facts({ tickets: [own], consultations: working, agents: null, now: NOW + GRACE + 1 }),
 			),
 		).toBe(1);
+	});
+
+	test("the cap gate reads the limit and the count, and a lifted limit never reads over", () => {
+		// The four force-dispatch sites and the mode line's start-now ask this one
+		// rule instead of each restating `limit > 0 && count >= limit` (issue #202).
+		expect(overParallelLimit(0, 0)).toBe(false);
+		expect(overParallelLimit(0, 40)).toBe(false);
+		expect(overParallelLimit(2, 0)).toBe(false);
+		expect(overParallelLimit(2, 1)).toBe(false);
+		// At the limit the seat a start wants is not free.
+		expect(overParallelLimit(2, 2)).toBe(true);
+		expect(overParallelLimit(2, 3)).toBe(true);
+		// The two compose the way the pickup and the force-dispatch compose them:
+		// one ticket seat under a limit of one is a start that has to wait.
+		expect(
+			overParallelLimit(
+				1,
+				parallelSeatCount(
+					facts({
+						tickets: [ticketFact("github:github.com:I_5", "pane-5", OWN_NAME)],
+						agents: [listed("pane-5", OWN_NAME)],
+					}),
+				),
+			),
+		).toBe(true);
 	});
 });

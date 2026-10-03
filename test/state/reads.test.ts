@@ -130,6 +130,39 @@ describe("the state module's batched reads", () => {
 		}
 		state.close();
 	});
+	test("the seat count's Agent names cost one read per chunk, not two per Ticket", () => {
+		// The Parallel limit count the mode line and every start gate run each
+		// cycle reads the in-flight Tickets and each Ticket's Agent name (issue
+		// #202, ADR 0092). The names arrive in the same batched shape as the rows.
+		const small = fileWithTickets(5);
+		const large = fileWithTickets(300);
+		handOffAll(small, 5, (index) => `github:github.com:I_${index}`);
+		handOffAll(large, 300, (index) => `github:github.com:I_${index}`);
+		const readNames = (state: typeof small) =>
+			measured(() =>
+				state.ticketWorkCycle.agentNamesForTickets(
+					state.ticketWorkCycle
+						.ticketsByState(["handed-off", "running"])
+						.map((ticket) => ticket.ticketIdentity),
+				),
+			);
+		const smallNames = readNames(small);
+		const largeNames = readNames(large);
+		expect(smallNames.value.size).toBe(5);
+		expect(largeNames.value.size).toBe(300);
+		// The same statement count for 5 Tickets and for 300: two statements for
+		// the in-flight rows and two for their names, whatever the Ticket count.
+		// The per-Ticket read this replaces ran two statements for every row - ten
+		// for the small file and six hundred for the large one.
+		expect(largeNames.statements).toBe(smallNames.statements);
+		expect(largeNames.statements).toBe(4);
+		// The batch answers the same names the single Ticket read answers.
+		for (const [identity, name] of largeNames.value) {
+			expect(name).toBe(large.ticketWorkCycle.agentNameForTicket(identity));
+		}
+		small.close();
+		large.close();
+	});
 	test("the start count a Ticket carries adds up both aggregates' starts", () => {
 		const state = fileWithTickets(1);
 		const [ticket] = state.ticketWorkCycle.projectedTickets([], "implement");

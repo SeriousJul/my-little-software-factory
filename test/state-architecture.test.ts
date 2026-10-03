@@ -18,15 +18,23 @@
  *    claims is a table nobody is answerable for, and it fails here.
  * 4. An aggregate's internal operations - the methods it publishes to the
  *    module for another aggregate to call - stay inside the module.
+ * 5. No caller outside the module imports the store, the composition, the
+ *    ownership map, the migration chain, the batch helper, or the JSON decoders.
+ *    Those are how a scope over an arbitrary table gets built, so the door the
+ *    first four rules close is not left open by an import.
+ * 6. An operation an aggregate publishes to the module never opens a
+ *    transaction. The file holds one write transaction at a time, so the first
+ *    cross-aggregate call to a transactional method would fail inside the
+ *    caller's own transaction (issue #202, ADR 0092).
  *
  * The open path is the one exception to the first two rules: it opens the file,
  * takes the lease, and closes it, so it holds the whole composition.
  *
  * Rule 3 also stands at runtime: the store hands each aggregate a statement
  * handle scoped to its own tables (src/state/tables.ts), so a statement built
- * from a variable is refused when it is prepared. This check is the same rule
- * read off the source, and it catches what the runtime handle cannot: a new
- * table nobody owns.
+ * from a variable is refused when it is prepared. The check reads the same
+ * matcher the runtime uses, and it catches what the runtime handle cannot: a
+ * new table nobody owns. `test/state/seam.test.ts` shows the runtime refusal.
  *
  * The rules read the source; they are not behavior tests. What the operator
  * sees is checked by the flow tests that drive the real screens.
@@ -36,7 +44,7 @@ import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { openStore } from "../src/state/store.ts";
-import { RETIRED_TABLES, SEAM_TABLES, TABLES_OWNED } from "../src/state/tables.ts";
+import { RETIRED_TABLES, SEAM_TABLES, TABLES_OWNED, tablesNamed } from "../src/state/tables.ts";
 import { cleanup, statePath } from "./state/harness.ts";
 import { sourceFiles } from "./static-checks.ts";
 
@@ -68,6 +76,7 @@ interface AggregateShape {
 	file: string;
 	interfaceMethods: Set<string>;
 	internalMethods: Set<string>;
+	privateMethods: Set<string>;
 }
 
 function aggregateShapes(): AggregateShape[] {
@@ -92,15 +101,83 @@ function aggregateShapes(): AggregateShape[] {
 				.map((match) => match[1])
 				.filter((name) => name !== "constructor"),
 		);
+		const privateMethods = new Set(
+			[...classBody.matchAll(/^\tprivate\s+(\w+)\(/gmu)].map((match) => match[1]),
+		);
 		shapes.push({
 			key,
 			interfaceName,
 			file,
 			interfaceMethods,
 			internalMethods: new Set([...publicMethods].filter((name) => !interfaceMethods.has(name))),
+			privateMethods,
 		});
 	}
 	return shapes;
+}
+
+/** The state module's own plumbing: no caller outside the module imports it. */
+const MODULE_INNERS = /(?:^|\/)state\/(store|graph|tables|schema|batch|json)\.ts$/u;
+
+/**
+ * The SQL a module holds: every string literal in its source.
+ *
+ * A comment is not a statement, and neither is an identifier, so the table
+ * rule reads only the text a `prepare` or an `exec` can be handed. A comment
+ * that names another aggregate's table says something; it does not reach it.
+ */
+function stringLiterals(source: string): string {
+	const literals: string[] = [];
+	let index = 0;
+	while (index < source.length) {
+		const char = source[index];
+		if (char === "/" && source[index + 1] === "/") {
+			while (index < source.length && source[index] !== "\n") index++;
+			continue;
+		}
+		if (char === "/" && source[index + 1] === "*") {
+			const end = source.indexOf("*/", index + 2);
+			index = end < 0 ? source.length : end + 2;
+			continue;
+		}
+		if (char === '"' || char === "'" || char === "`") {
+			let end = index + 1;
+			while (end < source.length) {
+				if (source[end] === "\\") {
+					end += 2;
+					continue;
+				}
+				if (source[end] === char) {
+					end += 1;
+					break;
+				}
+				end += 1;
+			}
+			literals.push(source.slice(index, end));
+			index = end;
+			continue;
+		}
+		index += 1;
+	}
+	return literals.join("\n");
+}
+
+/**
+ * One class member's own text: its signature line through the line before the
+ * next member at the same level. Body lines are indented deeper, so a call
+ * inside a body never ends the chunk.
+ */
+function memberChunk(source: string, name: string): string {
+	const lines = source.split("\n");
+	const member = new RegExp(`^\\t(?:private\\s+)?${name}\\s*[({=]`, "u");
+	const start = lines.findIndex((line) => member.test(line));
+	if (start < 0) throw new Error(`no member ${name} in the module source`);
+	for (let index = start + 1; index < lines.length; index++) {
+		if (/^\t(?:private\s+|readonly\s+|static\s+)?[A-Za-z_$][\w$]*\s*[({=]/u.test(lines[index]))
+			return lines.slice(start, index).join("\n");
+		if (lines[index] === "}") return lines.slice(start, index).join("\n");
+	}
+	return lines.slice(start).join("\n");
 }
 
 /** The names a caller imports from the state module's aggregate files. */
@@ -177,9 +254,10 @@ describe("the state module's boundary", () => {
 		const reads = new Set<string>();
 		for (const [key, owned] of Object.entries(OWNED)) {
 			const file = aggregateFile(key);
-			const source = readFileSync(file, "utf8");
-			for (const match of source.matchAll(/\b(?:FROM|INTO|UPDATE|JOIN)\s+([a-z_]+)/gu)) {
-				const table = match[1];
+			// The same matcher the store's scoped handle refuses with, so the two
+			// rules read the SQL the same way: either case, and no CTE or subquery
+			// alias mistaken for a reach.
+			for (const table of tablesNamed(stringLiterals(readFileSync(file, "utf8")))) {
 				const anyOwner = Object.values(OWNED).some((set) => set.has(table));
 				if (!anyOwner) continue;
 				reads.add(`${file} reads ${table}`);
@@ -264,5 +342,81 @@ describe("the state module's boundary", () => {
 		expect(graph).toContain("const graph: StateGraph = {");
 		expect(graph).not.toMatch(/as StateGraph/u);
 		for (const key of AGGREGATE_KEYS) expect(graph).toContain(`${key}: new `);
+	});
+
+	test("the table matcher reads SQL in either case and lets a statement's own names through", () => {
+		// The matcher is the one the store's scoped handle refuses with, so a
+		// statement written in lower case is read the same way (issue #202).
+		expect(tablesNamed("select title from tickets")).toEqual(["tickets"]);
+		expect(tablesNamed("update tickets set ignored = 1")).toEqual(["tickets"]);
+		expect(tablesNamed("update or ignore tickets set ignored = 1")).toEqual(["tickets"]);
+		expect(
+			tablesNamed(
+				"select a.title from tickets a join memberships m on m.ticket_identity = a.ticket_identity",
+			),
+		).toEqual(["tickets", "memberships"]);
+		// An upsert's `DO UPDATE SET` names no table of its own, and a column
+		// whose name starts with the keyword is not a table either.
+		expect(
+			tablesNamed(
+				"insert into repository_init(repository, settings_hash) values (?, ?) on conflict(repository) do update set settings_hash = excluded.settings_hash",
+			),
+		).toEqual(["repository_init"]);
+		// A quoted value is text the statement stores, not a table it reaches.
+		expect(
+			tablesNamed(
+				"update source_health set health = 'removed', error = 'source removed from config' where source_name = ?",
+			),
+		).toEqual(["source_health"]);
+		expect(tablesNamed("insert into tickets (identity) values ('it''s from handoffs')")).toEqual([
+			"tickets",
+		]);
+		// A CTE's name and a subquery's alias are names the statement binds for
+		// itself, not tables it reaches.
+		expect(tablesNamed("with held as (select 1) select * from held")).toEqual([]);
+		expect(tablesNamed("select * from (select 1) as held")).toEqual([]);
+		expect(tablesNamed("select * from (select 1) held")).toEqual([]);
+		// The reach inside an aliased subquery is still a reach.
+		expect(tablesNamed("select * from (select title from tickets) held")).toEqual(["tickets"]);
+	});
+
+	test("no caller outside the module imports its plumbing", () => {
+		// `openStore` plus `scopeOf` builds a handle over any table the caller
+		// names, so the door the other rules close is open to a file that imports
+		// the store itself. The open seam (`src/state.ts`) is the only file that
+		// may, and it is not a caller.
+		const offenders: string[] = [];
+		for (const file of CALLERS) {
+			const source = readFileSync(file, "utf8");
+			for (const match of source.matchAll(/^import\b[^\n]*?from\s*"([^"]+)"/gmu)) {
+				if (!MODULE_INNERS.test(match[1])) continue;
+				offenders.push(`${file} imports ${match[1]}, the state module's own plumbing`);
+			}
+		}
+		expect(offenders).toEqual([]);
+	});
+
+	test("an operation an aggregate publishes to the module never opens a transaction", () => {
+		// The file holds one write transaction at a time, so an aggregate may open
+		// it and call another aggregate's operations inside it. A published
+		// operation that opened one of its own would fail inside the caller's -
+		// `store.ts` refuses the nested open, and this rule keeps it from being
+		// written at all (issue #202, ADR 0092).
+		const offenders: string[] = [];
+		const covered = new Set<string>();
+		for (const shape of aggregateShapes()) {
+			const source = readFileSync(shape.file, "utf8");
+			// A published operation, and the private method it can call, both run
+			// inside whoever opened the write.
+			for (const method of [...shape.internalMethods, ...shape.privateMethods]) {
+				covered.add(`${shape.key}.${method}`);
+				if (/\btransaction\s*\(/u.test(memberChunk(source, method)))
+					offenders.push(
+						`${shape.file} opens a transaction in ${method}, an operation the module publishes`,
+					);
+			}
+		}
+		expect(covered.size).toBeGreaterThan(10);
+		expect(offenders).toEqual([]);
 	});
 });

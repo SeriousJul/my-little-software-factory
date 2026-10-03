@@ -38,7 +38,32 @@ that interface draws is the same boundary the running code enforces.**
   to prepare a statement naming a table the aggregate does not own. The runtime
   refuses the reach, so no module can drift past the boundary quietly, and the
   text check in `test/state-architecture.test.ts` refuses it in review. The two
-  rules hold the same line.
+  rules hold the same line: `tables.ts` answers `tablesNamed(sql)`, the one
+  matcher both read, so neither can drift from the other. The matcher reads the
+  keywords in either case - a statement written `from handoffs` reaches
+  `handoffs` - and it lets a name the statement binds for itself (a CTE, a
+  subquery alias) through, because that name is not a table the statement
+  reaches. The text check reads the module's string literals, not its comments,
+  so a sentence about another aggregate's table is not a reach.
+- **No caller outside the module imports its plumbing.** `store.ts`, `graph.ts`,
+  `tables.ts`, `schema.ts`, `batch.ts`, and `json.ts` are importable only inside
+  `src/state/`. `openStore` beside `scopeOf` builds a handle over any table the
+  caller names, so the door the other rules close is open to a file that imports
+  the store itself. `src/state.ts` is the module's open seam and is not a caller;
+  a caller that needs `StateError` takes it from `src/state.ts`, which re-exports
+  it.
+- **The file holds one write transaction at a time, and an operation an
+  aggregate publishes to the module never opens one.** The plane's atomic facts
+  span aggregates - a handoff that records a start and takes a Work queue item
+  is one fact - so the aggregate that owns the fact opens the transaction and
+  calls the other aggregates' operations inside it. That holds only while every
+  operation an aggregate publishes to the module runs inside the caller's
+  transaction and never opens its own. `store.ts` refuses a nested open and names
+  the aggregate that asked, and the boundary check refuses a published operation,
+  or the private method it can call, whose body opens a transaction, so the
+  invariant is stated and enforced rather than assumed. An aggregate that needs an atomic fact of its own opens the
+  transaction at its own interface method, which is the caller's entry point and
+  not a published operation.
 - **A cross-aggregate call is a narrow named operation, never a raw-row helper.**
   The Handoff aggregate answers `ticketsWithUnresolvedAttempts`, the source fact
   aggregate answers `ticketsWithMutedSource`, and the Ticket work cycle aggregate
@@ -68,6 +93,22 @@ that interface draws is the same boundary the running code enforces.**
   its attempt id. The fact is a fact about a handoff's environment, not about a
   Ticket's cycle. Moving it to `tickets` would move three columns, cost a schema
   migration, and change no behavior.
+- **The Source memberships stay with the Source fact aggregate.** Issue #202
+  listed the memberships under the Ticket work cycle, beside source health and
+  the mute. The membership row is a source's own listing of a work item: its
+  primary key is `(source_name, ticket_identity)`, the fetch writes it, the mute
+  and the source's removal write it, and its columns are the source's -
+  `source_kind`, `external_key`, `source_state`, `url`, `title`, `labels_json`,
+  the repository reference, and `attributes_json` - read beside the source's
+  health and mute. The Source fact aggregate is the module that writes the
+  listing, so it is the module that owns it; putting the table under the Ticket
+  work cycle would move the fetch's write and the mute's write into the cycle
+  module and split one fact's writes across two. The Ticket work cycle reads the
+  listing through the source fact aggregate's named batch operation
+  `membershipsForTickets`, and the source fact aggregate answers the one title a
+  Ticket's Agent name comes from - `newestMembershipTitle` for one Ticket and
+  `newestMembershipTitlesFor` for a list - which is the narrow operation this ADR
+  asks a cross-aggregate call to be.
 - **The composition is built as a whole.** `graph.ts` assembles the nine modules
   in one typed object, and each module takes a thunk that answers the finished
   graph. The first cut cast an empty object into the graph type; a missing
@@ -89,7 +130,20 @@ that interface draws is the same boundary the running code enforces.**
   the ownership check.
 - A read that needs a fact from another aggregate goes through that aggregate's
   batch operation. A per-row lookup in a loop over the visible list is a
-  regression the read test catches.
+  regression the read test catches. The seat count the Parallel limit reads is
+  one such read: the app shell takes the in-flight Tickets and their Agent names
+  in two batched reads - `agentNamesForTickets` on the Ticket work cycle
+  aggregate, measured at four statements for a file of 300 Tickets where the
+  per-Ticket lookup it replaces ran two per row.
+- A rule the plane states in words is a function that takes its facts as data,
+  so its test states the facts and opens no state file (issue #202, user story
+  23). The Parallel limit cap gate is `overParallelLimit(limit, seatCount)` in
+  `src/parallel.ts`, where the force-dispatch's three sites and the mode line's
+  start-now each restated `limit > 0 && count >= limit`. The Dispatch pause and
+  the Same-type hold are `dispatchPauseHolds` and `sameTypeHoldHolds` in
+  `src/domain/ticket.ts`, over the completion trace order and the cycle end; the
+  Ticket work cycle aggregate reads the two facts and calls the rule, so the
+  derived fact stays derived.
 - The state tests split with the modules: `test/state/` holds one file per
   aggregate, files for the behavior that spans two of them (`ignore.test.ts`,
   `mute.test.ts`, `route.test.ts`, `turnCause.test.ts`), `seam.test.ts` for the

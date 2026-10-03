@@ -8,6 +8,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import os from "node:os";
 import { openStore, StateError } from "../../src/state/store.ts";
+import { TABLES_OWNED } from "../../src/state/tables.ts";
 import { openFactoryState } from "../../src/state.ts";
 import {
 	cleanup,
@@ -91,6 +92,69 @@ describe("the seam aggregate", () => {
 			(other.prepare("PRAGMA journal_mode").get() as { journal_mode: string }).journal_mode,
 		).toBe("wal");
 		other.close();
+		store.close();
+	});
+	test("refuses a statement that names a table the aggregate does not own", () => {
+		// The boundary the architecture check reads off the source text stands at
+		// runtime too (issue #202, ADR 0092): the scoped handle refuses when the
+		// statement is prepared, so a statement built from a variable cannot slip
+		// past it.
+		const store = openStore(statePath());
+		const tickets = store.scopeOf("ticketWorkCycle", TABLES_OWNED.ticketWorkCycle);
+		// The aggregate's own table prepares, so the refusal is about the table.
+		expect(
+			tickets.prepare("SELECT identity FROM tickets WHERE identity = ?").get("no-such"),
+		).toBeNull();
+
+		let error: unknown;
+		try {
+			tickets.prepare("SELECT attempt_id FROM handoffs WHERE ticket_identity = ?");
+		} catch (caught) {
+			error = caught;
+		}
+		expect(error).toBeInstanceOf(StateError);
+		expect(String(error)).toContain(
+			"the ticketWorkCycle aggregate may not reach the table handoffs",
+		);
+		expect(String(error)).toContain(store.path);
+
+		// Either case: a statement written lower case reaches the same table.
+		expect(() => tickets.prepare("select attempt_id from handoffs")).toThrow(
+			"may not reach the table handoffs",
+		);
+		// The refusal stands for a write the handle would run.
+		expect(() => tickets.exec("delete from handoffs")).toThrow("may not reach the table handoffs");
+		// A join reaches the table on the far side of it.
+		expect(() =>
+			tickets.prepare(
+				"select t.identity from tickets t join memberships m on m.ticket_identity = t.identity",
+			),
+		).toThrow("may not reach the table memberships");
+
+		// A name the statement binds for itself is not a table it reaches: a CTE
+		// and a subquery alias prepare against the aggregate's own rows.
+		expect(() => tickets.prepare("with held as (select 1) select * from held")).not.toThrow();
+		expect(() =>
+			tickets.prepare("select * from (select identity from tickets) held"),
+		).not.toThrow();
+		// The reach inside an aliased subquery is still a reach.
+		expect(() => tickets.prepare("select * from (select attempt_id from handoffs) held")).toThrow(
+			"may not reach the table handoffs",
+		);
+		store.close();
+	});
+	test("holds one write transaction at a time and names the aggregate that asked for a second", () => {
+		// The plane's atomic facts span aggregates, so an aggregate opens the
+		// transaction and calls the other aggregates inside it. A published
+		// operation that opened its own would fail here (issue #202, ADR 0092).
+		const store = openStore(statePath());
+		const tickets = store.scopeOf("ticketWorkCycle", TABLES_OWNED.ticketWorkCycle);
+		expect(tickets.transaction(() => 7)).toBe(7);
+		expect(() => tickets.transaction(() => tickets.transaction(() => 1))).toThrow(
+			"may not open a transaction while the ticketWorkCycle aggregate holds one",
+		);
+		// The refusal rolls the open write back and clears it, so the file works on.
+		expect(tickets.transaction(() => 8)).toBe(8);
 		store.close();
 	});
 	test("permits only one live lease for a database", () => {

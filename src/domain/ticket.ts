@@ -89,6 +89,71 @@ export function isHeldCompletion(completion: Completion | null): boolean {
 	return completion !== null && completion.decision === null && isHeldCause(completion.cause);
 }
 
+/**
+ * Where one completion trace sits in the trace table's own order: its
+ * completion time, then its row. Two traces completed in the same instant are
+ * told apart by the row, so the order is the pair and never the time alone.
+ */
+export interface CompletionTraceOrder {
+	completedAt: string;
+	rowId: number;
+}
+
+/** Compare two traces in the order the trace table sorts them. */
+export function completionTraceOrder(
+	left: CompletionTraceOrder,
+	right: CompletionTraceOrder,
+): number {
+	return left.completedAt.localeCompare(right.completedAt) || left.rowId - right.rowId;
+}
+
+/**
+ * The Dispatch pause (ADR 0016): the newest trace whose turn settled `failed`
+ * and whose decision has not landed holds every automatic start until the
+ * operator decides that turn or another turn settles `completed`.
+ *
+ * The rule takes the two facts the traces answer as data (issue #202): the
+ * held failure, and the newest `completed` trace. The pause clears when a
+ * completed trace is newer than the held failure, and the trace order - the
+ * completion time, then the row - is what "newer" means. The aggregate reads
+ * the two facts and stores no pause: the derived fact stays derived.
+ */
+export function dispatchPauseHolds(
+	heldFailure: CompletionTraceOrder | null,
+	newestCompleted: CompletionTraceOrder | null,
+): boolean {
+	if (heldFailure === null) return false;
+	if (newestCompleted === null) return true;
+	return completionTraceOrder(newestCompleted, heldFailure) <= 0;
+}
+
+/**
+ * The cycle end the Same-type hold reads: the cause that ended the ticket's
+ * newest closed cycle, and the task type the turn that ended it ran.
+ */
+export interface CycleEndFact {
+	cause: string | null;
+	taskType: string;
+}
+
+/**
+ * The Same-type hold (ADR 0026): the ticket's newest closed cycle ended on a
+ * `completed` turn of exactly the task type the ticket now suggests, so the
+ * plane starts no repeat of work that already completed.
+ *
+ * The rule takes the cycle end as data (issue #202). Which trace is the cycle
+ * end is the aggregate's read; what a cycle end means for a suggested task
+ * type is this rule.
+ */
+export function sameTypeHoldHolds(
+	cycleEnd: CycleEndFact | null,
+	suggestedTaskType: string | null,
+): boolean {
+	return (
+		cycleEnd !== null && cycleEnd.cause === "completed" && cycleEnd.taskType === suggestedTaskType
+	);
+}
+
 /** The latest handoff of a ticket, including the herdr handles it started. */
 export interface Handoff {
 	agentType: string;

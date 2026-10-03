@@ -9,11 +9,20 @@
  * prepared. So the boundary the architecture check reads off the source text
  * is the same boundary the file enforces at runtime, and a statement built
  * from a variable cannot slip past it.
+ *
+ * The store holds one write transaction at a time. The plane's atomic facts - a
+ * handoff that records a start and takes a queue item - span aggregates, so an
+ * aggregate opens the transaction and calls the other aggregates' operations
+ * inside it. That only works while the operations an aggregate publishes to the
+ * module never open a transaction of their own: `transaction` refuses a nested
+ * open and names the aggregate that asked, and the boundary check refuses a
+ * published operation that opens one (issue #202, ADR 0092).
  */
 import { Database, type Statement } from "bun:sqlite";
 import { chmodSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { migrate } from "./schema.ts";
+import { tablesNamed } from "./tables.ts";
 
 export class StateError extends Error {
 	constructor(message: string) {
@@ -40,19 +49,12 @@ export interface StateScope {
 	transaction<T>(body: () => T): T;
 }
 
-/**
- * The tables a statement reaches. The keywords match as the plane writes them,
- * in upper case, so a quoted value that merely reads like a word is not taken
- * for a table. An `UPDATE` is read only in its `UPDATE <table> SET` shape, so
- * an upsert's `DO UPDATE SET` names no table.
- */
-const TABLE_REFERENCE =
-	/\b(?:FROM|JOIN|INTO)\s+([A-Za-z_][A-Za-z0-9_]*)|\bUPDATE\s+(?:OR\s+(?:ROLLBACK|ABORT|FAIL|IGNORE|REPLACE)\s+)?([A-Za-z_][A-Za-z0-9_]*)\s+SET/g;
-
 export class StateStore {
 	readonly path: string;
 	private readonly database: Database;
 	private readonly clock: () => number;
+	/** The aggregate that holds the file's one open transaction, or null. */
+	private openTransaction: string | null = null;
 
 	constructor(path: string, now: () => number = () => Date.now()) {
 		this.path = path;
@@ -97,14 +99,11 @@ export class StateStore {
 		const owned = new Set(tables);
 		const store = this;
 		const refuse = (sql: string): void => {
-			for (const match of sql.matchAll(TABLE_REFERENCE)) {
-				const table = match[1] ?? match[2];
-				if (table == null) continue;
-				if (!owned.has(table)) {
-					throw new StateError(
-						`the ${aggregate} aggregate may not reach the table ${table} at ${store.path}`,
-					);
-				}
+			const outside = tablesNamed(sql).filter((table) => !owned.has(table));
+			if (outside.length > 0) {
+				throw new StateError(
+					`the ${aggregate} aggregate may not reach the table ${outside.join(", ")} at ${store.path}`,
+				);
 			}
 		};
 		return {
@@ -121,12 +120,24 @@ export class StateStore {
 				store.database.exec(sql);
 			},
 			transaction<T>(body: () => T): T {
-				return store.transaction(body);
+				return store.transaction(aggregate, body);
 			},
 		};
 	}
 
-	transaction<T>(body: () => T): T {
+	/**
+	 * The file's one write transaction. The caller names the aggregate that
+	 * opened it, so a nested open - the shape a cross-aggregate call to a
+	 * transactional operation makes - fails with the aggregate's own name
+	 * instead of SQLite's `cannot start a transaction within a transaction`.
+	 */
+	transaction<T>(aggregate: string, body: () => T): T {
+		if (this.openTransaction !== null) {
+			throw new StateError(
+				`the ${aggregate} aggregate may not open a transaction while the ${this.openTransaction} aggregate holds one at ${this.path}`,
+			);
+		}
+		this.openTransaction = aggregate;
 		this.database.exec("BEGIN IMMEDIATE");
 		try {
 			const result = body();
@@ -135,6 +146,8 @@ export class StateStore {
 		} catch (error) {
 			this.database.exec("ROLLBACK");
 			throw error;
+		} finally {
+			this.openTransaction = null;
 		}
 	}
 

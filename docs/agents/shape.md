@@ -63,6 +63,12 @@ description: The module map of the source tree, for agents working in this repos
 	`graph.ts` composes the nine modules and lets them call each other through
 	their interfaces; `batch.ts` chunks an identity list so a fact the observation
 	loop reads for the whole list costs one statement per chunk, not one per row.
+	The module's own plumbing - `store.ts`, `graph.ts`, `tables.ts`, `schema.ts`,
+	`batch.ts`, `json.ts` - is importable only inside `src/state/`, and the check
+	refuses a caller that imports it. The file holds one write transaction at a
+	time: the aggregate that owns an atomic fact opens it and calls the other
+	aggregates inside it, and an operation an aggregate publishes to the module
+	never opens one.
 - `src/workflow.ts`: the workflow machine's transition (ADR 0027). A completed
 	turn fires the task type's transition once: the plane writes the label facts
 	on the ticket and its fixing pull request, and the machine converges every

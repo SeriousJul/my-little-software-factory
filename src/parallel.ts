@@ -104,3 +104,16 @@ export function parallelSeatCount(facts: ParallelSeatFacts): number {
 	).length;
 	return count;
 }
+
+/**
+ * The Parallel limit gate (ADR 0034): the seat count stands at or over the
+ * limit, so a start that wants a seat finds none free.
+ *
+ * The rule takes its two facts as data (issue #202). The force-dispatch's
+ * three call sites and the mode line's start-now ask the same question, so
+ * they call this one rule instead of each restating `limit > 0 && count >=
+ * limit` at its own site. A limit of 0 lifts the cap, so it never reads over.
+ */
+export function overParallelLimit(limit: number, seatCount: number): boolean {
+	return limit > 0 && seatCount >= limit;
+}

@@ -607,6 +607,18 @@ export class ObservationCoordinator {
 		}
 	}
 
+	/**
+	 * The Agent name of every Ticket in the list, in one batched read (issue #202,
+	 * ADR 0092). Each walk below reads the name per Ticket, so the name comes from
+	 * `agentNamesForTickets` and the read costs one statement per chunk of Tickets
+	 * instead of two per Ticket.
+	 */
+	private agentNames(tickets: readonly HandoffTicket[]): Map<string, string> {
+		return this.state.ticketWorkCycle.agentNamesForTickets(
+			tickets.map((ticket) => ticket.ticketIdentity),
+		);
+	}
+
 	private async cycle(): Promise<void> {
 		const probe = await this.herdr.listAgents();
 		// The probe can outlive the app: stop() during it must not touch the
@@ -644,6 +656,7 @@ export class ObservationCoordinator {
 		if (this.stopped) return;
 
 		const inFlight = this.state.ticketWorkCycle.ticketsByState(["handed-off", "running"]);
+		const inFlightNames = this.agentNames(inFlight);
 		// The cap the starts measure against (ADR 0049, ADR 0051): the shared
 		// seat count of the poll - the in-flight tickets the poll lists or
 		// still holds in their startup grace, every in-progress handoff, and
@@ -666,7 +679,7 @@ export class ObservationCoordinator {
 			// instead of the settle.
 			const own = ownAgentInPane(
 				byPane.get(ticket.paneId),
-				this.state.ticketWorkCycle.agentNameForTicket(ticket.ticketIdentity),
+				inFlightNames.get(ticket.ticketIdentity) ?? "",
 			);
 			if (own === null) {
 				if (autoOn) {
@@ -700,14 +713,16 @@ export class ObservationCoordinator {
 
 		// An awaiting ticket that reports working again resumes its still-pending
 		// turn. It holds a slot and its next settle refreshes the same trace.
-		for (const ticket of this.state.ticketWorkCycle.ticketsByState(["awaiting"])) {
+		const awaiting = this.state.ticketWorkCycle.ticketsByState(["awaiting"]);
+		const awaitingNames = this.agentNames(awaiting);
+		for (const ticket of awaiting) {
 			if (ticket.paneId === null) continue;
 			// The same identity rule as the in-flight loop: a working agent in
 			// the ticket's reused pane id that is not the ticket's own does not
 			// resume the ticket's pending turn.
 			const own = ownAgentInPane(
 				byPane.get(ticket.paneId),
-				this.state.ticketWorkCycle.agentNameForTicket(ticket.ticketIdentity),
+				awaitingNames.get(ticket.ticketIdentity) ?? "",
 			);
 			if (own === null || normalizeAgentStatus(own.status) !== "working") continue;
 			if (this.state.ticketWorkCycle.reopenTurn(ticket.ticketIdentity, ticket.handoffAttemptId)) {
@@ -817,9 +832,11 @@ export class ObservationCoordinator {
 	 */
 	private armAgentWaits(byPane: Map<string, HerdrAgent>): void {
 		if (this.herdr.waitAgent === undefined || this.stopped) return;
-		for (const ticket of this.state.ticketWorkCycle.ticketsByState(["handed-off", "running"])) {
+		const workingTickets = this.state.ticketWorkCycle.ticketsByState(["handed-off", "running"]);
+		const workingNames = this.agentNames(workingTickets);
+		for (const ticket of workingTickets) {
 			if (ticket.paneId === null) continue;
-			const name = this.state.ticketWorkCycle.agentNameForTicket(ticket.ticketIdentity);
+			const name = workingNames.get(ticket.ticketIdentity) ?? "";
 			if (name === "") continue;
 			const own = ownAgentInPane(byPane.get(ticket.paneId), name);
 			if (own === null || normalizeAgentStatus(own.status) !== "working") continue;
@@ -942,7 +959,9 @@ export class ObservationCoordinator {
 			}
 		}
 		let changed = false;
-		for (const ticket of this.state.ticketWorkCycle.ticketsByState(["open"])) {
+		const restingTickets = this.state.ticketWorkCycle.ticketsByState(["open"]);
+		const restingNames = this.agentNames(restingTickets);
+		for (const ticket of restingTickets) {
 			if (this.stopped) return changed;
 			if (ticket.paneId === null || held.has(ticket.paneId)) continue;
 			const agent = byPane.get(ticket.paneId);
@@ -956,10 +975,7 @@ export class ObservationCoordinator {
 			const name = agent.name;
 			if (
 				name === undefined ||
-				identifyHandoffAgentName(
-					name,
-					this.state.ticketWorkCycle.agentNameForTicket(ticket.ticketIdentity),
-				) !== "own"
+				identifyHandoffAgentName(name, restingNames.get(ticket.ticketIdentity) ?? "") !== "own"
 			)
 				continue;
 			const claimed = this.state.handoff.reclaimHandoff(ticket.ticketIdentity, {
@@ -1598,7 +1614,9 @@ export class ObservationCoordinator {
 		// empty-queue cycle reconsiders the restart the way ADR 0051 states.
 		const byPane = new Map<string, HerdrAgent>();
 		for (const agent of agents) byPane.set(agent.paneId, agent);
-		for (const ticket of this.state.ticketWorkCycle.ticketsByState(["handed-off", "running"])) {
+		const restartTickets = this.state.ticketWorkCycle.ticketsByState(["handed-off", "running"]);
+		const restartNames = this.agentNames(restartTickets);
+		for (const ticket of restartTickets) {
 			// The gate (ADR 0060, widened by ADR 0070): this walk reads the
 			// in-flight tickets directly, not the list, and a flagged Ticket whose
 			// Agent is missing is listed all the same because its work is live - so
@@ -1611,10 +1629,8 @@ export class ObservationCoordinator {
 			if (ticket.paneId === null) continue;
 			// The one missing-Agent rule, read the way the in-flight pass reads it.
 			if (
-				ownAgentInPane(
-					byPane.get(ticket.paneId),
-					this.state.ticketWorkCycle.agentNameForTicket(ticket.ticketIdentity),
-				) !== null
+				ownAgentInPane(byPane.get(ticket.paneId), restartNames.get(ticket.ticketIdentity) ?? "") !==
+				null
 			)
 				continue;
 			if (this.state.handoff.handoffCount(ticket.ticketIdentity) >= config.maxHandoffsPerTicket)
