@@ -29,7 +29,7 @@ import type { BoxRenderable } from "@opentui/core";
 import { createElement } from "@opentui/react";
 import { type ReactElement, useRef } from "react";
 
-import { holdsDecision, type Ticket } from "../domain/ticket.ts";
+import type { TicketRowFacts } from "../domain/ticket-facts.ts";
 import { usePaneGeometry } from "./geometry.ts";
 import { listMouse, listWindow } from "./list-pane.ts";
 import { groupHeaderSpans, type ListedRow } from "./shared/grouping.ts";
@@ -47,7 +47,6 @@ import {
 	stateColor,
 	taskTypeBadge,
 	taskTypeColor,
-	ticketTaskType,
 } from "./theme.ts";
 
 const REPO_GAP = 1;
@@ -73,34 +72,20 @@ const TITLE_MINIMUM = 2;
 
 interface TicketListProps {
 	/**
-	 * The list's rows: each ticket, and the Group header above each run the
-	 * Grouping axis makes. The `none` axis holds the tickets alone, in the flat
+	 * The list's rows: each Ticket's facts, and the Group header above each run
+	 * the Grouping axis makes. The `none` axis holds the facts alone, in the flat
 	 * list's order, so the pane draws today's list with no header.
+	 *
+	 * Every fact the row wears arrives as a value from the fact module (issue
+	 * #201): the pane holds no rule of its own and reads no callback.
 	 */
-	rows: readonly ListedRow<Ticket>[];
+	rows: readonly ListedRow<TicketRowFacts>[];
 	/** The cursor's place in that row list: it can rest on a Group header. */
 	selectedIndex: number;
 	focused: boolean;
 	/** The box's exact height in cells, from the Main view's section layout. */
 	height: number;
 	emptyMessage?: string;
-	/** The failure badge of a ticket from the last observation, or null. */
-	markerOf: (ticket: Ticket) => "blocked" | "missing" | null;
-	/** Whether the ticket has used up its handoffs: the limit marker. */
-	limitReached: (ticket: Ticket) => boolean;
-	/**
-	 * Whether the ticket's Starting window (ADR 0030) is open against the
-	 * app's facts: the row wears the spinner face in place of its state
-	 * badge while it holds. A failure marker outranks it in the row.
-	 */
-	starting: (ticket: Ticket) => boolean;
-	/**
-	 * Whether the ticket's Queue wait (CONTEXT.md) holds against the app's
-	 * facts: the row wears the `queued` badge in place of its state badge
-	 * while it holds. A failure marker and the Starting window outrank it in
-	 * the row the way they outrank the state badge.
-	 */
-	queueWait: (ticket: Ticket) => boolean;
 	/** False while an overlay owns input above the panes. */
 	active: boolean;
 	onFocus: () => void;
@@ -115,10 +100,6 @@ export function TicketList({
 	focused,
 	height,
 	emptyMessage,
-	markerOf,
-	limitReached,
-	starting,
-	queueWait,
 	active,
 	onFocus,
 	onSelect,
@@ -142,7 +123,7 @@ export function TicketList({
 	// the moment the window opens, so a frame snapshot read at the open holds.
 	// The word, not the glyph, is the fact (ADR 0030).
 	const faceFrame = useSpinnerFrame(
-		visible.some((row) => row.kind === "item" && starting(row.item)),
+		visible.some((row) => row.kind === "item" && row.item.starting),
 	);
 	const handleMouse = listMouse({
 		active: () => active,
@@ -212,10 +193,6 @@ export function TicketList({
 										row.item,
 										start + offset === selectedIndex,
 										geometry.usableCols,
-										markerOf(row.item),
-										limitReached(row.item),
-										starting(row.item),
-										queueWait(row.item),
 										faceFrame,
 									),
 								),
@@ -236,25 +213,21 @@ export function TicketList({
  * gap plus one text cell.
  */
 function rowSpans(
-	ticket: Ticket,
+	fact: TicketRowFacts,
 	selected: boolean,
 	usableCols: number,
-	marker: "blocked" | "missing" | null,
-	atLimit: boolean,
-	starting: boolean,
-	queueWait: boolean,
 	faceFrame: number,
 ): ReactElement[] {
 	const spans: ReactElement[] = [];
 	let budget = usableCols;
 	const trailing: { text: string; fg: string | undefined }[] = [];
-	if (atLimit) trailing.push({ text: LIMIT_TEXT, fg: paint("yellow") });
-	if (ticket.leftover !== null) trailing.push({ text: LEFTOVER_TEXT, fg: paint("yellow") });
+	if (fact.handoffLimit) trailing.push({ text: LIMIT_TEXT, fg: paint("yellow") });
+	if (fact.ticket.leftover !== null) trailing.push({ text: LEFTOVER_TEXT, fg: paint("yellow") });
 	// The ignore rides the same lane: the state badge keeps its own slot, so an
 	// ignored Ticket whose Agent works still reads `running` (ADR 0060), and the
 	// mute of the Ticket's sources rides it the same way (ADR 0070).
-	if (ticket.ignored) trailing.push({ text: IGNORED_TEXT, fg: paint("subtext0") });
-	if (ticket.muted) trailing.push({ text: MUTED_TEXT, fg: paint("subtext0") });
+	if (fact.ticket.ignored) trailing.push({ text: IGNORED_TEXT, fg: paint("subtext0") });
+	if (fact.ticket.muted) trailing.push({ text: MUTED_TEXT, fg: paint("subtext0") });
 
 	if (budget >= SELECTION_WIDTH) {
 		// The selected row's marker and title wear bold: the emphasis the
@@ -278,9 +251,11 @@ function rowSpans(
 	// it the way it beats the state badge, so a dead or blocked agent is
 	// never hidden behind the motion.
 	if (budget >= BADGE_WIDTH) {
-		if (marker !== null)
-			spans.push(createElement("span", { fg: markerColor(marker) }, failureBadge(marker)));
-		else if (starting)
+		if (fact.failure !== null)
+			spans.push(
+				createElement("span", { fg: markerColor(fact.failure) }, failureBadge(fact.failure)),
+			);
+		else if (fact.starting)
 			spans.push(
 				createElement(
 					"span",
@@ -288,14 +263,15 @@ function rowSpans(
 					spinnerFace(faceFrame, STARTING_WORD, BADGE_WIDTH),
 				),
 			);
-		else if (holdsDecision(ticket))
-			spans.push(createElement("span", { fg: paint("yellow") }, heldBadge()));
-		else if (queueWait)
+		else if (fact.held) spans.push(createElement("span", { fg: paint("yellow") }, heldBadge()));
+		else if (fact.queueWait)
 			// The Queue wait badge wears the open role: the ticket keeps its
 			// open state while its start waits for a seat.
 			spans.push(createElement("span", { fg: stateColor("open") }, queuedBadge()));
 		else
-			spans.push(createElement("span", { fg: stateColor(ticket.state) }, stateBadge(ticket.state)));
+			spans.push(
+				createElement("span", { fg: stateColor(fact.ticket.state) }, stateBadge(fact.ticket.state)),
+			);
 		budget -= BADGE_WIDTH;
 	}
 
@@ -303,7 +279,7 @@ function rowSpans(
 	// complete or absent: a partial badge could read as another task type,
 	// so the row must hold the whole badge, its gap, and the title minimum,
 	// or the badge drops and the title keeps the cells.
-	const presentation = ticketTaskType(ticket);
+	const presentation = fact.taskType;
 	const badgeWidth = widthOf(taskTypeBadge(presentation.value));
 	if (budget >= badgeWidth + TITLE_MINIMUM) {
 		spans.push(
@@ -314,7 +290,7 @@ function rowSpans(
 
 	const titleEl = (text: string): ReactElement =>
 		createElement(selected ? "b" : "span", { fg: paint("text") }, text);
-	const repoWidth = widthOf(ticket.repository);
+	const repoWidth = widthOf(fact.ticket.repository);
 
 	// The trailing markers keep their gaps and their text at the row's end,
 	// and the title keeps its gap and one text cell for itself.
@@ -328,14 +304,14 @@ function rowSpans(
 			titleField -= 1;
 		}
 		if (titleField > 0) {
-			spans.push(titleEl(padToWidth(truncateToWidth(ticket.title, titleField), titleField)));
+			spans.push(titleEl(padToWidth(truncateToWidth(fact.ticket.title, titleField), titleField)));
 		}
 		if (repoFits) {
 			spans.push(
 				createElement(
 					"span",
 					{ fg: paint("subtext0") },
-					`${" ".repeat(REPO_GAP)}${ticket.repository}`,
+					`${" ".repeat(REPO_GAP)}${fact.ticket.repository}`,
 				),
 			);
 		}
@@ -357,14 +333,14 @@ function rowSpans(
 		titleField -= 1;
 	}
 	if (titleField > 0) {
-		spans.push(titleEl(padToWidth(truncateToWidth(ticket.title, titleField), titleField)));
+		spans.push(titleEl(padToWidth(truncateToWidth(fact.ticket.title, titleField), titleField)));
 	}
 	if (repoFits) {
 		spans.push(
 			createElement(
 				"span",
 				{ fg: paint("subtext0") },
-				`${" ".repeat(REPO_GAP)}${ticket.repository}`,
+				`${" ".repeat(REPO_GAP)}${fact.ticket.repository}`,
 			),
 		);
 	}

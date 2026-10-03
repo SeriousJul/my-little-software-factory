@@ -16,10 +16,18 @@ import { createElement, useTerminalDimensions } from "@opentui/react";
 import type { ReactElement } from "react";
 import { useRef, useState } from "react";
 import { CONSULTATION_INPUT_LIMIT, responseOversize } from "../../consultation/response-draft.ts";
+import { agentPoll } from "../../domain/agent.ts";
+import { sectionFacts } from "../../domain/section-facts.ts";
 import type { Completion, Ticket } from "../../domain/ticket.ts";
+import {
+	type TicketFactInputs,
+	type TicketRowFacts,
+	ticketRowFacts,
+} from "../../domain/ticket-facts.ts";
+import type { HerdrAgent } from "../../herdr.ts";
 import type { InitableRepository } from "../../repository-list.ts";
 import type { Consultation } from "../../state/consultation-record.ts";
-import type { WorkQueueItem } from "../../state/work-queue.ts";
+import type { WorkQueueHandoffItem, WorkQueueItem } from "../../state/work-queue.ts";
 import { currentThemeResolution } from "../../theme-source.ts";
 import type { TurnLogEntry } from "../../turn-log.ts";
 import { ActionBar } from "../action-bar.ts";
@@ -52,7 +60,7 @@ import { WorkQueueList, type WorkQueueRow } from "../work-queue-list.ts";
 import { ActionItem, ChoiceRow } from "./choices.ts";
 import { DraftField, type FieldFacts, type FieldHandle, TextField } from "./fields.ts";
 import { copySelectionWith } from "./form.ts";
-import { ticketRows } from "./grouping.ts";
+import { type ListedRow, ticketRows } from "./grouping.ts";
 import {
 	controlInk,
 	inkForTheme,
@@ -483,6 +491,88 @@ function groupTicket(
 		suggestedTaskType: taskType,
 		matchedStateName: null,
 		lastCompletion: null,
+	};
+}
+
+/**
+ * The fact module's inputs for the gallery's rows (issue #201). The gallery
+ * states the fact rules answer, so a preview cannot drift from a control: no
+ * example builds its own badge rule.
+ */
+function galleryFactInputs(extra: Partial<TicketFactInputs> = {}): TicketFactInputs {
+	return {
+		maxHandoffsPerTicket: 1,
+		poll: null,
+		claims: new Set<string>(),
+		queue: [],
+		...extra,
+	};
+}
+
+/** One Work queue item, so the fact module's Queue wait rule answers a row. */
+function queueItem(ticketIdentity: string, origin: WorkQueueHandoffItem["origin"]): WorkQueueItem {
+	return {
+		kind: "handoff",
+		position: 0,
+		ticketIdentity,
+		automatic: origin === "workflow",
+		routeFromIdentity: null,
+		origin,
+		choice: {
+			agentType: "pi",
+			environment: "worktree",
+			taskType: "implement",
+			model: "",
+			thinking: "",
+			contextWindow: "",
+		},
+		previousMessage: "",
+		enqueuedAt: "2026-02-17T10:00:00.000Z",
+	};
+}
+
+/** The rows' facts, answered by the fact module, wrapped as list rows. */
+function factRows(
+	tickets: readonly Ticket[],
+	extra: Partial<TicketFactInputs> = {},
+): readonly TicketRowFacts[] {
+	return ticketRowFacts(galleryFactInputs(extra), tickets);
+}
+
+/**
+ * One row's Ticket for the fact example, on its own pane so one poll answers
+ * each row separately (issue #201).
+ */
+function factRowTicket(
+	number: number,
+	title: string,
+	state: Ticket["state"],
+	paneId: string,
+): Ticket {
+	const base = groupTicket(
+		number,
+		"acme/facts",
+		title,
+		state === "open" ? "open" : "running",
+		"implement",
+	);
+	return {
+		...base,
+		state,
+		handoff: base.handoff === null ? null : { ...base.handoff, paneId },
+	};
+}
+
+/** One agent as the last poll reported it, in the pane the row names. */
+function pollAgent(paneId: string, status: string): HerdrAgent {
+	return {
+		paneId,
+		tabId: "tab-f",
+		workspaceId: "ws-f",
+		name: "fix-the-layout-math",
+		agent: "pi",
+		status,
+		sessionId: "",
 	};
 }
 
@@ -1269,17 +1359,12 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 			// marker beside its own state badge.
 			createElement(TicketList, {
 				key: "muted-rows",
-				rows: [
-					{ kind: "item", item: mutedRowTicket("open") },
-					{ kind: "item", item: mutedRowTicket("running") },
-				],
+				rows: factRows([mutedRowTicket("open"), mutedRowTicket("running")]).map(
+					(fact): ListedRow<TicketRowFacts> => ({ kind: "item", item: fact }),
+				),
 				selectedIndex: 1,
 				focused: true,
 				height: 6,
-				markerOf: () => null,
-				limitReached: () => false,
-				starting: () => false,
-				queueWait: () => false,
 				active: true,
 				onFocus: () => undefined,
 				onSelect: () => undefined,
@@ -1343,6 +1428,89 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 				),
 			),
 		],
+	},
+	{
+		// The row's facts, answered by the fact module (issue #201): the failure
+		// badge, the Queue wait's badge, the Starting face, and the held badge,
+		// each on the row that wears it. The header's held cell stands only when a
+		// turn holds its decision, so three headers stand here: the one with the
+		// cell, the one without it, and the one on the narrow frame where the cell
+		// is the last count the header keeps. No example builds its own badge rule
+		// - every row here is the fact module's answer for its Ticket.
+		id: "ticket-facts",
+		state:
+			"Ticket row facts: the failure badge, the queued badge, the spinner face, and the header's held cell",
+		rows: 14,
+		render: (columns) => {
+			const rows = [
+				factRowTicket(21, "the blocked row", "running", "pane-f1"),
+				factRowTicket(22, "the missing row", "running", "pane-f2"),
+				factRowTicket(23, "the starting row", "handed-off", "pane-f3"),
+				factRowTicket(24, "the queued row", "open", "pane-f4"),
+				{
+					...factRowTicket(25, "the held row", "awaiting", "pane-f5"),
+					lastCompletion: heldCompletion(),
+				},
+			];
+			// One poll, read once: the blocked row's pane holds its own Agent and
+			// reports a block, the starting row's pane holds its own Agent at work,
+			// and the missing row's pane is gone from the list.
+			// The limit is above every row here, so no row wears its marker: the
+			// example is about the badges the fact module answers.
+			const facts = factRows(rows, {
+				maxHandoffsPerTicket: 4,
+				poll: agentPoll([pollAgent("pane-f1", "blocked"), pollAgent("pane-f3", "working")]),
+				queue: [queueItem(rows[3].identity, "open")],
+			});
+			const counts = sectionFacts({
+				tickets: rows,
+				consultations: [],
+				queue: [],
+				// The pile's count is an input to the same read that answers every
+				// other count on these headers. The narrow example needs a non-zero
+				// ignored cell to show which count the header gives up, so the
+				// example states the pile here and the header wears the answer.
+				ignored: 3,
+				muted: 0,
+			});
+			const header = (key: string, held: number, width = columns.contentWidth) =>
+				createElement(SectionHeader, {
+					key,
+					section: "tickets",
+					active: true,
+					terminalWidth: width,
+					width,
+					expanded: true,
+					open: counts.ticket.open,
+					running: counts.ticket.inFlight,
+					awaiting: counts.ticket.awaiting,
+					held,
+					ignored: counts.ticket.ignored,
+					onToggle: () => undefined,
+				});
+			return [
+				// The conditional cell: it stands for the one row that holds its
+				// decision, and it is absent where nothing holds.
+				header("held-header", counts.ticket.held),
+				header("no-held-header", 0),
+				// The narrow frame's cut (story 21): at 54 columns the header gives
+				// up the ignored cell and keeps the held count. The same budget
+				// `test/section-header.test.ts` measures, drawn where a reviewer can
+				// see it without booting the app.
+				header("narrow-held-header", counts.ticket.held, 54),
+				createElement(TicketList, {
+					key: "fact-rows",
+					rows: facts.map((fact): ListedRow<TicketRowFacts> => ({ kind: "item", item: fact })),
+					selectedIndex: 0,
+					focused: true,
+					height: 10,
+					active: true,
+					onFocus: () => undefined,
+					onSelect: () => undefined,
+					onMove: () => undefined,
+				}),
+			];
+		},
 	},
 	{
 		// The Consultation detail's own bodies (ADR 0025): the Session view
@@ -1806,16 +1974,19 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 			return [
 				createElement(TicketList, {
 					key: "grouped",
-					rows: ticketRows(listed, "repository", {}, [], []),
+					// The routed row wears its badge: the wait is the item's, and
+					// the ticket keeps its open state (ADR 0072). The fact module
+					// answers it from the queue item below.
+					rows: ticketRows(
+						factRows(listed, { queue: [queueItem("github:github.com:I_3", "workflow")] }),
+						"repository",
+						{},
+						[],
+						[],
+					),
 					selectedIndex: 1,
 					focused: true,
 					height: 10,
-					markerOf: () => null,
-					limitReached: () => false,
-					starting: () => false,
-					// The routed row wears its badge: the wait is the item's, and
-					// the ticket keeps its open state (ADR 0072).
-					queueWait: (ticket) => ticket.identity === "github:github.com:I_3",
 					active: true,
 					onFocus: () => undefined,
 					onSelect: () => undefined,
@@ -1823,14 +1994,10 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 				}),
 				createElement(TicketList, {
 					key: "folded",
-					rows: ticketRows(listed, "repository", { repository: folded }, [], []),
+					rows: ticketRows(factRows(listed), "repository", { repository: folded }, [], []),
 					selectedIndex: 0,
 					focused: true,
 					height: 5,
-					markerOf: () => null,
-					limitReached: () => false,
-					starting: () => false,
-					queueWait: () => false,
 					active: true,
 					onFocus: () => undefined,
 					onSelect: () => undefined,
@@ -1838,14 +2005,10 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 				}),
 				createElement(TicketList, {
 					key: "ordered",
-					rows: ticketRows(listed, "repository", {}, ["acme/factory"], []),
+					rows: ticketRows(factRows(listed), "repository", {}, ["acme/factory"], []),
 					selectedIndex: 0,
 					focused: true,
 					height: 4,
-					markerOf: () => null,
-					limitReached: () => false,
-					starting: () => false,
-					queueWait: () => false,
 					active: true,
 					onFocus: () => undefined,
 					onSelect: () => undefined,
@@ -1853,14 +2016,10 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 				}),
 				createElement(TicketList, {
 					key: "on-header",
-					rows: ticketRows(listed, "task", {}, [], []),
+					rows: ticketRows(factRows(listed), "task", {}, [], []),
 					selectedIndex: 0,
 					focused: true,
 					height: 5,
-					markerOf: () => null,
-					limitReached: () => false,
-					starting: () => false,
-					queueWait: () => false,
 					active: true,
 					onFocus: () => undefined,
 					onSelect: () => undefined,
@@ -1911,16 +2070,12 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 			return [
 				createElement(TicketList, {
 					key: "marker",
-					rows: ticketRows(listed, "repository", {}, [], [], (value) =>
+					rows: ticketRows(factRows(listed), "repository", {}, [], [], (value) =>
 						value === "acme/billing" ? "drift" : value === "acme/factory" ? "uninit" : null,
 					),
 					selectedIndex: 0,
 					focused: true,
 					height: 16,
-					markerOf: () => null,
-					limitReached: () => false,
-					starting: () => false,
-					queueWait: () => false,
 					active: true,
 					onFocus: () => undefined,
 					onSelect: () => undefined,

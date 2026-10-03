@@ -9,11 +9,16 @@ import {
 } from "../src/components/ticket-detail.ts";
 import type { ScrollConfig } from "../src/config.ts";
 import type { Handoff, Ticket } from "../src/domain/ticket.ts";
+import { type TicketRowFacts, ticketFactsFor } from "../src/domain/ticket-facts.ts";
 import type { HandoffChoice } from "../src/handoff.ts";
 import { roleColor } from "./app-harness.ts";
+import { factInputs } from "./fact-fixtures.ts";
 import { SAMPLE_TICKETS } from "./sample-tickets.ts";
 
 const settings: ScrollConfig = { speed: 1, acceleration: 0.8, maximumSpeed: 6 };
+
+/** The facts one Ticket wears, read through the fact module (issue #201). */
+const factOf = (ticket: Ticket): TicketRowFacts => ticketFactsFor(ticket, factInputs());
 
 /** The cells one line paints: a plain line is one cell of its own text. */
 const cellsOf = (line: DetailLine) => line.cells ?? [{ text: line.text, fg: line.fg }];
@@ -61,7 +66,7 @@ describe("Ticket detail task profile", () => {
 	test("shows the suggested effective settings and dims values left to the agent", () => {
 		const ticket = SAMPLE_TICKETS[0];
 		if (ticket === undefined) throw new Error("missing sample ticket");
-		const lines = detailLines(ticket, 100, 10, {
+		const lines = detailLines(factOf(ticket), 100, 10, {
 			agentType: "codex",
 			environment: "live-worktree",
 			taskType: "implement",
@@ -98,7 +103,7 @@ describe("Ticket detail task profile", () => {
 			handoff: recordedHandoff,
 			handoffCount: 1,
 		};
-		const next = detailLines(secondCycle, 100, 10, nextChoice);
+		const next = detailLines(factOf(secondCycle), 100, 10, nextChoice);
 		expect(hasCell(next, "Agent: pi", roleColor("text"))).toBe(true);
 		expect(hasCell(next, "Model: left to agent", roleColor("subtext0"))).toBe(true);
 		expect(hasCell(next, "Environment: live-worktree", roleColor("text"))).toBe(true);
@@ -107,7 +112,7 @@ describe("Ticket detail task profile", () => {
 		// A ticket inside a cycle shows that cycle's own Handoff, because those
 		// are the settings its running agent started with.
 		const running: Ticket = { ...secondCycle, state: "running" };
-		const shown = detailLines(running, 100, 10, nextChoice);
+		const shown = detailLines(factOf(running), 100, 10, nextChoice);
 		expect(hasCell(shown, "Agent: codex", roleColor("text"))).toBe(true);
 		expect(hasCell(shown, "Model: old-cycle-model", roleColor("text"))).toBe(true);
 		expect(hasCell(shown, "Thinking: high", roleColor("text"))).toBe(true);

@@ -10,6 +10,7 @@
  */
 import type { FactoryConfig } from "../config.ts";
 import type { RepositoryRef, Ticket } from "../domain/ticket.ts";
+import { inFlightState } from "../domain/ticket.ts";
 import { fileExists } from "../fs.ts";
 import type { HerdrAgent } from "../herdr.ts";
 import { expandHome, lookupRepositoryMapping, matchesRepository, realPathOf } from "../repo.ts";
@@ -137,8 +138,7 @@ export async function inspectLiveCheckout(
 	// this live checkout, and a different mapping of the same repository
 	// does.
 	for (const ticket of tickets) {
-		if (ticket.handoff === null || (ticket.state !== "handed-off" && ticket.state !== "running"))
-			continue;
+		if (ticket.handoff === null || !inFlightState(ticket.state)) continue;
 		if (ticket.handoff.paneId === null) continue;
 		const agent = agents.find((candidate) => candidate.paneId === ticket.handoff?.paneId);
 		if (agent === undefined) continue;

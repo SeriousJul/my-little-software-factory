@@ -11,7 +11,7 @@
 import type { FactoryConfig } from "./config.ts";
 import type { ConsultationPickupOutcome } from "./consultation-operations.ts";
 import type { EnvironmentKind, Ticket, TicketState } from "./domain/ticket.ts";
-import { issueReferencesOf } from "./domain/ticket.ts";
+import { inFlightState, issueReferencesOf } from "./domain/ticket.ts";
 import {
 	type CloseCleanupOptions,
 	closeCleanupReach,
@@ -2002,6 +2002,6 @@ function handoffAllowsState(origin: HandoffOrigin, state: TicketState): boolean 
 			// (ADR 0072).
 			return state === "open" || state === "awaiting";
 		case "restart":
-			return state === "handed-off" || state === "running";
+			return inFlightState(state);
 	}
 }
