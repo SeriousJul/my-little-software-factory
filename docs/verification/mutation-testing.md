@@ -94,6 +94,18 @@ for the question this answers.
   children of `test/crash-guard.test.ts`, which the initial run was executing
   when the cancel landed, and the guard's own grace period was cut short with
   them. No `bun test` child of the harness itself survived any recorded run.
+- **The state split (issue #202, ADR 0092) has had no campaign at all.** The
+  nine aggregate modules, `store.ts`, `graph.ts`, `tables.ts`, and `batch.ts` are
+  in the `src/**/*.ts` scope, so a future whole-`src` run will instrument them,
+  but no mutant has been run against them: this branch was gated by `bun run
+  test`, `bun run typecheck`, and `bun run lint` only. The suite it gated is
+  2,549 tests over 113 files, against the 1,919 tests over 79 files this record's
+  rates were measured on, so every time and mutant-count number above is out of
+  date for the current tree. `test/state-architecture.test.ts` was added to
+  `ignorePatterns` for the reason the shared control test is there - it reads the
+  state modules as text - and that exclusion is a reading of the existing rule,
+  not a measured run: no campaign has been executed on this branch to confirm the
+  initial run's test count drops by the file's cases.
 - **The coverage-bleed warnings were read, not resolved.** The initial run reports
   mutant coverage recorded outside any test for module-level code, and names one
   mutant id for the whole set. Stryker's static-mutant handling (all tests for

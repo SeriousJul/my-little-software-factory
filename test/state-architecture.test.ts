@@ -1,86 +1,148 @@
 /**
- * The state module's boundary: one interface per aggregate (issue #202).
+ * The state module's boundary: one interface per aggregate (issue #202,
+ * ADR 0092).
  *
  * The split is only worth keeping if a caller cannot reach past the interface
- * it was given. Three declared dependency rules hold it:
+ * it was given. Four declared dependency rules hold it:
  *
- * 1. A caller names only the aggregates it reads. It does not import the whole
- *    composition, so a new method on an aggregate cannot reach a caller that
- *    never asked for it.
- * 2. Every call a caller makes is on an aggregate the caller names.
- * 3. Inside the module, an aggregate reaches only the tables it owns.
+ * 1. No caller outside the open path holds the whole composition. It does not
+ *    import `FactoryState`, it does not open the state file itself, and it does
+ *    not name every aggregate - which is what holding the composition looks
+ *    like from the outside whatever name the caller bound it to.
+ * 2. Every aggregate a caller reads is one the caller names. The rule follows
+ *    the call, not one fixed variable name: a caller that reaches `.handoff.`
+ *    through a deps object, a field, or a name of its own still has to name
+ *    `HandoffAggregate`.
+ * 3. Inside the module, an aggregate reaches only the tables it owns, and every
+ *    table the schema creates has exactly one owner. A table no aggregate
+ *    claims is a table nobody is answerable for, and it fails here.
+ * 4. An aggregate's internal operations - the methods it publishes to the
+ *    module for another aggregate to call - stay inside the module.
  *
  * The open path is the one exception to the first two rules: it opens the file,
  * takes the lease, and closes it, so it holds the whole composition.
+ *
+ * Rule 3 also stands at runtime: the store hands each aggregate a statement
+ * handle scoped to its own tables (src/state/tables.ts), so a statement built
+ * from a variable is refused when it is prepared. This check is the same rule
+ * read off the source, and it catches what the runtime handle cannot: a new
+ * table nobody owns.
  *
  * The rules read the source; they are not behavior tests. What the operator
  * sees is checked by the flow tests that drive the real screens.
  */
 
-import { describe, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
+import { afterEach, describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
+import { openStore } from "../src/state/store.ts";
+import { RETIRED_TABLES, SEAM_TABLES, TABLES_OWNED } from "../src/state/tables.ts";
+import { cleanup, statePath } from "./state/harness.ts";
 import { sourceFiles } from "./static-checks.ts";
 
 /** The open path: it opens the file, takes the lease, and closes it, so it
  * holds the whole composition. Every other caller names its own list. */
 const OPEN_PATH = "src/startup.ts";
 
-/** The tables each aggregate owns. `schema.ts` defines them all, so it is
- * outside the rule; `store.ts`, `graph.ts`, and `json.ts` hold no table. */
-const TABLES_OWNED: Record<string, ReadonlySet<string>> = {
-	"consultation-record.ts": new Set([
-		"consultations",
-		"consultation_turns",
-		"consultation_snapshots",
-		"consultation_resources",
-		"consultation_remaining_resources",
-		"consultation_pending_responses",
-		"checkout_conflict_confirmations",
-	]),
-	"grouping.ts": new Set(["grouping_axis", "group_order"]),
-	"handoff.ts": new Set(["handoffs", "handoff_attempts", "auto_handoff_mode"]),
-	"lease.ts": new Set(["lease"]),
-	"plane-action.ts": new Set(["plane_action_attempts"]),
-	"repository-init.ts": new Set(["repository_init"]),
-	"source-fact.ts": new Set(["source_health", "memberships"]),
-	"ticket-work-cycle.ts": new Set(["tickets", "completion_traces"]),
-	"work-queue.ts": new Set(["work_queue", "queue_pause"]),
-};
+const AGGREGATE_KEYS = Object.keys(TABLES_OWNED) as readonly (keyof typeof TABLES_OWNED)[];
+
+/** The ownership map, read as sets. */
+const OWNED: Record<string, ReadonlySet<string>> = Object.fromEntries(
+	Object.entries(TABLES_OWNED).map(([key, tables]) => [key, new Set<string>(tables)]),
+);
 
 const CALLERS = sourceFiles(
 	"src",
 	(file) => !file.startsWith("src/state/") && file !== "src/state.ts",
 );
-const AGGREGATE_FILES = sourceFiles("src/state", (file) =>
-	Object.keys(TABLES_OWNED).includes(file.slice("src/state/".length)),
-);
 
-/** Every aggregate interface the module declares, by its aggregate key. */
-function aggregateInterfaces(): Map<string, string> {
-	const found = new Map<string, string>();
-	for (const file of sourceFiles("src/state")) {
-		const source = readFileSync(file, "utf8");
-		for (const match of source.matchAll(/export interface (\w+Aggregate)\b/gu)) {
-			const name = match[1];
-			const key = name.slice(0, -"Aggregate".length);
-			found.set(key.charAt(0).toLowerCase() + key.slice(1), name);
-		}
-	}
-	return found;
+function aggregateFile(key: string): string {
+	return `src/state/${key.replace(/[A-Z]/gu, (c) => `-${c.toLowerCase()}`)}.ts`;
 }
 
+/** One aggregate's declared shapes: its interface's methods and the public
+ * methods its module holds beyond that interface. */
+interface AggregateShape {
+	key: string;
+	interfaceName: string;
+	file: string;
+	interfaceMethods: Set<string>;
+	internalMethods: Set<string>;
+}
+
+function aggregateShapes(): AggregateShape[] {
+	const shapes: AggregateShape[] = [];
+	for (const key of AGGREGATE_KEYS) {
+		const file = aggregateFile(key);
+		const source = readFileSync(file, "utf8");
+		const interfaceName = `${key.charAt(0).toUpperCase()}${key.slice(1)}Aggregate`;
+		const interfaceStart = source.indexOf(`export interface ${interfaceName} {`);
+		if (interfaceStart < 0) throw new Error(`${file} declares no ${interfaceName}`);
+		const interfaceBody = source.slice(interfaceStart, source.indexOf("\n}", interfaceStart));
+		const interfaceMethods = new Set(
+			[...interfaceBody.matchAll(/^\t(\w+)\(/gmu)].map((match) => match[1]),
+		);
+		const classStart = source.indexOf(
+			`export class ${interfaceName.replace("Aggregate", "Module")}`,
+		);
+		if (classStart < 0) throw new Error(`${file} declares no module class`);
+		const classBody = source.slice(classStart);
+		const publicMethods = new Set(
+			[...classBody.matchAll(/^\t(?!private\s)(\w+)\(/gmu)]
+				.map((match) => match[1])
+				.filter((name) => name !== "constructor"),
+		);
+		shapes.push({
+			key,
+			interfaceName,
+			file,
+			interfaceMethods,
+			internalMethods: new Set([...publicMethods].filter((name) => !interfaceMethods.has(name))),
+		});
+	}
+	return shapes;
+}
+
+/** The names a caller imports from the state module's aggregate files. */
+function namedInterfaces(source: string): Set<string> {
+	const named = new Set<string>();
+	for (const match of source.matchAll(/import type \{([^}]*)\} from "[^"]*state\//gmu)) {
+		for (const name of match[1].split(",").map((part) => part.trim())) named.add(name);
+	}
+	for (const match of source.matchAll(/import type \{([^}]*)\} from "[^"]*\/state\.ts"/gmu)) {
+		for (const name of match[1].split(",").map((part) => part.trim())) named.add(name);
+	}
+	return named;
+}
+
+afterEach(cleanup);
+
 describe("the state module's boundary", () => {
-	test("no caller imports the whole composition", () => {
+	test("no caller outside the open path holds the whole composition", () => {
 		const offenders: string[] = [];
 		for (const file of CALLERS) {
-			if (/^import\b[^\n]*\bFactoryState\b/mu.test(readFileSync(file, "utf8")))
-				offenders.push(file);
+			// The open path is the rule's one exception: it is the caller that
+			// opens the file and holds the composition on purpose.
+			if (file === OPEN_PATH) continue;
+			const source = readFileSync(file, "utf8");
+			// The composition module is the only thing that hands a caller every
+			// aggregate. Importing from it is the hold whatever name the caller
+			// bound the import to, so the rule reads the import and not the name.
+			if (/^import\b[^\n]*from\s*"[^"]*state\.ts"/mu.test(source))
+				offenders.push(`${file} imports the composed state`);
+			if (/\bopenFactoryState\s*\(/u.test(source))
+				offenders.push(`${file} opens the state file itself`);
+			const named = namedInterfaces(source);
+			const shapes = aggregateShapes();
+			const namedAggregates = shapes.filter((shape) => named.has(shape.interfaceName));
+			if (namedAggregates.length === shapes.length)
+				offenders.push(`${file} names every aggregate, which is the composition`);
 		}
-		expect(offenders).toEqual([OPEN_PATH]);
+		expect(offenders).toEqual([]);
 	});
 
 	test("every aggregate a caller reads is one the caller names", () => {
-		const interfaces = aggregateInterfaces();
+		const shapes = aggregateShapes();
 		const offenders: string[] = [];
 		const reads = new Set<string>();
 		for (const file of CALLERS) {
@@ -88,16 +150,20 @@ describe("the state module's boundary", () => {
 			// aggregate; the first rule names it as the single exception.
 			if (file === OPEN_PATH) continue;
 			const source = readFileSync(file, "utf8");
-			const named = new Set<string>();
-			for (const match of source.matchAll(/import type \{([^}]*)\} from "[^"]*state\//gu)) {
-				for (const name of match[1].split(",").map((part) => part.trim())) named.add(name);
-			}
-			for (const match of source.matchAll(/\bstate\.([A-Za-z][A-Za-z0-9]*)\./gu)) {
-				const key = match[1];
-				const iface = interfaces.get(key);
-				if (iface === undefined) continue;
-				reads.add(`${file} reads ${key}`);
-				if (!named.has(iface)) offenders.push(`${file} calls ${key} without naming ${iface}`);
+			const named = namedInterfaces(source);
+			for (const shape of shapes) {
+				// The call is what counts, whatever the caller called the state.
+				// A method name is part of the match so a domain object's own
+				// field is not mistaken for an aggregate.
+				for (const method of shape.interfaceMethods) {
+					const call = new RegExp(`\\.${shape.key}\\.${method}\\s*\\(`, "gu");
+					if (!call.test(source)) continue;
+					reads.add(`${file} reads ${shape.key}`);
+					if (!named.has(shape.interfaceName))
+						offenders.push(
+							`${file} calls ${shape.key}.${method} without naming ${shape.interfaceName}`,
+						);
+				}
 			}
 		}
 		// The rule is only worth having while a caller actually reads an
@@ -109,12 +175,12 @@ describe("the state module's boundary", () => {
 	test("each aggregate reaches only the tables it owns", () => {
 		const offenders: string[] = [];
 		const reads = new Set<string>();
-		for (const file of AGGREGATE_FILES) {
+		for (const [key, owned] of Object.entries(OWNED)) {
+			const file = aggregateFile(key);
 			const source = readFileSync(file, "utf8");
-			const owned = TABLES_OWNED[file.slice("src/state/".length)] ?? new Set<string>();
 			for (const match of source.matchAll(/\b(?:FROM|INTO|UPDATE|JOIN)\s+([a-z_]+)/gu)) {
 				const table = match[1];
-				const anyOwner = Object.values(TABLES_OWNED).some((set) => set.has(table));
+				const anyOwner = Object.values(OWNED).some((set) => set.has(table));
 				if (!anyOwner) continue;
 				reads.add(`${file} reads ${table}`);
 				if (!owned.has(table)) offenders.push(`${file} reaches ${table}`);
@@ -123,8 +189,80 @@ describe("the state module's boundary", () => {
 		// Every owned table must still be reached, or the map has drifted from
 		// the module.
 		const reachedTables = new Set([...reads].map((read) => read.split(" reads ")[1]));
-		const allOwned = new Set([...Object.values(TABLES_OWNED)].flatMap((set) => [...set]));
+		const allOwned = new Set([...Object.values(OWNED)].flatMap((set) => [...set]));
 		expect([...allOwned].filter((table) => !reachedTables.has(table))).toEqual([]);
 		expect(offenders).toEqual([]);
+	});
+
+	test("every table the state file holds has exactly one owner", () => {
+		// The tables are read from a real file the migration chain has built, so
+		// a scratch table a migration renames away is not mistaken for a table the
+		// file keeps, and a table the chain creates is never left out.
+		const path = statePath();
+		openStore(path).close();
+		const database = new Database(path, { readonly: true });
+		const created = (
+			database
+				.prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
+				.all() as Array<{ name: string }>
+		).map((row) => row.name);
+		database.close();
+		expect(created.length).toBeGreaterThan(20);
+		const claimed = new Map<string, string>();
+		for (const [key, tables] of Object.entries(OWNED))
+			for (const table of tables) claimed.set(table, key);
+		const unclaimed: string[] = [];
+		for (const table of created) {
+			if (claimed.has(table)) continue;
+			if ((SEAM_TABLES as readonly string[]).includes(table)) continue;
+			if ((RETIRED_TABLES as readonly string[]).includes(table)) continue;
+			unclaimed.push(`${table} is created by the schema and claimed by no aggregate`);
+		}
+		// A table claimed twice is a table two aggregates can write.
+		const shared = [...claimed.keys()].filter(
+			(table) =>
+				Object.values(OWNED).filter((set) => set.has(table)).length > 1 &&
+				!(RETIRED_TABLES as readonly string[]).includes(table),
+		);
+		expect([...new Set(unclaimed)]).toEqual([]);
+		expect(shared).toEqual([]);
+	});
+
+	test("an aggregate's internal operations stay inside the module", () => {
+		const offenders: string[] = [];
+		const covered = new Set<string>();
+		for (const shape of aggregateShapes()) {
+			for (const method of shape.internalMethods) {
+				for (const file of CALLERS) {
+					const source = readFileSync(file, "utf8");
+					if (!new RegExp(`\\.${method}\\s*\\(`, "gu").test(source)) continue;
+					offenders.push(`${file} calls ${shape.key}.${method}, an internal operation`);
+				}
+				covered.add(`${shape.key}.${method}`);
+			}
+		}
+		// The module really does publish internal operations; an empty set would
+		// mean the split moved them somewhere the rule cannot see.
+		expect(covered.size).toBeGreaterThan(10);
+		expect(offenders).toEqual([]);
+	});
+
+	test("no aggregate holds the raw database handle", () => {
+		const offenders: string[] = [];
+		for (const key of AGGREGATE_KEYS) {
+			const file = aggregateFile(key);
+			const source = readFileSync(file, "utf8");
+			if (/\bnew Database\s*\(/u.test(source)) offenders.push(`${file} opens the file itself`);
+			if (/\bStateScope\b/u.test(source) === false)
+				offenders.push(`${file} does not run on the store's scoped handle`);
+		}
+		expect(offenders).toEqual([]);
+	});
+
+	test("the composition is built as a whole, not cast into place", () => {
+		const graph = readFileSync("src/state/graph.ts", "utf8");
+		expect(graph).toContain("const graph: StateGraph = {");
+		expect(graph).not.toMatch(/as StateGraph/u);
+		for (const key of AGGREGATE_KEYS) expect(graph).toContain(`${key}: new `);
 	});
 });

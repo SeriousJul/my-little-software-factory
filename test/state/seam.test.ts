@@ -79,7 +79,7 @@ describe("the seam aggregate", () => {
 		const path = statePath();
 		// Read the two pragmas on the live connection the store seam opens.
 		const store = openStore(path);
-		const db = store.db;
+		const db = store.scopeOf("seam test", []);
 		const journal = db.prepare("PRAGMA journal_mode").get() as { journal_mode: string };
 		const foreignKeys = db.prepare("PRAGMA foreign_keys").get() as { foreign_keys: number };
 		expect(journal.journal_mode).toBe("wal");
@@ -91,7 +91,7 @@ describe("the seam aggregate", () => {
 			(other.prepare("PRAGMA journal_mode").get() as { journal_mode: string }).journal_mode,
 		).toBe("wal");
 		other.close();
-		store.closeDb();
+		store.close();
 	});
 	test("permits only one live lease for a database", () => {
 		const path = statePath();

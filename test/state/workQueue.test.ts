@@ -246,4 +246,24 @@ describe("the workQueue aggregate", () => {
 		});
 		expect(state.workQueue.items().map(workQueueIdentityOf)).toEqual(first);
 	});
+
+	test("the queue pause is durable factory state (ADR 0052)", () => {
+		const path = statePath();
+		const state = openFactoryState(path);
+		expect(state.workQueue.queuePaused()).toBe(false);
+		state.workQueue.setQueuePaused(true);
+		expect(state.workQueue.queuePaused()).toBe(true);
+		state.close();
+
+		const reopened = openFactoryState(path);
+		expect(reopened.workQueue.queuePaused()).toBe(true);
+		// The pause is the file's own fact: the toggle writes it back off, and
+		// a third open reads the off.
+		reopened.workQueue.setQueuePaused(false);
+		expect(reopened.workQueue.queuePaused()).toBe(false);
+		reopened.close();
+		const third = openFactoryState(path);
+		expect(third.workQueue.queuePaused()).toBe(false);
+		third.close();
+	});
 });

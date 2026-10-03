@@ -81,7 +81,7 @@ import {
 	ObservationCoordinator,
 	STARTUP_GRACE_MS,
 } from "../observation.ts";
-import { parallelSeatCount, TICKET_SEAT_STATES } from "../parallel.ts";
+import { CONSULTATION_SEAT_STATES, parallelSeatCount, TICKET_SEAT_STATES } from "../parallel.ts";
 import { evaluatePlacement, type PlacementEvaluation } from "../placement.ts";
 import {
 	DEFAULT_MERGE_METHOD,
@@ -792,7 +792,7 @@ export function App({
 					})),
 					handoffAttemptTickets: state.handoff.openAttemptTickets(),
 					consultations: state.consultationRecord
-						.consultations("all")
+						.consultationsByState(CONSULTATION_SEAT_STATES)
 						.map((consultation) => ({ state: consultation.state })),
 					agents: agentsRef.current,
 					now: Date.now(),

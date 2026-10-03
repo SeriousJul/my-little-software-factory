@@ -1,6 +1,12 @@
 /**
  * The consultation record aggregate: the facts it answers and the
  * operations it runs. It reaches only the tables its aggregate owns.
+ *
+ * The methods on `ConsultationRecordAggregate` are the aggregate's interface: what a
+ * caller outside the module may reach. The other public methods are the narrow
+ * operations this aggregate publishes to the module for another aggregate to
+ * call (issue #202, ADR 0092). No caller outside the module reaches them, and
+ * the boundary check refuses one that does.
  */
 
 import { randomUUID } from "node:crypto";
@@ -14,8 +20,9 @@ import type { EnvironmentKind } from "../domain/ticket.ts";
 import type { TurnEndCause } from "../turn-log.ts";
 import type { StateGraph } from "./graph.ts";
 import { turnEndCauseOf } from "./json.ts";
-import type { StateStore } from "./store.ts";
+import type { StateScope, StateStore } from "./store.ts";
 import { StateError } from "./store.ts";
+import { TABLES_OWNED } from "./tables.ts";
 
 export const CONSULTATION_STATES = [
 	"queued",
@@ -339,7 +346,6 @@ export interface ConsultationRecordAggregate {
 		detail?: string,
 	): boolean;
 	captureConsultationPartial(id: string, output: string | null, capturedAt?: string): void;
-	consultationTurn(id: string): ConsultationTurn | undefined;
 	consultationTurns(id: string): ConsultationTurn[];
 	consultationSnapshots(id: string): ConsultationSnapshot[];
 	consultationNeedsSnapshot(id: string): boolean;
@@ -354,12 +360,6 @@ export interface ConsultationRecordAggregate {
 		details?: string,
 	): void;
 	markConsultationResourceClosed(id: string, kind: string, resourceId: string): void;
-	recordRemainingConsultationResource(
-		id: string,
-		kind: string,
-		resourceId: string,
-		details?: string,
-	): void;
 	consultationRemainingResources(id: string): ConsultationResource[];
 	beginConsultationClose(id: string): boolean;
 	recordConsultationCloseFailure(id: string, reason: string): void;
@@ -373,41 +373,41 @@ export interface ConsultationRecordAggregate {
 }
 
 export class ConsultationRecordModule implements ConsultationRecordAggregate {
-	readonly store: StateStore;
-	readonly graph: StateGraph;
-	constructor(store: StateStore, graph: StateGraph) {
-		this.store = store;
+	readonly db: StateScope;
+	readonly graph: () => StateGraph;
+	constructor(store: StateStore, graph: () => StateGraph) {
+		this.db = store.scopeOf("consultationRecord", TABLES_OWNED.consultationRecord);
 		this.graph = graph;
 	}
 	scheduleConsultation(consultationId: string): { ok: true } | { ok: false; reason: string } {
-		return this.store.transaction(() => {
-			if (this.graph.workQueue.hasConsultationItem(consultationId))
+		return this.db.transaction(() => {
+			if (this.graph().workQueue.hasConsultationItem(consultationId))
 				return {
 					ok: false,
 					reason: `consultation ${consultationId} already has a waiting queue item`,
 				};
-			const result = this.store.db
+			const result = this.db
 				.prepare(
 					"UPDATE consultations SET state = 'queued', updated_at = ? WHERE id = ? AND state = 'unscheduled'",
 				)
-				.run(new Date(this.store.now()).toISOString(), consultationId);
+				.run(new Date(this.db.now()).toISOString(), consultationId);
 			if (Number(result.changes) === 0)
 				return { ok: false, reason: "the Consultation is not unscheduled" };
-			this.graph.workQueue.insertWorkQueueConsultationItem(
+			this.graph().workQueue.insertWorkQueueConsultationItem(
 				consultationId,
-				new Date(this.store.now()).toISOString(),
+				new Date(this.db.now()).toISOString(),
 			);
 			return { ok: true };
 		});
 	}
 	removeConsultationWorkItem(consultationId: string): boolean {
-		return this.store.transaction(() => {
-			if (!this.graph.workQueue.dropConsultationWorkItem(consultationId)) return false;
-			this.store.db
+		return this.db.transaction(() => {
+			if (!this.graph().workQueue.dropConsultationWorkItem(consultationId)) return false;
+			this.db
 				.prepare(
 					"UPDATE consultations SET state = 'unscheduled', updated_at = ? WHERE id = ? AND state = 'queued'",
 				)
-				.run(new Date(this.store.now()).toISOString(), consultationId);
+				.run(new Date(this.db.now()).toISOString(), consultationId);
 			return true;
 		});
 	}
@@ -419,8 +419,8 @@ export class ConsultationRecordModule implements ConsultationRecordAggregate {
 		// with its Work queue item in the same write, so the record and the
 		// pointer to it commit together and never exist apart from each other.
 		const initialState = input.initialState ?? "opening";
-		this.store.transaction(() => {
-			this.store.db
+		this.db.transaction(() => {
+			this.db
 				.prepare(
 					`INSERT INTO consultations(
 						id, type_name, agent_type, environment, model, thinking, context_window, template,
@@ -451,20 +451,20 @@ export class ConsultationRecordModule implements ConsultationRecordAggregate {
 					input.agentName,
 					input.replacementOf ?? null,
 				);
-			this.store.db
+			this.db
 				.prepare(
 					"INSERT INTO consultation_turns(id, consultation_id, input, accepted_at, sequence_baseline) VALUES (?, ?, ?, ?, NULL)",
 				)
 				.run(randomUUID(), id, input.initialInput, createdAt);
 			if (initialState === "queued")
-				this.graph.workQueue.insertWorkQueueConsultationItem(id, createdAt);
+				this.graph().workQueue.insertWorkQueueConsultationItem(id, createdAt);
 		});
 		const consultation = this.consultation(id);
 		if (consultation == null) throw new StateError(`consultation ${id} was not created`);
 		return consultation;
 	}
 	consultation(id: string): Consultation | undefined {
-		const row = this.store.db.prepare("SELECT * FROM consultations WHERE id = ?").get(id) as
+		const row = this.db.prepare("SELECT * FROM consultations WHERE id = ?").get(id) as
 			| ConsultationRow
 			| undefined;
 		return row == null ? undefined : this.consultationFromRow(row);
@@ -476,13 +476,13 @@ export class ConsultationRecordModule implements ConsultationRecordAggregate {
 				: filter === "closed"
 					? "WHERE state = 'closed'"
 					: "";
-		const rows = this.store.db
+		const rows = this.db
 			.prepare(`SELECT * FROM consultations ${where}`)
 			.all() as unknown as ConsultationRow[];
 		return rows.map((row) => this.consultationFromRow(row)).sort(compareConsultations);
 	}
 	consultationCounts(): { awaitingResponse: number; recovery: number } {
-		const rows = this.store.db
+		const rows = this.db
 			.prepare(
 				"SELECT state, COUNT(*) AS count FROM consultations WHERE state <> 'closed' GROUP BY state",
 			)
@@ -501,12 +501,12 @@ export class ConsultationRecordModule implements ConsultationRecordAggregate {
 		};
 	}
 	setConsultationRepositoryPath(id: string, path: string): void {
-		this.store.db
+		this.db
 			.prepare("UPDATE consultations SET repository_path = ?, updated_at = ? WHERE id = ?")
 			.run(path, new Date().toISOString(), id);
 	}
 	confirmedCheckoutConflicts(checkoutPath: string): string[] {
-		const row = this.store.db
+		const row = this.db
 			.prepare(
 				"SELECT identities_json FROM checkout_conflict_confirmations WHERE checkout_path = ?",
 			)
@@ -522,7 +522,7 @@ export class ConsultationRecordModule implements ConsultationRecordAggregate {
 		return parsed.filter((value): value is string => typeof value === "string");
 	}
 	recordCheckoutConflictConfirmation(checkoutPath: string, identities: readonly string[]): void {
-		this.store.db
+		this.db
 			.prepare(
 				`INSERT INTO checkout_conflict_confirmations(checkout_path, identities_json, confirmed_at)
 					VALUES (?, ?, ?)
@@ -533,14 +533,14 @@ export class ConsultationRecordModule implements ConsultationRecordAggregate {
 			.run(
 				checkoutPath,
 				JSON.stringify([...new Set(identities)]),
-				new Date(this.store.now()).toISOString(),
+				new Date(this.db.now()).toISOString(),
 			);
 	}
 	setConsultationAgent(id: string, details: ConsultationAgentDetails): void {
 		// The opening's Agent warning is spent now: the Agent is verified and
 		// connected, so clear only the "Opening Agent ..." fact. Any other
 		// warning, such as the live checkout's uncommitted-changes note, stays.
-		this.store.db
+		this.db
 			.prepare(
 				"UPDATE consultations SET pane_id = ?, tab_id = ?, workspace_id = ?, session_id = ?, state = 'working', updated_at = ?, failure = NULL, warning = CASE WHEN warning LIKE 'Opening Agent %' THEN NULL ELSE warning END WHERE id = ? AND state = 'opening'",
 			)
@@ -554,20 +554,20 @@ export class ConsultationRecordModule implements ConsultationRecordAggregate {
 			);
 	}
 	canRecoverConsultationOpening(id: string): boolean {
-		const row = this.store.db.prepare("SELECT state FROM consultations WHERE id = ?").get(id) as
+		const row = this.db.prepare("SELECT state FROM consultations WHERE id = ?").get(id) as
 			| { state: ConsultationState }
 			| undefined;
 		return row?.state === "opening";
 	}
 	beginConsultationStart(id: string): boolean {
-		return this.store.transaction(() => {
-			const result = this.store.db
+		return this.db.transaction(() => {
+			const result = this.db
 				.prepare(
 					"UPDATE consultations SET state = 'opening', updated_at = ? WHERE id = ? AND state IN ('queued', 'unscheduled')",
 				)
-				.run(new Date(this.store.now()).toISOString(), id);
+				.run(new Date(this.db.now()).toISOString(), id);
 			if (Number(result.changes) === 0) return false;
-			this.graph.workQueue.dropConsultationWorkItem(id);
+			this.graph().workQueue.dropConsultationWorkItem(id);
 			return true;
 		});
 	}
@@ -583,7 +583,7 @@ export class ConsultationRecordModule implements ConsultationRecordAggregate {
 			renderedOpeningPrompt: string;
 		},
 	): boolean {
-		const result = this.store.db
+		const result = this.db
 			.prepare(
 				`UPDATE consultations SET agent_type = ?, environment = ?, model = ?, thinking = ?,
 					context_window = ?, template = ?, rendered_opening_prompt = ?, updated_at = ? WHERE id = ? AND state IN ('queued', 'unscheduled')`,
@@ -596,13 +596,13 @@ export class ConsultationRecordModule implements ConsultationRecordAggregate {
 				settings.contextWindow,
 				settings.template,
 				settings.renderedOpeningPrompt,
-				new Date(this.store.now()).toISOString(),
+				new Date(this.db.now()).toISOString(),
 				id,
 			);
 		return Number(result.changes) > 0;
 	}
 	failConsultationOpening(id: string, reason: string, agentStarted = false): void {
-		this.store.db
+		this.db
 			.prepare(
 				agentStarted
 					? "UPDATE consultations SET state = 'working', failure = ?, updated_at = ? WHERE id = ? AND state = 'opening'"
@@ -611,10 +611,10 @@ export class ConsultationRecordModule implements ConsultationRecordAggregate {
 			.run(reason, new Date().toISOString(), id);
 	}
 	setConsultationWarning(id: string, warning: string | null): void {
-		this.store.db.prepare("UPDATE consultations SET warning = ? WHERE id = ?").run(warning, id);
+		this.db.prepare("UPDATE consultations SET warning = ? WHERE id = ?").run(warning, id);
 	}
 	recordConsultationAgentHandles(id: string, details: ConsultationAgentDetails): void {
-		this.store.db
+		this.db
 			.prepare(
 				"UPDATE consultations SET pane_id = ?, tab_id = ?, workspace_id = ?, session_id = ? WHERE id = ? AND state = 'opening'",
 			)
@@ -631,8 +631,8 @@ export class ConsultationRecordModule implements ConsultationRecordAggregate {
 		sequence: number,
 		acceptedAt = new Date().toISOString(),
 	): boolean {
-		return this.store.transaction(() => {
-			const row = this.store.db
+		return this.db.transaction(() => {
+			const row = this.db
 				.prepare("SELECT state, latest_sequence, draft FROM consultations WHERE id = ?")
 				.get(id) as
 				| { state: ConsultationState; latest_sequence: number | null; draft: string }
@@ -642,7 +642,7 @@ export class ConsultationRecordModule implements ConsultationRecordAggregate {
 			if (row == null || row.state !== "awaiting-response") return false;
 			if (row.latest_sequence !== null && sequence <= row.latest_sequence) return false;
 			const pending = this.pendingConsultationResponse(id);
-			this.store.db
+			this.db
 				.prepare(
 					"INSERT INTO consultation_turns(id, consultation_id, input, accepted_at, sequence_baseline) VALUES (?, ?, ?, ?, ?)",
 				)
@@ -654,10 +654,8 @@ export class ConsultationRecordModule implements ConsultationRecordAggregate {
 					pending?.sequenceBaseline ?? row.latest_sequence,
 				);
 			if (pending !== null)
-				this.store.db
-					.prepare("DELETE FROM consultation_pending_responses WHERE id = ?")
-					.run(pending.id);
-			this.store.db
+				this.db.prepare("DELETE FROM consultation_pending_responses WHERE id = ?").run(pending.id);
+			this.db
 				.prepare(
 					"UPDATE consultations SET state = 'working', latest_sequence = ?, draft_old = CASE WHEN draft <> '' THEN 1 ELSE 0 END, updated_at = ? WHERE id = ?",
 				)
@@ -666,7 +664,7 @@ export class ConsultationRecordModule implements ConsultationRecordAggregate {
 		});
 	}
 	setConsultationState(id: string, next: ConsultationState, detail?: string | null): boolean {
-		const result = this.store.db
+		const result = this.db
 			.prepare(
 				"UPDATE consultations SET state = ?, updated_at = ?, failure = CASE WHEN ? IS NULL THEN failure ELSE ? END, warning = CASE WHEN ? IS NULL THEN warning ELSE ? END, close_result = CASE WHEN ? IS NULL THEN close_result ELSE ? END WHERE id = ? AND (state <> 'failed' OR ? IN ('closing', 'closed'))",
 			)
@@ -685,7 +683,7 @@ export class ConsultationRecordModule implements ConsultationRecordAggregate {
 		return Number(result.changes) > 0;
 	}
 	setConsultationDraft(id: string, draft: string, old = false): void {
-		this.store.db
+		this.db
 			.prepare(
 				"UPDATE consultations SET draft = ?, draft_updated_at = ?, draft_old = ? WHERE id = ?",
 			)
@@ -696,8 +694,8 @@ export class ConsultationRecordModule implements ConsultationRecordAggregate {
 		input: string,
 		sequenceBaseline: number | null = null,
 	): ConsultationPendingResponse | undefined {
-		return this.store.transaction(() => {
-			const row = this.store.db.prepare("SELECT state FROM consultations WHERE id = ?").get(id) as
+		return this.db.transaction(() => {
+			const row = this.db.prepare("SELECT state FROM consultations WHERE id = ?").get(id) as
 				| { state: ConsultationState }
 				| undefined;
 			if (row?.state !== "awaiting-response" || this.pendingConsultationResponse(id) !== null)
@@ -709,7 +707,7 @@ export class ConsultationRecordModule implements ConsultationRecordAggregate {
 				sequenceBaseline,
 				createdAt: new Date().toISOString(),
 			};
-			this.store.db
+			this.db
 				.prepare(
 					"INSERT INTO consultation_pending_responses(id, consultation_id, input, sequence_baseline, created_at) VALUES (?, ?, ?, ?, ?)",
 				)
@@ -718,23 +716,21 @@ export class ConsultationRecordModule implements ConsultationRecordAggregate {
 		});
 	}
 	acceptConsultationResponse(id: string, pendingId: string): ConsultationTurn | undefined {
-		return this.store.transaction(() => {
+		return this.db.transaction(() => {
 			const pending = this.pendingConsultationResponse(id);
-			const row = this.store.db.prepare("SELECT state FROM consultations WHERE id = ?").get(id) as
+			const row = this.db.prepare("SELECT state FROM consultations WHERE id = ?").get(id) as
 				| { state: ConsultationState }
 				| undefined;
 			if (row?.state !== "awaiting-response" || pending?.id !== pendingId) return undefined;
 			const turnId = randomUUID();
 			const acceptedAt = new Date().toISOString();
-			this.store.db
+			this.db
 				.prepare(
 					"INSERT INTO consultation_turns(id, consultation_id, input, accepted_at, sequence_baseline) VALUES (?, ?, ?, ?, ?)",
 				)
 				.run(turnId, id, pending.input, acceptedAt, pending.sequenceBaseline);
-			this.store.db
-				.prepare("DELETE FROM consultation_pending_responses WHERE id = ?")
-				.run(pendingId);
-			this.store.db
+			this.db.prepare("DELETE FROM consultation_pending_responses WHERE id = ?").run(pendingId);
+			this.db
 				.prepare(
 					"UPDATE consultations SET state = 'working', draft = '', draft_updated_at = NULL, draft_old = 0, updated_at = ? WHERE id = ?",
 				)
@@ -743,13 +739,13 @@ export class ConsultationRecordModule implements ConsultationRecordAggregate {
 		});
 	}
 	cancelConsultationResponse(id: string, pendingId: string): boolean {
-		const result = this.store.db
+		const result = this.db
 			.prepare("DELETE FROM consultation_pending_responses WHERE id = ? AND consultation_id = ?")
 			.run(pendingId, id);
 		return Number(result.changes) > 0;
 	}
 	pendingConsultationResponse(id: string): ConsultationPendingResponse | null {
-		const row = this.store.db
+		const row = this.db
 			.prepare(
 				"SELECT id, consultation_id, input, sequence_baseline, created_at FROM consultation_pending_responses WHERE consultation_id = ?",
 			)
@@ -781,8 +777,8 @@ export class ConsultationRecordModule implements ConsultationRecordAggregate {
 		cause: TurnEndCause = "unknown",
 		detail = "",
 	): boolean {
-		return this.store.transaction(() => {
-			const consultation = this.store.db
+		return this.db.transaction(() => {
+			const consultation = this.db
 				.prepare("SELECT state, warning FROM consultations WHERE id = ?")
 				.get(id) as { state: ConsultationState; warning: string | null } | undefined;
 			if (
@@ -790,7 +786,7 @@ export class ConsultationRecordModule implements ConsultationRecordAggregate {
 				(consultation.state !== "working" && consultation.state !== "opening")
 			)
 				return false;
-			const turn = this.store.db
+			const turn = this.db
 				.prepare(
 					"SELECT * FROM consultation_turns WHERE consultation_id = ? AND settled_at IS NULL ORDER BY accepted_at DESC LIMIT 1",
 				)
@@ -804,7 +800,7 @@ export class ConsultationRecordModule implements ConsultationRecordAggregate {
 				sequence <= turn.sequence_baseline
 			)
 				return false;
-			this.store.db
+			this.db
 				.prepare(
 					"UPDATE consultation_turns SET settled_at = ?, settled_status = ?, cause = ?, detail = ? WHERE id = ? AND settled_at IS NULL",
 				)
@@ -812,12 +808,12 @@ export class ConsultationRecordModule implements ConsultationRecordAggregate {
 			if (output !== null) {
 				const bounded = boundedSnapshot(output);
 				const snapshotId = randomUUID();
-				this.store.db
+				this.db
 					.prepare(
 						"INSERT INTO consultation_snapshots(id, consultation_id, turn_id, text, captured_at, partial, truncated) VALUES (?, ?, ?, ?, ?, 0, ?)",
 					)
 					.run(snapshotId, id, turn.id, bounded.text, capturedAt, bounded.truncated ? 1 : 0);
-				this.store.db
+				this.db
 					.prepare("UPDATE consultation_turns SET snapshot_id = ? WHERE id = ?")
 					.run(snapshotId, turn.id);
 			}
@@ -840,7 +836,7 @@ export class ConsultationRecordModule implements ConsultationRecordAggregate {
 						: consultation.warning;
 			const warning =
 				endWarning !== null ? endWarning : isTurnEndWarning(baseWarning) ? null : baseWarning;
-			this.store.db
+			this.db
 				.prepare(
 					"UPDATE consultations SET state = 'awaiting-response', latest_sequence = ?, attention_at = ?, updated_at = ?, draft = CASE WHEN draft = (SELECT input FROM consultation_turns WHERE id = ?) THEN '' ELSE draft END, draft_updated_at = CASE WHEN draft = (SELECT input FROM consultation_turns WHERE id = ?) THEN NULL ELSE draft_updated_at END, draft_old = CASE WHEN draft = (SELECT input FROM consultation_turns WHERE id = ?) THEN 0 ELSE draft_old END, warning = ? WHERE id = ?",
 				)
@@ -855,21 +851,21 @@ export class ConsultationRecordModule implements ConsultationRecordAggregate {
 	): void {
 		if (output === null) return;
 		const bounded = boundedSnapshot(output);
-		this.store.db
+		this.db
 			.prepare(
 				"INSERT INTO consultation_snapshots(id, consultation_id, turn_id, text, captured_at, partial, truncated) VALUES (?, ?, NULL, ?, ?, 1, ?)",
 			)
 			.run(randomUUID(), id, bounded.text, capturedAt, bounded.truncated ? 1 : 0);
 	}
-	consultationTurn(id: string): ConsultationTurn | undefined {
-		const row = this.store.db.prepare("SELECT * FROM consultation_turns WHERE id = ?").get(id) as
+	private consultationTurn(id: string): ConsultationTurn | undefined {
+		const row = this.db.prepare("SELECT * FROM consultation_turns WHERE id = ?").get(id) as
 			| ConsultationTurnRow
 			| undefined;
 		return row == null ? undefined : turnFromRow(row);
 	}
 	consultationTurns(id: string): ConsultationTurn[] {
 		return (
-			this.store.db
+			this.db
 				.prepare(
 					"SELECT * FROM consultation_turns WHERE consultation_id = ? ORDER BY accepted_at, rowid",
 				)
@@ -878,7 +874,7 @@ export class ConsultationRecordModule implements ConsultationRecordAggregate {
 	}
 	consultationSnapshots(id: string): ConsultationSnapshot[] {
 		return (
-			this.store.db
+			this.db
 				.prepare(
 					"SELECT * FROM consultation_snapshots WHERE consultation_id = ? ORDER BY captured_at, rowid",
 				)
@@ -887,7 +883,7 @@ export class ConsultationRecordModule implements ConsultationRecordAggregate {
 	}
 	consultationNeedsSnapshot(id: string): boolean {
 		return (
-			this.store.db
+			this.db
 				.prepare(
 					"SELECT 1 FROM consultation_turns WHERE consultation_id = ? AND settled_at IS NOT NULL AND snapshot_id IS NULL LIMIT 1",
 				)
@@ -898,7 +894,7 @@ export class ConsultationRecordModule implements ConsultationRecordAggregate {
 		id: string,
 		resource: Omit<ConsultationResource, "confirmedClosed"> & { confirmedClosed?: boolean },
 	): void {
-		this.store.db
+		this.db
 			.prepare(
 				"INSERT OR REPLACE INTO consultation_resources(consultation_id, kind, resource_id, owned, confirmed_closed, details) VALUES (?, ?, ?, ?, ?, ?)",
 			)
@@ -917,26 +913,26 @@ export class ConsultationRecordModule implements ConsultationRecordAggregate {
 		resourceId: string,
 		details = "retained because the workspace is shared",
 	): void {
-		this.store.db
+		this.db
 			.prepare(
 				"UPDATE consultation_resources SET owned = 0, details = ? WHERE consultation_id = ? AND kind = ? AND resource_id = ?",
 			)
 			.run(details, id, kind, resourceId);
 	}
 	markConsultationResourceClosed(id: string, kind: string, resourceId: string): void {
-		this.store.db
+		this.db
 			.prepare(
 				"UPDATE consultation_resources SET confirmed_closed = 1 WHERE consultation_id = ? AND kind = ? AND resource_id = ?",
 			)
 			.run(id, kind, resourceId);
 	}
-	recordRemainingConsultationResource(
+	private recordRemainingConsultationResource(
 		id: string,
 		kind: string,
 		resourceId: string,
 		details = "",
 	): void {
-		this.store.db
+		this.db
 			.prepare(
 				"INSERT OR REPLACE INTO consultation_remaining_resources(consultation_id, kind, resource_id, details) VALUES (?, ?, ?, ?)",
 			)
@@ -944,7 +940,7 @@ export class ConsultationRecordModule implements ConsultationRecordAggregate {
 	}
 	consultationRemainingResources(id: string): ConsultationResource[] {
 		return (
-			this.store.db
+			this.db
 				.prepare(
 					"SELECT kind, resource_id, 1 AS owned, 0 AS confirmed_closed, details FROM consultation_remaining_resources WHERE consultation_id = ?",
 				)
@@ -969,21 +965,21 @@ export class ConsultationRecordModule implements ConsultationRecordAggregate {
 		// pointer leaves the shared order in the same write, so the queue never
 		// holds an item whose record is closing behind a cap the pickup cannot
 		// reach.
-		return this.store.transaction(() => {
+		return this.db.transaction(() => {
 			if (!this.setConsultationState(id, "closing")) return false;
-			this.graph.workQueue.dropConsultationWorkItem(id);
+			this.graph().workQueue.dropConsultationWorkItem(id);
 			return true;
 		});
 	}
 	recordConsultationCloseFailure(id: string, reason: string): void {
-		this.store.db
+		this.db
 			.prepare(
 				"UPDATE consultations SET warning = ?, close_result = ?, updated_at = ? WHERE id = ? AND state = 'closing'",
 			)
 			.run(`cleanup failed: ${reason}`, `cleanup failed: ${reason}`, new Date().toISOString(), id);
 	}
 	finishConsultationClose(id: string, result?: string, forced = false): void {
-		this.store.transaction(() => {
+		this.db.transaction(() => {
 			if (forced) {
 				for (const resource of this.consultationResources(id).filter(
 					(item) => item.owned && !item.confirmedClosed,
@@ -995,7 +991,7 @@ export class ConsultationRecordModule implements ConsultationRecordAggregate {
 						resource.details,
 					);
 			}
-			this.store.db
+			this.db
 				.prepare(
 					"UPDATE consultations SET state = 'closed', warning = CASE WHEN warning LIKE 'cleanup failed:%' THEN NULL ELSE warning END, close_result = ?, updated_at = ? WHERE id = ? AND state = 'closing'",
 				)
@@ -1004,7 +1000,7 @@ export class ConsultationRecordModule implements ConsultationRecordAggregate {
 	}
 	consultationResources(id: string): ConsultationResource[] {
 		return (
-			this.store.db
+			this.db
 				.prepare(
 					"SELECT kind, resource_id, owned, confirmed_closed, details FROM consultation_resources WHERE consultation_id = ?",
 				)
@@ -1040,31 +1036,31 @@ export class ConsultationRecordModule implements ConsultationRecordAggregate {
 		return boundedInput(parts, limit);
 	}
 	deleteConsultation(id: string): boolean {
-		const row = this.store.db.prepare("SELECT state FROM consultations WHERE id = ?").get(id) as
+		const row = this.db.prepare("SELECT state FROM consultations WHERE id = ?").get(id) as
 			| { state: ConsultationState }
 			| undefined;
 		if (row?.state !== "closed" && row?.state !== "unscheduled") return false;
-		this.store.transaction(() => {
+		this.db.transaction(() => {
 			// The delete takes any pointer the record still leaves behind, so the
 			// queue never lists an item that names no record (ADR 0034, issue #90).
-			this.graph.workQueue.dropConsultationWorkItem(id);
-			this.store.db.prepare("DELETE FROM consultations WHERE id = ?").run(id);
+			this.graph().workQueue.dropConsultationWorkItem(id);
+			this.db.prepare("DELETE FROM consultations WHERE id = ?").run(id);
 		});
 		try {
-			this.store.db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+			this.db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
 		} catch {}
 		return true;
 	}
 	consultationsByState(states: readonly ConsultationState[]): Consultation[] {
 		const placeholders = states.map(() => "?").join(", ");
 		return (
-			this.store.db
+			this.db
 				.prepare(`SELECT * FROM consultations WHERE state IN (${placeholders})`)
 				.all(...states) as unknown as ConsultationRow[]
 		).map((row) => this.consultationFromRow(row));
 	}
 	updateConsultationAgentHandles(id: string, details: ConsultationAgentDetails): void {
-		this.store.transaction(() => {
+		this.db.transaction(() => {
 			const current = this.consultation(id);
 			if (current == null) return;
 			const moves: Array<[string, string | null, string | null]> = [
@@ -1074,21 +1070,21 @@ export class ConsultationRecordModule implements ConsultationRecordAggregate {
 			];
 			for (const [kind, from, to] of moves) {
 				if (from === null || to === null || from === to) continue;
-				this.store.db
+				this.db
 					.prepare(
 						"UPDATE consultation_resources SET resource_id = ?, details = REPLACE(details, ?, ?) WHERE consultation_id = ? AND kind = ? AND resource_id = ? AND owned = 1 AND confirmed_closed = 0",
 					)
 					.run(to, from, to, id, kind, from);
 			}
 			if (current.paneId !== null && current.paneId !== details.paneId)
-				this.store.db
+				this.db
 					.prepare(
 						"UPDATE consultation_resources SET details = REPLACE(details, ?, ?) WHERE consultation_id = ? AND kind = 'agent' AND owned = 1 AND confirmed_closed = 0",
 					)
 					.run(details.paneId, current.paneId, id);
 			// Follow-up handle writes are bookkeeping and, like the launch's,
 			// do not advance the record's activity time.
-			this.store.db
+			this.db
 				.prepare(
 					"UPDATE consultations SET pane_id = ?, tab_id = ?, workspace_id = ?, session_id = ? WHERE id = ?",
 				)
@@ -1106,7 +1102,7 @@ export class ConsultationRecordModule implements ConsultationRecordAggregate {
 		output: string,
 		capturedAt = new Date().toISOString(),
 	): boolean {
-		const turn = this.store.db
+		const turn = this.db
 			.prepare(
 				"SELECT id FROM consultation_turns WHERE consultation_id = ? AND settled_at IS NOT NULL AND snapshot_id IS NULL ORDER BY settled_at DESC LIMIT 1",
 			)
@@ -1114,13 +1110,13 @@ export class ConsultationRecordModule implements ConsultationRecordAggregate {
 		if (turn == null) return false;
 		const bounded = boundedSnapshot(output);
 		const snapshotId = randomUUID();
-		this.store.transaction(() => {
-			this.store.db
+		this.db.transaction(() => {
+			this.db
 				.prepare(
 					"INSERT INTO consultation_snapshots(id, consultation_id, turn_id, text, captured_at, partial, truncated) VALUES (?, ?, ?, ?, ?, 0, ?)",
 				)
 				.run(snapshotId, id, turn.id, bounded.text, capturedAt, bounded.truncated ? 1 : 0);
-			this.store.db
+			this.db
 				.prepare(
 					"UPDATE consultation_turns SET snapshot_id = ? WHERE id = ? AND snapshot_id IS NULL",
 				)

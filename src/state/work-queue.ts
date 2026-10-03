@@ -1,14 +1,21 @@
 /**
  * The work queue aggregate: the facts it answers and the
  * operations it runs. It reaches only the tables its aggregate owns.
+ *
+ * The methods on `WorkQueueAggregate` are the aggregate's interface: what a
+ * caller outside the module may reach. The other public methods are the narrow
+ * operations this aggregate publishes to the module for another aggregate to
+ * call (issue #202, ADR 0092). No caller outside the module reaches them, and
+ * the boundary check refuses one that does.
  */
 
 import type { HandoffChoice } from "../handoff.ts";
 import type { StateGraph } from "./graph.ts";
 import type { HandoffOrigin } from "./handoff.ts";
 import { jsonChoice } from "./json.ts";
-import type { StateStore } from "./store.ts";
+import type { StateScope, StateStore } from "./store.ts";
 import { StateError } from "./store.ts";
+import { TABLES_OWNED } from "./tables.ts";
 
 export interface WorkQueueHandoffItem {
 	kind: "handoff";
@@ -94,42 +101,36 @@ export interface WorkQueueAggregate {
 	removeWorkItem(ticketIdentity: string): boolean;
 	cancelWorkItem(ticketIdentity: string): boolean;
 	removeWorkflowRouteItem(ticketIdentity: string): number;
-	dropConsultationWorkItem(consultationId: string): boolean;
-	repackWorkQueuePositions(): void;
 	moveWorkItem(identity: string, direction: "up" | "down"): boolean;
-	insertWorkQueueConsultationItem(consultationId: string, createdAt: string): void;
-	removeItemsForTickets(identities: readonly string[]): number;
-	removeHandoffItemsForTickets(identities: readonly string[]): number;
-	hasConsultationItem(consultationId: string): boolean;
 }
 
 export class WorkQueueModule implements WorkQueueAggregate {
-	readonly store: StateStore;
-	readonly graph: StateGraph;
-	constructor(store: StateStore, graph: StateGraph) {
-		this.store = store;
+	readonly db: StateScope;
+	readonly graph: () => StateGraph;
+	constructor(store: StateStore, graph: () => StateGraph) {
+		this.db = store.scopeOf("workQueue", TABLES_OWNED.workQueue);
 		this.graph = graph;
 	}
 	queuePaused(): boolean {
-		const row = this.store.db.prepare("SELECT paused FROM queue_pause WHERE id = 1").get() as
+		const row = this.db.prepare("SELECT paused FROM queue_pause WHERE id = 1").get() as
 			| { paused: number }
 			| undefined;
 		return row?.paused === 1;
 	}
 	setQueuePaused(paused: boolean): void {
 		try {
-			this.store.db
+			this.db
 				.prepare(
 					"INSERT INTO queue_pause(id, paused) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET paused = excluded.paused",
 				)
 				.run(paused ? 1 : 0);
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
-			throw new StateError(`cannot store the queue pause at ${this.store.path}: ${message}`);
+			throw new StateError(`cannot store the queue pause at ${this.db.path}: ${message}`);
 		}
 	}
 	items(): WorkQueueItem[] {
-		const rows = this.store.db
+		const rows = this.db
 			.prepare(
 				"SELECT position, ticket_identity, consultation_id, origin, choice_json, previous_message, enqueued_at, route_from_identity, is_automatic, action_task_type FROM work_queue ORDER BY position ASC",
 			)
@@ -203,9 +204,8 @@ export class WorkQueueModule implements WorkQueueAggregate {
 	}
 	hasWorkItem(ticketIdentity: string): boolean {
 		return (
-			this.store.db
-				.prepare("SELECT 1 FROM work_queue WHERE ticket_identity = ?")
-				.get(ticketIdentity) != null
+			this.db.prepare("SELECT 1 FROM work_queue WHERE ticket_identity = ?").get(ticketIdentity) !=
+			null
 		);
 	}
 	enqueueWork(entry: {
@@ -219,8 +219,8 @@ export class WorkQueueModule implements WorkQueueAggregate {
 		automatic?: boolean;
 	}): { ok: true } | { ok: false; reason: string } {
 		try {
-			return this.store.transaction(() => {
-				const existing = this.store.db
+			return this.db.transaction(() => {
+				const existing = this.db
 					.prepare("SELECT 1 FROM work_queue WHERE ticket_identity = ?")
 					.get(entry.ticketIdentity);
 				if (existing !== null && existing !== undefined)
@@ -228,7 +228,7 @@ export class WorkQueueModule implements WorkQueueAggregate {
 						ok: false,
 						reason: `ticket ${entry.ticketIdentity} already has a waiting queue item`,
 					};
-				this.store.db
+				this.db
 					.prepare(
 						"INSERT INTO work_queue(position, ticket_identity, route_from_identity, origin, choice_json, previous_message, enqueued_at, is_automatic) VALUES (COALESCE((SELECT MAX(position) FROM work_queue), -1) + 1, ?, ?, ?, ?, ?, ?, ?)",
 					)
@@ -238,7 +238,7 @@ export class WorkQueueModule implements WorkQueueAggregate {
 						entry.origin,
 						JSON.stringify(entry.choice),
 						entry.previousMessage,
-						new Date(this.store.now()).toISOString(),
+						new Date(this.db.now()).toISOString(),
 						entry.automatic === true ? 1 : 0,
 					);
 				return { ok: true };
@@ -261,8 +261,8 @@ export class WorkQueueModule implements WorkQueueAggregate {
 		automatic?: boolean;
 	}): { ok: true } | { ok: false; reason: string } {
 		try {
-			return this.store.transaction(() => {
-				const existing = this.store.db
+			return this.db.transaction(() => {
+				const existing = this.db
 					.prepare("SELECT 1 FROM work_queue WHERE ticket_identity = ?")
 					.get(entry.ticketIdentity);
 				if (existing !== null && existing !== undefined)
@@ -270,7 +270,7 @@ export class WorkQueueModule implements WorkQueueAggregate {
 						ok: false,
 						reason: `ticket ${entry.ticketIdentity} already has a waiting queue item`,
 					};
-				this.store.db
+				this.db
 					.prepare(
 						"INSERT INTO work_queue(position, ticket_identity, route_from_identity, origin, choice_json, previous_message, enqueued_at, is_automatic, action_task_type) VALUES (COALESCE((SELECT MAX(position) FROM work_queue), -1) + 1, ?, ?, ?, NULL, '', ?, ?, ?)",
 					)
@@ -278,7 +278,7 @@ export class WorkQueueModule implements WorkQueueAggregate {
 						entry.ticketIdentity,
 						normalizeRouteFromIdentity(entry.ticketIdentity, entry.routeFromIdentity),
 						entry.origin,
-						new Date(this.store.now()).toISOString(),
+						new Date(this.db.now()).toISOString(),
 						entry.automatic === true ? 1 : 0,
 						entry.taskType,
 					);
@@ -293,8 +293,8 @@ export class WorkQueueModule implements WorkQueueAggregate {
 	}
 	enqueueConsultationWork(consultationId: string): { ok: true } | { ok: false; reason: string } {
 		try {
-			return this.store.transaction(() => {
-				const existing = this.store.db
+			return this.db.transaction(() => {
+				const existing = this.db
 					.prepare("SELECT 1 FROM work_queue WHERE consultation_id = ?")
 					.get(consultationId);
 				if (existing !== null && existing !== undefined)
@@ -302,11 +302,11 @@ export class WorkQueueModule implements WorkQueueAggregate {
 						ok: false,
 						reason: `consultation ${consultationId} already has a waiting queue item`,
 					};
-				this.store.db
+				this.db
 					.prepare(
 						"INSERT INTO work_queue(position, ticket_identity, consultation_id, origin, choice_json, previous_message, enqueued_at) VALUES (COALESCE((SELECT MAX(position) FROM work_queue), -1) + 1, NULL, ?, NULL, NULL, '', ?)",
 					)
-					.run(consultationId, new Date(this.store.now()).toISOString());
+					.run(consultationId, new Date(this.db.now()).toISOString());
 				return { ok: true };
 			});
 		} catch (error) {
@@ -317,8 +317,8 @@ export class WorkQueueModule implements WorkQueueAggregate {
 		}
 	}
 	removeWorkItem(ticketIdentity: string): boolean {
-		return this.store.transaction(() => {
-			const result = this.store.db
+		return this.db.transaction(() => {
+			const result = this.db
 				.prepare("DELETE FROM work_queue WHERE ticket_identity = ?")
 				.run(ticketIdentity);
 			if (result.changes === 0) return false;
@@ -327,8 +327,8 @@ export class WorkQueueModule implements WorkQueueAggregate {
 		});
 	}
 	cancelWorkItem(ticketIdentity: string): boolean {
-		return this.store.transaction(() => {
-			const row = this.store.db
+		return this.db.transaction(() => {
+			const row = this.db
 				.prepare(
 					"SELECT origin, route_from_identity, is_automatic, action_task_type FROM work_queue WHERE ticket_identity = ?",
 				)
@@ -339,7 +339,7 @@ export class WorkQueueModule implements WorkQueueAggregate {
 				action_task_type: string | null;
 			} | null;
 			if (row === null) return false;
-			this.store.db.prepare("DELETE FROM work_queue WHERE ticket_identity = ?").run(ticketIdentity);
+			this.db.prepare("DELETE FROM work_queue WHERE ticket_identity = ?").run(ticketIdentity);
 			this.repackWorkQueuePositions();
 			if (row.origin === "workflow") {
 				// The source the route routed from: the item's route from, or the
@@ -356,14 +356,14 @@ export class WorkQueueModule implements WorkQueueAggregate {
 						: row.is_automatic === 1
 							? "auto-handed-off"
 							: "handed-off";
-				this.graph.ticketWorkCycle.recordRouteRemovedMark(source, decision);
+				this.graph().ticketWorkCycle.recordRouteRemovedMark(source, decision);
 			}
 			return true;
 		});
 	}
 	removeWorkflowRouteItem(ticketIdentity: string): number {
-		return this.store.transaction(() => {
-			const result = this.store.db
+		return this.db.transaction(() => {
+			const result = this.db
 				.prepare(
 					`DELETE FROM work_queue
 					WHERE origin = 'workflow'
@@ -375,23 +375,23 @@ export class WorkQueueModule implements WorkQueueAggregate {
 		});
 	}
 	dropConsultationWorkItem(consultationId: string): boolean {
-		const result = this.store.db
+		const result = this.db
 			.prepare("DELETE FROM work_queue WHERE consultation_id = ?")
 			.run(consultationId);
 		this.repackWorkQueuePositions();
 		return Number(result.changes) > 0;
 	}
-	repackWorkQueuePositions(): void {
-		const remaining = this.store.db
+	private repackWorkQueuePositions(): void {
+		const remaining = this.db
 			.prepare("SELECT position FROM work_queue ORDER BY position ASC")
 			.all() as Array<{ position: number }>;
-		const set = this.store.db.prepare("UPDATE work_queue SET position = ? WHERE position = ?");
+		const set = this.db.prepare("UPDATE work_queue SET position = ? WHERE position = ?");
 		remaining.forEach((row, index) => {
 			if (row.position !== index) set.run(index, row.position);
 		});
 	}
 	moveWorkItem(identity: string, direction: "up" | "down"): boolean {
-		return this.store.transaction(() => {
+		return this.db.transaction(() => {
 			const items = this.items();
 			const index = items.findIndex((item) => workQueueIdentityOf(item) === identity);
 			const target = index + (direction === "up" ? -1 : 1);
@@ -399,10 +399,10 @@ export class WorkQueueModule implements WorkQueueAggregate {
 			// The swap goes through a spare position: the column is the
 			// queue's primary key, and the two rows may not share either
 			// place for a step of the swap.
-			const swap = this.store.db.prepare(
+			const swap = this.db.prepare(
 				`UPDATE work_queue SET position = ? WHERE ${identityColumn(items[index])} = ?`,
 			);
-			const swapTarget = this.store.db.prepare(
+			const swapTarget = this.db.prepare(
 				`UPDATE work_queue SET position = ? WHERE ${identityColumn(items[target])} = ?`,
 			);
 			swap.run(-1, identity);
@@ -412,24 +412,17 @@ export class WorkQueueModule implements WorkQueueAggregate {
 		});
 	}
 	insertWorkQueueConsultationItem(consultationId: string, createdAt: string): void {
-		this.store.db
+		this.db
 			.prepare(
 				"INSERT INTO work_queue(position, ticket_identity, consultation_id, origin, choice_json, previous_message, enqueued_at) VALUES (COALESCE((SELECT MAX(position) FROM work_queue), -1) + 1, NULL, ?, NULL, NULL, '', ?)",
 			)
 			.run(consultationId, createdAt);
 	}
 	/** Take the waiting starts of the tickets the caller names out of the queue. */
-	removeItemsForTickets(identities: readonly string[]): number {
-		const deleteItem = this.store.db.prepare("DELETE FROM work_queue WHERE ticket_identity = ?");
-		let removed = 0;
-		for (const identity of identities) removed += Number(deleteItem.run(identity).changes);
-		if (removed > 0) this.repackWorkQueuePositions();
-		return removed;
-	}
 
 	/** The waiting handoff starts of the tickets the caller names, out of the queue. */
 	removeHandoffItemsForTickets(identities: readonly string[]): number {
-		const deleteItem = this.store.db.prepare(
+		const deleteItem = this.db.prepare(
 			"DELETE FROM work_queue WHERE ticket_identity = ? AND action_task_type IS NULL",
 		);
 		let removed = 0;
@@ -440,7 +433,7 @@ export class WorkQueueModule implements WorkQueueAggregate {
 
 	/** Whether the consultation already has a waiting Work queue item. */
 	hasConsultationItem(consultationId: string): boolean {
-		const row = this.store.db
+		const row = this.db
 			.prepare("SELECT 1 FROM work_queue WHERE consultation_id = ? LIMIT 1")
 			.get(consultationId);
 		return row !== null;

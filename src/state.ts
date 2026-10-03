@@ -3,27 +3,46 @@
  *
  * One aggregate per aggregate: each answers its own facts and runs its own
  * operations, and the app shell reaches a fact or an operation only through
- * the aggregate that owns it. This file composes the nine aggregates into the
- * graph and closes the file. It holds no rule of its own.
+ * the aggregate that owns it. This file opens the file, hands the composition
+ * to `composeGraph`, and closes the file. It holds no rule of its own.
+ *
+ * What a caller holds is `FactoryState`: the nine aggregate interfaces, the
+ * path, the clock, and the close. The composition type the aggregates call
+ * each other through is a different type, and it is not exported from here -
+ * a caller cannot pick up the whole graph, and cannot pick up an aggregate's
+ * internal operations.
  */
 
-import { ConsultationRecordModule } from "./state/consultation-record.ts";
-import type { StateGraph } from "./state/graph.ts";
-import { GroupingModule } from "./state/grouping.ts";
-import { HandoffModule } from "./state/handoff.ts";
-import { LeaseModule } from "./state/lease.ts";
-import { PlaneActionModule } from "./state/plane-action.ts";
-import { RepositoryInitModule } from "./state/repository-init.ts";
-import { SourceFactModule } from "./state/source-fact.ts";
+import type { ConsultationRecordAggregate } from "./state/consultation-record.ts";
+import { composeGraph } from "./state/graph.ts";
+import type { GroupingAggregate } from "./state/grouping.ts";
+import type { HandoffAggregate } from "./state/handoff.ts";
+import type { LeaseAggregate } from "./state/lease.ts";
+import type { PlaneActionAggregate } from "./state/plane-action.ts";
+import type { RepositoryInitAggregate } from "./state/repository-init.ts";
+import type { SourceFactAggregate } from "./state/source-fact.ts";
 import { openStore, StateError, type StateStore } from "./state/store.ts";
-import { TicketWorkCycleModule } from "./state/ticket-work-cycle.ts";
-import { WorkQueueModule } from "./state/work-queue.ts";
+import type { TicketWorkCycleAggregate } from "./state/ticket-work-cycle.ts";
+import type { WorkQueueAggregate } from "./state/work-queue.ts";
 
 export { SCHEMA_VERSION } from "./state/schema.ts";
 export { StateError } from "./state/store.ts";
 
-/** The composed state: the nine aggregate interfaces, and the close. */
-export interface FactoryState extends StateGraph {
+/** The nine aggregates, each held as its own interface. */
+export interface FactoryAggregates {
+	lease: LeaseAggregate;
+	repositoryInit: RepositoryInitAggregate;
+	grouping: GroupingAggregate;
+	sourceFact: SourceFactAggregate;
+	handoff: HandoffAggregate;
+	planeAction: PlaneActionAggregate;
+	workQueue: WorkQueueAggregate;
+	ticketWorkCycle: TicketWorkCycleAggregate;
+	consultationRecord: ConsultationRecordAggregate;
+}
+
+/** The composed state: the nine aggregate interfaces, and the file's own facts. */
+export interface FactoryState extends FactoryAggregates {
 	/** The path of the state file the graph opened. */
 	readonly path: string;
 	/** The clock the graph reads its timestamps from. */
@@ -41,23 +60,19 @@ export function openFactoryState(path: string, now?: () => number): FactoryState
 		throw new StateError(`cannot open factory state at ${path}: ${String(error)}`);
 	}
 
-	// The aggregates call each other through the graph, so the graph is bound
-	// before any of them runs. Construction order does not matter: no call
-	// happens until the graph is whole.
-	const graph = {} as StateGraph;
-	graph.lease = new LeaseModule(store, graph);
-	graph.repositoryInit = new RepositoryInitModule(store, graph);
-	graph.grouping = new GroupingModule(store, graph);
-	graph.sourceFact = new SourceFactModule(store, graph);
-	graph.handoff = new HandoffModule(store, graph);
-	graph.planeAction = new PlaneActionModule(store, graph);
-	graph.workQueue = new WorkQueueModule(store, graph);
-	graph.ticketWorkCycle = new TicketWorkCycleModule(store, graph);
-	graph.consultationRecord = new ConsultationRecordModule(store, graph);
+	const graph = composeGraph(store);
 
 	let hasClosed = false;
 	return {
-		...graph,
+		lease: graph.lease,
+		repositoryInit: graph.repositoryInit,
+		grouping: graph.grouping,
+		sourceFact: graph.sourceFact,
+		handoff: graph.handoff,
+		planeAction: graph.planeAction,
+		workQueue: graph.workQueue,
+		ticketWorkCycle: graph.ticketWorkCycle,
+		consultationRecord: graph.consultationRecord,
 		path: store.path,
 		now(): number {
 			return store.now();
@@ -69,10 +84,7 @@ export function openFactoryState(path: string, now?: () => number): FactoryState
 			// Fold the WAL into the main file so a closed state file is complete
 			// on its own: Bun's close does not checkpoint the way a final SQLite
 			// close does, and the data otherwise stays in the -wal sidecar.
-			try {
-				store.db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
-			} catch {}
-			store.closeDb();
+			store.close();
 		},
 	};
 }

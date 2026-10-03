@@ -111,7 +111,7 @@ module-level constants are behavior the frames read. `bun run mutate` keeps them
 
 ## The score, and what is not in it
 
-Two files stay out of the campaign on purpose:
+Three files stay out of the campaign on purpose:
 
 - `src/components/shared/gallery.ts` is the shared control gallery's own example
   list. `bun run gallery` is its only caller, no shipped surface reads it, and it
@@ -122,6 +122,12 @@ Two files stay out of the campaign on purpose:
   mutation the file fails on a text change rather than on a behavior change. It
   would kill mutants for the wrong reason and inflate the score. It stays in
   `bun run test`, which reads the uninstrumented tree.
+- `test/state-architecture.test.ts` does the same job for the state aggregates
+  (ADR 0092): it reads the nine aggregate modules, the composition, and the
+  callers as text, and counts the interface methods, the tables each statement
+  names, and the shapes the graph is built with. Instrumentation rewrites the
+  method bodies and the query strings it reads, so it would kill every mutant in
+  the nine state modules for the wrong reason. It stays in `bun run test` too.
 
 The score is a coverage measure of the tests, not a grade of the code. A
 survivor is only a problem when the mutation it stands on is a behavior the

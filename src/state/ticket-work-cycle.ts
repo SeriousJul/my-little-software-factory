@@ -1,6 +1,12 @@
 /**
  * The ticket work cycle aggregate: the facts it answers and the
  * operations it runs. It reaches only the tables its aggregate owns.
+ *
+ * The methods on `TicketWorkCycleAggregate` are the aggregate's interface: what a
+ * caller outside the module may reach. The other public methods are the narrow
+ * operations this aggregate publishes to the module for another aggregate to
+ * call (issue #202, ADR 0092). No caller outside the module reaches them, and
+ * the boundary check refuses one that does.
  */
 
 import { randomUUID } from "node:crypto";
@@ -29,10 +35,12 @@ import {
 	isCoveredByFixingPullRequest,
 	NO_LINKED_PULL_REQUEST_SKIP,
 } from "../workflow.ts";
+import { identityChunks, placeholders } from "./batch.ts";
 import type { StateGraph } from "./graph.ts";
-import type { HandoffTicket } from "./handoff.ts";
+import { type HandoffTicket, ticketHandoffFact } from "./handoff.ts";
 import { transitionOf, turnEndCauseOf, turnLogOf } from "./json.ts";
-import type { StateStore } from "./store.ts";
+import type { StateScope, StateStore } from "./store.ts";
+import { TABLES_OWNED } from "./tables.ts";
 
 export interface SettleTurnInput {
 	ticketIdentity: string;
@@ -67,6 +75,16 @@ export interface CompletionDecisionInput {
 	handoffId: string;
 	decision: CompletionDecision;
 	decidedAt: string;
+}
+/**
+ * The work cycle's own two facts about a Ticket: where the cycle stands and
+ * how many cycles have run. The Handoff gates read them through
+ * `ticketCycleFacts`, the narrow operation the Ticket work cycle publishes to
+ * the module (issue #202, ADR 0092).
+ */
+export interface TicketCycle {
+	state: TicketState;
+	workCycle: number;
 }
 export interface TicketListViews {
 	/** The rows the Ticket section draws, in the operator's List filter. */
@@ -181,27 +199,59 @@ export interface TicketWorkCycleAggregate {
 	ticketState(identity: string): TicketState | undefined;
 	agentNameForTicket(identity: string): string;
 	automaticStartBlockedTickets(): Set<string>;
-	recordRouteRemovedMark(ticketIdentity: string, decision: string): boolean;
 	ticketsByState(states: readonly TicketState[]): HandoffTicket[];
 	markTicketRunning(identity: string): boolean;
 	reopenTurn(identity: string, handoffId: string): boolean;
 	settleTurn(input: SettleTurnInput): void;
 	applyCompletionDecision(input: CompletionDecisionInput): boolean;
 	closeWorkCycle(ticketIdentity: string): boolean;
-	openTicket(identity: string): void;
-	ticketRow(identity: string): { state: TicketState; work_cycle: number } | undefined;
-	moveTicketState(identity: string, from: readonly TicketState[], to: TicketState): boolean;
+}
+
+/** The completion trace cells a read maps into a `Completion`. */
+const COMPLETION_COLUMNS =
+	"task_type, agent_type, agent_name, model, thinking, context_window, completed_at, last_message, turn_log_json, cause, detail, decision, transition_json";
+interface CompletionRow {
+	task_type: string;
+	agent_type: string;
+	agent_name: string;
+	model: string;
+	thinking: string;
+	context_window: string;
+	completed_at: string;
+	last_message: string;
+	turn_log_json: string | null;
+	cause: string | null;
+	detail: string | null;
+	decision: string | null;
+	transition_json: string | null;
+}
+function completionFromRow(row: CompletionRow): Completion {
+	return {
+		taskType: row.task_type,
+		agentType: row.agent_type,
+		agentName: row.agent_name,
+		model: row.model,
+		thinking: row.thinking,
+		contextWindow: row.context_window,
+		completedAt: row.completed_at,
+		message: row.last_message,
+		turnLog: turnLogOf(row.turn_log_json, row.last_message),
+		cause: turnEndCauseOf(row.cause),
+		detail: row.detail ?? "",
+		decision: row.decision as CompletionDecision | null,
+		transition: transitionOf(row.transition_json),
+	};
 }
 
 export class TicketWorkCycleModule implements TicketWorkCycleAggregate {
-	readonly store: StateStore;
-	readonly graph: StateGraph;
-	constructor(store: StateStore, graph: StateGraph) {
-		this.store = store;
+	readonly db: StateScope;
+	readonly graph: () => StateGraph;
+	constructor(store: StateStore, graph: () => StateGraph) {
+		this.db = store.scopeOf("ticketWorkCycle", TABLES_OWNED.ticketWorkCycle);
 		this.graph = graph;
 	}
 	projectedTickets(states: readonly WorkflowState[], fallbackTaskType: string): Ticket[] {
-		const rows = this.store.db
+		const rows = this.db
 			.prepare("SELECT identity, state, work_cycle, ignored, ignored_at FROM tickets")
 			.all() as Array<{
 			identity: string;
@@ -210,13 +260,27 @@ export class TicketWorkCycleModule implements TicketWorkCycleAggregate {
 			ignored: number;
 			ignored_at: string | null;
 		}>;
+		// Every fact the row carries is read once for the whole list (issue
+		// #202, ADR 0092): the memberships, the unresolved attempts, the newest
+		// handoffs, the start counts, the completion traces, and the leftover
+		// environments each cost one statement per chunk of Tickets, not one per
+		// Ticket. The observation loop runs this read every cycle.
+		const identities = rows.map((row) => row.identity);
+		const memberships = this.graph().sourceFact.membershipsForTickets(
+			rows.map((row) => ({ identity: row.identity, state: row.state })),
+		);
+		const pendingTickets = this.graph().handoff.ticketsWithUnresolvedAttempts();
+		const newestHandoffs = this.graph().handoff.newestHandoffsFor(identities);
+		const handoffCounts = this.graph().handoff.handoffCountsFor(identities);
+		const completions = this.lastCompletionsFor(identities);
+		const leftovers = this.graph().handoff.leftoverEnvironmentsFor(identities);
 		const tickets: Ticket[] = [];
 		for (const row of rows) {
-			const storedMemberships = this.graph.sourceFact.membershipsFor(row.identity, row.state);
+			const storedMemberships = memberships.get(row.identity) ?? [];
 			const active = storedMemberships.filter(
 				(membership) => membership.active && membership.health !== "removed",
 			);
-			const pending = this.graph.handoff.hasUnresolvedAttempt(row.identity);
+			const pending = pendingTickets.has(row.identity);
 			const actionable =
 				row.state === "open" &&
 				!pending &&
@@ -235,7 +299,7 @@ export class TicketWorkCycleModule implements TicketWorkCycleAggregate {
 					a.sourceName.localeCompare(b.sourceName),
 			)[0];
 			if (facts == null) continue;
-			const handoff = this.graph.handoff.handoffFor(row.identity);
+			const handoff = ticketHandoffFact(newestHandoffs.get(row.identity) ?? null);
 			// One match answers both facts the list reads: the task the machine
 			// suggests and the name of the position that suggests it. The name is
 			// derived here and never stored, and no rule but the list's grouping
@@ -264,8 +328,8 @@ export class TicketWorkCycleModule implements TicketWorkCycleAggregate {
 				state: row.state,
 				handoff,
 				workCycle: row.work_cycle,
-				handoffCount: this.graph.handoff.handoffCount(row.identity),
-				lastCompletion: this.lastCompletion(row.identity),
+				handoffCount: handoffCounts.get(row.identity) ?? 0,
+				lastCompletion: completions.get(row.identity) ?? null,
 				description: facts.description,
 				sourceKind: facts.sourceKind,
 				externalKey: facts.externalKey,
@@ -282,7 +346,7 @@ export class TicketWorkCycleModule implements TicketWorkCycleAggregate {
 				matchedStateName: matched === null ? null : matched.name,
 				actionable,
 				handoffRecoveryRequired: pending,
-				leftover: this.graph.handoff.leftoverEnvironment(row.identity),
+				leftover: leftovers.get(row.identity)?.[0] ?? null,
 				ignored,
 				ignoredAt: ignored ? row.ignored_at : null,
 				muted,
@@ -306,47 +370,37 @@ export class TicketWorkCycleModule implements TicketWorkCycleAggregate {
 		return listTicketViews(this.projectedTickets(states, fallbackTaskType), filter);
 	}
 	lastCompletion(identity: string): Completion | null {
-		const row = this.store.db
+		const row = this.db
 			.prepare(
-				"SELECT task_type, agent_type, agent_name, model, thinking, context_window, completed_at, last_message, turn_log_json, cause, detail, decision, transition_json FROM completion_traces WHERE ticket_identity = ? ORDER BY completed_at DESC, rowid DESC LIMIT 1",
+				`SELECT ${COMPLETION_COLUMNS} FROM completion_traces WHERE ticket_identity = ? ORDER BY completed_at DESC, rowid DESC LIMIT 1`,
 			)
-			.get(identity) as
-			| {
-					task_type: string;
-					agent_type: string;
-					agent_name: string;
-					model: string;
-					thinking: string;
-					context_window: string;
-					completed_at: string;
-					last_message: string;
-					turn_log_json: string | null;
-					cause: string | null;
-					detail: string | null;
-					decision: string | null;
-					transition_json: string | null;
-			  }
-			| undefined;
-		if (row == null) return null;
-		return {
-			taskType: row.task_type,
-			agentType: row.agent_type,
-			agentName: row.agent_name,
-			model: row.model,
-			thinking: row.thinking,
-			contextWindow: row.context_window,
-			completedAt: row.completed_at,
-			message: row.last_message,
-			turnLog: turnLogOf(row.turn_log_json, row.last_message),
-			cause: turnEndCauseOf(row.cause),
-			detail: row.detail ?? "",
-			decision: row.decision as CompletionDecision | null,
-			transition: transitionOf(row.transition_json),
-		};
+			.get(identity) as CompletionRow | undefined;
+		return row == null ? null : completionFromRow(row);
+	}
+	/**
+	 * The newest completion trace of every Ticket in the list, in one statement
+	 * per chunk (issue #202, ADR 0092). The rows arrive newest first within
+	 * each Ticket, so the first row seen for an identity is its newest trace.
+	 */
+	lastCompletionsFor(identities: readonly string[]): Map<string, Completion | null> {
+		const found = new Map<string, Completion | null>();
+		for (const identity of identities) found.set(identity, null);
+		for (const chunk of identityChunks(identities)) {
+			const rows = this.db
+				.prepare(
+					`SELECT ticket_identity, ${COMPLETION_COLUMNS} FROM completion_traces WHERE ticket_identity IN (${placeholders(chunk.length)}) ORDER BY ticket_identity, completed_at DESC, rowid DESC`,
+				)
+				.all(...chunk) as unknown as Array<CompletionRow & { ticket_identity: string }>;
+			for (const row of rows) {
+				if (found.get(row.ticket_identity) !== null) continue;
+				found.set(row.ticket_identity, completionFromRow(row));
+			}
+		}
+		return found;
 	}
 	recordSkipRefire(ticketIdentity: string, outcome: TransitionOutcome): boolean {
-		return this.store.transaction(() => {
-			const row = this.store.db
+		return this.db.transaction(() => {
+			const row = this.db
 				.prepare(
 					"SELECT id, transition_json FROM completion_traces WHERE ticket_identity = ? ORDER BY completed_at DESC, rowid DESC LIMIT 1",
 				)
@@ -360,7 +414,7 @@ export class TicketWorkCycleModule implements TicketWorkCycleAggregate {
 					recorded.reason !== EMPTY_PULL_REQUEST_SKIP)
 			)
 				return false;
-			const result = this.store.db
+			const result = this.db
 				.prepare(
 					"UPDATE completion_traces SET transition_json = ? WHERE id = ? AND transition_json = ?",
 				)
@@ -369,7 +423,7 @@ export class TicketWorkCycleModule implements TicketWorkCycleAggregate {
 		});
 	}
 	recordedTransitionJson(ticketIdentity: string): string | null {
-		const row = this.store.db
+		const row = this.db
 			.prepare(
 				"SELECT transition_json FROM completion_traces WHERE ticket_identity = ? ORDER BY completed_at DESC, rowid DESC LIMIT 1",
 			)
@@ -381,14 +435,14 @@ export class TicketWorkCycleModule implements TicketWorkCycleAggregate {
 		recordedJson: string,
 		outcome: TransitionOutcome,
 	): boolean {
-		return this.store.transaction(() => {
-			const row = this.store.db
+		return this.db.transaction(() => {
+			const row = this.db
 				.prepare(
 					"SELECT id, transition_json FROM completion_traces WHERE ticket_identity = ? ORDER BY completed_at DESC, rowid DESC LIMIT 1",
 				)
 				.get(ticketIdentity) as { id: string; transition_json: string | null } | null;
 			if (row == null || row.transition_json !== recordedJson) return false;
-			const result = this.store.db
+			const result = this.db
 				.prepare(
 					"UPDATE completion_traces SET transition_json = ? WHERE id = ? AND transition_json = ?",
 				)
@@ -397,13 +451,13 @@ export class TicketWorkCycleModule implements TicketWorkCycleAggregate {
 		});
 	}
 	dispatchPauseActive(): boolean {
-		const held = this.store.db
+		const held = this.db
 			.prepare(
 				"SELECT completed_at, rowid FROM completion_traces WHERE cause = 'failed' AND decision IS NULL ORDER BY completed_at DESC, rowid DESC LIMIT 1",
 			)
 			.get() as { completed_at: string; rowid: number } | null;
 		if (held == null) return false;
-		const after = this.store.db
+		const after = this.db
 			.prepare(
 				"SELECT 1 FROM completion_traces WHERE cause = 'completed' AND (completed_at > ? OR (completed_at = ? AND rowid > ?)) LIMIT 1",
 			)
@@ -413,24 +467,22 @@ export class TicketWorkCycleModule implements TicketWorkCycleAggregate {
 	sourceReverifiedSinceCycleEnd(identity: string): boolean {
 		const ended = this.lastCycleEnd(identity);
 		if (ended === null) return true;
-		return !this.graph.sourceFact.hasUnrefreshedActiveMembershipSince(identity, ended.decidedAt);
+		return !this.graph().sourceFact.hasUnrefreshedActiveMembershipSince(identity, ended.decidedAt);
 	}
 	sameTypeHoldActive(identity: string, suggestedTaskType: string | null): boolean {
 		const ended = this.lastCycleEnd(identity);
 		return ended !== null && ended.cause === "completed" && ended.taskType === suggestedTaskType;
 	}
 	ignoredTickets(): Set<string> {
-		const rows = this.store.db
-			.prepare("SELECT identity FROM tickets WHERE ignored = 1")
-			.all() as Array<{
+		const rows = this.db.prepare("SELECT identity FROM tickets WHERE ignored = 1").all() as Array<{
 			identity: string;
 		}>;
 		return new Set(rows.map((row) => row.identity));
 	}
 	ticketObligation(identity: string, marker: TicketMarker | null = null): TicketObligation | null {
-		const row = this.store.db
-			.prepare("SELECT state FROM tickets WHERE identity = ?")
-			.get(identity) as { state: TicketState } | undefined;
+		const row = this.db.prepare("SELECT state FROM tickets WHERE identity = ?").get(identity) as
+			| { state: TicketState }
+			| undefined;
 		if (row === undefined) return null;
 		// The marker is the row's face: only an in-flight Ticket reads a missing
 		// Agent, exactly as the list's failure badge does, so a caller that hands
@@ -450,39 +502,39 @@ export class TicketWorkCycleModule implements TicketWorkCycleAggregate {
 			const refusal = ignoreRefusal(this.ticketObligation(identity, marker));
 			if (refusal !== null) return { ok: false, reason: refusal };
 		}
-		const row = this.store.db.prepare("SELECT 1 FROM tickets WHERE identity = ?").get(identity) as
+		const row = this.db.prepare("SELECT 1 FROM tickets WHERE identity = ?").get(identity) as
 			| { 1: number }
 			| undefined;
 		if (row === undefined) return { ok: false, reason: "the ticket no longer exists" };
-		this.store.db
+		this.db
 			.prepare("UPDATE tickets SET ignored = ?, ignored_at = ? WHERE identity = ?")
-			.run(ignored ? 1 : 0, ignored ? new Date(this.store.now()).toISOString() : null, identity);
+			.run(ignored ? 1 : 0, ignored ? new Date(this.db.now()).toISOString() : null, identity);
 		return { ok: true };
 	}
 	ticketState(identity: string): TicketState | undefined {
-		const row = this.store.db
-			.prepare("SELECT state FROM tickets WHERE identity = ?")
-			.get(identity) as { state: TicketState } | undefined;
+		const row = this.db.prepare("SELECT state FROM tickets WHERE identity = ?").get(identity) as
+			| { state: TicketState }
+			| undefined;
 		return row?.state;
 	}
 	agentNameForTicket(identity: string): string {
-		const row = this.graph.handoff.newestHandoffRow(identity);
+		const row = this.graph().handoff.newestHandoff(identity);
 		if (row !== null && row.herdrName !== null && row.herdrName !== "") {
 			return row.herdrName;
 		}
-		const title = this.graph.sourceFact.newestMembershipTitle(identity);
+		const title = this.graph().sourceFact.newestMembershipTitle(identity);
 		return title == null ? "" : agentNameFor(title);
 	}
 	automaticStartBlockedTickets(): Set<string> {
-		const rows = this.store.db
-			.prepare("SELECT identity FROM tickets WHERE ignored = 1")
-			.all() as Array<{ identity: string }>;
+		const rows = this.db.prepare("SELECT identity FROM tickets WHERE ignored = 1").all() as Array<{
+			identity: string;
+		}>;
 		const blocked = new Set(rows.map((row) => row.identity));
-		for (const identity of this.graph.sourceFact.ticketsWithMutedSource()) blocked.add(identity);
+		for (const identity of this.graph().sourceFact.ticketsWithMutedSource()) blocked.add(identity);
 		return blocked;
 	}
 	recordRouteRemovedMark(ticketIdentity: string, decision: string): boolean {
-		const row = this.store.db
+		const row = this.db
 			.prepare(
 				"SELECT id, transition_json FROM completion_traces WHERE ticket_identity = ? AND decision = ? ORDER BY completed_at DESC, rowid DESC LIMIT 1",
 			)
@@ -490,7 +542,7 @@ export class TicketWorkCycleModule implements TicketWorkCycleAggregate {
 		if (row == null || row.transition_json === null) return false;
 		const recorded = transitionOf(row.transition_json);
 		if (recorded === null || recorded.routeRemoved === true) return false;
-		const result = this.store.db
+		const result = this.db
 			.prepare(
 				"UPDATE completion_traces SET transition_json = ? WHERE id = ? AND transition_json = ?",
 			)
@@ -499,7 +551,7 @@ export class TicketWorkCycleModule implements TicketWorkCycleAggregate {
 	}
 	ticketsByState(states: readonly TicketState[]): HandoffTicket[] {
 		const clauses = states.map(() => "?").join(", ");
-		const rows = this.store.db
+		const rows = this.db
 			.prepare(
 				`SELECT identity AS ticket_identity, state, work_cycle FROM tickets WHERE state IN (${clauses}) ORDER BY identity`,
 			)
@@ -508,9 +560,15 @@ export class TicketWorkCycleModule implements TicketWorkCycleAggregate {
 			state: TicketState;
 			work_cycle: number;
 		}>;
+		// The newest handoff of every row arrives in one batch read, so the
+		// seat count the observation loop runs every cycle costs two statements
+		// and not one per Ticket (issue #202, ADR 0092).
+		const newestHandoffs = this.graph().handoff.newestHandoffsFor(
+			rows.map((row) => row.ticket_identity),
+		);
 		const out: HandoffTicket[] = [];
 		for (const row of rows) {
-			const handoff = this.graph.handoff.newestHandoffRow(row.ticket_identity);
+			const handoff = newestHandoffs.get(row.ticket_identity) ?? null;
 			if (handoff === null || handoff.choice === undefined) continue;
 			const choice = handoff.choice;
 			out.push({
@@ -533,36 +591,36 @@ export class TicketWorkCycleModule implements TicketWorkCycleAggregate {
 		return out;
 	}
 	markTicketRunning(identity: string): boolean {
-		const result = this.store.db
+		const result = this.db
 			.prepare("UPDATE tickets SET state = 'running' WHERE identity = ? AND state = 'handed-off'")
 			.run(identity);
 		return Number(result.changes) > 0;
 	}
 	reopenTurn(identity: string, handoffId: string): boolean {
-		return this.store.transaction(() => {
-			const pending = this.store.db
+		return this.db.transaction(() => {
+			const pending = this.db
 				.prepare("SELECT id FROM completion_traces WHERE handoff_id = ? AND decision IS NULL")
 				.get(handoffId) as { id: string } | undefined;
 			if (pending == null) return false;
-			const moved = this.store.db
+			const moved = this.db
 				.prepare("UPDATE tickets SET state = 'running' WHERE identity = ? AND state = 'awaiting'")
 				.run(identity);
 			return Number(moved.changes) > 0;
 		});
 	}
 	settleTurn(input: SettleTurnInput): void {
-		this.store.transaction(() => {
+		this.db.transaction(() => {
 			// A settle without a read cause is stored as `unknown`, the fail-open
 			// cause: it neither holds a turn nor pauses dispatch.
 			const cause = input.cause ?? "unknown";
 			const detail = input.detail ?? "";
-			this.store.db
+			this.db
 				.prepare(
 					"UPDATE tickets SET state = 'awaiting' WHERE identity = ? AND state IN ('handed-off', 'running', 'awaiting')",
 				)
 				.run(input.ticketIdentity);
-			const handoff = this.graph.handoff.handoffRecord(input.handoffId);
-			const pending = this.store.db
+			const handoff = this.graph().handoff.handoffRecord(input.handoffId);
+			const pending = this.db
 				.prepare("SELECT id FROM completion_traces WHERE handoff_id = ? AND decision IS NULL")
 				.get(input.handoffId) as { id: string } | undefined;
 			if (handoff == null) return;
@@ -571,7 +629,7 @@ export class TicketWorkCycleModule implements TicketWorkCycleAggregate {
 				// A reopened turn settles again: the same trace is refreshed, its
 				// cause and detail overwritten, so a recovered turn reads as the
 				// turn it became.
-				this.store.db
+				this.db
 					.prepare(
 						"UPDATE completion_traces SET last_message = ?, turn_log_json = ?, completed_at = ?, cause = ?, detail = ?, transition_json = ? WHERE id = ?",
 					)
@@ -585,7 +643,7 @@ export class TicketWorkCycleModule implements TicketWorkCycleAggregate {
 						pending.id,
 					);
 			} else {
-				this.store.db
+				this.db
 					.prepare(
 						"INSERT INTO completion_traces(id, handoff_id, ticket_identity, work_cycle, task_type, agent_type, agent_name, model, thinking, context_window, completed_at, last_message, turn_log_json, cause, detail, transition_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
 					)
@@ -611,8 +669,8 @@ export class TicketWorkCycleModule implements TicketWorkCycleAggregate {
 		});
 	}
 	applyCompletionDecision(input: CompletionDecisionInput): boolean {
-		return this.store.transaction(() => {
-			const decided = this.store.db
+		return this.db.transaction(() => {
+			const decided = this.db
 				.prepare(
 					"UPDATE completion_traces SET decision = ?, decided_at = ? WHERE handoff_id = ? AND decision IS NULL",
 				)
@@ -628,7 +686,7 @@ export class TicketWorkCycleModule implements TicketWorkCycleAggregate {
 			// close changes nothing. A routed ticket's cycle already ended at
 			// the ask (ADR 0072), so a close on it moves nothing here.
 			if (input.decision === "closed" || input.decision === "auto-closed") {
-				const ended = this.store.db
+				const ended = this.db
 					.prepare(
 						"UPDATE tickets SET state = 'open', work_cycle = work_cycle + 1 WHERE identity = ? AND state = 'awaiting'",
 					)
@@ -639,16 +697,16 @@ export class TicketWorkCycleModule implements TicketWorkCycleAggregate {
 			// decision anyway, once per handoff, so the trace stays complete
 			// and the cycle number moves exactly once.
 			if (input.decision !== "abandoned") return false;
-			const existing = this.store.db
+			const existing = this.db
 				.prepare(
 					"SELECT COUNT(*) AS count FROM completion_traces WHERE handoff_id = ? AND decision = ?",
 				)
 				.get(input.handoffId, input.decision) as { count: number };
 			if (existing.count > 0) return false;
-			const handoff = this.graph.handoff.handoffRecord(input.handoffId);
+			const handoff = this.graph().handoff.handoffRecord(input.handoffId);
 			if (handoff == null) return false;
 			const choice = handoff.choice;
-			this.store.db
+			this.db
 				.prepare(
 					"INSERT INTO completion_traces(id, handoff_id, ticket_identity, work_cycle, task_type, agent_type, agent_name, model, thinking, context_window, completed_at, last_message, decision, decided_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
 				)
@@ -678,7 +736,7 @@ export class TicketWorkCycleModule implements TicketWorkCycleAggregate {
 			input.decision === "auto-closed" ||
 			input.decision === "abandoned"
 		) {
-			this.store.db
+			this.db
 				.prepare(
 					"UPDATE tickets SET state = 'open', work_cycle = work_cycle + 1 WHERE identity = ?",
 				)
@@ -697,7 +755,7 @@ export class TicketWorkCycleModule implements TicketWorkCycleAggregate {
 			input.decision === "merged" ||
 			input.decision === "auto-merged"
 		) {
-			this.store.db
+			this.db
 				.prepare(
 					"UPDATE tickets SET state = 'open', work_cycle = work_cycle + 1 WHERE identity = ? AND state = 'awaiting'",
 				)
@@ -707,13 +765,13 @@ export class TicketWorkCycleModule implements TicketWorkCycleAggregate {
 		// the state.
 	}
 	closeWorkCycle(ticketIdentity: string): boolean {
-		return this.store.transaction(() => {
-			const ticket = this.store.db
+		return this.db.transaction(() => {
+			const ticket = this.db
 				.prepare("SELECT state FROM tickets WHERE identity = ?")
 				.get(ticketIdentity) as { state: TicketState } | undefined;
 			if (ticket == null) return false;
 			if (ticket.state !== "handed-off" && ticket.state !== "running") return false;
-			this.store.db
+			this.db
 				.prepare(
 					"UPDATE tickets SET state = 'open', work_cycle = work_cycle + 1 WHERE identity = ?",
 				)
@@ -726,7 +784,7 @@ export class TicketWorkCycleModule implements TicketWorkCycleAggregate {
 		taskType: string;
 		cause: string | null;
 	} | null {
-		const row = this.store.db
+		const row = this.db
 			.prepare(
 				`SELECT decided_at, task_type, cause FROM completion_traces
 				 WHERE ticket_identity = ? AND decision IN ('closed', 'auto-closed', 'abandoned')
@@ -742,7 +800,7 @@ export class TicketWorkCycleModule implements TicketWorkCycleAggregate {
 	}
 	/** Open the Ticket row for a ticket a source lists for the first time. */
 	openTicket(identity: string): void {
-		this.store.db
+		this.db
 			.prepare(
 				"INSERT INTO tickets(identity, state, work_cycle) VALUES (?, 'open', 1) ON CONFLICT(identity) DO NOTHING",
 			)
@@ -750,16 +808,17 @@ export class TicketWorkCycleModule implements TicketWorkCycleAggregate {
 	}
 
 	/** The Ticket row's own facts: its state and the cycle number it is on. */
-	ticketRow(identity: string): { state: TicketState; work_cycle: number } | undefined {
-		return this.store.db
+	ticketCycleFacts(identity: string): TicketCycle | undefined {
+		const row = this.db
 			.prepare("SELECT state, work_cycle FROM tickets WHERE identity = ?")
 			.get(identity) as { state: TicketState; work_cycle: number } | undefined;
+		return row == null ? undefined : { state: row.state, workCycle: row.work_cycle };
 	}
 
 	/** Move the Ticket state, only from the states the caller names. */
 	moveTicketState(identity: string, from: readonly TicketState[], to: TicketState): boolean {
 		const clauses = from.map(() => "?").join(", ");
-		const result = this.store.db
+		const result = this.db
 			.prepare(`UPDATE tickets SET state = ? WHERE identity = ? AND state IN (${clauses})`)
 			.run(to, identity, ...from);
 		return Number(result.changes) > 0;

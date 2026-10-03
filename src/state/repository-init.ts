@@ -4,8 +4,9 @@
  */
 
 import type { StateGraph } from "./graph.ts";
-import type { StateStore } from "./store.ts";
+import type { StateScope, StateStore } from "./store.ts";
 import { StateError } from "./store.ts";
+import { TABLES_OWNED } from "./tables.ts";
 
 export interface RepositoryInitFact {
 	/** The repository identity the fact stands for, matching the Config repository key. */
@@ -24,14 +25,14 @@ export interface RepositoryInitAggregate {
 }
 
 export class RepositoryInitModule implements RepositoryInitAggregate {
-	readonly store: StateStore;
-	readonly graph: StateGraph;
-	constructor(store: StateStore, graph: StateGraph) {
-		this.store = store;
+	readonly db: StateScope;
+	readonly graph: () => StateGraph;
+	constructor(store: StateStore, graph: () => StateGraph) {
+		this.db = store.scopeOf("repositoryInit", TABLES_OWNED.repositoryInit);
 		this.graph = graph;
 	}
 	repositoryInitFact(repository: string): RepositoryInitFact | null {
-		const row = this.store.db
+		const row = this.db
 			.prepare(
 				"SELECT repository, settings_hash, pushed_commit, at FROM repository_init WHERE repository = ?",
 			)
@@ -51,14 +52,14 @@ export class RepositoryInitModule implements RepositoryInitAggregate {
 	}
 	setRepositoryInitFact(repository: string, settingsHash: string, pushedCommit: string): void {
 		try {
-			this.store.db
+			this.db
 				.prepare(
 					"INSERT INTO repository_init(repository, settings_hash, pushed_commit, at) VALUES (?, ?, ?, ?) ON CONFLICT(repository) DO UPDATE SET settings_hash = excluded.settings_hash, pushed_commit = excluded.pushed_commit, at = excluded.at",
 				)
-				.run(repository, settingsHash, pushedCommit, new Date(this.store.now()).toISOString());
+				.run(repository, settingsHash, pushedCommit, new Date(this.db.now()).toISOString());
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
-			throw new StateError(`cannot store the init fact at ${this.store.path}: ${message}`);
+			throw new StateError(`cannot store the init fact at ${this.db.path}: ${message}`);
 		}
 	}
 }

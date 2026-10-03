@@ -6,36 +6,36 @@
 import { randomUUID } from "node:crypto";
 import os from "node:os";
 import type { StateGraph } from "./graph.ts";
-import type { StateStore } from "./store.ts";
+import type { StateScope, StateStore } from "./store.ts";
 import { StateError } from "./store.ts";
+import { TABLES_OWNED } from "./tables.ts";
 
 export interface LeaseAggregate {
 	acquireLease(): void;
-	heartbeatLease(): void;
 	releaseLease(): void;
 }
 
 export class LeaseModule implements LeaseAggregate {
 	leaseToken: string | null = null;
-	readonly store: StateStore;
-	readonly graph: StateGraph;
-	constructor(store: StateStore, graph: StateGraph) {
-		this.store = store;
+	readonly db: StateScope;
+	readonly graph: () => StateGraph;
+	constructor(store: StateStore, graph: () => StateGraph) {
+		this.db = store.scopeOf("lease", TABLES_OWNED.lease);
 		this.graph = graph;
 	}
 	acquireLease(): void {
 		const owner = randomUUID();
 		const host = os.hostname();
 		const now = Date.now();
-		this.store.transaction(() => {
-			const current = this.store.db
+		this.db.transaction(() => {
+			const current = this.db
 				.prepare("SELECT owner_token, pid, host FROM lease WHERE name = 'control-plane'")
 				.get() as { owner_token: string; pid: number; host: string } | null;
 			if (current != null && !this.isDeadLocalOwner(current, host))
 				throw new StateError(
 					`state database is already in use by process ${current.pid} on ${current.host}`,
 				);
-			this.store.db
+			this.db
 				.prepare(
 					"INSERT OR REPLACE INTO lease(name, owner_token, pid, host, heartbeat_at) VALUES ('control-plane', ?, ?, ?, ?)",
 				)
@@ -55,15 +55,9 @@ export class LeaseModule implements LeaseAggregate {
 			return (error as NodeJS.ErrnoException).code === "ESRCH";
 		}
 	}
-	heartbeatLease(): void {
-		if (this.leaseToken == null) return;
-		this.store.db
-			.prepare("UPDATE lease SET heartbeat_at = ? WHERE name = 'control-plane' AND owner_token = ?")
-			.run(Date.now(), this.leaseToken);
-	}
 	releaseLease(): void {
 		if (this.leaseToken == null) return;
-		this.store.db
+		this.db
 			.prepare("DELETE FROM lease WHERE name = 'control-plane' AND owner_token = ?")
 			.run(this.leaseToken);
 		this.leaseToken = null;

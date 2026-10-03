@@ -4,7 +4,8 @@
  * an aggregate does not migrate its own tables.
  */
 
-import { StateError, type StateStore } from "./store.ts";
+import type { Database } from "bun:sqlite";
+import { StateError } from "./store.ts";
 export const SCHEMA_VERSION = 27;
 export const SCHEMA_V1 = `
 	CREATE TABLE tickets (
@@ -253,143 +254,119 @@ CREATE TABLE IF NOT EXISTS repository_init (
 	at TEXT NOT NULL
 );
 `;
-export function hasTable(store: StateStore, name: string): boolean {
+export function hasTable(db: Database, name: string): boolean {
 	return (
-		store.db
-			.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")
-			.get(name) != null
+		db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?").get(name) != null
 	);
 }
-export function hasColumn(store: StateStore, table: string, name: string): boolean {
-	return (
-		store.db.prepare("SELECT 1 FROM pragma_table_info(?) WHERE name = ?").get(table, name) != null
-	);
+export function hasColumn(db: Database, table: string, name: string): boolean {
+	return db.prepare("SELECT 1 FROM pragma_table_info(?) WHERE name = ?").get(table, name) != null;
 }
-export function verifyIntegrity(store: StateStore): void {
+export function migrate(db: Database, path: string): void {
+	db.exec("BEGIN IMMEDIATE");
 	try {
-		const integrity = store.db.prepare("PRAGMA integrity_check").get() as
-			| { integrity_check?: string }
-			| undefined;
-		if (integrity?.integrity_check !== "ok")
-			throw new StateError(
-				`database integrity check failed at ${store.path}: ${integrity?.integrity_check ?? "unknown result"}`,
-			);
-	} catch (error) {
-		if (error instanceof StateError) throw error;
-		throw new StateError(
-			`database integrity check failed at ${store.path}: ${error instanceof Error ? error.message : String(error)}`,
-		);
-	}
-}
-export function migrate(store: StateStore): void {
-	store.db.exec("BEGIN IMMEDIATE");
-	try {
-		store.db.exec("CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL)");
-		const row = store.db.prepare("SELECT version FROM schema_version LIMIT 1").get() as {
+		db.exec("CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL)");
+		const row = db.prepare("SELECT version FROM schema_version LIMIT 1").get() as {
 			version: number;
 		} | null;
 		const version = row?.version ?? 0;
 		if (version > SCHEMA_VERSION)
-			throw new StateError(`database ${store.path} uses newer schema version ${version}`);
+			throw new StateError(`database ${path} uses newer schema version ${version}`);
 		// A database which claims a known version but lacks that version's
 		// core aggregate is not a valid state database. Treat it as newer.
 		const coreTable = version >= 4 ? "consultations" : "tickets";
-		if (version > 0 && !hasTable(store, coreTable))
-			throw new StateError(`database ${store.path} uses newer schema version ${version}`);
-		if (version < 1) store.db.exec(SCHEMA_V1);
+		if (version > 0 && !hasTable(db, coreTable))
+			throw new StateError(`database ${path} uses newer schema version ${version}`);
+		if (version < 1) db.exec(SCHEMA_V1);
 		if (version < 2) {
-			store.db.exec(MIGRATION_V1_TO_V2);
+			db.exec(MIGRATION_V1_TO_V2);
 			// Legacy `done` means that the Agent settled. Preserve its work
 			// cycle and expose the missing Completion decision.
-			store.db.exec("UPDATE tickets SET state = 'awaiting' WHERE state = 'done'");
+			db.exec("UPDATE tickets SET state = 'awaiting' WHERE state = 'done'");
 			// The absent flag only served the old done-cycle bump.
-			store.db.exec("ALTER TABLE tickets DROP COLUMN absent");
+			db.exec("ALTER TABLE tickets DROP COLUMN absent");
 		}
-		if (version < 3) store.db.exec(MIGRATION_V2_TO_V3);
-		if (version < 4) store.db.exec(MIGRATION_V3_TO_V4);
-		if (version < 5) store.db.exec(MIGRATION_V4_TO_V5);
-		if (version < 6) store.db.exec(MIGRATION_V5_TO_V6);
-		if (version < 7) store.db.exec(MIGRATION_V6_TO_V7);
-		if (version < 8) store.db.exec(MIGRATION_V7_TO_V8);
-		if (version < 9) store.db.exec(MIGRATION_V8_TO_V9);
-		if (version < 10) store.db.exec(MIGRATION_V9_TO_V10);
-		if (version < 11) store.db.exec(MIGRATION_V10_TO_V11);
-		if (version < 12) store.db.exec(MIGRATION_V11_TO_V12);
-		if (version < 13) store.db.exec(MIGRATION_V12_TO_V13);
-		if (version < 14) store.db.exec(MIGRATION_V13_TO_V14);
+		if (version < 3) db.exec(MIGRATION_V2_TO_V3);
+		if (version < 4) db.exec(MIGRATION_V3_TO_V4);
+		if (version < 5) db.exec(MIGRATION_V4_TO_V5);
+		if (version < 6) db.exec(MIGRATION_V5_TO_V6);
+		if (version < 7) db.exec(MIGRATION_V6_TO_V7);
+		if (version < 8) db.exec(MIGRATION_V7_TO_V8);
+		if (version < 9) db.exec(MIGRATION_V8_TO_V9);
+		if (version < 10) db.exec(MIGRATION_V9_TO_V10);
+		if (version < 11) db.exec(MIGRATION_V10_TO_V11);
+		if (version < 12) db.exec(MIGRATION_V11_TO_V12);
+		if (version < 13) db.exec(MIGRATION_V12_TO_V13);
+		if (version < 14) db.exec(MIGRATION_V13_TO_V14);
 		// The v14 number was reused while the queue was new, so the stamp alone
 		// cannot tell the two shapes apart. Ask the file: only the table that
 		// lacks its `position` column is unreadable, and a sound queue keeps
 		// the starts already waiting in it.
-		if (version < 15 && !hasColumn(store, "work_queue", "position"))
-			store.db.exec(MIGRATION_V14_TO_V15);
-		if (version < 16) store.db.exec(MIGRATION_V15_TO_V16);
+		if (version < 15 && !hasColumn(db, "work_queue", "position")) db.exec(MIGRATION_V14_TO_V15);
+		if (version < 16) db.exec(MIGRATION_V15_TO_V16);
 		// The column may already stand on a file the version stamp alone does
 		// not describe (a downgrade left the column in place), so the stamp
 		// and the file both get asked before the step runs.
-		if (version < 17 && !hasColumn(store, "completion_traces", "transition_json"))
-			store.db.exec(MIGRATION_V16_TO_V17);
+		if (version < 17 && !hasColumn(db, "completion_traces", "transition_json"))
+			db.exec(MIGRATION_V16_TO_V17);
 		// Ask the file, not the stamp: a build that stamped 18 before its
 		// step ran left a file the stamp alone does not describe, and the
 		// column missing is the file's own confession. A sound file keeps
 		// the column, so the step stays a no-op for it.
-		if (!hasColumn(store, "work_queue", "route_from_identity")) store.db.exec(MIGRATION_V17_TO_V18);
+		if (!hasColumn(db, "work_queue", "route_from_identity")) db.exec(MIGRATION_V17_TO_V18);
 		// Ask the file, not the stamp: the same build-early risk the route
 		// column carries, and a sound file keeps the column, so the step
 		// stays a no-op for it.
-		if (!hasColumn(store, "work_queue", "is_automatic")) store.db.exec(MIGRATION_V18_TO_V19);
-		if (!hasTable(store, "queue_pause")) store.db.exec(MIGRATION_V19_TO_V20_QUEUE_PAUSE);
+		if (!hasColumn(db, "work_queue", "is_automatic")) db.exec(MIGRATION_V18_TO_V19);
+		if (!hasTable(db, "queue_pause")) db.exec(MIGRATION_V19_TO_V20_QUEUE_PAUSE);
 		// The axis table is asked for by name, the way the queue pause is: a
 		// file the step already seeded keeps its stored answer, and an older
 		// file opens grouped at the fresh default, `repository` (ADR 0066;
 		// user story 57).
-		if (!hasTable(store, "grouping_axis")) store.db.exec(MIGRATION_V20_TO_V21_GROUPING_AXIS);
+		if (!hasTable(db, "grouping_axis")) db.exec(MIGRATION_V20_TO_V21_GROUPING_AXIS);
 		// Ask the file, not the stamp: a re-labeled newer file already lacks
 		// the retired column and the referenced-issues table, so each drop
 		// runs only when the fact is still present.
-		if (hasColumn(store, "tickets", "priority_override"))
-			store.db.exec(MIGRATION_V19_TO_V20_DROP_PRIORITY);
-		if (hasTable(store, "referenced_issues")) store.db.exec(MIGRATION_V19_TO_V20_DROP_REFERENCED);
+		if (hasColumn(db, "tickets", "priority_override")) db.exec(MIGRATION_V19_TO_V20_DROP_PRIORITY);
+		if (hasTable(db, "referenced_issues")) db.exec(MIGRATION_V19_TO_V20_DROP_REFERENCED);
 		// Ask the file, not the stamp: the same build-early risk the queue's own
 		// columns carry, and each half asks on its own, so a file that holds one
 		// of the two cells heals the missing half and keeps the other.
-		if (!hasColumn(store, "tickets", "ignored")) store.db.exec(MIGRATION_V21_TO_V22_IGNORED);
-		if (!hasColumn(store, "tickets", "ignored_at")) store.db.exec(MIGRATION_V21_TO_V22_IGNORED_AT);
+		if (!hasColumn(db, "tickets", "ignored")) db.exec(MIGRATION_V21_TO_V22_IGNORED);
+		if (!hasColumn(db, "tickets", "ignored_at")) db.exec(MIGRATION_V21_TO_V22_IGNORED_AT);
 		// Ask the file, not the stamp: the same build-early risk the ignore's own
 		// columns carry, and a sound file keeps the column, so the step stays a
 		// no-op for it.
-		if (!hasColumn(store, "source_health", "muted")) store.db.exec(MIGRATION_V22_TO_V23_MUTED);
-		if (!hasColumn(store, "source_health", "muted_at"))
-			store.db.exec(MIGRATION_V22_TO_V23_MUTED_AT);
+		if (!hasColumn(db, "source_health", "muted")) db.exec(MIGRATION_V22_TO_V23_MUTED);
+		if (!hasColumn(db, "source_health", "muted_at")) db.exec(MIGRATION_V22_TO_V23_MUTED_AT);
 		// Asked for by name, the way the axis table is: a file the step already
 		// ran keeps its stored order, and an older file opens with no order,
 		// which the read answers with the axis' default (ADR 0071).
-		if (!hasTable(store, "group_order")) store.db.exec(MIGRATION_V23_TO_V24_GROUP_ORDER);
+		if (!hasTable(db, "group_order")) db.exec(MIGRATION_V23_TO_V24_GROUP_ORDER);
 		// Ask the file, not the stamp: the queue's action cell is asked by
 		// column, the way the route's cell is, and the attempt table is
 		// asked by name, the way the queue pause is.
-		if (!hasColumn(store, "work_queue", "action_task_type"))
-			store.db.exec(MIGRATION_V24_TO_V25_QUEUE_ACTION);
-		if (!hasTable(store, "plane_action_attempts"))
-			store.db.exec(MIGRATION_V25_TO_V26_PLANE_ACTION_ATTEMPTS);
+		if (!hasColumn(db, "work_queue", "action_task_type"))
+			db.exec(MIGRATION_V24_TO_V25_QUEUE_ACTION);
+		if (!hasTable(db, "plane_action_attempts")) db.exec(MIGRATION_V25_TO_V26_PLANE_ACTION_ATTEMPTS);
 		// Asked for by name, the way the queue pause and the grouping axis are:
 		// a file the step already ran keeps its stored init facts, and an older
 		// file opens with none, which the read answers as uninit (ADR 0075).
-		if (!hasTable(store, "repository_init")) store.db.exec(MIGRATION_V26_TO_V27_REPOSITORY_INIT);
+		if (!hasTable(db, "repository_init")) db.exec(MIGRATION_V26_TO_V27_REPOSITORY_INIT);
 		// The `queued` state the retired route wait stood in (ADR 0072): a
 		// file that still carries it ends those cycles the way a close does -
 		// the ticket rests open with the cycle counted once - in one state
 		// write, the way the legacy `done` heal ran. The state is unreachable
 		// now, so the step is a no-op on a file the new rule wrote.
-		store.db.exec(
+		db.exec(
 			"UPDATE tickets SET state = 'open', work_cycle = work_cycle + 1 WHERE state = 'queued'",
 		);
-		store.db.exec("DELETE FROM schema_version");
-		store.db.prepare("INSERT INTO schema_version(version) VALUES (?)").run(SCHEMA_VERSION);
-		store.db.exec("COMMIT");
+		db.exec("DELETE FROM schema_version");
+		db.prepare("INSERT INTO schema_version(version) VALUES (?)").run(SCHEMA_VERSION);
+		db.exec("COMMIT");
 	} catch (error) {
 		try {
-			store.db.exec("ROLLBACK");
+			db.exec("ROLLBACK");
 		} catch {}
 		throw error;
 	}

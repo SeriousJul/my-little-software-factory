@@ -55,10 +55,14 @@ description: The module map of the source tree, for agents working in this repos
 	`source-fact.ts`, `ticket-work-cycle.ts`, and `work-queue.ts`. A caller
 	reaches a fact or an operation only through the aggregate that owns it, and
 	an aggregate reaches only the tables it owns; the boundary check in
-	`test/state-architecture.test.ts` holds both rules. `store.ts` owns the path,
-	the connection, the clock, and the transaction; `schema.ts` owns the
-	migration chain; `json.ts` holds the shared decode primitives; `graph.ts`
-	declares the interfaces and lets the aggregates call each other.
+	`test/state-architecture.test.ts` holds both rules. `tables.ts` names the
+	owner of every table the file holds. `store.ts` owns the path, the connection,
+	the clock, and the transaction, and hands each aggregate a scoped handle that
+	refuses a statement naming a table its aggregate does not own; `schema.ts`
+	owns the migration chain; `json.ts` holds the shared decode primitives;
+	`graph.ts` composes the nine modules and lets them call each other through
+	their interfaces; `batch.ts` chunks an identity list so a fact the observation
+	loop reads for the whole list costs one statement per chunk, not one per row.
 - `src/workflow.ts`: the workflow machine's transition (ADR 0027). A completed
 	turn fires the task type's transition once: the plane writes the label facts
 	on the ticket and its fixing pull request, and the machine converges every
