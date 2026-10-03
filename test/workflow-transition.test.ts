@@ -505,6 +505,30 @@ describe("the review score", () => {
 		expect(scoreFromMessage("**Score:** 92%")).toBe(92);
 	});
 
+	test("the verdict line keeps its score when its own prose follows", () => {
+		// The agent writes its verdict and keeps talking on the same line. The
+		// score the line names with its own scale stands whatever follows it.
+		expect(scoreFromMessage("**Score:** 74 / 100 - Specification: Pass")).toBe(74);
+		expect(scoreFromMessage("**Score:** 74 / 100 \u2014 Specification: Pass")).toBe(74);
+		expect(scoreFromMessage("**Score:** 74 / 100 (74%)")).toBe(74);
+		expect(scoreFromMessage("**Score:** 74 / 100 \u2705")).toBe(74);
+		expect(scoreFromMessage("**Score:** 74 / 100 points lost to the four nits")).toBe(74);
+		expect(scoreFromMessage("### Score\n\n74 / 100 - Specification: Pass")).toBe(74);
+		expect(scoreFromMessage("### Score\n\n74 / 100 (74%)")).toBe(74);
+	});
+
+	test("a score with no scale closes its own line, and a total that runs on is no scale", () => {
+		// Without its own scale the number must end its line: a dash, a
+		// parenthesis, or the line's end. A word after it is the sentence the
+		// number stands in, and a total longer than three digits is a number
+		// the read does not know how to scale.
+		expect(scoreFromMessage("Score: 74 \u2014 the review's verdict")).toBe(74);
+		expect(scoreFromMessage("Score: 74 (out of 100)")).toBe(74);
+		expect(scoreFromMessage("Score: 74 points")).toBeNull();
+		expect(scoreFromMessage("**Score:** 92 / 1000")).toBeNull();
+		expect(scoreFromMessage("### Score\n\n92 / 1000")).toBeNull();
+	});
+
 	test("a score out of another total is read on the 100 scale", () => {
 		// A line that names its own scale is still the fixed line: the judgment
 		// reads the score out of 100, whatever total the agent divided by.

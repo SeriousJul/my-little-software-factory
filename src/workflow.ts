@@ -197,13 +197,21 @@ function withoutMarkdown(line: string): string {
  * The fixed score line: the label, at its line's start or after a lead-in
  * that ends in a mark, its separator, and its number, with an optional
  * scale. The separator is the line's colon or equals sign, or the bar of the
- * table cell a scored row carries. The lookahead keeps the line's own score:
- * what follows the number is the scale, the line's end, or the line's
- * punctuation, never a word. A scale written in words is not the line's own
- * form, so `Score: 92 out of 100.` stays prose and reports nothing.
+ * table cell a scored row carries.
+ *
+ * A number that names its own scale is the line's verdict, and what follows
+ * the scale is the line's own prose: `Score: 74 / 100 - Specification: Pass`
+ * and `Score: 74 / 100 (74 %)` carry the same verdict as the bare line. The
+ * scale's own guard is that its total does not run on: `Score: 92 / 1000`
+ * names a total the read does not know and reports nothing.
+ *
+ * A number with no scale must close its line: the line's end, its
+ * punctuation, or its dash. That keeps the line's own score out of prose -
+ * `Score: 92 out of 100.` writes its scale in words, which is not the line's
+ * own form, and `Score: 74 points` names a thing, not a verdict.
  */
 const SCORE_LINE =
-	/(?:^|[\d)\]}>:;,-]\s*)(?:(?:review|total|final|overall|combined|verdict)\s+)?score\s*[:=|]\s*(\d{1,3}(?:\.\d+)?)(?:\s*(?:%|\/\s*(\d{1,3}(?:\.\d+)?)))?(?=\s*(?:$|[,.;:!)[\]}|_-]))/gi;
+	/(?:^|[\d)\]}>:;,-]\s*)(?:(?:review|total|final|overall|combined|verdict)\s+)?score\s*[:=|]\s*(\d{1,3}(?:\.\d+)?)(?:\s*(?:%|\/\s*(\d{1,3}(?:\.\d+)?))(?!\d)|(?=\s*(?:$|[,.;:!()[\]}|_\u2013\u2014-])))/gi;
 
 /**
  * The verdict line the label stands alone on its line (ADR 0063): the line
@@ -215,14 +223,14 @@ const SCORE_LABEL_LINE = /^(?:^|[\d)\]}>:;,-]\s+)score\s*[:=|]?\s*$/i;
 
 /**
  * The number line under the label line (ADR 0063): the line opens with its
- * number, the number carries its own scale - a percent or a total - and
- * what follows the scale is the line's end or its punctuation, never a
- * word. The scale is the line's own: a bare number under the label is prose
- * the label does not make a verdict of, and a numbered list under it keeps
- * its list.
+ * number, and the number carries its own scale - a percent or a total. The
+ * scale is the line's own: a bare number under the label is prose the label
+ * does not make a verdict of, a numbered list under it keeps its list, a
+ * scale written in words is not the line's own form, and a total that runs
+ * on past three digits is not a scale the read knows. What follows the scale
+ * is the line's own prose.
  */
-const SCORE_NUMBER_LINE =
-	/^(\d{1,3}(?:\.\d+)?)\s*(?:%|\/\s*(\d{1,3}(?:\.\d+)?))(?=\s*(?:$|[,.;:!)[\]}|_-]))/i;
+const SCORE_NUMBER_LINE = /^(\d{1,3}(?:\.\d+)?)\s*(?:%|\/\s*(\d{1,3}(?:\.\d+)?))(?!\d)/i;
 
 /**
  * The value one scored number reports on the 100 scale: the number with no
