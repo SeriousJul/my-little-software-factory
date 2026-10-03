@@ -65,10 +65,25 @@ const TABLE_REFERENCE = new RegExp(
  * The names a statement defines for itself: a CTE's name (`WITH held AS (`),
  * and a subquery's alias (`FROM (SELECT ...) AS held`, `FROM (SELECT ...) held`).
  * These are not tables the aggregate reaches; they are names the statement
- * binds, so the scope rule lets them through.
+ * binds, so the scope rule lets them through - but only while no aggregate
+ * claims the name (issue #202 review). A statement that calls its own
+ * subquery `handoffs` hides what the subquery reads, and the hiding is the
+ * reach: `select attempt_id from (select attempt_id from handoffs) as handoffs`
+ * reaches `handoffs` whatever it calls the result. A name no aggregate claims
+ * (`held`, `rows`, a column list) is still just a name the statement bound.
  */
 const STATEMENT_ALIAS =
 	/\b([A-Za-z_][A-Za-z0-9_]*)\s+AS\s*\(|\)\s*(?:AS\s+)?([A-Za-z_][A-Za-z0-9_]*)/giu;
+
+/**
+ * Every table name the module claims: the nine aggregates' tables and the
+ * seam's own version stamp. A statement-bound name that stands in this set is
+ * not a fresh name; it is a table name, and the reach behind it is reported.
+ */
+const CLAIMED_TABLE_NAMES = new Set<string>([
+	...Object.values(TABLES_OWNED).flat(),
+	...SEAM_TABLES,
+]);
 
 /**
  * The statement with every single-quoted value blanked out. A quoted value is
@@ -108,21 +123,17 @@ function withoutQuotedValues(sql: string): string {
  * case, so the comparison is the same whatever case the SQL is written in. A
  * quoted value names nothing, a schema prefix names the table under it and not
  * the schema, and a name the statement defines for itself - a CTE or a subquery
- * alias - is not a reach, so neither is reported.
- *
- * A CTE named after a real table is the matcher's one blind spot: every name in
- * `WITH handoffs AS (SELECT * FROM handoffs)` is a name the statement bound for
- * itself, so nothing is reported and the scoped handle lets it through. SQLite
- * closes the only useful form of it - a CTE that reads the table its own name
- * shadows is a `circular reference` - so the bypass reaches no rows. The seam
- * test states this so a reader knows which guard holds.
+ * alias - is not a reach, so neither is reported. A name the statement defines
+ * for itself is a reach when some aggregate claims that name, because then the
+ * statement is standing a claimed table in for its own result.
  */
 export function tablesNamed(sql: string): string[] {
 	const statement = withoutQuotedValues(sql);
 	const aliases = new Set<string>();
 	for (const match of statement.matchAll(STATEMENT_ALIAS)) {
 		const alias = (match[1] ?? match[2] ?? "").toLowerCase();
-		if (alias !== "") aliases.add(alias);
+		if (alias === "" || CLAIMED_TABLE_NAMES.has(alias)) continue;
+		aliases.add(alias);
 	}
 	const named: string[] = [];
 	for (const match of statement.matchAll(TABLE_REFERENCE)) {

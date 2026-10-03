@@ -154,23 +154,46 @@ describe("the seam aggregate", () => {
 		expect(() =>
 			tickets.prepare("with held as (select attempt_id from handoffs) select * from held"),
 		).toThrow("may not reach the table handoffs");
+		// A derived table given a claimed table's name hides its reach, so the
+		// hiding is the reach (issue #202 review): the matcher reports `handoffs`
+		// and the handle refuses before the statement is ever prepared.
+		expect(
+			tablesNamed("select attempt_id from (select attempt_id from handoffs) as handoffs"),
+		).toEqual(["handoffs"]);
+		expect(() =>
+			tickets.prepare("select attempt_id from (select attempt_id from handoffs) as handoffs"),
+		).toThrow("may not reach the table handoffs");
+		expect(() =>
+			tickets.prepare("select attempt_id from (select attempt_id from handoffs) handoffs"),
+		).toThrow("may not reach the table handoffs");
+		// A derived table under a name no aggregate claims is still just a name the
+		// statement bound for itself, so the aggregate's own rows read fine.
+		expect(() =>
+			tickets.prepare("select identity from (select identity from tickets) as tickets_view"),
+		).not.toThrow();
 		store.close();
 	});
-	test("a CTE named after a real table is closed by the engine, not by the matcher", () => {
-		// The matcher cannot see this shape: every `handoffs` in the statement is a
-		// name the statement bound for itself, so `tablesNamed` reports nothing and
-		// the scoped handle lets the statement through (issue #202 review). SQLite
-		// closes the useful form of it - a CTE that reads the table its own name
-		// shadows is a circular reference - so the bypass reaches no rows. The test
-		// states which guard holds: the engine, not the matcher.
+	test("a statement that names a real table for its own result is refused by the matcher", () => {
+		// The CTE form and the derived-table form are both closed by the matcher
+		// now (issue #202 review). Every `handoffs` in the CTE is a name the
+		// statement bound for itself, but `handoffs` is a table an aggregate
+		// claims, so the reach is reported and the scoped handle refuses it for an
+		// aggregate that does not own the table. SQLite would refuse the same
+		// statement as a `circular reference`; the boundary refusal lands first.
 		const store = openStore(statePath());
 		const tickets = store.scopeOf("ticketWorkCycle", TABLES_OWNED.ticketWorkCycle);
 		expect(tablesNamed("with handoffs as (select * from handoffs) select * from handoffs")).toEqual(
-			[],
+			["handoffs", "handoffs"],
 		);
 		expect(() =>
 			tickets.prepare("with handoffs as (select * from handoffs) select * from handoffs"),
-		).toThrow("circular reference");
+		).toThrow("may not reach the table handoffs");
+		// A name no aggregate claims is still the statement's own, so it is let
+		// through and the statement reads the aggregate's own rows.
+		expect(tablesNamed("with held as (select 1) select * from held")).toEqual([]);
+		expect(() =>
+			tickets.prepare("with held as (select identity from tickets) select * from held"),
+		).not.toThrow();
 		store.close();
 	});
 	test("a failed rollback keeps the write's error as the cause", () => {

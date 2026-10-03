@@ -45,11 +45,18 @@ that interface draws is the same boundary the running code enforces.**
   subquery alias) through, because that name is not a table the statement
   reaches. A name may carry its schema: `FROM main.tickets` is read as `tickets`,
   the table the statement reaches, so the refusal names the table and not the
-  schema that holds it (issue #202 review). A CTE named after a real table is the
-  matcher's one blind spot - every name in `WITH handoffs AS (SELECT * FROM
-  handoffs)` is a name the statement bound for itself - and SQLite closes the one
-  useful form of it, because a CTE that reads the table its own name shadows is a
-  `circular reference`; `test/state/seam.test.ts` states which guard holds. The
+  schema that holds it (issue #202 review). A name the statement binds for itself
+  is its own only while no aggregate claims it. A CTE or a derived table aliased
+  `handoffs` stands a claimed table in for the statement's own result, so the
+  hiding is the reach and the matcher reports it. The earlier reading let the
+  engine close the CTE form - a CTE that reads the table its own name shadows is a
+  `circular reference` - and left the derived-table form,
+  `(SELECT attempt_id FROM handoffs) AS handoffs`, reaching rows with neither
+  guard refusing: the matcher suppressed the name and the scoped handle saw none
+  of it. The matcher
+  closes both forms now, so the runtime handle refuses them and no guard depends
+  on the engine; `test/state/seam.test.ts` states which guard holds for each.
+  A name no aggregate claims (`held`, `tickets_view`) still passes through. The
   text check reads the module's string literals, not its comments, so a sentence
   about another aggregate's table is not a reach.
 - **No caller outside the module imports its plumbing.** `store.ts`, `graph.ts`,
@@ -70,7 +77,13 @@ that interface draws is the same boundary the running code enforces.**
   that asked, and the boundary check reads the call graph and refuses a
   transaction inside any method on that far side - the interface method another
   aggregate calls, the published operation, or the private method it can call
-  (issue #202 review). An aggregate that needs an atomic fact of its own opens the
+  (issue #202 review). The check reads the whole far side of a call: the method's
+  own body, every method it calls on itself through `this.`, and every method it
+  reaches in a third aggregate through `graph()`, followed to the end. A method
+  that opens its transaction two calls away is the same nested open as one that
+  writes it in its own body; the first reading looked at the one body only, so a
+  `newestHandoffsFor` that called `this.settleHandoff` passed every check. An
+  aggregate that needs an atomic fact of its own opens the
   transaction at its own interface method, which is the caller's entry point and
   not a published operation. A write whose rollback fails as well is reported as
   both failures with the write's own error kept as the cause, so the rollback
@@ -81,7 +94,20 @@ that interface draws is the same boundary the running code enforces.**
   the alias, and the rules read nothing. The check refuses the binding - a
   declaration, an assignment, a destructuring rename, or a member typed as an
   aggregate interface - and refuses a distinctive aggregate method called on any
-  other receiver, so the alias has nowhere to be written (issue #202 review).
+  other receiver, so the alias has nowhere to be written (issue #202 review). The
+  method-name half reads the callables a caller's own file declares, never the
+  union of names every caller declares: a name is this file's own, so a file that
+  declares `queuePaused` for itself is no allowance for a second file that calls
+  `pickQueue(state).queuePaused()`. The call sites the rule cannot read on its own
+  are written in `NAME_ALLOWANCE` in `test/state-architecture.test.ts` beside the
+  reason - today two: the Handoff dispatch's own `enqueueWork`, standing in the
+  same file as the queue's `enqueueWork` it calls, and the dispatch's
+  `closeWorkCycle`, which the app shell reaches through its dispatch field. A
+  recorded allowance no call site needs any more goes red, so the list cannot
+  gather allowances nobody uses. A function that hands an aggregate over as its
+  return value is a hold the call rules cannot see, so the check refuses it where
+  it is declared, and the shapes the rules are meant to refuse are kept as probe
+  sources the suite runs (issue #202 review).
 - **A cross-aggregate call is a narrow named operation, never a raw-row helper.**
   The Handoff aggregate answers `ticketsWithUnresolvedAttempts`, the source fact
   aggregate answers `ticketsWithMutedSource`, and the Ticket work cycle aggregate
@@ -132,6 +158,19 @@ that interface draws is the same boundary the running code enforces.**
   graph. The first cut cast an empty object into the graph type; a missing
   aggregate could not fail the build. The check reads the construction and fails
   on a cast.
+- **An interface method is either a caller's answer or the aggregate's test
+  surface.** Every method an aggregate's interface declares is reached - by a
+  caller in the plane, by another aggregate across the boundary, or by the
+  aggregate's own tests. A method no caller and no test reaches is neither, and
+  the check refuses it (issue #202 review). Seven methods have no caller in the
+  plane today and stand as the answer surface the aggregate's own tests cross:
+  `consultationRecord.pendingConsultationResponse` and
+  `handoff.leftoverEnvironments`, each read by the aggregate's own operations,
+  `planeAction.planeActionAttempts`, `ticketWorkCycle.visibleTickets`,
+  `ticketWorkCycle.ignoredTickets`, `ticketWorkCycle.ticketObligation`, and
+  `workQueue.enqueueConsultationWork`, the third enqueue operation the queue owns
+  beside the two the plane runs. The list is written in the check, so a new one
+  has to be named there before it can stand in an interface.
 - **The architecture test stays out of the mutation campaign**, beside the shared
   control architecture test, for the same reason: it reads production source as
   text, and instrumentation rewrites exactly the shapes it counts.
@@ -144,6 +183,9 @@ that interface draws is the same boundary the running code enforces.**
   that holds an aggregate under another name.
   `src/startup.ts` is the one caller allowed to hold the composition, because it
   is the open path.
+- A method that stands in an aggregate's interface has to be reached. A new
+  interface method no caller and no test reaches goes red, and a new method with
+  no caller but a test has to be written into the recorded list first.
 - Adding a fact means deciding its owner before writing a query, and adding a
   table means naming its owner in `tables.ts`. A table no aggregate claims fails
   the ownership check.

@@ -99,7 +99,7 @@ for the question this answers.
   in the `src/**/*.ts` scope, so a future whole-`src` run will instrument them,
   but no mutant has been run against them: this branch was gated by `bun run
   test`, `bun run typecheck`, and `bun run lint` only. The suite it gated is
-  2,586 tests over 114 files, against the 1,919 tests over 79 files this record's
+  2,590 tests over 114 files, against the 1,919 tests over 79 files this record's
   rates were measured on, so every time and mutant-count number above is out of
   date for the current tree. Nine of the branch's guards were each confirmed by
   hand - the guard was mutated, the named test went red, and the guard was put
@@ -111,6 +111,15 @@ for the question this answers.
   method called on another receiver), the batched seat-name read, the Handoff
   limit rule's no-restatement check, and the failed rollback's kept cause. That
   is not a campaign, and it covers no other module.
+  The #202 review's rework added four guards, and how each was measured differs:
+  the transitive reading of the one-transaction rule was confirmed by hand the
+  same way - a published internal method made to call `this.settleHandoff`, both
+  transaction tests red, the call removed again - and it keeps two probe tests
+  that run the rule over synthetic module sources. The derived-table alias case,
+  the per-file reading of the bare-method-name rule, and the interface reach rule
+  are measured by tests in the suite (`test/state/seam.test.ts` and
+  `test/state-architecture.test.ts`), not by hand. No campaign has been run over
+  any of them.
 - **One wiring probe survived, and it names a coverage gap.** Dropping the
   restart walk's read of the queue's own item - `queueItemStands: false` in
   `src/observation.ts` - leaves the whole suite green. The cycle gate already
