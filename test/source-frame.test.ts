@@ -280,10 +280,10 @@ describe("source-driven frames", () => {
 				ticket("github:github.com:I_9", { externalKey: "#9", title: "Another open item" }),
 			]),
 		);
-		const [first] = state.ticketWorkCycle.visibleTickets(
+		const [first] = state.ticketWorkCycle.ticketListViews(
 			BASE_CONFIG.workflowStates,
 			BASE_CONFIG.defaultTaskType,
-		);
+		).rows;
 		const claim = state.handoff.claimHandoff(first.identity, HANDOFF_CHOICE, "open");
 		if (!claim.ok) throw new Error(claim.reason);
 		state.handoff.settleHandoff(claim.claim.attemptId, true);
@@ -490,8 +490,8 @@ describe("source-driven frames", () => {
 		state.sourceFact.applyFetch(issues, success([runTicket, offTicket, openTicket, awaitTicket]));
 		state.sourceFact.applyFetch(pulls, success([pendingTicket]));
 		const off = state.ticketWorkCycle
-			.visibleTickets(BASE_CONFIG.workflowStates, "implement")
-			.find((t) => t.title === "Off ticket");
+			.ticketListViews(BASE_CONFIG.workflowStates, "implement")
+			.rows.find((t) => t.title === "Off ticket");
 		if (off === undefined) throw new Error("Off ticket is missing");
 		const claim = state.handoff.claimHandoff(off.identity, HANDOFF_CHOICE, "open");
 		if (!claim.ok) throw new Error(claim.reason);
@@ -637,10 +637,10 @@ describe("source-driven frames", () => {
 		const definition = { name: "issues", kind: "github-issues" };
 		state.sourceFact.initializeSources([definition]);
 		state.sourceFact.applyFetch(definition, success([ticket()]));
-		const [first] = state.ticketWorkCycle.visibleTickets(
+		const [first] = state.ticketWorkCycle.ticketListViews(
 			BASE_CONFIG.workflowStates,
 			BASE_CONFIG.defaultTaskType,
-		);
+		).rows;
 		const claim = state.handoff.claimHandoff(first.identity, HANDOFF_CHOICE, "open");
 		if (!claim.ok) throw new Error(claim.reason);
 		// The attempt stays unresolved: the process died before settling it.

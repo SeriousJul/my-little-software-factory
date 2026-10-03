@@ -1423,6 +1423,14 @@ export class ObservationCoordinator {
 	 * reconsiders every cycle the queue is empty.
 	 */
 	private async topUpQueue(agents: readonly HerdrAgent[]): Promise<boolean> {
+		// The queue's items, read once for the whole walk. The cycle gate needs the
+		// depth, and every walk needs the fact of whether an item already stands for
+		// the candidate it holds, so the one read answers both instead of one
+		// statement per candidate (issue #202 review).
+		const queueItems = this.state.workQueue.items();
+		const queuedTickets = new Set(
+			queueItems.filter((item) => item.kind !== "consultation").map((item) => item.ticketIdentity),
+		);
 		// The cycle gate (ADR 0051, ADR 0052, ADR 0016): the mode, the brake, the
 		// Dispatch pause - checked once per cycle so a held turn does not spam the
 		// status line - and the queue's depth, which is the top-up's pace. The rule
@@ -1432,7 +1440,7 @@ export class ObservationCoordinator {
 				modeOn: this.mode(),
 				queuePaused: this.state.workQueue.queuePaused(),
 				dispatchPauseActive: this.state.ticketWorkCycle.dispatchPauseActive(),
-				queueDepth: this.state.workQueue.items().length,
+				queueDepth: queueItems.length,
 			})
 		)
 			return false;
@@ -1609,6 +1617,13 @@ export class ObservationCoordinator {
 		for (const agent of agents) byPane.set(agent.paneId, agent);
 		const restartTickets = this.state.ticketWorkCycle.ticketsByState(["handed-off", "running"]);
 		const restartNames = this.agentNames(restartTickets);
+		// The start count each candidate needs arrives as one batched read for the
+		// in-flight list, the same shape the projection pays (issue #202, ADR 0092).
+		// Asked per candidate it cost two statements for every in-flight Ticket on
+		// every cycle the walk ran.
+		const restartStartCounts = this.state.handoff.handoffCountsFor(
+			restartTickets.map((ticket) => ticket.ticketIdentity),
+		);
 		for (const ticket of restartTickets) {
 			// The gate (ADR 0060, widened by ADR 0070): this walk reads the
 			// in-flight tickets directly, not the list, and a flagged Ticket whose
@@ -1631,9 +1646,9 @@ export class ObservationCoordinator {
 							ticket.paneId === null ? undefined : byPane.get(ticket.paneId),
 							restartNames.get(ticket.ticketIdentity) ?? "",
 						) === null,
-					handoffCount: this.state.handoff.handoffCount(ticket.ticketIdentity),
+					handoffCount: restartStartCounts.get(ticket.ticketIdentity) ?? 0,
 					handoffLimit: config.maxHandoffsPerTicket,
-					queueItemStands: this.state.workQueue.hasWorkItem(ticket.ticketIdentity),
+					queueItemStands: queuedTickets.has(ticket.ticketIdentity),
 					restartMarkStands: this.restarted.has(ticket.ticketIdentity),
 				})
 			)
@@ -1698,7 +1713,7 @@ export class ObservationCoordinator {
 			list.rows.filter((ticket) => ticket.sourceKind !== "github-pull-request"),
 		]) {
 			for (const ticket of group) {
-				if (await this.topUpOpenTicket(config, ticket)) return true;
+				if (await this.topUpOpenTicket(config, ticket, queuedTickets)) return true;
 			}
 		}
 		return false;
@@ -1712,7 +1727,11 @@ export class ObservationCoordinator {
 	 * item: a taken item ends the walk, and a held or refused row moves the
 	 * walk on to the next candidate, the way the walk did before the split.
 	 */
-	private async topUpOpenTicket(config: FactoryConfig, ticket: Ticket): Promise<boolean> {
+	private async topUpOpenTicket(
+		config: FactoryConfig,
+		ticket: Ticket,
+		queuedTickets: ReadonlySet<string>,
+	): Promise<boolean> {
 		// The row gate (ADR 0051, ADR 0060, ADR 0027): the row's own facts, the
 		// ignore flag read on this walk's own view - the `all` view holds every row
 		// the covered rule leaves, so a resting ignored row stands here and the flag
@@ -1740,7 +1759,7 @@ export class ObservationCoordinator {
 					ticket.identity,
 					taskType,
 				),
-				queueItemStands: this.state.workQueue.hasWorkItem(ticket.identity),
+				queueItemStands: queuedTickets.has(ticket.identity),
 			})
 		)
 			return false;

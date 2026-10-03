@@ -1050,8 +1050,8 @@ describe("the Work queue section", () => {
 					// The cycle ended once at the ask, the decision stands where
 					// the ask put it, and the removal's mark stands on the trace.
 					const ticket = state.ticketWorkCycle
-						.visibleTickets([], "implement")
-						.find((candidate) => candidate.identity === FIRST);
+						.ticketListViews([], "implement")
+						.rows.find((candidate) => candidate.identity === FIRST);
 					expect(ticket?.state).toBe("open");
 					expect(ticket?.workCycle).toBe(2);
 					expect(state.ticketWorkCycle.lastCompletion(FIRST)?.decision).toBe("handed-off");

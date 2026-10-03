@@ -29,7 +29,7 @@ describe("the sourceFact aggregate", () => {
 		const state = openFactoryState(":memory:");
 		state.sourceFact.initializeSources([sourceA]);
 		state.sourceFact.applyFetch(sourceA, success([labeled(["ready-for-agent"])]));
-		expect(state.ticketWorkCycle.visibleTickets(POSITION_STATES, "implement")[0]).toEqual(
+		expect(state.ticketWorkCycle.ticketListViews(POSITION_STATES, "implement").rows[0]).toEqual(
 			expect.objectContaining({
 				suggestedTaskType: "implement",
 				matchedStateName: "ready-for-agent",
@@ -41,7 +41,7 @@ describe("the sourceFact aggregate", () => {
 		const state = openFactoryState(":memory:");
 		state.sourceFact.initializeSources([sourceA]);
 		state.sourceFact.applyFetch(sourceA, success([labeled(["something-else"])]));
-		expect(state.ticketWorkCycle.visibleTickets(POSITION_STATES, "implement")[0]).toEqual(
+		expect(state.ticketWorkCycle.ticketListViews(POSITION_STATES, "implement").rows[0]).toEqual(
 			expect.objectContaining({ suggestedTaskType: "implement", matchedStateName: null }),
 		);
 		state.close();
@@ -50,7 +50,7 @@ describe("the sourceFact aggregate", () => {
 		const state = openFactoryState(":memory:");
 		state.sourceFact.initializeSources([sourceA]);
 		state.sourceFact.applyFetch(sourceA, success([labeled(["hold"])]));
-		expect(state.ticketWorkCycle.visibleTickets(POSITION_STATES, "implement")[0]).toEqual(
+		expect(state.ticketWorkCycle.ticketListViews(POSITION_STATES, "implement").rows[0]).toEqual(
 			expect.objectContaining({ suggestedTaskType: null, matchedStateName: "on-hold" }),
 		);
 		state.close();
@@ -63,16 +63,16 @@ describe("the sourceFact aggregate", () => {
 		state.sourceFact.initializeSources([sourceA]);
 		state.sourceFact.applyFetch(sourceA, success([labeled(["hold"])]));
 		expect(
-			state.ticketWorkCycle.visibleTickets(POSITION_STATES, "implement")[0].matchedStateName,
+			state.ticketWorkCycle.ticketListViews(POSITION_STATES, "implement").rows[0].matchedStateName,
 		).toBe("on-hold");
 		state.close();
 
 		const reopened = openFactoryState(path);
 		expect(
-			reopened.ticketWorkCycle.visibleTickets(
+			reopened.ticketWorkCycle.ticketListViews(
 				[{ name: "parked-elsewhere", match: { labelsAny: ["hold"] } }],
 				"implement",
-			)[0].matchedStateName,
+			).rows[0].matchedStateName,
 		).toBe("parked-elsewhere");
 		reopened.close();
 	});
@@ -80,7 +80,7 @@ describe("the sourceFact aggregate", () => {
 		const state = openFactoryState(":memory:");
 		state.sourceFact.initializeSources([sourceA]);
 		state.sourceFact.applyFetch(sourceA, success([fetched()]));
-		expect(state.ticketWorkCycle.visibleTickets([], "implement")).toEqual([
+		expect(state.ticketWorkCycle.ticketListViews([], "implement").rows).toEqual([
 			expect.objectContaining({ identity: "github:github.com:I_5", actionable: true }),
 		]);
 
@@ -88,7 +88,7 @@ describe("the sourceFact aggregate", () => {
 			status: "failed",
 			reason: "GitHub rate limit exceeded",
 		});
-		const [ticket] = state.ticketWorkCycle.visibleTickets([], "implement");
+		const [ticket] = state.ticketWorkCycle.ticketListViews([], "implement").rows;
 		expect(ticket).toEqual(expect.objectContaining({ actionable: false }));
 		expect(ticket.memberships?.[0]).toEqual(expect.objectContaining({ health: "stale" }));
 		expect(state.handoff.claimHandoff(ticket.identity, choice, "open")).toEqual(
@@ -103,7 +103,7 @@ describe("the sourceFact aggregate", () => {
 		state.sourceFact.applyFetch(sourceA, success([fetched()]));
 		state.sourceFact.applyFetch(sourceB, success([fetched()]));
 		state.sourceFact.applyFetch(sourceA, { status: "failed", reason: "network unavailable" });
-		const [ticket] = state.ticketWorkCycle.visibleTickets([], "implement");
+		const [ticket] = state.ticketWorkCycle.ticketListViews([], "implement").rows;
 		expect(ticket.actionable).toBe(true);
 		expect(ticket.memberships).toHaveLength(2);
 
@@ -117,7 +117,7 @@ describe("the sourceFact aggregate", () => {
 		state.close();
 
 		const reopened = openFactoryState(path);
-		const [persisted] = reopened.ticketWorkCycle.visibleTickets([], "implement");
+		const [persisted] = reopened.ticketWorkCycle.ticketListViews([], "implement").rows;
 		expect(persisted).toEqual(
 			expect.objectContaining({
 				state: "handed-off",
@@ -135,7 +135,7 @@ describe("the sourceFact aggregate", () => {
 		const state = openFactoryState(path);
 		state.sourceFact.initializeSources([sourceA]);
 		state.sourceFact.applyFetch(sourceA, success([fetched()]));
-		const [ticket] = state.ticketWorkCycle.visibleTickets([], "implement");
+		const [ticket] = state.ticketWorkCycle.ticketListViews([], "implement").rows;
 		const claim = state.handoff.claimHandoff(ticket.identity, choice, "open");
 		if (!claim.ok) throw new Error(claim.reason);
 		// The run dies here: the claim stays unsettled.
@@ -158,7 +158,7 @@ describe("the sourceFact aggregate", () => {
 		state.sourceFact.applyFetch(sourceA, success([fetched()]));
 		state.sourceFact.initializeSources([sourceB]);
 		state.sourceFact.applyFetch(sourceB, success([fetched()]));
-		const tickets = state.ticketWorkCycle.visibleTickets([], "implement");
+		const tickets = state.ticketWorkCycle.ticketListViews([], "implement").rows;
 		expect(tickets).toHaveLength(1);
 		expect(tickets[0]).toEqual(
 			expect.objectContaining({ identity: "github:github.com:I_5", state: "open" }),
@@ -170,12 +170,12 @@ describe("the sourceFact aggregate", () => {
 		const state = openFactoryState(path);
 		state.sourceFact.initializeSources([sourceA]);
 		state.sourceFact.applyFetch(sourceA, success([fetched()]));
-		const [ticket] = state.ticketWorkCycle.visibleTickets([], "implement");
+		const [ticket] = state.ticketWorkCycle.ticketListViews([], "implement").rows;
 		const started = state.handoff.claimHandoff(ticket.identity, choice, "open");
 		if (!started.ok) throw new Error(started.reason);
 		state.handoff.settleHandoff(started.claim.attemptId, true);
 		state.sourceFact.initializeSources([]);
-		expect(state.ticketWorkCycle.visibleTickets([], "implement")).toEqual([
+		expect(state.ticketWorkCycle.ticketListViews([], "implement").rows).toEqual([
 			expect.objectContaining({
 				state: "handed-off",
 				memberships: [expect.objectContaining({ health: "removed" })],
@@ -184,7 +184,7 @@ describe("the sourceFact aggregate", () => {
 		state.close();
 
 		const reopened = openFactoryState(path);
-		const [persisted] = reopened.ticketWorkCycle.visibleTickets([], "implement");
+		const [persisted] = reopened.ticketWorkCycle.ticketListViews([], "implement").rows;
 		const pending = reopened.handoff.claimHandoff(persisted.identity, choice, "open");
 		expect(pending).toEqual(expect.objectContaining({ ok: false }));
 		reopened.close();
@@ -229,7 +229,7 @@ describe("the sourceFact aggregate", () => {
 		const state = openFactoryState(":memory:");
 		state.sourceFact.initializeSources([sourceA]);
 		state.sourceFact.applyFetch(sourceA, success([fetched()]));
-		const [ticket] = state.ticketWorkCycle.visibleTickets([], "implement");
+		const [ticket] = state.ticketWorkCycle.ticketListViews([], "implement").rows;
 		const claim = state.handoff.claimHandoff(ticket.identity, choice, "open");
 		if (!claim.ok) throw new Error(claim.reason);
 		state.handoff.settleHandoff(claim.claim.attemptId, true);
@@ -245,7 +245,7 @@ describe("the sourceFact aggregate", () => {
 			turnLog: textLog("Done."),
 			completedAt: "2026-08-31T11:00:00Z",
 		});
-		const [rested] = state.ticketWorkCycle.visibleTickets([], "implement");
+		const [rested] = state.ticketWorkCycle.ticketListViews([], "implement").rows;
 		expect(rested.lastCompletion?.agentName).toBe("persist-source-facts");
 		state.close();
 	});
@@ -268,7 +268,7 @@ describe("the sourceFact aggregate", () => {
 		// The migration lands the mode off, and the ticket the v12 file held
 		// is untouched.
 		expect(reopened.handoff.autoHandoffMode()).toBe(false);
-		expect(reopened.ticketWorkCycle.visibleTickets([], "implement")).toEqual([
+		expect(reopened.ticketWorkCycle.ticketListViews([], "implement").rows).toEqual([
 			expect.objectContaining({ identity: "github:github.com:I_5" }),
 		]);
 		reopened.handoff.setAutoHandoffMode(true);
@@ -283,7 +283,7 @@ describe("the sourceFact aggregate", () => {
 		const state = openFactoryState(path);
 		state.sourceFact.initializeSources([sourceA]);
 		state.sourceFact.applyFetch(sourceA, success([fetched()]));
-		const [ticket] = state.ticketWorkCycle.visibleTickets([], "implement");
+		const [ticket] = state.ticketWorkCycle.ticketListViews([], "implement").rows;
 		if (!ticket) throw new Error("the fixture holds no ticket");
 		state.close();
 
@@ -317,7 +317,7 @@ describe("the sourceFact aggregate", () => {
 		const state = openFactoryState(path);
 		state.sourceFact.initializeSources([sourceA]);
 		state.sourceFact.applyFetch(sourceA, success([fetched()]));
-		const [ticket] = state.ticketWorkCycle.visibleTickets([], "implement");
+		const [ticket] = state.ticketWorkCycle.ticketListViews([], "implement").rows;
 		if (!ticket) throw new Error("the fixture holds no ticket");
 		state.close();
 
@@ -341,7 +341,7 @@ describe("the sourceFact aggregate", () => {
 		const state = openFactoryState(path);
 		state.sourceFact.initializeSources([sourceA]);
 		state.sourceFact.applyFetch(sourceA, success([fetched()]));
-		const [ticket] = state.ticketWorkCycle.visibleTickets([], "implement");
+		const [ticket] = state.ticketWorkCycle.ticketListViews([], "implement").rows;
 		if (!ticket) throw new Error("the fixture holds no ticket");
 		expect(
 			state.workQueue.enqueueWork({
@@ -409,7 +409,7 @@ describe("the sourceFact aggregate", () => {
 		const state = openFactoryState(path);
 		state.sourceFact.initializeSources([sourceA]);
 		state.sourceFact.applyFetch(sourceA, success([fetched()]));
-		const [ticket] = state.ticketWorkCycle.visibleTickets([], "implement");
+		const [ticket] = state.ticketWorkCycle.ticketListViews([], "implement").rows;
 		if (!ticket) throw new Error("the fixture holds no ticket");
 		expect(
 			state.workQueue.enqueueWork({
@@ -529,12 +529,12 @@ describe("the sourceFact aggregate", () => {
 		// the cycle it wore.
 		expect(reopened.ticketWorkCycle.ticketState("github:github.com:I_6")).toBe("open");
 		const healed = reopened.ticketWorkCycle
-			.visibleTickets([], "implement")
-			.find((candidate) => candidate.identity === "github:github.com:I_6");
+			.ticketListViews([], "implement")
+			.rows.find((candidate) => candidate.identity === "github:github.com:I_6");
 		expect(healed?.workCycle).toBe(2);
 		const resting = reopened.ticketWorkCycle
-			.visibleTickets([], "implement")
-			.find((candidate) => candidate.identity === "github:github.com:I_5");
+			.ticketListViews([], "implement")
+			.rows.find((candidate) => candidate.identity === "github:github.com:I_5");
 		expect(resting?.state).toBe("open");
 		expect(resting?.workCycle).toBe(1);
 		reopened.close();
@@ -543,7 +543,7 @@ describe("the sourceFact aggregate", () => {
 		const state = openFactoryState(":memory:");
 		state.sourceFact.initializeSources([sourceA]);
 		state.sourceFact.applyFetch(sourceA, success([fetched()]));
-		const [ticket] = state.ticketWorkCycle.visibleTickets([], "implement");
+		const [ticket] = state.ticketWorkCycle.ticketListViews([], "implement").rows;
 		const claim = state.handoff.claimHandoff(ticket.identity, choice, "open");
 		if (!claim.ok) throw new Error(claim.reason);
 		state.handoff.settleHandoff(claim.claim.attemptId, true);
@@ -560,7 +560,7 @@ describe("the sourceFact aggregate", () => {
 		// The agent closes the external item while working: the ticket leaves
 		// the source, but a pending decision keeps it visible.
 		state.sourceFact.applyFetch(sourceA, success([]));
-		const visible = state.ticketWorkCycle.visibleTickets([], "implement");
+		const visible = state.ticketWorkCycle.ticketListViews([], "implement").rows;
 		expect(visible).toEqual([
 			expect.objectContaining({ identity: ticket.identity, state: "awaiting" }),
 		]);
@@ -572,12 +572,12 @@ describe("the sourceFact aggregate", () => {
 		const state = openFactoryState(path);
 		state.sourceFact.initializeSources([sourceA]);
 		state.sourceFact.applyFetch(sourceA, success([fetched()]));
-		const [ticket] = state.ticketWorkCycle.visibleTickets([], "implement");
+		const [ticket] = state.ticketWorkCycle.ticketListViews([], "implement").rows;
 		const claim = state.handoff.claimHandoff(ticket.identity, choice, "open");
 		if (!claim.ok) throw new Error(claim.reason);
 		state.close();
 		const reopened = openFactoryState(path);
-		const [persisted] = reopened.ticketWorkCycle.visibleTickets([], "implement");
+		const [persisted] = reopened.ticketWorkCycle.ticketListViews([], "implement").rows;
 		expect(persisted.handoffRecoveryRequired).toBe(true);
 		expect(reopened.handoff.claimHandoff(persisted.identity, choice, "open")).toEqual(
 			expect.objectContaining({ ok: false, reason: expect.stringContaining("recovery") }),

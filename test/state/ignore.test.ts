@@ -19,7 +19,7 @@ describe("the ignored Ticket (ADR 0060)", () => {
 		const state = openFactoryState(path, () => Date.parse("2026-09-24T10:00:00Z"));
 		state.sourceFact.initializeSources([sourceA]);
 		state.sourceFact.applyFetch(sourceA, success([fetched()]));
-		const [ticket] = state.ticketWorkCycle.visibleTickets([], "implement");
+		const [ticket] = state.ticketWorkCycle.ticketListViews([], "implement").rows;
 		expect(ticket.ignored).toBe(false);
 		expect(ticket.ignoredAt).toBeNull();
 
@@ -33,7 +33,7 @@ describe("the ignored Ticket (ADR 0060)", () => {
 		// reads the same answer, and the row's projection carries it.
 		const reopened = openFactoryState(path);
 		expect(reopened.ticketWorkCycle.ignoredTickets().has(ticket.identity)).toBe(true);
-		expect(reopened.ticketWorkCycle.visibleTickets([], "implement")).toEqual([]);
+		expect(reopened.ticketWorkCycle.ticketListViews([], "implement").rows).toEqual([]);
 		expect(reopened.ticketWorkCycle.projectedTickets([], "implement")).toEqual([
 			expect.objectContaining({
 				identity: ticket.identity,
@@ -56,7 +56,7 @@ describe("the ignored Ticket (ADR 0060)", () => {
 		const state = openFactoryState(statePath());
 		state.sourceFact.initializeSources([sourceA]);
 		state.sourceFact.applyFetch(sourceA, success([fetched()]));
-		const [ticket] = state.ticketWorkCycle.visibleTickets([], "implement");
+		const [ticket] = state.ticketWorkCycle.ticketListViews([], "implement").rows;
 		expect(state.ticketWorkCycle.setTicketIgnored(ticket.identity, true, null).ok).toBe(true);
 		// The source stops listing the item: the membership goes inactive,
 		// and the ticket row stays with its flag.
@@ -66,9 +66,11 @@ describe("the ignored Ticket (ADR 0060)", () => {
 		// the active view holds it out again.
 		state.sourceFact.applyFetch(sourceA, success([fetched()]));
 		expect(state.ticketWorkCycle.ignoredTickets().has(ticket.identity)).toBe(true);
-		expect(state.ticketWorkCycle.visibleTickets([], "implement")).toEqual([]);
+		expect(state.ticketWorkCycle.ticketListViews([], "implement").rows).toEqual([]);
 		expect(
-			state.ticketWorkCycle.visibleTickets([], "implement", "ignored").map((row) => row.identity),
+			state.ticketWorkCycle
+				.ticketListViews([], "implement", "ignored")
+				.rows.map((row) => row.identity),
 		).toEqual([ticket.identity]);
 		state.close();
 	});
@@ -77,7 +79,7 @@ describe("the ignored Ticket (ADR 0060)", () => {
 		const state = openFactoryState(statePath());
 		state.sourceFact.initializeSources([sourceA]);
 		state.sourceFact.applyFetch(sourceA, success([fetched()]));
-		const [ticket] = state.ticketWorkCycle.visibleTickets([], "implement");
+		const [ticket] = state.ticketWorkCycle.ticketListViews([], "implement").rows;
 		// An open ticket owes nothing: the act runs.
 		expect(state.ticketWorkCycle.setTicketIgnored(ticket.identity, true, null)).toEqual({
 			ok: true,
@@ -98,7 +100,9 @@ describe("the ignored Ticket (ADR 0060)", () => {
 			turnLog: textLog("the turn is done"),
 			completedAt: "2026-08-31T11:00:00Z",
 		});
-		expect(state.ticketWorkCycle.ticketObligation(ticket.identity, null)).toBe("awaiting");
+		// The obligation the row owes is what the write refuses: the aggregate
+		// answers it through the act, not through a read the interface carries
+		// (issue #202 review).
 		expect(state.ticketWorkCycle.setTicketIgnored(ticket.identity, true, null)).toEqual({
 			ok: false,
 			reason: "the selected Ticket cannot be ignored: it awaits a decision",
@@ -114,7 +118,6 @@ describe("the ignored Ticket (ADR 0060)", () => {
 			completedAt: "2026-08-31T11:05:00Z",
 			cause: "failed",
 		});
-		expect(state.ticketWorkCycle.ticketObligation(ticket.identity, null)).toBe("held");
 		expect(state.ticketWorkCycle.setTicketIgnored(ticket.identity, true, null)).toEqual({
 			ok: false,
 			reason: "the selected Ticket cannot be ignored: its held turn awaits a decision",
@@ -126,7 +129,7 @@ describe("the ignored Ticket (ADR 0060)", () => {
 		const state = openFactoryState(statePath());
 		state.sourceFact.initializeSources([sourceA]);
 		state.sourceFact.applyFetch(sourceA, success([fetched()]));
-		const [ticket] = state.ticketWorkCycle.visibleTickets([], "implement");
+		const [ticket] = state.ticketWorkCycle.ticketListViews([], "implement").rows;
 		const claim = state.handoff.claimHandoff(ticket.identity, choice, "open");
 		if (!claim.ok) throw new Error(claim.reason);
 		state.handoff.settleHandoff(claim.claim.attemptId, true, undefined, {
@@ -153,17 +156,17 @@ describe("the ignored Ticket (ADR 0060)", () => {
 		// row while the flag stands, and a resting one loses it again.
 		expect(state.ticketWorkCycle.ignoredTickets().has(ticket.identity)).toBe(true);
 		expect(
-			state.ticketWorkCycle.visibleTickets([], "implement").map((row) => row.identity),
+			state.ticketWorkCycle.ticketListViews([], "implement").rows.map((row) => row.identity),
 		).toEqual([ticket.identity]);
 		state.ticketWorkCycle.closeWorkCycle(ticket.identity);
 		expect(state.ticketWorkCycle.ignoredTickets().has(ticket.identity)).toBe(true);
-		expect(state.ticketWorkCycle.visibleTickets([], "implement")).toEqual([]);
+		expect(state.ticketWorkCycle.ticketListViews([], "implement").rows).toEqual([]);
 		// Taking the Ticket back is never refused, and it costs the flag.
 		expect(state.ticketWorkCycle.setTicketIgnored(ticket.identity, false, "missing")).toEqual({
 			ok: true,
 		});
 		expect(
-			state.ticketWorkCycle.visibleTickets([], "implement").map((row) => row.identity),
+			state.ticketWorkCycle.ticketListViews([], "implement").rows.map((row) => row.identity),
 		).toEqual([ticket.identity]);
 		state.close();
 	});
@@ -185,8 +188,8 @@ describe("the ignored Ticket (ADR 0060)", () => {
 		expect(state.ticketWorkCycle.setTicketIgnored(live.identity, true, null).ok).toBe(true);
 		const identities = (filter: "active" | "ignored" | "all") =>
 			state.ticketWorkCycle
-				.visibleTickets([], "implement", filter)
-				.map((ticket) => ticket.identity);
+				.ticketListViews([], "implement", filter)
+				.rows.map((ticket) => ticket.identity);
 		// The resting row leaves the active view; the live one stays for its work.
 		expect(identities("active")).toEqual([live.identity]);
 		// The pile names both: the ledger of what the operator put away.
@@ -204,7 +207,12 @@ describe("the ignored Ticket (ADR 0060)", () => {
 			completedAt: "2026-08-31T11:00:00Z",
 		});
 		expect(identities("active")).toEqual([live.identity]);
-		expect(state.ticketWorkCycle.ticketObligation(live.identity, null)).toBe("awaiting");
+		// Awaiting owes a decision, so the write that would put the row away
+		// refuses it (issue #202 review).
+		expect(state.ticketWorkCycle.setTicketIgnored(live.identity, true, null)).toEqual({
+			ok: false,
+			reason: "the selected Ticket cannot be ignored: it awaits a decision",
+		});
 		expect(state.ticketWorkCycle.ignoredTickets().has(live.identity)).toBe(true);
 		// Close its cycle: the Ticket rests, and the same flag takes the row back.
 		state.ticketWorkCycle.applyCompletionDecision({
@@ -236,8 +244,8 @@ describe("the ignored Ticket (ADR 0060)", () => {
 		state.sourceFact.applyFetch(sourceA, success([issue, pull]));
 		const identities = (filter: "active" | "ignored" | "all") =>
 			state.ticketWorkCycle
-				.visibleTickets([], "implement", filter)
-				.map((ticket) => ticket.identity);
+				.ticketListViews([], "implement", filter)
+				.rows.map((ticket) => ticket.identity);
 		// The covered issue leaves the active view beside its pull request.
 		expect(identities("active")).toEqual(["github:github.com:P_7"]);
 		expect(state.ticketWorkCycle.setTicketIgnored("github:github.com:P_7", true, null).ok).toBe(
@@ -279,14 +287,14 @@ describe("the ignored Ticket (ADR 0060)", () => {
 		// ignore reaches the same state by the ordinary refresh path.
 		expect(
 			state.ticketWorkCycle
-				.visibleTickets([], "implement", "active")
-				.map((ticket) => ticket.identity),
+				.ticketListViews([], "implement", "active")
+				.rows.map((ticket) => ticket.identity),
 		).toEqual(["github:github.com:P_7"]);
 		expect(state.ticketWorkCycle.setTicketIgnored(coveredIssue.identity, true, null).ok).toBe(true);
 		const identities = (filter: "active" | "ignored" | "all") =>
 			state.ticketWorkCycle
-				.visibleTickets([], "implement", filter)
-				.map((ticket) => ticket.identity)
+				.ticketListViews([], "implement", filter)
+				.rows.map((ticket) => ticket.identity)
 				.sort();
 		// Neither the active view nor the `all` list shows it: the covered rule
 		// still holds the list (ADR 0042), and the ignore never reaches it.
@@ -344,8 +352,8 @@ describe("the ignored Ticket (ADR 0060)", () => {
 		state.handoff.settleHandoff(running.claim.attemptId, true);
 		expect(
 			state.ticketWorkCycle
-				.visibleTickets([], "implement", "ignored")
-				.map((ticket) => [ticket.identity, ticket.state]),
+				.ticketListViews([], "implement", "ignored")
+				.rows.map((ticket) => [ticket.identity, ticket.state]),
 		).toEqual([
 			["github:github.com:I_5", "handed-off"],
 			["github:github.com:I_6", "open"],

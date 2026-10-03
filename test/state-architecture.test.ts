@@ -2,7 +2,7 @@
  * The state module's boundary: one interface per aggregate (issue #202,
  * ADR 0092).
  *
- * Nine declared dependency rules hold it:
+ * Ten declared dependency rules hold it:
  *
  * 1. No caller outside the open path holds the whole composition. It does not
  *    import `FactoryState`, it does not open the state file itself, and it does
@@ -23,7 +23,10 @@
  *    variable, a parameter, a getter, a destructured entry, or a function's
  *    return value that carries a `<Aggregate>` type under another name is the
  *    alias rule 2 cannot see once the call moves behind it, so the alias itself
- *    is refused.
+ *    is refused. A method pulled out of the aggregate as a value - a destructured
+ *    entry, a `.bind`, a method handed to a function - is the same hole read from
+ *    the other end: no `.<aggregate>.<method>` call is left for rule 2 to see, so
+ *    the pull is refused where it happens (issue #202 review).
  * 4. Inside the module, an aggregate reaches only the tables it owns, and every
  *    table the schema creates has exactly one owner. A table no aggregate
  *    claims is a table nobody is answerable for, and it fails here.
@@ -47,6 +50,10 @@
  *    own tests. A method no one reaches is neither the contract nor the test
  *    surface, and it is the interface carrying plumbing the split exists to
  *    remove (issue #202 review).
+ * 10. The auto top-up's walk takes a fact it cannot read off the row it holds as
+ *    one read for the list it walks. A per-candidate read of the state module
+ *    costs a statement for every Ticket the walk passes, which is the read-shape
+ *    line ADR 0092 holds (issue #202 review).
  *
  * The open path is the one exception to the first two rules: it opens the file,
  * takes the lease, and closes it, so it holds the whole composition.
@@ -217,11 +224,15 @@ function stringLiterals(source: string): string {
 function memberChunk(source: string, name: string): string | null {
 	const lines = source.split("\n");
 	const classStart = lines.findIndex((line) => /^export class [A-Za-z_$][\w$]*\b/u.test(line));
-	const member = new RegExp(`^\\t(?:private\\s+)?${name}\\s*[({=]`, "u");
+	const member = new RegExp(`^\\t(?:private\\s+|async\\s+)*${name}\\s*[({=]`, "u");
 	const start = lines.findIndex((line, index) => index > classStart && member.test(line));
 	if (start < 0) return null;
 	for (let index = start + 1; index < lines.length; index++) {
-		if (/^\t(?:private\s+|readonly\s+|static\s+)?[A-Za-z_$][\w$]*\s*[({=]/u.test(lines[index]))
+		if (
+			/^\t(?:private\s+|readonly\s+|static\s+|async\s+)*[A-Za-z_$][\w$]*\s*[({=]/u.test(
+				lines[index],
+			)
+		)
 			return lines.slice(start, index).join("\n");
 		if (lines[index] === "}") return lines.slice(start, index).join("\n");
 	}
@@ -524,6 +535,47 @@ function aliasOffenders(
 			held.add(`${file} holds ${shape.key}`);
 			if (match[1] === shape.key) continue;
 			offenders.push(`${file} holds ${shape.interfaceName} under the name ${match[1]}`);
+		}
+	}
+	// A method pulled out of the aggregate and moved as a value: a destructured
+	// entry, a `.bind`, or a method handed to a function as an argument. The call
+	// rules read `.<aggregate>.<method>(`; a method that leaves the aggregate as
+	// a value leaves no call behind for them to read, so the pull itself is
+	// refused where it happens (issue #202 review).
+	const pulled = new RegExp(`${root}${path}(${keys})(?![\\w$])\\.([A-Za-z_$][\\w$]*)`, "gu");
+	for (const match of source.matchAll(pulled)) {
+		const shape = shapes.find((item) => item.key === match[1]);
+		if (shape === undefined) continue;
+		const method = match[2];
+		if (!shape.interfaceMethods.has(method) && !shape.internalMethods.has(method)) continue;
+		// A call is the method doing its work; anything else is the method
+		// standing on its own as a value.
+		if (
+			source
+				.slice(match.index + match[0].length)
+				.trimStart()
+				.startsWith("(")
+		)
+			continue;
+		offenders.push(`${file} takes ${shape.key}.${method} out of the aggregate as a value`);
+	}
+	// The same pull read from the other end: a destructuring whose source is the
+	// aggregate hands the aggregate's methods over as bare names.
+	const fromAggregate = new RegExp(
+		`\\b(?:const|let|var)\\s*\\{([^{}]*)\\}\\s*=\\s*${root}${path}(${keys})(?![\\w$])`,
+		"gu",
+	);
+	for (const match of source.matchAll(fromAggregate)) {
+		const shape = shapes.find((item) => item.key === match[2]);
+		if (shape === undefined) continue;
+		for (const entry of match[1].split(",")) {
+			const name =
+				entry
+					.split(":")
+					.map((part) => part.trim())
+					.pop() ?? "";
+			if (!shape.interfaceMethods.has(name) && !shape.internalMethods.has(name)) continue;
+			offenders.push(`${file} takes ${shape.key}.${name} out of the aggregate as a value`);
 		}
 	}
 	return { offenders, held };
@@ -901,9 +953,41 @@ describe("the state module's boundary", () => {
 		expect(facts.publishedOffenders).toEqual([]);
 	});
 
+	test("the auto top-up's walk takes its per-Ticket facts from one read of the list", () => {
+		// The top-up's gate reads the Ticket's start count and the queue's own item for
+		// the candidate it holds. Asked of the state module per candidate, each costs a
+		// statement for every Ticket the walk passes (issue #202 review): the restart
+		// walk holds no row of its own, so its facts arrive as one read for the whole
+		// in-flight list - the Handoff aggregate's `handoffCountsFor` and the Work
+		// queue's `items`, the same read the cycle gate already pays for its depth.
+		// The open-ticket walk reads the start count off the row it holds.
+		const source = codeOnly(readFileSync("src/observation.ts", "utf8"));
+		const offenders: string[] = [];
+		for (const member of ["topUpQueue", "topUpOpenTicket"]) {
+			const body = memberChunk(source, member);
+			if (body === null) {
+				offenders.push(`src/observation.ts holds no ${member} for the rule to read`);
+				continue;
+			}
+			for (const perTicket of [/\.handoff\.handoffCount\s*\(/u, /\.workQueue\.hasWorkItem\s*\(/u]) {
+				if (!perTicket.test(body)) continue;
+				offenders.push(
+					`src/observation.ts ${member} asks the state module for one Ticket's fact instead of the list's`,
+				);
+			}
+		}
+		// The restart walk names the two batched answers it takes in their place.
+		const walk = memberChunk(source, "topUpQueue") ?? "";
+		if (!/\.handoff\.handoffCountsFor\s*\(/u.test(walk))
+			offenders.push("src/observation.ts topUpQueue names no handoffCountsFor read");
+		if (!/\.workQueue\.items\s*\(/u.test(walk))
+			offenders.push("src/observation.ts topUpQueue names no workQueue items read");
+		expect(offenders).toEqual([]);
+	});
+
 	test("every method an aggregate's interface answers is reached", () => {
-		// An interface method is either a caller's contract or the aggregate's
-		// test surface (issue #202 review). A method no caller and no test
+		// An interface method is either a caller's contract or the aggregate's test
+		// surface (issue #202 review). A method no caller and no test
 		// reaches is neither, and it is the interface carrying plumbing the split
 		// exists to remove.
 		const facts = interfaceReachFacts();
@@ -985,6 +1069,43 @@ describe("the state module's boundary", () => {
 					"holds WorkQueueAggregate under the name pickQueue",
 					"calls workQueue.queuePaused through a name that is not workQueue",
 				],
+			},
+			{
+				name: "a method destructured out of the aggregate",
+				source: `
+					import type { HandoffAggregate } from "../src/state/handoff.ts";
+					export function probeClaim(state: { handoff: HandoffAggregate }): unknown {
+						const { claimHandoff } = state.handoff;
+						return claimHandoff("T1", { agentType: "pi", environment: "worktree", taskType: "implement", model: "", thinking: "", contextWindow: "" }, "open");
+					}
+				`,
+				mustName: ["takes handoff.claimHandoff out of the aggregate as a value"],
+			},
+			{
+				name: "a method bound off the aggregate",
+				source: `
+					import type { HandoffAggregate } from "../src/state/handoff.ts";
+					export class Probe {
+						claim: HandoffAggregate["claimHandoff"];
+						constructor(state: { handoff: HandoffAggregate }) {
+							this.claim = state.handoff.claimHandoff.bind(state.handoff);
+						}
+					}
+				`,
+				mustName: ["takes handoff.claimHandoff out of the aggregate as a value"],
+			},
+			{
+				name: "a method handed to a function as a value",
+				source: `
+					import type { HandoffAggregate } from "../src/state/handoff.ts";
+					export function probeRun(
+						state: { handoff: HandoffAggregate },
+						run: (claim: unknown) => void,
+					): void {
+						run(state.handoff.claimHandoff);
+					}
+				`,
+				mustName: ["takes handoff.claimHandoff out of the aggregate as a value"],
 			},
 		];
 		for (const probe of probes) {
@@ -1076,18 +1197,18 @@ describe("the state module's boundary", () => {
  * operation the aggregate owns, and the aggregate's tests cross it, so it stays
  * on the interface as the aggregate's answer surface. A method no caller and no
  * test reaches fails the rule above instead of standing here.
+ *
+ * The #202 review's rework took five off this list. `pendingConsultationResponse`,
+ * `leftoverEnvironments`, `ticketObligation`, and `visibleTickets` each answered
+ * a fact another operation on the same interface already answers - the stored
+ * record's own `pendingResponse`, the batched `leftoverEnvironmentsFor`, the
+ * ignore write's refusal, and `ticketListViews`'s `rows` - so they are private on
+ * their modules or gone. `enqueueConsultationWork` duplicated the Consultation
+ * record's own schedule path and is gone.
  */
 const TEST_ONLY_INTERFACE_METHODS = [
-	// The Consultation record reads its own pending Response in four of its own
-	// operations; the Handoff aggregate's clear path reads its own leftover rows.
-	"consultationRecord.pendingConsultationResponse",
-	"handoff.leftoverEnvironments",
-	// The Plane action record the merge tests read, the Ticket reads the ignore
-	// rules and the row's detail read, and the third enqueue operation the Work
-	// queue owns beside the two the plane runs.
-	"planeAction.planeActionAttempts",
+	// The ledger of Tickets the operator put away. No other operation answers the
+	// set: the projection carries the flag per row, and this is the one read of
+	// the whole pile the ignore tests cross.
 	"ticketWorkCycle.ignoredTickets",
-	"ticketWorkCycle.ticketObligation",
-	"ticketWorkCycle.visibleTickets",
-	"workQueue.enqueueConsultationWork",
 ];

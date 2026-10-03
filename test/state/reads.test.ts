@@ -186,4 +186,75 @@ describe("the state module's batched reads", () => {
 		expect(again.handoffCount).toBe(1);
 		state.close();
 	});
+	test("the restart walk's facts cost a constant number of statements, not one per Ticket", () => {
+		// The restart walk holds an identity, a pane, and a start time and no row of
+		// its own, so the two facts its gate cannot read off a row - the Ticket's
+		// start count, and whether the queue already holds an item for it - arrive as
+		// one read for the whole in-flight list (issue #202 review). Asked of every
+		// candidate they cost three statements per in-flight Ticket on every cycle the
+		// walk ran: sixty for twenty Tickets, where the walk before the split paid
+		// none for a Ticket its Agent still stood in.
+		const small = fileWithTickets(5);
+		const large = fileWithTickets(300);
+		handOffAll(small, 5, (index) => `github:github.com:I_${index}`);
+		handOffAll(large, 300, (index) => `github:github.com:I_${index}`);
+		const walkReads = (state: typeof small) =>
+			measured(() => {
+				const inFlight = state.ticketWorkCycle.ticketsByState(["handed-off", "running"]);
+				const identities = inFlight.map((ticket) => ticket.ticketIdentity);
+				state.ticketWorkCycle.agentNamesForTickets(identities);
+				state.handoff.handoffCountsFor(identities);
+				state.workQueue.items();
+				return inFlight.length;
+			});
+		const smallRead = walkReads(small);
+		const largeRead = walkReads(large);
+		expect(smallRead.value).toBe(5);
+		expect(largeRead.value).toBe(300);
+		// The same count for 5 in-flight Tickets and for 300: two for the rows, two
+		// for their Agent names, two for the start counts, and one for the queue's
+		// items the cycle gate reads for its depth as well.
+		expect(largeRead.statements).toBe(smallRead.statements);
+		expect(largeRead.statements).toBe(7);
+		small.close();
+		large.close();
+	});
+	test("the batched reads answer the facts the per-Ticket reads answered", () => {
+		// A batch that answers something else is a new read, not the same read in a
+		// batched shape (issue #202 review).
+		const state = fileWithTickets(40);
+		handOffAll(state, 40, (index) => `github:github.com:I_${index}`);
+		const identities = state.ticketWorkCycle
+			.ticketsByState(["handed-off", "running"])
+			.map((ticket) => ticket.ticketIdentity);
+		const counts = state.handoff.handoffCountsFor(identities);
+		for (const identity of identities)
+			expect(counts.get(identity)).toBe(state.handoff.handoffCount(identity));
+		const standing = (source: typeof state): Set<string> =>
+			new Set(
+				source.workQueue
+					.items()
+					.filter((item) => item.kind !== "consultation")
+					.map((item) => item.ticketIdentity),
+			);
+		for (const identity of identities) expect(standing(state).has(identity)).toBe(false);
+		state.workQueue.enqueueWork({
+			ticketIdentity: identities[0],
+			origin: "open",
+			choice: {
+				agentType: "pi",
+				environment: "worktree",
+				taskType: "implement",
+				model: "",
+				thinking: "",
+				contextWindow: "",
+			},
+			previousMessage: "",
+		});
+		expect(standing(state).has(identities[0])).toBe(true);
+		expect(standing(state).has(identities[1])).toBe(false);
+		for (const identity of identities)
+			expect(standing(state).has(identity)).toBe(state.workQueue.hasWorkItem(identity));
+		state.close();
+	});
 });

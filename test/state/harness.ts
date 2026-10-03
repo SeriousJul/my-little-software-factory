@@ -61,7 +61,7 @@ export function storedTrace(message = "fallback first\nfallback last"): {
 	const state = openFactoryState(path);
 	state.sourceFact.initializeSources([sourceA]);
 	state.sourceFact.applyFetch(sourceA, success([fetched()]));
-	const [ticket] = state.ticketWorkCycle.visibleTickets([], "implement");
+	const [ticket] = state.ticketWorkCycle.ticketListViews([], "implement").rows;
 	const claim = state.handoff.claimHandoff(ticket.identity, choice, "open");
 	if (!claim.ok) throw new Error(claim.reason);
 	state.handoff.settleHandoff(claim.claim.attemptId, true);

@@ -752,7 +752,7 @@ describe("the failure markers", () => {
 				expect(app.runner.commands()).toContain(
 					"herdr agent start persist-source-facts --kind pi --pane pane-restart -- --model gpt-5.6 --thinking high",
 				);
-				expect(app.state.ticketWorkCycle.visibleTickets([], "implement")[0].handoff).toEqual(
+				expect(app.state.ticketWorkCycle.ticketListViews([], "implement").rows[0].handoff).toEqual(
 					expect.objectContaining({
 						model: "gpt-5.6",
 						thinking: "high",
@@ -1000,7 +1000,9 @@ describe("the Ticket Close key", () => {
 				// (The read-only observation poll continues on its own clock, so
 				// the check names the commands that change state.)
 				expect(app.state.ticketWorkCycle.ticketState(identity)).toBe("handed-off");
-				expect(app.state.ticketWorkCycle.visibleTickets([], "implement")[0].workCycle).toBe(1);
+				expect(app.state.ticketWorkCycle.ticketListViews([], "implement").rows[0].workCycle).toBe(
+					1,
+				);
 				expect(app.state.ticketWorkCycle.lastCompletion(identity)).toBe(null);
 				expect(changed(app.runner.commands())).toEqual(changed(before));
 				expect(frameText(cancelled)).not.toContain("❯ Close");
@@ -1090,7 +1092,7 @@ describe("the Ticket Close key", () => {
 				// The cycle ended and the ticket is open with its next number, and
 				// no completion trace exists: the turn never settled.
 				expect(app.state.ticketWorkCycle.ticketState(identity)).toBe("open");
-				const [ticket] = app.state.ticketWorkCycle.visibleTickets([], "implement");
+				const [ticket] = app.state.ticketWorkCycle.ticketListViews([], "implement").rows;
 				expect(ticket.workCycle).toBe(2);
 				expect(ticket.handoffCount).toBe(1);
 				expect(app.state.ticketWorkCycle.lastCompletion(identity)).toBe(null);
@@ -2292,10 +2294,10 @@ describe("the decision modal", () => {
 				// awaiting until the poll or a decision moves it, and its row
 				// reads the state it wears.
 				expect(app.runner.commands()).toContain("herdr agent focus pane-1");
-				const visible = app.state.ticketWorkCycle.visibleTickets(
+				const visible = app.state.ticketWorkCycle.ticketListViews(
 					app.config.workflowStates,
 					app.config.defaultTaskType,
-				);
+				).rows;
 				expect(visible[0]?.state).toBe("awaiting");
 				expect(ticketRow(await settle(setup))).toContain("[awaiting]");
 				expect(app.state.ticketWorkCycle.lastCompletion(identity)?.decision ?? null).toBeNull();
@@ -2326,10 +2328,10 @@ describe("the decision modal", () => {
 					"the focus",
 				);
 				expect(
-					app.state.ticketWorkCycle.visibleTickets(
+					app.state.ticketWorkCycle.ticketListViews(
 						app.config.workflowStates,
 						app.config.defaultTaskType,
-					)[0]?.state,
+					).rows[0]?.state,
 				).toBe("awaiting");
 				expect(app.state.ticketWorkCycle.lastCompletion(identity)?.decision ?? null).toBeNull();
 				const frame = await settle(setup);
@@ -3042,9 +3044,9 @@ describe("the leftover environment", () => {
 				// cleanup did not reach stands, and no command resolved it.
 				expect(app.runner.commands().join("\n")).not.toContain("herdr worktree remove");
 				expect(app.runner.commands().join("\n")).not.toContain("herdr tab close");
-				expect(app.state.handoff.leftoverEnvironments(identity)).toEqual([
+				expect(app.state.handoff.leftoverEnvironment(identity)).toEqual(
 					expect.objectContaining({ handoffId: first.handoffId, workspaceId: "ws-1" }),
-				]);
+				);
 			},
 			WIDTH,
 			HEIGHT,
@@ -3460,10 +3462,10 @@ describe("the auto dispatch", () => {
 				]);
 				// No ticket is left with an unresolved handoff: every claim
 				// the queue held settled, so nothing needs recovery.
-				const visible = app.state.ticketWorkCycle.visibleTickets(
+				const visible = app.state.ticketWorkCycle.ticketListViews(
 					app.config.workflowStates,
 					app.config.defaultTaskType,
-				);
+				).rows;
 				expect(visible).toHaveLength(2);
 				for (const ticket of visible) {
 					expect(ticket.handoffRecoveryRequired).toBe(false);
@@ -4285,10 +4287,10 @@ describe("the handoff queue", () => {
 				// The abandonment ran the Close cleanup on the stored
 				// environment.
 				expect(inner.commands()).toContain("herdr tab close tab-2");
-				const visible = state.ticketWorkCycle.visibleTickets(
+				const visible = state.ticketWorkCycle.ticketListViews(
 					config.workflowStates,
 					config.defaultTaskType,
-				);
+				).rows;
 				const movedOn = visible.find((t) => t.identity === secondIdentity);
 				const inFlight = visible.find((t) => t.identity === identity);
 				expect(movedOn?.state).toBe("open");
@@ -4326,10 +4328,10 @@ describe("the handoff queue", () => {
 					"herdr agent start persist-source-facts --kind pi --pane pane-1",
 					"herdr agent start watch-agent-turns --kind pi --pane pane-1",
 				]);
-				const finalVisible = state.ticketWorkCycle.visibleTickets(
+				const finalVisible = state.ticketWorkCycle.ticketListViews(
 					config.workflowStates,
 					config.defaultTaskType,
-				);
+				).rows;
 				const reHandled = finalVisible.find((t) => t.identity === secondIdentity);
 				expect(reHandled?.state).toBe("handed-off");
 				expect(reHandled?.handoffRecoveryRequired).toBe(false);

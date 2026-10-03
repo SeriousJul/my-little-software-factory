@@ -41,8 +41,8 @@ describe("the muted source (ADR 0070)", () => {
 			}),
 		);
 		// The resting row leaves the active view and stands in the muted view.
-		expect(state.ticketWorkCycle.visibleTickets([], "implement")).toEqual([]);
-		expect(state.ticketWorkCycle.visibleTickets([], "implement", "muted")).toEqual([
+		expect(state.ticketWorkCycle.ticketListViews([], "implement").rows).toEqual([]);
+		expect(state.ticketWorkCycle.ticketListViews([], "implement", "muted").rows).toEqual([
 			expect.objectContaining({ identity: "github:github.com:I_5", muted: true }),
 		]);
 		state.close();
@@ -60,7 +60,7 @@ describe("the muted source (ADR 0070)", () => {
 		expect(reopened.ticketWorkCycle.projectedTickets([], "implement")[0]).toEqual(
 			expect.objectContaining({ muted: false, mutedAt: null }),
 		);
-		expect(reopened.ticketWorkCycle.visibleTickets([], "implement")).toEqual([
+		expect(reopened.ticketWorkCycle.ticketListViews([], "implement").rows).toEqual([
 			expect.objectContaining({ identity: "github:github.com:I_5" }),
 		]);
 		reopened.close();
@@ -85,8 +85,8 @@ describe("the muted source (ADR 0070)", () => {
 		expect(state.sourceFact.setSourceMuted("issues-a", true).ok).toBe(true);
 		const identities = (filter: "active" | "ignored" | "muted" | "all") =>
 			state.ticketWorkCycle
-				.visibleTickets([], "implement", filter)
-				.map((ticket) => ticket.identity);
+				.ticketListViews([], "implement", filter)
+				.rows.map((ticket) => ticket.identity);
 		// The resting row is in no active place - the source's mute withholds
 		// it beside its own flag - and the live row keeps its row for its work.
 		expect(identities("active")).toEqual([live.identity]);
@@ -99,7 +99,7 @@ describe("the muted source (ADR 0070)", () => {
 		// The unmute takes no flag the operator set on a row.
 		expect(state.sourceFact.setSourceMuted("issues-a", false).ok).toBe(true);
 		expect(state.ticketWorkCycle.ignoredTickets().has(rest.identity)).toBe(true);
-		expect(state.ticketWorkCycle.visibleTickets([], "implement")).toEqual([
+		expect(state.ticketWorkCycle.ticketListViews([], "implement").rows).toEqual([
 			expect.objectContaining({ identity: live.identity }),
 		]);
 		state.close();
@@ -215,7 +215,7 @@ describe("the muted source (ADR 0070)", () => {
 			.find((ticket) => ticket.identity === routed.identity);
 		expect(routedAfter?.workCycle).toBe(cycleBefore);
 		// And the muted ticket's resting row is nowhere in the active view.
-		expect(state.ticketWorkCycle.visibleTickets([], "implement")).toEqual([]);
+		expect(state.ticketWorkCycle.ticketListViews([], "implement").rows).toEqual([]);
 		state.close();
 	});
 

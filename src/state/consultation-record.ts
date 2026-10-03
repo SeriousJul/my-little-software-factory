@@ -335,7 +335,6 @@ export interface ConsultationRecordAggregate {
 	): ConsultationPendingResponse | undefined;
 	acceptConsultationResponse(id: string, pendingId: string): ConsultationTurn | undefined;
 	cancelConsultationResponse(id: string, pendingId: string): boolean;
-	pendingConsultationResponse(id: string): ConsultationPendingResponse | null;
 	settleConsultationTurn(
 		id: string,
 		sequence: number | null,
@@ -744,7 +743,7 @@ export class ConsultationRecordModule implements ConsultationRecordAggregate {
 			.run(pendingId, id);
 		return Number(result.changes) > 0;
 	}
-	pendingConsultationResponse(id: string): ConsultationPendingResponse | null {
+	private pendingConsultationResponse(id: string): ConsultationPendingResponse | null {
 		const row = this.db
 			.prepare(
 				"SELECT id, consultation_id, input, sequence_baseline, created_at FROM consultation_pending_responses WHERE consultation_id = ?",

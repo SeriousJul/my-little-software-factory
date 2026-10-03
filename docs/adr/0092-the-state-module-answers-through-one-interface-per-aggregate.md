@@ -126,9 +126,19 @@ that interface draws is the same boundary the running code enforces.**
 - **`handoffCount` stays two statements on purpose.** The count adds the Agent's
   starts (`handoffs`) to the control plane's starts (`plane_action_attempts`), and
   those tables have different owners. One joined statement would put both tables
-  behind one handle and break the ownership rule above. The count is batched in
-  the projection path, so the observation loop pays two statements for the whole
-  list rather than two per Ticket.
+  behind one handle and break the ownership rule above. The count is batched as
+  `handoffCountsFor(identities)` - two statements for a list of any length - in
+  the projection path and in the auto top-up's restart walk, so the observation
+  loop pays two statements for the whole in-flight list rather than two per Ticket.
+- **The auto top-up's walks read a list's facts from one read of the list.** The
+  restart walk holds an identity, a pane, and a start time and no row of its own,
+  so its two non-row facts arrive as batched reads: `handoffCountsFor` for the
+  start counts, and the Work queue's `items` for the standing item - the same read
+  the cycle gate already pays for the queue's depth, so the walk costs no statement
+  for it. Asked per candidate these cost three statements for every in-flight
+  Ticket on every cycle the walk ran (issue #202 review). The check reads the two
+  walk members in `src/observation.ts` and refuses a per-candidate read of either
+  fact.
 - **The Leftover environment fact stays with the Handoff aggregate.** Issue #202
   listed it under the Ticket work cycle. It lives on the `handoffs` row -
   `leftover_reason`, `leftover_at`, `leftover_cleared_at` - it is written when a
@@ -162,15 +172,36 @@ that interface draws is the same boundary the running code enforces.**
   surface.** Every method an aggregate's interface declares is reached - by a
   caller in the plane, by another aggregate across the boundary, or by the
   aggregate's own tests. A method no caller and no test reaches is neither, and
-  the check refuses it (issue #202 review). Seven methods have no caller in the
-  plane today and stand as the answer surface the aggregate's own tests cross:
-  `consultationRecord.pendingConsultationResponse` and
-  `handoff.leftoverEnvironments`, each read by the aggregate's own operations,
-  `planeAction.planeActionAttempts`, `ticketWorkCycle.visibleTickets`,
-  `ticketWorkCycle.ignoredTickets`, `ticketWorkCycle.ticketObligation`, and
-  `workQueue.enqueueConsultationWork`, the third enqueue operation the queue owns
-  beside the two the plane runs. The list is written in the check, so a new one
-  has to be named there before it can stand in an interface.
+  the check refuses it (issue #202 review). The list of methods with no caller in
+  the plane is written in the check, so a new one has to be named there before it
+  can stand in an interface.
+- **A method that only restates another answer is not an answer.** The #202 review
+  named five interface methods that answered a fact the same interface already
+  answers, and they are off the interfaces: `consultationRecord.pendingConsultationResponse`
+  (the stored record's own `pendingResponse`), `handoff.leftoverEnvironments` (the
+  batched `leftoverEnvironmentsFor` and the one-row `leftoverEnvironment`),
+  `ticketWorkCycle.ticketObligation` (the ignore write's refusal carries the
+  obligation), `ticketWorkCycle.visibleTickets` (a wrapper over
+  `ticketListViews(...).rows`), and `planeAction.planeActionAttempts` (the newest
+  attempt and the count are what the plane reads). Three of them - the pending
+  Response read, the leftover rows for a list, and the obligation - are called
+  only inside their own aggregate and are `private` on the class. The Work queue's
+  third enqueue operation, `enqueueConsultationWork`, is gone: the Consultation
+  record's own schedule path owns the one Consultation enqueue, and a second
+  operation that opened its own transaction could not be called across the
+  boundary from inside that schedule anyway. One method keeps its place with no
+  caller in the plane: `ticketWorkCycle.ignoredTickets`, the ledger of Tickets the
+  operator put away, which no other operation answers as a set.
+- **A method pulled out of an aggregate as a value is refused where it happens.**
+  The call rules read `.<aggregate>.<method>(`; a method that leaves the aggregate
+  as a value - a destructured entry, a `.bind`, a method handed to a function -
+  leaves no call behind for them to see. The check refuses the pull itself, at the
+  line that makes it (issue #202 review). The limit of the rule is the limit of
+  reading source text: it refuses a name that stands for an aggregate's interface
+  and a method that leaves an aggregate, and it cannot see a caller that builds
+  its own structurally identical interface and calls that. That caller is not
+  reaching across the boundary - it is reaching through a copy of the aggregate's
+  answer the compiler typed by shape, and no text rule can tell the two apart.
 - **The architecture test stays out of the mutation campaign**, beside the shared
   control architecture test, for the same reason: it reads production source as
   text, and instrumentation rewrites exactly the shapes it counts.
@@ -183,9 +214,12 @@ that interface draws is the same boundary the running code enforces.**
   that holds an aggregate under another name.
   `src/startup.ts` is the one caller allowed to hold the composition, because it
   is the open path.
-- A method that stands in an aggregate's interface has to be reached. A new
-  interface method no caller and no test reaches goes red, and a new method with
-  no caller but a test has to be written into the recorded list first.
+- A method that stands in an aggregate's interface has to be reached, and it has
+  to answer something no other method answers. A new interface method no caller
+  and no test reaches goes red, and a new method with no caller but a test has to
+  be written into the recorded list first. A method that only restates another
+  answer on the same interface is plumbing with a name, and it goes on the class
+  as `private` or it goes away.
 - Adding a fact means deciding its owner before writing a query, and adding a
   table means naming its owner in `tables.ts`. A table no aggregate claims fails
   the ownership check.

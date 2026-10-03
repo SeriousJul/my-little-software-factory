@@ -1356,7 +1356,7 @@ describe("the Close cleanup", () => {
 		// The cycle ended: the ticket rests open with the next number, and the
 		// closed cycle still counts toward the Handoff limit.
 		expect(rigRef.state.ticketWorkCycle.ticketState(FIRST.identity)).toBe("open");
-		const [ticket] = rigRef.state.ticketWorkCycle.visibleTickets([], "implement");
+		const [ticket] = rigRef.state.ticketWorkCycle.ticketListViews([], "implement").rows;
 		expect(ticket.workCycle).toBe(2);
 		expect(ticket.handoffCount).toBe(1);
 		// No completion trace: the turn never settled, so the handoff row is the
@@ -1519,7 +1519,7 @@ describe("the Close cleanup", () => {
 		).resolves.toBeUndefined();
 		// One workspace closed with the checkout: every fact that named it is
 		// gone, and herdr never heard a tab close.
-		expect(rigRef.state.handoff.leftoverEnvironments(FIRST.identity)).toEqual([]);
+		expect(rigRef.state.handoff.leftoverEnvironment(FIRST.identity)).toBe(null);
 		expect(rigRef.commands().filter((c) => c.startsWith("herdr tab close"))).toHaveLength(0);
 	});
 
@@ -1542,7 +1542,7 @@ describe("the Close cleanup", () => {
 		await expect(
 			rigRef.dispatch.closeCleanup(FIRST.identity, first, "closed"),
 		).resolves.toBeUndefined();
-		expect(rigRef.state.handoff.leftoverEnvironments(FIRST.identity)).toEqual([]);
+		expect(rigRef.state.handoff.leftoverEnvironment(FIRST.identity)).toBe(null);
 	});
 
 	test("a cleanup that broke on its way out still releases the seat", async () => {
@@ -1581,9 +1581,9 @@ describe("the Close cleanup", () => {
 		await expect(
 			rigRef.dispatch.closeCleanup(FIRST.identity, beside, "closed"),
 		).resolves.toBeUndefined();
-		expect(rigRef.state.handoff.leftoverEnvironments(FIRST.identity)).toEqual([
+		expect(rigRef.state.handoff.leftoverEnvironment(FIRST.identity)).toEqual(
 			expect.objectContaining({ handoffId: worktree.handoffId }),
-		]);
+		);
 	});
 
 	test("a cleanup moves herdr's view nowhere: it sends no focus command", async () => {
@@ -1863,8 +1863,8 @@ describe("the Parallel limit and the Work queue", () => {
 		// one copy of the fact serves the seat that started and the seat that
 		// waited.
 		const settledTicket = rigRef.state.ticketWorkCycle
-			.visibleTickets(rigRef.config.workflowStates, rigRef.config.defaultTaskType)
-			.find((candidate) => candidate.identity === ROUTE_SETTLED.identity);
+			.ticketListViews(rigRef.config.workflowStates, rigRef.config.defaultTaskType)
+			.rows.find((candidate) => candidate.identity === ROUTE_SETTLED.identity);
 		expect(settledTicket?.lastCompletion?.decision).toBe("handed-off");
 	});
 
@@ -3438,8 +3438,8 @@ describe("the decision screen's route close", () => {
 		expect(rigRef.state.workQueue.items()).toHaveLength(0);
 		expect(rigRef.state.ticketWorkCycle.ticketState(ROUTE_TARGET.identity)).toBe("handed-off");
 		const settled = rigRef.state.ticketWorkCycle
-			.visibleTickets(rigRef.config.workflowStates, rigRef.config.defaultTaskType)
-			.find((candidate) => candidate.identity === ROUTE_SETTLED.identity);
+			.ticketListViews(rigRef.config.workflowStates, rigRef.config.defaultTaskType)
+			.rows.find((candidate) => candidate.identity === ROUTE_SETTLED.identity);
 		expect(settled?.state).toBe("open");
 		expect(settled?.workCycle).toBe(2);
 		// The decision stands on the settled turn whatever the move says.
@@ -3475,8 +3475,8 @@ describe("the decision screen's route close", () => {
 		expect(capped.removeQueueItem(ROUTE_TARGET.identity)).toBe(true);
 		expect(rigRef.state.workQueue.items()).toHaveLength(0);
 		const settled = rigRef.state.ticketWorkCycle
-			.visibleTickets(rigRef.config.workflowStates, rigRef.config.defaultTaskType)
-			.find((candidate) => candidate.identity === ROUTE_SETTLED.identity);
+			.ticketListViews(rigRef.config.workflowStates, rigRef.config.defaultTaskType)
+			.rows.find((candidate) => candidate.identity === ROUTE_SETTLED.identity);
 		expect(settled?.state).toBe("open");
 		expect(settled?.workCycle).toBe(2);
 		// The decision stands on the settled turn whatever the move says.
@@ -3528,8 +3528,8 @@ describe("the decision screen's route close", () => {
 		// The rework is the ticket's next cycle, the one the ask ended at its
 		// write.
 		const ticket = rigRef.state.ticketWorkCycle
-			.visibleTickets(rigRef.config.workflowStates, rigRef.config.defaultTaskType)
-			.find((candidate) => candidate.identity === FIRST.identity);
+			.ticketListViews(rigRef.config.workflowStates, rigRef.config.defaultTaskType)
+			.rows.find((candidate) => candidate.identity === FIRST.identity);
 		expect(ticket?.workCycle).toBe(2);
 	});
 

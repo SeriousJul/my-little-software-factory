@@ -440,13 +440,13 @@ describe("durable Consultation lifecycle", () => {
 		expect(
 			state.consultationRecord.acceptConsultationResponse(consultation.id, "some-other-id"),
 		).toBeUndefined();
-		expect(state.consultationRecord.pendingConsultationResponse(consultation.id)?.id).toBe(
+		expect(state.consultationRecord.consultation(consultation.id)?.pendingResponse?.id).toBe(
 			first.id,
 		);
 		expect(
 			state.consultationRecord.acceptConsultationResponse(consultation.id, first.id),
 		).toBeDefined();
-		expect(state.consultationRecord.pendingConsultationResponse(consultation.id)).toBeNull();
+		expect(state.consultationRecord.consultation(consultation.id)?.pendingResponse).toBeNull();
 		expect(state.consultationRecord.consultationTurns(consultation.id)).toHaveLength(2);
 		state.close();
 	});
@@ -467,7 +467,7 @@ describe("durable Consultation lifecycle", () => {
 		const turns = state.consultationRecord.consultationTurns(consultation.id);
 		expect(turns).toHaveLength(2);
 		expect(turns[1]).toMatchObject({ input: "second question", sequenceBaseline: 1 });
-		expect(state.consultationRecord.pendingConsultationResponse(consultation.id)).toBeNull();
+		expect(state.consultationRecord.consultation(consultation.id)?.pendingResponse).toBeNull();
 		expect(state.consultationRecord.consultation(consultation.id)?.state).toBe("working");
 		// The delivery is consumed exactly once: a later accept is a no-op.
 		expect(
@@ -527,7 +527,7 @@ describe("durable Consultation lifecycle", () => {
 			state: "awaiting-response",
 			draft: "follow up",
 		});
-		expect(state.consultationRecord.pendingConsultationResponse(consultation.id)).toBeNull();
+		expect(state.consultationRecord.consultation(consultation.id)?.pendingResponse).toBeNull();
 		expect(state.consultationRecord.cancelConsultationResponse(consultation.id, pending.id)).toBe(
 			false,
 		);
@@ -820,7 +820,9 @@ describe("pending responses across restart and migration", () => {
 		state.close();
 		// Reopen after a crash between the durable write and the Herdr call.
 		const reopened = openFactoryState(path);
-		expect(reopened.consultationRecord.pendingConsultationResponse(consultation.id)).toMatchObject({
+		expect(
+			reopened.consultationRecord.consultation(consultation.id)?.pendingResponse,
+		).toMatchObject({
 			input: "unaccepted prompt",
 		});
 		// No turn exists for the unaccepted prompt yet.
@@ -829,7 +831,7 @@ describe("pending responses across restart and migration", () => {
 			reopened.consultationRecord.acceptConsultationResponse(consultation.id, pending.id),
 		).toBeDefined();
 		expect(reopened.consultationRecord.consultationTurns(consultation.id)).toHaveLength(2);
-		expect(reopened.consultationRecord.pendingConsultationResponse(consultation.id)).toBeNull();
+		expect(reopened.consultationRecord.consultation(consultation.id)?.pendingResponse).toBeNull();
 		expect(reopened.consultationRecord.consultation(consultation.id)?.state).toBe("working");
 		reopened.close();
 	});
@@ -883,7 +885,7 @@ describe("pending responses across restart and migration", () => {
 		);
 		expect(reopened.consultationRecord.consultationTurns(consultation.id)).toHaveLength(1);
 		// The pending table is back and usable for the preserved history.
-		expect(reopened.consultationRecord.pendingConsultationResponse(consultation.id)).toBeNull();
+		expect(reopened.consultationRecord.consultation(consultation.id)?.pendingResponse).toBeNull();
 		expect(
 			reopened.consultationRecord.beginConsultationResponse(consultation.id, "again", 1),
 		).toBeDefined();

@@ -224,7 +224,7 @@ describe("the mute key", () => {
 					// The flag follows the Ticket into the state the rows stand in:
 					// the resting rows left the active view and the machine's own
 					// read sees them withheld.
-					expect(state.ticketWorkCycle.visibleTickets([], "implement")).toEqual([]);
+					expect(state.ticketWorkCycle.ticketListViews([], "implement").rows).toEqual([]);
 					expect(state.ticketWorkCycle.automaticStartBlockedTickets()).toEqual(
 						new Set([FIRST, SECOND]),
 					);
@@ -614,7 +614,7 @@ test("the no-state shell refuses u with the missing fact", async () => {
 	const seeded = openFactoryState(statePath());
 	seeded.sourceFact.initializeSources([{ name: "issues", kind: "github-issues" }]);
 	seeded.sourceFact.applyFetch({ name: "issues", kind: "github-issues" }, success(twoTickets()));
-	const projection = seeded.ticketWorkCycle.visibleTickets([], "implement");
+	const projection = seeded.ticketWorkCycle.ticketListViews([], "implement").rows;
 	seeded.close();
 	await withApp(
 		async (setup) => {

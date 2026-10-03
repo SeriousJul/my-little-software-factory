@@ -265,8 +265,8 @@ function seededState(...tickets: FetchedTicket[]) {
 
 function ticketAt(state: ReturnType<typeof seededState>, identity: string): Ticket {
 	const ticket = state.ticketWorkCycle
-		.visibleTickets(MACHINE_CONFIG.workflowStates, MACHINE_CONFIG.defaultTaskType)
-		.find((candidate) => candidate.identity === identity);
+		.ticketListViews(MACHINE_CONFIG.workflowStates, MACHINE_CONFIG.defaultTaskType)
+		.rows.find((candidate) => candidate.identity === identity);
 	if (ticket === undefined) throw new Error(`no ticket ${identity} in the projection`);
 	return ticket;
 }

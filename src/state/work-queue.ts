@@ -97,7 +97,6 @@ export interface WorkQueueAggregate {
 		taskType: string /** True for the automatic add the top-up makes. */;
 		automatic?: boolean;
 	}): { ok: true } | { ok: false; reason: string };
-	enqueueConsultationWork(consultationId: string): { ok: true } | { ok: false; reason: string };
 	removeWorkItem(ticketIdentity: string): boolean;
 	cancelWorkItem(ticketIdentity: string): boolean;
 	removeWorkflowRouteItem(ticketIdentity: string): number;
@@ -291,31 +290,6 @@ export class WorkQueueModule implements WorkQueueAggregate {
 			};
 		}
 	}
-	enqueueConsultationWork(consultationId: string): { ok: true } | { ok: false; reason: string } {
-		try {
-			return this.db.transaction(() => {
-				const existing = this.db
-					.prepare("SELECT 1 FROM work_queue WHERE consultation_id = ?")
-					.get(consultationId);
-				if (existing !== null && existing !== undefined)
-					return {
-						ok: false,
-						reason: `consultation ${consultationId} already has a waiting queue item`,
-					};
-				this.db
-					.prepare(
-						"INSERT INTO work_queue(position, ticket_identity, consultation_id, origin, choice_json, previous_message, enqueued_at) VALUES (COALESCE((SELECT MAX(position) FROM work_queue), -1) + 1, NULL, ?, NULL, NULL, '', ?)",
-					)
-					.run(consultationId, new Date(this.db.now()).toISOString());
-				return { ok: true };
-			});
-		} catch (error) {
-			return {
-				ok: false,
-				reason: `cannot enqueue the Consultation: ${error instanceof Error ? error.message : String(error)}`,
-			};
-		}
-	}
 	removeWorkItem(ticketIdentity: string): boolean {
 		return this.db.transaction(() => {
 			const result = this.db
@@ -411,6 +385,12 @@ export class WorkQueueModule implements WorkQueueAggregate {
 			return true;
 		});
 	}
+	/**
+	 * The Consultation enqueue path the queue owns (issue #202 review). The
+	 * Consultation record calls both halves inside its own write, so neither
+	 * opens a transaction of its own, and the check is what lets the record
+	 * refuse its schedule with its own sentence.
+	 */
 	insertWorkQueueConsultationItem(consultationId: string, createdAt: string): void {
 		this.db
 			.prepare(
@@ -418,8 +398,13 @@ export class WorkQueueModule implements WorkQueueAggregate {
 			)
 			.run(consultationId, createdAt);
 	}
-	/** Take the waiting starts of the tickets the caller names out of the queue. */
-
+	/** Whether the Consultation already has a waiting Work queue item. */
+	hasConsultationItem(consultationId: string): boolean {
+		const row = this.db
+			.prepare("SELECT 1 FROM work_queue WHERE consultation_id = ? LIMIT 1")
+			.get(consultationId);
+		return row !== null;
+	}
 	/** The waiting handoff starts of the tickets the caller names, out of the queue. */
 	removeHandoffItemsForTickets(identities: readonly string[]): number {
 		const deleteItem = this.db.prepare(
@@ -429,13 +414,5 @@ export class WorkQueueModule implements WorkQueueAggregate {
 		for (const identity of identities) removed += Number(deleteItem.run(identity).changes);
 		if (removed > 0) this.repackWorkQueuePositions();
 		return removed;
-	}
-
-	/** Whether the consultation already has a waiting Work queue item. */
-	hasConsultationItem(consultationId: string): boolean {
-		const row = this.db
-			.prepare("SELECT 1 FROM work_queue WHERE consultation_id = ? LIMIT 1")
-			.get(consultationId);
-		return row !== null;
 	}
 }

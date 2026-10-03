@@ -742,7 +742,7 @@ describe("the observation cycle", () => {
 		handOut(done.state, "github:github.com:I_5");
 		done.advance(30_001);
 		await done.coordinator.tick();
-		const [ticket] = done.state.ticketWorkCycle.visibleTickets([], "implement");
+		const [ticket] = done.state.ticketWorkCycle.ticketListViews([], "implement").rows;
 		expect(ticket).toEqual(
 			expect.objectContaining({
 				state: "awaiting",
@@ -777,7 +777,7 @@ describe("the observation cycle", () => {
 		handOut(state, "github:github.com:I_5");
 		advance(30_001);
 		await coordinator.tick();
-		const [ticket] = state.ticketWorkCycle.visibleTickets([], "implement");
+		const [ticket] = state.ticketWorkCycle.ticketListViews([], "implement").rows;
 		expect(ticket.state).toBe("awaiting");
 		// The session record wins: the trace holds the log and its final
 		// text, and the pane was never read.
@@ -801,7 +801,7 @@ describe("the observation cycle", () => {
 		handOut(state, "github:github.com:I_5");
 		advance(30_001);
 		await coordinator.tick();
-		const [ticket] = state.ticketWorkCycle.visibleTickets([], "implement");
+		const [ticket] = state.ticketWorkCycle.ticketListViews([], "implement").rows;
 		expect(ticket.state).toBe("awaiting");
 		// The capture stands in: the message is the raw output, and its
 		// lines become a plain-text log.
@@ -830,7 +830,7 @@ describe("the observation cycle", () => {
 		handOut(state, "github:github.com:I_5");
 		advance(30_001);
 		await coordinator.tick();
-		const [ticket] = state.ticketWorkCycle.visibleTickets([], "implement");
+		const [ticket] = state.ticketWorkCycle.ticketListViews([], "implement").rows;
 		expect(asked).toBe(false);
 		expect(ticket.lastCompletion?.message).toBe("Done. message of pane-implement");
 		state.close();
@@ -903,11 +903,13 @@ describe("the observation cycle", () => {
 		// Inside the startup window the parked agent does not settle: the
 		// turn never started, and the flap did not lift the grace.
 		expect(state.ticketWorkCycle.ticketsByState(["running"])).toHaveLength(1);
-		expect(state.ticketWorkCycle.visibleTickets([], "implement").at(0)?.lastCompletion).toBeNull();
+		expect(
+			state.ticketWorkCycle.ticketListViews([], "implement").rows.at(0)?.lastCompletion,
+		).toBeNull();
 		// Past the grace, the parked agent settles no-turn, held.
 		advance(30_001);
 		await coordinator.tick();
-		const [ticket] = state.ticketWorkCycle.visibleTickets([], "implement");
+		const [ticket] = state.ticketWorkCycle.ticketListViews([], "implement").rows;
 		expect(ticket.state).toBe("awaiting");
 		expect(ticket.lastCompletion).toEqual(
 			expect.objectContaining({
@@ -937,7 +939,7 @@ describe("the observation cycle", () => {
 		await coordinator.tick();
 		advance(30_001);
 		await coordinator.tick();
-		const [ticket] = state.ticketWorkCycle.visibleTickets([], "implement");
+		const [ticket] = state.ticketWorkCycle.ticketListViews([], "implement").rows;
 		// The cycle is not closed on a boot screen: the ticket rests in
 		// awaiting, the trace held, and the decision is still open.
 		expect(ticket.state).toBe("awaiting");
@@ -986,7 +988,7 @@ describe("the observation cycle", () => {
 		// No advance: the handoff is still inside the startup window. A turn that
 		// demonstrably failed does not wait it out; it settles now, and is held.
 		await coordinator.tick();
-		const [ticket] = state.ticketWorkCycle.visibleTickets([], "implement");
+		const [ticket] = state.ticketWorkCycle.ticketListViews([], "implement").rows;
 		expect(ticket).toEqual(
 			expect.objectContaining({
 				state: "awaiting",
@@ -1017,7 +1019,7 @@ describe("the observation cycle", () => {
 		advance(1_000);
 		setAgents([agent("pane-implement", "done")]);
 		await coordinator.tick();
-		const [ticket] = state.ticketWorkCycle.visibleTickets([], "implement");
+		const [ticket] = state.ticketWorkCycle.ticketListViews([], "implement").rows;
 		expect(ticket).toEqual(
 			expect.objectContaining({
 				state: "awaiting",
@@ -1078,7 +1080,7 @@ describe("the observation cycle", () => {
 		advance(30_001);
 		await coordinator.tick();
 		expect(seen).toEqual([["pane-implement", config.completionMessageLines]]);
-		const [ticket] = state.ticketWorkCycle.visibleTickets([], "implement");
+		const [ticket] = state.ticketWorkCycle.ticketListViews([], "implement").rows;
 		expect(ticket.lastCompletion?.message).toBe("line one of pane-implement\nline two");
 		state.close();
 	});
@@ -1178,7 +1180,7 @@ describe("the transition fire of a completed settle", () => {
 		advance(30_001);
 		await coordinator.tick();
 		expect(fired).toBe(0);
-		const [ticket] = state.ticketWorkCycle.visibleTickets([], "implement");
+		const [ticket] = state.ticketWorkCycle.ticketListViews([], "implement").rows;
 		expect(ticket.state).toBe("awaiting");
 		expect(ticket.lastCompletion?.transition).toBeNull();
 		state.close();
@@ -1393,7 +1395,7 @@ describe("missing agents", () => {
 		// the auto mode may hand the now-open ticket out again.
 		expect(intents.every((intent) => intent.origin !== "restart")).toBe(true);
 		expect(cleanups).toEqual([{ paneId: "pane-implement", tabId: "tab-1", workspaceId: "ws-1" }]);
-		const [ticket] = state.ticketWorkCycle.visibleTickets([], "implement");
+		const [ticket] = state.ticketWorkCycle.ticketListViews([], "implement").rows;
 		// Back to open, at its handoff limit, never restarted.
 		expect(ticket).toEqual(expect.objectContaining({ state: "open", handoffCount: 2 }));
 		expect(ticket.lastCompletion?.decision).toBe("abandoned");
@@ -1553,7 +1555,7 @@ describe("the awaiting rule", () => {
 		settleFor(state, "github:github.com:I_5", "review", outcome());
 		expect(coordinator.decideAwaiting(0, outcome(), "review")).toBe("close");
 		await coordinator.tick();
-		const [ticket] = state.ticketWorkCycle.visibleTickets([], "implement");
+		const [ticket] = state.ticketWorkCycle.ticketListViews([], "implement").rows;
 		expect(ticket).toEqual(
 			expect.objectContaining({
 				state: "open",
@@ -1574,7 +1576,7 @@ describe("the awaiting rule", () => {
 			const { state, intents, coordinator } = rig({ autoOn: false, agents: [] });
 			settleFor(state, "github:github.com:I_5", "route", transition);
 			await coordinator.tick();
-			const [resting] = state.ticketWorkCycle.visibleTickets([], "implement");
+			const [resting] = state.ticketWorkCycle.ticketListViews([], "implement").rows;
 			expect(resting).toEqual(
 				expect.objectContaining({
 					state: "awaiting",
@@ -1612,7 +1614,7 @@ describe("the awaiting rule", () => {
 			}),
 		]);
 		expect(state.workQueue.items()).toHaveLength(1);
-		const [ticket] = state.ticketWorkCycle.visibleTickets([], "implement");
+		const [ticket] = state.ticketWorkCycle.ticketListViews([], "implement").rows;
 		expect(ticket).toEqual(
 			expect.objectContaining({
 				state: "open",
@@ -1631,7 +1633,7 @@ describe("the awaiting rule", () => {
 		await coordinator.tick();
 		// The plane does not route from labels it did not write: the ticket
 		// rests in awaiting, undecided, for the operator's Decision screen.
-		const [ticket] = state.ticketWorkCycle.visibleTickets([], "implement");
+		const [ticket] = state.ticketWorkCycle.ticketListViews([], "implement").rows;
 		expect(ticket).toEqual(
 			expect.objectContaining({
 				state: "awaiting",
@@ -1650,7 +1652,7 @@ describe("the awaiting rule", () => {
 		// undecided, for the operator.
 		expect(coordinator.decideAwaiting(0, null, "park")).toBe("park");
 		await coordinator.tick();
-		const [ticket] = state.ticketWorkCycle.visibleTickets([], "implement");
+		const [ticket] = state.ticketWorkCycle.ticketListViews([], "implement").rows;
 		expect(ticket).toEqual(
 			expect.objectContaining({
 				state: "awaiting",
@@ -1721,7 +1723,7 @@ describe("the awaiting rule", () => {
 		// the route enqueues a second time.
 		await coordinator.tick();
 		expect(intents.filter((intent) => intent.origin === "workflow")).toHaveLength(2);
-		const [resting] = state.ticketWorkCycle.visibleTickets([], "implement");
+		const [resting] = state.ticketWorkCycle.ticketListViews([], "implement").rows;
 		// The second ask re-lands the decision as a no-op, and the ticket rests
 		// open, the state the first ask left (ADR 0072).
 		expect(resting.state).toBe("open");
@@ -1759,7 +1761,7 @@ describe("the awaiting rule", () => {
 				.items()
 				.filter((item) => item.kind !== "consultation" && item.origin === "workflow"),
 		).toHaveLength(0);
-		const [resting] = state.ticketWorkCycle.visibleTickets([], "implement");
+		const [resting] = state.ticketWorkCycle.ticketListViews([], "implement").rows;
 		expect(resting).toEqual(
 			expect.objectContaining({
 				state: "open",
@@ -2091,8 +2093,8 @@ describe("the awaiting rule", () => {
 			expect(statuses.slice(before).map((status) => status.text)).toEqual([]);
 			expect(
 				state.ticketWorkCycle
-					.visibleTickets([], "implement")
-					.map((ticket) => `${ticket.identity}:${ticket.state}`),
+					.ticketListViews([], "implement")
+					.rows.map((ticket) => `${ticket.identity}:${ticket.state}`),
 			).toEqual(["github:github.com:I_5:handed-off"]);
 			await coordinator.tick();
 			await coordinator.tick();
@@ -2127,11 +2129,16 @@ describe("the awaiting rule", () => {
 			// and the obligation reads the same facts the row's face wears.
 			expect(state.ticketWorkCycle.ignoredTickets().has("github:github.com:I_5")).toBe(true);
 			expect(
-				state.ticketWorkCycle.visibleTickets([], "implement").map((ticket) => ticket.identity),
+				state.ticketWorkCycle
+					.ticketListViews([], "implement")
+					.rows.map((ticket) => ticket.identity),
 			).toEqual(["github:github.com:I_5"]);
-			expect(state.ticketWorkCycle.ticketObligation("github:github.com:I_5", null)).toBe(
-				"awaiting",
-			);
+			// The obligation the row owes is what the ignore's write refuses
+			// (issue #202 review).
+			expect(state.ticketWorkCycle.setTicketIgnored("github:github.com:I_5", true, null)).toEqual({
+				ok: false,
+				reason: "the selected Ticket cannot be ignored: it awaits a decision",
+			});
 			// The cycle's own settle line is the news; the ignore says nothing twice.
 			expect(
 				statuses
@@ -2165,9 +2172,16 @@ describe("the awaiting rule", () => {
 			expect(state.ticketWorkCycle.ignoredTickets().has("github:github.com:I_5")).toBe(true);
 			expect(state.ticketWorkCycle.dispatchPauseActive()).toBe(true);
 			expect(
-				state.ticketWorkCycle.visibleTickets([], "implement").map((ticket) => ticket.identity),
+				state.ticketWorkCycle
+					.ticketListViews([], "implement")
+					.rows.map((ticket) => ticket.identity),
 			).toEqual(["github:github.com:I_5"]);
-			expect(state.ticketWorkCycle.ticketObligation("github:github.com:I_5", null)).toBe("held");
+			// The held turn is the obligation the ignore's write refuses
+			// (issue #202 review).
+			expect(state.ticketWorkCycle.setTicketIgnored("github:github.com:I_5", true, null)).toEqual({
+				ok: false,
+				reason: "the selected Ticket cannot be ignored: its held turn awaits a decision",
+			});
 			state.close();
 		});
 
@@ -2209,7 +2223,9 @@ describe("the awaiting rule", () => {
 			// list while the flag stays set underneath it (ADR 0060).
 			expect(state.ticketWorkCycle.ignoredTickets().has("github:github.com:I_5")).toBe(true);
 			expect(
-				state.ticketWorkCycle.visibleTickets([], "implement").map((ticket) => ticket.identity),
+				state.ticketWorkCycle
+					.ticketListViews([], "implement")
+					.rows.map((ticket) => ticket.identity),
 			).toEqual(["github:github.com:I_5"]);
 			state.close();
 		});
@@ -2228,17 +2244,23 @@ describe("the awaiting rule", () => {
 			expect(state.ticketWorkCycle.ignoredTickets().has("github:github.com:I_5")).toBe(true);
 			expect(state.ticketWorkCycle.ticketState("github:github.com:I_5")).toBe("running");
 			expect(
-				state.ticketWorkCycle.visibleTickets([], "implement").map((ticket) => ticket.identity),
+				state.ticketWorkCycle
+					.ticketListViews([], "implement")
+					.rows.map((ticket) => ticket.identity),
 			).toEqual(["github:github.com:I_5"]);
 			expect(
-				state.ticketWorkCycle.visibleTickets([], "implement", "ignored").map((t) => t.identity),
+				state.ticketWorkCycle
+					.ticketListViews([], "implement", "ignored")
+					.rows.map((t) => t.identity),
 			).toEqual(["github:github.com:I_5"]);
 			// End the cycle with the Close the row reaches: the Ticket rests `open`,
 			// and the same flag takes the row out of the active view at once.
 			state.ticketWorkCycle.closeWorkCycle("github:github.com:I_5");
-			expect(state.ticketWorkCycle.visibleTickets([], "implement")).toEqual([]);
+			expect(state.ticketWorkCycle.ticketListViews([], "implement").rows).toEqual([]);
 			expect(
-				state.ticketWorkCycle.visibleTickets([], "implement", "ignored").map((t) => t.identity),
+				state.ticketWorkCycle
+					.ticketListViews([], "implement", "ignored")
+					.rows.map((t) => t.identity),
 			).toEqual(["github:github.com:I_5"]);
 			state.close();
 		});
@@ -2363,7 +2385,7 @@ describe("the awaiting rule", () => {
 		});
 		expect(coordinator.decideAwaiting(2, routeOutcome(), "route")).toBe("close");
 		await coordinator.tick();
-		const [ticket] = state.ticketWorkCycle.visibleTickets([], "implement");
+		const [ticket] = state.ticketWorkCycle.ticketListViews([], "implement").rows;
 		expect(ticket).toEqual(
 			expect.objectContaining({
 				state: "open",
@@ -2400,7 +2422,7 @@ describe("the awaiting rule", () => {
 			}),
 		]);
 		expect(state.workQueue.items()).toHaveLength(1);
-		const [ticket] = state.ticketWorkCycle.visibleTickets([], "implement");
+		const [ticket] = state.ticketWorkCycle.ticketListViews([], "implement").rows;
 		expect(ticket).toEqual(
 			expect.objectContaining({
 				state: "open",
@@ -2440,7 +2462,7 @@ describe("the awaiting rule", () => {
 			"close",
 		);
 		await coordinator.tick();
-		const [ticket] = state.ticketWorkCycle.visibleTickets([], "implement");
+		const [ticket] = state.ticketWorkCycle.ticketListViews([], "implement").rows;
 		expect(ticket).toEqual(
 			expect.objectContaining({
 				state: "open",
@@ -2466,7 +2488,7 @@ describe("the awaiting rule", () => {
 		state.workQueue.removeWorkItem("github:github.com:I_6");
 		await coordinator.tick();
 		expect(intents.filter((intent) => intent.origin === "workflow")).toHaveLength(2);
-		const [ticket] = state.ticketWorkCycle.visibleTickets([], "implement");
+		const [ticket] = state.ticketWorkCycle.ticketListViews([], "implement").rows;
 		expect(ticket).toEqual(
 			expect.objectContaining({
 				state: "open",
@@ -2481,7 +2503,7 @@ describe("the awaiting rule", () => {
 		settleFor(state, "github:github.com:I_5", "research");
 		expect(coordinator.decideAwaiting(0, null, "research")).toBe("close");
 		await coordinator.tick();
-		const [ticket] = state.ticketWorkCycle.visibleTickets([], "implement");
+		const [ticket] = state.ticketWorkCycle.ticketListViews([], "implement").rows;
 		expect(ticket).toEqual(
 			expect.objectContaining({
 				state: "open",
@@ -2522,7 +2544,7 @@ test("the open dispatch hands off nothing on a parking state", async () => {
 	});
 	await coordinator.tick();
 	expect(intents).toEqual([]);
-	const [ticket] = state.ticketWorkCycle.visibleTickets(
+	const [ticket] = state.ticketWorkCycle.ticketListViews(
 		[
 			{
 				name: "waiting-for-a-human",
@@ -2530,7 +2552,7 @@ test("the open dispatch hands off nothing on a parking state", async () => {
 			},
 		],
 		"implement",
-	);
+	).rows;
 	expect(ticket.suggestedTaskType).toBeNull();
 	state.close();
 });
@@ -2618,6 +2640,45 @@ describe("the open dispatch", () => {
 			kind: "info",
 			text: 'work queue top-up: restarting "Persist source facts"',
 		});
+		state.close();
+	});
+
+	/**
+	 * The restart walk's queue fact (issue #202 review). The walk takes the queue's
+	 * own items - the one read the cycle gate already pays for its depth - and hands
+	 * the standing item to the rule. The gate holds the walk out whenever the queue
+	 * holds any item, so no cycle reaches the fact as true through the walk: this
+	 * test holds the wiring and the fact's effect on the walk, and
+	 * `test/top-up.test.ts` holds the fact on the rule itself.
+	 */
+	test("the restart walk holds no item the queue already holds", async () => {
+		const { state, intents, coordinator, advance } = rig({ autoOn: true, agents: [] });
+		handOut(state, "github:github.com:I_5");
+		advance(STARTUP_GRACE_MS + 1);
+		// An item already stands for the in-flight candidate the walk would restart.
+		expect(
+			state.workQueue.enqueueWork({
+				ticketIdentity: "github:github.com:I_5",
+				origin: "open",
+				choice: { ...choice, taskType: "implement" },
+				previousMessage: "",
+			}),
+		).toEqual({ ok: true });
+		await coordinator.tick();
+		expect(intents).toEqual([]);
+		expect(state.workQueue.items()).toHaveLength(1);
+		// The item drains, and the next empty-queue cycle runs the restart: the walk
+		// carries no stale fact of its own across cycles.
+		state.workQueue.removeWorkItem("github:github.com:I_5");
+		await coordinator.tick();
+		expect(intents).toHaveLength(1);
+		expect(intents[0]).toEqual(
+			expect.objectContaining({
+				origin: "restart",
+				automatic: true,
+				ticketIdentity: "github:github.com:I_5",
+			}),
+		);
 		state.close();
 	});
 
@@ -2887,7 +2948,9 @@ describe("the open dispatch", () => {
 		});
 		await coordinator.tick();
 		expect(intents).toHaveLength(0);
-		expect(state.ticketWorkCycle.visibleTickets(config.workflowStates, "implement")).toEqual([]);
+		expect(state.ticketWorkCycle.ticketListViews(config.workflowStates, "implement").rows).toEqual(
+			[],
+		);
 		state.close();
 	});
 
@@ -3075,7 +3138,7 @@ describe("the held turn and the Dispatch pause", () => {
 		await coordinator.tick();
 		// The held gate stops the automatic route: nothing is dispatched.
 		expect(intents).toHaveLength(0);
-		const [ticket] = state.ticketWorkCycle.visibleTickets([], "implement");
+		const [ticket] = state.ticketWorkCycle.ticketListViews([], "implement").rows;
 		expect(ticket).toEqual(
 			expect.objectContaining({
 				state: "awaiting",
@@ -3094,7 +3157,7 @@ describe("the held turn and the Dispatch pause", () => {
 		settleForCause(state, "github:github.com:I_5", "review", "failed");
 		await coordinator.tick();
 		expect(intents).toHaveLength(0);
-		const [ticket] = state.ticketWorkCycle.visibleTickets([], "implement");
+		const [ticket] = state.ticketWorkCycle.ticketListViews([], "implement").rows;
 		expect(ticket).toEqual(
 			expect.objectContaining({
 				state: "awaiting",
@@ -3110,7 +3173,7 @@ describe("the held turn and the Dispatch pause", () => {
 			settleForCause(state, "github:github.com:I_5", "review", cause);
 			await coordinator.tick();
 			expect(intents).toHaveLength(0);
-			const [ticket] = state.ticketWorkCycle.visibleTickets([], "implement");
+			const [ticket] = state.ticketWorkCycle.ticketListViews([], "implement").rows;
 			expect(ticket.state).toBe("awaiting");
 			expect(ticket.lastCompletion?.decision).toBe(null);
 			state.close();
@@ -3126,7 +3189,7 @@ describe("the held turn and the Dispatch pause", () => {
 			// operator too: no close, no route, and the turn rests held with its
 			// trace undecided.
 			expect(intents).toHaveLength(0);
-			const [ticket] = state.ticketWorkCycle.visibleTickets([], "implement");
+			const [ticket] = state.ticketWorkCycle.ticketListViews([], "implement").rows;
 			expect(ticket).toEqual(
 				expect.objectContaining({
 					state: "awaiting",
@@ -3147,7 +3210,7 @@ describe("the held turn and the Dispatch pause", () => {
 		await coordinator.tick();
 		// unknown is not held: the review auto-closes as it normally would, then
 		// the loop re-dispatches the now-open ticket. It never rests as held.
-		const [ticket] = state.ticketWorkCycle.visibleTickets([], "implement");
+		const [ticket] = state.ticketWorkCycle.ticketListViews([], "implement").rows;
 		expect(ticket.lastCompletion?.decision).toBe("auto-closed");
 		state.close();
 	});
@@ -3175,7 +3238,7 @@ describe("the held turn and the Dispatch pause", () => {
 			decision: "auto-handed-off",
 			decidedAt: "2026-08-31T11:01:00Z",
 		});
-		const [decided] = state.ticketWorkCycle.visibleTickets([], "implement");
+		const [decided] = state.ticketWorkCycle.ticketListViews([], "implement").rows;
 		expect(decided.lastCompletion?.decision).toBe("auto-handed-off");
 		state.close();
 	});
@@ -3266,8 +3329,8 @@ describe("the held turn and the Dispatch pause", () => {
 		await coordinator.tick();
 		expect(intents).toHaveLength(0);
 		const resting = state.ticketWorkCycle
-			.visibleTickets([], "implement")
-			.find((ticket) => ticket.identity === "github:github.com:I_6");
+			.ticketListViews([], "implement")
+			.rows.find((ticket) => ticket.identity === "github:github.com:I_6");
 		expect(resting).toEqual(
 			expect.objectContaining({
 				state: "awaiting",
@@ -3318,8 +3381,8 @@ describe("the held turn and the Dispatch pause", () => {
 		await coordinator.tick();
 		expect(intents).toHaveLength(0);
 		const resting = state.ticketWorkCycle
-			.visibleTickets([], "implement")
-			.find((ticket) => ticket.identity === "github:github.com:I_6");
+			.ticketListViews([], "implement")
+			.rows.find((ticket) => ticket.identity === "github:github.com:I_6");
 		expect(resting).toEqual(
 			expect.objectContaining({
 				state: "awaiting",
@@ -3349,8 +3412,8 @@ describe("the held turn and the Dispatch pause", () => {
 			decidedAt: "2026-08-31T11:02:00Z",
 		});
 		const routed = state.ticketWorkCycle
-			.visibleTickets([], "implement")
-			.find((ticket) => ticket.identity === "github:github.com:I_6");
+			.ticketListViews([], "implement")
+			.rows.find((ticket) => ticket.identity === "github:github.com:I_6");
 		expect(routed?.lastCompletion?.decision).toBe("auto-handed-off");
 		state.close();
 	});
@@ -4123,8 +4186,8 @@ describe("an agent that outlives its work cycle", () => {
 
 	function ticketOf(state: FactoryState, of = identity) {
 		return state.ticketWorkCycle
-			.visibleTickets([], "implement")
-			.find((ticket) => ticket.identity === of);
+			.ticketListViews([], "implement")
+			.rows.find((ticket) => ticket.identity === of);
 	}
 
 	test("a working agent in a closed cycle's pane runs its ticket again", async () => {

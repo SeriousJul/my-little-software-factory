@@ -95,7 +95,7 @@ describe("the grouping aggregate", () => {
 		expect(reopened.grouping.groupingAxis("tickets")).toBe("repository");
 		// The work the v20 file held still reads: the migration added a row
 		// and moved nothing else.
-		expect(reopened.ticketWorkCycle.visibleTickets([], "implement")[0].sourceKind).toBe(
+		expect(reopened.ticketWorkCycle.ticketListViews([], "implement").rows[0].sourceKind).toBe(
 			"github-issue",
 		);
 		const check = new Database(path, { readonly: true });
@@ -182,7 +182,7 @@ describe("the grouping aggregate", () => {
 		reopened.grouping.setGroupOrder("tickets", "repository", ["acme/a"]);
 		// The work the v23 file held still reads: the migration added a table
 		// and moved nothing else.
-		expect(reopened.ticketWorkCycle.visibleTickets([], "implement")[0].sourceKind).toBe(
+		expect(reopened.ticketWorkCycle.ticketListViews([], "implement").rows[0].sourceKind).toBe(
 			"github-issue",
 		);
 		const check = new Database(path, { readonly: true });

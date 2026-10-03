@@ -132,7 +132,7 @@ describe("the list rule", () => {
 			issueIdentity,
 			pullIdentity,
 		]);
-		const visible = state.ticketWorkCycle.visibleTickets([], "implement");
+		const visible = state.ticketWorkCycle.ticketListViews([], "implement").rows;
 		expect(visible.map((ticket) => ticket.identity)).toEqual([pullIdentity]);
 		state.close();
 	});
@@ -146,7 +146,7 @@ describe("the list rule", () => {
 		const item = projected.find((ticket) => ticket.identity === securityIdentity);
 		if (item === undefined) throw new Error("the security item is missing from the projection");
 		expect(isCoveredByFixingPullRequest(projected, item)).toBe(true);
-		const visible = state.ticketWorkCycle.visibleTickets([], "implement");
+		const visible = state.ticketWorkCycle.ticketListViews([], "implement").rows;
 		expect(visible.map((ticket) => ticket.identity)).toEqual([securityPullIdentity]);
 		state.close();
 	});
@@ -165,7 +165,7 @@ describe("the list rule", () => {
 				),
 			]),
 		);
-		const visible = state.ticketWorkCycle.visibleTickets([], "implement");
+		const visible = state.ticketWorkCycle.ticketListViews([], "implement").rows;
 		// The draft's work is in flight: the issue rests, and the draft is the
 		// row that stands for the work.
 		expect(visible.map((ticket) => ticket.identity)).toEqual([pullIdentity]);
@@ -193,7 +193,7 @@ describe("the list rule", () => {
 		);
 		if (!claim.ok) throw new Error(claim.reason);
 		state.handoff.settleHandoff(claim.claim.attemptId, true);
-		const handedOff = state.ticketWorkCycle.visibleTickets([], "implement");
+		const handedOff = state.ticketWorkCycle.ticketListViews([], "implement").rows;
 		expect(handedOff.map((ticket) => ticket.identity).sort()).toEqual([
 			issueIdentity,
 			pullIdentity,
@@ -207,7 +207,7 @@ describe("the list rule", () => {
 			turnLog: [{ kind: "text", text: "The turn is done." }],
 			completedAt: "2026-08-31T11:00:00Z",
 		});
-		const awaiting = state.ticketWorkCycle.visibleTickets([], "implement");
+		const awaiting = state.ticketWorkCycle.ticketListViews([], "implement").rows;
 		expect(awaiting.map((ticket) => ticket.identity).sort()).toEqual([issueIdentity, pullIdentity]);
 		state.close();
 	});
@@ -218,19 +218,19 @@ describe("the list rule", () => {
 		state.sourceFact.applyFetch(issues, success([issueTicket(issueIdentity)]));
 		state.sourceFact.applyFetch(pulls, success([closingPullTicket()]));
 		expect(
-			state.ticketWorkCycle.visibleTickets([], "implement").map((ticket) => ticket.identity),
+			state.ticketWorkCycle.ticketListViews([], "implement").rows.map((ticket) => ticket.identity),
 		).toEqual([pullIdentity]);
 		// The next refresh lists the pull request closed and unmerged: it no
 		// longer fixes the ticket, and the ticket re-enters the list.
 		state.sourceFact.applyFetch(pulls, success([closingPullTicket({ sourceState: "closed" })]));
-		const reentered = state.ticketWorkCycle.visibleTickets([], "implement");
+		const reentered = state.ticketWorkCycle.ticketListViews([], "implement").rows;
 		expect(reentered.map((ticket) => ticket.identity).sort()).toEqual([
 			issueIdentity,
 			pullIdentity,
 		]);
 		// The next refresh drops the pull request from the source the same way.
 		state.sourceFact.applyFetch(pulls, success([]));
-		const back = state.ticketWorkCycle.visibleTickets([], "implement");
+		const back = state.ticketWorkCycle.ticketListViews([], "implement").rows;
 		expect(back.map((ticket) => ticket.identity)).toEqual([issueIdentity]);
 		state.close();
 	});
@@ -255,7 +255,7 @@ describe("the list rule", () => {
 				}),
 			]),
 		);
-		const visible = state.ticketWorkCycle.visibleTickets([], "implement");
+		const visible = state.ticketWorkCycle.ticketListViews([], "implement").rows;
 		expect(visible.map((ticket) => ticket.identity)).toEqual([securityPullIdentity]);
 		state.close();
 	});
@@ -274,7 +274,7 @@ describe("the list rule", () => {
 				),
 			]),
 		);
-		const visible = state.ticketWorkCycle.visibleTickets([], "implement");
+		const visible = state.ticketWorkCycle.ticketListViews([], "implement").rows;
 		expect(visible.map((ticket) => ticket.identity).sort()).toEqual([issueIdentity, pullIdentity]);
 		state.close();
 	});

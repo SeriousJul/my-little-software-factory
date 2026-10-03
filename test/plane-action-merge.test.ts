@@ -350,7 +350,7 @@ describe("the attempt record in the state", () => {
 			added: ["needs-work"],
 			removed: [],
 		});
-		expect(state.planeAction.planeActionAttempts(pullIdentity)).toHaveLength(1);
+		expect(state.planeAction.planeActionAttemptCount(pullIdentity)).toBe(1);
 		state.close();
 	});
 
@@ -436,8 +436,8 @@ describe("the attempt record in the state", () => {
 		const state = planeState();
 		const ticketOf = () =>
 			state.ticketWorkCycle
-				.visibleTickets(PLANE_WORKFLOW_STATES, PLANE_CONFIG.defaultTaskType, "all")
-				.find((candidate) => candidate.identity === pullIdentity);
+				.ticketListViews(PLANE_WORKFLOW_STATES, PLANE_CONFIG.defaultTaskType, "all")
+				.rows.find((candidate) => candidate.identity === pullIdentity);
 		expect(ticketOf()?.labels).toEqual(["ready-to-ship"]);
 		// The write's answer lands on the projection at once, and the
 		// position the machine derives stands on it: needs-work offers the
@@ -452,8 +452,8 @@ describe("the attempt record in the state", () => {
 		state.sourceFact.convergeMembershipLabels("github:github.com:P_999", ["no-listing"]);
 		expect(
 			state.ticketWorkCycle
-				.visibleTickets(PLANE_WORKFLOW_STATES, PLANE_CONFIG.defaultTaskType, "all")
-				.find((candidate) => candidate.identity === "github:github.com:P_999"),
+				.ticketListViews(PLANE_WORKFLOW_STATES, PLANE_CONFIG.defaultTaskType, "all")
+				.rows.find((candidate) => candidate.identity === "github:github.com:P_999"),
 		).toBeUndefined();
 		state.close();
 	});
@@ -518,8 +518,8 @@ describe("the attempt record in the state", () => {
 		).toBe(true);
 		expect(state.ticketWorkCycle.ticketState(issueIdentity)).toBe("open");
 		const ticket = state.ticketWorkCycle
-			.visibleTickets(PLANE_WORKFLOW_STATES, PLANE_CONFIG.defaultTaskType, "all")
-			.find((candidate) => candidate.identity === issueIdentity);
+			.ticketListViews(PLANE_WORKFLOW_STATES, PLANE_CONFIG.defaultTaskType, "all")
+			.rows.find((candidate) => candidate.identity === issueIdentity);
 		expect(ticket?.workCycle).toBe(2);
 		expect(state.ticketWorkCycle.lastCompletion(issueIdentity)?.decision).toBe("auto-merged");
 		state.close();
@@ -528,26 +528,27 @@ describe("the attempt record in the state", () => {
 	test("the merged ticket's retirement leaves it from the projection at once", () => {
 		const state = planeState();
 		withIssueSource(state);
-		const before = state.ticketWorkCycle.visibleTickets(
+		const before = state.ticketWorkCycle.ticketListViews(
 			PLANE_WORKFLOW_STATES,
 			PLANE_CONFIG.defaultTaskType,
-		);
+		).rows;
 		expect(before.map((ticket) => ticket.identity).sort()).toEqual(
 			[issueIdentity, pullIdentity].sort(),
 		);
 		// The retirement is the source's own move, done now: the source stops
 		// returning the pull request at its next refresh.
 		expect(state.sourceFact.retireTicket(pullIdentity)).toBe(true);
-		const after = state.ticketWorkCycle.visibleTickets(
+		const after = state.ticketWorkCycle.ticketListViews(
 			PLANE_WORKFLOW_STATES,
 			PLANE_CONFIG.defaultTaskType,
-		);
+		).rows;
 		expect(after.map((ticket) => ticket.identity)).toEqual([issueIdentity]);
 		// The issue the pull request closes retires with it, and an identity
 		// that already retired leaves no write behind.
 		expect(state.sourceFact.retireTicket(issueIdentity)).toBe(true);
 		expect(
-			state.ticketWorkCycle.visibleTickets(PLANE_WORKFLOW_STATES, PLANE_CONFIG.defaultTaskType),
+			state.ticketWorkCycle.ticketListViews(PLANE_WORKFLOW_STATES, PLANE_CONFIG.defaultTaskType)
+				.rows,
 		).toEqual([]);
 		expect(state.sourceFact.retireTicket(issueIdentity)).toBe(false);
 		state.close();
@@ -872,8 +873,8 @@ describe("the dispatch's ask and pickup", () => {
 		expect(state.ticketWorkCycle.ticketState(pullIdentity)).toBe("open");
 		expect(
 			state.ticketWorkCycle
-				.visibleTickets(PLANE_WORKFLOW_STATES, PLANE_CONFIG.defaultTaskType)
-				.find((candidate) => candidate.identity === pullIdentity),
+				.ticketListViews(PLANE_WORKFLOW_STATES, PLANE_CONFIG.defaultTaskType)
+				.rows.find((candidate) => candidate.identity === pullIdentity),
 		).toBeUndefined();
 		expect(state.workQueue.items()).toEqual([]);
 		expect(events).toContain(`notice: the merge of "${pullTitle}" ran from the Work queue`);
@@ -979,8 +980,8 @@ describe("the dispatch's ask and pickup", () => {
 		state.sourceFact.applyFetch(pullsSource, outcome);
 		expect(
 			state.ticketWorkCycle
-				.visibleTickets(PLANE_WORKFLOW_STATES, PLANE_CONFIG.defaultTaskType, "all")
-				.find((candidate) => candidate.identity === pullIdentity),
+				.ticketListViews(PLANE_WORKFLOW_STATES, PLANE_CONFIG.defaultTaskType, "all")
+				.rows.find((candidate) => candidate.identity === pullIdentity),
 		).toBeUndefined();
 		state.close();
 	});
@@ -1369,10 +1370,10 @@ describe("the dispatch's ask and pickup", () => {
 		// behind the open pull request it is fixed by: the list rule withholds
 		// it while the merge runs, and the merge's retirement leaves it with
 		// the pull request, so it does not stand again behind it.
-		const listed = state.ticketWorkCycle.visibleTickets(
+		const listed = state.ticketWorkCycle.ticketListViews(
 			PLANE_WORKFLOW_STATES,
 			PLANE_CONFIG.defaultTaskType,
-		);
+		).rows;
 		expect(listed.map((ticket) => ticket.identity).sort()).toEqual(
 			[issueIdentity, pullIdentity].sort(),
 		);
@@ -1398,10 +1399,10 @@ describe("the dispatch's ask and pickup", () => {
 		// settled, and so did the issue it closed on the merge: the sources
 		// stop returning both at the next refresh, and the retirement does it
 		// now (ADR 0068).
-		const after = state.ticketWorkCycle.visibleTickets(
+		const after = state.ticketWorkCycle.ticketListViews(
 			PLANE_WORKFLOW_STATES,
 			PLANE_CONFIG.defaultTaskType,
-		);
+		).rows;
 		expect(after.find((candidate) => candidate.identity === pullIdentity)).toBeUndefined();
 		expect(after.find((candidate) => candidate.identity === issueIdentity)).toBeUndefined();
 		expect(state.planeAction.latestPlaneActionAttempt(pullIdentity)?.outcome).toBe("merged");
@@ -1624,11 +1625,11 @@ describe("the dispatch's ask and pickup", () => {
 		// item's own ticket keeps the state it wears.
 		expect(state.ticketWorkCycle.ticketState(pullIdentity)).toBe("open");
 		expect(state.ticketWorkCycle.ticketState(issueIdentity)).toBe("open");
-		const tickets = state.ticketWorkCycle.visibleTickets(
+		const tickets = state.ticketWorkCycle.ticketListViews(
 			PLANE_WORKFLOW_STATES,
 			PLANE_CONFIG.defaultTaskType,
 			"all",
-		);
+		).rows;
 		const issueBefore = tickets.find((t) => t.identity === issueIdentity);
 		if (issueBefore === undefined) throw new Error("the issue is not in the read");
 		const cycleBefore = issueBefore.workCycle;
@@ -1645,11 +1646,11 @@ describe("the dispatch's ask and pickup", () => {
 		// never ran, and the machine's drop writes no mark.
 		expect(state.ticketWorkCycle.ticketState(pullIdentity)).toBe("open");
 		expect(state.ticketWorkCycle.ticketState(issueIdentity)).toBe("open");
-		const after = state.ticketWorkCycle.visibleTickets(
+		const after = state.ticketWorkCycle.ticketListViews(
 			PLANE_WORKFLOW_STATES,
 			PLANE_CONFIG.defaultTaskType,
 			"all",
-		);
+		).rows;
 		expect(after.find((t) => t.identity === issueIdentity)?.workCycle).toBe(cycleBefore);
 		const pullAfter = after.find((t) => t.identity === pullIdentity);
 		expect(pullAfter?.workCycle).toBe(tickets.find((t) => t.identity === pullIdentity)?.workCycle);
@@ -2051,8 +2052,8 @@ describe("the decision screen's merge", () => {
 		expect(attempt?.decision).toBe("merged");
 		expect(
 			state.ticketWorkCycle
-				.visibleTickets(PLANE_WORKFLOW_STATES, PLANE_CONFIG.defaultTaskType)
-				.find((candidate) => candidate.identity === pullIdentity),
+				.ticketListViews(PLANE_WORKFLOW_STATES, PLANE_CONFIG.defaultTaskType)
+				.rows.find((candidate) => candidate.identity === pullIdentity),
 		).toBeUndefined();
 		state.close();
 	});
@@ -2131,8 +2132,8 @@ describe("the auto top-up merge", () => {
 		expect(state.ticketWorkCycle.ticketState(pullIdentity)).toBe("open");
 		expect(
 			state.ticketWorkCycle
-				.visibleTickets(PLANE_WORKFLOW_STATES, PLANE_CONFIG.defaultTaskType)
-				.find((candidate) => candidate.identity === pullIdentity),
+				.ticketListViews(PLANE_WORKFLOW_STATES, PLANE_CONFIG.defaultTaskType)
+				.rows.find((candidate) => candidate.identity === pullIdentity),
 		).toBeUndefined();
 		state.close();
 	});
@@ -2190,8 +2191,8 @@ describe("the auto top-up merge", () => {
 			// read, and the position stands on them: needs-work offers the
 			// rework, not the merge the block already moved off.
 			const position = state.ticketWorkCycle
-				.visibleTickets(PLANE_WORKFLOW_STATES, PLANE_CONFIG.defaultTaskType, "all")
-				.find((candidate) => candidate.identity === pullIdentity);
+				.ticketListViews(PLANE_WORKFLOW_STATES, PLANE_CONFIG.defaultTaskType, "all")
+				.rows.find((candidate) => candidate.identity === pullIdentity);
 			expect(position?.labels).toEqual(["ready-to-ship", "needs-work"]);
 			expect(position?.suggestedTaskType).toBe("rework");
 			// The ticket keeps the open state it wore: no cycle ran for it, and
@@ -2221,8 +2222,8 @@ describe("the auto top-up merge", () => {
 				// source last fetched still wear the merge position, and the
 				// hold is the one gate between the top-up and the re-ask.
 				const position = held.ticketWorkCycle
-					.visibleTickets(PLANE_WORKFLOW_STATES, PLANE_CONFIG.defaultTaskType, "all")
-					.find((candidate) => candidate.identity === pullIdentity);
+					.ticketListViews(PLANE_WORKFLOW_STATES, PLANE_CONFIG.defaultTaskType, "all")
+					.rows.find((candidate) => candidate.identity === pullIdentity);
 				expect(position?.labels).toEqual(["ready-to-ship"]);
 				expect(position?.suggestedTaskType).toBe("merge");
 				expect(held.planeAction.planeActionBlockedUnrefreshed(pullIdentity)).toBe(true);
@@ -2274,7 +2275,7 @@ describe("the auto top-up merge", () => {
 		// and the second attempt is the read that carried the labels.
 		const mergeCommands = runner.commands().filter((command) => command.startsWith("gh pr merge "));
 		expect(mergeCommands).toHaveLength(2);
-		expect(state.planeAction.planeActionAttempts(pullIdentity)).toHaveLength(2);
+		expect(state.planeAction.planeActionAttemptCount(pullIdentity)).toBe(2);
 		expect(
 			runner.commands().filter((command) => command.startsWith("gh pr comment ")),
 		).toHaveLength(2);
@@ -2282,8 +2283,8 @@ describe("the auto top-up merge", () => {
 		// still wears the labels the source last fetched and offers the merge
 		// the hold keeps checking.
 		const position = state.ticketWorkCycle
-			.visibleTickets(PLANE_WORKFLOW_STATES, PLANE_CONFIG.defaultTaskType, "all")
-			.find((candidate) => candidate.identity === pullIdentity);
+			.ticketListViews(PLANE_WORKFLOW_STATES, PLANE_CONFIG.defaultTaskType, "all")
+			.rows.find((candidate) => candidate.identity === pullIdentity);
 		expect(position?.labels).toEqual(["ready-to-ship"]);
 		expect(position?.suggestedTaskType).toBe("merge");
 		state.close();

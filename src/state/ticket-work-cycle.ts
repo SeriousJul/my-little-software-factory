@@ -171,11 +171,6 @@ export function listTicketViews(
 
 export interface TicketWorkCycleAggregate {
 	projectedTickets(states: readonly WorkflowState[], fallbackTaskType: string): Ticket[];
-	visibleTickets(
-		states: readonly WorkflowState[],
-		fallbackTaskType: string,
-		filter?: TicketListFilter,
-	): readonly Ticket[];
 	ticketListViews(
 		states: readonly WorkflowState[],
 		fallbackTaskType: string,
@@ -193,7 +188,6 @@ export interface TicketWorkCycleAggregate {
 	sourceReverifiedSinceCycleEnd(identity: string): boolean;
 	sameTypeHoldActive(identity: string, suggestedTaskType: string | null): boolean;
 	ignoredTickets(): Set<string>;
-	ticketObligation(identity: string, marker?: TicketMarker | null): TicketObligation | null;
 	setTicketIgnored(
 		identity: string,
 		ignored: boolean,
@@ -359,13 +353,6 @@ export class TicketWorkCycleModule implements TicketWorkCycleAggregate {
 		}
 		return tickets;
 	}
-	visibleTickets(
-		states: readonly WorkflowState[],
-		fallbackTaskType: string,
-		filter: TicketListFilter = "active",
-	): readonly Ticket[] {
-		return this.ticketListViews(states, fallbackTaskType, filter).rows;
-	}
 	ticketListViews(
 		states: readonly WorkflowState[],
 		fallbackTaskType: string,
@@ -495,7 +482,10 @@ export class TicketWorkCycleModule implements TicketWorkCycleAggregate {
 		}>;
 		return new Set(rows.map((row) => row.identity));
 	}
-	ticketObligation(identity: string, marker: TicketMarker | null = null): TicketObligation | null {
+	private ticketObligation(
+		identity: string,
+		marker: TicketMarker | null = null,
+	): TicketObligation | null {
 		const row = this.db.prepare("SELECT state FROM tickets WHERE identity = ?").get(identity) as
 			| { state: TicketState }
 			| undefined;

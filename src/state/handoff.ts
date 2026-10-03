@@ -87,6 +87,12 @@ export interface StoredHandoff {
 export interface HandoffAggregate {
 	handoffInFlight(ticketIdentity: string): boolean;
 	handoffCount(identity: string): number;
+	/**
+	 * The start count of every Ticket in the list, in one grouped statement per
+	 * aggregate the count adds (issue #202, ADR 0092). A walk that holds a list
+	 * of Tickets takes this instead of `handoffCount` per Ticket.
+	 */
+	handoffCountsFor(identities: readonly string[]): Map<string, number>;
 	autoHandoffMode(): boolean;
 	setAutoHandoffMode(enabled: boolean): void;
 	latestHandoff(identity: string): {
@@ -123,7 +129,8 @@ export interface HandoffAggregate {
 		at?: string;
 	}): LeftoverEnvironment | null;
 	leftoverEnvironment(identity: string): LeftoverEnvironment | null;
-	leftoverEnvironments(identity: string): LeftoverEnvironment[];
+	/** The standing leftover environment facts of every Ticket in the list. */
+	leftoverEnvironmentsFor(identities: readonly string[]): Map<string, LeftoverEnvironment[]>;
 	clearLeftoverEnvironments(
 		identity: string,
 		ended: { workspaceId: string } | { tabId: string } | { handoffId: string },
@@ -596,7 +603,7 @@ export class HandoffModule implements HandoffAggregate {
 		const rows = this.leftoverEnvironments(identity);
 		return rows.length === 0 ? null : rows[0];
 	}
-	leftoverEnvironments(identity: string): LeftoverEnvironment[] {
+	private leftoverEnvironments(identity: string): LeftoverEnvironment[] {
 		return this.leftoverEnvironmentsFor([identity]).get(identity) ?? [];
 	}
 	/** The leftover environment facts of every Ticket in the list, batched. */

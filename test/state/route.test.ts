@@ -19,7 +19,7 @@ describe("the routed Ticket's wait (ADR 0072)", () => {
 
 	/** One Ticket with its turn settled, and the attempt the turn ran on. */
 	function settledTurn(state: State, transition?: TransitionOutcome) {
-		const [ticket] = state.ticketWorkCycle.visibleTickets([], "implement");
+		const [ticket] = state.ticketWorkCycle.ticketListViews([], "implement").rows;
 		if (ticket === undefined) throw new Error("the fixture holds no ticket");
 		const claim = state.handoff.claimHandoff(ticket.identity, choice, "open");
 		if (!claim.ok) throw new Error(claim.reason);
@@ -58,7 +58,9 @@ describe("the routed Ticket's wait (ADR 0072)", () => {
 
 	/** The row the list holds for a Ticket, with the cycle number it carries. */
 	const listed = (state: State, identity: string) =>
-		state.ticketWorkCycle.visibleTickets([], "implement").find((t) => t.identity === identity);
+		state.ticketWorkCycle
+			.ticketListViews([], "implement")
+			.rows.find((t) => t.identity === identity);
 
 	test("the route ask ends the cycle at the ask, and the re-confirm stands a no-op", () => {
 		const state = openFactoryState(statePath());

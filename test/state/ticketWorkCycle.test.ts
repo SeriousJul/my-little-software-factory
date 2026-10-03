@@ -28,7 +28,7 @@ describe("the ticketWorkCycle aggregate", () => {
 		const state = openFactoryState(":memory:");
 		state.sourceFact.initializeSources([sourceA]);
 		state.sourceFact.applyFetch(sourceA, success([fetched()]));
-		const [ticket] = state.ticketWorkCycle.visibleTickets([], "implement");
+		const [ticket] = state.ticketWorkCycle.ticketListViews([], "implement").rows;
 		const claim = state.handoff.claimHandoff(ticket.identity, choice, "open");
 		if (!claim.ok) throw new Error(claim.reason);
 		state.handoff.settleHandoff(claim.claim.attemptId, true, undefined, {
@@ -50,7 +50,7 @@ describe("the ticketWorkCycle aggregate", () => {
 			completedAt: "2026-08-31T11:00:00Z",
 		});
 
-		const [rested] = state.ticketWorkCycle.visibleTickets([], "implement");
+		const [rested] = state.ticketWorkCycle.ticketListViews([], "implement").rows;
 		expect(rested.state).toBe("awaiting");
 		// The herdr handles the handoff started are stored on the ticket.
 		expect(rested.handoff).toEqual(
@@ -77,7 +77,7 @@ describe("the ticketWorkCycle aggregate", () => {
 		const state = openFactoryState(":memory:");
 		state.sourceFact.initializeSources([sourceA]);
 		state.sourceFact.applyFetch(sourceA, success([fetched()]));
-		const [ticket] = state.ticketWorkCycle.visibleTickets([], "implement");
+		const [ticket] = state.ticketWorkCycle.ticketListViews([], "implement").rows;
 		const claim = state.handoff.claimHandoff(ticket.identity, choice, "open");
 		if (!claim.ok) throw new Error(claim.reason);
 		state.handoff.settleHandoff(claim.claim.attemptId, true);
@@ -132,7 +132,7 @@ describe("the ticketWorkCycle aggregate", () => {
 		const state = openFactoryState(":memory:");
 		state.sourceFact.initializeSources([sourceA]);
 		state.sourceFact.applyFetch(sourceA, success([fetched()]));
-		const [ticket] = state.ticketWorkCycle.visibleTickets([], "implement");
+		const [ticket] = state.ticketWorkCycle.ticketListViews([], "implement").rows;
 		const claim = state.handoff.claimHandoff(ticket.identity, choice, "open");
 		if (!claim.ok) throw new Error(claim.reason);
 		state.handoff.settleHandoff(claim.claim.attemptId, true);
@@ -207,7 +207,7 @@ describe("the ticketWorkCycle aggregate", () => {
 		const state = openFactoryState(":memory:");
 		state.sourceFact.initializeSources([sourceA]);
 		state.sourceFact.applyFetch(sourceA, success([fetched()]));
-		const [ticket] = state.ticketWorkCycle.visibleTickets([], "implement");
+		const [ticket] = state.ticketWorkCycle.ticketListViews([], "implement").rows;
 		const claim = state.handoff.claimHandoff(
 			ticket.identity,
 			{ ...choice, model: "gpt-5.6", thinking: "high", contextWindow: "272000" },
@@ -239,7 +239,7 @@ describe("the ticketWorkCycle aggregate", () => {
 		const state = openFactoryState(path);
 		state.sourceFact.initializeSources([sourceA]);
 		state.sourceFact.applyFetch(sourceA, success([fetched()]));
-		const [ticket] = state.ticketWorkCycle.visibleTickets([], "implement");
+		const [ticket] = state.ticketWorkCycle.ticketListViews([], "implement").rows;
 		const claim = state.handoff.claimHandoff(ticket.identity, choice, "open");
 		if (!claim.ok) throw new Error(claim.reason);
 		state.handoff.settleHandoff(claim.claim.attemptId, true);
@@ -262,7 +262,7 @@ describe("the ticketWorkCycle aggregate", () => {
 			completedAt: "2026-08-31T11:05:00Z",
 		});
 
-		const [rested] = state.ticketWorkCycle.visibleTickets([], "implement");
+		const [rested] = state.ticketWorkCycle.ticketListViews([], "implement").rows;
 		expect(rested.lastCompletion?.message).toBe("Last capture.");
 		const traceCount = new Database(path)
 			.prepare("SELECT COUNT(*) AS n FROM completion_traces WHERE ticket_identity = ?")
@@ -274,7 +274,7 @@ describe("the ticketWorkCycle aggregate", () => {
 		const state = openFactoryState(":memory:");
 		state.sourceFact.initializeSources([sourceA]);
 		state.sourceFact.applyFetch(sourceA, success([fetched()]));
-		const [ticket] = state.ticketWorkCycle.visibleTickets([], "implement");
+		const [ticket] = state.ticketWorkCycle.ticketListViews([], "implement").rows;
 		if (ticket === undefined) throw new Error("the fixture holds no ticket");
 		const claim = state.handoff.claimHandoff(ticket.identity, choice, "open");
 		if (!claim.ok) throw new Error(claim.reason);
@@ -299,8 +299,8 @@ describe("the ticketWorkCycle aggregate", () => {
 				decidedAt: "2026-08-31T11:10:00Z",
 			}),
 		).toBe(true);
-		expect(state.ticketWorkCycle.visibleTickets([], "implement")[0].state).toBe("open");
-		expect(state.ticketWorkCycle.visibleTickets([], "implement")[0].workCycle).toBe(2);
+		expect(state.ticketWorkCycle.ticketListViews([], "implement").rows[0].state).toBe("open");
+		expect(state.ticketWorkCycle.ticketListViews([], "implement").rows[0].workCycle).toBe(2);
 		// The turn is decided, so a close on it rewrites nothing and ends
 		// nothing: the cycle already ended at the ask, and the recorded
 		// decision stands.
@@ -312,7 +312,7 @@ describe("the ticketWorkCycle aggregate", () => {
 				decidedAt: "2026-08-31T11:30:00Z",
 			}),
 		).toBe(false);
-		const [returned] = state.ticketWorkCycle.visibleTickets([], "implement");
+		const [returned] = state.ticketWorkCycle.ticketListViews([], "implement").rows;
 		expect(returned.state).toBe("open");
 		expect(returned.workCycle).toBe(2);
 		expect(returned.lastCompletion?.decision).toBe("handed-off");
@@ -322,7 +322,7 @@ describe("the ticketWorkCycle aggregate", () => {
 		const state = openFactoryState(":memory:");
 		state.sourceFact.initializeSources([sourceA]);
 		state.sourceFact.applyFetch(sourceA, success([fetched()]));
-		const [ticket] = state.ticketWorkCycle.visibleTickets([], "implement");
+		const [ticket] = state.ticketWorkCycle.ticketListViews([], "implement").rows;
 		if (ticket === undefined) throw new Error("the fixture holds no ticket");
 		const claim = state.handoff.claimHandoff(ticket.identity, choice, "open");
 		if (!claim.ok) throw new Error(claim.reason);
@@ -355,7 +355,7 @@ describe("the ticketWorkCycle aggregate", () => {
 				decidedAt: "2026-08-31T11:30:00Z",
 			}),
 		).toBe(false);
-		const [returned] = state.ticketWorkCycle.visibleTickets([], "implement");
+		const [returned] = state.ticketWorkCycle.ticketListViews([], "implement").rows;
 		expect(returned.state).toBe("open");
 		expect(returned.workCycle).toBe(2);
 		expect(returned.lastCompletion?.decision).toBe("auto-handed-off");
@@ -374,7 +374,7 @@ describe("the ticketWorkCycle aggregate", () => {
 
 		expect(state.ticketWorkCycle.closeWorkCycle(identity)).toBe(true);
 		expect(state.ticketWorkCycle.ticketState(identity)).toBe("open");
-		const [ticket] = state.ticketWorkCycle.visibleTickets([], "implement");
+		const [ticket] = state.ticketWorkCycle.ticketListViews([], "implement").rows;
 		// The cycle the close ended counts like any other cycle end.
 		expect(ticket.workCycle).toBe(2);
 		expect(ticket.handoffCount).toBe(1);
@@ -412,7 +412,7 @@ describe("the ticketWorkCycle aggregate", () => {
 		// A settled turn closes through its decision, not through this move.
 		expect(state.ticketWorkCycle.closeWorkCycle(identity)).toBe(false);
 		expect(state.ticketWorkCycle.ticketState(identity)).toBe("awaiting");
-		expect(state.ticketWorkCycle.visibleTickets([], "implement")[0].workCycle).toBe(1);
+		expect(state.ticketWorkCycle.ticketListViews([], "implement").rows[0].workCycle).toBe(1);
 		state.close();
 	});
 	test("only a cycle end moves the work cycle, the fact the gates count on (ADR 0031)", () => {
@@ -454,7 +454,7 @@ describe("the ticketWorkCycle aggregate", () => {
 		state.sourceFact.initializeSources([sourceA]);
 		state.sourceFact.applyFetch(sourceA, success([fetched()]));
 		const identity = "github:github.com:I_5";
-		const cycleOf = () => state.ticketWorkCycle.visibleTickets([], "implement")[0].workCycle;
+		const cycleOf = () => state.ticketWorkCycle.ticketListViews([], "implement").rows[0].workCycle;
 		expect(cycleOf()).toBe(1);
 		const claim = state.handoff.claimHandoff(identity, choice, "open");
 		if (!claim.ok) throw new Error(claim.reason);
@@ -711,7 +711,7 @@ describe("the ticketWorkCycle aggregate", () => {
 		const state = openFactoryState(":memory:");
 		state.sourceFact.initializeSources([sourceA]);
 		state.sourceFact.applyFetch(sourceA, success([fetched()]));
-		const [ticket] = state.ticketWorkCycle.visibleTickets([], "implement");
+		const [ticket] = state.ticketWorkCycle.ticketListViews([], "implement").rows;
 		const claim = state.handoff.claimHandoff(ticket.identity, choice, "open");
 		if (!claim.ok) throw new Error(claim.reason);
 		state.handoff.settleHandoff(claim.claim.attemptId, true);
@@ -730,7 +730,7 @@ describe("the ticketWorkCycle aggregate", () => {
 			decision: "abandoned",
 			decidedAt: "2026-08-31T11:30:00Z",
 		});
-		const [returned] = state.ticketWorkCycle.visibleTickets([], "implement");
+		const [returned] = state.ticketWorkCycle.ticketListViews([], "implement").rows;
 		expect(returned.state).toBe("open");
 		state.close();
 	});
@@ -758,7 +758,7 @@ describe("the ticketWorkCycle aggregate", () => {
 		db.close();
 
 		const state = openFactoryState(path);
-		const [ticket] = state.ticketWorkCycle.visibleTickets([], "implement");
+		const [ticket] = state.ticketWorkCycle.ticketListViews([], "implement").rows;
 		expect(ticket).toEqual(expect.objectContaining({ state: "awaiting" }));
 		const tables = new Database(path)
 			.prepare("SELECT name FROM sqlite_master WHERE type = 'table'")
@@ -770,7 +770,7 @@ describe("the ticketWorkCycle aggregate", () => {
 		const state = openFactoryState(":memory:");
 		state.sourceFact.initializeSources([sourceA]);
 		state.sourceFact.applyFetch(sourceA, success([fetched()]));
-		const [ticket] = state.ticketWorkCycle.visibleTickets([], "implement");
+		const [ticket] = state.ticketWorkCycle.ticketListViews([], "implement").rows;
 		const claim = state.handoff.claimHandoff(ticket.identity, choice, "open");
 		if (!claim.ok) throw new Error(claim.reason);
 		state.handoff.settleHandoff(claim.claim.attemptId, true);
@@ -834,7 +834,7 @@ describe("the ticketWorkCycle aggregate", () => {
 		// The reclaimed handoff copies the previous handoff's choices, and the
 		// closed cycle keeps its handoff and its decided trace.
 		expect(state.handoff.handoffCount(identity)).toBe(2);
-		expect(state.ticketWorkCycle.visibleTickets([], "implement")[0]).toEqual(
+		expect(state.ticketWorkCycle.ticketListViews([], "implement").rows[0]).toEqual(
 			expect.objectContaining({
 				state: "running",
 				handoff: expect.objectContaining({ attemptId: claimed?.attemptId, taskType: "implement" }),

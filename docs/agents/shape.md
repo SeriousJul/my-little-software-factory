@@ -46,8 +46,9 @@ description: The module map of the source tree, for agents working in this repos
 	reclaims an agent that outlived its work cycle, settles turns into
 	`awaiting`, applies the automatic completion rule, and dispatches open
 	tickets in auto-handoff mode. The auto top-up's gate rules live in
-	`src/domain/top-up.ts`; the loop keeps the walk and the reads and asks each
-	rule in the order the waits are stated.
+	`src/domain/top-up.ts`; the loop keeps the walk and the reads, asks each rule
+	in the order the waits are stated, and takes a fact it cannot read off the row
+	it holds as one batched read for the list it walks (issue #202 review).
 - `src/state.ts`: the open seam of the state module (issue #202). It opens the
 	SQLite file, composes the nine aggregates into the graph, and closes the
 	file. It holds no rule of its own.

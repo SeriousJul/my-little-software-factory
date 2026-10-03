@@ -99,7 +99,7 @@ for the question this answers.
   in the `src/**/*.ts` scope, so a future whole-`src` run will instrument them,
   but no mutant has been run against them: this branch was gated by `bun run
   test`, `bun run typecheck`, and `bun run lint` only. The suite it gated is
-  2,590 tests over 114 files, against the 1,919 tests over 79 files this record's
+  2,593 tests over 114 files, against the 1,919 tests over 79 files this record's
   rates were measured on, so every time and mutant-count number above is out of
   date for the current tree. Nine of the branch's guards were each confirmed by
   hand - the guard was mutated, the named test went red, and the guard was put
@@ -120,14 +120,63 @@ for the question this answers.
   are measured by tests in the suite (`test/state/seam.test.ts` and
   `test/state-architecture.test.ts`), not by hand. No campaign has been run over
   any of them.
-- **One wiring probe survived, and it names a coverage gap.** Dropping the
-  restart walk's read of the queue's own item - `queueItemStands: false` in
-  `src/observation.ts` - leaves the whole suite green. The cycle gate already
-  holds the walk out whenever the queue holds an item, so no test reaches that
-  fact through the walk: `test/top-up.test.ts` covers the fact on the rule, and
-  nothing covers the wiring. The three sibling probes - the episode mark, the
-  ignore flag, and the source re-verify - each turned at least one named test
-  red. `src/domain/top-up.ts`, the top-up's new gate rules, is in the same scope
+- **The #202 review's second rework added three guards and took five methods off
+  the interfaces.** How each was measured, and what was not:
+  - The method-value rule - a destructured entry, a `.bind`, a method handed to a
+    function as a value - is held by three probe sources in
+    `test/state-architecture.test.ts`. The destructured probe was seen red before
+    the rule that names it was written, and green once the rule read it. A probe is
+    a synthetic source, not a mutant.
+  - The top-up walk's read-shape rule was confirmed by hand: `queueItemStands` put
+    back to a per-candidate `this.state.workQueue.hasWorkItem(...)` in
+    `src/observation.ts`, `the auto top-up's walk takes its per-Ticket facts from
+    one read of the list` red, the batched read put back and the file green.
+  - The batched restart facts are held by two new cases in
+    `test/state/reads.test.ts`, and each was confirmed by hand. `handoffCountsFor`
+    made to loop `this.handoffCount` per identity turned the statement-count case
+    red (7 statements for 5 in-flight Tickets and for 300, where the loop costs
+    three per Ticket); `handoffCountsFor` made to answer a count one higher than
+    `handoffCount` turned the answer-equality case red, which is the case that
+    refuses a batch answering something other than what the per-Ticket read answered.
+  - The five removed methods left no call behind: `bun run typecheck` is the gate
+    that refuses a leftover call, and it passed with each removal in place. The
+    interface reach rule's recorded no-caller list was seen to report exactly one
+    method after the removals, `ticketWorkCycle.ignoredTickets`, down from seven.
+  - No campaign has been run over any of them.
+- **The suite's load flake, recorded.** At `e12fa8ee` the #202 review ran the full
+  suite twice and `test/repo-init-stub.test.ts > the TUI walk of the init (ADR 0075)`
+  failed in one of those two runs and passed when the file ran alone. By this repo's
+  triage rule that is a load flake, not a regression, and it is recorded as evidence
+  rather than as a pass. On the rework head the full suite ran twice more on this
+  32-core machine - 2,593 tests over 114 files, 39.83 seconds and 39.68 seconds, 0
+  failures both times - with no other `bun test` process on the machine and a load
+  average of 10 to 12 from other work. The flake was not seen again in those runs.
+  Nothing was quarantined, no retry was added, and no bound was changed; the record
+  is the measurement, and the file is not claimed as flake-free.
+- **One wiring probe survived, and it names an equivalent fact, not a missing
+  test.** Dropping the restart walk's read of the queue's own item -
+  `queueItemStands: false` in `src/observation.ts` - leaves the whole suite green.
+  The reason is structural rather than a hole in the tests: the cycle gate reads
+  the queue's depth first and closes the top-up whenever the queue holds any item,
+  so the walk never runs with a standing item, so the value the walk hands the rule
+  is false on every cycle the plane can reach. `test/top-up.test.ts` covers the
+  fact on the rule, where it is reachable. The #202 review's rework adds
+  `test/observation.test.ts > the open dispatch > the restart walk holds no item
+  the queue already holds`: it plants a Work queue item for the in-flight candidate
+  the walk would otherwise restart, holds the cycle to no dispatch and no second
+  item, then drains the item and reads the restart add on the next cycle. That test
+  holds the wiring and the fact's effect on the walk; it stays green against the
+  same probe, which is what a fact the plane cannot make true looks like. The
+  `queueItemStands` value now comes from the Work queue read the cycle gate already
+  pays for, so the walk carries no stale fact of its own across cycles, and
+  `test/state-architecture.test.ts` refuses a per-candidate read of either of the
+  walk's two facts. The new wiring test does reach the fact through the walk: with
+  the cycle gate's `queueDepth === 0` term also removed - `topUpCycleOpen` made to
+  answer `true` - the same `queueItemStands: false` turned
+  `the restart walk holds no item the queue already holds` red. Measured, then both
+  put back. The single-mutant survival is the gate covering for the fact, not a hole
+  where the wiring is untested. The three sibling probes - the episode mark, the
+  ignore flag, and the source re-verify - each turned at least one named test red. `src/domain/top-up.ts`, the top-up's new gate rules, is in the same scope
   and has had no mutant run against it either. `test/state-architecture.test.ts` was added to
   `ignorePatterns` for the reason the shared control test is there - it reads the
   state modules as text - and that exclusion is a reading of the existing rule,

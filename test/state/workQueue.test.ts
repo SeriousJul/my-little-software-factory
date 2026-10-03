@@ -41,7 +41,7 @@ describe("the workQueue aggregate", () => {
 				},
 			]),
 		);
-		const first = state.ticketWorkCycle.visibleTickets(named("one-name"), "implement");
+		const first = state.ticketWorkCycle.ticketListViews(named("one-name"), "implement").rows;
 		// The queue holds the first ticket's waiting start, so its order is the
 		// operator's, and a name change cannot move it.
 		const claimed = state.workQueue.enqueueWork({
@@ -52,7 +52,7 @@ describe("the workQueue aggregate", () => {
 		});
 		if (!claimed.ok) throw new Error(claimed.reason);
 		const queueBefore = state.workQueue.items().map((item) => workQueueIdentityOf(item));
-		const second = state.ticketWorkCycle.visibleTickets(named("other-name"), "implement");
+		const second = state.ticketWorkCycle.ticketListViews(named("other-name"), "implement").rows;
 		expect(second.map((ticket) => ticket.identity)).toEqual(first.map((ticket) => ticket.identity));
 		expect(second.map((ticket) => ticket.actionable)).toEqual(
 			first.map((ticket) => ticket.actionable),
@@ -235,18 +235,6 @@ describe("the workQueue aggregate", () => {
 			consultation.id,
 		]);
 	});
-	test("one Consultation item per waiting record: the second add is refused", () => {
-		const state = openFactoryState(":memory:");
-		const consultation = queuedConsultation(state, uid("q"));
-		const first = state.workQueue.items().map(workQueueIdentityOf);
-		expect(first).toHaveLength(1);
-		expect(state.workQueue.enqueueConsultationWork(consultation.id)).toEqual({
-			ok: false,
-			reason: `consultation ${consultation.id} already has a waiting queue item`,
-		});
-		expect(state.workQueue.items().map(workQueueIdentityOf)).toEqual(first);
-	});
-
 	test("the queue pause is durable factory state (ADR 0052)", () => {
 		const path = statePath();
 		const state = openFactoryState(path);

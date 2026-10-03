@@ -5,7 +5,8 @@
 
 import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, test } from "bun:test";
-import type { FetchedTicket } from "../../src/domain/ticket.ts";
+import type { FetchedTicket, LeftoverEnvironment } from "../../src/domain/ticket.ts";
+import type { FactoryState } from "../../src/state.ts";
 import { openFactoryState } from "../../src/state.ts";
 import {
 	choice,
@@ -22,6 +23,16 @@ import {
 
 afterEach(cleanup);
 
+/**
+ * The standing leftover facts of one Ticket (issue #202 review). The Handoff
+ * aggregate answers the facts for a list of Tickets, so the test reads its own
+ * Ticket out of that answer instead of a per-Ticket read the interface does not
+ * carry.
+ */
+function leftoversOf(state: FactoryState, identity: string): LeftoverEnvironment[] {
+	return state.handoff.leftoverEnvironmentsFor([identity]).get(identity) ?? [];
+}
+
 describe("the handoff aggregate", () => {
 	test("an in-flight ticket keeps its own matched State from the source facts", () => {
 		// The Handoff records the task it started with, and the position is
@@ -30,7 +41,7 @@ describe("the handoff aggregate", () => {
 		const state = openFactoryState(":memory:");
 		state.sourceFact.initializeSources([sourceA]);
 		state.sourceFact.applyFetch(sourceA, success([labeled(["needs-review"])]));
-		const [open] = state.ticketWorkCycle.visibleTickets(POSITION_STATES, "implement");
+		const [open] = state.ticketWorkCycle.ticketListViews(POSITION_STATES, "implement").rows;
 		expect(open.matchedStateName).toBe("needs-review");
 		const claim = state.handoff.claimHandoff(
 			open.identity,
@@ -39,7 +50,7 @@ describe("the handoff aggregate", () => {
 		);
 		if (!claim.ok) throw new Error(claim.reason);
 		state.handoff.settleHandoff(claim.claim.attemptId, true);
-		const [flight] = state.ticketWorkCycle.visibleTickets(POSITION_STATES, "implement");
+		const [flight] = state.ticketWorkCycle.ticketListViews(POSITION_STATES, "implement").rows;
 		expect(flight).toEqual(
 			expect.objectContaining({
 				state: "handed-off",
@@ -73,7 +84,9 @@ describe("the handoff aggregate", () => {
 			]),
 		);
 		const identities = () =>
-			state.ticketWorkCycle.visibleTickets([], "implement", "active").map((row) => row.identity);
+			state.ticketWorkCycle
+				.ticketListViews([], "implement", "active")
+				.rows.map((row) => row.identity);
 		expect(identities()).toEqual([
 			"github:github.com:I_5",
 			"github:github.com:I_6a",
@@ -101,7 +114,7 @@ describe("the handoff aggregate", () => {
 		const state = openFactoryState(":memory:");
 		state.sourceFact.initializeSources([sourceA]);
 		state.sourceFact.applyFetch(sourceA, success([fetched()]));
-		const [ticket] = state.ticketWorkCycle.visibleTickets([], "implement");
+		const [ticket] = state.ticketWorkCycle.ticketListViews([], "implement").rows;
 		const first = state.handoff.claimHandoff(ticket.identity, choice, "open");
 		if (!first.ok) throw new Error(first.reason);
 		state.handoff.settleHandoff(first.claim.attemptId, false, "herdr is unavailable");
@@ -115,7 +128,7 @@ describe("the handoff aggregate", () => {
 		const state = openFactoryState(path);
 		state.sourceFact.initializeSources([sourceA]);
 		state.sourceFact.applyFetch(sourceA, success([fetched()]));
-		const [ticket] = state.ticketWorkCycle.visibleTickets([], "implement");
+		const [ticket] = state.ticketWorkCycle.ticketListViews([], "implement").rows;
 		const claim = state.handoff.claimHandoff(ticket.identity, choice, "open");
 		if (!claim.ok) throw new Error(claim.reason);
 		state.handoff.settleHandoff(claim.claim.attemptId, true);
@@ -128,7 +141,7 @@ describe("the handoff aggregate", () => {
 			turnLog: textLog("Done."),
 			completedAt: "2026-08-31T11:00:00Z",
 		});
-		expect(state.ticketWorkCycle.visibleTickets([], "implement")[0].state).toBe("awaiting");
+		expect(state.ticketWorkCycle.ticketListViews([], "implement").rows[0].state).toBe("awaiting");
 
 		// The decision records on the trace and ends the cycle.
 		state.ticketWorkCycle.applyCompletionDecision({
@@ -137,7 +150,7 @@ describe("the handoff aggregate", () => {
 			decision: "closed",
 			decidedAt: "2026-08-31T11:30:00Z",
 		});
-		const [returned] = state.ticketWorkCycle.visibleTickets([], "implement");
+		const [returned] = state.ticketWorkCycle.ticketListViews([], "implement").rows;
 		expect(returned.state).toBe("open");
 		expect(returned.lastCompletion?.decision).toBe("closed");
 
@@ -206,7 +219,7 @@ describe("the handoff aggregate", () => {
 		const state = openFactoryState(":memory:");
 		state.sourceFact.initializeSources([sourceA]);
 		state.sourceFact.applyFetch(sourceA, success([fetched()]));
-		const [ticket] = state.ticketWorkCycle.visibleTickets([], "implement");
+		const [ticket] = state.ticketWorkCycle.ticketListViews([], "implement").rows;
 		const claim = state.handoff.claimHandoff(ticket.identity, choice, "open");
 		if (!claim.ok) throw new Error(claim.reason);
 		state.handoff.settleHandoff(claim.claim.attemptId, true);
@@ -246,7 +259,7 @@ describe("the handoff aggregate", () => {
 		const state = openFactoryState(path);
 		state.sourceFact.initializeSources([sourceA]);
 		state.sourceFact.applyFetch(sourceA, success([fetched()]));
-		const [ticket] = state.ticketWorkCycle.visibleTickets([], "implement");
+		const [ticket] = state.ticketWorkCycle.ticketListViews([], "implement").rows;
 		const claim = state.handoff.claimHandoff(ticket.identity, choice, "open");
 		if (!claim.ok) throw new Error(claim.reason);
 		state.handoff.settleHandoff(claim.claim.attemptId, true);
@@ -301,7 +314,7 @@ describe("the handoff aggregate", () => {
 		db.close();
 
 		const reopened = openFactoryState(path);
-		const [restored] = reopened.ticketWorkCycle.visibleTickets([], "implement");
+		const [restored] = reopened.ticketWorkCycle.ticketListViews([], "implement").rows;
 		// The legacy trace reads a null log cell and degrades: its last
 		// message, one line per entry, stands in for the log.
 		expect(restored.lastCompletion).toEqual(
@@ -321,7 +334,7 @@ describe("the handoff aggregate", () => {
 		const state = openFactoryState(path);
 		state.sourceFact.initializeSources([sourceA]);
 		state.sourceFact.applyFetch(sourceA, success([fetched()]));
-		const [ticket] = state.ticketWorkCycle.visibleTickets([], "implement");
+		const [ticket] = state.ticketWorkCycle.ticketListViews([], "implement").rows;
 		const claim = state.handoff.claimHandoff(ticket.identity, choice, "open");
 		if (!claim.ok) throw new Error(claim.reason);
 		state.handoff.settleHandoff(claim.claim.attemptId, true);
@@ -391,7 +404,7 @@ describe("the handoff aggregate", () => {
 		// The handoff carries no leftover fact, and its stored choice reads
 		// back without the key a v5 row never held.
 		expect(reopened.handoff.leftoverEnvironment(ticket.identity)).toBe(null);
-		const [restored] = reopened.ticketWorkCycle.visibleTickets([], "implement");
+		const [restored] = reopened.ticketWorkCycle.ticketListViews([], "implement").rows;
 		expect(restored.handoff).toEqual(
 			expect.objectContaining({ model: "", thinking: "", contextWindow: "" }),
 		);
@@ -402,7 +415,7 @@ describe("the handoff aggregate", () => {
 		const state = openFactoryState(path);
 		state.sourceFact.initializeSources([sourceA]);
 		state.sourceFact.applyFetch(sourceA, success([fetched()]));
-		const [ticket] = state.ticketWorkCycle.visibleTickets([], "implement");
+		const [ticket] = state.ticketWorkCycle.ticketListViews([], "implement").rows;
 		const claim = state.handoff.claimHandoff(ticket.identity, choice, "open");
 		if (!claim.ok) throw new Error(claim.reason);
 		state.handoff.settleHandoff(claim.claim.attemptId, true);
@@ -457,7 +470,7 @@ describe("the handoff aggregate", () => {
 		);
 		// A choice written before the key existed reads back with it empty, so
 		// a Restart of a v7 handoff never carries a count it never chose.
-		const [restored] = reopened.ticketWorkCycle.visibleTickets([], "implement");
+		const [restored] = reopened.ticketWorkCycle.ticketListViews([], "implement").rows;
 		expect(restored.handoff).toEqual(expect.objectContaining({ contextWindow: "" }));
 		reopened.close();
 	});
@@ -534,8 +547,8 @@ describe("the handoff aggregate", () => {
 		).toBe(null);
 		expect(
 			state.ticketWorkCycle
-				.visibleTickets([], "implement")
-				.find((ticket) => ticket.identity === identity),
+				.ticketListViews([], "implement")
+				.rows.find((ticket) => ticket.identity === identity),
 		).toEqual(expect.objectContaining({ state: "open", handoffCount: 2 }));
 		state.close();
 	});
@@ -563,7 +576,7 @@ describe("the handoff aggregate", () => {
 			at: expect.any(String),
 		});
 		// The fact rides on the ticket, so the detail pane can name it.
-		expect(state.ticketWorkCycle.visibleTickets([], "implement")[0]).toEqual(
+		expect(state.ticketWorkCycle.ticketListViews([], "implement").rows[0]).toEqual(
 			expect.objectContaining({
 				state: "open",
 				workCycle: 2,
@@ -573,13 +586,11 @@ describe("the handoff aggregate", () => {
 
 		expect(state.handoff.clearLeftoverEnvironments(identity, { workspaceId: "ws-1" })).toBe(1);
 		expect(state.handoff.leftoverEnvironment(identity)).toBe(null);
-		expect(state.ticketWorkCycle.visibleTickets([], "implement")[0].leftover).toBe(null);
+		expect(state.ticketWorkCycle.ticketListViews([], "implement").rows[0].leftover).toBe(null);
 		// The handoff row keeps why it was left over: the record survives the clear.
-		expect(
-			state.handoff
-				.leftoverEnvironments(identity)
-				.every((leftover) => leftover.handoffId !== handoffId),
-		).toBe(true);
+		expect(leftoversOf(state, identity).every((leftover) => leftover.handoffId !== handoffId)).toBe(
+			true,
+		);
 		state.close();
 	});
 	test("a leftover named by a herdr collision lands on the handoff that holds the name", () => {
@@ -600,7 +611,7 @@ describe("the handoff aggregate", () => {
 			reason: "agent name persist-source-facts is already used",
 		});
 		expect(recorded?.paneId).toBe("pane-1");
-		expect(state.handoff.leftoverEnvironments(identity)).toHaveLength(1);
+		expect(leftoversOf(state, identity)).toHaveLength(1);
 		// A ticket with no handoff to carry the fact records nothing.
 		expect(
 			state.handoff.recordLeftoverEnvironment({
@@ -649,36 +660,32 @@ describe("the handoff aggregate", () => {
 				handoffId: second,
 				reason: "b",
 			});
-			expect(state.handoff.leftoverEnvironments(identity)).toHaveLength(2);
+			expect(leftoversOf(state, identity)).toHaveLength(2);
 		};
 
 		// A worktree removal closes the workspace, so it ends both facts: both
 		// handoffs ran in the one workspace herdr could not remove.
 		record();
 		expect(state.handoff.clearLeftoverEnvironments(identity, { workspaceId: "ws-1" })).toBe(2);
-		expect(state.handoff.leftoverEnvironments(identity)).toEqual([]);
+		expect(leftoversOf(state, identity)).toEqual([]);
 
 		// A tab close reaches one tab with the panes inside it, not the
 		// workspace around it: the fact of the other tab stands.
 		record();
 		expect(state.handoff.clearLeftoverEnvironments(identity, { tabId: "tab-1" })).toBe(1);
-		expect(state.handoff.leftoverEnvironments(identity)).toEqual([
-			expect.objectContaining({ handoffId: second }),
-		]);
+		expect(leftoversOf(state, identity)).toEqual([expect.objectContaining({ handoffId: second })]);
 
 		// A cleanup that ran no command ends nothing herdr can see, so it
 		// resolves only the fact of its own handoff row.
 		record();
 		expect(state.handoff.clearLeftoverEnvironments(identity, { handoffId: first })).toBe(1);
-		expect(state.handoff.leftoverEnvironments(identity)).toEqual([
-			expect.objectContaining({ handoffId: second }),
-		]);
+		expect(leftoversOf(state, identity)).toEqual([expect.objectContaining({ handoffId: second })]);
 
 		// A handle that names no fact clears nothing, so a stale answer cannot
 		// resolve a leftover the operator still has to end.
 		expect(state.handoff.clearLeftoverEnvironments(identity, { tabId: "tab-9" })).toBe(0);
 		expect(state.handoff.clearLeftoverEnvironments(identity, { workspaceId: "ws-9" })).toBe(0);
-		expect(state.handoff.leftoverEnvironments(identity)).toHaveLength(1);
+		expect(leftoversOf(state, identity)).toHaveLength(1);
 		state.close();
 	});
 	test("a handoff records the herdr name its agent started under", () => {
@@ -742,8 +749,8 @@ describe("the handoff aggregate", () => {
 		});
 		expect(claimed).toEqual({ attemptId: expect.any(String) });
 		const ticket = state.ticketWorkCycle
-			.visibleTickets([], "implement")
-			.find((t) => t.identity === identity);
+			.ticketListViews([], "implement")
+			.rows.find((t) => t.identity === identity);
 		expect(ticket?.handoff?.herdrName).toBe("persist-source-facts");
 		state.close();
 	});

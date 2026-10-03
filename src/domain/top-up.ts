@@ -8,10 +8,15 @@
  * so a test measures the decision without a cycle, an Agent, or a state file
  * (issue #202 review).
  *
- * The walk keeps the reads. It asks for a fact only when the waits before it
- * leave the candidate standing, so a large ticket list costs no statement for a
- * row an earlier wait already held out. The rules decide; the walk decides
- * nothing.
+ * The walk keeps the reads, and it keeps them in two shapes (issue #202 review).
+ * The open-ticket walk asks for a fact only when the waits before it leave the
+ * candidate standing, so a row an earlier wait holds out costs no statement, and
+ * the row gate answers on the facts the row already carries. The restart walk
+ * holds no row - the in-flight read gives it an identity, a pane, and a start
+ * time - so its per-Ticket facts come as one batched read for the whole
+ * in-flight list: the start counts from the Handoff aggregate, and the queue's
+ * items the cycle gate already read. Neither walk asks a fact per candidate.
+ * The rules decide; the walk decides nothing.
  */
 
 import type { TransitionOutcome } from "../config.ts";

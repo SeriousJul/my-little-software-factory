@@ -399,7 +399,9 @@ describe("the ignore key", () => {
 					// filter is a session view fact, and the file's own default read
 					// is the active view.
 					expect(
-						state.ticketWorkCycle.visibleTickets([], "implement").map((ticket) => ticket.identity),
+						state.ticketWorkCycle
+							.ticketListViews([], "implement")
+							.rows.map((ticket) => ticket.identity),
 					).toEqual([SECOND]);
 				},
 				WIDTH,
@@ -735,7 +737,7 @@ test("the no-state shell refuses i and f with the same missing fact", async () =
 	const seeded = openFactoryState(statePath());
 	seeded.sourceFact.initializeSources([{ name: "issues", kind: "github-issues" }]);
 	seeded.sourceFact.applyFetch({ name: "issues", kind: "github-issues" }, success(twoTickets()));
-	const projection = seeded.ticketWorkCycle.visibleTickets([], "implement");
+	const projection = seeded.ticketWorkCycle.ticketListViews([], "implement").rows;
 	seeded.close();
 	await withApp(
 		async (setup) => {
@@ -1195,7 +1197,9 @@ describe("the ignore and the machine", () => {
 					expect(state.ticketWorkCycle.setTicketIgnored(FIRST, false, null).ok).toBe(true);
 					expect(listRowOf(frame, SECOND_LEAD)).toBe(-1);
 					expect(
-						state.ticketWorkCycle.visibleTickets([], "implement").map((ticket) => ticket.identity),
+						state.ticketWorkCycle
+							.ticketListViews([], "implement")
+							.rows.map((ticket) => ticket.identity),
 					).toEqual([FIRST]);
 				},
 				WIDTH,
@@ -1253,7 +1257,9 @@ describe("the ignore and the machine", () => {
 			try {
 				expect(reopened.ticketWorkCycle.ignoredTickets().has(FIRST)).toBe(true);
 				expect(
-					reopened.ticketWorkCycle.visibleTickets([], "implement").map((ticket) => ticket.identity),
+					reopened.ticketWorkCycle
+						.ticketListViews([], "implement")
+						.rows.map((ticket) => ticket.identity),
 				).toEqual([SECOND]);
 				await withApp(
 					async (setup) => {
@@ -1323,7 +1329,12 @@ describe("the ignore and the machine", () => {
 					expect(gone).toContain("ignored");
 					expect(messageRowOf(gone)).not.toContain("no longer ignored");
 					expect(state.ticketWorkCycle.ignoredTickets().has(FIRST)).toBe(true);
-					expect(state.ticketWorkCycle.ticketObligation(FIRST, "missing")).toBe("missing");
+					// A missing Agent is the obligation the row's own face wears, and
+					// it is what the ignore's write refuses (issue #202 review).
+					expect(state.ticketWorkCycle.setTicketIgnored(FIRST, true, "missing")).toEqual({
+						ok: false,
+						reason: "the selected Ticket cannot be ignored: its Agent is missing",
+					});
 					// The machine starts nothing on it by itself: auto mode is on, the
 					// seat is free, and after a hundred cycles of the walk that would
 					// otherwise have asked for the restart, the queue is still empty and

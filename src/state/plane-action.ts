@@ -66,7 +66,6 @@ export interface PlaneActionAggregate {
 		at: string;
 	}): { id: string };
 	recordPlaneActionAttemptOutcome(attemptId: string, outcome: TransitionOutcome): boolean;
-	planeActionAttempts(identity: string): PlaneActionAttempt[];
 	latestPlaneActionAttempt(identity: string): PlaneActionAttempt | null;
 	planeActionAttemptCount(identity: string): number;
 	planeActionBlockedUnrefreshed(identity: string): boolean;
@@ -114,14 +113,6 @@ export class PlaneActionModule implements PlaneActionAggregate {
 				.run(JSON.stringify(outcome), attemptId);
 			return Number(result.changes) > 0;
 		});
-	}
-	planeActionAttempts(identity: string): PlaneActionAttempt[] {
-		const rows = this.db
-			.prepare(
-				"SELECT id, ticket_identity, task_type, decision, outcome, reason, transition_json, at FROM plane_action_attempts WHERE ticket_identity = ? ORDER BY at DESC, rowid DESC",
-			)
-			.all(identity) as Array<PlaneActionAttemptRow>;
-		return rows.map((row) => planeActionAttemptOf(row));
 	}
 	latestPlaneActionAttempt(identity: string): PlaneActionAttempt | null {
 		const rows = this.db

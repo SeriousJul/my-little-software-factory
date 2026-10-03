@@ -584,7 +584,7 @@ describe("Consultation launch and monitoring through the UI", () => {
 					expect(started).toHaveLength(1);
 					expect(started[0].state).toBe("working");
 					expect(started[0].paneId).toBe("pane-c1");
-					expect(state.consultationRecord.pendingConsultationResponse(started[0].id)).toBeNull();
+					expect(state.consultationRecord.consultation(started[0].id)?.pendingResponse).toBeNull();
 				},
 				WIDTH,
 				32,
@@ -1166,7 +1166,7 @@ describe("Consultation responses through the UI", () => {
 						[`herdr agent prompt ${AGENT} follow up`],
 						"the response prompt",
 					);
-					expect(state.consultationRecord.pendingConsultationResponse(RESPONSE_ID)).toBeNull();
+					expect(state.consultationRecord.consultation(RESPONSE_ID)?.pendingResponse).toBeNull();
 					const turns = state.consultationRecord.consultationTurns(RESPONSE_ID);
 					expect(turns).toHaveLength(2);
 					expect(turns[1].input).toBe("follow up");
@@ -1209,7 +1209,7 @@ describe("Consultation responses through the UI", () => {
 						state: "awaiting-response",
 						draft: "follow up",
 					});
-					expect(state.consultationRecord.pendingConsultationResponse(RESPONSE_ID)).toBeNull();
+					expect(state.consultationRecord.consultation(RESPONSE_ID)?.pendingResponse).toBeNull();
 					expect(state.consultationRecord.consultationTurns(RESPONSE_ID)).toHaveLength(1);
 					expect(frameText(setup.captureCharFrame())).toContain("follow up");
 				},
@@ -1260,7 +1260,7 @@ describe("Consultation responses through the UI", () => {
 						[`herdr agent prompt ${AGENT} then ship it`],
 						"the operator's response",
 					);
-					expect(state.consultationRecord.pendingConsultationResponse(RESPONSE_ID)).toBeNull();
+					expect(state.consultationRecord.consultation(RESPONSE_ID)?.pendingResponse).toBeNull();
 					const turns = state.consultationRecord.consultationTurns(RESPONSE_ID);
 					expect(turns).toHaveLength(2);
 					expect(turns.at(-1)?.input).toBe("then ship it");
@@ -3110,7 +3110,7 @@ describe("the Consultation detail reads the Agent's session record (ADR 0025)", 
 					expect(state.consultationRecord.consultation(WORKING_ID)?.state).toBe(
 						"awaiting-response",
 					);
-					expect(state.consultationRecord.pendingConsultationResponse(WORKING_ID)).toBeNull();
+					expect(state.consultationRecord.consultation(WORKING_ID)?.pendingResponse).toBeNull();
 				},
 				WIDTH,
 				32,

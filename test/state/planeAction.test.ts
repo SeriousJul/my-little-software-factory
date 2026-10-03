@@ -48,7 +48,7 @@ describe("the planeAction aggregate", () => {
 			reason: "the branch does not merge",
 			at: "2026-08-31T11:00:00Z",
 		});
-		const [record] = state.planeAction.planeActionAttempts(T5);
+		const record = state.planeAction.latestPlaneActionAttempt(T5);
 		expect(record).toEqual(
 			expect.objectContaining({
 				id: attempt.id,
@@ -80,12 +80,12 @@ describe("the planeAction aggregate", () => {
 		state.close();
 
 		const reopened = openFactoryState(path);
-		expect(reopened.planeAction.planeActionAttempts(T5)).toHaveLength(1);
+		expect(reopened.planeAction.planeActionAttemptCount(T5)).toBe(1);
 		expect(reopened.planeAction.latestPlaneActionAttempt(T5)?.outcome).toBe("merged");
 		reopened.close();
 	});
 
-	test("the attempts read newest first, and the latest is the newest", () => {
+	test("the newest start is the one the aggregate answers, and every start counts", () => {
 		const state = ticketState();
 		for (const at of ["2026-08-31T10:00:00Z", "2026-08-31T12:00:00Z", "2026-08-31T11:00:00Z"])
 			state.planeAction.recordPlaneActionAttempt({
@@ -96,11 +96,10 @@ describe("the planeAction aggregate", () => {
 				reason: "",
 				at,
 			});
-		expect(state.planeAction.planeActionAttempts(T5).map((attempt) => attempt.at)).toEqual([
-			"2026-08-31T12:00:00Z",
-			"2026-08-31T11:00:00Z",
-			"2026-08-31T10:00:00Z",
-		]);
+		// The aggregate answers the newest start and the count of starts; the
+		// record of every start a Ticket's action ran is not an answer a caller
+		// takes (issue #202 review).
+		expect(state.planeAction.planeActionAttemptCount(T5)).toBe(3);
 		expect(state.planeAction.latestPlaneActionAttempt(T5)?.at).toBe("2026-08-31T12:00:00Z");
 		state.close();
 	});
