@@ -724,6 +724,48 @@ describe("the merged Main view", () => {
 		}
 	});
 
+	test("the Consultation header's counts read the machine, not the History filter", async () => {
+		const state = openFactoryState(join(home, "state.sqlite"));
+		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
+		state.setGroupingAxis("tickets", "none");
+		seedConsultation(state, uid("h"));
+		try {
+			await booted(async (setup) => {
+				const frame = await awaitFrame(
+					setup,
+					(f) => headerOf(f, "Consultations").includes("recovery: 1"),
+					"the recovery count on the header",
+				);
+				expect(headerOf(frame, "Consultations")).toBe(
+					"▾ Consultations  awaiting response: 0  recovery: 1",
+				);
+				// `f` in the Consultation list cycles the section's History filter.
+				// The header's counts read the records the machine holds, so the
+				// closed view - the one that draws no row at all - still names the
+				// recovery need, and the count never moves on the cycle (issue #201,
+				// story 14).
+				await crossToConsultations(setup);
+				const closed = await press(setup, "f", "the closed history filter", (f) =>
+					f.includes("no closed Consultations"),
+				);
+				expect(headerOf(closed, "Consultations")).toBe(
+					"▾ Consultations  awaiting response: 0  recovery: 1",
+				);
+				const all = await press(
+					setup,
+					"f",
+					"the all history filter",
+					(f) => f.includes("grill") && !f.includes("no closed Consultations"),
+				);
+				expect(headerOf(all, "Consultations")).toBe(
+					"▾ Consultations  awaiting response: 0  recovery: 1",
+				);
+			}, state);
+		} finally {
+			state.close();
+		}
+	});
+
 	test("the Message line survives a cross, and m reads it in full", async () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
 		// Hold the flat axis: the frames read the unsplit list (ADR 0066).

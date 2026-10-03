@@ -966,7 +966,7 @@ export function App({
 	// (issue #201). The header takes them as values.
 	const headerFacts = sectionFacts({
 		tickets: machineTickets,
-		consultations,
+		consultations: machineConsultations,
 		queue: workQueue,
 		ignored: listViews.ignored.length,
 		muted: listViews.muted.length,
@@ -1281,7 +1281,12 @@ export function App({
 	}, [state, positionOrderOf, factRows]);
 	const replaceConsultations = useCallback(() => {
 		if (state === undefined) return;
-		const next = state.consultations(historyFilterRef.current);
+		const filter = historyFilterRef.current;
+		const next = state.consultations(filter);
+		// The header's counts read the machine's records, not the drawn list
+		// (story 14). On the open filter the two reads are the same list, so
+		// the common case costs one query.
+		const machine = filter === "open" ? next : state.consultations("open");
 		const currentIndex = consultationIndexRef.current;
 		const selectedId = consultationsRef.current[currentIndex]?.id;
 		const preserved =
@@ -1291,6 +1296,7 @@ export function App({
 		consultationsRef.current = next;
 		consultationIndexRef.current = nextIndex;
 		setConsultations(next);
+		setMachineConsultations(machine);
 		setConsultationIndex(nextIndex);
 		if (selectedId === undefined || !next.some((item) => item.id === selectedId)) {
 			setConsultationScroll(0);
