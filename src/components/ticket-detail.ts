@@ -14,7 +14,7 @@ import type { ScrollConfig } from "../config.ts";
 import type { LeftoverEnvironment, Ticket } from "../domain/ticket.ts";
 import type { TicketRowFacts } from "../domain/ticket-facts.ts";
 import type { HandoffChoice } from "../handoff.ts";
-import type { PlaneActionAttempt } from "../state.ts";
+import type { PlaneActionAttempt } from "../state/plane-action.ts";
 import { maxScrollOf, usePaneGeometry } from "./geometry.ts";
 import { paneMouse } from "./pane-mouse.ts";
 import { turnEndCauseLine } from "./shared/presentation.ts";

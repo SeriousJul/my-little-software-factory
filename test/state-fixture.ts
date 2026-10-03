@@ -12,7 +12,8 @@ import { join } from "node:path";
 import type { FactoryConfig, TransitionOutcome } from "../src/config.ts";
 import type { GroupingAxis } from "../src/domain/grouping.ts";
 import type { EnvironmentKind, FetchedTicket } from "../src/domain/ticket.ts";
-import { type FactoryState, openFactoryState } from "../src/state.ts";
+import type { FactoryState } from "../src/state.ts";
+import { openFactoryState } from "../src/state.ts";
 import type { FetchOutcome } from "../src/ticket-source.ts";
 import { sleep } from "./app-harness.ts";
 import { BASE_CONFIG } from "./base-config.ts";
@@ -32,7 +33,7 @@ export function freshState(axis: GroupingAxis = "none"): FactoryState {
 	const dir = mkdtempSync(join(tmpdir(), "factory-fixture-state-"));
 	paths.push(dir);
 	const state = openFactoryState(join(dir, "state.sqlite"));
-	state.setGroupingAxis("tickets", axis);
+	state.grouping.setGroupingAxis("tickets", axis);
 	return state;
 }
 
@@ -108,9 +109,9 @@ export function seedInFlightTurn(
 	environment: EnvironmentKind = "live-worktree",
 ): string {
 	const source = { name: "issues", kind: "github-issues" };
-	state.initializeSources([source]);
-	state.applyFetch(source, outcome);
-	const claim = state.claimHandoff(
+	state.sourceFact.initializeSources([source]);
+	state.sourceFact.applyFetch(source, outcome);
+	const claim = state.handoff.claimHandoff(
 		identity,
 		{
 			agentType: "pi",
@@ -123,7 +124,7 @@ export function seedInFlightTurn(
 		"open",
 	);
 	if (!claim.ok) throw new Error(claim.reason);
-	state.settleHandoff(claim.claim.attemptId, true, undefined, {
+	state.handoff.settleHandoff(claim.claim.attemptId, true, undefined, {
 		paneId: "pane-1",
 		tabId: "tab-1",
 		workspaceId: "ws-1",
@@ -145,7 +146,7 @@ export function seedAwaitingTurn(
 	environment: EnvironmentKind = "live-worktree",
 ): string {
 	const attemptId = seedInFlightTurn(state, outcome, identity, environment);
-	state.settleTurn({
+	state.ticketWorkCycle.settleTurn({
 		ticketIdentity: identity,
 		handoffId: attemptId,
 		taskType: "implement",

@@ -9,7 +9,8 @@
 import { describe, expect, test } from "bun:test";
 import { heldBellRang, type SectionFactInputs, sectionFacts } from "../src/domain/section-facts.ts";
 import type { Completion, Ticket } from "../src/domain/ticket.ts";
-import type { Consultation, ConsultationState, WorkQueueItem } from "../src/state.ts";
+import type { Consultation, ConsultationState } from "../src/state/consultation-record.ts";
+import type { WorkQueueItem } from "../src/state/work-queue.ts";
 
 function ticket(state: Ticket["state"], over: Partial<Ticket> = {}): Ticket {
 	return {

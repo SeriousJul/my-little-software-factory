@@ -20,7 +20,8 @@ import type { AppProps } from "../src/components/app.ts";
 import type { FactoryConfig, TransitionOutcome } from "../src/config.ts";
 import { type FetchedTicket, withIssueReferences } from "../src/domain/ticket.ts";
 import type { CommandRunner } from "../src/runner.ts";
-import { type FactoryState, openFactoryState } from "../src/state.ts";
+import type { FactoryState } from "../src/state.ts";
+import { openFactoryState } from "../src/state.ts";
 import type { FetchOutcome } from "../src/ticket-source.ts";
 import type { TurnEndCause, TurnLogEntry } from "../src/turn-log.ts";
 import {
@@ -83,7 +84,6 @@ function reviewRoute(over: Partial<TransitionOutcome> = {}): TransitionOutcome {
 		reason: "",
 		ticketFacts: ["ready-for-review"],
 		pullRequestFacts: [],
-		autoAdvance: false,
 		ticketWrite: { added: ["ready-for-review"], removed: ["ready-for-agent"] },
 		pullRequestWrite: null,
 		pullRequestIdentity: null,
@@ -177,7 +177,7 @@ function stubCheckout(app: SeededApp): void {
 interface SeedDetail {
 	/** The transition outcome to store on the settled turn; no transition when absent. */
 	transition?: TransitionOutcome | null;
-	/** The task type the seeded turn ran under; the automatic rule's No-auto-decision check reads it (ADR 0085). */
+	/** The task type the seeded turn ran under; the automatic rule's Operator-decides check reads it (ADR 0085, renamed by ADR 0092). */
 	taskType?: string;
 	message?: string;
 	model?: string;
@@ -222,12 +222,12 @@ function seed(
 	const state = openFactoryState(join(dir, "state.sqlite"), detail.stateNow);
 	// The frames assert the unsplit list: a fresh file opens grouped by
 	// repository (ADR 0066), so the fixture holds the flat axis.
-	state.setGroupingAxis("tickets", "none");
-	state.initializeSources([source]);
-	state.applyFetch(source, outcome);
+	state.grouping.setGroupingAxis("tickets", "none");
+	state.sourceFact.initializeSources([source]);
+	state.sourceFact.applyFetch(source, outcome);
 	if (shape !== "open") {
 		const message = detail.message ?? "The turn is done.";
-		const claim = state.claimHandoff(
+		const claim = state.handoff.claimHandoff(
 			identity,
 			{
 				agentType: "pi",
@@ -240,13 +240,13 @@ function seed(
 			"open",
 		);
 		if (!claim.ok) throw new Error(claim.reason);
-		state.settleHandoff(claim.claim.attemptId, true, undefined, {
+		state.handoff.settleHandoff(claim.claim.attemptId, true, undefined, {
 			paneId: "pane-1",
 			tabId: "tab-1",
 			workspaceId: "ws-1",
 		});
 		if (shape === "awaiting") {
-			state.settleTurn({
+			state.ticketWorkCycle.settleTurn({
 				ticketIdentity: identity,
 				handoffId: claim.claim.attemptId,
 				taskType: detail.taskType ?? "implement",
@@ -286,7 +286,7 @@ function seededApp(
 	const state = seed(shape, outcome, environment, detail);
 	// The operator's last choice of the mode is a fact of the state file, not
 	// of the config (ADR 0036), so the seed writes it before the app mounts.
-	if (detail.autoMode === true) state.setAutoHandoffMode(true);
+	if (detail.autoMode === true) state.handoff.setAutoHandoffMode(true);
 	const path = checkout();
 	const home = mkdtempSync(join(tmpdir(), "factory-auto-home-"));
 	paths.push(home);
@@ -355,7 +355,7 @@ function reverify(app: SeededApp, outcome: FetchOutcome, at: string): void {
 		outcome.status === "success"
 			? { status: "success", fetchedAt: at, tickets: outcome.tickets }
 			: outcome;
-	app.state.applyFetch(source, refetch);
+	app.state.sourceFact.applyFetch(source, refetch);
 }
 
 /**
@@ -427,10 +427,10 @@ describe("the mode line and the a key", () => {
 				await press(setup, "a", "auto on", (f) => f.includes("auto: on 0/2"));
 				// The flip is factory state (ADR 0036): it is on the state file the
 				// moment the key lands, and the toggle never writes the config file.
-				expect(app.state.autoHandoffMode()).toBe(true);
+				expect(app.state.handoff.autoHandoffMode()).toBe(true);
 				expect(readFileSync(app.configPath, "utf8")).toBe(before);
 				await press(setup, "a", "auto off", (f) => f.includes("auto: off 0/2"));
-				expect(app.state.autoHandoffMode()).toBe(false);
+				expect(app.state.handoff.autoHandoffMode()).toBe(false);
 				expect(readFileSync(app.configPath, "utf8")).toBe(before);
 			},
 			WIDTH,
@@ -461,7 +461,7 @@ describe("the mode line and the a key", () => {
 
 		// The next run reads the mode back off the same file, not off the config.
 		const reopened = openFactoryState(statePath);
-		expect(reopened.autoHandoffMode()).toBe(true);
+		expect(reopened.handoff.autoHandoffMode()).toBe(true);
 		const src = new FakeSource("issues", "github-issues", success);
 		await withApp(
 			async (setup) => {
@@ -498,7 +498,7 @@ describe("the mode line and the a key", () => {
 				app.src.settle(success);
 				const frame = await awaitFrame(setup, (f) => f.includes("auto: off 0/2"), "the mode line");
 				expect(frame).not.toContain("auto: on");
-				expect(app.state.autoHandoffMode()).toBe(false);
+				expect(app.state.handoff.autoHandoffMode()).toBe(false);
 			},
 			WIDTH,
 			HEIGHT,
@@ -579,7 +579,7 @@ describe("the mode line and the a key", () => {
 		const app = seededApp("in-flight");
 		// The Consultation starts in opening and takes its confirmed Agent with
 		// it into working, so the poll keeps it where it is.
-		app.state.createConsultation({
+		app.state.consultationRecord.createConsultation({
 			id: "consultation-1",
 			typeName: "grill-with-docs",
 			agentType: "pi",
@@ -599,7 +599,7 @@ describe("the mode line and the a key", () => {
 			agentName: "consultation-11111111",
 			createdAt: "2026-08-31T09:50:00.000Z",
 		});
-		app.state.setConsultationAgent("consultation-1", {
+		app.state.consultationRecord.setConsultationAgent("consultation-1", {
 			paneId: "pane-2",
 			tabId: "tab-2",
 			workspaceId: "ws-2",
@@ -751,7 +751,7 @@ describe("the failure markers", () => {
 				expect(app.runner.commands()).toContain(
 					"herdr agent start persist-source-facts --kind pi --pane pane-restart -- --model gpt-5.6 --thinking high",
 				);
-				expect(app.state.visibleTickets([], "implement")[0].handoff).toEqual(
+				expect(app.state.ticketWorkCycle.ticketListViews([], "implement").rows[0].handoff).toEqual(
 					expect.objectContaining({
 						model: "gpt-5.6",
 						thinking: "high",
@@ -785,7 +785,7 @@ describe("the failure markers", () => {
 			propsOf(app),
 		);
 		reverify(app, success, new Date(Date.now() + 60_000).toISOString());
-		const next = app.state.claimHandoff(
+		const next = app.state.handoff.claimHandoff(
 			identity,
 			{
 				agentType: "pi",
@@ -798,8 +798,8 @@ describe("the failure markers", () => {
 			"open",
 		);
 		if (!next.ok) throw new Error(next.reason);
-		app.state.settleHandoff(next.claim.attemptId, true);
-		expect(app.state.ticketsByState(["handed-off"])).toEqual([
+		app.state.handoff.settleHandoff(next.claim.attemptId, true);
+		expect(app.state.ticketWorkCycle.ticketsByState(["handed-off"])).toEqual([
 			expect.objectContaining({ ticketIdentity: identity, workCycle: 2 }),
 		]);
 		app.state.close();
@@ -854,7 +854,7 @@ describe("the failure markers", () => {
 				// the ticket stays in flight with the blocked badge standing.
 				await pressReturn(setup, "the focus", (f) => f.includes("focused the agent"));
 				expect(app.runner.commands()).toContain("herdr agent focus pane-1");
-				expect(app.state.ticketState(identity)).toBe("handed-off");
+				expect(app.state.ticketWorkCycle.ticketState(identity)).toBe("handed-off");
 				expect(ticketRow(await settle(setup))).toContain("blocked");
 			},
 			WIDTH,
@@ -879,7 +879,7 @@ describe("the failure markers", () => {
 				// Esc cancels: nothing runs, no decision lands.
 				await pressEscape(setup, "the panel to close", (f) => !f.includes("Missing:"));
 				// The ticket is still in flight with its missing agent.
-				expect(app.state.ticketState(identity)).toBe("handed-off");
+				expect(app.state.ticketWorkCycle.ticketState(identity)).toBe("handed-off");
 				expect(ticketRow(await settle(setup))).toContain("missing");
 			},
 			WIDTH,
@@ -908,7 +908,7 @@ describe("the failure markers", () => {
 				// The limit does not unhand the ticket: it stays in flight, and its
 				// missing agent still stands out in the badge's place.
 				expect(row).toContain("missing");
-				expect(app.state.ticketState(identity)).toBe("handed-off");
+				expect(app.state.ticketWorkCycle.ticketState(identity)).toBe("handed-off");
 			},
 			WIDTH,
 			HEIGHT,
@@ -998,9 +998,11 @@ describe("the Ticket Close key", () => {
 				// cycle, and its record stand, and Cancel ran no herdr command.
 				// (The read-only observation poll continues on its own clock, so
 				// the check names the commands that change state.)
-				expect(app.state.ticketState(identity)).toBe("handed-off");
-				expect(app.state.visibleTickets([], "implement")[0].workCycle).toBe(1);
-				expect(app.state.lastCompletion(identity)).toBe(null);
+				expect(app.state.ticketWorkCycle.ticketState(identity)).toBe("handed-off");
+				expect(app.state.ticketWorkCycle.ticketListViews([], "implement").rows[0].workCycle).toBe(
+					1,
+				);
+				expect(app.state.ticketWorkCycle.lastCompletion(identity)).toBe(null);
 				expect(changed(app.runner.commands())).toEqual(changed(before));
 				expect(frameText(cancelled)).not.toContain("❯ Close");
 			},
@@ -1031,7 +1033,7 @@ describe("the Ticket Close key", () => {
 				expect(frameText(opened)).toContain(
 					"Close removes the worktree checkout; a dirty checkout stays as a leftover.",
 				);
-				expect(app.state.ticketState(identity)).toBe("handed-off");
+				expect(app.state.ticketWorkCycle.ticketState(identity)).toBe("handed-off");
 			},
 			WIDTH,
 			HEIGHT,
@@ -1088,11 +1090,11 @@ describe("the Ticket Close key", () => {
 				);
 				// The cycle ended and the ticket is open with its next number, and
 				// no completion trace exists: the turn never settled.
-				expect(app.state.ticketState(identity)).toBe("open");
-				const [ticket] = app.state.visibleTickets([], "implement");
+				expect(app.state.ticketWorkCycle.ticketState(identity)).toBe("open");
+				const [ticket] = app.state.ticketWorkCycle.ticketListViews([], "implement").rows;
 				expect(ticket.workCycle).toBe(2);
 				expect(ticket.handoffCount).toBe(1);
-				expect(app.state.lastCompletion(identity)).toBe(null);
+				expect(app.state.ticketWorkCycle.lastCompletion(identity)).toBe(null);
 				// The Agent's environment went through the Close cleanup: the
 				// worktree checkout and the workspace behind it, never the branch.
 				const commands = app.runner.commands().join("\n");
@@ -1134,8 +1136,8 @@ describe("the Ticket Close key", () => {
 				);
 				// The cycle still ended; what herdr could not remove is the ticket's
 				// fact from there on, and the Message line says so.
-				expect(app.state.ticketState(identity)).toBe("open");
-				expect(app.state.leftoverEnvironment(identity)).toEqual(
+				expect(app.state.ticketWorkCycle.ticketState(identity)).toBe("open");
+				expect(app.state.handoff.leftoverEnvironment(identity)).toEqual(
 					expect.objectContaining({
 						workspaceId: "ws-1",
 						reason: expect.stringContaining("dirty_worktree_requires_force"),
@@ -1200,7 +1202,7 @@ describe("the Ticket Close key", () => {
 						ticketRow(f).includes("[open]"),
 					"the panel to let go when its cycle ends",
 				);
-				expect(app.state.ticketState(identity)).toBe("open");
+				expect(app.state.ticketWorkCycle.ticketState(identity)).toBe("open");
 				// The base pane answers its keys again: no invisible panel swallows them.
 				const refused = await press(setup, "w", "the refusal on the open ticket", (f) =>
 					messageRowOf(f).includes("no work is in flight to close"),
@@ -1231,8 +1233,8 @@ describe("the Ticket Close key", () => {
 				await confirmPanel(setup, "the close", (f) => ticketRow(f).includes("[open]"));
 				// The settled turn carries the decision, exactly as the Decision
 				// modal's Close row leaves it, and the tab went through the cleanup.
-				expect(app.state.lastCompletion(identity)?.decision).toBe("closed");
-				expect(app.state.ticketState(identity)).toBe("open");
+				expect(app.state.ticketWorkCycle.lastCompletion(identity)?.decision).toBe("closed");
+				expect(app.state.ticketWorkCycle.ticketState(identity)).toBe("open");
 				expect(app.runner.commands()).toContain("herdr tab close tab-1");
 			},
 			WIDTH,
@@ -1330,7 +1332,7 @@ describe("the decision modal", () => {
 				expect(commands.at(-1)).toBe("herdr tab close tab-1");
 				// The route's decision landed on the settled turn's trace when
 				// the routed handoff started, not at the claim.
-				expect(app.state.lastCompletion(identity)?.decision).toBe("handed-off");
+				expect(app.state.ticketWorkCycle.lastCompletion(identity)?.decision).toBe("handed-off");
 			},
 			WIDTH,
 			HEIGHT,
@@ -1369,6 +1371,89 @@ describe("the decision modal", () => {
 		app.state.close();
 	});
 
+	test("the Decision screen states the gate that holds the Next step (ADR 0092)", async () => {
+		// The fired Transition derived its review position, and the source has
+		// not re-read the ticket yet: it still offers implement, so the derived
+		// review stands held and the automatic route would not take it. The row
+		// stands for the operator's own key, and the fact line names the hold the
+		// machine reads beside it.
+		const app = seededApp("awaiting", {}, success, "live-worktree", { transition: reviewRoute() });
+		stubCheckout(app);
+		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+		await withApp(
+			async (setup) => {
+				app.src.settle(success);
+				await awaitFrame(setup, (f) => ticketRow(f).includes("[awaiting]"), "the awaiting ticket");
+				await pressReturn(setup, "the decision modal", (f) => f.includes("Decision:"));
+				const panel = frameText(await settle(setup));
+				expect(panel).toContain("Handoff: review");
+				expect(panel).toContain("the Next step is held: the position no longer offers the task");
+			},
+			WIDTH,
+			HEIGHT,
+			propsOf(app),
+		);
+		app.state.close();
+	});
+
+	test("the Decision screen states the Handoff limit that holds the Next step (ADR 0092)", async () => {
+		// The same settled turn on a position that already used its one start: the
+		// limit holds the machine's step, and the screen names the limit beside the
+		// row the operator's own key still confirms.
+		const landed: FetchOutcome = {
+			status: "success",
+			fetchedAt: "2026-08-31T10:01:00Z",
+			tickets: [fetched(5, "Persist source facts", ["ready-for-review"])],
+		};
+		const app = seededApp("awaiting", { maxHandoffsPerTicket: 1 }, landed, "live-worktree", {
+			transition: reviewRoute(),
+		});
+		stubCheckout(app);
+		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+		await withApp(
+			async (setup) => {
+				app.src.settle(landed);
+				await awaitFrame(setup, (f) => ticketRow(f).includes("[awaiting]"), "the awaiting ticket");
+				await pressReturn(setup, "the decision modal", (f) => f.includes("Decision:"));
+				const panel = frameText(await settle(setup));
+				expect(panel).toContain("Handoff: review");
+				expect(panel).toContain("the Next step is held: the position is at the handoff limit");
+			},
+			WIDTH,
+			HEIGHT,
+			propsOf(app),
+		);
+		app.state.close();
+	});
+
+	test("the Decision screen states no hold when the Next step runs free (ADR 0092)", async () => {
+		// The same settled turn with the label the write landed on the ticket:
+		// the position offers the review the step names, no gate holds it, and
+		// the screen says nothing about a hold.
+		const landed: FetchOutcome = {
+			status: "success",
+			fetchedAt: "2026-08-31T10:01:00Z",
+			tickets: [fetched(5, "Persist source facts", ["ready-for-review"])],
+		};
+		const app = seededApp("awaiting", {}, landed, "live-worktree", { transition: reviewRoute() });
+		stubCheckout(app);
+		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+		await withApp(
+			async (setup) => {
+				app.src.settle(landed);
+				await awaitFrame(setup, (f) => ticketRow(f).includes("[awaiting]"), "the awaiting ticket");
+				await pressReturn(setup, "the decision modal", (f) => f.includes("Decision:"));
+				const panel = frameText(await settle(setup));
+				expect(panel).toContain("Handoff: review");
+				expect(panel).not.toContain("the Next step is held");
+			},
+			WIDTH,
+			HEIGHT,
+			propsOf(app),
+		);
+		app.state.close();
+	});
+
 	test("the Re-fire row fires the turn's transition again and swaps the record (ADR 0054)", async () => {
 		// The recorded outcome did not complete: no branch held, the way the
 		// score read found no verdict before the review comment landed. The
@@ -1379,7 +1464,6 @@ describe("the decision modal", () => {
 			fired: false,
 			when: null,
 			reason: "the pull request carries no review score",
-			autoAdvance: false,
 			ticketWrite: null,
 			positionTaskType: null,
 			positionTicketIdentity: null,
@@ -1423,13 +1507,12 @@ describe("the decision modal", () => {
 				expect(commands).toContain(
 					"gh issue edit #5 --repo github.com/acme/factory --add-label ready-for-review",
 				);
-				expect(app.state.lastCompletion(identity)?.transition).toEqual({
+				expect(app.state.ticketWorkCycle.lastCompletion(identity)?.transition).toEqual({
 					fired: true,
 					when: null,
 					reason: "",
 					ticketFacts: ["ready-for-review"],
 					pullRequestFacts: [],
-					autoAdvance: false,
 					ticketWrite: { added: ["ready-for-review"], removed: [] },
 					pullRequestWrite: null,
 					pullRequestIdentity: null,
@@ -1438,7 +1521,7 @@ describe("the decision modal", () => {
 					positionTaskType: "review",
 					positionTicketIdentity: identity,
 				});
-				expect(app.state.lastCompletion(identity)?.decision).toBeNull();
+				expect(app.state.ticketWorkCycle.lastCompletion(identity)?.decision).toBeNull();
 			},
 			WIDTH,
 			HEIGHT,
@@ -1538,7 +1621,7 @@ describe("the decision modal", () => {
 			);
 			// The last refresh listed the pull request: it stands in the state
 			// active, where the outcome's position points.
-			app.state.applyFetch(pullSource, pullOpen);
+			app.state.sourceFact.applyFetch(pullSource, pullOpen);
 			const pull = app.pullSrc;
 			if (pull === undefined) throw new Error("the pull source is missing");
 
@@ -1555,7 +1638,7 @@ describe("the decision modal", () => {
 					pull.settle(pullGone);
 					await awaitFrame(
 						setup,
-						() => app.state.stillListed(pullIdentity) === false,
+						() => app.state.sourceFact.stillListed(pullIdentity) === false,
 						"the pull request to leave its source",
 					);
 					await pressReturn(setup, "the decision modal", (f) => f.includes("Decision:"));
@@ -1583,7 +1666,7 @@ describe("the decision modal", () => {
 				{ transition: pullPositionRoute() },
 				pullOpen,
 			);
-			app.state.applyFetch(pullSource, pullOpen);
+			app.state.sourceFact.applyFetch(pullSource, pullOpen);
 			const pull = app.pullSrc;
 			if (pull === undefined) throw new Error("the pull source is missing");
 
@@ -1599,7 +1682,7 @@ describe("the decision modal", () => {
 					pull.settle(pullOpen);
 					await awaitFrame(
 						setup,
-						() => app.state.stillListed(pullIdentity),
+						() => app.state.sourceFact.stillListed(pullIdentity),
 						"the pull request to list",
 					);
 					await pressReturn(setup, "the decision modal", (f) => f.includes("Decision:"));
@@ -1623,7 +1706,7 @@ describe("the decision modal", () => {
 				{ transition: pullPositionRoute() },
 				pullOpen,
 			);
-			app.state.applyFetch(pullSource, pullOpen);
+			app.state.sourceFact.applyFetch(pullSource, pullOpen);
 			const pull = app.pullSrc;
 			if (pull === undefined) throw new Error("the pull source is missing");
 
@@ -1645,7 +1728,7 @@ describe("the decision modal", () => {
 					pull.settle(pullGone);
 					await awaitFrame(
 						setup,
-						() => app.state.stillListed(pullIdentity) === false,
+						() => app.state.sourceFact.stillListed(pullIdentity) === false,
 						"the pull request to leave its source",
 					);
 					const after = frameText(await settle(setup));
@@ -1697,7 +1780,7 @@ describe("the decision modal", () => {
 				expect(app.runner.commands()).toContain("herdr tab close tab-1");
 				// The name holder is gone with its predecessor tab. It is not a
 				// leftover fact, and the row must not carry a false marker.
-				expect(app.state.leftoverEnvironment(identity)).toBe(null);
+				expect(app.state.handoff.leftoverEnvironment(identity)).toBe(null);
 				expect(ticketRow(setup.captureCharFrame())).not.toContain("leftover");
 			},
 			WIDTH,
@@ -1883,7 +1966,7 @@ describe("the decision modal", () => {
 				expect(panel).toContain("Context 131072");
 				// Opening the edit starts nothing: the claim waits for the confirm.
 				expect(app.runner.commands().join("\n")).not.toContain("herdr agent start");
-				expect(app.state.ticketState(identity)).toBe("awaiting");
+				expect(app.state.ticketWorkCycle.ticketState(identity)).toBe("awaiting");
 
 				// The operator replaces the resolved model for this one handoff.
 				await press(setup, "j", "the environment row", (f) => f.includes("❯ Environment"));
@@ -1913,8 +1996,8 @@ describe("the decision modal", () => {
 				expect(start).toContain(
 					"--kind pi --pane pane-9 -- --model one-shot-model --context 131072",
 				);
-				expect(app.state.ticketState(identity)).toBe("handed-off");
-				expect(app.state.lastCompletion(identity)?.decision).toBe("handed-off");
+				expect(app.state.ticketWorkCycle.ticketState(identity)).toBe("handed-off");
+				expect(app.state.ticketWorkCycle.lastCompletion(identity)?.decision).toBe("handed-off");
 			},
 			WIDTH,
 			HEIGHT,
@@ -2029,7 +2112,7 @@ describe("the decision modal", () => {
 					(f) => !f.includes("Override") && f.includes("Decision:"),
 				);
 				expect(frameText(back)).toContain("❯ Close");
-				expect(app.state.ticketState(identity)).toBe("awaiting");
+				expect(app.state.ticketWorkCycle.ticketState(identity)).toBe("awaiting");
 				expect(app.runner.commands().join("\n")).not.toContain("herdr agent start");
 			},
 			WIDTH,
@@ -2053,7 +2136,7 @@ describe("the decision modal", () => {
 				// The bar carries the e Override hint with its reason; the panel's
 				// box title is the open signal.
 				expect(frame).not.toContain("┌─Override");
-				expect(app.state.ticketState(identity)).toBe("awaiting");
+				expect(app.state.ticketWorkCycle.ticketState(identity)).toBe("awaiting");
 				expect(app.runner.commands().join("\n")).not.toContain("herdr agent start");
 			},
 			WIDTH,
@@ -2216,7 +2299,7 @@ describe("the decision modal", () => {
 				expect(app.runner.commands()).toContain(
 					"herdr agent start persist-source-facts --kind codex --pane pane-9",
 				);
-				expect(app.state.lastCompletion(identity)?.decision).toBe("handed-off");
+				expect(app.state.ticketWorkCycle.lastCompletion(identity)?.decision).toBe("handed-off");
 			},
 			WIDTH,
 			HEIGHT,
@@ -2257,10 +2340,10 @@ describe("the decision modal", () => {
 				const list = await settle(setup);
 				expect(list).not.toContain("Decision:");
 				expect(ticketRow(list)).toContain("[open]");
-				expect(app.state.ticketState(identity)).toBe("open");
+				expect(app.state.ticketWorkCycle.ticketState(identity)).toBe("open");
 				// The decision the ask recorded stands: a fact is not
 				// rewritten.
-				expect(app.state.lastCompletion(identity)?.decision).toBe("handed-off");
+				expect(app.state.ticketWorkCycle.lastCompletion(identity)?.decision).toBe("handed-off");
 			},
 			WIDTH,
 			HEIGHT,
@@ -2291,13 +2374,13 @@ describe("the decision modal", () => {
 				// awaiting until the poll or a decision moves it, and its row
 				// reads the state it wears.
 				expect(app.runner.commands()).toContain("herdr agent focus pane-1");
-				const visible = app.state.visibleTickets(
+				const visible = app.state.ticketWorkCycle.ticketListViews(
 					app.config.workflowStates,
 					app.config.defaultTaskType,
-				);
+				).rows;
 				expect(visible[0]?.state).toBe("awaiting");
 				expect(ticketRow(await settle(setup))).toContain("[awaiting]");
-				expect(app.state.lastCompletion(identity)?.decision ?? null).toBeNull();
+				expect(app.state.ticketWorkCycle.lastCompletion(identity)?.decision ?? null).toBeNull();
 			},
 			WIDTH,
 			HEIGHT,
@@ -2325,9 +2408,12 @@ describe("the decision modal", () => {
 					"the focus",
 				);
 				expect(
-					app.state.visibleTickets(app.config.workflowStates, app.config.defaultTaskType)[0]?.state,
+					app.state.ticketWorkCycle.ticketListViews(
+						app.config.workflowStates,
+						app.config.defaultTaskType,
+					).rows[0]?.state,
 				).toBe("awaiting");
-				expect(app.state.lastCompletion(identity)?.decision ?? null).toBeNull();
+				expect(app.state.ticketWorkCycle.lastCompletion(identity)?.decision ?? null).toBeNull();
 				const frame = await settle(setup);
 				expect(ticketRow(frame)).toContain("[awaiting]");
 				expect(frame).not.toContain("Live:");
@@ -2416,8 +2502,8 @@ describe("the decision modal", () => {
 				// Esc cancels: nothing runs, no decision lands.
 				await pressEscape(setup, "the panel to close", (f) => !f.includes("Decision:"));
 				// The ticket is still awaiting, and the turn is still pending.
-				expect(app.state.ticketState(identity)).toBe("awaiting");
-				expect(app.state.lastCompletion(identity)?.decision).toBeNull();
+				expect(app.state.ticketWorkCycle.ticketState(identity)).toBe("awaiting");
+				expect(app.state.ticketWorkCycle.lastCompletion(identity)?.decision).toBeNull();
 				expect(ticketRow(await settle(setup))).toContain("[awaiting]");
 			},
 			WIDTH,
@@ -2682,8 +2768,8 @@ describe("the leftover environment", () => {
 				await pressReturn(setup, "the close", (f) => ticketRow(f).includes("leftover"));
 				// The state transition stands: the cycle closed. What failed is
 				// now a fact on the ticket, not only a message line that fades.
-				expect(app.state.ticketState(identity)).toBe("open");
-				expect(app.state.leftoverEnvironment(identity)).toEqual(
+				expect(app.state.ticketWorkCycle.ticketState(identity)).toBe("open");
+				expect(app.state.handoff.leftoverEnvironment(identity)).toEqual(
 					expect.objectContaining({
 						workspaceId: "ws-1",
 						paneId: "pane-1",
@@ -2769,8 +2855,8 @@ describe("the leftover environment", () => {
 				await awaitFrame(setup, (f) => ticketRow(f).includes("[awaiting]"), "the awaiting ticket");
 				await pressReturn(setup, "the decision modal", (f) => f.includes("Decision:"));
 				await pressReturn(setup, "the close", (f) => ticketRow(f).includes("leftover"));
-				expect(app.state.ticketState(identity)).toBe("open");
-				expect(app.state.leftoverEnvironment(identity)).toEqual(
+				expect(app.state.ticketWorkCycle.ticketState(identity)).toBe("open");
+				expect(app.state.handoff.leftoverEnvironment(identity)).toEqual(
 					expect.objectContaining({
 						workspaceId: "ws-1",
 						reason: "the close cleanup did not run: herdr is not reachable",
@@ -2817,8 +2903,8 @@ describe("the leftover environment", () => {
 				expect(frameText(frame)).toContain(
 					"abandoned; the close cleanup failed: the checkout is dirty",
 				);
-				expect(app.state.ticketState(identity)).toBe("open");
-				expect(app.state.leftoverEnvironment(identity)).toEqual(
+				expect(app.state.ticketWorkCycle.ticketState(identity)).toBe("open");
+				expect(app.state.handoff.leftoverEnvironment(identity)).toEqual(
 					expect.objectContaining({ workspaceId: "ws-1", reason: "the checkout is dirty" }),
 				);
 				// The row wears both trailing markers at once: the limit that
@@ -2853,12 +2939,12 @@ describe("the leftover environment", () => {
 				);
 				await pressReturn(setup, "the abandonment", (f) => ticketRow(f).includes("leftover"));
 				expect(app.runner.commands()).toContain("herdr worktree remove --workspace ws-1");
-				expect(app.state.ticketState(identity)).toBe("open");
+				expect(app.state.ticketWorkCycle.ticketState(identity)).toBe("open");
 				// The fact names the handoff the abandon ended, so the clear that
 				// follows reaches the environment this cycle left.
-				expect(app.state.leftoverEnvironment(identity)).toEqual(
+				expect(app.state.handoff.leftoverEnvironment(identity)).toEqual(
 					expect.objectContaining({
-						handoffId: app.state.latestHandoff(identity)?.handoffId,
+						handoffId: app.state.handoff.latestHandoff(identity)?.handoffId,
 						workspaceId: "ws-1",
 						reason: expect.stringContaining("dirty_worktree_requires_force"),
 					}),
@@ -2888,9 +2974,9 @@ describe("the leftover environment", () => {
 			async (setup) => {
 				app.src.settle(success);
 				await awaitFrame(setup, (f) => ticketRow(f).includes("leftover"), "the leftover marker");
-				expect(app.state.lastCompletion(identity)?.decision).toBe("auto-closed");
+				expect(app.state.ticketWorkCycle.lastCompletion(identity)?.decision).toBe("auto-closed");
 				expect(app.runner.commands()).toContain("herdr tab close tab-1");
-				expect(app.state.leftoverEnvironment(identity)).toEqual(
+				expect(app.state.handoff.leftoverEnvironment(identity)).toEqual(
 					expect.objectContaining({
 						environment: "live-worktree",
 						tabId: "tab-1",
@@ -2908,7 +2994,7 @@ describe("the leftover environment", () => {
 	test("queued Close cleanups finish before their queued handoff starts", async () => {
 		const app = seededApp("awaiting", {}, pairSuccess, "worktree");
 		stubCheckout(app);
-		const second = app.state.claimHandoff(
+		const second = app.state.handoff.claimHandoff(
 			secondIdentity,
 			{
 				agentType: "pi",
@@ -2921,12 +3007,12 @@ describe("the leftover environment", () => {
 			"open",
 		);
 		if (!second.ok) throw new Error(second.reason);
-		app.state.settleHandoff(second.claim.attemptId, true, undefined, {
+		app.state.handoff.settleHandoff(second.claim.attemptId, true, undefined, {
 			paneId: "pane-2",
 			tabId: "tab-2",
 			workspaceId: "ws-2",
 		});
-		app.state.settleTurn({
+		app.state.ticketWorkCycle.settleTurn({
 			ticketIdentity: secondIdentity,
 			handoffId: second.claim.attemptId,
 			taskType: "implement",
@@ -2985,18 +3071,18 @@ describe("the leftover environment", () => {
 	test("a cleanup that ran no command ends only the fact of its own row", async () => {
 		const app = seededApp("awaiting", {}, success, "worktree");
 		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
-		const first = app.state.latestHandoff(identity);
+		const first = app.state.handoff.latestHandoff(identity);
 		if (first === null) throw new Error("the seeded handoff is missing");
 		// One cycle closed over a workspace herdr would not remove: its fact
 		// stands, and it names that workspace.
-		app.state.applyCompletionDecision({
+		app.state.ticketWorkCycle.applyCompletionDecision({
 			ticketIdentity: identity,
 			handoffId: first.handoffId,
 			decision: "closed",
 			decidedAt: "2026-09-02T09:30:00.000Z",
 		});
 		reverify(app, success, "2026-09-02T09:31:00.000Z");
-		app.state.recordLeftoverEnvironment({
+		app.state.handoff.recordLeftoverEnvironment({
 			ticketIdentity: identity,
 			handoffId: first.handoffId,
 			reason: "the worktree is dirty",
@@ -3004,7 +3090,7 @@ describe("the leftover environment", () => {
 		});
 		// A second cycle whose handoff stored no environment handle at all: its
 		// Close cleanup has nothing to close.
-		const claim = app.state.claimHandoff(
+		const claim = app.state.handoff.claimHandoff(
 			identity,
 			{
 				agentType: "pi",
@@ -3017,8 +3103,8 @@ describe("the leftover environment", () => {
 			"open",
 		);
 		if (!claim.ok) throw new Error(claim.reason);
-		app.state.settleHandoff(claim.claim.attemptId, true, undefined, { paneId: "pane-2" });
-		app.state.settleTurn({
+		app.state.handoff.settleHandoff(claim.claim.attemptId, true, undefined, { paneId: "pane-2" });
+		app.state.ticketWorkCycle.settleTurn({
 			ticketIdentity: identity,
 			handoffId: claim.claim.attemptId,
 			taskType: "implement",
@@ -3038,9 +3124,9 @@ describe("the leftover environment", () => {
 				// cleanup did not reach stands, and no command resolved it.
 				expect(app.runner.commands().join("\n")).not.toContain("herdr worktree remove");
 				expect(app.runner.commands().join("\n")).not.toContain("herdr tab close");
-				expect(app.state.leftoverEnvironments(identity)).toEqual([
+				expect(app.state.handoff.leftoverEnvironment(identity)).toEqual(
 					expect.objectContaining({ handoffId: first.handoffId, workspaceId: "ws-1" }),
-				]);
+				);
 			},
 			WIDTH,
 			HEIGHT,
@@ -3194,10 +3280,12 @@ describe("the leftover environment", () => {
 				expect(frameText(setup.captureCharFrame())).toContain(
 					"this agent started as persist-source-facts-c2",
 				);
-				expect(app.state.leftoverEnvironment(identity)).not.toBe(null);
+				expect(app.state.handoff.leftoverEnvironment(identity)).not.toBe(null);
 				// The durable handoff knows the name herdr accepted, so its
 				// completion trace will name the agent that actually ran.
-				expect(app.state.agentNameForTicket(identity)).toBe("persist-source-facts-c2");
+				expect(app.state.ticketWorkCycle.agentNameForTicket(identity)).toBe(
+					"persist-source-facts-c2",
+				);
 			},
 			WIDTH,
 			HEIGHT,
@@ -3242,7 +3330,7 @@ describe("the leftover environment", () => {
 				);
 				// The stranger blocks the new name, but the stable name was still
 				// this ticket's own leftover. That first collision remains a fact.
-				expect(app.state.leftoverEnvironment(identity)).toEqual(
+				expect(app.state.handoff.leftoverEnvironment(identity)).toEqual(
 					expect.objectContaining({ paneId: "pane-1", workspaceId: "ws-1" }),
 				);
 				expect(ticketRow(setup.captureCharFrame())).toContain("leftover");
@@ -3287,7 +3375,7 @@ describe("the leftover environment", () => {
 					"a leftover agent still holds the herdr name persist-source-facts; this agent started as persist-source-facts-c2",
 				);
 				// The agent runs, so the cycle stands: the ticket is handed off.
-				expect(app.state.ticketState(identity)).toBe("handed-off");
+				expect(app.state.ticketWorkCycle.ticketState(identity)).toBe("handed-off");
 			},
 			WIDE_STATUS,
 			HEIGHT,
@@ -3454,10 +3542,10 @@ describe("the auto dispatch", () => {
 				]);
 				// No ticket is left with an unresolved handoff: every claim
 				// the queue held settled, so nothing needs recovery.
-				const visible = app.state.visibleTickets(
+				const visible = app.state.ticketWorkCycle.ticketListViews(
 					app.config.workflowStates,
 					app.config.defaultTaskType,
-				);
+				).rows;
 				expect(visible).toHaveLength(2);
 				for (const ticket of visible) {
 					expect(ticket.handoffRecoveryRequired).toBe(false);
@@ -3512,7 +3600,7 @@ describe("the auto dispatch", () => {
 						ticketRow(f, "Watch agent turns").includes("missing"),
 					"the auto close and the pair dispatch",
 				);
-				expect(app.state.lastCompletion(identity)?.decision).toBe("auto-closed");
+				expect(app.state.ticketWorkCycle.lastCompletion(identity)?.decision).toBe("auto-closed");
 				// The re-read lands after the decision: the re-verify gate opens
 				// for the finished ticket, and the next cycle re-runs the
 				// dispatch. The same-type hold withholds it.
@@ -3556,7 +3644,7 @@ describe("the auto dispatch", () => {
 				expect(frameText(failed)).toContain("no model setting");
 				// Nothing ran, and the ticket stayed the open ticket it was.
 				expect(app.runner.commands().some((c) => c.startsWith("herdr agent start"))).toBe(false);
-				expect(app.state.ticketState(identity)).toBe("open");
+				expect(app.state.ticketWorkCycle.ticketState(identity)).toBe("open");
 				expect(ticketRow(failed)).toContain("[open]");
 			},
 			WIDTH,
@@ -3606,7 +3694,7 @@ describe("the auto decision", () => {
 			{ taskTypes: { ...BASE_CONFIG.taskTypes, review } },
 			success,
 			"live-worktree",
-			{ transition: reviewRoute({ autoAdvance: true }) },
+			{ transition: reviewRoute() },
 		);
 		stubCheckout(app);
 		// The routed agent's pane is live from the first list: a later tick
@@ -3648,8 +3736,12 @@ describe("the auto decision", () => {
 					(f) => f.includes("auto-handed-off"),
 					"the automatic route",
 				);
-				expect(app.state.lastCompletion(identity)?.decision).toBe("auto-handed-off");
-				expect(["handed-off", "running"]).toContain(app.state.ticketState(identity) ?? "");
+				expect(app.state.ticketWorkCycle.lastCompletion(identity)?.decision).toBe(
+					"auto-handed-off",
+				);
+				expect(["handed-off", "running"]).toContain(
+					app.state.ticketWorkCycle.ticketState(identity) ?? "",
+				);
 				// The row wears the workflow task's badge.
 				expect(ticketRow(frame)).toContain("[review]");
 				// The prompt carried the settled turn's last message, and the
@@ -3685,7 +3777,7 @@ describe("the auto decision", () => {
 				// The model the settled handoff ran on: a route must not inherit it.
 				model: "opus-4",
 				thinking: "high",
-				transition: reviewRoute({ autoAdvance: true }),
+				transition: reviewRoute(),
 			},
 		);
 		stubCheckout(app);
@@ -3757,7 +3849,7 @@ describe("the auto decision", () => {
 			},
 			success,
 			"live-worktree",
-			{ transition: reviewRoute({ autoAdvance: true }) },
+			{ transition: reviewRoute() },
 		);
 		stubCheckout(app);
 		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
@@ -3787,8 +3879,10 @@ describe("the auto decision", () => {
 				// the drop keeps the decision the ask recorded, with the ticket
 				// resting open beside its dropped route (ADR 0064, ADR 0072).
 				expect(app.runner.commands().some((c) => c.startsWith("herdr agent start"))).toBe(false);
-				expect(app.state.ticketState(identity)).toBe("open");
-				expect(app.state.lastCompletion(identity)?.decision).toBe("auto-handed-off");
+				expect(app.state.ticketWorkCycle.ticketState(identity)).toBe("open");
+				expect(app.state.ticketWorkCycle.lastCompletion(identity)?.decision).toBe(
+					"auto-handed-off",
+				);
 
 				// The live agent that finished the turn does not reopen the decided
 				// turn: the trace holds a decision, so the ticket rests open on
@@ -3805,8 +3899,10 @@ describe("the auto decision", () => {
 					]),
 				});
 				await sleep(300);
-				expect(app.state.ticketState(identity)).toBe("open");
-				expect(app.state.lastCompletion(identity)?.decision).toBe("auto-handed-off");
+				expect(app.state.ticketWorkCycle.ticketState(identity)).toBe("open");
+				expect(app.state.ticketWorkCycle.lastCompletion(identity)?.decision).toBe(
+					"auto-handed-off",
+				);
 			},
 			WIDTH,
 			HEIGHT,
@@ -3835,8 +3931,8 @@ describe("the auto decision", () => {
 				);
 				// The settled turn is auto-closed: the cycle ended, the trace
 				// carries the automatic decision, and the live tab was closed.
-				expect(app.state.ticketState(identity)).toBe("open");
-				expect(app.state.lastCompletion(identity)?.decision).toBe("auto-closed");
+				expect(app.state.ticketWorkCycle.ticketState(identity)).toBe("open");
+				expect(app.state.ticketWorkCycle.lastCompletion(identity)?.decision).toBe("auto-closed");
 				const commands = app.runner.commands();
 				expect(commands).toContain("herdr tab close tab-1");
 				// At the handoff limit, auto-handoff leaves the open ticket
@@ -3856,11 +3952,11 @@ describe("the auto decision", () => {
 			{ maxParallelAgents: 1 },
 			pairSuccess,
 			"live-worktree",
-			{ transition: reviewRoute({ autoAdvance: true }) },
+			{ transition: reviewRoute() },
 		);
 		// The second ticket holds the single parallel seat with a live agent,
 		// so the route waits and the ticket stays awaiting.
-		const claim = app.state.claimHandoff(
+		const claim = app.state.handoff.claimHandoff(
 			secondIdentity,
 			{
 				agentType: "pi",
@@ -3873,7 +3969,7 @@ describe("the auto decision", () => {
 			"open",
 		);
 		if (!claim.ok) throw new Error(claim.reason);
-		app.state.settleHandoff(claim.claim.attemptId, true, undefined, {
+		app.state.handoff.settleHandoff(claim.claim.attemptId, true, undefined, {
 			paneId: "pane-6",
 			tabId: "tab-6",
 			workspaceId: "ws-6",
@@ -3901,8 +3997,49 @@ describe("the auto decision", () => {
 				);
 				const frame = await settle(setup);
 				expect(frame).not.toContain("Decision:");
-				expect(app.state.ticketState(identity)).toBe("awaiting");
-				expect(app.state.lastCompletion(identity)?.decision).toBeNull();
+				expect(app.state.ticketWorkCycle.ticketState(identity)).toBe("awaiting");
+				expect(app.state.ticketWorkCycle.lastCompletion(identity)?.decision).toBeNull();
+			},
+			WIDTH,
+			HEIGHT,
+			propsOf(app),
+		);
+		app.state.close();
+	});
+
+	/**
+	 * The hold's reader (ADR 0092). In auto mode the Decision screen never opens on
+	 * a settled turn, so the Message line is where a held Next step stands: the
+	 * test reads the line the running loop reports, in the app's own frames.
+	 */
+	test("auto mode states a held Next step on the Message line", async () => {
+		// The seeded turn's fire derived its review on the ticket, and the source's
+		// own labels still offer the implement task: the step stands held, and the
+		// turn rests awaiting.
+		const app = seededAppInAutoMode(
+			"awaiting",
+			{ maxParallelAgents: 1 },
+			pairSuccess,
+			"live-worktree",
+			{ transition: reviewRoute() },
+		);
+		// No Agent works: the cycle's only fact is the settled turn it resolves.
+		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+		await withApp(
+			async (setup) => {
+				app.src.settle(pairSuccess);
+				await awaitFrame(
+					setup,
+					(f) =>
+						messageRowOf(f).includes(
+							`ticket ${identity} holds its Next step review: the position no longer offers the task`,
+						),
+					"the held Next step on the Message line",
+				);
+				const frame = await settle(setup);
+				expect(frame).not.toContain("Decision:");
+				expect(app.state.ticketWorkCycle.ticketState(identity)).toBe("awaiting");
+				expect(app.state.ticketWorkCycle.lastCompletion(identity)?.decision).toBeNull();
 			},
 			WIDTH,
 			HEIGHT,
@@ -3912,10 +4049,10 @@ describe("the auto decision", () => {
 	});
 });
 
-describe("the no-auto-decision type parks its completions for the operator (ADR 0085)", () => {
+describe("the Operator-decides type parks its completions for the operator (ADR 0085, ADR 0092)", () => {
 	// The config the park cases run on: the seeded app's own types, with the
 	// analyze type the shipped configuration carries - no transition, the
-	// no-auto-decision flag on - beside the implement control.
+	// operator-decides flag on - beside the implement control.
 	const withAnalyze: Partial<FactoryConfig> = {
 		taskTypes: {
 			...BASE_CONFIG.taskTypes,
@@ -3927,7 +4064,7 @@ describe("the no-auto-decision type parks its completions for the operator (ADR 
 				template:
 					"Analyze the following {source-kind}.\n\nRepository: {repository}\n\n" +
 					"{external-key}: {title}\n\nURL: {source-url}\n\nLabels: {labels}\n\nDescription:\n{description}",
-				noAutoDecision: true,
+				operatorDecides: true,
 			},
 		},
 	};
@@ -3945,16 +4082,16 @@ describe("the no-auto-decision type parks its completions for the operator (ADR 
 				// The park stands ahead of the outcome checks: a completion
 				// without a transition - the case that would close - rests in
 				// awaiting, undecided, and the environment stays untouched.
-				expect(app.state.ticketState(identity)).toBe("awaiting");
-				expect(app.state.lastCompletion(identity)?.decision).toBeNull();
+				expect(app.state.ticketWorkCycle.ticketState(identity)).toBe("awaiting");
+				expect(app.state.ticketWorkCycle.lastCompletion(identity)?.decision).toBeNull();
 				// Cycles keep coming, and the parked turn keeps resting: no tab
 				// close kills the live session, no handoff takes the ticket, and
 				// the queue holds nothing for it - a continuation needs a
 				// transition that fired, and a parked ticket is not open.
 				await sleep(150);
-				expect(app.state.ticketState(identity)).toBe("awaiting");
-				expect(app.state.lastCompletion(identity)?.decision).toBeNull();
-				expect(app.state.workQueue()).toHaveLength(0);
+				expect(app.state.ticketWorkCycle.ticketState(identity)).toBe("awaiting");
+				expect(app.state.ticketWorkCycle.lastCompletion(identity)?.decision).toBeNull();
+				expect(app.state.workQueue.items()).toHaveLength(0);
 				const commands = app.runner.commands();
 				expect(commands.filter((c) => c.startsWith("herdr tab close"))).toHaveLength(0);
 				expect(commands.filter((c) => c.startsWith("herdr agent start"))).toHaveLength(0);
@@ -3977,8 +4114,8 @@ describe("the no-auto-decision type parks its completions for the operator (ADR 
 				// implement carries the flag off, and no transition fired: the
 				// automatic rule closes the turn, the way it did before the flag
 				// existed, in a config that also carries the analyze type.
-				expect(app.state.ticketState(identity)).toBe("open");
-				expect(app.state.lastCompletion(identity)?.decision).toBe("auto-closed");
+				expect(app.state.ticketWorkCycle.ticketState(identity)).toBe("open");
+				expect(app.state.ticketWorkCycle.lastCompletion(identity)?.decision).toBe("auto-closed");
 				expect(app.runner.commands()).toContain("herdr tab close tab-1");
 			},
 			WIDTH,
@@ -4009,8 +4146,8 @@ describe("the no-auto-decision type parks its completions for the operator (ADR 
 				);
 				expect(frameText(opened)).toContain("The closed decision lands on the settled turn.");
 				await confirmPanel(setup, "the close", (f) => ticketRow(f).includes("[open]"));
-				expect(app.state.lastCompletion(identity)?.decision).toBe("closed");
-				expect(app.state.ticketState(identity)).toBe("open");
+				expect(app.state.ticketWorkCycle.lastCompletion(identity)?.decision).toBe("closed");
+				expect(app.state.ticketWorkCycle.ticketState(identity)).toBe("open");
 				expect(app.runner.commands()).toContain("herdr tab close tab-1");
 			},
 			WIDTH,
@@ -4046,7 +4183,7 @@ describe("the no-auto-decision type parks its completions for the operator (ADR 
 					]),
 				});
 				await awaitFrame(setup, (f) => ticketRow(f).includes("[running]"), "the reopened ticket");
-				expect(app.state.ticketState(identity)).toBe("running");
+				expect(app.state.ticketWorkCycle.ticketState(identity)).toBe("running");
 				// The session's next settle refreshes the trace in place: still
 				// parked, still undecided, still holding its session.
 				app.runner.set("herdr", ["agent", "list"], {
@@ -4065,8 +4202,8 @@ describe("the no-auto-decision type parks its completions for the operator (ADR 
 					(f) => ticketRow(f).includes("[awaiting]"),
 					"the settled ticket, parked again",
 				);
-				expect(app.state.ticketState(identity)).toBe("awaiting");
-				expect(app.state.lastCompletion(identity)?.decision).toBeNull();
+				expect(app.state.ticketWorkCycle.ticketState(identity)).toBe("awaiting");
+				expect(app.state.ticketWorkCycle.lastCompletion(identity)?.decision).toBeNull();
 				expect(app.runner.commands().filter((c) => c.startsWith("herdr tab close"))).toHaveLength(
 					0,
 				);
@@ -4098,11 +4235,11 @@ describe("the handoff queue", () => {
 		const state = openFactoryState(join(dir, "state.sqlite"));
 		// The test reads the list unsplit: a fresh file opens grouped by
 		// repository (ADR 0066), so the fixture holds the flat axis.
-		state.setGroupingAxis("tickets", "none");
-		state.initializeSources([source]);
-		state.applyFetch(source, pairMoved);
+		state.grouping.setGroupingAxis("tickets", "none");
+		state.sourceFact.initializeSources([source]);
+		state.sourceFact.applyFetch(source, pairMoved);
 		// The second ticket starts in flight, with the stored herdr handles.
-		const claim = state.claimHandoff(
+		const claim = state.handoff.claimHandoff(
 			secondIdentity,
 			{
 				agentType: "pi",
@@ -4115,7 +4252,7 @@ describe("the handoff queue", () => {
 			"open",
 		);
 		if (!claim.ok) throw new Error(claim.reason);
-		state.settleHandoff(claim.claim.attemptId, true, undefined, {
+		state.handoff.settleHandoff(claim.claim.attemptId, true, undefined, {
 			paneId: "pane-2",
 			tabId: "tab-2",
 			workspaceId: "ws-2",
@@ -4267,11 +4404,14 @@ describe("the handoff queue", () => {
 				// the Work queue empty.
 				const starts = inner.commands().filter((c) => c.startsWith("herdr agent start"));
 				expect(starts).toEqual(["herdr agent start persist-source-facts --kind pi --pane pane-1"]);
-				expect(state.hasWorkItem(secondIdentity)).toBe(false);
+				expect(state.workQueue.hasWorkItem(secondIdentity)).toBe(false);
 				// The abandonment ran the Close cleanup on the stored
 				// environment.
 				expect(inner.commands()).toContain("herdr tab close tab-2");
-				const visible = state.visibleTickets(config.workflowStates, config.defaultTaskType);
+				const visible = state.ticketWorkCycle.ticketListViews(
+					config.workflowStates,
+					config.defaultTaskType,
+				).rows;
 				const movedOn = visible.find((t) => t.identity === secondIdentity);
 				const inFlight = visible.find((t) => t.identity === identity);
 				expect(movedOn?.state).toBe("open");
@@ -4309,7 +4449,10 @@ describe("the handoff queue", () => {
 					"herdr agent start persist-source-facts --kind pi --pane pane-1",
 					"herdr agent start watch-agent-turns --kind pi --pane pane-1",
 				]);
-				const finalVisible = state.visibleTickets(config.workflowStates, config.defaultTaskType);
+				const finalVisible = state.ticketWorkCycle.ticketListViews(
+					config.workflowStates,
+					config.defaultTaskType,
+				).rows;
 				const reHandled = finalVisible.find((t) => t.identity === secondIdentity);
 				expect(reHandled?.state).toBe("handed-off");
 				expect(reHandled?.handoffRecoveryRequired).toBe(false);
@@ -4326,6 +4469,80 @@ describe("the handoff queue", () => {
 			},
 		);
 		state.close();
+	});
+
+	/**
+	 * The restart's first cycle counts the seat the live Agent holds (ADR 0021).
+	 *
+	 * The plane restarts while one task is already running under a 1/1 Parallel
+	 * limit, and its Work queue holds a start that waited out the restart. The
+	 * running task is two hours past its Startup grace, so the only fact that can
+	 * hold its seat is the herdr poll that lists its Agent. The poll lands in the
+	 * observation loop; the UI's copy of the same list lands at the cycle's end.
+	 * A gate that measured the cycle against that copy read no Agent at all, read
+	 * a free seat, and started the queued task on top of the live one - 2/1.
+	 */
+	test("a restart counts the live agent's seat before the queue's pickup", async () => {
+		const app = seededApp("in-flight", { maxParallelAgents: 1 }, pairSuccess, "live-worktree", {
+			stateNow: () => Date.now() - 2 * 60 * 60 * 1000,
+		});
+		stubCheckout(app);
+		// The start the previous run queued, still waiting when the plane opens.
+		const enqueued = app.state.workQueue.enqueueWork({
+			ticketIdentity: secondIdentity,
+			origin: "workflow",
+			choice: {
+				agentType: "pi",
+				environment: "live-worktree",
+				taskType: "implement",
+				model: "",
+				thinking: "",
+				contextWindow: "",
+			},
+			previousMessage: "",
+			automatic: true,
+		});
+		if (!enqueued.ok) throw new Error(enqueued.reason);
+		// herdr lists the running task's Agent working in its pane.
+		app.runner.set("herdr", ["agent", "list"], {
+			stdout: agentListJson([
+				{
+					paneId: "pane-1",
+					tabId: "tab-1",
+					workspaceId: "ws-1",
+					agent: "persist-source-facts",
+					status: "working",
+				},
+			]),
+		});
+		// Every command a wrongful start needs, so the start it must not run
+		// would have run to the end.
+		const path = Object.values(app.config.repos)[0];
+		app.runner.set("herdr", ["workspace", "list"], {
+			stdout: workspaceListJson([{ id: "ws-1", checkoutPath: path }]),
+		});
+		app.runner.set("herdr", ["tab", "create", "--workspace", "ws-1", "--cwd", path, "--no-focus"], {
+			stdout: tabCreateJson("pane-9", "tab-9"),
+		});
+
+		await withApp(
+			async (setup) => {
+				app.src.settle(pairSuccess);
+				await sleep(400);
+				const frame = await settle(setup, 1000);
+				// The one seat the cap allows, held by the live Agent.
+				expect(frameText(frame)).toContain("auto: off 1/1");
+				// The queued start never took a seat: its row stands, and no Agent
+				// started beside the live one.
+				expect(app.state.workQueue.hasWorkItem(secondIdentity)).toBe(true);
+				expect(app.state.handoff.openAttemptTickets()).toEqual([]);
+				expect(app.runner.commands().join("\n")).not.toContain("herdr agent start");
+			},
+			WIDTH,
+			HEIGHT,
+			propsOf(app),
+		);
+		app.state.close();
 	});
 });
 
@@ -4344,7 +4561,6 @@ describe("the re-fire of a recorded skip (ADR 0042)", () => {
 			reason: "no linked pull request was found for the ticket",
 			ticketFacts: [],
 			pullRequestFacts: ["ready-for-review"],
-			autoAdvance: false,
 			ticketWrite: null,
 			pullRequestWrite: null,
 			pullRequestIdentity: null,
@@ -4478,7 +4694,7 @@ describe("the re-fire of a recorded skip (ADR 0042)", () => {
 				).toHaveLength(1);
 				// The re-fire recorded over the skip: the trace is the re-fired
 				// outcome with its position on the pull request.
-				const transition = app.state.lastCompletion(identity)?.transition;
+				const transition = app.state.ticketWorkCycle.lastCompletion(identity)?.transition;
 				expect(transition).toEqual(
 					expect.objectContaining({
 						refired: true,
@@ -4495,9 +4711,9 @@ describe("the re-fire of a recorded skip (ADR 0042)", () => {
 				// The route started the review handoff on the pull request's
 				// own environment.
 				expect(commands.some((command) => command.startsWith("herdr agent prompt"))).toBe(true);
-				expect(app.state.ticketState(pullIdentity)).toBe("handed-off");
+				expect(app.state.ticketWorkCycle.ticketState(pullIdentity)).toBe("handed-off");
 				// The issue stands open and covered behind the pull request.
-				expect(app.state.ticketState(identity)).toBe("open");
+				expect(app.state.ticketWorkCycle.ticketState(identity)).toBe("open");
 			},
 			WIDTH,
 			HEIGHT,

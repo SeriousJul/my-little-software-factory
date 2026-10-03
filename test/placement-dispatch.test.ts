@@ -14,7 +14,6 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-
 import type { FactoryConfig, GitHubSourceKind, WorkflowState } from "../src/config.ts";
 import type { FetchedTicket } from "../src/domain/ticket.ts";
 import { baseChoice, type HandoffChoice } from "../src/handoff.ts";
@@ -24,7 +23,8 @@ import {
 	type HandoffDispatch,
 	type HandoffDispatchReports,
 } from "../src/handoff-dispatch.ts";
-import { FactoryState } from "../src/state.ts";
+import type { FactoryState } from "../src/state.ts";
+import { openFactoryState } from "../src/state.ts";
 import { BASE_CONFIG } from "./base-config.ts";
 import {
 	FakeRunner,
@@ -176,11 +176,11 @@ function rig(listings: Listing[], machine: WorkflowState[] = BASE_CONFIG.workflo
 		})),
 		repos: { "github.com/acme/factory": checkout },
 	};
-	const state = new FactoryState(":memory:");
+	const state = openFactoryState(":memory:");
 	openStates.push(state);
-	state.initializeSources(sources);
+	state.sourceFact.initializeSources(sources);
 	for (const listing of listings) {
-		state.applyFetch(listing.source, {
+		state.sourceFact.applyFetch(listing.source, {
 			status: "success",
 			fetchedAt: "2026-09-01T00:00:00Z",
 			tickets: [listing.ticket],
@@ -215,7 +215,7 @@ function rig(listings: Listing[], machine: WorkflowState[] = BASE_CONFIG.workflo
 		commands: () => runner.commands(),
 		relist: (fresh) => {
 			for (const listing of fresh) {
-				state.applyFetch(listing.source, {
+				state.sourceFact.applyFetch(listing.source, {
 					status: "success",
 					fetchedAt: "2026-09-01T00:01:00Z",
 					tickets: [listing.ticket],
@@ -294,7 +294,7 @@ describe("the write the start runs", () => {
 		expect(rigRef.events).toContain(
 			`notice:placement of "${PULL.title}": added labels ready-for-review; removed labels needs-work`,
 		);
-		expect(rigRef.state.ticketState(PULL.identity)).toBe("handed-off");
+		expect(rigRef.state.ticketWorkCycle.ticketState(PULL.identity)).toBe("handed-off");
 	});
 
 	test("a parked ticket placed by a task a state offers writes before the agent starts", async () => {
@@ -325,7 +325,7 @@ describe("the write the start runs", () => {
 		expect(rigRef.events).toContain(
 			`notice:placement of "${ISSUE.title}": added labels ready-for-review; removed labels held`,
 		);
-		expect(rigRef.state.ticketState(ISSUE.identity)).toBe("handed-off");
+		expect(rigRef.state.ticketWorkCycle.ticketState(ISSUE.identity)).toBe("handed-off");
 	});
 
 	test("the write runs on the newest membership the target state matches, and the other listing stands", async () => {
@@ -378,7 +378,7 @@ describe("the no-placement faces", () => {
 		await expect(enqueued).resolves.toEqual({ ok: true });
 		await expect(started).resolves.toEqual({ ok: true });
 		expect(rigRef.commands().some((command) => command.startsWith("gh "))).toBe(false);
-		expect(rigRef.state.ticketState(PULL.identity)).toBe("handed-off");
+		expect(rigRef.state.ticketWorkCycle.ticketState(PULL.identity)).toBe("handed-off");
 	});
 
 	test("the default handoff of a parked ticket takes no egress", async () => {
@@ -413,7 +413,7 @@ describe("the refusal", () => {
 		});
 		expect(rigRef.commands().some((command) => command.startsWith("gh "))).toBe(false);
 		expect(rigRef.commands().some((command) => command.startsWith("herdr "))).toBe(false);
-		expect(rigRef.state.ticketState(ISSUE.identity)).toBe("open");
+		expect(rigRef.state.ticketWorkCycle.ticketState(ISSUE.identity)).toBe("open");
 		expect(rigRef.events).toContain(
 			"error:task type review is not offered by any state that matches a github-issue ticket",
 		);
@@ -448,7 +448,7 @@ describe("the refusal", () => {
 		// The refused placement stands before the environment the start would
 		// have built: herdr hears nothing at all.
 		expect(rigRef.commands().some((command) => command.startsWith("herdr "))).toBe(false);
-		expect(rigRef.state.ticketState(PULL.identity)).toBe("open");
+		expect(rigRef.state.ticketWorkCycle.ticketState(PULL.identity)).toBe("open");
 		expect(rigRef.events).toContain("error:gh pr edit #5 failed: gh is unavailable");
 	});
 
@@ -466,7 +466,7 @@ describe("the refusal", () => {
 		// stands, the ticket keeps its state, and the position now offers
 		// the chosen task.
 		expect(rigRef.commands().indexOf(PULL_WRITE)).toBeGreaterThanOrEqual(0);
-		expect(rigRef.state.ticketState(PULL.identity)).toBe("open");
+		expect(rigRef.state.ticketWorkCycle.ticketState(PULL.identity)).toBe("open");
 	});
 });
 
@@ -495,7 +495,7 @@ describe("the idempotent rule", () => {
 		// The labels already match the spec: the re-run takes no egress.
 		const edits = rigRef.commands().filter((command) => command.startsWith("gh "));
 		expect(edits).toHaveLength(1);
-		expect(rigRef.state.ticketState(PULL.identity)).toBe("handed-off");
+		expect(rigRef.state.ticketWorkCycle.ticketState(PULL.identity)).toBe("handed-off");
 	});
 });
 
@@ -517,7 +517,7 @@ describe("the queue", () => {
 		// The operator removes the waiting start: the item leaves, and the
 		// write it would have run never runs.
 		expect(capped.removeQueueItem(PULL.identity)).toBe(true);
-		expect(rigRef.state.workQueue()).toHaveLength(0);
+		expect(rigRef.state.workQueue.items()).toHaveLength(0);
 		expect(rigRef.commands().some((command) => command.startsWith("gh "))).toBe(false);
 		// A seat frees and the start the operator re-asks places at its
 		// pickup: the write is the pickup's first command.
@@ -537,7 +537,7 @@ describe("the queue", () => {
 			"the start's settle",
 		);
 		expect(rigRef.commands().some((command) => command === PULL_WRITE)).toBe(true);
-		expect(rigRef.state.ticketState(PULL.identity)).toBe("handed-off");
+		expect(rigRef.state.ticketWorkCycle.ticketState(PULL.identity)).toBe("handed-off");
 	});
 
 	test("a queued override whose labels move while it waits is dropped at its pickup, and the force-dispatch refuses the same way", async () => {
@@ -585,14 +585,14 @@ describe("the queue", () => {
 		// The pickup's drop (ADR 0049): a pickup that fails a check leaves the
 		// item out of the queue with the warning, the ticket keeps its state,
 		// and the source stands untouched.
-		expect(rigRef.state.workQueue()).toHaveLength(0);
-		expect(rigRef.state.ticketState(PULL.identity)).toBe("open");
+		expect(rigRef.state.workQueue.items()).toHaveLength(0);
+		expect(rigRef.state.ticketWorkCycle.ticketState(PULL.identity)).toBe("open");
 		expect(rigRef.commands().some((command) => command.startsWith("gh "))).toBe(false);
 		// The force-dispatch re-runs the same check and refuses the same way:
 		// the item leaves with the warning, and the write never runs. The item
 		// enters the queue directly, because a dispatch's own pickup would
 		// drop it before the force-dispatch could meet it.
-		const enqueued = rigRef.state.enqueueWork({
+		const enqueued = rigRef.state.workQueue.enqueueWork({
 			ticketIdentity: PULL.identity,
 			origin: "open",
 			choice: reviewChoice,
@@ -607,8 +607,8 @@ describe("the queue", () => {
 				`warning:force-dispatch of "${PULL.title}" failed: state ready-for-review excludes label wip, and the ticket carries it`,
 			"the force-dispatch's refusal",
 		);
-		expect(rigRef.state.workQueue()).toHaveLength(0);
-		expect(rigRef.state.ticketState(PULL.identity)).toBe("open");
+		expect(rigRef.state.workQueue.items()).toHaveLength(0);
+		expect(rigRef.state.ticketWorkCycle.ticketState(PULL.identity)).toBe("open");
 		expect(rigRef.commands().some((command) => command.startsWith("gh "))).toBe(false);
 	});
 });

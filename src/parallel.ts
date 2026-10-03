@@ -17,26 +17,49 @@
  * - every Consultation in `opening` or `working` state; the other
  *   Consultation states hold no seat.
  *
- * The readers pass the same ingredients - the state database, the latest
- * successful agent list (null before the first success or while it fails),
- * the clock, and the Startup grace - so the gates and the mode line can
- * never disagree about the count.
+ * The rule takes its facts as data (issue #202): the caller passes the ticket
+ * facts, the claim identities, the Consultation states, the agent list, the
+ * clock, and the grace. The rule never reaches a state module, so the gates
+ * and the mode line can never disagree about the count, and a test states the
+ * facts instead of opening a state file.
  */
 
 import { agentInPane } from "./domain/agent.ts";
 import type { TicketState } from "./domain/ticket.ts";
 import type { HerdrAgent } from "./herdr.ts";
-import type { ConsultationState, FactoryState } from "./state.ts";
+import type { ConsultationState } from "./state/consultation-record.ts";
 
 /** The Consultation states that hold a Parallel limit seat. */
 export const CONSULTATION_SEAT_STATES: readonly ConsultationState[] = ["opening", "working"];
 
 /** The ticket states that can hold a Parallel limit seat. */
-const TICKET_SEAT_STATES: readonly TicketState[] = ["handed-off", "running"];
+export const TICKET_SEAT_STATES: readonly TicketState[] = ["handed-off", "running"];
 
-export interface ParallelSeatCountInput {
-	/** The factory state: the tickets, the handoff claims, the Consultations. */
-	state: FactoryState;
+/** What one in-flight ticket holds for the seat count. */
+export interface ParallelSeatTicketFact {
+	ticketIdentity: string;
+	/** The pane the ticket's agent runs in; null when it has none. */
+	paneId: string | null;
+	/** When the ticket's agent started, in ISO time. */
+	startedAt: string;
+	/** The agent name the ticket's handoff expects. */
+	agentName: string;
+}
+
+/** What one Consultation holds for the seat count. */
+export interface ParallelSeatConsultationFact {
+	/** The Consultation's state. */
+	state: ConsultationState;
+}
+
+/** The facts the seat count reads, as data. */
+export interface ParallelSeatFacts {
+	/** The tickets in a state that can hold a seat. */
+	tickets: readonly ParallelSeatTicketFact[];
+	/** The tickets with an unresolved handoff claim. */
+	handoffAttemptTickets: readonly string[];
+	/** Every Consultation, with its state. The rule keeps the states that hold a seat. */
+	consultations: readonly ParallelSeatConsultationFact[];
 	/** The latest successful herdr agent list; null until it holds one. */
 	agents: readonly HerdrAgent[] | null;
 	/** The clock, in epoch milliseconds. */
@@ -46,40 +69,50 @@ export interface ParallelSeatCountInput {
 }
 
 /** The combined Parallel limit seat count the gates and the mode line share. */
-export function parallelSeatCount(input: ParallelSeatCountInput): number {
+export function parallelSeatCount(facts: ParallelSeatFacts): number {
 	const listedAgents = new Map<string, HerdrAgent>();
-	if (input.agents !== null) {
-		for (const agent of input.agents) listedAgents.set(agent.paneId, agent);
+	if (facts.agents !== null) {
+		for (const agent of facts.agents) listedAgents.set(agent.paneId, agent);
 	}
-	const inFlight = input.state.ticketsByState(TICKET_SEAT_STATES);
 	// One seat per ticket at most: the ticket's own in-flight seat counts
 	// for every unresolved claim it carries.
 	const counted = new Set<string>();
 	let count = 0;
-	for (const ticket of inFlight) {
+	for (const ticket of facts.tickets) {
 		// One seat per ticket at most: the ticket's own in-flight seat counts
 		// for every unresolved claim it carries. The one missing-Agent rule the
 		// observation cycle and the list's failure badge read: the ticket's own
 		// agent is the one that runs under the name the ticket's handoff expects.
 		// A different agent in the same pane id - herdr handed the closed pane's
 		// id out again - holds no seat for the ticket, the way a missing one does.
-		const own = agentInPane(
-			listedAgents,
-			ticket.paneId,
-			input.state.agentNameForTicket(ticket.ticketIdentity),
-		);
-		const booting = own === null && input.now - Date.parse(ticket.startedAt) < input.startupGraceMs;
+		const own = agentInPane(listedAgents, ticket.paneId, ticket.agentName);
+		const booting = own === null && facts.now - Date.parse(ticket.startedAt) < facts.startupGraceMs;
 		if (own !== null || booting) {
 			count += 1;
 			counted.add(ticket.ticketIdentity);
 		}
 	}
-	for (const identity of input.state.openAttemptTickets()) {
+	for (const identity of facts.handoffAttemptTickets) {
 		if (!counted.has(identity)) {
 			count += 1;
 			counted.add(identity);
 		}
 	}
-	count += input.state.consultationsByState(CONSULTATION_SEAT_STATES).length;
+	count += facts.consultations.filter((consultation) =>
+		CONSULTATION_SEAT_STATES.includes(consultation.state),
+	).length;
 	return count;
+}
+
+/**
+ * The Parallel limit gate (ADR 0034): the seat count stands at or over the
+ * limit, so a start that wants a seat finds none free.
+ *
+ * The rule takes its two facts as data (issue #202). The force-dispatch's
+ * three call sites and the mode line's start-now ask the same question, so
+ * they call this one rule instead of each restating `limit > 0 && count >=
+ * limit` at its own site. A limit of 0 lifts the cap, so it never reads over.
+ */
+export function overParallelLimit(limit: number, seatCount: number): boolean {
+	return limit > 0 && seatCount >= limit;
 }

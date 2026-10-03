@@ -25,7 +25,8 @@ import {
 } from "../../domain/ticket-facts.ts";
 import type { HerdrAgent } from "../../herdr.ts";
 import type { InitableRepository } from "../../repository-list.ts";
-import type { Consultation, WorkQueueHandoffItem, WorkQueueItem } from "../../state.ts";
+import type { Consultation } from "../../state/consultation-record.ts";
+import type { WorkQueueHandoffItem, WorkQueueItem } from "../../state/work-queue.ts";
 import { currentThemeResolution } from "../../theme-source.ts";
 import type { TurnLogEntry } from "../../turn-log.ts";
 import { ActionBar } from "../action-bar.ts";

@@ -93,12 +93,12 @@ describe("the shared control library is the only control implementation", () => 
 	// this check refuses, the same way the rules above refuse a private field
 	// implementation.
 	test("only the grouping reads the matched Workflow state", () => {
-		// The domain carries the field, the projection derives it, the shared
-		// grouping module reads it, and the gallery's Ticket fixture names it
-		// the way every Ticket fixture states its facts.
+		// The domain carries the field, the Ticket work cycle aggregate derives it,
+		// the shared grouping module reads it, and the gallery's Ticket fixture
+		// names it the way every Ticket fixture states its facts.
 		const readers = new Set([
 			"src/domain/ticket.ts",
-			"src/state.ts",
+			"src/state/ticket-work-cycle.ts",
 			"src/components/shared/grouping.ts",
 			"src/components/shared/gallery.ts",
 		]);
@@ -124,6 +124,9 @@ describe("the shared control library is the only control implementation", () => 
 		expect(sourceFiles("src").filter((file) => file.includes("grouping"))).toEqual([
 			"src/components/shared/grouping.ts",
 			"src/domain/grouping.ts",
+			// The Grouping aggregate owns the Grouping axis and the Group order.
+			// It is the state side of the same concept, not a second list.
+			"src/state/grouping.ts",
 		]);
 	});
 

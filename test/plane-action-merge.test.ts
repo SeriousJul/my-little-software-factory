@@ -29,9 +29,11 @@ import type { FetchedTicket, Ticket } from "../src/domain/ticket.ts";
 import { withIssueReferences } from "../src/domain/ticket.ts";
 import { resolveHandoffChoice } from "../src/handoff.ts";
 import { createHandoffDispatch, type HandoffDispatchReports } from "../src/handoff-dispatch.ts";
-import { planeActionSettingOf, runMergePullRequest } from "../src/plane-actions.ts";
+import { planeActionSettingOf } from "../src/plane-action-registry.ts";
+import { runMergePullRequest } from "../src/plane-actions.ts";
 import type { CommandOptions, CommandResult } from "../src/runner.ts";
-import { type FactoryState, openFactoryState } from "../src/state.ts";
+import type { FactoryState } from "../src/state.ts";
+import { openFactoryState } from "../src/state.ts";
 import { createTicketSource, type FetchOutcome, SEARCH_QUERY } from "../src/ticket-source.ts";
 import { firePlaneActionOutcome } from "../src/workflow.ts";
 import {
@@ -180,8 +182,8 @@ const issueSuccess = (at = new Date(Date.now() - 60_000).toISOString()): FetchOu
 
 /** Boot the state with the issue beside the pull request. */
 function withIssueSource(state: FactoryState): void {
-	state.initializeSources([pullsSource, issuesSource]);
-	state.applyFetch(issuesSource, issueSuccess());
+	state.sourceFact.initializeSources([pullsSource, issuesSource]);
+	state.sourceFact.applyFetch(issuesSource, issueSuccess());
 }
 
 /**
@@ -219,9 +221,9 @@ function planeState(): FactoryState {
 	const dir = mkdtempSync(join(tmpdir(), "factory-plane-state-"));
 	paths.push(dir);
 	const state = openFactoryState(join(dir, "state.sqlite"));
-	state.setGroupingAxis("tickets", "none");
-	state.initializeSources([pullsSource]);
-	state.applyFetch(pullsSource, pullSuccess());
+	state.grouping.setGroupingAxis("tickets", "none");
+	state.sourceFact.initializeSources([pullsSource]);
+	state.sourceFact.applyFetch(pullsSource, pullSuccess());
 	return state;
 }
 
@@ -269,7 +271,6 @@ function mergeRoute(over: Partial<TransitionOutcome> = {}): TransitionOutcome {
 		reason: "",
 		ticketFacts: [],
 		pullRequestFacts: ["ready-to-ship"],
-		autoAdvance: false,
 		ticketWrite: null,
 		pullRequestWrite: { added: ["ready-to-ship"], removed: [] },
 		pullRequestIdentity: pullIdentity,
@@ -288,7 +289,7 @@ function seed(
 	transition: TransitionOutcome,
 ): void {
 	if (shape === "open") return;
-	const claim = state.claimHandoff(
+	const claim = state.handoff.claimHandoff(
 		pullIdentity,
 		{
 			agentType: "pi",
@@ -301,12 +302,12 @@ function seed(
 		"open",
 	);
 	if (!claim.ok) throw new Error(claim.reason);
-	state.settleHandoff(claim.claim.attemptId, true, undefined, {
+	state.handoff.settleHandoff(claim.claim.attemptId, true, undefined, {
 		paneId: "pane-1",
 		tabId: "tab-1",
 		workspaceId: "ws-1",
 	});
-	state.settleTurn({
+	state.ticketWorkCycle.settleTurn({
 		ticketIdentity: pullIdentity,
 		handoffId: claim.claim.attemptId,
 		taskType: "rework",
@@ -322,7 +323,7 @@ function seed(
 describe("the attempt record in the state", () => {
 	test("the attempt lands once, and the outcome's fire writes its fact once", () => {
 		const state = planeState();
-		const attempt = state.recordPlaneActionAttempt({
+		const attempt = state.planeAction.recordPlaneActionAttempt({
 			ticketIdentity: pullIdentity,
 			taskType: "merge",
 			decision: "auto-merged",
@@ -330,7 +331,7 @@ describe("the attempt record in the state", () => {
 			reason: "the source refused the merge",
 			at: "2026-08-31T12:00:00Z",
 		});
-		const latest = state.latestPlaneActionAttempt(pullIdentity);
+		const latest = state.planeAction.latestPlaneActionAttempt(pullIdentity);
 		expect(latest?.id).toBe(attempt.id);
 		expect(latest?.outcome).toBe("blocked");
 		expect(latest?.transition).toBeNull();
@@ -339,22 +340,24 @@ describe("the attempt record in the state", () => {
 			pullRequestFacts: ["needs-work"],
 			pullRequestWrite: { added: ["needs-work"], removed: [] },
 		});
-		expect(state.recordPlaneActionAttemptOutcome(attempt.id, outcome)).toBe(true);
+		expect(state.planeAction.recordPlaneActionAttemptOutcome(attempt.id, outcome)).toBe(true);
 		// A fire that runs twice writes the fact once: the record is
 		// conditional on the fact not standing.
-		expect(state.recordPlaneActionAttemptOutcome(attempt.id, outcome)).toBe(false);
-		expect(state.latestPlaneActionAttempt(pullIdentity)?.transition?.pullRequestWrite).toEqual({
+		expect(state.planeAction.recordPlaneActionAttemptOutcome(attempt.id, outcome)).toBe(false);
+		expect(
+			state.planeAction.latestPlaneActionAttempt(pullIdentity)?.transition?.pullRequestWrite,
+		).toEqual({
 			added: ["needs-work"],
 			removed: [],
 		});
-		expect(state.planeActionAttempts(pullIdentity)).toHaveLength(1);
+		expect(state.planeAction.planeActionAttemptCount(pullIdentity)).toBe(1);
 		state.close();
 	});
 
 	test("the Handoff limit counts the merge attempts beside the handoffs", () => {
 		const state = planeState();
-		expect(state.handoffCount(pullIdentity)).toBe(0);
-		state.recordPlaneActionAttempt({
+		expect(state.handoff.handoffCount(pullIdentity)).toBe(0);
+		state.planeAction.recordPlaneActionAttempt({
 			ticketIdentity: pullIdentity,
 			taskType: "merge",
 			decision: "auto-merged",
@@ -362,7 +365,7 @@ describe("the attempt record in the state", () => {
 			reason: "",
 			at: "2026-08-31T12:00:00Z",
 		});
-		state.recordPlaneActionAttempt({
+		state.planeAction.recordPlaneActionAttempt({
 			ticketIdentity: pullIdentity,
 			taskType: "merge",
 			decision: "merged",
@@ -370,7 +373,7 @@ describe("the attempt record in the state", () => {
 			reason: "the source refused the merge",
 			at: "2026-08-31T12:01:00Z",
 		});
-		expect(state.handoffCount(pullIdentity)).toBe(2);
+		expect(state.handoff.handoffCount(pullIdentity)).toBe(2);
 		state.close();
 	});
 
@@ -383,9 +386,9 @@ describe("the attempt record in the state", () => {
 		const at2 = new Date(base + 120_000).toISOString();
 		const reread = new Date(base + 180_000).toISOString();
 		// No attempt: the hold answers clear.
-		expect(state.planeActionBlockedUnrefreshed(pullIdentity)).toBe(false);
+		expect(state.planeAction.planeActionBlockedUnrefreshed(pullIdentity)).toBe(false);
 		// A merged attempt answers clear beside it: the hold is the block's.
-		state.recordPlaneActionAttempt({
+		state.planeAction.recordPlaneActionAttempt({
 			ticketIdentity: pullIdentity,
 			taskType: "merge",
 			decision: "auto-merged",
@@ -393,9 +396,9 @@ describe("the attempt record in the state", () => {
 			reason: "",
 			at: at1,
 		});
-		expect(state.planeActionBlockedUnrefreshed(pullIdentity)).toBe(false);
+		expect(state.planeAction.planeActionBlockedUnrefreshed(pullIdentity)).toBe(false);
 		// The blocked attempt that posts the source's last read: the hold stands.
-		state.recordPlaneActionAttempt({
+		state.planeAction.recordPlaneActionAttempt({
 			ticketIdentity: pullIdentity,
 			taskType: "merge",
 			decision: "auto-merged",
@@ -403,9 +406,9 @@ describe("the attempt record in the state", () => {
 			reason: "GraphQL: PullRequest is not mergeable.",
 			at: at2,
 		});
-		expect(state.planeActionBlockedUnrefreshed(pullIdentity)).toBe(true);
+		expect(state.planeAction.planeActionBlockedUnrefreshed(pullIdentity)).toBe(true);
 		// A merged attempt that posts the block lifts the hold on the newest row.
-		state.recordPlaneActionAttempt({
+		state.planeAction.recordPlaneActionAttempt({
 			ticketIdentity: pullIdentity,
 			taskType: "merge",
 			decision: "auto-merged",
@@ -413,9 +416,9 @@ describe("the attempt record in the state", () => {
 			reason: "",
 			at: reread,
 		});
-		expect(state.planeActionBlockedUnrefreshed(pullIdentity)).toBe(false);
+		expect(state.planeAction.planeActionBlockedUnrefreshed(pullIdentity)).toBe(false);
 		// The blocked attempt again, and the re-read that posts it: the hold lifts.
-		state.recordPlaneActionAttempt({
+		state.planeAction.recordPlaneActionAttempt({
 			ticketIdentity: pullIdentity,
 			taskType: "merge",
 			decision: "auto-merged",
@@ -423,34 +426,34 @@ describe("the attempt record in the state", () => {
 			reason: "GraphQL: PullRequest is not mergeable.",
 			at: reread,
 		});
-		expect(state.planeActionBlockedUnrefreshed(pullIdentity)).toBe(true);
-		state.applyFetch(pullsSource, pullSuccess(reread));
-		expect(state.planeActionBlockedUnrefreshed(pullIdentity)).toBe(false);
+		expect(state.planeAction.planeActionBlockedUnrefreshed(pullIdentity)).toBe(true);
+		state.sourceFact.applyFetch(pullsSource, pullSuccess(reread));
+		expect(state.planeAction.planeActionBlockedUnrefreshed(pullIdentity)).toBe(false);
 		state.close();
 	});
 
 	test("the fire's convergence lands the written labels on the newest membership", () => {
 		const state = planeState();
 		const ticketOf = () =>
-			state
-				.visibleTickets(PLANE_WORKFLOW_STATES, PLANE_CONFIG.defaultTaskType, "all")
-				.find((candidate) => candidate.identity === pullIdentity);
+			state.ticketWorkCycle
+				.ticketListViews(PLANE_WORKFLOW_STATES, PLANE_CONFIG.defaultTaskType, "all")
+				.rows.find((candidate) => candidate.identity === pullIdentity);
 		expect(ticketOf()?.labels).toEqual(["ready-to-ship"]);
 		// The write's answer lands on the projection at once, and the
 		// position the machine derives stands on it: needs-work offers the
 		// rework, not the merge the block moved off.
-		state.convergeMembershipLabels(pullIdentity, ["needs-work"]);
+		state.sourceFact.convergeMembershipLabels(pullIdentity, ["needs-work"]);
 		const after = ticketOf();
 		expect(after?.labels).toEqual(["needs-work"]);
 		expect(after?.suggestedTaskType).toBe("rework");
 		// A ticket no source lists answers nothing: the draft the machine
 		// just made ready is not listed yet, and there is no row for the
 		// write to land on.
-		state.convergeMembershipLabels("github:github.com:P_999", ["no-listing"]);
+		state.sourceFact.convergeMembershipLabels("github:github.com:P_999", ["no-listing"]);
 		expect(
-			state
-				.visibleTickets(PLANE_WORKFLOW_STATES, PLANE_CONFIG.defaultTaskType, "all")
-				.find((candidate) => candidate.identity === "github:github.com:P_999"),
+			state.ticketWorkCycle
+				.ticketListViews(PLANE_WORKFLOW_STATES, PLANE_CONFIG.defaultTaskType, "all")
+				.rows.find((candidate) => candidate.identity === "github:github.com:P_999"),
 		).toBeUndefined();
 		state.close();
 	});
@@ -458,7 +461,7 @@ describe("the attempt record in the state", () => {
 	test("the merge's decision ends the settled turn's cycle, the way the route's does (ADR 0072)", () => {
 		const state = planeState();
 		withIssueSource(state);
-		const claim = state.claimHandoff(
+		const claim = state.handoff.claimHandoff(
 			issueIdentity,
 			{
 				agentType: "pi",
@@ -471,12 +474,12 @@ describe("the attempt record in the state", () => {
 			"open",
 		);
 		if (!claim.ok) throw new Error(claim.reason);
-		state.settleHandoff(claim.claim.attemptId, true, undefined, {
+		state.handoff.settleHandoff(claim.claim.attemptId, true, undefined, {
 			paneId: "pane-1",
 			tabId: "tab-1",
 			workspaceId: "ws-1",
 		});
-		state.settleTurn({
+		state.ticketWorkCycle.settleTurn({
 			ticketIdentity: issueIdentity,
 			handoffId: claim.claim.attemptId,
 			taskType: "rework",
@@ -491,7 +494,6 @@ describe("the attempt record in the state", () => {
 				reason: "",
 				ticketFacts: [],
 				pullRequestFacts: [],
-				autoAdvance: true,
 				ticketWrite: null,
 				pullRequestWrite: null,
 				pullRequestIdentity: null,
@@ -501,44 +503,53 @@ describe("the attempt record in the state", () => {
 				positionTicketIdentity: pullIdentity,
 			},
 		});
-		expect(state.ticketState(issueIdentity)).toBe("awaiting");
+		expect(state.ticketWorkCycle.ticketState(issueIdentity)).toBe("awaiting");
 		// The merge's ask records the decision on the settled turn, and the
 		// cycle ends in the same write, the way the route's ask does: the
 		// wait stands on the item, not on a ticket state.
 		expect(
-			state.applyCompletionDecision({
+			state.ticketWorkCycle.applyCompletionDecision({
 				ticketIdentity: issueIdentity,
 				handoffId: claim.claim.attemptId,
 				decision: "auto-merged",
 				decidedAt: "2026-08-31T11:10:00Z",
 			}),
 		).toBe(true);
-		expect(state.ticketState(issueIdentity)).toBe("open");
-		const ticket = state
-			.visibleTickets(PLANE_WORKFLOW_STATES, PLANE_CONFIG.defaultTaskType, "all")
-			.find((candidate) => candidate.identity === issueIdentity);
+		expect(state.ticketWorkCycle.ticketState(issueIdentity)).toBe("open");
+		const ticket = state.ticketWorkCycle
+			.ticketListViews(PLANE_WORKFLOW_STATES, PLANE_CONFIG.defaultTaskType, "all")
+			.rows.find((candidate) => candidate.identity === issueIdentity);
 		expect(ticket?.workCycle).toBe(2);
-		expect(state.lastCompletion(issueIdentity)?.decision).toBe("auto-merged");
+		expect(state.ticketWorkCycle.lastCompletion(issueIdentity)?.decision).toBe("auto-merged");
 		state.close();
 	});
 
 	test("the merged ticket's retirement leaves it from the projection at once", () => {
 		const state = planeState();
 		withIssueSource(state);
-		const before = state.visibleTickets(PLANE_WORKFLOW_STATES, PLANE_CONFIG.defaultTaskType);
+		const before = state.ticketWorkCycle.ticketListViews(
+			PLANE_WORKFLOW_STATES,
+			PLANE_CONFIG.defaultTaskType,
+		).rows;
 		expect(before.map((ticket) => ticket.identity).sort()).toEqual(
 			[issueIdentity, pullIdentity].sort(),
 		);
 		// The retirement is the source's own move, done now: the source stops
 		// returning the pull request at its next refresh.
-		expect(state.retireTicket(pullIdentity)).toBe(true);
-		const after = state.visibleTickets(PLANE_WORKFLOW_STATES, PLANE_CONFIG.defaultTaskType);
+		expect(state.sourceFact.retireTicket(pullIdentity)).toBe(true);
+		const after = state.ticketWorkCycle.ticketListViews(
+			PLANE_WORKFLOW_STATES,
+			PLANE_CONFIG.defaultTaskType,
+		).rows;
 		expect(after.map((ticket) => ticket.identity)).toEqual([issueIdentity]);
 		// The issue the pull request closes retires with it, and an identity
 		// that already retired leaves no write behind.
-		expect(state.retireTicket(issueIdentity)).toBe(true);
-		expect(state.visibleTickets(PLANE_WORKFLOW_STATES, PLANE_CONFIG.defaultTaskType)).toEqual([]);
-		expect(state.retireTicket(issueIdentity)).toBe(false);
+		expect(state.sourceFact.retireTicket(issueIdentity)).toBe(true);
+		expect(
+			state.ticketWorkCycle.ticketListViews(PLANE_WORKFLOW_STATES, PLANE_CONFIG.defaultTaskType)
+				.rows,
+		).toEqual([]);
+		expect(state.sourceFact.retireTicket(issueIdentity)).toBe(false);
 		state.close();
 	});
 });
@@ -615,7 +626,7 @@ describe("the action form in the config", () => {
 describe("the merge run through the command runner", () => {
 	/** The pull request as the projection holds it, from a seeded state. */
 	function ticketOf(state: FactoryState): Ticket {
-		const ticket = state
+		const ticket = state.ticketWorkCycle
 			.projectedTickets(PLANE_CONFIG.workflowStates, PLANE_CONFIG.defaultTaskType)
 			.find((candidate) => candidate.identity === pullIdentity);
 		if (ticket === undefined) throw new Error("the pull request is not in the projection");
@@ -637,7 +648,7 @@ describe("the merge run through the command runner", () => {
 		expect(result).toEqual({ outcome: "merged", reason: "", alreadyMerged: false });
 		expect(runner.commands()).toContain("gh pr merge #12 --squash --repo github.com/acme/factory");
 
-		const attempt = state.recordPlaneActionAttempt({
+		const attempt = state.planeAction.recordPlaneActionAttempt({
 			ticketIdentity: pullIdentity,
 			taskType: "merge",
 			decision: "auto-merged",
@@ -659,7 +670,7 @@ describe("the merge run through the command runner", () => {
 		// facts, so the fire ran no label command.
 		expect(outcome?.pullRequestWrite).toBeNull();
 		expect(runner.commands().filter((command) => command.startsWith("gh pr edit"))).toEqual([]);
-		expect(state.latestPlaneActionAttempt(pullIdentity)?.transition).not.toBeNull();
+		expect(state.planeAction.latestPlaneActionAttempt(pullIdentity)?.transition).not.toBeNull();
 		state.close();
 	});
 
@@ -735,7 +746,7 @@ describe("the merge run through the command runner", () => {
 		// pull-request-open branch holds and writes the needs-work fact.
 		stubOpenRead(runner);
 
-		const attempt = state.recordPlaneActionAttempt({
+		const attempt = state.planeAction.recordPlaneActionAttempt({
 			ticketIdentity: pullIdentity,
 			taskType: "merge",
 			decision: "auto-merged",
@@ -756,7 +767,9 @@ describe("the merge run through the command runner", () => {
 		expect(runner.commands()).toContain(
 			"gh pr edit #12 --repo github.com/acme/factory --add-label needs-work",
 		);
-		expect(state.latestPlaneActionAttempt(pullIdentity)?.transition?.pullRequestWrite).toEqual({
+		expect(
+			state.planeAction.latestPlaneActionAttempt(pullIdentity)?.transition?.pullRequestWrite,
+		).toEqual({
 			added: ["needs-work"],
 			removed: [],
 		});
@@ -770,7 +783,7 @@ describe("the merge run through the command runner", () => {
 		// last refresh, which still reads the pull request open.
 		runner.set("gh", PR_READ_ARGS, { code: 1, stderr: "the read failed" });
 
-		const attempt = state.recordPlaneActionAttempt({
+		const attempt = state.planeAction.recordPlaneActionAttempt({
 			ticketIdentity: pullIdentity,
 			taskType: "merge",
 			decision: "merged",
@@ -848,7 +861,7 @@ describe("the dispatch's ask and pickup", () => {
 
 		// The attempt is the durable record: the top-up's decision word, the
 		// merged outcome, and the transition fact the fire wrote on it.
-		const attempt = state.latestPlaneActionAttempt(pullIdentity);
+		const attempt = state.planeAction.latestPlaneActionAttempt(pullIdentity);
 		expect(attempt?.outcome).toBe("merged");
 		expect(attempt?.decision).toBe("auto-merged");
 		expect(attempt?.transition).not.toBeNull();
@@ -856,13 +869,13 @@ describe("the dispatch's ask and pickup", () => {
 		// ticket moves no state, and the merged pull request left the
 		// projection the moment the run settled: its membership retired now,
 		// the way the source's next refresh would do.
-		expect(state.ticketState(pullIdentity)).toBe("open");
+		expect(state.ticketWorkCycle.ticketState(pullIdentity)).toBe("open");
 		expect(
-			state
-				.visibleTickets(PLANE_WORKFLOW_STATES, PLANE_CONFIG.defaultTaskType)
-				.find((candidate) => candidate.identity === pullIdentity),
+			state.ticketWorkCycle
+				.ticketListViews(PLANE_WORKFLOW_STATES, PLANE_CONFIG.defaultTaskType)
+				.rows.find((candidate) => candidate.identity === pullIdentity),
 		).toBeUndefined();
-		expect(state.workQueue()).toEqual([]);
+		expect(state.workQueue.items()).toEqual([]);
 		expect(events).toContain(`notice: the merge of "${pullTitle}" ran from the Work queue`);
 		expect(runner.commands()).toContain("gh pr merge #12 --squash --repo github.com/acme/factory");
 		// The run wore the start's spinner face on the ticket's row: the
@@ -963,11 +976,11 @@ describe("the dispatch's ask and pickup", () => {
 		const outcome = await createTicketSource(pullsConfig, lagRunner).fetch();
 		expect(outcome).toMatchObject({ status: "success" });
 		if (outcome.status !== "success") return;
-		state.applyFetch(pullsSource, outcome);
+		state.sourceFact.applyFetch(pullsSource, outcome);
 		expect(
-			state
-				.visibleTickets(PLANE_WORKFLOW_STATES, PLANE_CONFIG.defaultTaskType, "all")
-				.find((candidate) => candidate.identity === pullIdentity),
+			state.ticketWorkCycle
+				.ticketListViews(PLANE_WORKFLOW_STATES, PLANE_CONFIG.defaultTaskType, "all")
+				.rows.find((candidate) => candidate.identity === pullIdentity),
 		).toBeUndefined();
 		state.close();
 	});
@@ -1018,11 +1031,11 @@ describe("the dispatch's ask and pickup", () => {
 		// The ask crossed the plane action's channel: its attempt record
 		// holds the merged outcome, the queue is clear, and no handoff item
 		// ever stood on it.
-		const attempt = state.latestPlaneActionAttempt(pullIdentity);
+		const attempt = state.planeAction.latestPlaneActionAttempt(pullIdentity);
 		expect(attempt?.outcome).toBe("merged");
 		expect(attempt?.decision).not.toBeNull();
-		expect(state.ticketState(pullIdentity)).toBe("open");
-		expect(state.workQueue()).toEqual([]);
+		expect(state.ticketWorkCycle.ticketState(pullIdentity)).toBe("open");
+		expect(state.workQueue.items()).toEqual([]);
 		// The merge command carries no `--hostname`: the host rides in the
 		// repository identity its `--repo` takes.
 		expect(runner.commands()).toContain("gh pr merge #12 --squash --repo github.com/acme/factory");
@@ -1033,7 +1046,7 @@ describe("the dispatch's ask and pickup", () => {
 
 	test("a second ask keeps the first item's place, and the queue pause holds the item standing", async () => {
 		const state = planeState();
-		state.setQueuePaused(true);
+		state.workQueue.setQueuePaused(true);
 		const runner = new FakeRunner();
 		const events: string[] = [];
 		const dispatch = createHandoffDispatch({
@@ -1058,8 +1071,8 @@ describe("the dispatch's ask and pickup", () => {
 		// The item stands behind the pause, and the position keeps the state
 		// it wears (ADR 0072), so the second ask refuses with the one-item
 		// rule.
-		expect(state.ticketState(pullIdentity)).toBe("open");
-		const queue = state.workQueue();
+		expect(state.ticketWorkCycle.ticketState(pullIdentity)).toBe("open");
+		const queue = state.workQueue.items();
 		expect(queue).toHaveLength(1);
 		const item = queue[0];
 		expect(item.kind).toBe("plane-action");
@@ -1090,7 +1103,7 @@ describe("the dispatch's ask and pickup", () => {
 		const runner = new FakeRunner();
 		// The ticket moved on: a handoff started on it, so it stands
 		// handed-off, and the route is stale.
-		const claim = state.claimHandoff(
+		const claim = state.handoff.claimHandoff(
 			pullIdentity,
 			{
 				agentType: "pi",
@@ -1103,7 +1116,7 @@ describe("the dispatch's ask and pickup", () => {
 			"open",
 		);
 		if (!claim.ok) throw new Error(claim.reason);
-		state.settleHandoff(claim.claim.attemptId, true, undefined, {
+		state.handoff.settleHandoff(claim.claim.attemptId, true, undefined, {
 			paneId: "pane-1",
 			tabId: "tab-1",
 			workspaceId: "ws-1",
@@ -1124,7 +1137,7 @@ describe("the dispatch's ask and pickup", () => {
 			taskType: "merge",
 		});
 		expect(result).toEqual({ ok: false, reason: "the ticket is now handed-off" });
-		expect(state.workQueue()).toEqual([]);
+		expect(state.workQueue.items()).toEqual([]);
 		expect(runner.commands()).toEqual([]);
 		state.close();
 	});
@@ -1148,7 +1161,7 @@ describe("the dispatch's ask and pickup", () => {
 			taskType: "implement",
 		});
 		expect(result).toEqual({ ok: false, reason: "task type implement carries no plane action" });
-		expect(state.workQueue()).toEqual([]);
+		expect(state.workQueue.items()).toEqual([]);
 		state.close();
 	});
 
@@ -1181,7 +1194,7 @@ describe("the dispatch's ask and pickup", () => {
 		});
 		expect(result).toEqual({ ok: true });
 		await startedSettled;
-		expect(state.latestPlaneActionAttempt(pullIdentity)?.outcome).toBe("merged");
+		expect(state.planeAction.latestPlaneActionAttempt(pullIdentity)?.outcome).toBe("merged");
 		// The run's own line stands: the pickup did not ask the cap, because
 		// the action takes no seat from it.
 		expect(events).toContain(`notice: the merge of "${pullTitle}" ran from the Work queue`);
@@ -1193,7 +1206,7 @@ describe("the dispatch's ask and pickup", () => {
 		// The pause holds the ask in the queue without the dispatch's own
 		// pickup, so the two pickups the test starts read the queue together,
 		// before either claims the row.
-		state.setQueuePaused(true);
+		state.workQueue.setQueuePaused(true);
 		const runner = new FakeRunner();
 		stubReadSequence(runner, [{ state: "open" }, { merged: true }]);
 		stubMerge(runner, 0);
@@ -1221,7 +1234,7 @@ describe("the dispatch's ask and pickup", () => {
 			},
 		});
 		expect(result).toEqual({ ok: true });
-		state.setQueuePaused(false);
+		state.workQueue.setQueuePaused(false);
 		await Promise.all([dispatch.pickupWorkQueue(), dispatch.pickupWorkQueue()]);
 		await startedSettled;
 		// The claim is the row's removal, taken before the run: the second
@@ -1230,10 +1243,10 @@ describe("the dispatch's ask and pickup", () => {
 		expect(runner.commands().filter((command) => command.startsWith("gh pr merge"))).toHaveLength(
 			1,
 		);
-		expect(state.planeActionAttemptCount(pullIdentity)).toBe(1);
-		expect(state.latestPlaneActionAttempt(pullIdentity)?.outcome).toBe("merged");
-		expect(state.workQueue()).toEqual([]);
-		expect(state.ticketState(pullIdentity)).toBe("open");
+		expect(state.planeAction.planeActionAttemptCount(pullIdentity)).toBe(1);
+		expect(state.planeAction.latestPlaneActionAttempt(pullIdentity)?.outcome).toBe("merged");
+		expect(state.workQueue.items()).toEqual([]);
+		expect(state.ticketWorkCycle.ticketState(pullIdentity)).toBe("open");
 		state.close();
 	});
 
@@ -1279,15 +1292,15 @@ describe("the dispatch's ask and pickup", () => {
 		// The walk broke at the held seats-bound item, before it reached the
 		// plane item: the item stands behind it in the shared order, with no
 		// command run and no attempt recorded, and the route's wait stands.
-		const queue = state.workQueue();
+		const queue = state.workQueue.items();
 		expect(queue).toHaveLength(2);
 		expect(queue[0]?.kind).toBe("handoff");
 		expect(queue[1]?.kind).toBe("plane-action");
-		expect(state.latestPlaneActionAttempt(pullIdentity)).toBeNull();
+		expect(state.planeAction.latestPlaneActionAttempt(pullIdentity)).toBeNull();
 		expect(runner.commands()).toEqual([]);
 		// The item stands behind the held seats, and the position keeps the
 		// state it wears (ADR 0072).
-		expect(state.ticketState(pullIdentity)).toBe("open");
+		expect(state.ticketWorkCycle.ticketState(pullIdentity)).toBe("open");
 		state.close();
 	});
 
@@ -1296,10 +1309,10 @@ describe("the dispatch's ask and pickup", () => {
 		withIssueSource(state);
 		// The pull request closes the issue on the merge: the closing
 		// reference is a source fact on the pull request's membership.
-		state.applyFetch(pullsSource, pullClosingIssueSuccess());
+		state.sourceFact.applyFetch(pullsSource, pullClosingIssueSuccess());
 		// The issue stands awaiting with its settled turn: the cross route's
 		// source, the way the top-up's continuation ask finds it.
-		const claim = state.claimHandoff(
+		const claim = state.handoff.claimHandoff(
 			issueIdentity,
 			{
 				agentType: "pi",
@@ -1312,12 +1325,12 @@ describe("the dispatch's ask and pickup", () => {
 			"open",
 		);
 		if (!claim.ok) throw new Error(claim.reason);
-		state.settleHandoff(claim.claim.attemptId, true, undefined, {
+		state.handoff.settleHandoff(claim.claim.attemptId, true, undefined, {
 			paneId: "pane-1",
 			tabId: "tab-1",
 			workspaceId: "ws-1",
 		});
-		state.settleTurn({
+		state.ticketWorkCycle.settleTurn({
 			ticketIdentity: issueIdentity,
 			handoffId: claim.claim.attemptId,
 			taskType: "rework",
@@ -1356,11 +1369,14 @@ describe("the dispatch's ask and pickup", () => {
 		// behind the open pull request it is fixed by: the list rule withholds
 		// it while the merge runs, and the merge's retirement leaves it with
 		// the pull request, so it does not stand again behind it.
-		const listed = state.visibleTickets(PLANE_WORKFLOW_STATES, PLANE_CONFIG.defaultTaskType);
+		const listed = state.ticketWorkCycle.ticketListViews(
+			PLANE_WORKFLOW_STATES,
+			PLANE_CONFIG.defaultTaskType,
+		).rows;
 		expect(listed.map((ticket) => ticket.identity).sort()).toEqual(
 			[issueIdentity, pullIdentity].sort(),
 		);
-		expect(state.ticketState(issueIdentity)).toBe("awaiting");
+		expect(state.ticketWorkCycle.ticketState(issueIdentity)).toBe("awaiting");
 
 		// The route's ask: the issue's settled turn offers the merge of the
 		// pull request it fixes.
@@ -1382,10 +1398,13 @@ describe("the dispatch's ask and pickup", () => {
 		// settled, and so did the issue it closed on the merge: the sources
 		// stop returning both at the next refresh, and the retirement does it
 		// now (ADR 0068).
-		const after = state.visibleTickets(PLANE_WORKFLOW_STATES, PLANE_CONFIG.defaultTaskType);
+		const after = state.ticketWorkCycle.ticketListViews(
+			PLANE_WORKFLOW_STATES,
+			PLANE_CONFIG.defaultTaskType,
+		).rows;
 		expect(after.find((candidate) => candidate.identity === pullIdentity)).toBeUndefined();
 		expect(after.find((candidate) => candidate.identity === issueIdentity)).toBeUndefined();
-		expect(state.latestPlaneActionAttempt(pullIdentity)?.outcome).toBe("merged");
+		expect(state.planeAction.latestPlaneActionAttempt(pullIdentity)?.outcome).toBe("merged");
 		state.close();
 	});
 
@@ -1397,7 +1416,7 @@ describe("the dispatch's ask and pickup", () => {
 			// The issue's settled turn stored its environment: the environment
 			// the decision screen's ask asks to close, the way the route's ask
 			// does (ADR 0046).
-			const claim = state.claimHandoff(
+			const claim = state.handoff.claimHandoff(
 				issueIdentity,
 				{
 					agentType: "pi",
@@ -1410,12 +1429,12 @@ describe("the dispatch's ask and pickup", () => {
 				"open",
 			);
 			if (!claim.ok) throw new Error(claim.reason);
-			state.settleHandoff(claim.claim.attemptId, true, undefined, {
+			state.handoff.settleHandoff(claim.claim.attemptId, true, undefined, {
 				paneId: "pane-1",
 				tabId: "tab-1",
 				workspaceId: "ws-1",
 			});
-			state.settleTurn({
+			state.ticketWorkCycle.settleTurn({
 				ticketIdentity: issueIdentity,
 				handoffId: claim.claim.attemptId,
 				taskType: "rework",
@@ -1468,7 +1487,7 @@ describe("the dispatch's ask and pickup", () => {
 	test("the automatic merge ask keeps the settled turn's environment, the way the automatic route does", async () => {
 		const state = planeState();
 		withIssueSource(state);
-		const claim = state.claimHandoff(
+		const claim = state.handoff.claimHandoff(
 			issueIdentity,
 			{
 				agentType: "pi",
@@ -1481,12 +1500,12 @@ describe("the dispatch's ask and pickup", () => {
 			"open",
 		);
 		if (!claim.ok) throw new Error(claim.reason);
-		state.settleHandoff(claim.claim.attemptId, true, undefined, {
+		state.handoff.settleHandoff(claim.claim.attemptId, true, undefined, {
 			paneId: "pane-1",
 			tabId: "tab-1",
 			workspaceId: "ws-1",
 		});
-		state.settleTurn({
+		state.ticketWorkCycle.settleTurn({
 			ticketIdentity: issueIdentity,
 			handoffId: claim.claim.attemptId,
 			taskType: "rework",
@@ -1537,7 +1556,7 @@ describe("the dispatch's ask and pickup", () => {
 		withIssueSource(state);
 		// The issue stands awaiting with its settled turn: the cross route's
 		// source, the way the top-up's continuation ask finds it.
-		const claim = state.claimHandoff(
+		const claim = state.handoff.claimHandoff(
 			issueIdentity,
 			{
 				agentType: "pi",
@@ -1550,12 +1569,12 @@ describe("the dispatch's ask and pickup", () => {
 			"open",
 		);
 		if (!claim.ok) throw new Error(claim.reason);
-		state.settleHandoff(claim.claim.attemptId, true, undefined, {
+		state.handoff.settleHandoff(claim.claim.attemptId, true, undefined, {
 			paneId: "pane-1",
 			tabId: "tab-1",
 			workspaceId: "ws-1",
 		});
-		state.settleTurn({
+		state.ticketWorkCycle.settleTurn({
 			ticketIdentity: issueIdentity,
 			handoffId: claim.claim.attemptId,
 			taskType: "rework",
@@ -1570,7 +1589,6 @@ describe("the dispatch's ask and pickup", () => {
 				reason: "",
 				ticketFacts: [],
 				pullRequestFacts: [],
-				autoAdvance: true,
 				ticketWrite: null,
 				pullRequestWrite: null,
 				pullRequestIdentity: null,
@@ -1591,7 +1609,7 @@ describe("the dispatch's ask and pickup", () => {
 			home: home(),
 			...recorder(events),
 		});
-		state.setQueuePaused(true);
+		state.workQueue.setQueuePaused(true);
 		const result = await dispatch.dispatchPlaneAction({
 			origin: "workflow",
 			automatic: true,
@@ -1603,13 +1621,13 @@ describe("the dispatch's ask and pickup", () => {
 		// Both waits stand: the ask ended the source's cycle with the decision
 		// it landed (ADR 0072), the way the route's decision does, and the
 		// item's own ticket keeps the state it wears.
-		expect(state.ticketState(pullIdentity)).toBe("open");
-		expect(state.ticketState(issueIdentity)).toBe("open");
-		const tickets = state.visibleTickets(
+		expect(state.ticketWorkCycle.ticketState(pullIdentity)).toBe("open");
+		expect(state.ticketWorkCycle.ticketState(issueIdentity)).toBe("open");
+		const tickets = state.ticketWorkCycle.ticketListViews(
 			PLANE_WORKFLOW_STATES,
 			PLANE_CONFIG.defaultTaskType,
 			"all",
-		);
+		).rows;
 		const issueBefore = tickets.find((t) => t.identity === issueIdentity);
 		if (issueBefore === undefined) throw new Error("the issue is not in the read");
 		const cycleBefore = issueBefore.workCycle;
@@ -1617,20 +1635,26 @@ describe("the dispatch's ask and pickup", () => {
 		// the config, and the row leaves: no settle stands for the machine's
 		// drop, the waits are the items', not the tickets'.
 		config = { ...PLANE_CONFIG, taskTypes: { ...PLANE_TASK_TYPES, merge: { template: "x" } } };
-		state.setQueuePaused(false);
+		state.workQueue.setQueuePaused(false);
 		await dispatch.pickupWorkQueue();
-		expect(state.workQueue()).toEqual([]);
-		expect(state.latestPlaneActionAttempt(pullIdentity)).toBeNull();
+		expect(state.workQueue.items()).toEqual([]);
+		expect(state.planeAction.latestPlaneActionAttempt(pullIdentity)).toBeNull();
 		expect(runner.commands()).toEqual([]);
 		// The cycles hold: the source's cycle ended at its ask, the position's
 		// never ran, and the machine's drop writes no mark.
-		expect(state.ticketState(pullIdentity)).toBe("open");
-		expect(state.ticketState(issueIdentity)).toBe("open");
-		const after = state.visibleTickets(PLANE_WORKFLOW_STATES, PLANE_CONFIG.defaultTaskType, "all");
+		expect(state.ticketWorkCycle.ticketState(pullIdentity)).toBe("open");
+		expect(state.ticketWorkCycle.ticketState(issueIdentity)).toBe("open");
+		const after = state.ticketWorkCycle.ticketListViews(
+			PLANE_WORKFLOW_STATES,
+			PLANE_CONFIG.defaultTaskType,
+			"all",
+		).rows;
 		expect(after.find((t) => t.identity === issueIdentity)?.workCycle).toBe(cycleBefore);
 		const pullAfter = after.find((t) => t.identity === pullIdentity);
 		expect(pullAfter?.workCycle).toBe(tickets.find((t) => t.identity === pullIdentity)?.workCycle);
-		expect(state.lastCompletion(issueIdentity)?.transition?.routeRemoved).toBeUndefined();
+		expect(
+			state.ticketWorkCycle.lastCompletion(issueIdentity)?.transition?.routeRemoved,
+		).toBeUndefined();
 		expect(events).toContain(
 			`warning: the merge of "${pullTitle}" was not run: task type merge carries no plane action`,
 		);
@@ -1699,10 +1723,10 @@ describe("the decision screen's merge", () => {
 
 		// The record: the operator's decision word, the merged outcome, and
 		// the settled turn's decision in the trace.
-		const attempt = state.latestPlaneActionAttempt(pullIdentity);
+		const attempt = state.planeAction.latestPlaneActionAttempt(pullIdentity);
 		expect(attempt?.outcome).toBe("merged");
 		expect(attempt?.decision).toBe("merged");
-		expect(state.lastCompletion(pullIdentity)?.decision).toBe("merged");
+		expect(state.ticketWorkCycle.lastCompletion(pullIdentity)?.decision).toBe("merged");
 		expect(runner.commands()).toContain("gh pr merge #12 --squash --repo github.com/acme/factory");
 		// No agent, no worktree: the run started no herdr command.
 		expect(
@@ -1763,7 +1787,7 @@ describe("the decision screen's merge", () => {
 
 			// The line the pane painted is the block the run recorded: the record
 			// beside the handoff facts names the reason the source gave.
-			const attempt = state.latestPlaneActionAttempt(pullIdentity);
+			const attempt = state.planeAction.latestPlaneActionAttempt(pullIdentity);
 			expect(attempt?.outcome).toBe("blocked");
 			expect(attempt?.reason).toBe("GraphQL: PullRequest is not mergeable.");
 			expect(attempt?.decision).toBe("merged");
@@ -1803,7 +1827,7 @@ describe("the decision screen's merge", () => {
 		// An earlier turn of the ticket already ran the merge, and it was
 		// blocked: the attempt stands in the state with an at that predates
 		// this turn's completion.
-		state.recordPlaneActionAttempt({
+		state.planeAction.recordPlaneActionAttempt({
 			ticketIdentity: pullIdentity,
 			taskType: "merge",
 			decision: "merged",
@@ -1841,7 +1865,7 @@ describe("the decision screen's merge", () => {
 		seed(state, "awaiting", mergeRoute());
 		// The ledger stands full for the ticket: one attempt already recorded
 		// and the limit is one, the standing that holds the top-up's ask.
-		state.recordPlaneActionAttempt({
+		state.planeAction.recordPlaneActionAttempt({
 			ticketIdentity: pullIdentity,
 			taskType: "merge",
 			decision: "auto-merged",
@@ -1880,7 +1904,7 @@ describe("the decision screen's merge", () => {
 
 		// The confirm passed the full count: the run's attempt stands as the
 		// ticket's latest, with the operator's decision word.
-		const attempt = state.latestPlaneActionAttempt(pullIdentity);
+		const attempt = state.planeAction.latestPlaneActionAttempt(pullIdentity);
 		expect(attempt?.outcome).toBe("merged");
 		expect(attempt?.decision).toBe("merged");
 		state.close();
@@ -1944,12 +1968,12 @@ describe("the decision screen's merge", () => {
 						messageRowOf(f).includes(`the merge of "${pullTitle}" is in the Work queue`),
 					);
 					expect(fallback).not.toContain("Decision:");
-					expect(state.ticketState(pullIdentity)).toBe("open");
+					expect(state.ticketWorkCycle.ticketState(pullIdentity)).toBe("open");
 					// The attempt stands in the state before the fire's fresh read
 					// answers, and the run's settle waits on that read.
 					const attemptDeadline = Date.now() + 5000;
 					for (;;) {
-						if (state.latestPlaneActionAttempt(pullIdentity) !== null) break;
+						if (state.planeAction.latestPlaneActionAttempt(pullIdentity) !== null) break;
 						if (Date.now() >= attemptDeadline)
 							throw new Error("the attempt did not stand in the state");
 						await new Promise((resolve) => setTimeout(resolve, 20));
@@ -1967,7 +1991,7 @@ describe("the decision screen's merge", () => {
 
 			// The record stands for the outcome the screen read: the operator's
 			// decision word on the merged outcome.
-			const attempt = state.latestPlaneActionAttempt(pullIdentity);
+			const attempt = state.planeAction.latestPlaneActionAttempt(pullIdentity);
 			expect(attempt?.outcome).toBe("merged");
 			expect(attempt?.decision).toBe("merged");
 			state.close();
@@ -2021,13 +2045,13 @@ describe("the decision screen's merge", () => {
 		// decision word on the merged outcome, and the ticket's membership
 		// retired with the settle, the way the source's next refresh would
 		// leave it.
-		const attempt = state.latestPlaneActionAttempt(pullIdentity);
+		const attempt = state.planeAction.latestPlaneActionAttempt(pullIdentity);
 		expect(attempt?.outcome).toBe("merged");
 		expect(attempt?.decision).toBe("merged");
 		expect(
-			state
-				.visibleTickets(PLANE_WORKFLOW_STATES, PLANE_CONFIG.defaultTaskType)
-				.find((candidate) => candidate.identity === pullIdentity),
+			state.ticketWorkCycle
+				.ticketListViews(PLANE_WORKFLOW_STATES, PLANE_CONFIG.defaultTaskType)
+				.rows.find((candidate) => candidate.identity === pullIdentity),
 		).toBeUndefined();
 		state.close();
 	});
@@ -2045,7 +2069,7 @@ describe("the auto top-up merge", () => {
 		const runner = new FakeRunner();
 		runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
 		prep(state, runner);
-		state.setAutoHandoffMode(true);
+		state.handoff.setAutoHandoffMode(true);
 		stub(runner);
 		const src = new FakeSource("pulls", "github-pull-requests", pullSuccess());
 		const props: AppProps = {
@@ -2096,18 +2120,18 @@ describe("the auto top-up merge", () => {
 		);
 
 		// The attempt stands with the top-up's decision word.
-		const attempt = state.latestPlaneActionAttempt(pullIdentity);
+		const attempt = state.planeAction.latestPlaneActionAttempt(pullIdentity);
 		expect(attempt).not.toBeNull();
 		expect(attempt?.outcome).toBe("merged");
 		expect(attempt?.decision).toBe("auto-merged");
 		// The position kept the state it wears: the top-up's ask on the open
 		// ticket moves no state, and the merged pull request left the
 		// projection the moment the run settled.
-		expect(state.ticketState(pullIdentity)).toBe("open");
+		expect(state.ticketWorkCycle.ticketState(pullIdentity)).toBe("open");
 		expect(
-			state
-				.visibleTickets(PLANE_WORKFLOW_STATES, PLANE_CONFIG.defaultTaskType)
-				.find((candidate) => candidate.identity === pullIdentity),
+			state.ticketWorkCycle
+				.ticketListViews(PLANE_WORKFLOW_STATES, PLANE_CONFIG.defaultTaskType)
+				.rows.find((candidate) => candidate.identity === pullIdentity),
 		).toBeUndefined();
 		state.close();
 	});
@@ -2130,7 +2154,7 @@ describe("the auto top-up merge", () => {
 					// state the line would state.
 					await awaitFrame(
 						setup,
-						() => held.latestPlaneActionAttempt(pullIdentity)?.outcome === "blocked",
+						() => held.planeAction.latestPlaneActionAttempt(pullIdentity)?.outcome === "blocked",
 						"the block's attempt",
 					);
 				},
@@ -2152,7 +2176,7 @@ describe("the auto top-up merge", () => {
 				},
 			);
 
-			const attempt = state.latestPlaneActionAttempt(pullIdentity);
+			const attempt = state.planeAction.latestPlaneActionAttempt(pullIdentity);
 			expect(attempt?.outcome).toBe("blocked");
 			expect(attempt?.reason).toBe("GraphQL: PullRequest is not mergeable.");
 			expect(attempt?.decision).toBe("auto-merged");
@@ -2164,14 +2188,14 @@ describe("the auto top-up merge", () => {
 			// the projection at once, no refresh between the block and the
 			// read, and the position stands on them: needs-work offers the
 			// rework, not the merge the block already moved off.
-			const position = state
-				.visibleTickets(PLANE_WORKFLOW_STATES, PLANE_CONFIG.defaultTaskType, "all")
-				.find((candidate) => candidate.identity === pullIdentity);
+			const position = state.ticketWorkCycle
+				.ticketListViews(PLANE_WORKFLOW_STATES, PLANE_CONFIG.defaultTaskType, "all")
+				.rows.find((candidate) => candidate.identity === pullIdentity);
 			expect(position?.labels).toEqual(["ready-to-ship", "needs-work"]);
 			expect(position?.suggestedTaskType).toBe("rework");
 			// The ticket keeps the open state it wore: no cycle ran for it, and
 			// the block ran no retirement, so the ticket stays listed.
-			expect(state.ticketState(pullIdentity)).toBe("open");
+			expect(state.ticketWorkCycle.ticketState(pullIdentity)).toBe("open");
 			expect(position).toBeDefined();
 			state.close();
 		} finally {
@@ -2189,18 +2213,18 @@ describe("the auto top-up merge", () => {
 			async (setup) => {
 				await awaitFrame(
 					setup,
-					() => held.latestPlaneActionAttempt(pullIdentity)?.outcome === "blocked",
+					() => held.planeAction.latestPlaneActionAttempt(pullIdentity)?.outcome === "blocked",
 					"the block's attempt",
 				);
 				// The failed write converged nothing (ADR 0079): the labels the
 				// source last fetched still wear the merge position, and the
 				// hold is the one gate between the top-up and the re-ask.
-				const position = held
-					.visibleTickets(PLANE_WORKFLOW_STATES, PLANE_CONFIG.defaultTaskType, "all")
-					.find((candidate) => candidate.identity === pullIdentity);
+				const position = held.ticketWorkCycle
+					.ticketListViews(PLANE_WORKFLOW_STATES, PLANE_CONFIG.defaultTaskType, "all")
+					.rows.find((candidate) => candidate.identity === pullIdentity);
 				expect(position?.labels).toEqual(["ready-to-ship"]);
 				expect(position?.suggestedTaskType).toBe("merge");
-				expect(held.planeActionBlockedUnrefreshed(pullIdentity)).toBe(true);
+				expect(held.planeAction.planeActionBlockedUnrefreshed(pullIdentity)).toBe(true);
 				// The hold's window: the cycles keep running with the queue
 				// empty, and the position still reads the labels the source
 				// last fetched. A re-ask the hold failed to stop would run the
@@ -2212,7 +2236,10 @@ describe("the auto top-up merge", () => {
 				// still wears the merge position, the way a block whose label
 				// write failed stands. The next cycle's walk asks the merge
 				// again.
-				held.applyFetch(pullsSource, pullSuccess(new Date(Date.now() + 60_000).toISOString()));
+				held.sourceFact.applyFetch(
+					pullsSource,
+					pullSuccess(new Date(Date.now() + 60_000).toISOString()),
+				);
 				await awaitFrame(
 					setup,
 					() =>
@@ -2246,16 +2273,16 @@ describe("the auto top-up merge", () => {
 		// and the second attempt is the read that carried the labels.
 		const mergeCommands = runner.commands().filter((command) => command.startsWith("gh pr merge "));
 		expect(mergeCommands).toHaveLength(2);
-		expect(state.planeActionAttempts(pullIdentity)).toHaveLength(2);
+		expect(state.planeAction.planeActionAttemptCount(pullIdentity)).toBe(2);
 		expect(
 			runner.commands().filter((command) => command.startsWith("gh pr comment ")),
 		).toHaveLength(2);
 		// The failed write converged nothing on either attempt: the position
 		// still wears the labels the source last fetched and offers the merge
 		// the hold keeps checking.
-		const position = state
-			.visibleTickets(PLANE_WORKFLOW_STATES, PLANE_CONFIG.defaultTaskType, "all")
-			.find((candidate) => candidate.identity === pullIdentity);
+		const position = state.ticketWorkCycle
+			.ticketListViews(PLANE_WORKFLOW_STATES, PLANE_CONFIG.defaultTaskType, "all")
+			.rows.find((candidate) => candidate.identity === pullIdentity);
 		expect(position?.labels).toEqual(["ready-to-ship"]);
 		expect(position?.suggestedTaskType).toBe("merge");
 		state.close();
@@ -2273,7 +2300,7 @@ describe("the auto top-up merge", () => {
 			(s) => {
 				// The ledger stands full: one attempt already recorded for
 				// the ticket, and the limit is one.
-				s.recordPlaneActionAttempt({
+				s.planeAction.recordPlaneActionAttempt({
 					ticketIdentity: pullIdentity,
 					taskType: "merge",
 					decision: "auto-merged",
@@ -2285,8 +2312,10 @@ describe("the auto top-up merge", () => {
 		);
 
 		// The full count held the ask: no item, no attempt but the seed.
-		expect(state.workQueue()).toEqual([]);
-		expect(state.latestPlaneActionAttempt(pullIdentity)?.at).toBe("2026-08-31T11:00:00Z");
+		expect(state.workQueue.items()).toEqual([]);
+		expect(state.planeAction.latestPlaneActionAttempt(pullIdentity)?.at).toBe(
+			"2026-08-31T11:00:00Z",
+		);
 		state.close();
 	});
 
@@ -2325,9 +2354,9 @@ describe("the auto top-up merge", () => {
 			(s) => {
 				// The pause holds the pickup, and the item the test stages
 				// stands in the queue for the surfaces the body reads.
-				s.setQueuePaused(true);
+				s.workQueue.setQueuePaused(true);
 				expect(
-					s.enqueuePlaneActionWork({
+					s.workQueue.enqueuePlaneActionWork({
 						ticketIdentity: pullIdentity,
 						origin: "open",
 						automatic: true,
@@ -2337,7 +2366,7 @@ describe("the auto top-up merge", () => {
 			},
 		);
 		// The pause held the pickup: no command ran on the item.
-		expect(state.latestPlaneActionAttempt(pullIdentity)).toBeNull();
+		expect(state.planeAction.latestPlaneActionAttempt(pullIdentity)).toBeNull();
 		state.close();
 	});
 
@@ -2370,32 +2399,32 @@ describe("the auto top-up merge", () => {
 				// write, so the position rests open, and the wait stands on the
 				// item alone. The pause holds the pickup.
 				seed(s, "awaiting", mergeRoute());
-				const handoffId = s.latestHandoff(pullIdentity)?.handoffId ?? "";
+				const handoffId = s.handoff.latestHandoff(pullIdentity)?.handoffId ?? "";
 				if (handoffId === "") throw new Error("the seeded turn left no handoff");
 				expect(
-					s.applyCompletionDecision({
+					s.ticketWorkCycle.applyCompletionDecision({
 						ticketIdentity: pullIdentity,
 						handoffId,
 						decision: "auto-merged",
 						decidedAt: "2026-08-31T11:10:00Z",
 					}),
 				).toBe(true);
-				expect(s.ticketState(pullIdentity)).toBe("open");
+				expect(s.ticketWorkCycle.ticketState(pullIdentity)).toBe("open");
 				expect(
-					s.enqueuePlaneActionWork({
+					s.workQueue.enqueuePlaneActionWork({
 						ticketIdentity: pullIdentity,
 						origin: "workflow",
 						automatic: true,
 						taskType: "merge",
 					}),
 				).toEqual({ ok: true });
-				s.setQueuePaused(true);
+				s.workQueue.setQueuePaused(true);
 			},
 		);
 		// The pause held the pickup: no command ran on the item, and the
 		// position kept the open state the ask left it.
-		expect(state.latestPlaneActionAttempt(pullIdentity)).toBeNull();
-		expect(state.ticketState(pullIdentity)).toBe("open");
+		expect(state.planeAction.latestPlaneActionAttempt(pullIdentity)).toBeNull();
+		expect(state.ticketWorkCycle.ticketState(pullIdentity)).toBe("open");
 		state.close();
 	});
 
@@ -2410,16 +2439,16 @@ describe("the auto top-up merge", () => {
 				// the Message line in the warning voice.
 				await settle(setup);
 				await new Promise((resolve) => setTimeout(resolve, 400));
-				expect(held.dispatchPauseActive()).toBe(true);
-				expect(held.workQueue()).toEqual([]);
-				expect(held.latestPlaneActionAttempt(pullIdentity)).toBeNull();
+				expect(held.ticketWorkCycle.dispatchPauseActive()).toBe(true);
+				expect(held.workQueue.items()).toEqual([]);
+				expect(held.planeAction.latestPlaneActionAttempt(pullIdentity)).toBeNull();
 				expect(messageRowOf(setup.captureCharFrame())).toContain("Dispatch pause");
 				// The release: the decision on the held failed trace ends the
 				// pause, and the next cycle's open walk adds and runs the merge,
 				// the way the unheld run does. The released ticket's source is
 				// stale behind its cycle end, so the re-verify gate holds it out
 				// of the same walk that adds the merge.
-				held.applyCompletionDecision({
+				held.ticketWorkCycle.applyCompletionDecision({
 					ticketIdentity: issueIdentity,
 					handoffId: failedHandoffId,
 					decision: "closed",
@@ -2427,7 +2456,7 @@ describe("the auto top-up merge", () => {
 				});
 				await awaitFrame(
 					setup,
-					() => held.latestPlaneActionAttempt(pullIdentity)?.outcome === "merged",
+					() => held.planeAction.latestPlaneActionAttempt(pullIdentity)?.outcome === "merged",
 					"the merge run",
 				);
 			},
@@ -2441,7 +2470,7 @@ describe("the auto top-up merge", () => {
 				// The pause comes from the issue's held failed turn, beside the
 				// open pull request the merge add would run on.
 				withIssueSource(s);
-				const claim = s.claimHandoff(
+				const claim = s.handoff.claimHandoff(
 					issueIdentity,
 					{
 						agentType: "pi",
@@ -2454,12 +2483,12 @@ describe("the auto top-up merge", () => {
 					"open",
 				);
 				if (!claim.ok) throw new Error(claim.reason);
-				s.settleHandoff(claim.claim.attemptId, true, undefined, {
+				s.handoff.settleHandoff(claim.claim.attemptId, true, undefined, {
 					paneId: "pane-2",
 					tabId: "tab-2",
 					workspaceId: "ws-2",
 				});
-				s.settleTurn({
+				s.ticketWorkCycle.settleTurn({
 					ticketIdentity: issueIdentity,
 					handoffId: claim.claim.attemptId,
 					taskType: "rework",
@@ -2475,10 +2504,10 @@ describe("the auto top-up merge", () => {
 
 		// The release let the add through: the attempt stands with the
 		// top-up's decision word, the way the unheld run records it.
-		const attempt = state.latestPlaneActionAttempt(pullIdentity);
+		const attempt = state.planeAction.latestPlaneActionAttempt(pullIdentity);
 		expect(attempt?.outcome).toBe("merged");
 		expect(attempt?.decision).toBe("auto-merged");
-		expect(state.dispatchPauseActive()).toBe(false);
+		expect(state.ticketWorkCycle.dispatchPauseActive()).toBe(false);
 		state.close();
 	});
 });

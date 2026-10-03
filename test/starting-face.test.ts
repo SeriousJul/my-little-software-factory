@@ -133,11 +133,11 @@ function seed(shape: "open" | "in-flight" | "awaiting", detail: SeedDetail = {})
 	const state = openFactoryState(join(dir, "state.sqlite"), detail.stateNow);
 	// The frames assert the unsplit list: a fresh file opens grouped by
 	// repository (ADR 0066), so the fixture holds the flat axis.
-	state.setGroupingAxis("tickets", "none");
-	state.initializeSources([source]);
-	state.applyFetch(source, success);
+	state.grouping.setGroupingAxis("tickets", "none");
+	state.sourceFact.initializeSources([source]);
+	state.sourceFact.applyFetch(source, success);
 	if (shape !== "open") {
-		const claim = state.claimHandoff(
+		const claim = state.handoff.claimHandoff(
 			identity,
 			{
 				agentType: "pi",
@@ -150,13 +150,13 @@ function seed(shape: "open" | "in-flight" | "awaiting", detail: SeedDetail = {})
 			"open",
 		);
 		if (!claim.ok) throw new Error(claim.reason);
-		state.settleHandoff(claim.claim.attemptId, true, undefined, {
+		state.handoff.settleHandoff(claim.claim.attemptId, true, undefined, {
 			paneId: "pane-1",
 			tabId: "tab-1",
 			workspaceId: "ws-1",
 		});
 		if (shape === "awaiting") {
-			state.settleTurn({
+			state.ticketWorkCycle.settleTurn({
 				ticketIdentity: identity,
 				handoffId: claim.claim.attemptId,
 				taskType: "implement",
@@ -190,7 +190,7 @@ function seededApp(
 	// The operator's choice of the Auto-handoff mode is a fact of the state
 	// file, not of the config (ADR 0036), so the seed writes it before the app
 	// mounts.
-	if (detail.autoMode === true) state.setAutoHandoffMode(true);
+	if (detail.autoMode === true) state.handoff.setAutoHandoffMode(true);
 	const home = mkdtempSync(join(tmpdir(), "factory-face-home-"));
 	paths.push(home);
 	const repo = mkdtempSync(join(tmpdir(), "factory-face-repo-"));
@@ -443,7 +443,6 @@ describe("the Starting window's timeline", () => {
 			reason: "",
 			ticketFacts: [],
 			pullRequestFacts: [],
-			autoAdvance: false,
 			ticketWrite: null,
 			pullRequestWrite: null,
 			pullRequestIdentity: null,
@@ -528,7 +527,7 @@ describe("the Starting window's timeline", () => {
 				expect(badgeRow(back)).toContain("[open]");
 				expect(badgeRow(back)).not.toContain("held");
 				// And the decision stands where the ask put it.
-				expect(app.state.lastCompletion(identity)?.decision).toBe("handed-off");
+				expect(app.state.ticketWorkCycle.lastCompletion(identity)?.decision).toBe("handed-off");
 			},
 			WIDTH,
 			HEIGHT,

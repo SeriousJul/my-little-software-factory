@@ -14,7 +14,7 @@ import {
 } from "../src/components/controls.ts";
 import { GROUPING_AXES } from "../src/domain/grouping.ts";
 import type { Ticket, TicketListFilter } from "../src/domain/ticket.ts";
-import type { Consultation } from "../src/state.ts";
+import type { Consultation } from "../src/state/consultation-record.ts";
 
 const values: Omit<ControlContext, "mode"> = {
 	listCanMove: true,

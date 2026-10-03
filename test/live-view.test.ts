@@ -169,10 +169,10 @@ function seedInFlight(): FactoryState {
 	);
 	// The frames assert the unsplit list: a fresh file opens grouped by
 	// repository (ADR 0066), so the fixture holds the flat axis.
-	state.setGroupingAxis("tickets", "none");
-	state.initializeSources([source]);
-	state.applyFetch(source, success);
-	const claim = state.claimHandoff(
+	state.grouping.setGroupingAxis("tickets", "none");
+	state.sourceFact.initializeSources([source]);
+	state.sourceFact.applyFetch(source, success);
+	const claim = state.handoff.claimHandoff(
 		identity,
 		{
 			agentType: "pi",
@@ -185,7 +185,7 @@ function seedInFlight(): FactoryState {
 		"open",
 	);
 	if (!claim.ok) throw new Error(claim.reason);
-	state.settleHandoff(claim.claim.attemptId, true, undefined, {
+	state.handoff.settleHandoff(claim.claim.attemptId, true, undefined, {
 		paneId: "pane-1",
 		tabId: "tab-1",
 		workspaceId: "ws-1",
@@ -708,8 +708,8 @@ describe("the Live view against a running factory", () => {
 				expect(app.runner.commands()).toContain("herdr agent focus pane-1");
 				// The focus is pure: no completion trace exists, and the
 				// ticket is still in flight under its badge.
-				expect(app.state.lastCompletion(identity)).toBeNull();
-				expect(app.state.ticketsByState(["awaiting"])).toHaveLength(0);
+				expect(app.state.ticketWorkCycle.lastCompletion(identity)).toBeNull();
+				expect(app.state.ticketWorkCycle.ticketsByState(["awaiting"])).toHaveLength(0);
 				expect(frame).not.toContain("Live:");
 				expect(inFlightFace(ticketRow(await settle(setup)))).toBe(true);
 			},
@@ -750,8 +750,8 @@ describe("the Live view against a running factory", () => {
 				);
 				expect(frame).toContain(`Info: focused the agent of ticket ${identity}`);
 				expect(app.runner.commands()).toContain("herdr agent focus pane-1");
-				expect(app.state.lastCompletion(identity)).toBeNull();
-				expect(app.state.ticketsByState(["awaiting"])).toHaveLength(0);
+				expect(app.state.ticketWorkCycle.lastCompletion(identity)).toBeNull();
+				expect(app.state.ticketWorkCycle.ticketsByState(["awaiting"])).toHaveLength(0);
 				expect(frame).not.toContain("Live:");
 				expect(inFlightFace(ticketRow(await settle(setup)))).toBe(true);
 			},
@@ -821,7 +821,7 @@ describe("the Live view against a running factory", () => {
 				expect(app.runner.commands()).toContain(
 					"gh issue edit #5 --repo github.com/acme/factory --add-label ready-for-review",
 				);
-				const stored = app.state.lastCompletion(identity)?.transition;
+				const stored = app.state.ticketWorkCycle.lastCompletion(identity)?.transition;
 				expect(stored).toEqual(
 					expect.objectContaining({
 						fired: true,
@@ -845,30 +845,27 @@ describe("the Live view against a running factory", () => {
 		app.state.close();
 	});
 
-	test("a settled turn whose automatic route cannot start keeps streaming", async () => {
-		// The implement transition auto-advances into the review position: the
-		// factory decides for itself (route), never handing the screen over.
+	test("a settled turn Auto-handoff mode parks for the operator keeps streaming", async () => {
+		// The implement transition writes ready-for-review, so its Next step is
+		// the review position on the ticket itself. The task type carries the
+		// Operator-decides flag, so the machine decides nothing (ADR 0085) and the
+		// turn rests awaiting with its decision unwritten. Auto-handoff mode owns
+		// the Live view's body (ADR 0092): the stream stands where the operator
+		// left it, and no decision row appears.
 		const app = seededApp({
 			taskTypes: {
 				...BASE_CONFIG.taskTypes,
 				implement: {
 					...BASE_CONFIG.taskTypes.implement,
+					operatorDecides: true,
 					transition: {
 						ticketFacts: ["ready-for-review"],
 						pullRequestFacts: [],
-						autoAdvance: true,
 					},
 				},
 			},
 		});
-		const checkoutPath = Object.values(app.config.repos)[0];
-		// The checkout is not a repository: the automatic route cannot
-		// start, so the trace rests pending and the ticket stays in
-		// awaiting.
-		app.runner.set("git", ["-C", checkoutPath, "rev-parse", "--git-dir"], {
-			code: 1,
-			stderr: "not a repository",
-		});
+		app.state.handoff.setAutoHandoffMode(true);
 		app.runner.set("herdr", ["agent", "list"], {
 			stdout: agentListJson([
 				{
@@ -888,9 +885,9 @@ describe("the Live view against a running factory", () => {
 				app.src.settle(success);
 				await awaitFrame(setup, (f) => f.includes("Persist source facts"), "the ticket row");
 				await pressReturn(setup, "the Live view", (f) => f.includes("Live: Persist source facts"));
-				// The agent reports done. The turn settles, the factory takes
-				// the decision for itself (its route cannot start), and the
-				// screen never hands over to the decision rows.
+				// The agent reports done. The turn settles, and the factory decides
+				// nothing for it: the Operator-decides flag parks the completion
+				// ahead of every outcome check, so the ticket rests awaiting.
 				app.runner.set("herdr", ["agent", "list"], {
 					stdout: agentListJson([
 						{
@@ -903,21 +900,23 @@ describe("the Live view against a running factory", () => {
 						},
 					]),
 				});
-				// The settle lands in the state; the route's failure holds the
-				// trace pending for the next cycle.
 				const deadline = Date.now() + 2000;
-				while (app.state.ticketState(identity) !== "awaiting" && Date.now() < deadline) {
+				while (
+					app.state.ticketWorkCycle.ticketState(identity) !== "awaiting" &&
+					Date.now() < deadline
+				) {
 					await sleep(20);
 				}
-				expect(app.state.ticketState(identity)).toBe("awaiting");
+				expect(app.state.ticketWorkCycle.ticketState(identity)).toBe("awaiting");
 				const frame = setup.captureCharFrame();
-				// The factory's own decision never hands the screen over:
-				// the stream stands where the operator left it, and no decision
-				// rows appear at all while the route rests.
+				// The mode owns the body, not the outcome: the stream stands where
+				// the operator left it, and no decision rows appear at all while the
+				// parked turn waits.
 				expect(frame).toContain("Live: Persist source facts");
 				expect(frame).toContain("the agent is finishing up");
 				expect(frame).not.toContain("Handoff: review");
-				expect(app.state.lastCompletion(identity)?.decision).toBeNull();
+				expect(app.state.ticketWorkCycle.lastCompletion(identity)?.decision).toBeNull();
+				expect(app.state.workQueue.items()).toEqual([]);
 			},
 			WIDTH,
 			HEIGHT,
@@ -964,7 +963,7 @@ describe("the Live view against a running factory", () => {
 					(f) => f.includes("Live: Persist source facts") && !f.includes("Missing:"),
 					"the stream to return",
 				);
-				expect(app.state.ticketState(identity)).toBe("running");
+				expect(app.state.ticketWorkCycle.ticketState(identity)).toBe("running");
 			},
 			WIDTH,
 			HEIGHT,
@@ -1042,10 +1041,12 @@ describe("the Live view against a running factory", () => {
 				);
 				const listFrame = await settle(setup);
 				expect(listFrame).not.toContain("Live: Persist source facts");
-				expect(app.state.lastCompletion(identity)?.decision).toBe("handed-off");
+				expect(app.state.ticketWorkCycle.lastCompletion(identity)?.decision).toBe("handed-off");
 				// The new agent is live: the observation loop may already have
 				// marked the in-flight ticket running.
-				expect(["handed-off", "running"]).toContain(app.state.ticketState(identity) ?? "");
+				expect(["handed-off", "running"]).toContain(
+					app.state.ticketWorkCycle.ticketState(identity) ?? "",
+				);
 				// The Live view reopens on the row and streams the new pane: the
 				// stream follows the handoff, and no focus, which is the Goto's
 				// alone.
@@ -1124,9 +1125,9 @@ describe("the Live view against a running factory", () => {
 				expect(frame).toContain("Turn log");
 				// Only the edit is dropped: the turn is still undecided, and no
 				// handoff was claimed.
-				expect(app.state.ticketState(identity)).toBe("awaiting");
-				expect(app.state.lastCompletion(identity)?.decision).toBe(null);
-				expect(app.state.handoffCount(identity)).toBe(1);
+				expect(app.state.ticketWorkCycle.ticketState(identity)).toBe("awaiting");
+				expect(app.state.ticketWorkCycle.lastCompletion(identity)?.decision).toBe(null);
+				expect(app.state.handoff.handoffCount(identity)).toBe(1);
 			},
 			WIDTH,
 			HEIGHT,
@@ -1199,8 +1200,10 @@ describe("the Live view against a running factory", () => {
 				const listFrame = await settle(setup);
 				expect(listFrame).not.toContain("Live: Persist source facts");
 				expect(listFrame).not.toContain("Edit handoff");
-				expect(app.state.lastCompletion(identity)?.decision).toBe("handed-off");
-				expect(["handed-off", "running"]).toContain(app.state.ticketState(identity) ?? "");
+				expect(app.state.ticketWorkCycle.lastCompletion(identity)?.decision).toBe("handed-off");
+				expect(["handed-off", "running"]).toContain(
+					app.state.ticketWorkCycle.ticketState(identity) ?? "",
+				);
 				// The Live view reopens on the row and streams the new pane.
 				await pressReturn(
 					setup,
@@ -1217,21 +1220,20 @@ describe("the Live view against a running factory", () => {
 	});
 
 	test("the cycle ending while the view is open closes the screen", async () => {
-		// A task type the factory closes by itself: the transition
-		// auto-advances but writes no position, so the turn can only end the
-		// cycle, never hand off. The machine decides an auto-advancing
-		// settled turn only in Auto mode (ADR 0051), so the mode stands on
-		// when the view opens.
+		// A task type the factory closes by itself: the transition fires and
+		// derives no Next step, so the turn can only end the cycle, never hand
+		// off. The machine decides a settled turn only in Auto mode (ADR 0051,
+		// ADR 0092), so the mode stands on when the view opens.
 		const app = seededApp({
 			taskTypes: {
 				...BASE_CONFIG.taskTypes,
 				implement: {
 					...BASE_CONFIG.taskTypes.implement,
-					transition: { ticketFacts: [], pullRequestFacts: [], autoAdvance: true },
+					transition: { ticketFacts: [], pullRequestFacts: [] },
 				},
 			},
 		});
-		app.state.setAutoHandoffMode(true);
+		app.state.handoff.setAutoHandoffMode(true);
 		app.runner.set("herdr", ["agent", "list"], {
 			stdout: agentListJson([
 				{
@@ -1275,8 +1277,8 @@ describe("the Live view against a running factory", () => {
 				// The factory decided the turn, and the screen is gone with the
 				// cycle: no choice rows, no box.
 				expect(frame).not.toContain("Handoff: review");
-				expect(app.state.lastCompletion(identity)?.decision).toBe("auto-closed");
-				expect(app.state.ticketState(identity)).toBe("open");
+				expect(app.state.ticketWorkCycle.lastCompletion(identity)?.decision).toBe("auto-closed");
+				expect(app.state.ticketWorkCycle.ticketState(identity)).toBe("open");
 			},
 			WIDTH,
 			HEIGHT,

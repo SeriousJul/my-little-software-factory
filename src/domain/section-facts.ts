@@ -13,7 +13,8 @@
  * counts, and the header paints them through the shared paint layer (ADR 0024).
  */
 
-import type { Consultation, WorkQueueItem } from "../state.ts";
+import type { Consultation } from "../state/consultation-record.ts";
+import type { WorkQueueItem } from "../state/work-queue.ts";
 import { holdsDecision, type Ticket } from "./ticket.ts";
 import { inFlight } from "./ticket-facts.ts";
 

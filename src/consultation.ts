@@ -5,7 +5,7 @@ import { fileExists } from "./fs.ts";
 import type { HerdrAgent } from "./herdr.ts";
 import { expandHome, lookupRepositoryMapping, matchesRepository, realPathOf } from "./repo.ts";
 import type { CommandResult, CommandRunner } from "./runner.ts";
-import type { Consultation, ConsultationResource } from "./state.ts";
+import type { Consultation, ConsultationResource } from "./state/consultation-record.ts";
 import type { TurnEndCause } from "./turn-log.ts";
 
 export const CONSULTATION_INPUT_LIMIT = 64 * 1024;

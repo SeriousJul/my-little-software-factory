@@ -1,6 +1,6 @@
 /** Per-source refresh scheduling. A slow source never overlaps itself. */
 import type { Logger } from "./logging.ts";
-import type { FactoryState, SourceDefinition } from "./state.ts";
+import type { SourceDefinition, SourceFactAggregate } from "./state/source-fact.ts";
 import type { FetchOutcome, TicketSource } from "./ticket-source.ts";
 
 export interface RefreshClock {
@@ -10,6 +10,11 @@ export interface RefreshClock {
 
 export const SYSTEM_CLOCK: RefreshClock = { setTimeout, clearTimeout };
 
+/** The aggregates the refresh coordinator reads, as a list (issue #202). */
+export interface RefreshAggregates {
+	sourceFact: SourceFactAggregate;
+}
+
 export class RefreshCoordinator {
 	private readonly inFlight = new Set<string>();
 	private readonly timers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -17,7 +22,7 @@ export class RefreshCoordinator {
 	private readonly settling = new Map<string, Set<() => void>>();
 	private stopped = false;
 	private readonly sources: readonly TicketSource[];
-	private readonly state: FactoryState;
+	private readonly state: RefreshAggregates;
 	private readonly changed: (outcome?: FetchOutcome) => void;
 	private readonly clock: RefreshClock;
 	private readonly settled?: (sourceName: string) => void;
@@ -25,7 +30,7 @@ export class RefreshCoordinator {
 
 	constructor(
 		sources: readonly TicketSource[],
-		state: FactoryState,
+		state: RefreshAggregates,
 		changed: (outcome?: FetchOutcome) => void,
 		clock: RefreshClock = SYSTEM_CLOCK,
 		options: { settled?: (sourceName: string) => void; log?: Logger } = {},
@@ -39,7 +44,7 @@ export class RefreshCoordinator {
 	}
 
 	start(): void {
-		this.state.initializeSources(this.sources.map(sourceDefinition));
+		this.state.sourceFact.initializeSources(this.sources.map(sourceDefinition));
 		this.changed();
 		this.refreshAll();
 	}
@@ -120,7 +125,7 @@ export class RefreshCoordinator {
 				outcome = result;
 				this.logRefresh(source.name, result, startedAt);
 				if (this.stopped) return;
-				this.state.applyFetch(sourceDefinition(source), result);
+				this.state.sourceFact.applyFetch(sourceDefinition(source), result);
 			})
 			.catch((error) => {
 				outcome = {
@@ -129,7 +134,7 @@ export class RefreshCoordinator {
 				};
 				this.logRefresh(source.name, outcome, startedAt);
 				if (this.stopped) return;
-				this.state.applyFetch(sourceDefinition(source), outcome);
+				this.state.sourceFact.applyFetch(sourceDefinition(source), outcome);
 			})
 			.finally(() => {
 				this.inFlight.delete(source.name);

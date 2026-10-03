@@ -9,11 +9,13 @@ import { describe, expect, test } from "bun:test";
 import type { TransitionOutcome } from "../src/config.ts";
 import {
 	type DecisionFactInputs,
+	type DecisionPosition,
 	decisionFacts,
 	routeStandingLine,
 	transitionFactLine,
 } from "../src/domain/decision-facts.ts";
-import type { PlaneActionAttempt, WorkQueueItem } from "../src/state.ts";
+import type { PlaneActionAttempt } from "../src/state/plane-action.ts";
+import type { WorkQueueItem } from "../src/state/work-queue.ts";
 import { completion, handoff, queueItem, ticket } from "./fact-fixtures.ts";
 
 const outcome = (over: Partial<TransitionOutcome> = {}): TransitionOutcome => ({
@@ -22,7 +24,6 @@ const outcome = (over: Partial<TransitionOutcome> = {}): TransitionOutcome => ({
 	reason: "",
 	ticketFacts: ["ready-for-review"],
 	pullRequestFacts: [],
-	autoAdvance: false,
 	ticketWrite: { added: ["ready-for-review"], removed: ["ready-for-agent"] },
 	pullRequestWrite: null,
 	pullRequestIdentity: null,
@@ -30,6 +31,15 @@ const outcome = (over: Partial<TransitionOutcome> = {}): TransitionOutcome => ({
 	writeFailure: "",
 	positionTaskType: "review",
 	positionTicketIdentity: "github:github.com:I_1",
+	...over,
+});
+
+/** The transition's position record as the screen hands it: nothing stands on it. */
+const positionOn = (over: Partial<DecisionPosition> = {}): DecisionPosition => ({
+	ticket: undefined,
+	stillListed: true,
+	isPlaneAction: false,
+	latestAttempt: null,
 	...over,
 });
 
@@ -41,10 +51,13 @@ const decisionInputs = (over: Partial<DecisionFactInputs> = {}): DecisionFactInp
 	}),
 	queue: [],
 	claims: new Set<string>(),
-	positionTicket: undefined,
-	positionStillListed: true,
-	positionIsPlaneAction: false,
-	latestPlaneActionAttempt: null,
+	position: {
+		ticket: undefined,
+		stillListed: true,
+		isPlaneAction: false,
+		latestAttempt: null,
+	},
+	nextStepGate: null,
 	defaultTaskType: "implement",
 	...over,
 });
@@ -84,7 +97,10 @@ describe("the Decision region's facts", () => {
 			state: "running",
 			handoff: handoff(),
 		});
-		const facts = decisionFacts({ ...decisionInputs(), positionTicket: position });
+		const facts = decisionFacts({
+			...decisionInputs(),
+			position: { ...positionOn(), ticket: position },
+		});
 		expect(facts.factLines).toContain("the route is running on its position ticket");
 		expect(facts.offer).toBeNull();
 	});
@@ -95,13 +111,19 @@ describe("the Decision region's facts", () => {
 	});
 
 	test("a position that left its source withdraws the row and says so", () => {
-		const facts = decisionFacts({ ...decisionInputs(), positionStillListed: false });
+		const facts = decisionFacts({
+			...decisionInputs(),
+			position: { ...positionOn(), stillListed: false },
+		});
 		expect(facts.offer).toBeNull();
 		expect(facts.factLines).toContain("the position's ticket left its source; no handoff stands");
 	});
 
 	test("a plane action position asks for the merge, not for a handoff", () => {
-		const facts = decisionFacts({ ...decisionInputs(), positionIsPlaneAction: true });
+		const facts = decisionFacts({
+			...decisionInputs(),
+			position: { ...positionOn(), isPlaneAction: true },
+		});
 		expect(facts.offer).toEqual({ kind: "merge", taskType: "review" });
 	});
 
@@ -117,7 +139,10 @@ describe("the Decision region's facts", () => {
 			transition: null,
 			at: "2026-01-02T00:00:00Z",
 		};
-		const facts = decisionFacts({ ...settled, latestPlaneActionAttempt: attempt });
+		const facts = decisionFacts({
+			...settled,
+			position: { ...positionOn(), latestAttempt: attempt },
+		});
 		expect(facts.factLines).toContain("the merge was blocked: the pull request has open comments");
 		expect(facts.offer).toBeNull();
 	});
@@ -141,6 +166,27 @@ describe("the Decision region's facts", () => {
 		);
 		expect(facts.factLines).toEqual(["no transition branch held: no label matched"]);
 		expect(facts.offer).toBeNull();
+	});
+
+	test("a Next step the machine will not take on its own is stated beside the row", () => {
+		// ADR 0092: the operator's own key passes the gates, so the row stands and
+		// the fact line says why the factory holds the step.
+		const facts = decisionFacts({ ...decisionInputs(), nextStepGate: "same-type-hold" });
+		expect(facts.offer).toEqual({ kind: "handoff", taskType: "review" });
+		expect(facts.factLines).toContain(
+			"the Next step is held: the Same-type hold stands on the position",
+		);
+	});
+
+	test("a held Next step states no line where the route still stands", () => {
+		const settled = decisionInputs();
+		const facts = decisionFacts({
+			...settled,
+			nextStepGate: "handoff-limit",
+			queue: [queueItem(settled.ticket.identity, "workflow")],
+		});
+		expect(facts.factLines).toContain("the route is waiting in the Work queue");
+		expect(facts.factLines.some((line) => line.startsWith("the Next step is held"))).toBe(false);
 	});
 });
 
@@ -176,7 +222,10 @@ describe("the route's standing line", () => {
 			handoff: handoff(),
 		});
 		expect(
-			routeStandingLine(settled.ticket, outcome(), false, { ...settled, positionTicket: position }),
+			routeStandingLine(settled.ticket, outcome(), false, {
+				...settled,
+				position: { ...positionOn(), ticket: position },
+			}),
 		).toBe("the route is running on its position ticket");
 	});
 

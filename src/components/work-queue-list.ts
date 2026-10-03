@@ -8,7 +8,7 @@
 import type { BoxRenderable } from "@opentui/core";
 import { createElement } from "@opentui/react";
 import { useRef } from "react";
-import type { WorkQueueItem } from "../state.ts";
+import type { WorkQueueItem } from "../state/work-queue.ts";
 import { usePaneGeometry } from "./geometry.ts";
 import { listMouse, listWindow } from "./list-pane.ts";
 import { padToWidth, truncateToWidth, widthOf } from "./text.ts";

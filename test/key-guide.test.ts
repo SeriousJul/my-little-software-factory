@@ -218,9 +218,9 @@ describe("the in-app Key guide", () => {
 				missingRunner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
 				const source = new FakeSource("issues", "github-issues", success([issueTicket()]));
 				const sourceDef = { name: "issues", kind: "github-issues" };
-				state.initializeSources([sourceDef]);
-				state.applyFetch(sourceDef, success([issueTicket()]));
-				const claim = state.claimHandoff(
+				state.sourceFact.initializeSources([sourceDef]);
+				state.sourceFact.applyFetch(sourceDef, success([issueTicket()]));
+				const claim = state.handoff.claimHandoff(
 					"github:github.com:I_5",
 					{
 						agentType: "pi",
@@ -233,7 +233,7 @@ describe("the in-app Key guide", () => {
 					"open",
 				);
 				if (!claim.ok) throw new Error(claim.reason);
-				state.settleHandoff(claim.claim.attemptId, true, undefined, {
+				state.handoff.settleHandoff(claim.claim.attemptId, true, undefined, {
 					paneId: "pane-1",
 					tabId: "tab-1",
 					workspaceId: "ws-1",
@@ -293,7 +293,7 @@ describe("the in-app Key guide", () => {
 		const state = freshState();
 		try {
 			// One waiting start: the guide reads the queue cursor through it.
-			const enqueued = state.enqueueWork({
+			const enqueued = state.workQueue.enqueueWork({
 				ticketIdentity: "github:github.com:I_5",
 				origin: "open",
 				choice: baseChoice("pi", "live-worktree", "implement"),

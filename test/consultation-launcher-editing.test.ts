@@ -120,7 +120,7 @@ describe("the Consultation launcher's editing baseline", () => {
 			// The Consultation is still not open: an ordinary editing key never
 			// started Agent work on the operator's behalf.
 			expect(frameText(frame)).toContain("Consultation launcher");
-			expect(setup.state.consultations("open")).toEqual([]);
+			expect(setup.state.consultationRecord.consultations("open")).toEqual([]);
 
 			// The visible Launch action is what submits the draft.
 			await tabUntil(setup, 1, "❯ Launch Consultation");
@@ -130,7 +130,7 @@ describe("the Consultation launcher's editing baseline", () => {
 				(f) => !frameText(f).includes("Consultation launcher"),
 				"the Launch action to open the Consultation",
 			);
-			const opened = setup.state.consultations("open");
+			const opened = setup.state.consultationRecord.consultations("open");
 			expect(opened).toHaveLength(1);
 			// Both lines the operator typed are the Consultation's own input: the
 			// newline is text, not a key that meant something else.

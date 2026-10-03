@@ -48,9 +48,9 @@ import {
 import type {
 	Consultation,
 	ConsultationPendingResponse,
+	ConsultationRecordAggregate,
 	ConsultationResource,
-	FactoryState,
-} from "./state.ts";
+} from "./state/consultation-record.ts";
 
 /**
  * The answer the Work queue's pickup gets from one Consultation pickup
@@ -103,7 +103,7 @@ export interface ConsultationOperationCallbacks {
 }
 
 export interface ConsultationOperationsOptions {
-	state: FactoryState;
+	state: ConsultationOperationsAggregates;
 	runner: CommandRunner;
 	config: () => FactoryConfig;
 	home: string;
@@ -177,9 +177,14 @@ export function createConsultationOperations(
 	return new ConsultationOperations(options);
 }
 
+/** The aggregates the Consultation operations read, as a list (issue #202). */
+export interface ConsultationOperationsAggregates {
+	consultationRecord: ConsultationRecordAggregate;
+}
+
 /** The Consultation lifecycle interface: one owner for every external change. */
 export class ConsultationOperations {
-	private readonly state: FactoryState;
+	private readonly state: ConsultationOperationsAggregates;
 	private readonly runner: CommandRunner;
 	private readonly config: () => FactoryConfig;
 	private readonly home: string;
@@ -249,7 +254,7 @@ export class ConsultationOperations {
 			return undefined;
 		}
 		const id = randomUUID();
-		const consultation = this.state.createConsultation({
+		const consultation = this.state.consultationRecord.createConsultation({
 			id,
 			typeName: input.typeName,
 			agentType: type.agent,
@@ -273,7 +278,8 @@ export class ConsultationOperations {
 	}
 
 	launch(consultation: Consultation): Promise<void> {
-		if (!this.state.canRecoverConsultationOpening(consultation.id)) return Promise.resolve();
+		if (!this.state.consultationRecord.canRecoverConsultationOpening(consultation.id))
+			return Promise.resolve();
 		if (!this.claimOpening(consultation.id)) {
 			this.status("info", "Consultation opening is already in progress");
 			return Promise.resolve();
@@ -286,8 +292,11 @@ export class ConsultationOperations {
 	}
 
 	recover(consultation: Consultation): Promise<void> {
-		const current = this.state.consultation(consultation.id);
-		if (current === undefined || !this.state.canRecoverConsultationOpening(current.id))
+		const current = this.state.consultationRecord.consultation(consultation.id);
+		if (
+			current === undefined ||
+			!this.state.consultationRecord.canRecoverConsultationOpening(current.id)
+		)
 			return Promise.resolve();
 		if (current.paneId === null && current.sessionId === null) {
 			this.progress(current.id, `recovering Consultation ${current.id.slice(0, 8)}...`);
@@ -325,7 +334,7 @@ export class ConsultationOperations {
 		)
 			.then((result) => {
 				if (result.kind === "fit-failed") {
-					this.state.failConsultationOpening(current.id, result.reason);
+					this.state.consultationRecord.failConsultationOpening(current.id, result.reason);
 					this.callbacks.onConsultationsChanged();
 					this.status("error", `Consultation ${current.id.slice(0, 8)} failed: ${result.reason}`);
 					return;
@@ -335,18 +344,18 @@ export class ConsultationOperations {
 					return;
 				}
 				if (result.kind === "missing") {
-					this.state.failConsultationOpening(current.id, result.reason);
+					this.state.consultationRecord.failConsultationOpening(current.id, result.reason);
 					this.callbacks.onConsultationsChanged();
 					this.status("error", `Consultation ${current.id.slice(0, 8)} failed: ${result.reason}`);
 					return;
 				}
-				this.state.updateConsultationAgentHandles(current.id, {
+				this.state.consultationRecord.updateConsultationAgentHandles(current.id, {
 					paneId: result.agent.paneId,
 					tabId: result.agent.tabId,
 					workspaceId: result.agent.workspaceId,
 					sessionId: result.agent.stableSessionId ?? current.sessionId,
 				});
-				this.state.setConsultationAgent(current.id, {
+				this.state.consultationRecord.setConsultationAgent(current.id, {
 					paneId: result.agent.paneId,
 					tabId: result.agent.tabId,
 					workspaceId: result.agent.workspaceId,
@@ -388,7 +397,7 @@ export class ConsultationOperations {
 	 * does, and the queue's item went with the claim while one stood.
 	 */
 	pickup(consultationId: string): Promise<ConsultationPickupOutcome> {
-		const current = this.state.consultation(consultationId);
+		const current = this.state.consultationRecord.consultation(consultationId);
 		if (current === undefined || (current.state !== "queued" && current.state !== "unscheduled"))
 			return Promise.resolve({ kind: "moved" });
 		const type = this.config().consultationTypes[current.typeName];
@@ -396,7 +405,7 @@ export class ConsultationOperations {
 			// The type the record asks for is gone from the config: there is
 			// nothing to start it with. The record becomes failed, as a start
 			// that cannot fit does, and the queue's item leaves with it.
-			this.state.setConsultationState(
+			this.state.consultationRecord.setConsultationState(
 				current.id,
 				"failed",
 				`unknown Consultation type ${current.typeName}`,
@@ -408,7 +417,7 @@ export class ConsultationOperations {
 			);
 			return Promise.resolve({ kind: "failed" });
 		}
-		this.state.updateConsultationTypeSettings(current.id, {
+		this.state.consultationRecord.updateConsultationTypeSettings(current.id, {
 			agentType: type.agent,
 			environment: type.environment,
 			model: type.model ?? "",
@@ -420,11 +429,11 @@ export class ConsultationOperations {
 		// The atomic step is the seat: the record moves to `opening` only if it
 		// is still `queued` or `unscheduled`, so a close or a delete that
 		// raced the start wins the record and the start runs nothing.
-		if (!this.state.beginConsultationStart(current.id)) {
+		if (!this.state.consultationRecord.beginConsultationStart(current.id)) {
 			this.callbacks.onConsultationsChanged();
 			return Promise.resolve({ kind: "moved" });
 		}
-		const refreshed = this.state.consultation(current.id);
+		const refreshed = this.state.consultationRecord.consultation(current.id);
 		if (refreshed === undefined) {
 			// The record went away between the move and the re-read.
 			return Promise.resolve({ kind: "moved" });
@@ -447,7 +456,7 @@ export class ConsultationOperations {
 	 * with `launch`, exactly as it starts a new Consultation.
 	 */
 	replace(replaced: Consultation, input: ConsultationReplacementInput): Consultation | undefined {
-		const current = this.state.consultation(replaced.id) ?? replaced;
+		const current = this.state.consultationRecord.consultation(replaced.id) ?? replaced;
 		if (current.state !== "missing" && current.state !== "failed") {
 			this.status(
 				"error",
@@ -457,14 +466,15 @@ export class ConsultationOperations {
 		}
 		return this.create({
 			...input,
-			initialInput: input.initialInput ?? this.state.replacementInput(current.id),
+			initialInput:
+				input.initialInput ?? this.state.consultationRecord.replacementInput(current.id),
 			replacementOf: current.id,
 		});
 	}
 
 	/** Persist an editable Response draft without accepting it for delivery. */
 	saveDraft(consultation: Consultation, draft: string): void {
-		this.state.setConsultationDraft(consultation.id, draft);
+		this.state.consultationRecord.setConsultationDraft(consultation.id, draft);
 	}
 
 	async respond(consultation: Consultation, draft: string): Promise<void> {
@@ -476,7 +486,7 @@ export class ConsultationOperations {
 
 		let current: Consultation;
 		try {
-			current = this.state.consultation(consultation.id) ?? consultation;
+			current = this.state.consultationRecord.consultation(consultation.id) ?? consultation;
 		} catch (error) {
 			this.status("error", `response failed: ${errorMessage(error)}`);
 			return;
@@ -490,9 +500,13 @@ export class ConsultationOperations {
 				let pending: ConsultationPendingResponse | undefined;
 				let progressStarted = false;
 				try {
-					latest = this.state.consultation(current.id) ?? current;
-					this.state.setConsultationDraft(latest.id, draft);
-					pending = this.state.beginConsultationResponse(latest.id, draft, latest.latestSequence);
+					latest = this.state.consultationRecord.consultation(current.id) ?? current;
+					this.state.consultationRecord.setConsultationDraft(latest.id, draft);
+					pending = this.state.consultationRecord.beginConsultationResponse(
+						latest.id,
+						draft,
+						latest.latestSequence,
+					);
 					if (pending === undefined) {
 						this.status(
 							"warning",
@@ -509,12 +523,15 @@ export class ConsultationOperations {
 						draft,
 					]);
 					if (result.code !== 0) {
-						this.state.cancelConsultationResponse(latest.id, pending.id);
+						this.state.consultationRecord.cancelConsultationResponse(latest.id, pending.id);
 						this.callbacks.onConsultationsChanged();
 						this.status("error", `response failed: ${commandFailureText(result)}`);
 						return;
 					}
-					const accepted = this.state.acceptConsultationResponse(latest.id, pending.id);
+					const accepted = this.state.consultationRecord.acceptConsultationResponse(
+						latest.id,
+						pending.id,
+					);
 					this.callbacks.onConsultationsChanged();
 					if (accepted === undefined) {
 						this.status(
@@ -527,7 +544,7 @@ export class ConsultationOperations {
 				} catch (error) {
 					if (latest !== undefined && pending !== undefined) {
 						try {
-							this.state.cancelConsultationResponse(latest.id, pending.id);
+							this.state.consultationRecord.cancelConsultationResponse(latest.id, pending.id);
 						} catch {}
 					}
 					try {
@@ -549,13 +566,15 @@ export class ConsultationOperations {
 	 * from that decision on, this cleanup issues no command at all.
 	 */
 	close(consultation: Consultation): Promise<void> {
-		const current = this.state.consultation(consultation.id) ?? consultation;
+		const current = this.state.consultationRecord.consultation(consultation.id) ?? consultation;
 		if (current.state === "closed") return Promise.resolve();
 		if (this.closeOperations.has(current.id)) {
 			this.status("warning", "Consultation close is already in progress");
 			return Promise.resolve();
 		}
-		const started = current.state === "closing" || this.state.beginConsultationClose(current.id);
+		const started =
+			current.state === "closing" ||
+			this.state.consultationRecord.beginConsultationClose(current.id);
 		if (!started) {
 			this.status("warning", "Consultation is already closing or closed");
 			return Promise.resolve();
@@ -563,7 +582,7 @@ export class ConsultationOperations {
 		// A Consultation recovered by handle can hold a pane the record never
 		// registered: it is still the one this close takes down.
 		if (current.paneId !== null && !current.resources.some((item) => item.kind === "pane"))
-			this.state.recordConsultationResource(current.id, {
+			this.state.consultationRecord.recordConsultationResource(current.id, {
 				kind: "pane",
 				resourceId: current.paneId,
 				owned: true,
@@ -590,12 +609,12 @@ export class ConsultationOperations {
 		// this record closed, so herdr is left alone.
 		if (operation.cancelled) return;
 		try {
-			const refreshed = this.state.consultation(current.id) ?? current;
+			const refreshed = this.state.consultationRecord.consultation(current.id) ?? current;
 			const owned = refreshed.resources.filter((item) => item.owned && !item.confirmedClosed);
 			// The launch recorded no pane to take down: the record closes with no
 			// command at all, and herdr is left alone.
 			if (owned.find((item) => item.kind === "pane") === undefined) {
-				this.state.finishConsultationClose(current.id);
+				this.state.consultationRecord.finishConsultationClose(current.id);
 				this.callbacks.onConsultationsChanged();
 				this.status("info", `Consultation ${current.id.slice(0, 8)} closed`);
 				return;
@@ -621,7 +640,7 @@ export class ConsultationOperations {
 				// record and leave herdr untouched, the way the close of a record
 				// with no Agent promises. The owned resources stay recorded as
 				// remaining, so the operator sees what stands.
-				this.state.finishConsultationClose(
+				this.state.consultationRecord.finishConsultationClose(
 					current.id,
 					"closed without a command; its Agent is missing and its resources remain in herdr",
 					true,
@@ -642,14 +661,14 @@ export class ConsultationOperations {
 				(agent.workspaceId || null) !== refreshed.workspaceId ||
 				(agent.stableSessionId !== undefined && agent.stableSessionId !== refreshed.sessionId)
 			) {
-				this.state.updateConsultationAgentHandles(current.id, {
+				this.state.consultationRecord.updateConsultationAgentHandles(current.id, {
 					paneId: agent.paneId,
 					tabId: agent.tabId || null,
 					workspaceId: agent.workspaceId || null,
 					sessionId: agent.stableSessionId ?? refreshed.sessionId,
 				});
 			}
-			const latest = this.state.consultation(current.id) ?? refreshed;
+			const latest = this.state.consultationRecord.consultation(current.id) ?? refreshed;
 			const output =
 				latest.paneId === null
 					? null
@@ -660,8 +679,9 @@ export class ConsultationOperations {
 			if (operation.cancelled) return;
 			// The last lines the control plane can still read become a partial
 			// snapshot, so the history does not end with the opening prompt.
-			if (output !== null) this.state.captureConsultationPartial(current.id, output);
-			const settled = this.state.consultation(current.id) ?? latest;
+			if (output !== null)
+				this.state.consultationRecord.captureConsultationPartial(current.id, output);
+			const settled = this.state.consultationRecord.consultation(current.id) ?? latest;
 			const plan = await this.planCloseCleanup(
 				settled,
 				settled.resources.filter((item) => item.owned && !item.confirmedClosed),
@@ -671,7 +691,7 @@ export class ConsultationOperations {
 			// command.
 			if (operation.cancelled) return;
 			for (const retained of plan.retains)
-				this.state.markConsultationResourceShared(
+				this.state.consultationRecord.markConsultationResourceShared(
 					current.id,
 					retained.kind,
 					retained.resourceId,
@@ -688,17 +708,21 @@ export class ConsultationOperations {
 				// workspace the client is not viewing leaves that view alone.
 				if (operation.cancelled) return;
 				for (const resource of plan.closes)
-					this.state.markConsultationResourceClosed(current.id, resource.kind, resource.resourceId);
+					this.state.consultationRecord.markConsultationResourceClosed(
+						current.id,
+						resource.kind,
+						resource.resourceId,
+					);
 			}
 			if (operation.cancelled) return;
-			this.state.finishConsultationClose(current.id);
+			this.state.consultationRecord.finishConsultationClose(current.id);
 			this.callbacks.onConsultationsChanged();
 			this.status("info", `Consultation ${current.id.slice(0, 8)} closed`);
 		} catch (error) {
 			// A force-closed record needs no recovery warning: the operator
 			// already accepted the resources that may remain.
 			if (operation.cancelled) return;
-			this.state.recordConsultationCloseFailure(current.id, errorMessage(error));
+			this.state.consultationRecord.recordConsultationCloseFailure(current.id, errorMessage(error));
 			this.callbacks.onConsultationsChanged();
 			this.status("error", `Consultation close needs recovery: ${errorMessage(error)}`);
 		}
@@ -841,7 +865,7 @@ export class ConsultationOperations {
 	 * branch, so the operator's work survives.
 	 */
 	forceClose(consultation: Consultation): void {
-		const current = this.state.consultation(consultation.id) ?? consultation;
+		const current = this.state.consultationRecord.consultation(consultation.id) ?? consultation;
 		// The guard is shared with close: a pending or queued cleanup learns of
 		// this decision before its next external call, so it stops there.
 		const pending = this.closeOperations.get(current.id);
@@ -852,11 +876,14 @@ export class ConsultationOperations {
 			this.status("warning", "Consultation cleanup has already finished");
 			return;
 		}
-		if (current.state !== "closing" && !this.state.beginConsultationClose(current.id)) {
+		if (
+			current.state !== "closing" &&
+			!this.state.consultationRecord.beginConsultationClose(current.id)
+		) {
 			this.status("warning", "Consultation cleanup has already finished");
 			return;
 		}
-		this.state.finishConsultationClose(
+		this.state.consultationRecord.finishConsultationClose(
 			current.id,
 			"force-closed by operator; owned resources may remain",
 			true,
@@ -869,7 +896,7 @@ export class ConsultationOperations {
 	}
 
 	delete(consultation: Consultation): boolean {
-		if (!this.state.deleteConsultation(consultation.id)) return false;
+		if (!this.state.consultationRecord.deleteConsultation(consultation.id)) return false;
 		this.callbacks.onConsultationsChanged();
 		this.status(
 			"info",
@@ -885,7 +912,7 @@ export class ConsultationOperations {
 	 * record that left `unscheduled` behind the key says its own fact.
 	 */
 	schedule(consultation: Consultation): boolean {
-		const result = this.state.scheduleConsultation(consultation.id);
+		const result = this.state.consultationRecord.scheduleConsultation(consultation.id);
 		if (!result.ok) {
 			this.status("error", result.reason);
 			return false;
@@ -912,17 +939,17 @@ export class ConsultationOperations {
 		consultation: Consultation,
 		conflicts: readonly CheckoutConflict[],
 	): Promise<void> {
-		const current = this.state.consultation(consultation.id);
+		const current = this.state.consultationRecord.consultation(consultation.id);
 		if (current === undefined) return;
 		const key = await realPathOf(current.repository.path);
-		const confirmed = new Set(this.state.confirmedCheckoutConflicts(key));
+		const confirmed = new Set(this.state.consultationRecord.confirmedCheckoutConflicts(key));
 		for (const conflict of conflicts) confirmed.add(conflict.identity);
-		this.state.recordCheckoutConflictConfirmation(key, [...confirmed]);
+		this.state.consultationRecord.recordCheckoutConflictConfirmation(key, [...confirmed]);
 		await this.launch(current);
 	}
 
 	replacementInput(consultationId: string): string {
-		return this.state.replacementInput(consultationId);
+		return this.state.consultationRecord.replacementInput(consultationId);
 	}
 
 	/**
@@ -934,16 +961,19 @@ export class ConsultationOperations {
 	 * the view is current again.
 	 */
 	recordOutputRead(consultationId: string, output: string | null): void {
-		const current = this.state.consultation(consultationId);
+		const current = this.state.consultationRecord.consultation(consultationId);
 		if (current === undefined) return;
 		if (output === null) {
 			if (isStaleAgentOutputWarning(current.warning)) return;
-			this.state.setConsultationWarning(consultationId, STALE_AGENT_OUTPUT_WARNING);
+			this.state.consultationRecord.setConsultationWarning(
+				consultationId,
+				STALE_AGENT_OUTPUT_WARNING,
+			);
 			this.callbacks.onConsultationsChanged();
 			return;
 		}
 		if (!isStaleAgentOutputWarning(current.warning)) return;
-		this.state.setConsultationWarning(consultationId, null);
+		this.state.consultationRecord.setConsultationWarning(consultationId, null);
 		this.callbacks.onConsultationsChanged();
 	}
 
@@ -969,7 +999,8 @@ export class ConsultationOperations {
 				this.operationQueues,
 				consultation.repository.identity,
 				async (): Promise<LaunchOutcome | undefined> => {
-					const current = this.state.consultation(consultation.id) ?? consultation;
+					const current =
+						this.state.consultationRecord.consultation(consultation.id) ?? consultation;
 					// A queued opening can outlive a close or Force-close. Do not start
 					// an Agent after the operator has settled that record.
 					if (current.state !== "opening") return undefined;
@@ -995,7 +1026,10 @@ export class ConsultationOperations {
 						);
 						if (!resolution.ok) return { status: "failed", reason: resolution.reason };
 						resolvedRepository = resolution.repository;
-						this.state.setConsultationRepositoryPath(current.id, resolvedRepository.path);
+						this.state.consultationRecord.setConsultationRepositoryPath(
+							current.id,
+							resolvedRepository.path,
+						);
 						onStage("checking-live-checkout-safety");
 						const probe = await new HerdrAgentReader(this.runner).listAgents();
 						if (probe.kind === "error")
@@ -1007,21 +1041,21 @@ export class ConsultationOperations {
 							resolvedRepository.path,
 							this.runner,
 							this.tickets(),
-							this.state.consultations("open"),
+							this.state.consultationRecord.consultations("open"),
 							probe.agents,
 						);
 						if (safety.warning !== undefined)
-							this.state.setConsultationWarning(current.id, safety.warning);
+							this.state.consultationRecord.setConsultationWarning(current.id, safety.warning);
 						// The safety question belongs to the checkout, not to this
 						// opening: the launch asks again only when the current
 						// conflict set holds an identity the checkout has not
 						// confirmed, and a launch that proceeds stores the current
 						// set, so a shrunken set is persisted and never re-asked.
 						const key = await realPathOf(resolvedRepository.path);
-						const confirmed = this.state.confirmedCheckoutConflicts(key);
+						const confirmed = this.state.consultationRecord.confirmedCheckoutConflicts(key);
 						if (safety.conflicts.some((conflict) => !confirmed.includes(conflict.identity)))
 							return { status: "conflict", safety };
-						this.state.recordCheckoutConflictConfirmation(
+						this.state.consultationRecord.recordCheckoutConflictConfirmation(
 							key,
 							safety.conflicts.map((conflict) => conflict.identity),
 						);
@@ -1035,16 +1069,16 @@ export class ConsultationOperations {
 						startCheck,
 						resolvedRepository,
 						onRepositoryResolved: (path) =>
-							this.state.setConsultationRepositoryPath(current.id, path),
+							this.state.consultationRecord.setConsultationRepositoryPath(current.id, path),
 						onAgentStarted: (agent) => {
-							this.state.recordConsultationAgentHandles(current.id, agent);
-							this.state.recordConsultationResource(current.id, {
+							this.state.consultationRecord.recordConsultationAgentHandles(current.id, agent);
+							this.state.consultationRecord.recordConsultationResource(current.id, {
 								kind: "pane",
 								resourceId: agent.paneId,
 								owned: true,
 								details: "Consultation Agent pane",
 							});
-							this.state.recordConsultationResource(current.id, {
+							this.state.consultationRecord.recordConsultationResource(current.id, {
 								kind: "agent",
 								resourceId: current.agentName,
 								owned: true,
@@ -1052,7 +1086,7 @@ export class ConsultationOperations {
 							});
 						},
 						onResource: (kind, resourceId, owned, details) =>
-							this.state.recordConsultationResource(current.id, {
+							this.state.consultationRecord.recordConsultationResource(current.id, {
 								kind,
 								resourceId,
 								owned,
@@ -1073,7 +1107,7 @@ export class ConsultationOperations {
 			}
 			await this.finishOpening(consultation, outcome);
 		} catch (error) {
-			this.state.failConsultationOpening(consultation.id, errorMessage(error));
+			this.state.consultationRecord.failConsultationOpening(consultation.id, errorMessage(error));
 			this.callbacks.onConsultationsChanged();
 			this.status(
 				"error",
@@ -1104,24 +1138,30 @@ export class ConsultationOperations {
 			...(outcome.notes?.leftoverWorktree === undefined ? [] : [outcome.notes.leftoverWorktree]),
 		];
 		if (outcome.status === "failed") {
-			this.state.failConsultationOpening(consultation.id, lines.join("; ") || outcome.reason);
+			this.state.consultationRecord.failConsultationOpening(
+				consultation.id,
+				lines.join("; ") || outcome.reason,
+			);
 			this.status(
 				"error",
 				`Consultation ${consultation.id.slice(0, 8)} failed: ${lines.join("; ")}`,
 			);
 		} else {
-			this.state.setConsultationAgent(consultation.id, {
+			this.state.consultationRecord.setConsultationAgent(consultation.id, {
 				paneId: outcome.agent.paneId,
 				tabId: outcome.agent.tabId,
 				workspaceId: outcome.agent.workspaceId,
 				sessionId: outcome.agent.sessionId,
 			});
 			if (outcome.status === "prompt-failed") {
-				this.state.setConsultationDraft(consultation.id, consultation.renderedOpeningPrompt);
+				this.state.consultationRecord.setConsultationDraft(
+					consultation.id,
+					consultation.renderedOpeningPrompt,
+				);
 				this.status("error", outcome.reason);
 			} else if (lines.length > 0) this.status("warning", lines.join("; "));
 		}
-		const warning = this.state.consultation(consultation.id)?.warning;
+		const warning = this.state.consultationRecord.consultation(consultation.id)?.warning;
 		if (warning !== null && warning !== undefined) this.status("warning", warning);
 		this.callbacks.onConsultationsChanged();
 	}

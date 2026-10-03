@@ -177,11 +177,11 @@ function seedAwaitingTicket(statePath: string): string {
 	const state = openFactoryState(statePath, () => Date.parse("2026-09-02T22:29:00Z"));
 	// The test's keys assume the flat list: a fresh file opens grouped by
 	// repository (ADR 0066), so the seed holds the flat axis.
-	state.setGroupingAxis("tickets", "none");
+	state.grouping.setGroupingAxis("tickets", "none");
 	const source = { name: "factory-pull-requests", kind: "github-pull-requests" as const };
-	state.initializeSources([source]);
+	state.sourceFact.initializeSources([source]);
 	const identity = "github.com/SeriousJul/my-little-software-factory/pull/14";
-	state.applyFetch(source, {
+	state.sourceFact.applyFetch(source, {
 		status: "success",
 		fetchedAt: new Date(Date.parse("2026-09-02T22:20:00Z")).toISOString(),
 		tickets: [
@@ -205,7 +205,7 @@ function seedAwaitingTicket(statePath: string): string {
 			},
 		],
 	});
-	const claim = state.claimHandoff(
+	const claim = state.handoff.claimHandoff(
 		identity,
 		{
 			agentType: "pi",
@@ -218,7 +218,7 @@ function seedAwaitingTicket(statePath: string): string {
 		"open",
 	);
 	if (!claim.ok) throw new Error(`claim failed: ${claim.reason}`);
-	state.settleHandoff(claim.claim.attemptId, true, undefined, {
+	state.handoff.settleHandoff(claim.claim.attemptId, true, undefined, {
 		paneId: "pane-14",
 		tabId: "tab-14",
 		workspaceId: "ws-14",
@@ -246,7 +246,7 @@ function seedAwaitingTicket(statePath: string): string {
 	}
 	const conclusion =
 		"PR: body rewritten, rework summary comment posted, needs-rework dropped, ready-for-review added, MERGEABLE, HEAD 546055f.";
-	state.settleTurn({
+	state.ticketWorkCycle.settleTurn({
 		ticketIdentity: identity,
 		handoffId: claim.claim.attemptId,
 		taskType: "rework",

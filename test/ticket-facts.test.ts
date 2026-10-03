@@ -22,7 +22,7 @@ import {
 	ticketRowFacts,
 	turnTaskType,
 } from "../src/domain/ticket-facts.ts";
-import type { WorkQueueItem } from "../src/state.ts";
+import type { WorkQueueItem } from "../src/state/work-queue.ts";
 import { agent, completion, factInputs, handoff, queueItem, ticket } from "./fact-fixtures.ts";
 
 describe("the task type a row names", () => {

@@ -89,6 +89,88 @@ export function isHeldCompletion(completion: Completion | null): boolean {
 	return completion !== null && completion.decision === null && isHeldCause(completion.cause);
 }
 
+/**
+ * Where one completion trace sits in the trace table's own order: its
+ * completion time, then its row. Two traces completed in the same instant are
+ * told apart by the row, so the order is the pair and never the time alone.
+ */
+export interface CompletionTraceOrder {
+	completedAt: string;
+	rowId: number;
+}
+
+/** Compare two traces in the order the trace table sorts them. */
+export function completionTraceOrder(
+	left: CompletionTraceOrder,
+	right: CompletionTraceOrder,
+): number {
+	return left.completedAt.localeCompare(right.completedAt) || left.rowId - right.rowId;
+}
+
+/**
+ * The Dispatch pause (ADR 0016): the newest trace whose turn settled `failed`
+ * and whose decision has not landed holds every automatic start until the
+ * operator decides that turn or another turn settles `completed`.
+ *
+ * The rule takes the two facts the traces answer as data (issue #202): the
+ * held failure, and the newest `completed` trace. The pause clears when a
+ * completed trace is newer than the held failure, and the trace order - the
+ * completion time, then the row - is what "newer" means. The aggregate reads
+ * the two facts and stores no pause: the derived fact stays derived.
+ */
+export function dispatchPauseHolds(
+	heldFailure: CompletionTraceOrder | null,
+	newestCompleted: CompletionTraceOrder | null,
+): boolean {
+	if (heldFailure === null) return false;
+	if (newestCompleted === null) return true;
+	return completionTraceOrder(newestCompleted, heldFailure) <= 0;
+}
+
+/**
+ * The turn the Same-type hold reads (ADR 0093): the cause that settled the
+ * ticket's newest turn, and the task type that turn ran. The turn stands in the
+ * cycle the ticket is in now, or in the closed cycle behind it.
+ */
+export interface HoldTurnFact {
+	cause: string | null;
+	taskType: string;
+}
+
+/**
+ * The Same-type hold (ADR 0026, read as ADR 0093 states it): the ticket's
+ * newest turn settled `completed` on exactly the task type the ticket now
+ * suggests, so the plane starts no repeat of work that already completed.
+ *
+ * The rule takes the turn as data (issue #202). Which trace is the ticket's
+ * newest turn is the aggregate's read; what that turn means for a suggested
+ * task type is this rule.
+ */
+export function sameTypeHoldHolds(
+	holdTurn: HoldTurnFact | null,
+	suggestedTaskType: string | null,
+): boolean {
+	return (
+		holdTurn !== null && holdTurn.cause === "completed" && holdTurn.taskType === suggestedTaskType
+	);
+}
+
+/**
+ * The Handoff limit (CONTEXT.md, ADR 0005): the per-ticket cap on started
+ * handoffs and plane action attempts that stops the close-and-rehandoff loop.
+ *
+ * The rule takes its facts as data (issue #202 review): the count the aggregate
+ * read, and the cap the config resolved. Every gate that holds an automatic add
+ * at the cap - the missing-Agent pass, the auto-advance route, the top-up walk,
+ * the restart pass, the force-dispatch pass, the Work queue's Ticket line -
+ * asks this rule instead of restating the comparison, so the cap means one
+ * thing in one place. A manual handoff or a manual plane action confirm is not
+ * this rule's to hold (ADR 0068).
+ */
+export function handoffLimitReached(handoffCount: number, limit: number): boolean {
+	return handoffCount >= limit;
+}
+
 /** The latest handoff of a ticket, including the herdr handles it started. */
 export interface Handoff {
 	agentType: string;
@@ -436,7 +518,7 @@ export function ignoreRefusal(obligation: TicketObligation | null): string | nul
  * the row's facts in its one read per cycle, so no walk pays a second
  * projection read for the widened gate. The Restart walk reads the in-flight
  * rows, which carry no facts of their own, so it asks
- * `FactoryState.automaticStartBlockedTickets` once per cycle: the same columns
+ * `TicketWorkCycleAggregate.automaticStartBlockedTickets` once per cycle: the same columns
  * on the same rows, read by identity instead of by row.
  */
 export function automaticStartBlocked(ticket: TicketIgnoreFacts): boolean {

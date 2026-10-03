@@ -19,7 +19,8 @@ import type { AppProps } from "../src/components/app.ts";
 import type { FactoryConfig } from "../src/config.ts";
 import type { FetchedTicket } from "../src/domain/ticket.ts";
 import { agentNameFor } from "../src/naming.ts";
-import { type FactoryState, openFactoryState } from "../src/state.ts";
+import type { FactoryState } from "../src/state.ts";
+import { openFactoryState } from "../src/state.ts";
 import {
 	actionBarRowOf,
 	awaitFrame,
@@ -94,9 +95,9 @@ interface Rig {
 function rig(over: { config?: Partial<FactoryConfig>; pollIntervalMs?: number } = {}): Rig {
 	const state = openFactoryState(statePath());
 	// Hold the flat axis: the frames read the unsplit list (ADR 0066).
-	state.setGroupingAxis("tickets", "none");
-	state.initializeSources([{ name: "issues", kind: "github-issues" }]);
-	state.applyFetch({ name: "issues", kind: "github-issues" }, success(twoTickets()));
+	state.grouping.setGroupingAxis("tickets", "none");
+	state.sourceFact.initializeSources([{ name: "issues", kind: "github-issues" }]);
+	state.sourceFact.applyFetch({ name: "issues", kind: "github-issues" }, success(twoTickets()));
 	const runner = emptyAgentRunner();
 	const home = mkdtempSync(join(tmpdir(), "factory-mute-home-"));
 	paths.push(home);
@@ -212,7 +213,7 @@ describe("the mute key", () => {
 					// The flag is factory state on the source's row, read back
 					// through the file's own API, and the row's projection carries
 					// it with its moment.
-					expect(state.projectedTickets([], "implement")).toEqual([
+					expect(state.ticketWorkCycle.projectedTickets([], "implement")).toEqual([
 						expect.objectContaining({
 							identity: FIRST,
 							muted: true,
@@ -223,8 +224,10 @@ describe("the mute key", () => {
 					// The flag follows the Ticket into the state the rows stand in:
 					// the resting rows left the active view and the machine's own
 					// read sees them withheld.
-					expect(state.visibleTickets([], "implement")).toEqual([]);
-					expect(state.automaticStartBlockedTickets()).toEqual(new Set([FIRST, SECOND]));
+					expect(state.ticketWorkCycle.ticketListViews([], "implement").rows).toEqual([]);
+					expect(state.ticketWorkCycle.automaticStartBlockedTickets()).toEqual(
+						new Set([FIRST, SECOND]),
+					);
 					// The same key takes the mute back, from the row the ledger
 					// holds: the cycle walks the empty pile past, and the ledger's
 					// row is the act's own undo.
@@ -242,7 +245,7 @@ describe("the mute key", () => {
 						"source issues is not muted: its rows come back from the list, and the machine may start them",
 					);
 					expect(headerRow(back)).not.toContain("muted");
-					expect(state.projectedTickets([], "implement")[0]).toEqual(
+					expect(state.ticketWorkCycle.projectedTickets([], "implement")[0]).toEqual(
 						expect.objectContaining({ muted: false, mutedAt: null }),
 					);
 					const rowsBack = await press(
@@ -371,13 +374,13 @@ describe("the mute key", () => {
 		// shape. The row is how the operator reaches the Live view, the Goto,
 		// and the Close.
 		const state = openFactoryState(statePath());
-		state.setGroupingAxis("tickets", "none");
+		state.grouping.setGroupingAxis("tickets", "none");
 		const outcome = success([
 			issueTicket(FIRST),
 			issueTicket(SECOND, { title: secondTitle, externalKey: "#6" }),
 		]);
-		state.initializeSources([{ name: "issues", kind: "github-issues" }]);
-		state.applyFetch({ name: "issues", kind: "github-issues" }, outcome);
+		state.sourceFact.initializeSources([{ name: "issues", kind: "github-issues" }]);
+		state.sourceFact.applyFetch({ name: "issues", kind: "github-issues" }, outcome);
 		seedInFlightTurn(state, outcome, FIRST);
 		const runner = emptyAgentRunner();
 		runner.set("herdr", ["agent", "list"], { stdout: workingAgent() });
@@ -408,7 +411,9 @@ describe("the mute key", () => {
 					// The live row's projection carries the flag underneath the
 					// row, and the same key takes the mute back.
 					expect(
-						state.projectedTickets([], "implement").find((t) => t.identity === FIRST)?.muted,
+						state.ticketWorkCycle
+							.projectedTickets([], "implement")
+							.find((t) => t.identity === FIRST)?.muted,
 					).toBe(true);
 					const taken = await press(setup, "u", "the unmute", (f) => {
 						const row = rowsOf(f).find((r) => r.startsWith("│") && r.includes("[running]"));
@@ -432,10 +437,10 @@ describe("the mute key", () => {
 		// asked for on the second waits in the Work queue, which is the waiting
 		// item the mute takes away with the rows.
 		const state = openFactoryState(statePath());
-		state.setGroupingAxis("tickets", "none");
+		state.grouping.setGroupingAxis("tickets", "none");
 		const outcome = success(twoTickets());
-		state.initializeSources([{ name: "issues", kind: "github-issues" }]);
-		state.applyFetch({ name: "issues", kind: "github-issues" }, outcome);
+		state.sourceFact.initializeSources([{ name: "issues", kind: "github-issues" }]);
+		state.sourceFact.applyFetch({ name: "issues", kind: "github-issues" }, outcome);
 		seedInFlightTurn(state, outcome, FIRST);
 		const runner = emptyAgentRunner();
 		runner.set("herdr", ["agent", "list"], { stdout: workingAgent() });
@@ -461,8 +466,8 @@ describe("the mute key", () => {
 					// cancel's stated semantics, the way the operator's own removal
 					// already settles.
 					expect(muted).toContain("waiting: 0");
-					expect(state.ticketState(SECOND)).toBe("open");
-					expect(state.workQueue()).toEqual([]);
+					expect(state.ticketWorkCycle.ticketState(SECOND)).toBe("open");
+					expect(state.workQueue.items()).toEqual([]);
 				},
 				WIDTH,
 				HEIGHT,
@@ -512,7 +517,7 @@ describe("the mute key", () => {
 					expect(messageRowOf(back)).toContain(
 						"source issues is not muted: its rows come back from the list, and the machine may start them",
 					);
-					expect(state.projectedTickets([], "implement")[0]).toEqual(
+					expect(state.ticketWorkCycle.projectedTickets([], "implement")[0]).toEqual(
 						expect.objectContaining({ muted: false }),
 					);
 					const rowsBack = await press(
@@ -607,9 +612,9 @@ describe("the mute key", () => {
  */
 test("the no-state shell refuses u with the missing fact", async () => {
 	const seeded = openFactoryState(statePath());
-	seeded.initializeSources([{ name: "issues", kind: "github-issues" }]);
-	seeded.applyFetch({ name: "issues", kind: "github-issues" }, success(twoTickets()));
-	const projection = seeded.visibleTickets([], "implement");
+	seeded.sourceFact.initializeSources([{ name: "issues", kind: "github-issues" }]);
+	seeded.sourceFact.applyFetch({ name: "issues", kind: "github-issues" }, success(twoTickets()));
+	const projection = seeded.ticketWorkCycle.ticketListViews([], "implement").rows;
 	seeded.close();
 	await withApp(
 		async (setup) => {

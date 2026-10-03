@@ -14,9 +14,31 @@
  * from the shared paint layer (ADR 0024).
  */
 import type { TransitionOutcome } from "../config.ts";
-import type { PlaneActionAttempt, WorkQueueItem } from "../state.ts";
+import type { PlaneActionAttempt } from "../state/plane-action.ts";
+import type { WorkQueueItem } from "../state/work-queue.ts";
+import type { NextStepGate } from "../workflow.ts";
+import { NEXT_STEP_GATE_LINES } from "../workflow.ts";
 import type { Ticket } from "./ticket.ts";
 import { inFlight, turnTaskType } from "./ticket-facts.ts";
+
+/**
+ * The transition's position, resolved by the screen.
+ *
+ * The position is derived, never stored (ADR 0027), so the screen resolves it -
+ * the Ticket it stands on, whether a source still lists it, the form its task
+ * type carries, and the attempt the state recorded for it - and hands the four
+ * answers as one record.
+ */
+export interface DecisionPosition {
+	/** The Ticket the position stands on, or undefined when none does. */
+	ticket: Ticket | undefined;
+	/** Whether the position's Ticket still stands in a source. */
+	stillListed: boolean;
+	/** Whether the position's task type carries the plane action form. */
+	isPlaneAction: boolean;
+	/** The newest plane-action attempt the state read for the position, or null. */
+	latestAttempt: PlaneActionAttempt | null;
+}
 
 /** The inputs the Decision fact module reads for one settled turn. */
 export interface DecisionFactInputs {
@@ -26,14 +48,14 @@ export interface DecisionFactInputs {
 	queue: readonly WorkQueueItem[];
 	/** The claims this run holds: the Starting window's set. */
 	claims: ReadonlySet<string>;
-	/** The Ticket the transition's position stands on, or undefined when none does. */
-	positionTicket: Ticket | undefined;
-	/** Whether the position's Ticket still stands in a source. */
-	positionStillListed: boolean;
-	/** Whether the position's task type carries the plane action form. */
-	positionIsPlaneAction: boolean;
-	/** The newest plane-action attempt the state read for this Ticket, or null. */
-	latestPlaneActionAttempt: PlaneActionAttempt | null;
+	/** The transition's position, resolved by the screen. */
+	position: DecisionPosition;
+	/**
+	 * The gate that holds the settled turn's derived Next step (ADR 0092), or
+	 * null when the step stands or the turn derives none. The screen derives the
+	 * step from the state; the words that state a gate belong here.
+	 */
+	nextStepGate: NextStepGate | null;
 	/** The task type the resolved config falls back to. */
 	defaultTaskType: string;
 }
@@ -95,7 +117,7 @@ export function routeStandingLine(
 	);
 	if (waiting) return "the route is waiting in the Work queue";
 	if (inputs.claims.has(positionIdentity)) return "the route is starting";
-	if (inputs.positionTicket !== undefined && inFlight(inputs.positionTicket))
+	if (inputs.position.ticket !== undefined && inFlight(inputs.position.ticket))
 		return "the route is running on its position ticket";
 	return null;
 }
@@ -142,9 +164,9 @@ export function decisionFacts(inputs: DecisionFactInputs): DecisionFacts {
 		// only the turn that ran it: it stands while it postdates the turn's
 		// completion, so a blocked merge never hides the re-merge the following
 		// review asks for.
-		const attempt = inputs.latestPlaneActionAttempt;
+		const attempt = inputs.position.latestAttempt;
 		const attemptStands = attempt !== null && attempt.at >= (completion?.completedAt ?? "");
-		const standing = routeStandingLine(ticket, outcome, inputs.positionIsPlaneAction, inputs);
+		const standing = routeStandingLine(ticket, outcome, inputs.position.isPlaneAction, inputs);
 		if (standing !== null) {
 			factLines.push(standing);
 		} else if (attemptStands && attempt !== null) {
@@ -157,17 +179,24 @@ export function decisionFacts(inputs: DecisionFactInputs): DecisionFacts {
 			if (attempt.transition !== null && attempt.transition.pullRequestWrite !== null) {
 				factLines.push(transitionFactLine("pull request", attempt.transition.pullRequestWrite));
 			}
-		} else if (inputs.positionStillListed) {
+		} else if (inputs.position.stillListed) {
 			// The position is derived, never stored (ADR 0027): the Ticket it
 			// sits on can leave its source between the fire and the decision. No
 			// list holds such a Ticket, and no task can host on it, so the offer
 			// stands withdrawn.
-			offer = inputs.positionIsPlaneAction
+			offer = inputs.position.isPlaneAction
 				? { kind: "merge", taskType: outcome.positionTaskType }
 				: { kind: "handoff", taskType: outcome.positionTaskType };
+			// The hold on the machine's own step, stated beside the key the
+			// operator still holds (ADR 0092). The operator's own key passes the
+			// gates, so the row stands and the fact line says what the factory
+			// will not take on its own.
+			if (inputs.nextStepGate !== null) {
+				factLines.push(`the Next step is held: ${NEXT_STEP_GATE_LINES[inputs.nextStepGate]}`);
+			}
 		} else {
 			factLines.push(
-				inputs.positionIsPlaneAction
+				inputs.position.isPlaneAction
 					? "the position's ticket left its source; no merge stands"
 					: "the position's ticket left its source; no handoff stands",
 			);

@@ -628,20 +628,20 @@ describe("the Repository init plan (ADR 0075)", () => {
 describe("the init fact (ADR 0075)", () => {
 	test("it stores and reads one fact per repository, and drift is the hash mismatch", () => {
 		const state = openFactoryState(":memory:");
-		expect(state.repositoryInitFact("acme/factory")).toBe(null);
-		state.setRepositoryInitFact("acme/factory", "hash-a", "commit-a");
-		expect(state.repositoryInitFact("acme/factory")).toEqual({
+		expect(state.repositoryInit.repositoryInitFact("acme/factory")).toBe(null);
+		state.repositoryInit.setRepositoryInitFact("acme/factory", "hash-a", "commit-a");
+		expect(state.repositoryInit.repositoryInitFact("acme/factory")).toEqual({
 			repository: "acme/factory",
 			settingsHash: "hash-a",
 			pushedCommit: "commit-a",
 			at: expect.any(String),
 		});
 		// A second repository is its own row: each read stands its own fact.
-		state.setRepositoryInitFact("acme/other", "hash-b", "commit-b");
-		expect(state.repositoryInitFact("acme/factory")?.settingsHash).toBe("hash-a");
-		expect(state.repositoryInitFact("acme/other")?.settingsHash).toBe("hash-b");
+		state.repositoryInit.setRepositoryInitFact("acme/other", "hash-b", "commit-b");
+		expect(state.repositoryInit.repositoryInitFact("acme/factory")?.settingsHash).toBe("hash-a");
+		expect(state.repositoryInit.repositoryInitFact("acme/other")?.settingsHash).toBe("hash-b");
 		// The drift helper: the stored hash against the current settings' hash.
-		const fact = state.repositoryInitFact("acme/factory");
+		const fact = state.repositoryInit.repositoryInitFact("acme/factory");
 		if (fact === null) throw new Error("expected a stored init fact");
 		const drifted =
 			fact.settingsHash !== repositoryInitSettingsHash(statesFixture(), taskTypesFixture());
@@ -650,9 +650,9 @@ describe("the init fact (ADR 0075)", () => {
 
 	test("re-storing a fact for the same repository keeps one row", () => {
 		const state = openFactoryState(":memory:");
-		state.setRepositoryInitFact("acme/factory", "hash-a", "commit-a");
-		state.setRepositoryInitFact("acme/factory", "hash-b", "commit-b");
-		const fact = state.repositoryInitFact("acme/factory");
+		state.repositoryInit.setRepositoryInitFact("acme/factory", "hash-a", "commit-a");
+		state.repositoryInit.setRepositoryInitFact("acme/factory", "hash-b", "commit-b");
+		const fact = state.repositoryInit.repositoryInitFact("acme/factory");
 		expect(fact).not.toBe(null);
 		expect(fact?.settingsHash).toBe("hash-b");
 		expect(fact?.pushedCommit).toBe("commit-b");
@@ -709,7 +709,7 @@ describe("the repository init's commit flow", () => {
 			"acme/factory-issues",
 			"acme/factory-pull-requests",
 		]);
-		const fact = state.repositoryInitFact(identity);
+		const fact = state.repositoryInit.repositoryInitFact(identity);
 		expect(fact?.pushedCommit).toBe("abc1234");
 		expect(fact?.settingsHash).toBe(
 			repositoryInitSettingsHash(statesFixture(), taskTypesFixture()),
@@ -740,7 +740,7 @@ describe("the repository init's commit flow", () => {
 		expect(result.reason).toBe("a source named acme/factory-issues is already configured");
 		// The collision stops before the state write and before the act issues a
 		// single command (ADR 0075, story 15): no fetch, label, or worktree ran.
-		expect(state.repositoryInitFact(identity)).toBe(null);
+		expect(state.repositoryInit.repositoryInitFact(identity)).toBe(null);
 		expect(runner.commands()).toEqual([]);
 	});
 
@@ -767,7 +767,7 @@ describe("the repository init's commit flow", () => {
 		expect(result.reason).toContain("MLSF_TEST_NO_SUCH_VAR");
 		// The refusal stands before the act: no fetch, label, or worktree ran.
 		expect(runner.commands()).toEqual([]);
-		expect(state.repositoryInitFact(identity)).toBe(null);
+		expect(state.repositoryInit.repositoryInitFact(identity)).toBe(null);
 	});
 
 	test("the re-init stands over the sources the plane already registered", async () => {
@@ -809,7 +809,7 @@ describe("the repository init's commit flow", () => {
 			},
 		]);
 		// The fact re-writes on the current settings: the drift clears.
-		expect(state.repositoryInitFact(identity)?.settingsHash).toBe(
+		expect(state.repositoryInit.repositoryInitFact(identity)?.settingsHash).toBe(
 			repositoryInitSettingsHash(statesFixture(), taskTypesFixture()),
 		);
 		expect(repositoryInitDrifted(state, identity, statesFixture(), taskTypesFixture())).toBe(false);
@@ -877,7 +877,7 @@ describe("the repository init's commit flow", () => {
 			);
 			// The act ran and the fact stands on the current settings: the
 			// drift the plane reports is not about sources.
-			expect(state.repositoryInitFact(identity)?.pushedCommit).toBe("abc1234");
+			expect(state.repositoryInit.repositoryInitFact(identity)?.pushedCommit).toBe("abc1234");
 			expect(repositoryInitDrifted(state, identity, statesFixture(), taskTypesFixture())).toBe(
 				false,
 			);
@@ -1052,7 +1052,7 @@ describe("the repository init's commit flow", () => {
 			if (result.ok) throw new Error("expected the commit to refuse");
 			expect(result.reason).toBe("a source named acme/factory-issues is already configured");
 			expect(runner.commands()).toEqual([]);
-			expect(state.repositoryInitFact(identity)).toBe(null);
+			expect(state.repositoryInit.repositoryInitFact(identity)).toBe(null);
 		});
 	});
 });
@@ -1061,7 +1061,7 @@ describe("the init drift", () => {
 	test("a changed setting drifts the fact; a matching setting does not", () => {
 		const state = openFactoryState(":memory:");
 		const base = statesFixture();
-		state.setRepositoryInitFact(
+		state.repositoryInit.setRepositoryInitFact(
 			"github.com/acme/factory",
 			repositoryInitSettingsHash(base, taskTypesFixture()),
 			"abc1234",

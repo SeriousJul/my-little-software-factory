@@ -84,8 +84,8 @@ function seededState(): FactoryState {
 	const state = openFactoryState(join(dir, "state.sqlite"));
 	// The frames assert the unsplit list: a fresh file opens grouped by
 	// repository (ADR 0066), so the fixture holds the flat axis.
-	state.setGroupingAxis("tickets", "none");
-	state.initializeSources([source]);
+	state.grouping.setGroupingAxis("tickets", "none");
+	state.sourceFact.initializeSources([source]);
 	const success: FetchOutcome = {
 		status: "success",
 		fetchedAt: "2026-08-31T10:01:00Z",
@@ -96,8 +96,8 @@ function seededState(): FactoryState {
 			fetched(8, "Fourth open ticket"),
 		],
 	};
-	state.applyFetch(source, success);
-	const claim = state.claimHandoff(
+	state.sourceFact.applyFetch(source, success);
+	const claim = state.handoff.claimHandoff(
 		identityA,
 		{
 			agentType: "pi",
@@ -110,7 +110,7 @@ function seededState(): FactoryState {
 		"open",
 	);
 	if (!claim.ok) throw new Error(claim.reason);
-	state.settleHandoff(claim.claim.attemptId, true, undefined, {
+	state.handoff.settleHandoff(claim.claim.attemptId, true, undefined, {
 		paneId: "pane-1",
 		tabId: "tab-1",
 		workspaceId: "ws-1",
@@ -129,7 +129,7 @@ describe("the held turn through the real app flow", () => {
 		const state = seededState();
 		// The held-turn flow runs unattended: the mode is factory state (ADR 0036),
 		// so the test writes it to the state file the plane reads at startup.
-		state.setAutoHandoffMode(true);
+		state.handoff.setAutoHandoffMode(true);
 		// The session file the production reader reads from disk: one
 		// assistant message that failed on the provider's own text, with a
 		// turn log of its own so the fallback never runs. The timestamp is
@@ -223,7 +223,9 @@ describe("the held turn through the real app flow", () => {
 				// The auto-handoffs settle: two of the three open tickets
 				// are running; the third waits on the agent limit.
 				await waitUntil("the auto-handoffs to be running", () =>
-					[identityB, identityC].every((identity) => state.ticketState(identity) === "running"),
+					[identityB, identityC].every(
+						(identity) => state.ticketWorkCycle.ticketState(identity) === "running",
+					),
 				);
 				// Let the stable cycles settle, then count the dispatch
 				// commands: after the turn is held, nothing new may start an
@@ -258,29 +260,29 @@ describe("the held turn through the real app flow", () => {
 				});
 				await waitUntil(
 					"the held ticket to rest in awaiting",
-					() => state.ticketState(identityA) === "awaiting",
+					() => state.ticketWorkCycle.ticketState(identityA) === "awaiting",
 				);
 				// Give the paused factory several full cycles to do nothing.
 				await sleep(300);
 
 				// The turn rests in awaiting, held, with the provider's own
 				// text as its detail and no decision on it.
-				const completion = state.lastCompletion(identityA);
+				const completion = state.ticketWorkCycle.lastCompletion(identityA);
 				expect(completion?.cause).toBe("failed");
 				expect(completion?.detail).toBe(QUOTA);
 				expect(completion?.decision).toBeNull();
 				// The dispatch pause is armed, and it holds: no restart of
 				// the missing ticket, no handoff of the open one, no cleanup
 				// of the held one.
-				expect(state.dispatchPauseActive()).toBe(true);
+				expect(state.ticketWorkCycle.dispatchPauseActive()).toBe(true);
 				expect(dispatchCount()).toBe(before);
 				for (const part of ["workspace close", "worktree remove", "tab close", "branch -D"]) {
 					expect(runner.commands().some((command) => command.includes(part))).toBe(false);
 				}
 				// The missing ticket is not abandoned and the open one is
 				// still open.
-				expect(state.ticketState(identityB)).toBe("running");
-				expect(state.ticketState(identityD)).toBe("open");
+				expect(state.ticketWorkCycle.ticketState(identityB)).toBe("running");
+				expect(state.ticketWorkCycle.ticketState(identityD)).toBe("open");
 
 				// The frame: the mode line says paused, the row shows the
 				// held badge in place of the state badge, the attention line

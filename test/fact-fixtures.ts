@@ -9,12 +9,10 @@
 import type { Completion, Handoff, Ticket } from "../src/domain/ticket.ts";
 import type { TicketFactInputs } from "../src/domain/ticket-facts.ts";
 import type { HerdrAgent } from "../src/herdr.ts";
-import type { WorkQueueItem } from "../src/state.ts";
+import type { WorkQueueHandoffItem, WorkQueueItem } from "../src/state/work-queue.ts";
 
 /** The name the sample handoff's Agent started under. */
 export const OWN_NAME = "sample-agent";
-
-export type WorkQueueHandoffItem = WorkQueueItem & { kind: "handoff" };
 
 export function handoff(over: Partial<Handoff> = {}): Handoff {
 	return {
