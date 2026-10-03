@@ -45,15 +45,21 @@ export const RETIRED_TABLES = ["referenced_issues"] as const;
  * The tables a statement reaches.
  *
  * The keywords match in either case, so a statement written `from tickets` is
- * read the same way as one written `FROM tickets`. An `UPDATE` is read only in
- * its `UPDATE <table> SET` shape, and the `SET` is read as a whole word, so an
- * upsert's `DO UPDATE SET` names no table and a column named `settings_hash`
- * is never taken for one. This is the one matcher: the store's scoped handle
- * refuses with it, and the boundary check reads the source with it, so the
- * runtime rule and the review rule cannot drift apart.
+ * read the same way as one written `FROM tickets`. A name may carry its schema
+ * (`FROM main.tickets`), and the reach is the table, not the schema that holds
+ * it, so the refusal names `tickets` (issue #202 review). An `UPDATE` is read
+ * only in its `UPDATE <table> SET` shape, and the `SET` is read as a whole
+ * word, so an upsert's `DO UPDATE SET` names no table and a column named
+ * `settings_hash` is never taken for one. This is the one matcher: the store's
+ * scoped handle refuses with it, and the boundary check reads the source with
+ * it, so the runtime rule and the review rule cannot drift apart.
  */
-const TABLE_REFERENCE =
-	/\b(?:FROM|JOIN|INTO)\s+([A-Za-z_][A-Za-z0-9_]*)|\bUPDATE\s+(?:OR\s+(?:ROLLBACK|ABORT|FAIL|IGNORE|REPLACE)\s+)?([A-Za-z_][A-Za-z0-9_]*)\s+SET\b/giu;
+const TABLE_NAME = "[A-Za-z_][A-Za-z0-9_]*";
+const TABLE_REFERENCE = new RegExp(
+	`\\b(?:FROM|JOIN|INTO)\\s+(?:${TABLE_NAME}\\.)?(${TABLE_NAME})` +
+		`|\\bUPDATE\\s+(?:OR\\s+(?:ROLLBACK|ABORT|FAIL|IGNORE|REPLACE)\\s+)?(?:${TABLE_NAME}\\.)?(${TABLE_NAME})\\s+SET\\b`,
+	"giu",
+);
 
 /**
  * The names a statement defines for itself: a CTE's name (`WITH held AS (`),
@@ -100,8 +106,16 @@ function withoutQuotedValues(sql: string): string {
 /**
  * The table names a statement reaches, in the order it names them and in lower
  * case, so the comparison is the same whatever case the SQL is written in. A
- * quoted value names nothing, and a name the statement defines for itself - a
- * CTE or a subquery alias - is not a reach, so neither is reported.
+ * quoted value names nothing, a schema prefix names the table under it and not
+ * the schema, and a name the statement defines for itself - a CTE or a subquery
+ * alias - is not a reach, so neither is reported.
+ *
+ * A CTE named after a real table is the matcher's one blind spot: every name in
+ * `WITH handoffs AS (SELECT * FROM handoffs)` is a name the statement bound for
+ * itself, so nothing is reported and the scoped handle lets it through. SQLite
+ * closes the only useful form of it - a CTE that reads the table its own name
+ * shadows is a `circular reference` - so the bypass reaches no rows. The seam
+ * test states this so a reader knows which guard holds.
  */
 export function tablesNamed(sql: string): string[] {
 	const statement = withoutQuotedValues(sql);

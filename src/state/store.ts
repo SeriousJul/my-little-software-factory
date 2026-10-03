@@ -16,7 +16,9 @@
  * inside it. That only works while the operations an aggregate publishes to the
  * module never open a transaction of their own: `transaction` refuses a nested
  * open and names the aggregate that asked, and the boundary check refuses a
- * published operation that opens one (issue #202, ADR 0092).
+ * published operation that opens one (issue #202, ADR 0092). A write whose
+ * rollback fails as well is reported as both failures, with the write's own
+ * error kept as the cause (issue #202 review).
  */
 import { Database, type Statement } from "bun:sqlite";
 import { chmodSync, mkdirSync } from "node:fs";
@@ -24,9 +26,14 @@ import { dirname } from "node:path";
 import { migrate } from "./schema.ts";
 import { tablesNamed } from "./tables.ts";
 
+/** What an error says, whether or not it is an `Error`. */
+function messageOf(error: unknown): string {
+	return error instanceof Error ? error.message : String(error);
+}
+
 export class StateError extends Error {
-	constructor(message: string) {
-		super(message);
+	constructor(message: string, options?: ErrorOptions) {
+		super(message, options);
 		this.name = "StateError";
 	}
 }
@@ -144,7 +151,19 @@ export class StateStore {
 			this.database.exec("COMMIT");
 			return result;
 		} catch (error) {
-			this.database.exec("ROLLBACK");
+			try {
+				this.database.exec("ROLLBACK");
+			} catch (rollbackError) {
+				// The body's own failure is the reason the write ended. A rollback that
+				// fails too - the body already ended the transaction, or the file went -
+				// is named beside it, and the body's error stays the cause, so the
+				// rollback never hides what the write did (issue #202 review).
+				throw new StateError(
+					`the ${aggregate} aggregate's write failed at ${this.path}: ${messageOf(error)}; ` +
+						`the rollback failed too: ${messageOf(rollbackError)}`,
+					{ cause: error },
+				);
+			}
 			throw error;
 		} finally {
 			this.openTransaction = null;

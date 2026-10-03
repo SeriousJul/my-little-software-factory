@@ -8,7 +8,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import os from "node:os";
 import { openStore, StateError } from "../../src/state/store.ts";
-import { TABLES_OWNED } from "../../src/state/tables.ts";
+import { TABLES_OWNED, tablesNamed } from "../../src/state/tables.ts";
 import { openFactoryState } from "../../src/state.ts";
 import {
 	cleanup,
@@ -131,6 +131,14 @@ describe("the seam aggregate", () => {
 			),
 		).toThrow("may not reach the table memberships");
 
+		// A schema-qualified name is read as its table (issue #202): the refusal
+		// names `handoffs`, the table the statement reaches, and not `main`, the
+		// schema that holds it.
+		expect(() => tickets.prepare("select attempt_id from main.handoffs")).toThrow(
+			"may not reach the table handoffs",
+		);
+		expect(() => tickets.prepare("select identity from main.tickets")).not.toThrow();
+
 		// A name the statement binds for itself is not a table it reaches: a CTE
 		// and a subquery alias prepare against the aggregate's own rows.
 		expect(() => tickets.prepare("with held as (select 1) select * from held")).not.toThrow();
@@ -141,6 +149,51 @@ describe("the seam aggregate", () => {
 		expect(() => tickets.prepare("select * from (select attempt_id from handoffs) held")).toThrow(
 			"may not reach the table handoffs",
 		);
+		// The reach inside a CTE body is still a reach: the matcher reads the CTE's
+		// own statement, whatever the CTE is called.
+		expect(() =>
+			tickets.prepare("with held as (select attempt_id from handoffs) select * from held"),
+		).toThrow("may not reach the table handoffs");
+		store.close();
+	});
+	test("a CTE named after a real table is closed by the engine, not by the matcher", () => {
+		// The matcher cannot see this shape: every `handoffs` in the statement is a
+		// name the statement bound for itself, so `tablesNamed` reports nothing and
+		// the scoped handle lets the statement through (issue #202 review). SQLite
+		// closes the useful form of it - a CTE that reads the table its own name
+		// shadows is a circular reference - so the bypass reaches no rows. The test
+		// states which guard holds: the engine, not the matcher.
+		const store = openStore(statePath());
+		const tickets = store.scopeOf("ticketWorkCycle", TABLES_OWNED.ticketWorkCycle);
+		expect(tablesNamed("with handoffs as (select * from handoffs) select * from handoffs")).toEqual(
+			[],
+		);
+		expect(() =>
+			tickets.prepare("with handoffs as (select * from handoffs) select * from handoffs"),
+		).toThrow("circular reference");
+		store.close();
+	});
+	test("a failed rollback keeps the write's error as the cause", () => {
+		// The body ends the file's transaction itself, so the store's own ROLLBACK
+		// fails. The error the caller gets names both failures and carries the one
+		// that started the rollback as its cause (issue #202 review).
+		const store = openStore(statePath());
+		const tickets = store.scopeOf("ticketWorkCycle", TABLES_OWNED.ticketWorkCycle);
+		let error: unknown;
+		try {
+			tickets.transaction(() => {
+				tickets.exec("rollback");
+				throw new Error("the write failed");
+			});
+		} catch (caught) {
+			error = caught;
+		}
+		expect(error).toBeInstanceOf(StateError);
+		expect(String(error)).toContain("the write failed");
+		expect(String(error)).toContain("the rollback failed too");
+		expect(String((error as Error).cause)).toBe("Error: the write failed");
+		// The refusal clears the open write, so the file works on.
+		expect(tickets.transaction(() => 3)).toBe(3);
 		store.close();
 	});
 	test("holds one write transaction at a time and names the aggregate that asked for a second", () => {
