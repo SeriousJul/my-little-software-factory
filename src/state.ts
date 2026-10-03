@@ -2351,19 +2351,21 @@ export class FactoryState {
 	 * turn of exactly the task type the ticket now suggests: the agent
 	 * finished that kind of work, and the item still lists it because no new
 	 * signal landed - a label flip, an item removal. The check takes the
-	 * suggestion the caller already derived and reads the newest cycle-end
-	 * row, the same row the re-verify gate reads. A cycle closed after an `aborted` or `failed` turn holds
+	 * suggestion the caller already derived and reads the ticket's newest turn
+	 * (ADR 0093): the current cycle's settled turn when that cycle has settled
+	 * one, and otherwise the newest closed cycle's row, the row the re-verify
+	 * gate reads. A cycle closed after an `aborted` or `failed` turn holds
 	 * nothing: that work did not finish, and a retry is the next move. A
 	 * cycle whose turn never settled holds nothing: its row carries no
 	 * cause. A cycle that ended with no row at all - the in-flight Close, which
 	 * writes no trace (ADR 0031) - holds nothing the same way: the row that
 	 * would say the work finished is not there, and an older cycle's finished
-	 * turn is not this cycle's fact. It gates the open auto-handoff only; a
-	 * manual handoff passes.
+	 * turn is not this cycle's fact. It gates the open auto-handoff and the
+	 * Next step derivation; a manual handoff passes.
 	 */
 	sameTypeHoldActive(identity: string, suggestedTaskType: string | null): boolean {
-		const ended = this.lastCycleEnd(identity);
-		return ended !== null && ended.cause === "completed" && ended.taskType === suggestedTaskType;
+		const turn = this.holdTurn(identity);
+		return turn !== null && turn.cause === "completed" && turn.taskType === suggestedTaskType;
 	}
 
 	/**
@@ -3635,9 +3637,9 @@ export class FactoryState {
 	 * no trace (ADR 0031) - reads null here, and so does a ticket whose cycle has
 	 * never ended.
 	 *
-	 * Both gates read this one fact, so the absent row and the cause-less row -
-	 * an abandon of a turn that never settled - reach them the same way: as a
-	 * cycle end that asserts nothing about finished work.
+	 * The re-verify gate (ADR 0031) reads this fact. The Same-type hold reads the
+	 * ticket's newest turn instead, in `holdTurn`, because the two gates answer
+	 * different questions (ADR 0093).
 	 */
 	private lastCycleEnd(identity: string): {
 		decidedAt: string;
@@ -3657,6 +3659,45 @@ export class FactoryState {
 			| undefined;
 		if (row == null) return null;
 		return { decidedAt: row.decided_at, taskType: row.task_type, cause: row.cause };
+	}
+
+	/**
+	 * The turn the Same-type hold reads (ADR 0026, ADR 0093): the current cycle's
+	 * settled turn, or the newest closed cycle's row when the current cycle has
+	 * settled none.
+	 *
+	 * The cycle-end read alone answers the open ticket, whose current cycle has
+	 * settled no turn yet. It does not answer a settled turn's Next step: that
+	 * turn stands in the cycle the ticket is in now, and it is the newest fact
+	 * about the ticket. A review that finished and wrote `needs-work` is a new
+	 * signal whatever the cycle before it finished, so the hold reads the review
+	 * and stands clear of the rework the review asks for. Reading the older
+	 * closed cycle instead holds the rework on the ticket forever, and the review
+	 * and rework loop ADR 0092 runs unattended never runs.
+	 *
+	 * The window stays two cycles wide, the way the cycle-end read is: a cycle
+	 * that settled no turn - the in-flight Close (ADR 0031), an abandon over a
+	 * turn that never settled - asserts nothing and clears the hold, and the read
+	 * never reaches back past the cycle before the current one.
+	 */
+	private holdTurn(identity: string): { taskType: string; cause: string | null } | null {
+		const row = this.db
+			.prepare(
+				`SELECT task_type, cause FROM completion_traces
+				 WHERE ticket_identity = ?
+				   AND (
+				     work_cycle = (SELECT work_cycle FROM tickets WHERE identity = ?)
+				     OR (
+				       work_cycle = (SELECT work_cycle - 1 FROM tickets WHERE identity = ?)
+				       AND decision IN ('closed', 'auto-closed', 'abandoned')
+				       AND decided_at IS NOT NULL
+				     )
+				   )
+				 ORDER BY work_cycle DESC, decided_at DESC, rowid DESC LIMIT 1`,
+			)
+			.get(identity, identity, identity) as { task_type: string; cause: string | null } | undefined;
+		if (row == null) return null;
+		return { taskType: row.task_type, cause: row.cause };
 	}
 
 	/**

@@ -90,6 +90,11 @@ const CHAIN_CONFIG: FactoryConfig = {
 			taskType: "merge",
 			match: { sourceKind: "github-pull-request", labelsAny: ["ready-to-ship"] },
 		},
+		{
+			name: "needs-work",
+			taskType: "rework",
+			match: { sourceKind: "github-pull-request", labelsAny: ["needs-work"] },
+		},
 	],
 	taskTypes: {
 		implement: {
@@ -110,6 +115,10 @@ const CHAIN_CONFIG: FactoryConfig = {
 			},
 		},
 		merge: { action: "merge-pull-request", method: "squash" },
+		rework: {
+			template: "rework",
+			transition: { ticketFacts: [], pullRequestFacts: ["ready-for-review"] },
+		},
 	},
 	maxParallelAgents: 2,
 	maxHandoffsPerTicket: 20,
@@ -198,7 +207,10 @@ interface Chain {
 	 * land its start, fire the task type's Transition through the real fire
 	 * module, and store the outcome the completion decision reads.
 	 */
-	settleTurnWithFire: (identity: string, taskType: string) => Promise<TransitionOutcome>;
+	settleTurnWithFire: (
+		identity: string,
+		taskType: string,
+	) => Promise<{ outcome: TransitionOutcome; attemptId: string }>;
 	/** Wait for the merge's attempt record, which the pickup's run writes. */
 	awaitAttempt: () => Promise<NonNullable<ReturnType<FactoryState["latestPlaneActionAttempt"]>>>;
 }
@@ -330,7 +342,7 @@ function chainRig(): Chain {
 			detail: "",
 			transition: outcome,
 		});
-		return outcome;
+		return { outcome, attemptId: claim.claim.attemptId };
 	};
 
 	const awaitAttempt = async () => {
@@ -373,7 +385,8 @@ describe("the ADR 0092 chain runs unattended (issue #208)", () => {
 			// Hop 1: the implement turn on the issue, and its Transition's fire.
 			// The fire writes on the linked pull request and derives its position
 			// there, so the Next step is the review standing on #12.
-			const implementFire = await chain.settleTurnWithFire(issueIdentity, "implement");
+			const implementRun = await chain.settleTurnWithFire(issueIdentity, "implement");
+			const implementFire = implementRun.outcome;
 			expect(implementFire).toMatchObject({
 				fired: true,
 				writeFailure: "",
@@ -430,7 +443,8 @@ describe("the ADR 0092 chain runs unattended (issue #208)", () => {
 			]);
 			runner.set("gh", PR_MERGE_ARGS, { code: 0 });
 
-			const reviewFire = await chain.settleTurnWithFire(pullIdentity, "review");
+			const reviewRun = await chain.settleTurnWithFire(pullIdentity, "review");
+			const reviewFire = reviewRun.outcome;
 			expect(reviewFire).toMatchObject({
 				fired: true,
 				when: "score-above-threshold",
@@ -476,4 +490,63 @@ describe("the ADR 0092 chain runs unattended (issue #208)", () => {
 			state.close();
 		},
 	);
+
+	// The dev-run miss on PR #207 (issue #210's follow-up): the Same-type hold
+	// stood on the settled turn's Next step and the rework never routed.
+	test("a review that writes needs-work routes its rework after a finished rework cycle", async () => {
+		const chain = chainRig();
+		const { state, runner, coordinator } = chain;
+		chain.refresh(issueTicket(), pullTicket(["ready-for-review"]));
+
+		// The ticket's earlier cycle: a rework turn that finished, its cycle
+		// closed by the operator. Its fire put the pull request back at
+		// ready-for-review.
+		const reworkRun = await chain.settleTurnWithFire(pullIdentity, "rework");
+		expect(reworkRun.outcome).toMatchObject({
+			fired: true,
+			pullRequestFacts: ["ready-for-review"],
+			positionTaskType: "review",
+			positionTicketIdentity: pullIdentity,
+		});
+		expect(
+			state.applyCompletionDecision({
+				ticketIdentity: pullIdentity,
+				handoffId: reworkRun.attemptId,
+				decision: "closed",
+				decidedAt: new Date(Date.parse("2026-08-31T11:00:30Z")).toISOString(),
+			}),
+		).toBe(true);
+		chain.refresh(issueTicket(), pullTicket(["ready-for-review"]));
+
+		// The next cycle: the review turn, and a score below the threshold.
+		runner.set("gh", COMMENT_READ_ARGS, { stdout: "[]" });
+		runner.set("gh", REVIEW_READ_ARGS, {
+			stdout: JSON.stringify([
+				{ body: "**Score:** 86 / 100", submitted_at: "2026-08-31T11:01:00Z" },
+			]),
+		});
+		const reviewRun = await chain.settleTurnWithFire(pullIdentity, "review");
+		expect(reviewRun.outcome).toMatchObject({
+			fired: true,
+			when: "score-below-threshold",
+			pullRequestWrite: { added: ["needs-work"], removed: ["ready-for-review"] },
+			positionTaskType: "rework",
+			positionTicketIdentity: pullIdentity,
+		});
+		expect(state.ticketState(pullIdentity)).toBe("awaiting");
+
+		await coordinator.tick();
+
+		// The symptom: auto mode owes this turn a rework on its own position.
+		expect(chain.handoffAsks).toEqual([
+			expect.objectContaining({
+				origin: "workflow",
+				automatic: true,
+				ticketIdentity: pullIdentity,
+				routeFromIdentity: pullIdentity,
+				choice: expect.objectContaining({ taskType: "rework" }),
+			}),
+		]);
+		state.close();
+	});
 });

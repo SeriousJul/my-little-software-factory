@@ -464,8 +464,8 @@ It is distinct from the queue pause, the operator's brake on the queue itself (A
 _Avoid_: circuit breaker, cooldown, backoff
 
 **Same-type hold**:
-The condition in which the open Auto-handoff withholds a ticket whose newest closed cycle settled a `completed` turn of exactly the task type the ticket now suggests.
-A completed work needs no repeat, and progress needs a new signal. It is derived from the completion traces on every cycle, never stored, so it survives a restart and cannot drift from the fact it describes. It ends when the suggested task type changes, or the ticket leaves the source list. It gates the auto top-up's open-ticket add only; a manual handoff always passes it (ADR 0026, ADR 0051).
+The condition in which the Auto-handoff withholds a ticket whose newest turn settled a `completed` turn of exactly the task type it now suggests: the current cycle's settled turn when that cycle settled one, and the newest closed cycle otherwise (ADR 0093).
+A completed work needs no repeat, and progress needs a new signal. It is derived from the completion traces on every cycle, never stored, so it survives a restart and cannot drift from the fact it describes. It ends when the suggested task type changes, or the ticket leaves the source list. It gates the auto top-up's open-ticket add and a settled turn's Next step; a manual handoff always passes it (ADR 0026, ADR 0051, ADR 0092).
 _Avoid_: dispatch block, retry gate, backoff
 
 **Task type**:

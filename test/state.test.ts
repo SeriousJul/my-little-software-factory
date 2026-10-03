@@ -1767,6 +1767,67 @@ describe("factory SQLite state", () => {
 		state.close();
 	});
 
+	test("the hold reads the current cycle's settled turn, not the closed cycle behind it", () => {
+		// ADR 0093. The closed cycle completed `implement`, and a later turn in
+		// the cycle the ticket is in now completed `review`. The review is the
+		// newest fact about the ticket, so the hold answers it and stands clear of
+		// `implement` - the shape of the review that writes `needs-work` and asks
+		// for the rework the closed cycle ran.
+		const state = openFactoryState(":memory:");
+		state.initializeSources([sourceA]);
+		state.applyFetch(sourceA, success([fetched()]));
+		const identity = "github:github.com:I_5";
+		const first = state.claimHandoff(identity, choice, "open");
+		if (!first.ok) throw new Error(first.reason);
+		state.settleHandoff(first.claim.attemptId, true);
+		state.settleTurn({
+			ticketIdentity: identity,
+			handoffId: first.claim.attemptId,
+			taskType: "implement",
+			agentType: "pi",
+			message: "Done.",
+			turnLog: textLog("Done."),
+			completedAt: "2026-08-31T11:00:00Z",
+			cause: "completed",
+		});
+		state.applyCompletionDecision({
+			ticketIdentity: identity,
+			handoffId: first.claim.attemptId,
+			decision: "auto-closed",
+			decidedAt: "2026-08-31T11:30:00Z",
+		});
+		expect(state.sameTypeHoldActive(identity, "implement")).toBe(true);
+
+		state.applyFetch(sourceA, {
+			status: "success",
+			fetchedAt: "2026-08-31T11:31:00Z",
+			tickets: [fetched()],
+		});
+		const second = state.claimHandoff(identity, { ...choice, taskType: "review" }, "open");
+		if (!second.ok) throw new Error(second.reason);
+		state.settleHandoff(second.claim.attemptId, true);
+		state.settleTurn({
+			ticketIdentity: identity,
+			handoffId: second.claim.attemptId,
+			taskType: "review",
+			agentType: "pi",
+			message: "Reviewed.",
+			turnLog: textLog("Reviewed."),
+			completedAt: "2026-08-31T11:40:00Z",
+			cause: "completed",
+		});
+		// The turn settled and its cycle has not ended: the ticket awaits its
+		// decision, and its newest turn is the review.
+		expect(state.ticketState(identity)).toBe("awaiting");
+		expect(state.sameTypeHoldActive(identity, "implement")).toBe(false);
+		expect(state.sameTypeHoldActive(identity, "review")).toBe(true);
+		// The re-verify gate keeps its own read of the closed cycle (ADR 0031):
+		// it answers the 11:30 cycle end against the 11:31 re-read, and not the
+		// 11:40 turn that settled after it.
+		expect(state.sourceReverifiedSinceCycleEnd(identity)).toBe(true);
+		state.close();
+	});
+
 	test("an open claim waits for the source re-read after a cycle end", () => {
 		const state = openFactoryState(":memory:");
 		state.initializeSources([sourceA]);

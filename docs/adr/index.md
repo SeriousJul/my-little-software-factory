@@ -101,3 +101,4 @@ body states the context, the decision, and the consequences.
 - [ADR 0090: The tag's version is the release's version, and the workflow syncs the manifests to it](./0090-the-tags-version-is-the-releases-version-and-the-workflow-syncs-the-manifests-to-it.md)
 - [ADR 0091: The control plane drops the alias package](./0091-the-control-plane-drops-the-alias-package.md)
 - [ADR 0092: Auto-handoff mode decides the route at runtime, and the config drops auto-advance](./0092-auto-handoff-mode-decides-the-route-at-runtime-and-the-config-drops-auto-advance.md)
+- [ADR 0093: The Same-type hold reads the ticket's newest turn](./0093-the-same-type-hold-reads-the-tickets-newest-turn.md)

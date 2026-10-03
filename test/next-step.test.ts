@@ -265,6 +265,50 @@ describe("deriveNextStep (ADR 0092)", () => {
 		state.close();
 	});
 
+	test("the hold reads the settled turn, not an older closed cycle (ADR 0093)", () => {
+		// The dev-run miss: a finished rework closed its cycle, a review then
+		// settled, and the hold read the rework instead of the review. The review
+		// is the ticket's newest turn and the new signal the hold waits for, so
+		// the rework the review asks for is not a repeat of finished work.
+		const state = stateWith();
+		runTurn(state, "review", "completed", "closed");
+		state.applyFetch(source, {
+			status: "success",
+			fetchedAt: "2026-08-31T11:01:00Z",
+			tickets: [fetched(position, ["ready-for-review"])],
+		});
+		expect(state.sameTypeHoldActive(position, "review")).toBe(true);
+		runTurn(state, "implement", "completed", null);
+		expect(state.ticketState(position)).toBe("awaiting");
+		expect(state.sameTypeHoldActive(position, "review")).toBe(false);
+		// The rig's own Handoff limit of two is spent by the two turns, so the
+		// derivation is asked with a limit the turns do not reach.
+		expect(
+			deriveNextStep({ ...config, maxHandoffsPerTicket: 5 }, state, fired(), projection(state))
+				?.gate,
+		).toBeNull();
+		state.close();
+	});
+
+	test("a cycle that settled no turn clears the hold the way it always did", () => {
+		// The two-cycle window holds (ADR 0031): the in-flight Close writes no
+		// trace, so the current cycle asserts nothing and the read never reaches
+		// back to the finished turn two cycles old.
+		const state = stateWith();
+		runTurn(state, "review", "completed", "closed");
+		state.applyFetch(source, {
+			status: "success",
+			fetchedAt: "2026-08-31T11:01:00Z",
+			tickets: [fetched(position, ["ready-for-review"])],
+		});
+		const claim = state.claimHandoff(position, choice, "open");
+		if (!claim.ok) throw new Error(claim.reason);
+		state.settleHandoff(claim.claim.attemptId, true);
+		expect(state.closeWorkCycle(position)).toBe(true);
+		expect(state.sameTypeHoldActive(position, "review")).toBe(false);
+		state.close();
+	});
+
 	test("a position at the Handoff limit holds the step", () => {
 		// The limit counts the position's own starts, not the settled ticket's.
 		const state = stateWith();
