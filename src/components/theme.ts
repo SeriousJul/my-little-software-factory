@@ -13,7 +13,8 @@
  * so the terminal's own default shows through where the theme says so.
  */
 
-import type { Ticket, TicketMarker, TicketState } from "../domain/ticket.ts";
+import type { TicketMarker, TicketState } from "../domain/ticket.ts";
+import type { TaskTypeFact } from "../domain/ticket-facts.ts";
 import { currentThemeResolution } from "../theme-source.ts";
 import { noColorPresentation } from "./shared/presentation.ts";
 import type { ThemeRole } from "./shared/theme.ts";
@@ -66,23 +67,6 @@ export const BADGE_WIDTH = 12;
 /** The written word the Starting window's spinner face wears (ADR 0030). */
 export const STARTING_WORD = "starting";
 
-/**
- * Whether the ticket's Starting window (ADR 0030) is open against these facts.
- *
- * The window is the claim this run made, reported by the hand-off dispatch on
- * claim and on settle, or the `handed-off` state the claim settled into.
- * The claim outranks the recovery fact: a claim in flight of this run writes
- * its own unresolved attempt, so the projection reads its work as a recovery
- * while it runs, and the face wears that window. The fact still rules out a
- * crash remnant - the ticket whose claim belongs to a run that is gone, and
- * the set this run holds does not carry. A failure marker outranks the window
- * the way it outranks the state badge, so it is checked by the caller before
- * this.
- */
-export function inStartingWindow(ticket: Ticket, claimInFlight: boolean): boolean {
-	return claimInFlight || (!ticket.handoffRecoveryRequired && ticket.state === "handed-off");
-}
-
 /** Render a ticket state as a colored, fixed-width badge like `[open]`. */
 export function stateBadge(state: TicketState): string {
 	return `[${state}]`.padEnd(BADGE_WIDTH);
@@ -126,39 +110,6 @@ export function heldBadge(): string {
 	return "held".padEnd(BADGE_WIDTH);
 }
 
-/** The badge a parking state's ticket wears in place of a suggested task type. */
-export const PARKED_TASK_TYPE = "parked";
-
-/**
- * The task type a ticket presents in its list row and its detail pane.
- *
- * One shared choice between the two existing domain facts: an `open`
- * ticket presents its Suggested task type, the task of the first matching
- * Workflow state or the configured default. Every non-open ticket presents
- * the Task type its recorded handoff started with, so refreshed source facts
- * never change the meaning of active or settled work. A non-open ticket
- * without a recorded handoff presents `unknown`: the value is missing, not a
- * task type. An open ticket on a parking state presents `parked`: the machine
- * offers no task, and the plane starts nothing on it (ADR 0027).
- */
-export interface TaskTypePresentation {
-	/** The value the list badge and the detail pane show. */
-	value: string;
-	/** True when no recorded handoff task type exists. */
-	unknown: boolean;
-}
-
-export function ticketTaskType(ticket: Ticket): TaskTypePresentation {
-	if (ticket.state === "open") {
-		return { value: ticket.suggestedTaskType ?? PARKED_TASK_TYPE, unknown: false };
-	}
-	const recorded = ticket.handoff?.taskType;
-	if (recorded === undefined || recorded === "") {
-		return { value: "unknown", unknown: true };
-	}
-	return { value: recorded, unknown: false };
-}
-
 /**
  * The bracketed badge of a task type, at its natural width.
  *
@@ -175,6 +126,6 @@ export function taskTypeBadge(value: string): string {
  * The detail pane's task type line carries its own mauve face, so the list
  * badge and the detail line read as two surfaces of one fact.
  */
-export function taskTypeColor(presentation: TaskTypePresentation): string | undefined {
-	return paint(presentation.unknown ? "yellow" : "text");
+export function taskTypeColor(fact: TaskTypeFact): string | undefined {
+	return paint(fact.unknown ? "yellow" : "text");
 }

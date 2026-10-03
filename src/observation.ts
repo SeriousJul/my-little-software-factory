@@ -68,6 +68,10 @@
  */
 
 import type { FactoryConfig, TransitionOutcome } from "./config.ts";
+// The normalized states and the words for them are the domain's, beside the
+// Missing agent rule the observation cycle reads (issue #201). The observation
+// module re-states them for its existing readers.
+import { agentInPane, normalizeAgentStatus } from "./domain/agent.ts";
 import {
 	automaticStartBlocked,
 	type Completion,
@@ -89,7 +93,7 @@ import {
 	type PlaneActionIntent,
 	STOPPED_DISPATCH_REASON,
 } from "./handoff-dispatch.ts";
-import { type HerdrAgent, ownAgentInPane } from "./herdr.ts";
+import type { HerdrAgent } from "./herdr.ts";
 import { identifyHandoffAgentName } from "./naming.ts";
 import { isPlaneActionTaskType } from "./plane-action-registry.ts";
 import { type RefreshClock, SYSTEM_CLOCK } from "./refresh.ts";
@@ -115,9 +119,6 @@ import {
 	type NextStep,
 	type RefiredSkip,
 } from "./workflow.ts";
-
-/** The normalized states the factory reasons about. */
-export type AgentStatus = "working" | "done" | "idle" | "blocked" | "unknown";
 
 /**
  * The startup grace a handoff's agent gets before an idle or done report
@@ -330,15 +331,6 @@ export function matchConsultationAgent(
 	if (consultation.sessionId === null) return undefined;
 	const matches = agents.filter((agent) => agent.stableSessionId === consultation.sessionId);
 	return matches.length === 1 ? matches[0] : matches.length > 1 ? "ambiguous" : undefined;
-}
-
-export function normalizeAgentStatus(raw: string): AgentStatus {
-	const value = raw.trim().toLowerCase();
-	if (value === "working") return "working";
-	if (value === "done") return "done";
-	if (value === "idle") return "idle";
-	if (value === "blocked") return "blocked";
-	return "unknown";
 }
 
 /** Strip ANSI escape sequences and stray control characters. */
@@ -720,8 +712,9 @@ export class ObservationCoordinator {
 			// again, so a live agent in the ticket's pane that is not the ticket's
 			// own leaves the ticket's agent missing, and the missing path runs
 			// instead of the settle.
-			const own = ownAgentInPane(
-				byPane.get(ticket.paneId),
+			const own = agentInPane(
+				byPane,
+				ticket.paneId,
 				inFlightNames.get(ticket.ticketIdentity) ?? "",
 			);
 			if (own === null) {
@@ -763,8 +756,9 @@ export class ObservationCoordinator {
 			// The same identity rule as the in-flight loop: a working agent in
 			// the ticket's reused pane id that is not the ticket's own does not
 			// resume the ticket's pending turn.
-			const own = ownAgentInPane(
-				byPane.get(ticket.paneId),
+			const own = agentInPane(
+				byPane,
+				ticket.paneId,
 				awaitingNames.get(ticket.ticketIdentity) ?? "",
 			);
 			if (own === null || normalizeAgentStatus(own.status) !== "working") continue;
@@ -910,7 +904,7 @@ export class ObservationCoordinator {
 			if (ticket.paneId === null) continue;
 			const name = workingNames.get(ticket.ticketIdentity) ?? "";
 			if (name === "") continue;
-			const own = ownAgentInPane(byPane.get(ticket.paneId), name);
+			const own = agentInPane(byPane, ticket.paneId, name);
 			if (own === null || normalizeAgentStatus(own.status) !== "working") continue;
 			this.armAgentWait(name);
 		}
@@ -1780,10 +1774,8 @@ export class ObservationCoordinator {
 					hasPane: ticket.paneId !== null,
 					// The one missing-Agent rule, read the way the in-flight pass reads it.
 					agentMissing:
-						ownAgentInPane(
-							ticket.paneId === null ? undefined : byPane.get(ticket.paneId),
-							restartNames.get(ticket.ticketIdentity) ?? "",
-						) === null,
+						agentInPane(byPane, ticket.paneId, restartNames.get(ticket.ticketIdentity) ?? "") ===
+						null,
 					handoffCount: restartStartCounts.get(ticket.ticketIdentity) ?? 0,
 					handoffLimit: config.maxHandoffsPerTicket,
 					queueItemStands: queuedTickets.has(ticket.ticketIdentity),

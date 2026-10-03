@@ -26,10 +26,11 @@ import { createElement } from "@opentui/react";
 import type { ReactElement } from "react";
 
 import type { GroupingAxis, SplitGroupingAxis } from "../../domain/grouping.ts";
-import { holdsDecision, TICKET_STATES, type Ticket } from "../../domain/ticket.ts";
+import { TICKET_STATES } from "../../domain/ticket.ts";
+import type { TicketRowFacts } from "../../domain/ticket-facts.ts";
 import { newestMembership } from "../../task-selection.ts";
 import { truncateTailToWidth, widthOf } from "../text.ts";
-import { paint, ticketTaskType } from "../theme.ts";
+import { paint } from "../theme.ts";
 
 /** The word a header stands on when the `position` axis finds no State. */
 export const UNMATCHED_GROUP = "unmatched";
@@ -100,14 +101,14 @@ export function rowIndexForAnchor<T extends IdentifiedItem>(
 
 /** The Ticket list's own anchor read, with the axis' key rule applied. */
 export function ticketRowIndexForAnchor(
-	rows: readonly ListedRow<Ticket>[],
+	rows: readonly ListedRow<TicketRowFacts>[],
 	anchor: RowAnchor | undefined,
 	fallbackIndex: number,
-	tickets: readonly Ticket[],
+	facts: readonly TicketRowFacts[],
 	axis: GroupingAxis,
 ): number {
-	return rowIndexForAnchor(rows, anchor, fallbackIndex, tickets, (ticket) =>
-		ticketGroupKey(axis, ticket),
+	return rowIndexForAnchor(rows, anchor, fallbackIndex, facts, (fact) =>
+		ticketGroupKey(axis, fact),
 	);
 }
 
@@ -473,18 +474,18 @@ export function toggleFold(folds: GroupFolds, axis: GroupingAxis, value: string)
  * positions for the `position` axis' default (ADR 0071).
  */
 export function ticketRows(
-	tickets: readonly Ticket[],
+	facts: readonly TicketRowFacts[],
 	axis: GroupingAxis,
 	folds: GroupFolds,
 	storedOrder: readonly string[],
 	positionOrder: readonly string[],
 	groupMarker?: (value: string) => string | null,
-): readonly ListedRow<Ticket>[] {
+): readonly ListedRow<TicketRowFacts>[] {
 	const folded = foldedValues(folds, axis);
-	return groupedRows(tickets, {
+	return groupedRows(facts, {
 		axis,
-		keyOf: (ticket) => ticketGroupKey(axis, ticket),
-		heldOf: holdsDecision,
+		keyOf: (fact) => ticketGroupKey(axis, fact),
+		heldOf: (fact) => fact.held,
 		isFolded: (value) => folded.has(value),
 		storedOrder,
 		defaultCompare: axis === "none" ? undefined : ticketGroupCompare(axis, positionOrder),
@@ -506,20 +507,20 @@ export function ticketRows(
  * leading membership's name, which is the source the row's own facts come from,
  * so a ticket two feeds list appears once (story 13).
  */
-export function ticketGroupKey(axis: GroupingAxis, ticket: Ticket): string {
+export function ticketGroupKey(axis: GroupingAxis, fact: TicketRowFacts): string {
 	switch (axis) {
 		case "none":
 			return "";
 		case "repository":
-			return ticket.repository;
+			return fact.ticket.repository;
 		case "source":
-			return newestMembership(ticket.memberships)?.sourceName ?? UNKNOWN_GROUP;
+			return newestMembership(fact.ticket.memberships)?.sourceName ?? UNKNOWN_GROUP;
 		case "task":
-			return ticketTaskType(ticket).value;
+			return fact.taskType.value;
 		case "state":
-			return ticket.state;
+			return fact.ticket.state;
 		case "position":
-			return ticket.matchedStateName ?? UNMATCHED_GROUP;
+			return fact.ticket.matchedStateName ?? UNMATCHED_GROUP;
 	}
 }
 

@@ -17,6 +17,7 @@
 import type { GroupingAxis } from "../domain/grouping.ts";
 import type { Ticket, TicketListFilter, TicketMarker } from "../domain/ticket.ts";
 import { ignoreRefusal, nextTicketListFilter, obligationOf } from "../domain/ticket.ts";
+import { inFlight } from "../domain/ticket-facts.ts";
 import type { Consultation } from "../state/consultation-record.ts";
 import type { WorkQueueItem } from "../state/work-queue.ts";
 import type { GroupHeader } from "./shared/grouping.ts";
@@ -506,7 +507,7 @@ const completionEligibility = (context: ControlContext): ControlAvailability => 
 const liveViewEligibility = (context: ControlContext): ControlAvailability => {
 	const ticket = context.selectedTicket;
 	if (ticket === undefined) return unavailable("no Ticket is selected");
-	if (ticket.state === "handed-off" || ticket.state === "running") return available();
+	if (inFlight(ticket)) return available();
 	return unavailable("only an in-flight Ticket has a Live view");
 };
 /**
@@ -777,11 +778,7 @@ const ticketGoto = (context: ControlContext): ControlAvailability => {
 		return context.ticketPaneForeign === true
 			? unavailable("the Agent's pane is not alive in the last poll")
 			: available();
-	if (
-		(ticket.state === "handed-off" || ticket.state === "running") &&
-		context.ticketPaneAlive === true
-	)
-		return available();
+	if (inFlight(ticket) && context.ticketPaneAlive === true) return available();
 	return unavailable("the Agent's pane is not alive in the last poll");
 };
 /**

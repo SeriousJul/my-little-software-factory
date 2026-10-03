@@ -10,6 +10,7 @@
  */
 
 import type { SourceMembership, TicketState } from "../domain/ticket.ts";
+import { inFlightState } from "../domain/ticket.ts";
 import type { FetchOutcome } from "../ticket-source.ts";
 import { identityChunks, placeholders } from "./batch.ts";
 import type { StateGraph } from "./graph.ts";
@@ -231,10 +232,7 @@ export class SourceFactModule implements SourceFactAggregate {
 		// count.
 		const keepsInactive = new Set(
 			entries
-				.filter(
-					(entry) =>
-						entry.state === "handed-off" || entry.state === "running" || entry.state === "awaiting",
-				)
+				.filter((entry) => inFlightState(entry.state) || entry.state === "awaiting")
 				.map((entry) => entry.identity),
 		);
 		const grouped = new Map<string, StoredMembership[]>();

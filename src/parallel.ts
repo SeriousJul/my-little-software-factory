@@ -23,8 +23,10 @@
  * and the mode line can never disagree about the count, and a test states the
  * facts instead of opening a state file.
  */
+
+import { agentInPane } from "./domain/agent.ts";
 import type { TicketState } from "./domain/ticket.ts";
-import { type HerdrAgent, ownAgentInPane } from "./herdr.ts";
+import type { HerdrAgent } from "./herdr.ts";
 import type { ConsultationState } from "./state/consultation-record.ts";
 
 /** The Consultation states that hold a Parallel limit seat. */
@@ -83,10 +85,7 @@ export function parallelSeatCount(facts: ParallelSeatFacts): number {
 		// agent is the one that runs under the name the ticket's handoff expects.
 		// A different agent in the same pane id - herdr handed the closed pane's
 		// id out again - holds no seat for the ticket, the way a missing one does.
-		const own = ownAgentInPane(
-			ticket.paneId === null ? undefined : listedAgents.get(ticket.paneId),
-			ticket.agentName,
-		);
+		const own = agentInPane(listedAgents, ticket.paneId, ticket.agentName);
 		const booting = own === null && facts.now - Date.parse(ticket.startedAt) < facts.startupGraceMs;
 		if (own !== null || booting) {
 			count += 1;

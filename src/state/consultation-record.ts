@@ -303,7 +303,6 @@ export interface ConsultationRecordAggregate {
 	createConsultation(input: CreateConsultationInput): Consultation;
 	consultation(id: string): Consultation | undefined;
 	consultations(filter?: "open" | "closed" | "all"): Consultation[];
-	consultationCounts(): { awaitingResponse: number; recovery: number };
 	setConsultationRepositoryPath(id: string, path: string): void;
 	confirmedCheckoutConflicts(checkoutPath: string): string[];
 	recordCheckoutConflictConfirmation(checkoutPath: string, identities: readonly string[]): void;
@@ -479,25 +478,6 @@ export class ConsultationRecordModule implements ConsultationRecordAggregate {
 			.prepare(`SELECT * FROM consultations ${where}`)
 			.all() as unknown as ConsultationRow[];
 		return rows.map((row) => this.consultationFromRow(row)).sort(compareConsultations);
-	}
-	consultationCounts(): { awaitingResponse: number; recovery: number } {
-		const rows = this.db
-			.prepare(
-				"SELECT state, COUNT(*) AS count FROM consultations WHERE state <> 'closed' GROUP BY state",
-			)
-			.all() as Array<{ state: ConsultationState; count: number }>;
-		return {
-			awaitingResponse: rows.find((row) => row.state === "awaiting-response")?.count ?? 0,
-			recovery: rows
-				.filter(
-					(row) =>
-						row.state === "missing" ||
-						row.state === "failed" ||
-						row.state === "closing" ||
-						row.state === "opening",
-				)
-				.reduce((sum, row) => sum + row.count, 0),
-		};
 	}
 	setConsultationRepositoryPath(id: string, path: string): void {
 		this.db

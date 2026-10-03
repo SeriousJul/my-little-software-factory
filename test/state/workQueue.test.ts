@@ -59,9 +59,6 @@ describe("the workQueue aggregate", () => {
 			first.map((ticket) => ticket.actionable),
 		);
 		expect(state.workQueue.items().map((item) => workQueueIdentityOf(item))).toEqual(queueBefore);
-		expect(state.consultationRecord.consultationCounts()).toEqual(
-			state.consultationRecord.consultationCounts(),
-		);
 		state.close();
 	});
 	test("items enter in enqueue order, and the queue reports its depth and identities", () => {

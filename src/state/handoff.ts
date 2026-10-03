@@ -16,6 +16,7 @@ import type {
 	Ticket,
 	TicketState,
 } from "../domain/ticket.ts";
+import { inFlightState } from "../domain/ticket.ts";
 import type { HandoffChoice } from "../handoff.ts";
 import { identifyHandoffAgentName } from "../naming.ts";
 import { identityChunks, placeholders } from "./batch.ts";
@@ -391,7 +392,7 @@ export class HandoffModule implements HandoffAggregate {
 				ok: false,
 				reason: `only open or awaiting tickets can be handed off along a workflow (this one is ${ticket.state})`,
 			};
-		if (origin === "restart" && ticket.state !== "handed-off" && ticket.state !== "running")
+		if (origin === "restart" && !inFlightState(ticket.state))
 			return {
 				ok: false,
 				reason: `only in-flight tickets can be restarted (this one is ${ticket.state})`,
