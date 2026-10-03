@@ -25,7 +25,7 @@
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -37,11 +37,19 @@ import {
 	type PlaneActionIntent,
 } from "../src/handoff-dispatch.ts";
 import type { HerdrAgent } from "../src/herdr.ts";
-import { ObservationCoordinator } from "../src/observation.ts";
+import { ObservationCoordinator, STARTUP_GRACE_MS } from "../src/observation.ts";
+import { parallelSeatCount } from "../src/parallel.ts";
 import { type FactoryState, openFactoryState } from "../src/state.ts";
 import { fireTransition } from "../src/workflow.ts";
 import { BASE_CONFIG } from "./base-config.ts";
-import { FakeRunner } from "./fake-runner.ts";
+import {
+	FakeRunner,
+	tabCreateJson,
+	workspaceCreateJson,
+	workspaceListJson,
+	worktreeListJson,
+} from "./fake-runner.ts";
+import { gatedRunner } from "./gated-runner.ts";
 
 const paths: string[] = [];
 afterEach(() => {
@@ -51,6 +59,8 @@ afterEach(() => {
 const repoIdentity = "github.com/acme/factory";
 const issueIdentity = "github:github.com:I_5";
 const pullIdentity = "github:github.com:P_12";
+/** The second pull request in the seat test: the open ticket that queues fresh work. */
+const otherPullIdentity = "github:github.com:P_13";
 
 const issuesSource = { name: "issues", kind: "github-issues" as const };
 const pullsSource = { name: "pulls", kind: "github-pull-requests" as const };
@@ -188,9 +198,67 @@ function pullTicket(labels: readonly string[] = []): FetchedTicket {
 	};
 }
 
+/** The second pull request: open, and its labels suggest a rework of its own. */
+function reworkPullTicket(): FetchedTicket {
+	return {
+		identity: otherPullIdentity,
+		sourceKind: "github-pull-request",
+		externalKey: "#13",
+		sourceState: "open",
+		url: "https://github.com/acme/factory/pulls/13",
+		title: "Hold the seat for the chain",
+		description: "An open pull request with no work started on it.",
+		labels: ["needs-work"],
+		externalUpdatedAt: "2026-08-31T10:40:00Z",
+		repository: {
+			identity: repoIdentity,
+			displayName: "acme/factory",
+			cloneUrl: "https://github.com/acme/factory.git",
+		},
+		attributes: withIssueReferences({ draft: "false" }, [
+			{ identity: issueIdentity, number: 5, repository: "acme/factory" },
+		]),
+	};
+}
+
+interface ChainRigOptions {
+	/** The Parallel limit the rig's seats measure against. */
+	maxParallelAgents?: number;
+	/**
+	 * When set, the seat count is the real one: the shared count over the agent
+	 * list the rig controls, the way the app wires it. Without it the count reads
+	 * full, and no queue item ever starts an Agent.
+	 */
+	liveSeats?: boolean;
+}
+
 interface Chain {
 	state: FactoryState;
 	runner: FakeRunner;
+	/** The herdr agent list the observation probe answers and the seats count. */
+	setAgents: (agents: readonly HerdrAgent[]) => void;
+	/** Land pull request rows on the pulls source, the way a refresh does. */
+	landPulls: (...pulls: FetchedTicket[]) => void;
+	/**
+	 * Put one ticket in flight the way a started handoff does: a settled attempt
+	 * with its environment handles, so the ticket holds a seat while its own
+	 * agent stands in the probe's list.
+	 */
+	seedRunningTurn: (identity: string, taskType: string) => string;
+	/**
+	 * Settle the turn of a ticket already in flight, the way the loop's settle
+	 * does: the turn lands on the ticket's own attempt, and the task type's
+	 * Transition fires first so the trace carries its outcome.
+	 */
+	settleRunningTurnWithFire: (
+		identity: string,
+		taskType: string,
+		attemptId: string,
+	) => Promise<TransitionOutcome>;
+	/** Wait until one started handoff stands inside the held herdr call. */
+	awaitHandoffInFlight: () => Promise<void>;
+	/** The herdr calls the rig holds, in arrival order. */
+	heldCommands: () => string[];
 	/** The handoff asks the top-up made, in order. */
 	handoffAsks: HandoffIntent[];
 	/** The Plane action asks the top-up made, in order. */
@@ -216,7 +284,7 @@ interface Chain {
 }
 
 /** The rig: a real state, a real dispatch module, and a real observation cycle. */
-function chainRig(): Chain {
+function chainRig(options: ChainRigOptions = {}): Chain {
 	const dir = mkdtempSync(join(tmpdir(), "factory-chain-state-"));
 	paths.push(dir);
 	const nowMs = Date.parse("2026-08-31T11:00:00Z");
@@ -224,6 +292,38 @@ function chainRig(): Chain {
 	state.initializeSources([issuesSource, pullsSource]);
 	state.setGroupingAxis("tickets", "none");
 	const runner = new FakeRunner();
+	const config: FactoryConfig = {
+		...CHAIN_CONFIG,
+		maxParallelAgents: options.maxParallelAgents ?? CHAIN_CONFIG.maxParallelAgents,
+	};
+	// The app's own agent reference: the probe's list and the seat count read
+	// the same array, so the rig cannot hold a seat the count does not see.
+	const agentsRef: { current: readonly HerdrAgent[] } = { current: [] };
+	// A live-seat rig holds every started handoff inside its herdr call, the way
+	// the suite's seat tests do: the work stays in flight, its claim stays open,
+	// and the seat it took stays taken while the rest of the queue reads it.
+	const gate =
+		options.liveSeats === true
+			? gatedRunner(runner, (name) => name.startsWith("herdr agent start"))
+			: null;
+	if (options.liveSeats === true) {
+		const checkout = join(dir, "src", "factory");
+		mkdirSync(checkout, { recursive: true });
+		config.repos = { [repoIdentity]: checkout };
+		runner.set("git", ["-C", checkout, "rev-parse", "--git-dir"], { stdout: ".git\n" });
+		runner.set("git", ["-C", checkout, "remote", "get-url", "origin"], {
+			stdout: "https://github.com/acme/factory.git\n",
+		});
+		runner.set("git", ["-C", checkout, "rev-parse", "HEAD"], { stdout: "abcdef\n" });
+		runner.set("herdr", ["workspace", "list"], { stdout: workspaceListJson([]) });
+		runner.set("herdr", ["worktree", "list", "--cwd", checkout], { stdout: worktreeListJson([]) });
+		runner.set("herdr", ["workspace", "create", "--cwd", checkout, "--no-focus"], {
+			stdout: workspaceCreateJson("ws-1", "pane-root"),
+		});
+		runner.set("herdr", ["tab", "create", "--workspace", "ws-1", "--cwd", checkout, "--no-focus"], {
+			stdout: tabCreateJson("pane-agent", "tab-agent"),
+		});
+	}
 
 	const handoffAsks: HandoffIntent[] = [];
 	const planeAsks: PlaneActionIntent[] = [];
@@ -236,9 +336,17 @@ function chainRig(): Chain {
 	// because it takes no seat (ADR 0068).
 	const dispatch = createHandoffDispatch({
 		state,
-		runner,
-		config: () => CHAIN_CONFIG,
-		seatCount: () => CHAIN_CONFIG.maxParallelAgents,
+		runner: gate?.runner ?? runner,
+		config: () => config,
+		seatCount: () =>
+			options.liveSeats === true
+				? parallelSeatCount({
+						state,
+						agents: agentsRef.current,
+						now: nowMs,
+						startupGraceMs: STARTUP_GRACE_MS,
+					})
+				: config.maxParallelAgents,
 		home: dir,
 		working: () => undefined,
 		warning: () => undefined,
@@ -251,14 +359,13 @@ function chainRig(): Chain {
 		starting: () => undefined,
 	});
 
-	const noAgents: readonly HerdrAgent[] = [];
 	const coordinator = new ObservationCoordinator({
 		state,
 		herdr: {
-			listAgents: async () => ({ kind: "ok", agents: [...noAgents] }),
+			listAgents: async () => ({ kind: "ok", agents: [...agentsRef.current] }),
 			readPane: async () => null,
 		},
-		config: () => CHAIN_CONFIG,
+		config: () => config,
 		dispatch: (intent) => {
 			handoffAsks.push(intent);
 			return dispatch.dispatch(intent);
@@ -273,7 +380,7 @@ function chainRig(): Chain {
 		// command runner, on the state's projection.
 		fireCompleted: (ticket) =>
 			fireTransition({
-				config: CHAIN_CONFIG,
+				config,
 				state,
 				runner,
 				ticketIdentity: ticket.ticketIdentity,
@@ -301,19 +408,17 @@ function chainRig(): Chain {
 		});
 	};
 
+	const choiceFor = (taskType: string) => ({
+		agentType: "pi" as const,
+		environment: "worktree" as const,
+		taskType,
+		model: "",
+		thinking: "",
+		contextWindow: "",
+	});
+
 	const settleTurnWithFire = async (identity: string, taskType: string) => {
-		const claim = state.claimHandoff(
-			identity,
-			{
-				agentType: "pi",
-				environment: "worktree",
-				taskType,
-				model: "",
-				thinking: "",
-				contextWindow: "",
-			},
-			"workflow",
-		);
+		const claim = state.claimHandoff(identity, choiceFor(taskType), "workflow");
 		if (!claim.ok) throw new Error(claim.reason);
 		state.settleHandoff(claim.claim.attemptId, true, undefined, {
 			paneId: `pane-${taskType}`,
@@ -323,7 +428,7 @@ function chainRig(): Chain {
 		// The settle-time fire, the way the app's seam runs it before the
 		// completion decision.
 		const outcome = await fireTransition({
-			config: CHAIN_CONFIG,
+			config,
 			state,
 			runner,
 			ticketIdentity: identity,
@@ -358,9 +463,67 @@ function chainRig(): Chain {
 		throw new Error("no plane action attempt record landed");
 	};
 
+	const seedRunningTurn = (identity: string, taskType: string): string => {
+		const claim = state.claimHandoff(identity, choiceFor(taskType), "workflow");
+		if (!claim.ok) throw new Error(claim.reason);
+		state.settleHandoff(claim.claim.attemptId, true, undefined, {
+			paneId: `pane-${identity}`,
+			tabId: `tab-${identity}`,
+			workspaceId: `ws-${identity}`,
+		});
+		return claim.claim.attemptId;
+	};
+
+	const settleRunningTurnWithFire = async (
+		identity: string,
+		taskType: string,
+		attemptId: string,
+	): Promise<TransitionOutcome> => {
+		const outcome = await fireTransition({
+			config,
+			state,
+			runner,
+			ticketIdentity: identity,
+			taskType,
+		});
+		if (outcome === null) throw new Error(`no transition fired for ${taskType}`);
+		state.settleTurn({
+			ticketIdentity: identity,
+			handoffId: attemptId,
+			taskType,
+			agentType: "pi",
+			message: "Done. The rework is pushed.",
+			turnLog: [{ kind: "text", text: "Done. The rework is pushed." }],
+			completedAt: new Date(nowMs).toISOString(),
+			cause: "completed",
+			detail: "",
+			transition: outcome,
+		});
+		return outcome;
+	};
+
+	const landPulls = (...pulls: FetchedTicket[]): void => {
+		state.applyFetch(pullsSource, {
+			status: "success",
+			fetchedAt: new Date(nowMs).toISOString(),
+			tickets: [...pulls],
+		});
+	};
+
 	return {
 		state,
 		runner,
+		setAgents: (agents) => {
+			agentsRef.current = agents;
+		},
+		landPulls,
+		seedRunningTurn,
+		settleRunningTurnWithFire,
+		awaitHandoffInFlight: async () => {
+			if (gate === null) throw new Error("the rig holds no herdr gate");
+			await gate.waitForArrivals(1);
+		},
+		heldCommands: () => gate?.heldCommands() ?? [],
 		handoffAsks,
 		planeAsks,
 		notices,
@@ -546,6 +709,92 @@ describe("the ADR 0092 chain runs unattended (issue #208)", () => {
 				routeFromIdentity: pullIdentity,
 				choice: expect.objectContaining({ taskType: "rework" }),
 			}),
+		]);
+		state.close();
+	});
+});
+
+describe("the seat a settling turn frees (the dev-run miss on PR #206)", () => {
+	test("the settled turn's continuation takes the freed seat ahead of the standing open-ticket item", async () => {
+		// One seat, and the seat count reads the probe's agent list the way
+		// the app wires it. The run is the recorded one: a chain's turn is in
+		// flight, an open ticket's item stands in the queue, the chain's turn
+		// ends, and the queue's item takes the seat the chain owes itself.
+		const chain = chainRig({ maxParallelAgents: 1, liveSeats: true });
+		const { state, coordinator } = chain;
+		chain.landPulls(pullTicket(["ready-for-review"]), reworkPullTicket());
+
+		// The chain's ticket is in flight on its rework, its own agent live in
+		// its pane. The seat is full.
+		const runningAttempt = chain.seedRunningTurn(pullIdentity, "rework");
+		chain.setAgents([
+			{
+				paneId: `pane-${pullIdentity}`,
+				tabId: "tab-1",
+				workspaceId: "ws-1",
+				sessionId: "",
+				agent: "pi",
+				status: "working",
+			},
+		]);
+
+		// Cycle 1: the seat is full with the chain's running rework, so the
+		// top-up's open-ticket add lands in the queue and stands there.
+		await coordinator.tick();
+		expect(state.workQueue()).toEqual([
+			expect.objectContaining({
+				kind: "handoff",
+				origin: "open",
+				automatic: true,
+				ticketIdentity: otherPullIdentity,
+				choice: expect.objectContaining({ taskType: "rework" }),
+			}),
+		]);
+		expect(state.ticketsByState(["handed-off", "running"])).toHaveLength(1);
+
+		// The chain's turn ends. Its fire writes ready-for-review on its own
+		// pull request and derives its Next step there: the review. Its agent is
+		// gone, so the seat it held stands free.
+		const reworkRun = await chain.settleRunningTurnWithFire(pullIdentity, "rework", runningAttempt);
+		expect(reworkRun).toMatchObject({
+			fired: true,
+			positionTaskType: "review",
+			positionTicketIdentity: pullIdentity,
+		});
+		chain.setAgents([]);
+
+		// Cycle 2: the freed seat, and the two asks for it.
+		await coordinator.tick();
+		await chain.awaitHandoffInFlight();
+
+		// The seat the settling turn freed went to that turn's own continuation:
+		// the review claimed it, and the open ticket's item is the one that waits.
+		expect(chain.handoffAsks).toContainEqual(
+			expect.objectContaining({
+				origin: "workflow",
+				automatic: true,
+				ticketIdentity: pullIdentity,
+				routeFromIdentity: pullIdentity,
+				choice: expect.objectContaining({ taskType: "review" }),
+			}),
+		);
+		// The claim that holds the seat is the review's, and the held herdr call
+		// is the review agent's own start.
+		expect(state.openAttemptTickets()).toEqual([pullIdentity]);
+		expect(chain.heldCommands()).toEqual([
+			expect.stringContaining("herdr agent start persist-source-facts-in-state"),
+		]);
+		expect(
+			state.workQueue().map((item) => {
+				if (item.kind !== "handoff") throw new Error("the queue holds no handoff item");
+				return [item.ticketIdentity, item.origin];
+			}),
+		).toEqual([
+			// The continuation stands first, and the open ticket's item waits behind
+			// it: the seat the settling turn freed went to the settled turn's own
+			// next step.
+			[pullIdentity, "workflow"],
+			[otherPullIdentity, "open"],
 		]);
 		state.close();
 	});

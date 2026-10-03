@@ -409,7 +409,7 @@ An unresolved attempt prevents another handoff of the same ticket after a crash.
 _Avoid_: pending ticket, handoff state
 
 **Auto-handoff mode**:
-The mode of the factory in which the control plane tops up the Work queue by itself and decides its settled turns without the operator, within the configured limits: a continuation first, then a restart, then an eligible open ticket, one item at a time into an empty queue (ADR 0051).
+The mode of the factory in which the control plane tops up the Work queue by itself and decides its settled turns without the operator, within the configured limits: a continuation first, then a restart, then an eligible open ticket, one item at a time, the continuation asked before the pickup and the rest only into an empty queue (ADR 0051, with the step order ADR 0094 sets).
 The mode is factory state on the state file: it survives a restart and a dev reload, and a fresh state file starts with the mode off. The operator changes it with the `a` key in the Ticket section.
 _Avoid_: auto dispatch, dispatch mode
 
@@ -420,6 +420,7 @@ _Avoid_: concurrency cap, max agents
 
 **Work queue**:
 The ordered, durable list through which every start passes: a manual Handoff the operator asked for, a routed ticket's start, a Consultation in `queued` state, a Plane action's start, and the automatic adds the auto top-up makes (ADR 0049, ADR 0051). The routed item names its source: the source's cycle ended at the ask, and the item stands as the route's own fact while it waits (ADR 0072). The queue holds at most one item per ticket: a second add of a ticket that already waits is refused, and the first item keeps its place.
+The queue's order is the order the pickup takes the rows in. Every row enters at its tail except the automatic Continuation, which takes the place of the first automatic open-ticket or restart row: the seat a settling turn freed belongs to that turn's own next step (ADR 0094).
 The pickup is the only starter of a queued start, and a pickup attempt ends in start or drop, never in stay: a dropped item leaves the queue with its warning, and the queue never holds a failing item, so it cannot jam (ADR 0049). A pickup is a claim like any other: it puts the ticket in the Starting window, and it holds its seat even while the herdr seat keeps the work parked. The operator promotes and demotes an item with `+` and `-`, force-dispatches it over the cap, removes it, or pauses the queue itself: a removed Handoff item is cancelled - a manual start leaves its ticket in the state it wears, and a route the operator removes leaves its mark on the turn's trace, so the auto top-up does not bring the route back (ADR 0069, corrected by ADR 0072) - a removed Consultation item is unscheduled and keeps its record, and the queue pause holds the drain while it stands (ADR 0052). A removal ends the whole waiting start, including a claim the pickup already made and parked.
 _Avoid_: dispatch queue, pending list, execution queue
 
@@ -437,13 +438,13 @@ _Avoid_: manual override, bypass
 
 **Continuation**:
 The Next step Auto-handoff mode takes on its own, without the operator's Completion decision: the Next step of an awaiting ticket, or of an open ticket whose newest settled turn recorded an automatic route the operator did not take away, where the decision stands at the ask, the start died, and the walk re-offers the route (ADR 0067, corrected by ADR 0072, decided at runtime by ADR 0092).
-The auto top-up adds a continuation before a restart, an open pull request ticket, or fresh work (ADR 0051, ADR 0088).
+The auto top-up adds a continuation before a restart, an open pull request ticket, or fresh work (ADR 0051, ADR 0088). The cycle asks it before the pickup's pass, and its row enters ahead of a fresh-work row that queued earlier, so the seat a settling turn freed goes to that turn's own next step (ADR 0094).
 _Avoid_: follow-up, workflow advance
 
 **Top-up**:
-The one automatic add the observation cycle makes to the Work queue: while Auto-handoff mode is on and the queue is empty, a continuation, else a restart, else an eligible open pull request ticket, else an eligible fresh open ticket, else nothing (ADR 0051, ADR 0088).
+The one automatic add the observation cycle makes to the Work queue: while Auto-handoff mode is on, a continuation, else a restart, else an eligible open pull request ticket, else an eligible fresh open ticket, else nothing (ADR 0051, ADR 0088). The continuation is asked before the Work queue's pickup and waits only behind an item the operator staged or a continuation already standing; the restart and open-ticket adds run after the pickup and only into an empty queue (ADR 0094).
 The pull request group stands ahead of the fresh group: the work the machine has started on a pull request moves to the end before the machine starts work on a ticket it has not started. The list's order holds inside each group, and a gate that holds one ticket holds that ticket only: the held ticket rests, and the walk falls to the next candidate, as every gate does.
-It adds one item per cycle, and only into an empty queue, so the queue never piles.
+It adds one item per cycle, and only into an empty queue, so the queue never piles. A cycle that asked a continuation asks no fresh work, and the queue then holds at most one fresh-work row beside the continuation it outranks (ADR 0094).
 _Avoid_: refill, auto dispatch, queue feed
 
 **Queue pause**:

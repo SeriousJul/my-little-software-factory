@@ -1196,6 +1196,57 @@ describe("factory SQLite state", () => {
 			state.close();
 		});
 
+		test("an automatic continuation enters ahead of the standing fresh-work item (ADR 0094)", () => {
+			const state = openFactoryState(":memory:");
+			state.initializeSources([sourceA]);
+			state.applyFetch(
+				sourceA,
+				success([fetched("github:github.com:I_6"), fetched("github:github.com:I_7"), fetched()]),
+			);
+			// The factory's fresh work stands first: the open ticket's item the
+			// top-up added, and the operator's restart behind it.
+			expect(
+				state.enqueueWork({
+					ticketIdentity: "github:github.com:I_7",
+					origin: "open",
+					choice,
+					previousMessage: "",
+					automatic: true,
+				}),
+			).toEqual({ ok: true });
+			expect(
+				state.enqueueWork({
+					ticketIdentity: "github:github.com:I_6",
+					origin: "restart",
+					choice,
+					previousMessage: "",
+				}),
+			).toEqual({ ok: true });
+			// The continuation a settled turn owes itself takes the place of the
+			// first fresh-work row. The rows already standing keep their places
+			// relative to each other.
+			expect(
+				state.enqueueWork({
+					ticketIdentity: "github:github.com:I_5",
+					origin: "workflow",
+					choice,
+					previousMessage: "",
+					automatic: true,
+				}),
+			).toEqual({ ok: true });
+			expect(
+				state.workQueue().map((item) => {
+					if (item.kind !== "handoff") throw new Error("the queue holds no handoff item");
+					return [item.ticketIdentity, item.origin, item.position, item.automatic];
+				}),
+			).toEqual([
+				["github:github.com:I_5", "workflow", 0, true],
+				["github:github.com:I_7", "open", 1, true],
+				["github:github.com:I_6", "restart", 2, false],
+			]);
+			state.close();
+		});
+
 		test("the cancel of the route's item takes the mark on the turn (ADR 0072)", () => {
 			const state = openFactoryState(":memory:");
 			state.initializeSources([sourceA]);

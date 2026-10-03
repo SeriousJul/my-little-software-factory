@@ -2892,7 +2892,44 @@ export class FactoryState {
 	}
 
 	/**
-	 * Add the start to the end of the queue (ADR 0049). The queue holds at
+	 * The position a new row takes in the queue's order (ADR 0049, ADR 0094).
+	 *
+	 * Every row but one enters at the end of the queue, the way it always did.
+	 * The exception is the automatic continuation - the route item the top-up asks
+	 * for a settled turn. It enters at the place of the first automatic fresh-work
+	 * row (an open ticket's item, a restart), because the seat a settling turn
+	 * freed belongs to that turn's own next step. With no fresh-work row in the
+	 * queue it enters at the end, so the operator's staging and the continuations
+	 * already standing keep their places, and no row the queue already holds moves
+	 * relative to any other.
+	 *
+	 * Rows from that place up move one place later, highest first, so no two rows
+	 * ever share a position.
+	 */
+	private workQueuePosition(automatic: boolean, origin: HandoffOrigin): number {
+		const rows = this.db
+			.prepare("SELECT position, origin, is_automatic FROM work_queue ORDER BY position")
+			.all() as { position: number; origin: string; is_automatic: number }[];
+		const last = rows.length === 0 ? -1 : (rows[rows.length - 1] as { position: number }).position;
+		let position = last + 1;
+		if (automatic && origin === "workflow") {
+			const firstFreshWork = rows.find(
+				(row) => row.is_automatic === 1 && row.origin !== "workflow",
+			);
+			if (firstFreshWork !== undefined) position = firstFreshWork.position;
+		}
+		for (const row of rows.reverse()) {
+			if (row.position < position) break;
+			this.db
+				.prepare("UPDATE work_queue SET position = ? WHERE position = ?")
+				.run(row.position + 1, row.position);
+		}
+		return position;
+	}
+
+	/**
+	 * Add the start to the queue (ADR 0049, ADR 0094): the row takes its place in
+	 * the queue's order, the one `workQueuePosition` works out. The queue holds at
 	 * most one item per ticket: a second add for a ticket that already waits
 	 * is refused, and the first item keeps its place. `automatic` marks the
 	 * top-up's adds (ADR 0051): the pickup skips their placement and lands
@@ -2918,11 +2955,13 @@ export class FactoryState {
 						ok: false,
 						reason: `ticket ${entry.ticketIdentity} already has a waiting queue item`,
 					};
+				const position = this.workQueuePosition(entry.automatic === true, entry.origin);
 				this.db
 					.prepare(
-						"INSERT INTO work_queue(position, ticket_identity, route_from_identity, origin, choice_json, previous_message, enqueued_at, is_automatic) VALUES (COALESCE((SELECT MAX(position) FROM work_queue), -1) + 1, ?, ?, ?, ?, ?, ?, ?)",
+						"INSERT INTO work_queue(position, ticket_identity, route_from_identity, origin, choice_json, previous_message, enqueued_at, is_automatic) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
 					)
 					.run(
+						position,
 						entry.ticketIdentity,
 						normalizeRouteFromIdentity(entry.ticketIdentity, entry.routeFromIdentity),
 						entry.origin,
@@ -2970,11 +3009,13 @@ export class FactoryState {
 						ok: false,
 						reason: `ticket ${entry.ticketIdentity} already has a waiting queue item`,
 					};
+				const position = this.workQueuePosition(entry.automatic === true, entry.origin);
 				this.db
 					.prepare(
-						"INSERT INTO work_queue(position, ticket_identity, route_from_identity, origin, choice_json, previous_message, enqueued_at, is_automatic, action_task_type) VALUES (COALESCE((SELECT MAX(position) FROM work_queue), -1) + 1, ?, ?, ?, NULL, '', ?, ?, ?)",
+						"INSERT INTO work_queue(position, ticket_identity, route_from_identity, origin, choice_json, previous_message, enqueued_at, is_automatic, action_task_type) VALUES (?, ?, ?, ?, NULL, '', ?, ?, ?)",
 					)
 					.run(
+						position,
 						entry.ticketIdentity,
 						normalizeRouteFromIdentity(entry.ticketIdentity, entry.routeFromIdentity),
 						entry.origin,

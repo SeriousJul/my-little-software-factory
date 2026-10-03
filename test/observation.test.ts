@@ -3356,6 +3356,78 @@ describe("the open dispatch", () => {
 		state.close();
 	});
 
+	test("the owed continuation is asked before the pickup, ahead of the standing fresh-work item", async () => {
+		const order: string[] = [];
+		const { state, intents, coordinator } = rig({
+			autoOn: true,
+			agents: [],
+			pickupWorkQueue: async () => 0,
+			order,
+		});
+		state.applyFetch(
+			source,
+			success([fetched("github:github.com:I_6"), fetched("github:github.com:I_7"), fetched()]),
+		);
+		// The factory's fresh work already stands in the queue: an open ticket's
+		// item added in an earlier cycle, waiting for a seat.
+		expect(
+			state.enqueueWork({
+				ticketIdentity: "github:github.com:I_7",
+				origin: "open",
+				choice,
+				previousMessage: "",
+				automatic: true,
+			}),
+		).toEqual({ ok: true });
+		// A settled turn owes itself a route (ADR 0092).
+		settleFor(state, "github:github.com:I_5", "route", routeOutcome("github:github.com:I_6"));
+		await coordinator.tick();
+		// The ask the settled turn owes runs before the pickup's pass (ADR 0094),
+		// and its row stands ahead of the fresh-work row, so the free seat goes to
+		// the settled turn's own next step.
+		expect(order).toEqual(["dispatch:workflow", "pickup"]);
+		expect(intents).toEqual([
+			expect.objectContaining({
+				origin: "workflow",
+				automatic: true,
+				ticketIdentity: "github:github.com:I_6",
+				routeFromIdentity: "github:github.com:I_5",
+			}),
+		]);
+		expect(
+			state.workQueue().map((item) => {
+				if (item.kind !== "handoff") throw new Error("the queue holds no handoff item");
+				return item.ticketIdentity;
+			}),
+		).toEqual(["github:github.com:I_6", "github:github.com:I_7"]);
+		state.close();
+	});
+
+	test("an item the operator staged holds the owed continuation", async () => {
+		const { state, intents, coordinator } = rig({ autoOn: true, agents: [] });
+		state.applyFetch(
+			source,
+			success([fetched("github:github.com:I_6"), fetched("github:github.com:I_7"), fetched()]),
+		);
+		// The operator's own start waits in the queue for a seat.
+		expect(
+			state.enqueueWork({
+				ticketIdentity: "github:github.com:I_7",
+				origin: "open",
+				choice,
+				previousMessage: "",
+			}),
+		).toEqual({ ok: true });
+		settleFor(state, "github:github.com:I_5", "route", routeOutcome("github:github.com:I_6"));
+		await coordinator.tick();
+		// The continuation waits behind the operator's staging: the queue holds the
+		// one item the operator asked for, and the cycle asked nothing (ADR 0051,
+		// ADR 0094).
+		expect(intents).toEqual([]);
+		expect(state.workQueue()).toHaveLength(1);
+		state.close();
+	});
+
 	/**
 	 * ADR 0034 says a pickup is a manual start, so it runs "in auto or manual
 	 * mode alike", and the cycle places the step outside the `autoOn` branch.

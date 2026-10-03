@@ -783,20 +783,28 @@ export class ObservationCoordinator {
 			}
 		}
 
-		// The Work queue's pickup runs before the top-up (ADR 0051): the items
-		// the free seats take, in queue order. It runs in auto or manual mode
-		// alike, and the queue pause holds it (ADR 0052).
+		// The continuation the machine owes runs before the Work queue's pickup
+		// (ADR 0094): the item a settled turn earns is in the queue when the free
+		// seats are handed out, so the seat that turn freed goes to that turn's own
+		// next step. One item per cycle still holds (ADR 0051): the cycle that asked
+		// a continuation asks no fresh work.
+		const continued = await this.askContinuations();
+		changed = continued || changed;
+		if (this.stopped) return;
+
+		// The Work queue's pickup (ADR 0051): the items the free seats take, in
+		// queue order. It runs in auto or manual mode alike, and the queue pause
+		// holds it (ADR 0052).
 		if (this.pickupWorkQueue !== undefined) {
 			const picked = await this.pickupWorkQueue();
 			if (this.stopped) return;
 			if (picked > 0) changed = true;
 		}
 
-		// The auto top-up (ADR 0051): with Auto-handoff on, the queue empty,
-		// the queue pause down, and the Dispatch pause clear, the cycle adds
-		// exactly one item - a continuation first, then a restart, then a new
-		// open ticket, else nothing.
-		changed = (await this.topUpQueue(probe.agents)) || changed;
+		// The fresh-work adds (ADR 0051): with Auto-handoff on, the queue empty,
+		// the queue pause down, and the Dispatch pause clear, the cycle adds one
+		// item - a restart, then a new open ticket, else nothing.
+		if (!continued) changed = (await this.topUpFreshWork(probe.agents)) || changed;
 		if (this.stopped) return;
 
 		// Tickets and Consultations share this one successful Herdr list poll.
@@ -1455,43 +1463,36 @@ export class ObservationCoordinator {
 	}
 
 	/**
-	 * The auto top-up (ADR 0051, ADR 0088). While Auto-handoff mode is on,
-	 * the queue pause is down, the Dispatch pause is clear, and the queue is
-	 * empty, the cycle adds exactly one item - a continuation first, then a
-	 * restart, then an open pull request ticket, then a fresh open ticket,
-	 * else nothing. Every add takes the same path every
-	 * other start takes: an enqueue, then the immediate pickup. A queue that
-	 * holds even one item holds the adds until it drains, so the queue never
-	 * piles. A seat the item cannot take yet is the wait the queue item
-	 * holds: the item rests in the queue until a seat frees, and the top-up
-	 * reconsiders every cycle the queue is empty.
+	 * The continuation asks the cycle owes (ADR 0051's walks 1 and 2, moved ahead
+	 * of the Work queue's pickup by ADR 0094): the settled turn's Next step, and
+	 * the re-fired skip's route.
+	 *
+	 * They run first so the item a settling turn earns is already in the queue
+	 * when the free seats are handed out, and the seat a settling turn freed goes
+	 * to that turn's own next step instead of to a fresh ticket.
+	 *
+	 * The queue gate narrows here to the rows this add must not jump: an item the
+	 * operator staged, and a continuation the queue already holds. A standing
+	 * fresh-work row - an open ticket's item or a restart - does not hold a
+	 * continuation: ADR 0051 ranks the continuation above them, and ADR 0094 reads
+	 * that rank across cycles instead of inside one top-up call.
 	 */
-	private async topUpQueue(agents: readonly HerdrAgent[]): Promise<boolean> {
-		if (!this.mode()) return false;
-		// The queue pause (ADR 0052): the brake holds the automatic adds; the
-		// queue and the pickup stand still behind it.
-		if (this.state.queuePaused()) return false;
-		// The Dispatch pause (ADR 0016): a held failed turn stops new
-		// automatic work from starting until it is decided or a turn
-		// completes. It is checked once per cycle, so a held turn does not
-		// spam the status line.
-		if (this.state.dispatchPauseActive()) return false;
-		// One item per cycle, and only into an empty queue: the queue's depth
-		// is the top-up's pace.
-		if (this.state.workQueue().length > 0) return false;
+	private async askContinuations(): Promise<boolean> {
+		if (this.automaticAddsHeld()) return false;
+		// The rows this add waits behind: the operator's own staging, and a
+		// continuation the queue already holds.
+		if (
+			this.state
+				.workQueue()
+				.some(
+					(item) =>
+						item.kind === "consultation" || item.automatic !== true || item.origin === "workflow",
+				)
+		)
+			return false;
 		const config = this.config();
-		// The pile, in one read for the walk that holds an identity and no row
-		// (ADR 0060, widened by ADR 0070): the in-flight tickets the Restart walk
-		// reads carry no facts of their own, and the flag may be the ticket's own
-		// or its source's, so one read answers the whole cycle in place of one
-		// query per candidate. Every other walk asks `automaticStartBlocked` of
-		// the row it holds, and the row's facts fold the same flag.
-		const blocked = this.state.automaticStartBlockedTickets();
-		// The list, in one read. The continuation and re-fired-skip walks take the
-		// active view: the rows the whole list rule leaves. The open-ticket add takes
-		// the `all` view instead - every row the covered rule leaves, the ignore aside
-		// - and gates the flag on its own, so the gate is the walk's own test and not
-		// an accident of which view it happens to read.
+		// The list, in one read. These walks take the active view: the rows the
+		// whole list rule leaves.
 		const list = this.state.ticketListViews(config.workflowStates, config.defaultTaskType, "all");
 		const tickets = list.active;
 		// The same read's projection before the list rule (ADR 0042): the covered
@@ -1622,6 +1623,45 @@ export class ObservationCoordinator {
 			);
 			if (added !== "refused") return true;
 		}
+		return false;
+	}
+
+	/**
+	 * The gates every automatic add reads: Auto-handoff mode, the queue pause
+	 * (ADR 0052), and the Dispatch pause (ADR 0016). The pause is checked once per
+	 * cycle, so a held turn does not spam the status line.
+	 */
+	private automaticAddsHeld(): boolean {
+		if (!this.mode()) return true;
+		if (this.state.queuePaused()) return true;
+		return this.state.dispatchPauseActive();
+	}
+
+	/**
+	 * The fresh-work adds (ADR 0051's walks 3 and 4): a restart, then an open
+	 * pull request ticket, then a fresh open ticket. They keep the top-up's
+	 * empty-queue gate, so the queue never piles and the operator's staging always
+	 * starts before the factory's. A seat the item cannot take yet is the wait the
+	 * queue item holds: the item rests in the queue until a seat frees, and the add
+	 * reconsiders every cycle the queue is empty.
+	 */
+	private async topUpFreshWork(agents: readonly HerdrAgent[]): Promise<boolean> {
+		if (this.automaticAddsHeld()) return false;
+		// One item per cycle, and only into an empty queue: the queue's depth is
+		// the top-up's pace.
+		if (this.state.workQueue().length > 0) return false;
+		const config = this.config();
+		// The pile, in one read for the walk that holds an identity and no row
+		// (ADR 0060, widened by ADR 0070): the in-flight tickets the Restart walk
+		// reads carry no facts of their own, and the flag may be the ticket's own
+		// or its source's, so one read answers the whole cycle in place of one query
+		// per candidate. The open-ticket walk asks `automaticStartBlocked` of the row
+		// it holds, and the row's facts fold the same flag.
+		const blocked = this.state.automaticStartBlockedTickets();
+		// The open-ticket add takes the `all` view - every row the covered rule
+		// leaves, the ignore aside - and gates the flag on its own, so the gate is
+		// the walk's own test and not an accident of which view it happens to read.
+		const list = this.state.ticketListViews(config.workflowStates, config.defaultTaskType, "all");
 		// 3. Restart: the in-flight ticket whose agent is missing past the
 		// grace and whose handoffs stand below the limit - the abandon at the
 		// limit landed in the in-flight walk already, above. One restart per

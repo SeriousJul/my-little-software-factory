@@ -4,6 +4,8 @@ Status: accepted
 Date: 2026-09-22
 Superseded in part by ADR 0092: a continuation is the Next step Auto-handoff mode derives from a settled turn, not the outcome of a transition that carries `auto-advance`; the flag is deleted and the mode decides at runtime. Its single-channel, one-item-per-cycle, and gate rules stand.
 
+Superseded in part by ADR 0094: the cycle asks the continuation it owes before the Work queue's pickup, and a continuation row enters ahead of the factory's standing fresh-work rows. Its one-item-per-cycle rule, its continuation-then-restart-then-open order, its gates, and its empty-queue rule over the fresh-work adds stand.
+
 ## Context
 
 Auto-handoff held three direct-dispatch jobs: the open dispatch that
@@ -29,6 +31,10 @@ Continuation first, then restart, then a new open ticket, else nothing.
 A queue that holds even one item holds the automatic adds until it
 drains, so the queue never piles, and the operator's staging always
 starts before the factory's.
+
+(ADR 0094 moves the continuation ask ahead of the pickup, and lets a
+continuation enter a queue that holds only fresh-work rows. The restart
+and open-ticket adds keep this rule unchanged.)
 
 **A continuation is the next step of finished work.** An awaiting
 ticket whose newest settled turn's Transition fired, wrote its label
