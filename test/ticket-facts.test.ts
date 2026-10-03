@@ -9,159 +9,21 @@
  * test hands it inputs and reads its answer as a value.
  */
 import { describe, expect, test } from "bun:test";
-import type { TransitionOutcome } from "../src/config.ts";
 import { agentPoll } from "../src/domain/agent.ts";
-import type { Completion, Handoff, Ticket } from "../src/domain/ticket.ts";
 import {
-	type DecisionFactInputs,
-	decisionFacts,
 	failureMarker,
 	handoffLimitReached,
-	heldTurn,
 	inFlight,
 	liveContextLine,
 	queueWait,
 	rowTaskType,
 	startingWindow,
-	type TicketFactInputs,
 	ticketFactsFor,
 	ticketRowFacts,
 	turnTaskType,
 } from "../src/domain/ticket-facts.ts";
-import type { HerdrAgent } from "../src/herdr.ts";
-import type { PlaneActionAttempt, WorkQueueItem } from "../src/state.ts";
-
-/** The name the sample handoff's Agent started under. */
-const OWN_NAME = "sample-agent";
-
-function handoff(over: Partial<Handoff> = {}): Handoff {
-	return {
-		agentType: "pi",
-		environment: "worktree",
-		taskType: "implement",
-		model: "",
-		thinking: "",
-		contextWindow: "",
-		attemptId: "attempt-1",
-		paneId: "pane-1",
-		tabId: "tab-1",
-		workspaceId: "ws-1",
-		herdrName: OWN_NAME,
-		...over,
-	};
-}
-
-function completion(over: Partial<Completion> = {}): Completion {
-	return {
-		taskType: "review",
-		transition: null,
-		agentType: "pi",
-		agentName: "factory-review-I_1",
-		model: "",
-		thinking: "",
-		contextWindow: "",
-		completedAt: "2026-01-01T12:00:00Z",
-		message: "",
-		turnLog: [],
-		cause: "completed",
-		detail: "",
-		decision: null,
-		...over,
-	};
-}
-
-/** One Ticket: open, with a suggestion, and nothing else. */
-function ticket(over: Partial<Ticket> = {}): Ticket {
-	return {
-		identity: "github:github.com:I_1",
-		title: "Retry policy for webhooks",
-		repository: "acme/billing",
-		repositoryRef: {
-			identity: "github.com/acme/billing",
-			displayName: "acme/billing",
-			cloneUrl: "",
-		},
-		state: "open",
-		handoff: null,
-		workCycle: 1,
-		handoffCount: 0,
-		lastCompletion: null,
-		description: "",
-		sourceKind: "github-issue",
-		externalKey: "#1",
-		sourceState: "open",
-		url: "",
-		labels: [],
-		externalUpdatedAt: "2026-01-01T00:00:00Z",
-		memberships: [],
-		suggestedTaskType: "implement",
-		matchedStateName: null,
-		actionable: true,
-		handoffRecoveryRequired: false,
-		ignored: false,
-		ignoredAt: null,
-		muted: false,
-		mutedAt: null,
-		leftover: null,
-		...over,
-	};
-}
-
-/** One agent as a poll reports it. */
-function agent(over: Partial<HerdrAgent> = {}): HerdrAgent {
-	return {
-		paneId: "pane-1",
-		tabId: "tab-1",
-		workspaceId: "ws-1",
-		name: OWN_NAME,
-		agent: "pi",
-		status: "working",
-		sessionId: "",
-		...over,
-	};
-}
-
-/** The fact module's inputs, with nothing held. */
-function inputs(over: Partial<TicketFactInputs> = {}): TicketFactInputs {
-	return {
-		maxHandoffsPerTicket: 10,
-		defaultTaskType: "implement",
-		agents: null,
-		claims: new Set<string>(),
-		queue: [],
-		tickets: [],
-		...over,
-	};
-}
-
-/** One Work queue item that holds a start for one Ticket. */
-function queueItem(
-	ticketIdentity: string,
-	origin: "open" | "workflow",
-	over: Partial<WorkQueueHandoffItem> = {},
-): WorkQueueItem {
-	return {
-		kind: "handoff",
-		position: 1,
-		ticketIdentity,
-		automatic: origin === "workflow",
-		routeFromIdentity: origin === "workflow" ? ticketIdentity : null,
-		origin,
-		choice: {
-			agentType: "pi",
-			environment: "worktree",
-			taskType: "implement",
-			model: "",
-			thinking: "",
-			contextWindow: "",
-		},
-		previousMessage: "",
-		enqueuedAt: "2026-01-01T00:00:00Z",
-		...over,
-	};
-}
-
-type WorkQueueHandoffItem = WorkQueueItem & { kind: "handoff" };
+import type { WorkQueueItem } from "../src/state.ts";
+import { agent, completion, factInputs, handoff, queueItem, ticket } from "./fact-fixtures.ts";
 
 describe("the task type a row names", () => {
 	test("an open Ticket names its suggestion", () => {
@@ -300,7 +162,7 @@ describe("the Starting window", () => {
 		const blocked = ticket({ state: "handed-off", handoff: handoff() });
 		const facts = ticketFactsFor(
 			blocked,
-			inputs({ agents: [agent({ status: "blocked" })], claims: new Set() }),
+			factInputs({ poll: agentPoll([agent({ status: "blocked" })]), claims: new Set() }),
 		);
 		expect(facts.failure).toBe("blocked");
 		expect(facts.starting).toBe(false);
@@ -369,7 +231,7 @@ describe("the held turn", () => {
 			handoff: handoff(),
 			lastCompletion: completion({ decision: null, cause: "failed" }),
 		});
-		expect(heldTurn(held)).toBe(true);
+		expect(ticketFactsFor(held, factInputs()).held).toBe(true);
 	});
 
 	test("a decided turn does not hold", () => {
@@ -378,7 +240,7 @@ describe("the held turn", () => {
 			handoff: handoff(),
 			lastCompletion: completion({ decision: "closed", cause: "failed" }),
 		});
-		expect(heldTurn(decided)).toBe(false);
+		expect(ticketFactsFor(decided, factInputs()).held).toBe(false);
 	});
 
 	test("a turn that ended on its own cause does not hold", () => {
@@ -387,7 +249,7 @@ describe("the held turn", () => {
 			handoff: handoff(),
 			lastCompletion: completion({ decision: null, cause: "completed" }),
 		});
-		expect(heldTurn(settled)).toBe(false);
+		expect(ticketFactsFor(settled, factInputs()).held).toBe(false);
 	});
 
 	test("a held turn on a Ticket that is not awaiting does not hold", () => {
@@ -396,7 +258,7 @@ describe("the held turn", () => {
 			handoff: handoff(),
 			lastCompletion: completion({ decision: null, cause: "failed" }),
 		});
-		expect(heldTurn(running)).toBe(false);
+		expect(ticketFactsFor(running, factInputs()).held).toBe(false);
 	});
 });
 
@@ -408,9 +270,9 @@ describe("the one read", () => {
 			handoffCount: 1,
 		});
 		const answer = ticketRowFacts(
-			inputs({
+			factInputs({
 				tickets: [running],
-				agents: [agent({ status: "blocked" })],
+				poll: agentPoll([agent({ status: "blocked" })]),
 				claims: new Set<string>(),
 				// The start was picked up, so no wait stands on a running Ticket.
 				queue: [queueItem(running.identity, "workflow")],
@@ -430,7 +292,7 @@ describe("the one read", () => {
 
 	test("the detail pane reads the same fact the row wears", () => {
 		const running = ticket({ state: "running", handoff: handoff({ taskType: "fix" }) });
-		const read = inputs({ tickets: [running], agents: [agent()] });
+		const read = factInputs({ tickets: [running], poll: agentPoll([agent()]) });
 		const answer = ticketRowFacts(read);
 		expect(answer.byIdentity.get(running.identity)).toEqual(ticketFactsFor(running, read));
 	});
@@ -438,137 +300,9 @@ describe("the one read", () => {
 	test("the claim the run holds opens the face for the row it names", () => {
 		const handedOff = ticket({ state: "handed-off", handoff: handoff() });
 		const answer = ticketRowFacts(
-			inputs({ tickets: [handedOff], claims: new Set<string>([handedOff.identity]) }),
+			factInputs({ tickets: [handedOff], claims: new Set<string>([handedOff.identity]) }),
 		);
 		expect(answer.rows[0].starting).toBe(true);
-	});
-});
-
-describe("the Decision region's facts", () => {
-	const outcome = (over: Partial<TransitionOutcome> = {}): TransitionOutcome => ({
-		fired: true,
-		when: null,
-		reason: "",
-		ticketFacts: ["ready-for-review"],
-		pullRequestFacts: [],
-		autoAdvance: false,
-		ticketWrite: { added: ["ready-for-review"], removed: ["ready-for-agent"] },
-		pullRequestWrite: null,
-		pullRequestIdentity: null,
-		pullRequestKey: null,
-		writeFailure: "",
-		positionTaskType: "review",
-		positionTicketIdentity: "github:github.com:I_1",
-		...over,
-	});
-
-	const decisionInputs = (over: Partial<DecisionFactInputs> = {}): DecisionFactInputs => ({
-		ticket: ticket({
-			state: "awaiting",
-			handoff: handoff({ taskType: "review" }),
-			lastCompletion: completion({ taskType: "review", transition: outcome() }),
-		}),
-		queue: [],
-		claims: new Set<string>(),
-		positionTicket: undefined,
-		positionStillListed: true,
-		positionIsPlaneAction: false,
-		latestPlaneActionAttempt: null,
-		defaultTaskType: "implement",
-		...over,
-	});
-
-	test("the context line names the repository, the turn's task type, the agent, and the time", () => {
-		const facts = decisionFacts(decisionInputs());
-		expect(facts.contextLine).toBe("acme/billing · review · pi · 2026-01-01 12:00");
-	});
-
-	test("the fact lines state what the fire wrote", () => {
-		const facts = decisionFacts(decisionInputs());
-		expect(facts.factLines).toEqual(["ticket · added ready-for-review · removed ready-for-agent"]);
-		expect(facts.offer).toEqual({ kind: "handoff", taskType: "review" });
-	});
-
-	test("a route that waits in the Work queue states where it stands and offers no row", () => {
-		const settled = decisionInputs();
-		const facts = decisionFacts({
-			...settled,
-			queue: [queueItem(settled.ticket.identity, "workflow")],
-		});
-		expect(facts.factLines).toContain("the route is waiting in the Work queue");
-		expect(facts.offer).toBeNull();
-	});
-
-	test("a route that is starting states its fact line", () => {
-		const settled = decisionInputs();
-		const facts = decisionFacts({ ...settled, claims: new Set<string>([settled.ticket.identity]) });
-		expect(facts.factLines).toContain("the route is starting");
-		expect(facts.offer).toBeNull();
-	});
-
-	test("a route running on its position Ticket states its fact line", () => {
-		const position = ticket({
-			identity: "github:github.com:I_2",
-			state: "running",
-			handoff: handoff(),
-		});
-		const facts = decisionFacts({ ...decisionInputs(), positionTicket: position });
-		expect(facts.factLines).toContain("the route is running on its position ticket");
-		expect(facts.offer).toBeNull();
-	});
-
-	test("a dead route on a position that still stands keeps its row", () => {
-		const facts = decisionFacts(decisionInputs());
-		expect(facts.offer).toEqual({ kind: "handoff", taskType: "review" });
-	});
-
-	test("a position that left its source withdraws the row and says so", () => {
-		const facts = decisionFacts({ ...decisionInputs(), positionStillListed: false });
-		expect(facts.offer).toBeNull();
-		expect(facts.factLines).toContain("the position's ticket left its source; no handoff stands");
-	});
-
-	test("a plane action position asks for the merge, not for a handoff", () => {
-		const facts = decisionFacts({ ...decisionInputs(), positionIsPlaneAction: true });
-		expect(facts.offer).toEqual({ kind: "merge", taskType: "review" });
-	});
-
-	test("a blocked merge stands where the row stood", () => {
-		const settled = decisionInputs();
-		const attempt: PlaneActionAttempt = {
-			id: "attempt-1",
-			ticketIdentity: settled.ticket.identity,
-			taskType: "review",
-			decision: "merged",
-			outcome: "blocked",
-			reason: "the pull request has open comments",
-			transition: null,
-			at: "2026-01-02T00:00:00Z",
-		};
-		const facts = decisionFacts({ ...settled, latestPlaneActionAttempt: attempt });
-		expect(facts.factLines).toContain("the merge was blocked: the pull request has open comments");
-		expect(facts.offer).toBeNull();
-	});
-
-	test("an outcome that wrote nothing states only the reason", () => {
-		const facts = decisionFacts(
-			decisionInputs({
-				ticket: ticket({
-					state: "awaiting",
-					handoff: handoff(),
-					lastCompletion: completion({
-						transition: outcome({
-							fired: false,
-							reason: "no label matched",
-							ticketWrite: null,
-							positionTaskType: null,
-						}),
-					}),
-				}),
-			}),
-		);
-		expect(facts.factLines).toEqual(["no transition branch held: no label matched"]);
-		expect(facts.offer).toBeNull();
 	});
 });
 

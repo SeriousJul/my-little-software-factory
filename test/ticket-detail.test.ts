@@ -9,30 +9,17 @@ import {
 } from "../src/components/ticket-detail.ts";
 import type { ScrollConfig } from "../src/config.ts";
 import type { Handoff, Ticket } from "../src/domain/ticket.ts";
-import {
-	type TicketFactInputs,
-	type TicketRowFacts,
-	ticketFactsFor,
-} from "../src/domain/ticket-facts.ts";
+import { type TicketRowFacts, ticketFactsFor } from "../src/domain/ticket-facts.ts";
 import type { HandoffChoice } from "../src/handoff.ts";
 import { roleColor } from "./app-harness.ts";
+import { factInputs } from "./fact-fixtures.ts";
 import { SAMPLE_TICKETS } from "./sample-tickets.ts";
 
 const settings: ScrollConfig = { speed: 1, acceleration: 0.8, maximumSpeed: 6 };
 
-/** The pane's inputs, so the test reads the fact module the way the screen does. */
-const factInputs: TicketFactInputs = {
-	maxHandoffsPerTicket: 10,
-	defaultTaskType: "implement",
-	agents: null,
-	claims: new Set<string>(),
-	queue: [],
-	tickets: [],
-};
-
 /** The facts one Ticket wears, read through the fact module (issue #201). */
 const factOf = (ticket: Ticket): TicketRowFacts =>
-	ticketFactsFor(ticket, { ...factInputs, tickets: [ticket] });
+	ticketFactsFor(ticket, factInputs({ tickets: [ticket] }));
 
 /** The cells one line paints: a plain line is one cell of its own text. */
 const cellsOf = (line: DetailLine) => line.cells ?? [{ text: line.text, fg: line.fg }];

@@ -8,7 +8,6 @@ import {
 	type AgentReader,
 	type AgentWaitResult,
 	HerdrAgentReader,
-	normalizeAgentStatus,
 	ObservationCoordinator,
 	STARTUP_GRACE_MS,
 	stripAnsi,
@@ -418,17 +417,6 @@ function settleForCause(
 	});
 	return attempt;
 }
-
-describe("normalizeAgentStatus", () => {
-	test("maps the closed herdr 0.8.2 status set and falls back to unknown", () => {
-		expect(normalizeAgentStatus("working")).toBe("working");
-		expect(normalizeAgentStatus("Done")).toBe("done");
-		expect(normalizeAgentStatus("idle")).toBe("idle");
-		expect(normalizeAgentStatus("blocked")).toBe("blocked");
-		expect(normalizeAgentStatus("unknown")).toBe("unknown");
-		expect(normalizeAgentStatus("meditating")).toBe("unknown");
-	});
-});
 
 describe("stripAnsi", () => {
 	test("removes escape sequences and control characters", () => {

@@ -44,6 +44,8 @@ export type AgentStatus = "working" | "done" | "idle" | "blocked" | "unknown";
 export type AgentPoll = ReadonlyMap<string, HerdrAgent>;
 
 /** The Agent list as the fact the plane reads it: one entry per pane. */
+export function agentPoll(agents: readonly HerdrAgent[]): AgentPoll;
+export function agentPoll(agents: readonly HerdrAgent[] | null): AgentPoll | null;
 export function agentPoll(agents: readonly HerdrAgent[] | null): AgentPoll | null {
 	if (agents === null) return null;
 	const byPane = new Map<string, HerdrAgent>();
@@ -80,11 +82,6 @@ export function agentInPane(
 ): HerdrAgent | null {
 	if (paneId === null) return null;
 	return ownAgentInPane(poll.get(paneId), agentName);
-}
-
-/** Whether the pane holds no Agent of the Ticket's own: the Missing agent fact. */
-export function agentMissing(poll: AgentPoll, paneId: string | null, agentName: string): boolean {
-	return agentInPane(poll, paneId, agentName) === null;
 }
 
 /**

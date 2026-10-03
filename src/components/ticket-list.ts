@@ -191,11 +191,8 @@ export function TicketList({
 									{ key: row.item.identity },
 									...rowSpans(
 										row.item,
-
 										start + offset === selectedIndex,
-
 										geometry.usableCols,
-
 										faceFrame,
 									),
 								),

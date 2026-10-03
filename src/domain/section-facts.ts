@@ -3,10 +3,11 @@
  * answered from the screen's inputs as values.
  *
  * The header takes these counts as values and paints them; it holds no rule of
- * its own. The counts come from the active view, so no query runs for them and
- * the operator's List filter never moves them (ADR 0060): the machine's
- * obligations and the rows the section counts do not bend around the view, and
- * cycling `f` rings no bell.
+ * its own. Every count reads the machine's facts, never the operator's view:
+ * the Ticket counts read the active view (ADR 0060), the Consultation counts
+ * read every record that is not closed whatever the section's History filter
+ * shows, and the queue depth reads the queue itself. Cycling a filter therefore
+ * moves no count and rings no bell.
  *
  * The module owns no state file, no renderer, and no palette. It answers the
  * counts, and the header paints them through the shared paint layer (ADR 0024).
@@ -14,6 +15,7 @@
 
 import type { Consultation, WorkQueueItem } from "../state.ts";
 import { holdsDecision, type Ticket } from "./ticket.ts";
+import { inFlight } from "./ticket-facts.ts";
 
 /** The state the Consultation header counts as awaiting the operator's answer. */
 export const CONSULTATION_AWAITING_STATE = "awaiting-response";
@@ -23,9 +25,6 @@ export const CONSULTATION_RECOVERY_STATES = ["missing", "failed", "closing", "op
 
 /** The state no Consultation header count covers. */
 export const CONSULTATION_CLOSED_STATE = "closed";
-
-/** The states the Ticket header counts as in flight. */
-export const IN_FLIGHT_STATES = ["handed-off", "running"] as const;
 
 /** One Section header's counts. */
 export interface SectionFacts {
@@ -58,7 +57,7 @@ export interface SectionFacts {
 export interface SectionFactInputs {
 	/** The rows the Ticket section lists. */
 	tickets: readonly Ticket[];
-	/** The Consultation records. */
+	/** The Consultation records the machine holds: every record that is not closed. */
 	consultations: readonly Consultation[];
 	/** The Work queue items. */
 	queue: readonly WorkQueueItem[];
@@ -69,11 +68,13 @@ export interface SectionFactInputs {
 }
 
 /**
- * The counts the headers carry, from the active view.
+ * The counts the headers carry.
  *
  * `ignored` and `muted` are the list step's own answers, not rules re-applied
  * here: the numbers name exactly the rows the `ignored` and `muted` views show.
- * The queue depth counts the items the queue holds, whatever their kind.
+ * The Ticket counts read the active view, the Consultation counts read the
+ * records the machine holds, and the queue depth counts the items the queue
+ * holds, whatever their kind.
  */
 export function sectionFacts(inputs: SectionFactInputs): SectionFacts {
 	const { tickets, consultations, queue, ignored, muted } = inputs;
@@ -83,9 +84,7 @@ export function sectionFacts(inputs: SectionFactInputs): SectionFacts {
 			ignored,
 			muted,
 			open: tickets.filter((ticket) => ticket.state === "open").length,
-			inFlight: tickets.filter((ticket) =>
-				(IN_FLIGHT_STATES as readonly string[]).includes(ticket.state),
-			).length,
+			inFlight: tickets.filter(inFlight).length,
 			awaiting: tickets.filter((ticket) => ticket.state === "awaiting").length,
 			held: tickets.filter(holdsDecision).length,
 		},

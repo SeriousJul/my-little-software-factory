@@ -569,6 +569,14 @@ describe("the shared control gallery", () => {
 			lines.find((line) => line.includes("Tickets") && line.includes("held: 1")),
 		).toBeDefined();
 		expect(lines.find((line) => line.includes("Tickets") && !line.includes("held:"))).toBeDefined();
+		// The narrow frame's cut (story 21): at 54 columns the header keeps the
+		// held count and gives up the ignored cell, the same budget
+		// `test/section-header.test.ts` measures on the component.
+		const narrow = lines.find(
+			(line) => line.includes("Tickets") && line.includes("held 1") && !line.includes("held: 1"),
+		);
+		expect(narrow).toBeDefined();
+		expect(narrow).not.toContain("ignored");
 	});
 
 	test("the Consultation detail example shows the Session view and its fallbacks", async () => {

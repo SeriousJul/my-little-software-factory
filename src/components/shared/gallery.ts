@@ -15,6 +15,7 @@
 import { createElement, useTerminalDimensions } from "@opentui/react";
 import type { ReactElement } from "react";
 import { useRef, useState } from "react";
+import { agentPoll } from "../../domain/agent.ts";
 import { sectionFacts } from "../../domain/section-facts.ts";
 import type { Completion, Ticket } from "../../domain/ticket.ts";
 import {
@@ -501,8 +502,7 @@ function galleryFactInputs(
 ): TicketFactInputs {
 	return {
 		maxHandoffsPerTicket: 1,
-		defaultTaskType: "implement",
-		agents: null,
+		poll: null,
 		claims: new Set<string>(),
 		queue: [],
 		tickets,
@@ -1399,9 +1399,10 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 		// The row's facts, answered by the fact module (issue #201): the failure
 		// badge, the Queue wait's badge, the Starting face, and the held badge,
 		// each on the row that wears it. The header's held cell stands only when a
-		// turn holds its decision, so both headers stand here: the one with the
-		// cell and the one without. No example builds its own badge rule - every
-		// row here is the fact module's answer for its Ticket.
+		// turn holds its decision, so three headers stand here: the one with the
+		// cell, the one without it, and the one on the narrow frame where the cell
+		// is the last count the header keeps. No example builds its own badge rule
+		// - every row here is the fact module's answer for its Ticket.
 		id: "ticket-facts",
 		state:
 			"Ticket row facts: the failure badge, the queued badge, the spinner face, and the header's held cell",
@@ -1424,7 +1425,7 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 			// example is about the badges the fact module answers.
 			const facts = factRows(rows, {
 				maxHandoffsPerTicket: 4,
-				agents: [pollAgent("pane-f1", "blocked"), pollAgent("pane-f3", "working")],
+				poll: agentPoll([pollAgent("pane-f1", "blocked"), pollAgent("pane-f3", "working")]),
 				queue: [queueItem(rows[3].identity, "open")],
 			});
 			const counts = sectionFacts({
@@ -1434,18 +1435,19 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 				ignored: 0,
 				muted: 0,
 			});
-			const header = (key: string, held: number) =>
+			const header = (key: string, held: number, width = columns.contentWidth) =>
 				createElement(SectionHeader, {
 					key,
 					section: "tickets",
 					active: true,
-					terminalWidth: columns.contentWidth,
-					width: columns.contentWidth,
+					terminalWidth: width,
+					width,
 					expanded: true,
 					open: counts.ticket.open,
 					running: counts.ticket.inFlight,
 					awaiting: counts.ticket.awaiting,
 					held,
+					ignored: 3,
 					onToggle: () => undefined,
 				});
 			return [
@@ -1453,6 +1455,11 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 				// decision, and it is absent where nothing holds.
 				header("held-header", counts.ticket.held),
 				header("no-held-header", 0),
+				// The narrow frame's cut (story 21): at 54 columns the header gives
+				// up the ignored cell and keeps the held count. The same budget
+				// `test/section-header.test.ts` measures, drawn where a reviewer can
+				// see it without booting the app.
+				header("narrow-held-header", counts.ticket.held, 54),
 				createElement(TicketList, {
 					key: "fact-rows",
 					rows: facts.map((fact): ListedRow<TicketRowFacts> => ({ kind: "item", item: fact })),

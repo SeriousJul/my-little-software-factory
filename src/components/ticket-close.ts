@@ -13,6 +13,7 @@
  * the shared control standard names.
  */
 import type { Ticket, TicketMarker } from "../domain/ticket.ts";
+import { inFlight } from "../domain/ticket-facts.ts";
 import type { ActionRow } from "./modal-chrome.ts";
 
 /** What the Close confirmation shows: its title, its body, and its rows. */
@@ -70,7 +71,7 @@ function survivesLines(ticket: Ticket): string[] {
  * Cancel detail cannot serve every in-flight Ticket (ADR 0031).
  */
 function cancelDetail(ticket: Ticket, marker: TicketMarker | null): string {
-	if (ticket.state !== "handed-off" && ticket.state !== "running") return "keep the turn undecided";
+	if (!inFlight(ticket)) return "keep the turn undecided";
 	if (marker === "missing") return "keep the cycle, and its missing pane";
 	return "keep the Agent and its work running";
 }
@@ -91,13 +92,13 @@ export function ticketCloseDialog(
 	ticket: Ticket,
 	marker: TicketMarker | null = null,
 ): TicketCloseDialog {
-	const inFlight = ticket.state === "handed-off" || ticket.state === "running";
+	const live = inFlight(ticket);
 	return {
 		title: `Close: ${ticket.title}`,
 		bodyLines: [
 			aliveLine(ticket, marker),
 			...survivesLines(ticket),
-			inFlight
+			live
 				? "No completion record is written: the turn never settled."
 				: "The closed decision lands on the settled turn.",
 		],

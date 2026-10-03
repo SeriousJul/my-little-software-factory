@@ -254,7 +254,6 @@ describe("the projection's matched Workflow state (issue #159)", () => {
 			first.map((ticket) => ticket.actionable),
 		);
 		expect(state.workQueue().map((item) => workQueueIdentityOf(item))).toEqual(queueBefore);
-		expect(state.consultationCounts()).toEqual(state.consultationCounts());
 		state.close();
 	});
 });

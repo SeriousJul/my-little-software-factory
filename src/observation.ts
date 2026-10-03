@@ -103,9 +103,6 @@ import {
 } from "./turn-log.ts";
 import type { RefiredSkip } from "./workflow.ts";
 
-export type { AgentStatus } from "./domain/agent.ts";
-export { normalizeAgentStatus };
-
 /**
  * The startup grace a handoff's agent gets before an idle or done report
  * settles its turn.

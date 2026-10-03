@@ -3899,26 +3899,6 @@ export class FactoryState {
 		return rows.map((row) => this.consultationFromRow(row)).sort(compareConsultations);
 	}
 
-	consultationCounts(): { awaitingResponse: number; recovery: number } {
-		const rows = this.db
-			.prepare(
-				"SELECT state, COUNT(*) AS count FROM consultations WHERE state <> 'closed' GROUP BY state",
-			)
-			.all() as Array<{ state: ConsultationState; count: number }>;
-		return {
-			awaitingResponse: rows.find((row) => row.state === "awaiting-response")?.count ?? 0,
-			recovery: rows
-				.filter(
-					(row) =>
-						row.state === "missing" ||
-						row.state === "failed" ||
-						row.state === "closing" ||
-						row.state === "opening",
-				)
-				.reduce((sum, row) => sum + row.count, 0),
-		};
-	}
-
 	/** Persist the validated checkout selected during repository resolution. */
 	setConsultationRepositoryPath(id: string, path: string): void {
 		this.db

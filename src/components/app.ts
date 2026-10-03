@@ -45,7 +45,13 @@ import {
 	type ConsultationOperations,
 	createConsultationOperations,
 } from "../consultation-operations.ts";
-import { ticketAgentIdentity } from "../domain/agent.ts";
+import {
+	type AgentPoll,
+	agentPoll,
+	normalizeAgentStatus,
+	ticketAgentIdentity,
+} from "../domain/agent.ts";
+import { decisionFacts } from "../domain/decision-facts.ts";
 import type { GroupingAxis, SplitGroupingAxis } from "../domain/grouping.ts";
 import { DEFAULT_GROUPING_AXIS, nextGroupingAxis } from "../domain/grouping.ts";
 import { heldBellRang, sectionFacts } from "../domain/section-facts.ts";
@@ -58,7 +64,7 @@ import {
 	type TicketListFilter,
 } from "../domain/ticket.ts";
 import {
-	decisionFacts,
+	inFlight,
 	liveContextLine,
 	type TicketFactInputs,
 	type TicketRowFacts,
@@ -85,7 +91,6 @@ import type { Logger } from "../logging.ts";
 import {
 	HerdrAgentReader,
 	matchConsultationAgent,
-	normalizeAgentStatus,
 	ObservationCoordinator,
 	STARTUP_GRACE_MS,
 } from "../observation.ts";
@@ -490,6 +495,14 @@ export function App({
 	const [consultations, setConsultations] = useState<Consultation[]>(
 		() => state?.consultations("open") ?? [],
 	);
+	// The Consultation records the machine holds (issue #201, story 14): every
+	// record that is not closed, whatever the section's History filter shows.
+	// The Section header's attention counts read these, so the header never
+	// reads `recovery: 0` while a record still needs recovery, and a cycle of
+	// `f` moves no count.
+	const [machineConsultations, setMachineConsultations] = useState<Consultation[]>(
+		() => state?.consultations("open") ?? [],
+	);
 	const consultationsRef = useRef(consultations);
 	const [consultationIndex, setConsultationIndex] = useState(0);
 	const consultationIndexRef = useRef(0);
@@ -725,6 +738,12 @@ export function App({
 	// so the marker it re-checks reads the latest list through a ref.
 	const agentsRef = useRef<readonly HerdrAgent[] | null>(null);
 	agentsRef.current = agents;
+	// The last poll as the fact record the fact module reads (issue #201). The
+	// render turns the list into the poll once, and every fact read of the
+	// render - the rows, the detail pane, a key handler's refusal - takes that
+	// one record instead of rebuilding it.
+	const pollRef = useRef<AgentPoll | null>(null);
+	pollRef.current = agentPoll(agents);
 	/**
 	 * The one count the Parallel limit reads (issue #87, ADR 0034): the shared
 	 * seat count of the in-flight tickets, the in-progress handoffs, and the
@@ -770,8 +789,7 @@ export function App({
 	const factInputs = useCallback(
 		(tickets: readonly Ticket[]): TicketFactInputs => ({
 			maxHandoffsPerTicket: configRef.current.maxHandoffsPerTicket,
-			defaultTaskType: configRef.current.defaultTaskType,
-			agents: agentsRef.current,
+			poll: pollRef.current,
 			claims: startingTicketsRef.current,
 			queue: workQueueRef.current,
 			tickets,
@@ -2103,7 +2121,7 @@ export function App({
 			closeDecidedCycle(ticket);
 			return;
 		}
-		if (ticket.state === "handed-off" || ticket.state === "running") {
+		if (inFlight(ticket)) {
 			closeInFlightCycle(ticket);
 			return;
 		}
@@ -3092,7 +3110,7 @@ export function App({
 				// refusal.
 				handoff: ({ context, refuse }) => {
 					const ticket = context.selectedTicket;
-					if (ticket === undefined || !isInFlight(ticket)) {
+					if (ticket === undefined || !inFlight(ticket)) {
 						if (ticket === undefined) refuse();
 						else startHandoff(ticket, choiceFor(ticket));
 						return;
@@ -3107,7 +3125,7 @@ export function App({
 				// screen: the restart or the abandon, and nothing else.
 				"live-view": ({ context, refuse }) => {
 					const ticket = context.selectedTicket;
-					if (ticket === undefined || !isInFlight(ticket)) return refuse();
+					if (ticket === undefined || !inFlight(ticket)) return refuse();
 					if (factsFor(ticket).failure === "missing")
 						setPanel({ kind: "missing", identity: ticket.identity });
 					else setPanel({ kind: "live", identity: ticket.identity });
@@ -3402,9 +3420,6 @@ export function App({
 		else if (name === "end") moveEdge("end");
 		else moveVertical(name === "up" || name === "k" ? -1 : 1);
 	};
-	/** Whether a Ticket holds an Agent that is not finished with its work. */
-	const isInFlight = (ticket: Ticket) =>
-		ticket.state === "handed-off" || ticket.state === "running";
 	/**
 	 * Enter on a settled Ticket: decide its completion, or tell the operator
 	 * why the factory decides it alone.
