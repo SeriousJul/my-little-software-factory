@@ -2,6 +2,7 @@
 
 Status: accepted
 Date: 2026-09-22
+Superseded in part by ADR 0092: a continuation is the Next step Auto-handoff mode derives from a settled turn, not the outcome of a transition that carries `auto-advance`; the flag is deleted and the mode decides at runtime. Its single-channel, one-item-per-cycle, and gate rules stand.
 
 ## Context
 

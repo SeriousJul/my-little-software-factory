@@ -100,3 +100,4 @@ body states the context, the decision, and the consequences.
 - [ADR 0089: The search source drops the node that left the open work](./0089-the-search-source-drops-the-node-that-left-the-open-work.md)
 - [ADR 0090: The tag's version is the release's version, and the workflow syncs the manifests to it](./0090-the-tags-version-is-the-releases-version-and-the-workflow-syncs-the-manifests-to-it.md)
 - [ADR 0091: The control plane drops the alias package](./0091-the-control-plane-drops-the-alias-package.md)
+- [ADR 0092: Auto-handoff mode decides the route at runtime, and the config drops auto-advance](./0092-auto-handoff-mode-decides-the-route-at-runtime-and-the-config-drops-auto-advance.md)

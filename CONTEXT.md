@@ -436,9 +436,9 @@ A force-dispatch that fails leaves the item out of the queue, as a pickup failur
 _Avoid_: manual override, bypass
 
 **Continuation**:
-The next step of a ticket's finished work: an awaiting ticket whose newest settled turn's Transition fired, wrote its label facts, and whose new position offers a task, or an open ticket whose newest settled turn recorded an automatic route the operator did not take away: the decision stands at the ask, the start died, and the walk re-offers the route (ADR 0067, corrected by ADR 0072).
-The auto top-up adds a continuation before a restart or a new open ticket (ADR 0051).
-_Avoid_: workflow advance, follow-up, next task
+The Next step Auto-handoff mode takes on its own, without the operator's Completion decision: the Next step of an awaiting ticket, or of an open ticket whose newest settled turn recorded an automatic route the operator did not take away, where the decision stands at the ask, the start died, and the walk re-offers the route (ADR 0067, corrected by ADR 0072, decided at runtime by ADR 0092).
+The auto top-up adds a continuation before a restart, an open pull request ticket, or fresh work (ADR 0051, ADR 0088).
+_Avoid_: follow-up, workflow advance
 
 **Top-up**:
 The one automatic add the observation cycle makes to the Work queue: while Auto-handoff mode is on and the queue is empty, a continuation, else a restart, else an eligible open pull request ticket, else an eligible fresh open ticket, else nothing (ADR 0051, ADR 0088).
@@ -471,7 +471,7 @@ _Avoid_: dispatch block, retry gate, backoff
 **Task type**:
 The named description of a kind of work and its Transition, the label facts a completed turn of it writes, or a Plane action's outcome, fires (ADR 0068).
 A prompt task type holds its prompt template and the Task profile its handoffs start on. An action task type holds a Plane action instead of the template and the profile, and the two forms never mix on one type. A prompt task type can open a pull request for its ticket's work: the plane makes the Pull request open of it at the Handoff start, and the Agent works the branch the pull request already stands on.
-Either form can carry No-auto-decision, which parks the type's completions for the operator instead of the machine's decision (ADR 0085).
+Either form can carry Operator-decides, which parks the type's completions for the operator instead of the machine's decision (ADR 0085).
 A Workflow state offers a task type, and the default task type offers one when no state matches. The completion behavior follows the task type to whatever ticket it runs on.
 _Avoid_: prompt, template, task
 
@@ -512,21 +512,20 @@ _Avoid_: verdict, score check, gate
 The newest post on a pull request's comment and review timelines that carries the review template's fixed score line. It is the review's feedback to the pull request, read straight from the source, and the record both the score judgment at settle and the rework prompt at handoff decide on.
 _Avoid_: last review comment, review comment, verdict post
 
-**Auto-advance**:
-A property of a Transition. When it is set and Auto-handoff mode is on, the control plane tops up the Work queue with the suggested task of the ticket's new position without the operator: the route enters the queue like every start (ADR 0051). In manual mode the turn rests in awaiting, and the operator's Decision screen routes it.
-An advance at the ticket's handoff limit degrades to close.
-A transition whose new position offers no task on this ticket closes the cycle: the parking position is the machine's destination, and the cycle ends where the machine put the ticket.
-_Avoid_: auto complete, auto done, auto close
+**Next step**:
+The step a settled turn's Transition derives when its label facts land: the task type the ticket's new position offers, the ticket that position stands on, and whether the step is a Handoff or a Plane action. It is derived, never stored: the position's ticket can leave its source between the write and the start.
+A Transition whose facts land on a position that offers no task derives no Next step, and the cycle closes where the machine put the ticket.
+_Avoid_: auto advance, auto-advance, next task
 
 **Completion decision**:
 The choice made on a settled agent turn: close the cycle, go to the agent, or run the task the ticket's new position offers: a handoff when the task type is a prompt task, a Plane action when it is an action task (ADR 0068).
 On a task type that carries a Transition, the Transition has written its label facts before this choice.
 _Avoid_: verdict, outcome
 
-**No-auto-decision**:
-A property of a Task type. When it is set, the control plane never makes the Completion decision on its settled turns in Auto-handoff mode: the turn rests in `awaiting` for the operator, the environment and the agent stay untouched, and the operator's explicit close or route still runs (ADR 0085).
-The auto top-up leaves the ticket alone: a continuation needs a Transition that fired, and a parked ticket is not open.
-_Avoid_: no auto close, manual completion
+**Operator-decides**:
+A property of a Task type. When it is set, Auto-handoff mode never makes the Completion decision on that type's settled turns: the turn rests in `awaiting` for the operator, the environment and the agent stay untouched, and the operator's explicit close or route still runs (ADR 0085, renamed by ADR 0092).
+It is the only per-task-type brake Auto-handoff mode carries. The auto top-up leaves the ticket alone: a continuation needs a Next step, and a parked ticket is not open.
+_Avoid_: no-auto-decision, no auto close, manual completion
 
 **Turn log**:
 The agent's messages of one settled turn, in order: the agent's text, and one short note per tool call.
