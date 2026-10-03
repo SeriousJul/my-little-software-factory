@@ -100,7 +100,7 @@ function ruleFor(
 ): AwaitingDecision {
 	return coordinator.decideAwaiting(
 		state.lastCompletion(identity),
-		state.projectedTickets(config.workflowStates, config.defaultTaskType),
+		state.ticketProjection(config.workflowStates, config.defaultTaskType),
 	).decision;
 }
 
@@ -2045,6 +2045,75 @@ describe("the awaiting rule", () => {
 			expect(state.workQueue()).toEqual([expect.objectContaining({ origin: "open" })]);
 			state.close();
 		});
+
+		/**
+		 * ADR 0092 records the cross-ticket Handoff limit consequence, and this test
+		 * follows it to its end. The gate reads the count of the position the step
+		 * stands on, so a settled turn whose Next step lands on a position at its
+		 * limit closes, and the top-up's fresh walk re-dispatches the settled ticket
+		 * as open work. Each round spends one handoff of the settled ticket's own
+		 * budget, and the loop ends where that budget ends: the settled ticket stands
+		 * at its own limit, the fresh walk holds it out, the queue stays empty, and the
+		 * ticket rests open owing its next start to the operator.
+		 */
+		test("the cross-ticket limit loop ends at the settled ticket's own limit", async () => {
+			const { state, intents, coordinator, advance } = continuationRig();
+			const settled = "github:github.com:I_5";
+			const position = "github:github.com:I_6";
+			/** Re-read both rows, the way a refresh does, at the named time. */
+			const reRead = (at: string) =>
+				state.applyFetch(source, {
+					status: "success",
+					fetchedAt: at,
+					tickets: [fetched(position), fetched(settled)],
+				});
+			// The position at the rig's limit of two, the way the test above leaves it.
+			for (let cycle = 0; cycle < 2; cycle += 1) {
+				const attempt = settleForCause(state, position, "review", "aborted");
+				state.applyCompletionDecision({
+					ticketIdentity: position,
+					handoffId: attempt,
+					decision: "closed",
+					decidedAt: "2026-08-31T11:00:30Z",
+				});
+				reRead(`2026-08-31T11:0${cycle + 1}:00Z`);
+			}
+			expect(state.handoffCount(position)).toBe(config.maxHandoffsPerTicket);
+
+			// Turn 1: the settled turn's Next step stands on the limited position, so
+			// the turn closes and the fresh walk re-dispatches the settled ticket.
+			await coordinator.tick();
+			expect(state.lastCompletion(settled)?.decision).toBe("auto-closed");
+			expect(state.workQueue()).toEqual([
+				expect.objectContaining({ origin: "open", ticketIdentity: settled }),
+			]);
+			expect(state.handoffCount(settled)).toBe(1);
+
+			// The item runs: its row leaves the queue, its handoff starts, and its turn
+			// settles with the same Next step onto the same limited position. Starting
+			// it is what spends the settled ticket's second handoff.
+			expect(state.removeWorkItem(settled)).toBe(true);
+			settleFor(state, settled, "route", routeOutcome(position));
+			expect(state.handoffCount(settled)).toBe(config.maxHandoffsPerTicket);
+			advance(60_000);
+			reRead("2026-08-31T11:03:00Z");
+
+			// The loop's end: the second turn closes the same way, and the fresh walk
+			// now holds the settled ticket out because it stands at its own limit. The
+			// queue stays empty, the ticket rests open, and no later cycle adds anything
+			// for it.
+			await coordinator.tick();
+			expect(state.lastCompletion(settled)?.decision).toBe("auto-closed");
+			expect(state.workQueue()).toEqual([]);
+			expect(state.handoffCount(settled)).toBe(config.maxHandoffsPerTicket);
+			await coordinator.tick();
+			await coordinator.tick();
+			expect(state.workQueue()).toEqual([]);
+			expect(state.ticketState(settled)).toBe("open");
+			expect(state.handoffCount(settled)).toBe(config.maxHandoffsPerTicket);
+			expect(intents.filter((intent) => intent.origin === "open")).toHaveLength(1);
+			state.close();
+		});
 	});
 
 	/**
@@ -2053,6 +2122,84 @@ describe("the awaiting rule", () => {
 	 * implement, review, merge - through the top-up with no keypress, and its
 	 * opposite in manual mode.
 	 */
+	/**
+	 * A held Next step stated where the operator reads it (ADR 0092).
+	 *
+	 * In Auto-handoff mode the Decision screen never opens on a settled turn, so
+	 * the Message line is the surface a held step has. These tests drive the real
+	 * cycle and read the line the loop reports.
+	 */
+	describe("a held Next step states itself on the Message line (ADR 0092)", () => {
+		/**
+		 * One awaiting ticket whose settled turn's Next step stands on another
+		 * ticket, and stands held: the outcome names the review, the position's own
+		 * labels offer something else, so the gate is the position's task.
+		 */
+		function heldRig(autoOn: boolean) {
+			const r = rig({ autoOn, agents: [] });
+			r.state.applyFetch(source, success([fetched("github:github.com:I_6"), fetched()]));
+			settleFor(
+				r.state,
+				"github:github.com:I_5",
+				"route",
+				outcome({ positionTaskType: "review", positionTicketIdentity: "github:github.com:I_6" }),
+			);
+			return r;
+		}
+
+		const holdLines = (statuses: Rig["statuses"]) =>
+			statuses.filter((status) => status.text.includes("holds its Next step"));
+
+		test("the cycle states the held step, its position, and its gate", async () => {
+			const { state, coordinator, statuses } = heldRig(true);
+			await coordinator.tick();
+			expect(statuses).toContainEqual({
+				kind: "info",
+				text: "ticket github:github.com:I_5 holds its Next step review on github:github.com:I_6: the position no longer offers the task",
+			});
+			// The hold moves nothing: the turn still owes the operator its decision.
+			expect(state.ticketState("github:github.com:I_5")).toBe("awaiting");
+			expect(state.lastCompletion("github:github.com:I_5")?.decision).toBeNull();
+			state.close();
+		});
+
+		test("one held turn states itself once, cycle after cycle", async () => {
+			const { state, coordinator, statuses } = heldRig(true);
+			await coordinator.tick();
+			expect(holdLines(statuses)).toHaveLength(1);
+			// The hold is re-derived every cycle, so the line is a report of the last
+			// fact, not a copy of the fact: an unchanged hold says nothing again.
+			await coordinator.tick();
+			await coordinator.tick();
+			expect(holdLines(statuses)).toHaveLength(1);
+			state.close();
+		});
+
+		test("a hold on the settled ticket's own position names one ticket", async () => {
+			const { state, coordinator, statuses } = rig({ autoOn: true, agents: [] });
+			settleFor(
+				state,
+				"github:github.com:I_5",
+				"route",
+				outcome({ positionTaskType: "review", positionTicketIdentity: "github:github.com:I_5" }),
+			);
+			await coordinator.tick();
+			expect(statuses).toContainEqual({
+				kind: "info",
+				text: "ticket github:github.com:I_5 holds its Next step review: the position no longer offers the task",
+			});
+			state.close();
+		});
+
+		test("manual mode states nothing on the line: the Decision screen is its surface", async () => {
+			const { state, coordinator, statuses } = heldRig(false);
+			await coordinator.tick();
+			expect(holdLines(statuses)).toHaveLength(0);
+			expect(state.ticketState("github:github.com:I_5")).toBe("awaiting");
+			state.close();
+		});
+	});
+
 	describe("the Next step chain runs unattended (ADR 0092)", () => {
 		/**
 		 * The config the chain runs on: the implement Transition lands the review

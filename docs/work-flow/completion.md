@@ -24,7 +24,12 @@ that ends the awaiting state. What happens next depends on your mode:
   of work without you. A turn with no Next step - no branch held, or labels
   that land on a parking state - closes the cycle. A turn whose label write
   failed parks for you: the plane does not route from labels it did not write.
-  A step a gate holds rests `awaiting` with the hold stated for you.
+  A step a gate holds - the position offers no such task, the position is not
+  actionable, the Same-type hold - rests `awaiting`, and the Message line names it for
+  you beside the settle that produced it: the held step, the ticket that position
+  stands on when that is not your settled ticket, and the gate that holds it. The
+  decision modal never opens on that turn, so the line is where the hold is stated
+  while the mode runs.
 - A turn that ended in a failure is never decided for you, in either mode:
   see held turns below.
 
@@ -53,4 +58,7 @@ Every ticket carries a handoff limit, `max-handoffs-per-ticket` in the config
 (10 by default). The limit stops the close-and-rehandoff loop: when a
 ticket's started handoffs reach it, auto mode stops dispatching the ticket
 and leaves it open for you. A manual handoff may still pass the limit, so you
-keep the last word on one ticket.
+keep the last word on one ticket. The limit a held step reads is the limit of
+the ticket its position stands on, so a settled ticket whose routes land on a
+position at its limit spends its own budget on those turns, and it stops where
+its own limit stops it.

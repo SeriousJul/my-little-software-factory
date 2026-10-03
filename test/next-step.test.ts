@@ -8,11 +8,15 @@
  * that only notices the route is missing.
  */
 import { describe, expect, test } from "bun:test";
-import { NEXT_STEP_GATE_LINES } from "../src/components/shared/presentation.ts";
 import type { FactoryConfig, TransitionOutcome } from "../src/config.ts";
 import type { FetchedTicket } from "../src/domain/ticket.ts";
 import { type FactoryState, openFactoryState } from "../src/state.ts";
-import { deriveNextStep, NEXT_STEP_GATES, type NextStepGate } from "../src/workflow.ts";
+import {
+	deriveNextStep,
+	NEXT_STEP_GATE_LINES,
+	NEXT_STEP_GATES,
+	type NextStepGate,
+} from "../src/workflow.ts";
 import { BASE_CONFIG } from "./base-config.ts";
 
 const source = { name: "issues", kind: "github-issues" };
@@ -81,9 +85,9 @@ function stateWith(...tickets: FetchedTicket[]): FactoryState {
 	return state;
 }
 
-/** The projection the derivation reads, the way every caller hands it down. */
+/** The projection read the derivation takes, the way every caller hands it down. */
 function projection(state: FactoryState) {
-	return state.projectedTickets(config.workflowStates, config.defaultTaskType);
+	return state.ticketProjection(config.workflowStates, config.defaultTaskType);
 }
 
 /** The outcome a settled turn's Transition left: fired, with its position. */
@@ -219,9 +223,7 @@ describe("deriveNextStep (ADR 0092)", () => {
 		// in-flight row holds no second start.
 		const state = stateWith();
 		startTurn(state, "implement");
-		expect(projection(state).find((ticket) => ticket.identity === position)?.state).toBe(
-			"handed-off",
-		);
+		expect(projection(state).rowFor(position)?.state).toBe("handed-off");
 		expect(stepFor(state)?.gate).toBe("position-not-actionable");
 		state.close();
 	});
@@ -243,9 +245,7 @@ describe("deriveNextStep (ADR 0092)", () => {
 		const state = stateWith();
 		const claim = state.claimHandoff(position, choice, "open");
 		if (!claim.ok) throw new Error(claim.reason);
-		expect(projection(state).find((ticket) => ticket.identity === position)?.actionable).toBe(
-			false,
-		);
+		expect(projection(state).rowFor(position)?.actionable).toBe(false);
 		expect(stepFor(state)?.gate).toBe("position-not-actionable");
 		state.close();
 	});
@@ -281,20 +281,28 @@ describe("deriveNextStep (ADR 0092)", () => {
 		state.close();
 	});
 
-	test("a projection the caller hands down empty answers no step", () => {
-		// The precondition in the derivation's own words: `tickets` is the
-		// projection the caller already read, never a fresh array. A caller that
-		// passes none gets this gate on every step, so the machine routes nothing
-		// and the Decision screen says why. The test is the loud half of the
-		// precondition: a reader that hands down `[]` meets this line.
+	test("a projection read that holds no row answers no step", () => {
+		// The precondition in the derivation's own words (ADR 0092): the read it
+		// takes is one the state made, never an array a caller built, so the empty
+		// projection is a fact about the tickets - here, a refresh that left the
+		// ticket out of its source - and not a mistake at the call site. A read with
+		// no row answers this gate on every step, so the machine routes nothing and
+		// the surfaces say why.
 		const state = stateWith();
-		expect(deriveNextStep(config, state, fired(), [])?.gate).toBe("position-offers-no-task");
+		state.applyFetch(source, {
+			status: "success",
+			fetchedAt: "2026-08-31T11:05:00Z",
+			tickets: [],
+		});
+		const empty = projection(state);
+		expect(empty.rows).toHaveLength(0);
+		expect(deriveNextStep(config, state, fired(), empty)?.gate).toBe("position-offers-no-task");
 		state.close();
 	});
 
-	test("every gate has the line the Decision screen states", () => {
-		// The four gates are the four holds the screen can name; a gate added
-		// without a line, or a line reworded, fails here.
+	test("every gate has the line both surfaces state", () => {
+		// The four gates are the four holds the Message line and the Decision screen
+		// can name; a gate added without a line, or a line reworded, fails here.
 		expect(NEXT_STEP_GATES).toEqual([
 			"position-offers-no-task",
 			"position-not-actionable",

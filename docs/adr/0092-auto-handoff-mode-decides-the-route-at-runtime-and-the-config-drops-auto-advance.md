@@ -26,14 +26,9 @@ its review position on the linked pull request, and closed, because the flag was
 
 **Delete `auto-advance`.** The key leaves the parser, both shipped configs, the two
 config docs table rows, the Notes paragraph, and the docs' example config. The parser
-rejects unknown keys in a transition table and in a branch table, and it names this
-key as what it is: a config that still carries it fails at load with `"auto-advance"
-is retired (ADR 0092): Auto-handoff mode decides the route from the settled turn's
-Next step`, the way the renamed `no-auto-decision` names its new key. Both shipped
-configs wrote the key on three transitions, so an install that upgrades from either
-reads the retirement and not a bare unknown key. There is no ignore path and no
-migration shim, and the one-shot config migration does not take the key: a file that
-carries it stops at load instead of migrating.
+rejects unknown keys in a transition table and in a branch table, so a config that
+still carries the key fails at load with that error. There is no ignore path and no
+migration shim.
 
 **The mode decides at runtime.** A settled turn has a Next step when its Transition
 fired, wrote its label facts, and its new position offers a task. In Auto-handoff mode
@@ -76,6 +71,32 @@ the poll-time Agent facts, `blocked` and `missing`, and a failed write is a fact
 the fire, not of the Agent. The parked row already reads as a decision owed, and the
 Decision screen is where the operator reads the reason.
 
+**Superseded during implementation: what the parser answers.** The Decision paragraph
+above accepts the plain unknown-key error for a config that still carries the key. The
+implementation the review measured answers a named retirement instead: `"auto-advance"
+is retired (ADR 0092): Auto-handoff mode decides the route from the settled turn's Next
+step`, the way the renamed `no-auto-decision` names its new key. Both shipped configs
+wrote the key on three transitions, so an install that upgrades from either reads the
+retirement and not a bare unknown key. This is a deliberate change to the ticket's
+acceptance, which asked for "the parser's unknown-key error": the named error tells an
+upgrading install what replaced its key instead of only that a key is unknown. The rest
+of that paragraph stands - no ignore path, no migration shim, and the one-shot config
+migration does not take the key.
+
+**A held Next step is stated where the operator reads it.** A gate hold was the one
+route decision with no reader in the mode that produces it: the Decision screen never
+opens on a settled turn in Auto-handoff mode, so a turn whose step a gate holds rested
+in awaiting as an ordinary owed decision, and the operator had to open the Decision
+screen by hand to learn the gate. The mode that produces the hold now states it: the
+observation reports the held step on the Message line beside the settle that produced
+it - the step, the position it stands on when that is not the settled ticket, and the
+same gate sentence the Decision screen states in manual mode. One line per settled turn,
+and it is news, not a warning: a hold is often the gap between the labels a fire wrote
+and the refresh that re-reads them, and the cycle that closes the gap states its own
+routing line over it. `park` keeps no line of its own because its reader is the row
+itself: the Operator-decides type is the operator's own brake, and its awaiting row
+says the turn awaits them.
+
 **A start line names how it started.** The dispatch's start line carries the dispatch
 mode, the item's origin, and the seat count against the Parallel limit at the moment of
 the start. Today the line names only the origin, so a force-dispatch over the cap, a
@@ -103,11 +124,19 @@ from an operator's hand.
   the position's count, closes the settled turn, and the top-up's fresh walk then
   re-dispatches the settled ticket as open work. A settled ticket whose own routes
   land on a position at its limit can therefore spend its own handoff budget on those
-  turns. The operator accepts this: the two continuation walks read one rule, and the
-  limit that holds a step is the limit of the ticket the step starts on.
+  turns. Each round spends one handoff of that budget, so the loop ends where the budget
+  ends: the settled ticket stands at its own limit, the fresh walk holds it out, the queue
+  stays empty, and the ticket rests open owing its next start to the operator. The test
+  follows the loop to that end. The operator accepts this: the two continuation walks read
+  one rule, and the limit that holds a step is the limit of the ticket the step starts on.
 - The `agent` and `environment` pins on a Transition and its branches stay. They name
   the Agent and Environment the derived route runs on, and they are the route's
   settings, not the deleted flag.
 - A config that carries either deleted key fails at load, each with the error that
-  names what replaced it. Both shipped configs, the docs example, and the docs tables
-  change in the same move.
+  names what replaced it - the superseding note above records why that is not the plain
+  unknown-key error the ticket asked for. Both shipped configs, the docs example, and the
+  docs tables change in the same move.
+- The gate sentence table lives with the derivation that owns the gates, because two
+  surfaces read it: the Decision screen in manual mode, and the Message line in
+  Auto-handoff mode. A gate added without a sentence, or a sentence reworded, fails a
+  test.

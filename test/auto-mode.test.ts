@@ -3990,6 +3990,47 @@ describe("the auto decision", () => {
 		);
 		app.state.close();
 	});
+
+	/**
+	 * The hold's reader (ADR 0092). In auto mode the Decision screen never opens on
+	 * a settled turn, so the Message line is where a held Next step stands: the
+	 * test reads the line the running loop reports, in the app's own frames.
+	 */
+	test("auto mode states a held Next step on the Message line", async () => {
+		// The seeded turn's fire derived its review on the ticket, and the source's
+		// own labels still offer the implement task: the step stands held, and the
+		// turn rests awaiting.
+		const app = seededAppInAutoMode(
+			"awaiting",
+			{ maxParallelAgents: 1 },
+			pairSuccess,
+			"live-worktree",
+			{ transition: reviewRoute() },
+		);
+		// No Agent works: the cycle's only fact is the settled turn it resolves.
+		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+		await withApp(
+			async (setup) => {
+				app.src.settle(pairSuccess);
+				await awaitFrame(
+					setup,
+					(f) =>
+						messageRowOf(f).includes(
+							`ticket ${identity} holds its Next step review: the position no longer offers the task`,
+						),
+					"the held Next step on the Message line",
+				);
+				const frame = await settle(setup);
+				expect(frame).not.toContain("Decision:");
+				expect(app.state.ticketState(identity)).toBe("awaiting");
+				expect(app.state.lastCompletion(identity)?.decision).toBeNull();
+			},
+			WIDTH,
+			HEIGHT,
+			propsOf(app),
+		);
+		app.state.close();
+	});
 });
 
 describe("the Operator-decides type parks its completions for the operator (ADR 0085, ADR 0092)", () => {

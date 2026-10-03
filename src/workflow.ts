@@ -47,7 +47,7 @@ import {
 	type CommandRunner,
 	errorMessage,
 } from "./runner.ts";
-import type { FactoryState } from "./state.ts";
+import type { FactoryState, TicketProjection } from "./state.ts";
 import { membershipMatchesState, newestMembership } from "./task-selection.ts";
 import { GhAuthenticator } from "./ticket-source.ts";
 
@@ -1326,9 +1326,11 @@ export async function writeMembershipLabels(
 /**
  * Why a Next step stands while the machine will not run it (ADR 0092).
  *
- * The keys live here, beside the gates the derivation reads. The sentences a
- * screen states them in live in the shared presentation module, beside the
- * labels and the state words.
+ * The keys live here, beside the gates the derivation reads, and so do the
+ * sentences that state them. Two surfaces read them: the Decision screen's fact
+ * line, and the Message line that states a held step in Auto-handoff mode. The
+ * module that owns the gates owns the words for them, so neither surface holds a
+ * copy and no machine module reaches into the presentation layer for a sentence.
  */
 export const NEXT_STEP_GATES = [
 	"position-offers-no-task",
@@ -1338,6 +1340,14 @@ export const NEXT_STEP_GATES = [
 ] as const;
 
 export type NextStepGate = (typeof NEXT_STEP_GATES)[number];
+
+/** The sentence each gate is stated in, on either surface that names it. */
+export const NEXT_STEP_GATE_LINES: Readonly<Record<NextStepGate, string>> = {
+	"position-offers-no-task": "the position no longer offers the task",
+	"position-not-actionable": "the position is not actionable",
+	"same-type-hold": "the Same-type hold stands on the position",
+	"handoff-limit": "the position is at the handoff limit",
+};
 
 /** The channel a Next step runs on: the task type's own form (ADR 0068). */
 export const NEXT_STEP_KINDS = ["handoff", "plane-action"] as const;
@@ -1367,19 +1377,19 @@ export interface NextStep {
  * settled turn ran on: the step starts its work on the position, so the
  * position's standing, its hold, and its limit are the ones that hold it.
  *
- * `tickets` is the projection the caller already read, before the list rule
- * (ADR 0042): the position can be a ticket the operator's list withholds. Every
- * caller holds a read of its own - the observation cycle reads its pile once and
- * hands it down - so the derivation never pays for a scan by accident. It is a
- * precondition, not an option: an empty array names no position, so every step
- * answers `position-offers-no-task` and the machine routes nothing. A caller
- * that has no projection to hand down reads one first.
+ * `projection` is the Ticket projection read the caller already holds, before
+ * the list rule (ADR 0042): the position can be a ticket the operator's list
+ * withholds. Every caller holds a read of its own - the observation cycle reads
+ * its pile once and hands it down - so the derivation never pays for a scan by
+ * accident. It is a value the state makes, never an array a caller builds: a
+ * read that holds no row is a fact about the tickets, not a mistake at the call
+ * site.
  */
 export function deriveNextStep(
 	config: FactoryConfig,
 	state: FactoryState,
 	outcome: TransitionOutcome,
-	tickets: readonly Ticket[],
+	projection: TicketProjection,
 ): NextStep | null {
 	if (outcome.fired !== true) return null;
 	// A label write the plane did not make derives no position: the fire returns
@@ -1395,7 +1405,7 @@ export function deriveNextStep(
 		kind: isPlaneActionTaskType(config.taskTypes, taskType) ? "plane-action" : "handoff",
 		gate: null,
 	};
-	const position = tickets.find((candidate) => candidate.identity === ticketIdentity);
+	const position = projection.rowFor(ticketIdentity);
 	// The position is derived, never stored: between the write and the start the
 	// ticket can leave its source, and a refresh can move it off the task the
 	// fire wrote.

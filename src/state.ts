@@ -482,6 +482,36 @@ export interface HandoffTicket {
 }
 
 /**
+ * One Ticket projection read, held as a value (ADR 0042, ADR 0092).
+ *
+ * The state makes every one: `FactoryState.ticketProjection`, and the list
+ * read's own `projection` view. No caller builds one by hand, so the read a
+ * derivation takes is always a read the state actually ran. The Next step
+ * derivation reads the position's row out of it, and a value a caller made up -
+ * an empty list, a partial list - silently answers `position-offers-no-task`
+ * for every step and routes nothing, which is the mistake this shape is for.
+ */
+export interface TicketProjection {
+	/** The projected rows, before the list rule. */
+	readonly rows: readonly Ticket[];
+	/** The row of one identity, or undefined when the projection holds none. */
+	rowFor(identity: string): Ticket | undefined;
+}
+
+/**
+ * The read value over rows the state just read.
+ *
+ * Private to this module: the only way to hold a projection is to ask the state
+ * for one.
+ */
+function ticketProjectionOf(rows: readonly Ticket[]): TicketProjection {
+	return {
+		rows,
+		rowFor: (identity: string) => rows.find((candidate) => candidate.identity === identity),
+	};
+}
+
+/**
  * What one Ticket-list read gives the screen (ADR 0042, ADR 0060).
  *
  * One projection read serves the drawn rows, the active view the section's
@@ -514,7 +544,7 @@ export interface TicketListViews {
 	 * covered rule still holds its rows out, and only the flags' withhold is
 	 * lifted. This is the projection the list rule is applied to.
 	 */
-	projection: readonly Ticket[];
+	projection: TicketProjection;
 }
 
 /**
@@ -536,7 +566,7 @@ export function inMemoryTicketViews(projection: readonly Ticket[]): TicketListVi
 		active: [...rows],
 		ignored: [],
 		muted: [],
-		projection: [...rows],
+		projection: ticketProjectionOf([...rows]),
 	};
 }
 
@@ -608,7 +638,7 @@ export function listTicketViews(
 		active,
 		ignored,
 		muted,
-		projection: [...projection],
+		projection: ticketProjectionOf([...projection]),
 	};
 }
 
@@ -1617,6 +1647,16 @@ export class FactoryState {
 			});
 		}
 		return tickets;
+	}
+
+	/**
+	 * The projection read a derivation takes (ADR 0092): one `projectedTickets`
+	 * read held as the value `deriveNextStep` asks its gates of. A caller that
+	 * holds no read of its own asks here; a caller that already read the pile
+	 * hands its own value down.
+	 */
+	ticketProjection(states: readonly WorkflowState[], fallbackTaskType: string): TicketProjection {
+		return ticketProjectionOf(this.projectedTickets(states, fallbackTaskType));
 	}
 
 	/**

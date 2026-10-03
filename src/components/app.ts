@@ -130,7 +130,12 @@ import {
 	type TurnEndCause,
 	type TurnLogEntry,
 } from "../turn-log.ts";
-import { deriveNextStep, fireTransition, refireRecordedSkips } from "../workflow.ts";
+import {
+	deriveNextStep,
+	fireTransition,
+	NEXT_STEP_GATE_LINES,
+	refireRecordedSkips,
+} from "../workflow.ts";
 import { ActionBar } from "./action-bar.ts";
 import { ActionPanel } from "./action-panel.ts";
 import { renderAnsiScreen } from "./ansi-screen.ts";
@@ -187,7 +192,6 @@ import {
 	ticketRows,
 	toggleFold,
 } from "./shared/grouping.ts";
-import { NEXT_STEP_GATE_LINES } from "./shared/presentation.ts";
 import { padToWidth, truncateToWidth, widthOf } from "./text.ts";
 import { inStartingWindow, paint } from "./theme.ts";
 import { ticketCloseDialog } from "./ticket-close.ts";
@@ -652,8 +656,7 @@ export function App({
 	// so a surface that takes it as an effect dependency re-runs on the facts it
 	// watches, not on every render.
 	const findTicket = useCallback(
-		(identity: string): Ticket | undefined =>
-			listViewsRef.current.projection.find((ticket) => ticket.identity === identity),
+		(identity: string): Ticket | undefined => listViewsRef.current.projection.rowFor(identity),
 		[],
 	);
 	// The row the list draws: the item's ticket by its title while the ticket
@@ -1607,7 +1610,7 @@ export function App({
 					// remembered by hand here.
 					setListViews((current) => {
 						const next = inMemoryTicketViews(
-							current.projection.map((row: Ticket) =>
+							current.projection.rows.map((row: Ticket) =>
 								row.identity === ticket.identity
 									? { ...row, state: "handed-off" as const, handoff }
 									: row,
