@@ -53,9 +53,17 @@ export const RETIRED_TABLES = ["referenced_issues"] as const;
  * the refusal names `handoffs` (issue #202 review). An `UPDATE` is read
  * only in its `UPDATE <table> SET` shape, and the `SET` is read as a whole
  * word, so an upsert's `DO UPDATE SET` names no table and a column named
- * `settings_hash` is never taken for one. This is the one matcher: the store's
- * scoped handle refuses with it, and the boundary check reads the source with
- * it, so the runtime rule and the review rule cannot drift apart.
+ * `settings_hash` is never taken for one. The shape-changing statements are
+ * read too: `ALTER TABLE`, `DROP TABLE`, `CREATE TABLE`, `CREATE INDEX ... ON
+ * <table>`, `ALTER TABLE ... RENAME TO`, and `REFERENCES` each name a table the
+ * statement builds, destroys, or points at (issue #202 review). A handle that
+ * can read a table can drop it, so the matcher reports the reach the same way
+ * for both. The migration chain in `schema.ts` runs its DDL on the store's own
+ * handle, never on an aggregate's scope, so these keywords refuse no aggregate
+ * statement today; they stand so the runtime line and the review line stay one
+ * line. This is the one matcher: the store's scoped handle refuses with it, and
+ * the boundary check reads the source with it, so the two rules cannot drift
+ * apart.
  */
 const BARE_NAME = "[A-Za-z_][A-Za-z0-9_]*";
 /**
@@ -84,6 +92,26 @@ const TABLE_REFERENCE = new RegExp(
  */
 const STATEMENT_ALIAS = new RegExp(
 	`(?:^|(?<=\\W))(${TABLE_NAME})\\s+AS\\s*\\(|\\)\\s*(?:AS\\s+)?(${TABLE_NAME})`,
+	"giu",
+);
+
+/**
+ * The statements that change the file's shape rather than its rows. A handle
+ * scoped to a table can read that table, and a handle that can read a table can
+ * drop it, so a `DROP TABLE handoffs` run through the Grouping handle is the
+ * same reach as a `SELECT ... FROM handoffs` and is reported the same way
+ * (issue #202 review). `CREATE INDEX` names its own index and the table the
+ * index stands on; only the table is a reach. `REFERENCES` names the table a
+ * foreign key points at.
+ */
+const DDL_REFERENCE = new RegExp(
+	`\\b(?:ALTER|DROP)\\s+TABLE\\s+(?:IF\\s+EXISTS\\s+)?(?:${TABLE_NAME}\\.)?(${TABLE_NAME})` +
+		`|\\bCREATE\\s+(?:TEMP\\s+|TEMPORARY\\s+|VIRTUAL\\s+)?TABLE\\s+(?:IF\\s+NOT\\s+EXISTS\\s+)?` +
+		`(?:${TABLE_NAME}\\.)?(${TABLE_NAME})` +
+		`|\\bCREATE\\s+(?:UNIQUE\\s+)?INDEX\\s+(?:IF\\s+NOT\\s+EXISTS\\s+)?${TABLE_NAME}\\s+ON\\s+` +
+		`(?:${TABLE_NAME}\\.)?(${TABLE_NAME})` +
+		`|\\bRENAME\\s+TO\\s+(?:${TABLE_NAME}\\.)?(${TABLE_NAME})` +
+		`|\\bREFERENCES\\s+(?:${TABLE_NAME}\\.)?(${TABLE_NAME})`,
 	"giu",
 );
 
@@ -145,6 +173,21 @@ function withoutQuotedValues(sql: string): string {
 }
 
 /**
+ * The table a match names: the first group that holds a name. Each pattern
+ * holds one capture group per shape it reads - the table of a `FROM`, the table
+ * of an `UPDATE`, the table an index stands on - and the shapes are mutually
+ * exclusive, so exactly one group is set.
+ */
+function tableMatched(match: RegExpMatchArray): string {
+	for (const group of match.slice(1)) {
+		if (group === undefined) continue;
+		const name = nameSpelled(group);
+		if (name !== "") return name;
+	}
+	return "";
+}
+
+/**
  * The table names a statement reaches, in the order it names them and in lower
  * case, so the comparison is the same whatever case the SQL is written in. A
  * quoted value names nothing, a schema prefix names the table under it and not
@@ -157,15 +200,17 @@ export function tablesNamed(sql: string): string[] {
 	const statement = withoutQuotedValues(sql);
 	const aliases = new Set<string>();
 	for (const match of statement.matchAll(STATEMENT_ALIAS)) {
-		const alias = nameSpelled(match[1] ?? match[2] ?? "");
+		const alias = tableMatched(match);
 		if (alias === "" || CLAIMED_TABLE_NAMES.has(alias)) continue;
 		aliases.add(alias);
 	}
-	const named: string[] = [];
-	for (const match of statement.matchAll(TABLE_REFERENCE)) {
-		const table = nameSpelled(match[1] ?? match[2] ?? "");
-		if (table === "" || aliases.has(table)) continue;
-		named.push(table);
+	const reached: Array<{ at: number; table: string }> = [];
+	for (const pattern of [TABLE_REFERENCE, DDL_REFERENCE]) {
+		for (const match of statement.matchAll(pattern)) {
+			const table = tableMatched(match);
+			if (table === "" || aliases.has(table)) continue;
+			reached.push({ at: match.index, table });
+		}
 	}
-	return named;
+	return reached.sort((a, b) => a.at - b.at).map((reach) => reach.table);
 }

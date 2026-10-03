@@ -61,17 +61,24 @@ description: The module map of the source tree, for agents working in this repos
 	`test/state-architecture.test.ts` holds both rules. `tables.ts` names the
 	owner of every table the file holds. `store.ts` owns the path, the connection,
 	the clock, and the transaction, and hands each aggregate a scoped handle that
-	refuses a statement naming a table its aggregate does not own; `schema.ts`
+	refuses a statement naming a table its aggregate does not own; the handle is
+	`private` on the module class, so no caller reaches another aggregate's handle,
+	and the refusal reads the shape-changing statements too - `ALTER TABLE`, `DROP
+	TABLE`, `CREATE TABLE`, and `CREATE INDEX ... ON <table>` name their table
+	(ADR 0095); `schema.ts`
 	owns the migration chain; `json.ts` holds the shared decode primitives;
 	`graph.ts` composes the nine modules and lets them call each other through
 	their interfaces; `batch.ts` chunks an identity list so a fact the observation
 	loop reads for the whole list costs one statement per chunk, not one per row.
 	The module's own plumbing - `store.ts`, `graph.ts`, `tables.ts`, `schema.ts`,
 	`batch.ts`, `json.ts` - is importable only inside `src/state/`, and the check
-	refuses a caller that imports it. The file holds one write transaction at a
+	refuses a caller that imports it. A table's row shape stays inside the module
+	that owns the table: no aggregate exports a `*Row` type, and the check refuses a
+	caller that imports one. The file holds one write transaction at a
 	time: the aggregate that owns an atomic fact opens it and calls the other
 	aggregates inside it, and an operation the far side of a cross-aggregate call
-	reaches never opens one.
+	reaches never opens one; the check names a far-side method whose body it cannot
+	read, so it cannot shrink to reading nothing and still pass.
 - `src/workflow.ts`: the workflow machine's transition (ADR 0027). A completed
 	turn fires the task type's transition once: the plane writes the label facts
 	on the ticket and its fixing pull request, and the machine converges every

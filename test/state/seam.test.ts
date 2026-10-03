@@ -203,6 +203,27 @@ describe("the seam aggregate", () => {
 		expect(() =>
 			tickets.prepare("select identity from (select identity from tickets) as tickets_view"),
 		).not.toThrow();
+
+		// The shape-changing statements name their table too (issue #202 review).
+		// A handle scoped to a table can read that table, and a handle that can
+		// read a table can drop it, so DDL against another aggregate's table is
+		// refused at the same line as a SELECT against it.
+		expect(() => tickets.exec("alter table handoffs add column x integer")).toThrow(
+			"may not reach the table handoffs",
+		);
+		expect(() => tickets.exec("DROP TABLE handoffs")).toThrow("may not reach the table handoffs");
+		expect(() => tickets.exec("create table handoffs (attempt_id text)")).toThrow(
+			"may not reach the table handoffs",
+		);
+		expect(() => tickets.exec("create index idx_handoff on handoffs (attempt_id)")).toThrow(
+			"may not reach the table handoffs",
+		);
+		expect(() => tickets.exec("alter table tickets rename to handoffs")).toThrow(
+			"may not reach the table handoffs",
+		);
+		// The aggregate's own table, in the same spellings, is no offender.
+		expect(() => tickets.exec("create index idx_ticket on tickets (identity)")).not.toThrow();
+		expect(() => tickets.exec("alter table tickets add column x integer")).not.toThrow();
 		store.close();
 	});
 	test("a statement that names a real table for its own result is refused by the matcher", () => {

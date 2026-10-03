@@ -18,7 +18,7 @@ export interface GroupingAggregate {
 }
 
 export class GroupingModule implements GroupingAggregate {
-	readonly db: StateScope;
+	private readonly db: StateScope;
 	readonly graph: () => StateGraph;
 	constructor(store: StateStore, graph: () => StateGraph) {
 		this.db = store.scopeOf("grouping", TABLES_OWNED.grouping);

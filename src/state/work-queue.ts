@@ -83,18 +83,23 @@ export interface WorkQueueAggregate {
 	items(): WorkQueueItem[];
 	hasWorkItem(ticketIdentity: string): boolean;
 	enqueueWork(entry: {
-		ticketIdentity: string /** The ticket the route's handoff continues; null for a start that is no route. */;
+		ticketIdentity: string;
+		/** The ticket the route's handoff continues; null for a start that is no route. */
 		routeFromIdentity?: string | null;
 		origin: HandoffOrigin;
 		choice: HandoffChoice;
-		previousMessage: string /** True for the automatic add the top-up makes (ADR 0051). */;
+		previousMessage: string;
+		/** True for the automatic add the top-up makes (ADR 0051). */
 		automatic?: boolean;
 	}): { ok: true } | { ok: false; reason: string };
 	enqueuePlaneActionWork(entry: {
-		ticketIdentity: string /** The ticket the route's action continues; null for a start that is no route. */;
+		ticketIdentity: string;
+		/** The ticket the route's action continues; null for a start that is no route. */
 		routeFromIdentity?: string | null;
-		origin: HandoffOrigin /** The task type whose action form the pickup runs. */;
-		taskType: string /** True for the automatic add the top-up makes. */;
+		origin: HandoffOrigin;
+		/** The task type whose action form the pickup runs. */
+		taskType: string;
+		/** True for the automatic add the top-up makes. */
 		automatic?: boolean;
 	}): { ok: true } | { ok: false; reason: string };
 	removeWorkItem(ticketIdentity: string): boolean;
@@ -104,7 +109,7 @@ export interface WorkQueueAggregate {
 }
 
 export class WorkQueueModule implements WorkQueueAggregate {
-	readonly db: StateScope;
+	private readonly db: StateScope;
 	readonly graph: () => StateGraph;
 	constructor(store: StateStore, graph: () => StateGraph) {
 		this.db = store.scopeOf("workQueue", TABLES_OWNED.workQueue);

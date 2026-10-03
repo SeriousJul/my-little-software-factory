@@ -58,7 +58,26 @@ that interface draws is the same boundary the running code enforces.**
   on the engine; `test/state/seam.test.ts` states which guard holds for each.
   A name no aggregate claims (`held`, `tickets_view`) still passes through. The
   text check reads the module's string literals, not its comments, so a sentence
-  about another aggregate's table is not a reach.
+  about another aggregate's table is not a reach. The matcher reads the shape-
+  changing statements as the reaches they are - `ALTER TABLE`, `DROP TABLE`,
+  `CREATE TABLE`, `CREATE INDEX ... ON <table>`, `ALTER TABLE ... RENAME TO`, and
+  `REFERENCES` each name a table (issue #202 review). A handle scoped to a table
+  can read that table, and a handle that can read a table can drop it, so a
+  `DROP TABLE handoffs` run through the Grouping handle is refused at the same
+  line as a `SELECT ... FROM handoffs`; `test/state/seam.test.ts` runs both
+  spellings. The migration chain in `schema.ts` runs its DDL on the store's own
+  handle and never on an aggregate's scope, so these keywords refuse no aggregate
+  statement today; they stand so the runtime line and the review line stay one
+  line. `CREATE INDEX` names its own index and the table the index stands on, and
+  only the table is a reach; `DROP INDEX` names no table.
+- **The scoped handle is private on the module class.** Each aggregate module
+  holds its handle as `private readonly db` (issue #202 review). `graph.ts` holds
+  the module classes, so a public handle made `graph().handoff.db` another
+  aggregate's handle, and the runtime guard is bound to the handle's owner rather
+  than to the caller, so a statement run through it was refused by nothing. The
+  text rule could catch that only when the SQL literal naming the table stood in
+  the offending file. With the field private the two rules are one line at the
+  type as well as at the statement; no call had to change for it.
 - **No caller outside the module imports its plumbing.** `store.ts`, `graph.ts`,
   `tables.ts`, `schema.ts`, `batch.ts`, and `json.ts` are importable only inside
   `src/state/`. `openStore` beside `scopeOf` builds a handle over any table the
@@ -82,8 +101,14 @@ that interface draws is the same boundary the running code enforces.**
   reaches in a third aggregate through `graph()`, followed to the end. A method
   that opens its transaction two calls away is the same nested open as one that
   writes it in its own body; the first reading looked at the one body only, so a
-  `newestHandoffsFor` that called `this.settleHandoff` passed every check. An
-  aggregate that needs an atomic fact of its own opens the
+  `newestHandoffsFor` that called `this.settleHandoff` passed every check. The
+  check also asserts its own reach (issue #202 review): every far-side call site
+  it records has to resolve to a method body it read, and a method whose body it
+  cannot find - a call to a name the module holds no member for, or a method moved
+  out of the member level the check reads - is named as an offender instead of
+  ending the walk in silence. A probe test runs that shape, so the rule cannot
+  shrink to reading nothing and still pass. An aggregate that needs an atomic
+  fact of its own opens the
   transaction at its own interface method, which is the caller's entry point and
   not a published operation. A write whose rollback fails as well is reported as
   both failures with the write's own error kept as the cause, so the rollback
@@ -115,6 +140,14 @@ that interface draws is the same boundary the running code enforces.**
   handed out row lookups. An operation an aggregate does not publish to callers
   is `private` on its module, so the interface is the whole surface a caller can
   reach.
+- **A stored row shape stays inside the aggregate that reads it.** `ConsultationRow`,
+  `ConsultationTurnRow`, `ConsultationSnapshotRow`, `MembershipRow`,
+  `PlaneActionAttemptRow`, and `HandoffRow` are the column spelling of one
+  aggregate's table, and each is read only inside that aggregate's module, so
+  none of them is exported and neither is the row-decoding helper that takes one
+  (`turnFromRow`, `snapshotFromRow`, `planeActionAttemptOf`) (issue #202 review).
+  The boundary check refuses an import of any name ending in `Row` from a state
+  module, so a re-export goes red in review rather than reaching a caller.
 - **A split may not change the read shape of a read the observation loop runs
   every cycle.** Where the split forced a fact onto another aggregate's tables,
   the read batches instead of looping: `src/state/batch.ts` chunks the identity
@@ -222,7 +255,11 @@ that interface draws is the same boundary the running code enforces.**
   as `private` or it goes away.
 - Adding a fact means deciding its owner before writing a query, and adding a
   table means naming its owner in `tables.ts`. A table no aggregate claims fails
-  the ownership check.
+  the ownership check, and a statement that changes another aggregate's table - a
+  `DROP TABLE`, a `CREATE INDEX ... ON`, an `ALTER TABLE` - is refused by the same
+  handle that refuses a `SELECT` against it. A table's column spelling stays
+  inside the module that owns the table, so a caller reads the aggregate's fact
+  types and never its row shape.
 - A read that needs a fact from another aggregate goes through that aggregate's
   batch operation. A per-row lookup in a loop over the visible list is a
   regression the read test catches. The seat count the Parallel limit reads is

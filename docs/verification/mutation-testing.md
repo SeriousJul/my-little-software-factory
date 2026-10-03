@@ -98,8 +98,12 @@ for the question this answers.
   nine aggregate modules, `store.ts`, `graph.ts`, `tables.ts`, and `batch.ts` are
   in the `src/**/*.ts` scope, so a future whole-`src` run will instrument them,
   but no mutant has been run against them: this branch was gated by `bun run
-  test`, `bun run typecheck`, and `bun run lint` only. The suite it gated is
-  2,593 tests over 114 files, against the 1,919 tests over 79 files this record's
+  test`, `bun run typecheck`, and `bun run lint` only. The suite that gate ran on
+  is 2,635 tests over 116 files, 40.03 seconds, measured at this record's latest
+  run on 2026-10-04; the branch's earlier cuts measured 2,586 over 114 at
+  `92ecacae` and 2,593 over 114 at the run this record first wrote, and 2,633
+  over 116 at `44b2d909`, so a number in this file belongs to the commit it names.
+  Against the 1,919 tests over 79 files this record's
   rates were measured on, so every time and mutant-count number above is out of
   date for the current tree. Nine of the branch's guards were each confirmed by
   hand - the guard was mutated, the named test went red, and the guard was put
@@ -143,15 +147,48 @@ for the question this answers.
     interface reach rule's recorded no-caller list was seen to report exactly one
     method after the removals, `ticketWorkCycle.ignoredTickets`, down from seven.
   - No campaign has been run over any of them.
+- **The #202 review's third rework closed six review items.** How each was
+  measured, and what was not:
+  - The private scoped handle - `private readonly db` on all nine module classes -
+    was confirmed by hand: a `GroupingModule` method reaching
+    `this.graph().handoff.db.prepare("SELECT attempt_id FROM handoffs")` failed
+    `bun run typecheck` with `Property 'db' is private and only accessible within
+    class 'HandoffModule'`, and the file was removed again. No production call had
+    to change. The module's `graph` field stays public: three modules hold it and
+    never call it, and `private` on it is a lint refusal there, not a boundary
+    gain, because `graph.ts` is reachable only from inside `src/state/`.
+  - The matcher's reading of DDL - `ALTER TABLE`, `DROP TABLE`, `CREATE TABLE`,
+    `CREATE INDEX ... ON <table>`, `RENAME TO`, and `REFERENCES` - is held by
+    cases in `test/state-architecture.test.ts` and by runtime refusals in
+    `test/state/seam.test.ts`, including the aggregate's own table in the same
+    spellings, which prepares fine. No campaign ran over the matcher's new
+    keywords.
+  - The stored row shapes are off the nine modules' exports, and the new boundary
+    rule refuses a `*Row` import from a state module. Confirmed by hand: re-exporting
+    `HandoffRow` turned `a stored row shape stays inside the aggregate that reads it`
+    red with `["HandoffRow"]`, and the export was removed again.
+  - The transaction rules now assert their own reach. Confirmed by hand: indenting
+    `planeAction.planeActionAttemptCount` out of the member level the check reads
+    turned `an operation another aggregate calls never opens a transaction` red with
+    `["planeAction.planeActionAttemptCount"]` in the unresolved set, and the method
+    was put back. The rule keeps a probe test that runs both shapes - a published
+    method calling a member the module holds no body for, and a cross-aggregate call
+    to a name with no body - over synthetic module sources.
+  - The misplaced inline doc comments on `WorkQueueAggregate.enqueueWork` and
+    `enqueuePlaneActionWork` are a documentation change with no test.
+  - No campaign has been run over any of them.
 - **The suite's load flake, recorded.** At `e12fa8ee` the #202 review ran the full
   suite twice and `test/repo-init-stub.test.ts > the TUI walk of the init (ADR 0075)`
   failed in one of those two runs and passed when the file ran alone. By this repo's
   triage rule that is a load flake, not a regression, and it is recorded as evidence
   rather than as a pass. On the rework head the full suite ran twice more on this
-  32-core machine - 2,593 tests over 114 files, 39.83 seconds and 39.68 seconds, 0
-  failures both times - with no other `bun test` process on the machine and a load
-  average of 10 to 12 from other work. The flake was not seen again in those runs.
-  Nothing was quarantined, no retry was added, and no bound was changed; the record
+  32-core machine - 2,593 tests over 114 files at `44b2d909`, 39.83 seconds and
+  39.68 seconds, 0 failures both times - with no other `bun test` process on the
+  machine and a load average of 10 to 12 from other work. The flake was not seen
+  again in those runs. The third rework's head ran the full suite once more, 2,635
+  tests over 116 files in 40.03 seconds with 0 failures, again with no other
+  `bun test` process on the machine. Nothing was quarantined, no retry was added,
+  and no bound was changed; the record
   is the measurement, and the file is not claimed as flake-free.
 - **One wiring probe survived, and it names an equivalent fact, not a missing
   test.** Dropping the restart walk's read of the queue's own item -

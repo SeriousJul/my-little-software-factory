@@ -278,7 +278,7 @@ function completionFromRow(row: CompletionRow): Completion {
 }
 
 export class TicketWorkCycleModule implements TicketWorkCycleAggregate {
-	readonly db: StateScope;
+	private readonly db: StateScope;
 	readonly graph: () => StateGraph;
 	constructor(store: StateStore, graph: () => StateGraph) {
 		this.db = store.scopeOf("ticketWorkCycle", TABLES_OWNED.ticketWorkCycle);

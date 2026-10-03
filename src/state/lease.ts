@@ -17,7 +17,7 @@ export interface LeaseAggregate {
 
 export class LeaseModule implements LeaseAggregate {
 	leaseToken: string | null = null;
-	readonly db: StateScope;
+	private readonly db: StateScope;
 	readonly graph: () => StateGraph;
 	constructor(store: StateStore, graph: () => StateGraph) {
 		this.db = store.scopeOf("lease", TABLES_OWNED.lease);

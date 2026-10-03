@@ -25,7 +25,7 @@ export interface RepositoryInitAggregate {
 }
 
 export class RepositoryInitModule implements RepositoryInitAggregate {
-	readonly db: StateScope;
+	private readonly db: StateScope;
 	readonly graph: () => StateGraph;
 	constructor(store: StateStore, graph: () => StateGraph) {
 		this.db = store.scopeOf("repositoryInit", TABLES_OWNED.repositoryInit);

@@ -142,7 +142,7 @@ export interface ConsultationAgentDetails {
 	workspaceId?: string | null;
 	sessionId?: string | null;
 }
-export interface ConsultationRow {
+interface ConsultationRow {
 	id: string;
 	type_name: string;
 	agent_type: string;
@@ -175,7 +175,7 @@ export interface ConsultationRow {
 	close_result: string | null;
 	attention_at: string | null;
 }
-export interface ConsultationTurnRow {
+interface ConsultationTurnRow {
 	id: string;
 	consultation_id: string;
 	input: string;
@@ -187,7 +187,7 @@ export interface ConsultationTurnRow {
 	detail: string | null;
 	snapshot_id: string | null;
 }
-export interface ConsultationSnapshotRow {
+interface ConsultationSnapshotRow {
 	id: string;
 	consultation_id: string;
 	turn_id: string | null;
@@ -196,7 +196,7 @@ export interface ConsultationSnapshotRow {
 	partial: number;
 	truncated: number;
 }
-export function turnFromRow(row: ConsultationTurnRow): ConsultationTurn {
+function turnFromRow(row: ConsultationTurnRow): ConsultationTurn {
 	return {
 		id: row.id,
 		consultationId: row.consultation_id,
@@ -210,7 +210,7 @@ export function turnFromRow(row: ConsultationTurnRow): ConsultationTurn {
 		snapshotId: row.snapshot_id,
 	};
 }
-export function snapshotFromRow(row: ConsultationSnapshotRow): ConsultationSnapshot {
+function snapshotFromRow(row: ConsultationSnapshotRow): ConsultationSnapshot {
 	return {
 		id: row.id,
 		consultationId: row.consultation_id,
@@ -372,7 +372,7 @@ export interface ConsultationRecordAggregate {
 }
 
 export class ConsultationRecordModule implements ConsultationRecordAggregate {
-	readonly db: StateScope;
+	private readonly db: StateScope;
 	readonly graph: () => StateGraph;
 	constructor(store: StateStore, graph: () => StateGraph) {
 		this.db = store.scopeOf("consultationRecord", TABLES_OWNED.consultationRecord);

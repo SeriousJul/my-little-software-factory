@@ -29,7 +29,7 @@ export interface StoredMembership extends SourceMembership {
 	/** The moment the membership's source's mute was set, null while down. */
 	sourceMutedAt: string | null;
 }
-export interface MembershipRow {
+interface MembershipRow {
 	source_name: string;
 	ticket_identity: string;
 	health: Health;
@@ -92,7 +92,7 @@ function membershipFromRow(row: MembershipRow): StoredMembership {
 }
 
 export class SourceFactModule implements SourceFactAggregate {
-	readonly db: StateScope;
+	private readonly db: StateScope;
 	readonly graph: () => StateGraph;
 	constructor(store: StateStore, graph: () => StateGraph) {
 		this.db = store.scopeOf("sourceFact", TABLES_OWNED.sourceFact);

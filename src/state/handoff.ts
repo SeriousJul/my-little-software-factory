@@ -65,7 +65,7 @@ export interface HandoffTicket {
 	/** When the handoff's agent started, in ISO time. */
 	startedAt: string;
 }
-export interface HandoffRow {
+interface HandoffRow {
 	attempt_id: string;
 	choice_json: string;
 	pane_id: string | null;
@@ -185,7 +185,7 @@ export function ticketHandoffFact(handoff: StoredHandoff | null): Ticket["handof
 }
 
 export class HandoffModule implements HandoffAggregate {
-	readonly db: StateScope;
+	private readonly db: StateScope;
 	readonly graph: () => StateGraph;
 	constructor(store: StateStore, graph: () => StateGraph) {
 		this.db = store.scopeOf("handoff", TABLES_OWNED.handoff);

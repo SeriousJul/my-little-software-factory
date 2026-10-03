@@ -31,7 +31,7 @@ export interface PlaneActionAttempt {
 	transition: TransitionOutcome | null;
 	at: string;
 }
-export interface PlaneActionAttemptRow {
+interface PlaneActionAttemptRow {
 	id: string;
 	ticket_identity: string;
 	task_type: string;
@@ -41,7 +41,7 @@ export interface PlaneActionAttemptRow {
 	transition_json: string | null;
 	at: string;
 }
-export function planeActionAttemptOf(row: PlaneActionAttemptRow): PlaneActionAttempt {
+function planeActionAttemptOf(row: PlaneActionAttemptRow): PlaneActionAttempt {
 	const decision: CompletionDecision =
 		row.decision === "merged" || row.decision === "auto-merged" ? row.decision : "merged";
 	return {
@@ -72,7 +72,7 @@ export interface PlaneActionAggregate {
 }
 
 export class PlaneActionModule implements PlaneActionAggregate {
-	readonly db: StateScope;
+	private readonly db: StateScope;
 	readonly graph: () => StateGraph;
 	constructor(store: StateStore, graph: () => StateGraph) {
 		this.db = store.scopeOf("planeAction", TABLES_OWNED.planeAction);

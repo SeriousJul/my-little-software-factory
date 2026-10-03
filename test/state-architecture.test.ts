@@ -2,7 +2,7 @@
  * The state module's boundary: one interface per aggregate (issue #202,
  * ADR 0095).
  *
- * Ten declared dependency rules hold it:
+ * Eleven declared dependency rules hold it:
  *
  * 1. No caller outside the open path holds the whole composition. It does not
  *    import `FactoryState`, it does not open the state file itself, and it does
@@ -42,9 +42,11 @@
  *    The rule reads the whole far side of a `graph().<aggregate>.<method>` call
  *    - the method's own body, every method it calls on itself through `this.`,
  *    and every method it reaches in a third aggregate through `graph()`
- *    (issue #202, ADR 0095).
+ *    (issue #202, ADR 0095). A far-side method whose body the walk cannot find
+ *    is named as an offender, so the rule cannot shrink to reading nothing and
+ *    still pass (issue #202 review).
  * 8. An operation an aggregate publishes to the module never opens a
- *    transaction, read the same transitive way.
+ *    transaction, read the same transitive way, with the same resolution line.
  * 9. Every method an aggregate's interface declares is reached - by a caller in
  *    the plane, by another aggregate across the boundary, or by the aggregate's
  *    own tests. A method no one reaches is neither the contract nor the test
@@ -54,6 +56,8 @@
  *    one read for the list it walks. A per-candidate read of the state module
  *    costs a statement for every Ticket the walk passes, which is the read-shape
  *    line ADR 0095 holds (issue #202 review).
+ * 11. A stored row shape stays inside the aggregate that reads it. No aggregate
+ *    module exports a `*Row` name and no caller imports one (issue #202 review).
  *
  * The open path is the one exception to the first two rules: it opens the file,
  * takes the lease, and closes it, so it holds the whole composition.
@@ -230,12 +234,15 @@ function sqlLiterals(source: string): string[] {
 function memberChunk(source: string, name: string): string | null {
 	const lines = source.split("\n");
 	const classStart = lines.findIndex((line) => /^export class [A-Za-z_$][\w$]*\b/u.test(line));
-	const member = new RegExp(`^\\t(?:private\\s+|async\\s+)*${name}\\s*[({=]`, "u");
+	const member = new RegExp(
+		`^\\t(?:private\\s+|readonly\\s+|static\\s+|async\\s+)*${name}\\s*[{(=:]`,
+		"u",
+	);
 	const start = lines.findIndex((line, index) => index > classStart && member.test(line));
 	if (start < 0) return null;
 	for (let index = start + 1; index < lines.length; index++) {
 		if (
-			/^\t(?:private\s+|readonly\s+|static\s+|async\s+)*[A-Za-z_$][\w$]*\s*[({=]/u.test(
+			/^\t(?:private\s+|readonly\s+|static\s+|async\s+)*[A-Za-z_$][\w$]*\s*[{(=:]/u.test(
 				lines[index],
 			)
 		)
@@ -605,6 +612,44 @@ function plumbingOffenders(file: string, source: string): string[] {
 	return offenders;
 }
 
+/**
+ * The names one file imports from a state module: every import clause that
+ * reads from a file under `src/state/`, in either `import type` or `import`
+ * spelling.
+ */
+function stateImports(source: string): Array<{ path: string; names: string[] }> {
+	const imports: Array<{ path: string; names: string[] }> = [];
+	for (const match of source.matchAll(
+		/^import\s+(?:type\s+)?\{([^}]*)\}\s*from\s*"([^"]*state\/[^"]+)"/gmu,
+	)) {
+		imports.push({
+			path: match[2],
+			names: match[1]
+				.split(",")
+				.map((part) => part.trim().replace(/^type\s+/u, ""))
+				.filter((part) => part !== ""),
+		});
+	}
+	return imports;
+}
+
+/** Rule 11: a stored row shape stays inside the aggregate that reads it. */
+function storedShapeOffenders(file: string, source: string): string[] {
+	// A `*Row` name is the table's own column spelling. Handing it to a caller
+	// moves the stored shape across the boundary the split exists to keep (issue
+	// #202 review), so no name of that shape leaves an aggregate module.
+	const offenders: string[] = [];
+	for (const imported of stateImports(source)) {
+		for (const name of imported.names) {
+			if (!/Row$/u.test(name)) continue;
+			offenders.push(
+				`${file} imports ${name} from ${imported.path}, a stored row shape inside its aggregate`,
+			);
+		}
+	}
+	return offenders;
+}
+
 /** The calls one method's body makes: on itself through `this.`, and into
  * another aggregate through `graph()`. */
 function callsIn(body: string): Array<{ key: string | null; method: string }> {
@@ -628,17 +673,28 @@ function methodReaches(
 	method: string,
 	read: (file: string) => string,
 	seen = new Set<string>(),
+	unresolved: Set<string> = new Set<string>(),
 ): Array<{ id: string; body: string }> {
 	const shape = shapeByKey().get(key);
-	if (shape === undefined) return [];
 	const id = `${key}.${method}`;
+	if (shape === undefined) {
+		// A call naming no aggregate the module composes. The rule cannot read
+		// the far side of it, and that is a failure, not a skip.
+		unresolved.add(id);
+		return [];
+	}
 	if (seen.has(id)) return [];
 	seen.add(id);
 	const body = memberChunk(read(shape.file), method);
-	if (body === null) return [];
+	if (body === null) {
+		// The method has no body the rule can read, so the rule would read
+		// nothing and pass. It is recorded instead (issue #202 review).
+		unresolved.add(id);
+		return [];
+	}
 	const reached: Array<{ id: string; body: string }> = [{ id, body }];
 	for (const call of callsIn(body))
-		reached.push(...methodReaches(call.key ?? key, call.method, read, seen));
+		reached.push(...methodReaches(call.key ?? key, call.method, read, seen, unresolved));
 	return reached;
 }
 
@@ -653,6 +709,14 @@ interface TransactionFacts {
 	acrossCovered: Set<string>;
 	/** The published methods rule 8 read. */
 	publishedCovered: Set<string>;
+	/** Rule 7: the far-side methods whose body the rule could not read. */
+	acrossUnresolved: Set<string>;
+	/** Rule 8: the published methods whose body, or a method they call, it could not read. */
+	publishedUnresolved: Set<string>;
+	/** Rule 7: the method bodies rule 7 read, the far side included. */
+	acrossResolved: Set<string>;
+	/** Rule 8: the method bodies rule 8 read, the far side included. */
+	publishedResolved: Set<string>;
 }
 
 function transactionOffenders(
@@ -663,6 +727,10 @@ function transactionOffenders(
 	const publishedOffenders: string[] = [];
 	const acrossCovered = new Set<string>();
 	const publishedCovered = new Set<string>();
+	const acrossUnresolved = new Set<string>();
+	const publishedUnresolved = new Set<string>();
+	const acrossResolved = new Set<string>();
+	const publishedResolved = new Set<string>();
 	for (const shape of shapes) {
 		const callerSource = read(shape.file);
 		// The published operations are not the only cross-aggregate calls: some
@@ -671,13 +739,18 @@ function transactionOffenders(
 		for (const match of callerSource.matchAll(
 			/\bgraph\(\)\.([A-Za-z_$][\w$]*)\.([A-Za-z_$][\w$]*)\s*\(/gu,
 		)) {
-			const target = shapeByKey().get(match[1]);
-			if (target === undefined) continue;
-			acrossCovered.add(`${target.key}.${match[2]}`);
-			for (const reached of methodReaches(target.key, match[2], read)) {
+			acrossCovered.add(`${match[1]}.${match[2]}`);
+			for (const reached of methodReaches(
+				match[1],
+				match[2],
+				read,
+				new Set<string>(),
+				acrossUnresolved,
+			)) {
+				acrossResolved.add(reached.id);
 				if (!/\btransaction\s*\(/u.test(reached.body)) continue;
 				acrossOffenders.push(
-					`${target.file} opens a transaction in ${reached.id}, reached from ${shape.key} by ${match[2]}`,
+					`${shapeByKey().get(match[1])?.file ?? match[1]} opens a transaction in ${reached.id}, reached from ${shape.key} by ${match[2]}`,
 				);
 			}
 		}
@@ -685,7 +758,14 @@ function transactionOffenders(
 		// inside whoever opened the write (issue #202, ADR 0095).
 		for (const method of [...shape.internalMethods, ...shape.privateMethods]) {
 			publishedCovered.add(`${shape.key}.${method}`);
-			for (const reached of methodReaches(shape.key, method, read)) {
+			for (const reached of methodReaches(
+				shape.key,
+				method,
+				read,
+				new Set<string>(),
+				publishedUnresolved,
+			)) {
+				publishedResolved.add(reached.id);
 				if (!/\btransaction\s*\(/u.test(reached.body)) continue;
 				publishedOffenders.push(
 					`${shape.file} opens a transaction in ${reached.id}, reached from ${method}, an operation the module publishes`,
@@ -693,7 +773,16 @@ function transactionOffenders(
 			}
 		}
 	}
-	return { acrossOffenders, publishedOffenders, acrossCovered, publishedCovered };
+	return {
+		acrossOffenders,
+		publishedOffenders,
+		acrossCovered,
+		publishedCovered,
+		acrossUnresolved,
+		publishedUnresolved,
+		acrossResolved,
+		publishedResolved,
+	};
 }
 
 /** Rule 9: every interface method is reached by a caller or by the tests. */
@@ -984,6 +1073,36 @@ describe("the state module's boundary", () => {
 		expect(tablesNamed("update tickets set title = 'from handoffs' where 1 = 1")).toEqual([
 			"tickets",
 		]);
+		// The shape-changing statements name their table too (issue #202 review):
+		// a handle that can read a table can drop it, so DDL is the same reach and
+		// the scoped handle refuses it the same way.
+		expect(tablesNamed("alter table handoffs add column x integer")).toEqual(["handoffs"]);
+		expect(tablesNamed("ALTER TABLE main.handoffs RENAME TO handoffs_old")).toEqual([
+			"handoffs",
+			"handoffs_old",
+		]);
+		expect(tablesNamed("drop table handoffs")).toEqual(["handoffs"]);
+		expect(tablesNamed("DROP TABLE IF EXISTS main.handoffs")).toEqual(["handoffs"]);
+		expect(tablesNamed("create table handoffs (attempt_id text primary key)")).toEqual([
+			"handoffs",
+		]);
+		expect(tablesNamed("CREATE TABLE IF NOT EXISTS handoffs (attempt_id text)")).toEqual([
+			"handoffs",
+		]);
+		expect(tablesNamed("create temp table scratch (attempt_id text)")).toEqual(["scratch"]);
+		expect(tablesNamed("create index idx_handoff on handoffs (attempt_id)")).toEqual(["handoffs"]);
+		expect(tablesNamed("CREATE UNIQUE INDEX idx ON main.handoffs (attempt_id)")).toEqual([
+			"handoffs",
+		]);
+		// The index's own name is not a table, and dropping an index names no
+		// table at all.
+		expect(tablesNamed("drop index idx_handoff")).toEqual([]);
+		// A column drop is a column, not a table, so only the table the statement
+		// alters is read.
+		expect(tablesNamed("alter table tickets drop column ignored")).toEqual(["tickets"]);
+		expect(
+			tablesNamed("alter table tickets add constraint fk foreign key (a) references handoffs"),
+		).toEqual(["tickets", "handoffs"]);
 	});
 
 	test("no caller outside the module imports its plumbing", () => {
@@ -997,6 +1116,41 @@ describe("the state module's boundary", () => {
 		expect(offenders).toEqual([]);
 	});
 
+	test("a stored row shape stays inside the aggregate that reads it", () => {
+		// The stored shape is what the split keeps inside an aggregate (issue #202
+		// review). No aggregate module exports a `*Row` name, and no caller
+		// imports one.
+		for (const shape of aggregateShapes()) {
+			const exported = [
+				...readFileSync(shape.file, "utf8").matchAll(
+					/^export\s+(?:interface|type)\s+(\w*Row)\b/gmu,
+				),
+			].map((match) => match[1]);
+			expect(exported, `${shape.file} exports a stored row shape`).toEqual([]);
+		}
+		const offenders: string[] = [];
+		for (const file of CALLERS)
+			offenders.push(...storedShapeOffenders(file, readFileSync(file, "utf8")));
+		expect(offenders).toEqual([]);
+		// The probe is the shape the rule refuses: a caller that reads the
+		// Consultation record's own column spelling.
+		const probe = [
+			'import type { ConsultationRow, WorkQueueItem } from "../src/state/consultation-record.ts";',
+			"export type ProbeRow = ConsultationRow;",
+		].join("\n");
+		expect(storedShapeOffenders("probe.ts", probe)).toEqual([
+			"probe.ts imports ConsultationRow from ../src/state/consultation-record.ts, " +
+				"a stored row shape inside its aggregate",
+		]);
+		// A name that is not a row shape is no offender.
+		expect(
+			storedShapeOffenders(
+				"probe.ts",
+				'import type { WorkQueueItem } from "../src/state/work-queue.ts";',
+			),
+		).toEqual([]);
+	});
+
 	test("an operation another aggregate calls never opens a transaction", () => {
 		// Three of the cross-aggregate calls land on a method the interface
 		// declares (`planeActionAttemptCount`, `agentNameForTicket`,
@@ -1007,6 +1161,13 @@ describe("the state module's boundary", () => {
 		// The module really does call across the boundary; an empty set would mean
 		// the rule reads nothing.
 		expect(facts.acrossCovered.size).toBeGreaterThan(20);
+		// Every far-side call site resolved to a method body the rule read (issue
+		// #202 review). A method the walk cannot find is named here instead of
+		// ending the walk in silence, so the rule cannot shrink to nothing and
+		// still pass.
+		expect([...facts.acrossUnresolved].sort()).toEqual([]);
+		expect([...facts.acrossCovered].filter((id) => !facts.acrossResolved.has(id))).toEqual([]);
+		expect(facts.acrossResolved.size).toBeGreaterThanOrEqual(facts.acrossCovered.size);
 		expect(facts.acrossOffenders).toEqual([]);
 	});
 
@@ -1019,6 +1180,13 @@ describe("the state module's boundary", () => {
 		// method's own calls, so a transaction two calls away is read too.
 		const facts = transactionOffenders();
 		expect(facts.publishedCovered.size).toBeGreaterThan(10);
+		// The same resolution line: every published operation, and every method
+		// it reaches, has a body the rule read (issue #202 review).
+		expect([...facts.publishedUnresolved].sort()).toEqual([]);
+		expect([...facts.publishedCovered].filter((id) => !facts.publishedResolved.has(id))).toEqual(
+			[],
+		);
+		expect(facts.publishedResolved.size).toBeGreaterThanOrEqual(facts.publishedCovered.size);
 		expect(facts.publishedOffenders).toEqual([]);
 	});
 
@@ -1257,6 +1425,63 @@ describe("the state module's boundary", () => {
 		expect(transactionOffenders(read, [probeShape]).publishedOffenders).toEqual([
 			"src/state/handoff.ts opens a transaction in workQueue.enqueueWork, reached from newestHandoffsFor, an operation the module publishes",
 		]);
+	});
+
+	test("the transaction rule names a far-side method it cannot read", () => {
+		// The rule's own blind spot (issue #202 review). A call whose far side has
+		// no body the walk can find used to end the walk in silence: the call site
+		// was counted, nothing was read, and the rule still passed. A method moved
+		// into an object field, or written at an indent the rule does not read,
+		// used to shrink the rule to nothing. Each probe below is the shape the
+		// production rules above refuse with a `toEqual([])`.
+		const publishedProbe = [
+			"export class HandoffModule implements HandoffAggregate {",
+			"\tnewestHandoffsFor(identities: readonly string[]): number[] {",
+			"\t\tthis.settleEveryIdentity(identities);",
+			"\t\treturn identities.length;",
+			"\t}",
+			"}",
+		].join("\n");
+		const publishedRead = (file: string): string =>
+			file === "src/state/handoff.ts" ? publishedProbe : moduleSource(file);
+		const publishedShape: AggregateShape = {
+			key: "handoff",
+			interfaceName: "HandoffAggregate",
+			file: "src/state/handoff.ts",
+			interfaceMethods: new Set(["settleHandoff"]),
+			internalMethods: new Set(["newestHandoffsFor"]),
+			privateMethods: new Set(),
+		};
+		const published = transactionOffenders(publishedRead, [publishedShape]);
+		// The published method itself resolves; the method it calls does not.
+		expect([...published.publishedResolved].sort()).toEqual(["handoff.newestHandoffsFor"]);
+		expect([...published.publishedUnresolved].sort()).toEqual(["handoff.settleEveryIdentity"]);
+		const acrossProbe = [
+			"export class WorkQueueModule implements WorkQueueAggregate {",
+			"\tprivate readonly graph: () => StateGraph;",
+			"\tremoveWorkflowRouteItem(identity: string): number {",
+			"\t\treturn this.graph().handoff.noSuchMethod(identity).length;",
+			"\t}",
+			"}",
+		].join("\n");
+		const acrossRead = (file: string): string =>
+			file === "src/state/work-queue.ts" ? acrossProbe : moduleSource(file);
+		const acrossShape: AggregateShape = {
+			key: "workQueue",
+			interfaceName: "WorkQueueAggregate",
+			file: "src/state/work-queue.ts",
+			interfaceMethods: new Set(["removeWorkflowRouteItem"]),
+			internalMethods: new Set(),
+			privateMethods: new Set(),
+		};
+		const across = transactionOffenders(acrossRead, [acrossShape]);
+		expect([...across.acrossUnresolved].sort()).toEqual(["handoff.noSuchMethod"]);
+		// The call site was recorded and no body stands behind it - the exact
+		// condition the production rule holds to no offenders.
+		expect([...across.acrossCovered].filter((id) => !across.acrossResolved.has(id))).toEqual([
+			"handoff.noSuchMethod",
+		]);
+		expect(across.acrossCovered.size).toBeGreaterThan(across.acrossResolved.size);
 	});
 });
 
