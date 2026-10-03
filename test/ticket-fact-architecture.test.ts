@@ -16,12 +16,8 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { sourceFiles } from "./static-checks.ts";
 
-/** The Ticket surfaces the spec names: the list, the detail, and the Section header. */
-const TICKET_SURFACES = [
-	"src/components/ticket-list.ts",
-	"src/components/ticket-detail.ts",
-	"src/components/section-header.ts",
-];
+/** The domain module that owns the Ticket's own rules, including the in-flight fact. */
+const TICKET_RULE_MODULE = "src/domain/ticket.ts";
 
 /** The domain's fact modules. */
 const FACT_MODULES = [
@@ -38,14 +34,15 @@ function propsCode(file: string): string {
 }
 
 describe("the fact modules own the screen's facts", () => {
-	test("no Ticket surface takes a fact as a predicate callback prop", () => {
+	test("no surface takes a fact as a predicate callback prop", () => {
 		// A property whose type is a function answering `true` or `false` about a
 		// Ticket is the removed prop back again: `isFailure`, `isStarting`,
 		// `isQueued`, `isHeld`. The fact module answers those as values, so a
 		// surface that asks for the predicate owns the rule and the gallery has
-		// to invent one.
+		// to invent one. Every surface file is walked, so a new pane cannot stand
+		// outside the check.
 		const offenders: string[] = [];
-		for (const file of TICKET_SURFACES) {
+		for (const file of sourceFiles("src/components")) {
 			for (const line of propsCode(file).split("\n")) {
 				const declaration = line.trim();
 				if (/^[A-Za-z_$][\w$]*\??\s*:\s*.*=>\s*boolean/u.test(declaration)) {
@@ -66,16 +63,19 @@ describe("the fact modules own the screen's facts", () => {
 		}
 	});
 
-	test("no screen re-derives the in-flight fact", () => {
+	test("no module re-derives the in-flight fact", () => {
 		// `state === "handed-off" || state === "running"`, in either polarity, is
-		// the fact the Ticket fact module owns. A screen that spells it holds a
-		// second copy the row's badge and the seat count can drift from.
+		// the fact the domain's Ticket module owns and the fact module reads.
+		// Every reader - the screen, the state aggregates, the dispatch claim
+		// gates, the Consultation pane walk - asks `inFlightState`, so the row's
+		// badge and the seat count cannot drift from a gate three layers away.
 		const patterns = [
 			/state\s*===\s*"handed-off"\s*\|\|[^;]{0,80}?state\s*===\s*"running"/u,
 			/state\s*!==\s*"handed-off"\s*&&[^;]{0,80}?state\s*!==\s*"running"/u,
 		];
 		const offenders: string[] = [];
-		for (const file of sourceFiles("src/components")) {
+		for (const file of sourceFiles("src")) {
+			if (file === TICKET_RULE_MODULE) continue;
 			const source = readFileSync(file, "utf8");
 			if (patterns.some((pattern) => pattern.test(source))) offenders.push(file);
 		}

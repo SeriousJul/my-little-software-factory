@@ -171,6 +171,20 @@ export function handoffLimitReached(handoffCount: number, limit: number): boolea
 	return handoffCount >= limit;
 }
 
+/**
+ * The in-flight fact of one Ticket state (CONTEXT.md): an Agent works on the
+ * Ticket or its start is pending.
+ *
+ * The state is all the rule reads, so every reader of the fact asks it from the
+ * data it already holds - a projection row, a table row, a full Ticket. The
+ * Ticket fact module reads it for the row's badge, the in-flight pass, the
+ * Restart walk, the Parallel limit seat count, and the claim gates alike, so no
+ * surface holds its own spelling of the two states.
+ */
+export function inFlightState(state: TicketState): boolean {
+	return state === "handed-off" || state === "running";
+}
+
 /** The latest handoff of a ticket, including the herdr handles it started. */
 export interface Handoff {
 	agentType: string;

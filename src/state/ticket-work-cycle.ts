@@ -26,6 +26,7 @@ import {
 	dispatchPauseHolds,
 	flagWithholdsRow,
 	ignoreRefusal,
+	inFlightState,
 	obligationOf,
 	sameTypeHoldHolds,
 	ticketListRank,
@@ -320,12 +321,7 @@ export class TicketWorkCycleModule implements TicketWorkCycleAggregate {
 				!pending &&
 				active.some((membership) => membership.health === "healthy");
 			const ignored = row.ignored === 1;
-			if (
-				storedMemberships.length === 0 &&
-				row.state !== "handed-off" &&
-				row.state !== "running" &&
-				row.state !== "awaiting"
-			)
+			if (storedMemberships.length === 0 && !inFlightState(row.state) && row.state !== "awaiting")
 				continue;
 			const facts = [...storedMemberships].sort(
 				(a, b) =>
@@ -537,7 +533,7 @@ export class TicketWorkCycleModule implements TicketWorkCycleAggregate {
 		// The marker is the row's face: only an in-flight Ticket reads a missing
 		// Agent, exactly as the list's failure badge does, so a caller that hands
 		// the poll's fact in cannot make a resting Ticket owe what it does not.
-		const inFlight = row.state === "handed-off" || row.state === "running";
+		const inFlight = inFlightState(row.state);
 		return obligationOf(
 			{ state: row.state, lastCompletion: this.lastCompletion(identity) },
 			inFlight ? marker : null,
@@ -847,7 +843,7 @@ export class TicketWorkCycleModule implements TicketWorkCycleAggregate {
 				.prepare("SELECT state FROM tickets WHERE identity = ?")
 				.get(ticketIdentity) as { state: TicketState } | undefined;
 			if (ticket == null) return false;
-			if (ticket.state !== "handed-off" && ticket.state !== "running") return false;
+			if (!inFlightState(ticket.state)) return false;
 			this.db
 				.prepare(
 					"UPDATE tickets SET state = 'open', work_cycle = work_cycle + 1 WHERE identity = ?",
