@@ -139,6 +139,38 @@ describe("the seam aggregate", () => {
 		);
 		expect(() => tickets.prepare("select identity from main.tickets")).not.toThrow();
 
+		// A quoted table name is the same name in another spelling (issue #202
+		// review): the quotes are not a shield, so every quoted form reaches
+		// `handoffs` and the handle refuses it before SQLite ever sees the text.
+		expect(tablesNamed('SELECT "attempt_id" FROM "handoffs"')).toEqual(["handoffs"]);
+		expect(() => tickets.prepare('SELECT "attempt_id" FROM "handoffs"')).toThrow(
+			"may not reach the table handoffs",
+		);
+		expect(() => tickets.prepare("SELECT attempt_id FROM [handoffs]")).toThrow(
+			"may not reach the table handoffs",
+		);
+		expect(() => tickets.prepare("SELECT attempt_id FROM `handoffs`")).toThrow(
+			"may not reach the table handoffs",
+		);
+		expect(() => tickets.prepare('UPDATE "handoffs" SET leftover_reason = ?')).toThrow(
+			"may not reach the table handoffs",
+		);
+		expect(() => tickets.exec('DELETE FROM "handoffs"')).toThrow(
+			"may not reach the table handoffs",
+		);
+		// A quoted name the aggregate does own prepares, so the refusal is about
+		// the table and not about the quotes.
+		expect(() => tickets.prepare('SELECT identity FROM "tickets"')).not.toThrow();
+		expect(() => tickets.prepare('SELECT identity FROM "main"."tickets"')).not.toThrow();
+		// A quoted name standing in for the statement's own result hides its reach
+		// the same way the bare form does.
+		expect(
+			tablesNamed('select attempt_id from (select attempt_id from handoffs) as "handoffs"'),
+		).toEqual(["handoffs"]);
+		expect(() =>
+			tickets.prepare('select attempt_id from (select attempt_id from handoffs) as "handoffs"'),
+		).toThrow("may not reach the table handoffs");
+
 		// A name the statement binds for itself is not a table it reaches: a CTE
 		// and a subquery alias prepare against the aggregate's own rows.
 		expect(() => tickets.prepare("with held as (select 1) select * from held")).not.toThrow();

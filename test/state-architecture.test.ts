@@ -171,13 +171,19 @@ function shapeByKey(): Map<string, AggregateShape> {
 const MODULE_INNERS = /(?:^|\/)state\/(store|graph|tables|schema|batch|json)\.ts$/u;
 
 /**
- * The SQL a module holds: every string literal in its source.
+ * The SQL a module holds: the text inside every string literal in its source,
+ * one entry per literal.
  *
  * A comment is not a statement, and neither is an identifier, so the table
  * rule reads only the text a `prepare` or an `exec` can be handed. A comment
  * that names another aggregate's table says something; it does not reach it.
+ * A literal's own delimiters are stripped, because the rule then reads a
+ * statement the way the running handle does: SQL written in a single-quoted
+ * string is read as its text, and a single quote inside it is the SQL's own
+ * quoted value, which `tablesNamed` blanks out. Each literal is read on its
+ * own, so an apostrophe in one message cannot blank the text of the next.
  */
-function stringLiterals(source: string): string {
+function sqlLiterals(source: string): string[] {
 	const literals: string[] = [];
 	let index = 0;
 	while (index < source.length) {
@@ -204,13 +210,13 @@ function stringLiterals(source: string): string {
 				}
 				end += 1;
 			}
-			literals.push(source.slice(index, end));
+			literals.push(source.slice(index + 1, end - 1));
 			index = end;
 			continue;
 		}
 		index += 1;
 	}
-	return literals.join("\n");
+	return literals;
 }
 
 /**
@@ -242,6 +248,14 @@ function memberChunk(source: string, name: string): string | null {
 /** How many times a pattern matches in the source. */
 function countMatches(source: string, pattern: RegExp): number {
 	return [...source.matchAll(pattern)].length;
+}
+
+/**
+ * The tables one module's source reaches: every literal it could hand a
+ * `prepare` or an `exec`, read with the store's own matcher.
+ */
+function tableReaches(source: string): string[] {
+	return sqlLiterals(source).flatMap((sql) => tablesNamed(sql));
 }
 
 /**
@@ -779,9 +793,9 @@ describe("the state module's boundary", () => {
 		for (const [key, owned] of Object.entries(OWNED)) {
 			const file = aggregateFile(key);
 			// The same matcher the store's scoped handle refuses with, so the two
-			// rules read the SQL the same way: either case, and no CTE or subquery
-			// alias mistaken for a reach.
-			for (const table of tablesNamed(stringLiterals(readFileSync(file, "utf8")))) {
+			// rules read the SQL the same way: either case, a quoted name as the
+			// table it spells, and no CTE or subquery alias mistaken for a reach.
+			for (const table of tableReaches(readFileSync(file, "utf8"))) {
 				const anyOwner = Object.values(OWNED).some((set) => set.has(table));
 				if (!anyOwner) continue;
 				reads.add(`${file} reads ${table}`);
@@ -794,6 +808,44 @@ describe("the state module's boundary", () => {
 		const allOwned = new Set([...Object.values(OWNED)].flatMap((set) => [...set]));
 		expect([...allOwned].filter((table) => !reachedTables.has(table))).toEqual([]);
 		expect(offenders).toEqual([]);
+	});
+
+	test("the table rule reads a quoted table name as the table it spells", () => {
+		// The probe is the shape the guard missed (issue #202 review): a private
+		// method in the Grouping module that reaches `handoffs` through a quoted
+		// name. SQLite spells an identifier quoted three ways, so a matcher that
+		// read only a bare name let every one of them past - and a statement held
+		// in a single-quoted string was invisible to the text rule at all.
+		const statements = [
+			'SELECT COUNT(*) AS n FROM "handoffs"',
+			"SELECT COUNT(*) AS n FROM [handoffs]",
+			"SELECT COUNT(*) AS n FROM `handoffs`",
+			'UPDATE "handoffs" SET leftover_reason = ?',
+			'DELETE FROM "handoffs"',
+			"SELECT COUNT(*) AS n FROM handoffs",
+		];
+		const probeModule = (sql: string): string =>
+			[
+				"export class GroupingModule implements GroupingAggregate {",
+				"\tprivate probeCount(): number {",
+				`\t\tconst row = this.db.prepare('${sql}').get() as { n: number };`,
+				"\t\treturn row.n;",
+				"\t}",
+				"}",
+			].join("\n");
+		for (const sql of statements) {
+			const reached = tableReaches(probeModule(sql));
+			expect(reached, `probe statement ${sql}`).toEqual(["handoffs"]);
+			// The Grouping module owns neither table, so the rule names the reach.
+			expect(
+				reached.filter((table) => !OWNED.grouping.has(table)),
+				`probe statement ${sql}`,
+			).toEqual(["handoffs"]);
+		}
+		// The module's own table, quoted the same way, is no offender.
+		expect(tableReaches(probeModule('SELECT COUNT(*) AS n FROM "group_order"'))).toEqual([
+			"group_order",
+		]);
 	});
 
 	test("every table the state file holds has exactly one owner", () => {
@@ -915,6 +967,23 @@ describe("the state module's boundary", () => {
 		expect(tablesNamed("with handoffs as (select * from handoffs) select * from handoffs")).toEqual(
 			["handoffs", "handoffs"],
 		);
+		// A quoted name is the same table in another spelling (issue #202 review):
+		// SQLite lets an identifier be quoted in three ways, and the matcher reads
+		// the name inside the quotes, so no quoted form slips past the guard.
+		expect(tablesNamed('SELECT "attempt_id" FROM "handoffs"')).toEqual(["handoffs"]);
+		expect(tablesNamed("SELECT attempt_id FROM [handoffs]")).toEqual(["handoffs"]);
+		expect(tablesNamed("SELECT attempt_id FROM `handoffs`")).toEqual(["handoffs"]);
+		expect(tablesNamed('UPDATE "handoffs" SET leftover_reason = ?')).toEqual(["handoffs"]);
+		expect(tablesNamed('DELETE FROM "handoffs"')).toEqual(["handoffs"]);
+		expect(tablesNamed('select attempt_id from "main"."handoffs"')).toEqual(["handoffs"]);
+		expect(tablesNamed('select attempt_id from (select attempt_id from "handoffs") x')).toEqual([
+			"handoffs",
+		]);
+		// A quoted value stays a value, so a quoted string that names a table is
+		// still not a reach.
+		expect(tablesNamed("update tickets set title = 'from handoffs' where 1 = 1")).toEqual([
+			"tickets",
+		]);
 	});
 
 	test("no caller outside the module imports its plumbing", () => {

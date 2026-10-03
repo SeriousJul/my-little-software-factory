@@ -47,14 +47,24 @@ export const RETIRED_TABLES = ["referenced_issues"] as const;
  * The keywords match in either case, so a statement written `from tickets` is
  * read the same way as one written `FROM tickets`. A name may carry its schema
  * (`FROM main.tickets`), and the reach is the table, not the schema that holds
- * it, so the refusal names `tickets` (issue #202 review). An `UPDATE` is read
+ * it, so the refusal names `tickets` (issue #202 review). A name may be quoted
+ * (`FROM "handoffs"`, `FROM [handoffs]`, `` FROM `handoffs` ``); the quotes are
+ * the name's spelling, not a shield, so the reach is the name inside them and
+ * the refusal names `handoffs` (issue #202 review). An `UPDATE` is read
  * only in its `UPDATE <table> SET` shape, and the `SET` is read as a whole
  * word, so an upsert's `DO UPDATE SET` names no table and a column named
  * `settings_hash` is never taken for one. This is the one matcher: the store's
  * scoped handle refuses with it, and the boundary check reads the source with
  * it, so the runtime rule and the review rule cannot drift apart.
  */
-const TABLE_NAME = "[A-Za-z_][A-Za-z0-9_]*";
+const BARE_NAME = "[A-Za-z_][A-Za-z0-9_]*";
+/**
+ * A quoted SQLite identifier: `"name"`, `[name]`, or `` `name` ``. A doubled
+ * quote inside the quotes is the name's own character, so `"a""b"` is the name
+ * `a"b`.
+ */
+const QUOTED_NAME = '"(?:[^"]|"")+"|\\[(?:[^\\]]|\\]\\])+\\]|`(?:[^`]|``)+`';
+const TABLE_NAME = `(?:${BARE_NAME}|${QUOTED_NAME})`;
 const TABLE_REFERENCE = new RegExp(
 	`\\b(?:FROM|JOIN|INTO)\\s+(?:${TABLE_NAME}\\.)?(${TABLE_NAME})` +
 		`|\\bUPDATE\\s+(?:OR\\s+(?:ROLLBACK|ABORT|FAIL|IGNORE|REPLACE)\\s+)?(?:${TABLE_NAME}\\.)?(${TABLE_NAME})\\s+SET\\b`,
@@ -72,8 +82,24 @@ const TABLE_REFERENCE = new RegExp(
  * reaches `handoffs` whatever it calls the result. A name no aggregate claims
  * (`held`, `rows`, a column list) is still just a name the statement bound.
  */
-const STATEMENT_ALIAS =
-	/\b([A-Za-z_][A-Za-z0-9_]*)\s+AS\s*\(|\)\s*(?:AS\s+)?([A-Za-z_][A-Za-z0-9_]*)/giu;
+const STATEMENT_ALIAS = new RegExp(
+	`(?:^|(?<=\\W))(${TABLE_NAME})\\s+AS\\s*\\(|\\)\\s*(?:AS\\s+)?(${TABLE_NAME})`,
+	"giu",
+);
+
+/**
+ * The name a spelling stands for, in lower case. `"handoffs"`, `[handoffs]`,
+ * `` `handoffs` ``, `HANDOFFS`, and `main.handoffs` all answer `handoffs`, so
+ * the quoted form reaches the same table as the bare one and a quoted alias is
+ * matched against the claimed names the same way.
+ */
+function nameSpelled(raw: string): string {
+	const name = raw.toLowerCase();
+	if (name.startsWith('"')) return name.slice(1, -1).replace(/""/gu, '"');
+	if (name.startsWith("[")) return name.slice(1, -1).replace(/\]\]/gu, "]");
+	if (name.startsWith("`")) return name.slice(1, -1).replace(/``/gu, "`");
+	return name;
+}
 
 /**
  * Every table name the module claims: the nine aggregates' tables and the
@@ -131,13 +157,13 @@ export function tablesNamed(sql: string): string[] {
 	const statement = withoutQuotedValues(sql);
 	const aliases = new Set<string>();
 	for (const match of statement.matchAll(STATEMENT_ALIAS)) {
-		const alias = (match[1] ?? match[2] ?? "").toLowerCase();
+		const alias = nameSpelled(match[1] ?? match[2] ?? "");
 		if (alias === "" || CLAIMED_TABLE_NAMES.has(alias)) continue;
 		aliases.add(alias);
 	}
 	const named: string[] = [];
 	for (const match of statement.matchAll(TABLE_REFERENCE)) {
-		const table = (match[1] ?? match[2] ?? "").toLowerCase();
+		const table = nameSpelled(match[1] ?? match[2] ?? "");
 		if (table === "" || aliases.has(table)) continue;
 		named.push(table);
 	}
