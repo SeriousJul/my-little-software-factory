@@ -342,7 +342,6 @@ describe("the transition evaluation", () => {
 			when: null,
 			reason: "",
 			ticketFacts: ["ready-for-review"],
-			autoAdvance: false,
 		});
 	});
 
@@ -448,18 +447,6 @@ describe("the transition evaluation", () => {
 			{ score: null, pullRequestOpen: false },
 		);
 		expect(unknown).toMatchObject({ fired: false, reason: "no judgment held" });
-	});
-
-	test("the auto-advance flag is the branch's when the branch sets it", () => {
-		const base = transition({ autoAdvance: true, branches: [{ when: "pull-request-open" }] });
-		expect(evaluateTransition(base, { score: null, pullRequestOpen: true }).autoAdvance).toBe(true);
-		const overridden = transition({
-			autoAdvance: true,
-			branches: [{ when: "pull-request-open", autoAdvance: false }],
-		});
-		expect(evaluateTransition(overridden, { score: null, pullRequestOpen: true }).autoAdvance).toBe(
-			false,
-		);
 	});
 });
 
@@ -1726,7 +1713,6 @@ function skipOutcome(): TransitionOutcome {
 		reason: NO_LINKED_PULL_REQUEST_SKIP,
 		ticketFacts: [],
 		pullRequestFacts: ["ready-for-review"],
-		autoAdvance: false,
 		ticketWrite: null,
 		pullRequestWrite: null,
 		pullRequestIdentity: null,
@@ -2412,7 +2398,6 @@ describe("the recorded empty skip's re-fire (ADR 0076)", () => {
 			reason: EMPTY_PULL_REQUEST_SKIP,
 			ticketFacts: [],
 			pullRequestFacts: ["ready-for-review"],
-			autoAdvance: false,
 			ticketWrite: null,
 			pullRequestWrite: null,
 			pullRequestIdentity: null,

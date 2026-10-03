@@ -89,14 +89,14 @@ export interface TaskTypeConfig {
 	 */
 	opensPullRequest?: boolean;
 	/**
-	 * The No-auto-decision flag (ADR 0085): when set, the automatic Completion
-	 * rule parks every completion of the type for the operator ahead of its
-	 * outcome checks: the ticket rests in `awaiting`, the environment and the
+	 * The Operator-decides property (ADR 0085, renamed by ADR 0092): when set,
+	 * Auto-handoff mode never makes the Completion decision on this type's
+	 * settled turns: the turn rests in `awaiting`, the environment and the
 	 * agent stay untouched, and the operator's explicit close or route still
-	 * runs. Allowed on both forms; the action form's standing automatic
-	 * behavior is unused with it in the shipped config.
+	 * runs. It is the only per-task-type brake Auto-handoff mode carries.
+	 * Allowed on both forms; the shipped `analyze` type is its only user.
 	 */
-	noAutoDecision?: boolean;
+	operatorDecides?: boolean;
 	/**
 	 * The Transition that hangs off this task type (ADR 0027): the label facts
 	 * a completed turn of it writes, and where the ticket goes by judgment.
@@ -185,8 +185,6 @@ export interface TransitionBranch {
 	ticketFacts?: string[];
 	/** The label facts the fixing pull request wears after this branch fires. */
 	pullRequestFacts?: string[];
-	/** Hand off the new position's task without the operator, in any mode. */
-	autoAdvance?: boolean;
 	agent?: string;
 	environment?: EnvironmentKind;
 }
@@ -205,8 +203,6 @@ export interface WorkflowTransition {
 	/** The review-score threshold the score judgments test against. */
 	scoreThreshold?: number;
 	branches?: TransitionBranch[];
-	/** Hand off the new position's task without the operator, in any mode. */
-	autoAdvance?: boolean;
 	agent?: string;
 	environment?: EnvironmentKind;
 }
@@ -228,7 +224,6 @@ export interface TransitionOutcome {
 	ticketFacts: string[];
 	/** The effective pull request facts the fire wrote. */
 	pullRequestFacts: string[];
-	autoAdvance: boolean;
 	agent?: string;
 	environment?: EnvironmentKind;
 	/** What the write did on the ticket; null when it wrote nothing. */
@@ -932,10 +927,11 @@ function validateTaskTypes(
 		if (/\s/.test(name)) throw new ConfigError(`config: ${where}: must be a one-word name`);
 		if (!isRecord(raw)) throw new ConfigError(`config: ${where}: must be a table`);
 		if (raw["auto-close"] !== undefined) {
-			// The retired completion flag (ADR 0027): the auto-advance flag on
-			// the task type's transition is the replacement.
+			// The retired completion flag (ADR 0027), and the flag that replaced it
+			// is retired too (ADR 0092): Auto-handoff mode decides the route from
+			// the settled turn's Next step.
 			throw new ConfigError(
-				`config: ${where}: "auto-close" is a pre-workflow-machine key; use auto-advance on ${where}.transition (see the .bak backup and the migration report)`,
+				`config: ${where}: "auto-close" is a pre-workflow-machine key; Auto-handoff mode decides the route from the settled turn's Next step (see the .bak backup and the migration report)`,
 			);
 		}
 		// The form of the task type (ADR 0068): the prompt form starts an
@@ -951,7 +947,7 @@ function validateTaskTypes(
 			// and the transition its outcome fires. No profile keys: the
 			// action holds no settings an operator edits before a run.
 			for (const key of Object.keys(raw))
-				if (!["action", "method", "transition", "no-auto-decision"].includes(key))
+				if (!["action", "method", "transition", "operator-decides"].includes(key))
 					throw new ConfigError(
 						`config: ${where}: unknown key "${key}"; the action form takes no profile keys`,
 					);
@@ -969,12 +965,12 @@ function validateTaskTypes(
 					);
 				method = named;
 			}
-			const noAutoDecision = optionalBooleanField(raw, "no-auto-decision", where);
+			const operatorDecides = optionalBooleanField(raw, "operator-decides", where);
 			out[name] = {
 				action,
 				method,
 				...(transition === undefined ? {} : { transition }),
-				...(noAutoDecision === undefined ? {} : { noAutoDecision }),
+				...(operatorDecides === undefined ? {} : { operatorDecides }),
 			};
 			continue;
 		}
@@ -988,7 +984,7 @@ function validateTaskTypes(
 					"context-window",
 					"transition",
 					"opens-pull-request",
-					"no-auto-decision",
+					"operator-decides",
 				].includes(key)
 			)
 				throw new ConfigError(`config: ${where}: unknown key "${key}"`);
@@ -1001,9 +997,10 @@ function validateTaskTypes(
 				throw new ConfigError(`config: ${where}.opens-pull-request: must be a boolean`);
 			opensPullRequest = raw["opens-pull-request"] === true;
 		}
-		// The No-auto-decision flag (ADR 0085): a boolean either form carries;
-		// omitted or false lets the automatic rule run as it did.
-		const noAutoDecision = optionalBooleanField(raw, "no-auto-decision", where);
+		// The Operator-decides property (ADR 0085, renamed by ADR 0092): a
+		// boolean either form carries; omitted or false lets Auto-handoff mode
+		// make the Completion decision on the type's settled turns.
+		const operatorDecides = optionalBooleanField(raw, "operator-decides", where);
 		for (const placeholder of placeholderNames(template)) {
 			if (!PROMPT_PLACEHOLDERS.includes(placeholder)) {
 				throw new ConfigError(
@@ -1045,7 +1042,7 @@ function validateTaskTypes(
 			...(contextWindow === undefined ? {} : { contextWindow }),
 			...(transition === undefined ? {} : { transition }),
 			...(opensPullRequest ? { opensPullRequest } : {}),
-			...(noAutoDecision === undefined ? {} : { noAutoDecision }),
+			...(operatorDecides === undefined ? {} : { operatorDecides }),
 		};
 	}
 	return out;
@@ -1262,7 +1259,6 @@ function validateTransition(
 				"pull-request-facts",
 				"score-threshold",
 				"branches",
-				"auto-advance",
 				"agent",
 				"environment",
 			].includes(key)
@@ -1292,14 +1288,6 @@ function validateTransition(
 			);
 		scoreThreshold = rawThreshold;
 	}
-	const autoAdvance =
-		value["auto-advance"] === undefined
-			? undefined
-			: (() => {
-					if (typeof value["auto-advance"] !== "boolean")
-						throw new ConfigError(`config: ${where}.transition.auto-advance: must be a boolean`);
-					return value["auto-advance"] as boolean;
-				})();
 	let agent: string | undefined;
 	if (value.agent !== undefined) {
 		agent = stringField(value, "agent", `${where}.transition`);
@@ -1328,14 +1316,9 @@ function validateTransition(
 							throw new ConfigError(`config: ${branchWhere}: must be a table`);
 						for (const key of Object.keys(rawBranch))
 							if (
-								![
-									"when",
-									"ticket-facts",
-									"pull-request-facts",
-									"auto-advance",
-									"agent",
-									"environment",
-								].includes(key)
+								!["when", "ticket-facts", "pull-request-facts", "agent", "environment"].includes(
+									key,
+								)
 							)
 								throw new ConfigError(`config: ${branchWhere}: unknown key "${key}"`);
 						let when: TransitionJudgment | undefined;
@@ -1359,16 +1342,6 @@ function validateTransition(
 								);
 							return [...rawFacts] as string[];
 						};
-						const branchAutoAdvance =
-							rawBranch["auto-advance"] === undefined
-								? undefined
-								: (() => {
-										if (typeof rawBranch["auto-advance"] !== "boolean")
-											throw new ConfigError(
-												`config: ${branchWhere}.auto-advance: must be a boolean`,
-											);
-										return rawBranch["auto-advance"] as boolean;
-									})();
 						let branchAgent: string | undefined;
 						if (rawBranch.agent !== undefined) {
 							branchAgent = stringField(rawBranch, "agent", branchWhere);
@@ -1395,7 +1368,6 @@ function validateTransition(
 							...(branchFacts("pull-request-facts") === undefined
 								? {}
 								: { pullRequestFacts: branchFacts("pull-request-facts") }),
-							...(branchAutoAdvance === undefined ? {} : { autoAdvance: branchAutoAdvance }),
 							...(branchAgent === undefined ? {} : { agent: branchAgent }),
 							...(branchEnvironment === undefined ? {} : { environment: branchEnvironment }),
 						};
@@ -1418,7 +1390,6 @@ function validateTransition(
 		pullRequestFacts: facts("pull-request-facts"),
 		...(scoreThreshold === undefined ? {} : { scoreThreshold }),
 		...(branches === undefined ? {} : { branches }),
-		...(autoAdvance === undefined ? {} : { autoAdvance }),
 		...(agent === undefined ? {} : { agent }),
 		...(environment === undefined ? {} : { environment }),
 	};
@@ -1696,9 +1667,9 @@ export function configToToml(config: FactoryConfig): string {
 						...(task.opensPullRequest === undefined
 							? {}
 							: { "opens-pull-request": task.opensPullRequest }),
-						...(task.noAutoDecision === undefined
+						...(task.operatorDecides === undefined
 							? {}
-							: { "no-auto-decision": task.noAutoDecision }),
+							: { "operator-decides": task.operatorDecides }),
 						...(task.transition === undefined
 							? {}
 							: { transition: transitionToToml(task.transition) }),
@@ -1885,12 +1856,10 @@ function transitionToToml(transition: WorkflowTransition): Record<string, unknow
 						...(branch.pullRequestFacts === undefined
 							? {}
 							: { "pull-request-facts": branch.pullRequestFacts }),
-						...(branch.autoAdvance === undefined ? {} : { "auto-advance": branch.autoAdvance }),
 						...(branch.agent === undefined ? {} : { agent: branch.agent }),
 						...(branch.environment === undefined ? {} : { environment: branch.environment }),
 					})),
 				}),
-		...(transition.autoAdvance === undefined ? {} : { "auto-advance": transition.autoAdvance }),
 		...(transition.agent === undefined ? {} : { agent: transition.agent }),
 		...(transition.environment === undefined ? {} : { environment: transition.environment }),
 	};

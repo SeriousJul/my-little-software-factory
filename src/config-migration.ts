@@ -232,7 +232,7 @@ export function migrateWorkflowMachineConfig(
 			if (key === "auto-close") {
 				if (value === true) {
 					autoCloseLines.push(
-						`\`auto-close = true\` on \`${name}\`: dropped. The replacement is \`auto-advance\` on \`${name}\`'s transition.`,
+						`\`auto-close = true\` on \`${name}\`: dropped. Auto-handoff mode decides the route from the settled turn's Next step, so no flag replaces it.`,
 					);
 				}
 				continue;

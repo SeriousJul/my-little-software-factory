@@ -83,7 +83,6 @@ function reviewRoute(over: Partial<TransitionOutcome> = {}): TransitionOutcome {
 		reason: "",
 		ticketFacts: ["ready-for-review"],
 		pullRequestFacts: [],
-		autoAdvance: false,
 		ticketWrite: { added: ["ready-for-review"], removed: ["ready-for-agent"] },
 		pullRequestWrite: null,
 		pullRequestIdentity: null,
@@ -1369,6 +1368,59 @@ describe("the decision modal", () => {
 		app.state.close();
 	});
 
+	test("the Decision screen states the gate that holds the Next step (ADR 0092)", async () => {
+		// The fired Transition derived its review position, and the source has
+		// not re-read the ticket yet: it still offers implement, so the derived
+		// review stands held and the automatic route would not take it. The row
+		// stands for the operator's own key, and the fact line names the hold the
+		// machine reads beside it.
+		const app = seededApp("awaiting", {}, success, "live-worktree", { transition: reviewRoute() });
+		stubCheckout(app);
+		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+		await withApp(
+			async (setup) => {
+				app.src.settle(success);
+				await awaitFrame(setup, (f) => ticketRow(f).includes("[awaiting]"), "the awaiting ticket");
+				await pressReturn(setup, "the decision modal", (f) => f.includes("Decision:"));
+				const panel = frameText(await settle(setup));
+				expect(panel).toContain("Handoff: review");
+				expect(panel).toContain("the Next step is held: the position no longer offers the task");
+			},
+			WIDTH,
+			HEIGHT,
+			propsOf(app),
+		);
+		app.state.close();
+	});
+
+	test("the Decision screen states no hold when the Next step runs free (ADR 0092)", async () => {
+		// The same settled turn with the label the write landed on the ticket:
+		// the position offers the review the step names, no gate holds it, and
+		// the screen says nothing about a hold.
+		const landed: FetchOutcome = {
+			status: "success",
+			fetchedAt: "2026-08-31T10:01:00Z",
+			tickets: [fetched(5, "Persist source facts", ["ready-for-review"])],
+		};
+		const app = seededApp("awaiting", {}, landed, "live-worktree", { transition: reviewRoute() });
+		stubCheckout(app);
+		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+		await withApp(
+			async (setup) => {
+				app.src.settle(landed);
+				await awaitFrame(setup, (f) => ticketRow(f).includes("[awaiting]"), "the awaiting ticket");
+				await pressReturn(setup, "the decision modal", (f) => f.includes("Decision:"));
+				const panel = frameText(await settle(setup));
+				expect(panel).toContain("Handoff: review");
+				expect(panel).not.toContain("the Next step is held");
+			},
+			WIDTH,
+			HEIGHT,
+			propsOf(app),
+		);
+		app.state.close();
+	});
+
 	test("the Re-fire row fires the turn's transition again and swaps the record (ADR 0054)", async () => {
 		// The recorded outcome did not complete: no branch held, the way the
 		// score read found no verdict before the review comment landed. The
@@ -1379,7 +1431,6 @@ describe("the decision modal", () => {
 			fired: false,
 			when: null,
 			reason: "the pull request carries no review score",
-			autoAdvance: false,
 			ticketWrite: null,
 			positionTaskType: null,
 			positionTicketIdentity: null,
@@ -1429,7 +1480,6 @@ describe("the decision modal", () => {
 					reason: "",
 					ticketFacts: ["ready-for-review"],
 					pullRequestFacts: [],
-					autoAdvance: false,
 					ticketWrite: { added: ["ready-for-review"], removed: [] },
 					pullRequestWrite: null,
 					pullRequestIdentity: null,
@@ -3606,7 +3656,7 @@ describe("the auto decision", () => {
 			{ taskTypes: { ...BASE_CONFIG.taskTypes, review } },
 			success,
 			"live-worktree",
-			{ transition: reviewRoute({ autoAdvance: true }) },
+			{ transition: reviewRoute() },
 		);
 		stubCheckout(app);
 		// The routed agent's pane is live from the first list: a later tick
@@ -3685,7 +3735,7 @@ describe("the auto decision", () => {
 				// The model the settled handoff ran on: a route must not inherit it.
 				model: "opus-4",
 				thinking: "high",
-				transition: reviewRoute({ autoAdvance: true }),
+				transition: reviewRoute(),
 			},
 		);
 		stubCheckout(app);
@@ -3757,7 +3807,7 @@ describe("the auto decision", () => {
 			},
 			success,
 			"live-worktree",
-			{ transition: reviewRoute({ autoAdvance: true }) },
+			{ transition: reviewRoute() },
 		);
 		stubCheckout(app);
 		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
@@ -3856,7 +3906,7 @@ describe("the auto decision", () => {
 			{ maxParallelAgents: 1 },
 			pairSuccess,
 			"live-worktree",
-			{ transition: reviewRoute({ autoAdvance: true }) },
+			{ transition: reviewRoute() },
 		);
 		// The second ticket holds the single parallel seat with a live agent,
 		// so the route waits and the ticket stays awaiting.
@@ -3912,10 +3962,10 @@ describe("the auto decision", () => {
 	});
 });
 
-describe("the no-auto-decision type parks its completions for the operator (ADR 0085)", () => {
+describe("the Operator-decides type parks its completions for the operator (ADR 0085, ADR 0092)", () => {
 	// The config the park cases run on: the seeded app's own types, with the
 	// analyze type the shipped configuration carries - no transition, the
-	// no-auto-decision flag on - beside the implement control.
+	// operator-decides flag on - beside the implement control.
 	const withAnalyze: Partial<FactoryConfig> = {
 		taskTypes: {
 			...BASE_CONFIG.taskTypes,
@@ -3927,7 +3977,7 @@ describe("the no-auto-decision type parks its completions for the operator (ADR 
 				template:
 					"Analyze the following {source-kind}.\n\nRepository: {repository}\n\n" +
 					"{external-key}: {title}\n\nURL: {source-url}\n\nLabels: {labels}\n\nDescription:\n{description}",
-				noAutoDecision: true,
+				operatorDecides: true,
 			},
 		},
 	};
@@ -4344,7 +4394,6 @@ describe("the re-fire of a recorded skip (ADR 0042)", () => {
 			reason: "no linked pull request was found for the ticket",
 			ticketFacts: [],
 			pullRequestFacts: ["ready-for-review"],
-			autoAdvance: false,
 			ticketWrite: null,
 			pullRequestWrite: null,
 			pullRequestIdentity: null,

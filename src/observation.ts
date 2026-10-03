@@ -36,12 +36,12 @@
  *    up its handoffs, and the top-up restarts the missing agent once per
  *    episode as a Work queue item.
  * 4. With auto-handoff on, the automatic completion decisions resolve the
- *    awaiting tickets (ADR 0051): the completions the machine resolves
- *    close their cycle, and a completion that offers a continuation rests
- *    in awaiting for the top-up: a held turn, a transition whose label
- *    write failed, a same-type hold, and a No-auto-decision type park the
- *    ticket for the operator (ADR 0085), and a routable ticket's route is
- *    the top-up's continuation item.
+ *    awaiting tickets (ADR 0051, ADR 0092): the machine decides each settled
+ *    turn from one fact, the Next step its Transition derived. A turn with no
+ *    Next step closes its cycle, and a turn with one rests in awaiting for the
+ *    top-up: a held turn, a transition whose label write failed, and a turn of
+ *    an Operator-decides type park the ticket for the operator (ADR 0085), and
+ *    a routable turn's step is the top-up's continuation item.
  * 5. The Work queue's pickup (ADR 0049): the items the free seats take, in
  *    queue order, run before the top-up. Every pickup ends in start or
  *    drop, so the queue never sits stuck.
@@ -97,7 +97,7 @@ import {
 	type TurnLogEntry,
 	turnLogFromCapture,
 } from "./turn-log.ts";
-import type { RefiredSkip } from "./workflow.ts";
+import { deriveNextStep, type NextStep, type RefiredSkip } from "./workflow.ts";
 
 /** The normalized states the factory reasons about. */
 export type AgentStatus = "working" | "done" | "idle" | "blocked" | "unknown";
@@ -340,18 +340,30 @@ export function stripAnsi(text: string): string {
 }
 
 /**
- * The decision an awaiting ticket resolves to on a cycle (ADR 0051).
+ * The decision an awaiting ticket resolves to on a cycle (ADR 0051, ADR 0092).
  *
- * - `close`: the machine resolves the completion and closes the cycle: a
- *   turn whose task type offers no continuation, a transition that advanced
- *   into a parking state, or a route degraded at the handoff limit.
- * - `route`: the fired transition auto-advances into a position the machine
- *   offers a task for: the top-up's continuation, enqueued while the queue
- *   is empty and the gates hold nothing.
- * - `park`: the ticket rests in awaiting for the operator: a transition
- *   whose label write failed, a held turn, or the same-type hold.
+ * - `close`: the machine resolves the completion and closes the cycle: a turn
+ *   with no Next step - no transition, a fire that did not run, a fire that
+ *   landed on a parking state - or a Next step the Handoff limit holds.
+ * - `route`: the settled turn has a Next step the machine takes on its own:
+ *   the top-up's continuation, enqueued while the queue is empty. A step
+ *   another gate holds answers the same way and waits in awaiting: the top-up
+ *   will not take it, and the Decision screen states the hold.
+ * - `park`: the ticket rests in awaiting for the operator: a transition whose
+ *   label write failed, a held turn, or a turn of an Operator-decides type.
  */
 export type AwaitingDecision = "close" | "route" | "park";
+
+/**
+ * The automatic rule's answer for one settled turn (ADR 0092): what the
+ * machine does with it, and the Next step the turn's Transition derived.
+ * The step is null when the machine has none to take, and a step a gate holds
+ * carries its gate so the reader can state the reason.
+ */
+export interface AwaitingRule {
+	decision: AwaitingDecision;
+	step: NextStep | null;
+}
 
 /**
  * A structured topic for an onStatus event. The UI reacts to the topic, never
@@ -445,7 +457,7 @@ interface ObservationOptions {
 	 * recorded as the skip on a ticket's newest completion trace, for a
 	 * ticket that now stands an open fixing pull request. Returns the skips
 	 * whose trace took the re-fired outcome. Omitted: no recorded skip
-	 * re-fires, and the auto-advance of a closed cycle's skip never runs.
+	 * re-fires, and the Next step of a closed cycle's skip never runs.
 	 */
 	refireRecordedSkips?: () => Promise<RefiredSkip[]>;
 }
@@ -1252,27 +1264,16 @@ export class ObservationCoordinator {
 	private async handleAwaiting(ticket: HandoffTicket, autoOn: boolean): Promise<boolean> {
 		if (!autoOn) return false;
 		const completion = this.state.lastCompletion(ticket.ticketIdentity);
-		const outcome = completion?.transition ?? null;
 		// A decided turn decides nothing more: the route recorded its decision
 		// when it started, the automatic rule cannot route the same turn twice,
 		// and the routed turn rests in awaiting for the operator's close.
 		if (completion !== null && completion.decision !== null) return false;
-		// The held-turn gate (ADR 0016): a turn that failed, aborted, or was
-		// truncated is held. No automatic decision runs on it; the operator's
-		// explicit close or route still works. The ticket rests in awaiting
-		// until then.
-		if (isHeldCompletion(completion)) return false;
-		const decision = this.decideAwaiting(
-			this.state.handoffCount(ticket.ticketIdentity),
-			outcome,
-			completion?.taskType ?? "",
-		);
-		// The one route rule, read at both walks (ADR 0051): this walk closes
-		// what the machine resolves, and `continuationPosition` asks the same
-		// answer for what it enqueues. A `route` rests for the top-up and a
+		// The one route rule, read at both walks (ADR 0051, ADR 0092): this walk
+		// closes what the machine resolves, and `continuationPosition` asks the
+		// same answer for what it enqueues. A `route` rests for the top-up and a
 		// `park` rests for the operator; neither closes here, and neither
 		// re-derives the condition.
-		if (decision !== "close") return false;
+		if (this.decideAwaiting(completion).decision !== "close") return false;
 		const decidedAt = new Date(this.now()).toISOString();
 		const applied = this.state.applyCompletionDecision({
 			ticketIdentity: ticket.ticketIdentity,
@@ -1294,41 +1295,53 @@ export class ObservationCoordinator {
 	}
 
 	/**
-	 * The automatic completion rule (ADR 0051). Auto mode only: the caller
-	 * gates it, and a manual completion that is neither auto-advance nor
-	 * auto-handoff rests in awaiting for the operator's decision.
+	 * The automatic Completion rule (ADR 0051, ADR 0092). Auto mode only: the
+	 * caller gates it, and the rule is one fact - the settled turn's Next step.
+	 * Auto-handoff mode takes the step on its own, and closes the cycle when
+	 * the turn has none.
 	 *
-	 * The No-auto-decision type (ADR 0085) parks ahead of every outcome
-	 * check: a live session the parked turn holds stays untouched, and the
-	 * operator's close is the gate from its turn to whatever the ticket's new
-	 * position offers next.
+	 * Three facts park the turn for the operator ahead of the step: a held
+	 * turn (ADR 0016), a transition whose label write failed - the plane does
+	 * not route from labels it did not write - and a turn of a task type that
+	 * carries Operator-decides (ADR 0085, renamed by ADR 0092), the only
+	 * per-task-type brake the mode carries.
 	 *
-	 * The machine acts only where it is sure: a turn whose task type offers no
-	 * continuation closes its cycle, and a transition that advanced into a
-	 * parking state closes it, leaving the ticket in the state where a human
-	 * or an external tool drives. A route at the handoff limit degrades to
-	 * close, as it did. A transition whose label write failed no longer
-	 * closes: the plane does not route from labels it did not write, and the
-	 * ticket rests in awaiting for the operator's Decision screen.
+	 * A Next step the Handoff limit holds degrades to close, the way a route at
+	 * the limit did. A step another gate holds rests in awaiting: the top-up
+	 * will not take it, and the Decision screen states the hold.
+	 *
+	 * `tickets` is the projection the caller already read, before the list
+	 * rule; a caller that holds none leaves it out.
 	 */
 	decideAwaiting(
-		handoffCount: number,
-		outcome: TransitionOutcome | null,
-		taskType: string,
-	): AwaitingDecision {
-		if (this.config().taskTypes[taskType]?.noAutoDecision === true) return "park";
-		if (outcome === null || outcome.fired !== true) return "close";
-		// A label write the plane did not make holds the turn for the operator,
-		// whether or not the transition would have advanced.
-		if (outcome.writeFailure !== "") return "park";
-		const autoAdvance = outcome.autoAdvance === true;
-		if (autoAdvance && outcome.positionTaskType !== null) {
-			if (handoffCount >= this.config().maxHandoffsPerTicket) return "close";
-			return "route";
-		}
-		// No advance, or an advance into a parking state: the machine offers no
-		// task, so the cycle ends.
-		return "close";
+		completion: Completion | null,
+		tickets: readonly Ticket[] = this.state.projectedTickets(
+			this.config().workflowStates,
+			this.config().defaultTaskType,
+		),
+	): AwaitingRule {
+		const outcome = completion?.transition ?? null;
+		// The held-turn gate (ADR 0016): a turn that failed, aborted, or was
+		// truncated is held. No automatic decision runs on it; the operator's
+		// explicit close or route still works.
+		if (isHeldCompletion(completion)) return { decision: "park", step: null };
+		// The Operator-decides brake (ADR 0085, ADR 0092) stands ahead of every
+		// outcome check: a live session the parked turn holds stays untouched,
+		// and the operator's close is the gate from its turn to whatever the
+		// ticket's new position offers next.
+		if (
+			completion !== null &&
+			this.config().taskTypes[completion.taskType]?.operatorDecides === true
+		)
+			return { decision: "park", step: null };
+		if (outcome === null || outcome.fired !== true) return { decision: "close", step: null };
+		if (outcome.writeFailure !== "") return { decision: "park", step: null };
+		const step = deriveNextStep(this.config(), this.state, outcome, tickets);
+		// No Next step: the facts landed on a parking state, or on no position at
+		// all, so the cycle ends where the machine put the ticket.
+		if (step === null) return { decision: "close", step: null };
+		if (step.gate === "handoff-limit") return { decision: "close", step };
+		return { decision: "route", step };
 	}
 
 	/**
@@ -1458,35 +1471,25 @@ export class ObservationCoordinator {
 		}
 		// 2. The re-fired skip's route (ADR 0042) is a continuation: the skip
 		// closed its cycle and the ticket rests open behind it, so the awaiting
-		// walk never covered it. It enqueues like the rest, and its guards
-		// stand: the position still offers the task, and it holds no handoff,
-		// no queue item, and no unfinished attempt.
+		// walk never covered it. It enqueues like the rest, on the same Next step
+		// derivation and the same gates the continuation walk reads.
 		for (const ticket of tickets) {
 			if (ticket.state !== "open") continue;
 			const completion = this.state.lastCompletion(ticket.identity);
 			const outcome = completion?.transition ?? null;
-			if (
-				outcome === null ||
-				// The marker carries the shape: `refired` is set only on an
-				// outcome that fired and derived a position, so a re-fired trace
-				// with no position or no fire is not a state the plane writes.
-				// These three tests hold the record against a damaged trace, and
-				// no walk reaches them on its own; the marker, the fire, the
-				// advance, and the write are the four this suite measures.
-				outcome.refired !== true ||
-				outcome.fired !== true ||
-				outcome.autoAdvance !== true ||
-				outcome.writeFailure !== "" ||
-				outcome.positionTaskType === null ||
-				outcome.positionTicketIdentity === null
-			)
-				continue;
+			// The marker carries the shape: `refired` is set only on an outcome
+			// that fired and derived a position, so a re-fired trace with no fire
+			// is not a state the plane writes. The marker holds the record against
+			// a damaged trace; no walk reaches it on its own.
+			if (outcome === null || outcome.refired !== true) continue;
+			const step = deriveNextStep(config, this.state, outcome);
+			if (step === null || step.gate !== null) continue;
 			// The projection before the list rule (ADR 0042): the rule withholds
 			// a covered ticket's row from the operator's list, and the add must
 			// still reach the position it starts on.
 			const position = this.state
 				.projectedTickets(config.workflowStates, config.defaultTaskType)
-				.find((candidate) => candidate.identity === outcome.positionTicketIdentity);
+				.find((candidate) => candidate.identity === step.ticketIdentity);
 			if (position === undefined) continue;
 			// The ignore gate (ADR 0060): this walk reads the projection before the
 			// list rule on purpose, because ADR 0042's route must reach its position
@@ -1494,36 +1497,19 @@ export class ObservationCoordinator {
 			// withheld while a live one is listed. Either way the one gate predicate on
 			// the row the walk holds is what answers.
 			if (automaticStartBlocked(position)) continue;
-			if (position.suggestedTaskType !== outcome.positionTaskType) continue;
-			// One test of the position's standing. The projection builds
-			// `actionable` from the open state, so it holds every position that
-			// left the list - in flight, awaiting, or gone - as well as one the
-			// source cannot read, and an open ticket with an unresolved attempt is
-			// not actionable either. The queue's one-item-per-ticket rule is this
-			// cycle's own gate above: the walk adds only into an empty queue
-			// (ADR 0051).
-			if (!position.actionable) continue;
-			// The Same-type hold over the refresh lag: a position whose newest
-			// closed cycle completed the task it still suggests by stale labels
-			// has already run this route's task, and the add waits for the moved
-			// labels to land instead of starting it twice.
-			if (this.state.sameTypeHoldActive(position.identity, position.suggestedTaskType)) continue;
-			// The loop guard the handoff's add ran: the merge-to-needs-work loop
-			// stops at the cap, and the ask takes no seat when it runs.
-			if (position.handoffCount >= config.maxHandoffsPerTicket) continue;
 			// The merged position the skip routes to (ADR 0068): the plane
-			// action's merge stands for the handoff the skip would start, and
-			// the standing, hold, and limit guards the handoff's add ran ran on
-			// it above: an automatic merge add holds wherever the handoff's add
-			// would have held.
-			if (isPlaneActionTaskType(config.taskTypes, position.suggestedTaskType)) {
+			// action's merge stands for the handoff the skip would start, and the
+			// standing, hold, and limit guards the derivation ran hold the add the
+			// way the handoff's add held: an automatic merge add holds wherever the
+			// handoff's add would have held.
+			if (step.kind === "plane-action") {
 				const added = await this.topUpPlaneActionAsk(
 					{
 						origin: "workflow",
 						automatic: true,
 						ticketIdentity: position.identity,
 						routeFromIdentity: ticket.identity,
-						taskType: outcome.positionTaskType,
+						taskType: step.taskType,
 					},
 					`work queue top-up: merging ${this.ticketName(position.identity)}`,
 					`work queue top-up could not merge ${this.ticketName(position.identity)}`,
@@ -1537,13 +1523,13 @@ export class ObservationCoordinator {
 					automatic: true,
 					ticketIdentity: position.identity,
 					routeFromIdentity: ticket.identity,
-					choice: resolveHandoffChoice(config, outcome.positionTaskType, {
+					choice: resolveHandoffChoice(config, step.taskType, {
 						...(outcome.agent === undefined ? {} : { agent: outcome.agent }),
 						...(outcome.environment === undefined ? {} : { environment: outcome.environment }),
 					}),
 					previousMessage: this.promptPreviousMessage(completion),
 				},
-				`work queue top-up: routing ${this.ticketName(ticket.identity)} to ${outcome.positionTaskType}`,
+				`work queue top-up: routing ${this.ticketName(ticket.identity)} to ${step.taskType}`,
 				`work queue top-up could not route ${this.ticketName(ticket.identity)}`,
 			);
 			if (added !== "refused") return true;
@@ -1788,36 +1774,34 @@ export class ObservationCoordinator {
 	}
 
 	/**
-	 * The position a settled awaiting ticket's latest turn routes to, or null
-	 * when no continuation stands: the automatic rule answers `route` for the
-	 * turn (ADR 0051), the position the outcome names still offers the task it
-	 * names - open or awaiting, actionable, wearing the labels, holding no
-	 * handoff, no queue item, and no unfinished attempt, under its handoff
-	 * limit, and past the Same-type hold.
+	 * The position a settled turn's Next step stands on, or null when no
+	 * continuation stands: the automatic rule answers `route` for the turn and
+	 * names an unheld step (ADR 0051, ADR 0092), the step's ticket is still in
+	 * the projection, and the operator has not judged the position out.
 	 *
 	 * The position may be open or awaiting (ADR 0072): a route onto the
 	 * ticket's own new position finds its ticket open behind the wait the ask
 	 * left it, and a cross-position route finds the position it names.
 	 *
 	 * The route itself is never re-derived here. `decideAwaiting` is the one
-	 * rule both walks read: the awaiting walk that closes what the machine
-	 * resolves, and this walk that enqueues what it does not.
+	 * rule both walks read, and `deriveNextStep` is the one derivation of its
+	 * gates: the awaiting walk that closes what the machine resolves, and this
+	 * walk that enqueues what it does not.
 	 */
 	private continuationPosition(ticket: Ticket): Ticket | null {
 		const config = this.config();
 		const completion = this.state.lastCompletion(ticket.identity);
 		if (completion === null) return null;
-		if (isHeldCompletion(completion)) return null;
 		const outcome = completion.transition ?? null;
 		// The decision on the turn decides whether the walk re-offers the route
 		// it answers (ADR 0064, ADR 0072): an awaiting ticket's turn is
 		// undecided, and an open ticket's newest settled turn records the
 		// automatic route its ask ran - the decision stands at the ask, and a
 		// drop or the operator's removal left the route unrun, so the walk
-		// re-offers the same turn while the trace carries no removal mark and
-		// the position checks below answer the rest. Every other decision holds
-		// the turn: the route's position is in flight, and its state and handoff
-		// checks hold it out. A marked trace is not re-offered.
+		// re-offers the same turn while the trace carries no removal mark and the
+		// step's gates answer the rest. Every other decision holds the turn: the
+		// route's position is in flight, and its state and handoff checks hold it
+		// out. A marked trace is not re-offered.
 		if (
 			completion.decision !== null &&
 			completion.decision !== "auto-handed-off" &&
@@ -1826,41 +1810,21 @@ export class ObservationCoordinator {
 			return null;
 		}
 		if (completion.decision !== null && outcome?.routeRemoved === true) return null;
-		if (
-			this.decideAwaiting(
-				this.state.handoffCount(ticket.identity),
-				outcome,
-				completion.taskType,
-			) !== "route"
-		)
-			return null;
-		// The rule says a position exists; only this walk needs its identity to
-		// read the row, so the check stays here.
-		if (outcome === null || outcome.positionTicketIdentity === null) return null;
-		const position = this.state
-			.projectedTickets(config.workflowStates, config.defaultTaskType)
-			.find((candidate) => candidate.identity === outcome.positionTicketIdentity);
+		// One projection read serves the rule and this walk's row: the list rule
+		// withholds a covered ticket from the operator's view (ADR 0042), and the
+		// add must still reach the position it starts on.
+		const tickets = this.state.projectedTickets(config.workflowStates, config.defaultTaskType);
+		const { decision, step } = this.decideAwaiting(completion, tickets);
+		if (decision !== "route" || step === null || step.gate !== null) return null;
+		const position = tickets.find((candidate) => candidate.identity === step.ticketIdentity);
 		if (position === undefined) return null;
 		// The ignore gate (ADR 0060): the route starts an Agent on the position,
 		// and the position is read from the projection before the list rule, so the
 		// one gate predicate on the row this walk holds is what answers.
 		if (automaticStartBlocked(position)) return null;
-		if (position.state !== "open" && position.state !== "awaiting") return null;
-		if (position.suggestedTaskType !== outcome.positionTaskType) return null;
-		// The actionable fact is the open position's: an awaiting position is
-		// the ticket whose turn just settled, and the claim check owns its
-		// standing, so the top-up does not demand the open ticket's health of
-		// it.
-		// The position's standing, in one test. An unfinished attempt is folded
-		// into the open position's `actionable` by the projection, and an
-		// awaiting position is the settled ticket's own row, whose attempt the
-		// settle resolved - so the recovery fact never stands apart from this
-		// one. The queue's one-item-per-ticket rule is this cycle's own gate
-		// above: the walk adds only into an empty queue, and the claim check at
-		// the ask refuses the same ledger a second time (ADR 0051).
-		if (position.state === "open" && !position.actionable) return null;
-		if (this.state.sameTypeHoldActive(position.identity, position.suggestedTaskType)) return null;
-		if (position.handoffCount >= config.maxHandoffsPerTicket) return null;
+		// The queue's one-item-per-ticket rule is this cycle's own gate above:
+		// the walk adds only into an empty queue, and the claim check at the ask
+		// refuses the same ledger a second time (ADR 0051).
 		return position;
 	}
 }

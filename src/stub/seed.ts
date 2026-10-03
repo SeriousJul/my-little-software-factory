@@ -376,7 +376,6 @@ template = "Resolve {external-key}: {title}. The pull request already stands at:
 [task-types.resolve-security-advisory.transition]
 ticket-facts = []
 pull-request-facts = ["ready-for-review"]
-auto-advance = true
 
 [task-types.resolve-dependabot-alert]
 opens-pull-request = true
@@ -384,7 +383,6 @@ template = "Resolve {external-key}: {title}. The pull request already stands at:
 [task-types.resolve-dependabot-alert.transition]
 ticket-facts = []
 pull-request-facts = ["ready-for-review"]
-auto-advance = true
 
 [task-types.resolve-secret-scanning-alert]
 opens-pull-request = true
@@ -392,7 +390,6 @@ template = "Resolve {external-key}: {title}. The pull request already stands at:
 [task-types.resolve-secret-scanning-alert.transition]
 ticket-facts = []
 pull-request-facts = ["ready-for-review"]
-auto-advance = true
 
 [[sources]]
 name = "stub-issues"

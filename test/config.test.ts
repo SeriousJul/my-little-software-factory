@@ -201,7 +201,8 @@ describe("the Default configuration", () => {
 			],
 		});
 		// The security transitions write ready-for-review on the opened pull
-		// request and auto-advance into its review position.
+		// request; the Next step the fire derives is the review the labels put
+		// the pull request on (ADR 0092).
 		for (const name of [
 			"resolve-security-advisory",
 			"resolve-dependabot-alert",
@@ -210,7 +211,6 @@ describe("the Default configuration", () => {
 			expect(config.taskTypes[name].transition).toEqual({
 				ticketFacts: [],
 				pullRequestFacts: ["ready-for-review"],
-				autoAdvance: true,
 			});
 		}
 		// One neutral Consultation type that passes the operator's input
@@ -539,7 +539,7 @@ describe("validateConfig", () => {
 			});
 			// The machine carries the shipped security half (ADR 0029, ADR 0042):
 			// one state per security source kind, and one resolve task type per
-			// kind, each auto-advancing into its review position.
+			// kind, each deriving its review Next step from the labels it writes.
 			for (const name of [
 				"resolve-security-advisory",
 				"resolve-dependabot-alert",
@@ -549,7 +549,6 @@ describe("validateConfig", () => {
 				expect(config.taskTypes[name].transition).toEqual({
 					ticketFacts: [],
 					pullRequestFacts: ["ready-for-review"],
-					autoAdvance: true,
 				});
 			}
 			// The merge runs on the plane, with no agent (ADR 0068): the task
@@ -568,12 +567,12 @@ describe("validateConfig", () => {
 				},
 			});
 			// The analyze grills the ticket's specification (ADR 0085, ADR 0086):
-			// it carries the no-auto-decision flag that parks its completions for
+			// it carries the operator-decides flag that parks its completions for
 			// the operator, a high thinking level, and no transition.
 			expect(config.taskTypes.analyze).toEqual({
 				template: expect.stringContaining("/skill:grill-with-docs"),
 				thinking: "xhigh",
-				noAutoDecision: true,
+				operatorDecides: true,
 			});
 			// The review task type carries a template only: the live development
 			// path pins no Task profile settings in the file. The profile
@@ -861,7 +860,7 @@ describe("validateConfig", () => {
 		);
 	});
 
-	test("a task type's no-auto-decision flag is a boolean and both forms carry it (ADR 0085)", () => {
+	test("a task type's operator-decides flag is a boolean and both forms carry it (ADR 0085, ADR 0092)", () => {
 		const base = {
 			"default-agent": "pi",
 			"default-environment": "worktree",
@@ -875,43 +874,45 @@ describe("validateConfig", () => {
 			validateConfig({
 				...base,
 				"task-types": { t: { template: "x" } },
-			}).taskTypes.t.noAutoDecision,
+			}).taskTypes.t.operatorDecides,
 		).toBeUndefined();
 		expect(
 			validateConfig({
 				...base,
-				"task-types": { t: { template: "x", "no-auto-decision": true } },
-			}).taskTypes.t.noAutoDecision,
+				"task-types": { t: { template: "x", "operator-decides": true } },
+			}).taskTypes.t.operatorDecides,
 		).toBe(true);
 		expect(
 			validateConfig({
 				...base,
-				"task-types": { t: { template: "x", "no-auto-decision": false } },
-			}).taskTypes.t.noAutoDecision,
+				"task-types": { t: { template: "x", "operator-decides": false } },
+			}).taskTypes.t.operatorDecides,
 		).toBe(false);
 		// The write path must mirror the read path: a persist rewrites the
 		// whole file, so the flag must survive the round trip or the rewrite
 		// silently drops it.
 		const withFlag = validateConfig({
 			...base,
-			"task-types": { t: { template: "x", "no-auto-decision": true } },
+			"task-types": { t: { template: "x", "operator-decides": true } },
 		});
-		expect(validateConfig(parseToml(configToToml(withFlag))).taskTypes.t.noAutoDecision).toBe(true);
+		expect(validateConfig(parseToml(configToToml(withFlag))).taskTypes.t.operatorDecides).toBe(
+			true,
+		);
 		// The action form carries the flag beside its action, method, and
 		// transition.
 		expect(
 			validateConfig({
 				...base,
-				"task-types": { t: { action: "merge-pull-request", "no-auto-decision": true } },
-			}).taskTypes.t.noAutoDecision,
+				"task-types": { t: { action: "merge-pull-request", "operator-decides": true } },
+			}).taskTypes.t.operatorDecides,
 		).toBe(true);
 		// A value that is not a boolean is a startup error on either form.
 		expectConfigError(
 			{
 				...base,
-				"task-types": { t: { template: "x", "no-auto-decision": "yes" } },
+				"task-types": { t: { template: "x", "operator-decides": "yes" } },
 			},
-			"no-auto-decision: must be a boolean",
+			"operator-decides: must be a boolean",
 		);
 	});
 
@@ -1506,7 +1507,6 @@ describe("limits config keys", () => {
 					transition: {
 						"pull-request-facts": ["ready-for-review"],
 						"score-threshold": 90,
-						"auto-advance": true,
 						agent: "pi",
 						branches: [
 							{
@@ -1522,7 +1522,6 @@ describe("limits config keys", () => {
 			ticketFacts: [],
 			pullRequestFacts: ["ready-for-review"],
 			scoreThreshold: 90,
-			autoAdvance: true,
 			agent: "pi",
 			branches: [{ when: "score-above-threshold", pullRequestFacts: ["ready-to-ship"] }],
 		});
@@ -1587,14 +1586,29 @@ describe("limits config keys", () => {
 			},
 			"score-threshold: must be a number between 0 and 100",
 		);
+		// The deleted key (ADR 0092) is read by nothing: a config that still
+		// carries it fails startup as the unknown key it is, on the transition
+		// and on a branch.
 		expectConfigError(
 			{
-				...base(),
+				...withTransition(),
+				"task-types": { implement: { template: "x", transition: { "auto-advance": true } } },
+			},
+			'unknown key "auto-advance"',
+		);
+		expectConfigError(
+			{
+				...withTransition(),
 				"task-types": {
-					implement: { template: "x", transition: { "auto-advance": "yes" } },
+					implement: {
+						template: "x",
+						transition: {
+							branches: [{ when: "pull-request-open", "auto-advance": true }],
+						},
+					},
 				},
 			},
-			"auto-advance: must be a boolean",
+			'unknown key "auto-advance"',
 		);
 		expectConfigError(
 			{

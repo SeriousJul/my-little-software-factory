@@ -130,7 +130,12 @@ import {
 	type TurnEndCause,
 	type TurnLogEntry,
 } from "../turn-log.ts";
-import { fireTransition, refireRecordedSkips } from "../workflow.ts";
+import {
+	deriveNextStep,
+	fireTransition,
+	NEXT_STEP_GATE_LINES,
+	refireRecordedSkips,
+} from "../workflow.ts";
 import { ActionBar } from "./action-bar.ts";
 import { ActionPanel } from "./action-panel.ts";
 import { renderAnsiScreen } from "./ansi-screen.ts";
@@ -1809,6 +1814,13 @@ export function App({
 					configRef.current.taskTypes,
 					outcome.positionTaskType,
 				);
+				// The Next step the settled turn's Transition derived (ADR 0092):
+				// the screen states the gate that holds it, so a row the operator
+				// can confirm never hides a step the factory will not take on its
+				// own. The operator's own key passes the gates - the Same-type hold
+				// and the Handoff limit brake the automatic route, not the hand.
+				const nextStep =
+					state === undefined ? null : deriveNextStep(configRef.current, state, outcome);
 				// While the route is alive, the row reads as the fact line that
 				// names where it stands, and takes no key (ADR 0064): Close and
 				// Goto stand always, and the confirm waits with the route. The
@@ -1864,6 +1876,11 @@ export function App({
 								detail: routeDetail(outcome, outcome.positionTaskType),
 								editable: true,
 							});
+						}
+						// The hold on the machine's own step, stated beside the key
+						// the operator still holds (ADR 0092).
+						if (nextStep !== null && nextStep.gate !== null) {
+							factLines.push(`the Next step is held: ${NEXT_STEP_GATE_LINES[nextStep.gate]}`);
 						}
 					} else {
 						factLines.push(
@@ -3575,13 +3592,12 @@ export function App({
 	const isInFlight = (ticket: Ticket) =>
 		ticket.state === "handed-off" || ticket.state === "running";
 	/**
-	 * Enter on a settled Ticket: decide its completion, or tell the operator
-	 * why the factory decides it alone.
+	 * Enter on a settled Ticket: open the decision screen on the turn the
+	 * factory left for the operator to decide.
 	 */
 	const decideCompletion = (context: ControlContext) => {
 		const ticket = context.selectedTicket;
 		if (ticket === undefined) return;
-		const taskType = taskTypeOf(ticket);
 		if (autoModeRef.current) {
 			// The factory decides the ticket itself: the operator gets the
 			// notice on the Message line, and the observation makes the
@@ -3590,18 +3606,10 @@ export function App({
 			setNoticeMessage("auto-handoff is on: the factory decides this ticket");
 			return;
 		}
-		// The factory's own decisions - an auto-advance transition or
-		// auto-handoff - run on the observation's tick; the decision modal
-		// shows what the transition wrote (ADR 0027).
-		const outcome = ticket.lastCompletion?.transition ?? null;
-		// Gate the notice on the fire as well as the flag: a transition whose
-		// branch did not hold auto-advances nothing, so the factory decides
-		// nothing and the decision modal opens (ADR 0027).
-		if (outcome?.fired === true && outcome.autoAdvance) {
-			setNoticeMessage(`task type ${taskType} auto-advances: the factory decides this ticket`);
-			observationRef.current?.tick();
-			return;
-		}
+		// The mode decides the route at runtime (ADR 0092), so in manual mode the
+		// operator's key opens the screen on the settled turn in every case: the
+		// screen reads the turn's derived Next step and states the gate that
+		// holds it.
 		setPanel({ kind: "decision", identity: ticket.identity });
 	};
 	// A state may already hold tickets when the app boots: read them once at
@@ -4722,9 +4730,10 @@ export function App({
 					// states (ADR 0072).
 					"closed"
 				: panelTicket.state === "awaiting"
-					? autoMode ||
-						(panelTicket.lastCompletion?.transition?.fired === true &&
-							panelTicket.lastCompletion?.transition?.autoAdvance === true)
+					? // Auto-handoff mode decides the settled turn on its own, so
+						// the ticket keeps streaming; manual mode waits for the
+						// operator's hand (ADR 0092).
+						autoMode
 						? "stream"
 						: "decision"
 					: markerOf(panelTicket) === "missing"

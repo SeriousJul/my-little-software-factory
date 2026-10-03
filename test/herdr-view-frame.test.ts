@@ -63,7 +63,6 @@ const reviewRoute = {
 	reason: "",
 	ticketFacts: [],
 	pullRequestFacts: [],
-	autoAdvance: false,
 	ticketWrite: null,
 	pullRequestWrite: null,
 	pullRequestIdentity: null,

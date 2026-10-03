@@ -13,14 +13,17 @@ settings, the completion time, the agent's last message, and the decision
 that ends the awaiting state. What happens next depends on your mode:
 
 - **Manual mode** gives you the decision. Enter opens the
-  [decision modal](../operation/modals.md): the turn log, and the rows -
-  close the cycle, or hand the ticket off to the next kind of work when the
-  settled turn's labels offer one.
-- **Auto mode** decides within the configured limits. A transition marked
-  `auto-advance` routes the ticket to the next kind of work without you; a
-  turn the machine cannot route closes the cycle. [The Configuration
-  page](../configuration/index.md) marks which of your transitions
-  auto-advance.
+  [decision modal](../operation/modals.md) on every settled turn: the turn
+  log, and the rows - close the cycle, or hand the ticket off to the next kind
+  of work when the settled turn's labels offer one.
+- **Auto mode** decides within the configured limits. A fired Transition
+  leaves a Next step: the task type the written labels put the ticket on, the
+  ticket that position stands on, and whether the step is a Handoff or a Plane
+  action. The mode's one rule is "Auto-handoff mode is on, and the settled turn
+  has a Next step" (ADR 0092), so that step routes the ticket to the next kind
+  of work without you. A turn with no Next step - no branch held, a label write
+  that failed, or labels that land on a parking state - closes the cycle, and a
+  step a gate holds rests `awaiting` with the hold stated for you.
 - A turn that ended in a failure is never decided for you, in either mode:
   see held turns below.
 
