@@ -83,6 +83,7 @@ describe("the shared control gallery", () => {
 		expect(ids).toEqual([
 			"fields",
 			"states",
+			"response-over-limit",
 			"search",
 			"notes",
 			"spinner",
@@ -214,6 +215,25 @@ describe("the shared control gallery", () => {
 		// The marked row wears the queue's badge word at its end (ADR 0083).
 		expect(frame).toContain("queued");
 		expect(frame).toContain("Tab toggles the queue. Enter selects. Esc closes.");
+	});
+
+	// Issue #203, story 27: the Response field over its limit is a state a
+	// reviewer must see, and story 1 is about the two lines agreeing. The field
+	// states its size beside the text, the Send action refuses with the same
+	// sentence, and both read the one owner of the size rule.
+	test("the over-limit Response draft states one size reason on field and action", async () => {
+		const setup = await gallery("response-over-limit", 120, 34);
+		const text = frameText(setup.captureCharFrame());
+		expect(text).toContain(stateLine("response-over-limit"));
+		expect(text).toContain(
+			"Error: Response draft: response is 65537 UTF-8 bytes; the limit is 65536",
+		);
+		expect(text).toContain(
+			"Unavailable: Send response: response is 65537 UTF-8 bytes; the limit is 65536",
+		);
+		// The oversized draft stays editable: the field still paints its text.
+		expect(text).toContain("Response draft");
+		expect(text).toContain("the oversized draft stays editable");
 	});
 
 	test("the gallery walks past the select list without losing its keys", async () => {

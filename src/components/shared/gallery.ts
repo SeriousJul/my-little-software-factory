@@ -15,6 +15,7 @@
 import { createElement, useTerminalDimensions } from "@opentui/react";
 import type { ReactElement } from "react";
 import { useRef, useState } from "react";
+import { CONSULTATION_INPUT_LIMIT, responseOversize } from "../../consultation/response-draft.ts";
 import type { Completion, Ticket } from "../../domain/ticket.ts";
 import type { InitableRepository } from "../../repository-list.ts";
 import type { Consultation } from "../../state/consultation-record.ts";
@@ -128,6 +129,7 @@ export interface GalleryColumns {
 const FOCUSED_CONTROL: Record<string, string> = {
 	fields: "context",
 	states: "launch",
+	"response-over-limit": "draft",
 	search: "type-ahead",
 	notes: "reason",
 	queueOrder: "promote",
@@ -810,6 +812,14 @@ function GalleryRepositorySelect(): ReactElement {
 	});
 }
 
+/**
+ * One byte past the Response draft limit: the text the over-limit example holds.
+ *
+ * It is the draft an operator actually gets into, not a stand-in for it, so the
+ * size line the example states is the sentence the Response editor states.
+ */
+const OVER_LIMIT_DRAFT = "a".repeat(CONSULTATION_INPUT_LIMIT + 1);
+
 export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 	{
 		id: "fields",
@@ -897,6 +907,33 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 					refusal: "initial input cannot be empty",
 				}),
 			),
+		],
+	},
+	{
+		// The Response field over its limit: the state the standard says a reviewer
+		// must see, and the pair story 1 of issue #203 is about. The field's own
+		// size line and the Send action's refusal come from the one owner of the
+		// size rule, so one draft never carries two different reasons.
+		id: "response-over-limit",
+		state: "Response draft over the size limit",
+		render: (columns, holds, _inputActive, _wiring) => [
+			createElement(DraftField, {
+				key: "draft",
+				label: "Response draft",
+				value: OVER_LIMIT_DRAFT,
+				focused: holds === "draft",
+				width: columns.valueWidth,
+				labelWidth: columns.labelWidth,
+				height: 3,
+				oversize: (value: string) => responseOversize(value) ?? null,
+				hint: "the oversized draft stays editable: shorten it, do not retype it",
+			}),
+			createElement(ActionItem, {
+				row: { key: "send", label: "Send response" } satisfies ActionRow,
+				focused: holds === "send",
+				width: columns.contentWidth,
+				refusal: responseOversize(OVER_LIMIT_DRAFT) ?? null,
+			}),
 		],
 	},
 	{

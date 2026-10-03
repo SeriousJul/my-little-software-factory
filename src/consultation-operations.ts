@@ -10,19 +10,18 @@
 import { randomUUID } from "node:crypto";
 
 import type { FactoryConfig } from "./config.ts";
+import { type AgentInputEvent, ConsultationInputQueue } from "./consultation/agent-input.ts";
 import {
-	type AgentInputEvent,
 	type CheckoutConflict,
-	ConsultationInputQueue,
 	type ConsultationRepositoryOption,
 	inspectLiveCheckout,
-	isStaleAgentOutputWarning,
 	type LiveCheckoutSafety,
+} from "./consultation/checkout-safety.ts";
+import { validateConsultationInput, validateResponseInput } from "./consultation/response-draft.ts";
+import {
+	isStaleAgentOutputWarning,
 	STALE_AGENT_OUTPUT_WARNING,
-	serializeRepositoryOperation,
-	validateConsultationInput,
-	validateResponseInput,
-} from "./consultation.ts";
+} from "./consultation/warning-facts.ts";
 import type { Ticket } from "./domain/ticket.ts";
 import {
 	type ConsultationHandoffOutcome,
@@ -33,6 +32,7 @@ import {
 import type { HerdrAgent } from "./herdr.ts";
 import { consultationAgentName } from "./naming.ts";
 import { HerdrAgentReader, matchConsultationAgent } from "./observation.ts";
+import { serializeRepositoryOperation } from "./operation-serializer.ts";
 import {
 	type RepositoryMapping,
 	type ResolvedRepository,

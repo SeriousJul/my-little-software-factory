@@ -29,12 +29,12 @@ import type { ReactElement } from "react";
 import { useRef, useState } from "react";
 
 import type { ConsultationTypeConfig } from "../config.ts";
+import type { ConsultationRepositoryOption } from "../consultation/checkout-safety.ts";
 import {
 	CONSULTATION_INPUT_LIMIT,
-	type ConsultationRepositoryOption,
 	utf8ByteLength,
 	validateConsultationInput,
-} from "../consultation.ts";
+} from "../consultation/response-draft.ts";
 import { useControlDispatch } from "./control-dispatch.ts";
 import type { ControlContext, InteractionMode } from "./controls.ts";
 import { contextFor } from "./controls.ts";

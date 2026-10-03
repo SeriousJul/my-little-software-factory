@@ -11,11 +11,15 @@
 
 import { randomUUID } from "node:crypto";
 import {
+	boundedReplacementInput,
+	CONSULTATION_INPUT_LIMIT,
+} from "../consultation/response-draft.ts";
+import {
 	isStaleAgentOutputWarning,
 	isTurnEndWarning,
 	STALE_AGENT_OUTPUT_WARNING,
 	turnEndWarning,
-} from "../consultation.ts";
+} from "../consultation/warning-facts.ts";
 import type { EnvironmentKind } from "../domain/ticket.ts";
 import type { TurnEndCause } from "../turn-log.ts";
 import type { StateGraph } from "./graph.ts";
@@ -272,13 +276,6 @@ export function boundedSnapshot(value: string): { text: string; truncated: boole
 				: `${SNAPSHOT_MARKER}${utf8Suffix(value, SNAPSHOT_LIMIT - markerBytes)}`,
 		truncated: true,
 	};
-}
-export function boundedInput(parts: readonly string[], limit: number): string {
-	const full = parts.join("\n");
-	if (Buffer.byteLength(full, "utf8") <= limit) return full;
-	const marker = "\n[recovery context omitted]\n";
-	if (limit <= Buffer.byteLength(marker, "utf8")) return utf8Prefix(marker, limit);
-	return `${utf8Prefix(full, limit - Buffer.byteLength(marker, "utf8"))}${marker}`;
 }
 export function utf8Prefix(value: string, maxBytes: number): string {
 	if (maxBytes <= 0) return "";
@@ -1018,21 +1015,23 @@ export class ConsultationRecordModule implements ConsultationRecordAggregate {
 			details: row.details,
 		}));
 	}
-	replacementInput(id: string, limit = 64 * 1024): string {
+	replacementInput(id: string, limit = CONSULTATION_INPUT_LIMIT): string {
 		const consultation = this.consultation(id);
 		if (consultation == null) return "";
-		const parts = [`Original input:\n${consultation.initialInput}`];
 		const turns = this.consultationTurns(id);
 		const snapshots = this.consultationSnapshots(id);
-		// The first turn is the opening input already included above.
-		for (let index = turns.length - 1; index >= 1; index -= 1) {
-			const turn = turns[index];
-			const snapshot = snapshots.find((item) => item.turnId === turn.id);
-			parts.push(
-				`\nOperator response:\n${turn.input}${snapshot == null ? "" : `\nAgent output:\n${snapshot.text}`}`,
-			);
-		}
-		return boundedInput(parts, limit);
+		// This aggregate reads the record and its turns; the Response draft module
+		// owns the join, the marker, and the bound the recovery text is built with.
+		return boundedReplacementInput(
+			consultation.initialInput,
+			turns.map((turn) => {
+				const snapshot = snapshots.find((item) => item.turnId === turn.id);
+				return snapshot == null
+					? { input: turn.input }
+					: { input: turn.input, output: snapshot.text };
+			}),
+			limit,
+		);
 	}
 	deleteConsultation(id: string): boolean {
 		const row = this.db.prepare("SELECT state FROM consultations WHERE id = ?").get(id) as

@@ -18,12 +18,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import type { FactoryConfig } from "../src/config.ts";
-import {
-	CONSULTATION_INPUT_LIMIT,
-	type ConsultationRepositoryOption,
-	STALE_AGENT_OUTPUT_WARNING,
-	utf8ByteLength,
-} from "../src/consultation.ts";
+import type { ConsultationRepositoryOption } from "../src/consultation/checkout-safety.ts";
+import { CONSULTATION_INPUT_LIMIT, utf8ByteLength } from "../src/consultation/response-draft.ts";
+import { STALE_AGENT_OUTPUT_WARNING } from "../src/consultation/warning-facts.ts";
 import {
 	type ConsultationOperations,
 	type ConsultationSafetyConflict,
