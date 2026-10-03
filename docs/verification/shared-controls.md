@@ -154,6 +154,12 @@ and `bun run test`.
 | A row whose value cannot reach its Agent wears the warning tone and writes the Setting fit sentence under itself, at every width the panel renders at | `test/override-panel.test.ts`, `test/handoff-frame.test.ts` | Passed |
 | A row that waits for the list its value would be judged against keeps that value in the tone of a setting it cannot confirm | `test/shared-controls.test.ts`, `test/handoff-frame.test.ts`, `test/shared-gallery.test.ts` | Passed |
 | The override panel's state tones come from the shared palette, and the no-color presentation keeps a warning row's value and its whole sentence | `test/override-panel.test.ts` | Passed |
+| The Ticket row's facts - the failure badge, the Starting face, the Queue wait's badge, the Handoff limit marker, the in-flight fact, the held badge, and the task type a row names - answer at the Ticket fact module's interface, and the list row and the detail pane read one record (issue #201) | `test/ticket-facts.test.ts`, `test/ticket-detail.test.ts`, `test/starting-face.test.ts`, `test/ignored-ticket.test.ts`, `test/muted-source.test.ts` | Passed |
+| The Section header's counts and the held bell answer at the Section fact module's interface; the Consultation counts read the records the machine holds, so the section's History filter moves none of them (issue #201, story 14) | `test/section-facts.test.ts`, `test/main-view-frame.test.ts`, `test/section-header.test.ts` | Passed |
+| The Decision region's fact lines, the route's standing line, and the row the transition offers answer at the Decision fact module's interface (issue #201) | `test/decision-facts.test.ts`, `test/decision-modal.test.ts` | Passed |
+| The Missing agent rule is one function, and every reader of the fact calls it (issue #201) | `test/agent-facts.test.ts`, `test/ticket-fact-architecture.test.ts`, `test/parallel.test.ts`, `test/observation.test.ts` | Passed |
+| No Ticket surface takes a fact as a predicate callback prop, no screen re-derives the in-flight fact, and no fact module holds a renderer or a palette (issue #201, story 27) | `test/ticket-fact-architecture.test.ts` | Passed |
+| The gallery shows the row states the fact module answers, on the wide Section header and on the narrow header's cut (issue #201, stories 19 to 22) | `test/shared-gallery.test.ts` | Passed |
 
 ## Environment these checks ran in
 
@@ -1147,3 +1153,68 @@ the pushed state: 2028 pass, 0 skip, 0 fail, 85 files, on Bun 1.4.2, with no
 other `bun test` process on the machine. The screen-reader target remains
 unverified, and the terminal walks recorded earlier in this file have not been
 re-run.
+
+## The screen's facts get their own module (issue #201)
+
+The rules the glossary names - the failure badge, the Queue wait's badge, the
+Starting window, the Handoff limit marker, the in-flight fact, the held badge,
+the task type a row names, the Section header's counts, the held bell, and the
+Decision region's fact lines - now answer in three domain modules:
+`src/domain/ticket-facts.ts`, `src/domain/section-facts.ts`, and
+`src/domain/decision-facts.ts`. The surfaces take them as values. The four
+predicate callback props the Ticket list used to take are gone, and the gallery
+calls the same modules the screen calls.
+
+Two seams carry the checks, as the spec agreed: the frame harness for what the
+operator sees, and the fact module's interface for the rules themselves.
+
+The rules are measured one per test at the module's public interface in
+`test/ticket-facts.test.ts`, `test/section-facts.test.ts`,
+`test/decision-facts.test.ts`, and `test/agent-facts.test.ts`. The frame tests
+that already asserted these facts did not change, which is the signal the spec
+named: the rules answer the same facts. `test/ticket-detail.test.ts` reads the
+same fact record the row wears, and `test/shared-gallery.test.ts` drives the
+gallery's `ticket-facts` example - the failure badge, the `queued` badge, the
+spinner face, the header's held cell, and the narrow header that keeps the held
+count and gives up the ignored cell at 54 columns, the same budget
+`test/section-header.test.ts` measures on the component.
+
+The ownership rule is a guard test in the style of
+`test/shared-control-architecture.test.ts`: `test/ticket-fact-architecture.test.ts`
+refuses a predicate callback prop on a Ticket surface, refuses a screen that
+re-derives the in-flight fact, refuses a second copy of the Missing agent rule
+outside the domain's `agentInPane`, refuses `holdsDecision` on the way to a
+Group header, and refuses a renderer or a palette in a fact module.
+
+The Consultation Section header's counts read the records the machine holds, not
+the section's History filter (story 14). The first version of this work read
+them from the filtered list, so the header could show `recovery: 0` while a
+record still needed recovery. `test/main-view-frame.test.ts` now walks the
+filter: it boots with one Consultation that needs recovery, crosses to the
+Consultation list, presses `f` to the closed view - the view that draws no row
+at all - and again to the all view, and reads the same
+`awaiting response: 0  recovery: 1` on the header in every one of them.
+
+What was confirmed by deletion: reading the header's Consultation counts from
+the filtered list leaves the new frame case red and nothing else; re-adding a
+`(fact) => boolean` prop to `TicketListProps` leaves the guard red; and
+re-spelling `state === "handed-off" || state === "running"` inside the App
+leaves the guard red.
+
+The deviation from story 18 is recorded rather than closed. Story 18 asks for
+one task type per Ticket across the whole screen. The frame tests - the
+contract - name the settled turn's task type on the Decision modal's context
+row and the Live view's context line even while a different turn runs, so the
+screen keeps two named facts: `rowTaskType` for the row and the detail pane,
+and `turnTaskType` for the context lines. `docs/operation/main-view.md` states
+the two facts, and issue #201 records the deviation from its own story.
+
+`bun run lint`, `bun run typecheck`, and one full `bun run test` ran on this
+rework with no other `bun test` process on the machine (load average 9.9, the
+suite green at 2608 tests over 103 files, 14307 assertions, 0 fail, no skips).
+
+What was not measured: no screen reader has read this application, and no claim
+of screen-reader support is made here or anywhere else in this record. The
+terminal walks in Ghostty and foot have not been re-run for this change, nor on
+the theme-inherited paint, so they stand as not re-verified for it. Inherited
+herdr theme pairs are not contrast-checked.
