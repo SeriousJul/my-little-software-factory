@@ -748,20 +748,32 @@ export function App({
 	// so the marker it re-checks reads the latest list through a ref.
 	const agentsRef = useRef<readonly HerdrAgent[] | null>(null);
 	agentsRef.current = agents;
+	// The observation loop, held in a ref the seat count reads (ADR 0021).
+	// The loop is the plane's only herdr reader, and its poll is the fact the
+	// Parallel limit counts against, so the ref stands beside the count that
+	// reads it.
+	const observationRef = useRef<ObservationCoordinator | undefined>(undefined);
 	/**
 	 * The one count the Parallel limit reads (issue #87, ADR 0034): the shared
 	 * seat count of the in-flight tickets, the in-progress handoffs, and the
-	 * Consultations in `opening` or `working`, from the latest herdr poll. The
-	 * dispatch module gates a manual start on it, the observation loop gates the
-	 * automatic starts on the same facts each cycle, and the mode line displays
-	 * it, so the three never disagree.
+	 * Consultations in `opening` or `working`, from the latest herdr poll.
+	 * The dispatch module gates a manual start on it, the observation loop gates
+	 * the automatic starts on the same facts each cycle, and the mode line
+	 * displays it, so the three never disagree.
+	 *
+	 * The poll it reads is the loop's own (ADR 0021): the loop publishes its
+	 * list the moment the probe answers, before its gates run. The UI's copy of
+	 * the same list lands at the cycle's end, so a gate that read the copy would
+	 * measure a restart's first cycle against no agents at all - and the only
+	 * fact left to hold a running task's seat would its Startup grace, which a
+	 * task that outlived the restart spent long ago.
 	 */
 	const currentSeatCount = (): number =>
 		state === undefined
 			? 0
 			: parallelSeatCount({
 					state,
-					agents: agentsRef.current,
+					agents: observationRef.current?.lastAgents() ?? null,
 					now: Date.now(),
 					startupGraceMs: STARTUP_GRACE_MS,
 				});
@@ -786,7 +798,6 @@ export function App({
 		undefined,
 	);
 	const coordinatorRef = useRef<RefreshCoordinator | undefined>(undefined);
-	const observationRef = useRef<ObservationCoordinator | undefined>(undefined);
 	const configWriteQueue = useRef(Promise.resolve());
 	// The selected Agent pane's refresh, callable the moment a forwarded
 	// input lands: the operator should not wait out the refresh interval.

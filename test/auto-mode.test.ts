@@ -4448,6 +4448,80 @@ describe("the handoff queue", () => {
 		);
 		state.close();
 	});
+
+	/**
+	 * The restart's first cycle counts the seat the live Agent holds (ADR 0021).
+	 *
+	 * The plane restarts while one task is already running under a 1/1 Parallel
+	 * limit, and its Work queue holds a start that waited out the restart. The
+	 * running task is two hours past its Startup grace, so the only fact that can
+	 * hold its seat is the herdr poll that lists its Agent. The poll lands in the
+	 * observation loop; the UI's copy of the same list lands at the cycle's end.
+	 * A gate that measured the cycle against that copy read no Agent at all, read
+	 * a free seat, and started the queued task on top of the live one - 2/1.
+	 */
+	test("a restart counts the live agent's seat before the queue's pickup", async () => {
+		const app = seededApp("in-flight", { maxParallelAgents: 1 }, pairSuccess, "live-worktree", {
+			stateNow: () => Date.now() - 2 * 60 * 60 * 1000,
+		});
+		stubCheckout(app);
+		// The start the previous run queued, still waiting when the plane opens.
+		const enqueued = app.state.enqueueWork({
+			ticketIdentity: secondIdentity,
+			origin: "workflow",
+			choice: {
+				agentType: "pi",
+				environment: "live-worktree",
+				taskType: "implement",
+				model: "",
+				thinking: "",
+				contextWindow: "",
+			},
+			previousMessage: "",
+			automatic: true,
+		});
+		if (!enqueued.ok) throw new Error(enqueued.reason);
+		// herdr lists the running task's Agent working in its pane.
+		app.runner.set("herdr", ["agent", "list"], {
+			stdout: agentListJson([
+				{
+					paneId: "pane-1",
+					tabId: "tab-1",
+					workspaceId: "ws-1",
+					agent: "persist-source-facts",
+					status: "working",
+				},
+			]),
+		});
+		// Every command a wrongful start needs, so the start it must not run
+		// would have run to the end.
+		const path = Object.values(app.config.repos)[0];
+		app.runner.set("herdr", ["workspace", "list"], {
+			stdout: workspaceListJson([{ id: "ws-1", checkoutPath: path }]),
+		});
+		app.runner.set("herdr", ["tab", "create", "--workspace", "ws-1", "--cwd", path, "--no-focus"], {
+			stdout: tabCreateJson("pane-9", "tab-9"),
+		});
+
+		await withApp(
+			async (setup) => {
+				app.src.settle(pairSuccess);
+				await sleep(400);
+				const frame = await settle(setup, 1000);
+				// The one seat the cap allows, held by the live Agent.
+				expect(frameText(frame)).toContain("auto: off 1/1");
+				// The queued start never took a seat: its row stands, and no Agent
+				// started beside the live one.
+				expect(app.state.hasWorkItem(secondIdentity)).toBe(true);
+				expect(app.state.openAttemptTickets()).toEqual([]);
+				expect(app.runner.commands().join("\n")).not.toContain("herdr agent start");
+			},
+			WIDTH,
+			HEIGHT,
+			propsOf(app),
+		);
+		app.state.close();
+	});
 });
 
 describe("the re-fire of a recorded skip (ADR 0042)", () => {
