@@ -464,6 +464,16 @@ host = "github.com"
 				);
 				expect(cleared).toContain("acme/factory");
 
+				// The feed the act registered is live in this run:
+				// the refresh coordinator holds it, and the source health rows it
+				// seeds are the sources the plane polls. The operator's own feed
+				// stands beside the pull request feed the act added.
+				const polled = state
+					.sourceHealths()
+					.map((source) => source.name)
+					.sort();
+				expect(polled).toEqual(["acme-issues", "acme/factory-pull-requests"]);
+
 				// The checkout never moved and never dirtied, and the worktree is
 				// gone: the act pushed from a worktree the plane removed.
 				const headAfter = (
@@ -490,6 +500,215 @@ host = "github.com"
 			undefined,
 			undefined,
 			{ config, state, runner, sources, home: dir, configPath },
+		);
+		state.close();
+	});
+});
+
+describe("the select list's bootstrap init (ADR 0082)", () => {
+	/** The config the walk boots with: no Ticket source for the repository at all. */
+	function bootstrapConfig(checkout: string): string {
+		return `state-file = "factory.sqlite"
+default-agent = "pi"
+default-environment = "worktree"
+default-task-type = "implement"
+attention-bell = true
+interaction-exit-key = "f12"
+max-parallel-agents = 2
+agent-poll-interval-seconds = 5
+completion-message-lines = 200
+max-handoffs-per-ticket = 2
+
+[repos]
+"github.com/acme/beta" = "${checkout}"
+
+[scroll]
+speed = 1
+acceleration = 0.8
+maximum-speed = 6
+
+[agents.pi]
+kind = "pi"
+
+[[states]]
+name = "ready-for-agent"
+task-type = "implement"
+[states.match]
+source-kind = "github-issue"
+labels-any = ["ready-for-agent"]
+
+[task-types.implement]
+template = "Do the work: {external-key}: {title}"
+[task-types.implement.transition]
+ticket-facts = []
+pull-request-facts = ["ready-for-review"]
+
+[task-types.review]
+template = "Review {external-key}: {title}."
+[task-types.review.transition]
+ticket-facts = []
+pull-request-facts = []
+
+[task-types.rework]
+template = "Rework {external-key}: {title}."
+[task-types.rework.transition]
+ticket-facts = []
+pull-request-facts = ["ready-for-review"]
+
+[task-types.merge]
+template = "Merge {external-key}: {title}."
+[task-types.merge.transition]
+ticket-facts = []
+pull-request-facts = []
+`;
+	}
+
+	/** The `gh api graphql` answer the select list parses: the one repository. */
+	function viewerRepositoriesJson(): string {
+		return JSON.stringify({
+			data: {
+				viewer: {
+					repositories: {
+						nodes: [
+							{
+								name: "beta",
+								nameWithOwner: "acme/beta",
+								url: "https://github.com/acme/beta",
+							},
+						],
+					},
+					organizations: { nodes: [] },
+				},
+			},
+		});
+	}
+
+	test("o, Enter, Enter: the feeds the act registers run in the same run", async () => {
+		const dir = tempDir();
+		const real = createChildProcessRunner();
+
+		const seed = join(dir, "seed");
+		const origin = join(dir, "origin.git");
+		const checkout = join(dir, "beta");
+		await real.run("git", ["init", "-b", "main", seed]);
+		writeFileSync(join(seed, "AGENTS.md"), "# Factory\n\nIntro.\n", "utf8");
+		await real.run("git", ["-C", seed, "add", "-A"]);
+		await real.run("git", [
+			"-c",
+			"user.name=init",
+			"-c",
+			"user.email=init@example.com",
+			"-C",
+			seed,
+			"commit",
+			"-m",
+			"seed",
+		]);
+		await real.run("git", ["clone", "--bare", seed, origin]);
+		await real.run("git", ["clone", origin, checkout]);
+		await real.run("git", ["-C", checkout, "config", "user.name", "init"]);
+		await real.run("git", ["-C", checkout, "config", "user.email", "init@example.com"]);
+
+		// The world: the repository stands uninitialized, and its one issue
+		// wears the label the Workflow state matches on. The plane has no feed
+		// for it yet, so the list starts empty and the Group header's `i` is
+		// unreachable - `o` is the only path to this repository.
+		const world: StubWorld = {
+			version: 1,
+			host: "github.com",
+			owner: "acme",
+			autoScore: { enabled: false, score: 0 },
+			repositories: [
+				{
+					name: "beta",
+					labels: [],
+					issues: [
+						{
+							number: 1,
+							title: "an open issue",
+							body: "",
+							labels: ["ready-for-agent"],
+							state: "open",
+							updatedAt: "2026-01-01T00:00:00.000Z",
+							comments: [],
+						},
+					],
+					pullRequests: [],
+					mergeGates: {},
+					security: { advisories: [], dependabotAlerts: [], secretScanningAlerts: [] },
+				},
+			],
+		};
+		writeFileSync(join(dir, "world.json"), `${JSON.stringify(world, null, 2)}\n`);
+		const store = StubWorldStore.load(join(dir, "world.json"));
+
+		const stubRunner = createStubRunner(real, store);
+		const runner: CommandRunner = {
+			run: (command, args, options) => {
+				if (command === "herdr")
+					return Promise.resolve({ code: 0, stdout: agentListJson([]), stderr: "" });
+				// The select list's viewer read, and nothing else: the sources'
+				// search document stays the world's own answer.
+				if (
+					command === "gh" &&
+					args[0] === "api" &&
+					args[1] === "graphql" &&
+					!args.some((arg) => arg.startsWith("searchQuery="))
+				)
+					return Promise.resolve({ code: 0, stdout: viewerRepositoriesJson(), stderr: "" });
+				return stubRunner.run(command, args, options);
+			},
+			listModels: (kind) => stubRunner.listModels(kind),
+		};
+
+		const configPath = join(dir, "config.toml");
+		writeFileSync(configPath, bootstrapConfig(checkout));
+		const { config } = await loadConfigFile(configPath);
+		const state: FactoryState = openFactoryState(join(dir, "factory.sqlite"));
+		state.setGroupingAxis("tickets", "repository");
+
+		await withApp(
+			async (setup) => {
+				const boot = await awaitFrame(setup, (f) => f.includes("Tickets"), "the base view");
+				expect(boot).not.toContain("an open issue");
+
+				const beforeSelect = keyHandlerListeners(setup);
+				const select = await press(setup, "o", "the select list to open", (f) =>
+					f.includes("acme/beta"),
+				);
+				await awaitNewKeyHandler(setup, beforeSelect, "the select list to take the keys");
+				expect(select).toContain("acme/beta");
+
+				const beforePanel = keyHandlerListeners(setup);
+				const panel = await pressEnterQuiet(setup, "the init panel", (f) =>
+					f.includes("Init acme/beta"),
+				);
+				await awaitNewKeyHandler(setup, beforePanel, "the init panel to take the keys");
+				expect(panel).toContain("Pushes to main");
+
+				const settled = await pressEnterQuiet(setup, "the init's result", (f) =>
+					f.includes("acme/beta: pushed"),
+				);
+				expect(messageRowOf(settled)).toContain("pushed");
+
+				// The config file holds both feeds the act planned.
+				const saved = readFileSync(configPath, "utf8");
+				expect(saved).toContain("acme/beta-issues");
+				expect(saved).toContain("acme/beta-pull-requests");
+
+				// The running plane polls them now: the feed it just registered
+				// carries its ticket into the list without a restart.
+				const listed = await awaitFrame(
+					setup,
+					(f) => f.includes("an open issue"),
+					"the registered feed's ticket to reach the list",
+				);
+				expect(listed).toContain("an open issue");
+				expect(listed).toContain("acme/beta");
+			},
+			undefined,
+			undefined,
+			{ config, state, runner, sources: [], home: dir, configPath },
 		);
 		state.close();
 	});

@@ -278,7 +278,7 @@ const consultMarkerRowOf = (frame: string): number => {
 const booted = (
 	body: Parameters<typeof withApp>[0],
 	state: FactoryState,
-	options: { sources?: readonly TicketSource[] } = {},
+	options: { sources?: readonly TicketSource[]; config?: FactoryConfig } = {},
 	width = WIDTH,
 	height = 32,
 	runner: CommandRunner = emptyAgentRunner(),
@@ -652,15 +652,22 @@ describe("the merged Main view", () => {
 		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
 		state.setGroupingAxis("tickets", "none");
 		seedConsultation(state, uid("n"));
+		// The config names no feed: the plane's live source set follows the
+		// config, so this is the case with nothing to refresh.
+		const noSource: FactoryConfig = { ...config, sources: [] };
 		try {
-			await booted(async (setup) => {
-				// Refresh answers for the whole plane from either section: no
-				// section switch is needed to reach the Ticket sources.
-				const refreshed = await press(setup, "r", "the no-op refresh", (f) =>
-					messageRowOf(f).includes("no Ticket sources exist"),
-				);
-				expect(messageRowOf(refreshed)).not.toContain("refreshing 0 sources");
-			}, state);
+			await booted(
+				async (setup) => {
+					// Refresh answers for the whole plane from either section: no
+					// section switch is needed to reach the Ticket sources.
+					const refreshed = await press(setup, "r", "the no-op refresh", (f) =>
+						messageRowOf(f).includes("no Ticket sources exist"),
+					);
+					expect(messageRowOf(refreshed)).not.toContain("refreshing 0 sources");
+				},
+				state,
+				{ config: noSource },
+			);
 		} finally {
 			state.close();
 		}

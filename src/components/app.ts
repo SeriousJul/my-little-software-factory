@@ -123,7 +123,7 @@ import {
 } from "../state.ts";
 import { currentThemeResolution } from "../theme-source.ts";
 import type { TicketSource } from "../ticket-source.ts";
-import { GhAuthenticator } from "../ticket-source.ts";
+import { createTicketSource, GhAuthenticator } from "../ticket-source.ts";
 import {
 	readSessionExchange,
 	type SessionEntry,
@@ -794,6 +794,27 @@ export function App({
 	const commandRunner = runner ?? realRunner();
 	const homeDir = home ?? os.homedir();
 	const configFile = configPath ?? defaultConfigPath();
+	/**
+	 * The Ticket sources this run polls.
+	 *
+	 * The entry binds the config's feeds at boot and hands them in, and that
+	 * binding is the whole live set only until the config gains a feed. The
+	 * Repository init registers one (ADR 0075), and a source that stands in the
+	 * config with no bound instance is bound here through the entry's own rule,
+	 * so the plane starts fetching it in this run instead of at the next
+	 * restart. An injected instance stands for the definition it names, so a
+	 * test's fake stays the source the coordinator polls, and a source the
+	 * harness injects beside the config keeps its place.
+	 */
+	const liveSources = useMemo<readonly TicketSource[]>(() => {
+		const bound = new Set(sources.map((source) => source.name));
+		return [
+			...sources,
+			...config.sources
+				.filter((definition) => !bound.has(definition.name))
+				.map((definition) => createTicketSource(definition, commandRunner)),
+		];
+	}, [sources, config.sources, commandRunner]);
 	// The plane's out-of-band attention (ADR 0080): the terminal bell and the
 	// desktop notification of a standing warning or error fact, one service
 	// the app creates once per run from the config and the command runner.
@@ -3133,8 +3154,8 @@ export function App({
 				}
 				return null;
 			})(),
-			sourceCount: sources.length,
-			refreshingSourceCount: sources.filter(
+			sourceCount: liveSources.length,
+			refreshingSourceCount: liveSources.filter(
 				(source) => coordinatorRef.current?.isFetching(source.name) === true,
 			).length,
 			handoffActive: handoffDispatch?.handoffActive() ?? noStateHandoffInFlightRef.current,
@@ -3180,7 +3201,7 @@ export function App({
 		manualRefreshPending.current = new Set(started);
 		if (started.length === 0) {
 			setWarningMessage(
-				sources.length === 0
+				liveSources.length === 0
 					? "no Ticket sources exist"
 					: "every Ticket source is already refreshing",
 			);
@@ -3775,7 +3796,7 @@ export function App({
 	useEffect(() => {
 		if (state === undefined) return;
 		const coordinator = new RefreshCoordinator(
-			sources,
+			liveSources,
 			state,
 			(outcome) => {
 				// The pull request source's one warning line surfaces on the
@@ -3806,7 +3827,7 @@ export function App({
 		};
 	}, [
 		state,
-		sources,
+		liveSources,
 		replaceTickets,
 		replaceConsultations,
 		clearWorkingMessage,
