@@ -58,7 +58,8 @@ that interface draws is the same boundary the running code enforces.**
   caller names, so the door the other rules close is open to a file that imports
   the store itself. `src/state.ts` is the module's open seam and is not a caller;
   a caller that needs `StateError` takes it from `src/state.ts`, which re-exports
-  it.
+  it. `json.ts` holds the shared decoders only - the one JSON read every aggregate
+  needs - and each aggregate decodes its own columns in its own file.
 - **The file holds one write transaction at a time, and an operation another
   aggregate calls never opens one.** The plane's atomic facts span aggregates - a
   handoff that records a start and takes a Work queue item is one fact - so the
