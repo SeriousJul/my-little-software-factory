@@ -11,12 +11,8 @@ import {
 } from "react";
 
 import type { ScrollConfig } from "../config.ts";
-import {
-	holdsDecision,
-	type LeftoverEnvironment,
-	type Ticket,
-	type TicketMarker,
-} from "../domain/ticket.ts";
+import type { LeftoverEnvironment, Ticket } from "../domain/ticket.ts";
+import type { TicketRowFacts } from "../domain/ticket-facts.ts";
 import type { HandoffChoice } from "../handoff.ts";
 import type { PlaneActionAttempt } from "../state.ts";
 import { maxScrollOf, usePaneGeometry } from "./geometry.ts";
@@ -33,7 +29,6 @@ import {
 	STARTING_WORD,
 	stateBadge,
 	stateColor,
-	ticketTaskType,
 } from "./theme.ts";
 
 export interface DetailLine {
@@ -121,20 +116,20 @@ function identityLines(title: string, repository: string, width: number): Detail
 }
 
 export function detailContent(
-	ticket: Ticket | undefined,
+	/** The Ticket's facts, read by the fact module: the pane holds no rule of its own. */
+	fact: TicketRowFacts | undefined,
 	usableCols: number,
+	/** The Handoff limit the resolved config names, for the `Handoffs: n/limit` line. */
 	handoffLimit: number,
 	suggestedChoice?: HandoffChoice,
-	starting: boolean = false,
-	marker: TicketMarker | null = null,
-	queueWait: boolean = false,
 	mergeAttempt: PlaneActionAttempt | null = null,
 ): DetailContent {
-	if (ticket === undefined)
+	if (fact === undefined)
 		return {
 			lines: [{ text: "no ticket selected", fg: paint("subtext0") }],
 			rows: 1,
 		};
+	const ticket = fact.ticket;
 	const lines: DetailLine[] = [];
 	const pushWrapped = (text: string, fg: string | undefined, bold?: boolean) => {
 		for (const line of wrapToWidth(text, usableCols))
@@ -151,10 +146,10 @@ export function detailContent(
 	// slot, the word the row wears beside it. The Queue wait badge (CONTEXT.md)
 	// takes the slot the same way the list row wears it, so the two surfaces
 	// never disagree there either.
-	if (starting) lines.push({ text: " ", fg: undefined, spinner: true });
-	else if (marker !== null && ticket.state === "handed-off")
-		lines.push({ text: failureBadge(marker), fg: markerColor(marker) });
-	else if (queueWait)
+	if (fact.starting) lines.push({ text: " ", fg: undefined, spinner: true });
+	else if (fact.failure !== null && ticket.state === "handed-off")
+		lines.push({ text: failureBadge(fact.failure), fg: markerColor(fact.failure) });
+	else if (fact.queueWait)
 		// The Queue wait badge wears the open role: the ticket keeps its
 		// open state while its start waits for a seat.
 		lines.push({ text: queuedBadge(), fg: stateColor("open") });
@@ -202,7 +197,7 @@ export function detailContent(
 	// One explicit task type line for every ticket: the open ticket's
 	// suggestion, or the recorded handoff's task type. The label says which
 	// fact it is, so routing never reads as history.
-	const presentation = ticketTaskType(ticket);
+	const presentation = fact.taskType;
 	// The task type line wears the mauve role: the work's kind, kept out of
 	// the flat fact rows the way the GitHub link keeps its blue. The list
 	// badge keeps its own neutral face, so the role here says the detail's
@@ -312,7 +307,7 @@ export function detailContent(
 		// It only shows while the ticket rests in awaiting: a held turn whose
 		// agent works again is retried, not held, and the pane says so without
 		// a warning.
-		if (holdsDecision(ticket)) {
+		if (fact.held) {
 			const causeLine = turnEndCauseLine(completion.cause, completion.detail);
 			for (const wrapped of wrapToWidth(causeLine, usableCols))
 				lines.push({ text: wrapped, fg: paint("yellow") });
@@ -377,23 +372,12 @@ export function detailContent(
 }
 
 export function detailLines(
-	ticket: Ticket | undefined,
+	fact: TicketRowFacts | undefined,
 	usableCols: number,
 	handoffLimit: number,
 	suggestedChoice?: HandoffChoice,
-	starting: boolean = false,
-	marker: TicketMarker | null = null,
-	queueWait: boolean = false,
 ): DetailLine[] {
-	return detailContent(
-		ticket,
-		usableCols,
-		handoffLimit,
-		suggestedChoice,
-		starting,
-		marker,
-		queueWait,
-	).lines;
+	return detailContent(fact, usableCols, handoffLimit, suggestedChoice).lines;
 }
 
 /**
@@ -513,55 +497,33 @@ function detailTextCols(usableCols: number): number {
  * scroll the real ScrollBox does not have.
  */
 export function detailScrollRoom(
-	ticket: Ticket | undefined,
+	fact: TicketRowFacts | undefined,
 	usableCols: number,
 	visibleRows: number,
 	handoffLimit: number,
 	mergeAttempt: PlaneActionAttempt | null = null,
 ): number {
 	return maxScrollOf(
-		detailContent(
-			ticket,
-			detailTextCols(usableCols),
-			handoffLimit,
-			undefined,
-			false,
-			null,
-			false,
-			mergeAttempt,
-		).rows,
+		detailContent(fact, detailTextCols(usableCols), handoffLimit, undefined, mergeAttempt).rows,
 		visibleRows,
 	);
 }
 
 interface TicketDetailProps {
-	ticket: Ticket | undefined;
+	/**
+	 * The selected Ticket's facts, from the fact module: the pane wears the
+	 * same starting face, failure badge, Queue wait badge, and task type the
+	 * list row wears, so the two surfaces cannot disagree (issue #201).
+	 */
+	fact: TicketRowFacts | undefined;
 	focused: boolean;
 	/** False while a modal owns all input above the panes. */
 	active: boolean;
 	reservedRows: number;
+	/** The Handoff limit the resolved config names. */
 	handoffLimit: number;
 	/** The resolved choice for an open Ticket's suggested Task type. */
 	suggestedChoice?: HandoffChoice;
-	/**
-	 * Whether the ticket's Starting window (ADR 0030) is open against the
-	 * app's facts, with the failure marker already ruled out: the state line
-	 * wears the spinner face the list row wears in place of the badge.
-	 */
-	starting: boolean;
-	/**
-	 * The ticket's failure marker from the last observation, the word the list
-	 * row wears in the badge's slot. A `handed-off` ticket outside its window
-	 * wears it here too (ADR 0030): the `[handed-off]` badge is drawn by no
-	 * surface, so the marker that rules the face out takes the slot.
-	 */
-	marker: TicketMarker | null;
-	/**
-	 * Whether the ticket's Queue wait (CONTEXT.md) holds against the app's
-	 * facts: the state line wears the `queued` badge the list row wears in
-	 * place of the badge, while the ticket keeps its open state.
-	 */
-	queueWait: boolean;
 	scroll: ScrollConfig;
 	onFocus: () => void;
 	/**
@@ -581,15 +543,12 @@ interface TicketDetailProps {
  */
 export const TicketDetail = forwardRef<TicketDetailHandle, TicketDetailProps>(function TicketDetail(
 	{
-		ticket,
+		fact,
 		focused,
 		active,
 		reservedRows,
 		handoffLimit,
 		suggestedChoice,
-		starting,
-		marker,
-		queueWait,
 		scroll,
 		onFocus,
 		scrollSlot,
@@ -597,6 +556,7 @@ export const TicketDetail = forwardRef<TicketDetailHandle, TicketDetailProps>(fu
 	},
 	ref,
 ) {
+	const ticket = fact?.ticket;
 	const geometry = usePaneGeometry("detail", reservedRows);
 	// The renderer reports the frame it has laid out, which is when the scroll
 	// box first knows its own content height and viewport.
@@ -604,16 +564,7 @@ export const TicketDetail = forwardRef<TicketDetailHandle, TicketDetailProps>(fu
 	// The scroll box owns the gutter; see `detailTextCols`.
 	const textCols = detailTextCols(geometry.usableCols);
 	const reserveGutter = textCols < geometry.usableCols;
-	const content = detailContent(
-		ticket,
-		textCols,
-		handoffLimit,
-		suggestedChoice,
-		starting,
-		marker,
-		queueWait,
-		mergeAttempt,
-	);
+	const content = detailContent(fact, textCols, handoffLimit, suggestedChoice, mergeAttempt);
 	const lines = content.lines;
 	const hasOverflow = content.rows > geometry.visibleRows;
 	const scrollboxRef = useRef<ScrollBoxRenderable | null>(null);

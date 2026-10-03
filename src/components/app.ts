@@ -45,17 +45,27 @@ import {
 	type ConsultationOperations,
 	createConsultationOperations,
 } from "../consultation-operations.ts";
+import { ticketAgentIdentity } from "../domain/agent.ts";
 import type { GroupingAxis, SplitGroupingAxis } from "../domain/grouping.ts";
 import { DEFAULT_GROUPING_AXIS, nextGroupingAxis } from "../domain/grouping.ts";
+import { heldBellRang, sectionFacts } from "../domain/section-facts.ts";
 import {
 	flagWithholdsRow,
 	HANDOFF_ENVIRONMENT_KINDS,
 	type Handoff,
-	holdsDecision,
 	nextTicketListFilter,
 	type Ticket,
 	type TicketListFilter,
 } from "../domain/ticket.ts";
+import {
+	decisionFacts,
+	liveContextLine,
+	type TicketFactInputs,
+	type TicketRowFacts,
+	ticketFactsFor,
+	ticketRowFacts,
+	turnTaskType,
+} from "../domain/ticket-facts.ts";
 import { fileExists } from "../fs.ts";
 import {
 	baseChoice,
@@ -70,9 +80,8 @@ import {
 	reportHandoffOutcome,
 	type StoredHandoffFacts,
 } from "../handoff-dispatch.ts";
-import { type HerdrAgent, ownAgentInPane } from "../herdr.ts";
+import type { HerdrAgent } from "../herdr.ts";
 import type { Logger } from "../logging.ts";
-import { agentNameFor, type HandoffAgentIdentity, identifyHandoffAgentName } from "../naming.ts";
 import {
 	HerdrAgentReader,
 	matchConsultationAgent,
@@ -188,7 +197,7 @@ import {
 	toggleFold,
 } from "./shared/grouping.ts";
 import { padToWidth, truncateToWidth, widthOf } from "./text.ts";
-import { inStartingWindow, paint } from "./theme.ts";
+import { paint } from "./theme.ts";
 import { ticketCloseDialog } from "./ticket-close.ts";
 import { detailScrollRoom, TicketDetail, type TicketDetailHandle } from "./ticket-detail.ts";
 import { TicketList } from "./ticket-list.ts";
@@ -527,7 +536,7 @@ export function App({
 	// The held-turn bell: it rings the moment a held count rises, so a turn
 	// that failed while the operator looked away gets their attention.
 	const [heldBell, setHeldBell] = useState(false);
-	const heldCountRef = useRef(-1);
+	const heldCountRef = useRef<number | null>(null);
 	const [selectedIndex, setSelectedIndex] = useState(0);
 	const selectedIndexRef = useRef(0);
 	/**
@@ -561,34 +570,6 @@ export function App({
 	 * like a ticket does. `none` draws the tickets alone in the flat list's
 	 * order, which is the list exactly as it stood before grouping.
 	 */
-	// The init marker a repository Group header wears (ADR 0075, stories 19 and
-	// 22): `uninit` where the plane has not init'd the repository, `drift` where
-	// it init'd it under settings that have since changed, and nowhere where the
-	// stored fact matches the current settings. The display name the axis groups
-	// on maps to the identity the fact keys on through a ticket the Group holds.
-	// On every axis but repository the marker is absent, so the column never
-	// stands where the init does not act.
-	// The current settings' hash, computed once per render so the marker below
-	// compares each Group's fact against it without re-hashing the config per
-	// Group (ADR 0075): the hash moves only when the config does.
-	const currentInitHash = repositoryInitSettingsHash(config.workflowStates, config.taskTypes);
-	const repositoryInitMarkerOf = (value: string): string | null => {
-		if (groupingAxis !== "repository") return null;
-		const ticket = tickets.find((item) => item.repository === value);
-		const identity = ticket?.repositoryRef.identity ?? value;
-		const fact = state === undefined ? null : state.repositoryInitFact(identity);
-		return repositoryInitStanding(fact, currentInitHash);
-	};
-	const ticketRowsState: readonly ListedRow<Ticket>[] = ticketRows(
-		tickets,
-		groupingAxis,
-		groupFolds,
-		groupOrderList,
-		positionOrderOf(),
-		repositoryInitMarkerOf,
-	);
-	const ticketRowsRef = useRef<readonly ListedRow<Ticket>[]>(ticketRowsState);
-	ticketRowsRef.current = ticketRowsState;
 	/**
 	 * The Ticket under the cursor, read through the refs, so a render and a key
 	 * handler see the same fact (issue #159).
@@ -601,7 +582,7 @@ export function App({
 	 */
 	const ticketAtCursor = (): Ticket | undefined => {
 		const row = ticketRowsRef.current[selectedIndexRef.current];
-		if (row !== undefined && row.kind === "item") return row.item;
+		if (row !== undefined && row.kind === "item") return row.item.ticket;
 		return ticketsExpandedRef.current ? undefined : detailTicketRef.current;
 	};
 	/**
@@ -778,6 +759,65 @@ export function App({
 	// check reads the latest set through the ref.
 	const startingTicketsRef = useRef(startingTickets);
 	startingTicketsRef.current = startingTickets;
+	/**
+	 * The screen's inputs, read once (issue #201). The fact module answers the
+	 * row's facts from them, so the row, the detail pane, and the ignore key's
+	 * refusal state one fact and cannot disagree.
+	 */
+	// The fact module's inputs, read from the refs so the fact answers stay the
+	// same across renders (issue #201). The screen keeps the state; the fact
+	// module owns the rules the state is read through.
+	const factInputs = useCallback(
+		(tickets: readonly Ticket[]): TicketFactInputs => ({
+			maxHandoffsPerTicket: configRef.current.maxHandoffsPerTicket,
+			defaultTaskType: configRef.current.defaultTaskType,
+			agents: agentsRef.current,
+			claims: startingTicketsRef.current,
+			queue: workQueueRef.current,
+			tickets,
+		}),
+		[],
+	);
+	/** The rows' facts, read through the fact module: the values the surface wears. */
+	const factRows = useCallback(
+		(tickets: readonly Ticket[]): readonly TicketRowFacts[] =>
+			ticketRowFacts(factInputs(tickets)).rows,
+		[factInputs],
+	);
+	/** The facts one Ticket wears, read through the fact module. */
+	const factsFor = useCallback(
+		(ticket: Ticket): TicketRowFacts => ticketFactsFor(ticket, factInputs([ticket])),
+		[factInputs],
+	);
+
+	// The init marker a repository Group header wears (ADR 0075, stories 19 and
+	// 22): `uninit` where the plane has not init'd the repository, `drift` where
+	// it init'd it under settings that have since changed, and nowhere where the
+	// stored fact matches the current settings. The display name the axis groups
+	// on maps to the identity the fact keys on through a ticket the Group holds.
+	// On every axis but repository the marker is absent, so the column never
+	// stands where the init does not act.
+	// The current settings' hash, computed once per render so the marker below
+	// compares each Group's fact against it without re-hashing the config per
+	// Group (ADR 0075): the hash moves only when the config does.
+	const currentInitHash = repositoryInitSettingsHash(config.workflowStates, config.taskTypes);
+	const repositoryInitMarkerOf = (value: string): string | null => {
+		if (groupingAxis !== "repository") return null;
+		const ticket = tickets.find((item) => item.repository === value);
+		const identity = ticket?.repositoryRef.identity ?? value;
+		const fact = state === undefined ? null : state.repositoryInitFact(identity);
+		return repositoryInitStanding(fact, currentInitHash);
+	};
+	const ticketRowsState: readonly ListedRow<TicketRowFacts>[] = ticketRows(
+		factRows(tickets),
+		groupingAxis,
+		groupFolds,
+		groupOrderList,
+		positionOrderOf(),
+		repositoryInitMarkerOf,
+	);
+	const ticketRowsRef = useRef<readonly ListedRow<TicketRowFacts>[]>(ticketRowsState);
+	ticketRowsRef.current = ticketRowsState;
 	const handoffDispatchRef = useRef<{ state: FactoryState; dispatch: HandoffDispatch } | undefined>(
 		undefined,
 	);
@@ -889,6 +929,12 @@ export function App({
 	// The Dispatch pause (ADR 0016): a held failed trace holds the automatic
 	// handoffs, routes, and restarts until it is decided or a turn completes.
 	const dispatchPause = state?.dispatchPauseActive() ?? false;
+	const modeLine =
+		state === undefined
+			? ""
+			: `auto: ${autoMode ? "on" : "off"} ${liveCount}${
+					config.maxParallelAgents === 0 ? "" : `/${config.maxParallelAgents}`
+				}${autoMode && dispatchPause ? " paused" : ""}`;
 	// The held turns (ADR 0016, ADR 0017): the awaiting tickets whose last turn
 	// ended failed, aborted, truncated, or no-turn with no decision, read
 	// through the domain's one rule so this count and a Group header's agree.
@@ -898,39 +944,24 @@ export function App({
 	// active view beside every other header count, so an ignored Ticket that owes
 	// a decision is counted the moment its row returns, and a List filter cycle
 	// never moves the baseline the bell compares against (ADR 0060).
-	const heldCount = machineTickets.filter(holdsDecision).length;
-	const modeLine =
-		state === undefined
-			? ""
-			: `auto: ${autoMode ? "on" : "off"} ${liveCount}${
-					config.maxParallelAgents === 0 ? "" : `/${config.maxParallelAgents}`
-				}${autoMode && dispatchPause ? " paused" : ""}`;
-	const consultationCounts = state?.consultationCounts() ?? { awaitingResponse: 0, recovery: 0 };
-	// The steady pipeline counts the Ticket header carries (user stories 11
-	// through 16): open, in flight, and awaiting a decision. They come from the
-	// active view on each render, so no query runs for them and the operator's
-	// List filter never moves them (ADR 0060): the machine's obligations and the
-	// rows the section counts do not bend around the view, and cycling `f` rings
-	// no bell.
-	const openCount = machineTickets.filter((ticket) => ticket.state === "open").length;
-	const runningCount = machineTickets.filter(
-		(ticket) => ticket.state === "handed-off" || ticket.state === "running",
-	).length;
-	const awaitingCount = machineTickets.filter((ticket) => ticket.state === "awaiting").length;
-	// The ignored count the Ticket header carries (ADR 0060): the pile the flag
-	// made, read from the same list step as the rows themselves, so the number
-	// names exactly the rows the `ignored` view shows and nothing re-applies the
-	// covered rule or the ignore rule in the screen.
-	const ignoredCount = listViews.ignored.length;
-	// The muted count the Ticket header carries (ADR 0070): the ledger of the
-	// source acts, read from the same list step as the rows themselves, so the
-	// number names exactly the rows the `muted` view shows and nothing
-	// re-applies the covered rule or the mute rule in the screen.
-	const mutedCount = listViews.muted.length;
+	// The header's counts, answered by the fact module from the active view
+	// (issue #201). The header takes them as values.
+	const headerFacts = sectionFacts(
+		machineTickets,
+		consultations,
+		listViews.ignored.length,
+		listViews.muted.length,
+	);
+	const heldCount = headerFacts.ticket.held;
+	const openCount = headerFacts.ticket.open;
+	const runningCount = headerFacts.ticket.inFlight;
+	const awaitingCount = headerFacts.ticket.awaiting;
+	const ignoredCount = headerFacts.ticket.ignored;
+	const mutedCount = headerFacts.ticket.muted;
 	// The held count the bell compares against: a rise rings the terminal bell
 	// and flashes the Tickets header, a fall or a steady count does not.
 	useEffect(() => {
-		if (heldCountRef.current >= 0 && heldCount > heldCountRef.current) {
+		if (heldBellRang(heldCountRef.current, heldCount)) {
 			// The flash stays here; the bell write and its attention-bell gate
 			// live in the shared attention service (ADR 0080).
 			setHeldBell(true);
@@ -1052,7 +1083,7 @@ export function App({
 	// overflow, so it asks the pane for the measurement rather than repeating
 	// the pane's gutter rule here.
 	const detailMaxScroll = detailScrollRoom(
-		detailTicket,
+		detailTicket === undefined ? undefined : factsFor(detailTicket),
 		detailGeometry.usableCols,
 		detailGeometry.visibleRows,
 		config.maxHandoffsPerTicket,
@@ -1064,22 +1095,6 @@ export function App({
 	// handlers; the read above is the one this frame's pane paints with.
 	detailTicketRef.current = detailTicket;
 	const selectedTicket = detailTicket;
-	/**
-	 * The name the Ticket's own Agent runs under: the handoff's recorded name,
-	 * or the stable name the handoff asked for first. Herdr hands the id of a
-	 * closed pane out again, so this is the name the pane's agent is checked
-	 * against.
-	 */
-	const ticketAgentName = (ticket: Ticket): string => {
-		const recorded = ticket.handoff?.herdrName ?? null;
-		return recorded !== null && recorded !== "" ? recorded : agentNameFor(ticket.title);
-	};
-	/**
-	 * The identity of the live agent in the ticket's handoff pane, from the
-	 * names alone (ADR 0043).
-	 */
-	const ticketAgentIdentity = (ticket: Ticket, agent: HerdrAgent): HandoffAgentIdentity =>
-		identifyHandoffAgentName(agent.name, ticketAgentName(ticket));
 	// The Consultation the shared detail pane points at: the one under the
 	// unified cursor. None while the cursor is on the Ticket list, so the
 	// detail renders the ticket and no polling runs for a Consultation the
@@ -1215,8 +1230,9 @@ export function App({
 		);
 		const currentIndex = selectedIndexRef.current;
 		const anchor = rowAnchorOf(ticketRowsRef.current, currentIndex);
+		const nextFacts = factRows(next.rows);
 		const nextRows = ticketRows(
-			next.rows,
+			nextFacts,
 			groupingAxisRef.current,
 			groupFoldsRef.current,
 			groupOrderListRef.current,
@@ -1229,7 +1245,7 @@ export function App({
 			nextRows,
 			anchor,
 			currentIndex,
-			next.rows,
+			nextFacts,
 			groupingAxisRef.current,
 		);
 		listViewsRef.current = next;
@@ -1243,7 +1259,7 @@ export function App({
 		// removal all report their refresh through here, so the section never
 		// shows a row the durable queue no longer holds.
 		setWorkQueue(state.workQueue());
-	}, [state, positionOrderOf]);
+	}, [state, positionOrderOf, factRows]);
 	const replaceConsultations = useCallback(() => {
 		if (state === undefined) return;
 		const next = state.consultations(historyFilterRef.current);
@@ -1320,57 +1336,7 @@ export function App({
 			ticket.suggestedTaskType ?? configRef.current.defaultTaskType,
 		);
 	};
-	/** The failure marker of an in-flight ticket from the last observation. */
-	const markerOf = (ticket: Ticket): "blocked" | "missing" | null => {
-		if (ticket.state !== "handed-off" && ticket.state !== "running") return null;
-		const paneId = ticket.handoff?.paneId ?? null;
-		// No successful observation yet: an unreadable herdr must not read
-		// as "every pane is missing".
-		if (paneId === null || agentsRef.current === null) return null;
-		// The one missing-Agent rule, shared with the in-flight pass, the Restart
-		// walk, and the Parallel limit seat count: a live agent that is not the
-		// ticket's own - herdr placed another agent in the ticket's reused pane
-		// id - leaves the ticket's agent missing, the way an absent one does.
-		const own = ownAgentInPane(
-			agentsRef.current.find((candidate) => candidate.paneId === paneId),
-			ticketAgentName(ticket),
-		);
-		if (own === null) return "missing";
-		return normalizeAgentStatus(own.status) === "blocked" ? "blocked" : null;
-	};
-	/**
-	 * The Starting window (ADR 0030) one ticket reads from the app's facts:
-	 * the claim this run holds on it, or its `handed-off` state. The row and
-	 * the detail header wear the spinner face it opens in place of the state
-	 * badge, and the failure marker rules it out before it is read.
-	 */
-	const startingWindow = (ticket: Ticket): boolean =>
-		inStartingWindow(ticket, startingTickets.has(ticket.identity));
-	/**
-	 * The Queue wait (CONTEXT.md) one ticket reads from the app's facts: its
-	 * open-origin item in the Work queue while the ticket rests open, or the
-	 * route item the ticket's own turn or another's route enqueued on it
-	 * (ADR 0064, ADR 0072): the route's ask ends the source's cycle and the
-	 * wait stands on the item alone, so the badge wears on the item's position
-	 * while the item stands, open or awaiting alike, the route's item and the
-	 * Plane action's merge item alike, the wait the position takes the same
-	 * way (ADR 0068). The row and the detail state line wear the `queued`
-	 * badge in place of their state badge, and the Starting window rules it
-	 * out before it is read, so the spinner face takes over when the run
-	 * begins. The ticket keeps its state, so the counts and the state file
-	 * never learn the badge.
-	 */
-	const queueWait = (ticket: Ticket): boolean =>
-		workQueue.some(
-			(item) =>
-				(item.kind === "handoff" || item.kind === "plane-action") &&
-				((item.origin === "open" &&
-					item.ticketIdentity === ticket.identity &&
-					ticket.state === "open") ||
-					(item.origin === "workflow" &&
-						item.ticketIdentity === ticket.identity &&
-						(ticket.state === "open" || ticket.state === "awaiting"))),
-		);
+
 	const persistMapping = async (mapping: RepositoryMapping): Promise<string | undefined> => {
 		const write = configWriteQueue.current
 			.catch(() => undefined)
@@ -1642,7 +1608,7 @@ export function App({
 		// A Group header holds no Ticket: the catalogue refused the key with its
 		// own words before this ran (issue #159).
 		if (row === undefined || row.kind !== "item") return;
-		const ticket = row.item;
+		const ticket = row.item.ticket;
 		const choice = choiceFor(ticket);
 		// Opening the panel is a point of use for the Model list (ADR 0010): the
 		// list of the agent the panel starts on is fetched fresh, so provider
@@ -1730,225 +1696,89 @@ export function App({
 	const mergeMethodOf = (taskType: string): string =>
 		planeActionSettingOf(configRef.current.taskTypes, taskType)?.method ?? DEFAULT_MERGE_METHOD;
 
-	/** The task type of the ticket's current turn: the settled turn's, else the handoff's, else the ticket's suggestion. */
-	const taskTypeOf = (ticket: Ticket): string =>
-		ticket.lastCompletion?.taskType ??
-		ticket.handoff?.taskType ??
-		ticket.suggestedTaskType ??
-		configRef.current.defaultTaskType;
-
-	/** The Live view's context line: repository, task type, agent. No time: the turn has not settled. */
-	const liveContextLine = (ticket: Ticket): string =>
-		[ticket.repository, taskTypeOf(ticket), ticket.handoff?.agentType ?? "?"]
-			.filter((part) => part !== "")
-			.join(" · ");
-
 	// The decision modal's rows: Close first, selected by default, then a
 	// Goto, then one handoff row when the settled turn's transition wrote a
-	// position the machine offers a task for (ADR 0027). The row stands only
-	// while the position's ticket is still listed in a source: a refresh
-	// that finds the ticket gone - a merged or closed pull request, a
-	// closed issue - withdraws the row, and a fact line states the reason
-	// in its place. The row's detail names the Agent its route resolves to,
-	// beside the pin's Environment. The fact lines state the label facts
-	// the transition wrote on the ticket and its pull request, and a
-	// failed write as its failure fact. The modal's context row names the
-	// repository, the task type, the agent, and the completion time, so the
-	// operator knows what the log is about.
+	// position the machine offers a task for (ADR 0027). The fact lines, the
+	// route's standing, and the modal's context line come from the fact
+	// module (issue #201); the rows and the Decision region stay here. The
+	// row stands only while the position's ticket is still listed in a
+	// source: a refresh that finds the ticket gone - a merged or closed pull
+	// request, a closed issue - withdraws the row, and a fact line states the
+	// reason in its place. The row's detail names the Agent its route resolves
+	// to, beside the pin's Environment, which is setting resolution and stays
+	// with the screen.
 	const decisionFor = (
 		ticket: Ticket,
 	): {
 		actions: ActionRow[];
 		entries: readonly TurnLogEntry[];
 		contextLine: string;
-		/** The label facts the transition wrote, or its failure; empty when none. */
-		factLines: string[];
+		factLines: readonly string[];
 		/** The turn's end cause, or null when the turn has no settled record. */
 		cause: TurnEndCause | null;
 		/** The agent's or provider's text for the cause; empty when none. */
 		detail: string;
 	} => {
-		const taskType = taskTypeOf(ticket);
 		const completion = ticket.lastCompletion;
-		const time = completion === null ? "" : completion.completedAt.slice(0, 16).replace("T", " ");
-		const contextLine = [ticket.repository, taskType, completion?.agentType ?? "?", time]
-			.filter((part) => part !== "")
-			.join(" · ");
+		const outcome = completion?.transition ?? null;
+		const positionIdentity = outcome?.positionTicketIdentity ?? ticket.identity;
+		const facts = decisionFacts({
+			ticket,
+			queue: workQueueRef.current,
+			claims: startingTicketsRef.current,
+			positionTicket: findTicket(positionIdentity),
+			positionStillListed:
+				state === undefined ||
+				outcome?.positionTicketIdentity === null ||
+				state.stillListed(positionIdentity),
+			positionIsPlaneAction:
+				outcome?.positionTaskType != null &&
+				isPlaneActionTaskType(configRef.current.taskTypes, outcome.positionTaskType),
+			latestPlaneActionAttempt:
+				state === undefined ? null : state.latestPlaneActionAttempt(positionIdentity),
+			defaultTaskType: configRef.current.defaultTaskType,
+		});
 		const actions: ActionRow[] = [
 			{ key: "close", label: "Close", detail: "end the work cycle; the ticket returns to open" },
 			{ key: "goto", label: "Goto", detail: "focus the agent's pane; the handoff stays open" },
 		];
-		const factLines: string[] = [];
-		const outcome = completion?.transition ?? null;
-		if (outcome !== null) {
-			// The reason is a visible fact either way: the branch that did not
-			// hold, or the pull-request fact the fire skipped because no linked
-			// pull request was found (ADR 0027).
-			if (outcome.reason !== "")
-				factLines.push(
-					outcome.fired ? outcome.reason : `no transition branch held: ${outcome.reason}`,
-				);
-			if (outcome.ticketWrite !== null)
-				factLines.push(transitionFactLine("ticket", outcome.ticketWrite));
-			if (outcome.pullRequestWrite !== null && outcome.pullRequestIdentity !== null) {
-				const surface =
-					outcome.pullRequestKey !== null
-						? `pull request ${outcome.pullRequestKey}`
-						: "pull request";
-				factLines.push(transitionFactLine(surface, outcome.pullRequestWrite));
-			}
-			if (outcome.writeFailure !== "")
-				factLines.push(`label write failed: ${outcome.writeFailure}`);
-			if (outcome.positionTaskType !== null) {
-				// The merged position the transition offers (ADR 0068): the task
-				// type resolves on the plane action, so the row asks for the
-				// merge, not for a handoff. The row carries no settings to edit:
-				// the action form holds no profile keys, and the override key is
-				// unavailable on it with the reason the catalogue states.
-				const mergePosition = isPlaneActionTaskType(
-					configRef.current.taskTypes,
-					outcome.positionTaskType,
-				);
-				// While the route is alive, the row reads as the fact line that
-				// names where it stands, and takes no key (ADR 0064): Close and
-				// Goto stand always, and the confirm waits with the route. The
-				// merge's route stands the same way, and the attempt's record
-				// states the outcome that settled it, beside what the transition
-				// wrote, because no Completion trace stands for the action. The
-				// record settles only the turn that ran it: it stands while it
-				// postdates the turn's completion, and a newer turn that re-offers
-				// the position re-stands the row, so a blocked merge never hides
-				// the re-merge the following review asks for.
-				const attempt =
-					state?.latestPlaneActionAttempt(outcome.positionTicketIdentity ?? ticket.identity) ??
-					null;
-				const attemptStands = attempt !== null && attempt.at >= (completion?.completedAt ?? "");
-				const routeStanding = routeStandingLine(ticket, outcome, mergePosition);
-				if (routeStanding !== null) {
-					factLines.push(routeStanding);
-				} else if (attemptStands) {
-					// The outcome stands where the row stood (ADR 0068): the
-					// attempt's record is the fact the decision screen reads, and
-					// the transition's write stands on it beside the outcome.
-					factLines.push(
-						attempt.outcome === "merged"
-							? `the merge ${attempt.decision === "auto-merged" ? "ran" : "landed"}`
-							: `the merge was blocked: ${attempt.reason}`,
-					);
-					if (attempt.transition !== null) {
-						const write = attempt.transition.pullRequestWrite;
-						if (write !== null) factLines.push(transitionFactLine("pull request", write));
-					}
-				} else {
-					// The position is derived, never stored (ADR 0027): the ticket
-					// it sits on can leave its source between the fire and the
-					// decision. No list holds such a ticket, and no task can host
-					// on it, so the offer stands withdrawn: a route would start a
-					// turn on an item every source has dropped.
-					const positionListed =
-						state === undefined ||
-						outcome.positionTicketIdentity === null ||
-						state.stillListed(outcome.positionTicketIdentity);
-					if (positionListed) {
-						if (mergePosition) {
-							actions.push({
-								key: "merge",
-								label: planeActionLabel("merge-pull-request"),
-								detail: `runs the merge now, with no agent and no worktree (method ${mergeMethodOf(outcome.positionTaskType)})`,
-								planeAction: true,
-							});
-						} else {
-							actions.push({
-								key: "route",
-								label: `Handoff: ${outcome.positionTaskType}`,
-								detail: routeDetail(outcome, outcome.positionTaskType),
-								editable: true,
-							});
-						}
-					} else {
-						factLines.push(
-							mergePosition
-								? "the position's ticket left its source; no merge stands"
-								: "the position's ticket left its source; no handoff stands",
-						);
-					}
-				}
-			}
-			// The re-fire row stands on an outcome the fire did not complete
-			// (ADR 0054): no branch held, or the label write failed. The
-			// operator confirms it, and the plane reads the source as it stands
-			// now and fires the turn's transition again. A complete outcome
-			// shows no row: the machine's work is done.
-			if (outcome.fired === false || outcome.writeFailure !== "") {
+		if (outcome !== null && facts.offer !== null) {
+			if (facts.offer.kind === "merge") {
 				actions.push({
-					key: "refire",
-					label: "Re-fire",
-					detail: "read the source as it stands now and fire the turn's transition again",
+					key: "merge",
+					label: planeActionLabel("merge-pull-request"),
+					detail: `runs the merge now, with no agent and no worktree (method ${mergeMethodOf(facts.offer.taskType)})`,
+					planeAction: true,
+				});
+			} else {
+				actions.push({
+					key: "route",
+					label: `Handoff: ${facts.offer.taskType}`,
+					detail: routeDetail(outcome, facts.offer.taskType),
+					editable: true,
 				});
 			}
+		}
+		// The re-fire row stands on an outcome the fire did not complete
+		// (ADR 0054): no branch held, or the label write failed. The
+		// operator confirms it, and the plane reads the source as it stands
+		// now and fires the turn's transition again. A complete outcome
+		// shows no row: the machine's work is done.
+		if (outcome !== null && (outcome.fired === false || outcome.writeFailure !== "")) {
+			actions.push({
+				key: "refire",
+				label: "Re-fire",
+				detail: "read the source as it stands now and fire the turn's transition again",
+			});
 		}
 		return {
 			actions,
 			entries: completion?.turnLog ?? [],
-			contextLine,
-			factLines,
+			contextLine: facts.contextLine,
+			factLines: facts.factLines,
 			cause: completion?.cause ?? null,
 			detail: completion?.detail ?? "",
 		};
-	};
-
-	/**
-	 * Where a living route stands (ADR 0064), or null while the route is dead:
-	 * no queue item waits for it, and its position holds no handoff. The
-	 * decision row reads the answer as the fact line it names - waiting in the
-	 * Work queue, starting, or running on its position ticket - and the live
-	 * route row stands again the moment the route dies, so the operator can
-	 * ask the same route for the next ticket.
-	 */
-	const routeStandingLine = (
-		ticket: Ticket,
-		outcome: TransitionOutcome,
-		mergeRoute: boolean,
-	): string | null => {
-		const positionIdentity = outcome.positionTicketIdentity ?? ticket.identity;
-		if (mergeRoute) {
-			// The merge's route stands in the Work queue's row (ADR 0068):
-			// the item takes no seat, so the pickup's walk runs it when it
-			// reaches it, and the line names the wait the way the handoff's
-			// line does.
-			const waiting = workQueue.some(
-				(item) => item.kind === "plane-action" && item.ticketIdentity === positionIdentity,
-			);
-			if (waiting) return "the merge is waiting in the Work queue";
-			return null;
-		}
-		const waiting = workQueue.some(
-			(item) =>
-				item.kind === "handoff" &&
-				item.origin === "workflow" &&
-				item.routeFromIdentity === ticket.identity,
-		);
-		if (waiting) return "the route is waiting in the Work queue";
-		if (startingTickets.has(positionIdentity)) return "the route is starting";
-		const position = findTicket(positionIdentity);
-		if (
-			position !== undefined &&
-			(position.state === "handed-off" || position.state === "running")
-		) {
-			return "the route is running on its position ticket";
-		}
-		return null;
-	};
-
-	/** One surface's label write as the decision's fact line. */
-	const transitionFactLine = (
-		surface: string,
-		write: { added: string[]; removed: string[] },
-	): string => {
-		const parts = [surface];
-		if (write.added.length > 0) parts.push(`added ${write.added.join(", ")}`);
-		if (write.removed.length > 0) parts.push(`removed ${write.removed.join(", ")}`);
-		return parts.join(" · ");
 	};
 
 	/** The transition row states the Agent that will receive its handoff. */
@@ -1999,8 +1829,8 @@ export function App({
 		// runs in the pane the handoff recorded, the focus would land on that
 		// agent, not the ticket's own. Refuse the focus, and state the fact on
 		// the Message line the way a refused key does.
-		const agentInPane = agentsRef.current?.find((candidate) => candidate.paneId === paneId);
-		if (agentInPane !== undefined && ticketAgentIdentity(ticket, agentInPane) === "foreign") {
+		const paneAgent = agentsRef.current?.find((candidate) => candidate.paneId === paneId);
+		if (paneAgent !== undefined && ticketAgentIdentity(ticket, paneAgent) === "foreign") {
 			setWarningMessage("the pane the handoff recorded is no longer the agent's pane");
 			return;
 		}
@@ -2721,7 +2551,7 @@ export function App({
 			return;
 		}
 		const ignored = !ticket.ignored;
-		const result = state.setTicketIgnored(ticket.identity, ignored, markerOf(ticket));
+		const result = state.setTicketIgnored(ticket.identity, ignored, factsFor(ticket).failure);
 		if (!result.ok) {
 			setWarningMessage(result.reason);
 			return;
@@ -3129,7 +2959,7 @@ export function App({
 			// The ignore's obligation read takes the row's own facts (ADR 0060): the
 			// failure marker the list's badge wears, and the List filter the `f` hint
 			// names the next state of.
-			selectedTicketMarker: selectedTicket === undefined ? null : markerOf(selectedTicket),
+			selectedTicketMarker: selectedTicket === undefined ? null : factsFor(selectedTicket).failure,
 			ticketListFilter: ticketFilterRef.current,
 			consultationTypesConfigured: Object.keys(config.consultationTypes).length > 0,
 			interactionExitKey: configRef.current.interactionExitKey,
@@ -3277,7 +3107,7 @@ export function App({
 				"live-view": ({ context, refuse }) => {
 					const ticket = context.selectedTicket;
 					if (ticket === undefined || !isInFlight(ticket)) return refuse();
-					if (markerOf(ticket) === "missing")
+					if (factsFor(ticket).failure === "missing")
 						setPanel({ kind: "missing", identity: ticket.identity });
 					else setPanel({ kind: "live", identity: ticket.identity });
 				},
@@ -3581,7 +3411,7 @@ export function App({
 	const decideCompletion = (context: ControlContext) => {
 		const ticket = context.selectedTicket;
 		if (ticket === undefined) return;
-		const taskType = taskTypeOf(ticket);
+		const taskType = turnTaskType(ticket, configRef.current.defaultTaskType);
 		if (autoModeRef.current) {
 			// The factory decides the ticket itself: the operator gets the
 			// notice on the Message line, and the observation makes the
@@ -4002,8 +3832,9 @@ export function App({
 					})();
 		const anchor = rowAnchorOf(ticketRowsRef.current, selectedIndexRef.current);
 		const nextOrder = next === "none" ? [] : storedGroupOrderOf(next);
+		const nextFacts = factRows(ticketsRef.current);
 		const nextRows = ticketRows(
-			ticketsRef.current,
+			nextFacts,
 			next,
 			groupFoldsRef.current,
 			nextOrder,
@@ -4013,7 +3844,7 @@ export function App({
 			nextRows,
 			anchor,
 			selectedIndexRef.current,
-			ticketsRef.current,
+			nextFacts,
 			next,
 		);
 		groupingAxisRef.current = next;
@@ -4039,8 +3870,9 @@ export function App({
 		const axis = groupingAxisRef.current;
 		const nextFolds = toggleFold(groupFoldsRef.current, axis, value);
 		const anchor = rowAnchorOf(ticketRowsRef.current, selectedIndexRef.current);
+		const nextFacts = factRows(ticketsRef.current);
 		const nextRows = ticketRows(
-			ticketsRef.current,
+			nextFacts,
 			axis,
 			nextFolds,
 			groupOrderListRef.current,
@@ -4052,13 +3884,7 @@ export function App({
 		const nextIndex =
 			headerIndex >= 0
 				? headerIndex
-				: ticketRowIndexForAnchor(
-						nextRows,
-						anchor,
-						selectedIndexRef.current,
-						ticketsRef.current,
-						axis,
-					);
+				: ticketRowIndexForAnchor(nextRows, anchor, selectedIndexRef.current, nextFacts, axis);
 		groupFoldsRef.current = nextFolds;
 		setGroupFolds(nextFolds);
 		ticketRowsRef.current = nextRows;
@@ -4143,7 +3969,7 @@ export function App({
 				[axis]: [...moved],
 			};
 		const nextRows = ticketRows(
-			ticketsRef.current,
+			factRows(ticketsRef.current),
 			axis,
 			groupFoldsRef.current,
 			moved,
@@ -4727,7 +4553,7 @@ export function App({
 							panelTicket.lastCompletion?.transition?.autoAdvance === true)
 						? "stream"
 						: "decision"
-					: markerOf(panelTicket) === "missing"
+					: factsFor(panelTicket).failure === "missing"
 						? "missing"
 						: "stream"
 			: "closed";
@@ -5031,10 +4857,6 @@ export function App({
 									focused: focusedPane === "list" && selection === "ticket",
 									height: ticketsBoxRows,
 									emptyMessage,
-									markerOf,
-									limitReached: (ticket) => ticket.handoffCount >= config.maxHandoffsPerTicket,
-									starting: startingWindow,
-									queueWait,
 									active: mainSurfaceActive,
 									onFocus: () => focusListSection("ticket"),
 									onSelect: (index: number) => {
@@ -5061,8 +4883,8 @@ export function App({
 								expanded: consultationsExpanded,
 								terminalWidth,
 								width: leftCols,
-								awaitingResponse: consultationCounts.awaitingResponse,
-								recovery: consultationCounts.recovery,
+								awaitingResponse: headerFacts.consultation.awaitingResponse,
+								recovery: headerFacts.consultation.recovery,
 								bell,
 								newOutput,
 								active: mainSurfaceActive,
@@ -5141,19 +4963,13 @@ export function App({
 							: selection === "ticket"
 								? createElement(TicketDetail, {
 										ref: detailRef,
-										ticket: selectedTicket,
+										fact: selectedTicket === undefined ? undefined : factsFor(selectedTicket),
 										focused: focusedPane === "detail",
 										active: mainSurfaceActive,
 										reservedRows: detailReservedRows,
 										handoffLimit: config.maxHandoffsPerTicket,
 										suggestedChoice:
 											selectedTicket?.state === "open" ? choiceFor(selectedTicket) : undefined,
-										starting:
-											selectedTicket !== undefined &&
-											markerOf(selectedTicket) === null &&
-											startingWindow(selectedTicket),
-										marker: selectedTicket === undefined ? null : markerOf(selectedTicket),
-										queueWait: selectedTicket !== undefined && queueWait(selectedTicket),
 										scroll: config.scroll,
 										onFocus: () => focusPane("detail"),
 										scrollSlot: detailScrollSlot,
@@ -5303,8 +5119,8 @@ export function App({
 			liveMode !== "missing" &&
 			createElement(LiveView, {
 				title: panelTicket.title,
-				contextLine: liveContextLine(panelTicket),
-				blocked: markerOf(panelTicket) === "blocked",
+				contextLine: liveContextLine(panelTicket, configRef.current.defaultTaskType),
+				blocked: factsFor(panelTicket).failure === "blocked",
 				body:
 					liveDecision !== undefined
 						? { kind: "turn-log" as const, entries: liveDecision.entries }
@@ -5413,7 +5229,7 @@ export function App({
 			panelTicket !== undefined &&
 			createElement(ActionPanel, {
 				message: visibleMessage,
-				...ticketCloseDialog(panelTicket, markerOf(panelTicket)),
+				...ticketCloseDialog(panelTicket, factsFor(panelTicket).failure),
 				onAction: (key) => {
 					setPanel(null);
 					if (key === "close") runTicketClose(panelTicket);

@@ -90,6 +90,7 @@ describe("the shared control gallery", () => {
 			"ticket-ignore",
 			"ticket-mute",
 			"ticket-filter",
+			"ticket-facts",
 			"session-view",
 			"agent-view-fallback",
 			"captured-history-fallback",
@@ -541,6 +542,33 @@ describe("the shared control gallery", () => {
 		const runningRow = lines.find((line) => line.includes("[running]") && line.includes("muted"));
 		expect(openRow).toBeDefined();
 		expect(runningRow).toBeDefined();
+	});
+
+	// Issue #201: the row's badges are the fact module's answer, so the states a
+	// reviewer must see - the failure badge, the Queue wait's badge, the Starting
+	// face, and the header's conditional held cell - stand in one example and are
+	// asserted here. No example builds its own badge rule.
+	test("the Ticket row facts example shows each badge the fact module answers", async () => {
+		const setup = await gallery("ticket-facts", 160, 26);
+		const lines = rowsOf(setup.captureCharFrame());
+		const rowOf = (title: string) => lines.find((line) => line.includes(title));
+		// The failure badge takes the state badge's slot: the block the Agent
+		// reports, and the pane the poll no longer reports.
+		expect(rowOf("the blocked row")).toContain("blocked");
+		expect(rowOf("the missing row")).toContain("missing");
+		// The Starting face wears the same slot beside its written word, and the
+		// failure marker rules it out before the face is read.
+		expect(rowOf("the starting row")).toContain("starting");
+		// The Queue wait's badge stands on the open row, and the held badge
+		// outranks the resting state it rests in.
+		expect(rowOf("the queued row")).toContain("[queued]");
+		expect(rowOf("the held row")).toContain("held");
+		// The header's held cell stands only when a turn holds its decision: the
+		// two headers here show the cell and its absence on the same counts.
+		expect(
+			lines.find((line) => line.includes("Tickets") && line.includes("held: 1")),
+		).toBeDefined();
+		expect(lines.find((line) => line.includes("Tickets") && !line.includes("held:"))).toBeDefined();
 	});
 
 	test("the Consultation detail example shows the Session view and its fallbacks", async () => {
