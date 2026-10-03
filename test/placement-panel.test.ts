@@ -107,9 +107,9 @@ function seeded(machine: WorkflowState[] | null): Seeded {
 	openStates.push(state);
 	// The frames assert the unsplit list: a fresh file opens grouped by
 	// repository (ADR 0066), so the fixture holds the flat axis.
-	state.setGroupingAxis("tickets", "none");
-	state.initializeSources([source]);
-	state.applyFetch(source, success);
+	state.grouping.setGroupingAxis("tickets", "none");
+	state.sourceFact.initializeSources([source]);
+	state.sourceFact.applyFetch(source, success);
 	const home = mkdtempSync(join(tmpdir(), "factory-placement-panel-home-"));
 	paths.push(home);
 	const repo = mkdtempSync(join(tmpdir(), "factory-placement-panel-repo-"));

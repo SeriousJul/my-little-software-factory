@@ -827,7 +827,7 @@ describe("the contextual Action bar", () => {
 		// Seed a Consultation with a deterministic id so its recorded Agent
 		// handles match the pinned `agent list` entries.
 		const seed = (state: FactoryState, id: string, withAgent: boolean): void => {
-			state.createConsultation({
+			state.consultationRecord.createConsultation({
 				id,
 				typeName: "grill",
 				agentType: "pi",
@@ -839,7 +839,7 @@ describe("the contextual Action bar", () => {
 				agentName: `consultation-${id.slice(0, 8)}`,
 			});
 			if (withAgent)
-				state.setConsultationAgent(id, {
+				state.consultationRecord.setConsultationAgent(id, {
 					paneId: `pane-${id.slice(0, 8)}`,
 					tabId: `tab-${id.slice(0, 8)}`,
 					workspaceId: `ws-${id.slice(0, 8)}`,
@@ -928,7 +928,7 @@ describe("the contextual Action bar", () => {
 			const state = freshState();
 			const id = "bbbbbbbb-1111-4111-8111-111111111111";
 			seed(state, id, true);
-			state.settleConsultationTurn(id, null, "first answer", "idle");
+			state.consultationRecord.settleConsultationTurn(id, null, "first answer", "idle");
 			const runner = new FakeRunner();
 			runner.set("herdr", ["agent", "list"], { stdout: listJson(id, "idle") });
 			runner.set(
@@ -975,7 +975,7 @@ describe("the contextual Action bar", () => {
 			const state = freshState();
 			const id = "55555555-1111-4111-8111-111111111111";
 			seed(state, id, true);
-			state.settleConsultationTurn(id, null, "first answer", "blocked");
+			state.consultationRecord.settleConsultationTurn(id, null, "first answer", "blocked");
 			const paneId = `pane-${id.slice(0, 8)}`;
 			const runner = new FakeRunner();
 			runner.set("herdr", ["agent", "list"], { stdout: listJson(id, "blocked") });

@@ -6,7 +6,7 @@
  * cannot state a fact the record denies: one state word per live Agent,
  * and the surviving resources the close keeps on each environment.
  */
-import type { Consultation } from "../state.ts";
+import type { Consultation } from "../state/consultation-record.ts";
 import type { ActionRow } from "./modal-chrome.ts";
 
 /**

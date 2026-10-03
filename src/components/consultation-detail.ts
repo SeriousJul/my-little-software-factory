@@ -7,7 +7,7 @@ import type {
 	ConsultationResource,
 	ConsultationSnapshot,
 	ConsultationTurn,
-} from "../state.ts";
+} from "../state/consultation-record.ts";
 import type { SessionEntry } from "../turn-log.ts";
 import type { AnsiLine } from "./ansi-screen.ts";
 import { windowOf } from "./geometry.ts";

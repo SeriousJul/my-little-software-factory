@@ -27,6 +27,7 @@ import type {
 import {
 	type EnvironmentKind,
 	externalKeyNumber,
+	handoffLimitReached,
 	headBranchOf,
 	issueReferencesOf,
 	type SourceMembership,
@@ -47,9 +48,22 @@ import {
 	type CommandRunner,
 	errorMessage,
 } from "./runner.ts";
-import type { FactoryState, TicketProjection } from "./state.ts";
+import type { PlaneActionAggregate } from "./state/plane-action.ts";
+import type { SourceFactAggregate } from "./state/source-fact.ts";
+import type { TicketProjection, TicketWorkCycleAggregate } from "./state/ticket-work-cycle.ts";
 import { membershipMatchesState, newestMembership } from "./task-selection.ts";
 import { GhAuthenticator } from "./ticket-source.ts";
+
+/**
+ * The aggregates the workflow reads, as a list (issue #202). The workflow is a
+ * read-only rule over the state: it names the aggregates it touches, so a
+ * caller hands it exactly those and nothing else.
+ */
+export interface WorkflowAggregates {
+	planeAction: PlaneActionAggregate;
+	sourceFact: SourceFactAggregate;
+	ticketWorkCycle: TicketWorkCycleAggregate;
+}
 
 /**
  * The reason the fire records when no fixing pull request stands for the
@@ -738,7 +752,7 @@ export function isCoveredByFixingPullRequest(tickets: readonly Ticket[], ticket:
 /** The request one transition fire needs. */
 export interface FireTransitionRequest {
 	config: FactoryConfig;
-	state: FactoryState;
+	state: WorkflowAggregates;
 	runner: CommandRunner;
 	ticketIdentity: string;
 	taskType: string;
@@ -772,7 +786,7 @@ export async function fireTransition(
 	// The fire reads the projection before the list rule (ADR 0042): the rule
 	// withholds a covered ticket's row from the operator's list, and the
 	// machine's fire must still reach the ticket it acts on.
-	const tickets = request.state.projectedTickets(
+	const tickets = request.state.ticketWorkCycle.projectedTickets(
 		request.config.workflowStates,
 		request.config.defaultTaskType,
 	);
@@ -932,7 +946,7 @@ export async function fireTransition(
 	for (const target of surfaces) {
 		const write = target.kind === "ticket" ? outcome.ticketWrite : outcome.pullRequestWrite;
 		if (write !== null)
-			request.state.convergeMembershipLabels(
+			request.state.sourceFact.convergeMembershipLabels(
 				target.ticket.identity,
 				postWriteLabels(target.ticket.labels, write),
 			);
@@ -1004,7 +1018,7 @@ async function sourceIdentityOfOwnPullRequest(
 	// publish made ready, the way the fire's first refresh listed the ticket.
 	await request.refresh?.();
 	if (request.stopped?.() === true) return null;
-	const tickets = request.state.projectedTickets(
+	const tickets = request.state.ticketWorkCycle.projectedTickets(
 		request.config.workflowStates,
 		request.config.defaultTaskType,
 	);
@@ -1044,7 +1058,7 @@ export async function firePlaneActionOutcome(
 	// The stop over the fire's label reads: the fact lands on the attempt's
 	// record only while the state stands, the way the fire's reads do.
 	if (outcome !== null && request.stopped?.() !== true)
-		request.state.recordPlaneActionAttemptOutcome(request.attempt.id, outcome);
+		request.state.planeAction.recordPlaneActionAttemptOutcome(request.attempt.id, outcome);
 	return outcome;
 }
 
@@ -1091,7 +1105,7 @@ interface PullRequestSurface {
 /** The request the re-fire of the recorded skips needs (ADR 0042). */
 export interface RefireRecordedSkipsRequest {
 	config: FactoryConfig;
-	state: FactoryState;
+	state: WorkflowAggregates;
 	runner: CommandRunner;
 	/**
 	 * The forced refresh of the pull request sources; omitted in tests. The
@@ -1146,7 +1160,7 @@ export async function refireRecordedSkips(
 	// The sweep reads the projection before the list rule (ADR 0042): the rule
 	// withholds a covered ticket's row from the operator's list, and the
 	// re-fire must still reach the ticket it acts on.
-	const tickets = request.state.projectedTickets(
+	const tickets = request.state.ticketWorkCycle.projectedTickets(
 		request.config.workflowStates,
 		request.config.defaultTaskType,
 	);
@@ -1168,7 +1182,7 @@ export async function refireRecordedSkips(
 		// so the sweep checks the snapshot itself: the re-fire refuses a
 		// ticket its source no longer lists, the way the fire refuses a
 		// ticket that left the list.
-		if (!request.state.stillListed(ticket.identity)) continue;
+		if (!request.state.sourceFact.stillListed(ticket.identity)) continue;
 		if (request.config.taskTypes[completion.taskType]?.opensPullRequest === true) {
 			// The sweep's existence check is the direct head-branch read for a
 			// task type that opens a pull request (ADR 0076): a draft with
@@ -1191,7 +1205,7 @@ export async function refireRecordedSkips(
 		});
 		if (outcome === null) continue;
 		const recorded: TransitionOutcome = { ...outcome, refired: true };
-		if (request.state.recordSkipRefire(ticket.identity, recorded))
+		if (request.state.ticketWorkCycle.recordSkipRefire(ticket.identity, recorded))
 			refired.push({ ticketIdentity: ticket.identity, outcome: recorded });
 	}
 	return refired;
@@ -1381,13 +1395,16 @@ export interface NextStep {
  * the list rule (ADR 0042): the position can be a ticket the operator's list
  * withholds. Every caller holds a read of its own - the observation cycle reads
  * its pile once and hands it down - so the derivation never pays for a scan by
- * accident. It is a value the state makes, never an array a caller builds: a
+ * accident. It is a value the aggregate makes, never an array a caller builds: a
  * read that holds no row is a fact about the tickets, not a mistake at the call
  * site.
+ *
+ * `ticketWorkCycle` is the one aggregate the derivation reads: the Same-type hold
+ * is the Ticket work cycle's fact, and the derivation takes no other (issue #202).
  */
 export function deriveNextStep(
 	config: FactoryConfig,
-	state: FactoryState,
+	ticketWorkCycle: TicketWorkCycleAggregate,
 	outcome: TransitionOutcome,
 	projection: TicketProjection,
 ): NextStep | null {
@@ -1426,11 +1443,11 @@ export function deriveNextStep(
 		step.gate = "position-not-actionable";
 		return step;
 	}
-	if (state.sameTypeHoldActive(position.identity, taskType)) {
+	if (ticketWorkCycle.sameTypeHoldActive(position.identity, taskType)) {
 		step.gate = "same-type-hold";
 		return step;
 	}
-	if (position.handoffCount >= config.maxHandoffsPerTicket) {
+	if (handoffLimitReached(position.handoffCount, config.maxHandoffsPerTicket)) {
 		step.gate = "handoff-limit";
 		return step;
 	}

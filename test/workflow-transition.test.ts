@@ -230,13 +230,13 @@ function securitySeededState(...tickets: FetchedTicket[]) {
 	const dir = mkdtempSync(join(tmpdir(), "factory-workflow-state-"));
 	paths.push(dir);
 	const state = openFactoryState(join(dir, "state.sqlite"));
-	state.initializeSources([securitySource, pullSource]);
-	state.applyFetch(securitySource, {
+	state.sourceFact.initializeSources([securitySource, pullSource]);
+	state.sourceFact.applyFetch(securitySource, {
 		status: "success",
 		fetchedAt: "2026-08-31T11:01:00Z",
 		tickets: tickets.filter((ticket) => ticket.sourceKind === "github-dependabot-alert"),
 	});
-	state.applyFetch(pullSource, {
+	state.sourceFact.applyFetch(pullSource, {
 		status: "success",
 		fetchedAt: "2026-08-31T11:01:00Z",
 		tickets: tickets.filter((ticket) => ticket.sourceKind === "github-pull-request"),
@@ -249,13 +249,13 @@ function seededState(...tickets: FetchedTicket[]) {
 	const dir = mkdtempSync(join(tmpdir(), "factory-workflow-state-"));
 	paths.push(dir);
 	const state = openFactoryState(join(dir, "state.sqlite"));
-	state.initializeSources([issueSource, pullSource]);
-	state.applyFetch(issueSource, {
+	state.sourceFact.initializeSources([issueSource, pullSource]);
+	state.sourceFact.applyFetch(issueSource, {
 		status: "success",
 		fetchedAt: "2026-08-31T11:01:00Z",
 		tickets: tickets.filter((ticket) => ticket.sourceKind === "github-issue"),
 	});
-	state.applyFetch(pullSource, {
+	state.sourceFact.applyFetch(pullSource, {
 		status: "success",
 		fetchedAt: "2026-08-31T11:01:00Z",
 		tickets: tickets.filter((ticket) => ticket.sourceKind === "github-pull-request"),
@@ -264,9 +264,9 @@ function seededState(...tickets: FetchedTicket[]) {
 }
 
 function ticketAt(state: ReturnType<typeof seededState>, identity: string): Ticket {
-	const ticket = state
-		.visibleTickets(MACHINE_CONFIG.workflowStates, MACHINE_CONFIG.defaultTaskType)
-		.find((candidate) => candidate.identity === identity);
+	const ticket = state.ticketWorkCycle
+		.ticketListViews(MACHINE_CONFIG.workflowStates, MACHINE_CONFIG.defaultTaskType)
+		.rows.find((candidate) => candidate.identity === identity);
 	if (ticket === undefined) throw new Error(`no ticket ${identity} in the projection`);
 	return ticket;
 }
@@ -1595,8 +1595,8 @@ describe("the transition fire", () => {
 				"state.sqlite",
 			),
 		);
-		state.initializeSources([issueSource, pullSource]);
-		state.applyFetch(issueSource, {
+		state.sourceFact.initializeSources([issueSource, pullSource]);
+		state.sourceFact.applyFetch(issueSource, {
 			status: "success",
 			fetchedAt: "2026-08-31T11:01:00Z",
 			tickets: [issueTicketData()],
@@ -1611,7 +1611,7 @@ describe("the transition fire", () => {
 			refresh: async () => {
 				refreshed += 1;
 				// The refresh lands the pull request the agent just opened.
-				state.applyFetch(pullSource, {
+				state.sourceFact.applyFetch(pullSource, {
 					status: "success",
 					fetchedAt: "2026-08-31T11:02:00Z",
 					tickets: [pullTicketData()],
@@ -1637,8 +1637,8 @@ describe("the transition fire", () => {
 			],
 		};
 		const state = openFactoryState(":memory:");
-		state.initializeSources([{ name: "pulls", kind: "github-pull-requests" }]);
-		state.applyFetch(
+		state.sourceFact.initializeSources([{ name: "pulls", kind: "github-pull-requests" }]);
+		state.sourceFact.applyFetch(
 			{ name: "pulls", kind: "github-pull-requests" },
 			{
 				status: "success",
@@ -1730,7 +1730,7 @@ function settledTurn(
 	taskType: string,
 	transition: TransitionOutcome | null,
 ): void {
-	const claim = state.claimHandoff(
+	const claim = state.handoff.claimHandoff(
 		identity,
 		{
 			agentType: "pi",
@@ -1743,12 +1743,12 @@ function settledTurn(
 		"open",
 	);
 	if (!claim.ok) throw new Error(claim.reason);
-	state.settleHandoff(claim.claim.attemptId, true, undefined, {
+	state.handoff.settleHandoff(claim.claim.attemptId, true, undefined, {
 		paneId: "pane-1",
 		tabId: "tab-1",
 		workspaceId: "ws-1",
 	});
-	state.settleTurn({
+	state.ticketWorkCycle.settleTurn({
 		ticketIdentity: identity,
 		handoffId: claim.claim.attemptId,
 		taskType,
@@ -1773,7 +1773,7 @@ function skipSeededState(issue: FetchedTicket, transition: TransitionOutcome | n
 
 /** Land the pull request on the pulls source, the way a refresh would. */
 function landPullRequests(state: ReturnType<typeof seededState>, ...pulls: FetchedTicket[]): void {
-	state.applyFetch(pullSource, {
+	state.sourceFact.applyFetch(pullSource, {
 		status: "success",
 		fetchedAt: "2026-08-31T12:01:00Z",
 		tickets: pulls,
@@ -1809,7 +1809,7 @@ describe("the recorded skip's re-fire", () => {
 			"gh pr edit #12 --repo github.com/acme/factory --add-label ready-for-review",
 		]);
 		// The trace took the re-fired outcome in place of the skip it recorded.
-		expect(state.lastCompletion(issueIdentity)?.transition).toMatchObject({
+		expect(state.ticketWorkCycle.lastCompletion(issueIdentity)?.transition).toMatchObject({
 			refired: true,
 			reason: "",
 			positionTaskType: "review",
@@ -1867,7 +1867,7 @@ describe("the recorded skip's re-fire", () => {
 			await refireRecordedSkips({ config: MACHINE_CONFIG, state: draft, runner: draftRunner }),
 		).toEqual([]);
 		expect(draftRunner.commands()).toEqual([]);
-		expect(draft.lastCompletion(issueIdentity)?.transition).toMatchObject({
+		expect(draft.ticketWorkCycle.lastCompletion(issueIdentity)?.transition).toMatchObject({
 			reason: NO_LINKED_PULL_REQUEST_SKIP,
 		});
 		draft.close();
@@ -1919,7 +1919,7 @@ describe("the recorded skip's re-fire", () => {
 		landPullRequests(state, pullTicketData());
 		// The refresh no longer lists the issue: it left every source, and the
 		// sweep reads the projection.
-		state.applyFetch(issueSource, {
+		state.sourceFact.applyFetch(issueSource, {
 			status: "success",
 			fetchedAt: "2026-08-31T12:02:00Z",
 			tickets: [],
@@ -1965,7 +1965,9 @@ describe("the recorded skip's re-fire", () => {
 		// The failure stands on the trace where the skip stood: the operator
 		// reads it beside the settled turn, and the sweep's bound holds it
 		// there - a second sweep re-fires nothing.
-		expect(state.lastCompletion(issueIdentity)?.transition?.writeFailure).toContain("HTTP 403");
+		expect(state.ticketWorkCycle.lastCompletion(issueIdentity)?.transition?.writeFailure).toContain(
+			"HTTP 403",
+		);
 		const again = await refireRecordedSkips({ config: MACHINE_CONFIG, state, runner });
 		expect(again).toEqual([]);
 		state.close();
@@ -2325,7 +2327,7 @@ describe("the pull request the plane opens (ADR 0076)", () => {
 			ticketIdentity: issueIdentity,
 			taskType: "implement",
 			refresh: async () => {
-				state.applyFetch(pullSource, {
+				state.sourceFact.applyFetch(pullSource, {
 					status: "success",
 					fetchedAt: "2026-08-31T11:03:00Z",
 					tickets: [
@@ -2347,7 +2349,7 @@ describe("the pull request the plane opens (ADR 0076)", () => {
 		// The consumer's lookup: the position the outcome names stands in the
 		// projection the auto top-up's walk reads, so it finds the machine's
 		// position by the source's id.
-		const listed = state
+		const listed = state.ticketWorkCycle
 			.projectedTickets(OPEN_CONFIG.workflowStates, OPEN_CONFIG.defaultTaskType)
 			.find((candidate) => candidate.identity === outcome?.positionTicketIdentity);
 		expect(listed?.identity).toBe(sourceIdentity);
@@ -2425,7 +2427,7 @@ describe("the recorded empty skip's re-fire (ADR 0076)", () => {
 			state,
 			runner,
 			refresh: async () => {
-				state.applyFetch(pullSource, {
+				state.sourceFact.applyFetch(pullSource, {
 					status: "success",
 					fetchedAt: "2026-08-31T12:02:00Z",
 					tickets: [
@@ -2468,7 +2470,7 @@ describe("the recorded empty skip's re-fire (ADR 0076)", () => {
 		// recordSkipRefire swaps the EMPTY skip the way it swaps the missing
 		// one: the trace takes the re-fired outcome in place of the skip it
 		// recorded.
-		expect(state.lastCompletion(issueIdentity)?.transition).toMatchObject({
+		expect(state.ticketWorkCycle.lastCompletion(issueIdentity)?.transition).toMatchObject({
 			refired: true,
 			reason: "",
 			positionTaskType: "review",
@@ -2516,7 +2518,9 @@ describe("the recorded empty skip's re-fire (ADR 0076)", () => {
 			"git -C /acme/factory fetch origin factory/5-persist-source-facts main",
 			"git -C /acme/factory diff --quiet origin/main origin/factory/5-persist-source-facts",
 		]);
-		expect(state.lastCompletion(issueIdentity)?.transition?.reason).toBe(EMPTY_PULL_REQUEST_SKIP);
+		expect(state.ticketWorkCycle.lastCompletion(issueIdentity)?.transition?.reason).toBe(
+			EMPTY_PULL_REQUEST_SKIP,
+		);
 		state.close();
 	});
 });

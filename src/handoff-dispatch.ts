@@ -25,20 +25,24 @@ import {
 	type OwnNameKnowledge,
 } from "./handoff.ts";
 import type { Logger } from "./logging.ts";
+import { overParallelLimit } from "./parallel.ts";
 import { evaluatePlacement } from "./placement.ts";
 import { isPlaneActionTaskType, planeActionSettingOf } from "./plane-action-registry.ts";
 import { runMergePullRequest } from "./plane-actions.ts";
 import type { RepositoryMapping } from "./repo.ts";
 import { type CommandRunner, errorMessage } from "./runner.ts";
+import type { ConsultationRecordAggregate } from "./state/consultation-record.ts";
+import type { HandoffAggregate, HandoffClaim, HandoffOrigin } from "./state/handoff.ts";
+import type { PlaneActionAggregate } from "./state/plane-action.ts";
+import type { SourceFactAggregate } from "./state/source-fact.ts";
+import type { TicketWorkCycleAggregate } from "./state/ticket-work-cycle.ts";
 import type {
-	FactoryState,
-	HandoffClaim,
-	HandoffOrigin,
+	WorkQueueAggregate,
 	WorkQueueConsultationItem,
 	WorkQueueHandoffItem,
 	WorkQueuePlaneActionItem,
-} from "./state.ts";
-import { workQueueIdentityOf } from "./state.ts";
+} from "./state/work-queue.ts";
+import { workQueueIdentityOf } from "./state/work-queue.ts";
 import {
 	editCommandFor,
 	findFixingPullRequest,
@@ -239,9 +243,24 @@ export async function reportHandoffOutcome(
 	else if (lines.length > 0) reports.warning(lines.join("; "));
 }
 
+/**
+ * The aggregates the Handoff dispatch reads, as a list (issue #202), and the
+ * clock it stamps its records with.
+ */
+export interface HandoffDispatchAggregates {
+	consultationRecord: ConsultationRecordAggregate;
+	handoff: HandoffAggregate;
+	planeAction: PlaneActionAggregate;
+	sourceFact: SourceFactAggregate;
+	ticketWorkCycle: TicketWorkCycleAggregate;
+	workQueue: WorkQueueAggregate;
+	/** The state clock: the reading a record's timestamp is taken from. */
+	now(): number;
+}
+
 /** Dependencies of the Handoff dispatch module. */
 export interface HandoffDispatchOptions extends HandoffDispatchReports {
-	state: FactoryState;
+	state: HandoffDispatchAggregates;
 	runner: CommandRunner;
 	/** The current config. A queued handoff reads it when it starts. */
 	config: () => FactoryConfig;
@@ -409,7 +428,7 @@ export function createHandoffDispatch(options: HandoffDispatchOptions): HandoffD
 
 /** The seat, the queues, and the work of one durable state database. */
 class HandoffDispatchModule implements HandoffDispatch {
-	private readonly state: FactoryState;
+	private readonly state: HandoffDispatchAggregates;
 	private readonly runner: CommandRunner;
 	private readonly config: () => FactoryConfig;
 	private readonly seatCount: () => number;
@@ -506,7 +525,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 		// pass takes it when a seat is free. The claim's hard gates run before
 		// the ask, the way the claim runs them: a gate the ask fails is a
 		// refusal, not a queued item.
-		const check = this.state.handoffClaimCheck(intent.ticketIdentity, intent.origin);
+		const check = this.state.handoff.handoffClaimCheck(intent.ticketIdentity, intent.origin);
 		if (!check.ok) {
 			this.log?.warn(
 				`handoff refused: ${check.reason} (${this.ticketName(intent.ticketIdentity)})`,
@@ -521,7 +540,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 			this.intentOnStarted.set(intent.ticketIdentity, intent.onStarted);
 		// The queue pause (ADR 0052): the ask sits in the queue until the
 		// resume, and the resume starts the pickup that takes it.
-		if (this.state.queuePaused()) {
+		if (this.state.workQueue.queuePaused()) {
 			this.reports.notice(
 				`handoff of ${this.ticketName(intent.ticketIdentity)} is in the Work queue; the queue is paused`,
 			);
@@ -556,14 +575,14 @@ class HandoffDispatchModule implements HandoffDispatch {
 			this.log?.warn(`merge refused: ${check.reason} (${this.ticketName(intent.ticketIdentity)})`);
 			return Promise.resolve({ ok: false, reason: check.reason });
 		}
-		if (this.state.hasWorkItem(intent.ticketIdentity))
+		if (this.state.workQueue.hasWorkItem(intent.ticketIdentity))
 			return Promise.resolve({
 				ok: false,
 				reason:
 					`${this.ticketName(intent.ticketIdentity)} already has a waiting queue item; ` +
 					"the first item keeps its place",
 			});
-		const enqueued = this.state.enqueuePlaneActionWork({
+		const enqueued = this.state.workQueue.enqueuePlaneActionWork({
 			ticketIdentity: intent.ticketIdentity,
 			routeFromIdentity: intent.routeFromIdentity ?? null,
 			origin: intent.origin,
@@ -602,7 +621,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 		);
 		// The queue pause (ADR 0052): the ask sits in the queue until the
 		// resume, and the resume starts the pickup that takes it.
-		if (this.state.queuePaused()) {
+		if (this.state.workQueue.queuePaused()) {
 			this.reports.notice(
 				`the merge of ${this.ticketName(intent.ticketIdentity)} waits in the Work queue; the queue is paused`,
 			);
@@ -626,7 +645,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 	private planeActionClaimCheck(
 		ticketIdentity: string,
 	): { ok: true } | { ok: false; reason: string } {
-		const currentState = this.state.ticketState(ticketIdentity);
+		const currentState = this.state.ticketWorkCycle.ticketState(ticketIdentity);
 		if (currentState === undefined) return { ok: false, reason: "the ticket no longer exists" };
 		if (currentState !== "open" && currentState !== "awaiting")
 			return { ok: false, reason: `the ticket is now ${currentState}` };
@@ -646,9 +665,9 @@ class HandoffDispatchModule implements HandoffDispatch {
 	private recordPlaneActionDecision(intent: PlaneActionIntent): void {
 		if (intent.origin === "workflow") {
 			const routeFrom = intent.routeFromIdentity ?? intent.ticketIdentity;
-			const previousHandoffId = this.state.latestHandoff(routeFrom)?.handoffId ?? "";
+			const previousHandoffId = this.state.handoff.latestHandoff(routeFrom)?.handoffId ?? "";
 			if (previousHandoffId !== "")
-				this.state.applyCompletionDecision({
+				this.state.ticketWorkCycle.applyCompletionDecision({
 					ticketIdentity: routeFrom,
 					handoffId: previousHandoffId,
 					decision: intent.automatic === true ? "auto-merged" : "merged",
@@ -709,7 +728,10 @@ class HandoffDispatchModule implements HandoffDispatch {
 		}
 		// The projection before the list rule, the way the pickup's covered gate
 		// reads it: the rule withholds exactly the ticket this pickup asked for.
-		const projection = this.state.projectedTickets(config.workflowStates, config.defaultTaskType);
+		const projection = this.state.ticketWorkCycle.projectedTickets(
+			config.workflowStates,
+			config.defaultTaskType,
+		);
 		const ticket = projection.find((candidate) => candidate.identity === item.ticketIdentity);
 		if (ticket === undefined) {
 			this.settleIntentOnStarted(item.ticketIdentity, {
@@ -769,7 +791,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 		// external change: the row is the record of the run, written after the
 		// run, and a crash between the change and the record settles the same
 		// way on the restart, through the fresh read.
-		const attempt = this.state.recordPlaneActionAttempt({
+		const attempt = this.state.planeAction.recordPlaneActionAttempt({
 			ticketIdentity: item.ticketIdentity,
 			taskType: item.taskType,
 			decision: item.automatic ? "auto-merged" : "merged",
@@ -802,8 +824,8 @@ class HandoffDispatchModule implements HandoffDispatch {
 			for (const membership of pullRequest.memberships)
 				for (const reference of issueReferencesOf(membership.attributes))
 					if (reference.identity !== null) closedIssueIdentities.add(reference.identity);
-			this.state.retireTicket(pullRequest.identity);
-			for (const identity of closedIssueIdentities) this.state.retireTicket(identity);
+			this.state.sourceFact.retireTicket(pullRequest.identity);
+			for (const identity of closedIssueIdentities) this.state.sourceFact.retireTicket(identity);
 		}
 		// The row left at the claim, the way the Consultation's pickup
 		// leaves it. The tickets keep the states the ask left them in
@@ -840,14 +862,14 @@ class HandoffDispatchModule implements HandoffDispatch {
 	 * first line with a shorter copy of the same fact.
 	 */
 	private enqueueWork(intent: HandoffIntent): DispatchResult {
-		if (this.state.hasWorkItem(intent.ticketIdentity))
+		if (this.state.workQueue.hasWorkItem(intent.ticketIdentity))
 			return {
 				ok: false,
 				reason:
 					`${this.ticketName(intent.ticketIdentity)} already has a waiting queue item; ` +
 					"the first item keeps its place",
 			};
-		const enqueued = this.state.enqueueWork({
+		const enqueued = this.state.workQueue.enqueueWork({
 			ticketIdentity: intent.ticketIdentity,
 			routeFromIdentity: intent.routeFromIdentity ?? null,
 			origin: intent.origin,
@@ -909,9 +931,9 @@ class HandoffDispatchModule implements HandoffDispatch {
 		// The queue pause (ADR 0052): the brake holds the drain. The items keep
 		// their places, the force-dispatch passes it, and the resume starts the
 		// pickup that takes them.
-		if (this.state.queuePaused()) return 0;
+		if (this.state.workQueue.queuePaused()) return 0;
 		const limit = this.config().maxParallelAgents;
-		const items = this.state.workQueue();
+		const items = this.state.workQueue.items();
 		if (items.length === 0) return 0;
 		const freeSeats = limit === 0 ? items.length : limit - this.seatCount();
 		// The plane action's items take no seat and are not held by the cap
@@ -983,7 +1005,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 	 * stood when the keypress ran.
 	 */
 	removeQueueItem(ticketIdentity: string): boolean {
-		const removed = this.state.cancelWorkItem(ticketIdentity);
+		const removed = this.state.workQueue.cancelWorkItem(ticketIdentity);
 		this.cancelParkedPickup(ticketIdentity);
 		// A row that leaves without a claim still holds the ask's start report:
 		// the cancel answers it here, once, with the cancellation. Without this
@@ -993,7 +1015,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 		// live run is not that case: the run answers its own ask when it
 		// settles, and a row that had already left answers through the path
 		// that took it, so the cancel settles nothing twice.
-		if (removed && !this.state.handoffInFlight(ticketIdentity))
+		if (removed && !this.state.handoff.handoffInFlight(ticketIdentity))
 			this.settleIntentOnStarted(ticketIdentity, {
 				ok: false,
 				reason: "the waiting start was cancelled",
@@ -1011,13 +1033,13 @@ class HandoffDispatchModule implements HandoffDispatch {
 	 * reason that ended its item, not the cancel's.
 	 */
 	private removeQueueRow(ticketIdentity: string): boolean {
-		const removed = this.state.removeWorkItem(ticketIdentity);
+		const removed = this.state.workQueue.removeWorkItem(ticketIdentity);
 		this.cancelParkedPickup(ticketIdentity);
 		return removed;
 	}
 
 	removeConsultationQueueItem(consultationId: string): boolean {
-		return this.state.removeConsultationWorkItem(consultationId);
+		return this.state.consultationRecord.removeConsultationWorkItem(consultationId);
 	}
 
 	/**
@@ -1032,9 +1054,10 @@ class HandoffDispatchModule implements HandoffDispatch {
 	 */
 	private recordRouteDecision(intent: HandoffIntent) {
 		if (intent.origin !== "workflow" || intent.routeFromIdentity === undefined) return;
-		const previousHandoffId = this.state.latestHandoff(intent.routeFromIdentity)?.handoffId ?? "";
+		const previousHandoffId =
+			this.state.handoff.latestHandoff(intent.routeFromIdentity)?.handoffId ?? "";
 		if (previousHandoffId === "") return;
-		this.state.applyCompletionDecision({
+		this.state.ticketWorkCycle.applyCompletionDecision({
 			ticketIdentity: intent.routeFromIdentity,
 			handoffId: previousHandoffId,
 			decision: intent.automatic === true ? "auto-handed-off" : "handed-off",
@@ -1064,7 +1087,11 @@ class HandoffDispatchModule implements HandoffDispatch {
 			)
 				continue;
 			this.handoffQueue.splice(index, 1);
-			this.state.settleHandoff(parked.claim.attemptId, false, "the waiting start was cancelled");
+			this.state.handoff.settleHandoff(
+				parked.claim.attemptId,
+				false,
+				"the waiting start was cancelled",
+			);
 			this.settleIntentOnStarted(ticketIdentity, {
 				ok: false,
 				reason: "the waiting start was cancelled",
@@ -1102,7 +1129,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 		// left standing for a record that no longer waits. The item leaves the
 		// queue on every answer (ADR 0034, issue #90): the record keeps the ask,
 		// and the queue holds the pointer only while the record waits.
-		this.state.removeConsultationWorkItem(item.consultationId);
+		this.state.consultationRecord.removeConsultationWorkItem(item.consultationId);
 		this.reports.refresh();
 		if (outcome.kind === "started") {
 			// The record holds its seat in `opening` now, and the opening runs on
@@ -1152,7 +1179,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 		// is in the very state that gate refuses, and the answer there is the
 		// cancellation, not a "the ticket is now ..." failure.
 		if (item.origin === "restart" || item.origin === "workflow") {
-			const inFlight = this.state
+			const inFlight = this.state.ticketWorkCycle
 				.ticketsByState(["handed-off", "running"])
 				.find((candidate) => candidate.ticketIdentity === item.ticketIdentity);
 			if (inFlight !== undefined && Date.parse(inFlight.startedAt) > Date.parse(item.enqueuedAt)) {
@@ -1170,7 +1197,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 				return { ok: "cancelled" };
 			}
 		}
-		const currentState = this.state.ticketState(item.ticketIdentity);
+		const currentState = this.state.ticketWorkCycle.ticketState(item.ticketIdentity);
 		// The state gate reads the position the item names (ADR 0072): the
 		// position stands open or awaiting, the way the continuation's position
 		// check reads it. The claim does not ask the source ticket's state
@@ -1193,7 +1220,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 		// rule, because the rule withholds exactly the ticket this gate
 		// refuses.
 		if (item.origin === "open") {
-			const projection = this.state.projectedTickets(
+			const projection = this.state.ticketWorkCycle.projectedTickets(
 				this.config().workflowStates,
 				this.config().defaultTaskType,
 			);
@@ -1211,7 +1238,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 				return { ok: "cancelled" };
 			}
 		}
-		const claim = this.state.claimHandoff(item.ticketIdentity, item.choice, item.origin);
+		const claim = this.state.handoff.claimHandoff(item.ticketIdentity, item.choice, item.origin);
 		if (!claim.ok) {
 			this.log?.warn(`handoff refused: ${claim.reason} (${this.ticketName(item.ticketIdentity)})`);
 			return { ok: false, reason: claim.reason };
@@ -1223,7 +1250,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 			`handoff started: ${this.ticketName(item.ticketIdentity)} (origin ${item.origin})`,
 		);
 		this.reports.starting(item.ticketIdentity, true);
-		const ticket = this.state
+		const ticket = this.state.ticketWorkCycle
 			// The ignore is an automatic gate and never a hard start gate (ADR 0060):
 			// the only item an ignored Ticket can hold is one the operator asked for by
 			// hand, so the Pickup starts it. This read resolves a Ticket by identity, so
@@ -1235,7 +1262,11 @@ class HandoffDispatchModule implements HandoffDispatch {
 			// The claim's hard checks passed but the projection holds no ticket
 			// to run: settle the claim and name it; the item's fate is the
 			// caller's, like every other refusal above.
-			this.state.settleHandoff(claim.claim.attemptId, false, "the ticket is no longer visible");
+			this.state.handoff.settleHandoff(
+				claim.claim.attemptId,
+				false,
+				"the ticket is no longer visible",
+			);
 			this.reports.starting(item.ticketIdentity, false);
 			this.reports.refresh();
 			return { ok: false, reason: "the ticket is no longer visible" };
@@ -1257,7 +1288,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 		// A run already in flight for this ticket settles its own item when it
 		// ends; the pickup skips it so a concurrent pass cannot re-claim and
 		// drop the start the run holds (ADR 0049).
-		if (this.state.handoffInFlight(item.ticketIdentity)) return false;
+		if (this.state.handoff.handoffInFlight(item.ticketIdentity)) return false;
 		const claimed = this.claimQueueItem(item);
 		if (claimed.ok === "cancelled") return false;
 		if (claimed.ok === false) {
@@ -1286,7 +1317,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 					// operator's cancel seen from the module: a run already inside herdr
 					// cannot be recalled, so it finishes, keeps the row gone, and earns no
 					// "started from the Work queue" line for a start the operator ended.
-					const rowStands = this.state.hasWorkItem(item.ticketIdentity);
+					const rowStands = this.state.workQueue.hasWorkItem(item.ticketIdentity);
 					if (rowStands) this.removeQueueRow(item.ticketIdentity);
 					// The route's decision stands at the ask (ADR 0064); the start
 					// answers the ask's refresh and start report only.
@@ -1296,7 +1327,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 							`${this.ticketName(item.ticketIdentity)} started from the Work queue`,
 						);
 					}
-				} else if (this.state.hasWorkItem(item.ticketIdentity)) {
+				} else if (this.state.workQueue.hasWorkItem(item.ticketIdentity)) {
 					// The start never went live, so the item drops with the warning
 					// and the ticket keeps its state (ADR 0049). A row the operator
 					// already removed says its own goodbye on the line, so the
@@ -1335,8 +1366,8 @@ class HandoffDispatchModule implements HandoffDispatch {
 	 */
 	forceDispatchWorkQueueItem(itemIdentity: string): void {
 		if (this.stopped) return;
-		const item = this.state
-			.workQueue()
+		const item = this.state.workQueue
+			.items()
 			.find((candidate) => workQueueIdentityOf(candidate) === itemIdentity);
 		if (item === undefined) return;
 		if (item.kind === "consultation") {
@@ -1345,7 +1376,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 			// check the pickup runs and skips only the cap, and the item leaves
 			// the queue on every answer, the way its pickup does.
 			const limit = this.config().maxParallelAgents;
-			const overCap = limit > 0 && this.seatCount() >= limit;
+			const overCap = overParallelLimit(limit, this.seatCount());
 			void this.pickupConsultationItem(item, overCap);
 			return;
 		}
@@ -1355,14 +1386,14 @@ class HandoffDispatchModule implements HandoffDispatch {
 			// gates run, the item leaves the queue on every answer, and the line
 			// names the cap when it stood over it at the key.
 			const limit = this.config().maxParallelAgents;
-			const overCap = limit > 0 && this.seatCount() >= limit;
+			const overCap = overParallelLimit(limit, this.seatCount());
 			void this.pickupPlaneActionItem(item, overCap);
 			return;
 		}
 		// Measured before the claim, on the shared count: the line states the
 		// start over the cap only when the cap was full at the dispatch.
 		const limit = this.config().maxParallelAgents;
-		const overCap = limit > 0 && this.seatCount() >= limit;
+		const overCap = overParallelLimit(limit, this.seatCount());
 		const claimed = this.claimQueueItem(item);
 		if (claimed.ok === "cancelled") return;
 		if (claimed.ok === false) {
@@ -1399,7 +1430,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 					// The ask is answered, either way: the item leaves the queue when
 					// the start settles. A row the operator already removed leaves no
 					// second line: the run it ended earns no start line of its own.
-					const rowStands = this.state.hasWorkItem(item.ticketIdentity);
+					const rowStands = this.state.workQueue.hasWorkItem(item.ticketIdentity);
 					if (rowStands) this.removeQueueRow(item.ticketIdentity);
 					// The route's decision stands at the ask (ADR 0064); the start
 					// answers the ask's refresh and start report only.
@@ -1410,7 +1441,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 								? `force-dispatched ${this.ticketName(item.ticketIdentity)} over the Parallel limit`
 								: `${this.ticketName(item.ticketIdentity)} started from the Work queue`,
 						);
-				} else if (this.state.hasWorkItem(item.ticketIdentity)) {
+				} else if (this.state.workQueue.hasWorkItem(item.ticketIdentity)) {
 					// The ask is answered: a failed start leaves the queue, and the
 					// warning names the operation and the reason, one line for the
 					// failure the handoff's own line already carries.
@@ -1428,7 +1459,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 	private ticketName(identity: string): string {
 		// The projection, not the visible list: a covered ticket is hidden
 		// from the list while its queued start is still naming it (ADR 0042).
-		const title = this.state
+		const title = this.state.ticketWorkCycle
 			.projectedTickets(this.config().workflowStates, this.config().defaultTaskType)
 			.find((candidate) => candidate.identity === identity)?.title;
 		return title === undefined ? `ticket ${identity}` : `"${title}"`;
@@ -1451,11 +1482,11 @@ class HandoffDispatchModule implements HandoffDispatch {
 		// One seat item holds the whole close: the cycle ends and its environment
 		// goes, in that order, with no handoff of the same ticket in between them.
 		return this.queueCleanup(async () => {
-			const handoff = this.state.latestHandoff(identity);
-			if (!this.state.closeWorkCycle(identity)) {
+			const handoff = this.state.handoff.latestHandoff(identity);
+			if (!this.state.ticketWorkCycle.closeWorkCycle(identity)) {
 				// The ticket moved on while the close waited: it rests open, or its
 				// turn settled and awaits a decision of its own. One fact, said once.
-				const state = this.state.ticketState(identity) ?? "gone";
+				const state = this.state.ticketWorkCycle.ticketState(identity) ?? "gone";
 				this.reports.refresh();
 				return { ended: false, reason: `the ticket is ${state}` };
 			}
@@ -1488,17 +1519,17 @@ class HandoffDispatchModule implements HandoffDispatch {
 		const workspaceIds: string[] = [];
 		let leftoverKnown = false;
 		for (const known of identities) {
-			const handles = this.state.handoffHandles(known);
+			const handles = this.state.handoff.handoffHandles(known);
 			for (const paneId of handles.paneIds) paneIds.push(paneId);
 			for (const workspaceId of handles.workspaceIds) workspaceIds.push(workspaceId);
-			if (this.state.leftoverEnvironment(known) !== null) leftoverKnown = true;
+			if (this.state.handoff.leftoverEnvironment(known) !== null) leftoverKnown = true;
 		}
 		return { ownPaneIds: paneIds, ownWorkspaceIds: workspaceIds, leftoverKnown };
 	}
 
 	private recordNameCollision(identity: string, collision: NameCollision): void {
 		if (!collision.own) return;
-		this.state.recordLeftoverEnvironment({
+		this.state.handoff.recordLeftoverEnvironment({
 			ticketIdentity: identity,
 			paneId: collision.holder?.paneId ?? null,
 			reason: `the leftover agent still holds the herdr name ${collision.stableName}: ${collision.reason}`,
@@ -1524,7 +1555,8 @@ class HandoffDispatchModule implements HandoffDispatch {
 
 		this.inFlight = true;
 		this.reports.working(`handing off "${ticket.title}"...`);
-		const onStage = (stage: string) => this.state.advanceHandoffAttempt(claim.attemptId, stage);
+		const onStage = (stage: string) =>
+			this.state.handoff.advanceHandoffAttempt(claim.attemptId, stage);
 		const names = this.nameKnowledgeFor(ticket.identity, claimed.routeFromIdentity);
 		const run = (async () => {
 			// The placement (ADR 0045): a non-automatic start whose chosen task
@@ -1654,7 +1686,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 	 * the Close cleanup reads them.
 	 */
 	private async closePreviousHandoffEnvironment(identity: string): Promise<string | undefined> {
-		const stored = this.state.latestHandoff(identity);
+		const stored = this.state.handoff.latestHandoff(identity);
 		if (stored === null) return undefined;
 		try {
 			return await closeStoredEnvironment(
@@ -1678,7 +1710,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 	): void {
 		if (this.stopped) return;
 		const reason = errorMessage(error);
-		this.state.settleHandoff(claim.attemptId, false, reason);
+		this.state.handoff.settleHandoff(claim.attemptId, false, reason);
 		this.reports.starting(identity, false);
 		this.reports.refresh();
 		this.reports.clearWorking();
@@ -1701,7 +1733,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 		if (outcome.ownCollision !== undefined)
 			this.recordNameCollision(identity, outcome.ownCollision);
 
-		this.state.settleHandoff(
+		this.state.handoff.settleHandoff(
 			claim.attemptId,
 			outcome.status !== "failed",
 			outcome.status === "failed" ? outcome.reason : undefined,
@@ -1784,7 +1816,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 			if (this.seatHeld()) return;
 			const next = this.handoffQueue.shift();
 			if (next === undefined) return;
-			const currentState = this.state.ticketState(next.ticket.identity);
+			const currentState = this.state.ticketWorkCycle.ticketState(next.ticket.identity);
 			// A workflow route runs from the state its claim made: the route
 			// stands on the settled turn the claim waited on, and a ticket that
 			// moved on while the queue held - the turn closed, the ticket back
@@ -1807,7 +1839,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 					currentState === undefined
 						? "the ticket no longer exists"
 						: `the ticket is now ${currentState}`;
-				this.state.settleHandoff(next.claim.attemptId, false, movedOn);
+				this.state.handoff.settleHandoff(next.claim.attemptId, false, movedOn);
 				this.reports.starting(next.ticket.identity, false);
 				this.reports.refresh();
 				// One line for both exits, read through the one name helper every
@@ -1821,7 +1853,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 					// A pickup the seat parked, and the ticket moved on before its turn:
 					// the start-or-drop contract ends in a drop (ADR 0049). The item
 					// leaves the queue, and the warning says the reason the drain found.
-					this.state.removeWorkItem(next.ticket.identity);
+					this.state.workQueue.removeWorkItem(next.ticket.identity);
 					next.onStarted({ ok: false, reason: movedOn });
 				} else {
 					// The route the claim was for never started: its caller decides
@@ -1835,7 +1867,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 			// read, so it takes the whole projection - the operator's List filter and
 			// the list rule's two causes say nothing about which Ticket the claim made.
 			const snapshot =
-				this.state
+				this.state.ticketWorkCycle
 					.projectedTickets(this.config().workflowStates, this.config().defaultTaskType)
 					.find((candidate) => candidate.identity === next.ticket.identity) ?? next.ticket;
 			this.runClaimedHandoff({ ...next, ticket: snapshot }, next.onStarted);
@@ -1859,7 +1891,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 			);
 			if (failure === undefined) {
 				const reach = closeCleanupReach(handoff);
-				this.state.clearLeftoverEnvironments(
+				this.state.handoff.clearLeftoverEnvironments(
 					identity,
 					reach.scope === "workspace"
 						? { workspaceId: reach.workspaceId }
@@ -1869,7 +1901,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 				);
 				return undefined;
 			}
-			this.state.recordLeftoverEnvironment({
+			this.state.handoff.recordLeftoverEnvironment({
 				ticketIdentity: identity,
 				handoffId: handoff.handoffId,
 				reason: failure,
@@ -1877,7 +1909,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 			return failure;
 		} catch (error) {
 			const reason = `the close cleanup did not run: ${errorMessage(error)}`;
-			this.state.recordLeftoverEnvironment({
+			this.state.handoff.recordLeftoverEnvironment({
 				ticketIdentity: identity,
 				handoffId: handoff.handoffId,
 				reason,

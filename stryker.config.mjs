@@ -59,6 +59,15 @@ export default {
 		// inflate the score it reports. It stays in `bun run test`, which reads the
 		// uninstrumented tree.
 		"test/shared-control-architecture.test.ts",
+		// The state architecture test (issue #202, ADR 0095) reads the nine
+		// aggregate modules and the composition as text: it counts the interface
+		// methods a module publishes, the tables each statement names, and the
+		// `key: new ` shapes the graph is built with. Instrumentation rewrites the
+		// method bodies and the query strings it reads, so under mutation the file
+		// fails on a text change rather than on a behavior change, and it would
+		// kill every mutant in the nine state modules for the wrong reason. It
+		// stays in `bun run test`, which reads the uninstrumented tree.
+		"test/state-architecture.test.ts",
 	],
 	// "json" is the machine-readable report: a future `break` gate and any
 	// campaign-to-campaign diff read `reports/mutation/mutation.json`, so it is

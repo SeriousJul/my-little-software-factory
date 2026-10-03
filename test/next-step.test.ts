@@ -76,8 +76,8 @@ function fetched(
 
 function stateWith(...tickets: FetchedTicket[]): FactoryState {
 	const state = openFactoryState(":memory:", () => Date.parse("2026-08-31T10:00:00Z"));
-	state.initializeSources([source]);
-	state.applyFetch(source, {
+	state.sourceFact.initializeSources([source]);
+	state.sourceFact.applyFetch(source, {
 		status: "success",
 		fetchedAt: "2026-08-31T10:01:00Z",
 		tickets: tickets.length === 0 ? [fetched()] : tickets,
@@ -87,7 +87,7 @@ function stateWith(...tickets: FetchedTicket[]): FactoryState {
 
 /** The projection read the derivation takes, the way every caller hands it down. */
 function projection(state: FactoryState) {
-	return state.ticketProjection(config.workflowStates, config.defaultTaskType);
+	return state.ticketWorkCycle.ticketProjection(config.workflowStates, config.defaultTaskType);
 }
 
 /** The outcome a settled turn's Transition left: fired, with its position. */
@@ -110,14 +110,14 @@ function fired(over: Partial<TransitionOutcome> = {}): TransitionOutcome {
 }
 
 function stepFor(state: FactoryState, over: Partial<TransitionOutcome> = {}) {
-	return deriveNextStep(config, state, fired(over), projection(state));
+	return deriveNextStep(config, state.ticketWorkCycle, fired(over), projection(state));
 }
 
 /** Claim the position's handoff and land its start: the position holds a seat. */
 function startTurn(state: FactoryState, taskType: string): string {
-	const claim = state.claimHandoff(position, { ...choice, taskType }, "open");
+	const claim = state.handoff.claimHandoff(position, { ...choice, taskType }, "open");
 	if (!claim.ok) throw new Error(claim.reason);
-	state.settleHandoff(claim.claim.attemptId, true, undefined, {
+	state.handoff.settleHandoff(claim.claim.attemptId, true, undefined, {
 		paneId: "pane-1",
 		tabId: "tab-1",
 		workspaceId: "ws-1",
@@ -133,7 +133,7 @@ function runTurn(
 	decision: "closed" | null,
 ): void {
 	const attemptId = startTurn(state, taskType);
-	state.settleTurn({
+	state.ticketWorkCycle.settleTurn({
 		ticketIdentity: position,
 		handoffId: attemptId,
 		taskType,
@@ -144,7 +144,7 @@ function runTurn(
 		cause,
 	});
 	if (decision !== null) {
-		state.applyCompletionDecision({
+		state.ticketWorkCycle.applyCompletionDecision({
 			ticketIdentity: position,
 			handoffId: attemptId,
 			decision,
@@ -234,7 +234,7 @@ describe("deriveNextStep (ADR 0092)", () => {
 		// health, so the gate stands clear of it.
 		const state = stateWith();
 		runTurn(state, "implement", "completed", null);
-		expect(state.ticketState(position)).toBe("awaiting");
+		expect(state.ticketWorkCycle.ticketState(position)).toBe("awaiting");
 		expect(stepFor(state)?.gate).toBeNull();
 		state.close();
 	});
@@ -243,7 +243,7 @@ describe("deriveNextStep (ADR 0092)", () => {
 		// Claimed and never settled: the projection folds the attempt into the
 		// open row's actionable fact, and the standing gate reads that fact.
 		const state = stateWith();
-		const claim = state.claimHandoff(position, choice, "open");
+		const claim = state.handoff.claimHandoff(position, choice, "open");
 		if (!claim.ok) throw new Error(claim.reason);
 		expect(projection(state).rowFor(position)?.actionable).toBe(false);
 		expect(stepFor(state)?.gate).toBe("position-not-actionable");
@@ -255,12 +255,12 @@ describe("deriveNextStep (ADR 0092)", () => {
 		// suggests by labels no refresh has moved.
 		const state = stateWith();
 		runTurn(state, "review", "completed", "closed");
-		state.applyFetch(source, {
+		state.sourceFact.applyFetch(source, {
 			status: "success",
 			fetchedAt: "2026-08-31T11:01:00Z",
 			tickets: [fetched(position, ["ready-for-review"])],
 		});
-		expect(state.sameTypeHoldActive(position, "review")).toBe(true);
+		expect(state.ticketWorkCycle.sameTypeHoldActive(position, "review")).toBe(true);
 		expect(stepFor(state)?.gate).toBe("same-type-hold");
 		state.close();
 	});
@@ -272,20 +272,24 @@ describe("deriveNextStep (ADR 0092)", () => {
 		// the rework the review asks for is not a repeat of finished work.
 		const state = stateWith();
 		runTurn(state, "review", "completed", "closed");
-		state.applyFetch(source, {
+		state.sourceFact.applyFetch(source, {
 			status: "success",
 			fetchedAt: "2026-08-31T11:01:00Z",
 			tickets: [fetched(position, ["ready-for-review"])],
 		});
-		expect(state.sameTypeHoldActive(position, "review")).toBe(true);
+		expect(state.ticketWorkCycle.sameTypeHoldActive(position, "review")).toBe(true);
 		runTurn(state, "implement", "completed", null);
-		expect(state.ticketState(position)).toBe("awaiting");
-		expect(state.sameTypeHoldActive(position, "review")).toBe(false);
+		expect(state.ticketWorkCycle.ticketState(position)).toBe("awaiting");
+		expect(state.ticketWorkCycle.sameTypeHoldActive(position, "review")).toBe(false);
 		// The rig's own Handoff limit of two is spent by the two turns, so the
 		// derivation is asked with a limit the turns do not reach.
 		expect(
-			deriveNextStep({ ...config, maxHandoffsPerTicket: 5 }, state, fired(), projection(state))
-				?.gate,
+			deriveNextStep(
+				{ ...config, maxHandoffsPerTicket: 5 },
+				state.ticketWorkCycle,
+				fired(),
+				projection(state),
+			)?.gate,
 		).toBeNull();
 		state.close();
 	});
@@ -296,16 +300,16 @@ describe("deriveNextStep (ADR 0092)", () => {
 		// back to the finished turn two cycles old.
 		const state = stateWith();
 		runTurn(state, "review", "completed", "closed");
-		state.applyFetch(source, {
+		state.sourceFact.applyFetch(source, {
 			status: "success",
 			fetchedAt: "2026-08-31T11:01:00Z",
 			tickets: [fetched(position, ["ready-for-review"])],
 		});
-		const claim = state.claimHandoff(position, choice, "open");
+		const claim = state.handoff.claimHandoff(position, choice, "open");
 		if (!claim.ok) throw new Error(claim.reason);
-		state.settleHandoff(claim.claim.attemptId, true);
-		expect(state.closeWorkCycle(position)).toBe(true);
-		expect(state.sameTypeHoldActive(position, "review")).toBe(false);
+		state.handoff.settleHandoff(claim.claim.attemptId, true);
+		expect(state.ticketWorkCycle.closeWorkCycle(position)).toBe(true);
+		expect(state.ticketWorkCycle.sameTypeHoldActive(position, "review")).toBe(false);
 		state.close();
 	});
 
@@ -314,13 +318,13 @@ describe("deriveNextStep (ADR 0092)", () => {
 		const state = stateWith();
 		for (const cause of ["aborted", "aborted"] as const) {
 			runTurn(state, "implement", cause, "closed");
-			state.applyFetch(source, {
+			state.sourceFact.applyFetch(source, {
 				status: "success",
 				fetchedAt: "2026-08-31T11:02:00Z",
 				tickets: [fetched(position, ["ready-for-review"])],
 			});
 		}
-		expect(state.handoffCount(position)).toBe(config.maxHandoffsPerTicket);
+		expect(state.handoff.handoffCount(position)).toBe(config.maxHandoffsPerTicket);
 		expect(stepFor(state)?.gate).toBe("handoff-limit");
 		state.close();
 	});
@@ -333,14 +337,16 @@ describe("deriveNextStep (ADR 0092)", () => {
 		// no row answers this gate on every step, so the machine routes nothing and
 		// the surfaces say why.
 		const state = stateWith();
-		state.applyFetch(source, {
+		state.sourceFact.applyFetch(source, {
 			status: "success",
 			fetchedAt: "2026-08-31T11:05:00Z",
 			tickets: [],
 		});
 		const empty = projection(state);
 		expect(empty.rows).toHaveLength(0);
-		expect(deriveNextStep(config, state, fired(), empty)?.gate).toBe("position-offers-no-task");
+		expect(deriveNextStep(config, state.ticketWorkCycle, fired(), empty)?.gate).toBe(
+			"position-offers-no-task",
+		);
 		state.close();
 	});
 

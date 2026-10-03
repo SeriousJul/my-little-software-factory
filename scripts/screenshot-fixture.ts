@@ -42,7 +42,7 @@ import { parse } from "smol-toml";
 import { validateConfig } from "../src/config.ts";
 import type { FetchedTicket } from "../src/domain/ticket.ts";
 import { repositoryInitSettingsHash } from "../src/repo-init.ts";
-import type { SourceDefinition } from "../src/state.ts";
+import type { SourceDefinition } from "../src/state/source-fact.ts";
 import { openFactoryState } from "../src/state.ts";
 import { openControlPlanePty } from "../test/executable-pty.ts";
 import { parseScreen, renderPng } from "./ansi-render.ts";
@@ -470,15 +470,15 @@ esac
 function seedState(path: string, settingsHash: string): void {
 	const state = openFactoryState(path, () => Date.parse(NOW));
 	const source: SourceDefinition = { name: "issues", kind: "github-issues" };
-	state.initializeSources([source]);
-	state.applyFetch(source, { status: "success", fetchedAt: NOW, tickets: [...TICKETS] });
+	state.sourceFact.initializeSources([source]);
+	state.sourceFact.applyFetch(source, { status: "success", fetchedAt: NOW, tickets: [...TICKETS] });
 	// The guide screens stand on a world the operator has already initialized
 	// (ADR 0075): both repositories carry an init fact at the world's own
 	// settings hash, so the init marker stays off the Group headers and the
 	// one-time note stays off the Message line, and the screens read as the
 	// screens the guides show rather than as an init prompt.
 	for (const repository of [REPO_A, REPO_B]) {
-		state.setRepositoryInitFact(
+		state.repositoryInit.setRepositoryInitFact(
 			`github.com/${repository.toLowerCase()}`,
 			settingsHash,
 			"fixture-init",
@@ -486,7 +486,7 @@ function seedState(path: string, settingsHash: string): void {
 	}
 
 	// The in-flight ticket: claimed and started, its agent working in pane-2.
-	const runningClaim = state.claimHandoff(
+	const runningClaim = state.handoff.claimHandoff(
 		RUNNING_TICKET.identity,
 		{
 			agentType: "pi",
@@ -499,14 +499,14 @@ function seedState(path: string, settingsHash: string): void {
 		"open",
 	);
 	if (!runningClaim.ok) throw new Error(`fixture: running claim: ${runningClaim.reason}`);
-	state.settleHandoff(runningClaim.claim.attemptId, true, undefined, {
+	state.handoff.settleHandoff(runningClaim.claim.attemptId, true, undefined, {
 		paneId: "pane-2",
 		tabId: "tab-2",
 		workspaceId: "ws-2",
 	});
 
 	// The awaiting ticket: claimed, started, and its turn settled.
-	const awaitingClaim = state.claimHandoff(
+	const awaitingClaim = state.handoff.claimHandoff(
 		AWAITING_TICKET.identity,
 		{
 			agentType: "pi",
@@ -519,12 +519,12 @@ function seedState(path: string, settingsHash: string): void {
 		"open",
 	);
 	if (!awaitingClaim.ok) throw new Error(`fixture: awaiting claim: ${awaitingClaim.reason}`);
-	state.settleHandoff(awaitingClaim.claim.attemptId, true, undefined, {
+	state.handoff.settleHandoff(awaitingClaim.claim.attemptId, true, undefined, {
 		paneId: "pane-1",
 		tabId: "tab-1",
 		workspaceId: "ws-1",
 	});
-	state.settleTurn({
+	state.ticketWorkCycle.settleTurn({
 		ticketIdentity: AWAITING_TICKET.identity,
 		handoffId: awaitingClaim.claim.attemptId,
 		taskType: "review",
@@ -557,8 +557,8 @@ function seedState(path: string, settingsHash: string): void {
 	// under the open state. The queue pause (ADR 0052) holds the drain, so
 	// the item stands in the queue for the shot instead of its pickup trying
 	// to start it on the boot pass.
-	state.setQueuePaused(true);
-	const queued = state.enqueueWork({
+	state.workQueue.setQueuePaused(true);
+	const queued = state.workQueue.enqueueWork({
 		ticketIdentity: SKILL_INDEX_TICKET.identity,
 		origin: "open",
 		choice: {
@@ -575,10 +575,10 @@ function seedState(path: string, settingsHash: string): void {
 
 	// The grouping axis the operator chose (ADR 0058): the ticket list splits
 	// by repository, so the two repositories stand as two Groups.
-	state.setGroupingAxis("tickets", "repository");
+	state.grouping.setGroupingAxis("tickets", "repository");
 
 	// The working Consultation: launched, its agent working in pane-3.
-	const retryConsultation = state.createConsultation({
+	const retryConsultation = state.consultationRecord.createConsultation({
 		typeName: "grill-with-docs",
 		agentType: "codex",
 		environment: "live-worktree",
@@ -595,7 +595,7 @@ function seedState(path: string, settingsHash: string): void {
 		agentName: "consult-retry-budget",
 		createdAt: NOW,
 	});
-	state.setConsultationAgent(retryConsultation.id, {
+	state.consultationRecord.setConsultationAgent(retryConsultation.id, {
 		paneId: "pane-3",
 		tabId: "tab-3",
 		workspaceId: "ws-3",
@@ -603,7 +603,7 @@ function seedState(path: string, settingsHash: string): void {
 
 	// The Consultation that awaits its answer: its agent is idle in pane-4,
 	// and the section header's attention count reads it.
-	const indexConsultation = state.createConsultation({
+	const indexConsultation = state.consultationRecord.createConsultation({
 		typeName: "grill-with-docs",
 		agentType: "codex",
 		environment: "live-worktree",
@@ -621,12 +621,12 @@ function seedState(path: string, settingsHash: string): void {
 		agentName: "consult-skill-index",
 		createdAt: NOW,
 	});
-	state.setConsultationAgent(indexConsultation.id, {
+	state.consultationRecord.setConsultationAgent(indexConsultation.id, {
 		paneId: "pane-4",
 		tabId: "tab-4",
 		workspaceId: "ws-4",
 	});
-	state.setConsultationState(indexConsultation.id, "awaiting-response");
+	state.consultationRecord.setConsultationState(indexConsultation.id, "awaiting-response");
 	state.close();
 }
 

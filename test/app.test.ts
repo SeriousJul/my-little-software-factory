@@ -88,7 +88,7 @@ describe("the control plane", () => {
 	test("production starts with no configured ticket sources instead of sample data", async () => {
 		const state = openFactoryState(":memory:");
 		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
-		state.setGroupingAxis("tickets", "none");
+		state.grouping.setGroupingAxis("tickets", "none");
 		try {
 			await withApp(
 				async (setup) => {
@@ -115,13 +115,13 @@ describe("the control plane", () => {
 		// row wears the failure badge, and Goto focuses nothing.
 		const state = openFactoryState(":memory:");
 		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
-		state.setGroupingAxis("tickets", "none");
+		state.grouping.setGroupingAxis("tickets", "none");
 		const runner = new FakeRunner();
 		const source = { name: "issues", kind: "github-issues" as const };
 		const identity = "github:github.com:I_5";
 		try {
-			state.initializeSources([source]);
-			state.applyFetch(source, {
+			state.sourceFact.initializeSources([source]);
+			state.sourceFact.applyFetch(source, {
 				status: "success",
 				fetchedAt: "2026-08-31T10:01:00Z",
 				tickets: [
@@ -144,7 +144,7 @@ describe("the control plane", () => {
 					},
 				],
 			});
-			const claim = state.claimHandoff(
+			const claim = state.handoff.claimHandoff(
 				identity,
 				{
 					agentType: "pi",
@@ -159,12 +159,12 @@ describe("the control plane", () => {
 			if (!claim.ok) throw new Error(claim.reason);
 			// A legacy-style handoff: no herdr name recorded, so the identity the
 			// pane is read against is the ticket's stable name.
-			state.settleHandoff(claim.claim.attemptId, true, undefined, {
+			state.handoff.settleHandoff(claim.claim.attemptId, true, undefined, {
 				paneId: "pane-1",
 				tabId: "tab-1",
 				workspaceId: "ws-1",
 			});
-			state.markTicketRunning(identity);
+			state.ticketWorkCycle.markTicketRunning(identity);
 			// The Consultation's agent works in the ticket's reused pane id.
 			runner.set("herdr", ["agent", "list"], {
 				stdout: agentListJson([
@@ -218,13 +218,13 @@ describe("the control plane", () => {
 		// refuses, and the decision's Goto row refuses the same focus.
 		const state = openFactoryState(":memory:");
 		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
-		state.setGroupingAxis("tickets", "none");
+		state.grouping.setGroupingAxis("tickets", "none");
 		const runner = new FakeRunner();
 		const source = { name: "issues", kind: "github-issues" as const };
 		const identity = "github:github.com:I_5";
 		try {
-			state.initializeSources([source]);
-			state.applyFetch(source, {
+			state.sourceFact.initializeSources([source]);
+			state.sourceFact.applyFetch(source, {
 				status: "success",
 				fetchedAt: "2026-08-31T10:01:00Z",
 				tickets: [
@@ -247,7 +247,7 @@ describe("the control plane", () => {
 					},
 				],
 			});
-			const claim = state.claimHandoff(
+			const claim = state.handoff.claimHandoff(
 				identity,
 				{
 					agentType: "pi",
@@ -260,15 +260,15 @@ describe("the control plane", () => {
 				"open",
 			);
 			if (!claim.ok) throw new Error(claim.reason);
-			state.settleHandoff(claim.claim.attemptId, true, undefined, {
+			state.handoff.settleHandoff(claim.claim.attemptId, true, undefined, {
 				paneId: "pane-1",
 				tabId: "tab-1",
 				workspaceId: "ws-1",
 			});
-			state.markTicketRunning(identity);
+			state.ticketWorkCycle.markTicketRunning(identity);
 			// The turn settles with no decided cause: the ticket rests awaiting
 			// on its pending turn, its recorded pane still pane-1.
-			state.settleTurn({
+			state.ticketWorkCycle.settleTurn({
 				ticketIdentity: identity,
 				handoffId: claim.claim.attemptId,
 				taskType: "implement",
@@ -334,7 +334,7 @@ describe("the control plane", () => {
 		// pull request is never touched: only a draft closes, and a branch
 		// that carries no draft closes nothing and says nothing.
 		const state = openFactoryState(":memory:");
-		state.setGroupingAxis("tickets", "none");
+		state.grouping.setGroupingAxis("tickets", "none");
 		const runner = new FakeRunner();
 		const source = new FakeSource("issues", "github-issues", success([issueTicket()]));
 		const sourceConfig = {
@@ -379,9 +379,9 @@ describe("the control plane", () => {
 			},
 		);
 		try {
-			state.initializeSources([sourceConfig]);
-			state.applyFetch(sourceConfig, success([issueTicket()]));
-			const claim = state.claimHandoff(
+			state.sourceFact.initializeSources([sourceConfig]);
+			state.sourceFact.applyFetch(sourceConfig, success([issueTicket()]));
+			const claim = state.handoff.claimHandoff(
 				identity,
 				{
 					agentType: "pi",
@@ -394,13 +394,13 @@ describe("the control plane", () => {
 				"open",
 			);
 			if (!claim.ok) throw new Error(claim.reason);
-			state.settleHandoff(claim.claim.attemptId, true, undefined, {
+			state.handoff.settleHandoff(claim.claim.attemptId, true, undefined, {
 				paneId: "pane-1",
 				tabId: "tab-1",
 				workspaceId: "ws-1",
 			});
-			state.markTicketRunning(identity);
-			state.settleTurn({
+			state.ticketWorkCycle.markTicketRunning(identity);
+			state.ticketWorkCycle.settleTurn({
 				ticketIdentity: identity,
 				handoffId: claim.claim.attemptId,
 				taskType: "implement",
@@ -448,7 +448,7 @@ describe("the control plane", () => {
 		// lists, and the draft the ticket still wears is read off its factory
 		// branch and closed, the way the decided cycle's Close does.
 		const state = openFactoryState(":memory:");
-		state.setGroupingAxis("tickets", "none");
+		state.grouping.setGroupingAxis("tickets", "none");
 		const runner = new FakeRunner();
 		const source = new FakeSource("issues", "github-issues", success([issueTicket()]));
 		const sourceConfig = {
@@ -495,9 +495,9 @@ describe("the control plane", () => {
 		// The agent is gone: herdr lists no agent at all.
 		runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
 		try {
-			state.initializeSources([sourceConfig]);
-			state.applyFetch(sourceConfig, success([issueTicket()]));
-			const claim = state.claimHandoff(
+			state.sourceFact.initializeSources([sourceConfig]);
+			state.sourceFact.applyFetch(sourceConfig, success([issueTicket()]));
+			const claim = state.handoff.claimHandoff(
 				identity,
 				{
 					agentType: "pi",
@@ -510,14 +510,14 @@ describe("the control plane", () => {
 				"open",
 			);
 			if (!claim.ok) throw new Error(claim.reason);
-			state.settleHandoff(claim.claim.attemptId, true, undefined, {
+			state.handoff.settleHandoff(claim.claim.attemptId, true, undefined, {
 				paneId: "pane-1",
 				tabId: "tab-1",
 				workspaceId: "ws-1",
 			});
 			// The ticket stands running, and herdr lists no agent: the missing
 			// badge the recovery screen offers on.
-			state.markTicketRunning(identity);
+			state.ticketWorkCycle.markTicketRunning(identity);
 
 			await withApp(
 				async (setup) => {
@@ -1639,7 +1639,7 @@ describe("the control plane", () => {
 		// priority that moves reorders these rows.
 		const state = openFactoryState(":memory:");
 		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
-		state.setGroupingAxis("tickets", "none");
+		state.grouping.setGroupingAxis("tickets", "none");
 		try {
 			await withApp(
 				async (setup) => {

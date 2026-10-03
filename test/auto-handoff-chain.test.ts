@@ -38,7 +38,12 @@ import {
 } from "../src/handoff-dispatch.ts";
 import type { HerdrAgent } from "../src/herdr.ts";
 import { ObservationCoordinator, STARTUP_GRACE_MS } from "../src/observation.ts";
-import { parallelSeatCount } from "../src/parallel.ts";
+import {
+	CONSULTATION_SEAT_STATES,
+	parallelSeatCount,
+	TICKET_SEAT_STATES,
+} from "../src/parallel.ts";
+import type { PlaneActionAggregate } from "../src/state/plane-action.ts";
 import { type FactoryState, openFactoryState } from "../src/state.ts";
 import { fireTransition } from "../src/workflow.ts";
 import { BASE_CONFIG } from "./base-config.ts";
@@ -280,7 +285,9 @@ interface Chain {
 		taskType: string,
 	) => Promise<{ outcome: TransitionOutcome; attemptId: string }>;
 	/** Wait for the merge's attempt record, which the pickup's run writes. */
-	awaitAttempt: () => Promise<NonNullable<ReturnType<FactoryState["latestPlaneActionAttempt"]>>>;
+	awaitAttempt: () => Promise<
+		NonNullable<ReturnType<PlaneActionAggregate["latestPlaneActionAttempt"]>>
+	>;
 }
 
 /** The rig: a real state, a real dispatch module, and a real observation cycle. */
@@ -289,8 +296,8 @@ function chainRig(options: ChainRigOptions = {}): Chain {
 	paths.push(dir);
 	const nowMs = Date.parse("2026-08-31T11:00:00Z");
 	const state = openFactoryState(join(dir, "state.sqlite"), () => nowMs);
-	state.initializeSources([issuesSource, pullsSource]);
-	state.setGroupingAxis("tickets", "none");
+	state.sourceFact.initializeSources([issuesSource, pullsSource]);
+	state.grouping.setGroupingAxis("tickets", "none");
 	const runner = new FakeRunner();
 	const config: FactoryConfig = {
 		...CHAIN_CONFIG,
@@ -340,12 +347,27 @@ function chainRig(options: ChainRigOptions = {}): Chain {
 		config: () => config,
 		seatCount: () =>
 			options.liveSeats === true
-				? parallelSeatCount({
-						state,
-						agents: agentsRef.current,
-						now: nowMs,
-						startupGraceMs: STARTUP_GRACE_MS,
-					})
+				? (() => {
+						const inFlight = state.ticketWorkCycle.ticketsByState(TICKET_SEAT_STATES);
+						const names = state.ticketWorkCycle.agentNamesForTickets(
+							inFlight.map((ticket) => ticket.ticketIdentity),
+						);
+						return parallelSeatCount({
+							tickets: inFlight.map((ticket) => ({
+								ticketIdentity: ticket.ticketIdentity,
+								paneId: ticket.paneId,
+								startedAt: ticket.startedAt,
+								agentName: names.get(ticket.ticketIdentity) ?? "",
+							})),
+							handoffAttemptTickets: state.handoff.openAttemptTickets(),
+							consultations: state.consultationRecord
+								.consultationsByState(CONSULTATION_SEAT_STATES)
+								.map((consultation) => ({ state: consultation.state })),
+							agents: agentsRef.current,
+							now: nowMs,
+							startupGraceMs: STARTUP_GRACE_MS,
+						});
+					})()
 				: config.maxParallelAgents,
 		home: dir,
 		working: () => undefined,
@@ -396,12 +418,12 @@ function chainRig(options: ChainRigOptions = {}): Chain {
 	});
 
 	const refresh = (issue: FetchedTicket, pull: FetchedTicket): void => {
-		state.applyFetch(issuesSource, {
+		state.sourceFact.applyFetch(issuesSource, {
 			status: "success",
 			fetchedAt: new Date(nowMs).toISOString(),
 			tickets: [issue],
 		});
-		state.applyFetch(pullsSource, {
+		state.sourceFact.applyFetch(pullsSource, {
 			status: "success",
 			fetchedAt: new Date(nowMs).toISOString(),
 			tickets: [pull],
@@ -418,9 +440,9 @@ function chainRig(options: ChainRigOptions = {}): Chain {
 	});
 
 	const settleTurnWithFire = async (identity: string, taskType: string) => {
-		const claim = state.claimHandoff(identity, choiceFor(taskType), "workflow");
+		const claim = state.handoff.claimHandoff(identity, choiceFor(taskType), "workflow");
 		if (!claim.ok) throw new Error(claim.reason);
-		state.settleHandoff(claim.claim.attemptId, true, undefined, {
+		state.handoff.settleHandoff(claim.claim.attemptId, true, undefined, {
 			paneId: `pane-${taskType}`,
 			tabId: "tab-1",
 			workspaceId: "ws-1",
@@ -435,7 +457,7 @@ function chainRig(options: ChainRigOptions = {}): Chain {
 			taskType,
 		});
 		if (outcome === null) throw new Error(`no transition fired for ${taskType}`);
-		state.settleTurn({
+		state.ticketWorkCycle.settleTurn({
 			ticketIdentity: identity,
 			handoffId: claim.claim.attemptId,
 			taskType,
@@ -456,7 +478,7 @@ function chainRig(options: ChainRigOptions = {}): Chain {
 		// between reads: the fake runner answers at once, so the record stands
 		// within a few turns.
 		for (let round = 0; round < 100; round += 1) {
-			const attempt = state.latestPlaneActionAttempt(pullIdentity);
+			const attempt = state.planeAction.latestPlaneActionAttempt(pullIdentity);
 			if (attempt !== null) return attempt;
 			await new Promise((resolve) => setTimeout(resolve, 5));
 		}
@@ -464,9 +486,9 @@ function chainRig(options: ChainRigOptions = {}): Chain {
 	};
 
 	const seedRunningTurn = (identity: string, taskType: string): string => {
-		const claim = state.claimHandoff(identity, choiceFor(taskType), "workflow");
+		const claim = state.handoff.claimHandoff(identity, choiceFor(taskType), "workflow");
 		if (!claim.ok) throw new Error(claim.reason);
-		state.settleHandoff(claim.claim.attemptId, true, undefined, {
+		state.handoff.settleHandoff(claim.claim.attemptId, true, undefined, {
 			paneId: `pane-${identity}`,
 			tabId: `tab-${identity}`,
 			workspaceId: `ws-${identity}`,
@@ -487,7 +509,7 @@ function chainRig(options: ChainRigOptions = {}): Chain {
 			taskType,
 		});
 		if (outcome === null) throw new Error(`no transition fired for ${taskType}`);
-		state.settleTurn({
+		state.ticketWorkCycle.settleTurn({
 			ticketIdentity: identity,
 			handoffId: attemptId,
 			taskType,
@@ -503,7 +525,7 @@ function chainRig(options: ChainRigOptions = {}): Chain {
 	};
 
 	const landPulls = (...pulls: FetchedTicket[]): void => {
-		state.applyFetch(pullsSource, {
+		state.sourceFact.applyFetch(pullsSource, {
 			status: "success",
 			fetchedAt: new Date(nowMs).toISOString(),
 			tickets: [...pulls],
@@ -574,7 +596,7 @@ describe("the ADR 0092 chain runs unattended (issue #208)", () => {
 				routeFromIdentity: issueIdentity,
 			});
 			expect(chain.handoffAsks[0]?.choice.taskType).toBe("review");
-			expect(state.workQueue()).toEqual([
+			expect(state.workQueue.items()).toEqual([
 				expect.objectContaining({
 					kind: "handoff",
 					origin: "workflow",
@@ -585,15 +607,15 @@ describe("the ADR 0092 chain runs unattended (issue #208)", () => {
 			]);
 			// The route's ask ended the issue's cycle at the ask (ADR 0072), and
 			// the pull request wears the label the fire wrote and offers the review.
-			expect(state.lastCompletion(issueIdentity)?.decision).toBe("auto-handed-off");
-			const reviewPosition = state
+			expect(state.ticketWorkCycle.lastCompletion(issueIdentity)?.decision).toBe("auto-handed-off");
+			const reviewPosition = state.ticketWorkCycle
 				.projectedTickets(CHAIN_CONFIG.workflowStates, CHAIN_CONFIG.defaultTaskType)
 				.find((candidate) => candidate.identity === pullIdentity);
 			expect(reviewPosition?.suggestedTaskType).toBe("review");
 
 			// Hop 2: the review item drains, its turn runs, and its Transition
 			// reads the score the review posted on the pull request.
-			expect(state.removeWorkItem(pullIdentity)).toBe(true);
+			expect(state.workQueue.removeWorkItem(pullIdentity)).toBe(true);
 			runner.set("gh", COMMENT_READ_ARGS, { stdout: "[]" });
 			runner.set("gh", REVIEW_READ_ARGS, {
 				stdout: JSON.stringify([{ body: VERDICT_BODY, submitted_at: "2026-08-31T11:00:30Z" }]),
@@ -641,12 +663,12 @@ describe("the ADR 0092 chain runs unattended (issue #208)", () => {
 			expect(chain.notices).toContain(
 				'the merge of "Persist source facts in state" ran from the Work queue',
 			);
-			expect(state.lastCompletion(pullIdentity)?.decision).toBe("auto-merged");
+			expect(state.ticketWorkCycle.lastCompletion(pullIdentity)?.decision).toBe("auto-merged");
 			// The merged pull request leaves the projection the moment the merge
 			// lands (ADR 0068), so the chain ends with nothing waiting.
-			expect(state.workQueue()).toEqual([]);
+			expect(state.workQueue.items()).toEqual([]);
 			expect(
-				state
+				state.ticketWorkCycle
 					.projectedTickets(CHAIN_CONFIG.workflowStates, CHAIN_CONFIG.defaultTaskType)
 					.find((candidate) => candidate.identity === pullIdentity),
 			).toBeUndefined();
@@ -672,7 +694,7 @@ describe("the ADR 0092 chain runs unattended (issue #208)", () => {
 			positionTicketIdentity: pullIdentity,
 		});
 		expect(
-			state.applyCompletionDecision({
+			state.ticketWorkCycle.applyCompletionDecision({
 				ticketIdentity: pullIdentity,
 				handoffId: reworkRun.attemptId,
 				decision: "closed",
@@ -696,7 +718,7 @@ describe("the ADR 0092 chain runs unattended (issue #208)", () => {
 			positionTaskType: "rework",
 			positionTicketIdentity: pullIdentity,
 		});
-		expect(state.ticketState(pullIdentity)).toBe("awaiting");
+		expect(state.ticketWorkCycle.ticketState(pullIdentity)).toBe("awaiting");
 
 		await coordinator.tick();
 
@@ -741,7 +763,7 @@ describe("the seat a settling turn frees (the dev-run miss on PR #206)", () => {
 		// Cycle 1: the seat is full with the chain's running rework, so the
 		// top-up's open-ticket add lands in the queue and stands there.
 		await coordinator.tick();
-		expect(state.workQueue()).toEqual([
+		expect(state.workQueue.items()).toEqual([
 			expect.objectContaining({
 				kind: "handoff",
 				origin: "open",
@@ -750,7 +772,7 @@ describe("the seat a settling turn frees (the dev-run miss on PR #206)", () => {
 				choice: expect.objectContaining({ taskType: "rework" }),
 			}),
 		]);
-		expect(state.ticketsByState(["handed-off", "running"])).toHaveLength(1);
+		expect(state.ticketWorkCycle.ticketsByState(["handed-off", "running"])).toHaveLength(1);
 
 		// The chain's turn ends. Its fire writes ready-for-review on its own
 		// pull request and derives its Next step there: the review. Its agent is
@@ -780,12 +802,12 @@ describe("the seat a settling turn frees (the dev-run miss on PR #206)", () => {
 		);
 		// The claim that holds the seat is the review's, and the held herdr call
 		// is the review agent's own start.
-		expect(state.openAttemptTickets()).toEqual([pullIdentity]);
+		expect(state.handoff.openAttemptTickets()).toEqual([pullIdentity]);
 		expect(chain.heldCommands()).toEqual([
 			expect.stringContaining("herdr agent start persist-source-facts-in-state"),
 		]);
 		expect(
-			state.workQueue().map((item) => {
+			state.workQueue.items().map((item) => {
 				if (item.kind !== "handoff") throw new Error("the queue holds no handoff item");
 				return [item.ticketIdentity, item.origin];
 			}),

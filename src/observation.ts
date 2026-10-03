@@ -71,9 +71,17 @@ import type { FactoryConfig, TransitionOutcome } from "./config.ts";
 import {
 	automaticStartBlocked,
 	type Completion,
+	handoffLimitReached,
 	isHeldCompletion,
 	type Ticket,
 } from "./domain/ticket.ts";
+import {
+	automaticAddsHold,
+	continuationQueueHolds,
+	openTicketRowGate,
+	openTicketWaitsHold,
+	restartCandidateHolds,
+} from "./domain/top-up.ts";
 import { baseChoice, resolveHandoffChoice } from "./handoff.ts";
 import {
 	type DispatchResult,
@@ -86,7 +94,11 @@ import { identifyHandoffAgentName } from "./naming.ts";
 import { isPlaneActionTaskType } from "./plane-action-registry.ts";
 import { type RefreshClock, SYSTEM_CLOCK } from "./refresh.ts";
 import { type CommandRunner, commandFailureText } from "./runner.ts";
-import type { Consultation, FactoryState, HandoffTicket, TicketProjection } from "./state.ts";
+import type { Consultation, ConsultationRecordAggregate } from "./state/consultation-record.ts";
+import type { HandoffAggregate, HandoffTicket } from "./state/handoff.ts";
+import type { PlaneActionAggregate } from "./state/plane-action.ts";
+import type { TicketProjection, TicketWorkCycleAggregate } from "./state/ticket-work-cycle.ts";
+import type { WorkQueueAggregate } from "./state/work-queue.ts";
 import {
 	isHeldCause,
 	lastMessageFromLog,
@@ -387,8 +399,19 @@ export interface AwaitingRule {
  */
 export type ObservationStatusTopic = "herdr-recovered";
 
+/**
+ * The aggregates the observation cycle reads, as a list (issue #202).
+ */
+export interface ObservationAggregates {
+	consultationRecord: ConsultationRecordAggregate;
+	handoff: HandoffAggregate;
+	planeAction: PlaneActionAggregate;
+	ticketWorkCycle: TicketWorkCycleAggregate;
+	workQueue: WorkQueueAggregate;
+}
+
 interface ObservationOptions {
-	state: FactoryState;
+	state: ObservationAggregates;
 	herdr: AgentReader;
 	/** The config, read at each cycle: a runtime write-back stays visible. */
 	config: () => FactoryConfig;
@@ -478,7 +501,7 @@ interface ObservationOptions {
 }
 
 export class ObservationCoordinator {
-	private readonly state: FactoryState;
+	private readonly state: ObservationAggregates;
 	private readonly herdr: AgentReader;
 	private readonly config: () => FactoryConfig;
 	private readonly dispatch: (intent: HandoffIntent) => Promise<DispatchResult>;
@@ -627,6 +650,18 @@ export class ObservationCoordinator {
 		}
 	}
 
+	/**
+	 * The Agent name of every Ticket in the list, in one batched read (issue #202,
+	 * ADR 0095). Each walk below reads the name per Ticket, so the name comes from
+	 * `agentNamesForTickets` and the read costs one statement per chunk of Tickets
+	 * instead of two per Ticket.
+	 */
+	private agentNames(tickets: readonly HandoffTicket[]): Map<string, string> {
+		return this.state.ticketWorkCycle.agentNamesForTickets(
+			tickets.map((ticket) => ticket.ticketIdentity),
+		);
+	}
+
 	private async cycle(): Promise<void> {
 		const probe = await this.herdr.listAgents();
 		// The probe can outlive the app: stop() during it must not touch the
@@ -663,7 +698,8 @@ export class ObservationCoordinator {
 		const reclaimed = this.reclaimLiveAgents(byPane);
 		if (this.stopped) return;
 
-		const inFlight = this.state.ticketsByState(["handed-off", "running"]);
+		const inFlight = this.state.ticketWorkCycle.ticketsByState(["handed-off", "running"]);
+		const inFlightNames = this.agentNames(inFlight);
 		// The cap the starts measure against (ADR 0049, ADR 0051): the shared
 		// seat count of the poll - the in-flight tickets the poll lists or
 		// still holds in their startup grace, every in-progress handoff, and
@@ -686,7 +722,7 @@ export class ObservationCoordinator {
 			// instead of the settle.
 			const own = ownAgentInPane(
 				byPane.get(ticket.paneId),
-				this.state.agentNameForTicket(ticket.ticketIdentity),
+				inFlightNames.get(ticket.ticketIdentity) ?? "",
 			);
 			if (own === null) {
 				if (autoOn) {
@@ -700,7 +736,10 @@ export class ObservationCoordinator {
 			// agent is working, so the poll corrects the stored state to
 			// match it, and the list shows reality without the control plane
 			// ever writing to herdr.
-			if (status === "working" && this.state.markTicketRunning(ticket.ticketIdentity)) {
+			if (
+				status === "working" &&
+				this.state.ticketWorkCycle.markTicketRunning(ticket.ticketIdentity)
+			) {
 				changed = true;
 			}
 			if (status === "done" || status === "idle") {
@@ -717,17 +756,19 @@ export class ObservationCoordinator {
 
 		// An awaiting ticket that reports working again resumes its still-pending
 		// turn. It holds a slot and its next settle refreshes the same trace.
-		for (const ticket of this.state.ticketsByState(["awaiting"])) {
+		const awaiting = this.state.ticketWorkCycle.ticketsByState(["awaiting"]);
+		const awaitingNames = this.agentNames(awaiting);
+		for (const ticket of awaiting) {
 			if (ticket.paneId === null) continue;
 			// The same identity rule as the in-flight loop: a working agent in
 			// the ticket's reused pane id that is not the ticket's own does not
 			// resume the ticket's pending turn.
 			const own = ownAgentInPane(
 				byPane.get(ticket.paneId),
-				this.state.agentNameForTicket(ticket.ticketIdentity),
+				awaitingNames.get(ticket.ticketIdentity) ?? "",
 			);
 			if (own === null || normalizeAgentStatus(own.status) !== "working") continue;
-			if (this.state.reopenTurn(ticket.ticketIdentity, ticket.handoffAttemptId)) {
+			if (this.state.ticketWorkCycle.reopenTurn(ticket.ticketIdentity, ticket.handoffAttemptId)) {
 				changed = true;
 			}
 		}
@@ -763,19 +804,22 @@ export class ObservationCoordinator {
 		// derivations (ADR 0092): the walk reads the pile once, and re-reads it
 		// only after a close moved a row another turn's derivation reads. Manual
 		// mode runs no automatic rule, so it reads no pile for one.
-		const awaiting = this.state.ticketsByState(["awaiting"]);
+		const awaitingRows = this.state.ticketWorkCycle.ticketsByState(["awaiting"]);
 		// A hold states itself once per settled turn (ADR 0092): the report map is
 		// pruned to this cycle's awaiting rows, so a ticket the machine decided,
 		// closed, or routed states a later hold again.
 		for (const identity of [...this.holdReports.keys()]) {
-			if (!awaiting.some((ticket) => ticket.ticketIdentity === identity))
+			if (!awaitingRows.some((ticket) => ticket.ticketIdentity === identity))
 				this.holdReports.delete(identity);
 		}
-		if (autoOn && awaiting.length > 0) {
+		if (autoOn && awaitingRows.length > 0) {
 			const readProjection = (): TicketProjection =>
-				this.state.ticketProjection(this.config().workflowStates, this.config().defaultTaskType);
+				this.state.ticketWorkCycle.ticketProjection(
+					this.config().workflowStates,
+					this.config().defaultTaskType,
+				);
 			let awaitingProjection = readProjection();
-			for (const ticket of awaiting) {
+			for (const ticket of awaitingRows) {
 				const moved = await this.handleAwaiting(ticket, awaitingProjection);
 				changed = moved || changed;
 				if (this.stopped) return;
@@ -825,7 +869,7 @@ export class ObservationCoordinator {
 		// resuming dispatch on the line it already watches, in any mode: the
 		// pause holds the transition routes in manual mode too. The
 		// mode line wears it `paused` in auto mode, the state it names.
-		const effectivePause = this.state.dispatchPauseActive();
+		const effectivePause = this.state.ticketWorkCycle.dispatchPauseActive();
 		if (effectivePause !== this.pauseActive) {
 			this.pauseActive = effectivePause;
 			this.onStatus(
@@ -860,15 +904,17 @@ export class ObservationCoordinator {
 	 */
 	private armAgentWaits(byPane: Map<string, HerdrAgent>): void {
 		if (this.herdr.waitAgent === undefined || this.stopped) return;
-		for (const ticket of this.state.ticketsByState(["handed-off", "running"])) {
+		const workingTickets = this.state.ticketWorkCycle.ticketsByState(["handed-off", "running"]);
+		const workingNames = this.agentNames(workingTickets);
+		for (const ticket of workingTickets) {
 			if (ticket.paneId === null) continue;
-			const name = this.state.agentNameForTicket(ticket.ticketIdentity);
+			const name = workingNames.get(ticket.ticketIdentity) ?? "";
 			if (name === "") continue;
 			const own = ownAgentInPane(byPane.get(ticket.paneId), name);
 			if (own === null || normalizeAgentStatus(own.status) !== "working") continue;
 			this.armAgentWait(name);
 		}
-		for (const consultation of this.state.consultationsByState(["working"])) {
+		for (const consultation of this.state.consultationRecord.consultationsByState(["working"])) {
 			const name = consultation.agentName;
 			if (name === "") continue;
 			const match = matchConsultationAgent(consultation, [...byPane.values()]);
@@ -964,12 +1010,17 @@ export class ObservationCoordinator {
 		// ticket's is (ADR 0072): the ticket still names the handoff that ran
 		// its settled turn, and the pane is not handed to a stranger while the
 		// route stands on its Work queue's item.
-		for (const ticket of this.state.ticketsByState(["handed-off", "running", "awaiting"])) {
+		for (const ticket of this.state.ticketWorkCycle.ticketsByState([
+			"handed-off",
+			"running",
+			"awaiting",
+		])) {
 			if (ticket.paneId !== null) held.add(ticket.paneId);
 		}
-		for (const ticket of this.state.ticketsByState(["open"])) {
+		for (const ticket of this.state.ticketWorkCycle.ticketsByState(["open"])) {
 			if (ticket.paneId === null) continue;
-			const decision = this.state.lastCompletion(ticket.ticketIdentity)?.decision ?? null;
+			const decision =
+				this.state.ticketWorkCycle.lastCompletion(ticket.ticketIdentity)?.decision ?? null;
 			if (
 				decision === "handed-off" ||
 				decision === "auto-handed-off" ||
@@ -980,7 +1031,9 @@ export class ObservationCoordinator {
 			}
 		}
 		let changed = false;
-		for (const ticket of this.state.ticketsByState(["open"])) {
+		const restingTickets = this.state.ticketWorkCycle.ticketsByState(["open"]);
+		const restingNames = this.agentNames(restingTickets);
+		for (const ticket of restingTickets) {
 			if (this.stopped) return changed;
 			if (ticket.paneId === null || held.has(ticket.paneId)) continue;
 			const agent = byPane.get(ticket.paneId);
@@ -994,11 +1047,10 @@ export class ObservationCoordinator {
 			const name = agent.name;
 			if (
 				name === undefined ||
-				identifyHandoffAgentName(name, this.state.agentNameForTicket(ticket.ticketIdentity)) !==
-					"own"
+				identifyHandoffAgentName(name, restingNames.get(ticket.ticketIdentity) ?? "") !== "own"
 			)
 				continue;
-			const claimed = this.state.reclaimHandoff(ticket.ticketIdentity, {
+			const claimed = this.state.handoff.reclaimHandoff(ticket.ticketIdentity, {
 				paneId: agent.paneId,
 				tabId: agent.tabId,
 				workspaceId: agent.workspaceId,
@@ -1017,7 +1069,7 @@ export class ObservationCoordinator {
 
 	/** Reconcile durable Consultations from the same Agent list as Tickets. */
 	private async observeConsultations(agents: readonly HerdrAgent[]): Promise<boolean> {
-		const consultations = this.state.consultationsByState([
+		const consultations = this.state.consultationRecord.consultationsByState([
 			"opening",
 			"working",
 			"awaiting-response",
@@ -1035,7 +1087,7 @@ export class ObservationCoordinator {
 							? "Opening Agent match is ambiguous; explicit recovery is required"
 							: "Opening Agent is not visible; explicit recovery is required";
 					if (consultation.warning !== warning) {
-						this.state.setConsultationWarning(consultation.id, warning);
+						this.state.consultationRecord.setConsultationWarning(consultation.id, warning);
 						changed = true;
 						this.onStatus("warning", `Consultation ${consultation.id.slice(0, 8)} needs recovery`);
 					}
@@ -1043,7 +1095,11 @@ export class ObservationCoordinator {
 				}
 				const reason =
 					match === "ambiguous" ? "Agent session match is ambiguous" : "Agent is missing";
-				const moved = this.state.setConsultationState(consultation.id, "missing", reason);
+				const moved = this.state.consultationRecord.setConsultationState(
+					consultation.id,
+					"missing",
+					reason,
+				);
 				changed = moved || changed;
 				if (moved)
 					this.onStatus("warning", `${reason} for Consultation ${consultation.id.slice(0, 8)}`);
@@ -1052,7 +1108,7 @@ export class ObservationCoordinator {
 			if (consultation.state === "opening") {
 				// A uniquely verified Agent may refresh its durable handles, but
 				// remains opening until the operator chooses recovery.
-				this.state.recordConsultationAgentHandles(consultation.id, {
+				this.state.consultationRecord.recordConsultationAgentHandles(consultation.id, {
 					paneId: match.paneId,
 					tabId: match.tabId,
 					workspaceId: match.workspaceId,
@@ -1063,7 +1119,7 @@ export class ObservationCoordinator {
 						? "Agent status is unknown"
 						: "Opening Agent verified; explicit recovery is required";
 				if (consultation.warning !== warning) {
-					this.state.setConsultationWarning(consultation.id, warning);
+					this.state.consultationRecord.setConsultationWarning(consultation.id, warning);
 					changed = true;
 				}
 				continue;
@@ -1073,7 +1129,7 @@ export class ObservationCoordinator {
 				consultation.tabId !== match.tabId ||
 				consultation.workspaceId !== match.workspaceId
 			) {
-				this.state.updateConsultationAgentHandles(consultation.id, {
+				this.state.consultationRecord.updateConsultationAgentHandles(consultation.id, {
 					paneId: match.paneId,
 					tabId: match.tabId,
 					workspaceId: match.workspaceId,
@@ -1084,7 +1140,10 @@ export class ObservationCoordinator {
 			const status = normalizeAgentStatus(match.status);
 			if (status === "unknown") {
 				if (consultation.warning !== "Agent status is unknown") {
-					this.state.setConsultationWarning(consultation.id, "Agent status is unknown");
+					this.state.consultationRecord.setConsultationWarning(
+						consultation.id,
+						"Agent status is unknown",
+					);
 					this.onStatus(
 						"warning",
 						`Agent status is unknown for Consultation ${consultation.id.slice(0, 8)}`,
@@ -1094,7 +1153,7 @@ export class ObservationCoordinator {
 				continue;
 			}
 			if (consultation.warning === "Agent status is unknown") {
-				this.state.setConsultationWarning(consultation.id, null);
+				this.state.consultationRecord.setConsultationWarning(consultation.id, null);
 				changed = true;
 			}
 			if (
@@ -1103,27 +1162,30 @@ export class ObservationCoordinator {
 				(consultation.latestSequence === null || match.sequence > consultation.latestSequence)
 			)
 				changed =
-					this.state.recordExternalConsultationTurn(
+					this.state.consultationRecord.recordExternalConsultationTurn(
 						consultation.id,
 						match.sequence,
 						new Date(this.now()).toISOString(),
 					) || changed;
-			const before = this.state.consultation(consultation.id);
+			const before = this.state.consultationRecord.consultation(consultation.id);
 			if (
 				before?.state === "awaiting-response" &&
-				this.state.consultationNeedsSnapshot(consultation.id)
+				this.state.consultationRecord.consultationNeedsSnapshot(consultation.id)
 			) {
 				const output = await this.herdr.readPane(
 					match.paneId,
 					this.config().completionMessageLines,
 				);
 				if (this.stopped) return changed;
-				if (output !== null && this.state.fillConsultationSnapshot(consultation.id, output)) {
+				if (
+					output !== null &&
+					this.state.consultationRecord.fillConsultationSnapshot(consultation.id, output)
+				) {
 					changed = true;
 					this.onConsultationsChanged?.();
 				}
 			}
-			const current = this.state.consultation(consultation.id);
+			const current = this.state.consultationRecord.consultation(consultation.id);
 			if (current?.state !== "working" || status === "working") continue;
 			const output = await this.herdr.readPane(match.paneId, this.config().completionMessageLines);
 			if (this.stopped) return changed;
@@ -1131,7 +1193,7 @@ export class ObservationCoordinator {
 			// same reader the ticket settle uses (ADR 0015). The pending turn's
 			// accepted time feeds the staleness guard.
 			const kind = this.config().agents[consultation.agentType]?.kind;
-			const pendingTurn = this.state
+			const pendingTurn = this.state.consultationRecord
 				.consultationTurns(consultation.id)
 				.filter((turn) => turn.settledAt === null)
 				.at(-1);
@@ -1146,7 +1208,7 @@ export class ObservationCoordinator {
 			const turnEnd = turnRead.kind === "ended" ? turnRead.turnEnd : null;
 			const endCause: TurnEndCause = turnEnd?.cause ?? "unknown";
 			const endDetail: string = turnEnd?.detail ?? "";
-			const settled = this.state.settleConsultationTurn(
+			const settled = this.state.consultationRecord.settleConsultationTurn(
 				consultation.id,
 				match.sequence ?? null,
 				output,
@@ -1219,7 +1281,7 @@ export class ObservationCoordinator {
 		} else {
 			transition = null;
 		}
-		this.state.settleTurn({
+		this.state.ticketWorkCycle.settleTurn({
 			ticketIdentity: ticket.ticketIdentity,
 			handoffId: ticket.handoffAttemptId,
 			taskType: ticket.taskType,
@@ -1281,9 +1343,9 @@ export class ObservationCoordinator {
 	private async handleMissing(ticket: HandoffTicket): Promise<boolean> {
 		const config = this.config();
 		if (this.now() - Date.parse(ticket.startedAt) < this.startupGraceMs) return false;
-		const handoffCount = this.state.handoffCount(ticket.ticketIdentity);
-		if (handoffCount >= config.maxHandoffsPerTicket) {
-			const applied = this.state.applyCompletionDecision({
+		const handoffCount = this.state.handoff.handoffCount(ticket.ticketIdentity);
+		if (handoffLimitReached(handoffCount, config.maxHandoffsPerTicket)) {
+			const applied = this.state.ticketWorkCycle.applyCompletionDecision({
 				ticketIdentity: ticket.ticketIdentity,
 				handoffId: ticket.handoffAttemptId,
 				decision: "abandoned",
@@ -1328,7 +1390,7 @@ export class ObservationCoordinator {
 		ticket: HandoffTicket,
 		projection: TicketProjection,
 	): Promise<boolean> {
-		const completion = this.state.lastCompletion(ticket.ticketIdentity);
+		const completion = this.state.ticketWorkCycle.lastCompletion(ticket.ticketIdentity);
 		// A decided turn decides nothing more: the route recorded its decision
 		// when it started, the automatic rule cannot route the same turn twice,
 		// and the routed turn rests in awaiting for the operator's close.
@@ -1348,7 +1410,7 @@ export class ObservationCoordinator {
 		}
 		if (rule.decision !== "close") return false;
 		const decidedAt = new Date(this.now()).toISOString();
-		const applied = this.state.applyCompletionDecision({
+		const applied = this.state.ticketWorkCycle.applyCompletionDecision({
 			ticketIdentity: ticket.ticketIdentity,
 			handoffId: ticket.handoffAttemptId,
 			decision: "auto-closed",
@@ -1434,7 +1496,7 @@ export class ObservationCoordinator {
 			return { decision: "park", step: null };
 		if (outcome === null || outcome.fired !== true) return { decision: "close", step: null };
 		if (outcome.writeFailure !== "") return { decision: "park", step: null };
-		const step = deriveNextStep(this.config(), this.state, outcome, projection);
+		const step = deriveNextStep(this.config(), this.state.ticketWorkCycle, outcome, projection);
 		// No Next step: the facts landed on a parking state, or on no position at
 		// all, so the cycle ends where the machine put the ticket.
 		if (step === null) return { decision: "close", step: null };
@@ -1478,22 +1540,30 @@ export class ObservationCoordinator {
 	 * that rank across cycles instead of inside one top-up call.
 	 */
 	private async askContinuations(): Promise<boolean> {
+		// The queue's rows, read once for the whole walk (issue #202, ADR 0092):
+		// the gate below reads them, and no walk asks the queue for one Ticket's
+		// fact of its own.
+		const queueItems = this.state.workQueue.items();
 		if (this.automaticAddsHeld()) return false;
 		// The rows this add waits behind: the operator's own staging, and a
 		// continuation the queue already holds.
 		if (
-			this.state
-				.workQueue()
-				.some(
-					(item) =>
-						item.kind === "consultation" || item.automatic !== true || item.origin === "workflow",
-				)
+			continuationQueueHolds(
+				queueItems.map((item) => ({
+					operatorStaged: item.kind === "consultation" || item.automatic !== true,
+					continuation: item.kind !== "consultation" && item.origin === "workflow",
+				})),
+			)
 		)
 			return false;
 		const config = this.config();
 		// The list, in one read. These walks take the active view: the rows the
 		// whole list rule leaves.
-		const list = this.state.ticketListViews(config.workflowStates, config.defaultTaskType, "all");
+		const list = this.state.ticketWorkCycle.ticketListViews(
+			config.workflowStates,
+			config.defaultTaskType,
+			"all",
+		);
 		const tickets = list.active;
 		// The same read's projection before the list rule (ADR 0042): the covered
 		// ticket's row is withheld from the operator's list, and a route must still
@@ -1533,7 +1603,7 @@ export class ObservationCoordinator {
 				if (added !== "refused") return true;
 				continue;
 			}
-			const completion = this.state.lastCompletion(ticket.identity);
+			const completion = this.state.ticketWorkCycle.lastCompletion(ticket.identity);
 			const outcome = completion?.transition ?? null;
 			const added = await this.topUpAsk(
 				{
@@ -1566,14 +1636,14 @@ export class ObservationCoordinator {
 		// derivation and the same gates the continuation walk reads.
 		for (const ticket of tickets) {
 			if (ticket.state !== "open") continue;
-			const completion = this.state.lastCompletion(ticket.identity);
+			const completion = this.state.ticketWorkCycle.lastCompletion(ticket.identity);
 			const outcome = completion?.transition ?? null;
 			// The marker carries the shape: `refired` is set only on an outcome
 			// that fired and derived a position, so a re-fired trace with no fire
 			// is not a state the plane writes. The marker holds the record against
 			// a damaged trace; no walk reaches it on its own.
 			if (outcome === null || outcome.refired !== true) continue;
-			const step = deriveNextStep(config, this.state, outcome, projection);
+			const step = deriveNextStep(config, this.state.ticketWorkCycle, outcome, projection);
 			if (step === null || step.gate !== null) continue;
 			// The projection before the list rule (ADR 0042): the rule withholds
 			// a covered ticket's row from the operator's list, and the add must
@@ -1632,9 +1702,11 @@ export class ObservationCoordinator {
 	 * cycle, so a held turn does not spam the status line.
 	 */
 	private automaticAddsHeld(): boolean {
-		if (!this.mode()) return true;
-		if (this.state.queuePaused()) return true;
-		return this.state.dispatchPauseActive();
+		return automaticAddsHold({
+			modeOn: this.mode(),
+			queuePaused: this.state.workQueue.queuePaused(),
+			dispatchPauseActive: this.state.ticketWorkCycle.dispatchPauseActive(),
+		});
 	}
 
 	/**
@@ -1646,10 +1718,17 @@ export class ObservationCoordinator {
 	 * reconsiders every cycle the queue is empty.
 	 */
 	private async topUpFreshWork(agents: readonly HerdrAgent[]): Promise<boolean> {
+		// The queue's rows, read once for the whole walk (issue #202, ADR 0092):
+		// the pace gate needs the depth, and every walk needs the fact of whether
+		// an item already stands for the candidate it holds.
+		const queueItems = this.state.workQueue.items();
 		if (this.automaticAddsHeld()) return false;
 		// One item per cycle, and only into an empty queue: the queue's depth is
 		// the top-up's pace.
-		if (this.state.workQueue().length > 0) return false;
+		if (queueItems.length > 0) return false;
+		const queuedTickets = new Set(
+			queueItems.filter((item) => item.kind !== "consultation").map((item) => item.ticketIdentity),
+		);
 		const config = this.config();
 		// The pile, in one read for the walk that holds an identity and no row
 		// (ADR 0060, widened by ADR 0070): the in-flight tickets the Restart walk
@@ -1657,11 +1736,15 @@ export class ObservationCoordinator {
 		// or its source's, so one read answers the whole cycle in place of one query
 		// per candidate. The open-ticket walk asks `automaticStartBlocked` of the row
 		// it holds, and the row's facts fold the same flag.
-		const blocked = this.state.automaticStartBlockedTickets();
+		const blocked = this.state.ticketWorkCycle.automaticStartBlockedTickets();
 		// The open-ticket add takes the `all` view - every row the covered rule
 		// leaves, the ignore aside - and gates the flag on its own, so the gate is
 		// the walk's own test and not an accident of which view it happens to read.
-		const list = this.state.ticketListViews(config.workflowStates, config.defaultTaskType, "all");
+		const list = this.state.ticketWorkCycle.ticketListViews(
+			config.workflowStates,
+			config.defaultTaskType,
+			"all",
+		);
 		// 3. Restart: the in-flight ticket whose agent is missing past the
 		// grace and whose handoffs stand below the limit - the abandon at the
 		// limit landed in the in-flight walk already, above. One restart per
@@ -1670,7 +1753,16 @@ export class ObservationCoordinator {
 		// empty-queue cycle reconsiders the restart the way ADR 0051 states.
 		const byPane = new Map<string, HerdrAgent>();
 		for (const agent of agents) byPane.set(agent.paneId, agent);
-		for (const ticket of this.state.ticketsByState(["handed-off", "running"])) {
+		const restartTickets = this.state.ticketWorkCycle.ticketsByState(["handed-off", "running"]);
+		const restartNames = this.agentNames(restartTickets);
+		// The start count each candidate needs arrives as one batched read for the
+		// in-flight list, the same shape the projection pays (issue #202, ADR 0095).
+		// Asked per candidate it cost two statements for every in-flight Ticket on
+		// every cycle the walk ran.
+		const restartStartCounts = this.state.handoff.handoffCountsFor(
+			restartTickets.map((ticket) => ticket.ticketIdentity),
+		);
+		for (const ticket of restartTickets) {
 			// The gate (ADR 0060, widened by ADR 0070): this walk reads the
 			// in-flight tickets directly, not the list, and a flagged Ticket whose
 			// Agent is missing is listed all the same because its work is live - so
@@ -1678,22 +1770,29 @@ export class ObservationCoordinator {
 			// judged out, and it would keep starting it for as long as the flag
 			// stood. The identity is all this walk holds, so it asks the cycle's
 			// own read of the pile, the ticket's flag or its source's.
-			if (blocked.has(ticket.ticketIdentity)) continue;
-			if (this.now() - Date.parse(ticket.startedAt) < this.startupGraceMs) continue;
-			if (ticket.paneId === null) continue;
-			// The one missing-Agent rule, read the way the in-flight pass reads it.
+			// The restart candidate's gate (ADR 0051, ADR 0060, ADR 0070): the flag,
+			// the startup grace, the missing Agent, the loop guard, and the marks
+			// that already stand for this ticket. The rule decides.
 			if (
-				ownAgentInPane(
-					byPane.get(ticket.paneId),
-					this.state.agentNameForTicket(ticket.ticketIdentity),
-				) !== null
+				!restartCandidateHolds({
+					ignoreBlocked: blocked.has(ticket.ticketIdentity),
+					pastStartupGrace: this.now() - Date.parse(ticket.startedAt) >= this.startupGraceMs,
+					hasPane: ticket.paneId !== null,
+					// The one missing-Agent rule, read the way the in-flight pass reads it.
+					agentMissing:
+						ownAgentInPane(
+							ticket.paneId === null ? undefined : byPane.get(ticket.paneId),
+							restartNames.get(ticket.ticketIdentity) ?? "",
+						) === null,
+					handoffCount: restartStartCounts.get(ticket.ticketIdentity) ?? 0,
+					handoffLimit: config.maxHandoffsPerTicket,
+					queueItemStands: queuedTickets.has(ticket.ticketIdentity),
+					restartMarkStands: this.restarted.has(ticket.ticketIdentity),
+				})
 			)
 				continue;
-			if (this.state.handoffCount(ticket.ticketIdentity) >= config.maxHandoffsPerTicket) continue;
-			if (this.state.hasWorkItem(ticket.ticketIdentity)) continue;
-			if (this.restarted.has(ticket.ticketIdentity)) continue;
 			this.restarted.add(ticket.ticketIdentity);
-			const previous = this.state.lastCompletion(ticket.ticketIdentity);
+			const previous = this.state.ticketWorkCycle.lastCompletion(ticket.ticketIdentity);
 			const added = await this.topUpAsk(
 				{
 					origin: "restart",
@@ -1752,7 +1851,7 @@ export class ObservationCoordinator {
 			list.rows.filter((ticket) => ticket.sourceKind !== "github-pull-request"),
 		]) {
 			for (const ticket of group) {
-				if (await this.topUpOpenTicket(config, ticket)) return true;
+				if (await this.topUpOpenTicket(config, ticket, queuedTickets)) return true;
 			}
 		}
 		return false;
@@ -1766,41 +1865,53 @@ export class ObservationCoordinator {
 	 * item: a taken item ends the walk, and a held or refused row moves the
 	 * walk on to the next candidate, the way the walk did before the split.
 	 */
-	private async topUpOpenTicket(config: FactoryConfig, ticket: Ticket): Promise<boolean> {
-		if (ticket.state !== "open" || !ticket.actionable) return false;
-		// The ignore gate (ADR 0060), on this walk's own read: the `all` view holds
-		// every row the covered rule leaves, so a resting ignored row stands here
-		// and this test is the one that holds it out. The gate is the flag on the
-		// row, never the filter that drew it.
-		if (automaticStartBlocked(ticket)) return false;
-		if (ticket.handoffCount >= config.maxHandoffsPerTicket) return false;
-		// The ticket's last cycle may have ended on a source change the agent
-		// made (a merged pull request, a closed issue). Its membership still
-		// reads active and healthy on the stale fetch, so the add waits for
-		// the sources to re-read the ticket: a merged item leaves the list
-		// and the ticket does not dispatch, an open one re-verifies and
-		// dispatches. The gate holds the ticket, not a parallel slot.
-		if (!this.state.sourceReverifiedSinceCycleEnd(ticket.identity)) return false;
-		// The Same-type hold (ADR 0026): the ticket's newest closed cycle
-		// completed a turn of the type the ticket now suggests. That work
-		// finished; the item still lists it because no new signal landed.
-		// A parking state offers no task: the plane does nothing on the
-		// ticket, and an external label write is the only engine that moves
-		// it (ADR 0027).
-		if (ticket.suggestedTaskType === null) return false;
-		if (this.state.sameTypeHoldActive(ticket.identity, ticket.suggestedTaskType)) return false;
-		if (this.state.hasWorkItem(ticket.identity)) return false;
+	private async topUpOpenTicket(
+		config: FactoryConfig,
+		ticket: Ticket,
+		queuedTickets: ReadonlySet<string>,
+	): Promise<boolean> {
+		// The row gate (ADR 0051, ADR 0060, ADR 0027): the row's own facts, the
+		// ignore flag read on this walk's own view - the `all` view holds every row
+		// the covered rule leaves, so a resting ignored row stands here and the flag
+		// on the row is what holds it out, never the filter that drew it - and the
+		// task the row offers. A parking state offers none: the plane does nothing on
+		// the ticket, and an external label write is the only engine that moves it.
+		const row = openTicketRowGate({
+			state: ticket.state,
+			actionable: ticket.actionable,
+			ignoreBlocked: automaticStartBlocked(ticket),
+			handoffCount: ticket.handoffCount,
+			handoffLimit: config.maxHandoffsPerTicket,
+			taskType: ticket.suggestedTaskType,
+		});
+		if (!row.stands) return false;
+		const taskType = row.taskType;
+		// The waits the row's own facts cannot answer (ADR 0051, ADR 0026): the
+		// ticket's last cycle may have ended on a source change the agent made, so
+		// the sources must have re-read it; and the Same-type hold must be clear.
+		// The gate holds the ticket, not a parallel slot.
+		if (
+			!openTicketWaitsHold({
+				sourceReverified: this.state.ticketWorkCycle.sourceReverifiedSinceCycleEnd(ticket.identity),
+				sameTypeHoldActive: this.state.ticketWorkCycle.sameTypeHoldActive(
+					ticket.identity,
+					taskType,
+				),
+				queueItemStands: queuedTickets.has(ticket.identity),
+			})
+		)
+			return false;
 		// The ready position the list offers (ADR 0068): the task type
 		// resolves on the plane action, so the top-up asks for the merge,
 		// not for a handoff. The guards the handoff's add ran still ran
 		// above, and the item takes no seat when it runs.
-		if (isPlaneActionTaskType(config.taskTypes, ticket.suggestedTaskType)) {
+		if (isPlaneActionTaskType(config.taskTypes, taskType)) {
 			const added = await this.topUpPlaneActionAsk(
 				{
 					origin: "open",
 					automatic: true,
 					ticketIdentity: ticket.identity,
-					taskType: ticket.suggestedTaskType,
+					taskType,
 				},
 				`work queue top-up: merging ${this.ticketName(ticket.identity)}`,
 				`work queue top-up could not merge ${this.ticketName(ticket.identity)}`,
@@ -1810,7 +1921,7 @@ export class ObservationCoordinator {
 		// The configured settings of the ticket's task profile (ADR 0009): an
 		// unattended handoff starts with the same resolution chain a manual
 		// one sees in the panel, and the fit check guards what it starts with.
-		const choice = resolveHandoffChoice(config, ticket.suggestedTaskType);
+		const choice = resolveHandoffChoice(config, taskType);
 		const added = await this.topUpAsk(
 			{
 				origin: "open",
@@ -1833,7 +1944,7 @@ export class ObservationCoordinator {
 	 */
 	private ticketName(identity: string): string {
 		const config = this.config();
-		const title = this.state
+		const title = this.state.ticketWorkCycle
 			.projectedTickets(config.workflowStates, config.defaultTaskType)
 			.find((candidate) => candidate.identity === identity)?.title;
 		return title === undefined ? `ticket ${identity}` : `"${title}"`;
@@ -1887,7 +1998,8 @@ export class ObservationCoordinator {
 		// same wait the cycle-end re-verify gate keeps. The hold is silent:
 		// the re-ask on the refresh is the expected path, not a refusal to
 		// report, and the walk moves on to its next candidate.
-		if (this.state.planeActionBlockedUnrefreshed(intent.ticketIdentity)) return "refused";
+		if (this.state.planeAction.planeActionBlockedUnrefreshed(intent.ticketIdentity))
+			return "refused";
 		const result = await this.dispatchPlaneAction(intent);
 		if (this.stopped) return "stopped";
 		if (!result.ok) {
@@ -1925,7 +2037,7 @@ export class ObservationCoordinator {
 		ticket: Ticket,
 		projection: TicketProjection,
 	): { position: Ticket; step: NextStep } | null {
-		const completion = this.state.lastCompletion(ticket.identity);
+		const completion = this.state.ticketWorkCycle.lastCompletion(ticket.identity);
 		if (completion === null) return null;
 		const outcome = completion.transition ?? null;
 		// The decision on the turn decides whether the walk re-offers the route

@@ -85,7 +85,7 @@ import {
 } from "./runner.ts";
 import { fitSettings } from "./setting-fit.ts";
 import { resolveEnvironment, resolveSettings } from "./setting-resolution.ts";
-import type { Consultation } from "./state.ts";
+import type { Consultation } from "./state/consultation-record.ts";
 import { newestMembership } from "./task-selection.ts";
 import {
 	type ReviewVerdictRead,

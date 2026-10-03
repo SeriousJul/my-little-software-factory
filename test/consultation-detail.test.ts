@@ -9,7 +9,7 @@ import {
 	consultationDetailLines,
 	consultationDetailTitle,
 } from "../src/components/consultation-detail.ts";
-import type { Consultation } from "../src/state.ts";
+import type { Consultation } from "../src/state/consultation-record.ts";
 import type { SessionEntry } from "../src/turn-log.ts";
 
 function consultation(state: "working" | "closed"): Consultation {

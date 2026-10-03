@@ -126,7 +126,7 @@ describe("RefreshCoordinator", () => {
 		await turns();
 		expect(clock.delays).toEqual([10_000, 60_000]);
 		expect(coordinator.isFetching("slow")).toBe(false);
-		expect(state.sourceHealths()).toContainEqual({
+		expect(state.sourceFact.sourceHealths()).toContainEqual({
 			name: "slow",
 			kind: "github-issues",
 			health: "stale",
@@ -151,7 +151,7 @@ describe("RefreshCoordinator", () => {
 		await turns();
 		source.settle(RATE_LIMITED);
 		await turns();
-		expect(state.sourceHealths()).toEqual([
+		expect(state.sourceFact.sourceHealths()).toEqual([
 			{
 				name: "issues",
 				kind: "github-issues",
@@ -212,7 +212,7 @@ describe("RefreshCoordinator", () => {
 		const coordinator = new RefreshCoordinator([broken], state, () => undefined, clock);
 		coordinator.start();
 		await turns();
-		expect(state.sourceHealths()).toEqual([
+		expect(state.sourceFact.sourceHealths()).toEqual([
 			{
 				name: "broken",
 				kind: "github-issues",

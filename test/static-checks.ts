@@ -11,8 +11,15 @@ import { join, relative } from "node:path";
 
 /**
  * Every TypeScript source file under `directory`, as paths relative to the
- * process's working directory. `keep` narrows the set when a check reads only
- * part of the tree.
+ * process's working directory, in path order. `keep` narrows the set when a
+ * check reads only part of the tree.
+ *
+ * The list is sorted because `readdirSync` answers in the order the filesystem
+ * holds the entries, and that order is not the same in a git checkout as on a
+ * developer's disk. A check that compares a walked set against a written list
+ * would then pass on one machine and fail on the other: measured here, the
+ * grouped-list check in `test/shared-control-architecture.test.ts` passed in
+ * this worktree and failed in the CI checkout on the same commit.
  */
 export function sourceFiles(
 	directory: string,
@@ -30,5 +37,5 @@ export function sourceFiles(
 			if (keep(rel)) found.push(rel);
 		}
 	}
-	return found;
+	return found.sort();
 }

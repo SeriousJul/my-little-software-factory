@@ -17,7 +17,8 @@
 import type { GroupingAxis } from "../domain/grouping.ts";
 import type { Ticket, TicketListFilter, TicketMarker } from "../domain/ticket.ts";
 import { ignoreRefusal, nextTicketListFilter, obligationOf } from "../domain/ticket.ts";
-import type { Consultation, WorkQueueItem } from "../state.ts";
+import type { Consultation } from "../state/consultation-record.ts";
+import type { WorkQueueItem } from "../state/work-queue.ts";
 import type { GroupHeader } from "./shared/grouping.ts";
 import { groupingAxisHint } from "./shared/grouping.ts";
 import { widthOf } from "./text.ts";

@@ -15,7 +15,7 @@
  * Both are the catalogue's business, not this module's, so neither has copy
  * here.
  */
-import type { Consultation } from "../state.ts";
+import type { Consultation } from "../state/consultation-record.ts";
 import type { ActionRow } from "./modal-chrome.ts";
 
 /**

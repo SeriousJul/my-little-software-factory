@@ -10,7 +10,14 @@ import { describe, expect, test } from "bun:test";
 import type { Ticket, TicketState } from "../src/domain/ticket.ts";
 import {
 	attentionBand,
+	automaticStartBlocked,
+	type CompletionTraceOrder,
 	canTransition,
+	dispatchPauseHolds,
+	flagWithholdsRow,
+	type HoldTurnFact,
+	handoffLimitReached,
+	sameTypeHoldHolds,
 	TICKET_STATES,
 	ticketListRank,
 } from "../src/domain/ticket.ts";
@@ -123,5 +130,118 @@ describe("the ticket state machine", () => {
 		expect(ticketListRank({ ...ticket("open"), externalKey: "#5" })).toBeLessThan(
 			ticketListRank({ ...ticket("open"), externalKey: "#10" }),
 		);
+	});
+});
+
+describe("the automatic start gate (ADR 0060, widened by ADR 0070)", () => {
+	test("the Ticket's own flag or a muted source blocks the machine's start", () => {
+		// The Top-up walks ask this one predicate instead of restating the rule
+		// at their own sites (issue #202), so the gate is tested on its facts.
+		expect(automaticStartBlocked(ticket("open"))).toBe(false);
+		expect(automaticStartBlocked({ ...ticket("open"), ignored: true })).toBe(true);
+		expect(automaticStartBlocked({ ...ticket("open"), muted: true })).toBe(true);
+		expect(automaticStartBlocked({ ...ticket("open"), ignored: true, muted: true })).toBe(true);
+	});
+
+	test("the gate reads the facts and never the row's face", () => {
+		// A judged-out Ticket whose row the list reveals for its live work is
+		// still no automatic start.
+		for (const state of ["open", "handed-off", "running", "awaiting"] as const) {
+			expect(automaticStartBlocked({ ...ticket(state), ignored: true })).toBe(true);
+		}
+	});
+
+	test("a flag withholds a resting row and never a live one", () => {
+		// The row leaves the list only where the Ticket rests; a Ticket with
+		// work in flight or a decision owed keeps the row its controls hang from.
+		expect(flagWithholdsRow({ ...ticket("open"), ignored: true })).toBe(true);
+		expect(flagWithholdsRow({ ...ticket("open"), muted: true })).toBe(true);
+		for (const state of ["handed-off", "running", "awaiting"] as const) {
+			expect(flagWithholdsRow({ ...ticket(state), ignored: true })).toBe(false);
+			expect(flagWithholdsRow({ ...ticket(state), muted: true })).toBe(false);
+		}
+		// An unflagged row stands whatever its state.
+		for (const state of ["open", "handed-off", "running", "awaiting"] as const) {
+			expect(flagWithholdsRow(ticket(state))).toBe(false);
+		}
+	});
+});
+
+describe("the Dispatch pause (ADR 0016)", () => {
+	/** One completion trace, placed by its completion time and its row. */
+	function trace(completedAt: string, rowId: number): CompletionTraceOrder {
+		return { completedAt, rowId };
+	}
+
+	test("no held failure means no pause", () => {
+		expect(dispatchPauseHolds(null, null)).toBe(false);
+		expect(dispatchPauseHolds(null, trace("2026-01-03T00:00:00Z", 9))).toBe(false);
+	});
+
+	test("a held failure with nothing completed since it holds the pause", () => {
+		expect(dispatchPauseHolds(trace("2026-01-03T00:00:00Z", 9), null)).toBe(true);
+		expect(
+			dispatchPauseHolds(trace("2026-01-04T00:00:00Z", 9), trace("2026-01-03T00:00:00Z", 8)),
+		).toBe(true);
+	});
+
+	test("a completed turn newer than the held failure ends the pause", () => {
+		expect(
+			dispatchPauseHolds(trace("2026-01-03T00:00:00Z", 8), trace("2026-01-04T00:00:00Z", 9)),
+		).toBe(false);
+	});
+
+	test("newer means the completion time and then the row", () => {
+		// Two traces settled in the same instant: the later row is the newer
+		// trace, so it is the one that can end the pause.
+		expect(
+			dispatchPauseHolds(trace("2026-01-03T00:00:00Z", 8), trace("2026-01-03T00:00:00Z", 9)),
+		).toBe(false);
+		expect(
+			dispatchPauseHolds(trace("2026-01-03T00:00:00Z", 9), trace("2026-01-03T00:00:00Z", 8)),
+		).toBe(true);
+	});
+});
+
+describe("the Same-type hold (ADR 0026)", () => {
+	/** One cycle end: the cause that ended it and the task type its turn ran. */
+	function holdTurn(cause: string | null, taskType: string): HoldTurnFact {
+		return { cause, taskType };
+	}
+
+	test("a completed cycle end of the suggested task type holds the repeat", () => {
+		expect(sameTypeHoldHolds(holdTurn("completed", "implement"), "implement")).toBe(true);
+	});
+
+	test("a new signal ends the hold", () => {
+		// The suggested task type changed, the cycle did not end completed, or
+		// the ticket has no closed cycle yet.
+		expect(sameTypeHoldHolds(holdTurn("completed", "implement"), "review")).toBe(false);
+		expect(sameTypeHoldHolds(holdTurn("completed", "implement"), null)).toBe(false);
+		expect(sameTypeHoldHolds(holdTurn("failed", "implement"), "implement")).toBe(false);
+		expect(sameTypeHoldHolds(holdTurn("aborted", "implement"), "implement")).toBe(false);
+		expect(sameTypeHoldHolds(holdTurn(null, "implement"), "implement")).toBe(false);
+		expect(sameTypeHoldHolds(null, "implement")).toBe(false);
+	});
+});
+
+describe("the Handoff limit (ADR 0005)", () => {
+	test("a count under the cap leaves the gate open", () => {
+		expect(handoffLimitReached(0, 10)).toBe(false);
+		expect(handoffLimitReached(9, 10)).toBe(false);
+	});
+
+	test("the count that reaches the cap closes the gate", () => {
+		// The cap counts started handoffs, so the ticket that has started exactly
+		// the cap's worth gets no further automatic add.
+		expect(handoffLimitReached(10, 10)).toBe(true);
+		expect(handoffLimitReached(11, 10)).toBe(true);
+	});
+
+	test("the cap is the fact the config resolved, not a number the rule holds", () => {
+		// The same count answers differently at different caps: the rule reads the
+		// cap it is handed, so a config of one closes at one.
+		expect(handoffLimitReached(1, 1)).toBe(true);
+		expect(handoffLimitReached(1, 2)).toBe(false);
 	});
 });

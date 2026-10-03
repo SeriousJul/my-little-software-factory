@@ -32,7 +32,7 @@ import {
 	sourceCovers,
 } from "./repo-init.ts";
 import type { CommandOptions, CommandRunner } from "./runner.ts";
-import type { FactoryState, RepositoryInitFact } from "./state.ts";
+import type { RepositoryInitAggregate, RepositoryInitFact } from "./state/repository-init.ts";
 import { GhAuthenticator } from "./ticket-source.ts";
 
 /**
@@ -56,10 +56,15 @@ export interface RepositoryInitFlowPlan {
 	fileActions: readonly { path: string; action: string }[];
 }
 
+/** The aggregates the repository init flow reads, as a list (issue #202). */
+export interface RepositoryInitFlowAggregates {
+	repositoryInit: RepositoryInitAggregate;
+}
+
 /** Everything the commit needs besides the runner and the state. */
 export interface RepositoryInitFlowInput {
 	runner: CommandRunner;
-	state: FactoryState;
+	state: RepositoryInitFlowAggregates;
 	/** The config the init registers its sources against. */
 	config: FactoryConfig;
 	repository: RepositoryInitRepository;
@@ -182,7 +187,7 @@ export async function commitRepositoryInit(
 
 	// The fact stands on the settings that generated the labels and the
 	// sources, so the drift the plane reports is a change to those settings.
-	input.state.setRepositoryInitFact(
+	input.state.repositoryInit.setRepositoryInitFact(
 		input.repository.identity,
 		repositoryInitSettingsHash(input.workflowStates, input.taskTypes),
 		outcome.pushedCommit,
@@ -242,14 +247,14 @@ export function repositoryInitStanding(
  * fact is not drift: the repository has never been init'd.
  */
 export function repositoryInitDrifted(
-	state: FactoryState,
+	state: RepositoryInitFlowAggregates,
 	identity: string,
 	workflowStates: readonly WorkflowState[],
 	taskTypes: Record<string, TaskTypeConfig>,
 ): boolean {
 	return (
 		repositoryInitStanding(
-			state.repositoryInitFact(identity),
+			state.repositoryInit.repositoryInitFact(identity),
 			repositoryInitSettingsHash(workflowStates, taskTypes),
 		) === "drift"
 	);

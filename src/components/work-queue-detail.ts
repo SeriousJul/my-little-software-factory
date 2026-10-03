@@ -8,7 +8,7 @@
  * shared controls do.
  */
 import { DEFAULT_MERGE_METHOD } from "../plane-action-registry.ts";
-import type { Consultation } from "../state.ts";
+import type { Consultation } from "../state/consultation-record.ts";
 import { paint } from "./theme.ts";
 import type { WorkQueueRow } from "./work-queue-list.ts";
 

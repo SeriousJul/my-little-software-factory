@@ -25,7 +25,8 @@ import {
 	runRepositoryInit,
 } from "../src/repo-init.ts";
 import { type CommandRunner, createChildProcessRunner } from "../src/runner.ts";
-import { type FactoryState, openFactoryState } from "../src/state.ts";
+import type { FactoryState } from "../src/state.ts";
+import { openFactoryState } from "../src/state.ts";
 import { createStubRunner } from "../src/stub/runner.ts";
 import type { StubWorld } from "../src/stub/world.ts";
 import { StubWorldStore } from "../src/stub/world.ts";
@@ -396,7 +397,7 @@ host = "github.com"
 		// world, the way the entry module composes the plane.
 		const sources = config.sources.map((source) => createTicketSource(source, runner));
 		const state: FactoryState = openFactoryState(join(dir, "factory.sqlite"));
-		state.setGroupingAxis("tickets", "repository");
+		state.grouping.setGroupingAxis("tickets", "repository");
 
 		const headBefore = (await real.run("git", ["-C", checkout, "rev-parse", "HEAD"])).stdout.trim();
 
@@ -450,7 +451,7 @@ host = "github.com"
 				expect(saved).toContain("acme-issues");
 
 				// The init fact stands in the state file on the current settings.
-				const fact = state.repositoryInitFact("github.com/acme/factory");
+				const fact = state.repositoryInit.repositoryInitFact("github.com/acme/factory");
 				expect(fact).not.toBeNull();
 				expect(fact?.settingsHash).toBe(
 					repositoryInitSettingsHash(config.workflowStates, config.taskTypes),
@@ -468,7 +469,7 @@ host = "github.com"
 				// the refresh coordinator holds it, and the source health rows it
 				// seeds are the sources the plane polls. The operator's own feed
 				// stands beside the pull request feed the act added.
-				const polled = state
+				const polled = state.sourceFact
 					.sourceHealths()
 					.map((source) => source.name)
 					.sort();
@@ -665,7 +666,7 @@ pull-request-facts = []
 		writeFileSync(configPath, bootstrapConfig(checkout));
 		const { config } = await loadConfigFile(configPath);
 		const state: FactoryState = openFactoryState(join(dir, "factory.sqlite"));
-		state.setGroupingAxis("tickets", "repository");
+		state.grouping.setGroupingAxis("tickets", "repository");
 
 		await withApp(
 			async (setup) => {
