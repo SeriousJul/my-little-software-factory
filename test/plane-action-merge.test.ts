@@ -29,7 +29,8 @@ import type { FetchedTicket, Ticket } from "../src/domain/ticket.ts";
 import { withIssueReferences } from "../src/domain/ticket.ts";
 import { resolveHandoffChoice } from "../src/handoff.ts";
 import { createHandoffDispatch, type HandoffDispatchReports } from "../src/handoff-dispatch.ts";
-import { planeActionSettingOf, runMergePullRequest } from "../src/plane-actions.ts";
+import { planeActionSettingOf } from "../src/plane-action-registry.ts";
+import { runMergePullRequest } from "../src/plane-actions.ts";
 import type { CommandOptions, CommandResult } from "../src/runner.ts";
 import { type FactoryState, openFactoryState } from "../src/state.ts";
 import { createTicketSource, type FetchOutcome, SEARCH_QUERY } from "../src/ticket-source.ts";
@@ -269,7 +270,6 @@ function mergeRoute(over: Partial<TransitionOutcome> = {}): TransitionOutcome {
 		reason: "",
 		ticketFacts: [],
 		pullRequestFacts: ["ready-to-ship"],
-		autoAdvance: false,
 		ticketWrite: null,
 		pullRequestWrite: { added: ["ready-to-ship"], removed: [] },
 		pullRequestIdentity: pullIdentity,
@@ -491,7 +491,6 @@ describe("the attempt record in the state", () => {
 				reason: "",
 				ticketFacts: [],
 				pullRequestFacts: [],
-				autoAdvance: true,
 				ticketWrite: null,
 				pullRequestWrite: null,
 				pullRequestIdentity: null,
@@ -1570,7 +1569,6 @@ describe("the dispatch's ask and pickup", () => {
 				reason: "",
 				ticketFacts: [],
 				pullRequestFacts: [],
-				autoAdvance: true,
 				ticketWrite: null,
 				pullRequestWrite: null,
 				pullRequestIdentity: null,

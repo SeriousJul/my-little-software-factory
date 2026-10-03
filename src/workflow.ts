@@ -10,6 +10,10 @@
  * state from the pull request's own record, with the projection's last
  * refresh as the read's fallback. The branch that holds fires, and its facts
  * and pins take effect.
+ *
+ * The module also owns the Next step (ADR 0092): the one derivation of the
+ * step a fired Transition leaves behind, and the gates that hold it. Auto-
+ * handoff mode decides a settled turn from that step, not from a config flag.
  */
 
 import type {
@@ -30,6 +34,7 @@ import {
 } from "./domain/ticket.ts";
 import { firstNonEmptyLine } from "./lines.ts";
 import { ticketBranchPrefix } from "./naming.ts";
+import { isPlaneActionTaskType } from "./plane-action-registry.ts";
 import {
 	markPullRequestReady,
 	pullRequestCarriesWork,
@@ -42,7 +47,7 @@ import {
 	type CommandRunner,
 	errorMessage,
 } from "./runner.ts";
-import type { FactoryState } from "./state.ts";
+import type { FactoryState, TicketProjection } from "./state.ts";
 import { membershipMatchesState, newestMembership } from "./task-selection.ts";
 import { GhAuthenticator } from "./ticket-source.ts";
 
@@ -83,7 +88,6 @@ export interface TransitionEvaluation {
 	reason: string;
 	ticketFacts: string[];
 	pullRequestFacts: string[];
-	autoAdvance: boolean;
 	agent?: string;
 	environment?: EnvironmentKind;
 }
@@ -105,7 +109,6 @@ export function evaluateTransition(
 		reason: "",
 		ticketFacts: transition.ticketFacts,
 		pullRequestFacts: transition.pullRequestFacts,
-		autoAdvance: transition.autoAdvance ?? false,
 		...(transition.agent === undefined ? {} : { agent: transition.agent }),
 		...(transition.environment === undefined ? {} : { environment: transition.environment }),
 	};
@@ -167,7 +170,6 @@ function effective(
 		reason: "",
 		ticketFacts: branch.ticketFacts ?? transition.ticketFacts,
 		pullRequestFacts: branch.pullRequestFacts ?? transition.pullRequestFacts,
-		autoAdvance: branch.autoAdvance ?? transition.autoAdvance ?? false,
 		...(branch.agent !== undefined
 			? { agent: branch.agent }
 			: transition.agent === undefined
@@ -831,7 +833,6 @@ export async function fireTransition(
 		reason: evaluation.reason,
 		ticketFacts: evaluation.ticketFacts,
 		pullRequestFacts: evaluation.pullRequestFacts,
-		autoAdvance: evaluation.autoAdvance,
 		...(evaluation.agent === undefined ? {} : { agent: evaluation.agent }),
 		...(evaluation.environment === undefined ? {} : { environment: evaluation.environment }),
 		ticketWrite: null,
@@ -902,7 +903,7 @@ export async function fireTransition(
 	// is the fire's visible fact, not a silent gap in the written labels. The
 	// fire derives no position from it either: the position the facts were
 	// meant to stand on is the pull request's, and deriving one on the ticket
-	// instead would auto-advance into the ticket's own state, re-firing the
+	// instead derives no Next step on the ticket's own state, re-firing the
 	// same transition on the next turn while the pull request is still
 	// missing.
 	const missingPullRequest = pullRequest === null && evaluation.pullRequestFacts.length > 0;
@@ -1126,8 +1127,8 @@ export interface RefiredSkip {
  * the skip re-fires nothing, whatever the sweeps that follow read.
  *
  * The outcome the trace records carries `refired`, so the observation loop
- * can tell a re-fired outcome from a settle-time one, and route the
- * auto-advance the skip's closed cycle never ran. A fire that finds no
+ * can tell a re-fired outcome from a settle-time one, and route the Next step
+ * the skip's closed cycle never took. A fire that finds no
  * transition at all returns nothing and the sweep reads it again next cycle
  * with no command; any outcome the fire produced, a fact it refused with
  * included, lands on the trace once, the way a settle-time outcome does.
@@ -1304,4 +1305,134 @@ export async function writeMembershipLabels(
 		};
 	}
 	return { added: [...added], removed: [...removed] };
+}
+
+/**
+ * The Next step a settled turn's Transition derives (ADR 0092).
+ *
+ * The step is the one fact Auto-handoff mode decides a settled turn from: the
+ * task type the written labels put the ticket on, the ticket that position
+ * stands on, and whether the step runs as a Handoff or as a Plane action. The
+ * position is derived, never stored, so the step also carries the gate that
+ * holds it when it will not run: the position no longer offers the task, the
+ * position is not actionable, the Same-type hold, or the Handoff limit.
+ *
+ * One derivation serves every reader - the automatic Completion rule, the
+ * top-up's continuation walks, and the Decision screen's fact line - so no
+ * reader holds its own copy of the gates, and no screen offers a step the
+ * machine will not take without saying why.
+ */
+
+/**
+ * Why a Next step stands while the machine will not run it (ADR 0092).
+ *
+ * The keys live here, beside the gates the derivation reads, and so do the
+ * sentences that state them. Two surfaces read them: the Decision screen's fact
+ * line, and the Message line that states a held step in Auto-handoff mode. The
+ * module that owns the gates owns the words for them, so neither surface holds a
+ * copy and no machine module reaches into the presentation layer for a sentence.
+ */
+export const NEXT_STEP_GATES = [
+	"position-offers-no-task",
+	"position-not-actionable",
+	"same-type-hold",
+	"handoff-limit",
+] as const;
+
+export type NextStepGate = (typeof NEXT_STEP_GATES)[number];
+
+/** The sentence each gate is stated in, on either surface that names it. */
+export const NEXT_STEP_GATE_LINES: Readonly<Record<NextStepGate, string>> = {
+	"position-offers-no-task": "the position no longer offers the task",
+	"position-not-actionable": "the position is not actionable",
+	"same-type-hold": "the Same-type hold stands on the position",
+	"handoff-limit": "the position is at the handoff limit",
+};
+
+/** The channel a Next step runs on: the task type's own form (ADR 0068). */
+export const NEXT_STEP_KINDS = ["handoff", "plane-action"] as const;
+export type NextStepKind = (typeof NEXT_STEP_KINDS)[number];
+
+/** The step a settled turn's Transition derived (ADR 0092). */
+export interface NextStep {
+	/** The task type the derived position offers. */
+	taskType: string;
+	/** The ticket the derived position stands on. */
+	ticketIdentity: string;
+	/** Whether the step is a Handoff or a Plane action. */
+	kind: NextStepKind;
+	/** The gate that holds the step; null when the machine can run it. */
+	gate: NextStepGate | null;
+}
+
+/**
+ * Derive the Next step of one Transition outcome.
+ *
+ * The step exists when the fire ran and its label facts landed on a position
+ * that offers a task: a fire that did not run, a fire whose write failed, and
+ * a fire that lands on a parking state derive none, and the cycle closes where
+ * the machine put the ticket.
+ *
+ * The gates are read on the position the step names, not on the ticket the
+ * settled turn ran on: the step starts its work on the position, so the
+ * position's standing, its hold, and its limit are the ones that hold it.
+ *
+ * `projection` is the Ticket projection read the caller already holds, before
+ * the list rule (ADR 0042): the position can be a ticket the operator's list
+ * withholds. Every caller holds a read of its own - the observation cycle reads
+ * its pile once and hands it down - so the derivation never pays for a scan by
+ * accident. It is a value the state makes, never an array a caller builds: a
+ * read that holds no row is a fact about the tickets, not a mistake at the call
+ * site.
+ */
+export function deriveNextStep(
+	config: FactoryConfig,
+	state: FactoryState,
+	outcome: TransitionOutcome,
+	projection: TicketProjection,
+): NextStep | null {
+	if (outcome.fired !== true) return null;
+	// A label write the plane did not make derives no position: the fire returns
+	// before it computes one, and the machine does not route from labels it did
+	// not write.
+	if (outcome.writeFailure !== "") return null;
+	if (outcome.positionTaskType === null || outcome.positionTicketIdentity === null) return null;
+	const taskType = outcome.positionTaskType;
+	const ticketIdentity = outcome.positionTicketIdentity;
+	const step: NextStep = {
+		taskType,
+		ticketIdentity,
+		kind: isPlaneActionTaskType(config.taskTypes, taskType) ? "plane-action" : "handoff",
+		gate: null,
+	};
+	const position = projection.rowFor(ticketIdentity);
+	// The position is derived, never stored: between the write and the start the
+	// ticket can leave its source, and a refresh can move it off the task the
+	// fire wrote.
+	if (position === undefined || position.suggestedTaskType !== taskType) {
+		step.gate = "position-offers-no-task";
+		return step;
+	}
+	// The position's standing, in one test. An awaiting position is the ticket
+	// whose own turn just settled, and the claim check at the ask owns its
+	// standing, so the open ticket's health is not demanded of it; an in-flight
+	// position holds a seat, and a closed one is gone. The unfinished attempt is
+	// folded into the open position's `actionable` by the projection.
+	if (position.state !== "open" && position.state !== "awaiting") {
+		step.gate = "position-not-actionable";
+		return step;
+	}
+	if (position.state === "open" && !position.actionable) {
+		step.gate = "position-not-actionable";
+		return step;
+	}
+	if (state.sameTypeHoldActive(position.identity, taskType)) {
+		step.gate = "same-type-hold";
+		return step;
+	}
+	if (position.handoffCount >= config.maxHandoffsPerTicket) {
+		step.gate = "handoff-limit";
+		return step;
+	}
+	return step;
 }

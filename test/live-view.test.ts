@@ -845,30 +845,27 @@ describe("the Live view against a running factory", () => {
 		app.state.close();
 	});
 
-	test("a settled turn whose automatic route cannot start keeps streaming", async () => {
-		// The implement transition auto-advances into the review position: the
-		// factory decides for itself (route), never handing the screen over.
+	test("a settled turn Auto-handoff mode parks for the operator keeps streaming", async () => {
+		// The implement transition writes ready-for-review, so its Next step is
+		// the review position on the ticket itself. The task type carries the
+		// Operator-decides flag, so the machine decides nothing (ADR 0085) and the
+		// turn rests awaiting with its decision unwritten. Auto-handoff mode owns
+		// the Live view's body (ADR 0092): the stream stands where the operator
+		// left it, and no decision row appears.
 		const app = seededApp({
 			taskTypes: {
 				...BASE_CONFIG.taskTypes,
 				implement: {
 					...BASE_CONFIG.taskTypes.implement,
+					operatorDecides: true,
 					transition: {
 						ticketFacts: ["ready-for-review"],
 						pullRequestFacts: [],
-						autoAdvance: true,
 					},
 				},
 			},
 		});
-		const checkoutPath = Object.values(app.config.repos)[0];
-		// The checkout is not a repository: the automatic route cannot
-		// start, so the trace rests pending and the ticket stays in
-		// awaiting.
-		app.runner.set("git", ["-C", checkoutPath, "rev-parse", "--git-dir"], {
-			code: 1,
-			stderr: "not a repository",
-		});
+		app.state.setAutoHandoffMode(true);
 		app.runner.set("herdr", ["agent", "list"], {
 			stdout: agentListJson([
 				{
@@ -888,9 +885,9 @@ describe("the Live view against a running factory", () => {
 				app.src.settle(success);
 				await awaitFrame(setup, (f) => f.includes("Persist source facts"), "the ticket row");
 				await pressReturn(setup, "the Live view", (f) => f.includes("Live: Persist source facts"));
-				// The agent reports done. The turn settles, the factory takes
-				// the decision for itself (its route cannot start), and the
-				// screen never hands over to the decision rows.
+				// The agent reports done. The turn settles, and the factory decides
+				// nothing for it: the Operator-decides flag parks the completion
+				// ahead of every outcome check, so the ticket rests awaiting.
 				app.runner.set("herdr", ["agent", "list"], {
 					stdout: agentListJson([
 						{
@@ -903,21 +900,20 @@ describe("the Live view against a running factory", () => {
 						},
 					]),
 				});
-				// The settle lands in the state; the route's failure holds the
-				// trace pending for the next cycle.
 				const deadline = Date.now() + 2000;
 				while (app.state.ticketState(identity) !== "awaiting" && Date.now() < deadline) {
 					await sleep(20);
 				}
 				expect(app.state.ticketState(identity)).toBe("awaiting");
 				const frame = setup.captureCharFrame();
-				// The factory's own decision never hands the screen over:
-				// the stream stands where the operator left it, and no decision
-				// rows appear at all while the route rests.
+				// The mode owns the body, not the outcome: the stream stands where
+				// the operator left it, and no decision rows appear at all while the
+				// parked turn waits.
 				expect(frame).toContain("Live: Persist source facts");
 				expect(frame).toContain("the agent is finishing up");
 				expect(frame).not.toContain("Handoff: review");
 				expect(app.state.lastCompletion(identity)?.decision).toBeNull();
+				expect(app.state.workQueue()).toEqual([]);
 			},
 			WIDTH,
 			HEIGHT,
@@ -1217,17 +1213,16 @@ describe("the Live view against a running factory", () => {
 	});
 
 	test("the cycle ending while the view is open closes the screen", async () => {
-		// A task type the factory closes by itself: the transition
-		// auto-advances but writes no position, so the turn can only end the
-		// cycle, never hand off. The machine decides an auto-advancing
-		// settled turn only in Auto mode (ADR 0051), so the mode stands on
-		// when the view opens.
+		// A task type the factory closes by itself: the transition fires and
+		// derives no Next step, so the turn can only end the cycle, never hand
+		// off. The machine decides a settled turn only in Auto mode (ADR 0051,
+		// ADR 0092), so the mode stands on when the view opens.
 		const app = seededApp({
 			taskTypes: {
 				...BASE_CONFIG.taskTypes,
 				implement: {
 					...BASE_CONFIG.taskTypes.implement,
-					transition: { ticketFacts: [], pullRequestFacts: [], autoAdvance: true },
+					transition: { ticketFacts: [], pullRequestFacts: [] },
 				},
 			},
 		});

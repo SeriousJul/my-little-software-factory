@@ -375,7 +375,7 @@ pull-request-facts = []
 # the specification back into the ticket body, commits the glossary entries
 # and ADRs the interview produced directly to the default branch, and marks
 # the ticket ready-for-agent. It carries no transition and no pull request:
-# the branch stands for the implementation that follows. The no-auto-decision
+# the branch stands for the implementation that follows. The operator-decides
 # flag parks its completions for the operator, so unattended mode keeps the
 # live session alive between the agent's questions and the operator's
 # answers. Your agents need the grill-with-docs skill for it. Uncomment the
@@ -383,7 +383,7 @@ pull-request-facts = []
 #
 # [task-types.analyze]
 # thinking = "xhigh"
-# no-auto-decision = true
+# operator-decides = true
 # template = '''
 # /skill:grill-with-docs
 #
@@ -439,11 +439,11 @@ pull-request-facts = []
 # carries a template that resolves its kind of finding: verify the finding
 # and make the fix on the branch the pull request the plane opened already
 # stands on. From there the review, rework, and merge workflow takes over.
-# The transition writes ready-for-review on the opened pull request and
-# auto-advances into its review position; a turn that settled with a head
-# that carries no commit ahead of its base rests as the missing pull request,
-# and the completed task type rests the ticket while the item still lists
-# upstream.
+# The transition writes ready-for-review on the opened pull request; the Next
+# step it derives is the review the labels put the pull request on. A turn
+# that settled with a head that carries no commit ahead of its base rests as
+# the missing pull request, and the completed task type rests the ticket while
+# the item still lists upstream.
 
 [task-types.resolve-security-advisory]
 thinking = "high"
@@ -489,7 +489,6 @@ Description:
 [task-types.resolve-security-advisory.transition]
 ticket-facts = []
 pull-request-facts = ["ready-for-review"]
-auto-advance = true
 
 [task-types.resolve-dependabot-alert]
 thinking = "high"
@@ -536,7 +535,6 @@ Description:
 [task-types.resolve-dependabot-alert.transition]
 ticket-facts = []
 pull-request-facts = ["ready-for-review"]
-auto-advance = true
 
 [task-types.resolve-secret-scanning-alert]
 thinking = "high"
@@ -587,7 +585,6 @@ Description:
 [task-types.resolve-secret-scanning-alert.transition]
 ticket-facts = []
 pull-request-facts = ["ready-for-review"]
-auto-advance = true
 
 # --- Ticket sources -------------------------------------------------------
 # No source is active out of the box, so the control plane starts with an

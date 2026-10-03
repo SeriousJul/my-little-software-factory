@@ -118,7 +118,7 @@ pull-request-facts = [ "needs-work" ]
 # the specification back into the ticket body, commits the docs to the
 # default branch, and marks the ticket ready-for-agent. It carries no
 # transition and no pull request: the branch stands for the implementation
-# that follows. The no-auto-decision flag parks its completions for the
+# that follows. The operator-decides flag parks its completions for the
 # operator, so unattended mode keeps the live session alive between the
 # agent's questions and the operator's answers.
 [task-types.analyze]
@@ -171,7 +171,7 @@ Repository: {repository}
 
 Previous session message (empty on a first session): {previous-message}"""
 thinking = "xhigh"
-no-auto-decision = true
+operator-decides = true
 
 [task-types.rework]
 template = """Rework pull request {external-key}: {title}.
@@ -263,7 +263,6 @@ opens-pull-request = true
 [task-types.resolve-security-advisory.transition]
 ticket-facts = []
 pull-request-facts = [ "ready-for-review" ]
-auto-advance = true
 
 [task-types.resolve-dependabot-alert]
 template = """Resolve the following Dependabot alert {external-key}: {title}.
@@ -310,7 +309,6 @@ opens-pull-request = true
 [task-types.resolve-dependabot-alert.transition]
 ticket-facts = []
 pull-request-facts = [ "ready-for-review" ]
-auto-advance = true
 
 [task-types.resolve-secret-scanning-alert]
 template = """Resolve the following secret scanning alert {external-key}: {title}.
@@ -361,7 +359,6 @@ opens-pull-request = true
 [task-types.resolve-secret-scanning-alert.transition]
 ticket-facts = []
 pull-request-facts = [ "ready-for-review" ]
-auto-advance = true
 
 [consultation-types.grill-with-docs]
 agent = "pi"

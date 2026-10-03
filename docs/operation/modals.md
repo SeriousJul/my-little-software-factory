@@ -31,9 +31,12 @@ The rows the modal offers:
   no branch held, or the label write failed. It runs the same transition
   again, reading the source as it stands now.
 
-In auto mode, and on a transition that auto-advances, the factory decides
-the settled turn itself: Enter only reports what it decided, and the modal
-stays closed.
+In auto mode the factory decides the settled turn itself: Enter only reports
+what it decided, and the modal stays closed. In manual mode the modal opens on
+every settled turn (ADR 0092), and when the turn's Next step stands under a
+gate - the position offers no task, the position is not actionable, the
+Same-type hold, or the Handoff limit - the screen states the hold beside the
+row you can still confirm.
 
 ## Missing modal
 
