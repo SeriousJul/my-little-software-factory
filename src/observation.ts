@@ -71,7 +71,7 @@ import type { FactoryConfig, TransitionOutcome } from "./config.ts";
 // The normalized states and the words for them are the domain's, beside the
 // Missing agent rule the observation cycle reads (issue #201). The observation
 // module re-states them for its existing readers.
-import { normalizeAgentStatus } from "./domain/agent.ts";
+import { agentInPane, normalizeAgentStatus } from "./domain/agent.ts";
 import {
 	automaticStartBlocked,
 	type Completion,
@@ -85,7 +85,7 @@ import {
 	type PlaneActionIntent,
 	STOPPED_DISPATCH_REASON,
 } from "./handoff-dispatch.ts";
-import { type HerdrAgent, ownAgentInPane } from "./herdr.ts";
+import type { HerdrAgent } from "./herdr.ts";
 import { identifyHandoffAgentName } from "./naming.ts";
 import { isPlaneActionTaskType } from "./plane-actions.ts";
 import { type RefreshClock, SYSTEM_CLOCK } from "./refresh.ts";
@@ -644,8 +644,9 @@ export class ObservationCoordinator {
 			// again, so a live agent in the ticket's pane that is not the ticket's
 			// own leaves the ticket's agent missing, and the missing path runs
 			// instead of the settle.
-			const own = ownAgentInPane(
-				byPane.get(ticket.paneId),
+			const own = agentInPane(
+				byPane,
+				ticket.paneId,
 				this.state.agentNameForTicket(ticket.ticketIdentity),
 			);
 			if (own === null) {
@@ -682,8 +683,9 @@ export class ObservationCoordinator {
 			// The same identity rule as the in-flight loop: a working agent in
 			// the ticket's reused pane id that is not the ticket's own does not
 			// resume the ticket's pending turn.
-			const own = ownAgentInPane(
-				byPane.get(ticket.paneId),
+			const own = agentInPane(
+				byPane,
+				ticket.paneId,
 				this.state.agentNameForTicket(ticket.ticketIdentity),
 			);
 			if (own === null || normalizeAgentStatus(own.status) !== "working") continue;
@@ -798,7 +800,7 @@ export class ObservationCoordinator {
 			if (ticket.paneId === null) continue;
 			const name = this.state.agentNameForTicket(ticket.ticketIdentity);
 			if (name === "") continue;
-			const own = ownAgentInPane(byPane.get(ticket.paneId), name);
+			const own = agentInPane(byPane, ticket.paneId, name);
 			if (own === null || normalizeAgentStatus(own.status) !== "working") continue;
 			this.armAgentWait(name);
 		}
@@ -1564,10 +1566,8 @@ export class ObservationCoordinator {
 			if (ticket.paneId === null) continue;
 			// The one missing-Agent rule, read the way the in-flight pass reads it.
 			if (
-				ownAgentInPane(
-					byPane.get(ticket.paneId),
-					this.state.agentNameForTicket(ticket.ticketIdentity),
-				) !== null
+				agentInPane(byPane, ticket.paneId, this.state.agentNameForTicket(ticket.ticketIdentity)) !==
+				null
 			)
 				continue;
 			if (this.state.handoffCount(ticket.ticketIdentity) >= config.maxHandoffsPerTicket) continue;
