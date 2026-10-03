@@ -12,7 +12,7 @@
  * counts, and the header paints them through the shared paint layer (ADR 0024).
  */
 
-import type { Consultation } from "../state.ts";
+import type { Consultation, WorkQueueItem } from "../state.ts";
 import { holdsDecision, type Ticket } from "./ticket.ts";
 
 /** The state the Consultation header counts as awaiting the operator's answer. */
@@ -47,6 +47,25 @@ export interface SectionFacts {
 		awaitingResponse: number;
 		recovery: number;
 	};
+	/** The Work section header's counts. */
+	work: {
+		/** The queue's depth: the items it holds. */
+		waiting: number;
+	};
+}
+
+/** The inputs the section fact module reads once per render. */
+export interface SectionFactInputs {
+	/** The rows the Ticket section lists. */
+	tickets: readonly Ticket[];
+	/** The Consultation records. */
+	consultations: readonly Consultation[];
+	/** The Work queue items. */
+	queue: readonly WorkQueueItem[];
+	/** The list step's own answer: exactly the rows the `ignored` view shows. */
+	ignored: number;
+	/** The list step's own answer: exactly the rows the `muted` view shows. */
+	muted: number;
 }
 
 /**
@@ -54,13 +73,10 @@ export interface SectionFacts {
  *
  * `ignored` and `muted` are the list step's own answers, not rules re-applied
  * here: the numbers name exactly the rows the `ignored` and `muted` views show.
+ * The queue depth counts the items the queue holds, whatever their kind.
  */
-export function sectionFacts(
-	tickets: readonly Ticket[],
-	consultations: readonly Consultation[],
-	ignored: number,
-	muted: number,
-): SectionFacts {
+export function sectionFacts(inputs: SectionFactInputs): SectionFacts {
+	const { tickets, consultations, queue, ignored, muted } = inputs;
 	const counted = consultations.filter((record) => record.state !== CONSULTATION_CLOSED_STATE);
 	return {
 		ticket: {
@@ -80,6 +96,7 @@ export function sectionFacts(
 				(CONSULTATION_RECOVERY_STATES as readonly string[]).includes(record.state),
 			).length,
 		},
+		work: { waiting: queue.length },
 	};
 }
 

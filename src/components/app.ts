@@ -946,12 +946,13 @@ export function App({
 	// never moves the baseline the bell compares against (ADR 0060).
 	// The header's counts, answered by the fact module from the active view
 	// (issue #201). The header takes them as values.
-	const headerFacts = sectionFacts(
-		machineTickets,
+	const headerFacts = sectionFacts({
+		tickets: machineTickets,
 		consultations,
-		listViews.ignored.length,
-		listViews.muted.length,
-	);
+		queue: workQueue,
+		ignored: listViews.ignored.length,
+		muted: listViews.muted.length,
+	});
 	const heldCount = headerFacts.ticket.held;
 	const openCount = headerFacts.ticket.open;
 	const runningCount = headerFacts.ticket.inFlight;
@@ -4922,7 +4923,7 @@ export function App({
 								expanded: workExpanded,
 								terminalWidth,
 								width: leftCols,
-								waiting: workQueue.length,
+								waiting: headerFacts.work.waiting,
 								paused: queuePaused,
 								active: mainSurfaceActive,
 								onToggle: () => clickSection("work"),

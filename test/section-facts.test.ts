@@ -7,9 +7,9 @@
  * nothing else does.
  */
 import { describe, expect, test } from "bun:test";
-import { heldBellRang, sectionFacts } from "../src/domain/section-facts.ts";
+import { heldBellRang, type SectionFactInputs, sectionFacts } from "../src/domain/section-facts.ts";
 import type { Completion, Ticket } from "../src/domain/ticket.ts";
-import type { Consultation, ConsultationState } from "../src/state.ts";
+import type { Consultation, ConsultationState, WorkQueueItem } from "../src/state.ts";
 
 function ticket(state: Ticket["state"], over: Partial<Ticket> = {}): Ticket {
 	return {
@@ -103,13 +103,17 @@ function consultation(state: ConsultationState): Consultation {
 	};
 }
 
+/** The section fact module's inputs, with nothing counted. */
+function inputs(over: Partial<SectionFactInputs>): SectionFactInputs {
+	return { tickets: [], consultations: [], queue: [], ignored: 0, muted: 0, ...over };
+}
+
 describe("the Ticket header's counts", () => {
 	test("the steady pipeline counts name the active view's rows", () => {
 		const facts = sectionFacts(
-			[ticket("open"), ticket("handed-off"), ticket("running"), ticket("awaiting")],
-			[],
-			0,
-			0,
+			inputs({
+				tickets: [ticket("open"), ticket("handed-off"), ticket("running"), ticket("awaiting")],
+			}),
 		);
 		expect(facts.ticket.open).toBe(1);
 		expect(facts.ticket.inFlight).toBe(2);
@@ -118,7 +122,13 @@ describe("the Ticket header's counts", () => {
 	});
 
 	test("the held count names only the turns that hold their decision", () => {
-		const facts = sectionFacts([ticket("awaiting"), heldTicket()], [], 0, 0);
+		const facts = sectionFacts({
+			tickets: [ticket("awaiting"), heldTicket()],
+			consultations: [],
+			queue: [],
+			ignored: 0,
+			muted: 0,
+		});
 		expect(facts.ticket.awaiting).toBe(2);
 		expect(facts.ticket.held).toBe(1);
 	});
@@ -126,7 +136,13 @@ describe("the Ticket header's counts", () => {
 	test("the ignored and muted counts are the list step's answers, passed through", () => {
 		// The numbers name exactly the rows the `ignored` and `muted` views show:
 		// no rule is re-applied here (ADR 0060, ADR 0070).
-		const facts = sectionFacts([ticket("open")], [], 3, 2);
+		const facts = sectionFacts({
+			tickets: [ticket("open")],
+			consultations: [],
+			queue: [],
+			ignored: 3,
+			muted: 2,
+		});
 		expect(facts.ticket.ignored).toBe(3);
 		expect(facts.ticket.muted).toBe(2);
 	});
@@ -135,10 +151,7 @@ describe("the Ticket header's counts", () => {
 describe("the Consultation header's counts", () => {
 	test("the awaiting response count names the records that wait for the operator", () => {
 		const facts = sectionFacts(
-			[],
-			[consultation("awaiting-response"), consultation("working")],
-			0,
-			0,
+			inputs({ consultations: [consultation("awaiting-response"), consultation("working")] }),
 		);
 		expect(facts.consultation.awaitingResponse).toBe(1);
 		expect(facts.consultation.recovery).toBe(0);
@@ -146,28 +159,48 @@ describe("the Consultation header's counts", () => {
 
 	test("the recovery count names every state that needs it", () => {
 		const facts = sectionFacts(
-			[],
-			[
-				consultation("missing"),
-				consultation("failed"),
-				consultation("opening"),
-				consultation("closing"),
-			],
-			0,
-			0,
+			inputs({
+				consultations: [
+					consultation("missing"),
+					consultation("failed"),
+					consultation("opening"),
+					consultation("closing"),
+				],
+			}),
 		);
 		expect(facts.consultation.recovery).toBe(4);
 	});
 
 	test("a closed Consultation stands in neither count", () => {
 		const facts = sectionFacts(
-			[],
-			[consultation("closed"), consultation("awaiting-response")],
-			0,
-			0,
+			inputs({ consultations: [consultation("closed"), consultation("awaiting-response")] }),
 		);
 		expect(facts.consultation.awaitingResponse).toBe(1);
 		expect(facts.consultation.recovery).toBe(0);
+	});
+});
+
+describe("the Work header's depth", () => {
+	test("the count names the items the queue holds", () => {
+		const item: WorkQueueItem = {
+			kind: "handoff",
+			position: 1,
+			ticketIdentity: "github:github.com:I_open",
+			automatic: false,
+			routeFromIdentity: null,
+			origin: "open",
+			choice: {
+				agentType: "pi",
+				environment: "worktree",
+				taskType: "implement",
+				model: "",
+				thinking: "",
+				contextWindow: "",
+			},
+			previousMessage: "",
+			enqueuedAt: "2026-01-01T00:00:00Z",
+		};
+		expect(sectionFacts(inputs({ queue: [item] })).work.waiting).toBe(1);
 	});
 });
 

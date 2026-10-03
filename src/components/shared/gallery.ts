@@ -1427,7 +1427,13 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 				agents: [pollAgent("pane-f1", "blocked"), pollAgent("pane-f3", "working")],
 				queue: [queueItem(rows[3].identity, "open")],
 			});
-			const counts = sectionFacts(rows, [], 0, 0);
+			const counts = sectionFacts({
+				tickets: rows,
+				consultations: [],
+				queue: [],
+				ignored: 0,
+				muted: 0,
+			});
 			const header = (key: string, held: number) =>
 				createElement(SectionHeader, {
 					key,
