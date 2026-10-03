@@ -18,8 +18,7 @@ import { SAMPLE_TICKETS } from "./sample-tickets.ts";
 const settings: ScrollConfig = { speed: 1, acceleration: 0.8, maximumSpeed: 6 };
 
 /** The facts one Ticket wears, read through the fact module (issue #201). */
-const factOf = (ticket: Ticket): TicketRowFacts =>
-	ticketFactsFor(ticket, factInputs({ tickets: [ticket] }));
+const factOf = (ticket: Ticket): TicketRowFacts => ticketFactsFor(ticket, factInputs());
 
 /** The cells one line paints: a plain line is one cell of its own text. */
 const cellsOf = (line: DetailLine) => line.cells ?? [{ text: line.text, fg: line.fg }];

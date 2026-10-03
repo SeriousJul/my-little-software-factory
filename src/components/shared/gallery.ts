@@ -497,16 +497,12 @@ function groupTicket(
  * states the fact rules answer, so a preview cannot drift from a control: no
  * example builds its own badge rule.
  */
-function galleryFactInputs(
-	tickets: readonly Ticket[],
-	extra: Partial<TicketFactInputs> = {},
-): TicketFactInputs {
+function galleryFactInputs(extra: Partial<TicketFactInputs> = {}): TicketFactInputs {
 	return {
 		maxHandoffsPerTicket: 1,
 		poll: null,
 		claims: new Set<string>(),
 		queue: [],
-		tickets,
 		...extra,
 	};
 }
@@ -538,7 +534,7 @@ function factRows(
 	tickets: readonly Ticket[],
 	extra: Partial<TicketFactInputs> = {},
 ): readonly TicketRowFacts[] {
-	return ticketRowFacts(galleryFactInputs(tickets, extra)).rows;
+	return ticketRowFacts(galleryFactInputs(extra), tickets);
 }
 
 /**
@@ -1433,7 +1429,11 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 				tickets: rows,
 				consultations: [],
 				queue: [],
-				ignored: 0,
+				// The pile's count is an input to the same read that answers every
+				// other count on these headers. The narrow example needs a non-zero
+				// ignored cell to show which count the header gives up, so the
+				// example states the pile here and the header wears the answer.
+				ignored: 3,
 				muted: 0,
 			});
 			const header = (key: string, held: number, width = columns.contentWidth) =>
@@ -1448,7 +1448,7 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 					running: counts.ticket.inFlight,
 					awaiting: counts.ticket.awaiting,
 					held,
-					ignored: 3,
+					ignored: counts.ticket.ignored,
 					onToggle: () => undefined,
 				});
 			return [

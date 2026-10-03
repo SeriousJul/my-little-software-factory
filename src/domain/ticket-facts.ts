@@ -24,12 +24,18 @@
  */
 import type { WorkQueueItem } from "../state/work-queue.ts";
 import { type AgentPoll, agentInPane, normalizeAgentStatus, ticketAgentName } from "./agent.ts";
-import { holdsDecision, type Ticket, type TicketMarker } from "./ticket.ts";
+import {
+	handoffLimitReached,
+	holdsDecision,
+	inFlightState,
+	type Ticket,
+	type TicketMarker,
+} from "./ticket.ts";
 
 /** The task type a row names when the machine offers no task for it (ADR 0027). */
-export const PARKED_TASK_TYPE = "parked";
+const PARKED_TASK_TYPE = "parked";
 /** The word a row names when no task type is recorded for it. */
-export const UNKNOWN_TASK_TYPE = "unknown";
+const UNKNOWN_TASK_TYPE = "unknown";
 
 /** The task type as the fact the plane reads: its value and whether it is missing. */
 export interface TaskTypeFact {
@@ -40,7 +46,11 @@ export interface TaskTypeFact {
 }
 
 /**
- * The inputs the fact module reads once per render.
+ * The environment the fact module reads once per render.
+ *
+ * The Tickets a section lists are not part of it: the environment is what the
+ * rules read *about* a Ticket, so one record serves the row list and a single
+ * Ticket alike, and no reader hands a one-element list to ask about one Ticket.
  *
  * `poll` is the last Agent poll as the domain's fact record, not the raw list:
  * the screen turns the list into the poll once per render and every fact read
@@ -55,8 +65,6 @@ export interface TicketFactInputs {
 	claims: ReadonlySet<string>;
 	/** The Work queue items. */
 	queue: readonly WorkQueueItem[];
-	/** The rows the section lists. */
-	tickets: readonly Ticket[];
 }
 
 /** The facts one Ticket's row wears. */
@@ -86,13 +94,12 @@ export interface TicketRowFacts {
 	taskType: TaskTypeFact;
 }
 
-/** The answer: the rows in the order the section lists them, and the same facts by identity. */
-export interface TicketFacts {
-	rows: readonly TicketRowFacts[];
-	/** The facts of one Ticket by identity, so a detail pane reads the same fact the row wears. */
-	byIdentity: ReadonlyMap<string, TicketRowFacts>;
-}
-
+/**
+ * The answer: the rows in the order the section lists them.
+ *
+ * The facts of a Ticket the section does not list come from `ticketFactsFor`,
+ * read through the same rules, so no reader needs a second index of the rows.
+ */
 /**
  * The task type the row names and the detail pane's line carries.
  *
@@ -165,7 +172,7 @@ export function failureMarker(ticket: Ticket, poll: AgentPoll | null): TicketMar
 
 /** Whether the Ticket is in flight: an Agent works on it or its start is pending. */
 export function inFlight(ticket: Ticket): boolean {
-	return ticket.state === "handed-off" || ticket.state === "running";
+	return inFlightState(ticket.state);
 }
 
 /**
@@ -202,11 +209,6 @@ export function queueWait(ticket: Ticket, queue: readonly WorkQueueItem[]): bool
 	);
 }
 
-/** Whether the Ticket has used up its Handoff limit. */
-export function handoffLimitReached(ticket: Ticket, maxHandoffsPerTicket: number): boolean {
-	return ticket.handoffCount >= maxHandoffsPerTicket;
-}
-
 /**
  * The face one row wears: the Starting window, with the failure marker ruled
  * out first (story 7). The marker the row already wears is handed in, so one
@@ -225,7 +227,7 @@ function factsOf(ticket: Ticket, inputs: TicketFactInputs): TicketRowFacts {
 		failure,
 		starting: wornFace(ticket, failure, inputs.claims.has(ticket.identity)),
 		queueWait: queueWait(ticket, inputs.queue),
-		handoffLimit: handoffLimitReached(ticket, inputs.maxHandoffsPerTicket),
+		handoffLimit: handoffLimitReached(ticket.handoffCount, inputs.maxHandoffsPerTicket),
 		inFlight: inFlight(ticket),
 		held: holdsDecision(ticket),
 		taskType: rowTaskType(ticket),
@@ -238,9 +240,11 @@ function factsOf(ticket: Ticket, inputs: TicketFactInputs): TicketRowFacts {
  * Every row's facts come from this one read, so the row's badge, the detail
  * pane's badge, and the ignore key's refusal cannot disagree (ADR 0060).
  */
-export function ticketRowFacts(inputs: TicketFactInputs): TicketFacts {
-	const rows = inputs.tickets.map((ticket) => factsOf(ticket, inputs));
-	return { rows, byIdentity: new Map(rows.map((row) => [row.identity, row])) };
+export function ticketRowFacts(
+	inputs: TicketFactInputs,
+	tickets: readonly Ticket[],
+): readonly TicketRowFacts[] {
+	return tickets.map((ticket) => factsOf(ticket, inputs));
 }
 
 /** The fact one Ticket carries, read through the same rules as the rows. */

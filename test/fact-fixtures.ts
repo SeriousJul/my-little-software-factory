@@ -101,14 +101,13 @@ export function agent(over: Partial<HerdrAgent> = {}): HerdrAgent {
 	};
 }
 
-/** The Ticket fact module's inputs, with nothing held. */
+/** The Ticket fact module's environment, with nothing held. */
 export function factInputs(over: Partial<TicketFactInputs> = {}): TicketFactInputs {
 	return {
 		maxHandoffsPerTicket: 10,
 		poll: null,
 		claims: new Set<string>(),
 		queue: [],
-		tickets: [],
 		...over,
 	};
 }

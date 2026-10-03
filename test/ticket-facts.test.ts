@@ -12,7 +12,6 @@ import { describe, expect, test } from "bun:test";
 import { agentPoll } from "../src/domain/agent.ts";
 import {
 	failureMarker,
-	handoffLimitReached,
 	inFlight,
 	liveContextLine,
 	queueWait,
@@ -201,12 +200,20 @@ describe("the Queue wait", () => {
 });
 
 describe("the Handoff limit", () => {
-	test("a Ticket under the limit has not reached it", () => {
-		expect(handoffLimitReached(ticket({ handoffCount: 2 }), 10)).toBe(false);
+	test("a Ticket under the limit wears no marker", () => {
+		const fact = ticketFactsFor(
+			ticket({ handoffCount: 2 }),
+			factInputs({ maxHandoffsPerTicket: 10 }),
+		);
+		expect(fact.handoffLimit).toBe(false);
 	});
 
-	test("a Ticket at the limit has reached it", () => {
-		expect(handoffLimitReached(ticket({ handoffCount: 10 }), 10)).toBe(true);
+	test("a Ticket at the limit wears its marker", () => {
+		const fact = ticketFactsFor(
+			ticket({ handoffCount: 10 }),
+			factInputs({ maxHandoffsPerTicket: 10 }),
+		);
+		expect(fact.handoffLimit).toBe(true);
 	});
 });
 
@@ -271,15 +278,15 @@ describe("the one read", () => {
 		});
 		const answer = ticketRowFacts(
 			factInputs({
-				tickets: [running],
 				poll: agentPoll([agent({ status: "blocked" })]),
 				claims: new Set<string>(),
 				// The start was picked up, so no wait stands on a running Ticket.
 				queue: [queueItem(running.identity, "workflow")],
 				maxHandoffsPerTicket: 1,
 			}),
+			[running],
 		);
-		const fact = answer.rows[0];
+		const fact = answer[0];
 		expect(fact.identity).toBe(running.identity);
 		expect(fact.failure).toBe("blocked");
 		expect(fact.starting).toBe(false);
@@ -292,17 +299,16 @@ describe("the one read", () => {
 
 	test("the detail pane reads the same fact the row wears", () => {
 		const running = ticket({ state: "running", handoff: handoff({ taskType: "fix" }) });
-		const read = factInputs({ tickets: [running], poll: agentPoll([agent()]) });
-		const answer = ticketRowFacts(read);
-		expect(answer.byIdentity.get(running.identity)).toEqual(ticketFactsFor(running, read));
+		const read = factInputs({ poll: agentPoll([agent()]) });
+		expect(ticketRowFacts(read, [running])[0]).toEqual(ticketFactsFor(running, read));
 	});
 
 	test("the claim the run holds opens the face for the row it names", () => {
 		const handedOff = ticket({ state: "handed-off", handoff: handoff() });
-		const answer = ticketRowFacts(
-			factInputs({ tickets: [handedOff], claims: new Set<string>([handedOff.identity]) }),
-		);
-		expect(answer.rows[0].starting).toBe(true);
+		const answer = ticketRowFacts(factInputs({ claims: new Set<string>([handedOff.identity]) }), [
+			handedOff,
+		]);
+		expect(answer[0].starting).toBe(true);
 	});
 });
 

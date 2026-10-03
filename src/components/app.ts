@@ -831,24 +831,23 @@ export function App({
 	// same across renders (issue #201). The screen keeps the state; the fact
 	// module owns the rules the state is read through.
 	const factInputs = useCallback(
-		(tickets: readonly Ticket[]): TicketFactInputs => ({
+		(): TicketFactInputs => ({
 			maxHandoffsPerTicket: configRef.current.maxHandoffsPerTicket,
 			poll: pollRef.current,
 			claims: startingTicketsRef.current,
 			queue: workQueueRef.current,
-			tickets,
 		}),
 		[],
 	);
 	/** The rows' facts, read through the fact module: the values the surface wears. */
 	const factRows = useCallback(
 		(tickets: readonly Ticket[]): readonly TicketRowFacts[] =>
-			ticketRowFacts(factInputs(tickets)).rows,
+			ticketRowFacts(factInputs(), tickets),
 		[factInputs],
 	);
 	/** The facts one Ticket wears, read through the fact module. */
 	const factsFor = useCallback(
-		(ticket: Ticket): TicketRowFacts => ticketFactsFor(ticket, factInputs([ticket])),
+		(ticket: Ticket): TicketRowFacts => ticketFactsFor(ticket, factInputs()),
 		[factInputs],
 	);
 

@@ -19,13 +19,13 @@ import { holdsDecision, type Ticket } from "./ticket.ts";
 import { inFlight } from "./ticket-facts.ts";
 
 /** The state the Consultation header counts as awaiting the operator's answer. */
-export const CONSULTATION_AWAITING_STATE = "awaiting-response";
+const CONSULTATION_AWAITING_STATE = "awaiting-response";
 
 /** The states the Consultation header counts as needing recovery. */
-export const CONSULTATION_RECOVERY_STATES = ["missing", "failed", "closing", "opening"] as const;
+const CONSULTATION_RECOVERY_STATES = ["missing", "failed", "closing", "opening"] as const;
 
 /** The state no Consultation header count covers. */
-export const CONSULTATION_CLOSED_STATE = "closed";
+const CONSULTATION_CLOSED_STATE = "closed";
 
 /** One Section header's counts. */
 export interface SectionFacts {
