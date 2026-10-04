@@ -5090,12 +5090,16 @@ describe("the one start: one cleanup rule on every Environment kind", () => {
 		);
 		stubStartFailure(runner, "pane-wt");
 
-		const outcome = await handOffTicket(ticket, { ...defaultChoice, environment: "worktree" }, {
-			claim: "open",
-			config: BASE_CONFIG,
-			runner,
-			home: HOME,
-		});
+		const outcome = await handOffTicket(
+			ticket,
+			{ ...defaultChoice, environment: "worktree" },
+			{
+				claim: "open",
+				config: BASE_CONFIG,
+				runner,
+				home: HOME,
+			},
+		);
 
 		expect(outcome.status).toBe("failed");
 		// The worktree kind's row of the same rule: the checkout goes, and so does
@@ -5166,12 +5170,16 @@ describe("the one start: one cleanup rule on every Environment kind", () => {
 			},
 		);
 
-		const outcome = await handOffTicket(ticket, { ...defaultChoice, environment: "worktree" }, {
-			claim: "open",
-			config: BASE_CONFIG,
-			runner,
-			home: HOME,
-		});
+		const outcome = await handOffTicket(
+			ticket,
+			{ ...defaultChoice, environment: "worktree" },
+			{
+				claim: "open",
+				config: BASE_CONFIG,
+				runner,
+				home: HOME,
+			},
+		);
 
 		expect(outcome.status).toBe("failed");
 		expect(reasonOf(outcome)).toContain("worktree open returned no pane id");
