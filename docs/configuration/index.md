@@ -694,12 +694,24 @@ The other shapes that take the rewrite are the ones the check cannot vouch for:
 a mapping value the plane must write and cannot carry in place - a multiline
 string or a multiline array standing on a key the plane holds - and a file your
 edit left in a shape the startup loader itself refuses: a broken line, a stray
-byte-order mark, a dotted key in the `[repos]` table, a `[sources]` table instead
-of `[[sources]]` blocks, or a `[[sources]]` block that names no `name`. The
-loader refuses those at startup, so the plane only meets one of them through an
-edit made while it runs. The empty source list is not in that group: the plane
-writes no `sources` key at all for no sources, and a `sources = []` line an
-earlier version wrote is one the write-back drops before it appends its blocks.
+byte-order mark, a dotted key in the `[repos]` table, a multiline array or an
+inline table written across lines standing on any `[repos]` key, a dotted key
+inside a `[[sources]]` block, a `[sources]` table instead of `[[sources]]`
+blocks, or a `[[sources]]` block that names no `name`. The loader refuses those
+at startup, so the plane only meets one of them through an edit made while it
+runs. The empty source list is not in that group: the plane writes no `sources`
+key at all for no sources, and a `sources = []` line an earlier version wrote is
+one the write-back drops before it appends its blocks.
+
+One shape takes no rewrite and still costs you, and it is a shape the loader
+accepts: a `[[sources]]` block whose `name` you wrote as a multiline string. The
+plane reads that `name` as a single quote character instead of refusing the
+block, so it does not recognise the block as one it holds, and the next
+write-back appends the plane's own copy of that source at the end of the file.
+That write keeps your comments, and its Message line says only what it wrote.
+The write after it rewrites the whole file, and your comments do not survive
+that one. [Issue #234](https://github.com/SeriousJul/my-little-software-factory/issues/234)
+tracks it; until it is settled, write a source's `name` on one line.
 
 The shipped defaults define the three agent types `pi`, `codex`, and
 `claude`, the four task types `implement`, `review`, `rework`, and
