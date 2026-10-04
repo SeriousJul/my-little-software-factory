@@ -13,7 +13,7 @@
  */
 import { createElement } from "@opentui/react";
 import type { ReactElement } from "react";
-import { useRef, useState } from "react";
+import { useRef } from "react";
 
 import { responseOversize, validateResponseInput } from "../consultation/response-draft.ts";
 import { useControlDispatch } from "./control-dispatch.ts";
@@ -99,10 +99,20 @@ export function ResponseEditor({
 	const field = useRef<FieldHandle | null>(null);
 	const text = useRef(draft);
 	const selection = useRef(false);
-	const [size, setSize] = useState(draft);
 	const focus: FormFocus = useFormSlots(SLOTS);
 	const moveField = moveFieldWith(focus);
-	const refusal = validateResponseInput(size);
+	/**
+	 * The reply as the field holds it at the moment the editor is asked about it.
+	 *
+	 * The field reports its text through an event that can land after the next key
+	 * reaches the form, so the text this render painted can still be the draft the
+	 * editor opened on while the operator's own text already sits in the field. The
+	 * Send decision reads the field, never the render's copy: a reply the operator
+	 * can read on the screen is a reply the editor may send.
+	 */
+	const liveDraft = (): string => field.current?.value() ?? text.current;
+	/** The editor's own domain rule, read against the text it would actually send. */
+	const refusal = (): string | undefined => validateResponseInput(liveDraft());
 	// The form module states the slot facts: which slot holds the focus, and
 	// the selection and the refusal this editor owns. The record names the mode
 	// the focused slot owns, so a key that moves the focus moves the mode with
@@ -110,7 +120,7 @@ export function ResponseEditor({
 	const formFacts = () =>
 		focus.facts(standing, {
 			fieldHasSelection: selection.current,
-			formRefusal: focus.holds("send") ? refusal : undefined,
+			formRefusal: focus.holds("send") ? refusal() : undefined,
 		});
 	useControlDispatch({
 		facts: formFacts,
@@ -126,7 +136,8 @@ export function ResponseEditor({
 				key.preventDefault?.();
 				const slot = focus.current();
 				if (slot?.id === "send") {
-					if (refusal === undefined) onSend(text.current);
+					const value = liveDraft();
+					if (validateResponseInput(value) === undefined) onSend(value);
 					return;
 				}
 				if (slot?.id === "discard") onDiscard();
@@ -171,7 +182,6 @@ export function ResponseEditor({
 			onValueChange: (facts) => {
 				text.current = facts.value;
 				selection.current = facts.selection !== "";
-				setSize(facts.value);
 				onDraftChange(facts.value);
 			},
 			onRefuse: (reason: string) => onUnavailable?.(reason),
@@ -180,7 +190,7 @@ export function ResponseEditor({
 			row: { key: "send", label: "Send response" } satisfies ActionRow,
 			focused: focused && inputActive && focus.paints("send"),
 			width: contentWidth,
-			refusal: focus.paints("send") ? (refusal ?? null) : null,
+			refusal: focus.paints("send") ? (refusal() ?? null) : null,
 		}),
 		createElement(ActionItem, {
 			row: { key: "discard", label: "Discard draft" } satisfies ActionRow,
