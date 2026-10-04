@@ -49,6 +49,7 @@ import {
 	worktreeCreateJson,
 	worktreeListJson,
 } from "./fake-runner.ts";
+import { recordLogger } from "./record-logger.ts";
 
 const directories: string[] = [];
 const states: FactoryState[] = [];
@@ -2867,18 +2868,7 @@ describe("Consultation operations: the Work queue pickup (ADR 0034, issue #90)",
 	});
 });
 
-describe("the Consultation start line (issue #220)", () => {
-	/** The logger a test reads the plane's record lines back from. */
-	function record(lines: string[]): Logger {
-		return {
-			level: "info",
-			debug: () => {},
-			info: (message) => lines.push(message),
-			warn: (message) => lines.push(message),
-			error: () => {},
-		};
-	}
-
+describe("Consultation operations: the start line (issue #220)", () => {
 	/** The seats the Parallel limit counts for Consultations alone. */
 	function consultationSeats(state: FactoryState): number {
 		return state.consultationRecord.consultationsByState(["opening", "working"]).length;
@@ -2901,7 +2891,7 @@ describe("the Consultation start line (issue #220)", () => {
 		const runner = new LifecycleRunner();
 		const lines: string[] = [];
 		const harness = makeHarness(fixture, runner, {
-			log: record(lines),
+			log: recordLogger(lines),
 			seatCount: () => consultationSeats(fixture.state),
 		});
 		const consultation = harness.operations.create({
@@ -2936,7 +2926,7 @@ describe("the Consultation start line (issue #220)", () => {
 		const runner = new LifecycleRunner();
 		const lines: string[] = [];
 		const harness = makeHarness(fixture, runner, {
-			log: record(lines),
+			log: recordLogger(lines),
 			// The cap is full at the key: the reading the operator's start now ran over.
 			seatCount: () => fixture.config.maxParallelAgents,
 		});
@@ -2961,13 +2951,47 @@ describe("the Consultation start line (issue #220)", () => {
 		]);
 	});
 
+	test("the operator's key names its mode whatever the seat reading says", async () => {
+		// A Consultation's mode names the key, not a cap crossing (ADR 0102): the
+		// App names the start now key `force-dispatch` even when the cap has free
+		// seats, so `mode force-dispatch` beside `seats 0/2` is a legal line and a
+		// normal start, not a contradiction of ADR 0092's reading rule.
+		const fixture = makeFixture();
+		const runner = new LifecycleRunner();
+		const lines: string[] = [];
+		const harness = makeHarness(fixture, runner, {
+			log: recordLogger(lines),
+			// Nothing holds a seat at the key.
+			seatCount: () => consultationSeats(fixture.state),
+		});
+		const consultation = harness.operations.create({
+			typeName: "grill",
+			repository: fixture.repository,
+			initialInput: "review auth",
+			queued: true,
+		});
+		if (consultation === undefined) throw new Error("the queued submit created no record");
+		const id = consultation.id;
+		stubOpening(fixture, runner, id);
+
+		expect(await harness.operations.pickup(id, "force-dispatch")).toEqual({ kind: "started" });
+		await until(
+			() => current(fixture.state, id).state === "working",
+			"the Consultation the operator started to work",
+		);
+
+		expect(lines).toEqual([
+			`consultation started: "grill" ${id.slice(0, 8)} (mode force-dispatch, origin consultation, seats 0/2)`,
+		]);
+	});
+
 	test("an unlimited cap states its held seats with no limit", async () => {
 		const fixture = makeFixture();
 		fixture.config.maxParallelAgents = 0;
 		const runner = new LifecycleRunner();
 		const lines: string[] = [];
 		const harness = makeHarness(fixture, runner, {
-			log: record(lines),
+			log: recordLogger(lines),
 			// Work is held on two seats, and the lifted cap states none of them.
 			seatCount: () => 2,
 		});
@@ -2997,7 +3021,7 @@ describe("the Consultation start line (issue #220)", () => {
 		const runner = new LifecycleRunner();
 		const lines: string[] = [];
 		const harness = makeHarness(fixture, runner, {
-			log: record(lines),
+			log: recordLogger(lines),
 			seatCount: () => consultationSeats(fixture.state),
 		});
 		// A record that left the queue's wait, and a record whose type left the
@@ -3027,7 +3051,7 @@ describe("the Consultation start line (issue #220)", () => {
 		const runner = new LifecycleRunner();
 		const lines: string[] = [];
 		const harness = makeHarness(fixture, runner, {
-			log: record(lines),
+			log: recordLogger(lines),
 			seatCount: () => consultationSeats(fixture.state),
 		});
 		const dispatch = createHandoffDispatch({
@@ -3044,7 +3068,7 @@ describe("the Consultation start line (issue #220)", () => {
 			clearWorking: () => {},
 			refresh: () => {},
 			starting: () => {},
-			log: record(lines),
+			log: recordLogger(lines),
 		});
 		const first = harness.operations.create({
 			typeName: "grill",

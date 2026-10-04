@@ -30,7 +30,6 @@ import {
 	reportHandoffOutcome,
 	type StoredHandoffFacts,
 } from "../src/handoff-dispatch.ts";
-import type { Logger } from "../src/logging.ts";
 import { agentNameFor, cycleAgentName } from "../src/naming.ts";
 import type { CommandRunner } from "../src/runner.ts";
 import type { HandoffOrigin } from "../src/state/handoff.ts";
@@ -49,6 +48,7 @@ import {
 	worktreeOpenJson,
 } from "./fake-runner.ts";
 import { gatedRunner } from "./gated-runner.ts";
+import { recordLogger } from "./record-logger.ts";
 
 const source = { name: "issues", kind: "github-issues" } as const;
 
@@ -3896,17 +3896,6 @@ describe("the decision screen's route close", () => {
 });
 
 describe("the record lines", () => {
-	/** The logger one test reads the record's lines back from. */
-	function record(lines: string[]): Logger {
-		return {
-			level: "info",
-			debug: () => {},
-			info: (message) => lines.push(message),
-			warn: (message) => lines.push(message),
-			error: () => {},
-		};
-	}
-
 	test("a claimed start leaves one line, and a refused claim leaves its reason", async () => {
 		const rigRef = rig([FIRST]);
 		const lines: string[] = [];
@@ -3914,7 +3903,7 @@ describe("the record lines", () => {
 		// first call: only the claim runs, and the settle never meets the
 		// state this test closes behind it.
 		const hold = gatedRunner(rigRef.runner, () => true);
-		const dispatch = withRunner(rigRef, hold.runner, { log: record(lines) });
+		const dispatch = withRunner(rigRef, hold.runner, { log: recordLogger(lines) });
 		rigRef.dispatch = dispatch;
 		const first = await start(rigRef, FIRST, "open");
 		expect(first).toMatchObject({ ok: true });
@@ -3941,7 +3930,7 @@ describe("the record lines", () => {
 		// The cap is full at the ask, so the factory's automatic ask only enqueues
 		// its row, and one seat frees for the next pass.
 		const waiting = withRunner(rigRef, hold.runner, {
-			log: record(lines),
+			log: recordLogger(lines),
 			seatCount: () => rigRef.config.maxParallelAgents,
 		});
 		await expect(
@@ -3958,7 +3947,7 @@ describe("the record lines", () => {
 		// The next cycle's pickup takes the row for the free seat: the line names
 		// the pickup, never the ask that made the row.
 		const picking = withRunner(rigRef, hold.runner, {
-			log: record(lines),
+			log: recordLogger(lines),
 			seatCount: () => rigRef.config.maxParallelAgents - 1,
 		});
 		expect(await picking.pickupWorkQueue()).toBe(1);
@@ -3976,7 +3965,7 @@ describe("the record lines", () => {
 		const lines: string[] = [];
 		const hold = gatedRunner(rigRef.runner, () => true);
 		const mod = withRunner(rigRef, hold.runner, {
-			log: record(lines),
+			log: recordLogger(lines),
 			// Work is held on two seats. The lifted cap leaves a free seat for
 			// every waiting start, so the ask's own pass takes this row.
 			seatCount: () => 2,
@@ -4001,7 +3990,7 @@ describe("the record lines", () => {
 		// and its seat stays held while the next start reads the count.
 		const hold = gatedRunner(rigRef.runner, () => true);
 		const mod = withRunner(rigRef, hold.runner, {
-			log: record(lines),
+			log: recordLogger(lines),
 			seatCount: () => rigRef.state.handoff.openAttemptTickets().length,
 		});
 		rigRef.dispatch = mod;
