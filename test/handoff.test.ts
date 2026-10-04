@@ -5341,6 +5341,217 @@ describe("the one start: one cleanup rule on every Environment kind", () => {
 	});
 });
 
+describe("the one start: a command that raises", () => {
+	/**
+	 * The raise a CommandRunner adapter makes for a command it cannot run at all.
+	 *
+	 * The production runner maps a spawn-level failure to a failed result, so no
+	 * test reaches a raise through it. The seam has more than one adapter (the Stub
+	 * runner wraps another runner), and a caller's own callback can throw, so the
+	 * start's no-residue contract has to hold against a raise too. The fake can
+	 * now stand one, so the contract is checked rather than asserted.
+	 */
+	const RAISED = "spawn herdr: no such file or directory";
+
+	test("a start whose Agent start raises still removes the tab and the workspace it created", async () => {
+		const runner = new FakeRunner();
+		conventionCheckout(runner);
+		runner.set("herdr", ["workspace", "list"], { stdout: workspaceListJson([]) });
+		runner.set("herdr", ["workspace", "create", "--cwd", CHECKOUT, "--no-focus"], {
+			stdout: workspaceCreateJson("ws-new"),
+		});
+		runner.set(
+			"herdr",
+			["tab", "create", "--workspace", "ws-new", "--cwd", CHECKOUT, "--no-focus"],
+			{ stdout: tabCreateJson("pane-1") },
+		);
+		runner.reject("herdr", ["agent", "start", AGENT, "--kind", "pi", "--pane", "pane-1"], RAISED);
+
+		const outcome = await handOffTicket(ticket, defaultChoice, {
+			claim: "open",
+			config: BASE_CONFIG,
+			runner,
+			home: HOME,
+		});
+
+		expect(outcome.status).toBe("failed");
+		// The raise is the reason the operator sees, the way a refusal is.
+		expect(reasonOf(outcome)).toContain(RAISED);
+		// The no-residue contract holds on a raise exactly as it does on a tagged
+		// failure: the tab first, then the workspace behind it.
+		const commands = runner.commands();
+		expect(commands).toContain("herdr tab close tab-1");
+		expect(commands).toContain("herdr workspace close ws-new");
+		expect(commands.indexOf("herdr tab close tab-1")).toBeLessThan(
+			commands.indexOf("herdr workspace close ws-new"),
+		);
+	});
+
+	test("a start whose fresh tab create raises still closes the workspace it created", async () => {
+		const runner = new FakeRunner();
+		conventionCheckout(runner);
+		runner.set("herdr", ["workspace", "list"], { stdout: workspaceListJson([]) });
+		runner.set("herdr", ["workspace", "create", "--cwd", CHECKOUT, "--no-focus"], {
+			stdout: workspaceCreateJson("ws-new"),
+		});
+		runner.reject(
+			"herdr",
+			["tab", "create", "--workspace", "ws-new", "--cwd", CHECKOUT, "--no-focus"],
+			RAISED,
+		);
+
+		const outcome = await handOffTicket(ticket, defaultChoice, {
+			claim: "open",
+			config: BASE_CONFIG,
+			runner,
+			home: HOME,
+		});
+
+		expect(outcome.status).toBe("failed");
+		expect(reasonOf(outcome)).toContain(RAISED);
+		// The workspace entered the residue record before the tab was asked for, so
+		// a raise in the middle of the build still takes it down.
+		const commands = runner.commands();
+		expect(commands).toContain("herdr workspace close ws-new");
+		expectNoCommand(commands, "tab close");
+		expectNoCommand(commands, "agent start");
+	});
+
+	test("a raise at the prompt keeps the started Agent and its Environment", async () => {
+		const runner = new FakeRunner();
+		conventionCheckout(runner);
+		runner.set("git", ["-C", CHECKOUT, "branch", "--list", "factory/7-retry-policy-for-webhooks"], {
+			stdout: "",
+		});
+		stubRemoteDefaultBranch(runner);
+		runner.set(
+			"herdr",
+			[
+				"worktree",
+				"create",
+				"--cwd",
+				CHECKOUT,
+				"--branch",
+				"factory/7-retry-policy-for-webhooks",
+				"--base",
+				"origin/main",
+				"--no-focus",
+			],
+			{ stdout: worktreeCreateJson("ws-wt", "pane-wt") },
+		);
+		runner.reject("herdr", ["agent", "prompt", AGENT, PROMPT], RAISED);
+
+		const outcome = await handOffTicket(
+			ticket,
+			{ ...defaultChoice, environment: "worktree" },
+			{
+				claim: "open",
+				config: BASE_CONFIG,
+				runner,
+				home: HOME,
+			},
+		);
+
+		// A started Agent is never rolled back: the raise reads as the failed prompt
+		// it is, so the ticket still settles as handed off with the Agent on its
+		// record, and the Environment the Agent stands in stays.
+		expect(outcome.status).toBe("prompt-failed");
+		expect(reasonOf(outcome)).toContain("the prompt failed");
+		expect(reasonOf(outcome)).toContain(RAISED);
+		if (outcome.status !== "prompt-failed")
+			throw new Error("the start did not answer prompt-failed");
+		expect(outcome.agent.name).toBe(AGENT);
+		expect(outcome.agent.paneId).toBe("pane-wt");
+		const commands = runner.commands();
+		expectNoCommand(commands, "worktree remove");
+		expectNoCommand(commands, "workspace close");
+		expectNoCommand(commands, "branch -D");
+	});
+
+	test("a raise after the pull request open closes the draft it opened and deletes the branch it pushed", async () => {
+		const runner = new FakeRunner();
+		stubPrWorktreeHandoff(runner);
+		stubPullRequestOpenStep(runner);
+		runner.reject("herdr", ["agent", "start", AGENT, "--kind", "pi", "--pane", "pane-wt"], RAISED);
+
+		const outcome = await handOffTicket(
+			PR_TICKET,
+			{ ...defaultChoice, environment: "worktree" },
+			{
+				claim: "open",
+				config: PR_CONFIG,
+				runner,
+				home: HOME,
+			},
+		);
+
+		expect(outcome.status).toBe("failed");
+		expect(reasonOf(outcome)).toContain(RAISED);
+		// The residue of the open and the residue of the Environment go in the same
+		// order a tagged failure puts them in.
+		const commands = runner.commands();
+		const openedAt = commands.indexOf(PR_CREATE_COMMAND);
+		const closedAt = commands.indexOf(`gh pr close 42 --repo github.com/acme/billing`);
+		const deletedAt = commands.indexOf(`git -C ${CHECKOUT} push origin --delete ${PR_BRANCH}`);
+		const removedAt = commands.indexOf(`herdr worktree remove --workspace ws-wt`);
+		expect(openedAt).toBeGreaterThanOrEqual(0);
+		expect(closedAt).toBeGreaterThan(openedAt);
+		expect(deletedAt).toBeGreaterThan(closedAt);
+		expect(removedAt).toBeGreaterThan(deletedAt);
+		expect(commands).toContain(`git -C ${CHECKOUT} branch -D ${PR_BRANCH}`);
+	});
+
+	test("a Consultation start whose Agent start raises confirms the rows it recorded for what it removed", async () => {
+		const branch = "factory/consultation-consulta-grill-with-docs";
+		const runner = new FakeRunner();
+		conventionCheckout(runner);
+		runner.set("git", ["-C", CHECKOUT, "branch", "--list", branch], { stdout: "" });
+		stubRemoteDefaultBranch(runner);
+		runner.set(
+			"herdr",
+			[
+				"worktree",
+				"create",
+				"--cwd",
+				CHECKOUT,
+				"--branch",
+				branch,
+				"--base",
+				"origin/main",
+				"--no-focus",
+			],
+			{ stdout: worktreeCreateJson("ws-cwt", "pane-c1") },
+		);
+		runner.reject(
+			"herdr",
+			["agent", "start", "consultation-11111111", "--kind", "pi", "--pane", "pane-c1"],
+			RAISED,
+		);
+		const recorded: string[] = [];
+		const confirmed: string[] = [];
+
+		const outcome = await handOffConsultation({
+			consultation: consultationRecord({ environment: "worktree" }),
+			config: BASE_CONFIG,
+			runner,
+			home: HOME,
+			onResource: (kind, resourceId) => recorded.push(`${kind} ${resourceId}`),
+			onResourceRemoved: (kind, resourceId) => confirmed.push(`${kind} ${resourceId}`),
+		});
+
+		expect(outcome.status).toBe("failed");
+		expect(reasonOf(outcome)).toContain(RAISED);
+		const commands = runner.commands();
+		expect(commands).toContain("herdr worktree remove --workspace ws-cwt");
+		expect(commands).toContain(`git -C ${CHECKOUT} branch -D ${branch}`);
+		// Every row the start wrote is confirmed under the kind the start wrote it
+		// under, so no recorded row can be left standing over a handle the plane
+		// already took down.
+		expect(recorded).toEqual(["workspace ws-cwt", "worktree ws-cwt", "tab tab-ws-cwt"]);
+		expect(confirmed.sort()).toEqual(recorded.sort());
+	});
+});
+
 describe("the one start: the Consultation sequence at the handoff interface", () => {
 	const CONSULTATION_BRANCH = "factory/consultation-consulta-grill-with-docs";
 
