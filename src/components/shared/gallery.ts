@@ -17,6 +17,7 @@ import type { ReactElement } from "react";
 import { useRef, useState } from "react";
 import { CONSULTATION_INPUT_LIMIT, responseOversize } from "../../consultation/response-draft.ts";
 import { agentPoll } from "../../domain/agent.ts";
+import type { AutoHandoffCell, AutoHandoffMode } from "../../domain/section-facts.ts";
 import { sectionFacts } from "../../domain/section-facts.ts";
 import type { Completion, Ticket } from "../../domain/ticket.ts";
 import {
@@ -25,6 +26,7 @@ import {
 	ticketRowFacts,
 } from "../../domain/ticket-facts.ts";
 import type { HerdrAgent } from "../../herdr.ts";
+import { overParallelLimit } from "../../parallel.ts";
 import type { InitableRepository } from "../../repository-list.ts";
 import type { Consultation } from "../../state/consultation-record.ts";
 import type { WorkQueueHandoffItem, WorkQueueItem } from "../../state/work-queue.ts";
@@ -964,6 +966,38 @@ function GalleryRepositorySelect(): ReactElement {
  */
 const OVER_LIMIT_DRAFT = "a".repeat(CONSULTATION_INPUT_LIMIT + 1);
 
+/**
+ * The row width the auto-mode example's last header wears.
+ *
+ * It is short enough that the header has to give whole count cells up before
+ * its mode cell keeps its corner, so the preview shows the drop and the growth
+ * back a reviewer has to see, not a note about them.
+ */
+const DROP_RULE_ROW_COLUMNS = 54;
+
+/**
+ * One Auto-handoff mode cell, filled the way the screen that owns the factory
+ * state fills it.
+ *
+ * The Parallel limit gate's answer comes from the shared rule the dispatch
+ * gates read, so the preview's seat color cannot drift from the cap the
+ * machine applies.
+ */
+function autoHandoffCell(
+	mode: AutoHandoffMode,
+	seats: number,
+	limit: number,
+	dispatchPaused = false,
+): AutoHandoffCell {
+	return {
+		mode,
+		seats,
+		limit,
+		overLimit: overParallelLimit(limit, seats),
+		dispatchPaused,
+	};
+}
+
 export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 	{
 		id: "fields",
@@ -1213,7 +1247,7 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 					width: columns.contentWidth,
 					expanded: true,
 					waiting: 1,
-					paused: true,
+					queuePaused: true,
 					onToggle: () => undefined,
 				}),
 				// The bar the queue's own keys come from: the order-move keys and
@@ -1267,6 +1301,93 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 					},
 					truncateToWidth(
 						"+ promotes the selected item, - demotes it, and the top item is next in line for a seat",
+						columns.contentWidth,
+					),
+				),
+			];
+		},
+	},
+	{
+		// The Auto-handoff mode's lamp cell on the Ticket header's right corner:
+		// the `a` key flips the mode, and the row carries it as a shape and a word
+		// - the unlit lamp with `auto`, the lit lamp with `manual` - beside the
+		// Parallel limit seat reading and the Dispatch pause word. The last row
+		// shows the drop rule on a 54-column row: the counts give way whole from
+		// their tail, and the cell grows back into the room they left.
+		id: "auto-mode",
+		state: "Auto-handoff mode: the header's lamp, unlit for auto and lit for manual",
+		render: (columns, _holds, _inputActive, _wiring) => {
+			// The drop rule's row is a short row inside the gallery's own box, so it
+			// never claims more columns than the box holds: a narrow gallery shortens
+			// the row instead of clipping its corner cell.
+			const dropColumns = Math.min(DROP_RULE_ROW_COLUMNS, columns.contentWidth);
+			return [
+				createElement(SectionHeader, {
+					key: "tickets-header-auto",
+					section: "tickets",
+					active: true,
+					terminalWidth: columns.contentWidth,
+					width: columns.contentWidth,
+					expanded: true,
+					open: 2,
+					running: 1,
+					awaiting: 0,
+					mode: autoHandoffCell("auto", 1, 2),
+					onToggle: () => undefined,
+				}),
+				createElement(SectionHeader, {
+					key: "tickets-header-manual",
+					section: "tickets",
+					active: true,
+					terminalWidth: columns.contentWidth,
+					width: columns.contentWidth,
+					expanded: true,
+					open: 2,
+					running: 1,
+					awaiting: 0,
+					mode: autoHandoffCell("manual", 1, 2),
+					onToggle: () => undefined,
+				}),
+				// The Dispatch pause (ADR 0016): the word the cell wears while the
+				// pause holds the automatic works.
+				createElement(SectionHeader, {
+					key: "tickets-header-paused",
+					section: "tickets",
+					active: true,
+					terminalWidth: columns.contentWidth,
+					width: columns.contentWidth,
+					expanded: true,
+					open: 2,
+					running: 1,
+					awaiting: 1,
+					held: 1,
+					mode: autoHandoffCell("auto", 2, 3, true),
+					onToggle: () => undefined,
+				}),
+				// The drop rule on a row too short for the whole count line beside the
+				// whole cell: the pile, the bell, and the held count go whole, and the
+				// seat reading stands again in the room they left.
+				createElement(SectionHeader, {
+					key: "tickets-header-dropped",
+					section: "tickets",
+					active: true,
+					terminalWidth: dropColumns,
+					width: dropColumns,
+					expanded: true,
+					open: 2,
+					running: 1,
+					awaiting: 1,
+					held: 1,
+					heldBell: true,
+					ignored: 3,
+					mode: autoHandoffCell("manual", 1, 2),
+					onToggle: () => undefined,
+				}),
+				createElement(
+					"text",
+					{ key: "auto-mode-note", fg: paint("subtext0") },
+					truncateToWidth(
+						`\`a\` flips the mode; the ${dropColumns}-column row gives counts up whole and grows the seat reading back`,
 						columns.contentWidth,
 					),
 				),

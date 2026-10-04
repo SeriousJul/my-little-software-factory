@@ -395,7 +395,7 @@ describe("the mute key", () => {
 						"the running badge",
 					);
 					// The live Agent holds a Parallel limit seat the mute rides over.
-					expect(frame).toContain("auto: off 1/2");
+					expect(frame).toContain("● manual 1/2");
 					// The cursor holds the live row. The mute takes the resting
 					// sibling out of the list and leaves the live row standing,
 					// wearing its own marker beside the badge.
@@ -451,7 +451,7 @@ describe("the mute key", () => {
 					const frame = await listed(setup, src, SECOND_LEAD);
 					// The running Ticket holds the one seat, so the second ticket's
 					// start waits in the queue.
-					expect(frame).toContain("auto: off 1/1");
+					expect(frame).toContain("● manual 1/1");
 					await press(setup, "j", "the open row", (f) => detailPaneText(f).includes(secondTitle));
 					await press(setup, "return", "the start to wait", (f) => f.includes("waiting: 1"));
 					// The act and its settle are one write: the waiting start leaves

@@ -641,10 +641,10 @@ describe("Consultation launch and monitoring through the UI", () => {
 	});
 });
 
-test("the mode line counts the ticket seat and the Consultation seat against one cap", async () => {
+test("the mode cell counts the ticket seat and the Consultation seat against one cap", async () => {
 	// Issue #87: the Parallel limit counts a Consultation alike with a
 	// ticket. The running ticket and the working Consultation each hold
-	// one seat, and the mode line shows the combined count against the one
+	// one seat, and the mode cell shows the combined count against the one
 	// cap, from the same shared seat count the gates read. When the
 	// Consultation settles to awaiting-response it drops its seat, and the
 	// line holds the ticket's seat alone.
@@ -703,7 +703,7 @@ test("the mode line counts the ticket seat and the Consultation seat against one
 	try {
 		await withApp(
 			async (setup) => {
-				await awaitFrame(setup, (f) => f.includes("auto: off 2/2"), "the combined seat count");
+				await awaitFrame(setup, (f) => f.includes("● manual 2/2"), "the combined seat count");
 				// The Consultation settles to awaiting-response on the idle
 				// poll: that state holds no seat, and the line drops to the
 				// ticket's seat alone.
@@ -714,7 +714,7 @@ test("the mode line counts the ticket seat and the Consultation seat against one
 				await toConsultations(setup, "the settled Consultation", (f) =>
 					f.includes("State: awaiting-response"),
 				);
-				await awaitFrame(setup, (f) => f.includes("auto: off 1/2"), "the dropped seat");
+				await awaitFrame(setup, (f) => f.includes("● manual 1/2"), "the dropped seat");
 			},
 			WIDTH,
 			32,
@@ -2802,7 +2802,7 @@ describe("The full Consultation operator flow", () => {
 					expect(bells.count()).toBe(1);
 					// a is a Ticket-section control, so it is inert in Consultations.
 					setup.mockInput.pressKey("a");
-					expect((await settle(setup)).match(/auto: on/g)).toBeNull();
+					expect((await settle(setup)).match(/○ auto/g)).toBeNull();
 					// The Agent is idle: Enter opens the response editor.
 					await pressEnter(setup, "the response editor", (f) => f.includes("Response draft"));
 					setup.mockInput.typeText("answer one");
@@ -3627,7 +3627,7 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 					// line. The frame holds no room for the Work section's rows,
 					// so it rests collapsed, and Enter on the queued row jumps to
 					// its item and expands the section with it (ADR 0049).
-					expect(setup.captureCharFrame()).toContain("auto: off 1/1");
+					expect(setup.captureCharFrame()).toContain("● manual 1/1");
 					await press(setup, "return", "the cursor in the Work queue", (f) =>
 						f.includes("┌─❯ Work queue"),
 					);
@@ -3639,7 +3639,7 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 					);
 					// The line names the cap, and the seat count stands over the
 					// limit: the seed's seat plus the start the force-dispatch took.
-					await awaitFrame(setup, (f) => f.includes("auto: off 2/1"), "the seat over the cap");
+					await awaitFrame(setup, (f) => f.includes("● manual 2/1"), "the seat over the cap");
 					expect(messageRowOf(setup.captureCharFrame())).toContain(
 						`force-dispatched Consultation ${id8} over the Parallel limit`,
 					);
@@ -3857,7 +3857,7 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 					const id = await unscheduleThroughTheQueue(setup, state);
 					// The cap stands full from the boot: the seed's seat is the
 					// line, and Enter starts the record over it.
-					expect(setup.captureCharFrame()).toContain("auto: off 1/1");
+					expect(setup.captureCharFrame()).toContain("● manual 1/1");
 					const started = await press(setup, "return", "the start-now notice", (f) =>
 						f.includes("starting Consultation"),
 					);
@@ -3866,7 +3866,7 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 					);
 					// The seat count stands over the limit: the seed's seat plus
 					// the seat the start took over the cap.
-					await awaitFrame(setup, (f) => f.includes("auto: off 2/1"), "the seat over the cap");
+					await awaitFrame(setup, (f) => f.includes("● manual 2/1"), "the seat over the cap");
 					await waitForCommands(
 						runner,
 						[
@@ -3923,9 +3923,9 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 					state.consultationRecord.setConsultationState(seatId, "awaiting-response");
 					// The write lands in the state the app reads live but re-renders
 					// nothing: step the cursor up to the seed's row and back, so the
-					// mode line re-reads the freed seat count before the key runs.
-					await press(setup, "k", "the mode line on the freed seat", (f) =>
-						f.includes("auto: off 0/1"),
+					// mode cell re-reads the freed seat count before the key runs.
+					await press(setup, "k", "the mode cell on the freed seat", (f) =>
+						f.includes("● manual 0/1"),
 					);
 					await press(setup, "j", "the cursor back on the record", (f) =>
 						detailPaneText(f).includes("State: unscheduled"),
@@ -3937,7 +3937,7 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 					expect(line).toContain(`starting Consultation ${id.slice(0, 8)}`);
 					expect(line).not.toContain("over the Parallel limit");
 					// The start took the only free seat.
-					await awaitFrame(setup, (f) => f.includes("auto: off 1/1"), "the start's seat");
+					await awaitFrame(setup, (f) => f.includes("● manual 1/1"), "the start's seat");
 					await waitForCommands(
 						runner,
 						[

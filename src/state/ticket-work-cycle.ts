@@ -576,7 +576,7 @@ export class TicketWorkCycleModule implements TicketWorkCycleAggregate {
 	 * (issue #202, ADR 0095). The name is the same fact `agentNameForTicket`
 	 * answers - the herdr name the newest handoff recorded, else the name the
 	 * ticket's newest source title gives - so the seat count the observation
-	 * loop and the mode line read costs one statement per chunk of Tickets and
+	 * loop and the mode cell read costs one statement per chunk of Tickets and
 	 * not two per Ticket.
 	 */
 	agentNamesForTickets(identities: readonly string[]): Map<string, string> {

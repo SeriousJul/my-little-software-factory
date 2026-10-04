@@ -611,9 +611,9 @@ describe("the contextual Action bar", () => {
 				async (setup) => {
 					source.settle(success([issueTicket()]));
 					await awaitFrame(setup, (f) => f.includes("Add a webhook retry policy"), "the ticket");
-					// a toggles auto-handoff on the mode line.
-					await press(setup, "a", "auto on", (f) => f.includes("auto: on 0/2"));
-					await press(setup, "a", "auto off", (f) => f.includes("auto: off 0/2"));
+					// a toggles auto-handoff on the mode cell.
+					await press(setup, "a", "auto on", (f) => f.includes("○ auto 0/2"));
+					await press(setup, "a", "auto off", (f) => f.includes("● manual 0/2"));
 					// r refreshes the configured source, and the progress clears.
 					setup.mockInput.pressKey("r");
 					await callsReached(source, 2);

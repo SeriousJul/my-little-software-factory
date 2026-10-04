@@ -585,7 +585,7 @@ describe("native Ticket detail viewport", () => {
 		}
 	});
 
-	test("reserves a terminal row for the live mode line through a resize", async () => {
+	test("spends no terminal row on the mode cell through a resize", async () => {
 		const state = openFactoryState(":memory:");
 		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
 		state.grouping.setGroupingAxis("tickets", "none");
@@ -597,19 +597,19 @@ describe("native Ticket detail viewport", () => {
 						setup,
 						(candidate) => {
 							const rows = rowsOf(candidate);
-							// One frame: the mode line, the body with its three
-							// sections, then the reserved Message line and the
-							// Action bar.
+							// One frame: the body with its three sections, then the
+							// reserved Message line and the Action bar. The Ticket
+							// header's mode cell rides the body's first row.
 							return (
 								rows.length === 27 &&
 								rows.every((row) => row.length === 73) &&
-								rows[0]?.startsWith("auto: off 0/2") === true &&
+								rows[0]?.includes("● manual 0/2") === true &&
 								rows.at(-3)?.includes("└") === true
 							);
 						},
-						"the panes to stay above the live mode line after a resize",
+						"the panes to stay above the live mode cell after a resize",
 					);
-					expect(rowsOf(frame).at(-2)).not.toContain("auto:");
+					expect(rowsOf(frame).at(-2)).not.toContain("manual");
 				},
 				73,
 				27,

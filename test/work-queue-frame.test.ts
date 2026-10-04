@@ -1329,7 +1329,7 @@ describe("the Work queue section", () => {
 					"the queue's row under the cursor",
 				);
 				// The cap is full from the boot: the held seat stands on the line.
-				expect(setup.captureCharFrame()).toContain("auto: off 1/1");
+				expect(setup.captureCharFrame()).toContain("● manual 1/1");
 				const frame = await press(setup, "return", "the force-dispatch message", (f) =>
 					f.includes("force-dispatched"),
 				);
@@ -1338,7 +1338,7 @@ describe("the Work queue section", () => {
 				expect(messageRowOf(frame)).toContain(
 					`force-dispatched "Close the stale deploy branch" over the Parallel limit`,
 				);
-				expect(frame).toContain("auto: off 2/1");
+				expect(frame).toContain("● manual 2/1");
 				// The item left the queue with the settle, the ticket holds the
 				// handoff, and the start ran the real external steps on the item's
 				// own captured choice.

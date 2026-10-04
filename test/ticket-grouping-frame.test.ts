@@ -843,7 +843,7 @@ describe("the Ticket section's Groups", () => {
 		);
 	});
 
-	test("a fold changes no count, no mode line, and no queue fact", async () => {
+	test("a fold changes no count, no mode cell, and no queue fact", async () => {
 		await bootGrouped(
 			async (setup) => {
 				const before = await settle(setup);

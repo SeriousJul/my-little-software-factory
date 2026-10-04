@@ -24,10 +24,13 @@ import {
 	awaitFrame,
 	cellColors,
 	frameText,
+	rgb,
+	roleColor,
 	rowSpans,
 	rowsOf,
 	type Setup,
 	settle,
+	spanColorAt,
 	spanColors,
 } from "./app-harness.ts";
 
@@ -88,6 +91,7 @@ describe("the shared control gallery", () => {
 			"notes",
 			"spinner",
 			"queue-order",
+			"auto-mode",
 			"ticket-ignore",
 			"ticket-mute",
 			"ticket-filter",
@@ -185,6 +189,58 @@ describe("the shared control gallery", () => {
 		// lines are the words the press leaves on the line.
 		expect(text).toContain("Ticket list grouped by repository");
 		expect(text).toContain("Ticket list grouping off: the flat list");
+	});
+
+	// The Auto-handoff mode's lamp is a state a reviewer must see: the unlit lamp
+	// with `auto` and the lit lamp with `manual`, both at the Ticket header's
+	// right corner, the Dispatch pause word beside them, and the drop rule on a
+	// row too short for the whole cell.
+	test("the auto mode example shows the lamp in both modes, the pause word, and the drop", async () => {
+		const setup = await gallery("auto-mode", 100, 20);
+		const text = frameText(setup.captureCharFrame());
+		expect(text).toContain(stateLine("auto-mode"));
+		expect(text).toContain("○ auto 1/2");
+		expect(text).toContain("● manual 1/2");
+		// The Dispatch pause (ADR 0016) rides the cell, and the seat reading
+		// stands with it.
+		expect(text).toContain("○ auto 2/3 paused");
+		// The example's ink is the mode's own: the warning color for the mode the
+		// factory runs in on its own, the running state's color for the mode that
+		// waits for the operator.
+		const rows = rowsOf(setup.captureCharFrame());
+		expect(
+			spanColorAt(
+				setup,
+				rows.findIndex((row) => row.includes("○ auto")),
+				"○ auto",
+			),
+		).toEqual(rgb(roleColor("yellow")));
+		expect(
+			spanColorAt(
+				setup,
+				rows.findIndex((row) => row.includes("● manual")),
+				"● manual",
+			),
+		).toEqual(rgb(roleColor("green")));
+		// The pause word rides the header's own ink, not the mode's.
+		expect(
+			spanColorAt(
+				setup,
+				rows.findIndex((row) => row.includes("paused")),
+				"paused",
+			),
+		).toEqual(rgb(roleColor("text")));
+		// The drop rule, on the example's 54-column row: the pile, the bell, and
+		// the held count give way whole, and the seat reading grows back.
+		const dropped =
+			rows.find((row) => row.includes("open 2  running 1  awaiting 1  ● manual")) ?? "";
+		expect(dropped).toContain("▾ Tickets  open 2  running 1  awaiting 1  ● manual 1/2");
+		expect(dropped).not.toContain("ignored");
+		expect(dropped).not.toContain("!!!");
+		expect(dropped).not.toContain("held");
+		expect(text).toContain(
+			"the 54-column row gives counts up whole and grows the seat reading back",
+		);
 	});
 
 	// Issue #184: the init marker is a state a reviewer must see, so it stands

@@ -103,10 +103,12 @@ description: The module map of the source tree, for agents working in this repos
 	It checks determinate config values with one list query per Agent kind and
 	warns when a list is unavailable.
 - `src/herdr.ts`: the agent facts herdr reports, shared by every reader of an
-	agent list: the observation loop, the Consultation operations, the app's
-	mode line, and the Parallel limit seat count.
+	agent list: the observation loop, the Consultation operations, the Ticket
+	header's Auto-handoff mode cell, and the Parallel limit seat count.
 - `src/parallel.ts`: the shared Parallel limit seat count (ADR 0034), the one
-	source the Work queue's pickup and the mode line read.
+	source the Work queue's pickup and the Ticket header's mode cell read, the
+	Parallel limit gate no call site restates, and the seat reading's text rule
+	the mode cell and a dispatch start line share.
 - `src/placement.ts`: the ticket placement on the chosen task's state
 	(ADR 0045). A manual handoff whose final task type differs from the
 	ticket's current suggestion writes the ticket's labels before the agent
@@ -120,7 +122,9 @@ description: The module map of the source tree, for agents working in this repos
 - `src/domain/`: the Ticket type and its state machine, the agent-side facts
 	every Agent type shares (the standard Thinking level set), the handoff
 	environment kinds, and the Grouping axis that splits a section's list into
-	Groups (ADR 0058). `ticket.ts` holds the gate rules the plane states in words:
+	Groups (ADR 0058). `section-facts.ts` holds the Section header's counts and
+	the Auto-handoff facts its mode cell carries, the Parallel limit gate's
+	answer included. `ticket.ts` holds the gate rules the plane states in words:
 	the Dispatch pause, the Same-type hold (ADR 0093), and the Handoff limit
 	(`handoffLimitReached`). `top-up.ts` holds the auto top-up's gates (ADR 0051,
 	ADR 0088, ADR 0094): the gates every automatic add reads, the row a

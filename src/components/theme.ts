@@ -13,6 +13,7 @@
  * so the terminal's own default shows through where the theme says so.
  */
 
+import type { AutoHandoffMode } from "../domain/section-facts.ts";
 import type { TicketMarker, TicketState } from "../domain/ticket.ts";
 import type { TaskTypeFact } from "../domain/ticket-facts.ts";
 import { currentThemeResolution } from "../theme-source.ts";
@@ -90,6 +91,39 @@ const MARKER_ROLES: Record<TicketMarker, ThemeRole> = {
 /** The color a failure badge paints in. */
 export function markerColor(marker: TicketMarker): string | undefined {
 	return paint(MARKER_ROLES[marker]);
+}
+
+/** The theme role each Auto-handoff mode wears in the Ticket header's corner. */
+const AUTO_HANDOFF_ROLES: Record<AutoHandoffMode, ThemeRole> = {
+	auto: "yellow",
+	manual: "green",
+};
+
+/**
+ * The color the Auto-handoff lamp and its word paint in.
+ *
+ * The mode the factory runs in on its own wears the warning color, the mode
+ * that waits for the operator wears the running state's color. The written
+ * word names the mode either way, so the no-color presentation loses nothing.
+ */
+export function autoHandoffColor(mode: AutoHandoffMode): string | undefined {
+	return paint(AUTO_HANDOFF_ROLES[mode]);
+}
+
+/** The seat reading's roles: the room the Parallel limit still holds, and the cap reached. */
+const SEAT_ROLES = { room: "green", cap: "red" } as const;
+
+/**
+ * The color the mode cell's seat reading paints in.
+ *
+ * The cell carries the Parallel limit gate's answer, not the gate itself: the
+ * cap color stands from the frame the seats reach the limit through the frame
+ * they exceed it - the force-dispatched start and the held turn's own seat both
+ * stand against the cap (ADR 0034). A limit of 0 states no limit, so the gate
+ * answers false and the reading wears the room color.
+ */
+export function seatColor(overLimit: boolean): string | undefined {
+	return paint(overLimit ? SEAT_ROLES.cap : SEAT_ROLES.room);
 }
 
 /**

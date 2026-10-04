@@ -20,8 +20,8 @@
  * The rule takes its facts as data (issue #202): the caller passes the ticket
  * facts, the claim identities, the Consultation states, the agent list, the
  * clock, and the grace. The rule never reaches a state module, so the gates
- * and the mode line can never disagree about the count, and a test states the
- * facts instead of opening a state file.
+ * and the Ticket header's mode cell can never disagree about the count, and a
+ * test states the facts instead of opening a state file.
  */
 
 import { agentInPane } from "./domain/agent.ts";
@@ -68,7 +68,7 @@ export interface ParallelSeatFacts {
 	startupGraceMs: number;
 }
 
-/** The combined Parallel limit seat count the gates and the mode line share. */
+/** The combined Parallel limit seat count the gates and the mode cell share. */
 export function parallelSeatCount(facts: ParallelSeatFacts): number {
 	const listedAgents = new Map<string, HerdrAgent>();
 	if (facts.agents !== null) {
@@ -109,10 +109,24 @@ export function parallelSeatCount(facts: ParallelSeatFacts): number {
  * limit, so a start that wants a seat finds none free.
  *
  * The rule takes its two facts as data (issue #202). The force-dispatch's
- * three call sites and the mode line's start-now ask the same question, so
- * they call this one rule instead of each restating `limit > 0 && count >=
- * limit` at its own site. A limit of 0 lifts the cap, so it never reads over.
+ * three call sites and the screen that fills the Ticket header's mode cell ask
+ * the same question, so they call this one rule instead of each restating
+ * `limit > 0 && count >= limit` at its own site. A limit of 0 lifts the cap, so
+ * it never reads over.
  */
 export function overParallelLimit(limit: number, seatCount: number): boolean {
 	return limit > 0 && seatCount >= limit;
+}
+
+/**
+ * The seat reading's text (issue #209): the seats held, beside the limit they
+ * are measured against.
+ *
+ * The Ticket header's mode cell and a dispatch start line state the same
+ * measurement in their own words, so the one rule that decides whether a limit
+ * is named at all lives here: a limit of 0 states no limit, and the reading
+ * names the bare count.
+ */
+export function parallelSeatText(seats: number, limit: number): string {
+	return limit === 0 ? `${seats}` : `${seats}/${limit}`;
 }

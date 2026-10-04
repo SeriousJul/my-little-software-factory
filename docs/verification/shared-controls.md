@@ -1313,3 +1313,184 @@ What this work leaves open, stated plainly:
 What was not measured: no screen reader has read this application, and no claim
 of screen-reader support is made here. No theme or color behavior is involved in
 this change.
+
+## The Auto-handoff mode cell on the Ticket header
+
+The mode fact left its own row above the sections. It stands in the Ticket
+section header's right corner now: an unlit lamp (`○`) with `auto` when the
+factory hands off settled tickets on its own, a lit lamp (`●`) with `manual`
+when it waits for the operator, the Parallel limit seat reading `N/M` beside it,
+and the word `paused` while the Dispatch pause holds the automatic works. The
+Main view reserves no row for a mode line, so its body is one row taller at the
+same terminal height and the plane's minimum terminal height is 26 rows instead
+of 27. The lamp pair is the shared presentation module's `LAMP_GLYPHS`, plain
+Unicode geometric shapes, so no surface holds a private glyph.
+
+The cell's ink leaves through the shared paint layer. The lamp and its word wear
+the mode's own role - the warning color for `auto`, the running state's color for
+`manual` - and the seat reading wears the running color while the Parallel limit
+still holds room and the error color from the frame the seats reach it. A limit
+of 0 states no limit, so the bare count never wears the cap color. The pause word
+rides the header's own ink. The role maps stand in `src/components/theme.ts`
+beside the state and marker maps, so no surface holds a palette. In the plane's
+own standalone theme the three pairs measure 7.50, 7.45, and 5.65 against the
+panel surface, each above the standard's 4.5:1 text threshold, and the shared
+check asserts them. An inherited herdr theme paints its own values for those
+roles and is not contrast-checked, as the standard states. The written word
+names the mode in every presentation, so the color carries no fact on its own.
+
+The header lays its row out as whole cells, never as one string it cuts in
+half. The lamp and its word hold the corner and never give way. The count cells
+give up whole cells from their tail, in ADR 0060's order, and only as far as the
+row needs to hold the bare lamp beside them; the cell then takes back every part
+the room those cells left can hold - the seat reading first, then the Dispatch
+pause word. The ladder stands in one pure function, `planHeaderRow`, which takes
+the row's width, its cells, and the mode cell and answers what the row keeps, so
+the layout is measurable without a renderer. A held count therefore never loses
+its number to a seat measurement, and the row cuts no cell in half at any width
+the plane supports - its floor is 40 columns.
+
+What was measured: the component seam (`test/section-header.test.ts`) holds the
+lamp in both modes, the bare count at an unlimited Parallel limit, the pause
+word, the bell and pile cells beside the cell, and each step of the drop-and-
+grow-back ladder at 84, 72, 66, 62, 60, 59, 56, 54, and 40 columns. The same
+file measures the ladder a second time through `planHeaderRow` alone, with no
+renderer, at those widths and at 20 columns below the plane's floor. The frame
+tests read the cell through the real app flow: `test/auto-mode.test.ts` for the
+`a` toggle, the stored mode, the flipped mode, and the combined seat count;
+`test/turn-end-cause-frame.test.ts` for `auto 2/3 paused` on the held-turn
+frame; `test/ignored-ticket.test.ts` for the pile cell dropping whole before the
+held count; `test/main-view-frame.test.ts` and `test/ticket-scroll-frame.test.ts`
+for the row layout, the click rows, and the resize walk; `test/reserved-rows.test.ts`
+for the 26-row floor and the too-small notice. The gallery's `auto-mode` example
+carries both lamps, the pause word, and the drop rule on its own 54-column row,
+and the suite exercises it; the same example asserts each lamp's painted color
+and the pause word's color against the role the theme resolves.
+`test/section-header.test.ts` asserts every part's color at the component seam -
+the warning color for `auto`, the running color for `manual`, the room color
+under the cap, the cap color at and over it, the bare count under no limit, and
+the header's own ink for the counts and the pause word - and
+`test/main-view-frame.test.ts` reads the same colors through the real app frame
+across the `a` toggle. The Main view guide screenshot was regenerated with
+`bun run screenshots` and the drift test reads it.
+
+`bun run lint`, `bun run typecheck`, and one full `bun run test` ran on this
+change with no other `bun test` process on the machine. The run that gated the
+rework measured load average 10.31 and a green suite at 2834 tests over 129
+files, 0 fail, no skips, 15807 assertions in 37.98 s; the run before the rework
+measured 2825 tests over 129 files, 0 fail, no skips. The suite's
+assertion total is a timing read, not a fixed number: `test/app.test.ts` asserts
+every frame the renderer captured inside one scroll window, so the count moves
+between runs - 15654, 15555, 15475, 15640, 15720, and 15807 assertions across
+six green runs of this change. The count is recorded as what it measured, not as
+a target.
+
+The CI gate flaked once on this change and the record names it. The first `checks`
+run failed `test/consultation-frame.test.ts` > "the settled Agent output stays
+visible until an accepted response opens the next turn" at 20380 ms, which is the
+harness wait timing out and not an assertion about the header. That file passes on
+its own on this branch (58 tests, 0 fail). The same shape already hit `main`'s own
+CI on the run for #215: "the Ticket detail keeps its scroll across a round trip
+through the other section" at 21062 ms. A retry of the same run on this branch
+passed every check. The runner is about twice as slow as the machine this work ran
+on (85 s against 38 s for the full suite), so the 20 s harness wait is the tight
+part. That is recorded as a load flake and as an open item of its own, not as a
+pass this change earned or a problem it fixed. #225 has since landed the harness
+fix for that shape on `main`, and this branch carries it: the `checks` run on the
+rebased, reworked head is green in 1m39s.
+
+The review of this change found the ladder giving the seat reading up before it
+had to. At 54, 56, and 60 columns the row kept six to eleven empty columns while
+the seat reading stood dropped: the layout shrank the cell first, dropped count
+cells only after that, and never grew the cell back into the room those cells
+left. The ladder now drops count cells only as far as the bare lamp needs and
+then grows the cell back; `test/section-header.test.ts` holds a case at each of
+those three widths, and the same file measures the ladder through `planHeaderRow`
+with no renderer. The review's other items are in this head too: the layout math
+left the component body for that one pure function, `AutoHandoffMode` stands in
+`src/domain/section-facts.ts` where the paint layer and the header both read it,
+the gallery's `auto-mode` example carries the `paused` state and the drop on its
+own 54-column row, and the two wording claims above - the shrink order and the
+"never cuts a cell in half" claim - now state what the code does.
+
+The earlier entries in this record that measured the mode line - the held-turn
+frame's `auto: on 2/3 paused` among them - stand as history for the head they
+measured. They predate this move and no longer describe the current screen.
+
+What was not measured: no screen reader has read this application, and no claim
+of screen-reader support is made here or anywhere else in this record. The
+terminal walks in Ghostty and foot have not been re-run for this change, so they
+stand as not re-verified for it: no person has re-walked the lamp pair or the two
+mode colors in a live terminal on this head, and that is the open item this entry
+leaves open. The lamp pair is not contrast-checked against inherited herdr theme
+pairs.
+
+## The Ticket header's mode cell after the second review
+
+The second review of the cell found the Parallel limit gate written twice. The
+paint layer decided the seat color with `limit === 0 || seats < limit` inline in
+`src/components/theme.ts`, while `src/parallel.ts` owns that gate as
+`overParallelLimit` and states that no site restates it. The gate's answer now
+travels in the cell: `AutoHandoffCell.overLimit`, filled by
+`src/components/app.ts` from `overParallelLimit`, and `seatColor` answers from
+that boolean. The paint layer holds no gate, so a change to the rule moves the
+header's cap color with it. `test/section-header.test.ts` holds a case that
+states the answer apart from the seats and the limit it came from, and that
+file's own cell builder calls `overParallelLimit` the way the screen does.
+
+The seat reading's text rule - a limit of 0 names no fraction - stood in
+`planHeaderRow` and in the dispatch's `seatReading()`. It stands in
+`parallelSeatText` in `src/parallel.ts`, which both readers call, and
+`test/parallel.test.ts` holds it.
+
+The plan now answers what the row paints:
+
+- `HeaderRowPlan.countsRoom` carries the columns the counts may paint into, so
+  the component paints from the plan instead of measuring the mode cell a second
+  time.
+- A row too short to hold its name and the bare lamp whole beside each other
+  plans no mode cell at all: the plan names no lamp and the frame paints none,
+  so the plan never claims a cell the row could only cut.
+  `test/section-header.test.ts` holds the plan at 12 columns and the rendered row
+  at 12 columns.
+- The row plans at the smaller of its own width and the terminal width it is told
+  it renders in. A header that claims 60 columns inside a 40-column terminal
+  plans at 40, gives count cells up whole, and keeps its lamp; the same file
+  holds that frame. The gallery's `auto-mode` drop-rule row claims no more
+  columns than the gallery's own box holds, so a narrow gallery shortens that row
+  instead of clipping its corner.
+
+The Work queue's pause prop on the header is `queuePaused` now, so it no longer
+reads as one fact with the Dispatch pause the mode cell carries (ADR 0052 against
+ADR 0016).
+
+The Consultation and Work headers drop whole count cells too. At a 60 to 79 column
+terminal the Consultation header's row is 30 to 39 columns, its wide-form counts
+need 50, and the row reads `▾ Consultations` alone. That follows the drop rule,
+and it is now measured and written down: `test/main-view-frame.test.ts` holds a
+64-column frame that reads `▾ Consultations` alone beside a Work header that keeps
+its depth cell in a frame of the same row count, and the Main view guide states
+the left column's width and what a short header gives up.
+
+What was measured: the component seam (`test/section-header.test.ts`) holds the
+gate's answer apart from the numbers it came from, the counts' room at 84 and 62
+columns, the no-mode-cell plan below the plane's floor, the 40-column terminal
+against a 60-column claim, and the 12-column row. `test/parallel.test.ts` holds
+the seat text rule, and `test/main-view-frame.test.ts` holds the Consultation
+header's drop at 64 columns. The cell's other cases stand from the entry above,
+and the whole suite ran on this head: `bun run lint` clean over 288 files with no
+warnings, `bun run typecheck` clean, and one full `bun run test` green at 2841
+tests over 129 files, 0 fail, no skips, 15759 assertions in 38.13 s. No other
+`bun test` process ran on the machine during that gate (load average 6.99 on 32
+cores). The Main view guide screenshot stands as committed - nothing this rework
+changes reaches the frame the guide shows - and `test/screenshot-drift.test.ts`
+reads it.
+
+What was not measured: no screen reader has read this application, and no claim of
+screen-reader support is made here. The terminal walks in Ghostty and foot have
+still not been re-run for this change, so the lamp pair and the two mode colors
+stand as not walked in a live terminal by a person on this head. That remains the
+open item, and it is the one the test layer cannot close. The design question the
+review raised - whether `manual` should wear the running state's color at all, in
+a mode where the machine starts nothing on its own - is a judgment about what the
+operator should see in that corner, and it belongs to that same walk.

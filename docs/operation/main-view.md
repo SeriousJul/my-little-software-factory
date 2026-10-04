@@ -18,7 +18,22 @@ header row; the same toggle restores it.
   Its header shows the pipeline counts - open, running, awaiting - and, only
   when non-zero, the held count with its bell marker and the ignored and
   muted counts. A held count means a turn ended badly and the decision is
-  yours.
+  yours. The header's right corner carries the Auto-handoff mode cell: an
+  unlit lamp with `auto` when the factory hands off settled tickets on its
+  own, a lit lamp with `manual` when it waits for you, the Parallel limit
+  seat reading `N/M` beside it, and the word `paused` while the Dispatch
+  pause holds the automatic works. The lamp and its word wear the mode's own
+  color: the warning color for `auto`, the running state's color for
+  `manual`. The seat reading wears the running color while the limit still
+  holds room and the error color from the frame the seats reach the limit.
+  The written word names the mode either way, so a terminal that paints no
+  color loses nothing. A row too short for the whole cell gives whole count
+  cells up from the counts' tail - the pile first, then the bell, then the
+  held count - and only as far as the lamp and its word need them gone; the
+  cell then takes back what the room it now has allows, the seat reading
+  first and then the pause word. At every width the plane supports - its
+  floor is 40 columns - the row cuts no cell in half and never loses the
+  lamp.
 - **The Consultation section** lists your Consultations. Its header shows how
   many wait for your answer and how many need recovery, so a Consultation
   that needs you is visible whether the section is open or folded.
@@ -28,6 +43,14 @@ header row; the same toggle restores it.
   drain is paused. `+` and `-` move the item under the cursor toward the
   front or the back, `Delete` removes it, `p` pauses or resumes the drain,
   and Enter starts the item now, even over the limit.
+
+The Consultation header and the Work header stand in the left column's own
+width - half the terminal - while the Ticket header spans the whole terminal.
+Where a header's row is too short for its count cells it drops whole cells
+from their tail and never wraps onto a second row: at a 60 to 79 column
+terminal the Consultation header's row is 30 to 39 columns, its wide-form
+counts need 50, and the row reads `▾ Consultations` alone. The Work header's
+one count cell stands at that width.
 
 The detail pane shows the full detail of the selected item. On a ticket: the
 title, the repository, the state, the agent with its environment, model,

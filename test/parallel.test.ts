@@ -1,6 +1,6 @@
 /**
  * The shared Parallel limit seat count (issue #87, ADR 0034): the one source
- * the automatic start gates and the mode line read. A seat is held by an
+ * the automatic start gates and the mode cell read. A seat is held by an
  * in-flight ticket whose agent the poll listed or that is still inside its
  * startup grace, by every in-progress handoff, and by every Consultation in
  * opening or working.
@@ -16,6 +16,7 @@ import {
 	type ParallelSeatFacts,
 	type ParallelSeatTicketFact,
 	parallelSeatCount,
+	parallelSeatText,
 } from "../src/parallel.ts";
 
 const NOW = Date.parse("2026-08-31T11:00:00Z");
@@ -155,7 +156,7 @@ describe("parallelSeatCount", () => {
 	});
 
 	test("combines the ticket and Consultation seats into one count", () => {
-		// The mode line's own example: one live ticket and one working
+		// The mode cell's own example: one live ticket and one working
 		// Consultation read 2 against a cap of 2.
 		expect(
 			parallelSeatCount(
@@ -186,8 +187,9 @@ describe("parallelSeatCount", () => {
 	});
 
 	test("the cap gate reads the limit and the count, and a lifted limit never reads over", () => {
-		// The four force-dispatch sites and the mode line's start-now ask this one
-		// rule instead of each restating `limit > 0 && count >= limit` (issue #202).
+		// The force-dispatch's three call sites and the screen that fills the Ticket
+		// header's mode cell ask this one rule instead of each restating
+		// `limit > 0 && count >= limit` (issue #202).
 		expect(overParallelLimit(0, 0)).toBe(false);
 		expect(overParallelLimit(0, 40)).toBe(false);
 		expect(overParallelLimit(2, 0)).toBe(false);
@@ -208,5 +210,14 @@ describe("parallelSeatCount", () => {
 				),
 			),
 		).toBe(true);
+	});
+
+	test("the seat reading's text names a limit only where one stands", () => {
+		// The Ticket header's mode cell and a dispatch start line state the same
+		// measurement in their own words, so the one rule that decides whether a
+		// fraction stands at all lives beside the gate it reads.
+		expect(parallelSeatText(1, 2)).toBe("1/2");
+		expect(parallelSeatText(3, 2)).toBe("3/2");
+		expect(parallelSeatText(3, 0)).toBe("3");
 	});
 });
