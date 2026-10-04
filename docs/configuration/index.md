@@ -507,13 +507,16 @@ automatic walks hold: auto-handoff is off
 automatic walks hold: the Work queue is paused
 automatic walks hold: a failed turn waits for the operator
 automatic walks hold: the Work queue already holds a continuation
+automatic walks hold: the Work queue holds an item the operator staged
 automatic walks hold: the Work queue holds a waiting row
 ```
 
-The continuation line names the factory's own standing row only. The row your own
-route decision left in the queue is `workflow` too, and ADR 0100 ranks the owed
-continuation above it, so it holds nothing out: the walk asks, and the
-one-item-per-ticket refusal above is what answers.
+The two lines about a standing row name whose row it is, because the origin
+cannot: the row your own route decision left in the queue and the row the
+factory owes for a settled turn are both `workflow`. Either one holds the next
+continuation out while it stands (issue #230). The rank ADR 0100 gives the owed
+continuation is its place in the queue's order - ahead of a row that queued
+earlier - not a pass through a row that already stands.
 
 Auto-handoff mode and the Work queue pause are the two facts you set by key, and
 each flip states itself under its own prefix, so a grep for one family does not
