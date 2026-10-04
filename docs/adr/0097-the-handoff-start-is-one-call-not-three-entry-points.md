@@ -68,10 +68,12 @@ start path and the last one that answered through several entry points.
 - **One outcome shape.** The Consultation copy is gone and the nine casts are
   gone. The collision fields stay on the shape, because the naming rules produce
   them on both paths.
-- **One reader per herdr response shape.** `readWorkspaceList` owns the
-  workspace-list shape, `workspaceHeld` and `workspaceAtCheckout` own the two
-  lookups, and `herdrHandles` owns the Workspace id, Pane id, and Tab id read at
-  every start site.
+- **One reader per herdr response shape, and one stored-workspace lookup.**
+  `readWorkspaceList` owns the workspace-list shape, `readStartWorkspaces` runs
+  the ask both Environment builders share - list the workspaces and answer
+  whether the one a previous Handoff recorded still holds - `workspaceHeld` and
+  `workspaceAtCheckout` own the two lookups, and `herdrHandles` owns the Workspace
+  id, Pane id, and Tab id read at every start site.
 - **One cleanup rule reads one record.** The start writes a `Residue` as it
   creates each handle, and `removeResidue` removes exactly what that record
   holds when the Agent never starts. The coverage is therefore the same on every
@@ -81,11 +83,14 @@ start path and the last one that answered through several entry points.
   carried, and a pull request the read found all stand (ADR 0062, ADR 0076).
 - **The branch policy stays a fact, not a merge.** A Ticket branch is reused and
   a Consultation branch is refused. The naming rules are untouched.
-- **The resource recorder stays injected, and its wording travels with the
-  request.** The record must land before the next external step, so it is not a
-  return value. The Consultation's Close panel owns the resource table, so the
-  Consultation caller passes its own labels; the shared Environment builders hold
-  no surface's vocabulary.
+- **The resource recorder stays injected, and it travels with its wording.** The
+  record must land before the next external step, so it is not a return value.
+  The Consultation's Close panel owns the resource table, so the Consultation
+  caller hands its recorder and its labels as one `StartResources` record: a
+  start that records nothing carries none, and no row is ever written in wording
+  the caller did not state. The recorder has a second half, `removed`, which the
+  start's own cleanup calls for what it really took down, so the record holds no
+  row for a handle the plane already closed.
 - **The filesystem work stays inside the implementation.** The repository
   resolution, the leftover worktree directory move, and the real path comparison
   run for real. A filesystem seam would have one adapter, so it would be
@@ -98,12 +103,17 @@ start path and the last one that answered through several entry points.
   and states the order.
 - A failed start leaves the same residue on every Environment kind, and the
   contract is pinned by tests at the start interface rather than asserted in a
-  comment.
+  comment. The keep-half of that contract - what pre-dates the attempt stands -
+  is pinned by assertions that can fail (issue #213 review, and
+  `test/assertion-architecture.test.ts` refuses the assertion shape that could
+  not fail). A cleanup that really removed a resource confirms the row the start
+  wrote for it, so the Consultation's detail pane names no residue that is gone.
 - A contributor reads one start sequence. `src/handoff.ts` is not a smaller file
-  after this cut - it is 2,609 lines - but it holds one start, one pre-flight,
-  one workspace reader, one handle read, and one cleanup rule instead of two or
-  seven of each. Splitting the Environment builders, the pull request open, and
-  the prompt render out of the module is the natural next cut.
+  after this cut - it is 2,778 lines and 70 functions at the merge - but it holds
+  one start, one pre-flight, one workspace reader, one handle read, and one
+  cleanup rule instead of two or seven of each. Splitting the Environment builders,
+  the pull request open, and the prompt render out of the module is the natural
+  next cut.
 - The tests assert the command sequence the start produces and the outcome it
   returns, through `handOffTicket` and `handOffConsultation`. No test reaches for
   a private helper, and the Consultation start sequence is now covered at the

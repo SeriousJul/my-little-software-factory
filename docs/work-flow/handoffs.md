@@ -48,7 +48,9 @@ A start that fails before its agent starts removes what that start created: the
 fresh tab, the workspace it created, the fresh worktree checkout, and the branch
 when it created the branch. The rule is the same in every environment. What
 pre-dates the attempt stands: a workspace you own, a branch the repository
-already carried, and a pull request the read found.
+already carried, and a pull request the read found. What the start really closed
+is confirmed in its record, so a Consultation's detail names no resource that is
+already gone, and its Close does not retry a workspace herdr no longer holds.
 
 ## Model discovery
 

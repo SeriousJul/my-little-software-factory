@@ -261,7 +261,7 @@ export interface OwnNameKnowledge {
 }
 
 /** The names a handoff may ask herdr for, and what it knows about them. */
-export interface NamePlan {
+interface NamePlan {
 	/** The candidate names, in preference order. */
 	candidates: string[];
 	known: OwnNameKnowledge;
@@ -393,16 +393,14 @@ interface HandoffContext {
 	/** The checkout the start resolved to: every git step and cleanup runs in it. */
 	checkout: string;
 	onStage?: (stage: string) => void;
-	/** Record an external resource before the next external step. */
-	onResource?: (kind: string, resourceId: string, owned: boolean, details?: string) => void;
+	/** The caller's resource table, or null on a start that records nothing. */
+	resources: StartResources | null;
 	/** Record the Agent handles before sending its first prompt. */
 	onAgentStarted?: (agent: StartedAgent) => void;
 	/** The note the repository resolution carried, if it bent. */
 	notes?: ResolutionNotes;
 	/** The agent names the handoff may ask herdr for, in preference order. */
 	names: NamePlan;
-	/** The wording the resource recorder writes for what this start creates. */
-	labels: StartResourceLabels;
 	/**
 	 * The pull request open the handoff runs before its agent starts
 	 * (ADR 0076): set for a worktree handoff of a task type that opens a
@@ -697,6 +695,12 @@ export interface ConsultationHandoffOptions {
 	onStage?: (stage: string) => void;
 	/** Record an external resource before the next external step. */
 	onResource?: (kind: string, resourceId: string, owned: boolean, details?: string) => void;
+	/**
+	 * Confirm a resource this start's own cleanup removed. The record then holds
+	 * no row for a workspace, a worktree, or a tab the plane already took down,
+	 * and the Close panel does not offer a handle that is gone.
+	 */
+	onResourceRemoved?: (kind: string, resourceId: string) => void;
 	/** Record the Agent handles before sending its first prompt. */
 	onAgentStarted?: (agent: StartedAgent) => void;
 	/** Record the checkout the start resolved to, before its first herdr step. */
@@ -731,6 +735,7 @@ export async function handOffConsultation({
 	home,
 	onStage,
 	onResource,
+	onResourceRemoved,
 	onAgentStarted,
 	onRepositoryResolved,
 	resolvedRepository,
@@ -753,7 +758,6 @@ export async function handOffConsultation({
 		runner,
 		home,
 		onStage,
-		onResource,
 		onAgentStarted,
 		onRepositoryResolved,
 		repository: {
@@ -770,7 +774,17 @@ export async function handOffConsultation({
 		},
 		prompt: renderConsultationPrompt(consultation.template, consultation.initialInput),
 		names: consultationNamePlan(name),
-		resourceLabels: CONSULTATION_RESOURCE_LABELS,
+		// The recorder and its wording travel together (issue #213 review): a start
+		// that records resources states the wording those rows use, and a start that
+		// records none carries no resource table at all.
+		resources:
+			onResource === undefined
+				? undefined
+				: {
+						record: onResource,
+						removed: onResourceRemoved,
+						labels: CONSULTATION_RESOURCE_LABELS,
+					},
 		startCheck: check,
 	});
 }
@@ -811,11 +825,12 @@ interface StartBranch {
 /**
  * The wording the resource recorder writes for the resources a start creates.
  *
- * The resource table belongs to the Consultation's Close panel, so the
- * Consultation caller names its own rows and hands the labels with the request.
- * The shared Environment builders read these instead of spelling out one
- * surface's vocabulary: the same builders serve a Ticket start, and a Ticket
- * start that ever records a resource states its own labels.
+ * The resource table belongs to the Consultation's Close panel, so the caller
+ * that records resources names its own rows and hands the labels with them. The
+ * shared Environment builders read these instead of spelling out one surface's
+ * vocabulary. There is no default set: the labels travel with the recorder (see
+ * `StartResources`), so no start can write a row in wording its caller never
+ * stated (issue #213 review).
  */
 interface StartResourceLabels {
 	/** The live workspace this start created. */
@@ -832,17 +847,23 @@ interface StartResourceLabels {
 	worktreeTab: string;
 }
 
-/** The labels a start records when its caller states none. */
-const START_RESOURCE_LABELS: StartResourceLabels = {
-	workspace: "fresh workspace",
-	rootTab: "fresh root tab",
-	tab: "fresh tab",
-	worktreeWorkspace: "fresh worktree workspace",
-	worktreeCheckout: "fresh worktree checkout",
-	worktreeTab: "fresh worktree tab",
-};
+/**
+ * What one start records into its caller's resource table, and the wording those
+ * rows use.
+ *
+ * `record` lands before the next external step, so a failure in the middle of
+ * the sequence still shows what might remain. `removed` confirms a resource this
+ * start's own cleanup took down, so the record keeps no row for a handle the
+ * plane already closed.
+ */
+interface StartResources {
+	record: (kind: string, resourceId: string, owned: boolean, details?: string) => void;
+	/** Absent on a caller that tracks no rows of its own. */
+	removed?: (kind: string, resourceId: string) => void;
+	labels: StartResourceLabels;
+}
 
-/** The Consultation's own Close panel wording, carried with its request. */
+/** The Consultation's own Close panel wording, carried with its recorder. */
 const CONSULTATION_RESOURCE_LABELS: StartResourceLabels = {
 	workspace: "Consultation workspace",
 	rootTab: "Consultation root tab",
@@ -878,10 +899,12 @@ interface HandoffStartRequest {
 	startCheck?: StartCheck;
 	/** Records durable progress after the claim and before external work. */
 	onStage?: (stage: string) => void;
-	/** Record an external resource before the next external step. */
-	onResource?: (kind: string, resourceId: string, owned: boolean, details?: string) => void;
-	/** The wording the resource recorder writes for what this start creates. */
-	resourceLabels?: StartResourceLabels;
+	/**
+	 * The caller's resource table with the wording its rows use. A start that
+	 * records nothing carries nothing, so no row is ever written in wording the
+	 * caller did not state.
+	 */
+	resources?: StartResources;
 	/** Record the Agent handles before sending its first prompt. */
 	onAgentStarted?: (agent: StartedAgent) => void;
 	/** Record the checkout the start resolved to, before its first herdr step. */
@@ -905,8 +928,14 @@ interface HandoffStartRequest {
  * (ADR 0062, ADR 0076).
  */
 interface Residue {
-	/** The herdr tab this start created. */
+	/** The fresh tab this start created in a workspace it did not create. */
 	tabId: string | null;
+	/**
+	 * The root tab of a workspace this start created. The workspace or worktree
+	 * removal takes it down, so no separate tab command runs for it; it stands in
+	 * the record so the cleanup can confirm the row the start wrote for it.
+	 */
+	rootTabId: string | null;
 	/** The herdr workspace this start created. */
 	workspaceId: string | null;
 	/** The herdr worktree checkout this start created. */
@@ -915,7 +944,13 @@ interface Residue {
 	branch: string | null;
 }
 
-const NO_RESIDUE: Residue = { tabId: null, workspaceId: null, worktreeId: null, branch: null };
+const NO_RESIDUE: Residue = {
+	tabId: null,
+	rootTabId: null,
+	workspaceId: null,
+	worktreeId: null,
+	branch: null,
+};
 
 /**
  * The Environment a start built: the handles its Agent's pane stands in, and what
@@ -972,11 +1007,10 @@ async function runHandoffStart(request: HandoffStartRequest): Promise<HandoffOut
 		runner: request.runner,
 		checkout,
 		onStage: request.onStage,
-		onResource: request.onResource,
+		resources: request.resources ?? null,
 		onAgentStarted: request.onAgentStarted,
 		notes: resolved.repository.notes,
 		names: request.names,
-		labels: request.resourceLabels ?? START_RESOURCE_LABELS,
 		pullRequestOpen: request.pullRequestOpen,
 	};
 	const environment = await buildEnvironment(request, ctx);
@@ -1022,6 +1056,37 @@ async function buildEnvironment(
 }
 
 /**
+ * The workspace list one start reads, and whether the stored workspace still
+ * stands in it (issue #213 review).
+ *
+ * Both Environment kinds ask herdr the same question before they build: does the
+ * workspace a previous Handoff recorded still hold? The ask, the list read, the
+ * held check, and the two failure answers were written twice, once per builder.
+ * They live here now, so the rule has one copy. A pass carries the workspaces
+ * herdr listed, which the live builder goes on to search for the checkout (see
+ * `workspaceAtCheckout`).
+ */
+type StartWorkspaceList =
+	| { ok: true; held: string | null; workspaces: readonly HerdrWorkspace[] }
+	| { ok: false; outcome: HandoffOutcome };
+
+async function readStartWorkspaces(
+	request: HandoffStartRequest,
+	ctx: HandoffContext,
+): Promise<StartWorkspaceList> {
+	const listed = await ctx.runner.run("herdr", ["workspace", "list"]);
+	if (listed.code !== 0) return { ok: false, outcome: failedCommand(listed, ctx) };
+	const list = readWorkspaceList(listed);
+	if (list.status === "unreadable") return { ok: false, outcome: failed(list.reason, ctx) };
+	const stored = request.workspace.kind === "stored" ? request.workspace.workspaceId : null;
+	return {
+		ok: true,
+		held: stored !== null && workspaceHeld(list.workspaces, stored) ? stored : null,
+		workspaces: list.workspaces,
+	};
+}
+
+/**
  * The live worktree sequence: find the herdr workspace whose repository matches
  * the checkout, or the stored workspace a previous Handoff recorded, and create
  * one when neither holds. The Agent then starts in a fresh tab, except in a
@@ -1032,20 +1097,16 @@ async function buildLiveEnvironment(
 	ctx: HandoffContext,
 ): Promise<EnvironmentAnswer> {
 	ctx.onStage?.("creating-environment");
-	const listed = await ctx.runner.run("herdr", ["workspace", "list"]);
-	if (listed.code !== 0) return { outcome: failedCommand(listed, ctx), residue: NO_RESIDUE };
-	const list = readWorkspaceList(listed);
-	if (list.status === "unreadable")
-		return { outcome: failed(list.reason, ctx), residue: NO_RESIDUE };
-	if (request.workspace.kind === "stored") {
-		if (workspaceHeld(list.workspaces, request.workspace.workspaceId)) {
-			// The stored workspace still holds: a fresh tab in it, at the
-			// workspace's own cwd.
-			return openFreshTab(request.workspace.workspaceId, null, ctx, NO_RESIDUE);
-		}
-		// The stored workspace is gone: the checkout lookup below finds or creates one.
+	const listed = await readStartWorkspaces(request, ctx);
+	if (!listed.ok) return { outcome: listed.outcome, residue: NO_RESIDUE };
+	if (listed.held !== null) {
+		// The stored workspace still holds: a fresh tab in it, at the
+		// workspace's own cwd.
+		return openFreshTab(listed.held, null, ctx, NO_RESIDUE);
 	}
-	const atCheckout = await workspaceAtCheckout(list.workspaces, ctx.checkout);
+	// A stored workspace that is gone, and a start that names none, both end at
+	// the checkout lookup below, which finds a workspace or creates one.
+	const atCheckout = await workspaceAtCheckout(listed.workspaces, ctx.checkout);
 	if (atCheckout !== null) return openFreshTab(atCheckout, ctx.checkout, ctx, NO_RESIDUE);
 	const created = await ctx.runner.run("herdr", [
 		"workspace",
@@ -1065,8 +1126,9 @@ async function buildLiveEnvironment(
 	if (request.workspace.kind === "fresh") {
 		// The start owns the workspace it creates: its root pane is fresh, so the
 		// Agent starts there and no second tab is made.
-		ctx.onResource?.("workspace", handles.workspaceId, true, ctx.labels.workspace);
-		if (handles.tabId !== null) ctx.onResource?.("tab", handles.tabId, true, ctx.labels.rootTab);
+		recordResource(ctx, "workspace", handles.workspaceId, (labels) => labels.workspace);
+		if (handles.tabId !== null)
+			recordResource(ctx, "tab", handles.tabId, (labels) => labels.rootTab);
 		if (handles.paneId === null || handles.tabId === null)
 			return {
 				outcome: failed("herdr workspace create returned incomplete pane handles", ctx),
@@ -1078,7 +1140,9 @@ async function buildLiveEnvironment(
 				tabId: handles.tabId,
 				workspaceId: handles.workspaceId,
 			},
-			residue: createdResidue,
+			// The root tab stands in the record too: the workspace close takes it
+			// down, and the cleanup confirms the row written for it.
+			residue: { ...createdResidue, rootTabId: handles.tabId },
 		};
 	}
 	return openFreshTab(handles.workspaceId, ctx.checkout, ctx, createdResidue);
@@ -1101,7 +1165,7 @@ async function openFreshTab(
 	const tab = await ctx.runner.run("herdr", tabArgs);
 	if (tab.code !== 0) return { outcome: failedCommand(tab, ctx), residue };
 	const handles = herdrHandles(tab);
-	if (handles.tabId !== null) ctx.onResource?.("tab", handles.tabId, true, ctx.labels.tab);
+	if (handles.tabId !== null) recordResource(ctx, "tab", handles.tabId, (labels) => labels.tab);
 	const withTab: Residue = { ...residue, tabId: handles.tabId };
 	if (handles.paneId === null || handles.tabId === null)
 		return { outcome: failed("herdr tab create returned no pane id", ctx), residue: withTab };
@@ -1112,18 +1176,58 @@ async function openFreshTab(
 }
 
 /**
+ * Record one resource this start created, in the wording its caller stated.
+ *
+ * A start with no resource table records nothing. The recorder and its labels
+ * travel together (see `StartResources`), so there is no default wording for a
+ * row to fall back to.
+ */
+function recordResource(
+	ctx: HandoffContext,
+	kind: string,
+	resourceId: string,
+	label: (labels: StartResourceLabels) => string,
+): void {
+	if (ctx.resources === null) return;
+	ctx.resources.record(kind, resourceId, true, label(ctx.resources.labels));
+}
+
+/**
  * Remove what one start created, and only that (issue #204).
  *
  * Best effort: the start's own failure is the reason the operator sees, and a
  * cleanup error must not replace it. The tab goes first, then the workspace or
  * worktree checkout behind it, then the branch this start created.
+ *
+ * What a close really took down is confirmed in the caller's resource table, so
+ * the record does not keep a row for a handle the plane already removed. A close
+ * herdr refuses leaves its row unconfirmed: that resource may still stand, and
+ * the operator's Close has to be able to reach it.
  */
 async function removeResidue(ctx: HandoffContext, residue: Residue): Promise<void> {
-	if (residue.tabId !== null) await closeTab(residue.tabId, ctx);
-	if (residue.worktreeId !== null) await removeWorktreeCheckout(residue.worktreeId, ctx);
-	else if (residue.workspaceId !== null) await closeWorkspace(residue.workspaceId, ctx);
+	if (residue.tabId !== null && (await closeTab(residue.tabId, ctx)))
+		confirmRemoved(ctx, "tab", residue.tabId);
+	if (residue.worktreeId !== null) {
+		if (await removeWorktreeCheckout(residue.worktreeId, ctx)) {
+			// `worktree remove` takes the workspace herdr created together with its
+			// checkout, and the root tab between them, so all three rows go.
+			confirmRemoved(ctx, "worktree", residue.worktreeId);
+			confirmRemoved(ctx, "workspace", residue.worktreeId);
+			if (residue.rootTabId !== null) confirmRemoved(ctx, "tab", residue.rootTabId);
+		}
+	} else if (residue.workspaceId !== null) {
+		if (await closeWorkspace(residue.workspaceId, ctx)) {
+			confirmRemoved(ctx, "workspace", residue.workspaceId);
+			if (residue.rootTabId !== null) confirmRemoved(ctx, "tab", residue.rootTabId);
+		}
+	}
 	if (residue.branch !== null)
 		await ctx.runner.run("git", ["-C", ctx.checkout, "branch", "-D", residue.branch]);
+}
+
+/** Tell the caller's resource table that this start removed what it recorded. */
+function confirmRemoved(ctx: HandoffContext, kind: string, resourceId: string): void {
+	ctx.resources?.removed?.(kind, resourceId);
 }
 
 /**
@@ -1204,15 +1308,12 @@ async function buildWorktreeEnvironment(
 	const checkout = ctx.checkout;
 	ctx.onStage?.("creating-environment");
 	if (request.workspace.kind === "stored") {
-		const listed = await ctx.runner.run("herdr", ["workspace", "list"]);
-		if (listed.code !== 0) return { outcome: failedCommand(listed, ctx), residue: NO_RESIDUE };
-		const list = readWorkspaceList(listed);
-		if (list.status === "unreadable")
-			return { outcome: failed(list.reason, ctx), residue: NO_RESIDUE };
-		if (workspaceHeld(list.workspaces, request.workspace.workspaceId)) {
+		const listed = await readStartWorkspaces(request, ctx);
+		if (!listed.ok) return { outcome: listed.outcome, residue: NO_RESIDUE };
+		if (listed.held !== null) {
 			// The stored workspace still holds: a fresh tab in it, at the
 			// workspace's own cwd.
-			return openFreshTab(request.workspace.workspaceId, null, ctx, NO_RESIDUE);
+			return openFreshTab(listed.held, null, ctx, NO_RESIDUE);
 		}
 		// The worktree is gone: reopen it on the branch the naming rule gives the ticket.
 		return reuseBranch(ctx, branch);
@@ -1325,16 +1426,18 @@ function createdWorktreeAnswer(
 			residue: NO_RESIDUE,
 		};
 	}
-	ctx.onResource?.("workspace", handles.workspaceId, true, ctx.labels.worktreeWorkspace);
-	ctx.onResource?.(
+	recordResource(ctx, "workspace", handles.workspaceId, (labels) => labels.worktreeWorkspace);
+	recordResource(
+		ctx,
 		"worktree",
 		handles.workspaceId,
-		true,
-		`${ctx.labels.worktreeCheckout} for ${branch}`,
+		(labels) => `${labels.worktreeCheckout} for ${branch}`,
 	);
-	if (handles.tabId !== null) ctx.onResource?.("tab", handles.tabId, true, ctx.labels.worktreeTab);
+	if (handles.tabId !== null)
+		recordResource(ctx, "tab", handles.tabId, (labels) => labels.worktreeTab);
 	const residue: Residue = {
 		...NO_RESIDUE,
+		rootTabId: handles.tabId,
 		worktreeId: handles.workspaceId,
 		branch: createdBranch ? branch : null,
 	};
@@ -1853,18 +1956,21 @@ async function promptBeforeAgent(
 }
 
 /** Remove a herdr worktree checkout, best effort. The branch stays. */
-async function removeWorktreeCheckout(workspaceId: string, ctx: HandoffContext): Promise<void> {
-	await ctx.runner.run("herdr", ["worktree", "remove", "--workspace", workspaceId]);
+async function removeWorktreeCheckout(workspaceId: string, ctx: HandoffContext): Promise<boolean> {
+	const result = await ctx.runner.run("herdr", ["worktree", "remove", "--workspace", workspaceId]);
+	return result.code === 0;
 }
 
 /** Close a herdr workspace, best effort. Its worktree and branch stay. */
-async function closeWorkspace(workspaceId: string, ctx: HandoffContext): Promise<void> {
-	await ctx.runner.run("herdr", ["workspace", "close", workspaceId]);
+async function closeWorkspace(workspaceId: string, ctx: HandoffContext): Promise<boolean> {
+	const result = await ctx.runner.run("herdr", ["workspace", "close", workspaceId]);
+	return result.code === 0;
 }
 
 /** Close a herdr tab, best effort. */
-async function closeTab(tabId: string, ctx: HandoffContext): Promise<void> {
-	await ctx.runner.run("herdr", ["tab", "close", tabId]);
+async function closeTab(tabId: string, ctx: HandoffContext): Promise<boolean> {
+	const result = await ctx.runner.run("herdr", ["tab", "close", tabId]);
+	return result.code === 0;
 }
 
 /**

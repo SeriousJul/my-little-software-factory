@@ -35,6 +35,7 @@ import type { HandoffOrigin } from "../src/state/handoff.ts";
 import { workQueueIdentityOf } from "../src/state/work-queue.ts";
 import type { FactoryState } from "../src/state.ts";
 import { BASE_CONFIG } from "./base-config.ts";
+import { expectNoCommand } from "./command-assertions.ts";
 import {
 	FakeRunner,
 	herdrFocusCommands,
@@ -3659,7 +3660,7 @@ describe("the decision screen's route close", () => {
 		expect(pathOpenAt).toBeLessThan(
 			commands.indexOf(`herdr agent start ${FIRST.name} --kind pi --pane pane-route`),
 		);
-		expect(commands).not.toContain(expect.stringContaining("worktree create"));
+		expectNoCommand(commands, "worktree create");
 	});
 });
 

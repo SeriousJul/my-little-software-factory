@@ -1089,6 +1089,14 @@ export class ConsultationOperations {
 								owned,
 								details: details ?? "",
 							}),
+						// The start's own cleanup confirms what it removed, so the record
+						// does not keep a row for a handle the plane already took down.
+						onResourceRemoved: (kind, resourceId) =>
+							this.state.consultationRecord.markConsultationResourceClosed(
+								current.id,
+								kind,
+								resourceId,
+							),
 					});
 				},
 			);

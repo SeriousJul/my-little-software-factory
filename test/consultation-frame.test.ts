@@ -58,6 +58,7 @@ import {
 	withApp,
 } from "./app-harness.ts";
 import { BASE_CONFIG } from "./base-config.ts";
+import { expectNoCommand } from "./command-assertions.ts";
 import {
 	FakeRunner,
 	herdrFocusCommands,
@@ -3270,8 +3271,8 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 						expect.objectContaining({ kind: "consultation", consultationId: queued.id }),
 					);
 					// The enqueue ran no external step: it is not a start.
-					expect(runner.commands()).not.toContain(expect.stringContaining("worktree create"));
-					expect(runner.commands()).not.toContain(expect.stringContaining("agent start"));
+					expectNoCommand(runner.commands(), "worktree create");
+					expectNoCommand(runner.commands(), "agent start");
 				},
 				WIDTH,
 				32,
@@ -3428,8 +3429,8 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 					expect(state.workQueue.items()).toEqual([
 						expect.objectContaining({ kind: "consultation", consultationId: queued.id }),
 					]);
-					expect(runner.commands()).not.toContain(expect.stringContaining("worktree create"));
-					expect(runner.commands()).not.toContain(expect.stringContaining("agent start"));
+					expectNoCommand(runner.commands(), "worktree create");
+					expectNoCommand(runner.commands(), "agent start");
 				},
 				WIDTH,
 				32,
@@ -3487,8 +3488,8 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 					);
 					expect(state.consultationRecord.consultation(queued.id)?.state).toBe("closed");
 					expect(state.workQueue.items()).toHaveLength(0);
-					expect(runner.commands()).not.toContain(expect.stringContaining("pane close"));
-					expect(runner.commands()).not.toContain(expect.stringContaining("workspace close"));
+					expectNoCommand(runner.commands(), "pane close");
+					expectNoCommand(runner.commands(), "workspace close");
 				},
 				WIDTH,
 				32,

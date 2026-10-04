@@ -28,6 +28,7 @@ import {
 } from "../src/handoff.ts";
 import type { Consultation } from "../src/state/consultation-record.ts";
 import { BASE_CONFIG } from "./base-config.ts";
+import { expectNoCommand } from "./command-assertions.ts";
 import {
 	FakeRunner,
 	herdrFocusCommands,
@@ -149,6 +150,25 @@ function conventionCheckout(runner: FakeRunner): void {
 function stubRemoteDefaultBranch(runner: FakeRunner, branch = "main"): void {
 	runner.set("git", ["-C", CHECKOUT, "symbolic-ref", "refs/remotes/origin/HEAD"], {
 		stdout: `refs/remotes/origin/${branch}\n`,
+	});
+}
+
+/**
+ * The Agent start failure a start cleans up after. The name is the Ticket's own;
+ * `stubConsultationStartFailure` is the same failure under a Consultation's name.
+ */
+function stubStartFailure(runner: FakeRunner, pane: string): void {
+	runner.set("herdr", ["agent", "start", AGENT, "--kind", "pi", "--pane", pane], {
+		code: 1,
+		stderr: '{"error":{"code":"agent_start_failed","message":"the pane is gone"}}\n',
+	});
+}
+
+/** The same failure for the name a Consultation start runs under. */
+function stubConsultationStartFailure(runner: FakeRunner, pane: string): void {
+	runner.set("herdr", ["agent", "start", "consultation-11111111", "--kind", "pi", "--pane", pane], {
+		code: 1,
+		stderr: '{"error":{"code":"agent_start_failed","message":"the pane is gone"}}\n',
 	});
 }
 
@@ -564,7 +584,7 @@ describe("handOffTicket: the live worktree sequence", () => {
 		]);
 		// The live worktree environment takes no fetch: the operator's own
 		// checkout stays under their control.
-		expect(runner.commands()).not.toContain(expect.stringContaining("fetch origin"));
+		expectNoCommand(runner.commands(), "fetch origin");
 	});
 
 	test("retries a busy fresh pane until its shell is available", async () => {
@@ -749,7 +769,7 @@ describe("handOffTicket: the live worktree sequence", () => {
 
 		expect(outcome).toEqual({ status: "failed", reason: "error: herdr is not running" });
 		// Nothing after the failed step runs.
-		expect(runner.commands()).not.toContain(expect.stringContaining("agent start"));
+		expectNoCommand(runner.commands(), "agent start");
 	});
 
 	test("a prompt failure after the agent started still settles the ticket as handed off", async () => {
@@ -793,7 +813,7 @@ describe("handOffTicket: the live worktree sequence", () => {
 		expect(reasonOf(outcome)).toContain("readable workspace list");
 		// Unreadable is not "no workspace": the one-workspace-per-repository
 		// rule holds, so no second workspace is created for the checkout.
-		expect(runner.commands()).not.toContain(expect.stringContaining("workspace create"));
+		expectNoCommand(runner.commands(), "workspace create");
 	});
 });
 
@@ -1005,7 +1025,7 @@ describe("handOffTicket: the worktree sequence", () => {
 
 		expect(outcome.status).toBe("ok");
 		// No fetch ran: there was no ref to fetch.
-		expect(runner.commands()).not.toContain(expect.stringContaining("fetch origin"));
+		expectNoCommand(runner.commands(), "fetch origin");
 		expect(runner.commands()).toContain(
 			`herdr worktree create --cwd ${CHECKOUT} --branch factory/7-retry-policy-for-webhooks --base abc123def456 --no-focus`,
 		);
@@ -1059,7 +1079,7 @@ describe("handOffTicket: the worktree sequence", () => {
 		// The handoff ran on the sibling the resolution bent to...
 		expect(runner.commands()).toContain(`git clone https://github.com/acme/billing.git ${sibling}`);
 		// ...and no fetch ran: there was no origin to fetch from.
-		expect(runner.commands()).not.toContain(expect.stringContaining("fetch origin"));
+		expectNoCommand(runner.commands(), "fetch origin");
 		expect(runner.commands()).toContain(
 			`herdr worktree create --cwd ${sibling} --branch factory/7-retry-policy-for-webhooks --base abc123def456 --no-focus`,
 		);
@@ -1123,9 +1143,9 @@ describe("handOffTicket: the worktree sequence", () => {
 		]);
 		// The pre-existing branch is reused, never recreated or re-based, and
 		// the reuse takes no fetch.
-		expect(runner.commands()).not.toContain(expect.stringContaining("worktree create"));
-		expect(runner.commands()).not.toContain(expect.stringContaining("rev-parse HEAD"));
-		expect(runner.commands()).not.toContain(expect.stringContaining("fetch origin"));
+		expectNoCommand(runner.commands(), "worktree create");
+		expectNoCommand(runner.commands(), "rev-parse HEAD");
+		expectNoCommand(runner.commands(), "fetch origin");
 	});
 
 	test("an existing branch without an open workspace attaches one and starts in its first pane", async () => {
@@ -1172,8 +1192,8 @@ describe("handOffTicket: the worktree sequence", () => {
 		expect(commands).toContain(`herdr agent start ${AGENT} --kind pi --pane pane-wt`);
 		expect(commands).toContain(`herdr agent prompt ${AGENT} ${PROMPT}`);
 		// A fresh workspace has its own first pane: no extra tab, no create.
-		expect(commands).not.toContain(expect.stringContaining("tab create"));
-		expect(commands).not.toContain(expect.stringContaining("worktree create"));
+		expectNoCommand(commands, "tab create");
+		expectNoCommand(commands, "worktree create");
 	});
 
 	test("an existing branch no worktree holds is checked out into a fresh worktree", async () => {
@@ -1226,8 +1246,8 @@ describe("handOffTicket: the worktree sequence", () => {
 		expect(commands).toContain(
 			`herdr worktree create --cwd ${CHECKOUT} --branch factory/7-retry-policy-for-webhooks --no-focus`,
 		);
-		expect(commands).not.toContain(expect.stringContaining("--base"));
-		expect(commands).not.toContain(expect.stringContaining("rev-parse HEAD"));
+		expectNoCommand(commands, "--base");
+		expectNoCommand(commands, "rev-parse HEAD");
 		expect(commands).toContain(`herdr agent start ${AGENT} --kind pi --pane pane-wt`);
 	});
 
@@ -1286,9 +1306,9 @@ describe("handOffTicket: the worktree sequence", () => {
 		expect(commands.indexOf("herdr tab close tab-1")).toBeGreaterThan(
 			commands.indexOf(`herdr agent start ${AGENT} --kind pi --pane pane-tab`),
 		);
-		expect(commands).not.toContain(expect.stringContaining("workspace close"));
-		expect(commands).not.toContain(expect.stringContaining("worktree remove"));
-		expect(commands).not.toContain(expect.stringContaining("branch -D"));
+		expectNoCommand(commands, "workspace close");
+		expectNoCommand(commands, "worktree remove");
+		expectNoCommand(commands, "branch -D");
 	});
 
 	test("a failed agent start in an attached worktree closes the attached workspace", async () => {
@@ -1337,9 +1357,9 @@ describe("handOffTicket: the worktree sequence", () => {
 		// pre-date the handoff and stay.
 		const commands = runner.commands();
 		expect(commands).toContain("herdr workspace close ws-wt");
-		expect(commands).not.toContain(expect.stringContaining("worktree remove"));
-		expect(commands).not.toContain(expect.stringContaining("branch -D"));
-		expect(commands).not.toContain(expect.stringContaining("tab close"));
+		expectNoCommand(commands, "worktree remove");
+		expectNoCommand(commands, "branch -D");
+		expectNoCommand(commands, "tab close");
 	});
 
 	test("a failed agent start on a checked-out branch removes the worktree but keeps the branch", async () => {
@@ -1397,7 +1417,7 @@ describe("handOffTicket: the worktree sequence", () => {
 		// stays.
 		const commands = runner.commands();
 		expect(commands).toContain(`herdr worktree remove --workspace ws-wt`);
-		expect(commands).not.toContain(expect.stringContaining("branch -D"));
+		expectNoCommand(commands, "branch -D");
 	});
 
 	test("a failed worktree open for a reason other than a missing worktree fails without a create", async () => {
@@ -1433,7 +1453,7 @@ describe("handOffTicket: the worktree sequence", () => {
 
 		expect(outcome.status).toBe("failed");
 		expect(reasonOf(outcome)).toBe("error: herdr is not running");
-		expect(runner.commands()).not.toContain(expect.stringContaining("worktree create"));
+		expectNoCommand(runner.commands(), "worktree create");
 	});
 
 	test("a failed agent start removes the worktree and the branch", async () => {
@@ -1527,7 +1547,7 @@ describe("handOffTicket: the worktree sequence", () => {
 		expect(reasonOf(outcome)).toContain("leftover branch factory/7-retry-policy-for-webhooks");
 		// The cleanup needs the workspace id, so it cannot run and no
 		// command ran after the failed step.
-		expect(runner.commands()).not.toContain(expect.stringContaining("worktree remove"));
+		expectNoCommand(runner.commands(), "worktree remove");
 	});
 
 	test("a refused worktree create states the line that names the failure", async () => {
@@ -1627,7 +1647,7 @@ describe("handOffTicket: the worktree sequence", () => {
 
 		// The agent is running in the worktree and can be prompted by hand.
 		expect(outcome.status).toBe("prompt-failed");
-		expect(runner.commands()).not.toContain(expect.stringContaining("worktree remove"));
+		expectNoCommand(runner.commands(), "worktree remove");
 	});
 
 	// The ticket's worktree, left on another branch by the agent that last
@@ -1704,7 +1724,7 @@ describe("handOffTicket: the worktree sequence", () => {
 			`herdr agent start ${AGENT} --kind pi --pane pane-wt`,
 			`herdr agent prompt ${AGENT} ${PROMPT}`,
 		]);
-		expect(runner.commands()).not.toContain(expect.stringContaining("worktree create"));
+		expectNoCommand(runner.commands(), "worktree create");
 	});
 
 	test("an existing branch no worktree holds creates fresh when the worktree is gone from disk", async () => {
@@ -1765,7 +1785,7 @@ describe("handOffTicket: the worktree sequence", () => {
 		expect(commands).toContain(
 			`herdr worktree create --cwd ${CHECKOUT} --branch factory/7-retry-policy-for-webhooks --no-focus`,
 		);
-		expect(commands).not.toContain(expect.stringContaining("--path"));
+		expectNoCommand(commands, "--path");
 	});
 
 	test("an existing branch no worktree holds creates fresh when the ticket's worktree is prunable", async () => {
@@ -1825,7 +1845,7 @@ describe("handOffTicket: the worktree sequence", () => {
 		expect(commands).toContain(
 			`herdr worktree create --cwd ${CHECKOUT} --branch factory/7-retry-policy-for-webhooks --no-focus`,
 		);
-		expect(commands).not.toContain(expect.stringContaining("--path"));
+		expectNoCommand(commands, "--path");
 	});
 
 	test("an existing branch no worktree holds creates fresh when the worktree list does not read", async () => {
@@ -1883,7 +1903,7 @@ describe("handOffTicket: the worktree sequence", () => {
 		expect(commands).toContain(
 			`herdr worktree create --cwd ${CHECKOUT} --branch factory/7-retry-policy-for-webhooks --no-focus`,
 		);
-		expect(commands).not.toContain(expect.stringContaining("--path"));
+		expectNoCommand(commands, "--path");
 	});
 
 	test("an open workspace on the ticket's worktree gets a fresh tab, not a create", async () => {
@@ -1953,7 +1973,7 @@ describe("handOffTicket: the worktree sequence", () => {
 			`herdr tab create --workspace ws-open --cwd ${WORKTREE_PATH} --no-focus`,
 		);
 		expect(commands).toContain(`herdr agent start ${AGENT} --kind pi --pane pane-tab`);
-		expect(commands).not.toContain(expect.stringContaining("worktree create"));
+		expectNoCommand(commands, "worktree create");
 	});
 
 	test("a path open that finds nothing falls through to the fresh create", async () => {
@@ -2070,7 +2090,7 @@ describe("handOffTicket: the worktree sequence", () => {
 
 		expect(outcome.status).toBe("failed");
 		expect(reasonOf(outcome)).toContain("the worktree will not open");
-		expect(runner.commands()).not.toContain(expect.stringContaining("worktree create"));
+		expectNoCommand(runner.commands(), "worktree create");
 	});
 });
 
@@ -2997,7 +3017,7 @@ describe("handOffTicket: the workflow handoff and the restart", () => {
 		// `herdr agent prompt <name> <prompt>`: the prompt is the last argument.
 		expect(prompt?.args.at(-1)).toBe("Previous: settled earlier\nAdd a retry policy.");
 		// No previous tab: nothing to close.
-		expect(runner.commands()).not.toContain(expect.stringContaining("tab close"));
+		expectNoCommand(runner.commands(), "tab close");
 	});
 
 	test("a stored worktree that is gone is reopened on its branch", async () => {
@@ -3039,8 +3059,8 @@ describe("handOffTicket: the workflow handoff and the restart", () => {
 		// Reopen does not recheck the branch or read HEAD: the branch is the
 		// branch, and herdr's open owns it.
 		const commands = runner.commands();
-		expect(commands).not.toContain(expect.stringContaining("branch --list"));
-		expect(commands).not.toContain(expect.stringContaining("rev-parse HEAD"));
+		expectNoCommand(commands, "branch --list");
+		expectNoCommand(commands, "rev-parse HEAD");
 		expect(commands).toContain(
 			`herdr worktree open --cwd ${CHECKOUT} --branch factory/7-retry-policy-for-webhooks --no-focus`,
 		);
@@ -3079,7 +3099,7 @@ describe("handOffTicket: the workflow handoff and the restart", () => {
 		expect(commands).toContain(
 			`herdr tab create --workspace ws-still --cwd ${CHECKOUT} --no-focus`,
 		);
-		expect(commands).not.toContain(expect.stringContaining("workspace create"));
+		expectNoCommand(commands, "workspace create");
 		expect(commands).toContain(`herdr agent start ${AGENT} --kind pi --pane pane-3`);
 		expect(commands).toContain("herdr tab close tab-prev");
 	});
@@ -3130,7 +3150,7 @@ describe("handOffTicket: the workflow handoff and the restart", () => {
 		expect(commands).toContain(
 			`herdr worktree create --cwd ${CHECKOUT} --branch factory/7-retry-policy-for-webhooks --base origin/main --no-focus`,
 		);
-		expect(commands).not.toContain(expect.stringContaining("tab create --workspace ws-live"));
+		expectNoCommand(commands, "tab create --workspace ws-live");
 	});
 
 	test("an agent that fails in a reused workspace closes the tab the handoff made", async () => {
@@ -4931,27 +4951,155 @@ describe("the one start: one pre-flight order on both paths", () => {
 	});
 });
 
-describe("the one start: one cleanup rule on every Environment kind", () => {
-	/** The Agent start failure every cleanup test here runs on. */
-	function stubStartFailure(runner: FakeRunner, pane: string): void {
-		runner.set("herdr", ["agent", "start", AGENT, "--kind", "pi", "--pane", pane], {
-			code: 1,
-			stderr: '{"error":{"code":"agent_start_failed","message":"the pane is gone"}}\n',
-		});
+describe("the one start: one stage order on both paths", () => {
+	// Story 11: the stage facts appear in the same order on every path, so the
+	// Message line reads the same progress whatever the operator asked for. The
+	// dispatch writes these stages into the durable attempt, and the Consultation
+	// launch reports them under its own id in test/consultation-operations.test.ts.
+	// This block measures the order at the start module's own interface on every
+	// path it serves: the Ticket's live Environment, the Ticket's worktree
+	// Environment, and the Consultation's.
+
+	/** Collect the stages one start reports, in the order it reports them. */
+	function stageRecorder(into: string[]): (stage: string) => void {
+		return (stage) => into.push(stage);
 	}
 
-	/** The same failure for the name a Consultation start runs under. */
-	function stubConsultationStartFailure(runner: FakeRunner, pane: string): void {
+	/**
+	 * The order every path answers with. `checking-live-checkout-safety` is the
+	 * Consultation live safety step's own stage, written by its launch before it
+	 * calls the start, so it is not part of the start's order.
+	 */
+	const START_STAGES = [
+		"resolving-repository",
+		"creating-environment",
+		"starting-agent",
+		"sending-prompt",
+	];
+
+	test("a Ticket live start reports the stages in one order", async () => {
+		const runner = new FakeRunner();
+		conventionCheckout(runner);
+		runner.set("herdr", ["workspace", "list"], { stdout: workspaceListJson([{ id: "ws-other" }]) });
+		runner.set("herdr", ["workspace", "create", "--cwd", CHECKOUT, "--no-focus"], {
+			stdout: workspaceCreateJson("ws-new"),
+		});
 		runner.set(
 			"herdr",
-			["agent", "start", "consultation-11111111", "--kind", "pi", "--pane", pane],
+			["tab", "create", "--workspace", "ws-new", "--cwd", CHECKOUT, "--no-focus"],
+			{ stdout: tabCreateJson("pane-1") },
+		);
+		const stages: string[] = [];
+
+		const outcome = await handOffTicket(ticket, defaultChoice, {
+			claim: "open",
+			config: BASE_CONFIG,
+			runner,
+			home: HOME,
+			onStage: stageRecorder(stages),
+		});
+
+		expect(outcome.status).toBe("ok");
+		expect(stages).toEqual(START_STAGES);
+	});
+
+	test("a Ticket worktree start reports the same stages in the same order", async () => {
+		const runner = new FakeRunner();
+		conventionCheckout(runner);
+		runner.set("git", ["-C", CHECKOUT, "branch", "--list", "factory/7-retry-policy-for-webhooks"], {
+			stdout: "",
+		});
+		stubRemoteDefaultBranch(runner);
+		runner.set(
+			"herdr",
+			[
+				"worktree",
+				"create",
+				"--cwd",
+				CHECKOUT,
+				"--branch",
+				"factory/7-retry-policy-for-webhooks",
+				"--base",
+				"origin/main",
+				"--no-focus",
+			],
+			{ stdout: worktreeCreateJson("ws-wt", "pane-wt") },
+		);
+		const stages: string[] = [];
+
+		const outcome = await handOffTicket(
+			ticket,
+			{ ...defaultChoice, environment: "worktree" },
 			{
-				code: 1,
-				stderr: '{"error":{"code":"agent_start_failed","message":"the pane is gone"}}\n',
+				claim: "open",
+				config: BASE_CONFIG,
+				runner,
+				home: HOME,
+				onStage: stageRecorder(stages),
 			},
 		);
-	}
 
+		expect(outcome.status).toBe("ok");
+		expect(stages).toEqual(START_STAGES);
+	});
+
+	test("a Consultation start reports the same stages in the same order", async () => {
+		const runner = new FakeRunner();
+		conventionCheckout(runner);
+		runner.set("herdr", ["workspace", "list"], {
+			stdout: workspaceListJson([{ id: "ws-live", checkoutPath: CHECKOUT }]),
+		});
+		runner.set(
+			"herdr",
+			["tab", "create", "--workspace", "ws-live", "--cwd", CHECKOUT, "--no-focus"],
+			{ stdout: tabCreateJson("pane-c1", "tab-c1") },
+		);
+		const stages: string[] = [];
+
+		const outcome = await handOffConsultation({
+			consultation: consultationRecord(),
+			config: BASE_CONFIG,
+			runner,
+			home: HOME,
+			onStage: stageRecorder(stages),
+		});
+
+		expect(outcome.status).toBe("ok");
+		expect(stages).toEqual(START_STAGES);
+	});
+
+	test("a start that never reaches its Agent reports the stages it did reach", async () => {
+		const runner = new FakeRunner();
+		conventionCheckout(runner);
+		runner.set("herdr", ["workspace", "list"], { stdout: workspaceListJson([{ id: "ws-other" }]) });
+		runner.set("herdr", ["workspace", "create", "--cwd", CHECKOUT, "--no-focus"], {
+			stdout: workspaceCreateJson("ws-new"),
+		});
+		runner.set(
+			"herdr",
+			["tab", "create", "--workspace", "ws-new", "--cwd", CHECKOUT, "--no-focus"],
+			{ stdout: tabCreateJson("pane-1") },
+		);
+		stubStartFailure(runner, "pane-1");
+		const stages: string[] = [];
+
+		const outcome = await handOffTicket(ticket, defaultChoice, {
+			claim: "open",
+			config: BASE_CONFIG,
+			runner,
+			home: HOME,
+			onStage: stageRecorder(stages),
+		});
+
+		expect(outcome.status).toBe("failed");
+		// The order is the same as far as it goes: the failure stops after the
+		// Environment stage, so the Message line never shows a stage the start did
+		// not reach.
+		expect(stages).toEqual(["resolving-repository", "creating-environment", "starting-agent"]);
+	});
+});
+
+describe("the one start: one cleanup rule on every Environment kind", () => {
 	test("a live start that creates its workspace removes its tab and that workspace", async () => {
 		const runner = new FakeRunner();
 		conventionCheckout(runner);
@@ -4984,7 +5132,7 @@ describe("the one start: one cleanup rule on every Environment kind", () => {
 		expect(commands.indexOf("herdr tab close tab-1")).toBeLessThan(
 			commands.indexOf("herdr workspace close ws-new"),
 		);
-		expect(commands).not.toContain(expect.stringContaining("branch -D"));
+		expectNoCommand(commands, "branch -D");
 	});
 
 	test("a live start in the checkout's own workspace closes only the tab it created", async () => {
@@ -5014,7 +5162,7 @@ describe("the one start: one cleanup rule on every Environment kind", () => {
 		expect(commands).toContain("herdr tab close tab-1");
 		// The workspace pre-dates the attempt: the operator's own tabs may stand
 		// in it, so it stays.
-		expect(commands).not.toContain(expect.stringContaining("workspace close"));
+		expectNoCommand(commands, "workspace close");
 	});
 
 	test("a stored live start closes the tab it created and keeps the stored workspace", async () => {
@@ -5039,7 +5187,7 @@ describe("the one start: one cleanup rule on every Environment kind", () => {
 		expect(outcome.status).toBe("failed");
 		const commands = runner.commands();
 		expect(commands).toContain("herdr tab close tab-1");
-		expect(commands).not.toContain(expect.stringContaining("workspace close"));
+		expectNoCommand(commands, "workspace close");
 	});
 
 	test("a Consultation start in its fresh workspace closes the workspace it created", async () => {
@@ -5063,7 +5211,7 @@ describe("the one start: one cleanup rule on every Environment kind", () => {
 		// tab was created for the Agent, so no tab close runs either.
 		const commands = runner.commands();
 		expect(commands).toContain("herdr workspace close ws-new");
-		expect(commands).not.toContain(expect.stringContaining("tab close"));
+		expectNoCommand(commands, "tab close");
 	});
 
 	test("a Ticket worktree start removes the checkout it created and the branch it created", async () => {
@@ -5108,7 +5256,7 @@ describe("the one start: one cleanup rule on every Environment kind", () => {
 		const commands = runner.commands();
 		expect(commands).toContain("herdr worktree remove --workspace ws-wt");
 		expect(commands).toContain(`git -C ${CHECKOUT} branch -D factory/7-retry-policy-for-webhooks`);
-		expect(commands).not.toContain(expect.stringContaining("tab close"));
+		expectNoCommand(commands, "tab close");
 	});
 
 	test("a start whose fresh tab fails to open closes the workspace it created", async () => {
@@ -5136,8 +5284,8 @@ describe("the one start: one cleanup rule on every Environment kind", () => {
 		// asked for, so a failure at the tab still takes the workspace down.
 		const commands = runner.commands();
 		expect(commands).toContain("herdr workspace close ws-new");
-		expect(commands).not.toContain(expect.stringContaining("tab close"));
-		expect(commands).not.toContain(expect.stringContaining("agent start"));
+		expectNoCommand(commands, "tab close");
+		expectNoCommand(commands, "agent start");
 	});
 
 	test("a worktree open that answers no pane id closes the workspace herdr attached", async () => {
@@ -5188,8 +5336,8 @@ describe("the one start: one cleanup rule on every Environment kind", () => {
 		const commands = runner.commands();
 		expect(commands).toContain("herdr workspace close ws-wt");
 		// The branch and the worktree git recorded pre-date the start: they stay.
-		expect(commands).not.toContain(expect.stringContaining("worktree remove"));
-		expect(commands).not.toContain(expect.stringContaining("branch -D"));
+		expectNoCommand(commands, "worktree remove");
+		expectNoCommand(commands, "branch -D");
 	});
 });
 
@@ -5349,7 +5497,7 @@ describe("the one start: the Consultation sequence at the handoff interface", ()
 		// The refusal is the branch policy, not a reuse: no worktree is opened on
 		// the branch, and nothing is removed.
 		expect(runner.commands().join("\n")).not.toContain("herdr");
-		expect(runner.commands()).not.toContain(expect.stringContaining("branch -D"));
+		expectNoCommand(runner.commands(), "branch -D");
 	});
 
 	test("a Consultation worktree start removes the worktree and the branch it created", async () => {

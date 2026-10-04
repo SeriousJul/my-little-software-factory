@@ -132,7 +132,8 @@ description: The module map of the source tree, for agents working in this repos
 	the environment the choice names through herdr, starts the agent, sends the
 	prompt, and removes what the start created when the agent never starts. The
 	Ticket caller and the Consultation caller state their facts and hand one
-	request to it.
+	request to it; only the Consultation hands a resource table with its own
+	wording, and the start confirms in that table what its cleanup removed.
 - `src/consultation/`: the Consultation rules that need no terminal, one module
 	per concept (issue #203, ADR 0096). `response-draft.ts` owns the input limit,
 	the emptiness rule, the size reason, the literal-text rule, and the bounded

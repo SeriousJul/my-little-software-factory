@@ -36,11 +36,14 @@ import type { FactoryState } from "../src/state.ts";
 import { openFactoryState } from "../src/state.ts";
 import { utf8ByteLength } from "../src/text-bounds.ts";
 import { BASE_CONFIG } from "./base-config.ts";
+import { expectNoCommand } from "./command-assertions.ts";
 import {
 	agentListJson,
 	FakeRunner,
 	herdrFocusCommands,
 	tabCreateJson,
+	workspaceCreateJson,
+	workspaceListJson,
 	worktreeCreateJson,
 	worktreeListJson,
 } from "./fake-runner.ts";
@@ -665,7 +668,7 @@ describe("Consultation operations: launch", () => {
 			workspaceId: LAUNCH.workspaceId,
 		});
 		expect(runner.commands()).toContain(`git -C ${fixture.checkout} rev-parse HEAD`);
-		expect(runner.commands()).not.toContain(expect.stringContaining("fetch origin"));
+		expectNoCommand(runner.commands(), "fetch origin");
 		expect(runner.commands()).toContain(
 			`herdr worktree create --cwd ${fixture.checkout} --branch ${branch} --base ${WORKTREE_HEAD} --no-focus`,
 		);
@@ -2104,6 +2107,57 @@ describe("Consultation operations: close", () => {
 
 		expect(runner.commands()).toContain(`herdr workspace close ${LAUNCH.workspaceId}`);
 		expect(current(fixture.state, id).state).toBe("closed");
+	});
+
+	test("closes a failed live opening whose own start already took its workspace down", async () => {
+		// Issue #213 review: a start that cleans up its own Environment confirms the
+		// rows it recorded for it. The record then holds no "Unclosed owned
+		// resources" line for a handle the plane already removed, and the operator's
+		// Close has nothing left to retry against a workspace herdr no longer holds.
+		const fixture = makeFixture();
+		const runner = new LifecycleRunner();
+		const id = uid("y");
+		const consultation = seed(fixture.state, fixture, id, { environment: "live-worktree" });
+		stubLiveCheckout(runner.inner, fixture.checkout);
+		// No workspace holds the checkout: the start creates its own, records the
+		// workspace and its root tab, and then herdr refuses its Agent start.
+		runner.inner.set("herdr", ["workspace", "list"], { stdout: workspaceListJson([]) });
+		runner.inner.set("herdr", ["workspace", "create", "--cwd", fixture.checkout, "--no-focus"], {
+			stdout: workspaceCreateJson(LAUNCH.workspaceId, LAUNCH.paneId),
+		});
+		runner.inner.set(
+			"herdr",
+			["agent", "start", agentOf(id), "--kind", "pi", "--pane", LAUNCH.paneId],
+			{
+				code: 1,
+				stderr: '{"error":{"code":"agent_start_failed","message":"the pane is gone"}}\n',
+			},
+		);
+		runner.inner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+		const harness = makeHarness(fixture, runner);
+
+		await harness.operations.launch(consultation);
+
+		const failed = current(fixture.state, id);
+		expect(failed.state).toBe("failed");
+		// The start's own cleanup took the workspace it created down.
+		expect(runner.commands()).toContain(`herdr workspace close ${LAUNCH.workspaceId}`);
+		// And it confirmed both rows it had written for that Environment.
+		expect(
+			failed.resources.map((resource) => `${resource.kind} ${resource.confirmedClosed}`).sort(),
+		).toEqual(["tab true", "workspace true"]);
+
+		await harness.operations.close(current(fixture.state, id));
+
+		const closed = current(fixture.state, id);
+		expect(closed.state).toBe("closed");
+		// One close command in the whole run: the start's own. The Close issues no
+		// second one for a workspace that is gone, and reports no recovery.
+		expect(
+			runner.commands().filter((command) => command.startsWith("herdr workspace close")),
+		).toHaveLength(1);
+		expect(statusTexts(harness).join("\n")).not.toContain("needs recovery");
+		expect(statusTexts(harness).at(-1)).toBe(`Consultation ${id.slice(0, 8)} closed`);
 	});
 });
 

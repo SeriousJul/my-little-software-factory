@@ -405,11 +405,17 @@ host = "github.com"
 			async (setup) => {
 				// The fetch the refresh loop runs through the stub stands the list:
 				// the Group header wears the marker, and the one-time note names the
-				// real path of the act.
+				// real path of the act. Both are awaited together: the note and the
+				// marker stand in one render, and a frame captured mid-render can hold
+				// the marker over a Message line row that is still blank. Reading the
+				// row out of such a frame is the race this test hit on a loaded runner.
 				const marked = await awaitFrame(
 					setup,
-					(f) => f.includes("acme/factory") && f.includes("uninit"),
-					"the uninit marker on the Group header",
+					(f) =>
+						f.includes("acme/factory") &&
+						f.includes("uninit") &&
+						messageRowOf(f).includes("Press i on one of their Group headers"),
+					"the uninit marker on the Group header with the note on the Message line",
 				);
 				expect(marked).toContain("acme/factory");
 				expect(messageRowOf(marked)).toContain("Press i on one of their Group headers");
