@@ -28,6 +28,8 @@ import {
 	createConsultationOperations,
 } from "../src/consultation-operations.ts";
 import type { Ticket } from "../src/domain/ticket.ts";
+import { createHandoffDispatch } from "../src/handoff-dispatch.ts";
+import type { Logger } from "../src/logging.ts";
 import { consultationBranchName } from "../src/naming.ts";
 import type { RepositoryMapping } from "../src/repo.ts";
 import type { CommandOptions, CommandResult, CommandRunner } from "../src/runner.ts";
@@ -47,6 +49,7 @@ import {
 	worktreeCreateJson,
 	worktreeListJson,
 } from "./fake-runner.ts";
+import { recordLogger } from "./record-logger.ts";
 
 const directories: string[] = [];
 const states: FactoryState[] = [];
@@ -273,6 +276,10 @@ function makeHarness(
 		tickets?: () => readonly Ticket[];
 		persistRepositoryMapping?: (mapping: RepositoryMapping) => Promise<string | undefined>;
 		textBatchBytes?: number;
+		/** The seat count the module's start line states (issue #220). */
+		seatCount?: () => number;
+		/** The logger the module's record lines are read back from. */
+		log?: Logger;
 	} = {},
 ): Harness {
 	const reported: (ConsultationStatus | null)[] = [];
@@ -286,6 +293,8 @@ function makeHarness(
 			config: () => fixture.config,
 			home: options.home ?? fixture.home,
 			tickets: options.tickets ?? (() => []),
+			seatCount: options.seatCount ?? (() => 0),
+			log: options.log,
 			persistRepositoryMapping: options.persistRepositoryMapping,
 			textBatchBytes: options.textBatchBytes,
 			callbacks: {
@@ -2581,281 +2590,6 @@ describe("Consultation operations: Repository serialization", () => {
 		expect(current(fixture.state, other).state).toBe("working");
 	});
 });
-test("a queued submit creates the record and its queue item, and starts nothing", () => {
-	const fixture = makeFixture();
-	const runner = new LifecycleRunner();
-	const harness = makeHarness(fixture, runner);
-
-	const consultation = harness.operations.create({
-		typeName: "grill",
-		repository: fixture.repository,
-		initialInput: "review auth",
-		queued: true,
-	});
-	expect(consultation).toEqual(
-		expect.objectContaining({ state: "queued", paneId: null, workspaceId: null }),
-	);
-	const queue = fixture.state.workQueue.items();
-	expect(queue).toHaveLength(1);
-	if (consultation === undefined) throw new Error("the queued submit created no record");
-	expect(queue[0]).toEqual(
-		expect.objectContaining({ kind: "consultation", consultationId: consultation.id }),
-	);
-	// The enqueue is not a start: no repository resolve, no environment,
-	// no agent.
-	expect(runner.commands()).toEqual([]);
-});
-
-test("the pickup re-reads the type's settings from the config before it starts", async () => {
-	const fixture = makeFixture();
-	const runner = new LifecycleRunner();
-	const harness = makeHarness(fixture, runner);
-	const consultation = harness.operations.create({
-		typeName: "grill",
-		repository: fixture.repository,
-		initialInput: "review auth",
-		queued: true,
-	});
-	if (consultation === undefined) throw new Error("the queued submit created no record");
-	const id = consultation.id;
-	// The type changes while the record waits: a new model, a new
-	// template. The pickup starts the record on the type the config holds
-	// now, not on the settings the enqueue captured.
-	fixture.config.consultationTypes.grill = {
-		agent: "pi",
-		environment: "worktree",
-		model: "review-model",
-		template: "/re-grill {input}",
-	};
-	const branch = consultationBranchName(id, "grill");
-	stubCheckout(runner.inner, fixture.checkout);
-	runner.inner.set("git", ["-C", fixture.checkout, "branch", "--list", branch], {
-		stdout: "",
-	});
-	runner.inner.set("git", ["-C", fixture.checkout, "symbolic-ref", "refs/remotes/origin/HEAD"], {
-		stdout: "refs/remotes/origin/main\n",
-	});
-	runner.inner.set(
-		"herdr",
-		[
-			"worktree",
-			"create",
-			"--cwd",
-			fixture.checkout,
-			"--branch",
-			branch,
-			"--base",
-			"origin/main",
-			"--no-focus",
-		],
-		{ stdout: worktreeCreateJson(LAUNCH.workspaceId, LAUNCH.paneId) },
-	);
-	runner.inner.set(
-		"herdr",
-		["agent", "start", agentOf(id), "--kind", "pi", "--pane", LAUNCH.paneId],
-		{ stdout: JSON.stringify({ result: { agent: { session_id: `sess-${id.slice(0, 8)}` } } }) },
-	);
-	runner.inner.set("herdr", ["agent", "prompt", agentOf(id), "/re-grill review auth"], {
-		code: 0,
-	});
-	stubPaneRead(runner.inner, LAUNCH.paneId, "Agent: opened");
-
-	const outcome = await harness.operations.pickup(id);
-
-	// The answer comes at the seat: the record left `queued` and holds its
-	// seat in `opening`, and the environment and the Agent are built behind
-	// it. Wait for that opening to settle before reading the record.
-	expect(outcome).toEqual({ kind: "started" });
-	await until(
-		() => current(fixture.state, id).state === "working",
-		"the picked-up Consultation to work",
-	);
-	const started = current(fixture.state, id);
-	expect(started).toMatchObject({
-		state: "working",
-		model: "review-model",
-		template: "/re-grill {input}",
-		renderedOpeningPrompt: "/re-grill review auth",
-		initialInput: "review auth",
-		paneId: LAUNCH.paneId,
-	});
-	// The prompt went out with the re-read template. The claim took the
-	// record's pointer with it: the store keeps an item only while its
-	// record waits, and the loop's own removal covers the answers that
-	// claimed nothing.
-	expect(runner.commands()).toContain(`herdr agent prompt ${agentOf(id)} /re-grill review auth`);
-	expect(fixture.state.workQueue.items()).toHaveLength(0);
-});
-
-test("the pickup answers at the seat and lets the opening run behind it", async () => {
-	const fixture = makeFixture();
-	const runner = new LifecycleRunner();
-	const harness = makeHarness(fixture, runner);
-	const consultation = harness.operations.create({
-		typeName: "grill",
-		repository: fixture.repository,
-		initialInput: "review auth",
-		queued: true,
-	});
-	if (consultation === undefined) throw new Error("the queued submit created no record");
-	const id = consultation.id;
-	const branch = consultationBranchName(id, "grill");
-	stubCheckout(runner.inner, fixture.checkout);
-	runner.inner.set("git", ["-C", fixture.checkout, "branch", "--list", branch], { stdout: "" });
-	runner.inner.set("git", ["-C", fixture.checkout, "symbolic-ref", "refs/remotes/origin/HEAD"], {
-		stdout: "refs/remotes/origin/main\n",
-	});
-	runner.inner.set(
-		"herdr",
-		[
-			"worktree",
-			"create",
-			"--cwd",
-			fixture.checkout,
-			"--branch",
-			branch,
-			"--base",
-			"origin/main",
-			"--no-focus",
-		],
-		{ stdout: worktreeCreateJson(LAUNCH.workspaceId, LAUNCH.paneId) },
-	);
-	runner.inner.set(
-		"herdr",
-		["agent", "start", agentOf(id), "--kind", "pi", "--pane", LAUNCH.paneId],
-		{ stdout: JSON.stringify({ result: { agent: { session_id: `sess-${id.slice(0, 8)}` } } }) },
-	);
-	runner.inner.set("herdr", ["agent", "prompt", agentOf(id), "/grill review auth"], { code: 0 });
-	stubPaneRead(runner.inner, LAUNCH.paneId, "Agent: opened");
-	// The environment build is held: this is the wait a cold clone or a slow
-	// worktree create makes an observation cycle pay, and the pickup must not
-	// make the loop - and every ticket poll in it - wait through it.
-	runner.holdWhile((command) => command.startsWith("herdr worktree create"));
-
-	const outcome = await harness.operations.pickup(id);
-
-	// The answer came at the seat: the record holds it, no Agent is up yet,
-	// and the opening is running on behind the answer.
-	expect(outcome).toEqual({ kind: "started" });
-	await until(
-		() => runner.attempts.some((c) => c.startsWith("herdr worktree create")),
-		"the held environment build",
-	);
-	expect(current(fixture.state, id)).toMatchObject({ state: "opening", paneId: null });
-	runner.release();
-	// The start the pickup handed over settles on its own, to the same end a
-	// direct launch reaches.
-	await until(
-		() => current(fixture.state, id).state === "working",
-		"the released opening to reach its Agent",
-	);
-	expect(current(fixture.state, id).paneId).toBe(LAUNCH.paneId);
-});
-
-test("a pickup whose start fails leaves the record failed with its reason", async () => {
-	const fixture = makeFixture("gpt-4o");
-	const runner = new LifecycleRunner();
-	runner.inner.setModelList("pi", ["anthropic/claude-sonnet-4-5"]);
-	const harness = makeHarness(fixture, runner);
-	const consultation = harness.operations.create({
-		typeName: "grill",
-		repository: fixture.repository,
-		initialInput: "review auth",
-		queued: true,
-	});
-	if (consultation === undefined) throw new Error("the queued submit created no record");
-	const id = consultation.id;
-
-	const outcome = await harness.operations.pickup(id);
-
-	// The claim takes the seat, and the Setting fit check runs in the
-	// opening behind it: the record fails the way a launch fails it, with
-	// the readable reason, and nothing external runs.
-	expect(outcome).toEqual({ kind: "started" });
-	await until(
-		() => current(fixture.state, id).state === "failed",
-		"the picked-up Consultation to fail",
-	);
-	expect(current(fixture.state, id)).toMatchObject({
-		state: "failed",
-		paneId: null,
-		failure: expect.stringContaining('has no model "gpt-4o"'),
-	});
-	expect(runner.commands()).toEqual([]);
-	expect(statusTexts(harness).join("\n")).toContain('has no model "gpt-4o"');
-});
-
-test("a pickup of a record that left the queue's wait starts nothing", async () => {
-	const fixture = makeFixture();
-	const runner = new LifecycleRunner();
-	const harness = makeHarness(fixture, runner);
-
-	// An opening record is not one the queue holds: the pickup refuses
-	// it and the module's launch route stays the only starter.
-	const opening = seed(fixture.state, fixture, uid("p"));
-	expect(await harness.operations.pickup(opening.id)).toEqual({ kind: "moved" });
-	expect(runner.commands()).toEqual([]);
-	// A record that is gone answers the same way.
-	expect(await harness.operations.pickup(uid("x"))).toEqual({ kind: "moved" });
-	expect(fixture.state.consultationRecord.consultations("all")).toHaveLength(1);
-});
-
-test("a pickup whose type left the config fails the record", async () => {
-	const fixture = makeFixture();
-	const runner = new LifecycleRunner();
-	const harness = makeHarness(fixture, runner);
-	const consultation = harness.operations.create({
-		typeName: "grill",
-		repository: fixture.repository,
-		initialInput: "review auth",
-		queued: true,
-	});
-	if (consultation === undefined) throw new Error("the queued submit created no record");
-	const id = consultation.id;
-	// The type the record asks for is no longer in the config.
-	delete fixture.config.consultationTypes.grill;
-
-	const outcome = await harness.operations.pickup(id);
-
-	expect(outcome).toEqual({ kind: "failed" });
-	expect(current(fixture.state, id)).toMatchObject({
-		state: "failed",
-		failure: "unknown Consultation type grill",
-	});
-	expect(runner.commands()).toEqual([]);
-	expect(statusTexts(harness).at(-1)).toContain("unknown Consultation type grill");
-});
-
-test("a queued Replacement links to its record and waits in the queue", () => {
-	const fixture = makeFixture();
-	const runner = new LifecycleRunner();
-	const harness = makeHarness(fixture, runner);
-	const failed = seed(fixture.state, fixture, uid("f"));
-	fixture.state.consultationRecord.setConsultationState(
-		failed.id,
-		"failed",
-		"the Agent went missing",
-	);
-
-	const replacement = harness.operations.replace(failed, {
-		typeName: "grill",
-		repository: fixture.repository,
-		queued: true,
-	});
-	expect(replacement).toEqual(
-		expect.objectContaining({
-			state: "queued",
-			replacementOf: failed.id,
-		}),
-	);
-	if (replacement === undefined) throw new Error("the queued replacement created no record");
-	const queue = fixture.state.workQueue.items();
-	expect(queue).toHaveLength(1);
-	expect(queue[0]).toEqual(
-		expect.objectContaining({ kind: "consultation", consultationId: replacement.id }),
-	);
-	expect(runner.commands()).toEqual([]);
-});
 describe("Consultation operations: the Work queue pickup (ADR 0034, issue #90)", () => {
 	test("a queued submit creates the record and its queue item, and starts nothing", () => {
 		const fixture = makeFixture();
@@ -2936,7 +2670,7 @@ describe("Consultation operations: the Work queue pickup (ADR 0034, issue #90)",
 		});
 		stubPaneRead(runner.inner, LAUNCH.paneId, "Agent: opened");
 
-		const outcome = await harness.operations.pickup(id);
+		const outcome = await harness.operations.pickup(id, "pickup");
 
 		// The answer comes at the seat: the record left `queued` and holds its
 		// seat in `opening`, and the environment and the Agent are built behind
@@ -3008,7 +2742,7 @@ describe("Consultation operations: the Work queue pickup (ADR 0034, issue #90)",
 		// make the loop - and every ticket poll in it - wait through it.
 		runner.holdWhile((command) => command.startsWith("herdr worktree create"));
 
-		const outcome = await harness.operations.pickup(id);
+		const outcome = await harness.operations.pickup(id, "pickup");
 
 		// The answer came at the seat: the record holds it, no Agent is up yet,
 		// and the opening is running on behind the answer.
@@ -3042,7 +2776,7 @@ describe("Consultation operations: the Work queue pickup (ADR 0034, issue #90)",
 		if (consultation === undefined) throw new Error("the queued submit created no record");
 		const id = consultation.id;
 
-		const outcome = await harness.operations.pickup(id);
+		const outcome = await harness.operations.pickup(id, "pickup");
 
 		// The claim takes the seat, and the Setting fit check runs in the
 		// opening behind it: the record fails the way a launch fails it, with
@@ -3069,10 +2803,10 @@ describe("Consultation operations: the Work queue pickup (ADR 0034, issue #90)",
 		// An opening record is not one the queue holds: the pickup refuses
 		// it and the module's launch route stays the only starter.
 		const opening = seed(fixture.state, fixture, uid("p"));
-		expect(await harness.operations.pickup(opening.id)).toEqual({ kind: "moved" });
+		expect(await harness.operations.pickup(opening.id, "pickup")).toEqual({ kind: "moved" });
 		expect(runner.commands()).toEqual([]);
 		// A record that is gone answers the same way.
-		expect(await harness.operations.pickup(uid("x"))).toEqual({ kind: "moved" });
+		expect(await harness.operations.pickup(uid("x"), "pickup")).toEqual({ kind: "moved" });
 		expect(fixture.state.consultationRecord.consultations("all")).toHaveLength(1);
 	});
 
@@ -3091,7 +2825,7 @@ describe("Consultation operations: the Work queue pickup (ADR 0034, issue #90)",
 		// The type the record asks for is no longer in the config.
 		delete fixture.config.consultationTypes.grill;
 
-		const outcome = await harness.operations.pickup(id);
+		const outcome = await harness.operations.pickup(id, "pickup");
 
 		expect(outcome).toEqual({ kind: "failed" });
 		expect(current(fixture.state, id)).toMatchObject({
@@ -3131,5 +2865,254 @@ describe("Consultation operations: the Work queue pickup (ADR 0034, issue #90)",
 			expect.objectContaining({ kind: "consultation", consultationId: replacement.id }),
 		);
 		expect(runner.commands()).toEqual([]);
+	});
+});
+
+describe("Consultation operations: the start line (issue #220)", () => {
+	/** The seats the Parallel limit counts for Consultations alone. */
+	function consultationSeats(state: FactoryState): number {
+		return state.consultationRecord.consultationsByState(["opening", "working"]).length;
+	}
+
+	/** Stub the whole opening one picked-up record runs behind its answer. */
+	function stubOpening(
+		fixture: Fixture,
+		runner: LifecycleRunner,
+		id: string,
+		handles = LAUNCH,
+	): void {
+		stubWorktreeLaunch(runner.inner, fixture.checkout, id, handles);
+		runner.inner.set("herdr", ["agent", "prompt", agentOf(id), "/grill review auth"], { code: 0 });
+		stubPaneRead(runner.inner, handles.paneId, "Agent: opened");
+	}
+
+	test("the Work queue pickup writes its start line with its mode and its seat reading", async () => {
+		const fixture = makeFixture();
+		const runner = new LifecycleRunner();
+		const lines: string[] = [];
+		const harness = makeHarness(fixture, runner, {
+			log: recordLogger(lines),
+			seatCount: () => consultationSeats(fixture.state),
+		});
+		const consultation = harness.operations.create({
+			typeName: "grill",
+			repository: fixture.repository,
+			initialInput: "review auth",
+			queued: true,
+		});
+		if (consultation === undefined) throw new Error("the queued submit created no record");
+		const id = consultation.id;
+		stubOpening(fixture, runner, id);
+
+		expect(await harness.operations.pickup(id, "pickup")).toEqual({ kind: "started" });
+		await until(
+			() => current(fixture.state, id).state === "working",
+			"the picked-up Consultation to work",
+		);
+
+		// The line is the shape the `handoff started:` and `merge started:` lines
+		// use. The name is the record's Consultation type beside the identity
+		// prefix every other Consultation line names it by. The seat reading is
+		// measured before the seat is taken: the record is a seat only after the
+		// move, so the line states the count the cap gate stood on, never a count
+		// this start raised.
+		expect(lines).toEqual([
+			`consultation started: "grill" ${id.slice(0, 8)} (mode pickup, origin consultation, seats 0/2)`,
+		]);
+	});
+
+	test("a force-dispatch start line names the cap it ran over", async () => {
+		const fixture = makeFixture();
+		const runner = new LifecycleRunner();
+		const lines: string[] = [];
+		const harness = makeHarness(fixture, runner, {
+			log: recordLogger(lines),
+			// The cap is full at the key: the reading the operator's start now ran over.
+			seatCount: () => fixture.config.maxParallelAgents,
+		});
+		const consultation = harness.operations.create({
+			typeName: "grill",
+			repository: fixture.repository,
+			initialInput: "review auth",
+			queued: true,
+		});
+		if (consultation === undefined) throw new Error("the queued submit created no record");
+		const id = consultation.id;
+		stubOpening(fixture, runner, id);
+
+		expect(await harness.operations.pickup(id, "force-dispatch")).toEqual({ kind: "started" });
+		await until(
+			() => current(fixture.state, id).state === "working",
+			"the force-dispatched Consultation to work",
+		);
+
+		expect(lines).toEqual([
+			`consultation started: "grill" ${id.slice(0, 8)} (mode force-dispatch, origin consultation, seats 2/2)`,
+		]);
+	});
+
+	test("the operator's key names its mode whatever the seat reading says", async () => {
+		// A Consultation's mode names the key, not a cap crossing (ADR 0102): the
+		// App names the start now key `force-dispatch` even when the cap has free
+		// seats, so `mode force-dispatch` beside `seats 0/2` is a legal line and a
+		// normal start, not a contradiction of ADR 0092's reading rule.
+		const fixture = makeFixture();
+		const runner = new LifecycleRunner();
+		const lines: string[] = [];
+		const harness = makeHarness(fixture, runner, {
+			log: recordLogger(lines),
+			// Nothing holds a seat at the key.
+			seatCount: () => consultationSeats(fixture.state),
+		});
+		const consultation = harness.operations.create({
+			typeName: "grill",
+			repository: fixture.repository,
+			initialInput: "review auth",
+			queued: true,
+		});
+		if (consultation === undefined) throw new Error("the queued submit created no record");
+		const id = consultation.id;
+		stubOpening(fixture, runner, id);
+
+		expect(await harness.operations.pickup(id, "force-dispatch")).toEqual({ kind: "started" });
+		await until(
+			() => current(fixture.state, id).state === "working",
+			"the Consultation the operator started to work",
+		);
+
+		expect(lines).toEqual([
+			`consultation started: "grill" ${id.slice(0, 8)} (mode force-dispatch, origin consultation, seats 0/2)`,
+		]);
+	});
+
+	test("an unlimited cap states its held seats with no limit", async () => {
+		const fixture = makeFixture();
+		fixture.config.maxParallelAgents = 0;
+		const runner = new LifecycleRunner();
+		const lines: string[] = [];
+		const harness = makeHarness(fixture, runner, {
+			log: recordLogger(lines),
+			// Work is held on two seats, and the lifted cap states none of them.
+			seatCount: () => 2,
+		});
+		const consultation = harness.operations.create({
+			typeName: "grill",
+			repository: fixture.repository,
+			initialInput: "review auth",
+			queued: true,
+		});
+		if (consultation === undefined) throw new Error("the queued submit created no record");
+		const id = consultation.id;
+		stubOpening(fixture, runner, id);
+
+		expect(await harness.operations.pickup(id, "pickup")).toEqual({ kind: "started" });
+		await until(
+			() => current(fixture.state, id).state === "working",
+			"the picked-up Consultation to work",
+		);
+
+		expect(lines).toEqual([
+			`consultation started: "grill" ${id.slice(0, 8)} (mode pickup, origin consultation, seats 2)`,
+		]);
+	});
+
+	test("a start that claims nothing writes no start line", async () => {
+		const fixture = makeFixture();
+		const runner = new LifecycleRunner();
+		const lines: string[] = [];
+		const harness = makeHarness(fixture, runner, {
+			log: recordLogger(lines),
+			seatCount: () => consultationSeats(fixture.state),
+		});
+		// A record that left the queue's wait, and a record whose type left the
+		// config: neither takes a seat, so neither leaves a start line.
+		expect(await harness.operations.pickup(uid("x"), "pickup")).toEqual({ kind: "moved" });
+		const consultation = harness.operations.create({
+			typeName: "grill",
+			repository: fixture.repository,
+			initialInput: "review auth",
+			queued: true,
+		});
+		if (consultation === undefined) throw new Error("the queued submit created no record");
+		delete fixture.config.consultationTypes.grill;
+		expect(await harness.operations.pickup(consultation.id, "force-dispatch")).toEqual({
+			kind: "failed",
+		});
+		expect(lines).toEqual([]);
+	});
+
+	test("the Work queue's pickup and the operator's force-dispatch read differently in the record", async () => {
+		// The issue #220 case, wired the way the app wires it: the real Consultation
+		// operations behind the real Handoff dispatch's Consultation seam, on one
+		// logger. `max-parallel-agents = 1`, two queued records, and the log file
+		// has to say which path took the one seat.
+		const fixture = makeFixture();
+		fixture.config.maxParallelAgents = 1;
+		const runner = new LifecycleRunner();
+		const lines: string[] = [];
+		const harness = makeHarness(fixture, runner, {
+			log: recordLogger(lines),
+			seatCount: () => consultationSeats(fixture.state),
+		});
+		const dispatch = createHandoffDispatch({
+			state: fixture.state,
+			runner,
+			config: () => fixture.config,
+			seatCount: () => consultationSeats(fixture.state),
+			home: fixture.home,
+			pickupConsultation: (consultationId, mode) => harness.operations.pickup(consultationId, mode),
+			working: () => {},
+			warning: () => {},
+			error: () => {},
+			notice: () => {},
+			clearWorking: () => {},
+			refresh: () => {},
+			starting: () => {},
+			log: recordLogger(lines),
+		});
+		const first = harness.operations.create({
+			typeName: "grill",
+			repository: fixture.repository,
+			initialInput: "review auth",
+			queued: true,
+		});
+		const second = harness.operations.create({
+			typeName: "grill",
+			repository: fixture.repository,
+			initialInput: "review the fix",
+			queued: true,
+		});
+		if (first === undefined || second === undefined)
+			throw new Error("the queued submits created no records");
+		stubOpening(fixture, runner, first.id, {
+			workspaceId: "ws-a",
+			tabId: "tab-a",
+			paneId: "pane-a",
+		});
+		stubOpening(fixture, runner, second.id, {
+			workspaceId: "ws-b",
+			tabId: "tab-b",
+			paneId: "pane-b",
+		});
+
+		// The pickup takes the one free seat for the leading row and holds the
+		// other row behind the cap it cannot cross.
+		expect(await dispatch.pickupWorkQueue()).toBe(1);
+		expect(fixture.state.workQueue.items()).toHaveLength(1);
+		// The operator's key starts the waiting row over the full cap.
+		dispatch.forceDispatchWorkQueueItem(second.id);
+
+		await until(
+			() =>
+				current(fixture.state, first.id).state === "working" &&
+				current(fixture.state, second.id).state === "working",
+			"both Consultations to reach their Agents",
+		);
+		dispatch.stop();
+
+		expect(lines).toEqual([
+			`consultation started: "grill" ${first.id.slice(0, 8)} (mode pickup, origin consultation, seats 0/1)`,
+			`consultation started: "grill" ${second.id.slice(0, 8)} (mode force-dispatch, origin consultation, seats 1/1)`,
+		]);
 	});
 });

@@ -29,7 +29,6 @@ import type { FetchedTicket, Ticket } from "../src/domain/ticket.ts";
 import { withIssueReferences } from "../src/domain/ticket.ts";
 import { resolveHandoffChoice } from "../src/handoff.ts";
 import { createHandoffDispatch, type HandoffDispatchReports } from "../src/handoff-dispatch.ts";
-import type { Logger } from "../src/logging.ts";
 import { planeActionSettingOf } from "../src/plane-action-registry.ts";
 import { runMergePullRequest } from "../src/plane-actions.ts";
 import type { CommandOptions, CommandResult } from "../src/runner.ts";
@@ -52,6 +51,7 @@ import {
 import { BASE_CONFIG } from "./base-config.ts";
 import { agentListJson, FakeRunner } from "./fake-runner.ts";
 import { FakeSource } from "./fake-source.ts";
+import { recordLogger } from "./record-logger.ts";
 
 const paths: string[] = [];
 afterEach(() => {
@@ -826,17 +826,6 @@ describe("the dispatch's ask and pickup", () => {
 		return dir;
 	}
 
-	/** The logger one test reads the record's lines back from. */
-	function record(lines: string[]): Logger {
-		return {
-			level: "info",
-			debug: () => {},
-			info: (message) => lines.push(message),
-			warn: (message) => lines.push(message),
-			error: () => {},
-		};
-	}
-
 	/**
 	 * One merge ask through the module, with the record's lines kept: the ask's
 	 * `automatic` mark decides whether the start line names the pickup or the
@@ -860,7 +849,7 @@ describe("the dispatch's ask and pickup", () => {
 			// One seat held of the limit two: the reading the start line states.
 			seatCount: () => 1,
 			home: home(),
-			log: record(lines),
+			log: recordLogger(lines),
 			...recorder(events),
 		});
 		const result = await dispatch.dispatchPlaneAction({
@@ -919,7 +908,7 @@ describe("the dispatch's ask and pickup", () => {
 			config: () => ({ ...PLANE_CONFIG, maxParallelAgents: 1 }),
 			seatCount: () => 1,
 			home: home(),
-			log: record(lines),
+			log: recordLogger(lines),
 			...recorder(events),
 		});
 		const result = await dispatch.dispatchPlaneAction({

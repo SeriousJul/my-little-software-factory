@@ -18,6 +18,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import type { FactoryConfig, TransitionOutcome } from "../src/config.ts";
+import type { StartMode } from "../src/domain/start-mode.ts";
 import type { FetchedTicket } from "../src/domain/ticket.ts";
 import { baseChoice, type HandoffChoice, type NameCollision } from "../src/handoff.ts";
 import type { HandoffDispatchOptions } from "../src/handoff-dispatch.ts";
@@ -29,7 +30,6 @@ import {
 	reportHandoffOutcome,
 	type StoredHandoffFacts,
 } from "../src/handoff-dispatch.ts";
-import type { Logger } from "../src/logging.ts";
 import { agentNameFor, cycleAgentName } from "../src/naming.ts";
 import type { CommandRunner } from "../src/runner.ts";
 import type { HandoffOrigin } from "../src/state/handoff.ts";
@@ -48,6 +48,7 @@ import {
 	worktreeOpenJson,
 } from "./fake-runner.ts";
 import { gatedRunner } from "./gated-runner.ts";
+import { recordLogger } from "./record-logger.ts";
 
 const source = { name: "issues", kind: "github-issues" } as const;
 
@@ -3244,10 +3245,12 @@ describe("the Work queue's Consultation pickup (ADR 0034, issue #90)", () => {
 	test("a freed seat starts the item, and the item leaves the queue", async () => {
 		const rigRef = rig([]);
 		const calls: string[] = [];
+		const modes: StartMode[] = [];
 		const module = withRunner(rigRef, rigRef.runner, {
 			seatCount: () => 0,
-			pickupConsultation: (id) => {
+			pickupConsultation: (id, mode) => {
 				calls.push(id);
+				modes.push(mode);
 				return Promise.resolve({ kind: "started" });
 			},
 		});
@@ -3255,8 +3258,11 @@ describe("the Work queue's Consultation pickup (ADR 0034, issue #90)", () => {
 		expect(await module.pickupWorkQueue()).toBe(1);
 		// The seat stands free: the pickup crosses to the Consultation side and
 		// the claim takes the pointer in its own write, so the queue is empty
-		// and the answer holds the seat for the rest of the cycle.
+		// and the answer holds the seat for the rest of the cycle. The mode the
+		// seam carries is the path this module ran the start on, so the
+		// Consultation's own start line can name it (issue #220).
 		expect(calls).toEqual([id]);
+		expect(modes).toEqual(["pickup"]);
 		expect(rigRef.state.workQueue.items()).toHaveLength(0);
 		expect(rigRef.events).toContain("notice:Work queue: opening Consultation 22222222");
 	});
@@ -3362,10 +3368,12 @@ describe("the force-dispatch of a Consultation queue item (issue #89, #90, ADR 0
 	test("a force-dispatch at a full cap starts the Consultation, and the line names the cap", async () => {
 		const rigRef = rig([]);
 		const calls: string[] = [];
+		const modes: StartMode[] = [];
 		const capped = withRunner(rigRef, rigRef.runner, {
 			seatCount: () => rigRef.config.maxParallelAgents,
-			pickupConsultation: (id) => {
+			pickupConsultation: (id, mode) => {
 				calls.push(id);
+				modes.push(mode);
 				return Promise.resolve({ kind: "started" });
 			},
 		});
@@ -3373,8 +3381,10 @@ describe("the force-dispatch of a Consultation queue item (issue #89, #90, ADR 0
 		capped.forceDispatchWorkQueueItem(id);
 		await untilQueueDrains(rigRef);
 		// The seam ran the start with no cap in front of it, the claim took the
-		// pointer out of the queue, and the line names the cap it ran over.
+		// pointer out of the queue, and the line names the cap it ran over. The
+		// mode names the operator's key, whatever the cap read (issue #220).
 		expect(calls).toEqual([id]);
+		expect(modes).toEqual(["force-dispatch"]);
 		expect(rigRef.state.workQueue.items()).toHaveLength(0);
 		expect(rigRef.events).toContain(
 			"notice:force-dispatched Consultation 22222222 over the Parallel limit",
@@ -3383,9 +3393,13 @@ describe("the force-dispatch of a Consultation queue item (issue #89, #90, ADR 0
 
 	test("a force-dispatch under a full cap says the pickup's own words", async () => {
 		const rigRef = rig([]);
+		const modes: StartMode[] = [];
 		const mod = withRunner(rigRef, rigRef.runner, {
 			seatCount: () => rigRef.config.maxParallelAgents - 1,
-			pickupConsultation: () => Promise.resolve({ kind: "started" }),
+			pickupConsultation: (_id, mode) => {
+				modes.push(mode);
+				return Promise.resolve({ kind: "started" });
+			},
 		});
 		queuedConsultation(rigRef.state, "22222222-1111-4111-8111-111111111111");
 		mod.forceDispatchWorkQueueItem("22222222-1111-4111-8111-111111111111");
@@ -3393,6 +3407,10 @@ describe("the force-dispatch of a Consultation queue item (issue #89, #90, ADR 0
 		expect(rigRef.state.workQueue.items()).toHaveLength(0);
 		expect(rigRef.events).toContain("notice:Work queue: opening Consultation 22222222");
 		expect(rigRef.events.some((event) => event.includes("over the Parallel limit"))).toBe(false);
+		// The Message line says the pickup's words because the cap was not
+		// crossed; the mode the seam carries still names the operator's key, so
+		// the record's start line never reads like the cycle's pickup (issue #220).
+		expect(modes).toEqual(["force-dispatch"]);
 	});
 
 	test("a force-dispatch the record out-waits names the record it found", async () => {
@@ -3878,17 +3896,6 @@ describe("the decision screen's route close", () => {
 });
 
 describe("the record lines", () => {
-	/** The logger one test reads the record's lines back from. */
-	function record(lines: string[]): Logger {
-		return {
-			level: "info",
-			debug: () => {},
-			info: (message) => lines.push(message),
-			warn: (message) => lines.push(message),
-			error: () => {},
-		};
-	}
-
 	test("a claimed start leaves one line, and a refused claim leaves its reason", async () => {
 		const rigRef = rig([FIRST]);
 		const lines: string[] = [];
@@ -3896,7 +3903,7 @@ describe("the record lines", () => {
 		// first call: only the claim runs, and the settle never meets the
 		// state this test closes behind it.
 		const hold = gatedRunner(rigRef.runner, () => true);
-		const dispatch = withRunner(rigRef, hold.runner, { log: record(lines) });
+		const dispatch = withRunner(rigRef, hold.runner, { log: recordLogger(lines) });
 		rigRef.dispatch = dispatch;
 		const first = await start(rigRef, FIRST, "open");
 		expect(first).toMatchObject({ ok: true });
@@ -3923,7 +3930,7 @@ describe("the record lines", () => {
 		// The cap is full at the ask, so the factory's automatic ask only enqueues
 		// its row, and one seat frees for the next pass.
 		const waiting = withRunner(rigRef, hold.runner, {
-			log: record(lines),
+			log: recordLogger(lines),
 			seatCount: () => rigRef.config.maxParallelAgents,
 		});
 		await expect(
@@ -3940,7 +3947,7 @@ describe("the record lines", () => {
 		// The next cycle's pickup takes the row for the free seat: the line names
 		// the pickup, never the ask that made the row.
 		const picking = withRunner(rigRef, hold.runner, {
-			log: record(lines),
+			log: recordLogger(lines),
 			seatCount: () => rigRef.config.maxParallelAgents - 1,
 		});
 		expect(await picking.pickupWorkQueue()).toBe(1);
@@ -3958,7 +3965,7 @@ describe("the record lines", () => {
 		const lines: string[] = [];
 		const hold = gatedRunner(rigRef.runner, () => true);
 		const mod = withRunner(rigRef, hold.runner, {
-			log: record(lines),
+			log: recordLogger(lines),
 			// Work is held on two seats. The lifted cap leaves a free seat for
 			// every waiting start, so the ask's own pass takes this row.
 			seatCount: () => 2,
@@ -3983,7 +3990,7 @@ describe("the record lines", () => {
 		// and its seat stays held while the next start reads the count.
 		const hold = gatedRunner(rigRef.runner, () => true);
 		const mod = withRunner(rigRef, hold.runner, {
-			log: record(lines),
+			log: recordLogger(lines),
 			seatCount: () => rigRef.state.handoff.openAttemptTickets().length,
 		});
 		rigRef.dispatch = mod;

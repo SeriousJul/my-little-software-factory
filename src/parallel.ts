@@ -130,3 +130,17 @@ export function overParallelLimit(limit: number, seatCount: number): boolean {
 export function parallelSeatText(seats: number, limit: number): string {
 	return limit === 0 ? `${seats}` : `${seats}/${limit}`;
 }
+
+/**
+ * The seat field a start line states (issue #209, issue #220): the held seats
+ * beside the limit they are measured against, behind its `seats` word.
+ *
+ * Three start lines carry the same measurement in the same words -
+ * `handoff started:`, `merge started:`, and `consultation started:` - and each
+ * belongs to a different module. The field's text lives here beside the count
+ * rule and the limit text rule, so the three lines cannot drift the way
+ * `parallelSeatText` keeps the count from drifting.
+ */
+export function parallelSeatReading(seats: number, limit: number): string {
+	return `seats ${parallelSeatText(seats, limit)}`;
+}
