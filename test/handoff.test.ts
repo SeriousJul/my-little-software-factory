@@ -5550,6 +5550,42 @@ describe("the one start: a command that raises", () => {
 		expect(recorded).toEqual(["workspace ws-cwt", "worktree ws-cwt", "tab tab-ws-cwt"]);
 		expect(confirmed.sort()).toEqual(recorded.sort());
 	});
+
+	test("a Consultation start in its fresh live workspace confirms the tab row it recorded", async () => {
+		const runner = new FakeRunner();
+		conventionCheckout(runner);
+		runner.set("herdr", ["workspace", "list"], { stdout: workspaceListJson([]) });
+		runner.set("herdr", ["workspace", "create", "--cwd", CHECKOUT, "--no-focus"], {
+			stdout: workspaceCreateJson("ws-new", "pane-c1"),
+		});
+		runner.reject(
+			"herdr",
+			["agent", "start", "consultation-11111111", "--kind", "pi", "--pane", "pane-c1"],
+			RAISED,
+		);
+		const recorded: string[] = [];
+		const confirmed: string[] = [];
+
+		const outcome = await handOffConsultation({
+			consultation: consultationRecord(),
+			config: BASE_CONFIG,
+			runner,
+			home: HOME,
+			onResource: (kind, resourceId) => recorded.push(`${kind} ${resourceId}`),
+			onResourceRemoved: (kind, resourceId) => confirmed.push(`${kind} ${resourceId}`),
+		});
+
+		expect(outcome.status).toBe("failed");
+		expect(reasonOf(outcome)).toContain(RAISED);
+		const commands = runner.commands();
+		expect(commands).toContain("herdr workspace close ws-new");
+		expectNoCommand(commands, "tab close");
+		// The live half of the same rule: the workspace close takes the root tab with
+		// it, and the caller's table confirms that row under the kind the start wrote
+		// it under, not under a second copy of the word.
+		expect(recorded).toEqual(["workspace ws-new", "tab tab-ws-new"]);
+		expect(confirmed.sort()).toEqual(recorded.sort());
+	});
 });
 
 describe("the one start: the Consultation sequence at the handoff interface", () => {
