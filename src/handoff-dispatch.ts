@@ -25,7 +25,7 @@ import {
 	type OwnNameKnowledge,
 } from "./handoff.ts";
 import type { Logger } from "./logging.ts";
-import { overParallelLimit, parallelSeatText } from "./parallel.ts";
+import { overParallelLimit, parallelSeatReading } from "./parallel.ts";
 import { evaluatePlacement } from "./placement.ts";
 import { isPlaneActionTaskType, planeActionSettingOf } from "./plane-action-registry.ts";
 import { runMergePullRequest } from "./plane-actions.ts";
@@ -1521,13 +1521,11 @@ class HandoffDispatchModule implements HandoffDispatch {
 
 	/**
 	 * The seat reading a start line states (issue #209): the held seats of the
-	 * shared Parallel limit count, beside the limit they are measured against.
-	 * An unlimited cap states no limit, the way the mode cell states none, and
-	 * the shared text rule decides that for both readers.
+	 * shared Parallel limit count, in the shared field text a Consultation start
+	 * line states it in too.
 	 */
 	private seatReading(): string {
-		const limit = this.config().maxParallelAgents;
-		return `seats ${parallelSeatText(this.seatCount(), limit)}`;
+		return parallelSeatReading(this.seatCount(), this.config().maxParallelAgents);
 	}
 
 	closeCleanup(

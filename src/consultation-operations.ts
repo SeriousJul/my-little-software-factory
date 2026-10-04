@@ -36,7 +36,7 @@ import type { Logger } from "./logging.ts";
 import { consultationAgentName } from "./naming.ts";
 import { HerdrAgentReader, matchConsultationAgent } from "./observation.ts";
 import { serializeRepositoryOperation } from "./operation-serializer.ts";
-import { parallelSeatText } from "./parallel.ts";
+import { parallelSeatReading } from "./parallel.ts";
 import {
 	type RepositoryMapping,
 	type ResolvedRepository,
@@ -119,7 +119,8 @@ export interface ConsultationOperationsOptions {
 	 * limit gate and the mode cell read (ADR 0034). The start line's seat reading
 	 * is measured through this seam before the start takes its own seat (issue
 	 * #220), so it names the count the cap gate stood on, never a count this
-	 * start raised.
+	 * start raised. The start line is this module's only reader of it, so the
+	 * read runs only where a logger stands to state the line.
 	 */
 	seatCount: () => number;
 	/**
@@ -401,9 +402,11 @@ export class ConsultationOperations {
 	 *
 	 * `mode` is the path that ran the start (CONTEXT.md "Start mode", issue
 	 * #220): the Work queue's `pickup` for the pass that takes a free seat, and
-	 * the `force-dispatch` for the operator's key that starts the record over a
-	 * full cap. The caller names the path it ran the start on; this module owns
-	 * the line that states it, and the seat reading it states.
+	 * the `force-dispatch` for the operator's start now key on the record. The
+	 * mode names the key, never a cap crossing: the caller names the key's mode
+	 * whatever the seat count reads, so `mode force-dispatch` beside a reading
+	 * under the limit is a normal start. This module owns the line that states
+	 * the mode and the seat reading it states.
 	 *
 	 * The record already holds the operator's ask, and the start re-reads the
 	 * Consultation type's settings from the config - the record waited for a
@@ -450,10 +453,19 @@ export class ConsultationOperations {
 			template: type.template,
 			renderedOpeningPrompt: renderConsultationPrompt(type.template, current.initialInput),
 		});
-		// The seat reading the start line states, measured before this start takes
-		// its own seat (issue #220): the count the Parallel limit gate stood on,
-		// the way the `handoff started:` and `merge started:` lines state theirs.
-		const seats = this.seatCount();
+		// The Consultation start line, in the shape the plane's other start lines
+		// use (issue #220): the record's Consultation type beside the identity
+		// prefix every other Consultation line names it by, the path that ran the
+		// start, the origin word the Work queue stands a Consultation row under,
+		// and the seat reading. The reading is measured here, before this start
+		// takes its own seat, so it names the count the Parallel limit gate stood
+		// on, never a count this start raised. The line is this module's only
+		// reader of the seat count, so a module with no logger runs no read.
+		const startLine =
+			this.log === undefined
+				? undefined
+				: `consultation started: "${current.typeName}" ${current.id.slice(0, 8)} ` +
+					`(mode ${mode}, origin consultation, ${this.seatReading(this.seatCount())})`;
 		// The atomic step is the seat: the record moves to `opening` only if it
 		// is still `queued` or `unscheduled`, so a close or a delete that
 		// raced the start wins the record and the start runs nothing.
@@ -466,15 +478,8 @@ export class ConsultationOperations {
 			// The record went away between the move and the re-read.
 			return Promise.resolve({ kind: "moved" });
 		}
-		// The Consultation start line, in the shape the plane's other start lines
-		// use (issue #220): the record's Consultation type beside the identity
-		// prefix every other Consultation line names it by, the path that took the
-		// seat, the origin word the Work queue stands a Consultation row under, and
-		// the seat reading.
-		this.log?.info(
-			`consultation started: "${current.typeName}" ${current.id.slice(0, 8)} ` +
-				`(mode ${mode}, origin consultation, ${this.seatReading(seats)})`,
-		);
+		// The start claimed the seat, so the start line goes to the log file.
+		if (startLine !== undefined) this.log?.info(startLine);
 		// No await sits between the seat move and this call, so the record holds
 		// no other opening operation: the launch always takes the job it is
 		// handed, and reports its own outcome on the record and the Message line.
@@ -485,12 +490,13 @@ export class ConsultationOperations {
 
 	/**
 	 * The seat reading a Consultation start line states (issue #220): the held
-	 * seats beside the Parallel limit they are measured against. An unlimited cap
-	 * states no limit, the way the mode cell states none, and the shared text
-	 * rule decides that for both readers.
+	 * seats beside the Parallel limit they are measured against, in the shared
+	 * field text the `handoff started:` and `merge started:` lines state it in.
+	 * An unlimited cap states no limit, the way the mode cell states none, and
+	 * the shared rule decides that for every reader.
 	 */
 	private seatReading(seats: number): string {
-		return `seats ${parallelSeatText(seats, this.config().maxParallelAgents)}`;
+		return parallelSeatReading(seats, this.config().maxParallelAgents);
 	}
 
 	/**

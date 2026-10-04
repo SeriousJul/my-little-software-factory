@@ -16,6 +16,7 @@ import {
 	type ParallelSeatFacts,
 	type ParallelSeatTicketFact,
 	parallelSeatCount,
+	parallelSeatReading,
 	parallelSeatText,
 } from "../src/parallel.ts";
 
@@ -219,5 +220,14 @@ describe("parallelSeatCount", () => {
 		expect(parallelSeatText(1, 2)).toBe("1/2");
 		expect(parallelSeatText(3, 2)).toBe("3/2");
 		expect(parallelSeatText(3, 0)).toBe("3");
+	});
+
+	test("the start line's seat field names a limit only where one stands", () => {
+		// Three start lines - `handoff started:`, `merge started:`, and
+		// `consultation started:` - belong to two modules, and both state the
+		// reading through this one field text (issue #209, issue #220).
+		expect(parallelSeatReading(1, 2)).toBe("seats 1/2");
+		expect(parallelSeatReading(3, 2)).toBe("seats 3/2");
+		expect(parallelSeatReading(3, 0)).toBe("seats 3");
 	});
 });

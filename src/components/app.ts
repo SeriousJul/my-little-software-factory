@@ -3517,9 +3517,10 @@ export function App({
 				// seam with the cap skipped. The operations own every line the
 				// start or its failure leaves; the key names the cap when the seat
 				// count stood over it at the key, the way the queue's force-
-				// dispatch line does, and says when a race out-waited it. The key
-				// is the operator's own start over the cap, so the record's start
-				// line reads `force-dispatch` (issue #220).
+				// dispatch line does, and says when a race out-waited it. The key is
+				// the operator's own start on the record, so the record's start line
+				// reads `force-dispatch` whatever the seat count reads (issue #220,
+				// ADR 0102).
 				"consultation-start-now": ({ facts }) => {
 					if (!consultationSectionFacts(facts)) return;
 					const selected = facts.selectedConsultation;

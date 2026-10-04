@@ -13,5 +13,10 @@
  * the Handoff dispatch names it for a Handoff and for a Plane action, and the
  * Consultation operations name it for a Consultation. Each module owns its own
  * start line, and both read this one name for the path.
+ *
+ * A Consultation's `force-dispatch` names the operator's key on the record,
+ * not a crossing of the Parallel limit (ADR 0102): the Consultation section's
+ * start now key names that mode whatever the seat count reads, so its start
+ * line can read `mode force-dispatch` beside a count under the limit.
  */
 export type StartMode = "pickup" | "force-dispatch" | "direct-ask";
