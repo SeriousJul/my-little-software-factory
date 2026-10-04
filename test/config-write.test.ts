@@ -26,6 +26,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { configToToml, type FactoryConfig, loadConfigFile } from "../src/config.ts";
 import {
+	type ConfigWriteMode,
 	configWriteLine,
 	writeConfigFile,
 	writeFactWithConfirmation,
@@ -1115,6 +1116,493 @@ describe("the config write-back (ADR 0103)", () => {
 		expect(reloaded.repos).toEqual({ "github.com/acme/billing": "/home/me/src/billing_1" });
 		expect(reloaded.sources.map((source) => source.name)).toEqual(["acme/factory-pull-requests"]);
 	});
+});
+
+// ---------------------------------------------------------------------------
+// What the line scan reads, and what a fallback costs (issue #228)
+// ---------------------------------------------------------------------------
+
+/**
+ * The shapes the line scan does not read, measured instead of asserted by rule.
+ *
+ * The scan reads a table header, a key assignment whose value closes on its own
+ * line - a plain string, an inline table written on one line - and the string
+ * forms a config file carries: a basic string with its escapes, a literal
+ * string, and the multiline form of each. It does not read a value that runs
+ * past the end of its line (a multiline array, an inline table written across
+ * lines), a dotted key, or any other TOML form the plane's own serializer does
+ * not write.
+ *
+ * The rule says such a shape costs the operator their comments as a named full
+ * rewrite. The tables below measure that cost rather than trust the rule: each
+ * case restates one shape in the operator's file, runs every write-back over it,
+ * and records the mode the write lands as, the comment lines that survive it and
+ * the ones that do not, and the Message line the write leaves. The shapes the
+ * scan reads today stand in the second table, so a change to the scan that moves
+ * a shape from the group it reads into the group it does not turns a record red
+ * before an operator meets it.
+ *
+ * The plane meets an unread shape through an edit made while it runs: the
+ * startup loader refuses some of these shapes outright. A shape the loader does
+ * accept stands `fromShape`, so the plane starts by holding what that file says.
+ */
+
+/** The `[repos]` line the plane holds in the operator's fixture file. */
+const HELD_MAPPING_LINE = '"github.com/acme/factory" = "/home/me/src/factory"';
+/** The `[[sources]]` block the plane holds in the operator's fixture file. */
+const HELD_SOURCE_BLOCK = [
+	"[[sources]]",
+	'name = "acme-issues"',
+	'kind = "github-issues"',
+	"refresh-interval-seconds = 60",
+	'repositories = [ "acme/factory" ]',
+].join("\n");
+
+/** The operator's file with the mapping line the plane holds restated as `shape`. */
+function withReposShape(shape: string): string {
+	return operatorFile("/home/me/src/factory").replace(HELD_MAPPING_LINE, shape);
+}
+
+/** The operator's file with the source block the plane holds restated as `shape`. */
+function withSourceShape(shape: string): string {
+	return operatorFile("/home/me/src/factory").replace(HELD_SOURCE_BLOCK, shape);
+}
+
+/** One write-back the plane does, with the words its Message line carries. */
+interface WriteBack {
+	readonly name: string;
+	/** What the plane wrote, handed to `configWriteLine`. */
+	readonly written: string;
+	readonly updated: (config: FactoryConfig) => FactoryConfig;
+}
+
+const ADD_A_MAPPING: WriteBack = {
+	name: "the mapping write",
+	written: "saved the mapping",
+	updated: (config) => ({
+		...config,
+		repos: { ...config.repos, "github.com/acme/billing": "/home/me/src/billing_1" },
+	}),
+};
+
+const REPOINT_A_HELD_MAPPING: WriteBack = {
+	name: "the mapping write on a key the plane already holds",
+	written: "saved the mapping",
+	updated: (config) => ({
+		...config,
+		repos: { ...config.repos, "github.com/acme/factory": "/home/me/src/factory_2" },
+	}),
+};
+
+const APPEND_A_SOURCE: WriteBack = {
+	name: "the Repository init's source write",
+	written: "registered 1 new source",
+	updated: (config) => ({ ...config, sources: [...config.sources, pullRequestSource()] }),
+};
+
+/** The init's re-init of a repository whose sources already stand: nothing new to write. */
+const NOTHING_NEW: WriteBack = {
+	name: "a write-back that holds nothing new",
+	written: "",
+	updated: (config) => config,
+};
+
+/** What one write-back costs a file written in one shape. */
+interface ShapeCost {
+	mode: ConfigWriteMode;
+	/** The operator's comment lines that still stand in the file the write left. */
+	commentsKept: string[];
+	/** The operator's comment lines the write dropped. */
+	commentsLost: string[];
+	/** The Message line the write left, with the config file shown as `<file>`. */
+	message: string;
+	/** The source names the file carries after the write. */
+	sources: string[];
+}
+
+/**
+ * Run one write-back over `file` and report what it cost.
+ *
+ * By default the plane starts from the operator's readable file, and the shape
+ * lands as an edit made while the plane runs.
+ */
+async function costOfWriteBack(
+	file: string,
+	writeBack: WriteBack,
+	{ fromShape = false }: { fromShape?: boolean } = {},
+): Promise<ShapeCost> {
+	const temp = inTempDir();
+	const path = temp("config.toml");
+	writeFileSync(path, fromShape ? file : operatorFile("/home/me/src/factory"), "utf8");
+	const { config } = await loadConfigFile(path);
+	if (!fromShape) writeFileSync(path, file, "utf8");
+	const fact = await writeConfigFile(path, writeBack.updated(config));
+	const written = readFileSync(path, "utf8");
+	const commentsKept = commentLines(written);
+	const { config: reloaded } = await loadConfigFile(path);
+	return {
+		mode: fact.mode,
+		commentsKept,
+		commentsLost: commentLines(file).filter((line) => !commentsKept.includes(line)),
+		message: configWriteLine(fact, writeBack.written).replaceAll(path, "<file>"),
+		sources: reloaded.sources.map((source) => source.name),
+	};
+}
+
+/** One write-back's recorded cost on one shape. */
+interface CostRecord {
+	readonly via: WriteBack;
+	readonly mode: ConfigWriteMode;
+	/** Whether the write drops every comment line the operator wrote, or none of them. */
+	readonly commentsLost: "all" | "none";
+	/** The Message line the write leaves, with the config file shown as `<file>`. */
+	readonly message: string;
+	/** The source names the file carries after the write, for a shape that costs more than prose. */
+	readonly sources?: readonly string[];
+}
+
+/** One shape, why the scan reads it or does not, and what each write-back costs on it. */
+interface ShapeRecord {
+	readonly shape: string;
+	readonly why: string;
+	readonly file: string;
+	/** The plane starts from the shaped file instead of meeting the shape mid-run. */
+	readonly fromShape?: boolean;
+	readonly costs: readonly CostRecord[];
+}
+
+/** Every write-back pays the full rewrite on a file the check will not vouch for. */
+function rewriteCosts(): CostRecord[] {
+	return [
+		{
+			via: ADD_A_MAPPING,
+			mode: "rewrite",
+			commentsLost: "all",
+			message:
+				"saved the mapping in <file>; the whole config file was rewritten, " +
+				"and the comments in it did not survive",
+		},
+		{
+			via: REPOINT_A_HELD_MAPPING,
+			mode: "rewrite",
+			commentsLost: "all",
+			message:
+				"saved the mapping in <file>; the whole config file was rewritten, " +
+				"and the comments in it did not survive",
+		},
+		{
+			via: APPEND_A_SOURCE,
+			mode: "rewrite",
+			commentsLost: "all",
+			message:
+				"registered 1 new source in <file>; the whole config file was rewritten, " +
+				"and the comments in it did not survive",
+		},
+		{
+			via: NOTHING_NEW,
+			mode: "rewrite",
+			commentsLost: "all",
+			message:
+				"the whole config file at <file> was rewritten, and the comments in it did not survive",
+		},
+	];
+}
+
+/** Every write-back keeps its section edit on a file whose shapes the scan reads. */
+function sectionEditCosts(): CostRecord[] {
+	return [
+		{
+			via: ADD_A_MAPPING,
+			mode: "sections",
+			commentsLost: "none",
+			message: "saved the mapping in <file>",
+		},
+		{
+			via: REPOINT_A_HELD_MAPPING,
+			mode: "sections",
+			commentsLost: "none",
+			message: "saved the mapping in <file>",
+		},
+		{
+			via: APPEND_A_SOURCE,
+			mode: "sections",
+			commentsLost: "none",
+			message: "registered 1 new source in <file>",
+		},
+	];
+}
+
+/**
+ * The same write-backs without the re-point.
+ *
+ * A shape the scan reads as a string, but cannot write in place, keeps its
+ * section edit only while the plane leaves that line alone. The write that must
+ * put a new value on such a line is recorded in the table above.
+ */
+function sectionEditsThatLeaveTheLineAlone(): CostRecord[] {
+	return sectionEditCosts().filter((cost) => cost.via !== REPOINT_A_HELD_MAPPING);
+}
+
+const UNREAD_SHAPE_COSTS: readonly ShapeRecord[] = [
+	{
+		shape: "a multiline array on a key the plane holds",
+		why: "the value runs past the end of its line, and an array is not a checkout path",
+		file: withReposShape('"github.com/acme/factory" = [\n\t"/home/me/src/factory",\n]'),
+		costs: rewriteCosts(),
+	},
+	{
+		shape: "an inline table written across lines on a key the plane holds",
+		why: "the value runs past the end of its line, and a table is not a checkout path",
+		file: withReposShape('"github.com/acme/factory" = {\n\tpath = "/home/me/src/factory",\n}'),
+		costs: rewriteCosts(),
+	},
+	{
+		shape: "a dotted key in the [repos] table",
+		why: "the scan reads no dotted key, and the loader refuses the sub-table one opens inside [repos]",
+		file: withReposShape(`${HELD_MAPPING_LINE}\nacme.factory = "/home/me/src/other"`),
+		costs: rewriteCosts(),
+	},
+	{
+		shape: "a dotted key naming a key the plane holds",
+		why: "the scan reads no dotted key, so the line the plane would rewrite is never found",
+		file: withReposShape('"github.com/acme/factory".path = "/home/me/src/factory"'),
+		costs: rewriteCosts(),
+	},
+	{
+		shape: "a multiline string on a key the plane holds, restated while the plane runs",
+		why:
+			"the scan leaves the operator's lines alone, so the file no longer carries the value the " +
+			"plane holds, and the check refuses every write-back - even one that holds nothing new",
+		file: withReposShape('"github.com/acme/factory" = """\n/home/me/src/factory\n"""'),
+		costs: rewriteCosts(),
+	},
+	{
+		shape:
+			"a multiline string on a key the plane holds, when the plane must write a new value there",
+		why: "the plane's serializer has no in-place form for a value that spans lines",
+		file: withReposShape('"github.com/acme/factory" = """\n/home/me/src/factory\n"""'),
+		fromShape: true,
+		costs: [
+			{
+				via: REPOINT_A_HELD_MAPPING,
+				mode: "rewrite",
+				commentsLost: "all",
+				message:
+					"saved the mapping in <file>; the whole config file was rewritten, " +
+					"and the comments in it did not survive",
+			},
+		],
+	},
+	{
+		shape: "a multiline array on a key the plane does not hold",
+		why: "the line is the operator's own and stays, but the loader refuses an array where a path stands",
+		file: withReposShape(`${HELD_MAPPING_LINE}\nacme-other = [\n\t"/home/me/src/other",\n]`),
+		costs: rewriteCosts(),
+	},
+	{
+		shape: "a dotted key inside a [[sources]] block the plane holds",
+		why: "the block stands byte for byte, and the loader refuses what the dotted key makes of it",
+		file: withSourceShape(`${HELD_SOURCE_BLOCK}\nauth.note = "written by hand"`),
+		costs: rewriteCosts(),
+	},
+	{
+		shape: "a multiline array inside a [[sources]] block the plane holds",
+		why: "the scan names the block, so no line inside it is ever rewritten and nothing is lost",
+		file: withSourceShape(
+			[
+				"[[sources]]",
+				'name = "acme-issues"',
+				'kind = "github-issues"',
+				"refresh-interval-seconds = 60",
+				"repositories = [",
+				'\t"acme/factory",',
+				"]",
+			].join("\n"),
+		),
+		costs: [
+			{
+				via: ADD_A_MAPPING,
+				mode: "sections",
+				commentsLost: "none",
+				message: "saved the mapping in <file>",
+			},
+			{
+				via: REPOINT_A_HELD_MAPPING,
+				mode: "sections",
+				commentsLost: "none",
+				message: "saved the mapping in <file>",
+			},
+			{
+				via: APPEND_A_SOURCE,
+				mode: "sections",
+				commentsLost: "none",
+				message: "registered 1 new source in <file>",
+			},
+			{ via: NOTHING_NEW, mode: "unchanged", commentsLost: "none", message: "" },
+		],
+	},
+	{
+		shape: "a source name written as a multiline string inside a block the plane holds",
+		why: "the scan cannot name the block, so the plane appends its own copy of the source it holds",
+		file: withSourceShape(
+			[
+				"[[sources]]",
+				'name = """',
+				"acme-issues",
+				'"""',
+				'kind = "github-issues"',
+				"refresh-interval-seconds = 60",
+				'repositories = [ "acme/factory" ]',
+			].join("\n"),
+		),
+		costs: [
+			{
+				via: ADD_A_MAPPING,
+				mode: "sections",
+				commentsLost: "none",
+				message: "saved the mapping in <file>",
+				sources: ["acme-issues\n", "acme-issues"],
+			},
+			{
+				via: REPOINT_A_HELD_MAPPING,
+				mode: "sections",
+				commentsLost: "none",
+				message: "saved the mapping in <file>",
+				sources: ["acme-issues\n", "acme-issues"],
+			},
+			{
+				via: APPEND_A_SOURCE,
+				mode: "sections",
+				commentsLost: "none",
+				message: "registered 1 new source in <file>",
+				sources: ["acme-issues\n", "acme-issues", "acme/factory-pull-requests"],
+			},
+			{
+				via: NOTHING_NEW,
+				mode: "sections",
+				commentsLost: "none",
+				message: "",
+				sources: ["acme-issues\n", "acme-issues"],
+			},
+		],
+	},
+];
+
+const READ_SHAPE_COSTS: readonly ShapeRecord[] = [
+	{
+		shape: "a literal string on a key the plane holds",
+		why: "the value closes on its own line",
+		file: withReposShape("'github.com/acme/factory' = '/home/me/src/factory'"),
+		costs: sectionEditCosts(),
+	},
+	{
+		shape: "a basic string with its escapes on a key the plane holds",
+		why: "the value closes on its own line, and the scan decodes its escapes",
+		file: withReposShape('"github.com/acme/factory" = "C:\\\\Users\\\\me\\\\src\\\\factory"'),
+		fromShape: true,
+		costs: sectionEditCosts(),
+	},
+	{
+		shape: "an inline table written on one line on a key the plane holds",
+		why: "the value closes on its own line, so the plane writes its own value over the line it owns",
+		file: withReposShape('"github.com/acme/factory" = { path = "/x" }'),
+		costs: sectionEditCosts(),
+	},
+	{
+		shape: "a multiline basic string on a key the plane holds",
+		why:
+			"the scan reads the string, so the key counts as standing and no second line lands " +
+			"beside it; a write that must re-point that key is the rewrite the table above records",
+		file: withReposShape('"github.com/acme/factory" = """\n/home/me/src/factory\n"""'),
+		fromShape: true,
+		costs: sectionEditsThatLeaveTheLineAlone(),
+	},
+	{
+		shape: "a multiline literal string on a key the plane holds",
+		why:
+			"the scan reads the string, so the key counts as standing and no second line lands " +
+			"beside it; a write that must re-point that key is the rewrite the table above records",
+		file: withReposShape("'github.com/acme/factory' = '''\n/home/me/src/factory\n'''"),
+		fromShape: true,
+		costs: sectionEditsThatLeaveTheLineAlone(),
+	},
+	{
+		shape:
+			"a multiline string on a key the plane holds whose prose reads like a mapping the plane holds",
+		why: "the scan knows the line stands inside the string, so it is prose and never a key line to rewrite",
+		file: withReposShape(
+			'"github.com/acme/factory" = """\nWhy this checkout sits here, in my own words.\n"github.com/acme/billing" = not-a-mapping\n"""',
+		),
+		fromShape: true,
+		costs: sectionEditsThatLeaveTheLineAlone(),
+	},
+	{
+		shape: "a multiline literal string whose prose reads like a table header and a comment",
+		why: "the scan tracks the string, so its prose is never a line of the file's own tables",
+		file: operatorFile("/home/me/src/factory").replace(
+			'template = """Review pull request {external-key}: {title}."""',
+			[
+				"template = '''Review prose.",
+				"",
+				"[[repos]] is a line of this prompt, not a table the file opens.",
+				'It holds " a quote and a # hash.',
+				"'''",
+			].join("\n"),
+		),
+		costs: sectionEditCosts(),
+	},
+	{
+		shape: "a comment riding on the key line the plane holds",
+		why: "the scan reads the comment apart from the value, so the plane rewrites the value and keeps the note",
+		file: withReposShape(`${HELD_MAPPING_LINE} # the checkout I keep`),
+		costs: sectionEditCosts(),
+	},
+];
+
+/** Compare one measured cost against the record a reviewer reads. */
+function expectCost(measured: ShapeCost, record: CostRecord, file: string): void {
+	const where = record.via.name;
+	expect(measured.mode, `${where}: the mode the write landed as`).toBe(record.mode);
+	expect(measured.commentsLost, `${where}: the comment lines the write dropped`).toEqual(
+		record.commentsLost === "all" ? commentLines(file) : [],
+	);
+	expect(measured.commentsKept, `${where}: the comment lines the write kept`).toEqual(
+		record.commentsLost === "all" ? [] : commentLines(file),
+	);
+	expect(measured.message, `${where}: the Message line the write left`).toBe(record.message);
+	if (record.sources !== undefined) {
+		expect(measured.sources, `${where}: the sources the file carries after the write`).toEqual([
+			...record.sources,
+		]);
+	}
+}
+
+describe("the shapes the config write-back's line scan does not read (ADR 0103)", () => {
+	for (const record of UNREAD_SHAPE_COSTS) {
+		test(`${record.shape}: ${record.why}`, async () => {
+			for (const cost of record.costs) {
+				expectCost(
+					await costOfWriteBack(record.file, cost.via, { fromShape: record.fromShape }),
+					cost,
+					record.file,
+				);
+			}
+		});
+	}
+});
+
+describe("the shapes the config write-back's line scan reads today (ADR 0103)", () => {
+	for (const record of READ_SHAPE_COSTS) {
+		test(`the scan reads ${record.shape}: ${record.why}`, async () => {
+			for (const cost of record.costs) {
+				expectCost(
+					await costOfWriteBack(record.file, cost.via, { fromShape: record.fromShape }),
+					cost,
+					record.file,
+				);
+			}
+		});
+	}
 });
 
 describe("the write-back's Message line (ADR 0103)", () => {
