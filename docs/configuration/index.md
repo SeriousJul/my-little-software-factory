@@ -457,6 +457,22 @@ host = "github.com"
 | `max-size-mib` | no | `10` | The size, in mebibytes, at which the current file rotates. A whole number of 1 or more. |
 | `keep` | no | `5` | The rotated files kept, from `file.1` up to the `keep`-th file. A whole number of 1 or more. |
 
+The plane's start lines name the path that took the seat, the item's origin, and
+the seat reading that path stood on:
+
+```text
+handoff started: "Add a webhook retry policy" (mode pickup, origin open, seats 1/2)
+merge started: "Persist the source facts" (mode force-dispatch, origin workflow, seats 2/2)
+```
+
+`mode` is `pickup` for the Work queue's pickup, `force-dispatch` for the
+operator's key on the waiting row, and `direct ask` for the row the operator's
+own ask started at once. `origin` is the item's origin: `open`, `workflow`, or
+`restart`. `seats` counts the held seats before the start claimed its own,
+measured against the Parallel limit; an unlimited cap states no limit. A reading
+over the limit is the force-dispatch that crossed it, and a pickup never reads
+over its own limit.
+
 **`[agents.<name>]`** (one table per agent type).
 
 | Key | Required | Default | What it does |

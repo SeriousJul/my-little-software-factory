@@ -29,6 +29,7 @@ import type { FetchedTicket, Ticket } from "../src/domain/ticket.ts";
 import { withIssueReferences } from "../src/domain/ticket.ts";
 import { resolveHandoffChoice } from "../src/handoff.ts";
 import { createHandoffDispatch, type HandoffDispatchReports } from "../src/handoff-dispatch.ts";
+import type { Logger } from "../src/logging.ts";
 import { planeActionSettingOf } from "../src/plane-action-registry.ts";
 import { runMergePullRequest } from "../src/plane-actions.ts";
 import type { CommandOptions, CommandResult } from "../src/runner.ts";
@@ -824,6 +825,77 @@ describe("the dispatch's ask and pickup", () => {
 		paths.push(dir);
 		return dir;
 	}
+
+	/** The logger one test reads the record's lines back from. */
+	function record(lines: string[]): Logger {
+		return {
+			level: "info",
+			debug: () => {},
+			info: (message) => lines.push(message),
+			warn: (message) => lines.push(message),
+			error: () => {},
+		};
+	}
+
+	/**
+	 * One merge ask through the module, with the record's lines kept: the ask's
+	 * `automatic` mark decides whether the start line names the pickup or the
+	 * operator's direct ask (issue #209).
+	 */
+	async function mergeAskLines(automatic: boolean): Promise<string[]> {
+		const state = planeState();
+		const runner = new FakeRunner();
+		stubReadSequence(runner, [{ state: "open" }, { merged: true }]);
+		stubMerge(runner, 0);
+		const lines: string[] = [];
+		const events: string[] = [];
+		let resolveStarted: () => void = () => {};
+		const startedSettled = new Promise<void>((resolve) => {
+			resolveStarted = resolve;
+		});
+		const dispatch = createHandoffDispatch({
+			state,
+			runner,
+			config: () => PLANE_CONFIG,
+			// One seat held of the limit two: the reading the start line states.
+			seatCount: () => 1,
+			home: home(),
+			log: record(lines),
+			...recorder(events),
+		});
+		const result = await dispatch.dispatchPlaneAction({
+			origin: "open",
+			automatic,
+			ticketIdentity: pullIdentity,
+			taskType: "merge",
+			onStarted: (started) => {
+				expect(started).toEqual({ ok: true });
+				resolveStarted();
+			},
+		});
+		expect(result).toEqual({ ok: true });
+		await startedSettled;
+		state.close();
+		return lines;
+	}
+
+	test("the merge's start line names its mode, its origin, and its seat reading", async () => {
+		// The factory's ask: the pickup's walk ran the merge, so the line names
+		// the pickup (issue #209).
+		expect(await mergeAskLines(true)).toEqual([
+			`merge queued: "${pullTitle}" (origin open)`,
+			`merge started: "${pullTitle}" (mode pickup, origin open, seats 1/2)`,
+		]);
+	});
+
+	test("the operator's merge ask names the direct ask on its start line", async () => {
+		// The operator's ask, with a free seat: the ask's own pass ran the merge,
+		// so the line names the direct ask, not the pickup.
+		expect(await mergeAskLines(false)).toEqual([
+			`merge queued: "${pullTitle}" (origin open)`,
+			`merge started: "${pullTitle}" (mode direct ask, origin open, seats 1/2)`,
+		]);
+	});
 
 	test("the top-up's ask enters the queue, and the pickup runs the merge on the open ticket", async () => {
 		const state = planeState();
