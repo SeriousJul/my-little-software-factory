@@ -1,6 +1,6 @@
 /**
  * The agent facts herdr reports, shared by every reader of an agent list:
- * the observation loop, the Consultation operations, the app's mode line,
+ * the observation loop, the Consultation operations, the app's mode cell,
  * and the Parallel limit seat count.
  */
 import { identifyHandoffAgentName } from "./naming.ts";

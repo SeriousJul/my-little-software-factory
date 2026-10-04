@@ -1,6 +1,6 @@
 /**
  * The shared Parallel limit seat count (issue #87, ADR 0034): the one source
- * the automatic start gates and the mode line read. A seat is held by an
+ * the automatic start gates and the mode cell read. A seat is held by an
  * in-flight ticket whose agent the poll listed or that is still inside its
  * startup grace, by every in-progress handoff, and by every Consultation in
  * opening or working.
@@ -155,7 +155,7 @@ describe("parallelSeatCount", () => {
 	});
 
 	test("combines the ticket and Consultation seats into one count", () => {
-		// The mode line's own example: one live ticket and one working
+		// The mode cell's own example: one live ticket and one working
 		// Consultation read 2 against a cap of 2.
 		expect(
 			parallelSeatCount(
@@ -186,7 +186,7 @@ describe("parallelSeatCount", () => {
 	});
 
 	test("the cap gate reads the limit and the count, and a lifted limit never reads over", () => {
-		// The four force-dispatch sites and the mode line's start-now ask this one
+		// The four force-dispatch sites and the mode cell's start-now ask this one
 		// rule instead of each restating `limit > 0 && count >= limit` (issue #202).
 		expect(overParallelLimit(0, 0)).toBe(false);
 		expect(overParallelLimit(0, 40)).toBe(false);

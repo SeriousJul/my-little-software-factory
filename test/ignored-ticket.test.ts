@@ -876,7 +876,7 @@ describe("the ignore and the machine", () => {
 						"the running badge",
 					);
 					// The live Agent holds a Parallel limit seat the row can be ignored over.
-					expect(frame).toContain("auto: off 1/2");
+					expect(frame).toContain("● manual 1/2");
 					// The ignore ends where live work begins: the row stays in the active
 					// view wearing its own badge beside the `ignored` marker, because the row
 					// is how the operator reaches the Live view, the Goto, and the Close.
@@ -884,7 +884,7 @@ describe("the ignore and the machine", () => {
 						const row = rowsOf(f).find((r) => r.startsWith("│") && r.includes("[running]"));
 						return row?.includes("ignored") === true;
 					});
-					expect(ignored).toContain("auto: off 1/2");
+					expect(ignored).toContain("● manual 1/2");
 					expect(listRowOf(ignored, FIRST_LEAD)).toBeGreaterThanOrEqual(0);
 					// The header names the pile the flag made, and the active view still
 					// holds the row: the count is the ledger, not a claim that the row is gone.
@@ -932,7 +932,7 @@ describe("the ignore and the machine", () => {
 					const frame = await listed(setup, src, SECOND_LEAD);
 					// The running Ticket holds the one seat, so the second ticket's
 					// start waits in the queue.
-					expect(frame).toContain("auto: off 1/1");
+					expect(frame).toContain("● manual 1/1");
 					await press(setup, "j", "the open row", (f) => detailPaneText(f).includes(secondTitle));
 					await press(setup, "return", "the start to wait", (f) => f.includes("waiting: 1"));
 					const ignored = await press(setup, "i", "the start to leave the queue", (f) =>
@@ -1397,7 +1397,7 @@ describe("the ignored marker's frame", () => {
 		try {
 			await withApp(
 				async (setup) => {
-					setup.resize(62, HEIGHT);
+					setup.resize(70, HEIGHT);
 					src.settle(success(twoTickets()));
 					const frame = await awaitFrame(
 						setup,
@@ -1558,7 +1558,7 @@ describe("the ignored marker's frame", () => {
 			await withApp(
 				async (setup) => {
 					// Wide enough for both: the row names the held turn and the pile.
-					setup.resize(72, HEIGHT);
+					setup.resize(80, HEIGHT);
 					src.settle(outcome);
 					const wide = await awaitFrame(
 						setup,
@@ -1568,8 +1568,10 @@ describe("the ignored marker's frame", () => {
 					expect(headerRow(wide)).toContain("held: 1");
 					expect(headerRow(wide)).toContain("ignored: 1");
 					// A row that cannot hold both spends its last cells on the machine's
-					// fact: the held count stands and the ignored count is cut.
-					setup.resize(56, HEIGHT);
+					// fact: the held count stands and the ignored cell is dropped whole.
+					// The mode cell shrinks to its lamp and word before a count gives
+					// up its cells.
+					setup.resize(59, HEIGHT);
 					const narrow = await awaitFrame(
 						setup,
 						(f) => headerRow(f).includes("held") && !headerRow(f).includes("ignored"),

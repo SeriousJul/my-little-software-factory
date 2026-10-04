@@ -197,7 +197,7 @@ describe("the shared control gallery", () => {
 		expect(text).toContain(stateLine("auto-mode"));
 		expect(text).toContain("○ auto");
 		expect(text).toContain("● manual");
-		expect(text).toContain("the counts truncate before the lamp keeps its corner");
+		expect(text).toContain("the seat count gives up its cells before a count does");
 	});
 
 	// Issue #184: the init marker is a state a reviewer must see, so it stands

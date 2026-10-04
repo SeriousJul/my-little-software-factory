@@ -263,7 +263,8 @@ Two rules are the standard, not the surface's choice:
   always explainable from the row.
 
 A fold hides rows and never facts. The rows a fold takes away are the only thing
-that changes: the Section header's counts, the mode line, the Parallel limit, the
+that changes: the Section header's counts, the Section header's Auto-handoff mode
+cell, the Parallel limit, the
 Pickup, the Top-up, the handoff gates, and every Decision route read the same
 facts with a Group open or shut, and a collapsed header still carries its count
 and its held count. The header lays its line out on the list pane's own rule, a

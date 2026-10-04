@@ -978,7 +978,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 		// deliberate: `parallelSeatCount` counts one seat per ticket, so a picked
 		// ticket that already holds its own seat (a restart whose agent the latest
 		// poll still lists) claims no new seat, and the free-seat figure counts it
-		// against the same ceiling the mode line shows.
+		// against the same ceiling the mode cell shows.
 		let claimed = 0;
 		for (const item of items) {
 			if (this.stopped) break;
@@ -1509,7 +1509,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 	/**
 	 * The seat reading a start line states (issue #209): the held seats of the
 	 * shared Parallel limit count, beside the limit they are measured against.
-	 * An unlimited cap states no limit, the way the mode line states none.
+	 * An unlimited cap states no limit, the way the mode cell states none.
 	 */
 	private seatReading(): string {
 		const limit = this.config().maxParallelAgents;

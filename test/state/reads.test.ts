@@ -131,7 +131,7 @@ describe("the state module's batched reads", () => {
 		state.close();
 	});
 	test("the seat count's Agent names cost one read per chunk, not two per Ticket", () => {
-		// The Parallel limit count the mode line and every start gate run each
+		// The Parallel limit count the mode cell and every start gate run each
 		// cycle reads the in-flight Tickets and each Ticket's Agent name (issue
 		// #202, ADR 0095). The names arrive in the same batched shape as the rows.
 		const small = fileWithTickets(5);

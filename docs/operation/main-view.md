@@ -18,7 +18,13 @@ header row; the same toggle restores it.
   Its header shows the pipeline counts - open, running, awaiting - and, only
   when non-zero, the held count with its bell marker and the ignored and
   muted counts. A held count means a turn ended badly and the decision is
-  yours.
+  yours. The header's right corner carries the Auto-handoff mode cell: an
+  unlit lamp with `auto` when the factory hands off settled tickets on its
+  own, a lit lamp with `manual` when it waits for you, the Parallel limit
+  seat reading `N/M` beside it, and the word `paused` while the Dispatch
+  pause holds the automatic works. A row too short for the whole cell drops
+  the seat reading, then the pause word, then whole count cells from the
+  counts' tail; it never cuts a cell in half and never loses the lamp.
 - **The Consultation section** lists your Consultations. Its header shows how
   many wait for your answer and how many need recovery, so a Consultation
   that needs you is visible whether the section is open or folded.

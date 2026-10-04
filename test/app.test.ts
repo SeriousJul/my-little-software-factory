@@ -1005,7 +1005,7 @@ describe("the control plane", () => {
 				expect(rows).toHaveLength(27);
 				for (const row of rows) {
 					expect(row.length).toBe(75);
-				} // The test runs without factory state, so no mode line stands:
+				} // The test runs without factory state, so no mode cell stands:
 				// row 0 carries the section header and the detail's top border,
 				// and the Ticket box runs from row 1 to row 10. The split puts
 				// the list box on columns 0-36 and the detail box on 37-74. At

@@ -862,7 +862,7 @@ export class ObservationCoordinator {
 		// it clears, so the operator hears about the factory stopping and
 		// resuming dispatch on the line it already watches, in any mode: the
 		// pause holds the transition routes in manual mode too. The
-		// mode line wears it `paused` in auto mode, the state it names.
+		// mode cell wears it `paused` in auto mode, the state it names.
 		const effectivePause = this.state.ticketWorkCycle.dispatchPauseActive();
 		if (effectivePause !== this.pauseActive) {
 			this.pauseActive = effectivePause;

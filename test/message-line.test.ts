@@ -528,7 +528,7 @@ describe("the permanent Message line", () => {
 			async (setup) => {
 				// The mode is factory state, not a config default (ADR 0036): the
 				// operator's `a` key is the only way onto it. A plane with no state
-				// draws no mode line, so the flip is not visible here; the notice it
+				// draws no mode cell, so the flip is not visible here; the notice it
 				// produces is what this test reads.
 				setup.mockInput.pressKey("a");
 				await settle(setup);

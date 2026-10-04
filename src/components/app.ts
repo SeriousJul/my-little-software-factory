@@ -2,8 +2,8 @@
  * The control plane shell: panes, refresh, selection, handoff, and the
  * herdr observation loop (ADR 0005, ADR 0006).
  *
- * The mode line carries the auto-handoff state and the live agent count
- * against the parallel limit. Enter on an open ticket hands it off; Enter
+ * The Ticket header's mode cell carries the auto-handoff state and the live
+ * agent count against the parallel limit. Enter on an open ticket hands it off; Enter
  * on an awaiting ticket opens the decision modal (close, Goto, or a
  * workflow handoff), while the factory does not decide the ticket itself
  * (auto mode, or an auto-close task type); Enter on an in-flight ticket
@@ -777,8 +777,8 @@ export function App({
 	 * seat count of the in-flight tickets, the in-progress handoffs, and the
 	 * Consultations in `opening` or `working`, from the latest herdr poll. The
 	 * dispatch module gates a manual start on it, the observation loop gates the
-	 * automatic starts on the same facts each cycle, and the mode line displays
-	 * it, so the three never disagree.
+	 * automatic starts on the same facts each cycle, and the Ticket header's mode
+	 * cell displays it, so the three never disagree.
 	 *
 	 * The tickets and their Agent names each arrive in one batched read (issue
 	 * #202, ADR 0095): the count costs a constant number of statements whatever
@@ -1009,23 +1009,26 @@ export function App({
 	}, [renderer, setWarningMessage]);
 	const visibleMessageText = visibleMessage === null ? "" : formatMessage(visibleMessage);
 	const messageTruncated = visibleMessage !== null && widthOf(visibleMessageText) > terminalWidth;
-	// The mode line carries the auto-handoff state and the Parallel limit
-	// seat count: the same shared seat count the observation gates and the
-	// dispatch gate read (issue #87, ADR 0034) - the in-flight tickets the
-	// latest successful poll listed or still holds in their startup grace,
-	// every in-progress handoff, and every Consultation in opening or working
-	// - against the parallel limit. It exists only when the control plane has
-	// state to observe.
+	// The Ticket header's mode cell carries the auto-handoff state and the
+	// Parallel limit seat count: the same shared seat count the observation
+	// gates and the dispatch gate read (issue #87, ADR 0034) - the in-flight
+	// tickets the latest successful poll listed or still holds in their startup
+	// grace, every in-progress handoff, and every Consultation in opening or
+	// working - against the parallel limit. It exists only when the control
+	// plane has state to observe.
 	const liveCount = currentSeatCount();
 	// The Dispatch pause (ADR 0016): a held failed trace holds the automatic
 	// handoffs, routes, and restarts until it is decided or a turn completes.
 	const dispatchPause = state?.ticketWorkCycle.dispatchPauseActive() ?? false;
-	const modeLine =
+	const autoHandoffCell =
 		state === undefined
-			? ""
-			: `auto: ${autoMode ? "on" : "off"} ${liveCount}${
-					config.maxParallelAgents === 0 ? "" : `/${config.maxParallelAgents}`
-				}${autoMode && dispatchPause ? " paused" : ""}`;
+			? null
+			: {
+					mode: autoMode ? ("auto" as const) : ("manual" as const),
+					seats: liveCount,
+					limit: config.maxParallelAgents,
+					dispatchPaused: autoMode && dispatchPause,
+				};
 	// The held turns (ADR 0016, ADR 0017): the awaiting tickets whose last turn
 	// ended failed, aborted, truncated, or no-turn with no decision, read
 	// through the domain's one rule so this count and a Group header's agree.
@@ -1075,22 +1078,21 @@ export function App({
 	const compactTextWidth = Math.max(1, terminalWidth - 2 * compactPadding);
 	const compactLineCount = Math.max(0, compactRows - 2 * compactPadding);
 	// The Main view keeps the permanent Message line and Action bar. The mode
-	// line gives way before the panes' first text row. Keep the compact size
-	// frame focused on its size and Help controls when it cannot show the
-	// normal layout.
-	const showModeLine = modeLine !== "" && !tooSmall;
-	// The body holds every row between the (optional) mode line and the two
-	// permanent bottom rows (ADR 0019). Its first row is the Ticket section's
-	// header, run the full terminal width, so its counts stay whole on a
-	// small terminal; below it the left column stacks the Ticket list and the
-	// Consultation section's header and list, and the right column holds the
-	// one detail pane for the selected item.
-	const bodyRows = terminalHeight - (showModeLine ? 1 : 0) - 2;
+	// cell rides the Ticket header's own row, so the frame spends no row on it.
+	// Keep the compact size frame focused on its size and Help controls when it
+	// cannot show the normal layout.
+	// The body holds every row between the Ticket header and the two permanent
+	// bottom rows (ADR 0019). Its first row is the Ticket section's header, run
+	// the full terminal width, so its counts stay whole on a small terminal;
+	// below it the left column stacks the Ticket list and the Consultation
+	// section's header and list, and the right column holds the one detail pane
+	// for the selected item.
+	const bodyRows = terminalHeight - 2;
 	const leftCols = Math.floor(terminalWidth / 2);
-	// The detail pane starts one row below the body's top: the full-width
-	// Ticket header owns the body's first row, so the reservation holds that
-	// row with the mode line and the two permanent bottom rows.
-	const detailReservedRows = 3 + (showModeLine ? 1 : 0);
+	// The detail pane starts one row below the body's top: the full-width Ticket
+	// header owns the body's first row, so the reservation holds that row with
+	// the two permanent bottom rows.
+	const detailReservedRows = 3;
 	const detailGeometry = usePaneGeometry("detail", detailReservedRows);
 	// The rows a section's box spends on chrome: two borders and two padding
 	// rows. Each section's minimum is three content rows, so its minimum box
@@ -3947,7 +3949,7 @@ export function App({
 				),
 			now: () => Date.now(),
 			mode: () => autoModeRef.current,
-			// The mode line's shared seat count and the cycle's gates share this
+			// The Ticket header's seat count and the cycle's gates share this
 			// grace, so the booting seats they count agree.
 			startupGraceMs: STARTUP_GRACE_MS,
 			intervalMs: pollIntervalMs ?? configRef.current.agentPollIntervalSeconds * 1000,
@@ -4103,7 +4105,7 @@ export function App({
 	/**
 	 * Fold or open one Group (issue #159).
 	 *
-	 * The fold is the only thing that moves: no count, mode line, gate, or queue
+	 * The fold is the only thing that moves: no count, mode cell, gate, or queue
 	 * fact reads the row list, so a fold changes what is shown and nothing else
 	 * (ADR 0059). The cursor lands on the Group header the fold was made at, so
 	 * the fold is reversible by hand without hunting for it (user story 34).
@@ -4986,17 +4988,10 @@ export function App({
 	return createElement(
 		"box",
 		{ style: { width: "100%", height: "100%", flexDirection: "column" } },
-		// One Main frame: an optional mode line, the body, and the two
-		// permanent bottom rows. The body's left column stacks the two
-		// sections - each header row, and its list box while the section is
-		// expanded - and its right column holds the one detail pane for the
-		// selected item (ADR 0019).
-		showModeLine &&
-			createElement(
-				"text",
-				{ style: { width: "100%", height: 1, fg: paint("subtext0") } },
-				padToWidth(truncateToWidth(modeLine, terminalWidth), terminalWidth),
-			),
+		// One Main frame: the body and the two permanent bottom rows. The body's
+		// left column stacks the two sections - each header row, and its list box
+		// while the section is expanded - and its right column holds the one
+		// detail pane for the selected item (ADR 0019).
 		tooSmall
 			? createElement(
 					"box",
@@ -5048,8 +5043,8 @@ export function App({
 						},
 					},
 					// The Ticket header owns the body's first row at the full
-					// terminal width, so its counts stay whole where the
-					// columns below split (ADR 0019).
+					// terminal width, so its counts and its mode cell stay whole
+					// where the columns below split (ADR 0019).
 					createElement(SectionHeader, {
 						section: "tickets",
 						expanded: ticketsExpanded,
@@ -5062,6 +5057,7 @@ export function App({
 						ignored: ignoredCount,
 						muted: mutedCount,
 						heldBell,
+						mode: autoHandoffCell,
 						active: mainSurfaceActive,
 						onToggle: () => clickSection("tickets"),
 					}),

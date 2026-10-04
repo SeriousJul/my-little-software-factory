@@ -1313,3 +1313,50 @@ What this work leaves open, stated plainly:
 What was not measured: no screen reader has read this application, and no claim
 of screen-reader support is made here. No theme or color behavior is involved in
 this change.
+## The Auto-handoff mode cell on the Ticket header
+
+The mode fact left its own row above the sections. It stands in the Ticket
+section header's right corner now: an unlit lamp (`○`) with `auto` when the
+factory hands off settled tickets on its own, a lit lamp (`●`) with `manual`
+when it waits for the operator, the Parallel limit seat reading `N/M` beside it,
+and the word `paused` while the Dispatch pause holds the automatic works. The
+Main view reserves no row for a mode line, so its body is one row taller at the
+same terminal height and the plane's minimum terminal height is 26 rows instead
+of 27. The lamp pair is the shared presentation module's `LAMP_GLYPHS`, plain
+Unicode geometric shapes, so no surface holds a private glyph.
+
+The header lays its row out as whole cells. The lamp and its word hold the
+corner. When the row cannot hold the whole cell beside the whole count line, the
+cell shrinks from its own right end - the seat reading first, then the pause
+word - and only when the bare lamp still leaves no room do whole count cells
+drop from the counts' tail in ADR 0060's order. The row never cuts a cell in
+half, so a held count never loses its number to a seat measurement.
+
+What was measured: the component seam (`test/section-header.test.ts`) holds the
+lamp in both modes, the bare count at an unlimited Parallel limit, the pause
+word, the bell and pile cells beside the cell, and each step of the shrink-and-
+drop ladder at 84, 66, 62, 59, 54, and 40 columns. The frame tests read the cell
+through the real app flow: `test/auto-mode.test.ts` for the `a` toggle, the
+stored mode, the flipped mode, and the combined seat count;
+`test/turn-end-cause-frame.test.ts` for `auto 2/3 paused` on the held-turn
+frame; `test/ignored-ticket.test.ts` for the pile cell dropping whole before the
+held count; `test/main-view-frame.test.ts` and `test/ticket-scroll-frame.test.ts`
+for the row layout, the click rows, and the resize walk; `test/reserved-rows.test.ts`
+for the 26-row floor and the too-small notice. The gallery's `auto-mode` example
+carries both lamps, the seat reading, and the drop rule, and the suite exercises
+it. The Main view guide screenshot was regenerated with `bun run screenshots` and
+the drift test reads it.
+
+`bun run lint`, `bun run typecheck`, and one full `bun run test` ran on this
+change with no other `bun test` process on the machine (load average 7.25, the
+suite green at 2794 tests over 128 files, 15654 assertions, 0 fail, no skips).
+
+The earlier entries in this record that measured the mode line - the held-turn
+frame's `auto: on 2/3 paused` among them - stand as history for the head they
+measured. They predate this move and no longer describe the current screen.
+
+What was not measured: no screen reader has read this application, and no claim
+of screen-reader support is made here or anywhere else in this record. The
+terminal walks in Ghostty and foot have not been re-run for this change, so they
+stand as not re-verified for it. The lamp pair is not contrast-checked against
+inherited herdr theme pairs.

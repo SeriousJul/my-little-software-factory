@@ -103,10 +103,10 @@ description: The module map of the source tree, for agents working in this repos
 	It checks determinate config values with one list query per Agent kind and
 	warns when a list is unavailable.
 - `src/herdr.ts`: the agent facts herdr reports, shared by every reader of an
-	agent list: the observation loop, the Consultation operations, the app's
-	mode line, and the Parallel limit seat count.
+	agent list: the observation loop, the Consultation operations, the Ticket
+	header's Auto-handoff mode cell, and the Parallel limit seat count.
 - `src/parallel.ts`: the shared Parallel limit seat count (ADR 0034), the one
-	source the Work queue's pickup and the mode line read.
+	source the Work queue's pickup and the Ticket header's mode cell read.
 - `src/placement.ts`: the ticket placement on the chosen task's state
 	(ADR 0045). A manual handoff whose final task type differs from the
 	ticket's current suggestion writes the ticket's labels before the agent

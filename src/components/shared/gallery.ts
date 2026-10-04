@@ -1291,7 +1291,7 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 				open: 2,
 				running: 1,
 				awaiting: 0,
-				mode: "auto",
+				mode: { mode: "auto", seats: 1, limit: 2, dispatchPaused: false },
 				onToggle: () => undefined,
 			}),
 			createElement(SectionHeader, {
@@ -1304,14 +1304,14 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 				open: 2,
 				running: 1,
 				awaiting: 0,
-				mode: "manual",
+				mode: { mode: "manual", seats: 1, limit: 2, dispatchPaused: false },
 				onToggle: () => undefined,
 			}),
 			createElement(
 				"text",
 				{ key: "auto-mode-note", fg: paint("subtext0") },
 				truncateToWidth(
-					"`a` in the Ticket section flips the mode; the counts truncate before the lamp keeps its corner",
+					"`a` flips the mode; the seat count gives up its cells before a count does",
 					columns.contentWidth,
 				),
 			),

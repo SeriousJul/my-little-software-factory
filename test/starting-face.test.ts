@@ -423,7 +423,7 @@ describe("the Starting window's timeline", () => {
 				// the claim the dispatch makes.
 				const inFlight = await awaitFrame(
 					setup,
-					(f) => face(f) !== null && f.includes("auto: on"),
+					(f) => face(f) !== null && f.includes("○ auto"),
 					"the dispatched face",
 				);
 				expect(inFlight).not.toContain("[handed-off]");

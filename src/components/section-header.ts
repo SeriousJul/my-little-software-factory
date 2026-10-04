@@ -14,6 +14,26 @@ export type MainSection = "tickets" | "consultations" | "work";
  */
 export type AutoHandoffMode = "auto" | "manual";
 
+/**
+ * The Auto-handoff mode's cell at a header's right corner.
+ *
+ * The cell names the mode with a lamp and a word, the Parallel limit's seat
+ * count beside it (ADR 0034), and the Dispatch pause when it holds the
+ * automatic works (ADR 0016). The screen that owns the factory state passes
+ * the facts; the header owns how they read.
+ */
+export interface AutoHandoffCell {
+	/** Auto-handoff mode: `auto` leaves the lamp unlit, `manual` lights it.
+	 */
+	mode: AutoHandoffMode;
+	/** The seats the Parallel limit counts as taken. */
+	seats: number;
+	/** The Parallel limit. 0 states no limit, so the cell names no fraction. */
+	limit: number;
+	/** The Dispatch pause (ADR 0016): it rides the cell in auto mode only. */
+	dispatchPaused: boolean;
+}
+
 interface SectionHeaderProps {
 	section: MainSection;
 	/** False while a modal owns the surface above the Main view. */
@@ -44,11 +64,11 @@ interface SectionHeaderProps {
 	/** The held count: shown only when it is above zero (user story 15). */
 	held?: number;
 	/**
-	 * The Auto-handoff mode the row wears at its right corner: `auto` with the
-	 * lamp unlit, `manual` with the lamp lit. The screen that owns the mode
-	 * passes it; a row that does not carry the mode passes nothing.
+	 * The Auto-handoff mode's cell the row wears at its right corner: the lamp,
+	 * the word, the seat count, and the Dispatch pause. The screen that owns the
+	 * mode passes it; a row that carries no mode passes nothing.
 	 */
-	mode?: AutoHandoffMode | null;
+	mode?: AutoHandoffCell | null;
 	/**
 	 * The ignored count (ADR 0060): the pile, every row the flag stands on. Shown
 	 * only when it is above zero, the way the held count is, and it carries no bell
@@ -102,7 +122,8 @@ interface SectionHeaderProps {
  * their bell and the new-output fact (user stories 11 through 16). The row
  * truncates at the end rather than wrapping: the Main view's rows are fixed,
  * and a truncation must never hide the section name at the row's start. The
- * mode lamp holds its corner while the counts give up cells before it does.
+ * mode lamp and its word hold their corner, the seat count gives up its cells
+ * before any count does, and the counts truncate last.
  * A click on a header toggles the section, the same action `x` takes for the
  * cursor: expanding lands the cursor on the section's list, and collapsing
  * keeps its selection and detail (user stories 6, 9, and 20).
@@ -129,46 +150,80 @@ export function SectionHeader({
 	newOutput = false,
 	onToggle,
 }: SectionHeaderProps) {
-	// The terminal's width chooses the form; the row's own width only sets
-	// where a too-long count truncates, so the section name stays readable.
+	// The terminal's width chooses the form; the row's own width chooses which
+	// cells it can hold.
 	const wide = terminalWidth >= 60;
-	const counts =
+	// The row's cells, in the order they stand. The held count shows only when
+	// it is above zero (a steady zero holds no cell), the ignored count and the
+	// muted ledger for the same reason, and the conditional cells stand in the
+	// machine's own order: the held count and the bell that rings on it come
+	// before the pile and the ledger, so a short row drops the operator's view
+	// fact first and never a decision the operator owes (ADR 0060).
+	const cells: string[] =
 		section === "tickets"
 			? wide
-				? `open: ${open}  running: ${running}  awaiting: ${awaiting}`
-				: `open ${open}  running ${running}  awaiting ${awaiting}`
+				? [`open: ${open}`, `running: ${running}`, `awaiting: ${awaiting}`]
+				: [`open ${open}`, `running ${running}`, `awaiting ${awaiting}`]
 			: section === "work"
-				? wide
-					? `waiting: ${waiting}${paused ? "  paused" : ""}`
-					: `waiting ${waiting}${paused ? "  paused" : ""}`
+				? [wide ? `waiting: ${waiting}` : `waiting ${waiting}`]
 				: wide
-					? `awaiting response: ${awaitingResponse}  recovery: ${recovery}`
-					: `awaiting ${awaitingResponse}  recovery ${recovery}`;
-	// The section name leads so a truncation never hides it, the held count
-	// shows only when it is above zero (a steady zero holds no row), and the
-	// ignored count shows for the same reason (ADR 0060). The two conditional
-	// cells stand in the machine's own order: the held count and the bell that
-	// rings on it come first, so a narrow row spends its last cells on the view
-	// fact and never on a decision the operator owes.
-	const facts =
-		section === "tickets"
-			? `  ${counts}${held > 0 ? `  ${wide ? `held: ${held}` : `held ${held}`}` : ""}${
-					heldBell ? "  !!!" : ""
-				}${ignored > 0 ? `  ${wide ? `ignored: ${ignored}` : `ignored ${ignored}`}` : ""}${
-					muted > 0 ? `  ${wide ? `muted: ${muted}` : `muted ${muted}`}` : ""
-				}`
-			: section === "work"
-				? `  ${counts}`
-				: `  ${counts}${bell ? "  !!!" : ""}${newOutput ? "  new output" : ""}`;
+					? [`awaiting response: ${awaitingResponse}`, `recovery: ${recovery}`]
+					: [`awaiting ${awaitingResponse}`, `recovery ${recovery}`];
+	if (section === "tickets") {
+		if (held > 0) cells.push(wide ? `held: ${held}` : `held ${held}`);
+		if (heldBell) cells.push("!!!");
+		if (ignored > 0) cells.push(wide ? `ignored: ${ignored}` : `ignored ${ignored}`);
+		if (muted > 0) cells.push(wide ? `muted: ${muted}` : `muted ${muted}`);
+	} else if (section === "consultations") {
+		if (bell) cells.push("!!!");
+		if (newOutput) cells.push("new output");
+	}
+	// The Work queue's pause (ADR 0052) rides its depth cell: the brake on the
+	// queue's drain reads beside the depth it brakes.
+	if (section === "work" && paused) cells.push("paused");
 	const name = section === "tickets" ? "Tickets" : section === "work" ? "Work" : "Consultations";
-	const countsText = `${expanded ? "▾" : "▸"} ${name}${facts}`;
-	// The mode lamp is the row's last cell and it keeps its place: the counts
-	// truncate into the cells left of it, so a narrow row gives up a count
-	// before it gives up the mode the factory runs in.
-	const modeCell =
-		mode === null ? "" : ` ${mode === "auto" ? LAMP_GLYPHS.off : LAMP_GLYPHS.on} ${mode}`;
+	const lead = `${expanded ? "▾" : "▸"} ${name}`;
+	const countsTextOf = (rowCells: string[]): string =>
+		rowCells.length === 0 ? lead : `${lead}  ${rowCells.join("  ")}`;
+	// The mode cell is the row's right corner, and it holds that corner in two
+	// steps. First the cell shrinks from its own right end - the seat reading
+	// goes, then the Dispatch pause word - so the whole count line keeps every
+	// cell. Only when even the bare lamp leaves no room do the counts drop whole
+	// cells from their tail, in ADR 0060's order. A row never cuts a cell in
+	// half, and it never loses the mode the factory runs in.
+	const modeCore =
+		mode === null ? "" : ` ${mode.mode === "auto" ? LAMP_GLYPHS.off : LAMP_GLYPHS.on} ${mode.mode}`;
+	const modeSeats =
+		mode === null ? "" : ` ${mode.limit === 0 ? `${mode.seats}` : `${mode.seats}/${mode.limit}`}`;
+	const modePause = mode === null || !mode.dispatchPaused ? "" : " paused";
+	const modeVariants =
+		mode === null
+			? [""]
+			: [`${modeCore}${modeSeats}${modePause}`, `${modeCore}${modePause}`, modeCore];
+	const bareModeCell = modeVariants[modeVariants.length - 1] ?? "";
+	let modeCell = bareModeCell;
+	let keptCells = cells;
+	const wholeCounts = widthOf(countsTextOf(cells));
+	const shrunk = modeVariants.find(
+		(variant) => wholeCounts + widthOf(variant) <= width || variant === modeCore,
+	);
+	if (shrunk !== undefined && wholeCounts + widthOf(shrunk) <= width) {
+		// The whole count line fits beside this form of the cell.
+		modeCell = shrunk;
+	} else {
+		// The corner needs the room: drop whole cells from the counts' tail.
+		modeCell = bareModeCell;
+		let candidate = cells;
+		while (
+			candidate.length > 1 &&
+			widthOf(countsTextOf(candidate)) + widthOf(bareModeCell) > width
+		) {
+			candidate = candidate.slice(0, -1);
+		}
+		keptCells = candidate;
+	}
 	const countsCells = Math.max(0, width - widthOf(modeCell));
-	const text = `${padToWidth(truncateToWidth(countsText, countsCells), countsCells)}${modeCell}`;
+	const text = `${padToWidth(countsTextOf(keptCells), countsCells)}${modeCell}`;
 	const handleMouse = (event: MouseEvent) => {
 		if (!active) return;
 		if (event.type === "down" && event.button === 0) onToggle(section);

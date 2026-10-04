@@ -133,8 +133,8 @@ export const listHalfOf = (row: string): string => `${row.split("││")[0]}│
  *
  * Frame tests that point at a pane row or click a pane cell state their
  * target relative to this constant, so the header stays one fact instead of
- * a repeated magic number. The offset assumes no mode line: a test that boots
- * state sees the mode line on the first row and the rows shift down by one.
+ * a repeated magic number. The Auto-handoff mode cell rides the Ticket
+ * header's own row, so the offset holds with factory state and without it.
  */
 export const HEADER_ROWS = 1;
 /** The terminal row a frame-relative pane row holds under the header. */
@@ -753,7 +753,7 @@ export async function openPanel(setup: Setup): Promise<string> {
  *
  * `opener` is the key that opens the guide from the current mode: `?` in most
  * modes, `F1` where that is the mode's help alias. `title` is the open
- * signal, usually the guide's mode line.
+ * signal, usually the guide's mode cell.
  */
 export async function openGuide(
 	setup: Setup,

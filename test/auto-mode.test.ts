@@ -1,5 +1,5 @@
 /**
- * The unattended mode through the real UI: the mode line, the `a` toggle that
+ * The unattended mode through the real UI: the mode cell, the `a` toggle that
  * writes the mode to the state file, the blocked and missing markers, the missing
  * panel (restart / abandon), the decision modal on an awaiting ticket, and
  * the auto dispatch of open tickets.
@@ -423,8 +423,8 @@ function ticketRow(frame: string, title = "Persist source facts"): string {
 	return row;
 }
 
-describe("the mode line and the a key", () => {
-	test("the mode line reports the mode, and a writes the mode to the state file", async () => {
+describe("the mode cell and the a key", () => {
+	test("the mode cell reports the mode, and a writes the mode to the state file", async () => {
 		const app = seededApp("open");
 		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
 		const before = readFileSync(app.configPath, "utf8");
@@ -432,13 +432,13 @@ describe("the mode line and the a key", () => {
 		await withApp(
 			async (setup) => {
 				app.src.settle(success);
-				await awaitFrame(setup, (f) => f.includes("auto: off 0/2"), "the mode line");
-				await press(setup, "a", "auto on", (f) => f.includes("auto: on 0/2"));
+				await awaitFrame(setup, (f) => f.includes("● manual 0/2"), "the mode cell");
+				await press(setup, "a", "auto on", (f) => f.includes("○ auto 0/2"));
 				// The flip is factory state (ADR 0036): it is on the state file the
 				// moment the key lands, and the toggle never writes the config file.
 				expect(app.state.handoff.autoHandoffMode()).toBe(true);
 				expect(readFileSync(app.configPath, "utf8")).toBe(before);
-				await press(setup, "a", "auto off", (f) => f.includes("auto: off 0/2"));
+				await press(setup, "a", "auto off", (f) => f.includes("● manual 0/2"));
 				expect(app.state.handoff.autoHandoffMode()).toBe(false);
 				expect(readFileSync(app.configPath, "utf8")).toBe(before);
 			},
@@ -457,8 +457,8 @@ describe("the mode line and the a key", () => {
 		await withApp(
 			async (setup) => {
 				app.src.settle(success);
-				await awaitFrame(setup, (f) => f.includes("auto: off 0/2"), "the mode line");
-				await press(setup, "a", "auto on", (f) => f.includes("auto: on 0/2"));
+				await awaitFrame(setup, (f) => f.includes("● manual 0/2"), "the mode cell");
+				await press(setup, "a", "auto on", (f) => f.includes("○ auto 0/2"));
 			},
 			WIDTH,
 			HEIGHT,
@@ -477,10 +477,10 @@ describe("the mode line and the a key", () => {
 				src.settle(success);
 				const frame = await awaitFrame(
 					setup,
-					(f) => f.includes("auto: on 0/2"),
-					"the restarted mode line",
+					(f) => f.includes("○ auto 0/2"),
+					"the restarted mode cell",
 				);
-				expect(frame).not.toContain("auto: off");
+				expect(frame).not.toContain("● manual");
 			},
 			WIDTH,
 			HEIGHT,
@@ -505,8 +505,8 @@ describe("the mode line and the a key", () => {
 		await withApp(
 			async (setup) => {
 				app.src.settle(success);
-				const frame = await awaitFrame(setup, (f) => f.includes("auto: off 0/2"), "the mode line");
-				expect(frame).not.toContain("auto: on");
+				const frame = await awaitFrame(setup, (f) => f.includes("● manual 0/2"), "the mode cell");
+				expect(frame).not.toContain("○ auto");
 				expect(app.state.handoff.autoHandoffMode()).toBe(false);
 			},
 			WIDTH,
@@ -523,7 +523,7 @@ describe("the mode line and the a key", () => {
 		await withApp(
 			async (setup) => {
 				app.src.settle(success);
-				await awaitFrame(setup, (f) => f.includes("auto: off 0/2"), "the mode line");
+				await awaitFrame(setup, (f) => f.includes("● manual 0/2"), "the mode cell");
 				// The real write path, made to fail: the mode table is gone from the
 				// state file, so the plane's next write to it is refused by SQLite.
 				// The busy timeout covers the refresh write still in flight.
@@ -531,16 +531,16 @@ describe("the mode line and the a key", () => {
 				damage.exec("PRAGMA busy_timeout = 5000;");
 				damage.exec("DROP TABLE auto_handoff_mode;");
 				damage.close();
-				await press(setup, "a", "auto on", (f) => f.includes("auto: on 0/2"));
+				await press(setup, "a", "auto on", (f) => f.includes("○ auto 0/2"));
 				// The in-session flip stands, and the failure names the state file
 				// the plane could not write and says how long the flip lives.
 				const frame = await settle(setup);
-				expect(frame).toContain("auto: on 0/2");
+				expect(frame).toContain("○ auto 0/2");
 				expect(messageRowOf(frame)).toContain("auto-handoff is on for this session only:");
 				expect(messageRowOf(frame)).toContain(app.state.path);
 				expect(messageRowOf(frame).trim()).toContain("Error:");
-				// The mode line keeps the flipped mode, not the stored one.
-				expect(frameText(setup.captureCharFrame())).toContain("auto: on 0/2");
+				// The mode cell keeps the flipped mode, not the stored one.
+				expect(frameText(setup.captureCharFrame())).toContain("○ auto 0/2");
 			},
 			WIDE_STATUS,
 			HEIGHT,
@@ -549,7 +549,7 @@ describe("the mode line and the a key", () => {
 		app.state.close();
 	});
 
-	test("an unlimited parallel limit shows the bare count on the mode line", async () => {
+	test("an unlimited parallel limit shows the bare count on the mode cell", async () => {
 		const app = seededApp("in-flight", { maxParallelAgents: 0 });
 		app.runner.set("herdr", ["agent", "list"], {
 			stdout: agentListJson([
@@ -568,11 +568,11 @@ describe("the mode line and the a key", () => {
 				app.src.settle(success);
 				const frame = await awaitFrame(
 					setup,
-					(f) => f.includes("auto: off 1"),
-					"the unlimited mode line",
+					(f) => f.includes("● manual 1"),
+					"the unlimited mode cell",
 				);
 				// The count stands without a limit after it: no `/0` anywhere.
-				expect(frame).toContain("auto: off 1");
+				expect(frame).toContain("● manual 1");
 				expect(frame).not.toContain("/0");
 				// The blocked agent still holds its seat, with no limit to hold it to.
 				expect(ticketRow(frame)).toContain("blocked");
@@ -584,7 +584,7 @@ describe("the mode line and the a key", () => {
 		app.state.close();
 	});
 
-	test("a working Consultation holds its seat beside the ticket seat on the mode line", async () => {
+	test("a working Consultation holds its seat beside the ticket seat on the mode cell", async () => {
 		const app = seededApp("in-flight");
 		// The Consultation starts in opening and takes its confirmed Agent with
 		// it into working, so the poll keeps it where it is.
@@ -636,8 +636,8 @@ describe("the mode line and the a key", () => {
 			async (setup) => {
 				app.src.settle(success);
 				// The ticket seat and the Consultation seat fill the limit of
-				// two in one number on the mode line.
-				await awaitFrame(setup, (f) => f.includes("auto: off 2/2"), "the mode line");
+				// two in one number on the mode cell.
+				await awaitFrame(setup, (f) => f.includes("● manual 2/2"), "the mode cell");
 			},
 			WIDTH,
 			HEIGHT,
@@ -673,7 +673,7 @@ describe("the failure markers", () => {
 				// The agent is alive but not working: the state badge is replaced by the
 				// blocked badge, and the live agent count still holds its slot.
 				expect(ticketRow(frame)).toContain("blocked");
-				expect(frame).toContain("auto: off 1/2");
+				expect(frame).toContain("● manual 1/2");
 			},
 			WIDTH,
 			HEIGHT,
@@ -706,7 +706,7 @@ describe("the failure markers", () => {
 				// The missing badge replaces the state badge although no state changed:
 				// manual mode never acts on a missing agent. The missing agent holds no
 				// slot, so the shared seat count is zero.
-				expect(frame).toContain("auto: off 0/2");
+				expect(frame).toContain("● manual 0/2");
 				expect(ticketRow(frame)).toContain("missing");
 
 				// Enter on the in-flight missing ticket opens the missing modal.
@@ -3394,12 +3394,12 @@ describe("the auto dispatch", () => {
 				app.src.settle(success);
 				const frame = await awaitFrame(
 					setup,
-					(f) => f.includes("auto: on 1/2") && ticketRow(f).includes("missing"),
+					(f) => f.includes("○ auto 1/2") && ticketRow(f).includes("missing"),
 					"the dispatch",
 				);
 				// The new agent's pane is not in the faked list: the row wears
 				// the missing badge, and the detail pane shows the handoff.
-				// The mode line holds the booting seat: a started agent inside
+				// The mode cell holds the booting seat: a started agent inside
 				// its startup grace counts against the parallel limit, from the
 				// same shared seat count the gates read.
 				expect(ticketRow(frame)).toContain("missing");
@@ -3514,11 +3514,11 @@ describe("the auto dispatch", () => {
 				// 0051): the first cycle starts the first ticket in list order,
 				// and the second cycle, the queue drained, starts the second.
 				// Both started agents are inside their startup grace, so the
-				// mode line holds both booting seats against the cap.
+				// mode cell holds both booting seats against the cap.
 				await awaitFrame(
 					setup,
 					(f) =>
-						f.includes("auto: on 2/2") &&
+						f.includes("○ auto 2/2") &&
 						ticketRow(f).includes("missing") &&
 						ticketRow(f, "Watch agent turns").includes("missing"),
 					"both dispatches",
@@ -3581,11 +3581,11 @@ describe("the auto dispatch", () => {
 				// cycle, and the pair takes the dispatch. The finished ticket
 				// rests open, waiting on the re-read its close provoked.
 				// The finished ticket holds no seat; the pair's started agent
-				// is inside its startup grace, so the mode line holds one seat.
+				// is inside its startup grace, so the mode cell holds one seat.
 				await awaitFrame(
 					setup,
 					(f) =>
-						f.includes("auto: on 1/2") &&
+						f.includes("○ auto 1/2") &&
 						ticketRow(f).includes("[open]") &&
 						ticketRow(f, "Watch agent turns").includes("missing"),
 					"the auto close and the pair dispatch",
@@ -3651,7 +3651,7 @@ describe("the auto dispatch", () => {
 		await withApp(
 			async (setup) => {
 				app.src.settle(success);
-				const frame = await awaitFrame(setup, (f) => f.includes("auto: off 0/2"), "the mode line");
+				const frame = await awaitFrame(setup, (f) => f.includes("● manual 0/2"), "the mode cell");
 				expect(ticketRow(frame)).toContain("[open]");
 				// No herdr handoff commands: only the agent list polls.
 				// No herdr handoff commands: only agent list polls plus the
@@ -4328,17 +4328,17 @@ describe("the handoff queue", () => {
 				const pressReturnQuietFor = (what: string, predicate: (f: string) => boolean) =>
 					pressEnterQuiet(setup, what, predicate);
 				// Hand off the open ticket: it runs, and it holds the seat.
-				// The mode line, the Ticket header, the list box border, and
-				// the box's padding row sit above the list rows, so the two
-				// tickets sit on frame lines four and five. The in-flight
+				// The Ticket header, the list box border, and the box's padding
+				// row sit above the list rows, so the two tickets sit on frame
+				// lines three and four. The in-flight
 				// ticket is first, and it is the initial selection, so the
-				// move down lands the marker on line five - a line it was not
+				// move down lands the marker on line four - a line it was not
 				// on, so the key is applied before the next key is pressed.
-				await pressQuietFor("j", "select the open ticket", (f) => markerRowOf(f) === 5);
+				await pressQuietFor("j", "select the open ticket", (f) => markerRowOf(f) === 4);
 				await pressReturnQuietFor("the handoff to start", (f) => f.includes("handing off"));
 				// Back to the missing ticket: its restart queues behind the
 				// handoff in flight.
-				await pressQuietFor("k", "select the missing ticket", (f) => markerRowOf(f) === 4);
+				await pressQuietFor("k", "select the missing ticket", (f) => markerRowOf(f) === 3);
 				await pressReturnQuietFor("the missing modal", (f) => f.includes("Missing:"));
 				await pressReturnQuietFor("the restart to queue", (f) => !f.includes("Missing:"));
 				// And while the restart is queued, the ticket moves on:
@@ -4365,8 +4365,8 @@ describe("the handoff queue", () => {
 					// row, so the cross is read on the detail pane's empty line.
 					(f) => f.includes("no Consultation selected"),
 				);
-				await pressQuietFor("k", "the last Ticket", (f) => markerRowOf(f) === 5);
-				await pressQuietFor("k", "the missing row", (f) => markerRowOf(f) === 4);
+				await pressQuietFor("k", "the last Ticket", (f) => markerRowOf(f) === 4);
+				await pressQuietFor("k", "the missing row", (f) => markerRowOf(f) === 3);
 				await pressReturnQuietFor("the missing modal", (f) => f.includes("Missing:"));
 				await pressArrow(setup, "down", "select abandon", (f) =>
 					frameText(f).includes("❯ Abandon"),
@@ -4421,11 +4421,11 @@ describe("the handoff queue", () => {
 				// The claim settled, so the ticket is not dead: it hands off
 				// again on demand. The settled handoff stands in the in-flight
 				// group's front (row four), and the abandonment left the
-				// selection on its own row below it (row five: the mode line,
-				// the Ticket header, the border, and the padding row sit above
+				// selection on its own row below it (row four: the Ticket header,
+				// the border, and the padding row sit above
 				// the list), so the re-handoff takes no step at all.
 				const held = await settle(setup);
-				expect(markerRowOf(held)).toBe(5);
+				expect(markerRowOf(held)).toBe(4);
 				await settleReverify(src, pairMoved);
 				// The re-handoff settles on its new pane, which the agent list
 				// does not carry, so the row ends on its missing marker. The
@@ -4527,7 +4527,7 @@ describe("the handoff queue", () => {
 				await sleep(400);
 				const frame = await settle(setup, 1000);
 				// The one seat the cap allows, held by the live Agent.
-				expect(frameText(frame)).toContain("auto: off 1/1");
+				expect(frameText(frame)).toContain("● manual 1/1");
 				// The queued start never took a seat: its row stands, and no Agent
 				// started beside the live one.
 				expect(app.state.workQueue.hasWorkItem(secondIdentity)).toBe(true);
@@ -4666,7 +4666,7 @@ describe("the re-fire of a recorded skip (ADR 0042)", () => {
 				await awaitFrame(
 					setup,
 					(f) =>
-						f.includes("auto: on 1/2") &&
+						f.includes("○ auto 1/2") &&
 						ticketRow(f, "Persist source facts in state").includes("missing"),
 					"the review route on the pull request",
 				);
