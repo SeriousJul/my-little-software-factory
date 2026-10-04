@@ -964,6 +964,15 @@ function GalleryRepositorySelect(): ReactElement {
  */
 const OVER_LIMIT_DRAFT = "a".repeat(CONSULTATION_INPUT_LIMIT + 1);
 
+/**
+ * The row width the auto-mode example's last header wears.
+ *
+ * It is short enough that the header has to give whole count cells up before
+ * its mode cell keeps its corner, so the preview shows the drop and the growth
+ * back a reviewer has to see, not a note about them.
+ */
+const DROP_RULE_ROW_COLUMNS = 54;
+
 export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 	{
 		id: "fields",
@@ -1276,8 +1285,10 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 	{
 		// The Auto-handoff mode's lamp cell on the Ticket header's right corner:
 		// the `a` key flips the mode, and the row carries it as a shape and a word
-		// - the unlit lamp with `auto`, the lit lamp with `manual`. Where the row
-		// cannot hold every cell, the counts truncate before the lamp does.
+		// - the unlit lamp with `auto`, the lit lamp with `manual` - beside the
+		// Parallel limit seat reading and the Dispatch pause word. The last row
+		// shows the drop rule on a 54-column row: the counts give way whole from
+		// their tail, and the cell grows back into the room they left.
 		id: "auto-mode",
 		state: "Auto-handoff mode: the header's lamp, unlit for auto and lit for manual",
 		render: (columns, _holds, _inputActive, _wiring) => [
@@ -1307,11 +1318,46 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 				mode: { mode: "manual", seats: 1, limit: 2, dispatchPaused: false },
 				onToggle: () => undefined,
 			}),
+			// The Dispatch pause (ADR 0016): the word the cell wears while the
+			// pause holds the automatic works.
+			createElement(SectionHeader, {
+				key: "tickets-header-paused",
+				section: "tickets",
+				active: true,
+				terminalWidth: columns.contentWidth,
+				width: columns.contentWidth,
+				expanded: true,
+				open: 2,
+				running: 1,
+				awaiting: 1,
+				held: 1,
+				mode: { mode: "auto", seats: 2, limit: 3, dispatchPaused: true },
+				onToggle: () => undefined,
+			}),
+			// The drop rule on a row too short for the whole count line beside the
+			// whole cell: the pile, the bell, and the held count go whole, and the
+			// seat reading stands again in the room they left.
+			createElement(SectionHeader, {
+				key: "tickets-header-dropped",
+				section: "tickets",
+				active: true,
+				terminalWidth: DROP_RULE_ROW_COLUMNS,
+				width: DROP_RULE_ROW_COLUMNS,
+				expanded: true,
+				open: 2,
+				running: 1,
+				awaiting: 1,
+				held: 1,
+				heldBell: true,
+				ignored: 3,
+				mode: { mode: "manual", seats: 1, limit: 2, dispatchPaused: false },
+				onToggle: () => undefined,
+			}),
 			createElement(
 				"text",
 				{ key: "auto-mode-note", fg: paint("subtext0") },
 				truncateToWidth(
-					"`a` flips the mode; the seat count gives up its cells before a count does",
+					"`a` flips the mode; the 54-column row gives counts up whole and grows the seat reading back",
 					columns.contentWidth,
 				),
 			),
