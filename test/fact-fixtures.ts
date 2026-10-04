@@ -9,10 +9,20 @@
 import type { Completion, Handoff, Ticket } from "../src/domain/ticket.ts";
 import type { TicketFactInputs } from "../src/domain/ticket-facts.ts";
 import type { HerdrAgent } from "../src/herdr.ts";
+import { agentNameFor } from "../src/naming.ts";
 import type { WorkQueueHandoffItem, WorkQueueItem } from "../src/state/work-queue.ts";
 
 /** The name the sample handoff's Agent started under. */
 export const OWN_NAME = "sample-agent";
+
+/**
+ * The stable herdr name the naming rule gives the fixture Ticket (ADR 0098):
+ * its title slug with its own identity tag.
+ */
+export const STABLE_NAME = agentNameFor({
+	identity: "github:github.com:I_1",
+	title: "Retry policy for webhooks",
+});
 
 export function handoff(over: Partial<Handoff> = {}): Handoff {
 	return {

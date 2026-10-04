@@ -26,6 +26,7 @@ import { join } from "node:path";
 import type { AppProps } from "../src/components/app.ts";
 import type { FactoryConfig, TransitionOutcome } from "../src/config.ts";
 import type { FetchedTicket } from "../src/domain/ticket.ts";
+import { agentNameFor } from "../src/naming.ts";
 import type { FactoryState } from "../src/state.ts";
 import { openFactoryState } from "../src/state.ts";
 import type { FetchOutcome } from "../src/ticket-source.ts";
@@ -65,6 +66,8 @@ afterEach(() => {
 const source = { name: "issues", kind: "github-issues" };
 const identity = "github:github.com:I_5";
 const repoIdentity = "github.com/acme/factory";
+/** The herdr name the naming rule gives this Ticket (ADR 0098). */
+const AGENT_NAME = agentNameFor({ identity, title: "Persist source facts" });
 
 function fetched(index = 5): FetchedTicket {
 	return {
@@ -478,14 +481,10 @@ describe("the Starting window's timeline", () => {
 		app.runner.set("herdr", ["tab", "create", "--workspace", "ws-1", "--no-focus"], {
 			stdout: tabCreateJson("pane-9", "tab-9"),
 		});
-		app.runner.set(
-			"herdr",
-			["agent", "start", "persist-source-facts", "--kind", "pi", "--pane", "pane-9"],
-			{
-				code: 1,
-				stderr: "error: the pane is gone\n",
-			},
-		);
+		app.runner.set("herdr", ["agent", "start", AGENT_NAME, "--kind", "pi", "--pane", "pane-9"], {
+			code: 1,
+			stderr: "error: the pane is gone\n",
+		});
 		const gate = gateStart(app.runner);
 		await withApp(
 			async (setup) => {

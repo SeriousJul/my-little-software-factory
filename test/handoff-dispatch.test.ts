@@ -30,7 +30,7 @@ import {
 	type StoredHandoffFacts,
 } from "../src/handoff-dispatch.ts";
 import type { Logger } from "../src/logging.ts";
-import { cycleAgentName } from "../src/naming.ts";
+import { agentNameFor, cycleAgentName } from "../src/naming.ts";
 import type { CommandRunner } from "../src/runner.ts";
 import type { HandoffOrigin } from "../src/state/handoff.ts";
 import { workQueueIdentityOf } from "../src/state/work-queue.ts";
@@ -65,7 +65,7 @@ interface Seed {
 const FIRST: Seed = {
 	identity: "github:github.com:I_5",
 	title: "Add a webhook retry policy",
-	name: "add-a-webhook-retry-policy",
+	name: agentNameFor({ identity: "github:github.com:I_5", title: "Add a webhook retry policy" }),
 	paneId: "pane-1",
 	tabId: "tab-1",
 	workspaceId: "ws-1",
@@ -74,7 +74,7 @@ const FIRST: Seed = {
 const SECOND: Seed = {
 	identity: "github:github.com:I_6",
 	title: "Close the stale deploy branch",
-	name: "close-the-stale-deploy-branch",
+	name: agentNameFor({ identity: "github:github.com:I_6", title: "Close the stale deploy branch" }),
 	paneId: "pane-2",
 	tabId: "tab-2",
 	workspaceId: "ws-2",
@@ -83,21 +83,28 @@ const SECOND: Seed = {
 const THIRD: Seed = {
 	identity: "github:github.com:I_7",
 	title: "Reconcile the source list",
-	name: "reconcile-the-source-list",
+	name: agentNameFor({ identity: "github:github.com:I_7", title: "Reconcile the source list" }),
 	paneId: "pane-3",
 	tabId: "tab-3",
 	workspaceId: "ws-3",
 };
 
 /**
- * The route pair with one herdr name: the settled ticket's long title and the
- * position ticket's short title cut to the same 32-character name, the way an
- * issue and its fixing pull request do.
+ * The route pair one Handoff works on: the settled ticket, and the position
+ * ticket the settled turn routes to.
+ *
+ * Each Ticket asks herdr for its own name (ADR 0098), so the pair carries two
+ * names. A test that stands a name collision on the route stubs herdr's refusal
+ * of the position ticket's own name and chooses which pane holds it, so the
+ * rule that decides whether a holder is the handoff's own is what the test reads.
  */
 const ROUTE_SETTLED: Seed = {
 	identity: "github:github.com:I_8",
 	title: "The fixing pull request: the link, the list, and the rank",
-	name: "the-fixing-pull-request-the-link",
+	name: agentNameFor({
+		identity: "github:github.com:I_8",
+		title: "The fixing pull request: the link, the list, and the rank",
+	}),
 	paneId: "pane-1",
 	tabId: "tab-1",
 	workspaceId: "ws-1",
@@ -105,10 +112,36 @@ const ROUTE_SETTLED: Seed = {
 const ROUTE_TARGET: Seed = {
 	identity: "github:github.com:I_9",
 	title: "The fixing pull request: the link",
-	name: "the-fixing-pull-request-the-link",
+	name: agentNameFor({
+		identity: "github:github.com:I_9",
+		title: "The fixing pull request: the link",
+	}),
 	paneId: "pane-2",
 	tabId: "tab-2",
 	workspaceId: "ws-2",
+};
+
+/**
+ * The pair issue #216 is about: a Dependabot alert and the pull request opened
+ * to fix it carry one title, so the plane reads them as two Tickets with one
+ * title. Each still asks herdr for a name of its own.
+ */
+const SHARED_TITLE = "GHSA-6h2x-m376-mqjq: joi: Quadratic regular-expression backtracking";
+const SHARED_A: Seed = {
+	identity: "github:github.com:I_4",
+	title: SHARED_TITLE,
+	name: agentNameFor({ identity: "github:github.com:I_4", title: SHARED_TITLE }),
+	paneId: "pane-a",
+	tabId: "tab-a",
+	workspaceId: "ws-a",
+};
+const SHARED_B: Seed = {
+	identity: "github:github.com:I_1",
+	title: SHARED_TITLE,
+	name: agentNameFor({ identity: "github:github.com:I_1", title: SHARED_TITLE }),
+	paneId: "pane-b",
+	tabId: "tab-b",
+	workspaceId: "ws-b",
 };
 
 /**
@@ -526,6 +559,42 @@ function nameTaken(name: string, holders: { paneId: string; workspaceId: string 
 		)
 		.join(", ");
 	return `{"error":{"code":"agent_name_taken","message":"agent name ${name} is already used; candidates: ${candidates}"},"id":"cli:agent:start"}\n`;
+}
+
+/**
+ * herdr's own agent name space, standing in the fake runner.
+ *
+ * The name one `agent start` took stays held for the rest of the run, and every
+ * later ask for it gets herdr's `agent_name_taken` refusal with the holder's
+ * pane and workspace named. Issue #216 is a refusal of exactly this shape, so a
+ * fake that accepts any name a Ticket asks for cannot reproduce it.
+ */
+function herdrWithItsOwnNameSpace(
+	rig: Rig,
+	held: Map<string, { paneId: string; workspaceId: string }>,
+): CommandRunner {
+	const isStart = (command: string, args: readonly string[]): boolean =>
+		command === "herdr" && args[0] === "agent" && args[1] === "start";
+	return {
+		run: async (command, args, options) => {
+			if (isStart(command, args)) {
+				const holder = held.get(args[2]);
+				if (holder !== undefined) {
+					return { code: 1, stdout: "", stderr: nameTaken(args[2], [holder]) };
+				}
+			}
+			const result = await rig.runner.run(command, args, options);
+			if (isStart(command, args) && result.code === 0) {
+				const at = args.indexOf("--pane");
+				held.set(args[2], {
+					paneId: at === -1 ? "pane-agent" : args[at + 1],
+					workspaceId: FIRST.workspaceId,
+				});
+			}
+			return result;
+		},
+		listModels: (kind) => rig.runner.listModels(kind),
+	};
 }
 
 describe("the seat", () => {
@@ -1166,7 +1235,7 @@ describe("the claim, the settle, and every origin", () => {
 		expect(await rigRef.waitForStarted(FIRST.identity)).toEqual({ ok: true });
 		expect(rigRef.state.ticketWorkCycle.ticketState(FIRST.identity)).toBe("handed-off");
 		expect(rigRef.events).toContain(
-			"error:agent add-a-webhook-retry-policy started, but the prompt failed: the pipe broke",
+			`error:agent ${FIRST.name} started, but the prompt failed: the pipe broke`,
 		);
 		// The running Agent's Environment stands: the failure cleanup ran neither
 		// the workspace close nor the tab close.
@@ -1342,7 +1411,7 @@ describe("the outcome wording", () => {
 		);
 		expect(line.events).toEqual([
 			"clear-working",
-			"warning:a leftover agent still holds the herdr name webhook-retry; this agent started as webhook-retry-c2",
+			"warning:a leftover agent holds webhook-retry; this agent started as webhook-retry-c2",
 		]);
 	});
 
@@ -1374,7 +1443,7 @@ describe("the outcome wording", () => {
 		);
 		expect(line.events).toEqual([
 			"clear-working",
-			"error:agent webhook-retry started, but the prompt failed: herdr is gone; a leftover agent still holds the herdr name webhook-retry; this agent started as webhook-retry-c2",
+			"error:agent webhook-retry started, but the prompt failed: herdr is gone; a leftover agent holds webhook-retry; this agent started as webhook-retry-c2",
 		]);
 	});
 });
@@ -1669,7 +1738,7 @@ describe("the name fact", () => {
 		expect(started).toEqual([{ ok: true }]);
 		// The handoff started beside the leftover, under its cycle name.
 		expect(rigRef.commands()).toContain(
-			`herdr agent start ${FIRST.name}-c3 --kind pi --pane pane-agent`,
+			`herdr agent start ${cycleAgentName(FIRST, 3)} --kind pi --pane pane-agent`,
 		);
 		expect(rigRef.state.ticketWorkCycle.ticketState(FIRST.identity)).toBe("handed-off");
 		// The leftover stays a fact on the ticket, not only a line that fades,
@@ -1685,7 +1754,7 @@ describe("the name fact", () => {
 		);
 		// And the line says which name the agent actually runs under.
 		expect(rigRef.events).toContain(
-			`warning:a leftover agent still holds the herdr name ${FIRST.name}; this agent started as ${FIRST.name}-c3`,
+			`warning:a leftover agent holds ${FIRST.name}; this agent started as ${cycleAgentName(FIRST, 3)}`,
 		);
 	});
 
@@ -1716,7 +1785,7 @@ describe("the name fact", () => {
 		await rigRef.waitForStarted(FIRST.identity);
 		expect(started).toEqual([{ ok: true }]);
 		expect(rigRef.commands()).toContain(
-			`herdr agent start ${FIRST.name}-c2 --kind pi --pane pane-agent`,
+			`herdr agent start ${cycleAgentName(FIRST, 2)} --kind pi --pane pane-agent`,
 		);
 		expect(rigRef.state.handoff.leftoverEnvironment(FIRST.identity)?.reason).toContain(
 			`the leftover agent still holds the herdr name ${FIRST.name}`,
@@ -1747,6 +1816,62 @@ describe("the name fact", () => {
 		// The stranger is not this ticket's to move aside, and a name of its own
 		// is no answer: the stable name was asked for once.
 		expect(rigRef.commands().filter((c) => c.startsWith("herdr agent start"))).toHaveLength(1);
+	});
+
+	test("two Tickets that share a title each start under a name of their own (issue #216)", async () => {
+		const rigRef = rig([SHARED_A, SHARED_B]);
+		// herdr holds one agent name space across every Ticket it knows, so the
+		// fake holds one too: the name the first Ticket's agent took is refused
+		// for the next ask, with the holder named. That refusal is issue #216.
+		const heldNames = new Map<string, { paneId: string; workspaceId: string }>();
+		const herdr = herdrWithItsOwnNameSpace(rigRef, heldNames);
+		rigRef.dispatch = withRunner(rigRef, herdr);
+		const startedA: DispatchResult[] = [];
+		await expect(
+			start(rigRef, SHARED_A, "open", (result) => startedA.push(result)),
+		).resolves.toEqual({
+			ok: true,
+		});
+		await rigRef.waitForStarted(SHARED_A.identity);
+		const startedB: DispatchResult[] = [];
+		await expect(
+			start(rigRef, SHARED_B, "open", (result) => startedB.push(result)),
+		).resolves.toEqual({
+			ok: true,
+		});
+		await rigRef.waitForStarted(SHARED_B.identity);
+
+		expect(startedA).toEqual([{ ok: true }]);
+		expect(startedB).toEqual([{ ok: true }]);
+		// The two Tickets ask for different names, so the second is never refused
+		// for the name the first one holds. Before the identity tag (ADR 0098)
+		// both asked for `ghsa-6h2x-m376-mqjq-joi-quadrati`, and the second met
+		// herdr's refusal on every ask.
+		const names = rigRef
+			.commands()
+			.filter((command) => command.startsWith("herdr agent start "))
+			.map((command) => command.split(" ")[3]);
+		expect(names).toEqual([SHARED_A.name, SHARED_B.name]);
+		expect(new Set(names).size).toBe(2);
+		expect(rigRef.events.filter((event) => event.includes("agent_name_taken"))).toEqual([]);
+		expect(rigRef.state.ticketWorkCycle.ticketState(SHARED_A.identity)).toBe("handed-off");
+		expect(rigRef.state.ticketWorkCycle.ticketState(SHARED_B.identity)).toBe("handed-off");
+		// The rig holds a real name space: the name Ticket A's agent took is
+		// refused for any later ask. That is the refusal issue #216 reported for
+		// two Tickets of one title, so this test can meet it rather than only
+		// state that its names differ.
+		const refusal = await herdr.run("herdr", [
+			"agent",
+			"start",
+			SHARED_A.name,
+			"--kind",
+			"pi",
+			"--pane",
+			"pane-later",
+		]);
+		expect(refusal.code).toBe(1);
+		expect(refusal.stderr).toContain("agent_name_taken");
+		expect(refusal.stderr).toContain(SHARED_A.name);
 	});
 
 	test("a refusal that names no holder is no agent of this ticket, and records nothing", async () => {
@@ -1784,7 +1909,7 @@ describe("the name fact", () => {
 		// the handoff asks the cycle name for the seat instead of failing as a
 		// stranger.
 		expect(rigRef.commands()).toContain(
-			`herdr agent start ${cycleAgentName(ROUTE_TARGET.title, 1)} --kind pi --pane pane-agent`,
+			`herdr agent start ${cycleAgentName(ROUTE_TARGET, 1)} --kind pi --pane pane-agent`,
 		);
 		expect(rigRef.state.ticketWorkCycle.ticketState(ROUTE_TARGET.identity)).toBe("handed-off");
 		// No leftover fact lands: the holder's environment is the settled
@@ -1793,7 +1918,7 @@ describe("the name fact", () => {
 		expect(rigRef.state.handoff.leftoverEnvironment(ROUTE_SETTLED.identity)).toBeNull();
 		// And the line says which name the agent actually runs under.
 		expect(rigRef.events).toContain(
-			`warning:a leftover agent still holds the herdr name ${ROUTE_TARGET.name}; this agent started as ${cycleAgentName(ROUTE_TARGET.title, 1)}`,
+			`warning:a leftover agent holds ${ROUTE_TARGET.name}; this agent started as ${cycleAgentName(ROUTE_TARGET, 1)}`,
 		);
 	});
 
@@ -1895,7 +2020,7 @@ describe("the Parallel limit and the Work queue", () => {
 		await untilQueueDrains(rigRef);
 		expect(rigRef.state.workQueue.items()).toHaveLength(0);
 		expect(rigRef.commands()).toContain(
-			`herdr agent start ${cycleAgentName(ROUTE_TARGET.title, 1)} --kind pi --pane pane-agent`,
+			`herdr agent start ${cycleAgentName(ROUTE_TARGET, 1)} --kind pi --pane pane-agent`,
 		);
 		expect(rigRef.state.ticketWorkCycle.ticketState(ROUTE_TARGET.identity)).toBe("handed-off");
 		// The decision lands on the settled turn, like the direct route's start:

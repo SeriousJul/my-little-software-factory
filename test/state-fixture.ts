@@ -12,6 +12,7 @@ import { join } from "node:path";
 import type { FactoryConfig, TransitionOutcome } from "../src/config.ts";
 import type { GroupingAxis } from "../src/domain/grouping.ts";
 import type { EnvironmentKind, FetchedTicket } from "../src/domain/ticket.ts";
+import { agentNameFor } from "../src/naming.ts";
 import type { FactoryState } from "../src/state.ts";
 import { openFactoryState } from "../src/state.ts";
 import type { FetchOutcome } from "../src/ticket-source.ts";
@@ -83,6 +84,12 @@ export function issueTicket(
 		...over,
 	};
 }
+
+/**
+ * The herdr name the naming rule gives the fixture's default Ticket (ADR 0098):
+ * its title slug with its own identity tag.
+ */
+export const DEFAULT_AGENT_NAME = agentNameFor(issueTicket());
 
 export const success = (tickets: FetchedTicket[]): FetchOutcome => ({
 	status: "success",

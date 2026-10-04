@@ -91,7 +91,7 @@ export function agentInPane(
  */
 export function ticketAgentName(ticket: Ticket): string {
 	const recorded = ticket.handoff?.herdrName ?? null;
-	return recorded !== null && recorded !== "" ? recorded : agentNameFor(ticket.title);
+	return recorded !== null && recorded !== "" ? recorded : agentNameFor(ticket);
 }
 
 /**

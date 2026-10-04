@@ -396,7 +396,7 @@ _Avoid_: jump, follow, attach
 
 **Handoff**:
 Assigning a ticket to an agent type and an environment with a task type, and starting the agent's execution.
-It asks Herdr for the ticket's stable Agent name, and takes the name of its work cycle when the ticket's own Leftover environment still holds the stable one.
+It asks Herdr for the ticket's stable Agent name, which names that ticket and no other (ADR 0098), and takes the name of its work cycle when the ticket's own Leftover environment still holds the stable one.
 _Avoid_: assign, dispatch, launch
 
 **Plane action**:

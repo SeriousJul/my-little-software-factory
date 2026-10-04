@@ -26,6 +26,7 @@ import {
 	reviewVerdictFill,
 	settingArgs,
 } from "../src/handoff.ts";
+import { agentNameFor, cycleAgentName } from "../src/naming.ts";
 import type { Consultation } from "../src/state/consultation-record.ts";
 import { BASE_CONFIG } from "./base-config.ts";
 import { expectNoCommand } from "./command-assertions.ts";
@@ -132,7 +133,10 @@ const EXPECTED_IMPLEMENT_PROMPT =
 	"Implement the following github-issue.\n\nRepository: acme/billing\n\n" +
 	"#7: Retry policy for webhooks\n\nURL: https://github.com/acme/billing/issues/7\n\n" +
 	"Labels: \n\nDescription:\nAdd a retry policy.";
-const AGENT = "retry-policy-for-webhooks";
+const AGENT = agentNameFor(ticket);
+/** The Ticket's own cycle name and ordinal name, in the words herdr hears. */
+const CYCLE = cycleAgentName(ticket, 1);
+const ORDINAL = cycleAgentName(ticket, 1, 1);
 
 /** A git checkout that resolves from the convention path. */
 function conventionCheckout(runner: FakeRunner): void {
@@ -3453,7 +3457,7 @@ describe("a leftover agent that holds the ticket's name", () => {
 	test("starts under its cycle name beside its own leftover agent", async () => {
 		const runner = new FakeRunner();
 		openedWorktree(runner, "pane-old", "ws-old");
-		const cycle = "retry-policy-for-webhooks-c1";
+		const cycle = CYCLE;
 
 		const outcome = await handOffTicket(
 			ticket,
@@ -3538,7 +3542,7 @@ describe("a leftover agent that holds the ticket's name", () => {
 		// The ticket already knows what it left alive, so herdr's unreadable
 		// reason is not the last word: the handoff starts anyway.
 		expect(outcome.status).toBe("ok");
-		expect(outcome.status === "ok" && outcome.agent.name).toBe("retry-policy-for-webhooks-c1");
+		expect(outcome.status === "ok" && outcome.agent.name).toBe(CYCLE);
 	});
 
 	test("fails on a name another agent holds, and says where it is held", async () => {
@@ -3576,7 +3580,7 @@ describe("a leftover agent that holds the ticket's name", () => {
 		const runner = new FakeRunner();
 		openedWorktree(runner, "pane-old", "ws-old");
 		// Every name of this ticket is held by one of its own leftover agents.
-		for (const name of ["retry-policy-for-webhooks-c1", "retry-policy-for-webhooks-c1-1"]) {
+		for (const name of [CYCLE, ORDINAL]) {
 			runner.set("herdr", ["agent", "start", name, "--kind", "pi", "--pane", "pane-tab"], {
 				code: 1,
 				stderr: nameTaken("pane-old", "ws-old", "ws-old:t1"),
@@ -3614,7 +3618,7 @@ describe("a leftover agent that holds the ticket's name", () => {
 			`candidates: terminal_id=term_1 pane_id=pane-stranger workspace_id=ws-stranger ` +
 			`tab_id=ws-stranger:t1 cwd=unknown status=Working terminal_id=term_2 pane_id=pane-old ` +
 			`workspace_id=ws-old tab_id=ws-old:t2 cwd=unknown status=Idle"},"id":"cli:agent:start"}\n`;
-		for (const name of [AGENT, "retry-policy-for-webhooks-c1", "retry-policy-for-webhooks-c1-1"]) {
+		for (const name of [AGENT, CYCLE, ORDINAL]) {
 			runner.set("herdr", ["agent", "start", name, "--kind", "pi", "--pane", "pane-tab"], {
 				code: 1,
 				stderr: bothHeld(name),
@@ -3648,15 +3652,23 @@ describe("a leftover agent that holds the ticket's name", () => {
 		expect(reasonOf(outcome)).toContain("own leftover agent still holds the herdr name");
 	});
 
-	test("asks herdr for each name once, even when its cycle rebuilds the stable one", async () => {
+	test("asks herdr for each of its names once, and never repeats one", async () => {
 		const runner = new FakeRunner();
-		// A 32-character slug whose tail already spells the cycle suffix
-		// rebuilds the stable name under the length cut. The handoff drops
-		// that repeat instead of asking herdr for one name twice, and still
-		// has its ordinal name to start under.
-		const stable = `${"a".repeat(29)}-c2`;
-		const ordinal = `${"a".repeat(27)}-c2-2`;
-		const longTicket: Ticket = { ...ticket, title: stable, workCycle: 2, handoffCount: 1 };
+		// A 32-character slug whose tail already spells the cycle suffix was the
+		// shape where the length cut rebuilt the stable name, and the candidate
+		// list had to drop the repeat. The identity tag is what keeps the three
+		// names apart now (ADR 0098), so this handoff asks herdr for three
+		// different names and starts under its ordinal.
+		const longTicket: Ticket = {
+			...ticket,
+			title: `${"a".repeat(29)}-c2`,
+			workCycle: 2,
+			handoffCount: 1,
+		};
+		const stable = agentNameFor(longTicket);
+		const cycle = cycleAgentName(longTicket, 2);
+		const ordinal = cycleAgentName(longTicket, 2, 2);
+		expect(new Set([stable, cycle, ordinal]).size).toBe(3);
 		conventionCheckout(runner);
 		runner.set("herdr", ["workspace", "list"], {
 			stdout: workspaceListJson([{ id: "ws", checkoutPath: CHECKOUT }]),
@@ -3667,6 +3679,10 @@ describe("a leftover agent that holds the ticket's name", () => {
 		runner.set("herdr", ["agent", "start", stable, "--kind", "pi", "--pane", "pane-1"], {
 			code: 1,
 			stderr: nameTaken("pane-old", "ws-old", "ws-old:t1", stable),
+		});
+		runner.set("herdr", ["agent", "start", cycle, "--kind", "pi", "--pane", "pane-1"], {
+			code: 1,
+			stderr: nameTaken("pane-old", "ws-old", "ws-old:t1", cycle),
 		});
 
 		const outcome = await handOffTicket(longTicket, defaultChoice, {
@@ -3682,6 +3698,7 @@ describe("a leftover agent that holds the ticket's name", () => {
 		expect(outcome.status === "ok" && outcome.collision?.startedAs).toBe(ordinal);
 		expect(runner.commands().filter((command) => command.startsWith("herdr agent start"))).toEqual([
 			`herdr agent start ${stable} --kind pi --pane pane-1`,
+			`herdr agent start ${cycle} --kind pi --pane pane-1`,
 			`herdr agent start ${ordinal} --kind pi --pane pane-1`,
 		]);
 	});
@@ -3692,15 +3709,11 @@ describe("a leftover agent that holds the ticket's name", () => {
 		// The stable name is the ticket's own leftover; the cycle name then
 		// fails for a reason of its own. The operator reads that reason, not
 		// the collision an earlier candidate met.
-		runner.set(
-			"herdr",
-			["agent", "start", "retry-policy-for-webhooks-c1", "--kind", "pi", "--pane", "pane-tab"],
-			{
-				code: 1,
-				stderr:
-					'{"error":{"code":"agent_kind_unknown","message":"herdr does not know the agent kind pi"},"id":"cli:agent:start"}\n',
-			},
-		);
+		runner.set("herdr", ["agent", "start", CYCLE, "--kind", "pi", "--pane", "pane-tab"], {
+			code: 1,
+			stderr:
+				'{"error":{"code":"agent_kind_unknown","message":"herdr does not know the agent kind pi"},"id":"cli:agent:start"}\n',
+		});
 
 		const outcome = await handOffTicket(
 			ticket,

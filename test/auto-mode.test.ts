@@ -19,6 +19,7 @@ import { join } from "node:path";
 import type { AppProps } from "../src/components/app.ts";
 import type { FactoryConfig, TransitionOutcome } from "../src/config.ts";
 import { type FetchedTicket, withIssueReferences } from "../src/domain/ticket.ts";
+import { agentNameFor, cycleAgentName } from "../src/naming.ts";
 import type { CommandRunner } from "../src/runner.ts";
 import type { FactoryState } from "../src/state.ts";
 import { openFactoryState } from "../src/state.ts";
@@ -72,6 +73,14 @@ const source = { name: "issues", kind: "github-issues" };
 const identity = "github:github.com:I_5";
 const secondIdentity = "github:github.com:I_6";
 const repoIdentity = "github.com/acme/factory";
+/**
+ * The herdr names the naming rule gives the fixture Ticket (ADR 0098): its
+ * stable name, and the name of its second work cycle.
+ */
+const AGENT = agentNameFor({ identity, title: "Persist source facts" });
+const CYCLE2 = cycleAgentName({ identity, title: "Persist source facts" }, 2);
+/** The herdr name the naming rule gives the second fixture Ticket. */
+const SECOND_AGENT = agentNameFor({ identity: secondIdentity, title: "Watch agent turns" });
 /**
  * The outcome the implement transition produced for these tests: it fired,
  * wrote ready-for-review to the ticket (removing ready-for-agent), and the
@@ -548,7 +557,7 @@ describe("the mode line and the a key", () => {
 					paneId: "pane-1",
 					tabId: "tab-1",
 					workspaceId: "ws-1",
-					agent: "persist-source-facts",
+					agent: AGENT,
 					status: "blocked",
 				},
 			]),
@@ -610,7 +619,7 @@ describe("the mode line and the a key", () => {
 					paneId: "pane-1",
 					tabId: "tab-1",
 					workspaceId: "ws-1",
-					agent: "persist-source-facts",
+					agent: AGENT,
 					status: "working",
 				},
 				{
@@ -647,7 +656,7 @@ describe("the failure markers", () => {
 					paneId: "pane-1",
 					tabId: "tab-1",
 					workspaceId: "ws-1",
-					agent: "persist-source-facts",
+					agent: AGENT,
 					status: "blocked",
 				},
 			]),
@@ -749,7 +758,7 @@ describe("the failure markers", () => {
 					app.runner.commands().some((command) => command.startsWith("herdr agent prompt")),
 				);
 				expect(app.runner.commands()).toContain(
-					"herdr agent start persist-source-facts --kind pi --pane pane-restart -- --model gpt-5.6 --thinking high",
+					`herdr agent start ${AGENT} --kind pi --pane pane-restart -- --model gpt-5.6 --thinking high`,
 				);
 				expect(app.state.ticketWorkCycle.ticketListViews([], "implement").rows[0].handoff).toEqual(
 					expect.objectContaining({
@@ -813,7 +822,7 @@ describe("the failure markers", () => {
 					paneId: "pane-1",
 					tabId: "tab-1",
 					workspaceId: "ws-1",
-					agent: "persist-source-facts",
+					agent: AGENT,
 					status: "blocked",
 				},
 			]),
@@ -1265,7 +1274,7 @@ describe("the detail pane", () => {
 				expect(detail).toContain("Handoffs: 1/10");
 				// The last completion: date, task type, agent, decision, message.
 				expect(detail).toContain(
-					"Last completion: 2026-08-31 11:00 implement by persist-source-facts (pi) pending",
+					`Last completion: 2026-08-31 11:00 implement by ${AGENT} (pi) pending`,
 				);
 				expect(detail).toContain("The turn is done.");
 			},
@@ -1755,15 +1764,10 @@ describe("the decision modal", () => {
 		});
 		// The previous agent holds the stable name. The routed handoff starts
 		// under its cycle name, then closes the predecessor tab that held it.
-		app.runner.set(
-			"herdr",
-			["agent", "start", "persist-source-facts", "--kind", "pi", "--pane", "pane-9"],
-			{
-				code: 1,
-				stderr:
-					'{"error":{"code":"agent_name_taken","message":"agent name persist-source-facts is already used; candidates: terminal_id=term_1 pane_id=pane-1 workspace_id=ws-1 tab_id=tab-1 cwd=unknown status=Idle"}}\n',
-			},
-		);
+		app.runner.set("herdr", ["agent", "start", AGENT, "--kind", "pi", "--pane", "pane-9"], {
+			code: 1,
+			stderr: `{"error":{"code":"agent_name_taken","message":"agent name ${AGENT} is already used; candidates: terminal_id=term_1 pane_id=pane-1 workspace_id=ws-1 tab_id=tab-1 cwd=unknown status=Idle"}}\n`,
+		});
 
 		await withApp(
 			async (setup) => {
@@ -2297,7 +2301,7 @@ describe("the decision modal", () => {
 				// route's decision landed on the settled turn's trace when the
 				// routed handoff started.
 				expect(app.runner.commands()).toContain(
-					"herdr agent start persist-source-facts --kind codex --pane pane-9",
+					`herdr agent start ${AGENT} --kind codex --pane pane-9`,
 				);
 				expect(app.state.ticketWorkCycle.lastCompletion(identity)?.decision).toBe("handed-off");
 			},
@@ -3230,15 +3234,10 @@ describe("the leftover environment", () => {
 			["tab", "create", "--workspace", "ws-1", "--cwd", `${path}/wt`, "--no-focus"],
 			{ stdout: tabCreateJson("pane-2", "tab-2") },
 		);
-		app.runner.set(
-			"herdr",
-			["agent", "start", "persist-source-facts", "--kind", "pi", "--pane", "pane-2"],
-			{
-				code: 1,
-				stderr:
-					'{"error":{"code":"agent_name_taken","message":"agent name persist-source-facts is already used; candidates: terminal_id=term_1 pane_id=pane-1 workspace_id=ws-1 tab_id=tab-1 cwd=unknown status=Idle"},"id":"cli:agent:start"}\n',
-			},
-		);
+		app.runner.set("herdr", ["agent", "start", AGENT, "--kind", "pi", "--pane", "pane-2"], {
+			code: 1,
+			stderr: `{"error":{"code":"agent_name_taken","message":"agent name ${AGENT} is already used; candidates: terminal_id=term_1 pane_id=pane-1 workspace_id=ws-1 tab_id=tab-1 cwd=unknown status=Idle"},"id":"cli:agent:start"}\n`,
+		});
 		return app;
 	}
 
@@ -3270,23 +3269,20 @@ describe("the leftover environment", () => {
 				app.src.settle(success);
 				await closeAndHandOffAgain(setup, app.src);
 				const commands = app.runner.commands();
-				expect(commands).toContain(
-					"herdr agent start persist-source-facts-c2 --kind pi --pane pane-2",
-				);
+				expect(commands).toContain(`herdr agent start ${CYCLE2} --kind pi --pane pane-2`);
 				expect(commands.filter((command) => command.startsWith("herdr agent prompt "))).toEqual([
-					expect.stringContaining("herdr agent prompt persist-source-facts-c2 "),
+					expect.stringContaining(`herdr agent prompt ${CYCLE2} `),
 				]);
 				// The operator learns why the name is not the one they know.
-				expect(frameText(setup.captureCharFrame())).toContain(
-					"this agent started as persist-source-facts-c2",
-				);
+				expect(frameText(setup.captureCharFrame())).toContain(`this agent started as ${CYCLE2}`);
 				expect(app.state.handoff.leftoverEnvironment(identity)).not.toBe(null);
 				// The durable handoff knows the name herdr accepted, so its
 				// completion trace will name the agent that actually ran.
-				expect(app.state.ticketWorkCycle.agentNameForTicket(identity)).toBe(
-					"persist-source-facts-c2",
-				);
+				expect(app.state.ticketWorkCycle.agentNameForTicket(identity)).toBe(CYCLE2);
 			},
+			// The warning names both herdr names on the one status row, and the
+			// suite reads it at the ordinary terminal width: a cut line would hide
+			// the name the agent actually started as.
 			WIDTH,
 			HEIGHT,
 			propsOf(app),
@@ -3301,15 +3297,11 @@ describe("the leftover environment", () => {
 		app.runner.set("herdr", ["worktree", "remove", "--workspace", "ws-1"], { code: 0 });
 		const collisionRunner: CommandRunner = {
 			run: (command, args, options) =>
-				command === "herdr" &&
-				args[0] === "agent" &&
-				args[1] === "start" &&
-				args[2] !== "persist-source-facts"
+				command === "herdr" && args[0] === "agent" && args[1] === "start" && args[2] !== AGENT
 					? Promise.resolve({
 							code: 1,
 							stdout: "",
-							stderr:
-								'{"error":{"code":"agent_name_taken","message":"agent name persist-source-facts-c2 is already used; candidates: terminal_id=term_2 pane_id=pane-stranger workspace_id=ws-stranger tab_id=tab-stranger cwd=unknown status=Idle"}}\n',
+							stderr: `{"error":{"code":"agent_name_taken","message":"agent name ${CYCLE2} is already used; candidates: terminal_id=term_2 pane_id=pane-stranger workspace_id=ws-stranger tab_id=tab-stranger cwd=unknown status=Idle"}}\n`,
 						})
 					: app.runner.run(command, args, options),
 			listModels: (kind) => app.runner.listModels(kind),
@@ -3369,11 +3361,9 @@ describe("the leftover environment", () => {
 				// so the test renders wide enough to hold the whole of it.
 				const shown = frameText(setup.captureCharFrame());
 				expect(shown).toContain(
-					"agent persist-source-facts-c2 started, but the prompt failed: agent has no pane (agent_gone)",
+					`agent ${CYCLE2} started, but the prompt failed: agent has no pane (agent_gone)`,
 				);
-				expect(shown).toContain(
-					"a leftover agent still holds the herdr name persist-source-facts; this agent started as persist-source-facts-c2",
-				);
+				expect(shown).toContain(`a leftover agent holds ${AGENT}; this agent started as ${CYCLE2}`);
 				// The agent runs, so the cycle stands: the ticket is handed off.
 				expect(app.state.ticketWorkCycle.ticketState(identity)).toBe("handed-off");
 			},
@@ -3537,8 +3527,8 @@ describe("the auto dispatch", () => {
 				// name: the queue drained, and no handoff ran twice.
 				const starts = app.runner.commands().filter((c) => c.startsWith("herdr agent start"));
 				expect(starts).toEqual([
-					"herdr agent start persist-source-facts --kind pi --pane pane-1",
-					"herdr agent start watch-agent-turns --kind pi --pane pane-1",
+					`herdr agent start ${AGENT} --kind pi --pane pane-1`,
+					`herdr agent start ${SECOND_AGENT} --kind pi --pane pane-1`,
 				]);
 				// No ticket is left with an unresolved handoff: every claim
 				// the queue held settled, so nothing needs recovery.
@@ -3608,7 +3598,7 @@ describe("the auto dispatch", () => {
 				const held = await settle(setup);
 				expect(ticketRow(held)).toContain("[open]");
 				expect(app.runner.commands().filter((c) => c.startsWith("herdr agent start"))).toEqual([
-					"herdr agent start watch-agent-turns --kind pi --pane pane-1",
+					`herdr agent start ${SECOND_AGENT} --kind pi --pane pane-1`,
 				]);
 			},
 			WIDTH,
@@ -3705,7 +3695,7 @@ describe("the auto decision", () => {
 					paneId: "pane-9",
 					tabId: "tab-9",
 					workspaceId: "ws-1",
-					agent: "persist-source-facts",
+					agent: AGENT,
 					status: "working",
 				},
 			]),
@@ -3796,7 +3786,7 @@ describe("the auto decision", () => {
 					paneId: "pane-9",
 					tabId: "tab-9",
 					workspaceId: "ws-1",
-					agent: "persist-source-facts",
+					agent: AGENT,
 					status: "working",
 				},
 			]),
@@ -3901,7 +3891,7 @@ describe("the auto decision", () => {
 							paneId: "pane-1",
 							tabId: "tab-1",
 							workspaceId: "ws-1",
-							agent: "persist-source-facts",
+							agent: AGENT,
 							status: "working",
 						},
 					]),
@@ -4185,7 +4175,7 @@ describe("the Operator-decides type parks its completions for the operator (ADR 
 							paneId: "pane-1",
 							tabId: "tab-1",
 							workspaceId: "ws-1",
-							agent: "persist-source-facts",
+							agent: AGENT,
 							status: "working",
 						},
 					]),
@@ -4200,7 +4190,7 @@ describe("the Operator-decides type parks its completions for the operator (ADR 
 							paneId: "pane-1",
 							tabId: "tab-1",
 							workspaceId: "ws-1",
-							agent: "persist-source-facts",
+							agent: AGENT,
 							status: "idle",
 						},
 					]),
@@ -4309,7 +4299,7 @@ describe("the handoff queue", () => {
 		// re-handoff's own start passes through it.
 		const gate = gateOnRunner(
 			inner,
-			(command) => command === "herdr agent start persist-source-facts --kind pi --pane pane-1",
+			(command) => command === `herdr agent start ${AGENT} --kind pi --pane pane-1`,
 		);
 		const src = new FakeSource("issues", "github-issues", pairMoved);
 
@@ -4411,7 +4401,7 @@ describe("the handoff queue", () => {
 				// the ticket that moved on, and the operator's removal left
 				// the Work queue empty.
 				const starts = inner.commands().filter((c) => c.startsWith("herdr agent start"));
-				expect(starts).toEqual(["herdr agent start persist-source-facts --kind pi --pane pane-1"]);
+				expect(starts).toEqual([`herdr agent start ${AGENT} --kind pi --pane pane-1`]);
 				expect(state.workQueue.hasWorkItem(secondIdentity)).toBe(false);
 				// The abandonment ran the Close cleanup on the stored
 				// environment.
@@ -4446,16 +4436,14 @@ describe("the handoff queue", () => {
 				await awaitFrame(
 					setup,
 					() =>
-						inner
-							.commands()
-							.includes("herdr agent start watch-agent-turns --kind pi --pane pane-1"),
+						inner.commands().includes(`herdr agent start ${SECOND_AGENT} --kind pi --pane pane-1`),
 					"the re-handoff start",
 				);
 				await settle(setup);
 				const startsAfter = inner.commands().filter((c) => c.startsWith("herdr agent start"));
 				expect(startsAfter).toEqual([
-					"herdr agent start persist-source-facts --kind pi --pane pane-1",
-					"herdr agent start watch-agent-turns --kind pi --pane pane-1",
+					`herdr agent start ${AGENT} --kind pi --pane pane-1`,
+					`herdr agent start ${SECOND_AGENT} --kind pi --pane pane-1`,
 				]);
 				const finalVisible = state.ticketWorkCycle.ticketListViews(
 					config.workflowStates,
@@ -4518,7 +4506,7 @@ describe("the handoff queue", () => {
 					paneId: "pane-1",
 					tabId: "tab-1",
 					workspaceId: "ws-1",
-					agent: "persist-source-facts",
+					agent: AGENT,
 					status: "working",
 				},
 			]),

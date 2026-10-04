@@ -48,6 +48,7 @@ import {
 } from "./fake-runner.ts";
 import { FakeSource } from "./fake-source.ts";
 import {
+	DEFAULT_AGENT_NAME,
 	issuesConfig,
 	issueTicket,
 	seedAwaitingTurn,
@@ -93,7 +94,7 @@ function forcedFixture() {
 				paneId: "pane-1",
 				tabId: "tab-1",
 				workspaceId: "ws-1",
-				agent: "add-a-webhook-retry-policy",
+				agent: DEFAULT_AGENT_NAME,
 				status: "working",
 			},
 		]),

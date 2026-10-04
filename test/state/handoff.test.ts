@@ -13,6 +13,7 @@ import {
 	cleanup,
 	closedCycle,
 	fetched,
+	HARNESS_AGENT_NAME,
 	labeled,
 	POSITION_STATES,
 	sourceA,
@@ -717,7 +718,7 @@ describe("the handoff aggregate", () => {
 		state.handoff.settleHandoff(claim.claim.attemptId, true, undefined, { paneId: "pane-1" });
 		// A legacy row, and every clean handoff of a free name: the naming
 		// rule gives the same answer herdr took.
-		expect(state.ticketWorkCycle.agentNameForTicket(identity)).toBe("persist-source-facts");
+		expect(state.ticketWorkCycle.agentNameForTicket(identity)).toBe(HARNESS_AGENT_NAME);
 		state.close();
 	});
 	test("a reclaim refuses an agent that is not the ticket's own", () => {
@@ -745,13 +746,13 @@ describe("the handoff aggregate", () => {
 			paneId: "pane-1",
 			tabId: "tab-1",
 			workspaceId: "ws-1",
-			agentName: "persist-source-facts",
+			agentName: HARNESS_AGENT_NAME,
 		});
 		expect(claimed).toEqual({ attemptId: expect.any(String) });
 		const ticket = state.ticketWorkCycle
 			.ticketListViews([], "implement")
 			.rows.find((t) => t.identity === identity);
-		expect(ticket?.handoff?.herdrName).toBe("persist-source-facts");
+		expect(ticket?.handoff?.herdrName).toBe(HARNESS_AGENT_NAME);
 		state.close();
 	});
 	test("a failed clear leaves the leftover standing with its new reason", () => {
