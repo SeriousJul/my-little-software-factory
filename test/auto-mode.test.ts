@@ -1101,8 +1101,8 @@ describe("the Ticket Close key", () => {
 				expect(commands).toContain("herdr worktree remove --workspace ws-1");
 				expect(commands).not.toContain("branch -D");
 				// The closed cycle counts toward the Handoff limit like any other:
-				// the limit counts the handoffs that started, and this one did.
-				expect(detailPaneText(frame)).toContain("Handoffs: 1/10");
+				// the limit counts the attempts the factory made, and this one ran.
+				expect(detailPaneText(frame)).toContain("Handoff attempts: 1/10");
 				expect(messageRowOf(frame)).toContain(`ticket ${identity} closed`);
 			},
 			WIDTH,
@@ -1261,8 +1261,8 @@ describe("the detail pane", () => {
 				// The detail pane shows the selected ticket, which is the awaiting
 				// one: first in the attention order.
 				const detail = detailPaneText(frame);
-				// The handoff count is the ticket's handoffs against its limit.
-				expect(detail).toContain("Handoffs: 1/10");
+				// The handoff count is the ticket's attempts against its limit.
+				expect(detail).toContain("Handoff attempts: 1/10");
 				// The last completion: date, task type, agent, decision, message.
 				expect(detail).toContain(
 					"Last completion: 2026-08-31 11:00 implement by persist-source-facts (pi) pending",

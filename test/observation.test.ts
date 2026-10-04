@@ -213,6 +213,13 @@ function rig(options: {
 	 */
 	refuseDispatch?: string;
 	/**
+	 * The ask ran and its start never reached an Agent (issue #217): the seam
+	 * claims the Handoff in the state, settles it `failed` with this reason the
+	 * way the pickup's failed start does, and answers the ask with the refusal.
+	 * The attempt row it leaves is what the failed start's hold reads.
+	 */
+	startFails?: string;
+	/**
 	 * The Work queue's pickup (ADR 0034): the number of waiting starts this
 	 * cycle's free seats take. The coordinator calls it before auto-dispatch
 	 * and holds each picked claim's seat against the later dispatches of the
@@ -281,6 +288,17 @@ function rig(options: {
 			intents.push(intent);
 			if (options.refuseDispatch !== undefined)
 				return { ok: false, reason: options.refuseDispatch };
+			if (options.startFails !== undefined) {
+				// The claim the pickup's pass made, and the settle herdr's refusal
+				// wrote on it: an attempt row with no Handoff under it.
+				const claim = state.handoff.claimHandoff(
+					intent.ticketIdentity,
+					intent.choice,
+					intent.origin,
+				);
+				if (claim.ok) state.handoff.settleHandoff(claim.claim.attemptId, false, options.startFails);
+				return { ok: false, reason: options.startFails };
+			}
 			const enqueued = state.workQueue.enqueueWork({
 				ticketIdentity: intent.ticketIdentity,
 				routeFromIdentity: intent.routeFromIdentity ?? null,
@@ -5737,6 +5755,135 @@ describe("the open dispatch: the pull request group (ADR 0088)", () => {
 				ticketIdentity: "github:github.com:I_6",
 			}),
 		);
+		state.close();
+	});
+});
+
+/**
+ * The failed Handoff start's hold (ADR 0077 as extended by ADR 0100, issue #217).
+ *
+ * The development install recorded this shape on three Tickets: one start that
+ * never reached its Agent, asked again on every observation cycle, 9,365 times
+ * over five days on Ticket #37. The rig's `startFails` seam is that start: the
+ * claim ran, herdr refused the Agent, and the attempt settled `failed` with no
+ * Handoff under it.
+ */
+describe("the failed Handoff start's hold (ADR 0077 as extended by ADR 0100, issue #217)", () => {
+	const failure = "Preparing worktree: the worktree path already exists";
+
+	/** One open Ticket, and the automatic start on it that started no Agent. */
+	function failedStartRig(over: { config?: Partial<FactoryConfig> } = {}) {
+		return rig({ autoOn: true, agents: [], startFails: failure, config: over.config });
+	}
+
+	/** The re-read that carries the Ticket's current facts, one refresh later. */
+	function refresh(state: FactoryState, identity = "github:github.com:I_5"): void {
+		state.sourceFact.applyFetch(source, {
+			status: "success",
+			fetchedAt: "2026-08-31T11:30:00Z",
+			tickets: [fetched(identity)],
+		});
+	}
+
+	const refusalLines = (statuses: Rig["statuses"]) =>
+		statuses.filter((status) => status.text.includes("could not hand off"));
+
+	test("the failed start holds the next cycle's ask, and the source's re-read releases it", async () => {
+		const { state, intents, coordinator } = failedStartRig();
+		await coordinator.tick();
+		// The ask that ran and failed: the attempt row it left is the hold's fact.
+		expect(intents).toHaveLength(1);
+		expect(state.handoff.handoffBlockedUnrefreshed("github:github.com:I_5")).toBe(true);
+		// The cycles that follow ask nothing. Every other gate still reads clear -
+		// the Ticket stands open and actionable, the queue stands empty - so the
+		// hold is the only thing between the walk and the same failing start.
+		await coordinator.tick();
+		await coordinator.tick();
+		await coordinator.tick();
+		expect(intents).toHaveLength(1);
+		// The release: one active source re-reads the Ticket after the attempt.
+		refresh(state);
+		await coordinator.tick();
+		expect(intents).toHaveLength(2);
+		expect(intents[1]).toEqual(
+			expect.objectContaining({
+				origin: "open",
+				automatic: true,
+				ticketIdentity: "github:github.com:I_5",
+			}),
+		);
+		state.close();
+	});
+
+	test("the hold is silent: the refusal line stands once, not once per cycle", async () => {
+		const { state, coordinator, statuses } = failedStartRig();
+		await coordinator.tick();
+		expect(refusalLines(statuses)).toHaveLength(1);
+		await coordinator.tick();
+		await coordinator.tick();
+		await coordinator.tick();
+		// The held re-ask says nothing: the walk moved on to its next candidate,
+		// and the Message line carries no copy of a hold that changed nothing.
+		expect(refusalLines(statuses)).toHaveLength(1);
+		expect(statuses.filter((status) => status.kind === "warning")).toHaveLength(1);
+		// The re-ask on the refresh is the expected path, so its refusal is a line
+		// again: the ask ran, and the hold did not.
+		refresh(state);
+		await coordinator.tick();
+		expect(refusalLines(statuses)).toHaveLength(2);
+		state.close();
+	});
+
+	test("the hold covers the continuation walk's position", async () => {
+		const { state, intents, coordinator } = rig({ autoOn: true, agents: [], startFails: failure });
+		state.sourceFact.applyFetch(source, success([fetched("github:github.com:I_6"), fetched()]));
+		// A settled turn whose Next step stands on the open position I_6.
+		settleFor(state, "github:github.com:I_5", "route", routeOutcome("github:github.com:I_6"));
+		await coordinator.tick();
+		expect(intents.filter((intent) => intent.origin === "workflow")).toHaveLength(1);
+		await coordinator.tick();
+		await coordinator.tick();
+		// The route is still owed, and the step still stands: the position the
+		// route starts on is the Ticket the failed start holds.
+		expect(intents.filter((intent) => intent.origin === "workflow")).toHaveLength(1);
+		refresh(state, "github:github.com:I_6");
+		await coordinator.tick();
+		expect(intents.filter((intent) => intent.origin === "workflow")).toHaveLength(2);
+		state.close();
+	});
+
+	test("the hold covers the restart walk", async () => {
+		const { state, intents, coordinator, setAgents, advance } = rig({
+			autoOn: true,
+			agents: [agent("pane-implement")],
+			startFails: failure,
+			config: { maxHandoffsPerTicket: 5 },
+		});
+		handOut(state, "github:github.com:I_5");
+		setAgents([]);
+		advance(STARTUP_GRACE_MS + 1);
+		await coordinator.tick();
+		expect(intents.filter((intent) => intent.origin === "restart")).toHaveLength(1);
+		await coordinator.tick();
+		await coordinator.tick();
+		expect(intents.filter((intent) => intent.origin === "restart")).toHaveLength(1);
+		refresh(state);
+		await coordinator.tick();
+		expect(intents.filter((intent) => intent.origin === "restart")).toHaveLength(2);
+		state.close();
+	});
+
+	test("the hold gates the automatic ask, not the claim the operator's ask runs", async () => {
+		const { state, intents, coordinator } = failedStartRig();
+		await coordinator.tick();
+		// The failed start stands, unrefreshed. The gate the hold owns is the
+		// top-up's ask; the claim check the operator's confirm and the pickup run
+		// answers clear, the way it answers past the Handoff limit and the
+		// Same-type hold.
+		expect(state.handoff.handoffBlockedUnrefreshed("github:github.com:I_5")).toBe(true);
+		expect(state.handoff.handoffClaimCheck("github:github.com:I_5", "open")).toEqual({ ok: true });
+		await coordinator.tick();
+		expect(intents).toHaveLength(1);
 		state.close();
 	});
 });

@@ -119,7 +119,7 @@ export function detailContent(
 	/** The Ticket's facts, read by the fact module: the pane holds no rule of its own. */
 	fact: TicketRowFacts | undefined,
 	usableCols: number,
-	/** The Handoff limit the resolved config names, for the `Handoffs: n/limit` line. */
+	/** The Handoff limit the resolved config names, for the `Handoff attempts: n/limit` line. */
 	handoffLimit: number,
 	suggestedChoice?: HandoffChoice,
 	mergeAttempt: PlaneActionAttempt | null = null,
@@ -207,7 +207,10 @@ export function detailContent(
 		`${ticket.state === "open" ? "Suggested" : "Handoff"} task type: ${presentation.value}`,
 		presentation.unknown ? paint("yellow") : paint("mauve"),
 	);
-	addLeft(`Handoffs: ${ticket.handoffCount}/${handoffLimit}`, paint("text"));
+	// The count the Handoff limit reads: every attempt the factory made, the
+	// starts that reached an Agent and the starts that never reached one
+	// (ADR 0100). The word is the attempt's, not the handoff's.
+	addLeft(`Handoff attempts: ${ticket.handoffCount}/${handoffLimit}`, paint("text"));
 	// The Source column: where the ticket comes from, the way the operator
 	// reads the source facts in one column.
 	addRight(`Source kind: ${ticket.sourceKind}`, paint("text"));
