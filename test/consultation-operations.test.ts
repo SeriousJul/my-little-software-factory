@@ -50,7 +50,7 @@ import {
 	worktreeCreateJson,
 	worktreeListJson,
 } from "./fake-runner.ts";
-import { recordLogger } from "./record-logger.ts";
+import { infoLine, type RecordedLine, recordLogger } from "./record-logger.ts";
 
 const directories: string[] = [];
 const states: FactoryState[] = [];
@@ -2892,7 +2892,7 @@ describe("Consultation operations: the start line (issue #220)", () => {
 	test("the Work queue pickup writes its start line with its mode and its seat reading", async () => {
 		const fixture = makeFixture();
 		const runner = new LifecycleRunner();
-		const lines: string[] = [];
+		const lines: RecordedLine[] = [];
 		const harness = makeHarness(fixture, runner, {
 			log: recordLogger(lines),
 			seatCount: () => consultationSeats(fixture.state),
@@ -2920,14 +2920,16 @@ describe("Consultation operations: the start line (issue #220)", () => {
 		// move, so the line states the count the cap gate stood on, never a count
 		// this start raised.
 		expect(lines).toEqual([
-			`consultation started: "grill" ${id.slice(0, 8)} (mode pickup, origin consultation, seats 0/2)`,
+			infoLine(
+				`consultation started: "grill" ${id.slice(0, 8)} (mode pickup, origin consultation, seats 0/2)`,
+			),
 		]);
 	});
 
 	test("a force-dispatch start line names the cap it ran over", async () => {
 		const fixture = makeFixture();
 		const runner = new LifecycleRunner();
-		const lines: string[] = [];
+		const lines: RecordedLine[] = [];
 		const harness = makeHarness(fixture, runner, {
 			log: recordLogger(lines),
 			// The cap is full at the key: the reading the operator's start now ran over.
@@ -2950,7 +2952,9 @@ describe("Consultation operations: the start line (issue #220)", () => {
 		);
 
 		expect(lines).toEqual([
-			`consultation started: "grill" ${id.slice(0, 8)} (mode force-dispatch, origin consultation, seats 2/2)`,
+			infoLine(
+				`consultation started: "grill" ${id.slice(0, 8)} (mode force-dispatch, origin consultation, seats 2/2)`,
+			),
 		]);
 	});
 
@@ -2961,7 +2965,7 @@ describe("Consultation operations: the start line (issue #220)", () => {
 		// normal start, not a contradiction of ADR 0092's reading rule.
 		const fixture = makeFixture();
 		const runner = new LifecycleRunner();
-		const lines: string[] = [];
+		const lines: RecordedLine[] = [];
 		const harness = makeHarness(fixture, runner, {
 			log: recordLogger(lines),
 			// Nothing holds a seat at the key.
@@ -2984,7 +2988,9 @@ describe("Consultation operations: the start line (issue #220)", () => {
 		);
 
 		expect(lines).toEqual([
-			`consultation started: "grill" ${id.slice(0, 8)} (mode force-dispatch, origin consultation, seats 0/2)`,
+			infoLine(
+				`consultation started: "grill" ${id.slice(0, 8)} (mode force-dispatch, origin consultation, seats 0/2)`,
+			),
 		]);
 	});
 
@@ -2992,7 +2998,7 @@ describe("Consultation operations: the start line (issue #220)", () => {
 		const fixture = makeFixture();
 		fixture.config.maxParallelAgents = 0;
 		const runner = new LifecycleRunner();
-		const lines: string[] = [];
+		const lines: RecordedLine[] = [];
 		const harness = makeHarness(fixture, runner, {
 			log: recordLogger(lines),
 			// Work is held on two seats, and the lifted cap states none of them.
@@ -3015,14 +3021,16 @@ describe("Consultation operations: the start line (issue #220)", () => {
 		);
 
 		expect(lines).toEqual([
-			`consultation started: "grill" ${id.slice(0, 8)} (mode pickup, origin consultation, seats 2)`,
+			infoLine(
+				`consultation started: "grill" ${id.slice(0, 8)} (mode pickup, origin consultation, seats 2)`,
+			),
 		]);
 	});
 
 	test("a start that claims nothing writes no start line", async () => {
 		const fixture = makeFixture();
 		const runner = new LifecycleRunner();
-		const lines: string[] = [];
+		const lines: RecordedLine[] = [];
 		const harness = makeHarness(fixture, runner, {
 			log: recordLogger(lines),
 			seatCount: () => consultationSeats(fixture.state),
@@ -3052,7 +3060,7 @@ describe("Consultation operations: the start line (issue #220)", () => {
 		const fixture = makeFixture();
 		fixture.config.maxParallelAgents = 1;
 		const runner = new LifecycleRunner();
-		const lines: string[] = [];
+		const lines: RecordedLine[] = [];
 		const harness = makeHarness(fixture, runner, {
 			log: recordLogger(lines),
 			seatCount: () => consultationSeats(fixture.state),
@@ -3114,8 +3122,12 @@ describe("Consultation operations: the start line (issue #220)", () => {
 		dispatch.stop();
 
 		expect(lines).toEqual([
-			`consultation started: "grill" ${first.id.slice(0, 8)} (mode pickup, origin consultation, seats 0/1)`,
-			`consultation started: "grill" ${second.id.slice(0, 8)} (mode force-dispatch, origin consultation, seats 1/1)`,
+			infoLine(
+				`consultation started: "grill" ${first.id.slice(0, 8)} (mode pickup, origin consultation, seats 0/1)`,
+			),
+			infoLine(
+				`consultation started: "grill" ${second.id.slice(0, 8)} (mode force-dispatch, origin consultation, seats 1/1)`,
+			),
 		]);
 	});
 });

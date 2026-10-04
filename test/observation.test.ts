@@ -23,7 +23,7 @@ import { openFactoryState } from "../src/state.ts";
 import type { SessionTurnRead, TurnEndCause, TurnLogEntry } from "../src/turn-log.ts";
 import { BASE_CONFIG } from "./base-config.ts";
 import { FakeRunner } from "./fake-runner.ts";
-import { recordLogger } from "./record-logger.ts";
+import { infoLine, type RecordedLine, recordLogger } from "./record-logger.ts";
 
 const source = { name: "issues", kind: "github-issues" };
 const choice = {
@@ -5985,12 +5985,13 @@ describe("the failed Handoff start's hold (ADR 0077 as extended by ADR 0101, iss
  * Every one of these holds returns before a walk asks anything, so the run shows
  * the start that never came and says nothing about why - the failure the dev run
  * on PR #215 left behind. The cycle carries the dispatch's `log` seam and states
- * each fact it acted on once, in the words the gate rule owns.
+ * each fact it acted on once, in the words the gate rule owns, at the `info`
+ * level the configuration reference states for these lines.
  */
 describe("the automatic walks state their holds in the record (issue #223)", () => {
 	/** One cycle over the default feed, with its record lines read back. */
 	function recordRig(over: { autoOn?: boolean } = {}) {
-		const lines: string[] = [];
+		const lines: RecordedLine[] = [];
 		const r = rig({
 			autoOn: over.autoOn ?? true,
 			agents: [],
@@ -6032,10 +6033,12 @@ describe("the automatic walks state their holds in the record (issue #223)", () 
 		// The queue's own pace: one continuation at a time (ADR 0051).
 		expect(intents.filter((intent) => intent.origin === "workflow")).toHaveLength(0);
 		// Each fact the cycle acted on names itself: the continuation the walk
-		// would have jumped, and the row the fresh-work add waits behind.
+		// would have jumped, and the row the fresh-work add waits behind. A hold is
+		// news about a run that started nothing, not a warning, so both lines carry
+		// `info`.
 		expect(lines).toEqual([
-			"automatic walks hold: the Work queue already holds a continuation",
-			"automatic walks hold: the Work queue holds a waiting row",
+			infoLine("automatic walks hold: the Work queue already holds a continuation"),
+			infoLine("automatic walks hold: the Work queue holds a waiting row"),
 		]);
 		state.close();
 	});
@@ -6057,8 +6060,8 @@ describe("the automatic walks state their holds in the record (issue #223)", () 
 		await coordinator.tick();
 		expect(intents.filter((intent) => intent.origin === "workflow")).toHaveLength(0);
 		expect(lines).toEqual([
-			"automatic walks hold: the Work queue holds an item the operator staged",
-			"automatic walks hold: the Work queue holds a waiting row",
+			infoLine("automatic walks hold: the Work queue holds an item the operator staged"),
+			infoLine("automatic walks hold: the Work queue holds a waiting row"),
 		]);
 		state.close();
 	});
@@ -6067,21 +6070,23 @@ describe("the automatic walks state their holds in the record (issue #223)", () 
 		// Auto-handoff mode off: the walks run no automatic add at all.
 		const off = recordRig({ autoOn: false });
 		await off.coordinator.tick();
-		expect(off.lines).toEqual(["automatic walks hold: auto-handoff is off"]);
+		expect(off.lines).toEqual([infoLine("automatic walks hold: auto-handoff is off")]);
 		off.state.close();
 
 		// The operator's brake on the queue itself (ADR 0052).
 		const paused = recordRig();
 		paused.state.workQueue.setQueuePaused(true);
 		await paused.coordinator.tick();
-		expect(paused.lines).toEqual(["automatic walks hold: the Work queue is paused"]);
+		expect(paused.lines).toEqual([infoLine("automatic walks hold: the Work queue is paused")]);
 		paused.state.close();
 
 		// The Dispatch pause: a held failed turn stands undecided (ADR 0016).
 		const held = recordRig();
 		settleForCause(held.state, "github:github.com:I_5", "route", "failed", "the build broke");
 		await held.coordinator.tick();
-		expect(held.lines).toEqual(["automatic walks hold: a failed turn waits for the operator"]);
+		expect(held.lines).toEqual([
+			infoLine("automatic walks hold: a failed turn waits for the operator"),
+		]);
 		held.state.close();
 
 		// A row the operator staged stands in the queue (ADR 0100): the fresh-work
@@ -6089,7 +6094,9 @@ describe("the automatic walks state their holds in the record (issue #223)", () 
 		const row = recordRig();
 		queueRow(row.state, "github:github.com:I_5", "open", false);
 		await row.coordinator.tick();
-		expect(row.lines).toEqual(["automatic walks hold: the Work queue holds a waiting row"]);
+		expect(row.lines).toEqual([
+			infoLine("automatic walks hold: the Work queue holds a waiting row"),
+		]);
 		row.state.close();
 	});
 
@@ -6108,7 +6115,7 @@ describe("the automatic walks state their holds in the record (issue #223)", () 
 		state.workQueue.setQueuePaused(true);
 		await coordinator.tick();
 		expect(lines.slice(standing.length)).toEqual([
-			"automatic walks hold: the Work queue is paused",
+			infoLine("automatic walks hold: the Work queue is paused"),
 		]);
 		// The facts the queue still stands on state themselves once more, and then
 		// hold their silence for every later cycle.

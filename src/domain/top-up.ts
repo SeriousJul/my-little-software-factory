@@ -46,6 +46,12 @@ export type AutomaticHoldReason = (typeof AUTOMATIC_HOLD_REASONS)[number];
  * The module that owns the gates owns the words for them, the way
  * `NEXT_STEP_GATE_LINES` does for a gated Next step, so the walk states its
  * hold in one wording and no surface restates it.
+ *
+ * The two lines about a standing row name whose row it is, because the origin
+ * cannot tell the factory's row from the operator's. The third names the
+ * queue's depth instead: the fresh-work gate holds on any row at all, a
+ * Consultation row included, and the staging of the row that stands is what the
+ * queue's own `handoff queued:` line already states (issue #223 review).
  */
 export const AUTOMATIC_HOLD_LINES: Readonly<Record<AutomaticHoldReason, string>> = {
 	"auto-handoff-off": "automatic walks hold: auto-handoff is off",
@@ -81,7 +87,7 @@ export interface TopUpCycleFacts extends AutomaticAddFacts {
  * The order is the walk's own: the first gate that stands is the fact the cycle
  * acted on, so one hold is stated and not three.
  */
-export function automaticAddsHold(facts: AutomaticAddFacts): AutomaticHoldReason | null {
+export function automaticAddsHoldReason(facts: AutomaticAddFacts): AutomaticHoldReason | null {
 	if (!facts.modeOn) return "auto-handoff-off";
 	if (facts.queuePaused) return "queue-paused";
 	if (facts.dispatchPauseActive) return "dispatch-pause";
@@ -95,8 +101,8 @@ export function automaticAddsHold(facts: AutomaticAddFacts): AutomaticHoldReason
  * The continuation add reads the same gates and its own queue rule instead,
  * because ADR 0094 lets it enter ahead of a standing fresh-work row.
  */
-export function freshWorkHold(facts: TopUpCycleFacts): AutomaticHoldReason | null {
-	const gate = automaticAddsHold(facts);
+export function freshWorkHoldReason(facts: TopUpCycleFacts): AutomaticHoldReason | null {
+	const gate = automaticAddsHoldReason(facts);
 	if (gate !== null) return gate;
 	if (facts.queueDepth > 0) return "queue-row-standing";
 	return null;
@@ -135,7 +141,7 @@ export interface ContinuationRowFacts {
  * origin names both stagings `workflow`, and a record that calls the operator's
  * row a continuation names a fact the row is not.
  */
-export function continuationHold(
+export function continuationHoldReason(
 	rows: readonly ContinuationRowFacts[],
 ): AutomaticHoldReason | null {
 	const row = rows.find((candidate) => candidate.continuation);

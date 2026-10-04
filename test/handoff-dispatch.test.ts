@@ -48,7 +48,7 @@ import {
 	worktreeOpenJson,
 } from "./fake-runner.ts";
 import { gatedRunner } from "./gated-runner.ts";
-import { recordLogger } from "./record-logger.ts";
+import { infoLine, type RecordedLine, recordLogger, warnLine } from "./record-logger.ts";
 
 const source = { name: "issues", kind: "github-issues" } as const;
 
@@ -3958,7 +3958,7 @@ describe("the decision screen's route close", () => {
 describe("the record lines", () => {
 	test("a claimed start leaves one line, and a refused claim leaves its reason", async () => {
 		const rigRef = rig([FIRST]);
-		const lines: string[] = [];
+		const lines: RecordedLine[] = [];
 		// The gate holds every command, so the start's work pauses on its
 		// first call: only the claim runs, and the settle never meets the
 		// state this test closes behind it.
@@ -3975,17 +3975,24 @@ describe("the record lines", () => {
 		});
 		// The start line names the path that took the seat - the operator's own
 		// ask, started by the pass that ask ran (issue #209) - the item's origin,
-		// and the seat reading the claim stood on.
+		// and the seat reading the claim stood on. Each line carries the level the
+		// configuration reference states for it: the queue's lines are `info`, a
+		// refusal is `warn`, so `level = "warn"` keeps the refusals and drops the
+		// rest (issue #223).
 		expect(lines).toEqual([
-			`handoff queued: "${FIRST.title}" (origin open, operator-staged)`,
-			`handoff started: "${FIRST.title}" (mode direct-ask, origin open, operator-staged, seats 0/2)`,
-			`handoff refused: "${FIRST.title}" (handoff recovery is required before another handoff)`,
+			infoLine(`handoff queued: "${FIRST.title}" (origin open, operator-staged)`),
+			infoLine(
+				`handoff started: "${FIRST.title}" (mode direct-ask, origin open, operator-staged, seats 0/2)`,
+			),
+			warnLine(
+				`handoff refused: "${FIRST.title}" (handoff recovery is required before another handoff)`,
+			),
 		]);
 	});
 
 	test("a start the queue's pickup takes names the pickup and the seats it read", async () => {
 		const rigRef = rig([FIRST]);
-		const lines: string[] = [];
+		const lines: RecordedLine[] = [];
 		const hold = gatedRunner(rigRef.runner, () => true);
 		// The cap is full at the ask, so the factory's automatic ask only enqueues
 		// its row, and one seat frees for the next pass.
@@ -4003,7 +4010,7 @@ describe("the record lines", () => {
 			}),
 		).resolves.toEqual({ ok: true });
 		expect(rigRef.state.workQueue.items()).toHaveLength(1);
-		expect(lines).toEqual([`handoff queued: "${FIRST.title}" (origin open, automatic)`]);
+		expect(lines).toEqual([infoLine(`handoff queued: "${FIRST.title}" (origin open, automatic)`)]);
 		// The next cycle's pickup takes the row for the free seat: the line names
 		// the pickup, never the ask that made the row.
 		const picking = withRunner(rigRef, hold.runner, {
@@ -4012,8 +4019,10 @@ describe("the record lines", () => {
 		});
 		expect(await picking.pickupWorkQueue()).toBe(1);
 		expect(lines).toEqual([
-			`handoff queued: "${FIRST.title}" (origin open, automatic)`,
-			`handoff started: "${FIRST.title}" (mode pickup, origin open, automatic, seats 1/2)`,
+			infoLine(`handoff queued: "${FIRST.title}" (origin open, automatic)`),
+			infoLine(
+				`handoff started: "${FIRST.title}" (mode pickup, origin open, automatic, seats 1/2)`,
+			),
 		]);
 	});
 
@@ -4022,7 +4031,7 @@ describe("the record lines", () => {
 		// count and states no limit at all (issue #209).
 		const rigRef = rig([FIRST]);
 		rigRef.config.maxParallelAgents = 0;
-		const lines: string[] = [];
+		const lines: RecordedLine[] = [];
 		const hold = gatedRunner(rigRef.runner, () => true);
 		const mod = withRunner(rigRef, hold.runner, {
 			log: recordLogger(lines),
@@ -4033,8 +4042,10 @@ describe("the record lines", () => {
 		rigRef.dispatch = mod;
 		await expect(start(rigRef, FIRST, "open")).resolves.toMatchObject({ ok: true });
 		expect(lines).toEqual([
-			`handoff queued: "${FIRST.title}" (origin open, operator-staged)`,
-			`handoff started: "${FIRST.title}" (mode direct-ask, origin open, operator-staged, seats 2)`,
+			infoLine(`handoff queued: "${FIRST.title}" (origin open, operator-staged)`),
+			infoLine(
+				`handoff started: "${FIRST.title}" (mode direct-ask, origin open, operator-staged, seats 2)`,
+			),
 		]);
 		mod.stop();
 	});
@@ -4045,7 +4056,7 @@ describe("the record lines", () => {
 		// state's own unresolved claims, the fact the app's shared count reads.
 		const rigRef = rig([FIRST, SECOND]);
 		rigRef.config.maxParallelAgents = 1;
-		const lines: string[] = [];
+		const lines: RecordedLine[] = [];
 		// The gate holds every command, so each claimed start stays unresolved
 		// and its seat stays held while the next start reads the count.
 		const hold = gatedRunner(rigRef.runner, () => true);
@@ -4066,10 +4077,14 @@ describe("the record lines", () => {
 		// The operator's key starts the waiting row over the full cap.
 		mod.forceDispatchWorkQueueItem(SECOND.identity);
 		expect(lines).toEqual([
-			`handoff queued: "${FIRST.title}" (origin open, operator-staged)`,
-			`handoff started: "${FIRST.title}" (mode direct-ask, origin open, operator-staged, seats 0/1)`,
-			`handoff queued: "${SECOND.title}" (origin open, operator-staged)`,
-			`handoff started: "${SECOND.title}" (mode force-dispatch, origin open, operator-staged, seats 1/1)`,
+			infoLine(`handoff queued: "${FIRST.title}" (origin open, operator-staged)`),
+			infoLine(
+				`handoff started: "${FIRST.title}" (mode direct-ask, origin open, operator-staged, seats 0/1)`,
+			),
+			infoLine(`handoff queued: "${SECOND.title}" (origin open, operator-staged)`),
+			infoLine(
+				`handoff started: "${SECOND.title}" (mode force-dispatch, origin open, operator-staged, seats 1/1)`,
+			),
 		]);
 		// Both claims stand unresolved: the held work never settles, and the stop
 		// keeps the two runs from writing into the state the test closes.
@@ -4084,7 +4099,7 @@ describe("the record lines", () => {
 	 */
 	test("an operator-staged row and the factory's own row read differently on the same origin", async () => {
 		const rigRef = rig([FIRST, SECOND]);
-		const lines: string[] = [];
+		const lines: RecordedLine[] = [];
 		const hold = gatedRunner(rigRef.runner, () => true);
 		const mod = withRunner(rigRef, hold.runner, {
 			log: recordLogger(lines),
@@ -4103,8 +4118,8 @@ describe("the record lines", () => {
 			}),
 		).resolves.toEqual({ ok: true });
 		expect(lines).toEqual([
-			`handoff queued: "${FIRST.title}" (origin open, operator-staged)`,
-			`handoff queued: "${SECOND.title}" (origin open, automatic)`,
+			infoLine(`handoff queued: "${FIRST.title}" (origin open, operator-staged)`),
+			infoLine(`handoff queued: "${SECOND.title}" (origin open, automatic)`),
 		]);
 		mod.stop();
 	});
@@ -4117,7 +4132,7 @@ describe("the record lines", () => {
 	 */
 	test("a second ask for a ticket that already waits leaves its refusal in the record", async () => {
 		const rigRef = rig([FIRST]);
-		const lines: string[] = [];
+		const lines: RecordedLine[] = [];
 		const hold = gatedRunner(rigRef.runner, () => true);
 		const mod = withRunner(rigRef, hold.runner, {
 			log: recordLogger(lines),
@@ -4142,10 +4157,12 @@ describe("the record lines", () => {
 			reason: expect.stringContaining("already has a waiting queue item"),
 		});
 		// The reason names the ticket itself, and the line names it once more in
-		// the shape every refusal line wears.
+		// the shape every refusal line wears, at the level the filter reads.
 		expect(lines).toEqual([
-			`handoff queued: "${FIRST.title}" (origin open, operator-staged)`,
-			`handoff refused: "${FIRST.title}" (already has a waiting queue item; the first item keeps its place)`,
+			infoLine(`handoff queued: "${FIRST.title}" (origin open, operator-staged)`),
+			warnLine(
+				`handoff refused: "${FIRST.title}" (already has a waiting queue item; the first item keeps its place)`,
+			),
 		]);
 		mod.stop();
 	});
@@ -4163,7 +4180,7 @@ describe("the record lines", () => {
 		// millisecond the removed row and the new row land in.
 		let clockMs = Date.parse("2026-09-01T00:00:00Z");
 		const rigRef = rig([FIRST], () => clockMs);
-		const lines: string[] = [];
+		const lines: RecordedLine[] = [];
 		const hold = gatedRunner(rigRef.runner, () => true);
 		const mod = withRunner(rigRef, hold.runner, {
 			log: recordLogger(lines),
@@ -4186,17 +4203,19 @@ describe("the record lines", () => {
 		await expect(continuationAsk()).resolves.toMatchObject({ ok: false });
 		clockMs += 5_000;
 		await expect(continuationAsk()).resolves.toMatchObject({ ok: false });
-		const refusal = () => lines.filter((line) => line.startsWith("handoff refused:"));
-		expect(refusal()).toEqual([
-			`handoff refused: "${FIRST.title}" (already has a waiting queue item; the first item keeps its place)`,
-		]);
+		const standingRow = () =>
+			warnLine(
+				`handoff refused: "${FIRST.title}" (already has a waiting queue item; the first item keeps its place)`,
+			);
+		const refusal = () => lines.filter((line) => line.message.startsWith("handoff refused:"));
+		expect(refusal()).toEqual([standingRow()]);
 		// The row leaves the queue, and a later row for the same ticket is a new
 		// standing fact: the refusal states itself again.
 		expect(mod.removeQueueItem(FIRST.identity)).toBe(true);
 		clockMs += 60_000;
 		await expect(start(rigRef, FIRST, "open")).resolves.toEqual({ ok: true });
 		await expect(continuationAsk()).resolves.toMatchObject({ ok: false });
-		expect(refusal()).toHaveLength(2);
+		expect(refusal()).toEqual([standingRow(), standingRow()]);
 		mod.stop();
 	});
 
@@ -4209,7 +4228,7 @@ describe("the record lines", () => {
 	test("a row that left through another aggregate is a new standing fact", async () => {
 		let clockMs = Date.parse("2026-09-01T00:00:00Z");
 		const rigRef = rig([FIRST], () => clockMs);
-		const lines: string[] = [];
+		const lines: RecordedLine[] = [];
 		const hold = gatedRunner(rigRef.runner, () => true);
 		const mod = withRunner(rigRef, hold.runner, {
 			log: recordLogger(lines),
@@ -4234,7 +4253,59 @@ describe("the record lines", () => {
 		clockMs += 60_000;
 		await expect(start(rigRef, FIRST, "open")).resolves.toEqual({ ok: true });
 		await expect(continuationAsk()).resolves.toMatchObject({ ok: false });
-		expect(lines.filter((line) => line.startsWith("handoff refused:"))).toHaveLength(2);
+		expect(
+			lines.filter(
+				(line) =>
+					line.message.startsWith("handoff refused:") &&
+					line.message.includes("already has a waiting queue item"),
+			),
+		).toEqual([
+			warnLine(
+				`handoff refused: "${FIRST.title}" (already has a waiting queue item; the first item keeps its place)`,
+			),
+			warnLine(
+				`handoff refused: "${FIRST.title}" (already has a waiting queue item; the first item keeps its place)`,
+			),
+		]);
+		mod.stop();
+	});
+
+	/**
+	 * The same cadence on the other standing refusal (issue #223 review): the claim
+	 * the position's hard gates refuse. That line has always reached the file, but on
+	 * every ask, and the automatic walks re-ask the same position every observation
+	 * cycle - about 12 identical lines a minute at the five-second poll for one
+	 * refused claim. The plane's one rule for a standing fact covers it: once while
+	 * the fact stands, again when the fact moves.
+	 */
+	test("the claim refusal states itself once while the claim stands, and again when it moves", async () => {
+		const rigRef = rig([FIRST]);
+		const lines: RecordedLine[] = [];
+		// The gate holds the start's commands, so the claim the first ask made stays
+		// unresolved: the recovery gate is the fact every later ask meets.
+		const hold = gatedRunner(rigRef.runner, () => true);
+		const mod = withRunner(rigRef, hold.runner, { log: recordLogger(lines) });
+		rigRef.dispatch = mod;
+		await expect(start(rigRef, FIRST, "open")).resolves.toMatchObject({ ok: true });
+		const recovery = () =>
+			warnLine(
+				`handoff refused: "${FIRST.title}" (handoff recovery is required before another handoff)`,
+			);
+		const refusals = () => lines.filter((line) => line.message.startsWith("handoff refused:"));
+		// Three cycles' worth of re-asks on the one refused claim.
+		await expect(start(rigRef, FIRST, "open")).resolves.toMatchObject({ ok: false });
+		await expect(start(rigRef, FIRST, "open")).resolves.toMatchObject({ ok: false });
+		await expect(start(rigRef, FIRST, "open")).resolves.toMatchObject({ ok: false });
+		expect(refusals()).toEqual([recovery()]);
+		// The fact moves: the run ends and its recovery settles the stale claim, the
+		// way a restart does, and the row the held start left behind goes with it.
+		// The next ask goes through and claims again, so the next refusal is a new
+		// fact and states itself once more.
+		expect(rigRef.state.handoff.recoverUnsettledHandoffs()).toBe(1);
+		expect(mod.removeQueueItem(FIRST.identity)).toBe(true);
+		await expect(start(rigRef, FIRST, "open")).resolves.toMatchObject({ ok: true });
+		await expect(start(rigRef, FIRST, "open")).resolves.toMatchObject({ ok: false });
+		expect(refusals()).toEqual([recovery(), recovery()]);
 		mod.stop();
 	});
 });

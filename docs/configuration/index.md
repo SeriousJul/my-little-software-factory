@@ -498,6 +498,13 @@ stands, and a five-second poll cannot pin the file with the same refusal; a row
 that leaves the queue and a later row for the same ticket are two facts, and
 each states itself (issue #223).
 
+The same rule covers a refused claim. The gates that refuse a start answer the
+same way every cycle the walks re-ask the same position, so one refused claim
+states itself once too, and states itself again when the fact moves: another
+reason, or a claim that went through and met a refusal afterwards. The two start
+channels keep their own fact, so a `merge refused:` line never answers for a
+`handoff refused:` one (issue #223).
+
 The observation cycle states each hold its automatic walks take, once for as long
 as the fact stands and again when the fact changes, so a run that started nothing
 says why (issue #223):
@@ -517,6 +524,10 @@ factory owes for a settled turn are both `workflow`. Either one holds the next
 continuation out while it stands (issue #230). The rank ADR 0100 gives the owed
 continuation is its place in the queue's order - ahead of a row that queued
 earlier - not a pass through a row that already stands.
+
+The third line names the queue's depth rather than a staging, because the gate
+it states holds on any row at all, a Consultation row included. The staging of
+the row that stands is what the `handoff queued:` line beside it already says.
 
 Auto-handoff mode and the Work queue pause are the two facts you set by key, and
 each flip states itself under its own prefix, so a grep for one family does not

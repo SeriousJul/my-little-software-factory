@@ -87,9 +87,9 @@ import {
 import {
 	AUTOMATIC_HOLD_LINES,
 	type AutomaticHoldReason,
-	automaticAddsHold,
-	continuationHold,
-	freshWorkHold,
+	automaticAddsHoldReason,
+	continuationHoldReason,
+	freshWorkHoldReason,
 	openTicketRowGate,
 	openTicketWaitsHold,
 	restartCandidateHolds,
@@ -1576,7 +1576,7 @@ export class ObservationCoordinator {
 		// the gate below reads them, and no walk asks the queue for one Ticket's
 		// fact of its own.
 		const queueItems = this.state.workQueue.items();
-		const gate = this.automaticAddsHeld();
+		const gate = automaticAddsHoldReason(this.cycleFacts());
 		if (gate !== null) {
 			this.noteAutomaticHold(gate);
 			return false;
@@ -1585,7 +1585,7 @@ export class ObservationCoordinator {
 		// holds. The hold names that row's staging, because the origin cannot tell
 		// the two apart - the operator's route and the factory's continuation are
 		// both `workflow` (issue #223).
-		const held = continuationHold(
+		const held = continuationHoldReason(
 			queueItems.map((item) => ({
 				continuation: item.kind !== "consultation" && item.origin === "workflow",
 				automatic: item.kind !== "consultation" && item.automatic,
@@ -1736,15 +1736,6 @@ export class ObservationCoordinator {
 	}
 
 	/**
-	 * The gates every automatic add reads: Auto-handoff mode, the queue pause
-	 * (ADR 0052), and the Dispatch pause (ADR 0016). The pause is checked once per
-	 * cycle, so a held turn does not spam the status line.
-	 */
-	private automaticAddsHeld(): AutomaticHoldReason | null {
-		return automaticAddsHold(this.cycleFacts());
-	}
-
-	/**
 	 * The cycle's standing gate facts (ADR 0051, ADR 0052, ADR 0016): the mode, the
 	 * queue's brake, and the Dispatch pause. The automatic walks read these before
 	 * they read any candidate.
@@ -1806,7 +1797,7 @@ export class ObservationCoordinator {
 		// the pace gate needs the depth, and every walk needs the fact of whether
 		// an item already stands for the candidate it holds.
 		const queueItems = this.state.workQueue.items();
-		const hold = freshWorkHold({ ...this.cycleFacts(), queueDepth: queueItems.length });
+		const hold = freshWorkHoldReason({ ...this.cycleFacts(), queueDepth: queueItems.length });
 		if (hold !== null) {
 			this.noteAutomaticHold(hold);
 			return false;

@@ -56,7 +56,7 @@ import {
 	worktreeListJson,
 } from "./fake-runner.ts";
 import { gatedRunner } from "./gated-runner.ts";
-import { recordLogger } from "./record-logger.ts";
+import { infoLine, type RecordedLine, recordLogger } from "./record-logger.ts";
 
 const paths: string[] = [];
 afterEach(() => {
@@ -274,9 +274,9 @@ interface Chain {
 	notices: string[];
 	/**
 	 * The plane's record lines, read back from the `log` seam the dispatch and the
-	 * observation cycle share (issue #223).
+	 * observation cycle share, each with the level it carries (issue #223).
 	 */
-	lines: string[];
+	lines: RecordedLine[];
 	statuses: Array<{ kind: string; text: string }>;
 	coordinator: ObservationCoordinator;
 	dispatch: ReturnType<typeof createHandoffDispatch>;
@@ -342,7 +342,7 @@ function chainRig(options: ChainRigOptions = {}): Chain {
 	const handoffAsks: HandoffIntent[] = [];
 	const planeAsks: PlaneActionIntent[] = [];
 	const notices: string[] = [];
-	const lines: string[] = [];
+	const lines: RecordedLine[] = [];
 	const statuses: Chain["statuses"] = [];
 
 	// The dispatch the app builds, on the fake runner and the test state. The
@@ -925,12 +925,15 @@ describe("the seat a settling turn frees (the dev-run miss on PR #206)", () => {
 		// The record the run could not make then (issue #223). The operator's row
 		// and the factory's own row read differently on one origin, the hold the
 		// fresh-work walk took is stated, and the continuation the settled turn owed
-		// stands in the file with the path that started it.
+		// stands in the file with the path that started it. Every line of this chain
+		// is a fact about the run, not a warning, so each carries `info`.
 		expect(chain.lines).toEqual([
-			`handoff queued: "${STAGED_TITLE}" (origin open, operator-staged)`,
-			"automatic walks hold: the Work queue holds a waiting row",
-			`handoff queued: "${PULL_TITLE}" (origin workflow, automatic)`,
-			`handoff started: "${PULL_TITLE}" (mode pickup, origin workflow, automatic, seats 0/1)`,
+			infoLine(`handoff queued: "${STAGED_TITLE}" (origin open, operator-staged)`),
+			infoLine("automatic walks hold: the Work queue holds a waiting row"),
+			infoLine(`handoff queued: "${PULL_TITLE}" (origin workflow, automatic)`),
+			infoLine(
+				`handoff started: "${PULL_TITLE}" (mode pickup, origin workflow, automatic, seats 0/1)`,
+			),
 		]);
 		state.close();
 	});

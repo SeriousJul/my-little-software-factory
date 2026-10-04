@@ -293,9 +293,9 @@ export interface HandoffDispatchOptions extends HandoffDispatchReports {
 	 * The plane's file logger. The dispatch leaves the record's start lines and
 	 * queue lines, for a Handoff and for a Plane action alike: a start with its
 	 * start mode, its origin, its staging, and its seat reading, a queue, and a
-	 * refusal with its reason - the standing-row refusal once for the row that
-	 * stands, not once per ask. A Consultation's start line is not one of them:
-	 * the Consultation operations leave it (issue #220).
+	 * refusal with its reason - the standing-row refusal and a refused claim once
+	 * for the fact that stands, not once per ask. A Consultation's start line is
+	 * not one of them: the Consultation operations leave it (issue #220).
 	 */
 	log?: Logger;
 }
@@ -445,6 +445,14 @@ export function createHandoffDispatch(options: HandoffDispatchOptions): HandoffD
  */
 const QUEUE_ITEM_STANDS_FACT = "already has a waiting queue item; the first item keeps its place";
 
+/**
+ * The key a claim refusal's standing fact stands on: the start channel and the
+ * ticket. The prefix carries no colon, so the join names one pair (issue #223).
+ */
+function claimRefusalKey(prefix: "handoff" | "merge", ticketIdentity: string): string {
+	return `${prefix}:${ticketIdentity}`;
+}
+
 /** The seat, the queues, and the work of one durable state database. */
 class HandoffDispatchModule implements HandoffDispatch {
 	private readonly state: HandoffDispatchAggregates;
@@ -508,6 +516,21 @@ class HandoffDispatchModule implements HandoffDispatch {
 	 * cycle prunes its held-Next-step reports on the same rule.
 	 */
 	private readonly queueItemRefusals = new Set<string>();
+
+	/**
+	 * The claim refusals the record has already stated, keyed by the start channel
+	 * and the ticket, and holding the fact each one stated (issue #223).
+	 *
+	 * A claim refusal is a standing fact too: it is the answer the position's hard
+	 * gates give for the state the ticket is in, and the automatic walks re-ask the
+	 * same position every observation cycle. The same reason for the same ticket is
+	 * the same fact and states itself once; a different reason is a new fact and
+	 * states itself again; a claim that goes through drops the entry, so the next
+	 * refusal for that ticket is a new fact. The channel is part of the key because
+	 * the record line is a channel's line: a reader grepping `merge refused:` must
+	 * get the merge refusals and nothing else.
+	 */
+	private readonly claimRefusals = new Map<string, string>();
 
 	constructor(options: HandoffDispatchOptions) {
 		this.state = options.state;
@@ -573,9 +596,10 @@ class HandoffDispatchModule implements HandoffDispatch {
 		// refusal, not a queued item.
 		const check = this.state.handoff.handoffClaimCheck(intent.ticketIdentity, intent.origin);
 		if (!check.ok) {
-			this.log?.warn(this.refusalLine("handoff", intent.ticketIdentity, check.reason));
+			this.refuseClaim("handoff", intent.ticketIdentity, check.reason);
 			return Promise.resolve({ ok: false, reason: check.reason });
 		}
+		this.forgetClaimRefusal("handoff", intent.ticketIdentity);
 		const enqueued = this.enqueueWork(intent);
 		if (!enqueued.ok) return Promise.resolve(enqueued);
 		// The ask's start report answers from the item's pickup, drop, or cancel
@@ -618,9 +642,10 @@ class HandoffDispatchModule implements HandoffDispatch {
 			});
 		const check = this.planeActionClaimCheck(intent.ticketIdentity);
 		if (!check.ok) {
-			this.log?.warn(this.refusalLine("merge", intent.ticketIdentity, check.reason));
+			this.refuseClaim("merge", intent.ticketIdentity, check.reason);
 			return Promise.resolve({ ok: false, reason: check.reason });
 		}
+		this.forgetClaimRefusal("merge", intent.ticketIdentity);
 		if (this.state.workQueue.hasWorkItem(intent.ticketIdentity))
 			return Promise.resolve(this.refuseStandingQueueItem("merge", intent.ticketIdentity));
 		// The run's own hold, beside the queue's: the row of a merge already in
@@ -1351,9 +1376,10 @@ class HandoffDispatchModule implements HandoffDispatch {
 		const seats = this.seatReading();
 		const claim = this.state.handoff.claimHandoff(item.ticketIdentity, item.choice, item.origin);
 		if (!claim.ok) {
-			this.log?.warn(this.refusalLine("handoff", item.ticketIdentity, claim.reason));
+			this.refuseClaim("handoff", item.ticketIdentity, claim.reason);
 			return { ok: false, reason: claim.reason };
 		}
+		this.forgetClaimRefusal("handoff", item.ticketIdentity);
 		// A claim is a claim: the picked-up start enters the Starting window
 		// exactly as the direct start above does, so the two claim paths report
 		// the same fact and the row's spinner face does not wait for a seat.
@@ -1605,6 +1631,9 @@ class HandoffDispatchModule implements HandoffDispatch {
 	 * every cycle, and a five-second poll cannot pin the file with one refusal.
 	 */
 	private refuseStandingQueueItem(prefix: "handoff" | "merge", identity: string): DispatchResult {
+		// The key is the ticket alone, not the channel: the Work queue holds one row
+		// per ticket, so the standing row is one fact whichever channel re-asked it,
+		// and the line names the channel that reached it first (issue #223 review).
 		if (!this.queueItemRefusals.has(identity)) {
 			this.queueItemRefusals.add(identity);
 			this.log?.warn(this.refusalLine(prefix, identity, QUEUE_ITEM_STANDS_FACT));
@@ -1636,6 +1665,32 @@ class HandoffDispatchModule implements HandoffDispatch {
 	 */
 	private refusalLine(prefix: "handoff" | "merge", identity: string, fact: string): string {
 		return `${prefix} refused: ${this.ticketName(identity)} (${fact})`;
+	}
+
+	/**
+	 * The refusal a start claim's hard gates give, with the record line the
+	 * standing fact leaves (issue #223).
+	 *
+	 * The claim refusal has always reached the file. It reached it once per ask, and
+	 * the automatic walks re-ask every observation cycle, so a position whose claim
+	 * stands refused wrote about 12 identical lines a minute - the same failure the
+	 * standing-row refusal is deduped for. The line follows the plane's one rule for
+	 * a standing fact: once while it stands, again when it moves.
+	 */
+	private refuseClaim(prefix: "handoff" | "merge", identity: string, fact: string): void {
+		const key = claimRefusalKey(prefix, identity);
+		if (this.claimRefusals.get(key) === fact) return;
+		this.claimRefusals.set(key, fact);
+		this.log?.warn(this.refusalLine(prefix, identity, fact));
+	}
+
+	/**
+	 * Forget the claim refusal stated for one ticket on one start channel
+	 * (issue #223). The claim went through, so the fact the line stated no longer
+	 * stands and a later refusal is a new one.
+	 */
+	private forgetClaimRefusal(prefix: "handoff" | "merge", identity: string): void {
+		this.claimRefusals.delete(claimRefusalKey(prefix, identity));
 	}
 
 	/**

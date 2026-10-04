@@ -11,9 +11,9 @@ import {
 	AUTOMATIC_HOLD_LINES,
 	AUTOMATIC_HOLD_REASONS,
 	type AutomaticHoldReason,
-	automaticAddsHold,
-	continuationHold,
-	freshWorkHold,
+	automaticAddsHoldReason,
+	continuationHoldReason,
+	freshWorkHoldReason,
 	type OpenTicketRowFacts,
 	openTicketRowGate,
 	openTicketWaitsHold,
@@ -67,60 +67,62 @@ describe("the Handoff limit is one rule (ADR 0005)", () => {
 
 describe("the top-up's cycle gate (ADR 0051)", () => {
 	test("mode on, brake down, no held turn, empty queue: the cycle may add", () => {
-		expect(freshWorkHold(cycle())).toBeNull();
+		expect(freshWorkHoldReason(cycle())).toBeNull();
 	});
 
 	test("each single wait holds the whole cycle", () => {
-		expect(freshWorkHold(cycle({ modeOn: false }))).not.toBeNull();
-		expect(freshWorkHold(cycle({ queuePaused: true }))).not.toBeNull();
-		expect(freshWorkHold(cycle({ dispatchPauseActive: true }))).not.toBeNull();
+		expect(freshWorkHoldReason(cycle({ modeOn: false }))).not.toBeNull();
+		expect(freshWorkHoldReason(cycle({ queuePaused: true }))).not.toBeNull();
+		expect(freshWorkHoldReason(cycle({ dispatchPauseActive: true }))).not.toBeNull();
 		// One item is enough: the queue's depth is the top-up's pace.
-		expect(freshWorkHold(cycle({ queueDepth: 1 }))).not.toBeNull();
-		expect(freshWorkHold(cycle({ queueDepth: 4 }))).not.toBeNull();
+		expect(freshWorkHoldReason(cycle({ queueDepth: 1 }))).not.toBeNull();
+		expect(freshWorkHoldReason(cycle({ queueDepth: 4 }))).not.toBeNull();
 	});
 });
 
 describe("the gates every automatic add reads (ADR 0051, ADR 0052, ADR 0016)", () => {
 	test("mode on, brake down, no held turn: the gates hold nothing", () => {
-		expect(automaticAddsHold(cycle())).toBeNull();
+		expect(automaticAddsHoldReason(cycle())).toBeNull();
 	});
 
 	test("each single wait holds every add, and names itself (issue #223)", () => {
-		expect(automaticAddsHold(cycle({ modeOn: false }))).toBe("auto-handoff-off");
-		expect(automaticAddsHold(cycle({ queuePaused: true }))).toBe("queue-paused");
-		expect(automaticAddsHold(cycle({ dispatchPauseActive: true }))).toBe("dispatch-pause");
+		expect(automaticAddsHoldReason(cycle({ modeOn: false }))).toBe("auto-handoff-off");
+		expect(automaticAddsHoldReason(cycle({ queuePaused: true }))).toBe("queue-paused");
+		expect(automaticAddsHoldReason(cycle({ dispatchPauseActive: true }))).toBe("dispatch-pause");
 	});
 
 	test("the first gate the walk reads is the fact it states", () => {
 		// The mode, the brake, and the held turn stand at once: one hold is stated,
 		// and it is the one the walk reached first.
 		expect(
-			automaticAddsHold(cycle({ modeOn: false, queuePaused: true, dispatchPauseActive: true })),
+			automaticAddsHoldReason(
+				cycle({ modeOn: false, queuePaused: true, dispatchPauseActive: true }),
+			),
 		).toBe("auto-handoff-off");
-		expect(automaticAddsHold(cycle({ queuePaused: true, dispatchPauseActive: true }))).toBe(
+		expect(automaticAddsHoldReason(cycle({ queuePaused: true, dispatchPauseActive: true }))).toBe(
 			"queue-paused",
 		);
 	});
 
 	test("the fresh-work add enters an empty queue only (ADR 0051)", () => {
-		expect(freshWorkHold(cycle())).toBeNull();
+		expect(freshWorkHoldReason(cycle())).toBeNull();
 		// One item is enough: the queue's depth is the top-up's pace.
-		expect(freshWorkHold(cycle({ queueDepth: 1 }))).toBe("queue-row-standing");
-		expect(freshWorkHold(cycle({ queueDepth: 4 }))).toBe("queue-row-standing");
+		expect(freshWorkHoldReason(cycle({ queueDepth: 1 }))).toBe("queue-row-standing");
+		expect(freshWorkHoldReason(cycle({ queueDepth: 4 }))).toBe("queue-row-standing");
 		// The depth is the fresh-work walk's own gate. The standing gates above
 		// hold the continuation add too, and ADR 0094 lets that add enter a queue
 		// that already holds fresh work.
-		expect(automaticAddsHold(cycle({ queueDepth: 1 }))).toBeNull();
-		expect(freshWorkHold(cycle({ queueDepth: 1 }))).toBe("queue-row-standing");
+		expect(automaticAddsHoldReason(cycle({ queueDepth: 1 }))).toBeNull();
+		expect(freshWorkHoldReason(cycle({ queueDepth: 1 }))).toBe("queue-row-standing");
 	});
 
 	test("the fresh-work hold reads the standing gates first (ADR 0051, ADR 0052, ADR 0016)", () => {
-		expect(freshWorkHold(cycle({ queueDepth: 2, modeOn: false }))).toBe("auto-handoff-off");
-		expect(freshWorkHold(cycle({ queueDepth: 2, queuePaused: true }))).toBe("queue-paused");
-		expect(freshWorkHold(cycle({ queueDepth: 2, dispatchPauseActive: true }))).toBe(
+		expect(freshWorkHoldReason(cycle({ queueDepth: 2, modeOn: false }))).toBe("auto-handoff-off");
+		expect(freshWorkHoldReason(cycle({ queueDepth: 2, queuePaused: true }))).toBe("queue-paused");
+		expect(freshWorkHoldReason(cycle({ queueDepth: 2, dispatchPauseActive: true }))).toBe(
 			"dispatch-pause",
 		);
-		expect(freshWorkHold(cycle({ queueDepth: 0 }))).toBeNull();
+		expect(freshWorkHoldReason(cycle({ queueDepth: 0 }))).toBeNull();
 	});
 });
 
@@ -150,7 +152,7 @@ describe("each automatic-walk hold names itself in the record (issue #223)", () 
 			cycle({ dispatchPauseActive: true }),
 			cycle({ queueDepth: 1 }),
 		]) {
-			const reason = freshWorkHold(facts);
+			const reason = freshWorkHoldReason(facts);
 			expect(reason).not.toBeNull();
 			expect(AUTOMATIC_HOLD_LINES[reason as AutomaticHoldReason]).not.toBeUndefined();
 		}
@@ -159,8 +161,8 @@ describe("each automatic-walk hold names itself in the record (issue #223)", () 
 
 describe("the row a continuation must not jump (ADR 0051, ADR 0094, ADR 0100, issue #230)", () => {
 	test("an empty queue, or a queue of fresh work alone, holds nothing", () => {
-		expect(continuationHold([])).toBeNull();
-		expect(continuationHold([{ continuation: false, automatic: true }])).toBeNull();
+		expect(continuationHoldReason([])).toBeNull();
+		expect(continuationHoldReason([{ continuation: false, automatic: true }])).toBeNull();
 	});
 
 	test("a standing Workflow route row holds the add, of either staging (issue #230)", () => {
@@ -168,11 +170,11 @@ describe("the row a continuation must not jump (ADR 0051, ADR 0094, ADR 0100, is
 		// row the operator confirmed from the Decision screen counts as a continuation
 		// already standing: ADR 0100 ranks the owed row ahead in the queue's order, and
 		// a row that already stands is never overtaken by a row that has not entered.
-		expect(continuationHold([{ continuation: false, automatic: false }])).toBeNull();
-		expect(continuationHold([{ continuation: true, automatic: true }])).toBe(
+		expect(continuationHoldReason([{ continuation: false, automatic: false }])).toBeNull();
+		expect(continuationHoldReason([{ continuation: true, automatic: true }])).toBe(
 			"continuation-standing",
 		);
-		expect(continuationHold([{ continuation: true, automatic: false }])).toBe(
+		expect(continuationHoldReason([{ continuation: true, automatic: false }])).toBe(
 			"operator-row-standing",
 		);
 	});
@@ -185,13 +187,13 @@ describe("the row a continuation must not jump (ADR 0051, ADR 0094, ADR 0100, is
 		// The first standing row in the queue's order is the one the walk waits
 		// behind, and it is the row the line names.
 		expect(
-			continuationHold([
+			continuationHoldReason([
 				{ continuation: true, automatic: false },
 				{ continuation: true, automatic: true },
 			]),
 		).toBe("operator-row-standing");
 		expect(
-			continuationHold([
+			continuationHoldReason([
 				{ continuation: true, automatic: true },
 				{ continuation: true, automatic: false },
 			]),

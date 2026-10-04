@@ -63,7 +63,7 @@ import {
 } from "./fake-runner.ts";
 import { FakeSource } from "./fake-source.ts";
 import { type GatedRunner, gatedRunner as gateOnRunner } from "./gated-runner.ts";
-import { recordLogger } from "./record-logger.ts";
+import { infoLine, type RecordedLine, recordLogger } from "./record-logger.ts";
 
 const paths: string[] = [];
 afterEach(() => {
@@ -525,19 +525,20 @@ describe("the mode cell and the a key", () => {
 	test("the a key leaves the mode flip in the record", async () => {
 		const app = seededApp("open");
 		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
-		const lines: string[] = [];
+		const lines: RecordedLine[] = [];
 		await withApp(
 			async (setup) => {
 				app.src.settle(success);
 				await awaitFrame(setup, (f) => f.includes("● manual 0/2"), "the mode cell");
 				await press(setup, "a", "auto on", (f) => f.includes("○ auto 0/2"));
 				await press(setup, "a", "auto off", (f) => f.includes("● manual 0/2"));
-				// One line per key, in the order the keys landed. The `mode:` prefix is the
+				// One line per key, in the order the keys landed, each at the `info` level
+				// the configuration reference states for it. The `mode:` prefix is the
 				// record's family for the facts the operator sets by key. The cycle's own hold
 				// lines share the logger and are not this fact's lines.
-				expect(lines.filter((line) => line.startsWith("mode: auto-handoff is"))).toEqual([
-					"mode: auto-handoff is on",
-					"mode: auto-handoff is off",
+				expect(lines.filter((line) => line.message.startsWith("mode: auto-handoff is"))).toEqual([
+					infoLine("mode: auto-handoff is on"),
+					infoLine("mode: auto-handoff is off"),
 				]);
 			},
 			WIDTH,
@@ -550,7 +551,7 @@ describe("the mode cell and the a key", () => {
 	test("a mode write the state file refuses reports, and the flip stands", async () => {
 		const app = seededApp("open");
 		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
-		const lines: string[] = [];
+		const lines: RecordedLine[] = [];
 
 		await withApp(
 			async (setup) => {
@@ -575,11 +576,14 @@ describe("the mode cell and the a key", () => {
 				expect(frameText(setup.captureCharFrame())).toContain("○ auto 0/2");
 				// The record states the refused flip the way the Message line does
 				// (issue #223). A file that said `auto-handoff is on` while the next run
-				// reads the old value is a record a reviewer cannot trust.
-				const recorded = lines.filter((line) => line.startsWith("mode: auto-handoff is"));
+				// reads the old value is a record a reviewer cannot trust. The refused flip
+				// is news the operator must not miss, so it leaves at `warn` where the flip
+				// that landed leaves `info`.
+				const recorded = lines.filter((line) => line.message.startsWith("mode: auto-handoff is"));
 				expect(recorded).toHaveLength(1);
-				expect(recorded[0]).toContain("mode: auto-handoff is on for this session only:");
-				expect(recorded[0]).toContain(app.state.path);
+				expect(recorded[0]?.level).toBe("warn");
+				expect(recorded[0]?.message).toContain("mode: auto-handoff is on for this session only:");
+				expect(recorded[0]?.message).toContain(app.state.path);
 			},
 			WIDE_STATUS,
 			HEIGHT,

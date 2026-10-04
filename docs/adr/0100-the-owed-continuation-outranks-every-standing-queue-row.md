@@ -99,7 +99,7 @@ that already stands is never overtaken by a row that has not entered. A row the
 operator wants started ahead of a standing one keeps the queue pause, Enter on its
 row, and the force-dispatch.
 
-**The hold line keeps naming whose row stands.** `continuationHold` answers
+**The hold line keeps naming whose row stands.** `continuationHoldReason` answers
 `continuation-standing` for the factory's own row and `operator-row-standing` for the
 operator's, because the origin names both `workflow` and a record that calls the
 operator's row a continuation names a fact the row is not (issue #223). The staging

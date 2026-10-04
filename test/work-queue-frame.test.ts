@@ -48,7 +48,7 @@ import {
 	workspaceListJson,
 } from "./fake-runner.ts";
 import { FakeSource } from "./fake-source.ts";
-import { recordLogger } from "./record-logger.ts";
+import { infoLine, type RecordedLine, recordLogger } from "./record-logger.ts";
 import {
 	DEFAULT_AGENT_NAME,
 	issuesConfig,
@@ -449,7 +449,7 @@ describe("the Work queue section", () => {
 		state.grouping.setGroupingAxis("tickets", "none");
 		const { source, enqueue, runner } = queuedFixture(state);
 		enqueue(FIRST);
-		const lines: string[] = [];
+		const lines: RecordedLine[] = [];
 		try {
 			await booted(
 				async (setup) => {
@@ -462,13 +462,14 @@ describe("the Work queue section", () => {
 					await press(setup, "p", "the queue resume", (f) =>
 						messageRowOf(f).includes("Work queue resumed"),
 					);
-					// One line per key, in the order the keys landed. The `queue:` prefix is the
+					// One line per key, in the order the keys landed, each at the `info` level
+					// the configuration reference states for it. The `queue:` prefix is the
 					// record's family for the facts the operator sets by key. The cycle's own
 					// record lines - the holds its automatic walks state - are the other family
 					// the same logger carries, and they are not this fact's lines.
-					expect(lines.filter((line) => line.startsWith("queue:"))).toEqual([
-						"queue: the Work queue is paused",
-						"queue: the Work queue resumed",
+					expect(lines.filter((line) => line.message.startsWith("queue:"))).toEqual([
+						infoLine("queue: the Work queue is paused"),
+						infoLine("queue: the Work queue resumed"),
 					]);
 				},
 				state,

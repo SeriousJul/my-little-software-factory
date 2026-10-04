@@ -51,7 +51,7 @@ import {
 import { BASE_CONFIG } from "./base-config.ts";
 import { agentListJson, FakeRunner } from "./fake-runner.ts";
 import { FakeSource } from "./fake-source.ts";
-import { recordLogger } from "./record-logger.ts";
+import { infoLine, type RecordedLine, recordLogger, warnLine } from "./record-logger.ts";
 
 const paths: string[] = [];
 afterEach(() => {
@@ -831,12 +831,12 @@ describe("the dispatch's ask and pickup", () => {
 	 * `automatic` mark decides whether the start line names the pickup or the
 	 * operator's direct ask (issue #209).
 	 */
-	async function mergeAskLines(automatic: boolean): Promise<string[]> {
+	async function mergeAskLines(automatic: boolean): Promise<RecordedLine[]> {
 		const state = planeState();
 		const runner = new FakeRunner();
 		stubReadSequence(runner, [{ state: "open" }, { merged: true }]);
 		stubMerge(runner, 0);
-		const lines: string[] = [];
+		const lines: RecordedLine[] = [];
 		const events: string[] = [];
 		let resolveStarted: () => void = () => {};
 		const startedSettled = new Promise<void>((resolve) => {
@@ -872,8 +872,8 @@ describe("the dispatch's ask and pickup", () => {
 		// The factory's ask: the pickup's walk ran the merge, so the line names
 		// the pickup (issue #209), and the row is the factory's own add (issue #223).
 		expect(await mergeAskLines(true)).toEqual([
-			`merge queued: "${pullTitle}" (origin open, automatic)`,
-			`merge started: "${pullTitle}" (mode pickup, origin open, automatic, seats 1/2)`,
+			infoLine(`merge queued: "${pullTitle}" (origin open, automatic)`),
+			infoLine(`merge started: "${pullTitle}" (mode pickup, origin open, automatic, seats 1/2)`),
 		]);
 	});
 
@@ -882,8 +882,10 @@ describe("the dispatch's ask and pickup", () => {
 		// so the line names the direct ask, not the pickup, and the row reads
 		// `operator-staged` where the factory's row above reads `automatic`.
 		expect(await mergeAskLines(false)).toEqual([
-			`merge queued: "${pullTitle}" (origin open, operator-staged)`,
-			`merge started: "${pullTitle}" (mode direct-ask, origin open, operator-staged, seats 1/2)`,
+			infoLine(`merge queued: "${pullTitle}" (origin open, operator-staged)`),
+			infoLine(
+				`merge started: "${pullTitle}" (mode direct-ask, origin open, operator-staged, seats 1/2)`,
+			),
 		]);
 	});
 
@@ -897,7 +899,7 @@ describe("the dispatch's ask and pickup", () => {
 		const runner = new FakeRunner();
 		stubReadSequence(runner, [{ state: "open" }, { merged: true }]);
 		stubMerge(runner, 0);
-		const lines: string[] = [];
+		const lines: RecordedLine[] = [];
 		const events: string[] = [];
 		let resolveStarted: () => void = () => {};
 		const startedSettled = new Promise<void>((resolve) => {
@@ -928,8 +930,10 @@ describe("the dispatch's ask and pickup", () => {
 		dispatch.forceDispatchWorkQueueItem(pullIdentity);
 		await startedSettled;
 		expect(lines).toEqual([
-			`merge queued: "${pullTitle}" (origin open, automatic)`,
-			`merge started: "${pullTitle}" (mode force-dispatch, origin open, automatic, seats 1/1)`,
+			infoLine(`merge queued: "${pullTitle}" (origin open, automatic)`),
+			infoLine(
+				`merge started: "${pullTitle}" (mode force-dispatch, origin open, automatic, seats 1/1)`,
+			),
 		]);
 		state.close();
 	});
@@ -1158,7 +1162,7 @@ describe("the dispatch's ask and pickup", () => {
 		state.workQueue.setQueuePaused(true);
 		const runner = new FakeRunner();
 		const events: string[] = [];
-		const lines: string[] = [];
+		const lines: RecordedLine[] = [];
 		const dispatch = createHandoffDispatch({
 			state,
 			runner,
@@ -1205,10 +1209,13 @@ describe("the dispatch's ask and pickup", () => {
 			reason: `"${pullTitle}" already has a waiting queue item; the first item keeps its place`,
 		});
 		// The refusal reaches the plane's record on the merge channel too (issue
-		// #223), in the one shape every refusal line wears.
+		// #223), in the one shape every refusal line wears and at the `warn` level
+		// the filter reads.
 		expect(lines).toEqual([
-			`merge queued: "${pullTitle}" (origin open, automatic)`,
-			`merge refused: "${pullTitle}" (already has a waiting queue item; the first item keeps its place)`,
+			infoLine(`merge queued: "${pullTitle}" (origin open, automatic)`),
+			warnLine(
+				`merge refused: "${pullTitle}" (already has a waiting queue item; the first item keeps its place)`,
+			),
 		]);
 		// The pause held the pickup: no command ran.
 		expect(runner.commands()).toEqual([]);
@@ -1239,23 +1246,41 @@ describe("the dispatch's ask and pickup", () => {
 			workspaceId: "ws-1",
 		});
 		const events: string[] = [];
+		const lines: RecordedLine[] = [];
 		const dispatch = createHandoffDispatch({
 			state,
 			runner,
 			config: () => PLANE_CONFIG,
 			seatCount: () => 0,
 			home: home(),
+			log: recordLogger(lines),
 			...recorder(events),
 		});
-		const result = await dispatch.dispatchPlaneAction({
-			origin: "open",
-			automatic: true,
-			ticketIdentity: pullIdentity,
-			taskType: "merge",
-		});
+		const staleAsk = () =>
+			dispatch.dispatchPlaneAction({
+				origin: "open",
+				automatic: true,
+				ticketIdentity: pullIdentity,
+				taskType: "merge",
+			});
+		const result = await staleAsk();
 		expect(result).toEqual({ ok: false, reason: "the ticket is now handed-off" });
 		expect(state.workQueue.items()).toEqual([]);
 		expect(runner.commands()).toEqual([]);
+		// The refused claim is a standing fact (issue #223 review): the automatic
+		// walks re-ask the same position every observation cycle, and the line says
+		// it once while the fact stands, not once per ask.
+		await expect(staleAsk()).resolves.toEqual({
+			ok: false,
+			reason: "the ticket is now handed-off",
+		});
+		await expect(staleAsk()).resolves.toEqual({
+			ok: false,
+			reason: "the ticket is now handed-off",
+		});
+		expect(lines).toEqual([
+			warnLine(`merge refused: "${pullTitle}" (the ticket is now handed-off)`),
+		]);
 		state.close();
 	});
 
