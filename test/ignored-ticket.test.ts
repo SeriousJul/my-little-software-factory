@@ -1397,7 +1397,10 @@ describe("the ignored marker's frame", () => {
 		try {
 			await withApp(
 				async (setup) => {
-					setup.resize(70, HEIGHT);
+					// 68 columns is the narrowest row that still holds the pile cell beside
+					// the whole mode cell: 55 columns of counts and 13 of lamp, seat
+					// reading, and word. One column less and the pile gives way whole.
+					setup.resize(68, HEIGHT);
 					src.settle(success(twoTickets()));
 					const frame = await awaitFrame(
 						setup,
@@ -1557,8 +1560,9 @@ describe("the ignored marker's frame", () => {
 		try {
 			await withApp(
 				async (setup) => {
-					// Wide enough for both: the row names the held turn and the pile.
-					setup.resize(80, HEIGHT);
+					// 77 columns is the narrowest row that names the held turn and the
+					// pile beside the whole mode cell: 64 columns of counts and 13 of cell.
+					setup.resize(77, HEIGHT);
 					src.settle(outcome);
 					const wide = await awaitFrame(
 						setup,
@@ -1569,13 +1573,14 @@ describe("the ignored marker's frame", () => {
 					expect(headerRow(wide)).toContain("ignored: 1");
 					// A row that cannot hold both spends its last cells on the machine's
 					// fact: the held count stands and the ignored cell is dropped whole.
-					// The mode cell shrinks to its lamp and word before a count gives
-					// up its cells.
-					setup.resize(59, HEIGHT);
+					// 57 columns is the narrowest row that keeps it - 48 columns of counts
+					// beside the 9 of the bare lamp - and there the seat reading gives way
+					// before the held count does.
+					setup.resize(57, HEIGHT);
 					const narrow = await awaitFrame(
 						setup,
 						(f) => headerRow(f).includes("held") && !headerRow(f).includes("ignored"),
-						"the cut that drops the ignored cell",
+						"the drop that takes the ignored cell",
 					);
 					expect(headerRow(narrow)).toContain("Tickets");
 					expect(headerRow(narrow)).toContain("held");

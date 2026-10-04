@@ -585,7 +585,7 @@ describe("native Ticket detail viewport", () => {
 		}
 	});
 
-	test("reserves a terminal row for the live mode cell through a resize", async () => {
+	test("spends no terminal row on the mode cell through a resize", async () => {
 		const state = openFactoryState(":memory:");
 		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
 		state.grouping.setGroupingAxis("tickets", "none");

@@ -1,6 +1,7 @@
 /**
  * Section header facts (issue #201): the counts one Section header carries,
- * answered from the screen's inputs as values.
+ * answered from the screen's inputs as values, and the Auto-handoff facts its
+ * mode cell carries.
  *
  * The header takes these counts as values and paints them; it holds no rule of
  * its own. Every count reads the machine's facts, never the operator's view:
@@ -26,6 +27,33 @@ const CONSULTATION_RECOVERY_STATES = ["missing", "failed", "closing", "opening"]
 
 /** The state no Consultation header count covers. */
 const CONSULTATION_CLOSED_STATE = "closed";
+
+/**
+ * The Auto-handoff mode a Ticket header's lamp cell names (ADR 0092).
+ *
+ * The lamp reads the operator's share of the work, not the machine's: an auto
+ * run leaves the lamp unlit, and a manual run lights it.
+ */
+export type AutoHandoffMode = "auto" | "manual";
+
+/**
+ * The Auto-handoff facts one Ticket header's mode cell carries.
+ *
+ * The cell names the mode with a lamp and a word, the Parallel limit's seat
+ * count beside it (ADR 0034), and the Dispatch pause when it holds the
+ * automatic works (ADR 0016). The screen that owns the factory state fills
+ * these values; the header owns how they read.
+ */
+export interface AutoHandoffCell {
+	/** Auto-handoff mode: `auto` leaves the lamp unlit, `manual` lights it. */
+	mode: AutoHandoffMode;
+	/** The seats the Parallel limit counts as taken. */
+	seats: number;
+	/** The Parallel limit. 0 states no limit, so the cell names no fraction. */
+	limit: number;
+	/** The Dispatch pause (ADR 0016): it rides the cell in auto mode only. */
+	dispatchPaused: boolean;
+}
 
 /** One Section header's counts. */
 export interface SectionFacts {

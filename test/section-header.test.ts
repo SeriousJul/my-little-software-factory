@@ -14,12 +14,8 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { createElement } from "@opentui/react";
 import { testRender } from "@opentui/react/test-utils";
-
-import {
-	type AutoHandoffCell,
-	type AutoHandoffMode,
-	SectionHeader,
-} from "../src/components/section-header.ts";
+import { planHeaderRow, SectionHeader } from "../src/components/section-header.ts";
+import type { AutoHandoffCell, AutoHandoffMode } from "../src/domain/section-facts.ts";
 import { frameText, rgb, roleColor, rowsOf, spanColorAt } from "./app-harness.ts";
 
 let renderer: { destroy: () => void | Promise<void> } | null = null;
@@ -79,9 +75,9 @@ describe("the Section header's cell order", () => {
 		expect(row).toContain("ignored: 3");
 	});
 
-	test("the held count and its bell stand where the ignored cell is cut", async () => {
+	test("the held count and its bell stand where the ignored cell goes", async () => {
 		// The same facts on a row that cannot hold both conditional cells: the
-		// view fact goes, and the machine's decision fact stays with its bell.
+		// view fact goes whole, and the machine's decision fact stays with its bell.
 		const row = await headerRow(54, { held: 1, heldBell: true, ignored: 3 });
 		expect(row).toContain("Tickets");
 		expect(row).toContain("held 1");
@@ -158,14 +154,36 @@ describe("the Section header's mode lamp", () => {
 	test("the counts give up whole cells before the lamp gives up its corner", async () => {
 		// The facts that already overflow a 54-column row, now with the cell on
 		// it: the mode keeps its corner, and whole count cells drop from the
-		// counts' tail - the pile first, then the bell, then the held count.
+		// counts' tail - the pile first, then the bell, then the held count -
+		// only as far as the bare lamp needs. The cell then takes the seat
+		// reading back into the room those cells left.
 		const row = await headerRow(54, { held: 1, heldBell: true, ignored: 3 }, cell("manual", 1, 2));
 		expect(row).toContain("Tickets");
 		expect(row).toContain("awaiting 1");
 		expect(row).not.toContain("ignored");
 		expect(row).not.toContain("!!!");
 		expect(row).not.toContain("held");
-		expect(row.endsWith("● manual")).toBe(true);
+		expect(row.endsWith("● manual 1/2")).toBe(true);
+	});
+
+	test("the cell grows back at 56 and at 60 columns, where the row has the room", async () => {
+		// The same facts on the rows the drop rule measured at 54 columns. The
+		// counts give up only as far as the bare lamp needs, and the cell takes
+		// back every part the room those cells left can hold: the seat reading
+		// first, then the pause word.
+		const at56 = await headerRow(56, { held: 1, heldBell: true, ignored: 3 }, cell("manual", 1, 2));
+		expect(at56).not.toContain("ignored");
+		expect(at56).not.toContain("!!!");
+		expect(at56.endsWith("● manual 1/2")).toBe(true);
+		// 60 columns is the wide form, and the row needs three count cells gone
+		// before it can hold even the bare lamp: 69 columns of counts beside 9
+		// columns of lamp. The seat reading then stands again in the room left.
+		const at60 = await headerRow(60, { held: 1, heldBell: true, ignored: 3 }, cell("manual", 1, 2));
+		expect(at60).toContain("awaiting: 1");
+		expect(at60).not.toContain("held:");
+		expect(at60).not.toContain("!!!");
+		expect(at60).not.toContain("ignored");
+		expect(at60.endsWith("● manual 1/2")).toBe(true);
 	});
 
 	test("the seat count gives up its cells before a held count does", async () => {
@@ -219,5 +237,99 @@ describe("the Section header's mode lamp", () => {
 		const bare = await renderHeader(84, { held: 0 }, cell("auto", 3, 0));
 		expect(bare.row.endsWith("○ auto 3")).toBe(true);
 		expect(spanColorAt(bare.setup, 0, " 3")).toEqual(rgb(roleColor("green")));
+	});
+});
+
+/**
+ * The ladder the row lays itself out at, measured without a renderer.
+ *
+ * `planHeaderRow` is arithmetic over the row's cells, so the order the cells
+ * give way in reads here as the widths and the cells themselves. The rendered
+ * cases above read the same ladder through the component.
+ */
+describe("the Section header's row plan", () => {
+	// The Ticket header's cells on one set of facts, in each of the two forms.
+	const wide = [
+		"▾ Tickets",
+		"open: 0",
+		"running: 0",
+		"awaiting: 1",
+		"held: 1",
+		"!!!",
+		"ignored: 3",
+	];
+	const narrow = ["▾ Tickets", "open 0", "running 0", "awaiting 1", "held 1", "!!!", "ignored 3"];
+	// The same header with no bell and no pile: the pause ladder's row.
+	const wideHeld = ["▾ Tickets", "open: 0", "running: 0", "awaiting: 1", "held: 1"];
+	const cellText = (plan: ReturnType<typeof planHeaderRow>): string =>
+		`${plan.lamp}${plan.seats}${plan.pause}`;
+
+	test("a row wide enough keeps every cell and every part of the mode cell", () => {
+		const plan = planHeaderRow(84, wide, cell("manual", 1, 2));
+		expect(plan.cells).toEqual(wide);
+		expect(cellText(plan)).toBe(" ● manual 1/2");
+	});
+
+	test("the counts give way whole from their tail, and only as far as the bare lamp needs", () => {
+		// 72 columns against 69 columns of counts and a 13-column cell: the pile
+		// goes, and nothing else has to.
+		expect(planHeaderRow(72, wide, cell("manual", 1, 2)).cells).toEqual(wide.slice(0, 6));
+		// 66 columns: the pile is still gone and the seat reading has given way,
+		// so the bell keeps its place.
+		expect(planHeaderRow(66, wide, cell("manual", 1, 2)).cells).toEqual(wide.slice(0, 6));
+		// 62 columns: the held count goes, and the lamp keeps all 9 of its columns.
+		expect(planHeaderRow(62, wide, cell("manual", 1, 2)).cells).toEqual(wide.slice(0, 5));
+		// 59 columns, narrow form: the pile and the bell go and the held count stands.
+		expect(planHeaderRow(59, narrow, cell("manual", 1, 2)).cells).toEqual(narrow.slice(0, 5));
+	});
+
+	test("the mode cell grows back into the room the dropped cells left", () => {
+		// 60 columns: three count cells have to go before the row can hold even
+		// the bare lamp, and the room they leave holds the seat reading again.
+		const at60 = planHeaderRow(60, wide, cell("manual", 1, 2));
+		expect(at60.cells).toEqual(wide.slice(0, 4));
+		expect(cellText(at60)).toBe(" ● manual 1/2");
+		// 56 and 54 columns, narrow form: the row keeps 40 columns of counts and
+		// wears the whole cell beside them.
+		for (const width of [56, 54]) {
+			const plan = planHeaderRow(width, narrow, cell("manual", 1, 2));
+			expect(plan.cells).toEqual(narrow.slice(0, 4));
+			expect(cellText(plan)).toBe(" ● manual 1/2");
+		}
+		// 40 columns, the plane's own floor: the seat reading gives way, the lamp
+		// and its word do not.
+		expect(cellText(planHeaderRow(40, narrow, cell("manual", 1, 2)))).toBe(" ● manual");
+	});
+
+	test("the seat reading gives way before the pause word", () => {
+		// 66 columns of 52 columns of counts: the lamp and the pause word stand,
+		// the seat reading does not.
+		expect(cellText(planHeaderRow(66, wideHeld, cell("auto", 2, 3, true)))).toBe(" ○ auto paused");
+		// 62 columns: the pause word goes with it, and no count cell does.
+		const tight = planHeaderRow(62, wideHeld, cell("auto", 2, 3, true));
+		expect(tight.cells).toEqual(wideHeld);
+		expect(cellText(tight)).toBe(" ○ auto");
+		// 54 columns, narrow form: the held count goes whole, and the pause word
+		// the seat reading gave up stands again.
+		const narrowPlan = planHeaderRow(54, narrow, cell("auto", 2, 3, true));
+		expect(narrowPlan.cells).toEqual(narrow.slice(0, 4));
+		expect(cellText(narrowPlan)).toBe(" ○ auto paused");
+	});
+
+	test("the name and the lamp stand whole, and no count cell is cut", () => {
+		// Below the plane's 40-column floor the ladder keeps on dropping whole
+		// cells: at 20 columns the row holds the name and the bare lamp and no
+		// count at all, and it cuts none of them in half.
+		const tiny = planHeaderRow(20, narrow, cell("manual", 1, 2));
+		expect(tiny.cells).toEqual(["▾ Tickets"]);
+		expect(cellText(tiny)).toBe(" ● manual");
+	});
+
+	test("a header that carries no mode cell lays its counts out as whole cells too", () => {
+		// 54 columns against 64 columns of counts: the pile cell goes whole and
+		// the row keeps the held count and its bell.
+		const plan = planHeaderRow(54, narrow, null);
+		expect(plan.cells).toEqual(narrow.slice(0, 6));
+		expect(cellText(plan)).toBe("");
 	});
 });

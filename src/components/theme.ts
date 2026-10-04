@@ -13,6 +13,7 @@
  * so the terminal's own default shows through where the theme says so.
  */
 
+import type { AutoHandoffMode } from "../domain/section-facts.ts";
 import type { TicketMarker, TicketState } from "../domain/ticket.ts";
 import type { TaskTypeFact } from "../domain/ticket-facts.ts";
 import { currentThemeResolution } from "../theme-source.ts";
@@ -93,7 +94,7 @@ export function markerColor(marker: TicketMarker): string | undefined {
 }
 
 /** The theme role each Auto-handoff mode wears in the Ticket header's corner. */
-const AUTO_HANDOFF_ROLES: Record<"auto" | "manual", ThemeRole> = {
+const AUTO_HANDOFF_ROLES: Record<AutoHandoffMode, ThemeRole> = {
 	auto: "yellow",
 	manual: "green",
 };
@@ -105,7 +106,7 @@ const AUTO_HANDOFF_ROLES: Record<"auto" | "manual", ThemeRole> = {
  * that waits for the operator wears the running state's color. The written
  * word names the mode either way, so the no-color presentation loses nothing.
  */
-export function autoHandoffColor(mode: "auto" | "manual"): string | undefined {
+export function autoHandoffColor(mode: AutoHandoffMode): string | undefined {
 	return paint(AUTO_HANDOFF_ROLES[mode]);
 }
 
