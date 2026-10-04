@@ -56,6 +56,7 @@ import {
 	worktreeListJson,
 } from "./fake-runner.ts";
 import { gatedRunner } from "./gated-runner.ts";
+import { recordLogger } from "./record-logger.ts";
 
 const paths: string[] = [];
 afterEach(() => {
@@ -271,6 +272,11 @@ interface Chain {
 	planeAsks: PlaneActionIntent[];
 	/** What the dispatch module reported to the Message line, in order. */
 	notices: string[];
+	/**
+	 * The plane's record lines, read back from the `log` seam the dispatch and the
+	 * observation cycle share (issue #223).
+	 */
+	lines: string[];
 	statuses: Array<{ kind: string; text: string }>;
 	coordinator: ObservationCoordinator;
 	dispatch: ReturnType<typeof createHandoffDispatch>;
@@ -336,6 +342,7 @@ function chainRig(options: ChainRigOptions = {}): Chain {
 	const handoffAsks: HandoffIntent[] = [];
 	const planeAsks: PlaneActionIntent[] = [];
 	const notices: string[] = [];
+	const lines: string[] = [];
 	const statuses: Chain["statuses"] = [];
 
 	// The dispatch the app builds, on the fake runner and the test state. The
@@ -380,6 +387,7 @@ function chainRig(options: ChainRigOptions = {}): Chain {
 		clearWorking: () => undefined,
 		refresh: () => undefined,
 		starting: () => undefined,
+		log: recordLogger(lines),
 	});
 
 	const coordinator = new ObservationCoordinator({
@@ -416,6 +424,7 @@ function chainRig(options: ChainRigOptions = {}): Chain {
 		onStatus: (kind, text) => {
 			statuses.push({ kind, text });
 		},
+		log: recordLogger(lines),
 	});
 
 	const refresh = (issue: FetchedTicket, pull: FetchedTicket): void => {
@@ -550,6 +559,7 @@ function chainRig(options: ChainRigOptions = {}): Chain {
 		handoffAsks,
 		planeAsks,
 		notices,
+		lines,
 		statuses,
 		coordinator,
 		dispatch,
@@ -825,6 +835,8 @@ describe("the seat a settling turn frees (the dev-run miss on PR #206)", () => {
 	});
 
 	test("the settled turn's continuation takes the freed seat ahead of the row the operator staged", async () => {
+		const PULL_TITLE = "Persist source facts in state";
+		const STAGED_TITLE = "Hold the seat for the chain";
 		// The dev-run miss on PR #215: one seat, the chain's turn in flight, and
 		// the row standing in the queue is the operator's own staging of a fresh
 		// ticket, not the factory's fresh work. The chain's turn ends, and the seat
@@ -847,10 +859,10 @@ describe("the seat a settling turn frees (the dev-run miss on PR #206)", () => {
 		]);
 
 		// The operator stages the fresh ticket by hand while the seat is full.
-		expect(
-			state.workQueue.enqueueWork({
-				ticketIdentity: otherPullIdentity,
+		await expect(
+			chain.dispatch.dispatch({
 				origin: "open",
+				ticketIdentity: otherPullIdentity,
 				choice: {
 					agentType: "pi",
 					environment: "worktree",
@@ -861,7 +873,7 @@ describe("the seat a settling turn frees (the dev-run miss on PR #206)", () => {
 				},
 				previousMessage: "",
 			}),
-		).toEqual({ ok: true });
+		).resolves.toEqual({ ok: true });
 
 		// Cycle 1: the seat is full with the chain's running rework, and the queue
 		// holds the operator's row.
@@ -909,6 +921,16 @@ describe("the seat a settling turn frees (the dev-run miss on PR #206)", () => {
 		).toEqual([
 			[pullIdentity, "workflow", true],
 			[otherPullIdentity, "open", false],
+		]);
+		// The record the run could not make then (issue #223). The operator's row
+		// and the factory's own row read differently on one origin, the hold the
+		// fresh-work walk took is stated, and the continuation the settled turn owed
+		// stands in the file with the path that started it.
+		expect(chain.lines).toEqual([
+			`handoff queued: "${STAGED_TITLE}" (origin open, operator-staged)`,
+			"automatic walks hold: the Work queue holds a waiting row",
+			`handoff queued: "${PULL_TITLE}" (origin workflow, automatic)`,
+			`handoff started: "${PULL_TITLE}" (mode pickup, origin workflow, automatic, seats 0/1)`,
 		]);
 		state.close();
 	});

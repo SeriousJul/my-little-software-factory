@@ -8,8 +8,12 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import {
+	AUTOMATIC_HOLD_LINES,
+	AUTOMATIC_HOLD_REASONS,
+	type AutomaticHoldReason,
 	automaticAddsHold,
 	continuationQueueHolds,
+	freshWorkHold,
 	type OpenTicketRowFacts,
 	openTicketRowGate,
 	openTicketWaitsHold,
@@ -79,13 +83,24 @@ describe("the top-up's cycle gate (ADR 0051)", () => {
 
 describe("the gates every automatic add reads (ADR 0051, ADR 0052, ADR 0016)", () => {
 	test("mode on, brake down, no held turn: the gates hold nothing", () => {
-		expect(automaticAddsHold(cycle())).toBe(false);
+		expect(automaticAddsHold(cycle())).toBeNull();
 	});
 
-	test("each single wait holds every add", () => {
-		expect(automaticAddsHold(cycle({ modeOn: false }))).toBe(true);
-		expect(automaticAddsHold(cycle({ queuePaused: true }))).toBe(true);
-		expect(automaticAddsHold(cycle({ dispatchPauseActive: true }))).toBe(true);
+	test("each single wait holds every add, and names itself (issue #223)", () => {
+		expect(automaticAddsHold(cycle({ modeOn: false }))).toBe("auto-handoff-off");
+		expect(automaticAddsHold(cycle({ queuePaused: true }))).toBe("queue-paused");
+		expect(automaticAddsHold(cycle({ dispatchPauseActive: true }))).toBe("dispatch-pause");
+	});
+
+	test("the first gate the walk reads is the fact it states", () => {
+		// The mode, the brake, and the held turn stand at once: one hold is stated,
+		// and it is the one the walk reached first.
+		expect(
+			automaticAddsHold(cycle({ modeOn: false, queuePaused: true, dispatchPauseActive: true })),
+		).toBe("auto-handoff-off");
+		expect(automaticAddsHold(cycle({ queuePaused: true, dispatchPauseActive: true }))).toBe(
+			"queue-paused",
+		);
 	});
 
 	test("the fresh-work add enters an empty queue only (ADR 0051)", () => {
@@ -96,7 +111,49 @@ describe("the gates every automatic add reads (ADR 0051, ADR 0052, ADR 0016)", (
 		// The depth is the fresh-work walk's own gate. The standing gates above
 		// hold the continuation add too, and ADR 0094 lets that add enter a queue
 		// that already holds fresh work.
-		expect(automaticAddsHold(cycle({ queueDepth: 1 }))).toBe(false);
+		expect(automaticAddsHold(cycle({ queueDepth: 1 }))).toBeNull();
+		expect(freshWorkHold(cycle({ queueDepth: 1 }))).toBe("queue-row-standing");
+	});
+
+	test("the fresh-work hold reads the standing gates first (ADR 0051, ADR 0052, ADR 0016)", () => {
+		expect(freshWorkHold(cycle({ queueDepth: 2, modeOn: false }))).toBe("auto-handoff-off");
+		expect(freshWorkHold(cycle({ queueDepth: 2, queuePaused: true }))).toBe("queue-paused");
+		expect(freshWorkHold(cycle({ queueDepth: 2, dispatchPauseActive: true }))).toBe(
+			"dispatch-pause",
+		);
+		expect(freshWorkHold(cycle({ queueDepth: 0 }))).toBeNull();
+	});
+});
+
+/**
+ * The record words (issue #223). A hold that names nothing cannot be told apart
+ * from a walk that broke, so each reason states its own fact and no two reasons
+ * share a line.
+ */
+describe("each automatic-walk hold names itself in the record (issue #223)", () => {
+	test("every reason has its own line", () => {
+		const lines = AUTOMATIC_HOLD_REASONS.map((reason) => AUTOMATIC_HOLD_LINES[reason]);
+		expect(new Set(lines).size).toBe(AUTOMATIC_HOLD_REASONS.length);
+		expect(lines).toEqual([
+			"automatic walks hold: auto-handoff is off",
+			"automatic walks hold: the Work queue is paused",
+			"automatic walks hold: a failed turn waits for the operator",
+			"automatic walks hold: the Work queue already holds a continuation",
+			"automatic walks hold: the Work queue holds a waiting row",
+		]);
+	});
+
+	test("the rule answers only reasons the words cover", () => {
+		for (const facts of [
+			cycle({ modeOn: false }),
+			cycle({ queuePaused: true }),
+			cycle({ dispatchPauseActive: true }),
+			cycle({ queueDepth: 1 }),
+		]) {
+			const reason = freshWorkHold(facts);
+			expect(reason).not.toBeNull();
+			expect(AUTOMATIC_HOLD_LINES[reason as AutomaticHoldReason]).not.toBeUndefined();
+		}
 	});
 });
 

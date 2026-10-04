@@ -21,6 +21,39 @@
 
 import { handoffLimitReached, type TicketState } from "./ticket.ts";
 
+/**
+ * The fact an automatic walk acted on when it added nothing (issue #223).
+ *
+ * Every one of these holds the walk out before it asks for a candidate, so the
+ * run shows nothing but the start that never came. Each reason names itself in
+ * the plane's record, so a reviewer can tell a correct hold from a broken one.
+ * The reasons are the walk's own gates, in the order the walk reads them.
+ */
+export const AUTOMATIC_HOLD_REASONS = [
+	"auto-handoff-off",
+	"queue-paused",
+	"dispatch-pause",
+	"continuation-standing",
+	"queue-row-standing",
+] as const;
+
+export type AutomaticHoldReason = (typeof AUTOMATIC_HOLD_REASONS)[number];
+
+/**
+ * The sentence each hold is stated in.
+ *
+ * The module that owns the gates owns the words for them, the way
+ * `NEXT_STEP_GATE_LINES` does for a gated Next step, so the walk states its
+ * hold in one wording and no surface restates it.
+ */
+export const AUTOMATIC_HOLD_LINES: Readonly<Record<AutomaticHoldReason, string>> = {
+	"auto-handoff-off": "automatic walks hold: auto-handoff is off",
+	"queue-paused": "automatic walks hold: the Work queue is paused",
+	"dispatch-pause": "automatic walks hold: a failed turn waits for the operator",
+	"continuation-standing": "automatic walks hold: the Work queue already holds a continuation",
+	"queue-row-standing": "automatic walks hold: the Work queue holds a waiting row",
+};
+
 /** The gates every automatic add reads (ADR 0051, ADR 0052, ADR 0016). */
 export interface AutomaticAddFacts {
 	/** Auto-handoff mode is on. */
@@ -38,22 +71,41 @@ export interface TopUpCycleFacts extends AutomaticAddFacts {
 }
 
 /**
- * Whether the cycle's standing gates hold every automatic add: the mode is off,
- * the brake is on, or a held turn stands undecided. In every one of those the
- * walk reads no candidate and adds nothing.
+ * Which of the cycle's standing gates holds every automatic add, or null when
+ * none does: the mode is off, the brake is on, or a held turn stands undecided.
+ * In every one of those the walk reads no candidate and adds nothing, and the
+ * reason it names is the fact the record states (issue #223).
+ *
+ * The order is the walk's own: the first gate that stands is the fact the cycle
+ * acted on, so one hold is stated and not three.
  */
-export function automaticAddsHold(facts: AutomaticAddFacts): boolean {
-	return !facts.modeOn || facts.queuePaused || facts.dispatchPauseActive;
+export function automaticAddsHold(facts: AutomaticAddFacts): AutomaticHoldReason | null {
+	if (!facts.modeOn) return "auto-handoff-off";
+	if (facts.queuePaused) return "queue-paused";
+	if (facts.dispatchPauseActive) return "dispatch-pause";
+	return null;
+}
+
+/**
+ * The hold the fresh-work adds stand under: the gates every automatic add reads,
+ * then the queue's own depth (ADR 0051). null means the walk may add.
+ *
+ * The continuation add reads the same gates and its own queue rule instead,
+ * because ADR 0094 lets it enter ahead of a standing fresh-work row.
+ */
+export function freshWorkHold(facts: TopUpCycleFacts): AutomaticHoldReason | null {
+	const gate = automaticAddsHold(facts);
+	if (gate !== null) return gate;
+	if (facts.queueDepth > 0) return "queue-row-standing";
+	return null;
 }
 
 /**
  * Whether the fresh-work add may enter: the cycle's gates, and a queue with no
- * row in it (ADR 0051). The continuation add reads the same gates and its own
- * queue rule instead, because ADR 0094 lets it enter ahead of a standing
- * fresh-work row.
+ * row in it (ADR 0051).
  */
 export function topUpCycleOpen(facts: TopUpCycleFacts): boolean {
-	return !automaticAddsHold(facts) && facts.queueDepth === 0;
+	return freshWorkHold(facts) === null;
 }
 
 /** One row the Work queue holds, as the continuation's gate reads it (ADR 0094, ADR 0100). */

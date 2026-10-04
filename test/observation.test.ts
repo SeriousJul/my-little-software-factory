@@ -4,6 +4,7 @@ import type { FactoryConfig, TransitionOutcome } from "../src/config.ts";
 import type { FetchedTicket } from "../src/domain/ticket.ts";
 import type { DispatchResult, HandoffIntent } from "../src/handoff-dispatch.ts";
 import type { HerdrAgent } from "../src/herdr.ts";
+import type { Logger } from "../src/logging.ts";
 import { agentNameFor } from "../src/naming.ts";
 import {
 	type AgentReader,
@@ -16,11 +17,13 @@ import {
 } from "../src/observation.ts";
 import type { RefreshClock } from "../src/refresh.ts";
 import type { ConsultationState } from "../src/state/consultation-record.ts";
+import type { HandoffOrigin } from "../src/state/handoff.ts";
 import type { FactoryState } from "../src/state.ts";
 import { openFactoryState } from "../src/state.ts";
 import type { SessionTurnRead, TurnEndCause, TurnLogEntry } from "../src/turn-log.ts";
 import { BASE_CONFIG } from "./base-config.ts";
 import { FakeRunner } from "./fake-runner.ts";
+import { recordLogger } from "./record-logger.ts";
 
 const source = { name: "issues", kind: "github-issues" };
 const choice = {
@@ -183,6 +186,8 @@ interface Rig {
 	coordinator: ObservationCoordinator;
 	/** Advance the clock the state and the loop share. */
 	advance: (ms: number) => void;
+	/** Move the Auto-handoff mode the cycle reads, the way the operator's key does. */
+	setAutoMode: (next: boolean) => void;
 	/** Swap the agent list the next probe returns. */
 	setAgents: (next: HerdrAgent[]) => void;
 }
@@ -249,6 +254,11 @@ function rig(options: {
 	 * poll-only, and the wake arm stands down.
 	 */
 	waitAgent?: (target: string, budgetMs: number) => Promise<AgentWaitResult>;
+	/**
+	 * The cycle's record lines (issue #223). Absent: the cycle writes no file, the
+	 * way a run with no `[logging]` table does.
+	 */
+	log?: Logger;
 }): Rig {
 	let nowMs = Date.parse("2026-08-31T11:00:00Z");
 	let agents = typeof options.agents === "function" ? [] : [...(options.agents ?? [])];
@@ -271,6 +281,8 @@ function rig(options: {
 	const pending: Array<(started: DispatchResult) => void> = [];
 	const statuses: Rig["statuses"] = [];
 	const cleanups: Rig["cleanups"] = [];
+	// The mode the cycle reads, movable the way the operator's key moves it.
+	let autoOn = options.autoOn ?? false;
 	const coordinator = new ObservationCoordinator({
 		state,
 		herdr: reader(probeAgents, options.readPane, options.waitAgent),
@@ -367,7 +379,8 @@ function rig(options: {
 		},
 		...(options.fireCompleted === undefined ? {} : { fireCompleted: options.fireCompleted }),
 		now: () => nowMs,
-		mode: () => options.autoOn ?? false,
+		mode: () => autoOn,
+		...(options.log === undefined ? {} : { log: options.log }),
 		startupGraceMs: options.startupGraceMs,
 		intervalMs: 60_000,
 		onChanged: () => {},
@@ -390,6 +403,9 @@ function rig(options: {
 		coordinator,
 		advance: (ms: number) => {
 			nowMs += ms;
+		},
+		setAutoMode: (next: boolean) => {
+			autoOn = next;
 		},
 		setAgents: (next: HerdrAgent[]) => {
 			agents = next;
@@ -5959,6 +5975,136 @@ describe("the failed Handoff start's hold (ADR 0077 as extended by ADR 0101, iss
 		refresh(state);
 		await coordinator.tick();
 		expect(intents).toHaveLength(2);
+		state.close();
+	});
+});
+
+/**
+ * The holds the automatic walks take, stated in the record (issue #223).
+ *
+ * Every one of these holds returns before a walk asks anything, so the run shows
+ * the start that never came and says nothing about why - the failure the dev run
+ * on PR #215 left behind. The cycle carries the dispatch's `log` seam and states
+ * each fact it acted on once, in the words the gate rule owns.
+ */
+describe("the automatic walks state their holds in the record (issue #223)", () => {
+	/** One cycle over the default feed, with its record lines read back. */
+	function recordRig(over: { autoOn?: boolean } = {}) {
+		const lines: string[] = [];
+		const r = rig({
+			autoOn: over.autoOn ?? true,
+			agents: [],
+			log: recordLogger(lines),
+		});
+		return { ...r, lines };
+	}
+
+	/** Stand one row in the queue, the way an ask that found no seat leaves it. */
+	function queueRow(
+		state: FactoryState,
+		identity: string,
+		origin: HandoffOrigin,
+		automatic: boolean,
+	): void {
+		const enqueued = state.workQueue.enqueueWork({
+			ticketIdentity: identity,
+			routeFromIdentity: null,
+			origin,
+			choice,
+			previousMessage: "",
+			automatic,
+		});
+		if (!enqueued.ok) throw new Error(enqueued.reason);
+	}
+
+	/** One awaiting ticket whose settled turn owes a route onto another ticket. */
+	function continuationRecordRig(over: { autoOn?: boolean } = {}) {
+		const r = recordRig(over);
+		r.state.sourceFact.applyFetch(source, success([fetched("github:github.com:I_6"), fetched()]));
+		settleFor(r.state, "github:github.com:I_5", "route", routeOutcome("github:github.com:I_6"));
+		return r;
+	}
+
+	test("a continuation already standing holds the owed one, and the cycle names the hold", async () => {
+		const { state, intents, lines, coordinator } = continuationRecordRig();
+		queueRow(state, "github:github.com:I_6", "workflow", true);
+		await coordinator.tick();
+		// The queue's own pace: one continuation at a time (ADR 0051).
+		expect(intents.filter((intent) => intent.origin === "workflow")).toHaveLength(0);
+		// Each fact the cycle acted on names itself: the continuation the walk
+		// would have jumped, and the row the fresh-work add waits behind.
+		expect(lines).toEqual([
+			"automatic walks hold: the Work queue already holds a continuation",
+			"automatic walks hold: the Work queue holds a waiting row",
+		]);
+		state.close();
+	});
+
+	test("each hold names its own fact, and no two share a line", async () => {
+		// Auto-handoff mode off: the walks run no automatic add at all.
+		const off = recordRig({ autoOn: false });
+		await off.coordinator.tick();
+		expect(off.lines).toEqual(["automatic walks hold: auto-handoff is off"]);
+		off.state.close();
+
+		// The operator's brake on the queue itself (ADR 0052).
+		const paused = recordRig();
+		paused.state.workQueue.setQueuePaused(true);
+		await paused.coordinator.tick();
+		expect(paused.lines).toEqual(["automatic walks hold: the Work queue is paused"]);
+		paused.state.close();
+
+		// The Dispatch pause: a held failed turn stands undecided (ADR 0016).
+		const held = recordRig();
+		settleForCause(held.state, "github:github.com:I_5", "route", "failed", "the build broke");
+		await held.coordinator.tick();
+		expect(held.lines).toEqual(["automatic walks hold: a failed turn waits for the operator"]);
+		held.state.close();
+
+		// A row the operator staged stands in the queue (ADR 0100): the fresh-work
+		// add is the walk it holds.
+		const row = recordRig();
+		queueRow(row.state, "github:github.com:I_5", "open", false);
+		await row.coordinator.tick();
+		expect(row.lines).toEqual(["automatic walks hold: the Work queue holds a waiting row"]);
+		row.state.close();
+	});
+
+	test("a standing hold states itself once, and a fact that moves states itself again", async () => {
+		const { state, lines, coordinator } = continuationRecordRig();
+		queueRow(state, "github:github.com:I_6", "workflow", true);
+		await coordinator.tick();
+		const standing = [...lines];
+		expect(standing).toHaveLength(2);
+		// The poll re-derives the same facts every five seconds: an unchanged cycle
+		// says nothing again, so the line cannot pin the file at the poll's cadence.
+		await coordinator.tick();
+		await coordinator.tick();
+		expect(lines).toEqual(standing);
+		// A new fact states itself once.
+		state.workQueue.setQueuePaused(true);
+		await coordinator.tick();
+		expect(lines.slice(standing.length)).toEqual([
+			"automatic walks hold: the Work queue is paused",
+		]);
+		// The facts the queue still stands on state themselves once more, and then
+		// hold their silence for every later cycle.
+		state.workQueue.setQueuePaused(false);
+		await coordinator.tick();
+		expect(lines.length).toBe(standing.length + 3);
+		await coordinator.tick();
+		await coordinator.tick();
+		expect(lines).toHaveLength(standing.length + 3);
+		state.close();
+	});
+
+	test("a cycle that adds an item states no hold", async () => {
+		// The walk took its one item, so nothing was held: the record carries the
+		// ask's own line and no hold line.
+		const { state, intents, lines, coordinator } = continuationRecordRig();
+		await coordinator.tick();
+		expect(intents.filter((intent) => intent.origin === "workflow")).toHaveLength(1);
+		expect(lines).toEqual([]);
 		state.close();
 	});
 });

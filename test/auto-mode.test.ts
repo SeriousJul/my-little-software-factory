@@ -63,6 +63,7 @@ import {
 } from "./fake-runner.ts";
 import { FakeSource } from "./fake-source.ts";
 import { type GatedRunner, gatedRunner as gateOnRunner } from "./gated-runner.ts";
+import { recordLogger } from "./record-logger.ts";
 
 const paths: string[] = [];
 afterEach(() => {
@@ -512,6 +513,35 @@ describe("the mode cell and the a key", () => {
 			WIDTH,
 			HEIGHT,
 			propsOf(app),
+		);
+		app.state.close();
+	});
+
+	/**
+	 * The mode in the plane's record (issue #223). The mode decides every automatic
+	 * walk in the run, and until now its flips left no line anywhere: a reviewer
+	 * reading the log could not tell a manual run from an automatic one.
+	 */
+	test("the a key leaves the mode flip in the record", async () => {
+		const app = seededApp("open");
+		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+		const lines: string[] = [];
+		await withApp(
+			async (setup) => {
+				app.src.settle(success);
+				await awaitFrame(setup, (f) => f.includes("● manual 0/2"), "the mode cell");
+				await press(setup, "a", "auto on", (f) => f.includes("○ auto 0/2"));
+				await press(setup, "a", "auto off", (f) => f.includes("● manual 0/2"));
+				// One line per key, in the order the keys landed. The cycle's own hold
+				// lines share the logger and are not this fact's lines.
+				expect(lines.filter((line) => line.startsWith("auto-handoff is"))).toEqual([
+					"auto-handoff is on",
+					"auto-handoff is off",
+				]);
+			},
+			WIDTH,
+			HEIGHT,
+			{ ...propsOf(app), logger: recordLogger(lines) },
 		);
 		app.state.close();
 	});

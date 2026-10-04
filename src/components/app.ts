@@ -1819,6 +1819,10 @@ export function App({
 		const next = !autoModeRef.current;
 		autoModeRef.current = next;
 		setAutoMode(next);
+		// The mode decides every automatic walk in the run, so the record names it
+		// when it moves (issue #223). The line lands before the state write: the
+		// flip stands for this session even when the file refuses it.
+		logger?.info(`auto-handoff is ${next ? "on" : "off"}`);
 		if (state === undefined) return;
 		try {
 			state.handoff.setAutoHandoffMode(next);
@@ -3650,6 +3654,9 @@ export function App({
 						return;
 					}
 					setQueuePaused(next);
+					// The pause is the other fact the operator sets by key, and it holds
+					// every automatic add while it stands (issue #223).
+					logger?.info(next ? "the Work queue is paused" : "the Work queue resumed");
 					setNoticeMessage(next ? "Work queue paused" : "Work queue resumed");
 					if (!next) void handoffDispatch?.pickupWorkQueue();
 				},
@@ -4007,6 +4014,9 @@ export function App({
 				attention.ring();
 			},
 			reconcileOnly: true,
+			// The cycle's record lines: each hold its automatic walks take
+			// (issue #223).
+			log: logger,
 			onStatus: (kind, text, topic) => {
 				// Both sections read the same observation events: an outcome is
 				// a fact for the one Message line, whichever section is expanded.
@@ -4055,6 +4065,7 @@ export function App({
 		refreshTicketSources,
 		closeCycleEndDraft,
 		refreshPullRequestSources,
+		logger,
 	]);
 	function focusPane(pane: Pane) {
 		focusedPaneRef.current = pane;

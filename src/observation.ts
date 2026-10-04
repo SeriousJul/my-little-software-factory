@@ -54,7 +54,11 @@
  *    piles. A flagged ticket (ADR 0060, widened by ADR 0070) is out of every
  *    one of those walks, its own flag or its source's mute, and it stays out
  *    while its row shows again for live work or a decision owed: the flag
- *    holds the machine out, and only the operator's own key clears it.
+ *    holds the machine out, and only the operator's own key clears it. Each
+ *    hold these gates take - the mode, the queue pause, the Dispatch pause, a
+ *    continuation already standing, a row already in the queue - states itself
+ *    in the plane's record, once for as long as the fact stands, so the run
+ *    never shows only the start that never came (issue #223).
  * 7. The wake (ADR 0084): an in-flight agent the probe shows working arms
  *    a blocking `herdr agent wait` on the agent's name, and the wait's
  *    state match runs a cycle now instead of at the next poll, so a
@@ -80,11 +84,15 @@ import {
 	type Ticket,
 } from "./domain/ticket.ts";
 import {
+	AUTOMATIC_HOLD_LINES,
+	type AutomaticHoldReason,
 	automaticAddsHold,
 	continuationQueueHolds,
+	freshWorkHold,
 	openTicketRowGate,
 	openTicketWaitsHold,
 	restartCandidateHolds,
+	type TopUpCycleFacts,
 } from "./domain/top-up.ts";
 import { baseChoice, resolveHandoffChoice } from "./handoff.ts";
 import {
@@ -94,6 +102,7 @@ import {
 	STOPPED_DISPATCH_REASON,
 } from "./handoff-dispatch.ts";
 import type { HerdrAgent } from "./herdr.ts";
+import { type Logger, NOOP_LOGGER } from "./logging.ts";
 import { identifyHandoffAgentName } from "./naming.ts";
 import { isPlaneActionTaskType } from "./plane-action-registry.ts";
 import { type RefreshClock, SYSTEM_CLOCK } from "./refresh.ts";
@@ -459,6 +468,15 @@ interface ObservationOptions {
 		text: string,
 		topic?: ObservationStatusTopic,
 	) => void;
+	/**
+	 * The plane's file logger, the same seam the Handoff dispatch takes.
+	 *
+	 * The Message line is gone by the time anyone reads the file, so the facts
+	 * the cycle acts on that reach no start line leave their record here: each
+	 * hold the automatic walks take, stated once while the fact stands
+	 * (issue #223). Defaults to NOOP_LOGGER: a cycle with no file to write.
+	 */
+	log?: Logger;
 	/** Optional Consultation side of the shared monitor. */
 	onConsultationAttention?: (consultationId: string) => void;
 	onConsultationsChanged?: () => void;
@@ -520,6 +538,7 @@ export class ObservationCoordinator {
 		text: string,
 		topic?: ObservationStatusTopic,
 	) => void;
+	private readonly log: Logger;
 	private readonly clock: RefreshClock;
 	private readonly turnLogs: TurnLogSource;
 	private readonly fireCompleted?: (ticket: HandoffTicket) => Promise<TransitionOutcome | null>;
@@ -543,6 +562,15 @@ export class ObservationCoordinator {
 	 * The entry leaves when the ticket leaves awaiting.
 	 */
 	private readonly holdReports = new Map<string, string>();
+	/**
+	 * The automatic-walk holds this cycle noted, and the set the last cycle noted
+	 * (issue #223). The holds are derived every cycle and never stored; these two
+	 * sets only tell a standing fact from a new one, the way the Dispatch pause
+	 * line and the held Next step line remember their last report, so a hold
+	 * states itself once while it stands and not once per poll.
+	 */
+	private automaticHolds = new Set<AutomaticHoldReason>();
+	private automaticHoldsReported = new Set<AutomaticHoldReason>();
 	/**
 	 * The agents of the last successful list, for the UI's markers. Null
 	 * until the first success: an unreadable herdr must not read as "every
@@ -585,6 +613,7 @@ export class ObservationCoordinator {
 		this.onConsultationsChanged = options.onConsultationsChanged;
 		this.reconcileOnly = options.reconcileOnly ?? false;
 		this.onStatus = options.onStatus;
+		this.log = options.log ?? NOOP_LOGGER;
 		this.clock = options.clock ?? SYSTEM_CLOCK;
 		this.turnLogs = options.turnLogs ?? SESSION_TURN_LOGS;
 		this.fireCompleted = options.fireCompleted;
@@ -655,6 +684,9 @@ export class ObservationCoordinator {
 	}
 
 	private async cycle(): Promise<void> {
+		// A cycle notes the holds its walks take and states them when its walks
+		// are done; a cycle that never reached that point keeps no note.
+		this.automaticHolds = new Set();
 		const probe = await this.herdr.listAgents();
 		// The probe can outlive the app: stop() during it must not touch the
 		// state or the UI anymore.
@@ -844,6 +876,8 @@ export class ObservationCoordinator {
 		// item - a restart, then a new open ticket, else nothing.
 		if (!continued) changed = (await this.topUpFreshWork(probe.agents)) || changed;
 		if (this.stopped) return;
+		// The holds both walks took, stated once each for as long as they stand.
+		this.reportAutomaticHolds();
 
 		// Tickets and Consultations share this one successful Herdr list poll.
 		// A Consultation in `opening` or `working` already holds its seat in
@@ -1540,7 +1574,11 @@ export class ObservationCoordinator {
 		// the gate below reads them, and no walk asks the queue for one Ticket's
 		// fact of its own.
 		const queueItems = this.state.workQueue.items();
-		if (this.automaticAddsHeld()) return false;
+		const gate = this.automaticAddsHeld();
+		if (gate !== null) {
+			this.noteAutomaticHold(gate);
+			return false;
+		}
 		// The row this add waits behind: a continuation the queue already holds.
 		if (
 			continuationQueueHolds(
@@ -1548,8 +1586,10 @@ export class ObservationCoordinator {
 					continuation: item.kind !== "consultation" && item.origin === "workflow",
 				})),
 			)
-		)
+		) {
+			this.noteAutomaticHold("continuation-standing");
 			return false;
+		}
 		const config = this.config();
 		// The list, in one read. These walks take the active view: the rows the
 		// whole list rule leaves.
@@ -1695,12 +1735,56 @@ export class ObservationCoordinator {
 	 * (ADR 0052), and the Dispatch pause (ADR 0016). The pause is checked once per
 	 * cycle, so a held turn does not spam the status line.
 	 */
-	private automaticAddsHeld(): boolean {
-		return automaticAddsHold({
+	private automaticAddsHeld(): AutomaticHoldReason | null {
+		return automaticAddsHold(this.cycleFacts());
+	}
+
+	/**
+	 * The cycle's standing gate facts (ADR 0051, ADR 0052, ADR 0016): the mode, the
+	 * queue's brake, and the Dispatch pause. The automatic walks read these before
+	 * they read any candidate.
+	 */
+	private cycleFacts(): Omit<TopUpCycleFacts, "queueDepth"> {
+		return {
 			modeOn: this.mode(),
 			queuePaused: this.state.workQueue.queuePaused(),
 			dispatchPauseActive: this.state.ticketWorkCycle.dispatchPauseActive(),
-		});
+		};
+	}
+
+	/**
+	 * The hold one automatic walk took (issue #223).
+	 *
+	 * The walk keeps its own gate; this only collects the fact it acted on. The
+	 * cycle states the facts it collected when its walks are done
+	 * (`reportAutomaticHolds`), so a cycle that holds at two gates at once states
+	 * each of them once, and not twice per poll.
+	 */
+	private noteAutomaticHold(reason: AutomaticHoldReason): void {
+		this.automaticHolds.add(reason);
+	}
+
+	/**
+	 * The record lines for the holds this cycle's automatic walks took (issue #223).
+	 *
+	 * Every one of these holds returns before the walk asks anything, so the run
+	 * shows the start that never came and nothing about why. The line names the
+	 * fact the cycle acted on - the mode, the queue pause, the Dispatch pause, a
+	 * continuation already standing, or a row already in the queue - in the words
+	 * the gate rule owns, so a reviewer can tell a correct hold from a broken one.
+	 *
+	 * One line per standing fact, the way a held Next step states itself
+	 * (`reportHeldNextStep`): the holds are re-derived on every poll, and a fact
+	 * that stood last cycle too says nothing again. A fact that left and came back,
+	 * or a new fact the cycle reached, states itself once more.
+	 */
+	private reportAutomaticHolds(): void {
+		for (const reason of this.automaticHolds) {
+			if (this.automaticHoldsReported.has(reason)) continue;
+			this.log.info(AUTOMATIC_HOLD_LINES[reason]);
+		}
+		this.automaticHoldsReported = this.automaticHolds;
+		this.automaticHolds = new Set();
 	}
 
 	/**
@@ -1716,10 +1800,11 @@ export class ObservationCoordinator {
 		// the pace gate needs the depth, and every walk needs the fact of whether
 		// an item already stands for the candidate it holds.
 		const queueItems = this.state.workQueue.items();
-		if (this.automaticAddsHeld()) return false;
-		// One item per cycle, and only into an empty queue: the queue's depth is
-		// the top-up's pace.
-		if (queueItems.length > 0) return false;
+		const hold = freshWorkHold({ ...this.cycleFacts(), queueDepth: queueItems.length });
+		if (hold !== null) {
+			this.noteAutomaticHold(hold);
+			return false;
+		}
 		const queuedTickets = new Set(
 			queueItems.filter((item) => item.kind !== "consultation").map((item) => item.ticketIdentity),
 		);

@@ -11,6 +11,7 @@
 import type { FactoryConfig } from "./config.ts";
 import type { ConfigWriteReport } from "./config-write.ts";
 import type { ConsultationPickupOutcome } from "./consultation-operations.ts";
+import { queueStagingOf } from "./domain/queue-staging.ts";
 import type { StartMode } from "./domain/start-mode.ts";
 import type { EnvironmentKind, Ticket, TicketState } from "./domain/ticket.ts";
 import { inFlightState, issueReferencesOf } from "./domain/ticket.ts";
@@ -291,9 +292,9 @@ export interface HandoffDispatchOptions extends HandoffDispatchReports {
 	/**
 	 * The plane's file logger. The dispatch leaves the record's start lines and
 	 * queue lines, for a Handoff and for a Plane action alike: a start with its
-	 * start mode, its origin, and its seat reading, a queue, and a refusal with
-	 * its reason. A Consultation's start line is not one of them: the
-	 * Consultation operations leave it (issue #220).
+	 * start mode, its origin, its staging, and its seat reading, a queue, and a
+	 * refusal with its reason. A Consultation's start line is not one of them:
+	 * the Consultation operations leave it (issue #220).
 	 */
 	log?: Logger;
 }
@@ -600,13 +601,11 @@ class HandoffDispatchModule implements HandoffDispatch {
 			this.log?.warn(`merge refused: ${check.reason} (${this.ticketName(intent.ticketIdentity)})`);
 			return Promise.resolve({ ok: false, reason: check.reason });
 		}
-		if (this.state.workQueue.hasWorkItem(intent.ticketIdentity))
-			return Promise.resolve({
-				ok: false,
-				reason:
-					`${this.ticketName(intent.ticketIdentity)} already has a waiting queue item; ` +
-					"the first item keeps its place",
-			});
+		if (this.state.workQueue.hasWorkItem(intent.ticketIdentity)) {
+			const reason = this.queueItemStandsReason(intent.ticketIdentity);
+			this.log?.warn(`merge refused: ${reason}`);
+			return Promise.resolve({ ok: false, reason });
+		}
 		// The run's own hold, beside the queue's: the row of a merge already in
 		// flight left the queue at its claim, so `hasWorkItem` cannot see it, and
 		// the run's fresh read cannot either - the source still answers the pull
@@ -649,7 +648,8 @@ class HandoffDispatchModule implements HandoffDispatch {
 			});
 		}
 		this.log?.info(
-			`merge queued: ${this.ticketName(intent.ticketIdentity)} (origin ${intent.origin})`,
+			`merge queued: ${this.ticketName(intent.ticketIdentity)} ` +
+				`(origin ${intent.origin}, ${queueStagingOf(intent.automatic === true)})`,
 		);
 		this.reports.refresh();
 		this.reports.notice(
@@ -833,7 +833,8 @@ class HandoffDispatchModule implements HandoffDispatch {
 		// The action takes no seat, so its reading is the count the plane stood
 		// on at the start, never a count the merge raised.
 		this.log?.info(
-			`merge started: ${name} (mode ${mode}, origin ${item.origin}, ${this.seatReading()})`,
+			`merge started: ${name} (mode ${mode}, origin ${item.origin}, ` +
+				`${queueStagingOf(item.automatic)}, ${this.seatReading()})`,
 		);
 		// The Starting window the row's spinner face reads (ADR 0030, beside
 		// ADR 0068): the merge wears the same face the start wears while its
@@ -923,19 +924,22 @@ class HandoffDispatchModule implements HandoffDispatch {
 	 * a ticket that already waits is refused with the reason on the Message
 	 * line, and the first item keeps its place.
 	 *
-	 * A refusal is reported once, through the returned reason alone: every
-	 * caller of `dispatch` writes an refused result's reason to the Message
-	 * line, so a warning reported here on top of it would only overwrite that
-	 * first line with a shorter copy of the same fact.
+	 * A refusal is reported on the Message line once, through the returned reason
+	 * alone: every caller of `dispatch` writes an refused result's reason there, so
+	 * a warning reported on top of it would only overwrite that first line with a
+	 * shorter copy of the same fact. The file record is the other outlet, and it
+	 * carries the refusal the way the claim refusal does (issue #223).
 	 */
 	private enqueueWork(intent: HandoffIntent): DispatchResult {
-		if (this.state.workQueue.hasWorkItem(intent.ticketIdentity))
-			return {
-				ok: false,
-				reason:
-					`${this.ticketName(intent.ticketIdentity)} already has a waiting queue item; ` +
-					"the first item keeps its place",
-			};
+		if (this.state.workQueue.hasWorkItem(intent.ticketIdentity)) {
+			const reason = this.queueItemStandsReason(intent.ticketIdentity);
+			// The refusal is the record's fact too, the way the claim refusal is
+			// (issue #223): the reason already names the ticket, so the line states
+			// it once. Without it the run shows an owed start that never ran and no
+			// line saying the row already standing is why.
+			this.log?.warn(`handoff refused: ${reason}`);
+			return { ok: false, reason };
+		}
 		const enqueued = this.state.workQueue.enqueueWork({
 			ticketIdentity: intent.ticketIdentity,
 			routeFromIdentity: intent.routeFromIdentity ?? null,
@@ -952,7 +956,8 @@ class HandoffDispatchModule implements HandoffDispatch {
 		// that never enqueued leaves the turn pending.
 		this.recordRouteDecision(intent);
 		this.log?.info(
-			`handoff queued: ${this.ticketName(intent.ticketIdentity)} (origin ${intent.origin})`,
+			`handoff queued: ${this.ticketName(intent.ticketIdentity)} ` +
+				`(origin ${intent.origin}, ${queueStagingOf(intent.automatic === true)})`,
 		);
 		this.reports.refresh();
 		this.reports.notice(
@@ -1341,7 +1346,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 		// crossed it (ADR 0092).
 		this.log?.info(
 			`handoff started: ${this.ticketName(item.ticketIdentity)} ` +
-				`(mode ${mode}, origin ${item.origin}, ${seats})`,
+				`(mode ${mode}, origin ${item.origin}, ${queueStagingOf(item.automatic)}, ${seats})`,
 		);
 		this.reports.starting(item.ticketIdentity, true);
 		const ticket = this.state.ticketWorkCycle
@@ -1557,6 +1562,17 @@ class HandoffDispatchModule implements HandoffDispatch {
 			.projectedTickets(this.config().workflowStates, this.config().defaultTaskType)
 			.find((candidate) => candidate.identity === identity)?.title;
 		return title === undefined ? `ticket ${identity}` : `"${title}"`;
+	}
+
+	/**
+	 * The reason the Work queue's one-item-per-ticket rule gives (ADR 0049), in
+	 * the one wording both start channels state it in.
+	 *
+	 * The reason names the ticket itself, so the record line the refusal leaves
+	 * needs no name field beside it (issue #223).
+	 */
+	private queueItemStandsReason(identity: string): string {
+		return `${this.ticketName(identity)} already has a waiting queue item; the first item keeps its place`;
 	}
 
 	/**

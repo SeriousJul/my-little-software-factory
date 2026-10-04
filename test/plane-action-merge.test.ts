@@ -868,21 +868,22 @@ describe("the dispatch's ask and pickup", () => {
 		return lines;
 	}
 
-	test("the merge's start line names its mode, its origin, and its seat reading", async () => {
+	test("the merge's start line names its mode, its origin, its staging, and its seat reading", async () => {
 		// The factory's ask: the pickup's walk ran the merge, so the line names
-		// the pickup (issue #209).
+		// the pickup (issue #209), and the row is the factory's own add (issue #223).
 		expect(await mergeAskLines(true)).toEqual([
-			`merge queued: "${pullTitle}" (origin open)`,
-			`merge started: "${pullTitle}" (mode pickup, origin open, seats 1/2)`,
+			`merge queued: "${pullTitle}" (origin open, automatic)`,
+			`merge started: "${pullTitle}" (mode pickup, origin open, automatic, seats 1/2)`,
 		]);
 	});
 
-	test("the operator's merge ask names the direct ask on its start line", async () => {
+	test("the operator's merge ask names the direct ask and its own staging", async () => {
 		// The operator's ask, with a free seat: the ask's own pass ran the merge,
-		// so the line names the direct ask, not the pickup.
+		// so the line names the direct ask, not the pickup, and the row reads
+		// `operator-staged` where the factory's row above reads `automatic`.
 		expect(await mergeAskLines(false)).toEqual([
-			`merge queued: "${pullTitle}" (origin open)`,
-			`merge started: "${pullTitle}" (mode direct-ask, origin open, seats 1/2)`,
+			`merge queued: "${pullTitle}" (origin open, operator-staged)`,
+			`merge started: "${pullTitle}" (mode direct-ask, origin open, operator-staged, seats 1/2)`,
 		]);
 	});
 
@@ -927,8 +928,8 @@ describe("the dispatch's ask and pickup", () => {
 		dispatch.forceDispatchWorkQueueItem(pullIdentity);
 		await startedSettled;
 		expect(lines).toEqual([
-			`merge queued: "${pullTitle}" (origin open)`,
-			`merge started: "${pullTitle}" (mode force-dispatch, origin open, seats 1/1)`,
+			`merge queued: "${pullTitle}" (origin open, automatic)`,
+			`merge started: "${pullTitle}" (mode force-dispatch, origin open, automatic, seats 1/1)`,
 		]);
 		state.close();
 	});

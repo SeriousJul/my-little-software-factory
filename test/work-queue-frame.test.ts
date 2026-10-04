@@ -16,6 +16,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { FactoryConfig } from "../src/config.ts";
 import { baseChoice } from "../src/handoff.ts";
+import type { Logger } from "../src/logging.ts";
 import type { CommandRunner } from "../src/runner.ts";
 import { workQueueIdentityOf } from "../src/state/work-queue.ts";
 import type { FactoryState } from "../src/state.ts";
@@ -47,6 +48,7 @@ import {
 	workspaceListJson,
 } from "./fake-runner.ts";
 import { FakeSource } from "./fake-source.ts";
+import { recordLogger } from "./record-logger.ts";
 import {
 	DEFAULT_AGENT_NAME,
 	issuesConfig,
@@ -231,6 +233,7 @@ const booted = (
 	state: FactoryState,
 	source: FakeSource,
 	runner: CommandRunner,
+	logger?: Logger,
 ): Promise<void> =>
 	withApp(body, WIDTH, 34, {
 		state,
@@ -238,6 +241,7 @@ const booted = (
 		home,
 		runner,
 		sources: [source],
+		...(logger === undefined ? {} : { logger }),
 	});
 
 /** The terminal row of the Work section's header, or -1 while it is hidden. */
@@ -427,6 +431,50 @@ describe("the Work queue section", () => {
 				state,
 				source,
 				runner,
+			);
+		} finally {
+			state.close();
+		}
+	});
+
+	/**
+	 * The pause in the plane's record (issue #223). The pause and the mode are the
+	 * two facts the operator sets by key, and they decide every automatic walk in
+	 * the run; until now neither left a line anywhere, so a reviewer could not tell
+	 * a held run from a broken one.
+	 */
+	test("p and its resume each leave one line in the record", async () => {
+		const state = openFactoryState(join(home, "state.sqlite"));
+		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
+		state.grouping.setGroupingAxis("tickets", "none");
+		const { source, enqueue, runner } = queuedFixture(state);
+		enqueue(FIRST);
+		const lines: string[] = [];
+		try {
+			await booted(
+				async (setup) => {
+					source.settle(success(twoTickets()));
+					await awaitFrame(setup, (f) => queueRowIndex(f, openRowLead) >= 0, "the queued start");
+					await clickWorkHeader(setup);
+					await press(setup, "p", "the queue pause", (f) =>
+						messageRowOf(f).includes("Work queue paused"),
+					);
+					await press(setup, "p", "the queue resume", (f) =>
+						messageRowOf(f).includes("Work queue resumed"),
+					);
+					// One line per key, in the order the keys landed. The cycle's own
+					// record lines - the holds its automatic walks state - are the
+					// other family the same logger carries, and they are not this
+					// fact's lines.
+					expect(lines.filter((line) => line.startsWith("the Work queue "))).toEqual([
+						"the Work queue is paused",
+						"the Work queue resumed",
+					]);
+				},
+				state,
+				source,
+				runner,
+				recordLogger(lines),
 			);
 		} finally {
 			state.close();

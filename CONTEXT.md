@@ -347,6 +347,11 @@ Every start takes the wait before the pickup starts it, and a free seat starts i
 The ticket keeps its state, and its row and detail wear the `queued` badge in place of their state badge, the way the Starting window wears the spinner face. The badge is not a ticket state: the section counts, the pickup gate, and the state file all keep the ticket's state.
 _Avoid_: queued state, pending, on hold
 
+**Staging**:
+Who put a Work queue row in the queue: `automatic` for a row one of the observation cycle's walks added, `operator-staged` for a row an operator's ask left there when no Parallel limit seat stood free (issue #223).
+The word the `handoff queued:` and `handoff started:` lines state beside the origin, so a reviewer reading the record tells the factory's own row from the operator's. Staging is not the origin: the origin names the path the row came from - an open ticket, a Workflow route, a Restart - and the staging names who asked for it.
+_Avoid_: manual row, auto row, source
+
 **Startup grace**:
 The window from a handoff during which the agent's idle report is its boot, not a turn end, and a pane herdr has not listed yet is its boot, not a Missing agent (ADR 0021).
 The window holds until the agent's session record shows the turn ended: a working report marks the ticket running, but it does not end the window, because herdr's status is not evidence the turn ran (ADR 0017). Past the window, a turn the record does not show settles `no-turn` and holds.

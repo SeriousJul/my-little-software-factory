@@ -3977,8 +3977,8 @@ describe("the record lines", () => {
 		// ask, started by the pass that ask ran (issue #209) - the item's origin,
 		// and the seat reading the claim stood on.
 		expect(lines).toEqual([
-			`handoff queued: "${FIRST.title}" (origin open)`,
-			`handoff started: "${FIRST.title}" (mode direct-ask, origin open, seats 0/2)`,
+			`handoff queued: "${FIRST.title}" (origin open, operator-staged)`,
+			`handoff started: "${FIRST.title}" (mode direct-ask, origin open, operator-staged, seats 0/2)`,
 			`handoff refused: handoff recovery is required before another handoff ("${FIRST.title}")`,
 		]);
 	});
@@ -4003,7 +4003,7 @@ describe("the record lines", () => {
 			}),
 		).resolves.toEqual({ ok: true });
 		expect(rigRef.state.workQueue.items()).toHaveLength(1);
-		expect(lines).toEqual([`handoff queued: "${FIRST.title}" (origin open)`]);
+		expect(lines).toEqual([`handoff queued: "${FIRST.title}" (origin open, automatic)`]);
 		// The next cycle's pickup takes the row for the free seat: the line names
 		// the pickup, never the ask that made the row.
 		const picking = withRunner(rigRef, hold.runner, {
@@ -4012,8 +4012,8 @@ describe("the record lines", () => {
 		});
 		expect(await picking.pickupWorkQueue()).toBe(1);
 		expect(lines).toEqual([
-			`handoff queued: "${FIRST.title}" (origin open)`,
-			`handoff started: "${FIRST.title}" (mode pickup, origin open, seats 1/2)`,
+			`handoff queued: "${FIRST.title}" (origin open, automatic)`,
+			`handoff started: "${FIRST.title}" (mode pickup, origin open, automatic, seats 1/2)`,
 		]);
 	});
 
@@ -4033,8 +4033,8 @@ describe("the record lines", () => {
 		rigRef.dispatch = mod;
 		await expect(start(rigRef, FIRST, "open")).resolves.toMatchObject({ ok: true });
 		expect(lines).toEqual([
-			`handoff queued: "${FIRST.title}" (origin open)`,
-			`handoff started: "${FIRST.title}" (mode direct-ask, origin open, seats 2)`,
+			`handoff queued: "${FIRST.title}" (origin open, operator-staged)`,
+			`handoff started: "${FIRST.title}" (mode direct-ask, origin open, operator-staged, seats 2)`,
 		]);
 		mod.stop();
 	});
@@ -4066,13 +4066,86 @@ describe("the record lines", () => {
 		// The operator's key starts the waiting row over the full cap.
 		mod.forceDispatchWorkQueueItem(SECOND.identity);
 		expect(lines).toEqual([
-			`handoff queued: "${FIRST.title}" (origin open)`,
-			`handoff started: "${FIRST.title}" (mode direct-ask, origin open, seats 0/1)`,
-			`handoff queued: "${SECOND.title}" (origin open)`,
-			`handoff started: "${SECOND.title}" (mode force-dispatch, origin open, seats 1/1)`,
+			`handoff queued: "${FIRST.title}" (origin open, operator-staged)`,
+			`handoff started: "${FIRST.title}" (mode direct-ask, origin open, operator-staged, seats 0/1)`,
+			`handoff queued: "${SECOND.title}" (origin open, operator-staged)`,
+			`handoff started: "${SECOND.title}" (mode force-dispatch, origin open, operator-staged, seats 1/1)`,
 		]);
 		// Both claims stand unresolved: the held work never settles, and the stop
 		// keeps the two runs from writing into the state the test closes.
+		mod.stop();
+	});
+
+	/**
+	 * The two rows a reviewer has to tell apart (issue #223). The origin cannot do
+	 * it - the operator's route and the factory's continuation are both `workflow`,
+	 * and the operator's staged ticket and the factory's fresh ticket are both
+	 * `open` - so the queue's lines name the staging.
+	 */
+	test("an operator-staged row and the factory's own row read differently on the same origin", async () => {
+		const rigRef = rig([FIRST, SECOND]);
+		const lines: string[] = [];
+		const hold = gatedRunner(rigRef.runner, () => true);
+		const mod = withRunner(rigRef, hold.runner, {
+			log: recordLogger(lines),
+			// The cap is full at both asks, so each row waits and no claim is made.
+			seatCount: () => rigRef.config.maxParallelAgents,
+		});
+		rigRef.dispatch = mod;
+		await expect(start(rigRef, FIRST, "open")).resolves.toEqual({ ok: true });
+		await expect(
+			mod.dispatch({
+				origin: "open",
+				ticketIdentity: SECOND.identity,
+				choice: liveChoice,
+				previousMessage: "",
+				automatic: true,
+			}),
+		).resolves.toEqual({ ok: true });
+		expect(lines).toEqual([
+			`handoff queued: "${FIRST.title}" (origin open, operator-staged)`,
+			`handoff queued: "${SECOND.title}" (origin open, automatic)`,
+		]);
+		mod.stop();
+	});
+
+	/**
+	 * The end the replayed case reaches now (ADR 0100): the owed continuation is
+	 * asked for a position that already waits in the queue, and the
+	 * one-item-per-ticket rule refuses it before its enqueue. The claim refusal has
+	 * always left its line; this refusal left none (issue #223).
+	 */
+	test("a second ask for a ticket that already waits leaves its refusal in the record", async () => {
+		const rigRef = rig([FIRST]);
+		const lines: string[] = [];
+		const hold = gatedRunner(rigRef.runner, () => true);
+		const mod = withRunner(rigRef, hold.runner, {
+			log: recordLogger(lines),
+			seatCount: () => rigRef.config.maxParallelAgents,
+		});
+		rigRef.dispatch = mod;
+		// The operator stages the row by hand while the cap is full.
+		await expect(start(rigRef, FIRST, "open")).resolves.toEqual({ ok: true });
+		expect(rigRef.state.workQueue.hasWorkItem(FIRST.identity)).toBe(true);
+		// The factory's continuation ask for the same ticket: the row stands, and
+		// the first item keeps its place.
+		await expect(
+			mod.dispatch({
+				origin: "workflow",
+				ticketIdentity: FIRST.identity,
+				choice: liveChoice,
+				previousMessage: "",
+				automatic: true,
+			}),
+		).resolves.toMatchObject({
+			ok: false,
+			reason: expect.stringContaining("already has a waiting queue item"),
+		});
+		// The reason names the ticket itself, so the line states it once.
+		expect(lines).toEqual([
+			`handoff queued: "${FIRST.title}" (origin open, operator-staged)`,
+			`handoff refused: "${FIRST.title}" already has a waiting queue item; the first item keeps its place`,
+		]);
 		mod.stop();
 	});
 });

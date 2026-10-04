@@ -458,20 +458,60 @@ host = "github.com"
 | `keep` | no | `5` | The rotated files kept, from `file.1` up to the `keep`-th file. A whole number of 1 or more. |
 
 The plane's start lines name the path that started the work, the item's origin,
-and the seat reading that path stood on:
+who put the item in the Work queue, and the seat reading that path stood on:
 
 ```text
-handoff started: "Add a webhook retry policy" (mode pickup, origin open, seats 1/2)
-merge started: "Persist the source facts" (mode force-dispatch, origin workflow, seats 2/2)
+handoff started: "Add a webhook retry policy" (mode pickup, origin open, automatic, seats 1/2)
+merge started: "Persist the source facts" (mode force-dispatch, origin workflow, operator-staged, seats 2/2)
 consultation started: "review" 1a2b3c4d (mode pickup, origin consultation, seats 1/2)
 ```
 
 `mode` is `pickup`, `force-dispatch`, or `direct-ask`. `origin` is the item's
 origin: `open`, `workflow`, `restart`, or `consultation` for a Consultation
-row. `seats` is the held seats beside the Parallel limit, and an unlimited cap
-states no limit. A row you asked for that waited in the Work queue reads
-`mode pickup`, not `direct-ask`: the mode names the path that took the seat,
-not the ask that made the row.
+row. The staging word is `automatic` for a row one of the observation cycle's
+walks added and `operator-staged` for a row your own ask left when no seat stood
+free; a Consultation's start line states no staging, because the Consultation
+row is never one of the two. `seats` is the held seats beside the Parallel
+limit, and an unlimited cap states no limit. A row you asked for that waited in
+the Work queue reads `mode pickup`, not `direct-ask`: the mode names the path
+that took the seat, not the ask that made the row.
+
+The queue lines name the row the Work queue took and the refusal that left a row
+out:
+
+```text
+handoff queued: "Add a webhook retry policy" (origin open, operator-staged)
+merge queued: "Persist the source facts" (origin workflow, automatic)
+handoff refused: "Add a webhook retry policy" already has a waiting queue item; the first item keeps its place
+merge refused: "Persist the source facts" already has a waiting queue item; the first item keeps its place
+```
+
+The Work queue holds one item per ticket, so a second ask for a ticket that
+already waits is refused. The refusal reaches the Message line and the file
+alike, and the reason names the ticket, so the line carries no name field beside
+it (issue #223).
+
+The observation cycle states each hold its automatic walks take, once for as long
+as the fact stands and again when the fact changes, so a run that started nothing
+says why (issue #223):
+
+```text
+automatic walks hold: auto-handoff is off
+automatic walks hold: the Work queue is paused
+automatic walks hold: a failed turn waits for the operator
+automatic walks hold: the Work queue already holds a continuation
+automatic walks hold: the Work queue holds a waiting row
+```
+
+Auto-handoff mode and the Work queue pause are facts you set by key, and each
+flip states itself:
+
+```text
+auto-handoff is on
+auto-handoff is off
+the Work queue is paused
+the Work queue resumed
+```
 
 A Consultation's start line is the Consultation operations' own. Its name is the
 record's Consultation type beside the identity prefix the plane's other
