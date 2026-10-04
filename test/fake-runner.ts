@@ -11,6 +11,10 @@
  * query starts nothing, so a test reads `modelListCalls` to see that the
  * query ran and keeps `commands()` for the external work. A kind with no
  * canned answer fails, like a real kind whose CLI cannot report a list.
+ *
+ * The fake also holds every command by a delay and records which commands
+ * answered and how many ran at once, so a test that a flow serializes its
+ * external work reads the fake instead of building a runner of its own.
  */
 import type {
 	CommandOptions,
@@ -63,6 +67,12 @@ export class FakeRunner implements CommandRunner {
 	// A delay holds a command's answer, so a test can watch the window an
 	// in-flight operation leaves open.
 	private delays = new Map<string, number>();
+	// A default delay holds every command, so a test can watch the commands a
+	// flow issues overlap - or fail to overlap - without naming each one.
+	private defaultDelayMs: number | null = null;
+	private running = 0;
+	private peakRunning = 0;
+	private settled: RecordedCommand[] = [];
 	private modelLists = new Map<string, ModelListResult>();
 	// A held Model list query never answers until `releaseModelLists` runs, so a
 	// test can watch the panel's loading state.
@@ -92,6 +102,11 @@ export class FakeRunner implements CommandRunner {
 		this.delays.set(this.key(command, args), delayMs);
 	}
 
+	/** Hold every command by this many milliseconds, named or not. */
+	setDefaultDelay(delayMs: number): void {
+		this.defaultDelayMs = delayMs;
+	}
+
 	/** The answer for any command without a specific response. */
 	setDefault(result: Partial<CommandResult>): void {
 		this.fallback = { code: 0, stdout: "", stderr: "", ...result };
@@ -112,6 +127,16 @@ export class FakeRunner implements CommandRunner {
 		return this.calls.map((c) => `${c.command} ${c.args.join(" ")}`.trim());
 	}
 
+	/** The commands that answered, in the order they answered. */
+	settledCommands(): string[] {
+		return this.settled.map((c) => `${c.command} ${c.args.join(" ")}`.trim());
+	}
+
+	/** The largest number of commands that ran at the same time. */
+	peakConcurrency(): number {
+		return this.peakRunning;
+	}
+
 	async run(
 		command: string,
 		args: readonly string[],
@@ -122,17 +147,22 @@ export class FakeRunner implements CommandRunner {
 		void options;
 		this.calls.push({ command, args });
 		const key = this.key(command, args);
-		const delay = this.delays.get(key);
+		this.running += 1;
+		this.peakRunning = Math.max(this.peakRunning, this.running);
+		const delay = this.delays.get(key) ?? this.defaultDelayMs ?? undefined;
 		if (delay !== undefined) await new Promise((resolve) => setTimeout(resolve, delay));
 		const sequence = this.sequences.get(key);
-		if (sequence !== undefined && sequence.length > 0) return sequence.shift() as CommandResult;
-		if (this.responses.has(key)) return this.responses.get(key) as CommandResult;
+		const next = sequence !== undefined && sequence.length > 0 ? sequence.shift() : undefined;
+		const answer = next ?? this.responses.get(key);
 		// A blocking command the test did not configure holds, the way the real
 		// thing blocks: the fallback's code zero would match an `agent wait`
 		// at once and wake the observation cycle on every armed agent, so the
-		// double models the block instead of the success.
-		if (command === "herdr" && args[1] === "wait") return never();
-		return this.fallback;
+		// double models the block instead of the success. A held command never
+		// settles, so it stays counted as running.
+		if (answer === undefined && command === "herdr" && args[1] === "wait") return never();
+		this.running -= 1;
+		this.settled.push({ command, args });
+		return answer ?? this.fallback;
 	}
 
 	async listModels(kind: string): Promise<ModelListResult> {

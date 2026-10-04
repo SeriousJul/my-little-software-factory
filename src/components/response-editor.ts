@@ -15,7 +15,7 @@ import { createElement } from "@opentui/react";
 import type { ReactElement } from "react";
 import { useRef, useState } from "react";
 
-import { responseOversize, validateResponseInput } from "../consultation.ts";
+import { responseOversize, validateResponseInput } from "../consultation/response-draft.ts";
 import { useControlDispatch } from "./control-dispatch.ts";
 import type { ControlContext } from "./controls.ts";
 import { type MessageFact, messageRowElement } from "./messages.ts";
