@@ -28,12 +28,26 @@ description: The module map of the source tree, for agents working in this repos
 	`src/runtime-support.mjs`, the plain-JS helper the bin wrapper can load on
 	the runtimes it refuses.
 - `src/config.ts`: config types, strict startup validation, state path
-	resolution, and atomic TOML write-back.
+	resolution, and the atomic config file write the write-back module falls
+	back to.
 - `src/config-migration.ts`: the one-shot config migration to the workflow
 	machine (ADR 0027). A pre-machine config is rewritten at load: rules become
 	states, expressible edges become transitions, and the file is backed up and
 	reported before the rewrite; load stops with the file unchanged on any
 	failure.
+- `src/config-write.ts`: the config write-back (ADR 0103). `writeConfigFile` is
+	the one entry point for both write-backs - the repository mapping a
+	Consultation or a handoff records, and the ticket sources a repository init
+	registers - and it edits only the `[repos]` table and the `[[sources]]`
+	blocks the plane owns, so the operator's comments and layout stay in their
+	own file. The patched text is checked before it lands: it must parse, must
+	validate, and must carry what the plane holds, and a file the check will not
+	vouch for takes the full rewrite. `configWriteLine` words the fact for the
+	Message line, `ConfigWriteReport` says how urgent it is, and
+	`writeFactWithConfirmation` sets where it stands beside the confirmation of the
+	act that did the write; beside the notes of a start it goes where
+	`handoffReportLines` in `src/handoff.ts` puts it. No surface reaches past this
+	module for the disk step.
 - `src/ticket-source.ts`: the ticket-source seam and built-in GitHub Issues
 	and Pull Requests adapters.
 - `src/security-source.ts`: the built-in GitHub security ticket sources
@@ -144,6 +158,9 @@ description: The module map of the source tree, for agents working in this repos
 		start's own and its builders write into it as they create a handle, and the
 		steps from the environment build through the prompt run inside one guard, so
 		a command that raises cleans up the way a command herdr refused does.
+	`handoffReportLines` is this module's wording of a start's end: the one order
+	the Message line takes for every report of one, the Handoff dispatch's and the
+	Consultation's alike (ADR 0103).
 - `src/consultation/`: the Consultation rules that need no terminal, one module
 	per concept (issue #203, ADR 0096). `response-draft.ts` owns the input limit,
 	the emptiness rule, the size reason, the literal-text rule, and the bounded

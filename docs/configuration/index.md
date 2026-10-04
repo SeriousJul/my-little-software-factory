@@ -647,9 +647,59 @@ manager): a token without access makes the source stale with a readable
 reason, like any failed refresh. The control plane is read-only on all three
 feeds: it never writes labels, states, or dismissals to the security items.
 
-Repository mappings are the one section the control plane writes back: a
-sibling clone records its path there. The write-back rewrites the whole
-config file, so the data round-trips and your comments in the file do not.
+Two sections are the control plane's to write back: a sibling clone records
+its path in the `[repos]` table, and a repository init registers the ticket
+sources it generated as `[[sources]]` blocks. The write-back edits only those
+sections, so your comments, your blank lines, and the order you wrote your
+keys in stay where you put them. A comment you wrote beside a mapping key the
+plane re-points stays on that line. The Message line names the file each write
+lands on, and when the line is longer than the terminal the Message view on
+`F2` holds the whole fact. A write that replaced your whole file leads the line
+it lands on, so the warning that your comments did not survive is what stands on
+the visible row. A write that changed nothing leaves the file untouched,
+timestamp included, and says nothing. The write keeps the mode your
+file already carries when that mode is stricter than the one the text asks for:
+a file you locked to `0600` stays `0600` even when the config the plane holds
+names no literal token, and a file the plane creates takes the mode its own
+text asks for.
+
+The plane rewrites the whole file - and your comments do not survive that
+write - only when it cannot vouch for its own edit of your text. It checks the
+edited text before it lands: the text must parse, must pass the same validation
+the plane starts with, and must carry every mapping and every source the plane
+holds. A file that check will not vouch for takes the rewrite, and the Message
+line says plainly that the comments did not survive.
+
+What the two sections hold, and what happens when you edit them while the plane
+is running, is not the same on both sides.
+
+- The `[repos]` table is the plane's own writing: a write-back puts the value
+  the plane holds onto the line that names that key. If you re-point a key the
+  plane holds while the plane runs, the next write-back writes the plane's own
+  value back over yours, and no line says it was replaced. If you delete such a
+  key, the next write-back writes it again. A key the plane does not hold is
+  yours, and it stays. A key the plane holds that you restated as an inline
+  table - `"github.com/acme/factory" = { path = "/x" }` - is a key line the
+  plane owns like any other: the write-back writes its own value over it, and
+  the rest of your file keeps its place.
+- The `[[sources]]` blocks the plane holds stand byte for byte, so an edit of
+  one of them while the plane runs is a file that no longer says what the plane
+  holds. The check refuses the edit, and that is the case the plane names on
+  the Message line: change a held block's `kind` or its `repositories` while
+  the plane runs and the whole file is rewritten. If you delete such a block,
+  the next write-back appends the plane's own copy of it at the end of the
+  file.
+
+The other shapes that take the rewrite are the ones the check cannot vouch for:
+a mapping value the plane must write and cannot carry in place - a multiline
+string or a multiline array standing on a key the plane holds - and a file your
+edit left in a shape the startup loader itself refuses: a broken line, a stray
+byte-order mark, a dotted key in the `[repos]` table, a `[sources]` table instead
+of `[[sources]]` blocks, or a `[[sources]]` block that names no `name`. The
+loader refuses those at startup, so the plane only meets one of them through an
+edit made while it runs. The empty source list is not in that group: the plane
+writes no `sources` key at all for no sources, and a `sources = []` line an
+earlier version wrote is one the write-back drops before it appends its blocks.
 
 The shipped defaults define the three agent types `pi`, `codex`, and
 `claude`, the four task types `implement`, `review`, `rework`, and

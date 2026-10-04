@@ -129,6 +129,20 @@ Three files stay out of the campaign on purpose:
   method bodies and the query strings it reads, so it would kill every mutant in
   the nine state modules for the wrong reason. It stays in `bun run test` too.
 
+A fourth file reads production source as text and is deliberately **not** on
+that list. `test/config-write-architecture.test.ts` (ADR 0103) counts call
+names - `writeConfigFile(`, `persistConfig(`, `writeConfigText(` - and
+instrumentation leaves those names whole, so the file passes against the
+instrumented copy and stands inside the campaign. Measured: a `--dryRunOnly`
+initial run over the whole instrumented tree reported 2,771 tests in 4 minutes
+38 seconds with no failure, and the file's own cases reported 5 pass, 0 fail
+run alone inside that campaign's kept sandbox. The file has since grown to 6
+cases, `bun run test` reports 6 pass, 0 fail for it, and the campaign has not
+been re-run since. The rule for the exclusion is
+what a file counts, not that it reads source: a file that counts shapes
+instrumentation rewrites is excluded, a file that counts names it does not is
+not.
+
 The score is a coverage measure of the tests, not a grade of the code. A
 survivor is only a problem when the mutation it stands on is a behavior the
 plane should answer on: `i -= 1` to `i += 1` in a loop that never runs more than

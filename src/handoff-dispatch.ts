@@ -9,6 +9,7 @@
  * work.
  */
 import type { FactoryConfig } from "./config.ts";
+import type { ConfigWriteReport } from "./config-write.ts";
 import type { ConsultationPickupOutcome } from "./consultation-operations.ts";
 import type { StartMode } from "./domain/start-mode.ts";
 import type { EnvironmentKind, Ticket, TicketState } from "./domain/ticket.ts";
@@ -21,6 +22,7 @@ import {
 	type HandoffChoice,
 	type HandoffOutcome,
 	handOffTicket,
+	handoffReportLines,
 	type NameCollision,
 	type OwnNameKnowledge,
 } from "./handoff.ts";
@@ -206,17 +208,16 @@ export interface HandoffDispatchReports {
  * One function owns the wording of a handoff's end, for both callers that
  * report one: the dispatch module, and the App's no-state test projection. A
  * failed outcome is an error; a clean one with something to say is a warning; a
- * clean one with nothing to say leaves no line at all. The parts keep the order
- * the operator reads: the reason the handoff did not finish, the name it could
- * not take, the mapping write that failed, and the note the repository
- * resolution bent with.
+ * clean one with nothing to say leaves no line at all. The order the parts take
+ * is the Consultation's own report's order too: `handoffReportLines` in
+ * `src/handoff.ts` words it for both (ADR 0103).
  */
 export async function reportHandoffOutcome(
 	outcome: HandoffOutcome,
 	reports: Pick<HandoffDispatchReports, "clearWorking" | "warning" | "error">,
-	persistMapping?: (mapping: RepositoryMapping) => Promise<string | undefined>,
+	persistMapping?: (mapping: RepositoryMapping) => Promise<ConfigWriteReport | undefined>,
 ): Promise<void> {
-	const persistWarning =
+	const persistReport =
 		outcome.notes?.mappingToWrite === undefined || persistMapping === undefined
 			? undefined
 			: await persistMapping(outcome.notes.mappingToWrite);
@@ -227,20 +228,16 @@ export async function reportHandoffOutcome(
 				// names read whole on a normal terminal (issue #216, ADR 0098).
 				`a leftover agent holds ${outcome.collision.stableName}; this agent started as ${outcome.collision.startedAs}`
 			: undefined;
-	const lines = [
-		...(outcome.status === "ok" ? [] : [outcome.reason]),
-		...(nameWarning === undefined ? [] : [nameWarning]),
-		...(persistWarning === undefined ? [] : [persistWarning]),
-		...(outcome.status === "ok" && outcome.notes?.warning !== undefined
-			? [outcome.notes.warning]
-			: []),
-		...(outcome.status === "ok" && outcome.notes?.worktreeBase !== undefined
-			? [outcome.notes.worktreeBase]
-			: []),
+	const lines = handoffReportLines({
+		reason: outcome.status === "ok" ? undefined : outcome.reason,
+		collision: nameWarning,
+		warning: outcome.status === "ok" ? outcome.notes?.warning : undefined,
+		write: persistReport,
+		worktreeBase: outcome.status === "ok" ? outcome.notes?.worktreeBase : undefined,
 		// The moved directory is a fact on the operator's disk whether or not
-		// the start landed, so this line carries no status gate.
-		...(outcome.notes?.leftoverWorktree === undefined ? [] : [outcome.notes.leftoverWorktree]),
-	];
+		// the start landed, so this fact carries no status gate.
+		leftoverWorktree: outcome.notes?.leftoverWorktree,
+	});
 	reports.clearWorking();
 	if (outcome.status !== "ok") reports.error(lines.join("; "));
 	else if (lines.length > 0) reports.warning(lines.join("; "));
@@ -290,7 +287,7 @@ export interface HandoffDispatchOptions extends HandoffDispatchReports {
 	) => Promise<ConsultationPickupOutcome>;
 	home: string;
 	/** Persist a repository mapping discovered during handoff, if one is found. */
-	persistMapping?: (mapping: RepositoryMapping) => Promise<string | undefined>;
+	persistMapping?: (mapping: RepositoryMapping) => Promise<ConfigWriteReport | undefined>;
 	/**
 	 * The plane's file logger. The dispatch leaves the record's start lines and
 	 * queue lines, for a Handoff and for a Plane action alike: a start with its
@@ -450,7 +447,9 @@ class HandoffDispatchModule implements HandoffDispatch {
 	) => Promise<ConsultationPickupOutcome>;
 	private readonly home: string;
 	private readonly reports: HandoffDispatchReports;
-	private readonly persistMapping?: (mapping: RepositoryMapping) => Promise<string | undefined>;
+	private readonly persistMapping?: (
+		mapping: RepositoryMapping,
+	) => Promise<ConfigWriteReport | undefined>;
 	private readonly log?: Logger;
 
 	/** True while external handoff work holds the seat. */

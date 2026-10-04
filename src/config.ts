@@ -1752,25 +1752,11 @@ export function configToToml(config: FactoryConfig): string {
 				"maximum-speed": config.scroll.maximumSpeed,
 			},
 			repos: config.repos,
-			sources: config.sources.map((source) => ({
-				name: source.name,
-				kind: source.kind,
-				"refresh-interval-seconds": source.refreshIntervalSeconds,
-				repositories: source.repositories,
-				...(source.host === "github.com" ? {} : { host: source.host }),
-				...(source.filter === undefined ? {} : { filter: source.filter }),
-				...(source.auth === undefined
-					? {}
-					: {
-							auth: {
-								...(source.auth.token === undefined ? {} : { token: source.auth.token }),
-								...(source.auth.tokenEnv === undefined
-									? {}
-									: { "token-env": source.auth.tokenEnv }),
-								...(source.auth.account === undefined ? {} : { account: source.auth.account }),
-							},
-						}),
-			})),
+			// An empty source list writes no key at all. `sources = []` is a key,
+			// and a `[[sources]]` block the plane appends later cannot stand beside
+			// a key of the same name - the file would not parse, and the write-back
+			// checker would refuse its own edit (ADR 0103).
+			...(config.sources.length === 0 ? {} : { sources: config.sources.map(sourceToTomlEntry) }),
 			states: config.workflowStates.map((state) => ({
 				name: state.name,
 				...(state.taskType === undefined ? {} : { "task-type": state.taskType }),
@@ -1903,14 +1889,62 @@ function transitionToToml(transition: WorkflowTransition): Record<string, unknow
 	};
 }
 
-export async function persistConfig(path: string, config: FactoryConfig): Promise<void> {
+/**
+ * The `[[sources]]` blocks the plane writes for these sources, in the same
+ * form `configToToml` writes them in. The section write-back needs the blocks
+ * on their own to insert them into the operator's file, and one serializer
+ * keeps the two forms from drifting (ADR 0103).
+ */
+export function sourcesToToml(sources: readonly TicketSourceConfig[]): string {
+	return formatMultilineStrings(stringify({ sources: sources.map(sourceToTomlEntry) }));
+}
+
+function sourceToTomlEntry(source: TicketSourceConfig): Record<string, unknown> {
+	return {
+		name: source.name,
+		kind: source.kind,
+		"refresh-interval-seconds": source.refreshIntervalSeconds,
+		repositories: source.repositories,
+		...(source.host === "github.com" ? {} : { host: source.host }),
+		...(source.filter === undefined ? {} : { filter: source.filter }),
+		...(source.auth === undefined
+			? {}
+			: {
+					auth: {
+						...(source.auth.token === undefined ? {} : { token: source.auth.token }),
+						...(source.auth.tokenEnv === undefined ? {} : { "token-env": source.auth.tokenEnv }),
+						...(source.auth.account === undefined ? {} : { account: source.auth.account }),
+					},
+				}),
+	};
+}
+
+/**
+ * The atomic file write: temp file in the same directory, then rename. The
+ * mode follows the secret the text carries, never the caller's guess, and it
+ * never grants a permission the file already standing there does not carry.
+ *
+ * `writeConfigFile` in `config-write.ts` is the entry point every write-back
+ * goes through; this is the disk step it falls back to when it must replace
+ * the whole file (ADR 0103).
+ */
+export async function writeConfigText(path: string, text: string, secret: boolean): Promise<void> {
 	await mkdir(dirname(path), { recursive: true });
+	// The mode the text asks for, bounded by the mode the file already carries.
+	// A config file the operator locked to 0600 must not come back world-readable
+	// because the config the plane holds names no literal token: the plane cannot
+	// see why an operator locked the file, so it keeps the lock. The write asks
+	// for the intersection of the two masks - no permission either side lacks is
+	// granted - the same rule `writeMigrationFiles` below keeps for a migration.
+	let mode = secret ? 0o600 : 0o666;
+	try {
+		mode &= (await stat(path)).mode & 0o777;
+	} catch {
+		// No file stands here yet: the text's own mode is the mode to create.
+	}
 	const temp = join(dirname(path), `.${basename(path)}.${randomUUID()}.tmp`);
-	await writeFile(temp, configToToml(config), {
-		encoding: "utf8",
-		mode: containsLiteralToken(config) ? 0o600 : 0o666,
-	});
-	if (containsLiteralToken(config)) await chmod(temp, 0o600);
+	await writeFile(temp, text, { encoding: "utf8", mode });
+	if ((mode & 0o777) !== 0o666) await chmod(temp, mode & 0o777);
 	try {
 		await rename(temp, path);
 	} catch (error) {
@@ -1920,6 +1954,7 @@ export async function persistConfig(path: string, config: FactoryConfig): Promis
 		throw error;
 	}
 }
-function containsLiteralToken(config: FactoryConfig): boolean {
+
+export function containsLiteralToken(config: FactoryConfig): boolean {
 	return config.sources.some((source) => source.auth?.token !== undefined);
 }

@@ -20,6 +20,7 @@ import {
 	type HandoffOutcome,
 	handOffConsultation,
 	handOffTicket,
+	handoffReportLines,
 	renderPrompt,
 	renderSettingArgs,
 	resolveHandoffChoice,
@@ -5802,5 +5803,63 @@ describe("the one start: the Consultation sequence at the handoff interface", ()
 		const commands = runner.commands();
 		expect(commands).toContain("herdr worktree remove --workspace ws-cwt");
 		expect(commands).toContain(`git -C ${CHECKOUT} branch -D ${CONSULTATION_BRANCH}`);
+	});
+});
+
+describe("the Message lines one start's outcome leaves (ADR 0103)", () => {
+	test("a write that did not land, or landed as a rewrite, leads the notes; a section edit trails them", () => {
+		const failed = { line: "could not persist the repository mapping", landed: false } as const;
+		const landed = {
+			line: "saved the mapping in /home/me/config.toml",
+			landed: true,
+			mode: "sections",
+		} as const;
+		const rewritten = {
+			line: "saved the mapping in /home/me/config.toml; the whole config file was rewritten, and the comments in it did not survive",
+			landed: true,
+			mode: "rewrite",
+		} as const;
+		expect(
+			handoffReportLines({
+				warning: "cloned acme/billing to a sibling",
+				write: failed,
+				worktreeBase: "worktree base fell back to the local HEAD",
+			}),
+		).toEqual([
+			"could not persist the repository mapping",
+			"cloned acme/billing to a sibling",
+			"worktree base fell back to the local HEAD",
+		]);
+		expect(
+			handoffReportLines({
+				reason: "the pane is gone",
+				collision: "a leftover agent holds acme/billing; this agent started as acme/billing-2",
+				warning: "cloned acme/billing to a sibling",
+				write: landed,
+				leftoverWorktree: "moved aside the leftover worktree",
+			}),
+		).toEqual([
+			"the pane is gone",
+			"a leftover agent holds acme/billing; this agent started as acme/billing-2",
+			"cloned acme/billing to a sibling",
+			"saved the mapping in /home/me/config.toml",
+			"moved aside the leftover worktree",
+		]);
+		// A write that landed as a full rewrite of the operator's file leads the
+		// notes the way the Repository init's rewrite fact leads its confirmation:
+		// the fact that the whole file was replaced is the one the row must carry.
+		expect(
+			handoffReportLines({
+				warning: "cloned acme/billing to a sibling",
+				write: rewritten,
+				worktreeBase: "worktree base fell back to the local HEAD",
+			}),
+		).toEqual([
+			rewritten.line,
+			"cloned acme/billing to a sibling",
+			"worktree base fell back to the local HEAD",
+		]);
+		// A start with nothing to say leaves no line at all.
+		expect(handoffReportLines({})).toEqual([]);
 	});
 });

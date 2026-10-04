@@ -10,6 +10,7 @@
 import { randomUUID } from "node:crypto";
 
 import type { FactoryConfig } from "./config.ts";
+import type { ConfigWriteReport } from "./config-write.ts";
 import { type AgentInputEvent, ConsultationInputQueue } from "./consultation/agent-input.ts";
 import {
 	type CheckoutConflict,
@@ -29,6 +30,7 @@ import {
 	consultationStartFacts,
 	type HandoffOutcome,
 	handOffConsultation,
+	handoffReportLines,
 	renderConsultationPrompt,
 } from "./handoff.ts";
 import type { HerdrAgent } from "./herdr.ts";
@@ -130,7 +132,7 @@ export interface ConsultationOperationsOptions {
 	 */
 	log?: Logger;
 	/** Persist a sibling-clone mapping, when repository resolution creates one. */
-	persistRepositoryMapping?: (mapping: RepositoryMapping) => Promise<string | undefined>;
+	persistRepositoryMapping?: (mapping: RepositoryMapping) => Promise<ConfigWriteReport | undefined>;
 	textBatchBytes?: number;
 }
 
@@ -213,7 +215,7 @@ export class ConsultationOperations {
 	private readonly log?: Logger;
 	private readonly persistRepositoryMapping?: (
 		mapping: RepositoryMapping,
-	) => Promise<string | undefined>;
+	) => Promise<ConfigWriteReport | undefined>;
 	private readonly operationQueues = new Map<string, Promise<void>>();
 	private readonly openingOperations = new Set<string>();
 	private readonly closeOperations = new Map<string, CloseOperation>();
@@ -1178,23 +1180,21 @@ export class ConsultationOperations {
 	}
 
 	private async finishOpening(consultation: Consultation, outcome: HandoffOutcome): Promise<void> {
-		const mappingWarning =
+		const mappingReport =
 			outcome.notes?.mappingToWrite === undefined || this.persistRepositoryMapping === undefined
 				? undefined
 				: await this.persistRepositoryMapping(outcome.notes.mappingToWrite);
-		const lines = [
-			...(outcome.status === "ok" ? [] : [outcome.reason]),
-			...(outcome.status === "ok" && outcome.notes?.warning !== undefined
-				? [outcome.notes.warning]
-				: []),
-			...(mappingWarning === undefined ? [] : [mappingWarning]),
-			...(outcome.status === "ok" && outcome.notes?.worktreeBase !== undefined
-				? [outcome.notes.worktreeBase]
-				: []),
+		// The order the write fact takes beside the other notes is the Handoff
+		// dispatch's order, worded by one shared rule (ADR 0103).
+		const lines = handoffReportLines({
+			reason: outcome.status === "ok" ? undefined : outcome.reason,
+			warning: outcome.status === "ok" ? outcome.notes?.warning : undefined,
+			write: mappingReport,
+			worktreeBase: outcome.status === "ok" ? outcome.notes?.worktreeBase : undefined,
 			// The moved directory is a fact on the operator's disk whether or not
-			// the start landed, so this line carries no status gate.
-			...(outcome.notes?.leftoverWorktree === undefined ? [] : [outcome.notes.leftoverWorktree]),
-		];
+			// the start landed, so this fact carries no status gate.
+			leftoverWorktree: outcome.notes?.leftoverWorktree,
+		});
 		if (outcome.status === "failed") {
 			this.state.consultationRecord.failConsultationOpening(
 				consultation.id,

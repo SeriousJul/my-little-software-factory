@@ -666,7 +666,8 @@ _Avoid_: repository name, clone URL
 
 **Repository mapping**:
 The config entry that pins a repository identity to an explicit checkout path.
-It is the first place the control plane looks for a repository, and the one section the control plane writes back.
+It is the first place the control plane looks for a repository.
+The `[repos]` table and the `[[sources]]` blocks are the two regions the control plane writes back (ADR 0103).
 _Avoid_: repo config, alias
 
 **Convention checkout**:

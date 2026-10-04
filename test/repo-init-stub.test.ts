@@ -12,7 +12,7 @@
  * no desktop, no live Agent, isolated state.
  */
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadConfigFile, type TaskTypeConfig, type WorkflowState } from "../src/config.ts";
@@ -34,8 +34,10 @@ import { createTicketSource } from "../src/ticket-source.ts";
 import {
 	awaitFrame,
 	awaitNewKeyHandler,
+	frameText,
 	keyHandlerListeners,
 	messageRowOf,
+	openMessageView,
 	press,
 	pressEnterQuiet,
 	withApp,
@@ -247,7 +249,8 @@ describe("the label seam (ADR 0075)", () => {
 describe("the TUI walk of the init (ADR 0075)", () => {
 	/** The config the walk boots with: the operator's feed, the mapping, the machine. */
 	function walkConfig(checkout: string): string {
-		return `state-file = "factory.sqlite"
+		return `# The walk's machine: one repository, one feed, one state.
+state-file = "factory.sqlite"
 default-agent = "pi"
 default-environment = "worktree"
 default-task-type = "implement"
@@ -258,6 +261,8 @@ agent-poll-interval-seconds = 5
 completion-message-lines = 200
 max-handoffs-per-ticket = 2
 
+# The checkout the act works in. The plane writes a mapping back here when it
+# discovers a sibling clone.
 [repos]
 "github.com/acme/factory" = "${checkout}"
 
@@ -269,6 +274,7 @@ maximum-speed = 6
 [agents.pi]
 kind = "pi"
 
+# The states of the label workflow, in match order.
 [[states]]
 name = "ready-for-agent"
 task-type = "implement"
@@ -276,6 +282,8 @@ task-type = "implement"
 source-kind = "github-issue"
 labels-any = ["ready-for-agent"]
 
+# The analyze is the ticket-driven grilling: the operator-decides flag parks
+# its completions for the operator, so the live session stays alive.
 [task-types.implement]
 template = "Do the work: {external-key}: {title}"
 [task-types.implement.transition]
@@ -300,6 +308,7 @@ template = "Merge {external-key}: {title}."
 ticket-facts = []
 pull-request-facts = []
 
+# The feed the operator reads by hand: the issues of the one repository.
 [[sources]]
 name = "acme-issues"
 kind = "github-issues"
@@ -456,6 +465,41 @@ host = "github.com"
 				expect(saved).toContain("acme/factory-pull-requests");
 				expect(saved).toContain("acme-issues");
 
+				// The operator's own file survives the write-back (ADR 0103). The
+				// comments carry the reasoning behind each choice, and the only
+				// lines the write added are the source block the act registered.
+				const fileBefore = walkConfig(checkout).split("\n");
+				const fileAfter = saved.split("\n");
+				for (const line of fileBefore.filter((row) => row.trim().startsWith("#"))) {
+					expect(fileAfter).toContain(line);
+				}
+				const at = fileBefore.indexOf('host = "github.com"');
+				expect(at).toBeGreaterThan(-1);
+				expect(fileAfter).toEqual([
+					...fileBefore.slice(0, at + 1),
+					"",
+					"[[sources]]",
+					'name = "acme/factory-pull-requests"',
+					'kind = "github-pull-requests"',
+					"refresh-interval-seconds = 60",
+					'repositories = [ "acme/factory" ]',
+					...fileBefore.slice(at + 1),
+				]);
+				// The write is visible on the Message line beside the act's own
+				// confirmation. The line is one row wide and the confirmation is
+				// longer than that, so the whole fact is read where the plane
+				// keeps it: the Message view on F2.
+				expect(messageRowOf(settled)).toContain("acme/factory: pushed");
+				const view = await openMessageView(setup);
+				expect(frameText(view)).toContain("registered 1 new source in");
+				expect(frameText(view)).toContain(configPath);
+				await press(
+					setup,
+					"escape",
+					"the Message view to close",
+					(f) => !f.includes("Message view"),
+				);
+
 				// The init fact stands in the state file on the current settings.
 				const fact = state.repositoryInit.repositoryInitFact("github.com/acme/factory");
 				expect(fact).not.toBeNull();
@@ -470,6 +514,46 @@ host = "github.com"
 					"the marker to clear off the Group header",
 				);
 				expect(cleared).toContain("acme/factory");
+
+				// The re-init (story 21): the same act over the same repository, whose
+				// planned sources already stand in the config. It registers nothing new,
+				// so its write-back has no count to word: the operator's file stands
+				// untouched, byte and timestamp alike, and no line reads
+				// "registered 0 new sources" (ADR 0103).
+				const savedStat = statSync(configPath);
+				const reInitBefore = keyHandlerListeners(setup);
+				await press(setup, "i", "the re-init's panel to open", (f) =>
+					f.includes("Init acme/factory"),
+				);
+				await awaitNewKeyHandler(setup, reInitBefore, "the re-init's panel to take the keys");
+				await pressEnterQuiet(
+					setup,
+					"the re-init's panel to close",
+					(f) => !f.includes("Init acme/factory"),
+				);
+				await openMessageView(setup);
+				// The whole confirmation is read where the plane keeps it: the Message
+				// view on F2. The second skip is the re-init's own - the pull request
+				// feed the first init registered now covers that planned source.
+				const reInitLine = await awaitFrame(
+					setup,
+					(f) => frameText(f).includes("covered by acme/factory-pull-requests"),
+					"the re-init's own confirmation on the Message view",
+				);
+				const reInitText = frameText(reInitLine);
+				expect(reInitText).toContain(
+					"acme/factory-pull-requests (covered by acme/factory-pull-requests)",
+				);
+				expect(reInitText).not.toContain("registered 0 new source");
+				expect(reInitText).not.toContain("new source in");
+				await press(
+					setup,
+					"escape",
+					"the Message view to close on the re-init",
+					(f) => !f.includes("Message view"),
+				);
+				expect(readFileSync(configPath, "utf8")).toBe(saved);
+				expect(statSync(configPath).mtimeMs).toBe(savedStat.mtimeMs);
 
 				// The feed the act registered is live in this run:
 				// the refresh coordinator holds it, and the source health rows it

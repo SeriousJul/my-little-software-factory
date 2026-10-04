@@ -34,10 +34,10 @@ import {
 	type GitHubSourceKind,
 	loadConfigFile,
 	logPathFor,
-	persistConfig,
 	type TicketSourceConfig,
 	validateConfig,
 } from "../src/config.ts";
+import { writeConfigFile } from "../src/config-write.ts";
 import { THINKING_LEVELS } from "../src/domain/agent.ts";
 import { BASE_CONFIG } from "./base-config.ts";
 import { stubEnv, unstubAllEnvs } from "./env-stub.ts";
@@ -444,7 +444,7 @@ describe("validateConfig", () => {
 				...BASE_CONFIG,
 				sources: [sourceWithAuth({ token: "ghp_secret_token_value" })],
 			};
-			await persistConfig(path, config);
+			await writeConfigFile(path, config);
 			expect(statSync(path).mode & 0o777).toBe(0o600);
 			const { config: loaded } = await loadConfigFile(path);
 			expect(loaded.sources[0]?.auth).toEqual({ token: "ghp_secret_token_value" });
@@ -458,7 +458,7 @@ describe("validateConfig", () => {
 			};
 			process.env.FACTORY_TEST_TOKEN = "ghp_must_not_be_written";
 			try {
-				await persistConfig(path, config);
+				await writeConfigFile(path, config);
 				const written = readFileSync(path, "utf8");
 				expect(written).toContain("FACTORY_TEST_TOKEN");
 				expect(written).not.toContain("ghp_must_not_be_written");
@@ -2046,7 +2046,7 @@ describe("consultation configuration", () => {
 	});
 });
 
-describe("configToToml and persistConfig", () => {
+describe("configToToml and the config write-back", () => {
 	test("the shipped defaults round-trip through TOML", () => {
 		const config = validateConfig(parseToml(configToToml(BASE_CONFIG)));
 		expect(config).toEqual(BASE_CONFIG);
@@ -2076,27 +2076,29 @@ describe("configToToml and persistConfig", () => {
 		expect(validateConfig(parseToml(text))).toEqual(config);
 	});
 
-	test("persistConfig writes a file the loader reads back", async () => {
+	test("writeConfigFile writes a file the loader reads back", async () => {
 		const temp = inTempDir();
 		const path = temp("factory/config.toml");
 		const config: FactoryConfig = {
 			...BASE_CONFIG,
 			repos: { "acme/billing": "~/src/billing_1" },
 		};
-		await persistConfig(path, config);
+		const fact = await writeConfigFile(path, config);
+		// No file to edit: the write creates it, and it says so.
+		expect(fact.mode).toBe("created");
 		const { config: loaded, fromFile } = await loadConfigFile(path);
 		expect(fromFile).toBe(true);
 		expect(loaded).toEqual(config);
 		expect(readFileSync(path, "utf8")).toContain('"acme/billing"');
 	});
 
-	test("a failed persistConfig write leaves no temp file behind", async () => {
+	test("a failed config write leaves no temp file behind", async () => {
 		const temp = inTempDir();
 		const dir = temp("factory");
 		const path = join(dir, "config.toml");
 		// A directory where the file should be: the rename must fail.
 		mkdirSync(path, { recursive: true });
-		await expect(persistConfig(path, BASE_CONFIG)).rejects.toThrow();
+		await expect(writeConfigFile(path, BASE_CONFIG)).rejects.toThrow();
 		expect(readdirSync(dir).filter((name) => name.endsWith(".tmp"))).toHaveLength(0);
 	});
 });

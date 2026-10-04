@@ -18,6 +18,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import type { FactoryConfig } from "../src/config.ts";
+import type { ConfigWriteReport } from "../src/config-write.ts";
 import type { ConsultationRepositoryOption } from "../src/consultation/checkout-safety.ts";
 import { CONSULTATION_INPUT_LIMIT } from "../src/consultation/response-draft.ts";
 import { STALE_AGENT_OUTPUT_WARNING } from "../src/consultation/warning-facts.ts";
@@ -274,7 +275,9 @@ function makeHarness(
 	options: {
 		home?: string;
 		tickets?: () => readonly Ticket[];
-		persistRepositoryMapping?: (mapping: RepositoryMapping) => Promise<string | undefined>;
+		persistRepositoryMapping?: (
+			mapping: RepositoryMapping,
+		) => Promise<ConfigWriteReport | undefined>;
 		textBatchBytes?: number;
 		/** The seat count the module's start line states (issue #220). */
 		seatCount?: () => number;

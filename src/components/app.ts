@@ -27,12 +27,14 @@ import type { Selection } from "@opentui/core";
 import { createElement, useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AttentionService } from "../attention.ts";
+import { defaultConfigPath, type FactoryConfig, type TransitionOutcome } from "../config.ts";
 import {
-	defaultConfigPath,
-	type FactoryConfig,
-	persistConfig,
-	type TransitionOutcome,
-} from "../config.ts";
+	type ConfigWriteFact,
+	type ConfigWriteReport,
+	configWriteLine,
+	writeConfigFile,
+	writeFactWithConfirmation,
+} from "../config-write.ts";
 import { translateAgentKey } from "../consultation/agent-input.ts";
 import {
 	type ConsultationRepositoryOption,
@@ -1440,10 +1442,12 @@ export function App({
 		);
 	};
 
-	const persistMapping = async (mapping: RepositoryMapping): Promise<string | undefined> => {
+	const persistMapping = async (
+		mapping: RepositoryMapping,
+	): Promise<ConfigWriteReport | undefined> => {
 		const write = configWriteQueue.current
 			.catch(() => undefined)
-			.then(async () => {
+			.then(async (): Promise<ConfigWriteReport | undefined> => {
 				try {
 					const currentConfig = configRef.current;
 					const updated = {
@@ -1452,10 +1456,17 @@ export function App({
 					};
 					configRef.current = updated;
 					setConfig(updated);
-					await persistConfig(configFile, updated);
-					return undefined;
+					// The write-back edits the `[repos]` key it owns and leaves the
+					// rest of the operator's file where they put it (ADR 0103). The
+					// line names the file the write landed on.
+					const fact = await writeConfigFile(configFile, updated);
+					const line = configWriteLine(fact, "saved the mapping");
+					return line === "" ? undefined : { line, landed: true, mode: fact.mode };
 				} catch (error) {
-					return `could not persist the repository mapping: ${errorMessage(error)}`;
+					return {
+						line: `could not persist the repository mapping: ${errorMessage(error)}`,
+						landed: false,
+					};
 				}
 			});
 		configWriteQueue.current = write.then(
@@ -4485,8 +4496,10 @@ export function App({
 			return;
 		}
 		// The sources the flow registered join the config: the operator's pane
-		// shows them the moment the persist lands, the way a repository mapping
-		// does.
+		// shows them the moment the write-back lands, the way a repository
+		// mapping does.
+		let writeLine = "";
+		let writeFact: ConfigWriteFact | undefined;
 		const write = configWriteQueue.current
 			.catch(() => undefined)
 			.then(async () => {
@@ -4498,7 +4511,23 @@ export function App({
 					};
 					configRef.current = updated;
 					setConfig(updated);
-					await persistConfig(configFile, updated);
+					// The write-back appends the `[[sources]]` blocks the init
+					// registered and leaves the rest of the operator's file, their
+					// comments included, where they wrote it (ADR 0103).
+					const fact = await writeConfigFile(configFile, updated);
+					writeFact = fact;
+					// A re-init whose planned sources already stand in the config registers
+					// nothing new, so it hands the write-back no count to word. Only a full
+					// rewrite of the operator's file has something to say then, and it says
+					// it without a count (ADR 0103).
+					writeLine = configWriteLine(
+						fact,
+						flow.newSources.length === 0
+							? ""
+							: `registered ${flow.newSources.length} new source${
+									flow.newSources.length === 1 ? "" : "s"
+								}`,
+					);
 				} catch (error) {
 					setErrorMessage(`the init's sources did not save: ${errorMessage(error)}`);
 				}
@@ -4508,7 +4537,14 @@ export function App({
 			() => undefined,
 		);
 		await write;
-		setNoticeMessage(flow.message);
+		// The Message line is one row of the terminal's width and the act's own
+		// confirmation is longer than that, so a full rewrite leads the line: the
+		// warning that the file's comments did not survive is what reads (ADR 0103).
+		setNoticeMessage(
+			writeFact === undefined
+				? flow.message
+				: writeFactWithConfirmation(writeFact, writeLine, flow.message),
+		);
 		// A queue behind the act closes its panel now, the way the skip does:
 		// the next entry plans async, and the panel under review must not
 		// stand live behind it. A lone init keeps its panel, the way it

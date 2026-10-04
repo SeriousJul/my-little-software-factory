@@ -1385,11 +1385,71 @@ describe("the outcome wording", () => {
 				},
 			},
 			line.reports,
-			() => Promise.resolve("could not persist the repository mapping"),
+			() =>
+				Promise.resolve({
+					line: "could not persist the repository mapping",
+					landed: false,
+				}),
 		);
 		expect(line.events).toEqual([
 			"clear-working",
 			"warning:could not persist the repository mapping; the checkout was a sibling clone",
+		]);
+	});
+
+	test("a mapping write that landed trails the note about the operator's disk", async () => {
+		const line = sink();
+		await reportHandoffOutcome(
+			{
+				status: "ok",
+				agent,
+				notes: {
+					warning: "the checkout was a sibling clone",
+					mappingToWrite: { repository: "acme/factory", path: "/home/me/factory" },
+				},
+			},
+			line.reports,
+			() =>
+				Promise.resolve({
+					line: "saved the mapping in /home/me/config.toml",
+					landed: true,
+					mode: "sections",
+				}),
+		);
+		// The Message line is one row of the terminal's width. The note naming the
+		// clone the plane made on the operator's disk leads it, and the routine
+		// write-back fact follows it (ADR 0103).
+		expect(line.events).toEqual([
+			"clear-working",
+			"warning:the checkout was a sibling clone; saved the mapping in /home/me/config.toml",
+		]);
+	});
+
+	test("a mapping write that took the full rewrite leads the note about the operator's disk", async () => {
+		const line = sink();
+		await reportHandoffOutcome(
+			{
+				status: "ok",
+				agent,
+				notes: {
+					warning: "the checkout was a sibling clone",
+					mappingToWrite: { repository: "acme/factory", path: "/home/me/factory" },
+				},
+			},
+			line.reports,
+			() =>
+				Promise.resolve({
+					line: "saved the mapping in /home/me/config.toml; the whole config file was rewritten, and the comments in it did not survive",
+					landed: true,
+					mode: "rewrite",
+				}),
+		);
+		// The same fact the Repository init leads its confirmation with: the line
+		// that says the operator's whole file was replaced never trails the note it
+		// rode in on (ADR 0103).
+		expect(line.events).toEqual([
+			"clear-working",
+			"warning:saved the mapping in /home/me/config.toml; the whole config file was rewritten, and the comments in it did not survive; the checkout was a sibling clone",
 		]);
 	});
 

@@ -32,6 +32,7 @@ import {
 	listHalfOf,
 	markerRowOf,
 	messageRowOf,
+	openMessageView,
 	openPanel,
 	press,
 	pressArrow,
@@ -2210,10 +2211,22 @@ describe("the override panel", () => {
 				const frame = await awaitFrame(
 					setup,
 					(f) => messageRowOf(f).includes("cloned acme/billing to a sibling"),
-					"the mapping warning on the Message line",
+					"the sibling-clone warning on the Message line",
 				);
-				// The warning sits on the permanent Message line.
+				// The note about the operator's disk leads the line (ADR 0103), so it
+				// reads whole on the row. The write-back fact that follows it names
+				// the file it landed on, and the two together are longer than the
+				// row, so the whole fact reads in the Message view.
 				expect(messageRowOf(frame)).toContain("cloned acme/billing to a sibling");
+				const view = await openMessageView(setup);
+				expect(frameText(view)).toContain("saved the mapping in");
+				expect(frameText(view)).toContain(configPath);
+				await press(
+					setup,
+					"escape",
+					"the Message view to close",
+					(f) => !f.includes("Message view"),
+				);
 				// The mapping was written back to the config file.
 				const written = readFileSync(configPath, "utf8");
 				expect(written).toContain(`[repos]`);

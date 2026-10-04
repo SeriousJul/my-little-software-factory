@@ -68,6 +68,16 @@ export default {
 		// kill every mutant in the nine state modules for the wrong reason. It
 		// stays in `bun run test`, which reads the uninstrumented tree.
 		"test/state-architecture.test.ts",
+		// Not an exclusion, and the note stands here because the file looks like one:
+		// `test/config-write-architecture.test.ts` (ADR 0103, issue #222) also reads
+		// production source as text, but it counts call names - `writeConfigFile(`,
+		// `persistConfig(`, `writeConfigText(` - and instrumentation leaves those
+		// whole. Measured on this branch: a `--dryRunOnly` initial run over the whole
+		// instrumented tree (117 files, 34,432 mutants) reported 2,771 tests at exit 0
+		// with the file in the set, and its cases passed run alone inside that
+		// campaign's kept sandbox - 5 cases then, 6 now, and the campaign has not been
+		// re-run since the sixth landed. It stays in the campaign. The rule is what a file
+		// counts, not that it reads source.
 	],
 	// "json" is the machine-readable report: a future `break` gate and any
 	// campaign-to-campaign diff read `reports/mutation/mutation.json`, so it is
