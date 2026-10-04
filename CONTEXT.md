@@ -457,7 +457,8 @@ _Avoid_: manual override, bypass
 The fact a start line names: the path that took the seat for a queued start. `pickup` for the Work queue's Pickup, `force-dispatch` for the operator's key on the waiting row, and `direct-ask` for the row the operator's own ask started at once, on the immediate pass that ask ran (ADR 0092).
 The mode names the path that ran the start, never the ask that made the row: a row the operator asked for that waited in the queue reads `pickup` when a later cycle takes it.
 It is not the item's origin. The origin says where the ask came from (`open`, `workflow`, `restart`); the mode says which path started it.
-A Consultation's start line names it too: `pickup` for the Work queue's Pickup of a `queued` record, and `force-dispatch` for the operator's key that starts the record over the Parallel limit (issue #220).
+A Consultation's start line names it too: `pickup` for the Work queue's Pickup of a `queued` record, and `force-dispatch` for the operator's start now key on the record (issue #220, ADR 0102).
+For a Consultation the mode names the key, not a crossing of the Parallel limit: the key names its mode whatever the seat reading says, so `mode force-dispatch` beside a reading under the limit is a normal start, not a cap breach.
 _Avoid_: dispatch mode, launch mode, start path
 
 **Continuation**:

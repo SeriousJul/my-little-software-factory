@@ -106,6 +106,16 @@ limit: `seats <held>`. Today the line names only the origin, so a force-dispatch
 cap, a pickup start, and a top-up route read the same, and a reviewer cannot tell a cap
 breach from an operator's hand.
 
+**Amended by ADR 0102: a third start line, owned by a third module.** A Consultation
+start now writes `consultation started: "<type>" <id8> (mode <mode>, origin consultation,
+seats <held>/<limit>)`, and the Consultation operations write it, not this dispatch. The
+dispatch holds no Consultation start fact - it neither re-reads the Consultation type's
+settings nor moves the record to `opening` nor runs the opening - so it carries the mode
+across the `pickupConsultation` seam and lets the module that performed the start state
+it. `StartMode` moved to `src/domain/start-mode.ts`, the one name both line owners read,
+and the `seats` field's text moved to `parallelSeatReading` in `src/parallel.ts`, beside
+the count rule and the limit text rule the three lines share.
+
 **The seat reading is the count the gate stood on.** The reading is taken before the
 start claims its own seat, so it is the count the Parallel limit gate stood on, never a
 count the start raised itself. The pickup starts only into a free seat, so its reading
@@ -114,7 +124,10 @@ under a cap of 1, `seats 2/2` under a cap of 2 - is the force-dispatch that cros
 A `merge started:` line is the exception a reader must know: a Plane action takes no
 seat, and the pickup runs it whatever the limit reads (ADR 0068), so `seats 1/1` on a
 merge line states the count the plane stood on at the start and is a normal start, not a
-breach.
+breach. A `consultation started:` line carries the second exception (ADR 0102): the
+Consultation section's key names `mode force-dispatch` whatever the count reads, so there
+the mode names the operator's key on the record and not a crossing, and `mode
+force-dispatch` beside `seats 0/2` is a normal start.
 
 **The mode names the pass, not the ask.** Every start enters the Work queue first (ADR
 0049), so the dispatch cannot tell the operator's row from the factory's row at the

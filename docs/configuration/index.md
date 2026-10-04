@@ -467,17 +467,21 @@ consultation started: "review" 1a2b3c4d (mode pickup, origin consultation, seats
 ```
 
 `mode` is `pickup`, `force-dispatch`, or `direct-ask`. `origin` is the item's
-origin: `open`, `workflow`, or `restart`. `seats` is the held seats beside the
-Parallel limit, and an unlimited cap states no limit. A row you asked for that
-waited in the Work queue reads `mode pickup`, not `direct-ask`: the mode names
-the path that took the seat, not the ask that made the row.
+origin: `open`, `workflow`, `restart`, or `consultation` for a Consultation
+row. `seats` is the held seats beside the Parallel limit, and an unlimited cap
+states no limit. A row you asked for that waited in the Work queue reads
+`mode pickup`, not `direct-ask`: the mode names the path that took the seat,
+not the ask that made the row.
 
 A Consultation's start line is the Consultation operations' own. Its name is the
 record's Consultation type beside the identity prefix the plane's other
 Consultation lines name it by, and its origin word is `consultation`, the same
 word the Work queue stands a Consultation row under. The seat reading is
-measured before the record takes its seat, so a Consultation you force-dispatch
-over a full cap reads `mode force-dispatch` beside the count the cap stood on.
+measured before the record takes its seat, so it names the count the Parallel
+limit stood on. For a Consultation the mode names the key, not a cap crossing:
+the Work queue's Pickup reads `mode pickup`, and your own start now key reads
+`mode force-dispatch` whatever the seat reading says, so `mode force-dispatch`
+beside `seats 0/2` is a normal start, not a breach of the cap.
 
 **`[agents.<name>]`** (one table per agent type).
 

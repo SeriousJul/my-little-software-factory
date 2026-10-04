@@ -124,7 +124,9 @@ description: The module map of the source tree, for agents working in this repos
 	environment kinds, and the Grouping axis that splits a section's list into
 	Groups (ADR 0058). `section-facts.ts` holds the Section header's counts and
 	the Auto-handoff facts its mode cell carries, the Parallel limit gate's
-	answer included. `ticket.ts` holds the gate rules the plane states in words:
+	answer included. `start-mode.ts` holds the start mode - the one name the
+	`handoff started:`, `merge started:`, and `consultation started:` lines read
+	for the path that ran a start (ADR 0102). `ticket.ts` holds the gate rules the plane states in words:
 	the Dispatch pause, the Same-type hold (ADR 0093), and the Handoff limit
 	(`handoffLimitReached`). `top-up.ts` holds the auto top-up's gates (ADR 0051,
 	ADR 0088, ADR 0094): the gates every automatic add reads, the row a
