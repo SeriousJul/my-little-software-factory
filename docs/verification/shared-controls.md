@@ -1313,6 +1313,7 @@ What this work leaves open, stated plainly:
 What was not measured: no screen reader has read this application, and no claim
 of screen-reader support is made here. No theme or color behavior is involved in
 this change.
+
 ## The Auto-handoff mode cell on the Ticket header
 
 The mode fact left its own row above the sections. It stands in the Ticket
@@ -1338,27 +1339,33 @@ check asserts them. An inherited herdr theme paints its own values for those
 roles and is not contrast-checked, as the standard states. The written word
 names the mode in every presentation, so the color carries no fact on its own.
 
-The header lays its row out as whole cells. The lamp and its word hold the
-corner. When the row cannot hold the whole cell beside the whole count line, the
-cell shrinks from its own right end - the seat reading first, then the pause
-word - and only when the bare lamp still leaves no room do whole count cells
-drop from the counts' tail in ADR 0060's order. The row never cuts a cell in
-half, so a held count never loses its number to a seat measurement.
+The header lays its row out as whole cells, never as one string it cuts in
+half. The lamp and its word hold the corner and never give way. The count cells
+give up whole cells from their tail, in ADR 0060's order, and only as far as the
+row needs to hold the bare lamp beside them; the cell then takes back every part
+the room those cells left can hold - the seat reading first, then the Dispatch
+pause word. The ladder stands in one pure function, `planHeaderRow`, which takes
+the row's width, its cells, and the mode cell and answers what the row keeps, so
+the layout is measurable without a renderer. A held count therefore never loses
+its number to a seat measurement, and the row cuts no cell in half at any width
+the plane supports - its floor is 40 columns.
 
 What was measured: the component seam (`test/section-header.test.ts`) holds the
 lamp in both modes, the bare count at an unlimited Parallel limit, the pause
-word, the bell and pile cells beside the cell, and each step of the shrink-and-
-drop ladder at 84, 66, 62, 59, 54, and 40 columns. The frame tests read the cell
-through the real app flow: `test/auto-mode.test.ts` for the `a` toggle, the
-stored mode, the flipped mode, and the combined seat count;
+word, the bell and pile cells beside the cell, and each step of the drop-and-
+grow-back ladder at 84, 72, 66, 62, 60, 59, 56, 54, and 40 columns. The same
+file measures the ladder a second time through `planHeaderRow` alone, with no
+renderer, at those widths and at 20 columns below the plane's floor. The frame
+tests read the cell through the real app flow: `test/auto-mode.test.ts` for the
+`a` toggle, the stored mode, the flipped mode, and the combined seat count;
 `test/turn-end-cause-frame.test.ts` for `auto 2/3 paused` on the held-turn
 frame; `test/ignored-ticket.test.ts` for the pile cell dropping whole before the
 held count; `test/main-view-frame.test.ts` and `test/ticket-scroll-frame.test.ts`
 for the row layout, the click rows, and the resize walk; `test/reserved-rows.test.ts`
 for the 26-row floor and the too-small notice. The gallery's `auto-mode` example
-carries both lamps, the seat reading, and the drop rule, and the suite exercises
-it; the same example asserts each lamp's painted color against the role the theme
-resolves. `test/section-header.test.ts` asserts every part's color at the
+carries both lamps, the pause word, and the drop rule on its own 54-column row,
+and the suite exercises it; the same example asserts each lamp's painted color
+and the pause word's color against the role the theme resolves. `test/section-header.test.ts` asserts every part's color at the
 component seam - the warning color for `auto`, the running color for `manual`,
 the room color under the cap, the cap color at and over it, the bare count under
 no limit, and the header's own ink for the counts and the pause word - and
@@ -1367,12 +1374,15 @@ across the `a` toggle. The Main view guide screenshot was regenerated with
 `bun run screenshots` and the drift test reads it.
 
 `bun run lint`, `bun run typecheck`, and one full `bun run test` ran on this
-change with no other `bun test` process on the machine (load average 10.39, the
-suite green at 2825 tests over 129 files, 0 fail, no skips). The suite's
+change with no other `bun test` process on the machine. The run that gated the
+rework measured load average 10.31 and a green suite at 2834 tests over 129
+files, 0 fail, no skips, 15807 assertions in 37.98 s; the run before the rework
+measured 2825 tests over 129 files, 0 fail, no skips. The suite's
 assertion total is a timing read, not a fixed number: `test/app.test.ts` asserts
 every frame the renderer captured inside one scroll window, so the count moves
-between runs - 15654, 15555, 15475, 15640, and 15720 assertions across five green
-runs of this change. The count is recorded as what it measured, not as a target.
+between runs - 15654, 15555, 15475, 15640, 15720, and 15807 assertions across
+six green runs of this change. The count is recorded as what it measured, not as
+a target.
 
 The CI gate flaked once on this change and the record names it. The first `checks`
 run failed `test/consultation-frame.test.ts` > "the settled Agent output stays
@@ -1384,7 +1394,23 @@ through the other section" at 21062 ms. A retry of the same run on this branch
 passed every check. The runner is about twice as slow as the machine this work ran
 on (85 s against 38 s for the full suite), so the 20 s harness wait is the tight
 part. That is recorded as a load flake and as an open item of its own, not as a
-pass this change earned or a problem it fixed.
+pass this change earned or a problem it fixed. #225 has since landed the harness
+fix for that shape on `main`, and this branch carries it: the `checks` run on the
+rebased, reworked head is green in 1m39s.
+
+The review of this change found the ladder giving the seat reading up before it
+had to. At 54, 56, and 60 columns the row kept six to eleven empty columns while
+the seat reading stood dropped: the layout shrank the cell first, dropped count
+cells only after that, and never grew the cell back into the room those cells
+left. The ladder now drops count cells only as far as the bare lamp needs and
+then grows the cell back; `test/section-header.test.ts` holds a case at each of
+those three widths, and the same file measures the ladder through `planHeaderRow`
+with no renderer. The review's other items are in this head too: the layout math
+left the component body for that one pure function, `AutoHandoffMode` stands in
+`src/domain/section-facts.ts` where the paint layer and the header both read it,
+the gallery's `auto-mode` example carries the `paused` state and the drop on its
+own 54-column row, and the two wording claims above - the shrink order and the
+"never cuts a cell in half" claim - now state what the code does.
 
 The earlier entries in this record that measured the mode line - the held-turn
 frame's `auto: on 2/3 paused` among them - stand as history for the head they
@@ -1393,5 +1419,7 @@ measured. They predate this move and no longer describe the current screen.
 What was not measured: no screen reader has read this application, and no claim
 of screen-reader support is made here or anywhere else in this record. The
 terminal walks in Ghostty and foot have not been re-run for this change, so they
-stand as not re-verified for it. The lamp pair is not contrast-checked against
-inherited herdr theme pairs.
+stand as not re-verified for it: no person has re-walked the lamp pair or the two
+mode colors in a live terminal on this head, and that is the open item this entry
+leaves open. The lamp pair is not contrast-checked against inherited herdr theme
+pairs.

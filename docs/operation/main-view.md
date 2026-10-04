@@ -27,9 +27,13 @@ header row; the same toggle restores it.
   `manual`. The seat reading wears the running color while the limit still
   holds room and the error color from the frame the seats reach the limit.
   The written word names the mode either way, so a terminal that paints no
-  color loses nothing. A row too short for the whole cell drops
-  the seat reading, then the pause word, then whole count cells from the
-  counts' tail; it never cuts a cell in half and never loses the lamp.
+  color loses nothing. A row too short for the whole cell gives whole count
+  cells up from the counts' tail - the pile first, then the bell, then the
+  held count - and only as far as the lamp and its word need them gone; the
+  cell then takes back what the room it now has allows, the seat reading
+  first and then the pause word. At every width the plane supports - its
+  floor is 40 columns - the row cuts no cell in half and never loses the
+  lamp.
 - **The Consultation section** lists your Consultations. Its header shows how
   many wait for your answer and how many need recovery, so a Consultation
   that needs you is visible whether the section is open or folded.

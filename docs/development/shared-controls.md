@@ -263,23 +263,22 @@ Two rules are the standard, not the surface's choice:
   always explainable from the row.
 
 A fold hides rows and never facts. The rows a fold takes away are the only thing
-that changes: the Section header's counts, the Section header's Auto-handoff mode
-cell, the Parallel limit, the
-Pickup, the Top-up, the handoff gates, and every Decision route read the same
-facts with a Group open or shut, and a collapsed header still carries its count
-and its held count. The header lays its line out on the list pane's own rule, a
-field is dropped and never wrapped: the Group's value gives up its tail and then
-its last cell before the counts do, and the ticket count gives up before the held
-count, because a header that overflowed its pane would split the count the fold
-exists to keep over two window rows. The plane never folds or unfolds on its own - an operator
-press or click is the only mover - and a fold never changes what is selected:
-where the cursor stands on a Group header no row is selected, so every control
-that needs one refuses with the catalogue's own reason, and the fold takes the
-`Space` key, which answers nowhere else: on any other row the catalogue
-refuses it, and `x` keeps its one meaning, the Section toggle, on every row a
-Group header row included. The header's glyph is the fold's marker, so the no-color
-presentation keeps every word and the fold needs no palette of its own.
-
+that changes: the Section header's counts, the Section header's Auto-handoff
+mode cell, the Parallel limit, the Pickup, the Top-up, the handoff gates, and
+every Decision route read the same facts with a Group open or shut, and a
+collapsed header still carries its count and its held count. The header lays its
+line out on the list pane's own rule, a field is dropped and never wrapped: the
+Group's value gives up its tail and then its last cell before the counts do, and
+the ticket count gives up before the held count, because a header that
+overflowed its pane would split the count the fold exists to keep over two
+window rows. The plane never folds or unfolds on its own - an operator press or
+click is the only mover - and a fold never changes what is selected: where the
+cursor stands on a Group header no row is selected, so every control that needs
+one refuses with the catalogue's own reason, and the fold takes the `Space` key,
+which answers nowhere else: on any other row the catalogue refuses it, and `x`
+keeps its one meaning, the Section toggle, on every row a Group header row
+included. The header's glyph is the fold's marker, so the no-color presentation
+keeps every word and the fold needs no palette of its own.
 Which Groups stand folded is a session fact and is never written to disk; the
 Grouping axis is factory state and is, per
 [ADR 0058](../adr/0058-the-grouping-axis-is-factory-state-and-the-folds-are-not.md),
