@@ -2,7 +2,7 @@ import type { MouseEvent } from "@opentui/core";
 import { createElement } from "@opentui/react";
 import { LAMP_GLYPHS } from "./shared/presentation.ts";
 import { padToWidth, truncateToWidth, widthOf } from "./text.ts";
-import { paint } from "./theme.ts";
+import { autoHandoffColor, paint, seatColor } from "./theme.ts";
 
 export type MainSection = "tickets" | "consultations" | "work";
 
@@ -196,34 +196,84 @@ export function SectionHeader({
 	const modeSeats =
 		mode === null ? "" : ` ${mode.limit === 0 ? `${mode.seats}` : `${mode.seats}/${mode.limit}`}`;
 	const modePause = mode === null || !mode.dispatchPaused ? "" : " paused";
-	const modeVariants =
+	// Each form of the cell carries the parts it kept, so the render colors
+	// each surviving part with its own ink.
+	const fullMode =
 		mode === null
-			? [""]
-			: [`${modeCore}${modeSeats}${modePause}`, `${modeCore}${modePause}`, modeCore];
-	const bareModeCell = modeVariants[modeVariants.length - 1] ?? "";
-	let modeCell = bareModeCell;
+			? { cell: "", seats: "", pause: "" }
+			: { cell: `${modeCore}${modeSeats}${modePause}`, seats: modeSeats, pause: modePause };
+	const pausedMode =
+		mode === null ? fullMode : { cell: `${modeCore}${modePause}`, seats: "", pause: modePause };
+	const bareMode = mode === null ? fullMode : { cell: modeCore, seats: "", pause: "" };
+	const modeVariants = [fullMode, pausedMode, bareMode];
+	let modeVariant = bareMode;
+	let keptSeats = "";
+	let keptPause = "";
 	let keptCells = cells;
 	const wholeCounts = widthOf(countsTextOf(cells));
 	const shrunk = modeVariants.find(
-		(variant) => wholeCounts + widthOf(variant) <= width || variant === modeCore,
+		(variant) => wholeCounts + widthOf(variant.cell) <= width || variant.cell === modeCore,
 	);
-	if (shrunk !== undefined && wholeCounts + widthOf(shrunk) <= width) {
+	if (shrunk !== undefined && wholeCounts + widthOf(shrunk.cell) <= width) {
 		// The whole count line fits beside this form of the cell.
-		modeCell = shrunk;
+		modeVariant = shrunk;
+		keptSeats = shrunk.seats;
+		keptPause = shrunk.pause;
 	} else {
 		// The corner needs the room: drop whole cells from the counts' tail.
-		modeCell = bareModeCell;
+		modeVariant = bareMode;
 		let candidate = cells;
 		while (
 			candidate.length > 1 &&
-			widthOf(countsTextOf(candidate)) + widthOf(bareModeCell) > width
+			widthOf(countsTextOf(candidate)) + widthOf(bareMode.cell) > width
 		) {
 			candidate = candidate.slice(0, -1);
 		}
 		keptCells = candidate;
 	}
-	const countsCells = Math.max(0, width - widthOf(modeCell));
-	const text = `${padToWidth(countsTextOf(keptCells), countsCells)}${modeCell}`;
+	const countsCells = Math.max(0, width - widthOf(modeVariant.cell));
+	// An expanded section wears bold: the emphasis the old palette carried in a
+	// brighter text color. Each part of the row paints its own role, so the
+	// mode cell reads in color while the counts keep the header's own ink.
+	const face = expanded ? "b" : "span";
+	const headerInk = expanded ? paint("text") : paint("subtext0");
+	const parts = [
+		createElement(
+			face,
+			{ key: "counts", fg: headerInk },
+			padToWidth(truncateToWidth(countsTextOf(keptCells), countsCells), countsCells),
+		),
+	];
+	if (mode !== null) {
+		parts.push(
+			createElement(
+				face,
+				{ key: "lamp", fg: autoHandoffColor(mode.mode) },
+				truncateToWidth(modeCore, Math.max(0, width - countsCells)),
+			),
+		);
+		if (keptSeats !== "") {
+			parts.push(
+				createElement(
+					face,
+					{ key: "seats", fg: seatColor(mode.seats, mode.limit) },
+					truncateToWidth(keptSeats, Math.max(0, width - countsCells - widthOf(modeCore))),
+				),
+			);
+		}
+		if (keptPause !== "") {
+			parts.push(
+				createElement(
+					face,
+					{ key: "pause", fg: headerInk },
+					truncateToWidth(
+						keptPause,
+						Math.max(0, width - countsCells - widthOf(modeCore) - widthOf(keptSeats)),
+					),
+				),
+			);
+		}
+	}
 	const handleMouse = (event: MouseEvent) => {
 		if (!active) return;
 		if (event.type === "down" && event.button === 0) onToggle(section);
@@ -234,14 +284,6 @@ export function SectionHeader({
 			onMouse: handleMouse,
 			style: { width: "100%", height: 1, flexGrow: 0, flexShrink: 0 },
 		},
-		createElement(
-			"text",
-			{ style: { width: "100%", height: 1 }, fg: expanded ? paint("text") : paint("subtext0") },
-			// An expanded section wears bold: the emphasis the old palette carried
-			// in a brighter text color.
-			expanded
-				? createElement("b", undefined, padToWidth(truncateToWidth(text, width), width))
-				: padToWidth(truncateToWidth(text, width), width),
-		),
+		createElement("text", { style: { width: "100%", height: 1 }, fg: headerInk }, ...parts),
 	);
 }

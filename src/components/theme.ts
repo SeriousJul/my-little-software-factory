@@ -92,6 +92,38 @@ export function markerColor(marker: TicketMarker): string | undefined {
 	return paint(MARKER_ROLES[marker]);
 }
 
+/** The theme role each Auto-handoff mode wears in the Ticket header's corner. */
+const AUTO_HANDOFF_ROLES: Record<"auto" | "manual", ThemeRole> = {
+	auto: "yellow",
+	manual: "green",
+};
+
+/**
+ * The color the Auto-handoff lamp and its word paint in.
+ *
+ * The mode the factory runs in on its own wears the warning color, the mode
+ * that waits for the operator wears the running state's color. The written
+ * word names the mode either way, so the no-color presentation loses nothing.
+ */
+export function autoHandoffColor(mode: "auto" | "manual"): string | undefined {
+	return paint(AUTO_HANDOFF_ROLES[mode]);
+}
+
+/** The seat reading's roles: the room the Parallel limit still holds, and the cap reached. */
+const SEAT_ROLES = { room: "green", cap: "red" } as const;
+
+/**
+ * The color the mode cell's seat reading paints in.
+ *
+ * The cap color stands from the frame the seats reach the limit through the
+ * frame they exceed it - the force-dispatched start and the held turn's own
+ * seat both stand against the cap (ADR 0034). A limit of 0 states no limit,
+ * so the reading never wears the cap color.
+ */
+export function seatColor(seats: number, limit: number): string | undefined {
+	return paint(limit === 0 || seats < limit ? SEAT_ROLES.room : SEAT_ROLES.cap);
+}
+
 /**
  * The failure badge: `blocked` or `missing` in place of the state badge,
  * padded to the badge width so the row columns stay aligned.

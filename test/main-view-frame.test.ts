@@ -36,8 +36,11 @@ import {
 	overlayRows,
 	press,
 	pressScrollKey,
+	rgb,
+	roleColor,
 	rowsOf,
 	settle,
+	spanColorAt,
 	stillFrame,
 	WIDTH,
 	withApp,
@@ -990,6 +993,17 @@ describe("the merged Main view", () => {
 				expect(actionBarRowOf(across)).toContain("w Close");
 				expect(actionBarRowOf(across)).toContain("f History");
 				expect(actionBarRowOf(across)).toContain("x Section");
+				// The corner's ink comes from the Theme the environment resolved:
+				// the mode's own role for the lamp and its word, and the room color
+				// for the seat reading under the cap (ADR 0024, ADR 0034).
+				expect(spanColorAt(setup, 0, "● manual")).toEqual(rgb(roleColor("green")));
+				expect(spanColorAt(setup, 0, "0/2")).toEqual(rgb(roleColor("green")));
+				// Turning auto-handoff on moves the lamp and its word to the
+				// warning color while the counts keep the header's own ink.
+				await crossToTickets(setup);
+				await press(setup, "a", "auto-handoff to turn on", (f) => f.includes("○ auto"));
+				expect(spanColorAt(setup, 0, "○ auto")).toEqual(rgb(roleColor("yellow")));
+				expect(spanColorAt(setup, 0, "Tickets")).toEqual(rgb(roleColor("text")));
 			}, state);
 		} finally {
 			state.close();

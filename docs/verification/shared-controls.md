@@ -1325,6 +1325,19 @@ same terminal height and the plane's minimum terminal height is 26 rows instead
 of 27. The lamp pair is the shared presentation module's `LAMP_GLYPHS`, plain
 Unicode geometric shapes, so no surface holds a private glyph.
 
+The cell's ink leaves through the shared paint layer. The lamp and its word wear
+the mode's own role - the warning color for `auto`, the running state's color for
+`manual` - and the seat reading wears the running color while the Parallel limit
+still holds room and the error color from the frame the seats reach it. A limit
+of 0 states no limit, so the bare count never wears the cap color. The pause word
+rides the header's own ink. The role maps stand in `src/components/theme.ts`
+beside the state and marker maps, so no surface holds a palette. In the plane's
+own standalone theme the three pairs measure 7.50, 7.45, and 5.65 against the
+panel surface, each above the standard's 4.5:1 text threshold, and the shared
+check asserts them. An inherited herdr theme paints its own values for those
+roles and is not contrast-checked, as the standard states. The written word
+names the mode in every presentation, so the color carries no fact on its own.
+
 The header lays its row out as whole cells. The lamp and its word hold the
 corner. When the row cannot hold the whole cell beside the whole count line, the
 cell shrinks from its own right end - the seat reading first, then the pause
@@ -1344,12 +1357,22 @@ held count; `test/main-view-frame.test.ts` and `test/ticket-scroll-frame.test.ts
 for the row layout, the click rows, and the resize walk; `test/reserved-rows.test.ts`
 for the 26-row floor and the too-small notice. The gallery's `auto-mode` example
 carries both lamps, the seat reading, and the drop rule, and the suite exercises
-it. The Main view guide screenshot was regenerated with `bun run screenshots` and
-the drift test reads it.
+it; the same example asserts each lamp's painted color against the role the theme
+resolves. `test/section-header.test.ts` asserts every part's color at the
+component seam - the warning color for `auto`, the running color for `manual`,
+the room color under the cap, the cap color at and over it, the bare count under
+no limit, and the header's own ink for the counts and the pause word - and
+`test/main-view-frame.test.ts` reads the same colors through the real app frame
+across the `a` toggle. The Main view guide screenshot was regenerated with
+`bun run screenshots` and the drift test reads it.
 
 `bun run lint`, `bun run typecheck`, and one full `bun run test` ran on this
-change with no other `bun test` process on the machine (load average 7.25, the
-suite green at 2794 tests over 128 files, 15654 assertions, 0 fail, no skips).
+change with no other `bun test` process on the machine (load average 10.39, the
+suite green at 2825 tests over 129 files, 0 fail, no skips). The suite's
+assertion total is a timing read, not a fixed number: `test/app.test.ts` asserts
+every frame the renderer captured inside one scroll window, so the count moves
+between runs - 15654, 15555, 15475, 15640, and 15720 assertions across five green
+runs of this change. The count is recorded as what it measured, not as a target.
 
 The earlier entries in this record that measured the mode line - the held-turn
 frame's `auto: on 2/3 paused` among them - stand as history for the head they

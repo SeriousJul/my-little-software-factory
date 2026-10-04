@@ -20,7 +20,7 @@ import {
 	type AutoHandoffMode,
 	SectionHeader,
 } from "../src/components/section-header.ts";
-import { frameText, rowsOf } from "./app-harness.ts";
+import { frameText, rgb, roleColor, rowsOf, spanColorAt } from "./app-harness.ts";
 
 let renderer: { destroy: () => void | Promise<void> } | null = null;
 afterEach(async () => {
@@ -34,11 +34,11 @@ afterEach(async () => {
  * The narrow form (below 60 columns) drops the colons, so the caller's width
  * chooses both the truncation and the cell's wording.
  */
-async function headerRow(
+async function renderHeader(
 	width: number,
 	facts: { held: number; heldBell?: boolean; ignored?: number },
 	mode: AutoHandoffCell | null = null,
-): Promise<string> {
+): Promise<{ setup: Parameters<typeof spanColorAt>[0]; row: string }> {
 	const setup = await testRender(
 		createElement(SectionHeader, {
 			section: "tickets",
@@ -59,7 +59,15 @@ async function headerRow(
 	);
 	await setup.flush();
 	renderer = setup.renderer;
-	return (rowsOf(frameText(setup.captureCharFrame()))[0] ?? "").trim();
+	return { setup, row: (rowsOf(frameText(setup.captureCharFrame()))[0] ?? "").trim() };
+}
+
+async function headerRow(
+	width: number,
+	facts: { held: number; heldBell?: boolean; ignored?: number },
+	mode: AutoHandoffCell | null = null,
+): Promise<string> {
+	return (await renderHeader(width, facts, mode)).row;
 }
 
 describe("the Section header's cell order", () => {
@@ -180,5 +188,36 @@ describe("the Section header's mode lamp", () => {
 		const tight = await headerRow(62, { held: 1 }, cell("auto", 2, 3, true));
 		expect(tight).toContain("held: 1");
 		expect(tight.endsWith("○ auto")).toBe(true);
+	});
+
+	test("the lamp and its word wear the mode's own color", async () => {
+		// The mode the factory runs in on its own wears the warning color, and
+		// the mode that waits for the operator wears the running state's color.
+		const auto = await renderHeader(84, { held: 0 }, cell("auto", 1, 2));
+		expect(spanColorAt(auto.setup, 0, "○ auto")).toEqual(rgb(roleColor("yellow")));
+		const manual = await renderHeader(84, { held: 0 }, cell("manual", 1, 2));
+		expect(spanColorAt(manual.setup, 0, "● manual")).toEqual(rgb(roleColor("green")));
+		// The counts keep the header's own ink, so the corner is the colored
+		// part of the row.
+		expect(spanColorAt(manual.setup, 0, "Tickets")).toEqual(rgb(roleColor("text")));
+		// The pause word rides the header's ink, not the mode's.
+		const paused = await renderHeader(84, { held: 0 }, cell("auto", 1, 2, true));
+		expect(spanColorAt(paused.setup, 0, "paused")).toEqual(rgb(roleColor("text")));
+	});
+
+	test("the seat reading wears the room color under the cap and the cap color at it", async () => {
+		const room = await renderHeader(84, { held: 0 }, cell("manual", 1, 2));
+		expect(spanColorAt(room.setup, 0, "1/2")).toEqual(rgb(roleColor("green")));
+		// At the cap and over it the reading wears the error color: the
+		// force-dispatched start and the held turn's seat both stand against the
+		// cap (ADR 0034).
+		const at = await renderHeader(84, { held: 0 }, cell("manual", 2, 2));
+		expect(spanColorAt(at.setup, 0, "2/2")).toEqual(rgb(roleColor("red")));
+		const over = await renderHeader(84, { held: 0 }, cell("auto", 3, 2));
+		expect(spanColorAt(over.setup, 0, "3/2")).toEqual(rgb(roleColor("red")));
+		// No limit states no cap, so the bare count never wears it.
+		const bare = await renderHeader(84, { held: 0 }, cell("auto", 3, 0));
+		expect(bare.row.endsWith("○ auto 3")).toBe(true);
+		expect(spanColorAt(bare.setup, 0, " 3")).toEqual(rgb(roleColor("green")));
 	});
 });

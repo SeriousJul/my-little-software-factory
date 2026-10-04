@@ -24,10 +24,13 @@ import {
 	awaitFrame,
 	cellColors,
 	frameText,
+	rgb,
+	roleColor,
 	rowSpans,
 	rowsOf,
 	type Setup,
 	settle,
+	spanColorAt,
 	spanColors,
 } from "./app-harness.ts";
 
@@ -198,6 +201,24 @@ describe("the shared control gallery", () => {
 		expect(text).toContain("○ auto");
 		expect(text).toContain("● manual");
 		expect(text).toContain("the seat count gives up its cells before a count does");
+		// The example's ink is the mode's own: the warning color for the mode the
+		// factory runs in on its own, the running state's color for the mode that
+		// waits for the operator.
+		const rows = rowsOf(setup.captureCharFrame());
+		expect(
+			spanColorAt(
+				setup,
+				rows.findIndex((row) => row.includes("○ auto")),
+				"○ auto",
+			),
+		).toEqual(rgb(roleColor("yellow")));
+		expect(
+			spanColorAt(
+				setup,
+				rows.findIndex((row) => row.includes("● manual")),
+				"● manual",
+			),
+		).toEqual(rgb(roleColor("green")));
 	});
 
 	// Issue #184: the init marker is a state a reviewer must see, so it stands

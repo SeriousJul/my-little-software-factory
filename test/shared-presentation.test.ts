@@ -77,6 +77,18 @@ describe("the shared control ink", () => {
 		expect(contrastFailures(inkForTheme(STANDALONE_THEME))).toEqual([]);
 	});
 
+	test("the Auto-handoff cell's colors clear the contrast the standard sets", () => {
+		// The mode lamp, the seat reading's room color, and its cap color are text
+		// the plane paints on its own panel surface, so each pair clears the text
+		// threshold in the plane's own theme (ADR 0024).
+		const panel = STANDALONE_THEME.roles.panel_bg;
+		for (const role of ["yellow", "green", "red"] as const) {
+			expect(contrastRatio(STANDALONE_THEME.roles[role], panel)).toBeGreaterThanOrEqual(
+				MIN_TEXT_CONTRAST,
+			);
+		}
+	});
+
 	test("the numbers the check measures are the ones the theme paints", () => {
 		// The ratios are recomputed from the hex pairs, so a declared theme
 		// cannot pass a test that only repeats it.

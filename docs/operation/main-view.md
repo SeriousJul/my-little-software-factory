@@ -22,7 +22,12 @@ header row; the same toggle restores it.
   unlit lamp with `auto` when the factory hands off settled tickets on its
   own, a lit lamp with `manual` when it waits for you, the Parallel limit
   seat reading `N/M` beside it, and the word `paused` while the Dispatch
-  pause holds the automatic works. A row too short for the whole cell drops
+  pause holds the automatic works. The lamp and its word wear the mode's own
+  color: the warning color for `auto`, the running state's color for
+  `manual`. The seat reading wears the running color while the limit still
+  holds room and the error color from the frame the seats reach the limit.
+  The written word names the mode either way, so a terminal that paints no
+  color loses nothing. A row too short for the whole cell drops
   the seat reading, then the pause word, then whole count cells from the
   counts' tail; it never cuts a cell in half and never loses the lamp.
 - **The Consultation section** lists your Consultations. Its header shows how
