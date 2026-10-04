@@ -509,28 +509,41 @@ class HandoffDispatchModule implements HandoffDispatch {
 	 *
 	 * One entry per ticket, and the entry stands for the row that stands: the Work
 	 * queue holds at most one row per ticket, so the ticket names the row, and no
-	 * timestamp is read for the fact. Every path that takes a row out of the queue
-	 * drops the entry, and a row that left through another aggregate is covered at
-	 * the next enqueue for the same ticket - an enqueue can only land once the row
-	 * before it left, so the new row is a new fact that states itself again. The
-	 * cycle prunes its held-Next-step reports on the same rule.
+	 * timestamp is read for the fact. The rule is one sentence - the entry stands
+	 * while the row stands - and two paths keep it. Every path this module runs that
+	 * takes a row out drops the entry, and a successful enqueue drops it too: the
+	 * queue holds one row per ticket, so an enqueue can only land once the row
+	 * before it left, whatever aggregate took that row out. The pickup pass sweeps
+	 * the entries whose row is gone, which covers the removals this module never saw
+	 * - the App's route removal at a close, another aggregate's cross-boundary drop
+	 * - and bounds the set to the rows that stand (issue #223 review). The cycle
+	 * prunes its held-Next-step reports on the same rule.
 	 */
 	private readonly queueItemRefusals = new Set<string>();
 
 	/**
 	 * The claim refusals the record has already stated, keyed by the start channel
-	 * and the ticket, and holding the fact each one stated (issue #223).
+	 * and the ticket, and holding the fact each one stated beside the attempt ledger
+	 * it stood on (issue #223).
 	 *
 	 * A claim refusal is a standing fact too: it is the answer the position's hard
 	 * gates give for the state the ticket is in, and the automatic walks re-ask the
-	 * same position every observation cycle. The same reason for the same ticket is
-	 * the same fact and states itself once; a different reason is a new fact and
-	 * states itself again; a claim that goes through drops the entry, so the next
-	 * refusal for that ticket is a new fact. The channel is part of the key because
-	 * the record line is a channel's line: a reader grepping `merge refused:` must
-	 * get the merge refusals and nothing else.
+	 * same position every observation cycle. The same reason over an unchanged
+	 * attempt ledger is the same fact and states itself once; another reason, or the
+	 * same reason over a ledger that moved, is a new fact and states itself again.
+	 * The ledger is what closes the hole the reason alone leaves: a stale claim can
+	 * settle outside this module - a restart's recovery, the observation cycle's
+	 * reclaim - and a refusal behind a later claim is a new fact even when no claim
+	 * ever came through here (issue #223 review). A reason that names a state
+	 * carries its own change in its own words: the ticket's state and the source's
+	 * freshness are part of the sentence, so the reason moves with the fact.
+	 *
+	 * The channel is part of the key because the record line is a channel's line: a
+	 * reader grepping `merge refused:` must get the merge refusals and nothing else.
+	 * The map holds one entry per ticket per channel, and a new fact replaces it in
+	 * place, so it cannot grow past the tickets the run refused.
 	 */
-	private readonly claimRefusals = new Map<string, string>();
+	private readonly claimRefusals = new Map<string, { fact: string; attempts: number }>();
 
 	constructor(options: HandoffDispatchOptions) {
 		this.state = options.state;
@@ -1029,6 +1042,22 @@ class HandoffDispatchModule implements HandoffDispatch {
 	}
 
 	/**
+	 * Forget the standing-row refusals whose row no longer stands (issue #223).
+	 *
+	 * The sweep runs at the head of every pickup pass, which the observation cycle
+	 * asks for on every poll whether or not the queue takes anything. It applies the
+	 * rule the entry follows everywhere else - the entry stands while the row
+	 * stands - to the rows this module never saw leave, and it keeps the set bounded
+	 * to the rows that stand. A row that left and never came back states no refusal
+	 * again, so the sweep drops its entry and nothing else changes.
+	 */
+	private sweepStandingRowRefusals(): void {
+		for (const identity of [...this.queueItemRefusals]) {
+			if (!this.state.workQueue.hasWorkItem(identity)) this.queueItemRefusals.delete(identity);
+		}
+	}
+
+	/**
 	 * Start the queue's items for the free seats, in queue order (ADR 0034,
 	 * ADR 0049).
 	 *
@@ -1054,6 +1083,11 @@ class HandoffDispatchModule implements HandoffDispatch {
 	 * start line states, so it names the path that actually took the seat.
 	 */
 	private async runPickupPass(directAskIdentity?: string): Promise<number> {
+		// The record's standing-fact entries follow their rows, whatever path took a
+		// row out (issue #223). This runs ahead of the brake and the seat checks
+		// because it is bookkeeping and not a pickup: a paused queue and a full cap
+		// still sweep.
+		this.sweepStandingRowRefusals();
 		// The queue pause (ADR 0052): the brake holds the drain. The items keep
 		// their places, the force-dispatch passes it, and the resume starts the
 		// pickup that takes them.
@@ -1679,8 +1713,13 @@ class HandoffDispatchModule implements HandoffDispatch {
 	 */
 	private refuseClaim(prefix: "handoff" | "merge", identity: string, fact: string): void {
 		const key = claimRefusalKey(prefix, identity);
-		if (this.claimRefusals.get(key) === fact) return;
-		this.claimRefusals.set(key, fact);
+		// The ledger read marks the claim this refusal stands on. It runs on the
+		// refusal path only, once per cycle per refused position, and the claim gate
+		// above already read the same tables.
+		const attempts = this.state.handoff.handoffCount(identity);
+		const stated = this.claimRefusals.get(key);
+		if (stated !== undefined && stated.fact === fact && stated.attempts === attempts) return;
+		this.claimRefusals.set(key, { fact, attempts });
 		this.log?.warn(this.refusalLine(prefix, identity, fact));
 	}
 

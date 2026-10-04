@@ -2240,7 +2240,12 @@ describe("the awaiting rule", () => {
 		});
 
 		test("a hold on the settled ticket's own position names one ticket", async () => {
-			const { state, coordinator, statuses } = rig({ autoOn: true, agents: [] });
+			const lines: RecordedLine[] = [];
+			const { state, coordinator, statuses } = rig({
+				autoOn: true,
+				agents: [],
+				log: recordLogger(lines),
+			});
 			settleFor(
 				state,
 				"github:github.com:I_5",
@@ -2252,7 +2257,53 @@ describe("the awaiting rule", () => {
 				kind: "info",
 				text: "ticket github:github.com:I_5 holds its Next step review: the position no longer offers the task",
 			});
+			// The record line names one ticket too: no position is named beside the
+			// settled turn's own.
+			expect(lines.filter((line) => line.message.startsWith("next step held:"))).toEqual([
+				infoLine(
+					'next step held: "Persist source facts" review (the position no longer offers the task)',
+				),
+			]);
 			state.close();
+		});
+
+		/**
+		 * The same fact in the plane's record (issue #223). The Message line is gone by
+		 * the time anyone reads the file, so a gated Next step was the one automatic
+		 * hold a reviewer could not see after the run: the record carried the start that
+		 * never came and nothing about the gate that held it.
+		 */
+		test("the held step leaves one record line, named the way the record names a ticket", async () => {
+			const lines: RecordedLine[] = [];
+			const r = rig({ autoOn: true, agents: [], log: recordLogger(lines) });
+			r.state.sourceFact.applyFetch(
+				source,
+				success([
+					{ ...fetched("github:github.com:I_6"), title: "Add a webhook retry policy" },
+					fetched(),
+				]),
+			);
+			settleFor(
+				r.state,
+				"github:github.com:I_5",
+				"route",
+				outcome({ positionTaskType: "review", positionTicketIdentity: "github:github.com:I_6" }),
+			);
+			await r.coordinator.tick();
+			// The record names the ticket the way its other lines name a ticket, and
+			// names the gate in parentheses the way every refusal line names its fact.
+			const held = () => lines.filter((line) => line.message.startsWith("next step held:"));
+			expect(held()).toEqual([
+				infoLine(
+					'next step held: "Persist source facts" review on "Add a webhook retry policy" (the position no longer offers the task)',
+				),
+			]);
+			// One fact, one line: the hold is re-derived every poll, and the record
+			// states it once while it stands.
+			await r.coordinator.tick();
+			await r.coordinator.tick();
+			expect(held()).toHaveLength(1);
+			r.state.close();
 		});
 
 		test("manual mode states nothing on the line: the Decision screen is its surface", async () => {
@@ -6021,7 +6072,15 @@ describe("the automatic walks state their holds in the record (issue #223)", () 
 	/** One awaiting ticket whose settled turn owes a route onto another ticket. */
 	function continuationRecordRig(over: { autoOn?: boolean } = {}) {
 		const r = recordRig(over);
-		r.state.sourceFact.applyFetch(source, success([fetched("github:github.com:I_6"), fetched()]));
+		// The two tickets carry different titles, so a hold line that names a row can
+		// be told from one that names another (issue #223 review).
+		r.state.sourceFact.applyFetch(
+			source,
+			success([
+				{ ...fetched("github:github.com:I_6"), title: "Add a webhook retry policy" },
+				fetched(),
+			]),
+		);
 		settleFor(r.state, "github:github.com:I_5", "route", routeOutcome("github:github.com:I_6"));
 		return r;
 	}
@@ -6037,7 +6096,9 @@ describe("the automatic walks state their holds in the record (issue #223)", () 
 		// news about a run that started nothing, not a warning, so both lines carry
 		// `info`.
 		expect(lines).toEqual([
-			infoLine("automatic walks hold: the Work queue already holds a continuation"),
+			infoLine(
+				'automatic walks hold: the Work queue already holds a continuation ("Add a webhook retry policy")',
+			),
 			infoLine("automatic walks hold: the Work queue holds a waiting row"),
 		]);
 		state.close();
@@ -6060,9 +6121,43 @@ describe("the automatic walks state their holds in the record (issue #223)", () 
 		await coordinator.tick();
 		expect(intents.filter((intent) => intent.origin === "workflow")).toHaveLength(0);
 		expect(lines).toEqual([
-			infoLine("automatic walks hold: the Work queue holds an item the operator staged"),
+			infoLine(
+				'automatic walks hold: the Work queue holds an item the operator staged ("Add a webhook retry policy")',
+			),
 			infoLine("automatic walks hold: the Work queue holds a waiting row"),
 		]);
+		state.close();
+	});
+
+	/**
+	 * The question this issue's title asks (issue #223 review): a run with more than
+	 * one ticket in play has to say which owed start the hold blocked, not only that
+	 * a hold happened. The walk holds the standing row in hand when its gate
+	 * answers, so the line names that row, and a later cycle that waits behind a
+	 * different row is a different fact that states itself again.
+	 */
+	test("the hold names the row it waits behind, and a different row is a new fact", async () => {
+		const { state, lines, coordinator } = continuationRecordRig();
+		queueRow(state, "github:github.com:I_6", "workflow", true);
+		await coordinator.tick();
+		const first = [...lines];
+		expect(first[0]).toEqual(
+			infoLine(
+				'automatic walks hold: the Work queue already holds a continuation ("Add a webhook retry policy")',
+			),
+		);
+		// The same row stands: the fact says nothing again.
+		await coordinator.tick();
+		expect(lines).toEqual(first);
+		// The row leaves, and the row that stands next belongs to another ticket.
+		expect(state.workQueue.removeWorkItem("github:github.com:I_6")).toBe(true);
+		queueRow(state, "github:github.com:I_5", "workflow", true);
+		await coordinator.tick();
+		expect(lines[first.length]).toEqual(
+			infoLine(
+				'automatic walks hold: the Work queue already holds a continuation ("Persist source facts")',
+			),
+		);
 		state.close();
 	});
 
@@ -6125,6 +6220,40 @@ describe("the automatic walks state their holds in the record (issue #223)", () 
 		await coordinator.tick();
 		await coordinator.tick();
 		expect(lines).toHaveLength(standing.length + 3);
+		state.close();
+	});
+
+	/**
+	 * The mode is the fact the operator sets by key, and the cycle reads it on every
+	 * poll (issue #223 review). Moving it mid-run is how the operator's `a` moves it:
+	 * the hold states itself for every move, and stays silent while the mode stands.
+	 */
+	test("a mode that moves mid-run states its hold again, and holds its silence between", async () => {
+		const { state, lines, coordinator, setAutoMode } = recordRig();
+		const modeHolds = () => lines.filter((line) => line.message.includes("auto-handoff is off"));
+		// Auto-handoff on and nothing standing: the walks hold nothing, so the file
+		// carries no mode hold line at all.
+		await coordinator.tick();
+		expect(modeHolds()).toEqual([]);
+		setAutoMode(false);
+		await coordinator.tick();
+		expect(modeHolds()).toEqual([infoLine("automatic walks hold: auto-handoff is off")]);
+		// The mode stands off across the next polls: one line for the fact, not one
+		// per poll.
+		await coordinator.tick();
+		await coordinator.tick();
+		expect(modeHolds()).toHaveLength(1);
+		// The operator flips the mode back on, and back off: the fact left and came
+		// back, so it states itself again.
+		setAutoMode(true);
+		await coordinator.tick();
+		expect(modeHolds()).toHaveLength(1);
+		setAutoMode(false);
+		await coordinator.tick();
+		expect(modeHolds()).toEqual([
+			infoLine("automatic walks hold: auto-handoff is off"),
+			infoLine("automatic walks hold: auto-handoff is off"),
+		]);
 		state.close();
 	});
 

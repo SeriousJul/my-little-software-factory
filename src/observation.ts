@@ -85,11 +85,12 @@ import {
 	type Ticket,
 } from "./domain/ticket.ts";
 import {
-	AUTOMATIC_HOLD_LINES,
-	type AutomaticHoldReason,
-	automaticAddsHoldReason,
-	continuationHoldReason,
-	freshWorkHoldReason,
+	type AutomaticHold,
+	automaticAddsHold,
+	automaticHoldKey,
+	automaticHoldLine,
+	continuationHold,
+	freshWorkHold,
 	openTicketRowGate,
 	openTicketWaitsHold,
 	restartCandidateHolds,
@@ -113,6 +114,7 @@ import type { HandoffAggregate, HandoffTicket } from "./state/handoff.ts";
 import type { PlaneActionAggregate } from "./state/plane-action.ts";
 import type { TicketProjection, TicketWorkCycleAggregate } from "./state/ticket-work-cycle.ts";
 import type { WorkQueueAggregate } from "./state/work-queue.ts";
+import { workQueueIdentityOf } from "./state/work-queue.ts";
 import {
 	isHeldCause,
 	lastMessageFromLog,
@@ -564,14 +566,15 @@ export class ObservationCoordinator {
 	 */
 	private readonly holdReports = new Map<string, string>();
 	/**
-	 * The automatic-walk holds this cycle noted, and the set the last cycle noted
+	 * The automatic-walk holds this cycle noted, and the keys the last cycle stated
 	 * (issue #223). The holds are derived every cycle and never stored; these two
-	 * sets only tell a standing fact from a new one, the way the Dispatch pause
-	 * line and the held Next step line remember their last report, so a hold
-	 * states itself once while it stands and not once per poll.
+	 * only tell a standing fact from a new one, the way the Dispatch pause line and
+	 * the held Next step line remember their last report, so a hold states itself
+	 * once while it stands and not once per poll. The key is the fact and the row it
+	 * names (`automaticHoldKey`), so a hold behind a different row is a new fact.
 	 */
-	private automaticHolds = new Set<AutomaticHoldReason>();
-	private automaticHoldsReported = new Set<AutomaticHoldReason>();
+	private automaticHolds = new Map<string, AutomaticHold>();
+	private automaticHoldsReported = new Set<string>();
 	/**
 	 * The agents of the last successful list, for the UI's markers. Null
 	 * until the first success: an unreadable herdr must not read as "every
@@ -686,8 +689,9 @@ export class ObservationCoordinator {
 
 	private async cycle(): Promise<void> {
 		// A cycle notes the holds its walks take and states them when its walks
-		// are done; a cycle that never reached that point keeps no note.
-		this.automaticHolds = new Set();
+		// are done; a cycle that never reached that point keeps no note, and the
+		// facts it acted on state themselves next cycle as new ones.
+		this.automaticHolds = new Map();
 		const probe = await this.herdr.listAgents();
 		// The probe can outlive the app: stop() during it must not touch the
 		// state or the UI anymore.
@@ -1475,6 +1479,14 @@ export class ObservationCoordinator {
 	 * closes the gap states its own routing line over this one; a standing warning
 	 * would pin the Message line and ring the desktop for a condition the machine
 	 * resolves on its own.
+	 *
+	 * The same fact leaves one line in the plane's record (issue #223). The Message
+	 * line is gone by the time anyone reads the file, so a gated Next step was the
+	 * one automatic hold a reviewer could not see after the run: the file showed the
+	 * start that never came and nothing about the gate that held it. The record line
+	 * names the ticket the way the record's other lines name it, and the gate in
+	 * parentheses the way every refusal line names its fact. One dedupe serves both
+	 * outlets: the fact states itself once, on each outlet, while it stands.
 	 */
 	private reportHeldNextStep(ticket: HandoffTicket, step: NextStep): void {
 		if (step.gate === null) return;
@@ -1485,6 +1497,16 @@ export class ObservationCoordinator {
 		this.onStatus(
 			"info",
 			`ticket ${ticket.ticketIdentity} holds its Next step ${step.taskType}${where}: ${NEXT_STEP_GATE_LINES[step.gate]}`,
+		);
+		// The name read runs only for a hold the record has not stated yet, so a
+		// hold that stands across the whole run costs no projection read at the
+		// poll's cadence.
+		this.log.info(
+			`next step held: ${this.ticketName(ticket.ticketIdentity)} ${step.taskType}` +
+				(step.ticketIdentity === ticket.ticketIdentity
+					? ""
+					: ` on ${this.ticketName(step.ticketIdentity)}`) +
+				` (${NEXT_STEP_GATE_LINES[step.gate]})`,
 		);
 	}
 
@@ -1576,7 +1598,7 @@ export class ObservationCoordinator {
 		// the gate below reads them, and no walk asks the queue for one Ticket's
 		// fact of its own.
 		const queueItems = this.state.workQueue.items();
-		const gate = automaticAddsHoldReason(this.cycleFacts());
+		const gate = automaticAddsHold(this.cycleFacts());
 		if (gate !== null) {
 			this.noteAutomaticHold(gate);
 			return false;
@@ -1584,9 +1606,11 @@ export class ObservationCoordinator {
 		// The row this add waits behind: a Workflow route row the queue already
 		// holds. The hold names that row's staging, because the origin cannot tell
 		// the two apart - the operator's route and the factory's continuation are
-		// both `workflow` (issue #223).
-		const held = continuationHoldReason(
+		// both `workflow` (issue #223) - and names the row itself, so the record says
+		// which owed start the hold blocked (issue #223 review).
+		const held = continuationHold(
 			queueItems.map((item) => ({
+				identity: workQueueIdentityOf(item),
 				continuation: item.kind !== "consultation" && item.origin === "workflow",
 				automatic: item.kind !== "consultation" && item.automatic,
 			})),
@@ -1756,8 +1780,8 @@ export class ObservationCoordinator {
 	 * (`reportAutomaticHolds`), so a cycle that holds at two gates at once states
 	 * each of them once, and not twice per poll.
 	 */
-	private noteAutomaticHold(reason: AutomaticHoldReason): void {
-		this.automaticHolds.add(reason);
+	private noteAutomaticHold(hold: AutomaticHold): void {
+		this.automaticHolds.set(automaticHoldKey(hold), hold);
 	}
 
 	/**
@@ -1768,20 +1792,28 @@ export class ObservationCoordinator {
 	 * fact the cycle acted on - the mode, the queue pause, the Dispatch pause, a
 	 * continuation already standing, a row the operator staged, or a row already in
 	 * the queue - in the words the gate rule owns, so a reviewer can tell a correct
-	 * hold from a broken one.
+	 * hold from a broken one. A hold that waits behind a standing row names that
+	 * row, so the record answers which owed start the hold blocked and not only
+	 * that a hold happened.
 	 *
 	 * One line per standing fact, the way a held Next step states itself
 	 * (`reportHeldNextStep`): the holds are re-derived on every poll, and a fact
 	 * that stood last cycle too says nothing again. A fact that left and came back,
-	 * or a new fact the cycle reached, states itself once more.
+	 * a new fact the cycle reached, or the same fact behind a different row states
+	 * itself once more.
+	 *
+	 * The name read for a standing row runs here and not where the walk noted the
+	 * hold, so a fact that stands across a hundred polls costs no read at the poll's
+	 * cadence. A cycle that throws between its walks and this report keeps no note:
+	 * its holds state themselves on the next cycle that reaches here.
 	 */
 	private reportAutomaticHolds(): void {
-		for (const reason of this.automaticHolds) {
-			if (this.automaticHoldsReported.has(reason)) continue;
-			this.log.info(AUTOMATIC_HOLD_LINES[reason]);
+		for (const [key, hold] of this.automaticHolds) {
+			if (this.automaticHoldsReported.has(key)) continue;
+			this.log.info(automaticHoldLine(hold, (identity) => this.ticketName(identity)));
 		}
-		this.automaticHoldsReported = this.automaticHolds;
-		this.automaticHolds = new Set();
+		this.automaticHoldsReported = new Set(this.automaticHolds.keys());
+		this.automaticHolds = new Map();
 	}
 
 	/**
@@ -1797,7 +1829,7 @@ export class ObservationCoordinator {
 		// the pace gate needs the depth, and every walk needs the fact of whether
 		// an item already stands for the candidate it holds.
 		const queueItems = this.state.workQueue.items();
-		const hold = freshWorkHoldReason({ ...this.cycleFacts(), queueDepth: queueItems.length });
+		const hold = freshWorkHold({ ...this.cycleFacts(), queueDepth: queueItems.length });
 		if (hold !== null) {
 			this.noteAutomaticHold(hold);
 			return false;

@@ -4308,4 +4308,105 @@ describe("the record lines", () => {
 		expect(refusals()).toEqual([recovery(), recovery()]);
 		mod.stop();
 	});
+
+	/**
+	 * The same cadence when no claim ever came through this module (issue #223
+	 * review). The stale claim settles outside the dispatch - a restart's recovery,
+	 * the observation cycle's reclaim - and another path claims again. The reason is
+	 * word for word the one already stated, but it stands on a new claim, and a
+	 * record that keyed on the reason alone would go silent on a genuinely new
+	 * refusal. The attempt ledger is what tells the two apart.
+	 */
+	test("a claim that settled elsewhere makes the next refusal a new fact", async () => {
+		const rigRef = rig([FIRST]);
+		const lines: RecordedLine[] = [];
+		const hold = gatedRunner(rigRef.runner, () => true);
+		const mod = withRunner(rigRef, hold.runner, { log: recordLogger(lines) });
+		rigRef.dispatch = mod;
+		await expect(start(rigRef, FIRST, "open")).resolves.toMatchObject({ ok: true });
+		const recovery = () =>
+			warnLine(
+				`handoff refused: "${FIRST.title}" (handoff recovery is required before another handoff)`,
+			);
+		const refusals = () => lines.filter((line) => line.message.startsWith("handoff refused:"));
+		// The standing fact: the same unresolved claim, refused again and again.
+		await expect(start(rigRef, FIRST, "open")).resolves.toMatchObject({ ok: false });
+		await expect(start(rigRef, FIRST, "open")).resolves.toMatchObject({ ok: false });
+		expect(refusals()).toEqual([recovery()]);
+		// The stale claim settles outside the dispatch, and a start the dispatch never
+		// ran claims again - the shape of the observation cycle's reclaim of a stale
+		// pane. Nothing here went through the dispatch's own claim path.
+		expect(rigRef.state.handoff.recoverUnsettledHandoffs()).toBe(1);
+		const otherClaim = rigRef.state.handoff.claimHandoff(FIRST.identity, liveChoice, "open");
+		expect(otherClaim.ok).toBe(true);
+		// The next ask meets the same words over a new claim: a new fact, and it
+		// states itself.
+		await expect(start(rigRef, FIRST, "open")).resolves.toMatchObject({ ok: false });
+		expect(refusals()).toEqual([recovery(), recovery()]);
+		// And it stands: the same claim refused again says nothing more.
+		await expect(start(rigRef, FIRST, "open")).resolves.toMatchObject({ ok: false });
+		expect(refusals()).toHaveLength(2);
+		mod.stop();
+	});
+
+	/**
+	 * The record's entry follows its row (issue #223 review). Every removal this
+	 * module runs drops the entry, and an enqueue drops it too, but a row can leave
+	 * through another aggregate and a new row can land without the dispatch's own
+	 * enqueue - the App's route removal at a close, a cross-boundary drop. The pickup
+	 * pass the observation cycle asks for on every poll sweeps the entries whose row
+	 * is gone, so the entry stands while the row stands and no longer, and the set
+	 * stays bounded to the rows that stand.
+	 */
+	test("the pickup pass drops the entry of a row that no longer stands", async () => {
+		const rigRef = rig([FIRST]);
+		const lines: RecordedLine[] = [];
+		const hold = gatedRunner(rigRef.runner, () => true);
+		const mod = withRunner(rigRef, hold.runner, {
+			log: recordLogger(lines),
+			// The cap is full, so every ask here only reaches the queue's rules.
+			seatCount: () => rigRef.config.maxParallelAgents,
+		});
+		rigRef.dispatch = mod;
+		await expect(start(rigRef, FIRST, "open")).resolves.toMatchObject({ ok: true });
+		const continuationAsk = () =>
+			mod.dispatch({
+				origin: "workflow",
+				ticketIdentity: FIRST.identity,
+				choice: liveChoice,
+				previousMessage: "",
+				automatic: true,
+			});
+		const standingRow = () =>
+			warnLine(
+				`handoff refused: "${FIRST.title}" (already has a waiting queue item; the first item keeps its place)`,
+			);
+		const refusals = () =>
+			lines.filter(
+				(line) =>
+					line.message.startsWith("handoff refused:") &&
+					line.message.includes("already has a waiting queue item"),
+			);
+		await expect(continuationAsk()).resolves.toMatchObject({ ok: false });
+		await expect(continuationAsk()).resolves.toMatchObject({ ok: false });
+		expect(refusals()).toEqual([standingRow()]);
+		// The row leaves through the queue's own aggregate, and a new row lands there
+		// too: neither write runs through the dispatch, and no enqueue of this module
+		// drops the entry. Only the pass does.
+		expect(rigRef.state.workQueue.removeWorkItem(FIRST.identity)).toBe(true);
+		expect(await mod.pickupWorkQueue()).toBe(0);
+		const enqueued = rigRef.state.workQueue.enqueueWork({
+			ticketIdentity: FIRST.identity,
+			routeFromIdentity: null,
+			origin: "open",
+			choice: liveChoice,
+			previousMessage: "",
+			automatic: false,
+		});
+		expect(enqueued.ok).toBe(true);
+		// The row that stands now is a new fact, and it states itself.
+		await expect(continuationAsk()).resolves.toMatchObject({ ok: false });
+		expect(refusals()).toEqual([standingRow(), standingRow()]);
+		mod.stop();
+	});
 });

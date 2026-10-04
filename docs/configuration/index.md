@@ -496,14 +496,21 @@ The file states a standing-row refusal once for the row that stands, not once
 per ask. The automatic walks re-ask every observation cycle while the row
 stands, and a five-second poll cannot pin the file with the same refusal; a row
 that leaves the queue and a later row for the same ticket are two facts, and
-each states itself (issue #223).
+each states itself (issue #223). The entry follows its row: every removal the
+dispatch runs drops it, an enqueue drops it, and the Work queue's pickup pass -
+which the observation cycle asks for on every poll - sweeps the entries whose row
+is gone, so a row that left through another aggregate's write is covered too
+(issue #223 review).
 
 The same rule covers a refused claim. The gates that refuse a start answer the
 same way every cycle the walks re-ask the same position, so one refused claim
 states itself once too, and states itself again when the fact moves: another
-reason, or a claim that went through and met a refusal afterwards. The two start
-channels keep their own fact, so a `merge refused:` line never answers for a
-`handoff refused:` one (issue #223).
+reason, or the same reason over an attempt ledger that moved. The ledger is what
+tells a new refusal from a repeat: a stale claim can settle outside the dispatch
+- a restart's recovery, the reclaim of a stale pane - and the next refusal behind
+a new claim is a new fact even when no claim ever came through the dispatch
+(issue #223 review). The two start channels keep their own fact, so a
+`merge refused:` line never answers for a `handoff refused:` one (issue #223).
 
 The observation cycle states each hold its automatic walks take, once for as long
 as the fact stands and again when the fact changes, so a run that started nothing
@@ -518,16 +525,42 @@ automatic walks hold: the Work queue holds an item the operator staged
 automatic walks hold: the Work queue holds a waiting row
 ```
 
+A hold that waits behind a standing row names that row in parentheses:
+
+```text
+automatic walks hold: the Work queue already holds a continuation ("Persist the source facts")
+automatic walks hold: the Work queue holds an item the operator staged ("Add a webhook retry policy")
+```
+
 The two lines about a standing row name whose row it is, because the origin
 cannot: the row your own route decision left in the queue and the row the
 factory owes for a settled turn are both `workflow`. Either one holds the next
 continuation out while it stands (issue #230). The rank ADR 0100 gives the owed
 continuation is its place in the queue's order - ahead of a row that queued
-earlier - not a pass through a row that already stands.
+earlier - not a pass through a row that already stands. The line names the row
+itself too, because a run with more than one ticket in play has to say which
+owed start the hold blocked and not only that a hold happened; a later hold
+behind a different row is a new fact and states itself again (issue #223
+review). The other holds stay bare: no row is picked where their gate stands.
 
 The third line names the queue's depth rather than a staging, because the gate
 it states holds on any row at all, a Consultation row included. The staging of
 the row that stands is what the `handoff queued:` line beside it already says.
+
+A settled turn's Next step that a gate holds leaves its own line, beside the
+Message line it has always reached (issue #223). The Message line is gone by the
+time anyone reads the file, and without this line the record carries the start
+that never came and nothing about the gate that held it:
+
+```text
+next step held: "Persist the source facts" review (the position no longer offers the task)
+next step held: "Persist the source facts" review on "Add a webhook retry policy" (the position no longer offers the task)
+```
+
+The line names the settled turn, the task the position offers, the position the
+step stands on when that is not the settled turn, and the gate in parentheses -
+the same gate sentence the Decision screen states in manual mode. It states
+itself once while the hold stands, on both outlets.
 
 Auto-handoff mode and the Work queue pause are the two facts you set by key, and
 each flip states itself under its own prefix, so a grep for one family does not
@@ -542,10 +575,12 @@ queue: the Work queue resumed
 
 A mode flip the state file refused states itself as what it is - the line lands
 beside the Message line that names the state file it could not write, and the
-next run reads the mode the file still holds:
+next run reads the mode the file still holds. A plane running with no state file
+states the same limit, because nothing will read the flip back:
 
 ```text
 mode: auto-handoff is on for this session only: cannot store the Auto-handoff mode at /path/to/state.sqlite: Error: no such table: auto_handoff_mode
+mode: auto-handoff is on for this session only: the plane runs with no state file
 ```
 
 Every line above carries its own level, and the filter keeps or drops it. The

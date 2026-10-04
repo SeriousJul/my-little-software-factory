@@ -1830,9 +1830,11 @@ export function App({
 		const modeLine = `mode: auto-handoff is ${next ? "on" : "off"}`;
 		const sessionOnly = `auto-handoff is ${next ? "on" : "off"} for this session only`;
 		// The mode decides every automatic walk in the run, so the record names it
-		// when it moves. A plane with no state file has nothing to persist.
+		// when it moves. A plane with no state file has nothing to persist, and the
+		// record says so: a file that claims the mode moved while no run reads it back
+		// is the same untrustworthy line a refused write leaves (issue #223 review).
 		if (state === undefined) {
-			logger?.info(modeLine);
+			logger?.info(`${modeLine} for this session only: the plane runs with no state file`);
 			return;
 		}
 		try {

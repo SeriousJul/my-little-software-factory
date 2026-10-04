@@ -148,7 +148,9 @@ description: The module map of the source tree, for agents working in this repos
 	and the open ticket's row gate and its waits. It owns the fact each hold acted
 	on and the one sentence the cycle states that hold in, so a walk that added
 	nothing names its own reason in the record, and the reason for a held
-	continuation names the staging of the row it waits behind (issue #223). The row
+	continuation names the staging of the row it waits behind and that row itself,
+	so the record answers which owed start the hold blocked (issue #223, issue #223
+	review). The row
 	a continuation must not jump is a Workflow route row already standing, the row
 	an operator's own route decision left there included (issue #230).
 	`queue-staging.ts` holds the staging - the one name the `handoff queued:` and

@@ -79,6 +79,7 @@ that way, not by its place in the queue.
 - The Work queue screen still shows the order the pickup will take the rows in, and
   that order can now put a machine-owed row above a row the operator staged. The
   row's detail names who asked for it.
+
 ## Amendment: what "a continuation already stands" counts
 
 Date: 2026-10-05
@@ -99,9 +100,10 @@ that already stands is never overtaken by a row that has not entered. A row the
 operator wants started ahead of a standing one keeps the queue pause, Enter on its
 row, and the force-dispatch.
 
-**The hold line keeps naming whose row stands.** `continuationHoldReason` answers
+**The hold line keeps naming whose row stands.** `continuationHold` answers
 `continuation-standing` for the factory's own row and `operator-row-standing` for the
 operator's, because the origin names both `workflow` and a record that calls the
 operator's row a continuation names a fact the row is not (issue #223). The staging
 is a fact that answer reads, so `ContinuationRowFacts` carries it beside the
-`continuation` fact the hold itself rests on.
+`continuation` fact the hold itself rests on, and the row's identity, so the line
+names the row the walk waits behind.
