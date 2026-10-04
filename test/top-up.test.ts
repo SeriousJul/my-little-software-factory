@@ -100,20 +100,20 @@ describe("the gates every automatic add reads (ADR 0051, ADR 0052, ADR 0016)", (
 	});
 });
 
-describe("the row a continuation must not jump (ADR 0051, ADR 0094)", () => {
+describe("the row a continuation must not jump (ADR 0051, ADR 0094, ADR 0100)", () => {
 	test("an empty queue, or a queue of fresh work alone, holds nothing", () => {
 		expect(continuationQueueHolds([])).toBe(false);
-		expect(
-			continuationQueueHolds([
-				{ operatorStaged: false, continuation: false },
-				{ operatorStaged: false, continuation: false },
-			]),
-		).toBe(false);
+		expect(continuationQueueHolds([{ continuation: false }, { continuation: false }])).toBe(false);
 	});
 
-	test("the operator's staging, and a continuation already standing, hold the add", () => {
-		expect(continuationQueueHolds([{ operatorStaged: true, continuation: false }])).toBe(true);
-		expect(continuationQueueHolds([{ operatorStaged: false, continuation: true }])).toBe(true);
+	test("only a continuation already standing holds the add (ADR 0100)", () => {
+		// The operator's staging is no longer a fact this rule reads: the seat a
+		// settling turn freed belongs to that turn's own next step, and the
+		// operator's row waits for the next seat. The queue's own pace - one
+		// continuation - still holds. `test/observation.test.ts` and
+		// `test/auto-handoff-chain.test.ts` carry the staged-row case.
+		expect(continuationQueueHolds([{ continuation: false }])).toBe(false);
+		expect(continuationQueueHolds([{ continuation: true }])).toBe(true);
 	});
 });
 

@@ -146,7 +146,7 @@ export class PlaneActionModule implements PlaneActionAggregate {
 	/**
 	 * The blocked attempt's hold (ADR 0077). The rule itself is the shared
 	 * blocked-and-unrefreshed rule the Handoff aggregate reads the same way over
-	 * its own attempt table (ADR 0100); this aggregate supplies the newest
+	 * its own attempt table (ADR 0101); this aggregate supplies the newest
 	 * attempt and the word `blocked`.
 	 */
 	planeActionBlockedUnrefreshed(identity: string): boolean {

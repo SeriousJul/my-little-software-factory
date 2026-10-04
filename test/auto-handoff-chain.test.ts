@@ -820,4 +820,93 @@ describe("the seat a settling turn frees (the dev-run miss on PR #206)", () => {
 		]);
 		state.close();
 	});
+
+	test("the settled turn's continuation takes the freed seat ahead of the row the operator staged", async () => {
+		// The dev-run miss on PR #215: one seat, the chain's turn in flight, and
+		// the row standing in the queue is the operator's own staging of a fresh
+		// ticket, not the factory's fresh work. The chain's turn ends, and the seat
+		// it freed went to the operator's row while the review the settled turn owed
+		// never ran and its workspace stood open.
+		const chain = chainRig({ maxParallelAgents: 1, liveSeats: true });
+		const { state, coordinator } = chain;
+		chain.landPulls(pullTicket(["ready-for-review"]), reworkPullTicket());
+
+		const runningAttempt = chain.seedRunningTurn(pullIdentity, "rework");
+		chain.setAgents([
+			{
+				paneId: `pane-${pullIdentity}`,
+				tabId: "tab-1",
+				workspaceId: "ws-1",
+				sessionId: "",
+				agent: "pi",
+				status: "working",
+			},
+		]);
+
+		// The operator stages the fresh ticket by hand while the seat is full.
+		expect(
+			state.workQueue.enqueueWork({
+				ticketIdentity: otherPullIdentity,
+				origin: "open",
+				choice: {
+					agentType: "pi",
+					environment: "worktree",
+					taskType: "rework",
+					model: "",
+					thinking: "",
+					contextWindow: "",
+				},
+				previousMessage: "",
+			}),
+		).toEqual({ ok: true });
+
+		// Cycle 1: the seat is full with the chain's running rework, and the queue
+		// holds the operator's row.
+		await coordinator.tick();
+		expect(state.workQueue.items()).toEqual([
+			expect.objectContaining({
+				kind: "handoff",
+				origin: "open",
+				automatic: false,
+				ticketIdentity: otherPullIdentity,
+			}),
+		]);
+
+		// The chain's turn ends, and its agent is gone: the seat stands free, and
+		// the review stands on the chain's own pull request.
+		const reworkRun = await chain.settleRunningTurnWithFire(pullIdentity, "rework", runningAttempt);
+		expect(reworkRun).toMatchObject({
+			fired: true,
+			positionTaskType: "review",
+			positionTicketIdentity: pullIdentity,
+		});
+		chain.setAgents([]);
+
+		// Cycle 2: the freed seat, and the two asks for it.
+		await coordinator.tick();
+		await chain.awaitHandoffInFlight();
+
+		// The seat the settling turn freed goes to that turn's own next step, and
+		// the row the operator staged is the one that waits (ADR 0100).
+		expect(chain.handoffAsks).toContainEqual(
+			expect.objectContaining({
+				origin: "workflow",
+				automatic: true,
+				ticketIdentity: pullIdentity,
+				routeFromIdentity: pullIdentity,
+				choice: expect.objectContaining({ taskType: "review" }),
+			}),
+		);
+		expect(state.handoff.openAttemptTickets()).toEqual([pullIdentity]);
+		expect(
+			state.workQueue.items().map((item) => {
+				if (item.kind !== "handoff") throw new Error("the queue holds no handoff item");
+				return [item.ticketIdentity, item.origin, item.automatic];
+			}),
+		).toEqual([
+			[pullIdentity, "workflow", true],
+			[otherPullIdentity, "open", false],
+		]);
+		state.close();
+	});
 });

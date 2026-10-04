@@ -944,7 +944,7 @@ describe("the claim, the settle, and every origin", () => {
 		const rigRef = rig();
 		// The factory's own start ran and never reached its Agent: the attempt
 		// stands `failed`, unrefreshed, and that is the fact the top-up's hold
-		// reads (ADR 0100, issue #217).
+		// reads (ADR 0101, issue #217).
 		rigRef.runner.set("herdr", ["workspace", "list"], {
 			code: 1,
 			stderr: "the worktree build failed",

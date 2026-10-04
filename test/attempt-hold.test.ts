@@ -1,6 +1,6 @@
 /**
  * The blocked-and-unrefreshed rule both attempt holds read (ADR 0077 as extended
- * by ADR 0100, issue #217).
+ * by ADR 0101, issue #217).
  *
  * Two things are measured here. The rule's own truth table, so the decision a
  * Ticket's newest attempt makes is testable without a cycle, an Agent, or a state
@@ -36,7 +36,7 @@ function facts(over: Partial<AttemptHoldFacts> = {}): AttemptHoldFacts {
 	};
 }
 
-describe("the blocked-and-unrefreshed rule (ADR 0077, ADR 0100)", () => {
+describe("the blocked-and-unrefreshed rule (ADR 0077, ADR 0101)", () => {
 	test("an attempt that never reached its work, and no read since, holds", () => {
 		expect(blockedUnrefreshedHold(facts())).toBe(true);
 		// A source that has never read at all cannot carry the move either.
@@ -105,7 +105,7 @@ describe("the blocked-and-unrefreshed rule (ADR 0077, ADR 0100)", () => {
 	});
 });
 
-describe("the two holds read one rule (ADR 0077, ADR 0100)", () => {
+describe("the two holds read one rule (ADR 0077, ADR 0101)", () => {
 	/**
 	 * One Ticket with both kinds of attempt landed at 11:00: a Handoff whose
 	 * Agent never started, and a Plane action the source blocked. The source's

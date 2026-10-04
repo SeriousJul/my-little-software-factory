@@ -552,7 +552,7 @@ describe("the handoff aggregate", () => {
 		).toEqual(
 			expect.objectContaining({
 				state: "open",
-				// The attempt ledger, not the started-handoff table (ADR 0100): the
+				// The attempt ledger, not the started-handoff table (ADR 0101): the
 				// two closed cycles and the claim this test left unresolved. No reclaim
 				// added a row of its own.
 				handoffCount: 3,
@@ -804,7 +804,7 @@ describe("the handoff aggregate", () => {
 
 /**
  * The failed start's hold, and the start count the Handoff limit reads
- * (ADR 0077 as extended by ADR 0100, issue #217).
+ * (ADR 0077 as extended by ADR 0101, issue #217).
  *
  * The state clock stands at 11:00 so an attempt's own time is the fixture's, and
  * the source's last read stands at 10:01 until a test re-reads the Ticket.
@@ -830,7 +830,7 @@ function failAnotherStart(state: FactoryState, reason: string): void {
 	state.handoff.settleHandoff(claim.claim.attemptId, false, reason);
 }
 
-describe("the failed start's hold (ADR 0077, ADR 0100)", () => {
+describe("the failed start's hold (ADR 0077, ADR 0101)", () => {
 	test("a failed start reads as unrefreshed until the source re-reads the Ticket", () => {
 		const state = failedStartState();
 		// The last successful read of the Ticket's source (10:01) stands before
@@ -915,7 +915,7 @@ describe("the failed start's hold (ADR 0077, ADR 0100)", () => {
 	});
 });
 
-describe("the Handoff limit counts every attempt (ADR 0005, ADR 0100)", () => {
+describe("the Handoff limit counts every attempt (ADR 0005, ADR 0101)", () => {
 	test("a start that never reached an Agent counts beside one that did", () => {
 		const state = failedStartState();
 		// The failed start wrote an attempt row and no handoff row: the count the

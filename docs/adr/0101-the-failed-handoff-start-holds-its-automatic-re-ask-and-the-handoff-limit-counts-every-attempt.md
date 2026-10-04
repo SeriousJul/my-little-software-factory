@@ -1,4 +1,4 @@
-# ADR 0100: The failed Handoff start holds its automatic re-ask, and the Handoff limit counts every attempt
+# ADR 0101: The failed Handoff start holds its automatic re-ask, and the Handoff limit counts every attempt
 
 Status: accepted
 Date: 2026-10-04

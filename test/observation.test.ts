@@ -1969,14 +1969,13 @@ describe("the awaiting rule", () => {
 		});
 
 		/**
-		 * A queue that holds one row stops the top-up at its depth gate, so the
-		 * per-ticket guard inside the walk is never reached from a cycle the
-		 * queue already holds an item in. This walk pins the gate that holds the
-		 * row instead: the operator's waiting start keeps the position, and the
-		 * top-up adds nothing behind it.
+		 * ADR 0100 moves the gate: the queue's depth is no longer the continuation's
+		 * hold, so the walk reaches the per-ticket rule inside the dispatch. The row
+		 * the operator staged for the position stands, the walk asks its route, and
+		 * the one-item-per-ticket rule is what refuses the add.
 		 */
-		test("a waiting queue item holds the whole top-up, the position included", async () => {
-			const { state, intents, coordinator } = continuationRig();
+		test("a standing row does not hold the continuation, and the position's own waiting row refuses the add", async () => {
+			const { state, intents, statuses, coordinator } = continuationRig();
 			expect(
 				state.workQueue.enqueueWork({
 					ticketIdentity: "github:github.com:I_6",
@@ -1987,11 +1986,26 @@ describe("the awaiting rule", () => {
 					automatic: false,
 				}).ok,
 			).toBe(true);
-			// The queue's depth is the top-up's pace (ADR 0051): no add runs while
-			// the operator's item waits, and the row stands untouched.
 			await coordinator.tick();
-			expect(intents).toEqual([]);
-			expect(state.workQueue.items()).toHaveLength(1);
+			// The walk asked: the queue's depth holds the fresh-work adds, not a
+			// continuation (ADR 0051, ADR 0094, ADR 0100).
+			expect(routes(intents)).toHaveLength(1);
+			// The refusal is the per-ticket rule's, and the row the operator staged
+			// stands untouched: the first item keeps its place.
+			expect(
+				state.workQueue.items().map((item) => {
+					if (item.kind !== "handoff") throw new Error("the queue holds no handoff item");
+					return [item.ticketIdentity, item.origin, item.automatic];
+				}),
+			).toEqual([["github:github.com:I_6", "open", false]]);
+			expect(
+				statuses.some(
+					(status) =>
+						status.kind === "warning" &&
+						status.text.includes("could not route") &&
+						status.text.includes("already has a waiting queue item"),
+				),
+			).toBe(true);
 			state.close();
 		});
 
@@ -3510,7 +3524,7 @@ describe("the open dispatch", () => {
 		state.close();
 	});
 
-	test("an item the operator staged holds the owed continuation", async () => {
+	test("an item the operator staged does not hold the owed continuation", async () => {
 		const { state, intents, coordinator } = rig({ autoOn: true, agents: [] });
 		state.sourceFact.applyFetch(
 			source,
@@ -3527,11 +3541,23 @@ describe("the open dispatch", () => {
 		).toEqual({ ok: true });
 		settleFor(state, "github:github.com:I_5", "route", routeOutcome("github:github.com:I_6"));
 		await coordinator.tick();
-		// The continuation waits behind the operator's staging: the queue holds the
-		// one item the operator asked for, and the cycle asked nothing (ADR 0051,
-		// ADR 0094).
-		expect(intents).toEqual([]);
-		expect(state.workQueue.items()).toHaveLength(1);
+		// The owed continuation outranks the operator's staging (ADR 0100): the
+		// settled turn's own next step is asked, and its row stands ahead of the
+		// row the operator staged.
+		expect(intents).toEqual([
+			expect.objectContaining({
+				origin: "workflow",
+				automatic: true,
+				ticketIdentity: "github:github.com:I_6",
+				routeFromIdentity: "github:github.com:I_5",
+			}),
+		]);
+		expect(
+			state.workQueue.items().map((item) => {
+				if (item.kind !== "handoff") throw new Error("the queue holds no handoff item");
+				return item.ticketIdentity;
+			}),
+		).toEqual(["github:github.com:I_6", "github:github.com:I_7"]);
 		state.close();
 	});
 
@@ -5760,7 +5786,7 @@ describe("the open dispatch: the pull request group (ADR 0088)", () => {
 });
 
 /**
- * The failed Handoff start's hold (ADR 0077 as extended by ADR 0100, issue #217).
+ * The failed Handoff start's hold (ADR 0077 as extended by ADR 0101, issue #217).
  *
  * The development install recorded this shape on three Tickets: one start that
  * never reached its Agent, asked again on every observation cycle, 9,365 times
@@ -5768,7 +5794,7 @@ describe("the open dispatch: the pull request group (ADR 0088)", () => {
  * claim ran, herdr refused the Agent, and the attempt settled `failed` with no
  * Handoff under it.
  */
-describe("the failed Handoff start's hold (ADR 0077 as extended by ADR 0100, issue #217)", () => {
+describe("the failed Handoff start's hold (ADR 0077 as extended by ADR 0101, issue #217)", () => {
 	const failure = "Preparing worktree: the worktree path already exists";
 
 	/** One open Ticket, and the automatic start on it that started no Agent. */

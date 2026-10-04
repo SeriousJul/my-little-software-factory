@@ -92,7 +92,7 @@ export interface HandoffAggregate {
 	 * The Ticket's start count the Handoff limit reads: every Handoff attempt the
 	 * factory made, the starts that reached an Agent and the starts that never
 	 * reached one, beside the Ticket's Plane action attempts (ADR 0005 as amended
-	 * by ADR 0100, issue #217).
+	 * by ADR 0101, issue #217).
 	 */
 	handoffCount(identity: string): number;
 	/**
@@ -105,7 +105,7 @@ export interface HandoffAggregate {
 	 * Whether the Ticket's newest Handoff attempt holds the auto top-up's re-ask
 	 * of that Ticket: the attempt settled `failed` - it started no Agent - and no
 	 * active source has re-read the Ticket since it landed (ADR 0077 as extended
-	 * by ADR 0100, issue #217). The hold gates the automatic adds only.
+	 * by ADR 0101, issue #217). The hold gates the automatic adds only.
 	 */
 	handoffBlockedUnrefreshed(identity: string): boolean;
 	autoHandoffMode(): boolean;
@@ -232,7 +232,7 @@ export class HandoffModule implements HandoffAggregate {
 		// The attempt ledger, not the started-handoff table: a start that never
 		// reached an Agent writes an attempt row and no handoff row, and the limit
 		// that bounds a run-away loop has to count the starts it is bounding
-		// (ADR 0100, issue #217).
+		// (ADR 0101, issue #217).
 		const row = this.db
 			.prepare("SELECT COUNT(*) AS count FROM handoff_attempts WHERE ticket_identity = ?")
 			.get(identity) as { count: number };
@@ -262,7 +262,7 @@ export class HandoffModule implements HandoffAggregate {
 		return counts;
 	}
 	/**
-	 * The failed start's hold (ADR 0077 as extended by ADR 0100, issue #217). The
+	 * The failed start's hold (ADR 0077 as extended by ADR 0101, issue #217). The
 	 * rule is the shared blocked-and-unrefreshed rule the Plane action aggregate
 	 * reads over its own attempt table; this aggregate supplies the newest
 	 * Handoff attempt and the word `failed`.

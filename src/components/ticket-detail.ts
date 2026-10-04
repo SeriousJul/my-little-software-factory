@@ -209,7 +209,7 @@ export function detailContent(
 	);
 	// The count the Handoff limit reads: every attempt the factory made, the
 	// starts that reached an Agent and the starts that never reached one
-	// (ADR 0100). The word is the attempt's, not the handoff's.
+	// (ADR 0101). The word is the attempt's, not the handoff's.
 	addLeft(`Handoff attempts: ${ticket.handoffCount}/${handoffLimit}`, paint("text"));
 	// The Source column: where the ticket comes from, the way the operator
 	// reads the source facts in one column.

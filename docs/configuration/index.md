@@ -427,7 +427,7 @@ host = "github.com"
 | `max-parallel-agents` | no | `2` | The one cap over all running work: the in-flight ticket seats and every Consultation in `opening` or `working`. `0` means unlimited. |
 | `agent-poll-interval-seconds` | no | `5` | Seconds between herdr polls. A positive number. |
 | `completion-message-lines` | no | `200` | Lines of the agent last message captured when a turn settles. A whole number of 1 or more. |
-| `max-handoffs-per-ticket` | no | `10` | Handoff attempts and plane action attempts per ticket after which auto-handoff stops dispatching it. An attempt that never started an Agent counts (ADR 0100). A manual handoff may pass the limit. |
+| `max-handoffs-per-ticket` | no | `10` | Handoff attempts and plane action attempts per ticket after which auto-handoff stops dispatching it. An attempt that never started an Agent counts (ADR 0101). A manual handoff may pass the limit. |
 | `attention-bell` | no | `true` | Ring the terminal bell when a Consultation settles. |
 | `desktop-notification` | no | `true` | Send a desktop notification per standing warning or error fact on the Message line, carrying the full text the line truncates. Switches independently of `attention-bell`. |
 | `interaction-exit-key` | no | `f12` | Exit Agent interaction mode. A function key `f1` to `f24`, or `ctrl` plus one letter. Not `ctrl+c`: the emergency exit owns that key. |

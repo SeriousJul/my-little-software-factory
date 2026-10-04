@@ -125,6 +125,40 @@ describe("the workQueue aggregate", () => {
 		]);
 		state.close();
 	});
+	test("an automatic continuation enters ahead of the row the operator staged (ADR 0100)", () => {
+		const state = openFactoryState(":memory:");
+		// The operator staged a fresh start while a seat was full. The row is the
+		// queue's first, and a settled turn now owes itself a route.
+		expect(
+			state.workQueue.enqueueWork({
+				ticketIdentity: "github:github.com:I_7",
+				origin: "open",
+				choice,
+				previousMessage: "",
+			}),
+		).toEqual({ ok: true });
+		expect(
+			state.workQueue.enqueueWork({
+				ticketIdentity: "github:github.com:I_5",
+				origin: "workflow",
+				choice,
+				previousMessage: "",
+				automatic: true,
+			}),
+		).toEqual({ ok: true });
+		// The owed start takes the head, and the operator's row waits behind it.
+		// The rows already standing keep their places relative to each other.
+		expect(
+			state.workQueue.items().map((item) => {
+				if (item.kind !== "handoff") throw new Error("the queue holds no handoff item");
+				return [item.ticketIdentity, item.origin, item.position, item.automatic];
+			}),
+		).toEqual([
+			["github:github.com:I_5", "workflow", 0, true],
+			["github:github.com:I_7", "open", 1, false],
+		]);
+		state.close();
+	});
 	test("a second enqueue for a waiting ticket is refused, and the first keeps its place", () => {
 		const state = openFactoryState(":memory:");
 		enqueue(state, "t1");
