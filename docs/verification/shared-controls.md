@@ -1374,6 +1374,18 @@ every frame the renderer captured inside one scroll window, so the count moves
 between runs - 15654, 15555, 15475, 15640, and 15720 assertions across five green
 runs of this change. The count is recorded as what it measured, not as a target.
 
+The CI gate flaked once on this change and the record names it. The first `checks`
+run failed `test/consultation-frame.test.ts` > "the settled Agent output stays
+visible until an accepted response opens the next turn" at 20380 ms, which is the
+harness wait timing out and not an assertion about the header. That file passes on
+its own on this branch (58 tests, 0 fail). The same shape already hit `main`'s own
+CI on the run for #215: "the Ticket detail keeps its scroll across a round trip
+through the other section" at 21062 ms. A retry of the same run on this branch
+passed every check. The runner is about twice as slow as the machine this work ran
+on (85 s against 38 s for the full suite), so the 20 s harness wait is the tight
+part. That is recorded as a load flake and as an open item of its own, not as a
+pass this change earned or a problem it fixed.
+
 The earlier entries in this record that measured the mode line - the held-turn
 frame's `auto: on 2/3 paused` among them - stand as history for the head they
 measured. They predate this move and no longer describe the current screen.
