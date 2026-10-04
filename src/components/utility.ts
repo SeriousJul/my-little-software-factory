@@ -4,9 +4,9 @@ import type { ReactElement } from "react";
 import { useEffect, useMemo, useState } from "react";
 import { useControlDispatch } from "./control-dispatch.ts";
 import {
+	type AvailabilityFacts,
+	availabilityFacts,
 	availabilityFor,
-	type ControlContext,
-	contextFor,
 	guideControls,
 	guideKeyLabel,
 	modeTitle,
@@ -52,8 +52,7 @@ function useClampedScroll(maxScroll: number) {
  * the Message view wires the Help control on F1.
  */
 function useUtilityKeys(
-	mode: "key-guide" | "message-view",
-	context: ControlContext,
+	facts: AvailabilityFacts,
 	handlers: {
 		close: () => void;
 		/** The Message control, on the guide's F2. */
@@ -65,8 +64,7 @@ function useUtilityKeys(
 	},
 ): void {
 	useControlDispatch({
-		mode,
-		context,
+		facts,
 		onEmergencyExit: handlers.emergencyExit,
 		handlers: {
 			"guide-close": handlers.close,
@@ -80,7 +78,7 @@ function useUtilityKeys(
 }
 
 interface KeyGuideProps {
-	context: ControlContext;
+	facts: AvailabilityFacts;
 	onClose: () => void;
 	onMessage?: () => void;
 	/** The Message fact the overlay's own Message line shows. */
@@ -88,12 +86,15 @@ interface KeyGuideProps {
 	onEmergencyExit: () => void;
 }
 
-export function KeyGuide({ context, onClose, onMessage, message, onEmergencyExit }: KeyGuideProps) {
+export function KeyGuide({ facts, onClose, onMessage, message, onEmergencyExit }: KeyGuideProps) {
 	const { width, height } = useTerminalDimensions();
-	const mode = context.mode;
+	const mode = facts.mode;
+	// The guide's own mode owns no rows, so it states no facts of its own
+	// beside the plane's standing facts.
+	const guideFacts = availabilityFacts("key-guide", facts, {});
 	// What the guide lists depends on the mode alone; what each row says about
-	// availability is read from the live context when the row renders.
-	const entries = useMemo(() => guideControls(context), [context]);
+	// availability is read from the live facts when the row renders.
+	const entries = useMemo(() => guideControls(facts), [facts]);
 	const frame = modalFrame(width, height, {
 		maxWidth: UTILITY_MAX_WIDTH,
 		maxHeight: UTILITY_MAX_HEIGHT,
@@ -101,15 +102,15 @@ export function KeyGuide({ context, onClose, onMessage, message, onEmergencyExit
 	const fullTitle = `Key guide - ${modeTitle(mode)}`;
 	const modalTitle = widthOf(fullTitle) <= frame.contentWidth ? fullTitle : "Key guide";
 	const rows = useMemo(
-		() => guideRows(entries, context, frame.contentWidth),
-		[entries, context, frame.contentWidth],
+		() => guideRows(entries, facts, frame.contentWidth),
+		[entries, facts, frame.contentWidth],
 	);
 	// The first row names the mode the guide catalogs; the rows below it scroll.
 	const visibleRows = Math.max(1, frame.contentRows - 1);
 	const { scroll, scrollBy } = useClampedScroll(Math.max(0, rows.length - visibleRows));
 	const visible = rows.slice(scroll, scroll + visibleRows);
 
-	useUtilityKeys("key-guide", context, {
+	useUtilityKeys(guideFacts, {
 		close: onClose,
 		message: () => onMessage?.(),
 		scroll: scrollBy,
@@ -141,7 +142,7 @@ export function KeyGuide({ context, onClose, onMessage, message, onEmergencyExit
 		message,
 		bar: {
 			mode: "key-guide",
-			context: contextFor("key-guide", context),
+			facts: guideFacts,
 			rangeIndicator: range,
 		},
 	});
@@ -155,13 +156,16 @@ interface MessageViewProps extends KeyGuideProps {
 
 export function MessageView({
 	fact,
-	context,
+	facts,
 	onClose,
 	onHelp,
 	message,
 	onEmergencyExit,
 }: MessageViewProps) {
 	const { width, height } = useTerminalDimensions();
+	// The Message view's own mode owns no rows, so it states no facts of its
+	// own beside the plane's standing facts.
+	const viewFacts = availabilityFacts("message-view", facts, {});
 	const frame = modalFrame(width, height, {
 		maxWidth: UTILITY_MAX_WIDTH,
 		maxHeight: UTILITY_MAX_HEIGHT,
@@ -179,7 +183,7 @@ export function MessageView({
 	const { scroll, scrollBy } = useClampedScroll(Math.max(0, wrapped.length - visibleRows));
 	const visible = wrapped.slice(scroll, scroll + visibleRows);
 
-	useUtilityKeys("message-view", context, {
+	useUtilityKeys(viewFacts, {
 		close: onClose,
 		help: onHelp,
 		scroll: scrollBy,
@@ -206,7 +210,7 @@ export function MessageView({
 		message,
 		bar: {
 			mode: "message-view",
-			context: contextFor("message-view", context),
+			facts: viewFacts,
 			rangeIndicator: range,
 		},
 	});
@@ -229,7 +233,7 @@ type GuideLine =
 
 function guideRows(
 	entries: ReturnType<typeof guideControls>,
-	context: ControlContext,
+	facts: AvailabilityFacts,
 	width: number,
 ): GuideLine[] {
 	const rows: GuideLine[] = [];
@@ -239,11 +243,11 @@ function guideRows(
 			group = entry.group;
 			rows.push({ kind: "group", group });
 		}
-		const isCurrent = entry.control.modes.includes(context.mode);
-		const availability = isCurrent ? availabilityFor(entry.control, context) : { available: true };
+		const isCurrent = entry.control.modes.includes(facts.mode);
+		const availability = isCurrent ? availabilityFor(entry.control, facts) : { available: true };
 		rows.push({
 			kind: "control",
-			keys: guideKeyLabel(context.mode, entry.control, context),
+			keys: guideKeyLabel(facts.mode, entry.control, facts),
 			label: entry.control.label,
 			// A control that is always available carries its guide note; a
 			// current-mode control carries its live unavailable reason. Other

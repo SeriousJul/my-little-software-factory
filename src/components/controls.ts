@@ -140,119 +140,14 @@ export interface ControlAvailability {
 	reason?: string;
 }
 
-export interface ControlContext {
-	mode: InteractionMode;
-	/** The Ticket the base panes point at, if the list holds one. */
-	selectedTicket?: Ticket;
-	/** The Consultation the base panes point at, if the list holds one. */
-	selectedConsultation?: Consultation;
-	/**
-	 * The Grouping axis in effect for the Ticket section's list (issue #159).
-	 *
-	 * The shell states it from the factory state it read at boot and the press
-	 * that moved it, and the axis control's hint names it, so the operator never
-	 * has to infer the split from the rows.
-	 */
-	groupingAxis?: GroupingAxis;
-	/**
-	 * The Group header the Ticket cursor stands on, or null when it stands on a
-	 * Ticket row (issue #159).
-	 *
-	 * The list states it from the row under the cursor, and the fold control
-	 * gates on it: `Space` folds the Group under a header and answers nothing
-	 * anywhere else, and the Action bar names the key the facts under the
-	 * cursor run.
-	 */
-	selectedGroupHeader?: GroupHeader | null;
-	/**
-	 * Whether the Ticket cursor stands on a Group header (issue #159).
-	 *
-	 * No Ticket is selected there, so every Ticket control refuses with the
-	 * catalogue's own words, and the fold control takes the `Space` key.
-	 */
-	groupHeaderSelected?: boolean;
-	/**
-	 * The position of the Group under the cursor among the visible Group
-	 * headers, zero-based, and their count beside it (ADR 0071).
-	 *
-	 * The move control gates on both: a Group at the top of its axis has no
-	 * visible neighbor above to trade places with, and the catalogue states
-	 * that refusal in its own words, the way the queue's order keys do.
-	 */
-	selectedGroupPosition?: number;
-	visibleGroupHeaderCount?: number;
-	/**
-	 * The Work queue's item under the cursor, with the queue's depth beside it
-	 * (ADR 0034). The item's own position is the queue order's.
-	 */
-	selectedWorkQueueItem?: WorkQueueItem | null;
-	workQueueDepth?: number;
-	/**
-	 * The queue pause for the Work queue's section (ADR 0052): the `p` key's
-	 * hint reads its own state, and the other sections refuse it in the
-	 * catalogue's words.
-	 */
-	queuePaused?: boolean;
-	/**
-	 * The Work queue item the row under the cursor waits with, in the Ticket
-	 * and Consultation list panes (ADR 0049): Enter on such a row jumps to
-	 * the item instead of starting or deciding.
-	 */
-	queueItemForSelectedRow?: WorkQueueItem | null;
-	/**
-	 * The count of repositories in the init's select list (ADR 0082).
-	 *
-	 * The confirm control reads the fact: while the list is loading or holds
-	 * nothing, Enter is refused in the catalogue's words.
-	 */
-	repositoryCount?: number;
-	/** The text of the init's select list's search (ADR 0082). */
-	searchText?: string;
-	/**
-	 * The count of rows the operator marked for the init queue (ADR 0083).
-	 *
-	 * The confirm control reads the fact: a marking of two or more names the
-	 * queue on the bar, because Enter then starts it instead of selecting one.
-	 */
-	pendingCount?: number;
-	listCanMove: boolean;
-	detailCanScroll: boolean;
-	sourceCount: number;
-	refreshingSourceCount: number;
-	/** Whether the Consultation section can re-read its durable projection. */
-	consultationRefreshAvailable?: boolean;
-	/** The observed status of the selected Consultation Agent. */
-	consultationAgentStatus?: string | null;
-	/**
-	 * Whether the selected Consultation's Agent pane is alive in the last
-	 * herdr poll. Goto focuses that pane, so it needs it.
-	 */
-	consultationPaneAlive?: boolean;
-	/**
-	 * Whether the selected Ticket's Agent pane is alive in the last herdr
-	 * poll. Goto focuses that pane, so an in-flight Ticket needs it (ADR 0033).
-	 */
-	ticketPaneAlive?: boolean;
-	/**
-	 * Whether the selected Ticket's recorded pane holds a live agent that is
-	 * not the Ticket's own. Herdr hands the id of a closed pane out again, so
-	 * the recorded pane of an awaiting Ticket can name a pane a different
-	 * agent owns, and Goto must not focus it there (ADR 0033's recorded-pane
-	 * standing gives way to the agent's identity).
-	 */
-	ticketPaneForeign?: boolean;
-	/**
-	 * The failure marker the last poll set on the selected Ticket (ADR 0060):
-	 * the same fact the list row's failure badge wears. The ignore's obligation
-	 * predicate reads it, because a missing Agent is not a Ticket state, and the
-	 * refusal must name what the row's own face names.
-	 */
-	selectedTicketMarker?: TicketMarker | null;
-	/**
-	 * The Ticket section's List filter (ADR 0060): the `f` hint names the state
-	 * the cycle moves to, so the bar reads the filter that stands.
-	 */
-	ticketListFilter?: TicketListFilter;
+/**
+ * The plane's standing facts.
+ *
+ * Every Interaction mode reads these, and no surface restates them: one
+ * record of them is read the same way in every mode, and the constructor
+ * below places it in every mode's facts.
+ */
+export interface StandingFacts {
 	/**
 	 * True while a Handoff holds the seat. The fact the normal Quit gates on
 	 * (ADR 0064): the ask controls no longer wait on a run, and the Quit is
@@ -262,31 +157,236 @@ export interface ControlContext {
 	messageTruncated: boolean;
 	/** Whether the config defines any [consultation-types.<name>] block. */
 	consultationTypesConfigured: boolean;
+	sourceCount: number;
+	refreshingSourceCount: number;
 	/** The configured key that leaves Agent interaction mode. */
-	interactionExitKey?: string;
+	interactionExitKey: string;
+}
+
+/**
+ * The facts the Ticket section's list pane states for its own cursor.
+ *
+ * The Group facts come from the shared grouping module's row list, so the
+ * position, the count, and the fold read the same rows the list draws and the
+ * step walks (issue #159, ADR 0071).
+ */
+export interface TicketListFacts extends StandingFacts {
+	mode: "ticket-list";
+	/** The Ticket the base panes point at, if the list holds one. */
+	selectedTicket: Ticket | undefined;
 	/**
-	 * The decision modal's row under the cursor carries settings to edit.
+	 * The Grouping axis in effect for the Ticket section's list (issue #159).
 	 *
-	 * The modal states it from its own rows; the catalogue stays the single
-	 * gate, the bar stays the single display, and neither special-cases the
-	 * `e` key by control id.
+	 * The shell states it from the factory state it read at boot and the press
+	 * that moved it, and the axis control's hint names it, so the operator never
+	 * has to infer the split from the rows.
 	 */
-	editableActionSelected?: boolean;
+	groupingAxis: GroupingAxis;
 	/**
-	 * The decision modal's row under the cursor asks for the plane action, which
-	 * holds no settings to edit (ADR 0068): the surface states it from its own
-	 * rows, and the catalogue keeps the one gate with the reason it names.
+	 * The Group header the Ticket cursor stands on, or null when it stands on a
+	 * Ticket row (issue #159).
+	 *
+	 * The list states it from the row under the cursor, and the fold control
+	 * gates on it: `Space` folds the Group under a header and answers nothing
+	 * anywhere else, and the Action bar names the key the facts under the
+	 * cursor run.
 	 */
-	planeActionSelected?: boolean;
+	selectedGroupHeader: GroupHeader | null;
 	/**
-	 * Whether the surface's Body pane scrolls: the body holds more rows than
-	 * its window. The surface states it from its own rows, and the catalogue
-	 * gates the body's scroll on it, so the bar never hints a scroll that
-	 * cannot run (ADR 0039).
+	 * Whether the Ticket cursor stands on a Group header (issue #159).
+	 *
+	 * No Ticket is selected there, so every Ticket control refuses with the
+	 * catalogue's own words, and the fold control takes the `Space` key.
 	 */
-	bodyScrollable?: boolean;
-	/** Whether the surface's Body pane carries nothing at all. */
-	bodyEmpty?: boolean;
+	groupHeaderSelected: boolean;
+	/**
+	 * The position of the Group under the cursor among the visible Group
+	 * headers, zero-based, and their count beside it (ADR 0071).
+	 *
+	 * The move control gates on both: a Group at the top of its axis has no
+	 * visible neighbor above to trade places with, and the catalogue states
+	 * that refusal in its own words, the way the queue's order keys do.
+	 */
+	selectedGroupPosition: number;
+	visibleGroupHeaderCount: number;
+	/**
+	 * The failure marker the last poll set on the selected Ticket (ADR 0060):
+	 * the same fact the list row's failure badge wears. The ignore's obligation
+	 * predicate reads it, because a missing Agent is not a Ticket state, and the
+	 * refusal must name what the row's own face names.
+	 */
+	selectedTicketMarker: TicketMarker | null;
+	/**
+	 * The Ticket section's List filter (ADR 0060): the `f` hint names the state
+	 * the cycle moves to, so the bar reads the filter that stands.
+	 */
+	ticketListFilter: TicketListFilter;
+	/**
+	 * Whether the selected Ticket's Agent pane is alive in the last herdr
+	 * poll. Goto focuses that pane, so an in-flight Ticket needs it (ADR 0033).
+	 */
+	ticketPaneAlive: boolean;
+	/**
+	 * Whether the selected Ticket's recorded pane holds a live agent that is
+	 * not the Ticket's own. Herdr hands the id of a closed pane out again, so
+	 * the recorded pane of an awaiting Ticket can name a pane a different
+	 * agent owns, and Goto must not focus it there (ADR 0033's recorded-pane
+	 * standing gives way to the agent's identity).
+	 */
+	ticketPaneForeign: boolean;
+	listCanMove: boolean;
+	/**
+	 * The Work queue item the row under the cursor waits with (ADR 0049): Enter
+	 * on such a row jumps to the item instead of starting or deciding.
+	 */
+	queueItemForSelectedRow: WorkQueueItem | null;
+}
+
+/** The facts the Ticket section's detail pane states for its own Body. */
+export interface TicketDetailFacts extends StandingFacts {
+	mode: "ticket-detail";
+	selectedTicket: Ticket | undefined;
+	groupingAxis: GroupingAxis;
+	selectedGroupHeader: GroupHeader | null;
+	groupHeaderSelected: boolean;
+	selectedGroupPosition: number;
+	visibleGroupHeaderCount: number;
+	selectedTicketMarker: TicketMarker | null;
+	ticketListFilter: TicketListFilter;
+	ticketPaneAlive: boolean;
+	ticketPaneForeign: boolean;
+	detailCanScroll: boolean;
+}
+
+/** Whether the Consultation section can re-read its durable projection. */
+export interface ConsultationSectionFacts {
+	/** The Consultation the base panes point at, if the list holds one. */
+	selectedConsultation: Consultation | undefined;
+	/** Whether the Consultation section can re-read its durable projection. */
+	consultationRefreshAvailable: boolean;
+	/** The observed status of the selected Consultation Agent. */
+	consultationAgentStatus: string | null;
+	/**
+	 * Whether the selected Consultation's Agent pane is alive in the last
+	 * herdr poll. Goto focuses that pane, so it needs it.
+	 */
+	consultationPaneAlive: boolean;
+}
+
+/** The facts the Consultation section's list pane states for its own cursor. */
+export interface ConsultationListFacts extends StandingFacts, ConsultationSectionFacts {
+	mode: "consultation-list";
+	listCanMove: boolean;
+	/**
+	 * The Work queue item the row under the cursor waits with (ADR 0049): Enter
+	 * on such a row jumps to the item instead of starting or deciding.
+	 */
+	queueItemForSelectedRow: WorkQueueItem | null;
+}
+
+/** The facts the Consultation section's detail pane states for its own Body. */
+export interface ConsultationDetailFacts extends StandingFacts, ConsultationSectionFacts {
+	mode: "consultation-detail";
+	detailCanScroll: boolean;
+}
+
+/**
+ * The facts the Work queue module states for its own rows.
+ *
+ * The item under the cursor, the queue's depth, and the pause come from the
+ * queue itself, so the queue's keys cannot disagree with the queue (ADR 0034,
+ * ADR 0052).
+ */
+export interface WorkQueueSectionFacts {
+	/**
+	 * The Work queue's item under the cursor (ADR 0034). The item's own position
+	 * is the queue order's.
+	 */
+	selectedWorkQueueItem: WorkQueueItem | null;
+	/** The queue's depth: the items it holds. */
+	workQueueDepth: number;
+	/**
+	 * The queue pause for the Work queue's section (ADR 0052): the `p` key's
+	 * hint reads its own state, and the other sections refuse it in the
+	 * catalogue's words.
+	 */
+	queuePaused: boolean;
+}
+
+/** The facts the Work queue's list pane states for its own cursor. */
+export interface WorkQueueListFacts extends StandingFacts, WorkQueueSectionFacts {
+	mode: "work-queue-list";
+	listCanMove: boolean;
+}
+
+/** The facts the Work queue's detail pane states for its own Body. */
+export interface WorkQueueDetailFacts extends StandingFacts, WorkQueueSectionFacts {
+	mode: "work-queue-detail";
+	detailCanScroll: boolean;
+}
+
+/**
+ * The facts the override panel's list row states.
+ *
+ * The panel owns no list the plane's cursor could run out of: its mode follows
+ * the row the cursor is on, and `move-list` answers for it before any step
+ * fact, so this row states nothing beside the plane's standing facts.
+ */
+export interface OverrideListFacts extends StandingFacts {
+	mode: "override-list";
+}
+
+/** The facts the override panel's Model row states. */
+export interface OverrideModelFacts extends StandingFacts {
+	mode: "override-model";
+	/** The focused field has a text selection the Copy control could hand over. */
+	fieldHasSelection: boolean;
+}
+
+/** The facts the override panel's free-text row states. */
+export interface OverrideTextFacts extends StandingFacts {
+	mode: "override-text";
+	fieldHasSelection: boolean;
+}
+
+/**
+ * The facts the shared form module states for the slot that holds the focus.
+ *
+ * A form owns one keyboard rule per slot, and the slot's own facts are the
+ * form module's to state (ADR 0014).
+ */
+export interface FormSlotFacts {
+	/** The active form has a text selection the Copy control could hand over. */
+	fieldHasSelection: boolean;
+	/** How many values the focused selector offers. One of them cycles nowhere. */
+	formCycleCount: number;
+	/** Why the form's Confirm action cannot run, in the surface's own words. */
+	formRefusal: string | null;
+}
+
+/** The facts a shared form states while its field holds the focus. */
+export interface FormFieldFacts extends StandingFacts, FormSlotFacts {
+	mode: "form-field";
+}
+
+/** The facts a shared form states while its selector holds the focus. */
+export interface FormSelectorFacts extends StandingFacts, FormSlotFacts {
+	mode: "form-selector";
+}
+
+/** The facts a shared form states while its action holds the focus. */
+export interface FormActionFacts extends StandingFacts, FormSlotFacts {
+	mode: "form-action";
+}
+
+/**
+ * The facts the Decision modal states for its own regions.
+ *
+ * The Decision region's row count and the Body pane's window come from the
+ * shared region module, the one that owns the rows they count (ADR 0039).
+ */
+export interface DecisionModalFacts extends StandingFacts {
+	mode: "decision-modal";
 	/**
 	 * The rows the surface's Decision region holds.
 	 *
@@ -294,24 +394,206 @@ export interface ControlContext {
 	 * region's selection when the region holds one row, on the same rule the
 	 * form's selector already uses for a cycle that goes nowhere.
 	 */
-	actionRowCount?: number;
+	actionRowCount: number;
 	/**
-	 * The slot of the active form that holds the focus.
-	 *
-	 * A form owns one keyboard rule per slot: a field takes its own editing
-	 * keys, a selector cycles, an action confirms. The surface states the fact
-	 * from the slot it holds, and the catalogue gates on it, so no mode can
-	 * hand a Draft field's arrows to the form's selection.
+	 * Whether the surface's Body pane scrolls: the body holds more rows than
+	 * its window. The surface states it from its own rows, and the catalogue
+	 * gates the body's scroll on it, so the bar never hints a scroll that
+	 * cannot run (ADR 0039).
 	 */
-	formSlot?: "field" | "selector" | "action";
-	/** The active form has a text selection the Copy control could hand over. */
-	fieldHasSelection?: boolean;
-	/** The Model search row holds text the clear control could remove. */
-	formSearchActive?: boolean;
-	/** How many values the focused selector offers. One of them cycles nowhere. */
-	formCycleCount?: number;
-	/** Why the form's Confirm action cannot run, in the surface's own words. */
-	formRefusal?: string;
+	bodyScrollable: boolean;
+	/** Whether the surface's Body pane carries nothing at all. */
+	bodyEmpty: boolean;
+	/**
+	 * The decision modal's row under the cursor carries settings to edit.
+	 *
+	 * The modal states it from its own rows; the catalogue stays the single
+	 * gate, the bar stays the single display, and neither special-cases the
+	 * `e` key by control id.
+	 */
+	editableActionSelected: boolean;
+	/**
+	 * The decision modal's row under the cursor asks for the plane action, which
+	 * holds no settings to edit (ADR 0068): the surface states it from its own
+	 * rows, and the catalogue keeps the one gate with the reason it names.
+	 */
+	planeActionSelected: boolean;
+}
+
+/** The facts the Missing agent modal states for its own rows. */
+export interface MissingModalFacts extends StandingFacts {
+	mode: "missing-modal";
+	actionRowCount: number;
+}
+
+/** The facts the shared action panel states for its own rows. */
+export interface ActionPanelFacts extends StandingFacts {
+	mode: "action-panel";
+	actionRowCount: number;
+}
+
+/** The facts the Live view states for its own Body pane and its own Ticket. */
+export interface LiveViewFacts extends StandingFacts {
+	mode: "live-view";
+	/** The Ticket the Live view streams. The Goto focuses that Ticket's pane. */
+	selectedTicket: Ticket | undefined;
+	ticketPaneAlive: boolean;
+	ticketPaneForeign: boolean;
+	bodyScrollable: boolean;
+	bodyEmpty: boolean;
+}
+
+/** The facts the init's repository select list states for its own rows (ADR 0082). */
+export interface RepositorySelectFacts extends StandingFacts {
+	mode: "repository-select";
+	listCanMove: boolean;
+	/**
+	 * The count of repositories in the init's select list (ADR 0082).
+	 *
+	 * The confirm control reads the fact: while the list is loading or holds
+	 * nothing, Enter is refused in the catalogue's words.
+	 */
+	repositoryCount: number;
+	/** The text of the init's select list's search (ADR 0082). */
+	searchText: string;
+	/**
+	 * The count of rows the operator marked for the init queue (ADR 0083).
+	 *
+	 * The confirm control reads the fact: a marking of two or more names the
+	 * queue on the bar, because Enter then starts it instead of selecting one.
+	 */
+	pendingCount: number;
+}
+
+/** The facts the Key guide states. It owns no rows, so it states none. */
+export interface KeyGuideFacts extends StandingFacts {
+	mode: "key-guide";
+}
+
+/** The facts the Message view states. It owns no rows, so it states none. */
+export interface MessageViewFacts extends StandingFacts {
+	mode: "message-view";
+}
+
+/** The facts Agent interaction mode states. The Agent owns every other key. */
+export interface ConsultationInteractionFacts extends StandingFacts {
+	mode: "consultation-interaction";
+}
+
+/**
+ * The Availability facts, stated per Interaction mode.
+ *
+ * One record per mode, holding only the facts that mode's controls read. Every
+ * fact in a record is required, so an availability rule never answers from an
+ * absence. A record is the plane's standing facts plus the facts the surface
+ * that owns the mode states; `availabilityFacts` is the one constructor.
+ */
+export interface ModeFacts {
+	"ticket-list": TicketListFacts;
+	"ticket-detail": TicketDetailFacts;
+	"consultation-list": ConsultationListFacts;
+	"consultation-detail": ConsultationDetailFacts;
+	"work-queue-list": WorkQueueListFacts;
+	"work-queue-detail": WorkQueueDetailFacts;
+	"override-list": OverrideListFacts;
+	"override-model": OverrideModelFacts;
+	"override-text": OverrideTextFacts;
+	"form-field": FormFieldFacts;
+	"form-selector": FormSelectorFacts;
+	"form-action": FormActionFacts;
+	"action-panel": ActionPanelFacts;
+	"decision-modal": DecisionModalFacts;
+	"missing-modal": MissingModalFacts;
+	"repository-select": RepositorySelectFacts;
+	"live-view": LiveViewFacts;
+	"key-guide": KeyGuideFacts;
+	"message-view": MessageViewFacts;
+	"consultation-interaction": ConsultationInteractionFacts;
+}
+
+/** The facts of one Interaction mode, as the catalogue reads them. */
+export type AvailabilityFacts = ModeFacts[InteractionMode];
+
+/** `Omit` that keeps each member of a union a member, not one merged record. */
+type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
+
+/** The facts a surface states for one mode, beside the plane's standing facts. */
+export type OwnFacts<M extends InteractionMode> = DistributiveOmit<
+	ModeFacts[M],
+	"mode" | keyof StandingFacts
+>;
+
+/**
+ * The one constructor of the Availability facts.
+ *
+ * A surface names its mode, hands over the plane's standing facts it reads
+ * without restating them, and states exactly the facts its mode names. A
+ * missing one is a compile error, so no control can read an absence.
+ */
+export function availabilityFacts<M extends InteractionMode>(
+	mode: M,
+	standing: StandingFacts,
+	own: OwnFacts<M>,
+): ModeFacts[M] {
+	// The one assertion in the facts' interface. The compiler checks both sides
+	// of every call - the mode, the standing record, and the exact own-facts
+	// record that mode names - and this body only places the three pieces
+	// beside each other. It cannot prove to itself that the union of every
+	// mode's record equals the record of one mode chosen at the call.
+	return { ...standing, ...own, mode } as unknown as ModeFacts[M];
+}
+
+/** The Ticket section's two modes. */
+type TicketBaseFacts = TicketListFacts | TicketDetailFacts;
+/** The Consultation section's two modes. */
+type ConsultationBaseFacts = ConsultationListFacts | ConsultationDetailFacts;
+/** The Work queue's two modes. */
+type WorkQueueBaseFacts = WorkQueueListFacts | WorkQueueDetailFacts;
+/** The Main view's six base modes. */
+type BaseFacts = TicketBaseFacts | ConsultationBaseFacts | WorkQueueBaseFacts;
+/** The override panel's three row modes. */
+type OverrideFacts = OverrideListFacts | OverrideModelFacts | OverrideTextFacts;
+/** The three modes one shared form runs. */
+type FormFacts = FormFieldFacts | FormSelectorFacts | FormActionFacts;
+/** The modes that show action rows in a Decision region. */
+type ActionRegionFacts = DecisionModalFacts | MissingModalFacts | ActionPanelFacts;
+/** The modes whose surface owns a Body pane. */
+type BodyPaneFacts = DecisionModalFacts | LiveViewFacts;
+/** The modes that own a list the cursor steps through. */
+type ListFacts =
+	| TicketListFacts
+	| ConsultationListFacts
+	| WorkQueueListFacts
+	| OverrideListFacts
+	| OverrideModelFacts
+	| OverrideTextFacts
+	| RepositorySelectFacts;
+/** The modes that own a detail pane the cursor scrolls. */
+type DetailFacts = TicketDetailFacts | ConsultationDetailFacts | WorkQueueDetailFacts;
+/** The modes the `Enter`-on-a-waiting-row meaning runs in. */
+type QueueJumpFacts = TicketListFacts | ConsultationListFacts;
+/** The modes the Hand off control runs in. */
+type HandoffFacts = TicketBaseFacts | OverrideFacts;
+/** The modes the Ticket Goto runs in, the Live view's own Goto included. */
+type TicketGotoFacts = TicketBaseFacts | LiveViewFacts;
+/** The modes the Copy-selection control runs in. */
+type CopySelectionFacts = FormFacts | OverrideModelFacts | OverrideTextFacts;
+
+/**
+ * The section guards a handler uses to name the modes its behavior runs in.
+ *
+ * A handler reaches a fact only where the mode that owns the key states it, so
+ * a behavior says which section it belongs to instead of reading a field that
+ * mode never named.
+ */
+export function ticketSectionFacts(facts: AvailabilityFacts): facts is TicketBaseFacts {
+	return ticketBaseMode(facts.mode);
+}
+export function consultationSectionFacts(facts: AvailabilityFacts): facts is ConsultationBaseFacts {
+	return consultationMode(facts.mode);
+}
+export function workQueueSectionFacts(facts: AvailabilityFacts): facts is WorkQueueBaseFacts {
+	return workQueueMode(facts.mode);
 }
 
 export interface ControlDefinition {
@@ -321,23 +603,27 @@ export interface ControlDefinition {
 	 * The keys the control accepts in each interaction mode.
 	 *
 	 * One control answers to a key the operator configures: the Agent
-	 * terminal's exit key is read from the context, so the catalogue, the bar,
+	 * terminal's exit key is read from the facts, so the catalogue, the bar,
 	 * and the dispatch still share one source for what a key means.
 	 */
-	keys: (mode: InteractionMode, context: ControlContext) => readonly ControlKey[];
+	// Every member below is declared as a method, not as a property holding a
+	// function. A method's parameter is checked bivariantly, so a rule may name
+	// just the mode-group facts it reads - `ListFacts`, `TicketBaseFacts` - and
+	// the catalogue still calls it with any mode's facts.
+	keys(mode: InteractionMode, facts: AvailabilityFacts): readonly ControlKey[];
 	/** Displayed in familiar arrow order, then Vim aliases. */
 	keyLabel: string;
 	scope: ControlScope;
 	/** Controls with this flag are candidates for the contextual Action bar. */
 	actionBar: boolean;
 	/**
-	 * Whether one candidate earns a place on the bar in this context.
+	 * Whether one candidate earns a place on the bar in this facts.
 	 *
 	 * A control whose keys work and whose view would show nothing answers for
 	 * itself elsewhere, so the Message control states that here rather than
 	 * making the bar test control ids.
 	 */
-	showInBar?: (context: ControlContext) => boolean;
+	showInBar?(facts: AvailabilityFacts): boolean;
 	/**
 	 * Whether the control's hint holds the row's right-hand cells.
 	 *
@@ -366,7 +652,7 @@ export interface ControlDefinition {
 	 * control that owns it, so the bar packs the catalogue and no second map has
 	 * to remember which hint went with which id.
 	 */
-	barLabel?: (context: ControlContext) => string | undefined;
+	barLabel?(facts: AvailabilityFacts): string | undefined;
 	/**
 	 * Whether the control belongs to the Key guide alone.
 	 *
@@ -416,11 +702,11 @@ export interface ControlDefinition {
 	 * neither - states the two owners instead of one (ADR 0060). Omitted: the
 	 * marker's own sentence stands.
 	 */
-	sectionRefusal?: (mode: InteractionMode) => string;
+	sectionRefusal?(mode: InteractionMode): string;
 	/** Larger values survive narrow Action bar packing first. */
 	priority: number;
 	modes: readonly InteractionMode[];
-	availability: (context: ControlContext) => ControlAvailability;
+	availability(facts: AvailabilityFacts): ControlAvailability;
 	/**
 	 * The note the Key guide shows beside a control that is always available.
 	 * A consequence of the control, not a claim about the current state, so it
@@ -447,10 +733,6 @@ const DECIDE_NOTE = "opens the decision on a settled Ticket";
 /** What the section toggle does with the section under the cursor. */
 const SECTION_TOGGLE_NOTE = "collapses the section the cursor is in, or expands it back";
 
-/** The panel's own modes: while one is open, the list's selection is inert. */
-const panelMode = (mode: InteractionMode) =>
-	mode === "override-list" || mode === "override-model" || mode === "override-text";
-
 /**
  * The Handoff and Override eligibility rules, with one source for each
  * reason. An Override on a settled Ticket misses its Handoff row by one
@@ -462,9 +744,17 @@ const panelMode = (mode: InteractionMode) =>
  */
 const handoffEligibility =
 	(awaitingReason?: string) =>
-	(context: ControlContext): ControlAvailability => {
-		if (panelMode(context.mode)) return available();
-		const ticket = context.selectedTicket;
+	(facts: HandoffFacts): ControlAvailability => {
+		// The panel's own modes: while one is open, Enter confirms the panel's
+		// ticket, not the list's selection, so the list's Ticket facts are not
+		// stated there and this rule answers before them.
+		if (
+			facts.mode === "override-list" ||
+			facts.mode === "override-model" ||
+			facts.mode === "override-text"
+		)
+			return available();
+		const ticket = facts.selectedTicket;
 		if (ticket === undefined) return unavailable("no Ticket is selected");
 		if (ticket.state === "awaiting" && awaitingReason !== undefined)
 			return unavailable(awaitingReason);
@@ -486,11 +776,11 @@ const handoffEligibility =
  * behind the wait, so the screen refuses it, and the wait is the Work queue's
  * to show.
  */
-const completionEligibility = (context: ControlContext): ControlAvailability => {
+const completionEligibility = (facts: TicketBaseFacts): ControlAvailability => {
 	// A Group header holds no Ticket (issue #159), and the refusal is this
 	// catalogue's own words, not a surface that swallows the key.
-	if (context.selectedTicket === undefined) return unavailable("no Ticket is selected");
-	const state = context.selectedTicket.state;
+	if (facts.selectedTicket === undefined) return unavailable("no Ticket is selected");
+	const state = facts.selectedTicket.state;
 	return state === "awaiting"
 		? available()
 		: unavailable("the selected Ticket has no completion to decide");
@@ -504,8 +794,8 @@ const completionEligibility = (context: ControlContext): ControlAvailability => 
  * inside the handler owns the marker check, so the gate only states the
  * state rule.
  */
-const liveViewEligibility = (context: ControlContext): ControlAvailability => {
-	const ticket = context.selectedTicket;
+const liveViewEligibility = (facts: TicketBaseFacts): ControlAvailability => {
+	const ticket = facts.selectedTicket;
 	if (ticket === undefined) return unavailable("no Ticket is selected");
 	if (inFlight(ticket)) return available();
 	return unavailable("only an in-flight Ticket has a Live view");
@@ -584,30 +874,33 @@ const LIST_SECTIONS_ONLY =
  * The control stays a candidate in both sections so the key the operator
  * already knows states a readable refusal instead of doing nothing at all.
  */
-const ticketOnly = (context: ControlContext): ControlAvailability =>
-	ticketBaseMode(context.mode) ? available() : unavailable(TICKET_ONLY);
-const listMove = (context: ControlContext): ControlAvailability =>
-	context.mode === "override-list" ||
-	context.mode === "override-model" ||
-	context.mode === "override-text" ||
-	context.listCanMove
+const ticketOnly = (facts: AvailabilityFacts): ControlAvailability =>
+	ticketBaseMode(facts.mode) ? available() : unavailable(TICKET_ONLY);
+const listMove = (facts: ListFacts): ControlAvailability =>
+	// The override panel's three rows answer first: its mode follows the row
+	// the cursor is on, and the panel owns no list the plane's cursor could run
+	// out of, so no step fact is read there.
+	facts.mode === "override-list" ||
+	facts.mode === "override-model" ||
+	facts.mode === "override-text" ||
+	facts.listCanMove
 		? available()
 		: unavailable(
-				context.mode === "repository-select"
+				facts.mode === "repository-select"
 					? "the repository list has nowhere to move"
-					: consultationMode(context.mode)
+					: consultationMode(facts.mode)
 						? "the Consultation list has nowhere to move"
-						: workQueueMode(context.mode)
+						: workQueueMode(facts.mode)
 							? "the Work queue has nowhere to move"
 							: "the Ticket list has nowhere to move",
 			);
-const detailScroll = (context: ControlContext): ControlAvailability =>
-	context.detailCanScroll
+const detailScroll = (facts: DetailFacts): ControlAvailability =>
+	facts.detailCanScroll
 		? available()
 		: unavailable(
-				context.mode === "consultation-detail"
+				facts.mode === "consultation-detail"
 					? "the Consultation detail has nowhere to scroll"
-					: workQueueMode(context.mode)
+					: workQueueMode(facts.mode)
 						? "the Work queue detail has nowhere to scroll"
 						: "the Ticket detail has nowhere to scroll",
 			);
@@ -622,11 +915,11 @@ const detailScroll = (context: ControlContext): ControlAvailability =>
  */
 const queueOrderMove =
 	(direction: "up" | "down") =>
-	(context: ControlContext): ControlAvailability => {
-		const item = context.selectedWorkQueueItem;
+	(facts: WorkQueueBaseFacts): ControlAvailability => {
+		const item = facts.selectedWorkQueueItem;
 		if (item === null || item === undefined)
 			return unavailable("no queue item is under the cursor");
-		const depth = context.workQueueDepth ?? 0;
+		const depth = facts.workQueueDepth;
 		if (direction === "up" && item.position > 0) return available();
 		if (direction === "down" && item.position < depth - 1) return available();
 		return unavailable(
@@ -645,19 +938,19 @@ const queueOrderMove =
  */
 const groupOrderMove =
 	(direction: "up" | "down") =>
-	(context: ControlContext): ControlAvailability => {
-		if (context.selectedGroupHeader === null || context.selectedGroupHeader === undefined)
+	(facts: TicketBaseFacts): ControlAvailability => {
+		if (facts.selectedGroupHeader === null)
 			return unavailable("no Group header is under the cursor");
-		const position = context.selectedGroupPosition ?? 0;
-		const count = context.visibleGroupHeaderCount ?? 1;
+		const position = facts.selectedGroupPosition;
+		const count = facts.visibleGroupHeaderCount;
 		if (direction === "up" && position > 0) return available();
 		if (direction === "down" && position < count - 1) return available();
 		return unavailable(
 			direction === "up" ? "the group is first in the list" : "the group is last in the list",
 		);
 	};
-const queueRemove = (context: ControlContext): ControlAvailability =>
-	context.selectedWorkQueueItem !== null && context.selectedWorkQueueItem !== undefined
+const queueRemove = (facts: WorkQueueListFacts): ControlAvailability =>
+	facts.selectedWorkQueueItem !== null
 		? available()
 		: unavailable("no queue item is under the cursor");
 /**
@@ -673,18 +966,20 @@ const queueRemove = (context: ControlContext): ControlAvailability =>
  * issue #90). An empty queue refuses with the one reason the operator can
  * act on, like the queue's other row keys.
  */
-const queueForceDispatch = (context: ControlContext): ControlAvailability => {
-	const item = context.selectedWorkQueueItem;
+const queueForceDispatch = (facts: WorkQueueListFacts): ControlAvailability => {
+	const item = facts.selectedWorkQueueItem;
 	if (item === null || item === undefined) return unavailable("no queue item is under the cursor");
 	return available();
 };
-const refresh = (context: ControlContext): ControlAvailability => {
-	if (consultationMode(context.mode))
-		return context.consultationRefreshAvailable === true
+const refresh = (facts: BaseFacts): ControlAvailability => {
+	// The Consultation section's re-read is its own fact, stated only in its own
+	// two modes; the other four sections gate on the source facts instead.
+	if (facts.mode === "consultation-list" || facts.mode === "consultation-detail")
+		return facts.consultationRefreshAvailable
 			? available()
 			: unavailable("Consultations require SQLite state");
-	if (context.sourceCount === 0) return unavailable("no Ticket sources exist");
-	if (context.refreshingSourceCount >= context.sourceCount)
+	if (facts.sourceCount === 0) return unavailable("no Ticket sources exist");
+	if (facts.refreshingSourceCount >= facts.sourceCount)
 		return unavailable("every Ticket source is already refreshing");
 	return available();
 };
@@ -709,8 +1004,8 @@ const CONSULTATION_CLOSED_REASON = "the selected Consultation is already closed"
  * Agent cannot be reached at all resolves to no available meaning, and then
  * it is this sentence the operator reads.
  */
-const consultationRecovery = (context: ControlContext): ControlAvailability => {
-	const consultation = context.selectedConsultation;
+const consultationRecovery = (facts: ConsultationBaseFacts): ControlAvailability => {
+	const consultation = facts.selectedConsultation;
 	if (consultation === undefined) return unavailable("no Consultation is selected");
 	if (
 		consultation.state === "opening" ||
@@ -733,17 +1028,17 @@ const consultationRecovery = (context: ControlContext): ControlAvailability => {
 		);
 	return unavailable("the selected Consultation reaches its Agent or its response with Enter");
 };
-const consultationResponse = (context: ControlContext): ControlAvailability =>
-	context.selectedConsultation?.state === "awaiting-response" &&
-	context.consultationAgentStatus !== "blocked"
+const consultationResponse = (facts: ConsultationBaseFacts): ControlAvailability =>
+	facts.selectedConsultation?.state === "awaiting-response" &&
+	facts.consultationAgentStatus !== "blocked"
 		? available()
 		: unavailable("only an awaiting Consultation can receive a response");
-const consultationInteraction = (context: ControlContext): ControlAvailability =>
-	(context.selectedConsultation?.state === "working" ||
-		(context.selectedConsultation?.state === "awaiting-response" &&
-			context.consultationAgentStatus === "blocked")) &&
-	context.selectedConsultation?.paneId !== null &&
-	context.selectedConsultation?.paneId !== undefined
+const consultationInteraction = (facts: ConsultationBaseFacts): ControlAvailability =>
+	(facts.selectedConsultation?.state === "working" ||
+		(facts.selectedConsultation?.state === "awaiting-response" &&
+			facts.consultationAgentStatus === "blocked")) &&
+	facts.selectedConsultation?.paneId !== null &&
+	facts.selectedConsultation?.paneId !== undefined
 		? available()
 		: unavailable("only a working or blocked Consultation with an Agent can be interacted with");
 /**
@@ -752,10 +1047,10 @@ const consultationInteraction = (context: ControlContext): ControlAvailability =
  * navigation: it focuses the pane and leaves the Consultation record
  * untouched.
  */
-const consultationGoto = (context: ControlContext): ControlAvailability =>
-	context.selectedConsultation?.paneId !== null &&
-	context.selectedConsultation?.paneId !== undefined &&
-	context.consultationPaneAlive === true
+const consultationGoto = (facts: ConsultationBaseFacts): ControlAvailability =>
+	facts.selectedConsultation?.paneId !== null &&
+	facts.selectedConsultation?.paneId !== undefined &&
+	facts.consultationPaneAlive
 		? available()
 		: unavailable("the Agent's pane is not alive in the last poll");
 /**
@@ -765,8 +1060,8 @@ const consultationGoto = (context: ControlContext): ControlAvailability =>
  * recorded pane. Goto is navigation: it focuses the pane and leaves the
  * Ticket, its work cycle, and its traces untouched.
  */
-const ticketGoto = (context: ControlContext): ControlAvailability => {
-	const ticket = context.selectedTicket;
+const ticketGoto = (facts: TicketGotoFacts): ControlAvailability => {
+	const ticket = facts.selectedTicket;
 	if (ticket === undefined) return unavailable("no Ticket is selected");
 	const paneId = ticket.handoff?.paneId;
 	if (paneId === null || paneId === undefined)
@@ -775,10 +1070,10 @@ const ticketGoto = (context: ControlContext): ControlAvailability => {
 	// handed the closed pane's id out again: the live agent in the pane that
 	// is not the Ticket's own is not the agent the operator went to look at.
 	if (ticket.state === "awaiting")
-		return context.ticketPaneForeign === true
+		return facts.ticketPaneForeign
 			? unavailable("the Agent's pane is not alive in the last poll")
 			: available();
-	if (inFlight(ticket) && context.ticketPaneAlive === true) return available();
+	if (inFlight(ticket) && facts.ticketPaneAlive) return available();
 	return unavailable("the Agent's pane is not alive in the last poll");
 };
 /**
@@ -794,8 +1089,8 @@ const ticketGoto = (context: ControlContext): ControlAvailability => {
  * environment seat and queues behind that Handoff, so a hung start still ends
  * in the close the operator asked for (ADR 0031).
  */
-const ticketClose = (context: ControlContext): ControlAvailability => {
-	const ticket = context.selectedTicket;
+const ticketClose = (facts: TicketBaseFacts): ControlAvailability => {
+	const ticket = facts.selectedTicket;
 	if (ticket === undefined) return unavailable("no Ticket is selected");
 	if (ticket.state === "open")
 		return unavailable("the selected Ticket is open: no work is in flight to close");
@@ -811,11 +1106,11 @@ const ticketClose = (context: ControlContext): ControlAvailability => {
  * the last poll's missing-Agent marker. Taking a Ticket back is never refused -
  * it hides nothing, and it costs the same effort as putting one away.
  */
-const ticketIgnore = (context: ControlContext): ControlAvailability => {
-	const ticket = context.selectedTicket;
+const ticketIgnore = (facts: TicketBaseFacts): ControlAvailability => {
+	const ticket = facts.selectedTicket;
 	if (ticket === undefined) return unavailable("no Ticket is selected");
 	if (ticket.ignored) return available();
-	const refusal = ignoreRefusal(obligationOf(ticket, context.selectedTicketMarker ?? null));
+	const refusal = ignoreRefusal(obligationOf(ticket, facts.selectedTicketMarker));
 	return refusal === null ? available() : unavailable(refusal);
 };
 /**
@@ -826,10 +1121,10 @@ const ticketIgnore = (context: ControlContext): ControlAvailability => {
  * words. On any other axis the repository the header names is not the split
  * that init acts on, so the key refuses there too.
  */
-const repositoryInit = (context: ControlContext): ControlAvailability => {
-	if (context.groupingAxis !== "repository")
+const repositoryInit = (facts: TicketBaseFacts): ControlAvailability => {
+	if (facts.groupingAxis !== "repository")
 		return unavailable("init is available on the repository axis only");
-	if (context.groupHeaderSelected !== true)
+	if (facts.groupHeaderSelected === false)
 		return unavailable("no Group header is under the cursor");
 	return available();
 };
@@ -847,8 +1142,8 @@ const repositoryInit = (context: ControlContext): ControlAvailability => {
  * acts on the source - and the same key on a muted row takes the mute back.
  * What it asks is the row itself: a selected Ticket.
  */
-const ticketMute = (context: ControlContext): ControlAvailability => {
-	if (context.selectedTicket === undefined) return unavailable("no Ticket is selected");
+const ticketMute = (facts: TicketBaseFacts): ControlAvailability => {
+	if (facts.selectedTicket === undefined) return unavailable("no Ticket is selected");
 	return available();
 };
 /**
@@ -860,8 +1155,8 @@ const ticketMute = (context: ControlContext): ControlAvailability => {
  * mute's ledger stands beside the ignore's in the same cycle, so the hint
  * names the muted view too.
  */
-const ticketFilterLabel = (context: ControlContext): string =>
-	`Show ${nextTicketListFilter(context.ticketListFilter ?? "active")}`;
+const ticketFilterLabel = (facts: TicketBaseFacts): string =>
+	`Show ${nextTicketListFilter(facts.ticketListFilter)}`;
 /**
  * The source the `u` act reaches on one row (ADR 0070).
  *
@@ -870,8 +1165,8 @@ const ticketFilterLabel = (context: ControlContext): string =>
  * says what it reaches before the operator presses it. A row that names no
  * source names the act's object alone.
  */
-const ticketMuteLabel = (context: ControlContext): string => {
-	const ticket = context.selectedTicket;
+const ticketMuteLabel = (facts: TicketBaseFacts): string => {
+	const ticket = facts.selectedTicket;
 	if (ticket === undefined) return "Mute";
 	const sources = [
 		...new Set(ticket.memberships.map((membership) => membership.sourceName)),
@@ -879,8 +1174,8 @@ const ticketMuteLabel = (context: ControlContext): string => {
 	const name = sources.length === 0 ? "source" : sources.join(", ");
 	return ticket.muted === true ? `Un-mute ${name}` : `Mute ${name}`;
 };
-const consultationClose = (context: ControlContext): ControlAvailability => {
-	const consultation = context.selectedConsultation;
+const consultationClose = (facts: ConsultationBaseFacts): ControlAvailability => {
+	const consultation = facts.selectedConsultation;
 	if (consultation === undefined) return unavailable("no Consultation is selected");
 	return consultation.state === "closed" ? unavailable(CONSULTATION_CLOSED_REASON) : available();
 };
@@ -892,8 +1187,8 @@ const consultationClose = (context: ControlContext): ControlAvailability => {
  * removes the record and nothing else. Every other state still runs - the
  * close or the recovery answers the key - and the delete refuses it.
  */
-const consultationDelete = (context: ControlContext): ControlAvailability => {
-	const state = context.selectedConsultation?.state;
+const consultationDelete = (facts: ConsultationBaseFacts): ControlAvailability => {
+	const state = facts.selectedConsultation?.state;
 	if (state === "closed" || state === "unscheduled") return available();
 	return unavailable("only a closed or unscheduled Consultation can be deleted");
 };
@@ -905,8 +1200,8 @@ const consultationDelete = (context: ControlContext): ControlAvailability => {
  * state refuses the key with the state's own fact, so a record that is
  * started, waiting, or broken never silently re-enters the queue.
  */
-const consultationSchedule = (context: ControlContext): ControlAvailability => {
-	const consultation = context.selectedConsultation;
+const consultationSchedule = (facts: ConsultationBaseFacts): ControlAvailability => {
+	const consultation = facts.selectedConsultation;
 	if (consultation === undefined) return unavailable("no Consultation is selected");
 	if (consultation.state === "unscheduled") return available();
 	if (consultation.state === "queued")
@@ -923,18 +1218,18 @@ const consultationSchedule = (context: ControlContext): ControlAvailability => {
  * start is the Work queue's pickup, and a started or broken record reaches
  * its Agent or its recovery with Enter instead.
  */
-const consultationStartNow = (context: ControlContext): ControlAvailability => {
-	const consultation = context.selectedConsultation;
+const consultationStartNow = (facts: ConsultationBaseFacts): ControlAvailability => {
+	const consultation = facts.selectedConsultation;
 	if (consultation === undefined) return unavailable("no Consultation is selected");
 	if (consultation.state === "unscheduled") return available();
 	if (consultation.state === "queued")
 		return unavailable("the selected Consultation waits in the Work queue for a free seat");
 	return unavailable("only an unscheduled Consultation can be started now");
 };
-const activeQuit = (context: ControlContext): ControlAvailability =>
-	context.handoffActive ? unavailable("normal Quit is unavailable during a Handoff") : available();
-const message = (context: ControlContext): ControlAvailability =>
-	context.messageTruncated
+const activeQuit = (facts: StandingFacts): ControlAvailability =>
+	facts.handoffActive ? unavailable("normal Quit is unavailable during a Handoff") : available();
+const message = (facts: StandingFacts): ControlAvailability =>
+	facts.messageTruncated
 		? available()
 		: unavailable("the current Message fits on the Message line");
 /**
@@ -944,11 +1239,83 @@ const message = (context: ControlContext): ControlAvailability =>
  * the body already fills the pane's window or carries nothing, so the Action
  * bar never hints a scroll that cannot run and a pressed key says why.
  */
-const bodyScroll = (context: ControlContext): ControlAvailability => {
-	if (context.bodyEmpty === true) return unavailable("the body carries no rows");
-	if (context.bodyScrollable === false) return unavailable("the body fills its pane");
+const bodyScroll = (facts: BodyPaneFacts): ControlAvailability => {
+	if (facts.bodyEmpty) return unavailable("the body carries no rows");
+	if (!facts.bodyScrollable) return unavailable("the body fills its pane");
 	return available();
 };
+
+/**
+ * Why Enter on a row in a list pane jumps or does not (ADR 0049).
+ *
+ * The row under the cursor carries the fact: a row that waits in the Work
+ * queue resolves to its item, and a row that holds no Ticket and no waiting
+ * item - a Group header - answers with the section's own missing-selection
+ * words.
+ */
+const queueJump = (facts: QueueJumpFacts): ControlAvailability => {
+	if (facts.queueItemForSelectedRow !== null) return available();
+	if (facts.mode === "ticket-list" && facts.selectedTicket === undefined)
+		return unavailable("no Ticket is selected");
+	return unavailable("the selected row has no waiting queue item");
+};
+const ticketIgnoreLabel = (facts: TicketBaseFacts): string =>
+	facts.selectedTicket?.ignored === true ? "Un-ignore" : "Ignore";
+/** The init's select list: its own rows, its own search, its own markings (ADR 0082, ADR 0083). */
+const repositorySelectConfirm = (facts: RepositorySelectFacts): ControlAvailability =>
+	facts.repositoryCount > 0 ? available() : unavailable("the list holds no repository");
+const repositorySelectClear = (facts: RepositorySelectFacts): ControlAvailability =>
+	facts.searchText !== "" ? available() : unavailable("the search holds no text");
+const repositorySelectLabel = (facts: RepositorySelectFacts): string =>
+	facts.pendingCount >= 2 ? "Start queue" : "Select";
+/** The Ticket section's Grouping axis, as the bar states it (issue #159). */
+const groupAxisLabel = (facts: TicketBaseFacts): string | undefined =>
+	facts.groupingAxis === "none" ? undefined : groupingAxisHint(facts.groupingAxis);
+const groupAxisShown = (facts: TicketBaseFacts): boolean => facts.groupingAxis !== "none";
+const groupFoldLabel = (facts: TicketBaseFacts): string =>
+	facts.selectedGroupHeader?.collapsed === true ? "Unfold group" : "Fold group";
+const groupFoldShown = (facts: TicketBaseFacts): boolean => facts.groupHeaderSelected;
+const groupFoldAvailability = (facts: TicketBaseFacts): ControlAvailability =>
+	facts.groupHeaderSelected ? available() : unavailable("no Group header is under the cursor");
+const groupMoveShown = (facts: TicketBaseFacts): boolean => facts.selectedGroupHeader !== null;
+const queuePauseLabel = (facts: WorkQueueBaseFacts): string =>
+	facts.queuePaused ? "Resume queue" : "Pause queue";
+/** The `e` key on a base-mode row: the Ticket section's override, nowhere else. */
+const overrideControl = (facts: BaseFacts): ControlAvailability =>
+	facts.mode === "ticket-list" || facts.mode === "ticket-detail"
+		? handoffEligibility(
+				"awaiting ticket: press Enter, then e on a Handoff row to edit its settings",
+			)(facts)
+		: ticketOnly(facts);
+const consultationRecoveryControl = (facts: ConsultationBaseFacts): ControlAvailability =>
+	facts.selectedConsultation?.state === "opening"
+		? available()
+		: unavailable("only an interrupted opening needs recovery");
+/** The focused selector's cycle: a choice with no other value goes nowhere. */
+const formCycle = (facts: FormSelectorFacts): ControlAvailability =>
+	facts.formCycleCount > 1 ? available() : unavailable("this choice has no other value");
+/** The focused action's Confirm: the surface states why it cannot run. */
+const formConfirm = (facts: FormActionFacts): ControlAvailability =>
+	facts.formRefusal === null ? available() : unavailable(facts.formRefusal);
+/** F3 hands a text selection over, and only a selection. */
+const copySelection = (facts: CopySelectionFacts): ControlAvailability =>
+	facts.fieldHasSelection
+		? available()
+		: unavailable("the focused field holds no selection to copy");
+const copySelectionShown = (facts: CopySelectionFacts): boolean => facts.fieldHasSelection;
+/** A Launch needs a Consultation type to launch with. */
+const consultationLaunch = (facts: StandingFacts): ControlAvailability =>
+	facts.consultationTypesConfigured ? available() : unavailable(CONSULTATION_TYPES_MISSING);
+/** A Decision region's selection goes nowhere where the region holds one row. */
+const regionSelection = (facts: ActionRegionFacts): ControlAvailability =>
+	facts.actionRowCount === 1 ? unavailable("the region holds one row") : available();
+/** Only a Handoff row in the decision carries settings to edit (ADR 0068). */
+const editAction = (facts: DecisionModalFacts): ControlAvailability =>
+	facts.planeActionSelected
+		? unavailable("the plane action holds no settings")
+		: facts.editableActionSelected
+			? available()
+			: unavailable("the selected action has no settings to edit");
 
 const ticketBaseModes = ["ticket-list", "ticket-detail"] as const;
 const consultationBaseModes = ["consultation-list", "consultation-detail"] as const;
@@ -1205,21 +1572,7 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		actionBar: true,
 		priority: 71,
 		modes: ["ticket-list", "consultation-list"],
-		availability: (context) => {
-			// A Group header holds no Ticket (issue #159): the key refuses in the
-			// catalogue's words for a missing selection, the way the section's other
-			// Ticket controls do, and never as a row that has no item.
-			if (
-				ticketBaseMode(context.mode) &&
-				context.selectedTicket === undefined &&
-				context.queueItemForSelectedRow === null
-			)
-				return unavailable("no Ticket is selected");
-			return context.queueItemForSelectedRow !== null &&
-				context.queueItemForSelectedRow !== undefined
-				? available()
-				: unavailable("the selected row has no waiting queue item");
-		},
+		availability: queueJump,
 		guideNote: "jumps to the row's waiting item in the Work queue",
 	},
 	{
@@ -1304,7 +1657,7 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		// source, and the same key on an ignored row puts the Ticket back.
 		id: "ticket-ignore",
 		label: "Ignore",
-		barLabel: (context) => (context.selectedTicket?.ignored === true ? "Un-ignore" : "Ignore"),
+		barLabel: ticketIgnoreLabel,
 		keys: () => ["i"],
 		keyLabel: "i",
 		scope: "control-plane",
@@ -1382,14 +1735,10 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		actionBar: true,
 		// A marking of two or more turns the select into a queue start (ADR
 		// 0083): the hint names the act the key takes then.
-		barLabel: (context) =>
-			context.pendingCount !== undefined && context.pendingCount >= 2 ? "Start queue" : "Select",
+		barLabel: repositorySelectLabel,
 		priority: 70,
 		modes: ["repository-select"],
-		availability: (context) =>
-			context.repositoryCount !== undefined && context.repositoryCount > 0
-				? available()
-				: unavailable("the list holds no repository"),
+		availability: repositorySelectConfirm,
 	},
 	{
 		// The select list's queue mark (ADR 0083): Tab marks the row under the
@@ -1406,10 +1755,7 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		// for, so it outranks the confirm and the clear on the bar.
 		priority: 75,
 		modes: ["repository-select"],
-		availability: (context) =>
-			context.repositoryCount !== undefined && context.repositoryCount > 0
-				? available()
-				: unavailable("the list holds no repository"),
+		availability: repositorySelectConfirm,
 		guideNote: "marks the row under the cursor for the queue, and unmarks it",
 	},
 	{
@@ -1424,10 +1770,7 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		actionBar: true,
 		priority: 60,
 		modes: ["repository-select"],
-		availability: (context) =>
-			context.searchText !== undefined && context.searchText !== ""
-				? available()
-				: unavailable("the search holds no text"),
+		availability: repositorySelectClear,
 	},
 	{
 		// The select list's way out (ADR 0082): closing discards nothing,
@@ -1505,10 +1848,7 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		actionBar: true,
 		// Only a split axis names a hint: at `none` the entry is hidden from the bar
 		// by `showInBar` below, so no word stands here for a flat list.
-		barLabel: (context) =>
-			context.groupingAxis === undefined || context.groupingAxis === "none"
-				? undefined
-				: groupingAxisHint(context.groupingAxis),
+		barLabel: groupAxisLabel,
 		// Just above the Launch entry: the split the list wears outranks the
 		// entry the control plane reached for, and the base modes' common
 		// controls outrank it, so a narrow row keeps Move, Detail, the Enter
@@ -1522,7 +1862,7 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		modes: [...ticketBaseModes],
 		// The axis answers everywhere the plane does, a collapsed Ticket section
 		// included: a press still records the operator's choice (user story 10).
-		showInBar: (context) => context.groupingAxis !== undefined && context.groupingAxis !== "none",
+		showInBar: groupAxisShown,
 		availability: available,
 		guideNote: "cycles the grouping axis: none, repository, source, task, state, position",
 	},
@@ -1538,21 +1878,17 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		keyLabel: "Space",
 		scope: "control-plane",
 		actionBar: true,
-		barLabel: (context) =>
-			context.selectedGroupHeader?.collapsed === true ? "Unfold group" : "Fold group",
+		barLabel: groupFoldLabel,
 		// The bar names the fold where its key runs: on a Group header row. On
 		// any other row the key refuses, and the bar spends its cells on the
 		// keys the rows under the cursor answer, the way the bar spent them
 		// before the fold shared its key.
-		showInBar: (context) => context.groupHeaderSelected === true,
+		showInBar: groupFoldShown,
 		// The fold outranks the section toggle in the bar, so a header row
 		// names both keys, each with its one meaning.
 		priority: 47,
 		modes: [...ticketBaseModes],
-		availability: (context) =>
-			context.groupHeaderSelected === true
-				? available()
-				: unavailable("no Group header is under the cursor"),
+		availability: groupFoldAvailability,
 		guideNote: "folds the Group under the cursor, or opens it back",
 	},
 	{
@@ -1573,8 +1909,7 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		// The bar states only the meaning the facts under the cursor run: the
 		// move names itself on a Group header, and a ticket row keeps the bar's
 		// old hints, the axis hint among them.
-		showInBar: (context) =>
-			context.selectedGroupHeader !== undefined && context.selectedGroupHeader !== null,
+		showInBar: groupMoveShown,
 		// Beside the fold it shares the cursor with: the move runs only on a
 		// Group header, the way the fold does.
 		priority: 46,
@@ -1590,8 +1925,7 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		scope: "control-plane",
 		actionBar: true,
 		barLabel: () => "Move down",
-		showInBar: (context) =>
-			context.selectedGroupHeader !== undefined && context.selectedGroupHeader !== null,
+		showInBar: groupMoveShown,
 		priority: 44,
 		modes: [...ticketBaseModes],
 		availability: groupOrderMove("down"),
@@ -1652,7 +1986,7 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		// sections refuse it in the catalogue's words.
 		id: "queue-pause",
 		label: "Pause queue",
-		barLabel: (context) => (context.queuePaused === true ? "Resume queue" : "Pause queue"),
+		barLabel: queuePauseLabel,
 		keys: () => ["p"],
 		keyLabel: "p",
 		scope: "work-queue-list",
@@ -1704,8 +2038,7 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		actionBar: true,
 		priority: 40,
 		modes: [...baseModes],
-		availability: (context) =>
-			context.consultationTypesConfigured ? available() : unavailable(CONSULTATION_TYPES_MISSING),
+		availability: consultationLaunch,
 	},
 	{
 		id: "history",
@@ -1860,12 +2193,7 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		actionBar: true,
 		priority: 65,
 		modes: [...baseModes],
-		availability: (context) =>
-			ticketBaseMode(context.mode)
-				? handoffEligibility(
-						"awaiting ticket: press Enter, then e on a Handoff row to edit its settings",
-					)(context)
-				: ticketOnly(context),
+		availability: overrideControl,
 	},
 	{
 		id: "recover",
@@ -1878,10 +2206,7 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		actionBar: true,
 		priority: 61,
 		modes: [...consultationBaseModes],
-		availability: (context) =>
-			context.selectedConsultation?.state === "opening"
-				? available()
-				: unavailable("only an interrupted opening needs recovery"),
+		availability: consultationRecoveryControl,
 	},
 	{
 		id: "refresh",
@@ -1900,7 +2225,7 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		// this mode claims nothing else.
 		id: "interact-exit",
 		label: "Exit interaction",
-		keys: (_mode, context) => [exitControlKey(context.interactionExitKey)],
+		keys: (_mode, facts) => [exitControlKey(facts.interactionExitKey)],
 		keyLabel: "F12",
 		scope: "consultation-interaction",
 		actionBar: true,
@@ -1947,10 +2272,7 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		actionBar: true,
 		priority: 80,
 		modes: ["form-selector"],
-		availability: (context) =>
-			context.formCycleCount !== undefined && context.formCycleCount > 1
-				? available()
-				: unavailable("this choice has no other value"),
+		availability: formCycle,
 	},
 	{
 		// The focused action runs on Enter. The bar's refusal line states
@@ -1963,8 +2285,7 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		actionBar: true,
 		priority: 70,
 		modes: ["form-action"],
-		availability: (context) =>
-			context.formRefusal === undefined ? available() : unavailable(context.formRefusal),
+		availability: formConfirm,
 	},
 	{
 		id: "copy-selection",
@@ -1978,11 +2299,8 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		// Copy is its own control, because Ctrl+C stays the emergency exit even
 		// while a field holds a selection: a text selection may never change what
 		// a safety control means.
-		availability: (context) =>
-			context.fieldHasSelection === true
-				? available()
-				: unavailable("the focused field holds no selection to copy"),
-		showInBar: (context) => context.fieldHasSelection === true,
+		availability: copySelection,
+		showInBar: copySelectionShown,
 	},
 	{
 		id: "clear-search",
@@ -2044,7 +2362,7 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		availability: message,
 		// The bar never offers a Message view with nothing to read: the hint
 		// belongs to a Message the terminal has cut short.
-		showInBar: (context) => context.messageTruncated,
+		showInBar: (facts) => facts.messageTruncated,
 	},
 	{
 		id: "auto-handoff",
@@ -2095,8 +2413,7 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		// A selection in a region that holds one row goes nowhere: the same
 		// rule the form's selector already uses for a cycle with no other
 		// value, and the reason lands on the Message line.
-		availability: (context) =>
-			context.actionRowCount === 1 ? unavailable("the region holds one row") : available(),
+		availability: regionSelection,
 	},
 	{
 		id: "scroll-body",
@@ -2136,12 +2453,7 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		// Only a Handoff row carries settings to edit: Close and Goto decide
 		// about the turn that ended, not about a new Agent. The plane action's
 		// row carries none at all, and the reason says so (ADR 0068).
-		availability: (context) =>
-			context.planeActionSelected === true
-				? unavailable("the plane action holds no settings")
-				: context.editableActionSelected === true
-					? available()
-					: unavailable("the selected action has no settings to edit"),
+		availability: editAction,
 	},
 	{
 		id: "confirm-action",
@@ -2180,7 +2492,7 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		actionBar: true,
 		priority: 70,
 		modes: ["live-view"],
-		availability: (context) => ticketGoto(context),
+		availability: ticketGoto,
 	},
 	{
 		id: "guide-scroll",
@@ -2245,14 +2557,14 @@ export function controlById(id: string): ControlDefinition {
 
 export function actionBarControls(
 	mode: InteractionMode,
-	context: ControlContext,
+	facts: AvailabilityFacts,
 ): ControlDefinition[] {
 	return controlsForMode(mode).filter(
 		(control) =>
 			control.actionBar &&
 			!omitFromOtherSection(mode, control) &&
-			isReachableInMode(mode, control, context) &&
-			(control.showInBar?.(context) ?? true),
+			isReachableInMode(mode, control, facts) &&
+			(control.showInBar?.(facts) ?? true),
 	);
 }
 
@@ -2266,13 +2578,13 @@ export function actionBarControls(
 function isReachableInMode(
 	mode: InteractionMode,
 	control: ControlDefinition,
-	context: ControlContext,
+	facts: AvailabilityFacts,
 ): boolean {
-	const keys = control.keys(mode, context);
+	const keys = control.keys(mode, facts);
 	if (keys.length === 0) return true;
 	return keys.some((key) => {
 		const event = key === "ctrl+c" ? { name: "c", ctrl: true } : { name: key };
-		return controlForKey(event, context)?.id === control.id;
+		return controlForKey(event, facts)?.id === control.id;
 	});
 }
 
@@ -2286,15 +2598,15 @@ function isReachableInMode(
  * the guide uses it to name every meaning a mode dispatches, and the bar uses
  * it with the facts to hide a meaning the state does not run.
  */
-function candidatesForKey(context: ControlContext, key: ControlKey): readonly ControlDefinition[] {
-	const mode = context.mode;
+function candidatesForKey(facts: AvailabilityFacts, key: ControlKey): readonly ControlDefinition[] {
+	const mode = facts.mode;
 	// Utility close controls take precedence over global aliases that share
 	// their keys. The catalogue still owns both meanings.
 	if (mode === "key-guide" && (key === "escape" || key === "f1" || key === "?"))
 		return [controlById("guide-close")];
 	if (mode === "message-view" && (key === "escape" || key === "f2"))
 		return [controlById("message-close")];
-	return controlsForMode(mode).filter((control) => control.keys(mode, context).includes(key));
+	return controlsForMode(mode).filter((control) => control.keys(mode, facts).includes(key));
 }
 
 /** The whole key one accepted binding is called by, as a hint states it. */
@@ -2374,10 +2686,10 @@ function keyName(key: ControlKey): string {
 export function compactKeyLabels(
 	mode: InteractionMode,
 	control: ControlDefinition,
-	context: ControlContext,
+	facts: AvailabilityFacts,
 ): string[] {
 	const ranked = control
-		.keys(mode, context)
+		.keys(mode, facts)
 		.map(keyName)
 		.map((label) => ({ label, rank: label === KEY_NAMES.escape ? 0 : 1, cells: widthOf(label) }));
 	ranked.sort((a, b) => a.rank - b.rank || a.cells - b.cells);
@@ -2387,17 +2699,17 @@ export function compactKeyLabels(
 /** Find a control accepted by this mode for one OpenTUI key event. */
 export function controlForKey(
 	key: { name: string; ctrl?: boolean; meta?: boolean },
-	context: ControlContext,
+	facts: AvailabilityFacts,
 ): ControlDefinition | undefined {
 	const name = key.ctrl === true && /^[a-z]$/.test(key.name) ? `ctrl+${key.name}` : key.name;
-	const candidates = candidatesForKey(context, name as ControlKey);
+	const candidates = candidatesForKey(facts, name as ControlKey);
 	// Enter has a state-specific completion action as well as Hand off. An
 	// available meaning wins. If none is available, the first definition owns
 	// the key and supplies its stable unavailable reason - the queue jump
 	// excepted: a row that holds no waiting item has no jump to refuse, so it
 	// never masks the mode's own Enter reason.
 	return (
-		candidates.find((control) => availabilityFor(control, context).available) ??
+		candidates.find((control) => availabilityFor(control, facts).available) ??
 		candidates.find((control) => control.id !== "queue-jump") ??
 		candidates[0]
 	);
@@ -2405,7 +2717,7 @@ export function controlForKey(
 
 export function availabilityFor(
 	control: ControlDefinition,
-	context: ControlContext,
+	facts: AvailabilityFacts,
 ): ControlAvailability {
 	// A Consultation-section control states the section refusal in every other
 	// section's modes: the Ticket section and the Work queue both answer the key
@@ -2413,13 +2725,13 @@ export function availabilityFor(
 	// ownership is written, so the dispatch, the guide, and the bar all read the
 	// same words. The Work queue's own keys state their refusal in the same
 	// way (ADR 0049, ADR 0052).
-	if (control.consultationSectionOnly === true && otherSectionMode(context.mode))
-		return unavailable(control.sectionRefusal?.(context.mode) ?? CONSULTATION_ONLY);
-	if (control.queueSectionOnly === true && !workQueueMode(context.mode))
+	if (control.consultationSectionOnly === true && otherSectionMode(facts.mode))
+		return unavailable(control.sectionRefusal?.(facts.mode) ?? CONSULTATION_ONLY);
+	if (control.queueSectionOnly === true && !workQueueMode(facts.mode))
 		return unavailable(QUEUE_ONLY);
-	if (control.ticketSectionOnly === true && !ticketBaseMode(context.mode))
-		return unavailable(control.sectionRefusal?.(context.mode) ?? TICKET_ONLY);
-	return control.availability(context);
+	if (control.ticketSectionOnly === true && !ticketBaseMode(facts.mode))
+		return unavailable(control.sectionRefusal?.(facts.mode) ?? TICKET_ONLY);
+	return control.availability(facts);
 }
 
 /** Ticket-section controls have no useful meaning in a Consultation guide. */
@@ -2481,25 +2793,25 @@ function omitFromOtherSection(mode: InteractionMode, control: ControlDefinition)
 function isCataloguedInMode(
 	mode: InteractionMode,
 	control: ControlDefinition,
-	context: ControlContext,
+	facts: AvailabilityFacts,
 ): boolean {
 	// A control of another mode is cataloged on its own terms: the guide
 	// states what it does and claims nothing about this mode's keys.
 	if (!control.modes.includes(mode)) return true;
-	const keys = control.keys(mode, context);
+	const keys = control.keys(mode, facts);
 	// A display-only hint (the text row's Type and Backspace) claims no key.
 	if (keys.length === 0) return true;
 	return keys.some((key) =>
-		candidatesForKey({ ...context, mode }, key).some((candidate) => candidate.id === control.id),
+		candidatesForKey(facts, key).some((candidate) => candidate.id === control.id),
 	);
 }
 
 /** Current-mode controls, then global and control-plane controls, then other modes. */
-export function guideControls(context: ControlContext): Array<{
+export function guideControls(facts: AvailabilityFacts): Array<{
 	group: string;
 	control: ControlDefinition;
 }> {
-	const mode = context.mode;
+	const mode = facts.mode;
 	// The current section is every control this mode dispatches a key for. The
 	// bar shows only the meaning the current state runs; the guide shows both.
 	const current = controlsForMode(mode).filter(
@@ -2508,7 +2820,7 @@ export function guideControls(context: ControlContext): Array<{
 			control.id !== "emergency-exit" &&
 			control.guideOnly !== true &&
 			!omitFromOtherSection(mode, control) &&
-			isCataloguedInMode(mode, control, context),
+			isCataloguedInMode(mode, control, facts),
 	);
 	const seen = new Set(current.map((control) => control.id));
 	const append = (group: string, predicate: (control: ControlDefinition) => boolean) =>
@@ -2519,7 +2831,7 @@ export function guideControls(context: ControlContext): Array<{
 				!omitFromGuide(mode, control) &&
 				!omitFromOtherSection(mode, control) &&
 				predicate(control) &&
-				isCataloguedInMode(mode, control, context),
+				isCataloguedInMode(mode, control, facts),
 		).map((control) => {
 			seen.add(control.id);
 			return { group, control };
@@ -2588,9 +2900,9 @@ function displayKeyLabel(
 	mode: InteractionMode,
 	control: ControlDefinition,
 	includeAllAliases: boolean,
-	context: ControlContext,
+	facts: AvailabilityFacts,
 ): string {
-	if (control.id === "interact-exit") return interactionExitLabel(context.interactionExitKey);
+	if (control.id === "interact-exit") return interactionExitLabel(facts.interactionExitKey);
 	if (control.id === "consultation-interact") return "Enter";
 	if (control.id === "move-list" && (mode === "override-text" || mode === "override-model"))
 		return "↑↓";
@@ -2613,23 +2925,16 @@ function displayKeyLabel(
 export function keyLabelFor(
 	mode: InteractionMode,
 	control: ControlDefinition,
-	context: ControlContext,
+	facts: AvailabilityFacts,
 ): string {
-	return displayKeyLabel(mode, control, false, context);
+	return displayKeyLabel(mode, control, false, facts);
 }
 
 /** The Key guide shows all aliases which are valid in its source mode. */
 export function guideKeyLabel(
 	mode: InteractionMode,
 	control: ControlDefinition,
-	context: ControlContext,
+	facts: AvailabilityFacts,
 ): string {
-	return displayKeyLabel(mode, control, true, context);
-}
-
-export function contextFor(
-	mode: InteractionMode,
-	values: Omit<ControlContext, "mode">,
-): ControlContext {
-	return { ...values, mode };
+	return displayKeyLabel(mode, control, true, facts);
 }

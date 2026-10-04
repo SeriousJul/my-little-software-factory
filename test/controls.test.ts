@@ -2,29 +2,134 @@
 import { describe, expect, test } from "bun:test";
 
 import {
+	type AvailabilityFacts,
 	actionBarControls,
+	availabilityFacts,
 	availabilityFor,
-	type ControlContext,
 	type ControlDefinition,
-	contextFor,
 	controlById,
 	controlForKey,
 	controlsForMode,
 	guideControls,
+	type InteractionMode,
+	type OwnFacts,
+	type StandingFacts,
 } from "../src/components/controls.ts";
 import { GROUPING_AXES } from "../src/domain/grouping.ts";
 import type { Ticket, TicketListFilter } from "../src/domain/ticket.ts";
 import type { Consultation } from "../src/state/consultation-record.ts";
 
-const values: Omit<ControlContext, "mode"> = {
-	listCanMove: true,
-	detailCanScroll: true,
+/**
+ * The plane's standing facts, as this suite reads them.
+ *
+ * Every mode's Availability facts carry this record beside the facts only that
+ * mode's controls read. A test names the facts its assertion is about; the
+ * helper below supplies the rest of the mode's own record, so no test spreads
+ * a facts record it does not own and no test needs a cast.
+ */
+const STANDING: StandingFacts = {
 	sourceCount: 0,
 	refreshingSourceCount: 0,
 	handoffActive: false,
 	messageTruncated: false,
 	consultationTypesConfigured: true,
+	interactionExitKey: "f12",
 };
+
+/** The facts a mode's controls read when a test says nothing about them. */
+const OWN_FACTS = {
+	"ticket-list": {
+		selectedTicket: undefined,
+		selectedTicketMarker: null,
+		ticketListFilter: "active",
+		ticketPaneAlive: false,
+		ticketPaneForeign: false,
+		groupingAxis: "none",
+		selectedGroupHeader: null,
+		groupHeaderSelected: false,
+		selectedGroupPosition: 0,
+		visibleGroupHeaderCount: 0,
+		listCanMove: true,
+		queueItemForSelectedRow: null,
+	},
+	"ticket-detail": {
+		selectedTicket: undefined,
+		selectedTicketMarker: null,
+		ticketListFilter: "active",
+		ticketPaneAlive: false,
+		ticketPaneForeign: false,
+		groupingAxis: "none",
+		selectedGroupHeader: null,
+		groupHeaderSelected: false,
+		selectedGroupPosition: 0,
+		visibleGroupHeaderCount: 0,
+		detailCanScroll: true,
+	},
+	"consultation-list": {
+		selectedConsultation: undefined,
+		consultationRefreshAvailable: false,
+		consultationAgentStatus: null,
+		consultationPaneAlive: false,
+		listCanMove: true,
+		queueItemForSelectedRow: null,
+	},
+	"consultation-detail": {
+		selectedConsultation: undefined,
+		consultationRefreshAvailable: false,
+		consultationAgentStatus: null,
+		consultationPaneAlive: false,
+		detailCanScroll: true,
+	},
+	"work-queue-list": {
+		selectedWorkQueueItem: null,
+		workQueueDepth: 0,
+		queuePaused: false,
+		listCanMove: true,
+	},
+	"work-queue-detail": {
+		selectedWorkQueueItem: null,
+		workQueueDepth: 0,
+		queuePaused: false,
+		detailCanScroll: true,
+	},
+	"consultation-interaction": {},
+	"form-field": { fieldHasSelection: false, formCycleCount: 0, formRefusal: null },
+	"form-selector": { fieldHasSelection: false, formCycleCount: 0, formRefusal: null },
+	"form-action": { fieldHasSelection: false, formCycleCount: 0, formRefusal: null },
+	"decision-modal": {
+		actionRowCount: 2,
+		editableActionSelected: false,
+		planeActionSelected: false,
+		bodyScrollable: true,
+		bodyEmpty: false,
+	},
+	"missing-modal": { actionRowCount: 2 },
+	"action-panel": { actionRowCount: 2 },
+	"live-view": {
+		selectedTicket: undefined,
+		ticketPaneAlive: false,
+		ticketPaneForeign: false,
+		bodyScrollable: true,
+		bodyEmpty: false,
+	},
+	"repository-select": { listCanMove: true, repositoryCount: 0, searchText: "", pendingCount: 0 },
+	"key-guide": {},
+	"message-view": {},
+	"override-list": {},
+	"override-model": { fieldHasSelection: false },
+	"override-text": { fieldHasSelection: false },
+} satisfies { [M in InteractionMode]: OwnFacts<M> };
+
+/** Every fact any mode can name, so a test can name one by name. */
+type ModeOwn = OwnFacts<InteractionMode>;
+
+/** The facts of one mode: the mode's own defaults beside what the test names. */
+function facts(
+	mode: InteractionMode,
+	own: Partial<ModeOwn & StandingFacts> = {},
+): AvailabilityFacts {
+	return availabilityFacts(mode, STANDING, { ...OWN_FACTS[mode], ...own });
+}
 
 const consultationWithPane = { paneId: "pane-1" } as unknown as Consultation;
 
@@ -32,25 +137,43 @@ const consultationWithPane = { paneId: "pane-1" } as unknown as Consultation;
  * The same context with one item under the Work queue's cursor, so the two
  * queue modes hold a real row to move, remove, and read the refusal against.
  */
-const queueValues: Omit<ControlContext, "mode"> = {
-	...values,
+/**
+ * The same facts with one item under the Work queue's cursor, so the two queue
+ * modes hold a real row to move, remove, and read the refusal against.
+ */
+const queueValues: Partial<OwnFacts<"work-queue-list"> & OwnFacts<"work-queue-detail">> = {
 	selectedWorkQueueItem: {
 		kind: "handoff",
 		ticketIdentity: "github:github.com:I_5",
 		origin: "open",
 		position: 0,
-	} as unknown as ControlContext["selectedWorkQueueItem"],
+		automatic: false,
+		routeFromIdentity: null,
+		choice: {
+			agentType: "claude",
+			environment: "worktree",
+			taskType: "implement",
+			model: "",
+			thinking: "",
+			contextWindow: "",
+		},
+		previousMessage: "",
+		enqueuedAt: "2026-02-17T10:00:00.000Z",
+	},
 	workQueueDepth: 2,
 };
 
 /** The cursor on a Consultation's queue item (issue #90), for the queue's keys. */
-const queueConsultationValues: Omit<ControlContext, "mode"> = {
-	...values,
+/** The cursor on a Consultation's queue item (issue #90), for the queue's keys. */
+const queueConsultationValues: Partial<
+	OwnFacts<"work-queue-list"> & OwnFacts<"work-queue-detail">
+> = {
 	selectedWorkQueueItem: {
 		kind: "consultation",
 		consultationId: "c1c1c1c1-1111-4111-8111-111111111111",
 		position: 0,
-	} as unknown as ControlContext["selectedWorkQueueItem"],
+		enqueuedAt: "2026-02-17T10:00:00.000Z",
+	},
 	workQueueDepth: 2,
 };
 
@@ -67,8 +190,8 @@ const openTicket = { state: "open", handoff: null } as unknown as Ticket;
 const rowTicket = (over: Record<string, unknown>): Ticket => ({ ...over }) as unknown as Ticket;
 
 /** The guide groups that list one control for one context. */
-function guideGroupsFor(context: ControlContext, id: string): string[] {
-	return guideControls(context)
+function guideGroupsFor(facts: AvailabilityFacts, id: string): string[] {
+	return guideControls(facts)
 		.filter(({ control }) => control.id === id)
 		.map(({ group }) => group);
 }
@@ -84,8 +207,7 @@ const SPLIT_AXES = GROUPING_AXES.filter((axis) => axis !== "none");
 // init, a Group header under any other axis refuses in the init's own words,
 // and a Ticket row keeps the ignore's `i`.
 test("i runs the Repository init on a repository Group header and refuses elsewhere", () => {
-	const repoHeader = contextFor("ticket-list", {
-		...values,
+	const repoHeader = facts("ticket-list", {
 		groupingAxis: "repository",
 		groupHeaderSelected: true,
 	});
@@ -99,8 +221,7 @@ test("i runs the Repository init on a repository Group header and refuses elsewh
 	// an init refusal on a row the init does not run on.
 	for (const axis of SPLIT_AXES) {
 		if (axis === "repository") continue;
-		const other = contextFor("ticket-list", {
-			...values,
+		const other = facts("ticket-list", {
 			groupingAxis: axis,
 			groupHeaderSelected: true,
 		});
@@ -108,8 +229,7 @@ test("i runs the Repository init on a repository Group header and refuses elsewh
 	}
 
 	// On a Ticket row the key is the ignore's, whatever the axis.
-	const row = contextFor("ticket-list", {
-		...values,
+	const row = facts("ticket-list", {
 		groupingAxis: "repository",
 		groupHeaderSelected: false,
 		selectedTicket: rowTicket({ state: "open", ignored: false }),
@@ -122,7 +242,7 @@ test("i runs the Repository init on a repository Group header and refuses elsewh
 // collapsed Ticket section still records the operator's choice.
 test("Tab cycles the Grouping axis in both Ticket modes, and refuses nowhere", () => {
 	for (const mode of ["ticket-list", "ticket-detail"] as const) {
-		const context = contextFor(mode, { ...values, groupingAxis: "none" });
+		const context = facts(mode, { groupingAxis: "none" });
 		const control = controlForKey({ name: "tab" }, context);
 		expect(control?.id).toBe("group-axis");
 		if (control === undefined) throw new Error(`Tab answers nothing in ${mode}`);
@@ -135,7 +255,7 @@ test("Tab cycles the Grouping axis in both Ticket modes, and refuses nowhere", (
 		// Every split axis names itself on the bar, and the guide row carries the
 		// whole cycle so the order is documented where it is used.
 		for (const axis of SPLIT_AXES) {
-			const split = contextFor(mode, { ...values, groupingAxis: axis });
+			const split = facts(mode, { groupingAxis: axis });
 			expect(controlForKey({ name: "tab" }, split)?.barLabel?.(split)).toBe(`Group: ${axis}`);
 			expect(actionBarControls(mode, split).map((entry) => entry.id)).toContain("group-axis");
 		}
@@ -153,16 +273,14 @@ test("Tab cycles the Grouping axis in both Ticket modes, and refuses nowhere", (
 		"work-queue-list",
 		"work-queue-detail",
 	] as const) {
-		expect(controlForKey({ name: "tab" }, contextFor(mode, values))).toBeUndefined();
-		const groups = guideControls(contextFor(mode, values));
+		expect(controlForKey({ name: "tab" }, facts(mode))).toBeUndefined();
+		const groups = guideControls(facts(mode));
 		expect(
 			groups.filter(
 				({ control, group }) => control.id === "group-axis" && group === "Current interaction mode",
 			),
 		).toEqual([]);
-		expect(actionBarControls(mode, contextFor(mode, values)).map((c) => c.id)).not.toContain(
-			"group-axis",
-		);
+		expect(actionBarControls(mode, facts(mode)).map((c) => c.id)).not.toContain("group-axis");
 	}
 });
 
@@ -176,8 +294,7 @@ test("a Group header under the Ticket cursor gives no other section a fold", () 
 		"work-queue-list",
 		"work-queue-detail",
 	] as const) {
-		const context = contextFor(mode, {
-			...values,
+		const context = facts(mode, {
 			groupingAxis: "repository",
 			groupHeaderSelected: true,
 			selectedGroupHeader: { value: "acme/factory", count: 3, held: 0, collapsed: false },
@@ -193,9 +310,9 @@ test("a Group header under the Ticket cursor gives no other section a fold", () 
 });
 
 test("the flat list hints no axis, and a grouped list names its own", () => {
-	const context = contextFor("ticket-list", { ...values, groupingAxis: "none" });
+	const context = facts("ticket-list", { groupingAxis: "none" });
 	expect(actionBarControls("ticket-list", context).map((c) => c.id)).not.toContain("group-axis");
-	const grouped = contextFor("ticket-list", { ...values, groupingAxis: "position" });
+	const grouped = facts("ticket-list", { groupingAxis: "position" });
 	expect(actionBarControls("ticket-list", grouped).map((c) => c.id)).toContain("group-axis");
 });
 
@@ -207,8 +324,7 @@ test("the flat list hints no axis, and a grouped list names its own", () => {
  * both controls, the way it names every meaning of Enter.
  */
 test("Space folds the Group under the cursor, and x toggles the Section on every row", () => {
-	const onHeader = contextFor("ticket-list", {
-		...values,
+	const onHeader = facts("ticket-list", {
 		groupingAxis: "repository",
 		groupHeaderSelected: true,
 		selectedGroupHeader: { value: "acme/factory", count: 3, held: 0, collapsed: false },
@@ -218,7 +334,7 @@ test("Space folds the Group under the cursor, and x toggles the Section on every
 	if (fold === undefined) throw new Error("Space answers nothing on a Group header");
 	expect(availabilityFor(fold, onHeader)).toEqual({ available: true });
 	expect(fold.barLabel?.(onHeader)).toBe("Fold group");
-	const collapsed = contextFor("ticket-list", {
+	const collapsed = facts("ticket-list", {
 		...onHeader,
 		selectedGroupHeader: { value: "acme/factory", count: 3, held: 0, collapsed: true },
 	});
@@ -241,8 +357,7 @@ test("Space folds the Group under the cursor, and x toggles the Section on every
 
 	// On a ticket row the fold refuses in its own words, and the toggle keeps
 	// its key.
-	const onRow = contextFor("ticket-list", {
-		...values,
+	const onRow = facts("ticket-list", {
 		groupingAxis: "repository",
 		groupHeaderSelected: false,
 		selectedGroupHeader: null,
@@ -266,8 +381,7 @@ test("every Ticket control answers a Group header with no Ticket selected", () =
 	// The shell leaves `selectedTicket` unset where the cursor stands on a
 	// header, and each control states that fact itself: no surface swallows
 	// the key (story 39).
-	const onHeader = contextFor("ticket-list", {
-		...values,
+	const onHeader = facts("ticket-list", {
 		groupingAxis: "repository",
 		groupHeaderSelected: true,
 		selectedGroupHeader: { value: "acme/factory", count: 3, held: 0, collapsed: false },
@@ -292,8 +406,7 @@ test("every Ticket control answers a Group header with no Ticket selected", () =
 	expect(controlForKey({ name: "return" }, onHeader)?.id).toBe("handoff");
 	// The Consultation section keeps its own words for the same row keys:
 	// nothing there reads as a missing Ticket.
-	const consultation = contextFor("consultation-list", {
-		...values,
+	const consultation = facts("consultation-list", {
 		queueItemForSelectedRow: null,
 	});
 	expect(availabilityFor(controlById("queue-jump"), consultation)).toEqual({
@@ -304,7 +417,7 @@ test("every Ticket control answers a Group header with no Ticket selected", () =
 
 describe("the shared control catalogue", () => {
 	test("x toggles the section under the cursor and is not an Interact alias", () => {
-		const context = contextFor("consultation-detail", values);
+		const context = facts("consultation-detail");
 		const interact = guideControls(context).find(
 			({ control }) => control.id === "consultation-interact",
 		);
@@ -314,7 +427,7 @@ describe("the shared control catalogue", () => {
 	});
 
 	test("the Ticket guide names the section toggle in its own section", () => {
-		const context = contextFor("ticket-list", values);
+		const context = facts("ticket-list");
 		const entries = guideControls(context);
 		const toggle = entries.find(({ control }) => control.id === "section-toggle");
 
@@ -323,7 +436,7 @@ describe("the shared control catalogue", () => {
 	});
 
 	test("the Consultation guide omits Ticket-only controls", () => {
-		const context = contextFor("consultation-list", values);
+		const context = facts("consultation-list");
 		const ids = guideControls(context).map(({ control }) => control.id);
 
 		expect(ids).not.toContain("auto-handoff");
@@ -331,7 +444,7 @@ describe("the shared control catalogue", () => {
 	});
 
 	test("the Consultation close is w, not the section toggle", () => {
-		const context = contextFor("consultation-detail", values);
+		const context = facts("consultation-detail");
 
 		expect(controlForKey({ name: "w" }, context)?.id).toBe("consultation-close");
 		expect(controlForKey({ name: "x" }, context)?.id).toBe("section-toggle");
@@ -339,12 +452,12 @@ describe("the shared control catalogue", () => {
 
 	test("z answers nothing in the Consultation section", () => {
 		for (const mode of ["consultation-list", "consultation-detail"] as const)
-			expect(controlForKey({ name: "z" }, contextFor(mode, values))).toBeUndefined();
+			expect(controlForKey({ name: "z" }, facts(mode))).toBeUndefined();
 	});
 
 	test("d refuses in both Ticket modes, and f cycles the Ticket section's own filter", () => {
 		for (const mode of ["ticket-list", "ticket-detail"] as const) {
-			const context = contextFor(mode, values);
+			const context = facts(mode);
 			const deleteControl = controlForKey({ name: "d" }, context);
 			expect(deleteControl?.id).toBe("consultation-delete");
 			if (deleteControl === undefined) throw new Error("Delete is missing from the catalogue");
@@ -365,11 +478,10 @@ describe("the shared control catalogue", () => {
 			});
 		}
 		// In the Consultation section the keys keep their own meanings.
-		const consultation = contextFor("consultation-list", values);
+		const consultation = facts("consultation-list");
 		expect(controlForKey({ name: "d" }, consultation)?.id).toBe("consultation-delete");
 		expect(controlForKey({ name: "f" }, consultation)?.id).toBe("history");
-		const closed = contextFor("consultation-list", {
-			...values,
+		const closed = facts("consultation-list", {
 			selectedConsultation: { state: "closed" } as unknown as Consultation,
 		});
 		const closedDelete = controlForKey({ name: "d" }, closed);
@@ -387,31 +499,28 @@ describe("the shared control catalogue", () => {
 	// drift from what the list shows.
 	test("i ignores in both Ticket panes, and refuses a Ticket that owes a decision", () => {
 		for (const mode of ["ticket-list", "ticket-detail"] as const) {
-			const open = contextFor(mode, { ...values, selectedTicket: openTicket });
+			const open = facts(mode, { selectedTicket: openTicket });
 			const ignore = controlForKey({ name: "i" }, open);
 			expect(ignore?.id).toBe("ticket-ignore");
 			if (ignore === undefined) throw new Error("the Ticket section lost its ignore");
 			expect(availabilityFor(ignore, open)).toEqual({ available: true });
 			// The same key on an ignored row takes the Ticket back, whatever state
 			// it rests in: clearing hides nothing.
-			const ignoredRow = contextFor(mode, {
-				...values,
+			const ignoredRow = facts(mode, {
 				selectedTicket: { ...openTicket, ignored: true, ignoredAt: "2026-09-24T10:00:00Z" },
 			});
 			expect(availabilityFor(ignore, ignoredRow)).toEqual({ available: true });
 			expect(controlById("ticket-ignore").barLabel?.(ignoredRow)).toBe("Un-ignore");
 			expect(controlById("ticket-ignore").barLabel?.(open)).toBe("Ignore");
 			// The three obligations, in the Message line's own words.
-			const awaiting = contextFor(mode, {
-				...values,
+			const awaiting = facts(mode, {
 				selectedTicket: rowTicket({ state: "awaiting", ignored: false, lastCompletion: null }),
 			});
 			expect(availabilityFor(ignore, awaiting)).toEqual({
 				available: false,
 				reason: "the selected Ticket cannot be ignored: it awaits a decision",
 			});
-			const held = contextFor(mode, {
-				...values,
+			const held = facts(mode, {
 				selectedTicket: rowTicket({
 					state: "awaiting",
 					ignored: false,
@@ -422,8 +531,7 @@ describe("the shared control catalogue", () => {
 				available: false,
 				reason: "the selected Ticket cannot be ignored: its held turn awaits a decision",
 			});
-			const missing = contextFor(mode, {
-				...values,
+			const missing = facts(mode, {
 				selectedTicket: rowTicket({ state: "running", ignored: false, lastCompletion: null }),
 				selectedTicketMarker: "missing",
 			});
@@ -436,20 +544,17 @@ describe("the shared control catalogue", () => {
 			// always the row that can be taken back (ADR 0060, user story 15). The three
 			// contexts run the un-ignore past each refusal's own fact.
 			for (const owed of [
-				contextFor(mode, {
-					...values,
+				facts(mode, {
 					selectedTicket: rowTicket({ state: "awaiting", ignored: true, lastCompletion: null }),
 				}),
-				contextFor(mode, {
-					...values,
+				facts(mode, {
 					selectedTicket: rowTicket({
 						state: "awaiting",
 						ignored: true,
 						lastCompletion: { cause: "failed", decision: null },
 					}),
 				}),
-				contextFor(mode, {
-					...values,
+				facts(mode, {
 					selectedTicket: rowTicket({ state: "running", ignored: true, lastCompletion: null }),
 					selectedTicketMarker: "missing",
 				}),
@@ -458,14 +563,13 @@ describe("the shared control catalogue", () => {
 				expect(controlById("ticket-ignore").barLabel?.(owed)).toBe("Un-ignore");
 			}
 			// A blocked Agent owes no decision, so the key stands.
-			const blocked = contextFor(mode, {
-				...values,
+			const blocked = facts(mode, {
 				selectedTicket: rowTicket({ state: "running", ignored: false, lastCompletion: null }),
 				selectedTicketMarker: "blocked",
 			});
 			expect(availabilityFor(ignore, blocked)).toEqual({ available: true });
 			// No row under the cursor: the key says so, like the section's other keys.
-			expect(availabilityFor(ignore, contextFor(mode, values))).toEqual({
+			expect(availabilityFor(ignore, facts(mode))).toEqual({
 				available: false,
 				reason: "no Ticket is selected",
 			});
@@ -482,7 +586,7 @@ describe("the shared control catalogue", () => {
 			"work-queue-list",
 			"work-queue-detail",
 		] as const) {
-			const context = contextFor(mode, queueValues);
+			const context = facts(mode, queueValues);
 			const ignore = controlForKey({ name: "i" }, context);
 			expect(ignore?.id).toBe("ticket-ignore");
 			if (ignore === undefined) throw new Error("i answers nothing outside the Ticket section");
@@ -499,7 +603,7 @@ describe("the shared control catalogue", () => {
 		}
 		// The Ticket section's own guide and bar name both keys, in each pane.
 		for (const mode of ["ticket-list", "ticket-detail"] as const) {
-			const context = contextFor(mode, { ...values, selectedTicket: openTicket });
+			const context = facts(mode, { selectedTicket: openTicket });
 			const ids = guideControls(context).map(({ control }) => control.id);
 			expect(ids).toContain("ticket-ignore");
 			expect(ids).toContain("ticket-filter");
@@ -519,7 +623,7 @@ describe("the shared control catalogue", () => {
 			["all", "Show active"],
 		];
 		for (const [filter, label] of labels) {
-			const context = contextFor("ticket-list", { ...values, ticketListFilter: filter });
+			const context = facts("ticket-list", { ticketListFilter: filter });
 			expect(controlById("ticket-filter").barLabel?.(context)).toBe(label);
 		}
 	});
@@ -529,8 +633,7 @@ describe("the shared control catalogue", () => {
 	// (ADR 0070).
 	test("u mutes and un-mutes the row's source, and names it on the bar", () => {
 		const withSource = (muted: boolean) =>
-			contextFor("ticket-list", {
-				...values,
+			facts("ticket-list", {
 				selectedTicket: {
 					...openTicket,
 					muted,
@@ -549,7 +652,7 @@ describe("the shared control catalogue", () => {
 	// the ignore does, and nowhere else (ADR 0070).
 	test("u reaches the row in both Ticket panes, and nowhere else", () => {
 		for (const mode of ["ticket-list", "ticket-detail", "work-queue-list"] as const) {
-			const context = contextFor(mode, { ...values, selectedTicket: openTicket });
+			const context = facts(mode, { selectedTicket: openTicket });
 			const availability = availabilityFor(controlById("ticket-mute"), context);
 			const inTicketSection = mode === "ticket-list" || mode === "ticket-detail";
 			expect(availability.available, `${mode}: the mute reaches the row`).toBe(inTicketSection);
@@ -559,8 +662,7 @@ describe("the shared control catalogue", () => {
 		}
 		// The row that names no source still rides the act: the key mutes the
 		// source the Ticket came in on, and the bar names the act's object alone.
-		const bare = contextFor("ticket-list", {
-			...values,
+		const bare = facts("ticket-list", {
 			selectedTicket: { ...openTicket, memberships: [] },
 		});
 		expect(availabilityFor(controlById("ticket-mute"), bare).available).toBe(true);
@@ -582,7 +684,7 @@ describe("the shared control catalogue", () => {
 			"work-queue-list",
 			"work-queue-detail",
 		] as const) {
-			const context = contextFor(mode, queueValues);
+			const context = facts(mode, queueValues);
 			const named = new Set(guideControls(context).map(({ control }) => control.id));
 			const hinted = new Set(actionBarControls(mode, context).map((control) => control.id));
 			for (const control of controlsForMode(mode)) {
@@ -603,31 +705,28 @@ describe("the shared control catalogue", () => {
 		// item runs its own pickup seam and never parks on the herdr seat
 		// (issue #90). On an empty queue it carries the queue's row keys' one
 		// reason.
-		const control = controlForKey({ name: "return" }, contextFor("work-queue-list", queueValues));
+		const control = controlForKey({ name: "return" }, facts("work-queue-list", queueValues));
 		expect(control?.id).toBe("queue-force-dispatch");
 		if (control === undefined) throw new Error("the queue lost its force-dispatch");
-		expect(availabilityFor(control, contextFor("work-queue-list", queueValues))).toEqual({
+		expect(availabilityFor(control, facts("work-queue-list", queueValues))).toEqual({
 			available: true,
 		});
 		// The ask never waits on a run (ADR 0064): a Handoff in flight holds no
 		// Handoff item, and the Consultation item stands in the same moment, the
 		// way a launcher submit does.
 		expect(
-			availabilityFor(
-				control,
-				contextFor("work-queue-list", { ...queueValues, handoffActive: true }),
-			),
+			availabilityFor(control, facts("work-queue-list", { ...queueValues, handoffActive: true })),
 		).toEqual({ available: true });
 		expect(
 			availabilityFor(
 				control,
-				contextFor("work-queue-list", { ...queueConsultationValues, handoffActive: true }),
+				facts("work-queue-list", { ...queueConsultationValues, handoffActive: true }),
 			),
 		).toEqual({ available: true });
-		expect(
-			availabilityFor(control, contextFor("work-queue-list", queueConsultationValues)),
-		).toEqual({ available: true });
-		const empty = contextFor("work-queue-list", values);
+		expect(availabilityFor(control, facts("work-queue-list", queueConsultationValues))).toEqual({
+			available: true,
+		});
+		const empty = facts("work-queue-list");
 		expect(availabilityFor(control, empty)).toEqual({
 			available: false,
 			reason: "no queue item is under the cursor",
@@ -647,7 +746,7 @@ describe("the shared control catalogue", () => {
 		}
 		// The guide names the key in the queue's own section with its note,
 		// whatever the item's facts run.
-		const entry = guideControls(contextFor("work-queue-list", queueValues)).find(
+		const entry = guideControls(facts("work-queue-list", queueValues)).find(
 			({ control }) => control.id === "queue-force-dispatch",
 		);
 		expect(entry?.group).toBe("Current interaction mode");
@@ -666,44 +765,44 @@ describe("the shared control catalogue", () => {
 		expect(
 			availabilityFor(
 				controlById("handoff"),
-				contextFor("ticket-list", { ...values, ...busy, selectedTicket: open }),
+				facts("ticket-list", { ...busy, selectedTicket: open }),
 			),
 		).toEqual({ available: true });
 		expect(
 			availabilityFor(
 				controlById("decide-completion"),
-				contextFor("ticket-list", { ...values, ...busy, selectedTicket: awaitingTicketWithPane }),
+				facts("ticket-list", { ...busy, selectedTicket: awaitingTicketWithPane }),
 			),
 		).toEqual({ available: true });
 		expect(
 			availabilityFor(
 				controlById("override"),
-				contextFor("ticket-list", { ...values, ...busy, selectedTicket: open }),
+				facts("ticket-list", { ...busy, selectedTicket: open }),
 			),
 		).toEqual({ available: true });
 		expect(
 			availabilityFor(
 				controlById("queue-force-dispatch"),
-				contextFor("work-queue-list", { ...queueValues, ...busy }),
+				facts("work-queue-list", { ...queueValues, ...busy }),
 			),
 		).toEqual({ available: true });
 		// The Quit is the one control that waits on a run, with its own words.
 		const quit = controlById("quit");
-		expect(availabilityFor(quit, contextFor("ticket-list", { ...values, ...busy }))).toEqual({
+		expect(availabilityFor(quit, facts("ticket-list", { ...busy }))).toEqual({
 			available: false,
 			reason: "normal Quit is unavailable during a Handoff",
 		});
-		expect(availabilityFor(quit, contextFor("ticket-list", values))).toEqual({ available: true });
+		expect(availabilityFor(quit, facts("ticket-list"))).toEqual({ available: true });
 	});
 
 	test("the Ticket guide omits Delete and History, and the Consultation guide keeps them", () => {
 		for (const mode of ["ticket-list", "ticket-detail"] as const) {
-			const ids = guideControls(contextFor(mode, values)).map(({ control }) => control.id);
+			const ids = guideControls(facts(mode)).map(({ control }) => control.id);
 			expect(ids).not.toContain("history");
 			expect(ids).not.toContain("consultation-delete");
 		}
 		for (const mode of ["consultation-list", "consultation-detail"] as const) {
-			const entries = guideControls(contextFor(mode, values));
+			const entries = guideControls(facts(mode));
 			for (const id of ["history", "consultation-delete"]) {
 				expect(entries.find(({ control }) => control.id === id)?.group).toBe(
 					"Current interaction mode",
@@ -719,7 +818,7 @@ describe("the shared control catalogue", () => {
 	// the keys it dispatches (issue #85, ADR 0034).
 	test("d and f refuse in both Work queue modes, and its guide and bar omit them", () => {
 		for (const mode of ["work-queue-list", "work-queue-detail"] as const) {
-			const context = contextFor(mode, queueValues);
+			const context = facts(mode, queueValues);
 			// `f` now belongs to two lists, so the queue's refusal names both
 			// owners instead of the Consultation section alone (ADR 0060).
 			const filterControl = controlForKey({ name: "f" }, context);
@@ -756,11 +855,11 @@ describe("the shared control catalogue", () => {
 		// A closed Consultation under the cursor changes nothing in the queue:
 		// the queue's modes still refuse the key in the Consultation's words,
 		// because the ownership, not the row, decides.
-		const withClosedConsultation: Omit<ControlContext, "mode"> = {
+		const withClosedConsultation: Partial<ModeOwn & StandingFacts> = {
 			...queueValues,
 			selectedConsultation: { state: "closed" } as unknown as Consultation,
 		};
-		const detail = contextFor("work-queue-detail", withClosedConsultation);
+		const detail = facts("work-queue-detail", withClosedConsultation);
 		const deleteControl = controlById("consultation-delete");
 		expect(availabilityFor(deleteControl, detail).available).toBe(false);
 	});
@@ -768,7 +867,7 @@ describe("the shared control catalogue", () => {
 	test("p pauses and resumes the queue, and the bar's label rides on the pause", () => {
 		// One item under the cursor, unpaused: the key resolves to the pause,
 		// the bar hints it, and the label names the pause.
-		const open = contextFor("work-queue-list", { ...queueValues, queuePaused: false });
+		const open = facts("work-queue-list", { ...queueValues, queuePaused: false });
 		const unpaused = controlForKey({ name: "p" }, open);
 		expect(unpaused?.id).toBe("queue-pause");
 		if (unpaused === undefined) throw new Error("p answers nothing in the queue mode");
@@ -779,7 +878,7 @@ describe("the shared control catalogue", () => {
 		expect(unpaused.barLabel?.(open)).toBe("Pause queue");
 		// Paused: the same key now resolves to the resume, and the bar's label
 		// flips with the fact the shell writes.
-		const paused = contextFor("work-queue-list", { ...queueValues, queuePaused: true });
+		const paused = facts("work-queue-list", { ...queueValues, queuePaused: true });
 		const resume = controlForKey({ name: "p" }, paused);
 		expect(resume?.id).toBe("queue-pause");
 		if (resume === undefined) throw new Error("p answers nothing in the queue mode");
@@ -804,7 +903,7 @@ describe("the shared control catalogue", () => {
 			"consultation-list",
 			"consultation-detail",
 		] as const) {
-			const context = contextFor(mode, values);
+			const context = facts(mode);
 			const pause = controlForKey({ name: "p" }, context);
 			if (pause === undefined || pause.id !== "queue-pause")
 				throw new Error(`p does not resolve to queue-pause in ${mode}`);
@@ -849,20 +948,19 @@ describe("the shared control catalogue", () => {
 		}
 		// In the queue's own modes the keys keep their meanings: the pause is
 		// available, and the order moves answer with their own availability.
-		const queue = contextFor("work-queue-list", queueValues);
+		const queue = facts("work-queue-list", queueValues);
 		expect(controlForKey({ name: "p" }, queue)?.id).toBe("queue-pause");
 		expect(controlForKey({ name: "+" }, queue)?.id).toBe("queue-promote");
 		expect(controlForKey({ name: "-" }, queue)?.id).toBe("queue-demote");
 	});
 
 	test("g is Goto in both Consultation panes, and it needs the Agent's pane alive", () => {
-		const withAlivePane: Omit<ControlContext, "mode"> = {
-			...values,
+		const withAlivePane: Partial<ModeOwn & StandingFacts> = {
 			selectedConsultation: consultationWithPane,
 			consultationPaneAlive: true,
 		};
-		const detail = contextFor("consultation-detail", withAlivePane);
-		const list = contextFor("consultation-list", withAlivePane);
+		const detail = facts("consultation-detail", withAlivePane);
+		const list = facts("consultation-list", withAlivePane);
 		const found = controlForKey({ name: "g" }, detail);
 		const control: ControlDefinition | undefined = found;
 
@@ -870,7 +968,7 @@ describe("the shared control catalogue", () => {
 		expect(controlForKey({ name: "g" }, list)?.id).toBe("consultation-goto");
 		if (control === undefined) throw new Error("Goto is missing from the catalogue");
 		expect(availabilityFor(control, detail).available).toBe(true);
-		const paneGone = contextFor("consultation-detail", {
+		const paneGone = facts("consultation-detail", {
 			...withAlivePane,
 			consultationPaneAlive: false,
 		});
@@ -878,19 +976,16 @@ describe("the shared control catalogue", () => {
 			available: false,
 			reason: "the Agent's pane is not alive in the last poll",
 		});
-		expect(availabilityFor(control, contextFor("consultation-detail", values)).available).toBe(
-			false,
-		);
+		expect(availabilityFor(control, facts("consultation-detail")).available).toBe(false);
 	});
 
 	test("g is Goto in both Ticket panes, and it needs the pane the way the Consultation names it", () => {
-		const inFlight: Omit<ControlContext, "mode"> = {
-			...values,
+		const inFlight: Partial<ModeOwn & StandingFacts> = {
 			selectedTicket: runningTicketWithPane,
 			ticketPaneAlive: true,
 		};
-		const detail = contextFor("ticket-detail", inFlight);
-		const list = contextFor("ticket-list", inFlight);
+		const detail = facts("ticket-detail", inFlight);
+		const list = facts("ticket-list", inFlight);
 		const control: ControlDefinition | undefined = controlForKey({ name: "g" }, detail);
 
 		expect(control?.id).toBe("ticket-goto");
@@ -899,20 +994,19 @@ describe("the shared control catalogue", () => {
 		expect(availabilityFor(control, detail).available).toBe(true);
 		// The in-flight Ticket's pane goes away in the last poll: the
 		// Consultation section's own refusal words.
-		const paneGone = contextFor("ticket-detail", { ...inFlight, ticketPaneAlive: false });
+		const paneGone = facts("ticket-detail", { ...inFlight, ticketPaneAlive: false });
 		expect(availabilityFor(control, paneGone)).toEqual({
 			available: false,
 			reason: "the Agent's pane is not alive in the last poll",
 		});
 		// An awaiting Ticket keeps its recorded pane: the poll or a decision
 		// still moves it, and Goto is the way to look in the meantime.
-		const awaiting = contextFor("ticket-detail", {
-			...values,
+		const awaiting = facts("ticket-detail", {
 			selectedTicket: awaitingTicketWithPane,
 		});
 		expect(availabilityFor(control, awaiting).available).toBe(true);
 		// An open Ticket has no agent at all: the same refusal.
-		const open = contextFor("ticket-list", { ...values, selectedTicket: openTicket });
+		const open = facts("ticket-list", { selectedTicket: openTicket });
 		expect(availabilityFor(control, open)).toEqual({
 			available: false,
 			reason: "the Agent's pane is not alive in the last poll",
@@ -920,12 +1014,11 @@ describe("the shared control catalogue", () => {
 	});
 
 	test("w is Close in both Ticket panes, on every state but open (ADR 0031)", () => {
-		const inFlight: Omit<ControlContext, "mode"> = {
-			...values,
+		const inFlight: Partial<ModeOwn & StandingFacts> = {
 			selectedTicket: runningTicketWithPane,
 		};
-		const detail = contextFor("ticket-detail", inFlight);
-		const list = contextFor("ticket-list", inFlight);
+		const detail = facts("ticket-detail", inFlight);
+		const list = facts("ticket-list", inFlight);
 		const control: ControlDefinition | undefined = controlForKey({ name: "w" }, detail);
 
 		expect(control?.id).toBe("ticket-close");
@@ -934,31 +1027,23 @@ describe("the shared control catalogue", () => {
 		expect(availabilityFor(control, detail).available).toBe(true);
 		// An awaiting ticket has a settled turn to close, and it asks too.
 		expect(
-			availabilityFor(
-				control,
-				contextFor("ticket-list", { ...values, selectedTicket: awaitingTicketWithPane }),
-			).available,
+			availabilityFor(control, facts("ticket-list", { selectedTicket: awaitingTicketWithPane }))
+				.available,
 		).toBe(true);
 		// An open ticket has no work in flight: the refusal the key states.
-		expect(
-			availabilityFor(
-				control,
-				contextFor("ticket-list", { ...values, selectedTicket: openTicket }),
-			),
-		).toEqual({
+		expect(availabilityFor(control, facts("ticket-list", { selectedTicket: openTicket }))).toEqual({
 			available: false,
 			reason: "the selected Ticket is open: no work is in flight to close",
 		});
 		// No row at all is its own reason, the way every Ticket control names it.
-		expect(availabilityFor(control, contextFor("ticket-list", values)).available).toBe(false);
+		expect(availabilityFor(control, facts("ticket-list")).available).toBe(false);
 	});
 
 	test("a Handoff in flight is no refusal for the Ticket close: the close queues", () => {
 		// ADR 0031 holds the close on the shared environment seat instead of
 		// refusing it, so a hung start still ends in the close asked for.
 		const control = controlById("ticket-close");
-		const context = contextFor("ticket-list", {
-			...values,
+		const context = facts("ticket-list", {
 			selectedTicket: runningTicketWithPane,
 			handoffActive: true,
 		});
@@ -970,8 +1055,7 @@ describe("the shared control catalogue", () => {
 		// 0032) and the Ticket work cycle's (ADR 0031). A key belongs to one mode,
 		// so the guide lists the other section's Close among the control-plane
 		// controls it catalogues on its own terms, never as this mode's key.
-		const consultation = contextFor("consultation-detail", {
-			...values,
+		const consultation = facts("consultation-detail", {
 			selectedConsultation: consultationWithPane,
 		});
 		expect(controlForKey({ name: "w" }, consultation)?.id).toBe("consultation-close");
@@ -979,15 +1063,14 @@ describe("the shared control catalogue", () => {
 			"Current interaction mode",
 		);
 		expect(guideGroupsFor(consultation, "ticket-close")).toEqual([]);
-		const ticket = contextFor("ticket-list", { ...values, selectedTicket: runningTicketWithPane });
+		const ticket = facts("ticket-list", { selectedTicket: runningTicketWithPane });
 		expect(controlForKey({ name: "w" }, ticket)?.id).toBe("ticket-close");
 		expect(guideGroupsFor(ticket, "ticket-close")).toContain("Current interaction mode");
 		expect(guideGroupsFor(ticket, "consultation-close")).toEqual(["Control plane controls"]);
 	});
 
 	test("the Ticket guide names Goto in its own section, and the Consultation guide omits it", () => {
-		const ticket = contextFor("ticket-detail", {
-			...values,
+		const ticket = facts("ticket-detail", {
 			selectedTicket: runningTicketWithPane,
 			ticketPaneAlive: true,
 		});
@@ -997,8 +1080,7 @@ describe("the shared control catalogue", () => {
 					control.id === "ticket-goto" && group === "Current interaction mode",
 			),
 		).toBe(true);
-		const consultation = contextFor("consultation-detail", {
-			...values,
+		const consultation = facts("consultation-detail", {
 			selectedConsultation: consultationWithPane,
 			consultationPaneAlive: true,
 		});
@@ -1012,8 +1094,7 @@ describe("the shared control catalogue", () => {
 	 * stuck one. A closed record answers nothing, in words.
 	 */
 	const consultationIn = (state: Consultation["state"]) =>
-		contextFor("consultation-list", {
-			...values,
+		facts("consultation-list", {
 			selectedConsultation: { id: "c1", state, paneId: "pane-1" } as unknown as Consultation,
 		});
 
@@ -1031,8 +1112,7 @@ describe("the shared control catalogue", () => {
 		// An awaiting Agent takes the response; a blocked one takes the
 		// Agent, and a working one takes the Agent, whatever the recovery
 		// control's own reason says.
-		const awaiting = contextFor("consultation-list", {
-			...values,
+		const awaiting = facts("consultation-list", {
 			selectedConsultation: {
 				state: "awaiting-response",
 				paneId: "pane-1",
@@ -1040,12 +1120,12 @@ describe("the shared control catalogue", () => {
 			consultationAgentStatus: "idle",
 		});
 		expect(controlForKey({ name: "return" }, awaiting)?.id).toBe("consultation-respond");
-		const blocked = contextFor("consultation-list", {
+		const blocked = facts("consultation-list", {
 			...awaiting,
 			consultationAgentStatus: "blocked",
 		});
 		expect(controlForKey({ name: "return" }, blocked)?.id).toBe("consultation-interact");
-		const working = contextFor("consultation-detail", consultationIn("working"));
+		const working = facts("consultation-detail", consultationIn("working"));
 		expect(controlForKey({ name: "return" }, working)?.id).toBe("consultation-interact");
 	});
 
@@ -1061,7 +1141,7 @@ describe("the shared control catalogue", () => {
 
 	test("the Key guide names the recovery meaning of Enter in the Consultation section", () => {
 		for (const mode of ["consultation-list", "consultation-detail"] as const) {
-			const context = contextFor(mode, consultationIn("opening"));
+			const context = facts(mode, consultationIn("opening"));
 			const entry = guideControls(context).find(
 				({ control }) => control.id === "consultation-recovery",
 			);

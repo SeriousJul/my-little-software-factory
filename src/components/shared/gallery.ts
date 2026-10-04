@@ -36,7 +36,13 @@ import { consultationClosePanel } from "../consultation-close-panel.ts";
 import { ConsultationDetail, consultationDetailLines } from "../consultation-detail.ts";
 import { consultationRecoveryPanel } from "../consultation-recovery-panel.ts";
 import { refusalText, useControlDispatch } from "../control-dispatch.ts";
-import { availabilityFor, type ControlContext, contextFor, controlById } from "../controls.ts";
+import {
+	type AvailabilityFacts,
+	availabilityFacts,
+	availabilityFor,
+	controlById,
+	type StandingFacts,
+} from "../controls.ts";
 import { EMPTY_TURN_LOG_NOTE, turnLogBody } from "../decision-modal.ts";
 import { type MessageFact, messageRowElement } from "../messages.ts";
 import {
@@ -56,11 +62,11 @@ import { ticketCloseDialog } from "../ticket-close.ts";
 import { TicketList } from "../ticket-list.ts";
 import { KeyGuide } from "../utility.ts";
 import { workQueueDetailLines } from "../work-queue-detail.ts";
-import { WorkQueueList, type WorkQueueRow } from "../work-queue-list.ts";
+import { type WorkQueueCursorFacts, WorkQueueList, type WorkQueueRow } from "../work-queue-list.ts";
 import { ActionItem, ChoiceRow } from "./choices.ts";
 import { DraftField, type FieldFacts, type FieldHandle, TextField } from "./fields.ts";
 import { copySelectionWith } from "./form.ts";
-import { type ListedRow, ticketRows } from "./grouping.ts";
+import { type GroupCursorFacts, type ListedRow, ticketRows } from "./grouping.ts";
 import {
 	controlInk,
 	inkForTheme,
@@ -312,6 +318,7 @@ function closeDialogElement(
 	return createElement(ActionPanel, {
 		key,
 		message: null,
+		standing: GALLERY_STANDING,
 		inputActive: false,
 		title: panel.title,
 		bodyLines: panel.bodyLines,
@@ -335,6 +342,7 @@ function recoveryDialogElement(state: "opening" | "missing" | "failed", key: str
 	return createElement(ActionPanel, {
 		key,
 		message: null,
+		standing: GALLERY_STANDING,
 		inputActive: false,
 		title: panel.title,
 		bodyLines: panel.bodyLines,
@@ -675,6 +683,42 @@ function sampleTicket(
 /** The source name the mute examples act on (ADR 0070). */
 const MUTE_SOURCE_NAME = "acme/factory-issues";
 
+/**
+ * The plane's standing facts, as the gallery's examples read them.
+ *
+ * Every mode's Availability facts carry this record. An example states the
+ * facts its own mode names beside it, so a picture shows the state a rule
+ * needs instead of a bag of stand-ins.
+ */
+const GALLERY_STANDING: StandingFacts = {
+	handoffActive: false,
+	messageTruncated: false,
+	consultationTypesConfigured: true,
+	sourceCount: 0,
+	refreshingSourceCount: 0,
+	interactionExitKey: "f12",
+};
+/** A list the grouping axis leaves flat, so no Group header stands under the cursor. */
+const NO_GROUP: GroupCursorFacts = {
+	selectedGroupHeader: null,
+	groupHeaderSelected: false,
+	selectedGroupPosition: 0,
+	visibleGroupHeaderCount: 0,
+};
+/** A Ticket row with no failure marker, no List filter beyond the default, and no Agent pane. */
+const NO_TICKET_ROW = {
+	selectedTicketMarker: null,
+	ticketListFilter: "active" as const,
+	ticketPaneAlive: false,
+	ticketPaneForeign: false,
+};
+/** A queue that holds nothing and stands unpaused. */
+const NO_QUEUE: WorkQueueCursorFacts = {
+	selectedWorkQueueItem: null,
+	workQueueDepth: 0,
+	queuePaused: false,
+};
+
 /** The Ticket-base-mode context the Source-mute example runs on (ADR 0070).
  *
  * One row the operator can put a source out of the way, one row whose source
@@ -682,7 +726,10 @@ const MUTE_SOURCE_NAME = "acme/factory-issues";
  * and the header's cell for the ledger. The row names its source, the way the
  * bar's word does: the act rides on the row and acts on the source.
  */
-function ticketMuteContext(mode: "ticket-list" | "ticket-detail", muted: boolean): ControlContext {
+function ticketMuteContext(
+	mode: "ticket-list" | "ticket-detail",
+	muted: boolean,
+): AvailabilityFacts {
 	const now = "2026-02-17T10:00:00.000Z";
 	const ticket = sampleTicket(
 		mode === "ticket-detail" ? "running" : "open",
@@ -690,35 +737,42 @@ function ticketMuteContext(mode: "ticket-list" | "ticket-detail", muted: boolean
 		false,
 		muted,
 	);
-	return contextFor(mode, {
-		selectedTicket: {
-			...ticket,
-			memberships: [
-				{
-					identity: ticket.identity,
-					sourceKind: ticket.sourceKind,
-					externalKey: ticket.externalKey,
-					sourceState: ticket.sourceState,
-					url: ticket.url,
-					title: ticket.title,
-					description: ticket.description,
-					labels: ticket.labels,
-					externalUpdatedAt: now,
-					repository: ticket.repositoryRef,
-					attributes: {},
-					sourceName: MUTE_SOURCE_NAME,
-					health: "healthy",
-				},
-			],
-		},
-		listCanMove: true,
-		detailCanScroll: true,
-		sourceCount: 0,
-		refreshingSourceCount: 0,
-		handoffActive: false,
-		messageTruncated: false,
-		consultationTypesConfigured: true,
-	});
+	const selectedTicket: Ticket = {
+		...ticket,
+		memberships: [
+			{
+				identity: ticket.identity,
+				sourceKind: ticket.sourceKind,
+				externalKey: ticket.externalKey,
+				sourceState: ticket.sourceState,
+				url: ticket.url,
+				title: ticket.title,
+				description: ticket.description,
+				labels: ticket.labels,
+				externalUpdatedAt: now,
+				repository: ticket.repositoryRef,
+				attributes: {},
+				sourceName: MUTE_SOURCE_NAME,
+				health: "healthy",
+			},
+		],
+	};
+	return mode === "ticket-detail"
+		? availabilityFacts("ticket-detail", GALLERY_STANDING, {
+				selectedTicket,
+				...NO_TICKET_ROW,
+				groupingAxis: "none" as const,
+				...NO_GROUP,
+				detailCanScroll: true,
+			})
+		: availabilityFacts("ticket-list", GALLERY_STANDING, {
+				selectedTicket,
+				...NO_TICKET_ROW,
+				groupingAxis: "none" as const,
+				...NO_GROUP,
+				listCanMove: true,
+				queueItemForSelectedRow: null,
+			});
 }
 
 /** One row the mute example draws: the resting row the list withholds and the
@@ -736,18 +790,26 @@ function mutedRowTicket(state: "open" | "running"): Ticket {
 }
 
 /** The Ticket-base-mode context the Ticket-Goto example runs on (ADR 0033). */
-function ticketGotoContext(paneAlive: boolean): ControlContext {
-	return contextFor(paneAlive ? "ticket-detail" : "ticket-list", {
-		selectedTicket: sampleTicket(paneAlive ? "running" : "open"),
-		listCanMove: true,
-		detailCanScroll: true,
-		sourceCount: 0,
-		refreshingSourceCount: 0,
-		ticketPaneAlive: paneAlive,
-		handoffActive: false,
-		messageTruncated: false,
-		consultationTypesConfigured: true,
-	});
+function ticketGotoContext(paneAlive: boolean): AvailabilityFacts {
+	const selectedTicket = sampleTicket(paneAlive ? "running" : "open");
+	return paneAlive
+		? availabilityFacts("ticket-detail", GALLERY_STANDING, {
+				selectedTicket,
+				...NO_TICKET_ROW,
+				ticketPaneAlive: paneAlive,
+				groupingAxis: "none" as const,
+				...NO_GROUP,
+				detailCanScroll: true,
+			})
+		: availabilityFacts("ticket-list", GALLERY_STANDING, {
+				selectedTicket,
+				...NO_TICKET_ROW,
+				ticketPaneAlive: paneAlive,
+				groupingAxis: "none" as const,
+				...NO_GROUP,
+				listCanMove: true,
+				queueItemForSelectedRow: null,
+			});
 }
 
 /** The Ticket-base-mode context the Ticket-ignore example runs on (ADR 0060).
@@ -760,83 +822,87 @@ function ticketIgnoreContext(
 	state: "open" | "awaiting" | "held" | "running",
 	ignored: boolean,
 	marker: "missing" | null = null,
-): ControlContext {
+): AvailabilityFacts {
 	const ticket = sampleTicket(state === "held" ? "awaiting" : state, "worktree", ignored);
-	return contextFor(ignored ? "ticket-detail" : "ticket-list", {
-		// The held row is the awaiting one with its failed turn still undecided:
-		// the fact `obligationOf` reads for the `held` clause of the refusal.
-		selectedTicket: state === "held" ? { ...ticket, lastCompletion: heldCompletion() } : ticket,
-		selectedTicketMarker: marker,
-		listCanMove: true,
-		detailCanScroll: true,
-		sourceCount: 0,
-		refreshingSourceCount: 0,
-		handoffActive: false,
-		messageTruncated: false,
-		consultationTypesConfigured: true,
-	});
+	// The held row is the awaiting one with its failed turn still undecided:
+	// the fact `obligationOf` reads for the `held` clause of the refusal.
+	const selectedTicket =
+		state === "held" ? { ...ticket, lastCompletion: heldCompletion() } : ticket;
+	return ignored
+		? availabilityFacts("ticket-detail", GALLERY_STANDING, {
+				selectedTicket,
+				...NO_TICKET_ROW,
+				selectedTicketMarker: marker,
+				groupingAxis: "none" as const,
+				...NO_GROUP,
+				detailCanScroll: true,
+			})
+		: availabilityFacts("ticket-list", GALLERY_STANDING, {
+				selectedTicket,
+				...NO_TICKET_ROW,
+				selectedTicketMarker: marker,
+				groupingAxis: "none" as const,
+				...NO_GROUP,
+				listCanMove: true,
+				queueItemForSelectedRow: null,
+			});
 }
 
 /** The refusal the ignore states for one row's facts, in the catalogue's own
  * words: the example reads the availability the frame reads, so the sentence
  * on the line and the sentence the control answers with are one sentence. */
-function ticketIgnoreRefusal(context: ControlContext): string {
+function ticketIgnoreRefusal(facts: AvailabilityFacts): string {
 	const control = controlById("ticket-ignore");
-	return refusalText(control, availabilityFor(control, context));
+	return refusalText(control, availabilityFor(control, facts));
 }
 
 /** The context the List-filter example runs on (ADR 0060, widened by ADR
  * 0070): the filter's own value is what the hint reads, so one helper draws
  * all four states. */
-function ticketFilterContext(filter: "active" | "ignored" | "muted" | "all"): ControlContext {
-	return contextFor(filter === "ignored" || filter === "muted" ? "ticket-detail" : "ticket-list", {
+function ticketFilterContext(filter: "active" | "ignored" | "muted" | "all"): AvailabilityFacts {
+	const detail = filter === "ignored" || filter === "muted";
+	const own = {
 		selectedTicket: sampleTicket("open", "worktree", filter === "ignored", filter === "muted"),
+		...NO_TICKET_ROW,
 		ticketListFilter: filter,
-		listCanMove: true,
-		detailCanScroll: true,
-		sourceCount: 0,
-		refreshingSourceCount: 0,
-		handoffActive: false,
-		messageTruncated: false,
-		consultationTypesConfigured: true,
-	});
+		groupingAxis: "none" as const,
+		...NO_GROUP,
+	};
+	return detail
+		? availabilityFacts("ticket-detail", GALLERY_STANDING, { ...own, detailCanScroll: true })
+		: availabilityFacts("ticket-list", GALLERY_STANDING, {
+				...own,
+				listCanMove: true,
+				queueItemForSelectedRow: null,
+			});
 }
 
 /** The Work queue's list context, where `f` owns no list at all (ADR 0060):
  * the key names two lists and this section holds neither. */
-function queueFilterContext(): ControlContext {
-	return contextFor("work-queue-list", {
-		listCanMove: true,
-		detailCanScroll: false,
+function queueFilterContext(): AvailabilityFacts {
+	return availabilityFacts("work-queue-list", GALLERY_STANDING, {
+		...NO_QUEUE,
 		workQueueDepth: 1,
-		sourceCount: 0,
-		refreshingSourceCount: 0,
-		handoffActive: false,
-		messageTruncated: false,
-		consultationTypesConfigured: true,
+		listCanMove: true,
 	});
 }
 
 /** The refusal `f` answers with where it owns nothing, read through the
  * catalogue's own availability: the example states the sentence the plane
  * states, never a copy of it, so a picture cannot outlive a rewording. */
-function ticketFilterRefusal(context: ControlContext): string {
+function ticketFilterRefusal(facts: AvailabilityFacts): string {
 	const control = controlById("ticket-filter");
-	return refusalText(control, availabilityFor(control, context));
+	return refusalText(control, availabilityFor(control, facts));
 }
 
 /** The Consultation-detail context the Goto example runs on. */
-function gotoContext(paneAlive: boolean): ControlContext {
-	return contextFor("consultation-detail", {
+function gotoContext(paneAlive: boolean): AvailabilityFacts {
+	return availabilityFacts("consultation-detail", GALLERY_STANDING, {
 		selectedConsultation: sampleConsultation("working"),
-		listCanMove: true,
-		detailCanScroll: true,
-		sourceCount: 0,
-		refreshingSourceCount: 0,
+		consultationRefreshAvailable: true,
+		consultationAgentStatus: null,
 		consultationPaneAlive: paneAlive,
-		handoffActive: false,
-		messageTruncated: false,
-		consultationTypesConfigured: true,
+		detailCanScroll: true,
 	});
 }
 
@@ -872,18 +938,6 @@ const GALLERY_REPOSITORIES: readonly InitableRepository[] = [
  * sits inactive, the way the dialog examples sit.
  */
 function GalleryRepositorySelect(): ReactElement {
-	// The base facts the panel's bar reads, in the state the gallery holds:
-	// the gallery's own bar stands on the same facts.
-	const context = contextFor("repository-select", {
-		listCanMove: false,
-		detailCanScroll: false,
-		sourceCount: 0,
-		refreshingSourceCount: 0,
-		handoffActive: false,
-		messageTruncated: false,
-		consultationTypesConfigured: true,
-		repositoryCount: GALLERY_REPOSITORIES.length,
-	});
 	const read: { status: "success"; repositories: readonly InitableRepository[] } = {
 		status: "success",
 		repositories: GALLERY_REPOSITORIES,
@@ -896,7 +950,7 @@ function GalleryRepositorySelect(): ReactElement {
 		initialPending: ["github.com/acme/factory"],
 		onCancel: () => undefined,
 		inputActive: false,
-		context,
+		standing: GALLERY_STANDING,
 		message: null,
 		onEmergencyExit: () => undefined,
 	});
@@ -1168,34 +1222,23 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 				createElement(ActionBar, {
 					key: "queue-bar",
 					mode: "work-queue-list",
-					context: contextFor("work-queue-list", {
-						listCanMove: true,
-						detailCanScroll: false,
+					facts: availabilityFacts("work-queue-list", GALLERY_STANDING, {
+						...NO_QUEUE,
 						selectedWorkQueueItem: item,
 						workQueueDepth: 1,
-						queuePaused: false,
-						sourceCount: 0,
-						refreshingSourceCount: 0,
-						handoffActive: false,
-						messageTruncated: false,
-						consultationTypesConfigured: true,
+						listCanMove: true,
 					}),
 					width: columns.contentWidth,
 				}),
 				createElement(ActionBar, {
 					key: "queue-bar-paused",
 					mode: "work-queue-list",
-					context: contextFor("work-queue-list", {
-						listCanMove: true,
-						detailCanScroll: false,
+					facts: availabilityFacts("work-queue-list", GALLERY_STANDING, {
+						...NO_QUEUE,
 						selectedWorkQueueItem: item,
 						workQueueDepth: 1,
 						queuePaused: true,
-						sourceCount: 0,
-						refreshingSourceCount: 0,
-						handoffActive: false,
-						messageTruncated: false,
-						consultationTypesConfigured: true,
+						listCanMove: true,
 					}),
 					width: columns.contentWidth,
 				}),
@@ -1246,11 +1289,11 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 			const awaiting = ticketIgnoreContext("awaiting", false);
 			const held = ticketIgnoreContext("held", false);
 			const missing = ticketIgnoreContext("running", false, "missing");
-			const refusedBar = (key: string, context: ControlContext) =>
+			const refusedBar = (key: string, facts: AvailabilityFacts) =>
 				createElement(ActionBar, {
 					key,
-					mode: context.mode,
-					context,
+					mode: facts.mode,
+					facts,
 					width: columns.contentWidth,
 				});
 			return [
@@ -1258,14 +1301,14 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 				createElement(ActionBar, {
 					key: "ignore-bar",
 					mode: "ticket-list",
-					context: ticketIgnoreContext("open", false),
+					facts: ticketIgnoreContext("open", false),
 					width: columns.contentWidth,
 				}),
 				// The bar beside a piled row: the same key takes it back.
 				createElement(ActionBar, {
 					key: "unignore-bar",
 					mode: "ticket-detail",
-					context: ticketIgnoreContext("open", true),
+					facts: ticketIgnoreContext("open", true),
 					width: columns.contentWidth,
 				}),
 				// A piled row's own face: the marker rides the trailing lane beside the
@@ -1328,14 +1371,14 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 			createElement(ActionBar, {
 				key: "mute-bar",
 				mode: "ticket-list",
-				context: ticketMuteContext("ticket-list", false),
+				facts: ticketMuteContext("ticket-list", false),
 				width: columns.contentWidth,
 			}),
 			// The bar beside a muted row: the same key takes the source back.
 			createElement(ActionBar, {
 				key: "unmute-bar",
 				mode: "ticket-detail",
-				context: ticketMuteContext("ticket-detail", true),
+				facts: ticketMuteContext("ticket-detail", true),
 				width: columns.contentWidth,
 			}),
 			// The ledger the header names: the cell stands only while it is above
@@ -1390,25 +1433,25 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 			createElement(ActionBar, {
 				key: "filter-from-active",
 				mode: "ticket-list",
-				context: ticketFilterContext("active"),
+				facts: ticketFilterContext("active"),
 				width: columns.contentWidth,
 			}),
 			createElement(ActionBar, {
 				key: "filter-from-ignored",
 				mode: "ticket-detail",
-				context: ticketFilterContext("ignored"),
+				facts: ticketFilterContext("ignored"),
 				width: columns.contentWidth,
 			}),
 			createElement(ActionBar, {
 				key: "filter-from-muted",
 				mode: "ticket-detail",
-				context: ticketFilterContext("muted"),
+				facts: ticketFilterContext("muted"),
 				width: columns.contentWidth,
 			}),
 			createElement(ActionBar, {
 				key: "filter-from-all",
 				mode: "ticket-list",
-				context: ticketFilterContext("all"),
+				facts: ticketFilterContext("all"),
 				width: columns.contentWidth,
 			}),
 			// The refusal the Work queue owns: `f` answers in two lists, and this
@@ -1705,6 +1748,7 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 		render: (_columns, _holds, _inputActive, _wiring) => [
 			createElement(ActionPanel, {
 				key: "close-worktree",
+				standing: GALLERY_STANDING,
 				message: null,
 				inputActive: false,
 				...ticketCloseDialog(sampleTicket("running")),
@@ -1720,6 +1764,7 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 		render: (_columns, _holds, _inputActive, _wiring) => [
 			createElement(ActionPanel, {
 				key: "close-live-worktree",
+				standing: GALLERY_STANDING,
 				message: null,
 				inputActive: false,
 				...ticketCloseDialog(sampleTicket("awaiting", "live-worktree")),
@@ -1773,13 +1818,13 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 			createElement(ActionBar, {
 				key: "goto-available",
 				mode: "consultation-detail",
-				context: gotoContext(true),
+				facts: gotoContext(true),
 				width: columns.contentWidth,
 			}),
 			createElement(ActionBar, {
 				key: "goto-unavailable",
 				mode: "consultation-detail",
-				context: gotoContext(false),
+				facts: gotoContext(false),
 				width: columns.contentWidth,
 			}),
 		],
@@ -1794,13 +1839,13 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 			createElement(ActionBar, {
 				key: "ticket-goto-available",
 				mode: "ticket-detail",
-				context: ticketGotoContext(true),
+				facts: ticketGotoContext(true),
 				width: columns.contentWidth,
 			}),
 			createElement(ActionBar, {
 				key: "ticket-goto-unavailable",
 				mode: "ticket-list",
-				context: ticketGotoContext(false),
+				facts: ticketGotoContext(false),
 				width: columns.contentWidth,
 			}),
 		],
@@ -1859,16 +1904,13 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 				createElement(ActionBar, {
 					key,
 					mode: "consultation-list",
-					context: contextFor("consultation-list", {
+					facts: availabilityFacts("consultation-list", GALLERY_STANDING, {
 						selectedConsultation: sampleConsultation(state),
-						listCanMove: true,
-						detailCanScroll: false,
-						sourceCount: 0,
-						refreshingSourceCount: 0,
-						handoffActive: false,
-						messageTruncated: false,
-						consultationTypesConfigured: true,
 						consultationRefreshAvailable: true,
+						consultationAgentStatus: null,
+						consultationPaneAlive: false,
+						listCanMove: true,
+						queueItemForSelectedRow: null,
 					}),
 					width: columns.contentWidth,
 				});
@@ -1953,20 +1995,19 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 				createElement(ActionBar, {
 					key,
 					mode: "ticket-list",
-					context: contextFor("ticket-list", {
+					facts: availabilityFacts("ticket-list", GALLERY_STANDING, {
 						listCanMove: true,
-						detailCanScroll: false,
 						selectedTicket: header ? undefined : listed[0],
+						...NO_TICKET_ROW,
 						groupingAxis: "repository",
+						...NO_GROUP,
 						groupHeaderSelected: header,
 						selectedGroupHeader: header
 							? { value: "acme/billing", count: 2, held: 1, collapsed: false }
 							: null,
-						sourceCount: 0,
-						refreshingSourceCount: 0,
-						handoffActive: false,
-						messageTruncated: false,
-						consultationTypesConfigured: true,
+						visibleGroupHeaderCount: 1,
+						selectedGroupPosition: header ? 0 : -1,
+						queueItemForSelectedRow: null,
 					}),
 					width: columns.contentWidth,
 				});
@@ -2185,16 +2226,11 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 				createElement(ActionBar, {
 					key: "queue-bar",
 					mode: "work-queue-list",
-					context: contextFor("work-queue-list", {
-						listCanMove: true,
-						detailCanScroll: false,
+					facts: availabilityFacts("work-queue-list", GALLERY_STANDING, {
+						...NO_QUEUE,
 						selectedWorkQueueItem: items[0],
 						workQueueDepth: items.length,
-						sourceCount: 0,
-						refreshingSourceCount: 0,
-						handoffActive: false,
-						messageTruncated: false,
-						consultationTypesConfigured: true,
+						listCanMove: true,
 					}),
 					width: columns.contentWidth,
 				}),
@@ -2242,16 +2278,11 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 				createElement(ActionBar, {
 					key,
 					mode: "work-queue-list",
-					context: contextFor("work-queue-list", {
-						listCanMove: selected !== null,
-						detailCanScroll: false,
+					facts: availabilityFacts("work-queue-list", GALLERY_STANDING, {
+						...NO_QUEUE,
 						selectedWorkQueueItem: selected,
 						workQueueDepth: selected === null ? 0 : 1,
-						sourceCount: 0,
-						refreshingSourceCount: 0,
-						handoffActive: false,
-						messageTruncated: false,
-						consultationTypesConfigured: true,
+						listCanMove: selected !== null,
 					}),
 					width: columns.contentWidth,
 				});
@@ -2612,21 +2643,15 @@ export function Gallery({
 	// the example's fields stay mounted, so closing returns the same field,
 	// caret, and selection the operator left.
 	const [guideOpen, setGuideOpen] = useState(false);
-	const barContext = contextFor("form-field", {
-		listCanMove: false,
-		detailCanScroll: false,
-		sourceCount: 0,
-		refreshingSourceCount: 0,
-		handoffActive: false,
-		messageTruncated: false,
-		consultationTypesConfigured: true,
+	const barFacts = availabilityFacts("form-field", GALLERY_STANDING, {
 		fieldHasSelection: hasSelection,
+		formCycleCount: 0,
+		formRefusal: null,
 	});
 	// The gallery's own keys come from the same catalogue the application runs,
 	// so a contributor exercises the real dispatch and the real Action bar.
 	useControlDispatch({
-		mode: "form-field",
-		context: barContext,
+		facts: barFacts,
 		onEmergencyExit,
 		active: guideOpen === false,
 		handlers: {
@@ -2679,12 +2704,12 @@ export function Gallery({
 				minRows: 3,
 			},
 			message,
-			bar: { mode: "form-field", context: barContext },
+			bar: { mode: "form-field", facts: barFacts },
 		}),
 		guideOpen &&
 			createElement(KeyGuide, {
 				message,
-				context: barContext,
+				facts: barFacts,
 				onClose: () => setGuideOpen(false),
 				onEmergencyExit,
 			}),

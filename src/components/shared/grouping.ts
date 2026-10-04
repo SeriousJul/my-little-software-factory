@@ -243,6 +243,47 @@ export function cursorRowCount<T>(rows: readonly ListedRow<T>[]): number {
 	return count;
 }
 
+/**
+ * The Availability facts this module's own rows produce for one cursor.
+ *
+ * The header under the cursor, whether the cursor stands on one, the header's
+ * position among the visible headers, and their count all come from the row
+ * list this module built, so the fold, the move, and the step read the same
+ * rows the list draws (issue #159, ADR 0071). A cursor index outside the list
+ * - a section that draws no list at all - states no header.
+ */
+export interface GroupCursorFacts {
+	/** The Group header under the cursor, or null where none stands. */
+	selectedGroupHeader: GroupHeader | null;
+	/** Whether the cursor stands on a Group header. */
+	groupHeaderSelected: boolean;
+	/** The header's position among the visible headers, zero-based. */
+	selectedGroupPosition: number;
+	/** The Group headers the list shows. */
+	visibleGroupHeaderCount: number;
+}
+
+export function groupCursorFacts<T>(
+	rows: readonly ListedRow<T>[],
+	index: number,
+): GroupCursorFacts {
+	const at = index >= 0 ? rows[index] : undefined;
+	const header = at !== undefined && at.kind === "group" ? at.group : null;
+	let position = 0;
+	let count = 0;
+	for (let i = 0; i < rows.length; i += 1) {
+		if (rows[i]?.kind !== "group") continue;
+		if (i < index) position += 1;
+		count += 1;
+	}
+	return {
+		selectedGroupHeader: header,
+		groupHeaderSelected: header !== null,
+		selectedGroupPosition: position,
+		visibleGroupHeaderCount: count,
+	};
+}
+
 /** What the grouping mechanism asks the section for: the facts one row carries. */
 export interface GroupingOf<T> {
 	/** The axis in effect. `none` draws today's flat list, with no header. */

@@ -13,7 +13,15 @@
 import { useCallback, useRef, useState } from "react";
 
 import type { ControlHandler } from "../control-dispatch.ts";
-import type { ControlContext, InteractionMode } from "../controls.ts";
+import type {
+	FormActionFacts,
+	FormFieldFacts,
+	FormSelectorFacts,
+	FormSlotFacts,
+	InteractionMode,
+	StandingFacts,
+} from "../controls.ts";
+import { availabilityFacts } from "../controls.ts";
 import type { MessageFact } from "../messages.ts";
 import type { FieldHandle } from "./fields.ts";
 
@@ -28,7 +36,13 @@ export interface FormSlot {
 	label: string;
 }
 
-/** The facts a form's controls are gated on, beyond the focused slot. */
+/**
+ * The facts a form's controls are gated on, beyond the focused slot.
+ *
+ * The form module owns the slot's facts, so a caller states what only it knows
+ * - how many values its selector offers, why its action cannot run - and the
+ * module fills in the rest.
+ */
 export interface FormFacts {
 	/** Whether the focused field holds a selection the Copy control can hand over. */
 	fieldHasSelection?: boolean;
@@ -36,9 +50,10 @@ export interface FormFacts {
 	formCycleCount?: number;
 	/** Why the focused action cannot run, in the surface's own words. */
 	formRefusal?: string;
-	/** Whether the Model search row holds text its clear control can remove. */
-	formSearchActive?: boolean;
 }
+
+/** The facts of the three modes one shared form runs. */
+export type FormModeFacts = FormFieldFacts | FormSelectorFacts | FormActionFacts;
 
 /** The focus of one form, read the way its key handler needs it. */
 export interface FormFocus {
@@ -67,8 +82,8 @@ export interface FormFocus {
 	move(delta: number): void;
 	/** Put the focus on one named slot, as a restored draft asks. */
 	select(id: string): void;
-	/** The same facts, in the shape the control catalogue gates on. */
-	context(base: ControlContext, facts?: FormFacts): ControlContext;
+	/** The Availability facts of the mode the focused slot owns. */
+	facts(standing: StandingFacts, own?: FormFacts): FormModeFacts;
 }
 
 /** The mode of one slot kind: the rule that slot owns the keyboard under. */
@@ -115,15 +130,21 @@ export function useFormSlots(slots: readonly FormSlot[]): FormFocus {
 			ref.current = index;
 			setAt(index);
 		},
-		context: (base: ControlContext, facts: FormFacts = {}) => ({
-			...base,
-			mode: slotMode(focused()?.kind ?? "field"),
-			formSlot: focused()?.kind ?? "field",
-			fieldHasSelection: facts.fieldHasSelection === true,
-			formCycleCount: facts.formCycleCount,
-			formRefusal: facts.formRefusal,
-			formSearchActive: facts.formSearchActive,
-		}),
+		facts: (standing: StandingFacts, own: FormFacts = {}): FormModeFacts => {
+			const slot: FormSlotFacts = {
+				fieldHasSelection: own.fieldHasSelection === true,
+				formCycleCount: own.formCycleCount ?? 0,
+				formRefusal: own.formRefusal ?? null,
+			};
+			switch (focused()?.kind ?? "field") {
+				case "selector":
+					return availabilityFacts("form-selector", standing, slot);
+				case "action":
+					return availabilityFacts("form-action", standing, slot);
+				default:
+					return availabilityFacts("form-field", standing, slot);
+			}
+		},
 	};
 }
 

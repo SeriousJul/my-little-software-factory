@@ -29,7 +29,7 @@ import { useEffect, useRef, useState } from "react";
 
 import type { InitableRepository } from "../repository-list.ts";
 import { useControlDispatch } from "./control-dispatch.ts";
-import { type ControlContext, contextFor } from "./controls.ts";
+import { availabilityFacts, type StandingFacts } from "./controls.ts";
 import type { MessageFact } from "./messages.ts";
 import { type ActionRow, MARKER_WIDTH, ModalSurface, modalFrame } from "./modal-chrome.ts";
 import { TextField } from "./shared/fields.ts";
@@ -56,7 +56,8 @@ interface RepositorySelectPanelProps {
 	initialPending?: readonly string[];
 	onCancel: () => void;
 	/** The base control facts, preserved while this panel owns input. */
-	context: ControlContext;
+	/** The plane's standing facts, read the same way in every mode. */
+	standing: StandingFacts;
 	/** False while a Key guide or Message view is above this panel. */
 	inputActive?: boolean;
 	/** Open the Key guide on the mode this panel is running. */
@@ -91,7 +92,7 @@ export function RepositorySelectPanel({
 	onSelect,
 	initialPending,
 	onCancel,
-	context,
+	standing,
 	inputActive = true,
 	onHelp,
 	onMessage,
@@ -146,15 +147,16 @@ export function RepositorySelectPanel({
 	const region = useDecisionRegion(rows, visibleRows);
 	const ink = controlInk();
 
+	// The panel states the facts its own list produces: the rows it holds, the
+	// search's text, and the rows the operator marked for the queue.
+	const facts = availabilityFacts("repository-select", standing, {
+		listCanMove: filtered.length > 0,
+		repositoryCount: filtered.length,
+		searchText: query,
+		pendingCount: pending.size,
+	});
 	useControlDispatch({
-		mode: "repository-select",
-		context: contextFor("repository-select", {
-			...context,
-			listCanMove: filtered.length > 0,
-			repositoryCount: filtered.length,
-			searchText: query,
-			pendingCount: pending.size,
-		}),
+		facts,
 		active: inputActive,
 		onUnavailable,
 		onEmergencyExit,
@@ -306,15 +308,6 @@ export function RepositorySelectPanel({
 			minRows: SEARCH_ROWS + NOTE_ROWS + MIN_LIST_ROWS,
 		},
 		message,
-		bar: {
-			mode: "repository-select",
-			context: contextFor("repository-select", {
-				...context,
-				listCanMove: filtered.length > 0,
-				repositoryCount: filtered.length,
-				searchText: query,
-				pendingCount: pending.size,
-			}),
-		},
+		bar: { mode: "repository-select", facts },
 	});
 }

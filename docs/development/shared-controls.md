@@ -45,6 +45,11 @@ Draft storage and Agent operations stay outside the shared modules. Callers must
 not need to manage renderer buffers, keyboard subscriptions, or caret repair to
 use a field correctly.
 
+Availability facts are stated per Interaction mode: each mode names only the
+facts its own controls read, the surface that owns the mode states exactly those
+facts beside the plane's standing facts, and the compiler rejects a missing one.
+No surface builds its facts by spreading a facts record it does not own.
+
 Reuse the existing shared control and modal code where it fits this standard.
 OpenTUI's field primitives are candidates for the shared implementation, not
 public escape routes for separate screen-specific editors. Do not create a

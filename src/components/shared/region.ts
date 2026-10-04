@@ -42,6 +42,14 @@ export interface DecisionRegion {
 	/** The rows the region shows, in order. */
 	window: readonly ActionRow[];
 	/**
+	 * The rows the region holds, shown or not.
+	 *
+	 * The catalogue refuses the region's selection where the region holds one
+	 * row, so the count the region's own cursor walks is the count the gate
+	 * reads (ADR 0039).
+	 */
+	rowCount: number;
+	/**
 	 * The region's range text: first-last of total, behind the selection's
 	 * hint on the Action bar. Absent when the region shows every row.
 	 */
@@ -87,6 +95,7 @@ export function useDecisionRegion(rows: readonly ActionRow[], visibleRows: numbe
 	};
 	return {
 		at,
+		rowCount: count,
 		move: (delta: number) => {
 			if (count === 0) return;
 			place((Math.min(ref.current, last) + delta + count) % count);
@@ -112,5 +121,25 @@ export function useDecisionRegion(rows: readonly ActionRow[], visibleRows: numbe
 		window,
 		rangeText:
 			limit > 0 && count > limit ? rangeTextOf(windowTop, window.length, count) : undefined,
+	};
+}
+
+/**
+ * The Body pane's window facts.
+ *
+ * The pane holds more rows than its window shows, or it holds nothing at all.
+ * The catalogue gates the body's scroll on the pair, so the Action bar never
+ * hints a scroll that cannot run and a pressed key says why (ADR 0039). The
+ * region module owns the window over a pane's rows, so it states the pair from
+ * the counts the pane already computed.
+ */
+export function bodyPaneFacts(
+	rows: number,
+	windowRows: number,
+	carriesNothing: boolean,
+): { bodyScrollable: boolean; bodyEmpty: boolean } {
+	return {
+		bodyEmpty: carriesNothing,
+		bodyScrollable: !carriesNothing && rows > windowRows,
 	};
 }

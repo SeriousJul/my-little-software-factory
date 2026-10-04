@@ -12,7 +12,7 @@ import { createElement } from "@opentui/react";
 import { testRender } from "@opentui/react/test-utils";
 
 import { ConsultationLauncher } from "../src/components/consultation-launcher.ts";
-import type { ControlContext } from "../src/components/controls.ts";
+import type { StandingFacts } from "../src/components/controls.ts";
 import { awaitFrame, frameText } from "./app-harness.ts";
 
 const types = {
@@ -28,15 +28,13 @@ const repositories = [
 ];
 
 /** The base control facts the launcher is mounted over: the list, idle. */
-const BASE_CONTEXT: ControlContext = {
-	mode: "ticket-list",
-	listCanMove: false,
-	detailCanScroll: false,
+const BASE_STANDING: StandingFacts = {
 	sourceCount: 1,
 	refreshingSourceCount: 0,
 	handoffActive: false,
 	messageTruncated: false,
 	consultationTypesConfigured: true,
+	interactionExitKey: "f12",
 };
 
 async function launcher(
@@ -49,7 +47,7 @@ async function launcher(
 			types,
 			repositories: repositoriesOverride ?? repositories,
 			draft,
-			context: BASE_CONTEXT,
+			standing: BASE_STANDING,
 			message: null,
 			onCopy: () => undefined,
 			onLaunch,

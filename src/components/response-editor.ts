@@ -17,7 +17,7 @@ import { useRef, useState } from "react";
 
 import { responseOversize, validateResponseInput } from "../consultation/response-draft.ts";
 import { useControlDispatch } from "./control-dispatch.ts";
-import type { ControlContext } from "./controls.ts";
+import type { StandingFacts } from "./controls.ts";
 import { type MessageFact, messageRowElement } from "./messages.ts";
 import { type ActionRow, MARKER_WIDTH } from "./modal-chrome.ts";
 import { ActionItem } from "./shared/choices.ts";
@@ -35,7 +35,8 @@ interface ResponseEditorProps {
 	/** The rows the consultations view gives this panel, border included. */
 	rows: number;
 	focused: boolean;
-	context: ControlContext;
+	/** The plane's standing facts, read the same way in every mode. */
+	standing: StandingFacts;
 	/** False while a Key guide or Message view is above this editor. */
 	inputActive?: boolean;
 	/** Send the draft to the Consultation's Agent. */
@@ -82,7 +83,7 @@ export function ResponseEditor({
 	width,
 	rows,
 	focused,
-	context,
+	standing,
 	inputActive = true,
 	onSend,
 	onDiscard,
@@ -102,13 +103,17 @@ export function ResponseEditor({
 	const focus: FormFocus = useFormSlots(SLOTS);
 	const moveField = moveFieldWith(focus);
 	const refusal = validateResponseInput(size);
-	const formContext = focus.context(context, {
-		fieldHasSelection: selection.current,
-		formRefusal: focus.holds("send") ? refusal : undefined,
-	});
+	// The form module states the slot facts: which slot holds the focus, and
+	// the selection and the refusal this editor owns. The record names the mode
+	// the focused slot owns, so a key that moves the focus moves the mode with
+	// it in the same tick.
+	const formFacts = () =>
+		focus.facts(standing, {
+			fieldHasSelection: selection.current,
+			formRefusal: focus.holds("send") ? refusal : undefined,
+		});
 	useControlDispatch({
-		mode: focus.mode,
-		context: formContext,
+		facts: formFacts,
 		active: focused && inputActive,
 		onUnavailable,
 		onEmergencyExit,

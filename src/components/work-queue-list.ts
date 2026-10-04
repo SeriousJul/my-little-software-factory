@@ -9,6 +9,7 @@ import type { BoxRenderable } from "@opentui/core";
 import { createElement } from "@opentui/react";
 import { useRef } from "react";
 import type { WorkQueueItem } from "../state/work-queue.ts";
+import type { WorkQueueSectionFacts } from "./controls.ts";
 import { usePaneGeometry } from "./geometry.ts";
 import { listMouse, listWindow } from "./list-pane.ts";
 import { padToWidth, truncateToWidth, widthOf } from "./text.ts";
@@ -143,4 +144,54 @@ function itemRow(row: WorkQueueRow, selected: boolean, width: number) {
 			truncateToWidth(suffix, Math.max(0, width - widthOf(prefix) - available)),
 		),
 	];
+}
+
+/**
+ * The Availability facts the Work queue's own rows produce for one cursor.
+ *
+ * The item under the cursor, the queue's depth, and the pause all come from the
+ * queue this section draws, so the queue's order keys, its pause hint, and its
+ * force-dispatch cannot disagree with the queue itself (ADR 0034, ADR 0052).
+ */
+export type WorkQueueCursorFacts = WorkQueueSectionFacts;
+
+export function workQueueCursorFacts(
+	items: readonly WorkQueueItem[],
+	index: number,
+	paused: boolean,
+): WorkQueueCursorFacts {
+	return {
+		selectedWorkQueueItem: items[index] ?? null,
+		workQueueDepth: items.length,
+		queuePaused: paused,
+	};
+}
+
+/**
+ * The item that waits under a Ticket row (ADR 0049).
+ *
+ * A row whose Ticket has a waiting start in the queue carries that item, and
+ * Enter on the row jumps to it. A row that holds no Ticket - a Group header -
+ * waits with nothing.
+ */
+export function handoffItemWaitingForTicket(
+	items: readonly WorkQueueItem[],
+	ticketIdentity: string | undefined,
+): WorkQueueItem | null {
+	if (ticketIdentity === undefined) return null;
+	return (
+		items.find((item) => item.kind === "handoff" && item.ticketIdentity === ticketIdentity) ?? null
+	);
+}
+
+/** The item that waits under a Consultation row (ADR 0049). */
+export function consultationItemWaitingFor(
+	items: readonly WorkQueueItem[],
+	consultationId: string | undefined,
+): WorkQueueItem | null {
+	if (consultationId === undefined) return null;
+	return (
+		items.find((item) => item.kind === "consultation" && item.consultationId === consultationId) ??
+		null
+	);
 }

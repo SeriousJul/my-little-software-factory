@@ -35,7 +35,7 @@ import { useMemo, useState } from "react";
 
 import { isHeldCause, type TurnEndCause, type TurnLogEntry } from "../turn-log.ts";
 import { useControlDispatch } from "./control-dispatch.ts";
-import { type ControlContext, contextFor } from "./controls.ts";
+import { availabilityFacts, type StandingFacts } from "./controls.ts";
 import { maxScrollOf, windowOf } from "./geometry.ts";
 import { type MdColors, type MdLine, renderMarkdown } from "./markdown.ts";
 import type { MessageFact } from "./messages.ts";
@@ -52,7 +52,7 @@ import {
 } from "./modal-chrome.ts";
 import { ActionItem } from "./shared/choices.ts";
 import { turnEndCauseLine } from "./shared/presentation.ts";
-import { useDecisionRegion } from "./shared/region.ts";
+import { bodyPaneFacts, useDecisionRegion } from "./shared/region.ts";
 import { truncateToWidth } from "./text.ts";
 import { paint } from "./theme.ts";
 
@@ -78,7 +78,8 @@ interface DecisionModalProps {
 	onEditAction?: (key: string) => void;
 	onCancel: () => void;
 	/** The base control facts, preserved when this modal owns input. */
-	context: ControlContext;
+	/** The plane's standing facts, read the same way in every mode. */
+	standing: StandingFacts;
 	/** False while a Key guide or Message view is above this modal. */
 	inputActive?: boolean;
 	onHelp?: () => void;
@@ -213,7 +214,7 @@ export function DecisionModal({
 	onAction,
 	onEditAction,
 	onCancel,
-	context,
+	standing,
 	inputActive = true,
 	onHelp,
 	onMessage,
@@ -296,14 +297,14 @@ export function DecisionModal({
 	// The plane action's row holds no settings (ADR 0068): the surface states
 	// it, and the catalogue keeps the one gate with the reason it names.
 	const planeActionSelected = actions[region.at]?.planeAction === true;
-	const modalContext = {
-		...context,
+	// The modal states the facts its own regions produce: the Decision
+	// region's row count, and the Body pane's window beside it.
+	const facts = availabilityFacts("decision-modal", standing, {
 		editableActionSelected,
 		planeActionSelected,
-		bodyScrollable: !emptyLog && maxBodyScroll > 0,
-		bodyEmpty: emptyLog,
+		...bodyPaneFacts(renderedBody.length, bodyRows, emptyLog),
 		actionRowCount: actions.length,
-	};
+	});
 
 	// Scroll the body by one step of the named key: a page moves one viewport
 	// minus the shared row, and the jump keys take either edge. A null view
@@ -323,8 +324,7 @@ export function DecisionModal({
 	};
 
 	useControlDispatch({
-		mode: "decision-modal",
-		context: contextFor("decision-modal", modalContext),
+		facts,
 		active: inputActive,
 		onUnavailable,
 		onEmergencyExit,
@@ -417,7 +417,7 @@ export function DecisionModal({
 		message,
 		bar: {
 			mode: "decision-modal",
-			context: contextFor("decision-modal", modalContext),
+			facts,
 			rangeIndicator: region.rangeText,
 		},
 	});

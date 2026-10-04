@@ -18,9 +18,9 @@ import { createElement } from "@opentui/react";
 import type { ReactElement } from "react";
 
 import {
+	type AvailabilityFacts,
 	actionBarControls,
 	availabilityFor,
-	type ControlContext,
 	type ControlDefinition,
 	compactKeyLabels,
 	type InteractionMode,
@@ -31,7 +31,7 @@ import { padToWidth, truncateToWidth, widthOf } from "./text.ts";
 
 interface ActionBarProps {
 	mode: InteractionMode;
-	context: ControlContext;
+	facts: AvailabilityFacts;
 	/**
 	 * The cells the row may fill, handed down by the surface that measured it.
 	 *
@@ -78,7 +78,7 @@ const GAP = 2;
  */
 function packActionBar(
 	controls: readonly ControlDefinition[],
-	context: ControlContext,
+	facts: AvailabilityFacts,
 	width: number,
 	options: { rangeIndicator?: string; anchorOnly?: boolean } = {},
 ): PackedBar {
@@ -86,9 +86,9 @@ function packActionBar(
 		control,
 		// The hint's wording rides on the control that owns it, so the bar
 		// packs the catalogue and no second map restates a label.
-		label: control.barLabel?.(context) ?? control.label,
-		keyLabel: keyLabelFor(context.mode, control, context),
-		availability: availabilityFor(control, context),
+		label: control.barLabel?.(facts) ?? control.label,
+		keyLabel: keyLabelFor(facts.mode, control, facts),
+		availability: availabilityFor(control, facts),
 	}));
 	// Where a bar carries two anchors, the one that outranks the rest holds the
 	// cells: a utility overlay's Close beats its Help, because it ends the
@@ -139,19 +139,19 @@ function fitAnchorHint(
 	anchor: PackedControl,
 	mode: InteractionMode,
 	width: number,
-	context: ControlContext,
+	facts: AvailabilityFacts,
 ): string {
 	const full = `${anchor.keyLabel} ${anchor.label}`;
 	if (widthOf(full) <= width) return full;
-	for (const key of compactKeyLabels(mode, anchor.control, context))
+	for (const key of compactKeyLabels(mode, anchor.control, facts))
 		if (widthOf(key) <= width) return key;
 	return "";
 }
 
-export function ActionBar({ mode, context, width, rangeIndicator, compactAnchor }: ActionBarProps) {
+export function ActionBar({ mode, facts, width, rangeIndicator, compactAnchor }: ActionBarProps) {
 	const ink = controlInk();
-	const controls = actionBarControls(mode, context);
-	const packed = packActionBar(controls, context, width, {
+	const controls = actionBarControls(mode, facts);
+	const packed = packActionBar(controls, facts, width, {
 		rangeIndicator,
 		anchorOnly: compactAnchor,
 	});
@@ -164,7 +164,7 @@ export function ActionBar({ mode, context, width, rangeIndicator, compactAnchor 
 		return createElement(
 			"text",
 			{ style: { width: "100%", height: 1 } },
-			padToWidth(truncateToWidth(fitAnchorHint(anchor, mode, width, context), width), width),
+			padToWidth(truncateToWidth(fitAnchorHint(anchor, mode, width, facts), width), width),
 		);
 	// The compact row left-aligns its one hint; a full bar keeps the anchor in
 	// its own cells at the right end of the row.
