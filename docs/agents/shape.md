@@ -132,8 +132,12 @@ description: The module map of the source tree, for agents working in this repos
 	the environment the choice names through herdr, starts the agent, sends the
 	prompt, and removes what the start created when the agent never starts. The
 	Ticket caller and the Consultation caller state their facts and hand one
-	request to it; only the Consultation hands a resource table with its own
-	wording, and the start confirms in that table what its cleanup removed.
+		request to it; only the Consultation hands a resource table with its own
+		wording, and the start confirms in that table what its cleanup removed, under
+		the kind the start recorded the handle under. The residue record is the
+		start's own and its builders write into it as they create a handle, and the
+		steps from the environment build through the prompt run inside one guard, so
+		a command that raises cleans up the way a command herdr refused does.
 - `src/consultation/`: the Consultation rules that need no terminal, one module
 	per concept (issue #203, ADR 0096). `response-draft.ts` owns the input limit,
 	the emptiness rule, the size reason, the literal-text rule, and the bounded

@@ -60,6 +60,15 @@ start path and the last one that answered through several entry points.
   before any external step, so no start resolves - and can clone - a repository
   it will never use. The Ticket path changed to the Consultation path's order,
   because that order was the readable one.
+- **The bad-choice wording stays in `checkStart`, not in the shared presentation
+  module.** The spec for this cut said the reason wording would come from the
+  shared presentation module. It does not, and that is the decision:
+  `src/components/shared/presentation.ts` owns labels, focus markers, state
+  words, and the tested color pairs for the control plane's controls, and a
+  handoff failure sentence is a domain fact about a choice, not a control's
+  presentation. Putting it there would put a domain rule in the control library
+  ADR 0014 keeps domain validation out of. `checkStart` owns the sentences the
+  way the Setting fit module owns its own.
 - **One facts builder feeds the pre-flight.** `choiceFacts` reads a `HandoffChoice`
   and reads an empty Task type as "no Task type". A Consultation record reaches
   the same rule through `consultationStartFacts`, which names each field it
@@ -74,13 +83,35 @@ start path and the last one that answered through several entry points.
   whether the one a previous Handoff recorded still holds - `workspaceHeld` and
   `workspaceAtCheckout` own the two lookups, and `herdrHandles` owns the Workspace
   id, Pane id, and Tab id read at every start site.
-- **One cleanup rule reads one record.** The start writes a `Residue` as it
-  creates each handle, and `removeResidue` removes exactly what that record
-  holds when the Agent never starts. The coverage is therefore the same on every
-  Environment kind. No start builder closes anything itself: an incomplete herdr
-  answer returns its residue like any other failure. What pre-dates the attempt
-  never enters the record, so a stored Workspace, a branch the repository already
-  carried, and a pull request the read found all stand (ADR 0062, ADR 0076).
+- **One cleanup rule reads one record.** The start owns a `Residue` and every
+  Environment builder writes into it as it creates a handle, and `removeResidue`
+  removes exactly what that record holds when the Agent never starts. The
+  coverage is therefore the same on every Environment kind. No start builder
+  closes anything itself: an incomplete herdr answer fails like any other
+  failure. What pre-dates the attempt never enters the record, so a stored
+  Workspace, a branch the repository already carried, and a pull request the read
+  found all stand (ADR 0062, ADR 0076).
+- **The record carries the kind it was recorded under.** Each handle enters the
+  record as a `CreatedHandle` - a `ResourceKind` (`tab`, `workspace`, `worktree`)
+  beside the handle - and `recordResource` answers with it. `confirmRemoved`
+  reads the kind out of the record instead of spelling the word a second time, so
+  the write into the caller's resource table and the confirmation of it cannot
+  name two different kinds and leave the recorded row standing in silence (pull
+  request #213 review).
+- **A command that raises is a failure the start answers.** The steps from the
+  Environment build through the prompt run inside one guard. A raise - what a
+  `CommandRunner` adapter makes for a command it cannot run at all, and what an
+  injected callback can make - answers as a failed start that runs the same
+  cleanup a tagged failure runs. A raise after the Agent started answers as the
+  failed prompt it is, because a started Agent is never rolled back. The
+  production runner maps a spawn-level failure to a failed command, so this is
+  the same rule `runPullRequestOpen` already held for its own commands, extended
+  to the steps that run after the Environment stands.
+- **The start takes the pre-flight as a fact, never recomputes one.**
+  `HandoffStartRequest.startCheck` is required. The start used to fall back to a
+  `checkStart` of its own; both callers always carried a check, so the fallback
+  was dead code, and it let a caller hand in a check computed from facts the
+  request did not state.
 - **The branch policy stays a fact, not a merge.** A Ticket branch is reused and
   a Consultation branch is refused. The naming rules are untouched.
 - **The resource recorder stays injected, and it travels with its wording.** The
@@ -91,6 +122,15 @@ start path and the last one that answered through several entry points.
   the caller did not state. The recorder has a second half, `removed`, which the
   start's own cleanup calls for what it really took down, so the record holds no
   row for a handle the plane already closed.
+- **The module keeps four injected callbacks, not the two the spec names.** The
+  spec named the stage recorder and the resource recorder. The module also keeps
+  `onAgentStarted` and `onRepositoryResolved`, because each is a durable write
+  the caller must make before the next external step: the Agent's handles, so a
+  run that dies mid-start still leaves the plane able to find the Agent it
+  started, and the resolved checkout path, so the Consultation record names the
+  directory its worktree was built from. Both follow the same ordering rule that
+  keeps the resource recorder injected, and both stay optional: a Ticket start
+  carries neither.
 - **The filesystem work stays inside the implementation.** The repository
   resolution, the leftover worktree directory move, and the real path comparison
   run for real. A filesystem seam would have one adapter, so it would be
@@ -104,16 +144,21 @@ start path and the last one that answered through several entry points.
 - A failed start leaves the same residue on every Environment kind, and the
   contract is pinned by tests at the start interface rather than asserted in a
   comment. The keep-half of that contract - what pre-dates the attempt stands -
-  is pinned by assertions that can fail (issue #213 review, and
+  is pinned by assertions that can fail (pull request #213 review, and
   `test/assertion-architecture.test.ts` refuses the assertion shape that could
   not fail). A cleanup that really removed a resource confirms the row the start
-  wrote for it, so the Consultation's detail pane names no residue that is gone.
+  wrote for it, under the kind the start wrote it under, so the Consultation's
+  detail pane names no residue that is gone. The contract holds against a command
+  that raises as well as one herdr refuses: the fake runner can stand a raise,
+  and "the one start: a command that raises" pins it at the interface.
 - A contributor reads one start sequence. `src/handoff.ts` is not a smaller file
-  after this cut - it is 2,778 lines and 70 functions at the merge - but it holds
-  one start, one pre-flight, one workspace reader, one handle read, and one
-  cleanup rule instead of two or seven of each. Splitting the Environment builders,
-  the pull request open, and the prompt render out of the module is the natural
-  next cut.
+  after this cut - it is 2,778 lines and 70 functions at the merge, and 2,967
+  lines and 76 functions after the review's raised-command guard and the
+  kind-carrying residue record landed - but it holds one start, one pre-flight,
+  one workspace reader, one handle read, and one cleanup rule instead of two or
+  seven of each. Splitting the Environment builders, the pull request open, and
+  the prompt render out of the module is the natural next cut, and this branch
+  made the module coherent rather than small.
 - The tests assert the command sequence the start produces and the outcome it
   returns, through `handOffTicket` and `handOffConsultation`. No test reaches for
   a private helper, and the Consultation start sequence is now covered at the
@@ -149,3 +194,18 @@ start path and the last one that answered through several entry points.
   only the Task type record and the Environment, both of which the pre-flight
   already holds, and a reason written outside the pre-flight is the one reason
   that can drift again.
+- **Move the bad-choice wording into the shared presentation module.** Rejected:
+  see the Decision. `presentation.ts` is the control library's label, focus,
+  state-word, and color module (ADR 0014); a handoff's failure sentence is a
+  domain fact about a choice, and one start path's reason does not belong in the
+  library every screen shares.
+- **Let a raised command escape the start.** Rejected on review of this branch:
+  the no-residue contract is stated absolutely, and an escaped raise skips both
+  cleanups and leaves the created Workspace, worktree, branch, and pull request
+  residue in place. Answering `failed` for every raise was rejected too: after
+  the Agent started, the raise is a failed prompt, and a started Agent is never
+  rolled back.
+- **Re-check the pre-flight inside the start when a caller carries none.**
+  Rejected: both callers always carry one, so the fallback was unreachable, and
+  it let a check computed from facts the request never stated stand in for the
+  start's own.

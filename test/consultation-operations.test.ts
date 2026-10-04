@@ -2110,7 +2110,7 @@ describe("Consultation operations: close", () => {
 	});
 
 	test("closes a failed live opening whose own start already took its workspace down", async () => {
-		// Issue #213 review: a start that cleans up its own Environment confirms the
+		// Pull request #213 review: a start that cleans up its own Environment confirms the
 		// rows it recorded for it. The record then holds no "Unclosed owned
 		// resources" line for a handle the plane already removed, and the operator's
 		// Close has nothing left to retry against a workspace herdr no longer holds.
