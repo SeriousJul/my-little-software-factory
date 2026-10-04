@@ -14,6 +14,7 @@ import {
 	cleanup,
 	closedCycle,
 	fetched,
+	HARNESS_AGENT_NAME,
 	sourceA,
 	sourceB,
 	statePath,
@@ -876,7 +877,7 @@ describe("the ticketWorkCycle aggregate", () => {
 			paneId: "pane-1",
 			tabId: "tab-1",
 			workspaceId: "ws-1",
-			agentName: "persist-source-facts",
+			agentName: HARNESS_AGENT_NAME,
 		});
 		expect(claimed).toEqual({ attemptId: expect.any(String) });
 		expect(state.ticketWorkCycle.ticketsByState(["running"])).toEqual([

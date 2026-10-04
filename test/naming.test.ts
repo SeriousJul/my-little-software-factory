@@ -13,6 +13,7 @@ import {
 	identifyHandoffAgentName,
 	shortStableIdentity,
 	ticketAgentNames,
+	ticketNameTag,
 	titleSlug,
 } from "../src/naming.ts";
 
@@ -103,33 +104,82 @@ describe("branchNameFor", () => {
 	});
 });
 
+describe("ticketNameTag", () => {
+	test("is the same six hex characters for the same identity, every run", () => {
+		// FNV-1a 32-bit, the published vectors: "" is 811c9dc5, "a" is e40c292c,
+		// "foobar" is bf9cf968. The tag is the leading six characters.
+		expect(ticketNameTag("")).toBe("811c9d");
+		expect(ticketNameTag("a")).toBe("e40c29");
+		expect(ticketNameTag("foobar")).toBe("bf9cf9");
+	});
+
+	test("is six characters of hex, so it always fits herdr's name rule", () => {
+		for (const identity of [
+			"",
+			"a",
+			"github:github.com:I_1",
+			"github:github.com:seriousjul/seriousjul.github.io:dependabot:51",
+		]) {
+			expect(ticketNameTag(identity)).toMatch(/^[0-9a-f]{6}$/);
+		}
+	});
+
+	test("separates two identities that share every leading word", () => {
+		// A truncation of a Ticket identity is no help: every GitHub identity
+		// starts with the same words, and `shortStableIdentity` proves it.
+		expect(shortStableIdentity("github:github.com:I_123456789")).toBe("githubgi");
+		expect(ticketNameTag("github:github.com:I_123456789")).not.toBe(
+			ticketNameTag("github:github.com:I_987654321"),
+		);
+	});
+});
+
 describe("agentNameFor", () => {
-	test("is the title slug, which already fits herdr's name rule", () => {
-		expect(agentNameFor("Retry policy for webhooks")).toBe("retry-policy-for-webhooks");
+	test("is the title slug with the ticket's own identity tag", () => {
+		expect(agentNameFor(ticket("Retry policy for webhooks"))).toBe(
+			"retry-policy-for-webhooks-444d8b",
+		);
 	});
 
 	test("a slug that starts with a digit gets a t- prefix", () => {
-		expect(agentNameFor("2fa rollout")).toBe("t-2fa-rollout");
+		expect(agentNameFor(ticket("2fa rollout"))).toBe("t-2fa-rollout-444d8b");
 	});
 
-	test("keeps an agent name of exactly 32 characters", () => {
-		const name = "a".repeat(32);
-		expect(agentNameFor(name)).toBe(name);
+	test("keeps an agent name inside herdr's name rule", () => {
+		const name = agentNameFor(ticket("a".repeat(32)));
+		expect(name).toBe(`${"a".repeat(25)}-444d8b`);
+		expect(name.length).toBe(32);
+		expect(/^[a-z][a-z0-9_-]{0,31}$/.test(name)).toBe(true);
 	});
 
 	test("a long slug cuts at 32 characters and drops a trailing hyphen", () => {
-		const title = `a${"x".repeat(30)}-more`;
-		const name = agentNameFor(title);
-		expect(name).toBe(`a${"x".repeat(30)}`);
+		const title = `a${"x".repeat(23)}-more`;
+		const name = agentNameFor(ticket(title));
+		expect(name).toBe(`${"a"}${"x".repeat(23)}-444d8b`);
 		expect(name.length).toBe(31);
 		expect(name.endsWith("-")).toBe(false);
 		expect(/^[a-z][a-z0-9_-]*$/.test(name)).toBe(true);
 	});
 
-	test("a cut that lands on a word keeps every inner hyphen", () => {
-		expect(agentNameFor("Fix pan drift in split panes today")).toBe(
-			"fix-pan-drift-in-split-panes-tod",
+	test("the identity tag survives the cut, whatever the title's length", () => {
+		for (const title of [
+			"Retry policy",
+			"!!!",
+			"Fix pan drift in split panes today",
+			"a-very-long-title-that-goes-on-and-on-past-thirty-two-characters",
+		]) {
+			expect(agentNameFor(ticket(title)).endsWith("-444d8b")).toBe(true);
+		}
+	});
+
+	test("two Tickets that share a title get two stable names (issue #216)", () => {
+		// The live case: a pull request and the Dependabot alert of the same
+		// advisory, and an issue and the pull request opened for it.
+		const title = "GHSA-6h2x-m376-mqjq: joi: Quadratic regular-expression backtracking";
+		const names = new Set(
+			["#45", "#51", "#209", "#215", "#6", "#7"].map((key) => agentNameFor(ticket(title, key))),
 		);
+		expect(names.size).toBe(6);
 	});
 });
 
@@ -190,23 +240,25 @@ describe("Consultation naming", () => {
 
 describe("cycleAgentName", () => {
 	test("keeps the ticket's own words and names the work cycle", () => {
-		expect(cycleAgentName("Retry policy for webhooks", 2)).toBe("retry-policy-for-webhooks-c2");
+		expect(cycleAgentName(ticket("Retry policy for webhooks"), 2)).toBe(
+			"retry-policy-for-webho-444d8b-c2",
+		);
 	});
 
 	test("the handoff's ordinal tells two handoffs of one cycle apart", () => {
-		expect(cycleAgentName("Retry policy for webhooks", 2, 5)).toBe(
-			"retry-policy-for-webhooks-c2-5",
+		expect(cycleAgentName(ticket("Retry policy for webhooks"), 2, 5)).toBe(
+			"retry-policy-for-web-444d8b-c2-5",
 		);
 	});
 
 	test("a digit slug keeps its prefix beside its cycle", () => {
-		expect(cycleAgentName("2fa rollout", 1)).toBe("t-2fa-rollout-c1");
+		expect(cycleAgentName(ticket("2fa rollout"), 1)).toBe("t-2fa-rollout-444d8b-c1");
 	});
 
 	test("a cut cycle name still says which cycle it belongs to", () => {
-		const title = "a-very-long-title-that-goes-on-and-on-past-thirty-two-characters";
-		const stable = agentNameFor(title);
-		const cycle = cycleAgentName(title, 3);
+		const one = ticket("a-very-long-title-that-goes-on-and-on-past-thirty-two-characters");
+		const stable = agentNameFor(one);
+		const cycle = cycleAgentName(one, 3);
 		expect(stable.length).toBe(32);
 		expect(cycle.length).toBeLessThanOrEqual(32);
 		expect(cycle.endsWith("-c3")).toBe(true);
@@ -216,56 +268,52 @@ describe("cycleAgentName", () => {
 
 	test("a short title's cycle name differs from its stable name", () => {
 		for (const title of ["Retry policy", "2fa rollout", "!!!", "Close the mutation testing gaps"]) {
-			expect(cycleAgentName(title, 1)).not.toBe(agentNameFor(title));
-			expect(cycleAgentName(title, 1).length).toBeLessThanOrEqual(32);
+			expect(cycleAgentName(ticket(title), 1)).not.toBe(agentNameFor(ticket(title)));
+			expect(cycleAgentName(ticket(title), 1).length).toBeLessThanOrEqual(32);
 		}
 	});
 });
 
 describe("ticketAgentNames", () => {
 	/**
-	 * A slug whose own tail spells the cycle suffix: the cut that keeps the
-	 * suffix can rebuild the stable name out of it. `-c2` at the 32-character
-	 * boundary is the shortest case where the two names meet.
+	 * A slug whose own tail spells the cycle suffix. Before the identity tag
+	 * this was the shape where the cut rebuilt the stable name; the tag at a
+	 * fixed width is what makes the three candidates meet nowhere.
 	 */
 	const rebuildsStable = `${"a".repeat(29)}-c2`;
 
 	test("offers the stable name, then the cycle, then the handoff ordinal", () => {
-		expect(ticketAgentNames("Retry policy", 2, 3)).toEqual([
-			"retry-policy",
-			"retry-policy-c2",
-			"retry-policy-c2-3",
+		expect(ticketAgentNames(ticket("Retry policy"), 2, 3)).toEqual([
+			"retry-policy-444d8b",
+			"retry-policy-444d8b-c2",
+			"retry-policy-444d8b-c2-3",
 		]);
 	});
 
-	test("drops a cycle name that rebuilds the stable name", () => {
-		expect(agentNameFor(rebuildsStable)).toBe(rebuildsStable);
-		expect(cycleAgentName(rebuildsStable, 2)).toBe(rebuildsStable);
-		// The repeat is gone rather than left for the caller to notice, and
-		// the ordinal name is still there to start under.
-		expect(ticketAgentNames(rebuildsStable, 2, 1)).toEqual([
-			rebuildsStable,
-			`${"a".repeat(27)}-c2-1`,
+	test("the identity tag keeps the three candidates apart on a rebuilding slug", () => {
+		const one = ticket(rebuildsStable);
+		const candidates = ticketAgentNames(one, 2, 1);
+		expect(candidates).toEqual([
+			`${"a".repeat(25)}-444d8b`,
+			`${"a".repeat(22)}-444d8b-c2`,
+			`${"a".repeat(20)}-444d8b-c2-1`,
 		]);
-	});
-
-	test("drops an ordinal name that rebuilds the stable name", () => {
-		const title = `${"b".repeat(27)}-c2-3`;
-		expect(agentNameFor(title)).toBe(title);
-		// Here the cycle name is the usable one, and the ordinal name is the
-		// repeat: both orders of the same rebuild.
-		expect(ticketAgentNames(title, 2, 3)).toEqual([title, cycleAgentName(title, 2)]);
+		expect(new Set(candidates).size).toBe(3);
 	});
 
 	test("the t- prefix moves the same boundary", () => {
-		const title = `2${"a".repeat(26)}-c2`;
-		const stable = agentNameFor(title);
-		expect(stable).toBe(`t-${title}`);
-		expect(cycleAgentName(title, 2)).toBe(stable);
-		expect(ticketAgentNames(title, 2, 1)).toEqual([stable, `t-2${"a".repeat(24)}-c2-1`]);
+		const one = ticket(`2${"a".repeat(26)}-c2`);
+		const stable = agentNameFor(one);
+		expect(stable).toBe(`t-2${"a".repeat(22)}-444d8b`);
+		expect(cycleAgentName(one, 2)).toBe(`t-2${"a".repeat(19)}-444d8b-c2`);
+		expect(ticketAgentNames(one, 2, 1)).toEqual([
+			stable,
+			`t-2${"a".repeat(19)}-444d8b-c2`,
+			`t-2${"a".repeat(17)}-444d8b-c2-1`,
+		]);
 	});
 
-	test("a handoff always keeps two names to ask for, and no name repeats", () => {
+	test("a handoff always keeps three names to ask for, and no name repeats", () => {
 		const titles = [
 			"Retry policy",
 			"2fa rollout",
@@ -277,16 +325,25 @@ describe("ticketAgentNames", () => {
 		];
 		for (const title of titles) {
 			for (const cycle of [1, 2, 12]) {
-				const candidates = ticketAgentNames(title, cycle, cycle + 1);
+				const candidates = ticketAgentNames(ticket(title), cycle, cycle + 1);
+				expect(candidates.length).toBe(3);
 				expect(candidates.length).toBe(new Set(candidates).size);
-				expect(candidates.length).toBeGreaterThanOrEqual(2);
-				expect(candidates[0]).toBe(agentNameFor(title));
+				expect(candidates[0]).toBe(agentNameFor(ticket(title)));
 				for (const name of candidates) {
 					expect(name.length).toBeLessThanOrEqual(32);
 					expect(/^[a-z][a-z0-9_-]{0,31}$/.test(name)).toBe(true);
 				}
 			}
 		}
+	});
+
+	test("two Tickets of one title ask for no name in common (issue #216)", () => {
+		const title = "GHSA-6h2x-m376-mqjq: joi: Quadratic regular-expression backtracking";
+		const asked = [
+			...ticketAgentNames(ticket(title, "#45"), 1, 1),
+			...ticketAgentNames(ticket(title, "#51"), 1, 1),
+		];
+		expect(new Set(asked).size).toBe(6);
 	});
 });
 

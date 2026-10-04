@@ -8,6 +8,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { FetchedTicket } from "../../src/domain/ticket.ts";
+import { agentNameFor } from "../../src/naming.ts";
 import type { FactoryState } from "../../src/state.ts";
 import { openFactoryState } from "../../src/state.ts";
 import type { TurnLogEntry } from "../../src/turn-log.ts";
@@ -97,6 +98,15 @@ export function readStoredLog(path: string, identity: string): TurnLogEntry[] {
 		state.close();
 	}
 }
+
+/**
+ * The herdr Agent name the naming rule gives the harness Ticket (ADR 0098):
+ * its title slug with its own identity tag.
+ */
+export const HARNESS_AGENT_NAME = agentNameFor({
+	identity: "github:github.com:I_5",
+	title: "Persist source facts",
+});
 
 export function fetched(identity = "github:github.com:I_5"): FetchedTicket {
 	return {

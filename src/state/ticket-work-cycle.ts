@@ -569,7 +569,7 @@ export class TicketWorkCycleModule implements TicketWorkCycleAggregate {
 			return row.herdrName;
 		}
 		const title = this.graph().sourceFact.newestMembershipTitle(identity);
-		return title == null ? "" : agentNameFor(title);
+		return title == null ? "" : agentNameFor({ identity, title });
 	}
 	/**
 	 * The Agent name of every Ticket the caller names, in one batched read
@@ -594,7 +594,7 @@ export class TicketWorkCycleModule implements TicketWorkCycleAggregate {
 				continue;
 			}
 			const title = titles.get(identity) ?? null;
-			names.set(identity, title === null ? "" : agentNameFor(title));
+			names.set(identity, title === null ? "" : agentNameFor({ identity, title }));
 		}
 		return names;
 	}

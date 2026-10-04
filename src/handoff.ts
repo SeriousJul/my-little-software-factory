@@ -290,7 +290,7 @@ function ticketNamePlan(ticket: Ticket, known: OwnNameKnowledge | undefined): Na
 	return {
 		// The last candidate carries the handoff's ordinal in the ticket: its
 		// handoff count plus one, across every cycle, so it only grows.
-		candidates: ticketAgentNames(ticket.title, ticket.workCycle, ticket.handoffCount + 1),
+		candidates: ticketAgentNames(ticket, ticket.workCycle, ticket.handoffCount + 1),
 		known: known ?? NO_NAME_KNOWLEDGE,
 		owner: "this ticket",
 	};

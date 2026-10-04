@@ -46,6 +46,7 @@ import {
 } from "./fake-runner.ts";
 import { FakeSource } from "./fake-source.ts";
 import {
+	DEFAULT_AGENT_NAME,
 	issuesConfig,
 	issueTicket,
 	seedAwaitingTurn,
@@ -134,7 +135,7 @@ function routeRunner(): FakeRunner {
 		["tab", "create", "--workspace", "ws-route", "--cwd", checkout, "--no-focus"],
 		{ stdout: tabCreateJson("pane-route", "tab-route") },
 	);
-	runner.set("herdr", ["agent", "start", "add-a-webhook-retry-policy", "--kind", "pi"], {
+	runner.set("herdr", ["agent", "start", DEFAULT_AGENT_NAME, "--kind", "pi"], {
 		stdout: JSON.stringify({ result: { agent: { session_id: "sess-route" } } }),
 	});
 	return runner;
@@ -395,7 +396,7 @@ describe("Goto stays the one focus move", () => {
 					workspaceId: "ws-1",
 					agent: "pi",
 					status: "idle",
-					name: "add-a-webhook-retry-policy",
+					name: DEFAULT_AGENT_NAME,
 				},
 			]),
 		});

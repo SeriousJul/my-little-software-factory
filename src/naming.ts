@@ -6,9 +6,17 @@
  * is recognizable in git and in herdr by the same words. One ticket owns
  * one branch, while its agent name is stable only until a handoff needs it
  * and its own earlier agent still holds it: that handoff takes the same
- * slug with its work cycle, so the name keeps naming the ticket. The
- * candidates one handoff may ask for are built together, and no candidate
- * repeats an earlier one (see ticketAgentNames).
+ * slug with its work cycle, so the name keeps naming the ticket.
+ *
+ * The branch and the name do not share one uniqueness rule, because they do
+ * not live in one space. A branch lives inside one repository, so the ticket
+ * id the branch carries (see ticketBranchKey) keeps a ticket's siblings
+ * apart. herdr holds one agent name space across every repository the plane
+ * watches, so the title alone is not enough there: an issue and the pull
+ * request opened for it carry one title, and a security advisory and its
+ * Dependabot alert carry one title. The agent name carries the ticket's own
+ * identity tag beside its slug (ADR 0098, issue #216), so no two Tickets
+ * ask herdr for the same name.
  */
 
 import type { Ticket } from "./domain/ticket.ts";
@@ -59,31 +67,76 @@ export function ticketBranchPrefix(externalKey: string): string {
 	return `factory/${ticketBranchKey(externalKey)}-`;
 }
 
+/** The two facts a Ticket's herdr Agent name is built from. */
+export interface TicketNameSource {
+	identity: string;
+	title: string;
+}
+
+/** The maximum length of a herdr agent name: `[a-z][a-z0-9_-]{0,31}`. */
+const HERDR_NAME_MAX_LENGTH = 32;
+
+/** The identity tag's width: the leading 24 bits of the digest, in hex. */
+const IDENTITY_TAG_LENGTH = 6;
+
 /**
- * The herdr name an agent starts under: the title slug, shaped to herdr's
- * agent name rule `[a-z][a-z0-9_-]{0,31}`.
+ * FNV-1a, 32 bit.
+ *
+ * The digest is a pure function of the identity string, so a name is the same
+ * in every run, on every machine, and across a version change. It guards no
+ * secret and needs no cryptographic strength: the tag only has to keep two
+ * Tickets apart.
+ */
+function fnv1a32(text: string): number {
+	let hash = 0x811c9dc5;
+	for (let index = 0; index < text.length; index += 1) {
+		hash ^= text.charCodeAt(index);
+		hash = Math.imul(hash, 0x01000193) >>> 0;
+	}
+	return hash >>> 0;
+}
+
+/**
+ * The tag that keeps two Tickets apart in herdr's one agent name space.
+ *
+ * A truncation of the identity is no help here: every Ticket of a GitHub
+ * source starts its identity with the same words, so the leading characters
+ * of two identities are equal - `shortStableIdentity` answers `githubgi` for
+ * every one of them. The digest reads the whole identity instead.
+ */
+export function ticketNameTag(identity: string): string {
+	return fnv1a32(identity).toString(16).padStart(8, "0").slice(0, IDENTITY_TAG_LENGTH);
+}
+
+/**
+ * The herdr name an agent starts under: the title slug with the ticket's own
+ * identity tag, shaped to herdr's agent name rule `[a-z][a-z0-9_-]{0,31}`.
  *
  * A slug that starts with a digit gets a "t-" prefix (the name must start
  * with a letter), and the result is cut to 32 characters on a safe boundary
  * so the cut never leaves a trailing hyphen.
  */
-export function agentNameFor(title: string): string {
-	return herdrAgentName(titleSlug(title), "");
+export function agentNameFor(ticket: TicketNameSource): string {
+	return herdrAgentName(ticket, "");
 }
 
 /**
  * The herdr name of a handoff whose stable name is still held by the
- * ticket's own leftover agent: the same slug, with the work cycle the
- * handoff belongs to. The name says which cycle started the agent, and a
- * name the earlier cycle left behind can never block it.
+ * ticket's own leftover agent: the same slug and identity tag, with the work
+ * cycle the handoff belongs to. The name says which cycle started the agent,
+ * and a name the earlier cycle left behind can never block it.
  *
  * When two handoffs of one ticket meet that collision, the handoff's ordinal
  * in the ticket (its handoff count plus one, across every cycle) tells them
  * apart: that count only grows, so no two handoffs of one ticket share it.
  */
-export function cycleAgentName(title: string, workCycle: number, ordinal?: number): string {
+export function cycleAgentName(
+	ticket: TicketNameSource,
+	workCycle: number,
+	ordinal?: number,
+): string {
 	const cycle = `-c${workCycle}`;
-	return herdrAgentName(titleSlug(title), ordinal === undefined ? cycle : `${cycle}-${ordinal}`);
+	return herdrAgentName(ticket, ordinal === undefined ? cycle : `${cycle}-${ordinal}`);
 }
 
 /**
@@ -91,37 +144,38 @@ export function cycleAgentName(title: string, workCycle: number, ordinal?: numbe
  * order: the stable name, then the name of its work cycle, then that name
  * with the handoff's ordinal in the ticket.
  *
- * No candidate repeats an earlier one. The 32-character cut can rebuild the
- * stable name out of a slug whose tail already spells `-c<cycle>`, and a
- * handoff that asked herdr twice for one name would only fail twice, so the
- * repeat is dropped here instead of being left for the caller to notice.
- * Two names are always left to ask for: a cycle name and its ordinal name
- * never meet, because one ends in `-c<n>` and the other in `-c<n>-<m>`.
+ * The three never meet. Every one ends in the fixed-width identity tag, and
+ * what follows the tag differs in shape each time: nothing, then `-c<n>`,
+ * then `-c<n>-<m>`. The cut shortens the slug in front of the tag and never
+ * touches the tag, so a slug whose tail spells out a suffix - the shape that
+ * let a cut rebuild the stable name before the tag existed - cannot make two
+ * candidates equal.
  */
-export function ticketAgentNames(title: string, workCycle: number, ordinal: number): string[] {
-	const candidates = [
-		agentNameFor(title),
-		cycleAgentName(title, workCycle),
-		cycleAgentName(title, workCycle, ordinal),
+export function ticketAgentNames(
+	ticket: TicketNameSource,
+	workCycle: number,
+	ordinal: number,
+): string[] {
+	return [
+		agentNameFor(ticket),
+		cycleAgentName(ticket, workCycle),
+		cycleAgentName(ticket, workCycle, ordinal),
 	];
-	return candidates.filter((name, index) => candidates.indexOf(name) === index);
 }
 
 /**
- * A herdr agent name from a slug and a suffix.
+ * A herdr agent name from a Ticket's slug, its identity tag, and the cycle
+ * suffix of one handoff.
  *
- * The suffix always survives: the slug gives up its tail to the 32-character
- * limit first, so a cut name still says which cycle and which handoff of the
- * ticket it belongs to. The cut alone does not keep two names of one ticket
- * apart: a slug that ends in its own suffix rebuilds the name above it. The
- * candidates of one handoff are checked against each other instead (see
- * ticketAgentNames).
+ * The tag and the cycle suffix always survive: the slug gives up its tail to
+ * the 32-character limit first, so a cut name still says which ticket it
+ * belongs to, and which cycle and which handoff of that ticket started it.
  */
-function herdrAgentName(slug: string, suffix: string): string {
-	// The maximum length of a herdr agent name: `[a-z][a-z0-9_-]{0,31}`.
-	const maxLength = 32;
+function herdrAgentName(ticket: TicketNameSource, cycleSuffix: string): string {
+	const slug = titleSlug(ticket.title);
+	const suffix = `-${ticketNameTag(ticket.identity)}${cycleSuffix}`;
 	const prefix = /^[a-z]/.test(slug) ? "" : "t-";
-	const budget = Math.max(1, maxLength - prefix.length - suffix.length);
+	const budget = Math.max(1, HERDR_NAME_MAX_LENGTH - prefix.length - suffix.length);
 	// A slug that gives the whole budget to the suffix keeps one letter, so
 	// the name never passes the limit.
 	const base = slug.slice(0, budget).replace(/-+$/, "") || "t";

@@ -23,6 +23,7 @@ import {
 	type HandoffDispatch,
 	type HandoffDispatchReports,
 } from "../src/handoff-dispatch.ts";
+import { agentNameFor } from "../src/naming.ts";
 import type { FactoryState } from "../src/state.ts";
 import { openFactoryState } from "../src/state.ts";
 import { BASE_CONFIG } from "./base-config.ts";
@@ -47,12 +48,12 @@ interface Seed {
 const PULL: Seed = {
 	identity: "github:github.com:P_5",
 	title: "Add a webhook retry policy",
-	name: "add-a-webhook-retry-policy",
+	name: agentNameFor({ identity: "github:github.com:P_5", title: "Add a webhook retry policy" }),
 };
 const ISSUE: Seed = {
 	identity: "github:github.com:I_5",
 	title: "Add a webhook retry policy",
-	name: "add-a-webhook-retry-policy",
+	name: agentNameFor({ identity: "github:github.com:I_5", title: "Add a webhook retry policy" }),
 };
 
 /** A pull request listing of the ticket, on the repository the config maps. */
