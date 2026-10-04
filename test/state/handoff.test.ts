@@ -7,7 +7,7 @@ import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, test } from "bun:test";
 import type { FetchedTicket, LeftoverEnvironment } from "../../src/domain/ticket.ts";
 import type { FactoryState } from "../../src/state.ts";
-import { openFactoryState } from "../../src/state.ts";
+import { openFactoryState, SCHEMA_VERSION } from "../../src/state.ts";
 import {
 	choice,
 	cleanup,
@@ -550,7 +550,15 @@ describe("the handoff aggregate", () => {
 			state.ticketWorkCycle
 				.ticketListViews([], "implement")
 				.rows.find((ticket) => ticket.identity === identity),
-		).toEqual(expect.objectContaining({ state: "open", handoffCount: 2 }));
+		).toEqual(
+			expect.objectContaining({
+				state: "open",
+				// The attempt ledger, not the started-handoff table (ADR 0101): the
+				// two closed cycles and the claim this test left unresolved. No reclaim
+				// added a row of its own.
+				handoffCount: 3,
+			}),
+		);
 		state.close();
 	});
 	test("records a failed Close cleanup as a leftover environment of the handoff", () => {
@@ -791,6 +799,242 @@ describe("the handoff aggregate", () => {
 				at: "2026-09-02T10:05:00.000Z",
 			}),
 		);
+		state.close();
+	});
+});
+
+/**
+ * The failed start's hold, and the start count the Handoff limit reads
+ * (ADR 0077 as extended by ADR 0101, issue #217).
+ *
+ * The state clock stands at 11:00 so an attempt's own time is the fixture's, and
+ * the source's last read stands at 10:01 until a test re-reads the Ticket.
+ */
+const ATTEMPT_NOW = () => Date.parse("2026-08-31T11:00:00Z");
+const TICKET = "github:github.com:I_5";
+
+/** One open Ticket, and the automatic start that never reached its Agent. */
+function failedStartState() {
+	const state = openFactoryState(":memory:", ATTEMPT_NOW);
+	state.sourceFact.initializeSources([sourceA]);
+	state.sourceFact.applyFetch(sourceA, success([fetched()]));
+	const claim = state.handoff.claimHandoff(TICKET, choice, "open");
+	if (!claim.ok) throw new Error(claim.reason);
+	state.handoff.settleHandoff(claim.claim.attemptId, false, "the worktree path already exists");
+	return state;
+}
+
+/** The Ticket's newest Handoff attempt settled `failed`. */
+function failAnotherStart(state: FactoryState, reason: string): void {
+	const claim = state.handoff.claimHandoff(TICKET, choice, "open");
+	if (!claim.ok) throw new Error(claim.reason);
+	state.handoff.settleHandoff(claim.claim.attemptId, false, reason);
+}
+
+describe("the failed start's hold (ADR 0077, ADR 0101)", () => {
+	test("a failed start reads as unrefreshed until the source re-reads the Ticket", () => {
+		const state = failedStartState();
+		// The last successful read of the Ticket's source (10:01) stands before
+		// the failed start (11:00): the hold stands.
+		expect(state.handoff.handoffBlockedUnrefreshed(TICKET)).toBe(true);
+		state.sourceFact.applyFetch(sourceA, {
+			status: "success",
+			fetchedAt: "2026-08-31T11:30:00Z",
+			tickets: [fetched()],
+		});
+		expect(state.handoff.handoffBlockedUnrefreshed(TICKET)).toBe(false);
+		state.close();
+	});
+
+	test("the hold is the newest attempt's fact, not any attempt's", () => {
+		const state = failedStartState();
+		expect(state.handoff.handoffBlockedUnrefreshed(TICKET)).toBe(true);
+		// The re-ask ran on the refresh and reached its Agent: the newest attempt
+		// started work, so the older failure no longer stands.
+		state.sourceFact.applyFetch(sourceA, {
+			status: "success",
+			fetchedAt: "2026-08-31T11:30:00Z",
+			tickets: [fetched()],
+		});
+		const claim = state.handoff.claimHandoff(TICKET, choice, "open");
+		if (!claim.ok) throw new Error(claim.reason);
+		state.handoff.settleHandoff(claim.claim.attemptId, true, undefined, {
+			paneId: "pane-1",
+			tabId: "tab-1",
+			workspaceId: "ws-1",
+		});
+		expect(state.handoff.handoffBlockedUnrefreshed(TICKET)).toBe(false);
+		state.close();
+	});
+
+	test("a started handoff, and a Ticket with no attempt, never read as unrefreshed", () => {
+		const state = openFactoryState(":memory:", ATTEMPT_NOW);
+		state.sourceFact.initializeSources([sourceA]);
+		state.sourceFact.applyFetch(sourceA, success([fetched()]));
+		expect(state.handoff.handoffBlockedUnrefreshed(TICKET)).toBe(false);
+		const claim = state.handoff.claimHandoff(TICKET, choice, "open");
+		if (!claim.ok) throw new Error(claim.reason);
+		state.handoff.settleHandoff(claim.claim.attemptId, true, undefined, {
+			paneId: "pane-1",
+			tabId: "tab-1",
+			workspaceId: "ws-1",
+		});
+		expect(state.handoff.handoffBlockedUnrefreshed(TICKET)).toBe(false);
+		state.close();
+	});
+
+	test("an attempt still in flight holds nothing: the claim gate owns that one", () => {
+		const state = failedStartState();
+		// The failed start released on the refresh, and the next claim is still
+		// running. An attempt with no outcome yet is not a failure to wait out;
+		// the unresolved attempt is what holds the next claim (ADR 0041).
+		state.sourceFact.applyFetch(sourceA, {
+			status: "success",
+			fetchedAt: "2026-08-31T11:30:00Z",
+			tickets: [fetched()],
+		});
+		expect(state.handoff.handoffBlockedUnrefreshed(TICKET)).toBe(false);
+		const pending = state.handoff.claimHandoff(TICKET, choice, "open");
+		if (!pending.ok) throw new Error(pending.reason);
+		expect(state.handoff.handoffBlockedUnrefreshed(TICKET)).toBe(false);
+		expect(state.handoff.handoffInFlight(TICKET)).toBe(true);
+		state.close();
+	});
+
+	test("the hold survives the state file being closed and reopened", () => {
+		const path = statePath();
+		const state = openFactoryState(path, ATTEMPT_NOW);
+		state.sourceFact.initializeSources([sourceA]);
+		state.sourceFact.applyFetch(sourceA, success([fetched()]));
+		const claim = state.handoff.claimHandoff(TICKET, choice, "open");
+		if (!claim.ok) throw new Error(claim.reason);
+		state.handoff.settleHandoff(claim.claim.attemptId, false, "the worktree path already exists");
+		state.close();
+		const reopened = openFactoryState(path, ATTEMPT_NOW);
+		expect(reopened.handoff.handoffBlockedUnrefreshed(TICKET)).toBe(true);
+		reopened.close();
+	});
+
+	test("the wait is measured from the outcome's time, not the claim's", () => {
+		// The claim lands at 11:00 and herdr refuses it at 11:10. A source read
+		// between the two is not the release: the Ticket's facts were no different
+		// then than they were before the start, and the failure was not yet a fact
+		// (ADR 0101).
+		let nowMs = Date.parse("2026-08-31T11:00:00Z");
+		const state = openFactoryState(":memory:", () => nowMs);
+		state.sourceFact.initializeSources([sourceA]);
+		state.sourceFact.applyFetch(sourceA, success([fetched()]));
+		const claim = state.handoff.claimHandoff(TICKET, choice, "open");
+		if (!claim.ok) throw new Error(claim.reason);
+		nowMs = Date.parse("2026-08-31T11:10:00Z");
+		state.handoff.settleHandoff(claim.claim.attemptId, false, "the worktree path already exists");
+		expect(state.handoff.handoffBlockedUnrefreshed(TICKET)).toBe(true);
+		state.sourceFact.applyFetch(sourceA, {
+			status: "success",
+			fetchedAt: "2026-08-31T11:05:00Z",
+			tickets: [fetched()],
+		});
+		expect(state.handoff.handoffBlockedUnrefreshed(TICKET)).toBe(true);
+		state.sourceFact.applyFetch(sourceA, {
+			status: "success",
+			fetchedAt: "2026-08-31T11:10:01Z",
+			tickets: [fetched()],
+		});
+		expect(state.handoff.handoffBlockedUnrefreshed(TICKET)).toBe(false);
+		state.close();
+	});
+
+	test("two attempts claimed in the same millisecond: the later claim is the newest", () => {
+		// The clock stands still, so both attempt rows carry one `created_at`. The
+		// newest read breaks the tie on the insert order, and the hold follows the
+		// attempt that actually ran last: the start that reached its Agent.
+		const state = failedStartState();
+		expect(state.handoff.handoffBlockedUnrefreshed(TICKET)).toBe(true);
+		const claim = state.handoff.claimHandoff(TICKET, choice, "open");
+		if (!claim.ok) throw new Error(claim.reason);
+		state.handoff.settleHandoff(claim.claim.attemptId, true, undefined, {
+			paneId: "pane-1",
+			tabId: "tab-1",
+			workspaceId: "ws-1",
+		});
+		expect(state.handoff.handoffBlockedUnrefreshed(TICKET)).toBe(false);
+		state.close();
+	});
+
+	test("the newest-attempt index reaches a file written before it (ADR 0101)", () => {
+		// The hold reads the Ticket's newest attempt for every candidate the walk
+		// reaches. On a Ticket carrying thousands of attempts that read needs an
+		// index behind it, so the v27 file gains `attempts_ticket_latest` on the
+		// next open and the hold keeps its answer across the migration.
+		const path = statePath();
+		const state = openFactoryState(path, ATTEMPT_NOW);
+		state.sourceFact.initializeSources([sourceA]);
+		state.sourceFact.applyFetch(sourceA, success([fetched()]));
+		const claim = state.handoff.claimHandoff(TICKET, choice, "open");
+		if (!claim.ok) throw new Error(claim.reason);
+		state.handoff.settleHandoff(claim.claim.attemptId, false, "the worktree path already exists");
+		state.close();
+
+		const db = new Database(path);
+		db.exec("DROP INDEX attempts_ticket_latest");
+		db.prepare("UPDATE schema_version SET version = 27").run();
+		db.close();
+
+		const reopened = openFactoryState(path, ATTEMPT_NOW);
+		expect(reopened.handoff.handoffBlockedUnrefreshed(TICKET)).toBe(true);
+		reopened.close();
+		const check = new Database(path, { readonly: true });
+		const indexes = (
+			check.prepare("SELECT name FROM sqlite_master WHERE type = 'index'").all() as Array<{
+				name: string;
+			}>
+		).map((row) => row.name);
+		expect(indexes).toContain("attempts_ticket_latest");
+		expect(
+			(check.prepare("SELECT version FROM schema_version").get() as { version: number }).version,
+		).toBe(SCHEMA_VERSION);
+		check.close();
+	});
+});
+
+describe("the Handoff limit counts every attempt (ADR 0005, ADR 0101)", () => {
+	test("a start that never reached an Agent counts beside one that did", () => {
+		const state = failedStartState();
+		// The failed start wrote an attempt row and no handoff row: the count the
+		// limit reads sees it (issue #217).
+		expect(state.handoff.handoffCount(TICKET)).toBe(1);
+		failAnotherStart(state, "herdr refused the name");
+		expect(state.handoff.handoffCount(TICKET)).toBe(2);
+		const claim = state.handoff.claimHandoff(TICKET, choice, "open");
+		if (!claim.ok) throw new Error(claim.reason);
+		state.handoff.settleHandoff(claim.claim.attemptId, true, undefined, {
+			paneId: "pane-1",
+			tabId: "tab-1",
+			workspaceId: "ws-1",
+		});
+		// A start that reached its Agent keeps its one row in the ledger, so the
+		// count a Ticket that never failed carries is the number it carried
+		// before: one per start, not two.
+		expect(state.handoff.handoffCount(TICKET)).toBe(3);
+		expect(
+			state.ticketWorkCycle
+				.ticketListViews([], "implement")
+				.rows.find((ticket) => ticket.identity === TICKET)?.handoffCount,
+		).toBe(3);
+		expect(state.handoff.handoffCountsFor([TICKET]).get(TICKET)).toBe(3);
+		state.close();
+	});
+
+	test("a Ticket with no start carries zero, and every Ticket carries its own", () => {
+		const state = openFactoryState(":memory:", ATTEMPT_NOW);
+		state.sourceFact.initializeSources([sourceA]);
+		state.sourceFact.applyFetch(sourceA, success([fetched("github:github.com:I_6"), fetched()]));
+		failAnotherStart(state, "the worktree path already exists");
+		const counts = state.handoff.handoffCountsFor(["github:github.com:I_6", TICKET]);
+		expect([...counts]).toEqual([
+			["github:github.com:I_6", 0],
+			[TICKET, 1],
+		]);
 		state.close();
 	});
 });

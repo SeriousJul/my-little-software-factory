@@ -109,3 +109,4 @@ body states the context, the decision, and the consequences.
 - [ADR 0098: Every Ticket's herdr Agent name carries its own identity tag](./0098-every-ticket-herdr-agent-name-carries-its-own-identity-tag.md)
 - [ADR 0099: The merge ask closes the settled turn's environment, automatic and manual alike](./0099-the-merge-ask-closes-the-settled-turns-environment-automatic-and-manual-alike.md)
 - [ADR 0100: The owed continuation outranks every standing queue row](./0100-the-owed-continuation-outranks-every-standing-queue-row.md)
+- [ADR 0101: The failed Handoff start holds its automatic re-ask, and the Handoff limit counts every attempt](./0101-the-failed-handoff-start-holds-its-automatic-re-ask-and-the-handoff-limit-counts-every-attempt.md)

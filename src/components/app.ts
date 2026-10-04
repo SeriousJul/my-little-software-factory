@@ -5407,7 +5407,7 @@ export function App({
 				title: truncateToWidth(`Missing: ${panelTicket.title}`, 40),
 				bodyLines: [
 					"The agent's pane is not in herdr's agent list.",
-					`Handoffs: ${panelTicket.handoffCount} of ${config.maxHandoffsPerTicket}`,
+					`Handoff attempts: ${panelTicket.handoffCount} of ${config.maxHandoffsPerTicket}`,
 				],
 				actions: [
 					{ key: "restart", label: "Restart", detail: "same task type, same workspace" },

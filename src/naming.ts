@@ -136,8 +136,9 @@ export function agentNameFor(ticket: TicketNameSource): string {
  * and a name the earlier cycle left behind can never block it.
  *
  * When two handoffs of one ticket meet that collision, the handoff's ordinal
- * in the ticket (its handoff count plus one, across every cycle) tells them
- * apart: that count only grows, so no two handoffs of one ticket share it.
+ * in the ticket (its Handoff attempt count plus one, across every cycle - the
+ * attempts the factory made, ADR 0101) tells them apart: that count only grows,
+ * so no two handoffs of one ticket share it.
  */
 export function cycleAgentName(
 	ticket: TicketNameSource,

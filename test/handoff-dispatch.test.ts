@@ -1010,6 +1010,55 @@ describe("the claim, the settle, and every origin", () => {
 		expect(rigRef.dispatch.handoffActive()).toBe(false);
 	});
 
+	test("the operator's handoff passes the failed start's hold the auto top-up obeys", async () => {
+		const rigRef = rig();
+		// The factory's own start ran and never reached its Agent: the attempt
+		// stands `failed`, unrefreshed, and that is the fact the top-up's hold
+		// reads (ADR 0101, issue #217).
+		rigRef.runner.set("herdr", ["workspace", "list"], {
+			code: 1,
+			stderr: "the worktree build failed",
+		});
+		await expect(start(rigRef, FIRST, "open")).resolves.toEqual({ ok: true });
+		await rigRef.waitForStarted(FIRST.identity);
+		expect(rigRef.state.handoff.handoffBlockedUnrefreshed(FIRST.identity)).toBe(true);
+		// The operator's ask is not the automatic one. The hold stands on the
+		// top-up's walk, and the dispatch's claim takes the start the way it takes
+		// one past the Handoff limit and the Same-type hold.
+		rigRef.runner.set("herdr", ["workspace", "list"], { stdout: workspaceListJson([]) });
+		const started: DispatchResult[] = [];
+		await expect(start(rigRef, FIRST, "open", (r) => started.push(r))).resolves.toEqual({
+			ok: true,
+		});
+		expect(await rigRef.waitForStarted(FIRST.identity)).toEqual({ ok: true });
+		expect(started).toEqual([{ ok: true }]);
+		// The start the operator asked for reached its Agent, so the newest attempt
+		// is no failure to wait out and the hold is gone.
+		expect(rigRef.state.handoff.handoffBlockedUnrefreshed(FIRST.identity)).toBe(false);
+	});
+
+	test("a failed operator start sets the hold the automatic walks obey", async () => {
+		const rigRef = rig();
+		// No automatic ask ever touched this Ticket: the start that failed is the
+		// operator's own confirm. The hold reads the Ticket's newest attempt and its
+		// outcome, not who asked for that start (ADR 0101): the cause of a start
+		// that never reached its Agent - a worktree path that stands, a name a
+		// stranger holds - says nothing about the origin, and the automatic walk
+		// would meet the same refusal on its next ask.
+		rigRef.runner.set("herdr", ["workspace", "list"], {
+			code: 1,
+			stderr: "the worktree path already exists",
+		});
+		await expect(start(rigRef, FIRST, "open")).resolves.toEqual({ ok: true });
+		expect(await rigRef.waitForStarted(FIRST.identity)).toEqual(
+			expect.objectContaining({ ok: false }),
+		);
+		expect(rigRef.state.handoff.handoffBlockedUnrefreshed(FIRST.identity)).toBe(true);
+		// What the hold never gates: the claim check the operator's next ask and the
+		// Work queue's pickup run.
+		expect(rigRef.state.handoff.handoffClaimCheck(FIRST.identity, "open")).toEqual({ ok: true });
+	});
+
 	test("a workflow handoff settles the agent it started in the stored workspace", async () => {
 		const rigRef = rig();
 		const stored = await handOff(rigRef, FIRST);

@@ -318,12 +318,23 @@ export class SourceFactModule implements SourceFactAggregate {
 			return { ok: true as const, removed };
 		});
 	}
-	/** The waiting handoff starts of the tickets the caller names, out of the queue. */
+	/**
+	 * Whether one of the Ticket's active sources still has no read after `since`.
+	 *
+	 * The plane's one "unrefreshed since T" rule: the cycle-end re-verify gate and
+	 * both attempt holds (ADR 0077, ADR 0101) answer through this query, so the
+	 * time comparison - and its boundary, a read landing at `since` itself counts
+	 * as the read after it - stands here once. The compare is on `julianday`, not
+	 * on the ISO text: a string compare orders two precisions of one instant the
+	 * wrong way (`...T11:00:00.000Z` reads as older than `...T11:00:00Z`), and the
+	 * source's read time comes from the fetch while the attempt's time comes from
+	 * the state clock.
+	 */
 	hasUnrefreshedActiveMembershipSince(identity: string, since: string): boolean {
 		const unrefreshed = this.db
 			.prepare(
 				`SELECT 1 FROM memberships m JOIN source_health h ON h.source_name = m.source_name
-				WHERE m.ticket_identity = ? AND m.active = 1 AND (h.last_success IS NULL OR h.last_success < ?) LIMIT 1`,
+				WHERE m.ticket_identity = ? AND m.active = 1 AND (h.last_success IS NULL OR julianday(h.last_success) < julianday(?)) LIMIT 1`,
 			)
 			.get(identity, since) as { 1: number } | undefined;
 		return unrefreshed !== null;
@@ -346,16 +357,6 @@ export class SourceFactModule implements SourceFactAggregate {
 			.all(identity) as Array<{ source_name: string }>;
 		return rows.map((row) => row.source_name);
 	}
-
-	/** The time one source last read its list, or null when it never has. */
-	sourceLastSuccess(name: string): string | null {
-		const row = this.db
-			.prepare("SELECT last_success FROM source_health WHERE source_name = ?")
-			.get(name) as { last_success: string | null } | undefined;
-		return row?.last_success ?? null;
-	}
-
-	/** Whether one source is muted. */
 
 	/** Whether one source last read its list cleanly. */
 	sourceHealthy(name: string): boolean {

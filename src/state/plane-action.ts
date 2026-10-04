@@ -11,6 +11,7 @@
 
 import { randomUUID } from "node:crypto";
 import type { TransitionOutcome } from "../config.ts";
+import { blockedUnrefreshedHold } from "../domain/attempt-hold.ts";
 import type { CompletionDecision } from "../domain/ticket.ts";
 import { identityChunks, placeholders } from "./batch.ts";
 import type { StateGraph } from "./graph.ts";
@@ -142,14 +143,21 @@ export class PlaneActionModule implements PlaneActionAggregate {
 		}
 		return counts;
 	}
+	/**
+	 * The blocked attempt's hold (ADR 0077). The rule itself is the shared
+	 * blocked-and-unrefreshed rule the Handoff aggregate reads the same way over
+	 * its own attempt table (ADR 0101); this aggregate supplies the newest
+	 * attempt, the word `blocked`, and the source half through
+	 * `sourceFact.hasUnrefreshedActiveMembershipSince` - the query the cycle-end
+	 * re-verify gate runs, so the two gates wait on one time rule.
+	 */
 	planeActionBlockedUnrefreshed(identity: string): boolean {
-		const latest = this.latestPlaneActionAttemptRow(identity);
-		if (latest === null || latest.outcome !== "blocked") return false;
-		for (const name of this.graph().sourceFact.activeMembershipSourceNames(identity)) {
-			const last = this.graph().sourceFact.sourceLastSuccess(name);
-			if (last === null || last < latest.at) return true;
-		}
-		return false;
+		return blockedUnrefreshedHold({
+			latestAttempt: this.latestPlaneActionAttemptRow(identity),
+			unreachedOutcome: "blocked",
+			unrefreshedSince: (at) =>
+				this.graph().sourceFact.hasUnrefreshedActiveMembershipSince(identity, at),
+		});
 	}
 
 	/** The newest attempt row: its outcome and the time it ran. */

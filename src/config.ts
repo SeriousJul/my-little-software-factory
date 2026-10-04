@@ -343,7 +343,11 @@ export interface FactoryConfig {
 	agentPollIntervalSeconds: number;
 	/** How many lines of an agent it captures when the agent settles. */
 	completionMessageLines: number;
-	/** Handoffs per ticket after which the control plane stops dispatching it. */
+	/**
+	 * Handoff attempts and plane action attempts per ticket after which
+	 * auto-handoff stops dispatching it. An attempt that never started an Agent
+	 * counts (ADR 0101); a manual start may pass the limit.
+	 */
 	maxHandoffsPerTicket: number;
 	/** Detail-pane keyboard and wheel scroll behavior. */
 	scroll: ScrollConfig;

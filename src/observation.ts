@@ -1944,17 +1944,32 @@ export class ObservationCoordinator {
 
 	/**
 	 * The top-up's one ask-and-report step (ADR 0051), shared by all four
-	 * walks: the enqueue through the dispatch seam, the refusal warning on a
-	 * rejected ask, and the add line on the Message when the item took its
-	 * place. The answer says what the cycle does next: "added" ends it with
-	 * its one item, "refused" lets the walk move to the next candidate, and
-	 * "stopped" ends the run.
+	 * walks: the failed start's hold (ADR 0077 as extended by ADR 0101), the
+	 * enqueue through the dispatch seam, the refusal warning on a rejected ask,
+	 * and the add line on the Message when the item took its place. The answer
+	 * says what the cycle does next: "added" ends it with its one item,
+	 * "refused" lets the walk move to the next candidate, and "stopped" ends the
+	 * run.
 	 */
 	private async topUpAsk(
 		intent: HandoffIntent,
 		addedLine: string,
 		refusedPrefix: string,
 	): Promise<"added" | "refused" | "stopped"> {
+		// The failed start's hold (ADR 0077 as extended by ADR 0101, issue #217):
+		// the ticket's newest Handoff attempt settled `failed` - it started no
+		// Agent - and not every active source has re-read the ticket since it
+		// landed. The start changed nothing on the source, so the position still
+		// offers the task the failed start already tried, and every other gate still
+		// reads clear; without this hold the next empty-queue cycle asks the same
+		// failing start again, for as long as the ticket stands. The re-ask waits for
+		// the read that carries the ticket's current facts, the same wait the plane
+		// action's hold keeps, and it waits on the slowest active source: one stale
+		// source out of several keeps the hold. The hold is silent: the re-ask on the
+		// refresh is the expected path, not a refusal to report, and the walk moves on
+		// to its next candidate. It gates the automatic adds only - the operator's own
+		// confirm reaches the dispatch past it, the way it passes the Handoff limit.
+		if (this.state.handoff.handoffBlockedUnrefreshed(intent.ticketIdentity)) return "refused";
 		const result = await this.dispatch(intent);
 		if (this.stopped) return "stopped";
 		if (!result.ok) {
@@ -1981,8 +1996,8 @@ export class ObservationCoordinator {
 		refusedPrefix: string,
 	): Promise<"added" | "refused" | "stopped"> {
 		// The blocked attempt's hold (ADR 0077): the ticket's newest plane
-		// action attempt blocked, and the source has not re-read the ticket
-		// since the attempt ran. The attempt's fire wrote the block's labels on
+		// action attempt blocked, and not every active source has re-read the
+		// ticket since the attempt ran. The attempt's fire wrote the block's labels on
 		// the source, and the position the projection derives stands on the
 		// read the source last landed - the one the written labels outran - so
 		// the position still offers the task the block already moved off. The

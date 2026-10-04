@@ -82,3 +82,16 @@ ticket's sources, the way a low review score does today. The attempt's row
 is the gate's read, and it stands for a crash the way the decision's row
 does: a restart finds the blocked attempt and keeps the hold until the
 source re-reads the ticket.
+
+## Amendment: which sources the release waits on
+
+Date: 2026-10-04
+
+The Decision above says the hold releases when "one of the ticket's active
+sources re-reads the ticket", and the same paragraph states the query the state
+actually runs: an active source whose last successful read predates the attempt
+keeps the hold. The query is the rule, and ADR 0101 states it in words: the hold
+stands while any active source is still unrefreshed since the attempt, and it
+releases only once every active source has read the ticket after it. A ticket
+with several active sources therefore waits on its slowest source's refresh
+interval, not on the first refresh to land.

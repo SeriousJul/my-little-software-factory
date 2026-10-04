@@ -10,6 +10,7 @@
  */
 
 import { randomUUID } from "node:crypto";
+import { blockedUnrefreshedHold } from "../domain/attempt-hold.ts";
 import type {
 	EnvironmentKind,
 	LeftoverEnvironment,
@@ -87,6 +88,12 @@ export interface StoredHandoff {
 
 export interface HandoffAggregate {
 	handoffInFlight(ticketIdentity: string): boolean;
+	/**
+	 * The Ticket's start count the Handoff limit reads: every Handoff attempt the
+	 * factory made, the starts that reached an Agent and the starts that never
+	 * reached one, beside the Ticket's Plane action attempts (ADR 0005 as amended
+	 * by ADR 0101, issue #217).
+	 */
 	handoffCount(identity: string): number;
 	/**
 	 * The start count of every Ticket in the list, in one grouped statement per
@@ -94,6 +101,14 @@ export interface HandoffAggregate {
 	 * of Tickets takes this instead of `handoffCount` per Ticket.
 	 */
 	handoffCountsFor(identities: readonly string[]): Map<string, number>;
+	/**
+	 * Whether the Ticket's newest Handoff attempt holds the auto top-up's re-ask
+	 * of that Ticket: the attempt settled `failed` - it started no Agent - and not
+	 * every active source has re-read the Ticket since it landed (ADR 0077 as
+	 * extended by ADR 0101, issue #217). The hold reads the attempt, not who asked
+	 * for the start, and it gates the automatic adds only.
+	 */
+	handoffBlockedUnrefreshed(identity: string): boolean;
 	autoHandoffMode(): boolean;
 	setAutoHandoffMode(enabled: boolean): void;
 	latestHandoff(identity: string): {
@@ -215,8 +230,12 @@ export class HandoffModule implements HandoffAggregate {
 		return ticketHandoffFact(this.newestHandoff(identity));
 	}
 	handoffCount(identity: string): number {
+		// The attempt ledger, not the started-handoff table: a start that never
+		// reached an Agent writes an attempt row and no handoff row, and the limit
+		// that bounds a run-away loop has to count the starts it is bounding
+		// (ADR 0101, issue #217).
 		const row = this.db
-			.prepare("SELECT COUNT(*) AS count FROM handoffs WHERE ticket_identity = ?")
+			.prepare("SELECT COUNT(*) AS count FROM handoff_attempts WHERE ticket_identity = ?")
 			.get(identity) as { count: number };
 		return Number(row.count) + this.graph().planeAction.planeActionAttemptCount(identity);
 	}
@@ -232,7 +251,7 @@ export class HandoffModule implements HandoffAggregate {
 		for (const chunk of identityChunks(identities)) {
 			const rows = this.db
 				.prepare(
-					`SELECT ticket_identity, COUNT(*) AS count FROM handoffs WHERE ticket_identity IN (${placeholders(chunk.length)}) GROUP BY ticket_identity`,
+					`SELECT ticket_identity, COUNT(*) AS count FROM handoff_attempts WHERE ticket_identity IN (${placeholders(chunk.length)}) GROUP BY ticket_identity`,
 				)
 				.all(...chunk) as Array<{ ticket_identity: string; count: number }>;
 			for (const row of rows) counts.set(row.ticket_identity, Number(row.count));
@@ -242,6 +261,49 @@ export class HandoffModule implements HandoffAggregate {
 		))
 			counts.set(identity, (counts.get(identity) ?? 0) + count);
 		return counts;
+	}
+	/**
+	 * The failed start's hold (ADR 0077 as extended by ADR 0101, issue #217). The
+	 * rule is the shared blocked-and-unrefreshed rule the Plane action aggregate
+	 * reads over its own attempt table; this aggregate supplies the newest
+	 * Handoff attempt, the word `failed`, and the source half through
+	 * `sourceFact.hasUnrefreshedActiveMembershipSince` - the query the cycle-end
+	 * re-verify gate runs, so the two gates wait on one time rule.
+	 *
+	 * The attempt's own record is the read: the newest attempt by the time it was
+	 * claimed, and the time its outcome landed. An attempt still in flight - no
+	 * outcome yet - holds nothing here; the unresolved attempt is what the claim
+	 * gate and the queue's one-item rule already hold the re-ask on.
+	 *
+	 * The read cost is two statements per ask the walk reaches: the newest attempt
+	 * row, served by `attempts_ticket_latest`, and the source fact over the
+	 * Ticket's memberships. The hold runs once per candidate the walk reaches, so
+	 * the index behind the newest-attempt read is what keeps that off the cycle's
+	 * critical path (ADR 0101).
+	 */
+	handoffBlockedUnrefreshed(identity: string): boolean {
+		return blockedUnrefreshedHold({
+			latestAttempt: this.latestHandoffAttemptRow(identity),
+			unreachedOutcome: "failed",
+			unrefreshedSince: (at) =>
+				this.graph().sourceFact.hasUnrefreshedActiveMembershipSince(identity, at),
+		});
+	}
+	/**
+	 * The newest attempt row: the stage its outcome landed with and that time.
+	 * "Newest" is the newest claim - `created_at`, then the insert order - and the
+	 * outcome the claim settled with. `attempts_ticket_latest` serves the read in
+	 * one index step: the index stands ascending so its backward scan lands the
+	 * newest claim first and breaks a same-millisecond tie on the row order.
+	 */
+	private latestHandoffAttemptRow(identity: string): { outcome: string; at: string } | null {
+		const row = this.db
+			.prepare(
+				"SELECT stage, resolved_at FROM handoff_attempts WHERE ticket_identity = ? ORDER BY created_at DESC, rowid DESC LIMIT 1",
+			)
+			.get(identity) as { stage: string; resolved_at: string | null } | undefined;
+		if (row == null || row.resolved_at === null) return null;
+		return { outcome: row.stage, at: row.resolved_at };
 	}
 	autoHandoffMode(): boolean {
 		const row = this.db.prepare("SELECT enabled FROM auto_handoff_mode WHERE id = 1").get() as

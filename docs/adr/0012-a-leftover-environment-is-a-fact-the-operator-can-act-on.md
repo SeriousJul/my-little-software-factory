@@ -193,3 +193,15 @@ settled ticket is a fact of the handoff's queue item, so a route that waits in
 the Work queue keeps it across a restart, and a route the settled ticket
 outlived - its turn closed while the item waited - stands on the settled
 ticket's awaiting, and the refusal names the ticket that left.
+
+## Amendment: what the ordinal counts
+
+Date: 2026-10-04
+
+ADR 0101 amended the number the ordinal is built from. The ticket's handoff
+count is now its Handoff attempts plus its Plane action attempts - the starts
+that reached an Agent and the starts that never reached one - so a start herdr
+refused before its Agent began grows the ordinal too. The rule above is
+unchanged, and the change serves it: the ordinal still only grows, so no two
+handoffs of one ticket share it, and the handoff after a refused start asks for
+a name no earlier start used.

@@ -41,7 +41,7 @@ row you can still confirm.
 ## Missing modal
 
 Enter on a ticket whose agent is missing opens the missing modal. It shows
-the badge fact and the handoff count, and it offers two rows:
+the badge fact and the handoff attempt count, and it offers two rows:
 
 - **Restart** hands the ticket off again with the same choices, in the
   workspace the handoff recorded, and the last message as the previous
