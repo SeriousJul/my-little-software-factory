@@ -79,11 +79,20 @@ rules.
 - A mapping key the plane holds is written on the line that already names it,
   or appended inside the `[repos]` table. A key the file names and the plane
   does not is a line the operator wrote by hand since the load, and the plane
-  leaves it.
+  leaves it. A comment the operator wrote beside a key the plane re-points
+  stays on the rewritten line.
 - A source the plane holds that no `[[sources]]` block names is appended as a
   new block after the last block the file holds. A block the file already
   names by source name stands byte-for-byte.
-- The plane never deletes a line it did not write.
+- The plane never deletes a line it did not write. The one line it can drop is
+  its own older writing: a top-level `sources = []` key, the form the plane's
+  serializer used for an empty source list. A `[[sources]]` block cannot stand
+  beside a key of that name - the file would not parse - so the edit drops the
+  key and appends its blocks at the end of the file. `configToToml` no longer
+  writes that key at all, so a file the plane wrote with no sources carries no
+  `sources` key.
+- A file whose lines end CRLF is edited the same way: every line the plane
+  writes carries the file's own line ending.
 
 **The edit is checked before it lands.** The patched text must parse, must
 validate through the startup loader, and must carry every mapping and every
@@ -100,10 +109,26 @@ nothing. Where the line is longer than the terminal, the Message view and the
 desktop notification carry the whole fact, as they do for every long fact on
 the line.
 
-**The file mode follows the file.** The write asks for the mode the config the
-file now carries decides - an owner-only file where a literal token stands in
-it - read from the patched text rather than from the caller's in-memory
-config.
+**A write that landed trails the note about the operator's disk.** The Message
+line is one row of the terminal's width, so what leads it is what reads. The
+mapping write-back answers with a `MappingWriteReport` (`src/repo.ts`), and
+both reports that line comes from - `reportHandoffOutcome` and the
+Consultation's own - put a write that did not land ahead of the note the
+repository resolution bent with, and a write that landed behind it. A routine
+"saved the mapping" line never pushes the sibling clone the plane made on the
+operator's disk off the visible row.
+
+**Only a file that is not there is a file to create.** A read that fails for
+another reason - no permission, a directory where the file stands - is not
+"nothing of the operator's stands here to lose", and the write reports it to
+the caller instead of landing a fresh file over it.
+
+**The file mode follows the config the file carries.** The write asks for the
+mode the text it lands decides: an owner-only file where a literal token
+stands in it, the ordinary mode otherwise. The mode is read from the patched
+text, not from the caller's in-memory config, so a literal token the operator
+wrote into the file while the plane ran lands 0600 even when the plane's own
+copy holds no token.
 
 **The load-time migration is outside this decision.** A config file from an
 older install still migrates whole at load, with its backup and its report
@@ -113,7 +138,9 @@ beside the file. That act changes the file's schema, not one table of it.
 
 - The operator's comments survive a repository init and a mapping write. On
   the development config the same edit that once dropped 13 comment lines now
-  changes 7 lines: the one mapping key and the one appended source block.
+  keeps all 26 of them: a mapping write adds 1 line to the file (546 lines to
+  547) and a source append adds 6 (546 to 552), and every other line stands
+  where the operator wrote it.
 - `persistConfig` is gone. `writeConfigText` stays as the atomic disk step
   under `writeConfigFile`, and no surface reaches past the module for it.
 - A repository init that registers no new source leaves the operator's file

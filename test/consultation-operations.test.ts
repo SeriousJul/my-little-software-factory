@@ -31,7 +31,7 @@ import type { Ticket } from "../src/domain/ticket.ts";
 import { createHandoffDispatch } from "../src/handoff-dispatch.ts";
 import type { Logger } from "../src/logging.ts";
 import { consultationBranchName } from "../src/naming.ts";
-import type { RepositoryMapping } from "../src/repo.ts";
+import type { MappingWriteReport, RepositoryMapping } from "../src/repo.ts";
 import type { CommandOptions, CommandResult, CommandRunner } from "../src/runner.ts";
 import type { Consultation } from "../src/state/consultation-record.ts";
 import type { FactoryState } from "../src/state.ts";
@@ -274,7 +274,9 @@ function makeHarness(
 	options: {
 		home?: string;
 		tickets?: () => readonly Ticket[];
-		persistRepositoryMapping?: (mapping: RepositoryMapping) => Promise<string | undefined>;
+		persistRepositoryMapping?: (
+			mapping: RepositoryMapping,
+		) => Promise<MappingWriteReport | undefined>;
 		textBatchBytes?: number;
 		/** The seat count the module's start line states (issue #220). */
 		seatCount?: () => number;

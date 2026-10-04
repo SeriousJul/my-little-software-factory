@@ -105,7 +105,7 @@ import {
 } from "../plane-action-registry.ts";
 import { closeCycleEndDraftPullRequest } from "../pull-request.ts";
 import { RefreshCoordinator } from "../refresh.ts";
-import type { RepositoryMapping } from "../repo.ts";
+import type { MappingWriteReport, RepositoryMapping } from "../repo.ts";
 import { repositoryInitCheckoutPath } from "../repo.ts";
 import {
 	type InstructionFileName,
@@ -1436,7 +1436,9 @@ export function App({
 		);
 	};
 
-	const persistMapping = async (mapping: RepositoryMapping): Promise<string | undefined> => {
+	const persistMapping = async (
+		mapping: RepositoryMapping,
+	): Promise<MappingWriteReport | undefined> => {
 		const write = configWriteQueue.current
 			.catch(() => undefined)
 			.then(async () => {
@@ -1453,9 +1455,12 @@ export function App({
 					// line names the file the write landed on.
 					const fact = await writeConfigFile(configFile, updated);
 					const line = configWriteLine(fact, "saved the mapping");
-					return line === "" ? undefined : line;
+					return line === "" ? undefined : { line, failed: false };
 				} catch (error) {
-					return `could not persist the repository mapping: ${errorMessage(error)}`;
+					return {
+						line: `could not persist the repository mapping: ${errorMessage(error)}`,
+						failed: true,
+					};
 				}
 			});
 		configWriteQueue.current = write.then(

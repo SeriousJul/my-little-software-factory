@@ -2210,15 +2210,16 @@ describe("the override panel", () => {
 				// facts. Wait for the line, or the frame is read mid-flight.
 				const frame = await awaitFrame(
 					setup,
-					(f) => messageRowOf(f).includes("saved the mapping in"),
-					"the mapping write-back on the Message line",
+					(f) => messageRowOf(f).includes("cloned acme/billing to a sibling"),
+					"the sibling-clone warning on the Message line",
 				);
-				// The write-back names the file it landed on (ADR 0103), and it
-				// leads the line. The sibling note the clone earns is longer than
-				// the row, so the whole fact is read in the Message view.
-				expect(messageRowOf(frame)).toContain("saved the mapping in");
+				// The note about the operator's disk leads the line (ADR 0103), so it
+				// reads whole on the row. The write-back fact that follows it names
+				// the file it landed on, and the two together are longer than the
+				// row, so the whole fact reads in the Message view.
+				expect(messageRowOf(frame)).toContain("cloned acme/billing to a sibling");
 				const view = await openMessageView(setup);
-				expect(frameText(view)).toContain("cloned acme/billing to a sibling");
+				expect(frameText(view)).toContain("saved the mapping in");
 				expect(frameText(view)).toContain(configPath);
 				await press(
 					setup,

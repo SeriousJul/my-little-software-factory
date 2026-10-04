@@ -28,12 +28,22 @@ description: The module map of the source tree, for agents working in this repos
 	`src/runtime-support.mjs`, the plain-JS helper the bin wrapper can load on
 	the runtimes it refuses.
 - `src/config.ts`: config types, strict startup validation, state path
-	resolution, and atomic TOML write-back.
+	resolution, and the atomic config file write the write-back module falls
+	back to.
 - `src/config-migration.ts`: the one-shot config migration to the workflow
 	machine (ADR 0027). A pre-machine config is rewritten at load: rules become
 	states, expressible edges become transitions, and the file is backed up and
 	reported before the rewrite; load stops with the file unchanged on any
 	failure.
+- `src/config-write.ts`: the config write-back (ADR 0103). `writeConfigFile` is
+	the one entry point for both write-backs - the repository mapping a
+	Consultation or a handoff records, and the ticket sources a repository init
+	registers - and it edits only the `[repos]` table and the `[[sources]]`
+	blocks the plane owns, so the operator's comments and layout stay in their
+	own file. The patched text is checked before it lands: it must parse, must
+	validate, and must carry what the plane holds, and a file the check will not
+	vouch for takes the full rewrite. `configWriteLine` words the fact for the
+	Message line. No surface reaches past this module for the disk step.
 - `src/ticket-source.ts`: the ticket-source seam and built-in GitHub Issues
 	and Pull Requests adapters.
 - `src/security-source.ts`: the built-in GitHub security ticket sources

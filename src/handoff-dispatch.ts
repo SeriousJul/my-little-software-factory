@@ -29,7 +29,7 @@ import { overParallelLimit, parallelSeatReading } from "./parallel.ts";
 import { evaluatePlacement } from "./placement.ts";
 import { isPlaneActionTaskType, planeActionSettingOf } from "./plane-action-registry.ts";
 import { runMergePullRequest } from "./plane-actions.ts";
-import type { RepositoryMapping } from "./repo.ts";
+import type { MappingWriteReport, RepositoryMapping } from "./repo.ts";
 import { type CommandRunner, errorMessage } from "./runner.ts";
 import type { ConsultationRecordAggregate } from "./state/consultation-record.ts";
 import type { HandoffAggregate, HandoffClaim, HandoffOrigin } from "./state/handoff.ts";
@@ -207,19 +207,25 @@ export interface HandoffDispatchReports {
  * report one: the dispatch module, and the App's no-state test projection. A
  * failed outcome is an error; a clean one with something to say is a warning; a
  * clean one with nothing to say leaves no line at all. The parts keep the order
- * the operator reads: the reason the handoff did not finish, the name it could
- * not take, the mapping write that failed, and the note the repository
- * resolution bent with.
+ * the operator reads, the same order the Consultation's own report uses: the
+ * reason the handoff did not finish, the name it could not take, the mapping
+ * write that did not land, the note the repository resolution bent with, the
+ * write-back that names the file it landed on, and the directory the plane
+ * moved aside. A write-back that landed never pushes the note about the
+ * operator's disk off the visible Message row (ADR 0101).
  */
 export async function reportHandoffOutcome(
 	outcome: HandoffOutcome,
 	reports: Pick<HandoffDispatchReports, "clearWorking" | "warning" | "error">,
-	persistMapping?: (mapping: RepositoryMapping) => Promise<string | undefined>,
+	persistMapping?: (mapping: RepositoryMapping) => Promise<MappingWriteReport | undefined>,
 ): Promise<void> {
-	const persistWarning =
+	const persistReport =
 		outcome.notes?.mappingToWrite === undefined || persistMapping === undefined
 			? undefined
 			: await persistMapping(outcome.notes.mappingToWrite);
+	const persistFailure = persistReport?.failed ? persistReport.line : undefined;
+	const persistWrite =
+		persistReport === undefined || persistReport.failed ? undefined : persistReport.line;
 	const nameWarning =
 		outcome.collision !== undefined && outcome.collision.startedAs !== null
 			? // The Message line is one row of the terminal's width, and this fact
@@ -230,10 +236,11 @@ export async function reportHandoffOutcome(
 	const lines = [
 		...(outcome.status === "ok" ? [] : [outcome.reason]),
 		...(nameWarning === undefined ? [] : [nameWarning]),
-		...(persistWarning === undefined ? [] : [persistWarning]),
+		...(persistFailure === undefined ? [] : [persistFailure]),
 		...(outcome.status === "ok" && outcome.notes?.warning !== undefined
 			? [outcome.notes.warning]
 			: []),
+		...(persistWrite === undefined ? [] : [persistWrite]),
 		...(outcome.status === "ok" && outcome.notes?.worktreeBase !== undefined
 			? [outcome.notes.worktreeBase]
 			: []),
@@ -290,7 +297,7 @@ export interface HandoffDispatchOptions extends HandoffDispatchReports {
 	) => Promise<ConsultationPickupOutcome>;
 	home: string;
 	/** Persist a repository mapping discovered during handoff, if one is found. */
-	persistMapping?: (mapping: RepositoryMapping) => Promise<string | undefined>;
+	persistMapping?: (mapping: RepositoryMapping) => Promise<MappingWriteReport | undefined>;
 	/**
 	 * The plane's file logger. The dispatch leaves the record's start lines and
 	 * queue lines, for a Handoff and for a Plane action alike: a start with its
@@ -450,7 +457,9 @@ class HandoffDispatchModule implements HandoffDispatch {
 	) => Promise<ConsultationPickupOutcome>;
 	private readonly home: string;
 	private readonly reports: HandoffDispatchReports;
-	private readonly persistMapping?: (mapping: RepositoryMapping) => Promise<string | undefined>;
+	private readonly persistMapping?: (
+		mapping: RepositoryMapping,
+	) => Promise<MappingWriteReport | undefined>;
 	private readonly log?: Logger;
 
 	/** True while external handoff work holds the seat. */

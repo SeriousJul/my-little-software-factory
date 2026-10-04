@@ -1752,7 +1752,11 @@ export function configToToml(config: FactoryConfig): string {
 				"maximum-speed": config.scroll.maximumSpeed,
 			},
 			repos: config.repos,
-			sources: config.sources.map(sourceToTomlEntry),
+			// An empty source list writes no key at all. `sources = []` is a key,
+			// and a `[[sources]]` block the plane appends later cannot stand beside
+			// a key of the same name - the file would not parse, and the write-back
+			// checker would refuse its own edit (ADR 0103).
+			...(config.sources.length === 0 ? {} : { sources: config.sources.map(sourceToTomlEntry) }),
 			states: config.workflowStates.map((state) => ({
 				name: state.name,
 				...(state.taskType === undefined ? {} : { "task-type": state.taskType }),

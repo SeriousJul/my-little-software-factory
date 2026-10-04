@@ -651,13 +651,23 @@ Two sections are the control plane's to write back: a sibling clone records
 its path in the `[repos]` table, and a repository init registers the ticket
 sources it generated as `[[sources]]` blocks. The write-back edits only those
 sections, so your comments, your blank lines, and the order you wrote your
-keys in stay where you put them. The Message line names the file each write
+keys in stay where you put them. A comment you wrote beside a mapping key the
+plane re-points stays on that line. The Message line names the file each write
 lands on, and when the line is longer than the terminal the Message view on
 `F2` holds the whole fact. A write that changes nothing leaves the file
-untouched. In the one case the plane cannot edit its own sections safely -
-you changed the file while the plane was running - it rewrites the file from
-what it holds, says so on the Message line, and your comments do not survive
-that write.
+untouched, timestamp included.
+
+The plane rewrites the whole file - and your comments do not survive that
+write - only when it cannot vouch for its own edit of your text. It checks the
+edited text before it lands, and it says plainly on the Message line when the
+check fails. The check fails when the file no longer says what the plane holds,
+which is what happens when you change a `[repos]` key or a `[[sources]]` block
+while the plane is running. It also fails on a shape the section edit does not
+read: a `[sources]` table instead of `[[sources]]` blocks, more than one
+`[repos]` table, or a `[[sources]]` block that names no `name`. The empty
+source list is not in that group: the plane writes no `sources` key at all for
+no sources, and a `sources = []` line an earlier version wrote is one the
+write-back drops before it appends its blocks.
 
 The shipped defaults define the three agent types `pi`, `codex`, and
 `claude`, the four task types `implement`, `review`, `rework`, and
