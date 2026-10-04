@@ -62,7 +62,11 @@ describe("the config write-back is one rule (ADR 0103)", () => {
 		// source write: two call sites, one module that owns the edit.
 		expect(callers).toEqual(["src/components/app.ts"]);
 		const app = readFileSync("src/components/app.ts", "utf8");
-		const calls = app.match(/await writeConfigFile\(/g) ?? [];
+		// The count is the call-site count, not the call syntax: a write-back that
+		// reaches the entry point through `.then(writeConfigFile)` is still a second
+		// rule to review, and a third call site that belongs under this rule is a
+		// change this file must take on purpose.
+		const calls = app.match(/\bwriteConfigFile\s*\(/gu) ?? [];
 		expect(calls).toHaveLength(2);
 	});
 

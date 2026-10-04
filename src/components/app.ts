@@ -1447,7 +1447,7 @@ export function App({
 	): Promise<ConfigWriteReport | undefined> => {
 		const write = configWriteQueue.current
 			.catch(() => undefined)
-			.then(async () => {
+			.then(async (): Promise<ConfigWriteReport | undefined> => {
 				try {
 					const currentConfig = configRef.current;
 					const updated = {
@@ -1461,7 +1461,7 @@ export function App({
 					// line names the file the write landed on.
 					const fact = await writeConfigFile(configFile, updated);
 					const line = configWriteLine(fact, "saved the mapping");
-					return line === "" ? undefined : { line, landed: true };
+					return line === "" ? undefined : { line, landed: true, mode: fact.mode };
 				} catch (error) {
 					return {
 						line: `could not persist the repository mapping: ${errorMessage(error)}`,
@@ -4516,11 +4516,17 @@ export function App({
 					// comments included, where they wrote it (ADR 0103).
 					const fact = await writeConfigFile(configFile, updated);
 					writeFact = fact;
+					// A re-init whose planned sources already stand in the config registers
+					// nothing new, so it hands the write-back no count to word. Only a full
+					// rewrite of the operator's file has something to say then, and it says
+					// it without a count (ADR 0103).
 					writeLine = configWriteLine(
 						fact,
-						`registered ${flow.newSources.length} new source${
-							flow.newSources.length === 1 ? "" : "s"
-						}`,
+						flow.newSources.length === 0
+							? ""
+							: `registered ${flow.newSources.length} new source${
+									flow.newSources.length === 1 ? "" : "s"
+								}`,
 					);
 				} catch (error) {
 					setErrorMessage(`the init's sources did not save: ${errorMessage(error)}`);

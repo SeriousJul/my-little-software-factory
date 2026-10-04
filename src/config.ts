@@ -1921,7 +1921,8 @@ function sourceToTomlEntry(source: TicketSourceConfig): Record<string, unknown> 
 
 /**
  * The atomic file write: temp file in the same directory, then rename. The
- * mode follows the secret the text carries, never the caller's guess.
+ * mode follows the secret the text carries, never the caller's guess, and it
+ * never grants a permission the file already standing there does not carry.
  *
  * `writeConfigFile` in `config-write.ts` is the entry point every write-back
  * goes through; this is the disk step it falls back to when it must replace
@@ -1929,9 +1930,21 @@ function sourceToTomlEntry(source: TicketSourceConfig): Record<string, unknown> 
  */
 export async function writeConfigText(path: string, text: string, secret: boolean): Promise<void> {
 	await mkdir(dirname(path), { recursive: true });
+	// The mode the text asks for, bounded by the mode the file already carries.
+	// A config file the operator locked to 0600 must not come back world-readable
+	// because the config the plane holds names no literal token: the plane cannot
+	// see why an operator locked the file, so it keeps the lock. The write asks
+	// for the intersection of the two masks - no permission either side lacks is
+	// granted - the same rule `writeMigrationFiles` below keeps for a migration.
+	let mode = secret ? 0o600 : 0o666;
+	try {
+		mode &= (await stat(path)).mode & 0o777;
+	} catch {
+		// No file stands here yet: the text's own mode is the mode to create.
+	}
 	const temp = join(dirname(path), `.${basename(path)}.${randomUUID()}.tmp`);
-	await writeFile(temp, text, { encoding: "utf8", mode: secret ? 0o600 : 0o666 });
-	if (secret) await chmod(temp, 0o600);
+	await writeFile(temp, text, { encoding: "utf8", mode });
+	if ((mode & 0o777) !== 0o666) await chmod(temp, mode & 0o777);
 	try {
 		await rename(temp, path);
 	} catch (error) {

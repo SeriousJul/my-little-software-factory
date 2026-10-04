@@ -13,6 +13,7 @@
  */
 import { afterEach, describe, expect, test } from "bun:test";
 import {
+	chmodSync,
 	mkdirSync,
 	mkdtempSync,
 	readdirSync,
@@ -582,6 +583,41 @@ describe("the config write-back (ADR 0103)", () => {
 		expect(commentLines(written)).toHaveLength(commentLines(text).length);
 	});
 
+	test("a config file the operator locked to 0600 keeps that lock", async () => {
+		const temp = inTempDir();
+		const path = temp("config.toml");
+		writeFileSync(path, operatorFile("/home/me/src/factory"), "utf8");
+		chmodSync(path, 0o600);
+		const { config } = await loadConfigFile(path);
+		// The plane's own copy holds no literal token, so the text it lands would
+		// ask for the ordinary mode. The lock the file carries is stricter, and the
+		// plane cannot see why the operator set it, so the write keeps it (ADR 0103).
+		expect(config.sources.every((source) => source.auth?.token === undefined)).toBe(true);
+
+		const fact = await writeConfigFile(path, {
+			...config,
+			repos: { ...config.repos, "github.com/acme/billing": "/home/me/src/billing_1" },
+		});
+
+		expect(fact.mode).toBe("sections");
+		expect(statSync(path).mode & 0o777).toBe(0o600);
+
+		// The same rule on the fallback path. The operator re-points a held source
+		// block, the checker refuses the patch, and the whole-file rewrite lands on
+		// the locked file at the locked mode.
+		writeFileSync(
+			path,
+			readFileSync(path, "utf8").replace('kind = "github-issues"', 'kind = "github-pull-requests"'),
+			"utf8",
+		);
+		const rewritten = await writeConfigFile(path, {
+			...config,
+			repos: { ...config.repos, "github.com/acme/factory": "/home/me/src/factory_2" },
+		});
+		expect(rewritten.mode).toBe("rewrite");
+		expect(statSync(path).mode & 0o777).toBe(0o600);
+	});
+
 	test("a file that ends its lines CRLF is edited in place and stays CRLF", async () => {
 		const temp = inTempDir();
 		const path = temp("config.toml");
@@ -1014,6 +1050,71 @@ describe("the config write-back (ADR 0103)", () => {
 		await writeConfigFile(blankEnd, { ...alsoEmpty, sources: [source] });
 		expect(blankLinesAboveTheLastBlock(readFileSync(blankEnd, "utf8").split("\n"))).toBe(1);
 	});
+
+	test("a tail append that writes both regions separates the two tables it wrote", async () => {
+		const temp = inTempDir();
+		const path = temp("config.toml");
+		// A file holding neither region the plane owns - the shape the shipped
+		// default config carries. The write-back appends both tables at the file's
+		// end, and they stand apart with the same blank separator the plane's own
+		// whole-file form puts between every table.
+		const text = operatorFile("/home/me/src/factory")
+			.replace(
+				[
+					"# The checkouts the plane works in. The mapping is the one the plane writes",
+					"# back when it discovers a sibling clone.",
+					"[repos]",
+					'"github.com/acme/factory" = "/home/me/src/factory"',
+					"",
+				].join("\n"),
+				"",
+			)
+			.replace(
+				[
+					"# The feed the operator reads by hand: the issues of the one repository.",
+					"[[sources]]",
+					'name = "acme-issues"',
+					'kind = "github-issues"',
+					"refresh-interval-seconds = 60",
+					'repositories = [ "acme/factory" ]',
+				].join("\n"),
+				"",
+			)
+			.replaceAll("\n\n\n", "\n\n");
+		writeFileSync(path, text, "utf8");
+		const { config } = await loadConfigFile(path);
+		expect(config.repos).toEqual({});
+		expect(config.sources).toEqual([]);
+
+		const fact = await writeConfigFile(path, {
+			...config,
+			repos: { "github.com/acme/billing": "/home/me/src/billing_1" },
+			sources: [...config.sources, pullRequestSource()],
+		});
+
+		expect(fact.mode).toBe("sections");
+		const lines = readFileSync(path, "utf8").split("\n");
+		const reposAt = lines.indexOf("[repos]");
+		const sourcesAt = lines.lastIndexOf("[[sources]]");
+		expect(reposAt).toBeGreaterThan(-1);
+		expect(sourcesAt).toBeGreaterThan(reposAt);
+		// The two tables the plane wrote, and the one blank line between them.
+		expect(lines.slice(reposAt)).toEqual([
+			"[repos]",
+			'"github.com/acme/billing" = "/home/me/src/billing_1"',
+			"",
+			"[[sources]]",
+			'name = "acme/factory-pull-requests"',
+			'kind = "github-pull-requests"',
+			"refresh-interval-seconds = 300",
+			'repositories = [ "acme/factory" ]',
+			"",
+		]);
+		expect(commentLines(readFileSync(path, "utf8"))).toHaveLength(commentLines(text).length);
+		const { config: reloaded } = await loadConfigFile(path);
+		expect(reloaded.repos).toEqual({ "github.com/acme/billing": "/home/me/src/billing_1" });
+		expect(reloaded.sources.map((source) => source.name)).toEqual(["acme/factory-pull-requests"]);
+	});
 });
 
 describe("the write-back's Message line (ADR 0103)", () => {
@@ -1076,5 +1177,39 @@ describe("the write-back's Message line (ADR 0103)", () => {
 				confirmation,
 			),
 		).toBe(confirmation);
+	});
+
+	test("a write that carried no new count words itself, or says nothing", () => {
+		// The Repository init's re-init of a repository whose sources already stand
+		// registers nothing new, so its write-back hands the line no count to word.
+		// A write that edited nothing, or edited only what the plane owns, adds no
+		// row. A full rewrite says the fact on its own, with no count in it.
+		expect(configWriteLine({ mode: "unchanged", path: "/home/me/config.toml" }, "")).toBe("");
+		expect(configWriteLine({ mode: "sections", path: "/home/me/config.toml" }, "")).toBe("");
+		expect(configWriteLine({ mode: "created", path: "/home/me/config.toml" }, "")).toBe(
+			"the config file was created at /home/me/config.toml",
+		);
+		const rewrite = configWriteLine({ mode: "rewrite", path: "/home/me/config.toml" }, "");
+		expect(rewrite).toBe(
+			"the whole config file at /home/me/config.toml was rewritten, " +
+				"and the comments in it did not survive",
+		);
+		expect(rewrite).not.toContain("0");
+		// The count-free rewrite leads the confirmation the way a counted one does,
+		// and a write with nothing to say leaves the confirmation standing alone.
+		expect(
+			writeFactWithConfirmation(
+				{ mode: "rewrite", path: "/home/me/config.toml" },
+				rewrite,
+				"acme/factory: pushed 1 commit, created 0 labels",
+			),
+		).toBe(`${rewrite}. acme/factory: pushed 1 commit, created 0 labels`);
+		expect(
+			writeFactWithConfirmation(
+				{ mode: "unchanged", path: "/home/me/config.toml" },
+				configWriteLine({ mode: "unchanged", path: "/home/me/config.toml" }, ""),
+				"acme/factory: pushed 1 commit, created 0 labels",
+			),
+		).toBe("acme/factory: pushed 1 commit, created 0 labels");
 	});
 });

@@ -12,7 +12,7 @@
  * no desktop, no live Agent, isolated state.
  */
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadConfigFile, type TaskTypeConfig, type WorkflowState } from "../src/config.ts";
@@ -514,6 +514,46 @@ host = "github.com"
 					"the marker to clear off the Group header",
 				);
 				expect(cleared).toContain("acme/factory");
+
+				// The re-init (story 21): the same act over the same repository, whose
+				// planned sources already stand in the config. It registers nothing new,
+				// so its write-back has no count to word: the operator's file stands
+				// untouched, byte and timestamp alike, and no line reads
+				// "registered 0 new sources" (ADR 0103).
+				const savedStat = statSync(configPath);
+				const reInitBefore = keyHandlerListeners(setup);
+				await press(setup, "i", "the re-init's panel to open", (f) =>
+					f.includes("Init acme/factory"),
+				);
+				await awaitNewKeyHandler(setup, reInitBefore, "the re-init's panel to take the keys");
+				await pressEnterQuiet(
+					setup,
+					"the re-init's panel to close",
+					(f) => !f.includes("Init acme/factory"),
+				);
+				await openMessageView(setup);
+				// The whole confirmation is read where the plane keeps it: the Message
+				// view on F2. The second skip is the re-init's own - the pull request
+				// feed the first init registered now covers that planned source.
+				const reInitLine = await awaitFrame(
+					setup,
+					(f) => frameText(f).includes("covered by acme/factory-pull-requests"),
+					"the re-init's own confirmation on the Message view",
+				);
+				const reInitText = frameText(reInitLine);
+				expect(reInitText).toContain(
+					"acme/factory-pull-requests (covered by acme/factory-pull-requests)",
+				);
+				expect(reInitText).not.toContain("registered 0 new source");
+				expect(reInitText).not.toContain("new source in");
+				await press(
+					setup,
+					"escape",
+					"the Message view to close on the re-init",
+					(f) => !f.includes("Message view"),
+				);
+				expect(readFileSync(configPath, "utf8")).toBe(saved);
+				expect(statSync(configPath).mtimeMs).toBe(savedStat.mtimeMs);
 
 				// The feed the act registered is live in this run:
 				// the refresh coordinator holds it, and the source health rows it

@@ -654,8 +654,14 @@ sections, so your comments, your blank lines, and the order you wrote your
 keys in stay where you put them. A comment you wrote beside a mapping key the
 plane re-points stays on that line. The Message line names the file each write
 lands on, and when the line is longer than the terminal the Message view on
-`F2` holds the whole fact. A write that changes nothing leaves the file
-untouched, timestamp included.
+`F2` holds the whole fact. A write that replaced your whole file leads the line
+it lands on, so the warning that your comments did not survive is what stands on
+the visible row. A write that changed nothing leaves the file untouched,
+timestamp included, and says nothing. The write keeps the mode your
+file already carries when that mode is stricter than the one the text asks for:
+a file you locked to `0600` stays `0600` even when the config the plane holds
+names no literal token, and a file the plane creates takes the mode its own
+text asks for.
 
 The plane rewrites the whole file - and your comments do not survive that
 write - only when it cannot vouch for its own edit of your text. It checks the

@@ -125,36 +125,48 @@ plane used before. The fallback is a named fact, not a silent one.
 fact for both paths: the file the write landed on, and, for a full rewrite of
 a file the operator already had, the plain statement that the comments in it
 did not survive. A write that changes nothing writes nothing and says nothing.
-Where the line is longer than the terminal, the Message view on `F2` carries
-the whole fact. The desktop notification carries it on the mapping path only:
-that fact rides a warning, and a warning fact is what the plane sends to the
-desktop. The init's confirmation is a notice fact, and a notice fact sends no
-notification (`src/components/message-facts.ts`).
+An act that added nothing new to the file - the Repository init's re-init of a
+repository whose sources already stand - hands the line no count to word, so it
+says nothing for a write that edited nothing and words the full rewrite on its
+own, without a count, when the checker refused the edit. No line ever reads
+`registered 0 new sources`. Where the line is longer than the terminal, the
+Message view on `F2` carries the whole fact. The desktop notification carries it
+on the mapping path only: that fact rides a warning, and a warning fact is what
+the plane sends to the desktop. The init's confirmation is a notice fact, and a
+notice fact sends no notification (`src/components/message-facts.ts`).
 
 **A write fact leads the line when it is the one the operator must read.** The
-Message line is one row of the terminal's width, so what leads it is what reads.
-The mapping write-back answers with a `ConfigWriteReport`
-(`src/config-write.ts`), and one shared rule places that report in every report
-it belongs to: `handoffReportLines` in `src/handoff.ts`, which
+Message line is one row of the terminal's width, so what leads it is what reads,
+and both write-backs answer that by the same rule. The mapping write-back answers
+with a `ConfigWriteReport` (`src/config-write.ts`) that carries the mode the
+write landed as, and one shared rule places that report in every report it
+belongs to: `handoffReportLines` in `src/handoff.ts`, which
 `reportHandoffOutcome` and the Consultation's own `finishOpening` both call, puts
-a write that did not land ahead of the note the repository resolution bent with,
-and a write that landed behind it. A routine "saved the mapping" line never pushes the sibling clone the
-plane made on the operator's disk off the visible row. The Repository init's own
-confirmation is longer than the row, so its write fact trails it except when the
-mode is `rewrite`: then the write fact leads, and the warning that the comments
-did not survive is what stands on the visible row.
+a write that did not land, and a write that landed as a full `rewrite`, ahead of
+the note the repository resolution bent with, and a write that landed as a
+section edit behind it. A routine "saved the mapping" line never pushes the
+sibling clone the plane made on the operator's disk off the visible row, and the
+line that says the operator's whole file was replaced never trails it. The
+Repository init's own confirmation is longer than the row, and
+`writeFactWithConfirmation` places its write fact the same way: the section edit
+trails the confirmation, the `rewrite` leads it.
 
 **Only a file that is not there is a file to create.** A read that fails for
 another reason - no permission, a directory where the file stands - is not
 "nothing of the operator's stands here to lose", and the write reports it to
 the caller instead of landing a fresh file over it.
 
-**The file mode follows the config the file carries.** The write asks for the
-mode the text it lands decides: an owner-only file where a literal token
-stands in it, the ordinary mode otherwise. The mode is read from the patched
-text, not from the caller's in-memory config, so a literal token the operator
-wrote into the file while the plane ran lands 0600 even when the plane's own
-copy holds no token.
+**The file mode follows the config the file carries, and never widens the
+lock the file carries.** The write asks for the mode the text it lands decides:
+an owner-only file where a literal token stands in it, the ordinary mode
+otherwise. The mode is read from the patched text, not from the caller's
+in-memory config, so a literal token the operator wrote into the file while the
+plane ran lands 0600 even when the plane's own copy holds no token. And the
+write grants no permission the standing file does not already carry: it takes
+the intersection of the two masks, so a config file the operator locked to 0600
+stays 0600 through a write whose own text would have asked for the ordinary
+mode. The plane cannot see why an operator locked the file, so it keeps the
+lock; `writeMigrationFiles` keeps the same rule for a migration's writes.
 
 **The load-time migration is outside this decision.** A config file from an
 older install still migrates whole at load, with its backup and its report
@@ -170,7 +182,18 @@ beside the file. That act changes the file's schema, not one table of it.
 - `persistConfig` is gone. `writeConfigText` stays as the atomic disk step
   under `writeConfigFile`, and no surface reaches past the module for it.
 - A repository init that registers no new source leaves the operator's file
-  untouched, timestamp included. Before this decision it rewrote the file.
+  untouched, timestamp included, and its confirmation carries no write fact. A
+  re-init whose sources already stand registers nothing, and its Message line
+  names the commit, the labels, and the feeds it skipped. Before this decision it
+  rewrote the file and said nothing about it.
+- The plane appends one blank line between the operator's last line and what it
+  appends, the same separator it writes inside a region it already holds, and the
+  same separator between the two regions it writes at the end of a file that
+  holds neither of them. A file whose own last line is blank carries that
+  separator already, so the plane adds no second blank line.
+- A config file the operator locked to 0600 keeps that lock through a write-back
+  and through a migration. A file the plane creates takes the mode its own text
+  asks for.
 - The Message line names the config file on both write-backs. The init's
   confirmation carries the fact beside the commit and the labels.
 - `test/config-write.test.ts` holds the edit and the fallback,
@@ -182,10 +205,6 @@ beside the file. That act changes the file's schema, not one table of it.
   a task type's prompt that reads like a table header cannot move an edit. A
   scan that got it wrong still has to pass the verify step, so the worst a
   wrong scan can do is send the write back to the full rewrite.
-- The plane appends one blank line between the operator's last line and what it
-  appends, the same separator it writes inside a region it already holds. A file
-  whose own last line is blank carries that separator already, so the plane adds
-  no second blank line.
 - An operator's mid-run edit of a line the plane owns is not a fact the plane
   reports. Re-point a mapping key and the plane writes its own value; delete a
   mapping key or a source block and the plane writes its own line again. The

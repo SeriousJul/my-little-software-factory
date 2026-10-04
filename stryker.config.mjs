@@ -74,8 +74,9 @@ export default {
 		// `persistConfig(`, `writeConfigText(` - and instrumentation leaves those
 		// whole. Measured on this branch: a `--dryRunOnly` initial run over the whole
 		// instrumented tree (117 files, 34,432 mutants) reported 2,771 tests at exit 0
-		// with the file in the set, and its 5 cases passed run alone inside that
-		// campaign's kept sandbox. It stays in the campaign. The rule is what a file
+		// with the file in the set, and its cases passed run alone inside that
+		// campaign's kept sandbox - 5 cases then, 6 now, and the campaign has not been
+		// re-run since the sixth landed. It stays in the campaign. The rule is what a file
 		// counts, not that it reads source.
 	],
 	// "json" is the machine-readable report: a future `break` gate and any

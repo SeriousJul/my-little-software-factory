@@ -47,6 +47,11 @@
  * patch carries only the two regions the plane owns, so the most a change lost
  * to that window can do is overwrite an operator's edit of a line the plane
  * itself writes.
+ *
+ * The file mode the write lands with is the mode the text it lands asks for,
+ * bounded by the mode the file already carries: a config file the operator
+ * locked to 0600 keeps that lock even when the config the plane holds names no
+ * literal token (`writeConfigText` in `src/config.ts`, ADR 0103).
  */
 import { readFile } from "node:fs/promises";
 import { parse } from "smol-toml";
@@ -117,15 +122,17 @@ export async function writeConfigFile(
  * line is (ADR 0103).
  *
  * The two facts a write-back can leave are not equally urgent, and the Message
- * line holds one row of the terminal. `landed` says which one it is. Where that
- * line stands beside the other facts of the act that did the write is one rule
- * for every report: `handoffReportLines` in `src/handoff.ts` places a write that
- * did not land ahead of the notes a start carried, and a write that landed after
- * them so the note about the operator's disk - the sibling clone the plane made
- * - stays on the visible row.
+ * line holds one row of the terminal. `landed` says which one it is, and `mode`
+ * carries how the write landed, so the one rule that places the fact can tell a
+ * routine edit from a full rewrite. Where that line stands beside the other
+ * facts of the act that did the write is one rule for every report:
+ * `handoffReportLines` in `src/handoff.ts` places a write that did not land, and
+ * a write that landed as a full rewrite, ahead of the notes a start carried, and
+ * a write that landed as a section edit after them so the note about the
+ * operator's disk - the sibling clone the plane made - stays on the visible row.
  */
 export type ConfigWriteReport =
-	| { readonly line: string; readonly landed: true }
+	| { readonly line: string; readonly landed: true; readonly mode: ConfigWriteMode }
 	| { readonly line: string; readonly landed: false };
 
 /**
@@ -157,6 +164,20 @@ export function writeFactWithConfirmation(
  */
 export function configWriteLine(fact: ConfigWriteFact, written: string): string {
 	if (fact.mode === "unchanged") return "";
+	// An empty `written` means the act added nothing new to the file - the
+	// Repository init's re-init of a repository whose sources already stand is
+	// the case. A write that changed no region says nothing. A full rewrite still
+	// says everything: the operator's file was replaced even though the plane
+	// added no line, and that is the fact the line carries on its own.
+	if (written === "") {
+		if (fact.mode === "rewrite")
+			return (
+				`the whole config file at ${fact.path} was rewritten, ` +
+				"and the comments in it did not survive"
+			);
+		if (fact.mode === "created") return `the config file was created at ${fact.path}`;
+		return "";
+	}
 	if (fact.mode !== "rewrite") return `${written} in ${fact.path}`;
 	return (
 		`${written} in ${fact.path}; ` +
@@ -371,6 +392,11 @@ function editSourcesRegion(
 	const empty = emptySourcesKeyLine(scanned);
 	if (empty >= 0) edit.remove.add(empty);
 	if (regions.length === 0) {
+		// The tail already holds the `[repos]` table this edit wrote, or it does
+		// not. When it does, the two regions the plane wrote at the file's end
+		// stand beside each other with the same blank separator every table in
+		// the plane's own whole-file form carries.
+		if (edit.tail.length > 0) edit.tail.push(edit.eol);
 		edit.tail.push(...block);
 		return true;
 	}

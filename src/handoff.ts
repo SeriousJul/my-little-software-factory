@@ -360,12 +360,14 @@ export type HandoffOutcome =
  * One rule words the end of every start: the Handoff dispatch's report and the
  * Consultation's own report both call this, so the two cannot grow into two
  * orders. The reason the start did not finish leads, then the name it could not
- * take, then a config write-back that did not land, then the note the repository
- * resolution bent with, then a write-back that landed, then the worktree base
+ * take, then a config write-back that did not land or that landed as a full
+ * rewrite of the operator's file, then the note the repository resolution bent
+ * with, then a write-back that landed as a section edit, then the worktree base
  * note, then the directory the plane moved aside. The Message line holds one row
- * of the terminal's width, so a write-back that landed never pushes the note
- * about the operator's disk off that row, and a write that did not land outranks
- * every note that follows it.
+ * of the terminal's width, so a routine write-back never pushes the note about
+ * the operator's disk off that row, while the write-back that replaced their
+ * whole file leads it, and a write that did not land outranks every note that
+ * follows it.
  *
  * A caller that gates a fact on its outcome's status passes only the facts that
  * stand: the reason only for an outcome that did not finish, the resolution
@@ -386,11 +388,15 @@ export function handoffReportLines(facts: {
 	leftoverWorktree?: string;
 }): string[] {
 	const write = facts.write;
-	// One write fact, placed by its own urgency: a write that did not land leads
-	// the report, a write that landed trails the notes it belongs beside.
+	// One write fact, placed by its own urgency: a write that did not land, and a
+	// write that landed as a full rewrite of the operator's file, lead the report;
+	// a write that landed as a section edit trails the notes it belongs beside.
 	const lead: string[] = [];
 	const trail: string[] = [];
-	if (write !== undefined) (write.landed ? trail : lead).push(write.line);
+	if (write !== undefined) {
+		if (!write.landed || write.mode === "rewrite") lead.push(write.line);
+		else trail.push(write.line);
+	}
 	return [
 		...(facts.reason === undefined ? [] : [facts.reason]),
 		...(facts.collision === undefined ? [] : [facts.collision]),

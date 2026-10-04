@@ -135,8 +135,10 @@ names - `writeConfigFile(`, `persistConfig(`, `writeConfigText(` - and
 instrumentation leaves those names whole, so the file passes against the
 instrumented copy and stands inside the campaign. Measured: a `--dryRunOnly`
 initial run over the whole instrumented tree reported 2,771 tests in 4 minutes
-38 seconds with no failure, and the file's own 5 cases reported 5 pass, 0 fail
-run alone inside that campaign's kept sandbox. The rule for the exclusion is
+38 seconds with no failure, and the file's own cases reported 5 pass, 0 fail
+run alone inside that campaign's kept sandbox. The file has since grown to 6
+cases, `bun run test` reports 6 pass, 0 fail for it, and the campaign has not
+been re-run since. The rule for the exclusion is
 what a file counts, not that it reads source: a file that counts shapes
 instrumentation rewrites is excluded, a file that counts names it does not is
 not.
