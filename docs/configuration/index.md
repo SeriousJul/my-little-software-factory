@@ -647,9 +647,17 @@ manager): a token without access makes the source stale with a readable
 reason, like any failed refresh. The control plane is read-only on all three
 feeds: it never writes labels, states, or dismissals to the security items.
 
-Repository mappings are the one section the control plane writes back: a
-sibling clone records its path there. The write-back rewrites the whole
-config file, so the data round-trips and your comments in the file do not.
+Two sections are the control plane's to write back: a sibling clone records
+its path in the `[repos]` table, and a repository init registers the ticket
+sources it generated as `[[sources]]` blocks. The write-back edits only those
+sections, so your comments, your blank lines, and the order you wrote your
+keys in stay where you put them. The Message line names the file each write
+lands on, and when the line is longer than the terminal the Message view on
+`F2` holds the whole fact. A write that changes nothing leaves the file
+untouched. In the one case the plane cannot edit its own sections safely -
+you changed the file while the plane was running - it rewrites the file from
+what it holds, says so on the Message line, and your comments do not survive
+that write.
 
 The shipped defaults define the three agent types `pi`, `codex`, and
 `claude`, the four task types `implement`, `review`, `rework`, and
