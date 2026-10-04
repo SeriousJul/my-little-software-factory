@@ -3737,7 +3737,7 @@ describe("the record lines", () => {
 		// and the seat reading the claim stood on.
 		expect(lines).toEqual([
 			`handoff queued: "${FIRST.title}" (origin open)`,
-			`handoff started: "${FIRST.title}" (mode direct ask, origin open, seats 0/2)`,
+			`handoff started: "${FIRST.title}" (mode direct-ask, origin open, seats 0/2)`,
 			`handoff refused: handoff recovery is required before another handoff ("${FIRST.title}")`,
 		]);
 	});
@@ -3776,6 +3776,28 @@ describe("the record lines", () => {
 		]);
 	});
 
+	test("a start under an unlimited cap states its held seats with no limit", async () => {
+		// `max-parallel-agents = 0` lifts the cap, so the seat part names the held
+		// count and states no limit at all (issue #209).
+		const rigRef = rig([FIRST]);
+		rigRef.config.maxParallelAgents = 0;
+		const lines: string[] = [];
+		const hold = gatedRunner(rigRef.runner, () => true);
+		const mod = withRunner(rigRef, hold.runner, {
+			log: record(lines),
+			// Work is held on two seats. The lifted cap leaves a free seat for
+			// every waiting start, so the ask's own pass takes this row.
+			seatCount: () => 2,
+		});
+		rigRef.dispatch = mod;
+		await expect(start(rigRef, FIRST, "open")).resolves.toMatchObject({ ok: true });
+		expect(lines).toEqual([
+			`handoff queued: "${FIRST.title}" (origin open)`,
+			`handoff started: "${FIRST.title}" (mode direct-ask, origin open, seats 2)`,
+		]);
+		mod.stop();
+	});
+
 	test("a force-dispatch over a full cap reads differently from the start that filled the cap", async () => {
 		// The issue #209 case: `max-parallel-agents = 1`, two starts, and the log
 		// has to say which path took the second seat. The seat count is the
@@ -3804,7 +3826,7 @@ describe("the record lines", () => {
 		mod.forceDispatchWorkQueueItem(SECOND.identity);
 		expect(lines).toEqual([
 			`handoff queued: "${FIRST.title}" (origin open)`,
-			`handoff started: "${FIRST.title}" (mode direct ask, origin open, seats 0/1)`,
+			`handoff started: "${FIRST.title}" (mode direct-ask, origin open, seats 0/1)`,
 			`handoff queued: "${SECOND.title}" (origin open)`,
 			`handoff started: "${SECOND.title}" (mode force-dispatch, origin open, seats 1/1)`,
 		]);

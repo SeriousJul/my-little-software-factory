@@ -893,8 +893,55 @@ describe("the dispatch's ask and pickup", () => {
 		// so the line names the direct ask, not the pickup.
 		expect(await mergeAskLines(false)).toEqual([
 			`merge queued: "${pullTitle}" (origin open)`,
-			`merge started: "${pullTitle}" (mode direct ask, origin open, seats 1/2)`,
+			`merge started: "${pullTitle}" (mode direct-ask, origin open, seats 1/2)`,
 		]);
+	});
+
+	test("the force-dispatch of a waiting merge names its mode on the start line", async () => {
+		// The queue pause holds the ask in the queue, so the row waits, and the
+		// operator's key on that row starts it (issue #209). The cap reads full
+		// and the action takes no seat (ADR 0068), so `seats 1/1` here is the
+		// count the plane stood on at the start, not a cap breach.
+		const state = planeState();
+		state.workQueue.setQueuePaused(true);
+		const runner = new FakeRunner();
+		stubReadSequence(runner, [{ state: "open" }, { merged: true }]);
+		stubMerge(runner, 0);
+		const lines: string[] = [];
+		const events: string[] = [];
+		let resolveStarted: () => void = () => {};
+		const startedSettled = new Promise<void>((resolve) => {
+			resolveStarted = resolve;
+		});
+		const dispatch = createHandoffDispatch({
+			state,
+			runner,
+			config: () => ({ ...PLANE_CONFIG, maxParallelAgents: 1 }),
+			seatCount: () => 1,
+			home: home(),
+			log: record(lines),
+			...recorder(events),
+		});
+		const result = await dispatch.dispatchPlaneAction({
+			origin: "open",
+			automatic: true,
+			ticketIdentity: pullIdentity,
+			taskType: "merge",
+			onStarted: (started) => {
+				expect(started).toEqual({ ok: true });
+				resolveStarted();
+			},
+		});
+		expect(result).toEqual({ ok: true });
+		expect(state.workQueue.items()).toHaveLength(1);
+		state.workQueue.setQueuePaused(false);
+		dispatch.forceDispatchWorkQueueItem(pullIdentity);
+		await startedSettled;
+		expect(lines).toEqual([
+			`merge queued: "${pullTitle}" (origin open)`,
+			`merge started: "${pullTitle}" (mode force-dispatch, origin open, seats 1/1)`,
+		]);
+		state.close();
 	});
 
 	test("the top-up's ask enters the queue, and the pickup runs the merge on the open ticket", async () => {

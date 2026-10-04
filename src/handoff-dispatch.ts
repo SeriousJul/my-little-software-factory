@@ -284,8 +284,8 @@ export interface HandoffDispatchOptions extends HandoffDispatchReports {
 	/**
 	 * The plane's file logger. The dispatch leaves the record's start lines and
 	 * queue lines, for a Handoff and for a Plane action alike: a start with its
-	 * dispatch mode, its origin, and its seat reading, a queue, and a refusal
-	 * with its reason.
+	 * start mode, its origin, and its seat reading, a queue, and a refusal with
+	 * its reason.
 	 */
 	log?: Logger;
 }
@@ -551,8 +551,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 		// takes a free seat now, or waits in the queue for one. The pass runs on
 		// behind the answer, the way every other pickup does. The pass names the
 		// item the operator's own ask enqueued, so that item's start line reads
-		// as the operator's direct ask and not as a later cycle's pickup
-		// (issue #209).
+		// `direct-ask` and not the `pickup` a later cycle writes (issue #209).
 		void this.runPickupPass(directAskOf(intent, intent.ticketIdentity));
 		return Promise.resolve({ ok: true });
 	}
@@ -1278,9 +1277,10 @@ class HandoffDispatchModule implements HandoffDispatch {
 		// the same fact and the row's spinner face does not wait for a seat.
 		// The start line names the path that took the seat, the item's origin,
 		// and the seat reading (issue #209): the count before this start claimed
-		// its seat, beside the limit it was measured against. A pickup never
-		// reads over its own limit, so a line over the limit is the
-		// force-dispatch that crossed it.
+		// its seat, beside the limit it was measured against. The pickup starts
+		// only into a free seat, so its reading always sits under the limit; a
+		// reading that already stands at the limit is the force-dispatch that
+		// crossed it (ADR 0092).
 		this.log?.info(
 			`handoff started: ${this.ticketName(item.ticketIdentity)} ` +
 				`(mode ${mode}, origin ${item.origin}, ${seats})`,
@@ -2039,23 +2039,29 @@ type QueueItemClaimResult =
 	| { ok: "cancelled" };
 
 /**
- * How a start reached its claim (issue #209).
+ * The start mode: how a start reached its claim (issue #209, CONTEXT.md).
  *
  * The mode is not the origin. The origin says where the ask came from (`open`,
  * `workflow`, `restart`); the mode says which path took the seat: the Work
  * queue's Pickup for a free seat, the operator's Force-dispatch over the
  * Parallel limit, or the immediate pass the operator's own ask ran for the item
- * it had just enqueued. A Consultation's start is the Consultation operations'
- * fact, not this module's, so no line here names it.
+ * it had just enqueued. Each value is one token, so the start line's `mode`
+ * field reads as one word for a tool that parses it.
+ *
+ * A Consultation's start is the Consultation operations' fact, not this
+ * module's, so no line here names it.
  */
-type StartMode = "pickup" | "force-dispatch" | "direct ask";
+type StartMode = "pickup" | "force-dispatch" | "direct-ask";
 
 /**
  * The ticket an ask makes its own direct ask (issue #209): the identity the
  * operator asked for by hand, and no identity for the ask the factory made
  * itself (the intent's `automatic` mark, ADR 0051).
  */
-function directAskOf(intent: { automatic?: boolean }, ticketIdentity: string): string | undefined {
+function directAskOf(
+	intent: HandoffIntent | PlaneActionIntent,
+	ticketIdentity: string,
+): string | undefined {
 	return intent.automatic === true ? undefined : ticketIdentity;
 }
 
@@ -2068,7 +2074,7 @@ function startModeOf(
 	item: { ticketIdentity: string },
 	directAskIdentity: string | undefined,
 ): StartMode {
-	return directAskIdentity === item.ticketIdentity ? "direct ask" : "pickup";
+	return directAskIdentity === item.ticketIdentity ? "direct-ask" : "pickup";
 }
 
 /** A queued handoff may start only from the state its origin claims. */
