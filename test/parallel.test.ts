@@ -16,6 +16,7 @@ import {
 	type ParallelSeatFacts,
 	type ParallelSeatTicketFact,
 	parallelSeatCount,
+	parallelSeatText,
 } from "../src/parallel.ts";
 
 const NOW = Date.parse("2026-08-31T11:00:00Z");
@@ -186,8 +187,9 @@ describe("parallelSeatCount", () => {
 	});
 
 	test("the cap gate reads the limit and the count, and a lifted limit never reads over", () => {
-		// The four force-dispatch sites and the mode cell's start-now ask this one
-		// rule instead of each restating `limit > 0 && count >= limit` (issue #202).
+		// The force-dispatch's three call sites and the screen that fills the Ticket
+		// header's mode cell ask this one rule instead of each restating
+		// `limit > 0 && count >= limit` (issue #202).
 		expect(overParallelLimit(0, 0)).toBe(false);
 		expect(overParallelLimit(0, 40)).toBe(false);
 		expect(overParallelLimit(2, 0)).toBe(false);
@@ -208,5 +210,14 @@ describe("parallelSeatCount", () => {
 				),
 			),
 		).toBe(true);
+	});
+
+	test("the seat reading's text names a limit only where one stands", () => {
+		// The Ticket header's mode cell and a dispatch start line state the same
+		// measurement in their own words, so the one rule that decides whether a
+		// fraction stands at all lives beside the gate it reads.
+		expect(parallelSeatText(1, 2)).toBe("1/2");
+		expect(parallelSeatText(3, 2)).toBe("3/2");
+		expect(parallelSeatText(3, 0)).toBe("3");
 	});
 });

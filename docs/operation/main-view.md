@@ -44,6 +44,14 @@ header row; the same toggle restores it.
   front or the back, `Delete` removes it, `p` pauses or resumes the drain,
   and Enter starts the item now, even over the limit.
 
+The Consultation header and the Work header stand in the left column's own
+width - half the terminal - while the Ticket header spans the whole terminal.
+Where a header's row is too short for its count cells it drops whole cells
+from their tail and never wraps onto a second row: at a 60 to 79 column
+terminal the Consultation header's row is 30 to 39 columns, its wide-form
+counts need 50, and the row reads `▾ Consultations` alone. The Work header's
+one count cell stands at that width.
+
 The detail pane shows the full detail of the selected item. On a ticket: the
 title, the repository, the state, the agent with its environment, model,
 thinking level, and context window, the task type, the handoff attempt count

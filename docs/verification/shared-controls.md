@@ -1365,10 +1365,11 @@ for the row layout, the click rows, and the resize walk; `test/reserved-rows.tes
 for the 26-row floor and the too-small notice. The gallery's `auto-mode` example
 carries both lamps, the pause word, and the drop rule on its own 54-column row,
 and the suite exercises it; the same example asserts each lamp's painted color
-and the pause word's color against the role the theme resolves. `test/section-header.test.ts` asserts every part's color at the
-component seam - the warning color for `auto`, the running color for `manual`,
-the room color under the cap, the cap color at and over it, the bare count under
-no limit, and the header's own ink for the counts and the pause word - and
+and the pause word's color against the role the theme resolves.
+`test/section-header.test.ts` asserts every part's color at the component seam -
+the warning color for `auto`, the running color for `manual`, the room color
+under the cap, the cap color at and over it, the bare count under no limit, and
+the header's own ink for the counts and the pause word - and
 `test/main-view-frame.test.ts` reads the same colors through the real app frame
 across the `a` toggle. The Main view guide screenshot was regenerated with
 `bun run screenshots` and the drift test reads it.
@@ -1423,3 +1424,73 @@ stand as not re-verified for it: no person has re-walked the lamp pair or the tw
 mode colors in a live terminal on this head, and that is the open item this entry
 leaves open. The lamp pair is not contrast-checked against inherited herdr theme
 pairs.
+
+## The Ticket header's mode cell after the second review
+
+The second review of the cell found the Parallel limit gate written twice. The
+paint layer decided the seat color with `limit === 0 || seats < limit` inline in
+`src/components/theme.ts`, while `src/parallel.ts` owns that gate as
+`overParallelLimit` and states that no site restates it. The gate's answer now
+travels in the cell: `AutoHandoffCell.overLimit`, filled by
+`src/components/app.ts` from `overParallelLimit`, and `seatColor` answers from
+that boolean. The paint layer holds no gate, so a change to the rule moves the
+header's cap color with it. `test/section-header.test.ts` holds a case that
+states the answer apart from the seats and the limit it came from, and that
+file's own cell builder calls `overParallelLimit` the way the screen does.
+
+The seat reading's text rule - a limit of 0 names no fraction - stood in
+`planHeaderRow` and in the dispatch's `seatReading()`. It stands in
+`parallelSeatText` in `src/parallel.ts`, which both readers call, and
+`test/parallel.test.ts` holds it.
+
+The plan now answers what the row paints:
+
+- `HeaderRowPlan.countsRoom` carries the columns the counts may paint into, so
+  the component paints from the plan instead of measuring the mode cell a second
+  time.
+- A row too short to hold its name and the bare lamp whole beside each other
+  plans no mode cell at all: the plan names no lamp and the frame paints none,
+  so the plan never claims a cell the row could only cut.
+  `test/section-header.test.ts` holds the plan at 12 columns and the rendered row
+  at 12 columns.
+- The row plans at the smaller of its own width and the terminal width it is told
+  it renders in. A header that claims 60 columns inside a 40-column terminal
+  plans at 40, gives count cells up whole, and keeps its lamp; the same file
+  holds that frame. The gallery's `auto-mode` drop-rule row claims no more
+  columns than the gallery's own box holds, so a narrow gallery shortens that row
+  instead of clipping its corner.
+
+The Work queue's pause prop on the header is `queuePaused` now, so it no longer
+reads as one fact with the Dispatch pause the mode cell carries (ADR 0052 against
+ADR 0016).
+
+The Consultation and Work headers drop whole count cells too. At a 60 to 79 column
+terminal the Consultation header's row is 30 to 39 columns, its wide-form counts
+need 50, and the row reads `▾ Consultations` alone. That follows the drop rule,
+and it is now measured and written down: `test/main-view-frame.test.ts` holds a
+64-column frame that reads `▾ Consultations` alone beside a Work header that keeps
+its depth cell in a frame of the same row count, and the Main view guide states
+the left column's width and what a short header gives up.
+
+What was measured: the component seam (`test/section-header.test.ts`) holds the
+gate's answer apart from the numbers it came from, the counts' room at 84 and 62
+columns, the no-mode-cell plan below the plane's floor, the 40-column terminal
+against a 60-column claim, and the 12-column row. `test/parallel.test.ts` holds
+the seat text rule, and `test/main-view-frame.test.ts` holds the Consultation
+header's drop at 64 columns. The cell's other cases stand from the entry above,
+and the whole suite ran on this head: `bun run lint` clean over 288 files with no
+warnings, `bun run typecheck` clean, and one full `bun run test` green at 2841
+tests over 129 files, 0 fail, no skips, 15759 assertions in 38.13 s. No other
+`bun test` process ran on the machine during that gate (load average 6.99 on 32
+cores). The Main view guide screenshot stands as committed - nothing this rework
+changes reaches the frame the guide shows - and `test/screenshot-drift.test.ts`
+reads it.
+
+What was not measured: no screen reader has read this application, and no claim of
+screen-reader support is made here. The terminal walks in Ghostty and foot have
+still not been re-run for this change, so the lamp pair and the two mode colors
+stand as not walked in a live terminal by a person on this head. That remains the
+open item, and it is the one the test layer cannot close. The design question the
+review raised - whether `manual` should wear the running state's color at all, in
+a mode where the machine starts nothing on its own - is a judgment about what the
+operator should see in that corner, and it belongs to that same walk.

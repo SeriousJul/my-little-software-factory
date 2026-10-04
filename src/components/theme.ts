@@ -116,13 +116,14 @@ const SEAT_ROLES = { room: "green", cap: "red" } as const;
 /**
  * The color the mode cell's seat reading paints in.
  *
- * The cap color stands from the frame the seats reach the limit through the
- * frame they exceed it - the force-dispatched start and the held turn's own
- * seat both stand against the cap (ADR 0034). A limit of 0 states no limit,
- * so the reading never wears the cap color.
+ * The cell carries the Parallel limit gate's answer, not the gate itself: the
+ * cap color stands from the frame the seats reach the limit through the frame
+ * they exceed it - the force-dispatched start and the held turn's own seat both
+ * stand against the cap (ADR 0034). A limit of 0 states no limit, so the gate
+ * answers false and the reading wears the room color.
  */
-export function seatColor(seats: number, limit: number): string | undefined {
-	return paint(limit === 0 || seats < limit ? SEAT_ROLES.room : SEAT_ROLES.cap);
+export function seatColor(overLimit: boolean): string | undefined {
+	return paint(overLimit ? SEAT_ROLES.cap : SEAT_ROLES.room);
 }
 
 /**

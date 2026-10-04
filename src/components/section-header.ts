@@ -1,6 +1,7 @@
 import type { MouseEvent } from "@opentui/core";
 import { createElement } from "@opentui/react";
 import type { AutoHandoffCell } from "../domain/section-facts.ts";
+import { parallelSeatText } from "../parallel.ts";
 import { LAMP_GLYPHS } from "./shared/presentation.ts";
 import { padToWidth, truncateToWidth, widthOf } from "./text.ts";
 import { autoHandoffColor, paint, seatColor } from "./theme.ts";
@@ -13,10 +14,16 @@ interface SectionHeaderProps {
 	active: boolean;
 	/**
 	 * The terminal width. It chooses the wide or narrow count form (wide
-	 * starts at 60 columns), per the Main view's header layout.
+	 * starts at 60 columns), per the Main view's header layout, and it bounds
+	 * the row's own width: a header never lays its row out past the terminal it
+	 * renders in.
 	 */
 	terminalWidth: number;
-	/** The cells the header row actually holds. The text truncates to them. */
+	/**
+	 * The cells the header row actually holds. The row plans against the
+	 * smaller of this and the terminal width, so a caller that overstates its
+	 * box cannot push the row's last cell past the edge of the box.
+	 */
 	width: number;
 	/** Whether the section's list box is expanded (user story 3). */
 	expanded: boolean;
@@ -30,10 +37,11 @@ interface SectionHeaderProps {
 	/** The Work queue's depth for the Work section's header (ADR 0034). */
 	waiting?: number;
 	/**
-	 * The queue pause for the Work section's header (ADR 0052): the brake on
-	 * the queue's drain, factory state that shows where the pane owns it.
+	 * The Work queue's pause for the Work section's header (ADR 0052): the brake
+	 * on the queue's drain, factory state that shows where the pane owns it. It
+	 * is not the Dispatch pause the mode cell carries (ADR 0016).
 	 */
-	paused?: boolean;
+	queuePaused?: boolean;
 	/** The held count: shown only when it is above zero (user story 15). */
 	held?: number;
 	/**
@@ -87,22 +95,31 @@ interface SectionHeaderProps {
  *
  * `cells` holds the row's cells in the order they stand, the section name
  * first. `lamp`, `seats`, and `pause` are the mode cell's parts it kept: an
- * empty string is a part the row had no room for.
+ * empty string is a part the row had no room for. `countsRoom` is what the
+ * counts may paint into. Together they are the row as the component paints it:
+ * every part the plan names stands whole, and a part the row cannot hold whole
+ * is named as nothing.
  */
 export interface HeaderRowPlan {
 	/** The row's cells, every one of them whole. The section name always stands. */
 	readonly cells: readonly string[];
-	/** The lamp and its word. "" when the row carries no mode cell. */
+	/**
+	 * The lamp and its word. "" when the row carries no mode cell, and "" when
+	 * it is too short to hold the bare lamp beside its own name.
+	 */
 	readonly lamp: string;
 	/** The Parallel limit seat reading. "" when the row gave it up. */
 	readonly seats: string;
 	/** The Dispatch pause word. "" when the row gave it up. */
 	readonly pause: string;
+	/** The columns the count cells paint into: what the mode cell leaves. */
+	readonly countsRoom: number;
 }
 
 /** One form the mode cell can wear: the text it paints and the parts that text carries. */
 interface ModeForm {
 	readonly cell: string;
+	readonly lamp: string;
 	readonly seats: string;
 	readonly pause: string;
 }
@@ -121,7 +138,9 @@ interface ModeForm {
  *
  * The row cuts no cell in half at any width the plane supports: the plane's
  * 40-column floor leaves room for the name and the bare lamp beside each
- * other, and every count cell the ladder kept fits beside them.
+ * other, and every count cell the ladder kept fits beside them. Below that
+ * floor the ladder runs out of count cells to give up, and the row then holds
+ * no mode cell at all rather than a lamp it can only cut in half.
  */
 export function planHeaderRow(
 	width: number,
@@ -130,20 +149,19 @@ export function planHeaderRow(
 ): HeaderRowPlan {
 	const lamp =
 		mode === null ? "" : ` ${mode.mode === "auto" ? LAMP_GLYPHS.off : LAMP_GLYPHS.on} ${mode.mode}`;
-	const seats =
-		mode === null ? "" : mode.limit === 0 ? ` ${mode.seats}` : ` ${mode.seats}/${mode.limit}`;
+	const seats = mode === null ? "" : ` ${parallelSeatText(mode.seats, mode.limit)}`;
 	const pause = mode === null || !mode.dispatchPaused ? "" : " paused";
 	// The forms the cell can wear, widest first. A part the cell does not carry
 	// repeats the form below it, so only the choices the row can make are kept.
 	const forms: ModeForm[] = [];
 	for (const form of [
-		{ cell: `${lamp}${seats}${pause}`, seats, pause },
-		{ cell: `${lamp}${pause}`, seats: "", pause },
-		{ cell: lamp, seats: "", pause: "" },
+		{ cell: `${lamp}${seats}${pause}`, lamp, seats, pause },
+		{ cell: `${lamp}${pause}`, lamp, seats: "", pause },
+		{ cell: lamp, lamp, seats: "", pause: "" },
 	]) {
 		if (!forms.some((kept) => kept.cell === form.cell)) forms.push(form);
 	}
-	const bare = forms.at(-1) ?? { cell: "", seats: "", pause: "" };
+	const bare = forms.at(-1) ?? { cell: "", lamp: "", seats: "", pause: "" };
 	const lineWidthOf = (rowCells: readonly string[]): number => widthOf(rowCells.join("  "));
 	// The counts give way first, whole, from their tail, and only as far as the
 	// bare lamp needs.
@@ -151,11 +169,23 @@ export function planHeaderRow(
 	while (kept.length > 1 && lineWidthOf(kept) + widthOf(bare.cell) > width) {
 		kept = kept.slice(0, -1);
 	}
+	// A row too short to hold its name and the bare lamp whole beside each other
+	// holds no mode cell at all. Naming the lamp anyway would state a part the
+	// row can only cut, and the plan answers what the row paints.
+	if (mode === null || lineWidthOf(kept) + widthOf(bare.cell) > width) {
+		return { cells: kept, lamp: "", seats: "", pause: "", countsRoom: Math.max(0, width) };
+	}
 	// The cell then re-grows into the room those cells left: the widest form the
 	// row can hold beside them.
 	const form =
 		forms.find((candidate) => lineWidthOf(kept) + widthOf(candidate.cell) <= width) ?? bare;
-	return { cells: kept, lamp, seats: form.seats, pause: form.pause };
+	return {
+		cells: kept,
+		lamp: form.lamp,
+		seats: form.seats,
+		pause: form.pause,
+		countsRoom: Math.max(0, width - widthOf(form.cell)),
+	};
 }
 
 /**
@@ -188,7 +218,7 @@ export function SectionHeader({
 	awaitingResponse = 0,
 	recovery = 0,
 	waiting = 0,
-	paused = false,
+	queuePaused = false,
 	held = 0,
 	mode = null,
 	ignored = 0,
@@ -227,15 +257,15 @@ export function SectionHeader({
 		if (newOutput) cells.push("new output");
 	}
 	// The Work queue's pause (ADR 0052) rides its depth cell: the brake on the
-	// queue's drain reads beside the depth it brakes.
-	if (section === "work" && paused) cells.push("paused");
+	// queue's drain reads beside the depth it brakes. It is not the Dispatch
+	// pause the mode cell carries (ADR 0016).
+	if (section === "work" && queuePaused) cells.push("paused");
 	const name = section === "tickets" ? "Tickets" : section === "work" ? "Work" : "Consultations";
 	const lead = `${expanded ? "▾" : "▸"} ${name}`;
-	// The ladder the row lays itself out at, measured on the row's own width.
-	const plan = planHeaderRow(width, [lead, ...cells], mode);
+	// The ladder the row lays itself out at, measured on the row's own width and
+	// never past the terminal the header renders in.
+	const plan = planHeaderRow(Math.min(width, terminalWidth), [lead, ...cells], mode);
 	const countsText = plan.cells.join("  ");
-	const modeCell = `${plan.lamp}${plan.seats}${plan.pause}`;
-	const countsCells = Math.max(0, width - widthOf(modeCell));
 	// An expanded section wears bold: the emphasis the old palette carried in a
 	// brighter text color. Each part of the row paints its own role, so the
 	// mode cell reads in color while the counts keep the header's own ink.
@@ -245,15 +275,15 @@ export function SectionHeader({
 		createElement(
 			face,
 			{ key: "counts", fg: headerInk },
-			padToWidth(truncateToWidth(countsText, countsCells), countsCells),
+			padToWidth(truncateToWidth(countsText, plan.countsRoom), plan.countsRoom),
 		),
 	];
-	if (mode !== null) {
+	// The row paints exactly the parts the plan named, so a part the row had no
+	// room for is absent from the frame, not cut inside it.
+	if (mode !== null && plan.lamp !== "") {
 		parts.push(createElement(face, { key: "lamp", fg: autoHandoffColor(mode.mode) }, plan.lamp));
 		if (plan.seats !== "") {
-			parts.push(
-				createElement(face, { key: "seats", fg: seatColor(mode.seats, mode.limit) }, plan.seats),
-			);
+			parts.push(createElement(face, { key: "seats", fg: seatColor(mode.overLimit) }, plan.seats));
 		}
 		if (plan.pause !== "") {
 			parts.push(createElement(face, { key: "pause", fg: headerInk }, plan.pause));

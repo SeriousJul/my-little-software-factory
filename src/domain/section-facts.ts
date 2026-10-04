@@ -51,6 +51,13 @@ export interface AutoHandoffCell {
 	seats: number;
 	/** The Parallel limit. 0 states no limit, so the cell names no fraction. */
 	limit: number;
+	/**
+	 * The Parallel limit gate's answer (ADR 0034): the seats stand at or over
+	 * the limit. The screen that owns the factory state fills it from
+	 * `overParallelLimit`, so the header and its paint layer hold no gate of
+	 * their own and cannot drift from the gate the dispatch reads.
+	 */
+	overLimit: boolean;
 	/** The Dispatch pause (ADR 0016): it rides the cell in auto mode only. */
 	dispatchPaused: boolean;
 }

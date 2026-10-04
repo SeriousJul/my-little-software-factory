@@ -1027,6 +1027,9 @@ export function App({
 					mode: autoMode ? ("auto" as const) : ("manual" as const),
 					seats: liveCount,
 					limit: config.maxParallelAgents,
+					// The gate's answer, from the one rule the dispatch gates read: the header's
+					// seat color and a force-dispatch refusal cannot disagree about the cap.
+					overLimit: overParallelLimit(config.maxParallelAgents, liveCount),
 					dispatchPaused: autoMode && dispatchPause,
 				};
 	// The held turns (ADR 0016, ADR 0017): the awaiting tickets whose last turn
@@ -5162,7 +5165,7 @@ export function App({
 								terminalWidth,
 								width: leftCols,
 								waiting: headerFacts.work.waiting,
-								paused: queuePaused,
+								queuePaused,
 								active: mainSurfaceActive,
 								onToggle: () => clickSection("work"),
 							}),

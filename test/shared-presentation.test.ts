@@ -80,7 +80,10 @@ describe("the shared control ink", () => {
 	test("the Auto-handoff cell's colors clear the contrast the standard sets", () => {
 		// The mode lamp, the seat reading's room color, and its cap color are text
 		// the plane paints on its own panel surface, so each pair clears the text
-		// threshold in the plane's own theme (ADR 0024).
+		// threshold in the plane's own theme (ADR 0024). The `yellow` and `red`
+		// pairs stand in the ink table's `warning` and `error` roles too, so this
+		// case is partly the same measurement named from the cell's own parts; the
+		// `green` pair on the panel surface is the new one.
 		const panel = STANDALONE_THEME.roles.panel_bg;
 		for (const role of ["yellow", "green", "red"] as const) {
 			expect(contrastRatio(STANDALONE_THEME.roles[role], panel)).toBeGreaterThanOrEqual(

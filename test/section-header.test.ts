@@ -15,7 +15,9 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { createElement } from "@opentui/react";
 import { testRender } from "@opentui/react/test-utils";
 import { planHeaderRow, SectionHeader } from "../src/components/section-header.ts";
+import { widthOf } from "../src/components/text.ts";
 import type { AutoHandoffCell, AutoHandoffMode } from "../src/domain/section-facts.ts";
+import { overParallelLimit } from "../src/parallel.ts";
 import { frameText, rgb, roleColor, rowsOf, spanColorAt } from "./app-harness.ts";
 
 let renderer: { destroy: () => void | Promise<void> } | null = null;
@@ -95,13 +97,24 @@ describe("the Section header's cell order", () => {
 
 /**
  * The Auto-handoff mode's cell, on the facts the screen that owns the mode reads.
+ *
+ * The Parallel limit gate's answer comes from the shared rule the dispatch
+ * gates read, the same way `src/components/app.ts` fills it, so the header's
+ * seat color is measured against the gate itself and not against a second
+ * statement of it.
  */
 const cell = (
 	mode: AutoHandoffMode,
 	seats: number,
 	limit: number,
 	dispatchPaused = false,
-): AutoHandoffCell => ({ mode, seats, limit, dispatchPaused });
+): AutoHandoffCell => ({
+	mode,
+	seats,
+	limit,
+	overLimit: overParallelLimit(limit, seats),
+	dispatchPaused,
+});
 
 /**
  * The Auto-handoff mode's lamp cell.
@@ -238,6 +251,83 @@ describe("the Section header's mode lamp", () => {
 		expect(bare.row.endsWith("○ auto 3")).toBe(true);
 		expect(spanColorAt(bare.setup, 0, " 3")).toEqual(rgb(roleColor("green")));
 	});
+
+	test("the seat color reads the gate's answer the cell carries, not its numbers", async () => {
+		// The paint layer holds no Parallel limit gate of its own: it picks the
+		// role from the boolean the screen fills from `overParallelLimit`, the one
+		// rule the dispatch gates read. So the header's cap color follows that
+		// rule, and a cell that states the gate's answer wears the color that
+		// answer names whatever its seats and limit say.
+		const stated = await renderHeader(
+			84,
+			{ held: 0 },
+			{
+				mode: "manual",
+				seats: 1,
+				limit: 2,
+				overLimit: true,
+				dispatchPaused: false,
+			},
+		);
+		expect(spanColorAt(stated.setup, 0, "1/2")).toEqual(rgb(roleColor("red")));
+		const under = await renderHeader(
+			84,
+			{ held: 0 },
+			{
+				mode: "manual",
+				seats: 9,
+				limit: 10,
+				overLimit: false,
+				dispatchPaused: false,
+			},
+		);
+		expect(spanColorAt(under.setup, 0, "9/10")).toEqual(rgb(roleColor("green")));
+	});
+
+	test("a header never lays its row out past the terminal it renders in", async () => {
+		// The width prop is the caller's claim about its own box, and the terminal
+		// is the outer bound. A header that claims 60 columns inside a 40-column
+		// terminal plans at 40: the counts give way whole, and the lamp keeps its
+		// corner instead of being the first thing the box clips.
+		const setup = await testRender(
+			createElement(SectionHeader, {
+				section: "tickets",
+				active: true,
+				terminalWidth: 40,
+				width: 60,
+				expanded: true,
+				open: 2,
+				running: 1,
+				awaiting: 1,
+				held: 1,
+				heldBell: true,
+				ignored: 3,
+				mode: cell("manual", 1, 2),
+				onToggle: () => undefined,
+			}),
+			{ width: 40, height: 2 },
+		);
+		await setup.flush();
+		renderer = setup.renderer;
+		// The raw character frame, not `frameText`: this test reads the columns the
+		// row actually paints, and `frameText` collapses the runs between cells.
+		const row = (rowsOf(setup.captureCharFrame())[0] ?? "").trimEnd();
+		expect(row).toBe("▾ Tickets  open 2  running 1    ● manual");
+		expect(row).not.toContain("awaiting");
+		expect(row).not.toContain("held");
+		expect(row).not.toContain("ignored");
+		expect(widthOf(row)).toBe(40);
+	});
+
+	test("a row too short for its name and the bare lamp paints no mode cell", async () => {
+		// Below the plane's 40-column floor the ladder runs out of count cells to
+		// give up. The row then holds no corner cell at all rather than a lamp it
+		// could only cut, and the plan names exactly what the frame shows.
+		const row = await headerRow(12, { held: 1 }, cell("manual", 2, 3));
+		expect(row).toBe("▾ Tickets");
+		expect(row).not.toContain("manual");
+		expect(row).not.toContain("●");
+	});
 });
 
 /**
@@ -331,5 +421,31 @@ describe("the Section header's row plan", () => {
 		const plan = planHeaderRow(54, narrow, null);
 		expect(plan.cells).toEqual(narrow.slice(0, 6));
 		expect(cellText(plan)).toBe("");
+	});
+
+	test("the plan states the room the counts paint into", () => {
+		// The component paints from this number instead of measuring the mode cell
+		// a second time. 84 columns beside a 13-column cell leaves 71.
+		expect(planHeaderRow(84, wide, cell("manual", 1, 2)).countsRoom).toBe(71);
+		// 62 columns: the held count has gone and the cell can only wear its bare
+		// form, so the counts keep 53 of the row.
+		const at62 = planHeaderRow(62, wide, cell("manual", 1, 2));
+		expect(at62.cells).toEqual(wide.slice(0, 5));
+		expect(cellText(at62)).toBe(" ● manual");
+		expect(at62.countsRoom).toBe(53);
+		// A row that carries no mode cell gives the counts its whole width.
+		expect(planHeaderRow(54, narrow, null).countsRoom).toBe(54);
+	});
+
+	test("a row too short for its name and the bare lamp plans no mode cell", () => {
+		// Below the plane's 40-column floor the ladder runs out of count cells to
+		// give up, and the plan then names no lamp at all: at 12 columns the
+		// 9-column name and the 9-column lamp cannot stand whole beside each other.
+		const plan = planHeaderRow(12, narrow, cell("manual", 1, 2));
+		expect(plan.cells).toEqual(["▾ Tickets"]);
+		expect(cellText(plan)).toBe("");
+		expect(plan.countsRoom).toBe(12);
+		// At the floor the lamp stands whole, and the plan says so.
+		expect(planHeaderRow(40, narrow, cell("manual", 1, 2)).lamp).toBe(" ● manual");
 	});
 });

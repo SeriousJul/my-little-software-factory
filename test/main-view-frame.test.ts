@@ -246,7 +246,7 @@ function liveConsultationAgents(ids: readonly string[]): FakeRunner {
 }
 
 /** The section header text: the row's left-column half, before the detail. */
-const headerOf = (frame: string, section: "Tickets" | "Consultations"): string =>
+const headerOf = (frame: string, section: "Tickets" | "Consultations" | "Work"): string =>
 	rowsOf(frame)
 		.find((row) => row.includes(section))
 		?.split(/┌|│/)[0]
@@ -730,6 +730,35 @@ describe("the merged Main view", () => {
 				expect(headerOf(collapsed, "Consultations")).toContain("recovery: 1");
 				expect(rowsOf(collapsed)).toHaveLength(32);
 			}, state);
+		} finally {
+			state.close();
+		}
+	});
+
+	test("a Consultation header too short for its counts drops whole cells and adds no row", async () => {
+		// At a 64-column terminal the Consultation header's pane is 32 columns, and
+		// the wide-form counts beside the section name need 50. The row gives whole
+		// count cells up from their tail - the same drop rule the Ticket header runs
+		// beside its mode cell - and never wraps onto a second row, so the frame
+		// keeps its row count and the section keeps its box.
+		const state = openFactoryState(join(home, "state.sqlite"));
+		state.grouping.setGroupingAxis("tickets", "none");
+		seedConsultation(state, uid("k"));
+		try {
+			await booted(
+				async (setup) => {
+					const frame = await settle(setup);
+					expect(headerOf(frame, "Consultations")).toBe("▾ Consultations");
+					expect(headerOf(frame, "Consultations")).not.toContain("recovery");
+					// The Work header's one count cell still stands in the same pane.
+					expect(headerOf(frame, "Work")).toContain("waiting: 0");
+					expect(rowsOf(frame)).toHaveLength(32);
+				},
+				state,
+				{},
+				64,
+				32,
+			);
 		} finally {
 			state.close();
 		}
