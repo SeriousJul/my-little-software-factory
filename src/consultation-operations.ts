@@ -30,6 +30,7 @@ import {
 	consultationStartFacts,
 	type HandoffOutcome,
 	handOffConsultation,
+	handoffReportLines,
 	renderConsultationPrompt,
 } from "./handoff.ts";
 import type { HerdrAgent } from "./herdr.ts";
@@ -1183,26 +1184,17 @@ export class ConsultationOperations {
 			outcome.notes?.mappingToWrite === undefined || this.persistRepositoryMapping === undefined
 				? undefined
 				: await this.persistRepositoryMapping(outcome.notes.mappingToWrite);
-		// A mapping write that did not land leads the line; one that landed trails
-		// the note the resolution bent with (ADR 0101).
-		const mappingFailure =
-			mappingReport === undefined || mappingReport.landed ? undefined : mappingReport.line;
-		const mappingWrite =
-			mappingReport === undefined || !mappingReport.landed ? undefined : mappingReport.line;
-		const lines = [
-			...(outcome.status === "ok" ? [] : [outcome.reason]),
-			...(mappingFailure === undefined ? [] : [mappingFailure]),
-			...(outcome.status === "ok" && outcome.notes?.warning !== undefined
-				? [outcome.notes.warning]
-				: []),
-			...(mappingWrite === undefined ? [] : [mappingWrite]),
-			...(outcome.status === "ok" && outcome.notes?.worktreeBase !== undefined
-				? [outcome.notes.worktreeBase]
-				: []),
+		// The order the write fact takes beside the other notes is the Handoff
+		// dispatch's order, worded by one shared rule (ADR 0103).
+		const lines = handoffReportLines({
+			reason: outcome.status === "ok" ? undefined : outcome.reason,
+			warning: outcome.status === "ok" ? outcome.notes?.warning : undefined,
+			write: mappingReport,
+			worktreeBase: outcome.status === "ok" ? outcome.notes?.worktreeBase : undefined,
 			// The moved directory is a fact on the operator's disk whether or not
-			// the start landed, so this line carries no status gate.
-			...(outcome.notes?.leftoverWorktree === undefined ? [] : [outcome.notes.leftoverWorktree]),
-		];
+			// the start landed, so this fact carries no status gate.
+			leftoverWorktree: outcome.notes?.leftoverWorktree,
+		});
 		if (outcome.status === "failed") {
 			this.state.consultationRecord.failConsultationOpening(
 				consultation.id,

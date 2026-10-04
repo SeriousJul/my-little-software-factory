@@ -29,16 +29,17 @@
  * plane owns and rewrites, so the edit stands and no line says the value was
  * replaced. `docs/configuration/index.md` states this to the operator.
  *
- * What the line scan reads, and what it does not. It reads table headers,
- * single-line key assignments, and the string forms a config file carries: a
+ * What the line scan reads, and what it does not. It reads table headers, key
+ * assignments whose value closes on its own line - a plain string, an inline
+ * table written on one line - and the string forms a config file carries: a
  * basic string with its escapes, a literal string, and the multiline form of
- * each. It does not read a value that spans lines (a multiline array, an
- * inline table), a dotted key, or any other TOML form the plane's own
- * serializer does not write. Such a line is the operator's own, and the edit
- * leaves it alone; what keeps the write honest is the verify step, which
- * refuses a patched text that does not carry what the plane holds. A file
- * whose lines end CRLF is edited the same way: every line the plane writes
- * carries the file's own line ending.
+ * each. It does not read a value that runs past the end of its line (a
+ * multiline array, an inline table written across lines), a dotted key, or any
+ * other TOML form the plane's own serializer does not write. Such a line is the
+ * operator's own, and the edit leaves it alone; what keeps the write honest is
+ * the verify step, which refuses a patched text that does not carry what the
+ * plane holds. A file whose lines end CRLF is edited the same way: every line
+ * the plane writes carries the file's own line ending.
  *
  * One window this design does not close, stated so the next contributor does
  * not read the verify step as a lock: the patch is built and checked in
@@ -116,10 +117,12 @@ export async function writeConfigFile(
  * line is (ADR 0103).
  *
  * The two facts a write-back can leave are not equally urgent, and the Message
- * line holds one row of the terminal. `landed` says which one it is: a write
- * that did not land leads the line, ahead of the notes a Handoff carried, and
- * a write that landed trails them so the note about the operator's disk - the
- * sibling clone the plane made - stays on the visible row.
+ * line holds one row of the terminal. `landed` says which one it is. Where that
+ * line stands beside the other facts of the act that did the write is one rule
+ * for every report: `handoffReportLines` in `src/handoff.ts` places a write that
+ * did not land ahead of the notes a start carried, and a write that landed after
+ * them so the note about the operator's disk - the sibling clone the plane made
+ * - stays on the visible row.
  */
 export type ConfigWriteReport =
 	| { readonly line: string; readonly landed: true }
@@ -235,10 +238,18 @@ function patchOwnedSections(text: string, updated: FactoryConfig): string | null
 		if (inserted !== undefined) out.push(...inserted);
 	}
 	if (edit.tail.length > 0) {
-		// The file ended with a newline; the appended lines keep that ending so
-		// the operator's last line is still a line.
+		// The file's own final newline is the empty element the split yields at the
+		// end. It is set aside so the appended lines land before it and keep that
+		// ending, and the operator's last line is still a line.
+		const endsWithNewline = lines[lines.length - 1] === "";
+		if (endsWithNewline) out.pop();
+		// One blank line separates what the plane appends from what the operator
+		// wrote, the same separator an in-region insert writes. A file whose own
+		// last line is blank carries that separator already, so the plane adds no
+		// second one.
+		if (out.at(-1)?.trim() !== "") out.push(edit.eol);
 		out.push(...edit.tail);
-		if (lines[lines.length - 1] === "") out.push("");
+		if (endsWithNewline) out.push("");
 	}
 	return out.join("\n");
 }
@@ -266,7 +277,6 @@ function editReposRegion(
 	if (regions.length > 1) return false;
 	if (regions.length === 0) {
 		edit.tail.push(
-			edit.eol,
 			`[repos]${edit.eol}`,
 			...entries.map(([key, value]) => assignmentLine(edit, key, value)),
 		);
@@ -277,11 +287,12 @@ function editReposRegion(
 	for (let i = region.start + 1; i < region.end; i++) {
 		const row = scanned[i];
 		// A line that stands inside an operator's multiline string is prose, not
-		// an assignment, and a line whose value spans lines is a form the plane's
-		// own serializer does not write. Neither is a line the plane rewrites: the
-		// key a value-opening line names still counts as standing, so the plane
-		// does not add a second one, and the verify step decides whether what
-		// stands carries what the plane holds.
+		// an assignment, and a line whose value runs past the end of the line (a
+		// multiline array, an inline table written across lines) is a form the
+		// plane's own serializer has no in-place writing for. Neither is a line the
+		// plane rewrites: the key such a line names still counts as standing, so
+		// the plane does not add a second one beside it, and the verify step
+		// decides whether what stands carries what the plane holds.
 		if (row.startsInString) continue;
 		const key = assignmentKey(row.body);
 		if (key === null) continue;
@@ -290,7 +301,7 @@ function editReposRegion(
 		// since the plane read the file. The plane owns its own keys, not theirs.
 		if (value === undefined) continue;
 		written.add(key);
-		if (row.opensString) continue;
+		if (row.opensString || valueRunsPastLine(row.body)) continue;
 		if (assignmentValue(row.body) === value) continue;
 		const indent = /^\s*/.exec(row.body)?.[0] ?? "";
 		// The line's own comment is the operator's prose about the value, and it
@@ -360,7 +371,7 @@ function editSourcesRegion(
 	const empty = emptySourcesKeyLine(scanned);
 	if (empty >= 0) edit.remove.add(empty);
 	if (regions.length === 0) {
-		edit.tail.push(edit.eol, ...block);
+		edit.tail.push(...block);
 		return true;
 	}
 	insertAt(edit, lastEditableLine(scanned, regions[regions.length - 1]), [edit.eol, ...block]);
@@ -596,6 +607,42 @@ function regionsOf(scanned: ScannedLine[], name: string, array: boolean): Region
 // ---------------------------------------------------------------------------
 
 const ASSIGNMENT = /^\s*("(?:[^"\\]|\\.)*"|'[^']*'|[A-Za-z0-9_-]+)\s*=\s*(.*)$/u;
+
+/**
+ * Whether the value an assignment line opens runs past the end of that line.
+ * A multiline array, an inline table written across lines, and a string that
+ * does not close on the line all do. The scan reads strings and comments the
+ * way the rest of the module does, so a bracket inside the operator's prose
+ * does not count.
+ */
+function valueRunsPastLine(text: string): boolean {
+	const match = ASSIGNMENT.exec(text);
+	if (match === null) return false;
+	// The value group is the last thing the match reaches, so its own start is
+	// the end of the match minus its own length.
+	let i = match.index + match[0].length - match[2].length;
+	let depth = 0;
+	while (i < text.length) {
+		const ch = text[i];
+		if (ch === "#") break;
+		if (ch === '"' || ch === "'") {
+			if (text.startsWith(ch.repeat(3), i)) {
+				const close = findClose(text, i + 3, ch, true);
+				if (close === null) return true;
+				i = close + 3;
+				continue;
+			}
+			const close = findClose(text, i + 1, ch, false);
+			if (close === null) return true;
+			i = close + 1;
+			continue;
+		}
+		if (ch === "[" || ch === "{") depth += 1;
+		else if (ch === "]" || ch === "}") depth -= 1;
+		i += 1;
+	}
+	return depth > 0;
+}
 
 /** The key a body line assigns, decoded, or null when the line assigns none. */
 function assignmentKey(text: string): string | null {

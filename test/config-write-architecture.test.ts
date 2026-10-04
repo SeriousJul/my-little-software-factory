@@ -14,7 +14,8 @@
  * file on disk; `test/config-write.test.ts` holds the edit itself. This file
  * refuses the shape a new write-back would take to re-add a whole-file
  * rewrite, so the operator's comments cannot be lost by a second rule nobody
- * reviewed.
+ * reviewed, and it refuses a report that places the write fact in its own
+ * words instead of asking the one rule that places it.
  *
  * One limit, stated so no reader trusts more than it holds: the scan reads
  * call sites by name. A write-back that reaches the disk through a helper of
@@ -36,6 +37,8 @@ const SECTION_WRITE = /\bwriteConfigFile\s*\(/u;
 const RAW_CONFIG_WRITE = /\bwriteConfigText\s*\(/u;
 /** The rewrite fact, in the words the plane says to the operator. */
 const REWRITE_WORDING = /was rewritten/u;
+/** A surface that reads a write report's own urgency instead of asking the one rule. */
+const WRITE_FACT_SPLIT = /\b\w+Report\.landed\b|\bwrite\.landed\b/u;
 
 describe("the config write-back is one rule (ADR 0103)", () => {
 	test("the scan reads the plane's own sources", () => {
@@ -78,5 +81,22 @@ describe("the config write-back is one rule (ADR 0103)", () => {
 				RAW_CONFIG_WRITE.test(readFileSync(file, "utf8")),
 		);
 		expect(offenders).toEqual([]);
+	});
+
+	test("one rule places the write fact in a report's line", () => {
+		// The Consultation's own report and the Handoff dispatch's report used to
+		// split the write report and order it each in its own words. One function
+		// owns that now, so the two cannot drift apart (ADR 0103).
+		const readers = sources.filter(
+			(file) =>
+				file !== "src/handoff.ts" &&
+				file !== "src/config-write.ts" &&
+				WRITE_FACT_SPLIT.test(readFileSync(file, "utf8")),
+		);
+		expect(readers).toEqual([]);
+		// The two reports reach it.
+		for (const file of ["src/consultation-operations.ts", "src/handoff-dispatch.ts"]) {
+			expect(readFileSync(file, "utf8")).toContain("handoffReportLines(");
+		}
 	});
 });

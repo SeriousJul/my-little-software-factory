@@ -672,7 +672,10 @@ is running, is not the same on both sides.
   plane holds while the plane runs, the next write-back writes the plane's own
   value back over yours, and no line says it was replaced. If you delete such a
   key, the next write-back writes it again. A key the plane does not hold is
-  yours, and it stays.
+  yours, and it stays. A key the plane holds that you restated as an inline
+  table - `"github.com/acme/factory" = { path = "/x" }` - is a key line the
+  plane owns like any other: the write-back writes its own value over it, and
+  the rest of your file keeps its place.
 - The `[[sources]]` blocks the plane holds stand byte for byte, so an edit of
   one of them while the plane runs is a file that no longer says what the plane
   holds. The check refuses the edit, and that is the case the plane names on
@@ -685,13 +688,12 @@ The other shapes that take the rewrite are the ones the check cannot vouch for:
 a mapping value the plane must write and cannot carry in place - a multiline
 string or a multiline array standing on a key the plane holds - and a file your
 edit left in a shape the startup loader itself refuses: a broken line, a stray
-byte-order mark, an inline table or a dotted key in the `[repos]` table, a
-`[sources]` table instead of `[[sources]]` blocks, or a `[[sources]]` block that
-names no `name`. The loader refuses those at startup, so the plane only meets
-one of them through an edit made while it runs. The empty source list is not in
-that group: the plane writes no `sources` key at all for no sources, and a
-`sources = []` line an earlier version wrote is one the write-back drops before
-it appends its blocks.
+byte-order mark, a dotted key in the `[repos]` table, a `[sources]` table instead
+of `[[sources]]` blocks, or a `[[sources]]` block that names no `name`. The
+loader refuses those at startup, so the plane only meets one of them through an
+edit made while it runs. The empty source list is not in that group: the plane
+writes no `sources` key at all for no sources, and a `sources = []` line an
+earlier version wrote is one the write-back drops before it appends its blocks.
 
 The shipped defaults define the three agent types `pi`, `codex`, and
 `claude`, the four task types `implement`, `review`, `rework`, and

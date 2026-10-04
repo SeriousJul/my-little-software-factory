@@ -124,6 +124,18 @@ function commentLines(text: string): string[] {
 	return text.split("\n").filter((line) => line.trim().startsWith("#"));
 }
 
+/**
+ * How many blank lines stand directly above the last `[[sources]]` header the
+ * file holds - the block the plane wrote last.
+ */
+function blankLinesAboveTheLastBlock(lines: string[]): number {
+	const at = lines.lastIndexOf("[[sources]]");
+	expect(at).toBeGreaterThan(-1);
+	let count = 0;
+	while (at - 1 - count >= 0 && lines[at - 1 - count].trim() === "") count += 1;
+	return count;
+}
+
 /** A source a Repository init would register for the operator's one repository. */
 function pullRequestSource(): FactoryConfig["sources"][number] {
 	return {
@@ -462,7 +474,10 @@ describe("the config write-back (ADR 0103)", () => {
 		// cannot open in the middle of the file's top-level keys.
 		expect(after).toEqual([
 			...before.slice(0, at),
-			...before.slice(at + 1),
+			// The operator's own lines, without the empty element the split yields
+			// for the file's final newline.
+			...before.slice(at + 1, -1),
+			// One blank line, the same separator an in-region insert writes.
 			"",
 			"[[sources]]",
 			'name = "acme/factory-pull-requests"',
@@ -929,6 +944,75 @@ describe("the config write-back (ADR 0103)", () => {
 		// A no-op on the plane's own file writes nothing at all.
 		const noop = await writeConfigFile(path, reloaded);
 		expect(noop.mode).toBe("unchanged");
+	});
+
+	test("an inline table on a mapping key the plane holds is rewritten in place", async () => {
+		const temp = inTempDir();
+		const path = temp("config.toml");
+		const text = operatorFile("/home/me/src/factory");
+		writeFileSync(path, text, "utf8");
+		const { config } = await loadConfigFile(path);
+		// The operator restates a mapping the plane holds as an inline table while
+		// the plane runs. The value closes on its own line, so the scan reads that
+		// line the way it reads any key line the plane owns: the plane writes its
+		// own value over it, and the edit stays inside the one line.
+		writeFileSync(
+			path,
+			readFileSync(path, "utf8").replace(
+				'"github.com/acme/factory" = "/home/me/src/factory"',
+				'"github.com/acme/factory" = { path = "/home/me/src/my-own-pick" }',
+			),
+			"utf8",
+		);
+		const updated = { ...config, repos: { ...config.repos, "github.com/acme/factory": "/new" } };
+
+		const fact = await writeConfigFile(path, updated);
+
+		expect(fact.mode).toBe("sections");
+		const written = readFileSync(path, "utf8");
+		expect(written).toContain('"github.com/acme/factory" = "/new"');
+		expect(written).not.toContain("{ path =");
+		expect(commentLines(written)).toHaveLength(commentLines(text).length);
+		const { config: reloaded } = await loadConfigFile(path);
+		expect(reloaded.repos["github.com/acme/factory"]).toBe("/new");
+	});
+
+	test("a tail append adds the one blank line an in-region insert adds", async () => {
+		const temp = inTempDir();
+		const source = pullRequestSource();
+		// The file already holds a `[[sources]]` block, so the new block is inserted
+		// inside the region the file names.
+		const inside = temp("inside.toml");
+		writeFileSync(inside, operatorFile("/home/me/src/factory"), "utf8");
+		const { config } = await loadConfigFile(inside);
+		await writeConfigFile(inside, { ...config, sources: [...config.sources, source] });
+		expect(blankLinesAboveTheLastBlock(readFileSync(inside, "utf8").split("\n"))).toBe(1);
+		// The file holds no block at all, so the new block is appended at the end.
+		// The plane writes one blank line there too, not two.
+		const operatorText = operatorFile("/home/me/src/factory").replace(
+			[
+				"# The feed the operator reads by hand: the issues of the one repository.",
+				"[[sources]]",
+				'name = "acme-issues"',
+				'kind = "github-issues"',
+				"refresh-interval-seconds = 60",
+				'repositories = [ "acme/factory" ]',
+			].join("\n"),
+			"",
+		);
+		const tail = temp("tail.toml");
+		writeFileSync(tail, operatorText, "utf8");
+		const { config: empty } = await loadConfigFile(tail);
+		expect(empty.sources).toEqual([]);
+		await writeConfigFile(tail, { ...empty, sources: [source] });
+		expect(blankLinesAboveTheLastBlock(readFileSync(tail, "utf8").split("\n"))).toBe(1);
+		// The operator's own last line is blank, so their blank line is the
+		// separator and the plane adds no second one.
+		const blankEnd = temp("blank-end.toml");
+		writeFileSync(blankEnd, `${operatorText}\n`, "utf8");
+		const { config: alsoEmpty } = await loadConfigFile(blankEnd);
+		await writeConfigFile(blankEnd, { ...alsoEmpty, sources: [source] });
+		expect(blankLinesAboveTheLastBlock(readFileSync(blankEnd, "utf8").split("\n"))).toBe(1);
 	});
 });
 

@@ -70,6 +70,7 @@
  * a fact on the ticket for the operator to clear in herdr (ADR 0012, ADR 0032).
  */
 import type { FactoryConfig, TicketSourceConfig, TransitionPin } from "./config.ts";
+import type { ConfigWriteReport } from "./config-write.ts";
 import type { EnvironmentKind, RepositoryRef, Ticket } from "./domain/ticket.ts";
 import { fileExists, movePath, readDirectoryNames } from "./fs.ts";
 import { failureLine } from "./lines.ts";
@@ -351,6 +352,55 @@ export type HandoffOutcome =
 			collision?: NameCollision;
 			ownCollision?: NameCollision;
 	  };
+
+/**
+ * The Message lines one start's outcome leaves, in the order the operator reads
+ * them (ADR 0103).
+ *
+ * One rule words the end of every start: the Handoff dispatch's report and the
+ * Consultation's own report both call this, so the two cannot grow into two
+ * orders. The reason the start did not finish leads, then the name it could not
+ * take, then a config write-back that did not land, then the note the repository
+ * resolution bent with, then a write-back that landed, then the worktree base
+ * note, then the directory the plane moved aside. The Message line holds one row
+ * of the terminal's width, so a write-back that landed never pushes the note
+ * about the operator's disk off that row, and a write that did not land outranks
+ * every note that follows it.
+ *
+ * A caller that gates a fact on its outcome's status passes only the facts that
+ * stand: the reason only for an outcome that did not finish, the resolution
+ * warning and the worktree note only for one that did.
+ */
+export function handoffReportLines(facts: {
+	/** The reason the start did not finish, absent for a clean outcome. */
+	reason?: string;
+	/** The name the agent could not take, already worded (issue #216). */
+	collision?: string;
+	/** The note the repository resolution bent with. */
+	warning?: string;
+	/** What a config write-back left on the line, or nothing. */
+	write?: ConfigWriteReport;
+	/** The worktree base the start used, when the plane had to say which. */
+	worktreeBase?: string;
+	/** The directory the plane moved aside. */
+	leftoverWorktree?: string;
+}): string[] {
+	const write = facts.write;
+	// One write fact, placed by its own urgency: a write that did not land leads
+	// the report, a write that landed trails the notes it belongs beside.
+	const lead: string[] = [];
+	const trail: string[] = [];
+	if (write !== undefined) (write.landed ? trail : lead).push(write.line);
+	return [
+		...(facts.reason === undefined ? [] : [facts.reason]),
+		...(facts.collision === undefined ? [] : [facts.collision]),
+		...lead,
+		...(facts.warning === undefined ? [] : [facts.warning]),
+		...trail,
+		...(facts.worktreeBase === undefined ? [] : [facts.worktreeBase]),
+		...(facts.leftoverWorktree === undefined ? [] : [facts.leftoverWorktree]),
+	];
+}
 
 /**
  * The facts a Ticket start's caller supplies: the config and egress the start

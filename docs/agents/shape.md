@@ -45,7 +45,9 @@ description: The module map of the source tree, for agents working in this repos
 	vouch for takes the full rewrite. `configWriteLine` words the fact for the
 	Message line, `ConfigWriteReport` says how urgent it is, and
 	`writeFactWithConfirmation` sets where it stands beside the confirmation of the
-	act that did the write. No surface reaches past this module for the disk step.
+	act that did the write; beside the notes of a start it goes where
+	`handoffReportLines` in `src/handoff.ts` puts it. No surface reaches past this
+	module for the disk step.
 - `src/ticket-source.ts`: the ticket-source seam and built-in GitHub Issues
 	and Pull Requests adapters.
 - `src/security-source.ts`: the built-in GitHub security ticket sources
@@ -156,6 +158,9 @@ description: The module map of the source tree, for agents working in this repos
 		start's own and its builders write into it as they create a handle, and the
 		steps from the environment build through the prompt run inside one guard, so
 		a command that raises cleans up the way a command herdr refused does.
+	`handoffReportLines` is this module's wording of a start's end: the one order
+	the Message line takes for every report of one, the Handoff dispatch's and the
+	Consultation's alike (ADR 0103).
 - `src/consultation/`: the Consultation rules that need no terminal, one module
 	per concept (issue #203, ADR 0096). `response-draft.ts` owns the input limit,
 	the emptiness rule, the size reason, the literal-text rule, and the bounded

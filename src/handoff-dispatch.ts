@@ -22,6 +22,7 @@ import {
 	type HandoffChoice,
 	type HandoffOutcome,
 	handOffTicket,
+	handoffReportLines,
 	type NameCollision,
 	type OwnNameKnowledge,
 } from "./handoff.ts";
@@ -207,13 +208,9 @@ export interface HandoffDispatchReports {
  * One function owns the wording of a handoff's end, for both callers that
  * report one: the dispatch module, and the App's no-state test projection. A
  * failed outcome is an error; a clean one with something to say is a warning; a
- * clean one with nothing to say leaves no line at all. The parts keep the order
- * the operator reads, the same order the Consultation's own report uses: the
- * reason the handoff did not finish, the name it could not take, the mapping
- * write that did not land, the note the repository resolution bent with, the
- * write-back that names the file it landed on, and the directory the plane
- * moved aside. A write-back that landed never pushes the note about the
- * operator's disk off the visible Message row (ADR 0101).
+ * clean one with nothing to say leaves no line at all. The order the parts take
+ * is the Consultation's own report's order too: `handoffReportLines` in
+ * `src/handoff.ts` words it for both (ADR 0103).
  */
 export async function reportHandoffOutcome(
 	outcome: HandoffOutcome,
@@ -224,10 +221,6 @@ export async function reportHandoffOutcome(
 		outcome.notes?.mappingToWrite === undefined || persistMapping === undefined
 			? undefined
 			: await persistMapping(outcome.notes.mappingToWrite);
-	const persistFailure =
-		persistReport === undefined || persistReport.landed ? undefined : persistReport.line;
-	const persistWrite =
-		persistReport === undefined || !persistReport.landed ? undefined : persistReport.line;
 	const nameWarning =
 		outcome.collision !== undefined && outcome.collision.startedAs !== null
 			? // The Message line is one row of the terminal's width, and this fact
@@ -235,21 +228,16 @@ export async function reportHandoffOutcome(
 				// names read whole on a normal terminal (issue #216, ADR 0098).
 				`a leftover agent holds ${outcome.collision.stableName}; this agent started as ${outcome.collision.startedAs}`
 			: undefined;
-	const lines = [
-		...(outcome.status === "ok" ? [] : [outcome.reason]),
-		...(nameWarning === undefined ? [] : [nameWarning]),
-		...(persistFailure === undefined ? [] : [persistFailure]),
-		...(outcome.status === "ok" && outcome.notes?.warning !== undefined
-			? [outcome.notes.warning]
-			: []),
-		...(persistWrite === undefined ? [] : [persistWrite]),
-		...(outcome.status === "ok" && outcome.notes?.worktreeBase !== undefined
-			? [outcome.notes.worktreeBase]
-			: []),
+	const lines = handoffReportLines({
+		reason: outcome.status === "ok" ? undefined : outcome.reason,
+		collision: nameWarning,
+		warning: outcome.status === "ok" ? outcome.notes?.warning : undefined,
+		write: persistReport,
+		worktreeBase: outcome.status === "ok" ? outcome.notes?.worktreeBase : undefined,
 		// The moved directory is a fact on the operator's disk whether or not
-		// the start landed, so this line carries no status gate.
-		...(outcome.notes?.leftoverWorktree === undefined ? [] : [outcome.notes.leftoverWorktree]),
-	];
+		// the start landed, so this fact carries no status gate.
+		leftoverWorktree: outcome.notes?.leftoverWorktree,
+	});
 	reports.clearWorking();
 	if (outcome.status !== "ok") reports.error(lines.join("; "));
 	else if (lines.length > 0) reports.warning(lines.join("; "));

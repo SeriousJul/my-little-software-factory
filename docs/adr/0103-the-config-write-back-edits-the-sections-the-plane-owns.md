@@ -95,11 +95,15 @@ rules.
   holds again, and re-appends its own serialization of a source block it holds.
   `docs/configuration/index.md` states all four facts to the operator.
 - A line the scan reads as standing inside a multiline string, and a line whose
-  value spans lines, are not lines the plane rewrites. The key such a line names
-  counts as standing, so the plane never adds a second one beside it, and the
-  verify step decides what follows: a value the plane does not need to change
-  keeps the file in its edited form, and a value the plane must change falls
-  back to the rewrite rather than corrupting the operator's prose.
+  value runs past the end of its line - a multiline array, an inline table
+  written across lines - are not lines the plane rewrites. The key such a line
+  names counts as standing, so the plane never adds a second one beside it, and
+  the verify step decides what follows: a value the plane does not need to change
+  keeps the file in its edited form, and a value the plane must change falls back
+  to the rewrite rather than corrupting the operator's prose. An inline table the
+  operator wrote on one line is not such a line: it closes on its own line, so
+  the plane rewrites it like any other key it holds and keeps the rest of the
+  file.
 - The plane never deletes a line it did not write. The one line it can drop is
   its own older writing: a top-level `sources = []` key, the form the plane's
   serializer used for an empty source list. A `[[sources]]` block cannot stand
@@ -130,10 +134,11 @@ notification (`src/components/message-facts.ts`).
 **A write fact leads the line when it is the one the operator must read.** The
 Message line is one row of the terminal's width, so what leads it is what reads.
 The mapping write-back answers with a `ConfigWriteReport`
-(`src/config-write.ts`), and both reports that line comes from -
-`reportHandoffOutcome` and the Consultation's own - put a write that did not land
-ahead of the note the repository resolution bent with, and a write that landed
-behind it. A routine "saved the mapping" line never pushes the sibling clone the
+(`src/config-write.ts`), and one shared rule places that report in every report
+it belongs to: `handoffReportLines` in `src/handoff.ts`, which
+`reportHandoffOutcome` and the Consultation's own `finishOpening` both call, puts
+a write that did not land ahead of the note the repository resolution bent with,
+and a write that landed behind it. A routine "saved the mapping" line never pushes the sibling clone the
 plane made on the operator's disk off the visible row. The Repository init's own
 confirmation is longer than the row, so its write fact trails it except when the
 mode is `rewrite`: then the write fact leads, and the warning that the comments
@@ -177,6 +182,10 @@ beside the file. That act changes the file's schema, not one table of it.
   a task type's prompt that reads like a table header cannot move an edit. A
   scan that got it wrong still has to pass the verify step, so the worst a
   wrong scan can do is send the write back to the full rewrite.
+- The plane appends one blank line between the operator's last line and what it
+  appends, the same separator it writes inside a region it already holds. A file
+  whose own last line is blank carries that separator already, so the plane adds
+  no second blank line.
 - An operator's mid-run edit of a line the plane owns is not a fact the plane
   reports. Re-point a mapping key and the plane writes its own value; delete a
   mapping key or a source block and the plane writes its own line again. The
