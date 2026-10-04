@@ -665,13 +665,42 @@ export function DraftField(props: DraftFieldProps): ReactElement {
 		},
 		[changed],
 	);
-	// A caller owns its draft's storage, so a draft it restores from outside -
-	// a reopened response editor, a delivery the Agent refused - is the field's
-	// own text now. The field's text already matches what it reported last, so
-	// an edit the operator made never round-trips back through this write.
+	// Whether the operator's own keys have written this field. The marker is set
+	// by the field's key and paste routes only, never by a write the field makes
+	// for its caller, so it says exactly what it names: text the operator typed.
+	const edited = useRef(false);
+	const operatorKey = useCallback(
+		(key: KeyEvent) => {
+			edited.current = true;
+			keyDown(key);
+		},
+		[keyDown],
+	);
+	const operatorPaste = useCallback(
+		(event: PasteEvent) => {
+			edited.current = true;
+			paste(event);
+		},
+		[paste],
+	);
+	/**
+	 * Take a draft the caller hands this field, and only before the operator has written it.
+	 *
+	 * A draft the field starts on is the caller's text, so the field takes it.
+	 * Once the operator's own keys have written the field, its text is the
+	 * operator's: a screen that means to give it another draft closes the field
+	 * and opens it on the new text, which is the route every restore in the plane
+	 * already takes - a reopened response editor, a delivery the Agent refused.
+	 *
+	 * A screen that stores what the field reports paints that same text back at
+	 * the field on its next render, and a render can land after the operator has
+	 * typed past it. Writing that older text into the field deletes the keys the
+	 * operator just typed, so the field refuses a write it is behind.
+	 */
 	useEffect(() => {
 		const field = node.current;
 		if (field === null || props.value === reported.current) return;
+		if (edited.current) return;
 		field.setText(props.value);
 		field.cursorOffset = Math.min(props.value.length, field.cursorOffset);
 		reported.current = props.value;
@@ -708,8 +737,8 @@ export function DraftField(props: DraftFieldProps): ReactElement {
 				selectionOccupancy: "boundary",
 				wrapMode: "word",
 				keyBindings: props.onSubmit === undefined ? FIELD_KEY_BINDINGS : DRAFT_SUBMIT_BINDINGS,
-				onKeyDown: keyDown,
-				onPaste: paste,
+				onKeyDown: operatorKey,
+				onPaste: operatorPaste,
 				onContentChange: content,
 				onCursorChange: () => {
 					reportFacts();

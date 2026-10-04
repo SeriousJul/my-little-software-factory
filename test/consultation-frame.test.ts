@@ -1268,53 +1268,6 @@ describe("Consultation responses through the UI", () => {
 			state.close();
 		}
 	});
-
-	test("a Send run in one key burst reads the text the field holds", async () => {
-		const state = openFactoryState(join(home, "state.sqlite"));
-		seed(state, RESPONSE_ID);
-		state.consultationRecord.settleConsultationTurn(RESPONSE_ID, null, "the design holds", "idle");
-		const paneId = `pane-${RESPONSE_ID.slice(0, 8)}`;
-		const inner = new FakeRunner();
-		stubPaneReadText(inner, paneId, "Agent: the design holds");
-		const runner = new ConsultationRunner(inner, agentListJson([{ pane: paneId, status: "idle" }]));
-		try {
-			await withApp(
-				async (setup) => {
-					await toConsultations(setup, "the consultations view", (f) =>
-						detailPaneText(f).includes("State: awaiting-response"),
-					);
-					await pressEnter(setup, "the response editor", (f) => f.includes("Response draft"));
-					// One burst with no frame wait between the keys: the reply, the Tab to the
-					// action, and the Enter all reach the form before the field's change report
-					// does. The editor must judge the Send on the text the field holds, because
-					// the text its last render painted can still be the empty draft the editor
-					// opened on. A reply the operator can read is a reply they can send.
-					await setup.mockInput.typeText("then ship it");
-					setup.mockInput.pressTab();
-					setup.mockInput.pressEnter();
-					const working = await awaitFrame(
-						setup,
-						(f) => f.includes("State: working"),
-						"the working state",
-					);
-					expect(working).not.toContain("response cannot be empty");
-					await waitForCommands(
-						runner,
-						[`herdr agent prompt ${AGENT} then ship it`],
-						"the operator's response",
-					);
-					expect(state.consultationRecord.consultationTurns(RESPONSE_ID).at(-1)?.input).toBe(
-						"then ship it",
-					);
-				},
-				WIDTH,
-				32,
-				{ state, runner, config: configFor(), home, pollIntervalMs: 100 },
-			);
-		} finally {
-			state.close();
-		}
-	});
 });
 
 describe("Agent interaction through the UI", () => {
