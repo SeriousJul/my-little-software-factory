@@ -1484,72 +1484,91 @@ describe("the dispatch's ask and pickup", () => {
 		{ timeout: 15_000 },
 	);
 
-	test("the automatic merge ask keeps the settled turn's environment, the way the automatic route does", async () => {
-		const state = planeState();
-		withIssueSource(state);
-		const claim = state.handoff.claimHandoff(
-			issueIdentity,
-			{
+	test(
+		"the automatic merge ask closes the settled turn's environment, the way the confirm does",
+		async () => {
+			const state = planeState();
+			withIssueSource(state);
+			// The settled turn ran in the shipped machine's own environment: the
+			// worktree environment, so herdr holds a workspace the merge must take
+			// down.
+			const claim = state.handoff.claimHandoff(
+				issueIdentity,
+				{
+					agentType: "pi",
+					environment: "worktree",
+					taskType: "review",
+					model: "",
+					thinking: "",
+					contextWindow: "",
+				},
+				"open",
+			);
+			if (!claim.ok) throw new Error(claim.reason);
+			state.handoff.settleHandoff(claim.claim.attemptId, true, undefined, {
+				paneId: "pane-1",
+				tabId: "tab-1",
+				workspaceId: "ws-1",
+			});
+			state.ticketWorkCycle.settleTurn({
+				ticketIdentity: issueIdentity,
+				handoffId: claim.claim.attemptId,
+				taskType: "review",
 				agentType: "pi",
-				environment: "live-worktree",
-				taskType: "rework",
-				model: "",
-				thinking: "",
-				contextWindow: "",
-			},
-			"open",
-		);
-		if (!claim.ok) throw new Error(claim.reason);
-		state.handoff.settleHandoff(claim.claim.attemptId, true, undefined, {
-			paneId: "pane-1",
-			tabId: "tab-1",
-			workspaceId: "ws-1",
-		});
-		state.ticketWorkCycle.settleTurn({
-			ticketIdentity: issueIdentity,
-			handoffId: claim.claim.attemptId,
-			taskType: "rework",
-			agentType: "pi",
-			message: "The turn is done.",
-			turnLog: [{ kind: "text", text: "The turn is done." }],
-			completedAt: "2026-08-31T11:00:00Z",
-			cause: "completed",
-			transition: mergeRoute(),
-		});
-		const runner = new FakeRunner();
-		stubReadSequence(runner, [{ state: "open" }, { merged: true }]);
-		stubMerge(runner, 0);
-		const events: string[] = [];
-		let resolveStarted: () => void = () => {};
-		const startedSettled = new Promise<void>((resolve) => {
-			resolveStarted = resolve;
-		});
-		const dispatch = createHandoffDispatch({
-			state,
-			runner,
-			config: () => PLANE_CONFIG,
-			seatCount: () => 0,
-			home: home(),
-			...recorder(events),
-		});
-		const result = await dispatch.dispatchPlaneAction({
-			origin: "workflow",
-			automatic: true,
-			ticketIdentity: pullIdentity,
-			routeFromIdentity: issueIdentity,
-			taskType: "merge",
-			onStarted: (started) => {
-				expect(started).toEqual({ ok: true });
-				resolveStarted();
-			},
-		});
-		expect(result).toEqual({ ok: true });
-		await startedSettled;
-		// The automatic ask keeps the stored environment, the way the
-		// automatic route does: the run takes no herdr command at all.
-		expect(runner.commands().filter((command) => command.startsWith("herdr"))).toEqual([]);
-		state.close();
-	});
+				message: "Score: 95 / 100.",
+				turnLog: [{ kind: "text", text: "Score: 95 / 100." }],
+				completedAt: "2026-08-31T11:00:00Z",
+				cause: "completed",
+				transition: mergeRoute(),
+			});
+			const runner = new FakeRunner();
+			stubReadSequence(runner, [{ state: "open" }, { merged: true }]);
+			stubMerge(runner, 0);
+			const events: string[] = [];
+			let resolveStarted: () => void = () => {};
+			const startedSettled = new Promise<void>((resolve) => {
+				resolveStarted = resolve;
+			});
+			const dispatch = createHandoffDispatch({
+				state,
+				runner,
+				config: () => PLANE_CONFIG,
+				seatCount: () => 0,
+				home: home(),
+				...recorder(events),
+			});
+			const result = await dispatch.dispatchPlaneAction({
+				origin: "workflow",
+				automatic: true,
+				ticketIdentity: pullIdentity,
+				routeFromIdentity: issueIdentity,
+				taskType: "merge",
+				onStarted: (started) => {
+					expect(started).toEqual({ ok: true });
+					resolveStarted();
+				},
+			});
+			expect(result).toEqual({ ok: true });
+			await startedSettled;
+			// The close takes the seat, the way every environment change does, so
+			// it lands behind the ask's answer on the cleanup's own pass, and the
+			// merge run stands beside it.
+			const deadline = Date.now() + 5000;
+			while (!runner.commands().includes("herdr workspace close ws-1")) {
+				if (Date.now() >= deadline) throw new Error("the ask never closed the environment");
+				await new Promise((resolve) => setTimeout(resolve, 20));
+			}
+			// The merge still ran, and the close is the ask's whole act on the
+			// environment: the workspace goes, the checkout and the branch stay,
+			// and no other herdr command stands.
+			expect(state.planeAction.latestPlaneActionAttempt(pullIdentity)?.outcome).toBe("merged");
+			expect(runner.commands().filter((command) => command.startsWith("herdr"))).toEqual([
+				"herdr workspace close ws-1",
+			]);
+			state.close();
+		},
+		{ timeout: 15_000 },
+	);
 
 	test("a dropped merge settles its route's source, the way the cancel does", async () => {
 		const state = planeState();
@@ -1639,7 +1658,11 @@ describe("the dispatch's ask and pickup", () => {
 		await dispatch.pickupWorkQueue();
 		expect(state.workQueue.items()).toEqual([]);
 		expect(state.planeAction.latestPlaneActionAttempt(pullIdentity)).toBeNull();
-		expect(runner.commands()).toEqual([]);
+		// The drop ran no source work: no merge command, no comment. The ask's
+		// own close of the settled turn's environment stands beside it, the way
+		// it stands for a merge that runs (ADR 0046): the close belongs to the
+		// ask, not to the run.
+		expect(runner.commands().filter((command) => command.startsWith("gh"))).toEqual([]);
 		// The cycles hold: the source's cycle ended at its ask, the position's
 		// never ran, and the machine's drop writes no mark.
 		expect(state.ticketWorkCycle.ticketState(pullIdentity)).toBe("open");

@@ -2,6 +2,11 @@
 
 Status: accepted
 Date: 2026-09-30
+Superseded in part by ADR 0099: the automatic merge ask no longer keeps the
+settled turn's environment. The confirm's close, its reach, and its timing at
+the ask stand, and everything else this page decides about the plane action
+stands. Where this page says the automatic ask keeps the environment, read the
+ADR 0099 rule: every workflow-origin merge ask closes it at the ask.
 
 ## Context
 
@@ -89,7 +94,8 @@ screen's merge ask makes the route close at the ask, the way its handoff ask
 does (ADR 0046): the confirm closes the environment the settled turn stored,
 and the automatic ask keeps it, the way the automatic route does. The merge
 run builds no environment of its own, so the close is the ask's whole act on
-the environment.
+the environment. (Retired by ADR 0099: the automatic ask closes it too, and
+only the automatic handoff route and the Restart keep the reuse.)
 
 **The close-ticket judgment drops.** GitHub closes the issues a pull request
 references at merge time, and the re-verify gate reads a closed issue after

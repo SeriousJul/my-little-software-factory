@@ -596,13 +596,15 @@ class HandoffDispatchModule implements HandoffDispatch {
 		// the decision (ADR 0072), and the open position keeps its open state,
 		// the wait standing on the item alone.
 		this.recordPlaneActionDecision(intent);
-		if (intent.origin === "workflow" && intent.automatic !== true) {
-			// The decision screen's ask: the settled turn's environment goes at
-			// the ask, the way the route's ask closes it (ADR 0046): the close
+		if (intent.origin === "workflow") {
+			// The merge ask closes the settled turn's environment at the ask, the
+			// confirm's ask and the top-up's alike (ADR 0046, ADR 0068): the close
 			// takes the seat, the way every environment change does, so it runs
 			// the moment the seat is free and never under a run. The merge run
 			// builds no environment of its own, so the close is the ask's whole
-			// act on the environment.
+			// act on the environment. A merge that keeps the environment keeps it
+			// for nobody: the run retires the ticket the moment it lands, and no
+			// later act reaches the workspace herdr still holds.
 			const closeIdentity = intent.routeFromIdentity ?? intent.ticketIdentity;
 			void this.queueCleanup(async () => {
 				const failure = await this.closePreviousHandoffEnvironment(closeIdentity);
@@ -1676,10 +1678,11 @@ class HandoffDispatchModule implements HandoffDispatch {
 	}
 
 	/**
-	 * The close of the previous handoff's environment that the decision
-	 * screen's route asks for. The settled ticket's newest handoff is the
-	 * environment the settled turn ran in, and a ticket that recorded no
-	 * handle answers the close with nothing to close.
+	 * The close of the previous handoff's environment that a workflow-origin
+	 * merge ask asks for, the confirm's ask and the auto top-up's alike (ADR
+	 * 0046, ADR 0099). The settled ticket's newest handoff is the environment
+	 * the settled turn ran in, and a ticket that recorded no handle answers the
+	 * close with nothing to close.
 	 *
 	 * Best effort all the way down: the answer is herdr's refusal, when
 	 * herdr made one, and a close that never ran is its own reason. A null
