@@ -213,31 +213,30 @@ export class WorkQueueModule implements WorkQueueAggregate {
 		);
 	}
 	/**
-	 * The position a new row takes in the queue's order (ADR 0049, ADR 0094).
+	 * The position a new row takes in the queue's order (ADR 0049, ADR 0094,
+	 * ADR 0100).
 	 *
 	 * Every row but one enters at the end of the queue, the way it always did.
 	 * The exception is the automatic continuation - the route item the top-up asks
-	 * for a settled turn. It enters at the place of the first automatic fresh-work
-	 * row (an open ticket's item, a restart), because the seat a settling turn
-	 * freed belongs to that turn's own next step. With no fresh-work row in the
-	 * queue it enters at the end, so the operator's staging and the continuations
-	 * already standing keep their places, and no row the queue already holds moves
-	 * relative to any other.
+	 * for a settled turn. It enters at the place of the first row that is no
+	 * continuation, because the seat a settling turn freed belongs to that turn's
+	 * own next step: the row outranks a fresh-work row (ADR 0094) and a row the
+	 * operator staged (ADR 0100) alike. A continuation already standing keeps its
+	 * place at the head, and no row the queue already holds moves relative to any
+	 * other.
 	 *
 	 * Rows from that place up move one place later, highest first, so no two rows
 	 * ever share a position.
 	 */
 	private workQueuePosition(automatic: boolean, origin: HandoffOrigin): number {
 		const rows = this.db
-			.prepare("SELECT position, origin, is_automatic FROM work_queue ORDER BY position")
-			.all() as { position: number; origin: string; is_automatic: number }[];
+			.prepare("SELECT position, origin FROM work_queue ORDER BY position")
+			.all() as { position: number; origin: string | null }[];
 		const last = rows.length === 0 ? -1 : (rows[rows.length - 1] as { position: number }).position;
 		let position = last + 1;
 		if (automatic && origin === "workflow") {
-			const firstFreshWork = rows.find(
-				(row) => row.is_automatic === 1 && row.origin !== "workflow",
-			);
-			if (firstFreshWork !== undefined) position = firstFreshWork.position;
+			const firstStandingWork = rows.find((row) => row.origin !== "workflow");
+			if (firstStandingWork !== undefined) position = firstStandingWork.position;
 		}
 		for (const row of rows.reverse()) {
 			if (row.position < position) break;

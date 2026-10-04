@@ -7,6 +7,11 @@ Supersedes part of ADR 0051: the cycle's step order, and the queue gate over a
 continuation. Its one-item-per-cycle rule, its continuation-then-restart-then-open
 order, its gates, and its empty-queue rule over the fresh-work adds stand.
 
+Superseded in part by ADR 0100: the sentence "It waits behind an item the operator
+staged" no longer holds, and the queue's depth is no gate over a continuation at
+all. Its step order, its rank over a fresh-work row, its one continuation at a
+time, and its consequences stand.
+
 ## Context
 
 A dev run on 2026-10-03 stopped a pull request's chain at the seat its own turn

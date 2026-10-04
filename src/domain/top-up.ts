@@ -56,23 +56,23 @@ export function topUpCycleOpen(facts: TopUpCycleFacts): boolean {
 	return !automaticAddsHold(facts) && facts.queueDepth === 0;
 }
 
-/** One row the Work queue holds, as the continuation's gate reads it (ADR 0094). */
+/** One row the Work queue holds, as the continuation's gate reads it (ADR 0094, ADR 0100). */
 export interface ContinuationRowFacts {
-	/** The row is the operator's own staging: a Consultation, or a hand the plane took. */
-	operatorStaged: boolean;
 	/** The row is a continuation the queue already holds. */
 	continuation: boolean;
 }
 
 /**
  * Whether the queue holds a row the continuation add must not jump (ADR 0051,
- * ADR 0094): the operator's staging always starts first, and one continuation
- * per cycle is the queue's own pace. A standing fresh-work row is not one of
- * them - the continuation outranks it, and ADR 0094 reads that rank across
- * cycles instead of inside one top-up call.
+ * ADR 0094, ADR 0100): one continuation per cycle is the queue's own pace, so a
+ * continuation already standing holds the next one out. Nothing else does. A
+ * standing fresh-work row is outranked by ADR 0094, and a row the operator
+ * staged is a standing row of the same kind: the seat a settling turn freed
+ * belongs to that turn's own next step, and the operator's row waits for the
+ * next seat. The operator keeps the queue pause and the force-dispatch.
  */
 export function continuationQueueHolds(rows: readonly ContinuationRowFacts[]): boolean {
-	return rows.some((row) => row.operatorStaged || row.continuation);
+	return rows.some((row) => row.continuation);
 }
 
 /** The facts the restart walk reads for one in-flight Ticket (ADR 0051, ADR 0060, ADR 0070). */

@@ -107,3 +107,4 @@ body states the context, the decision, and the consequences.
 - [ADR 0096: The Consultation rules answer through one module per concept](./0096-the-consultation-rules-answer-through-one-module-per-concept.md)
 - [ADR 0097: The handoff start is one call, not three entry points](./0097-the-handoff-start-is-one-call-not-three-entry-points.md)
 - [ADR 0099: The merge ask closes the settled turn's environment, automatic and manual alike](./0099-the-merge-ask-closes-the-settled-turns-environment-automatic-and-manual-alike.md)
+- [ADR 0100: The owed continuation outranks every standing queue row](./0100-the-owed-continuation-outranks-every-standing-queue-row.md)

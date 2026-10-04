@@ -1527,11 +1527,13 @@ export class ObservationCoordinator {
 	 * when the free seats are handed out, and the seat a settling turn freed goes
 	 * to that turn's own next step instead of to a fresh ticket.
 	 *
-	 * The queue gate narrows here to the rows this add must not jump: an item the
-	 * operator staged, and a continuation the queue already holds. A standing
-	 * fresh-work row - an open ticket's item or a restart - does not hold a
-	 * continuation: ADR 0051 ranks the continuation above them, and ADR 0094 reads
-	 * that rank across cycles instead of inside one top-up call.
+	 * The queue gate narrows here to the one row this add must not jump: a
+	 * continuation the queue already holds. A standing fresh-work row - an open
+	 * ticket's item or a restart - does not hold a continuation: ADR 0051 ranks
+	 * the continuation above them, and ADR 0094 reads that rank across cycles
+	 * instead of inside one top-up call. A row the operator staged does not hold
+	 * it either (ADR 0100): it is a standing row of the same kind, and the seat a
+	 * settling turn freed belongs to that turn's own next step.
 	 */
 	private async askContinuations(): Promise<boolean> {
 		// The queue's rows, read once for the whole walk (issue #202, ADR 0092):
@@ -1539,12 +1541,10 @@ export class ObservationCoordinator {
 		// fact of its own.
 		const queueItems = this.state.workQueue.items();
 		if (this.automaticAddsHeld()) return false;
-		// The rows this add waits behind: the operator's own staging, and a
-		// continuation the queue already holds.
+		// The row this add waits behind: a continuation the queue already holds.
 		if (
 			continuationQueueHolds(
 				queueItems.map((item) => ({
-					operatorStaged: item.kind === "consultation" || item.automatic !== true,
 					continuation: item.kind !== "consultation" && item.origin === "workflow",
 				})),
 			)

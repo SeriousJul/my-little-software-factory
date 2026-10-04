@@ -448,13 +448,13 @@ _Avoid_: manual override, bypass
 
 **Continuation**:
 The Next step Auto-handoff mode takes on its own, without the operator's Completion decision: the Next step of an awaiting ticket, or of an open ticket whose newest settled turn recorded an automatic route the operator did not take away, where the decision stands at the ask, the start died, and the walk re-offers the route (ADR 0067, corrected by ADR 0072, decided at runtime by ADR 0092).
-The auto top-up adds a continuation before a restart, an open pull request ticket, or fresh work (ADR 0051, ADR 0088). The cycle asks it before the pickup's pass, and its row enters ahead of a fresh-work row that queued earlier, so the seat a settling turn freed goes to that turn's own next step (ADR 0094).
+The auto top-up adds a continuation before a restart, an open pull request ticket, or fresh work (ADR 0051, ADR 0088). The cycle asks it before the pickup's pass, and its row enters ahead of every row that queued earlier - a fresh-work row and a row the operator staged alike - so the seat a settling turn freed goes to that turn's own next step (ADR 0094, ADR 0100).
 _Avoid_: follow-up, workflow advance
 
 **Top-up**:
-The one automatic add the observation cycle makes to the Work queue: while Auto-handoff mode is on, a continuation, else a restart, else an eligible open pull request ticket, else an eligible fresh open ticket, else nothing (ADR 0051, ADR 0088). The continuation is asked before the Work queue's pickup and waits only behind an item the operator staged or a continuation already standing; the restart and open-ticket adds run after the pickup and only into an empty queue (ADR 0094).
+The one automatic add the observation cycle makes to the Work queue: while Auto-handoff mode is on, a continuation, else a restart, else an eligible open pull request ticket, else an eligible fresh open ticket, else nothing (ADR 0051, ADR 0088). The continuation is asked before the Work queue's pickup and waits only behind a continuation already standing; a row the operator staged is a standing row the continuation outranks (ADR 0094, ADR 0100). The restart and open-ticket adds run after the pickup and only into an empty queue (ADR 0094).
 The pull request group stands ahead of the fresh group: the work the machine has started on a pull request moves to the end before the machine starts work on a ticket it has not started. The list's order holds inside each group, and a gate that holds one ticket holds that ticket only: the held ticket rests, and the walk falls to the next candidate, as every gate does.
-It adds one item per cycle, and only into an empty queue, so the queue never piles. A cycle that asked a continuation asks no fresh work, and the queue then holds at most one fresh-work row beside the continuation it outranks (ADR 0094).
+It adds one item per cycle, and only into an empty queue, so the queue never piles. A cycle that asked a continuation asks no fresh work, and the queue then holds at most one fresh-work row beside the continuation it outranks (ADR 0094, ADR 0100).
 _Avoid_: refill, auto dispatch, queue feed
 
 **Queue pause**:
