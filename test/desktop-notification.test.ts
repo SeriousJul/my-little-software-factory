@@ -471,4 +471,36 @@ describe("the Message line's fact to the desktop", () => {
 			},
 		);
 	});
+
+	test("the pre-flight's refusal reaches the desktop in the words the line shows", async () => {
+		// Issue #204, story 4. The drift the issue measured was one bad choice
+		// answering two ways, so the fact read away from the terminal was not the
+		// fact read at the key. One pre-flight writes the reason; this test carries
+		// that same reason from the Message line to the notification command.
+		const runner = new FakeRunner();
+		await withApp(
+			async (setup) => {
+				await press(setup, "return", "the refusal", (f) =>
+					messageRowOf(f).includes("unknown agent type: nope"),
+				);
+				const frame = await settle(setup);
+				expect(messageRowOf(frame)).toContain("unknown agent type: nope");
+				const calls = notificationCalls(runner);
+				expect(calls.at(-1)?.args.join(" ")).toContain("Factory: error");
+				expect(calls.at(-1)?.args.join(" ")).toContain("unknown agent type: nope");
+				// A bad choice is refused before the start resolves a repository, so
+				// the handoff ran no external step at all.
+				expect(
+					runner.calls.filter((call) => call.command === "herdr" || call.command === "git"),
+				).toHaveLength(0);
+			},
+			WIDTH,
+			HEIGHT,
+			{
+				config: { ...BASE_CONFIG, defaultAgent: "nope" },
+				runner,
+				initialTickets: SAMPLE_TICKETS,
+			},
+		);
+	});
 });

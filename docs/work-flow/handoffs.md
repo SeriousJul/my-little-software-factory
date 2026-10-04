@@ -29,6 +29,32 @@ So a model written for one agent never runs a different one quietly, and a
 route onto a narrower agent is seen as a failure instead of being absorbed as
 a default.
 
+## One start, one pre-flight
+
+Every start runs through one module: an open ticket's first handoff, a workflow
+handoff, a Restart, and a Consultation launch. Each caller states the facts it
+owns - the choice, the workspace its previous handoff recorded or none, the
+branch policy, and the prompt - and the start answers with one outcome.
+
+The pre-flight reads the same facts in the same order on every path: the Agent
+type, then the Environment, then the task type a handoff names, then the
+Environment a task type that opens a pull request needs, then the Setting fit.
+One bad choice therefore carries one reason, whatever you asked for, and it
+carries that reason before the plane touches your repository or your remote. An
+unknown Agent type beside the reserved container Environment names the Agent
+type, because that is the first fact the plane read.
+
+A start that fails before its agent starts removes what that start created: the
+fresh tab, the workspace it created, the fresh worktree checkout, and the branch
+when it created the branch. The rule is the same in every environment. What
+pre-dates the attempt stands: a workspace you own, a branch the repository
+already carried, and a pull request the read found. A command the plane cannot
+run at all is answered the way a refusal is, so a start that stops in the middle
+of its own sequence still removes what it made. What the start really closed is
+confirmed in its record, under the kind the start recorded it under, so a
+Consultation's detail names no resource that is already gone, and its Close does
+not retry a workspace herdr no longer holds.
+
 ## Model discovery
 
 The agent CLI owns the list of models it can run, and the config file names

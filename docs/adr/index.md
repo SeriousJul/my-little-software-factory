@@ -105,3 +105,4 @@ body states the context, the decision, and the consequences.
 - [ADR 0094: The seat a settling turn frees goes to its own next step](./0094-the-seat-a-settling-turn-frees-goes-to-its-own-next-step.md)
 - [ADR 0095: The state module answers through one interface per aggregate](./0095-the-state-module-answers-through-one-interface-per-aggregate.md)
 - [ADR 0096: The Consultation rules answer through one module per concept](./0096-the-consultation-rules-answer-through-one-module-per-concept.md)
+- [ADR 0097: The handoff start is one call, not three entry points](./0097-the-handoff-start-is-one-call-not-three-entry-points.md)

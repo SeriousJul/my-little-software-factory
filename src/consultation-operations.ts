@@ -24,8 +24,9 @@ import {
 } from "./consultation/warning-facts.ts";
 import type { Ticket } from "./domain/ticket.ts";
 import {
-	type ConsultationHandoffOutcome,
-	checkConsultationStart,
+	checkStart,
+	consultationStartFacts,
+	type HandoffOutcome,
 	handOffConsultation,
 	renderConsultationPrompt,
 } from "./handoff.ts";
@@ -153,7 +154,7 @@ interface LaunchConflict {
 	safety: LiveCheckoutSafety;
 }
 
-type LaunchOutcome = ConsultationHandoffOutcome | LaunchConflict;
+type LaunchOutcome = HandoffOutcome | LaunchConflict;
 
 /** The herdr environment one close takes down, and what survives it. */
 interface ClosePlan {
@@ -218,7 +219,7 @@ export class ConsultationOperations {
 	 * the reason stands on the Message line at the ask. The check reads the
 	 * type's settings - the record's settings are the type's, both at the create
 	 * below and at the pickup's re-read - and it is the same
-	 * `checkConsultationStart` the start runs. The start runs it again on the
+	 * `checkStart` the one start runs. The start runs it again on the
 	 * record it picked up, because the fit answer is a runtime read and a queued
 	 * record must answer to the config it starts under; that re-read is what
 	 * leaves the `failed` record story 6 asks for when the config moved while
@@ -228,8 +229,8 @@ export class ConsultationOperations {
 		const config = this.config();
 		const type = config.consultationTypes[typeName];
 		if (type === undefined) return `unknown Consultation type ${typeName}`;
-		const check = await checkConsultationStart({
-			consultation: {
+		const check = await checkStart(
+			{
 				agentType: type.agent,
 				environment: type.environment,
 				model: type.model ?? "",
@@ -237,8 +238,8 @@ export class ConsultationOperations {
 				contextWindow: type.contextWindow ?? "",
 			},
 			config,
-			runner: this.runner,
-		});
+			this.runner,
+		);
 		return check.ok ? undefined : check.reason;
 	}
 
@@ -314,11 +315,7 @@ export class ConsultationOperations {
 				// Recovery is another Consultation start. Re-check the stored
 				// settings before reading Herdr, so a config change cannot let a
 				// stale opening start trimmed.
-				const fit = await checkConsultationStart({
-					consultation: current,
-					config: this.config(),
-					runner: this.runner,
-				});
+				const fit = await checkStart(consultationStartFacts(current), this.config(), this.runner);
 				if (!fit.ok) return { kind: "fit-failed" as const, reason: fit.reason };
 				const probe = await new HerdrAgentReader(this.runner).listAgents();
 				if (probe.kind === "error") return { kind: "error" as const, reason: probe.reason };
@@ -1006,11 +1003,11 @@ export class ConsultationOperations {
 					if (current.state !== "opening") return undefined;
 					const onStage = (stage: string) =>
 						this.progress(current.id, `Consultation ${current.id.slice(0, 8)}: ${stage}`);
-					const startCheck = await checkConsultationStart({
-						consultation: current,
-						config: this.config(),
-						runner: this.runner,
-					});
+					const startCheck = await checkStart(
+						consultationStartFacts(current),
+						this.config(),
+						this.runner,
+					);
 					if (!startCheck.ok) return { status: "failed", reason: startCheck.reason };
 					let resolvedRepository: ResolvedRepository | undefined;
 					if (current.environment === "live-worktree") {
@@ -1092,6 +1089,14 @@ export class ConsultationOperations {
 								owned,
 								details: details ?? "",
 							}),
+						// The start's own cleanup confirms what it removed, so the record
+						// does not keep a row for a handle the plane already took down.
+						onResourceRemoved: (kind, resourceId) =>
+							this.state.consultationRecord.markConsultationResourceClosed(
+								current.id,
+								kind,
+								resourceId,
+							),
 					});
 				},
 			);
@@ -1116,10 +1121,7 @@ export class ConsultationOperations {
 		}
 	}
 
-	private async finishOpening(
-		consultation: Consultation,
-		outcome: ConsultationHandoffOutcome,
-	): Promise<void> {
+	private async finishOpening(consultation: Consultation, outcome: HandoffOutcome): Promise<void> {
 		const mappingWarning =
 			outcome.notes?.mappingToWrite === undefined || this.persistRepositoryMapping === undefined
 				? undefined

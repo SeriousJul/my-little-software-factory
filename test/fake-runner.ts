@@ -79,6 +79,11 @@ export class FakeRunner implements CommandRunner {
 	private modelListGate: Promise<void> = Promise.resolve();
 	private modelListRelease: (() => void) | null = null;
 	private fallback: CommandResult = { code: 0, stdout: "", stderr: "" };
+	// A raised command, the way a CommandRunner adapter raises for a command it
+	// cannot run at all. The production runner maps a spawn-level failure to a
+	// failed result; an adapter is free to raise, and a test has to be able to
+	// stand one (issue #204, pull request #213 review).
+	private rejections = new Map<string, Error>();
 
 	/** Answer `command args` with a result; exact args match, in order. */
 	set(command: string, args: readonly string[], result: Partial<CommandResult>): void {
@@ -117,6 +122,17 @@ export class FakeRunner implements CommandRunner {
 		this.modelLists.set(kind, { ok: true, models: [...models] });
 	}
 
+	/**
+	 * Make `command args` raise instead of answering.
+	 *
+	 * The command is still recorded, because the caller did ask for it, and it
+	 * never settles, so a test reads the commands a flow reached before the raise
+	 * and the commands its cleanup ran after.
+	 */
+	reject(command: string, args: readonly string[], message = "the command raised"): void {
+		this.rejections.set(this.key(command, args), new Error(message));
+	}
+
 	/** Fail one agent kind's Model list query with a readable reason. */
 	setModelListFailure(kind: string, reason: string): void {
 		this.modelLists.set(kind, { ok: false, reason });
@@ -151,6 +167,11 @@ export class FakeRunner implements CommandRunner {
 		this.peakRunning = Math.max(this.peakRunning, this.running);
 		const delay = this.delays.get(key) ?? this.defaultDelayMs ?? undefined;
 		if (delay !== undefined) await new Promise((resolve) => setTimeout(resolve, delay));
+		const rejection = this.rejections.get(key);
+		if (rejection !== undefined) {
+			this.running -= 1;
+			throw rejection;
+		}
 		const sequence = this.sequences.get(key);
 		const next = sequence !== undefined && sequence.length > 0 ? sequence.shift() : undefined;
 		const answer = next ?? this.responses.get(key);

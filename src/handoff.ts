@@ -29,16 +29,30 @@
  * fills the gates fact instead: the review passed, so the failure stands in
  * the pull request's gates and not in the review's feedback (ADR 0078).
  *
+ * Every start runs through one start: `runHandoffStart`, this module's own start
+ * call (issue #204, ADR 0097). An open ticket's first handoff, a workflow
+ * handoff, a restart, and a Consultation launch each state the facts they own -
+ * the choice, the workspace, the branch policy, the prompt, and the name plan -
+ * and one pre-flight rule, one environment builder, one workspace reader, and
+ * one cleanup rule answer them. A caller no longer picks between entry points:
+ * it states the workspace its previous handoff recorded, or none.
+ *
  * The sequence of external commands is the contract the fake runner tests
  * pin; the herdr CLI contract was verified against herdr 0.8.2, and the
  * worktree list and the worktree open by its path against herdr 0.9.1.
  *
- * A handoff failure leaves no residue: a worktree handoff that fails before
- * the agent starts removes what the handoff created (the fresh worktree,
- * the attached workspace, the fresh tab, and the branch when the handoff
- * created it), so a retry can run instead of failing on residue the first
- * attempt left behind. It never deletes a branch that pre-dates the
- * handoff: that branch may hold the ticket's earlier work.
+ * A handoff failure leaves no residue: a start that fails before its agent
+ * starts removes what that start created (the fresh tab, the workspace it
+ * created, the fresh worktree checkout, and the branch when the start created
+ * it), so a retry can run instead of failing on residue the first attempt left
+ * behind. What the start created is recorded as it is created, and one cleanup
+ * rule reads that record, so the coverage is the same in every environment. It
+ * never deletes what pre-dates the attempt: a stored workspace, a branch the
+ * repository already carried, and a pull request the read found all stand. A
+ * command that raises is answered the way a command herdr refused is, so a start
+ * that stops in the middle of its own sequence still removes what it made; a
+ * raise after the agent started reads as the failed prompt it is, because a
+ * started agent is never rolled back.
  *
  * One residue is not a herdr environment at all, and no tool clears it: the
  * directory herdr named for a branch can stay on disk after git stopped
@@ -56,7 +70,7 @@
  * a fact on the ticket for the operator to clear in herdr (ADR 0012, ADR 0032).
  */
 import type { FactoryConfig, TicketSourceConfig, TransitionPin } from "./config.ts";
-import type { EnvironmentKind, Ticket } from "./domain/ticket.ts";
+import type { EnvironmentKind, RepositoryRef, Ticket } from "./domain/ticket.ts";
 import { fileExists, movePath, readDirectoryNames } from "./fs.ts";
 import { failureLine } from "./lines.ts";
 import {
@@ -148,9 +162,9 @@ export function baseChoice(
  * independently. An operator override changes this returned choice later,
  * before the handoff starts.
  *
- * A resolved value never disappears here. When the resolved agent cannot map
- * a Model, Thinking level, or context window, validateChoice fails the
- * handoff with that reason instead of starting without it (ADR 0009).
+ * A resolved value never disappears here. When the resolved agent cannot map a
+ * Model, Thinking level, or context window, the one pre-flight (`checkStart`)
+ * fails the handoff with that reason instead of starting without it (ADR 0009).
  */
 export function resolveHandoffChoice(
 	config: FactoryConfig,
@@ -336,7 +350,12 @@ export type HandoffOutcome =
 			ownCollision?: NameCollision;
 	  };
 
-interface HandoffOptions {
+/**
+ * The facts a Ticket start's caller supplies: the config and egress the start
+ * reads, the claim that stands behind it, and the environment its previous
+ * Handoff recorded.
+ */
+export interface TicketHandoffOptions {
 	config: FactoryConfig;
 	runner: CommandRunner;
 	home: string;
@@ -344,19 +363,42 @@ interface HandoffOptions {
 	onStage?: (stage: string) => void;
 	/** What the caller knows about the names this ticket's own agents hold. */
 	names?: OwnNameKnowledge;
+	/**
+	 * The claim this start runs on. `open` refuses a Ticket that is no longer
+	 * open. `continuation` stands behind the Handoff of a turn the plane already
+	 * settled - a workflow handoff or a Restart - whose claim ran elsewhere.
+	 */
+	claim: "open" | "continuation";
+	/**
+	 * The herdr environment the ticket's previous Handoff recorded. A continuation
+	 * carries it; an open start carries nothing and builds the Environment its
+	 * choice names (issue #204).
+	 */
+	previous?: PreviousHandoffEnvironment;
+	/** The {previous-message} value: the last captured message. */
+	previousMessage?: string;
+}
+
+/** The herdr environment a previous Handoff recorded on its Ticket. */
+export interface PreviousHandoffEnvironment {
+	workspaceId: string | null;
+	environment: EnvironmentKind;
+	tabId: string | null;
 }
 
 /**
- * What the handoff steps share: the command egress plus the note the
- * repository resolution carried. The note travels with every outcome a step
- * returns, so a failure still warns and still hands back the mapping to
- * persist.
+ * What the handoff steps share: the command egress, the checkout the start
+ * resolved to, and the note that resolution carried. The note travels with every
+ * outcome a step returns, so a failure still warns and still hands back the
+ * mapping to persist.
  */
 interface HandoffContext {
 	runner: CommandRunner;
+	/** The checkout the start resolved to: every git step and cleanup runs in it. */
+	checkout: string;
 	onStage?: (stage: string) => void;
-	/** Record an external resource before the next external step. */
-	onResource?: (kind: string, resourceId: string, owned: boolean, details?: string) => void;
+	/** The caller's resource table, or null on a start that records nothing. */
+	resources: StartResources | null;
 	/** Record the Agent handles before sending its first prompt. */
 	onAgentStarted?: (agent: StartedAgent) => void;
 	/** The note the repository resolution carried, if it bent. */
@@ -366,20 +408,20 @@ interface HandoffContext {
 	/**
 	 * The pull request open the handoff runs before its agent starts
 	 * (ADR 0076): set for a worktree handoff of a task type that opens a
-	 * pull request, and null on every other handoff.
+	 * pull request, and absent on every other handoff.
 	 */
 	pullRequestOpen?: PullRequestOpenPlan;
 }
 
 /**
  * The facts the pull request open of one handoff needs (ADR 0076): the
- * ticket whose branch the pull request stands on, the checkout the branch
- * is pushed from, the branch the naming rule gives the ticket, and the
- * source the pull request opens on, with its own auth.
+ * ticket whose branch the pull request stands on, the branch the naming rule
+ * gives the ticket, and the source the pull request opens on, with its own
+ * auth. The checkout the open pushes from is the one the start resolved.
  */
 interface PullRequestOpenPlan {
 	ticket: Ticket;
-	checkout: string;
+	/** The branch the naming rule gives the ticket, and the branch the pull request stands on. */
 	branch: string;
 	source: TicketSourceConfig;
 }
@@ -393,131 +435,212 @@ interface PullRequestOpenPlan {
 type HandoffPrompt = string | ((pullRequestUrl: string) => Promise<string>);
 
 /**
- * Validate a handoff's choices. A failure comes back as its own outcome;
- * a pass carries the agent and task type records the steps need.
- *
- * The checks run before any external step, so the ticket stays where the
- * claim left it.
+ * The facts one start pre-flight reads. A Ticket start names its Task type; a
+ * Consultation start names none.
  */
-function validateChoice(
-	choice: HandoffChoice,
-	config: FactoryConfig,
-):
-	| HandoffOutcome
-	| { agent: FactoryConfig["agents"][string]; taskType: FactoryConfig["taskTypes"][string] } {
-	if (choice.environment === "container") {
-		return { status: "failed", reason: "the container environment is reserved and not yet built" };
-	}
-	const agent = config.agents[choice.agentType];
-	if (agent === undefined) {
-		return { status: "failed", reason: `unknown agent type: ${choice.agentType}` };
-	}
-	const taskType = config.taskTypes[choice.taskType];
-	if (taskType === undefined) {
-		return { status: "failed", reason: `unknown task type: ${choice.taskType}` };
-	}
-	return { agent, taskType };
+export interface StartFacts {
+	agentType: string;
+	environment: EnvironmentKind;
+	/** The Task type a Ticket start runs. A Consultation start names none. */
+	taskType?: string;
+	model: string;
+	thinking: string;
+	contextWindow: string;
 }
 
 /**
- * The setting fit check of a handoff (ADR 0010).
- *
- * It runs before the handoff's first external change, so an unfit model or
- * thinking level fails with a readable reason and leaves the ticket open
- * instead of starting an agent that dies inside its own terminal. A model list
- * that cannot be fetched skips the model check: the handoff proceeds, and the
- * agent's own rejection stands.
+ * The pre-flight's answer. A pass carries the records the start steps read, so
+ * the pre-flight and the start read the config once; a failure carries the one
+ * reason the Message line shows and the Desktop notification carries.
  */
-async function settingFitFailure(
-	choice: HandoffChoice,
-	agent: FactoryConfig["agents"][string],
+export type StartCheck =
+	| {
+			ok: true;
+			agent: FactoryConfig["agents"][string];
+			/** The Task type record, on a start that named a Task type. */
+			taskType?: FactoryConfig["taskTypes"][string];
+	  }
+	| { ok: false; reason: string };
+
+/**
+ * The one pre-flight rule, in one order (issue #204, ADR 0097).
+ *
+ * Agent type, then Environment, then the Task type a Ticket start names, then
+ * the Environment a Task type that opens a pull request needs (ADR 0076), then
+ * the Setting fit. Every start path asks the same facts in the same order, so
+ * one bad choice answers with one reason on the Ticket path and the Consultation
+ * path alike: an unknown Agent type beside the reserved container Environment
+ * answers with the Agent type on both, and the operator fixes the fact the plane
+ * really read. The wording lives here alone, the way the Setting fit module owns
+ * its sentences, so it cannot drift a second time.
+ *
+ * The checks run before any external step, so the ticket stays where the claim
+ * left it and no start resolves - and can clone - a repository it will never
+ * use. The Setting fit check (ADR 0010) is the only half that reaches the
+ * command runner: an unfit model or thinking level fails with a readable reason
+ * instead of starting an agent that dies inside its own terminal, and a Model
+ * list that cannot be fetched skips the model check.
+ */
+export async function checkStart(
+	facts: StartFacts,
+	config: FactoryConfig,
 	runner: CommandRunner,
-): Promise<HandoffOutcome | null> {
-	const fit = await fitSettings(
-		{ agentType: choice.agentType, agent },
-		{
-			model: choice.model,
-			thinking: choice.thinking,
-			contextWindow: choice.contextWindow,
-		},
-		runner,
-	);
-	if (fit === undefined) return null;
-	return { status: "failed", reason: fit.reason };
+): Promise<StartCheck> {
+	const agent = config.agents[facts.agentType];
+	if (agent === undefined) return { ok: false, reason: `unknown agent type: ${facts.agentType}` };
+	if (facts.environment === "container")
+		return { ok: false, reason: "the container environment is reserved and not yet built" };
+	// The Task type record is read once, and the Setting fit runs once, so the
+	// order cannot depend on which branch a start happened to take.
+	const taskType = facts.taskType === undefined ? undefined : config.taskTypes[facts.taskType];
+	if (facts.taskType !== undefined && taskType === undefined)
+		return { ok: false, reason: `unknown task type: ${facts.taskType}` };
+	// The pull request open runs only in the worktree Environment: only that
+	// Environment holds the factory branch the pull request stands on (ADR 0076).
+	// It is a bad-choice reason like any other, so it answers here with the rest.
+	if (taskType?.opensPullRequest === true && facts.environment === "live-worktree")
+		return {
+			ok: false,
+			reason: `the task type ${facts.taskType} opens a pull request, which runs only in the worktree environment: the live worktree holds no factory branch`,
+		};
+	const unfit = await settingFitFailure(facts, agent, runner);
+	if (unfit !== null) return { ok: false, reason: unfit };
+	return taskType === undefined ? { ok: true, agent } : { ok: true, agent, taskType };
 }
 
-/** Hand an open ticket off, returning the facts the app records on it. */
+/** The Setting fit half of the pre-flight: the reason an unfit setting gives, or null. */
+async function settingFitFailure(
+	facts: StartFacts,
+	agent: FactoryConfig["agents"][string],
+	runner: CommandRunner,
+): Promise<string | null> {
+	const fit = await fitSettings(
+		{ agentType: facts.agentType, agent },
+		{ model: facts.model, thinking: facts.thinking, contextWindow: facts.contextWindow },
+		runner,
+	);
+	return fit === undefined ? null : fit.reason;
+}
+
+/**
+ * Hand a Ticket off (issue #204): the caller's thin start.
+ *
+ * The caller states the facts it owns - the choice, the claim behind it, the
+ * workspace the ticket's previous Handoff recorded, and the prompt the Agent
+ * receives - and hands one request to the one start. It returns the outcome the
+ * app records on the ticket.
+ */
 export async function handOffTicket(
 	ticket: Ticket,
 	choice: HandoffChoice,
-	{ config, runner, home, onStage, names }: HandoffOptions,
+	{ config, runner, home, onStage, names, claim, previous, previousMessage }: TicketHandoffOptions,
 ): Promise<HandoffOutcome> {
-	if (ticket.state !== "open") {
+	if (claim === "open" && ticket.state !== "open") {
 		return {
 			status: "failed",
 			reason: `only open tickets can be handed off (this one is ${ticket.state})`,
 		};
 	}
-	const checked = validateChoice(choice, config);
-	if ("status" in checked) return checked;
-	const unfit = await settingFitFailure(choice, checked.agent, runner);
-	if (unfit !== null) return unfit;
-
-	// The action form holds no template (ADR 0068): a handoff never starts on a
-	// plane action's task type, so a profile missing its template is a refusal,
-	// not an empty prompt.
-	if (checked.taskType.template === undefined)
-		return { status: "failed", reason: "the task type carries no prompt template" };
-	onStage?.("resolving-repository");
-	const resolved = await resolveRepository(ticket.repositoryRef, config, { runner, home });
-	if (!resolved.ok) {
-		return { status: "failed", reason: resolved.reason };
-	}
-
-	const ctx: HandoffContext = {
-		runner,
-		onStage,
-		notes: resolved.repository.notes,
-		names: ticketNamePlan(ticket, names),
-	};
-	const checkout = resolved.repository.path;
-	const args = settingArgs(checked.agent, choice);
-	// The pull request open runs only in the worktree environment: only that
-	// environment holds the factory branch the pull request stands on
-	// (ADR 0076). The refusal is a pre-flight, before any external step.
-	if (checked.taskType.opensPullRequest === true && choice.environment === "live-worktree")
-		return {
-			status: "failed",
-			reason: `the task type ${choice.taskType} opens a pull request, which runs only in the worktree environment: the live worktree holds no factory branch`,
-		};
-	const promptAnswer = await ticketPrompt(
-		checked.taskType,
+	const check = await checkStart(choiceFacts(choice), config, runner);
+	if (!check.ok) return { status: "failed", reason: check.reason };
+	// A Ticket start always names a Task type, so a choice that names none has no
+	// prompt to render. The refusal for a Task type record that holds no template
+	// is the render's own (see `ticketPrompt`), so this caller states only the
+	// fact it owns.
+	const taskType = check.taskType;
+	if (taskType === undefined) return { status: "failed", reason: "the handoff names no task type" };
+	const answer = await ticketPrompt(
+		taskType,
 		choice.taskType,
 		ticket,
 		runner,
 		config.sources,
-		ctx,
-		checkout,
-		undefined,
+		previousMessage,
 		workflowScoreThreshold(config),
 	);
-	if ("fail" in promptAnswer) return { status: "failed", reason: promptAnswer.fail };
-	const prompt = promptAnswer.prompt;
-
-	if (choice.environment === "live-worktree") {
-		return startLiveHandoff(checkout, checked.agent, args, prompt, ctx);
-	}
-	return startWorktreeHandoff(ticket, checkout, checked.agent, args, prompt, ctx);
+	if ("fail" in answer) return { status: "failed", reason: answer.fail };
+	return runHandoffStart({
+		choice,
+		config,
+		runner,
+		home,
+		onStage,
+		repository: ticket.repositoryRef,
+		workspace: ticketWorkspaceFact(choice, previous),
+		previousTabId: previous?.tabId ?? null,
+		// The branch policy is a fact, not a merge (issue #204): the ticket keeps
+		// its branch and the work a finished cycle left on it.
+		branch: { name: branchNameFor(ticket), policy: "reuse" },
+		prompt: answer.prompt,
+		pullRequestOpen: answer.pullRequestOpen,
+		names: ticketNamePlan(ticket, names),
+		startCheck: check,
+	});
 }
 
 /**
- * The prompt of one ticket handoff (ADR 0076): the rendered template for
- * every task type, and - for a task type that opens a pull request - the
- * render the pull request open fills with the pull request's url before the
- * prompt is sent. The open's plan stands on the context, so the start
- * sequence runs it between the environment's creation and the agent's start.
- * The answer is tagged, the way the handoff's own answers are: a pass
- * carries the prompt to send, a failure its reason.
+ * The handoff's choice as the one pre-flight reads it. Every start builds its
+ * facts here, so no path can answer `unknown task type: ` for a name the start
+ * never named: a Consultation choice carries an empty Task type, and the empty
+ * name reads as "no Task type".
+ */
+function choiceFacts(choice: HandoffChoice): StartFacts {
+	return {
+		agentType: choice.agentType,
+		environment: choice.environment,
+		taskType: choice.taskType === "" ? undefined : choice.taskType,
+		model: choice.model,
+		thinking: choice.thinking,
+		contextWindow: choice.contextWindow,
+	};
+}
+
+/**
+ * The Consultation record as the one pre-flight reads it.
+ *
+ * The facts are named field by field, not passed as the whole record: a
+ * Consultation names no Task type, and a future Consultation field must not
+ * enter the pre-flight just because it happens to share the fact's name.
+ */
+export function consultationStartFacts(consultation: Consultation): StartFacts {
+	return {
+		agentType: consultation.agentType,
+		environment: consultation.environment,
+		model: consultation.model,
+		thinking: consultation.thinking,
+		contextWindow: consultation.contextWindow,
+	};
+}
+
+/**
+ * The workspace fact a Ticket start carries (issue #204).
+ *
+ * The previous Handoff's workspace is a fact only when it stands in the
+ * Environment this start chose. A stored workspace of another kind is not
+ * reused: the start builds the chosen Environment fresh, and the previous tab is
+ * still the one to close once the new Agent runs.
+ */
+function ticketWorkspaceFact(
+	choice: HandoffChoice,
+	previous: PreviousHandoffEnvironment | undefined,
+): StartWorkspace {
+	if (
+		previous !== undefined &&
+		previous.workspaceId !== null &&
+		previous.environment === choice.environment
+	)
+		return { kind: "stored", workspaceId: previous.workspaceId };
+	return { kind: "none" };
+}
+
+/**
+ * The prompt of one ticket handoff (ADR 0076): the rendered template for every
+ * task type, and - for a task type that opens a pull request - the render the
+ * pull request open fills with the pull request's url before the prompt is sent.
+ * The open's plan travels with the prompt, so the start runs it between the
+ * environment's creation and the agent's start. The answer is tagged, the way
+ * the handoff's own answers are: a pass carries the prompt to send and the open
+ * to run, a failure its reason.
  */
 async function ticketPrompt(
 	taskType: FactoryConfig["taskTypes"][string],
@@ -525,11 +648,9 @@ async function ticketPrompt(
 	ticket: Ticket,
 	runner: CommandRunner,
 	sources: readonly TicketSourceConfig[],
-	ctx: HandoffContext,
-	checkout: string,
 	previousMessage?: string,
 	scoreThreshold?: number,
-): Promise<{ prompt: HandoffPrompt } | { fail: string }> {
+): Promise<{ prompt: HandoffPrompt; pullRequestOpen?: PullRequestOpenPlan } | { fail: string }> {
 	const template = taskType.template;
 	if (template === undefined) return { fail: "the task type carries no prompt template" };
 	if (taskType.opensPullRequest !== true)
@@ -553,77 +674,41 @@ async function ticketPrompt(
 		return {
 			fail: `the task type ${taskTypeName} opens a pull request, but the ticket lists on no source that could open it`,
 		};
-	ctx.pullRequestOpen = { ticket, checkout, branch: branchNameFor(ticket), source };
 	return {
 		prompt: (url) =>
 			renderTicketPrompt(template, ticket, runner, sources, previousMessage, url, scoreThreshold),
+		pullRequestOpen: { ticket, branch: branchNameFor(ticket), source },
 	};
 }
 
 /**
- * What the pre-flight of a Consultation start answers (ADR 0010). A pass
- * carries the Agent record the start steps need, so the check and the start
- * read the config once.
- */
-export type ConsultationStartCheck =
-	| { ok: true; agent: FactoryConfig["agents"][string] }
-	| { ok: false; reason: string };
-
-/**
- * The settings a Consultation start pre-flight reads. A stored Consultation
- * carries them, and so does the Consultation type the submit resolves before
- * the record exists: the enqueue check and the start check are the same rule
- * asked at two moments (ADR 0049), so one shape serves both.
- */
-export type ConsultationStartSettings = Pick<
-	Consultation,
-	"agentType" | "environment" | "model" | "thinking" | "contextWindow"
->;
-
-/**
- * The pre-flight of a Consultation start: the record checks and the setting fit
- * check.
+ * The facts a Consultation start's caller supplies. The record already exists in
+ * SQLite; the start builds its Environment and starts its Agent.
  *
- * The Work queue's enqueue runs this before a Consultation start takes its row
- * (ADR 0049): a start that already fails refuses to enter, and the reason
- * stands on the Message line at the ask. The launch route runs it again before
- * it resolves its repository, and a resolve can clone a repository, so an unfit
- * model or thinking level must leave no checkout behind. The verdict
- * rides into the start, so the Agent's Model list answers one query per
- * Consultation rather than one per step.
+ * The Consultation keeps its own start caller because the Consultation owns its
+ * own facts: the record's settings, its branch name, its one Agent name, and the
+ * resource table the Close panel reads. The start itself is the handoff's one
+ * start (issue #204).
  */
-export async function checkConsultationStart({
-	consultation,
-	config,
-	runner,
-}: {
-	consultation: ConsultationStartSettings;
+export interface ConsultationHandoffOptions {
 	config: FactoryConfig;
 	runner: CommandRunner;
-}): Promise<ConsultationStartCheck> {
-	const agent = config.agents[consultation.agentType];
-	if (agent === undefined)
-		return { ok: false, reason: `unknown agent type: ${consultation.agentType}` };
-	if (consultation.environment === "container")
-		return { ok: false, reason: "the container environment is reserved and not yet built" };
-	const fit = await fitSettings(
-		{ agentType: consultation.agentType, agent },
-		{
-			model: consultation.model,
-			thinking: consultation.thinking,
-			contextWindow: consultation.contextWindow,
-		},
-		runner,
-	);
-	if (fit === undefined) return { ok: true, agent };
-	return { ok: false, reason: fit.reason };
-}
-
-/** A durable Consultation uses the same Herdr and repository boundary as a Handoff. */
-export interface ConsultationHandoffOptions extends HandoffOptions {
+	home: string;
 	consultation: Consultation;
-	onResource?: (kind: string, resourceId: string, owned: boolean, details?: string) => void;
+	/** Records durable progress for the Message line. */
+	onStage?: (stage: string) => void;
+	/** Record an external resource before the next external step. */
+	onResource?: (kind: ResourceKind, resourceId: string, owned: boolean, details?: string) => void;
+	/**
+	 * Confirm a resource this start's own cleanup removed. The record then holds
+	 * no row for a workspace, a worktree, or a tab the plane already took down,
+	 * and the Close panel does not offer a handle that is gone. The kind is the
+	 * one fact the start recorded the row under, never a second copy of the word.
+	 */
+	onResourceRemoved?: (kind: ResourceKind, resourceId: string) => void;
+	/** Record the Agent handles before sending its first prompt. */
 	onAgentStarted?: (agent: StartedAgent) => void;
+	/** Record the checkout the start resolved to, before its first herdr step. */
 	onRepositoryResolved?: (path: string) => void;
 	/** A resolution already made by the serialized live safety operation. */
 	resolvedRepository?: ResolvedRepository;
@@ -632,20 +717,22 @@ export interface ConsultationHandoffOptions extends HandoffOptions {
 	 * A start that carries one is not checked again here; a start that carries
 	 * none is, so no path reaches the Agent unchecked.
 	 */
-	startCheck?: ConsultationStartCheck;
+	startCheck?: StartCheck;
 }
-
-export type ConsultationHandoffOutcome =
-	| { status: "failed"; reason: string; notes?: ResolutionNotes }
-	| { status: "prompt-failed"; reason: string; agent: StartedAgent; notes?: ResolutionNotes }
-	| { status: "ok"; agent: StartedAgent; notes?: ResolutionNotes };
 
 /** Render a Consultation opening prompt without interpreting operator text. */
 export function renderConsultationPrompt(template: string, input: string): string {
 	return template.replace(/\{input\}/g, () => input);
 }
 
-/** Start a newly created Consultation. The record already exists in SQLite. */
+/**
+ * Start a newly created Consultation (issue #204): the caller's thin start. The
+ * record already exists in SQLite.
+ *
+ * The Consultation owns the Environment it builds: no previous Handoff stands
+ * behind it, a workspace it creates keeps its root pane for its Agent, and its
+ * branch is refused rather than reused.
+ */
 export async function handOffConsultation({
 	consultation,
 	config,
@@ -653,42 +740,18 @@ export async function handOffConsultation({
 	home,
 	onStage,
 	onResource,
+	onResourceRemoved,
 	onAgentStarted,
 	onRepositoryResolved,
 	resolvedRepository,
 	startCheck,
-}: ConsultationHandoffOptions): Promise<ConsultationHandoffOutcome> {
-	const check = startCheck ?? (await checkConsultationStart({ consultation, config, runner }));
+}: ConsultationHandoffOptions): Promise<HandoffOutcome> {
+	const check =
+		startCheck ?? (await checkStart(consultationStartFacts(consultation), config, runner));
 	if (!check.ok) return { status: "failed", reason: check.reason };
-	const agent = check.agent;
-	if (resolvedRepository === undefined) onStage?.("resolving-repository");
-	const resolved =
-		resolvedRepository === undefined
-			? await resolveRepository(
-					{
-						identity: consultation.repository.identity,
-						displayName: consultation.repository.displayName,
-						cloneUrl: consultation.repository.cloneUrl,
-					},
-					config,
-					{ runner, home },
-				)
-			: { ok: true as const, repository: resolvedRepository };
-	if (!resolved.ok) return { status: "failed", reason: resolved.reason };
-	onRepositoryResolved?.(resolved.repository.path);
 	const name = consultation.agentName || consultationAgentName(consultation.id);
-	const ctx: HandoffContext = {
-		runner,
-		onStage,
-		onResource,
-		onAgentStarted,
-		notes: resolved.repository.notes,
-		names: consultationNamePlan(name),
-	};
-	const prompt = renderConsultationPrompt(consultation.template, consultation.initialInput);
-	const args = settingArgs(
-		agent,
-		baseChoice(
+	return runHandoffStart({
+		choice: baseChoice(
 			consultation.agentType,
 			consultation.environment,
 			"",
@@ -696,371 +759,616 @@ export async function handOffConsultation({
 			consultation.thinking,
 			consultation.contextWindow,
 		),
-	);
-	if (consultation.environment === "live-worktree") {
-		return startConsultationLive(resolved.repository.path, agent, args, prompt, ctx);
-	}
-	return startConsultationWorktree(
-		consultation.id,
-		consultation.typeName,
-		resolved.repository.path,
-		agent,
-		args,
-		prompt,
-		ctx,
-	);
-}
-
-/** Consultation live launch: a new checkout workspace uses its root pane. */
-async function startConsultationLive(
-	checkout: string,
-	agent: FactoryConfig["agents"][string],
-	args: string[],
-	prompt: string,
-	ctx: HandoffContext,
-): Promise<ConsultationHandoffOutcome> {
-	ctx.onStage?.("creating-environment");
-	const listed = await ctx.runner.run("herdr", ["workspace", "list"]);
-	if (listed.code !== 0) return failedCommand(listed, ctx) as ConsultationHandoffOutcome;
-	let data: unknown;
-	try {
-		data = JSON.parse(listed.stdout);
-	} catch {
-		return failed(
-			"herdr workspace list did not return a readable workspace list",
-			ctx,
-		) as ConsultationHandoffOutcome;
-	}
-	const workspaces =
-		(
-			data as {
-				result?: {
-					workspaces?: Array<{ workspace_id?: unknown; worktree?: { checkout_path?: unknown } }>;
-				};
-			}
-		).result?.workspaces ?? [];
-	const checkoutReal = await realPathOf(checkout);
-	for (const workspace of workspaces) {
-		if (
-			typeof workspace.workspace_id !== "string" ||
-			typeof workspace.worktree?.checkout_path !== "string"
-		)
-			continue;
-		const recorded = workspace.worktree.checkout_path;
-		if (recorded === checkout || (await realPathOf(recorded)) === checkoutReal)
-			return startAgentInNewTab(workspace.workspace_id, checkout, agent, args, prompt, ctx);
-	}
-	const created = await ctx.runner.run("herdr", [
-		"workspace",
-		"create",
-		"--cwd",
-		checkout,
-		"--no-focus",
-	]);
-	if (created.code !== 0) return failedCommand(created, ctx) as ConsultationHandoffOutcome;
-	const workspaceId = jsonResultField(created, "workspace", "workspace_id");
-	const paneId = jsonResultField(created, "root_pane", "pane_id");
-	const tabId = jsonResultField(created, "tab", "tab_id");
-	if (workspaceId !== null)
-		ctx.onResource?.("workspace", workspaceId, true, "Consultation workspace");
-	if (tabId !== null) ctx.onResource?.("tab", tabId, true, "Consultation root tab");
-	if (workspaceId === null || paneId === null || tabId === null)
-		return failed(
-			"herdr workspace create returned incomplete pane handles",
-			ctx,
-		) as ConsultationHandoffOutcome;
-	return startAgentAndPrompt(agent, args, prompt, ctx, { paneId, tabId, workspaceId });
-}
-
-async function startConsultationWorktree(
-	id: string,
-	typeName: string,
-	checkout: string,
-	agent: FactoryConfig["agents"][string],
-	args: string[],
-	prompt: string,
-	ctx: HandoffContext,
-): Promise<ConsultationHandoffOutcome> {
-	const branch = consultationBranchName(id, typeName);
-	ctx.onStage?.("creating-environment");
-	const listed = await ctx.runner.run("git", ["-C", checkout, "branch", "--list", branch]);
-	if (listed.code !== 0)
-		return failed(
-			`cannot check branch in ${checkout}: ${commandFailureText(listed)}`,
-			ctx,
-		) as ConsultationHandoffOutcome;
-	if (listed.stdout.trim() !== "")
-		return failed(
-			`Consultation branch already exists: ${branch}`,
-			ctx,
-		) as ConsultationHandoffOutcome;
-	// The worktree base rule (the "Worktree base" the glossary records): the
-	// fetched remote default branch, so a Consultation reads the shipped
-	// state of the repository, not the branch the checkout happens to hold.
-	// When the fetch or the ref is unavailable the base falls back to the
-	// checkout's HEAD, with a note on the handoff.
-	const base = await freshWorktreeBase(checkout, ctx.runner);
-	if ("fail" in base) return failed(base.fail, ctx) as ConsultationHandoffOutcome;
-	if (base.note !== undefined) ctx.notes = { ...ctx.notes, worktreeBase: base.note };
-	const created = await createWorktree(ctx, checkout, branch, [
-		"worktree",
-		"create",
-		"--cwd",
-		checkout,
-		"--branch",
-		branch,
-		"--base",
-		base.reference,
-		"--no-focus",
-	]);
-	if (created.code !== 0) return failedCommand(created, ctx) as ConsultationHandoffOutcome;
-	const workspaceId = jsonResultField(created, "workspace", "workspace_id");
-	const paneId = jsonResultField(created, "root_pane", "pane_id");
-	const tabId = jsonResultField(created, "tab", "tab_id");
-	if (workspaceId !== null) {
-		ctx.onResource?.("workspace", workspaceId, true, "Consultation worktree workspace");
-		ctx.onResource?.("worktree", workspaceId, true, `Consultation worktree checkout for ${branch}`);
-	}
-	if (tabId !== null) ctx.onResource?.("tab", tabId, true, "Consultation worktree tab");
-	if (workspaceId === null || paneId === null || tabId === null)
-		return failed(
-			`herdr worktree create returned incomplete handles for branch ${branch}`,
-			ctx,
-		) as ConsultationHandoffOutcome;
-	return startAgentOrCleanUp(agent, args, prompt, ctx, { paneId, tabId, workspaceId }, async () => {
-		await removeWorktree(checkout, branch, workspaceId, ctx);
-	}) as Promise<ConsultationHandoffOutcome>;
-}
-
-/**
- * The options of a workflow handoff or a restart: the stored workspace of
- * the ticket's previous handoff, the tab to close once the new agent has
- * started, and the last captured message the prompt carries.
- */
-export interface StoredWorkspaceHandoffOptions extends HandoffOptions {
-	/** The ticket the previous handoff ran on, with its stored handles. */
-	ticket: Ticket;
-	choice: HandoffChoice;
-	/** The workspace the previous handoff recorded, or null when it has none. */
-	workspaceId: string | null;
-	/** The environment the previous handoff ran in. */
-	environment: EnvironmentKind;
-	/** The tab the previous handoff recorded, or null when it has none. */
-	previousTabId: string | null;
-	/** The {previous-message} value: the last captured message. */
-	previousMessage: string;
-}
-
-/**
- * Hand a ticket off in the workspace of its previous handoff.
- *
- * The stored workspace is reused when herdr still holds it and it matches
- * the chosen environment. A worktree that is gone is reopened on its
- * branch; a live workspace that is gone falls back to the live sequence at
- * the checkout. A stored workspace of a different environment kind is not
- * reused: the handoff builds the chosen environment fresh. Once the agent
- * has started, the previous handoff's tab is closed.
- */
-export async function handOffStoredWorkspace({
-	ticket,
-	choice,
-	config,
-	runner,
-	home,
-	workspaceId,
-	environment,
-	previousTabId,
-	previousMessage,
-	onStage,
-	names,
-}: StoredWorkspaceHandoffOptions): Promise<HandoffOutcome> {
-	const checked = validateChoice(choice, config);
-	if ("status" in checked) return checked;
-	const unfit = await settingFitFailure(choice, checked.agent, runner);
-	if (unfit !== null) return unfit;
-	const agent = checked.agent;
-	const taskType = checked.taskType;
-	// The action form holds no template (ADR 0068): a handoff never starts on a
-	// plane action's task type, so a profile missing its template is a refusal,
-	// not an empty prompt.
-	if (taskType.template === undefined)
-		return { status: "failed", reason: "the task type carries no prompt template" };
-
-	onStage?.("resolving-repository");
-	const resolved = await resolveRepository(ticket.repositoryRef, config, { runner, home });
-	if (!resolved.ok) {
-		return { status: "failed", reason: resolved.reason };
-	}
-
-	const ctx: HandoffContext = {
+		config,
 		runner,
+		home,
 		onStage,
-		notes: resolved.repository.notes,
-		names: ticketNamePlan(ticket, names),
-	};
-	const checkout = resolved.repository.path;
-	const args = settingArgs(agent, choice);
-	// The pull request open runs only in the worktree environment: only that
-	// environment holds the factory branch the pull request stands on
-	// (ADR 0076). The refusal is a pre-flight, before any external step.
-	if (taskType.opensPullRequest === true && choice.environment === "live-worktree")
-		return {
-			status: "failed",
-			reason: `the task type ${choice.taskType} opens a pull request, which runs only in the worktree environment: the live worktree holds no factory branch`,
-		};
-	const promptAnswer = await ticketPrompt(
-		taskType,
-		choice.taskType,
-		ticket,
-		runner,
-		config.sources,
-		ctx,
-		checkout,
-		previousMessage,
-		workflowScoreThreshold(config),
-	);
-	if ("fail" in promptAnswer) return { status: "failed", reason: promptAnswer.fail };
-	const prompt = promptAnswer.prompt;
-
-	const storedMatches = workspaceId !== null && environment === choice.environment;
-	if (storedMatches) {
-		ctx.onStage?.("creating-environment");
-		const listed = await ctx.runner.run("herdr", ["workspace", "list"]);
-		if (listed.code !== 0) {
-			return failedCommand(listed, ctx);
-		}
-		const found = await findWorkspaceIn(listed, workspaceId);
-		if (found.status === "unreadable") {
-			return failed(found.reason, ctx);
-		}
-		if (found.status === "found") {
-			// The stored workspace still holds: a fresh tab in it, at the
-			// workspace's own cwd.
-			return startAgentInNewTab(workspaceId, null, agent, args, prompt, ctx, {
-				previousTabId,
-				closeTabOnFailure: true,
-			});
-		}
-		if (choice.environment === "worktree") {
-			// The worktree is gone: reopen it on the branch the naming rule
-			// gives the ticket. The branch is the branch, not herdr's: the
-			// reuse sequence checks it out when no worktree holds it.
-			return startReusedBranchHandoff(checkout, branchNameFor(ticket), agent, args, prompt, ctx, {
-				previousTabId,
-			});
-		}
-		// A live workspace is gone: the live sequence finds or creates one.
-		return startLiveHandoff(checkout, agent, args, prompt, ctx, { previousTabId });
-	}
-
-	if (choice.environment === "worktree") {
-		return startWorktreeHandoff(ticket, checkout, agent, args, prompt, ctx, {
-			previousTabId,
-		});
-	}
-	return startLiveHandoff(checkout, agent, args, prompt, ctx, { previousTabId });
+		onAgentStarted,
+		onRepositoryResolved,
+		repository: {
+			identity: consultation.repository.identity,
+			displayName: consultation.repository.displayName,
+			cloneUrl: consultation.repository.cloneUrl,
+		},
+		resolvedRepository,
+		workspace: { kind: "fresh" },
+		previousTabId: null,
+		branch: {
+			name: consultationBranchName(consultation.id, consultation.typeName),
+			policy: "refuse",
+		},
+		prompt: renderConsultationPrompt(consultation.template, consultation.initialInput),
+		names: consultationNamePlan(name),
+		// The recorder and its wording travel together (pull request #213 review): a start
+		// that records resources states the wording those rows use, and a start that
+		// records none carries no resource table at all.
+		resources:
+			onResource === undefined
+				? undefined
+				: {
+						record: onResource,
+						removed: onResourceRemoved,
+						labels: CONSULTATION_RESOURCE_LABELS,
+					},
+		startCheck: check,
+	});
 }
 
 /**
- * The live worktree sequence: find the herdr workspace whose repository
- * matches the checkout (create it when missing), create a fresh tab in that
- * workspace at the checkout, start a fresh agent in the tab's pane, send
- * the prompt.
+ * The herdr workspace a start works in, as the caller states it (issue #204).
+ *
+ * `fresh`: the start builds its own Environment and owns it. A workspace it
+ * creates is fresh end to end, so its root pane is where the Agent starts. A
+ * Consultation carries this fact, the same fact its Close cleanup reads when it
+ * takes the whole workspace down.
+ *
+ * `stored`: the workspace a previous Handoff recorded. The start reuses it when
+ * herdr still holds it, and reopens the worktree on its branch when the worktree
+ * is gone.
+ *
+ * `none`: the caller states no workspace. The start works in the Environment of
+ * the checkout, which the operator's own tabs may hold, so its Agent starts in a
+ * fresh tab in the workspace it found or the one it created.
  */
-async function startLiveHandoff(
-	checkout: string,
-	agent: FactoryConfig["agents"][string],
-	args: string[],
-	prompt: HandoffPrompt,
-	ctx: HandoffContext,
-	extra: { previousTabId?: string | null } = {},
-): Promise<HandoffOutcome> {
-	ctx.onStage?.("creating-environment");
-	const listed = await ctx.runner.run("herdr", ["workspace", "list"]);
-	if (listed.code !== 0) {
-		return failedCommand(listed, ctx);
-	}
-	const found = await findWorkspaceAt(listed, checkout);
-	if (found.status === "unreadable") {
-		// Unreadable is not "no workspace": the list may already hold the
-		// checkout's workspace, and a second create would break the
-		// one-workspace-per-repository rule. The handoff fails with a reason.
-		return failed(found.reason, ctx);
-	}
-	if (found.status === "found") {
-		return startAgentInNewTab(found.id, checkout, agent, args, prompt, ctx, extra);
-	}
-	// No workspace holds the checkout: create one.
-	const created = await ctx.runner.run("herdr", [
-		"workspace",
-		"create",
-		"--cwd",
+type StartWorkspace =
+	| { kind: "fresh" }
+	| { kind: "stored"; workspaceId: string }
+	| { kind: "none" };
+
+/**
+ * The branch a worktree Environment works on, and what an existing branch means.
+ *
+ * The policy stays a fact and the naming rules stay untouched (issue #204): a
+ * Ticket branch is reused, so the ticket keeps the work an earlier cycle left on
+ * it, and a Consultation branch that already exists is refused.
+ */
+interface StartBranch {
+	name: string;
+	policy: "reuse" | "refuse";
+}
+
+/**
+ * The wording the resource recorder writes for the resources a start creates.
+ *
+ * The resource table belongs to the Consultation's Close panel, so the caller
+ * that records resources names its own rows and hands the labels with them. The
+ * shared Environment builders read these instead of spelling out one surface's
+ * vocabulary. There is no default set: the labels travel with the recorder (see
+ * `StartResources`), so no start can write a row in wording its caller never
+ * stated (pull request #213 review).
+ */
+interface StartResourceLabels {
+	/** The live workspace this start created. */
+	workspace: string;
+	/** The root tab of the live workspace this start created. */
+	rootTab: string;
+	/** The fresh tab this start created in a workspace it did not create. */
+	tab: string;
+	/** The worktree workspace this start created. */
+	worktreeWorkspace: string;
+	/** The worktree checkout this start created, beside the branch it stands on. */
+	worktreeCheckout: string;
+	/** The tab holding the worktree workspace this start created. */
+	worktreeTab: string;
+}
+
+/**
+ * What one start records into its caller's resource table, and the wording those
+ * rows use.
+ *
+ * `record` lands before the next external step, so a failure in the middle of
+ * the sequence still shows what might remain. `removed` confirms a resource this
+ * start's own cleanup took down, so the record keeps no row for a handle the
+ * plane already closed.
+ */
+interface StartResources {
+	record: (kind: ResourceKind, resourceId: string, owned: boolean, details?: string) => void;
+	/** Absent on a caller that tracks no rows of its own. */
+	removed?: (kind: ResourceKind, resourceId: string) => void;
+	labels: StartResourceLabels;
+}
+
+/** The Consultation's own Close panel wording, carried with its recorder. */
+const CONSULTATION_RESOURCE_LABELS: StartResourceLabels = {
+	workspace: "Consultation workspace",
+	rootTab: "Consultation root tab",
+	tab: "Consultation tab",
+	worktreeWorkspace: "Consultation worktree workspace",
+	worktreeCheckout: "Consultation worktree checkout",
+	worktreeTab: "Consultation worktree tab",
+};
+
+/** What one handoff start is asked to do. */
+interface HandoffStartRequest {
+	/** The Agent type, Environment, Task type, and the three settings this start runs on. */
+	choice: HandoffChoice;
+	/** The config the pre-flight and the repository resolution read. */
+	config: FactoryConfig;
+	/** The repository the start works in, as the Ticket or the Consultation names it. */
+	repository: string | RepositoryRef;
+	/** A repository resolution the caller already made: the Consultation live safety run. */
+	resolvedRepository?: ResolvedRepository;
+	/** The herdr workspace this start works in. */
+	workspace: StartWorkspace;
+	/** The tab the previous Handoff recorded, closed once this start's Agent runs. */
+	previousTabId: string | null;
+	/** The branch the worktree Environment works on. */
+	branch: StartBranch;
+	/** The prompt the Agent receives, or the render the Pull request open fills with its url. */
+	prompt: HandoffPrompt;
+	/** The Agent names the start may ask herdr for, in preference order. */
+	names: NamePlan;
+	/** The Task type's Pull request open (ADR 0076), and nothing on a start that opens none. */
+	pullRequestOpen?: PullRequestOpenPlan;
+	/**
+	 * The pre-flight the caller ran. It is required, and the start never re-runs
+	 * one: the check and this request then always carry the same facts, and the
+	 * Agent's Model list is asked once per start.
+	 */
+	startCheck: StartCheck;
+	/** Records durable progress after the claim and before external work. */
+	onStage?: (stage: string) => void;
+	/**
+	 * The caller's resource table with the wording its rows use. A start that
+	 * records nothing carries nothing, so no row is ever written in wording the
+	 * caller did not state.
+	 */
+	resources?: StartResources;
+	/** Record the Agent handles before sending its first prompt. */
+	onAgentStarted?: (agent: StartedAgent) => void;
+	/** Record the checkout the start resolved to, before its first herdr step. */
+	onRepositoryResolved?: (path: string) => void;
+	/** The one seam the start runs through: every external command. */
+	runner: CommandRunner;
+	/** The home directory the ~/src repository convention resolves under. */
+	home: string;
+}
+
+/**
+ * The kinds a start records in its caller's resource table (issue #204).
+ *
+ * One fact, stated once. Every handle a start creates enters its residue record
+ * carrying the kind it was recorded under, and the cleanup confirms that kind out
+ * of the record. A write and a confirmation therefore cannot name two different
+ * kinds and leave the recorded row standing in silence (pull request #213
+ * review).
+ */
+export type ResourceKind = "tab" | "workspace" | "worktree";
+
+/**
+ * One handle this start created: the kind its caller's resource table records it
+ * under, and the handle itself.
+ */
+interface CreatedHandle {
+	readonly kind: ResourceKind;
+	readonly resourceId: string;
+}
+
+/**
+ * What one start created, so its failure removes exactly that and nothing that
+ * pre-dates it (issue #204).
+ *
+ * The start owns the record and every Environment builder writes into it as it
+ * creates a handle, so the coverage is the same on every Environment kind: a
+ * live start that never started its Agent removes its fresh tab and the workspace
+ * it created, the way a worktree start removes its fresh checkout. A handle the
+ * start did not create never enters the record, so a stored workspace, a branch
+ * the repository already carried, and a pull request the read found all stand
+ * (ADR 0062, ADR 0076).
+ *
+ * The record is written as each handle is created rather than returned at the end
+ * of a build, because a command can raise in the middle of one - see
+ * `raisedDuringStart`.
+ */
+interface Residue {
+	/** The fresh tab this start created in a workspace it did not create. */
+	tab: CreatedHandle | null;
+	/**
+	 * The root tab of a workspace this start created. The workspace or worktree
+	 * removal takes it down, so no separate tab command runs for it; it stands in
+	 * the record so the cleanup can confirm the row the start wrote for it.
+	 */
+	rootTab: CreatedHandle | null;
+	/** The herdr workspace this start created. */
+	workspace: CreatedHandle | null;
+	/** The herdr worktree checkout this start created. */
+	worktree: CreatedHandle | null;
+	/** The git branch this start created. */
+	branch: string | null;
+}
+
+const NO_RESIDUE: Residue = {
+	tab: null,
+	rootTab: null,
+	workspace: null,
+	worktree: null,
+	branch: null,
+};
+
+/**
+ * The Environment a start built: the handles its Agent's pane stands in, or the
+ * outcome its build reports. What the build created is not part of the answer -
+ * it stands in the start's own residue record, so a build that ends in the
+ * middle still leaves what it made on the record.
+ */
+type EnvironmentAnswer = { handles: AgentHandles } | { outcome: HandoffOutcome };
+
+/**
+ * The one handoff start (issue #204, ADR 0097).
+ *
+ * Every start runs through this call: an open Ticket's first Handoff, a workflow
+ * handoff, a Restart, and a Consultation launch. It is this module's own start,
+ * behind the two start calls the plane has (`handOffTicket` and
+ * `handOffConsultation`): no caller outside the module builds a request, so a
+ * new Environment kind is added inside the module and not as a seventh start
+ * path. The caller states the facts it owns - the choice, the resolved settings,
+ * the workspace, the prompt, the name plan, and the branch policy - and the start
+ * answers with one outcome. The caller that used to pick between two entry points
+ * states a workspace instead.
+ *
+ * The sequence is the contract the fake runner's tests pin:
+ *
+ * 1. the pre-flight, in one order, once;
+ * 2. the repository resolution;
+ * 3. the Environment the choice names, through herdr;
+ * 4. the Pull request open of a task type that opens one (ADR 0076);
+ * 5. the Agent start under one of the name plan's candidates;
+ * 6. the prompt.
+ *
+ * What the start created is recorded as it is created, and one cleanup rule
+ * removes it when the Agent never starts. A started Agent is never rolled back:
+ * even a failed prompt settles the ticket as handed off.
+ */
+async function runHandoffStart(request: HandoffStartRequest): Promise<HandoffOutcome> {
+	const check = request.startCheck;
+	if (!check.ok) return { status: "failed", reason: check.reason };
+	if (request.resolvedRepository === undefined) request.onStage?.("resolving-repository");
+	const resolved =
+		request.resolvedRepository === undefined
+			? await resolveRepository(request.repository, request.config, {
+					runner: request.runner,
+					home: request.home,
+				})
+			: { ok: true as const, repository: request.resolvedRepository };
+	if (!resolved.ok) return { status: "failed", reason: resolved.reason };
+	const checkout = resolved.repository.path;
+	request.onRepositoryResolved?.(checkout);
+	const ctx: HandoffContext = {
+		runner: request.runner,
 		checkout,
-		"--no-focus",
-	]);
-	if (created.code !== 0) {
-		return failedCommand(created, ctx);
+		onStage: request.onStage,
+		resources: request.resources ?? null,
+		onAgentStarted: request.onAgentStarted,
+		notes: resolved.repository.notes,
+		names: request.names,
+		pullRequestOpen: request.pullRequestOpen,
+	};
+	// What this start creates, and what it has already put into the world, stand
+	// outside its steps. A command that raises in the middle of a start therefore
+	// still leaves the start able to name what it made and what it must not roll
+	// back (pull request #213 review).
+	const residue: Residue = { ...NO_RESIDUE };
+	const progress: StartProgress = { agent: null, pullRequestCleanup: null };
+	let outcome: HandoffOutcome;
+	try {
+		outcome = await runStartSteps(request, check, ctx, residue, progress);
+	} catch (error) {
+		outcome = raisedDuringStart(error, ctx, progress);
 	}
-	const id = jsonResultField(created, "workspace", "workspace_id");
-	if (id === null) {
-		return failed("herdr workspace create returned no workspace id", ctx);
-	}
-	return startAgentInNewTab(id, checkout, agent, args, prompt, ctx, extra);
-}
-
-interface NewTabOptions {
-	previousTabId?: string | null;
-	/** Close the new tab when the agent never starts, leaving no residue. */
-	closeTabOnFailure?: boolean;
-}
-
-async function startAgentInNewTab(
-	workspaceId: string,
-	checkout: string | null,
-	agent: FactoryConfig["agents"][string],
-	args: string[],
-	prompt: HandoffPrompt,
-	ctx: HandoffContext,
-	options: NewTabOptions = {},
-): Promise<HandoffOutcome> {
-	const tabArgs = ["tab", "create", "--workspace", workspaceId];
-	if (checkout !== null) {
-		tabArgs.push("--cwd", checkout);
-	}
-	tabArgs.push("--no-focus");
-	const tab = await ctx.runner.run("herdr", tabArgs);
-	if (tab.code !== 0) {
-		return failedCommand(tab, ctx);
-	}
-	const paneId = jsonResultField(tab, "root_pane", "pane_id");
-	const tabId = jsonResultField(tab, "tab", "tab_id");
-	if (tabId !== null) ctx.onResource?.("tab", tabId, true, "Consultation tab");
-	if (paneId === null || tabId === null) {
-		return failed("herdr tab create returned no pane id", ctx);
-	}
-	// The pull request open stands between the environment and the agent
-	// (ADR 0076): the prompt the agent gets carries the pull request's url.
-	const pre = await promptBeforeAgent(ctx, prompt);
-	if ("fail" in pre) {
-		await pre.cleanup();
-		if (options.closeTabOnFailure) await ctx.runner.run("herdr", ["tab", "close", tabId]);
-		return failed(pre.fail, ctx);
-	}
-	const outcome = await startAgentAndPrompt(agent, args, pre.text, ctx, {
-		paneId,
-		tabId,
-		workspaceId,
-		previousTabId: options.previousTabId,
-	});
 	if (outcome.status === "failed") {
-		if (pre.cleanup !== null) await pre.cleanup();
-		if (options.closeTabOnFailure) {
-			// The agent never started: the tab the handoff just created would
-			// sit empty in the stored workspace. Close it, best effort.
-			await ctx.runner.run("herdr", ["tab", "close", tabId]);
-		}
+		// The Agent never started: the residue of the pull request open goes first,
+		// then the Environment standing behind it, so a retry can run instead of
+		// failing on what this attempt left behind.
+		await runStartCleanup(progress.pullRequestCleanup, ctx, residue);
 	}
 	return outcome;
+}
+
+/**
+ * The steps one start runs, in their one order: the Environment the choice
+ * names, the Pull request open of a task type that opens one, the Agent start,
+ * and the prompt.
+ */
+async function runStartSteps(
+	request: HandoffStartRequest,
+	check: StartCheck & { ok: true },
+	ctx: HandoffContext,
+	residue: Residue,
+	progress: StartProgress,
+): Promise<HandoffOutcome> {
+	const environment = await buildEnvironment(request, ctx, residue);
+	if ("outcome" in environment) return environment.outcome;
+	// The step between the environment and the Agent is the Pull request open of
+	// a task type that opens one (ADR 0076): the environment stands, the branch
+	// is pushed, the draft stands or is reused, and only then does the prompt -
+	// filled with the pull request's url - go out. Its cleanup goes on the
+	// progress every failure answer reads, so a failure after the open runs it
+	// whether the open tagged its own failure or a command raised.
+	const pre = await promptBeforeAgent(ctx, request.prompt);
+	progress.pullRequestCleanup = pre.cleanup;
+	if ("fail" in pre) return failed(pre.fail, ctx);
+	return await startAgentAndPrompt(
+		check.agent,
+		settingArgs(check.agent, request.choice),
+		pre.text,
+		ctx,
+		{ ...environment.handles, previousTabId: request.previousTabId },
+		progress,
+	);
+}
+
+/**
+ * What a start has already put into the world, held outside its steps so the
+ * answer to a raised command can tell a residue to remove from an Agent it must
+ * not roll back.
+ */
+interface StartProgress {
+	/** The Agent herdr accepted, once one is running. A started Agent is never rolled back. */
+	agent: StartedAgent | null;
+	/** The cleanup of the pull request open's residue, once that open has run. */
+	pullRequestCleanup: (() => Promise<void>) | null;
+}
+
+/**
+ * The answer to a command that raised in the middle of a start.
+ *
+ * The production runner maps a spawn-level failure to a failed command, but a
+ * CommandRunner adapter is free to raise - the Stub runner wraps another runner,
+ * and a caller's own callback can throw - and the rest of this module already
+ * treats a raise as a failure it must answer, because an answer that escaped
+ * would skip the cleanup of what the attempt created (see `runPullRequestOpen`).
+ * The steps after the Environment stands are held to the same rule.
+ *
+ * A raise after the Agent started is the failed prompt it is: the Agent stays
+ * running, its Environment stays, and the ticket settles as handed off with the
+ * reason on its record. A started Agent is never rolled back.
+ */
+function raisedDuringStart(
+	error: unknown,
+	ctx: HandoffContext,
+	progress: StartProgress,
+): HandoffOutcome {
+	const agent = progress.agent;
+	if (agent !== null) {
+		return {
+			status: "prompt-failed",
+			reason: `agent ${agent.name} started, but the handoff raised: ${errorMessage(error)}`,
+			agent,
+			notes: ctx.notes,
+		};
+	}
+	return failed(`the handoff could not run a command: ${errorMessage(error)}`, ctx);
+}
+
+/**
+ * The cleanup of one failed start: the pull request open's residue, then the
+ * Environment behind it.
+ *
+ * Best effort, the way every cleanup in this module is: the start's own failure
+ * is the reason the operator sees, so a cleanup that fails, or a cleanup command
+ * that raises, adds no second failure on top of it.
+ */
+async function runStartCleanup(
+	pullRequestCleanup: (() => Promise<void>) | null,
+	ctx: HandoffContext,
+	residue: Residue,
+): Promise<void> {
+	if (pullRequestCleanup !== null) {
+		try {
+			await pullRequestCleanup();
+		} catch {
+			// A cleanup command that raised is answered like one herdr refused.
+		}
+	}
+	await removeResidue(ctx, residue);
+}
+
+/**
+ * The Environment the choice names, built through herdr. What it creates is
+ * written into the start's residue record as it is created.
+ */
+async function buildEnvironment(
+	request: HandoffStartRequest,
+	ctx: HandoffContext,
+	residue: Residue,
+): Promise<EnvironmentAnswer> {
+	if (request.choice.environment === "worktree")
+		return buildWorktreeEnvironment(request, ctx, residue);
+	return buildLiveEnvironment(request, ctx, residue);
+}
+
+/**
+ * The workspace list one start reads, and whether the stored workspace still
+ * stands in it (pull request #213 review).
+ *
+ * Both Environment kinds ask herdr the same question before they build: does the
+ * workspace a previous Handoff recorded still hold? The ask, the list read, the
+ * held check, and the two failure answers were written twice, once per builder.
+ * They live here now, so the rule has one copy. A pass carries the workspaces
+ * herdr listed, which the live builder goes on to search for the checkout (see
+ * `workspaceAtCheckout`).
+ */
+type StartWorkspaceList =
+	| { ok: true; held: string | null; workspaces: readonly HerdrWorkspace[] }
+	| { ok: false; outcome: HandoffOutcome };
+
+async function readStartWorkspaces(
+	request: HandoffStartRequest,
+	ctx: HandoffContext,
+): Promise<StartWorkspaceList> {
+	const listed = await ctx.runner.run("herdr", ["workspace", "list"]);
+	if (listed.code !== 0) return { ok: false, outcome: failedCommand(listed, ctx) };
+	const list = readWorkspaceList(listed);
+	if (list.status === "unreadable") return { ok: false, outcome: failed(list.reason, ctx) };
+	const stored = request.workspace.kind === "stored" ? request.workspace.workspaceId : null;
+	return {
+		ok: true,
+		held: stored !== null && workspaceHeld(list.workspaces, stored) ? stored : null,
+		workspaces: list.workspaces,
+	};
+}
+
+/**
+ * The live worktree sequence: find the herdr workspace whose repository matches
+ * the checkout, or the stored workspace a previous Handoff recorded, and create
+ * one when neither holds. The Agent then starts in a fresh tab, except in a
+ * workspace this start created for itself (see `StartWorkspace`).
+ */
+async function buildLiveEnvironment(
+	request: HandoffStartRequest,
+	ctx: HandoffContext,
+	residue: Residue,
+): Promise<EnvironmentAnswer> {
+	ctx.onStage?.("creating-environment");
+	const listed = await readStartWorkspaces(request, ctx);
+	if (!listed.ok) return { outcome: listed.outcome };
+	if (listed.held !== null) {
+		// The stored workspace still holds: a fresh tab in it, at the
+		// workspace's own cwd.
+		return openFreshTab(listed.held, null, ctx, residue);
+	}
+	// A stored workspace that is gone, and a start that names none, both end at
+	// the checkout lookup below, which finds a workspace or creates one.
+	const atCheckout = await workspaceAtCheckout(listed.workspaces, ctx.checkout);
+	if (atCheckout !== null) return openFreshTab(atCheckout, ctx.checkout, ctx, residue);
+	const created = await ctx.runner.run("herdr", [
+		"workspace",
+		"create",
+		"--cwd",
+		ctx.checkout,
+		"--no-focus",
+	]);
+	if (created.code !== 0) return { outcome: failedCommand(created, ctx) };
+	const handles = herdrHandles(created);
+	if (handles.workspaceId === null)
+		return { outcome: failed("herdr workspace create returned no workspace id", ctx) };
+	// The workspace this start created enters the record before the next ask, so
+	// a failure - or a raise - at that ask still takes it down.
+	residue.workspace = recordResource(
+		ctx,
+		"workspace",
+		handles.workspaceId,
+		(labels) => labels.workspace,
+	);
+	if (handles.tabId !== null)
+		residue.rootTab = recordResource(ctx, "tab", handles.tabId, (labels) => labels.rootTab);
+	if (request.workspace.kind === "fresh") {
+		// The start owns the workspace it creates: its root pane is fresh, so the
+		// Agent starts there and no second tab is made.
+		if (handles.paneId === null || handles.tabId === null)
+			return {
+				outcome: failed("herdr workspace create returned incomplete pane handles", ctx),
+			};
+		// The root tab stands in the record too: the workspace close takes it
+		// down, and the cleanup confirms the row written for it.
+		return {
+			handles: {
+				paneId: handles.paneId,
+				tabId: handles.tabId,
+				workspaceId: handles.workspaceId,
+			},
+		};
+	}
+	return openFreshTab(handles.workspaceId, ctx.checkout, ctx, residue);
+}
+
+/**
+ * A fresh tab in a workspace the start found or created: the Agent's pane is that
+ * tab's root pane. The tab enters the record as soon as herdr names it, beside
+ * the workspace when this start created it.
+ */
+async function openFreshTab(
+	workspaceId: string,
+	cwd: string | null,
+	ctx: HandoffContext,
+	residue: Residue,
+): Promise<EnvironmentAnswer> {
+	const tabArgs = ["tab", "create", "--workspace", workspaceId];
+	if (cwd !== null) tabArgs.push("--cwd", cwd);
+	tabArgs.push("--no-focus");
+	const tab = await ctx.runner.run("herdr", tabArgs);
+	if (tab.code !== 0) return { outcome: failedCommand(tab, ctx) };
+	const handles = herdrHandles(tab);
+	if (handles.tabId !== null)
+		residue.tab = recordResource(ctx, "tab", handles.tabId, (labels) => labels.tab);
+	if (handles.paneId === null || handles.tabId === null)
+		return { outcome: failed("herdr tab create returned no pane id", ctx) };
+	return {
+		handles: { paneId: handles.paneId, tabId: handles.tabId, workspaceId },
+	};
+}
+
+/**
+ * Record one resource this start created, in the wording its caller stated, and
+ * answer with the handle as it was recorded.
+ *
+ * A start with no resource table records nothing, yet still gets the handle back:
+ * the residue record carries the same kind the table would have held, so the
+ * cleanup confirms the kind the start wrote rather than a kind it spells again
+ * (pull request #213 review). The recorder and its labels travel together (see
+ * `StartResources`), so there is no default wording for a row to fall back to.
+ */
+function recordResource(
+	ctx: HandoffContext,
+	kind: ResourceKind,
+	resourceId: string,
+	label: (labels: StartResourceLabels) => string,
+): CreatedHandle {
+	if (ctx.resources !== null)
+		ctx.resources.record(kind, resourceId, true, label(ctx.resources.labels));
+	return { kind, resourceId };
+}
+
+/**
+ * Remove what one start created, and only that (issue #204).
+ *
+ * Best effort: the start's own failure is the reason the operator sees, and a
+ * cleanup error must not replace it. The tab goes first, then the workspace or
+ * worktree checkout behind it, then the branch this start created.
+ *
+ * What a close really took down is confirmed in the caller's resource table, so
+ * the record does not keep a row for a handle the plane already removed. A close
+ * herdr refuses leaves its row unconfirmed: that resource may still stand, and
+ * the operator's Close has to be able to reach it.
+ */
+async function removeResidue(ctx: HandoffContext, residue: Residue): Promise<void> {
+	if (residue.tab !== null && (await closeTab(residue.tab.resourceId, ctx)))
+		confirmRemoved(ctx, residue.tab);
+	if (residue.worktree !== null) {
+		if (await removeWorktreeCheckout(residue.worktree.resourceId, ctx)) {
+			// `worktree remove` takes the workspace herdr created together with its
+			// checkout, and the root tab between them, so all three rows go.
+			confirmRemoved(ctx, residue.worktree);
+			if (residue.workspace !== null) confirmRemoved(ctx, residue.workspace);
+			if (residue.rootTab !== null) confirmRemoved(ctx, residue.rootTab);
+		}
+	} else if (residue.workspace !== null) {
+		if (await closeWorkspace(residue.workspace.resourceId, ctx)) {
+			confirmRemoved(ctx, residue.workspace);
+			if (residue.rootTab !== null) confirmRemoved(ctx, residue.rootTab);
+		}
+	}
+	if (residue.branch !== null) {
+		// A branch delete is cleanup like every other half of this rule: a command
+		// that raises is answered the way a refusal is, so it cannot escape the
+		// start and take the rest of the cleanup with it.
+		try {
+			await ctx.runner.run("git", ["-C", ctx.checkout, "branch", "-D", residue.branch]);
+		} catch {
+			// Best effort.
+		}
+	}
+}
+
+/**
+ * Tell the caller's resource table that this start removed what it recorded.
+ *
+ * The kind comes out of the record the start wrote, never out of a second copy of
+ * the word, so a recorded row and its confirmation cannot name different kinds
+ * (pull request #213 review).
+ */
+function confirmRemoved(ctx: HandoffContext, created: CreatedHandle): void {
+	ctx.resources?.removed?.(created.kind, created.resourceId);
 }
 
 /**
@@ -1123,32 +1431,47 @@ async function localHeadBase(
 }
 
 /**
- * The worktree sequence: check the branch in the checkout, then get the
- * ticket a herdr worktree on it. A missing branch is created from the
- * worktree base (see freshWorktreeBase); an existing branch is reused (see
- * startReusedBranchHandoff), and the reuse takes no fetch. The agent starts
- * in a fresh pane, receives the prompt.
+ * The worktree Environment: the branch the naming rule gives the work, then the
+ * herdr worktree that holds it.
+ *
+ * A stored workspace of this kind is reopened on its branch without re-reading
+ * the branch or HEAD: the branch is the branch, and herdr's `worktree open` owns
+ * it. Otherwise the branch is checked in the checkout first. An existing branch
+ * follows the request's branch policy - reused, or refused - and the reuse takes
+ * no fetch. A missing branch is created from the worktree base (see
+ * freshWorktreeBase).
  */
-async function startWorktreeHandoff(
-	ticket: Ticket,
-	checkout: string,
-	agent: FactoryConfig["agents"][string],
-	args: string[],
-	prompt: HandoffPrompt,
+async function buildWorktreeEnvironment(
+	request: HandoffStartRequest,
 	ctx: HandoffContext,
-	extra: { previousTabId?: string | null } = {},
-): Promise<HandoffOutcome> {
-	const branch = branchNameFor(ticket);
+	residue: Residue,
+): Promise<EnvironmentAnswer> {
+	const branch = request.branch.name;
+	const checkout = ctx.checkout;
 	ctx.onStage?.("creating-environment");
-	const listed = await ctx.runner.run("git", ["-C", checkout, "branch", "--list", branch]);
-	if (listed.code !== 0) {
-		return failed(`cannot check branch in ${checkout}: ${commandFailureText(listed)}`, ctx);
+	if (request.workspace.kind === "stored") {
+		const listed = await readStartWorkspaces(request, ctx);
+		if (!listed.ok) return { outcome: listed.outcome };
+		if (listed.held !== null) {
+			// The stored workspace still holds: a fresh tab in it, at the
+			// workspace's own cwd.
+			return openFreshTab(listed.held, null, ctx, residue);
+		}
+		// The worktree is gone: reopen it on the branch the naming rule gives the ticket.
+		return reuseBranch(ctx, branch, residue);
 	}
-	if (listed.stdout.trim() !== "") {
-		return startReusedBranchHandoff(checkout, branch, agent, args, prompt, ctx, extra);
+	const known = await ctx.runner.run("git", ["-C", checkout, "branch", "--list", branch]);
+	if (known.code !== 0)
+		return {
+			outcome: failed(`cannot check branch in ${checkout}: ${commandFailureText(known)}`, ctx),
+		};
+	if (known.stdout.trim() !== "") {
+		if (request.branch.policy === "refuse")
+			return { outcome: failed(`Consultation branch already exists: ${branch}`, ctx) };
+		return reuseBranch(ctx, branch, residue);
 	}
 	const base = await freshWorktreeBase(checkout, ctx.runner);
-	if ("fail" in base) return failed(base.fail, ctx);
+	if ("fail" in base) return { outcome: failed(base.fail, ctx) };
 	if (base.note !== undefined) ctx.notes = { ...ctx.notes, worktreeBase: base.note };
 	const created = await createWorktree(ctx, checkout, branch, [
 		"worktree",
@@ -1161,66 +1484,23 @@ async function startWorktreeHandoff(
 		base.reference,
 		"--no-focus",
 	]);
-	if (created.code !== 0) {
-		return failedCommand(created, ctx);
-	}
-	const workspaceId = jsonResultField(created, "workspace", "workspace_id");
-	if (workspaceId === null) {
-		// The cleanup needs the workspace id, so it cannot run here. A retry
-		// reuses the branch herdr created, so it can still run; the reason
-		// points at the branch in case the leftover worktree blocks it.
-		return failed(
-			`herdr worktree create returned no workspace id; check for a leftover branch ${branch}`,
-			ctx,
-		);
-	}
-	const paneId = jsonResultField(created, "root_pane", "pane_id");
-	const tabId = jsonResultField(created, "tab", "tab_id");
-	if (paneId === null || tabId === null) {
-		await removeWorktree(checkout, branch, workspaceId, ctx);
-		return failed("herdr worktree create returned no pane id", ctx);
-	}
-	return startAgentOrCleanUp(
-		agent,
-		args,
-		prompt,
-		ctx,
-		{
-			paneId,
-			tabId,
-			workspaceId,
-			previousTabId: extra.previousTabId,
-		},
-		() => removeWorktree(checkout, branch, workspaceId, ctx),
-	);
+	return createdWorktreeAnswer(created, ctx, branch, true, residue);
 }
 
 /**
- * The reuse sequence for a branch that already exists in the checkout: the
- * ticket keeps its branch and its earlier work. `worktree open` finds the
- * worktree that holds the branch and gives it a workspace (reusing one
- * that is already open). A branch no worktree holds is checked out into a
- * fresh worktree - unless the ticket's own worktree still stands on disk,
- * left on another branch by the agent that last worked the ticket (the
- * work of a pull request lands on the branch the agent chose, not the
- * plane's): that worktree is reopened by its path, on the branch it holds,
- * and a fresh create would only collide with its directory. The agent
- * starts in a fresh pane: a fresh tab when a workspace was already open,
- * the attached workspace's first pane when herdr just opened it.
+ * The branch already stands in the checkout, so the worktree is opened on it.
  *
- * Cleanup removes only what this handoff created (the fresh tab, the
- * attached workspace, the fresh worktree). It never deletes the branch:
- * the branch pre-dates the handoff and may hold the ticket's earlier work.
+ * When no herdr workspace holds the branch, the worktree git records is reopened
+ * by path. When no worktree stands on the branch either, herdr creates one on the
+ * branch it did not make. The branch pre-dates the start either way, so the
+ * cleanup removes the checkout and never the branch.
  */
-async function startReusedBranchHandoff(
-	checkout: string,
-	branch: string,
-	agent: FactoryConfig["agents"][string],
-	args: string[],
-	prompt: HandoffPrompt,
+async function reuseBranch(
 	ctx: HandoffContext,
-	extra: { previousTabId?: string | null } = {},
-): Promise<HandoffOutcome> {
+	branch: string,
+	residue: Residue,
+): Promise<EnvironmentAnswer> {
+	const checkout = ctx.checkout;
 	const opened = await ctx.runner.run("herdr", [
 		"worktree",
 		"open",
@@ -1230,17 +1510,12 @@ async function startReusedBranchHandoff(
 		branch,
 		"--no-focus",
 	]);
-	if (opened.code === 0) {
-		return startInOpenedWorktree(opened, agent, args, prompt, ctx, extra);
-	}
-	if (herdrErrorCode(opened) !== "worktree_not_found") {
-		return failedCommand(opened, ctx);
-	}
-	// No worktree holds the branch: the agent that last worked the ticket
-	// may have left its worktree on the branch the work needed, so the
-	// branch lookup finds nothing while the worktree still stands on
-	// disk. Reopen that worktree by its path before a fresh create would
-	// collide with its directory.
+	if (opened.code === 0) return startInOpenedWorktree(opened, ctx, residue);
+	if (herdrErrorCode(opened) !== "worktree_not_found")
+		return { outcome: failedCommand(opened, ctx) };
+	// No herdr workspace holds the branch. A linked worktree git records is
+	// reopened by path: herdr's own `worktree open` refuses a path it does not
+	// know, and a branch alone does not name the directory.
 	const worktreePath = await findTicketWorktreePath(checkout, branch, ctx);
 	if (worktreePath !== null) {
 		const reopened = await ctx.runner.run("herdr", [
@@ -1252,16 +1527,10 @@ async function startReusedBranchHandoff(
 			worktreePath,
 			"--no-focus",
 		]);
-		if (reopened.code === 0) {
-			return startInOpenedWorktree(reopened, agent, args, prompt, ctx, extra);
-		}
-		// The worktree went between the list and the open: the fresh create
-		// is the answer. Any other refusal stands on its own.
-		if (herdrErrorCode(reopened) !== "worktree_not_found") {
-			return failedCommand(reopened, ctx);
-		}
+		if (reopened.code === 0) return startInOpenedWorktree(reopened, ctx, residue);
+		if (herdrErrorCode(reopened) !== "worktree_not_found")
+			return { outcome: failedCommand(reopened, ctx) };
 	}
-	// No worktree holds the branch: check it out into a fresh worktree.
 	const created = await createWorktree(ctx, checkout, branch, [
 		"worktree",
 		"create",
@@ -1271,38 +1540,56 @@ async function startReusedBranchHandoff(
 		branch,
 		"--no-focus",
 	]);
-	if (created.code !== 0) {
-		return failedCommand(created, ctx);
+	return createdWorktreeAnswer(created, ctx, branch, false, residue);
+}
+
+/**
+ * The answer a `herdr worktree create` gives: the workspace, its root pane, and
+ * the tab that holds it. `createdBranch` says whether this start made the branch,
+ * which is what the cleanup may delete.
+ */
+function createdWorktreeAnswer(
+	created: CommandResult,
+	ctx: HandoffContext,
+	branch: string,
+	createdBranch: boolean,
+	residue: Residue,
+): EnvironmentAnswer {
+	if (created.code !== 0) return { outcome: failedCommand(created, ctx) };
+	const handles = herdrHandles(created);
+	if (handles.workspaceId === null) {
+		// The cleanup needs the workspace id, so it cannot run here. The message
+		// names the residue the operator has to remove by hand: the branch this
+		// start created, or the branch the worktree was to be built on.
+		return {
+			outcome: failed(
+				`herdr worktree create returned no workspace id; check for a leftover ${createdBranch ? `branch ${branch}` : `worktree on branch ${branch}`}`,
+				ctx,
+			),
+		};
 	}
-	const workspaceId = jsonResultField(created, "workspace", "workspace_id");
-	if (workspaceId === null) {
-		// The cleanup needs the workspace id, so it cannot run here. The
-		// worktree herdr created survives and would block every retry, so
-		// the reason points at it.
-		return failed(
-			`herdr worktree create returned no workspace id; check for a leftover worktree on branch ${branch}`,
-			ctx,
-		);
-	}
-	const paneId = jsonResultField(created, "root_pane", "pane_id");
-	const tabId = jsonResultField(created, "tab", "tab_id");
-	if (paneId === null || tabId === null) {
-		await removeWorktreeCheckout(workspaceId, ctx);
-		return failed("herdr worktree create returned no pane id", ctx);
-	}
-	return startAgentOrCleanUp(
-		agent,
-		args,
-		prompt,
+	residue.workspace = recordResource(
 		ctx,
-		{
-			paneId,
-			tabId,
-			workspaceId,
-			previousTabId: extra.previousTabId,
-		},
-		() => removeWorktreeCheckout(workspaceId, ctx),
+		"workspace",
+		handles.workspaceId,
+		(labels) => labels.worktreeWorkspace,
 	);
+	residue.worktree = recordResource(
+		ctx,
+		"worktree",
+		handles.workspaceId,
+		(labels) => `${labels.worktreeCheckout} for ${branch}`,
+	);
+	if (handles.tabId !== null)
+		residue.rootTab = recordResource(ctx, "tab", handles.tabId, (labels) => labels.worktreeTab);
+	// Only a branch this start made enters the record: a branch the repository
+	// already carried pre-dates the attempt and never goes.
+	residue.branch = createdBranch ? branch : null;
+	if (handles.paneId === null || handles.tabId === null)
+		return { outcome: failed("herdr worktree create returned no pane id", ctx) };
+	return {
+		handles: { paneId: handles.paneId, tabId: handles.tabId, workspaceId: handles.workspaceId },
+	};
 }
 
 /** How many numbered `.leftover-<n>` names one leftover directory may ask for. */
@@ -1513,120 +1800,35 @@ interface TicketWorktreePaths {
 }
 
 /**
- * The agent starts in a fresh pane of the workspace `worktree open`
- * returned: a fresh tab when a workspace was already open on the
+ * The answer a `herdr worktree open` gives. The Agent starts in a fresh pane of
+ * the workspace it returned: a fresh tab when a workspace was already open on the
  * worktree, the attached workspace's first pane when herdr just opened it.
  */
 async function startInOpenedWorktree(
 	opened: CommandResult,
-	agent: FactoryConfig["agents"][string],
-	args: string[],
-	prompt: HandoffPrompt,
 	ctx: HandoffContext,
-	extra: { previousTabId?: string | null } = {},
-): Promise<HandoffOutcome> {
-	const workspaceId = jsonResultField(opened, "workspace", "workspace_id");
-	if (workspaceId === null) {
-		return failed("herdr worktree open returned no workspace id", ctx);
-	}
+	residue: Residue,
+): Promise<EnvironmentAnswer> {
+	const handles = herdrHandles(opened);
+	if (handles.workspaceId === null)
+		return { outcome: failed("herdr worktree open returned no workspace id", ctx) };
 	if (worktreeAlreadyOpen(opened)) {
 		// A workspace was already open on the worktree: add a fresh tab in it.
 		const worktreePath = jsonResultField(opened, "worktree", "path");
-		if (worktreePath === null) {
-			return failed("herdr worktree open returned no worktree path", ctx);
-		}
-		const tab = await ctx.runner.run("herdr", [
-			"tab",
-			"create",
-			"--workspace",
-			workspaceId,
-			"--cwd",
-			worktreePath,
-			"--no-focus",
-		]);
-		if (tab.code !== 0) {
-			// The workspace pre-dates the handoff: leave it, report the step.
-			return failedCommand(tab, ctx);
-		}
-		const paneId = jsonResultField(tab, "root_pane", "pane_id");
-		const tabId = jsonResultField(tab, "tab", "tab_id");
-		if (paneId === null || tabId === null) {
-			if (tabId !== null) {
-				await closeTab(tabId, ctx);
-			}
-			return failed("herdr tab create returned no pane id", ctx);
-		}
-		return startAgentOrCleanUp(
-			agent,
-			args,
-			prompt,
-			ctx,
-			{
-				paneId,
-				tabId,
-				workspaceId,
-				previousTabId: extra.previousTabId,
-			},
-			() => closeTab(tabId, ctx),
-		);
+		if (worktreePath === null)
+			return { outcome: failed("herdr worktree open returned no worktree path", ctx) };
+		return openFreshTab(handles.workspaceId, worktreePath, ctx, residue);
 	}
-	// herdr attached a fresh workspace: its first pane is fresh.
-	const paneId = jsonResultField(opened, "root_pane", "pane_id");
-	const tabId = jsonResultField(opened, "tab", "tab_id");
-	if (paneId === null || tabId === null) {
-		await closeWorkspace(workspaceId, ctx);
-		return failed("herdr worktree open returned no pane id", ctx);
+	// herdr attached a fresh workspace: its first pane is fresh, and the
+	// workspace goes into the residue record so the one cleanup rule takes it down.
+	if (handles.paneId === null || handles.tabId === null) {
+		residue.workspace = { kind: "workspace", resourceId: handles.workspaceId };
+		return { outcome: failed("herdr worktree open returned no pane id", ctx) };
 	}
-	return startAgentOrCleanUp(
-		agent,
-		args,
-		prompt,
-		ctx,
-		{
-			paneId,
-			tabId,
-			workspaceId,
-			previousTabId: extra.previousTabId,
-		},
-		() => closeWorkspace(workspaceId, ctx),
-	);
-}
-
-/**
- * Start the agent in the pane. When it never starts, run the cleanup for
- * the residue the handoff just created. A started agent is never rolled
- * back: even a failed prompt settles the ticket as handed off.
- *
- * The step before the agent starts is the pull request open of a task type
- * that opens one (ADR 0076): the environment stands, the branch is pushed,
- * the draft stands or is reused, and only then does the prompt - filled with
- * the pull request's url - go out. A handoff that fails after the open runs
- * the open's cleanup: it closes the pull request it opened and deletes the
- * remote branch it created, the residue contract of the open.
- */
-async function startAgentOrCleanUp(
-	agent: FactoryConfig["agents"][string],
-	args: string[],
-	prompt: HandoffPrompt,
-	ctx: HandoffContext,
-	handles: AgentHandles,
-	cleanup: () => Promise<void>,
-): Promise<HandoffOutcome> {
-	const pre = await promptBeforeAgent(ctx, prompt);
-	if ("fail" in pre) {
-		await pre.cleanup();
-		await cleanup();
-		return failed(pre.fail, ctx);
-	}
-	const outcome = await startAgentAndPrompt(agent, args, pre.text, ctx, handles);
-	if (outcome.status === "failed") {
-		// The agent never started: remove what the handoff created - the
-		// environment, and the residue of the pull request open when it ran -
-		// so a retry can run instead of failing on the first attempt's residue.
-		if (pre.cleanup !== null) await pre.cleanup();
-		await cleanup();
-	}
-	return outcome;
+	residue.workspace = { kind: "workspace", resourceId: handles.workspaceId };
+	return {
+		handles: { paneId: handles.paneId, tabId: handles.tabId, workspaceId: handles.workspaceId },
+	};
 }
 
 /**
@@ -1671,7 +1873,7 @@ async function runPullRequestOpen(
 	try {
 		listed = await ctx.runner.run(
 			"git",
-			["-C", plan.checkout, "ls-remote", "--heads", "origin", plan.branch],
+			["-C", ctx.checkout, "ls-remote", "--heads", "origin", plan.branch],
 			{ env: { GIT_TERMINAL_PROMPT: "0" } },
 		);
 	} catch (error) {
@@ -1690,7 +1892,7 @@ async function runPullRequestOpen(
 	const existedBefore = listed.stdout.trim() !== "";
 	const pushCleanup = existedBefore
 		? noopCleanup
-		: () => deleteRemoteBranch(ctx, plan.checkout, plan.branch);
+		: () => deleteRemoteBranch(ctx, ctx.checkout, plan.branch);
 	// A branch the remote did not carry stands at its base: the create would
 	// answer "No commits between", and no retry of the create clears it. The
 	// hold commit gives the open a commit to stand on, before the push. The
@@ -1702,7 +1904,7 @@ async function runPullRequestOpen(
 		try {
 			refs = await ctx.runner.run("git", [
 				"-C",
-				plan.checkout,
+				ctx.checkout,
 				"rev-parse",
 				plan.branch,
 				`${plan.branch}^{tree}`,
@@ -1727,7 +1929,7 @@ async function runPullRequestOpen(
 		try {
 			held = await ctx.runner.run("git", [
 				"-C",
-				plan.checkout,
+				ctx.checkout,
 				"commit-tree",
 				tree,
 				"-p",
@@ -1751,7 +1953,7 @@ async function runPullRequestOpen(
 		try {
 			moved = await ctx.runner.run("git", [
 				"-C",
-				plan.checkout,
+				ctx.checkout,
 				"update-ref",
 				`refs/heads/${plan.branch}`,
 				holdSha,
@@ -1770,7 +1972,7 @@ async function runPullRequestOpen(
 	}
 	let pushed: CommandResult;
 	try {
-		pushed = await ctx.runner.run("git", ["-C", plan.checkout, "push", "origin", plan.branch], {
+		pushed = await ctx.runner.run("git", ["-C", ctx.checkout, "push", "origin", plan.branch], {
 			env: { GIT_TERMINAL_PROMPT: "0" },
 		});
 	} catch (error) {
@@ -1857,7 +2059,7 @@ function pullRequestOpenCleanup(
 	return async () => {
 		if (opened.opened)
 			await closePullRequest(ctx.runner, plan.source, plan.ticket.repositoryRef, opened.number);
-		if (opened.createdRemoteBranch) await deleteRemoteBranch(ctx, plan.checkout, plan.branch);
+		if (opened.createdRemoteBranch) await deleteRemoteBranch(ctx, ctx.checkout, plan.branch);
 	};
 }
 
@@ -1890,33 +2092,47 @@ async function promptBeforeAgent(
 }
 
 /**
- * Remove a worktree handoff's residue: the herdr worktree workspace, and the
- * branch herdr leaves behind. Best effort: the handoff failure is the reason
- * the operator sees, and a cleanup error must not replace it.
+ * One cleanup command, and whether herdr took the resource down.
+ *
+ * A cleanup is best effort twice over: a non-zero answer means the resource
+ * stands, and so does a command that raised. The start's own failure is the
+ * reason the operator sees, so a cleanup adds no second failure beside it.
  */
-async function removeWorktree(
-	checkout: string,
-	branch: string,
-	workspaceId: string,
+async function cleanupCommand(ctx: HandoffContext, args: readonly string[]): Promise<boolean> {
+	const result = await runQuietly(ctx, args);
+	return result !== null && result.code === 0;
+}
+
+/**
+ * Run one herdr command and answer null when it raised.
+ *
+ * The cleanup path and the predecessor tab close both read a raise as "herdr did
+ * not confirm this is gone", never as a failure that escapes the start.
+ */
+async function runQuietly(
 	ctx: HandoffContext,
-): Promise<void> {
-	await removeWorktreeCheckout(workspaceId, ctx);
-	await ctx.runner.run("git", ["-C", checkout, "branch", "-D", branch]);
+	args: readonly string[],
+): Promise<CommandResult | null> {
+	try {
+		return await ctx.runner.run("herdr", args);
+	} catch {
+		return null;
+	}
 }
 
 /** Remove a herdr worktree checkout, best effort. The branch stays. */
-async function removeWorktreeCheckout(workspaceId: string, ctx: HandoffContext): Promise<void> {
-	await ctx.runner.run("herdr", ["worktree", "remove", "--workspace", workspaceId]);
+async function removeWorktreeCheckout(workspaceId: string, ctx: HandoffContext): Promise<boolean> {
+	return await cleanupCommand(ctx, ["worktree", "remove", "--workspace", workspaceId]);
 }
 
 /** Close a herdr workspace, best effort. Its worktree and branch stay. */
-async function closeWorkspace(workspaceId: string, ctx: HandoffContext): Promise<void> {
-	await ctx.runner.run("herdr", ["workspace", "close", workspaceId]);
+async function closeWorkspace(workspaceId: string, ctx: HandoffContext): Promise<boolean> {
+	return await cleanupCommand(ctx, ["workspace", "close", workspaceId]);
 }
 
 /** Close a herdr tab, best effort. */
-async function closeTab(tabId: string, ctx: HandoffContext): Promise<void> {
-	await ctx.runner.run("herdr", ["tab", "close", tabId]);
+async function closeTab(tabId: string, ctx: HandoffContext): Promise<boolean> {
+	return await cleanupCommand(ctx, ["tab", "close", tabId]);
 }
 
 /**
@@ -1937,6 +2153,7 @@ async function startAgentAndPrompt(
 	prompt: string,
 	ctx: HandoffContext,
 	handles: AgentHandles,
+	progress: StartProgress,
 ): Promise<HandoffOutcome> {
 	const attempt = await startAgentUnderAvailableName(agent, args, handles.paneId, ctx);
 	if (attempt.name === null) {
@@ -1944,7 +2161,10 @@ async function startAgentAndPrompt(
 	}
 	const name = attempt.name;
 	// The agent is running: record its handles before the next external
-	// command. From here the ticket is handed-off even if the prompt fails.
+	// command. From here the ticket is handed-off even if the prompt fails, and
+	// the Agent goes on the progress so a command that raises from here on
+	// answers as the failed prompt it is instead of rolling the Environment out
+	// from under a live Agent.
 	const sessionId =
 		jsonResultField(attempt.result, "agent", "session_id") ??
 		jsonResultField(attempt.result, "session", "session_id");
@@ -1955,25 +2175,46 @@ async function startAgentAndPrompt(
 		workspaceId: handles.workspaceId,
 		...(sessionId === null ? {} : { sessionId }),
 	};
+	progress.agent = startedAgent;
 	ctx.onAgentStarted?.(startedAgent);
 	ctx.onStage?.("sending-prompt");
-	const sent = await ctx.runner.run("herdr", ["agent", "prompt", name, prompt]);
+	const sent = await sendAgentPrompt(name, prompt, ctx);
 	const previousTabClosed = await closePreviousTab(handles.previousTabId, startedAgent.tabId, ctx);
 	const collisions = collisionsAfterPreviousTabClose(
 		attempt,
 		handles.previousTabId,
 		previousTabClosed,
 	);
-	if (sent.code !== 0) {
-		return {
-			status: "prompt-failed",
-			reason: `agent ${name} started, but the prompt failed: ${herdrFailureText(sent)}`,
-			agent: startedAgent,
-			notes: ctx.notes,
-			...collisions,
-		};
+	if ("result" in sent && sent.result.code === 0)
+		return { status: "ok", agent: startedAgent, notes: ctx.notes, ...collisions };
+	return {
+		status: "prompt-failed",
+		reason: `agent ${name} started, but the prompt failed: ${
+			"result" in sent ? herdrFailureText(sent.result) : sent.raised
+		}`,
+		agent: startedAgent,
+		notes: ctx.notes,
+		...collisions,
+	};
+}
+
+/**
+ * Send the prompt, and answer with herdr's reply or the raise's message.
+ *
+ * A raise is read as the failed prompt it is: the Agent already runs, and a
+ * started Agent is never rolled back. The message reaches the operator the way a
+ * refusal's does, so the fact the plane could not run is the fact on the record.
+ */
+async function sendAgentPrompt(
+	name: string,
+	prompt: string,
+	ctx: HandoffContext,
+): Promise<{ result: CommandResult } | { raised: string }> {
+	try {
+		return { result: await ctx.runner.run("herdr", ["agent", "prompt", name, prompt]) };
+	} catch (error) {
+		return { raised: errorMessage(error) };
 	}
-	return { status: "ok", agent: startedAgent, notes: ctx.notes, ...collisions };
 }
 
 /**
@@ -2207,8 +2448,10 @@ async function closePreviousTab(
 ): Promise<boolean> {
 	if (previousTabId === null || previousTabId === undefined || previousTabId === newTabId)
 		return false;
-	const closed = await ctx.runner.run("herdr", ["tab", "close", previousTabId]);
-	return closed.code === 0 || herdrErrorCode(closed) === "tab_not_found";
+	// The Agent is already running, so this close answers false on a refusal and
+	// on a raise alike: it never fails the handoff.
+	const closed = await runQuietly(ctx, ["tab", "close", previousTabId]);
+	return closed !== null && (closed.code === 0 || herdrErrorCode(closed) === "tab_not_found");
 }
 
 /** The predecessor close resolves only a collision whose holder was in that tab. */
@@ -2594,21 +2837,24 @@ async function renderTicketPrompt(
 }
 
 /**
- * A workspace id from a herdr `workspace list` result.
+ * One herdr `workspace list` answer, read once (issue #204).
  *
  * A list that does not parse is a failure with a reason, not "no workspace":
- * the list may already hold the wanted workspace, and acting on "none"
- * would build a duplicate environment.
+ * the list may already hold the wanted workspace, and acting on "none" would
+ * build a duplicate environment or break the one-workspace-per-repository rule.
  */
-type WorkspaceLookup =
-	| { status: "found"; id: string }
-	| { status: "none" }
+type WorkspaceList =
+	| { status: "read"; workspaces: readonly HerdrWorkspace[] }
 	| { status: "unreadable"; reason: string };
 
-async function findWorkspaceIn(
-	listed: CommandResult,
-	workspaceId: string,
-): Promise<WorkspaceLookup> {
+/** One workspace a herdr `workspace list` answer names. */
+interface HerdrWorkspace {
+	workspaceId: string;
+	/** The checkout path herdr records for the workspace's worktree, when it names one. */
+	checkoutPath: string | null;
+}
+
+function readWorkspaceList(listed: CommandResult): WorkspaceList {
 	let data: unknown;
 	try {
 		data = JSON.parse(listed.stdout);
@@ -2618,58 +2864,43 @@ async function findWorkspaceIn(
 			reason: "herdr workspace list did not return a readable workspace list",
 		};
 	}
-	const result = data as {
-		result?: {
-			workspaces?: Array<{ worktree?: { checkout_path?: string }; workspace_id: string }>;
-		};
-	};
-	const workspaces = result.result?.workspaces ?? [];
-	if (workspaces.some((workspace) => workspace.workspace_id === workspaceId)) {
-		return { status: "found", id: workspaceId };
+	const workspaces = (data as { result?: { workspaces?: unknown } }).result?.workspaces;
+	const read: HerdrWorkspace[] = [];
+	for (const workspace of Array.isArray(workspaces) ? workspaces : []) {
+		const item = workspace as { workspace_id?: unknown; worktree?: { checkout_path?: unknown } };
+		if (typeof item.workspace_id !== "string" || item.workspace_id === "") continue;
+		read.push({
+			workspaceId: item.workspace_id,
+			checkoutPath:
+				typeof item.worktree?.checkout_path === "string" ? item.worktree.checkout_path : null,
+		});
 	}
-	return { status: "none" };
+	return { status: "read", workspaces: read };
+}
+
+/** Whether a read list still holds one workspace id. */
+function workspaceHeld(workspaces: readonly HerdrWorkspace[], workspaceId: string): boolean {
+	return workspaces.some((workspace) => workspace.workspaceId === workspaceId);
 }
 
 /**
- * The workspace whose repository matches the checkout, from a herdr
- * `workspace list` result.
+ * The workspace whose repository matches the checkout, from one read list.
  *
- * A match is the recorded checkout path, compared raw and then through
- * realpath, so a symlinked checkout still matches the workspace herdr
- * already holds for it.
- *
- * A list that does not parse is a failure with a reason, not "no
- * workspace": the list may already hold the checkout's workspace, and a
- * second `workspace create` would break the one-workspace-per-repository
- * rule.
+ * A match is the recorded checkout path, compared raw and then through realpath,
+ * so a symlinked checkout still matches the workspace herdr already holds for it.
  */
-async function findWorkspaceAt(listed: CommandResult, checkout: string): Promise<WorkspaceLookup> {
-	let data: unknown;
-	try {
-		data = JSON.parse(listed.stdout);
-	} catch {
-		return {
-			status: "unreadable",
-			reason: "herdr workspace list did not return a readable workspace list",
-		};
-	}
-	const result = data as {
-		result?: {
-			workspaces?: Array<{ worktree?: { checkout_path?: string }; workspace_id: string }>;
-		};
-	};
-	const workspaces = result.result?.workspaces ?? [];
+async function workspaceAtCheckout(
+	workspaces: readonly HerdrWorkspace[],
+	checkout: string,
+): Promise<string | null> {
 	const checkoutReal = await realPathOf(checkout);
 	for (const workspace of workspaces) {
-		const recorded = workspace.worktree?.checkout_path;
-		if (recorded === undefined) {
-			continue;
-		}
-		if (recorded === checkout || (await realPathOf(recorded)) === checkoutReal) {
-			return { status: "found", id: workspace.workspace_id };
-		}
+		const recorded = workspace.checkoutPath;
+		if (recorded === null) continue;
+		if (recorded === checkout || (await realPathOf(recorded)) === checkoutReal)
+			return workspace.workspaceId;
 	}
-	return { status: "none" };
+	return null;
 }
 
 /**
@@ -2716,4 +2947,21 @@ function jsonResultField(result: CommandResult, field: string, key: string): str
 		key
 	];
 	return typeof value === "string" && value !== "" ? value : null;
+}
+
+/**
+ * The handles one herdr create answer names (issue #204): the workspace it made
+ * or opened, the root pane of that workspace, and the tab that holds it. One
+ * reader serves every start site, so a start cannot read one answer three ways.
+ */
+function herdrHandles(result: CommandResult): {
+	workspaceId: string | null;
+	paneId: string | null;
+	tabId: string | null;
+} {
+	return {
+		workspaceId: jsonResultField(result, "workspace", "workspace_id"),
+		paneId: jsonResultField(result, "root_pane", "pane_id"),
+		tabId: jsonResultField(result, "tab", "tab_id"),
+	};
 }

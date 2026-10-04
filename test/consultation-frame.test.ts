@@ -58,6 +58,7 @@ import {
 	withApp,
 } from "./app-harness.ts";
 import { BASE_CONFIG } from "./base-config.ts";
+import { expectNoCommand } from "./command-assertions.ts";
 import {
 	FakeRunner,
 	herdrFocusCommands,
@@ -572,13 +573,6 @@ describe("Consultation launch and monitoring through the UI", () => {
 						],
 						"the launch command sequence",
 					);
-					const commands = runner.commands();
-					const worktreeAt = commands.findIndex((c) => c.includes("worktree create"));
-					const startAt = commands.findIndex((c) => c.includes("agent start"));
-					const promptAt = commands.findIndex((c) => c.includes("agent prompt"));
-					expect(worktreeAt).toBeGreaterThan(-1);
-					expect(startAt).toBeGreaterThan(worktreeAt);
-					expect(promptAt).toBeGreaterThan(startAt);
 					await awaitFrame(setup, (f) => f.includes("Agent: auth review"), "the live Agent output");
 					const started = state.consultationRecord.consultations("open");
 					expect(started).toHaveLength(1);
@@ -1995,17 +1989,6 @@ describe("Consultation live-worktree launch through the UI", () => {
 						],
 						"the live launch sequence",
 					);
-					const commands = runner.commands();
-					const listAt = commands.indexOf("herdr workspace list");
-					const tabAt = commands.findIndex((c) => c.startsWith("herdr tab create"));
-					const startAt = commands.findIndex((c) => c.startsWith("herdr agent start"));
-					const promptAt = commands.findIndex((c) => c.startsWith("herdr agent prompt"));
-					expect(listAt).toBeGreaterThan(-1);
-					expect(tabAt).toBeGreaterThan(listAt);
-					expect(startAt).toBeGreaterThan(tabAt);
-					expect(promptAt).toBeGreaterThan(startAt);
-					// The existing workspace is reused, never recreated.
-					expect(commands.join("\n")).not.toContain("workspace create");
 					const [consultation] = state.consultationRecord.consultations("open");
 					expect(consultation.state).toBe("working");
 					expect(consultation.paneId).toBe("pane-c1");
@@ -2100,18 +2083,6 @@ describe("Consultation live-worktree launch through the UI", () => {
 					);
 					await launchConsultationDraft(setup, "review auth");
 					await awaitFrame(setup, (f) => f.includes("State: working"), "the working state");
-					const commands = runner.commands();
-					const listAt = commands.indexOf("herdr workspace list");
-					const createAt = commands.findIndex((c) => c.startsWith("herdr workspace create"));
-					const startAt = commands.findIndex((c) => c.startsWith("herdr agent start"));
-					const promptAt = commands.findIndex((c) => c.startsWith("herdr agent prompt"));
-					expect(listAt).toBeGreaterThan(-1);
-					expect(createAt).toBeGreaterThan(listAt);
-					expect(startAt).toBeGreaterThan(createAt);
-					expect(promptAt).toBeGreaterThan(startAt);
-					expect(commands).toContain(`herdr workspace create --cwd ${checkout} --no-focus`);
-					// No empty tab: the Agent takes the workspace root pane.
-					expect(commands.join("\n")).not.toContain("tab create");
 					const [consultation] = state.consultationRecord.consultations("open");
 					expect(consultation.state).toBe("working");
 					expect(consultation.paneId).toBe("pane-c1");
@@ -3300,8 +3271,8 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 						expect.objectContaining({ kind: "consultation", consultationId: queued.id }),
 					);
 					// The enqueue ran no external step: it is not a start.
-					expect(runner.commands()).not.toContain(expect.stringContaining("worktree create"));
-					expect(runner.commands()).not.toContain(expect.stringContaining("agent start"));
+					expectNoCommand(runner.commands(), "worktree create");
+					expectNoCommand(runner.commands(), "agent start");
 				},
 				WIDTH,
 				32,
@@ -3458,8 +3429,8 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 					expect(state.workQueue.items()).toEqual([
 						expect.objectContaining({ kind: "consultation", consultationId: queued.id }),
 					]);
-					expect(runner.commands()).not.toContain(expect.stringContaining("worktree create"));
-					expect(runner.commands()).not.toContain(expect.stringContaining("agent start"));
+					expectNoCommand(runner.commands(), "worktree create");
+					expectNoCommand(runner.commands(), "agent start");
 				},
 				WIDTH,
 				32,
@@ -3517,8 +3488,8 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 					);
 					expect(state.consultationRecord.consultation(queued.id)?.state).toBe("closed");
 					expect(state.workQueue.items()).toHaveLength(0);
-					expect(runner.commands()).not.toContain(expect.stringContaining("pane close"));
-					expect(runner.commands()).not.toContain(expect.stringContaining("workspace close"));
+					expectNoCommand(runner.commands(), "pane close");
+					expectNoCommand(runner.commands(), "workspace close");
 				},
 				WIDTH,
 				32,

@@ -1642,7 +1642,12 @@ export function App({
 			return next;
 		});
 		setWorkingMessage(`handing off "${ticket.title}"...`, "handoff");
-		void handOffTicket(ticket, choice, { config, runner: commandRunner, home: homeDir })
+		void handOffTicket(ticket, choice, {
+			config,
+			runner: commandRunner,
+			home: homeDir,
+			claim: "open",
+		})
 			.then(async (outcome) => {
 				setStartingTickets((current) => {
 					if (!current.has(ticket.identity)) return current;

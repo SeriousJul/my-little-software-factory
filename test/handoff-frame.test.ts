@@ -47,6 +47,7 @@ import {
 	withApp,
 } from "./app-harness.ts";
 import { BASE_CONFIG } from "./base-config.ts";
+import { expectNoCommand } from "./command-assertions.ts";
 import {
 	FakeRunner,
 	tabCreateJson,
@@ -498,7 +499,7 @@ describe("the Enter handoff", () => {
 				expect(selectedRow(frame)).toContain("[open]");
 				// ...and no second workspace is created for the checkout:
 				// unreadable is not "no workspace".
-				expect(runner.commands()).not.toContain(expect.stringContaining("workspace create"));
+				expectNoCommand(runner.commands(), "workspace create");
 			},
 			WIDTH,
 			HEIGHT,

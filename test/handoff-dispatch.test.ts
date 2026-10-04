@@ -35,6 +35,7 @@ import type { HandoffOrigin } from "../src/state/handoff.ts";
 import { workQueueIdentityOf } from "../src/state/work-queue.ts";
 import type { FactoryState } from "../src/state.ts";
 import { BASE_CONFIG } from "./base-config.ts";
+import { expectNoCommand } from "./command-assertions.ts";
 import {
 	FakeRunner,
 	herdrFocusCommands,
@@ -1092,14 +1093,14 @@ describe("the claim, the settle, and every origin", () => {
 		expect(rigRef.dispatch.handoffActive()).toBe(false);
 	});
 
-	test("handoff work that throws settles as failed and gives the seat back", async () => {
+	test("handoff work that raises settles as failed and gives the seat back", async () => {
 		const rigRef = rig([FIRST, SECOND]);
-		// The throw is outside every outcome herdr can write: the prompt call
+		// The raise is outside every outcome herdr can write: the Agent start call
 		// itself breaks on the way to the pane.
 		let broken = false;
 		const throwing: CommandRunner = {
 			run: (command, args, options) => {
-				if (command === "herdr" && args[0] === "agent" && args[1] === "prompt" && !broken) {
+				if (command === "herdr" && args[0] === "agent" && args[1] === "start" && !broken) {
 					broken = true;
 					return Promise.reject(new Error("the pipe broke"));
 				}
@@ -1117,21 +1118,59 @@ describe("the claim, the settle, and every origin", () => {
 		await expect(start(rigRef, SECOND, "open")).resolves.toEqual({ ok: true });
 		expect(await rigRef.waitForStarted(FIRST.identity)).toEqual({
 			ok: false,
-			reason: "the pipe broke",
+			reason: "the handoff could not run a command: the pipe broke",
 		});
-		expect(started).toEqual([{ ok: false, reason: "the pipe broke" }]);
+		expect(started).toEqual([
+			{ ok: false, reason: "the handoff could not run a command: the pipe broke" },
+		]);
 		// The failure ends the handoff's own progress line and states its reason,
-		// and the refresh of the projection it changed comes first.
-		const failedAt = rigRef.events.indexOf("error:handoff failed: the pipe broke");
+		// and the refresh of the projection it changed comes first. A raise the
+		// start answered reads on the Message line like any other start failure.
+		const failedAt = rigRef.events.indexOf(
+			"error:the handoff could not run a command: the pipe broke",
+		);
 		expect(failedAt).toBeGreaterThan(0);
 		expect(rigRef.events.slice(0, failedAt)).toContain("refresh");
 		expect(rigRef.events.slice(0, failedAt)).toContain("clear-working");
 		// The ticket stays where the claim left it: nothing started.
 		expect(rigRef.state.ticketWorkCycle.ticketState(FIRST.identity)).toBe("open");
-		// And the handoff behind it ran: a throw cannot deadlock the seat.
+		// And the raise left no Environment behind it: the start's own cleanup ran
+		// the way it runs for a refusal herdr wrote.
+		expect(rigRef.commands()).toContain(`herdr workspace close ${FIRST.workspaceId}`);
+		// And the handoff behind it ran: a raise cannot deadlock the seat.
 		await rigRef.waitForStarted(SECOND.identity);
 		// The queued handoff settles the second claim before its final drain
 		// releases the seat. Wait for that drain before reading the seat.
+		await seatReleased();
+		expect(rigRef.dispatch.handoffActive()).toBe(false);
+	});
+
+	test("a raise at the prompt settles the ticket handed off, not as a start that never ran", async () => {
+		const rigRef = rig([FIRST]);
+		// The Agent is already in its pane when the prompt call breaks. A started
+		// Agent is never rolled back, so the raise is the prompt that never landed.
+		let broken = false;
+		const throwing: CommandRunner = {
+			run: (command, args, options) => {
+				if (command === "herdr" && args[0] === "agent" && args[1] === "prompt" && !broken) {
+					broken = true;
+					return Promise.reject(new Error("the pipe broke"));
+				}
+				return rigRef.runner.run(command, args, options);
+			},
+			listModels: (kind) => rigRef.runner.listModels(kind),
+		};
+		rigRef.dispatch = withRunner(rigRef, throwing);
+		await expect(start(rigRef, FIRST, "open")).resolves.toEqual({ ok: true });
+		expect(await rigRef.waitForStarted(FIRST.identity)).toEqual({ ok: true });
+		expect(rigRef.state.ticketWorkCycle.ticketState(FIRST.identity)).toBe("handed-off");
+		expect(rigRef.events).toContain(
+			"error:agent add-a-webhook-retry-policy started, but the prompt failed: the pipe broke",
+		);
+		// The running Agent's Environment stands: the failure cleanup ran neither
+		// the workspace close nor the tab close.
+		expectNoCommand(rigRef.commands(), "workspace close");
+		expectNoCommand(rigRef.commands(), "tab close");
 		await seatReleased();
 		expect(rigRef.dispatch.handoffActive()).toBe(false);
 	});
@@ -3659,7 +3698,7 @@ describe("the decision screen's route close", () => {
 		expect(pathOpenAt).toBeLessThan(
 			commands.indexOf(`herdr agent start ${FIRST.name} --kind pi --pane pane-route`),
 		);
-		expect(commands).not.toContain(expect.stringContaining("worktree create"));
+		expectNoCommand(commands, "worktree create");
 	});
 });
 
