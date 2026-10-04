@@ -1260,3 +1260,56 @@ of screen-reader support is made here or anywhere else in this record. The
 terminal walks in Ghostty and foot have not been re-run for this change, nor on
 the theme-inherited paint, so they stand as not re-verified for it. Inherited
 herdr theme pairs are not contrast-checked.
+
+## The Draft field keeps the text its operator wrote (the CI frame flake)
+
+`checks` failed on `main` and on the fix branch's first run with one shape: a
+frame wait timed out near 20 s, and the last frame showed the Response draft
+empty with `Unavailable: Send response: response cannot be empty` beside it.
+Three of the five recent `main` CI failures had that shape, in two tests.
+
+A trace run named the cause. The Response screen stores every draft change and
+paints that draft back at the Draft field. A render can commit after the
+operator has typed past the value it carries, and the field's restore write puts
+the older text into the field over the operator's keys. That write reports its
+own text, the screen stores it, and the two fight: one traced run showed the
+field's text alternating between `then ship it` and `""` 11 304 times.
+
+The Draft field now takes its caller's draft only until its own keys have
+written the field, and the Response editor judges the Send on the text its field
+holds rather than on the text its last render painted.
+
+What was measured:
+
+- The shared-field test `keeps the text its operator wrote when its caller paints
+  an older draft` fails on the code before this change and passes after it.
+- The frame test that flaked in CI ran 25 times with `CI=1` after the editor
+  change: 0 fails. It failed 1 time in 20 before the change.
+- Both previously flaky frame tests ran 15 times each under load (`taskset` to
+  two cores with the full suite running beside them): 0 fails.
+- One full `bun run test` gated the push with another suite running on the
+  machine (load average 6.7): green at 2814 tests over 129 files, 15701
+  assertions, 0 fail, no skips. `bun run lint` and `bun run typecheck` ran clean.
+- CI ran 7 times on the branch (1 push run plus 6 reruns): all green. The base
+  rate before this work was 5 failures in the 29 most recent CI runs.
+- The trace that named the loop ran on a throwaway probe branch, closed without
+  merging.
+
+What this work leaves open, stated plainly:
+
+- The other CI failure shape, `timed out waiting for the detail to resume at its
+  scrolled position` in `test/main-view-frame.test.ts`, never reproduced
+  locally: 25 solo runs, 8 full-file runs, 6 runs under load, and the 7 CI runs
+  above all passed it. This change does not touch the Ticket detail's scroll
+  restore, so that failure stands as not fixed.
+- The harness's frame deadline is 20 s on CI against a runner about twice as
+  slow as this machine (about 85 s for the suite against about 38 s). A slow
+  host can still spend that whole wait on one effect. That is a harness cost,
+  not a correctness fact, and it is not changed here.
+- A key typed in the window between a surface opening and that surface holding
+  the keys is still dropped. The harness documents this window and its tests
+  wait for it; a burst test that raced it was removed rather than left to flake.
+
+What was not measured: no screen reader has read this application, and no claim
+of screen-reader support is made here. No theme or color behavior is involved in
+this change.

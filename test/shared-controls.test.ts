@@ -3,6 +3,7 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import { createElement } from "@opentui/react";
 import { testRender } from "@opentui/react/test-utils";
+import { act, type ReactElement, type RefObject, useEffect, useState } from "react";
 
 import { ChoiceRow } from "../src/components/shared/choices.ts";
 import {
@@ -46,6 +47,57 @@ async function withField(
 	await setup.flush();
 	renderer = setup.renderer;
 	await body(setup);
+}
+
+/** The paint a test uses to be the caller that hands a Draft field a draft. */
+let paintDraft: ((value: string) => void) | null = null;
+
+/**
+ * The caller side of a Draft field: the draft a screen stores, and the paint it
+ * gives back to the field.
+ *
+ * A screen that stores what its field reports paints that text at the field on
+ * its next render, and a render can land after the operator has typed past it.
+ * `paintDraft` is how a test plays that late render.
+ */
+function DraftHost(props: {
+	initial: string;
+	fieldRef: RefObject<FieldHandle | null>;
+}): ReactElement {
+	const [draft, setDraft] = useState(props.initial);
+	useEffect(() => {
+		paintDraft = setDraft;
+		return () => {
+			paintDraft = null;
+		};
+	}, []);
+	return createElement(
+		"box",
+		{ style: { flexDirection: "column" } },
+		createElement(DraftField, {
+			label: "Response draft",
+			value: draft,
+			focused: true,
+			width: 32,
+			height: 4,
+			fieldRef: props.fieldRef,
+		}),
+	);
+}
+
+/** Mount one Draft field over its caller, and hand the test both handles. */
+async function withDraftHost(initial: string): Promise<{
+	setup: Awaited<ReturnType<typeof testRender>>;
+	field: RefObject<FieldHandle | null>;
+}> {
+	const field: RefObject<FieldHandle | null> = { current: null };
+	const setup = await testRender(createElement(DraftHost, { initial, fieldRef: field }), {
+		width: 40,
+		height: 10,
+	});
+	await setup.flush();
+	renderer = setup.renderer;
+	return { setup, field };
 }
 
 describe("the shared Draft field", () => {
@@ -195,6 +247,33 @@ describe("the shared Draft field", () => {
 					"the typed character to replace the selection",
 				);
 			},
+		);
+	});
+
+	test("keeps the text its operator wrote when its caller paints an older draft", async () => {
+		const { setup, field } = await withDraftHost("the stored draft");
+		await setup.mockInput.typeText(" then ship it");
+		await awaitFrame(
+			setup,
+			() => field.current?.value() === "the stored draft then ship it",
+			"the operator's text in the field",
+		);
+		// The caller's late render: the draft the screen stored before the operator's
+		// own keys reached it. Writing it into the field would delete the reply the
+		// operator just typed.
+		act(() => paintDraft?.("an older stored draft"));
+		await sleep(150);
+		expect(field.current?.value()).toBe("the stored draft then ship it");
+		expect(frameText(setup.captureCharFrame())).not.toContain("an older stored draft");
+	});
+
+	test("takes the draft its caller paints at it while the operator has written nothing", async () => {
+		const { setup, field } = await withDraftHost("");
+		act(() => paintDraft?.("a draft the screen restored"));
+		await awaitFrame(
+			setup,
+			() => field.current?.value() === "a draft the screen restored",
+			"the restored draft in the field",
 		);
 	});
 });
