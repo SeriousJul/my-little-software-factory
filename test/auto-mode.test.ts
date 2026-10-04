@@ -3730,10 +3730,18 @@ describe("the auto decision", () => {
 					tickets: [fetched(5, "Persist source facts", ["ready-for-review"])],
 				});
 				// No operator key: the loop routed the settled turn, and the
-				// trace carries the automatic decision.
+				// trace carries the automatic decision. The predicate waits for
+				// the facts the reads below take: the frame, the ticket's place
+				// in the work queue, and the close of the settled agent's tab.
+				// Under the parallel CI load the frame can land first.
 				const frame = await awaitFrame(
 					setup,
-					(f) => f.includes("auto-handed-off"),
+					(f) =>
+						f.includes("auto-handed-off") &&
+						["handed-off", "running"].includes(
+							app.state.ticketWorkCycle.ticketState(identity) ?? "",
+						) &&
+						app.runner.commands().includes("herdr tab close tab-1"),
 					"the automatic route",
 				);
 				expect(app.state.ticketWorkCycle.lastCompletion(identity)?.decision).toBe(
