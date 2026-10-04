@@ -282,8 +282,10 @@ export interface HandoffDispatchOptions extends HandoffDispatchReports {
 	/** Persist a repository mapping discovered during handoff, if one is found. */
 	persistMapping?: (mapping: RepositoryMapping) => Promise<string | undefined>;
 	/**
-	 * The plane's file logger. The dispatch leaves the record's handoff lines:
-	 * a start, a queue, and a refusal with its reason.
+	 * The plane's file logger. The dispatch leaves the record's start lines and
+	 * queue lines, for a Handoff and for a Plane action alike: a start with its
+	 * start mode, its origin, and its seat reading, a queue, and a refusal with
+	 * its reason.
 	 */
 	log?: Logger;
 }
@@ -547,8 +549,10 @@ class HandoffDispatchModule implements HandoffDispatch {
 		}
 		// An immediate pickup pass follows every enqueue (ADR 0049): the ask
 		// takes a free seat now, or waits in the queue for one. The pass runs on
-		// behind the answer, the way every other pickup does.
-		void this.pickupWorkQueue();
+		// behind the answer, the way every other pickup does. The pass names the
+		// item the operator's own ask enqueued, so that item's start line reads
+		// `direct-ask` and not the `pickup` a later cycle writes (issue #209).
+		void this.runPickupPass(directAskOf(intent, intent.ticketIdentity));
 		return Promise.resolve({ ok: true });
 	}
 
@@ -630,8 +634,10 @@ class HandoffDispatchModule implements HandoffDispatch {
 		}
 		// The item takes no seat, so the pickup's walk runs it when it
 		// reaches it, whatever the limit reads (ADR 0068); the pass runs on
-		// behind the answer, the way every other pickup does.
-		void this.pickupWorkQueue();
+		// behind the answer, the way every other pickup does. The pass names the
+		// item the operator's own ask enqueued, the way the handoff's does
+		// (issue #209).
+		void this.runPickupPass(directAskOf(intent, intent.ticketIdentity));
 		return Promise.resolve({ ok: true });
 	}
 
@@ -700,6 +706,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 	private async pickupPlaneActionItem(
 		item: WorkQueuePlaneActionItem,
 		overCap: boolean,
+		mode: StartMode,
 	): Promise<void> {
 		// The claim: the row leaves the queue before the run starts, the way
 		// the handoff pickup's seat claim takes the start. A row another walk
@@ -769,6 +776,13 @@ class HandoffDispatchModule implements HandoffDispatch {
 		// still stands: the merged ticket's retirement leaves it from the
 		// projection before the line lands (ADR 0068).
 		const name = this.ticketName(item.ticketIdentity);
+		// The merge's start line, the way a handoff's start is reported (issue
+		// #209): the mode that ran it, the item's origin, and the seat reading.
+		// The action takes no seat, so its reading is the count the plane stood
+		// on at the start, never a count the merge raised.
+		this.log?.info(
+			`merge started: ${name} (mode ${mode}, origin ${item.origin}, ${this.seatReading()})`,
+		);
 		// The Starting window the row's spinner face reads (ADR 0030, beside
 		// ADR 0068): the merge wears the same face the start wears while its
 		// command runs, so the operator sees the plane at work.
@@ -910,6 +924,11 @@ class HandoffDispatchModule implements HandoffDispatch {
 		return { ok: true };
 	}
 
+	/** The Work queue's pickup, the seam every caller crosses (ADR 0049). */
+	async pickupWorkQueue(): Promise<number> {
+		return this.runPickupPass();
+	}
+
 	/**
 	 * Start the queue's items for the free seats, in queue order (ADR 0034,
 	 * ADR 0049).
@@ -927,8 +946,15 @@ class HandoffDispatchModule implements HandoffDispatch {
 	 * An unlimited cap holds a free seat for every waiting start, so it picks
 	 * up the whole queue: an operator who lifts the cap while items wait frees
 	 * them all in the same cycle.
+	 *
+	 * `directAskIdentity` is the ticket the operator's own ask just enqueued,
+	 * and only the immediate pass that ask ran carries it (issue #209). A start
+	 * of that row by that pass is the ask taking a free seat at once; the same
+	 * row started by a later pass - the observation cycle's pickup, or the pass
+	 * a settling run frees the seat for - is a pickup. The mode is what the
+	 * start line states, so it names the path that actually took the seat.
 	 */
-	async pickupWorkQueue(): Promise<number> {
+	private async runPickupPass(directAskIdentity?: string): Promise<number> {
 		// The queue pause (ADR 0052): the brake holds the drain. The items keep
 		// their places, the force-dispatch passes it, and the resume starts the
 		// pickup that takes them.
@@ -959,7 +985,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 				// the cap bounds (ADR 0068) - and a cap that breaks the walk at a
 				// held seats-bound item holds it, the way it holds every item
 				// behind.
-				await this.pickupPlaneActionItem(item, false);
+				await this.pickupPlaneActionItem(item, false, startModeOf(item, directAskIdentity));
 				continue;
 			}
 			// In-flight items skip without taking a free seat, so the walk reaches
@@ -976,7 +1002,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 				if (await this.pickupConsultationItem(item, false)) claimed += 1;
 				continue;
 			}
-			if (this.pickupItem(item)) claimed += 1;
+			if (this.pickupItem(item, startModeOf(item, directAskIdentity))) claimed += 1;
 		}
 		if (claimed > 0) this.reports.refresh();
 		return claimed;
@@ -1168,7 +1194,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 	 * `cancelled` says the item already left through the restart-or-route race
 	 * check, with that check's own line.
 	 */
-	private claimQueueItem(item: WorkQueueHandoffItem): QueueItemClaimResult {
+	private claimQueueItem(item: WorkQueueHandoffItem, mode: StartMode): QueueItemClaimResult {
 		// A restart or a route whose ticket already wears a handoff newer than
 		// the item's enqueue: the seat the operator asked for was taken by a
 		// start the operator did not ask for - the automatic restart, or the
@@ -1239,6 +1265,10 @@ class HandoffDispatchModule implements HandoffDispatch {
 				return { ok: "cancelled" };
 			}
 		}
+		// The seat reading the start line states, taken before the claim: the
+		// count the Parallel limit gate stood on, not a count this start's own
+		// claim raised (issue #209).
+		const seats = this.seatReading();
 		const claim = this.state.handoff.claimHandoff(item.ticketIdentity, item.choice, item.origin);
 		if (!claim.ok) {
 			this.log?.warn(`handoff refused: ${claim.reason} (${this.ticketName(item.ticketIdentity)})`);
@@ -1247,8 +1277,15 @@ class HandoffDispatchModule implements HandoffDispatch {
 		// A claim is a claim: the picked-up start enters the Starting window
 		// exactly as the direct start above does, so the two claim paths report
 		// the same fact and the row's spinner face does not wait for a seat.
+		// The start line names the path that took the seat, the item's origin,
+		// and the seat reading (issue #209): the count before this start claimed
+		// its seat, beside the limit it was measured against. The pickup starts
+		// only into a free seat, so its reading always sits under the limit; a
+		// reading that already stands at the limit is the force-dispatch that
+		// crossed it (ADR 0092).
 		this.log?.info(
-			`handoff started: ${this.ticketName(item.ticketIdentity)} (origin ${item.origin})`,
+			`handoff started: ${this.ticketName(item.ticketIdentity)} ` +
+				`(mode ${mode}, origin ${item.origin}, ${seats})`,
 		);
 		this.reports.starting(item.ticketIdentity, true);
 		const ticket = this.state.ticketWorkCycle
@@ -1285,12 +1322,12 @@ class HandoffDispatchModule implements HandoffDispatch {
 	 * this call: every pickup ends in start or drop (ADR 0049), so a refused
 	 * claim drops the item with its warning, and a failed start does the same.
 	 */
-	private pickupItem(item: WorkQueueHandoffItem): boolean {
+	private pickupItem(item: WorkQueueHandoffItem, mode: StartMode): boolean {
 		// A run already in flight for this ticket settles its own item when it
 		// ends; the pickup skips it so a concurrent pass cannot re-claim and
 		// drop the start the run holds (ADR 0049).
 		if (this.state.handoff.handoffInFlight(item.ticketIdentity)) return false;
-		const claimed = this.claimQueueItem(item);
+		const claimed = this.claimQueueItem(item, mode);
 		if (claimed.ok === "cancelled") return false;
 		if (claimed.ok === false) {
 			this.dropPickup(item, claimed.reason);
@@ -1388,14 +1425,14 @@ class HandoffDispatchModule implements HandoffDispatch {
 			// names the cap when it stood over it at the key.
 			const limit = this.config().maxParallelAgents;
 			const overCap = overParallelLimit(limit, this.seatCount());
-			void this.pickupPlaneActionItem(item, overCap);
+			void this.pickupPlaneActionItem(item, overCap, "force-dispatch");
 			return;
 		}
 		// Measured before the claim, on the shared count: the line states the
 		// start over the cap only when the cap was full at the dispatch.
 		const limit = this.config().maxParallelAgents;
 		const overCap = overParallelLimit(limit, this.seatCount());
-		const claimed = this.claimQueueItem(item);
+		const claimed = this.claimQueueItem(item, "force-dispatch");
 		if (claimed.ok === "cancelled") return;
 		if (claimed.ok === false) {
 			// The claim refused the start: the ticket no longer holds the state
@@ -1464,6 +1501,17 @@ class HandoffDispatchModule implements HandoffDispatch {
 			.projectedTickets(this.config().workflowStates, this.config().defaultTaskType)
 			.find((candidate) => candidate.identity === identity)?.title;
 		return title === undefined ? `ticket ${identity}` : `"${title}"`;
+	}
+
+	/**
+	 * The seat reading a start line states (issue #209): the held seats of the
+	 * shared Parallel limit count, beside the limit they are measured against.
+	 * An unlimited cap states no limit, the way the mode line states none.
+	 */
+	private seatReading(): string {
+		const limit = this.config().maxParallelAgents;
+		const held = this.seatCount();
+		return limit === 0 ? `seats ${held}` : `seats ${held}/${limit}`;
 	}
 
 	closeCleanup(
@@ -1992,6 +2040,45 @@ type QueueItemClaimResult =
 	  }
 	| { ok: false; reason: string }
 	| { ok: "cancelled" };
+
+/**
+ * The start mode: how a start reached its claim (issue #209, CONTEXT.md).
+ *
+ * The mode is not the origin. The origin says where the ask came from (`open`,
+ * `workflow`, `restart`); the mode says which path took the seat: the Work
+ * queue's Pickup for a free seat, the operator's Force-dispatch over the
+ * Parallel limit, or the immediate pass the operator's own ask ran for the item
+ * it had just enqueued. Each value is one token, so the start line's `mode`
+ * field reads as one word for a tool that parses it.
+ *
+ * A Consultation's start is the Consultation operations' fact, not this
+ * module's, so no line here names it.
+ */
+type StartMode = "pickup" | "force-dispatch" | "direct-ask";
+
+/**
+ * The ticket an ask makes its own direct ask (issue #209): the identity the
+ * operator asked for by hand, and no identity for the ask the factory made
+ * itself (the intent's `automatic` mark, ADR 0051).
+ */
+function directAskOf(
+	intent: HandoffIntent | PlaneActionIntent,
+	ticketIdentity: string,
+): string | undefined {
+	return intent.automatic === true ? undefined : ticketIdentity;
+}
+
+/**
+ * The mode a pickup pass starts one item as (issue #209): the operator's direct
+ * ask for the row their own ask enqueued, the Pickup for every other row the
+ * same pass takes.
+ */
+function startModeOf(
+	item: { ticketIdentity: string },
+	directAskIdentity: string | undefined,
+): StartMode {
+	return directAskIdentity === item.ticketIdentity ? "direct-ask" : "pickup";
+}
 
 /** A queued handoff may start only from the state its origin claims. */
 function handoffAllowsState(origin: HandoffOrigin, state: TicketState): boolean {

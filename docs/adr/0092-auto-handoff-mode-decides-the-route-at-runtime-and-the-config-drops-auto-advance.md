@@ -97,11 +97,32 @@ routing line over it. `park` keeps no line of its own because its reader is the 
 itself: the Operator-decides type is the operator's own brake, and its awaiting row
 says the turn awaits them.
 
-**A start line names how it started.** The dispatch's start line carries the dispatch
-mode, the item's origin, and the seat count against the Parallel limit at the moment of
-the start. Today the line names only the origin, so a force-dispatch over the cap, a
-pickup start, and a top-up route read the same, and a reviewer cannot tell a cap breach
-from an operator's hand.
+**A start line names how it started.** The dispatch's start line carries the start
+mode, the item's origin, and the seat reading: `handoff started: <name> (mode <mode>,
+origin <origin>, seats <held>/<limit>)`, and the same shape on the `merge started:` line
+a Plane action start now writes. The mode is `pickup`, `force-dispatch`, or `direct-ask`,
+one token each. `max-parallel-agents = 0` lifts the cap, and then the seat part states no
+limit: `seats <held>`. Today the line names only the origin, so a force-dispatch over the
+cap, a pickup start, and a top-up route read the same, and a reviewer cannot tell a cap
+breach from an operator's hand.
+
+**The seat reading is the count the gate stood on.** The reading is taken before the
+start claims its own seat, so it is the count the Parallel limit gate stood on, never a
+count the start raised itself. The pickup starts only into a free seat, so its reading
+always sits under the limit; a reading that already stands at the limit - `seats 1/1`
+under a cap of 1, `seats 2/2` under a cap of 2 - is the force-dispatch that crossed it.
+A `merge started:` line is the exception a reader must know: a Plane action takes no
+seat, and the pickup runs it whatever the limit reads (ADR 0068), so `seats 1/1` on a
+merge line states the count the plane stood on at the start and is a normal start, not a
+breach.
+
+**The mode names the pass, not the ask.** Every start enters the Work queue first (ADR
+0049), so the dispatch cannot tell the operator's row from the factory's row at the
+claim. Only the immediate pass an operator's own ask runs names that ask's row as
+`direct-ask`. A row the operator asked for that found no free seat reads `mode pickup`
+when a later cycle starts it, the same line an automatic top-up start writes. The log
+tells a pickup from a force-dispatch from a seat-count fault; it does not tell an
+operator's ask from the factory's ask for a start that waited in the queue.
 
 ## Consequences
 

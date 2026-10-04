@@ -446,6 +446,12 @@ It re-runs every start check the pickup runs and skips only the cap, and it stil
 A force-dispatch that fails leaves the item out of the queue, as a pickup failure now does (ADR 0049): a Consultation's start that fails is a terminal record, and its item leaves with it.
 _Avoid_: manual override, bypass
 
+**Start mode**:
+The fact a start line names: the path that took the seat for a queued start. `pickup` for the Work queue's Pickup, `force-dispatch` for the operator's key on the waiting row, and `direct-ask` for the row the operator's own ask started at once, on the immediate pass that ask ran (ADR 0092).
+The mode names the path that ran the start, never the ask that made the row: a row the operator asked for that waited in the queue reads `pickup` when a later cycle takes it.
+It is not the item's origin. The origin says where the ask came from (`open`, `workflow`, `restart`); the mode says which path started it.
+_Avoid_: dispatch mode, launch mode, start path
+
 **Continuation**:
 The Next step Auto-handoff mode takes on its own, without the operator's Completion decision: the Next step of an awaiting ticket, or of an open ticket whose newest settled turn recorded an automatic route the operator did not take away, where the decision stands at the ask, the start died, and the walk re-offers the route (ADR 0067, corrected by ADR 0072, decided at runtime by ADR 0092).
 The auto top-up adds a continuation before a restart, an open pull request ticket, or fresh work (ADR 0051, ADR 0088). The cycle asks it before the pickup's pass, and its row enters ahead of every row that queued earlier - a fresh-work row and a row the operator staged alike - so the seat a settling turn freed goes to that turn's own next step (ADR 0094, ADR 0100).

@@ -29,6 +29,7 @@ import {
 	reportHandoffOutcome,
 	type StoredHandoffFacts,
 } from "../src/handoff-dispatch.ts";
+import type { Logger } from "../src/logging.ts";
 import { cycleAgentName } from "../src/naming.ts";
 import type { CommandRunner } from "../src/runner.ts";
 import type { HandoffOrigin } from "../src/state/handoff.ts";
@@ -3703,21 +3704,25 @@ describe("the decision screen's route close", () => {
 });
 
 describe("the record lines", () => {
+	/** The logger one test reads the record's lines back from. */
+	function record(lines: string[]): Logger {
+		return {
+			level: "info",
+			debug: () => {},
+			info: (message) => lines.push(message),
+			warn: (message) => lines.push(message),
+			error: () => {},
+		};
+	}
+
 	test("a claimed start leaves one line, and a refused claim leaves its reason", async () => {
 		const rigRef = rig([FIRST]);
 		const lines: string[] = [];
-		const logger = {
-			level: "info" as const,
-			debug: () => {},
-			info: (message: string) => lines.push(message),
-			warn: (message: string) => lines.push(message),
-			error: () => {},
-		};
 		// The gate holds every command, so the start's work pauses on its
 		// first call: only the claim runs, and the settle never meets the
 		// state this test closes behind it.
 		const hold = gatedRunner(rigRef.runner, () => true);
-		const dispatch = withRunner(rigRef, hold.runner, { log: logger });
+		const dispatch = withRunner(rigRef, hold.runner, { log: record(lines) });
 		rigRef.dispatch = dispatch;
 		const first = await start(rigRef, FIRST, "open");
 		expect(first).toMatchObject({ ok: true });
@@ -3727,10 +3732,106 @@ describe("the record lines", () => {
 			ok: false,
 			reason: "handoff recovery is required before another handoff",
 		});
+		// The start line names the path that took the seat - the operator's own
+		// ask, started by the pass that ask ran (issue #209) - the item's origin,
+		// and the seat reading the claim stood on.
 		expect(lines).toEqual([
 			`handoff queued: "${FIRST.title}" (origin open)`,
-			`handoff started: "${FIRST.title}" (origin open)`,
+			`handoff started: "${FIRST.title}" (mode direct-ask, origin open, seats 0/2)`,
 			`handoff refused: handoff recovery is required before another handoff ("${FIRST.title}")`,
 		]);
+	});
+
+	test("a start the queue's pickup takes names the pickup and the seats it read", async () => {
+		const rigRef = rig([FIRST]);
+		const lines: string[] = [];
+		const hold = gatedRunner(rigRef.runner, () => true);
+		// The cap is full at the ask, so the factory's automatic ask only enqueues
+		// its row, and one seat frees for the next pass.
+		const waiting = withRunner(rigRef, hold.runner, {
+			log: record(lines),
+			seatCount: () => rigRef.config.maxParallelAgents,
+		});
+		await expect(
+			waiting.dispatch({
+				origin: "open",
+				ticketIdentity: FIRST.identity,
+				choice: liveChoice,
+				previousMessage: "",
+				automatic: true,
+			}),
+		).resolves.toEqual({ ok: true });
+		expect(rigRef.state.workQueue.items()).toHaveLength(1);
+		expect(lines).toEqual([`handoff queued: "${FIRST.title}" (origin open)`]);
+		// The next cycle's pickup takes the row for the free seat: the line names
+		// the pickup, never the ask that made the row.
+		const picking = withRunner(rigRef, hold.runner, {
+			log: record(lines),
+			seatCount: () => rigRef.config.maxParallelAgents - 1,
+		});
+		expect(await picking.pickupWorkQueue()).toBe(1);
+		expect(lines).toEqual([
+			`handoff queued: "${FIRST.title}" (origin open)`,
+			`handoff started: "${FIRST.title}" (mode pickup, origin open, seats 1/2)`,
+		]);
+	});
+
+	test("a start under an unlimited cap states its held seats with no limit", async () => {
+		// `max-parallel-agents = 0` lifts the cap, so the seat part names the held
+		// count and states no limit at all (issue #209).
+		const rigRef = rig([FIRST]);
+		rigRef.config.maxParallelAgents = 0;
+		const lines: string[] = [];
+		const hold = gatedRunner(rigRef.runner, () => true);
+		const mod = withRunner(rigRef, hold.runner, {
+			log: record(lines),
+			// Work is held on two seats. The lifted cap leaves a free seat for
+			// every waiting start, so the ask's own pass takes this row.
+			seatCount: () => 2,
+		});
+		rigRef.dispatch = mod;
+		await expect(start(rigRef, FIRST, "open")).resolves.toMatchObject({ ok: true });
+		expect(lines).toEqual([
+			`handoff queued: "${FIRST.title}" (origin open)`,
+			`handoff started: "${FIRST.title}" (mode direct-ask, origin open, seats 2)`,
+		]);
+		mod.stop();
+	});
+
+	test("a force-dispatch over a full cap reads differently from the start that filled the cap", async () => {
+		// The issue #209 case: `max-parallel-agents = 1`, two starts, and the log
+		// has to say which path took the second seat. The seat count is the
+		// state's own unresolved claims, the fact the app's shared count reads.
+		const rigRef = rig([FIRST, SECOND]);
+		rigRef.config.maxParallelAgents = 1;
+		const lines: string[] = [];
+		// The gate holds every command, so each claimed start stays unresolved
+		// and its seat stays held while the next start reads the count.
+		const hold = gatedRunner(rigRef.runner, () => true);
+		const mod = withRunner(rigRef, hold.runner, {
+			log: record(lines),
+			seatCount: () => rigRef.state.handoff.openAttemptTickets().length,
+		});
+		rigRef.dispatch = mod;
+		// The operator's ask on the first ticket: the cap has room, and the ask's
+		// own pass takes it.
+		await expect(start(rigRef, FIRST, "open")).resolves.toMatchObject({ ok: true });
+		expect(rigRef.state.handoff.openAttemptTickets()).toEqual([FIRST.identity]);
+		// The cap is full now: the one seat belongs to the start that took it, so
+		// the second ask finds no free seat and its row waits.
+		await expect(start(rigRef, SECOND, "open")).resolves.toMatchObject({ ok: true });
+		expect(rigRef.state.workQueue.hasWorkItem(SECOND.identity)).toBe(true);
+		expect(rigRef.state.ticketWorkCycle.ticketState(SECOND.identity)).toBe("open");
+		// The operator's key starts the waiting row over the full cap.
+		mod.forceDispatchWorkQueueItem(SECOND.identity);
+		expect(lines).toEqual([
+			`handoff queued: "${FIRST.title}" (origin open)`,
+			`handoff started: "${FIRST.title}" (mode direct-ask, origin open, seats 0/1)`,
+			`handoff queued: "${SECOND.title}" (origin open)`,
+			`handoff started: "${SECOND.title}" (mode force-dispatch, origin open, seats 1/1)`,
+		]);
+		// Both claims stand unresolved: the held work never settles, and the stop
+		// keeps the two runs from writing into the state the test closes.
+		mod.stop();
 	});
 });
