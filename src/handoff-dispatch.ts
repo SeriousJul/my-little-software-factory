@@ -10,6 +10,7 @@
  */
 import type { FactoryConfig } from "./config.ts";
 import type { ConsultationPickupOutcome } from "./consultation-operations.ts";
+import type { StartMode } from "./domain/start-mode.ts";
 import type { EnvironmentKind, Ticket, TicketState } from "./domain/ticket.ts";
 import { inFlightState, issueReferencesOf } from "./domain/ticket.ts";
 import {
@@ -276,11 +277,17 @@ export interface HandoffDispatchOptions extends HandoffDispatchReports {
 	 * The Work queue's Consultation side (ADR 0034, issue #90): start the
 	 * `queued` Consultation an item names. The module crosses this to the
 	 * Consultation operations, which own the settings re-read, the seat move,
-	 * and the opening the record runs behind the answer. Absent where the app
-	 * has no Consultation side, and a loop without the side leaves the item
-	 * standing for a later cycle.
+	 * the Consultation start line, and the opening the record runs behind the
+	 * answer (issue #220). The mode names the path this module ran the start
+	 * on - the pickup, or the operator's force-dispatch - because the path is
+	 * the queue's fact while the line that states it is the Consultation
+	 * module's. Absent where the app has no Consultation side, and a loop
+	 * without the side leaves the item standing for a later cycle.
 	 */
-	pickupConsultation?: (consultationId: string) => Promise<ConsultationPickupOutcome>;
+	pickupConsultation?: (
+		consultationId: string,
+		mode: StartMode,
+	) => Promise<ConsultationPickupOutcome>;
 	home: string;
 	/** Persist a repository mapping discovered during handoff, if one is found. */
 	persistMapping?: (mapping: RepositoryMapping) => Promise<string | undefined>;
@@ -288,7 +295,8 @@ export interface HandoffDispatchOptions extends HandoffDispatchReports {
 	 * The plane's file logger. The dispatch leaves the record's start lines and
 	 * queue lines, for a Handoff and for a Plane action alike: a start with its
 	 * start mode, its origin, and its seat reading, a queue, and a refusal with
-	 * its reason.
+	 * its reason. A Consultation's start line is not one of them: the
+	 * Consultation operations leave it (issue #220).
 	 */
 	log?: Logger;
 }
@@ -438,6 +446,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 	private readonly seatCount: () => number;
 	private readonly pickupConsultation?: (
 		consultationId: string,
+		mode: StartMode,
 	) => Promise<ConsultationPickupOutcome>;
 	private readonly home: string;
 	private readonly reports: HandoffDispatchReports;
@@ -1001,8 +1010,9 @@ class HandoffDispatchModule implements HandoffDispatch {
 				// The shared order is one across kinds (ADR 0034, issue #90): a
 				// Consultation item takes its place in the same walk, and a pickup
 				// that starts holds its seat for the rest of the cycle, the way a
-				// handoff pickup does.
-				if (await this.pickupConsultationItem(item, false)) claimed += 1;
+				// handoff pickup does. The Consultation's own start line names this
+				// pass as the path that took the seat (issue #220).
+				if (await this.pickupConsultationItem(item, "pickup", false)) claimed += 1;
 				continue;
 			}
 			if (this.pickupItem(item, startModeOf(item, directAskIdentity))) claimed += 1;
@@ -1141,18 +1151,20 @@ class HandoffDispatchModule implements HandoffDispatch {
 	 * means the claim took the seat in its atomic move to `opening`, and the
 	 * opening pipeline runs on behind it.
 	 *
-	 * `overCap` says the force-dispatch measured the seat count over the
-	 * Parallel limit at the key, so the started line names the cap: a force-
-	 * dispatch under a full cap says the pickup's own words, the way the
-	 * handoff's force-dispatch does.
+	 * `mode` is the path this module ran the start on, handed to the Consultation
+	 * side so its own start line can name it (issue #220). `overCap` says this
+	 * module measured the seat count over the Parallel limit at the key, so the
+	 * Message line names the cap: a force-dispatch under a full cap says the
+	 * pickup's own words, the way the handoff's force-dispatch does.
 	 */
 	private async pickupConsultationItem(
 		item: WorkQueueConsultationItem,
+		mode: StartMode,
 		overCap: boolean,
 	): Promise<boolean> {
 		const pickup = this.pickupConsultation;
 		if (pickup === undefined) return false;
-		const outcome = await pickup(item.consultationId);
+		const outcome = await pickup(item.consultationId, mode);
 		if (this.stopped) return false;
 		// The claim took the pointer with it for a `started` answer; this
 		// removal clears it for the answers that claimed nothing, so no item is
@@ -1163,9 +1175,10 @@ class HandoffDispatchModule implements HandoffDispatch {
 		this.reports.refresh();
 		if (outcome.kind === "started") {
 			// The record holds its seat in `opening` now, and the opening runs on
-			// behind this answer: the line names the pickup - or the cap, for a
-			// force-dispatch that stood over it - and the record's own progress
-			// line takes over from there.
+			// behind this answer: the Message line names the pickup - or the cap,
+			// for a force-dispatch that stood over it - and the record's own
+			// progress line takes over from there. The record's start line in the
+			// log file is the Consultation operations' own (issue #220).
 			this.reports.notice(
 				overCap
 					? `force-dispatched Consultation ${item.consultationId.slice(0, 8)} over the Parallel limit`
@@ -1418,7 +1431,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 			// the queue on every answer, the way its pickup does.
 			const limit = this.config().maxParallelAgents;
 			const overCap = overParallelLimit(limit, this.seatCount());
-			void this.pickupConsultationItem(item, overCap);
+			void this.pickupConsultationItem(item, "force-dispatch", overCap);
 			return;
 		}
 		if (item.kind === "plane-action") {
@@ -2044,20 +2057,11 @@ type QueueItemClaimResult =
 	| { ok: false; reason: string }
 	| { ok: "cancelled" };
 
-/**
- * The start mode: how a start reached its claim (issue #209, CONTEXT.md).
- *
- * The mode is not the origin. The origin says where the ask came from (`open`,
- * `workflow`, `restart`); the mode says which path took the seat: the Work
- * queue's Pickup for a free seat, the operator's Force-dispatch over the
- * Parallel limit, or the immediate pass the operator's own ask ran for the item
- * it had just enqueued. Each value is one token, so the start line's `mode`
- * field reads as one word for a tool that parses it.
- *
- * A Consultation's start is the Consultation operations' fact, not this
- * module's, so no line here names it.
- */
-type StartMode = "pickup" | "force-dispatch" | "direct-ask";
+// The start mode this module names on its start lines (issue #209, CONTEXT.md)
+// is the shared fact in `domain/start-mode.ts`. A Consultation's start is the
+// Consultation operations' fact, not this module's, so no line here names it;
+// the dispatch hands the mode to the Consultation side at the pickup seam so
+// that module can name it on its own line (issue #220).
 
 /**
  * The ticket an ask makes its own direct ask (issue #209): the identity the

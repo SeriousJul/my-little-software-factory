@@ -1479,6 +1479,11 @@ export function App({
 			// holds the checkout, and a Ticket the operator judged out of the list is
 			// still live work the confirmation has to name.
 			tickets: () => listViewsRef.current.active,
+			// The one shared seat count the Parallel limit gate and the mode cell
+			// read: the Consultation start line states the reading this seam
+			// answers, measured before the start takes its own seat (issue #220).
+			seatCount: currentSeatCount,
+			log: logger,
 			persistRepositoryMapping: persistMapping,
 			callbacks: {
 				onStatus: setStatus,
@@ -1515,8 +1520,8 @@ export function App({
 				// the still-`queued` record loses its pointer, and a removal of the
 				// item through the module's seam moves the record to `unscheduled`
 				// the way the Main view's Delete does (issue #91).
-				pickupConsultation: (consultationId) =>
-					consultationOperationsRef.current?.pickup(consultationId) ??
+				pickupConsultation: (consultationId, mode) =>
+					consultationOperationsRef.current?.pickup(consultationId, mode) ??
 					Promise.resolve({ kind: "moved" } as const),
 				home: homeDir,
 				working: (text) => setWorkingMessage(text, "handoff"),
@@ -3512,7 +3517,9 @@ export function App({
 				// seam with the cap skipped. The operations own every line the
 				// start or its failure leaves; the key names the cap when the seat
 				// count stood over it at the key, the way the queue's force-
-				// dispatch line does, and says when a race out-waited it.
+				// dispatch line does, and says when a race out-waited it. The key
+				// is the operator's own start over the cap, so the record's start
+				// line reads `force-dispatch` (issue #220).
 				"consultation-start-now": ({ facts }) => {
 					if (!consultationSectionFacts(facts)) return;
 					const selected = facts.selectedConsultation;
@@ -3526,7 +3533,7 @@ export function App({
 					// seat count stood over the limit at the key.
 					const cap = configRef.current.maxParallelAgents;
 					const overCap = overParallelLimit(cap, currentSeatCount());
-					void consultationOperations.pickup(selected.id).then((outcome) => {
+					void consultationOperations.pickup(selected.id, "force-dispatch").then((outcome) => {
 						if (outcome.kind === "moved") {
 							setWarningMessage(
 								`consultation ${selected.id.slice(0, 8)}: the record is no longer unscheduled`,

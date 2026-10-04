@@ -22,6 +22,7 @@ import {
 	isStaleAgentOutputWarning,
 	STALE_AGENT_OUTPUT_WARNING,
 } from "./consultation/warning-facts.ts";
+import type { StartMode } from "./domain/start-mode.ts";
 import type { Ticket } from "./domain/ticket.ts";
 import {
 	checkStart,
@@ -31,9 +32,11 @@ import {
 	renderConsultationPrompt,
 } from "./handoff.ts";
 import type { HerdrAgent } from "./herdr.ts";
+import type { Logger } from "./logging.ts";
 import { consultationAgentName } from "./naming.ts";
 import { HerdrAgentReader, matchConsultationAgent } from "./observation.ts";
 import { serializeRepositoryOperation } from "./operation-serializer.ts";
+import { parallelSeatText } from "./parallel.ts";
 import {
 	type RepositoryMapping,
 	type ResolvedRepository,
@@ -111,6 +114,20 @@ export interface ConsultationOperationsOptions {
 	/** The live Ticket projection used by the checkout safety check. */
 	tickets: () => readonly Ticket[];
 	callbacks: ConsultationOperationCallbacks;
+	/**
+	 * The Parallel limit seats held now, from the one shared source the Parallel
+	 * limit gate and the mode cell read (ADR 0034). The start line's seat reading
+	 * is measured through this seam before the start takes its own seat (issue
+	 * #220), so it names the count the cap gate stood on, never a count this
+	 * start raised.
+	 */
+	seatCount: () => number;
+	/**
+	 * The plane's file logger. The Consultation operations leave the
+	 * Consultation start line here, in the shape the `handoff started:` and
+	 * `merge started:` lines use (issue #220).
+	 */
+	log?: Logger;
 	/** Persist a sibling-clone mapping, when repository resolution creates one. */
 	persistRepositoryMapping?: (mapping: RepositoryMapping) => Promise<string | undefined>;
 	textBatchBytes?: number;
@@ -191,6 +208,8 @@ export class ConsultationOperations {
 	private readonly home: string;
 	private readonly tickets: () => readonly Ticket[];
 	private readonly callbacks: ConsultationOperationCallbacks;
+	private readonly seatCount: () => number;
+	private readonly log?: Logger;
 	private readonly persistRepositoryMapping?: (
 		mapping: RepositoryMapping,
 	) => Promise<string | undefined>;
@@ -206,6 +225,8 @@ export class ConsultationOperations {
 		this.home = options.home;
 		this.tickets = options.tickets;
 		this.callbacks = options.callbacks;
+		this.seatCount = options.seatCount;
+		this.log = options.log;
 		this.persistRepositoryMapping = options.persistRepositoryMapping;
 		this.inputQueue = new ConsultationInputQueue(this.runner, options.textBatchBytes);
 	}
@@ -378,6 +399,12 @@ export class ConsultationOperations {
 	 * scheduler's check, not the start's, and the seat move below is the claim
 	 * in either case.
 	 *
+	 * `mode` is the path that ran the start (CONTEXT.md "Start mode", issue
+	 * #220): the Work queue's `pickup` for the pass that takes a free seat, and
+	 * the `force-dispatch` for the operator's key that starts the record over a
+	 * full cap. The caller names the path it ran the start on; this module owns
+	 * the line that states it, and the seat reading it states.
+	 *
 	 * The record already holds the operator's ask, and the start re-reads the
 	 * Consultation type's settings from the config - the record waited for a
 	 * seat or the operator's call, so the start runs on the type the config
@@ -393,7 +420,7 @@ export class ConsultationOperations {
 	 * `failed` with its reason and its Message line, exactly as a failed launch
 	 * does, and the queue's item went with the claim while one stood.
 	 */
-	pickup(consultationId: string): Promise<ConsultationPickupOutcome> {
+	pickup(consultationId: string, mode: StartMode): Promise<ConsultationPickupOutcome> {
 		const current = this.state.consultationRecord.consultation(consultationId);
 		if (current === undefined || (current.state !== "queued" && current.state !== "unscheduled"))
 			return Promise.resolve({ kind: "moved" });
@@ -423,6 +450,10 @@ export class ConsultationOperations {
 			template: type.template,
 			renderedOpeningPrompt: renderConsultationPrompt(type.template, current.initialInput),
 		});
+		// The seat reading the start line states, measured before this start takes
+		// its own seat (issue #220): the count the Parallel limit gate stood on,
+		// the way the `handoff started:` and `merge started:` lines state theirs.
+		const seats = this.seatCount();
 		// The atomic step is the seat: the record moves to `opening` only if it
 		// is still `queued` or `unscheduled`, so a close or a delete that
 		// raced the start wins the record and the start runs nothing.
@@ -435,12 +466,31 @@ export class ConsultationOperations {
 			// The record went away between the move and the re-read.
 			return Promise.resolve({ kind: "moved" });
 		}
+		// The Consultation start line, in the shape the plane's other start lines
+		// use (issue #220): the record's Consultation type beside the identity
+		// prefix every other Consultation line names it by, the path that took the
+		// seat, the origin word the Work queue stands a Consultation row under, and
+		// the seat reading.
+		this.log?.info(
+			`consultation started: "${current.typeName}" ${current.id.slice(0, 8)} ` +
+				`(mode ${mode}, origin consultation, ${this.seatReading(seats)})`,
+		);
 		// No await sits between the seat move and this call, so the record holds
 		// no other opening operation: the launch always takes the job it is
 		// handed, and reports its own outcome on the record and the Message line.
 		void this.launch(refreshed);
 		this.callbacks.onConsultationsChanged();
 		return Promise.resolve({ kind: "started" });
+	}
+
+	/**
+	 * The seat reading a Consultation start line states (issue #220): the held
+	 * seats beside the Parallel limit they are measured against. An unlimited cap
+	 * states no limit, the way the mode cell states none, and the shared text
+	 * rule decides that for both readers.
+	 */
+	private seatReading(seats: number): string {
+		return `seats ${parallelSeatText(seats, this.config().maxParallelAgents)}`;
 	}
 
 	/**
