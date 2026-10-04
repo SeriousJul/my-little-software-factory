@@ -12,7 +12,7 @@
 
 import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 // readFileSync checks the config file: the toggle writes the state file, never it.
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -3547,6 +3547,81 @@ describe("the auto dispatch", () => {
 			// A short interval lets the second top-up cycle run while the test
 			// waits: the poll the default config asks for is a minute long.
 			{ ...propsOf(app), pollIntervalMs: 25 },
+		);
+		app.state.close();
+	});
+
+	test("a config write-back leaves the automatic walks running", async () => {
+		// The dev session's stall: a Handoff discovers a repository mapping and
+		// writes it back, the App's config state moves, and the observation
+		// effect re-runs. Its cleanup stops the dispatch module, and the effect
+		// run that follows keeps using that same module, so every later ask -
+		// automatic or the operator's own - answers `the dispatch has been
+		// stopped` while the plane still reads as auto.
+		// The fixture holds no mapping, so the convention checkout is the one
+		// that resolves the repository, and it holds a different repository.
+		const app = seededAppInAutoMode("open", { repos: {} }, pairSuccess);
+		const home = mkdtempSync(join(tmpdir(), "factory-auto-home-"));
+		paths.push(home);
+		const convention = join(home, "src", "factory");
+		mkdirSync(convention, { recursive: true });
+		writeFileSync(join(convention, "marker"), "repo");
+		app.runner.set("git", ["-C", convention, "rev-parse", "--git-dir"], { stdout: ".git\n" });
+		app.runner.set("git", ["-C", convention, "remote", "get-url", "origin"], {
+			stdout: "https://github.com/acme/other.git\n",
+		});
+		// The sibling clone the discovery makes, and the handoff that runs in it.
+		const sibling = join(home, "src", "factory_1");
+		app.runner.set("git", ["clone", `https://github.com/acme/factory.git`, sibling], {
+			stdout: "",
+		});
+		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+		app.runner.set("herdr", ["workspace", "list"], { stdout: workspaceListJson([]) });
+		app.runner.set("herdr", ["workspace", "create", "--cwd", sibling, "--no-focus"], {
+			stdout: workspaceCreateJson("ws-1", "pane-1"),
+		});
+		app.runner.set(
+			"herdr",
+			["tab", "create", "--workspace", "ws-1", "--cwd", sibling, "--no-focus"],
+			{
+				stdout: tabCreateJson("pane-1"),
+			},
+		);
+
+		await withApp(
+			async (setup) => {
+				app.src.settle(pairSuccess);
+				// The config write-back re-runs the refresh too, and a fetch the
+				// test never settles would make every Ticket non-actionable. The
+				// pump keeps the source as fresh as a real source is between polls.
+				const pump = setInterval(() => app.src.settle(pairSuccess), 40);
+				// The first top-up cycle starts the first ticket, and that Handoff
+				// discovers the mapping and writes it back to the config file. The
+				// write-back moves the App's config state, which re-runs the
+				// observation effect. The second cycle, the queue drained, must still
+				// start the second ticket: a dispatch the re-run stopped starts
+				// nothing, and the plane reads auto while it does nothing.
+				await awaitFrame(
+					setup,
+					(f) =>
+						f.includes("\u25cb auto 2/2") && ticketRow(f, "Watch agent turns").includes("missing"),
+					"both dispatches after the mapping write-back",
+				);
+				clearInterval(pump);
+				const starts = app.runner.commands().filter((c) => c.startsWith("herdr agent start"));
+				expect(starts).toEqual([
+					`herdr agent start ${AGENT} --kind pi --pane pane-1`,
+					`herdr agent start ${SECOND_AGENT} --kind pi --pane pane-1`,
+				]);
+				// The write-back landed, so the config state really did move.
+				// The write-back landed, so the config state really did move.
+				expect(readFileSync(app.configPath, "utf8")).toContain(
+					`"github.com/acme/factory" = "${sibling}"`,
+				);
+			},
+			WIDTH,
+			HEIGHT,
+			{ ...propsOf(app), home, pollIntervalMs: 25 },
 		);
 		app.state.close();
 	});

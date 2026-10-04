@@ -1557,6 +1557,24 @@ export function App({
 	}
 	const handoffDispatch = handoffDispatchRef.current?.dispatch;
 	/**
+	 * The Handoff dispatch is stopped when its owner leaves, never when the
+	 * observation loop restarts.
+	 *
+	 * The module lives on the state, not on the loop that asks it (the same
+	 * standing the `onReady` stop keeps), so the effect keys on the module the
+	 * ref holds, which changes only when the state does. The observation effect
+	 * re-runs on any fact its own body reads - a config the plane wrote back, a
+	 * source list that moved - and a `stop` in that cleanup killed the module the
+	 * next run of the same effect kept using. Every later ask then
+	 * answered `the dispatch has been stopped` for the rest of the run: the
+	 * automatic walks went silent, and the operator's own start, route, and
+	 * Close were refused beside a mode cell that still read auto.
+	 */
+	useEffect(() => {
+		if (handoffDispatch === undefined) return;
+		return () => handoffDispatch.stop();
+	}, [handoffDispatch]);
+	/**
 	 * Report the Close cleanup of one ended cycle.
 	 *
 	 * The module answers with herdr's failure and keeps the durable fact of the
@@ -4016,8 +4034,10 @@ export function App({
 			},
 		});
 		return () => {
+			// Only the loop this run made. The dispatch module outlives it: the
+			// effect re-runs on a config write-back, and a stopped module is a
+			// plane that starts nothing for the rest of the run.
 			coordinator.stop();
-			handoffDispatch?.stop();
 			observationRef.current = undefined;
 		};
 	}, [
