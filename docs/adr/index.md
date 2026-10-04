@@ -104,3 +104,4 @@ body states the context, the decision, and the consequences.
 - [ADR 0093: The Same-type hold reads the ticket's newest turn](./0093-the-same-type-hold-reads-the-tickets-newest-turn.md)
 - [ADR 0094: The seat a settling turn frees goes to its own next step](./0094-the-seat-a-settling-turn-frees-goes-to-its-own-next-step.md)
 - [ADR 0095: The state module answers through one interface per aggregate](./0095-the-state-module-answers-through-one-interface-per-aggregate.md)
+- [ADR 0096: The Consultation rules answer through one module per concept](./0096-the-consultation-rules-answer-through-one-module-per-concept.md)

@@ -33,14 +33,14 @@ import {
 	persistConfig,
 	type TransitionOutcome,
 } from "../config.ts";
+import { translateAgentKey } from "../consultation/agent-input.ts";
 import {
 	type ConsultationRepositoryOption,
 	consultationRepositoryCatalog,
 	type LiveCheckoutSafety,
-	translateAgentKey,
 	validateConsultationRepositoryOptions,
-	validateResponseInput,
-} from "../consultation.ts";
+} from "../consultation/checkout-safety.ts";
+import { validateResponseInput } from "../consultation/response-draft.ts";
 import {
 	type ConsultationOperations,
 	createConsultationOperations,
