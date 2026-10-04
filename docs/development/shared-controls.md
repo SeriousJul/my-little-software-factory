@@ -343,6 +343,13 @@ Closing an editor and discarding its content are different actions.
 
 Draft persistence belongs to the screen's domain state, not to the field module.
 
+The Draft field owns the text its operator wrote. A screen may hand the field a
+draft to open on, and the field takes that draft only until its own keys have
+written it. A screen that means to replace the text closes the field and opens
+it on the new draft, which is how a reopened Response editor and a refused
+delivery already restore one. A field never writes back a draft it is behind, so
+a late render cannot delete the operator's keys.
+
 ## Presentation
 
 - The plane inherits its Theme from herdr: the shared Theme module reads herdr's
