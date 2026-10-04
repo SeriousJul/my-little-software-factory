@@ -402,6 +402,7 @@ _Avoid_: assign, dispatch, launch
 **Plane action**:
 The work of an action task type, which the control plane executes itself through the Command runner. It holds no Agent and takes no Environment, so it opens no work cycle, holds no Parallel limit seat, and settles no turn.
 The plane action is a named built-in with its own typed settings, and the shipped set holds the merge of a pull request. Its start is a Work queue item like any start, and the queue pause holds it while it stands. The Dispatch pause holds its automatic add, and the Handoff limit counts its attempts.
+Its run holds its Ticket's re-ask from the pickup's claim until the run settles: the claim removes the queue row, so the queue's one-item rule cannot see a run in flight, and a second ask in that window would run the same merge twice over one pull request (ADR 0104).
 Its attempt is a fact on the ticket, outside any work cycle: the time, the task type, the outcome, and the reason. A merge that finds its pull request already merged settles `merged`.
 Its outcome fires the task type's Transition the way a `completed` settle does, on both outcomes alike, and the fire's fact lands on the attempt's record, because no Completion trace stands for it.
 The successful merge leaves the projection at once: the merged pull request retires, and so does every issue it closed on the merge, the way the next source refresh would (ADR 0068).

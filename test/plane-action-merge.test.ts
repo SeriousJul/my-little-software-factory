@@ -1358,6 +1358,64 @@ describe("the dispatch's ask and pickup", () => {
 		state.close();
 	});
 
+	test("an ask that arrives after the claim runs the merge once", async () => {
+		// The window the live log shows: the settled turn's ask enqueues the row,
+		// the pickup's claim removes it, and the `gh pr merge` command runs for
+		// seconds. A second ask in that window finds no standing row, so it must
+		// not stand for a second run of the same merge.
+		const state = planeState();
+		const runner = new FakeRunner();
+		// Every read answers open: the way the source answers while the first
+		// merge is still landing, so the run's fresh read cannot tell the two.
+		stubOpenRead(runner);
+		stubMerge(runner, 0);
+		const events: string[] = [];
+		let resolveStarted: () => void = () => {};
+		const startedSettled = new Promise<void>((resolve) => {
+			resolveStarted = resolve;
+		});
+		const dispatch = createHandoffDispatch({
+			state,
+			runner,
+			config: () => PLANE_CONFIG,
+			seatCount: () => 0,
+			home: home(),
+			...recorder(events),
+		});
+		const first = await dispatch.dispatchPlaneAction({
+			origin: "workflow",
+			automatic: true,
+			ticketIdentity: pullIdentity,
+			taskType: "merge",
+			onStarted: (started) => {
+				expect(started).toEqual({ ok: true });
+				resolveStarted();
+			},
+		});
+		expect(first).toEqual({ ok: true });
+		// The claim took the row before the run: the queue holds nothing while the
+		// merge command is still out.
+		expect(state.workQueue.items()).toEqual([]);
+		const second = await dispatch.dispatchPlaneAction({
+			origin: "workflow",
+			automatic: true,
+			ticketIdentity: pullIdentity,
+			taskType: "merge",
+		});
+		await startedSettled;
+		// The merge stands once: one command, one attempt row, and the second ask
+		// is a refusal that states the run already stands.
+		expect(runner.commands().filter((command) => command.startsWith("gh pr merge"))).toHaveLength(
+			1,
+		);
+		expect(state.planeAction.planeActionAttemptCount(pullIdentity)).toBe(1);
+		expect(second).toEqual({
+			ok: false,
+			reason: `"${pullTitle}" already has a merge running; the first run stands`,
+		});
+		state.close();
+	});
+
 	test("a full limit holds the plane item behind a seats-bound item, the way it holds every item", async () => {
 		const state = planeState();
 		withIssueSource(state);

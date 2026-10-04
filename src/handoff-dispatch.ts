@@ -474,6 +474,17 @@ class HandoffDispatchModule implements HandoffDispatch {
 	 * route decision and the test's await both resolve when the start lands.
 	 */
 	private intentOnStarted = new Map<string, (started: DispatchResult) => void>();
+	/**
+	 * The tickets whose Plane action run is in flight: from the pickup's claim,
+	 * when the Work queue row leaves the queue, until that run settles.
+	 *
+	 * The queue's one-item-per-ticket rule can only answer for a row that still
+	 * stands, and the Plane action's attempt row is written only after its run
+	 * (ADR 0068), so between the claim and the settle no durable fact names the
+	 * run. A re-ask in that window would stand for a second run of the same
+	 * merge, and the source answers the second command as a block.
+	 */
+	private planeActionRunsInFlight = new Set<string>();
 
 	constructor(options: HandoffDispatchOptions) {
 		this.state = options.state;
@@ -596,6 +607,15 @@ class HandoffDispatchModule implements HandoffDispatch {
 					`${this.ticketName(intent.ticketIdentity)} already has a waiting queue item; ` +
 					"the first item keeps its place",
 			});
+		// The run's own hold, beside the queue's: the row of a merge already in
+		// flight left the queue at its claim, so `hasWorkItem` cannot see it, and
+		// the run's fresh read cannot either - the source still answers the pull
+		// request open while the merge is landing.
+		if (this.planeActionRunsInFlight.has(intent.ticketIdentity))
+			return Promise.resolve({
+				ok: false,
+				reason: `${this.ticketName(intent.ticketIdentity)} already has a merge running; the first run stands`,
+			});
 		const enqueued = this.state.workQueue.enqueuePlaneActionWork({
 			ticketIdentity: intent.ticketIdentity,
 			routeFromIdentity: intent.routeFromIdentity ?? null,
@@ -703,7 +723,11 @@ class HandoffDispatchModule implements HandoffDispatch {
 	 * taken before the run starts: the item takes no seat to hold the start,
 	 * so the row is the claim, and two walks that both read the queue before
 	 * either claims cannot both run the merge - the second claim finds no row
-	 * and leaves, and the run stands once. The run's gates are the route's -
+	 * and leaves, and the run stands once. The claim also takes the run's mark,
+	 * held until the run settles: the row is the claim, and once it is gone the
+	 * queue's one-item-per-ticket rule cannot see the run, so the mark is what
+	 * holds a re-ask off a merge that is already landing. The run's gates are
+	 * the route's -
 	 * the ticket still stands, and the task type still carries the action
 	 * form the registry names. The run reads the pull request fresh before
 	 * it runs, so an already-merged pull request settles as merged without a
@@ -723,6 +747,23 @@ class HandoffDispatchModule implements HandoffDispatch {
 		// the handoff pickup's seat claim takes the start. A row another walk
 		// already took leaves, and its run stands.
 		if (!this.removeQueueRow(item.ticketIdentity)) return;
+		// The run's mark rides the claim, and the mark holds until the run
+		// settles: the row is the claim, and the row is gone, so the mark is the
+		// only fact that says this ticket's merge runs. Every ask in the window
+		// reads it, and the run's own fresh read cannot.
+		this.planeActionRunsInFlight.add(item.ticketIdentity);
+		try {
+			await this.runPlaneActionItem(item, overCap, mode);
+		} finally {
+			this.planeActionRunsInFlight.delete(item.ticketIdentity);
+		}
+	}
+
+	private async runPlaneActionItem(
+		item: WorkQueuePlaneActionItem,
+		overCap: boolean,
+		mode: StartMode,
+	): Promise<void> {
 		const check = this.planeActionClaimCheck(item.ticketIdentity);
 		if (!check.ok) {
 			this.settleIntentOnStarted(item.ticketIdentity, { ok: false, reason: check.reason });
