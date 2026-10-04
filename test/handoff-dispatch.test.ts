@@ -561,6 +561,42 @@ function nameTaken(name: string, holders: { paneId: string; workspaceId: string 
 	return `{"error":{"code":"agent_name_taken","message":"agent name ${name} is already used; candidates: ${candidates}"},"id":"cli:agent:start"}\n`;
 }
 
+/**
+ * herdr's own agent name space, standing in the fake runner.
+ *
+ * The name one `agent start` took stays held for the rest of the run, and every
+ * later ask for it gets herdr's `agent_name_taken` refusal with the holder's
+ * pane and workspace named. Issue #216 is a refusal of exactly this shape, so a
+ * fake that accepts any name a Ticket asks for cannot reproduce it.
+ */
+function herdrWithItsOwnNameSpace(
+	rig: Rig,
+	held: Map<string, { paneId: string; workspaceId: string }>,
+): CommandRunner {
+	const isStart = (command: string, args: readonly string[]): boolean =>
+		command === "herdr" && args[0] === "agent" && args[1] === "start";
+	return {
+		run: async (command, args, options) => {
+			if (isStart(command, args)) {
+				const holder = held.get(args[2]);
+				if (holder !== undefined) {
+					return { code: 1, stdout: "", stderr: nameTaken(args[2], [holder]) };
+				}
+			}
+			const result = await rig.runner.run(command, args, options);
+			if (isStart(command, args) && result.code === 0) {
+				const at = args.indexOf("--pane");
+				held.set(args[2], {
+					paneId: at === -1 ? "pane-agent" : args[at + 1],
+					workspaceId: FIRST.workspaceId,
+				});
+			}
+			return result;
+		},
+		listModels: (kind) => rig.runner.listModels(kind),
+	};
+}
+
 describe("the seat", () => {
 	test("one handoff holds the seat, and the next waits behind it", async () => {
 		const rigRef = rig([FIRST, SECOND]);
@@ -1375,7 +1411,7 @@ describe("the outcome wording", () => {
 		);
 		expect(line.events).toEqual([
 			"clear-working",
-			"warning:a leftover agent still holds the herdr name webhook-retry; this agent started as webhook-retry-c2",
+			"warning:a leftover agent holds webhook-retry; this agent started as webhook-retry-c2",
 		]);
 	});
 
@@ -1407,7 +1443,7 @@ describe("the outcome wording", () => {
 		);
 		expect(line.events).toEqual([
 			"clear-working",
-			"error:agent webhook-retry started, but the prompt failed: herdr is gone; a leftover agent still holds the herdr name webhook-retry; this agent started as webhook-retry-c2",
+			"error:agent webhook-retry started, but the prompt failed: herdr is gone; a leftover agent holds webhook-retry; this agent started as webhook-retry-c2",
 		]);
 	});
 });
@@ -1718,7 +1754,7 @@ describe("the name fact", () => {
 		);
 		// And the line says which name the agent actually runs under.
 		expect(rigRef.events).toContain(
-			`warning:a leftover agent still holds the herdr name ${FIRST.name}; this agent started as ${cycleAgentName(FIRST, 3)}`,
+			`warning:a leftover agent holds ${FIRST.name}; this agent started as ${cycleAgentName(FIRST, 3)}`,
 		);
 	});
 
@@ -1784,6 +1820,12 @@ describe("the name fact", () => {
 
 	test("two Tickets that share a title each start under a name of their own (issue #216)", async () => {
 		const rigRef = rig([SHARED_A, SHARED_B]);
+		// herdr holds one agent name space across every Ticket it knows, so the
+		// fake holds one too: the name the first Ticket's agent took is refused
+		// for the next ask, with the holder named. That refusal is issue #216.
+		const heldNames = new Map<string, { paneId: string; workspaceId: string }>();
+		const herdr = herdrWithItsOwnNameSpace(rigRef, heldNames);
+		rigRef.dispatch = withRunner(rigRef, herdr);
 		const startedA: DispatchResult[] = [];
 		await expect(
 			start(rigRef, SHARED_A, "open", (result) => startedA.push(result)),
@@ -1801,21 +1843,35 @@ describe("the name fact", () => {
 
 		expect(startedA).toEqual([{ ok: true }]);
 		expect(startedB).toEqual([{ ok: true }]);
-		// The two Tickets ask for different names. Before the identity tag
-		// (ADR 0098) both asked for `ghsa-6h2x-m376-mqjq-joi-q`, and the second
-		// was refused for a name the first one held on every ask.
-		expect(SHARED_A.name).not.toBe(SHARED_B.name);
-		// herdr hears two different names, so neither Ticket is refused for a
-		// name the other holds. Before the identity tag (ADR 0098) both asked
-		// for `ghsa-6h2x-m376-mqjq-joi-q`, and the second failed every ask.
+		// The two Tickets ask for different names, so the second is never refused
+		// for the name the first one holds. Before the identity tag (ADR 0098)
+		// both asked for `ghsa-6h2x-m376-mqjq-joi-quadrati`, and the second met
+		// herdr's refusal on every ask.
 		const names = rigRef
 			.commands()
 			.filter((command) => command.startsWith("herdr agent start "))
 			.map((command) => command.split(" ")[3]);
 		expect(names).toEqual([SHARED_A.name, SHARED_B.name]);
 		expect(new Set(names).size).toBe(2);
+		expect(rigRef.events.filter((event) => event.includes("agent_name_taken"))).toEqual([]);
 		expect(rigRef.state.ticketWorkCycle.ticketState(SHARED_A.identity)).toBe("handed-off");
 		expect(rigRef.state.ticketWorkCycle.ticketState(SHARED_B.identity)).toBe("handed-off");
+		// The rig holds a real name space: the name Ticket A's agent took is
+		// refused for any later ask. That is the refusal issue #216 reported for
+		// two Tickets of one title, so this test can meet it rather than only
+		// state that its names differ.
+		const refusal = await herdr.run("herdr", [
+			"agent",
+			"start",
+			SHARED_A.name,
+			"--kind",
+			"pi",
+			"--pane",
+			"pane-later",
+		]);
+		expect(refusal.code).toBe(1);
+		expect(refusal.stderr).toContain("agent_name_taken");
+		expect(refusal.stderr).toContain(SHARED_A.name);
 	});
 
 	test("a refusal that names no holder is no agent of this ticket, and records nothing", async () => {
@@ -1862,7 +1918,7 @@ describe("the name fact", () => {
 		expect(rigRef.state.handoff.leftoverEnvironment(ROUTE_SETTLED.identity)).toBeNull();
 		// And the line says which name the agent actually runs under.
 		expect(rigRef.events).toContain(
-			`warning:a leftover agent still holds the herdr name ${ROUTE_TARGET.name}; this agent started as ${cycleAgentName(ROUTE_TARGET, 1)}`,
+			`warning:a leftover agent holds ${ROUTE_TARGET.name}; this agent started as ${cycleAgentName(ROUTE_TARGET, 1)}`,
 		);
 	});
 

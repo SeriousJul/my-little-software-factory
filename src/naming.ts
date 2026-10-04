@@ -76,8 +76,16 @@ export interface TicketNameSource {
 /** The maximum length of a herdr agent name: `[a-z][a-z0-9_-]{0,31}`. */
 const HERDR_NAME_MAX_LENGTH = 32;
 
-/** The identity tag's width: the leading 24 bits of the digest, in hex. */
-const IDENTITY_TAG_LENGTH = 6;
+/**
+ * The identity tag's width: the whole 32-bit digest, written as eight
+ * hexadecimal characters.
+ *
+ * The tag is the only fact that tells two Tickets of one title apart, so it
+ * carries every bit the digest answers. Six characters would throw away half
+ * of it: the birthday bound of one name space is met by roughly 5,000 Tickets
+ * at 24 bits and by roughly 77,000 at 32 (ADR 0098).
+ */
+const IDENTITY_TAG_LENGTH = 8;
 
 /**
  * FNV-1a, 32 bit.
@@ -102,10 +110,11 @@ function fnv1a32(text: string): number {
  * A truncation of the identity is no help here: every Ticket of a GitHub
  * source starts its identity with the same words, so the leading characters
  * of two identities are equal - `shortStableIdentity` answers `githubgi` for
- * every one of them. The digest reads the whole identity instead.
+ * every one of them. The digest reads the whole identity instead, and the tag
+ * is that whole digest at its fixed width.
  */
 export function ticketNameTag(identity: string): string {
-	return fnv1a32(identity).toString(16).padStart(8, "0").slice(0, IDENTITY_TAG_LENGTH);
+	return fnv1a32(identity).toString(16).padStart(IDENTITY_TAG_LENGTH, "0");
 }
 
 /**

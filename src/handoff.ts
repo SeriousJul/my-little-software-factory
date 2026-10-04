@@ -283,8 +283,8 @@ const NO_NAME_KNOWLEDGE: OwnNameKnowledge = {
  * The name plan of a ticket's handoff: the stable name first, then the names
  * that carry the ticket's work cycle and its handoff ordinal, so a leftover
  * agent of an earlier cycle can never be the reason a handoff does not start.
- * The names come from the naming module, which drops a candidate that would
- * repeat an earlier one.
+ * The naming module builds the three candidates, and each one carries the
+ * ticket's own identity tag, so no candidate repeats an earlier one (ADR 0098).
  */
 function ticketNamePlan(ticket: Ticket, known: OwnNameKnowledge | undefined): NamePlan {
 	return {

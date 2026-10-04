@@ -1,7 +1,7 @@
 # Every Ticket's herdr Agent name carries its own identity tag
 
 Status: accepted
-Date: 2026-09-29
+Date: 2026-10-04
 
 ## Context
 
@@ -33,17 +33,37 @@ had asked for one name.
 ## Decision
 
 **A Ticket's herdr Agent name carries the Ticket's own identity beside its
-title slug.** `agentNameFor` builds `<slug>-<tag>`, where the tag is the
-leading 24 bits of an FNV-1a 32-bit digest of the Ticket's identity, written
-as six hexadecimal characters. The digest is a pure function of the identity
-string, so the name is the same in every run, on every machine, and across a
-version change. It guards no secret and needs no cryptographic strength: the
-tag only has to keep two Tickets apart.
+title slug.** `agentNameFor` builds `<slug>-<tag>`, where the tag is an FNV-1a
+32-bit digest of the Ticket's identity, written as eight hexadecimal
+characters. The digest is a pure function of the identity string, so the name
+is the same in every run, on every machine, and across a version change. It
+guards no secret and needs no cryptographic strength: the tag only has to keep
+two Tickets apart.
 
 **A truncation of the identity is not the tag.** Every Ticket of one GitHub
 source starts its identity with the same words, so the leading characters of
 two identities are equal - `shortStableIdentity`, the Consultation's answer,
 returns `githubgi` for all of them. The digest reads the whole identity.
+
+**The tag is the whole digest, at eight characters.** herdr's name rule leaves
+32 characters for the whole name, so every tag character is taken from the
+title slug: the slug gives up its tail first, and the tag never moves. The
+width is that budget spent on the one fact the name cannot do without. Six
+characters would throw away half of a 32-bit digest and buy nothing back,
+because the tag is not a checksum, it is the separator. For a pair of Tickets
+whose titles already share their first 23 slug characters, the odds their
+digests collide too are one in 4.3 billion. The development install has
+carried 432 Tickets and 102 title pairs of more than one Ticket across its
+whole record, so the odds that one of its real title collisions also meets a
+tag collision are about one in 40 million.
+
+**The tag is not the Ticket's external key.** `#45` and `#51` are two
+characters an operator can read, and the branch name already carries them. They
+are not the tag because an external key is unique only inside one source: two
+repositories the plane watches can each hold a Dependabot alert numbered `#45`
+for one advisory, and those two Tickets carry one key and one title. The digest
+reads the identity, which names the source and the repository, so it separates
+them.
 
 **The tag survives the 32-character cut.** The slug gives up its tail to the
 limit first, so a cut name still says which Ticket it belongs to. The Work
@@ -75,6 +95,27 @@ no longer ask for one name, which no leftover rule was ever meant to settle.
 ADR 0043's rule - a live Agent belongs to a Ticket by its name - is what makes
 the shared name a correctness failure and not just a nuisance.
 
+**The tag is not the part an operator reads.** The tag says which Ticket a name
+belongs to to the plane and to herdr, not to a person: a digest is not a handle
+a human recognizes. What an operator reads is the title slug, which starts
+every name, the cycle suffix, which says which work cycle started the Agent,
+and the branch name, which carries the Ticket's external key. The tag costs the
+title two characters of its tail, and the title is what the name is for.
+
+**A stranger's hold on the stable name still ends the candidate search.**
+`startAgentUnderAvailableName` falls to the next candidate only when the holder
+is this Ticket's own Leftover environment. A name held by an Agent the plane
+does not know - a second install of the plane on one herdr, an Agent the
+operator named by hand, or a pre-change Agent whose Handoff row records no name
+- stays a stranger, and the Handoff fails with that holder named. The tag makes
+a stranger collision rare; it does not remove it. The plane keeps the failure
+deliberately: a stranger's name is not this Handoff's to take, and the operator
+is sent to the pane that holds it. If a live install ever meets one, the
+settlement is to let a stranger collision on the stable name fall through to
+the cycle names, which still asks for the stable name first and still lets it
+win when it is free. That is not the alternative ADR 0012 rejected: it hides no
+leftover and renames no Agent the operator knows.
+
 **Every agent name the plane asks herdr for changes.** A Ticket whose Handoff
 records carry a `herdr_name` keeps that recorded name everywhere the plane
 reads it - the Live view, the Work queue, the Agent identity check, the Close
@@ -88,7 +129,7 @@ on the recorded pane and workspace ids, not on the name, so the leftover
 environment is still closable. What stops working is the name-collision path
 for those pre-change agents: the plane no longer recognizes the old name as
 the Ticket's own, so it will not report "your own leftover agent still holds
-this name" for them. The development state carries 1,089 Handoff rows, 113 of
+this name" for them. The development state carries 1,096 Handoff rows, 113 of
 them with no recorded name; none of those 113 belongs to a Ticket in the
 running or awaiting state, so no live Agent in that install is read under a
 name the plane no longer derives.
@@ -102,7 +143,14 @@ shape that remains: a route Handoff works in environments both Tickets
 recorded, and a holder named there is not a stranger the operator cannot act
 on.
 
+**The leftover warning keeps both names on one Message row.** The Message line
+is one row of the terminal's width, and the warning a Handoff leaves beside its
+own Leftover agent names two herdr names. Its wording is now `a leftover agent
+holds <stable name>; this agent started as <cycle name>` so both names read
+whole at 120 columns with the eight-character tag; the suite reads that warning
+at the ordinary terminal width, not a wide one.
+
 **The 32-character truncation stays a latent risk.** Two Tickets whose titles
-share their first 27 characters now collide only if their identity digests
-collide too. The tag does not remove the truncation; it makes a collision
-require two coincidences instead of none.
+share their first 23 slug characters now collide only if their identity
+digests collide too. The tag does not remove the truncation; it makes a
+collision require two coincidences instead of none.

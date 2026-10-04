@@ -105,22 +105,23 @@ describe("branchNameFor", () => {
 });
 
 describe("ticketNameTag", () => {
-	test("is the same six hex characters for the same identity, every run", () => {
+	test("is the same eight hex characters for the same identity, every run", () => {
 		// FNV-1a 32-bit, the published vectors: "" is 811c9dc5, "a" is e40c292c,
-		// "foobar" is bf9cf968. The tag is the leading six characters.
-		expect(ticketNameTag("")).toBe("811c9d");
-		expect(ticketNameTag("a")).toBe("e40c29");
-		expect(ticketNameTag("foobar")).toBe("bf9cf9");
+		// "foobar" is bf9cf968. The tag is the whole digest, so every vector
+		// stands in the tag unchanged.
+		expect(ticketNameTag("")).toBe("811c9dc5");
+		expect(ticketNameTag("a")).toBe("e40c292c");
+		expect(ticketNameTag("foobar")).toBe("bf9cf968");
 	});
 
-	test("is six characters of hex, so it always fits herdr's name rule", () => {
+	test("is eight characters of hex, so it always fits herdr's name rule", () => {
 		for (const identity of [
 			"",
 			"a",
 			"github:github.com:I_1",
 			"github:github.com:seriousjul/seriousjul.github.io:dependabot:51",
 		]) {
-			expect(ticketNameTag(identity)).toMatch(/^[0-9a-f]{6}$/);
+			expect(ticketNameTag(identity)).toMatch(/^[0-9a-f]{8}$/);
 		}
 	});
 
@@ -137,25 +138,25 @@ describe("ticketNameTag", () => {
 describe("agentNameFor", () => {
 	test("is the title slug with the ticket's own identity tag", () => {
 		expect(agentNameFor(ticket("Retry policy for webhooks"))).toBe(
-			"retry-policy-for-webhooks-444d8b",
+			"retry-policy-for-webhoo-444d8b55",
 		);
 	});
 
 	test("a slug that starts with a digit gets a t- prefix", () => {
-		expect(agentNameFor(ticket("2fa rollout"))).toBe("t-2fa-rollout-444d8b");
+		expect(agentNameFor(ticket("2fa rollout"))).toBe("t-2fa-rollout-444d8b55");
 	});
 
 	test("keeps an agent name inside herdr's name rule", () => {
 		const name = agentNameFor(ticket("a".repeat(32)));
-		expect(name).toBe(`${"a".repeat(25)}-444d8b`);
+		expect(name).toBe(`${"a".repeat(23)}-444d8b55`);
 		expect(name.length).toBe(32);
 		expect(/^[a-z][a-z0-9_-]{0,31}$/.test(name)).toBe(true);
 	});
 
 	test("a long slug cuts at 32 characters and drops a trailing hyphen", () => {
-		const title = `a${"x".repeat(23)}-more`;
+		const title = `a${"x".repeat(21)}-more`;
 		const name = agentNameFor(ticket(title));
-		expect(name).toBe(`${"a"}${"x".repeat(23)}-444d8b`);
+		expect(name).toBe(`${"a"}${"x".repeat(21)}-444d8b55`);
 		expect(name.length).toBe(31);
 		expect(name.endsWith("-")).toBe(false);
 		expect(/^[a-z][a-z0-9_-]*$/.test(name)).toBe(true);
@@ -168,7 +169,7 @@ describe("agentNameFor", () => {
 			"Fix pan drift in split panes today",
 			"a-very-long-title-that-goes-on-and-on-past-thirty-two-characters",
 		]) {
-			expect(agentNameFor(ticket(title)).endsWith("-444d8b")).toBe(true);
+			expect(agentNameFor(ticket(title)).endsWith("-444d8b55")).toBe(true);
 		}
 	});
 
@@ -241,25 +242,26 @@ describe("Consultation naming", () => {
 describe("cycleAgentName", () => {
 	test("keeps the ticket's own words and names the work cycle", () => {
 		expect(cycleAgentName(ticket("Retry policy for webhooks"), 2)).toBe(
-			"retry-policy-for-webho-444d8b-c2",
+			"retry-policy-for-web-444d8b55-c2",
 		);
 	});
 
 	test("the handoff's ordinal tells two handoffs of one cycle apart", () => {
 		expect(cycleAgentName(ticket("Retry policy for webhooks"), 2, 5)).toBe(
-			"retry-policy-for-web-444d8b-c2-5",
+			"retry-policy-for-w-444d8b55-c2-5",
 		);
 	});
 
 	test("a digit slug keeps its prefix beside its cycle", () => {
-		expect(cycleAgentName(ticket("2fa rollout"), 1)).toBe("t-2fa-rollout-444d8b-c1");
+		expect(cycleAgentName(ticket("2fa rollout"), 1)).toBe("t-2fa-rollout-444d8b55-c1");
 	});
 
 	test("a cut cycle name still says which cycle it belongs to", () => {
 		const one = ticket("a-very-long-title-that-goes-on-and-on-past-thirty-two-characters");
 		const stable = agentNameFor(one);
 		const cycle = cycleAgentName(one, 3);
-		expect(stable.length).toBe(32);
+		expect(stable.length).toBeLessThanOrEqual(32);
+		expect(stable.endsWith("-444d8b55")).toBe(true);
 		expect(cycle.length).toBeLessThanOrEqual(32);
 		expect(cycle.endsWith("-c3")).toBe(true);
 		expect(cycle).not.toBe(stable);
@@ -284,9 +286,9 @@ describe("ticketAgentNames", () => {
 
 	test("offers the stable name, then the cycle, then the handoff ordinal", () => {
 		expect(ticketAgentNames(ticket("Retry policy"), 2, 3)).toEqual([
-			"retry-policy-444d8b",
-			"retry-policy-444d8b-c2",
-			"retry-policy-444d8b-c2-3",
+			"retry-policy-444d8b55",
+			"retry-policy-444d8b55-c2",
+			"retry-policy-444d8b55-c2-3",
 		]);
 	});
 
@@ -294,9 +296,9 @@ describe("ticketAgentNames", () => {
 		const one = ticket(rebuildsStable);
 		const candidates = ticketAgentNames(one, 2, 1);
 		expect(candidates).toEqual([
-			`${"a".repeat(25)}-444d8b`,
-			`${"a".repeat(22)}-444d8b-c2`,
-			`${"a".repeat(20)}-444d8b-c2-1`,
+			`${"a".repeat(23)}-444d8b55`,
+			`${"a".repeat(20)}-444d8b55-c2`,
+			`${"a".repeat(18)}-444d8b55-c2-1`,
 		]);
 		expect(new Set(candidates).size).toBe(3);
 	});
@@ -304,12 +306,12 @@ describe("ticketAgentNames", () => {
 	test("the t- prefix moves the same boundary", () => {
 		const one = ticket(`2${"a".repeat(26)}-c2`);
 		const stable = agentNameFor(one);
-		expect(stable).toBe(`t-2${"a".repeat(22)}-444d8b`);
-		expect(cycleAgentName(one, 2)).toBe(`t-2${"a".repeat(19)}-444d8b-c2`);
+		expect(stable).toBe(`t-2${"a".repeat(20)}-444d8b55`);
+		expect(cycleAgentName(one, 2)).toBe(`t-2${"a".repeat(17)}-444d8b55-c2`);
 		expect(ticketAgentNames(one, 2, 1)).toEqual([
 			stable,
-			`t-2${"a".repeat(19)}-444d8b-c2`,
-			`t-2${"a".repeat(17)}-444d8b-c2-1`,
+			`t-2${"a".repeat(17)}-444d8b55-c2`,
+			`t-2${"a".repeat(15)}-444d8b55-c2-1`,
 		]);
 	});
 

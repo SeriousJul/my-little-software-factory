@@ -221,7 +221,10 @@ export async function reportHandoffOutcome(
 			: await persistMapping(outcome.notes.mappingToWrite);
 	const nameWarning =
 		outcome.collision !== undefined && outcome.collision.startedAs !== null
-			? `a leftover agent still holds the herdr name ${outcome.collision.stableName}; this agent started as ${outcome.collision.startedAs}`
+			? // The Message line is one row of the terminal's width, and this fact
+				// carries two herdr names. The wording stays short enough that both
+				// names read whole on a normal terminal (issue #216, ADR 0098).
+				`a leftover agent holds ${outcome.collision.stableName}; this agent started as ${outcome.collision.startedAs}`
 			: undefined;
 	const lines = [
 		...(outcome.status === "ok" ? [] : [outcome.reason]),

@@ -3280,9 +3280,10 @@ describe("the leftover environment", () => {
 				// completion trace will name the agent that actually ran.
 				expect(app.state.ticketWorkCycle.agentNameForTicket(identity)).toBe(CYCLE2);
 			},
-			// The warning names the ticket's full herdr name, so the status row
-			// needs the room for the whole line.
-			WIDE_STATUS,
+			// The warning names both herdr names on the one status row, and the
+			// suite reads it at the ordinary terminal width: a cut line would hide
+			// the name the agent actually started as.
+			WIDTH,
 			HEIGHT,
 			propsOf(app),
 		);
@@ -3362,9 +3363,7 @@ describe("the leftover environment", () => {
 				expect(shown).toContain(
 					`agent ${CYCLE2} started, but the prompt failed: agent has no pane (agent_gone)`,
 				);
-				expect(shown).toContain(
-					`a leftover agent still holds the herdr name ${AGENT}; this agent started as ${CYCLE2}`,
-				);
+				expect(shown).toContain(`a leftover agent holds ${AGENT}; this agent started as ${CYCLE2}`);
 				// The agent runs, so the cycle stands: the ticket is handed off.
 				expect(app.state.ticketWorkCycle.ticketState(identity)).toBe("handed-off");
 			},
