@@ -349,7 +349,7 @@ _Avoid_: queued state, pending, on hold
 
 **Staging**:
 Who put a Work queue row in the queue: `automatic` for a row one of the observation cycle's walks added, `operator-staged` for a row an operator's ask left there when no Parallel limit seat stood free (issue #223).
-The word the `handoff queued:` and `handoff started:` lines state beside the origin, so a reviewer reading the record tells the factory's own row from the operator's. Staging is not the origin: the origin names the path the row came from - an open ticket, a Workflow route, a Restart - and the staging names who asked for it.
+The word the `handoff queued:` and `handoff started:` lines state beside the origin, so a reviewer reading the record tells the factory's own row from the operator's. Staging is not the origin: the origin names the path the row came from - an open ticket, a Workflow route, a Restart - and the staging names who asked for it. The automatic walks' hold line names it too, so a row the operator staged that holds an owed continuation out is stated as the operator's row and never as a continuation.
 _Avoid_: manual row, auto row, source
 
 **Startup grace**:

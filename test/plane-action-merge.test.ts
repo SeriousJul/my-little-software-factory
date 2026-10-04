@@ -1158,12 +1158,14 @@ describe("the dispatch's ask and pickup", () => {
 		state.workQueue.setQueuePaused(true);
 		const runner = new FakeRunner();
 		const events: string[] = [];
+		const lines: string[] = [];
 		const dispatch = createHandoffDispatch({
 			state,
 			runner,
 			config: () => PLANE_CONFIG,
 			seatCount: () => 0,
 			home: home(),
+			log: recordLogger(lines),
 			...recorder(events),
 		});
 
@@ -1202,6 +1204,12 @@ describe("the dispatch's ask and pickup", () => {
 			ok: false,
 			reason: `"${pullTitle}" already has a waiting queue item; the first item keeps its place`,
 		});
+		// The refusal reaches the plane's record on the merge channel too (issue
+		// #223), in the one shape every refusal line wears.
+		expect(lines).toEqual([
+			`merge queued: "${pullTitle}" (origin open, automatic)`,
+			`merge refused: "${pullTitle}" (already has a waiting queue item; the first item keeps its place)`,
+		]);
 		// The pause held the pickup: no command ran.
 		expect(runner.commands()).toEqual([]);
 		state.close();

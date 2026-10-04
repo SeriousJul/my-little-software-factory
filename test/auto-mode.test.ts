@@ -549,6 +549,7 @@ describe("the mode cell and the a key", () => {
 	test("a mode write the state file refuses reports, and the flip stands", async () => {
 		const app = seededApp("open");
 		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+		const lines: string[] = [];
 
 		await withApp(
 			async (setup) => {
@@ -571,10 +572,17 @@ describe("the mode cell and the a key", () => {
 				expect(messageRowOf(frame).trim()).toContain("Error:");
 				// The mode cell keeps the flipped mode, not the stored one.
 				expect(frameText(setup.captureCharFrame())).toContain("○ auto 0/2");
+				// The record states the refused flip the way the Message line does
+				// (issue #223). A file that said `auto-handoff is on` while the next run
+				// reads the old value is a record a reviewer cannot trust.
+				const recorded = lines.filter((line) => line.startsWith("auto-handoff is"));
+				expect(recorded).toHaveLength(1);
+				expect(recorded[0]).toContain("auto-handoff is on for this session only:");
+				expect(recorded[0]).toContain(app.state.path);
 			},
 			WIDE_STATUS,
 			HEIGHT,
-			propsOf(app),
+			{ ...propsOf(app), logger: recordLogger(lines) },
 		);
 		app.state.close();
 	});

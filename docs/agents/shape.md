@@ -147,9 +147,11 @@ description: The module map of the source tree, for agents working in this repos
 	continuation must not jump, the fresh-work cycle gate, the restart candidate,
 	and the open ticket's row gate and its waits. It owns the fact each hold acted
 	on and the one sentence the cycle states that hold in, so a walk that added
-	nothing names its own reason in the record (issue #223). `queue-staging.ts`
-	holds the staging - the one name the `handoff queued:` and `handoff started:`
-	lines read for who put the row in the queue (issue #223).
+	nothing names its own reason in the record, and the reason for a held
+	continuation names the staging of the row it waits behind (issue #223).
+	`queue-staging.ts` holds the staging - the one name the `handoff queued:` and
+	`handoff started:` lines read for who put the row in the queue, and the name
+	the hold line states for the row an automatic walk waits behind (issue #223).
 - `src/handoff.ts`: the handoff. One start call (`runHandoffStart`, kept private
 	to the module) behind the two start calls the plane has (issue #204,
 	ADR 0097): it runs the pre-flight in one order, resolves the repository, builds

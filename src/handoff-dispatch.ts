@@ -293,7 +293,8 @@ export interface HandoffDispatchOptions extends HandoffDispatchReports {
 	 * The plane's file logger. The dispatch leaves the record's start lines and
 	 * queue lines, for a Handoff and for a Plane action alike: a start with its
 	 * start mode, its origin, its staging, and its seat reading, a queue, and a
-	 * refusal with its reason. A Consultation's start line is not one of them:
+	 * refusal with its reason - the standing-row refusal once for the row that
+	 * stands, not once per ask. A Consultation's start line is not one of them:
 	 * the Consultation operations leave it (issue #220).
 	 */
 	log?: Logger;
@@ -436,6 +437,14 @@ export function createHandoffDispatch(options: HandoffDispatchOptions): HandoffD
 	return new HandoffDispatchModule(options);
 }
 
+/**
+ * The fact the Work queue's one-item-per-ticket rule states (ADR 0049), without
+ * the ticket's name. The reason the Message line carries puts the name in front
+ * of it; the record line puts the name in front of the whole fact, the way every
+ * other refusal line does (issue #223).
+ */
+const QUEUE_ITEM_STANDS_FACT = "already has a waiting queue item; the first item keeps its place";
+
 /** The seat, the queues, and the work of one durable state database. */
 class HandoffDispatchModule implements HandoffDispatch {
 	private readonly state: HandoffDispatchAggregates;
@@ -486,6 +495,17 @@ class HandoffDispatchModule implements HandoffDispatch {
 	 * merge, and the source answers the second command as a block.
 	 */
 	private planeActionRunsInFlight = new Set<string>();
+
+	/**
+	 * The standing-item refusal the record has already stated, per ticket, keyed by
+	 * the enqueue time of the row that stood (issue #223).
+	 *
+	 * The automatic walks re-ask every cycle while a row stands, and the row's own
+	 * enqueue time is the fact: the same row says the refusal once, and a row that
+	 * left the queue and a later row for the same ticket are two facts that each
+	 * state themselves again.
+	 */
+	private readonly queueItemRefusals = new Map<string, string>();
 
 	constructor(options: HandoffDispatchOptions) {
 		this.state = options.state;
@@ -551,9 +571,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 		// refusal, not a queued item.
 		const check = this.state.handoff.handoffClaimCheck(intent.ticketIdentity, intent.origin);
 		if (!check.ok) {
-			this.log?.warn(
-				`handoff refused: ${check.reason} (${this.ticketName(intent.ticketIdentity)})`,
-			);
+			this.log?.warn(this.refusalLine("handoff", intent.ticketIdentity, check.reason));
 			return Promise.resolve({ ok: false, reason: check.reason });
 		}
 		const enqueued = this.enqueueWork(intent);
@@ -598,14 +616,11 @@ class HandoffDispatchModule implements HandoffDispatch {
 			});
 		const check = this.planeActionClaimCheck(intent.ticketIdentity);
 		if (!check.ok) {
-			this.log?.warn(`merge refused: ${check.reason} (${this.ticketName(intent.ticketIdentity)})`);
+			this.log?.warn(this.refusalLine("merge", intent.ticketIdentity, check.reason));
 			return Promise.resolve({ ok: false, reason: check.reason });
 		}
-		if (this.state.workQueue.hasWorkItem(intent.ticketIdentity)) {
-			const reason = this.queueItemStandsReason(intent.ticketIdentity);
-			this.log?.warn(`merge refused: ${reason}`);
-			return Promise.resolve({ ok: false, reason });
-		}
+		if (this.state.workQueue.hasWorkItem(intent.ticketIdentity))
+			return Promise.resolve(this.refuseStandingQueueItem("merge", intent.ticketIdentity));
 		// The run's own hold, beside the queue's: the row of a merge already in
 		// flight left the queue at its claim, so `hasWorkItem` cannot see it, and
 		// the run's fresh read cannot either - the source still answers the pull
@@ -928,18 +943,12 @@ class HandoffDispatchModule implements HandoffDispatch {
 	 * alone: every caller of `dispatch` writes an refused result's reason there, so
 	 * a warning reported on top of it would only overwrite that first line with a
 	 * shorter copy of the same fact. The file record is the other outlet, and it
-	 * carries the refusal the way the claim refusal does (issue #223).
+	 * states a standing-row refusal once for the row that stands, not once per ask
+	 * (issue #223).
 	 */
 	private enqueueWork(intent: HandoffIntent): DispatchResult {
-		if (this.state.workQueue.hasWorkItem(intent.ticketIdentity)) {
-			const reason = this.queueItemStandsReason(intent.ticketIdentity);
-			// The refusal is the record's fact too, the way the claim refusal is
-			// (issue #223): the reason already names the ticket, so the line states
-			// it once. Without it the run shows an owed start that never ran and no
-			// line saying the row already standing is why.
-			this.log?.warn(`handoff refused: ${reason}`);
-			return { ok: false, reason };
-		}
+		if (this.state.workQueue.hasWorkItem(intent.ticketIdentity))
+			return this.refuseStandingQueueItem("handoff", intent.ticketIdentity);
 		const enqueued = this.state.workQueue.enqueueWork({
 			ticketIdentity: intent.ticketIdentity,
 			routeFromIdentity: intent.routeFromIdentity ?? null,
@@ -1332,7 +1341,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 		const seats = this.seatReading();
 		const claim = this.state.handoff.claimHandoff(item.ticketIdentity, item.choice, item.origin);
 		if (!claim.ok) {
-			this.log?.warn(`handoff refused: ${claim.reason} (${this.ticketName(item.ticketIdentity)})`);
+			this.log?.warn(this.refusalLine("handoff", item.ticketIdentity, claim.reason));
 			return { ok: false, reason: claim.reason };
 		}
 		// A claim is a claim: the picked-up start enters the Starting window
@@ -1568,11 +1577,46 @@ class HandoffDispatchModule implements HandoffDispatch {
 	 * The reason the Work queue's one-item-per-ticket rule gives (ADR 0049), in
 	 * the one wording both start channels state it in.
 	 *
-	 * The reason names the ticket itself, so the record line the refusal leaves
-	 * needs no name field beside it (issue #223).
+	 * The reason names the ticket itself, because every caller writes it to the
+	 * Message line as the whole line.
 	 */
 	private queueItemStandsReason(identity: string): string {
-		return `${this.ticketName(identity)} already has a waiting queue item; the first item keeps its place`;
+		return `${this.ticketName(identity)} ${QUEUE_ITEM_STANDS_FACT}`;
+	}
+
+	/**
+	 * The refusal the Work queue's one-item-per-ticket rule gives, on both start
+	 * channels, with the record line the standing row leaves (issue #223).
+	 *
+	 * Without the line the run shows an owed start that never ran and says nothing
+	 * about the row already standing being why. The line follows the rule the
+	 * plane's other standing facts follow - a held Next step states itself once
+	 * while the fact stands and again when it moves: the automatic walks re-ask
+	 * every cycle, and a five-second poll cannot pin the file with one refusal.
+	 */
+	private refuseStandingQueueItem(prefix: "handoff" | "merge", identity: string): DispatchResult {
+		const row = this.state.workQueue
+			.items()
+			.find((item) => item.kind !== "consultation" && item.ticketIdentity === identity);
+		const standingSince = row === undefined ? "" : row.enqueuedAt;
+		if (this.queueItemRefusals.get(identity) !== standingSince) {
+			this.queueItemRefusals.set(identity, standingSince);
+			this.log?.warn(this.refusalLine(prefix, identity, QUEUE_ITEM_STANDS_FACT));
+		}
+		return { ok: false, reason: this.queueItemStandsReason(identity) };
+	}
+
+	/**
+	 * The record line every refusal leaves (issue #223): the prefix, the ticket the
+	 * refusal is about, and the fact the refusal gives.
+	 *
+	 * One shape for every refusal the plane records, so a reader or a tool needs
+	 * one rule to read them. The reason a caller puts on the Message line keeps its
+	 * own wording; the line names the ticket first, the way the queue's other lines
+	 * name it.
+	 */
+	private refusalLine(prefix: "handoff" | "merge", identity: string, fact: string): string {
+		return `${prefix} refused: ${this.ticketName(identity)} (${fact})`;
 	}
 
 	/**

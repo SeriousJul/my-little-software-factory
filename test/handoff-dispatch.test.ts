@@ -3979,7 +3979,7 @@ describe("the record lines", () => {
 		expect(lines).toEqual([
 			`handoff queued: "${FIRST.title}" (origin open, operator-staged)`,
 			`handoff started: "${FIRST.title}" (mode direct-ask, origin open, operator-staged, seats 0/2)`,
-			`handoff refused: handoff recovery is required before another handoff ("${FIRST.title}")`,
+			`handoff refused: "${FIRST.title}" (handoff recovery is required before another handoff)`,
 		]);
 	});
 
@@ -4141,11 +4141,55 @@ describe("the record lines", () => {
 			ok: false,
 			reason: expect.stringContaining("already has a waiting queue item"),
 		});
-		// The reason names the ticket itself, so the line states it once.
+		// The reason names the ticket itself, and the line names it once more in
+		// the shape every refusal line wears.
 		expect(lines).toEqual([
 			`handoff queued: "${FIRST.title}" (origin open, operator-staged)`,
-			`handoff refused: "${FIRST.title}" already has a waiting queue item; the first item keeps its place`,
+			`handoff refused: "${FIRST.title}" (already has a waiting queue item; the first item keeps its place)`,
 		]);
+		mod.stop();
+	});
+
+	/**
+	 * The cadence of that line (issue #223). The automatic walks re-ask every
+	 * observation cycle while the row stands, so a refusal written on every ask
+	 * pins the file at the poll's rate - about 12 identical lines a minute at the
+	 * five-second poll. The line follows the rule the plane's other standing facts
+	 * follow: once while the fact stands, again when the fact changes.
+	 */
+	test("the standing-row refusal states itself once while the row stands, and again for a new row", async () => {
+		const rigRef = rig([FIRST]);
+		const lines: string[] = [];
+		const hold = gatedRunner(rigRef.runner, () => true);
+		const mod = withRunner(rigRef, hold.runner, {
+			log: recordLogger(lines),
+			// The cap is full, so every ask here only reaches the queue's rules.
+			seatCount: () => rigRef.config.maxParallelAgents,
+		});
+		rigRef.dispatch = mod;
+		await expect(start(rigRef, FIRST, "open")).resolves.toEqual({ ok: true });
+		const continuationAsk = () =>
+			mod.dispatch({
+				origin: "workflow",
+				ticketIdentity: FIRST.identity,
+				choice: liveChoice,
+				previousMessage: "",
+				automatic: true,
+			});
+		// Three cycles' worth of re-asks on the one standing row.
+		await expect(continuationAsk()).resolves.toMatchObject({ ok: false });
+		await expect(continuationAsk()).resolves.toMatchObject({ ok: false });
+		await expect(continuationAsk()).resolves.toMatchObject({ ok: false });
+		const refusal = () => lines.filter((line) => line.startsWith("handoff refused:"));
+		expect(refusal()).toEqual([
+			`handoff refused: "${FIRST.title}" (already has a waiting queue item; the first item keeps its place)`,
+		]);
+		// The row leaves the queue, and a later row for the same ticket is a new
+		// standing fact: the refusal states itself again.
+		expect(mod.removeQueueItem(FIRST.identity)).toBe(true);
+		await expect(start(rigRef, FIRST, "open")).resolves.toEqual({ ok: true });
+		await expect(continuationAsk()).resolves.toMatchObject({ ok: false });
+		expect(refusal()).toHaveLength(2);
 		mod.stop();
 	});
 });

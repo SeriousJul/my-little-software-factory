@@ -482,14 +482,21 @@ out:
 ```text
 handoff queued: "Add a webhook retry policy" (origin open, operator-staged)
 merge queued: "Persist the source facts" (origin workflow, automatic)
-handoff refused: "Add a webhook retry policy" already has a waiting queue item; the first item keeps its place
-merge refused: "Persist the source facts" already has a waiting queue item; the first item keeps its place
+handoff refused: "Add a webhook retry policy" (already has a waiting queue item; the first item keeps its place)
+merge refused: "Persist the source facts" (already has a waiting queue item; the first item keeps its place)
+handoff refused: "Add a webhook retry policy" (handoff recovery is required before another handoff)
 ```
 
 The Work queue holds one item per ticket, so a second ask for a ticket that
 already waits is refused. The refusal reaches the Message line and the file
-alike, and the reason names the ticket, so the line carries no name field beside
-it (issue #223).
+alike. Every refusal line wears one shape - the prefix, the ticket's name, and
+the fact in parentheses - so one rule reads them all (issue #223).
+
+The file states a standing-row refusal once for the row that stands, not once
+per ask. The automatic walks re-ask every observation cycle while the row
+stands, and a five-second poll cannot pin the file with the same refusal; a row
+that leaves the queue and a later row for the same ticket are two facts, and
+each states itself (issue #223).
 
 The observation cycle states each hold its automatic walks take, once for as long
 as the fact stands and again when the fact changes, so a run that started nothing
@@ -500,8 +507,13 @@ automatic walks hold: auto-handoff is off
 automatic walks hold: the Work queue is paused
 automatic walks hold: a failed turn waits for the operator
 automatic walks hold: the Work queue already holds a continuation
+automatic walks hold: the Work queue holds an item the operator staged
 automatic walks hold: the Work queue holds a waiting row
 ```
+
+The two lines about a standing row name whose row it is, because the origin
+cannot: the row your own route decision left in the queue and the row the
+factory owes for a settled turn are both `workflow`.
 
 Auto-handoff mode and the Work queue pause are facts you set by key, and each
 flip states itself:
@@ -511,6 +523,14 @@ auto-handoff is on
 auto-handoff is off
 the Work queue is paused
 the Work queue resumed
+```
+
+A mode flip the state file refused states itself as what it is - the line lands
+beside the Message line that names the state file it could not write, and the
+next run reads the mode the file still holds:
+
+```text
+auto-handoff is on for this session only: cannot store the Auto-handoff mode at /path/to/state.sqlite: Error: no such table: auto_handoff_mode
 ```
 
 A Consultation's start line is the Consultation operations' own. Its name is the

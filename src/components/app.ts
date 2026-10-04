@@ -1814,22 +1814,29 @@ export function App({
 	 * line, and the in-session flip stands: the operator keeps working in the mode
 	 * they asked for, so the failure is news about the next run, not a refusal of
 	 * this one.
+	 *
+	 * The record states the flip the way the Message line states it (issue #223):
+	 * the plain line lands when the write took, and a write the state file refused
+	 * leaves the session-only line beside it. A file that says the mode moved while
+	 * the next run reads the old value is a record a reviewer cannot trust.
 	 */
 	const toggleAutoHandoff = () => {
 		const next = !autoModeRef.current;
 		autoModeRef.current = next;
 		setAutoMode(next);
 		// The mode decides every automatic walk in the run, so the record names it
-		// when it moves (issue #223). The line lands before the state write: the
-		// flip stands for this session even when the file refuses it.
-		logger?.info(`auto-handoff is ${next ? "on" : "off"}`);
-		if (state === undefined) return;
+		// when it moves. A plane with no state file has nothing to persist.
+		if (state === undefined) {
+			logger?.info(`auto-handoff is ${next ? "on" : "off"}`);
+			return;
+		}
 		try {
 			state.handoff.setAutoHandoffMode(next);
+			logger?.info(`auto-handoff is ${next ? "on" : "off"}`);
 		} catch (error) {
-			setErrorMessage(
-				`auto-handoff is ${next ? "on" : "off"} for this session only: ${errorMessage(error)}`,
-			);
+			const reason = errorMessage(error);
+			logger?.warn(`auto-handoff is ${next ? "on" : "off"} for this session only: ${reason}`);
+			setErrorMessage(`auto-handoff is ${next ? "on" : "off"} for this session only: ${reason}`);
 		}
 	};
 

@@ -6040,6 +6040,26 @@ describe("the automatic walks state their holds in the record (issue #223)", () 
 		state.close();
 	});
 
+	/**
+	 * The row the dev run on PR #215 left behind (issue #223). The operator's route
+	 * decision keeps its row in the queue with no `automatic` mark, and ADR 0100
+	 * ranks the owed continuation above it, so the row still holds the continuation
+	 * out. The line has to say whose row it is: the origin of the operator's route
+	 * and of the factory's continuation is the same `workflow`, and a record that
+	 * calls the operator's row a continuation names a fact the row is not.
+	 */
+	test("an item the operator staged holds the owed one, and the cycle names it as the operator's", async () => {
+		const { state, intents, lines, coordinator } = continuationRecordRig();
+		queueRow(state, "github:github.com:I_6", "workflow", false);
+		await coordinator.tick();
+		expect(intents.filter((intent) => intent.origin === "workflow")).toHaveLength(0);
+		expect(lines).toEqual([
+			"automatic walks hold: the Work queue holds an item the operator staged",
+			"automatic walks hold: the Work queue holds a waiting row",
+		]);
+		state.close();
+	});
+
 	test("each hold names its own fact, and no two share a line", async () => {
 		// Auto-handoff mode off: the walks run no automatic add at all.
 		const off = recordRig({ autoOn: false });
