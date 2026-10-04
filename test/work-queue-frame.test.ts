@@ -462,13 +462,13 @@ describe("the Work queue section", () => {
 					await press(setup, "p", "the queue resume", (f) =>
 						messageRowOf(f).includes("Work queue resumed"),
 					);
-					// One line per key, in the order the keys landed. The cycle's own
-					// record lines - the holds its automatic walks state - are the
-					// other family the same logger carries, and they are not this
-					// fact's lines.
-					expect(lines.filter((line) => line.startsWith("the Work queue "))).toEqual([
-						"the Work queue is paused",
-						"the Work queue resumed",
+					// One line per key, in the order the keys landed. The `queue:` prefix is the
+					// record's family for the facts the operator sets by key. The cycle's own
+					// record lines - the holds its automatic walks state - are the other family
+					// the same logger carries, and they are not this fact's lines.
+					expect(lines.filter((line) => line.startsWith("queue:"))).toEqual([
+						"queue: the Work queue is paused",
+						"queue: the Work queue resumed",
 					]);
 				},
 				state,

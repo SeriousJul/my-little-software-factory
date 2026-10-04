@@ -532,11 +532,12 @@ describe("the mode cell and the a key", () => {
 				await awaitFrame(setup, (f) => f.includes("● manual 0/2"), "the mode cell");
 				await press(setup, "a", "auto on", (f) => f.includes("○ auto 0/2"));
 				await press(setup, "a", "auto off", (f) => f.includes("● manual 0/2"));
-				// One line per key, in the order the keys landed. The cycle's own hold
+				// One line per key, in the order the keys landed. The `mode:` prefix is the
+				// record's family for the facts the operator sets by key. The cycle's own hold
 				// lines share the logger and are not this fact's lines.
-				expect(lines.filter((line) => line.startsWith("auto-handoff is"))).toEqual([
-					"auto-handoff is on",
-					"auto-handoff is off",
+				expect(lines.filter((line) => line.startsWith("mode: auto-handoff is"))).toEqual([
+					"mode: auto-handoff is on",
+					"mode: auto-handoff is off",
 				]);
 			},
 			WIDTH,
@@ -575,9 +576,9 @@ describe("the mode cell and the a key", () => {
 				// The record states the refused flip the way the Message line does
 				// (issue #223). A file that said `auto-handoff is on` while the next run
 				// reads the old value is a record a reviewer cannot trust.
-				const recorded = lines.filter((line) => line.startsWith("auto-handoff is"));
+				const recorded = lines.filter((line) => line.startsWith("mode: auto-handoff is"));
 				expect(recorded).toHaveLength(1);
-				expect(recorded[0]).toContain("auto-handoff is on for this session only:");
+				expect(recorded[0]).toContain("mode: auto-handoff is on for this session only:");
 				expect(recorded[0]).toContain(app.state.path);
 			},
 			WIDE_STATUS,

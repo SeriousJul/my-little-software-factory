@@ -1818,25 +1818,30 @@ export function App({
 	 * The record states the flip the way the Message line states it (issue #223):
 	 * the plain line lands when the write took, and a write the state file refused
 	 * leaves the session-only line beside it. A file that says the mode moved while
-	 * the next run reads the old value is a record a reviewer cannot trust.
+	 * the next run reads the old value is a record a reviewer cannot trust. The
+	 * record's line carries the `mode:` family prefix, so a reader grepping the file
+	 * for the facts the operator sets by key gets this line and not the cycle's hold
+	 * line about the same fact.
 	 */
 	const toggleAutoHandoff = () => {
 		const next = !autoModeRef.current;
 		autoModeRef.current = next;
 		setAutoMode(next);
+		const modeLine = `mode: auto-handoff is ${next ? "on" : "off"}`;
+		const sessionOnly = `auto-handoff is ${next ? "on" : "off"} for this session only`;
 		// The mode decides every automatic walk in the run, so the record names it
 		// when it moves. A plane with no state file has nothing to persist.
 		if (state === undefined) {
-			logger?.info(`auto-handoff is ${next ? "on" : "off"}`);
+			logger?.info(modeLine);
 			return;
 		}
 		try {
 			state.handoff.setAutoHandoffMode(next);
-			logger?.info(`auto-handoff is ${next ? "on" : "off"}`);
+			logger?.info(modeLine);
 		} catch (error) {
 			const reason = errorMessage(error);
-			logger?.warn(`auto-handoff is ${next ? "on" : "off"} for this session only: ${reason}`);
-			setErrorMessage(`auto-handoff is ${next ? "on" : "off"} for this session only: ${reason}`);
+			logger?.warn(`${modeLine} for this session only: ${reason}`);
+			setErrorMessage(`${sessionOnly}: ${reason}`);
 		}
 	};
 
@@ -3662,8 +3667,10 @@ export function App({
 					}
 					setQueuePaused(next);
 					// The pause is the other fact the operator sets by key, and it holds
-					// every automatic add while it stands (issue #223).
-					logger?.info(next ? "the Work queue is paused" : "the Work queue resumed");
+					// every automatic add while it stands (issue #223). The `queue:` prefix
+					// keeps this line in its own family: the cycle states its own hold line
+					// about the same fact, and a reader grepping one must not get the other.
+					logger?.info(next ? "queue: the Work queue is paused" : "queue: the Work queue resumed");
 					setNoticeMessage(next ? "Work queue paused" : "Work queue resumed");
 					if (!next) void handoffDispatch?.pickupWorkQueue();
 				},

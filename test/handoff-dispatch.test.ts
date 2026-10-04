@@ -4158,7 +4158,11 @@ describe("the record lines", () => {
 	 * follow: once while the fact stands, again when the fact changes.
 	 */
 	test("the standing-row refusal states itself once while the row stands, and again for a new row", async () => {
-		const rigRef = rig([FIRST]);
+		// A pinned clock the test moves (issue #223 review). The row's enqueue time
+		// is no fact of this refusal, and the test must not stand or fall on which
+		// millisecond the removed row and the new row land in.
+		let clockMs = Date.parse("2026-09-01T00:00:00Z");
+		const rigRef = rig([FIRST], () => clockMs);
 		const lines: string[] = [];
 		const hold = gatedRunner(rigRef.runner, () => true);
 		const mod = withRunner(rigRef, hold.runner, {
@@ -4178,7 +4182,9 @@ describe("the record lines", () => {
 			});
 		// Three cycles' worth of re-asks on the one standing row.
 		await expect(continuationAsk()).resolves.toMatchObject({ ok: false });
+		clockMs += 5_000;
 		await expect(continuationAsk()).resolves.toMatchObject({ ok: false });
+		clockMs += 5_000;
 		await expect(continuationAsk()).resolves.toMatchObject({ ok: false });
 		const refusal = () => lines.filter((line) => line.startsWith("handoff refused:"));
 		expect(refusal()).toEqual([
@@ -4187,9 +4193,48 @@ describe("the record lines", () => {
 		// The row leaves the queue, and a later row for the same ticket is a new
 		// standing fact: the refusal states itself again.
 		expect(mod.removeQueueItem(FIRST.identity)).toBe(true);
+		clockMs += 60_000;
 		await expect(start(rigRef, FIRST, "open")).resolves.toEqual({ ok: true });
 		await expect(continuationAsk()).resolves.toMatchObject({ ok: false });
 		expect(refusal()).toHaveLength(2);
+		mod.stop();
+	});
+
+	/**
+	 * The same cadence when the row leaves through another aggregate's operation and
+	 * not through the dispatch's own removal (issue #223). The queue holds one row per
+	 * ticket, so an enqueue can only land once the row before it left: the new row is
+	 * a new fact whatever path took the old one out.
+	 */
+	test("a row that left through another aggregate is a new standing fact", async () => {
+		let clockMs = Date.parse("2026-09-01T00:00:00Z");
+		const rigRef = rig([FIRST], () => clockMs);
+		const lines: string[] = [];
+		const hold = gatedRunner(rigRef.runner, () => true);
+		const mod = withRunner(rigRef, hold.runner, {
+			log: recordLogger(lines),
+			seatCount: () => rigRef.config.maxParallelAgents,
+		});
+		rigRef.dispatch = mod;
+		await expect(start(rigRef, FIRST, "open")).resolves.toEqual({ ok: true });
+		const continuationAsk = () =>
+			mod.dispatch({
+				origin: "workflow",
+				ticketIdentity: FIRST.identity,
+				choice: liveChoice,
+				previousMessage: "",
+				automatic: true,
+			});
+		await expect(continuationAsk()).resolves.toMatchObject({ ok: false });
+		// The row leaves through the queue's own removal, run by hand: the shape of a
+		// removal the dispatch module never saw - the Source fact aggregate's cross
+		// boundary removal, or the app's route removal - not the dispatch's cancel or
+		// its drop.
+		expect(rigRef.state.workQueue.removeWorkItem(FIRST.identity)).toBe(true);
+		clockMs += 60_000;
+		await expect(start(rigRef, FIRST, "open")).resolves.toEqual({ ok: true });
+		await expect(continuationAsk()).resolves.toMatchObject({ ok: false });
+		expect(lines.filter((line) => line.startsWith("handoff refused:"))).toHaveLength(2);
 		mod.stop();
 	});
 });

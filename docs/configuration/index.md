@@ -507,22 +507,23 @@ automatic walks hold: auto-handoff is off
 automatic walks hold: the Work queue is paused
 automatic walks hold: a failed turn waits for the operator
 automatic walks hold: the Work queue already holds a continuation
-automatic walks hold: the Work queue holds an item the operator staged
 automatic walks hold: the Work queue holds a waiting row
 ```
 
-The two lines about a standing row name whose row it is, because the origin
-cannot: the row your own route decision left in the queue and the row the
-factory owes for a settled turn are both `workflow`.
+The continuation line names the factory's own standing row only. The row your own
+route decision left in the queue is `workflow` too, and ADR 0100 ranks the owed
+continuation above it, so it holds nothing out: the walk asks, and the
+one-item-per-ticket refusal above is what answers.
 
-Auto-handoff mode and the Work queue pause are facts you set by key, and each
-flip states itself:
+Auto-handoff mode and the Work queue pause are the two facts you set by key, and
+each flip states itself under its own prefix, so a grep for one family does not
+return the cycle's hold line about the same fact:
 
 ```text
-auto-handoff is on
-auto-handoff is off
-the Work queue is paused
-the Work queue resumed
+mode: auto-handoff is on
+mode: auto-handoff is off
+queue: the Work queue is paused
+queue: the Work queue resumed
 ```
 
 A mode flip the state file refused states itself as what it is - the line lands
@@ -530,8 +531,14 @@ beside the Message line that names the state file it could not write, and the
 next run reads the mode the file still holds:
 
 ```text
-auto-handoff is on for this session only: cannot store the Auto-handoff mode at /path/to/state.sqlite: Error: no such table: auto_handoff_mode
+mode: auto-handoff is on for this session only: cannot store the Auto-handoff mode at /path/to/state.sqlite: Error: no such table: auto_handoff_mode
 ```
+
+Every line above carries its own level, and the filter keeps or drops it. The
+hold lines, the mode lines, and the queue lines are `info`; a refusal is `warn`,
+and so is the session-only mode line. `level = "warn"` therefore keeps every
+refusal and none of the hold lines, so a run you want to read the holds of needs
+`info` or `debug`.
 
 A Consultation's start line is the Consultation operations' own. Its name is the
 record's Consultation type beside the identity prefix the plane's other

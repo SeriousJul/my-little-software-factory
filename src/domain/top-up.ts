@@ -34,7 +34,6 @@ export const AUTOMATIC_HOLD_REASONS = [
 	"queue-paused",
 	"dispatch-pause",
 	"continuation-standing",
-	"operator-row-standing",
 	"queue-row-standing",
 ] as const;
 
@@ -52,7 +51,6 @@ export const AUTOMATIC_HOLD_LINES: Readonly<Record<AutomaticHoldReason, string>>
 	"queue-paused": "automatic walks hold: the Work queue is paused",
 	"dispatch-pause": "automatic walks hold: a failed turn waits for the operator",
 	"continuation-standing": "automatic walks hold: the Work queue already holds a continuation",
-	"operator-row-standing": "automatic walks hold: the Work queue holds an item the operator staged",
 	"queue-row-standing": "automatic walks hold: the Work queue holds a waiting row",
 };
 
@@ -102,40 +100,36 @@ export function freshWorkHold(facts: TopUpCycleFacts): AutomaticHoldReason | nul
 	return null;
 }
 
-/** One row the Work queue holds, as the continuation's gate reads it (ADR 0094, ADR 0100). */
+/** One row the Work queue holds, as the continuation's pace gate reads it (ADR 0094, ADR 0100). */
 export interface ContinuationRowFacts {
-	/** The row is a continuation the queue already holds. */
-	continuation: boolean;
 	/**
-	 * The staging of the row - the factory's own add or the operator's (CONTEXT.md
-	 * "Staging"). The gate decides on `continuation` alone; this fact names which
-	 * row the hold line states, because the origin cannot: the operator's route and
-	 * the factory's continuation are both `workflow` (issue #223).
+	 * The row is a continuation the queue already holds: the factory's own owed next
+	 * step standing in the queue (CONTEXT.md "Continuation"). The staging is part of
+	 * what this fact answers, because a row the operator's route decision left in
+	 * the queue is not a continuation the factory owes: ADR 0100 ranks the owed
+	 * continuation above it, so it holds nothing out. The origin alone cannot tell
+	 * the two apart - both are `workflow` - so the gate reads the row's `automatic`
+	 * mark beside it (issue #223).
 	 */
-	automatic: boolean;
+	continuation: boolean;
 }
 
 /**
- * Which standing row holds the owed continuation out, named by that row's own
- * staging, or null when no standing row does (ADR 0051, ADR 0094, ADR 0100).
+ * Which standing row holds the owed continuation out, or null when none does
+ * (ADR 0051, ADR 0094, ADR 0100).
  *
  * One continuation per cycle is the queue's own pace, so a continuation already
- * standing holds the next one out. Nothing else does. A standing fresh-work row
- * is outranked by ADR 0094, and a row the operator staged is a standing row of
- * the same kind: the seat a settling turn freed belongs to that turn's own next
- * step, and the operator's row waits for the next seat. The operator keeps the
- * queue pause and the force-dispatch.
- *
- * The staging answers the line, not the decision: ADR 0100 ranks the owed
- * continuation above a standing row of either staging, and the first standing
- * row in the queue's order is the one the walk waits behind.
+ * standing holds the next one out. Nothing else does: a standing fresh-work row
+ * is outranked by ADR 0094, and a row the operator staged is outranked by ADR
+ * 0100 - the seat a settling turn freed belongs to that turn's own next step, and
+ * the operator's row waits for the next seat. The operator keeps the queue pause
+ * and the force-dispatch.
  */
 export function continuationHold(
 	rows: readonly ContinuationRowFacts[],
 ): AutomaticHoldReason | null {
-	const row = rows.find((candidate) => candidate.continuation);
-	if (row === undefined) return null;
-	return row.automatic ? "continuation-standing" : "operator-row-standing";
+	if (rows.some((row) => row.continuation)) return "continuation-standing";
+	return null;
 }
 
 /** The facts the restart walk reads for one in-flight Ticket (ADR 0051, ADR 0060, ADR 0070). */

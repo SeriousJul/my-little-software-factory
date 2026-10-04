@@ -138,7 +138,6 @@ describe("each automatic-walk hold names itself in the record (issue #223)", () 
 			"automatic walks hold: the Work queue is paused",
 			"automatic walks hold: a failed turn waits for the operator",
 			"automatic walks hold: the Work queue already holds a continuation",
-			"automatic walks hold: the Work queue holds an item the operator staged",
 			"automatic walks hold: the Work queue holds a waiting row",
 		]);
 	});
@@ -158,44 +157,33 @@ describe("each automatic-walk hold names itself in the record (issue #223)", () 
 });
 
 describe("the row a continuation must not jump (ADR 0051, ADR 0094, ADR 0100)", () => {
-	test("an empty queue, or a queue of fresh work alone, holds nothing", () => {
+	test("an empty queue, or a queue of standing rows alone, holds nothing", () => {
 		expect(continuationHold([])).toBeNull();
-		expect(continuationHold([{ continuation: false, automatic: true }])).toBeNull();
+		expect(continuationHold([{ continuation: false }, { continuation: false }])).toBeNull();
 	});
 
 	test("only a continuation already standing holds the add (ADR 0100)", () => {
-		// The staging decides no part of this answer: the seat a settling turn
-		// freed belongs to that turn's own next step, so a row the operator staged
-		// holds the owed continuation out exactly as the factory's own row does.
-		// The queue's own pace - one continuation - still holds.
-		expect(continuationHold([{ continuation: false, automatic: false }])).toBeNull();
-		expect(continuationHold([{ continuation: true, automatic: true }])).toBe(
-			"continuation-standing",
-		);
+		// The queue's own pace - one continuation at a time - is the whole rule. A
+		// standing row that is no continuation holds nothing out: the fresh-work row
+		// ADR 0094 ranks below the owed one, and the row the operator staged ADR 0100
+		// ranks below it. The seat a settling turn freed belongs to that turn's own
+		// next step, and the operator's row waits for the next seat.
+		expect(continuationHold([{ continuation: false }])).toBeNull();
+		expect(continuationHold([{ continuation: true }])).toBe("continuation-standing");
 	});
 
-	test("the hold names the staging of the row the walk waits behind (issue #223)", () => {
-		// The origin cannot tell the two apart - the operator's route and the
-		// factory's continuation are both `workflow` - so the line has to. A row
-		// the operator staged is stated as the operator's row, never as a
-		// continuation the factory owes.
-		expect(continuationHold([{ continuation: true, automatic: false }])).toBe(
-			"operator-row-standing",
+	test("the standing continuation is the fact the line states (issue #223)", () => {
+		// The staging is part of what the caller answers for `continuation`, not a
+		// second fact this rule reads: the operator's route row and the factory's
+		// continuation are both `workflow`, so only the factory's own standing row
+		// is a continuation (CONTEXT.md "Continuation"). `test/observation.test.ts`
+		// measures that answer at the seam, where the queue's rows are the real rows.
+		expect(continuationHold([{ continuation: false }, { continuation: true }])).toBe(
+			"continuation-standing",
 		);
-		// The first standing row in the queue's order is the one the walk waits
-		// behind, and it is the row the line names.
-		expect(
-			continuationHold([
-				{ continuation: true, automatic: false },
-				{ continuation: true, automatic: true },
-			]),
-		).toBe("operator-row-standing");
-		expect(
-			continuationHold([
-				{ continuation: true, automatic: true },
-				{ continuation: true, automatic: false },
-			]),
-		).toBe("continuation-standing");
+		expect(continuationHold([{ continuation: true }, { continuation: false }])).toBe(
+			"continuation-standing",
+		);
 	});
 });
 

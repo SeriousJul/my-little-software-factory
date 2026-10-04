@@ -56,10 +56,9 @@
  *    while its row shows again for live work or a decision owed: the flag
  *    holds the machine out, and only the operator's own key clears it. Each
  *    hold these gates take - the mode, the queue pause, the Dispatch pause, a
- *    continuation already standing, a row the operator staged, a row already in
- *    the queue - states itself in the plane's record, once for as long as the
- *    fact stands, so the run never shows only the start that never came
- *    (issue #223).
+ *    continuation already standing, a row already in the queue - states itself
+ *    in the plane's record, once for as long as the fact stands, so the run
+ *    never shows only the start that never came (issue #223).
  * 7. The wake (ADR 0084): an in-flight agent the probe shows working arms
  *    a blocking `herdr agent wait` on the agent's name, and the wait's
  *    state match runs a cycle now instead of at the next poll, so a
@@ -1567,9 +1566,11 @@ export class ObservationCoordinator {
 	 * ticket's item or a restart - does not hold a continuation: ADR 0051 ranks
 	 * the continuation above them, and ADR 0094 reads that rank across cycles
 	 * instead of inside one top-up call. A row the operator staged does not hold
-	 * it either (ADR 0100): it is a standing row of the same kind, and the seat a
-	 * settling turn freed belongs to that turn's own next step. The hold line names
-	 * which of the two stands, because the origin names both `workflow` (issue
+	 * it either (ADR 0100): the owed continuation outranks it, so the walk asks
+	 * and the Work queue's one-item-per-ticket rule is what answers. Only the
+	 * factory's own standing row is a continuation the pace gate reads, and the
+	 * row's `automatic` mark is what says so, because the origin names the
+	 * operator's route and the factory's continuation alike `workflow` (issue
 	 * #223).
 	 */
 	private async askContinuations(): Promise<boolean> {
@@ -1583,13 +1584,11 @@ export class ObservationCoordinator {
 			return false;
 		}
 		// The row this add waits behind: a continuation the queue already holds.
-		// The hold names that row's staging, because the origin cannot tell the two
-		// apart - the operator's route and the factory's continuation are both
-		// `workflow` (issue #223).
+		// Only the factory's own standing row is one - the operator's route row is
+		// `workflow` too, and ADR 0100 ranks the owed continuation above it.
 		const held = continuationHold(
 			queueItems.map((item) => ({
-				continuation: item.kind !== "consultation" && item.origin === "workflow",
-				automatic: item.kind !== "consultation" && item.automatic,
+				continuation: item.kind !== "consultation" && item.origin === "workflow" && item.automatic,
 			})),
 		);
 		if (held !== null) {
@@ -1776,9 +1775,8 @@ export class ObservationCoordinator {
 	 * Every one of these holds returns before the walk asks anything, so the run
 	 * shows the start that never came and nothing about why. The line names the
 	 * fact the cycle acted on - the mode, the queue pause, the Dispatch pause, a
-	 * continuation already standing, a row the operator staged, or a row already in
-	 * the queue - in the words the gate rule owns, so a reviewer can tell a correct
-	 * hold from a broken one.
+	 * continuation already standing, or a row already in the queue - in the words
+	 * the gate rule owns, so a reviewer can tell a correct hold from a broken one.
 	 *
 	 * One line per standing fact, the way a held Next step states itself
 	 * (`reportHeldNextStep`): the holds are re-derived on every poll, and a fact

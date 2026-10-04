@@ -79,3 +79,24 @@ that way, not by its place in the queue.
 - The Work queue screen still shows the order the pickup will take the rows in, and
   that order can now put a machine-owed row above a row the operator staged. The
   row's detail names who asked for it.
+
+## Amendment: what "a continuation already stands" reads
+
+Date: 2026-10-05
+
+Issue #223's rework found the two halves of this decision reading two different
+facts. `continuationQueueHolds` stood as `origin === "workflow"`, and the operator's
+own route decision enqueues a row on that same origin, so a row the operator staged
+held the owed continuation out - the outcome this ADR exists to retire - while
+`WorkQueueModule.workQueuePosition` already placed a continuation by
+`automatic && origin === "workflow"`. The record and the glossary stated the rank
+this ADR decided; the pace gate did not apply it.
+
+**A standing row is a continuation the pace gate reads when it is the factory's own
+add: `automatic` beside the Workflow origin.** That is the fact the placement rule
+reads and the fact CONTEXT.md "Continuation" names. A row the operator's route
+decision left in the queue is a standing row the owed continuation outranks, so it
+holds nothing out, the cycle asks, and the one-item-per-ticket rule is what answers.
+
+`ContinuationRowFacts` keeps its one fact. The staging is part of what the caller
+answers for `continuation`, not a second fact the rule reads.

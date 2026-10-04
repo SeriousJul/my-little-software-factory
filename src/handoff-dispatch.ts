@@ -497,15 +497,17 @@ class HandoffDispatchModule implements HandoffDispatch {
 	private planeActionRunsInFlight = new Set<string>();
 
 	/**
-	 * The standing-item refusal the record has already stated, per ticket, keyed by
-	 * the enqueue time of the row that stood (issue #223).
+	 * The tickets whose standing-row refusal the record has already stated (issue #223).
 	 *
-	 * The automatic walks re-ask every cycle while a row stands, and the row's own
-	 * enqueue time is the fact: the same row says the refusal once, and a row that
-	 * left the queue and a later row for the same ticket are two facts that each
-	 * state themselves again.
+	 * One entry per ticket, and the entry stands for the row that stands: the Work
+	 * queue holds at most one row per ticket, so the ticket names the row, and no
+	 * timestamp is read for the fact. Every path that takes a row out of the queue
+	 * drops the entry, and a row that left through another aggregate is covered at
+	 * the next enqueue for the same ticket - an enqueue can only land once the row
+	 * before it left, so the new row is a new fact that states itself again. The
+	 * cycle prunes its held-Next-step reports on the same rule.
 	 */
-	private readonly queueItemRefusals = new Map<string, string>();
+	private readonly queueItemRefusals = new Set<string>();
 
 	constructor(options: HandoffDispatchOptions) {
 		this.state = options.state;
@@ -638,6 +640,9 @@ class HandoffDispatchModule implements HandoffDispatch {
 			automatic: intent.automatic === true,
 		});
 		if (!enqueued.ok) return Promise.resolve(enqueued);
+		// A row stands for this ticket now, and it is a new one: the refusal the
+		// standing row before it earned is no longer the fact it stated (issue #223).
+		this.forgetStandingRowRefusal(intent.ticketIdentity);
 		if (intent.onStarted !== undefined)
 			this.intentOnStarted.set(intent.ticketIdentity, intent.onStarted);
 		// The decision word lands at the ask, the way the route's does (ADR
@@ -958,6 +963,9 @@ class HandoffDispatchModule implements HandoffDispatch {
 			automatic: intent.automatic === true,
 		});
 		if (!enqueued.ok) return { ok: false, reason: enqueued.reason };
+		// A row stands for this ticket now, and it is a new one: the refusal the
+		// standing row before it earned is no longer the fact it stated (issue #223).
+		this.forgetStandingRowRefusal(intent.ticketIdentity);
 		// The route's decision lands at the ask (ADR 0064): a workflow-origin
 		// ask records it on the settled turn's trace the moment it enqueues, so
 		// the ask never waits on a run. A refusal before the enqueue - the
@@ -1101,6 +1109,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 	removeQueueItem(ticketIdentity: string): boolean {
 		const removed = this.state.workQueue.cancelWorkItem(ticketIdentity);
 		this.cancelParkedPickup(ticketIdentity);
+		this.forgetStandingRowRefusal(ticketIdentity);
 		// A row that leaves without a claim still holds the ask's start report:
 		// the cancel answers it here, once, with the cancellation. Without this
 		// settle the held callback would survive the row and answer the next
@@ -1129,6 +1138,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 	private removeQueueRow(ticketIdentity: string): boolean {
 		const removed = this.state.workQueue.removeWorkItem(ticketIdentity);
 		this.cancelParkedPickup(ticketIdentity);
+		this.forgetStandingRowRefusal(ticketIdentity);
 		return removed;
 	}
 
@@ -1595,15 +1605,24 @@ class HandoffDispatchModule implements HandoffDispatch {
 	 * every cycle, and a five-second poll cannot pin the file with one refusal.
 	 */
 	private refuseStandingQueueItem(prefix: "handoff" | "merge", identity: string): DispatchResult {
-		const row = this.state.workQueue
-			.items()
-			.find((item) => item.kind !== "consultation" && item.ticketIdentity === identity);
-		const standingSince = row === undefined ? "" : row.enqueuedAt;
-		if (this.queueItemRefusals.get(identity) !== standingSince) {
-			this.queueItemRefusals.set(identity, standingSince);
+		if (!this.queueItemRefusals.has(identity)) {
+			this.queueItemRefusals.add(identity);
 			this.log?.warn(this.refusalLine(prefix, identity, QUEUE_ITEM_STANDS_FACT));
 		}
 		return { ok: false, reason: this.queueItemStandsReason(identity) };
+	}
+
+	/**
+	 * Forget the standing-row refusal stated for a ticket (issue #223).
+	 *
+	 * The row it stands for is gone, so a later row for the same ticket is a new
+	 * fact and states its refusal again. Every path that ends a waiting row runs
+	 * this, and a successful enqueue runs it too: the queue holds one row per
+	 * ticket, so an enqueue can only land after the row before it left, whatever
+	 * path took that row out.
+	 */
+	private forgetStandingRowRefusal(identity: string): void {
+		this.queueItemRefusals.delete(identity);
 	}
 
 	/**
@@ -2021,6 +2040,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 					// the start-or-drop contract ends in a drop (ADR 0049). The item
 					// leaves the queue, and the warning says the reason the drain found.
 					this.state.workQueue.removeWorkItem(next.ticket.identity);
+					this.forgetStandingRowRefusal(next.ticket.identity);
 					next.onStarted({ ok: false, reason: movedOn });
 				} else {
 					// The route the claim was for never started: its caller decides

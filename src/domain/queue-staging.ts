@@ -13,7 +13,10 @@
  *
  * The staging decides the row's place in the queue's order too: the automatic
  * Continuation enters ahead of every standing row, a row the operator staged
- * included (ADR 0094, ADR 0100).
+ * included (ADR 0094, ADR 0100). It decides which standing row is a Continuation
+ * at all: the queue's pace gate reads the factory's own `automatic` row of a
+ * Workflow route, and the row an operator's route decision left there is
+ * `workflow` too and holds no owed continuation out (ADR 0100).
  *
  * The fact stands outside the module that writes the queue lines, the way the
  * start mode does (ADR 0102): the queue's own `automatic` mark is a boolean on
