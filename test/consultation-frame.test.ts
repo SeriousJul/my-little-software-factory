@@ -21,6 +21,7 @@ import { join } from "node:path";
 import { widthOf } from "../src/components/text.ts";
 import type { FactoryConfig } from "../src/config.ts";
 import type { Ticket } from "../src/domain/ticket.ts";
+import { agentNameFor } from "../src/naming.ts";
 import type {
 	CommandOptions,
 	CommandResult,
@@ -2158,7 +2159,7 @@ describe("Consultation live-worktree launch through the UI", () => {
 						workspace_id: "ws-tick",
 						agent: "pi",
 						agent_status: "working",
-						name: "watch-agent-turns",
+						name: agentNameFor({ identity: ignoredTicket, title: "Watch agent turns" }),
 						checkout_path: checkout,
 					},
 					{
@@ -2167,7 +2168,7 @@ describe("Consultation live-worktree launch through the UI", () => {
 						workspace_id: "ws-rank",
 						agent: "pi",
 						agent_status: "working",
-						name: "rank-tickets-by-priority",
+						name: agentNameFor({ identity: listedTicket, title: "Rank tickets by priority" }),
 						checkout_path: checkout,
 					},
 				],

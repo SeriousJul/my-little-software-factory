@@ -37,6 +37,7 @@ import {
 	type PlaneActionIntent,
 } from "../src/handoff-dispatch.ts";
 import type { HerdrAgent } from "../src/herdr.ts";
+import { agentNameFor } from "../src/naming.ts";
 import { ObservationCoordinator, STARTUP_GRACE_MS } from "../src/observation.ts";
 import {
 	CONSULTATION_SEAT_STATES,
@@ -804,7 +805,9 @@ describe("the seat a settling turn frees (the dev-run miss on PR #206)", () => {
 		// is the review agent's own start.
 		expect(state.handoff.openAttemptTickets()).toEqual([pullIdentity]);
 		expect(chain.heldCommands()).toEqual([
-			expect.stringContaining("herdr agent start persist-source-facts-in-state"),
+			expect.stringContaining(
+				`herdr agent start ${agentNameFor({ identity: pullIdentity, title: "Persist source facts in state" })}`,
+			),
 		]);
 		expect(
 			state.workQueue.items().map((item) => {

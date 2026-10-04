@@ -396,7 +396,7 @@ _Avoid_: jump, follow, attach
 
 **Handoff**:
 Assigning a ticket to an agent type and an environment with a task type, and starting the agent's execution.
-It asks Herdr for the ticket's stable Agent name, and takes the name of its work cycle when the ticket's own Leftover environment still holds the stable one.
+It asks Herdr for the ticket's stable Agent name, which names that ticket and no other (ADR 0098), and takes the name of its work cycle when the ticket's own Leftover environment still holds the stable one.
 _Avoid_: assign, dispatch, launch
 
 **Plane action**:
@@ -452,6 +452,12 @@ The Work queue control that starts the selected item immediately, even when the 
 It re-runs every start check the pickup runs and skips only the cap, and it still starts while the queue pause stands: the brake holds the automatic pickup, not the operator's explicit ask (ADR 0052).
 A force-dispatch that fails leaves the item out of the queue, as a pickup failure now does (ADR 0049): a Consultation's start that fails is a terminal record, and its item leaves with it.
 _Avoid_: manual override, bypass
+
+**Start mode**:
+The fact a start line names: the path that took the seat for a queued start. `pickup` for the Work queue's Pickup, `force-dispatch` for the operator's key on the waiting row, and `direct-ask` for the row the operator's own ask started at once, on the immediate pass that ask ran (ADR 0092).
+The mode names the path that ran the start, never the ask that made the row: a row the operator asked for that waited in the queue reads `pickup` when a later cycle takes it.
+It is not the item's origin. The origin says where the ask came from (`open`, `workflow`, `restart`); the mode says which path started it.
+_Avoid_: dispatch mode, launch mode, start path
 
 **Continuation**:
 The Next step Auto-handoff mode takes on its own, without the operator's Completion decision: the Next step of an awaiting ticket, or of an open ticket whose newest settled turn recorded an automatic route the operator did not take away, where the decision stands at the ask, the start died, and the walk re-offers the route (ADR 0067, corrected by ADR 0072, decided at runtime by ADR 0092).

@@ -13,6 +13,7 @@ import {
 	cleanup,
 	downgradeQueueToTheAbandonedShape,
 	fetched,
+	HARNESS_AGENT_NAME,
 	labeled,
 	POSITION_STATES,
 	sourceA,
@@ -246,7 +247,7 @@ describe("the sourceFact aggregate", () => {
 			completedAt: "2026-08-31T11:00:00Z",
 		});
 		const [rested] = state.ticketWorkCycle.ticketListViews([], "implement").rows;
-		expect(rested.lastCompletion?.agentName).toBe("persist-source-facts");
+		expect(rested.lastCompletion?.agentName).toBe(HARNESS_AGENT_NAME);
 		state.close();
 	});
 	test("a v12 database migrates to v13: the mode lands off on the existing file", () => {

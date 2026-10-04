@@ -4,6 +4,7 @@ import type { FactoryConfig, TransitionOutcome } from "../src/config.ts";
 import type { FetchedTicket } from "../src/domain/ticket.ts";
 import type { DispatchResult, HandoffIntent } from "../src/handoff-dispatch.ts";
 import type { HerdrAgent } from "../src/herdr.ts";
+import { agentNameFor } from "../src/naming.ts";
 import {
 	type AgentReader,
 	type AgentWaitResult,
@@ -4616,9 +4617,10 @@ describe("Consultation observation identity", () => {
 describe("an agent that outlives its work cycle", () => {
 	const identity = "github:github.com:I_5";
 	const PANE = "pane-research";
-	// The name the ticket's handoff expects: the stable name of its title,
-	// so a leftover agent under it is the ticket's own.
-	const NAME = "persist-source-facts";
+	// The name the ticket's handoff expects: the stable name of its title with
+	// its own identity tag (ADR 0098), so a leftover agent under it is the
+	// ticket's own.
+	const NAME = agentNameFor({ identity, title: "Persist source facts" });
 
 	/** Hand a ticket out, settle its turn, and close its cycle. */
 	function closedCycle(rig_: Pick<Rig, "state" | "advance" | "setAgents">): string {

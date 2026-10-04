@@ -58,7 +58,7 @@ const FIRST_LEAD = "Add a w";
 const SECOND_LEAD = "Watch a";
 const repoIdentity = "github.com/acme/factory";
 /** The name the handoff of the fixture Ticket expects its Agent to run under. */
-const firstAgent = agentNameFor(firstTitle);
+const firstAgent = agentNameFor({ identity: FIRST, title: firstTitle });
 
 function twoTickets(): FetchedTicket[] {
 	return [

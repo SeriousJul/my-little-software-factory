@@ -21,6 +21,7 @@ import { panelValueCells } from "../src/components/override-panel.ts";
 import type { FactoryConfig } from "../src/config.ts";
 import type { Ticket } from "../src/domain/ticket.ts";
 import { renderPrompt } from "../src/handoff.ts";
+import { agentNameFor } from "../src/naming.ts";
 import type { CommandResult, CommandRunner, ModelListResult } from "../src/runner.ts";
 import {
 	actionBarRowOf,
@@ -97,7 +98,10 @@ function templateOf(taskType: { template?: string }): string {
 }
 
 const first = SAMPLE_TICKETS[0];
-const firstAgent = "retry-policy-for-webhooks";
+/** The title slug the branch name carries. */
+const firstSlug = "retry-policy-for-webhooks";
+/** The herdr name the naming rule gives the first sample Ticket (ADR 0098). */
+const firstAgent = agentNameFor(first);
 const firstPrompt = renderPrompt(templateOf(BASE_CONFIG.taskTypes.implement), first);
 
 /** Stub the git answers for a healthy convention checkout. */
@@ -126,7 +130,7 @@ function stubWorktreeHandoff(runner: FakeRunner): void {
 	const path = checkout();
 	runner.set(
 		"git",
-		["-C", path, "branch", "--list", `factory/${first.externalKey.slice(1)}-${firstAgent}`],
+		["-C", path, "branch", "--list", `factory/${first.externalKey.slice(1)}-${firstSlug}`],
 		{
 			stdout: "",
 		},
@@ -145,7 +149,7 @@ function stubWorktreeHandoff(runner: FakeRunner): void {
 			"--cwd",
 			path,
 			"--branch",
-			`factory/${first.externalKey.slice(1)}-${firstAgent}`,
+			`factory/${first.externalKey.slice(1)}-${firstSlug}`,
 			"--base",
 			"origin/main",
 			"--no-focus",
@@ -744,14 +748,14 @@ describe("the override panel", () => {
 				// The worktree sequence ran, based on the fetched remote default
 				// branch, not a default.
 				expect(runner.commands()).toContain(
-					`git -C ${checkout()} branch --list factory/${first.externalKey.slice(1)}-${firstAgent}`,
+					`git -C ${checkout()} branch --list factory/${first.externalKey.slice(1)}-${firstSlug}`,
 				);
 				expect(runner.commands()).toContain(
 					`git -C ${checkout()} symbolic-ref refs/remotes/origin/HEAD`,
 				);
 				expect(runner.commands()).toContain(`git -C ${checkout()} fetch origin main`);
 				expect(runner.commands()).toContain(
-					`herdr worktree create --cwd ${checkout()} --branch factory/${first.externalKey.slice(1)}-${firstAgent} --base origin/main --no-focus`,
+					`herdr worktree create --cwd ${checkout()} --branch factory/${first.externalKey.slice(1)}-${firstSlug} --base origin/main --no-focus`,
 				);
 				expect(runner.commands()).toContain(
 					`herdr agent start ${firstAgent} --kind codex --pane pane-wt`,
@@ -3913,7 +3917,7 @@ describe("the override panel", () => {
 				const commands = runner.commands();
 				expect(commands).toContain("herdr worktree remove --workspace ws-wt");
 				expect(commands).toContain(
-					`git -C ${checkout()} branch -D factory/${first.externalKey.slice(1)}-${firstAgent}`,
+					`git -C ${checkout()} branch -D factory/${first.externalKey.slice(1)}-${firstSlug}`,
 				);
 			},
 			WIDTH,

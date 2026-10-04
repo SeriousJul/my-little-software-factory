@@ -14,7 +14,7 @@ import {
 	normalizeAgentStatus,
 	ticketAgentName,
 } from "../src/domain/agent.ts";
-import { agent, handoff, OWN_NAME, ticket } from "./fact-fixtures.ts";
+import { agent, handoff, OWN_NAME, STABLE_NAME, ticket } from "./fact-fixtures.ts";
 
 /** One Ticket with an Agent working in its recorded pane. */
 const inFlightTicket = ticket({ state: "running", handoff: handoff() });
@@ -56,7 +56,7 @@ describe("the Missing agent rule", () => {
 
 	test("a handoff that recorded no name falls back to the Ticket's stable Agent name", () => {
 		expect(ticketAgentName(ticket({ state: "running", handoff: handoff({ herdrName: "" }) }))).toBe(
-			"retry-policy-for-webhooks",
+			STABLE_NAME,
 		);
 	});
 });
