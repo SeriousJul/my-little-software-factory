@@ -15,11 +15,10 @@ import { join } from "node:path";
 import type { FactoryConfig, TicketSourceConfig } from "../src/config.ts";
 import type { Ticket } from "../src/domain/ticket.ts";
 import {
-	checkConsultationStart,
+	checkStart,
 	closeHandoffEnvironment,
 	type HandoffOutcome,
 	handOffConsultation,
-	handOffStoredWorkspace,
 	handOffTicket,
 	renderPrompt,
 	renderSettingArgs,
@@ -531,6 +530,7 @@ describe("handOffTicket: the live worktree sequence", () => {
 		);
 
 		const outcome = await handOffTicket(ticket, defaultChoice, {
+			claim: "open",
 			config: BASE_CONFIG,
 			runner,
 			home: HOME,
@@ -593,6 +593,7 @@ describe("handOffTicket: the live worktree sequence", () => {
 		);
 
 		const outcome = await handOffTicket(ticket, defaultChoice, {
+			claim: "open",
 			config: BASE_CONFIG,
 			runner,
 			home: HOME,
@@ -642,7 +643,12 @@ describe("handOffTicket: the live worktree sequence", () => {
 		const outcome = await handOffTicket(
 			ticket,
 			{ ...defaultChoice, environment: "worktree" },
-			{ config: BASE_CONFIG, runner, home: HOME },
+			{
+				claim: "open",
+				config: BASE_CONFIG,
+				runner,
+				home: HOME,
+			},
 		);
 
 		expect(outcome.status).toBe("failed");
@@ -674,6 +680,7 @@ describe("handOffTicket: the live worktree sequence", () => {
 		);
 
 		const outcome = await handOffTicket(ticket, defaultChoice, {
+			claim: "open",
 			config: BASE_CONFIG,
 			runner,
 			home: HOME,
@@ -698,6 +705,7 @@ describe("handOffTicket: the live worktree sequence", () => {
 
 		const choice = { ...defaultChoice, agentType: "codex", model: "gpt-5.6", thinking: "high" };
 		const outcome = await handOffTicket(ticket, choice, {
+			claim: "open",
 			config: BASE_CONFIG,
 			runner,
 			home: HOME,
@@ -733,6 +741,7 @@ describe("handOffTicket: the live worktree sequence", () => {
 		});
 
 		const outcome = await handOffTicket(ticket, defaultChoice, {
+			claim: "open",
 			config: BASE_CONFIG,
 			runner,
 			home: HOME,
@@ -758,6 +767,7 @@ describe("handOffTicket: the live worktree sequence", () => {
 		});
 
 		const outcome = await handOffTicket(ticket, defaultChoice, {
+			claim: "open",
 			config: BASE_CONFIG,
 			runner,
 			home: HOME,
@@ -773,6 +783,7 @@ describe("handOffTicket: the live worktree sequence", () => {
 		runner.set("herdr", ["workspace", "list"], { stdout: "not a workspace list\n" });
 
 		const outcome = await handOffTicket(ticket, defaultChoice, {
+			claim: "open",
 			config: BASE_CONFIG,
 			runner,
 			home: HOME,
@@ -813,7 +824,12 @@ describe("handOffTicket: the worktree sequence", () => {
 		const outcome = await handOffTicket(
 			ticket,
 			{ ...defaultChoice, environment: "worktree" },
-			{ config: BASE_CONFIG, runner, home: HOME },
+			{
+				claim: "open",
+				config: BASE_CONFIG,
+				runner,
+				home: HOME,
+			},
 		);
 
 		expect(outcome.status).toBe("ok");
@@ -863,7 +879,12 @@ describe("handOffTicket: the worktree sequence", () => {
 		const outcome = await handOffTicket(
 			ticket,
 			{ ...defaultChoice, environment: "worktree" },
-			{ config: BASE_CONFIG, runner, home: HOME },
+			{
+				claim: "open",
+				config: BASE_CONFIG,
+				runner,
+				home: HOME,
+			},
 		);
 
 		expect(outcome.status).toBe("ok");
@@ -910,7 +931,12 @@ describe("handOffTicket: the worktree sequence", () => {
 		const outcome = await handOffTicket(
 			ticket,
 			{ ...defaultChoice, environment: "worktree" },
-			{ config: BASE_CONFIG, runner, home: HOME },
+			{
+				claim: "open",
+				config: BASE_CONFIG,
+				runner,
+				home: HOME,
+			},
 		);
 
 		// The handoff still starts, on the local HEAD...
@@ -969,7 +995,12 @@ describe("handOffTicket: the worktree sequence", () => {
 		const outcome = await handOffTicket(
 			ticket,
 			{ ...defaultChoice, environment: "worktree" },
-			{ config: BASE_CONFIG, runner, home: HOME },
+			{
+				claim: "open",
+				config: BASE_CONFIG,
+				runner,
+				home: HOME,
+			},
 		);
 
 		expect(outcome.status).toBe("ok");
@@ -1016,7 +1047,12 @@ describe("handOffTicket: the worktree sequence", () => {
 		const outcome = await handOffTicket(
 			ticket,
 			{ ...defaultChoice, environment: "worktree" },
-			{ config: BASE_CONFIG, runner, home: HOME },
+			{
+				claim: "open",
+				config: BASE_CONFIG,
+				runner,
+				home: HOME,
+			},
 		);
 
 		expect(outcome.status).toBe("ok");
@@ -1067,7 +1103,12 @@ describe("handOffTicket: the worktree sequence", () => {
 		const outcome = await handOffTicket(
 			ticket,
 			{ ...defaultChoice, environment: "worktree" },
-			{ config: BASE_CONFIG, runner, home: HOME },
+			{
+				claim: "open",
+				config: BASE_CONFIG,
+				runner,
+				home: HOME,
+			},
 		);
 
 		expect(outcome.status).toBe("ok");
@@ -1115,7 +1156,12 @@ describe("handOffTicket: the worktree sequence", () => {
 		const outcome = await handOffTicket(
 			ticket,
 			{ ...defaultChoice, environment: "worktree" },
-			{ config: BASE_CONFIG, runner, home: HOME },
+			{
+				claim: "open",
+				config: BASE_CONFIG,
+				runner,
+				home: HOME,
+			},
 		);
 
 		expect(outcome.status).toBe("ok");
@@ -1166,7 +1212,12 @@ describe("handOffTicket: the worktree sequence", () => {
 		const outcome = await handOffTicket(
 			ticket,
 			{ ...defaultChoice, environment: "worktree" },
-			{ config: BASE_CONFIG, runner, home: HOME },
+			{
+				claim: "open",
+				config: BASE_CONFIG,
+				runner,
+				home: HOME,
+			},
 		);
 
 		expect(outcome.status).toBe("ok");
@@ -1217,7 +1268,12 @@ describe("handOffTicket: the worktree sequence", () => {
 		const outcome = await handOffTicket(
 			ticket,
 			{ ...defaultChoice, environment: "worktree" },
-			{ config: BASE_CONFIG, runner, home: HOME },
+			{
+				claim: "open",
+				config: BASE_CONFIG,
+				runner,
+				home: HOME,
+			},
 		);
 
 		expect(outcome.status).toBe("failed");
@@ -1267,7 +1323,12 @@ describe("handOffTicket: the worktree sequence", () => {
 		const outcome = await handOffTicket(
 			ticket,
 			{ ...defaultChoice, environment: "worktree" },
-			{ config: BASE_CONFIG, runner, home: HOME },
+			{
+				claim: "open",
+				config: BASE_CONFIG,
+				runner,
+				home: HOME,
+			},
 		);
 
 		expect(outcome.status).toBe("failed");
@@ -1321,7 +1382,12 @@ describe("handOffTicket: the worktree sequence", () => {
 		const outcome = await handOffTicket(
 			ticket,
 			{ ...defaultChoice, environment: "worktree" },
-			{ config: BASE_CONFIG, runner, home: HOME },
+			{
+				claim: "open",
+				config: BASE_CONFIG,
+				runner,
+				home: HOME,
+			},
 		);
 
 		expect(outcome.status).toBe("failed");
@@ -1357,7 +1423,12 @@ describe("handOffTicket: the worktree sequence", () => {
 		const outcome = await handOffTicket(
 			ticket,
 			{ ...defaultChoice, environment: "worktree" },
-			{ config: BASE_CONFIG, runner, home: HOME },
+			{
+				claim: "open",
+				config: BASE_CONFIG,
+				runner,
+				home: HOME,
+			},
 		);
 
 		expect(outcome.status).toBe("failed");
@@ -1395,7 +1466,12 @@ describe("handOffTicket: the worktree sequence", () => {
 		const outcome = await handOffTicket(
 			ticket,
 			{ ...defaultChoice, environment: "worktree" },
-			{ config: BASE_CONFIG, runner, home: HOME },
+			{
+				claim: "open",
+				config: BASE_CONFIG,
+				runner,
+				home: HOME,
+			},
 		);
 
 		expect(outcome.status).toBe("failed");
@@ -1438,7 +1514,12 @@ describe("handOffTicket: the worktree sequence", () => {
 		const outcome = await handOffTicket(
 			ticket,
 			{ ...defaultChoice, environment: "worktree" },
-			{ config: BASE_CONFIG, runner, home: HOME },
+			{
+				claim: "open",
+				config: BASE_CONFIG,
+				runner,
+				home: HOME,
+			},
 		);
 
 		expect(outcome.status).toBe("failed");
@@ -1493,7 +1574,12 @@ describe("handOffTicket: the worktree sequence", () => {
 		const outcome = await handOffTicket(
 			ticket,
 			{ ...defaultChoice, environment: "worktree" },
-			{ config: BASE_CONFIG, runner, home: HOME },
+			{
+				claim: "open",
+				config: BASE_CONFIG,
+				runner,
+				home: HOME,
+			},
 		);
 
 		expect(outcome.status).toBe("failed");
@@ -1531,7 +1617,12 @@ describe("handOffTicket: the worktree sequence", () => {
 		const outcome = await handOffTicket(
 			ticket,
 			{ ...defaultChoice, environment: "worktree" },
-			{ config: BASE_CONFIG, runner, home: HOME },
+			{
+				claim: "open",
+				config: BASE_CONFIG,
+				runner,
+				home: HOME,
+			},
 		);
 
 		// The agent is running in the worktree and can be prompted by hand.
@@ -1589,7 +1680,12 @@ describe("handOffTicket: the worktree sequence", () => {
 		const outcome = await handOffTicket(
 			ticket,
 			{ ...defaultChoice, environment: "worktree" },
-			{ config: BASE_CONFIG, runner, home: HOME },
+			{
+				claim: "open",
+				config: BASE_CONFIG,
+				runner,
+				home: HOME,
+			},
 		);
 
 		expect(outcome.status).toBe("ok");
@@ -1655,7 +1751,12 @@ describe("handOffTicket: the worktree sequence", () => {
 		const outcome = await handOffTicket(
 			ticket,
 			{ ...defaultChoice, environment: "worktree" },
-			{ config: BASE_CONFIG, runner, home: HOME },
+			{
+				claim: "open",
+				config: BASE_CONFIG,
+				runner,
+				home: HOME,
+			},
 		);
 
 		expect(outcome.status).toBe("ok");
@@ -1711,7 +1812,12 @@ describe("handOffTicket: the worktree sequence", () => {
 		const outcome = await handOffTicket(
 			ticket,
 			{ ...defaultChoice, environment: "worktree" },
-			{ config: BASE_CONFIG, runner, home: HOME },
+			{
+				claim: "open",
+				config: BASE_CONFIG,
+				runner,
+				home: HOME,
+			},
 		);
 
 		expect(outcome.status).toBe("ok");
@@ -1764,7 +1870,12 @@ describe("handOffTicket: the worktree sequence", () => {
 		const outcome = await handOffTicket(
 			ticket,
 			{ ...defaultChoice, environment: "worktree" },
-			{ config: BASE_CONFIG, runner, home: HOME },
+			{
+				claim: "open",
+				config: BASE_CONFIG,
+				runner,
+				home: HOME,
+			},
 		);
 
 		expect(outcome.status).toBe("ok");
@@ -1825,7 +1936,12 @@ describe("handOffTicket: the worktree sequence", () => {
 		const outcome = await handOffTicket(
 			ticket,
 			{ ...defaultChoice, environment: "worktree" },
-			{ config: BASE_CONFIG, runner, home: HOME },
+			{
+				claim: "open",
+				config: BASE_CONFIG,
+				runner,
+				home: HOME,
+			},
 		);
 
 		expect(outcome.status).toBe("ok");
@@ -1889,7 +2005,12 @@ describe("handOffTicket: the worktree sequence", () => {
 		const outcome = await handOffTicket(
 			ticket,
 			{ ...defaultChoice, environment: "worktree" },
-			{ config: BASE_CONFIG, runner, home: HOME },
+			{
+				claim: "open",
+				config: BASE_CONFIG,
+				runner,
+				home: HOME,
+			},
 		);
 
 		expect(outcome.status).toBe("ok");
@@ -1939,7 +2060,12 @@ describe("handOffTicket: the worktree sequence", () => {
 		const outcome = await handOffTicket(
 			ticket,
 			{ ...defaultChoice, environment: "worktree" },
-			{ config: BASE_CONFIG, runner, home: HOME },
+			{
+				claim: "open",
+				config: BASE_CONFIG,
+				runner,
+				home: HOME,
+			},
 		);
 
 		expect(outcome.status).toBe("failed");
@@ -1966,7 +2092,12 @@ describe("handOffTicket: the leftover worktree directory that blocks a create", 
 		const outcome = await handOffTicket(
 			ticket,
 			{ ...defaultChoice, environment: "worktree" },
-			{ config: BASE_CONFIG, runner, home: HOME },
+			{
+				claim: "open",
+				config: BASE_CONFIG,
+				runner,
+				home: HOME,
+			},
 		);
 
 		expect(outcome.status).toBe("ok");
@@ -1998,7 +2129,12 @@ describe("handOffTicket: the leftover worktree directory that blocks a create", 
 		const outcome = await handOffTicket(
 			ticket,
 			{ ...defaultChoice, environment: "worktree" },
-			{ config: BASE_CONFIG, runner, home: HOME },
+			{
+				claim: "open",
+				config: BASE_CONFIG,
+				runner,
+				home: HOME,
+			},
 		);
 
 		expect(outcome.status).toBe("ok");
@@ -2019,7 +2155,12 @@ describe("handOffTicket: the leftover worktree directory that blocks a create", 
 		const outcome = await handOffTicket(
 			ticket,
 			{ ...defaultChoice, environment: "worktree" },
-			{ config: BASE_CONFIG, runner, home: HOME },
+			{
+				claim: "open",
+				config: BASE_CONFIG,
+				runner,
+				home: HOME,
+			},
 		);
 
 		expect(outcome.status).toBe("failed");
@@ -2040,7 +2181,12 @@ describe("handOffTicket: the leftover worktree directory that blocks a create", 
 		const outcome = await handOffTicket(
 			ticket,
 			{ ...defaultChoice, environment: "worktree" },
-			{ config: BASE_CONFIG, runner, home: HOME },
+			{
+				claim: "open",
+				config: BASE_CONFIG,
+				runner,
+				home: HOME,
+			},
 		);
 
 		expect(outcome.status).toBe("failed");
@@ -2077,7 +2223,12 @@ describe("handOffTicket: the leftover worktree directory that blocks a create", 
 		const outcome = await handOffTicket(
 			ticket,
 			{ ...defaultChoice, environment: "worktree" },
-			{ config: BASE_CONFIG, runner, home: HOME },
+			{
+				claim: "open",
+				config: BASE_CONFIG,
+				runner,
+				home: HOME,
+			},
 		);
 
 		expect(outcome.status).toBe("failed");
@@ -2099,7 +2250,12 @@ describe("handOffTicket: the leftover worktree directory that blocks a create", 
 		const outcome = await handOffTicket(
 			ticket,
 			{ ...defaultChoice, environment: "worktree" },
-			{ config: BASE_CONFIG, runner, home: HOME },
+			{
+				claim: "open",
+				config: BASE_CONFIG,
+				runner,
+				home: HOME,
+			},
 		);
 
 		expect(outcome.status).toBe("failed");
@@ -2128,7 +2284,12 @@ describe("handOffTicket: the leftover worktree directory that blocks a create", 
 		const outcome = await handOffTicket(
 			ticket,
 			{ ...defaultChoice, environment: "worktree" },
-			{ config: BASE_CONFIG, runner, home: HOME },
+			{
+				claim: "open",
+				config: BASE_CONFIG,
+				runner,
+				home: HOME,
+			},
 		);
 
 		expect(outcome.status).toBe("ok");
@@ -2147,6 +2308,7 @@ describe("handOffTicket: the guard rails", () => {
 	test("only open tickets can be handed off", async () => {
 		const runner = new FakeRunner();
 		const outcome = await handOffTicket({ ...ticket, state: "running" }, defaultChoice, {
+			claim: "open",
 			config: BASE_CONFIG,
 			runner,
 			home: HOME,
@@ -2160,7 +2322,12 @@ describe("handOffTicket: the guard rails", () => {
 		const outcome = await handOffTicket(
 			ticket,
 			{ ...defaultChoice, environment: "container" },
-			{ config: BASE_CONFIG, runner, home: HOME },
+			{
+				claim: "open",
+				config: BASE_CONFIG,
+				runner,
+				home: HOME,
+			},
 		);
 		expect(outcome.status).toBe("failed");
 		expect(reasonOf(outcome)).toContain("reserved");
@@ -2177,7 +2344,12 @@ describe("handOffTicket: the guard rails", () => {
 			const outcome = await handOffTicket(
 				ticket,
 				{ ...defaultChoice, model: "gpt-4o" },
-				{ config: BASE_CONFIG, runner, home: HOME },
+				{
+					claim: "open",
+					config: BASE_CONFIG,
+					runner,
+					home: HOME,
+				},
 			);
 
 			expect(outcome.status).toBe("failed");
@@ -2198,7 +2370,12 @@ describe("handOffTicket: the guard rails", () => {
 			const outcome = await handOffTicket(
 				ticket,
 				{ ...defaultChoice, model: "anthropic/claude-sonnet-4-5" },
-				{ config: BASE_CONFIG, runner, home: HOME },
+				{
+					claim: "open",
+					config: BASE_CONFIG,
+					runner,
+					home: HOME,
+				},
 			);
 
 			expect(outcome.status).toBe("ok");
@@ -2226,7 +2403,12 @@ describe("handOffTicket: the guard rails", () => {
 			const outcome = await handOffTicket(
 				ticket,
 				{ ...defaultChoice, model: "anthropic/claude-sonnet-4-5", thinking: "ultra" },
-				{ config: BASE_CONFIG, runner, home: HOME },
+				{
+					claim: "open",
+					config: BASE_CONFIG,
+					runner,
+					home: HOME,
+				},
 			);
 
 			expect(outcome.status).toBe("failed");
@@ -2251,7 +2433,12 @@ describe("handOffTicket: the guard rails", () => {
 			const outcome = await handOffTicket(
 				ticket,
 				{ ...defaultChoice, model: "gpt-4o" },
-				{ config: BASE_CONFIG, runner, home: HOME },
+				{
+					claim: "open",
+					config: BASE_CONFIG,
+					runner,
+					home: HOME,
+				},
 			);
 
 			expect(outcome.status).toBe("ok");
@@ -2265,17 +2452,22 @@ describe("handOffTicket: the guard rails", () => {
 			stubLiveWorkspace(runner);
 			runner.setModelList("pi", ["anthropic/claude-sonnet-4-5"]);
 
-			const outcome = await handOffStoredWorkspace({
+			const outcome = await handOffTicket(
 				ticket,
-				choice: { ...defaultChoice, model: "gpt-4o" },
-				config: BASE_CONFIG,
-				runner,
-				home: HOME,
-				workspaceId: "ws-stored",
-				environment: "live-worktree",
-				previousTabId: "tab-prev",
-				previousMessage: "settled earlier",
-			});
+				{ ...defaultChoice, model: "gpt-4o" },
+				{
+					config: BASE_CONFIG,
+					runner,
+					home: HOME,
+					previousMessage: "settled earlier",
+					claim: "continuation",
+					previous: {
+						workspaceId: "ws-stored",
+						environment: "live-worktree",
+						tabId: "tab-prev",
+					},
+				},
+			);
 
 			expect(outcome.status).toBe("failed");
 			expect(reasonOf(outcome)).toContain('has no model "gpt-4o"');
@@ -2435,11 +2627,7 @@ describe("handOffTicket: the guard rails", () => {
 			stubLiveWorkspace(runner);
 			runner.setModelList("pi", ["anthropic/claude-sonnet-4-5"]);
 			const consultation = consultationRecord({ model: "anthropic/claude-sonnet-4-5" });
-			const startCheck = await checkConsultationStart({
-				consultation,
-				config: BASE_CONFIG,
-				runner,
-			});
+			const startCheck = await checkStart(consultation, BASE_CONFIG, runner);
 			expect(startCheck.ok).toBe(true);
 
 			const outcome = await handOffConsultation({
@@ -2462,13 +2650,23 @@ describe("handOffTicket: the guard rails", () => {
 		const agent = await handOffTicket(
 			ticket,
 			{ ...defaultChoice, agentType: "cursor" },
-			{ config: BASE_CONFIG, runner, home: HOME },
+			{
+				claim: "open",
+				config: BASE_CONFIG,
+				runner,
+				home: HOME,
+			},
 		);
 		expect(agent).toEqual({ status: "failed", reason: "unknown agent type: cursor" });
 		const task = await handOffTicket(
 			ticket,
 			{ ...defaultChoice, taskType: "refactor" },
-			{ config: BASE_CONFIG, runner, home: HOME },
+			{
+				claim: "open",
+				config: BASE_CONFIG,
+				runner,
+				home: HOME,
+			},
 		);
 		expect(task).toEqual({ status: "failed", reason: "unknown task type: refactor" });
 		expect(runner.calls).toHaveLength(0);
@@ -2489,6 +2687,7 @@ describe("handOffTicket: the guard rails", () => {
 		};
 
 		const outcome = await handOffTicket(ticket, resolveHandoffChoice(config, "implement"), {
+			claim: "open",
 			config,
 			runner,
 			home: HOME,
@@ -2516,6 +2715,7 @@ describe("handOffTicket: the guard rails", () => {
 		};
 
 		const outcome = await handOffTicket(ticket, resolveHandoffChoice(config, "implement"), {
+			claim: "open",
 			config,
 			runner,
 			home: HOME,
@@ -2547,7 +2747,12 @@ describe("handOffTicket: the guard rails", () => {
 		const outcome = await handOffTicket(
 			ticket,
 			{ ...defaultChoice, agentType: "zed", thinking: "minimal" },
-			{ config, runner, home: HOME },
+			{
+				claim: "open",
+				config,
+				runner,
+				home: HOME,
+			},
 		);
 
 		expect(outcome.status).toBe("failed");
@@ -2576,7 +2781,12 @@ describe("handOffTicket: the guard rails", () => {
 			const outcome = await handOffTicket(
 				ticket,
 				{ ...defaultChoice, agentType: "codex", contextWindow: draft },
-				{ config, runner, home: HOME },
+				{
+					claim: "open",
+					config,
+					runner,
+					home: HOME,
+				},
 			);
 			expect(outcome.status).toBe("failed");
 			expect(reasonOf(outcome)).toBe(
@@ -2604,6 +2814,7 @@ describe("handOffTicket: the guard rails", () => {
 		});
 
 		const outcome = await handOffTicket(ticket, defaultChoice, {
+			claim: "open",
 			config: BASE_CONFIG,
 			runner,
 			home: HOME,
@@ -2637,6 +2848,7 @@ describe("handOffTicket: the guard rails", () => {
 		});
 
 		const outcome = await handOffTicket(ticket, defaultChoice, {
+			claim: "open",
 			config: BASE_CONFIG,
 			runner,
 			home: HOME,
@@ -2676,16 +2888,17 @@ describe("handOffStoredWorkspace: the workflow handoff and the restart", () => {
 			stdout: tabCreateJson("pane-2"),
 		});
 
-		const outcome = await handOffStoredWorkspace({
-			ticket,
-			choice: defaultChoice,
+		const outcome = await handOffTicket(ticket, defaultChoice, {
 			config: BASE_CONFIG,
 			runner,
 			home: HOME,
-			workspaceId: "ws-stored",
-			environment: "live-worktree",
-			previousTabId: "tab-prev",
 			previousMessage: "settled earlier",
+			claim: "continuation",
+			previous: {
+				workspaceId: "ws-stored",
+				environment: "live-worktree",
+				tabId: "tab-prev",
+			},
 		});
 
 		expect(outcome.status).toBe("ok");
@@ -2716,17 +2929,22 @@ describe("handOffStoredWorkspace: the workflow handoff and the restart", () => {
 			stdout: tabCreateJson("pane-restart"),
 		});
 
-		const outcome = await handOffStoredWorkspace({
+		const outcome = await handOffTicket(
 			ticket,
-			choice: { ...defaultChoice, agentType: "codex", model: "gpt-5.6", thinking: "high" },
-			config: BASE_CONFIG,
-			runner,
-			home: HOME,
-			workspaceId: "ws-stored",
-			environment: "live-worktree",
-			previousTabId: "tab-interrupted",
-			previousMessage: "the interrupted work",
-		});
+			{ ...defaultChoice, agentType: "codex", model: "gpt-5.6", thinking: "high" },
+			{
+				config: BASE_CONFIG,
+				runner,
+				home: HOME,
+				previousMessage: "the interrupted work",
+				claim: "continuation",
+				previous: {
+					workspaceId: "ws-stored",
+					environment: "live-worktree",
+					tabId: "tab-interrupted",
+				},
+			},
+		);
 
 		expect(outcome.status).toBe("ok");
 		expect(
@@ -2759,16 +2977,17 @@ describe("handOffStoredWorkspace: the workflow handoff and the restart", () => {
 			stdout: tabCreateJson("pane-2"),
 		});
 
-		const outcome = await handOffStoredWorkspace({
-			ticket,
-			choice: defaultChoice,
+		const outcome = await handOffTicket(ticket, defaultChoice, {
 			config: previousMessageConfig,
 			runner,
 			home: HOME,
-			workspaceId: "ws-stored",
-			environment: "live-worktree",
-			previousTabId: null,
 			previousMessage: "settled earlier",
+			claim: "continuation",
+			previous: {
+				workspaceId: "ws-stored",
+				environment: "live-worktree",
+				tabId: null,
+			},
 		});
 
 		expect(outcome.status).toBe("ok");
@@ -2799,17 +3018,22 @@ describe("handOffStoredWorkspace: the workflow handoff and the restart", () => {
 			{ stdout: worktreeCreateJson("ws-reopen", "pane-ro") },
 		);
 
-		const outcome = await handOffStoredWorkspace({
+		const outcome = await handOffTicket(
 			ticket,
-			choice: { ...defaultChoice, environment: "worktree" },
-			config: BASE_CONFIG,
-			runner,
-			home: HOME,
-			workspaceId: "ws-gone",
-			environment: "worktree",
-			previousTabId: "tab-prev",
-			previousMessage: "settled earlier",
-		});
+			{ ...defaultChoice, environment: "worktree" },
+			{
+				config: BASE_CONFIG,
+				runner,
+				home: HOME,
+				previousMessage: "settled earlier",
+				claim: "continuation",
+				previous: {
+					workspaceId: "ws-gone",
+					environment: "worktree",
+					tabId: "tab-prev",
+				},
+			},
+		);
 
 		expect(outcome.status).toBe("ok");
 		// Reopen does not recheck the branch or read HEAD: the branch is the
@@ -2836,16 +3060,17 @@ describe("handOffStoredWorkspace: the workflow handoff and the restart", () => {
 			{ stdout: tabCreateJson("pane-3") },
 		);
 
-		const outcome = await handOffStoredWorkspace({
-			ticket,
-			choice: defaultChoice,
+		const outcome = await handOffTicket(ticket, defaultChoice, {
 			config: BASE_CONFIG,
 			runner,
 			home: HOME,
-			workspaceId: "ws-gone",
-			environment: "live-worktree",
-			previousTabId: "tab-prev",
 			previousMessage: "settled earlier",
+			claim: "continuation",
+			previous: {
+				workspaceId: "ws-gone",
+				environment: "live-worktree",
+				tabId: "tab-prev",
+			},
 		});
 
 		expect(outcome.status).toBe("ok");
@@ -2882,17 +3107,22 @@ describe("handOffStoredWorkspace: the workflow handoff and the restart", () => {
 			{ stdout: worktreeCreateJson("ws-wt", "pane-wt") },
 		);
 
-		const outcome = await handOffStoredWorkspace({
+		const outcome = await handOffTicket(
 			ticket,
-			choice: { ...defaultChoice, environment: "worktree" },
-			config: BASE_CONFIG,
-			runner,
-			home: HOME,
-			workspaceId: "ws-live",
-			environment: "live-worktree",
-			previousTabId: "tab-prev",
-			previousMessage: "settled earlier",
-		});
+			{ ...defaultChoice, environment: "worktree" },
+			{
+				config: BASE_CONFIG,
+				runner,
+				home: HOME,
+				previousMessage: "settled earlier",
+				claim: "continuation",
+				previous: {
+					workspaceId: "ws-live",
+					environment: "live-worktree",
+					tabId: "tab-prev",
+				},
+			},
+		);
 
 		expect(outcome.status).toBe("ok");
 		// The choice says worktree, the storage says live: build fresh.
@@ -2917,16 +3147,17 @@ describe("handOffStoredWorkspace: the workflow handoff and the restart", () => {
 			stderr: "error: herdr is not running\n",
 		});
 
-		const outcome = await handOffStoredWorkspace({
-			ticket,
-			choice: defaultChoice,
+		const outcome = await handOffTicket(ticket, defaultChoice, {
 			config: BASE_CONFIG,
 			runner,
 			home: HOME,
-			workspaceId: "ws-stored",
-			environment: "live-worktree",
-			previousTabId: "tab-prev",
 			previousMessage: "settled earlier",
+			claim: "continuation",
+			previous: {
+				workspaceId: "ws-stored",
+				environment: "live-worktree",
+				tabId: "tab-prev",
+			},
 		});
 
 		expect(outcome.status).toBe("failed");
@@ -2976,6 +3207,7 @@ describe("handOffStoredWorkspace: the workflow handoff and the restart", () => {
 		);
 
 		const outcome = await handOffTicket(ticket, resolveHandoffChoice(profileConfig, "implement"), {
+			claim: "open",
 			config: profileConfig,
 			runner,
 			home: HOME,
@@ -3021,6 +3253,7 @@ describe("handOffStoredWorkspace: the workflow handoff and the restart", () => {
 		};
 
 		const outcome = await handOffTicket(ticket, resolveHandoffChoice(config, "implement"), {
+			claim: "open",
 			config,
 			runner,
 			home: HOME,
@@ -3046,17 +3279,22 @@ describe("handOffStoredWorkspace: the workflow handoff and the restart", () => {
 			stdout: workspaceListJson([{ id: "ws-stored" }]),
 		});
 
-		const outcome = await handOffStoredWorkspace({
-			ticket: { ...ticket, state: "running" },
-			choice: { ...defaultChoice, agentType: "pi", contextWindow: "272000" },
-			config: BASE_CONFIG,
-			runner,
-			home: HOME,
-			workspaceId: "ws-stored",
-			environment: "live-worktree",
-			previousTabId: "tab-prev",
-			previousMessage: "",
-		});
+		const outcome = await handOffTicket(
+			{ ...ticket, state: "running" },
+			{ ...defaultChoice, agentType: "pi", contextWindow: "272000" },
+			{
+				config: BASE_CONFIG,
+				runner,
+				home: HOME,
+				previousMessage: "",
+				claim: "continuation",
+				previous: {
+					workspaceId: "ws-stored",
+					environment: "live-worktree",
+					tabId: "tab-prev",
+				},
+			},
+		);
 
 		expect(outcome.status).toBe("failed");
 		expect(reasonOf(outcome)).toContain('agent type "pi" defines no context window setting');
@@ -3079,17 +3317,22 @@ describe("handOffStoredWorkspace: the workflow handoff and the restart", () => {
 		};
 		const edge = { from: "implement", to: ["review"], agent: "cursor" };
 
-		const outcome = await handOffStoredWorkspace({
-			ticket: { ...ticket, state: "awaiting" },
-			choice: resolveHandoffChoice(config, "review", edge),
-			config,
-			runner,
-			home: HOME,
-			workspaceId: "ws-stored",
-			environment: "live-worktree",
-			previousTabId: "tab-prev",
-			previousMessage: "settled earlier",
-		});
+		const outcome = await handOffTicket(
+			{ ...ticket, state: "awaiting" },
+			resolveHandoffChoice(config, "review", edge),
+			{
+				config,
+				runner,
+				home: HOME,
+				previousMessage: "settled earlier",
+				claim: "continuation",
+				previous: {
+					workspaceId: "ws-stored",
+					environment: "live-worktree",
+					tabId: "tab-prev",
+				},
+			},
+		);
 
 		expect(outcome.status).toBe("failed");
 		expect(reasonOf(outcome)).toContain('agent type "cursor" defines no model setting');
@@ -3114,17 +3357,22 @@ describe("handOffStoredWorkspace: the workflow handoff and the restart", () => {
 		};
 		const edge = { from: "implement", to: ["review"], agent: "zed" };
 
-		const outcome = await handOffStoredWorkspace({
-			ticket: { ...ticket, state: "awaiting" },
-			choice: resolveHandoffChoice(config, "review", edge),
-			config,
-			runner,
-			home: HOME,
-			workspaceId: "ws-stored",
-			environment: "live-worktree",
-			previousTabId: "tab-prev",
-			previousMessage: "settled earlier",
-		});
+		const outcome = await handOffTicket(
+			{ ...ticket, state: "awaiting" },
+			resolveHandoffChoice(config, "review", edge),
+			{
+				config,
+				runner,
+				home: HOME,
+				previousMessage: "settled earlier",
+				claim: "continuation",
+				previous: {
+					workspaceId: "ws-stored",
+					environment: "live-worktree",
+					tabId: "tab-prev",
+				},
+			},
+		);
 
 		expect(outcome.status).toBe("failed");
 		expect(reasonOf(outcome)).toContain('agent type "zed" offers no thinking level "medium"');
@@ -3191,6 +3439,7 @@ describe("a leftover agent that holds the ticket's name", () => {
 			ticket,
 			{ ...defaultChoice, environment: "worktree" },
 			{
+				claim: "open",
 				config: BASE_CONFIG,
 				runner,
 				home: HOME,
@@ -3258,6 +3507,7 @@ describe("a leftover agent that holds the ticket's name", () => {
 			ticket,
 			{ ...defaultChoice, environment: "worktree" },
 			{
+				claim: "open",
 				config: BASE_CONFIG,
 				runner,
 				home: HOME,
@@ -3279,6 +3529,7 @@ describe("a leftover agent that holds the ticket's name", () => {
 			ticket,
 			{ ...defaultChoice, environment: "worktree" },
 			{
+				claim: "open",
 				config: BASE_CONFIG,
 				runner,
 				home: HOME,
@@ -3316,6 +3567,7 @@ describe("a leftover agent that holds the ticket's name", () => {
 			ticket,
 			{ ...defaultChoice, environment: "worktree" },
 			{
+				claim: "open",
 				config: BASE_CONFIG,
 				runner,
 				home: HOME,
@@ -3353,6 +3605,7 @@ describe("a leftover agent that holds the ticket's name", () => {
 			ticket,
 			{ ...defaultChoice, environment: "worktree" },
 			{
+				claim: "open",
 				config: BASE_CONFIG,
 				runner,
 				home: HOME,
@@ -3397,6 +3650,7 @@ describe("a leftover agent that holds the ticket's name", () => {
 		});
 
 		const outcome = await handOffTicket(longTicket, defaultChoice, {
+			claim: "open",
 			config: BASE_CONFIG,
 			runner,
 			home: HOME,
@@ -3432,6 +3686,7 @@ describe("a leftover agent that holds the ticket's name", () => {
 			ticket,
 			{ ...defaultChoice, environment: "worktree" },
 			{
+				claim: "open",
 				config: BASE_CONFIG,
 				runner,
 				home: HOME,
@@ -3844,7 +4099,12 @@ describe("the review verdict of the rework handoff prompt", () => {
 	): Promise<HandoffOutcome> {
 		conventionCheckout(runner);
 		stubLiveWorkspace(runner);
-		return handOffTicket(pullTicket, reworkChoice, { config, runner, home: HOME });
+		return handOffTicket(pullTicket, reworkChoice, {
+			claim: "open",
+			config,
+			runner,
+			home: HOME,
+		});
 	}
 
 	test("a template without the placeholder issues no verdict read", async () => {
@@ -3993,16 +4253,17 @@ describe("the review verdict of the rework handoff prompt", () => {
 		setComments(runner, []);
 		setReviews(runner, [{ body: VERDICT_BODY, submitted_at: "2026-08-31T12:00:00Z" }]);
 
-		const outcome = await handOffStoredWorkspace({
-			ticket: pullTicket,
-			choice: reworkChoice,
+		const outcome = await handOffTicket(pullTicket, reworkChoice, {
 			config: reviewVerdictConfig,
 			runner,
 			home: HOME,
-			workspaceId: "ws-stored",
-			environment: "live-worktree",
-			previousTabId: "tab-prev",
 			previousMessage: "the last message",
+			claim: "continuation",
+			previous: {
+				workspaceId: "ws-stored",
+				environment: "live-worktree",
+				tabId: "tab-prev",
+			},
 		});
 
 		expect(outcome.status).toBe("ok");
@@ -4190,7 +4451,12 @@ describe("handOffTicket: the pull request the plane opens (ADR 0076)", () => {
 		const outcome = await handOffTicket(
 			PR_TICKET,
 			{ ...defaultChoice, environment: "worktree" },
-			{ config: PR_CONFIG, runner, home: HOME },
+			{
+				claim: "open",
+				config: PR_CONFIG,
+				runner,
+				home: HOME,
+			},
 		);
 
 		expect(outcome.status).toBe("ok");
@@ -4257,7 +4523,12 @@ describe("handOffTicket: the pull request the plane opens (ADR 0076)", () => {
 		const outcome = await handOffTicket(
 			PR_TICKET,
 			{ ...defaultChoice, environment: "worktree" },
-			{ config: PR_CONFIG, runner, home: HOME },
+			{
+				claim: "open",
+				config: PR_CONFIG,
+				runner,
+				home: HOME,
+			},
 		);
 
 		expect(outcome.status).toBe("ok");
@@ -4278,7 +4549,12 @@ describe("handOffTicket: the pull request the plane opens (ADR 0076)", () => {
 		const outcome = await handOffTicket(
 			PR_TICKET,
 			{ ...defaultChoice, environment: "worktree" },
-			{ config: PR_CONFIG, runner, home: HOME },
+			{
+				claim: "open",
+				config: PR_CONFIG,
+				runner,
+				home: HOME,
+			},
 		);
 
 		expect(outcome.status).toBe("ok");
@@ -4306,7 +4582,12 @@ describe("handOffTicket: the pull request the plane opens (ADR 0076)", () => {
 		const outcome = await handOffTicket(
 			PR_TICKET,
 			{ ...defaultChoice, environment: "worktree" },
-			{ config: PR_CONFIG, runner, home: HOME },
+			{
+				claim: "open",
+				config: PR_CONFIG,
+				runner,
+				home: HOME,
+			},
 		);
 
 		expect(outcome.status).toBe("failed");
@@ -4338,7 +4619,12 @@ describe("handOffTicket: the pull request the plane opens (ADR 0076)", () => {
 		const outcome = await handOffTicket(
 			PR_TICKET,
 			{ ...defaultChoice, environment: "worktree" },
-			{ config: PR_CONFIG, runner, home: HOME },
+			{
+				claim: "open",
+				config: PR_CONFIG,
+				runner,
+				home: HOME,
+			},
 		);
 
 		expect(outcome.status).toBe("failed");
@@ -4365,7 +4651,12 @@ describe("handOffTicket: the pull request the plane opens (ADR 0076)", () => {
 		const outcome = await handOffTicket(
 			PR_TICKET,
 			{ ...defaultChoice, environment: "worktree" },
-			{ config: PR_CONFIG, runner, home: HOME },
+			{
+				claim: "open",
+				config: PR_CONFIG,
+				runner,
+				home: HOME,
+			},
 		);
 
 		expect(outcome.status).toBe("failed");
@@ -4413,7 +4704,12 @@ describe("handOffTicket: the pull request the plane opens (ADR 0076)", () => {
 		const outcome = await handOffTicket(
 			PR_TICKET,
 			{ ...defaultChoice, environment: "worktree" },
-			{ config: PR_CONFIG, runner, home: HOME },
+			{
+				claim: "open",
+				config: PR_CONFIG,
+				runner,
+				home: HOME,
+			},
 		);
 
 		expect(outcome.status).toBe("failed");
@@ -4431,7 +4727,12 @@ describe("handOffTicket: the pull request the plane opens (ADR 0076)", () => {
 		const outcome = await handOffTicket(
 			PR_TICKET,
 			{ ...defaultChoice, environment: "live-worktree" },
-			{ config: PR_CONFIG, runner, home: HOME },
+			{
+				claim: "open",
+				config: PR_CONFIG,
+				runner,
+				home: HOME,
+			},
 		);
 
 		expect(outcome.status).toBe("failed");
@@ -4452,15 +4753,19 @@ describe("handOffTicket: the pull request the plane opens (ADR 0076)", () => {
 		const outcome = await handOffTicket(
 			ticket,
 			{ ...defaultChoice, environment: "worktree" },
-			{ config: PR_CONFIG, runner, home: HOME },
+			{
+				claim: "open",
+				config: PR_CONFIG,
+				runner,
+				home: HOME,
+			},
 		);
 
 		expect(outcome.status).toBe("failed");
 		expect(reasonOf(outcome)).toContain("opens a pull request");
-		expect(runner.commands()).toEqual([
-			`git -C ${CHECKOUT} rev-parse --git-dir`,
-			`git -C ${CHECKOUT} remote get-url origin`,
-		]);
+		// The open's own pre-flight reads the ticket and the config, so it answers
+		// before the start resolves a repository it would never use.
+		expect(runner.commands()).toEqual([]);
 	});
 
 	test("a task type that opens no pull request runs no open step", async () => {
@@ -4487,12 +4792,470 @@ describe("handOffTicket: the pull request the plane opens (ADR 0076)", () => {
 		const outcome = await handOffTicket(
 			PR_TICKET,
 			{ ...defaultChoice, environment: "worktree" },
-			{ config: BASE_CONFIG, runner, home: HOME },
+			{
+				claim: "open",
+				config: BASE_CONFIG,
+				runner,
+				home: HOME,
+			},
 		);
 
 		expect(outcome.status).toBe("ok");
 		const commands = runner.commands();
 		expect(commands).not.toContain(`git -C ${CHECKOUT} push origin ${PR_BRANCH}`);
 		expect(commands).not.toContain(`gh ${PR_READ_ARGS.join(" ")}`);
+	});
+});
+
+/**
+ * The one start (issue #204): the rules every start path shares, measured at the
+ * handoff interface instead of inside a caller.
+ */
+describe("the one start: one pre-flight order on both paths", () => {
+	// Issue #204 measured the drift this block closes: an unknown Agent type
+	// beside the reserved container Environment answered `the container
+	// environment is reserved and not yet built` on the Ticket path and
+	// `unknown agent type: nope` on the Consultation path. One rule now answers
+	// one order, so the Message line and the Desktop notification carry the fact
+	// the plane really read.
+
+	const AGENT_AND_ENVIRONMENT_FACTS = { agentType: "nope", environment: "container" as const };
+
+	test("an unknown Agent type beside the reserved Environment answers the Agent type on both paths", async () => {
+		const runner = new FakeRunner();
+		const onTicket = await handOffTicket(
+			ticket,
+			{ ...defaultChoice, ...AGENT_AND_ENVIRONMENT_FACTS },
+			{
+				claim: "open",
+				config: BASE_CONFIG,
+				runner,
+				home: HOME,
+			},
+		);
+		const onConsultation = await handOffConsultation({
+			consultation: consultationRecord(AGENT_AND_ENVIRONMENT_FACTS),
+			config: BASE_CONFIG,
+			runner,
+			home: HOME,
+		});
+		expect(reasonOf(onTicket)).toBe("unknown agent type: nope");
+		expect(reasonOf(onConsultation)).toBe(reasonOf(onTicket));
+		// The pre-flight answers before either start touches anything external.
+		expect(runner.calls).toHaveLength(0);
+	});
+
+	test("a known Agent type with the reserved Environment answers the Environment on both paths", async () => {
+		const runner = new FakeRunner();
+		const facts = { agentType: "pi", environment: "container" as const };
+		const onTicket = await handOffTicket(
+			ticket,
+			{ ...defaultChoice, ...facts },
+			{
+				claim: "open",
+				config: BASE_CONFIG,
+				runner,
+				home: HOME,
+			},
+		);
+		const onConsultation = await handOffConsultation({
+			consultation: consultationRecord(facts),
+			config: BASE_CONFIG,
+			runner,
+			home: HOME,
+		});
+		expect(reasonOf(onTicket)).toBe("the container environment is reserved and not yet built");
+		expect(reasonOf(onConsultation)).toBe(reasonOf(onTicket));
+		expect(runner.calls).toHaveLength(0);
+	});
+
+	test("the Agent type is answered before the Task type on the Ticket path", async () => {
+		const runner = new FakeRunner();
+		const outcome = await handOffTicket(
+			ticket,
+			{ ...defaultChoice, agentType: "nope", taskType: "refactor" },
+			{ claim: "open", config: BASE_CONFIG, runner, home: HOME },
+		);
+		expect(reasonOf(outcome)).toBe("unknown agent type: nope");
+	});
+
+	test("the Task type is answered before the Setting fit on the Ticket path", async () => {
+		const runner = new FakeRunner();
+		// The model is unfit too, and the Agent type is known: the Task type is
+		// the fact the order puts first, so its reason is the one the operator reads.
+		runner.setModelList("pi", ["anthropic/claude-sonnet-4-5"]);
+		const outcome = await handOffTicket(
+			ticket,
+			{ ...defaultChoice, taskType: "refactor", model: "gpt-4o" },
+			{ claim: "open", config: BASE_CONFIG, runner, home: HOME },
+		);
+		expect(reasonOf(outcome)).toBe("unknown task type: refactor");
+		expect(runner.modelListCalls).toHaveLength(0);
+	});
+
+	test("the Setting fit is the last half of the order on both paths", async () => {
+		const runner = new FakeRunner();
+		runner.setModelList("pi", ["anthropic/claude-sonnet-4-5"]);
+		const onTicket = await handOffTicket(
+			ticket,
+			{ ...defaultChoice, model: "gpt-4o" },
+			{
+				claim: "open",
+				config: BASE_CONFIG,
+				runner,
+				home: HOME,
+			},
+		);
+		const onConsultation = await handOffConsultation({
+			consultation: consultationRecord({ model: "gpt-4o" }),
+			config: BASE_CONFIG,
+			runner,
+			home: HOME,
+		});
+		expect(reasonOf(onTicket)).toContain('has no model "gpt-4o"');
+		expect(reasonOf(onConsultation)).toBe(reasonOf(onTicket));
+		// The fit is a runtime read, and it is the only half that asks for one.
+		expect(runner.modelListCalls).toEqual(["pi", "pi"]);
+		expect(runner.calls).toHaveLength(0);
+	});
+});
+
+describe("the one start: one cleanup rule on every Environment kind", () => {
+	/** The Agent start failure every cleanup test here runs on. */
+	function stubStartFailure(runner: FakeRunner, pane: string): void {
+		runner.set("herdr", ["agent", "start", AGENT, "--kind", "pi", "--pane", pane], {
+			code: 1,
+			stderr: '{"error":{"code":"agent_start_failed","message":"the pane is gone"}}\n',
+		});
+	}
+
+	/** The same failure for the name a Consultation start runs under. */
+	function stubConsultationStartFailure(runner: FakeRunner, pane: string): void {
+		runner.set(
+			"herdr",
+			["agent", "start", "consultation-11111111", "--kind", "pi", "--pane", pane],
+			{
+				code: 1,
+				stderr: '{"error":{"code":"agent_start_failed","message":"the pane is gone"}}\n',
+			},
+		);
+	}
+
+	test("a live start that creates its workspace removes its tab and that workspace", async () => {
+		const runner = new FakeRunner();
+		conventionCheckout(runner);
+		runner.set("herdr", ["workspace", "list"], { stdout: workspaceListJson([]) });
+		runner.set("herdr", ["workspace", "create", "--cwd", CHECKOUT, "--no-focus"], {
+			stdout: workspaceCreateJson("ws-new"),
+		});
+		runner.set(
+			"herdr",
+			["tab", "create", "--workspace", "ws-new", "--cwd", CHECKOUT, "--no-focus"],
+			{
+				stdout: tabCreateJson("pane-1"),
+			},
+		);
+		stubStartFailure(runner, "pane-1");
+
+		const outcome = await handOffTicket(ticket, defaultChoice, {
+			claim: "open",
+			config: BASE_CONFIG,
+			runner,
+			home: HOME,
+		});
+
+		expect(outcome.status).toBe("failed");
+		// The live kind cleans up the way the worktree kind always did: the tab
+		// first, then the workspace behind it. No branch stands in this kind.
+		const commands = runner.commands();
+		expect(commands).toContain("herdr tab close tab-1");
+		expect(commands).toContain("herdr workspace close ws-new");
+		expect(commands.indexOf("herdr tab close tab-1")).toBeLessThan(
+			commands.indexOf("herdr workspace close ws-new"),
+		);
+		expect(commands).not.toContain(expect.stringContaining("branch -D"));
+	});
+
+	test("a live start in the checkout's own workspace closes only the tab it created", async () => {
+		const runner = new FakeRunner();
+		conventionCheckout(runner);
+		runner.set("herdr", ["workspace", "list"], {
+			stdout: workspaceListJson([{ id: "ws-live", checkoutPath: CHECKOUT }]),
+		});
+		runner.set(
+			"herdr",
+			["tab", "create", "--workspace", "ws-live", "--cwd", CHECKOUT, "--no-focus"],
+			{
+				stdout: tabCreateJson("pane-1"),
+			},
+		);
+		stubStartFailure(runner, "pane-1");
+
+		const outcome = await handOffTicket(ticket, defaultChoice, {
+			claim: "open",
+			config: BASE_CONFIG,
+			runner,
+			home: HOME,
+		});
+
+		expect(outcome.status).toBe("failed");
+		const commands = runner.commands();
+		expect(commands).toContain("herdr tab close tab-1");
+		// The workspace pre-dates the attempt: the operator's own tabs may stand
+		// in it, so it stays.
+		expect(commands).not.toContain(expect.stringContaining("workspace close"));
+	});
+
+	test("a stored live start closes the tab it created and keeps the stored workspace", async () => {
+		const runner = new FakeRunner();
+		conventionCheckout(runner);
+		runner.set("herdr", ["workspace", "list"], {
+			stdout: workspaceListJson([{ id: "ws-stored" }]),
+		});
+		runner.set("herdr", ["tab", "create", "--workspace", "ws-stored", "--no-focus"], {
+			stdout: tabCreateJson("pane-1"),
+		});
+		stubStartFailure(runner, "pane-1");
+
+		const outcome = await handOffTicket(ticket, defaultChoice, {
+			claim: "continuation",
+			config: BASE_CONFIG,
+			runner,
+			home: HOME,
+			previous: { workspaceId: "ws-stored", environment: "live-worktree", tabId: "tab-prev" },
+		});
+
+		expect(outcome.status).toBe("failed");
+		const commands = runner.commands();
+		expect(commands).toContain("herdr tab close tab-1");
+		expect(commands).not.toContain(expect.stringContaining("workspace close"));
+	});
+
+	test("a Consultation start in its fresh workspace closes the workspace it created", async () => {
+		const runner = new FakeRunner();
+		conventionCheckout(runner);
+		runner.set("herdr", ["workspace", "list"], { stdout: workspaceListJson([]) });
+		runner.set("herdr", ["workspace", "create", "--cwd", CHECKOUT, "--no-focus"], {
+			stdout: workspaceCreateJson("ws-new", "pane-c1"),
+		});
+		stubConsultationStartFailure(runner, "pane-c1");
+
+		const outcome = await handOffConsultation({
+			consultation: consultationRecord(),
+			config: BASE_CONFIG,
+			runner,
+			home: HOME,
+		});
+
+		expect(outcome.status).toBe("failed");
+		// The Consultation owns this workspace, so its failure takes it down. No
+		// tab was created for the Agent, so no tab close runs either.
+		const commands = runner.commands();
+		expect(commands).toContain("herdr workspace close ws-new");
+		expect(commands).not.toContain(expect.stringContaining("tab close"));
+	});
+});
+
+describe("the one start: the Consultation sequence at the handoff interface", () => {
+	const CONSULTATION_BRANCH = "factory/consultation-consulta-grill-with-docs";
+
+	/** The resources a Consultation start recorded, in the order it recorded them. */
+	function recorder(
+		into: string[],
+	): (kind: string, resourceId: string, owned: boolean, details?: string) => void {
+		return (kind, resourceId, owned, details) => {
+			into.push(
+				`${kind} ${resourceId}${owned ? "" : " shared"}${details === undefined ? "" : ` ${details}`}`,
+			);
+		};
+	}
+
+	test("a Consultation reuses the checkout's workspace and adds a fresh tab", async () => {
+		const runner = new FakeRunner();
+		conventionCheckout(runner);
+		runner.set("herdr", ["workspace", "list"], {
+			stdout: workspaceListJson([{ id: "ws-live", checkoutPath: CHECKOUT }]),
+		});
+		runner.set(
+			"herdr",
+			["tab", "create", "--workspace", "ws-live", "--cwd", CHECKOUT, "--no-focus"],
+			{
+				stdout: tabCreateJson("pane-c1", "tab-c1"),
+			},
+		);
+		const resources: string[] = [];
+
+		const outcome = await handOffConsultation({
+			consultation: consultationRecord(),
+			config: BASE_CONFIG,
+			runner,
+			home: HOME,
+			onResource: recorder(resources),
+		});
+
+		expect(outcome.status).toBe("ok");
+		const commands = runner.commands();
+		const listAt = commands.indexOf("herdr workspace list");
+		const tabAt = commands.findIndex((command) => command.startsWith("herdr tab create"));
+		const startAt = commands.findIndex((command) => command.startsWith("herdr agent start"));
+		const promptAt = commands.findIndex((command) => command.startsWith("herdr agent prompt"));
+		expect(listAt).toBeGreaterThan(-1);
+		expect(tabAt).toBeGreaterThan(listAt);
+		expect(startAt).toBeGreaterThan(tabAt);
+		expect(promptAt).toBeGreaterThan(startAt);
+		// The workspace the checkout already lives in is never recreated.
+		expect(commands.join("\n")).not.toContain("workspace create");
+		// The record lands before the next external step, so a failure in the
+		// middle of the sequence still shows what might remain in the Close panel.
+		expect(resources).toEqual(["tab tab-c1 Consultation tab"]);
+	});
+
+	test("a Consultation creates the missing checkout workspace and starts in its root pane", async () => {
+		const runner = new FakeRunner();
+		conventionCheckout(runner);
+		runner.set("herdr", ["workspace", "list"], { stdout: workspaceListJson([]) });
+		runner.set("herdr", ["workspace", "create", "--cwd", CHECKOUT, "--no-focus"], {
+			stdout: workspaceCreateJson("ws-new", "pane-c1"),
+		});
+		const resources: string[] = [];
+
+		const outcome = await handOffConsultation({
+			consultation: consultationRecord(),
+			config: BASE_CONFIG,
+			runner,
+			home: HOME,
+			onResource: recorder(resources),
+		});
+
+		expect(outcome.status).toBe("ok");
+		const commands = runner.commands();
+		const listAt = commands.indexOf("herdr workspace list");
+		const createAt = commands.findIndex((command) => command.startsWith("herdr workspace create"));
+		const startAt = commands.findIndex((command) => command.startsWith("herdr agent start"));
+		const promptAt = commands.findIndex((command) => command.startsWith("herdr agent prompt"));
+		expect(listAt).toBeGreaterThan(-1);
+		expect(createAt).toBeGreaterThan(listAt);
+		expect(startAt).toBeGreaterThan(createAt);
+		expect(promptAt).toBeGreaterThan(startAt);
+		// No empty tab: the Agent takes the root pane of the workspace it owns.
+		expect(commands.join("\n")).not.toContain("tab create");
+		expect(resources).toEqual([
+			"workspace ws-new Consultation workspace",
+			"tab tab-ws-new Consultation root tab",
+		]);
+	});
+
+	test("a Consultation worktree start creates its worktree from the worktree base", async () => {
+		const runner = new FakeRunner();
+		conventionCheckout(runner);
+		runner.set("git", ["-C", CHECKOUT, "branch", "--list", CONSULTATION_BRANCH], { stdout: "" });
+		stubRemoteDefaultBranch(runner);
+		runner.set(
+			"herdr",
+			[
+				"worktree",
+				"create",
+				"--cwd",
+				CHECKOUT,
+				"--branch",
+				CONSULTATION_BRANCH,
+				"--base",
+				"origin/main",
+				"--no-focus",
+			],
+			{ stdout: worktreeCreateJson("ws-cwt", "pane-c1") },
+		);
+		const resources: string[] = [];
+
+		const outcome = await handOffConsultation({
+			consultation: consultationRecord({ environment: "worktree" }),
+			config: BASE_CONFIG,
+			runner,
+			home: HOME,
+			onResource: recorder(resources),
+		});
+
+		expect(outcome.status).toBe("ok");
+		const commands = runner.commands();
+		const branchAt = commands.findIndex((command) => command.includes("branch --list"));
+		const createAt = commands.findIndex((command) => command.startsWith("herdr worktree create"));
+		const startAt = commands.findIndex((command) => command.startsWith("herdr agent start"));
+		const promptAt = commands.findIndex((command) => command.startsWith("herdr agent prompt"));
+		expect(branchAt).toBeGreaterThan(-1);
+		expect(createAt).toBeGreaterThan(branchAt);
+		expect(startAt).toBeGreaterThan(createAt);
+		expect(promptAt).toBeGreaterThan(startAt);
+		expect(commands).toContain(`herdr agent start consultation-11111111 --kind pi --pane pane-c1`);
+		expect(resources).toEqual([
+			"workspace ws-cwt Consultation worktree workspace",
+			"worktree ws-cwt Consultation worktree checkout for factory/consultation-consulta-grill-with-docs",
+			"tab tab-ws-cwt Consultation worktree tab",
+		]);
+	});
+
+	test("a Consultation branch that already exists is refused before any herdr step", async () => {
+		const runner = new FakeRunner();
+		conventionCheckout(runner);
+		runner.set("git", ["-C", CHECKOUT, "branch", "--list", CONSULTATION_BRANCH], {
+			stdout: `  ${CONSULTATION_BRANCH}\n`,
+		});
+
+		const outcome = await handOffConsultation({
+			consultation: consultationRecord({ environment: "worktree" }),
+			config: BASE_CONFIG,
+			runner,
+			home: HOME,
+		});
+
+		expect(outcome.status).toBe("failed");
+		expect(reasonOf(outcome)).toBe(`Consultation branch already exists: ${CONSULTATION_BRANCH}`);
+		// The refusal is the branch policy, not a reuse: no worktree is opened on
+		// the branch, and nothing is removed.
+		expect(runner.commands().join("\n")).not.toContain("herdr");
+		expect(runner.commands()).not.toContain(expect.stringContaining("branch -D"));
+	});
+
+	test("a Consultation worktree start removes the worktree and the branch it created", async () => {
+		const runner = new FakeRunner();
+		conventionCheckout(runner);
+		runner.set("git", ["-C", CHECKOUT, "branch", "--list", CONSULTATION_BRANCH], { stdout: "" });
+		stubRemoteDefaultBranch(runner);
+		runner.set(
+			"herdr",
+			[
+				"worktree",
+				"create",
+				"--cwd",
+				CHECKOUT,
+				"--branch",
+				CONSULTATION_BRANCH,
+				"--base",
+				"origin/main",
+				"--no-focus",
+			],
+			{ stdout: worktreeCreateJson("ws-cwt", "pane-c1") },
+		);
+		runner.set(
+			"herdr",
+			["agent", "start", "consultation-11111111", "--kind", "pi", "--pane", "pane-c1"],
+			{
+				code: 1,
+				stderr: '{"error":{"code":"agent_start_failed","message":"the pane is gone"}}\n',
+			},
+		);
+
+		const outcome = await handOffConsultation({
+			consultation: consultationRecord({ environment: "worktree" }),
+			config: BASE_CONFIG,
+			runner,
+			home: HOME,
+		});
+
+		expect(outcome.status).toBe("failed");
+		// One cleanup rule for every kind: the checkout goes, and so does the
+		// branch this start created.
+		const commands = runner.commands();
+		expect(commands).toContain("herdr worktree remove --workspace ws-cwt");
+		expect(commands).toContain(`git -C ${CHECKOUT} branch -D ${CONSULTATION_BRANCH}`);
 	});
 });

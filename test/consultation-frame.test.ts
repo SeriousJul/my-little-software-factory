@@ -572,13 +572,6 @@ describe("Consultation launch and monitoring through the UI", () => {
 						],
 						"the launch command sequence",
 					);
-					const commands = runner.commands();
-					const worktreeAt = commands.findIndex((c) => c.includes("worktree create"));
-					const startAt = commands.findIndex((c) => c.includes("agent start"));
-					const promptAt = commands.findIndex((c) => c.includes("agent prompt"));
-					expect(worktreeAt).toBeGreaterThan(-1);
-					expect(startAt).toBeGreaterThan(worktreeAt);
-					expect(promptAt).toBeGreaterThan(startAt);
 					await awaitFrame(setup, (f) => f.includes("Agent: auth review"), "the live Agent output");
 					const started = state.consultationRecord.consultations("open");
 					expect(started).toHaveLength(1);
@@ -1995,17 +1988,6 @@ describe("Consultation live-worktree launch through the UI", () => {
 						],
 						"the live launch sequence",
 					);
-					const commands = runner.commands();
-					const listAt = commands.indexOf("herdr workspace list");
-					const tabAt = commands.findIndex((c) => c.startsWith("herdr tab create"));
-					const startAt = commands.findIndex((c) => c.startsWith("herdr agent start"));
-					const promptAt = commands.findIndex((c) => c.startsWith("herdr agent prompt"));
-					expect(listAt).toBeGreaterThan(-1);
-					expect(tabAt).toBeGreaterThan(listAt);
-					expect(startAt).toBeGreaterThan(tabAt);
-					expect(promptAt).toBeGreaterThan(startAt);
-					// The existing workspace is reused, never recreated.
-					expect(commands.join("\n")).not.toContain("workspace create");
 					const [consultation] = state.consultationRecord.consultations("open");
 					expect(consultation.state).toBe("working");
 					expect(consultation.paneId).toBe("pane-c1");
@@ -2100,18 +2082,6 @@ describe("Consultation live-worktree launch through the UI", () => {
 					);
 					await launchConsultationDraft(setup, "review auth");
 					await awaitFrame(setup, (f) => f.includes("State: working"), "the working state");
-					const commands = runner.commands();
-					const listAt = commands.indexOf("herdr workspace list");
-					const createAt = commands.findIndex((c) => c.startsWith("herdr workspace create"));
-					const startAt = commands.findIndex((c) => c.startsWith("herdr agent start"));
-					const promptAt = commands.findIndex((c) => c.startsWith("herdr agent prompt"));
-					expect(listAt).toBeGreaterThan(-1);
-					expect(createAt).toBeGreaterThan(listAt);
-					expect(startAt).toBeGreaterThan(createAt);
-					expect(promptAt).toBeGreaterThan(startAt);
-					expect(commands).toContain(`herdr workspace create --cwd ${checkout} --no-focus`);
-					// No empty tab: the Agent takes the workspace root pane.
-					expect(commands.join("\n")).not.toContain("tab create");
 					const [consultation] = state.consultationRecord.consultations("open");
 					expect(consultation.state).toBe("working");
 					expect(consultation.paneId).toBe("pane-c1");

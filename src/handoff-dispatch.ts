@@ -19,7 +19,6 @@ import {
 	closeStoredEnvironment,
 	type HandoffChoice,
 	type HandoffOutcome,
-	handOffStoredWorkspace,
 	handOffTicket,
 	type NameCollision,
 	type OwnNameKnowledge,
@@ -1582,27 +1581,30 @@ class HandoffDispatchModule implements HandoffDispatch {
 				if (failure !== undefined)
 					this.reports.warning(`the previous handoff's environment did not close: ${failure}`);
 			}
-			return origin === "open"
-				? handOffTicket(ticket, choice, {
-						config: this.config(),
-						runner: this.runner,
-						home: this.home,
-						onStage,
-						names,
-					})
-				: handOffStoredWorkspace({
-						ticket,
-						choice,
-						config: this.config(),
-						runner: this.runner,
-						home: this.home,
-						workspaceId: ticket.handoff?.workspaceId ?? null,
-						environment: ticket.handoff?.environment ?? this.config().defaultEnvironment,
-						previousTabId: ticket.handoff?.tabId ?? null,
-						previousMessage,
-						onStage,
-						names,
-					});
+			return handOffTicket(ticket, choice, {
+				config: this.config(),
+				runner: this.runner,
+				home: this.home,
+				onStage,
+				names,
+				// The one start (issue #204): an open start carries the ticket's open
+				// gate, and a workflow handoff or a restart stands behind the claim its
+				// turn already settled. Both state the workspace the previous handoff
+				// recorded, and the start decides whether herdr still holds it.
+				claim: origin === "open" ? "open" : "continuation",
+				// An open start states no workspace: it builds the Environment its choice
+				// names. A workflow handoff or a restart states the workspace its
+				// previous handoff recorded, and the start decides whether herdr holds it.
+				previous:
+					origin === "open"
+						? undefined
+						: {
+								workspaceId: ticket.handoff?.workspaceId ?? null,
+								environment: ticket.handoff?.environment ?? this.config().defaultEnvironment,
+								tabId: ticket.handoff?.tabId ?? null,
+							},
+				previousMessage,
+			});
 		})();
 
 		void run

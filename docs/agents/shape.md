@@ -126,8 +126,12 @@ description: The module map of the source tree, for agents working in this repos
 	ADR 0088, ADR 0094): the gates every automatic add reads, the row a
 	continuation must not jump, the fresh-work cycle gate, the restart candidate,
 	and the open ticket's row gate and its waits.
-- `src/handoff.ts`: the handoff. Resolves the repository, runs the pinned
-	command sequence through herdr, starts the agent, and sends the prompt.
+- `src/handoff.ts`: the handoff. One start module (`startHandoff`) every start
+	path calls (issue #204): it runs the pre-flight in one order, resolves the
+	repository, builds the environment the choice names through herdr, starts the
+	agent, sends the prompt, and removes what the start created when the agent
+	never starts. The Ticket caller and the Consultation caller state their facts
+	and hand one request to it.
 - `src/consultation.ts`: the Consultation rules that need no terminal. The input
 	and snapshot bounds, the per-Repository operation queue, the live checkout
 	safety check, the Replacement context bounds, the Agent interaction key
