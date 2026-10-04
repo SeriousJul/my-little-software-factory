@@ -566,7 +566,7 @@ export class ObservationCoordinator {
 	 */
 	private readonly holdReports = new Map<string, string>();
 	/**
-	 * The automatic-walk holds this cycle noted, and the keys the last cycle stated
+	 * The automatic-walk holds this cycle noted, and the holds the last cycle stated
 	 * (issue #223). The holds are derived every cycle and never stored; these two
 	 * only tell a standing fact from a new one, the way the Dispatch pause line and
 	 * the held Next step line remember their last report, so a hold states itself
@@ -574,7 +574,14 @@ export class ObservationCoordinator {
 	 * names (`automaticHoldKey`), so a hold behind a different row is a new fact.
 	 */
 	private automaticHolds = new Map<string, AutomaticHold>();
-	private automaticHoldsReported = new Set<string>();
+	/**
+	 * The holds the last cycle stated (issue #223). A cycle that ran no fresh-work
+	 * walk keeps that walk's facts standing here: the skip is the cycle's own
+	 * choice, not the fact leaving, so a row that stood the whole time is not
+	 * stated twice. The entry is the hold, not only its key, so the carry-over can
+	 * ask which walk owns the fact.
+	 */
+	private automaticHoldsReported = new Map<string, AutomaticHold>();
 	/**
 	 * The agents of the last successful list, for the UI's markers. Null
 	 * until the first success: an unreadable herdr must not read as "every
@@ -879,10 +886,11 @@ export class ObservationCoordinator {
 		// The fresh-work adds (ADR 0051): with Auto-handoff on, the queue empty,
 		// the queue pause down, and the Dispatch pause clear, the cycle adds one
 		// item - a restart, then a new open ticket, else nothing.
-		if (!continued) changed = (await this.topUpFreshWork(probe.agents)) || changed;
+		const freshWorkWalkRan = !continued;
+		if (freshWorkWalkRan) changed = (await this.topUpFreshWork(probe.agents)) || changed;
 		if (this.stopped) return;
 		// The holds both walks took, stated once each for as long as they stand.
-		this.reportAutomaticHolds();
+		this.reportAutomaticHolds(freshWorkWalkRan);
 
 		// Tickets and Consultations share this one successful Herdr list poll.
 		// A Consultation in `opening` or `working` already holds its seat in
@@ -1802,17 +1810,34 @@ export class ObservationCoordinator {
 	 * a new fact the cycle reached, or the same fact behind a different row states
 	 * itself once more.
 	 *
+	 * A walk the cycle did not run states nothing new and clears nothing. The cycle
+	 * that asks a continuation asks no fresh work (ADR 0051), so the row that
+	 * fresh-work walk waits behind is never read in that cycle: the row stands the
+	 * whole time, and its line stays silent rather than stating itself again on the
+	 * next poll (issue #223 review). Only a cycle that reads the fact and finds it
+	 * gone retires it, so the row that really leaves the queue is stated again when
+	 * a row comes back.
+	 *
 	 * The name read for a standing row runs here and not where the walk noted the
 	 * hold, so a fact that stands across a hundred polls costs no read at the poll's
 	 * cadence. A cycle that throws between its walks and this report keeps no note:
 	 * its holds state themselves on the next cycle that reaches here.
 	 */
-	private reportAutomaticHolds(): void {
+	private reportAutomaticHolds(freshWorkWalkRan: boolean): void {
 		for (const [key, hold] of this.automaticHolds) {
 			if (this.automaticHoldsReported.has(key)) continue;
 			this.log.info(automaticHoldLine(hold, (identity) => this.ticketName(identity)));
 		}
-		this.automaticHoldsReported = new Set(this.automaticHolds.keys());
+		const reported = new Map(this.automaticHolds);
+		if (!freshWorkWalkRan) {
+			// `queue-row-standing` is the fact only the fresh-work walk states: the
+			// continuation walk answers its own queue rule (ADR 0094), and the mode,
+			// the pause, and the Dispatch pause are noted by both walks. So the carry-
+			// over names one reason, and it is the one the skipped walk owns.
+			for (const [key, hold] of this.automaticHoldsReported)
+				if (hold.reason === "queue-row-standing") reported.set(key, hold);
+		}
+		this.automaticHoldsReported = reported;
 		this.automaticHolds = new Map();
 	}
 

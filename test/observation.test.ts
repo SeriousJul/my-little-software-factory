@@ -6224,6 +6224,52 @@ describe("the automatic walks state their holds in the record (issue #223)", () 
 	});
 
 	/**
+	 * The skip is not the fact leaving (issue #223 review). A cycle that asks a
+	 * continuation asks no fresh work (ADR 0051), so the fresh-work walk never reads
+	 * the row it waits behind. That row stood the whole cycle, and its hold states
+	 * itself once - not once per skip.
+	 */
+	test("a cycle that skips the fresh-work walk does not state a standing row twice", async () => {
+		const lines: RecordedLine[] = [];
+		const r = rig({ autoOn: true, agents: [], log: recordLogger(lines) });
+		// Two tickets with different titles, so a hold that names a row is told from
+		// one that names another.
+		r.state.sourceFact.applyFetch(
+			source,
+			success([
+				{ ...fetched("github:github.com:I_6"), title: "Add a webhook retry policy" },
+				fetched(),
+			]),
+		);
+		// A row the operator staged stands from the first cycle to the last.
+		queueRow(r.state, "github:github.com:I_6", "open", false);
+		await r.coordinator.tick();
+		const standing = [...lines];
+		expect(standing).toEqual([
+			infoLine("automatic walks hold: the Work queue holds a waiting row"),
+		]);
+		// A settled turn now owes a start, and the cycle asks it: the fresh-work walk
+		// never runs, so it notes nothing this cycle.
+		settleFor(r.state, "github:github.com:I_5", "route", routeOutcome("github:github.com:I_5"));
+		await r.coordinator.tick();
+		expect(r.intents.filter((intent) => intent.origin === "workflow")).toHaveLength(1);
+		// The asked row now stands beside the operator's, so the next cycle reaches
+		// the fresh-work walk again. The row it waits behind never left the queue,
+		// so its line says nothing new; only the new standing continuation speaks.
+		await r.coordinator.tick();
+		expect(lines.slice(standing.length)).toEqual([
+			infoLine(
+				'automatic walks hold: the Work queue already holds a continuation ("Persist source facts")',
+			),
+		]);
+		// And it stays silent from here on.
+		await r.coordinator.tick();
+		await r.coordinator.tick();
+		expect(lines).toHaveLength(standing.length + 1);
+		r.state.close();
+	});
+
+	/**
 	 * The mode is the fact the operator sets by key, and the cycle reads it on every
 	 * poll (issue #223 review). Moving it mid-run is how the operator's `a` moves it:
 	 * the hold states itself for every move, and stays silent while the mode stands.

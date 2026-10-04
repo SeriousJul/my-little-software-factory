@@ -444,6 +444,8 @@ export function createHandoffDispatch(options: HandoffDispatchOptions): HandoffD
  * other refusal line does (issue #223).
  */
 const QUEUE_ITEM_STANDS_FACT = "already has a waiting queue item; the first item keeps its place";
+/** The fact a merge run already in flight refuses a re-ask with (ADR 0104, issue #223). */
+const MERGE_RUN_STANDS_FACT = "already has a merge running; the first run stands";
 
 /**
  * The key a claim refusal's standing fact stands on: the start channel and the
@@ -520,6 +522,15 @@ class HandoffDispatchModule implements HandoffDispatch {
 	 * prunes its held-Next-step reports on the same rule.
 	 */
 	private readonly queueItemRefusals = new Set<string>();
+
+	/**
+	 * The refusals of a merge run already in flight that the record has stated
+	 * (issue #223). The run's mark is the fact: it stands from the claim until the
+	 * run settles, and the entry stands with it, so the walks that re-ask every
+	 * observation cycle while one merge lands state the refusal once, the way the
+	 * standing-row refusal does. The settle drops it.
+	 */
+	private readonly mergeRunRefusals = new Set<string>();
 
 	/**
 	 * The claim refusals the record has already stated, keyed by the start channel
@@ -666,10 +677,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 		// the run's fresh read cannot either - the source still answers the pull
 		// request open while the merge is landing.
 		if (this.planeActionRunsInFlight.has(intent.ticketIdentity))
-			return Promise.resolve({
-				ok: false,
-				reason: `${this.ticketName(intent.ticketIdentity)} already has a merge running; the first run stands`,
-			});
+			return Promise.resolve(this.refuseMergeRunStanding(intent.ticketIdentity));
 		const enqueued = this.state.workQueue.enqueuePlaneActionWork({
 			ticketIdentity: intent.ticketIdentity,
 			routeFromIdentity: intent.routeFromIdentity ?? null,
@@ -814,6 +822,9 @@ class HandoffDispatchModule implements HandoffDispatch {
 			await this.runPlaneActionItem(item, overCap, mode);
 		} finally {
 			this.planeActionRunsInFlight.delete(item.ticketIdentity);
+			// The run settled, so the fact its refusal stated is gone: a later ask
+			// refused behind a new run is a new fact and states itself again.
+			this.mergeRunRefusals.delete(item.ticketIdentity);
 		}
 	}
 
@@ -1673,6 +1684,26 @@ class HandoffDispatchModule implements HandoffDispatch {
 			this.log?.warn(this.refusalLine(prefix, identity, QUEUE_ITEM_STANDS_FACT));
 		}
 		return { ok: false, reason: this.queueItemStandsReason(identity) };
+	}
+
+	/**
+	 * The refusal a merge run already in flight gives (ADR 0104), with the record
+	 * line the standing run leaves (issue #223).
+	 *
+	 * This is the same fact the issue exists to read: a start the walks asked that
+	 * never ran, refused before its enqueue. The Message line has always carried
+	 * the reason; the file carries it once for the run that stands, so a re-ask on
+	 * every poll cannot pin the file with it.
+	 */
+	private refuseMergeRunStanding(identity: string): DispatchResult {
+		if (!this.mergeRunRefusals.has(identity)) {
+			this.mergeRunRefusals.add(identity);
+			this.log?.warn(this.refusalLine("merge", identity, MERGE_RUN_STANDS_FACT));
+		}
+		return {
+			ok: false,
+			reason: `${this.ticketName(identity)} ${MERGE_RUN_STANDS_FACT}`,
+		};
 	}
 
 	/**

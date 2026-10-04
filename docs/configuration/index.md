@@ -462,6 +462,7 @@ who put the item in the Work queue, and the seat reading that path stood on:
 
 ```text
 handoff started: "Add a webhook retry policy" (mode pickup, origin open, automatic, seats 1/2)
+handoff started: "Watch agent turns" (mode pickup, origin open, operator-staged, seats 1/2)
 merge started: "Persist the source facts" (mode force-dispatch, origin workflow, operator-staged, seats 2/2)
 consultation started: "review" 1a2b3c4d (mode pickup, origin consultation, seats 1/2)
 ```
@@ -481,16 +482,20 @@ out:
 
 ```text
 handoff queued: "Add a webhook retry policy" (origin open, operator-staged)
+handoff queued: "Watch agent turns" (origin open, automatic)
 merge queued: "Persist the source facts" (origin workflow, automatic)
 handoff refused: "Add a webhook retry policy" (already has a waiting queue item; the first item keeps its place)
 merge refused: "Persist the source facts" (already has a waiting queue item; the first item keeps its place)
 handoff refused: "Add a webhook retry policy" (handoff recovery is required before another handoff)
+merge refused: "Persist the source facts" (already has a merge running; the first run stands)
 ```
 
 The Work queue holds one item per ticket, so a second ask for a ticket that
 already waits is refused. The refusal reaches the Message line and the file
 alike. Every refusal line wears one shape - the prefix, the ticket's name, and
-the fact in parentheses - so one rule reads them all (issue #223).
+the fact in parentheses - so one rule reads them all (issue #223). A merge whose
+run is already in flight is refused the same way, and its line names the run
+that stands (ADR 0104).
 
 The file states a standing-row refusal once for the row that stands, not once
 per ask. The automatic walks re-ask every observation cycle while the row
@@ -500,7 +505,10 @@ each states itself (issue #223). The entry follows its row: every removal the
 dispatch runs drops it, an enqueue drops it, and the Work queue's pickup pass -
 which the observation cycle asks for on every poll - sweeps the entries whose row
 is gone, so a row that left through another aggregate's write is covered too
-(issue #223 review).
+(issue #223 review). The standing fact is the ticket's row and not a channel's,
+so the channel that refuses first states the line: a grep for `merge refused:`
+can find nothing for a row the `handoff refused:` line already stated, because
+one row is one fact (issue #223 review).
 
 The same rule covers a refused claim. The gates that refuse a start answer the
 same way every cycle the walks re-ask the same position, so one refused claim
@@ -546,6 +554,11 @@ review). The other holds stay bare: no row is picked where their gate stands.
 The third line names the queue's depth rather than a staging, because the gate
 it states holds on any row at all, a Consultation row included. The staging of
 the row that stands is what the `handoff queued:` line beside it already says.
+A cycle that asks a continuation runs no fresh-work walk (ADR 0051), and that is
+not the row leaving: the cycle keeps the fact it last stated for the walk it did
+not run, so the row that stood the whole time states itself once and not again
+on the next poll. Only a cycle that reads the fact and finds it gone retires it
+(issue #223 review).
 
 A settled turn's Next step that a gate holds leaves its own line, beside the
 Message line it has always reached (issue #223). The Message line is gone by the
@@ -576,18 +589,22 @@ queue: the Work queue resumed
 A mode flip the state file refused states itself as what it is - the line lands
 beside the Message line that names the state file it could not write, and the
 next run reads the mode the file still holds. A plane running with no state file
-states the same limit, because nothing will read the flip back:
+states the same limit, because nothing will read the flip back. A queue pause
+the state file refused leaves its line beside its Message line the same way, and
+the brake stays where it stood (issue #223 review):
 
 ```text
 mode: auto-handoff is on for this session only: cannot store the Auto-handoff mode at /path/to/state.sqlite: Error: no such table: auto_handoff_mode
 mode: auto-handoff is on for this session only: the plane runs with no state file
+queue: the Work queue pause did not move: cannot store the queue pause at /path/to/state.sqlite: Error: no such table: queue_pause
 ```
 
 Every line above carries its own level, and the filter keeps or drops it. The
 hold lines, the mode lines, and the queue lines are `info`; a refusal is `warn`,
-and so is the session-only mode line. `level = "warn"` therefore keeps every
-refusal and none of the hold lines, so a run you want to read the holds of needs
-`info` or `debug`.
+and so is every line that says a fact the next run will not read back - the
+session-only mode line and the refused pause line. `level = "warn"` therefore
+keeps every refusal and none of the hold lines, so a run you want to read the
+holds of needs `info` or `debug`.
 
 A Consultation's start line is the Consultation operations' own. Its name is the
 record's Consultation type beside the identity prefix the plane's other

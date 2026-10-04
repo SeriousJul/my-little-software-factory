@@ -63,7 +63,7 @@ import {
 } from "./fake-runner.ts";
 import { FakeSource } from "./fake-source.ts";
 import { type GatedRunner, gatedRunner as gateOnRunner } from "./gated-runner.ts";
-import { infoLine, type RecordedLine, recordLogger } from "./record-logger.ts";
+import { infoLine, type RecordedLine, recordLogger, warnLine } from "./record-logger.ts";
 
 const paths: string[] = [];
 afterEach(() => {
@@ -546,6 +546,39 @@ describe("the mode cell and the a key", () => {
 			{ ...propsOf(app), logger: recordLogger(lines) },
 		);
 		app.state.close();
+	});
+
+	/**
+	 * A plane running with no state file (issue #223 review). The mode still moves in
+	 * the session, and the record states the limit the next run will hit: nothing
+	 * reads the flip back. It leaves at `warn`, the level the configuration reference
+	 * states for it, beside the refused write's line.
+	 */
+	test("a plane with no state file states the session-only limit of a mode flip", async () => {
+		const runner = new FakeRunner();
+		runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+		const lines: RecordedLine[] = [];
+
+		await withApp(
+			async (setup) => {
+				// A plane with no state file has no mode cell to read: the header's cell
+				// wears a fact the state owns. The key still moves the mode in the
+				// session, and the record is where the limit is stated.
+				await awaitFrame(setup, (f) => f.includes("▾ Tickets"), "the plane");
+				await pressQuiet(setup, "a", "auto on", () => true);
+				// The flip moved in the session, and the file says no run will read it
+				// back. A plain `mode: auto-handoff is on` here would be the record a
+				// reviewer cannot trust, on the branch a refused write already closes.
+				expect(lines.filter((line) => line.message.startsWith("mode: auto-handoff is"))).toEqual([
+					warnLine(
+						"mode: auto-handoff is on for this session only: the plane runs with no state file",
+					),
+				]);
+			},
+			WIDTH,
+			HEIGHT,
+			{ config: BASE_CONFIG, runner, initialTickets: [], logger: recordLogger(lines) },
+		);
 	});
 
 	test("a mode write the state file refuses reports, and the flip stands", async () => {

@@ -10,6 +10,7 @@
  * to run, and these frames verify the waiting, not the running.
  */
 
+import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -471,6 +472,63 @@ describe("the Work queue section", () => {
 						infoLine("queue: the Work queue is paused"),
 						infoLine("queue: the Work queue resumed"),
 					]);
+				},
+				state,
+				source,
+				runner,
+				recordLogger(lines),
+			);
+		} finally {
+			state.close();
+		}
+	});
+
+	/**
+	 * The refused pause write states itself (issue #223 review).
+	 *
+	 * The Auto-handoff mode's identical failure has left its record line since this
+	 * issue landed, and the pause left none, so two facts of one kind failed two
+	 * ways: a key that moved nothing left the file quiet, and a reviewer could not
+	 * tell a brake the plane would not move from a run that simply had nothing to
+	 * start. It leaves at `warn`, the level every line stating a fact the next run
+	 * will not read back carries.
+	 */
+	test("a queue pause the state file refuses leaves its warn line", async () => {
+		const state = openFactoryState(join(home, "state.sqlite"));
+		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
+		state.grouping.setGroupingAxis("tickets", "none");
+		const { source, enqueue, runner } = queuedFixture(state);
+		enqueue(FIRST);
+		const lines: RecordedLine[] = [];
+		try {
+			await booted(
+				async (setup) => {
+					source.settle(success(twoTickets()));
+					await awaitFrame(setup, (f) => queueRowIndex(f, openRowLead) >= 0, "the queued start");
+					// The real write path, made to fail while the read still works: the
+					// pause table is replaced by a view of the same name, so the plane's
+					// write to it is refused by SQLite while its every-frame read of the
+					// brake keeps answering. The busy timeout covers the refresh write
+					// still in flight.
+					const damage = new Database(state.path);
+					damage.exec("PRAGMA busy_timeout = 5000;");
+					damage.exec("DROP TABLE queue_pause;");
+					damage.exec("CREATE VIEW queue_pause AS SELECT 1 AS id, 0 AS paused;");
+					damage.close();
+					await clickWorkHeader(setup);
+					await press(setup, "p", "the refused pause", (f) =>
+						messageRowOf(f).includes("the queue pause did not move"),
+					);
+					// The brake stayed where it stood: the pickup and the top-up read the
+					// pause off the state, and the state never took the write.
+					expect(state.workQueue.queuePaused()).toBe(false);
+					// One line, at `warn`, naming the state file the write failed on. The
+					// `queue:` family carries no move line beside it: the brake did not move.
+					const stated = lines.filter((line) => line.message.startsWith("queue:"));
+					expect(stated).toHaveLength(1);
+					expect(stated[0]?.level).toBe("warn");
+					expect(stated[0]?.message).toContain("queue: the Work queue pause did not move:");
+					expect(stated[0]?.message).toContain(state.path);
 				},
 				state,
 				source,

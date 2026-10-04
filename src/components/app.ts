@@ -1833,8 +1833,11 @@ export function App({
 		// when it moves. A plane with no state file has nothing to persist, and the
 		// record says so: a file that claims the mode moved while no run reads it back
 		// is the same untrustworthy line a refused write leaves (issue #223 review).
+		// Both session-only lines carry `warn`, the level the configuration reference
+		// states for them, so a run filtered to `warn` keeps the news that the next
+		// run reads nothing back.
 		if (state === undefined) {
-			logger?.info(`${modeLine} for this session only: the plane runs with no state file`);
+			logger?.warn(`${modeLine} for this session only: the plane runs with no state file`);
 			return;
 		}
 		try {
@@ -3653,18 +3656,22 @@ export function App({
 				"queue-pause": () => {
 					if (state === undefined) return;
 					const next = !state.workQueue.queuePaused();
-					// The write is guarded the way the Auto-handoff mode's identical
-					// fact is, so two facts of one kind do not fail two ways (ADR
-					// 0052). The difference is what a refused write means: the pickup
-					// and the top-up read the pause from the state, not from this
+					// The write is guarded the way the Auto-handoff mode's identical fact
+					// is (ADR 0052). What differs is what a refused write means: the
+					// pickup and the top-up read the pause from the state, not from this
 					// shell's copy, so a write that failed left the brake where it
-					// stood. The key says so and moves nothing - the section's
-					// header, the bar's hint, and the drain all keep reading the
-					// value that stands.
+					// stood. The key says so and moves nothing - the section's header, the
+					// bar's hint, and the drain all keep reading the value that stands.
 					try {
 						state.workQueue.setQueuePaused(next);
 					} catch (error) {
-						setErrorMessage(`the queue pause did not move: ${errorMessage(error)}`);
+						const reason = errorMessage(error);
+						// The refused write leaves its record line the way the Auto-handoff
+						// mode's identical failure does, so two facts of one kind do not fail
+						// two ways (issue #223 review). The line is `warn`: the operator pressed
+						// the key and the brake did not move.
+						logger?.warn(`queue: the Work queue pause did not move: ${reason}`);
+						setErrorMessage(`the queue pause did not move: ${reason}`);
 						return;
 					}
 					setQueuePaused(next);

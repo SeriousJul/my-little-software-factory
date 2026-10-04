@@ -1404,6 +1404,7 @@ describe("the dispatch's ask and pickup", () => {
 		stubOpenRead(runner);
 		stubMerge(runner, 0);
 		const events: string[] = [];
+		const lines: RecordedLine[] = [];
 		let resolveStarted: () => void = () => {};
 		const startedSettled = new Promise<void>((resolve) => {
 			resolveStarted = resolve;
@@ -1414,6 +1415,7 @@ describe("the dispatch's ask and pickup", () => {
 			config: () => PLANE_CONFIG,
 			seatCount: () => 0,
 			home: home(),
+			log: recordLogger(lines),
 			...recorder(events),
 		});
 		const first = await dispatch.dispatchPlaneAction({
@@ -1436,6 +1438,14 @@ describe("the dispatch's ask and pickup", () => {
 			ticketIdentity: pullIdentity,
 			taskType: "merge",
 		});
+		// A third ask in the same window, the way the observation cycle re-asks every
+		// five seconds while one merge lands.
+		const third = await dispatch.dispatchPlaneAction({
+			origin: "workflow",
+			automatic: true,
+			ticketIdentity: pullIdentity,
+			taskType: "merge",
+		});
 		await startedSettled;
 		// The merge stands once: one command, one attempt row, and the second ask
 		// is a refusal that states the run already stands.
@@ -1447,6 +1457,13 @@ describe("the dispatch's ask and pickup", () => {
 			ok: false,
 			reason: `"${pullTitle}" already has a merge running; the first run stands`,
 		});
+		expect(third).toEqual(second);
+		// The refusal reaches the file in the one shape every refusal line wears, once
+		// for the run that stands (issue #223). The run's mark is the standing fact: it
+		// holds from the claim to the settle, and the entry holds with it.
+		expect(lines.filter((line) => line.message.startsWith("merge refused:"))).toEqual([
+			warnLine(`merge refused: "${pullTitle}" (already has a merge running; the first run stands)`),
+		]);
 		state.close();
 	});
 
