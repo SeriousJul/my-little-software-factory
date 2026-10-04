@@ -38,22 +38,6 @@ export interface RepositoryMapping {
 }
 
 /**
- * What a mapping write-back left on the operator's config file (ADR 0103).
- *
- * The two facts a write-back can leave are not equally urgent, and the Message
- * line holds one row of the terminal. `failed` says which one it is: a write
- * that did not land leads the line, ahead of the notes the handoff carried,
- * and a write that landed trails them so the note about the operator's disk -
- * the sibling clone the plane made - stays on the visible row.
- */
-export interface MappingWriteReport {
-	/** The line the write leaves on the Message row. */
-	line: string;
-	/** The write did not land. */
-	failed: boolean;
-}
-
-/**
  * The note the handoff carries with its result: the warning the repository
  * resolution bent with, the mapping to persist into the config when the
  * resolution bent to a sibling clone, and the note of a worktree base that

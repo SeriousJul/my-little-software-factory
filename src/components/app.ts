@@ -28,7 +28,13 @@ import { createElement, useKeyboard, useRenderer, useTerminalDimensions } from "
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AttentionService } from "../attention.ts";
 import { defaultConfigPath, type FactoryConfig, type TransitionOutcome } from "../config.ts";
-import { configWriteLine, writeConfigFile } from "../config-write.ts";
+import {
+	type ConfigWriteFact,
+	type ConfigWriteReport,
+	configWriteLine,
+	writeConfigFile,
+	writeFactWithConfirmation,
+} from "../config-write.ts";
 import { translateAgentKey } from "../consultation/agent-input.ts";
 import {
 	type ConsultationRepositoryOption,
@@ -105,7 +111,7 @@ import {
 } from "../plane-action-registry.ts";
 import { closeCycleEndDraftPullRequest } from "../pull-request.ts";
 import { RefreshCoordinator } from "../refresh.ts";
-import type { MappingWriteReport, RepositoryMapping } from "../repo.ts";
+import type { RepositoryMapping } from "../repo.ts";
 import { repositoryInitCheckoutPath } from "../repo.ts";
 import {
 	type InstructionFileName,
@@ -1438,7 +1444,7 @@ export function App({
 
 	const persistMapping = async (
 		mapping: RepositoryMapping,
-	): Promise<MappingWriteReport | undefined> => {
+	): Promise<ConfigWriteReport | undefined> => {
 		const write = configWriteQueue.current
 			.catch(() => undefined)
 			.then(async () => {
@@ -1455,11 +1461,11 @@ export function App({
 					// line names the file the write landed on.
 					const fact = await writeConfigFile(configFile, updated);
 					const line = configWriteLine(fact, "saved the mapping");
-					return line === "" ? undefined : { line, failed: false };
+					return line === "" ? undefined : { line, landed: true };
 				} catch (error) {
 					return {
 						line: `could not persist the repository mapping: ${errorMessage(error)}`,
-						failed: true,
+						landed: false,
 					};
 				}
 			});
@@ -4493,6 +4499,7 @@ export function App({
 		// shows them the moment the write-back lands, the way a repository
 		// mapping does.
 		let writeLine = "";
+		let writeFact: ConfigWriteFact | undefined;
 		const write = configWriteQueue.current
 			.catch(() => undefined)
 			.then(async () => {
@@ -4508,6 +4515,7 @@ export function App({
 					// registered and leaves the rest of the operator's file, their
 					// comments included, where they wrote it (ADR 0103).
 					const fact = await writeConfigFile(configFile, updated);
+					writeFact = fact;
 					writeLine = configWriteLine(
 						fact,
 						`registered ${flow.newSources.length} new source${
@@ -4523,7 +4531,14 @@ export function App({
 			() => undefined,
 		);
 		await write;
-		setNoticeMessage(writeLine === "" ? flow.message : `${flow.message}, ${writeLine}`);
+		// The Message line is one row of the terminal's width and the act's own
+		// confirmation is longer than that, so a full rewrite leads the line: the
+		// warning that the file's comments did not survive is what reads (ADR 0103).
+		setNoticeMessage(
+			writeFact === undefined
+				? flow.message
+				: writeFactWithConfirmation(writeFact, writeLine, flow.message),
+		);
 		// A queue behind the act closes its panel now, the way the skip does:
 		// the next entry plans async, and the panel under review must not
 		// stand live behind it. A lone init keeps its panel, the way it

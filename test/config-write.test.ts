@@ -24,7 +24,11 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { configToToml, type FactoryConfig, loadConfigFile } from "../src/config.ts";
-import { configWriteLine, writeConfigFile } from "../src/config-write.ts";
+import {
+	configWriteLine,
+	writeConfigFile,
+	writeFactWithConfirmation,
+} from "../src/config-write.ts";
 import { BASE_CONFIG } from "./base-config.ts";
 
 const tempDirs: string[] = [];
@@ -118,6 +122,17 @@ async function operatorConfig(path: string): Promise<{ config: FactoryConfig; te
 
 function commentLines(text: string): string[] {
 	return text.split("\n").filter((line) => line.trim().startsWith("#"));
+}
+
+/** A source a Repository init would register for the operator's one repository. */
+function pullRequestSource(): FactoryConfig["sources"][number] {
+	return {
+		name: "acme/factory-pull-requests",
+		kind: "github-pull-requests",
+		refreshIntervalSeconds: 300,
+		repositories: ["acme/factory"],
+		host: "github.com",
+	};
 }
 
 describe("the config write-back (ADR 0103)", () => {
@@ -572,7 +587,12 @@ describe("the config write-back (ADR 0103)", () => {
 		for (const line of text.split("\r\n")) {
 			expect(after).toContain(line);
 		}
-		expect(written.split("\n").filter((line) => !line.endsWith("\r") && line !== "")).toEqual([]);
+		// Every real line in a CRLF file carries its `\r`. The last element the
+		// split yields is the artifact of the file's own final line ending, not a
+		// line. A blank line the plane wrote with no ending fails this read.
+		const rows = written.split("\n");
+		expect(rows.at(-1)).toBe("");
+		expect(rows.slice(0, -1).filter((line) => !line.endsWith("\r"))).toEqual([]);
 		const { config: reloaded } = await loadConfigFile(path);
 		expect(reloaded.repos["github.com/acme/billing"]).toBe("/home/me/src/billing_1");
 	});
@@ -617,6 +637,299 @@ describe("the config write-back (ADR 0103)", () => {
 		expect(reloaded.taskTypes.rework?.template).toBe(config.taskTypes.rework?.template);
 		expect(reloaded.sources).toEqual(config.sources);
 	});
+
+	test("a source append on a CRLF file gives its blank separator the same ending", async () => {
+		const temp = inTempDir();
+		const path = temp("config.toml");
+		const text = operatorFile("/home/me/src/factory").replaceAll("\n", "\r\n");
+		writeFileSync(path, text, "utf8");
+		const { config } = await loadConfigFile(path);
+
+		const fact = await writeConfigFile(path, {
+			...config,
+			sources: [...config.sources, pullRequestSource()],
+		});
+
+		expect(fact.mode).toBe("sections");
+		const written = readFileSync(path, "utf8");
+		// The blank line the plane inserts between the operator's last block and
+		// its own is a line the plane writes, so it carries the file's ending too.
+		const rows = written.split("\n");
+		expect(rows.at(-1)).toBe("");
+		expect(rows.slice(0, -1).filter((line) => !line.endsWith("\r"))).toEqual([]);
+		const { config: reloaded } = await loadConfigFile(path);
+		expect(reloaded.sources.map((source) => source.name)).toEqual([
+			"acme-issues",
+			"acme/factory-pull-requests",
+		]);
+	});
+
+	test("a mapping-shaped line inside an operator's multiline string stays their prose", async () => {
+		const temp = inTempDir();
+		const path = temp("config.toml");
+		// The operator wrote one mapping value as a multiline string, and its
+		// prose carries a line that reads exactly like a mapping the plane holds.
+		// The scan knows the line stands inside a string, so the edit leaves the
+		// prose alone and the file keeps its comments instead of falling back to
+		// the full rewrite.
+		const text = operatorFile("/home/me/src/factory").replace(
+			'"github.com/acme/factory" = "/home/me/src/factory"',
+			[
+				'"github.com/acme/factory" = """',
+				"Why this checkout sits here, in the operator's own words.",
+				'"github.com/acme/billing" = not-a-mapping',
+				'"""',
+			].join("\n"),
+		);
+		writeFileSync(path, text, "utf8");
+		const { config } = await loadConfigFile(path);
+		expect(typeof config.repos["github.com/acme/factory"]).toBe("string");
+
+		const fact = await writeConfigFile(path, {
+			...config,
+			repos: { ...config.repos, "github.com/acme/billing": "/home/me/src/billing_1" },
+		});
+
+		expect(fact.mode).toBe("sections");
+		const written = readFileSync(path, "utf8");
+		expect(written).toContain('"github.com/acme/billing" = not-a-mapping');
+		expect(written).toContain('"github.com/acme/billing" = "/home/me/src/billing_1"');
+		expect(commentLines(written)).toHaveLength(commentLines(text).length);
+		const { config: reloaded } = await loadConfigFile(path);
+		expect(reloaded.taskTypes.implement?.template).toBe(config.taskTypes.implement?.template);
+		expect(reloaded.sources).toEqual(config.sources);
+	});
+
+	test("a file with no [repos] table gets the table the plane writes at its end", async () => {
+		const temp = inTempDir();
+		const path = temp("config.toml");
+		const text = operatorFile("/home/me/src/factory")
+			.replace(
+				[
+					"# The checkouts the plane works in. The mapping is the one the plane writes",
+					"# back when it discovers a sibling clone.",
+					"[repos]",
+					'"github.com/acme/factory" = "/home/me/src/factory"',
+					"",
+				].join("\n"),
+				"",
+			)
+			.replaceAll("\n\n\n", "\n\n");
+		writeFileSync(path, text, "utf8");
+		const { config } = await loadConfigFile(path);
+		expect(config.repos).toEqual({});
+
+		const fact = await writeConfigFile(path, {
+			...config,
+			repos: { "github.com/acme/billing": "/home/me/src/billing_1" },
+		});
+
+		expect(fact.mode).toBe("sections");
+		const written = readFileSync(path, "utf8");
+		expect(
+			written.endsWith('[repos]\n"github.com/acme/billing" = "/home/me/src/billing_1"\n'),
+		).toBe(true);
+		expect(commentLines(written)).toHaveLength(commentLines(text).length);
+		const { config: reloaded } = await loadConfigFile(path);
+		expect(reloaded.repos).toEqual({ "github.com/acme/billing": "/home/me/src/billing_1" });
+		expect(reloaded.sources).toEqual(config.sources);
+	});
+
+	test("a [sources] table instead of blocks falls back to the full rewrite", async () => {
+		const temp = inTempDir();
+		const path = temp("config.toml");
+		writeFileSync(path, operatorFile("/home/me/src/factory"), "utf8");
+		const { config } = await loadConfigFile(path);
+		// The operator turned the source array-of-tables into a `[sources]` table
+		// while the plane ran. The startup loader refuses that shape, so the plane
+		// can only meet it mid-run, and the section edit refuses it the same way:
+		// an edit beside that table could land inside it.
+		writeFileSync(
+			path,
+			readFileSync(path, "utf8").replace(
+				["[[sources]]", 'name = "acme-issues"', 'kind = "github-issues"'].join("\n"),
+				["[sources]", 'name = "acme-issues"', 'kind = "github-issues"'].join("\n"),
+			),
+			"utf8",
+		);
+
+		const fact = await writeConfigFile(path, config);
+
+		expect(fact.mode).toBe("rewrite");
+		expect(readFileSync(path, "utf8")).toBe(configToToml(config));
+		expect(configWriteLine(fact, "saved the mapping")).toContain("did not survive");
+	});
+
+	test("a [[sources]] block that names no name falls back to the full rewrite", async () => {
+		const temp = inTempDir();
+		const path = temp("config.toml");
+		writeFileSync(path, operatorFile("/home/me/src/factory"), "utf8");
+		const { config } = await loadConfigFile(path);
+		// The startup loader refuses a source block with no name. Mid-run the
+		// plane can meet one, and it cannot tell which source that block stands
+		// for, so it refuses to edit beside it.
+		writeFileSync(
+			path,
+			readFileSync(path, "utf8").replace('name = "acme-issues"', "# the name line is gone"),
+			"utf8",
+		);
+		const updated = { ...config, sources: [...config.sources, pullRequestSource()] };
+
+		const fact = await writeConfigFile(path, updated);
+
+		expect(fact.mode).toBe("rewrite");
+		expect(readFileSync(path, "utf8")).toBe(configToToml(updated));
+		expect(configWriteLine(fact, "registered 1 new source")).toContain("did not survive");
+	});
+
+	test("a mapping the operator re-points while the plane runs takes the plane's own value", async () => {
+		const temp = inTempDir();
+		const path = temp("config.toml");
+		const text = operatorFile("/home/me/src/factory");
+		writeFileSync(path, text, "utf8");
+		const { config } = await loadConfigFile(path);
+		// The `[repos]` table is the plane's own region: it writes the value it
+		// holds. An operator who re-points that key while the plane runs has
+		// their value replaced on the next write-back, with no line to say so.
+		// The `[[sources]]` blocks behave the other way - see the test above -
+		// and docs/configuration/index.md states both to the operator.
+		writeFileSync(
+			path,
+			readFileSync(path, "utf8").replace(
+				'"github.com/acme/factory" = "/home/me/src/factory"',
+				'"github.com/acme/factory" = "/home/me/src/my-own-pick"',
+			),
+			"utf8",
+		);
+
+		const fact = await writeConfigFile(path, config);
+
+		expect(fact.mode).toBe("sections");
+		const written = readFileSync(path, "utf8");
+		expect(written).toContain('"github.com/acme/factory" = "/home/me/src/factory"');
+		expect(written).not.toContain("/home/me/src/my-own-pick");
+		expect(commentLines(written)).toHaveLength(commentLines(text).length);
+	});
+
+	test("a line the operator deletes from an owned region comes back", async () => {
+		const temp = inTempDir();
+		const path = temp("config.toml");
+		writeFileSync(path, operatorFile("/home/me/src/factory"), "utf8");
+		const { config } = await loadConfigFile(path);
+		// The plane writes what its own config holds, so a deletion inside one of
+		// its two regions is undone by the next write-back: the mapping key is
+		// re-added inside the table, and the source block is re-appended in the
+		// plane's own serialization. Nothing says the deletion was undone, so
+		// docs/configuration/index.md states it to the operator.
+		writeFileSync(
+			path,
+			readFileSync(path, "utf8")
+				.replace('\n"github.com/acme/factory" = "/home/me/src/factory"', "")
+				.replace(
+					[
+						"# The feed the operator reads by hand: the issues of the one repository.",
+						"[[sources]]",
+						'name = "acme-issues"',
+						'kind = "github-issues"',
+						"refresh-interval-seconds = 60",
+						'repositories = [ "acme/factory" ]',
+					].join("\n"),
+					"",
+				),
+			"utf8",
+		);
+
+		const fact = await writeConfigFile(path, config);
+
+		expect(fact.mode).toBe("sections");
+		const written = readFileSync(path, "utf8");
+		expect(written).toContain('[repos]\n"github.com/acme/factory" = "/home/me/src/factory"');
+		expect(written).toContain('name = "acme-issues"');
+		expect(written).toContain('kind = "github-issues"');
+		const { config: reloaded } = await loadConfigFile(path);
+		expect(reloaded.repos).toEqual(config.repos);
+		expect(reloaded.sources.map((source) => source.name)).toEqual(["acme-issues"]);
+	});
+
+	test("a mapping value the plane cannot carry in place falls back to the rewrite", async () => {
+		const temp = inTempDir();
+		const path = temp("config.toml");
+		writeFileSync(path, operatorFile("/home/me/src/factory"), "utf8");
+		const { config } = await loadConfigFile(path);
+		// The operator restates a mapping the plane holds as a value spanning lines
+		// while the plane runs. The plane's own serializer writes a one-line
+		// string, so it has no in-place form for that key, and it takes the rewrite
+		// instead of writing a second line beside the operator's.
+		writeFileSync(
+			path,
+			readFileSync(path, "utf8").replace(
+				'"github.com/acme/factory" = "/home/me/src/factory"',
+				'"github.com/acme/factory" = [\n\t"/home/me/src/factory",\n]',
+			),
+			"utf8",
+		);
+		const updated = {
+			...config,
+			repos: { ...config.repos, "github.com/acme/factory": "/home/me/src/factory_2" },
+		};
+
+		const fact = await writeConfigFile(path, updated);
+
+		expect(fact.mode).toBe("rewrite");
+		expect(readFileSync(path, "utf8")).toBe(configToToml(updated));
+	});
+
+	test("a file the operator made unparseable while the plane ran falls back to the rewrite", async () => {
+		const temp = inTempDir();
+		const path = temp("config.toml");
+		writeFileSync(path, operatorFile("/home/me/src/factory"), "utf8");
+		const { config } = await loadConfigFile(path);
+		// A line the operator typed that is not TOML at all. The plane cannot vouch
+		// for an edit of that text, so it replaces the file and names the loss.
+		writeFileSync(path, `${readFileSync(path, "utf8")}this line is not TOML\n`, "utf8");
+		const updated = { ...config, repos: { ...config.repos, "github.com/acme/billing": "/b" } };
+
+		const fact = await writeConfigFile(path, updated);
+
+		expect(fact.mode).toBe("rewrite");
+		expect(readFileSync(path, "utf8")).toBe(configToToml(updated));
+		expect(configWriteLine(fact, "saved the mapping")).toContain("did not survive");
+	});
+
+	test("a file the plane serialized stays editable in sections mode", async () => {
+		const temp = inTempDir();
+		const path = temp("config.toml");
+		writeFileSync(path, operatorFile("/home/me/src/factory"), "utf8");
+		const { config } = await loadConfigFile(path);
+		// The promise the whole design rests on: the steady state. A file the
+		// plane itself wrote with `configToToml` is a file its own section edit
+		// can read, so a later write-back edits it instead of replacing it. This
+		// is the drift guard between the two serializers.
+		writeFileSync(path, configToToml(config), "utf8");
+
+		const mapping = await writeConfigFile(path, {
+			...config,
+			repos: { ...config.repos, "github.com/acme/billing": "/home/me/src/billing_1" },
+		});
+		expect(mapping.mode).toBe("sections");
+
+		const append = await writeConfigFile(path, {
+			...config,
+			repos: { ...config.repos, "github.com/acme/billing": "/home/me/src/billing_1" },
+			sources: [...config.sources, pullRequestSource()],
+		});
+		expect(append.mode).toBe("sections");
+
+		const { config: reloaded } = await loadConfigFile(path);
+		expect(reloaded.repos["github.com/acme/billing"]).toBe("/home/me/src/billing_1");
+		expect(reloaded.sources.map((source) => source.name)).toEqual([
+			"acme-issues",
+			"acme/factory-pull-requests",
+		]);
+		// A no-op on the plane's own file writes nothing at all.
+		const noop = await writeConfigFile(path, reloaded);
+		expect(noop.mode).toBe("unchanged");
+	});
 });
 
 describe("the write-back's Message line (ADR 0103)", () => {
@@ -637,5 +950,47 @@ describe("the write-back's Message line (ADR 0103)", () => {
 			"registered 2 new sources in /home/me/config.toml; " +
 				"the whole config file was rewritten, and the comments in it did not survive",
 		);
+	});
+
+	test("a rewrite leads the confirmation it rides with", () => {
+		const confirmation = "acme/factory: pushed 1 commit, created 2 labels";
+		// The Repository init's confirmation is longer than the Message row, so the
+		// fact the operator most needs - the one naming the lost comments - leads it.
+		expect(
+			writeFactWithConfirmation(
+				{ mode: "rewrite", path: "/home/me/config.toml" },
+				configWriteLine(
+					{ mode: "rewrite", path: "/home/me/config.toml" },
+					"registered 1 new source",
+				),
+				confirmation,
+			),
+		).toBe(
+			"registered 1 new source in /home/me/config.toml; the whole config file was " +
+				"rewritten, and the comments in it did not survive. acme/factory: pushed 1 commit, " +
+				"created 2 labels",
+		);
+		// A write that edited only what the plane owns trails it, the way it always did.
+		expect(
+			writeFactWithConfirmation(
+				{ mode: "sections", path: "/home/me/config.toml" },
+				configWriteLine(
+					{ mode: "sections", path: "/home/me/config.toml" },
+					"registered 1 new source",
+				),
+				confirmation,
+			),
+		).toBe(`${confirmation}, registered 1 new source in /home/me/config.toml`);
+		// A write that changed nothing adds nothing to the confirmation.
+		expect(
+			writeFactWithConfirmation(
+				{ mode: "unchanged", path: "/home/me/config.toml" },
+				configWriteLine(
+					{ mode: "unchanged", path: "/home/me/config.toml" },
+					"registered 0 new sources",
+				),
+				confirmation,
+			),
+		).toBe(confirmation);
 	});
 });

@@ -84,6 +84,22 @@ rules.
 - A source the plane holds that no `[[sources]]` block names is appended as a
   new block after the last block the file holds. A block the file already
   names by source name stands byte-for-byte.
+- Inside the two regions the plane's own copy is what stands, and the two
+  regions answer an operator's mid-run edit differently. A `[repos]` key the
+  plane holds is written from that copy, so an operator who re-points the key
+  while the plane runs has the plane's value written back over theirs, with no
+  line to say so. A `[[sources]]` block the plane holds is left byte-for-byte,
+  so an operator who changes one leaves a file that no longer says what the
+  plane holds: the check refuses the edit, and the rewrite is named. A deletion
+  is undone the same way in both regions - the next write-back writes the key it
+  holds again, and re-appends its own serialization of a source block it holds.
+  `docs/configuration/index.md` states all four facts to the operator.
+- A line the scan reads as standing inside a multiline string, and a line whose
+  value spans lines, are not lines the plane rewrites. The key such a line names
+  counts as standing, so the plane never adds a second one beside it, and the
+  verify step decides what follows: a value the plane does not need to change
+  keeps the file in its edited form, and a value the plane must change falls
+  back to the rewrite rather than corrupting the operator's prose.
 - The plane never deletes a line it did not write. The one line it can drop is
   its own older writing: a top-level `sources = []` key, the form the plane's
   serializer used for an empty source list. A `[[sources]]` block cannot stand
@@ -104,19 +120,24 @@ plane used before. The fallback is a named fact, not a silent one.
 **The write is visible on the Message line.** `configWriteLine` words the
 fact for both paths: the file the write landed on, and, for a full rewrite of
 a file the operator already had, the plain statement that the comments in it
-did not survive. A write that changes nothing writes nothing and says
-nothing. Where the line is longer than the terminal, the Message view and the
-desktop notification carry the whole fact, as they do for every long fact on
-the line.
+did not survive. A write that changes nothing writes nothing and says nothing.
+Where the line is longer than the terminal, the Message view on `F2` carries
+the whole fact. The desktop notification carries it on the mapping path only:
+that fact rides a warning, and a warning fact is what the plane sends to the
+desktop. The init's confirmation is a notice fact, and a notice fact sends no
+notification (`src/components/message-facts.ts`).
 
-**A write that landed trails the note about the operator's disk.** The Message
-line is one row of the terminal's width, so what leads it is what reads. The
-mapping write-back answers with a `MappingWriteReport` (`src/repo.ts`), and
-both reports that line comes from - `reportHandoffOutcome` and the
-Consultation's own - put a write that did not land ahead of the note the
-repository resolution bent with, and a write that landed behind it. A routine
-"saved the mapping" line never pushes the sibling clone the plane made on the
-operator's disk off the visible row.
+**A write fact leads the line when it is the one the operator must read.** The
+Message line is one row of the terminal's width, so what leads it is what reads.
+The mapping write-back answers with a `ConfigWriteReport`
+(`src/config-write.ts`), and both reports that line comes from -
+`reportHandoffOutcome` and the Consultation's own - put a write that did not land
+ahead of the note the repository resolution bent with, and a write that landed
+behind it. A routine "saved the mapping" line never pushes the sibling clone the
+plane made on the operator's disk off the visible row. The Repository init's own
+confirmation is longer than the row, so its write fact trails it except when the
+mode is `rewrite`: then the write fact leads, and the warning that the comments
+did not survive is what stands on the visible row.
 
 **Only a file that is not there is a file to create.** A read that fails for
 another reason - no permission, a directory where the file stands - is not
@@ -156,3 +177,7 @@ beside the file. That act changes the file's schema, not one table of it.
   a task type's prompt that reads like a table header cannot move an edit. A
   scan that got it wrong still has to pass the verify step, so the worst a
   wrong scan can do is send the write back to the full rewrite.
+- An operator's mid-run edit of a line the plane owns is not a fact the plane
+  reports. Re-point a mapping key and the plane writes its own value; delete a
+  mapping key or a source block and the plane writes its own line again. The
+  operator page states this, and no Message line does.

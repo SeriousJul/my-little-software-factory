@@ -659,15 +659,39 @@ untouched, timestamp included.
 
 The plane rewrites the whole file - and your comments do not survive that
 write - only when it cannot vouch for its own edit of your text. It checks the
-edited text before it lands, and it says plainly on the Message line when the
-check fails. The check fails when the file no longer says what the plane holds,
-which is what happens when you change a `[repos]` key or a `[[sources]]` block
-while the plane is running. It also fails on a shape the section edit does not
-read: a `[sources]` table instead of `[[sources]]` blocks, more than one
-`[repos]` table, or a `[[sources]]` block that names no `name`. The empty
-source list is not in that group: the plane writes no `sources` key at all for
-no sources, and a `sources = []` line an earlier version wrote is one the
-write-back drops before it appends its blocks.
+edited text before it lands: the text must parse, must pass the same validation
+the plane starts with, and must carry every mapping and every source the plane
+holds. A file that check will not vouch for takes the rewrite, and the Message
+line says plainly that the comments did not survive.
+
+What the two sections hold, and what happens when you edit them while the plane
+is running, is not the same on both sides.
+
+- The `[repos]` table is the plane's own writing: a write-back puts the value
+  the plane holds onto the line that names that key. If you re-point a key the
+  plane holds while the plane runs, the next write-back writes the plane's own
+  value back over yours, and no line says it was replaced. If you delete such a
+  key, the next write-back writes it again. A key the plane does not hold is
+  yours, and it stays.
+- The `[[sources]]` blocks the plane holds stand byte for byte, so an edit of
+  one of them while the plane runs is a file that no longer says what the plane
+  holds. The check refuses the edit, and that is the case the plane names on
+  the Message line: change a held block's `kind` or its `repositories` while
+  the plane runs and the whole file is rewritten. If you delete such a block,
+  the next write-back appends the plane's own copy of it at the end of the
+  file.
+
+The other shapes that take the rewrite are the ones the check cannot vouch for:
+a mapping value the plane must write and cannot carry in place - a multiline
+string or a multiline array standing on a key the plane holds - and a file your
+edit left in a shape the startup loader itself refuses: a broken line, a stray
+byte-order mark, an inline table or a dotted key in the `[repos]` table, a
+`[sources]` table instead of `[[sources]]` blocks, or a `[[sources]]` block that
+names no `name`. The loader refuses those at startup, so the plane only meets
+one of them through an edit made while it runs. The empty source list is not in
+that group: the plane writes no `sources` key at all for no sources, and a
+`sources = []` line an earlier version wrote is one the write-back drops before
+it appends its blocks.
 
 The shipped defaults define the three agent types `pi`, `codex`, and
 `claude`, the four task types `implement`, `review`, `rework`, and

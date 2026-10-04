@@ -10,6 +10,7 @@
 import { randomUUID } from "node:crypto";
 
 import type { FactoryConfig } from "./config.ts";
+import type { ConfigWriteReport } from "./config-write.ts";
 import { type AgentInputEvent, ConsultationInputQueue } from "./consultation/agent-input.ts";
 import {
 	type CheckoutConflict,
@@ -38,7 +39,6 @@ import { HerdrAgentReader, matchConsultationAgent } from "./observation.ts";
 import { serializeRepositoryOperation } from "./operation-serializer.ts";
 import { parallelSeatReading } from "./parallel.ts";
 import {
-	type MappingWriteReport,
 	type RepositoryMapping,
 	type ResolvedRepository,
 	realPathOf,
@@ -131,9 +131,7 @@ export interface ConsultationOperationsOptions {
 	 */
 	log?: Logger;
 	/** Persist a sibling-clone mapping, when repository resolution creates one. */
-	persistRepositoryMapping?: (
-		mapping: RepositoryMapping,
-	) => Promise<MappingWriteReport | undefined>;
+	persistRepositoryMapping?: (mapping: RepositoryMapping) => Promise<ConfigWriteReport | undefined>;
 	textBatchBytes?: number;
 }
 
@@ -216,7 +214,7 @@ export class ConsultationOperations {
 	private readonly log?: Logger;
 	private readonly persistRepositoryMapping?: (
 		mapping: RepositoryMapping,
-	) => Promise<MappingWriteReport | undefined>;
+	) => Promise<ConfigWriteReport | undefined>;
 	private readonly operationQueues = new Map<string, Promise<void>>();
 	private readonly openingOperations = new Set<string>();
 	private readonly closeOperations = new Map<string, CloseOperation>();
@@ -1187,9 +1185,10 @@ export class ConsultationOperations {
 				: await this.persistRepositoryMapping(outcome.notes.mappingToWrite);
 		// A mapping write that did not land leads the line; one that landed trails
 		// the note the resolution bent with (ADR 0101).
-		const mappingFailure = mappingReport?.failed ? mappingReport.line : undefined;
+		const mappingFailure =
+			mappingReport === undefined || mappingReport.landed ? undefined : mappingReport.line;
 		const mappingWrite =
-			mappingReport === undefined || mappingReport.failed ? undefined : mappingReport.line;
+			mappingReport === undefined || !mappingReport.landed ? undefined : mappingReport.line;
 		const lines = [
 			...(outcome.status === "ok" ? [] : [outcome.reason]),
 			...(mappingFailure === undefined ? [] : [mappingFailure]),

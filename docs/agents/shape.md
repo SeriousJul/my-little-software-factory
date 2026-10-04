@@ -43,7 +43,9 @@ description: The module map of the source tree, for agents working in this repos
 	own file. The patched text is checked before it lands: it must parse, must
 	validate, and must carry what the plane holds, and a file the check will not
 	vouch for takes the full rewrite. `configWriteLine` words the fact for the
-	Message line. No surface reaches past this module for the disk step.
+	Message line, `ConfigWriteReport` says how urgent it is, and
+	`writeFactWithConfirmation` sets where it stands beside the confirmation of the
+	act that did the write. No surface reaches past this module for the disk step.
 - `src/ticket-source.ts`: the ticket-source seam and built-in GitHub Issues
 	and Pull Requests adapters.
 - `src/security-source.ts`: the built-in GitHub security ticket sources

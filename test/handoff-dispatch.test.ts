@@ -1385,7 +1385,7 @@ describe("the outcome wording", () => {
 				},
 			},
 			line.reports,
-			() => Promise.resolve({ line: "could not persist the repository mapping", failed: true }),
+			() => Promise.resolve({ line: "could not persist the repository mapping", landed: false }),
 		);
 		expect(line.events).toEqual([
 			"clear-working",
@@ -1405,7 +1405,7 @@ describe("the outcome wording", () => {
 				},
 			},
 			line.reports,
-			() => Promise.resolve({ line: "saved the mapping in /home/me/config.toml", failed: false }),
+			() => Promise.resolve({ line: "saved the mapping in /home/me/config.toml", landed: true }),
 		);
 		// The Message line is one row of the terminal's width. The note naming the
 		// clone the plane made on the operator's disk leads it, and the routine

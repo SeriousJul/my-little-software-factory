@@ -18,6 +18,17 @@
  * named on the Message line so the operator learns the comments did not
  * survive.
  *
+ * Inside the two regions the plane's own copy is what stands. A `[repos]` key
+ * the plane holds is written from that copy, so an operator who re-points that
+ * key while the plane runs has their value replaced on the next write-back,
+ * and an operator who deletes such a key, or deletes a `[[sources]]` block the
+ * plane holds, has the plane's own line written back. The check is what tells
+ * the two regions apart: a `[[sources]]` block the operator changed is a file
+ * that no longer says what the plane holds, so the check refuses the edit and
+ * the rewrite is named; a `[repos]` key the operator changed is a line the
+ * plane owns and rewrites, so the edit stands and no line says the value was
+ * replaced. `docs/configuration/index.md` states this to the operator.
+ *
  * What the line scan reads, and what it does not. It reads table headers,
  * single-line key assignments, and the string forms a config file carries: a
  * basic string with its escapes, a literal string, and the multiline form of
@@ -98,6 +109,41 @@ export async function writeConfigFile(
 	}
 	await writeConfigText(path, configToToml(updated), containsLiteralToken(updated));
 	return { mode: "rewrite", path };
+}
+
+/**
+ * What a config write-back leaves on the Message line, and how urgent that
+ * line is (ADR 0103).
+ *
+ * The two facts a write-back can leave are not equally urgent, and the Message
+ * line holds one row of the terminal. `landed` says which one it is: a write
+ * that did not land leads the line, ahead of the notes a Handoff carried, and
+ * a write that landed trails them so the note about the operator's disk - the
+ * sibling clone the plane made - stays on the visible row.
+ */
+export type ConfigWriteReport =
+	| { readonly line: string; readonly landed: true }
+	| { readonly line: string; readonly landed: false };
+
+/**
+ * Where a write fact stands beside the confirmation of the act that did the
+ * write (ADR 0103).
+ *
+ * The Message line is one row of the terminal's width, so what leads it is what
+ * reads. A full rewrite is the fact the operator most needs - the one that says
+ * the comments in their file did not survive - so it leads a confirmation longer
+ * than the row. Every other write trails the confirmation it belongs to, and a
+ * write that changed nothing adds nothing.
+ */
+export function writeFactWithConfirmation(
+	fact: ConfigWriteFact,
+	writeLine: string,
+	confirmation: string,
+): string {
+	if (writeLine === "") return confirmation;
+	return fact.mode === "rewrite"
+		? `${writeLine}. ${confirmation}`
+		: `${confirmation}, ${writeLine}`;
 }
 
 /**
@@ -213,11 +259,15 @@ function editReposRegion(
 	const entries = Object.entries(updated.repos);
 	if (entries.length === 0) return true;
 	const regions = regionsOf(scanned, "repos", false);
+	// A second `[repos]` header in the raw text is a file this edit cannot be
+	// trusted on. TOML forbids a redefined table, so the verify step's parse
+	// would refuse such a file too; refusing here keeps the refusal at the scan
+	// that found the shape.
 	if (regions.length > 1) return false;
 	if (regions.length === 0) {
 		edit.tail.push(
-			"",
-			"[repos]",
+			edit.eol,
+			`[repos]${edit.eol}`,
 			...entries.map(([key, value]) => assignmentLine(edit, key, value)),
 		);
 		return true;
@@ -225,19 +275,28 @@ function editReposRegion(
 	const region = regions[0];
 	const written = new Set<string>();
 	for (let i = region.start + 1; i < region.end; i++) {
-		const key = assignmentKey(scanned[i].body);
+		const row = scanned[i];
+		// A line that stands inside an operator's multiline string is prose, not
+		// an assignment, and a line whose value spans lines is a form the plane's
+		// own serializer does not write. Neither is a line the plane rewrites: the
+		// key a value-opening line names still counts as standing, so the plane
+		// does not add a second one, and the verify step decides whether what
+		// stands carries what the plane holds.
+		if (row.startsInString) continue;
+		const key = assignmentKey(row.body);
 		if (key === null) continue;
 		const value = updated.repos[key];
 		// A key the plane does not hold is one the operator wrote by hand
 		// since the plane read the file. The plane owns its own keys, not theirs.
 		if (value === undefined) continue;
 		written.add(key);
-		if (assignmentValue(scanned[i].body) === value) continue;
-		const indent = /^\s*/.exec(scanned[i].body)?.[0] ?? "";
+		if (row.opensString) continue;
+		if (assignmentValue(row.body) === value) continue;
+		const indent = /^\s*/.exec(row.body)?.[0] ?? "";
 		// The line's own comment is the operator's prose about the value, and it
 		// survives the plane's new value (ADR 0103).
-		const comment = trailingComment(scanned[i]);
-		const cr = scanned[i].text.endsWith("\r") ? "\r" : "";
+		const comment = trailingComment(row);
+		const cr = row.text.endsWith("\r") ? "\r" : "";
 		edit.replace.set(i, `${indent}${tomlKey(key)} = ${tomlString(value)}${comment ?? ""}${cr}`);
 	}
 	const missing = entries.filter(([key]) => !written.has(key));
@@ -301,10 +360,10 @@ function editSourcesRegion(
 	const empty = emptySourcesKeyLine(scanned);
 	if (empty >= 0) edit.remove.add(empty);
 	if (regions.length === 0) {
-		edit.tail.push("", ...block);
+		edit.tail.push(edit.eol, ...block);
 		return true;
 	}
-	insertAt(edit, lastEditableLine(scanned, regions[regions.length - 1]), ["", ...block]);
+	insertAt(edit, lastEditableLine(scanned, regions[regions.length - 1]), [edit.eol, ...block]);
 	return true;
 }
 

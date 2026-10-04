@@ -9,6 +9,7 @@
  * work.
  */
 import type { FactoryConfig } from "./config.ts";
+import type { ConfigWriteReport } from "./config-write.ts";
 import type { ConsultationPickupOutcome } from "./consultation-operations.ts";
 import type { StartMode } from "./domain/start-mode.ts";
 import type { EnvironmentKind, Ticket, TicketState } from "./domain/ticket.ts";
@@ -29,7 +30,7 @@ import { overParallelLimit, parallelSeatReading } from "./parallel.ts";
 import { evaluatePlacement } from "./placement.ts";
 import { isPlaneActionTaskType, planeActionSettingOf } from "./plane-action-registry.ts";
 import { runMergePullRequest } from "./plane-actions.ts";
-import type { MappingWriteReport, RepositoryMapping } from "./repo.ts";
+import type { RepositoryMapping } from "./repo.ts";
 import { type CommandRunner, errorMessage } from "./runner.ts";
 import type { ConsultationRecordAggregate } from "./state/consultation-record.ts";
 import type { HandoffAggregate, HandoffClaim, HandoffOrigin } from "./state/handoff.ts";
@@ -217,15 +218,16 @@ export interface HandoffDispatchReports {
 export async function reportHandoffOutcome(
 	outcome: HandoffOutcome,
 	reports: Pick<HandoffDispatchReports, "clearWorking" | "warning" | "error">,
-	persistMapping?: (mapping: RepositoryMapping) => Promise<MappingWriteReport | undefined>,
+	persistMapping?: (mapping: RepositoryMapping) => Promise<ConfigWriteReport | undefined>,
 ): Promise<void> {
 	const persistReport =
 		outcome.notes?.mappingToWrite === undefined || persistMapping === undefined
 			? undefined
 			: await persistMapping(outcome.notes.mappingToWrite);
-	const persistFailure = persistReport?.failed ? persistReport.line : undefined;
+	const persistFailure =
+		persistReport === undefined || persistReport.landed ? undefined : persistReport.line;
 	const persistWrite =
-		persistReport === undefined || persistReport.failed ? undefined : persistReport.line;
+		persistReport === undefined || !persistReport.landed ? undefined : persistReport.line;
 	const nameWarning =
 		outcome.collision !== undefined && outcome.collision.startedAs !== null
 			? // The Message line is one row of the terminal's width, and this fact
@@ -297,7 +299,7 @@ export interface HandoffDispatchOptions extends HandoffDispatchReports {
 	) => Promise<ConsultationPickupOutcome>;
 	home: string;
 	/** Persist a repository mapping discovered during handoff, if one is found. */
-	persistMapping?: (mapping: RepositoryMapping) => Promise<MappingWriteReport | undefined>;
+	persistMapping?: (mapping: RepositoryMapping) => Promise<ConfigWriteReport | undefined>;
 	/**
 	 * The plane's file logger. The dispatch leaves the record's start lines and
 	 * queue lines, for a Handoff and for a Plane action alike: a start with its
@@ -459,7 +461,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 	private readonly reports: HandoffDispatchReports;
 	private readonly persistMapping?: (
 		mapping: RepositoryMapping,
-	) => Promise<MappingWriteReport | undefined>;
+	) => Promise<ConfigWriteReport | undefined>;
 	private readonly log?: Logger;
 
 	/** True while external handoff work holds the seat. */
