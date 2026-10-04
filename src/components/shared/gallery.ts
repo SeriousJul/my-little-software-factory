@@ -2006,7 +2006,6 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 							? { value: "acme/billing", count: 2, held: 1, collapsed: false }
 							: null,
 						visibleGroupHeaderCount: 1,
-						selectedGroupPosition: header ? 0 : -1,
 						queueItemForSelectedRow: null,
 					}),
 					width: columns.contentWidth,
@@ -2645,8 +2644,6 @@ export function Gallery({
 	const [guideOpen, setGuideOpen] = useState(false);
 	const barFacts = availabilityFacts("form-field", GALLERY_STANDING, {
 		fieldHasSelection: hasSelection,
-		formCycleCount: 0,
-		formRefusal: null,
 	});
 	// The gallery's own keys come from the same catalogue the application runs,
 	// so a contributor exercises the real dispatch and the real Action bar.

@@ -296,7 +296,10 @@ describe("the shared control library is the only control implementation", () => 
 		// rejects a mode whose facts its surface did not state. A wide bag is
 		// how that check was avoided before: every mode read the same record,
 		// so a control could read a fact no screen had stated. The retired names
-		// are the bag's spellings, so they may not come back.
+		// are the bag's spellings, so they may not come back. The rule reads the
+		// source as text, so it refuses those names inside a comment as well as
+		// inside code: a comment that explains the retired bag is still a
+		// contributor reading the retired shape.
 		const all = sourceFiles("src", () => true).concat(sourceFiles("test", () => true));
 		const offenders: string[] = [];
 		for (const file of all) {
@@ -314,6 +317,13 @@ describe("the shared control library is the only control implementation", () => 
 		// the module that owns it, so the rule reads a spread of a named record -
 		// `<mode>Facts`, `<mode>Context`, `context` - not a spread of the value a
 		// module answers a call with.
+		//
+		// What this rule cannot see: it matches a name, so a spread of a call
+		// (`...panelFacts()`) or of a value named something else passes it. The
+		// guarantee that a rule reads only the facts its mode states is measured
+		// at the catalogue seam in `test/controls.test.ts`, which wraps every
+		// mode's record so an unstated read fails the test. This rule only
+		// refuses one spelling of the old bag.
 		const surfaces = sourceFiles("src/components", (file) => file !== "src/components/controls.ts");
 		const offenders: string[] = [];
 		for (const file of surfaces) {

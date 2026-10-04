@@ -170,10 +170,12 @@ import {
 	type AvailabilityFacts,
 	availabilityFacts,
 	availabilityFor,
+	consultationSectionFacts,
 	controlById,
 	type InteractionMode,
 	type StandingFacts,
 	ticketSectionFacts,
+	workQueueSectionFacts,
 } from "./controls.ts";
 import { DecisionModal } from "./decision-modal.ts";
 import { maxScrollOf, usePaneGeometry } from "./geometry.ts";
@@ -2834,10 +2836,11 @@ export function App({
 	 * module uses everywhere else. The captured choice travels with the item,
 	 * so a reorder changes only the order the free seats take.
 	 */
-	const moveQueueItem = (direction: "up" | "down") => {
+	const moveQueueItem = (direction: "up" | "down", item: WorkQueueItem | null) => {
 		if (state === undefined) return;
-		const item = workQueueRef.current[workQueueIndexRef.current];
-		if (item === undefined) return;
+		// The item is the queue module's own fact for the row under the cursor,
+		// the same one the catalogue gated the key on.
+		if (item === null) return;
 		if (
 			!state.workQueue.moveWorkItem(
 				item.kind === "consultation" ? item.consultationId : item.ticketIdentity,
@@ -2869,10 +2872,11 @@ export function App({
 	 * way, and the plane says that instead of a removal the operator did not
 	 * cause.
 	 */
-	const removeQueueItem = () => {
+	const removeQueueItem = (item: WorkQueueItem | null) => {
 		if (handoffDispatch === undefined) return;
-		const item = workQueueRef.current[workQueueIndexRef.current];
-		if (item === undefined) return;
+		// The item is the queue module's own fact for the row under the cursor,
+		// the same one the catalogue gated the key on.
+		if (item === null) return;
 		if (item.kind === "consultation") {
 			// A Consultation item's removal unschedules the record (ADR 0034,
 			// issue #91): the ask is kept in `unscheduled` state behind the
@@ -2932,10 +2936,11 @@ export function App({
 	 * while it queues parks a Handoff claim in the module, and the row leaves
 	 * only when that parked start settles.
 	 */
-	const forceDispatchQueueItem = () => {
+	const forceDispatchQueueItem = (item: WorkQueueItem | null) => {
 		if (handoffDispatch === undefined) return;
-		const item = workQueueRef.current[workQueueIndexRef.current];
-		if (item === undefined) return;
+		// The item is the queue module's own fact for the row under the cursor,
+		// the same one the catalogue gated the key on.
+		if (item === null) return;
 		handoffDispatch.forceDispatchWorkQueueItem(workQueueIdentityOf(item));
 	};
 	const currentBaseMode = (): InteractionMode =>
@@ -2955,14 +2960,17 @@ export function App({
 							? "ticket-list"
 							: "ticket-detail";
 	/**
-	 * The plane's standing facts, stated once (ADR 0014).
+	 * The plane's standing facts, stated once per render (ADR 0014).
 	 *
 	 * Every Interaction mode's Availability facts carry this record, and no
 	 * surface restates a fact from it: the run state, the source counts, the
 	 * Message line's truncation, the configured Consultation types, and the
-	 * configured exit key are read the same way in every mode.
+	 * configured exit key are read the same way in every mode. The view builds
+	 * the one record here and hands it to every surface, every mode's facts, and
+	 * the Action bar, so the bar, the Key guide, and the dispatch read the same
+	 * values in the same frame.
 	 */
-	const standingFacts = (): StandingFacts => ({
+	const standing: StandingFacts = {
 		handoffActive: handoffDispatch?.handoffActive() ?? noStateHandoffInFlightRef.current,
 		messageTruncated,
 		consultationTypesConfigured: Object.keys(config.consultationTypes).length > 0,
@@ -2971,19 +2979,19 @@ export function App({
 			(source) => coordinatorRef.current?.isFetching(source.name) === true,
 		).length,
 		interactionExitKey: configRef.current.interactionExitKey,
-	});
+	};
 	/**
 	 * The Group facts, from the module that owns the row list they count (issue
 	 * #159, ADR 0071). A collapsed Ticket section draws no list, so its cursor
 	 * stands on no header.
 	 */
-	const groupRows = () =>
+	const groupFacts = () =>
 		groupCursorFacts(
 			ticketRowsRef.current,
 			ticketsExpandedRef.current ? selectedIndexRef.current : -1,
 		);
 	/** The queue facts, from the module that draws the queue it counts (ADR 0034, ADR 0052). */
-	const queueRows = () =>
+	const queueFacts = () =>
 		workQueueCursorFacts(workQueueRef.current, workQueueIndexRef.current, queuePausedRef.current);
 	/** The Ticket facts the Ticket section's two modes read. */
 	const ticketCursor = () => ({
@@ -3065,10 +3073,13 @@ export function App({
 	 * The facts the Main view states when it opens the Key guide or the Message
 	 * view for a mode another surface owns.
 	 *
-	 * The Main view holds no cursor in that surface, so it states no row under
-	 * one and no rows of its own. The guide names the keys the mode dispatches;
-	 * the surface that owns the mode states its own rows' facts for its own bar
-	 * and its own keys.
+	 * The guide names the keys that mode dispatches, and it gates them on what
+	 * the Main view can honestly read from outside that surface: no row stands
+	 * under a cursor the Main view does not hold, and no Action row count it can
+	 * count. The Body pane is stated as a pane that holds rows and scrolls,
+	 * because the Main view reads nothing of the open surface's body, and a Body
+	 * reported as empty would refuse a key the surface can run. The surface that
+	 * owns the mode states its own rows' facts for its own bar and its own keys.
 	 */
 	const overlayGuideFacts = {
 		actionRowCount: 0,
@@ -3085,12 +3096,11 @@ export function App({
 	 * rejects a mode whose facts this view did not state.
 	 */
 	const mainFactsFor = (mode: InteractionMode): AvailabilityFacts => {
-		const standing = standingFacts();
 		switch (mode) {
 			case "ticket-list":
 				return availabilityFacts("ticket-list", standing, {
 					...ticketCursor(),
-					...groupRows(),
+					...groupFacts(),
 					groupingAxis: groupingAxisRef.current,
 					listCanMove: listCanMove(),
 					queueItemForSelectedRow: queueItemForSelectedRow(),
@@ -3098,7 +3108,7 @@ export function App({
 			case "ticket-detail":
 				return availabilityFacts("ticket-detail", standing, {
 					...ticketCursor(),
-					...groupRows(),
+					...groupFacts(),
 					groupingAxis: groupingAxisRef.current,
 					detailCanScroll: detailMaxScroll > 0,
 				});
@@ -3115,12 +3125,12 @@ export function App({
 				});
 			case "work-queue-list":
 				return availabilityFacts("work-queue-list", standing, {
-					...queueRows(),
+					...queueFacts(),
 					listCanMove: listCanMove(),
 				});
 			case "work-queue-detail":
 				return availabilityFacts("work-queue-detail", standing, {
-					...queueRows(),
+					...queueFacts(),
 					detailCanScroll: workQueueDetailMaxScroll > 0,
 				});
 			case "consultation-interaction":
@@ -3129,11 +3139,7 @@ export function App({
 			case "form-field":
 				// The response editor owns its own slot facts and dispatches from
 				// them; this record only names the mode the Main view's bar reads.
-				return availabilityFacts("form-field", standing, {
-					fieldHasSelection: false,
-					formCycleCount: 0,
-					formRefusal: null,
-				});
+				return availabilityFacts("form-field", standing, { fieldHasSelection: false });
 			case "decision-modal":
 				return availabilityFacts("decision-modal", standing, overlayGuideFacts);
 			case "missing-modal":
@@ -3158,10 +3164,13 @@ export function App({
 			case "override-text":
 				return availabilityFacts(mode, standing, { fieldHasSelection: false });
 			case "form-selector":
-			case "form-action":
-				return availabilityFacts(mode, standing, {
+				return availabilityFacts("form-selector", standing, {
 					fieldHasSelection: false,
 					formCycleCount: 0,
+				});
+			case "form-action":
+				return availabilityFacts("form-action", standing, {
+					fieldHasSelection: false,
 					formRefusal: null,
 				});
 			case "key-guide":
@@ -3359,14 +3368,26 @@ export function App({
 				// cursor, `-` demotes it (ADR 0049): the keys the operator already
 				// knew for raising and lowering a rank, with the queue's own
 				// refusal when the item already stands where the move would put it.
-				"queue-promote": () => moveQueueItem("up"),
-				"queue-demote": () => moveQueueItem("down"),
-				"queue-remove": () => removeQueueItem(),
+				"queue-promote": ({ facts }) => {
+					if (!workQueueSectionFacts(facts)) return;
+					moveQueueItem("up", facts.selectedWorkQueueItem);
+				},
+				"queue-demote": ({ facts }) => {
+					if (!workQueueSectionFacts(facts)) return;
+					moveQueueItem("down", facts.selectedWorkQueueItem);
+				},
+				"queue-remove": ({ facts }) => {
+					if (!workQueueSectionFacts(facts)) return;
+					removeQueueItem(facts.selectedWorkQueueItem);
+				},
 				// Enter on a queue row force-dispatches the item under the cursor over a
 				// full Parallel limit (issue #89). The catalogue gated the availability,
 				// so this runs the dispatch and nothing else; the module owns every line
 				// the start or its failure leaves.
-				"queue-force-dispatch": () => forceDispatchQueueItem(),
+				"queue-force-dispatch": ({ facts }) => {
+					if (!workQueueSectionFacts(facts)) return;
+					forceDispatchQueueItem(facts.selectedWorkQueueItem);
+				},
 				"move-list": ({ key }) => moveRange(key.name),
 				"scroll-detail": ({ key }) => moveRange(key.name),
 				"section-toggle": () => toggleSection(),
@@ -3419,8 +3440,9 @@ export function App({
 				"ticket-ignore": () => toggleTicketIgnore(),
 				"ticket-mute": () => toggleSourceMute(),
 				"ticket-filter": () => cycleTicketFilter(),
-				"consultation-recovery": () => {
-					const selected = consultationsRef.current[consultationIndexRef.current];
+				"consultation-recovery": ({ facts }) => {
+					if (!consultationSectionFacts(facts)) return;
+					const selected = facts.selectedConsultation;
 					if (selected === undefined) return;
 					// A closing record's recovery is the close panel's own: its Retry
 					// and Force-close rows already answer the stuck cleanup. Every other
@@ -3431,15 +3453,17 @@ export function App({
 						identity: selected.id,
 					});
 				},
-				"consultation-close": () => {
-					const selected = consultationsRef.current[consultationIndexRef.current];
+				"consultation-close": ({ facts }) => {
+					if (!consultationSectionFacts(facts)) return;
+					const selected = facts.selectedConsultation;
 					if (selected === undefined) return;
 					runConsultationClose(selected);
 				},
-				"consultation-delete": () => {
-					const selected = consultationsRef.current[consultationIndexRef.current];
-					if (selected !== undefined)
-						setPanel({ kind: "consultation-delete", identity: selected.id });
+				"consultation-delete": ({ facts }) => {
+					if (!consultationSectionFacts(facts)) return;
+					const selected = facts.selectedConsultation;
+					if (selected === undefined) return;
+					setPanel({ kind: "consultation-delete", identity: selected.id });
 				},
 				// `s` schedules the unscheduled record back into the Work queue
 				// (issue #91, ADR 0049): the enqueue's hard check runs first, the
@@ -3447,8 +3471,9 @@ export function App({
 				// start never takes a row. The state's one write then moves it to
 				// `queued` at the queue's tail, and the pickup is its only starter
 				// from there.
-				"consultation-schedule": () => {
-					const selected = consultationsRef.current[consultationIndexRef.current];
+				"consultation-schedule": ({ facts }) => {
+					if (!consultationSectionFacts(facts)) return;
+					const selected = facts.selectedConsultation;
 					if (selected === undefined) return;
 					if (consultationOperations === undefined) {
 						setWarningMessage("Consultations require SQLite state");
@@ -3478,8 +3503,9 @@ export function App({
 				// start or its failure leaves; the key names the cap when the seat
 				// count stood over it at the key, the way the queue's force-
 				// dispatch line does, and says when a race out-waited it.
-				"consultation-start-now": () => {
-					const selected = consultationsRef.current[consultationIndexRef.current];
+				"consultation-start-now": ({ facts }) => {
+					if (!consultationSectionFacts(facts)) return;
+					const selected = facts.selectedConsultation;
 					if (selected === undefined) return;
 					if (consultationOperations === undefined) {
 						setWarningMessage("Consultations require SQLite state");
@@ -3505,14 +3531,16 @@ export function App({
 							);
 					});
 				},
-				"consultation-respond": () => {
-					const selected = consultationsRef.current[consultationIndexRef.current];
+				"consultation-respond": ({ facts }) => {
+					if (!consultationSectionFacts(facts)) return;
+					const selected = facts.selectedConsultation;
 					if (selected === undefined) return;
 					beginResponse(selected);
 				},
 				"consultation-interact": () => setInteraction(true),
-				"consultation-goto": () => {
-					const selected = consultationsRef.current[consultationIndexRef.current];
+				"consultation-goto": ({ facts }) => {
+					if (!consultationSectionFacts(facts)) return;
+					const selected = facts.selectedConsultation;
 					if (selected === undefined || selected.paneId === null) return;
 					// Navigation only (ADR 0025): the Consultation record stays
 					// untouched, and the confirmation stands on the Message line
@@ -3538,8 +3566,9 @@ export function App({
 						});
 				},
 				override: openOverride,
-				recover: () => {
-					const selected = consultationsRef.current[consultationIndexRef.current];
+				recover: ({ facts }) => {
+					if (!consultationSectionFacts(facts)) return;
+					const selected = facts.selectedConsultation;
 					if (selected?.state === "opening") recoverConsultationOpening(selected);
 				},
 				refresh: () => {
@@ -3585,7 +3614,7 @@ export function App({
 				"queue-jump": ({ facts }) => {
 					if (facts.mode !== "ticket-list" && facts.mode !== "consultation-list") return;
 					const item = facts.queueItemForSelectedRow;
-					if (item === null || item === undefined) return;
+					if (item === null) return;
 					const index = workQueueRef.current.findIndex(
 						(candidate) => workQueueIdentityOf(candidate) === workQueueIdentityOf(item),
 					);
@@ -5210,7 +5239,7 @@ export function App({
 												width: consultationWidth,
 												rows: RESPONSE_EDITOR_ROWS,
 												focused: true,
-												standing: standingFacts(),
+												standing,
 												inputActive: utility === null,
 												onSend: sendResponseText,
 												onDiscard: discardResponseDraft,
@@ -5251,7 +5280,7 @@ export function App({
 					setLauncher(false);
 					setReplacementConsultationId(null);
 				},
-				standing: standingFacts(),
+				standing,
 				inputActive: utility === null,
 				onHelp: (mode) => openGuide(mode),
 				onMessage: (mode) => openMessage(mode),
@@ -5281,7 +5310,7 @@ export function App({
 				modelList,
 				onAgentChange: requestModelList,
 				initial: override.choice,
-				standing: standingFacts(),
+				standing,
 				inputActive: utility === null,
 				onHelp: (mode) => openGuide(mode),
 				onMessage: (mode) => openMessage(mode),
@@ -5308,7 +5337,7 @@ export function App({
 				onAction: (key) => runDecisionAction(panelTicket, key),
 				onEditAction: (key) => openRouteOverride(panelTicket, key),
 				onCancel: () => setPanel(null),
-				standing: standingFacts(),
+				standing,
 				inputActive: utility === null,
 				onHelp: () => openGuide("decision-modal"),
 				onMessage: () => openMessage("decision-modal"),
@@ -5347,7 +5376,7 @@ export function App({
 				onCancel: () => setPanel(null),
 				// The view's own Ticket is the Goto's pane fact, whatever the
 				// list below points at.
-				standing: standingFacts(),
+				standing,
 				ticket: panelTicket,
 				paneAlive:
 					panelTicket.handoff?.paneId !== null &&
@@ -5381,7 +5410,7 @@ export function App({
 				],
 				onAction: (key) => runMissingAction(panelTicket, key),
 				onCancel: () => setPanel(null),
-				standing: standingFacts(),
+				standing,
 				inputActive: utility === null,
 				onHelp: () => openGuide("missing-modal"),
 				onMessage: () => openMessage("missing-modal"),
@@ -5414,7 +5443,7 @@ export function App({
 					else skipRepositoryInitEntry();
 				},
 				onCancel: () => skipRepositoryInitEntry(),
-				standing: standingFacts(),
+				standing,
 				inputActive: utility === null,
 				onHelp: () => openGuide("action-panel"),
 				onMessage: () => openMessage("action-panel"),
@@ -5430,7 +5459,7 @@ export function App({
 					startRepositoryInitQueue(queue);
 				},
 				onCancel: () => setPanel(null),
-				standing: standingFacts(),
+				standing,
 				inputActive: utility === null,
 				onHelp: () => openGuide("repository-select"),
 				onMessage: () => openMessage("repository-select"),
@@ -5451,7 +5480,7 @@ export function App({
 				// Cancel is the way out with nothing changed: the Ticket, its cycle,
 				// and its Agent stay exactly where the dialog found them.
 				onCancel: () => setPanel(null),
-				standing: standingFacts(),
+				standing,
 				inputActive: utility === null,
 				onHelp: () => openGuide("action-panel"),
 				onMessage: () => openMessage("action-panel"),
@@ -5464,7 +5493,7 @@ export function App({
 			consultationSafety?.consultationId === panelConsultation.id &&
 			createElement(ActionPanel, {
 				message: visibleMessage,
-				standing: standingFacts(),
+				standing,
 				title: `Live checkout conflict ${panelConsultation.id.slice(0, 8)}`,
 				bodyLines: [
 					...(consultationSafety.safety.warning === undefined
@@ -5509,7 +5538,7 @@ export function App({
 			recoveryPanel !== undefined &&
 			createElement(ActionPanel, {
 				message: visibleMessage,
-				standing: standingFacts(),
+				standing,
 				title: recoveryPanel.title,
 				bodyLines: recoveryPanel.bodyLines,
 				actions: recoveryPanel.actions,
@@ -5540,7 +5569,7 @@ export function App({
 			closePanel !== undefined &&
 			createElement(ActionPanel, {
 				message: visibleMessage,
-				standing: standingFacts(),
+				standing,
 				title: closePanel.title,
 				bodyLines: closePanel.bodyLines,
 				actions: closePanel.actions,
@@ -5563,7 +5592,7 @@ export function App({
 			state !== undefined &&
 			createElement(ActionPanel, {
 				message: visibleMessage,
-				standing: standingFacts(),
+				standing,
 				title: `Force-close Consultation ${panelConsultation.id.slice(0, 8)}?`,
 				bodyLines: [
 					"Force-close stops the cleanup and closes the record. These owned",
@@ -5593,7 +5622,7 @@ export function App({
 			panel.kind === "consultation-delete" &&
 			createElement(ActionPanel, {
 				message: visibleMessage,
-				standing: standingFacts(),
+				standing,
 				title: `Delete Consultation ${panelConsultation.id.slice(0, 8)}`,
 				bodyLines: [
 					"Saved history will be removed. Backups and filesystem snapshots may retain copies. Data is not encrypted.",

@@ -350,33 +350,35 @@ export interface OverrideTextFacts extends StandingFacts {
 }
 
 /**
- * The facts the shared form module states for the slot that holds the focus.
+ * The facts a shared form states while its field holds the focus.
  *
  * A form owns one keyboard rule per slot, and the slot's own facts are the
- * form module's to state (ADR 0014).
+ * form module's to state (ADR 0014). Each slot's record names only what that
+ * slot's controls read: the field's Copy control, the selector's cycle, and
+ * the action's Confirm each state their own fact and nothing beside it.
  */
-export interface FormSlotFacts {
-	/** The active form has a text selection the Copy control could hand over. */
-	fieldHasSelection: boolean;
-	/** How many values the focused selector offers. One of them cycles nowhere. */
-	formCycleCount: number;
-	/** Why the form's Confirm action cannot run, in the surface's own words. */
-	formRefusal: string | null;
-}
-
-/** The facts a shared form states while its field holds the focus. */
-export interface FormFieldFacts extends StandingFacts, FormSlotFacts {
+export interface FormFieldFacts extends StandingFacts {
 	mode: "form-field";
+	/** The focused field holds a text selection the Copy control could hand over. */
+	fieldHasSelection: boolean;
 }
 
 /** The facts a shared form states while its selector holds the focus. */
-export interface FormSelectorFacts extends StandingFacts, FormSlotFacts {
+export interface FormSelectorFacts extends StandingFacts {
 	mode: "form-selector";
+	/** The focused slot holds a text selection the Copy control could hand over. */
+	fieldHasSelection: boolean;
+	/** How many values the focused selector offers. One of them cycles nowhere. */
+	formCycleCount: number;
 }
 
 /** The facts a shared form states while its action holds the focus. */
-export interface FormActionFacts extends StandingFacts, FormSlotFacts {
+export interface FormActionFacts extends StandingFacts {
 	mode: "form-action";
+	/** The focused slot holds a text selection the Copy control could hand over. */
+	fieldHasSelection: boolean;
+	/** Why the form's Confirm action cannot run, in the surface's own words. */
+	formRefusal: string | null;
 }
 
 /**
@@ -584,7 +586,9 @@ type CopySelectionFacts = FormFacts | OverrideModelFacts | OverrideTextFacts;
  *
  * A handler reaches a fact only where the mode that owns the key states it, so
  * a behavior says which section it belongs to instead of reading a field that
- * mode never named.
+ * mode never named. The Main view's Ticket, Consultation, and Work queue
+ * handlers each narrow with their section's guard and then act on the row the
+ * catalogue gated, never on a second read of the list behind it.
  */
 export function ticketSectionFacts(facts: AvailabilityFacts): facts is TicketBaseFacts {
 	return ticketBaseMode(facts.mode);
@@ -917,8 +921,7 @@ const queueOrderMove =
 	(direction: "up" | "down") =>
 	(facts: WorkQueueBaseFacts): ControlAvailability => {
 		const item = facts.selectedWorkQueueItem;
-		if (item === null || item === undefined)
-			return unavailable("no queue item is under the cursor");
+		if (item === null) return unavailable("no queue item is under the cursor");
 		const depth = facts.workQueueDepth;
 		if (direction === "up" && item.position > 0) return available();
 		if (direction === "down" && item.position < depth - 1) return available();
@@ -967,8 +970,7 @@ const queueRemove = (facts: WorkQueueListFacts): ControlAvailability =>
  * act on, like the queue's other row keys.
  */
 const queueForceDispatch = (facts: WorkQueueListFacts): ControlAvailability => {
-	const item = facts.selectedWorkQueueItem;
-	if (item === null || item === undefined) return unavailable("no queue item is under the cursor");
+	if (facts.selectedWorkQueueItem === null) return unavailable("no queue item is under the cursor");
 	return available();
 };
 const refresh = (facts: BaseFacts): ControlAvailability => {
@@ -1124,8 +1126,7 @@ const ticketIgnore = (facts: TicketBaseFacts): ControlAvailability => {
 const repositoryInit = (facts: TicketBaseFacts): ControlAvailability => {
 	if (facts.groupingAxis !== "repository")
 		return unavailable("init is available on the repository axis only");
-	if (facts.groupHeaderSelected === false)
-		return unavailable("no Group header is under the cursor");
+	if (!facts.groupHeaderSelected) return unavailable("no Group header is under the cursor");
 	return available();
 };
 /**

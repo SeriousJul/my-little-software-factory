@@ -7,6 +7,7 @@ import {
 	availabilityFacts,
 	availabilityFor,
 	type ControlDefinition,
+	compactKeyLabels,
 	controlById,
 	controlForKey,
 	controlsForMode,
@@ -93,9 +94,9 @@ const OWN_FACTS = {
 		detailCanScroll: true,
 	},
 	"consultation-interaction": {},
-	"form-field": { fieldHasSelection: false, formCycleCount: 0, formRefusal: null },
-	"form-selector": { fieldHasSelection: false, formCycleCount: 0, formRefusal: null },
-	"form-action": { fieldHasSelection: false, formCycleCount: 0, formRefusal: null },
+	"form-field": { fieldHasSelection: false },
+	"form-selector": { fieldHasSelection: false, formCycleCount: 0 },
+	"form-action": { fieldHasSelection: false, formRefusal: null },
 	"decision-modal": {
 		actionRowCount: 2,
 		editableActionSelected: false,
@@ -1150,5 +1151,80 @@ describe("the shared control catalogue", () => {
 			expect(entry.control.keyLabel).toBe("Enter");
 			expect(entry.control.guideNote).toContain("recovery");
 		}
+	});
+});
+
+/**
+ * The invariant the facts' interface leans on.
+ *
+ * `ControlDefinition` declares `keys`, `barLabel`, `showInBar`, and
+ * `availability` as methods, so TypeScript checks their parameters
+ * bivariantly: a rule that names only the facts of one mode group is accepted
+ * on a control whose `modes` name any mode. Nothing in the types writes down
+ * the correspondence between a control's `modes` and the facts its rule reads,
+ * so a contributor who adds a mode to a control, or drops a section-only
+ * marker, gets a green `bun run typecheck` and a rule that reads a fact no
+ * surface stated. This test writes the correspondence down: every mode's
+ * record is wrapped so a read of a fact that mode does not name throws, and
+ * every control the catalogue runs in that mode is reached through the bar,
+ * the guide, the hint wording, and the dispatch.
+ */
+describe("no availability rule reads a fact its mode does not state", () => {
+	const STANDING_KEYS = Object.keys(STANDING);
+
+	/**
+	 * One mode's facts, wrapped so an unstated read fails the test.
+	 *
+	 * The stated names are the mode's own defaults plus the standing facts and
+	 * the mode itself. `OWN_FACTS` is checked against `OwnFacts<M>`, so its
+	 * keys are exactly the facts that mode's record names.
+	 */
+	function statedOnly(mode: InteractionMode): AvailabilityFacts {
+		const stated = new Set<string>([...STANDING_KEYS, "mode", ...Object.keys(OWN_FACTS[mode])]);
+		const record = facts(mode);
+		return new Proxy(record, {
+			get(target, property) {
+				if (typeof property === "string" && !stated.has(property)) {
+					throw new Error(`${mode} states no fact named ${property}`);
+				}
+				return Reflect.get(target, property);
+			},
+		});
+	}
+
+	test("every control the catalogue runs in a mode reads only that mode's facts", () => {
+		const modes = Object.keys(OWN_FACTS) as InteractionMode[];
+		const offenders: string[] = [];
+		const read = (what: string, run: () => unknown): void => {
+			try {
+				run();
+			} catch (error) {
+				offenders.push(`${what}: ${error instanceof Error ? error.message : error}`);
+			}
+		};
+		for (const mode of modes) {
+			const guarded = statedOnly(mode);
+			const controls = controlsForMode(mode);
+			for (const control of controls) {
+				read(`${mode} / ${control.id} availability`, () => availabilityFor(control, guarded));
+				read(`${mode} / ${control.id} keys`, () => control.keys(mode, guarded));
+				read(`${mode} / ${control.id} compact keys`, () =>
+					compactKeyLabels(mode, control, guarded),
+				);
+				read(`${mode} / ${control.id} section refusal`, () => control.sectionRefusal?.(mode));
+			}
+			// The bar's own path: it asks for a hint only for the controls it kept,
+			// so a section-only control's wording is never read in another section.
+			read(`${mode} bar`, () => {
+				for (const control of actionBarControls(mode, guarded)) control.barLabel?.(guarded);
+			});
+			read(`${mode} guide`, () => guideControls(guarded));
+			for (const key of new Set(controls.flatMap((control) => [...control.keys(mode, guarded)]))) {
+				read(`${mode} dispatch ${key}`, () =>
+					controlForKey(key === "ctrl+c" ? { name: "c", ctrl: true } : { name: key }, guarded),
+				);
+			}
+		}
+		expect(offenders).toEqual([]);
 	});
 });

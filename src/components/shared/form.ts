@@ -17,7 +17,6 @@ import type {
 	FormActionFacts,
 	FormFieldFacts,
 	FormSelectorFacts,
-	FormSlotFacts,
 	InteractionMode,
 	StandingFacts,
 } from "../controls.ts";
@@ -131,18 +130,25 @@ export function useFormSlots(slots: readonly FormSlot[]): FormFocus {
 			setAt(index);
 		},
 		facts: (standing: StandingFacts, own: FormFacts = {}): FormModeFacts => {
-			const slot: FormSlotFacts = {
-				fieldHasSelection: own.fieldHasSelection === true,
-				formCycleCount: own.formCycleCount ?? 0,
-				formRefusal: own.formRefusal ?? null,
-			};
+			// Each slot's record names only the facts that slot's controls read, so
+			// a field states its Copy fact and nothing else, a selector adds its own
+			// cycle count, and an action its own refusal.
+			const hasSelection = own.fieldHasSelection === true;
 			switch (focused()?.kind ?? "field") {
 				case "selector":
-					return availabilityFacts("form-selector", standing, slot);
+					return availabilityFacts("form-selector", standing, {
+						fieldHasSelection: hasSelection,
+						formCycleCount: own.formCycleCount ?? 0,
+					});
 				case "action":
-					return availabilityFacts("form-action", standing, slot);
+					return availabilityFacts("form-action", standing, {
+						fieldHasSelection: hasSelection,
+						formRefusal: own.formRefusal ?? null,
+					});
 				default:
-					return availabilityFacts("form-field", standing, slot);
+					return availabilityFacts("form-field", standing, {
+						fieldHasSelection: hasSelection,
+					});
 			}
 		},
 	};
