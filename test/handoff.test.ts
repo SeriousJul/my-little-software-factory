@@ -2877,7 +2877,7 @@ const previousMessageConfig: FactoryConfig = {
 	},
 };
 
-describe("handOffStoredWorkspace: the workflow handoff and the restart", () => {
+describe("handOffTicket: the workflow handoff and the restart", () => {
 	test("reuses the stored live workspace, tabs without a cwd, closes the previous tab", async () => {
 		const runner = new FakeRunner();
 		conventionCheckout(runner);
@@ -4738,12 +4738,9 @@ describe("handOffTicket: the pull request the plane opens (ADR 0076)", () => {
 		expect(outcome.status).toBe("failed");
 		expect(reasonOf(outcome)).toContain("opens a pull request");
 		expect(reasonOf(outcome)).toContain("worktree environment");
-		// The refusal is a pre-flight: the repository resolves, and nothing
-		// else touches the remote.
-		expect(runner.commands()).toEqual([
-			`git -C ${CHECKOUT} rev-parse --git-dir`,
-			`git -C ${CHECKOUT} remote get-url origin`,
-		]);
+		// The refusal is the one pre-flight's own sentence, so it answers before
+		// the start resolves - and could clone - a repository it will never use.
+		expect(runner.commands()).toEqual([]);
 	});
 
 	test("a ticket that lists on no source the task type can read fails the open's pre-flight", async () => {
@@ -4918,6 +4915,20 @@ describe("the one start: one pre-flight order on both paths", () => {
 		expect(runner.modelListCalls).toEqual(["pi", "pi"]);
 		expect(runner.calls).toHaveLength(0);
 	});
+
+	test("a choice that names no Task type answers with a whole reason", async () => {
+		const runner = new FakeRunner();
+		// One facts builder for every start (issue #204): an empty Task type reads
+		// as "no Task type", so the answer is never `unknown task type: ` with a
+		// trailing space for a name no start ever named.
+		const outcome = await handOffTicket(
+			ticket,
+			{ ...defaultChoice, taskType: "" },
+			{ claim: "open", config: BASE_CONFIG, runner, home: HOME },
+		);
+		expect(reasonOf(outcome)).toBe("the handoff names no task type");
+		expect(runner.commands().join("\n")).not.toContain("herdr");
+	});
 });
 
 describe("the one start: one cleanup rule on every Environment kind", () => {
@@ -5053,6 +5064,124 @@ describe("the one start: one cleanup rule on every Environment kind", () => {
 		const commands = runner.commands();
 		expect(commands).toContain("herdr workspace close ws-new");
 		expect(commands).not.toContain(expect.stringContaining("tab close"));
+	});
+
+	test("a Ticket worktree start removes the checkout it created and the branch it created", async () => {
+		const runner = new FakeRunner();
+		conventionCheckout(runner);
+		runner.set("git", ["-C", CHECKOUT, "branch", "--list", "factory/7-retry-policy-for-webhooks"], {
+			stdout: "",
+		});
+		stubRemoteDefaultBranch(runner);
+		runner.set(
+			"herdr",
+			[
+				"worktree",
+				"create",
+				"--cwd",
+				CHECKOUT,
+				"--branch",
+				"factory/7-retry-policy-for-webhooks",
+				"--base",
+				"origin/main",
+				"--no-focus",
+			],
+			{ stdout: worktreeCreateJson("ws-wt", "pane-wt") },
+		);
+		stubStartFailure(runner, "pane-wt");
+
+		const outcome = await handOffTicket(ticket, { ...defaultChoice, environment: "worktree" }, {
+			claim: "open",
+			config: BASE_CONFIG,
+			runner,
+			home: HOME,
+		});
+
+		expect(outcome.status).toBe("failed");
+		// The worktree kind's row of the same rule: the checkout goes, and so does
+		// the branch this start created. The kind creates no tab of its own, so no
+		// tab close runs.
+		const commands = runner.commands();
+		expect(commands).toContain("herdr worktree remove --workspace ws-wt");
+		expect(commands).toContain(`git -C ${CHECKOUT} branch -D factory/7-retry-policy-for-webhooks`);
+		expect(commands).not.toContain(expect.stringContaining("tab close"));
+	});
+
+	test("a start whose fresh tab fails to open closes the workspace it created", async () => {
+		const runner = new FakeRunner();
+		conventionCheckout(runner);
+		runner.set("herdr", ["workspace", "list"], { stdout: workspaceListJson([]) });
+		runner.set("herdr", ["workspace", "create", "--cwd", CHECKOUT, "--no-focus"], {
+			stdout: workspaceCreateJson("ws-new"),
+		});
+		runner.set(
+			"herdr",
+			["tab", "create", "--workspace", "ws-new", "--cwd", CHECKOUT, "--no-focus"],
+			{ code: 1, stderr: '{"error":{"code":"tab_create_failed","message":"no pane"}}\n' },
+		);
+
+		const outcome = await handOffTicket(ticket, defaultChoice, {
+			claim: "open",
+			config: BASE_CONFIG,
+			runner,
+			home: HOME,
+		});
+
+		expect(outcome.status).toBe("failed");
+		// The workspace was written into the residue record before the tab was
+		// asked for, so a failure at the tab still takes the workspace down.
+		const commands = runner.commands();
+		expect(commands).toContain("herdr workspace close ws-new");
+		expect(commands).not.toContain(expect.stringContaining("tab close"));
+		expect(commands).not.toContain(expect.stringContaining("agent start"));
+	});
+
+	test("a worktree open that answers no pane id closes the workspace herdr attached", async () => {
+		const runner = new FakeRunner();
+		conventionCheckout(runner);
+		runner.set("git", ["-C", CHECKOUT, "branch", "--list", "factory/7-retry-policy-for-webhooks"], {
+			stdout: "  factory/7-retry-policy-for-webhooks\n",
+		});
+		runner.set(
+			"herdr",
+			[
+				"worktree",
+				"open",
+				"--cwd",
+				CHECKOUT,
+				"--branch",
+				"factory/7-retry-policy-for-webhooks",
+				"--no-focus",
+			],
+			// herdr attached a fresh workspace and answered no root pane.
+			{
+				stdout: JSON.stringify({
+					result: {
+						already_open: false,
+						workspace: { workspace_id: "ws-wt" },
+						tab: { tab_id: "tab-ws-wt" },
+						worktree: { path: WORKTREE_PATH },
+					},
+				}),
+			},
+		);
+
+		const outcome = await handOffTicket(ticket, { ...defaultChoice, environment: "worktree" }, {
+			claim: "open",
+			config: BASE_CONFIG,
+			runner,
+			home: HOME,
+		});
+
+		expect(outcome.status).toBe("failed");
+		expect(reasonOf(outcome)).toContain("worktree open returned no pane id");
+		// The attached workspace stands in the residue record, so the one cleanup
+		// rule takes it down: no start builder closes anything itself.
+		const commands = runner.commands();
+		expect(commands).toContain("herdr workspace close ws-wt");
+		// The branch and the worktree git recorded pre-date the start: they stay.
+		expect(commands).not.toContain(expect.stringContaining("worktree remove"));
+		expect(commands).not.toContain(expect.stringContaining("branch -D"));
 	});
 });
 

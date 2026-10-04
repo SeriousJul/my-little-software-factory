@@ -126,12 +126,13 @@ description: The module map of the source tree, for agents working in this repos
 	ADR 0088, ADR 0094): the gates every automatic add reads, the row a
 	continuation must not jump, the fresh-work cycle gate, the restart candidate,
 	and the open ticket's row gate and its waits.
-- `src/handoff.ts`: the handoff. One start module (`startHandoff`) every start
-	path calls (issue #204): it runs the pre-flight in one order, resolves the
-	repository, builds the environment the choice names through herdr, starts the
-	agent, sends the prompt, and removes what the start created when the agent
-	never starts. The Ticket caller and the Consultation caller state their facts
-	and hand one request to it.
+- `src/handoff.ts`: the handoff. One start call (`runHandoffStart`, kept private
+	to the module) behind the two start calls the plane has (issue #204,
+	ADR 0097): it runs the pre-flight in one order, resolves the repository, builds
+	the environment the choice names through herdr, starts the agent, sends the
+	prompt, and removes what the start created when the agent never starts. The
+	Ticket caller and the Consultation caller state their facts and hand one
+	request to it.
 - `src/consultation/`: the Consultation rules that need no terminal, one module
 	per concept (issue #203, ADR 0096). `response-draft.ts` owns the input limit,
 	the emptiness rule, the size reason, the literal-text rule, and the bounded

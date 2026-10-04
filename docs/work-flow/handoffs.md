@@ -37,8 +37,10 @@ owns - the choice, the workspace its previous handoff recorded or none, the
 branch policy, and the prompt - and the start answers with one outcome.
 
 The pre-flight reads the same facts in the same order on every path: the Agent
-type, then the Environment, then the task type a handoff names, then the Setting
-fit. One bad choice therefore carries one reason, whatever you asked for. An
+type, then the Environment, then the task type a handoff names, then the
+Environment a task type that opens a pull request needs, then the Setting fit.
+One bad choice therefore carries one reason, whatever you asked for, and it
+carries that reason before the plane touches your repository or your remote. An
 unknown Agent type beside the reserved container Environment names the Agent
 type, because that is the first fact the plane read.
 

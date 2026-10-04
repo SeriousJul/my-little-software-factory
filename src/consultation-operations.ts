@@ -25,6 +25,7 @@ import {
 import type { Ticket } from "./domain/ticket.ts";
 import {
 	checkStart,
+	consultationStartFacts,
 	type HandoffOutcome,
 	handOffConsultation,
 	renderConsultationPrompt,
@@ -314,7 +315,7 @@ export class ConsultationOperations {
 				// Recovery is another Consultation start. Re-check the stored
 				// settings before reading Herdr, so a config change cannot let a
 				// stale opening start trimmed.
-				const fit = await checkStart(current, this.config(), this.runner);
+				const fit = await checkStart(consultationStartFacts(current), this.config(), this.runner);
 				if (!fit.ok) return { kind: "fit-failed" as const, reason: fit.reason };
 				const probe = await new HerdrAgentReader(this.runner).listAgents();
 				if (probe.kind === "error") return { kind: "error" as const, reason: probe.reason };
@@ -1002,7 +1003,11 @@ export class ConsultationOperations {
 					if (current.state !== "opening") return undefined;
 					const onStage = (stage: string) =>
 						this.progress(current.id, `Consultation ${current.id.slice(0, 8)}: ${stage}`);
-					const startCheck = await checkStart(current, this.config(), this.runner);
+					const startCheck = await checkStart(
+						consultationStartFacts(current),
+						this.config(),
+						this.runner,
+					);
 					if (!startCheck.ok) return { status: "failed", reason: startCheck.reason };
 					let resolvedRepository: ResolvedRepository | undefined;
 					if (current.environment === "live-worktree") {
