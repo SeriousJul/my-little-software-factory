@@ -11,7 +11,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { createElement } from "@opentui/react";
 import { testRender } from "@opentui/react/test-utils";
-import type { ControlContext } from "../src/components/controls.ts";
+import type { StandingFacts } from "../src/components/controls.ts";
 import {
 	type AgentModelList,
 	OverridePanel,
@@ -104,15 +104,13 @@ function sentence(verdict: FitVerdict): string {
 }
 
 /** The base control facts the panel is mounted over: the list, idle. */
-const BASE_CONTEXT: ControlContext = {
-	mode: "ticket-list",
-	listCanMove: true,
-	detailCanScroll: false,
+const BASE_STANDING: StandingFacts = {
 	sourceCount: 1,
 	refreshingSourceCount: 0,
 	handoffActive: false,
 	messageTruncated: false,
 	consultationTypesConfigured: false,
+	interactionExitKey: "f12",
 };
 
 /** The choice the panel opens on: the pilot agent, no setting chosen. */
@@ -165,7 +163,7 @@ async function withPanel(
 			initial,
 			onConfirm: () => undefined,
 			onCancel: () => undefined,
-			context: BASE_CONTEXT,
+			standing: BASE_STANDING,
 			message: null,
 			onUnavailable: (reason: string) => refusals.push(reason),
 			onCopy: () => undefined,

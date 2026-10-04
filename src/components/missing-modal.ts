@@ -16,7 +16,7 @@
 import { createElement, useTerminalDimensions } from "@opentui/react";
 import { useState } from "react";
 import { useControlDispatch } from "./control-dispatch.ts";
-import { type ControlContext, contextFor } from "./controls.ts";
+import { availabilityFacts, type StandingFacts } from "./controls.ts";
 import { maxScrollOf, windowOf } from "./geometry.ts";
 import type { MessageFact } from "./messages.ts";
 import {
@@ -39,7 +39,8 @@ interface MissingModalProps {
 	onAction: (key: string) => void;
 	onCancel: () => void;
 	/** The base control facts, preserved when this modal owns input. */
-	context: ControlContext;
+	/** The plane's standing facts, read the same way in every mode. */
+	standing: StandingFacts;
 	/** False while a Key guide or Message view is above this modal. */
 	inputActive?: boolean;
 	onHelp?: () => void;
@@ -67,7 +68,7 @@ export function MissingModal({
 	actions,
 	onAction,
 	onCancel,
-	context,
+	standing,
 	inputActive = true,
 	onHelp,
 	onMessage,
@@ -106,9 +107,12 @@ export function MissingModal({
 	const selection = useDecisionRegion(actions, actions.length);
 	const scroll = Math.min(bodyScroll, maxBodyScroll);
 
+	// The modal owns one fact: the rows its Decision region holds.
+	const facts = availabilityFacts("missing-modal", standing, {
+		actionRowCount: actions.length,
+	});
 	useControlDispatch({
-		mode: "missing-modal",
-		context: { ...context, actionRowCount: actions.length },
+		facts,
 		active: inputActive,
 		onUnavailable,
 		onEmergencyExit,
@@ -158,6 +162,6 @@ export function MissingModal({
 			minRows: actions.length,
 		},
 		message,
-		bar: { mode: "missing-modal", context: contextFor("missing-modal", context) },
+		bar: { mode: "missing-modal", facts },
 	});
 }

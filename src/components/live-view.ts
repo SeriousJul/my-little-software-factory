@@ -26,10 +26,10 @@
  */
 import { createElement, useTerminalDimensions } from "@opentui/react";
 import { useMemo, useState } from "react";
-
+import type { Ticket } from "../domain/ticket.ts";
 import { isHeldCause, type TurnEndCause, type TurnLogEntry } from "../turn-log.ts";
 import { useControlDispatch } from "./control-dispatch.ts";
-import { type ControlContext, contextFor, type InteractionMode } from "./controls.ts";
+import { availabilityFacts, type StandingFacts } from "./controls.ts";
 import { decisionBodyLayout, turnLogBody } from "./decision-modal.ts";
 import { maxScrollOf, windowOf } from "./geometry.ts";
 import type { MdLine, MdSpan } from "./markdown.ts";
@@ -49,7 +49,7 @@ import {
 } from "./modal-chrome.ts";
 import { ActionItem } from "./shared/choices.ts";
 import { turnEndCauseLine } from "./shared/presentation.ts";
-import { useDecisionRegion } from "./shared/region.ts";
+import { bodyPaneFacts, useDecisionRegion } from "./shared/region.ts";
 import { truncateToWidth, widthOf, wrapToWidth } from "./text.ts";
 import { paint } from "./theme.ts";
 
@@ -89,7 +89,14 @@ interface LiveViewProps {
 	onGoto: () => void;
 	onCancel: () => void;
 	/** The base control facts, preserved when this view owns input. */
-	context: ControlContext;
+	/** The plane's standing facts, read the same way in every mode. */
+	standing: StandingFacts;
+	/** The Ticket the view streams: the Goto focuses that Ticket's pane. */
+	ticket: Ticket;
+	/** Whether that Ticket's Agent pane is alive in the last herdr poll. */
+	paneAlive: boolean;
+	/** Whether that Ticket's recorded pane holds an agent that is not its own. */
+	paneForeign: boolean;
 	/** False while a Key guide or Message view is above this view. */
 	inputActive?: boolean;
 	onHelp?: () => void;
@@ -130,7 +137,10 @@ export function LiveView({
 	onEditAction,
 	onGoto,
 	onCancel,
-	context,
+	standing,
+	ticket,
+	paneAlive,
+	paneForeign,
 	inputActive = true,
 	onHelp,
 	onMessage,
@@ -203,16 +213,26 @@ export function LiveView({
 	const planeActionSelected = decideable && actions[region.at]?.planeAction === true;
 	// The sub-mode dispatches from the catalogue: the streaming sub-mode
 	// answers to a live-view mode of its own, the settled sub-mode to the
-	// decision-modal mode the glossary already names.
-	const mode: InteractionMode = decideable ? "decision-modal" : "live-view";
-	const surfaceContext = {
-		...context,
-		editableActionSelected,
-		planeActionSelected,
-		bodyScrollable: maxBodyScroll > 0,
-		bodyEmpty,
-		actionRowCount: regionRows,
-	};
+	// decision-modal mode the glossary already names. The record names which
+	// one it is.
+	//
+	// The view states the facts its own Body pane and its own Decision region
+	// produce, beside the Ticket it streams. The settled sub-mode adds the
+	// action rows' facts; the streaming sub-mode names none of them.
+	const pane = bodyPaneFacts(renderedBody.length, bodyRows, bodyEmpty);
+	const facts = decideable
+		? availabilityFacts("decision-modal", standing, {
+				editableActionSelected,
+				planeActionSelected,
+				...pane,
+				actionRowCount: regionRows,
+			})
+		: availabilityFacts("live-view", standing, {
+				selectedTicket: ticket,
+				ticketPaneAlive: paneAlive,
+				ticketPaneForeign: paneForeign,
+				...pane,
+			});
 
 	// Scroll the body by one step of the named key: a page moves one viewport
 	// minus the shared row, and the jump keys take either edge. A null view
@@ -240,8 +260,7 @@ export function LiveView({
 	};
 
 	useControlDispatch({
-		mode,
-		context: contextFor(mode, surfaceContext),
+		facts,
 		active: inputActive,
 		onUnavailable,
 		onEmergencyExit,
@@ -330,8 +349,8 @@ export function LiveView({
 		body: liveBody,
 		message,
 		bar: {
-			mode,
-			context: contextFor(mode, surfaceContext),
+			mode: facts.mode,
+			facts,
 			rangeIndicator: region.rangeText,
 		},
 	});

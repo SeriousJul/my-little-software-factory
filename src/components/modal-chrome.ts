@@ -22,7 +22,7 @@ import { createElement } from "@opentui/react";
 import { Fragment, type ReactElement, useEffect, useState } from "react";
 
 import { ActionBar } from "./action-bar.ts";
-import type { ControlContext, InteractionMode } from "./controls.ts";
+import type { AvailabilityFacts, InteractionMode } from "./controls.ts";
 import { maxScrollOf } from "./geometry.ts";
 import { type MessageFact, messageRowElement } from "./messages.ts";
 import { controlInk } from "./shared/presentation.ts";
@@ -251,7 +251,7 @@ interface ModalSurfaceProps {
 	/** The Message fact the surface's Message line shows. */
 	message: MessageFact | null;
 	/** The catalogue bar this surface owns, if it owns one. */
-	bar?: { mode: InteractionMode; context: ControlContext; rangeIndicator?: string };
+	bar?: { mode: InteractionMode; facts: AvailabilityFacts; rangeIndicator?: string };
 	opacity?: number;
 	zIndex?: number;
 }
@@ -329,7 +329,7 @@ export function ModalSurface({
 			? emptyRowElement()
 			: createElement(ActionBar, {
 					mode: bar.mode,
-					context: bar.context,
+					facts: bar.facts,
 					width,
 					rangeIndicator: bar.rangeIndicator,
 				}),

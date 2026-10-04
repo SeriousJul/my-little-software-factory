@@ -4,20 +4,18 @@ import { describe, expect, test } from "bun:test";
 import { createElement } from "@opentui/react";
 import { testRender } from "@opentui/react/test-utils";
 
-import type { ControlContext } from "../src/components/controls.ts";
+import type { StandingFacts } from "../src/components/controls.ts";
 import { MissingModal } from "../src/components/missing-modal.ts";
 import { awaitFrame } from "./app-harness.ts";
 
 /** The base control facts a modal is mounted over: the list, idle. */
-const BASE_CONTEXT: ControlContext = {
-	mode: "ticket-list",
-	listCanMove: true,
-	detailCanScroll: false,
+const BASE_STANDING: StandingFacts = {
 	sourceCount: 1,
 	refreshingSourceCount: 0,
 	handoffActive: false,
 	messageTruncated: false,
 	consultationTypesConfigured: false,
+	interactionExitKey: "f12",
 };
 
 describe("the Missing modal", () => {
@@ -32,7 +30,7 @@ describe("the Missing modal", () => {
 				],
 				onAction: () => undefined,
 				onCancel: () => undefined,
-				context: BASE_CONTEXT,
+				standing: BASE_STANDING,
 				message: null,
 				onEmergencyExit: () => undefined,
 			}),

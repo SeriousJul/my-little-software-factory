@@ -100,7 +100,7 @@ import {
 } from "../setting-fit.ts";
 import type { TaskProfileStart } from "../setting-resolution.ts";
 import { useControlDispatch } from "./control-dispatch.ts";
-import { type ControlContext, contextFor } from "./controls.ts";
+import { type AvailabilityFacts, availabilityFacts, type StandingFacts } from "./controls.ts";
 import type { MessageFact } from "./messages.ts";
 import { MARKER_WIDTH, ModalSurface, modalFrame } from "./modal-chrome.ts";
 import { ChoiceRow, cycleChoice } from "./shared/choices.ts";
@@ -226,8 +226,8 @@ interface OverridePanelProps {
 	 * unrun.
 	 */
 	planeActionTaskTypes?: readonly string[];
-	/** The base control facts, preserved when this overlay owns input. */
-	context: ControlContext;
+	/** The plane's standing facts, read the same way in every mode. */
+	standing: StandingFacts;
 	/** False while a Key guide or Message view is above this panel. */
 	inputActive?: boolean;
 	onHelp?: (mode: OverrideMode) => void;
@@ -345,7 +345,7 @@ export function OverridePanel({
 	onCancel,
 	taskPlacements,
 	planeActionTaskTypes,
-	context,
+	standing,
 	inputActive = true,
 	onHelp,
 	onMessage,
@@ -554,19 +554,20 @@ export function OverridePanel({
 		return "override-list";
 	};
 	// The facts the catalogue gates on, stated by the row the cursor is on. The
-	// Copy control needs the field's own selection, and the clear control needs
-	// to know whether the Model search holds anything to clear.
-	const panelContext = (mode: OverrideMode) =>
-		contextFor(mode, {
-			...context,
-			fieldHasSelection: hasSelection,
-			formSearchActive: typeAhead.current?.query() !== "",
-		});
+	// panel owns one fact: the field's own selection, which the Copy control
+	// reads. The list's step and the Handoff's state rule belong to the plane,
+	// so the panel states nothing it does not own.
+	const panelFacts = (mode: OverrideMode): AvailabilityFacts =>
+		mode === "override-list"
+			? availabilityFacts("override-list", standing, {})
+			: mode === "override-model"
+				? availabilityFacts("override-model", standing, { fieldHasSelection: hasSelection })
+				: availabilityFacts("override-text", standing, { fieldHasSelection: hasSelection });
 	useControlDispatch({
-		mode: currentMode,
-		// The Copy and Clear controls are gated on facts only this panel knows,
-		// so the panel states them and the catalogue decides.
-		context: panelContext(currentMode()),
+		// The Copy control is gated on a fact only this panel knows, so the
+		// panel states it and the catalogue decides. The record names the mode
+		// the cursor's row owns, and one key can move that cursor.
+		facts: () => panelFacts(currentMode()),
 		active: inputActive,
 		// The Ctrl combos the catalogue does not name (undo, redo, word
 		// movement and word delete) belong to the focused field. Ctrl+C stays
@@ -637,7 +638,7 @@ export function OverridePanel({
 			minRows: 1,
 		},
 		message,
-		bar: { mode, context: panelContext(mode) },
+		bar: { mode, facts: panelFacts(mode) },
 	});
 }
 

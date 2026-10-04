@@ -16,7 +16,7 @@ import { join } from "node:path";
 import { createElement } from "@opentui/react";
 import { testRender } from "@opentui/react/test-utils";
 
-import { contextFor } from "../src/components/controls.ts";
+import type { StandingFacts } from "../src/components/controls.ts";
 import { RepositorySelectPanel } from "../src/components/repository-select-panel.ts";
 import { SPINNER_FRAMES } from "../src/components/shared/spinner.ts";
 import { type InitableRepository, VIEWER_REPOSITORIES_QUERY } from "../src/repository-list.ts";
@@ -300,15 +300,14 @@ describe("the repository select panel", () => {
 					>(() => undefined),
 				onSelect: () => undefined,
 				onCancel: () => undefined,
-				context: contextFor("repository-select", {
-					listCanMove: false,
-					detailCanScroll: false,
+				standing: {
 					sourceCount: 0,
 					refreshingSourceCount: 0,
 					handoffActive: false,
 					messageTruncated: false,
 					consultationTypesConfigured: true,
-				}),
+					interactionExitKey: "f12",
+				} satisfies StandingFacts,
 				message: null,
 				onEmergencyExit: () => undefined,
 			}),

@@ -36,8 +36,8 @@ import {
 } from "../consultation/response-draft.ts";
 import { utf8ByteLength } from "../text-bounds.ts";
 import { useControlDispatch } from "./control-dispatch.ts";
-import type { ControlContext, InteractionMode } from "./controls.ts";
-import { contextFor } from "./controls.ts";
+import type { InteractionMode, StandingFacts } from "./controls.ts";
+
 import type { MessageFact } from "./messages.ts";
 import { type ActionRow, MARKER_WIDTH, ModalSurface, modalFrame } from "./modal-chrome.ts";
 import { ActionItem, ChoiceRow, useChoice } from "./shared/choices.ts";
@@ -65,7 +65,8 @@ interface ConsultationLauncherProps {
 	/** Delete the unfinished form. Closing never does this on its own. */
 	onDiscard: () => void;
 	/** The base control facts, preserved while this surface owns input. */
-	context: ControlContext;
+	/** The plane's standing facts, read the same way in every mode. */
+	standing: StandingFacts;
 	/** False while a Key guide or Message view is above this launcher. */
 	inputActive?: boolean;
 	/** Open the Key guide on the mode this launcher is running. */
@@ -120,7 +121,7 @@ export function ConsultationLauncher({
 	onLaunch,
 	onClose,
 	onDiscard,
-	context,
+	standing,
 	inputActive = true,
 	onHelp,
 	onMessage,
@@ -177,18 +178,23 @@ export function ConsultationLauncher({
 	};
 
 	const moveField = moveFieldWith(focus);
-	const formContext = focus.context(context, {
-		fieldHasSelection: selectionRef.current,
-		formCycleCount: focus.holds("type")
-			? names.length
-			: focus.holds("repository")
-				? repositories.length
-				: undefined,
-		formRefusal: focus.holds("launch") ? refusal() : undefined,
-	});
+	// The form module states the slot facts: which slot holds the focus, and
+	// the cycle count and the refusal this launcher owns. The record names the
+	// mode the focused slot owns, so a Tab in the same tick as another key
+	// still gates on the slot it landed on.
+	const formFacts = () =>
+		focus.facts(standing, {
+			fieldHasSelection: selectionRef.current,
+			formCycleCount: focus.holds("type")
+				? names.length
+				: focus.holds("repository")
+					? repositories.length
+					: undefined,
+			formRefusal: focus.holds("launch") ? refusal() : undefined,
+		});
+	const formModeFacts = formFacts();
 	useControlDispatch({
-		mode: focus.mode,
-		context: formContext,
+		facts: formFacts,
 		active: inputActive,
 		onUnavailable,
 		onEmergencyExit,
@@ -216,8 +222,8 @@ export function ConsultationLauncher({
 				key.preventDefault?.();
 				onClose(formOf());
 			},
-			help: () => onHelp?.(formContext.mode),
-			message: () => onMessage?.(formContext.mode),
+			help: () => onHelp?.(formModeFacts.mode),
+			message: () => onMessage?.(formModeFacts.mode),
 		},
 	});
 
@@ -314,6 +320,6 @@ export function ConsultationLauncher({
 			minRows: FIXED_ROWS + MINIMUM_DRAFT_ROWS,
 		},
 		message,
-		bar: { mode: formContext.mode, context: contextFor(formContext.mode, formContext) },
+		bar: { mode: formModeFacts.mode, facts: formModeFacts },
 	});
 }

@@ -14,20 +14,18 @@ import type { KeyEvent } from "@opentui/core";
 import { useKeyboard } from "@opentui/react";
 
 import {
+	type AvailabilityFacts,
 	availabilityFor,
 	type ControlAvailability,
-	type ControlContext,
 	type ControlDefinition,
-	contextFor,
 	controlForKey,
-	type InteractionMode,
 } from "./controls.ts";
 
 /** What a control's behavior is called with: one object, so a handler names
  *  only the parts it uses. */
 export interface ControlCall {
-	/** The facts the control was gated on. */
-	context: ControlContext;
+	/** The Availability facts the control was gated on. */
+	facts: AvailabilityFacts;
 	/** The raw key event: some behaviors need its name, and some must call
 	 *  `preventDefault` so the surface's own text field cannot claim it. */
 	key: KeyEvent;
@@ -52,17 +50,20 @@ export function refusalText(control: ControlDefinition, availability: ControlAva
 }
 
 /** The refusal of a control judged against the current facts. */
-export const refusalReason = (control: ControlDefinition, context: ControlContext): string =>
-	refusalText(control, availabilityFor(control, context));
+export const refusalReason = (control: ControlDefinition, facts: AvailabilityFacts): string =>
+	refusalText(control, availabilityFor(control, facts));
 
 interface ControlDispatchSpec {
 	/**
-	 * The mode that owns the key. The override panel passes a function: its
-	 * mode follows the row the cursor is on, and one key can move that cursor.
+	 * The Availability facts the mode's controls are gated on.
+	 *
+	 * The record names its own mode, so the dispatch never carries a mode
+	 * beside facts that could disagree with it. The override panel passes a
+	 * function: its mode follows the row the cursor is on, and one key can
+	 * move that cursor, so the facts it states belong to the row the key
+	 * lands on.
 	 */
-	mode: InteractionMode | (() => InteractionMode);
-	/** The facts availability is judged on, in the dispatch mode. */
-	context: ControlContext;
+	facts: AvailabilityFacts | (() => AvailabilityFacts);
 	/** The behavior by control id. A control with no behavior is inert. */
 	handlers: Readonly<Record<string, ControlHandler>>;
 	/**
@@ -99,13 +100,12 @@ export function createControlDispatch(spec: ControlDispatchSpec): (key: KeyEvent
 		// The super key is the terminal's own, and a skipped key is the
 		// surface's own text field.
 		if (key.meta || spec.skip?.(key)) return false;
-		const mode = typeof spec.mode === "function" ? spec.mode() : spec.mode;
-		const context = contextFor(mode, spec.context);
-		const control = controlForKey(key, context);
+		const facts = typeof spec.facts === "function" ? spec.facts() : spec.facts;
+		const control = controlForKey(key, facts);
 		if (control === undefined) return spec.onUnclaimed?.(key) === true;
-		const availability = availabilityFor(control, context);
+		const availability = availabilityFor(control, facts);
 		if (!availability.available && !spec.ungated?.includes(control.id)) {
-			spec.onUnavailable?.(refusalReason(control, context));
+			spec.onUnavailable?.(refusalReason(control, facts));
 			// A refused key must not also reach a focused text field: the
 			// catalogue named it, so nothing else may claim it.
 			key.preventDefault?.();
@@ -115,8 +115,8 @@ export function createControlDispatch(spec: ControlDispatchSpec): (key: KeyEvent
 			spec.onEmergencyExit();
 			return true;
 		}
-		const refuse = () => spec.onUnavailable?.(refusalReason(control, context));
-		spec.handlers[control.id]?.({ context, key, control, refuse });
+		const refuse = () => spec.onUnavailable?.(refusalReason(control, facts));
+		spec.handlers[control.id]?.({ facts, key, control, refuse });
 		return true;
 	};
 }

@@ -290,4 +290,48 @@ describe("the shared control library is the only control implementation", () => 
 			);
 		}
 	});
+
+	test("no surface holds a facts bag wider than the mode it runs", () => {
+		// The catalogue reads one record per Interaction mode, and the compiler
+		// rejects a mode whose facts its surface did not state. A wide bag is
+		// how that check was avoided before: every mode read the same record,
+		// so a control could read a fact no screen had stated. The retired names
+		// are the bag's spellings, so they may not come back. The rule reads the
+		// source as text, so it refuses those names inside a comment as well as
+		// inside code: a comment that explains the retired bag is still a
+		// contributor reading the retired shape.
+		const all = sourceFiles("src", () => true).concat(sourceFiles("test", () => true));
+		const offenders: string[] = [];
+		for (const file of all) {
+			const source = readFileSync(file, "utf8");
+			if (/\bControlContext\b|\bcontextFor\b/u.test(source)) offenders.push(file);
+		}
+		expect(offenders).toEqual([]);
+	});
+
+	test("no surface builds its facts by spreading a record it does not own", () => {
+		// A surface states the facts its own mode names. Spreading another
+		// surface's facts record is the wide bag again in one more spelling: it
+		// hands over facts the spreading surface never read, and the compiler
+		// cannot tell which of them are real. A surface may build a record from
+		// the module that owns it, so the rule reads a spread of a named record -
+		// `<mode>Facts`, `<mode>Context`, `context` - not a spread of the value a
+		// module answers a call with.
+		//
+		// What this rule cannot see: it matches a name, so a spread of a call
+		// (`...panelFacts()`) or of a value named something else passes it. The
+		// guarantee that a rule reads only the facts its mode states is measured
+		// at the catalogue seam in `test/controls.test.ts`, which wraps every
+		// mode's record so an unstated read fails the test. This rule only
+		// refuses one spelling of the old bag.
+		const surfaces = sourceFiles("src/components", (file) => file !== "src/components/controls.ts");
+		const offenders: string[] = [];
+		for (const file of surfaces) {
+			const source = readFileSync(file, "utf8");
+			if (/\.\.\.(?:\w*Context|\w*Facts|context)\s*[,)}]/u.test(source)) {
+				offenders.push(file);
+			}
+		}
+		expect(offenders).toEqual([]);
+	});
 });

@@ -17,7 +17,7 @@ import { createElement, useTerminalDimensions } from "@opentui/react";
 import { useState } from "react";
 
 import { useControlDispatch } from "./control-dispatch.ts";
-import { type ControlContext, contextFor } from "./controls.ts";
+import { availabilityFacts, type StandingFacts } from "./controls.ts";
 import { windowOf } from "./geometry.ts";
 import type { MessageFact } from "./messages.ts";
 import { type ActionRow, ModalSurface, modalFrame } from "./modal-chrome.ts";
@@ -35,8 +35,8 @@ interface ActionPanelProps {
 	onCancel: () => void;
 	/** The Message fact the panel's own Message line shows. */
 	message: MessageFact | null;
-	/** The base facts preserved while this confirmation owns input. */
-	context?: ControlContext;
+	/** The plane's standing facts, read the same way in every mode. */
+	standing: StandingFacts;
 	inputActive?: boolean;
 	onHelp?: () => void;
 	onMessage?: () => void;
@@ -62,7 +62,7 @@ export function ActionPanel({
 	onAction,
 	onCancel,
 	message,
-	context,
+	standing,
 	inputActive = true,
 	onHelp,
 	onMessage,
@@ -97,21 +97,14 @@ export function ActionPanel({
 	// The panel's rows are the region's: the shared selection, its wrap, and
 	// its window, with every row shown, the way the decision's region does.
 	const selection = useDecisionRegion(actions, actions.length);
-	const actionContext = contextFor("action-panel", {
-		...(context ?? {
-			listCanMove: false,
-			detailCanScroll: false,
-			sourceCount: 0,
-			refreshingSourceCount: 0,
-			handoffActive: false,
-			messageTruncated: false,
-			consultationTypesConfigured: false,
-		}),
+	// The panel owns one fact: the rows its Decision region holds. The plane's
+	// standing facts come to it as they are, and it states nothing it does not
+	// own.
+	const facts = availabilityFacts("action-panel", standing, {
 		actionRowCount: actions.length,
 	});
 	useControlDispatch({
-		mode: "action-panel",
-		context: actionContext,
+		facts,
 		active: inputActive,
 		onUnavailable,
 		onEmergencyExit,
@@ -161,6 +154,6 @@ export function ActionPanel({
 			minRows: actions.length + 1,
 		},
 		message,
-		bar: { mode: "action-panel", context: actionContext },
+		bar: { mode: "action-panel", facts },
 	});
 }

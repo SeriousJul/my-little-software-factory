@@ -167,11 +167,15 @@ import { ConsultationList } from "./consultation-list.ts";
 import { consultationRecoveryPanel } from "./consultation-recovery-panel.ts";
 import { createControlDispatch, refusalReason, refusalText } from "./control-dispatch.ts";
 import {
+	type AvailabilityFacts,
+	availabilityFacts,
 	availabilityFor,
-	type ControlContext,
-	contextFor,
+	consultationSectionFacts,
 	controlById,
 	type InteractionMode,
+	type StandingFacts,
+	ticketSectionFacts,
+	workQueueSectionFacts,
 } from "./controls.ts";
 import { DecisionModal } from "./decision-modal.ts";
 import { maxScrollOf, usePaneGeometry } from "./geometry.ts";
@@ -191,10 +195,10 @@ import { RepositorySelectPanel } from "./repository-select-panel.ts";
 import { RESPONSE_EDITOR_ROWS, ResponseEditor } from "./response-editor.ts";
 import { type MainSection, SectionHeader } from "./section-header.ts";
 import { COPY_REFUSED_REASON } from "./shared/fields.ts";
-import type { GroupHeader } from "./shared/grouping.ts";
 import {
 	cursorRowCount,
 	type GroupFolds,
+	groupCursorFacts,
 	groupingAxisNotice,
 	groupingEmptyMessage,
 	type ListedRow,
@@ -215,7 +219,13 @@ import { detailScrollRoom, TicketDetail, type TicketDetailHandle } from "./ticke
 import { TicketList } from "./ticket-list.ts";
 import { KeyGuide, MessageView } from "./utility.ts";
 import { workQueueDetailLines } from "./work-queue-detail.ts";
-import { WorkQueueList, type WorkQueueRow } from "./work-queue-list.ts";
+import {
+	consultationItemWaitingFor,
+	handoffItemWaitingForTicket,
+	WorkQueueList,
+	type WorkQueueRow,
+	workQueueCursorFacts,
+} from "./work-queue-list.ts";
 
 type Pane = "list" | "detail";
 interface StatusMessage {
@@ -618,15 +628,6 @@ export function App({
 		const row = ticketRowsRef.current[selectedIndexRef.current];
 		if (row !== undefined && row.kind === "item") return row.item.ticket;
 		return ticketsExpandedRef.current ? undefined : detailTicketRef.current;
-	};
-	/**
-	 * The Group header under the cursor, or nothing where no header stands or
-	 * where the section draws no list.
-	 */
-	const groupHeaderAtCursor = (): GroupHeader | undefined => {
-		if (!ticketsExpandedRef.current) return undefined;
-		const row = ticketRowsRef.current[selectedIndexRef.current];
-		return row !== undefined && row.kind === "group" ? row.group : undefined;
 	};
 	const configRef = useRef(config);
 	configRef.current = config;
@@ -1599,14 +1600,9 @@ export function App({
 			persistMapping,
 		);
 	const startHandoff = (ticket: Ticket, choice: HandoffChoice) => {
-		const availability = availabilityFor(
-			controlById("handoff"),
-			controlContextFor(currentBaseMode()),
-		);
+		const availability = availabilityFor(controlById("handoff"), mainFacts());
 		if (!availability.available) {
-			setWarningMessage(
-				refusalReason(controlById("handoff"), controlContextFor(currentBaseMode())),
-			);
+			setWarningMessage(refusalReason(controlById("handoff"), mainFacts()));
 			return;
 		}
 		if (handoffDispatch !== undefined) {
@@ -1701,7 +1697,7 @@ export function App({
 	};
 	const openOverride = () => {
 		const overrideControl = controlById("override");
-		const availability = availabilityFor(overrideControl, controlContextFor(currentBaseMode()));
+		const availability = availabilityFor(overrideControl, mainFacts());
 		if (!availability.available) {
 			setWarningMessage(refusalText(overrideControl, availability));
 			return;
@@ -2845,10 +2841,11 @@ export function App({
 	 * module uses everywhere else. The captured choice travels with the item,
 	 * so a reorder changes only the order the free seats take.
 	 */
-	const moveQueueItem = (direction: "up" | "down") => {
+	const moveQueueItem = (direction: "up" | "down", item: WorkQueueItem | null) => {
 		if (state === undefined) return;
-		const item = workQueueRef.current[workQueueIndexRef.current];
-		if (item === undefined) return;
+		// The item is the queue module's own fact for the row under the cursor,
+		// the same one the catalogue gated the key on.
+		if (item === null) return;
 		if (
 			!state.workQueue.moveWorkItem(
 				item.kind === "consultation" ? item.consultationId : item.ticketIdentity,
@@ -2880,10 +2877,11 @@ export function App({
 	 * way, and the plane says that instead of a removal the operator did not
 	 * cause.
 	 */
-	const removeQueueItem = () => {
+	const removeQueueItem = (item: WorkQueueItem | null) => {
 		if (handoffDispatch === undefined) return;
-		const item = workQueueRef.current[workQueueIndexRef.current];
-		if (item === undefined) return;
+		// The item is the queue module's own fact for the row under the cursor,
+		// the same one the catalogue gated the key on.
+		if (item === null) return;
 		if (item.kind === "consultation") {
 			// A Consultation item's removal unschedules the record (ADR 0034,
 			// issue #91): the ask is kept in `unscheduled` state behind the
@@ -2943,10 +2941,11 @@ export function App({
 	 * while it queues parks a Handoff claim in the module, and the row leaves
 	 * only when that parked start settles.
 	 */
-	const forceDispatchQueueItem = () => {
+	const forceDispatchQueueItem = (item: WorkQueueItem | null) => {
 		if (handoffDispatch === undefined) return;
-		const item = workQueueRef.current[workQueueIndexRef.current];
-		if (item === undefined) return;
+		// The item is the queue module's own fact for the row under the cursor,
+		// the same one the catalogue gated the key on.
+		if (item === null) return;
 		handoffDispatch.forceDispatchWorkQueueItem(workQueueIdentityOf(item));
 	};
 	const currentBaseMode = (): InteractionMode =>
@@ -2965,129 +2964,235 @@ export function App({
 						: focusedPaneRef.current === "list"
 							? "ticket-list"
 							: "ticket-detail";
-	const controlContextFor = (mode: InteractionMode) =>
-		contextFor(mode, {
-			selectedTicket: ticketAtCursor(),
-			// The facts the grouping controls read: the axis in effect names the
-			// Action bar hint, and a cursor on a Group header is what opens the
-			// `Space` key to the fold (issue #159, issue #170).
-			groupingAxis: groupingAxisRef.current,
-			groupHeaderSelected: groupHeaderAtCursor() !== undefined,
-			selectedGroupHeader: groupHeaderAtCursor() ?? null,
-			// The facts the Group's move reads (ADR 0071): the position of the
-			// Group under the cursor among the visible Group headers, and their
-			// count. The move's edge refusal stands in the catalogue's words.
-			selectedGroupPosition: (() => {
-				const rows = ticketRowsRef.current;
-				let position = 0;
-				for (let i = 0; i < selectedIndexRef.current; i += 1) {
-					const row = rows[i];
-					if (row !== undefined && row.kind === "group") position += 1;
-				}
-				return position;
-			})(),
-			visibleGroupHeaderCount: ticketRowsRef.current.filter((row) => row.kind === "group").length,
-			selectedConsultation:
-				selectionRef.current === "consultation"
-					? consultationsRef.current[consultationIndexRef.current]
-					: undefined,
-			// The cursor walks one sequence: the rows of each expanded section, in
-			// order. A step is possible past the last row of a section, into the
-			// next expanded one, so the list can move as long as the cursor is not
-			// the sequence's only row.
-			listCanMove: (() => {
-				// The Ticket section's cursor walks the row list, Group headers
-				// included, so its edge is the row list's last index (issue #159).
-				const t = ticketRowsRef.current.length;
-				// The blank row between two Groups holds no cursor, so the walk asks
-				// how many rows it can rest on rather than how many rows it draws.
-				const tStops = cursorRowCount(ticketRowsRef.current);
-				const c = consultationsRef.current.length;
-				const w = workQueueRef.current.length;
-				const tOpen = ticketsExpandedRef.current;
-				const cOpen = consultationsExpandedRef.current;
-				const wOpen = workExpandedRef.current;
-				// A cross reaches an empty section too, so the step into it is
-				// always possible while the other section is expanded: the empty
-				// message is the row the cursor takes, and the Work section keeps
-				// its header while it is empty the same way (ADR 0049).
-				if (selectionRef.current === "queue") {
-					// Up out of the queue crosses into the Consultation section, or into
-					// the Ticket section while the Consultation section is collapsed, and
-					// the cross opens at the queue's own first row. Where the other
-					// section happens to hold its cursor says nothing about where this
-					// one stands: a direct click on the Work header can land the cursor on
-					// the only row of a queue the Consultation cursor never touched.
-					const crossUp = cOpen || tOpen;
-					return (
-						(wOpen && (w > 1 || (workQueueIndexRef.current === 0 && crossUp))) ||
-						(!wOpen && crossUp)
-					);
-				}
-				if (selectionRef.current === "consultation")
-					return (
-						(cOpen && (c > 1 || (consultationIndexRef.current === 0 && tOpen))) || (!cOpen && tOpen)
-					);
-				return (
-					(tOpen && (tStops > 1 || (cOpen && selectedIndexRef.current >= t - 1))) ||
-					(!tOpen && cOpen)
-				);
-			})(),
-			detailCanScroll:
-				mode === "consultation-detail"
-					? consultationMaxScroll > 0
-					: mode === "work-queue-detail"
-						? workQueueDetailMaxScroll > 0
-						: detailMaxScroll > 0,
-			selectedWorkQueueItem:
-				selectionRef.current === "queue"
-					? (workQueueRef.current[workQueueIndexRef.current] ?? null)
-					: undefined,
-			workQueueDepth: workQueueRef.current.length,
-			// The row under the cursor in the Ticket or Consultation list, in the
-			// Work queue (ADR 0049): Enter on it jumps to the item.
-			queueItemForSelectedRow: (() => {
-				const queue = workQueueRef.current;
-				if (queue.length === 0) return null;
-				if (selectionRef.current === "ticket") {
-					// A Group header holds no Ticket, so no row of the queue
-					// waits under it (issue #159).
-					const identity = ticketAtCursor()?.identity;
-					return (
-						queue.find((item) => item.kind === "handoff" && item.ticketIdentity === identity) ??
-						null
-					);
-				}
-				if (selectionRef.current === "consultation") {
-					const id = consultationsRef.current[consultationIndexRef.current]?.id;
-					return (
-						queue.find((item) => item.kind === "consultation" && item.consultationId === id) ?? null
-					);
-				}
-				return null;
-			})(),
-			sourceCount: liveSources.length,
-			refreshingSourceCount: liveSources.filter(
-				(source) => coordinatorRef.current?.isFetching(source.name) === true,
-			).length,
-			handoffActive: handoffDispatch?.handoffActive() ?? noStateHandoffInFlightRef.current,
-			messageTruncated,
-			consultationRefreshAvailable: state !== undefined,
-			consultationAgentStatus: selectedConsultationAgentStatus,
-			consultationPaneAlive: selectedConsultationPaneAlive,
-			ticketPaneAlive: selectedTicketPaneAlive,
-			ticketPaneForeign: selectedTicketPaneForeign,
-			// The ignore's obligation read takes the row's own facts (ADR 0060): the
-			// failure marker the list's badge wears, and the List filter the `f` hint
-			// names the next state of.
-			selectedTicketMarker: selectedTicket === undefined ? null : factsFor(selectedTicket).failure,
-			ticketListFilter: ticketFilterRef.current,
-			consultationTypesConfigured: Object.keys(config.consultationTypes).length > 0,
-			interactionExitKey: configRef.current.interactionExitKey,
-			// The queue pause's own fact (ADR 0052): the `p` hint reads it, so
-			// the bar names the resume while the pause stands.
-			queuePaused: queuePausedRef.current,
-		});
+	/**
+	 * The plane's standing facts, stated once per render (ADR 0014).
+	 *
+	 * Every Interaction mode's Availability facts carry this record, and no
+	 * surface restates a fact from it: the run state, the source counts, the
+	 * Message line's truncation, the configured Consultation types, and the
+	 * configured exit key are read the same way in every mode. The view builds
+	 * the one record here and hands it to every surface, every mode's facts, and
+	 * the Action bar, so the bar, the Key guide, and the dispatch read the same
+	 * values in the same frame.
+	 */
+	const standing: StandingFacts = {
+		handoffActive: handoffDispatch?.handoffActive() ?? noStateHandoffInFlightRef.current,
+		messageTruncated,
+		consultationTypesConfigured: Object.keys(config.consultationTypes).length > 0,
+		sourceCount: liveSources.length,
+		refreshingSourceCount: liveSources.filter(
+			(source) => coordinatorRef.current?.isFetching(source.name) === true,
+		).length,
+		interactionExitKey: configRef.current.interactionExitKey,
+	};
+	/**
+	 * The Group facts, from the module that owns the row list they count (issue
+	 * #159, ADR 0071). A collapsed Ticket section draws no list, so its cursor
+	 * stands on no header.
+	 */
+	const groupFacts = () =>
+		groupCursorFacts(
+			ticketRowsRef.current,
+			ticketsExpandedRef.current ? selectedIndexRef.current : -1,
+		);
+	/** The queue facts, from the module that draws the queue it counts (ADR 0034, ADR 0052). */
+	const queueFacts = () =>
+		workQueueCursorFacts(workQueueRef.current, workQueueIndexRef.current, queuePausedRef.current);
+	/** The Ticket facts the Ticket section's two modes read. */
+	const ticketCursor = () => ({
+		selectedTicket: ticketAtCursor(),
+		// The ignore's obligation read takes the row's own facts (ADR 0060): the
+		// failure marker the list's badge wears, and the List filter the `f` hint
+		// names the next state of.
+		selectedTicketMarker: selectedTicket === undefined ? null : factsFor(selectedTicket).failure,
+		ticketListFilter: ticketFilterRef.current,
+		ticketPaneAlive: selectedTicketPaneAlive,
+		ticketPaneForeign: selectedTicketPaneForeign,
+	});
+	/** The Consultation facts the Consultation section's two modes read. */
+	const consultationCursor = () => ({
+		selectedConsultation:
+			selectionRef.current === "consultation"
+				? consultationsRef.current[consultationIndexRef.current]
+				: undefined,
+		consultationRefreshAvailable: state !== undefined,
+		consultationAgentStatus: selectedConsultationAgentStatus,
+		consultationPaneAlive: selectedConsultationPaneAlive,
+	});
+	/**
+	 * Whether the list's cursor can step.
+	 *
+	 * The cursor walks one sequence: the rows of each expanded section, in
+	 * order. A step is possible past the last row of a section, into the next
+	 * expanded one, so the list can move as long as the cursor is not the
+	 * sequence's only row.
+	 */
+	const listCanMove = (): boolean => {
+		// The Ticket section's cursor walks the row list, Group headers
+		// included, so its edge is the row list's last index (issue #159).
+		const t = ticketRowsRef.current.length;
+		// The blank row between two Groups holds no cursor, so the walk asks
+		// how many rows it can rest on rather than how many rows it draws.
+		const tStops = cursorRowCount(ticketRowsRef.current);
+		const c = consultationsRef.current.length;
+		const w = workQueueRef.current.length;
+		const tOpen = ticketsExpandedRef.current;
+		const cOpen = consultationsExpandedRef.current;
+		const wOpen = workExpandedRef.current;
+		// A cross reaches an empty section too, so the step into it is
+		// always possible while the other section is expanded: the empty
+		// message is the row the cursor takes, and the Work section keeps
+		// its header while it is empty the same way (ADR 0049).
+		if (selectionRef.current === "queue") {
+			// Up out of the queue crosses into the Consultation section, or into
+			// the Ticket section while the Consultation section is collapsed, and
+			// the cross opens at the queue's own first row. Where the other
+			// section happens to hold its cursor says nothing about where this
+			// one stands: a direct click on the Work header can land the cursor on
+			// the only row of a queue the Consultation cursor never touched.
+			const crossUp = cOpen || tOpen;
+			return (
+				(wOpen && (w > 1 || (workQueueIndexRef.current === 0 && crossUp))) || (!wOpen && crossUp)
+			);
+		}
+		if (selectionRef.current === "consultation")
+			return (
+				(cOpen && (c > 1 || (consultationIndexRef.current === 0 && tOpen))) || (!cOpen && tOpen)
+			);
+		return (
+			(tOpen && (tStops > 1 || (cOpen && selectedIndexRef.current >= t - 1))) || (!tOpen && cOpen)
+		);
+	};
+	/** The queue item that waits under the row the cursor holds (ADR 0049). */
+	const queueItemForSelectedRow = (): WorkQueueItem | null => {
+		if (selectionRef.current === "ticket")
+			return handoffItemWaitingForTicket(workQueueRef.current, ticketAtCursor()?.identity);
+		if (selectionRef.current === "consultation")
+			return consultationItemWaitingFor(
+				workQueueRef.current,
+				consultationsRef.current[consultationIndexRef.current]?.id,
+			);
+		return null;
+	};
+	/**
+	 * The facts the Main view states when it opens the Key guide or the Message
+	 * view for a mode another surface owns.
+	 *
+	 * The guide names the keys that mode dispatches, and it gates them on what
+	 * the Main view can honestly read from outside that surface: no row stands
+	 * under a cursor the Main view does not hold, and no Action row count it can
+	 * count. The Body pane is stated as a pane that holds rows and scrolls,
+	 * because the Main view reads nothing of the open surface's body, and a Body
+	 * reported as empty would refuse a key the surface can run. The surface that
+	 * owns the mode states its own rows' facts for its own bar and its own keys.
+	 */
+	const overlayGuideFacts = {
+		actionRowCount: 0,
+		bodyScrollable: true,
+		bodyEmpty: false,
+		editableActionSelected: false,
+		planeActionSelected: false,
+	};
+	/**
+	 * The Availability facts of one mode the Main view dispatches, paints on
+	 * its own Action bar, or catalogs in the Key guide.
+	 *
+	 * Each mode names only the facts its controls read, and the compiler
+	 * rejects a mode whose facts this view did not state.
+	 */
+	const mainFactsFor = (mode: InteractionMode): AvailabilityFacts => {
+		switch (mode) {
+			case "ticket-list":
+				return availabilityFacts("ticket-list", standing, {
+					...ticketCursor(),
+					...groupFacts(),
+					groupingAxis: groupingAxisRef.current,
+					listCanMove: listCanMove(),
+					queueItemForSelectedRow: queueItemForSelectedRow(),
+				});
+			case "ticket-detail":
+				return availabilityFacts("ticket-detail", standing, {
+					...ticketCursor(),
+					...groupFacts(),
+					groupingAxis: groupingAxisRef.current,
+					detailCanScroll: detailMaxScroll > 0,
+				});
+			case "consultation-list":
+				return availabilityFacts("consultation-list", standing, {
+					...consultationCursor(),
+					listCanMove: listCanMove(),
+					queueItemForSelectedRow: queueItemForSelectedRow(),
+				});
+			case "consultation-detail":
+				return availabilityFacts("consultation-detail", standing, {
+					...consultationCursor(),
+					detailCanScroll: consultationMaxScroll > 0,
+				});
+			case "work-queue-list":
+				return availabilityFacts("work-queue-list", standing, {
+					...queueFacts(),
+					listCanMove: listCanMove(),
+				});
+			case "work-queue-detail":
+				return availabilityFacts("work-queue-detail", standing, {
+					...queueFacts(),
+					detailCanScroll: workQueueDetailMaxScroll > 0,
+				});
+			case "consultation-interaction":
+				// The Agent owns every key but the configured exit.
+				return availabilityFacts("consultation-interaction", standing, {});
+			case "form-field":
+				// The response editor owns its own slot facts and dispatches from
+				// them; this record only names the mode the Main view's bar reads.
+				return availabilityFacts("form-field", standing, { fieldHasSelection: false });
+			case "decision-modal":
+				return availabilityFacts("decision-modal", standing, overlayGuideFacts);
+			case "missing-modal":
+			case "action-panel":
+				return availabilityFacts(mode, standing, { actionRowCount: 0 });
+			case "live-view":
+				return availabilityFacts("live-view", standing, {
+					...ticketCursor(),
+					bodyScrollable: true,
+					bodyEmpty: false,
+				});
+			case "repository-select":
+				return availabilityFacts("repository-select", standing, {
+					listCanMove: listCanMove(),
+					repositoryCount: 0,
+					searchText: "",
+					pendingCount: 0,
+				});
+			case "override-list":
+				return availabilityFacts("override-list", standing, {});
+			case "override-model":
+			case "override-text":
+				return availabilityFacts(mode, standing, { fieldHasSelection: false });
+			case "form-selector":
+				return availabilityFacts("form-selector", standing, {
+					fieldHasSelection: false,
+					formCycleCount: 0,
+				});
+			case "form-action":
+				return availabilityFacts("form-action", standing, {
+					fieldHasSelection: false,
+					formRefusal: null,
+				});
+			case "key-guide":
+			case "message-view":
+				// The overlay's own two modes read nothing beside the standing facts.
+				return availabilityFacts(mode, standing, {});
+			default: {
+				// A mode the plane has never seen. The assertion is the check: a new
+				// Interaction mode reaches this line as a compile error, not as a
+				// record borrowed from another mode.
+				const unstated: never = mode;
+				throw new Error(`the Main view states no facts for ${unstated}`);
+			}
+		}
+	};
+	/** The facts of the mode the Main view's own keys and bar run in. */
+	const mainFacts = (): AvailabilityFacts => mainFactsFor(currentBaseMode());
 	const openGuide = (mode: InteractionMode = currentBaseMode()) => {
 		setUtility({ kind: "guide", mode });
 	};
@@ -3196,8 +3301,7 @@ export function App({
 		// same dispatch hook every modal, panel, and overlay uses.
 		const mode = currentBaseMode();
 		createControlDispatch({
-			mode,
-			context: controlContextFor(mode),
+			facts: mainFacts(),
 			ungated: ["decide-completion", "handoff", "live-view"],
 			onUnavailable: setWarningMessage,
 			onEmergencyExit: () => renderer.destroy(),
@@ -3205,13 +3309,14 @@ export function App({
 				// A settled Ticket uses the distinct Decide control. It names
 				// what Enter does instead of leaving a dimmed Hand off hint
 				// that still opens a panel.
-				"decide-completion": ({ context }) => decideCompletion(context),
+				"decide-completion": ({ facts }) => decideCompletion(facts),
 				// An open Ticket is the only one a Hand off starts, and it can
 				// queue behind nothing: the control stays ungated so a Ticket
 				// with no other Enter meaning still gets the catalogue's own
 				// refusal.
-				handoff: ({ context, refuse }) => {
-					const ticket = context.selectedTicket;
+				handoff: ({ facts, refuse }) => {
+					if (!ticketSectionFacts(facts)) return;
+					const ticket = facts.selectedTicket;
 					if (ticket === undefined || !inFlight(ticket)) {
 						if (ticket === undefined) refuse();
 						else startHandoff(ticket, choiceFor(ticket));
@@ -3225,8 +3330,9 @@ export function App({
 				// ticket's own screen, which streams the agent's output and
 				// offers the Goto. A missing agent keeps its own recovery
 				// screen: the restart or the abandon, and nothing else.
-				"live-view": ({ context, refuse }) => {
-					const ticket = context.selectedTicket;
+				"live-view": ({ facts, refuse }) => {
+					if (!ticketSectionFacts(facts)) return;
+					const ticket = facts.selectedTicket;
 					if (ticket === undefined || !inFlight(ticket)) return refuse();
 					if (factsFor(ticket).failure === "missing")
 						setPanel({ kind: "missing", identity: ticket.identity });
@@ -3235,8 +3341,9 @@ export function App({
 				// `g` focuses the agent's pane in herdr and changes nothing
 				// (ADR 0033): the catalogue gated the pane, so this runs the
 				// focus and the confirmation stands on the Message line.
-				"ticket-goto": ({ context }) => {
-					const ticket = context.selectedTicket;
+				"ticket-goto": ({ facts }) => {
+					if (!ticketSectionFacts(facts)) return;
+					const ticket = facts.selectedTicket;
 					if (ticket !== undefined) runGoto(ticket);
 				},
 				// `w` ends the selected Ticket's work cycle (ADR 0031). The catalogue
@@ -3244,8 +3351,9 @@ export function App({
 				// Agent or a settled turn behind it, and both confirm first: the dialog
 				// states who is alive and what survives, and nothing runs until the
 				// operator answers it.
-				"ticket-close": ({ context }) => {
-					const ticket = context.selectedTicket;
+				"ticket-close": ({ facts }) => {
+					if (!ticketSectionFacts(facts)) return;
+					const ticket = facts.selectedTicket;
 					if (ticket === undefined) return;
 					if (state === undefined) {
 						// A work cycle is durable factory state: the projection the App
@@ -3265,14 +3373,26 @@ export function App({
 				// cursor, `-` demotes it (ADR 0049): the keys the operator already
 				// knew for raising and lowering a rank, with the queue's own
 				// refusal when the item already stands where the move would put it.
-				"queue-promote": () => moveQueueItem("up"),
-				"queue-demote": () => moveQueueItem("down"),
-				"queue-remove": () => removeQueueItem(),
+				"queue-promote": ({ facts }) => {
+					if (!workQueueSectionFacts(facts)) return;
+					moveQueueItem("up", facts.selectedWorkQueueItem);
+				},
+				"queue-demote": ({ facts }) => {
+					if (!workQueueSectionFacts(facts)) return;
+					moveQueueItem("down", facts.selectedWorkQueueItem);
+				},
+				"queue-remove": ({ facts }) => {
+					if (!workQueueSectionFacts(facts)) return;
+					removeQueueItem(facts.selectedWorkQueueItem);
+				},
 				// Enter on a queue row force-dispatches the item under the cursor over a
 				// full Parallel limit (issue #89). The catalogue gated the availability,
 				// so this runs the dispatch and nothing else; the module owns every line
 				// the start or its failure leaves.
-				"queue-force-dispatch": () => forceDispatchQueueItem(),
+				"queue-force-dispatch": ({ facts }) => {
+					if (!workQueueSectionFacts(facts)) return;
+					forceDispatchQueueItem(facts.selectedWorkQueueItem);
+				},
 				"move-list": ({ key }) => moveRange(key.name),
 				"scroll-detail": ({ key }) => moveRange(key.name),
 				"section-toggle": () => toggleSection(),
@@ -3325,8 +3445,9 @@ export function App({
 				"ticket-ignore": () => toggleTicketIgnore(),
 				"ticket-mute": () => toggleSourceMute(),
 				"ticket-filter": () => cycleTicketFilter(),
-				"consultation-recovery": () => {
-					const selected = consultationsRef.current[consultationIndexRef.current];
+				"consultation-recovery": ({ facts }) => {
+					if (!consultationSectionFacts(facts)) return;
+					const selected = facts.selectedConsultation;
 					if (selected === undefined) return;
 					// A closing record's recovery is the close panel's own: its Retry
 					// and Force-close rows already answer the stuck cleanup. Every other
@@ -3337,15 +3458,17 @@ export function App({
 						identity: selected.id,
 					});
 				},
-				"consultation-close": () => {
-					const selected = consultationsRef.current[consultationIndexRef.current];
+				"consultation-close": ({ facts }) => {
+					if (!consultationSectionFacts(facts)) return;
+					const selected = facts.selectedConsultation;
 					if (selected === undefined) return;
 					runConsultationClose(selected);
 				},
-				"consultation-delete": () => {
-					const selected = consultationsRef.current[consultationIndexRef.current];
-					if (selected !== undefined)
-						setPanel({ kind: "consultation-delete", identity: selected.id });
+				"consultation-delete": ({ facts }) => {
+					if (!consultationSectionFacts(facts)) return;
+					const selected = facts.selectedConsultation;
+					if (selected === undefined) return;
+					setPanel({ kind: "consultation-delete", identity: selected.id });
 				},
 				// `s` schedules the unscheduled record back into the Work queue
 				// (issue #91, ADR 0049): the enqueue's hard check runs first, the
@@ -3353,8 +3476,9 @@ export function App({
 				// start never takes a row. The state's one write then moves it to
 				// `queued` at the queue's tail, and the pickup is its only starter
 				// from there.
-				"consultation-schedule": () => {
-					const selected = consultationsRef.current[consultationIndexRef.current];
+				"consultation-schedule": ({ facts }) => {
+					if (!consultationSectionFacts(facts)) return;
+					const selected = facts.selectedConsultation;
 					if (selected === undefined) return;
 					if (consultationOperations === undefined) {
 						setWarningMessage("Consultations require SQLite state");
@@ -3384,8 +3508,9 @@ export function App({
 				// start or its failure leaves; the key names the cap when the seat
 				// count stood over it at the key, the way the queue's force-
 				// dispatch line does, and says when a race out-waited it.
-				"consultation-start-now": () => {
-					const selected = consultationsRef.current[consultationIndexRef.current];
+				"consultation-start-now": ({ facts }) => {
+					if (!consultationSectionFacts(facts)) return;
+					const selected = facts.selectedConsultation;
 					if (selected === undefined) return;
 					if (consultationOperations === undefined) {
 						setWarningMessage("Consultations require SQLite state");
@@ -3411,14 +3536,16 @@ export function App({
 							);
 					});
 				},
-				"consultation-respond": () => {
-					const selected = consultationsRef.current[consultationIndexRef.current];
+				"consultation-respond": ({ facts }) => {
+					if (!consultationSectionFacts(facts)) return;
+					const selected = facts.selectedConsultation;
 					if (selected === undefined) return;
 					beginResponse(selected);
 				},
 				"consultation-interact": () => setInteraction(true),
-				"consultation-goto": () => {
-					const selected = consultationsRef.current[consultationIndexRef.current];
+				"consultation-goto": ({ facts }) => {
+					if (!consultationSectionFacts(facts)) return;
+					const selected = facts.selectedConsultation;
 					if (selected === undefined || selected.paneId === null) return;
 					// Navigation only (ADR 0025): the Consultation record stays
 					// untouched, and the confirmation stands on the Message line
@@ -3444,8 +3571,9 @@ export function App({
 						});
 				},
 				override: openOverride,
-				recover: () => {
-					const selected = consultationsRef.current[consultationIndexRef.current];
+				recover: ({ facts }) => {
+					if (!consultationSectionFacts(facts)) return;
+					const selected = facts.selectedConsultation;
 					if (selected?.state === "opening") recoverConsultationOpening(selected);
 				},
 				refresh: () => {
@@ -3488,9 +3616,10 @@ export function App({
 				// queue's keys act on it. The catalogue resolved it ahead of the
 				// other Enter meanings, so this only moves the cursor and never
 				// starts or decides.
-				"queue-jump": ({ context }) => {
-					const item = context.queueItemForSelectedRow;
-					if (item === null || item === undefined) return;
+				"queue-jump": ({ facts }) => {
+					if (facts.mode !== "ticket-list" && facts.mode !== "consultation-list") return;
+					const item = facts.queueItemForSelectedRow;
+					if (item === null) return;
 					const index = workQueueRef.current.findIndex(
 						(candidate) => workQueueIdentityOf(candidate) === workQueueIdentityOf(item),
 					);
@@ -3526,8 +3655,9 @@ export function App({
 	 * Enter on a settled Ticket: open the decision screen on the turn the
 	 * factory left for the operator to decide.
 	 */
-	const decideCompletion = (context: ControlContext) => {
-		const ticket = context.selectedTicket;
+	const decideCompletion = (facts: AvailabilityFacts) => {
+		if (!ticketSectionFacts(facts)) return;
+		const ticket = facts.selectedTicket;
 		if (ticket === undefined) return;
 		if (autoModeRef.current) {
 			// The factory decides the ticket itself: the operator gets the
@@ -4823,7 +4953,7 @@ export function App({
 						input: "",
 					};
 	const actionMode = currentBaseMode();
-	const ticketContext = controlContextFor(actionMode);
+	const mainBarFacts = mainFacts();
 	const messageColor = colorOfMessage(visibleMessage);
 	const importantSmallMessage =
 		visibleMessage !== null &&
@@ -4840,10 +4970,10 @@ export function App({
 					{ text: importantSmallMessage, fg: messageColor },
 				]
 	).slice(0, compactLineCount);
-	const utilityContext =
+	const utilityFacts =
 		utility?.kind === "guide" || utility?.kind === "message"
-			? controlContextFor(utility.mode)
-			: ticketContext;
+			? mainFactsFor(utility.mode)
+			: mainBarFacts;
 	// Response editing and Agent interaction own all input above the Main
 	// panes. Keep headers and panes mouse-inert until that mode closes.
 	const mainSurfaceActive =
@@ -5114,7 +5244,7 @@ export function App({
 												width: consultationWidth,
 												rows: RESPONSE_EDITOR_ROWS,
 												focused: true,
-												context: controlContextFor("form-field"),
+												standing,
 												inputActive: utility === null,
 												onSend: sendResponseText,
 												onDiscard: discardResponseDraft,
@@ -5155,7 +5285,7 @@ export function App({
 					setLauncher(false);
 					setReplacementConsultationId(null);
 				},
-				context: controlContextFor(currentBaseMode()),
+				standing,
 				inputActive: utility === null,
 				onHelp: (mode) => openGuide(mode),
 				onMessage: (mode) => openMessage(mode),
@@ -5167,7 +5297,7 @@ export function App({
 		terminalHeight >= 2 && messageRowElement(visibleMessage, terminalWidth),
 		createElement(ActionBar, {
 			mode: actionMode,
-			context: ticketContext,
+			facts: mainBarFacts,
 			width: terminalWidth,
 			compactAnchor: tooSmall,
 		}),
@@ -5185,7 +5315,7 @@ export function App({
 				modelList,
 				onAgentChange: requestModelList,
 				initial: override.choice,
-				context: ticketContext,
+				standing,
 				inputActive: utility === null,
 				onHelp: (mode) => openGuide(mode),
 				onMessage: (mode) => openMessage(mode),
@@ -5212,7 +5342,7 @@ export function App({
 				onAction: (key) => runDecisionAction(panelTicket, key),
 				onEditAction: (key) => openRouteOverride(panelTicket, key),
 				onCancel: () => setPanel(null),
-				context: ticketContext,
+				standing,
 				inputActive: utility === null,
 				onHelp: () => openGuide("decision-modal"),
 				onMessage: () => openMessage("decision-modal"),
@@ -5249,15 +5379,20 @@ export function App({
 				// behavior, so the two paths cannot drift.
 				onGoto: () => runDecisionAction(panelTicket, "goto"),
 				onCancel: () => setPanel(null),
-				context: {
-					...ticketContext,
-					// The view's own ticket is the Goto's pane fact, whatever
-					// the list below points at.
-					selectedTicket: panelTicket,
-					ticketPaneAlive:
-						panelTicket.handoff?.paneId !== null &&
-						agents?.some((agent) => agent.paneId === panelTicket.handoff?.paneId) === true,
-				},
+				// The view's own Ticket is the Goto's pane fact, whatever the
+				// list below points at.
+				standing,
+				ticket: panelTicket,
+				paneAlive:
+					panelTicket.handoff?.paneId !== null &&
+					agents?.some((agent) => agent.paneId === panelTicket.handoff?.paneId) === true,
+				paneForeign:
+					panelTicket.handoff?.paneId !== null &&
+					agents?.some(
+						(agent) =>
+							agent.paneId === panelTicket.handoff?.paneId &&
+							ticketAgentIdentity(panelTicket, agent) === "foreign",
+					) === true,
 				inputActive: utility === null,
 				onHelp: () => openGuide(liveMode === "decision" ? "decision-modal" : "live-view"),
 				onMessage: () => openMessage(liveMode === "decision" ? "decision-modal" : "live-view"),
@@ -5280,7 +5415,7 @@ export function App({
 				],
 				onAction: (key) => runMissingAction(panelTicket, key),
 				onCancel: () => setPanel(null),
-				context: ticketContext,
+				standing,
 				inputActive: utility === null,
 				onHelp: () => openGuide("missing-modal"),
 				onMessage: () => openMessage("missing-modal"),
@@ -5313,7 +5448,7 @@ export function App({
 					else skipRepositoryInitEntry();
 				},
 				onCancel: () => skipRepositoryInitEntry(),
-				context: ticketContext,
+				standing,
 				inputActive: utility === null,
 				onHelp: () => openGuide("action-panel"),
 				onMessage: () => openMessage("action-panel"),
@@ -5329,7 +5464,7 @@ export function App({
 					startRepositoryInitQueue(queue);
 				},
 				onCancel: () => setPanel(null),
-				context: ticketContext,
+				standing,
 				inputActive: utility === null,
 				onHelp: () => openGuide("repository-select"),
 				onMessage: () => openMessage("repository-select"),
@@ -5350,7 +5485,7 @@ export function App({
 				// Cancel is the way out with nothing changed: the Ticket, its cycle,
 				// and its Agent stay exactly where the dialog found them.
 				onCancel: () => setPanel(null),
-				context: ticketContext,
+				standing,
 				inputActive: utility === null,
 				onHelp: () => openGuide("action-panel"),
 				onMessage: () => openMessage("action-panel"),
@@ -5363,6 +5498,7 @@ export function App({
 			consultationSafety?.consultationId === panelConsultation.id &&
 			createElement(ActionPanel, {
 				message: visibleMessage,
+				standing,
 				title: `Live checkout conflict ${panelConsultation.id.slice(0, 8)}`,
 				bodyLines: [
 					...(consultationSafety.safety.warning === undefined
@@ -5407,6 +5543,7 @@ export function App({
 			recoveryPanel !== undefined &&
 			createElement(ActionPanel, {
 				message: visibleMessage,
+				standing,
 				title: recoveryPanel.title,
 				bodyLines: recoveryPanel.bodyLines,
 				actions: recoveryPanel.actions,
@@ -5437,6 +5574,7 @@ export function App({
 			closePanel !== undefined &&
 			createElement(ActionPanel, {
 				message: visibleMessage,
+				standing,
 				title: closePanel.title,
 				bodyLines: closePanel.bodyLines,
 				actions: closePanel.actions,
@@ -5459,6 +5597,7 @@ export function App({
 			state !== undefined &&
 			createElement(ActionPanel, {
 				message: visibleMessage,
+				standing,
 				title: `Force-close Consultation ${panelConsultation.id.slice(0, 8)}?`,
 				bodyLines: [
 					"Force-close stops the cleanup and closes the record. These owned",
@@ -5488,6 +5627,7 @@ export function App({
 			panel.kind === "consultation-delete" &&
 			createElement(ActionPanel, {
 				message: visibleMessage,
+				standing,
 				title: `Delete Consultation ${panelConsultation.id.slice(0, 8)}`,
 				bodyLines: [
 					"Saved history will be removed. Backups and filesystem snapshots may retain copies. Data is not encrypted.",
@@ -5505,18 +5645,18 @@ export function App({
 		utility?.kind === "guide" &&
 			createElement(KeyGuide, {
 				message: visibleMessage,
-				context: utilityContext,
+				facts: utilityFacts,
 				onClose: () => setUtility(null),
-				onMessage: () => openMessage(utilityContext.mode),
+				onMessage: () => openMessage(utilityFacts.mode),
 				onEmergencyExit: () => renderer.destroy(),
 			}),
 		utility?.kind === "message" &&
 			createElement(MessageView, {
 				message: visibleMessage,
 				fact: utility.fact,
-				context: utilityContext,
+				facts: utilityFacts,
 				onClose: () => setUtility(null),
-				onHelp: () => openGuide(utilityContext.mode),
+				onHelp: () => openGuide(utilityFacts.mode),
 				onEmergencyExit: () => renderer.destroy(),
 			}),
 	);

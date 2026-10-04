@@ -45,6 +45,16 @@ Draft storage and Agent operations stay outside the shared modules. Callers must
 not need to manage renderer buffers, keyboard subscriptions, or caret repair to
 use a field correctly.
 
+Availability facts are stated per Interaction mode: each mode names only the
+facts its own controls read, the surface that owns the mode states exactly those
+facts beside the plane's standing facts, and the compiler rejects a missing one.
+No surface builds its facts by spreading a facts record it does not own.
+The module that owns a list of rows states the facts those rows produce: the
+grouping module the Group cursor, the Work queue module its item, depth, and
+pause, the region module the region's row count and the Body pane's window, and
+the form module the focused slot. An availability rule reads only the facts its
+mode names, never an absence, and `test/controls.test.ts` measures that.
+
 Reuse the existing shared control and modal code where it fits this standard.
 OpenTUI's field primitives are candidates for the shared implementation, not
 public escape routes for separate screen-specific editors. Do not create a

@@ -63,6 +63,16 @@ The complete set of controls owned by the control plane, with each control's key
 It is the common reference for the controls the operator can use and the controls described by the Action bar and Key guide.
 _Avoid_: key map, binding table
 
+**Availability facts**:
+The record of state one Interaction mode's controls read. Each mode names only the facts its own controls read, the surface that owns the mode states exactly those facts, and a missing one is a compile error.
+It is why a hint, a refusal, and a Key guide row cannot be built from a fact no surface stated.
+_Avoid_: control context, context bag, facts bag
+
+**Standing facts**:
+The part of the Availability facts the whole plane owns: the run state, the two source counts, the Message line's truncation, the configured Consultation types, and the configured exit key.
+One record of them is read the same way in every Interaction mode, and no surface restates one.
+_Avoid_: global context, shared facts bag
+
 **Key guide**:
 The on-demand description of the Control catalogue, with the current Interaction mode and global controls shown first.
 It includes controls omitted from the Action bar and the editing controls of Text fields and Draft fields.
