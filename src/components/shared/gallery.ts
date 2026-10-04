@@ -1274,6 +1274,50 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 		},
 	},
 	{
+		// The Auto-handoff mode's lamp cell on the Ticket header's right corner:
+		// the `a` key flips the mode, and the row carries it as a shape and a word
+		// - the unlit lamp with `auto`, the lit lamp with `manual`. Where the row
+		// cannot hold every cell, the counts truncate before the lamp does.
+		id: "auto-mode",
+		state: "Auto-handoff mode: the header's lamp, unlit for auto and lit for manual",
+		render: (columns, _holds, _inputActive, _wiring) => [
+			createElement(SectionHeader, {
+				key: "tickets-header-auto",
+				section: "tickets",
+				active: true,
+				terminalWidth: columns.contentWidth,
+				width: columns.contentWidth,
+				expanded: true,
+				open: 2,
+				running: 1,
+				awaiting: 0,
+				mode: "auto",
+				onToggle: () => undefined,
+			}),
+			createElement(SectionHeader, {
+				key: "tickets-header-manual",
+				section: "tickets",
+				active: true,
+				terminalWidth: columns.contentWidth,
+				width: columns.contentWidth,
+				expanded: true,
+				open: 2,
+				running: 1,
+				awaiting: 0,
+				mode: "manual",
+				onToggle: () => undefined,
+			}),
+			createElement(
+				"text",
+				{ key: "auto-mode-note", fg: paint("subtext0") },
+				truncateToWidth(
+					"`a` in the Ticket section flips the mode; the counts truncate before the lamp keeps its corner",
+					columns.contentWidth,
+				),
+			),
+		],
+	},
+	{
 		// The Ticket section's `i` (ADR 0060): the bar's label flips between the
 		// Ignore an active row offers and the Un-ignore a piled row offers, and the
 		// three obligations the key refuses each stand on their own bar and their

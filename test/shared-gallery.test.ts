@@ -88,6 +88,7 @@ describe("the shared control gallery", () => {
 			"notes",
 			"spinner",
 			"queue-order",
+			"auto-mode",
 			"ticket-ignore",
 			"ticket-mute",
 			"ticket-filter",
@@ -185,6 +186,18 @@ describe("the shared control gallery", () => {
 		// lines are the words the press leaves on the line.
 		expect(text).toContain("Ticket list grouped by repository");
 		expect(text).toContain("Ticket list grouping off: the flat list");
+	});
+
+	// The Auto-handoff mode's lamp is a state a reviewer must see: the unlit lamp
+	// with `auto` and the lit lamp with `manual`, both at the Ticket header's
+	// right corner.
+	test("the auto mode example shows the lamp in both modes", async () => {
+		const setup = await gallery("auto-mode", 100, 20);
+		const text = frameText(setup.captureCharFrame());
+		expect(text).toContain(stateLine("auto-mode"));
+		expect(text).toContain("○ auto");
+		expect(text).toContain("● manual");
+		expect(text).toContain("the counts truncate before the lamp keeps its corner");
 	});
 
 	// Issue #184: the init marker is a state a reviewer must see, so it stands

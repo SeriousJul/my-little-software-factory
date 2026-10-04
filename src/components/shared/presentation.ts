@@ -174,6 +174,18 @@ export function markerText(focused: boolean): string {
 }
 
 /**
+ * The status lamp's two glyphs: the lit lamp and the unlit one.
+ *
+ * The lamp is a shape first and a color second, the way the focus marker is:
+ * a filled circle and an open circle are two shapes, so the no-color
+ * presentation keeps both states readable and the lamp needs no palette of its
+ * own. Both glyphs are plain Unicode Geometric Shapes, so an ordinary terminal
+ * font paints them, and both already stand in the screen-font table the
+ * screenshots rasterize from.
+ */
+export const LAMP_GLYPHS = { on: "●", off: "○" } as const;
+
+/**
  * The cells a control's own written note holds: its marker, its label column,
  * and its value column.
  *

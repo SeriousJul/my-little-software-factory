@@ -15,7 +15,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { createElement } from "@opentui/react";
 import { testRender } from "@opentui/react/test-utils";
 
-import { SectionHeader } from "../src/components/section-header.ts";
+import { type AutoHandoffMode, SectionHeader } from "../src/components/section-header.ts";
 import { frameText, rowsOf } from "./app-harness.ts";
 
 let renderer: { destroy: () => void | Promise<void> } | null = null;
@@ -33,6 +33,7 @@ afterEach(async () => {
 async function headerRow(
 	width: number,
 	facts: { held: number; heldBell?: boolean; ignored?: number },
+	mode: AutoHandoffMode | null = null,
 ): Promise<string> {
 	const setup = await testRender(
 		createElement(SectionHeader, {
@@ -47,6 +48,7 @@ async function headerRow(
 			held: facts.held,
 			heldBell: facts.heldBell ?? false,
 			ignored: facts.ignored ?? 0,
+			mode,
 			onToggle: () => undefined,
 		}),
 		{ width, height: 2 },
@@ -80,5 +82,53 @@ describe("the Section header's cell order", () => {
 		expect(row).toContain("ignored 2");
 		expect(row).not.toContain("held");
 		expect(row).not.toContain("!!!");
+	});
+});
+
+/**
+ * The Auto-handoff mode's lamp cell.
+ *
+ * The mode reads as a shape and a word at the row's right corner: the unlit
+ * lamp with `auto`, the lit lamp with `manual`. The shape carries the fact on
+ * its own, so the no-color presentation needs no color for it, and the cell
+ * keeps its corner while the counts give up cells before it does.
+ */
+describe("the Section header's mode lamp", () => {
+	test("the unlit lamp and the word auto stand at the row's right corner", async () => {
+		const row = await headerRow(72, { held: 0 }, "auto");
+		expect(row).toContain("Tickets");
+		expect(row.endsWith("○ auto")).toBe(true);
+	});
+
+	test("the lit lamp and the word manual stand at the row's right corner", async () => {
+		const row = await headerRow(72, { held: 0 }, "manual");
+		expect(row).toContain("Tickets");
+		expect(row.endsWith("● manual")).toBe(true);
+	});
+
+	test("no mode means no lamp cell, so a section that does not own it paints none", async () => {
+		const row = await headerRow(72, { held: 0 });
+		expect(row).not.toContain("auto");
+		expect(row).not.toContain("manual");
+		expect(row).not.toContain("●");
+		expect(row).not.toContain("○");
+	});
+
+	test("a row wide enough holds every count beside the lamp", async () => {
+		const row = await headerRow(80, { held: 1, heldBell: true, ignored: 3 }, "manual");
+		expect(row).toContain("held: 1");
+		expect(row).toContain("!!!");
+		expect(row).toContain("ignored: 3");
+		expect(row.endsWith("● manual")).toBe(true);
+	});
+
+	test("the counts give up their cells before the lamp gives up its corner", async () => {
+		// The facts that already overflow a 54-column row, now with the lamp on
+		// it: the mode keeps its corner, and the counts are what truncates.
+		const row = await headerRow(54, { held: 1, heldBell: true, ignored: 3 }, "manual");
+		expect(row).toContain("Tickets");
+		expect(row).toContain("awaiting 1");
+		expect(row).not.toContain("ignored");
+		expect(row.endsWith("● manual")).toBe(true);
 	});
 });

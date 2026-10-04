@@ -1,10 +1,18 @@
 import type { MouseEvent } from "@opentui/core";
 import { createElement } from "@opentui/react";
-
-import { padToWidth, truncateToWidth } from "./text.ts";
+import { LAMP_GLYPHS } from "./shared/presentation.ts";
+import { padToWidth, truncateToWidth, widthOf } from "./text.ts";
 import { paint } from "./theme.ts";
 
 export type MainSection = "tickets" | "consultations" | "work";
+
+/**
+ * The Auto-handoff mode a header's lamp cell names.
+ *
+ * The lamp reads the operator's share of the work, not the machine's: an auto
+ * run leaves the lamp unlit, and a manual run lights it.
+ */
+export type AutoHandoffMode = "auto" | "manual";
 
 interface SectionHeaderProps {
 	section: MainSection;
@@ -35,6 +43,12 @@ interface SectionHeaderProps {
 	paused?: boolean;
 	/** The held count: shown only when it is above zero (user story 15). */
 	held?: number;
+	/**
+	 * The Auto-handoff mode the row wears at its right corner: `auto` with the
+	 * lamp unlit, `manual` with the lamp lit. The screen that owns the mode
+	 * passes it; a row that does not carry the mode passes nothing.
+	 */
+	mode?: AutoHandoffMode | null;
 	/**
 	 * The ignored count (ADR 0060): the pile, every row the flag stands on. Shown
 	 * only when it is above zero, the way the held count is, and it carries no bell
@@ -78,15 +92,18 @@ interface SectionHeaderProps {
 /**
  * Draw one row for one Main view section's header.
  *
- * The row carries the section name, the count facts the section reports, and
- * the marker that says the section is expanded. The Tickets section reports
+ * The row carries the section name, the count facts the section reports, the
+ * marker that says the section is expanded, and - where the screen that owns
+ * the Auto-handoff mode passes it - the mode's lamp cell at the row's right
+ * corner. The Tickets section reports
  * steady counts - open, running, awaiting - plus the held count with its bell
  * and the conditional ignored count of the pile (ADR 0060), and the
  * Consultations section reports the Consultation facts with
  * their bell and the new-output fact (user stories 11 through 16). The row
  * truncates at the end rather than wrapping: the Main view's rows are fixed,
- * and a truncation must never hide the section name at the row's start. A
- * click on a header toggles the section, the same action `x` takes for the
+ * and a truncation must never hide the section name at the row's start. The
+ * mode lamp holds its corner while the counts give up cells before it does.
+ * A click on a header toggles the section, the same action `x` takes for the
  * cursor: expanding lands the cursor on the section's list, and collapsing
  * keeps its selection and detail (user stories 6, 9, and 20).
  */
@@ -104,6 +121,7 @@ export function SectionHeader({
 	waiting = 0,
 	paused = false,
 	held = 0,
+	mode = null,
 	ignored = 0,
 	muted = 0,
 	bell = false,
@@ -143,7 +161,14 @@ export function SectionHeader({
 				? `  ${counts}`
 				: `  ${counts}${bell ? "  !!!" : ""}${newOutput ? "  new output" : ""}`;
 	const name = section === "tickets" ? "Tickets" : section === "work" ? "Work" : "Consultations";
-	const text = `${expanded ? "▾" : "▸"} ${name}${facts}`;
+	const countsText = `${expanded ? "▾" : "▸"} ${name}${facts}`;
+	// The mode lamp is the row's last cell and it keeps its place: the counts
+	// truncate into the cells left of it, so a narrow row gives up a count
+	// before it gives up the mode the factory runs in.
+	const modeCell =
+		mode === null ? "" : ` ${mode === "auto" ? LAMP_GLYPHS.off : LAMP_GLYPHS.on} ${mode}`;
+	const countsCells = Math.max(0, width - widthOf(modeCell));
+	const text = `${padToWidth(truncateToWidth(countsText, countsCells), countsCells)}${modeCell}`;
 	const handleMouse = (event: MouseEvent) => {
 		if (!active) return;
 		if (event.type === "down" && event.button === 0) onToggle(section);
