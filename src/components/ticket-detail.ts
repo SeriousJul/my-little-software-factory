@@ -648,6 +648,9 @@ export const TicketDetail = forwardRef<TicketDetailHandle, TicketDetailProps>(fu
 		const box = scrollboxRef.current;
 		const slot = scrollSlot.current;
 		const identity = identityRef.current;
+		console.log(
+			`PROBE-RESTORE-EFFECT identity=${identity} boxTop=${box === null ? "null" : box.scrollTop} boxHeight=${box === null ? "null" : box.scrollHeight} viewport=${box === null ? "null" : box.viewport.height} slot=${slot === null ? "null" : `${slot.identity}:${slot.top}`}`,
+		);
 		if (box === null || slot === null || identity === undefined) return;
 		if (slot.identity !== identity || slot.top === 0) return;
 		const restore = () => {
@@ -655,6 +658,9 @@ export const TicketDetail = forwardRef<TicketDetailHandle, TicketDetailProps>(fu
 			const live = scrollSlot.current;
 			if (live === null || live.identity !== identity) return;
 			const max = maxScrollOf(box.scrollHeight, box.viewport.height);
+			console.log(
+				`PROBE-RESTORE-ATTEMPT identity=${identity} liveTop=${live.top} boxHeight=${box.scrollHeight} viewport=${box.viewport.height} max=${max}`,
+			);
 			// A cross back through the other section can remount the pane before
 			// the renderer has laid it out at its new size. Until the first frame
 			// with real geometry, an offset would clamp to zero and be lost.
@@ -689,6 +695,9 @@ export const TicketDetail = forwardRef<TicketDetailHandle, TicketDetailProps>(fu
 			if (box === null || identity === undefined) return;
 			const top = box.scrollTop;
 			const live = scrollSlot.current;
+			console.log(
+				`PROBE-SAVE identity=${identity} boxTop=${top} boxHeight=${box.scrollHeight} viewport=${box.viewport.height} live=${live === null ? "null" : `${live.identity}:${live.top}`}`,
+			);
 			if (live !== null && live.identity !== identity && top === 0) return;
 			scrollSlot.current = { identity, top };
 		};
