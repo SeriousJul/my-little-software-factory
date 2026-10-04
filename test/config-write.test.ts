@@ -122,8 +122,17 @@ async function operatorConfig(path: string): Promise<{ config: FactoryConfig; te
 	return { config, text };
 }
 
+/**
+ * The operator's comment lines: the lines whose first non-blank character is
+ * `#`. A line ending is not part of the line, so a file whose lines end CRLF
+ * names the same comment lines an LF file does, and a record that names its
+ * lost lines exactly names them the same way for either file.
+ */
 function commentLines(text: string): string[] {
-	return text.split("\n").filter((line) => line.trim().startsWith("#"));
+	return text
+		.split("\n")
+		.map((line) => (line.endsWith("\r") ? line.slice(0, -1) : line))
+		.filter((line) => line.trim().startsWith("#"));
 }
 
 /**
@@ -1140,7 +1149,26 @@ describe("the config write-back (ADR 0103)", () => {
  * the ones that do not, and the Message line the write leaves. The shapes the
  * scan reads today stand in the second table, so a change to the scan that moves
  * a shape from the group it reads into the group it does not turns a record red
- * before an operator meets it.
+ * before an operator meets it. The third table holds what the scan decides about
+ * the file's own shape - the second `[repos]` header it refuses and the comment
+ * it accepts on a header line - because those are costs the rule knows and a
+ * reader cannot see.
+ *
+ * A shape the scan does not read costs nothing when it stands outside the two
+ * regions the plane owns. That is the form an operator is most likely to write -
+ * a multiline array in a `[[states]]` block - and it stands in the first table so
+ * a scan that one day refuses such a shape anywhere in the file goes red here
+ * instead of costing that operator their comments quietly.
+ *
+ * What "comments" means in these records: the lines whose first non-blank
+ * character is `#`. The table counts those lines and only those. A full rewrite
+ * costs more than they are - the blank-line layout, the order of the tables, and
+ * every byte the plane's own serializer does not write go with them - so a record
+ * that says every comment line went understates what the operator loses.
+ *
+ * A record can also stand `shapeStands`: text the write is recorded as leaving
+ * alone. The check reads it against the file the write left, so a cost claim that
+ * the plane never touched the operator's own lines is measured, not assumed.
  *
  * How the plane comes to hold the shape. The startup loader refuses some of
  * these shapes outright, so the default run starts from the operator's readable
@@ -1155,7 +1183,9 @@ describe("the config write-back (ADR 0103)", () => {
  * the shape standing in the file, and the next write then pays for it again. A
  * record that names `after` runs that write-back first and measures the next one
  * over the file it left, with the plane holding what that file says, the way a
- * later write-back starts after any write.
+ * later write-back starts after any write. That record also names `afterMode`,
+ * the mode the first write landed as, so the run the text describes is the run
+ * the numbers come from.
  */
 
 // Where this guard bites, written as steps a reviewer can re-run. Each probe
@@ -1185,10 +1215,39 @@ describe("the config write-back (ADR 0103)", () => {
 // older one together.
 //
 // Probe C, the record form itself. `commentsLost` can name the exact comment
-// lines a write drops. Replace one record's `commentsLost: "all"` with the five
-// lines the fixture holds and that record stays green; drop one line from that
-// list and it goes red. A scan that one day keeps part of an operator's file has
-// a form that states what it kept, and the check reads that form.
+// lines a write drops, and one record uses that form: "a multiline array on a key
+// the plane holds, in a file whose lines end CRLF" names the fixture's five
+// comment lines through `FIXTURE_COMMENT_LINES` where every other rewrite record
+// says `all`. Delete one line from that list and that record goes red while every
+// record that says `all` stays green; put `"all"` in the record instead of the
+// list and it stays green. The named lines carry no carriage return: a CRLF file
+// puts a `\r` on the end of each of them, and `commentLines()` strips it, so the
+// same five lines name the fixture's comments in either file. A scan that one day
+// keeps part of an operator's file has a form that states what it kept, and the
+// check reads that form.
+//
+// Probe D, a scan that refuses an array or an inline table written across lines
+// anywhere in the file, not only in the two regions the plane owns. In
+// `patchOwnedSections` in `src/config-write.ts`, above the `editReposRegion`
+// call, add:
+//
+//     if (scanned.some((row) => !row.startsInString && arrayOrTableRunsPastLine(row.body)))
+//       return null;
+//
+// with a helper that answers true when an assignment's value opens with `[` or
+// `{` and does not close on that line. 2 records go red. One is "a multiline array
+// outside the two regions the plane owns", which is the record that says today's
+// scan costs that shape nothing: the operator's `[[states]]` block keeps its
+// lines, every comment line stands, and no write-back has a reason to touch it.
+// The other is "a multiline array inside a [[sources]] block the plane holds". A
+// wider refusal cannot pass quietly.
+//
+// The record form reads its own claims. Change one record's `afterMode` from
+// `sections` to `rewrite` and that one record goes red: the mode the first write
+// landed as is part of the measurement, not a caption over it. And change a
+// record's `shapeStands` text to something the write did not leave standing -
+// "a multiline array outside the two regions the plane owns" is the case - and
+// that record goes red the same way.
 //
 // The tables check their own fixtures. Make `withReposShape` return the
 // operator's file unchanged and 9 records go red: no record can pass on a file
@@ -1213,6 +1272,38 @@ function withReposShape(shape: string): string {
 /** The operator's file with the source block the plane holds restated as `shape`. */
 function withSourceShape(shape: string): string {
 	return operatorFile("/home/me/src/factory").replace(HELD_SOURCE_BLOCK, shape);
+}
+
+/** The held `[[sources]]` block with its `repositories` array written across lines. */
+const SOURCE_REPOSITORIES_ACROSS_LINES = [
+	"[[sources]]",
+	'name = "acme-issues"',
+	'kind = "github-issues"',
+	"refresh-interval-seconds = 60",
+	"repositories = [",
+	'\t"acme/factory",',
+	"]",
+].join("\n");
+
+/** The held `[[sources]]` block with its `name` written as a multiline string. */
+const SOURCE_NAME_AS_MULTILINE_STRING = [
+	"[[sources]]",
+	'name = """',
+	"acme-issues",
+	'"""',
+	'kind = "github-issues"',
+	"refresh-interval-seconds = 60",
+	'repositories = [ "acme/factory" ]',
+].join("\n");
+
+/** The `labels-any` line of the first `[[states]]` block, which the plane never edits. */
+const HELD_STATES_LABELS_LINE = 'labels-any = [ "ready-for-review" ]';
+/** That line written across lines, the form an operator writes by hand. */
+const STATES_LABELS_ACROSS_LINES = 'labels-any = [\n\t"ready-for-review",\n]';
+
+/** The operator's file with the first `[[states]]` block's `labels-any` restated as `shape`. */
+function withStatesShape(shape: string): string {
+	return operatorFile("/home/me/src/factory").replace(HELD_STATES_LABELS_LINE, shape);
 }
 
 /** One write-back the plane does, with the words its Message line carries. */
@@ -1257,6 +1348,8 @@ const NOTHING_NEW: WriteBack = {
 /** What one write-back costs a file written in one shape. */
 interface ShapeCost {
 	mode: ConfigWriteMode;
+	/** The whole file the write left. */
+	written: string;
 	/** The operator's comment lines that still stand in the file the write left. */
 	commentsKept: string[];
 	/** The operator's comment lines the write dropped. */
@@ -1306,6 +1399,7 @@ async function costOfWriteBack(
 	const { config: reloaded } = await loadConfigFile(path);
 	return {
 		mode: fact.mode,
+		written,
 		commentsKept,
 		commentsLost: commentLines(before).filter((line) => !commentsKept.includes(line)),
 		message: configWriteLine(fact, writeBack.written).replaceAll(path, "<file>"),
@@ -1332,22 +1426,20 @@ async function measure(record: ShapeRecord, cost: CostRecord): Promise<Measured>
 		const measured = await costOfWriteBack(plane.path, plane.holds, cost.via, record.file);
 		return { cost: measured, before: record.file };
 	}
-	await costOfWriteBack(plane.path, plane.holds, cost.after, record.file);
+	const first = await costOfWriteBack(plane.path, plane.holds, cost.after, record.file);
+	expect(
+		first.mode,
+		`${cost.after.name}, then ${cost.via.name}: the mode the first write landed as`,
+	).toBe(cost.afterMode);
 	const left = readFileSync(plane.path, "utf8");
 	const { config } = await loadConfigFile(plane.path);
 	const measured = await costOfWriteBack(plane.path, config, cost.via, left);
 	return { cost: measured, before: left };
 }
 
-/** One write-back's recorded cost on one shape. */
-interface CostRecord {
+/** What a write-back's cost is recorded with, however it ran. */
+interface CostFacts {
 	readonly via: WriteBack;
-	/**
-	 * When set, this write-back runs second: it reads the file `after` left, and
-	 * the plane starts that run holding what the file now says. A shape the first
-	 * write leaves standing in the file is not paid for once.
-	 */
-	readonly after?: WriteBack;
 	readonly mode: ConfigWriteMode;
 	/**
 	 * Which comment lines the write drops: `all` for every line in the file the
@@ -1356,7 +1448,10 @@ interface CostRecord {
 	 * No write today keeps some of an operator's comment lines and loses the rest,
 	 * so no record uses the third form. A scan that one day edits part of a file
 	 * has to state its loss that way, and the check below compares the measured
-	 * lines against whichever form a record uses.
+	 * lines against whichever form a record uses. The exact-lines form holds a line
+	 * without its line ending: `commentLines()` strips the carriage return a CRLF
+	 * file carries, so the same five lines name the fixture's comments in either
+	 * file.
 	 */
 	readonly commentsLost: "all" | "none" | readonly string[];
 	/** The Message line the write leaves, with the config file shown as `<file>`. */
@@ -1365,6 +1460,20 @@ interface CostRecord {
 	readonly sources?: readonly string[];
 }
 
+/**
+ * One write-back's recorded cost on one shape.
+ *
+ * A record that names `after` measures a second write-back over the file a first
+ * one left, and must name `afterMode`, the mode that first write landed as: the
+ * first write's own fact is part of the run the record describes, and a record
+ * that left it out could measure a different run than its text tells.
+ */
+type CostRecord = CostFacts &
+	(
+		| { readonly after?: undefined; readonly afterMode?: undefined }
+		| { readonly after: WriteBack; readonly afterMode: ConfigWriteMode }
+	);
+
 /** One shape, why the scan reads it or does not, and what each write-back costs on it. */
 interface ShapeRecord {
 	readonly shape: string;
@@ -1372,67 +1481,58 @@ interface ShapeRecord {
 	readonly file: string;
 	/** The plane starts from the shaped file instead of meeting the shape mid-run. */
 	readonly fromShape?: boolean;
+	/**
+	 * Text that must still stand in the file every write in this record leaves: the
+	 * operator's own lines a cost claim says the plane never touched.
+	 */
+	readonly shapeStands?: string;
 	readonly costs: readonly CostRecord[];
 }
 
+/**
+ * The Message line a full rewrite leaves, with the config file shown as `<file>`.
+ *
+ * The words are spelled out once here rather than once per shape record. The
+ * three tests at the end of this file own the wording itself, so a change to it
+ * goes red there for its own reason; a shape record goes red because a write
+ * stopped naming the rewrite it did.
+ */
+function rewriteMessage(written: string): string {
+	if (written === "")
+		return "the whole config file at <file> was rewritten, and the comments in it did not survive";
+	return `${written} in <file>; the whole config file was rewritten, and the comments in it did not survive`;
+}
+
+/** The Message line a write leaves when the check vouched for its section edit. */
+function sectionMessage(written: string): string {
+	// A write that added nothing new to the file has no count to word, and a write
+	// that changed only what the plane owns says nothing.
+	return written === "" ? "" : `${written} in <file>`;
+}
+
+/** What one write-back costs on a file the check will not vouch for: the full rewrite. */
+function rewriteCost(via: WriteBack, commentsLost: CostFacts["commentsLost"] = "all"): CostRecord {
+	return { via, mode: "rewrite", commentsLost, message: rewriteMessage(via.written) };
+}
+
+/** What one write-back costs on a file whose shapes the scan reads: its own section edit. */
+function sectionCost(via: WriteBack): CostRecord {
+	return { via, mode: "sections", commentsLost: "none", message: sectionMessage(via.written) };
+}
+
 /** Every write-back pays the full rewrite on a file the check will not vouch for. */
-function rewriteCosts(): CostRecord[] {
-	return [
-		{
-			via: ADD_A_MAPPING,
-			mode: "rewrite",
-			commentsLost: "all",
-			message:
-				"saved the mapping in <file>; the whole config file was rewritten, " +
-				"and the comments in it did not survive",
-		},
-		{
-			via: REPOINT_A_HELD_MAPPING,
-			mode: "rewrite",
-			commentsLost: "all",
-			message:
-				"saved the mapping in <file>; the whole config file was rewritten, " +
-				"and the comments in it did not survive",
-		},
-		{
-			via: APPEND_A_SOURCE,
-			mode: "rewrite",
-			commentsLost: "all",
-			message:
-				"registered 1 new source in <file>; the whole config file was rewritten, " +
-				"and the comments in it did not survive",
-		},
-		{
-			via: NOTHING_NEW,
-			mode: "rewrite",
-			commentsLost: "all",
-			message:
-				"the whole config file at <file> was rewritten, and the comments in it did not survive",
-		},
-	];
+function rewriteCosts(commentsLost: CostFacts["commentsLost"] = "all"): CostRecord[] {
+	return [ADD_A_MAPPING, REPOINT_A_HELD_MAPPING, APPEND_A_SOURCE, NOTHING_NEW].map((via) =>
+		rewriteCost(via, commentsLost),
+	);
 }
 
 /** Every write-back keeps its section edit on a file whose shapes the scan reads. */
 function sectionEditCosts(nothingNew: CostRecord): CostRecord[] {
 	return [
-		{
-			via: ADD_A_MAPPING,
-			mode: "sections",
-			commentsLost: "none",
-			message: "saved the mapping in <file>",
-		},
-		{
-			via: REPOINT_A_HELD_MAPPING,
-			mode: "sections",
-			commentsLost: "none",
-			message: "saved the mapping in <file>",
-		},
-		{
-			via: APPEND_A_SOURCE,
-			mode: "sections",
-			commentsLost: "none",
-			message: "registered 1 new source in <file>",
-		},
+		sectionCost(ADD_A_MAPPING),
+		sectionCost(REPOINT_A_HELD_MAPPING),
+		sectionCost(APPEND_A_SOURCE),
 		nothingNew,
 	];
 }
@@ -1474,6 +1574,15 @@ function sectionEditsThatLeaveTheLineAlone(nothingNew: CostRecord): CostRecord[]
 	return sectionEditCosts(nothingNew).filter((cost) => cost.via !== REPOINT_A_HELD_MAPPING);
 }
 
+/** Every comment line the operator's fixture file holds, in the order it writes them. */
+const FIXTURE_COMMENT_LINES = [
+	"# The control plane's machine: the states, the task types, and the feeds.",
+	"# The checkouts the plane works in. The mapping is the one the plane writes",
+	"# back when it discovers a sibling clone.",
+	"# The feed the operator reads by hand: the issues of the one repository.",
+	"# The states of the label workflow, in match order.",
+];
+
 const UNREAD_SHAPE_COSTS: readonly ShapeRecord[] = [
 	{
 		shape: "a multiline array on a key the plane holds",
@@ -1485,6 +1594,7 @@ const UNREAD_SHAPE_COSTS: readonly ShapeRecord[] = [
 			// writing, so the next write has nothing to change and no comment left.
 			{
 				after: ADD_A_MAPPING,
+				afterMode: "rewrite",
 				via: ADD_A_MAPPING,
 				mode: "unchanged",
 				commentsLost: "none",
@@ -1501,7 +1611,12 @@ const UNREAD_SHAPE_COSTS: readonly ShapeRecord[] = [
 			"\n",
 			"\r\n",
 		),
-		costs: rewriteCosts(),
+		// The one record that names the lines it loses instead of saying `all`, so
+		// the exact-lines form is read by the check and not only written down. The
+		// lines carry no carriage return: `commentLines()` strips the `\r` a CRLF
+		// file puts on them, so the same five lines name the fixture's comments in
+		// either file.
+		costs: rewriteCosts(FIXTURE_COMMENT_LINES),
 	},
 	{
 		shape: "an inline table written across lines on a key the plane holds",
@@ -1535,16 +1650,7 @@ const UNREAD_SHAPE_COSTS: readonly ShapeRecord[] = [
 		why: "the plane's serializer has no in-place form for a value that spans lines",
 		file: withReposShape('"github.com/acme/factory" = """\n/home/me/src/factory\n"""'),
 		fromShape: true,
-		costs: [
-			{
-				via: REPOINT_A_HELD_MAPPING,
-				mode: "rewrite",
-				commentsLost: "all",
-				message:
-					"saved the mapping in <file>; the whole config file was rewritten, " +
-					"and the comments in it did not survive",
-			},
-		],
+		costs: [rewriteCost(REPOINT_A_HELD_MAPPING)],
 	},
 	{
 		shape: "a multiline array on a key the plane does not hold",
@@ -1561,41 +1667,18 @@ const UNREAD_SHAPE_COSTS: readonly ShapeRecord[] = [
 	{
 		shape: "a multiline array inside a [[sources]] block the plane holds",
 		why: "the scan names the block, so no line inside it is ever rewritten and nothing is lost",
-		file: withSourceShape(
-			[
-				"[[sources]]",
-				'name = "acme-issues"',
-				'kind = "github-issues"',
-				"refresh-interval-seconds = 60",
-				"repositories = [",
-				'\t"acme/factory",',
-				"]",
-			].join("\n"),
-		),
+		file: withSourceShape(SOURCE_REPOSITORIES_ACROSS_LINES),
+		shapeStands: SOURCE_REPOSITORIES_ACROSS_LINES,
 		costs: [
-			{
-				via: ADD_A_MAPPING,
-				mode: "sections",
-				commentsLost: "none",
-				message: "saved the mapping in <file>",
-			},
-			{
-				via: REPOINT_A_HELD_MAPPING,
-				mode: "sections",
-				commentsLost: "none",
-				message: "saved the mapping in <file>",
-			},
-			{
-				via: APPEND_A_SOURCE,
-				mode: "sections",
-				commentsLost: "none",
-				message: "registered 1 new source in <file>",
-			},
-			{ via: NOTHING_NEW, mode: "unchanged", commentsLost: "none", message: "" },
+			sectionCost(ADD_A_MAPPING),
+			sectionCost(REPOINT_A_HELD_MAPPING),
+			sectionCost(APPEND_A_SOURCE),
+			NOTHING_NEW_WRITES_NOTHING,
 			// The shape stands through the first write, so it is still free on a
 			// second one over the file that write left.
 			{
 				after: ADD_A_MAPPING,
+				afterMode: "sections",
 				via: ADD_A_MAPPING,
 				mode: "unchanged",
 				commentsLost: "none",
@@ -1608,70 +1691,40 @@ const UNREAD_SHAPE_COSTS: readonly ShapeRecord[] = [
 		why:
 			"the scan names the block as a single quote character instead of refusing it, so the plane " +
 			"appends its own copy of the source it holds (issue #234)",
-		file: withSourceShape(
-			[
-				"[[sources]]",
-				'name = """',
-				"acme-issues",
-				'"""',
-				'kind = "github-issues"',
-				"refresh-interval-seconds = 60",
-				'repositories = [ "acme/factory" ]',
-			].join("\n"),
-		),
+		file: withSourceShape(SOURCE_NAME_AS_MULTILINE_STRING),
 		costs: [
+			{ ...sectionCost(ADD_A_MAPPING), sources: ["acme-issues\n", "acme-issues"] },
+			{ ...sectionCost(REPOINT_A_HELD_MAPPING), sources: ["acme-issues\n", "acme-issues"] },
 			{
-				via: ADD_A_MAPPING,
-				mode: "sections",
-				commentsLost: "none",
-				message: "saved the mapping in <file>",
-				sources: ["acme-issues\n", "acme-issues"],
-			},
-			{
-				via: REPOINT_A_HELD_MAPPING,
-				mode: "sections",
-				commentsLost: "none",
-				message: "saved the mapping in <file>",
-				sources: ["acme-issues\n", "acme-issues"],
-			},
-			{
-				via: APPEND_A_SOURCE,
-				mode: "sections",
-				commentsLost: "none",
-				message: "registered 1 new source in <file>",
+				...sectionCost(APPEND_A_SOURCE),
 				sources: ["acme-issues\n", "acme-issues", "acme/factory-pull-requests"],
 			},
-			{
-				via: NOTHING_NEW,
-				mode: "sections",
-				commentsLost: "none",
-				message: "",
-				sources: ["acme-issues\n", "acme-issues"],
-			},
+			{ ...sectionCost(NOTHING_NEW), sources: ["acme-issues\n", "acme-issues"] },
 			// The duplicate stands in the file the first write left, so the next
 			// write-back pays for it again: the check will not vouch for an edit of a
 			// file that holds the plane's source twice, and every comment line goes.
 			{
 				after: ADD_A_MAPPING,
-				via: ADD_A_MAPPING,
-				mode: "rewrite",
-				commentsLost: "all",
-				message:
-					"saved the mapping in <file>; the whole config file was rewritten, " +
-					"and the comments in it did not survive",
+				afterMode: "sections",
+				...rewriteCost(ADD_A_MAPPING),
 				sources: ["acme-issues\n", "acme-issues"],
 			},
 			{
 				after: ADD_A_MAPPING,
-				via: APPEND_A_SOURCE,
-				mode: "rewrite",
-				commentsLost: "all",
-				message:
-					"registered 1 new source in <file>; the whole config file was rewritten, " +
-					"and the comments in it did not survive",
+				afterMode: "sections",
+				...rewriteCost(APPEND_A_SOURCE),
 				sources: ["acme-issues\n", "acme-issues", "acme/factory-pull-requests"],
 			},
 		],
+	},
+	{
+		shape: "a multiline array outside the two regions the plane owns",
+		why:
+			"the scan does not read the value, but the line stands in a [[states]] block the plane " +
+			"never edits, so no write-back has a reason to touch it and nothing is lost",
+		file: withStatesShape(STATES_LABELS_ACROSS_LINES),
+		shapeStands: STATES_LABELS_ACROSS_LINES,
+		costs: sectionEditCosts(NOTHING_NEW_WRITES_NOTHING),
 	},
 ];
 
@@ -1748,47 +1801,91 @@ const READ_SHAPE_COSTS: readonly ShapeRecord[] = [
 	},
 ];
 
+/**
+ * What the scan decides about the file's own shape, rather than about a value it
+ * reads or does not read.
+ *
+ * Each of these is a rule the module states and the scan enforces: a second
+ * `[repos]` header is refused, and a table header that carries a comment is
+ * still read as a header. Both cost the operator something, in comments or in
+ * the file's own layout, so each is measured here the way a shape is.
+ */
+const SCAN_JUDGEMENT_COSTS: readonly ShapeRecord[] = [
+	{
+		shape: "a second [repos] header in the same file",
+		why:
+			"the scan finds two regions for one table and refuses the edit; TOML forbids a redefined " +
+			"table, so the verify step's parse would refuse this file too",
+		file: `${operatorFile("/home/me/src/factory")}\n# The checkouts on the other machine.\n[repos]\n"github.com/acme/other" = "/home/me/src/other"\n`,
+		costs: rewriteCosts(),
+	},
+	{
+		shape: "a comment riding on the [repos] table header",
+		why:
+			"the scan reads a header that carries a comment, so the table is found and edited in place; " +
+			"a scan that read only a bare header would find no [repos] table and append a second one, " +
+			"which the check would refuse",
+		file: operatorFile("/home/me/src/factory").replace(
+			"[repos]\n",
+			"[repos] # the checkouts the plane writes back\n",
+		),
+		shapeStands: "[repos] # the checkouts the plane writes back",
+		costs: sectionEditCosts(NOTHING_NEW_WRITES_NOTHING),
+	},
+];
+
 /** Compare one measured cost against the record a reviewer reads. */
-function expectCost(measured: Measured, record: CostRecord): void {
+function expectCost(measured: Measured, cost: CostRecord, shape: ShapeRecord): void {
 	const where =
-		record.after === undefined ? record.via.name : `${record.after.name}, then ${record.via.name}`;
+		cost.after === undefined ? cost.via.name : `${cost.after.name}, then ${cost.via.name}`;
 	const fileComments = commentLines(measured.before);
 	const lost =
-		record.commentsLost === "all"
+		cost.commentsLost === "all"
 			? fileComments
-			: record.commentsLost === "none"
+			: cost.commentsLost === "none"
 				? []
-				: [...record.commentsLost];
-	expect(measured.cost.mode, `${where}: the mode the write landed as`).toBe(record.mode);
+				: [...cost.commentsLost];
+	expect(measured.cost.mode, `${where}: the mode the write landed as`).toBe(cost.mode);
 	expect(measured.cost.commentsLost, `${where}: the comment lines the write dropped`).toEqual(lost);
 	expect(measured.cost.commentsKept, `${where}: the comment lines the write kept`).toEqual(
 		fileComments.filter((line) => !lost.includes(line)),
 	);
-	expect(measured.cost.message, `${where}: the Message line the write left`).toBe(record.message);
-	if (record.sources !== undefined) {
+	expect(measured.cost.message, `${where}: the Message line the write left`).toBe(cost.message);
+	if (cost.sources !== undefined) {
 		expect(measured.cost.sources, `${where}: the sources the file carries after the write`).toEqual(
-			[...record.sources],
+			[...cost.sources],
 		);
+	}
+	if (shape.shapeStands !== undefined) {
+		expect(
+			measured.cost.written,
+			`${where}: the operator's own lines the write was recorded as leaving alone`,
+		).toContain(shape.shapeStands);
+	}
+}
+
+/** Run every write-back a record names over one shape and compare each to its record. */
+async function expectShapeCosts(record: ShapeRecord): Promise<void> {
+	for (const cost of record.costs) {
+		expectCost(await measure(record, cost), cost, record);
 	}
 }
 
 describe("the shapes the config write-back's line scan does not read (ADR 0103)", () => {
 	for (const record of UNREAD_SHAPE_COSTS) {
-		test(`${record.shape}: ${record.why}`, async () => {
-			for (const cost of record.costs) {
-				expectCost(await measure(record, cost), cost);
-			}
-		});
+		test(`${record.shape}: ${record.why}`, () => expectShapeCosts(record));
 	}
 });
 
 describe("the shapes the config write-back's line scan reads today (ADR 0103)", () => {
 	for (const record of READ_SHAPE_COSTS) {
-		test(`the scan reads ${record.shape}: ${record.why}`, async () => {
-			for (const cost of record.costs) {
-				expectCost(await measure(record, cost), cost);
-			}
-		});
+		test(`the scan reads ${record.shape}: ${record.why}`, () => expectShapeCosts(record));
+	}
+});
+
+describe("what the config write-back's line scan decides about the file's own shape (ADR 0103)", () => {
+	for (const record of SCAN_JUDGEMENT_COSTS) {
+		test(`${record.shape}: ${record.why}`, () => expectShapeCosts(record));
 	}
 });
 

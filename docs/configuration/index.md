@@ -695,13 +695,21 @@ a mapping value the plane must write and cannot carry in place - a multiline
 string or a multiline array standing on a key the plane holds - and a file your
 edit left in a shape the startup loader itself refuses: a broken line, a stray
 byte-order mark, a dotted key in the `[repos]` table, a multiline array or an
-inline table written across lines standing on any `[repos]` key, a dotted key
-inside a `[[sources]]` block, a `[sources]` table instead of `[[sources]]`
-blocks, or a `[[sources]]` block that names no `name`. The loader refuses those
-at startup, so the plane only meets one of them through an edit made while it
-runs. The empty source list is not in that group: the plane writes no `sources`
-key at all for no sources, and a `sources = []` line an earlier version wrote is
-one the write-back drops before it appends its blocks.
+inline table written across lines standing on any `[repos]` key, a second
+`[repos]` header in one file, a dotted key inside a `[[sources]]` block, a
+`[sources]` table instead of `[[sources]]` blocks, or a `[[sources]]` block that
+names no `name`. The loader refuses those at startup, so the plane only meets
+one of them through an edit made while it runs. The empty source list is not in
+that group: the plane writes no `sources` key at all for no sources, and a
+`sources = []` line an earlier version wrote is one the write-back drops before
+it appends its blocks.
+
+A shape that stands outside those two sections is not the plane's to edit, and
+it costs you nothing: a `labels-any` array you write across lines inside a
+`[[states]]` block stays exactly where you put it, and so does a comment you
+write on a table header line. What a rewrite does cost is more than the comment
+lines: your blank lines, the order you put the tables in, and every byte the
+plane's own serializer does not write go with them.
 
 One shape takes no rewrite and still costs you, and it is a shape the loader
 accepts: a `[[sources]]` block whose `name` you wrote as a multiline string. The
