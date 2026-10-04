@@ -1218,13 +1218,15 @@ describe("the config write-back (ADR 0103)", () => {
 // lines a write drops, and one record uses that form: "a multiline array on a key
 // the plane holds, in a file whose lines end CRLF" names the fixture's five
 // comment lines through `FIXTURE_COMMENT_LINES` where every other rewrite record
-// says `all`. Delete one line from that list and that record goes red while every
-// record that says `all` stays green; put `"all"` in the record instead of the
-// list and it stays green. The named lines carry no carriage return: a CRLF file
-// puts a `\r` on the end of each of them, and `commentLines()` strips it, so the
-// same five lines name the fixture's comments in either file. A scan that one day
-// keeps part of an operator's file has a form that states what it kept, and the
-// check reads that form.
+// says `all`. Delete one line from that list and 2 go red: that record, and the
+// check that the list names the fixture's own comment lines, which is what keeps
+// the list from drifting from the file it names. Every record that says `all`
+// stays green, and putting `"all"` in the record instead of the list keeps it
+// green. The named lines carry no carriage return: a CRLF file puts a `\r` on the
+// end of each of them, and `commentLines()` strips it, so the same five lines
+// name the fixture's comments in either file. A scan that one day keeps part of
+// an operator's file has a form that states what it kept, and the check reads
+// that form.
 //
 // Probe D, a scan that refuses an array or an inline table written across lines
 // anywhere in the file, not only in the two regions the plane owns. In
@@ -1500,7 +1502,10 @@ interface ShapeRecord {
 function rewriteMessage(written: string): string {
 	if (written === "")
 		return "the whole config file at <file> was rewritten, and the comments in it did not survive";
-	return `${written} in <file>; the whole config file was rewritten, and the comments in it did not survive`;
+	return (
+		`${written} in <file>; the whole config file was rewritten, ` +
+		"and the comments in it did not survive"
+	);
 }
 
 /** The Message line a write leaves when the check vouched for its section edit. */
@@ -1582,6 +1587,18 @@ const FIXTURE_COMMENT_LINES = [
 	"# The feed the operator reads by hand: the issues of the one repository.",
 	"# The states of the label workflow, in match order.",
 ];
+
+/**
+ * The operator's file with a second `[repos]` table appended below the first - a
+ * redefined table, which TOML forbids.
+ */
+const TWO_REPOS_HEADERS = [
+	operatorFile("/home/me/src/factory"),
+	"# The checkouts on the other machine.",
+	"[repos]",
+	'"github.com/acme/other" = "/home/me/src/other"',
+	"",
+].join("\n");
 
 const UNREAD_SHAPE_COSTS: readonly ShapeRecord[] = [
 	{
@@ -1816,7 +1833,7 @@ const SCAN_JUDGEMENT_COSTS: readonly ShapeRecord[] = [
 		why:
 			"the scan finds two regions for one table and refuses the edit; TOML forbids a redefined " +
 			"table, so the verify step's parse would refuse this file too",
-		file: `${operatorFile("/home/me/src/factory")}\n# The checkouts on the other machine.\n[repos]\n"github.com/acme/other" = "/home/me/src/other"\n`,
+		file: TWO_REPOS_HEADERS,
 		costs: rewriteCosts(),
 	},
 	{
@@ -1887,6 +1904,15 @@ describe("what the config write-back's line scan decides about the file's own sh
 	for (const record of SCAN_JUDGEMENT_COSTS) {
 		test(`${record.shape}: ${record.why}`, () => expectShapeCosts(record));
 	}
+});
+
+describe("the form the shape records are written in (issue #228)", () => {
+	test("the exact-lines list names the fixture's comment lines and no others", () => {
+		// The one record that names the lines it loses reads this list. If the
+		// fixture gains a comment line and the list does not, that record's claim
+		// stops naming the file it measures.
+		expect(FIXTURE_COMMENT_LINES).toEqual(commentLines(operatorFile("/home/me/src/factory")));
+	});
 });
 
 describe("the write-back's Message line (ADR 0103)", () => {
