@@ -406,7 +406,7 @@ Its attempt is a fact on the ticket, outside any work cycle: the time, the task 
 Its outcome fires the task type's Transition the way a `completed` settle does, on both outcomes alike, and the fire's fact lands on the attempt's record, because no Completion trace stands for it.
 The successful merge leaves the projection at once: the merged pull request retires, and so does every issue it closed on the merge, the way the next source refresh would (ADR 0068).
 The fire's successful label write converges the projection at once: the ticket's newest membership wears the labels the fire wrote, and the position the machine derives stands on them without waiting for the source's next read (ADR 0079).
-A blocked attempt whose label write failed holds the auto top-up's re-ask of the action until one of the ticket's active sources re-reads the ticket after the attempt: the fire could not move the labels, the position still offers the merge the block could not move, and only the read that outruns the attempt settles the position on the source's own labels. The hold is silent, and it holds the automatic adds only: the operator's confirm passes it (ADR 0077). A failed Handoff start keeps the same hold over its own re-ask, and both channels read the one rule (ADR 0101).
+A blocked attempt whose label write failed holds the auto top-up's re-ask of the action until every one of the ticket's active sources has re-read the ticket after the attempt: the fire could not move the labels, the position still offers the merge the block could not move, and only the read that outruns the attempt settles the position on the source's own labels. The hold is silent, and it holds the automatic adds only: the operator's confirm passes it (ADR 0077). A failed Handoff start keeps the same hold over its own re-ask, and both channels read the one rule (ADR 0101).
 _Avoid_: handoff, automation, command
 
 **Route close**:
@@ -420,9 +420,9 @@ An attempt that settled `failed` started no Agent and left no Handoff: it counts
 _Avoid_: pending ticket, handoff state
 
 **Attempt hold**:
-The condition in which a ticket's newest Handoff attempt settled `failed`, or its newest Plane action attempt blocked, and none of the ticket's active sources has re-read the ticket since that attempt's outcome landed.
-The start changed nothing on the source, so the position still offers the task the failed start already tried and every other top-up gate still reads clear; the read that carries the ticket's current facts is the signal the next ask waits for.
-It is silent, and it holds the auto top-up's automatic adds only: the operator's confirm, the pickup's claim, and a force-dispatch pass it. Both start channels read the one rule, and an attempt still in flight holds nothing - the unresolved attempt is what the claim gate owns (ADR 0077 as extended by ADR 0101).
+The condition in which a ticket's newest Handoff attempt settled `failed`, or its newest Plane action attempt blocked, and not every one of the ticket's active sources has re-read the ticket since that attempt's outcome landed.
+The start changed nothing on the source, so the position still offers the task the failed start already tried and every other top-up gate still reads clear; the read that carries the ticket's current facts is the signal the next ask waits for. One active source whose last read still predates the attempt keeps the hold, so a ticket with several active sources waits on its slowest source's refresh.
+Any failed start sets it - the automatic ask, the operator's confirm, a pickup, and a force-dispatch all leave the same attempt row - because a start that never reached its Agent refused for a reason that says nothing about who asked. It is silent, and it holds the auto top-up's automatic adds only: the operator's confirm, the pickup's claim, and a force-dispatch pass it. Both start channels read the one rule, and an attempt still in flight holds nothing - the unresolved attempt is what the claim gate owns (ADR 0077 as extended by ADR 0101).
 _Avoid_: retry cooldown, backoff timer, dispatch block
 
 **Auto-handoff mode**:
@@ -468,7 +468,7 @@ _Avoid_: follow-up, workflow advance
 The one automatic add the observation cycle makes to the Work queue: while Auto-handoff mode is on, a continuation, else a restart, else an eligible open pull request ticket, else an eligible fresh open ticket, else nothing (ADR 0051, ADR 0088). The continuation is asked before the Work queue's pickup and waits only behind a continuation already standing; a row the operator staged is a standing row the continuation outranks (ADR 0094, ADR 0100). The restart and open-ticket adds run after the pickup and only into an empty queue (ADR 0094).
 The pull request group stands ahead of the fresh group: the work the machine has started on a pull request moves to the end before the machine starts work on a ticket it has not started. The list's order holds inside each group, and a gate that holds one ticket holds that ticket only: the held ticket rests, and the walk falls to the next candidate, as every gate does.
 It adds one item per cycle, and only into an empty queue, so the queue never piles. A cycle that asked a continuation asks no fresh work, and the queue then holds at most one fresh-work row beside the continuation it outranks (ADR 0094, ADR 0100).
-A ticket whose newest automatic start failed, or whose newest plane action blocked, holds the re-ask until one of its active sources re-reads it: the Attempt hold (ADR 0077 as extended by ADR 0101).
+A ticket whose newest start failed, or whose newest plane action blocked, holds the re-ask until every one of its active sources re-reads it: the Attempt hold (ADR 0077 as extended by ADR 0101).
 _Avoid_: refill, auto dispatch, queue feed
 
 **Queue pause**:

@@ -64,7 +64,7 @@ agent-poll-interval-seconds = 5
 # Lines of the agent last message captured when a turn settles.
 completion-message-lines = 200
 
-# Handoffs per ticket after which auto-handoff stops dispatching it.
+# Handoff attempts per ticket after which auto-handoff stops dispatching it.
 max-handoffs-per-ticket = 10
 
 # --- UI ----------------------------------------------------------------

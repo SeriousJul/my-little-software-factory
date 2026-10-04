@@ -147,14 +147,16 @@ export class PlaneActionModule implements PlaneActionAggregate {
 	 * The blocked attempt's hold (ADR 0077). The rule itself is the shared
 	 * blocked-and-unrefreshed rule the Handoff aggregate reads the same way over
 	 * its own attempt table (ADR 0101); this aggregate supplies the newest
-	 * attempt and the word `blocked`.
+	 * attempt, the word `blocked`, and the source half through
+	 * `sourceFact.hasUnrefreshedActiveMembershipSince` - the query the cycle-end
+	 * re-verify gate runs, so the two gates wait on one time rule.
 	 */
 	planeActionBlockedUnrefreshed(identity: string): boolean {
 		return blockedUnrefreshedHold({
 			latestAttempt: this.latestPlaneActionAttemptRow(identity),
 			unreachedOutcome: "blocked",
-			activeSourceNames: this.graph().sourceFact.activeMembershipSourceNames(identity),
-			lastSourceRead: (name) => this.graph().sourceFact.sourceLastSuccess(name),
+			unrefreshedSince: (at) =>
+				this.graph().sourceFact.hasUnrefreshedActiveMembershipSince(identity, at),
 		});
 	}
 

@@ -103,9 +103,10 @@ export interface HandoffAggregate {
 	handoffCountsFor(identities: readonly string[]): Map<string, number>;
 	/**
 	 * Whether the Ticket's newest Handoff attempt holds the auto top-up's re-ask
-	 * of that Ticket: the attempt settled `failed` - it started no Agent - and no
-	 * active source has re-read the Ticket since it landed (ADR 0077 as extended
-	 * by ADR 0101, issue #217). The hold gates the automatic adds only.
+	 * of that Ticket: the attempt settled `failed` - it started no Agent - and not
+	 * every active source has re-read the Ticket since it landed (ADR 0077 as
+	 * extended by ADR 0101, issue #217). The hold reads the attempt, not who asked
+	 * for the start, and it gates the automatic adds only.
 	 */
 	handoffBlockedUnrefreshed(identity: string): boolean;
 	autoHandoffMode(): boolean;
@@ -265,22 +266,36 @@ export class HandoffModule implements HandoffAggregate {
 	 * The failed start's hold (ADR 0077 as extended by ADR 0101, issue #217). The
 	 * rule is the shared blocked-and-unrefreshed rule the Plane action aggregate
 	 * reads over its own attempt table; this aggregate supplies the newest
-	 * Handoff attempt and the word `failed`.
+	 * Handoff attempt, the word `failed`, and the source half through
+	 * `sourceFact.hasUnrefreshedActiveMembershipSince` - the query the cycle-end
+	 * re-verify gate runs, so the two gates wait on one time rule.
 	 *
 	 * The attempt's own record is the read: the newest attempt by the time it was
 	 * claimed, and the time its outcome landed. An attempt still in flight - no
 	 * outcome yet - holds nothing here; the unresolved attempt is what the claim
 	 * gate and the queue's one-item rule already hold the re-ask on.
+	 *
+	 * The read cost is two statements per ask the walk reaches: the newest attempt
+	 * row, served by `attempts_ticket_latest`, and the source fact over the
+	 * Ticket's memberships. The hold runs once per candidate the walk reaches, so
+	 * the index behind the newest-attempt read is what keeps that off the cycle's
+	 * critical path (ADR 0101).
 	 */
 	handoffBlockedUnrefreshed(identity: string): boolean {
 		return blockedUnrefreshedHold({
 			latestAttempt: this.latestHandoffAttemptRow(identity),
 			unreachedOutcome: "failed",
-			activeSourceNames: this.graph().sourceFact.activeMembershipSourceNames(identity),
-			lastSourceRead: (name) => this.graph().sourceFact.sourceLastSuccess(name),
+			unrefreshedSince: (at) =>
+				this.graph().sourceFact.hasUnrefreshedActiveMembershipSince(identity, at),
 		});
 	}
-	/** The newest attempt row: the stage its outcome landed with and that time. */
+	/**
+	 * The newest attempt row: the stage its outcome landed with and that time.
+	 * "Newest" is the newest claim - `created_at`, then the insert order - and the
+	 * outcome the claim settled with. `attempts_ticket_latest` serves the read in
+	 * one index step: the index stands ascending so its backward scan lands the
+	 * newest claim first and breaks a same-millisecond tie on the row order.
+	 */
 	private latestHandoffAttemptRow(identity: string): { outcome: string; at: string } | null {
 		const row = this.db
 			.prepare(

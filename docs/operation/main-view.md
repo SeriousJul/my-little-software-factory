@@ -31,8 +31,8 @@ header row; the same toggle restores it.
 
 The detail pane shows the full detail of the selected item. On a ticket: the
 title, the repository, the state, the agent with its environment, model,
-thinking level, and context window, the task type, the handoff count against
-its limit, the last completion when one stands, and the source facts - the
+thinking level, and context window, the task type, the handoff attempt count
+against its limit, the last completion when one stands, and the source facts - the
 source name, the state, and the labels. On an open ticket it shows the
 settings `Enter` would start with; on a ticket inside a work cycle it shows
 the settings that handoff started with.

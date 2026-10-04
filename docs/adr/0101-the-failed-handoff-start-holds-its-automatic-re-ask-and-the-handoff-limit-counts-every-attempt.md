@@ -24,8 +24,8 @@ Nothing held the next cycle's ask of the same Ticket, so the walk asked the same
 failing start again on every empty-queue cycle, for as long as the Ticket stood.
 
 The Plane action walk already owns the right shape (ADR 0077): its blocked attempt
-holds the top-up's re-ask until one of the Ticket's active sources re-reads the
-Ticket after the attempt ran. The Handoff walk had no equivalent.
+holds the top-up's re-ask until every one of the Ticket's active sources has
+re-read the Ticket after the attempt ran. The Handoff walk had no equivalent.
 
 The brake that was supposed to bound this could not reach it. `handoffCount` -
 what the Handoff limit reads - counted the `handoffs` table beside the plane
@@ -37,14 +37,26 @@ figures.
 
 **The failed Handoff start holds its automatic re-ask.** The Ticket's newest
 Handoff attempt that settled `failed` - it claimed, it ran, and it started no
-Agent - holds the auto top-up's ask of that Ticket until one of the Ticket's
-active sources re-reads the Ticket after the attempt's outcome landed. The hold
-stands in the top-up's Handoff ask, the one step all four walks share: the
-continuation, the re-fired skip's route, the restart, and the open ticket. It is
-silent: the re-ask on the refresh is the expected path, not a refusal to report,
-and the walk moves on to its next candidate. It gates the automatic adds only -
-the operator's confirm, the pickup's claim, and the force-dispatch pass it, the
-way they pass the Handoff limit and the Same-type hold.
+Agent - holds the auto top-up's ask of that Ticket until every one of the
+Ticket's active sources has re-read the Ticket after the attempt's outcome
+landed. One active source whose last read still predates the attempt keeps the
+hold. The hold stands in the top-up's Handoff ask, the one step all four walks
+share: the continuation, the re-fired skip's route, the restart, and the open
+ticket. It is silent: the re-ask on the refresh is the expected path, not a
+refusal to report, and the walk moves on to its next candidate. It gates the
+automatic adds only - the operator's confirm, the pickup's claim, and the
+force-dispatch pass it, the way they pass the Handoff limit and the Same-type
+hold.
+
+**Any failed start sets the hold, whatever asked for it.** The rule reads the
+Ticket's newest attempt and the outcome it settled with; the attempt ledger
+carries no origin, and none is needed. A failed automatic ask, a failed operator
+confirm, a failed pickup of a row the operator staged, and a failed
+force-dispatch all leave the same `failed` row, and all hold the automatic walks
+until the next read. The cause of a start that never reached its Agent - a
+worktree path that stands, a name a stranger holds - says nothing about who
+asked, so the automatic walk would meet the same refusal on its next ask. The
+operator's own ask is never held: the hold gates the automatic adds only.
 
 The hold is the same wait ADR 0077 waits for. The failed start changed nothing on
 the source, so the read that lands the Ticket's current facts is the new signal
@@ -52,7 +64,11 @@ that makes the next ask worth making. A Ticket with no active source holds
 nothing: no read can release it, and no automatic add stands on it either. An
 attempt still in flight holds nothing here - it has no outcome to wait out, and
 the unresolved attempt is what the claim gate and the queue's one-item rule
-already hold the re-ask on.
+already hold the re-ask on. The wait is measured from the time the outcome
+landed, not from the claim: a source read that lands between the claim and the
+refusal is not the release, because the failure was not yet a fact then. A read
+landing at the outcome's own instant is the release - the boundary the cycle-end
+re-verify gate keeps, and both gates ask the same query for it.
 
 **Both channels read one rule.** The blocked-and-unrefreshed decision lives once,
 in `src/domain/attempt-hold.ts`. The Handoff aggregate supplies its newest
@@ -60,8 +76,11 @@ in `src/domain/attempt-hold.ts`. The Handoff aggregate supplies its newest
 its outcome landed, and the word `failed` - and the Plane action aggregate
 supplies its newest `plane_action_attempts` row and the word `blocked`. Each
 aggregate answers through its own interface method over its own tables; the
-comparison, the source walk, and the answer are the shared module's. ADR 0077's
-hold does not change behavior.
+decision is the shared module's. The source half is not a second rule: each
+aggregate passes the fact through
+`sourceFact.hasUnrefreshedActiveMembershipSince`, the query the cycle-end
+re-verify gate already runs, so the time comparison, its boundary, and its
+precision stand in that one query. ADR 0077's hold does not change behavior.
 
 **The Handoff limit counts every attempt.** `handoffCount` is the Ticket's
 `handoff_attempts` rows plus its Plane action attempts. Every `handoffs` row has
@@ -73,10 +92,10 @@ limit rests from the automatic walks, and the operator's ask passes it.
 ## Considered options
 
 - **Only the hold, and leave the limit on started handoffs.** Rejected: the hold
-  bounds the cadence to one attempt per source refresh, not the total. A Ticket
-  whose cause never clears - a worktree path that stands, a name a stranger holds
-  - would ask once per refresh forever, and the cap that exists to bound a
-  run-away loop would still be blind to it.
+  bounds the cadence to one attempt per release of the hold, not the total. A
+  Ticket whose cause never clears - a worktree path that stands, a name a
+  stranger holds - would ask once per release forever, and the cap that exists to
+  bound a run-away loop would still be blind to it.
 - **Only the limit, and no hold.** Rejected: the limit is a different brake with
   a heavier failure mode. It ends the Ticket's automatic work after N tries, and
   for an in-flight Ticket the abandon is a decision written on the trace. The
@@ -84,12 +103,16 @@ limit rests from the automatic walks, and the operator's ask passes it.
   for a start that failed once.
 - **A fixed cooldown after a failed start.** Rejected for ADR 0077's reason: a
   timer is not a fact. The refresh is the event that makes the next ask worth
-  making, and waiting for it bounds the hold to one refresh interval with no new
-  knob.
+  making, and waiting for it bounds the hold to the Ticket's own refresh cadence
+  with no new knob.
 - **Count only the failed attempts, and leave the in-flight ones out.** Rejected:
   the ledger is one row per start the factory made, and a start that has not
   settled yet is a start. Counting a subset makes the number depend on when the
   read happens.
+- **Set the hold only for a start the automatic walks asked for.** Rejected: the
+  attempt ledger carries no origin, and adding one to hold a fact the failure
+  already states would be a new column for no decision the plane makes. The
+  refusal a manual start met is the refusal the next automatic ask would meet.
 - **Converge the Ticket's position locally when a start fails.** Rejected for
   ADR 0077's reason: the source's fetch is the one writer of the Ticket's
   position, and a second writer that copies the plane's intent opens a divergence
@@ -106,13 +129,26 @@ state file, #37 reads 9,365 against a limit of 20 and #45 reads 1,773: both stop
 being handed off automatically on the next run, and an in-flight Ticket in that
 state is abandoned by the in-flight walk's limit check the way a Ticket at the
 cap is today. That is the count of an install that ran without the hold; with the
-hold in place the attempts accumulate at one per source refresh, so reaching the
-cap takes as many refreshes as it takes starts.
+hold in place the attempts accumulate at one per release - one per cycle in which
+every active source has re-read the Ticket since the last failure. A Ticket with
+several active sources waits on its slowest source's `refreshIntervalMs`, not on
+one refresh interval.
 
 `recoverUnsettledHandoffs` settles the claim a crashed run left behind as a failed
 start, so a Ticket whose start was cut off keeps the hold until its sources
 re-read it, the way ADR 0077's hold survives a restart on the attempt's row.
 
-The hold adds no read to the cycle: the top-up's ask already holds the Ticket's
-identity, and the hold answers from the newest attempt row and the source reads
-the gates already use.
+The hold adds reads to the cycle, and they are bounded. Each automatic ask the
+walk reaches costs the Ticket's newest attempt row and one join over the Ticket's
+active memberships - the same statement the cycle-end re-verify gate runs. The
+newest-attempt read is the one that needed work: `attempts_ticket_open` serves
+the in-flight lookup on `resolved_at`, not the newest claim, so the read scanned
+the Ticket's attempt rows and sorted them. Measured on the real schema with
+20,001 attempt rows for one Ticket, 200 of the hold's reads cost 490 ms (2.45 ms
+each) with no index behind them; the v27 to v28 migration adds
+`attempts_ticket_latest` on `handoff_attempts(ticket_identity, created_at)` and
+the same 200 reads cost 4.4 ms (0.022 ms each). The index stands ascending on
+purpose: the read orders `created_at DESC, rowid DESC`, and SQLite answers that
+with a backward scan, so a same-millisecond tie lands the later claim first with
+no temporary B-tree. The count the Handoff limit reads costs 0.27 ms per Ticket
+at the same 20,001 rows.

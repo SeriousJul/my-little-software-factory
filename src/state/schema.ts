@@ -6,7 +6,7 @@
 
 import type { Database } from "bun:sqlite";
 import { StateError } from "./store.ts";
-export const SCHEMA_VERSION = 27;
+export const SCHEMA_VERSION = 28;
 export const SCHEMA_V1 = `
 	CREATE TABLE tickets (
 		identity TEXT PRIMARY KEY, state TEXT NOT NULL, work_cycle INTEGER NOT NULL,
@@ -254,6 +254,20 @@ CREATE TABLE IF NOT EXISTS repository_init (
 	at TEXT NOT NULL
 );
 `;
+/**
+ * The index behind the newest-attempt read both attempt holds run (ADR 0101).
+ * `attempts_ticket_open` serves the in-flight lookup on `resolved_at`, not the
+ * newest claim, so without this the read scans the Ticket's attempt rows and
+ * sorts them - 4 ms per read on a Ticket carrying 20,000 attempts.
+ *
+ * The index stands ascending on purpose. The read orders `created_at DESC,
+ * rowid DESC`, and SQLite answers that with a backward scan of an ascending
+ * index: the implicit rowid term comes out descending too, so a same-millisecond
+ * tie lands the later claim first and no temporary B-tree is built. An index on
+ * `created_at DESC` cannot serve that tiebreak.
+ */
+export const MIGRATION_V27_TO_V28_ATTEMPT_LATEST_INDEX =
+	"CREATE INDEX IF NOT EXISTS attempts_ticket_latest ON handoff_attempts(ticket_identity, created_at);";
 export function hasTable(db: Database, name: string): boolean {
 	return (
 		db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?").get(name) != null
@@ -261,6 +275,11 @@ export function hasTable(db: Database, name: string): boolean {
 }
 export function hasColumn(db: Database, table: string, name: string): boolean {
 	return db.prepare("SELECT 1 FROM pragma_table_info(?) WHERE name = ?").get(table, name) != null;
+}
+export function hasIndex(db: Database, name: string): boolean {
+	return (
+		db.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name = ?").get(name) != null
+	);
 }
 export function migrate(db: Database, path: string): void {
 	db.exec("BEGIN IMMEDIATE");
@@ -353,6 +372,10 @@ export function migrate(db: Database, path: string): void {
 		// a file the step already ran keeps its stored init facts, and an older
 		// file opens with none, which the read answers as uninit (ADR 0075).
 		if (!hasTable(db, "repository_init")) db.exec(MIGRATION_V26_TO_V27_REPOSITORY_INIT);
+		// Asked for by name, the way the plane action attempt index is: a file the
+		// step already ran keeps its index, and an older file gains it before the
+		// first cycle that reads the Ticket's newest attempt (ADR 0101).
+		if (!hasIndex(db, "attempts_ticket_latest")) db.exec(MIGRATION_V27_TO_V28_ATTEMPT_LATEST_INDEX);
 		// The `queued` state the retired route wait stood in (ADR 0072): a
 		// file that still carries it ends those cycles the way a close does -
 		// the ticket rests open with the cycle counted once - in one state

@@ -5914,4 +5914,51 @@ describe("the failed Handoff start's hold (ADR 0077 as extended by ADR 0101, iss
 		expect(intents).toHaveLength(1);
 		state.close();
 	});
+
+	test("the loop as it runs: the ask enqueues, the pickup's start fails, the next ask is held", async () => {
+		// The shape the development install actually ran (issue #217). The
+		// automatic ask only enqueues, so it answers "added" before any start has
+		// failed; the failure lands later, at the pickup, when herdr refuses the
+		// Agent. The rig's pickup mirrors that walk (ADR 0049): the claim runs the
+		// hard checks, the start fails, the attempt settles `failed` with no Handoff
+		// under it, and the item drops. That row is what the hold reads, and no
+		// earlier test in this file covers this order.
+		const identity = "github:github.com:I_5";
+		const { state, intents, coordinator } = rig({
+			autoOn: true,
+			agents: [],
+			pickupWorkQueue: async () => {
+				const [item] = state.workQueue.items();
+				if (item === undefined || item.kind !== "handoff") return 0;
+				const claim = state.handoff.claimHandoff(item.ticketIdentity, item.choice, item.origin);
+				if (claim.ok) state.handoff.settleHandoff(claim.claim.attemptId, false, failure);
+				state.workQueue.removeWorkItem(item.ticketIdentity);
+				return 1;
+			},
+		});
+		// Cycle 1: the ask lands in the queue. Nothing has failed, so nothing is
+		// held, and the queue's one-item rule ends the cycle's fresh work.
+		await coordinator.tick();
+		expect(intents).toHaveLength(1);
+		expect(state.workQueue.hasWorkItem(identity)).toBe(true);
+		expect(state.handoff.handoffBlockedUnrefreshed(identity)).toBe(false);
+		// Cycle 2: the pickup takes the row and herdr refuses the start. The failed
+		// attempt is now the Ticket's newest attempt, and the ask in this same
+		// cycle - the cycle that would have re-asked it - is held.
+		await coordinator.tick();
+		expect(state.workQueue.hasWorkItem(identity)).toBe(false);
+		expect(state.handoff.handoffBlockedUnrefreshed(identity)).toBe(true);
+		expect(intents).toHaveLength(1);
+		// Every later cycle reaches the same gate. Without the hold this is where
+		// the loop ran: one ask per cycle, 9,365 of them on Ticket #37.
+		await coordinator.tick();
+		await coordinator.tick();
+		await coordinator.tick();
+		expect(intents).toHaveLength(1);
+		// The release: the source re-reads the Ticket, and the walk asks it again.
+		refresh(state);
+		await coordinator.tick();
+		expect(intents).toHaveLength(2);
+		state.close();
+	});
 });

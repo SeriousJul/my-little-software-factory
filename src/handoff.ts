@@ -289,7 +289,9 @@ const NO_NAME_KNOWLEDGE: OwnNameKnowledge = {
 function ticketNamePlan(ticket: Ticket, known: OwnNameKnowledge | undefined): NamePlan {
 	return {
 		// The last candidate carries the handoff's ordinal in the ticket: its
-		// handoff count plus one, across every cycle, so it only grows.
+		// Handoff attempt count plus one - the attempts the factory made, the starts
+		// that reached an Agent and the starts that never reached one (ADR 0101) -
+		// across every cycle, so it only grows.
 		candidates: ticketAgentNames(ticket, ticket.workCycle, ticket.handoffCount + 1),
 		known: known ?? NO_NAME_KNOWLEDGE,
 		owner: "this ticket",
