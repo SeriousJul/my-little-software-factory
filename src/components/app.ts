@@ -1814,18 +1814,39 @@ export function App({
 	 * line, and the in-session flip stands: the operator keeps working in the mode
 	 * they asked for, so the failure is news about the next run, not a refusal of
 	 * this one.
+	 *
+	 * The record states the flip the way the Message line states it (issue #223):
+	 * the plain line lands when the write took, and a write the state file refused
+	 * leaves the session-only line beside it. A file that says the mode moved while
+	 * the next run reads the old value is a record a reviewer cannot trust. The
+	 * record's line carries the `mode:` family prefix, so a reader grepping the file
+	 * for the facts the operator sets by key gets this line and not the cycle's hold
+	 * line about the same fact.
 	 */
 	const toggleAutoHandoff = () => {
 		const next = !autoModeRef.current;
 		autoModeRef.current = next;
 		setAutoMode(next);
-		if (state === undefined) return;
+		const modeLine = `mode: auto-handoff is ${next ? "on" : "off"}`;
+		const sessionOnly = `auto-handoff is ${next ? "on" : "off"} for this session only`;
+		// The mode decides every automatic walk in the run, so the record names it
+		// when it moves. A plane with no state file has nothing to persist, and the
+		// record says so: a file that claims the mode moved while no run reads it back
+		// is the same untrustworthy line a refused write leaves (issue #223 review).
+		// Both session-only lines carry `warn`, the level the configuration reference
+		// states for them, so a run filtered to `warn` keeps the news that the next
+		// run reads nothing back.
+		if (state === undefined) {
+			logger?.warn(`${modeLine} for this session only: the plane runs with no state file`);
+			return;
+		}
 		try {
 			state.handoff.setAutoHandoffMode(next);
+			logger?.info(modeLine);
 		} catch (error) {
-			setErrorMessage(
-				`auto-handoff is ${next ? "on" : "off"} for this session only: ${errorMessage(error)}`,
-			);
+			const reason = errorMessage(error);
+			logger?.warn(`${modeLine} for this session only: ${reason}`);
+			setErrorMessage(`${sessionOnly}: ${reason}`);
 		}
 	};
 
@@ -3635,21 +3656,30 @@ export function App({
 				"queue-pause": () => {
 					if (state === undefined) return;
 					const next = !state.workQueue.queuePaused();
-					// The write is guarded the way the Auto-handoff mode's identical
-					// fact is, so two facts of one kind do not fail two ways (ADR
-					// 0052). The difference is what a refused write means: the pickup
-					// and the top-up read the pause from the state, not from this
+					// The write is guarded the way the Auto-handoff mode's identical fact
+					// is (ADR 0052). What differs is what a refused write means: the
+					// pickup and the top-up read the pause from the state, not from this
 					// shell's copy, so a write that failed left the brake where it
-					// stood. The key says so and moves nothing - the section's
-					// header, the bar's hint, and the drain all keep reading the
-					// value that stands.
+					// stood. The key says so and moves nothing - the section's header, the
+					// bar's hint, and the drain all keep reading the value that stands.
 					try {
 						state.workQueue.setQueuePaused(next);
 					} catch (error) {
-						setErrorMessage(`the queue pause did not move: ${errorMessage(error)}`);
+						const reason = errorMessage(error);
+						// The refused write leaves its record line the way the Auto-handoff
+						// mode's identical failure does, so two facts of one kind do not fail
+						// two ways (issue #223 review). The line is `warn`: the operator pressed
+						// the key and the brake did not move.
+						logger?.warn(`queue: the Work queue pause did not move: ${reason}`);
+						setErrorMessage(`the queue pause did not move: ${reason}`);
 						return;
 					}
 					setQueuePaused(next);
+					// The pause is the other fact the operator sets by key, and it holds
+					// every automatic add while it stands (issue #223). The `queue:` prefix
+					// keeps this line in its own family: the cycle states its own hold line
+					// about the same fact, and a reader grepping one must not get the other.
+					logger?.info(next ? "queue: the Work queue is paused" : "queue: the Work queue resumed");
 					setNoticeMessage(next ? "Work queue paused" : "Work queue resumed");
 					if (!next) void handoffDispatch?.pickupWorkQueue();
 				},
@@ -4007,6 +4037,9 @@ export function App({
 				attention.ring();
 			},
 			reconcileOnly: true,
+			// The cycle's record lines: each hold its automatic walks take
+			// (issue #223).
+			log: logger,
 			onStatus: (kind, text, topic) => {
 				// Both sections read the same observation events: an outcome is
 				// a fact for the one Message line, whichever section is expanded.
@@ -4055,6 +4088,7 @@ export function App({
 		refreshTicketSources,
 		closeCycleEndDraft,
 		refreshPullRequestSources,
+		logger,
 	]);
 	function focusPane(pane: Pane) {
 		focusedPaneRef.current = pane;

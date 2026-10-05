@@ -10,12 +10,14 @@
  * to run, and these frames verify the waiting, not the running.
  */
 
+import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { FactoryConfig } from "../src/config.ts";
 import { baseChoice } from "../src/handoff.ts";
+import type { Logger } from "../src/logging.ts";
 import type { CommandRunner } from "../src/runner.ts";
 import { workQueueIdentityOf } from "../src/state/work-queue.ts";
 import type { FactoryState } from "../src/state.ts";
@@ -47,6 +49,7 @@ import {
 	workspaceListJson,
 } from "./fake-runner.ts";
 import { FakeSource } from "./fake-source.ts";
+import { infoLine, type RecordedLine, recordLogger } from "./record-logger.ts";
 import {
 	DEFAULT_AGENT_NAME,
 	issuesConfig,
@@ -231,6 +234,7 @@ const booted = (
 	state: FactoryState,
 	source: FakeSource,
 	runner: CommandRunner,
+	logger?: Logger,
 ): Promise<void> =>
 	withApp(body, WIDTH, 34, {
 		state,
@@ -238,6 +242,7 @@ const booted = (
 		home,
 		runner,
 		sources: [source],
+		...(logger === undefined ? {} : { logger }),
 	});
 
 /** The terminal row of the Work section's header, or -1 while it is hidden. */
@@ -427,6 +432,108 @@ describe("the Work queue section", () => {
 				state,
 				source,
 				runner,
+			);
+		} finally {
+			state.close();
+		}
+	});
+
+	/**
+	 * The pause in the plane's record (issue #223). The pause and the mode are the
+	 * two facts the operator sets by key, and they decide every automatic walk in
+	 * the run; until now neither left a line anywhere, so a reviewer could not tell
+	 * a held run from a broken one.
+	 */
+	test("p and its resume each leave one line in the record", async () => {
+		const state = openFactoryState(join(home, "state.sqlite"));
+		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
+		state.grouping.setGroupingAxis("tickets", "none");
+		const { source, enqueue, runner } = queuedFixture(state);
+		enqueue(FIRST);
+		const lines: RecordedLine[] = [];
+		try {
+			await booted(
+				async (setup) => {
+					source.settle(success(twoTickets()));
+					await awaitFrame(setup, (f) => queueRowIndex(f, openRowLead) >= 0, "the queued start");
+					await clickWorkHeader(setup);
+					await press(setup, "p", "the queue pause", (f) =>
+						messageRowOf(f).includes("Work queue paused"),
+					);
+					await press(setup, "p", "the queue resume", (f) =>
+						messageRowOf(f).includes("Work queue resumed"),
+					);
+					// One line per key, in the order the keys landed, each at the `info` level
+					// the configuration reference states for it. The `queue:` prefix is the
+					// record's family for the facts the operator sets by key. The cycle's own
+					// record lines - the holds its automatic walks state - are the other family
+					// the same logger carries, and they are not this fact's lines.
+					expect(lines.filter((line) => line.message.startsWith("queue:"))).toEqual([
+						infoLine("queue: the Work queue is paused"),
+						infoLine("queue: the Work queue resumed"),
+					]);
+				},
+				state,
+				source,
+				runner,
+				recordLogger(lines),
+			);
+		} finally {
+			state.close();
+		}
+	});
+
+	/**
+	 * The refused pause write states itself (issue #223 review).
+	 *
+	 * The Auto-handoff mode's identical failure has left its record line since this
+	 * issue landed, and the pause left none, so two facts of one kind failed two
+	 * ways: a key that moved nothing left the file quiet, and a reviewer could not
+	 * tell a brake the plane would not move from a run that simply had nothing to
+	 * start. It leaves at `warn`, the level every line stating a fact the next run
+	 * will not read back carries.
+	 */
+	test("a queue pause the state file refuses leaves its warn line", async () => {
+		const state = openFactoryState(join(home, "state.sqlite"));
+		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
+		state.grouping.setGroupingAxis("tickets", "none");
+		const { source, enqueue, runner } = queuedFixture(state);
+		enqueue(FIRST);
+		const lines: RecordedLine[] = [];
+		try {
+			await booted(
+				async (setup) => {
+					source.settle(success(twoTickets()));
+					await awaitFrame(setup, (f) => queueRowIndex(f, openRowLead) >= 0, "the queued start");
+					// The real write path, made to fail while the read still works: the
+					// pause table is replaced by a view of the same name, so the plane's
+					// write to it is refused by SQLite while its every-frame read of the
+					// brake keeps answering. The busy timeout covers the refresh write
+					// still in flight.
+					const damage = new Database(state.path);
+					damage.exec("PRAGMA busy_timeout = 5000;");
+					damage.exec("DROP TABLE queue_pause;");
+					damage.exec("CREATE VIEW queue_pause AS SELECT 1 AS id, 0 AS paused;");
+					damage.close();
+					await clickWorkHeader(setup);
+					await press(setup, "p", "the refused pause", (f) =>
+						messageRowOf(f).includes("the queue pause did not move"),
+					);
+					// The brake stayed where it stood: the pickup and the top-up read the
+					// pause off the state, and the state never took the write.
+					expect(state.workQueue.queuePaused()).toBe(false);
+					// One line, at `warn`, naming the state file the write failed on. The
+					// `queue:` family carries no move line beside it: the brake did not move.
+					const stated = lines.filter((line) => line.message.startsWith("queue:"));
+					expect(stated).toHaveLength(1);
+					expect(stated[0]?.level).toBe("warn");
+					expect(stated[0]?.message).toContain("queue: the Work queue pause did not move:");
+					expect(stated[0]?.message).toContain(state.path);
+				},
+				state,
+				source,
+				runner,
+				recordLogger(lines),
 			);
 		} finally {
 			state.close();

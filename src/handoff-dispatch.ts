@@ -11,6 +11,7 @@
 import type { FactoryConfig } from "./config.ts";
 import type { ConfigWriteReport } from "./config-write.ts";
 import type { ConsultationPickupOutcome } from "./consultation-operations.ts";
+import { queueStagingOf } from "./domain/queue-staging.ts";
 import type { StartMode } from "./domain/start-mode.ts";
 import type { EnvironmentKind, Ticket, TicketState } from "./domain/ticket.ts";
 import { inFlightState, issueReferencesOf } from "./domain/ticket.ts";
@@ -291,9 +292,10 @@ export interface HandoffDispatchOptions extends HandoffDispatchReports {
 	/**
 	 * The plane's file logger. The dispatch leaves the record's start lines and
 	 * queue lines, for a Handoff and for a Plane action alike: a start with its
-	 * start mode, its origin, and its seat reading, a queue, and a refusal with
-	 * its reason. A Consultation's start line is not one of them: the
-	 * Consultation operations leave it (issue #220).
+	 * start mode, its origin, its staging, and its seat reading, a queue, and a
+	 * refusal with its reason - the standing-row refusal and a refused claim once
+	 * for the fact that stands, not once per ask. A Consultation's start line is
+	 * not one of them: the Consultation operations leave it (issue #220).
 	 */
 	log?: Logger;
 }
@@ -435,6 +437,24 @@ export function createHandoffDispatch(options: HandoffDispatchOptions): HandoffD
 	return new HandoffDispatchModule(options);
 }
 
+/**
+ * The fact the Work queue's one-item-per-ticket rule states (ADR 0049), without
+ * the ticket's name. The reason the Message line carries puts the name in front
+ * of it; the record line puts the name in front of the whole fact, the way every
+ * other refusal line does (issue #223).
+ */
+const QUEUE_ITEM_STANDS_FACT = "already has a waiting queue item; the first item keeps its place";
+/** The fact a merge run already in flight refuses a re-ask with (ADR 0104, issue #223). */
+const MERGE_RUN_STANDS_FACT = "already has a merge running; the first run stands";
+
+/**
+ * The key a claim refusal's standing fact stands on: the start channel and the
+ * ticket. The prefix carries no colon, so the join names one pair (issue #223).
+ */
+function claimRefusalKey(prefix: "handoff" | "merge", ticketIdentity: string): string {
+	return `${prefix}:${ticketIdentity}`;
+}
+
 /** The seat, the queues, and the work of one durable state database. */
 class HandoffDispatchModule implements HandoffDispatch {
 	private readonly state: HandoffDispatchAggregates;
@@ -485,6 +505,56 @@ class HandoffDispatchModule implements HandoffDispatch {
 	 * merge, and the source answers the second command as a block.
 	 */
 	private planeActionRunsInFlight = new Set<string>();
+
+	/**
+	 * The tickets whose standing-row refusal the record has already stated (issue #223).
+	 *
+	 * One entry per ticket, and the entry stands for the row that stands: the Work
+	 * queue holds at most one row per ticket, so the ticket names the row, and no
+	 * timestamp is read for the fact. The rule is one sentence - the entry stands
+	 * while the row stands - and two paths keep it. Every path this module runs that
+	 * takes a row out drops the entry, and a successful enqueue drops it too: the
+	 * queue holds one row per ticket, so an enqueue can only land once the row
+	 * before it left, whatever aggregate took that row out. The pickup pass sweeps
+	 * the entries whose row is gone, which covers the removals this module never saw
+	 * - the App's route removal at a close, another aggregate's cross-boundary drop
+	 * - and bounds the set to the rows that stand (issue #223 review). The cycle
+	 * prunes its held-Next-step reports on the same rule.
+	 */
+	private readonly queueItemRefusals = new Set<string>();
+
+	/**
+	 * The refusals of a merge run already in flight that the record has stated
+	 * (issue #223). The run's mark is the fact: it stands from the claim until the
+	 * run settles, and the entry stands with it, so the walks that re-ask every
+	 * observation cycle while one merge lands state the refusal once, the way the
+	 * standing-row refusal does. The settle drops it.
+	 */
+	private readonly mergeRunRefusals = new Set<string>();
+
+	/**
+	 * The claim refusals the record has already stated, keyed by the start channel
+	 * and the ticket, and holding the fact each one stated beside the attempt ledger
+	 * it stood on (issue #223).
+	 *
+	 * A claim refusal is a standing fact too: it is the answer the position's hard
+	 * gates give for the state the ticket is in, and the automatic walks re-ask the
+	 * same position every observation cycle. The same reason over an unchanged
+	 * attempt ledger is the same fact and states itself once; another reason, or the
+	 * same reason over a ledger that moved, is a new fact and states itself again.
+	 * The ledger is what closes the hole the reason alone leaves: a stale claim can
+	 * settle outside this module - a restart's recovery, the observation cycle's
+	 * reclaim - and a refusal behind a later claim is a new fact even when no claim
+	 * ever came through here (issue #223 review). A reason that names a state
+	 * carries its own change in its own words: the ticket's state and the source's
+	 * freshness are part of the sentence, so the reason moves with the fact.
+	 *
+	 * The channel is part of the key because the record line is a channel's line: a
+	 * reader grepping `merge refused:` must get the merge refusals and nothing else.
+	 * The map holds one entry per ticket per channel, and a new fact replaces it in
+	 * place, so it cannot grow past the tickets the run refused.
+	 */
+	private readonly claimRefusals = new Map<string, { fact: string; attempts: number }>();
 
 	constructor(options: HandoffDispatchOptions) {
 		this.state = options.state;
@@ -550,11 +620,10 @@ class HandoffDispatchModule implements HandoffDispatch {
 		// refusal, not a queued item.
 		const check = this.state.handoff.handoffClaimCheck(intent.ticketIdentity, intent.origin);
 		if (!check.ok) {
-			this.log?.warn(
-				`handoff refused: ${check.reason} (${this.ticketName(intent.ticketIdentity)})`,
-			);
+			this.refuseClaim("handoff", intent.ticketIdentity, check.reason);
 			return Promise.resolve({ ok: false, reason: check.reason });
 		}
+		this.forgetClaimRefusal("handoff", intent.ticketIdentity);
 		const enqueued = this.enqueueWork(intent);
 		if (!enqueued.ok) return Promise.resolve(enqueued);
 		// The ask's start report answers from the item's pickup, drop, or cancel
@@ -597,25 +666,18 @@ class HandoffDispatchModule implements HandoffDispatch {
 			});
 		const check = this.planeActionClaimCheck(intent.ticketIdentity);
 		if (!check.ok) {
-			this.log?.warn(`merge refused: ${check.reason} (${this.ticketName(intent.ticketIdentity)})`);
+			this.refuseClaim("merge", intent.ticketIdentity, check.reason);
 			return Promise.resolve({ ok: false, reason: check.reason });
 		}
+		this.forgetClaimRefusal("merge", intent.ticketIdentity);
 		if (this.state.workQueue.hasWorkItem(intent.ticketIdentity))
-			return Promise.resolve({
-				ok: false,
-				reason:
-					`${this.ticketName(intent.ticketIdentity)} already has a waiting queue item; ` +
-					"the first item keeps its place",
-			});
+			return Promise.resolve(this.refuseStandingQueueItem("merge", intent.ticketIdentity));
 		// The run's own hold, beside the queue's: the row of a merge already in
 		// flight left the queue at its claim, so `hasWorkItem` cannot see it, and
 		// the run's fresh read cannot either - the source still answers the pull
 		// request open while the merge is landing.
 		if (this.planeActionRunsInFlight.has(intent.ticketIdentity))
-			return Promise.resolve({
-				ok: false,
-				reason: `${this.ticketName(intent.ticketIdentity)} already has a merge running; the first run stands`,
-			});
+			return Promise.resolve(this.refuseMergeRunStanding(intent.ticketIdentity));
 		const enqueued = this.state.workQueue.enqueuePlaneActionWork({
 			ticketIdentity: intent.ticketIdentity,
 			routeFromIdentity: intent.routeFromIdentity ?? null,
@@ -624,6 +686,9 @@ class HandoffDispatchModule implements HandoffDispatch {
 			automatic: intent.automatic === true,
 		});
 		if (!enqueued.ok) return Promise.resolve(enqueued);
+		// A row stands for this ticket now, and it is a new one: the refusal the
+		// standing row before it earned is no longer the fact it stated (issue #223).
+		this.forgetStandingRowRefusal(intent.ticketIdentity);
 		if (intent.onStarted !== undefined)
 			this.intentOnStarted.set(intent.ticketIdentity, intent.onStarted);
 		// The decision word lands at the ask, the way the route's does (ADR
@@ -649,7 +714,8 @@ class HandoffDispatchModule implements HandoffDispatch {
 			});
 		}
 		this.log?.info(
-			`merge queued: ${this.ticketName(intent.ticketIdentity)} (origin ${intent.origin})`,
+			`merge queued: ${this.ticketName(intent.ticketIdentity)} ` +
+				`(origin ${intent.origin}, ${queueStagingOf(intent.automatic === true)})`,
 		);
 		this.reports.refresh();
 		this.reports.notice(
@@ -756,6 +822,9 @@ class HandoffDispatchModule implements HandoffDispatch {
 			await this.runPlaneActionItem(item, overCap, mode);
 		} finally {
 			this.planeActionRunsInFlight.delete(item.ticketIdentity);
+			// The run settled, so the fact its refusal stated is gone: a later ask
+			// refused behind a new run is a new fact and states itself again.
+			this.mergeRunRefusals.delete(item.ticketIdentity);
 		}
 	}
 
@@ -833,7 +902,8 @@ class HandoffDispatchModule implements HandoffDispatch {
 		// The action takes no seat, so its reading is the count the plane stood
 		// on at the start, never a count the merge raised.
 		this.log?.info(
-			`merge started: ${name} (mode ${mode}, origin ${item.origin}, ${this.seatReading()})`,
+			`merge started: ${name} (mode ${mode}, origin ${item.origin}, ` +
+				`${queueStagingOf(item.automatic)}, ${this.seatReading()})`,
 		);
 		// The Starting window the row's spinner face reads (ADR 0030, beside
 		// ADR 0068): the merge wears the same face the start wears while its
@@ -923,19 +993,16 @@ class HandoffDispatchModule implements HandoffDispatch {
 	 * a ticket that already waits is refused with the reason on the Message
 	 * line, and the first item keeps its place.
 	 *
-	 * A refusal is reported once, through the returned reason alone: every
-	 * caller of `dispatch` writes an refused result's reason to the Message
-	 * line, so a warning reported here on top of it would only overwrite that
-	 * first line with a shorter copy of the same fact.
+	 * A refusal is reported on the Message line once, through the returned reason
+	 * alone: every caller of `dispatch` writes an refused result's reason there, so
+	 * a warning reported on top of it would only overwrite that first line with a
+	 * shorter copy of the same fact. The file record is the other outlet, and it
+	 * states a standing-row refusal once for the row that stands, not once per ask
+	 * (issue #223).
 	 */
 	private enqueueWork(intent: HandoffIntent): DispatchResult {
 		if (this.state.workQueue.hasWorkItem(intent.ticketIdentity))
-			return {
-				ok: false,
-				reason:
-					`${this.ticketName(intent.ticketIdentity)} already has a waiting queue item; ` +
-					"the first item keeps its place",
-			};
+			return this.refuseStandingQueueItem("handoff", intent.ticketIdentity);
 		const enqueued = this.state.workQueue.enqueueWork({
 			ticketIdentity: intent.ticketIdentity,
 			routeFromIdentity: intent.routeFromIdentity ?? null,
@@ -945,6 +1012,9 @@ class HandoffDispatchModule implements HandoffDispatch {
 			automatic: intent.automatic === true,
 		});
 		if (!enqueued.ok) return { ok: false, reason: enqueued.reason };
+		// A row stands for this ticket now, and it is a new one: the refusal the
+		// standing row before it earned is no longer the fact it stated (issue #223).
+		this.forgetStandingRowRefusal(intent.ticketIdentity);
 		// The route's decision lands at the ask (ADR 0064): a workflow-origin
 		// ask records it on the settled turn's trace the moment it enqueues, so
 		// the ask never waits on a run. A refusal before the enqueue - the
@@ -952,7 +1022,8 @@ class HandoffDispatchModule implements HandoffDispatch {
 		// that never enqueued leaves the turn pending.
 		this.recordRouteDecision(intent);
 		this.log?.info(
-			`handoff queued: ${this.ticketName(intent.ticketIdentity)} (origin ${intent.origin})`,
+			`handoff queued: ${this.ticketName(intent.ticketIdentity)} ` +
+				`(origin ${intent.origin}, ${queueStagingOf(intent.automatic === true)})`,
 		);
 		this.reports.refresh();
 		this.reports.notice(
@@ -982,6 +1053,22 @@ class HandoffDispatchModule implements HandoffDispatch {
 	}
 
 	/**
+	 * Forget the standing-row refusals whose row no longer stands (issue #223).
+	 *
+	 * The sweep runs at the head of every pickup pass, which the observation cycle
+	 * asks for on every poll whether or not the queue takes anything. It applies the
+	 * rule the entry follows everywhere else - the entry stands while the row
+	 * stands - to the rows this module never saw leave, and it keeps the set bounded
+	 * to the rows that stand. A row that left and never came back states no refusal
+	 * again, so the sweep drops its entry and nothing else changes.
+	 */
+	private sweepStandingRowRefusals(): void {
+		for (const identity of [...this.queueItemRefusals]) {
+			if (!this.state.workQueue.hasWorkItem(identity)) this.queueItemRefusals.delete(identity);
+		}
+	}
+
+	/**
 	 * Start the queue's items for the free seats, in queue order (ADR 0034,
 	 * ADR 0049).
 	 *
@@ -1007,6 +1094,11 @@ class HandoffDispatchModule implements HandoffDispatch {
 	 * start line states, so it names the path that actually took the seat.
 	 */
 	private async runPickupPass(directAskIdentity?: string): Promise<number> {
+		// The record's standing-fact entries follow their rows, whatever path took a
+		// row out (issue #223). This runs ahead of the brake and the seat checks
+		// because it is bookkeeping and not a pickup: a paused queue and a full cap
+		// still sweep.
+		this.sweepStandingRowRefusals();
 		// The queue pause (ADR 0052): the brake holds the drain. The items keep
 		// their places, the force-dispatch passes it, and the resume starts the
 		// pickup that takes them.
@@ -1087,6 +1179,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 	removeQueueItem(ticketIdentity: string): boolean {
 		const removed = this.state.workQueue.cancelWorkItem(ticketIdentity);
 		this.cancelParkedPickup(ticketIdentity);
+		this.forgetStandingRowRefusal(ticketIdentity);
 		// A row that leaves without a claim still holds the ask's start report:
 		// the cancel answers it here, once, with the cancellation. Without this
 		// settle the held callback would survive the row and answer the next
@@ -1115,6 +1208,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 	private removeQueueRow(ticketIdentity: string): boolean {
 		const removed = this.state.workQueue.removeWorkItem(ticketIdentity);
 		this.cancelParkedPickup(ticketIdentity);
+		this.forgetStandingRowRefusal(ticketIdentity);
 		return removed;
 	}
 
@@ -1327,9 +1421,10 @@ class HandoffDispatchModule implements HandoffDispatch {
 		const seats = this.seatReading();
 		const claim = this.state.handoff.claimHandoff(item.ticketIdentity, item.choice, item.origin);
 		if (!claim.ok) {
-			this.log?.warn(`handoff refused: ${claim.reason} (${this.ticketName(item.ticketIdentity)})`);
+			this.refuseClaim("handoff", item.ticketIdentity, claim.reason);
 			return { ok: false, reason: claim.reason };
 		}
+		this.forgetClaimRefusal("handoff", item.ticketIdentity);
 		// A claim is a claim: the picked-up start enters the Starting window
 		// exactly as the direct start above does, so the two claim paths report
 		// the same fact and the row's spinner face does not wait for a seat.
@@ -1341,7 +1436,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 		// crossed it (ADR 0092).
 		this.log?.info(
 			`handoff started: ${this.ticketName(item.ticketIdentity)} ` +
-				`(mode ${mode}, origin ${item.origin}, ${seats})`,
+				`(mode ${mode}, origin ${item.origin}, ${queueStagingOf(item.automatic)}, ${seats})`,
 		);
 		this.reports.starting(item.ticketIdentity, true);
 		const ticket = this.state.ticketWorkCycle
@@ -1557,6 +1652,115 @@ class HandoffDispatchModule implements HandoffDispatch {
 			.projectedTickets(this.config().workflowStates, this.config().defaultTaskType)
 			.find((candidate) => candidate.identity === identity)?.title;
 		return title === undefined ? `ticket ${identity}` : `"${title}"`;
+	}
+
+	/**
+	 * The reason the Work queue's one-item-per-ticket rule gives (ADR 0049), in
+	 * the one wording both start channels state it in.
+	 *
+	 * The reason names the ticket itself, because every caller writes it to the
+	 * Message line as the whole line.
+	 */
+	private queueItemStandsReason(identity: string): string {
+		return `${this.ticketName(identity)} ${QUEUE_ITEM_STANDS_FACT}`;
+	}
+
+	/**
+	 * The refusal the Work queue's one-item-per-ticket rule gives, on both start
+	 * channels, with the record line the standing row leaves (issue #223).
+	 *
+	 * Without the line the run shows an owed start that never ran and says nothing
+	 * about the row already standing being why. The line follows the rule the
+	 * plane's other standing facts follow - a held Next step states itself once
+	 * while the fact stands and again when it moves: the automatic walks re-ask
+	 * every cycle, and a five-second poll cannot pin the file with one refusal.
+	 */
+	private refuseStandingQueueItem(prefix: "handoff" | "merge", identity: string): DispatchResult {
+		// The key is the ticket alone, not the channel: the Work queue holds one row
+		// per ticket, so the standing row is one fact whichever channel re-asked it,
+		// and the line names the channel that reached it first (issue #223 review).
+		if (!this.queueItemRefusals.has(identity)) {
+			this.queueItemRefusals.add(identity);
+			this.log?.warn(this.refusalLine(prefix, identity, QUEUE_ITEM_STANDS_FACT));
+		}
+		return { ok: false, reason: this.queueItemStandsReason(identity) };
+	}
+
+	/**
+	 * The refusal a merge run already in flight gives (ADR 0104), with the record
+	 * line the standing run leaves (issue #223).
+	 *
+	 * This is the same fact the issue exists to read: a start the walks asked that
+	 * never ran, refused before its enqueue. The Message line has always carried
+	 * the reason; the file carries it once for the run that stands, so a re-ask on
+	 * every poll cannot pin the file with it.
+	 */
+	private refuseMergeRunStanding(identity: string): DispatchResult {
+		if (!this.mergeRunRefusals.has(identity)) {
+			this.mergeRunRefusals.add(identity);
+			this.log?.warn(this.refusalLine("merge", identity, MERGE_RUN_STANDS_FACT));
+		}
+		return {
+			ok: false,
+			reason: `${this.ticketName(identity)} ${MERGE_RUN_STANDS_FACT}`,
+		};
+	}
+
+	/**
+	 * Forget the standing-row refusal stated for a ticket (issue #223).
+	 *
+	 * The row it stands for is gone, so a later row for the same ticket is a new
+	 * fact and states its refusal again. Every path that ends a waiting row runs
+	 * this, and a successful enqueue runs it too: the queue holds one row per
+	 * ticket, so an enqueue can only land after the row before it left, whatever
+	 * path took that row out.
+	 */
+	private forgetStandingRowRefusal(identity: string): void {
+		this.queueItemRefusals.delete(identity);
+	}
+
+	/**
+	 * The record line every refusal leaves (issue #223): the prefix, the ticket the
+	 * refusal is about, and the fact the refusal gives.
+	 *
+	 * One shape for every refusal the plane records, so a reader or a tool needs
+	 * one rule to read them. The reason a caller puts on the Message line keeps its
+	 * own wording; the line names the ticket first, the way the queue's other lines
+	 * name it.
+	 */
+	private refusalLine(prefix: "handoff" | "merge", identity: string, fact: string): string {
+		return `${prefix} refused: ${this.ticketName(identity)} (${fact})`;
+	}
+
+	/**
+	 * The refusal a start claim's hard gates give, with the record line the
+	 * standing fact leaves (issue #223).
+	 *
+	 * The claim refusal has always reached the file. It reached it once per ask, and
+	 * the automatic walks re-ask every observation cycle, so a position whose claim
+	 * stands refused wrote about 12 identical lines a minute - the same failure the
+	 * standing-row refusal is deduped for. The line follows the plane's one rule for
+	 * a standing fact: once while it stands, again when it moves.
+	 */
+	private refuseClaim(prefix: "handoff" | "merge", identity: string, fact: string): void {
+		const key = claimRefusalKey(prefix, identity);
+		// The ledger read marks the claim this refusal stands on. It runs on the
+		// refusal path only, once per cycle per refused position, and the claim gate
+		// above already read the same tables.
+		const attempts = this.state.handoff.handoffCount(identity);
+		const stated = this.claimRefusals.get(key);
+		if (stated !== undefined && stated.fact === fact && stated.attempts === attempts) return;
+		this.claimRefusals.set(key, { fact, attempts });
+		this.log?.warn(this.refusalLine(prefix, identity, fact));
+	}
+
+	/**
+	 * Forget the claim refusal stated for one ticket on one start channel
+	 * (issue #223). The claim went through, so the fact the line stated no longer
+	 * stands and a later refusal is a new one.
+	 */
+	private forgetClaimRefusal(prefix: "handoff" | "merge", identity: string): void {
+		this.claimRefusals.delete(claimRefusalKey(prefix, identity));
 	}
 
 	/**
@@ -1961,6 +2165,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 					// the start-or-drop contract ends in a drop (ADR 0049). The item
 					// leaves the queue, and the warning says the reason the drain found.
 					this.state.workQueue.removeWorkItem(next.ticket.identity);
+					this.forgetStandingRowRefusal(next.ticket.identity);
 					next.onStarted({ ok: false, reason: movedOn });
 				} else {
 					// The route the claim was for never started: its caller decides

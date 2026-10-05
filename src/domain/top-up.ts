@@ -21,6 +21,115 @@
 
 import { handoffLimitReached, type TicketState } from "./ticket.ts";
 
+/**
+ * The fact an automatic walk acted on when it added nothing (issue #223).
+ *
+ * Every one of these holds the walk out before it asks for a candidate, so the
+ * run shows nothing but the start that never came. Each reason names itself in
+ * the plane's record, so a reviewer can tell a correct hold from a broken one.
+ * The reasons are the walk's own gates, in the order the walk reads them.
+ */
+export const AUTOMATIC_HOLD_REASONS = [
+	"auto-handoff-off",
+	"queue-paused",
+	"dispatch-pause",
+	"continuation-standing",
+	"operator-row-standing",
+	"queue-row-standing",
+] as const;
+
+export type AutomaticHoldReason = (typeof AUTOMATIC_HOLD_REASONS)[number];
+
+/**
+ * The holds that name the Work queue row the walk waits behind.
+ *
+ * The owed continuation is the walk that names it: the row that stands is the
+ * one fact the hold acted on, and the walk holds that row in hand when its gate
+ * answers, so the line can say which owed start the hold blocked and not only
+ * that a hold happened (issue #223 review). The other holds state a bare fact:
+ * where their gate stands no row is picked and none is known.
+ */
+export const AUTOMATIC_ROW_HOLD_REASONS = [
+	"continuation-standing",
+	"operator-row-standing",
+] as const;
+
+export type AutomaticRowHoldReason = (typeof AUTOMATIC_ROW_HOLD_REASONS)[number];
+
+/** The holds whose line states the fact alone, with no row named. */
+export type AutomaticBareHoldReason = Exclude<AutomaticHoldReason, AutomaticRowHoldReason>;
+
+/** A hold that names no row. */
+export interface AutomaticBareHold {
+	readonly reason: AutomaticBareHoldReason;
+	readonly row?: undefined;
+}
+
+/** A hold that names the Work queue row the walk waits behind. */
+export interface AutomaticRowHold {
+	readonly reason: AutomaticRowHoldReason;
+	/**
+	 * The standing row's ticket identity. The rule answers with the identity and
+	 * not the name: the walk reads a name only for a fact the record has not
+	 * stated yet, so a hold that stands across a hundred polls costs no name read.
+	 */
+	readonly row: string;
+}
+
+/** The hold one automatic walk took: its fact, and the standing row when one names it. */
+export type AutomaticHold = AutomaticBareHold | AutomaticRowHold;
+
+/**
+ * The sentence each hold is stated in.
+ *
+ * The module that owns the gates owns the words for them, the way
+ * `NEXT_STEP_GATE_LINES` does for a gated Next step, so the walk states its
+ * hold in one wording and no surface restates it. A standing-row hold's line is
+ * this sentence with the row it waits behind beside it (`automaticHoldLine`).
+ *
+ * The two lines about a standing row name whose row it is, because the origin
+ * cannot tell the factory's row from the operator's. The third names the
+ * queue's depth instead: the fresh-work gate holds on any row at all, a
+ * Consultation row included, and the staging of the row that stands is what the
+ * queue's own `handoff queued:` line already states (issue #223 review).
+ */
+export const AUTOMATIC_HOLD_LINES: Readonly<Record<AutomaticHoldReason, string>> = {
+	"auto-handoff-off": "automatic walks hold: auto-handoff is off",
+	"queue-paused": "automatic walks hold: the Work queue is paused",
+	"dispatch-pause": "automatic walks hold: a failed turn waits for the operator",
+	"continuation-standing": "automatic walks hold: the Work queue already holds a continuation",
+	"operator-row-standing": "automatic walks hold: the Work queue holds an item the operator staged",
+	"queue-row-standing": "automatic walks hold: the Work queue holds a waiting row",
+};
+
+/**
+ * The key a hold states itself under: the fact, and the row when the fact names
+ * one.
+ *
+ * A hold is one standing fact, so the key is the fact and not the cycle that
+ * reached it. The row is part of it because a later hold behind a different row
+ * is a different fact and states itself again (issue #223 review).
+ */
+export function automaticHoldKey(hold: AutomaticHold): string {
+	return hold.row === undefined ? hold.reason : `${hold.reason} ${hold.row}`;
+}
+
+/**
+ * The record line a hold states itself in.
+ *
+ * `rowName` is the walk's own name read for the standing row - the ticket's
+ * title while the ticket is in the projection, its identity once it is gone.
+ * The rule owns the sentence and calls for the name only for a hold that names
+ * a row.
+ */
+export function automaticHoldLine(
+	hold: AutomaticHold,
+	rowName: (identity: string) => string,
+): string {
+	const line = AUTOMATIC_HOLD_LINES[hold.reason];
+	return hold.row === undefined ? line : `${line} (${rowName(hold.row)})`;
+}
+
 /** The gates every automatic add reads (ADR 0051, ADR 0052, ADR 0016). */
 export interface AutomaticAddFacts {
 	/** Auto-handoff mode is on. */
@@ -38,41 +147,77 @@ export interface TopUpCycleFacts extends AutomaticAddFacts {
 }
 
 /**
- * Whether the cycle's standing gates hold every automatic add: the mode is off,
- * the brake is on, or a held turn stands undecided. In every one of those the
- * walk reads no candidate and adds nothing.
+ * Which of the cycle's standing gates holds every automatic add, or null when
+ * none does: the mode is off, the brake is on, or a held turn stands undecided.
+ * In every one of those the walk reads no candidate and adds nothing, and the
+ * reason it names is the fact the record states (issue #223).
+ *
+ * The order is the walk's own: the first gate that stands is the fact the cycle
+ * acted on, so one hold is stated and not three.
  */
-export function automaticAddsHold(facts: AutomaticAddFacts): boolean {
-	return !facts.modeOn || facts.queuePaused || facts.dispatchPauseActive;
+export function automaticAddsHold(facts: AutomaticAddFacts): AutomaticHold | null {
+	if (!facts.modeOn) return { reason: "auto-handoff-off" };
+	if (facts.queuePaused) return { reason: "queue-paused" };
+	if (facts.dispatchPauseActive) return { reason: "dispatch-pause" };
+	return null;
 }
 
 /**
- * Whether the fresh-work add may enter: the cycle's gates, and a queue with no
- * row in it (ADR 0051). The continuation add reads the same gates and its own
- * queue rule instead, because ADR 0094 lets it enter ahead of a standing
- * fresh-work row.
+ * The hold the fresh-work adds stand under: the gates every automatic add reads,
+ * then the queue's own depth (ADR 0051). null means the walk may add.
+ *
+ * The continuation add reads the same gates and its own queue rule instead,
+ * because ADR 0094 lets it enter ahead of a standing fresh-work row.
  */
-export function topUpCycleOpen(facts: TopUpCycleFacts): boolean {
-	return !automaticAddsHold(facts) && facts.queueDepth === 0;
+export function freshWorkHold(facts: TopUpCycleFacts): AutomaticHold | null {
+	const gate = automaticAddsHold(facts);
+	if (gate !== null) return gate;
+	if (facts.queueDepth > 0) return { reason: "queue-row-standing" };
+	return null;
 }
 
-/** One row the Work queue holds, as the continuation's gate reads it (ADR 0094, ADR 0100). */
+/** One row the Work queue holds, as the continuation's pace gate reads it (ADR 0094, ADR 0100). */
 export interface ContinuationRowFacts {
-	/** The row is a continuation the queue already holds. */
+	/** The row's ticket identity: the hold line names the row the walk waits behind. */
+	identity: string;
+	/**
+	 * The row is a Workflow route row the queue already holds: the factory's owed
+	 * continuation, or the row the operator's own route decision left there. Either
+	 * one holds the next continuation out (ADR 0100 as amended, issue #230).
+	 */
 	continuation: boolean;
+	/**
+	 * The staging of that row - the factory's own add or the operator's (CONTEXT.md
+	 * "Staging"). The gate holds on `continuation` alone; this fact answers which
+	 * fact the hold line states, because the origin cannot: the operator's route and
+	 * the factory's continuation are both `workflow` (issue #223).
+	 */
+	automatic: boolean;
 }
 
 /**
- * Whether the queue holds a row the continuation add must not jump (ADR 0051,
- * ADR 0094, ADR 0100): one continuation per cycle is the queue's own pace, so a
- * continuation already standing holds the next one out. Nothing else does. A
- * standing fresh-work row is outranked by ADR 0094, and a row the operator
- * staged is a standing row of the same kind: the seat a settling turn freed
- * belongs to that turn's own next step, and the operator's row waits for the
- * next seat. The operator keeps the queue pause and the force-dispatch.
+ * Which standing row holds the owed continuation out, named by that row's own
+ * staging, or null when no standing row does (ADR 0051, ADR 0094, ADR 0100 as
+ * amended by issue #230).
+ *
+ * One continuation per cycle is the queue's own pace, so a Workflow route row
+ * already standing holds the next one out - the factory's own row and the row the
+ * operator's route decision left in the queue alike. Nothing else does: a standing
+ * fresh-work row is outranked by ADR 0094. ADR 0100's rank is the owed row's place
+ * in the queue's order, and a row that already stands is never overtaken by a row
+ * that has not entered. The operator keeps the queue pause and the force-dispatch.
+ *
+ * The staging answers which fact the line states, not whether the row holds: the
+ * origin names both stagings `workflow`, and a record that calls the operator's
+ * row a continuation names a fact the row is not.
  */
-export function continuationQueueHolds(rows: readonly ContinuationRowFacts[]): boolean {
-	return rows.some((row) => row.continuation);
+export function continuationHold(rows: readonly ContinuationRowFacts[]): AutomaticHold | null {
+	const row = rows.find((candidate) => candidate.continuation);
+	if (row === undefined) return null;
+	return {
+		reason: row.automatic ? "continuation-standing" : "operator-row-standing",
+		row: row.identity,
+	};
 }
 
 /** The facts the restart walk reads for one in-flight Ticket (ADR 0051, ADR 0060, ADR 0070). */

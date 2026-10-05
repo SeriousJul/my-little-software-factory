@@ -145,7 +145,17 @@ description: The module map of the source tree, for agents working in this repos
 	(`handoffLimitReached`). `top-up.ts` holds the auto top-up's gates (ADR 0051,
 	ADR 0088, ADR 0094): the gates every automatic add reads, the row a
 	continuation must not jump, the fresh-work cycle gate, the restart candidate,
-	and the open ticket's row gate and its waits.
+	and the open ticket's row gate and its waits. The row a continuation must not
+	jump is a Workflow route row already standing, the row an operator's own route
+	decision left there included (issue #230). It owns the fact each hold acted on
+	and the one sentence the cycle states that hold in (`AUTOMATIC_HOLD_LINES`),
+	so a walk that added nothing names its own reason in the record, and the
+	reason for a held continuation names the staging of the row it waits behind
+	and that row itself, so the record answers which owed start the hold blocked
+	(issue #223, issue #223 review). `queue-staging.ts` holds the staging - the
+	one name the `handoff queued:`, `handoff started:`, `merge queued:`, and
+	`merge started:` lines read for who put the row in the queue (issue #223). It
+	states no hold line of its own: the hold sentences are `top-up.ts`'s.
 - `src/handoff.ts`: the handoff. One start call (`runHandoffStart`, kept private
 	to the module) behind the two start calls the plane has (issue #204,
 	ADR 0097): it runs the pre-flight in one order, resolves the repository, builds

@@ -54,7 +54,12 @@
  *    piles. A flagged ticket (ADR 0060, widened by ADR 0070) is out of every
  *    one of those walks, its own flag or its source's mute, and it stays out
  *    while its row shows again for live work or a decision owed: the flag
- *    holds the machine out, and only the operator's own key clears it.
+ *    holds the machine out, and only the operator's own key clears it. Each
+ *    hold these gates take - the mode, the queue pause, the Dispatch pause, a
+ *    continuation already standing, a row the operator staged, a row already in
+ *    the queue - states itself in the plane's record, once for as long as the
+ *    fact stands, so the run never shows only the start that never came
+ *    (issue #223).
  * 7. The wake (ADR 0084): an in-flight agent the probe shows working arms
  *    a blocking `herdr agent wait` on the agent's name, and the wait's
  *    state match runs a cycle now instead of at the next poll, so a
@@ -80,11 +85,16 @@ import {
 	type Ticket,
 } from "./domain/ticket.ts";
 import {
+	type AutomaticHold,
 	automaticAddsHold,
-	continuationQueueHolds,
+	automaticHoldKey,
+	automaticHoldLine,
+	continuationHold,
+	freshWorkHold,
 	openTicketRowGate,
 	openTicketWaitsHold,
 	restartCandidateHolds,
+	type TopUpCycleFacts,
 } from "./domain/top-up.ts";
 import { baseChoice, resolveHandoffChoice } from "./handoff.ts";
 import {
@@ -94,6 +104,7 @@ import {
 	STOPPED_DISPATCH_REASON,
 } from "./handoff-dispatch.ts";
 import type { HerdrAgent } from "./herdr.ts";
+import { type Logger, NOOP_LOGGER } from "./logging.ts";
 import { identifyHandoffAgentName } from "./naming.ts";
 import { isPlaneActionTaskType } from "./plane-action-registry.ts";
 import { type RefreshClock, SYSTEM_CLOCK } from "./refresh.ts";
@@ -103,6 +114,7 @@ import type { HandoffAggregate, HandoffTicket } from "./state/handoff.ts";
 import type { PlaneActionAggregate } from "./state/plane-action.ts";
 import type { TicketProjection, TicketWorkCycleAggregate } from "./state/ticket-work-cycle.ts";
 import type { WorkQueueAggregate } from "./state/work-queue.ts";
+import { workQueueIdentityOf } from "./state/work-queue.ts";
 import {
 	isHeldCause,
 	lastMessageFromLog,
@@ -459,6 +471,15 @@ interface ObservationOptions {
 		text: string,
 		topic?: ObservationStatusTopic,
 	) => void;
+	/**
+	 * The plane's file logger, the same seam the Handoff dispatch takes.
+	 *
+	 * The Message line is gone by the time anyone reads the file, so the facts
+	 * the cycle acts on that reach no start line leave their record here: each
+	 * hold the automatic walks take, stated once while the fact stands
+	 * (issue #223). Defaults to NOOP_LOGGER: a cycle with no file to write.
+	 */
+	log?: Logger;
 	/** Optional Consultation side of the shared monitor. */
 	onConsultationAttention?: (consultationId: string) => void;
 	onConsultationsChanged?: () => void;
@@ -520,6 +541,7 @@ export class ObservationCoordinator {
 		text: string,
 		topic?: ObservationStatusTopic,
 	) => void;
+	private readonly log: Logger;
 	private readonly clock: RefreshClock;
 	private readonly turnLogs: TurnLogSource;
 	private readonly fireCompleted?: (ticket: HandoffTicket) => Promise<TransitionOutcome | null>;
@@ -543,6 +565,23 @@ export class ObservationCoordinator {
 	 * The entry leaves when the ticket leaves awaiting.
 	 */
 	private readonly holdReports = new Map<string, string>();
+	/**
+	 * The automatic-walk holds this cycle noted, and the holds the last cycle stated
+	 * (issue #223). The holds are derived every cycle and never stored; these two
+	 * only tell a standing fact from a new one, the way the Dispatch pause line and
+	 * the held Next step line remember their last report, so a hold states itself
+	 * once while it stands and not once per poll. The key is the fact and the row it
+	 * names (`automaticHoldKey`), so a hold behind a different row is a new fact.
+	 */
+	private automaticHolds = new Map<string, AutomaticHold>();
+	/**
+	 * The holds the last cycle stated (issue #223). A cycle that ran no fresh-work
+	 * walk keeps that walk's facts standing here: the skip is the cycle's own
+	 * choice, not the fact leaving, so a row that stood the whole time is not
+	 * stated twice. The entry is the hold, not only its key, so the carry-over can
+	 * ask which walk owns the fact.
+	 */
+	private automaticHoldsReported = new Map<string, AutomaticHold>();
 	/**
 	 * The agents of the last successful list, for the UI's markers. Null
 	 * until the first success: an unreadable herdr must not read as "every
@@ -585,6 +624,7 @@ export class ObservationCoordinator {
 		this.onConsultationsChanged = options.onConsultationsChanged;
 		this.reconcileOnly = options.reconcileOnly ?? false;
 		this.onStatus = options.onStatus;
+		this.log = options.log ?? NOOP_LOGGER;
 		this.clock = options.clock ?? SYSTEM_CLOCK;
 		this.turnLogs = options.turnLogs ?? SESSION_TURN_LOGS;
 		this.fireCompleted = options.fireCompleted;
@@ -655,6 +695,10 @@ export class ObservationCoordinator {
 	}
 
 	private async cycle(): Promise<void> {
+		// A cycle notes the holds its walks take and states them when its walks
+		// are done; a cycle that never reached that point keeps no note, and the
+		// facts it acted on state themselves next cycle as new ones.
+		this.automaticHolds = new Map();
 		const probe = await this.herdr.listAgents();
 		// The probe can outlive the app: stop() during it must not touch the
 		// state or the UI anymore.
@@ -842,8 +886,11 @@ export class ObservationCoordinator {
 		// The fresh-work adds (ADR 0051): with Auto-handoff on, the queue empty,
 		// the queue pause down, and the Dispatch pause clear, the cycle adds one
 		// item - a restart, then a new open ticket, else nothing.
-		if (!continued) changed = (await this.topUpFreshWork(probe.agents)) || changed;
+		const freshWorkWalkRan = !continued;
+		if (freshWorkWalkRan) changed = (await this.topUpFreshWork(probe.agents)) || changed;
 		if (this.stopped) return;
+		// The holds both walks took, stated once each for as long as they stand.
+		this.reportAutomaticHolds(freshWorkWalkRan);
 
 		// Tickets and Consultations share this one successful Herdr list poll.
 		// A Consultation in `opening` or `working` already holds its seat in
@@ -1440,6 +1487,14 @@ export class ObservationCoordinator {
 	 * closes the gap states its own routing line over this one; a standing warning
 	 * would pin the Message line and ring the desktop for a condition the machine
 	 * resolves on its own.
+	 *
+	 * The same fact leaves one line in the plane's record (issue #223). The Message
+	 * line is gone by the time anyone reads the file, so a gated Next step was the
+	 * one automatic hold a reviewer could not see after the run: the file showed the
+	 * start that never came and nothing about the gate that held it. The record line
+	 * names the ticket the way the record's other lines name it, and the gate in
+	 * parentheses the way every refusal line names its fact. One dedupe serves both
+	 * outlets: the fact states itself once, on each outlet, while it stands.
 	 */
 	private reportHeldNextStep(ticket: HandoffTicket, step: NextStep): void {
 		if (step.gate === null) return;
@@ -1450,6 +1505,16 @@ export class ObservationCoordinator {
 		this.onStatus(
 			"info",
 			`ticket ${ticket.ticketIdentity} holds its Next step ${step.taskType}${where}: ${NEXT_STEP_GATE_LINES[step.gate]}`,
+		);
+		// The name read runs only for a hold the record has not stated yet, so a
+		// hold that stands across the whole run costs no projection read at the
+		// poll's cadence.
+		this.log.info(
+			`next step held: ${this.ticketName(ticket.ticketIdentity)} ${step.taskType}` +
+				(step.ticketIdentity === ticket.ticketIdentity
+					? ""
+					: ` on ${this.ticketName(step.ticketIdentity)}`) +
+				` (${NEXT_STEP_GATE_LINES[step.gate]})`,
 		);
 	}
 
@@ -1527,29 +1592,41 @@ export class ObservationCoordinator {
 	 * when the free seats are handed out, and the seat a settling turn freed goes
 	 * to that turn's own next step instead of to a fresh ticket.
 	 *
-	 * The queue gate narrows here to the one row this add must not jump: a
-	 * continuation the queue already holds. A standing fresh-work row - an open
-	 * ticket's item or a restart - does not hold a continuation: ADR 0051 ranks
-	 * the continuation above them, and ADR 0094 reads that rank across cycles
-	 * instead of inside one top-up call. A row the operator staged does not hold
-	 * it either (ADR 0100): it is a standing row of the same kind, and the seat a
-	 * settling turn freed belongs to that turn's own next step.
+	 * The queue gate narrows here to the one row this add must not jump: a Workflow
+	 * route row the queue already holds. A standing fresh-work row - an open ticket's
+	 * item or a restart - does not hold a continuation: ADR 0051 ranks the
+	 * continuation above them, and ADR 0094 reads that rank across cycles instead of
+	 * inside one top-up call. A row the operator staged does hold it: ADR 0100's rank
+	 * is the owed row's place in the queue's order, and a row that already stands is
+	 * never overtaken (issue #230). The hold line names which of the two stands,
+	 * because the origin names both `workflow` (issue #223).
 	 */
 	private async askContinuations(): Promise<boolean> {
 		// The queue's rows, read once for the whole walk (issue #202, ADR 0092):
 		// the gate below reads them, and no walk asks the queue for one Ticket's
 		// fact of its own.
 		const queueItems = this.state.workQueue.items();
-		if (this.automaticAddsHeld()) return false;
-		// The row this add waits behind: a continuation the queue already holds.
-		if (
-			continuationQueueHolds(
-				queueItems.map((item) => ({
-					continuation: item.kind !== "consultation" && item.origin === "workflow",
-				})),
-			)
-		)
+		const gate = automaticAddsHold(this.cycleFacts());
+		if (gate !== null) {
+			this.noteAutomaticHold(gate);
 			return false;
+		}
+		// The row this add waits behind: a Workflow route row the queue already
+		// holds. The hold names that row's staging, because the origin cannot tell
+		// the two apart - the operator's route and the factory's continuation are
+		// both `workflow` (issue #223) - and names the row itself, so the record says
+		// which owed start the hold blocked (issue #223 review).
+		const held = continuationHold(
+			queueItems.map((item) => ({
+				identity: workQueueIdentityOf(item),
+				continuation: item.kind !== "consultation" && item.origin === "workflow",
+				automatic: item.kind !== "consultation" && item.automatic,
+			})),
+		);
+		if (held !== null) {
+			this.noteAutomaticHold(held);
+			return false;
+		}
 		const config = this.config();
 		// The list, in one read. These walks take the active view: the rows the
 		// whole list rule leaves.
@@ -1691,16 +1768,77 @@ export class ObservationCoordinator {
 	}
 
 	/**
-	 * The gates every automatic add reads: Auto-handoff mode, the queue pause
-	 * (ADR 0052), and the Dispatch pause (ADR 0016). The pause is checked once per
-	 * cycle, so a held turn does not spam the status line.
+	 * The cycle's standing gate facts (ADR 0051, ADR 0052, ADR 0016): the mode, the
+	 * queue's brake, and the Dispatch pause. The automatic walks read these before
+	 * they read any candidate.
 	 */
-	private automaticAddsHeld(): boolean {
-		return automaticAddsHold({
+	private cycleFacts(): Omit<TopUpCycleFacts, "queueDepth"> {
+		return {
 			modeOn: this.mode(),
 			queuePaused: this.state.workQueue.queuePaused(),
 			dispatchPauseActive: this.state.ticketWorkCycle.dispatchPauseActive(),
-		});
+		};
+	}
+
+	/**
+	 * The hold one automatic walk took (issue #223).
+	 *
+	 * The walk keeps its own gate; this only collects the fact it acted on. The
+	 * cycle states the facts it collected when its walks are done
+	 * (`reportAutomaticHolds`), so a cycle that holds at two gates at once states
+	 * each of them once, and not twice per poll.
+	 */
+	private noteAutomaticHold(hold: AutomaticHold): void {
+		this.automaticHolds.set(automaticHoldKey(hold), hold);
+	}
+
+	/**
+	 * The record lines for the holds this cycle's automatic walks took (issue #223).
+	 *
+	 * Every one of these holds returns before the walk asks anything, so the run
+	 * shows the start that never came and nothing about why. The line names the
+	 * fact the cycle acted on - the mode, the queue pause, the Dispatch pause, a
+	 * continuation already standing, a row the operator staged, or a row already in
+	 * the queue - in the words the gate rule owns, so a reviewer can tell a correct
+	 * hold from a broken one. A hold that waits behind a standing row names that
+	 * row, so the record answers which owed start the hold blocked and not only
+	 * that a hold happened.
+	 *
+	 * One line per standing fact, the way a held Next step states itself
+	 * (`reportHeldNextStep`): the holds are re-derived on every poll, and a fact
+	 * that stood last cycle too says nothing again. A fact that left and came back,
+	 * a new fact the cycle reached, or the same fact behind a different row states
+	 * itself once more.
+	 *
+	 * A walk the cycle did not run states nothing new and clears nothing. The cycle
+	 * that asks a continuation asks no fresh work (ADR 0051), so the row that
+	 * fresh-work walk waits behind is never read in that cycle: the row stands the
+	 * whole time, and its line stays silent rather than stating itself again on the
+	 * next poll (issue #223 review). Only a cycle that reads the fact and finds it
+	 * gone retires it, so the row that really leaves the queue is stated again when
+	 * a row comes back.
+	 *
+	 * The name read for a standing row runs here and not where the walk noted the
+	 * hold, so a fact that stands across a hundred polls costs no read at the poll's
+	 * cadence. A cycle that throws between its walks and this report keeps no note:
+	 * its holds state themselves on the next cycle that reaches here.
+	 */
+	private reportAutomaticHolds(freshWorkWalkRan: boolean): void {
+		for (const [key, hold] of this.automaticHolds) {
+			if (this.automaticHoldsReported.has(key)) continue;
+			this.log.info(automaticHoldLine(hold, (identity) => this.ticketName(identity)));
+		}
+		const reported = new Map(this.automaticHolds);
+		if (!freshWorkWalkRan) {
+			// `queue-row-standing` is the fact only the fresh-work walk states: the
+			// continuation walk answers its own queue rule (ADR 0094), and the mode,
+			// the pause, and the Dispatch pause are noted by both walks. So the carry-
+			// over names one reason, and it is the one the skipped walk owns.
+			for (const [key, hold] of this.automaticHoldsReported)
+				if (hold.reason === "queue-row-standing") reported.set(key, hold);
+		}
+		this.automaticHoldsReported = reported;
+		this.automaticHolds = new Map();
 	}
 
 	/**
@@ -1716,10 +1854,11 @@ export class ObservationCoordinator {
 		// the pace gate needs the depth, and every walk needs the fact of whether
 		// an item already stands for the candidate it holds.
 		const queueItems = this.state.workQueue.items();
-		if (this.automaticAddsHeld()) return false;
-		// One item per cycle, and only into an empty queue: the queue's depth is
-		// the top-up's pace.
-		if (queueItems.length > 0) return false;
+		const hold = freshWorkHold({ ...this.cycleFacts(), queueDepth: queueItems.length });
+		if (hold !== null) {
+			this.noteAutomaticHold(hold);
+			return false;
+		}
 		const queuedTickets = new Set(
 			queueItems.filter((item) => item.kind !== "consultation").map((item) => item.ticketIdentity),
 		);

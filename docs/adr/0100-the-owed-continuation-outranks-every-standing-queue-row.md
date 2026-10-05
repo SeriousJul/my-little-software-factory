@@ -79,3 +79,31 @@ that way, not by its place in the queue.
 - The Work queue screen still shows the order the pickup will take the rows in, and
   that order can now put a machine-owed row above a row the operator staged. The
   row's detail names who asked for it.
+
+## Amendment: what "a continuation already stands" counts
+
+Date: 2026-10-05
+
+Issue #230 asked what this decision left open. `continuationQueueHolds` "reads one
+fact: whether a continuation already stands", and the code classifies a standing row
+by its origin alone, so a row the operator confirmed from the Decision screen -
+origin `workflow`, `automatic: 0` - holds the next owed continuation out for as long
+as it stands. The operator decided the question: yes, an operator-confirmed
+`workflow` row counts as a continuation already standing.
+
+**The pace rule counts a standing Workflow route row of either staging.** The
+factory's own continuation and the row the operator's route decision left in the
+queue hold the next continuation out alike. The rank this ADR decides is the owed
+continuation's place in the queue's order - it enters ahead of a fresh-work row and
+ahead of a row the operator staged alike - and that rank is not the pace rule: a row
+that already stands is never overtaken by a row that has not entered. A row the
+operator wants started ahead of a standing one keeps the queue pause, Enter on its
+row, and the force-dispatch.
+
+**The hold line keeps naming whose row stands.** `continuationHold` answers
+`continuation-standing` for the factory's own row and `operator-row-standing` for the
+operator's, because the origin names both `workflow` and a record that calls the
+operator's row a continuation names a fact the row is not (issue #223). The staging
+is a fact that answer reads, so `ContinuationRowFacts` carries it beside the
+`continuation` fact the hold itself rests on, and the row's identity, so the line
+names the row the walk waits behind.

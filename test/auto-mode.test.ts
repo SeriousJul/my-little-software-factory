@@ -63,6 +63,7 @@ import {
 } from "./fake-runner.ts";
 import { FakeSource } from "./fake-source.ts";
 import { type GatedRunner, gatedRunner as gateOnRunner } from "./gated-runner.ts";
+import { infoLine, type RecordedLine, recordLogger, warnLine } from "./record-logger.ts";
 
 const paths: string[] = [];
 afterEach(() => {
@@ -516,9 +517,74 @@ describe("the mode cell and the a key", () => {
 		app.state.close();
 	});
 
+	/**
+	 * The mode in the plane's record (issue #223). The mode decides every automatic
+	 * walk in the run, and until now its flips left no line anywhere: a reviewer
+	 * reading the log could not tell a manual run from an automatic one.
+	 */
+	test("the a key leaves the mode flip in the record", async () => {
+		const app = seededApp("open");
+		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+		const lines: RecordedLine[] = [];
+		await withApp(
+			async (setup) => {
+				app.src.settle(success);
+				await awaitFrame(setup, (f) => f.includes("● manual 0/2"), "the mode cell");
+				await press(setup, "a", "auto on", (f) => f.includes("○ auto 0/2"));
+				await press(setup, "a", "auto off", (f) => f.includes("● manual 0/2"));
+				// One line per key, in the order the keys landed, each at the `info` level
+				// the configuration reference states for it. The `mode:` prefix is the
+				// record's family for the facts the operator sets by key. The cycle's own hold
+				// lines share the logger and are not this fact's lines.
+				expect(lines.filter((line) => line.message.startsWith("mode: auto-handoff is"))).toEqual([
+					infoLine("mode: auto-handoff is on"),
+					infoLine("mode: auto-handoff is off"),
+				]);
+			},
+			WIDTH,
+			HEIGHT,
+			{ ...propsOf(app), logger: recordLogger(lines) },
+		);
+		app.state.close();
+	});
+
+	/**
+	 * A plane running with no state file (issue #223 review). The mode still moves in
+	 * the session, and the record states the limit the next run will hit: nothing
+	 * reads the flip back. It leaves at `warn`, the level the configuration reference
+	 * states for it, beside the refused write's line.
+	 */
+	test("a plane with no state file states the session-only limit of a mode flip", async () => {
+		const runner = new FakeRunner();
+		runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+		const lines: RecordedLine[] = [];
+
+		await withApp(
+			async (setup) => {
+				// A plane with no state file has no mode cell to read: the header's cell
+				// wears a fact the state owns. The key still moves the mode in the
+				// session, and the record is where the limit is stated.
+				await awaitFrame(setup, (f) => f.includes("▾ Tickets"), "the plane");
+				await pressQuiet(setup, "a", "auto on", () => true);
+				// The flip moved in the session, and the file says no run will read it
+				// back. A plain `mode: auto-handoff is on` here would be the record a
+				// reviewer cannot trust, on the branch a refused write already closes.
+				expect(lines.filter((line) => line.message.startsWith("mode: auto-handoff is"))).toEqual([
+					warnLine(
+						"mode: auto-handoff is on for this session only: the plane runs with no state file",
+					),
+				]);
+			},
+			WIDTH,
+			HEIGHT,
+			{ config: BASE_CONFIG, runner, initialTickets: [], logger: recordLogger(lines) },
+		);
+	});
+
 	test("a mode write the state file refuses reports, and the flip stands", async () => {
 		const app = seededApp("open");
 		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+		const lines: RecordedLine[] = [];
 
 		await withApp(
 			async (setup) => {
@@ -541,10 +607,20 @@ describe("the mode cell and the a key", () => {
 				expect(messageRowOf(frame).trim()).toContain("Error:");
 				// The mode cell keeps the flipped mode, not the stored one.
 				expect(frameText(setup.captureCharFrame())).toContain("○ auto 0/2");
+				// The record states the refused flip the way the Message line does
+				// (issue #223). A file that said `auto-handoff is on` while the next run
+				// reads the old value is a record a reviewer cannot trust. The refused flip
+				// is news the operator must not miss, so it leaves at `warn` where the flip
+				// that landed leaves `info`.
+				const recorded = lines.filter((line) => line.message.startsWith("mode: auto-handoff is"));
+				expect(recorded).toHaveLength(1);
+				expect(recorded[0]?.level).toBe("warn");
+				expect(recorded[0]?.message).toContain("mode: auto-handoff is on for this session only:");
+				expect(recorded[0]?.message).toContain(app.state.path);
 			},
 			WIDE_STATUS,
 			HEIGHT,
-			propsOf(app),
+			{ ...propsOf(app), logger: recordLogger(lines) },
 		);
 		app.state.close();
 	});

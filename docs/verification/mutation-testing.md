@@ -209,8 +209,9 @@ for the question this answers.
   pays for, so the walk carries no stale fact of its own across cycles, and
   `test/state-architecture.test.ts` refuses a per-candidate read of either of the
   walk's two facts. The new wiring test does reach the fact through the walk: with
-  the cycle gate's `queueDepth === 0` term also removed - `topUpCycleOpen` made to
-  answer `true` - the same `queueItemStands: false` turned
+  the cycle gate's `queueDepth === 0` term also removed - `freshWorkHold` (named
+  `topUpCycleOpen` when this probe ran) made to answer `null` - the same
+  `queueItemStands: false` turned
   `the restart walk holds no item the queue already holds` red. Measured, then both
   put back. The single-mutant survival is the gate covering for the fact, not a hole
   where the wiring is untested. The three sibling probes - the episode mark, the
