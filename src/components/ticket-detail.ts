@@ -603,8 +603,9 @@ export const TicketDetail = forwardRef<TicketDetailHandle, TicketDetailProps>(fu
 ) {
 	const ticket = fact?.ticket;
 	const geometry = usePaneGeometry("detail", reservedRows);
-	// The renderer reports the frame it has laid out, which is when the scroll
-	// box first knows its own content height and viewport.
+	// The renderer is held to invalidate the tree when the scroll box does not
+	// yet answer its own content height and viewport. It paints on invalidation
+	// and emits no frame at rest, so the pane asks rather than waits (issue #302).
 	const renderer = useRenderer();
 	// The scroll box owns the gutter; see `detailTextCols`.
 	const textCols = detailTextCols(geometry.usableCols);
