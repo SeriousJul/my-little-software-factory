@@ -4974,7 +4974,7 @@ describe("handOffTicket: the pull request the plane opens (ADR 0076)", () => {
 	test("the retry's create meets a leftover worktree directory, and the plane moves it aside", async () => {
 		// Every failed start removes the checkout and keeps the branch, so the retry
 		// is the start that meets the directory a build cache left in the checkout's
-		// path (issue #296, ADR 0046): the reuse runs on the leftover recovery.
+		// path (issue #296, ADR 0062): the reuse runs on the leftover recovery.
 		const runner = new PrWorldRunner();
 		stubPrWorldCheckout(runner);
 		stubHoldCommit(runner);
