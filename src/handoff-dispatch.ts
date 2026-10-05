@@ -274,6 +274,15 @@ export interface HandoffDispatchOptions extends HandoffDispatchReports {
 	 */
 	seatCount: () => number;
 	/**
+	 * The in-flight tickets whose own Agent the latest poll does not list past
+	 * the Startup grace (ADR 0108): the seat each one leaves stands reserved
+	 * for that ticket's own restart row, so a missing Agent cannot spend the
+	 * Parallel limit on unrelated work. The wiring answers the tickets the
+	 * Top-up can restart: a seat no restart row will ever take is not
+	 * reserved, because that is the seat that starves the queue.
+	 */
+	missingSeatTickets?: () => readonly string[];
+	/**
 	 * The Work queue's Consultation side (ADR 0034, issue #90): start the
 	 * `queued` Consultation an item names. The module crosses this to the
 	 * Consultation operations, which own the settings re-read, the seat move,
@@ -463,6 +472,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 	private readonly runner: CommandRunner;
 	private readonly config: () => FactoryConfig;
 	private readonly seatCount: () => number;
+	private readonly missingSeatTickets: () => readonly string[];
 	private readonly pickupConsultation?: (
 		consultationId: string,
 		mode: StartMode,
@@ -563,6 +573,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 		this.runner = options.runner;
 		this.config = options.config;
 		this.seatCount = options.seatCount;
+		this.missingSeatTickets = options.missingSeatTickets ?? (() => []);
 		this.pickupConsultation = options.pickupConsultation;
 		this.home = options.home;
 		this.persistMapping = options.persistMapping;
@@ -1108,13 +1119,29 @@ class HandoffDispatchModule implements HandoffDispatch {
 		const limit = this.config().maxParallelAgents;
 		const items = this.state.workQueue.items();
 		if (items.length === 0) return 0;
-		const freeSeats = limit === 0 ? items.length : limit - this.seatCount();
+		// The seats a Missing Agent left (ADR 0108): each one belongs to that
+		// ticket's own restart row. The walk keeps them out of the free seats
+		// every other start reads, and hands each one to that row alone - the
+		// way ADR 0094 gives the seat a settling turn freed to that turn's own
+		// next step. A limit of 0 lifts the cap, so nothing stands reserved.
+		const reserved = new Set(limit === 0 ? [] : this.missingSeatTickets());
+		const reservedLeft = new Set(reserved);
+		const openSeats =
+			limit === 0 ? items.length : Math.max(0, limit - this.seatCount() - reserved.size);
 		// The plane action's items take no seat and are not held by the cap
 		// (ADR 0068): the walk runs them when it reaches them, and a queue
 		// that stands under a full cap is one whose first plane item sits
 		// behind a seats-bound item the walk breaks at.
 		const hasPlaneAction = items.some((candidate) => candidate.kind === "plane-action");
-		if (freeSeats <= 0 && !hasPlaneAction) return 0;
+		// A reserved seat stands open for its own restart row even when no free
+		// seat reads open, so the early return has to see that row too.
+		const hasReservedRow = items.some(
+			(candidate) =>
+				candidate.kind === "handoff" &&
+				candidate.origin === "restart" &&
+				reserved.has(candidate.ticketIdentity),
+		);
+		if (openSeats <= 0 && !hasPlaneAction && !hasReservedRow) return 0;
 		// One count for the whole call, on purpose: the loop takes at most
 		// `freeSeats` items, so it cannot start more than the cap allows even when
 		// a claim dedups to a seat the ticket already holds. That dedup is real and
@@ -1123,6 +1150,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 		// poll still lists) claims no new seat, and the free-seat figure counts it
 		// against the same ceiling the mode cell shows.
 		let claimed = 0;
+		let started = 0;
 		for (const item of items) {
 			if (this.stopped) break;
 			if (item.kind === "plane-action") {
@@ -1139,29 +1167,46 @@ class HandoffDispatchModule implements HandoffDispatch {
 			// pickup starts, not how many it reads. A full cap bounds the whole
 			// seats-bound walk the same way, the moment its early return was
 			// lifted for the plane action's items.
-			if (claimed >= freeSeats) break;
-			// The head's figure is a snapshot, and this walk awaits: the Plane
-			// action's run, the Consultation's claim. The pass is also not the only
-			// taker of a seat - every enqueue, the observation cycle, and every
-			// settling run starts one - so the seat a second pass took across an
-			// `await` never shows in `freeSeats`, and the two walks together cross
-			// the limit. The cap is a runtime reading, so the walk asks it again at
-			// every seats-bound item and stops at the count the plane stands at now,
-			// the way the force-dispatch measures its cap at its own claim.
-			if (overParallelLimit(limit, this.seatCount())) break;
+			// The restart row a reserved seat belongs to is not bounded by the
+			// free-seat figure: that seat is its own (ADR 0108).
+			const reservedSeat =
+				item.kind === "handoff" &&
+				item.origin === "restart" &&
+				reservedLeft.has(item.ticketIdentity);
+			if (!reservedSeat) {
+				if (claimed >= openSeats) break;
+				// The head's figure is a snapshot, and this walk awaits: the Plane
+				// action's run, the Consultation's claim. The pass is also not the only
+				// taker of a seat - every enqueue, the observation cycle, and every
+				// settling run starts one - so the seat a second pass took across an
+				// `await` never shows in `freeSeats`, and the two walks together cross
+				// the limit. The cap is a runtime reading, so the walk asks it again at
+				// every seats-bound item and stops at the count the plane stands at now,
+				// the way the force-dispatch measures its cap at its own claim. The
+				// seats still reserved for a restart row count as held here too: no
+				// other start may take them (ADR 0108).
+				if (overParallelLimit(limit, this.seatCount() + reservedLeft.size)) break;
+			}
 			if (item.kind === "consultation") {
 				// The shared order is one across kinds (ADR 0034, issue #90): a
 				// Consultation item takes its place in the same walk, and a pickup
 				// that starts holds its seat for the rest of the cycle, the way a
 				// handoff pickup does. The Consultation's own start line names this
 				// pass as the path that took the seat (issue #220).
-				if (await this.pickupConsultationItem(item, "pickup", false)) claimed += 1;
+				if (await this.pickupConsultationItem(item, "pickup", false)) {
+					claimed += 1;
+					started += 1;
+				}
 				continue;
 			}
-			if (this.pickupItem(item, startModeOf(item, directAskIdentity))) claimed += 1;
+			if (this.pickupItem(item, startModeOf(item, directAskIdentity))) {
+				if (reservedSeat) reservedLeft.delete(item.ticketIdentity);
+				else claimed += 1;
+				started += 1;
+			}
 		}
-		if (claimed > 0) this.reports.refresh();
-		return claimed;
+		if (started > 0) this.reports.refresh();
+		return started;
 	}
 
 	/**

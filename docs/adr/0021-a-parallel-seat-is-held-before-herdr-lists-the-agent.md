@@ -3,6 +3,10 @@
 Status: accepted
 Date: 2026-09-14
 
+Amended in part by ADR 0108: past the Startup grace, the seat a Ticket whose Agent
+the poll does not list leaves is not open to every start - it is reserved for that
+Ticket's own Restart row.
+
 ## Context
 
 The parallel limit bounds the agents that run, and the observation loop

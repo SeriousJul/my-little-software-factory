@@ -15,6 +15,7 @@ import {
 	type ParallelSeatConsultationFact,
 	type ParallelSeatFacts,
 	type ParallelSeatTicketFact,
+	parallelSeatAccount,
 	parallelSeatCount,
 	parallelSeatReading,
 	parallelSeatText,
@@ -185,6 +186,61 @@ describe("parallelSeatCount", () => {
 				facts({ tickets: [own], consultations: working, agents: null, now: NOW + GRACE + 1 }),
 			),
 		).toBe(1);
+	});
+
+	test("the missing Agent's seat is named for its own restart row (ADR 0108)", () => {
+		const own = ticketFact("github:github.com:I_5", "pane-5", OWN_NAME);
+		const other = ticketFact("github:github.com:I_7", "pane-7", "the-other-agent");
+		const past = NOW + GRACE + 1;
+		// Past the grace, the ticket whose own Agent the poll does not list is
+		// the one the seat reading names: its seat stands reserved for its own
+		// restart row.
+		expect(
+			parallelSeatAccount(
+				facts({
+					tickets: [own, other],
+					agents: [listed("pane-7", "the-other-agent")],
+					now: past,
+				}),
+			),
+		).toEqual({ count: 1, missingTickets: ["github:github.com:I_5"] });
+		// Inside the grace the Agent is booting, so nothing stands reserved.
+		// The ticket started ten seconds before the pinned clock, so its grace
+		// runs out at NOW + GRACE - 10_000.
+		expect(
+			parallelSeatAccount(facts({ tickets: [own], agents: [], now: NOW + GRACE - 10_001 })),
+		).toEqual({ count: 1, missingTickets: [] });
+		// A ticket whose unresolved claim holds its seat is not missing: the
+		// claim is starting it, and a reserved seat beside that claim would
+		// count the same seat twice.
+		expect(
+			parallelSeatAccount(
+				facts({
+					tickets: [own],
+					handoffAttemptTickets: ["github:github.com:I_5"],
+					agents: [],
+					now: past,
+				}),
+			),
+		).toEqual({ count: 1, missingTickets: [] });
+		// A pane herdr handed out to a foreign agent holds no seat, and the
+		// seat the ticket left is reserved the same way: the restart is the
+		// answer the plane has for it.
+		expect(
+			parallelSeatAccount(
+				facts({ tickets: [own], agents: [listed("pane-5", "a-stranger")], now: past }),
+			),
+		).toEqual({ count: 0, missingTickets: ["github:github.com:I_5"] });
+		// The count the rule answers is the count `parallelSeatCount` answers,
+		// for every facts set: one read, never two that can drift.
+		for (const set of [
+			facts({}),
+			facts({ tickets: [own, other], agents: [], now: past }),
+			facts({ consultations: [consultationFact("working")] }),
+			facts({ tickets: [own], handoffAttemptTickets: ["github:github.com:I_5"], agents: null }),
+		]) {
+			expect(parallelSeatAccount(set).count).toBe(parallelSeatCount(set));
+		}
 	});
 
 	test("the cap gate reads the limit and the count, and a lifted limit never reads over", () => {

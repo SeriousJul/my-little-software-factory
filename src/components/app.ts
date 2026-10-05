@@ -62,6 +62,7 @@ import {
 	flagWithholdsRow,
 	HANDOFF_ENVIRONMENT_KINDS,
 	type Handoff,
+	handoffLimitReached,
 	nextTicketListFilter,
 	type Ticket,
 	type TicketListFilter,
@@ -100,6 +101,8 @@ import {
 import {
 	CONSULTATION_SEAT_STATES,
 	overParallelLimit,
+	type ParallelSeatFacts,
+	parallelSeatAccount,
 	parallelSeatCount,
 	TICKET_SEAT_STATES,
 } from "../parallel.ts";
@@ -787,27 +790,65 @@ export function App({
 	 * #202, ADR 0095): the count costs a constant number of statements whatever
 	 * the file holds, never a lookup per in-flight Ticket.
 	 */
-	const currentSeatCount = (): number => {
-		if (state === undefined) return 0;
-		const inFlight = state.ticketWorkCycle.ticketsByState(TICKET_SEAT_STATES);
-		const names = state.ticketWorkCycle.agentNamesForTickets(
-			inFlight.map((ticket) => ticket.ticketIdentity),
-		);
-		return parallelSeatCount({
+	/**
+	 * The Parallel limit seat facts, read once per call (issue #202, ADR 0095):
+	 * the in-flight tickets and their Agent names in one batched read each, the
+	 * unresolved claims, the Consultation seats, and the latest herdr poll.
+	 */
+	const parallelSeatFacts = (): ParallelSeatFacts => {
+		const inFlight =
+			state === undefined ? [] : state.ticketWorkCycle.ticketsByState(TICKET_SEAT_STATES);
+		const names =
+			state === undefined
+				? new Map<string, string>()
+				: state.ticketWorkCycle.agentNamesForTickets(
+						inFlight.map((ticket) => ticket.ticketIdentity),
+					);
+		return {
 			tickets: inFlight.map((ticket) => ({
 				ticketIdentity: ticket.ticketIdentity,
 				paneId: ticket.paneId,
 				startedAt: ticket.startedAt,
 				agentName: names.get(ticket.ticketIdentity) ?? "",
 			})),
-			handoffAttemptTickets: state.handoff.openAttemptTickets(),
-			consultations: state.consultationRecord
-				.consultationsByState(CONSULTATION_SEAT_STATES)
-				.map((consultation) => ({ state: consultation.state })),
+			handoffAttemptTickets: state === undefined ? [] : state.handoff.openAttemptTickets(),
+			consultations:
+				state === undefined
+					? []
+					: state.consultationRecord
+							.consultationsByState(CONSULTATION_SEAT_STATES)
+							.map((consultation) => ({ state: consultation.state })),
 			agents: observationRef.current?.lastAgents() ?? null,
 			now: Date.now(),
 			startupGraceMs: STARTUP_GRACE_MS,
-		});
+		};
+	};
+	const currentSeatCount = (): number => parallelSeatCount(parallelSeatFacts());
+	/**
+	 * The tickets whose seat stands reserved for their own restart row (ADR 0108):
+	 * the in-flight tickets whose Agent the latest poll does not list past the
+	 * Startup grace, and that the Top-up can restart - the flag is out, the pane
+	 * stands, the Handoff limit leaves room, and Auto-handoff mode runs the
+	 * Top-up at all. A seat no restart row will ever take is not reserved: that
+	 * is the seat that starves every other start in the queue.
+	 */
+	const currentMissingSeatTickets = (): string[] => {
+		if (state === undefined || !autoModeRef.current) return [];
+		const facts = parallelSeatFacts();
+		const missing = parallelSeatAccount(facts).missingTickets;
+		if (missing.length === 0) return [];
+		const blocked = state.ticketWorkCycle.automaticStartBlockedTickets();
+		const counts = state.handoff.handoffCountsFor(missing);
+		const limit = configRef.current.maxHandoffsPerTicket;
+		return facts.tickets
+			.filter(
+				(ticket) =>
+					missing.includes(ticket.ticketIdentity) &&
+					ticket.paneId !== null &&
+					!blocked.has(ticket.ticketIdentity) &&
+					!handoffLimitReached(counts.get(ticket.ticketIdentity) ?? 0, limit),
+			)
+			.map((ticket) => ticket.ticketIdentity);
 	};
 	// The herdr seat: one external change to a ticket's environment at a time.
 	// A handoff holds it while herdr builds the environment and starts the
@@ -1523,6 +1564,9 @@ export function App({
 				runner: commandRunner,
 				config: () => configRef.current,
 				seatCount: currentSeatCount,
+				// The seats a Missing Agent left, each one reserved for its own
+				// restart row (ADR 0108): the pickup hands them to no other start.
+				missingSeatTickets: currentMissingSeatTickets,
 				// The Work queue's Consultation side (ADR 0034, issue #90): the
 				// pickup crosses to the Consultation operations, which own the
 				// record's settings re-read, its seat move, and its opening. The

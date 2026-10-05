@@ -6,6 +6,8 @@ Superseded in part by ADR 0092: a continuation is the Next step Auto-handoff mod
 
 Superseded in part by ADR 0094: the cycle asks the continuation it owes before the Work queue's pickup, and a continuation row enters ahead of the factory's standing fresh-work rows. Its one-item-per-cycle rule, its continuation-then-restart-then-open order, its gates, and its empty-queue rule over the fresh-work adds stand.
 
+Amended in part by ADR 0108: the Missing Agent's Restart is asked past a standing queue row, because the seat that Agent left is reserved for that row, and its row enters behind the owed continuation and ahead of the standing rows. The empty-queue rule over the open-ticket add, the one-item-per-cycle pace, and the gates stand.
+
 ## Context
 
 Auto-handoff held three direct-dispatch jobs: the open dispatch that

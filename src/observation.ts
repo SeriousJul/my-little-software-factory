@@ -1899,7 +1899,18 @@ export class ObservationCoordinator {
 		// an item already stands for the candidate it holds.
 		const queueItems = this.state.workQueue.items();
 		const hold = freshWorkHold({ ...this.cycleFacts(), queueDepth: queueItems.length });
-		if (hold !== null) {
+		// The Missing Agent's restart is the one fresh-work add a standing queue row
+		// does not hold (ADR 0108): the seat that Agent left is reserved for its own
+		// restart row, and the row enters ahead of the standing rows the way the owed
+		// continuation does (ADR 0100). Every other fresh-work add keeps ADR 0051's
+		// empty-queue rule, and the hold states itself as it always did.
+		const standingRowHold =
+			hold !== null &&
+			hold.reason === "queue-row-standing" &&
+			automaticAddsHold(this.cycleFacts()) === null
+				? hold
+				: null;
+		if (hold !== null && standingRowHold === null) {
 			this.noteAutomaticHold(hold);
 			return false;
 		}
@@ -2008,6 +2019,13 @@ export class ObservationCoordinator {
 				continue;
 			}
 			return true;
+		}
+		// The standing row the restart walked past is the open-ticket add's hold
+		// (ADR 0051, ADR 0108): the restart asked above, and the queue keeps its
+		// one-item pace for every other fresh-work add.
+		if (standingRowHold !== null) {
+			this.noteAutomaticHold(standingRowHold);
+			return false;
 		}
 		// 4. A new open ticket (ADR 0051, ADR 0088): the first open ticket in
 		// the list's order that every wait the auto-dispatch checked still

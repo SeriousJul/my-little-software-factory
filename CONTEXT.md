@@ -365,6 +365,7 @@ _Avoid_: orphaned agent, re-handoff, resume
 **Restart**:
 A recovery Handoff after a Missing agent.
 It repeats the interrupted Handoff's choices and counts toward the Handoff limit.
+The automatic Restart is the one fresh-work add a standing queue row does not hold out, and its row enters ahead of the standing rows: the seat the Missing agent left is its own (ADR 0108).
 _Avoid_: retry, Workflow Handoff
 
 **Stale Agent output**:
@@ -446,6 +447,7 @@ _Avoid_: auto dispatch, dispatch mode
 **Parallel limit**:
 The maximum number of works in flight, counting a ticket Handoff and a Consultation alike. A seat is held by an in-flight ticket whose agent the latest poll listed, by every in-progress handoff, by a started agent still inside its Startup grace (ADR 0021), and by a Consultation in `opening` or `working`.
 It gates every start: a start that cannot take a seat waits in the Work queue for its pickup (ADR 0049). A Plane action's start takes no seat, because it holds no agent: the pickup runs it whatever the limit reads (ADR 0068).
+The seat a Missing agent left is reserved: the Pickup hands it to that Ticket's own Restart row and to no other start, and the Top-up asks that row past the rows standing in the queue (ADR 0108). A seat no Restart can take - the flag, the Handoff limit, or the mode stands - is not reserved.
 _Avoid_: concurrency cap, max agents
 
 **Work queue**:
@@ -481,9 +483,9 @@ That rank is the row's place in the queue's order, not the queue's pace. A conti
 _Avoid_: follow-up, workflow advance
 
 **Top-up**:
-The one automatic add the observation cycle makes to the Work queue: while Auto-handoff mode is on, a continuation, else a restart, else an eligible open pull request ticket, else an eligible fresh open ticket, else nothing (ADR 0051, ADR 0088). The continuation is asked before the Work queue's pickup and waits only behind a Workflow route row already standing - the factory's own continuation or the row the operator's own route decision left there alike (ADR 0094, ADR 0100, issue #230). The rank ADR 0100 gives the owed continuation is its place in the queue's order, and a row that already stands is never overtaken by a row that has not entered. The restart and open-ticket adds run after the pickup and only into an empty queue (ADR 0094).
+The one automatic add the observation cycle makes to the Work queue: while Auto-handoff mode is on, a continuation, else a restart, else an eligible open pull request ticket, else an eligible fresh open ticket, else nothing (ADR 0051, ADR 0088). The continuation is asked before the Work queue's pickup and waits only behind a Workflow route row already standing - the factory's own continuation or the row the operator's own route decision left there alike (ADR 0094, ADR 0100, issue #230). The rank ADR 0100 gives the owed continuation is its place in the queue's order, and a row that already stands is never overtaken by a row that has not entered. The restart and open-ticket adds run after the pickup and only into an empty queue (ADR 0094). The Missing agent's restart is the exception the seat reservation forces (ADR 0108): the seat that agent left is reserved for that row, so a standing row does not hold the restart out, and its row enters behind the owed continuation and ahead of the standing rows.
 The pull request group stands ahead of the fresh group: the work the machine has started on a pull request moves to the end before the machine starts work on a ticket it has not started. The list's order holds inside each group, and a gate that holds one ticket holds that ticket only: the held ticket rests, and the walk falls to the next candidate, as every gate does.
-It adds one item per cycle, and only into an empty queue, so the queue never piles. A cycle that asked a continuation asks no fresh work, and the queue then holds at most one fresh-work row beside the continuation it outranks (ADR 0094, ADR 0100).
+It adds one item per cycle, and only into an empty queue, so the queue never piles. A cycle that asked a continuation asks no fresh work, and the queue then holds at most one fresh-work row beside the continuation it outranks (ADR 0094, ADR 0100). The restart walked past a standing row asks no open-ticket add in the same cycle: the standing row is its hold (ADR 0108).
 A ticket whose newest start failed, or whose newest plane action blocked, holds the re-ask until every one of its active sources re-reads it: the Attempt hold (ADR 0077 as extended by ADR 0101). A ticket whose starts keep failing holds it outright: the Failed-start park (ADR 0106).
 _Avoid_: refill, auto dispatch, queue feed
 

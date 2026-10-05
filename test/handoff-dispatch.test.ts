@@ -4765,3 +4765,151 @@ describe("the record lines", () => {
 		mod.stop();
 	});
 });
+
+describe("the seat a missing Agent left (ADR 0108)", () => {
+	const consultationRepository = {
+		identity: "github.com/acme/factory",
+		displayName: "acme/factory",
+		cloneUrl: "https://github.com/acme/factory.git",
+		path: "/tmp/factory",
+	};
+
+	/** A `queued` Consultation with its queue item, the way the submit makes one. */
+	function queuedConsultation(state: FactoryState, id: string): void {
+		state.consultationRecord.createConsultation({
+			id,
+			typeName: "grill",
+			agentType: "pi",
+			environment: "worktree",
+			template: "/grill {input}",
+			initialInput: "review auth",
+			renderedOpeningPrompt: "/grill review auth",
+			repository: consultationRepository,
+			agentName: `consultation-${id.slice(0, 8)}`,
+			initialState: "queued",
+		});
+	}
+
+	/** Pump the microtasks and timers until the queue holds nothing again. */
+	async function drains(rigRef: Rig): Promise<void> {
+		for (let turn = 0; turn < 200 && rigRef.state.workQueue.items().length > 0; turn += 1)
+			await new Promise((resolve) => setTimeout(resolve, 5));
+	}
+
+	/**
+	 * The dispatch with the app's own reading of the seat facts wired in: a
+	 * ticket whose Agent the latest poll does not list past the Startup grace
+	 * holds no seat, and the seat it left is named for its own restart row.
+	 */
+	function seatReader(missing: () => readonly string[]): Partial<HandoffDispatchOptions> {
+		return {
+			seatCount: () => 0,
+			missingSeatTickets: missing,
+		};
+	}
+
+	test("a queued Consultation does not take the seat a missing Agent left", async () => {
+		const rigRef = rig([FIRST]);
+		// One seat: the seat the missing Agent left is the only seat the limit
+		// has, so the reservation is all of it.
+		rigRef.config.maxParallelAgents = 1;
+		const calls: string[] = [];
+		seedHandoff(rigRef, FIRST);
+		const mod = withRunner(rigRef, rigRef.runner, {
+			...seatReader(() => [FIRST.identity]),
+			pickupConsultation: (id) => {
+				calls.push(id);
+				return Promise.resolve({ kind: "started" });
+			},
+		});
+		queuedConsultation(rigRef.state, "22222222-1111-4111-8111-111111111111");
+		// The seat stands reserved for FIRST's own restart row, so the
+		// Consultation waits with it: the dev run's over-cap start cannot land.
+		expect(await mod.pickupWorkQueue()).toBe(0);
+		expect(calls).toEqual([]);
+		expect(rigRef.state.workQueue.items()).toHaveLength(1);
+		mod.stop();
+	});
+
+	test("the restart row takes the seat reserved for it", async () => {
+		const rigRef = rig([FIRST]);
+		seedHandoff(rigRef, FIRST);
+		const mod = withRunner(
+			rigRef,
+			rigRef.runner,
+			seatReader(() => [FIRST.identity]),
+		);
+		expect(
+			rigRef.state.workQueue.enqueueWork({
+				ticketIdentity: FIRST.identity,
+				origin: "restart",
+				choice: liveChoice,
+				previousMessage: "",
+				automatic: true,
+			}),
+		).toMatchObject({ ok: true });
+		// The reserved seat is the row's own, so the walk takes it past the
+		// free-seat figure that reads 0.
+		expect(await mod.pickupWorkQueue()).toBe(1);
+		await drains(rigRef);
+		expect(rigRef.state.workQueue.items()).toHaveLength(0);
+		expect(rigRef.commands()).toContain(agentStart(FIRST.name));
+		mod.stop();
+	});
+
+	test("a seat no restart row can take is not reserved", async () => {
+		const rigRef = rig([FIRST]);
+		const calls: string[] = [];
+		const mod = withRunner(rigRef, rigRef.runner, {
+			// The Top-up restarts nothing: the flag, the Handoff limit, or the
+			// mode stands. The seat is free for the work that waits.
+			...seatReader(() => []),
+			pickupConsultation: (id) => {
+				calls.push(id);
+				return Promise.resolve({ kind: "started" });
+			},
+		});
+		seedHandoff(rigRef, FIRST);
+		queuedConsultation(rigRef.state, "22222222-1111-4111-8111-111111111111");
+		expect(await mod.pickupWorkQueue()).toBe(1);
+		expect(calls).toEqual(["22222222-1111-4111-8111-111111111111"]);
+		mod.stop();
+	});
+
+	test("the Plane action's run is not held by a reserved seat", async () => {
+		const rigRef = rig([FIRST]);
+		const mod = withRunner(
+			rigRef,
+			rigRef.runner,
+			seatReader(() => [FIRST.identity]),
+		);
+		// A row the pickup can carry: an open ticket whose task type is the
+		// merge, the plane action the rig's config knows.
+		rigRef.state.sourceFact.applyFetch(rigRef.config.sources[0] as never, {
+			status: "success",
+			fetchedAt: "2026-09-01T00:00:00Z",
+			tickets: [{ ...issueTicket(SECOND), labels: ["ready-for-review"] }],
+		});
+		expect(rigRef.state.ticketWorkCycle.ticketState(SECOND.identity)).toBe("open");
+		expect(
+			rigRef.state.workQueue.enqueuePlaneActionWork({
+				ticketIdentity: SECOND.identity,
+				origin: "open",
+				automatic: true,
+				taskType: "merge",
+			}),
+		).toMatchObject({ ok: true });
+		// The plane action takes no seat (ADR 0068), so the walk runs it even
+		// with every free seat reserved: the early return sees the row, and the
+		// run is the row's answer. The merge takes no seat, so it starts none.
+		expect(await mod.pickupWorkQueue()).toBe(0);
+		await drains(rigRef);
+		expect(rigRef.state.workQueue.items()).toHaveLength(0);
+		// The walk reached the row: its run answered it, and the seat the
+		// missing Agent left held nothing over it.
+		expect(rigRef.events).toContain(
+			'warning:the merge of "Close the stale deploy branch" was not run: task type merge carries no plane action',
+		);
+		mod.stop();
+	});
+});

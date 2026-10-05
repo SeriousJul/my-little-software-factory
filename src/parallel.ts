@@ -22,6 +22,11 @@
  * clock, and the grace. The rule never reaches a state module, so the gates
  * and the Ticket header's mode cell can never disagree about the count, and a
  * test states the facts instead of opening a state file.
+ *
+ * The same read answers a second question (ADR 0108): which in-flight tickets
+ * hold no seat because their own agent the latest poll does not list and their
+ * Startup grace has run out. Those are the Missing agents, and the seat each
+ * one leaves is reserved for that ticket's own restart row.
  */
 
 import { agentInPane } from "./domain/agent.ts";
@@ -68,8 +73,47 @@ export interface ParallelSeatFacts {
 	startupGraceMs: number;
 }
 
-/** The combined Parallel limit seat count the gates and the mode cell share. */
-export function parallelSeatCount(facts: ParallelSeatFacts): number {
+/** The seat answer one in-flight ticket gives for the latest poll. */
+type ParallelSeatState = "held" | "booting" | "missing";
+
+/** The seat the one in-flight ticket holds, read from the poll and the clock. */
+function seatStateOf(
+	ticket: ParallelSeatTicketFact,
+	listedAgents: ReadonlyMap<string, HerdrAgent>,
+	now: number,
+	startupGraceMs: number,
+): ParallelSeatState {
+	// The one missing-Agent rule the observation cycle and the list's failure
+	// badge read: the ticket's own agent is the one that runs under the name the
+	// ticket's handoff expects. A different agent in the same pane id - herdr
+	// handed the closed pane's id out again - holds no seat for the ticket, the
+	// way a missing one does.
+	const own = agentInPane(listedAgents, ticket.paneId, ticket.agentName);
+	if (own !== null) return "held";
+	return now - Date.parse(ticket.startedAt) < startupGraceMs ? "booting" : "missing";
+}
+
+/** The Parallel limit seat reading the gates, the pickup, and the mode cell share (ADR 0034, ADR 0108). */
+export interface ParallelSeatAccount {
+	/** The seats held: the count the mode cell shows and every cap gate reads. */
+	count: number;
+	/**
+	 * The in-flight tickets that hold no seat because their own agent the latest
+	 * poll does not list and their Startup grace has run out, in the order the
+	 * facts name them. A ticket whose unresolved claim holds its seat is not
+	 * here: its seat is held, and nothing stands reserved for it.
+	 */
+	missingTickets: string[];
+}
+
+/**
+ * The seat reading: the held seats, and the tickets whose Agent is Missing
+ * past the Startup grace (ADR 0034, ADR 0108).
+ *
+ * One read answers both, so the count the mode cell shows and the seats the
+ * pickup reserves cannot disagree about which ticket is missing.
+ */
+export function parallelSeatAccount(facts: ParallelSeatFacts): ParallelSeatAccount {
 	const listedAgents = new Map<string, HerdrAgent>();
 	if (facts.agents !== null) {
 		for (const agent of facts.agents) listedAgents.set(agent.paneId, agent);
@@ -78,19 +122,15 @@ export function parallelSeatCount(facts: ParallelSeatFacts): number {
 	// for every unresolved claim it carries.
 	const counted = new Set<string>();
 	let count = 0;
+	const missing: string[] = [];
 	for (const ticket of facts.tickets) {
-		// One seat per ticket at most: the ticket's own in-flight seat counts
-		// for every unresolved claim it carries. The one missing-Agent rule the
-		// observation cycle and the list's failure badge read: the ticket's own
-		// agent is the one that runs under the name the ticket's handoff expects.
-		// A different agent in the same pane id - herdr handed the closed pane's
-		// id out again - holds no seat for the ticket, the way a missing one does.
-		const own = agentInPane(listedAgents, ticket.paneId, ticket.agentName);
-		const booting = own === null && facts.now - Date.parse(ticket.startedAt) < facts.startupGraceMs;
-		if (own !== null || booting) {
-			count += 1;
-			counted.add(ticket.ticketIdentity);
+		const state = seatStateOf(ticket, listedAgents, facts.now, facts.startupGraceMs);
+		if (state === "missing") {
+			missing.push(ticket.ticketIdentity);
+			continue;
 		}
+		count += 1;
+		counted.add(ticket.ticketIdentity);
 	}
 	for (const identity of facts.handoffAttemptTickets) {
 		if (!counted.has(identity)) {
@@ -101,7 +141,18 @@ export function parallelSeatCount(facts: ParallelSeatFacts): number {
 	count += facts.consultations.filter((consultation) =>
 		CONSULTATION_SEAT_STATES.includes(consultation.state),
 	).length;
-	return count;
+	// A ticket whose unresolved claim holds its seat is not missing for the
+	// reservation: its seat is spent on the claim that is starting it, and a
+	// reserved seat beside that claim would count the same seat twice.
+	return {
+		count,
+		missingTickets: missing.filter((identity) => !counted.has(identity)),
+	};
+}
+
+/** The combined Parallel limit seat count the gates and the mode cell share. */
+export function parallelSeatCount(facts: ParallelSeatFacts): number {
+	return parallelSeatAccount(facts).count;
 }
 
 /**

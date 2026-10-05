@@ -1519,6 +1519,42 @@ describe("missing agents", () => {
 		state.close();
 	});
 
+	test("the restart walks past a standing row, and its row leads the queue (ADR 0108)", async () => {
+		const { state, intents, coordinator, advance } = rig({ autoOn: true, agents: [] });
+		// A Consultation stands in the queue for a seat, so the fresh-work
+		// walk's empty-queue gate stands (ADR 0051).
+		state.consultationRecord.createConsultation({
+			id: "22222222-1111-4111-8111-111111111111",
+			typeName: "grill",
+			agentType: "pi",
+			environment: "worktree",
+			template: "/grill {input}",
+			initialInput: "review auth",
+			renderedOpeningPrompt: "/grill review auth",
+			repository: { ...fetched().repository, path: "/tmp/factory" },
+			agentName: "consultation-a1",
+			initialState: "queued",
+		});
+		// The in-flight ticket's Agent is missing past the Startup grace: the
+		// seat it held reads free, and it is the seat its restart row owns.
+		handOut(state, "github:github.com:I_5");
+		advance(STARTUP_GRACE_MS + 1);
+		await coordinator.tick();
+		// The standing row does not hold the restart out: the seat the missing
+		// Agent left is reserved for it, so the Top-up asks it past the row.
+		expect(intents).toEqual([
+			expect.objectContaining({
+				origin: "restart",
+				automatic: true,
+				ticketIdentity: "github:github.com:I_5",
+			}),
+		]);
+		// The restart row leads the queue, so the pickup takes the reserved
+		// seat first and the Consultation waits for the seat that start leaves.
+		expect(state.workQueue.items().map((item) => item.kind)).toEqual(["handoff", "consultation"]);
+		state.close();
+	});
+
 	test("a started agent inside the startup grace is booting, not missing", async () => {
 		const { state, intents, claims, coordinator } = rig({
 			autoOn: true,

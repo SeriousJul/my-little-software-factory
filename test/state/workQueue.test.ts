@@ -159,6 +159,84 @@ describe("the workQueue aggregate", () => {
 		]);
 		state.close();
 	});
+	test("an automatic restart enters behind the owed continuation and ahead of the standing rows (ADR 0108)", () => {
+		const state = openFactoryState(":memory:");
+		// The operator's row stands, a settled turn owes itself a route, and the
+		// Top-up asks a missing Agent's restart past the queue's depth.
+		expect(
+			state.workQueue.enqueueWork({
+				ticketIdentity: "github:github.com:I_7",
+				origin: "open",
+				choice,
+				previousMessage: "",
+			}),
+		).toEqual({ ok: true });
+		expect(
+			state.workQueue.enqueueWork({
+				ticketIdentity: "github:github.com:I_5",
+				origin: "workflow",
+				choice,
+				previousMessage: "",
+				automatic: true,
+			}),
+		).toEqual({ ok: true });
+		expect(
+			state.workQueue.enqueueWork({
+				ticketIdentity: "github:github.com:I_9",
+				origin: "restart",
+				choice,
+				previousMessage: "",
+				automatic: true,
+			}),
+		).toEqual({ ok: true });
+		// The owed continuation keeps its rank (ADR 0100); the restart takes the
+		// seat the missing Agent left ahead of every other waiting start.
+		expect(
+			state.workQueue.items().map((item) => {
+				if (item.kind !== "handoff") throw new Error("the queue holds no handoff item");
+				return [item.ticketIdentity, item.origin, item.position, item.automatic];
+			}),
+		).toEqual([
+			["github:github.com:I_5", "workflow", 0, true],
+			["github:github.com:I_9", "restart", 1, true],
+			["github:github.com:I_7", "open", 2, false],
+		]);
+		state.close();
+	});
+
+	test("an automatic restart leads a queue that holds no continuation (ADR 0108)", () => {
+		const state = openFactoryState(":memory:");
+		expect(
+			state.workQueue.enqueueWork({
+				ticketIdentity: "github:github.com:I_7",
+				origin: "open",
+				choice,
+				previousMessage: "",
+			}),
+		).toEqual({ ok: true });
+		expect(
+			state.workQueue.enqueueWork({
+				ticketIdentity: "github:github.com:I_9",
+				origin: "restart",
+				choice,
+				previousMessage: "",
+				automatic: true,
+			}),
+		).toEqual({ ok: true });
+		expect(
+			state.workQueue.items().map((item) => {
+				if (item.kind !== "handoff") throw new Error("the queue holds no handoff item");
+				return [item.ticketIdentity, item.origin, item.position];
+			}),
+		).toEqual([
+			["github:github.com:I_9", "restart", 0],
+			["github:github.com:I_7", "open", 1],
+		]);
+		// A row the operator asked for is never moved by the reservation: the
+		// restart's own seat is the only one it claims.
+		state.close();
+	});
+
 	test("a second enqueue for a waiting ticket is refused, and the first keeps its place", () => {
 		const state = openFactoryState(":memory:");
 		enqueue(state, "t1");

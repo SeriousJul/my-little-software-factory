@@ -227,16 +227,27 @@ export class WorkQueueModule implements WorkQueueAggregate {
 	 *
 	 * Rows from that place up move one place later, highest first, so no two rows
 	 * ever share a position.
+	 *
+	 * The automatic restart is the second row that does not enter at the tail
+	 * (ADR 0108): the seat a Missing Agent left is reserved for that ticket's own
+	 * restart row, so the row enters behind every owed continuation and ahead of
+	 * the standing rows the reserved seat must not be spent on.
 	 */
 	private workQueuePosition(automatic: boolean, origin: HandoffOrigin): number {
 		const rows = this.db
-			.prepare("SELECT position, origin FROM work_queue ORDER BY position")
-			.all() as { position: number; origin: string | null }[];
+			.prepare("SELECT position, origin, is_automatic FROM work_queue ORDER BY position")
+			.all() as { position: number; origin: string | null; is_automatic: number }[];
 		const last = rows.length === 0 ? -1 : (rows[rows.length - 1] as { position: number }).position;
 		let position = last + 1;
 		if (automatic && origin === "workflow") {
 			const firstStandingWork = rows.find((row) => row.origin !== "workflow");
 			if (firstStandingWork !== undefined) position = firstStandingWork.position;
+		}
+		if (automatic && origin === "restart") {
+			// The owed continuation keeps its rank over the restart (ADR 0100), so
+			// the restart takes the place of the first row that is no continuation.
+			const first = rows.find((row) => !(row.origin === "workflow" && row.is_automatic === 1));
+			if (first !== undefined) position = first.position;
 		}
 		for (const row of rows.reverse()) {
 			if (row.position < position) break;
