@@ -26,7 +26,12 @@ import {
 	AUTOMATIC_ROW_HOLD_REASONS,
 	automaticHoldLine,
 } from "../src/domain/top-up.ts";
-import { CHECKOUT_WAIT_PREFIX, checkoutWaitHolderFact } from "../src/handoff-dispatch.ts";
+import {
+	checkoutWaitHolderFact,
+	checkoutWaitLine,
+	checkoutWaitMessageLine,
+} from "../src/handoff-dispatch.ts";
+import { planeActionCheckoutWord } from "../src/plane-action-registry.ts";
 
 const repo = join(import.meta.dir, "..");
 const guide = readFileSync(join(repo, "docs/configuration/index.md"), "utf8");
@@ -50,7 +55,10 @@ function statedInGuide(line: string, writtenBy: string): void {
  * instead of in a doc assertion that would pass on an empty string.
  */
 function sourceConstant(source: string, name: string): string {
-	const match = new RegExp(`const ${name} = "((?:[^"\\\\]|\\\\.)*)";`).exec(source);
+	// The formatter may wrap a long constant's value onto its own line, so the
+	// reading allows the whitespace between `=` and the string and still insists
+	// on a plain string literal.
+	const match = new RegExp(`const ${name} =\\s*"((?:[^"\\\\]|\\\\.)*)";`).exec(source);
 	if (match === null) throw new Error(`${name} is no longer a plain string constant in its module`);
 	return match[1];
 }
@@ -99,8 +107,14 @@ describe("the record lines the configuration reference states", () => {
 			},
 			{
 				// The bounded end of a Shared checkout wait is a refusal like every
-				// other (ADR 0108): the row leaves the queue with the reason.
-				fact: sourceConstant(dispatchSource, "CHECKOUT_WORK_OVER_BUDGET_FACT"),
+				// other (ADR 0108): the row leaves the queue with the reason. The two
+				// clocks of the bound answer different questions, so each refuses with
+				// its own fact, and the guide states both (issue #297 review).
+				fact: sourceConstant(dispatchSource, "CHECKOUT_HOLD_OVER_BUDGET_FACT"),
+				lines: ['handoff refused: "Add a webhook retry policy"'],
+			},
+			{
+				fact: sourceConstant(dispatchSource, "CHECKOUT_ROW_OVER_BUDGET_FACT"),
 				lines: ['handoff refused: "Add a webhook retry policy"'],
 			},
 		];
@@ -120,18 +134,42 @@ describe("the record lines the configuration reference states", () => {
 	 */
 	test("a start the shared checkout holds states its own line in the guide", () => {
 		statedInGuide(
-			`${CHECKOUT_WAIT_PREFIX.handoff}: "Add a webhook retry policy" (${checkoutWaitHolderFact("merge", '"Persist the source facts"')})`,
+			checkoutWaitLine(
+				"handoff",
+				'"Add a webhook retry policy"',
+				checkoutWaitHolderFact("merge", '"Persist the source facts"'),
+			),
 			"the handoff's Shared checkout wait line",
 		);
 		statedInGuide(
-			`${CHECKOUT_WAIT_PREFIX.merge}: "Persist the source facts" (${checkoutWaitHolderFact("handoff", '"Add a webhook retry policy"')})`,
+			checkoutWaitLine(
+				planeActionCheckoutWord("merge-pull-request"),
+				'"Persist the source facts"',
+				checkoutWaitHolderFact("handoff", '"Add a webhook retry policy"'),
+			),
 			"the merge's Shared checkout wait line",
+		);
+		// The Message line the force-dispatch key answers a held row with is built
+		// in the dispatch, and the page states it (issue #297 review).
+		statedInGuide(
+			checkoutWaitMessageLine(
+				'"Add a webhook retry policy"',
+				checkoutWaitHolderFact("merge", '"Persist the source facts"'),
+			),
+			"the force-dispatch answer for a row the Shared checkout holds",
 		);
 		// The page says what the wait is not: the Parallel limit's cap, and a
 		// refusal. A reader who mistakes one for the other reads a working plane
 		// as a stuck one.
 		statedInGuide("Shared checkout hold", "the term ADR 0108 names");
 		statedInGuide("takes no seat", "the rule that keeps ADR 0068 whole");
+		// The Plane action side of the gate takes its word from the registry, so the
+		// page's merge line is the registry's word and not a second spelling
+		// (issue #297 review).
+		statedInGuide(
+			`\`${planeActionCheckoutWord("merge-pull-request")} waits:\``,
+			"the registry's checkout word for the merge action",
+		);
 	});
 
 	/**

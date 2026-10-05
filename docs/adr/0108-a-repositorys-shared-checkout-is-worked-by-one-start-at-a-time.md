@@ -64,7 +64,11 @@ the merge Plane action, which the record shows meeting that create with no gate
 between them. The dispatch holds one checkout hold per Repository, taken at the
 start's claim and let go when that start settles. The hold is keyed by the same
 Repository key the Operation serializer normalizes (issue #203), so `acme/factory`
-and `github.com/acme/factory` are one checkout and not two.
+and `github.com/acme/factory` are one checkout and not two. The Plane action side
+of the rule reaches the Work queue through the registry's cell for that action, so
+the queue's channel word - `merge` today, and a second Plane action's own word the
+day the registry names one - is read from the registry and not kept twice (issue
+#297 review).
 
 The hold names the Repository the start works, read from the projection: the
 pull request's Repository for a merge, and the Repository the Handoff's Ticket
@@ -122,7 +126,19 @@ clock reaches it, the way every pickup attempt ends in start or drop (ADR 0049):
 
 ```text
 handoff refused: "Add a webhook retry policy" (the shared checkout stayed at work past its budget)
+handoff refused: "Add a webhook retry policy" (the row waited behind the shared checkout past its budget)
 ```
+
+Each clock names its own fact, because the two answer different questions: the
+first says one start stopped answering, and the second says the Repository is
+busy and every start answered in time. An operator who reads the second fact as
+the first goes looking for a hung run that is not there (issue #297 review).
+
+The bound is per waiting row, not per Ticket. A Ticket whose row waits, is
+refused, and is asked again waits the budget again from its new row. That is the
+shape the plane already accepts for a standing-row refusal (issue #223), and it
+is stated here as a limit rather than solved as a per-Ticket bound: nothing stops
+a repeated ask from spending the budget once per ask.
 
 The queue never waits on a row that cannot reach an exit.
 
@@ -213,11 +229,13 @@ fact per Repository and not one per spelling.
 `CHECKOUT_WORK_BUDGET_MS` is the one bound, and the suite reads it rather than
 restating it, so moving the budget moves the test with it.
 
-The registry holds one Plane action, and it is the merge, so the hold's channel
-word, the `merge waits:` prefix, and the refusal's wording are the merge's. A
-second Plane action the registry gains waits behind the same holds and states
-them in the merge's words until its own channel word comes from the registry's
-action; the gate names this assumption where it takes the Plane action side.
+The registry holds one Plane action, and it is the merge. Its checkout word comes
+from the registry's cell for that action - the same cell the Work queue's channel
+word is read from - so the `merge waits:` prefix, the holder fact, and the
+refusal's wording all wear the registry's word and not a spelling the dispatch
+keeps (issue #297 review). A second Plane action the registry gains waits behind
+the same holds and states itself in its own word the day its cell names one; until
+then the words are the merge's because the registry's word is the merge's.
 
 The wait is a record fact and a queue fact, not a surface fact: the row already
 wears the `queued` badge, and no new badge or marker was added. The screen-reader
@@ -238,3 +256,13 @@ the cost it records is the seconds a worktree create takes. A later change
 narrows the rule to the worktree Handoff pair alone if the merge's serialization
 costs more than that. The verification record states what the suite measured for
 this rule and what it did not.
+
+**The Handoff side pays for the merge's hold.** The rule is symmetric, and the
+cost is not only the merge's: a worktree Handoff of a Repository whose merge is
+in flight no longer reaches its claim until the merge's commands answer, so its
+Agent starts later than it did on the base. What the Handoff waits is the pair of
+`gh` commands the merge runs, measured above, and the wait is a queue position -
+the row keeps its place and its `queued` badge, takes no seat, and starts on the
+next pass - bounded by the checkout work's budget like every other wait. The
+suite measures the wait and its bound; the wall-clock cost on a real merge is not
+measured, and the verification record states that as incomplete.

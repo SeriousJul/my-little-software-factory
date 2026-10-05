@@ -32,6 +32,30 @@ export const PLANE_ACTION_LABELS: Readonly<Record<PlaneActionName, string>> = {
 	"merge-pull-request": "Merge pull request",
 };
 
+/**
+ * The word the Shared checkout hold names one plane action's start by (ADR 0108,
+ * issue #297 review): the hold's kind, its `<word> waits:` line, its
+ * `the <word> of "<ticket>" runs in it` fact, and its `<word> refused:` line all
+ * read this one cell. The registry is the only place that can know the word, so
+ * the dispatch asks it instead of naming the merge: a second Plane action the
+ * registry gains states its own wait in its own words, and the compiler holds the
+ * table to one word per name.
+ *
+ * The word has to read in all four places, the way the labels read on the
+ * surfaces.
+ */
+export const PLANE_ACTION_CHECKOUT_WORDS = {
+	"merge-pull-request": "merge",
+} as const satisfies Record<PlaneActionName, string>;
+
+/** The checkout word of one plane action, from the registry. */
+export type PlaneActionCheckoutWord = (typeof PLANE_ACTION_CHECKOUT_WORDS)[PlaneActionName];
+
+/** The word the Shared checkout hold names one plane action's start by. */
+export function planeActionCheckoutWord(name: PlaneActionName): PlaneActionCheckoutWord {
+	return PLANE_ACTION_CHECKOUT_WORDS[name];
+}
+
 /** The name the surfaces give the named plane action, from the registry. */
 export function planeActionLabel(name: PlaneActionName): string {
 	return PLANE_ACTION_LABELS[name];

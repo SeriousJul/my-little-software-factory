@@ -29,10 +29,13 @@ import type { FetchedTicket, RepositoryRef } from "../src/domain/ticket.ts";
 import { queueWait } from "../src/domain/ticket-facts.ts";
 import { baseChoice, type HandoffChoice } from "../src/handoff.ts";
 import {
+	CHECKOUT_HOLD_OVER_BUDGET_FACT,
+	CHECKOUT_ROW_OVER_BUDGET_FACT,
 	CHECKOUT_WORK_BUDGET_MS,
 	createHandoffDispatch,
 	type HandoffDispatchReports,
 } from "../src/handoff-dispatch.ts";
+import { planeActionCheckoutWord } from "../src/plane-action-registry.ts";
 import type { FactoryState } from "../src/state.ts";
 import { openFactoryState } from "../src/state.ts";
 import { BASE_CONFIG } from "./base-config.ts";
@@ -193,6 +196,8 @@ interface Rig {
 	advance: (ms: number) => void;
 	/** Resolve once `test()` holds, pumping the microtasks a run leaves behind. */
 	until: (test: () => boolean) => Promise<void>;
+	/** Let held commands answer, one at a time, until `test()` holds. */
+	releaseUntil: (test: () => boolean) => Promise<void>;
 	/** The same state and record, with the Parallel limit read at `seats`. */
 	withSeats: (seats: number) => ReturnType<typeof createHandoffDispatch>;
 }
@@ -364,6 +369,12 @@ function rig(options: RigOptions = {}): Rig {
 		until: async (holds) => {
 			for (let turn = 0; turn < 200 && !holds(); turn += 1)
 				await new Promise((resolve) => setTimeout(resolve, 5));
+		},
+		releaseUntil: async (holds) => {
+			for (let turn = 0; turn < 200 && !holds(); turn += 1) {
+				gate.release();
+				await new Promise((resolve) => setTimeout(resolve, 5));
+			}
 		},
 		withSeats: (seats) => make(gate.runner, () => seats),
 	};
@@ -564,7 +575,9 @@ describe("the shared checkout of one Repository (issue #297, ADR 0108)", () => {
 		for (const ticket of SIXTEEN) await handoffAsked(r, ticket);
 		await r.dispatch.pickupWorkQueue();
 		expect(r.state.workQueue.items()).toHaveLength(18);
-		const overBudget = (line: RecordedLine) => line.message.includes("past its budget");
+		const overBudget = (line: RecordedLine) =>
+			line.message.includes(CHECKOUT_HOLD_OVER_BUDGET_FACT) ||
+			line.message.includes(CHECKOUT_ROW_OVER_BUDGET_FACT);
 		// The clock moves in steps of a third of the budget and one command
 		// answers per step, so the checkout changes hands at every step and every
 		// new holder takes it with a fresh reading. The old bound reset at every
@@ -585,13 +598,19 @@ describe("the shared checkout of one Repository (issue #297, ADR 0108)", () => {
 		// checkout came free, the three Handoffs that reached a start left the way
 		// a start leaves it, and the queue is empty when the walk ends: no row is
 		// held past the budget, whatever the checkout did in that window.
-		expect(r.lines.filter(overBudget).length).toBeGreaterThanOrEqual(14);
+		expect(r.lines.filter(overBudget)).toHaveLength(14);
+		// And it is the row's own clock that refused them, in its own words: every
+		// holder answered in time, so the Repository is busy and no run hung (issue
+		// #297 review).
+		expect(r.lines.filter((line) => line.message.includes(CHECKOUT_HOLD_OVER_BUDGET_FACT))).toEqual(
+			[],
+		);
 		expect(
 			r.lines.some(
 				(line) =>
 					line.level === "warn" &&
 					line.message.startsWith("handoff refused:") &&
-					line.message.includes("past its budget"),
+					line.message.includes(CHECKOUT_ROW_OVER_BUDGET_FACT),
 			),
 		).toBe(true);
 		expect(r.state.workQueue.items()).toHaveLength(0);
@@ -756,6 +775,165 @@ describe("the shared checkout of one Repository (issue #297, ADR 0108)", () => {
 		expect(linesFor(ISSUE.title)).toHaveLength(1);
 		expect(r.state.workQueue.hasWorkItem(NEXT.identity)).toBe(true);
 		r.release();
+	});
+
+	test("a claim the herdr seat parks holds the checkout while it waits", async () => {
+		const r = rig();
+		// The rule's own premise: the worktree create is the next thing a parked
+		// start will do, so a merge must not walk into the checkout ahead of it
+		// (ADR 0108). The herdr seat is one channel-wide seat, so a run inside it
+		// parks the next claim behind it, and that parked claim holds the checkout
+		// from its claim, not from its create.
+		r.hold(`herdr worktree create --cwd ${r.billingCheckout}`);
+		// The billing Handoff works its own checkout and holds the herdr seat inside
+		// the gate: it takes no factory hold, so the factory row can reach its claim.
+		await handoffAsked(r, OTHER);
+		await r.waitForArrivals(1);
+		// The factory worktree Handoff claims, takes the factory checkout, and parks
+		// behind the seat the billing run holds. Its row stands: the claim waits in
+		// the drain, and its create has not reached the checkout yet.
+		await handoffAsked(r, ISSUE);
+		await r.dispatch.pickupWorkQueue();
+		await r.settle();
+		expect(r.state.workQueue.hasWorkItem(ISSUE.identity)).toBe(true);
+		expect(r.state.handoff.handoffInFlight(ISSUE.identity)).toBe(true);
+		expect(
+			r
+				.commands()
+				.filter(
+					(command) =>
+						command.startsWith("herdr worktree create") && command.includes(r.factoryCheckout),
+				),
+		).toEqual([]);
+		// The merge of that Repository waits behind the parked claim, and the record
+		// names the parked Handoff as the holder.
+		expect(
+			await r.dispatch.dispatchPlaneAction({
+				origin: "open",
+				automatic: false,
+				ticketIdentity: PULL.identity,
+				taskType: "merge",
+			}),
+		).toEqual({ ok: true });
+		await r.dispatch.pickupWorkQueue();
+		expect(r.state.workQueue.hasWorkItem(PULL.identity)).toBe(true);
+		expect(r.commands().filter((command) => command.startsWith("gh pr merge"))).toEqual([]);
+		expect(r.lines).toContainEqual(
+			infoLine(
+				`merge waits: "${PULL.title}" (the shared checkout is at work: the handoff of "${ISSUE.title}" runs in it)`,
+			),
+		);
+		// herdr answers the run that held the seat: the parked claim drains, its
+		// create reaches the checkout, its start leaves the way any start leaves it,
+		// and the merge runs then.
+		await r.releaseUntil(() => r.commands().some((command) => command.startsWith("gh pr merge")));
+		expect(
+			r
+				.commands()
+				.filter(
+					(command) =>
+						command.startsWith("herdr worktree create") && command.includes(r.factoryCheckout),
+				),
+		).toHaveLength(1);
+		expect(r.state.workQueue.hasWorkItem(PULL.identity)).toBe(false);
+		r.release();
+	});
+
+	test("the two clocks of the bound refuse with two facts", async () => {
+		// The hold's own age answers one start that stopped answering (issue #297
+		// review): the holder is a worktree create the gate holds, and the row that
+		// waits is refused on the holder's age.
+		const hung = rig({ tickets: [fetched(NEXT, "github-issue")] });
+		hung.hold("herdr worktree create");
+		await handoffAsked(hung, ISSUE);
+		await hung.waitForArrivals(1);
+		await handoffAsked(hung, NEXT);
+		await hung.dispatch.pickupWorkQueue();
+		hung.advance(CHECKOUT_WORK_BUDGET_MS);
+		await hung.dispatch.pickupWorkQueue();
+		expect(hung.lines).toContainEqual(
+			warnLine(`handoff refused: "${NEXT.title}" (${CHECKOUT_HOLD_OVER_BUDGET_FACT})`),
+		);
+		expect(
+			hung.lines.filter((line) => line.message.includes(CHECKOUT_ROW_OVER_BUDGET_FACT)),
+		).toEqual([]);
+		hung.release();
+		// The row's own wait answers a Repository that is simply busy: the checkout
+		// changes hands well inside the budget, so no holder's age reaches it, and
+		// the row that kept waiting is refused in words that name its wait and not a
+		// hung run.
+		const third = SIXTEEN[0];
+		const busy = rig({
+			tickets: [fetched(NEXT, "github-issue"), fetched(third, "github-issue")],
+		});
+		busy.hold("herdr worktree create");
+		// ISSUE works the checkout first; NEXT and the third row wait behind it.
+		await handoffAsked(busy, ISSUE);
+		await busy.waitForArrivals(1);
+		await handoffAsked(busy, NEXT);
+		await handoffAsked(busy, third);
+		// Half the budget in, the first holder answers and the next start takes the
+		// checkout with a fresh reading. The third row keeps waiting behind it.
+		busy.advance(CHECKOUT_WORK_BUDGET_MS / 2);
+		busy.release();
+		await busy.settle();
+		await busy.dispatch.pickupWorkQueue();
+		await busy.waitForArrivals(2);
+		// The rest of the budget: no holder stands a whole budget and no start hung,
+		// but the row waited the whole budget behind the changing hands.
+		busy.advance(CHECKOUT_WORK_BUDGET_MS / 2);
+		await busy.dispatch.pickupWorkQueue();
+		expect(busy.lines).toContainEqual(
+			warnLine(`handoff refused: "${third.title}" (${CHECKOUT_ROW_OVER_BUDGET_FACT})`),
+		);
+		expect(
+			busy.lines.filter((line) => line.message.includes(CHECKOUT_HOLD_OVER_BUDGET_FACT)),
+		).toEqual([]);
+		busy.release();
+	});
+
+	test("the Plane action side of the gate wears the registry's word", async () => {
+		// The channel word is the registry's cell, not a spelling the dispatch keeps
+		// (issue #297 review): the wait line, the holder fact, and the refusal all
+		// read it, so a second Plane action states itself in its own words.
+		const word = planeActionCheckoutWord("merge-pull-request");
+		const r = rig();
+		await mergeInFlight(r);
+		await handoffAsked(r, ISSUE);
+		expect(r.lines).toContainEqual(
+			infoLine(
+				`handoff waits: "${ISSUE.title}" (the shared checkout is at work: the ${word} of "${PULL.title}" runs in it)`,
+			),
+		);
+		r.release();
+		// And the merge's own wait line and refusal wear it the same way.
+		const r2 = rig();
+		r2.hold("herdr worktree create");
+		await handoffAsked(r2, ISSUE);
+		await r2.waitForArrivals(1);
+		expect(
+			await r2.dispatch.dispatchPlaneAction({
+				origin: "open",
+				automatic: false,
+				ticketIdentity: PULL.identity,
+				taskType: "merge",
+			}),
+		).toEqual({ ok: true });
+		await r2.dispatch.pickupWorkQueue();
+		expect(r2.lines).toContainEqual(
+			infoLine(
+				`${word} waits: "${PULL.title}" (the shared checkout is at work: the handoff of "${ISSUE.title}" runs in it)`,
+			),
+		);
+		r2.advance(CHECKOUT_WORK_BUDGET_MS);
+		await r2.dispatch.pickupWorkQueue();
+		expect(r2.lines).toContainEqual(
+			warnLine(`${word} refused: "${PULL.title}" (${CHECKOUT_HOLD_OVER_BUDGET_FACT})`),
+		);
+		expect(r2.events).toContain(
+			`warning:the ${word} of "${PULL.title}" was not run: ${CHECKOUT_HOLD_OVER_BUDGET_FACT}`,
+		);
+		r2.release();
 	});
 
 	test("a live-worktree Handoff takes no hold", async () => {
