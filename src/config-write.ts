@@ -18,6 +18,20 @@
  * named on the Message line so the operator learns the comments did not
  * survive.
  *
+ * The check reads the whole patched file, not only the two regions the plane
+ * owns: a shape anywhere in it that the startup loader refuses costs the
+ * operator their comments, even a line the scan never looks at in a table the
+ * plane never edits.
+ *
+ * One limit sits inside that check rather than under it, stated so the next
+ * contributor does not read "a source block with no name" as every unread name.
+ * `sourceNameOf` answers what the scan makes of the line rather than refusing an
+ * unread one, and for a `name = """` line that answer is a single quote
+ * character. The plane then does not recognise the operator's block and appends
+ * its own copy of that source beside it: issue #234 tracks that defect, the
+ * source-name records in `test/config-write.test.ts` measure what it costs, and
+ * `docs/configuration/index.md` states it to the operator.
+ *
  * Inside the two regions the plane's own copy is what stands. A `[repos]` key
  * the plane holds is written from that copy, so an operator who re-points that
  * key while the plane runs has their value replaced on the next write-back,
@@ -39,7 +53,9 @@
  * operator's own, and the edit leaves it alone; what keeps the write honest is
  * the verify step, which refuses a patched text that does not carry what the
  * plane holds. A file whose lines end CRLF is edited the same way: every line
- * the plane writes carries the file's own line ending.
+ * the plane writes carries the file's own line ending. A full rewrite does not
+ * carry it: it writes the plane's own text, which ends its lines LF, and the
+ * records in `test/config-write.test.ts` name that cost.
  *
  * One window this design does not close, stated so the next contributor does
  * not read the verify step as a lock: the patch is built and checked in
@@ -467,9 +483,10 @@ function sourceNameOf(scanned: ScannedLine[], region: Region): string | null {
 
 /**
  * The patched file must carry what the plane wrote. The check reads the patched
- * text the way startup reads it, so a patch that misreads the file cannot land.
- * The returned config is the one the file now carries, and it decides the file
- * mode the write asks for.
+ * text the way startup reads it, so a patch that misreads the file cannot land,
+ * and so a shape anywhere in the file that startup refuses is refused here - not
+ * only a shape inside the two regions the plane owns. The returned config is the
+ * one the file now carries, and it decides the file mode the write asks for.
  */
 function verifyPatch(patched: string, updated: FactoryConfig): FactoryConfig | null {
 	let carried: FactoryConfig;
