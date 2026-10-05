@@ -39,6 +39,7 @@ import {
 	rgb,
 	roleColor,
 	rowsOf,
+	type Setup,
 	settle,
 	spanColorAt,
 	stillFrame,
@@ -1160,143 +1161,134 @@ describe("the merged Main view", () => {
 		}
 	});
 
-	test("the Ticket detail keeps its scroll across a round trip through the other section", async () => {
+	/**
+	 * The scroll round trip both cases below walk: scroll the long-description
+	 * Ticket's detail off its own title, cross through the Consultation section
+	 * and back, take the same Ticket up again, then move on to the next Ticket.
+	 *
+	 * The cross unmounts the detail and the way back remounts it, so the walk
+	 * reaches the restore effect in `src/components/ticket-detail.ts`. With
+	 * `withholdFrames` the renderer's `frame` event is held back for the whole
+	 * round trip: the passes the walk's own updates cause still run and still
+	 * paint, and the harness's waits still read the painted buffer, but no
+	 * surface can be woken by a pass (issue #302). Only a restore that asks
+	 * nothing of a later pass brings the offset back under the hold.
+	 *
+	 * Where this pin bites, written as steps a reviewer can re-run. Each probe
+	 * edits one file, runs `bun test test/main-view-frame.test.ts --isolate
+	 * --timeout=30000`, and is then reverted. Every count and timing below is what
+	 * the probe produced on this head, and each left the other 24 records in the
+	 * file green.
+	 *
+	 * Probe A, the wait this branch retires. In the restore effect of
+	 * `src/components/ticket-detail.ts`, replace the line `restore();` with
+	 * `renderer.once("frame", restore);`. 1 record goes red at 11031.14 ms, the
+	 * local 10000 ms frame deadline: "the Ticket detail resumes at its offset while
+	 * no surface can be woken by a frame". Its dump is the whole screen fully
+	 * painted with the detail at its top and its scroll thumb on the first row of
+	 * its track, the shape the four remote misses printed. The older round-trip
+	 * case stays green: with the event in place a pass the walk itself causes still
+	 * wakes the wait, so only the withheld case pins the contract.
+	 *
+	 * Probe B, the witness the hold needs. In `withholdFrameEvents` in
+	 * `test/app-harness.ts`, delete the line
+	 * `renderer.on(CliRenderEvents.FRAME, witness);`. 1 record goes red, the same
+	 * one, at 1018.41 ms, on the harness's own swallowed-count line. The renderer
+	 * announces a pass only when something listens for it, so with no listener of
+	 * the harness's own the hold swallows nothing and proves nothing.
+	 *
+	 * Probe C, the hold leaking. In the same wrapper, count the event and then hand
+	 * it to the real `emit` instead of returning `true`. 1 record goes red, the same
+	 * one, at 1021.80 ms, on the harness's own leaked-count line: the witness was
+	 * woken by a pass, so the hold did not hold.
+	 */
+	async function scrollRoundTripThroughTheOtherSection(
+		setup: Setup,
+		withholdFrames: boolean,
+	): Promise<{ resumed: string; next: string }> {
+		await awaitFrame(setup, (f) => f.includes("Retry policy"), "the Tickets");
+		// The long-description Ticket is the one that overflows the pane, so it
+		// can be scrolled off its own title.
+		for (let step = 1; step <= 3; step += 1)
+			await press(setup, "j", "the next Ticket", (f) => markerRowOf(f) === 3 + step);
+		await focusDetail(setup);
+		const scrolled = await pressScrollKey(
+			setup,
+			"end",
+			"the detail past its title",
+			(f) => !detailPaneText(f).includes("Drop the legacy auth shim"),
+		);
+		expect(detailPaneText(scrolled)).toContain("sentinel-end-marker");
+		// Walk through the Consultation section and back, and take the Ticket up
+		// again: its detail unmounted with the cross, and its offset came back
+		// with the remount. The cursor crosses to the last Ticket row; home
+		// brings it back to the list's first row.
+		const walk = async () => {
+			await press(setup, "h", "the list focus back", (f) => f.includes("┌─❯ Tickets"));
+			await crossToConsultations(setup);
+			await crossToTickets(setup);
+			await press(setup, "home", "the list back to its first Ticket", (f) => markerRowOf(f) === 3);
+			for (let step = 1; step <= 3; step += 1)
+				await press(setup, "j", "the next Ticket", (f) => markerRowOf(f) === 3 + step);
+			await focusDetail(setup);
+			return awaitFrame(
+				setup,
+				(f) => detailPaneText(f) === detailPaneText(scrolled),
+				"the detail to resume at its scrolled position",
+			);
+		};
+		const handFramesBack = withholdFrames ? withholdFrameEvents(setup) : null;
+		let resumed: string;
+		try {
+			resumed = await walk();
+		} finally {
+			handFramesBack?.();
+		}
+		// The offset is the Ticket's, not the section's: another Ticket's detail
+		// starts at its own top, and the held-back event leaves the plane working.
+		await press(setup, "h", "the list focus back", (f) => f.includes("┌─❯ Tickets"));
+		await press(setup, "j", "the next Ticket", (f) => markerRowOf(f) === 7);
+		await focusDetail(setup);
+		const next = await settle(setup);
+		expect(detailPaneText(next)).toContain("Observe the agent");
+		expect(detailPaneText(next)).not.toContain("sentinel-end-marker");
+		return { resumed, next };
+	}
+
+	const bootedScrollRoundTrip = (body: (setup: Setup) => Promise<void>) => {
 		const state = openFactoryState(join(home, "state.sqlite"));
 		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
 		state.grouping.setGroupingAxis("tickets", "none");
 		seedConsultation(state, uid("t"));
 		const outcome = longDetailOutcome();
 		const source = new FakeSource("issues", "github-issues", outcome);
-		try {
-			await booted(
-				async (setup) => {
-					source.settle(outcome);
-					await awaitFrame(setup, (f) => f.includes("Retry policy"), "the Tickets");
-					// The long-description Ticket is the one that overflows the
-					// pane, so it can be scrolled off its own title.
-					for (let step = 1; step <= 3; step += 1)
-						await press(setup, "j", "the next Ticket", (f) => markerRowOf(f) === 3 + step);
-					await focusDetail(setup);
-					const scrolled = await pressScrollKey(
-						setup,
-						"end",
-						"the detail past its title",
-						(f) => !detailPaneText(f).includes("Drop the legacy auth shim"),
-					);
-					expect(detailPaneText(scrolled)).toContain("sentinel-end-marker");
-					// Walk through the Consultation section and back, and take
-					// the Ticket up again: its detail unmounted with the cross,
-					// and its offset came back with the remount.
-					await press(setup, "h", "the list focus back", (f) => f.includes("┌─❯ Tickets"));
-					await crossToConsultations(setup);
-					// The cursor crosses to the last Ticket row; home brings it
-					// back to the list's first row.
-					await crossToTickets(setup);
-					await press(
-						setup,
-						"home",
-						"the list back to its first Ticket",
-						(f) => markerRowOf(f) === 3,
-					);
-					for (let step = 1; step <= 3; step += 1)
-						await press(setup, "j", "the next Ticket", (f) => markerRowOf(f) === 3 + step);
-					await focusDetail(setup);
-					const resumed = await awaitFrame(
-						setup,
-						(f) => detailPaneText(f) === detailPaneText(scrolled),
-						"the detail to resume at its scrolled position",
-					);
-					// The offset is the Ticket's, not the section's: another
-					// Ticket's detail starts at its own top.
-					await press(setup, "h", "the list focus back", (f) => f.includes("┌─❯ Tickets"));
-					await press(setup, "j", "the next Ticket", (f) => markerRowOf(f) === 7);
-					await focusDetail(setup);
-					const next = await settle(setup);
-					expect(detailPaneText(next)).toContain("Observe the agent");
-					expect(detailPaneText(next)).not.toContain("sentinel-end-marker");
-					expect(detailPaneText(next)).not.toBe(detailPaneText(resumed));
-				},
-				state,
-				{ sources: [source] },
-				WIDTH,
-				27,
-				liveConsultationAgents([uid("t")]),
-			);
-		} finally {
+		return booted(
+			async (setup) => {
+				source.settle(outcome);
+				await body(setup);
+			},
+			state,
+			{ sources: [source] },
+			WIDTH,
+			27,
+			liveConsultationAgents([uid("t")]),
+		).finally(() => {
 			source.settle(outcome);
 			state.close();
-		}
+		});
+	};
+
+	test("the Ticket detail keeps its scroll across a round trip through the other section", async () => {
+		await bootedScrollRoundTrip(async (setup) => {
+			const { resumed, next } = await scrollRoundTripThroughTheOtherSection(setup, false);
+			expect(detailPaneText(next)).not.toBe(detailPaneText(resumed));
+		});
 	});
 
-	test("the Ticket detail resumes at its offset with no render pass to wait on", async () => {
-		const state = openFactoryState(join(home, "state.sqlite"));
-		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
-		state.grouping.setGroupingAxis("tickets", "none");
-		seedConsultation(state, uid("t"));
-		const outcome = longDetailOutcome();
-		const source = new FakeSource("issues", "github-issues", outcome);
-		try {
-			await booted(
-				async (setup) => {
-					source.settle(outcome);
-					await awaitFrame(setup, (f) => f.includes("Retry policy"), "the Tickets");
-					for (let step = 1; step <= 3; step += 1)
-						await press(setup, "j", "the next Ticket", (f) => markerRowOf(f) === 3 + step);
-					await focusDetail(setup);
-					const scrolled = await pressScrollKey(
-						setup,
-						"end",
-						"the detail past its title",
-						(f) => !detailPaneText(f).includes("Drop the legacy auth shim"),
-					);
-					expect(detailPaneText(scrolled)).toContain("sentinel-end-marker");
-					// The renderer paints on invalidation, not on a free-running loop,
-					// and a resting plane emits no frames at all: a restore that waits
-					// for the next `frame` pass can wait forever (issue #302). The
-					// event is held back for the whole round trip, so the passes the
-					// walk itself causes still paint, but no surface can be woken by
-					// one. Only a restore that asks for nothing brings the offset back.
-					const handFramesBack = withholdFrameEvents(setup);
-					try {
-						await press(setup, "h", "the list focus back", (f) => f.includes("┌─❯ Tickets"));
-						await crossToConsultations(setup);
-						await crossToTickets(setup);
-						await press(
-							setup,
-							"home",
-							"the list back to its first Ticket",
-							(f) => markerRowOf(f) === 3,
-						);
-						for (let step = 1; step <= 3; step += 1)
-							await press(setup, "j", "the next Ticket", (f) => markerRowOf(f) === 3 + step);
-						await focusDetail(setup);
-						await awaitFrame(
-							setup,
-							(f) => detailPaneText(f) === detailPaneText(scrolled),
-							"the detail to resume at its scrolled position with no frame to wait on",
-						);
-					} finally {
-						handFramesBack();
-					}
-					// The held-back event leaves the plane working: the next Ticket
-					// still starts at its own top once the frames come back.
-					await press(setup, "h", "the list focus back", (f) => f.includes("┌─❯ Tickets"));
-					await press(setup, "j", "the next Ticket", (f) => markerRowOf(f) === 7);
-					await focusDetail(setup);
-					const next = await settle(setup);
-					expect(detailPaneText(next)).toContain("Observe the agent");
-					expect(detailPaneText(next)).not.toContain("sentinel-end-marker");
-				},
-				state,
-				{ sources: [source] },
-				WIDTH,
-				27,
-				liveConsultationAgents([uid("t")]),
-			);
-		} finally {
-			source.settle(outcome);
-			state.close();
-		}
+	test("the Ticket detail resumes at its offset while no surface can be woken by a frame", async () => {
+		await bootedScrollRoundTrip(async (setup) => {
+			await scrollRoundTripThroughTheOtherSection(setup, true);
+		});
 	});
 
 	test("the Consultation header carries the attention bell, collapsed and expanded", async () => {

@@ -413,14 +413,42 @@ export async function withApp(
  * cause still paint, but no surface can be woken by one: only a change that
  * asks for nothing shows on the screen. The harness's own waits read the painted
  * buffer, never the event, so they keep working while it is held back.
+ *
+ * The key counts what it swallowed and refuses to hand the event back on an
+ * empty count, and it refuses a hold that leaked. The renderer only announces a
+ * pass behind its own `listenerCount("frame") > 0` guard, so a fixed restore,
+ * which registers no listener, would leave the count at zero and say nothing.
+ * The harness therefore keeps one listener of its own on the event: the guard
+ * stays open, the wrapper intercepts every announcement a surface could have
+ * been woken by, and the witness counts the ones that reached it anyway. A
+ * future OpenTUI that announces a pass along another path trips the witness
+ * instead of leaving the pin to pass green on a wait nobody tested.
  */
 export function withholdFrameEvents(setup: Setup): () => void {
 	const renderer = setup.renderer;
 	const emit = renderer.emit.bind(renderer);
-	renderer.emit = (event: string | symbol, ...args: unknown[]) =>
-		event === CliRenderEvents.FRAME ? true : emit(event, ...args);
+	let framesSwallowed = 0;
+	let framesWitnessed = 0;
+	renderer.emit = (event: string | symbol, ...args: unknown[]) => {
+		if (event !== CliRenderEvents.FRAME) return emit(event, ...args);
+		framesSwallowed += 1;
+		return true;
+	};
+	const witness = () => {
+		framesWitnessed += 1;
+	};
+	renderer.on(CliRenderEvents.FRAME, witness);
 	return () => {
+		renderer.removeListener(CliRenderEvents.FRAME, witness);
 		renderer.emit = emit;
+		expect(
+			framesSwallowed,
+			"withholdFrameEvents swallowed no `frame` emission, so the hold proved nothing",
+		).toBeGreaterThan(0);
+		expect(
+			framesWitnessed,
+			"withholdFrameEvents leaked a `frame` emission to its own listener, so the hold did not hold",
+		).toBe(0);
 	};
 }
 
