@@ -41,16 +41,50 @@
   plane's own themes keep the tested pairs.
 - Start bug fixes with a reproduction through the real application flow. Use
   isolated test state and fake external operations, not live Agent work.
-- Check `bun run lint`, `bun run typecheck`, and `bun run test` for implementation
-  changes, plus the applicable acceptance checks in the standard. Record what
-  could not run as incomplete; do not extend a claim past what was measured.
+- Record what could not run as incomplete; do not extend a claim past what was
+  measured. Run the two loops below, plus the applicable acceptance checks in
+  the standard.
 - Frame snapshots and keyboard tests do not establish screen-reader support.
   Record tested versions and results. A skipped required check is not a pass.
 - Update current-behavior documentation as migrations land. Keep implementation
   rules in the standard and architecture decisions in ADRs, not in the glossary.
 
+## Two loops: the inner loop and the push gate
+
+During development run the small loop, never the full suite:
+
+- `bun run fmt` on the files you touched, or `bun run lint` (0.25 s)
+- `bun run typecheck` (2.8 s)
+- `bun test <file>` for the file you changed, or `bun run test:changed` when
+  several files changed
+
+That loop costs about 5 seconds. `bun run test` does not belong in it.
+
+Exactly one full `bun run test` gates the push, and it runs against the merged
+tree: rebase onto `origin/main` first, then run `bun run lint`, `bun run
+typecheck`, and `bun run test`. If the branch falls behind again during a rework
+round, rebase and run all three again. When the change touches `docs/`,
+`CONTEXT.md`, or an ADR, `bun run docs:build` joins the gate. A new ADR number is
+checked against `origin/main` after the rebase.
+
+`scripts/git-hooks/pre-push` runs lint and typecheck, and refuses a push on a
+branch behind `origin/main`. It is active only where
+`git config core.hooksPath scripts/git-hooks` has been set; the setup line is in
+[the commands page](docs/development/commands.md). Do not bypass it with
+`--no-verify`: CI runs the same checks.
+
+See [the quality gate](docs/development/quality-gate.md) for the probe rules,
+the reporting rules, and the measured costs, and
+[ADR 0105](docs/adr/0105-the-push-gate-runs-the-three-checks-on-the-merged-tree-and-a-hook-owns-the-two-cheap-ones.md)
+for the decision.
+
 ## Testing limits
 
+- A frame test states the arithmetic that fixes the terminal width it picks.
+- One copy of a describe block per test file: a split leaves a duplicated suite
+  behind once, and it doubles the run.
+- A wording that has its own test is not restated literally in a table of
+  records. Read it from the helper, so a wording change moves one place.
 - Do NOT control the desktop environment to test the app. Never run
   `hyprctl` (or any other window manager or desktop tool) from a test,
   a script, or by hand while verifying a change.
@@ -73,9 +107,9 @@ is not a pass, and a recorded load flake is evidence, not a dodge.
   you already have do the work.
 - `/tmp` is for scratch scripts only. Probe files land there; a repository
   copy, worktree, or clone never does.
-- Iterate with targeted file runs (`bun test <file>`). Exactly one full
-  `bun run test` gates the push; do not pay the full-suite price on every
-  intermediate state.
+- Iterate with targeted file runs (`bun test <file>`) or the scoped suite
+  (`bun run test:changed`). Exactly one full `bun run test` gates the push, on
+  the merged tree; do not pay the full-suite price on every intermediate state.
 - Before the full run, check once whether another `bun test` process is
   running on this machine, and record the machine state in the report. No
   sleep or `pgrep` poll loops.

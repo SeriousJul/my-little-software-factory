@@ -35,7 +35,9 @@ trigger a restart.
 
 `bun run test:changed` is the suite, scoped: it runs only the test files that
 the current changes can affect, so a change to one or two files keeps the run
-short. It is a speed tool for iteration; the push gate stays the full suite.
+short. It is a speed tool for iteration; the push gate stays the full suite, run
+once against the merged tree. See [the quality gate](./quality-gate.md) for the
+two loops and what each one runs.
 
 The base ref defaults to `origin/main` and is overridable with the
 `TEST_CHANGED_BASE` environment variable, so work based on another branch
@@ -44,6 +46,23 @@ test:changed`. The run covers committed changes against the base, uncommitted
 edits, and untracked test files, and it works on a detached head, so a herdr
 worktree gets the same tool. A clean, up-to-date worktree matches nothing, and
 the run says so.
+
+## The pre-push hook
+
+`scripts/git-hooks/pre-push` is the cheap half of the push gate (ADR 0105): it
+runs `bun run lint` and `bun run typecheck`, about 3 seconds, and refuses a push
+whose branch is behind the remote-tracking ref the checkout already holds. It
+fetches nothing, and it never runs the suite.
+
+A committed hook is not active by itself. Set it once per checkout:
+
+```sh
+git config core.hooksPath scripts/git-hooks
+```
+
+The hook prints which check ran, and a refusal names the rule it enforced. Do not
+bypass it with `--no-verify`: CI runs the same checks, so a bypass only moves the
+failure to a red check on the pull request.
 
 ## Mutation testing
 

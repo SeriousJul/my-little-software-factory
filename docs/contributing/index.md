@@ -13,6 +13,9 @@ decision records carry the mechanics the operator pages do not.
 
 - [Commands](../development/commands.md) - the repository's commands: build,
   test, the shared control gallery, the screenshots, and the site.
+- [The quality gate](../development/quality-gate.md) - the two loops a change
+  runs through, the rules a review measures, and what a claim about a check has
+  to carry.
 - [The shared control standard](../development/shared-controls.md) - the
   contract a control screen must keep, and the shared control library that
   answers for it.

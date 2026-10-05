@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+# The pre-push gate (ADR 0105).
+#
+# It owns the two cheap checks and the merged-tree rule, and nothing else:
+# `bun run lint` (0.25 s) and `bun run typecheck` (2.8 s), and a refusal of a
+# push whose branch is behind the remote-tracking ref this checkout already
+# holds. The full suite is not here on purpose: exactly one `bun run test` gates
+# the push, and the agent runs it deliberately, against the merged tree, once.
+#
+# A committed hook is not active by itself. It runs in a checkout that has set
+# it: `git config core.hooksPath scripts/git-hooks`.
+
+set -uo pipefail
+
+repo_root=$(git rev-parse --show-toplevel) || exit 1
+cd "$repo_root" || exit 1
+
+remote=${1:-}
+failed=0
+
+# Git hands one line per ref on the remote's side: <local ref> <local oid>
+# <remote ref> <remote oid>. They are read here, before the checks run, because
+# a check that reads stdin would eat them.
+lines=()
+while IFS= read -r line; do
+	[ -n "$line" ] && lines+=("$line")
+done
+
+for check in lint typecheck; do
+	printf 'pre-push: bun run %s\n' "$check"
+	if ! bun run "$check" </dev/null; then
+		printf 'pre-push: bun run %s failed\n' "$check" >&2
+		failed=1
+	fi
+done
+
+for line in "${lines[@]-}"; do
+	read -r local_ref local_oid remote_ref remote_oid <<<"$line"
+	[ -z "${local_ref:-}" ] && continue
+	# A deleted ref is all zeros and needs no check.
+	case "$local_oid" in
+	0000000000000000000000000000000000000000) continue ;;
+	esac
+
+	branch=${local_ref#refs/heads/}
+	if [ "$branch" = "$local_ref" ]; then
+		continue
+	fi
+
+	upstream="refs/remotes/${remote:-origin}/${branch}"
+	if ! git show-ref --verify --quiet "$upstream"; then
+		printf 'pre-push: %s names no %s, so the behind check runs on nothing\n' "$branch" "$upstream"
+		continue
+	fi
+
+	# Behind means commits the remote-tracking ref holds that this ref does not.
+	behind=$(git rev-list --count "$local_ref".."$upstream")
+	if [ "$behind" -gt 0 ]; then
+		printf 'pre-push: %s is %s commit(s) behind %s. Rebase onto it, then run bun run lint, bun run typecheck, and bun run test against the merged tree (ADR 0105).\n' \
+			"$branch" "$behind" "$upstream" >&2
+		failed=1
+	fi
+done
+
+if [ "$failed" -ne 0 ]; then
+	printf 'pre-push: the push is refused. Do not bypass this with --no-verify: CI runs the same checks.\n' >&2
+	exit 1
+fi
+
+printf 'pre-push: lint and typecheck clean, and no branch behind its remote-tracking ref\n'
