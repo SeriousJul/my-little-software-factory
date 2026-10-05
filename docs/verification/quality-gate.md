@@ -406,7 +406,7 @@ The branch was level with `origin/main` at `dab44a0d` before the run.
 | `bun run lint` | clean over 304 files (132 ms) |
 | `bun run typecheck` | clean (2.88 s) |
 | `bun run docs:build` | complete in 1.59 s, because the branch touches `docs/` |
-| `bun run test` | 3,021 pass / 0 fail across 138 files in 41.02 s (16,014 `expect()` calls), at load average 9.37 before the run and 5.91 after. No other `bun test` process ran on this machine: the one match was the check's own command line |
+| `bun run test` | Two full runs on the branch, both green: 3,021 pass / 0 fail across 138 files in 41.02 s (16,014 `expect()` calls) at load average 9.37 before and 5.91 after, on the tree one docs commit short of the head; then the same 3,021 pass / 0 fail in 41.47 s (16,934 `expect()` calls) at load 6.25 after, on `b8c375bc`. The only change after both runs is this record's own wording of the row. The `expect()` count moves between runs on the timing-read assertions the records already name. No other `bun test` process ran on this machine: the one match was the check's own command line |
 
 ### What this branch did not measure
 
