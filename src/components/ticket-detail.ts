@@ -708,6 +708,14 @@ export const TicketDetail = forwardRef<TicketDetailHandle, TicketDetailProps>(fu
 			// offset would clamp to zero and be lost. The pane invalidates the
 			// tree itself rather than wait for a pass nobody owes it, and asks at
 			// most once, so a box that never lays out cannot spin the renderer.
+			//
+			// The give-up path is the second return: when the pass the pane asked
+			// for still answers no size, the offset is not applied and the slot is
+			// left as it was. That is intended. The restore side never rewrites a
+			// fact the save side owns, and the retained value cannot move the scroll
+			// later: every path to another remount runs the save cleanup first, which
+			// writes the offset the pane actually leaves behind - its top, since
+			// nothing was applied - and a zero offset never re-arms the restore.
 			if (box.scrollHeight === 0 || box.viewport.height === 0) {
 				if (passAsked) return;
 				passAsked = true;

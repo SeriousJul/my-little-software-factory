@@ -105,25 +105,28 @@ const sampleOutcome = () => ({
  * description is what overflows the pane: the row the scroll tests carry off
  * its own title, and its `sentinel-end-marker` is the last line of the body.
  */
-const longDetailOutcome = () => ({
-	...sampleOutcome(),
-	tickets: sampleOutcome().tickets.map((ticket) =>
-		ticket.externalKey === "#4"
-			? {
-					...ticket,
-					description:
-						"The legacy auth shim that predated the token service has no remaining callers.\n" +
-						"Remove it and its feature flag.\n" +
-						Array.from(
-							{ length: 12 },
-							(_, index) =>
-								`A long note ${index + 1} about the callers that were considered and why each one no longer needs the shim.`,
-						).join("\n") +
-						"\nsentinel-end-marker",
-				}
-			: ticket,
-	),
-});
+const longDetailOutcome = () => {
+	const outcome = sampleOutcome();
+	return {
+		...outcome,
+		tickets: outcome.tickets.map((ticket) =>
+			ticket.externalKey === "#4"
+				? {
+						...ticket,
+						description:
+							"The legacy auth shim that predated the token service has no remaining callers.\n" +
+							"Remove it and its feature flag.\n" +
+							Array.from(
+								{ length: 12 },
+								(_, index) =>
+									`A long note ${index + 1} about the callers that were considered and why each one no longer needs the shim.`,
+							).join("\n") +
+							"\nsentinel-end-marker",
+					}
+				: ticket,
+		),
+	};
+};
 
 function seedConsultation(
 	state: FactoryState,

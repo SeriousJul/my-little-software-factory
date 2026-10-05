@@ -452,6 +452,69 @@ export function withholdFrameEvents(setup: Setup): () => void {
 	};
 }
 
+/** What `withholdRenderAsksButThePlanesOwn` saw while it held. */
+export interface RenderAskWitness {
+	/** How many render asks the hold swallowed. */
+	asksHeld: number;
+	/** How many asks came from the control plane's own code and got through. */
+	planeAsks: number;
+}
+
+/**
+ * Hold back every render ask but the control plane's own, and hand back the key
+ * that puts them back, with what the hold witnessed.
+ *
+ * The renderer paints on invalidation: a surface that changes a renderable asks
+ * for the next pass, and a resting plane asks for nothing (issue #302). A pane
+ * that needs a pass to lay itself out cannot count on some other surface's ask
+ * to supply one. With this hold up, the rig's own resize ask and the asks a
+ * remount's renderable mutations make are all swallowed, so no pass can land
+ * until the control plane asks for one. That also fixes the geometry the pane
+ * meets: with no pass able to run first, a remounted scroll box still answers no
+ * size when its restore effect runs, which is the branch the unheld case takes
+ * only while the runner is quiet.
+ *
+ * The hold reads the direct caller of `requestRender` off the call stack. A
+ * renderable's own ask reaches the renderer from inside OpenTUI, so it is held
+ * like the rig's; only a surface that calls the renderer itself gets through.
+ * The first ask that gets through puts the hold down: the pass it schedules is
+ * the one under test, and the repaint that carries its result to the screen
+ * belongs to the buffer the assertion reads.
+ *
+ * The key counts what it swallowed and refuses to hand the asks back on an empty
+ * count: a hold that swallowed nothing is indistinguishable from no hold at all.
+ */
+export function withholdRenderAsksButThePlanesOwn(setup: Setup): () => RenderAskWitness {
+	const renderer = setup.renderer;
+	const ask = renderer.requestRender.bind(renderer);
+	let held = true;
+	const witness: RenderAskWitness = { asksHeld: 0, planeAsks: 0 };
+	renderer.requestRender = () => {
+		// The frame above this wrapper names whoever called `requestRender`. A
+		// path under the repository's own `src/` is the control plane asking the
+		// renderer directly; OpenTUI's files, `node_modules/` included, are not.
+		const caller = (new Error().stack ?? "").split("\n")[2] ?? "";
+		const fromThePlane =
+			!caller.includes("node_modules") && /\/src\/[\w./-]+\.ts:\d+:\d+/.test(caller);
+		if (fromThePlane) {
+			witness.planeAsks += 1;
+			held = false;
+			return ask();
+		}
+		if (!held) return ask();
+		witness.asksHeld += 1;
+		return undefined;
+	};
+	return () => {
+		renderer.requestRender = ask;
+		expect(
+			witness.asksHeld,
+			"withholdRenderAsksButThePlanesOwn swallowed no render ask, so the hold proved nothing",
+		).toBeGreaterThan(0);
+		return witness;
+	};
+}
+
 /**
  * Wait for the rendered frame to satisfy `predicate`, and return it.
  *

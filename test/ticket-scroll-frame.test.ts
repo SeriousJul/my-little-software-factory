@@ -21,13 +21,16 @@ import {
 	paneRow,
 	press,
 	pressArrow,
+	type RenderAskWitness,
 	rgb,
 	roleColor,
 	rowsOf,
+	type Setup,
 	settle,
 	startingFaceOf,
 	stillFrame,
 	withApp,
+	withholdRenderAsksButThePlanesOwn,
 } from "./app-harness.ts";
 import { BASE_CONFIG } from "./base-config.ts";
 import { FakeSource } from "./fake-source.ts";
@@ -766,45 +769,118 @@ describe("native Ticket detail viewport", () => {
 		);
 	});
 
+	/**
+	 * The below-minimum resize round trip both cases below walk: scroll the
+	 * overflowing detail off its own title, drop the terminal below the minimum
+	 * size so the compact frame unmounts the panes, take the terminal back, and
+	 * read the remounted detail.
+	 *
+	 * With `holdAsks`, every render ask but the control plane's own is held back
+	 * from the moment the terminal comes back: the rig's resize ask, and the asks
+	 * the remount's own renderable mutations make, never schedule a pass. So the
+	 * remounted box still answers no size when the restore effect runs - the branch
+	 * the unheld case takes only while the runner is quiet - and the only pass that
+	 * can lay the box out is the one the Ticket detail asks for itself (issue #302).
+	 * The witness then states how many asks that one remount cost the pane.
+	 *
+	 * Where this pin bites, written as steps a reviewer can re-run. Each probe
+	 * edits one file, runs `bun test test/ticket-scroll-frame.test.ts --isolate
+	 * --timeout=30000`, and is then reverted. Every count and timing below is what
+	 * the probe produced on this head, and each left the other records in the file
+	 * green.
+	 *
+	 * Probe D, the ask the pane owes itself. In the restore effect of
+	 * `src/components/ticket-detail.ts`, delete the line `renderer.requestRender();`.
+	 * 1 record goes red at 10277.00 ms, the local 10000 ms `FRAME_DEADLINE_MS`, with
+	 * the other 12 in the file green: the held case, because with every outside ask
+	 * swallowed no pass lands, the box never lays out, and the offset never comes
+	 * back. Its dump is blank rows - after the resize nothing repainted the buffer at
+	 * all. The unheld case stays green, which is the gap the review of the first round
+	 * named: the rig's own resize ask used to supply the pass the pane owes itself.
+	 *
+	 * Probe E, the one-ask bound. In the same effect, delete `if (passAsked) return;`
+	 * and `passAsked = true;`. All 13 records stay green, and the witness still counts
+	 * one ask: the pass the pane asks for lays the box out, so the restore takes the
+	 * on-spot branch and never asks again. The bound only bites on a box that keeps
+	 * answering no size after its own ask, and no case reaches that. The record names
+	 * the bound as a guard no test detects.
+	 *
+	 * Probe F, the hold letting an outside ask through. In
+	 * `withholdRenderAsksButThePlanesOwn` in `test/app-harness.ts`, drop the
+	 * `!caller.includes("node_modules")` half of the caller test, so OpenTUI's own
+	 * asks count as the plane's. 1 record goes red, the held case, at 296.73 ms, on
+	 * the hold's own swallowed-count line: the rig's resize ask is waved through at
+	 * once, the hold swallows nothing, and a hold that swallowed nothing says so
+	 * instead of leaving the case to pass on a pass the pane never asked for.
+	 */
+	async function resizeBelowTheMinimumAndBack(setup: Setup, holdAsks: boolean): Promise<void> {
+		await focusDetail(setup);
+		// Scroll to a middle offset: the detail title leaves the viewport.
+		let frame = setup.captureCharFrame();
+		for (let step = 0; step < 20 && frame.includes("Retry policy for webhooks"); step += 1) {
+			setup.mockInput.pressKey("j");
+			frame = await settle(setup);
+		}
+		const middle = await awaitFrame(
+			setup,
+			(f) => f.includes("Detail") && !f.includes("Retry policy for webhooks"),
+			"a middle detail offset with the title out of view",
+		);
+		expect(middle).toMatch(/[▀▄█]/);
+
+		// Below the minimum size the compact frame unmounts the panes.
+		setup.resize(39, 12);
+		const compact = await awaitFrame(
+			setup,
+			(f) => f.includes("Terminal too small"),
+			"the compact frame",
+		);
+		expect(compact).not.toMatch(/[▀▄█]/);
+
+		// Back at normal size, the remounted detail resumes from the offset the
+		// unmount saved: the title stays out of view instead of the viewport
+		// restarting at its top. The hold goes up only once the screen is idle, so
+		// a pass scheduled before it cannot land between the resize and the restore.
+		await setup.flush();
+		const handAsksBack = holdAsks ? withholdRenderAsksButThePlanesOwn(setup) : null;
+		setup.resize(80, SCROLL_HEIGHT);
+		let witness: RenderAskWitness | null = null;
+		try {
+			await awaitFrame(
+				setup,
+				(f) =>
+					rowsOf(f).every((row) => row.length === 80) &&
+					f.includes("Detail") &&
+					f.match(/[▀▄█]/) !== null &&
+					!f.includes("Retry policy for webhooks"),
+				"the detail offset to resume below the title",
+			);
+		} finally {
+			if (handAsksBack !== null) witness = handAsksBack();
+		}
+		if (witness !== null) {
+			expect(
+				witness.planeAsks,
+				"one remount of the Ticket detail asked the renderer for a pass more than once",
+			).toBe(1);
+		}
+	}
+
 	test("restores the detail offset across a round-trip resize below the minimum size", async () => {
 		await withApp(
 			async (setup) => {
-				await focusDetail(setup);
-				// Scroll to a middle offset: the detail title leaves the viewport.
-				let frame = setup.captureCharFrame();
-				for (let step = 0; step < 20 && frame.includes("Retry policy for webhooks"); step += 1) {
-					setup.mockInput.pressKey("j");
-					frame = await settle(setup);
-				}
-				const middle = await awaitFrame(
-					setup,
-					(f) => f.includes("Detail") && !f.includes("Retry policy for webhooks"),
-					"a middle detail offset with the title out of view",
-				);
-				expect(middle).toMatch(/[▀▄█]/);
+				await resizeBelowTheMinimumAndBack(setup, false);
+			},
+			80,
+			SCROLL_HEIGHT,
+			{ initialTickets: OVERFLOW_TICKETS },
+		);
+	});
 
-				// Below the minimum size the compact frame unmounts the panes.
-				setup.resize(39, 12);
-				const compact = await awaitFrame(
-					setup,
-					(f) => f.includes("Terminal too small"),
-					"the compact frame",
-				);
-				expect(compact).not.toMatch(/[▀▄█]/);
-
-				// Back at normal size, the remounted detail resumes from the
-				// offset the unmount saved: the title stays out of view instead
-				// of the viewport restarting at the top.
-				setup.resize(80, SCROLL_HEIGHT);
-				await awaitFrame(
-					setup,
-					(f) =>
-						rowsOf(f).every((row) => row.length === 80) &&
-						f.includes("Detail") &&
-						f.match(/[▀▄█]/) !== null &&
-						!f.includes("Retry policy for webhooks"),
-					"the detail offset to resume below the title",
-				);
+	test("restores the detail offset across a below-minimum resize on its own render ask alone", async () => {
+		await withApp(
+			async (setup) => {
+				await resizeBelowTheMinimumAndBack(setup, true);
 			},
 			80,
 			SCROLL_HEIGHT,
