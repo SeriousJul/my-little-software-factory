@@ -26,6 +26,7 @@ import {
 	AUTOMATIC_ROW_HOLD_REASONS,
 	automaticHoldLine,
 } from "../src/domain/top-up.ts";
+import { CHECKOUT_WAIT_PREFIX, checkoutWaitHolderFact } from "../src/handoff-dispatch.ts";
 
 const repo = join(import.meta.dir, "..");
 const guide = readFileSync(join(repo, "docs/configuration/index.md"), "utf8");
@@ -96,12 +97,41 @@ describe("the record lines the configuration reference states", () => {
 				fact: sourceConstant(dispatchSource, "MERGE_RUN_STANDS_FACT"),
 				lines: ['merge refused: "Persist the source facts"'],
 			},
+			{
+				// The bounded end of a Shared checkout wait is a refusal like every
+				// other (ADR 0108): the row leaves the queue with the reason.
+				fact: sourceConstant(dispatchSource, "CHECKOUT_WORK_OVER_BUDGET_FACT"),
+				lines: ['handoff refused: "Add a webhook retry policy"'],
+			},
 		];
 		for (const shape of shapes) {
 			for (const line of shape.lines) {
 				statedInGuide(`${line} (${shape.fact})`, `the refusal line for ${shape.fact}`);
 			}
 		}
+	});
+
+	/**
+	 * The line of a start the Shared checkout hold keeps in the Work queue
+	 * (issue #297, ADR 0108). It is not a refusal, so it wears its own prefix,
+	 * and it names the start that holds the checkout. The check builds both lines
+	 * from the module that writes them, so a wording that moves in the code
+	 * turns this red instead of quietly redefining the guide.
+	 */
+	test("a start the shared checkout holds states its own line in the guide", () => {
+		statedInGuide(
+			`${CHECKOUT_WAIT_PREFIX.handoff}: "Add a webhook retry policy" (${checkoutWaitHolderFact("merge", '"Persist the source facts"')})`,
+			"the handoff's Shared checkout wait line",
+		);
+		statedInGuide(
+			`${CHECKOUT_WAIT_PREFIX.merge}: "Persist the source facts" (${checkoutWaitHolderFact("handoff", '"Add a webhook retry policy"')})`,
+			"the merge's Shared checkout wait line",
+		);
+		// The page says what the wait is not: the Parallel limit's cap, and a
+		// refusal. A reader who mistakes one for the other reads a working plane
+		// as a stuck one.
+		statedInGuide("Shared checkout hold", "the term ADR 0108 names");
+		statedInGuide("takes no seat", "the rule that keeps ADR 0068 whole");
 	});
 
 	/**

@@ -3,6 +3,7 @@
 Status: accepted
 Date: 2026-09-18
 Superseded in part by ADR 0049: every start now enters the queue, a pickup attempt ends in start or drop instead of leaving the item standing, and the Work section is always visible. Its other decisions stand.
+Amended in one sentence by ADR 0108: the cap is not the only gate the Work queue has. A Repository's shared checkout is worked by one start at a time, a start that finds it at work waits in the queue for it, and that wait costs no seat - so a Plane action, which takes no seat, still waits behind a worktree Handoff of its Repository.
 
 ## Context
 
@@ -25,7 +26,9 @@ a way to push one queued item to the front over the cap.
 ticket seats of ADR 0021 - an in-flight ticket whose agent the latest poll
 listed, every in-progress handoff, a started agent inside its Startup grace -
 and gains the Consultation seats: a Consultation in `opening` or `working`
-holds one, the other states hold none. It gates every start:
+holds one, the other states hold none. It gates every start, and it is the
+only gate the queue reads until ADR 0108 adds the Shared checkout hold beside
+it - a second, per-Repository gate that costs no seat:
 
 - A manual start that cannot take a seat enters the Work queue instead of
   starting: the handoff from the ticket detail, the route from the decision

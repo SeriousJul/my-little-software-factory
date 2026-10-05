@@ -30,6 +30,7 @@ import {
 	type OwnNameKnowledge,
 } from "./handoff.ts";
 import type { Logger } from "./logging.ts";
+import { repositoryOperationKey } from "./operation-serializer.ts";
 import { overParallelLimit, parallelSeatReading } from "./parallel.ts";
 import { evaluatePlacement } from "./placement.ts";
 import { isPlaneActionTaskType, planeActionSettingOf } from "./plane-action-registry.ts";
@@ -459,6 +460,74 @@ const QUEUE_ITEM_STANDS_FACT = "already has a waiting queue item; the first item
 const MERGE_RUN_STANDS_FACT = "already has a merge running; the first run stands";
 
 /**
+ * The fact a start states while another start works its Repository's shared
+ * checkout (issue #297, ADR 0108), and the fact it is refused with when the
+ * wait outlives the checkout work's own budget.
+ */
+const CHECKOUT_WORK_STANDS_FACT = "the shared checkout is at work";
+const CHECKOUT_WORK_OVER_BUDGET_FACT = "the shared checkout stayed at work past its budget";
+
+/** The record prefix of a start the Shared checkout hold keeps in the Work queue. */
+export const CHECKOUT_WAIT_PREFIX = { handoff: "handoff waits", merge: "merge waits" } as const;
+/**
+ * The fact the wait states: the checkout at work, and the start that works it
+ * (issue #297, ADR 0108). The line names the holder so the reader sees the pair
+ * that met without guessing which run stands.
+ */
+export function checkoutWaitHolderFact(
+	holderKind: "merge" | "handoff",
+	holderName: string,
+): string {
+	return `${CHECKOUT_WORK_STANDS_FACT}: the ${holderKind} of ${holderName} runs in it`;
+}
+
+/**
+ * How long a checkout wait may stand before the plane refuses the start that
+ * waits (issue #297, ADR 0108).
+ *
+ * The checkout work one start does is a short sequence of commands, and the
+ * Command runner gives a single command ten minutes; a hold that still stands
+ * a whole command budget after the start took it is a start that stopped
+ * answering, not work the next start should keep waiting behind. The bound is
+ * what keeps the wait from being forever, the way every other wait in the
+ * queue is bounded (ADR 0049).
+ */
+export const CHECKOUT_WORK_BUDGET_MS = 10 * 60 * 1000;
+
+/**
+ * The channel that works a Repository's shared checkout, and the Ticket whose
+ * start holds it (issue #297, ADR 0108).
+ *
+ * A merge Plane action run works the checkout, and a worktree Handoff creates
+ * its worktree from that same checkout. The Parallel limit says nothing about
+ * the pair, because the action takes no seat (ADR 0068): both starts read the
+ * same free seat and both go. This hold is the checkout's own rule - one
+ * holder per Repository - and it stands beside the seat, never counted
+ * against it.
+ */
+interface CheckoutHold {
+	/** The channel the wait line names, and the channel the hold releases on. */
+	kind: "merge" | "handoff";
+	/** The Ticket whose start holds the checkout. */
+	ticketIdentity: string;
+}
+
+/** Whether the Work queue's answer to the shared checkout gate. */
+type CheckoutGate = { ok: true } | { ok: false; fact: string };
+
+/**
+ * Whether this start works a Repository's shared checkout (issue #297,
+ * ADR 0108): the merge Plane action runs its Git work there, and a worktree
+ * Handoff creates its worktree from it. A live-worktree Handoff works a
+ * checkout the operator chose and already owns, and a Consultation's work is
+ * serialized per Repository by its own lock (issue #203), so neither takes
+ * this hold.
+ */
+function startWorksSharedCheckout(item: WorkQueueHandoffItem | WorkQueuePlaneActionItem): boolean {
+	return item.kind === "plane-action" || item.choice.environment === "worktree";
+}
+
+/**
  * The key a claim refusal's standing fact stands on: the start channel and the
  * ticket. The prefix carries no colon, so the join names one pair (issue #223).
  */
@@ -517,6 +586,35 @@ class HandoffDispatchModule implements HandoffDispatch {
 	 * merge, and the source answers the second command as a block.
 	 */
 	private planeActionRunsInFlight = new Set<string>();
+
+	/**
+	 * The Repository checkouts this dispatch works, one holder per Repository
+	 * (issue #297, ADR 0108).
+	 *
+	 * The hold is taken at the claim, before the start's first command, and let
+	 * go when the start settles: for a merge, when its run settles; for a
+	 * Handoff, when its attempt settles, which is when the Agent started, not
+	 * when its turn ends. The Agent works inside its own worktree, so the
+	 * shared checkout is free again the moment the worktree stands.
+	 *
+	 * The key is the shared Repository key, so one Repository is one hold
+	 * whatever spelling its identity arrives in. The map is bounded by the
+	 * Repositories the plane works at once, and a read drops a hold whose
+	 * holder no longer stands, so a path that let go of nothing cannot lock a
+	 * Repository out.
+	 */
+	private readonly checkoutHolds = new Map<string, CheckoutHold>();
+
+	/**
+	 * The Work queue rows the record has named a checkout wait for, with the
+	 * clock reading the wait began and the holder the line named (issue #297).
+	 *
+	 * The rule is the one issue #231 sets for a standing fact: once while it
+	 * stands, again when the fact changes, never once per poll. The entry
+	 * stands while the row stands, the way the standing-row refusal's entry
+	 * does, and the pickup pass sweeps the entries whose row is gone.
+	 */
+	private readonly checkoutWaits = new Map<string, { since: number; holder: string }>();
 
 	/**
 	 * The tickets whose standing-row refusal the record has already stated (issue #223).
@@ -702,6 +800,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 		// A row stands for this ticket now, and it is a new one: the refusal the
 		// standing row before it earned is no longer the fact it stated (issue #223).
 		this.forgetStandingRowRefusal(intent.ticketIdentity);
+		this.forgetCheckoutWait(intent.ticketIdentity);
 		if (intent.onStarted !== undefined)
 			this.intentOnStarted.set(intent.ticketIdentity, intent.onStarted);
 		// The decision word lands at the ask, the way the route's does (ADR
@@ -831,6 +930,10 @@ class HandoffDispatchModule implements HandoffDispatch {
 		// only fact that says this ticket's merge runs. Every ask in the window
 		// reads it, and the run's own fresh read cannot.
 		this.planeActionRunsInFlight.add(item.ticketIdentity);
+		// The checkout hold rides the claim the way the handoff's rides its own
+		// (issue #297): the merge works the Repository's shared checkout, and no
+		// worktree Handoff of that Repository starts while it stands.
+		this.takeCheckoutHold("merge", item.ticketIdentity);
 		try {
 			await this.runPlaneActionItem(item, overCap, mode);
 		} finally {
@@ -838,6 +941,13 @@ class HandoffDispatchModule implements HandoffDispatch {
 			// The run settled, so the fact its refusal stated is gone: a later ask
 			// refused behind a new run is a new fact and states itself again.
 			this.mergeRunRefusals.delete(item.ticketIdentity);
+			// A start the checkout held gets its turn as soon as the checkout is
+			// free, the way a settled run re-runs the pickup for the rows the last
+			// pass left behind it (ADR 0049). The pass runs only when this run held
+			// a checkout and a row waits on one: a merge that held nothing has
+			// freed nothing, and the cycle's own pickup covers the rest.
+			if (this.releaseCheckoutHold("merge", item.ticketIdentity) && this.checkoutWaits.size > 0)
+				void this.pickupWorkQueue();
 		}
 	}
 
@@ -1028,6 +1138,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 		// A row stands for this ticket now, and it is a new one: the refusal the
 		// standing row before it earned is no longer the fact it stated (issue #223).
 		this.forgetStandingRowRefusal(intent.ticketIdentity);
+		this.forgetCheckoutWait(intent.ticketIdentity);
 		// The route's decision lands at the ask (ADR 0064): a workflow-origin
 		// ask records it on the settled turn's trace the moment it enqueues, so
 		// the ask never waits on a run. A refusal before the enqueue - the
@@ -1082,6 +1193,186 @@ class HandoffDispatchModule implements HandoffDispatch {
 	}
 
 	/**
+	 * Forget the checkout waits whose row no longer stands (issue #297). The
+	 * sweep follows the standing-row sweep it stands beside: the entry stands
+	 * while the row stands, and the pickup pass runs it whatever the brake and
+	 * the seat checks answer below.
+	 */
+	private sweepCheckoutWaits(): void {
+		for (const identity of [...this.checkoutWaits.keys()]) {
+			if (!this.state.workQueue.hasWorkItem(identity)) this.checkoutWaits.delete(identity);
+		}
+	}
+
+	/**
+	 * The Repository checkouts one Ticket's start works (issue #297): the
+	 * Repositories its active memberships stand in, in the one key the plane
+	 * holds a Repository by. A Ticket no active membership names works no
+	 * checkout this module can name, and its start crosses the gate and takes
+	 * no hold - the run's own gates refuse a Ticket the source left.
+	 */
+	private checkoutKeysOf(ticketIdentity: string): string[] {
+		const keys: string[] = [];
+		for (const identity of this.state.sourceFact.membershipRepositoryIdentities(ticketIdentity)) {
+			const key = repositoryOperationKey(identity);
+			if (key !== "" && !keys.includes(key)) keys.push(key);
+		}
+		return keys;
+	}
+
+	/**
+	 * The start that works one of these checkouts now, or null when the
+	 * checkout is free (issue #297).
+	 *
+	 * A hold whose holder no longer stands is dropped here: the merge run's
+	 * mark and the Handoff attempt are the facts that say a start stands, and a
+	 * hold outliving both is a bookkeeping miss, not work. The plane keeps the
+	 * Repository working rather than lock it out for the rest of the run.
+	 */
+	private checkoutHolderOf(keys: readonly string[]): CheckoutHold | null {
+		for (const key of keys) {
+			const hold = this.checkoutHolds.get(key);
+			if (hold === undefined) continue;
+			if (this.checkoutHolderStands(hold)) return hold;
+			this.checkoutHolds.delete(key);
+		}
+		return null;
+	}
+
+	/** Whether the start that took a hold still stands. */
+	private checkoutHolderStands(hold: CheckoutHold): boolean {
+		return hold.kind === "merge"
+			? this.planeActionRunsInFlight.has(hold.ticketIdentity)
+			: this.state.handoff.handoffInFlight(hold.ticketIdentity);
+	}
+
+	/**
+	 * Take the checkout hold for a claimed start (issue #297). It runs after
+	 * the claim and before the start's first command, in the same synchronous
+	 * step as the gate below, so no second walk can read a free checkout while
+	 * this start is on its way in.
+	 */
+	private takeCheckoutHold(kind: "merge" | "handoff", ticketIdentity: string): void {
+		for (const key of this.checkoutKeysOf(ticketIdentity)) {
+			this.checkoutHolds.set(key, { kind, ticketIdentity });
+		}
+		this.forgetCheckoutWait(ticketIdentity);
+	}
+
+	/**
+	 * Let go of the checkout a start worked, if it still holds one (issue #297).
+	 * The release runs wherever that start settles, and it is idempotent: a
+	 * start that took no hold, and a start whose hold another path already
+	 * dropped, change nothing.
+	 */
+	private releaseCheckoutHold(kind: "merge" | "handoff", ticketIdentity: string): boolean {
+		let released = false;
+		for (const [key, hold] of this.checkoutHolds) {
+			if (hold.kind === kind && hold.ticketIdentity === ticketIdentity) {
+				this.checkoutHolds.delete(key);
+				released = true;
+			}
+		}
+		this.forgetCheckoutWait(ticketIdentity);
+		return released;
+	}
+
+	/**
+	 * Forget the checkout wait stated for one row (issue #297). The entry
+	 * stands while the row stands: a row that leaves, and a new row for the
+	 * same ticket, are each a new fact, the way the standing-row refusal's
+	 * entry follows its row (issue #223).
+	 */
+	private forgetCheckoutWait(ticketIdentity: string): void {
+		this.checkoutWaits.delete(ticketIdentity);
+	}
+
+	/** The fact the wait states: the checkout at work, and the start that works it. */
+	private checkoutWaitFact(holder: CheckoutHold): string {
+		return checkoutWaitHolderFact(holder.kind, this.ticketName(holder.ticketIdentity));
+	}
+
+	/**
+	 * The shared checkout gate one start crosses before its claim (issue #297,
+	 * ADR 0108).
+	 *
+	 * A start that finds its Repository's checkout at work leaves its row in the
+	 * Work queue: the wait is the row's, the row wears the `queued` badge it
+	 * already wore, and the record names the wait once while it stands. A start
+	 * that waits past the checkout work's budget is refused with the reason and
+	 * leaves the queue, the way every pickup attempt ends in start or drop
+	 * (ADR 0049) - the queue never holds a row forever.
+	 *
+	 * The gate is not the Parallel limit and does not read it: the Plane action
+	 * takes no seat, and the wait belongs to the checkout (ADR 0068 unchanged).
+	 */
+	private crossCheckoutGate(
+		item: WorkQueueHandoffItem | WorkQueuePlaneActionItem,
+		kind: "merge" | "handoff",
+	): CheckoutGate {
+		if (!startWorksSharedCheckout(item)) return { ok: true };
+		const holder = this.checkoutHolderOf(this.checkoutKeysOf(item.ticketIdentity));
+		if (holder === null) {
+			this.checkoutWaits.delete(item.ticketIdentity);
+			return { ok: true };
+		}
+		const waiting = this.checkoutWaits.get(item.ticketIdentity);
+		if (waiting === undefined || waiting.holder !== holder.ticketIdentity) {
+			// A new wait, or the same row waiting behind a different start: the
+			// fact changed, so it states itself again (issue #231).
+			this.checkoutWaits.set(item.ticketIdentity, {
+				since: this.state.now(),
+				holder: holder.ticketIdentity,
+			});
+			this.log?.info(
+				`${CHECKOUT_WAIT_PREFIX[kind]}: ${this.ticketName(item.ticketIdentity)} (${this.checkoutWaitFact(holder)})`,
+			);
+			return { ok: false, fact: this.checkoutWaitFact(holder) };
+		}
+		if (this.state.now() - waiting.since >= CHECKOUT_WORK_BUDGET_MS) {
+			this.refuseCheckoutWait(kind, item);
+			return { ok: false, fact: CHECKOUT_WORK_OVER_BUDGET_FACT };
+		}
+		return { ok: false, fact: this.checkoutWaitFact(holder) };
+	}
+
+	/**
+	 * The bounded end of a checkout wait (issue #297): the row leaves the queue
+	 * with the reason, on the channel's own refusal shape, and the pickup's
+	 * drop answers the ask the way every other drop does.
+	 */
+	private refuseCheckoutWait(
+		kind: "merge" | "handoff",
+		item: WorkQueueHandoffItem | WorkQueuePlaneActionItem,
+	): void {
+		this.forgetCheckoutWait(item.ticketIdentity);
+		this.log?.warn(this.refusalLine(kind, item.ticketIdentity, CHECKOUT_WORK_OVER_BUDGET_FACT));
+		if (item.kind === "plane-action") {
+			this.removeQueueRow(item.ticketIdentity);
+			this.settleIntentOnStarted(item.ticketIdentity, {
+				ok: false,
+				reason: CHECKOUT_WORK_OVER_BUDGET_FACT,
+			});
+			this.reports.refresh();
+			this.reports.warning(
+				`the merge of ${this.ticketName(item.ticketIdentity)} was not run: ${CHECKOUT_WORK_OVER_BUDGET_FACT}`,
+			);
+			return;
+		}
+		this.dropPickup(item, CHECKOUT_WORK_OVER_BUDGET_FACT);
+	}
+
+	/**
+	 * What the operator's force-dispatch key answers when the checkout gate
+	 * holds the row: the key passes the Parallel limit's cap and nothing else,
+	 * so the row stands and the fact that holds it reaches the Message line
+	 * beside the record (issue #297).
+	 */
+	private reportCheckoutWait(itemIdentity: string, fact: string): void {
+		this.reports.notice(`${this.ticketName(itemIdentity)} waits in the Work queue: ${fact}`);
+	}
+
+	/**
 	 * Start the queue's items for the free seats, in queue order (ADR 0034,
 	 * ADR 0049).
 	 *
@@ -1112,6 +1403,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 		// because it is bookkeeping and not a pickup: a paused queue and a full cap
 		// still sweep.
 		this.sweepStandingRowRefusals();
+		this.sweepCheckoutWaits();
 		// The queue pause (ADR 0052): the brake holds the drain. The items keep
 		// their places, the force-dispatch passes it, and the resume starts the
 		// pickup that takes them.
@@ -1159,6 +1451,10 @@ class HandoffDispatchModule implements HandoffDispatch {
 				// the cap bounds (ADR 0068) - and a cap that breaks the walk at a
 				// held seats-bound item holds it, the way it holds every item
 				// behind.
+				// The shared checkout gate stands beside the cap, not inside it
+				// (issue #297): a merge whose Repository checkout is at work keeps
+				// its row and the walk walks on, the way an in-flight item does.
+				if (!this.crossCheckoutGate(item, "merge").ok) continue;
 				await this.pickupPlaneActionItem(item, false, startModeOf(item, directAskIdentity));
 				continue;
 			}
@@ -1236,6 +1532,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 		const removed = this.state.workQueue.cancelWorkItem(ticketIdentity);
 		this.cancelParkedPickup(ticketIdentity);
 		this.forgetStandingRowRefusal(ticketIdentity);
+		this.forgetCheckoutWait(ticketIdentity);
 		// A row that leaves without a claim still holds the ask's start report:
 		// the cancel answers it here, once, with the cancellation. Without this
 		// settle the held callback would survive the row and answer the next
@@ -1265,6 +1562,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 		const removed = this.state.workQueue.removeWorkItem(ticketIdentity);
 		this.cancelParkedPickup(ticketIdentity);
 		this.forgetStandingRowRefusal(ticketIdentity);
+		this.forgetCheckoutWait(ticketIdentity);
 		return removed;
 	}
 
@@ -1318,6 +1616,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 				continue;
 			this.handoffQueue.splice(index, 1);
 			this.settleFailedStart(parked.claim.attemptId, "the waiting start was cancelled");
+			this.releaseCheckoutHold("handoff", parked.ticket.identity);
 			this.settleIntentOnStarted(ticketIdentity, {
 				ok: false,
 				reason: "the waiting start was cancelled",
@@ -1477,6 +1776,13 @@ class HandoffDispatchModule implements HandoffDispatch {
 			return { ok: false, reason: claim.reason };
 		}
 		this.forgetClaimRefusal("handoff", item.ticketIdentity);
+		// The checkout hold rides the claim (issue #297): the worktree the start
+		// creates comes out of the Repository's shared checkout, so the checkout
+		// belongs to this start from the claim until the attempt settles - and a
+		// claim the herdr seat parks holds it too, so a merge cannot walk into
+		// the checkout behind it.
+		if (item.choice.environment === "worktree")
+			this.takeCheckoutHold("handoff", item.ticketIdentity);
 		// A claim is a claim: the picked-up start enters the Starting window
 		// exactly as the direct start above does, so the two claim paths report
 		// the same fact and the row's spinner face does not wait for a seat.
@@ -1504,6 +1810,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 			// to run: settle the claim and name it; the item's fate is the
 			// caller's, like every other refusal above.
 			this.settleFailedStart(claim.claim.attemptId, "the ticket is no longer visible");
+			this.releaseCheckoutHold("handoff", item.ticketIdentity);
 			this.reports.starting(item.ticketIdentity, false);
 			this.reports.refresh();
 			return { ok: false, reason: "the ticket is no longer visible" };
@@ -1526,6 +1833,10 @@ class HandoffDispatchModule implements HandoffDispatch {
 		// ends; the pickup skips it so a concurrent pass cannot re-claim and
 		// drop the start the run holds (ADR 0049).
 		if (this.state.handoff.handoffInFlight(item.ticketIdentity)) return false;
+		// The shared checkout gate, ahead of the claim (issue #297): a worktree
+		// Handoff whose Repository checkout is at work keeps its row, states the
+		// wait once, and takes no seat, so the walk reaches the starts behind it.
+		if (!this.crossCheckoutGate(item, "handoff").ok) return false;
 		const claimed = this.claimQueueItem(item, mode);
 		if (claimed.ok === "cancelled") return false;
 		if (claimed.ok === false) {
@@ -1622,6 +1933,13 @@ class HandoffDispatchModule implements HandoffDispatch {
 			// dispatch's one ask - start it now - is the pickup's own: the run's
 			// gates run, the item leaves the queue on every answer, and the line
 			// names the cap when it stood over it at the key.
+			// The key passes the cap and nothing else (issue #297): a checkout at
+			// work still holds the row, and the fact that holds it answers the key.
+			const gate = this.crossCheckoutGate(item, "merge");
+			if (!gate.ok) {
+				this.reportCheckoutWait(item.ticketIdentity, gate.fact);
+				return;
+			}
 			const limit = this.config().maxParallelAgents;
 			const overCap = overParallelLimit(limit, this.seatCount());
 			void this.pickupPlaneActionItem(item, overCap, "force-dispatch");
@@ -1631,6 +1949,11 @@ class HandoffDispatchModule implements HandoffDispatch {
 		// start over the cap only when the cap was full at the dispatch.
 		const limit = this.config().maxParallelAgents;
 		const overCap = overParallelLimit(limit, this.seatCount());
+		const gate = this.crossCheckoutGate(item, "handoff");
+		if (!gate.ok) {
+			this.reportCheckoutWait(item.ticketIdentity, gate.fact);
+			return;
+		}
 		const claimed = this.claimQueueItem(item, "force-dispatch");
 		if (claimed.ok === "cancelled") return;
 		if (claimed.ok === false) {
@@ -2148,6 +2471,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 		if (this.stopped) return;
 		const reason = errorMessage(error);
 		this.settleFailedStart(claim.attemptId, reason);
+		this.releaseCheckoutHold("handoff", identity);
 		this.reports.starting(identity, false);
 		this.reports.refresh();
 		this.reports.clearWorking();
@@ -2167,6 +2491,10 @@ class HandoffDispatchModule implements HandoffDispatch {
 	): Promise<void> {
 		if (this.stopped) return;
 		this.recordNameCollisions(identity, outcome);
+		// The start settled, so the checkout it worked is free again: the Agent
+		// works inside its own worktree, and the shared checkout was only ever
+		// the place the worktree came out of (issue #297).
+		this.releaseCheckoutHold("handoff", identity);
 
 		if (outcome.status === "failed") {
 			this.settleFailedStart(claim.attemptId, outcome.reason);
@@ -2278,6 +2606,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 						? "the ticket no longer exists"
 						: `the ticket is now ${currentState}`;
 				this.settleFailedStart(next.claim.attemptId, movedOn);
+				this.releaseCheckoutHold("handoff", next.ticket.identity);
 				this.reports.starting(next.ticket.identity, false);
 				this.reports.refresh();
 				// One line for both exits, read through the one name helper every
@@ -2293,6 +2622,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 					// leaves the queue, and the warning says the reason the drain found.
 					this.state.workQueue.removeWorkItem(next.ticket.identity);
 					this.forgetStandingRowRefusal(next.ticket.identity);
+					this.forgetCheckoutWait(next.ticket.identity);
 					next.onStarted({ ok: false, reason: movedOn });
 				} else {
 					// The route the claim was for never started: its caller decides

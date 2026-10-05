@@ -117,5 +117,6 @@ body states the context, the decision, and the consequences.
 - [ADR 0106: A run of failed Handoff starts parks its Ticket, and the park states itself](./0106-a-run-of-failed-handoff-starts-parks-its-ticket-and-the-park-states-itself.md)
 - [ADR 0107: A herdr Agent name held by a stranger is a fact on the Ticket, and the Top-up waits for the operator](./0107-a-herdr-agent-name-held-by-a-stranger-is-a-fact-on-the-ticket-and-the-top-up-waits-for-the-operator.md)
 - [ADR 0108: The seat a Missing Agent left belongs to that Ticket's Restart](./0108-the-seat-a-missing-agent-left-belongs-to-that-tickets-restart.md)
+- [ADR 0108: A Repository's shared checkout is worked by one start at a time](./0108-a-repositorys-shared-checkout-is-worked-by-one-start-at-a-time.md)
 - [ADR 0110: The Live view is one Work cycle's screen](./0110-the-live-view-is-one-work-cycles-screen.md)
 - [ADR 0111: The Queue pause's key and display are plane-wide, and the Dispatch pause's word is held](./0111-the-queue-pauses-key-and-display-are-plane-wide-and-the-dispatch-pauses-word-is-held.md)

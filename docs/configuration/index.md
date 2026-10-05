@@ -488,6 +488,9 @@ handoff refused: "Add a webhook retry policy" (already has a waiting queue item;
 merge refused: "Persist the source facts" (already has a waiting queue item; the first item keeps its place)
 handoff refused: "Add a webhook retry policy" (handoff recovery is required before another handoff)
 merge refused: "Persist the source facts" (already has a merge running; the first run stands)
+handoff waits: "Add a webhook retry policy" (the shared checkout is at work: the merge of "Persist the source facts" runs in it)
+merge waits: "Persist the source facts" (the shared checkout is at work: the handoff of "Add a webhook retry policy" runs in it)
+handoff refused: "Add a webhook retry policy" (the shared checkout stayed at work past its budget)
 ```
 
 The Work queue holds one item per ticket, so a second ask for a ticket that
@@ -496,6 +499,18 @@ alike. Every refusal line wears one shape - the prefix, the ticket's name, and
 the fact in parentheses - so one rule reads them all (issue #223). A merge whose
 run is already in flight is refused the same way, and its line names the run
 that stands (ADR 0104).
+
+A `waits:` line is not a refusal: the row stays in the Work queue, keeps its
+place and its `queued` badge, and starts on a later pickup. The hold it names is
+the Shared checkout hold: one Repository's checkout is worked by one start at a
+time, so a merge Plane action and a worktree Handoff of that Repository never
+work it together (ADR 0108). The hold is not the Parallel limit, and the waiting
+row takes no seat: the Pickup reaches the starts behind it. The wait is bounded:
+a start still waiting after the checkout work's own budget is refused with the
+reason and leaves the queue, and that line is a `refused:` line like every
+other. The two `waits:` lines follow the standing-fact rule the queue lines
+follow: once while the wait stands, again when the fact changes, never once per
+poll.
 
 The file states a standing-row refusal once for the row that stands, not once
 per ask. The automatic walks re-ask every observation cycle while the row
