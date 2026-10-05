@@ -459,4 +459,80 @@ describe("the whole startup", () => {
 		expect(existsSync(result.statePath)).toBe(true);
 		result.state.close();
 	});
+
+	/**
+	 * The record a crashed run leaves unfinished (issue #295). The dead run wrote
+	 * its `handoff started:` line and nothing after it; the boot settles the claim
+	 * it left (ADR 0041), and that settle is a start that reached no Agent, so the
+	 * boot states its ending in the same file. Reading the record for one Ticket
+	 * then answers how many starts were made and why each one ended.
+	 */
+	test("a claim the previous run left unsettled leaves its ending in the record", async () => {
+		const statePath = inTempDir("run-record")("state.sqlite");
+		const logFile = inTempDir("run-record")("factory.log");
+		const configPath = inTempDir("run-record")("config.toml");
+		writeFileSync(
+			configPath,
+			`${configBody(statePath, true)}\n[logging]\nlevel = "info"\nfile = "${logFile}"\n`,
+			"utf8",
+		);
+		// The previous run: the Ticket its source listed, and the Handoff claim it
+		// never settled - the shape a crash or a watch reset leaves.
+		const previous = openStartupState(statePath);
+		if (!previous.ok) throw new Error(previous.reason);
+		previous.state.sourceFact.initializeSources([{ name: "issues", kind: "github-issues" }]);
+		previous.state.sourceFact.applyFetch(
+			{ name: "issues", kind: "github-issues" },
+			{
+				status: "success",
+				fetchedAt: "2026-09-20T18:00:00Z",
+				tickets: [
+					{
+						identity: "github:github.com:I_5",
+						sourceKind: "github-issue",
+						externalKey: "#5",
+						sourceState: "open",
+						url: "https://github.com/owner/name/issues/5",
+						title: "Add a webhook retry policy",
+						description: "The body the agent reads.",
+						labels: ["ready-for-agent"],
+						externalUpdatedAt: "2026-09-20T10:00:00Z",
+						repository: {
+							identity: "github.com/owner/name",
+							displayName: "owner/name",
+							cloneUrl: "https://github.com/owner/name.git",
+						},
+						attributes: {},
+					},
+				],
+			},
+		);
+		const claim = previous.state.handoff.claimHandoff(
+			"github:github.com:I_5",
+			{
+				agentType: "pi",
+				environment: "live-worktree",
+				taskType: "implement",
+				model: "",
+				thinking: "",
+				contextWindow: "",
+			},
+			"open",
+		);
+		if (!claim.ok) throw new Error(claim.reason);
+		previous.state.close();
+
+		const result = await runStartup(configPath);
+		expect(result.ok).toBe(true);
+		if (!result.ok) return;
+		result.state.close();
+
+		const log = readFileSync(logFile, "utf8");
+		// The line wears the same prefix, the same name shape, and the same level
+		// the dispatch's own failed starts leave.
+		expect(log).toContain(
+			'WARN handoff start failed: "Add a webhook retry policy" ' +
+				"(the run that claimed this handoff ended before it settled it)",
+		);
+	});
 });

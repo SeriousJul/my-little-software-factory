@@ -56,6 +56,7 @@ import {
 import { decisionFacts } from "../domain/decision-facts.ts";
 import type { GroupingAxis, SplitGroupingAxis } from "../domain/grouping.ts";
 import { DEFAULT_GROUPING_AXIS, nextGroupingAxis } from "../domain/grouping.ts";
+import { recordTicketName } from "../domain/record-name.ts";
 import { heldBellRang, sectionFacts } from "../domain/section-facts.ts";
 import {
 	flagWithholdsRow,
@@ -2974,8 +2975,9 @@ export function App({
 		// is still in the projection, its identity once it is gone. The projection
 		// before the list rule, so an ignored Ticket's waiting start names its
 		// ticket instead of falling back to the raw identity (ADR 0042, ADR 0060).
-		const title = findTicket(item.ticketIdentity)?.title;
-		const name = title === undefined ? `ticket ${item.ticketIdentity}` : `"${title}"`;
+		// The name rule is the shared one the dispatch, the observation cycle, and
+		// the boot read, so one Ticket wears one name (issue #295 review).
+		const name = recordTicketName(listViewsRef.current.projection, item.ticketIdentity);
 		if (removed) {
 			setNoticeMessage(`the waiting start for ${name} was removed`);
 		} else {

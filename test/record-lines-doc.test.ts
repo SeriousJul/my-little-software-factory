@@ -15,6 +15,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { handoffStartFailedLine } from "../src/domain/attempt-record.ts";
 import { queueStagingOf } from "../src/domain/queue-staging.ts";
 import {
 	AUTOMATIC_HOLD_LINES,
@@ -26,6 +27,7 @@ const repo = join(import.meta.dir, "..");
 const guide = readFileSync(join(repo, "docs/configuration/index.md"), "utf8");
 const appSource = readFileSync(join(repo, "src/components/app.ts"), "utf8");
 const dispatchSource = readFileSync(join(repo, "src/handoff-dispatch.ts"), "utf8");
+const attemptRecordSource = readFileSync(join(repo, "src/domain/attempt-record.ts"), "utf8");
 
 /** One line of the reference page, with the code that writes it named for the failure. */
 function statedInGuide(line: string, writtenBy: string): void {
@@ -94,6 +96,37 @@ describe("the record lines the configuration reference states", () => {
 				statedInGuide(`${line} (${shape.fact})`, `the refusal line for ${shape.fact}`);
 			}
 		}
+	});
+
+	/**
+	 * The line a start that reached no Agent leaves (issue #295). It wears the
+	 * refusal's shape under its own prefix, and the page has to state both the
+	 * prefix and the reason shape, or a reviewer greps the file for words the page
+	 * never taught them.
+	 */
+	test("a start that reached no Agent states its own line in the guide", () => {
+		// The sentence lives in the module that owns it, so the check runs the
+		// builder instead of retyping it. The two examples are the two endings a
+		// reader has to tell from a gate refusal: a start herdr refused, and a
+		// start whose Ticket moved on behind it.
+		const examples: Array<[string, string]> = [
+			['"Add a webhook retry policy"', "the worktree path already exists"],
+			['"Watch agent turns"', "the ticket is now closed"],
+		];
+		for (const [name, fact] of examples) {
+			statedInGuide(
+				handoffStartFailedLine(name, fact),
+				`handoffStartFailedLine(${JSON.stringify(fact)})`,
+			);
+		}
+		// The prefix is the fact that keeps the failed start and the gate refusal
+		// apart, so the check reads it out of the module that states it.
+		statedInGuide(
+			`\`${sourceConstant(attemptRecordSource, "HANDOFF_START_FAILED_PREFIX")}\``,
+			"HANDOFF_START_FAILED_PREFIX",
+		);
+		// And the page says the two lines never answer for one another.
+		statedInGuide("`handoff refused:`", "the gate refusal the failed start is told from");
 	});
 
 	test("the two facts the operator sets by key state themselves in the guide", () => {

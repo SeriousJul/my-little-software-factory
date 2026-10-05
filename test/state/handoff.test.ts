@@ -1038,3 +1038,105 @@ describe("the Handoff limit counts every attempt (ADR 0005, ADR 0101)", () => {
 		state.close();
 	});
 });
+
+/**
+ * What one settle leaves in the attempt's own record (issue #295). The record
+ * line a failed Handoff start states reads its reason out of this answer, so the
+ * file and the ledger cannot state two endings for one start, and the line
+ * follows the settle's one write.
+ */
+describe("the settle answers with the attempt's own record (issue #295)", () => {
+	test("a failed settle answers with the reason its row stores, and a repeat answers nothing", () => {
+		const state = openFactoryState(":memory:", ATTEMPT_NOW);
+		state.sourceFact.initializeSources([sourceA]);
+		state.sourceFact.applyFetch(sourceA, success([fetched()]));
+		const claim = state.handoff.claimHandoff(TICKET, choice, "open");
+		if (!claim.ok) throw new Error(claim.reason);
+		expect(
+			state.handoff.settleHandoff(claim.claim.attemptId, false, "the worktree path already exists"),
+		).toEqual({
+			ticketIdentity: TICKET,
+			failureReason: "the worktree path already exists",
+		});
+		// The attempt settled once. A settle that reaches it again - a recovery
+		// that got there first, a run that outlived its own settle - answers no
+		// record, so its caller writes no second line for one attempt.
+		expect(state.handoff.settleHandoff(claim.claim.attemptId, false, "a later reason")).toBeNull();
+		state.close();
+	});
+
+	test("a failed settle that names no reason answers no reason", () => {
+		// The door the record line's fallback stands behind. It is a guard: every
+		// start this plane settles names its reason, so no live run reaches this
+		// answer. The settle's own interface still lets a failed settle name no
+		// reason, and the attempt's reason column is nullable in every schema
+		// version, so the answer carries the empty cell rather than making an
+		// ending up (issue #295 review).
+		const state = openFactoryState(":memory:", ATTEMPT_NOW);
+		state.sourceFact.initializeSources([sourceA]);
+		state.sourceFact.applyFetch(sourceA, success([fetched()]));
+		const claim = state.handoff.claimHandoff(TICKET, choice, "open");
+		if (!claim.ok) throw new Error(claim.reason);
+		expect(state.handoff.settleHandoff(claim.claim.attemptId, false)).toEqual({
+			ticketIdentity: TICKET,
+			failureReason: null,
+		});
+		state.close();
+	});
+
+	test("the stage a start advanced through never answers for the ending", () => {
+		// The start ran through its stages before herdr refused it. The settle
+		// writes its ending over those stages, and the answer reads the row the
+		// write left: the reason the line states is the one this settle stored, not
+		// anything the stages before it hold (issue #295 review).
+		const state = openFactoryState(":memory:", ATTEMPT_NOW);
+		state.sourceFact.initializeSources([sourceA]);
+		state.sourceFact.applyFetch(sourceA, success([fetched()]));
+		const claim = state.handoff.claimHandoff(TICKET, choice, "open");
+		if (!claim.ok) throw new Error(claim.reason);
+		state.handoff.advanceHandoffAttempt(claim.claim.attemptId, "creating-environment");
+		state.handoff.advanceHandoffAttempt(claim.claim.attemptId, "starting-agent");
+		expect(
+			state.handoff.settleHandoff(claim.claim.attemptId, false, "herdr is unavailable"),
+		).toEqual({
+			ticketIdentity: TICKET,
+			failureReason: "herdr is unavailable",
+		});
+		state.close();
+	});
+
+	test("a settle that reached its Agent stores no reason", () => {
+		const state = openFactoryState(":memory:", ATTEMPT_NOW);
+		state.sourceFact.initializeSources([sourceA]);
+		state.sourceFact.applyFetch(sourceA, success([fetched()]));
+		const claim = state.handoff.claimHandoff(TICKET, choice, "open");
+		if (!claim.ok) throw new Error(claim.reason);
+		expect(
+			state.handoff.settleHandoff(claim.claim.attemptId, true, undefined, { paneId: "pane-1" }),
+		).toEqual({
+			ticketIdentity: TICKET,
+			failureReason: null,
+		});
+		state.close();
+	});
+
+	test("the boot's recovery answers each unsettled attempt with the reason it wrote", () => {
+		const state = openFactoryState(":memory:", ATTEMPT_NOW);
+		state.sourceFact.initializeSources([sourceA]);
+		state.sourceFact.applyFetch(sourceA, success([fetched()]));
+		const claim = state.handoff.claimHandoff(TICKET, choice, "open");
+		if (!claim.ok) throw new Error(claim.reason);
+		// The run ends with the claim unresolved. The next boot settles it, and
+		// answers with the record it settled, the way the dispatch's own settle
+		// answers for a start that reached no Agent.
+		expect(state.handoff.recoverUnsettledHandoffs()).toEqual([
+			{
+				ticketIdentity: TICKET,
+				failureReason: "the run that claimed this handoff ended before it settled it",
+			},
+		]);
+		// Nothing stands unsettled, so the next recovery has nothing to record.
+		expect(state.handoff.recoverUnsettledHandoffs()).toEqual([]);
+		state.close();
+	});
+});

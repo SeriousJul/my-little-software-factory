@@ -4301,7 +4301,7 @@ describe("the record lines", () => {
 		// way a restart does, and the row the held start left behind goes with it.
 		// The next ask goes through and claims again, so the next refusal is a new
 		// fact and states itself once more.
-		expect(rigRef.state.handoff.recoverUnsettledHandoffs()).toBe(1);
+		expect(rigRef.state.handoff.recoverUnsettledHandoffs()).toHaveLength(1);
 		expect(mod.removeQueueItem(FIRST.identity)).toBe(true);
 		await expect(start(rigRef, FIRST, "open")).resolves.toMatchObject({ ok: true });
 		await expect(start(rigRef, FIRST, "open")).resolves.toMatchObject({ ok: false });
@@ -4336,7 +4336,7 @@ describe("the record lines", () => {
 		// The stale claim settles outside the dispatch, and a start the dispatch never
 		// ran claims again - the shape of the observation cycle's reclaim of a stale
 		// pane. Nothing here went through the dispatch's own claim path.
-		expect(rigRef.state.handoff.recoverUnsettledHandoffs()).toBe(1);
+		expect(rigRef.state.handoff.recoverUnsettledHandoffs()).toHaveLength(1);
 		const otherClaim = rigRef.state.handoff.claimHandoff(FIRST.identity, liveChoice, "open");
 		expect(otherClaim.ok).toBe(true);
 		// The next ask meets the same words over a new claim: a new fact, and it
@@ -4407,6 +4407,155 @@ describe("the record lines", () => {
 		// The row that stands now is a new fact, and it states itself.
 		await expect(continuationAsk()).resolves.toMatchObject({ ok: false });
 		expect(refusals()).toEqual([standingRow(), standingRow()]);
+		mod.stop();
+	});
+
+	/**
+	 * The end of a start that began (issue #295). The record held the `handoff
+	 * started:` line and nothing after it: the reason lived only in the attempt's
+	 * row, so a reviewer reading the file could not see that the factory had tried
+	 * at all. The line names the Ticket and the reason its attempt settled
+	 * `failed`, at the `warn` level every refusal wears.
+	 */
+	test("a start that reaches no Agent states the ticket and the reason it ended", async () => {
+		const rigRef = rig([FIRST]);
+		const lines: RecordedLine[] = [];
+		// herdr refuses the start's first command: the claim stands, the run ends,
+		// and the attempt settles `failed`.
+		rigRef.runner.set("herdr", ["workspace", "list"], {
+			code: 1,
+			stderr: "the worktree path already exists",
+		});
+		const mod = withRunner(rigRef, rigRef.runner, { log: recordLogger(lines) });
+		rigRef.dispatch = mod;
+		await expect(start(rigRef, FIRST, "open")).resolves.toEqual({ ok: true });
+		await rigRef.waitForStarted(FIRST.identity);
+		// The start line stands, and the line for how it ended stands beside it.
+		expect(lines).toEqual([
+			infoLine(`handoff queued: "${FIRST.title}" (origin open, operator-staged)`),
+			infoLine(
+				`handoff started: "${FIRST.title}" (mode direct-ask, origin open, operator-staged, seats 0/2)`,
+			),
+			warnLine(`handoff start failed: "${FIRST.title}" (the worktree path already exists)`),
+		]);
+		// The reason the line states is the reason the start answered with, which
+		// is the reason the settle wrote into the attempt's row (issue #295).
+		expect(rigRef.state.handoff.handoffCount(FIRST.identity)).toBe(1);
+		expect(rigRef.state.handoff.handoffBlockedUnrefreshed(FIRST.identity)).toBe(true);
+	});
+
+	/**
+	 * The cadence (issue #295). The automatic walks re-ask a Ticket every
+	 * observation cycle, and the attempt that already settled says nothing new on
+	 * any of them: the line follows the settle's one write, the rule issue #223
+	 * sets for a standing refusal and issue #231 for the walk's per-candidate
+	 * facts. A new attempt is a new start, and it states itself again.
+	 */
+	test("the failed start states itself once per attempt, and again for the next attempt", async () => {
+		const rigRef = rig([FIRST]);
+		const lines: RecordedLine[] = [];
+		rigRef.runner.set("herdr", ["workspace", "list"], {
+			code: 1,
+			stderr: "a herdr Agent name a stranger holds",
+		});
+		const mod = withRunner(rigRef, rigRef.runner, { log: recordLogger(lines) });
+		rigRef.dispatch = mod;
+		await expect(start(rigRef, FIRST, "open")).resolves.toEqual({ ok: true });
+		await rigRef.waitForStarted(FIRST.identity);
+		const failedLine = () =>
+			warnLine(`handoff start failed: "${FIRST.title}" (a herdr Agent name a stranger holds)`);
+		const failures = () => lines.filter((line) => line.message.startsWith("handoff start failed:"));
+		// Three more pickup passes over the empty queue - the shape of three
+		// observation cycles asking about the same Ticket - add nothing.
+		for (let cycle = 0; cycle < 3; cycle += 1) expect(await mod.pickupWorkQueue()).toBe(0);
+		expect(failures()).toEqual([failedLine()]);
+		// The next attempt is a start the factory made, and it ends the same way.
+		await expect(start(rigRef, FIRST, "open")).resolves.toEqual({ ok: true });
+		await rigRef.waitForStarted(FIRST.identity);
+		expect(failures()).toEqual([failedLine(), failedLine()]);
+		expect(rigRef.state.handoff.handoffCount(FIRST.identity)).toBe(2);
+	});
+
+	/**
+	 * The two lines a reader must not mistake for one another (issue #295). A
+	 * pre-start gate refusal keeps its `handoff refused:` line and leaves no
+	 * attempt row at all; a start that passed every gate and reached no Agent
+	 * leaves its own line and no refusal. One grep answers one question.
+	 */
+	test("a gate refusal and a failed start state themselves under different prefixes", async () => {
+		const rigRef = rig([FIRST]);
+		const lines: RecordedLine[] = [];
+		// The gate first: the cap is full, so the second ask never claims, and the
+		// queue's one-item rule refuses it.
+		const hold = gatedRunner(rigRef.runner, () => true);
+		const gated = withRunner(rigRef, hold.runner, {
+			log: recordLogger(lines),
+			seatCount: () => rigRef.config.maxParallelAgents,
+		});
+		rigRef.dispatch = gated;
+		await expect(start(rigRef, FIRST, "open")).resolves.toEqual({ ok: true });
+		await expect(
+			gated.dispatch({
+				origin: "workflow",
+				ticketIdentity: FIRST.identity,
+				choice: liveChoice,
+				previousMessage: "",
+				automatic: true,
+			}),
+		).resolves.toMatchObject({ ok: false });
+		const refusals = () => lines.filter((line) => line.message.startsWith("handoff refused:"));
+		const failures = () => lines.filter((line) => line.message.startsWith("handoff start failed:"));
+		expect(refusals()).toEqual([
+			warnLine(
+				`handoff refused: "${FIRST.title}" (already has a waiting queue item; the first item keeps its place)`,
+			),
+		]);
+		expect(failures()).toEqual([]);
+		// Now the start that passes every gate and reaches no Agent: its line never
+		// wears the refusal's prefix, and it adds no refusal.
+		rigRef.runner.set("herdr", ["workspace", "list"], { code: 1, stderr: "herdr is unavailable" });
+		const failing = withRunner(rigRef, rigRef.runner, { log: recordLogger(lines) });
+		rigRef.dispatch = failing;
+		expect(failing.removeQueueItem(FIRST.identity)).toBe(true);
+		await expect(start(rigRef, FIRST, "open")).resolves.toEqual({ ok: true });
+		await rigRef.waitForStarted(FIRST.identity);
+		expect(refusals()).toHaveLength(1);
+		expect(failures()).toEqual([
+			warnLine(`handoff start failed: "${FIRST.title}" (herdr is unavailable)`),
+		]);
+		failing.stop();
+	});
+
+	/**
+	 * A start the seat parked and the Ticket moved on behind (issue #295). The
+	 * claim was made and the start line stood, and the drain settled the attempt
+	 * `failed`: the record says so beside the Message line this case has always
+	 * reached.
+	 */
+	test("a parked start whose ticket moved on states how it ended", async () => {
+		const rigRef = rig([FIRST, SECOND, THIRD]);
+		const lines: RecordedLine[] = [];
+		// The gate holds only the agent start, so each later claim parks behind the
+		// first start's seat while the test moves the ticket out from under it.
+		const gate = gatedRunner(rigRef.runner, (command) => command.startsWith("herdr agent start"));
+		const mod = withRunner(rigRef, gate.runner, { log: recordLogger(lines) });
+		rigRef.dispatch = mod;
+		const second = seedHandoff(rigRef, SECOND);
+		settleTurn(rigRef, SECOND, second.handoffId);
+		await start(rigRef, FIRST, "open");
+		await expect(start(rigRef, SECOND, "workflow")).resolves.toEqual({ ok: true });
+		await expect(start(rigRef, THIRD, "open")).resolves.toEqual({ ok: true });
+		// The awaited turn of the middle ticket closes while its route waits: the
+		// parked claim has nothing to start.
+		closeCycle(rigRef, SECOND, second.handoffId);
+		await gate.waitForArrivals(1);
+		gate.release();
+		await gate.waitForArrivals(2);
+		gate.release();
+		await rigRef.waitForStarted(THIRD.identity);
+		expect(lines.filter((line) => line.message.startsWith("handoff start failed:"))).toEqual([
+			warnLine(`handoff start failed: "${SECOND.title}" (the ticket is now open)`),
+		]);
 		mod.stop();
 	});
 });

@@ -147,7 +147,7 @@ describe("the sourceFact aggregate", () => {
 		expect(reopened.handoff.claimHandoff(ticket.identity, choice, "open")).toEqual(
 			expect.objectContaining({ ok: false, reason: expect.stringContaining("recovery") }),
 		);
-		expect(reopened.handoff.recoverUnsettledHandoffs()).toBe(1);
+		expect(reopened.handoff.recoverUnsettledHandoffs()).toHaveLength(1);
 		expect(reopened.handoff.claimHandoff(ticket.identity, choice, "open")).toEqual(
 			expect.objectContaining({ ok: true }),
 		);

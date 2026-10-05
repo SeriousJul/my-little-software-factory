@@ -26,10 +26,13 @@ import {
 	logPathFor,
 	statePathFor,
 } from "./config.ts";
+import { handoffStartFailedLine } from "./domain/attempt-record.ts";
+import { recordTicketName } from "./domain/record-name.ts";
 import { createLogger, type Logger, NOOP_LOGGER } from "./logging.ts";
 import { validateConfiguredModels } from "./model-settings.ts";
 import type { CommandRunner } from "./runner.ts";
 import { createChildProcessRunner } from "./runner.ts";
+import type { HandoffSettlement } from "./state/handoff.ts";
 import { type FactoryState, openFactoryState, StateError } from "./state.ts";
 import { createStubRunner } from "./stub/runner.ts";
 import { StubWorldError, StubWorldStore } from "./stub/world.ts";
@@ -62,7 +65,7 @@ export type StartupConfigResult =
 
 /** An opened state, or the one failure line the operator reads instead. */
 export type StartupStateResult =
-	| { ok: true; state: FactoryState; notes: string[] }
+	| { ok: true; state: FactoryState; notes: string[]; recovered: HandoffSettlement[] }
 	| { ok: false; reason: string };
 
 /**
@@ -194,7 +197,9 @@ export async function loadStartupConfig(configPath: string): Promise<StartupConf
  * A path that cannot be opened is one readable failure line; the state is
  * left open only when it is usable. A recovered claim is a note, not a
  * warning: the recovery is the normal end of the crashed run's start, and
- * the ticket it frees is ready to hand off again.
+ * the ticket it frees is ready to hand off again. The settled records come
+ * back beside the note so the boot can state each one in the record the run
+ * writes to (issue #295).
  */
 export function openStartupState(statePath: string): StartupStateResult {
 	let state: FactoryState | undefined;
@@ -210,11 +215,12 @@ export function openStartupState(statePath: string): StartupStateResult {
 	return {
 		ok: true,
 		state,
+		recovered,
 		notes:
-			recovered === 0
+			recovered.length === 0
 				? []
 				: [
-						`recovered ${recovered} handoff claim${recovered === 1 ? "" : "s"} left unsettled by the previous run`,
+						`recovered ${recovered.length} handoff claim${recovered.length === 1 ? "" : "s"} left unsettled by the previous run`,
 					],
 	};
 }
@@ -335,6 +341,31 @@ export async function runStartup(configPath: string, worldPath?: string): Promis
 	// The recovery note lands after the warnings: it is the last of the boot's
 	// findings, and the state it opens already carries the repair.
 	for (const note of opened.notes) notes.push(note);
+	// A claim the previous run left unsettled settles `failed` at the open
+	// (ADR 0041), and that attempt is a start the factory made that never reached
+	// its Agent. The dead run wrote its `handoff started:` line and nothing after
+	// it, so this boot states the ending beside it: the record for one Ticket then
+	// answers how many starts were made and why each one ended (issue #295).
+	//
+	// The names come off one projection read (ADR 0093): the stored rows are the
+	// last titles the sources left in the state file, since the run that starts
+	// has fetched nothing yet and the starts these lines name belong to the run
+	// that ended. The name rule is the shared one, so the boot names a Ticket the
+	// way the dispatch named it in the line the dead run wrote (issue #295 review).
+	if (opened.recovered.length > 0) {
+		const projection = opened.state.ticketWorkCycle.ticketProjection(
+			loaded.config.workflowStates,
+			loaded.config.defaultTaskType,
+		);
+		for (const attempt of opened.recovered) {
+			logger.warn(
+				handoffStartFailedLine(
+					recordTicketName(projection, attempt.ticketIdentity),
+					attempt.failureReason,
+				),
+			);
+		}
+	}
 
 	const sources = loaded.config.sources.map((source) => createTicketSource(source, runner));
 	logger.info(
