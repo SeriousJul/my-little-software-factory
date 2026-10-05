@@ -245,6 +245,64 @@ test/consultation-frame.test.ts` 21.9 s for 58 tests.
 | Whether the rules change behaviour on a pull request that did not come from this session | Incomplete. Every commit in this change set was written by the same agent that wrote the rules, so the round is self-review, and it is recorded as such |
 | The screen-reader path, the live terminal walk, and the theme inheritance inside a real herdr | Open, unchanged, as [the shared control record](./shared-controls.md) states |
 
+## Issue #301: the 14 unread domain types (2026-10-05)
+
+The 14 names this record held as "held still, not cleaned" are answered at
+`8bd17a4d`, and `UNREAD_TYPE_BASELINE` in
+`test/domain-export-architecture.test.ts` stands empty. Each name took one of
+the three answers [issue #301](https://github.com/SeriousJul/my-little-software-factory/issues/301)
+states.
+
+| Name | Answer | Where the reader stands |
+| --- | --- | --- |
+| `agent.ts :: AgentStatus` | reached through a value | `normalizeAgentStatus` answers it to `src/observation.ts` and `src/components/app.ts`; `test/agent-facts.test.ts` pins the set as closed |
+| `attempt-hold.ts :: UnreachedOutcome` | module-private | the `export` is gone: it types one field of `AttemptHoldFacts`, and `src/state/handoff.ts` and `src/state/plane-action.ts` each hand their own literal |
+| `decision-facts.ts :: DecisionFacts` | reached through a value | `decisionFacts` answers it to `src/components/app.ts`; `test/decision-facts.test.ts` pins its three fields |
+| `decision-facts.ts :: DecisionOffer` | reached through a value | the row of the record above; the same test pins the two kinds |
+| `section-facts.ts :: SectionFacts` | reached through a value | `sectionFacts` answers it to `src/components/app.ts` and the gallery; `test/section-facts.test.ts` pins the three count groups |
+| `ticket.ts :: TicketIgnoreFacts` | reached through a value | `automaticStartBlocked` reads it in `src/observation.ts` and `flagWithholdsRow` in `src/state/ticket-work-cycle.ts` and `src/components/app.ts`; `test/domain.test.ts` now tests the gate on its own four facts |
+| `top-up.ts :: AutomaticAddFacts` | reached through a value | `automaticAddsHold` reads it in `src/observation.ts`; `test/top-up.test.ts` states the record |
+| `top-up.ts :: AutomaticBareHold` | reached through a value | one member of the `AutomaticHold` the walk holds; the same test states a bare hold names no row |
+| `top-up.ts :: AutomaticHoldReason` | reached through a value | the key of `AUTOMATIC_HOLD_LINES` and the `reason` of every hold; the same suite pins that the words and the lines are one set |
+| `top-up.ts :: AutomaticRowHold` | reached through a value | one member of the same union, answered by `continuationHold`; the same test pins the row identity it carries |
+| `top-up.ts :: AutomaticRowHoldReason` | reached through a value | the `reason` of that member and the words of `AUTOMATIC_ROW_HOLD_REASONS` |
+| `top-up.ts :: ContinuationRowFacts` | reached through a value | the rows `continuationHold` reads in `src/observation.ts`; the same test states the three facts |
+| `top-up.ts :: OpenTicketRowGate` | reached through a value | `openTicketRowGate` answers it to `src/observation.ts`; the same test pins that the task type is readable only on the branch that stands |
+| `top-up.ts :: OpenTicketWaitsFacts` | reached through a value | `openTicketWaitsHold` reads it in `src/observation.ts`; the same test states the three waits |
+
+The counts the check's ratchet moves, read by the same walk the check runs
+(`exportsOf`, `importsOf`, `namesModule`) over every file under `src/domain/`, by
+a scratch script under `/tmp` that was deleted after the run:
+
+| Count | At `f3b11e8b`, before | At `8bd17a4d`, after |
+| --- | --- | --- |
+| exports under `src/domain/` | 126 | 125 |
+| of them with no importer under `src/` | 42 | 41 |
+| of those, read by a test import | 28 | 41 |
+| of those, read by nothing at all | 14, all of them types | 0 |
+
+### The probes, re-run at `8bd17a4d`
+
+| Probe | Result |
+| --- | --- |
+| domain A, `export const anUnreadRule = () => true;` in `src/domain/top-up.ts` | 1 case red, that one name |
+| domain B, `export const freshWorkHoldAlias = freshWorkHold;` | 2 cases red, the alias case names both sides |
+| domain C, `export interface ABrandNewUnreadType` | 1 case red, that one name against a list that stands empty |
+| domain D, `"src/domain/top-up.ts :: AutomaticHold (interface)"` written into the empty list | 1 case red: the list side holds a name that has readers and the unread side holds nothing |
+
+Each file was restored after its probe and `git status` came back clean. Probe D
+is new to this round: with the list empty the "stale entry" direction has no
+entry to delete, so it is probed by writing in a name that has readers. The
+three probes recorded above were re-run unchanged.
+
+### What this round did not measure
+
+| Item | State |
+| --- | --- |
+| Whether any of the 13 types now named at the seam is dead | Not measured, and the check still cannot see it: a caller holds the shape through the value, so a test writing the name down is not proof of life. What was measured is that each of the 13 has a call site that reads the value carrying it, and the module map names that call site |
+| The stated-exemption mechanism the issue sketches for the third answer | Not built. No name needed it - 13 are read through a value and one is private - so the baseline stays the only place a name is held and the check's shape did not move. The issue leaves that choice to whoever takes the item, and this branch took the smaller check |
+| The live terminal walk, the screen-reader path, and the theme inheritance in a real herdr | Open, unchanged, as [the shared control record](./shared-controls.md) states. The only production line that moved is one `export` keyword in `src/domain/attempt-hold.ts` |
+
 ## What was not measured
 
 | Item | State |
@@ -252,6 +310,6 @@ test/consultation-frame.test.ts` 21.9 s for 58 tests.
 | A real `git push` to `github.com/SeriousJul/my-little-software-factory` with the hook installed | Passed. The push of `main` ran the hook: `pre-push: bun run lint` (302 files, no fixes), `pre-push: bun run typecheck`, `pre-push: lint and typecheck clean, and no branch behind its remote-tracking ref`, and `370563f5..724dc3ec main -> main` landed |
 | The hook installed in the operator's checkout | Passed. `git config core.hooksPath scripts/git-hooks` is set in this checkout, and the push above is the proof it is live. The setup line stays a documented step on [the commands page](../development/commands.md) for every other checkout |
 | The doc-claim rule, the rename sweep, the documented-line rule, the probe rule, the determinism rule, the fake-fidelity rule, the file-the-defect rule, the failure-mode sweep, and the reporting rules | First measured by the self-review round above, on `b3b5fc38`: the probe rule, the rename sweep, the determinism rule, the file-the-defect rule, and the doc-claim rule each produced a result there, and the doc-claim rule found the stale cost numbers. What stays incomplete is the round's value: every commit was written by the agent that wrote the rules, so this is self-review, and a round on a pull request from a different author is the first independent measurement |
-| The 14 domain types in `UNREAD_TYPE_BASELINE` | Held still, not cleaned, and filed as [issue #301](https://github.com/SeriousJul/my-little-software-factory/issues/301). The ratchet refuses a new one and refuses a stale baseline entry; nothing was measured about whether these 14 should be exported, and the check's own header states that a caller can hold such a type without naming it |
+| The 14 domain types in `UNREAD_TYPE_BASELINE` | Answered on 2026-10-05 in [the section above](#issue-301-the-14-unread-domain-types-2026-10-05): each name took one of [issue #301](https://github.com/SeriousJul/my-little-software-factory/issues/301)'s three answers and the baseline stands empty. What stays unmeasured is whether any of them is dead, which the check still cannot see, and it is recorded in that section |
 | The CI load flake on the frame tests | Investigated on 2026-10-05 and filed as [issue #302](https://github.com/SeriousJul/my-little-software-factory/issues/302): four remote frame-deadline misses, the mechanism measured, no local reproduction, and no fix shipped on that evidence. The older records in [the shared control record](./shared-controls.md) and the pull request records stand |
 | The live terminal walk, the screen-reader path, and the theme inheritance inside a real herdr | Open, as [the shared control record](./shared-controls.md) states. The gate is a claim about the automated checks and the tree they ran on, and it extends no further |
