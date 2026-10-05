@@ -704,12 +704,22 @@ that group: the plane writes no `sources` key at all for no sources, and a
 `sources = []` line an earlier version wrote is one the write-back drops before
 it appends its blocks.
 
-A shape that stands outside those two sections is not the plane's to edit, and
-it costs you nothing: a `labels-any` array you write across lines inside a
-`[[states]]` block stays exactly where you put it, and so does a comment you
-write on a table header line. What a rewrite does cost is more than the comment
-lines: your blank lines, the order you put the tables in, and every byte the
-plane's own serializer does not write go with them.
+A shape that stands outside those two sections is not the plane's to edit, and it
+costs you nothing as long as the loader still accepts your file: a `labels-any`
+array you write across lines inside a `[[states]]` block stays exactly where you
+put it, and so does a comment you write on a table header line. The check reads
+your whole file and not only the two sections, so that is where the qualification
+comes in. A shape outside those sections that the loader refuses takes the
+rewrite just the same: write a `[[states]]` block's `source-kind` as a multiline
+array and the loader refuses the file, the check will not vouch for the edit, and
+every comment line goes. Your own line goes with them, because the rewrite writes
+the plane's own text and the plane holds no such line.
+
+What a rewrite does cost is more than the comment lines: your blank lines, the
+order you put the tables in, the endings your file puts on its lines - the
+plane's own serializer writes LF, so a file whose lines end CRLF loses them with
+the comments - and every byte the plane's own serializer does not write go with
+them.
 
 One shape takes no rewrite and still costs you, and it is a shape the loader
 accepts: a `[[sources]]` block whose `name` you wrote as a multiline string. The
