@@ -4604,7 +4604,7 @@ describe("handOffTicket: the pull request the plane opens (ADR 0076)", () => {
 		);
 	});
 
-	test("a failed agent start after the open closes the opened draft and deletes the pushed branch", async () => {
+	test("a failed agent start after the open leaves the branch and the draft standing", async () => {
 		const runner = new FakeRunner();
 		stubPrWorktreeHandoff(runner);
 		stubPullRequestOpenStep(runner);
@@ -4627,21 +4627,106 @@ describe("handOffTicket: the pull request the plane opens (ADR 0076)", () => {
 		expect(outcome.status).toBe("failed");
 		expect(reasonOf(outcome)).toContain("agent_name_taken");
 		const commands = runner.commands();
-		const openedAt = commands.indexOf(PR_CREATE_COMMAND);
-		const closedAt = commands.indexOf(`gh pr close 42 --repo github.com/acme/billing`);
-		const deletedAt = commands.indexOf(`git -C ${CHECKOUT} push origin --delete ${PR_BRANCH}`);
-		const removedAt = commands.indexOf(`herdr worktree remove --workspace ws-wt`);
-		expect(openedAt).toBeGreaterThanOrEqual(0);
-		// The no-residue contract: the attempt closes the pull request it
-		// opened, deletes the remote branch it pushed, and removes the
-		// environment it created, in that order, after the failure.
-		expect(closedAt).toBeGreaterThan(openedAt);
-		expect(deletedAt).toBeGreaterThan(closedAt);
-		expect(removedAt).toBeGreaterThan(deletedAt);
-		expect(commands).toContain(`git -C ${CHECKOUT} branch -D ${PR_BRANCH}`);
+		// The push landed, so the branch and the draft the attempt made belong to
+		// the ticket, not to the start (issue #296): the failure closes no draft,
+		// deletes no remote branch, and keeps the local branch the start created.
+		expect(commands).toContain(PR_CREATE_COMMAND);
+		expectNoCommand(commands, `gh pr close`);
+		expectNoCommand(commands, "push origin --delete");
+		expectNoCommand(commands, "branch -D");
+		// The herdr environment is still the start's own residue, and it goes.
+		expect(commands).toContain(`herdr worktree remove --workspace ws-wt`);
 	});
 
-	test("a reused draft is not closed when the agent start fails after it", async () => {
+	test("the next handoff of a ticket whose start failed reuses the standing branch and draft", async () => {
+		const runner = new FakeRunner();
+		stubPrWorktreeHandoff(runner);
+		stubPullRequestOpenStep(runner);
+		runner.set("herdr", ["agent", "start", AGENT, "--kind", "pi", "--pane", "pane-wt"], {
+			code: 1,
+			stderr: '{"error":{"code":"agent_name_taken","message":"agent name is already used"}}\n',
+		});
+
+		const first = await handOffTicket(
+			PR_TICKET,
+			{ ...defaultChoice, environment: "worktree" },
+			{
+				claim: "open",
+				config: PR_CONFIG,
+				runner,
+				home: HOME,
+			},
+		);
+		expect(first.status).toBe("failed");
+		const firstEnd = runner.commands().length;
+
+		// The failed start left its work behind: the branch stands in the checkout
+		// and on the remote, and the draft stands on it. The next start reads that
+		// state the way a start of a ticket that never failed does not.
+		runner.set("git", ["-C", CHECKOUT, "branch", "--list", PR_BRANCH], {
+			stdout: `  ${PR_BRANCH}\n`,
+		});
+		runner.set("git", ["-C", CHECKOUT, "ls-remote", "--heads", "origin", PR_BRANCH], {
+			stdout: `abc123\trefs/heads/${PR_BRANCH}\n`,
+		});
+		runner.set("gh", PR_READ_ARGS, {
+			stdout: JSON.stringify([
+				{
+					number: 42,
+					state: "open",
+					draft: true,
+					html_url: PR_URL,
+					head: { ref: PR_BRANCH },
+					base: { ref: "main" },
+					labels: [],
+				},
+			]),
+		});
+		runner.set(
+			"herdr",
+			["worktree", "open", "--cwd", CHECKOUT, "--branch", PR_BRANCH, "--no-focus"],
+			{
+				stdout: worktreeOpenJson("ws-wt", "pane-wt", {
+					alreadyOpen: false,
+					worktreePath: WORKTREE_PATH,
+				}),
+			},
+		);
+		runner.set("herdr", ["agent", "start", AGENT, "--kind", "pi", "--pane", "pane-wt"], {
+			stdout: "",
+		});
+
+		const second = await handOffTicket(
+			PR_TICKET,
+			{ ...defaultChoice, environment: "worktree" },
+			{
+				claim: "open",
+				config: PR_CONFIG,
+				runner,
+				home: HOME,
+			},
+		);
+
+		expect(second.status).toBe("ok");
+		const retry = runner.commands().slice(firstEnd);
+		// The reuse path: the worktree opens on the branch that stands, so no
+		// create runs from the worktree base, and the branch needs no second hold
+		// commit because it already carries the first.
+		expect(retry).toContain(
+			`herdr worktree open --cwd ${CHECKOUT} --branch ${PR_BRANCH} --no-focus`,
+		);
+		expectNoCommand(retry, "worktree create");
+		expectNoCommand(retry, "commit-tree");
+		expectNoCommand(retry, "update-ref");
+		// One ticket wears one pull request: the standing draft is read by its head
+		// branch and reused, and no second draft is opened.
+		expect(retry).toContain(`gh ${PR_READ_ARGS.join(" ")}`);
+		expectNoCommand(retry, "pr create");
+		// The prompt carries the standing pull request's url.
+		expect(retry).toContain(`herdr agent prompt ${AGENT} Implement #7.\n\nPull request: ${PR_URL}`);
+	});
+
+	test("a failed agent start after a reused draft closes nothing and deletes nothing", async () => {
 		const runner = new FakeRunner();
 		stubPrWorktreeHandoff(runner);
 		stubPullRequestOpenStep(runner, { standing: true });
@@ -4663,10 +4748,11 @@ describe("handOffTicket: the pull request the plane opens (ADR 0076)", () => {
 
 		expect(outcome.status).toBe("failed");
 		const commands = runner.commands();
-		// The standing draft pre-dates the attempt: the attempt closes
-		// nothing and deletes nothing of the branch it did not push.
-		expect(commands).not.toContain(`gh pr close 42 --repo github.com/acme/billing`);
-		expect(commands).not.toContain(`git -C ${CHECKOUT} push origin --delete ${PR_BRANCH}`);
+		// The standing draft and the branch it stands on pre-date the attempt: the
+		// attempt closes nothing and deletes nothing of the branch it did not push.
+		expectNoCommand(commands, `gh pr close`);
+		expectNoCommand(commands, "push origin --delete");
+		expectNoCommand(commands, "branch -D");
 		expect(commands).toContain(`herdr worktree remove --workspace ws-wt`);
 	});
 
@@ -4696,16 +4782,17 @@ describe("handOffTicket: the pull request the plane opens (ADR 0076)", () => {
 		expect(outcome.status).toBe("failed");
 		expect(reasonOf(outcome)).toContain("pushing the factory branch");
 		const commands = runner.commands();
-		expect(commands).not.toContain(`gh ${PR_READ_ARGS.join(" ")}`);
-		expect(commands).not.toContain(PR_CREATE_COMMAND);
-		expect(commands).not.toContain(`gh pr close 42 --repo github.com/acme/billing`);
-		// The environment is removed, and the branch the remote never carried
-		// is never deleted.
+		expectNoCommand(commands, `gh ${PR_READ_ARGS.join(" ")}`);
+		expectNoCommand(commands, "pr create");
+		expectNoCommand(commands, "gh pr close");
+		// The environment is removed. The push never landed, so the branch never
+		// stood on the remote and the start still owns the local copy it created.
 		expect(commands).toContain(`herdr worktree remove --workspace ws-wt`);
-		expect(commands).not.toContain(`git -C ${CHECKOUT} push origin --delete ${PR_BRANCH}`);
+		expectNoCommand(commands, "push origin --delete");
+		expect(commands).toContain(`git -C ${CHECKOUT} branch -D ${PR_BRANCH}`);
 	});
 
-	test("a branch the remote already carries is not deleted on a later failure", async () => {
+	test("a draft opened on a branch the remote already carries stands after a later failure", async () => {
 		const runner = new FakeRunner();
 		stubPrWorktreeHandoff(runner);
 		runner.set("git", ["-C", CHECKOUT, "ls-remote", "--heads", "origin", PR_BRANCH], {
@@ -4748,10 +4835,14 @@ describe("handOffTicket: the pull request the plane opens (ADR 0076)", () => {
 
 		expect(outcome.status).toBe("failed");
 		const commands = runner.commands();
-		// The attempt opened a draft on a branch it did not create: it closes
-		// its draft and deletes nothing.
-		expect(commands).toContain(`gh pr close 42 --repo github.com/acme/billing`);
-		expect(commands).not.toContain(`git -C ${CHECKOUT} push origin --delete ${PR_BRANCH}`);
+		// The attempt opened its draft on a branch it did not create, and the push
+		// landed: the draft and the branch stand for the ticket's next Handoff
+		// (issue #296), and only the herdr environment goes.
+		expect(commands).toContain(PR_CREATE_COMMAND);
+		expectNoCommand(commands, "gh pr close");
+		expectNoCommand(commands, "push origin --delete");
+		expectNoCommand(commands, "branch -D");
+		expect(commands).toContain(`herdr worktree remove --workspace ws-wt`);
 	});
 
 	test("a task type that opens a pull request refuses the live worktree before it acts", async () => {
@@ -5482,7 +5573,7 @@ describe("the one start: a command that raises", () => {
 		expectNoCommand(commands, "branch -D");
 	});
 
-	test("a raise after the pull request open closes the draft it opened and deletes the branch it pushed", async () => {
+	test("a raise after the pull request open leaves the branch and the draft standing", async () => {
 		const runner = new FakeRunner();
 		stubPrWorktreeHandoff(runner);
 		stubPullRequestOpenStep(runner);
@@ -5501,18 +5592,14 @@ describe("the one start: a command that raises", () => {
 
 		expect(outcome.status).toBe("failed");
 		expect(reasonOf(outcome)).toContain(RAISED);
-		// The residue of the open and the residue of the Environment go in the same
-		// order a tagged failure puts them in.
+		// A raise answers the way a tagged failure does: the pushed branch and the
+		// draft stand for the next Handoff, and the herdr environment goes.
 		const commands = runner.commands();
-		const openedAt = commands.indexOf(PR_CREATE_COMMAND);
-		const closedAt = commands.indexOf(`gh pr close 42 --repo github.com/acme/billing`);
-		const deletedAt = commands.indexOf(`git -C ${CHECKOUT} push origin --delete ${PR_BRANCH}`);
-		const removedAt = commands.indexOf(`herdr worktree remove --workspace ws-wt`);
-		expect(openedAt).toBeGreaterThanOrEqual(0);
-		expect(closedAt).toBeGreaterThan(openedAt);
-		expect(deletedAt).toBeGreaterThan(closedAt);
-		expect(removedAt).toBeGreaterThan(deletedAt);
-		expect(commands).toContain(`git -C ${CHECKOUT} branch -D ${PR_BRANCH}`);
+		expect(commands).toContain(PR_CREATE_COMMAND);
+		expectNoCommand(commands, "gh pr close");
+		expectNoCommand(commands, "push origin --delete");
+		expectNoCommand(commands, "branch -D");
+		expect(commands).toContain(`herdr worktree remove --workspace ws-wt`);
 	});
 
 	test("a Consultation start whose Agent start raises confirms the rows it recorded for what it removed", async () => {

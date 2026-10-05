@@ -43,8 +43,9 @@ git server, but the source's read may not carry the fresh branch's commits
 yet when the create runs straight after the push. The create then answers
 `No commits exist` on a branch that stands, and the plane retries only that
 answer for a bounded window. A create that never clears the lag fails the
-open with the last answer the source gave, and the no-residue contract of
-the failure is untouched: the attempt deletes the remote branch it created.
+open with the last answer the source gave, and the failure still leaves nothing
+of its own behind: the branch never reached the remote, and the start removes
+the local branch it created.
 
 **A fresh branch opens with the plane's hold commit.** The source opens no
 pull request on a head that carries no commit ahead of its base: the create
@@ -83,15 +84,35 @@ the plane observes, and the label writer stays the single one the machine
 has.
 
 
-**The open is a hard gate on the start, and the no-residue contract extends
-to it.** A failed open refuses the Handoff start with a readable reason, the
-way a refused Placement does. A Handoff that fails after the open closes the
-pull request it opened and deletes the remote branch it created; a branch or
-a pull request that pre-dates the attempt is never touched, and a pull
-request the branch already carries is reused, never re-created. The open
-runs only on a worktree environment, because only that environment holds the
-factory branch; a live-worktree start of a task type that opens a pull
-request is refused with a readable reason.
+**The open is a hard gate on the start.** A failed open refuses the Handoff
+start with a readable reason, the way a refused Placement does. A pull request
+the branch already carries is reused, never re-created, and the open runs only
+on a worktree environment, because only that environment holds the factory
+branch; a live-worktree start of a task type that opens a pull request is
+refused with a readable reason.
+
+**Amended by issue #296: the failed start holds the branch and the draft.** The
+rule first written here was the no-residue contract extended: a Handoff that
+failed after the open closed the pull request it opened and deleted the remote
+branch it created, and the start's residue cleanup deleted the local branch too.
+That is retired. Once the open's push lands, the branch stands on the remote
+under the draft it carries, and the start owns neither copy of it: a Handoff
+that fails after the push removes its herdr environment and nothing else, and
+the ticket's next Handoff reopens the worktree on the standing branch and reuses
+the standing pull request. Before the push the branch never stood on the remote,
+and the start still removes the local branch it created, so the no-residue
+contract of ADR 0097 stands for everything the open did not hand over.
+
+The old rule spent the whole lifecycle on every failed start. Measured on the
+development run over the night of 4-5 October: three tickets, 20 attempts each,
+60 branch pushes, 60 draft pull requests opened with a written title and body,
+and 60 closes - 98% of every closed-unmerged pull request the factory had ever
+made. Each of those pull requests carried the ticket's full description and a
+`Closes #<ticket>` line, so one ticket's timeline ended with twenty closed pull
+requests each claiming to close it. The reuse path the plane already had - the
+worktree reopens on a branch that stands, and the open reads the branch's own
+pull requests before it creates - reaches that work for free once the failed
+start stops tearing it down.
 
 **A cycle end closes the draft, and never the published pull request.** A
 Close, an abandon, or a decision close that ends the cycle while the ticket's

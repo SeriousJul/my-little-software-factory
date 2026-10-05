@@ -55,6 +55,16 @@ confirmed in its record, under the kind the start recorded it under, so a
 Consultation's detail names no resource that is already gone, and its Close does
 not retry a workspace herdr no longer holds.
 
+The pull request open hands the branch over. Once the plane's push lands the
+factory branch on the remote, the branch and the draft pull request it carries
+belong to the ticket and not to the start: a start that fails after that push
+removes its herdr environment and nothing else - no draft close, no remote
+branch delete, no local branch delete. Your next handoff of that ticket reopens
+the worktree on the branch that stands and reuses the pull request the branch
+already carries, so a ticket wears at most one Fixing pull request across any
+number of failed starts. Before the push the branch never stood on the remote,
+and the start still removes the local branch it created.
+
 ## Model discovery
 
 The agent CLI owns the list of models it can run, and the config file names
