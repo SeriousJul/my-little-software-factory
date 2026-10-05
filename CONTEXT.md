@@ -422,7 +422,7 @@ _Avoid_: workspace cleanup, environment teardown
 **Handoff attempt**:
 The durable record created before a handoff makes its first external change.
 An unresolved attempt prevents another handoff of the same ticket after a crash.
-An attempt that settled `failed` started no Agent and left no Handoff: it counts toward the Handoff limit, and it stands as the Attempt hold (ADR 0101).
+An attempt that settled `failed` started no Agent and left no Handoff: it counts toward the Handoff limit, it stands as the Attempt hold (ADR 0101), and it states itself in the record as the `handoff start failed:` line beside the `handoff started:` line the start wrote (issue #295).
 _Avoid_: pending ticket, handoff state
 
 **Attempt hold**:

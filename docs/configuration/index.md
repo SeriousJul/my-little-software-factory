@@ -520,6 +520,34 @@ a new claim is a new fact even when no claim ever came through the dispatch
 (issue #223 review). The two start channels keep their own fact, so a
 `merge refused:` line never answers for a `handoff refused:` one (issue #223).
 
+A start that passed every gate, claimed its seat, and reached no Agent states how
+it ended (issue #295). The `handoff started:` line says the factory began a
+start; this line says its attempt settled `failed` and names the reason the
+attempt's own record stores:
+
+```text
+handoff start failed: "Add a webhook retry policy" (the worktree path already exists)
+handoff start failed: "Watch agent turns" (the ticket is now closed)
+```
+
+It is not the refusal line, and the two never answer for one another. A
+`handoff refused:` line answers a hard gate before the start began, and no
+attempt row stands under it; a `handoff start failed:` line stands only under a
+start that claimed and settled `failed` in the attempt ledger. One grep returns
+one kind of start that did not run.
+
+The line states itself once per attempt, never once per observation cycle: the
+automatic walks re-ask a Ticket every poll, and the attempt that already settled
+says nothing new on the next one - the rule issue #223 sets for a standing
+refusal and issue #231 for the walk's per-candidate facts. A second attempt at
+the same Ticket is a second start, and it states itself again. Reading the record
+for one Ticket then answers how many starts the factory made - the
+`handoff started:` lines - and why each one ended.
+
+The boot states the same line for a claim a previous run left unsettled: the open
+settles it as a failed start (ADR 0041), and the line lands beside the
+`handoff started:` line the run that ended wrote.
+
 The observation cycle states each hold its automatic walks take, once for as long
 as the fact stands and again when the fact changes, so a run that started nothing
 says why (issue #223):
@@ -601,10 +629,11 @@ queue: the Work queue pause did not move: cannot store the queue pause at /path/
 
 Every line above carries its own level, and the filter keeps or drops it. The
 hold lines, the mode lines, and the queue lines are `info`; a refusal is `warn`,
-and so is every line that says a fact the next run will not read back - the
-session-only mode line and the refused pause line. `level = "warn"` therefore
-keeps every refusal and none of the hold lines, so a run you want to read the
-holds of needs `info` or `debug`.
+as is every line that says a start the factory made and how it ended, and so is
+every line that says a fact the next run will not read back - the session-only
+mode line and the refused pause line. `level = "warn"` therefore keeps every
+refusal, every failed start, and none of the hold lines, so a run you want to
+read the holds of needs `info` or `debug`.
 
 A Consultation's start line is the Consultation operations' own. Its name is the
 record's Consultation type beside the identity prefix the plane's other

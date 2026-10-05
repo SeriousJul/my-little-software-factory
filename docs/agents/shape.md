@@ -156,6 +156,11 @@ description: The module map of the source tree, for agents working in this repos
 	one name the `handoff queued:`, `handoff started:`, `merge queued:`, and
 	`merge started:` lines read for who put the row in the queue (issue #223). It
 	states no hold line of its own: the hold sentences are `top-up.ts`'s.
+	`attempt-record.ts` holds the one sentence a Handoff start leaves in the record
+	when its attempt settles `failed` - the prefix, the Ticket's name, and the
+	reason that attempt's row stores - so the Handoff dispatch's own failed starts
+	and the boot's recovery of a crashed run's claims state the same fact the same
+	way, and the line cannot be mistaken for a pre-start gate refusal (issue #295).
 - `src/handoff.ts`: the handoff. One start call (`runHandoffStart`, kept private
 	to the module) behind the two start calls the plane has (issue #204,
 	ADR 0097): it runs the pre-flight in one order, resolves the repository, builds

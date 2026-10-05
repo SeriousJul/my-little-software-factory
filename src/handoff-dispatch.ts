@@ -11,6 +11,7 @@
 import type { FactoryConfig } from "./config.ts";
 import type { ConfigWriteReport } from "./config-write.ts";
 import type { ConsultationPickupOutcome } from "./consultation-operations.ts";
+import { handoffStartFailedLine } from "./domain/attempt-record.ts";
 import { queueStagingOf } from "./domain/queue-staging.ts";
 import type { StartMode } from "./domain/start-mode.ts";
 import type { EnvironmentKind, Ticket, TicketState } from "./domain/ticket.ts";
@@ -1261,11 +1262,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 			)
 				continue;
 			this.handoffQueue.splice(index, 1);
-			this.state.handoff.settleHandoff(
-				parked.claim.attemptId,
-				false,
-				"the waiting start was cancelled",
-			);
+			this.settleFailedStart(parked.claim.attemptId, "the waiting start was cancelled");
 			this.settleIntentOnStarted(ticketIdentity, {
 				ok: false,
 				reason: "the waiting start was cancelled",
@@ -1451,11 +1448,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 			// The claim's hard checks passed but the projection holds no ticket
 			// to run: settle the claim and name it; the item's fate is the
 			// caller's, like every other refusal above.
-			this.state.handoff.settleHandoff(
-				claim.claim.attemptId,
-				false,
-				"the ticket is no longer visible",
-			);
+			this.settleFailedStart(claim.claim.attemptId, "the ticket is no longer visible");
 			this.reports.starting(item.ticketIdentity, false);
 			this.reports.refresh();
 			return { ok: false, reason: "the ticket is no longer visible" };
@@ -2013,6 +2006,32 @@ class HandoffDispatchModule implements HandoffDispatch {
 		}
 	}
 
+	/**
+	 * Settle a start that began and reached no Agent, and leave its line in the
+	 * record (issue #295).
+	 *
+	 * Every failed settle of this module runs through here, so the record holds
+	 * one line per attempt: the settle answers null when the attempt had already
+	 * settled, and the line follows that one write. It never rides the observation
+	 * cycle - the walks re-ask a Ticket every poll, and the attempt that already
+	 * settled says nothing new on the next one - the same rule issue #223 sets for
+	 * a standing refusal and issue #231 for the walk's per-candidate facts.
+	 *
+	 * The reason the line states is the one the attempt's row stores: the settle
+	 * answers with its own row, and the line reads that answer, so the file and the
+	 * ledger cannot state two endings for one start. The line is a `warn`, the level
+	 * every refusal line wears, and it wears a prefix no refusal wears: a pre-start
+	 * gate refusal leaves `handoff refused:` and no attempt row at all, while this
+	 * line stands only under a start that passed every gate and settled `failed`.
+	 */
+	private settleFailedStart(attemptId: string, reason: string): void {
+		const settled = this.state.handoff.settleHandoff(attemptId, false, reason);
+		if (settled === null || settled.outcome !== "failed") return;
+		this.log?.warn(
+			handoffStartFailedLine(this.ticketName(settled.ticketIdentity), settled.failureReason),
+		);
+	}
+
 	private failHandoff(
 		identity: string,
 		claim: HandoffClaim,
@@ -2021,7 +2040,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 	): void {
 		if (this.stopped) return;
 		const reason = errorMessage(error);
-		this.state.handoff.settleHandoff(claim.attemptId, false, reason);
+		this.settleFailedStart(claim.attemptId, reason);
 		this.reports.starting(identity, false);
 		this.reports.refresh();
 		this.reports.clearWorking();
@@ -2044,20 +2063,17 @@ class HandoffDispatchModule implements HandoffDispatch {
 		if (outcome.ownCollision !== undefined)
 			this.recordNameCollision(identity, outcome.ownCollision);
 
-		this.state.handoff.settleHandoff(
-			claim.attemptId,
-			outcome.status !== "failed",
-			outcome.status === "failed" ? outcome.reason : undefined,
-			outcome.status === "failed"
-				? undefined
-				: {
-						paneId: outcome.agent.paneId,
-						tabId: outcome.agent.tabId,
-						workspaceId: outcome.agent.workspaceId,
-						agentName: outcome.agent.name,
-						routeFromIdentity,
-					},
-		);
+		if (outcome.status === "failed") {
+			this.settleFailedStart(claim.attemptId, outcome.reason);
+		} else {
+			this.state.handoff.settleHandoff(claim.attemptId, true, undefined, {
+				paneId: outcome.agent.paneId,
+				tabId: outcome.agent.tabId,
+				workspaceId: outcome.agent.workspaceId,
+				agentName: outcome.agent.name,
+				routeFromIdentity,
+			});
+		}
 		this.reports.starting(identity, false);
 		this.reports.refresh();
 		await reportHandoffOutcome(outcome, this.reports, this.persistMapping);
@@ -2150,7 +2166,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 					currentState === undefined
 						? "the ticket no longer exists"
 						: `the ticket is now ${currentState}`;
-				this.state.handoff.settleHandoff(next.claim.attemptId, false, movedOn);
+				this.settleFailedStart(next.claim.attemptId, movedOn);
 				this.reports.starting(next.ticket.identity, false);
 				this.reports.refresh();
 				// One line for both exits, read through the one name helper every
