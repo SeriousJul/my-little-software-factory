@@ -61,7 +61,26 @@ run together alone: 90 pass / 0 fail in 28.18 s. No production line moves in thi
 change, and no test file changed in it.
 
 This is recorded as a load flake with a missing name, not as a pass: the failing
-case is not identified, and the next run that goes red at load names it.
+case is not identified, and the next run that goes red at load names it. The
+same shape on the remote was investigated on 2026-10-05 below and filed as
+[issue #302](https://github.com/SeriousJul/my-little-software-factory/issues/302).
+
+## The two named red cases on the same tree
+
+A later full run on this tree (`48493de3`, load 6.35 before, no other `bun test`
+process) went red twice in 39.91 s, and this time the output was kept, so both
+cases are named:
+
+| Case | Time | Alone |
+| --- | --- | --- |
+| `test/repository-select-panel.test.ts` - a failed act stops the queue, and names the repository on the line | 10247.03 ms, which is `FRAME_DEADLINE_MS` at its non-CI 10000 | 14 pass / 0 fail in 12.32 s with the row below |
+| `test/screenshot-drift.test.ts` - the guide screenshots, inside `captureScreens` | 796.61 ms | same run, same result |
+
+Each fails in the full suite and passes alone, so each is a load flake under
+[the triage rule](../../AGENTS.md), not a regression: the tree moved only markdown
+since the green run above. The first case is the frame-deadline class of
+[issue #302](https://github.com/SeriousJul/my-little-software-factory/issues/302)
+at the local deadline, and the case name is recorded on that issue.
 
 ## Two defects the run found, and fixed
 
@@ -78,6 +97,44 @@ Both came from driving the hook through real refs instead of reading it.
   `<local>..<upstream>`, and the level, ahead, and behind cases above are each
   run.
 
+## The frame-deadline investigation, on the same date
+
+The remote gate is not read as a rule (AGENTS.md, "Remote gates"); a CI flakiness
+investigation is the one case that reads it, and every run read is named here.
+
+Runs read for their failure lines: 37232190458, 37216619811, 37192986722,
+37159675095, 37153742528, 37150434813, plus the CI run list for the last 200 runs
+of `CI`. Four of the six failed a frame wait between 20155 ms and 21088 ms, which
+is `FRAME_DEADLINE_MS` (20000 on CI) in `test/app-harness.ts`, not the runner's
+60000 ms budget. The harness's own dump came back with the screen fully painted
+and the detail's scroll thumb on the first row of its track.
+
+At the unit layer, in this checkout:
+
+| Run | Result |
+| --- | --- |
+| The three named files alone | 95 pass / 0 fail in 30.76 s, load 9.61 before |
+| Three full suites in CI shape, `CI=1 bun test --parallel=4 --isolate --timeout=60000` | 3 x 2974 pass / 0 fail, load 7.58 to 9.74 before each run |
+| Five runs of the three files pinned to two CPUs, `taskset -c 0-1 env CI=1 bun test --parallel=2 --isolate --timeout=60000` | 0 fail in five runs |
+
+Two measurements came out of temporary probes, both deleted after the run, and
+both stated here rather than shipped as tests:
+
+- **A resting plane emits no frames.** A listener on the renderer's `frame` event
+  counted **0** events over 1000 ms with the app booted and idle. The renderer
+  paints on invalidation, not on a free-running loop.
+- **The scroll restore's geometry is already real when its effect runs.** The
+  round-trip test printed `slot.top=30 box.scrollHeight=52 viewport=22` at the
+  restore, and `box.scrollTop=30` at the save. The save side is clean; the
+  restore waits for a render pass anyway.
+
+Two probes of the ordering that the failure needs both stayed green, because a
+later pass still arrived: deferring the registration by one macrotask, and the
+same round trip with the app's loops stopped and `renderer.requestRender`
+neutered. The ordering flip is not pinned, so no fix was shipped on this
+evidence. The finding, the mechanism, and what a fix has to hold are in
+[issue #302](https://github.com/SeriousJul/my-little-software-factory/issues/302).
+
 ## What was not measured
 
 | Item | State |
@@ -86,5 +143,5 @@ Both came from driving the hook through real refs instead of reading it.
 | The hook installed in the operator's checkout | Passed. `git config core.hooksPath scripts/git-hooks` is set in this checkout, and the push above is the proof it is live. The setup line stays a documented step on [the commands page](../development/commands.md) for every other checkout |
 | The doc-claim rule, the rename sweep, the documented-line rule, the probe rule, the determinism rule, the fake-fidelity rule, the file-the-defect rule, the failure-mode sweep, and the reporting rules | Incomplete by nature. No check measures them; the reviewer's floor on the quality gate page is what enforces them, and the next review round is where they are first measured |
 | The 14 domain types in `UNREAD_TYPE_BASELINE` | Held still, not cleaned, and filed as [issue #301](https://github.com/SeriousJul/my-little-software-factory/issues/301). The ratchet refuses a new one and refuses a stale baseline entry; nothing was measured about whether these 14 should be exported, and the check's own header states that a caller can hold such a type without naming it |
-| The CI load flake on the frame tests | Open, and unchanged by this decision. `test/consultation-frame.test.ts` and the other load-sensitive frame files are recorded in [the shared control record](./shared-controls.md) and in the pull request records; the gate does not fix them |
+| The CI load flake on the frame tests | Investigated on 2026-10-05 and filed as [issue #302](https://github.com/SeriousJul/my-little-software-factory/issues/302): four remote frame-deadline misses, the mechanism measured, no local reproduction, and no fix shipped on that evidence. The older records in [the shared control record](./shared-controls.md) and the pull request records stand |
 | The live terminal walk, the screen-reader path, and the theme inheritance inside a real herdr | Open, as [the shared control record](./shared-controls.md) states. The gate is a claim about the automated checks and the tree they ran on, and it extends no further |
