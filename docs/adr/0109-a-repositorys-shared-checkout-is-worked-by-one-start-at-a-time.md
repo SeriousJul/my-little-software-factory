@@ -22,27 +22,36 @@ checkout. The issue's premise, that the merge "runs its Git work in the shared
 checkout", is not what the code does, and this decision records that
 measurement.
 
-The plane knew the collision the worktree starts cause and named it in a comment
-without acting on it: the worktree add is "the one place two Handoffs can
-collide".
+What two starts do to one checkout, on the code: a worktree create runs its
+`git -C <checkout>` reads and then `git worktree create --cwd <checkout>`, and
+each of those writes into the checkout's own ref store and worktree metadata.
+Two creates of one Repository therefore run their reads and their add in one
+checkout at the same time, and the second can report the branch the first is
+standing up as already used. The merge is not that second writer. What it
+changes is the state the create reads: the remote default branch the create
+fetches and bases its branch on, and the remote copy of the branch the create
+may reuse. It deletes no branch, so the reuse path meets no branch that
+vanished under it.
 
 The Parallel limit cannot see the pair, because the Plane action takes no seat
 (ADR 0068). The measured failure is exactly that reading: a merge started at
 `00:30:43.830` with the seats read `0/1`, a Handoff started at `00:30:43.922`
 with the seats read `0/1`, and the worktree create reached the checkout at
 `00:30:46.013` while the merge still ran. Both starts were correct against the
-cap, and both were wrong about the checkout. The create that met the checkout
-was a create meeting another create; the merge's own commands never reached it.
+cap, and the cap said nothing about the checkout. The create that met the
+checkout was a create meeting another create; the merge's own commands never
+reached it.
 What the merge and the create share is the Repository, and the absence of any
 gate between them.
 
 The failure is not rare and not self-limiting. The plane re-asks a position
 every observation cycle, so one stuck position spends the Handoff limit and
 starts again on the next source read. The issue measured 9,356 failed attempts
-on one Ticket, 4,864 on a second, and 585 on a third, in about a day. The
-refusals the collision produced - a worktree add that reports its own branch as
-already used, a merge that meets a checkout moving under it - were the whole
-record, and nothing in the record said the two starts had met.
+on one Ticket, 4,864 on a second, and 585 on a third, in about a day. What the
+record holds is the create's own refusal - a worktree add that reports its own
+branch as already used - and nothing in it said two starts had met. No recorded
+failure names the merge failing at a checkout, and this decision does not claim
+one.
 
 Two facts made the pair easy to start and hard to see:
 
@@ -58,11 +67,17 @@ Two facts made the pair easy to start and hard to see:
 ## Decision
 
 **One Repository's shared checkout is worked by one start at a time, and the
-Handoff dispatch owns that rule.** Two starts take the hold: a Handoff whose
+start's owner drives that rule.** Two starts take the hold: a Handoff whose
 Environment is a worktree, which creates that worktree out of the checkout, and
 the merge Plane action, which the record shows meeting that create with no gate
-between them. The dispatch holds one checkout hold per Repository, taken at the
-start's claim and let go when that start settles. The hold is keyed by the same
+between them. One checkout hold per Repository, taken at the start's claim and
+let go when that start settles. The hold's state machine - the holds, the two
+clocks, the record lines - is its own module, `src/checkout-hold.ts`, and the
+Handoff dispatch is its first caller: the module answers whether a start crosses
+and what the record says, and the caller that owns the Work queue row performs
+the wait's keep and the refusal's drop, because a Consultation row belongs to
+another module for all three acts and the seam has to be there for issue #315 to
+cross it (issue #297 review). The hold is keyed by the same
 Repository key the Operation serializer normalizes (issue #203), so `acme/factory`
 and `github.com/acme/factory` are one checkout and not two. The Plane action side
 of the rule reaches the Work queue through the registry's cell for that action, so
@@ -113,8 +128,10 @@ standing-row refusal's entry does, and the pickup pass sweeps the entries whose
 row is gone.
 
 **The wait is bounded, on two clocks, and the two end different things.** The
-bound is the checkout work's own budget: ten minutes, the budget the Command
-runner already gives a single command.
+bound is the checkout work's own budget: ten minutes, read off the Command
+runner's budget for a single command rather than restated here, because the
+bound's whole argument is that a start which could not answer one command budget
+is not answering (issue #297 review).
 
 The hold's own age, read from the clock reading its start took the checkout, ends
 the hold. A hold that stands a whole budget after the start took it is a start
@@ -157,21 +174,36 @@ a repeated ask from spending the budget once per ask.
 
 The queue never waits on a row that cannot reach an exit.
 
-**The hold is dropped wherever its start settles, and a read drops a hold whose
-holder no longer stands.** The merge run's mark and the Handoff attempt are the
-two facts that say a start stands. A hold outliving both is a bookkeeping miss,
-not work, and the plane keeps the Repository working rather than lock it out for
-the rest of the run. The hold's age is the third fact of the same kind, stated
-above: a holder that stands past the budget is treated as gone in the same way.
+**The hold is dropped wherever its start settles, and a hold whose holder no
+longer stands is dropped by the read and by the sweep.** The merge run's mark and
+the Handoff attempt are the two facts that say a start stands. A hold outliving
+both is a bookkeeping miss, not work, and the plane keeps the Repository working
+rather than lock it out for the rest of the run. The hold's age is the third fact
+of the same kind, stated above: a holder that stands past the budget is treated
+as gone in the same way.
 
-**A settle inside a pickup pass asks that pass for one more lap, and runs no
-second pass beside it** (issue #297 review). Every path that lets a checkout go
-re-runs the pickup for the rows waiting on it, and one of those paths - the Plane
-action's settle - runs in the walk's own `finally`, across the pass's `await`. A
-pass run beside another pass reads a seat count the first has not taken yet,
-which is the race the walk's per-item cap re-read exists for; a promised lap
-lands the same turn after the pass that released ends. A lap that starts nothing
-releases no checkout, so the laps end.
+The gate drops a hold where a start reaches its Repository, so a hung holder of a
+Repository nothing wants again would keep its hold and state nothing about it.
+The pickup pass therefore sweeps the holds beside the waits, and states the same
+drop line the gate states, so the record says a hold ended whether or not a
+second start ever came to that checkout (issue #297 review). The sweep reads the
+Ticket projection only when a hold actually ends, because that line names its
+holder.
+
+**A release inside a walking pickup pass asks that pass for one more lap**
+(issue #297 review). Every path that lets a checkout go re-runs the pickup for
+the rows waiting on it, and one of those paths - the Plane action's settle - runs
+in the walk's own `finally`, across the pass's `await`. What the code guarantees
+is the lap: a release that lands while a pass walks sets that pass's flag and
+starts no pass of its own, and a lap that starts nothing releases no checkout, so
+the laps end. What it does not guarantee is that no second pass ever runs beside
+a pass: a release that lands outside a walking pass starts its own pass, and
+`finishHandoff` is such a path twice over - it lets the checkout go at its head,
+where no pass walks, and asks for the seat's own pickup at its tail. Two passes
+beside each other is the case the walk's per-item cap re-read already bounds, and
+the exposure is the seat count, never the hold, which is taken in one synchronous
+step. The review's reading that the lap is a re-entrancy guard claims more than
+the mechanism does (issue #297 review).
 
 **The operator's force-dispatch passes the cap and nothing else.** The key on a
 row whose checkout is at work leaves the row standing and answers with the fact
@@ -224,14 +256,14 @@ limit below rather than told as a case this rule covers.
   one holder. The review's sixteen-handoff measurement showed the hold's age
   alone resets at every hand-off and cannot bound a chain, so the row's own wait
   stands beside it.
-- **Scope the rule to the worktree Handoff pair the evidence names.** Considered
-  and not taken. The pair the issue names, and the pair the record shows meeting
-  with no gate between them, is the merge and the worktree create, and the
-  measured fact that the merge's commands are `gh` commands narrows what the
-  hold buys from the merge's side: a merge of a Repository waits behind that
-  Repository's worktree starts, which is the seconds a create takes, and the
-  budget bounds it. The rule narrows to the Handoff pair alone if the merge's
-  serialization ever costs more than that, and the open limit is recorded below.
+- **Scope the rule to the worktree pair the evidence names, and let the merge
+  go.** Considered, and not taken in this change. The pair that puts `git` on one
+  checkout together is the worktree Handoff and the worktree Consultation, and the
+  Handoff half is gated here while the Consultation half is issue #315. The merge
+  stays in the hold because the issue names the pair, because it changes the remote
+  state a create reads, and because nothing else separates the two starts; what it
+  costs, and what would settle the question, is stated under the merge's half
+  below.
 - **Refuse the second start instead of queueing it.** Rejected: the second start
   is a start the factory already decided to make, and ADR 0049's queue is where
   a start that cannot run now waits. A refusal would spend the Handoff limit on
@@ -258,14 +290,20 @@ limit entries state the rule beside the seat. ADR 0068 and ADR 0034 carry the
 same sentence, so the two decisions that own the starts name the gate the pair
 now crosses.
 
-The dispatch owns the hold, because it owns the claim: the merge's claim is its
-queue row's removal, and the Handoff's claim is its attempt. No new durable
+The hold's state machine lives in `src/checkout-hold.ts`, and the dispatch is its
+caller, because the dispatch owns the claim: the merge's claim is its
+queue row's removal, and the Handoff's claim is its attempt. The module is not
+the dispatch's private detail: it is the seam issue #315 needs, and it answers
+the gate and nothing about the row, so a second caller brings its own row acts.
+The split is also what lets the two clocks be tested without the dispatch's rig,
+which `test/checkout-hold-ledger.test.ts` does. No new durable
 table stands for the hold - it lives and dies inside one run, and the record is
 the durable account of it. The gate reads the Repository the start works out of
 one Ticket projection read taken at the head of the pickup pass and handed to
-every row the walk visits, and the claim's take uses the key that read produced,
-so the hold adds one read per pass and no read per queue row (issue #297
-review). The read is lazy: a pass whose rows take no checkout reads nothing. The
+every row the walk visits and to the hold sweep, and the claim's take uses the key
+that read produced, so the hold adds one read per pass and no read per queue row
+(issue #297 review). The read is lazy: a pass whose rows take no checkout and
+whose holds all stand reads nothing. The
 force-dispatch key runs no pass, so it takes that one read for itself. The
 verification record carries the measured cost.
 
@@ -273,8 +311,11 @@ verification record carries the measured cost.
 the Operation serializer and the checkout hold alike, so the plane holds one
 fact per Repository and not one per spelling.
 
-`CHECKOUT_WORK_BUDGET_MS` is the one bound, and the suite reads it rather than
-restating it, so moving the budget moves the test with it.
+`CHECKOUT_WORK_BUDGET_MS` is the one bound, and it is the Command runner's
+`COMMAND_TIMEOUT_MS` read through that name rather than a second ten-minute
+literal, so the bound cannot drift from the budget its own argument measures. The
+suite reads the constant rather than restating it, so moving the budget moves the
+test with it (issue #297 review).
 
 The registry holds one Plane action, and it is the merge. Its checkout word comes
 from the registry's cell for that action - the same cell the Work queue's channel
@@ -295,14 +336,31 @@ The hold is in-memory, so a plane restart does not carry one. A restart cannot
 collide with a run it no longer has, and the boot settles the claims a crashed
 run left behind (ADR 0041) before its first pickup pass.
 
-**The open limit this decision leaves.** The merge's half of the rule rests on
-the pair the record names, not on checkout work the merge does: the merge's
-commands are `gh` commands, measured above. The plane keeps the merge held
-because the issue names the pair and nothing else separates the two starts, and
-the cost it records is the seconds a worktree create takes. A later change
-narrows the rule to the worktree Handoff pair alone if the merge's serialization
-costs more than that. The verification record states what the suite measured for
-this rule and what it did not.
+**The merge's half: kept, on what the merge changes, and not on the premise the
+issue gave.** The merge runs no `git` command, measured above, so it never writes
+to the checkout and the collision the recorded failures name - two creates adding
+worktrees in one checkout - cannot involve it. What it does change is the state a
+create reads: `gh pr merge` moves the remote default branch the create fetches and
+bases its branch on, and the create reads that head between its own `fetch` and
+its `worktree create`. The merge holds the checkout for that reason, and because
+the issue names the pair and nothing else separates the two starts.
+
+What that costs is stated rather than assumed. A worktree Handoff of a Repository
+whose merge is in flight waits the merge's run, which is a handful of `gh` round
+trips, and the hold's budget bounds the wait from above even when the merge itself
+runs longer, because the sweep ends a hold that outlives the budget while its run
+still stands. The failed-start rate the issue counted is the number this change
+should move, and no run measures it: the development install has never run a merge,
+so there is nothing there to time, and the review's own measurement is the honest
+statement of the gap. The verification record carries that row as Incomplete and
+names the probe.
+
+The trigger that settles the half is named with the number: if a development run
+with the gate on shows a worktree Handoff waiting behind a merge for more than the
+seconds a worktree create takes, the merge leaves the hold and the rule narrows to
+the worktree pair, which is the pair the checkout itself can feel. Keeping the
+merge in the hold is the conservative half of that trade, and it is a decision this
+decision records as taken, not as open.
 
 **The second open limit: the Consultation's worktree start.** A worktree
 Consultation and a worktree Handoff of one Repository still reach its checkout

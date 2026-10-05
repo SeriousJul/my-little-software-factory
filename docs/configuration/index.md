@@ -513,7 +513,10 @@ Parallel limit, and the waiting row takes no seat: the Pickup reaches the starts
 behind it. The wait is bounded on two clocks that end different things, and each
 states its own fact. The hold's age ends the hold: `stayed at work past its
 budget` names one start that stopped answering, the plane drops its hold on the
-`checkout hold dropped:` line, and the row that waited runs. The row's own wait
+`checkout hold dropped:` line, and the row that waited runs. That line comes from
+the Pickup whether the wait it ends belongs to a row that is waiting or to no row
+at all: a hung holder of a Repository nothing asks about again is stated the same
+way, so the file never leaves a checkout at work forever in silence. The row's own wait
 ends the row: `waited behind the shared checkout past its budget` names a
 Repository that is simply busy, where every start answered in time and the
 checkout only kept changing hands, and that line is a `refused:` line like every
