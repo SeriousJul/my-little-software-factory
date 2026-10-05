@@ -84,6 +84,9 @@ export class FakeRunner implements CommandRunner {
 	// failed result; an adapter is free to raise, and a test has to be able to
 	// stand one (issue #204, pull request #213 review).
 	private rejections = new Map<string, Error>();
+	// A command that raises only for its next calls: the push that breaks its pipe
+	// on one start and lands on the next (issue #296 review).
+	private raises = new Map<string, { times: number; message: string }>();
 
 	/** Answer `command args` with a result; exact args match, in order. */
 	set(command: string, args: readonly string[], result: Partial<CommandResult>): void {
@@ -133,6 +136,20 @@ export class FakeRunner implements CommandRunner {
 		this.rejections.set(this.key(command, args), new Error(message));
 	}
 
+	/**
+	 * Make the next `times` calls of one command raise, and its later calls answer
+	 * as set: the raise of a pipe that breaks on one start and lands on the next.
+	 * The call is still recorded, because the caller did ask for it.
+	 */
+	raiseNext(
+		command: string,
+		args: readonly string[],
+		times = 1,
+		message = "the command raised",
+	): void {
+		this.raises.set(this.key(command, args), { times, message });
+	}
+
 	/** Fail one agent kind's Model list query with a readable reason. */
 	setModelListFailure(kind: string, reason: string): void {
 		this.modelLists.set(kind, { ok: false, reason });
@@ -171,6 +188,12 @@ export class FakeRunner implements CommandRunner {
 		if (rejection !== undefined) {
 			this.running -= 1;
 			throw rejection;
+		}
+		const raised = this.raises.get(key);
+		if (raised !== undefined && raised.times > 0) {
+			raised.times -= 1;
+			this.running -= 1;
+			throw new Error(raised.message);
 		}
 		const sequence = this.sequences.get(key);
 		const next = sequence !== undefined && sequence.length > 0 ? sequence.shift() : undefined;

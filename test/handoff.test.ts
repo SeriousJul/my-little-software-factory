@@ -21,6 +21,7 @@ import {
 	handOffConsultation,
 	handOffTicket,
 	handoffReportLines,
+	PULL_REQUEST_HOLD_COMMIT_MESSAGE,
 	renderPrompt,
 	renderSettingArgs,
 	resolveHandoffChoice,
@@ -28,6 +29,7 @@ import {
 	settingArgs,
 } from "../src/handoff.ts";
 import { agentNameFor, cycleAgentName } from "../src/naming.ts";
+import { closeCycleEndDraftPullRequest } from "../src/pull-request.ts";
 import type {
 	CommandOptions,
 	CommandResult,
@@ -3038,6 +3040,9 @@ describe("handOffTicket: the workflow handoff and the restart", () => {
 		const runner = new FakeRunner();
 		conventionCheckout(runner);
 		runner.set("herdr", ["workspace", "list"], { stdout: workspaceListJson([]) });
+		runner.set("git", ["-C", CHECKOUT, "branch", "--list", PR_BRANCH], {
+			stdout: `  ${PR_BRANCH}\n`,
+		});
 		runner.set(
 			"herdr",
 			[
@@ -3070,11 +3075,17 @@ describe("handOffTicket: the workflow handoff and the restart", () => {
 		);
 
 		expect(outcome.status).toBe("ok");
-		// Reopen does not recheck the branch or read HEAD: the branch is the
-		// branch, and herdr's open owns it.
+		// The reopen checks the branch before it can build one: its create names no
+		// base, so a branch the checkout does not carry would stand at herdr's own
+		// HEAD and meet the standing remote copy's refusal (issue #296 review). The
+		// checkout carries the branch here, so origin is never asked, and the reopen
+		// reads no HEAD and builds nothing from the Worktree base: herdr's open owns
+		// the branch that stands.
 		const commands = runner.commands();
-		expectNoCommand(commands, "branch --list");
+		expect(commands).toContain(`git -C ${CHECKOUT} branch --list ${PR_BRANCH}`);
+		expectNoCommand(commands, "ls-remote");
 		expectNoCommand(commands, "rev-parse HEAD");
+		expectNoCommand(commands, "worktree create");
 		expect(commands).toContain(
 			`herdr worktree open --cwd ${CHECKOUT} --branch factory/7-retry-policy-for-webhooks --no-focus`,
 		);
@@ -4367,6 +4378,10 @@ const PR_CONFIG: FactoryConfig = {
 
 const PR_BRANCH = "factory/7-retry-policy-for-webhooks";
 const PR_URL = "https://github.com/acme/billing/pull/42";
+/** The subject a branch tip carries when the plane has never held it. */
+const BRANCH_TIP_SUBJECT = "the work the last cycle left";
+/** The sha the world's hold commit answers, and the branch moves to. */
+const HOLD_SHA = "sha1111";
 const PR_READ_ARGS = [
 	"api",
 	"--hostname",
@@ -4390,12 +4405,14 @@ const PR_CREATE_COMMAND = [
 ].join(" ");
 
 /**
- * Stub the hold commit the open steps a fresh branch onto: the refs read,
- * the empty commit built on them, and the branch moved to it.
+ * Stub the hold commit the open steps a fresh branch onto: the tip read (its
+ * commit, its tree, and its written message), the empty commit built on them,
+ * and the branch moved to it. The read's subject is not the plane's hold, so the
+ * hold lands.
  */
-function stubHoldCommit(runner: FakeRunner): void {
-	runner.set("git", ["-C", CHECKOUT, "rev-parse", PR_BRANCH, `${PR_BRANCH}^{tree}`], {
-		stdout: "abc123\ndef456\n",
+function stubHoldCommit(runner: FakeRunner, branch = PR_BRANCH): void {
+	runner.set("git", ["-C", CHECKOUT, "log", "-1", "--format=%H%n%T%n%s", branch], {
+		stdout: `abc123\ndef456\n${BRANCH_TIP_SUBJECT}\n`,
 	});
 	runner.set(
 		"git",
@@ -4407,7 +4424,7 @@ function stubHoldCommit(runner: FakeRunner): void {
 			"-p",
 			"abc123",
 			"-m",
-			"factory: hold the branch for the pull request",
+			PULL_REQUEST_HOLD_COMMIT_MESSAGE,
 		],
 		{ stdout: "sha1111\n" },
 	);
@@ -4513,6 +4530,9 @@ function stubPrWorldCheckout(runner: FakeRunner): void {
 /** The answer a source gives a create that runs before the fresh branch stands. */
 const PR_CREATE_LAG_STDERR = `GraphQL: No commits exist on github.com/acme/billing:${PR_BRANCH}. (HTTP 400)\n`;
 
+/** What a push raises with when its pipe breaks. */
+const PUSH_RAISED_MESSAGE = "spawn git: the pipe broke";
+
 /**
  * The stateful double of the factory branch, its worktree, and its draft
  * (issue #296 review).
@@ -4538,16 +4558,31 @@ class PrWorldRunner extends FakeRunner {
 	private remoteBranch = false;
 	private worktreeStanding = false;
 	private draft: { number: number; url: string } | null = null;
+	/** The plane's hold commit, standing on the local branch's tip. */
+	private localHold = false;
 	/** The creates that answer the fresh branch's lag before one succeeds. */
 	private lagAnswers = 0;
 	/** The creates git refuses because the checkout path holds a leftover. */
 	private blockedCreates = 0;
+	/** The pushes that raise instead of landing. */
+	private raisePushes = 0;
+	private raisePushMessage = PUSH_RAISED_MESSAGE;
 	/** The hold commits the open has run, so a test can see a second one. */
 	holdCommits = 0;
 
 	/** Make the next `times` draft creates answer the fresh branch's lag. */
 	answerCreatesWithLag(times: number): void {
 		this.lagAnswers = times;
+	}
+
+	/**
+	 * Make the next `times` pushes raise instead of landing (issue #296 review):
+	 * the pipe breaks after the plane moved the local branch and before the remote
+	 * carries anything, so the branch stands with its hold in the checkout alone.
+	 */
+	answerPushesWithRaise(times = 1, message = PUSH_RAISED_MESSAGE): void {
+		this.raisePushes = times;
+		this.raisePushMessage = message;
 	}
 
 	/**
@@ -4596,8 +4631,8 @@ class PrWorldRunner extends FakeRunner {
 	/**
 	 * Answer the branch, worktree, and pull request commands from the world, and
 	 * land the ones that change it. A command the world does not speak - the
-	 * Agent start, the prompt, the refs read behind the hold commit - keeps the
-	 * answer the test gave it.
+	 * Agent start, the prompt, the Worktree base reads - keeps the answer the test
+	 * gave it.
 	 */
 	private answerFromWorld(command: string, args: readonly string[]): void {
 		const line = args.join(" ");
@@ -4612,10 +4647,32 @@ class PrWorldRunner extends FakeRunner {
 				this.localBranch = true;
 				this.set(command, args, { stdout: "" });
 			} else if (line === `-C ${CHECKOUT} push origin ${PR_BRANCH}`) {
+				if (this.raisePushes > 0) {
+					this.raisePushes -= 1;
+					// The raise leaves the remote copy out of the world: the branch stands
+					// in the checkout with the plane's hold on its tip, and origin carries
+					// nothing.
+					this.raiseNext(command, args, 1, this.raisePushMessage);
+					return;
+				}
 				this.remoteBranch = true;
 				this.set(command, args, { stdout: "" });
-			} else if (line === `-C ${CHECKOUT} update-ref refs/heads/${PR_BRANCH} sha1111`) {
+			} else if (line === `-C ${CHECKOUT} log -1 --format=%H%n%T%n%s ${PR_BRANCH}`) {
+				// The branch's own tip: its commit, its tree, and its written message.
+				// The world answers its own hold when its own hold stands.
+				this.set(command, args, {
+					stdout: this.localHold
+						? `${HOLD_SHA}\ndef456\n${PULL_REQUEST_HOLD_COMMIT_MESSAGE}\n`
+						: `abc123\ndef456\n${BRANCH_TIP_SUBJECT}\n`,
+				});
+			} else if (
+				line ===
+				`-C ${CHECKOUT} commit-tree def456 -p abc123 -m ${PULL_REQUEST_HOLD_COMMIT_MESSAGE}`
+			) {
+				this.set(command, args, { stdout: `${HOLD_SHA}\n` });
+			} else if (line === `-C ${CHECKOUT} update-ref refs/heads/${PR_BRANCH} ${HOLD_SHA}`) {
 				this.holdCommits += 1;
+				this.localHold = true;
 				this.set(command, args, { stdout: "" });
 			} else if (line === `-C ${CHECKOUT} branch -D ${PR_BRANCH}`) {
 				this.localBranch = false;
@@ -4751,7 +4808,7 @@ describe("handOffTicket: the pull request the plane opens (ADR 0076)", () => {
 			`git -C ${CHECKOUT} fetch origin main`,
 			`herdr worktree create --cwd ${CHECKOUT} --branch ${PR_BRANCH} --base origin/main --no-focus`,
 			`git -C ${CHECKOUT} ls-remote --heads origin ${PR_BRANCH}`,
-			`git -C ${CHECKOUT} rev-parse ${PR_BRANCH} ${PR_BRANCH}^{tree}`,
+			`git -C ${CHECKOUT} log -1 --format=%H%n%T%n%s ${PR_BRANCH}`,
 			`git -C ${CHECKOUT} commit-tree def456 -p abc123 -m factory: hold the branch for the pull request`,
 			`git -C ${CHECKOUT} update-ref refs/heads/${PR_BRANCH} sha1111`,
 			`git -C ${CHECKOUT} push origin ${PR_BRANCH}`,
@@ -4890,7 +4947,6 @@ describe("handOffTicket: the pull request the plane opens (ADR 0076)", () => {
 		// answers to the state the first left, not to answers the test wrote.
 		const runner = new PrWorldRunner();
 		stubPrWorldCheckout(runner);
-		stubHoldCommit(runner);
 		runner.set("herdr", ["agent", "start", AGENT, "--kind", "pi", "--pane", "pane-wt"], {
 			code: 1,
 			stderr: '{"error":{"code":"agent_name_taken","message":"agent name is already used"}}\n',
@@ -4977,7 +5033,6 @@ describe("handOffTicket: the pull request the plane opens (ADR 0076)", () => {
 		// path (issue #296, ADR 0062): the reuse runs on the leftover recovery.
 		const runner = new PrWorldRunner();
 		stubPrWorldCheckout(runner);
-		stubHoldCommit(runner);
 		runner.set("herdr", ["agent", "start", AGENT, "--kind", "pi", "--pane", "pane-wt"], {
 			code: 1,
 			stderr: '{"error":{"code":"agent_name_taken","message":"agent name is already used"}}\n',
@@ -5054,7 +5109,6 @@ describe("handOffTicket: the pull request the plane opens (ADR 0076)", () => {
 		// retry would meet the same refusal until the Handoff limit (ADR 0101).
 		const runner = new PrWorldRunner();
 		stubPrWorldCheckout(runner);
-		stubHoldCommit(runner);
 		runner.standRemoteBranchWithoutLocalCopy();
 
 		const outcome = await handOffTicket(
@@ -5103,13 +5157,186 @@ describe("handOffTicket: the pull request the plane opens (ADR 0076)", () => {
 		});
 	});
 
+	test("a push that raises hands the branch over, and the retry stacks no second hold", async () => {
+		// The raise lands after the plane moved the local branch onto its hold and
+		// before the remote carries anything (issue #296): the answer hands the branch
+		// over, so the local copy stays, and the next start reads no remote branch.
+		// The hold block runs again - and the tip's own message says the hold stands,
+		// so one empty hold commit stays on the branch (ADR 0076).
+		const runner = new PrWorldRunner();
+		stubPrWorldCheckout(runner);
+		runner.answerPushesWithRaise();
+		runner.set("herdr", ["agent", "start", AGENT, "--kind", "pi", "--pane", "pane-wt"], {
+			stdout: "",
+		});
+
+		const first = await handOffTicket(
+			PR_TICKET,
+			{ ...defaultChoice, environment: "worktree" },
+			{
+				claim: "open",
+				config: PR_CONFIG,
+				runner,
+				home: HOME,
+			},
+		);
+
+		expect(first.status).toBe("failed");
+		expect(reasonOf(first)).toContain(PUSH_RAISED_MESSAGE);
+		expect(runner.facts()).toEqual({
+			localBranch: true,
+			remoteBranch: false,
+			worktree: false,
+			draft: false,
+		});
+		expect(runner.holdCommits).toBe(1);
+		const firstEnd = runner.commands().length;
+
+		const second = await handOffTicket(
+			PR_TICKET,
+			{ ...defaultChoice, environment: "worktree" },
+			{
+				claim: "open",
+				config: PR_CONFIG,
+				runner,
+				home: HOME,
+			},
+		);
+
+		expect(second.status).toBe("ok");
+		const retry = runner.commands().slice(firstEnd);
+		// The branch stands in the checkout, so the worktree is asked for by branch.
+		expect(retry).toContain(
+			`herdr worktree open --cwd ${CHECKOUT} --branch ${PR_BRANCH} --no-focus`,
+		);
+		// The open reads the branch's tip - its commit, its tree, and its written
+		// message - and the message is the plane's hold, so nothing is committed.
+		expect(retry).toContain(`git -C ${CHECKOUT} log -1 --format=%H%n%T%n%s ${PR_BRANCH}`);
+		expectNoCommand(retry, "commit-tree");
+		expectNoCommand(retry, `git -C ${CHECKOUT} update-ref refs/heads/${PR_BRANCH} ${HOLD_SHA}`);
+		expect(runner.holdCommits).toBe(1);
+		// The push lands the branch that already carried the hold, and the first
+		// draft opens on it.
+		expect(retry).toContain(`git -C ${CHECKOUT} push origin ${PR_BRANCH}`);
+		expect(retry).toContain(PR_CREATE_COMMAND);
+		expect(runner.facts()).toEqual({
+			localBranch: true,
+			remoteBranch: true,
+			worktree: true,
+			draft: true,
+		});
+	});
+
+	test("a stored worktree that is gone reopens on the standing remote branch", async () => {
+		// The stored path builds a branch too: its create names no base, so herdr
+		// takes its own HEAD. The origin check runs here for the same reason it runs
+		// on the fresh path (issue #296 review) - the standing remote copy a failed
+		// start leaves would refuse the push of a branch built from anything else.
+		const runner = new PrWorldRunner();
+		stubPrWorldCheckout(runner);
+		runner.set("herdr", ["workspace", "list"], { stdout: workspaceListJson([]) });
+		runner.standRemoteBranchWithoutLocalCopy();
+		runner.set("herdr", ["agent", "start", AGENT, "--kind", "pi", "--pane", "pane-wt"], {
+			stdout: "",
+		});
+
+		const outcome = await handOffTicket(
+			PR_TICKET,
+			{ ...defaultChoice, environment: "worktree" },
+			{
+				claim: "continuation",
+				config: PR_CONFIG,
+				runner,
+				home: HOME,
+				previous: { workspaceId: "ws-gone", environment: "worktree", tabId: "tab-prev" },
+			},
+		);
+
+		expect(outcome.status).toBe("ok");
+		const commands = runner.commands();
+		// The checkout carries no copy, so origin is asked, and the standing remote
+		// branch is fetched by name into a local branch.
+		expect(commands).toContain(`git -C ${CHECKOUT} branch --list ${PR_BRANCH}`);
+		expect(commands).toContain(`git -C ${CHECKOUT} ls-remote --heads origin ${PR_BRANCH}`);
+		expect(commands).toContain(
+			`git -C ${CHECKOUT} fetch origin ${PR_BRANCH}:refs/heads/${PR_BRANCH}`,
+		);
+		// The worktree is built on the branch it did not make: no create from the
+		// Worktree base, and no hold commit on a branch the remote already carries.
+		expect(commands).toContain(
+			`herdr worktree create --cwd ${CHECKOUT} --branch ${PR_BRANCH} --no-focus`,
+		);
+		expectNoCommand(
+			commands,
+			`herdr worktree create --cwd ${CHECKOUT} --branch ${PR_BRANCH} --base origin/main --no-focus`,
+		);
+		expectNoCommand(commands, "commit-tree");
+		expect(runner.holdCommits).toBe(0);
+		// One ticket wears one pull request: the standing draft is reused.
+		expect(commands).toContain(`gh ${PR_READ_ARGS.join(" ")}`);
+		expectNoCommand(commands, "pr create");
+		expect(commands).toContain(
+			`herdr agent prompt ${AGENT} Implement #7.\n\nPull request: ${PR_URL}`,
+		);
+		expect(runner.facts()).toEqual({
+			localBranch: true,
+			remoteBranch: true,
+			worktree: true,
+			draft: true,
+		});
+	});
+
+	test("the cycle end closes the draft a failed start left standing", async () => {
+		// A failed start after the push keeps the branch and the draft it carries
+		// (issue #296), and the draft is the ticket's own: the Close of the ticket's
+		// cycle closes it (ADR 0076). One world carries the state from the start to
+		// the cycle end, so the draft the close reads is the draft the start left.
+		const runner = new PrWorldRunner();
+		stubPrWorldCheckout(runner);
+		runner.set("herdr", ["agent", "start", AGENT, "--kind", "pi", "--pane", "pane-wt"], {
+			code: 1,
+			stderr: '{"error":{"code":"agent_name_taken","message":"agent name is already used"}}\n',
+		});
+
+		const first = await handOffTicket(
+			PR_TICKET,
+			{ ...defaultChoice, environment: "worktree" },
+			{
+				claim: "open",
+				config: PR_CONFIG,
+				runner,
+				home: HOME,
+			},
+		);
+
+		expect(first.status).toBe("failed");
+		expect(runner.facts()).toEqual({
+			localBranch: true,
+			remoteBranch: true,
+			worktree: false,
+			draft: true,
+		});
+
+		const closed = await closeCycleEndDraftPullRequest(runner, [PR_SOURCE], PR_TICKET);
+		expect(closed).toBeNull();
+		expect(runner.commands()).toContain(`gh pr close 42 --repo github.com/acme/billing`);
+		// The draft went; the branch stays, and the cycle end never takes it.
+		expect(runner.facts()).toEqual({
+			localBranch: true,
+			remoteBranch: true,
+			worktree: false,
+			draft: false,
+		});
+		expectNoCommand(runner.commands(), `git -C ${CHECKOUT} push origin --delete ${PR_BRANCH}`);
+		expectNoCommand(runner.commands(), `git -C ${CHECKOUT} branch -D ${PR_BRANCH}`);
+	});
+
 	test("a create that never clears the fresh branch's lag leaves the branch with no draft, and the next start opens the first one on it", async () => {
 		// The push lands before the create, so the exhausted create is a failure
 		// after the handover (issue #296, ADR 0076): the branch stands on both
 		// sides with no draft on it, and the retry does not build the branch again.
 		const runner = new PrWorldRunner();
 		stubPrWorldCheckout(runner);
-		stubHoldCommit(runner);
 		// Every create answers the lag, so the create's retry window runs out.
 		// The window is the production one, so the test pays its real 5 seconds;
 		// its own timeout keeps that from reading as a hang.

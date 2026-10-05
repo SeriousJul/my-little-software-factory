@@ -74,7 +74,10 @@ pull request on it, and your next handoff opens the first draft on it.
 The branch on the remote is the standing branch. When the checkout no longer
 carries it - you pruned local branches, or a fresh clone carries none - the next
 handoff asks origin, fetches the branch it finds there, and reuses it, instead of
-building a fresh branch whose push the remote would refuse every time. And
+building a fresh branch whose push the remote would refuse every time. The ask
+runs before either way of building a branch: the fresh build from the worktree
+base, and the reopen of a stored worktree whose checkout is gone, which names no
+base and would take whatever HEAD the source checkout stands on. And
 because every failed start removes its checkout and keeps its branch, the retry
 is the start that can meet the directory the removed checkout left behind with a
 build cache in it: the plane moves that leftover aside under a `.leftover` name

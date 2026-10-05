@@ -127,7 +127,7 @@ const AGENT_PANE_BUSY_RETRY_DELAY_MS = 100;
 const AGENT_PANE_BUSY_RETRY_WINDOW_MS = 2_000;
 
 /** The message the plane's hold commit carries on a fresh factory branch. */
-const PULL_REQUEST_HOLD_COMMIT_MESSAGE = "factory: hold the branch for the pull request";
+export const PULL_REQUEST_HOLD_COMMIT_MESSAGE = "factory: hold the branch for the pull request";
 
 /** One handoff's choices: the resolved task profile plus whatever an override changed. */
 export interface HandoffChoice {
@@ -1494,14 +1494,12 @@ async function localHeadBase(
  * The worktree Environment: the branch the naming rule gives the work, then the
  * herdr worktree that holds it.
  *
- * A stored workspace of this kind is reopened on its branch without re-reading
- * the branch or HEAD: the branch is the branch, and herdr's `worktree open` owns
- * it. Otherwise the branch is checked in the checkout first. An existing branch
- * follows the request's branch policy - reused, or refused - and the reuse takes
- * no fetch. A branch the checkout does not carry is then checked on origin, and a
- * remote copy standing there is fetched and reused (see `remoteBranchStands`).
- * Only a branch neither copy carries is created from the worktree base (see
- * freshWorktreeBase).
+ * The branch is checked once, on both paths, before either one builds it: the
+ * checkout's own copy, then origin for a copy the checkout does not carry (see
+ * `standingBranchCopy`). An existing branch follows the request's branch policy -
+ * reused, or refused. A branch neither copy carries is created from the worktree
+ * base on the fresh path (see `freshWorktreeBase`), and on the stored path the
+ * worktree is reopened on the branch the naming rule gives the ticket.
  */
 async function buildWorktreeEnvironment(
 	request: HandoffStartRequest,
@@ -1519,41 +1517,19 @@ async function buildWorktreeEnvironment(
 			// workspace's own cwd.
 			return openFreshTab(listed.held, null, ctx, residue);
 		}
-		// The worktree is gone: reopen it on the branch the naming rule gives the ticket.
+		// The worktree is gone: reopen it on the branch the naming rule gives the
+		// ticket. The check runs here too: the reopen's create names no base, so
+		// herdr builds a branch the checkout does not carry at its own HEAD, and
+		// that branch meets the standing remote copy's refusal (issue #296 review).
+		const copy = await standingBranchCopy(request, ctx);
+		if ("outcome" in copy) return { outcome: copy.outcome };
 		return reuseBranch(ctx, branch, residue);
 	}
-	const known = await ctx.runner.run("git", ["-C", checkout, "branch", "--list", branch]);
-	if (known.code !== 0)
-		return {
-			outcome: failed(`cannot check branch in ${checkout}: ${commandFailureText(known)}`, ctx),
-		};
-	if (known.stdout.trim() !== "") {
-		if (request.branch.policy === "refuse")
-			return { outcome: failed(`Consultation branch already exists: ${branch}`, ctx) };
-		return reuseBranch(ctx, branch, residue);
-	}
-	// No local copy, but the remote copy may stand: a failed start leaves the
-	// branch on the remote under its draft (issue #296), an operator prunes local
-	// branches, and a fresh clone carries none. A branch built from the Worktree
-	// base would then push against the remote copy's hold commit, every retry
-	// would meet the same refusal, and the Handoff limit would spend on it. The
-	// remote copy is the standing branch: the start fetches its local copy and
-	// takes the reuse path, so the branch is never built twice.
-	if (request.branch.policy === "reuse" && (await remoteBranchStands(checkout, branch, ctx))) {
-		const fetched = await ctx.runner.run(
-			"git",
-			["-C", checkout, "fetch", "origin", `${branch}:refs/heads/${branch}`],
-			{ env: { GIT_TERMINAL_PROMPT: "0" } },
-		);
-		if (fetched.code !== 0)
-			return {
-				outcome: failed(
-					`the standing remote branch ${branch} could not be fetched: ${commandFailureText(fetched)}`,
-					ctx,
-				),
-			};
-		return reuseBranch(ctx, branch, residue);
-	}
+	const copy = await standingBranchCopy(request, ctx);
+	if ("outcome" in copy) return { outcome: copy.outcome };
+	if (copy.copy === "local" && request.branch.policy === "refuse")
+		return { outcome: failed(`Consultation branch already exists: ${branch}`, ctx) };
+	if (copy.copy !== "none") return reuseBranch(ctx, branch, residue);
 	const base = await freshWorktreeBase(checkout, ctx.runner);
 	if ("fail" in base) return { outcome: failed(base.fail, ctx) };
 	if (base.note !== undefined) ctx.notes = { ...ctx.notes, worktreeBase: base.note };
@@ -1569,6 +1545,52 @@ async function buildWorktreeEnvironment(
 		"--no-focus",
 	]);
 	return createdWorktreeAnswer(created, ctx, branch, true, residue);
+}
+
+/**
+ * Where the branch stands before the worktree Environment is built: the
+ * checkout's own copy, the remote copy fetched into a local branch, or neither.
+ *
+ * The check runs on both branch builders, because both build a branch the remote
+ * may already carry: the fresh create names the Worktree base, and the reopen of
+ * a stored worktree names no base at all, so herdr takes its own HEAD (herdr
+ * v0.9.1, src/app/api/worktrees/deferred.rs `start_api_worktree_create`). A
+ * failed start leaves the branch on the remote under its draft (issue #296), an
+ * operator prunes local branches, and a fresh clone carries none. Either branch
+ * built from a base of its own would then push against the remote copy's hold
+ * commit, every retry would answer the same refusal, and the Handoff limit would
+ * spend on it. The remote copy is the standing branch: the start fetches its
+ * local copy and takes the reuse path, so the branch is never built twice.
+ */
+async function standingBranchCopy(
+	request: HandoffStartRequest,
+	ctx: HandoffContext,
+): Promise<{ copy: "local" | "remote" | "none" } | { outcome: HandoffOutcome }> {
+	const branch = request.branch.name;
+	const checkout = ctx.checkout;
+	const known = await ctx.runner.run("git", ["-C", checkout, "branch", "--list", branch]);
+	if (known.code !== 0)
+		return {
+			outcome: failed(`cannot check branch in ${checkout}: ${commandFailureText(known)}`, ctx),
+		};
+	if (known.stdout.trim() !== "") return { copy: "local" };
+	// A Consultation branch is never reused, so origin is not asked for one: the
+	// refusal below answers the copy the checkout carries.
+	if (request.branch.policy === "refuse") return { copy: "none" };
+	if (!(await remoteBranchStands(checkout, branch, ctx))) return { copy: "none" };
+	const fetched = await ctx.runner.run(
+		"git",
+		["-C", checkout, "fetch", "origin", `${branch}:refs/heads/${branch}`],
+		{ env: { GIT_TERMINAL_PROMPT: "0" } },
+	);
+	if (fetched.code !== 0)
+		return {
+			outcome: failed(
+				`the standing remote branch ${branch} could not be fetched: ${commandFailureText(fetched)}`,
+				ctx,
+			),
+		};
+	return { copy: "remote" };
 }
 
 /**
@@ -1948,7 +1970,7 @@ async function startInOpenedWorktree(
  * copy it created.
  */
 type PullRequestOpenAnswer =
-	| { url: string; number: number; branchHandedOver: true }
+	| { url: string; branchHandedOver: true }
 	| { fail: string; branchHandedOver: boolean };
 
 /**
@@ -1959,10 +1981,12 @@ type PullRequestOpenAnswer =
  *
  * A branch the remote did not carry first receives the plane's empty hold
  * commit, because the source opens no pull request on a head that carries no
- * commit ahead of its base. The hold stays on the branch: pushing the branch
- * back to its base after the open closes the pull request, and the agent's
- * commits stack on the hold. The fire's work test - the head's tree against
- * the base's, not the commit count - sees through it.
+ * commit ahead of its base. One hold commit per branch: the open reads the tip's
+ * own message and refuses a second hold on a branch that already carries it. The
+ * hold stays on the branch: pushing the branch back to its base after the open
+ * closes the pull request, and the agent's commits stack on the hold. The fire's
+ * work test - the head's tree against the base's, not the commit count - sees
+ * through it.
  *
  * The open holds nothing back for a later failure (issue #296): it closes no
  * draft and deletes no branch. Its answer carries the handover, and the start
@@ -2004,85 +2028,12 @@ async function runPullRequestOpen(
 		};
 	const existedBefore = listed.stdout.trim() !== "";
 	// A branch the remote did not carry stands at its base: the create would
-	// answer "No commits between", and no retry of the create clears it. The
-	// hold commit gives the open a commit to stand on, before the push. The
-	// commit moves the factory branch by its name - the refs read, the empty
-	// commit built on it, the branch moved to it - and never the checkout's
-	// current branch, which the open runs from and owns no part of.
+	// answer "No commits between", and no retry of the create clears it. The hold
+	// commit gives the open a commit to stand on, before the push (see
+	// `holdFreshBranch`).
 	if (!existedBefore) {
-		let refs: CommandResult;
-		try {
-			refs = await ctx.runner.run("git", [
-				"-C",
-				ctx.checkout,
-				"rev-parse",
-				plan.branch,
-				`${plan.branch}^{tree}`,
-			]);
-		} catch (error) {
-			return {
-				fail: `the pull request open could not read the factory branch: ${errorMessage(error)}`,
-				branchHandedOver: false,
-			};
-		}
-		const refLines = refs.stdout
-			.split(/\r?\n/)
-			.map((line) => line.trim())
-			.filter((line) => line !== "");
-		if (refs.code !== 0 || refLines.length !== 2)
-			return {
-				fail: `the pull request open could not read the factory branch: ${commandFailureText(refs)}`,
-				branchHandedOver: false,
-			};
-		const [tip, tree] = refLines as [string, string];
-		let held: CommandResult;
-		try {
-			held = await ctx.runner.run("git", [
-				"-C",
-				ctx.checkout,
-				"commit-tree",
-				tree,
-				"-p",
-				tip,
-				"-m",
-				PULL_REQUEST_HOLD_COMMIT_MESSAGE,
-			]);
-		} catch (error) {
-			return {
-				fail: `the pull request open could not commit the hold: ${errorMessage(error)}`,
-				branchHandedOver: false,
-			};
-		}
-		const holdSha = held.stdout.trim();
-		if (held.code !== 0 || holdSha === "")
-			return {
-				fail: `the pull request open could not commit the hold: ${commandFailureText(held)}`,
-				branchHandedOver: false,
-			};
-		let moved: CommandResult;
-		try {
-			moved = await ctx.runner.run("git", [
-				"-C",
-				ctx.checkout,
-				"update-ref",
-				`refs/heads/${plan.branch}`,
-				holdSha,
-			]);
-		} catch (error) {
-			return {
-				fail: `the pull request open could not move the factory branch to the hold: ${errorMessage(
-					error,
-				)}`,
-				branchHandedOver: false,
-			};
-		}
-		if (moved.code !== 0)
-			return {
-				fail: `the pull request open could not move the factory branch to the hold: ${commandFailureText(
-					moved,
-				)}`,
-				branchHandedOver: false,
-			};
+		const held = await holdFreshBranch(ctx, plan.branch);
+		if (held !== null) return { fail: held, branchHandedOver: false };
 	}
 	let pushed: CommandResult;
 	try {
@@ -2139,8 +2090,7 @@ async function runPullRequestOpen(
 			branchHandedOver: handedOver,
 		};
 	const standing = records[0];
-	if (standing !== undefined)
-		return { url: standing.url, number: standing.number, branchHandedOver: handedOver };
+	if (standing !== undefined) return { url: standing.url, branchHandedOver: handedOver };
 	let opened: { number: number; url: string } | { fail: string };
 	try {
 		opened = await openDraftPullRequest(
@@ -2162,7 +2112,84 @@ async function runPullRequestOpen(
 			fail: `the pull request open could not open the draft pull request: ${opened.fail}`,
 			branchHandedOver: handedOver,
 		};
-	return { url: opened.url, number: opened.number, branchHandedOver: handedOver };
+	return { url: opened.url, branchHandedOver: handedOver };
+}
+
+/**
+ * The plane's hold commit, before the push, on a branch the remote does not carry.
+ *
+ * The source opens no pull request on a head that carries no commit ahead of its
+ * base, so the fresh branch stands at its base and no retry of the create clears
+ * it: the plane moves the branch onto one empty commit of its own, and the push
+ * carries it. The commit moves the factory branch by its name - the tip read, the
+ * empty commit built on it, the branch moved to it - and never the checkout's
+ * current branch, which the open runs from and owns no part of.
+ *
+ * One hold commit per branch (ADR 0076). A push that raises hands the branch over
+ * with its hold on the local copy while the remote carries nothing, so the next
+ * start reads no remote branch and would stack a second hold on the first: the
+ * tip's own message says the hold already stands, and the open commits nothing of
+ * its own. The answer is the failure's reason, or null when the branch stands as
+ * the open needs it to.
+ */
+async function holdFreshBranch(ctx: HandoffContext, branch: string): Promise<string | null> {
+	let refs: CommandResult;
+	try {
+		refs = await ctx.runner.run("git", [
+			"-C",
+			ctx.checkout,
+			"log",
+			"-1",
+			"--format=%H%n%T%n%s",
+			branch,
+		]);
+	} catch (error) {
+		return `the pull request open could not read the factory branch: ${errorMessage(error)}`;
+	}
+	const refLines = refs.stdout.split(/\r?\n/);
+	const tip = (refLines[0] ?? "").trim();
+	const tree = (refLines[1] ?? "").trim();
+	const subject = (refLines[2] ?? "").trim();
+	if (refs.code !== 0 || tip === "" || tree === "")
+		return `the pull request open could not read the factory branch: ${commandFailureText(refs)}`;
+	if (subject === PULL_REQUEST_HOLD_COMMIT_MESSAGE) return null;
+	let held: CommandResult;
+	try {
+		held = await ctx.runner.run("git", [
+			"-C",
+			ctx.checkout,
+			"commit-tree",
+			tree,
+			"-p",
+			tip,
+			"-m",
+			PULL_REQUEST_HOLD_COMMIT_MESSAGE,
+		]);
+	} catch (error) {
+		return `the pull request open could not commit the hold: ${errorMessage(error)}`;
+	}
+	const holdSha = held.stdout.trim();
+	if (held.code !== 0 || holdSha === "")
+		return `the pull request open could not commit the hold: ${commandFailureText(held)}`;
+	let moved: CommandResult;
+	try {
+		moved = await ctx.runner.run("git", [
+			"-C",
+			ctx.checkout,
+			"update-ref",
+			`refs/heads/${branch}`,
+			holdSha,
+		]);
+	} catch (error) {
+		return `the pull request open could not move the factory branch to the hold: ${errorMessage(
+			error,
+		)}`;
+	}
+	if (moved.code !== 0)
+		return `the pull request open could not move the factory branch to the hold: ${commandFailureText(
+			moved,
+		)}`;
+	return null;
 }
 
 /**

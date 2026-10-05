@@ -204,7 +204,12 @@ start path and the last one that answered through several entry points.
   cleanups and leaves the created Workspace, worktree, branch, and pull request
   residue in place. Answering `failed` for every raise was rejected too: after
   the Agent started, the raise is a failed prompt, and a started Agent is never
-  rolled back.
+  rolled back. ADR 0076 as amended by issue #296 narrows what that cleanup owns:
+  once the Pull request open's push lands, the factory branch and the draft it
+  carries are the ticket's standing work and not this start's residue, and the
+  next Handoff reuses them. The raise stays the fault for what it skips - the
+  herdr environment, and the local branch of a push that never landed - and not
+  for a branch and a draft that stand on purpose.
 - **Re-check the pre-flight inside the start when a caller carries none.**
   Rejected: both callers always carry one, so the fallback was unreachable, and
   it let a check computed from facts the request never stated stand in for the

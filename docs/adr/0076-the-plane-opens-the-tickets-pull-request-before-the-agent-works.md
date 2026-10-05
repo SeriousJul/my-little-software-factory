@@ -56,7 +56,12 @@ the branch stands at its base until the agent commits. A branch the remote
 did not carry therefore first receives one empty hold commit from the plane,
 and the push carries it. The commit moves the factory branch by its name,
 never the checkout's current branch: the open step runs from the source
-checkout, and that checkout's current branch is the operator's. The hold stays on the branch: pushing the branch
+checkout, and that checkout's current branch is the operator's. One hold
+commit per branch: the open reads the branch tip's own message, and a tip that
+carries the plane's hold gets no second one. The case that needs the rule is
+the push that raises - the handover below keeps the local branch with its hold
+while the remote carries nothing, so the next start reads no remote branch and
+would stack a hold on the hold. The hold stays on the branch: pushing the branch
 back to its base after the open closes the pull request the source opened,
 and the agent's commits stack on the hold. A squash merge, the merge
 method's default, leaves the hold out of main.
@@ -124,7 +129,10 @@ the checkout does not carry is therefore checked on origin before it is built.
 When origin carries it, the start fetches that copy into a local branch and
 takes the reuse path: the branch is never built twice, and the push never meets
 the non-fast-forward refusal every retry would answer the same way until the
-Handoff limit of ADR 0101 spends. A remote read that does not answer - no
+Handoff limit of ADR 0101 spends. The check runs before either builder of a
+branch runs, because both build one: the fresh create names the Worktree base,
+and the reopen of a stored worktree whose checkout is gone names no base, so
+herdr takes its own HEAD. A remote read that does not answer - no
 origin, no network - says nothing, and the fresh-branch path stays the path it
 was.
 

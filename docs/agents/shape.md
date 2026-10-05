@@ -184,9 +184,12 @@ description: The module map of the source tree, for agents working in this repos
 		owns no cleanup of its own. A raise after the push is answered inside the
 		open, or inside the prompt step, and carries that handover, so no raise
 		reaches the outer guard with the branch row still standing. The worktree
-		builder asks origin whether the branch stands before it builds one, and
-		fetches the copy it finds: the remote copy stands on its own once a start
-		hands it over.
+		builder asks origin whether the branch stands before either of its creates
+		builds one - the fresh create from the Worktree base, and the reopen of a
+		stored worktree that names no base - and fetches the copy it finds: the remote
+		copy stands on its own once a start hands it over. The open commits its hold
+		commit only on a branch whose tip does not already carry it, so a retry of a
+		raised push never stacks a second hold on the first.
 	`handoffReportLines` is this module's wording of a start's end: the one order
 	the Message line takes for every report of one, the Handoff dispatch's and the
 	Consultation's alike (ADR 0103).
