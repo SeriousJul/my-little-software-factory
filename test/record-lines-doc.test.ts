@@ -15,6 +15,12 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import {
+	checkoutHoldDropLine,
+	checkoutWaitHolderFact,
+	checkoutWaitLine,
+	checkoutWaitMessageLine,
+} from "../src/checkout-hold.ts";
 import { handoffStartFailedLine } from "../src/domain/attempt-record.ts";
 import { failedStartParkLine } from "../src/domain/failed-start-park.ts";
 import { NAME_COLLISION_PREFIX, nameCollisionLine } from "../src/domain/name-collision.ts";
@@ -26,18 +32,13 @@ import {
 	AUTOMATIC_ROW_HOLD_REASONS,
 	automaticHoldLine,
 } from "../src/domain/top-up.ts";
-import {
-	checkoutHoldDropLine,
-	checkoutWaitHolderFact,
-	checkoutWaitLine,
-	checkoutWaitMessageLine,
-} from "../src/handoff-dispatch.ts";
 import { planeActionCheckoutWord } from "../src/plane-action-registry.ts";
 
 const repo = join(import.meta.dir, "..");
 const guide = readFileSync(join(repo, "docs/configuration/index.md"), "utf8");
 const appSource = readFileSync(join(repo, "src/components/app.ts"), "utf8");
 const dispatchSource = readFileSync(join(repo, "src/handoff-dispatch.ts"), "utf8");
+const checkoutHoldSource = readFileSync(join(repo, "src/checkout-hold.ts"), "utf8");
 const attemptRecordSource = readFileSync(join(repo, "src/domain/attempt-record.ts"), "utf8");
 const failedStartParkSource = readFileSync(join(repo, "src/domain/failed-start-park.ts"), "utf8");
 const nameCollisionSource = readFileSync(join(repo, "src/domain/name-collision.ts"), "utf8");
@@ -111,7 +112,7 @@ describe("the record lines the configuration reference states", () => {
 				// other (ADR 0109): the row leaves the queue with the reason. The other
 				// clock of the bound ends the hold and not the row, and its own line is
 				// checked beside the wait lines below (issue #297 review).
-				fact: sourceConstant(dispatchSource, "CHECKOUT_ROW_OVER_BUDGET_FACT"),
+				fact: sourceConstant(checkoutHoldSource, "CHECKOUT_ROW_OVER_BUDGET_FACT"),
 				lines: ['handoff refused: "Add a webhook retry policy"'],
 			},
 		];
@@ -161,7 +162,7 @@ describe("the record lines the configuration reference states", () => {
 			checkoutHoldDropLine(
 				planeActionCheckoutWord("merge-pull-request"),
 				'"Persist the source facts"',
-				sourceConstant(dispatchSource, "CHECKOUT_HOLD_OVER_BUDGET_FACT"),
+				sourceConstant(checkoutHoldSource, "CHECKOUT_HOLD_OVER_BUDGET_FACT"),
 			),
 			"the line of a Shared checkout hold the budget ends",
 		);

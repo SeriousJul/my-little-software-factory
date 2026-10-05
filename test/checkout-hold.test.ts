@@ -23,18 +23,16 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-
-import type { FactoryConfig } from "../src/config.ts";
-import type { FetchedTicket, RepositoryRef } from "../src/domain/ticket.ts";
-import { queueWait } from "../src/domain/ticket-facts.ts";
-import { baseChoice, type HandoffChoice } from "../src/handoff.ts";
 import {
 	CHECKOUT_HOLD_OVER_BUDGET_FACT,
 	CHECKOUT_ROW_OVER_BUDGET_FACT,
 	CHECKOUT_WORK_BUDGET_MS,
-	createHandoffDispatch,
-	type HandoffDispatchReports,
-} from "../src/handoff-dispatch.ts";
+} from "../src/checkout-hold.ts";
+import type { FactoryConfig } from "../src/config.ts";
+import type { FetchedTicket, RepositoryRef } from "../src/domain/ticket.ts";
+import { queueWait } from "../src/domain/ticket-facts.ts";
+import { baseChoice, type HandoffChoice } from "../src/handoff.ts";
+import { createHandoffDispatch, type HandoffDispatchReports } from "../src/handoff-dispatch.ts";
 import { planeActionCheckoutWord } from "../src/plane-action-registry.ts";
 import type { FactoryState } from "../src/state.ts";
 import { openFactoryState } from "../src/state.ts";
@@ -540,6 +538,35 @@ describe("the shared checkout of one Repository (issue #297, ADR 0109)", () => {
 		expect(r.lines.filter((line) => line.message.startsWith("handoff refused:"))).toEqual([]);
 		await r.until(() => r.state.workQueue.items().length === 0);
 		expect(r.commands().some((command) => command.startsWith("herdr worktree create"))).toBe(true);
+		r.release();
+	});
+
+	test("a hung holder states the hold the sweep ends, with no row waiting for it", async () => {
+		const r = rig();
+		await mergeInFlight(r);
+		// Nothing waits for this checkout. The gate drops a stale hold where a start
+		// reaches its Repository, so a Repository nothing wants again would keep its
+		// hold and never say so, and a reader of the file would find a checkout that
+		// is at work forever and no line about it. The pickup pass sweeps the holds
+		// beside the waits, so the record states the hold it ended either way
+		// (issue #297 review).
+		r.advance(CHECKOUT_WORK_BUDGET_MS);
+		await r.dispatch.pickupWorkQueue();
+		expect(r.lines).toContainEqual(
+			warnLine(
+				`checkout hold dropped: the merge of "${PULL.title}" (${CHECKOUT_HOLD_OVER_BUDGET_FACT})`,
+			),
+		);
+		// The sweep states it once: the hold is gone, so the next pass has nothing
+		// left to end, and the next start of that Repository crosses at once.
+		await r.dispatch.pickupWorkQueue();
+		expect(
+			r.lines.filter((line) => line.message.startsWith("checkout hold dropped:")),
+		).toHaveLength(1);
+		await handoffAsked(r, ISSUE);
+		await r.until(() =>
+			r.commands().some((command) => command.startsWith("herdr worktree create")),
+		);
 		r.release();
 	});
 

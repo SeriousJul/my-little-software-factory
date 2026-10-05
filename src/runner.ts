@@ -85,8 +85,15 @@ export function supportsModelList(kind: string): boolean {
 	return modelListQuery(kind) !== undefined;
 }
 
-/** Give a handoff command ten minutes; a handoff clones repositories. */
-const COMMAND_TIMEOUT_MS = 10 * 60 * 1000;
+/**
+ * Give a handoff command ten minutes; a handoff clones repositories.
+ *
+ * This is the plane's one budget for a single command, and the Shared checkout
+ * hold reads it rather than restating it: the hold's bound is "a start that
+ * could not answer one command budget is not answering", so the two numbers are
+ * one number by construction (issue #297 review, ADR 0109).
+ */
+export const COMMAND_TIMEOUT_MS = 10 * 60 * 1000;
 /**
  * Give a Model list query fifteen seconds, not the handoff's budget.
  *
