@@ -479,12 +479,15 @@ own. The witness then states that one remount costs the pane exactly one ask.
 
 Each probe edited one file, ran `bun test test/ticket-scroll-frame.test.ts
 --isolate --timeout=30000`, and was reverted; a `diff` against a copy taken before
-the probe showed the file byte-identical afterwards.
+the probe showed the file byte-identical afterwards. The rows stand on `e4289568`,
+the head that round landed them on; [the section after the gate
+rows](#the-second-rework-round-the-bound-pinned-and-the-gate-on-the-merged-tree)
+re-runs every probe on the rebased tree and names the counts that moved.
 
 | Item the review asked to name | Where it stands |
 | --- | --- |
-| The give-up path: what becomes of `scrollSlot.current` when the one ask's pass still answers no size | Named in the code where it runs, above the second return of `restore()` in `src/components/ticket-detail.ts`. The offset is not applied and the slot is left exactly as the save side wrote it. That is intended: the slot is the save side's fact, and the restore side rewrites it only to say the offset landed. The retained value cannot move the scroll later, because every path to another remount runs the save cleanup first, which writes the offset the pane actually leaves behind - its top, since nothing was applied - and a zero offset never re-arms the restore. No case reaches the path: the pass the pane asks for lays the box out, and a terminal too small for the detail unmounts the pane into the compact frame outright |
-| The `passAsked` bound | A guard no test detects, and Probe E above is the step that shows it. It bounds what a box that keeps answering no size after its own ask would otherwise do: ask again on every pass, forever. Nothing reachable puts the box in that state, so nothing reaches the bound either, and this record states that instead of claiming a pin for it |
+| The give-up path: what becomes of `scrollSlot.current` when the one ask's pass still answers no size | Named in the code where it runs, above the second return of `restore()` in `src/components/ticket-detail.ts`. The offset is not applied and the slot is left exactly as the save side wrote it. That is intended: the slot is the save side's fact, and the restore side rewrites it only to say the offset landed. The retained value cannot move the scroll later, because every path to another remount runs the save cleanup first, which writes the offset the pane actually leaves behind - its top, since nothing was applied - and a zero offset never re-arms the restore. No case reaches the path: the pass the pane asks for lays the box out, and a terminal too small for the detail unmounts the pane into the compact frame outright. [The section after the gate rows](#the-second-rework-round-the-bound-pinned-and-the-gate-on-the-merged-tree) reaches it with a case |
+| The `passAsked` bound | A guard no test detects, and Probe E above is the step that shows it. It bounds what a box that keeps answering no size after its own ask would otherwise do: ask again on every pass, forever. Nothing reachable puts the box in that state, so nothing reaches the bound either, and this record states that instead of claiming a pin for it. [The section after the gate rows](#the-second-rework-round-the-bound-pinned-and-the-gate-on-the-merged-tree) supplies that state at the rig layer and pins the bound |
 
 ### The gate on this branch
 
@@ -526,6 +529,79 @@ The three cheap checks and a second full run were repeated on the record commit
 run docs:build` complete in 1.64 s, and one `bun run test` at 3022 pass / 0 fail in
 42.29 s at load average 8.58 before and 5.93 after, with the `bun test` process
 check again answering 0. The only change after that run is this paragraph.
+
+### The second rework round: the bound pinned, and the gate on the merged tree
+
+The review of `fb373d83` asked for three things. The round on `e4289568` answered
+the ask half and named the other two. This round answers the third with a test
+instead of a record: the `passAsked` bound now has a case that goes red when the
+line goes.
+
+The branch was rebased onto `origin/main` at `3a1257e4` (0 behind, 11 ahead)
+before any check below ran, so the tree checked is the tree that merges. The
+rebase rewrote the commit names the rows above carry (`d1b55a00`, `673bb8d3`,
+`e4289568`, `6dcc5058`): those objects no longer stand on the branch, and those
+rows stand for the content they measured, not for a ref a reviewer can check out.
+
+The bound needs a box that keeps answering no size after its own ask, and no
+reachable app state puts a box there: the pass the pane asks for lays it out. So
+the rig supplies that state. `withholdEveryRenderAsk` in `test/app-harness.ts`
+swallows every render ask, the control plane's own included, so no pass ever runs
+and a scroll box remounted under it never lays out; it counts the asks the plane
+made directly on the renderer and swallows them with the rest. `announceFramePass`
+calls the renderer's own `frame` announcement, which is what a surface registered
+with `once("frame", ...)` meets: the rig announces the pass, nothing lays the tree
+out, and the box answers no size again.
+
+A new case, `test/ticket-scroll-frame.test.ts` - "the Ticket detail asks for one
+pass and stops when its box never lays out" - walks the same scroll and the same
+drop below the minimum size as the two round-trip cases, through the prefix helper
+they now share, takes the terminal back under that hold, announces five passes, and
+reads the witness: the remount costs exactly one ask. Its last assertion is the
+give-up path on screen - the buffer holds no detail pane and no thumb, so the saved
+offset was never applied to anything the operator can see. Five runs of the file at
+the machine's own load came back 14 pass / 0 fail, the case at 518.73 ms to
+523.39 ms. The load rig this record used for the held round-trip case did not hold
+24 busy loops on this machine during this round - each one exited within seconds -
+so the new case is measured at the machine's own load and not under load.
+
+| Probe, re-run on the rebased tree | Result |
+| --- | --- |
+| Probe A, the retired wait put back (`restore();` to `renderer.once("frame", restore);`) | 1 record red at 11025.94 ms, 24 green, in `test/main-view-frame.test.ts`: the withheld round trip, with the dump the remote misses printed |
+| Probe B, the frame hold's own `frame` listener deleted | 1 record red at 1018.66 ms on the hold's swallowed-count line, 24 green |
+| Probe C, the frame hold handing the event to the real `emit` | 1 record red at 1018.81 ms on the hold's leaked-count line, 24 green |
+| Probe D, `renderer.requestRender();` deleted from the restore effect | 2 records red, 12 green: the held round trip at 10228.18 ms, the local 10000 ms `FRAME_DEADLINE_MS`, with its dump blank rows; and the new case at 518.80 ms with the witness at 0 asks where the record expects 1. The unheld round trip stays green - the gap the review of `fb373d83` measured |
+| Probe E, the one-ask bound (`let passAsked = false;`, `if (passAsked) return;`, `passAsked = true;`) deleted | 1 record red at 521.26 ms, 13 green: the new case, with the witness at 6 asks where the record expects 1 - the unbounded restore asks again on every pass the rig announces. The bound is pinned |
+| Probe F, the caller test in `renderAskComesFromThePlane` widened so OpenTUI's own asks count as the plane's | 2 records red, 12 green: the held round trip at 258.36 ms on the hold's own swallowed-count line, and the new case at 522.47 ms on its ask-count line, because the rig's resize ask reads as the pane's own |
+
+Each probe edited one file, ran the file alone with `--isolate --timeout=30000`,
+and was reverted; a `diff` against a copy taken before the probe showed the file
+byte-identical afterwards.
+
+| Item the review asked for | Where it stands on this head |
+| --- | --- |
+| Pin the ask half, or record it as unpinned | Pinned: Probe D above, on the rebased tree, bites the held round trip and the new case |
+| Name the give-up path, and say whether the retained offset is intended | Named in the code, and now reached by a case: the new case is that path, and its buffer states that the offset was never applied. The retained `scrollSlot.current` is intended, for the reason the row above gives |
+| State the `passAsked` bound as a guard no test detects, or pin it | Pinned by the new case. The row above that called it a guard no test detects stands as the measurement that made it one, and this round is what changed it |
+| Call `sampleOutcome()` once in `longDetailOutcome()` | Landed on `e4289568`, unchanged |
+
+| Check | Result |
+| --- | --- |
+| `bun run lint` | clean over 306 files (130 ms) |
+| `bun run typecheck` | clean (`tsc`, no output) |
+| `bun run docs:build` | complete in 1.57 s; the branch touches `docs/`, and this section's anchor resolves |
+| Scoped: `test/main-view-frame.test.ts`, `test/ticket-scroll-frame.test.ts`, `test/ticket-detail.test.ts` | 48 pass / 0 fail in 13.02 s |
+| `bun run test`, once, on the merged tree | 3058 pass / 0 fail in 39.66 s (17,150 `expect()` calls) at load average 7.39 before and 4.33 after. Machine: 32 CPUs, and the `bun test` process check before the run answered 0. No red to name, so the triage table below stands as the previous head left it. An earlier full run on the same tree, before the harness refactor and the probe-header wording landed, read 3058 pass / 0 fail in 39.78 s (17,110 `expect()`) |
+
+The counts the rows above carry moved with the merge, as they must: `origin/main`
+at `3a1257e4` adds files to the lint count (304 to 306) and four records to
+`test/ticket-detail.test.ts` (5 to 9), the new case adds one to the scroll file
+(13 to 14), and the scoped trio goes from 43 to 48. The gate rows above name the
+counts this round measured.
+
+Every check in the table ran on the tree of this round's two commits, with the test
+commit at `23caff2b`. The only change after the full run is this record's own text,
+in the commit that lands on top of it.
 
 ### The full-suite reds this branch produced, and where each is filed
 
