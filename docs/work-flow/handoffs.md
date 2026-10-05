@@ -48,11 +48,11 @@ A start that fails before its agent starts removes what that start created: the
 fresh tab, the workspace it created, the fresh worktree checkout, and the branch
 when it created the branch. The rule is the same in every environment. The pull
 request open's handover, two paragraphs below, is the exception to the last of
-them. What
-pre-dates the attempt stands: a workspace you own, a branch the repository
-already carried, and a pull request the read found. A command the plane cannot
-run at all is answered the way a refusal is, so a start that stops in the middle
-of its own sequence still removes what it made. What the start really closed is
+them. What pre-dates the attempt stands: a workspace you own, a branch the
+repository already carried, and a pull request the read found. A command the
+plane cannot run at all is answered the way a refusal is, so a start that stops
+in the middle of its own sequence still removes what it made. What the start
+really closed is
 confirmed in its record, under the kind the start recorded it under, so a
 Consultation's detail names no resource that is already gone, and its Close does
 not retry a workspace herdr no longer holds.
