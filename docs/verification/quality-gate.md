@@ -521,6 +521,12 @@ red. It is not reproducible on the head above: six runs of the trio and the full
 suite all came back clean. It is recorded here rather than dropped, and it is not
 filed, because nothing names it.
 
+The three cheap checks and a second full run were repeated on the record commit
+`6dcc5058`: `bun run lint` clean over 304 files, `bun run typecheck` clean, `bun
+run docs:build` complete in 1.64 s, and one `bun run test` at 3022 pass / 0 fail in
+42.29 s at load average 8.58 before and 5.93 after, with the `bun test` process
+check again answering 0. The only change after that run is this paragraph.
+
 ### The full-suite reds this branch produced, and where each is filed
 
 The standing triage rule records a file that goes red in the full suite and green
