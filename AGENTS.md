@@ -78,6 +78,24 @@ the reporting rules, and the measured costs, and
 [ADR 0105](docs/adr/0105-the-push-gate-runs-the-three-checks-on-the-merged-tree-and-a-hook-owns-the-two-cheap-ones.md)
 for the decision.
 
+## Remote gates
+
+Never check a remote gate by hand. Do not run `gh run list`, `gh run watch`, or
+`gh pr checks`, and do not open the Actions pages to see whether CI passed. CI
+runs the same checks this file names, on the tree that merges, and a push either
+lands or it does not. A remote run is not feedback the work waits on: reading it
+spends a turn to learn what the push already said.
+
+Two exceptions:
+
+- the user asks for the remote state;
+- the work is a CI flakiness investigation, where the remote's runs are the
+  evidence, and the record names every run read.
+
+A suspected load flake is settled at the unit layer, not on the remote: run the
+file alone, run the base commit in the same worktree, and record both. See
+[the test failure triage](#test-failure-triage).
+
 ## Testing limits
 
 - A frame test states the arithmetic that fixes the terminal width it picks.

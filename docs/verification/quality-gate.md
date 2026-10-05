@@ -1,9 +1,10 @@
 # The quality gate verification
 
 Status: the gate's commands and the pre-push hook were measured on the branch
-that added them, on 2026-10-05. The hook's four ref cases, its refusal on a lint
-failure, and its git-level wiring were each run, and the run found two defects in
-the hook itself, both fixed on this branch before any push. The rules on
+that added them, on 2026-10-05, and the hook was then installed in this checkout
+and exercised by the real push that landed the work. The hook's four ref cases,
+its refusal on a lint failure, and its git-level wiring were each run, and the run
+found two defects in the hook itself, both fixed before any push. The rules on
 [the quality gate page](../development/quality-gate.md) are not machine-checked:
 they hold a document's claim, a probe's reproducibility, and a report's numbers,
 and only a review measures those. Those rows stand incomplete below.
@@ -81,8 +82,8 @@ Both came from driving the hook through real refs instead of reading it.
 
 | Item | State |
 | --- | --- |
-| A real `git push` to `github.com/SeriousJul/my-little-software-factory` with the hook installed | Incomplete. The wiring was measured with `git push --dry-run` against this checkout, not against the remote. No push was made from this verification |
-| The hook installed in the operator's checkout | Incomplete, and deliberate. `core.hooksPath` was set for the wiring run and unset again; the setup line stays a documented step on [the commands page](../development/commands.md) |
+| A real `git push` to `github.com/SeriousJul/my-little-software-factory` with the hook installed | Passed. The push of `main` ran the hook: `pre-push: bun run lint` (302 files, no fixes), `pre-push: bun run typecheck`, `pre-push: lint and typecheck clean, and no branch behind its remote-tracking ref`, and `370563f5..724dc3ec main -> main` landed |
+| The hook installed in the operator's checkout | Passed. `git config core.hooksPath scripts/git-hooks` is set in this checkout, and the push above is the proof it is live. The setup line stays a documented step on [the commands page](../development/commands.md) for every other checkout |
 | The doc-claim rule, the rename sweep, the documented-line rule, the probe rule, the determinism rule, the fake-fidelity rule, the file-the-defect rule, the failure-mode sweep, and the reporting rules | Incomplete by nature. No check measures them; the reviewer's floor on the quality gate page is what enforces them, and the next review round is where they are first measured |
 | The 14 domain types in `UNREAD_TYPE_BASELINE` | Held still, not cleaned. The ratchet refuses a new one and refuses a stale baseline entry; nothing was measured about whether these 14 should be exported, and the check's own header states that a caller can hold such a type without naming it |
 | The CI load flake on the frame tests | Open, and unchanged by this decision. `test/consultation-frame.test.ts` and the other load-sensitive frame files are recorded in [the shared control record](./shared-controls.md) and in the pull request records; the gate does not fix them |

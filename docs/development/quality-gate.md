@@ -174,6 +174,11 @@ A review measures the head it reviews, not the description:
   tree, with the machine state recorded.
 - Every probe the branch claims is re-run, and each result is reported.
 - The score and the specification check name the head they were measured on.
+- No remote read. `gh run list`, `gh run watch`, and `gh pr checks` stay unused:
+  CI runs the same checks on the tree that merges, and a review that waits on the
+  remote is measuring someone else's tree on someone else's schedule. The one
+  exception is a CI flakiness investigation, and there the record names every run
+  it reads.
 
 ## A control change gets a human look
 
