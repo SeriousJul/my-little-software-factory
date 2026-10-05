@@ -46,7 +46,9 @@ type, because that is the first fact the plane read.
 
 A start that fails before its agent starts removes what that start created: the
 fresh tab, the workspace it created, the fresh worktree checkout, and the branch
-when it created the branch. The rule is the same in every environment. What
+when it created the branch. The rule is the same in every environment. The pull
+request open's handover, two paragraphs below, is the exception to the last of
+them. What
 pre-dates the attempt stands: a workspace you own, a branch the repository
 already carried, and a pull request the read found. A command the plane cannot
 run at all is answered the way a refusal is, so a start that stops in the middle
@@ -63,7 +65,20 @@ branch delete, no local branch delete. Your next handoff of that ticket reopens
 the worktree on the branch that stands and reuses the pull request the branch
 already carries, so a ticket wears at most one Fixing pull request across any
 number of failed starts. Before the push the branch never stood on the remote,
-and the start still removes the local branch it created.
+and the start still removes the local branch it created. The create's retry
+window is a failure after the push: a draft create that never clears the fresh
+branch's lag leaves the branch standing on both sides with no pull request on
+it, and your next handoff opens the first draft on it.
+
+The standing draft does not hide the ticket. The covered rule that withholds a
+ticket behind its Fixing pull request reads only the rows your sources fetched,
+and the default pull request source fetches no unlabeled draft: it asks for
+`no:draft`, or for a draft that carries `needs-work`. The draft a failed start
+leaves wears no label, so the ticket keeps its row in the Ticket section, the
+automatic top-up asks it again once the failed start's hold clears, and the next
+start reuses the branch and the draft. A draft you labeled `needs-work` is the
+case that does enter the list, and there the ticket rests behind its pull request
+the way ADR 0042 says.
 
 ## Model discovery
 

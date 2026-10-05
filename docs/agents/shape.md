@@ -177,9 +177,11 @@ description: The module map of the source tree, for agents working in this repos
 		start's own and its builders write into it as they create a handle, and the
 		steps from the environment build through the prompt run inside one guard, so
 		a command that raises cleans up the way a command herdr refused does. The
-		pull request open clears the record's branch row once its push lands, so a
-		failed start keeps the branch and its draft for the next start's reuse
-		(issue #296), and the open owns no cleanup of its own.
+		pull request open answers the handover once its push lands, and the start
+		level clears the record's branch row on the strength of that fact - the
+		open writes into no other step's record - so a failed start keeps the
+		branch and its draft for the next start's reuse (issue #296) and the open
+		owns no cleanup of its own.
 	`handoffReportLines` is this module's wording of a start's end: the one order
 	the Message line takes for every report of one, the Handoff dispatch's and the
 	Consultation's alike (ADR 0103).

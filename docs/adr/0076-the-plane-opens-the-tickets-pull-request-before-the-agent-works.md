@@ -43,9 +43,11 @@ git server, but the source's read may not carry the fresh branch's commits
 yet when the create runs straight after the push. The create then answers
 `No commits exist` on a branch that stands, and the plane retries only that
 answer for a bounded window. A create that never clears the lag fails the
-open with the last answer the source gave, and the failure still leaves nothing
-of its own behind: the branch never reached the remote, and the start removes
-the local branch it created.
+open with the last answer the source gave. The push runs before the create, so
+that failure lands after the handover the amendment below describes: the
+branch stands on the remote and in the checkout with no pull request on it,
+and the ticket's next Handoff reopens the worktree on that branch and opens
+the first draft on it.
 
 **A fresh branch opens with the plane's hold commit.** The source opens no
 pull request on a head that carries no commit ahead of its base: the create
@@ -114,16 +116,32 @@ worktree reopens on a branch that stands, and the open reads the branch's own
 pull requests before it creates - reaches that work for free once the failed
 start stops tearing it down.
 
+**The standing draft does not rest the ticket.** A draft left on the branch
+can hide its ticket only by entering the projection, because the covered rule
+of ADR 0042 reads the projection and nothing else. The default Pull request
+source policy keeps it out: the source asks for
+`is:open is:pr repo:<repository> -label:blocked no:draft`, and for a draft
+only with `label:needs-work`. The draft a failed start leaves wears no label,
+so the covered rule has no row to read: the ticket keeps its place in the
+Ticket section, the top-up asks it again once the failed start's hold clears,
+and the next start runs the reuse path. The corner where a standing draft does
+cover is one the source carries into the projection on its own - a draft the
+operator labeled `needs-work`, or a source whose own `filter` fetches drafts -
+and there ADR 0042's rule stands as written: the ticket rests behind its pull
+request until that pull request closes or loses the label.
+
 **A cycle end closes the draft, and never the published pull request.** A
 Close, an abandon, or a decision close that ends the cycle while the ticket's
 pull request is still a draft closes that pull request: the work was never
 published, the branch keeps its commits, and the ticket's next cycle opens a
 fresh pull request on the same branch. A pull request the machine has
 published is never closed by a cycle end: its work carries the machine's
-position (ADR 0042). The rule exists because a draft left in place would
-cover its ticket - the list withholds a covered ticket and the top-up
-cancels its queued start, while a draft without `needs-work` stands in no
-pull request list at all - and the ticket would be unreachable.
+position (ADR 0042). The rule exists because a draft left in place can reach
+the projection after all - the policy fetches a draft that carries
+`needs-work`, and a covered ticket leaves the ticket list while the top-up
+cancels its queued start - and a draft the operator sees in no pull request
+list is inert there too. The cycle end takes the draft out instead of leaving
+the ticket's reach to a label.
 
 **The pull request opens under the source's authentication.** The same
 egress the label writes use, so the pull request is plane-owned in the same

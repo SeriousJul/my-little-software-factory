@@ -189,6 +189,38 @@ describe("the sources read the world", () => {
 		expect(store.refusals).toEqual([]);
 	});
 
+	test("the draft a failed Handoff start leaves standing never enters the projection, and a labeled draft does", async () => {
+		// Issue #296 leaves the factory branch standing under the draft the open
+		// pushed up. Whether that draft rests its ticket is decided by the source's
+		// fetch policy, because the covered rule of ADR 0042 reads the projection:
+		// the default pull request policy asks for `no:draft`, or for a draft that
+		// carries `needs-work`. The draft a failed start leaves carries no label, so
+		// it never enters, and the ticket keeps its row for the next start.
+		const dir = tempDir();
+		const store = seededStore(dir);
+		const pullSource = async () =>
+			await createTicketSource(
+				source("github-pull-requests"),
+				createStubRunner(new FakeRunner(), store),
+			).fetch();
+
+		// The seed's drafts stand on factory branches, carry a closing reference,
+		// and wear no label: the shape the failed start leaves. None of them enters.
+		expect(await pullSource()).toMatchObject({ status: "success", tickets: [] });
+
+		// The one draft the policy fetches is a `needs-work` draft. Once a label
+		// puts the row in the projection, the covered rule has something to read -
+		// the half test/fixing-pull-request.test.ts holds.
+		store.world.repositories[0].pullRequests[0].labels = ["needs-work"];
+		store.save();
+		const fetched = await pullSource();
+		expect(fetched).toMatchObject({ status: "success" });
+		if (fetched.status !== "success") return;
+		expect(fetched.tickets.map((ticket) => ticket.externalKey)).toEqual(["#1"]);
+		expect(fetched.tickets[0]?.attributes.headBranch).toBe("factory/1-add-a-greeting-command");
+		expect(store.refusals).toEqual([]);
+	});
+
 	test("an undrafted pull request enters the list with its head branch and closing references", async () => {
 		const dir = tempDir();
 		const store = seededStore(dir);
