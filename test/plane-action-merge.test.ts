@@ -27,8 +27,9 @@ import {
 } from "../src/config.ts";
 import type { FetchedTicket, Ticket } from "../src/domain/ticket.ts";
 import { withIssueReferences } from "../src/domain/ticket.ts";
-import { resolveHandoffChoice } from "../src/handoff.ts";
+import { baseChoice, resolveHandoffChoice } from "../src/handoff.ts";
 import { createHandoffDispatch, type HandoffDispatchReports } from "../src/handoff-dispatch.ts";
+import { CONSULTATION_SEAT_STATES } from "../src/parallel.ts";
 import { planeActionSettingOf } from "../src/plane-action-registry.ts";
 import { runMergePullRequest } from "../src/plane-actions.ts";
 import type { CommandOptions, CommandResult } from "../src/runner.ts";
@@ -49,8 +50,16 @@ import {
 	withApp,
 } from "./app-harness.ts";
 import { BASE_CONFIG } from "./base-config.ts";
-import { agentListJson, FakeRunner } from "./fake-runner.ts";
+import {
+	agentListJson,
+	FakeRunner,
+	tabCreateJson,
+	workspaceCreateJson,
+	workspaceListJson,
+	worktreeListJson,
+} from "./fake-runner.ts";
 import { FakeSource } from "./fake-source.ts";
+import { gatedRunner } from "./gated-runner.ts";
 import { infoLine, type RecordedLine, recordLogger, warnLine } from "./record-logger.ts";
 
 const paths: string[] = [];
@@ -819,6 +828,115 @@ describe("the dispatch's ask and pickup", () => {
 			starting: (identity, active) => events.push(`starting ${active ? "on" : "off"}: ${identity}`),
 		};
 	}
+
+	/**
+	 * The dev-run miss: the pickup pass measures the free seats once, at its
+	 * head, and its walk awaits the Plane action's run. Every enqueue, the
+	 * observation cycle, and every settling run start a pass, so two passes walk
+	 * the same queue in one tick. The seat the second pass took across the merge's
+	 * `await` never shows in the first pass's figure, and the two starts cross the
+	 * Parallel limit - the merge, the Consultation, and a fresh handoff all ran on
+	 * a limit of one.
+	 */
+	test("the pickup re-measures the seat at each seats-bound item", async () => {
+		const state = planeState();
+		withIssueSource(state);
+		const runner = new FakeRunner();
+		stubReadSequence(runner, [{ state: "open" }, { merged: true }]);
+		stubMerge(runner, 0);
+		const checkout = home();
+		runner.set("git", ["-C", checkout, "rev-parse", "--git-dir"], { stdout: ".git\n" });
+		runner.set("git", ["-C", checkout, "remote", "get-url", "origin"], {
+			stdout: "https://github.com/acme/factory.git\n",
+		});
+		runner.set("git", ["-C", checkout, "rev-parse", "HEAD"], { stdout: "abcdef\n" });
+		runner.set("herdr", ["workspace", "list"], { stdout: workspaceListJson([]) });
+		runner.set("herdr", ["worktree", "list", "--cwd", checkout], { stdout: worktreeListJson([]) });
+		runner.set("herdr", ["workspace", "create", "--cwd", checkout, "--no-focus"], {
+			stdout: workspaceCreateJson("ws-9"),
+		});
+		runner.set("herdr", ["tab", "create", "--workspace", "ws-9", "--cwd", checkout, "--no-focus"], {
+			stdout: tabCreateJson("pane-agent", "tab-agent"),
+		});
+		// The merge holds inside its `gh pr merge`, so the two walks interleave
+		// across a real external call, the way the dev run's did.
+		const gate = gatedRunner(runner, (command) => command.startsWith("gh pr merge"));
+		const events: string[] = [];
+		const config: FactoryConfig = { ...PLANE_CONFIG, maxParallelAgents: 1 };
+		const dispatch = createHandoffDispatch({
+			state,
+			runner: gate.runner,
+			config: () => config,
+			// The count the app wires: every claim that lands shows up in it, so a
+			// pass sees the seat the other pass took.
+			seatCount: () =>
+				state.handoff.openAttemptTickets().length +
+				state.consultationRecord.consultationsByState(CONSULTATION_SEAT_STATES).length,
+			// The seat move the Consultation operations make: the record moves to
+			// `opening` only while it still waits, so the pass that reaches it
+			// second finds it gone.
+			pickupConsultation: (id) =>
+				Promise.resolve(
+					state.consultationRecord.beginConsultationStart(id)
+						? { kind: "started" as const }
+						: { kind: "moved" as const },
+				),
+			home: checkout,
+			...recorder(events),
+		});
+		// One free seat, and three asks for it: the merge takes no seat, the
+		// Consultation row leads the seats-bound walk, and the issue's fresh start
+		// stands behind it.
+		state.consultationRecord.createConsultation({
+			id: "22222222-1111-4111-8111-111111111111",
+			typeName: "grill",
+			agentType: "pi",
+			environment: "live-worktree",
+			template: "/grill {input}",
+			initialInput: "review auth",
+			renderedOpeningPrompt: "/grill review auth",
+			repository: {
+				identity: repoIdentity,
+				displayName: "acme/factory",
+				cloneUrl: "https://github.com/acme/factory.git",
+				path: checkout,
+			},
+			agentName: "consultation-22222222",
+			initialState: "queued",
+		});
+		const enqueued = state.workQueue.enqueueWork({
+			ticketIdentity: issueIdentity,
+			origin: "open",
+			automatic: true,
+			choice: baseChoice("pi", "live-worktree", "implement"),
+			previousMessage: "",
+		});
+		if (!enqueued.ok) throw new Error(enqueued.reason);
+
+		// The merge ask fires its own immediate pass, and the observation cycle's
+		// pass walks the same queue in the same tick.
+		void dispatch.dispatchPlaneAction({
+			origin: "workflow",
+			automatic: true,
+			ticketIdentity: pullIdentity,
+			taskType: "merge",
+		});
+		void dispatch.pickupWorkQueue();
+		await gate.waitForArrivals(1);
+		gate.release();
+		await new Promise((resolve) => setTimeout(resolve, 40));
+
+		// The merge ran, the Consultation took the one seat, and the row behind it
+		// keeps waiting: the walk stops at the seat reading as it stands, not at
+		// the figure its own head took.
+		expect(
+			state.consultationRecord.consultation("22222222-1111-4111-8111-111111111111")?.state,
+		).toBe("opening");
+		expect(state.ticketWorkCycle.ticketState(issueIdentity)).toBe("open");
+		expect(state.workQueue.items().map((item) => item.kind)).toEqual(["handoff"]);
+		dispatch.stop();
+		state.close();
+	});
 
 	function home(): string {
 		const dir = mkdtempSync(join(tmpdir(), "factory-plane-home-"));

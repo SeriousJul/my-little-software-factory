@@ -1140,6 +1140,15 @@ class HandoffDispatchModule implements HandoffDispatch {
 			// seats-bound walk the same way, the moment its early return was
 			// lifted for the plane action's items.
 			if (claimed >= freeSeats) break;
+			// The head's figure is a snapshot, and this walk awaits: the Plane
+			// action's run, the Consultation's claim. The pass is also not the only
+			// taker of a seat - every enqueue, the observation cycle, and every
+			// settling run starts one - so the seat a second pass took across an
+			// `await` never shows in `freeSeats`, and the two walks together cross
+			// the limit. The cap is a runtime reading, so the walk asks it again at
+			// every seats-bound item and stops at the count the plane stands at now,
+			// the way the force-dispatch measures its cap at its own claim.
+			if (overParallelLimit(limit, this.seatCount())) break;
 			if (item.kind === "consultation") {
 				// The shared order is one across kinds (ADR 0034, issue #90): a
 				// Consultation item takes its place in the same walk, and a pickup
