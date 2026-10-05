@@ -507,7 +507,7 @@ waiting start's channel: `handoff waits:` for a Handoff, and the Plane action's
 own word from the registry - `merge waits:` for the merge of a pull request. The hold it names is
 the Shared checkout hold: one Repository's checkout is worked by one start at a
 time, so a merge Plane action and a worktree Handoff of that Repository never
-reach it at the same time (ADR 0108). The hold is not the Parallel limit, and the
+reach it at the same time (ADR 0109). The hold is not the Parallel limit, and the
 waiting row takes no seat: the Pickup reaches the starts behind it. The wait is
 bounded, on two clocks, and each answers a different question, so each refuses
 with its own fact: `stayed at work past its budget` names one start that stopped

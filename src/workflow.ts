@@ -739,7 +739,7 @@ export function findFixingPullRequest(tickets: readonly Ticket[], ticket: Ticket
 }
 
 /**
- * The pull request a merge works (issue #297, ADR 0108): the position's own pull
+ * The pull request a merge works (issue #297, ADR 0109): the position's own pull
  * request when the position is one, and its fixing pull request when the
  * position is the ticket that pull request fixes. Null when the position has
  * none to aim at.

@@ -1,4 +1,4 @@
-# ADR 0108: A Repository's shared checkout is worked by one start at a time
+# ADR 0109: A Repository's shared checkout is worked by one start at a time
 
 Status: accepted
 Date: 2026-10-05

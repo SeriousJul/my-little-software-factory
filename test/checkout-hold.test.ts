@@ -1,6 +1,6 @@
 /**
  * The shared checkout: one Repository's checkout is worked by one start at a
- * time (issue #297, ADR 0108).
+ * time (issue #297, ADR 0109).
  *
  * A worktree Handoff creates its worktree out of the Repository's shared
  * checkout. The merge Plane action is the other start of the pair the record
@@ -8,7 +8,7 @@
  * no `git` command and no `-C <checkout>` - and the Parallel limit says nothing
  * about the pair, because the Plane action takes no seat (ADR 0068): both
  * starts read the same free seat and both go. The Shared checkout hold is the
- * serialization of that pair, and ADR 0108 states what each start works. These
+ * serialization of that pair, and ADR 0109 states what each start works. These
  * tests stand one merge and one worktree Handoff of one Repository against each
  * other and read which one runs.
  *
@@ -91,7 +91,7 @@ const PULL = {
 };
 
 // The same Repository spelled the short way: the plane holds one checkout per
-// Repository and not one per spelling (issue #297, ADR 0108).
+// Repository and not one per spelling (issue #297, ADR 0109).
 const BARE: RepositoryRef = {
 	identity: "acme/factory",
 	displayName: "acme/factory",
@@ -415,7 +415,7 @@ async function handoffAsked(
 	).toEqual({ ok: true });
 }
 
-describe("the shared checkout of one Repository (issue #297, ADR 0108)", () => {
+describe("the shared checkout of one Repository (issue #297, ADR 0109)", () => {
 	test("a merge in flight holds the checkout, and the worktree Handoff of that Repository waits", async () => {
 		const r = rig();
 		await mergeInFlight(r);
@@ -740,7 +740,7 @@ describe("the shared checkout of one Repository (issue #297, ADR 0108)", () => {
 		if (ticket === undefined) throw new Error("the fixture ticket left the projection");
 		// The badge the row wears is the Queue wait fact the list reads, and the
 		// gate holds the row without touching it: the waiting row is a queue row
-		// like every other (ADR 0108).
+		// like every other (ADR 0109).
 		expect(queueWait(ticket, r.state.workQueue.items())).toBe(true);
 		expect(ticket.state).toBe("open");
 		r.release();
@@ -763,7 +763,7 @@ describe("the shared checkout of one Repository (issue #297, ADR 0108)", () => {
 		// The merge settles and the checkout moves to the first Handoff. The row
 		// that keeps waiting waits behind a different start now: the fact changed,
 		// so it states itself again, beside the first line and not over it
-		// (issue #231, ADR 0108).
+		// (issue #231, ADR 0109).
 		r.release();
 		await r.until(() => linesFor(NEXT.title).length === 2);
 		expect(linesFor(NEXT.title).map((line) => line.message)).toEqual([
@@ -781,7 +781,7 @@ describe("the shared checkout of one Repository (issue #297, ADR 0108)", () => {
 		const r = rig();
 		// The rule's own premise: the worktree create is the next thing a parked
 		// start will do, so a merge must not walk into the checkout ahead of it
-		// (ADR 0108). The herdr seat is one channel-wide seat, so a run inside it
+		// (ADR 0109). The herdr seat is one channel-wide seat, so a run inside it
 		// parks the next claim behind it, and that parked claim holds the checkout
 		// from its claim, not from its create.
 		r.hold(`herdr worktree create --cwd ${r.billingCheckout}`);
@@ -941,7 +941,7 @@ describe("the shared checkout of one Repository (issue #297, ADR 0108)", () => {
 		await mergeInFlight(r);
 		// A live-worktree Handoff works a checkout the operator chose and already
 		// owns, so the merge's hold does not reach it: the row crosses the gate and
-		// its start runs (issue #297, ADR 0108).
+		// its start runs (issue #297, ADR 0109).
 		await handoffAsked(r, ISSUE, baseChoice("pi", "live-worktree", "implement"));
 		await r.dispatch.pickupWorkQueue();
 		await r.settle();

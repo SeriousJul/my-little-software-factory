@@ -249,7 +249,7 @@ description: The module map of the source tree, for agents working in this repos
 	control, not a Consultation rule, so it stands outside `src/consultation/`.
 	`repositoryOperationKey` is the one spelling of one Repository, and the Work
 	queue's Shared checkout hold reads it too, so the plane holds one fact per
-	Repository and not one per spelling (issue #297, ADR 0108).
+	Repository and not one per spelling (issue #297, ADR 0109).
 - `src/consultation-operations.ts`: the Consultation lifecycle. Launch, recovery,
 	response, close, Force-close, Replacement, deletion, the Stale Agent output
 	fact, and the Agent input queue, behind one interface with its dependencies
@@ -264,7 +264,7 @@ description: The module map of the source tree, for agents working in this repos
 	worked by one start at a time, so a merge Plane action and a worktree Handoff
 	of that Repository never reach it at the same time, the start that waits stays
 	in the Work queue, and the hold costs no Parallel limit seat (issue #297,
-	ADR 0108).
+	ADR 0109).
 	It reports through plain callbacks,
 	so a test drives it with the fake runner and an in-memory state, and the
 	App and the observation loop cross the same interface.

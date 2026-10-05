@@ -467,7 +467,7 @@ const MERGE_RUN_STANDS_FACT = "already has a merge running; the first run stands
 
 /**
  * The fact a start states while another start works its Repository's shared
- * checkout (issue #297, ADR 0108).
+ * checkout (issue #297, ADR 0109).
  */
 const CHECKOUT_WORK_STANDS_FACT = "the shared checkout is at work";
 /**
@@ -508,7 +508,7 @@ export function checkoutWaitMessageLine(name: string, fact: string): string {
 
 /**
  * The fact the wait states: the checkout at work, and the start that works it
- * (issue #297, ADR 0108). The line names the holder so the reader sees the pair
+ * (issue #297, ADR 0109). The line names the holder so the reader sees the pair
  * that met without guessing which run stands.
  */
 export function checkoutWaitHolderFact(holderChannel: CheckoutChannel, holderName: string): string {
@@ -517,7 +517,7 @@ export function checkoutWaitHolderFact(holderChannel: CheckoutChannel, holderNam
 
 /**
  * How long a checkout may hold a start before the plane refuses it (issue #297,
- * ADR 0108). The bound runs on two clocks, read against this one budget, and
+ * ADR 0109). The bound runs on two clocks, read against this one budget, and
  * each clock answers its own question and refuses with its own fact:
  *
  * - the hold's own age, from the clock reading its start took the checkout, and
@@ -536,7 +536,7 @@ export function checkoutWaitHolderFact(holderChannel: CheckoutChannel, holderNam
  * The second clock bounds one standing row, not one Ticket: the entry follows
  * its row the way the standing-row refusal's entry does (issue #223), so a row
  * that leaves and a later row for the same Ticket are two facts, and the later
- * row waits on a fresh reading. ADR 0108 records that limit as open.
+ * row waits on a fresh reading. ADR 0109 records that limit as open.
  *
  * The bound is what keeps the wait from being forever, the way every other wait
  * in the queue is bounded (ADR 0049).
@@ -545,14 +545,14 @@ export const CHECKOUT_WORK_BUDGET_MS = 10 * 60 * 1000;
 
 /**
  * The start that works a Repository's shared checkout, and the Ticket whose run
- * holds it (issue #297, ADR 0108).
+ * holds it (issue #297, ADR 0109).
  *
  * A worktree Handoff creates its worktree out of the Repository's shared
  * checkout. The merge Plane action is the other start of the pair the record
  * measured: its run works the Repository through the source, and it reaches
  * the Repository with no Parallel limit seat between it and a worktree create
  * (ADR 0068), so the hold separates the two starts the development run saw
- * meeting. ADR 0108 states what each start works, the measured fact that the
+ * meeting. ADR 0109 states what each start works, the measured fact that the
  * merge's own commands are `gh` commands, and the cost the merge's half of the
  * rule costs the Handoff side.
  *
@@ -591,7 +591,7 @@ type CheckoutGate =
 
 /**
  * The checkout channel of this start, or null when the start works no shared
- * checkout (issue #297, ADR 0108): a worktree Handoff creates its worktree out
+ * checkout (issue #297, ADR 0109): a worktree Handoff creates its worktree out
  * of the Repository's shared checkout, and the Plane action is the start the
  * record shows meeting that create (ADR 0068 takes it outside the seat count,
  * so nothing else separates the two). A live-worktree Handoff works a checkout
@@ -691,7 +691,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 
 	/**
 	 * The Repository checkouts this dispatch works, one holder per Repository
-	 * (issue #297, ADR 0108).
+	 * (issue #297, ADR 0109).
 	 *
 	 * The hold is taken at the claim, before the start's first command, and let
 	 * go when the start settles: for a merge, when its run settles; for a
@@ -1454,7 +1454,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 
 	/**
 	 * The shared checkout gate one start crosses before its claim (issue #297,
-	 * ADR 0108).
+	 * ADR 0109).
 	 *
 	 * A start that finds its Repository's checkout at work leaves its row in the
 	 * Work queue: the wait is the row's, the row wears the `queued` badge it
@@ -1567,7 +1567,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 
 	/**
 	 * The one Ticket projection read a checkout walk takes (issue #297 review,
-	 * ADR 0108): a reader that asks the state at most once and hands the same
+	 * ADR 0109): a reader that asks the state at most once and hands the same
 	 * value to every gate it visits. The read is the caller's, the way
 	 * src/state/ticket-work-cycle.ts sets it, and it is lazy: a walk whose rows
 	 * take no checkout - a Consultation-only queue, a live-worktree row, a row
@@ -1655,7 +1655,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 		// poll still lists) claims no new seat, and the free-seat figure counts it
 		// against the same ceiling the mode cell shows.
 		// One Ticket projection read for the whole pass, handed to every row the
-		// shared checkout gate visits (issue #297 review, ADR 0108).
+		// shared checkout gate visits (issue #297 review, ADR 0109).
 		const checkoutProjection = this.checkoutProjectionReader();
 		let claimed = 0;
 		let started = 0;
@@ -2738,7 +2738,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 		// that waited on it take their turn at once: the Agent works inside its own
 		// worktree, and the shared checkout was only ever the place the worktree
 		// came out of, so the hold ends at the start and not at the turn (issue
-		// #297 review, ADR 0108). This settle path owns its own re-ask the way every
+		// #297 review, ADR 0109). This settle path owns its own re-ask the way every
 		// other checkout release does; the pass below is the seat's, for the rows the
 		// last pass left behind the free-seat slice.
 		this.releaseCheckoutAndReask("handoff", identity);
