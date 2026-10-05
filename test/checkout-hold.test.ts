@@ -415,6 +415,18 @@ async function handoffAsked(
 	).toEqual({ ok: true });
 }
 
+/** Ask the merge of one pull request, and leave its row to the queue. */
+async function mergeAsked(r: Rig, pull: typeof PULL = PULL): Promise<void> {
+	expect(
+		await r.dispatch.dispatchPlaneAction({
+			origin: "open",
+			automatic: false,
+			ticketIdentity: pull.identity,
+			taskType: "merge",
+		}),
+	).toEqual({ ok: true });
+}
+
 describe("the shared checkout of one Repository (issue #297, ADR 0109)", () => {
 	test("a merge in flight holds the checkout, and the worktree Handoff of that Repository waits", async () => {
 		const r = rig();
@@ -432,7 +444,7 @@ describe("the shared checkout of one Repository (issue #297, ADR 0109)", () => {
 		// The record names the wait, and names the start that holds the checkout.
 		expect(r.lines).toContainEqual(
 			infoLine(
-				`handoff waits: "${ISSUE.title}" (the shared checkout is at work: the merge of "${PULL.title}" runs in it)`,
+				`handoff waits: "${ISSUE.title}" (the shared checkout is at work: the merge of "${PULL.title}" holds it)`,
 			),
 		);
 		r.release();
@@ -473,7 +485,7 @@ describe("the shared checkout of one Repository (issue #297, ADR 0109)", () => {
 		expect(r.commands().filter((command) => command.startsWith("gh pr merge"))).toEqual([]);
 		expect(r.lines).toContainEqual(
 			infoLine(
-				`merge waits: "${PULL.title}" (the shared checkout is at work: the handoff of "${ISSUE.title}" runs in it)`,
+				`merge waits: "${PULL.title}" (the shared checkout is at work: the handoff of "${ISSUE.title}" holds it)`,
 			),
 		);
 		r.release();
@@ -507,25 +519,27 @@ describe("the shared checkout of one Repository (issue #297, ADR 0109)", () => {
 		r.release();
 	});
 
-	test("a wait past the checkout work's budget is refused with the reason, and the row leaves", async () => {
+	test("a hold whose start stopped answering is dropped, and the row that waited runs", async () => {
 		const r = rig();
 		await mergeInFlight(r);
 		await handoffAsked(r, ISSUE);
 		expect(r.state.workQueue.items()).toHaveLength(1);
 		// The checkout work should have ended inside its own budget. A hold that
-		// still stands past it is a start that stopped answering, and the plane
-		// refuses the waiter rather than hold it forever (ADR 0049).
+		// still stands past it is a start that stopped answering, and the plane ends
+		// the hold rather than lock the Repository out for the rest of the run: the
+		// row that waited takes its turn, and the record names the holder whose hold
+		// it ended (issue #297 review, ADR 0109).
 		r.advance(CHECKOUT_WORK_BUDGET_MS);
 		await r.dispatch.pickupWorkQueue();
-		expect(r.state.workQueue.items()).toEqual([]);
 		expect(r.lines).toContainEqual(
 			warnLine(
-				`handoff refused: "${ISSUE.title}" (the shared checkout stayed at work past its budget)`,
+				`checkout hold dropped: the merge of "${PULL.title}" (${CHECKOUT_HOLD_OVER_BUDGET_FACT})`,
 			),
 		);
-		expect(r.events).toContain(
-			`warning:queued handoff for "${ISSUE.title}" was not run: the shared checkout stayed at work past its budget`,
-		);
+		// The row is not refused for a run that stopped answering: it runs.
+		expect(r.lines.filter((line) => line.message.startsWith("handoff refused:"))).toEqual([]);
+		await r.until(() => r.state.workQueue.items().length === 0);
+		expect(r.commands().some((command) => command.startsWith("herdr worktree create"))).toBe(true);
 		r.release();
 	});
 
@@ -628,24 +642,40 @@ describe("the shared checkout of one Repository (issue #297, ADR 0109)", () => {
 		expect(r.state.workQueue.hasWorkItem(ISSUE.identity)).toBe(true);
 		expect(r.commands().filter((command) => command.startsWith("herdr worktree"))).toEqual([]);
 		expect(r.events).toContain(
-			`notice:"${ISSUE.title}" waits in the Work queue: the shared checkout is at work: the merge of "${PULL.title}" runs in it`,
+			`notice:"${ISSUE.title}" waits in the Work queue: the shared checkout is at work: the merge of "${PULL.title}" holds it`,
 		);
 		r.release();
 	});
 
 	test("the force-dispatch key past the budget answers the refusal, never a wait", async () => {
-		const r = rig();
-		await mergeInFlight(r);
+		const r = rig({ tickets: [fetched(NEXT, "github-issue")] });
+		r.hold("herdr worktree create");
+		// ISSUE works the factory checkout, and NEXT and the merge row wait behind it.
+		// The merge row is the last of the three, so the checkout changes hands in
+		// front of it and no holder's age ever reaches the budget: the row's own wait
+		// is the clock that ends it.
 		await handoffAsked(r, ISSUE);
-		r.advance(CHECKOUT_WORK_BUDGET_MS);
-		r.dispatch.forceDispatchWorkQueueItem(ISSUE.identity);
+		await r.waitForArrivals(1);
+		await handoffAsked(r, NEXT);
+		await mergeAsked(r);
+		await r.dispatch.pickupWorkQueue();
+		expect(r.state.workQueue.hasWorkItem(PULL.identity)).toBe(true);
+		// Half the budget in, the holder answers and the next start takes the
+		// checkout with a fresh reading. The rest of the budget is the row's own wait.
+		r.advance(CHECKOUT_WORK_BUDGET_MS / 2);
+		r.release();
 		await r.settle();
-		// The gate dropped the row, so the key answers with the refusal that
-		// dropped it. A `waits:` line for a row that left the queue would tell the
-		// operator a working queue and a dropped row in the same act (issue #297).
-		expect(r.state.workQueue.hasWorkItem(ISSUE.identity)).toBe(false);
+		await r.dispatch.pickupWorkQueue();
+		await r.waitForArrivals(2);
+		r.advance(CHECKOUT_WORK_BUDGET_MS / 2);
+		r.dispatch.forceDispatchWorkQueueItem(PULL.identity);
+		await r.settle();
+		// The gate dropped the row, so the key answers with the refusal that dropped
+		// it. A `waits:` line for a row that left the queue would tell the operator a
+		// working queue and a dropped row in the same act (issue #297).
+		expect(r.state.workQueue.hasWorkItem(PULL.identity)).toBe(false);
 		expect(r.events).toContain(
-			`warning:queued handoff for "${ISSUE.title}" was not run: the shared checkout stayed at work past its budget`,
+			`warning:the merge of "${PULL.title}" was not run: ${CHECKOUT_ROW_OVER_BUDGET_FACT}`,
 		);
 		expect(r.events.filter((event) => event.includes("waits in the Work queue"))).toEqual([]);
 		r.release();
@@ -673,7 +703,7 @@ describe("the shared checkout of one Repository (issue #297, ADR 0109)", () => {
 		expect(r.commands().filter((command) => command.startsWith("gh pr merge"))).toEqual([]);
 		expect(r.lines).toContainEqual(
 			infoLine(
-				`merge waits: "${PULL_BARE.title}" (the shared checkout is at work: the handoff of "${ISSUE.title}" runs in it)`,
+				`merge waits: "${PULL_BARE.title}" (the shared checkout is at work: the handoff of "${ISSUE.title}" holds it)`,
 			),
 		);
 		r.release();
@@ -695,11 +725,15 @@ describe("the shared checkout of one Repository (issue #297, ADR 0109)", () => {
 		r.release();
 	});
 
-	test("the merge side of the budget refusal answers the ask with the reason", async () => {
-		const r = rig();
+	test("the merge side of the bounded wait answers the ask with the reason", async () => {
+		const r = rig({ tickets: [fetched(NEXT, "github-issue")] });
 		r.hold("herdr worktree create");
+		// ISSUE works the checkout, NEXT waits ahead of the merge row, and the merge
+		// row waits last: the checkout changes hands in front of it, so it is the
+		// row's own wait that ends it and never a holder's age.
 		await handoffAsked(r, ISSUE);
 		await r.waitForArrivals(r.arrivals() + 1);
+		await handoffAsked(r, NEXT);
 		const answers: string[] = [];
 		expect(
 			await r.dispatch.dispatchPlaneAction({
@@ -712,21 +746,26 @@ describe("the shared checkout of one Repository (issue #297, ADR 0109)", () => {
 		).toEqual({ ok: true });
 		await r.dispatch.pickupWorkQueue();
 		expect(r.state.workQueue.hasWorkItem(PULL.identity)).toBe(true);
-		r.advance(CHECKOUT_WORK_BUDGET_MS);
+		// Half the budget in, the holder answers and the next start takes the
+		// checkout with a fresh reading. The rest of the budget is the row's own wait.
+		r.advance(CHECKOUT_WORK_BUDGET_MS / 2);
+		r.release();
+		await r.settle();
+		await r.dispatch.pickupWorkQueue();
+		await r.waitForArrivals(2);
+		r.advance(CHECKOUT_WORK_BUDGET_MS / 2);
 		await r.dispatch.pickupWorkQueue();
 		// The merge row ends on the same shape the handoff's row does: the row
 		// leaves, the record names the refusal, the Message line warns, and the
 		// ask answers with the reason (ADR 0049).
 		expect(r.state.workQueue.hasWorkItem(PULL.identity)).toBe(false);
 		expect(r.lines).toContainEqual(
-			warnLine(
-				`merge refused: "${PULL.title}" (the shared checkout stayed at work past its budget)`,
-			),
+			warnLine(`merge refused: "${PULL.title}" (${CHECKOUT_ROW_OVER_BUDGET_FACT})`),
 		);
 		expect(r.events).toContain(
-			`warning:the merge of "${PULL.title}" was not run: the shared checkout stayed at work past its budget`,
+			`warning:the merge of "${PULL.title}" was not run: ${CHECKOUT_ROW_OVER_BUDGET_FACT}`,
 		);
-		expect(answers).toEqual(["the shared checkout stayed at work past its budget"]);
+		expect(answers).toEqual([CHECKOUT_ROW_OVER_BUDGET_FACT]);
 		r.release();
 	});
 
@@ -758,7 +797,7 @@ describe("the shared checkout of one Repository (issue #297, ADR 0109)", () => {
 		const linesFor = (title: string) =>
 			r.lines.filter((line) => line.message.startsWith(`handoff waits: "${title}"`));
 		expect(linesFor(NEXT.title).map((line) => line.message)).toEqual([
-			`handoff waits: "${NEXT.title}" (the shared checkout is at work: the merge of "${PULL.title}" runs in it)`,
+			`handoff waits: "${NEXT.title}" (the shared checkout is at work: the merge of "${PULL.title}" holds it)`,
 		]);
 		// The merge settles and the checkout moves to the first Handoff. The row
 		// that keeps waiting waits behind a different start now: the fact changed,
@@ -767,8 +806,8 @@ describe("the shared checkout of one Repository (issue #297, ADR 0109)", () => {
 		r.release();
 		await r.until(() => linesFor(NEXT.title).length === 2);
 		expect(linesFor(NEXT.title).map((line) => line.message)).toEqual([
-			`handoff waits: "${NEXT.title}" (the shared checkout is at work: the merge of "${PULL.title}" runs in it)`,
-			`handoff waits: "${NEXT.title}" (the shared checkout is at work: the handoff of "${ISSUE.title}" runs in it)`,
+			`handoff waits: "${NEXT.title}" (the shared checkout is at work: the merge of "${PULL.title}" holds it)`,
+			`handoff waits: "${NEXT.title}" (the shared checkout is at work: the handoff of "${ISSUE.title}" holds it)`,
 		]);
 		// The row that took the checkout states its own wait once, and the row
 		// that keeps waiting keeps its place (issue #297).
@@ -820,7 +859,7 @@ describe("the shared checkout of one Repository (issue #297, ADR 0109)", () => {
 		expect(r.commands().filter((command) => command.startsWith("gh pr merge"))).toEqual([]);
 		expect(r.lines).toContainEqual(
 			infoLine(
-				`merge waits: "${PULL.title}" (the shared checkout is at work: the handoff of "${ISSUE.title}" runs in it)`,
+				`merge waits: "${PULL.title}" (the shared checkout is at work: the handoff of "${ISSUE.title}" holds it)`,
 			),
 		);
 		// herdr answers the run that held the seat: the parked claim drains, its
@@ -839,10 +878,10 @@ describe("the shared checkout of one Repository (issue #297, ADR 0109)", () => {
 		r.release();
 	});
 
-	test("the two clocks of the bound refuse with two facts", async () => {
+	test("the two clocks of the bound end the hold and the row, each in its own words", async () => {
 		// The hold's own age answers one start that stopped answering (issue #297
-		// review): the holder is a worktree create the gate holds, and the row that
-		// waits is refused on the holder's age.
+		// review): the holder is a worktree create the gate holds, and the age ends
+		// the hold - the row that waited runs, and the record names the holder it left.
 		const hung = rig({ tickets: [fetched(NEXT, "github-issue")] });
 		hung.hold("herdr worktree create");
 		await handoffAsked(hung, ISSUE);
@@ -852,11 +891,17 @@ describe("the shared checkout of one Repository (issue #297, ADR 0109)", () => {
 		hung.advance(CHECKOUT_WORK_BUDGET_MS);
 		await hung.dispatch.pickupWorkQueue();
 		expect(hung.lines).toContainEqual(
-			warnLine(`handoff refused: "${NEXT.title}" (${CHECKOUT_HOLD_OVER_BUDGET_FACT})`),
+			warnLine(
+				`checkout hold dropped: the handoff of "${ISSUE.title}" (${CHECKOUT_HOLD_OVER_BUDGET_FACT})`,
+			),
 		);
 		expect(
 			hung.lines.filter((line) => line.message.includes(CHECKOUT_ROW_OVER_BUDGET_FACT)),
 		).toEqual([]);
+		// The row that waited is not refused for a run that stopped answering: its
+		// claim is taken, and the Repository keeps working beside the run that hung.
+		expect(hung.lines.filter((line) => line.message.startsWith("handoff refused:"))).toEqual([]);
+		expect(hung.state.handoff.handoffInFlight(NEXT.identity)).toBe(true);
 		hung.release();
 		// The row's own wait answers a Repository that is simply busy: the checkout
 		// changes hands well inside the budget, so no holder's age reaches it, and
@@ -902,36 +947,37 @@ describe("the shared checkout of one Repository (issue #297, ADR 0109)", () => {
 		await handoffAsked(r, ISSUE);
 		expect(r.lines).toContainEqual(
 			infoLine(
-				`handoff waits: "${ISSUE.title}" (the shared checkout is at work: the ${word} of "${PULL.title}" runs in it)`,
+				`handoff waits: "${ISSUE.title}" (the shared checkout is at work: the ${word} of "${PULL.title}" holds it)`,
 			),
 		);
 		r.release();
-		// And the merge's own wait line and refusal wear it the same way.
-		const r2 = rig();
+		// And the merge's own wait line and refusal wear it the same way. The merge row
+		// waits last, behind a checkout that keeps changing hands, so its own wait is
+		// the clock that ends it and the refusal wears the registry's word.
+		const r2 = rig({ tickets: [fetched(NEXT, "github-issue")] });
 		r2.hold("herdr worktree create");
 		await handoffAsked(r2, ISSUE);
 		await r2.waitForArrivals(1);
-		expect(
-			await r2.dispatch.dispatchPlaneAction({
-				origin: "open",
-				automatic: false,
-				ticketIdentity: PULL.identity,
-				taskType: "merge",
-			}),
-		).toEqual({ ok: true });
+		await handoffAsked(r2, NEXT);
+		await mergeAsked(r2);
 		await r2.dispatch.pickupWorkQueue();
 		expect(r2.lines).toContainEqual(
 			infoLine(
-				`${word} waits: "${PULL.title}" (the shared checkout is at work: the handoff of "${ISSUE.title}" runs in it)`,
+				`${word} waits: "${PULL.title}" (the shared checkout is at work: the handoff of "${ISSUE.title}" holds it)`,
 			),
 		);
-		r2.advance(CHECKOUT_WORK_BUDGET_MS);
+		r2.advance(CHECKOUT_WORK_BUDGET_MS / 2);
+		r2.release();
+		await r2.settle();
+		await r2.dispatch.pickupWorkQueue();
+		await r2.waitForArrivals(2);
+		r2.advance(CHECKOUT_WORK_BUDGET_MS / 2);
 		await r2.dispatch.pickupWorkQueue();
 		expect(r2.lines).toContainEqual(
-			warnLine(`${word} refused: "${PULL.title}" (${CHECKOUT_HOLD_OVER_BUDGET_FACT})`),
+			warnLine(`${word} refused: "${PULL.title}" (${CHECKOUT_ROW_OVER_BUDGET_FACT})`),
 		);
 		expect(r2.events).toContain(
-			`warning:the ${word} of "${PULL.title}" was not run: ${CHECKOUT_HOLD_OVER_BUDGET_FACT}`,
+			`warning:the ${word} of "${PULL.title}" was not run: ${CHECKOUT_ROW_OVER_BUDGET_FACT}`,
 		);
 		r2.release();
 	});

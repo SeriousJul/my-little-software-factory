@@ -35,8 +35,9 @@ export const PLANE_ACTION_LABELS: Readonly<Record<PlaneActionName, string>> = {
 /**
  * The word the Shared checkout hold names one plane action's start by (ADR 0109,
  * issue #297 review): the hold's kind, its `<word> waits:` line, its
- * `the <word> of "<ticket>" runs in it` fact, and its `<word> refused:` line all
- * read this one cell. The registry is the only place that can know the word, so
+ * `the <word> of "<ticket>" holds it` fact, its `<word> refused:` line, and the
+ * `checkout hold dropped:` line of the hold it left all read this one cell. The
+ * registry is the only place that can know the word, so
  * the dispatch asks it instead of naming the merge: a second Plane action the
  * registry gains states its own wait in its own words, and the compiler holds the
  * table to one word per name.

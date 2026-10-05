@@ -488,9 +488,9 @@ handoff refused: "Add a webhook retry policy" (already has a waiting queue item;
 merge refused: "Persist the source facts" (already has a waiting queue item; the first item keeps its place)
 handoff refused: "Add a webhook retry policy" (handoff recovery is required before another handoff)
 merge refused: "Persist the source facts" (already has a merge running; the first run stands)
-handoff waits: "Add a webhook retry policy" (the shared checkout is at work: the merge of "Persist the source facts" runs in it)
-merge waits: "Persist the source facts" (the shared checkout is at work: the handoff of "Add a webhook retry policy" runs in it)
-handoff refused: "Add a webhook retry policy" (the shared checkout stayed at work past its budget)
+handoff waits: "Add a webhook retry policy" (the shared checkout is at work: the merge of "Persist the source facts" holds it)
+merge waits: "Persist the source facts" (the shared checkout is at work: the handoff of "Add a webhook retry policy" holds it)
+checkout hold dropped: the merge of "Persist the source facts" (the shared checkout stayed at work past its budget)
 handoff refused: "Add a webhook retry policy" (the row waited behind the shared checkout past its budget)
 ```
 
@@ -509,21 +509,24 @@ the Shared checkout hold: one Repository's checkout is worked by one start at a
 time, so a merge Plane action and a worktree Handoff of that Repository never
 reach it at the same time (ADR 0109). The hold is not the Parallel limit, and the
 waiting row takes no seat: the Pickup reaches the starts behind it. The wait is
-bounded, on two clocks, and each answers a different question, so each refuses
-with its own fact: `stayed at work past its budget` names one start that stopped
-answering, and `waited behind the shared checkout past its budget` names a
-Repository that is simply busy, where every start answered in time and the
-checkout only kept changing hands. Both lines are `refused:` lines like every
-other, and the row leaves the queue. The two `waits:` lines follow the
-standing-fact rule the queue lines follow: once while the wait stands, again when
-the fact changes, never once per poll.
+bounded on two clocks that end different things, and each states its own fact.
+The hold's age ends the hold: `stayed at work past its budget` names one start
+that stopped answering, the plane drops its hold, and the row that waited runs.
+The row's own wait ends the row: `waited behind the shared checkout past its
+budget` names a Repository that is simply busy, where every start answered in
+time and the checkout only kept changing hands, and that line is a `refused:` line
+like every other, so the row leaves the queue. The two facts read apart on
+purpose: an operator who reads the second as the first goes looking for a hung run
+that is not there. The `waits:` lines follow the standing-fact rule the queue
+lines follow: once while the wait stands, again when the fact changes, never once
+per poll.
 
 Your own force-dispatch key passes the Parallel limit's cap and not the hold. On
 a row whose checkout is at work it leaves the row standing and answers on the
 Message line with the fact that holds it:
 
 ```text
-"Add a webhook retry policy" waits in the Work queue: the shared checkout is at work: the merge of "Persist the source facts" runs in it
+"Add a webhook retry policy" waits in the Work queue: the shared checkout is at work: the merge of "Persist the source facts" holds it
 ```
 
 The file states a standing-row refusal once for the row that stands, not once

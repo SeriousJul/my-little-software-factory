@@ -27,6 +27,7 @@ import {
 	automaticHoldLine,
 } from "../src/domain/top-up.ts";
 import {
+	checkoutHoldDropLine,
 	checkoutWaitHolderFact,
 	checkoutWaitLine,
 	checkoutWaitMessageLine,
@@ -107,13 +108,9 @@ describe("the record lines the configuration reference states", () => {
 			},
 			{
 				// The bounded end of a Shared checkout wait is a refusal like every
-				// other (ADR 0109): the row leaves the queue with the reason. The two
-				// clocks of the bound answer different questions, so each refuses with
-				// its own fact, and the guide states both (issue #297 review).
-				fact: sourceConstant(dispatchSource, "CHECKOUT_HOLD_OVER_BUDGET_FACT"),
-				lines: ['handoff refused: "Add a webhook retry policy"'],
-			},
-			{
+				// other (ADR 0109): the row leaves the queue with the reason. The other
+				// clock of the bound ends the hold and not the row, and its own line is
+				// checked beside the wait lines below (issue #297 review).
 				fact: sourceConstant(dispatchSource, "CHECKOUT_ROW_OVER_BUDGET_FACT"),
 				lines: ['handoff refused: "Add a webhook retry policy"'],
 			},
@@ -157,6 +154,16 @@ describe("the record lines the configuration reference states", () => {
 				checkoutWaitHolderFact("merge", '"Persist the source facts"'),
 			),
 			"the force-dispatch answer for a row the Shared checkout holds",
+		);
+		// The line of a hold the budget ends names the holder it left behind, and it
+		// is not a refusal: the row that waited runs (issue #297 review).
+		statedInGuide(
+			checkoutHoldDropLine(
+				planeActionCheckoutWord("merge-pull-request"),
+				'"Persist the source facts"',
+				sourceConstant(dispatchSource, "CHECKOUT_HOLD_OVER_BUDGET_FACT"),
+			),
+			"the line of a Shared checkout hold the budget ends",
 		);
 		// The page says what the wait is not: the Parallel limit's cap, and a
 		// refusal. A reader who mistakes one for the other reads a working plane

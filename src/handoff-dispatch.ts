@@ -479,6 +479,13 @@ const CHECKOUT_WORK_STANDS_FACT = "the shared checkout is at work";
  * Repository that is simply busy, where every holder answered in time and the
  * checkout only kept changing hands. One fact for both would report a busy
  * Repository as a hung run.
+ *
+ * The two clocks end different things. The row's own wait ends the row, the way
+ * every pickup attempt ends in start or drop (ADR 0049). The hold's age ends the
+ * hold: a holder that outlives the budget is a start the plane must treat as
+ * gone, and a hold that stood forever would make every later start of that
+ * Repository wait the whole budget and then leave the queue refused, for the rest
+ * of the plane's life (issue #297 review, ADR 0109).
  */
 export const CHECKOUT_HOLD_OVER_BUDGET_FACT = "the shared checkout stayed at work past its budget";
 export const CHECKOUT_ROW_OVER_BUDGET_FACT =
@@ -507,25 +514,54 @@ export function checkoutWaitMessageLine(name: string, fact: string): string {
 }
 
 /**
- * The fact the wait states: the checkout at work, and the start that works it
+ * How the record names the start that holds a Repository's checkout. The wait
+ * line, the force-dispatch answer, and the drop line all wear this one phrase, so
+ * the holder reads the same wherever the plane names it.
+ */
+function checkoutHolderPhrase(holderChannel: CheckoutChannel, holderName: string): string {
+	return `the ${holderChannel} of ${holderName}`;
+}
+
+/**
+ * The fact the wait states: the checkout at work, and the start that holds it
  * (issue #297, ADR 0109). The line names the holder so the reader sees the pair
  * that met without guessing which run stands.
+ *
+ * It says `holds it` and not `runs in it` on purpose (issue #297 review): the
+ * merge half of the pair works the Repository's remote and not its checkout, and
+ * a record line may not state the premise ADR 0109 measured away.
  */
 export function checkoutWaitHolderFact(holderChannel: CheckoutChannel, holderName: string): string {
-	return `${CHECKOUT_WORK_STANDS_FACT}: the ${holderChannel} of ${holderName} runs in it`;
+	return `${CHECKOUT_WORK_STANDS_FACT}: ${checkoutHolderPhrase(holderChannel, holderName)} holds it`;
+}
+
+/**
+ * The record line of a hold the budget ends (issue #297 review). The holder's own
+ * facts still say it stands, and it has stood a whole checkout budget, which is
+ * the plane's reading of a start that stopped answering. The line names the
+ * holder, because the next start of that Repository then runs beside a run the
+ * record never saw end.
+ */
+export function checkoutHoldDropLine(
+	holderChannel: CheckoutChannel,
+	holderName: string,
+	fact: string,
+): string {
+	return `checkout hold dropped: ${checkoutHolderPhrase(holderChannel, holderName)} (${fact})`;
 }
 
 /**
  * How long a checkout may hold a start before the plane refuses it (issue #297,
  * ADR 0109). The bound runs on two clocks, read against this one budget, and
- * each clock answers its own question and refuses with its own fact:
+ * each clock answers its own question and ends its own thing:
  *
  * - the hold's own age, from the clock reading its start took the checkout, and
- *   refused with `CHECKOUT_HOLD_OVER_BUDGET_FACT`. The checkout work one start
- *   does is a short sequence of commands, and the Command runner gives a single
- *   command ten minutes; a hold that still stands a whole command budget after
- *   the start took it is a start that stopped answering, not work the next start
- *   should keep waiting behind.
+ *   stated with `CHECKOUT_HOLD_OVER_BUDGET_FACT` when it ends the hold. The
+ *   checkout work one start does is a short sequence of commands, and the Command
+ *   runner gives a single command ten minutes; a hold that still stands a whole
+ *   command budget after the start took it is a start that stopped answering, and
+ *   the plane drops it so the Repository keeps working. The next start then
+ *   crosses, and the row that waited runs.
  * - the waiting row's own wait, from the clock reading its line was first
  *   stated, and refused with `CHECKOUT_ROW_OVER_BUDGET_FACT`. A Repository whose
  *   checkout keeps changing hands gives every new holder a fresh reading, so the
@@ -595,8 +631,10 @@ type CheckoutGate =
  * of the Repository's shared checkout, and the Plane action is the start the
  * record shows meeting that create (ADR 0068 takes it outside the seat count,
  * so nothing else separates the two). A live-worktree Handoff works a checkout
- * the operator chose and already owns, and a Consultation's work is serialized
- * per Repository by its own lock (issue #203), so neither takes this hold.
+ * the operator chose and already owns, so it takes no hold. A Consultation row
+ * is gated here neither: its row, its name, and its refusal belong to the
+ * Consultation module, and its own per-Repository lock is a second lock over the
+ * same checkout, which is the gap ADR 0109 names as open (issue #297 review).
  *
  * The Plane action side takes its word from the registry's action, not from the
  * dispatch (issue #297 review): the hold's channel, the `<word> waits:` prefix,
@@ -720,6 +758,22 @@ class HandoffDispatchModule implements HandoffDispatch {
 	 * (issue #297 review).
 	 */
 	private readonly checkoutWaits = new Map<string, { since: number; holder: string }>();
+
+	/**
+	 * How many pickup passes this module is running now, and whether a checkout
+	 * let go during one of them asked for another lap (issue #297 review).
+	 *
+	 * Every settle path that lets a checkout go asks for the rows waiting on it, and
+	 * one of those paths - the Plane action's settle - runs inside the walk's own
+	 * `finally`, across the pass's `await`. A second pass run beside the first reads
+	 * a seat count the first has not taken yet, which is the race the walk's
+	 * per-item cap re-read exists for; a promised lap run after the pass ends adds
+	 * the same turn without the second reader. The counter is a depth, not a flag:
+	 * a pass can be started from a settle another pass started.
+	 */
+	private pickupPasses = 0;
+	/** Whether a checkout let go during a running pass asked that pass for one more lap. */
+	private checkoutReaskWanted = false;
 
 	/**
 	 * The tickets whose standing-row refusal the record has already stated (issue #223).
@@ -1357,11 +1411,30 @@ class HandoffDispatchModule implements HandoffDispatch {
 	 * mark and the Handoff attempt are the facts that say a start stands, and a
 	 * hold outliving both is a bookkeeping miss, not work. The plane keeps the
 	 * Repository working rather than lock it out for the rest of the run.
+	 *
+	 * A hold whose holder stands past the checkout work's own budget is dropped
+	 * here too, and states the holder it ended (issue #297 review). The bound that
+	 * only refused the waiting row left the holder standing forever, and one start
+	 * that never answered would then refuse every later start of its Repository:
+	 * each waited the whole budget and left the queue refused, for as long as the
+	 * plane ran. The age that says the holder is gone ends the hold instead, and the
+	 * next start crosses.
 	 */
-	private checkoutHolderOf(key: string): CheckoutHold | null {
+	private checkoutHolderOf(key: string, projection: TicketProjection): CheckoutHold | null {
 		const hold = this.checkoutHolds.get(key);
 		if (hold === undefined) return null;
-		if (this.checkoutHolderStands(hold)) return hold;
+		if (this.checkoutHolderStands(hold)) {
+			if (this.state.now() - hold.takenAt < CHECKOUT_WORK_BUDGET_MS) return hold;
+			this.checkoutHolds.delete(key);
+			this.log?.warn(
+				checkoutHoldDropLine(
+					hold.channel,
+					recordTicketName(projection, hold.ticketIdentity),
+					CHECKOUT_HOLD_OVER_BUDGET_FACT,
+				),
+			);
+			return null;
+		}
 		this.checkoutHolds.delete(key);
 		return null;
 	}
@@ -1425,8 +1498,16 @@ class HandoffDispatchModule implements HandoffDispatch {
 	 * cycle's own pickup covers the rest.
 	 */
 	private releaseCheckoutAndReask(side: CheckoutSide, ticketIdentity: string): void {
-		if (this.releaseCheckoutHold(side, ticketIdentity) && this.checkoutWaits.size > 0)
-			void this.pickupWorkQueue();
+		if (!this.releaseCheckoutHold(side, ticketIdentity) || this.checkoutWaits.size === 0) return;
+		// Inside a pass, the pass that is walking gets the next lap: the Plane action's
+		// settle runs in the walk's own `finally`, and `finishHandoff` reaches this
+		// beside the settle's own re-ask, so one release asks for one lap and not for
+		// a pass run across the pass that released (issue #297 review).
+		if (this.pickupPasses > 0) {
+			this.checkoutReaskWanted = true;
+			return;
+		}
+		void this.runPickupPass();
 	}
 
 	/**
@@ -1440,7 +1521,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 	}
 
 	/**
-	 * The fact the wait states: the checkout at work, and the start that works
+	 * The fact the wait states: the checkout at work, and the start that holds
 	 * it. The name is read out of the caller's projection, the way the gate's
 	 * key is (issue #297 review): a standing wait is stated on every pass, and
 	 * a fact builder that read the pile per row would put that read back.
@@ -1458,14 +1539,13 @@ class HandoffDispatchModule implements HandoffDispatch {
 	 *
 	 * A start that finds its Repository's checkout at work leaves its row in the
 	 * Work queue: the wait is the row's, the row wears the `queued` badge it
-	 * already wore, and the record names the wait once while it stands. A start
-	 * that waits past the bound is refused with the reason and leaves the queue,
-	 * the way every pickup attempt ends in start or drop (ADR 0049) - the queue
-	 * never holds a row forever. The two clocks refuse with two facts, so the
-	 * file tells a run that stopped answering from a Repository that is simply
-	 * busy (issue #297 review).
+	 * already wore, and the record names the wait once while it stands. A row that
+	 * waits past its own bound is refused with the reason and leaves the queue, the
+	 * way every pickup attempt ends in start or drop (ADR 0049) - the queue never
+	 * holds a row forever. The other clock of the bound, the hold's age, is read
+	 * where the holder is and ends the hold, so the file tells a run that stopped
+	 * answering from a Repository that is simply busy (issue #297 review).
 	 *
-	/**
 	 * The gate is not the Parallel limit and does not read it: the Plane action
 	 * takes no seat, and the wait belongs to the checkout (ADR 0068 unchanged).
 	 *
@@ -1483,25 +1563,25 @@ class HandoffDispatchModule implements HandoffDispatch {
 		const projection = checkoutProjection();
 		const key = this.checkoutKeyOf(item, projection);
 		if (key === null) return { ok: true, checkoutKey: null };
-		const holder = this.checkoutHolderOf(key);
+		const holder = this.checkoutHolderOf(key, projection);
 		if (holder === null) {
 			this.checkoutWaits.delete(item.ticketIdentity);
 			return { ok: true, checkoutKey: key };
 		}
 		const stated = this.checkoutWaits.get(item.ticketIdentity);
-		// The bound runs on two clocks, and each answers its own question (issue
-		// #297 review). The hold's own age answers a start that stopped answering:
-		// the checkout has been at work since this holder took it. The row's own
-		// wait answers a checkout that keeps changing hands: every hand-off gives
-		// the next holder a fresh reading, so a row that has waited a whole budget
-		// leaves the queue whatever the chain of holders did behind it.
-		const holdOverBudget = this.state.now() - holder.takenAt >= CHECKOUT_WORK_BUDGET_MS;
-		const rowOverBudget =
-			stated !== undefined && this.state.now() - stated.since >= CHECKOUT_WORK_BUDGET_MS;
-		if (holdOverBudget || rowOverBudget) {
-			const fact = holdOverBudget ? CHECKOUT_HOLD_OVER_BUDGET_FACT : CHECKOUT_ROW_OVER_BUDGET_FACT;
-			this.refuseCheckoutWait(channel, item, fact);
-			return { ok: false, outcome: "refused", checkoutKey: key, fact };
+		// One clock refuses at the gate: the row's own wait. A checkout that keeps
+		// changing hands gives every new holder a fresh reading, so a row that has
+		// waited a whole budget leaves the queue whatever the chain of holders did
+		// behind it. The other clock, the hold's age, is read where the holder is, and
+		// it ends the hold and not the row (issue #297 review, ADR 0109).
+		if (stated !== undefined && this.state.now() - stated.since >= CHECKOUT_WORK_BUDGET_MS) {
+			this.refuseCheckoutWait(channel, item, CHECKOUT_ROW_OVER_BUDGET_FACT);
+			return {
+				ok: false,
+				outcome: "refused",
+				checkoutKey: key,
+				fact: CHECKOUT_ROW_OVER_BUDGET_FACT,
+			};
 		}
 		if (stated === undefined || stated.holder !== holder.ticketIdentity) {
 			// A new wait, or the same row waiting behind a different start: the
@@ -1611,6 +1691,26 @@ class HandoffDispatchModule implements HandoffDispatch {
 	 * start line states, so it names the path that actually took the seat.
 	 */
 	private async runPickupPass(directAskIdentity?: string): Promise<number> {
+		// The pass is a lap and not one shot: a checkout let go during the walk asks
+		// this pass for one more lap, and no second pass runs beside it (issue #297
+		// review). A lap that starts nothing releases no checkout, so the laps end.
+		this.pickupPasses += 1;
+		try {
+			let started = await this.runPickupLap(directAskIdentity);
+			while (this.checkoutReaskWanted && !this.stopped) {
+				this.checkoutReaskWanted = false;
+				started += await this.runPickupLap();
+			}
+			return started;
+		} finally {
+			this.pickupPasses -= 1;
+		}
+	}
+
+	private async runPickupLap(directAskIdentity?: string): Promise<number> {
+		// One walk of the queue's rows. The pass above owns the laps, so a checkout
+		// let go by a settle inside this walk asks for another lap here and not for a
+		// second reader of the seat count.
 		// The record's standing-fact entries follow their rows, whatever path took a
 		// row out (issue #223). This runs ahead of the brake and the seat checks
 		// because it is bookkeeping and not a pickup: a paused queue and a full cap

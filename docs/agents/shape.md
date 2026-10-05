@@ -249,7 +249,11 @@ description: The module map of the source tree, for agents working in this repos
 	control, not a Consultation rule, so it stands outside `src/consultation/`.
 	`repositoryOperationKey` is the one spelling of one Repository, and the Work
 	queue's Shared checkout hold reads it too, so the plane holds one fact per
-	Repository and not one per spelling (issue #297, ADR 0109).
+	Repository and not one per spelling (issue #297, ADR 0109). The two locks are
+	still two locks: this one chains a promise the Consultation module owns, and
+	that hold gates the Work queue's starts, so a worktree Consultation and a
+	worktree Handoff of one Repository still reach its checkout together, and
+	ADR 0109 records the gap as open.
 - `src/consultation-operations.ts`: the Consultation lifecycle. Launch, recovery,
 	response, close, Force-close, Replacement, deletion, the Stale Agent output
 	fact, and the Agent input queue, behind one interface with its dependencies
@@ -263,8 +267,9 @@ description: The module map of the source tree, for agents working in this repos
 	agent. It also owns the Shared checkout hold: one Repository's checkout is
 	worked by one start at a time, so a merge Plane action and a worktree Handoff
 	of that Repository never reach it at the same time, the start that waits stays
-	in the Work queue, and the hold costs no Parallel limit seat (issue #297,
-	ADR 0109).
+	in the Work queue, and the hold costs no Parallel limit seat. A hold ends where
+	its start settles, where its holder's fact is gone, and where its age passes the
+	checkout work's budget (issue #297, ADR 0109).
 	It reports through plain callbacks,
 	so a test drives it with the fake runner and an in-memory state, and the
 	App and the observation loop cross the same interface.

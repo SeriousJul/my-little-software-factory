@@ -11,7 +11,7 @@ Amended in one sentence by ADR 0109: the run takes the Shared checkout hold of
 its pull request's Repository from its claim until its run settles, so a
 worktree Handoff of that Repository never creates its worktree while the merge
 runs. The run's own commands work the Repository through the source, and ADR
-0108 records that measurement. The seat rule this page decides is unchanged:
+0109 records that measurement. The seat rule this page decides is unchanged:
 the plane action takes no Parallel limit seat, and the checkout hold is not one.
 
 ## Context
