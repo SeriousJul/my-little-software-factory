@@ -199,8 +199,12 @@ The dispatch owns the hold, because it owns the claim: the merge's claim is its
 queue row's removal, and the Handoff's claim is its attempt. No new durable
 table stands for the hold - it lives and dies inside one run, and the record is
 the durable account of it. The gate reads the Repository the start works out of
-the projection the pickup already reads for its own gates, so no read runs per
-queue row beyond the one the claim path takes.
+one Ticket projection read taken at the head of the pickup pass and handed to
+every row the walk visits, and the claim's take uses the key that read produced,
+so the hold adds one read per pass and no read per queue row (issue #297
+review). The read is lazy: a pass whose rows take no checkout reads nothing. The
+force-dispatch key runs no pass, so it takes that one read for itself. The
+verification record carries the measured cost.
 
 `repositoryOperationKey` is now the shared spelling of one Repository, read by
 the Operation serializer and the checkout hold alike, so the plane holds one
@@ -208,6 +212,12 @@ fact per Repository and not one per spelling.
 
 `CHECKOUT_WORK_BUDGET_MS` is the one bound, and the suite reads it rather than
 restating it, so moving the budget moves the test with it.
+
+The registry holds one Plane action, and it is the merge, so the hold's channel
+word, the `merge waits:` prefix, and the refusal's wording are the merge's. A
+second Plane action the registry gains waits behind the same holds and states
+them in the merge's words until its own channel word comes from the registry's
+action; the gate names this assumption where it takes the Plane action side.
 
 The wait is a record fact and a queue fact, not a surface fact: the row already
 wears the `queued` badge, and no new badge or marker was added. The screen-reader

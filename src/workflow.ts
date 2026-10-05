@@ -739,6 +739,22 @@ export function findFixingPullRequest(tickets: readonly Ticket[], ticket: Ticket
 }
 
 /**
+ * The pull request a merge works (issue #297, ADR 0108): the position's own pull
+ * request when the position is one, and its fixing pull request when the
+ * position is the ticket that pull request fixes. Null when the position has
+ * none to aim at.
+ *
+ * The merge run aims with this, and the Shared checkout hold names the
+ * Repository of the pull request it answers with, so the run and the hold
+ * resolve one Repository per merge and cannot drift apart.
+ */
+export function mergeTargetPullRequest(tickets: readonly Ticket[], ticket: Ticket): Ticket | null {
+	return ticket.sourceKind === "github-pull-request"
+		? ticket
+		: findFixingPullRequest(tickets, ticket);
+}
+
+/**
  * Whether a ticket is covered by an open fixing pull request (ADR 0042):
  * the ticket is open, and at least one open pull request fixes it. The list
  * rule withholds a covered ticket's row, and a draft fixing pull request
@@ -792,8 +808,7 @@ export async function fireTransition(
 	);
 	const ticket = tickets.find((item) => item.identity === request.ticketIdentity);
 	if (ticket === undefined) return null;
-	let pullRequest =
-		ticket.sourceKind === "github-pull-request" ? ticket : findFixingPullRequest(tickets, ticket);
+	let pullRequest = mergeTargetPullRequest(tickets, ticket);
 	// The pull request publish (ADR 0076): a completed turn of a task type
 	// that opens a pull request reaches the ticket's own draft through the
 	// direct head-branch read, because a draft the machine has not labeled

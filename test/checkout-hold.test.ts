@@ -2,12 +2,15 @@
  * The shared checkout: one Repository's checkout is worked by one start at a
  * time (issue #297, ADR 0108).
  *
- * A merge Plane action run works the Repository's shared checkout, and a
- * worktree Handoff creates its worktree from that same checkout. The Parallel
- * limit says nothing about the pair, because the Plane action takes no seat
- * (ADR 0068): both starts read the same free seat and both go, and the two
- * collide in the checkout. These tests stand one merge and one worktree
- * Handoff of one Repository against each other and read which one runs.
+ * A worktree Handoff creates its worktree out of the Repository's shared
+ * checkout. The merge Plane action is the other start of the pair the record
+ * measured: its run works the Repository through the source - `gh` commands,
+ * no `git` command and no `-C <checkout>` - and the Parallel limit says nothing
+ * about the pair, because the Plane action takes no seat (ADR 0068): both
+ * starts read the same free seat and both go. The Shared checkout hold is the
+ * serialization of that pair, and ADR 0108 states what each start works. These
+ * tests stand one merge and one worktree Handoff of one Repository against each
+ * other and read which one runs.
  *
  * The assertions read the facts outside the seam: the Work queue's rows, the
  * commands the plane reached, and the record's lines. Every test drives
@@ -105,6 +108,15 @@ const DUAL = {
 	identity: "github:github.com:I_7",
 	externalKey: "#7",
 	title: "Fix the invoice total",
+	repository: FACTORY,
+};
+
+// The second factory Handoff the change-of-holder test queues: the row that
+// keeps waiting while the checkout moves from the merge to the first Handoff.
+const NEXT = {
+	identity: "github:github.com:I_8",
+	externalKey: "#8",
+	title: "Retire the legacy importer",
 	repository: FACTORY,
 };
 
@@ -712,6 +724,37 @@ describe("the shared checkout of one Repository (issue #297, ADR 0108)", () => {
 		// like every other (ADR 0108).
 		expect(queueWait(ticket, r.state.workQueue.items())).toBe(true);
 		expect(ticket.state).toBe("open");
+		r.release();
+	});
+
+	test("the wait states itself again when the checkout changes hands", async () => {
+		const r = rig({ tickets: [fetched(NEXT, "github-issue")] });
+		r.hold("herdr worktree create");
+		// The merge works the factory checkout first, and two worktree Handoffs of
+		// that Repository queue behind it. The first takes the checkout when the
+		// merge lets go; the second keeps waiting and sees the holder change.
+		await mergeInFlight(r);
+		await handoffAsked(r, ISSUE);
+		await handoffAsked(r, NEXT);
+		const linesFor = (title: string) =>
+			r.lines.filter((line) => line.message.startsWith(`handoff waits: "${title}"`));
+		expect(linesFor(NEXT.title).map((line) => line.message)).toEqual([
+			`handoff waits: "${NEXT.title}" (the shared checkout is at work: the merge of "${PULL.title}" runs in it)`,
+		]);
+		// The merge settles and the checkout moves to the first Handoff. The row
+		// that keeps waiting waits behind a different start now: the fact changed,
+		// so it states itself again, beside the first line and not over it
+		// (issue #231, ADR 0108).
+		r.release();
+		await r.until(() => linesFor(NEXT.title).length === 2);
+		expect(linesFor(NEXT.title).map((line) => line.message)).toEqual([
+			`handoff waits: "${NEXT.title}" (the shared checkout is at work: the merge of "${PULL.title}" runs in it)`,
+			`handoff waits: "${NEXT.title}" (the shared checkout is at work: the handoff of "${ISSUE.title}" runs in it)`,
+		]);
+		// The row that took the checkout states its own wait once, and the row
+		// that keeps waiting keeps its place (issue #297).
+		expect(linesFor(ISSUE.title)).toHaveLength(1);
+		expect(r.state.workQueue.hasWorkItem(NEXT.identity)).toBe(true);
 		r.release();
 	});
 
