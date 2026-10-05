@@ -61,13 +61,6 @@ export interface SourceFactAggregate {
 	stillListed(ticketIdentity: string): boolean;
 	convergeMembershipLabels(ticketIdentity: string, labels: readonly string[]): void;
 	membershipSourceNames(identity: string): string[];
-	/**
-	 * The Repository identities the Ticket's active memberships stand in - the
-	 * shared checkouts a start on this Ticket works (issue #297). One identity
-	 * per Repository, whatever number of sources list the same Ticket, and an
-	 * empty list for a Ticket no active membership names.
-	 */
-	membershipRepositoryIdentities(identity: string): string[];
 	setSourceMuted(
 		sourceName: string,
 		muted: boolean,
@@ -292,16 +285,6 @@ export class SourceFactModule implements SourceFactAggregate {
 			)
 			.all(identity) as Array<{ source_name: string }>;
 		return rows.map((row) => row.source_name);
-	}
-	membershipRepositoryIdentities(identity: string): string[] {
-		// The active memberships only: a retired membership's Repository is no
-		// longer a checkout a start of this Ticket works.
-		const rows = this.db
-			.prepare(
-				"SELECT DISTINCT repository_identity FROM memberships WHERE ticket_identity = ? AND active = 1 ORDER BY repository_identity",
-			)
-			.all(identity) as Array<{ repository_identity: string }>;
-		return rows.map((row) => row.repository_identity);
 	}
 	setSourceMuted(
 		sourceName: string,

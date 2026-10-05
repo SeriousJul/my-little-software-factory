@@ -7,11 +7,12 @@ settled turn's environment. The confirm's close, its reach, and its timing at
 the ask stand, and everything else this page decides about the plane action
 stands. Where this page says the automatic ask keeps the environment, read the
 ADR 0099 rule: every workflow-origin merge ask closes it at the ask.
-Amended in one sentence by ADR 0108: the run works the Repository's shared
-checkout, so it takes the Shared checkout hold from its claim until its run
-settles, and a worktree Handoff of that Repository waits in the Work queue
-behind it. The seat rule this page decides is unchanged: the plane action takes
-no Parallel limit seat, and the checkout hold is not one.
+Amended in one sentence by ADR 0108: the run takes the Shared checkout hold of
+its pull request's Repository from its claim until its run settles, so a
+worktree Handoff of that Repository never creates its worktree while the merge
+runs. The run's own commands work the Repository through the source, and ADR
+0108 records that measurement. The seat rule this page decides is unchanged:
+the plane action takes no Parallel limit seat, and the checkout hold is not one.
 
 ## Context
 
@@ -54,9 +55,9 @@ cannot both run the merge - the second claim finds no row and leaves, and the
 attempt row stands once. The queue pause holds it while it stands, the
 Dispatch pause holds its automatic add, and the Handoff limit counts its
 attempts. A manual confirm passes the limit, the way a manual handoff does.
-The run works the Repository's shared checkout, so it takes the Shared checkout
-hold from the claim until the run settles: the merge and a worktree Handoff of
-one Repository never work that checkout at the same time, and the hold costs no
+The run takes the Shared checkout hold of its pull request's Repository from
+the claim until the run settles, so a merge and a worktree Handoff of one
+Repository never reach that checkout at the same time, and the hold costs no
 seat (ADR 0108).
 
 **Manual mode keeps its gate.** Nothing ships without the operator's key:

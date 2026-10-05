@@ -262,8 +262,9 @@ description: The module map of the source tree, for agents working in this repos
 	cleanup with the leftover fact it leaves, and the name fact of a leftover
 	agent. It also owns the Shared checkout hold: one Repository's checkout is
 	worked by one start at a time, so a merge Plane action and a worktree Handoff
-	of that Repository never work it together, the start that waits stays in the
-	Work queue, and the hold costs no Parallel limit seat (issue #297, ADR 0108).
+	of that Repository never reach it at the same time, the start that waits stays
+	in the Work queue, and the hold costs no Parallel limit seat (issue #297,
+	ADR 0108).
 	It reports through plain callbacks,
 	so a test drives it with the fake runner and an in-memory state, and the
 	App and the observation loop cross the same interface.

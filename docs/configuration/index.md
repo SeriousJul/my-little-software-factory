@@ -477,8 +477,8 @@ limit, and an unlimited cap states no limit. A row you asked for that waited in
 the Work queue reads `mode pickup`, not `direct-ask`: the mode names the path
 that took the seat, not the ask that made the row.
 
-The queue lines name the row the Work queue took and the refusal that left a row
-out:
+The queue lines name the row the Work queue took, the refusal that left a row
+out, and the start the Shared checkout hold keeps waiting:
 
 ```text
 handoff queued: "Add a webhook retry policy" (origin open, operator-staged)
@@ -504,11 +504,11 @@ A `waits:` line is not a refusal: the row stays in the Work queue, keeps its
 place and its `queued` badge, and starts on a later pickup. The hold it names is
 the Shared checkout hold: one Repository's checkout is worked by one start at a
 time, so a merge Plane action and a worktree Handoff of that Repository never
-work it together (ADR 0108). The hold is not the Parallel limit, and the waiting
-row takes no seat: the Pickup reaches the starts behind it. The wait is bounded:
-a start still waiting after the checkout work's own budget is refused with the
-reason and leaves the queue, and that line is a `refused:` line like every
-other. The two `waits:` lines follow the standing-fact rule the queue lines
+reach it at the same time (ADR 0108). The hold is not the Parallel limit, and the
+waiting row takes no seat: the Pickup reaches the starts behind it. The wait is
+bounded: a start still waiting after the checkout work's own budget is refused
+with the reason and leaves the queue, and that line is a `refused:` line like
+every other. The two `waits:` lines follow the standing-fact rule the queue lines
 follow: once while the wait stands, again when the fact changes, never once per
 poll.
 
