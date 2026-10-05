@@ -347,6 +347,54 @@ The gate on this tree, level with `origin/main` at `af085a2e`:
 | The live terminal walk, the screen-reader path, and the theme inheritance in a real herdr | Open, unchanged, as [the shared control record](./shared-controls.md) states. The only production line that moved on the branch is one `export` keyword
 in `src/domain/attempt-hold.ts`; the rework round moved none |
 
+## Issue #302: the detail's scroll restore waits for a pass the plane does not owe (2026-10-05, the fix)
+
+The mechanism [the section above](#the-frame-deadline-investigation-on-the-same-date)
+measured is answered on this branch. The restore no longer depends on a render
+pass, and the contract now has a test that fails when it does.
+
+### The pin, and the reproduction it is
+
+`withholdFrameEvents` in `test/app-harness.ts` takes the renderer's `frame`
+event away from every surface and hands back the key that puts it back. The
+passes the app's own updates cause still paint, and the harness's waits read the
+painted buffer, so the screen keeps working; what is gone is any way for a
+surface to be woken by a pass. A new case, `test/main-view-frame.test.ts` - "the
+Ticket detail resumes at its offset with no render pass to wait on" - walks the
+same cross-section round trip the existing scroll test walks, with the event
+held back for the whole round trip.
+
+| State | Result |
+| --- | --- |
+| The new case on the tree before the fix | Red at 11058.77 ms, the local 10000 ms `FRAME_DEADLINE_MS`. The harness's dump came back fully painted with the detail at its top and its thumb on the first row of its track: the same shape the four remote misses printed at 20155 to 21088 ms |
+| The same case with the fix | Green at 1254.02 ms |
+| `test/main-view-frame.test.ts`, `test/ticket-scroll-frame.test.ts`, `test/ticket-detail.test.ts` | 42 pass / 0 fail in 12.14 s |
+| `test/consultation-frame.test.ts`, `test/repository-select-panel.test.ts` | 71 pass / 0 fail in 23.55 s |
+
+### What the fix holds
+
+`src/components/ticket-detail.ts` runs the restore in the effect's own turn
+whenever the box already answers its content height and viewport, which is what
+it does at the moment the effect runs after a cross back. Only when the box
+answers no size does the pane ask for the pass that lays it out, and it asks by
+calling `renderer.requestRender()` itself rather than waiting for one nobody
+owes. The ask is bounded to one per effect run: a box that never lays out cannot
+spin the renderer on every pass, which an unbounded "ask while `maxScrollOf`
+answers zero" would do on a detail whose body fits the viewport.
+
+| Choice the issue left open | What this branch chose |
+| --- | --- |
+| "ask for the next pass only when the box does not answer a non-zero `maxScrollOf`" | The ask is keyed on the box answering no size at all (`scrollHeight === 0` or `viewport.height === 0`), not on `maxScrollOf` answering zero. A body that fits its viewport answers `maxScrollOf` 0 for the rest of its life, and asking again on each pass would repaint forever; for that body the clamp to 0 is the right answer, so the pane takes it on the spot |
+| How to hold "no later repaint available" in a test | The frame event is withheld rather than the render loop stopped. Stopping the loop (`renderer.pause()`) leaves the painted buffer stale, so the assertion could only read the scroll box's own `scrollTop` and could not say what the operator sees. With the event withheld the screen is still the fact under test, and a restore that waits for a pass still cannot run |
+
+### What this branch did not measure
+
+| Item | State |
+| --- | --- |
+| Whether the other three remote misses share this mechanism | Not measured. `src/components/ticket-detail.ts` is the only surface under `src/` that reads the renderer's `frame` event, so the mechanism measured here cannot be what `test/consultation-frame.test.ts` - a live checkout conflict blocks the launch until one explicit confirm - and `test/repository-select-panel.test.ts` - Esc closes the list and keeps the base frame - miss on. Both files are green run together here, as they were green alone before the fix |
+| The ordering flip that let a remote run miss at all | Still not pinned. The two probes the section above record stayed green, and this branch does not reproduce the miss; it removes the wait that made the miss a 20-second failure instead of a repaint the next key would have hidden. What is pinned is the contract: no surface can bring the offset back by waiting |
+| The live terminal walk, the screen-reader path, and the theme inheritance inside a real herdr | Open, unchanged, as [the shared control record](./shared-controls.md) states |
+
 ## What was not measured
 
 | Item | State |
@@ -355,5 +403,5 @@ in `src/domain/attempt-hold.ts`; the rework round moved none |
 | The hook installed in the operator's checkout | Passed. `git config core.hooksPath scripts/git-hooks` is set in this checkout, and the push above is the proof it is live. The setup line stays a documented step on [the commands page](../development/commands.md) for every other checkout |
 | The doc-claim rule, the rename sweep, the documented-line rule, the probe rule, the determinism rule, the fake-fidelity rule, the file-the-defect rule, the failure-mode sweep, and the reporting rules | First measured by the self-review round above, on `b3b5fc38`: the probe rule, the rename sweep, the determinism rule, the file-the-defect rule, and the doc-claim rule each produced a result there, and the doc-claim rule found the stale cost numbers. What stays incomplete is the round's value: every commit was written by the agent that wrote the rules, so this is self-review, and a round on a pull request from a different author is the first independent measurement |
 | The 14 domain types in `UNREAD_TYPE_BASELINE` | Answered on 2026-10-05 in [the section above](#issue-301-the-14-unread-domain-types-2026-10-05): each name took one of [issue #301](https://github.com/SeriousJul/my-little-software-factory/issues/301)'s three answers and the baseline stands empty. What stays unmeasured is whether any of them is dead, which the check still cannot see, and it is recorded in that section |
-| The CI load flake on the frame tests | Investigated on 2026-10-05 and filed as [issue #302](https://github.com/SeriousJul/my-little-software-factory/issues/302): four remote frame-deadline misses, the mechanism measured, no local reproduction, and no fix shipped on that evidence. The older records in [the shared control record](./shared-controls.md) and the pull request records stand |
+| The CI load flake on the frame tests | Investigated on 2026-10-05 and filed as [issue #302](https://github.com/SeriousJul/my-little-software-factory/issues/302): four remote frame-deadline misses, the mechanism measured, no local reproduction, and no fix shipped on that evidence. The scroll half of it is answered on 2026-10-05 in [the section above](#issue-302-the-details-scroll-restore-waits-for-a-pass-the-plane-does-not-owe-2026-10-05-the-fix); what stays open there is whether the other three named misses share the mechanism, which this branch records as not measured. The older records in [the shared control record](./shared-controls.md) and the pull request records stand |
 | The live terminal walk, the screen-reader path, and the theme inheritance inside a real herdr | Open, as [the shared control record](./shared-controls.md) states. The gate is a claim about the automated checks and the tree they ran on, and it extends no further |

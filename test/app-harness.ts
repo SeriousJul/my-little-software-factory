@@ -9,6 +9,7 @@
  */
 
 import { afterEach, beforeEach, expect, spyOn } from "bun:test";
+import { CliRenderEvents } from "@opentui/core";
 import { type MouseButton, MouseButtons } from "@opentui/core/testing";
 import { createElement } from "@opentui/react";
 import { testRender } from "@opentui/react/test-utils";
@@ -399,6 +400,28 @@ export async function withApp(
 		// outlives the state reads a closed database.
 		setup.stopApp();
 	}
+}
+
+/**
+ * Take the renderer's `frame` event away from every surface, and hand back the
+ * key that puts it back.
+ *
+ * The renderer paints on invalidation, not on a free-running loop: a booted and
+ * idle plane emits no frames at all. A surface that waits for the next `frame`
+ * pass can therefore wait forever, and the plane is under no obligation to give
+ * one (issue #302). With the event withheld, the passes the app's own updates
+ * cause still paint, but no surface can be woken by one: only a change that
+ * asks for nothing shows on the screen. The harness's own waits read the painted
+ * buffer, never the event, so they keep working while it is held back.
+ */
+export function withholdFrameEvents(setup: Setup): () => void {
+	const renderer = setup.renderer;
+	const emit = renderer.emit.bind(renderer);
+	renderer.emit = (event: string | symbol, ...args: unknown[]) =>
+		event === CliRenderEvents.FRAME ? true : emit(event, ...args);
+	return () => {
+		renderer.emit = emit;
+	};
 }
 
 /**

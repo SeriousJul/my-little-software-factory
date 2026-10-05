@@ -44,6 +44,7 @@ import {
 	stillFrame,
 	WIDTH,
 	withApp,
+	withholdFrameEvents,
 } from "./app-harness.ts";
 import { BASE_CONFIG } from "./base-config.ts";
 import { emptyAgentRunner, FakeRunner } from "./fake-runner.ts";
@@ -94,6 +95,33 @@ const sampleOutcome = () => ({
 		repository: ticket.repositoryRef,
 		attributes: {},
 	})),
+});
+
+/**
+ * The sample Ticket outcome with one description taller than the detail pane.
+ *
+ * The state projection carries no handoff facts for the seeded rows, so the
+ * description is what overflows the pane: the row the scroll tests carry off
+ * its own title, and its `sentinel-end-marker` is the last line of the body.
+ */
+const longDetailOutcome = () => ({
+	...sampleOutcome(),
+	tickets: sampleOutcome().tickets.map((ticket) =>
+		ticket.externalKey === "#4"
+			? {
+					...ticket,
+					description:
+						"The legacy auth shim that predated the token service has no remaining callers.\n" +
+						"Remove it and its feature flag.\n" +
+						Array.from(
+							{ length: 12 },
+							(_, index) =>
+								`A long note ${index + 1} about the callers that were considered and why each one no longer needs the shim.`,
+						).join("\n") +
+						"\nsentinel-end-marker",
+				}
+			: ticket,
+	),
 });
 
 function seedConsultation(
@@ -1137,27 +1165,7 @@ describe("the merged Main view", () => {
 		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
 		state.grouping.setGroupingAxis("tickets", "none");
 		seedConsultation(state, uid("t"));
-		// A description taller than the detail pane: the state projection
-		// carries no handoff facts, so the body is what overflows.
-		const outcome = {
-			...sampleOutcome(),
-			tickets: sampleOutcome().tickets.map((ticket) =>
-				ticket.externalKey === "#4"
-					? {
-							...ticket,
-							description:
-								"The legacy auth shim that predated the token service has no remaining callers.\n" +
-								"Remove it and its feature flag.\n" +
-								Array.from(
-									{ length: 12 },
-									(_, index) =>
-										`A long note ${index + 1} about the callers that were considered and why each one no longer needs the shim.`,
-								).join("\n") +
-								"\nsentinel-end-marker",
-						}
-					: ticket,
-			),
-		};
+		const outcome = longDetailOutcome();
 		const source = new FakeSource("issues", "github-issues", outcome);
 		try {
 			await booted(
@@ -1207,6 +1215,77 @@ describe("the merged Main view", () => {
 					expect(detailPaneText(next)).toContain("Observe the agent");
 					expect(detailPaneText(next)).not.toContain("sentinel-end-marker");
 					expect(detailPaneText(next)).not.toBe(detailPaneText(resumed));
+				},
+				state,
+				{ sources: [source] },
+				WIDTH,
+				27,
+				liveConsultationAgents([uid("t")]),
+			);
+		} finally {
+			source.settle(outcome);
+			state.close();
+		}
+	});
+
+	test("the Ticket detail resumes at its offset with no render pass to wait on", async () => {
+		const state = openFactoryState(join(home, "state.sqlite"));
+		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
+		state.grouping.setGroupingAxis("tickets", "none");
+		seedConsultation(state, uid("t"));
+		const outcome = longDetailOutcome();
+		const source = new FakeSource("issues", "github-issues", outcome);
+		try {
+			await booted(
+				async (setup) => {
+					source.settle(outcome);
+					await awaitFrame(setup, (f) => f.includes("Retry policy"), "the Tickets");
+					for (let step = 1; step <= 3; step += 1)
+						await press(setup, "j", "the next Ticket", (f) => markerRowOf(f) === 3 + step);
+					await focusDetail(setup);
+					const scrolled = await pressScrollKey(
+						setup,
+						"end",
+						"the detail past its title",
+						(f) => !detailPaneText(f).includes("Drop the legacy auth shim"),
+					);
+					expect(detailPaneText(scrolled)).toContain("sentinel-end-marker");
+					// The renderer paints on invalidation, not on a free-running loop,
+					// and a resting plane emits no frames at all: a restore that waits
+					// for the next `frame` pass can wait forever (issue #302). The
+					// event is held back for the whole round trip, so the passes the
+					// walk itself causes still paint, but no surface can be woken by
+					// one. Only a restore that asks for nothing brings the offset back.
+					const handFramesBack = withholdFrameEvents(setup);
+					try {
+						await press(setup, "h", "the list focus back", (f) => f.includes("┌─❯ Tickets"));
+						await crossToConsultations(setup);
+						await crossToTickets(setup);
+						await press(
+							setup,
+							"home",
+							"the list back to its first Ticket",
+							(f) => markerRowOf(f) === 3,
+						);
+						for (let step = 1; step <= 3; step += 1)
+							await press(setup, "j", "the next Ticket", (f) => markerRowOf(f) === 3 + step);
+						await focusDetail(setup);
+						await awaitFrame(
+							setup,
+							(f) => detailPaneText(f) === detailPaneText(scrolled),
+							"the detail to resume at its scrolled position with no frame to wait on",
+						);
+					} finally {
+						handFramesBack();
+					}
+					// The held-back event leaves the plane working: the next Ticket
+					// still starts at its own top once the frames come back.
+					await press(setup, "h", "the list focus back", (f) => f.includes("┌─❯ Tickets"));
+					await press(setup, "j", "the next Ticket", (f) => markerRowOf(f) === 7);
+					await focusDetail(setup);
+					const next = await settle(setup);
+					expect(detailPaneText(next)).toContain("Observe the agent");
+					expect(detailPaneText(next)).not.toContain("sentinel-end-marker");
 				},
 				state,
 				{ sources: [source] },
