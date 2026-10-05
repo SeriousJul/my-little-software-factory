@@ -1185,7 +1185,7 @@ describe("the merged Main view", () => {
 	 *
 	 * Probe A, the wait this branch retires. In the restore effect of
 	 * `src/components/ticket-detail.ts`, replace the line `restore();` with
-	 * `renderer.once("frame", restore);`. 1 record goes red at 11031.14 ms, the
+	 * `renderer.once("frame", restore);`. 1 record goes red at 11025.94 ms, the
 	 * local 10000 ms frame deadline: "the Ticket detail resumes at its offset while
 	 * no surface can be woken by a frame". Its dump is the whole screen fully
 	 * painted with the detail at its top and its scroll thumb on the first row of
@@ -1196,13 +1196,13 @@ describe("the merged Main view", () => {
 	 * Probe B, the witness the hold needs. In `withholdFrameEvents` in
 	 * `test/app-harness.ts`, delete the line
 	 * `renderer.on(CliRenderEvents.FRAME, witness);`. 1 record goes red, the same
-	 * one, at 1018.41 ms, on the harness's own swallowed-count line. The renderer
+	 * one, at 1018.66 ms, on the harness's own swallowed-count line. The renderer
 	 * announces a pass only when something listens for it, so with no listener of
 	 * the harness's own the hold swallows nothing and proves nothing.
 	 *
 	 * Probe C, the hold leaking. In the same wrapper, count the event and then hand
 	 * it to the real `emit` instead of returning `true`. 1 record goes red, the same
-	 * one, at 1021.80 ms, on the harness's own leaked-count line: the witness was
+	 * one, at 1018.81 ms, on the harness's own leaked-count line: the witness was
 	 * woken by a pass, so the hold did not hold.
 	 */
 	async function scrollRoundTripThroughTheOtherSection(

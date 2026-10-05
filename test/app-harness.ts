@@ -452,12 +452,29 @@ export function withholdFrameEvents(setup: Setup): () => void {
 	};
 }
 
-/** What `withholdRenderAsksButThePlanesOwn` saw while it held. */
+/** What a render-ask hold saw while it held. */
 export interface RenderAskWitness {
 	/** How many render asks the hold swallowed. */
 	asksHeld: number;
-	/** How many asks came from the control plane's own code and got through. */
+	/**
+	 * How many asks came from the control plane's own code. `withholdRenderAsks
+	 * ButThePlanesOwn` lets its first one through; `withholdEveryRenderAsk`
+	 * swallows it along with every other ask and counts it.
+	 */
 	planeAsks: number;
+}
+
+/**
+ * True when the caller of the `requestRender` wrapper is the control plane.
+ *
+ * The wrapper's own frame is on the stack, so the caller is the frame above it.
+ * A path under the repository's own `src/` is a surface asking the renderer
+ * directly; OpenTUI's files, `node_modules/` included, are not the plane, so a
+ * renderable's own ask reads as a renderable's ask.
+ */
+function renderAskComesFromThePlane(): boolean {
+	const caller = (new Error().stack ?? "").split("\n")[3] ?? "";
+	return !caller.includes("node_modules") && /\/src\/[\w./-]+\.ts:\d+:\d+/.test(caller);
 }
 
 /**
@@ -490,13 +507,7 @@ export function withholdRenderAsksButThePlanesOwn(setup: Setup): () => RenderAsk
 	let held = true;
 	const witness: RenderAskWitness = { asksHeld: 0, planeAsks: 0 };
 	renderer.requestRender = () => {
-		// The frame above this wrapper names whoever called `requestRender`. A
-		// path under the repository's own `src/` is the control plane asking the
-		// renderer directly; OpenTUI's files, `node_modules/` included, are not.
-		const caller = (new Error().stack ?? "").split("\n")[2] ?? "";
-		const fromThePlane =
-			!caller.includes("node_modules") && /\/src\/[\w./-]+\.ts:\d+:\d+/.test(caller);
-		if (fromThePlane) {
+		if (renderAskComesFromThePlane()) {
 			witness.planeAsks += 1;
 			held = false;
 			return ask();
@@ -513,6 +524,55 @@ export function withholdRenderAsksButThePlanesOwn(setup: Setup): () => RenderAsk
 		).toBeGreaterThan(0);
 		return witness;
 	};
+}
+
+/**
+ * Hold back every render ask, the control plane's own included, and hand back
+ * the key that puts them back with what the hold witnessed.
+ *
+ * `withholdRenderAsksButThePlanesOwn` lets the pane's own ask schedule the pass
+ * under test. This hold lets none through, so no pass ever runs and a scroll box
+ * remounted under it never lays out: it answers no content height and no
+ * viewport on every pass the rig announces. That is the state the restore
+ * effect's give-up path is about, and no reachable app state puts a box there -
+ * the pass the pane asks for always lays it out - so the rig announces the
+ * passes itself with `announceFramePass`.
+ *
+ * The witness counts the asks the control plane made directly on the renderer,
+ * which is what the restore's one-ask bound bounds: an unbounded restore asks
+ * again on every announced pass, forever. The key refuses to hand the asks back
+ * on an empty swallowed count, as the other hold does.
+ */
+export function withholdEveryRenderAsk(setup: Setup): () => RenderAskWitness {
+	const renderer = setup.renderer;
+	const ask = renderer.requestRender.bind(renderer);
+	const witness: RenderAskWitness = { asksHeld: 0, planeAsks: 0 };
+	renderer.requestRender = () => {
+		if (renderAskComesFromThePlane()) witness.planeAsks += 1;
+		witness.asksHeld += 1;
+		return undefined;
+	};
+	return () => {
+		renderer.requestRender = ask;
+		expect(
+			witness.asksHeld,
+			"withholdEveryRenderAsk swallowed no render ask, so the hold proved nothing",
+		).toBeGreaterThan(0);
+		return witness;
+	};
+}
+
+/**
+ * Announce one render pass to the surfaces that registered for it.
+ *
+ * The renderer announces a pass when a pass runs, and no pass can run while
+ * every ask is held. This calls the renderer's own `frame` announcement, which
+ * is what a surface registered with `once("frame", ...)` meets. It is the rig
+ * speaking, not a pass: nothing lays the tree out, so a box that answered no
+ * size before the announcement answers no size after it.
+ */
+export function announceFramePass(setup: Setup): void {
+	setup.renderer.emit(CliRenderEvents.FRAME);
 }
 
 /**
