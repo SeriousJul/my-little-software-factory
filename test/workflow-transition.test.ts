@@ -1242,6 +1242,7 @@ function stubTicket(
 		muted: false,
 		mutedAt: null,
 		leftover: null,
+		nameCollision: null,
 		...over,
 	};
 }

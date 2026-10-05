@@ -80,6 +80,7 @@ function ticketAt(
 		actionable: false,
 		handoffRecoveryRequired: false,
 		leftover: null,
+		nameCollision: null,
 		ignored: false,
 		ignoredAt: null,
 		muted: false,

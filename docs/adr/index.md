@@ -115,3 +115,4 @@ body states the context, the decision, and the consequences.
 - [ADR 0104: A Plane action run in flight holds its Ticket's re-ask](./0104-a-plane-action-run-in-flight-holds-its-ticket-re-ask.md)
 - [ADR 0105: The push gate runs the three checks on the merged tree, and a hook owns the two cheap ones](./0105-the-push-gate-runs-the-three-checks-on-the-merged-tree-and-a-hook-owns-the-two-cheap-ones.md)
 - [ADR 0106: A run of failed Handoff starts parks its Ticket, and the park states itself](./0106-a-run-of-failed-handoff-starts-parks-its-ticket-and-the-park-states-itself.md)
+- [ADR 0107: A herdr Agent name held by a stranger is a fact on the Ticket, and the Top-up waits for the operator](./0107-a-herdr-agent-name-held-by-a-stranger-is-a-fact-on-the-ticket-and-the-top-up-waits-for-the-operator.md)

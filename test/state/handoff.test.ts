@@ -1289,3 +1289,178 @@ describe("the settle answers with the attempt's own record (issue #295)", () => 
 		state.close();
 	});
 });
+
+/**
+ * The Agent name collision (issue #299, ADR 0107): the fact a Handoff start
+ * leaves on its Ticket when herdr refuses the Ticket's stable Agent name because
+ * a pane the plane does not own holds it.
+ *
+ * The refusal is not transient, so the fact is durable: the row, the detail, and
+ * the Top-up's gate all read this one record, and it stands until the operator's
+ * own Handoff takes the name. It is never a Leftover environment, and a Leftover
+ * environment is never it - the plane owns the cleanup of one and no cleanup of
+ * the other.
+ */
+describe("the Agent name collision a refused start leaves (issue #299)", () => {
+	/** The refusal herdr gave, with the handles it named. */
+	function recordCollision(state: FactoryState, over: Record<string, unknown> = {}): void {
+		state.handoff.recordNameCollision({
+			ticketIdentity: TICKET,
+			heldName: "watch-agent-turns-1a2b3c4d",
+			holderPaneId: "w13K:p1",
+			holderWorkspaceId: "w13K",
+			reason:
+				"the herdr name watch-agent-turns-1a2b3c4d is held by pane w13K:p1 in workspace w13K, " +
+				"which is no agent of this ticket: agent_name_taken",
+			...over,
+		});
+	}
+
+	test("the refused start records the pane and workspace that hold the name", () => {
+		const state = failedStartState();
+		recordCollision(state);
+		expect(state.handoff.nameCollision(TICKET)).toEqual({
+			heldName: "watch-agent-turns-1a2b3c4d",
+			holderPaneId: "w13K:p1",
+			holderWorkspaceId: "w13K",
+			reason:
+				"the herdr name watch-agent-turns-1a2b3c4d is held by pane w13K:p1 in workspace w13K, " +
+				"which is no agent of this ticket: agent_name_taken",
+			at: new Date(ATTEMPT_NOW()).toISOString(),
+		});
+		// The projection carries the same fact onto the row, so the marker and the
+		// detail state it without a rule of their own.
+		expect(
+			state.ticketWorkCycle.ticketListViews(POSITION_STATES, "implement").rows[0].nameCollision,
+		).toEqual(expect.objectContaining({ holderPaneId: "w13K:p1", holderWorkspaceId: "w13K" }));
+		state.close();
+	});
+
+	test("a second refusal refreshes the one fact with the handles herdr names now", () => {
+		// The collision is one standing fact per Ticket, not one row per refusal:
+		// the operator is sent to where the name is held now.
+		const state = failedStartState();
+		recordCollision(state);
+		recordCollision(state, { holderPaneId: "w91Z:p7", at: "2026-10-04T09:30:00Z" });
+		expect(state.handoff.nameCollision(TICKET)).toEqual(
+			expect.objectContaining({ holderPaneId: "w91Z:p7", at: "2026-10-04T09:30:00Z" }),
+		);
+		state.close();
+	});
+
+	test("the operator's Handoff that takes the name clears the fact", () => {
+		const state = failedStartState();
+		recordCollision(state);
+		expect(state.handoff.clearNameCollision(TICKET)).toBe(true);
+		expect(state.handoff.nameCollision(TICKET)).toBe(null);
+		expect(
+			state.ticketWorkCycle.ticketListViews(POSITION_STATES, "implement").rows[0].nameCollision,
+		).toBe(null);
+		// Nothing stands, so the clear answers that it cleared nothing: the caller
+		// never reports a fact it did not end.
+		expect(state.handoff.clearNameCollision(TICKET)).toBe(false);
+		state.close();
+	});
+
+	test("the collision is never a Leftover environment, and the reverse", () => {
+		// Two facts, two cleanups: the plane knows how to end the Ticket's own
+		// environment and owns no cleanup for a stranger's pane (ADR 0012, ADR
+		// 0107). Neither read answers for the other.
+		const state = failedStartState();
+		recordCollision(state);
+		expect(leftoversOf(state, TICKET)).toEqual([]);
+		const cleared = state.handoff.clearLeftoverEnvironments(TICKET, { handoffId: TICKET });
+		expect(cleared).toBe(0);
+		expect(state.handoff.nameCollision(TICKET)).not.toBe(null);
+
+		// A Leftover environment stands on a handoff that reached its Agent, so the
+		// Ticket gets one: the fact the close cleanup could not clear.
+		const claim = state.handoff.claimHandoff(TICKET, choice, "open");
+		if (!claim.ok) throw new Error(claim.reason);
+		state.handoff.settleHandoff(claim.claim.attemptId, true, undefined, {
+			paneId: "pane-1",
+			workspaceId: "ws-1",
+		});
+		state.handoff.recordLeftoverEnvironment({
+			ticketIdentity: TICKET,
+			handoffId: claim.claim.attemptId,
+			reason: "the worktree checkout would not close",
+		});
+		expect(state.handoff.nameCollision(TICKET)).not.toBe(null);
+		expect(leftoversOf(state, TICKET)).toHaveLength(1);
+		state.handoff.clearNameCollision(TICKET);
+		// The collision leaves; the Ticket's own leftover stands on.
+		expect(state.handoff.nameCollision(TICKET)).toBe(null);
+		expect(leftoversOf(state, TICKET)).toHaveLength(1);
+		state.close();
+	});
+
+	test("the batched read answers every Ticket the list holds, and none it does not", () => {
+		const state = openFactoryState(":memory:", ATTEMPT_NOW);
+		state.sourceFact.initializeSources([sourceA]);
+		state.sourceFact.applyFetch(
+			sourceA,
+			success([fetched(), { ...fetched(), externalKey: "I_9" }]),
+		);
+		recordCollision(state);
+		const found = state.handoff.nameCollisionsFor([TICKET, "github:github.com:I_9"]);
+		expect(found.size).toBe(1);
+		expect(found.get(TICKET)).not.toBeUndefined();
+		// A Ticket the read holds no row for answers absent: the caller folds the
+		// fact into every row it lists and states nothing for the rest.
+		expect(found.has("github:github.com:I_9")).toBe(false);
+		state.close();
+	});
+
+	test("the fact survives the state file being closed and reopened", () => {
+		// The refusal stands until the operator acts, and the operator may act in a
+		// later run: the fact is on the file, not in the process.
+		const path = statePath();
+		const state = openFactoryState(path, ATTEMPT_NOW);
+		state.sourceFact.initializeSources([sourceA]);
+		state.sourceFact.applyFetch(sourceA, success([fetched()]));
+		recordCollision(state);
+		state.close();
+
+		const reopened = openFactoryState(path, ATTEMPT_NOW);
+		expect(reopened.handoff.nameCollision(TICKET)).toEqual(
+			expect.objectContaining({ holderPaneId: "w13K:p1", holderWorkspaceId: "w13K" }),
+		);
+		reopened.close();
+	});
+
+	test("the collision table reaches a file written before it (issue #299)", () => {
+		// A v29 file has never heard of the fact. It gains the table on the next
+		// open, and a fact recorded there reads back the same way.
+		const path = statePath();
+		const state = openFactoryState(path, ATTEMPT_NOW);
+		state.sourceFact.initializeSources([sourceA]);
+		state.sourceFact.applyFetch(sourceA, success([fetched()]));
+		recordCollision(state);
+		state.close();
+
+		const db = new Database(path);
+		db.exec("DROP TABLE name_collisions");
+		db.prepare("UPDATE schema_version SET version = 29").run();
+		db.close();
+
+		const reopened = openFactoryState(path, ATTEMPT_NOW);
+		expect(reopened.handoff.nameCollision(TICKET)).toBe(null);
+		recordCollision(reopened);
+		expect(reopened.handoff.nameCollision(TICKET)).toEqual(
+			expect.objectContaining({ holderPaneId: "w13K:p1" }),
+		);
+		reopened.close();
+		const check = new Database(path, { readonly: true });
+		const tables = (
+			check.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as Array<{
+				name: string;
+			}>
+		).map((row) => row.name);
+		expect(tables).toContain("name_collisions");
+		expect(
+			(check.prepare("SELECT version FROM schema_version").get() as { version: number }).version,
+		).toBe(SCHEMA_VERSION);
+		check.close();
+	});
+});

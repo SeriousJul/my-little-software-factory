@@ -110,11 +110,19 @@ operator named by hand, or a pre-change Agent whose Handoff row records no name
 - stays a stranger, and the Handoff fails with that holder named. The tag makes
 a stranger collision rare; it does not remove it. The plane keeps the failure
 deliberately: a stranger's name is not this Handoff's to take, and the operator
-is sent to the pane that holds it. If a live install ever meets one, the
-settlement is to let a stranger collision on the stable name fall through to
-the cycle names, which still asks for the stable name first and still lets it
-win when it is free. That is not the alternative ADR 0012 rejected: it hides no
-leftover and renames no Agent the operator knows.
+is sent to the pane that holds it.
+
+**Amended by ADR 0107: the settlement for a stranger collision is a fact, not a
+fall-through.** This paragraph said that if a live install ever met one, the
+settlement was to let a stranger collision on the stable name fall through to the
+cycle names. ADR 0107 rejects that option and settles it another way, and a live
+install did meet one: one Ticket re-asked 1,772 times in three hours and met the
+same refusal each time. Falling through starts the Ticket under a name that is not
+the one the plane derives for it, which leaves the stable name held, breaks
+ADR 0043's rule that a live Agent belongs to a Ticket by its name, and says
+nothing about the pane. What stands here is the search rule - a stranger ends it -
+and what ADR 0107 adds is that the refusal leaves a standing fact on the Ticket,
+so the re-ask waits for the operator instead of spending the Handoff limit.
 
 **Every agent name the plane asks herdr for changes.** A Ticket whose Handoff
 records carry a `herdr_name` keeps that recorded name everywhere the plane

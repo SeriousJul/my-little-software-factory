@@ -84,3 +84,32 @@ the run and the automatic starts resume; ignoring the ticket, or muting its
 source, answers the failure and takes the marker off the row. A start of yours
 that fails keeps the park standing, because it met the same refusal. See
 [ADR 0106](../adr/0106-a-run-of-failed-handoff-starts-parks-its-ticket-and-the-park-states-itself.md).
+
+## When herdr holds the ticket's Agent name
+
+Every ticket asks herdr for one stable Agent name, and herdr holds one name space
+across every Agent it knows (ADR 0098). When a pane the plane cannot tie to that
+ticket holds the name - another Agent, or one from a run the state file no longer
+carries - herdr refuses the start, and the start has nothing left to try: the same
+ask meets the same line until a person closes that Agent in herdr.
+
+The refusal leaves a fact on the ticket: the Agent name collision. The row wears
+`name held` beside the `leftover` marker, the detail names the pane, the
+workspace, the name, and since when, the record names the hold once with the
+refusal beside it, and the Message line states it as a standing warning, which
+sends a desktop notification. While it stands the top-up adds no automatic start
+for that ticket, so the re-ask waits for you instead of spending the handoff limit
+on a refusal herdr has already given.
+
+It is not a leftover environment. A leftover environment is your own ticket's
+workspace, tab, or Agent that herdr did not remove, and the plane asks herdr to
+clean it up. The collision is a name in a pane the plane never made, and the plane
+owns no cleanup for it. The two markers ride the same lane and never stand for one
+another.
+
+One act clears it, and nothing holds that act out: the handoff you start yourself.
+A start that reaches its Agent took the name, so the fact leaves and the automatic
+starts resume with no second act. A start of yours that fails for another reason
+never asked for the name, so the fact stands. Ignoring the ticket, or muting its
+source, answers the refusal the way they answer a run of failed starts. See
+[ADR 0107](../adr/0107-a-herdr-agent-name-held-by-a-stranger-is-a-fact-on-the-ticket-and-the-top-up-waits-for-the-operator.md).

@@ -61,6 +61,7 @@ function ticket(state: TicketState, environment: (typeof ENVIRONMENT_KINDS)[numb
 		muted: false,
 		mutedAt: null,
 		leftover: null,
+		nameCollision: null,
 	};
 }
 

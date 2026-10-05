@@ -108,6 +108,7 @@ const ticket: Ticket = {
 	failedStartStreak: 0,
 	lastCompletion: null,
 	leftover: null,
+	nameCollision: null,
 };
 
 const defaultChoice = {
@@ -3488,6 +3489,7 @@ describe("a leftover agent that holds the ticket's name", () => {
 		expect(outcome.status === "ok" && outcome.agent.name).toBe(cycle);
 		expect(outcome.status === "ok" && outcome.collision).toEqual({
 			stableName: AGENT,
+			heldName: AGENT,
 			startedAs: cycle,
 			holder: {
 				terminalId: "term_1",

@@ -6,7 +6,7 @@
 
 import type { Database } from "bun:sqlite";
 import { StateError } from "./store.ts";
-export const SCHEMA_VERSION = 29;
+export const SCHEMA_VERSION = 30;
 export const SCHEMA_V1 = `
 	CREATE TABLE tickets (
 		identity TEXT PRIMARY KEY, state TEXT NOT NULL, work_cycle INTEGER NOT NULL,
@@ -291,6 +291,38 @@ export const MIGRATION_V28_TO_V29_FAILED_START_RUN_INDEXES = `
 	CREATE INDEX IF NOT EXISTS attempts_ticket_reached ON handoff_attempts(ticket_identity) WHERE stage <> 'failed';
 	CREATE INDEX IF NOT EXISTS attempts_ticket_failed ON handoff_attempts(ticket_identity) WHERE stage = 'failed';
 `;
+/**
+ * The table the Agent name collision stands on (issue #299, ADR 0107).
+ *
+ * A start refused because herdr holds the Ticket's Agent name in a pane the
+ * plane does not own leaves a fact the operator has to see and act on, and
+ * the fact outlives the attempt that met it: it stands until the operator's own
+ * Handoff takes the name. The attempt ledger cannot carry it - the ledger
+ * answers a run and a wait, not a standing fact with handles the operator reads
+ * - and the `handoffs` table holds only the starts that reached an Agent, while
+ * this refusal is exactly the start that reached none. So the fact has its own
+ * row per Ticket, in the Handoff aggregate that owns the name (ADR 0095).
+ *
+ * One row per Ticket, not one per refusal: the collision is one standing fact,
+ * and a later refusal refreshes the row it already has, the way a leftover
+ * environment's reason refreshes the handoff row it stands on.
+ *
+ * The row names the name the holder holds, not the name the Handoff asked for
+ * first: when the Ticket's own Leftover environment held the stable name, the
+ * search reached the cycle name, and that is the name the stranger pane holds.
+ */
+export const MIGRATION_V29_TO_V30_NAME_COLLISIONS = `
+CREATE TABLE IF NOT EXISTS name_collisions (
+	ticket_identity TEXT PRIMARY KEY,
+	held_name TEXT NOT NULL,
+	holder_pane_id TEXT,
+	holder_workspace_id TEXT,
+	reason TEXT NOT NULL,
+	at TEXT NOT NULL,
+	cleared_at TEXT,
+	FOREIGN KEY (ticket_identity) REFERENCES tickets(identity) ON DELETE CASCADE
+);
+`;
 export function hasTable(db: Database, name: string): boolean {
 	return (
 		db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?").get(name) != null
@@ -408,6 +440,11 @@ export function migrate(db: Database, path: string): void {
 		// file already has is left alone.
 		if (!hasIndex(db, "attempts_ticket_failed") || !hasIndex(db, "attempts_ticket_reached"))
 			db.exec(MIGRATION_V28_TO_V29_FAILED_START_RUN_INDEXES);
+		// Asked for by name, the way the repository-init table is: a file the step
+		// already ran keeps its collision rows, and an older file opens with no
+		// standing collision, which is the honest answer for a run that never met a
+		// name refusal (issue #299, ADR 0107).
+		if (!hasTable(db, "name_collisions")) db.exec(MIGRATION_V29_TO_V30_NAME_COLLISIONS);
 		// The `queued` state the retired route wait stood in (ADR 0072): a
 		// file that still carries it ends those cycles the way a close does -
 		// the ticket rests open with the cycle counted once - in one state

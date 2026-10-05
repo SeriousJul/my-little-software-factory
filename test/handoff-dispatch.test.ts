@@ -1404,6 +1404,7 @@ describe("the outcome wording", () => {
 	const agent = { name: "webhook-retry", paneId: "pane-1", tabId: "tab-1", workspaceId: "ws-1" };
 	const held: NameCollision = {
 		stableName: "webhook-retry",
+		heldName: "webhook-retry",
 		startedAs: null,
 		holder: { paneId: "pane-x", tabId: "tab-x", workspaceId: "ws-x", terminalId: "term-x" },
 		own: false,
@@ -1945,7 +1946,7 @@ describe("the name fact", () => {
 		);
 	});
 
-	test("a name another ticket's agent holds fails the handoff and records no fact", async () => {
+	test("a name another ticket's agent holds fails the handoff and records the collision, not a leftover", async () => {
 		const rigRef = rig();
 		// The ticket has a closed cycle of its own, so a record that should not
 		// happen would land on its latest handoff.
@@ -1965,10 +1966,28 @@ describe("the name fact", () => {
 		await rigRef.waitForStarted(FIRST.identity);
 		expect(started[0]?.ok).toBe(false);
 		expect(rigRef.state.ticketWorkCycle.ticketState(FIRST.identity)).toBe("open");
-		expect(rigRef.state.handoff.leftoverEnvironment(FIRST.identity)).toBeNull();
 		// The stranger is not this ticket's to move aside, and a name of its own
 		// is no answer: the stable name was asked for once.
 		expect(rigRef.commands().filter((c) => c.startsWith("herdr agent start"))).toHaveLength(1);
+		// No Leftover environment lands: the holder is no handoff of this Ticket, so
+		// the fact the plane owns no cleanup for is the collision, and the two never
+		// stand for one another (issue #299, ADR 0107).
+		expect(rigRef.state.handoff.leftoverEnvironment(FIRST.identity)).toBeNull();
+		const collision = rigRef.state.handoff.nameCollision(FIRST.identity);
+		expect(collision).toEqual({
+			heldName: FIRST.name,
+			holderPaneId: "pane-stranger",
+			holderWorkspaceId: "ws-stranger",
+			reason: expect.stringContaining("agent_name_taken"),
+			at: expect.any(String),
+		});
+		// The fact's reason is the refusal the attempt's own row stores, which names
+		// the pane and the workspace - so the row, the detail, and the record state
+		// one refusal and not three (issue #231).
+		const line = rigRef.events.find((event) => event.startsWith("error:the herdr name"));
+		if (line === undefined) throw new Error("the refusal never reached the Message line");
+		expect(collision?.reason).toBe(line.slice("error:".length));
+		expect(collision?.reason).toContain("pane pane-stranger in workspace ws-stranger");
 	});
 
 	test("two Tickets that share a title each start under a name of their own (issue #216)", async () => {
@@ -2027,7 +2046,7 @@ describe("the name fact", () => {
 		expect(refusal.stderr).toContain(SHARED_A.name);
 	});
 
-	test("a refusal that names no holder is no agent of this ticket, and records nothing", async () => {
+	test("a refusal that names no holder is no agent of this ticket, and records the collision with no handles", async () => {
 		const rigRef = rig();
 		seedClosedHandoff(rigRef, FIRST);
 		rigRef.runner.set(
@@ -2050,6 +2069,15 @@ describe("the name fact", () => {
 			`error:the herdr name ${FIRST.name} is held by a pane herdr did not name, which is no agent of this ticket: agent name ${FIRST.name} is already used (agent_name_taken)`,
 		);
 		expect(rigRef.state.handoff.leftoverEnvironment(FIRST.identity)).toBeNull();
+		// herdr named no candidate, so the fact names none: the row and the detail say
+		// the name is held without inventing a place for the operator to look.
+		expect(rigRef.state.handoff.nameCollision(FIRST.identity)).toEqual(
+			expect.objectContaining({
+				heldName: FIRST.name,
+				holderPaneId: null,
+				holderWorkspaceId: null,
+			}),
+		);
 	});
 
 	test("a route treats the settled ticket's held name as its own, and starts beside it", async () => {
@@ -2075,7 +2103,7 @@ describe("the name fact", () => {
 		);
 	});
 
-	test("a route still fails on a name a stranger holds, and records nothing", async () => {
+	test("a route still fails on a name a stranger holds, and records the collision on its own Ticket", async () => {
 		const rigRef = rig([ROUTE_SETTLED, ROUTE_TARGET]);
 		// The holder the refusal names is no agent of either ticket of the route.
 		settleRoutePair(rigRef, [{ paneId: "pane-stranger", workspaceId: "ws-stranger" }]);
@@ -2086,6 +2114,12 @@ describe("the name fact", () => {
 		expect(rigRef.state.ticketWorkCycle.ticketState(ROUTE_TARGET.identity)).toBe("open");
 		expect(rigRef.state.handoff.leftoverEnvironment(ROUTE_TARGET.identity)).toBeNull();
 		expect(rigRef.state.handoff.leftoverEnvironment(ROUTE_SETTLED.identity)).toBeNull();
+		// The collision lands on the Ticket whose name was refused - the position -
+		// and not on the settled Ticket the route continues (issue #299, ADR 0107).
+		expect(rigRef.state.handoff.nameCollision(ROUTE_TARGET.identity)).toEqual(
+			expect.objectContaining({ holderPaneId: "pane-stranger", holderWorkspaceId: "ws-stranger" }),
+		);
+		expect(rigRef.state.handoff.nameCollision(ROUTE_SETTLED.identity)).toBeNull();
 		// The line names the stranger's handles, so the operator can find the
 		// pane, and carries herdr's refusal behind the fact.
 		expect(rigRef.events).toContain(
@@ -2094,6 +2128,135 @@ describe("the name fact", () => {
 		expect(
 			rigRef.commands().filter((command) => command.startsWith("herdr agent start")),
 		).toHaveLength(1);
+	});
+
+	test("the operator's own Handoff that takes the name clears the collision (issue #299)", async () => {
+		const rigRef = rig();
+		// herdr holds the Ticket's name in a pane the plane never made, so the first
+		// ask is refused and the fact lands on the Ticket.
+		const held = new Map<string, { paneId: string; workspaceId: string }>([
+			[FIRST.name, { paneId: "pane-stranger", workspaceId: "ws-stranger" }],
+		]);
+		rigRef.dispatch = withRunner(rigRef, herdrWithItsOwnNameSpace(rigRef, held));
+		const refused: DispatchResult[] = [];
+		await expect(start(rigRef, FIRST, "open", (r) => refused.push(r))).resolves.toEqual({
+			ok: true,
+		});
+		await rigRef.waitForStarted(FIRST.identity);
+		expect(refused[0]?.ok).toBe(false);
+		expect(rigRef.state.handoff.nameCollision(FIRST.identity)).not.toBeNull();
+		// The operator closes the stranger's agent in herdr, then hands the Ticket off
+		// themselves: the one act the plane offers for the fact, and one the automatic
+		// gates never hold out. The start takes the stable name, and the fact leaves
+		// with it - the automatic adds resume on the same rule, with no second act.
+		held.delete(FIRST.name);
+		const second: DispatchResult[] = [];
+		await expect(start(rigRef, FIRST, "open", (r) => second.push(r))).resolves.toEqual({
+			ok: true,
+		});
+		await rigRef.waitForStarted(FIRST.identity);
+		expect(second[0]?.ok).toBe(true);
+		expect(rigRef.commands()).toContain(agentStart(FIRST.name));
+		expect(rigRef.state.ticketWorkCycle.ticketState(FIRST.identity)).toBe("handed-off");
+		expect(rigRef.state.handoff.nameCollision(FIRST.identity)).toBeNull();
+	});
+
+	test("a start that fails for another reason leaves the collision standing (issue #299)", async () => {
+		const rigRef = rig();
+		rigRef.runner.set(
+			"herdr",
+			["agent", "start", FIRST.name, "--kind", "pi", "--pane", "pane-agent"],
+			{
+				code: 1,
+				stderr: nameTaken(FIRST.name, [{ paneId: "pane-stranger", workspaceId: "ws-stranger" }]),
+			},
+		);
+		await expect(start(rigRef, FIRST, "open")).resolves.toEqual({ ok: true });
+		await rigRef.waitForStarted(FIRST.identity);
+		const first = rigRef.state.handoff.nameCollision(FIRST.identity);
+		expect(first).not.toBeNull();
+		// A later start herdr refuses for a different reason never asked for the name,
+		// so it answered nothing about it: the fact stands, with the refusal that
+		// stands under it unchanged.
+		rigRef.runner.set(
+			"herdr",
+			["agent", "start", FIRST.name, "--kind", "pi", "--pane", "pane-agent"],
+			{
+				code: 1,
+				stderr:
+					'{"error":{"code":"agent_pane_gone","message":"the pane is gone"},"id":"cli:agent:start"}\n',
+			},
+		);
+		await expect(start(rigRef, FIRST, "open")).resolves.toEqual({ ok: true });
+		await rigRef.waitForStarted(FIRST.identity);
+		expect(rigRef.state.handoff.nameCollision(FIRST.identity)).toEqual(first);
+	});
+
+	test("the Ticket's own leftover holds the name: a Leftover environment lands, and no collision", async () => {
+		// The two facts never stand for one another (issue #299, ADR 0107): the holder
+		// this Ticket's own handoff recorded is its own, and the Handoff takes its
+		// cycle name beside it (ADR 0012, ADR 0098).
+		const rigRef = rig();
+		const previous = seedClosedHandoff(rigRef, FIRST);
+		rigRef.runner.set(
+			"herdr",
+			["agent", "start", FIRST.name, "--kind", "pi", "--pane", "pane-agent"],
+			{
+				code: 1,
+				stderr: nameTaken(FIRST.name, [{ paneId: FIRST.paneId, workspaceId: FIRST.workspaceId }]),
+			},
+		);
+		await expect(start(rigRef, FIRST, "open")).resolves.toEqual({ ok: true });
+		await rigRef.waitForStarted(FIRST.identity);
+		expect(rigRef.state.ticketWorkCycle.ticketState(FIRST.identity)).toBe("handed-off");
+		expect(rigRef.state.handoff.leftoverEnvironment(FIRST.identity)?.handoffId).toBe(
+			previous.handoffId,
+		);
+		expect(rigRef.state.handoff.nameCollision(FIRST.identity)).toBeNull();
+	});
+
+	test("a stranger that holds the cycle name is named by the cycle name, not the stable one (issue #299)", async () => {
+		const rigRef = rig();
+		// The stable name belongs to this Ticket's own Leftover environment, so the
+		// search moves on to its cycle name - and there a pane the plane never made
+		// stands in the way (ADR 0098, ADR 0107).
+		const previous = seedClosedHandoff(rigRef, FIRST);
+		rigRef.runner.set(
+			"herdr",
+			["agent", "start", FIRST.name, "--kind", "pi", "--pane", "pane-agent"],
+			{
+				code: 1,
+				stderr: nameTaken(FIRST.name, [{ paneId: FIRST.paneId, workspaceId: FIRST.workspaceId }]),
+			},
+		);
+		const cycle = cycleAgentName(FIRST, 2);
+		rigRef.runner.set("herdr", ["agent", "start", cycle, "--kind", "pi", "--pane", "pane-agent"], {
+			code: 1,
+			stderr: nameTaken(cycle, [{ paneId: "pane-stranger", workspaceId: "ws-stranger" }]),
+		});
+		const started: DispatchResult[] = [];
+		await expect(start(rigRef, FIRST, "open", (r) => started.push(r))).resolves.toEqual({
+			ok: true,
+		});
+		await rigRef.waitForStarted(FIRST.identity);
+		expect(started[0]?.ok).toBe(false);
+		// The two facts land apart, each on its own holder: the handle this Ticket's
+		// handoff recorded is the Leftover environment, the stranger is the collision.
+		expect(rigRef.state.handoff.leftoverEnvironment(FIRST.identity)?.handoffId).toBe(
+			previous.handoffId,
+		);
+		const collision = rigRef.state.handoff.nameCollision(FIRST.identity);
+		// The fact names the name the named pane actually holds - the cycle name, not
+		// the stable name the search started on - so the operator reads in that pane
+		// the same name the plane sent them to look for.
+		expect(collision).toEqual(
+			expect.objectContaining({
+				heldName: cycle,
+				holderPaneId: "pane-stranger",
+				holderWorkspaceId: "ws-stranger",
+			}),
+		);
+		expect(collision?.reason).toContain(`the herdr name ${cycle} is held by pane pane-stranger`);
 	});
 });
 

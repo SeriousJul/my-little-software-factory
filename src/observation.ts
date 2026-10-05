@@ -82,8 +82,14 @@ import {
 	failedStartParkLine,
 	failedStartParkStands,
 } from "./domain/failed-start-park.ts";
+import {
+	type NameCollisionFacts,
+	nameCollisionLine,
+	nameCollisionStands,
+} from "./domain/name-collision.ts";
 import { recordTicketName } from "./domain/record-name.ts";
 import {
+	type AgentNameCollision,
 	automaticStartBlocked,
 	type Completion,
 	handoffLimitReached,
@@ -605,6 +611,15 @@ export class ObservationCoordinator {
 	 */
 	private readonly parkReports = new Map<string, AutomaticCandidateHold>();
 	/**
+	 * The Agent name collisions this run has stated (issue #299, ADR 0107), held
+	 * the same way the parks are: one standing fact states its record line and its
+	 * Message warning once, and a cycle that reads the Ticket and finds the fact
+	 * gone retires the memory, so the next refusal states itself again. The key is
+	 * `automaticHoldKey` of the hold, shared with the park's memory, so one fact
+	 * has one key wherever it is stated.
+	 */
+	private readonly collisionReports = new Map<string, AutomaticCandidateHold>();
+	/**
 	 * The agents of the last successful list, for the UI's markers. Null
 	 * until the first success: an unreadable herdr must not read as "every
 	 * pane is missing".
@@ -916,6 +931,10 @@ export class ObservationCoordinator {
 		// The Failed-start parks that no longer stand, retired from the report so the
 		// next run of failures states itself again (issue #298, ADR 0106).
 		this.retireFailedStartParks();
+		// The Agent name collisions the same way (issue #299, ADR 0107): the operator's
+		// own Handoff that takes the name, or the ignore that answers the refusal,
+		// retires the memory, so the next refusal states itself again.
+		this.retireNameCollisions();
 
 		// Tickets and Consultations share this one successful Herdr list poll.
 		// A Consultation in `opening` or `working` already holds its seat in
@@ -2136,6 +2155,26 @@ export class ObservationCoordinator {
 		// to its next candidate. It gates the automatic adds only - the operator's own
 		// confirm reaches the dispatch past it, the way it passes the Handoff limit.
 		if (this.state.handoff.handoffBlockedUnrefreshed(intent.ticketIdentity)) return "refused";
+		// The Agent name collision (issue #299, ADR 0107): herdr holds the Ticket's
+		// stable Agent name in a pane the plane cannot tie to that Ticket, and the
+		// start that asked for it settled `failed` on that refusal. The two brakes
+		// above bound the loop; neither waits for the operator or says what stands in
+		// the way, and this refusal does not clear itself on a source read - the same
+		// ask meets the same line until the operator moves the pane. So the walk stops
+		// asking and the fact says why: the record names the hold once, in the voice
+		// the other walk holds wear, and carries the refusal the attempt stored.
+		const collision = this.nameCollisionFacts(intent.ticketIdentity);
+		if (collision.collision !== null && nameCollisionStands(collision.facts)) {
+			this.reportNameCollision(
+				{
+					reason: "agent-name-held",
+					candidate: intent.ticketIdentity,
+					detail: collision.collision.reason,
+				},
+				collision.collision,
+			);
+			return "refused";
+		}
 		// The Failed-start park (issue #298, ADR 0106): the Ticket's Handoff starts
 		// keep failing, and the Top-up adds no automatic start for it. The hold above
 		// waits out one failure for the source read that carries the Ticket's current
@@ -2235,6 +2274,67 @@ export class ObservationCoordinator {
 		for (const [key, hold] of this.parkReports)
 			if (!failedStartParkStands(this.failedStartParkFacts(hold.candidate)))
 				this.parkReports.delete(key);
+	}
+
+	/**
+	 * The Agent name collision's facts for one Ticket (issue #299, ADR 0107): the
+	 * standing record the refused start wrote, and whether the operator has
+	 * already answered it.
+	 *
+	 * The one place the facts are built, so the ask that holds the automatic adds
+	 * and the cycle that retires the report cannot state the fact differently. The
+	 * read is the one the ask takes for the single candidate it reached, the way
+	 * the Attempt hold reads that candidate's newest attempt; the projection
+	 * carries the same fact for every row the list rule leaves.
+	 */
+	private nameCollisionFacts(ticketIdentity: string): {
+		facts: NameCollisionFacts;
+		collision: AgentNameCollision | null;
+	} {
+		const collision = this.state.handoff.nameCollision(ticketIdentity);
+		return {
+			collision,
+			facts: {
+				held: collision !== null,
+				judgedOut: this.state.ticketWorkCycle.automaticStartBlockedTicket(ticketIdentity),
+			},
+		};
+	}
+
+	/**
+	 * The Agent name collision's report, stated once for as long as it stands
+	 * (issue #299, ADR 0107).
+	 *
+	 * Two channels carry the one fact, the way the park does. The record names the
+	 * hold in the voice the automatic walks' holds wear and states the refusal the
+	 * attempt's own row stores, so the file answers which Ticket the walk left
+	 * resting and what stood in its way; the Message line states the standing
+	 * warning the Desktop notification carries (ADR 0080) with the handles the
+	 * operator has to go find, because the plane owns no cleanup for a pane it
+	 * never made.
+	 */
+	private reportNameCollision(hold: AutomaticCandidateHold, collision: AgentNameCollision): void {
+		const key = automaticHoldKey(hold);
+		if (this.collisionReports.has(key)) return;
+		this.collisionReports.set(key, hold);
+		this.log.info(automaticHoldLine(hold, (identity) => this.ticketName(identity)));
+		this.onStatus("warning", nameCollisionLine(this.ticketName(hold.candidate), collision));
+	}
+
+	/**
+	 * The Agent name collisions this run has stated that no longer stand (issue
+	 * #299, ADR 0107).
+	 *
+	 * The fact clears when the operator's own Handoff takes the name, and the
+	 * ignore or a source mute answers the refusal. Neither runs a walk that reaches
+	 * the Ticket's ask, so without this the next refusal would stay silent. The
+	 * read runs only over the Tickets already reported.
+	 */
+	private retireNameCollisions(): void {
+		if (this.collisionReports.size === 0) return;
+		for (const [key, hold] of this.collisionReports)
+			if (!nameCollisionStands(this.nameCollisionFacts(hold.candidate).facts))
+				this.collisionReports.delete(key);
 	}
 
 	/**

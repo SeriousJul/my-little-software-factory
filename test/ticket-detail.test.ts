@@ -154,3 +154,120 @@ describe("Ticket detail wheel acceleration", () => {
 		}
 	});
 });
+
+/**
+ * The Agent name collision and the Leftover environment in the detail (issue
+ * #299, ADR 0107).
+ *
+ * A Leftover environment is the Ticket's own workspace, tab, or Agent herdr
+ * still holds, and the plane knows the cleanup that ends it. The collision is a
+ * name a pane the plane never made holds, and the plane owns no cleanup for it:
+ * the detail names the pane and workspace, and names the operator's one act. The
+ * two blocks stand apart, and neither states the other's fact.
+ */
+describe("the Agent name collision in the Ticket detail (issue #299)", () => {
+	const collision = {
+		heldName: "watch-agent-turns-1a2b3c4d",
+		holderPaneId: "w13K:p1",
+		holderWorkspaceId: "w13K",
+		reason:
+			"the herdr name watch-agent-turns-1a2b3c4d is held by pane w13K:p1 in workspace w13K, " +
+			"which is no agent of this ticket: agent_name_taken",
+		at: "2026-10-04T09:12:00Z",
+	};
+
+	/** The sample Ticket, carrying what the test names. */
+	const sample = (over: Partial<Ticket>): Ticket => ({
+		...(SAMPLE_TICKETS[0] as Ticket),
+		...over,
+	});
+
+	test("the detail names the pane and workspace that hold the name", () => {
+		const lines = detailLines(factOf(sample({ nameCollision: collision })), 120, 10);
+		expect(
+			hasCell(
+				lines,
+				"Agent name held: pane w13K:p1 in workspace w13K holds watch-agent-turns-1a2b3c4d",
+			),
+		).toBe(true);
+		// The refusal the attempt stored reaches the detail too, so the operator reads
+		// the same line the record carries.
+		expect(
+			lines.some((line) => cellsOf(line).some((cell) => cell.text.includes("agent_name_taken"))),
+		).toBe(true);
+		// The block says what the fact holds and what the operator's act is.
+		expect(
+			hasCell(
+				lines,
+				"the Top-up adds no automatic start; your own Handoff clears this once the pane gives the name up",
+			),
+		).toBe(true);
+		// And no Leftover block stands for it.
+		expect(
+			hasCell(
+				lines,
+				"Leftover: herdr workspace ws-1, tab tab-1, pane pane-1 is still open for this ticket",
+			),
+		).toBe(false);
+	});
+
+	test("the collision block and the Leftover block stand together, and each names its own fact", () => {
+		const lines = detailLines(
+			factOf(
+				sample({
+					nameCollision: collision,
+					leftover: {
+						handoffId: "attempt-old-cycle",
+						environment: "worktree",
+						workspaceId: "ws-old",
+						tabId: "tab-old",
+						paneId: "pane-old",
+						reason: "the worktree checkout would not close",
+						at: "2026-10-01T08:00:00Z",
+					},
+				}),
+			),
+			120,
+			10,
+		);
+		expect(
+			hasCell(
+				lines,
+				"Agent name held: pane w13K:p1 in workspace w13K holds watch-agent-turns-1a2b3c4d",
+			),
+		).toBe(true);
+		expect(
+			hasCell(
+				lines,
+				"Leftover: herdr workspace ws-old, tab tab-old, pane pane-old is still open for this ticket",
+			),
+		).toBe(true);
+	});
+
+	test("the operator's ignore or mute answers the refusal, and the block leaves with the marker", () => {
+		// The detail asks the fact module's predicate, the way the row's marker does and
+		// the way the Failed-start park's line does (ADR 0060, ADR 0070, ADR 0106): the
+		// two surfaces take the fact off together, so neither states a refusal the
+		// operator has already answered.
+		for (const judgedOut of [{ ignored: true }, { muted: true }]) {
+			const fact = factOf(sample({ nameCollision: collision, ...judgedOut }));
+			expect(fact.nameCollision).toBe(false);
+			const lines = detailLines(fact, 120, 10);
+			expect(
+				lines.some((line) => cellsOf(line).some((cell) => cell.text.includes("Agent name held"))),
+			).toBe(false);
+		}
+	});
+
+	test("a Ticket that carries neither fact wears neither block", () => {
+		const lines = detailLines(factOf(sample({})), 120, 10);
+		expect(
+			lines.some((line) => cellsOf(line).some((cell) => cell.text.includes("Agent name held"))),
+		).toBe(false);
+		expect(
+			lines.some((line) =>
+				cellsOf(line).some((cell) => cell.text.trimStart().startsWith("Leftover:")),
+			),
+		).toBe(false);
+	});
+});

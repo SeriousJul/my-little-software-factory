@@ -12,6 +12,7 @@
 import { randomUUID } from "node:crypto";
 import { blockedUnrefreshedHold } from "../domain/attempt-hold.ts";
 import type {
+	AgentNameCollision,
 	EnvironmentKind,
 	LeftoverEnvironment,
 	Ticket,
@@ -192,6 +193,37 @@ export interface HandoffAggregate {
 		identity: string,
 		ended: { workspaceId: string } | { tabId: string } | { handoffId: string },
 	): number;
+	/**
+	 * Record that a Handoff start of this Ticket asked herdr for its Agent name
+	 * and was refused because a pane the plane does not own holds it (issue #299,
+	 * ADR 0107). The row names the name that pane holds, which is the cycle name
+	 * when the Ticket's own Leftover environment held the stable one. The row is
+	 * one standing fact per Ticket: a later refusal refreshes it with the handles
+	 * herdr names now, the way a leftover environment's reason refreshes the fact
+	 * it stands on.
+	 */
+	recordNameCollision(input: {
+		ticketIdentity: string;
+		heldName: string;
+		holderPaneId: string | null;
+		holderWorkspaceId: string | null;
+		reason: string;
+		at?: string;
+	}): AgentNameCollision;
+	/**
+	 * The Agent name collision that stands unresolved on the Ticket, or null.
+	 * The automatic ask reads it for the one candidate it reached, the way the
+	 * Attempt hold reads that candidate's newest attempt.
+	 */
+	nameCollision(identity: string): AgentNameCollision | null;
+	/** The standing Agent name collision of every Ticket in the list, batched. */
+	nameCollisionsFor(identities: readonly string[]): Map<string, AgentNameCollision>;
+	/**
+	 * Clear the Ticket's standing Agent name collision, and answer whether one
+	 * stood. The operator's own Handoff that takes the name is the one act that
+	 * reaches this (issue #299, ADR 0107).
+	 */
+	clearNameCollision(identity: string): boolean;
 }
 
 /**
@@ -845,5 +877,76 @@ export class HandoffModule implements HandoffAggregate {
 							)
 							.run(at, identity, ended.handoffId);
 		return Number(cleared.changes);
+	}
+	recordNameCollision(input: {
+		ticketIdentity: string;
+		heldName: string;
+		holderPaneId: string | null;
+		holderWorkspaceId: string | null;
+		reason: string;
+		at?: string;
+	}): AgentNameCollision {
+		const at = input.at ?? new Date(this.db.now()).toISOString();
+		// One row per Ticket, refreshed by the next refusal: the collision is one
+		// standing fact, and the handles herdr names now are the ones the operator
+		// is sent to. The clear is stamped, never deleted, so the fact the operator
+		// acted on stays readable in the file the way a cleared leftover does.
+		this.db
+			.prepare(
+				"INSERT INTO name_collisions(ticket_identity, held_name, holder_pane_id, holder_workspace_id, reason, at, cleared_at) VALUES (?, ?, ?, ?, ?, ?, NULL) ON CONFLICT(ticket_identity) DO UPDATE SET held_name = excluded.held_name, holder_pane_id = excluded.holder_pane_id, holder_workspace_id = excluded.holder_workspace_id, reason = excluded.reason, at = excluded.at, cleared_at = NULL",
+			)
+			.run(
+				input.ticketIdentity,
+				input.heldName,
+				input.holderPaneId,
+				input.holderWorkspaceId,
+				input.reason,
+				at,
+			);
+		return {
+			heldName: input.heldName,
+			holderPaneId: input.holderPaneId,
+			holderWorkspaceId: input.holderWorkspaceId,
+			reason: input.reason,
+			at,
+		};
+	}
+	nameCollision(identity: string): AgentNameCollision | null {
+		return this.nameCollisionsFor([identity]).get(identity) ?? null;
+	}
+	/** The standing Agent name collisions of every Ticket in the list, batched. */
+	nameCollisionsFor(identities: readonly string[]): Map<string, AgentNameCollision> {
+		const found = new Map<string, AgentNameCollision>();
+		for (const chunk of identityChunks(identities)) {
+			const rows = this.db
+				.prepare(
+					`SELECT ticket_identity, held_name, holder_pane_id, holder_workspace_id, reason, at FROM name_collisions WHERE ticket_identity IN (${placeholders(chunk.length)}) AND cleared_at IS NULL`,
+				)
+				.all(...chunk) as unknown as Array<{
+				ticket_identity: string;
+				held_name: string;
+				holder_pane_id: string | null;
+				holder_workspace_id: string | null;
+				reason: string;
+				at: string;
+			}>;
+			for (const row of rows)
+				found.set(row.ticket_identity, {
+					heldName: row.held_name,
+					holderPaneId: row.holder_pane_id,
+					holderWorkspaceId: row.holder_workspace_id,
+					reason: row.reason,
+					at: row.at,
+				});
+		}
+		return found;
+	}
+	clearNameCollision(identity: string): boolean {
+		const cleared = this.db
+			.prepare(
+				"UPDATE name_collisions SET cleared_at = ? WHERE ticket_identity = ? AND cleared_at IS NULL",
+			)
+			.run(new Date(this.db.now()).toISOString(), identity);
+		return Number(cleared.changes) > 0;
 	}
 }

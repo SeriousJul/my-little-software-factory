@@ -402,6 +402,7 @@ _Avoid_: jump, follow, attach
 **Handoff**:
 Assigning a ticket to an agent type and an environment with a task type, and starting the agent's execution.
 It asks Herdr for the ticket's stable Agent name, which names that ticket and no other (ADR 0098), and takes the name of its work cycle when the ticket's own Leftover environment still holds the stable one.
+When a pane the plane cannot tie to the ticket holds the stable name, the start fails and leaves the Agent name collision on the ticket (ADR 0107).
 _Avoid_: assign, dispatch, launch
 
 **Plane action**:
@@ -422,7 +423,7 @@ _Avoid_: workspace cleanup, environment teardown
 **Handoff attempt**:
 The durable record created before a handoff makes its first external change.
 An unresolved attempt prevents another handoff of the same ticket after a crash.
-An attempt that settled `failed` started no Agent and left no Handoff: it counts toward the Handoff limit, it stands as the Attempt hold (ADR 0101), it counts toward the run the Failed-start park stands on (ADR 0106), and it states itself in the record as the `handoff start failed:` line beside the `handoff started:` line the start wrote (issue #295).
+An attempt that settled `failed` started no Agent and left no Handoff: it counts toward the Handoff limit, it stands as the Attempt hold (ADR 0101), it counts toward the run the Failed-start park stands on (ADR 0106), it may leave the Agent name collision on the ticket (ADR 0107), and it states itself in the record as the `handoff start failed:` line beside the `handoff started:` line the start wrote (issue #295).
 _Avoid_: pending ticket, handoff state
 
 **Attempt hold**:
@@ -619,6 +620,15 @@ The workspace, tab, or Agent of a ticket's closed Handoff that Herdr still holds
 It is a durable fact on the ticket, visible in its row and in its detail, and its cleanup runs in herdr, not in the control plane.
 It never blocks a Handoff of that ticket.
 _Avoid_: orphaned agent, zombie workspace, stale checkout
+
+**Agent name collision**:
+The condition where Herdr refuses a Handoff's stable Agent name because a pane the control plane cannot tie to that ticket holds it (ADR 0107).
+It is a durable fact on the ticket, worn by its row as `name held` and stated in its detail with the pane, the workspace, the name that pane holds, and since when.
+The plane owns no cleanup for it: the pane is no workspace, tab, or Agent the plane made, so the operator closes it in herdr.
+While it stands the Top-up adds no automatic start for the ticket, the record names the hold once with the refusal the attempt stored beside the ticket, and the Message line states it once as the standing warning the Desktop notification carries (ADR 0080). Like the Attempt hold and the Failed-start park, it gates the automatic adds only: the operator's confirm, the pickup's claim, and a force-dispatch pass it.
+The one act that clears it is the Handoff the operator starts themselves: a start that reaches its Agent took the name, the fact leaves with it, and the automatic adds resume with no second act. A start that fails for another reason never asked for the name, so it answers nothing about it. The ticket's own ignore, or the mute of one of its sources, answers the refusal the way they answer a run of failed starts.
+It is not a Leftover environment, which is the ticket's own workspace, tab, or Agent Herdr still holds and whose cleanup the plane asks herdr to run. A holder the ticket's own handoff recorded is a Leftover environment and never a collision, and neither read answers for the other.
+_Avoid_: name conflict, stuck retry, orphaned agent
 
 **Leftover worktree directory**:
 The directory Herdr's naming rule reserves for a Branch, standing on disk after Git stopped recording the worktree that held it.

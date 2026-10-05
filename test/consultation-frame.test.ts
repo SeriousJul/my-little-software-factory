@@ -143,6 +143,7 @@ const selectedTicket: Ticket = {
 	muted: false,
 	mutedAt: null,
 	leftover: null,
+	nameCollision: null,
 };
 
 function configFor(): FactoryConfig {

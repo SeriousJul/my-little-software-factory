@@ -158,6 +158,15 @@ description: The module map of the source tree, for agents working in this repos
 	one name the `handoff queued:`, `handoff started:`, `merge queued:`, and
 	`merge started:` lines read for who put the row in the queue (issue #223). It
 	states no hold line of its own: the hold sentences are `top-up.ts`'s.
+	`name-collision.ts` holds the Agent name collision (issue #299, ADR 0107): the
+	one predicate every reader asks (the Top-up's gate, the row's marker, and the
+	detail's block all ask `nameCollisionStands`, so an ignore or a source mute
+	takes the fact off every surface at once), the one wording of the pointer into
+	herdr (`nameHolderText`, which the Handoff dispatch's refusal line and the
+	standing fact both read), and the Message-line sentence the Desktop
+	notification carries. The record line is the walk-hold sentence `top-up.ts`
+	owns, and the refusal inside it is the attempt's own. No surface re-states the
+	wording or the handles.
 	`attempt-record.ts` holds the one sentence a Handoff start leaves in the record
 	when its attempt settles `failed` - the prefix, the Ticket's name, and the
 	reason that attempt's row stores - so the Handoff dispatch's own failed starts

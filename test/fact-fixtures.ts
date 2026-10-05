@@ -94,6 +94,7 @@ export function ticket(over: Partial<Ticket> = {}): Ticket {
 		muted: false,
 		mutedAt: null,
 		leftover: null,
+		nameCollision: null,
 		...over,
 	};
 }

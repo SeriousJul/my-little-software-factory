@@ -367,6 +367,42 @@ export interface LeftoverEnvironment {
 }
 
 /**
+ * The Agent name collision: the fact one Ticket carries when a Handoff start
+ * asked herdr for its stable Agent name and herdr refused because a pane the
+ * plane does not own holds that name (issue #299, ADR 0107).
+ *
+ * It is not a Leftover environment. A Leftover environment is the Ticket's own
+ * workspace, tab, or Agent that outlived its close, and the plane can name the
+ * cleanup that ends it; the holder here belongs to no Handoff the plane made,
+ * so the plane owns no cleanup for it and the operator is sent to the pane.
+ * The two facts stand apart on the row and in the detail for that reason.
+ *
+ * The fact is durable until the operator's own Handoff takes the name, and
+ * while it stands the Top-up adds no automatic start for the Ticket.
+ */
+export interface AgentNameCollision {
+	/**
+	 * The herdr Agent name the holder holds: the Ticket's stable name, or its
+	 * work-cycle name when its own Leftover environment held the stable one and
+	 * the search reached the next candidate (ADR 0098). The fact names the name
+	 * the named pane actually holds, so the operator reads a name there.
+	 */
+	heldName: string;
+	/** The herdr pane that holds the name, when herdr named one. */
+	holderPaneId: string | null;
+	/** The herdr workspace that holds the name, when herdr named one. */
+	holderWorkspaceId: string | null;
+	/**
+	 * The refusal the Handoff attempt stored, which names the pane and the
+	 * workspace. The record line states this same reason, so the row, the
+	 * detail, and the file name one refusal (issue #299, issue #231).
+	 */
+	reason: string;
+	/** When the plane last met the refusal, in ISO time. */
+	at: string;
+}
+
+/**
  * The gate's facts on one Ticket's row (ADR 0060, widened by ADR 0070).
  *
  * The ignore is the operator's act on this Ticket: the flag and the moment it
@@ -436,6 +472,13 @@ export interface Ticket extends TicketIgnoreFacts {
 	 * null when nothing of its closed handoffs is still alive in herdr.
 	 */
 	leftover: LeftoverEnvironment | null;
+	/**
+	 * The Agent name collision that stands unresolved on the ticket, or null
+	 * when no start of this ticket was refused on its stable Agent name
+	 * (issue #299, ADR 0107). It is a separate fact from the Leftover
+	 * environment above, and no reader folds one into the other.
+	 */
+	nameCollision: AgentNameCollision | null;
 	/**
 	 * The name of the first Workflow state whose match holds on the ticket,
 	 * or null when no state matches it.

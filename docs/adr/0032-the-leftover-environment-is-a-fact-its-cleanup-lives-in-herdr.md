@@ -60,3 +60,14 @@ The considered alternatives:
   leftover starts under the cycle name, and the leftover's agent holding
   the stable name is the case the fact makes visible, not the case the clear
   used to fix.
+
+**Amended by ADR 0107: a second herdr-held fact, with no cleanup of the plane's.**
+The sentence this decision owns is that the plane names the handles of an
+environment herdr still holds, and the cleanup runs in herdr. ADR 0107 adds a
+second herdr-held fact beside the leftover: the Agent name collision, a name held
+in a pane the plane never made. It is deliberately not a leftover environment -
+the plane recorded no handles for that pane, so it has no cleanup to ask herdr for
+and offers no clear of its own, exactly the settlement this decision reached for
+the leftover itself. The leftover's own rule, its row marker, its detail block,
+and its pointer to herdr stand unchanged, and the two facts wear different words
+and never answer for one another.
