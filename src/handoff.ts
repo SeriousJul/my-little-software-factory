@@ -54,6 +54,18 @@
  * raise after the agent started reads as the failed prompt it is, because a
  * started agent is never rolled back.
  *
+ * The pull request open hands the branch over (issue #296): once the push lands,
+ * the branch stands under the draft pull request it carries, and the start owns
+ * neither copy of it any more. The open states that fact in its answer, and the
+ * start level - `runStartSteps` - drops the branch row out of the residue record
+ * on the strength of it; no step reaches into another's record. A start that
+ * fails after that push removes its herdr environment and nothing else - no
+ * draft close, no remote branch delete, no local branch delete - so the ticket's
+ * next handoff reopens the worktree on the standing branch and reuses the
+ * standing pull request instead of building the whole lifecycle again from
+ * nothing. Before the push the start still owns the local branch it created,
+ * and its failure still removes it.
+ *
  * One residue is not a herdr environment at all, and no tool clears it: the
  * directory herdr named for a branch can stay on disk after git stopped
  * recording the checkout it held, and git then refuses every create on the
@@ -81,8 +93,8 @@ import {
 	ticketAgentNames,
 } from "./naming.ts";
 import {
-	closePullRequest,
 	listOpenPullRequestsByHeadBranch,
+	type OpenPullRequestRecord,
 	openDraftPullRequest,
 	pullRequestBodyFor,
 } from "./pull-request.ts";
@@ -1031,7 +1043,14 @@ interface Residue {
 	workspace: CreatedHandle | null;
 	/** The herdr worktree checkout this start created. */
 	worktree: CreatedHandle | null;
-	/** The git branch this start created. */
+	/**
+	 * The git branch this start created.
+	 *
+	 * The start level clears the row when the pull request open answers that its
+	 * push landed: the branch then stands under the draft pull request it carries,
+	 * and the next Handoff of the ticket reuses it instead of building the branch
+	 * again (issue #296).
+	 */
 	branch: string | null;
 }
 
@@ -1106,7 +1125,7 @@ async function runHandoffStart(request: HandoffStartRequest): Promise<HandoffOut
 	// still leaves the start able to name what it made and what it must not roll
 	// back (pull request #213 review).
 	const residue: Residue = { ...NO_RESIDUE };
-	const progress: StartProgress = { agent: null, pullRequestCleanup: null };
+	const progress: StartProgress = { agent: null };
 	let outcome: HandoffOutcome;
 	try {
 		outcome = await runStartSteps(request, check, ctx, residue, progress);
@@ -1114,10 +1133,11 @@ async function runHandoffStart(request: HandoffStartRequest): Promise<HandoffOut
 		outcome = raisedDuringStart(error, ctx, progress);
 	}
 	if (outcome.status === "failed") {
-		// The Agent never started: the residue of the pull request open goes first,
-		// then the Environment standing behind it, so a retry can run instead of
-		// failing on what this attempt left behind.
-		await runStartCleanup(progress.pullRequestCleanup, ctx, residue);
+		// The Agent never started: the Environment standing behind the failure goes,
+		// so a retry can run instead of failing on what this attempt left behind.
+		// What the pull request open made is not in that record: its push handed the
+		// branch and the draft to the ticket (issue #296).
+		await removeResidue(ctx, residue);
 	}
 	return outcome;
 }
@@ -1139,11 +1159,16 @@ async function runStartSteps(
 	// The step between the environment and the Agent is the Pull request open of
 	// a task type that opens one (ADR 0076): the environment stands, the branch
 	// is pushed, the draft stands or is reused, and only then does the prompt -
-	// filled with the pull request's url - go out. Its cleanup goes on the
-	// progress every failure answer reads, so a failure after the open runs it
-	// whether the open tagged its own failure or a command raised.
+	// filled with the pull request's url - go out. A failure of that open leaves
+	// the pushed branch and the draft standing on purpose: the ticket's next
+	// Handoff reuses them (issue #296), so the open makes no cleanup of its own.
 	const pre = await promptBeforeAgent(ctx, request.prompt);
-	progress.pullRequestCleanup = pre.cleanup;
+	// The handover is the open's own fact, and the start acts on it here: once the
+	// push landed, the branch belongs to the ticket's pull request, and this start
+	// owns neither copy of it whatever the open answered. Before the push the row
+	// stays, so the residue cleanup below still removes the local branch the start
+	// created.
+	if (pre.branchHandedOver) residue.branch = null;
 	if ("fail" in pre) return failed(pre.fail, ctx);
 	return await startAgentAndPrompt(
 		check.agent,
@@ -1163,8 +1188,6 @@ async function runStartSteps(
 interface StartProgress {
 	/** The Agent herdr accepted, once one is running. A started Agent is never rolled back. */
 	agent: StartedAgent | null;
-	/** The cleanup of the pull request open's residue, once that open has run. */
-	pullRequestCleanup: (() => Promise<void>) | null;
 }
 
 /**
@@ -1174,8 +1197,10 @@ interface StartProgress {
  * CommandRunner adapter is free to raise - the Stub runner wraps another runner,
  * and a caller's own callback can throw - and the rest of this module already
  * treats a raise as a failure it must answer, because an answer that escaped
- * would skip the cleanup of what the attempt created (see `runPullRequestOpen`).
- * The steps after the Environment stands are held to the same rule.
+ * would skip the cleanup of what the attempt created. Every step of the start
+ * answers a raise that way, the pull request open included (see
+ * `runPullRequestOpen`). The steps after the Environment stands are held to the
+ * same rule.
  *
  * A raise after the Agent started is the failed prompt it is: the Agent stays
  * running, its Environment stays, and the ticket settles as handed off with the
@@ -1196,29 +1221,6 @@ function raisedDuringStart(
 		};
 	}
 	return failed(`the handoff could not run a command: ${errorMessage(error)}`, ctx);
-}
-
-/**
- * The cleanup of one failed start: the pull request open's residue, then the
- * Environment behind it.
- *
- * Best effort, the way every cleanup in this module is: the start's own failure
- * is the reason the operator sees, so a cleanup that fails, or a cleanup command
- * that raises, adds no second failure on top of it.
- */
-async function runStartCleanup(
-	pullRequestCleanup: (() => Promise<void>) | null,
-	ctx: HandoffContext,
-	residue: Residue,
-): Promise<void> {
-	if (pullRequestCleanup !== null) {
-		try {
-			await pullRequestCleanup();
-		} catch {
-			// A cleanup command that raised is answered like one herdr refused.
-		}
-	}
-	await removeResidue(ctx, residue);
 }
 
 /**
@@ -1496,7 +1498,9 @@ async function localHeadBase(
  * the branch or HEAD: the branch is the branch, and herdr's `worktree open` owns
  * it. Otherwise the branch is checked in the checkout first. An existing branch
  * follows the request's branch policy - reused, or refused - and the reuse takes
- * no fetch. A missing branch is created from the worktree base (see
+ * no fetch. A branch the checkout does not carry is then checked on origin, and a
+ * remote copy standing there is fetched and reused (see `remoteBranchStands`).
+ * Only a branch neither copy carries is created from the worktree base (see
  * freshWorktreeBase).
  */
 async function buildWorktreeEnvironment(
@@ -1528,6 +1532,28 @@ async function buildWorktreeEnvironment(
 			return { outcome: failed(`Consultation branch already exists: ${branch}`, ctx) };
 		return reuseBranch(ctx, branch, residue);
 	}
+	// No local copy, but the remote copy may stand: a failed start leaves the
+	// branch on the remote under its draft (issue #296), an operator prunes local
+	// branches, and a fresh clone carries none. A branch built from the Worktree
+	// base would then push against the remote copy's hold commit, every retry
+	// would meet the same refusal, and the Handoff limit would spend on it. The
+	// remote copy is the standing branch: the start fetches its local copy and
+	// takes the reuse path, so the branch is never built twice.
+	if (request.branch.policy === "reuse" && (await remoteBranchStands(checkout, branch, ctx))) {
+		const fetched = await ctx.runner.run(
+			"git",
+			["-C", checkout, "fetch", "origin", `${branch}:refs/heads/${branch}`],
+			{ env: { GIT_TERMINAL_PROMPT: "0" } },
+		);
+		if (fetched.code !== 0)
+			return {
+				outcome: failed(
+					`the standing remote branch ${branch} could not be fetched: ${commandFailureText(fetched)}`,
+					ctx,
+				),
+			};
+		return reuseBranch(ctx, branch, residue);
+	}
 	const base = await freshWorktreeBase(checkout, ctx.runner);
 	if ("fail" in base) return { outcome: failed(base.fail, ctx) };
 	if (base.note !== undefined) ctx.notes = { ...ctx.notes, worktreeBase: base.note };
@@ -1543,6 +1569,29 @@ async function buildWorktreeEnvironment(
 		"--no-focus",
 	]);
 	return createdWorktreeAnswer(created, ctx, branch, true, residue);
+}
+
+/**
+ * Whether origin carries one branch by name.
+ *
+ * The read is the branch check the local one cannot make: the remote copy stands
+ * on its own once a failed start hands it over (issue #296). A read that does not
+ * answer - no origin, no network, an unreadable answer - says nothing, and the
+ * fresh-branch path stays the path the plane took before the standing remote copy
+ * was a case: the open's own read of the same branch answers the outage with its
+ * reason, and no start is refused for a check that could not run.
+ */
+async function remoteBranchStands(
+	checkout: string,
+	branch: string,
+	ctx: HandoffContext,
+): Promise<boolean> {
+	const listed = await ctx.runner.run(
+		"git",
+		["-C", checkout, "ls-remote", "--heads", "origin", branch],
+		{ env: { GIT_TERMINAL_PROMPT: "0" } },
+	);
+	return listed.code === 0 && listed.stdout.trim() !== "";
 }
 
 /**
@@ -1891,12 +1940,16 @@ async function startInOpenedWorktree(
 
 /**
  * The answer the pull request open gives (ADR 0076): the pull request that
- * stands on the branch - reused, or opened as a draft - with the facts the
- * cleanup needs to tell what this attempt created from what pre-dates it.
+ * stands on the branch - reused, or opened as a draft - and the handover fact
+ * the start needs for its own cleanup (issue #296). `branchHandedOver` states
+ * that the push landed, so the branch stands on the remote under the pull
+ * request it carries and this start owns neither copy of it; the answer that
+ * says false left no branch on the remote, and the start still owns the local
+ * copy it created.
  */
 type PullRequestOpenAnswer =
-	| { url: string; number: number; opened: boolean; createdRemoteBranch: boolean }
-	| { fail: string; cleanup: () => Promise<void> };
+	| { url: string; number: number; branchHandedOver: true }
+	| { fail: string; branchHandedOver: boolean };
 
 /**
  * The pull request open (ADR 0076): the ticket's factory branch is pushed
@@ -1911,22 +1964,22 @@ type PullRequestOpenAnswer =
  * commits stack on the hold. The fire's work test - the head's tree against
  * the base's, not the commit count - sees through it.
  *
- * The no-residue contract (ADR 0076): a failure answers with the reason it
- * reports and the cleanup of what the attempt created - the remote branch it
- * pushed when the branch did not stand on the remote before, and the pull
- * request it opened. What pre-dates the attempt is never touched: a branch
- * the remote already carried is not deleted, and a pull request the read
- * found is not closed.
+ * The open holds nothing back for a later failure (issue #296): it closes no
+ * draft and deletes no branch. Its answer carries the handover, and the start
+ * level keeps the local copy of the branch when the answer says the push landed.
+ * A Handoff that fails after the push leaves the branch standing on the remote
+ * under the draft it carries, and the ticket's next Handoff reopens the worktree
+ * on that branch and reuses that pull request instead of building the whole
+ * lifecycle again from nothing.
  */
 async function runPullRequestOpen(
 	ctx: HandoffContext,
 	plan: PullRequestOpenPlan,
 ): Promise<PullRequestOpenAnswer> {
-	const noopCleanup = async (): Promise<void> => {};
-	// The branch, before the push: the attempt deletes only a remote branch
-	// it created, never one the remote already carried. A command that raises
-	// is a failure the tagged answer carries, the way the module's reads do: an
-	// answer that escaped would skip the cleanup of what the attempt created.
+	// The branch, before the push: the attempt deletes nothing of it either way,
+	// but the read still decides whether the fresh branch needs the plane's hold
+	// commit. A command that raises is a failure the answer carries, the way the
+	// module's reads do.
 	let listed: CommandResult;
 	try {
 		listed = await ctx.runner.run(
@@ -1939,18 +1992,17 @@ async function runPullRequestOpen(
 			fail: `the pull request open could not read the factory branch from origin: ${errorMessage(
 				error,
 			)}`,
-			cleanup: noopCleanup,
+			branchHandedOver: false,
 		};
 	}
 	if (listed.code !== 0)
 		return {
-			fail: `the pull request open could not read the factory branch from origin: ${commandFailureText(listed)}`,
-			cleanup: noopCleanup,
+			fail: `the pull request open could not read the factory branch from origin: ${commandFailureText(
+				listed,
+			)}`,
+			branchHandedOver: false,
 		};
 	const existedBefore = listed.stdout.trim() !== "";
-	const pushCleanup = existedBefore
-		? noopCleanup
-		: () => deleteRemoteBranch(ctx, ctx.checkout, plan.branch);
 	// A branch the remote did not carry stands at its base: the create would
 	// answer "No commits between", and no retry of the create clears it. The
 	// hold commit gives the open a commit to stand on, before the push. The
@@ -1970,7 +2022,7 @@ async function runPullRequestOpen(
 		} catch (error) {
 			return {
 				fail: `the pull request open could not read the factory branch: ${errorMessage(error)}`,
-				cleanup: noopCleanup,
+				branchHandedOver: false,
 			};
 		}
 		const refLines = refs.stdout
@@ -1980,7 +2032,7 @@ async function runPullRequestOpen(
 		if (refs.code !== 0 || refLines.length !== 2)
 			return {
 				fail: `the pull request open could not read the factory branch: ${commandFailureText(refs)}`,
-				cleanup: noopCleanup,
+				branchHandedOver: false,
 			};
 		const [tip, tree] = refLines as [string, string];
 		let held: CommandResult;
@@ -1998,14 +2050,14 @@ async function runPullRequestOpen(
 		} catch (error) {
 			return {
 				fail: `the pull request open could not commit the hold: ${errorMessage(error)}`,
-				cleanup: noopCleanup,
+				branchHandedOver: false,
 			};
 		}
 		const holdSha = held.stdout.trim();
 		if (held.code !== 0 || holdSha === "")
 			return {
 				fail: `the pull request open could not commit the hold: ${commandFailureText(held)}`,
-				cleanup: noopCleanup,
+				branchHandedOver: false,
 			};
 		let moved: CommandResult;
 		try {
@@ -2018,14 +2070,18 @@ async function runPullRequestOpen(
 			]);
 		} catch (error) {
 			return {
-				fail: `the pull request open could not move the factory branch to the hold: ${errorMessage(error)}`,
-				cleanup: noopCleanup,
+				fail: `the pull request open could not move the factory branch to the hold: ${errorMessage(
+					error,
+				)}`,
+				branchHandedOver: false,
 			};
 		}
 		if (moved.code !== 0)
 			return {
-				fail: `the pull request open could not move the factory branch to the hold: ${commandFailureText(moved)}`,
-				cleanup: noopCleanup,
+				fail: `the pull request open could not move the factory branch to the hold: ${commandFailureText(
+					moved,
+				)}`,
+				branchHandedOver: false,
 			};
 	}
 	let pushed: CommandResult;
@@ -2036,117 +2092,117 @@ async function runPullRequestOpen(
 	} catch (error) {
 		return {
 			fail: `pushing the factory branch ${plan.branch} raised: ${errorMessage(error)}`,
-			// A push that raises may have created the branch: the delete is
-			// best effort, and a branch the remote pre-carried is never touched.
-			cleanup: pushCleanup,
+			// A push that raises may still have created the remote branch, and the
+			// local branch carries the hold commit either way: the answer hands the
+			// branch over, so the next Handoff reuses both copies instead of building
+			// a fresh branch the remote may then refuse.
+			branchHandedOver: true,
 		};
 	}
 	if (pushed.code !== 0)
 		return {
 			fail: `pushing the factory branch ${plan.branch} failed: ${commandFailureText(pushed)}`,
-			// A failed push creates no remote branch: the attempt owns nothing
-			// of its own to delete, and a branch the remote pre-carried is never
-			// touched.
-			cleanup: noopCleanup,
+			// A failed push created no remote branch, and the start still owns the
+			// local copy it created.
+			branchHandedOver: false,
 		};
-	const createdRemoteBranch = !existedBefore;
-	const records = await listOpenPullRequestsByHeadBranch(
-		ctx.runner,
-		plan.source,
-		plan.ticket.repositoryRef,
-		plan.branch,
-	);
+	// The push landed the branch on the remote, and from here the branch belongs
+	// to the ticket's pull request, not to this start (issue #296). The answer
+	// states the handover; the start level drops the branch row out of its
+	// residue record, so a later failure keeps the local copy beside the remote
+	// one and the next Handoff's branch check finds the branch and opens the
+	// worktree on it instead of building a fresh one the remote then refuses.
+	const handedOver = true as const;
+	// The source reads answer a raise with their own reason, but the read of a
+	// source's authentication stands outside those guards, and a CommandRunner
+	// adapter is free to raise (see `raisedDuringStart`). A raise here is a
+	// failure the answer carries: the push already landed, so it carries the
+	// handover too, and the start keeps the local copy of the branch beside the
+	// remote one the next Handoff reuses.
+	let records: OpenPullRequestRecord[] | { fail: string };
+	try {
+		records = await listOpenPullRequestsByHeadBranch(
+			ctx.runner,
+			plan.source,
+			plan.ticket.repositoryRef,
+			plan.branch,
+		);
+	} catch (error) {
+		return {
+			fail: `the pull request open could not read the branch's pull requests: ${errorMessage(error)}`,
+			branchHandedOver: handedOver,
+		};
+	}
 	if ("fail" in records)
 		return {
 			fail: `the pull request open could not read the branch's pull requests: ${records.fail}`,
-			cleanup: pushCleanup,
+			branchHandedOver: handedOver,
 		};
 	const standing = records[0];
 	if (standing !== undefined)
+		return { url: standing.url, number: standing.number, branchHandedOver: handedOver };
+	let opened: { number: number; url: string } | { fail: string };
+	try {
+		opened = await openDraftPullRequest(
+			ctx.runner,
+			plan.source,
+			plan.ticket.repositoryRef,
+			plan.branch,
+			plan.ticket.title,
+			pullRequestBodyFor(plan.ticket),
+		);
+	} catch (error) {
 		return {
-			url: standing.url,
-			number: standing.number,
-			opened: false,
-			createdRemoteBranch,
+			fail: `the pull request open could not open the draft pull request: ${errorMessage(error)}`,
+			branchHandedOver: handedOver,
 		};
-	const opened = await openDraftPullRequest(
-		ctx.runner,
-		plan.source,
-		plan.ticket.repositoryRef,
-		plan.branch,
-		plan.ticket.title,
-		pullRequestBodyFor(plan.ticket),
-	);
+	}
 	if ("fail" in opened)
 		return {
 			fail: `the pull request open could not open the draft pull request: ${opened.fail}`,
-			cleanup: pushCleanup,
+			branchHandedOver: handedOver,
 		};
-	return { url: opened.url, number: opened.number, opened: true, createdRemoteBranch };
-}
-
-/**
- * The best-effort delete of a remote branch the attempt created (ADR 0076):
- * the delete runs only in a cleanup, and a cleanup that cannot delete leaves
- * nothing behind to report: the handoff's reason is the fact the operator
- * sees, and the branch the remote carries stays readable in its own right.
- */
-async function deleteRemoteBranch(
-	ctx: HandoffContext,
-	checkout: string,
-	branch: string,
-): Promise<void> {
-	await ctx.runner.run("git", ["-C", checkout, "push", "origin", "--delete", branch], {
-		env: { GIT_TERMINAL_PROMPT: "0" },
-	});
-}
-
-/**
- * The cleanup of the residue of one pull request open (ADR 0076): the pull
- * request the attempt opened is closed, and the remote branch the attempt
- * created is deleted. Null when the attempt created nothing of its own - a
- * reuse on a branch the remote already carried - and a handoff that fails
- * after the open never touches what pre-dated it.
- */
-function pullRequestOpenCleanup(
-	ctx: HandoffContext,
-	plan: PullRequestOpenPlan,
-	opened: { url: string; number: number; opened: boolean; createdRemoteBranch: boolean },
-): (() => Promise<void>) | null {
-	if (!opened.opened && !opened.createdRemoteBranch) return null;
-	return async () => {
-		if (opened.opened)
-			await closePullRequest(ctx.runner, plan.source, plan.ticket.repositoryRef, opened.number);
-		if (opened.createdRemoteBranch) await deleteRemoteBranch(ctx, ctx.checkout, plan.branch);
-	};
+	return { url: opened.url, number: opened.number, branchHandedOver: handedOver };
 }
 
 /**
  * The step between the environment's creation and the agent's start
  * (ADR 0076): the pull request open for a task type that opens one, and the
- * prompt the start sends. A failure answers with the reason and the cleanup
- * of what the attempt created; a pass carries the prompt to send - filled
- * with the pull request's url where the open ran - and the cleanup a later
- * failure runs.
+ * prompt the start sends. A failure answers with its reason and nothing else:
+ * what the open pushed stands for the ticket's next Handoff to reuse
+ * (issue #296), and the Environment behind it is the residue record's to
+ * remove. Every answer carries the open's handover fact, and the start level
+ * acts on it. A pass carries the prompt to send - filled with the pull request's
+ * url where the open ran.
  */
 async function promptBeforeAgent(
 	ctx: HandoffContext,
 	prompt: HandoffPrompt,
-): Promise<
-	| { text: string; cleanup: (() => Promise<void>) | null }
-	| { fail: string; cleanup: () => Promise<void> }
-> {
-	if (typeof prompt === "string") return { text: prompt, cleanup: null };
+): Promise<{ branchHandedOver: boolean } & ({ text: string } | { fail: string })> {
+	if (typeof prompt === "string") return { text: prompt, branchHandedOver: false };
 	const plan = ctx.pullRequestOpen;
 	if (plan === undefined)
 		return {
 			fail: "the handoff prompt asks for the pull request url, but the handoff opens no pull request",
-			cleanup: async () => {},
+			branchHandedOver: false,
 		};
 	const opened = await runPullRequestOpen(ctx, plan);
-	if ("fail" in opened) return { fail: opened.fail, cleanup: opened.cleanup };
-	const text = await prompt(opened.url);
-	return { text, cleanup: pullRequestOpenCleanup(ctx, plan, opened) };
+	if ("fail" in opened) return { fail: opened.fail, branchHandedOver: opened.branchHandedOver };
+	// The render is a caller's callback, and a callback is free to raise. The
+	// handover is the open's fact, and it holds whatever the render then does: a
+	// raise becomes the failure this step answers, still carrying the handover, so
+	// the start never removes the local copy of a branch the remote already
+	// carries. A raise allowed to escape to `raisedDuringStart` would leave the
+	// remote branch and the draft standing over a checkout with no branch, and
+	// every retry would meet the push that cannot land (issue #296 review).
+	try {
+		return { text: await prompt(opened.url), branchHandedOver: opened.branchHandedOver };
+	} catch (error) {
+		return {
+			fail: `the handoff prompt raised: ${errorMessage(error)}`,
+			branchHandedOver: opened.branchHandedOver,
+		};
+	}
 }
 
 /**

@@ -752,8 +752,9 @@ export class StubWorldStore {
 		return { code: 0, stdout: this.itemUrl(repository, "pr", number), stderr: "" };
 	}
 
-	// The close the cycle end and the no-residue cleanup run (ADR 0076): the
-	// draft leaves the open state, and the labels it carried stay with it.
+	// The close the cycle end runs (ADR 0076): the draft leaves the open state,
+	// and the labels it carried stay with it. A failed Handoff start runs no
+	// close - the draft it opened stands for the next start to reuse (issue #296).
 	private answerPullClose(rest: string[]): Answer {
 		const number = externalKeyNumber(rest[0]);
 		let repositoryIdentity: string | null = null;

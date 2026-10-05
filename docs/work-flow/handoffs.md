@@ -46,14 +46,49 @@ type, because that is the first fact the plane read.
 
 A start that fails before its agent starts removes what that start created: the
 fresh tab, the workspace it created, the fresh worktree checkout, and the branch
-when it created the branch. The rule is the same in every environment. What
-pre-dates the attempt stands: a workspace you own, a branch the repository
-already carried, and a pull request the read found. A command the plane cannot
-run at all is answered the way a refusal is, so a start that stops in the middle
-of its own sequence still removes what it made. What the start really closed is
+when it created the branch. The rule is the same in every environment. The pull
+request open's handover, two paragraphs below, is the exception to the last of
+them. What pre-dates the attempt stands: a workspace you own, a branch the
+repository already carried, and a pull request the read found. A command the
+plane cannot run at all is answered the way a refusal is, so a start that stops
+in the middle of its own sequence still removes what it made. What the start
+really closed is
 confirmed in its record, under the kind the start recorded it under, so a
 Consultation's detail names no resource that is already gone, and its Close does
 not retry a workspace herdr no longer holds.
+
+The pull request open hands the branch over. Once the plane's push lands the
+factory branch on the remote, the branch and the draft pull request it carries
+belong to the ticket and not to the start: a start that fails after that push
+removes its herdr environment and nothing else - no draft close, no remote
+branch delete, no local branch delete. A command that raises is answered the way
+a refusal is, and a raise after the push carries the same handover. Your next
+handoff of that ticket reopens the worktree on the branch that stands and reuses
+the pull request the branch already carries, so a ticket wears at most one Fixing
+pull request across any number of failed starts. Before the push the branch never
+stood on the remote, and the start still removes the local branch it created. The
+create's retry window is a failure after the push: a draft create that never
+clears the fresh branch's lag leaves the branch standing on both sides with no
+pull request on it, and your next handoff opens the first draft on it.
+
+The branch on the remote is the standing branch. When the checkout no longer
+carries it - you pruned local branches, or a fresh clone carries none - the next
+handoff asks origin, fetches the branch it finds there, and reuses it, instead of
+building a fresh branch whose push the remote would refuse every time. And
+because every failed start removes its checkout and keeps its branch, the retry
+is the start that can meet the directory the removed checkout left behind with a
+build cache in it: the plane moves that leftover aside under a `.leftover` name
+and creates again (ADR 0062).
+
+The standing draft does not hide the ticket. The covered rule that withholds a
+ticket behind its Fixing pull request reads only the rows your sources fetched,
+and the default pull request source fetches no unlabeled draft: it asks for
+`no:draft`, or for a draft that carries `needs-work`. The draft a failed start
+leaves wears no label, so the ticket keeps its row in the Ticket section, the
+automatic top-up asks it again once the failed start's hold clears, and the next
+start reuses the branch and the draft. A draft you labeled `needs-work` is the
+case that does enter the list, and there the ticket rests behind its pull request
+the way ADR 0042 says.
 
 ## Model discovery
 

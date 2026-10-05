@@ -43,8 +43,11 @@ git server, but the source's read may not carry the fresh branch's commits
 yet when the create runs straight after the push. The create then answers
 `No commits exist` on a branch that stands, and the plane retries only that
 answer for a bounded window. A create that never clears the lag fails the
-open with the last answer the source gave, and the no-residue contract of
-the failure is untouched: the attempt deletes the remote branch it created.
+open with the last answer the source gave. The push runs before the create, so
+that failure lands after the handover the amendment below describes: the
+branch stands on the remote and in the checkout with no pull request on it,
+and the ticket's next Handoff reopens the worktree on that branch and opens
+the first draft on it.
 
 **A fresh branch opens with the plane's hold commit.** The source opens no
 pull request on a head that carries no commit ahead of its base: the create
@@ -83,15 +86,75 @@ the plane observes, and the label writer stays the single one the machine
 has.
 
 
-**The open is a hard gate on the start, and the no-residue contract extends
-to it.** A failed open refuses the Handoff start with a readable reason, the
-way a refused Placement does. A Handoff that fails after the open closes the
-pull request it opened and deletes the remote branch it created; a branch or
-a pull request that pre-dates the attempt is never touched, and a pull
-request the branch already carries is reused, never re-created. The open
-runs only on a worktree environment, because only that environment holds the
-factory branch; a live-worktree start of a task type that opens a pull
-request is refused with a readable reason.
+**The open is a hard gate on the start.** A failed open refuses the Handoff
+start with a readable reason, the way a refused Placement does. A pull request
+the branch already carries is reused, never re-created, and the open runs only
+on a worktree environment, because only that environment holds the factory
+branch; a live-worktree start of a task type that opens a pull request is
+refused with a readable reason.
+
+**Amended by issue #296: the failed start holds the branch and the draft.** The
+rule first written here was the no-residue contract extended: a Handoff that
+failed after the open closed the pull request it opened and deleted the remote
+branch it created, and the start's residue cleanup deleted the local branch too.
+That is retired. Once the open's push lands, the branch stands on the remote
+under the draft it carries, and the start owns neither copy of it: a Handoff
+that fails after the push removes its herdr environment and nothing else, and
+the ticket's next Handoff reopens the worktree on the standing branch and reuses
+the standing pull request. Before the push the branch never stood on the remote,
+and the start still removes the local branch it created, so the no-residue
+contract of ADR 0097 stands for everything the open did not hand over.
+
+The old rule spent the whole lifecycle on every failed start. Measured on the
+development run over the night of 4-5 October: three tickets, 20 attempts each,
+60 branch pushes, 60 draft pull requests opened with a written title and body,
+and 60 closes - 98% of every closed-unmerged pull request the factory had ever
+made. Each of those pull requests carried the ticket's full description and a
+`Closes #<ticket>` line, so one ticket's timeline ended with twenty closed pull
+requests each claiming to close it. The reuse path the plane already had - the
+worktree reopens on a branch that stands, and the open reads the branch's own
+pull requests before it creates - reaches that work for free once the failed
+start stops tearing it down.
+
+**The standing branch is the branch on the remote.** The reuse path reads the
+checkout's branch list, and the rule above lets the remote copy stand on its
+own, so the two copies can come apart: an operator prunes local branches, a
+fresh clone carries none, a second machine starts with nothing. A ticket branch
+the checkout does not carry is therefore checked on origin before it is built.
+When origin carries it, the start fetches that copy into a local branch and
+takes the reuse path: the branch is never built twice, and the push never meets
+the non-fast-forward refusal every retry would answer the same way until the
+Handoff limit of ADR 0101 spends. A remote read that does not answer - no
+origin, no network - says nothing, and the fresh-branch path stays the path it
+was.
+
+**The handover holds whatever comes after the push.** The handover is the open's
+own fact: its answer carries it, and the start level applies it. A CommandRunner
+adapter is free to raise, and a source's authentication read stands outside the
+raise guards the source reads keep; the open answers such a raise as the failure
+it is, and so does the prompt render a caller supplies. Either answer carries the
+handover once the push landed, so no start removes the local copy of a branch the
+remote already carries.
+
+**The retry runs on the leftover worktree directory.** Every failed start removes
+its checkout and keeps its branch, so the retry's create is the one that can meet
+the directory the removed checkout left behind with a build cache in it. The
+recovery of ADR 0062 - move the leftover aside under a name that says what it is,
+then create again - stands on the mainline reuse path, not only beside it.
+
+**The standing draft does not rest the ticket.** A draft left on the branch
+can hide its ticket only by entering the projection, because the covered rule
+of ADR 0042 reads the projection and nothing else. The default Pull request
+source policy keeps it out: the source asks for
+`is:open is:pr repo:<repository> -label:blocked no:draft`, and for a draft
+only with `label:needs-work`. The draft a failed start leaves wears no label,
+so the covered rule has no row to read: the ticket keeps its place in the
+Ticket section, the top-up asks it again once the failed start's hold clears,
+and the next start runs the reuse path. The corner where a standing draft does
+cover is one the source carries into the projection on its own - a draft the
+operator labeled `needs-work`, or a source whose own `filter` fetches drafts -
+and there ADR 0042's rule stands as written: the ticket rests behind its pull
+request until that pull request closes or loses the label.
 
 **A cycle end closes the draft, and never the published pull request.** A
 Close, an abandon, or a decision close that ends the cycle while the ticket's
@@ -99,10 +162,12 @@ pull request is still a draft closes that pull request: the work was never
 published, the branch keeps its commits, and the ticket's next cycle opens a
 fresh pull request on the same branch. A pull request the machine has
 published is never closed by a cycle end: its work carries the machine's
-position (ADR 0042). The rule exists because a draft left in place would
-cover its ticket - the list withholds a covered ticket and the top-up
-cancels its queued start, while a draft without `needs-work` stands in no
-pull request list at all - and the ticket would be unreachable.
+position (ADR 0042). The rule exists because a draft left in place can reach
+the projection after all - the policy fetches a draft that carries
+`needs-work`, and a covered ticket leaves the ticket list while the top-up
+cancels its queued start - and a draft the operator sees in no pull request
+list is inert there too. The cycle end takes the draft out instead of leaving
+the ticket's reach to a label.
 
 **The pull request opens under the source's authentication.** The same
 egress the label writes use, so the pull request is plane-owned in the same

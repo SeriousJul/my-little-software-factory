@@ -172,6 +172,54 @@ describe("the list rule", () => {
 		state.close();
 	});
 
+	test("the standing draft a failed Handoff start leaves covers nothing: the source never fetches it", () => {
+		// Issue #296 leaves the factory branch standing under the draft the open
+		// pushed up. The covered rule reads the projection, and the projection
+		// holds only the rows the source's queries fetch. The default pull request
+		// policy asks for `no:draft`, or for a draft that carries `needs-work`, and
+		// the standing draft carries no label - the world's answer is an empty pull
+		// request list (test/stub-world.test.ts pins that read). So the ticket keeps
+		// its row, and its next Handoff reuses the branch and the draft.
+		const state = openFactoryState(statePath());
+		state.sourceFact.initializeSources([issues, pulls]);
+		state.sourceFact.applyFetch(issues, success([issueTicket(issueIdentity)]));
+		state.sourceFact.applyFetch(pulls, success([]));
+		const projected = state.ticketWorkCycle.projectedTickets([], "implement");
+		const item = projected.find((ticket) => ticket.identity === issueIdentity);
+		if (item === undefined) throw new Error("the ticket is missing from the projection");
+		expect(isCoveredByFixingPullRequest(projected, item)).toBe(false);
+		const visible = state.ticketWorkCycle.ticketListViews([], "implement").rows;
+		expect(visible.map((ticket) => ticket.identity)).toEqual([issueIdentity]);
+		state.close();
+	});
+
+	test("the one draft the policy fetches is a needs-work draft, and that one covers the ticket", () => {
+		// The boundary of the rule above: a draft enters the projection only through
+		// the policy's other query, the one that requires `needs-work`. Once the row
+		// stands in the projection, ADR 0042 rests the open ticket behind it.
+		const state = openFactoryState(statePath());
+		state.sourceFact.initializeSources([issues, pulls]);
+		state.sourceFact.applyFetch(issues, success([issueTicket(issueIdentity)]));
+		state.sourceFact.applyFetch(
+			pulls,
+			success([
+				pullTicket(
+					pullIdentity,
+					7,
+					withHeadBranch({ draft: "true" }, "factory/5-persist-source-facts"),
+					{ labels: ["needs-work"] },
+				),
+			]),
+		);
+		const projected = state.ticketWorkCycle.projectedTickets([], "implement");
+		const item = projected.find((ticket) => ticket.identity === issueIdentity);
+		if (item === undefined) throw new Error("the ticket is missing from the projection");
+		expect(isCoveredByFixingPullRequest(projected, item)).toBe(true);
+		const visible = state.ticketWorkCycle.ticketListViews([], "implement").rows;
+		expect(visible.map((ticket) => ticket.identity)).toEqual([pullIdentity]);
+		state.close();
+	});
+
 	test("an in-flight ticket stays listed whatever pull requests exist", () => {
 		const state = openFactoryState(statePath());
 		state.sourceFact.initializeSources([issues, pulls]);
