@@ -8,10 +8,13 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import {
+	AUTOMATIC_CANDIDATE_HOLD_REASONS,
 	AUTOMATIC_HOLD_LINES,
 	AUTOMATIC_HOLD_REASONS,
 	AUTOMATIC_ROW_HOLD_REASONS,
 	type AutomaticBareHoldReason,
+	type AutomaticCandidateHold,
+	type AutomaticCandidateHoldReason,
 	automaticAddsHold,
 	automaticHoldKey,
 	automaticHoldLine,
@@ -149,6 +152,7 @@ describe("each automatic-walk hold names itself in the record (issue #223)", () 
 			"automatic walks hold: the Work queue already holds a continuation",
 			"automatic walks hold: the Work queue holds an item the operator staged",
 			"automatic walks hold: the Work queue holds a waiting row",
+			"automatic walks hold: the Ticket's Handoff starts keep failing",
 		]);
 	});
 
@@ -184,12 +188,39 @@ describe("each automatic-walk hold names itself in the record (issue #223)", () 
 		// the queue's own `handoff queued:` line states.
 		expect(AUTOMATIC_ROW_HOLD_REASONS).toEqual(["continuation-standing", "operator-row-standing"]);
 		const bare = AUTOMATIC_HOLD_REASONS.filter(
-			(reason) => !(AUTOMATIC_ROW_HOLD_REASONS as readonly string[]).includes(reason),
+			(reason) =>
+				!(AUTOMATIC_ROW_HOLD_REASONS as readonly string[]).includes(reason) &&
+				!(AUTOMATIC_CANDIDATE_HOLD_REASONS as readonly string[]).includes(reason),
 		) as AutomaticBareHoldReason[];
-		expect(bare).toHaveLength(AUTOMATIC_HOLD_REASONS.length - AUTOMATIC_ROW_HOLD_REASONS.length);
+		expect(bare).toHaveLength(
+			AUTOMATIC_HOLD_REASONS.length -
+				AUTOMATIC_ROW_HOLD_REASONS.length -
+				AUTOMATIC_CANDIDATE_HOLD_REASONS.length,
+		);
 		for (const reason of bare) {
 			expect(automaticHoldLine({ reason }, name)).toBe(AUTOMATIC_HOLD_LINES[reason]);
 		}
+	});
+
+	test("the parked Ticket's hold names the Ticket the walk reached (issue #298)", () => {
+		// The Failed-start park stands on one candidate, not on a Work queue row, so
+		// its line names the Ticket the walk held out - the same reason a standing-row
+		// line names its row (issue #223 review).
+		const reasons: AutomaticCandidateHoldReason[] = [...AUTOMATIC_CANDIDATE_HOLD_REASONS];
+		expect(reasons).toEqual(["handoff-failure-park"]);
+		const hold: AutomaticCandidateHold = {
+			reason: "handoff-failure-park",
+			candidate: "github:github.com:I_5",
+		};
+		expect(automaticHoldLine(hold, (identity) => `"${identity} title"`)).toBe(
+			'automatic walks hold: the Ticket\'s Handoff starts keep failing ("github:github.com:I_5 title")',
+		);
+		// The candidate is the key, so a park on another Ticket is another fact and
+		// states its own line.
+		expect(automaticHoldKey(hold)).toBe("handoff-failure-park github:github.com:I_5");
+		expect(automaticHoldKey(hold)).not.toBe(
+			automaticHoldKey({ reason: "handoff-failure-park", candidate: "github:github.com:I_6" }),
+		);
 	});
 
 	test("the same fact behind a different row is a different fact", () => {

@@ -102,6 +102,7 @@ function pullTicket(repository: string, number: number, sourceName: string): Tic
 		actionable: true,
 		handoffRecoveryRequired: false,
 		handoffCount: 0,
+		failedStartStreak: 0,
 		lastCompletion: null,
 		ignored: false,
 		ignoredAt: null,

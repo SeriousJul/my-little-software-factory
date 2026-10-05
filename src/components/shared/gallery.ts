@@ -642,6 +642,7 @@ function sampleTicket(
 					},
 		workCycle: 1,
 		handoffCount: 1,
+		failedStartStreak: 0,
 		// An `awaiting` Ticket holds the settled turn the Close decision records
 		// on, so the confirmation's first line can name the turn that settled.
 		lastCompletion:

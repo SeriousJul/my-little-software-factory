@@ -152,7 +152,9 @@ description: The module map of the source tree, for agents working in this repos
 	so a walk that added nothing names its own reason in the record, and the
 	reason for a held continuation names the staging of the row it waits behind
 	and that row itself, so the record answers which owed start the hold blocked
-	(issue #223, issue #223 review). `queue-staging.ts` holds the staging - the
+	(issue #223, issue #223 review). A hold names either the Work queue row the walk
+	waits behind or the candidate Ticket the walk held out (issue #298), and the one
+	key (`automaticHoldKey`) keeps the two apart. `queue-staging.ts` holds the staging - the
 	one name the `handoff queued:`, `handoff started:`, `merge queued:`, and
 	`merge started:` lines read for who put the row in the queue (issue #223). It
 	states no hold line of its own: the hold sentences are `top-up.ts`'s.
@@ -161,6 +163,12 @@ description: The module map of the source tree, for agents working in this repos
 	reason that attempt's row stores - so the Handoff dispatch's own failed starts
 	and the boot's recovery of a crashed run's claims state the same fact the same
 	way, and the line cannot be mistaken for a pre-start gate refusal (issue #295).
+	`failed-start-park.ts` holds the Failed-start park (issue #298, ADR 0106): the
+	count a run of failed Handoff starts parks at - half the Handoff limit, so the
+	cap stays the one number the operator sets - the one predicate every reader asks
+	(the Top-up's gate, the row's marker, the detail's line), and the Message-line
+	sentence the Desktop notification carries. No surface re-states the threshold or
+	the wording. The record line is the walk-hold sentence `top-up.ts` owns.
 	`record-name.ts` holds the name every one of those lines reads: the projection
 	title in quotes, or the identity when the projection holds no row. The Handoff
 	dispatch, the observation cycle, the App's queue-removal line, and the boot each

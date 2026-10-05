@@ -65,6 +65,7 @@ function ticketAt(
 		},
 		workCycle: 2,
 		handoffCount: 1,
+		failedStartStreak: 0,
 		lastCompletion: null,
 		description: "",
 		sourceKind: "github-issue",

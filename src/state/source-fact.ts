@@ -348,6 +348,19 @@ export class SourceFactModule implements SourceFactAggregate {
 			.all() as Array<{ identity: string }>;
 		return new Set(rows.map((row) => row.identity));
 	}
+	/**
+	 * Whether this one Ticket stands on a muted source (ADR 0070): the same join
+	 * read for one identity, and the read the Failed-start park asks beside the
+	 * Ticket's own ignore (issue #298).
+	 */
+	ticketHasMutedSource(ticketIdentity: string): boolean {
+		const row = this.db
+			.prepare(
+				"SELECT 1 AS muted FROM memberships m JOIN source_health h ON h.source_name = m.source_name WHERE m.ticket_identity = ? AND h.muted = 1 LIMIT 1",
+			)
+			.get(ticketIdentity);
+		return row !== null;
+	}
 	/** The sources that still actively list the ticket. */
 	activeMembershipSourceNames(identity: string): string[] {
 		const rows = this.db

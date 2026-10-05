@@ -997,6 +997,155 @@ describe("the failed start's hold (ADR 0077, ADR 0101)", () => {
 	});
 });
 
+/**
+ * The run of failed starts the Failed-start park counts (issue #298, ADR 0106).
+ *
+ * The same ledger the Attempt hold reads answers the run, but the run is a length
+ * and not a wait: it is the Ticket's newest attempts read back until one settled
+ * otherwise or is still in flight. The state clock stands at 11:00, so an
+ * attempt's own time is the fixture's.
+ */
+describe("the run of failed Handoff starts (issue #298)", () => {
+	/** One start that reached its Agent, on a Ticket with no attempts yet. */
+	function startOne(state: FactoryState): void {
+		const claim = state.handoff.claimHandoff(TICKET, choice, "open");
+		if (!claim.ok) throw new Error(claim.reason);
+		state.handoff.settleHandoff(claim.claim.attemptId, true, undefined, {
+			paneId: "pane-1",
+			tabId: "tab-1",
+			workspaceId: "ws-1",
+		});
+	}
+
+	test("the run is the failed settles claimed after the last start that reached an Agent", () => {
+		const state = failedStartState();
+		expect(state.handoff.failedStartStreaksFor([TICKET]).get(TICKET)).toBe(1);
+		failAnotherStart(state, "herdr refused the start");
+		failAnotherStart(state, "herdr refused the start");
+		expect(state.handoff.failedStartStreaksFor([TICKET]).get(TICKET)).toBe(3);
+		state.close();
+	});
+
+	test("a start that reaches its Agent ends the run", () => {
+		// The operator's own Handoff that works, or the automatic re-ask that finally
+		// lands, is the end of the run: the park the run stands on leaves with it.
+		const state = failedStartState();
+		failAnotherStart(state, "herdr refused the start");
+		expect(state.handoff.failedStartStreaksFor([TICKET]).get(TICKET)).toBe(2);
+		startOne(state);
+		expect(state.handoff.failedStartStreaksFor([TICKET]).get(TICKET)).toBe(0);
+		state.close();
+	});
+
+	test("an attempt still in flight ends the run", () => {
+		// An attempt with no outcome yet is not a failed start, and the next claim
+		// cannot run behind it (ADR 0041): the run stops at it.
+		const state = failedStartState();
+		failAnotherStart(state, "herdr refused the start");
+		const pending = state.handoff.claimHandoff(TICKET, choice, "open");
+		if (!pending.ok) throw new Error(pending.reason);
+		expect(state.handoff.failedStartStreaksFor([TICKET]).get(TICKET)).toBe(0);
+		state.handoff.settleHandoff(pending.claim.attemptId, false, "herdr refused the start");
+		expect(state.handoff.failedStartStreaksFor([TICKET]).get(TICKET)).toBe(3);
+		state.close();
+	});
+
+	test("a Ticket whose whole ledger failed is one run, and a Ticket with no attempt has none", () => {
+		const state = openFactoryState(":memory:", ATTEMPT_NOW);
+		state.sourceFact.initializeSources([sourceA]);
+		state.sourceFact.applyFetch(
+			sourceA,
+			success([fetched(), { ...fetched(), externalKey: "I_9" }]),
+		);
+		for (let i = 0; i < 4; i += 1) failAnotherStart(state, "herdr refused the start");
+		const streaks = state.handoff.failedStartStreaksFor([TICKET, "github:github.com:I_9"]);
+		expect(streaks.get(TICKET)).toBe(4);
+		// A Ticket the read holds no row for answers zero, not absent: the caller
+		// folds the run into every row it lists.
+		expect(streaks.get("github:github.com:I_9")).toBe(0);
+		state.close();
+	});
+
+	test("two claims in the same millisecond: the later claim is the boundary", () => {
+		// The clock stands still, so both rows carry one `created_at`. The run counts
+		// by the claim order, so the start that actually ran last ends it, and a
+		// failure claimed before it is not counted as a failure after it.
+		const state = failedStartState();
+		expect(state.handoff.failedStartStreaksFor([TICKET]).get(TICKET)).toBe(1);
+		startOne(state);
+		expect(state.handoff.failedStartStreaksFor([TICKET]).get(TICKET)).toBe(0);
+		state.close();
+	});
+
+	test("the run's indexes reach a file written before them (issue #298)", () => {
+		// The projection reads the run for every Ticket it lists, in one statement.
+		// On a file carrying thousands of attempts that statement needs the two
+		// partial indexes behind it, so a v28 file gains them on the next open and
+		// the run keeps its answer across the migration.
+		const path = statePath();
+		const state = openFactoryState(path, ATTEMPT_NOW);
+		state.sourceFact.initializeSources([sourceA]);
+		state.sourceFact.applyFetch(sourceA, success([fetched()]));
+		failAnotherStart(state, "herdr refused the start");
+		failAnotherStart(state, "herdr refused the start");
+		state.close();
+
+		const db = new Database(path);
+		for (const index of ["attempts_ticket_failed", "attempts_ticket_reached"]) {
+			db.exec(`DROP INDEX ${index}`);
+		}
+		db.prepare("UPDATE schema_version SET version = 28").run();
+		db.close();
+
+		const reopened = openFactoryState(path, ATTEMPT_NOW);
+		expect(reopened.handoff.failedStartStreaksFor([TICKET]).get(TICKET)).toBe(2);
+		reopened.close();
+		const check = new Database(path, { readonly: true });
+		const indexes = (
+			check.prepare("SELECT name FROM sqlite_master WHERE type = 'index'").all() as Array<{
+				name: string;
+			}>
+		).map((row) => row.name);
+		expect(indexes).toContain("attempts_ticket_failed");
+		expect(indexes).toContain("attempts_ticket_reached");
+		expect(
+			(check.prepare("SELECT version FROM schema_version").get() as { version: number }).version,
+		).toBe(SCHEMA_VERSION);
+		check.close();
+	});
+
+	test("a file that carries one of the two indexes gains the other (issue #298)", () => {
+		// The guard asks both names, not one. A file left with only the failed-settle
+		// half - a hand edit, or a run that ended between the two creates - still gains
+		// the boundary half, so the read keeps the index it needs for the newest attempt
+		// that is not a failed settle.
+		const path = statePath();
+		const state = openFactoryState(path, ATTEMPT_NOW);
+		state.sourceFact.initializeSources([sourceA]);
+		state.sourceFact.applyFetch(sourceA, success([fetched()]));
+		failAnotherStart(state, "herdr refused the start");
+		failAnotherStart(state, "herdr refused the start");
+		state.close();
+
+		const db = new Database(path);
+		db.exec("DROP INDEX attempts_ticket_reached");
+		db.close();
+
+		const reopened = openFactoryState(path, ATTEMPT_NOW);
+		expect(reopened.handoff.failedStartStreaksFor([TICKET]).get(TICKET)).toBe(2);
+		reopened.close();
+		const check = new Database(path, { readonly: true });
+		const indexes = (
+			check.prepare("SELECT name FROM sqlite_master WHERE type = 'index'").all() as Array<{
+				name: string;
+			}>
+		).map((row) => row.name);
+		expect(indexes).toContain("attempts_ticket_failed");
+		expect(indexes).toContain("attempts_ticket_reached");
+		check.close();
+	});
+});
+
 describe("the Handoff limit counts every attempt (ADR 0005, ADR 0101)", () => {
 	test("a start that never reached an Agent counts beside one that did", () => {
 		const state = failedStartState();

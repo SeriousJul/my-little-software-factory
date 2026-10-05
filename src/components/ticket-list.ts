@@ -52,6 +52,12 @@ import {
 const REPO_GAP = 1;
 /** The marker a ticket at the handoff limit wears at the row's end. */
 const LIMIT_TEXT = "handoff limit";
+/**
+ * The marker a Ticket the Failed-start park stands on wears (issue #298, ADR
+ * 0106), beside the Handoff limit's: its Handoff starts keep failing, and the
+ * Top-up adds no automatic start for it. The detail states the run it stands on.
+ */
+const PARK_TEXT = "failed starts";
 /** The marker a ticket with an environment still alive in herdr wears. */
 const LEFTOVER_TEXT = "leftover";
 /**
@@ -222,6 +228,7 @@ function rowSpans(
 	let budget = usableCols;
 	const trailing: { text: string; fg: string | undefined }[] = [];
 	if (fact.handoffLimit) trailing.push({ text: LIMIT_TEXT, fg: paint("yellow") });
+	if (fact.failedStartPark) trailing.push({ text: PARK_TEXT, fg: paint("yellow") });
 	if (fact.ticket.leftover !== null) trailing.push({ text: LEFTOVER_TEXT, fg: paint("yellow") });
 	// The ignore rides the same lane: the state badge keeps its own slot, so an
 	// ignored Ticket whose Agent works still reads `running` (ADR 0060), and the

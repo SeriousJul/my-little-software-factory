@@ -42,6 +42,7 @@ function ticket(state: TicketState, environment: (typeof ENVIRONMENT_KINDS)[numb
 					},
 		workCycle: 2,
 		handoffCount: 1,
+		failedStartStreak: 0,
 		lastCompletion: null,
 		description: "",
 		sourceKind: "github-issue",

@@ -75,6 +75,7 @@ export function ticket(over: Partial<Ticket> = {}): Ticket {
 		handoff: null,
 		workCycle: 1,
 		handoffCount: 0,
+		failedStartStreak: 0,
 		lastCompletion: null,
 		description: "",
 		sourceKind: "github-issue",

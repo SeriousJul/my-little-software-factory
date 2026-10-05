@@ -114,3 +114,4 @@ body states the context, the decision, and the consequences.
 - [ADR 0103: The config write-back edits the sections the plane owns](./0103-the-config-write-back-edits-the-sections-the-plane-owns.md)
 - [ADR 0104: A Plane action run in flight holds its Ticket's re-ask](./0104-a-plane-action-run-in-flight-holds-its-ticket-re-ask.md)
 - [ADR 0105: The push gate runs the three checks on the merged tree, and a hook owns the two cheap ones](./0105-the-push-gate-runs-the-three-checks-on-the-merged-tree-and-a-hook-owns-the-two-cheap-ones.md)
+- [ADR 0106: A run of failed Handoff starts parks its Ticket, and the park states itself](./0106-a-run-of-failed-handoff-starts-parks-its-ticket-and-the-park-states-itself.md)

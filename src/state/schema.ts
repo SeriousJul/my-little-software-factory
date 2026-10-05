@@ -6,7 +6,7 @@
 
 import type { Database } from "bun:sqlite";
 import { StateError } from "./store.ts";
-export const SCHEMA_VERSION = 28;
+export const SCHEMA_VERSION = 29;
 export const SCHEMA_V1 = `
 	CREATE TABLE tickets (
 		identity TEXT PRIMARY KEY, state TEXT NOT NULL, work_cycle INTEGER NOT NULL,
@@ -268,6 +268,29 @@ CREATE TABLE IF NOT EXISTS repository_init (
  */
 export const MIGRATION_V27_TO_V28_ATTEMPT_LATEST_INDEX =
 	"CREATE INDEX IF NOT EXISTS attempts_ticket_latest ON handoff_attempts(ticket_identity, created_at);";
+/**
+ * The indexes behind the Failed-start park's run read (issue #298, ADR 0106).
+ *
+ * The run read answers every Ticket in the projection's list in one statement:
+ * the newest attempt that is not a failed settle is each Ticket's boundary, and
+ * the run is the failed settles claimed after it. The boundary half scans the
+ * attempts that reached an Agent, and the count half the attempts that did not,
+ * and `attempts_ticket_latest` serves neither on its own: it carries every
+ * attempt, so each half re-reads the whole ledger. The two partial indexes split
+ * it, and each half walks only the rows its own half of the ledger holds.
+ *
+ * Both stand on `(ticket_identity)` alone. The index's implicit rowid term is the
+ * claim order the run counts, so `MAX(rowid)` of a Ticket's reached attempts, and
+ * the count of its failed settles above a rowid, are both answered from the index
+ * without a temporary B-tree. On a file holding 201 Tickets, one of them carrying
+ * 9,363 attempts, the read costs 2.6 ms with `attempts_ticket_latest` alone
+ * against 1.6 ms with both indexes (the median of 25 runs of the batched read over
+ * all 201 identities).
+ */
+export const MIGRATION_V28_TO_V29_FAILED_START_RUN_INDEXES = `
+	CREATE INDEX IF NOT EXISTS attempts_ticket_reached ON handoff_attempts(ticket_identity) WHERE stage <> 'failed';
+	CREATE INDEX IF NOT EXISTS attempts_ticket_failed ON handoff_attempts(ticket_identity) WHERE stage = 'failed';
+`;
 export function hasTable(db: Database, name: string): boolean {
 	return (
 		db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?").get(name) != null
@@ -376,6 +399,15 @@ export function migrate(db: Database, path: string): void {
 		// step already ran keeps its index, and an older file gains it before the
 		// first cycle that reads the Ticket's newest attempt (ADR 0101).
 		if (!hasIndex(db, "attempts_ticket_latest")) db.exec(MIGRATION_V27_TO_V28_ATTEMPT_LATEST_INDEX);
+		// Asked for by name, the way the newest-attempt index is: a file the step
+		// already ran keeps its indexes, and an older file gains the two partial
+		// indexes before the first cycle that reads a Ticket's run of failed starts
+		// (issue #298, ADR 0106). Both names are asked: a file that carries one and
+		// not the other - a hand edit, or a run that died between the two creates -
+		// still gains the pair, and each create is `IF NOT EXISTS`, so the half the
+		// file already has is left alone.
+		if (!hasIndex(db, "attempts_ticket_failed") || !hasIndex(db, "attempts_ticket_reached"))
+			db.exec(MIGRATION_V28_TO_V29_FAILED_START_RUN_INDEXES);
 		// The `queued` state the retired route wait stood in (ADR 0072): a
 		// file that still carries it ends those cycles the way a close does -
 		// the ticket rests open with the cycle counted once - in one state

@@ -62,3 +62,25 @@ keep the last word on one ticket. The limit a held step reads is the limit of
 the ticket its position stands on, so a settled ticket whose routes land on a
 position at its limit spends its own budget on those turns, and it stops where
 its own limit stops it.
+
+## When one ticket's starts keep failing
+
+A start that never reaches its Agent - herdr refuses it, the worktree path
+already stands, a name a stranger holds - leaves the ticket exactly where it
+stood, so the automatic walk asks it again. The attempt hold waits out one such
+failure until your ticket's sources read it again, which on a healthy source is
+one refresh. If the starts keep failing after that read, the failed-start park
+stands: at half the handoff limit the top-up stops asking that ticket, and the
+fact says so where you can read it.
+
+The row wears `failed starts` beside the `handoff limit` marker, the detail
+states the run and that the top-up holds it, the record names the hold once, and
+the Message line states it as a standing warning, which sends a desktop
+notification. The park arrives before the handoff limit, so the limit still
+reaches what happens after you act.
+
+Nothing holds your own hand of it. A handoff you start that reaches its Agent ends
+the run and the automatic starts resume; ignoring the ticket, or muting its
+source, answers the failure and takes the marker off the row. A start of yours
+that fails keeps the park standing, because it met the same refusal. See
+[ADR 0106](../adr/0106-a-run-of-failed-handoff-starts-parks-its-ticket-and-the-park-states-itself.md).

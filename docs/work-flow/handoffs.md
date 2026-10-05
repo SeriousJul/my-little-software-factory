@@ -86,7 +86,11 @@ and the default pull request source fetches no unlabeled draft: it asks for
 `no:draft`, or for a draft that carries `needs-work`. The draft a failed start
 leaves wears no label, so the ticket keeps its row in the Ticket section, the
 automatic top-up asks it again once the failed start's hold clears, and the next
-start reuses the branch and the draft. A draft you labeled `needs-work` is the
+start reuses the branch and the draft. If the starts keep failing after that
+read, the failed-start park stands: the top-up stops asking that ticket at half
+the handoff limit, and the row and the detail say so (see
+[the completion guide](./completion.md#when-one-tickets-starts-keep-failing)). A
+draft you labeled `needs-work` is the
 case that does enter the list, and there the ticket rests behind its pull request
 the way ADR 0042 says.
 

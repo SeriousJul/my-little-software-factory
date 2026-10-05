@@ -211,6 +211,13 @@ export function detailContent(
 	// starts that reached an Agent and the starts that never reached one
 	// (ADR 0101). The word is the attempt's, not the handoff's.
 	addLeft(`Handoff attempts: ${ticket.handoffCount}/${handoffLimit}`, paint("text"));
+	// The Failed-start park states the run it stands on and what the run holds
+	// (issue #298, ADR 0106): the count the row's marker cannot carry.
+	if (fact.failedStartPark)
+		addLeft(
+			`Handoff starts failing: ${ticket.failedStartStreak} in a row; the Top-up adds no automatic start`,
+			paint("yellow"),
+		);
 	// The Source column: where the ticket comes from, the way the operator
 	// reads the source facts in one column.
 	addRight(`Source kind: ${ticket.sourceKind}`, paint("text"));

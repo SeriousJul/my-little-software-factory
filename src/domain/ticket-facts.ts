@@ -24,7 +24,9 @@
  */
 import type { WorkQueueItem } from "../state/work-queue.ts";
 import { type AgentPoll, agentInPane, normalizeAgentStatus, ticketAgentName } from "./agent.ts";
+import { failedStartParkStands } from "./failed-start-park.ts";
 import {
+	automaticStartBlocked,
 	handoffLimitReached,
 	holdsDecision,
 	inFlightState,
@@ -86,6 +88,13 @@ export interface TicketRowFacts {
 	queueWait: boolean;
 	/** The Handoff limit marker the row wears at its end. */
 	handoffLimit: boolean;
+	/**
+	 * The Failed-start park the row wears at its end (issue #298, ADR 0106): the
+	 * Ticket's Handoff starts keep failing, and the Top-up adds no automatic start
+	 * for it. The row names it beside the Handoff limit marker, and the detail
+	 * states the run it stands on.
+	 */
+	failedStartPark: boolean;
 	/** The in-flight fact: the row keeps its row while the operator's flag stands (ADR 0060). */
 	inFlight: boolean;
 	/** The held turn's badge (ADR 0016): the decision the operator owes. */
@@ -228,6 +237,13 @@ function factsOf(ticket: Ticket, inputs: TicketFactInputs): TicketRowFacts {
 		starting: wornFace(ticket, failure, inputs.claims.has(ticket.identity)),
 		queueWait: queueWait(ticket, inputs.queue),
 		handoffLimit: handoffLimitReached(ticket.handoffCount, inputs.maxHandoffsPerTicket),
+		// The park the same ledger answers: the run of failed starts against half
+		// the same limit, and the operator's own act that answers it (issue #298).
+		failedStartPark: failedStartParkStands({
+			failedStartStreak: ticket.failedStartStreak,
+			handoffLimit: inputs.maxHandoffsPerTicket,
+			judgedOut: automaticStartBlocked(ticket),
+		}),
 		inFlight: inFlight(ticket),
 		held: holdsDecision(ticket),
 		taskType: rowTaskType(ticket),

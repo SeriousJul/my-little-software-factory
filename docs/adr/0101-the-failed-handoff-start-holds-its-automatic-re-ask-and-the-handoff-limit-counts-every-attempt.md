@@ -89,6 +89,16 @@ carries the same number it carried before; what the count gains is the starts
 that never reached one. The limit keeps gating auto-handoff only: a Ticket at the
 limit rests from the automatic walks, and the operator's ask passes it.
 
+**Amended by ADR 0106: the hold is one brake, and the park is the second.** The
+hold this decision set waits out one failed start, and it releases on the next
+source read - one refresh of delay when the cause stands outside the Ticket. The
+run of failed starts the hold releases on is now a standing fact of its own, the
+Failed-start park, and it lives in `src/domain/failed-start-park.ts`: at half the
+Handoff limit the Top-up stops asking that Ticket, and the fact states itself on
+the record, the Message line, the row, and the detail. Nothing here changes: the
+hold still waits the same wait, the limit still counts every attempt, and the park
+stands behind the hold in the same ask.
+
 ## Considered options
 
 - **Only the hold, and leave the limit on started handoffs.** Rejected: the hold
