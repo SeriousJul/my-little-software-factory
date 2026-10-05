@@ -283,8 +283,9 @@ export const MIGRATION_V27_TO_V28_ATTEMPT_LATEST_INDEX =
  * claim order the run counts, so `MAX(rowid)` of a Ticket's reached attempts, and
  * the count of its failed settles above a rowid, are both answered from the index
  * without a temporary B-tree. On a file holding 201 Tickets, one of them carrying
- * 9,363 attempts, the read costs 1.5 ms with both indexes against 2.2 ms with
- * `attempts_ticket_latest` alone.
+ * 9,363 attempts, the read costs 2.6 ms with `attempts_ticket_latest` alone
+ * against 1.6 ms with both indexes (the median of 25 runs of the batched read over
+ * all 201 identities).
  */
 export const MIGRATION_V28_TO_V29_FAILED_START_RUN_INDEXES = `
 	CREATE INDEX IF NOT EXISTS attempts_ticket_reached ON handoff_attempts(ticket_identity) WHERE stage <> 'failed';
@@ -401,8 +402,11 @@ export function migrate(db: Database, path: string): void {
 		// Asked for by name, the way the newest-attempt index is: a file the step
 		// already ran keeps its indexes, and an older file gains the two partial
 		// indexes before the first cycle that reads a Ticket's run of failed starts
-		// (issue #298, ADR 0106).
-		if (!hasIndex(db, "attempts_ticket_failed"))
+		// (issue #298, ADR 0106). Both names are asked: a file that carries one and
+		// not the other - a hand edit, or a run that died between the two creates -
+		// still gains the pair, and each create is `IF NOT EXISTS`, so the half the
+		// file already has is left alone.
+		if (!hasIndex(db, "attempts_ticket_failed") || !hasIndex(db, "attempts_ticket_reached"))
 			db.exec(MIGRATION_V28_TO_V29_FAILED_START_RUN_INDEXES);
 		// The `queued` state the retired route wait stood in (ADR 0072): a
 		// file that still carries it ends those cycles the way a close does -

@@ -77,7 +77,11 @@ import type { FactoryConfig, TransitionOutcome } from "./config.ts";
 // Missing agent rule the observation cycle reads (issue #201). The observation
 // module re-states them for its existing readers.
 import { agentInPane, normalizeAgentStatus } from "./domain/agent.ts";
-import { failedStartParkLine, failedStartParkStands } from "./domain/failed-start-park.ts";
+import {
+	type FailedStartParkFacts,
+	failedStartParkLine,
+	failedStartParkStands,
+} from "./domain/failed-start-park.ts";
 import { recordTicketName } from "./domain/record-name.ts";
 import {
 	automaticStartBlocked,
@@ -87,6 +91,7 @@ import {
 	type Ticket,
 } from "./domain/ticket.ts";
 import {
+	type AutomaticCandidateHold,
 	type AutomaticHold,
 	automaticAddsHold,
 	automaticHoldKey,
@@ -592,8 +597,13 @@ export class ObservationCoordinator {
 	 * per poll. A cycle retires the entry when it reads the Ticket and finds the park
 	 * gone - a start that reached its Agent, or the operator's own act - so the next
 	 * run of failures states itself again.
+	 *
+	 * The key is `automaticHoldKey` of the hold the walk took - the key the walk-hold
+	 * memory already uses - so the park is one standing fact in one memory. A key of
+	 * the identity alone would hold a second candidate-hold reason on the same Ticket
+	 * silent behind this one.
 	 */
-	private readonly parkReports = new Set<string>();
+	private readonly parkReports = new Map<string, AutomaticCandidateHold>();
 	/**
 	 * The agents of the last successful list, for the UI's markers. Null
 	 * until the first success: an unreadable herdr must not read as "every
@@ -2137,16 +2147,12 @@ export class ObservationCoordinator {
 		// warning the Desktop notification carries (ADR 0080). It gates the automatic
 		// adds only - the operator's own confirm reaches the dispatch past it, the way
 		// it passes the Handoff limit, and the act that reaches an Agent ends the run.
-		const failedStarts = this.failedStartStreakOf(intent.ticketIdentity);
-		if (
-			failedStarts !== 0 &&
-			failedStartParkStands({
-				failedStartStreak: failedStarts,
-				handoffLimit: this.config().maxHandoffsPerTicket,
-				judgedOut: this.state.ticketWorkCycle.automaticStartBlockedTicket(intent.ticketIdentity),
-			})
-		) {
-			this.reportFailedStartPark(intent.ticketIdentity, failedStarts);
+		const park = this.failedStartParkFacts(intent.ticketIdentity);
+		if (park.failedStartStreak !== 0 && failedStartParkStands(park)) {
+			this.reportFailedStartPark(
+				{ reason: "handoff-failure-park", candidate: intent.ticketIdentity },
+				park.failedStartStreak,
+			);
 			return "refused";
 		}
 		const result = await this.dispatch(intent);
@@ -2163,16 +2169,28 @@ export class ObservationCoordinator {
 	}
 
 	/**
-	 * The Ticket's run of failed Handoff starts (issue #298, ADR 0106): the length
-	 * of the run of its newest Handoff attempts that settled `failed`.
+	 * The Failed-start park's facts for one Ticket (issue #298, ADR 0106): the run
+	 * the attempt ledger answers, the cap the config resolved, and whether the
+	 * operator has already answered the failure.
 	 *
-	 * The ask reads it for the one candidate it reached, the way the Attempt hold
-	 * reads that candidate's newest attempt. The projection carries the same run for
-	 * every row the list rule leaves, and the row's marker reads it from there; this
-	 * is the read for the walk that holds an identity and no row.
+	 * The one place the park's facts are built, so the ask that holds the automatic
+	 * adds and the cycle that retires the report cannot state the fact differently.
+	 * The run read is the one the ask takes for the single candidate it reached, the
+	 * way the Attempt hold reads that candidate's newest attempt; the projection
+	 * carries the same run for every row the list rule leaves, and the row's marker
+	 * reads it from there.
 	 */
-	private failedStartStreakOf(ticketIdentity: string): number {
-		return this.state.handoff.failedStartStreaksFor([ticketIdentity]).get(ticketIdentity) ?? 0;
+	private failedStartParkFacts(ticketIdentity: string): FailedStartParkFacts {
+		return {
+			failedStartStreak:
+				this.state.handoff.failedStartStreaksFor([ticketIdentity]).get(ticketIdentity) ?? 0,
+			handoffLimit: this.config().maxHandoffsPerTicket,
+			// A guard, not a path the walks reach: every walk drops a judged-out Ticket
+			// before it reaches the ask, and the open-ticket walk already holds the flag
+			// as its own row gate. The rule still reads it, so a Ticket the operator has
+			// answered never parks here whichever walk reached its ask.
+			judgedOut: this.state.ticketWorkCycle.automaticStartBlockedTicket(ticketIdentity),
+		};
 	}
 
 	/**
@@ -2189,19 +2207,17 @@ export class ObservationCoordinator {
 	 * last report, the way the held Next step's line does (`reportHeldNextStep`):
 	 * one parked Ticket states itself once, and a cycle that reads the Ticket and
 	 * finds the park gone (`retireFailedStartParks`) lets the next run state itself
-	 * again.
+	 * again. The memory is keyed by `automaticHoldKey` of the hold, the same key the
+	 * walk-hold memory uses, so one standing fact has one key wherever it is stated.
 	 */
-	private reportFailedStartPark(ticketIdentity: string, failedStartStreak: number): void {
-		if (this.parkReports.has(ticketIdentity)) return;
-		this.parkReports.add(ticketIdentity);
-		this.log.info(
-			automaticHoldLine({ reason: "handoff-failure-park", candidate: ticketIdentity }, (identity) =>
-				this.ticketName(identity),
-			),
-		);
+	private reportFailedStartPark(hold: AutomaticCandidateHold, failedStartStreak: number): void {
+		const key = automaticHoldKey(hold);
+		if (this.parkReports.has(key)) return;
+		this.parkReports.set(key, hold);
+		this.log.info(automaticHoldLine(hold, (identity) => this.ticketName(identity)));
 		this.onStatus(
 			"warning",
-			failedStartParkLine(this.ticketName(ticketIdentity), failedStartStreak),
+			failedStartParkLine(this.ticketName(hold.candidate), failedStartStreak),
 		);
 	}
 
@@ -2216,16 +2232,9 @@ export class ObservationCoordinator {
 	 */
 	private retireFailedStartParks(): void {
 		if (this.parkReports.size === 0) return;
-		const handoffLimit = this.config().maxHandoffsPerTicket;
-		for (const identity of [...this.parkReports]) {
-			const failedStarts = this.failedStartStreakOf(identity);
-			const stands = failedStartParkStands({
-				failedStartStreak: failedStarts,
-				handoffLimit,
-				judgedOut: this.state.ticketWorkCycle.automaticStartBlockedTicket(identity),
-			});
-			if (!stands) this.parkReports.delete(identity);
-		}
+		for (const [key, hold] of this.parkReports)
+			if (!failedStartParkStands(this.failedStartParkFacts(hold.candidate)))
+				this.parkReports.delete(key);
 	}
 
 	/**

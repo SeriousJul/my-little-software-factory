@@ -1113,6 +1113,37 @@ describe("the run of failed Handoff starts (issue #298)", () => {
 		).toBe(SCHEMA_VERSION);
 		check.close();
 	});
+
+	test("a file that carries one of the two indexes gains the other (issue #298)", () => {
+		// The guard asks both names, not one. A file left with only the failed-settle
+		// half - a hand edit, or a run that ended between the two creates - still gains
+		// the boundary half, so the read keeps the index it needs for the newest attempt
+		// that is not a failed settle.
+		const path = statePath();
+		const state = openFactoryState(path, ATTEMPT_NOW);
+		state.sourceFact.initializeSources([sourceA]);
+		state.sourceFact.applyFetch(sourceA, success([fetched()]));
+		failAnotherStart(state, "herdr refused the start");
+		failAnotherStart(state, "herdr refused the start");
+		state.close();
+
+		const db = new Database(path);
+		db.exec("DROP INDEX attempts_ticket_reached");
+		db.close();
+
+		const reopened = openFactoryState(path, ATTEMPT_NOW);
+		expect(reopened.handoff.failedStartStreaksFor([TICKET]).get(TICKET)).toBe(2);
+		reopened.close();
+		const check = new Database(path, { readonly: true });
+		const indexes = (
+			check.prepare("SELECT name FROM sqlite_master WHERE type = 'index'").all() as Array<{
+				name: string;
+			}>
+		).map((row) => row.name);
+		expect(indexes).toContain("attempts_ticket_failed");
+		expect(indexes).toContain("attempts_ticket_reached");
+		check.close();
+	});
 });
 
 describe("the Handoff limit counts every attempt (ADR 0005, ADR 0101)", () => {

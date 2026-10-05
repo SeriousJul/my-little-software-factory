@@ -141,13 +141,14 @@ Handoff limit already reads from the same ledger. It is one statement per chunk
 of Tickets, not one per Ticket, and the automatic ask reads it for the one
 candidate it reached, the way the Attempt hold reads that candidate's newest
 attempt. Measured on the real schema with 201 Tickets, one of them carrying 9,363
-attempts, the batched read costs 2.4 ms with only `attempts_ticket_latest` behind
+attempts, the batched read costs 2.6 ms with only `attempts_ticket_latest` behind
 it; the v28 to v29 migration adds two partial indexes -
 `attempts_ticket_reached` on the attempts that settled otherwise and
 `attempts_ticket_failed` on the attempts that did not - and the same read costs
-1.5 ms. The count the Handoff limit reads costs 0.4 ms on the same file, so the
+1.6 ms. The count the Handoff limit reads costs 0.5 ms on the same file, so the
 run read is the larger of the two ledger reads the projection makes, and both run
-once per cycle rather than once per candidate.
+once per cycle rather than once per candidate. Each number is the median of 25
+runs of the read over all 201 identities on one file.
 
 The park holds the automatic adds, not the ledger: the Handoff limit keeps
 counting every attempt, and a Ticket whose park stands stays below the cap that

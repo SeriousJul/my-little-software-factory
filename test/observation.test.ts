@@ -6221,6 +6221,31 @@ describe("the Failed-start park holds a Ticket whose starts keep failing (issue 
 		expect(holdLines(lines)).toHaveLength(2);
 		state.close();
 	});
+
+	test("a source mute answers the failure through the cycle, and un-muting states it again", async () => {
+		// The mute is the other operator act on the failing starts (ADR 0070): the
+		// Ticket's source is the thing that keeps offering the task, and muting it is
+		// the answer. The park reads the same judged-out fact the row does, so the
+		// standing fact retires through the cycle and not only on the row.
+		const { state, coordinator, statuses, lines } = parkRig();
+		await failStarts(state, coordinator, 2);
+		expect(parkWarnings(statuses)).toHaveLength(1);
+		expect(state.sourceFact.setSourceMuted(source.name, true)).toEqual({ ok: true, removed: 0 });
+		await coordinator.tick();
+		// The walk never reaches the ask: the judged-out gate holds the Ticket out
+		// ahead of it, and the retired report says nothing more.
+		expect(state.ticketWorkCycle.automaticStartBlockedTicket(IDENTITY)).toBe(true);
+		expect(parkWarnings(statuses)).toHaveLength(1);
+		expect(holdLines(lines)).toHaveLength(1);
+		// The act leaves, the run is still in the ledger, and the park is a fact the
+		// cycle derives: the next ask states it again rather than staying silent.
+		expect(state.sourceFact.setSourceMuted(source.name, false)).toEqual({ ok: true, removed: 0 });
+		refresh(state);
+		await coordinator.tick();
+		expect(parkWarnings(statuses)).toHaveLength(2);
+		expect(holdLines(lines)).toHaveLength(2);
+		state.close();
+	});
 });
 
 /**

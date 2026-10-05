@@ -18,8 +18,10 @@ import { join } from "node:path";
 
 import { AttentionService, DESKTOP_NOTIFICATION_APP_NAME } from "../src/attention.ts";
 import type { FactoryConfig } from "../src/config.ts";
+import type { FetchedTicket } from "../src/domain/ticket.ts";
 import type { CommandOptions, CommandResult, CommandRunner } from "../src/runner.ts";
 import { openFactoryState } from "../src/state.ts";
+import type { FetchOutcome } from "../src/ticket-source.ts";
 import { awaitFrame, HEIGHT, messageRowOf, press, settle, WIDTH, withApp } from "./app-harness.ts";
 import { BASE_CONFIG } from "./base-config.ts";
 import { agentListJson, FakeRunner, type RecordedCommand } from "./fake-runner.ts";
@@ -72,6 +74,51 @@ function makeService(
 		service: new AttentionService(() => config, runner, { platform, logger }),
 	};
 }
+
+/**
+ * The Failed-start park's fixtures (issue #298): one open Ticket whose two newest
+ * Handoff attempts settled `failed`, and the source read that releases the Attempt
+ * hold so the ask the park holds is the one that runs.
+ */
+const PARK_IDENTITY = "github:github.com:I_5";
+const parkSource = { name: "issues", kind: "github-issues" };
+const parkTicket: FetchedTicket = {
+	identity: PARK_IDENTITY,
+	sourceKind: "github-issue",
+	externalKey: "#5",
+	sourceState: "open",
+	url: "https://github.com/acme/factory/issues/5",
+	title: "Persist source facts",
+	description: "Keep state independent from GitHub.",
+	labels: ["ready-for-agent"],
+	externalUpdatedAt: "2026-08-31T10:00:00Z",
+	repository: {
+		identity: "github.com/acme/factory",
+		displayName: "acme/factory",
+		cloneUrl: "https://github.com/acme/factory.git",
+	},
+	attributes: {},
+};
+/** The read that lands the Ticket row, before the app mounts. */
+const parkFetch: FetchOutcome = {
+	status: "success",
+	fetchedAt: "2026-08-31T10:01:00Z",
+	tickets: [parkTicket],
+};
+/** The re-read after the failed starts: the Attempt hold's release. */
+const parkRefresh: FetchOutcome = {
+	status: "success",
+	fetchedAt: new Date(Date.now() + 60_000).toISOString(),
+	tickets: [parkTicket],
+};
+const parkChoice = {
+	agentType: "pi",
+	environment: "live-worktree" as const,
+	taskType: "implement",
+	model: "",
+	thinking: "",
+	contextWindow: "",
+};
 
 /** The failing-handoff stubs: the handoff dies on its workspace list. */
 function failingHandoffRunner(): FakeRunner {
@@ -502,5 +549,66 @@ describe("the Message line's fact to the desktop", () => {
 				initialTickets: SAMPLE_TICKETS,
 			},
 		);
+	});
+
+	test("the Failed-start park's warning reaches the desktop in the words the line shows", async () => {
+		// Issue #298, ADR 0106. The park holds the Top-up's automatic adds and states
+		// itself as a standing warning, and the desktop is how the operator learns the
+		// loop stopped without reading the terminal. The composition is what this pins:
+		// the cycle's warning fact, the Message line's warning slot, and the send that
+		// slot makes, with the park's own line - the run's count included - carried end
+		// to end through the real app and the real observation loop.
+		const state = openFactoryState(join(home, "park-state.sqlite"));
+		state.sourceFact.initializeSources([parkSource]);
+		state.sourceFact.applyFetch(parkSource, parkFetch);
+		// Two starts that reached no Agent at a Handoff limit of 4: the park's count,
+		// and still one start short of the cap that ends the work cycle.
+		for (let i = 0; i < 2; i += 1) {
+			const claim = state.handoff.claimHandoff(PARK_IDENTITY, parkChoice, "open");
+			if (!claim.ok) throw new Error(claim.reason);
+			state.handoff.settleHandoff(
+				claim.claim.attemptId,
+				false,
+				"Preparing worktree: the worktree path already exists",
+			);
+		}
+		// The mode is factory state (ADR 0036), and the park stands on the walk only
+		// the mode runs.
+		state.handoff.setAutoHandoffMode(true);
+
+		const runner = new FakeRunner();
+		runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+		// The source re-reads the Ticket after its failed starts, so the Attempt hold
+		// is released and the ask the park holds is the one that runs.
+		const src = new FakeSource("issues", "github-issues", parkFetch);
+		try {
+			await withApp(
+				async (setup) => {
+					src.settle(parkRefresh);
+					await awaitFrame(
+						setup,
+						(f) => messageRowOf(f).includes("handoff failure park:"),
+						"the park's standing warning",
+					);
+					await flush();
+					const calls = notificationCalls(runner);
+					expect(calls.at(-1)?.args.join(" ")).toContain("Factory: warning");
+					expect(calls.at(-1)?.args.join(" ")).toContain(
+						'handoff failure park: "Persist source facts" (2 Handoff starts in a row never reached an Agent)',
+					);
+				},
+				WIDTH,
+				HEIGHT,
+				{
+					config: { ...BASE_CONFIG, maxHandoffsPerTicket: 4 },
+					runner,
+					state,
+					sources: [src],
+					pollIntervalMs: 60_000,
+				},
+			);
+		} finally {
+			state.close();
+		}
 	});
 });

@@ -18,6 +18,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import type { FactoryConfig, TransitionOutcome } from "../src/config.ts";
+import { failedStartParkStands } from "../src/domain/failed-start-park.ts";
 import type { StartMode } from "../src/domain/start-mode.ts";
 import type { FetchedTicket } from "../src/domain/ticket.ts";
 import { baseChoice, type HandoffChoice, type NameCollision } from "../src/handoff.ts";
@@ -1036,6 +1037,48 @@ describe("the claim, the settle, and every origin", () => {
 		// The start the operator asked for reached its Agent, so the newest attempt
 		// is no failure to wait out and the hold is gone.
 		expect(rigRef.state.handoff.handoffBlockedUnrefreshed(FIRST.identity)).toBe(false);
+	});
+
+	test("the operator's handoff passes the Failed-start park the auto top-up holds", async () => {
+		const rigRef = rig();
+		// Five starts that reached no Agent: the park's count at this Ticket's Handoff
+		// limit of 10 (ADR 0106), and the run the row's marker reads off the ledger.
+		for (let i = 0; i < 5; i += 1) {
+			const claim = rigRef.state.handoff.claimHandoff(FIRST.identity, liveChoice, "open");
+			if (!claim.ok) throw new Error(claim.reason);
+			rigRef.state.handoff.settleHandoff(
+				claim.claim.attemptId,
+				false,
+				"the worktree path already exists",
+			);
+		}
+		const failedStartStreak =
+			rigRef.state.handoff.failedStartStreaksFor([FIRST.identity]).get(FIRST.identity) ?? 0;
+		expect(failedStartStreak).toBe(5);
+		// The park stands, by the one rule every reader asks: the run reaches half the
+		// cap, and no operator act has answered the failure.
+		expect(
+			failedStartParkStands({
+				failedStartStreak,
+				handoffLimit: BASE_CONFIG.maxHandoffsPerTicket,
+				judgedOut: false,
+			}),
+		).toBe(true);
+		// What the park never gates: the operator's own ask. The gate stands in the
+		// top-up's ask step and nowhere else, so the claim check and the dispatch take
+		// this start the way they take one past the Attempt hold and the Handoff limit.
+		expect(rigRef.state.handoff.handoffClaimCheck(FIRST.identity, "open")).toEqual({ ok: true });
+		const started: DispatchResult[] = [];
+		await expect(start(rigRef, FIRST, "open", (r) => started.push(r))).resolves.toEqual({
+			ok: true,
+		});
+		expect(await rigRef.waitForStarted(FIRST.identity)).toEqual({ ok: true });
+		expect(started).toEqual([{ ok: true }]);
+		// And the start that reached its Agent ends the run, so the park leaves with it
+		// and the automatic adds resume on the same rule - no second act (issue #298).
+		expect(rigRef.state.handoff.failedStartStreaksFor([FIRST.identity]).get(FIRST.identity)).toBe(
+			0,
+		);
 	});
 
 	test("a failed operator start sets the hold the automatic walks obey", async () => {

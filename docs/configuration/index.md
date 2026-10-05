@@ -608,7 +608,8 @@ keeps the standing fact apart from the walk's holds and from a start's own
 failure line. A start that reaches its Agent ends the run and the automatic adds
 resume; ignoring the Ticket or muting its source answers the failure the same way
 and takes the fact off the row. See
-[Handoffs](/work-flow/handoffs) for the rule.
+[the completion guide](../work-flow/completion.md#when-one-tickets-starts-keep-failing)
+for the rule.
 
 The third line names the queue's depth rather than a staging, because the gate
 it states holds on any row at all, a Consultation row included. The staging of
