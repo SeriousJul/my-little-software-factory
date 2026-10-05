@@ -65,6 +65,7 @@ function sample(
 		muted: false,
 		mutedAt: null,
 		leftover: null,
+		nameCollision: null,
 	};
 }
 

@@ -49,6 +49,7 @@ const ticket = (title: string, externalKey = "#1"): Ticket => ({
 	failedStartStreak: 0,
 	lastCompletion: null,
 	leftover: null,
+	nameCollision: null,
 });
 
 describe("titleSlug", () => {

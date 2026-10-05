@@ -36,6 +36,7 @@ export const AUTOMATIC_HOLD_REASONS = [
 	"continuation-standing",
 	"operator-row-standing",
 	"queue-row-standing",
+	"agent-name-held",
 	"handoff-failure-park",
 ] as const;
 
@@ -60,12 +61,16 @@ export type AutomaticRowHoldReason = (typeof AUTOMATIC_ROW_HOLD_REASONS)[number]
 /**
  * The holds that name the candidate Ticket the walk reached and held out.
  *
- * The Failed-start park is the one of these: its gate stands on a candidate the
- * walk read, not on a Work queue row, and the record has to say which Ticket the
- * walk left resting - a run with more than one Ticket in play cannot tell a held
- * Ticket from a held factory (issue #298).
+ * The Agent name collision and the Failed-start park are the two of these: each
+ * gate stands on a candidate the walk read, not on a Work queue row, and the
+ * record has to say which Ticket the walk left resting - a run with more than
+ * one Ticket in play cannot tell a held Ticket from a held factory (issue #298,
+ * issue #299).
  */
-export const AUTOMATIC_CANDIDATE_HOLD_REASONS = ["handoff-failure-park"] as const;
+export const AUTOMATIC_CANDIDATE_HOLD_REASONS = [
+	"agent-name-held",
+	"handoff-failure-park",
+] as const;
 
 export type AutomaticCandidateHoldReason = (typeof AUTOMATIC_CANDIDATE_HOLD_REASONS)[number];
 
@@ -80,6 +85,7 @@ export interface AutomaticBareHold {
 	readonly reason: AutomaticBareHoldReason;
 	readonly row?: undefined;
 	readonly candidate?: undefined;
+	readonly detail?: undefined;
 }
 
 /** A hold that names the Work queue row the walk waits behind. */
@@ -92,6 +98,7 @@ export interface AutomaticRowHold {
 	 */
 	readonly row: string;
 	readonly candidate?: undefined;
+	readonly detail?: undefined;
 }
 
 /** A hold that names the candidate Ticket the walk reached and held out. */
@@ -103,6 +110,12 @@ export interface AutomaticCandidateHold {
 	 * record has not stated yet.
 	 */
 	readonly candidate: string;
+	/**
+	 * The fact stated beside the Ticket's name, when the hold carries one. The
+	 * Agent name collision names the refusal its attempt stored, so the record
+	 * states the same reason the ledger holds and the row states (issue #299).
+	 */
+	readonly detail?: string;
 	readonly row?: undefined;
 }
 
@@ -133,6 +146,7 @@ export const AUTOMATIC_HOLD_LINES: Readonly<Record<AutomaticHoldReason, string>>
 	"continuation-standing": "automatic walks hold: the Work queue already holds a continuation",
 	"operator-row-standing": "automatic walks hold: the Work queue holds an item the operator staged",
 	"queue-row-standing": "automatic walks hold: the Work queue holds a waiting row",
+	"agent-name-held": "automatic walks hold: another pane holds the Ticket's Agent name",
 	"handoff-failure-park": "automatic walks hold: the Ticket's Handoff starts keep failing",
 };
 
@@ -157,6 +171,11 @@ export function automaticHoldKey(hold: AutomaticHold): string {
  * title while the ticket is in the projection, its identity once it is gone.
  * The rule owns the sentence and calls for the name only for a hold that names
  * a row.
+ *
+ * A hold that carries a `detail` states it after the name, under the same
+ * parentheses: the Agent name collision names the refusal its attempt stored,
+ * so one line answers which Ticket the walk left resting and what stood in its
+ * way (issue #299).
  */
 export function automaticHoldLine(
 	hold: AutomaticHold,
@@ -164,7 +183,11 @@ export function automaticHoldLine(
 ): string {
 	const line = AUTOMATIC_HOLD_LINES[hold.reason];
 	const named = hold.row ?? hold.candidate;
-	return named === undefined ? line : `${line} (${rowName(named)})`;
+	if (named === undefined) return line;
+	const detail = hold.detail;
+	return detail === undefined
+		? `${line} (${rowName(named)})`
+		: `${line} (${rowName(named)}: ${detail})`;
 }
 
 /** The gates every automatic add reads (ADR 0051, ADR 0052, ADR 0016). */

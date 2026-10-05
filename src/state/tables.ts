@@ -20,7 +20,7 @@ export const TABLES_OWNED = {
 		"checkout_conflict_confirmations",
 	],
 	grouping: ["grouping_axis", "group_order"],
-	handoff: ["handoffs", "handoff_attempts", "auto_handoff_mode"],
+	handoff: ["handoffs", "handoff_attempts", "auto_handoff_mode", "name_collisions"],
 	lease: ["lease"],
 	planeAction: ["plane_action_attempts"],
 	repositoryInit: ["repository_init"],

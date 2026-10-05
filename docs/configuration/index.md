@@ -564,6 +564,7 @@ automatic walks hold: a failed turn waits for the operator
 automatic walks hold: the Work queue already holds a continuation
 automatic walks hold: the Work queue holds an item the operator staged
 automatic walks hold: the Work queue holds a waiting row
+automatic walks hold: another pane holds the Ticket's Agent name
 automatic walks hold: the Ticket's Handoff starts keep failing
 ```
 
@@ -610,6 +611,39 @@ resume; ignoring the Ticket or muting its source answers the failure the same wa
 and takes the fact off the row. See
 [the completion guide](../work-flow/completion.md#when-one-tickets-starts-keep-failing)
 for the rule.
+
+The Agent name collision names its Ticket the same way, and carries herdr's
+refusal behind it (issue #299). herdr holds the Ticket's stable Agent name in a
+pane the plane cannot tie to that Ticket, so the start that asked for it settled
+`failed`, and the Top-up adds no automatic start while that pane holds the name:
+
+```text
+automatic walks hold: another pane holds the Ticket's Agent name ("Watch agent turns")
+```
+
+The record states the hold with the refusal the attempt's own row stores, so the
+row, the detail, and the record name one refusal and not three:
+
+```text
+automatic walks hold: another pane holds the Ticket's Agent name ("Watch agent turns": the herdr name watch-agent-turns-1a2b3c4d is held by pane w13K:p1 in workspace w13K, which is no agent of this ticket: agent_name_taken)
+```
+
+The same fact reaches the Message line as a standing warning, once for as long as
+it stands:
+
+```text
+agent name held: "Watch agent turns" (the herdr name watch-agent-turns-1a2b3c4d is held by pane w13K:p1 in workspace w13K)
+```
+
+The parentheses carry where the name is held, because that is the pane the
+operator has to close in herdr: the plane owns no cleanup for a pane it never
+made. The `agent name held:` prefix keeps the fact apart from the `leftover`
+fact, which names the Ticket's own workspace, tab, and Agent still open and
+whose cleanup the plane asks herdr to run. Your own Handoff clears the collision
+once the pane gives the name up, and ignoring the Ticket or muting its source
+answers the refusal the way they answer a run of failed starts. See
+[the completion guide](../work-flow/completion.md#when-herdr-holds-the-tickets-agent-name)
+and [ADR 0107](../adr/0107-a-herdr-agent-name-held-by-a-stranger-is-a-fact-on-the-ticket-and-the-top-up-waits-for-the-operator.md).
 
 The third line names the queue's depth rather than a staging, because the gate
 it states holds on any row at all, a Consultation row included. The staging of

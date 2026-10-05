@@ -109,6 +109,7 @@ function pullTicket(repository: string, number: number, sourceName: string): Tic
 		muted: false,
 		mutedAt: null,
 		leftover: null,
+		nameCollision: null,
 	};
 }
 

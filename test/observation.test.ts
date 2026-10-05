@@ -6257,6 +6257,174 @@ describe("the Failed-start park holds a Ticket whose starts keep failing (issue 
  * each fact it acted on once, in the words the gate rule owns, at the `info`
  * level the configuration reference states for these lines.
  */
+/**
+ * The Agent name collision (issue #299, ADR 0107): the standing fact a Handoff
+ * start leaves when herdr holds the Ticket's stable Agent name in a pane the
+ * plane does not own.
+ *
+ * The refusal is not transient, so the automatic re-ask waits for the operator
+ * instead of spending the Handoff limit on it: the walk holds the Ticket out
+ * while the fact stands, states the hold once with the refusal beside it, and
+ * asks again when the operator's own Handoff takes the name. The dispatch's own
+ * recording of the fact is measured in test/handoff-dispatch.test.ts; this rig's
+ * start seam settles the attempt without a herdr refusal, so these tests record
+ * the fact the way the dispatch leaves it.
+ */
+describe("the Agent name collision holds the Top-up out (issue #299)", () => {
+	const IDENTITY = "github:github.com:I_5";
+	const REFUSAL =
+		"the herdr name persist-source-facts-1a2b3c4d is held by pane w13K:p1 in workspace w13K, " +
+		"which is no agent of this ticket: agent_name_taken";
+	const HOLD_LINE = `automatic walks hold: another pane holds the Ticket's Agent name ("Persist source facts": ${REFUSAL})`;
+	const WARNING =
+		'agent name held: "Persist source facts" (the herdr name persist-source-facts-1a2b3c4d ' +
+		"is held by pane w13K:p1 in workspace w13K)";
+
+	/** The record lines and the rig of one Ticket whose start herdr refuses. */
+	function collisionRig(config?: Partial<FactoryConfig>) {
+		const lines: RecordedLine[] = [];
+		const r = rig({
+			autoOn: true,
+			agents: [],
+			startFails: REFUSAL,
+			// The rig's default Handoff limit of 2 parks a Ticket at one failed start.
+			// These tests want the collision alone in front of them, so the limit sits
+			// high; the test that wants both facts names its own.
+			config: { maxHandoffsPerTicket: 10, ...config },
+			log: recordLogger(lines),
+		});
+		return { ...r, lines };
+	}
+
+	/** The fact one refused start leaves on the Ticket. */
+	function standCollision(state: FactoryState): void {
+		state.handoff.recordNameCollision({
+			ticketIdentity: IDENTITY,
+			stableName: "persist-source-facts-1a2b3c4d",
+			holderPaneId: "w13K:p1",
+			holderWorkspaceId: "w13K",
+			reason: REFUSAL,
+		});
+	}
+
+	/** The re-read that carries the Ticket's current facts, one refresh later. */
+	function refresh(state: FactoryState, tickets: FetchedTicket[] = [fetched(IDENTITY)]): void {
+		state.sourceFact.applyFetch(source, {
+			status: "success",
+			fetchedAt: "2026-08-31T11:30:00Z",
+			tickets,
+		});
+	}
+
+	const holdLines = (lines: readonly RecordedLine[]) =>
+		lines.filter((line) => line.message.startsWith("automatic walks hold: another pane holds"));
+
+	test("the collision holds the Top-up out, and the walk stops asking", async () => {
+		const { state, coordinator, intents, statuses, advance, lines } = collisionRig();
+		// The first ask runs and herdr refuses the name: the attempt settles failed.
+		await coordinator.tick();
+		expect(intents).toHaveLength(1);
+		standCollision(state);
+		// The source re-reads the Ticket, so the Attempt hold releases - and the
+		// collision takes the gate: the walk adds nothing, however long it waits.
+		refresh(state);
+		for (let i = 0; i < 4; i += 1) {
+			await coordinator.tick();
+			advance(60_000);
+		}
+		expect(intents).toHaveLength(1);
+		// The refusal stands as a fact the operator can act on, and the record names
+		// the hold once, with the refusal the attempt stored beside the Ticket.
+		expect(holdLines(lines)).toEqual([infoLine(HOLD_LINE)]);
+		// The Message line carries the same fact as the warning the notification
+		// shows, naming where the name is held.
+		expect(statuses.filter((status) => status.text.startsWith("agent name held:"))).toEqual([
+			{ kind: "warning", text: WARNING },
+		]);
+		// The row carries the fact, so the marker and the detail state which Ticket
+		// rests without a rule of their own.
+		expect(
+			state.ticketWorkCycle.ticketListViews([], "implement").rows[0].nameCollision,
+		).not.toBeNull();
+		state.close();
+	});
+
+	test("the collision speaks before the Failed-start park (issue #299)", async () => {
+		// Both facts stand on the same ledger, and the collision is the one the
+		// operator can act on: the walk names it, and the park stays silent.
+		const { state, coordinator, intents, lines } = collisionRig({ maxHandoffsPerTicket: 2 });
+		await coordinator.tick();
+		standCollision(state);
+		refresh(state);
+		await coordinator.tick();
+		expect(intents).toHaveLength(1);
+		expect(holdLines(lines)).toEqual([infoLine(HOLD_LINE)]);
+		expect(
+			lines.filter((line) => line.message.includes("the Ticket's Handoff starts keep failing")),
+		).toEqual([]);
+		state.close();
+	});
+
+	test("the operator's own Handoff that takes the name ends the hold", async () => {
+		const { state, coordinator, intents, advance } = collisionRig();
+		await coordinator.tick();
+		standCollision(state);
+		refresh(state);
+		await coordinator.tick();
+		expect(intents).toHaveLength(1);
+		// The operator closes the stranger's agent in herdr and hands the Ticket off.
+		// That start reaches its Agent, so the fact leaves - and the automatic adds
+		// resume on the same rule, with no second act.
+		expect(state.handoff.clearNameCollision(IDENTITY)).toBe(true);
+		advance(60_000);
+		refresh(state);
+		await coordinator.tick();
+		expect(intents).toHaveLength(2);
+		expect(intents[1]).toEqual(
+			expect.objectContaining({ origin: "open", automatic: true, ticketIdentity: IDENTITY }),
+		);
+		state.close();
+	});
+
+	test("the ignore answers the refusal, and un-ignoring states it again", async () => {
+		const { state, coordinator, lines } = collisionRig();
+		await coordinator.tick();
+		standCollision(state);
+		refresh(state);
+		await coordinator.tick();
+		expect(holdLines(lines)).toEqual([infoLine(HOLD_LINE)]);
+		// The ignore is the operator's answer to the refusal, the way it answers a run
+		// of failed starts (ADR 0060, ADR 0070, ADR 0106): the standing fact retires,
+		// and the walk stops naming the hold.
+		expect(state.ticketWorkCycle.setTicketIgnored(IDENTITY, true)).toEqual({ ok: true });
+		await coordinator.tick();
+		expect(holdLines(lines)).toHaveLength(1);
+		// The act leaves, the refusal still stands in herdr, and the fact is on the
+		// Ticket: it states itself again rather than staying silent forever.
+		expect(state.ticketWorkCycle.setTicketIgnored(IDENTITY, false)).toEqual({ ok: true });
+		refresh(state);
+		await coordinator.tick();
+		expect(holdLines(lines)).toHaveLength(2);
+		state.close();
+	});
+
+	test("the fact leaves the record when the source closes the Ticket", async () => {
+		const { state, coordinator, lines } = collisionRig();
+		await coordinator.tick();
+		standCollision(state);
+		refresh(state);
+		await coordinator.tick();
+		expect(holdLines(lines)).toEqual([infoLine(HOLD_LINE)]);
+		// The Ticket left the list, so the walk has no candidate to hold out and no
+		// line to re-state: the entry retires with it.
+		refresh(state, []);
+		await coordinator.tick();
+		await coordinator.tick();
+		expect(holdLines(lines)).toEqual([infoLine(HOLD_LINE)]);
+		state.close();
+	});
+});
+
 describe("the automatic walks state their holds in the record (issue #223)", () => {
 	/** One cycle over the default feed, with its record lines read back. */
 	function recordRig(over: { autoOn?: boolean } = {}) {

@@ -1021,6 +1021,7 @@ describe("Consultation operations: live checkout confirmation lifetime", () => {
 			muted: false,
 			mutedAt: null,
 			leftover: null,
+			nameCollision: null,
 		};
 	}
 

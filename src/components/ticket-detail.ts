@@ -11,6 +11,7 @@ import {
 } from "react";
 
 import type { ScrollConfig } from "../config.ts";
+import { nameCollisionHolder } from "../domain/name-collision.ts";
 import type { LeftoverEnvironment, Ticket } from "../domain/ticket.ts";
 import type { TicketRowFacts } from "../domain/ticket-facts.ts";
 import type { HandoffChoice } from "../handoff.ts";
@@ -306,6 +307,26 @@ export function detailContent(
 		// The control plane keeps no clear for it; the Consultation detail
 		// states the same pointer for its remaining resources.
 		pushWrapped("its cleanup runs in herdr", paint("yellow"));
+	}
+	// The Agent name collision stands beside the Leftover block and is never read
+	// for it (issue #299, ADR 0107). A Leftover environment is this Ticket's own
+	// workspace, tab, or Agent, and the plane knows the cleanup that ends it; the
+	// holder here belongs to no Handoff the plane made, so the pane names where the
+	// name is held and what the operator's one act is. The refusal the attempt
+	// stored is the same line the record carries, so the row, the detail, and the
+	// file name one refusal.
+	const collision = ticket.nameCollision;
+	if (collision !== null) {
+		const at = collision.at === "" ? "" : ` ${collision.at.slice(0, 16).replace("T", " ")}`;
+		pushWrapped(
+			`Agent name held: ${nameCollisionHolder(collision)} holds ${collision.stableName}`,
+			paint("yellow"),
+		);
+		pushWrapped(`since${at}: ${collision.reason}`, paint("yellow"));
+		pushWrapped(
+			"the Top-up adds no automatic start; your own Handoff clears this once the pane gives the name up",
+			paint("yellow"),
+		);
 	}
 	if (ticket.lastCompletion !== null) {
 		const completion = ticket.lastCompletion;

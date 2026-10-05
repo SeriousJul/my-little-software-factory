@@ -55,6 +55,7 @@ function ticket(state: TicketState, externalUpdatedAt = "2026-01-01T00:00:00Z"):
 		muted: false,
 		mutedAt: null,
 		leftover: null,
+		nameCollision: null,
 		matchedStateName: null,
 	};
 }

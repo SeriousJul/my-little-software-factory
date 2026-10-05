@@ -320,6 +320,10 @@ export class TicketWorkCycleModule implements TicketWorkCycleAggregate {
 		const failedStartStreaks = this.graph().handoff.failedStartStreaksFor(identities);
 		const completions = this.lastCompletionsFor(identities);
 		const leftovers = this.graph().handoff.leftoverEnvironmentsFor(identities);
+		// The Agent name collision rides the same one read per cycle (issue #299,
+		// ADR 0107): the row's marker and the detail's block state it without a rule
+		// of their own, the way the leftover's do.
+		const nameCollisions = this.graph().handoff.nameCollisionsFor(identities);
 		const tickets: Ticket[] = [];
 		for (const row of rows) {
 			const storedMemberships = memberships.get(row.identity) ?? [];
@@ -389,6 +393,7 @@ export class TicketWorkCycleModule implements TicketWorkCycleAggregate {
 				actionable,
 				handoffRecoveryRequired: pending,
 				leftover: leftovers.get(row.identity)?.[0] ?? null,
+				nameCollision: nameCollisions.get(row.identity) ?? null,
 				ignored,
 				ignoredAt: ignored ? row.ignored_at : null,
 				muted,

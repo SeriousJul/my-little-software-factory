@@ -1833,8 +1833,44 @@ class HandoffDispatchModule implements HandoffDispatch {
 		return { ownPaneIds: paneIds, ownWorkspaceIds: workspaceIds, leftoverKnown };
 	}
 
-	private recordNameCollision(identity: string, collision: NameCollision): void {
-		if (!collision.own) return;
+	/**
+	 * Make every name collision this start met durable, and keep the two facts
+	 * apart (issue #299, ADR 0107).
+	 *
+	 * A holder the plane recorded for this Ticket is one of its own handoffs, so
+	 * the fact is a Leftover environment and its cleanup runs in herdr (ADR
+	 * 0012). A holder the plane cannot tie to the Ticket is the Agent name
+	 * collision: the plane owns no cleanup for a pane it never made, so the fact
+	 * names the pane and workspace and holds the automatic adds until the
+	 * operator acts. One start can meet both - its own leftover holds the stable
+	 * name and a stranger holds the next candidate - and each lands on its own
+	 * fact, never on the other's.
+	 *
+	 * The collision's reason is the reason the attempt's own row stores, so the
+	 * row, the detail, and the record line name one refusal (issue #295, issue
+	 * #231).
+	 */
+	private recordNameCollisions(identity: string, outcome: HandoffOutcome): void {
+		for (const collision of [outcome.collision, outcome.ownCollision]) {
+			if (collision === undefined) continue;
+			if (collision.own) {
+				this.recordLeftoverFromCollision(identity, collision);
+				continue;
+			}
+			this.state.handoff.recordNameCollision({
+				ticketIdentity: identity,
+				stableName: collision.stableName,
+				holderPaneId: collision.holder?.paneId ?? null,
+				holderWorkspaceId: collision.holder?.workspaceId ?? null,
+				// The refusal the attempt stores names the pane and the workspace herdr
+				// gave; a collision that rode an outcome which still reached its Agent
+				// carries herdr's own reason, because the start stated no refusal.
+				reason: outcome.status === "failed" ? outcome.reason : collision.reason,
+			});
+		}
+	}
+
+	private recordLeftoverFromCollision(identity: string, collision: NameCollision): void {
 		this.state.handoff.recordLeftoverEnvironment({
 			ticketIdentity: identity,
 			paneId: collision.holder?.paneId ?? null,
@@ -2069,9 +2105,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 		routeFromIdentity: string | null,
 	): Promise<void> {
 		if (this.stopped) return;
-		if (outcome.collision !== undefined) this.recordNameCollision(identity, outcome.collision);
-		if (outcome.ownCollision !== undefined)
-			this.recordNameCollision(identity, outcome.ownCollision);
+		this.recordNameCollisions(identity, outcome);
 
 		if (outcome.status === "failed") {
 			this.settleFailedStart(claim.attemptId, outcome.reason);
@@ -2083,6 +2117,12 @@ class HandoffDispatchModule implements HandoffDispatch {
 				agentName: outcome.agent.name,
 				routeFromIdentity,
 			});
+			// The start reached its Agent, so the name that was held is held no more:
+			// the operator's own Handoff is the one act that clears the collision, and
+			// the automatic adds resume on the same rule with no second act (issue #299,
+			// ADR 0107). A start that failed for another reason clears nothing - it never
+			// asked for the name, so it answered nothing about it.
+			this.state.handoff.clearNameCollision(identity);
 		}
 		this.reports.starting(identity, false);
 		this.reports.refresh();

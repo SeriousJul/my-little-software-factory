@@ -17,7 +17,9 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { handoffStartFailedLine } from "../src/domain/attempt-record.ts";
 import { failedStartParkLine } from "../src/domain/failed-start-park.ts";
+import { NAME_COLLISION_PREFIX, nameCollisionLine } from "../src/domain/name-collision.ts";
 import { queueStagingOf } from "../src/domain/queue-staging.ts";
+import type { AgentNameCollision } from "../src/domain/ticket.ts";
 import {
 	AUTOMATIC_CANDIDATE_HOLD_REASONS,
 	AUTOMATIC_HOLD_LINES,
@@ -31,6 +33,7 @@ const appSource = readFileSync(join(repo, "src/components/app.ts"), "utf8");
 const dispatchSource = readFileSync(join(repo, "src/handoff-dispatch.ts"), "utf8");
 const attemptRecordSource = readFileSync(join(repo, "src/domain/attempt-record.ts"), "utf8");
 const failedStartParkSource = readFileSync(join(repo, "src/domain/failed-start-park.ts"), "utf8");
+const nameCollisionSource = readFileSync(join(repo, "src/domain/name-collision.ts"), "utf8");
 
 /** One line of the reference page, with the code that writes it named for the failure. */
 function statedInGuide(line: string, writtenBy: string): void {
@@ -156,6 +159,45 @@ describe("the record lines the configuration reference states", () => {
 			`\`${sourceConstant(failedStartParkSource, "FAILED_START_PARK_PREFIX")}\``,
 			"FAILED_START_PARK_PREFIX",
 		);
+	});
+
+	test("the held Agent name states its own lines in the guide (issue #299)", () => {
+		// The collision is the second standing fact the same ask meets, and its
+		// Message line names where the name is held - the whole pointer, because the
+		// plane owns no cleanup for the pane. Both sentences come from the module that
+		// owns them, so the checks run the builders.
+		const refusal =
+			"the herdr name watch-agent-turns-1a2b3c4d is held by pane w13K:p1 in workspace w13K, " +
+			"which is no agent of this ticket: agent_name_taken";
+		const collision: AgentNameCollision = {
+			stableName: "watch-agent-turns-1a2b3c4d",
+			holderPaneId: "w13K:p1",
+			holderWorkspaceId: "w13K",
+			reason: refusal,
+			at: "2026-10-04T09:12:00Z",
+		};
+		statedInGuide(
+			nameCollisionLine('"Watch agent turns"', collision),
+			'nameCollisionLine("Watch agent turns")',
+		);
+		statedInGuide(
+			`\`${sourceConstant(nameCollisionSource, "NAME_COLLISION_PREFIX")}\``,
+			"NAME_COLLISION_PREFIX",
+		);
+		// The record line carries the refusal the attempt's own row stores beside the
+		// Ticket, so the row, the detail, and the file name one refusal. The builder
+		// owns that shape, so the check runs the builder.
+		statedInGuide(
+			automaticHoldLine(
+				{ reason: "agent-name-held", candidate: "github:github.com:I_5", detail: refusal },
+				() => `"Watch agent turns"`,
+			),
+			"automaticHoldLine(agent-name-held with the refusal beside the Ticket)",
+		);
+		// And the page says the two facts the same lane carries never answer for one
+		// another.
+		statedInGuide("`leftover`", "the Leftover environment fact the collision is told from");
+		expect(NAME_COLLISION_PREFIX).toBe("agent name held:");
 	});
 
 	test("the two facts the operator sets by key state themselves in the guide", () => {

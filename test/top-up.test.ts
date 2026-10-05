@@ -152,6 +152,7 @@ describe("each automatic-walk hold names itself in the record (issue #223)", () 
 			"automatic walks hold: the Work queue already holds a continuation",
 			"automatic walks hold: the Work queue holds an item the operator staged",
 			"automatic walks hold: the Work queue holds a waiting row",
+			"automatic walks hold: another pane holds the Ticket's Agent name",
 			"automatic walks hold: the Ticket's Handoff starts keep failing",
 		]);
 	});
@@ -207,7 +208,7 @@ describe("each automatic-walk hold names itself in the record (issue #223)", () 
 		// its line names the Ticket the walk held out - the same reason a standing-row
 		// line names its row (issue #223 review).
 		const reasons: AutomaticCandidateHoldReason[] = [...AUTOMATIC_CANDIDATE_HOLD_REASONS];
-		expect(reasons).toEqual(["handoff-failure-park"]);
+		expect(reasons).toEqual(["agent-name-held", "handoff-failure-park"]);
 		const hold: AutomaticCandidateHold = {
 			reason: "handoff-failure-park",
 			candidate: "github:github.com:I_5",
@@ -220,6 +221,34 @@ describe("each automatic-walk hold names itself in the record (issue #223)", () 
 		expect(automaticHoldKey(hold)).toBe("handoff-failure-park github:github.com:I_5");
 		expect(automaticHoldKey(hold)).not.toBe(
 			automaticHoldKey({ reason: "handoff-failure-park", candidate: "github:github.com:I_6" }),
+		);
+	});
+
+	test("the held Agent name states the refusal its attempt stored (issue #299)", () => {
+		// The collision names the Ticket the walk reached, like the park does, and
+		// states beside it the reason the attempt's own row stores - so one line
+		// answers which Ticket rests and what it rests on (issue #231).
+		const reason =
+			"the herdr name watch-agent-turns-1a2b3c4d is held by pane w13K:p1 in workspace w13K, " +
+			"which is no agent of this ticket: agent_name_taken";
+		const hold: AutomaticCandidateHold = {
+			reason: "agent-name-held",
+			candidate: "github:github.com:I_5",
+			detail: reason,
+		};
+		expect(automaticHoldLine(hold, (identity) => `"${identity} title"`)).toBe(
+			`automatic walks hold: another pane holds the Ticket's Agent name (` +
+				`"github:github.com:I_5 title": ${reason})`,
+		);
+		// The fact is the Ticket and the refusal, not the handles: a refresh that
+		// names a different pane is the same standing fact and states itself once.
+		expect(automaticHoldKey(hold)).toBe("agent-name-held github:github.com:I_5");
+		expect(automaticHoldKey(hold)).not.toBe(
+			automaticHoldKey({ reason: "agent-name-held", candidate: "github:github.com:I_6" }),
+		);
+		// And the collision is not the park: two facts on one Ticket, two keys.
+		expect(automaticHoldKey(hold)).not.toBe(
+			automaticHoldKey({ reason: "handoff-failure-park", candidate: "github:github.com:I_5" }),
 		);
 	});
 

@@ -25,6 +25,7 @@
 import type { WorkQueueItem } from "../state/work-queue.ts";
 import { type AgentPoll, agentInPane, normalizeAgentStatus, ticketAgentName } from "./agent.ts";
 import { failedStartParkStands } from "./failed-start-park.ts";
+import { nameCollisionStands } from "./name-collision.ts";
 import {
 	automaticStartBlocked,
 	handoffLimitReached,
@@ -95,6 +96,15 @@ export interface TicketRowFacts {
 	 * states the run it stands on.
 	 */
 	failedStartPark: boolean;
+	/**
+	 * The Agent name collision the row wears (issue #299, ADR 0107): herdr holds
+	 * the Ticket's stable Agent name in a pane the plane does not own, and the
+	 * Top-up adds no automatic start for it while the fact stands. It rides the
+	 * row apart from the Leftover environment the Ticket also carries: one word
+	 * names the plane's own environment still open, the other names a name a
+	 * stranger holds, and no reader folds one into the other.
+	 */
+	nameCollision: boolean;
 	/** The in-flight fact: the row keeps its row while the operator's flag stands (ADR 0060). */
 	inFlight: boolean;
 	/** The held turn's badge (ADR 0016): the decision the operator owes. */
@@ -242,6 +252,12 @@ function factsOf(ticket: Ticket, inputs: TicketFactInputs): TicketRowFacts {
 		failedStartPark: failedStartParkStands({
 			failedStartStreak: ticket.failedStartStreak,
 			handoffLimit: inputs.maxHandoffsPerTicket,
+			judgedOut: automaticStartBlocked(ticket),
+		}),
+		// The collision is a stored fact, not a derived one: the row states the
+		// record the refused start wrote, and the operator's own act takes it off.
+		nameCollision: nameCollisionStands({
+			held: ticket.nameCollision !== null,
 			judgedOut: automaticStartBlocked(ticket),
 		}),
 		inFlight: inFlight(ticket),

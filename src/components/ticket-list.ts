@@ -61,6 +61,14 @@ const PARK_TEXT = "failed starts";
 /** The marker a ticket with an environment still alive in herdr wears. */
 const LEFTOVER_TEXT = "leftover";
 /**
+ * The marker a Ticket whose stable Agent name a pane the plane does not own
+ * holds wears (issue #299, ADR 0107). It stands beside the Leftover marker and
+ * never for it: `leftover` names the Ticket's own environment herdr still
+ * holds, `name held` names a name a stranger holds, and the detail states
+ * which pane and workspace.
+ */
+const NAME_HELD_TEXT = "name held";
+/**
  * The marker an ignored ticket wears (ADR 0060). The fact is the written word,
  * so it stands in the no-color presentation and under an inherited Theme alike.
  */
@@ -212,8 +220,8 @@ export function TicketList({
  * The selection marker and the state badge take their fixed widths, the
  * task type badge takes its natural width, the repository keeps its
  * natural width with one gap column, the title takes whatever is left, and
- * the row's trailing markers (the handoff limit, a leftover environment)
- * ride at its end. A field is dropped, never wrapped: the repository drops
+ * the row's trailing markers (the handoff limit, a leftover environment, a
+ * held Agent name) ride at its end. A field is dropped, never wrapped: the repository drops
  * first, the task type badge drops before the repository when its complete
  * text plus the title minimum would not fit, and the title always keeps its
  * gap plus one text cell.
@@ -229,6 +237,9 @@ function rowSpans(
 	const trailing: { text: string; fg: string | undefined }[] = [];
 	if (fact.handoffLimit) trailing.push({ text: LIMIT_TEXT, fg: paint("yellow") });
 	if (fact.failedStartPark) trailing.push({ text: PARK_TEXT, fg: paint("yellow") });
+	// The collision rides beside the Leftover marker and never for it: two words,
+	// two facts, and the row states both when a Ticket carries both (issue #299).
+	if (fact.nameCollision) trailing.push({ text: NAME_HELD_TEXT, fg: paint("yellow") });
 	if (fact.ticket.leftover !== null) trailing.push({ text: LEFTOVER_TEXT, fg: paint("yellow") });
 	// The ignore rides the same lane: the state badge keeps its own slot, so an
 	// ignored Ticket whose Agent works still reads `running` (ADR 0060), and the

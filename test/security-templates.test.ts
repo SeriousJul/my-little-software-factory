@@ -82,6 +82,7 @@ function ticketOf(kind: keyof typeof tickets): Ticket {
 		actionable: true,
 		handoffRecoveryRequired: false,
 		leftover: null,
+		nameCollision: null,
 		...tickets[kind],
 	} as Ticket;
 }

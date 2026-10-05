@@ -108,6 +108,7 @@ const ticket: Ticket = {
 	failedStartStreak: 0,
 	lastCompletion: null,
 	leftover: null,
+	nameCollision: null,
 };
 
 const defaultChoice = {

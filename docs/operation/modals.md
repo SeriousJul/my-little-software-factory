@@ -64,3 +64,14 @@ When herdr cannot remove an environment, the ticket wears a `leftover` marker
 and its detail names the workspace, tab, and pane that remain, with the
 reason and since when. The control plane keeps no clear of its own: the
 cleanup runs in herdr, not in the control plane, so go there to remove it.
+
+## Agent name held
+
+When herdr refuses a handoff because a pane the plane cannot tie to that ticket
+holds the ticket's stable Agent name, the ticket wears a `name held` marker and
+its detail names the pane, the workspace, the name, and since when, with herdr's
+refusal behind it. The plane owns no cleanup for that pane, so close the Agent
+that holds the name in herdr and hand the ticket off yourself: that start clears
+the marker, and the automatic starts resume. While the marker stands the factory
+adds no automatic start for the ticket. See
+[ADR 0107](../adr/0107-a-herdr-agent-name-held-by-a-stranger-is-a-fact-on-the-ticket-and-the-top-up-waits-for-the-operator.md).

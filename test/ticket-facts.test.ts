@@ -10,6 +10,7 @@
  */
 import { describe, expect, test } from "bun:test";
 import { agentPoll } from "../src/domain/agent.ts";
+import type { AgentNameCollision, LeftoverEnvironment } from "../src/domain/ticket.ts";
 import {
 	failureMarker,
 	inFlight,
@@ -362,5 +363,70 @@ describe("the Live view's context line", () => {
 
 	test("an agent that is not named keeps the placeholder", () => {
 		expect(liveContextLine(ticket(), "implement")).toBe("acme/billing · implement · ?");
+	});
+});
+
+/**
+ * The Agent name collision (issue #299, ADR 0107): the row's marker for the fact
+ * a Handoff start leaves when herdr holds the Ticket's stable Agent name in a
+ * pane the plane does not own. It rides the row beside the Leftover marker and
+ * never for it.
+ */
+describe("the Agent name collision (issue #299)", () => {
+	/** The fact one refused start leaves. */
+	const collision: AgentNameCollision = {
+		stableName: "watch-agent-turns-1a2b3c4d",
+		holderPaneId: "w13K:p1",
+		holderWorkspaceId: "w13K",
+		reason:
+			"the herdr name watch-agent-turns-1a2b3c4d is held by pane w13K:p1 in workspace w13K, " +
+			"which is no agent of this ticket: agent_name_taken",
+		at: "2026-10-04T09:12:00Z",
+	};
+
+	/** The Ticket's own environment herdr still holds after its Close cleanup. */
+	const leftover = (): LeftoverEnvironment => ({
+		handoffId: "attempt-old-cycle",
+		environment: "worktree",
+		workspaceId: "ws-old",
+		tabId: "tab-old",
+		paneId: "pane-old",
+		reason: "the worktree checkout would not close",
+		at: "2026-10-01T08:00:00Z",
+	});
+
+	test("a Ticket whose name a stranger holds wears its marker", () => {
+		const fact = ticketFactsFor(ticket({ nameCollision: collision }), factInputs());
+		expect(fact.nameCollision).toBe(true);
+	});
+
+	test("no collision, no marker", () => {
+		expect(ticketFactsFor(ticket(), factInputs()).nameCollision).toBe(false);
+	});
+
+	test("the operator's own act takes the fact off the row", () => {
+		// The ignore and the source mute answer the refusal the way they answer a run
+		// of failed starts (ADR 0060, ADR 0070, ADR 0106).
+		const inputs = factInputs();
+		expect(
+			ticketFactsFor(ticket({ nameCollision: collision, ignored: true }), inputs).nameCollision,
+		).toBe(false);
+		expect(
+			ticketFactsFor(ticket({ nameCollision: collision, muted: true }), inputs).nameCollision,
+		).toBe(false);
+	});
+
+	test("the collision and the Leftover environment are two facts, and each wears its own word", () => {
+		// The row states both when a Ticket carries both, and neither marker stands
+		// for the other: one names the Ticket's own environment still open, the other
+		// a name a stranger holds.
+		const inputs = factInputs();
+		const both = ticketFactsFor(ticket({ nameCollision: collision, leftover: leftover() }), inputs);
+		expect(both.nameCollision).toBe(true);
+		expect(both.ticket.leftover).not.toBe(null);
+		const onlyLeftover = ticketFactsFor(ticket({ leftover: leftover() }), inputs);
+		expect(onlyLeftover.nameCollision).toBe(false);
+		const onlyCollision = ticketFactsFor(ticket({ nameCollision: collision }), inputs);
+		expect(onlyCollision.ticket.leftover).toBe(null);
 	});
 });

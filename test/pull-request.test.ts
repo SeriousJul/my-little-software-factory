@@ -76,6 +76,7 @@ const ticket: Ticket = {
 	failedStartStreak: 0,
 	lastCompletion: null,
 	leftover: null,
+	nameCollision: null,
 };
 
 const branch = "factory/7-retry-policy-for-webhooks";

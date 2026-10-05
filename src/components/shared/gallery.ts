@@ -680,6 +680,7 @@ function sampleTicket(
 		muted,
 		mutedAt: muted ? "2026-02-17T10:00:00.000Z" : null,
 		leftover: null,
+		nameCollision: null,
 	};
 }
 
