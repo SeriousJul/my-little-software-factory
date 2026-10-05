@@ -478,7 +478,8 @@ the Work queue reads `mode pickup`, not `direct-ask`: the mode names the path
 that took the seat, not the ask that made the row.
 
 The queue lines name the row the Work queue took, the refusal that left a row
-out, and the start the Shared checkout hold keeps waiting:
+out, the start the Shared checkout hold keeps waiting, and the hold its budget
+ends:
 
 ```text
 handoff queued: "Add a webhook retry policy" (origin open, operator-staged)
@@ -504,22 +505,22 @@ that stands (ADR 0104).
 A `waits:` line is not a refusal: the row stays in the Work queue, keeps its
 place and its `queued` badge, and starts on a later pickup. Its prefix names the
 waiting start's channel: `handoff waits:` for a Handoff, and the Plane action's
-own word from the registry - `merge waits:` for the merge of a pull request. The hold it names is
-the Shared checkout hold: one Repository's checkout is worked by one start at a
-time, so a merge Plane action and a worktree Handoff of that Repository never
-reach it at the same time (ADR 0109). The hold is not the Parallel limit, and the
-waiting row takes no seat: the Pickup reaches the starts behind it. The wait is
-bounded on two clocks that end different things, and each states its own fact.
-The hold's age ends the hold: `stayed at work past its budget` names one start
-that stopped answering, the plane drops its hold, and the row that waited runs.
-The row's own wait ends the row: `waited behind the shared checkout past its
-budget` names a Repository that is simply busy, where every start answered in
-time and the checkout only kept changing hands, and that line is a `refused:` line
-like every other, so the row leaves the queue. The two facts read apart on
-purpose: an operator who reads the second as the first goes looking for a hung run
-that is not there. The `waits:` lines follow the standing-fact rule the queue
-lines follow: once while the wait stands, again when the fact changes, never once
-per poll.
+own word from the registry - `merge waits:` for the merge of a pull request. The
+hold it names is the Shared checkout hold: one Repository's checkout is worked by
+one start at a time, so a merge Plane action and a worktree Handoff of that
+Repository never reach it at the same time (ADR 0109). The hold is not the
+Parallel limit, and the waiting row takes no seat: the Pickup reaches the starts
+behind it. The wait is bounded on two clocks that end different things, and each
+states its own fact. The hold's age ends the hold: `stayed at work past its
+budget` names one start that stopped answering, the plane drops its hold on the
+`checkout hold dropped:` line, and the row that waited runs. The row's own wait
+ends the row: `waited behind the shared checkout past its budget` names a
+Repository that is simply busy, where every start answered in time and the
+checkout only kept changing hands, and that line is a `refused:` line like every
+other, so the row leaves the queue. The two facts read apart on purpose: an
+operator who reads the second as the first goes looking for a hung run that is not
+there. The `waits:` lines follow the standing-fact rule the queue lines follow:
+once while the wait stands, again when the fact changes, never once per poll.
 
 Your own force-dispatch key passes the Parallel limit's cap and not the hold. On
 a row whose checkout is at work it leaves the row standing and answers on the
