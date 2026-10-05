@@ -265,7 +265,7 @@ states.
 | `top-up.ts :: AutomaticBareHold` | reached through a value | one member of the `AutomaticHold` the walk holds; the same test states a bare hold names no row |
 | `top-up.ts :: AutomaticHoldReason` | reached through a value | the key of `AUTOMATIC_HOLD_LINES` and the `reason` of every hold; the same suite pins that the words and the lines are one set |
 | `top-up.ts :: AutomaticRowHold` | reached through a value | one member of the same union, answered by `continuationHold`; the same test pins the row identity it carries |
-| `top-up.ts :: AutomaticRowHoldReason` | reached through a value | the `reason` of that member and the words of `AUTOMATIC_ROW_HOLD_REASONS` |
+| `top-up.ts :: AutomaticRowHoldReason` | reached through a value | the `reason` of that member and the words of `AUTOMATIC_ROW_HOLD_REASONS`; `test/top-up.test.ts` - "the pace gate answers each row-hold word, and no word outside the set" - pins the set where the only writer of it answers: the factory's staging and the operator's staging answer the two words, the two answers are the whole set, and each word has its own line |
 | `top-up.ts :: ContinuationRowFacts` | reached through a value | the rows `continuationHold` reads in `src/observation.ts`; the same test states the three facts |
 | `top-up.ts :: OpenTicketRowGate` | reached through a value | `openTicketRowGate` answers it to `src/observation.ts`; the same test pins that the task type is readable only on the branch that stands |
 | `top-up.ts :: OpenTicketWaitsFacts` | reached through a value | `openTicketWaitsHold` reads it in `src/observation.ts`; the same test states the three waits |
@@ -281,6 +281,10 @@ a scratch script under `/tmp` that was deleted after the run:
 | of those, read by a test import | 28 | 41 |
 | of those, read by nothing at all | 14, all of them types | 0 |
 
+The rework round below moved no domain export, and the same walk re-run on that
+tree answers the same: 125 exports, 41 with no importer under `src/`, 41 read by
+a test import, 0 read by nothing at all.
+
 ### The probes, re-run at `8bd17a4d`
 
 | Probe | Result |
@@ -288,20 +292,60 @@ a scratch script under `/tmp` that was deleted after the run:
 | domain A, `export const anUnreadRule = () => true;` in `src/domain/top-up.ts` | 1 case red, that one name |
 | domain B, `export const freshWorkHoldAlias = freshWorkHold;` | 2 cases red, the alias case names both sides |
 | domain C, `export interface ABrandNewUnreadType` | 1 case red, that one name against a list that stands empty |
-| domain D, `"src/domain/top-up.ts :: AutomaticHold (interface)"` written into the empty list | 1 case red: the list side holds a name that has readers and the unread side holds nothing |
+| domain D, `{ name: "src/domain/top-up.ts :: AutomaticHold (interface)", reason: "the walk holds it" }` written into the empty list | 1 case red: the list side holds a name that has readers and the unread side holds nothing |
+| domain E, probe C's type plus `{ name: "src/domain/top-up.ts :: ABrandNewUnreadType (interface)", reason: "" }` in the list | the ratchet case green on that name, and "every baseline entry states the reason it stays exported" red with that one name |
 
 Each file was restored after its probe and `git status` came back clean. Probe D
 is new to this round: with the list empty the "stale entry" direction has no
 entry to delete, so it is probed by writing in a name that has readers. The
-three probes recorded above were re-run unchanged.
+three probes recorded above were re-run unchanged. Probe E joined the rework
+round below, and all five were re-run there on the tree that merges.
+
+### The review round on pull request #308 (2026-10-05)
+
+The review scored the branch 86 / 100, passed the specification check and the
+quality check, and named six required changes. Each was made, and each is
+recorded with what measures it:
+
+| Finding | What the rework did |
+| --- | --- |
+| `AutomaticBareHold` and `AutomaticRowHold` were not greppable in the module map | `docs/agents/shape.md` names all three members of `AutomaticHold` and what each carries, so a reader who greps either name lands on the map entry |
+| `AutomaticRowHoldReason` pointed at no assertion | A new case pins the word set at the gate that writes it, and the table row above names that case |
+| Six `Object.keys` assertions pinned field declaration order | Each now sorts the read keys, the way `test/config.test.ts` and `test/theme-resolver.test.ts` do: `test/decision-facts.test.ts`, `test/domain.test.ts`, `test/section-facts.test.ts` (four), and `test/top-up.test.ts` (two) |
+| Duplicated assertions | `test/agent-facts.test.ts` keeps the closed-set annotation and the no-two-words-answer-alike check and drops the loop over the five words and the second `meditating` fallback, both already pinned by the test above. `test/decision-facts.test.ts` keeps the record-shape pin and the closed pair of offer kinds, and drops the handoff and merge offers the two tests above already pin |
+| A row-hold test threw where an `expect` belongs | The row-hold case and the open-ticket row-gate case now compare the whole answer with `toEqual`, so a regression prints a diff instead of an error |
+| The header said a name may be written into the list "with its reason", and nothing read a reason | The baseline entry is now `{ name, reason }`, and a new case refuses an entry whose reason is blank. The reason is a field the check reads, not a convention a reviewer enforces. Probe E measures it |
+
+What the round did not change is the ratchet's satisfaction condition the review
+named as weak: a name counts as read when a test file imports it, which a bare
+annotation satisfies. Biome's `noUnusedImports` refuses the degenerate import,
+and the round above replaced the one annotation-only row (`AutomaticRowHoldReason`)
+with an assertion. Whether a name named at the seam is dead stays unmeasured, as
+the row below states.
+
+The five domain probes were re-run on this tree, each file restored after its
+probe and `git status` clean: A, 1 case red with that one value name; B, 2 cases
+red, the alias case names both sides; C, 1 case red with that one type name; D, 1
+case red on the list side; E, the ratchet green and the reason case red with that
+one name.
+
+The gate on this tree, level with `origin/main` at `af085a2e`:
+
+| Check | Result |
+| --- | --- |
+| `bun run lint` | clean over 304 files (128 ms) |
+| `bun run typecheck` | clean (2.92 s) |
+| `bun run docs:build` | complete in 1.59 s, because the round touches `docs/` |
+| `bun run test` | 3,020 pass / 0 fail across 138 files in 40.18 s (16,895 `expect()` calls), at load average 8.62 before the run and 4.74 after. No other `bun test` process ran on this machine: the only match was the gate's own command line |
 
 ### What this round did not measure
 
 | Item | State |
 | --- | --- |
 | Whether any of the 13 types now named at the seam is dead | Not measured, and the check still cannot see it: a caller holds the shape through the value, so a test writing the name down is not proof of life. What was measured is that each of the 13 has a call site that reads the value carrying it, and the module map names that call site |
-| The stated-exemption mechanism the issue sketches for the third answer | Not built. No name needed it - 13 are read through a value and one is private - so the baseline stays the only place a name is held and the check's shape did not move. The issue leaves that choice to whoever takes the item, and this branch took the smaller check |
-| The live terminal walk, the screen-reader path, and the theme inheritance in a real herdr | Open, unchanged, as [the shared control record](./shared-controls.md) states. The only production line that moved is one `export` keyword in `src/domain/attempt-hold.ts` |
+| The stated-exemption mechanism the issue sketches for the third answer | Not built as a separate mechanism. No name needed it - 13 are read through a value and one is private - so the baseline stays the only place a name is held. The rework round below settled what an entry holds: `{ name, reason }`, with the reason read by a case that refuses a blank one, so the exemption is written where the check can enforce it |
+| The live terminal walk, the screen-reader path, and the theme inheritance in a real herdr | Open, unchanged, as [the shared control record](./shared-controls.md) states. The only production line that moved on the branch is one `export` keyword
+in `src/domain/attempt-hold.ts`; the rework round moved none |
 
 ## What was not measured
 

@@ -183,11 +183,14 @@ description: The module map of the source tree, for agents working in this repos
 	`flagWithholdsRow` reads it off a Ticket in the work-cycle aggregate and the
 	App; and the observation loop's walk holds the top-up's fact records
 	(`AutomaticAddFacts`, `ContinuationRowFacts`, `OpenTicketWaitsFacts`), its
-	answers (`AutomaticHold` with its three members, and `OpenTicketRowGate`), and
-	the reason words those answers carry (`AutomaticHoldReason`,
-	`AutomaticRowHoldReason`). `attempt-hold.ts` keeps the word its own record's
-	field takes (`UnreachedOutcome`) to itself: each aggregate hands its own
-	literal, and no reader asks for the name.
+	answers (`AutomaticHold` and `OpenTicketRowGate`; the three members of that
+	union are named here too, since each is an answer the walk can hand:
+	`AutomaticBareHold` names no row, `AutomaticRowHold` names the Work queue row
+	the walk waits behind, and `AutomaticCandidateHold` names the Ticket the walk
+	held out), and the reason words those answers carry
+	(`AutomaticHoldReason`, `AutomaticRowHoldReason`). `attempt-hold.ts` keeps the
+	word its own record's field takes (`UnreachedOutcome`) to itself: each aggregate
+	hands its own literal, and no reader asks for the name.
 - `src/handoff.ts`: the handoff. One start call (`runHandoffStart`, kept private
 	to the module) behind the two start calls the plane has (issue #204,
 	ADR 0097): it runs the pre-flight in one order, resolves the repository, builds
@@ -302,7 +305,8 @@ description: The module map of the source tree, for agents working in this repos
 	refused, an export that is a pure alias of another export of its own module is
 	refused, and a domain type neither side names is refused against a baseline
 	that can only shrink - the list stands empty since issue #301 answered the 14
-	names it was written with (ADR 0105).
+	names it was written with, and an entry written into it later carries the
+	reason the check reads, so an entry without one is refused (ADR 0105).
 - `src/components/`: the app shell, the ticket list pane, the ticket detail
 	pane, the native ticket detail viewport, the override panel, the decision
 	and missing modals, the turn log and markdown rendering, the shared

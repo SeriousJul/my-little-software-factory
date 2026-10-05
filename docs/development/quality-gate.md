@@ -94,7 +94,7 @@ review would otherwise have to find:
 | --- | --- |
 | `test/record-lines-doc.test.ts` | a record line the configuration reference states that the code does not write, and a level the page states that the code does not send |
 | `test/shape-doc-paths.test.ts` | a path `docs/agents/shape.md` prints that the tree does not hold, resolved against the entry that printed it |
-| `test/domain-export-architecture.test.ts` | a `src/domain/` value export neither `src` nor a test asks for; a domain export that is a pure alias of another export of its own module; and a domain type that neither side names, against a baseline that can only shrink and that stands empty since [issue #301](https://github.com/SeriousJul/my-little-software-factory/issues/301) answered its 14 names |
+| `test/domain-export-architecture.test.ts` | a `src/domain/` value export neither `src` nor a test asks for; a domain export that is a pure alias of another export of its own module; a domain type that neither side names, against a baseline that can only shrink and that stands empty since [issue #301](https://github.com/SeriousJul/my-little-software-factory/issues/301) answered its 14 names; and a baseline entry that states no reason |
 
 The second rule is the one the #223 review found standing in that directory:
 `topUpCycleOpen` was a wrapper of `freshWorkHold` with no `src` caller and nine
