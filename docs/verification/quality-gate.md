@@ -7,7 +7,10 @@ its refusal on a lint failure, and its git-level wiring were each run, and the r
 found two defects in the hook itself, both fixed before any push. The rules on
 [the quality gate page](../development/quality-gate.md) are not machine-checked:
 they hold a document's claim, a probe's reproducibility, and a report's numbers,
-and only a review measures those. Those rows stand incomplete below.
+and only a review measures those. A first round of that review ran on the change
+set itself and is recorded below; it is self-review, and the row that says so
+stands incomplete. The findings the round and the flake investigation produced are
+filed as issues #301, #302, #303, and #304.
 
 This record states what was measured, on what, and what was not measured. A
 check that could not run is recorded as incomplete. It is not a pass, and it is
@@ -170,6 +173,25 @@ same round trip with the app's loops stopped and `renderer.requestRender`
 neutered. The ordering flip is not pinned, so no fix was shipped on this
 evidence. The finding, the mechanism, and what a fix has to hold are in
 [issue #302](https://github.com/SeriousJul/my-little-software-factory/issues/302).
+
+### What the failures have in common
+
+Across the five local full runs and the six remote runs read, the case names are
+not the same. Four things are:
+
+| Constant | Evidence |
+| --- | --- |
+| The wait | Every deadline miss ends in `awaitFrame` or `awaitNewKeyHandler` in `test/app-harness.ts`, against `FRAME_DEADLINE_MS`: 10000 ms here, 20000 ms on CI. Local misses land at 10180 to 11453 ms, remote ones at 20155 to 21088 ms |
+| The file set | Only tests that boot the real renderer and the real state database. No unit file has gone red |
+| The exposure | The cases that fail hold the most waits in one test: 8 `awaitFrame` waits in `test/repository-select-panel.test.ts` - a failed act stops the queue, about 9 in `test/repo-init-stub.test.ts` - the TUI walk of the init, about 16 in `test/main-view-frame.test.ts` - the scroll round trip. Which file loses one is which worker got starved that run |
+| Three mechanisms, not one | #302 misses a deadline (10000 ms local, 20000 ms CI). #303 fails at 796 to 1282 ms on a fixed `sleep(150)` in `stepUntilRow`. A third, filed as [issue #304](https://github.com/SeriousJul/my-little-software-factory/issues/304), fails fast at 360 to 425 ms because `settle` reads a stable frame as a finished transition: `test/live-view.test.ts` asserted on a `settle` result and caught the Live view still open. #303 is the most frequent local failure, so fixing it alone would quiet the noise while #302 and #304 stand |
+
+A final full run at `50b4a51f`, load 6.66 before, went red three times in 40.39 s:
+the screenshot fixture at 1244.35 ms (#303), `test/live-view.test.ts` at 360.95 ms
+(#304), and `test/repository-select-panel.test.ts` - Esc closes the list and keeps
+the base frame at 10379.11 ms, which is #302's class at the local deadline and the
+same case name CI hit at 20155 ms in run 37159675095. Each file passes alone:
+`test/live-view.test.ts` gives 20 pass / 0 fail in 10.10 s.
 
 ## The review round on the gate itself
 
