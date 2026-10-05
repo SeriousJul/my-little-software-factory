@@ -2,7 +2,7 @@
 # The pre-push gate (ADR 0105).
 #
 # It owns the two cheap checks and the merged-tree rule, and nothing else:
-# `bun run lint` (0.25 s) and `bun run typecheck` (2.8 s), and a refusal of a
+# `bun run lint` (0.18 s) and `bun run typecheck` (2.7 s), and a refusal of a
 # push whose branch is behind the remote-tracking ref this checkout already
 # holds. The full suite is not here on purpose: exactly one `bun run test` gates
 # the push, and the agent runs it deliberately, against the merged tree, once.

@@ -17,12 +17,15 @@ after every edit is the cost that makes an agent skip a check.
 
 | Command | What it covers | Measured cost |
 | --- | --- | --- |
-| `bun run fmt`, or `bun run lint` on the files you touched | Format and lint with Biome | 0.25 s over 296 files |
-| `bun run typecheck` | TypeScript over `src` and `test` | 2.8 s |
-| `bun test <file>` | The suite of the file you changed | 1.7 s for 124 tests |
+| `bun run fmt`, or `bun run lint` on the files you touched | Format and lint with Biome | 0.18 s over 302 files (three runs: 175 ms, 178 ms, 181 ms) |
+| `bun run typecheck` | TypeScript over `src` and `test` | 2.7 s (two runs: 2.74 s, 2.78 s) |
+| `bun test <file>` | The suite of the file you changed | 0.16 s for a static check over the tree; 13.8 s for the 22 frame tests in `test/action-bar.test.ts`; 21.9 s for the 58 in `test/consultation-frame.test.ts` |
 | `bun run test:changed` | The test files the current changes can affect | near zero when nothing changed |
 
-The whole loop costs about 5 seconds. `bun run test` does not belong in it.
+Lint and typecheck together cost under 3 seconds. The scoped run is the part that
+moves: a unit file costs a fraction of a second, and a frame file that boots the
+real renderer costs 14 to 22 seconds. That is still far below the full suite, and
+`bun run test` does not belong in the loop either way.
 
 ## The push gate
 

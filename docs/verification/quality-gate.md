@@ -65,7 +65,7 @@ case is not identified, and the next run that goes red at load names it. The
 same shape on the remote was investigated on 2026-10-05 below and filed as
 [issue #302](https://github.com/SeriousJul/my-little-software-factory/issues/302).
 
-## The two named red cases on the same tree
+## The named red cases on the same tree
 
 A later full run on this tree (`48493de3`, load 6.35 before, no other `bun test`
 process) went red twice in 39.91 s, and this time the output was kept, so both
@@ -81,6 +81,32 @@ Each fails in the full suite and passes alone, so each is a load flake under
 since the green run above. The first case is the frame-deadline class of
 [issue #302](https://github.com/SeriousJul/my-little-software-factory/issues/302)
 at the local deadline, and the case name is recorded on that issue.
+
+The screenshot case came back on the next push gate, at `b3b5fc38`, load 10.42
+before the run, 1282.69 ms, with the same miss text: `the cursor never reached a
+row matching "Rank tickets by priori" within 3 "j" steps`, and the dump showed the
+cursor on a Group header one step above the row it aims at. That is a fixed 150 ms
+sleep in `stepUntilRow` in `scripts/screenshot-fixture.ts`, not a pixel drift, and
+it is filed as
+[issue #303](https://github.com/SeriousJul/my-little-software-factory/issues/303)
+with the three occurrences and what a fix has to hold.
+
+The push gate for the review round ran the full suite a third time on the same
+head, at load 11.13, and went red twice again in 41.51 s:
+
+| Case | Time | Alone |
+| --- | --- | --- |
+| `test/repo-init-stub.test.ts` - the TUI walk of the init (ADR 0075) | 11452.92 ms, the local 10000 ms frame deadline | 8 pass / 0 fail in 11.67 s with the row below, at load 10.39 |
+| `test/screenshot-drift.test.ts` - the guide screenshots | 1074.95 ms | same run |
+
+So the full suite did not go green on the head the review round measured, and the
+result is recorded as it stands: two named cases, each red in the full suite and
+green alone, at load 11.13 after back-to-back suites in one session, with
+`test/repo-init-stub.test.ts` already carrying a recorded flake history. The first
+is this issue's class in a new file, named on
+[issue #302](https://github.com/SeriousJul/my-little-software-factory/issues/302);
+the second is #303. No check in this change set is claimed as passing on a run
+that did not pass.
 
 ## Two defects the run found, and fixed
 
@@ -135,13 +161,65 @@ neutered. The ordering flip is not pinned, so no fix was shipped on this
 evidence. The finding, the mechanism, and what a fix has to hold are in
 [issue #302](https://github.com/SeriousJul/my-little-software-factory/issues/302).
 
+## The review round on the gate itself
+
+The rules on [the quality gate page](../development/quality-gate.md) are not
+machine-checked, so a review round is where they are measured. This round measured
+the change set that added them, on the head `b3b5fc38`, and followed the
+reviewer's floor the page states: the three checks on the merged tree, every probe
+re-run, and the score naming the head. No remote run was read.
+
+### The probes, re-run at this head
+
+| Probe | Result at `b3b5fc38` |
+| --- | --- |
+| shape A, `src/config-write.ts` to `src/config-write-back.ts` in the map | red with `src/config-write-back.ts (entry src/config-write-back.ts) names no file or directory` |
+| shape B, `batch.ts` to `chunker.ts` in the `src/state/` entry | red with `chunker.ts (entry src/state/ stands nowhere under src/state/` |
+| domain A, `export const anUnreadRule = () => true;` in `src/domain/top-up.ts` | 1 case red, that one name |
+| domain B, `export const freshWorkHoldAlias = freshWorkHold;` | 2 cases red, the alias case names both sides |
+| domain C, `export interface ABrandNewUnreadType` | 1 case red, that one name |
+
+Each file was restored after its probe, and `git status` came back clean.
+
+### The costs, re-measured at this head
+
+lint 175 ms, 178 ms, 181 ms over 302 files; typecheck 2.74 s and 2.78 s;
+`bun run docs:build` 1.75 s; `bun run test` 40.82 s; a scoped static check 0.16 s;
+`bun test test/action-bar.test.ts` 13.8 s for 22 tests; `bun test
+test/consultation-frame.test.ts` 21.9 s for 58 tests.
+
+### What the round found
+
+- **One stale number, fixed in the round.** The inner-loop table stated `0.25 s
+  over 296 files` for lint and `1.7 s for 124 tests` for a scoped run. Neither was
+  a measurement of this tree: lint costs 0.18 s over 302 files, and no scoped run
+  of that shape costs 1.7 s. The table now carries the numbers above, and the
+  sentence that followed them, "the whole loop costs about 5 seconds", is replaced
+  by what the two parts actually cost. The hook's own comment carried the same
+  `0.25 s` and was corrected with it.
+- **The rename sweep is clean.** The four domain values un-exported at `724dc3ec`
+  appear nowhere in `docs/` or `test/` as exports; the only mention is this
+  record's account of the fix.
+- **The determinism rule holds for the new checks.** Both read files and never a
+  clock, and neither touches the desktop.
+- **Noted, not changed.** ADR 0105's title names "the three checks" while the gate
+  runs `bun run docs:build` conditionally. The ADR body states the conditional, so
+  the title names the three that always run.
+
+### What this round could not measure
+
+| Item | State |
+| --- | --- |
+| Whether the rules change behaviour on a pull request that did not come from this session | Incomplete. Every commit in this change set was written by the same agent that wrote the rules, so the round is self-review, and it is recorded as such |
+| The screen-reader path, the live terminal walk, and the theme inheritance inside a real herdr | Open, unchanged, as [the shared control record](./shared-controls.md) states |
+
 ## What was not measured
 
 | Item | State |
 | --- | --- |
 | A real `git push` to `github.com/SeriousJul/my-little-software-factory` with the hook installed | Passed. The push of `main` ran the hook: `pre-push: bun run lint` (302 files, no fixes), `pre-push: bun run typecheck`, `pre-push: lint and typecheck clean, and no branch behind its remote-tracking ref`, and `370563f5..724dc3ec main -> main` landed |
 | The hook installed in the operator's checkout | Passed. `git config core.hooksPath scripts/git-hooks` is set in this checkout, and the push above is the proof it is live. The setup line stays a documented step on [the commands page](../development/commands.md) for every other checkout |
-| The doc-claim rule, the rename sweep, the documented-line rule, the probe rule, the determinism rule, the fake-fidelity rule, the file-the-defect rule, the failure-mode sweep, and the reporting rules | Incomplete by nature. No check measures them; the reviewer's floor on the quality gate page is what enforces them, and the next review round is where they are first measured |
+| The doc-claim rule, the rename sweep, the documented-line rule, the probe rule, the determinism rule, the fake-fidelity rule, the file-the-defect rule, the failure-mode sweep, and the reporting rules | First measured by the self-review round above, on `b3b5fc38`: the probe rule, the rename sweep, the determinism rule, the file-the-defect rule, and the doc-claim rule each produced a result there, and the doc-claim rule found the stale cost numbers. What stays incomplete is the round's value: every commit was written by the agent that wrote the rules, so this is self-review, and a round on a pull request from a different author is the first independent measurement |
 | The 14 domain types in `UNREAD_TYPE_BASELINE` | Held still, not cleaned, and filed as [issue #301](https://github.com/SeriousJul/my-little-software-factory/issues/301). The ratchet refuses a new one and refuses a stale baseline entry; nothing was measured about whether these 14 should be exported, and the check's own header states that a caller can hold such a type without naming it |
 | The CI load flake on the frame tests | Investigated on 2026-10-05 and filed as [issue #302](https://github.com/SeriousJul/my-little-software-factory/issues/302): four remote frame-deadline misses, the mechanism measured, no local reproduction, and no fix shipped on that evidence. The older records in [the shared control record](./shared-controls.md) and the pull request records stand |
 | The live terminal walk, the screen-reader path, and the theme inheritance inside a real herdr | Open, as [the shared control record](./shared-controls.md) states. The gate is a claim about the automated checks and the tree they ran on, and it extends no further |
