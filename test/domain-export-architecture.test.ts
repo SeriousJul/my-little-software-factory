@@ -24,7 +24,9 @@
  *    is refused, and a name that no longer needs the list is refused too, so the
  *    list can only shrink. A type is a module's interface vocabulary, and the
  *    seams `docs/agents/shape.md` documents lean on it, so this class is held
- *    still rather than cleaned here.
+ *    still rather than cleaned here. The 14 names measured on the branch that
+ *    added the check are filed as issue #301, which states the three answers each
+ *    one can get.
  *
  * The rule is a declared dependency rule, not a behavior test: what the operator
  * sees is checked by the flow suites.
