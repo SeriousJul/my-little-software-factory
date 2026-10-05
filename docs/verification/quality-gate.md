@@ -387,6 +387,27 @@ answers zero" would do on a detail whose body fits the viewport.
 | "ask for the next pass only when the box does not answer a non-zero `maxScrollOf`" | The ask is keyed on the box answering no size at all (`scrollHeight === 0` or `viewport.height === 0`), not on `maxScrollOf` answering zero. A body that fits its viewport answers `maxScrollOf` 0 for the rest of its life, and asking again on each pass would repaint forever; for that body the clamp to 0 is the right answer, so the pane takes it on the spot |
 | How to hold "no later repaint available" in a test | The frame event is withheld rather than the render loop stopped. Stopping the loop (`renderer.pause()`) leaves the painted buffer stale, so the assertion could only read the scroll box's own `scrollTop` and could not say what the operator sees. With the event withheld the screen is still the fact under test, and a restore that waits for a pass still cannot run |
 
+Both branches of the restore are live in the app, read by a temporary
+`console.log` probe on the effect that was reverted after the run: at the
+cross-section remount the box answers `scrollHeight=52 viewport=22`, so the
+restore runs on the spot; at the remount back from below the minimum size it
+answers `scrollHeight=0 viewport=0`, so the pane asks for the pass and the
+following pass lands the offset. `test/ticket-scroll-frame.test.ts` - "restores
+the detail offset across a round-trip resize below the minimum size" and
+"resets a new Ticket, preserves same-Ticket refresh offsets, clamps, and
+survives resize" - are the cases that cover the ask path.
+
+### The gate on this branch
+
+The branch was level with `origin/main` at `dab44a0d` before the run.
+
+| Check | Result |
+| --- | --- |
+| `bun run lint` | clean over 304 files (132 ms) |
+| `bun run typecheck` | clean (2.88 s) |
+| `bun run docs:build` | complete in 1.59 s, because the branch touches `docs/` |
+| `bun run test` | 3,021 pass / 0 fail across 138 files in 41.02 s (16,014 `expect()` calls), at load average 9.37 before the run and 5.91 after. No other `bun test` process ran on this machine: the one match was the check's own command line |
+
 ### What this branch did not measure
 
 | Item | State |
