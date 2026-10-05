@@ -1567,7 +1567,10 @@ class HandoffDispatchModule implements HandoffDispatch {
 		// pile hands its own value down (src/state/ticket-work-cycle.ts). The read
 		// is lazy and memoized for the pass: a walk whose rows take no checkout - a
 		// Consultation-only queue, a row that skips at the seat check - reads
-		// nothing, and a walk of a hundred rows reads once.
+		// nothing, and a walk of a hundred rows reads once. The snapshot answers
+		// one question, the Repository a start works, and the claim path re-reads
+		// the pile for its own gates, so a run that lands mid-pass moves nothing
+		// this read decides.
 		let passProjection: TicketProjection | undefined;
 		const checkoutProjection = (): TicketProjection =>
 			(passProjection ??= this.state.ticketWorkCycle.ticketProjection(
@@ -1976,6 +1979,8 @@ class HandoffDispatchModule implements HandoffDispatch {
 	 * Claim and run one queue item. Returns whether the item claimed a seat
 	 * this call: every pickup ends in start or drop (ADR 0049), so a refused
 	 * claim drops the item with its warning, and a failed start does the same.
+	 * `checkoutProjection` is the pass's one Ticket projection read, asked only
+	 * when the row reaches the checkout gate (issue #297 review).
 	 */
 	private pickupItem(
 		item: WorkQueueHandoffItem,
