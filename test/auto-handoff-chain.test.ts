@@ -984,12 +984,16 @@ describe("the failed start's line follows the attempt, not the cycle (issue #295
 
 		// The wait the loop implies: the pickup starts the handoff and answers
 		// before the run ends, so the failed start's line lands after the tick.
+		// The wait is polled, not budgeted: it returns as soon as the lines are
+		// there, and the deadline only says how long a missing line takes to fail
+		// the test, so a loaded machine slows the test down without reddening it.
 		const awaitFailedLines = async (count: number): Promise<void> => {
-			for (let round = 0; round < 100; round += 1) {
+			const deadline = Date.now() + 10_000;
+			for (;;) {
 				if (failedLines(chain.lines).length === count) return;
+				if (Date.now() > deadline) throw new Error(`no ${count} failed-start line in the record`);
 				await new Promise((resolve) => setTimeout(resolve, 5));
 			}
-			throw new Error(`no ${count} failed-start line in the record`);
 		};
 
 		// Cycle 1: the walk's ask, and the row it leaves in the Work queue.

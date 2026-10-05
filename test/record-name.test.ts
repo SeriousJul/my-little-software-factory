@@ -51,18 +51,47 @@ describe("the record's Ticket name (issue #295 review)", () => {
 		// falls back to. Three surfaces read it - the Handoff dispatch, the
 		// observation cycle, and the boot - and each had its own copy until
 		// issue #295. A fourth copy is the drift the shared module exists to stop.
-		const shapes = [/`ticket \$\{[^}]*\}`\s*:\s*`"\$\{/u, /`"\$\{[^}]*\}"`\s*:\s*`ticket \$\{/u];
+		//
+		// The scan reads one line at a time and asks for both halves of the pair on
+		// that line, in either order, so it is not tied to the one template shape
+		// the four copies wore: a copy that swaps the branches, writes the pair as
+		// string concatenation, or puts the quoted title inside a longer sentence is
+		// the same rule restated, and it is caught the same way. A line that names a
+		// Ticket by identity alone - the walk's `ticket I_5 held (...)` lines - holds
+		// one half of the pair and is not the rule, so it stays out.
+		const identityFallback = [/`ticket\s*\$\{[^}]*\}`/u, /["'`]ticket\s+["'`]\s*\+/u];
+		const titleInQuotes = [
+			/`"\$\{[^}]*\}"`/u,
+			/`[^`]*\s"\$\{[^}]*\}"[^`]*`/u,
+			/["']"["']\s*\+\s*[\w.[\]]+\s*\+\s*["']"["']/u,
+		];
+		const restates = (code: string): boolean =>
+			code
+				.split("\n")
+				.some(
+					(line) =>
+						identityFallback.some((shape) => shape.test(line)) &&
+						titleInQuotes.some((shape) => shape.test(line)),
+				);
 		const offenders = sourceFiles("src")
 			.filter((file) => file !== "src/domain/record-name.ts")
-			.filter((file) => {
-				const code = readFileSync(file, "utf8");
-				return shapes.some((shape) => shape.test(code));
-			});
+			.filter((file) => restates(readFileSync(file, "utf8")));
 		expect(offenders).toEqual([]);
-		// The scan is not vacuous: a copy written the way the four copies were is
-		// caught by it. The placeholder and the backticks are escaped, so this file
-		// holds no live template of its own.
-		const restatement = `const name = title === undefined ? \`ticket \${identity}\` : \`"\${title}"\`;`;
-		expect(shapes.some((shape) => shape.test(restatement))).toBe(true);
+		// The scan is not vacuous: each way a copy can be written is caught by it.
+		// The placeholders and the backticks are escaped, so this file holds no live
+		// restatement of its own.
+		const copies = [
+			// The shape the four removed copies wore.
+			`const name = title === undefined ? \`ticket \${identity}\` : \`"\${title}"\`;`,
+			// The same pair with the branches swapped.
+			`const name = title !== undefined ? \`"\${title}"\` : \`ticket \${identity}\`;`,
+			// The pair written as concatenation instead of a template.
+			`const name = title === undefined ? "ticket " + identity : '"' + title + '"';`,
+			// The quoted title sitting inside a longer sentence.
+			`const name = title === undefined ? \`ticket \${identity}\` : \`the Ticket "\${title}" is gone\`;`,
+		];
+		for (const copy of copies) expect(restates(copy)).toBe(true);
+		// And a line that names a Ticket one way only stays out of the scan.
+		expect(restates(`log.warn(\`ticket \${identity} held (\${cause})\`);`)).toBe(false);
 	});
 });

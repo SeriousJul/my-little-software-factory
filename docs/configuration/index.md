@@ -544,6 +544,11 @@ the same Ticket is a second start, and it states itself again. Reading the recor
 for one Ticket then answers how many starts the factory made - the
 `handoff started:` lines - and why each one ended.
 
+Counting those starts needs `level = "info"`. The start lines are `info` while
+this ending line is `warn`, so at `level = "warn"` the record holds every ending
+and none of the starts they belong to: it answers why each start that failed
+failed, but not how many starts the factory made.
+
 The boot states the same line for a claim a previous run left unsettled: the open
 settles it as a failed start (ADR 0041), and the line lands beside the
 `handoff started:` line the run that ended wrote.
@@ -628,12 +633,14 @@ queue: the Work queue pause did not move: cannot store the queue pause at /path/
 ```
 
 Every line above carries its own level, and the filter keeps or drops it. The
-hold lines, the mode lines, and the queue lines are `info`; a refusal is `warn`,
-as is every line that says a start the factory made and how it ended, and so is
-every line that says a fact the next run will not read back - the session-only
-mode line and the refused pause line. `level = "warn"` therefore keeps every
-refusal, every failed start, and none of the hold lines, so a run you want to
-read the holds of needs `info` or `debug`.
+hold lines, the mode lines, the queue lines, and every `... started:` line are
+`info`; a refusal is `warn`, as is every line that says how a start the factory
+made ended, and so is every line that says a fact the next run will not read
+back - the session-only mode line and the refused pause line. `level = "warn"`
+therefore keeps every refusal, every failed start, and none of the hold lines,
+so a run you want to read the holds of needs `info` or `debug`. It keeps none of
+the start lines either, so counting a Ticket's starts - the `handoff started:`
+lines the `handoff start failed:` endings stand beside - needs `info`.
 
 A Consultation's start line is the Consultation operations' own. Its name is the
 record's Consultation type beside the identity prefix the plane's other

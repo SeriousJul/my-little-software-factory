@@ -31,11 +31,15 @@ export const HANDOFF_START_FAILED_PREFIX = "handoff start failed:";
 /**
  * The words the line states when the attempt's row stores no reason at all.
  *
- * The settle's own interface lets a failed settle name no reason, and the
- * attempt's `failure_reason` column is nullable in every schema version, so a
- * state file an older run wrote can hold a failed attempt with nothing in it.
- * The line states that fact rather than inventing a reason for it, and the
- * suite holds both doors: the settle that stores none, and the line it earns.
+ * This is a guard, not a path this plane reaches today. Every caller that
+ * settles a failed start names its reason, and the line is written at that
+ * settle, never when a row is read back, so a failed attempt an older run left
+ * with an empty reason earns no line at all (issue #295 review). The guard
+ * stands because the settle's own interface lets a failed settle name no reason
+ * and the attempt's `failure_reason` column is nullable in every schema
+ * version. The line states that empty cell rather than inventing a reason for
+ * it, and the suite holds both doors: the settle that stores none, and the line
+ * it earns.
  */
 export const NO_FAILURE_RECORDED_FACT = "the attempt recorded no reason";
 

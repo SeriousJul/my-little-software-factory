@@ -11,15 +11,15 @@
 import { describe, expect, test } from "bun:test";
 import {
 	HANDOFF_START_FAILED_PREFIX,
-	NO_FAILURE_RECORDED_FACT,
 	handoffStartFailedLine,
+	NO_FAILURE_RECORDED_FACT,
 } from "../src/domain/attempt-record.ts";
 
 describe("the failed Handoff start's line (issue #295)", () => {
 	test("the line names the Ticket and the reason its attempt's row stores", () => {
-		expect(handoffStartFailedLine('"Add a webhook retry policy"', "the worktree path already exists")).toBe(
-			'handoff start failed: "Add a webhook retry policy" (the worktree path already exists)',
-		);
+		expect(
+			handoffStartFailedLine('"Add a webhook retry policy"', "the worktree path already exists"),
+		).toBe('handoff start failed: "Add a webhook retry policy" (the worktree path already exists)');
 	});
 
 	test("the prefix is its own, and never the gate refusal's", () => {

@@ -33,23 +33,25 @@ export interface HandoffClaim {
 }
 /**
  * What one Handoff settle leaves in the attempt's own record: the Ticket the
- * attempt names, the outcome its own stage states, and the reason the attempt's
- * row stores.
+ * attempt names, and the reason the attempt's row stores.
  *
- * The settle answers this so the caller's record line states the reason the
- * ledger holds, not a second copy of the reason the caller handed the write
- * (issue #295). A settle of an attempt that had already settled answers null:
- * the write runs once per attempt, and the line follows the write.
+ * The settle answers these two cells so the caller's record line states the
+ * reason the ledger holds, not a second copy of the reason the caller handed the
+ * write (issue #295). A settle of an attempt that had already settled answers
+ * null: the write runs once per attempt, and the line follows the write.
  *
- * `failureReason` is null for a start that reached its Agent, and for the failed
- * settle that stored no reason at all: the column is nullable in every schema
- * version, so an older state file can hold a failed attempt with no reason in
- * it. The record line says so rather than inventing one.
+ * The settle's stage is not answered: every caller knows which settle it ran,
+ * and no surface reads an outcome out of this answer.
+ *
+ * `failureReason` is null for a start that reached its Agent, and for the guard
+ * case of a failed settle that names no reason: the column is nullable in every
+ * schema version, so the answer can carry the empty cell. No start this plane
+ * settles today leaves one - every failed start names its reason at the settle -
+ * and the record line says the cell is empty rather than inventing a reason for
+ * it (issue #295 review).
  */
 export interface HandoffSettlement {
 	ticketIdentity: string;
-	/** `agent-started` when the start reached its Agent, `failed` when it did not. */
-	outcome: "agent-started" | "failed";
 	/** The reason the attempt's row stores; null when it stores none. */
 	failureReason: string | null;
 }
@@ -609,30 +611,21 @@ export class HandoffModule implements HandoffAggregate {
 		});
 	}
 	/**
-	 * The record one settled attempt row answers: the Ticket it names, the outcome
-	 * its stage states, and the reason its row stores.
+	 * The record one settled attempt row answers: the Ticket it names and the
+	 * reason its row stores.
 	 *
-	 * The stage decides the outcome, and only the two stages a settle writes are
-	 * an outcome. A row that holds a stage the start advanced through - `claimed`,
-	 * `reclaimed`, `creating-environment`, and the rest - settled outside the
-	 * settle whose write this read follows. Reading such a stage as
-	 * `agent-started` would answer a start that reached its Agent and hide the
-	 * failed start's line, so the stage is checked and a stage that is neither
-	 * outcome is refused as the ledger break it is (issue #295 review).
+	 * The stage check is a guard, not a state this plane reaches: both writes that
+	 * answer here set the stage themselves, to `agent-started` or to `failed`, so
+	 * no settle this run makes can leave a row on another stage. It stands because
+	 * the answer is read off the row the write left: a row that reports a stage the
+	 * start only advanced through - `claimed`, `reclaimed`, `creating-environment`,
+	 * and the rest - was settled outside the settle whose write this read follows,
+	 * and the state module refuses that ledger break instead of answering with a
+	 * row it cannot account for (issue #295 review).
 	 */
 	private settledRecord(row: SettledAttemptRow): HandoffSettlement {
-		if (row.stage === "failed")
-			return {
-				ticketIdentity: row.ticket_identity,
-				outcome: "failed",
-				failureReason: row.failure_reason,
-			};
-		if (row.stage === "agent-started")
-			return {
-				ticketIdentity: row.ticket_identity,
-				outcome: "agent-started",
-				failureReason: row.failure_reason,
-			};
+		if (row.stage === "failed" || row.stage === "agent-started")
+			return { ticketIdentity: row.ticket_identity, failureReason: row.failure_reason };
 		throw new StateError(
 			`the handoff attempt ${row.attempt_id} settled with the stage ${row.stage} at ${this.db.path}`,
 		);

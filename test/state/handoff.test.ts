@@ -1056,7 +1056,6 @@ describe("the settle answers with the attempt's own record (issue #295)", () => 
 			state.handoff.settleHandoff(claim.claim.attemptId, false, "the worktree path already exists"),
 		).toEqual({
 			ticketIdentity: TICKET,
-			outcome: "failed",
 			failureReason: "the worktree path already exists",
 		});
 		// The attempt settled once. A settle that reaches it again - a recovery
@@ -1067,11 +1066,12 @@ describe("the settle answers with the attempt's own record (issue #295)", () => 
 	});
 
 	test("a failed settle that names no reason answers no reason", () => {
-		// The door the record line's fallback stands behind: the settle's own
-		// interface lets a failed settle name no reason, and the attempt's reason
-		// column is nullable in every schema version, so the ledger can hold a
-		// failed attempt with nothing stored in it. The answer says so rather than
-		// making an ending up (issue #295 review).
+		// The door the record line's fallback stands behind. It is a guard: every
+		// start this plane settles names its reason, so no live run reaches this
+		// answer. The settle's own interface still lets a failed settle name no
+		// reason, and the attempt's reason column is nullable in every schema
+		// version, so the answer carries the empty cell rather than making an
+		// ending up (issue #295 review).
 		const state = openFactoryState(":memory:", ATTEMPT_NOW);
 		state.sourceFact.initializeSources([sourceA]);
 		state.sourceFact.applyFetch(sourceA, success([fetched()]));
@@ -1079,18 +1079,16 @@ describe("the settle answers with the attempt's own record (issue #295)", () => 
 		if (!claim.ok) throw new Error(claim.reason);
 		expect(state.handoff.settleHandoff(claim.claim.attemptId, false)).toEqual({
 			ticketIdentity: TICKET,
-			outcome: "failed",
 			failureReason: null,
 		});
 		state.close();
 	});
 
-	test("the stage a start advanced through never answers for the outcome", () => {
+	test("the stage a start advanced through never answers for the ending", () => {
 		// The start ran through its stages before herdr refused it. The settle
-		// writes its outcome over those stages, and the answer reads the stage the
-		// write left: a stage the start advanced through is never read as
-		// `agent-started`, which would answer a start that reached its Agent and
-		// hide the failed start's line (issue #295 review).
+		// writes its ending over those stages, and the answer reads the row the
+		// write left: the reason the line states is the one this settle stored, not
+		// anything the stages before it hold (issue #295 review).
 		const state = openFactoryState(":memory:", ATTEMPT_NOW);
 		state.sourceFact.initializeSources([sourceA]);
 		state.sourceFact.applyFetch(sourceA, success([fetched()]));
@@ -1102,13 +1100,12 @@ describe("the settle answers with the attempt's own record (issue #295)", () => 
 			state.handoff.settleHandoff(claim.claim.attemptId, false, "herdr is unavailable"),
 		).toEqual({
 			ticketIdentity: TICKET,
-			outcome: "failed",
 			failureReason: "herdr is unavailable",
 		});
 		state.close();
 	});
 
-	test("a settle that reached its Agent answers the outcome and stores no reason", () => {
+	test("a settle that reached its Agent stores no reason", () => {
 		const state = openFactoryState(":memory:", ATTEMPT_NOW);
 		state.sourceFact.initializeSources([sourceA]);
 		state.sourceFact.applyFetch(sourceA, success([fetched()]));
@@ -1118,7 +1115,6 @@ describe("the settle answers with the attempt's own record (issue #295)", () => 
 			state.handoff.settleHandoff(claim.claim.attemptId, true, undefined, { paneId: "pane-1" }),
 		).toEqual({
 			ticketIdentity: TICKET,
-			outcome: "agent-started",
 			failureReason: null,
 		});
 		state.close();
@@ -1136,7 +1132,6 @@ describe("the settle answers with the attempt's own record (issue #295)", () => 
 		expect(state.handoff.recoverUnsettledHandoffs()).toEqual([
 			{
 				ticketIdentity: TICKET,
-				outcome: "failed",
 				failureReason: "the run that claimed this handoff ended before it settled it",
 			},
 		]);
