@@ -1306,7 +1306,7 @@ describe("the Agent name collision a refused start leaves (issue #299)", () => {
 	function recordCollision(state: FactoryState, over: Record<string, unknown> = {}): void {
 		state.handoff.recordNameCollision({
 			ticketIdentity: TICKET,
-			stableName: "watch-agent-turns-1a2b3c4d",
+			heldName: "watch-agent-turns-1a2b3c4d",
 			holderPaneId: "w13K:p1",
 			holderWorkspaceId: "w13K",
 			reason:
@@ -1320,7 +1320,7 @@ describe("the Agent name collision a refused start leaves (issue #299)", () => {
 		const state = failedStartState();
 		recordCollision(state);
 		expect(state.handoff.nameCollision(TICKET)).toEqual({
-			stableName: "watch-agent-turns-1a2b3c4d",
+			heldName: "watch-agent-turns-1a2b3c4d",
 			holderPaneId: "w13K:p1",
 			holderWorkspaceId: "w13K",
 			reason:

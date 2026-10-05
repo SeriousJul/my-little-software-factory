@@ -381,8 +381,13 @@ export interface LeftoverEnvironment {
  * while it stands the Top-up adds no automatic start for the Ticket.
  */
 export interface AgentNameCollision {
-	/** The stable Agent name the start asked herdr for (ADR 0098). */
-	stableName: string;
+	/**
+	 * The herdr Agent name the holder holds: the Ticket's stable name, or its
+	 * work-cycle name when its own Leftover environment held the stable one and
+	 * the search reached the next candidate (ADR 0098). The fact names the name
+	 * the named pane actually holds, so the operator reads a name there.
+	 */
+	heldName: string;
 	/** The herdr pane that holds the name, when herdr named one. */
 	holderPaneId: string | null;
 	/** The herdr workspace that holds the name, when herdr named one. */

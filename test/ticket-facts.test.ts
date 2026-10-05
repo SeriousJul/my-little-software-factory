@@ -375,7 +375,7 @@ describe("the Live view's context line", () => {
 describe("the Agent name collision (issue #299)", () => {
 	/** The fact one refused start leaves. */
 	const collision: AgentNameCollision = {
-		stableName: "watch-agent-turns-1a2b3c4d",
+		heldName: "watch-agent-turns-1a2b3c4d",
 		holderPaneId: "w13K:p1",
 		holderWorkspaceId: "w13K",
 		reason:

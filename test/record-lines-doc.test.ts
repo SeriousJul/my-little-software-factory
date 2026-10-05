@@ -170,7 +170,7 @@ describe("the record lines the configuration reference states", () => {
 			"the herdr name watch-agent-turns-1a2b3c4d is held by pane w13K:p1 in workspace w13K, " +
 			"which is no agent of this ticket: agent_name_taken";
 		const collision: AgentNameCollision = {
-			stableName: "watch-agent-turns-1a2b3c4d",
+			heldName: "watch-agent-turns-1a2b3c4d",
 			holderPaneId: "w13K:p1",
 			holderWorkspaceId: "w13K",
 			reason: refusal,

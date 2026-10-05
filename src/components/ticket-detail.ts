@@ -74,6 +74,15 @@ type DetailChoice = Pick<
 >;
 
 /**
+ * The stored instant as the detail reads it: to the minute, with the ISO `T`
+ * replaced by a space. Every "since when" in the pane states the moment the
+ * plane learned the fact in this one form.
+ */
+function factTime(at: string): string {
+	return at.slice(0, 16).replace("T", " ");
+}
+
+/**
  * Pick the Handoff whose settings the rows show, with the Ticket state as the
  * switch. An open Ticket starts `suggestedChoice`, so that is what an open
  * Ticket shows: a close ends a work cycle and returns the ticket to `open`
@@ -266,8 +275,7 @@ export function detailContent(
 	// ignore hides a resting Ticket, and a Ticket with live work or a decision
 	// owed keeps its row while the flag stays set underneath it.
 	if (ticket.ignored) {
-		const at =
-			ticket.ignoredAt === null ? "" : ` ${ticket.ignoredAt.slice(0, 16).replace("T", " ")}`;
+		const at = ticket.ignoredAt === null ? "" : ` ${factTime(ticket.ignoredAt)}`;
 		pushWrapped(
 			`Ignored${at}: no automatic start, and no row while the Ticket rests`,
 			paint("subtext0"),
@@ -281,7 +289,7 @@ export function detailContent(
 	// row, the way the ignore's does: a muted ticket with live work keeps its
 	// row while the flag stands.
 	if (ticket.muted) {
-		const at = ticket.mutedAt === null ? "" : ` ${ticket.mutedAt.slice(0, 16).replace("T", " ")}`;
+		const at = ticket.mutedAt === null ? "" : ` ${factTime(ticket.mutedAt)}`;
 		pushWrapped(
 			`Muted source${at}: no automatic start, and no row while the Ticket rests`,
 			paint("subtext0"),
@@ -295,7 +303,7 @@ export function detailContent(
 	// Message line that fades.
 	const leftover = ticket.leftover;
 	if (leftover !== null) {
-		const at = leftover.at === "" ? "" : ` ${leftover.at.slice(0, 16).replace("T", " ")}`;
+		const at = leftover.at === "" ? "" : ` ${factTime(leftover.at)}`;
 		// The warning color is the block's indent: the wrap drops leading
 		// spaces, and a dim run would read on as one flat line with the rest
 		// of the detail. The block is one warning the operator can act on.
@@ -315,11 +323,16 @@ export function detailContent(
 	// name is held and what the operator's one act is. The refusal the attempt
 	// stored is the same line the record carries, so the row, the detail, and the
 	// file name one refusal.
-	const collision = ticket.nameCollision;
+	//
+	// The block asks the fact module's predicate, the way the row's marker does and
+	// the way the Failed-start park's line does: your ignore or a source mute
+	// answers the refusal, and then the row and the detail take the fact off
+	// together, so the two surfaces never disagree.
+	const collision = fact.nameCollision ? ticket.nameCollision : null;
 	if (collision !== null) {
-		const at = collision.at === "" ? "" : ` ${collision.at.slice(0, 16).replace("T", " ")}`;
+		const at = collision.at === "" ? "" : ` ${factTime(collision.at)}`;
 		pushWrapped(
-			`Agent name held: ${nameCollisionHolder(collision)} holds ${collision.stableName}`,
+			`Agent name held: ${nameCollisionHolder(collision)} holds ${collision.heldName}`,
 			paint("yellow"),
 		);
 		pushWrapped(`since${at}: ${collision.reason}`, paint("yellow"));
@@ -347,7 +360,7 @@ export function detailContent(
 		}
 		// The date is the first minute of the stored completion time; the
 		// decision is `pending` until one is made on the turn.
-		const date = completion.completedAt.slice(0, 16).replace("T", " ");
+		const date = factTime(completion.completedAt);
 		const decision = completion.decision ?? "pending";
 		// The green label opens the turn's log: the report the agent left
 		// behind, kept apart from the static facts by its color and its
@@ -371,7 +384,7 @@ export function detailContent(
 	// the turn's green, the block in the needs-work yellow, with the reason it
 	// names beside it.
 	if (mergeAttempt !== null) {
-		const date = mergeAttempt.at.slice(0, 16).replace("T", " ");
+		const date = factTime(mergeAttempt.at);
 		if (mergeAttempt.outcome === "merged")
 			pushWrapped(
 				`Merge: ${date} merged by ${mergeAttempt.decision === "auto-merged" ? "the factory's auto top-up" : "the operator"}`,

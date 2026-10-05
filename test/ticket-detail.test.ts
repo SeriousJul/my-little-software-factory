@@ -167,7 +167,7 @@ describe("Ticket detail wheel acceleration", () => {
  */
 describe("the Agent name collision in the Ticket detail (issue #299)", () => {
 	const collision = {
-		stableName: "watch-agent-turns-1a2b3c4d",
+		heldName: "watch-agent-turns-1a2b3c4d",
 		holderPaneId: "w13K:p1",
 		holderWorkspaceId: "w13K",
 		reason:
@@ -242,6 +242,21 @@ describe("the Agent name collision in the Ticket detail (issue #299)", () => {
 				"Leftover: herdr workspace ws-old, tab tab-old, pane pane-old is still open for this ticket",
 			),
 		).toBe(true);
+	});
+
+	test("the operator's ignore or mute answers the refusal, and the block leaves with the marker", () => {
+		// The detail asks the fact module's predicate, the way the row's marker does and
+		// the way the Failed-start park's line does (ADR 0060, ADR 0070, ADR 0106): the
+		// two surfaces take the fact off together, so neither states a refusal the
+		// operator has already answered.
+		for (const judgedOut of [{ ignored: true }, { muted: true }]) {
+			const fact = factOf(sample({ nameCollision: collision, ...judgedOut }));
+			expect(fact.nameCollision).toBe(false);
+			const lines = detailLines(fact, 120, 10);
+			expect(
+				lines.some((line) => cellsOf(line).some((cell) => cell.text.includes("Agent name held"))),
+			).toBe(false);
+		}
 	});
 
 	test("a Ticket that carries neither fact wears neither block", () => {

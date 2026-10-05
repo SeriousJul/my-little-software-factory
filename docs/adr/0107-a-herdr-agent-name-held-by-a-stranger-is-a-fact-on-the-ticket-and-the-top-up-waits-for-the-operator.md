@@ -61,6 +61,12 @@ whether a holder is the Ticket's own stays the dispatch's existing one - a holde
 its own handoff recorded is a Leftover environment, and everything else is a
 stranger - so the two facts are decided by one branch and never for each other.
 
+The name the fact stores is the name the named pane holds, not the name the search
+started on. When the Ticket's own Leftover environment holds the stable name, the
+search reaches the cycle name (ADR 0098), and a stranger met there holds that
+cycle name; the fact, its refusal line, and the record name it, so the operator
+reads in the pane the plane sends them to the same name the plane wrote down.
+
 **The collision is not a Leftover environment, and a Leftover environment is never
 it.** A Leftover environment is the Ticket's own workspace, tab, or Agent herdr
 still holds, and its cleanup runs in herdr on the plane's request (ADR 0032): the
@@ -144,6 +150,19 @@ operator may act in a later run and the fact is still there to be acted on.
 - **Re-ask on a slower timer instead of holding.** Rejected: the wait is for a human
   act with no clock on it, and a timer is a second clock the plane has to keep
   while still saying nothing about the pane.
+- **Falsify the holder from herdr's Agent list and retire the fact.** Rejected for
+  now, and the cost of it is recorded. The coordinator already reads herdr's whole
+  Agent list every cycle, and the fact stores the holder's pane and workspace, so
+  a cycle could ask whether that pane still holds the name and take the fact off
+  when it does not. It does not stand, because the read cannot answer the case the
+  fact exists for: herdr's list names the Agents it knows, and a name can be held
+  by an Agent the list does not carry - a pre-change Agent whose Handoff row
+  records no name, an Agent of a second install, a pane that is idle and not
+  listed. A cycle that retired the fact on an absent pane would un-hold the
+  automatic adds, meet the same refusal, and re-record the same fact: the loop the
+  issue measured, running again with a write per cycle. The plane stays held, and
+  the operator's act is the one answer that cannot be wrong. If a live install
+  shows the retirement is safe on the list it really has, the fact gains it.
 
 ## Consequences
 
@@ -157,6 +176,11 @@ Ticket can carry the fact that decision names, and the one `automaticHoldLine`
 builder owns the shape. The hold key stays the reason plus the candidate, so a
 refresh that names a different pane is the same standing fact and states itself
 once.
+
+`nameHolderText` in `src/domain/name-collision.ts` is the one wording of the
+pointer into herdr. The dispatch's refusal line and the standing fact state the
+pane and workspace in the same sentence, so the row, the detail, the Message line,
+and the record cannot drift apart on where the name is held.
 
 The collision gate runs before the park's gate, so a Ticket that carries both facts
 names the collision. The park still stands behind it: an operator who ignores the

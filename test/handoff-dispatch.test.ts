@@ -1404,6 +1404,7 @@ describe("the outcome wording", () => {
 	const agent = { name: "webhook-retry", paneId: "pane-1", tabId: "tab-1", workspaceId: "ws-1" };
 	const held: NameCollision = {
 		stableName: "webhook-retry",
+		heldName: "webhook-retry",
 		startedAs: null,
 		holder: { paneId: "pane-x", tabId: "tab-x", workspaceId: "ws-x", terminalId: "term-x" },
 		own: false,
@@ -1974,7 +1975,7 @@ describe("the name fact", () => {
 		expect(rigRef.state.handoff.leftoverEnvironment(FIRST.identity)).toBeNull();
 		const collision = rigRef.state.handoff.nameCollision(FIRST.identity);
 		expect(collision).toEqual({
-			stableName: FIRST.name,
+			heldName: FIRST.name,
 			holderPaneId: "pane-stranger",
 			holderWorkspaceId: "ws-stranger",
 			reason: expect.stringContaining("agent_name_taken"),
@@ -2072,7 +2073,7 @@ describe("the name fact", () => {
 		// the name is held without inventing a place for the operator to look.
 		expect(rigRef.state.handoff.nameCollision(FIRST.identity)).toEqual(
 			expect.objectContaining({
-				stableName: FIRST.name,
+				heldName: FIRST.name,
 				holderPaneId: null,
 				holderWorkspaceId: null,
 			}),
@@ -2212,6 +2213,50 @@ describe("the name fact", () => {
 			previous.handoffId,
 		);
 		expect(rigRef.state.handoff.nameCollision(FIRST.identity)).toBeNull();
+	});
+
+	test("a stranger that holds the cycle name is named by the cycle name, not the stable one (issue #299)", async () => {
+		const rigRef = rig();
+		// The stable name belongs to this Ticket's own Leftover environment, so the
+		// search moves on to its cycle name - and there a pane the plane never made
+		// stands in the way (ADR 0098, ADR 0107).
+		const previous = seedClosedHandoff(rigRef, FIRST);
+		rigRef.runner.set(
+			"herdr",
+			["agent", "start", FIRST.name, "--kind", "pi", "--pane", "pane-agent"],
+			{
+				code: 1,
+				stderr: nameTaken(FIRST.name, [{ paneId: FIRST.paneId, workspaceId: FIRST.workspaceId }]),
+			},
+		);
+		const cycle = cycleAgentName(FIRST, 2);
+		rigRef.runner.set("herdr", ["agent", "start", cycle, "--kind", "pi", "--pane", "pane-agent"], {
+			code: 1,
+			stderr: nameTaken(cycle, [{ paneId: "pane-stranger", workspaceId: "ws-stranger" }]),
+		});
+		const started: DispatchResult[] = [];
+		await expect(start(rigRef, FIRST, "open", (r) => started.push(r))).resolves.toEqual({
+			ok: true,
+		});
+		await rigRef.waitForStarted(FIRST.identity);
+		expect(started[0]?.ok).toBe(false);
+		// The two facts land apart, each on its own holder: the handle this Ticket's
+		// handoff recorded is the Leftover environment, the stranger is the collision.
+		expect(rigRef.state.handoff.leftoverEnvironment(FIRST.identity)?.handoffId).toBe(
+			previous.handoffId,
+		);
+		const collision = rigRef.state.handoff.nameCollision(FIRST.identity);
+		// The fact names the name the named pane actually holds - the cycle name, not
+		// the stable name the search started on - so the operator reads in that pane
+		// the same name the plane sent them to look for.
+		expect(collision).toEqual(
+			expect.objectContaining({
+				heldName: cycle,
+				holderPaneId: "pane-stranger",
+				holderWorkspaceId: "ws-stranger",
+			}),
+		);
+		expect(collision?.reason).toContain(`the herdr name ${cycle} is held by pane pane-stranger`);
 	});
 });
 

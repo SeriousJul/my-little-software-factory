@@ -623,7 +623,7 @@ _Avoid_: orphaned agent, zombie workspace, stale checkout
 
 **Agent name collision**:
 The condition where Herdr refuses a Handoff's stable Agent name because a pane the control plane cannot tie to that ticket holds it (ADR 0107).
-It is a durable fact on the ticket, worn by its row as `name held` and stated in its detail with the pane, the workspace, the name, and since when.
+It is a durable fact on the ticket, worn by its row as `name held` and stated in its detail with the pane, the workspace, the name that pane holds, and since when.
 The plane owns no cleanup for it: the pane is no workspace, tab, or Agent the plane made, so the operator closes it in herdr.
 While it stands the Top-up adds no automatic start for the ticket, the record names the hold once with the refusal the attempt stored beside the ticket, and the Message line states it once as the standing warning the Desktop notification carries (ADR 0080). Like the Attempt hold and the Failed-start park, it gates the automatic adds only: the operator's confirm, the pickup's claim, and a force-dispatch pass it.
 The one act that clears it is the Handoff the operator starts themselves: a start that reaches its Agent took the name, the fact leaves with it, and the automatic adds resume with no second act. A start that fails for another reason never asked for the name, so it answers nothing about it. The ticket's own ignore, or the mute of one of its sources, answers the refusal the way they answer a run of failed starts.

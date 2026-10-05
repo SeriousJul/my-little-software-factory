@@ -1210,6 +1210,67 @@ describe("the Ticket Close key", () => {
 		app.state.close();
 	});
 
+	test("a Ticket whose Agent name a pane the plane does not own holds wears `name held`, and its detail names the pane (issue #299)", async () => {
+		// The refusal herdr gave does not clear itself on a source read: the Top-up has
+		// stopped asking, and only a person can close the pane that holds the name. So
+		// the row and the detail have to say it, in the words the operator acts on.
+		const app = seededApp("in-flight");
+		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+		// The cycle closes and herdr keeps its environment, so the Ticket carries a
+		// Leftover environment beside the collision: two words, two facts, one lane,
+		// and the row states both (ADR 0032, ADR 0107).
+		const handoff = app.state.handoff.latestHandoff(identity);
+		if (handoff === null) throw new Error("the seed left no Handoff to leave behind");
+		app.state.handoff.recordLeftoverEnvironment({
+			ticketIdentity: identity,
+			handoffId: handoff.handoffId,
+			reason: "the worktree checkout would not close",
+		});
+		app.state.ticketWorkCycle.closeWorkCycle(identity);
+		// The fact the refused start wrote: the name, the handles herdr named, and the
+		// refusal that attempt's own row stores.
+		app.state.handoff.recordNameCollision({
+			ticketIdentity: identity,
+			heldName: AGENT,
+			holderPaneId: "w13K:p1",
+			holderWorkspaceId: "w13K",
+			reason:
+				`the herdr name ${AGENT} is held by pane w13K:p1 in workspace w13K, ` +
+				"which is no agent of this ticket: agent_name_taken",
+		});
+
+		await withApp(
+			async (setup) => {
+				app.src.settle(success);
+				const frame = await awaitFrame(
+					setup,
+					(f) => ticketRow(f).includes("name held"),
+					"the held Agent name marker",
+				);
+				// The marker rides at the end of the list row, in the lane the Handoff
+				// limit's and the park's markers ride, and the Leftover marker stands
+				// beside it: the row never folds one fact into the other.
+				const row = frameText(ticketRow(frame).slice(0, Math.floor(WIDTH / 2))).trimEnd();
+				expect(row).toContain("name held");
+				expect(row.endsWith("leftover")).toBe(true);
+				// The detail states what the marker cannot: where the name is held, since
+				// when, herdr's own refusal, and the one act that clears the fact.
+				const detail = detailPaneText(frame);
+				expect(detail).toContain(`Agent name held: pane w13K:p1 in workspace w13K holds ${AGENT}`);
+				expect(detail).toContain("which is no agent of this ticket: agent_name_taken");
+				expect(detail).toContain(
+					"the Top-up adds no automatic start; your own Handoff clears this once the pane gives the name up",
+				);
+				// And the Leftover block states its own fact beside it, never this one.
+				expect(detail).toContain("its cleanup runs in herdr");
+			},
+			WIDTH,
+			HEIGHT,
+			propsOf(app),
+		);
+		app.state.close();
+	});
+
 	test("confirming an in-flight close ends the cycle with no trace and stops the Agent", async () => {
 		const app = seededApp("in-flight", {}, success, "worktree");
 		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });

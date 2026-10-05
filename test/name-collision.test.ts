@@ -17,12 +17,13 @@ import {
 	nameCollisionHolder,
 	nameCollisionLine,
 	nameCollisionStands,
+	nameHolderText,
 } from "../src/domain/name-collision.ts";
 import type { AgentNameCollision } from "../src/domain/ticket.ts";
 
 /** The refusal herdr gave, with the handles it named. */
 const HELD: AgentNameCollision = {
-	stableName: "watch-agent-turns-1a2b3c4d",
+	heldName: "watch-agent-turns-1a2b3c4d",
 	holderPaneId: "w13K:p1",
 	holderWorkspaceId: "w13K",
 	reason:
@@ -69,6 +70,18 @@ describe("where the name is held, in the handles herdr named", () => {
 		expect(nameCollisionHolder({ ...HELD, holderPaneId: null, holderWorkspaceId: null })).toBe(
 			"a pane herdr did not name",
 		);
+	});
+
+	test("the handles are the one wording the Handoff dispatch and the fact share", () => {
+		// `nameHolderText` takes the holder shape herdr names, which is what
+		// `src/handoff.ts` words its refusal line with; `nameCollisionHolder` is the
+		// same sentence on the standing fact. One wording, so the refusal, the row,
+		// the detail, and the record never state the handles differently.
+		expect(nameHolderText({ paneId: "w13K:p1", workspaceId: "w13K" })).toBe(
+			nameCollisionHolder(HELD),
+		);
+		expect(nameHolderText(null)).toBe("a pane herdr did not name");
+		expect(nameHolderText({ paneId: null, workspaceId: null })).toBe("a pane herdr did not name");
 	});
 });
 

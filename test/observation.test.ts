@@ -6300,7 +6300,7 @@ describe("the Agent name collision holds the Top-up out (issue #299)", () => {
 	function standCollision(state: FactoryState): void {
 		state.handoff.recordNameCollision({
 			ticketIdentity: IDENTITY,
-			stableName: "persist-source-facts-1a2b3c4d",
+			heldName: "persist-source-facts-1a2b3c4d",
 			holderPaneId: "w13K:p1",
 			holderWorkspaceId: "w13K",
 			reason: REFUSAL,

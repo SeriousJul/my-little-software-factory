@@ -294,8 +294,8 @@ export const MIGRATION_V28_TO_V29_FAILED_START_RUN_INDEXES = `
 /**
  * The table the Agent name collision stands on (issue #299, ADR 0107).
  *
- * A start refused because herdr holds the Ticket's stable Agent name in a pane
- * the plane does not own leaves a fact the operator has to see and act on, and
+ * A start refused because herdr holds the Ticket's Agent name in a pane the
+ * plane does not own leaves a fact the operator has to see and act on, and
  * the fact outlives the attempt that met it: it stands until the operator's own
  * Handoff takes the name. The attempt ledger cannot carry it - the ledger
  * answers a run and a wait, not a standing fact with handles the operator reads
@@ -306,11 +306,15 @@ export const MIGRATION_V28_TO_V29_FAILED_START_RUN_INDEXES = `
  * One row per Ticket, not one per refusal: the collision is one standing fact,
  * and a later refusal refreshes the row it already has, the way a leftover
  * environment's reason refreshes the handoff row it stands on.
+ *
+ * The row names the name the holder holds, not the name the Handoff asked for
+ * first: when the Ticket's own Leftover environment held the stable name, the
+ * search reached the cycle name, and that is the name the stranger pane holds.
  */
 export const MIGRATION_V29_TO_V30_NAME_COLLISIONS = `
 CREATE TABLE IF NOT EXISTS name_collisions (
 	ticket_identity TEXT PRIMARY KEY,
-	stable_name TEXT NOT NULL,
+	held_name TEXT NOT NULL,
 	holder_pane_id TEXT,
 	holder_workspace_id TEXT,
 	reason TEXT NOT NULL,

@@ -194,15 +194,17 @@ export interface HandoffAggregate {
 		ended: { workspaceId: string } | { tabId: string } | { handoffId: string },
 	): number;
 	/**
-	 * Record that a Handoff start of this Ticket asked herdr for its stable Agent
-	 * name and was refused because a pane the plane does not own holds it
-	 * (issue #299, ADR 0107). The row is one standing fact per Ticket: a later
-	 * refusal refreshes it with the handles herdr names now, the way a leftover
-	 * environment's reason refreshes the fact it stands on.
+	 * Record that a Handoff start of this Ticket asked herdr for its Agent name
+	 * and was refused because a pane the plane does not own holds it (issue #299,
+	 * ADR 0107). The row names the name that pane holds, which is the cycle name
+	 * when the Ticket's own Leftover environment held the stable one. The row is
+	 * one standing fact per Ticket: a later refusal refreshes it with the handles
+	 * herdr names now, the way a leftover environment's reason refreshes the fact
+	 * it stands on.
 	 */
 	recordNameCollision(input: {
 		ticketIdentity: string;
-		stableName: string;
+		heldName: string;
 		holderPaneId: string | null;
 		holderWorkspaceId: string | null;
 		reason: string;
@@ -878,7 +880,7 @@ export class HandoffModule implements HandoffAggregate {
 	}
 	recordNameCollision(input: {
 		ticketIdentity: string;
-		stableName: string;
+		heldName: string;
 		holderPaneId: string | null;
 		holderWorkspaceId: string | null;
 		reason: string;
@@ -891,18 +893,18 @@ export class HandoffModule implements HandoffAggregate {
 		// acted on stays readable in the file the way a cleared leftover does.
 		this.db
 			.prepare(
-				"INSERT INTO name_collisions(ticket_identity, stable_name, holder_pane_id, holder_workspace_id, reason, at, cleared_at) VALUES (?, ?, ?, ?, ?, ?, NULL) ON CONFLICT(ticket_identity) DO UPDATE SET stable_name = excluded.stable_name, holder_pane_id = excluded.holder_pane_id, holder_workspace_id = excluded.holder_workspace_id, reason = excluded.reason, at = excluded.at, cleared_at = NULL",
+				"INSERT INTO name_collisions(ticket_identity, held_name, holder_pane_id, holder_workspace_id, reason, at, cleared_at) VALUES (?, ?, ?, ?, ?, ?, NULL) ON CONFLICT(ticket_identity) DO UPDATE SET held_name = excluded.held_name, holder_pane_id = excluded.holder_pane_id, holder_workspace_id = excluded.holder_workspace_id, reason = excluded.reason, at = excluded.at, cleared_at = NULL",
 			)
 			.run(
 				input.ticketIdentity,
-				input.stableName,
+				input.heldName,
 				input.holderPaneId,
 				input.holderWorkspaceId,
 				input.reason,
 				at,
 			);
 		return {
-			stableName: input.stableName,
+			heldName: input.heldName,
 			holderPaneId: input.holderPaneId,
 			holderWorkspaceId: input.holderWorkspaceId,
 			reason: input.reason,
@@ -918,11 +920,11 @@ export class HandoffModule implements HandoffAggregate {
 		for (const chunk of identityChunks(identities)) {
 			const rows = this.db
 				.prepare(
-					`SELECT ticket_identity, stable_name, holder_pane_id, holder_workspace_id, reason, at FROM name_collisions WHERE ticket_identity IN (${placeholders(chunk.length)}) AND cleared_at IS NULL`,
+					`SELECT ticket_identity, held_name, holder_pane_id, holder_workspace_id, reason, at FROM name_collisions WHERE ticket_identity IN (${placeholders(chunk.length)}) AND cleared_at IS NULL`,
 				)
 				.all(...chunk) as unknown as Array<{
 				ticket_identity: string;
-				stable_name: string;
+				held_name: string;
 				holder_pane_id: string | null;
 				holder_workspace_id: string | null;
 				reason: string;
@@ -930,7 +932,7 @@ export class HandoffModule implements HandoffAggregate {
 			}>;
 			for (const row of rows)
 				found.set(row.ticket_identity, {
-					stableName: row.stable_name,
+					heldName: row.held_name,
 					holderPaneId: row.holder_pane_id,
 					holderWorkspaceId: row.holder_workspace_id,
 					reason: row.reason,

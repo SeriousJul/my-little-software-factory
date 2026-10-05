@@ -21,9 +21,14 @@
  * the Top-up's gate, worn by the row, stated in the detail, and named in the
  * record in the voice the other walk holds wear. The rule is pure - it takes
  * whether the fact stands and whether the operator has answered it, and
- * answers. Every reader asks this one predicate, the way every reader of the
- * Handoff limit asks `handoffLimitReached` and every reader of the run of
- * failed starts asks `failedStartParkStands`.
+ * answers. Every reader asks this one predicate - the gate, the row's marker,
+ * and the detail's block - the way every reader of the Handoff limit asks
+ * `handoffLimitReached` and every reader of the run of failed starts asks
+ * `failedStartParkStands`.
+ *
+ * `nameHolderText` is the one wording of the pointer into herdr. The Handoff
+ * dispatch's refusal line and the standing fact state the same handles in the
+ * same words, so no surface re-states them (issue #299 review).
  */
 import type { AgentNameCollision } from "./ticket.ts";
 
@@ -62,19 +67,33 @@ export function nameCollisionStands(facts: NameCollisionFacts): boolean {
 export const NAME_COLLISION_PREFIX = "agent name held:";
 
 /**
- * Where the Ticket's Agent name is held, in the handles herdr named.
+ * Where a name is held, in the handles herdr named. This is the one wording of
+ * the pointer, read by the Handoff dispatch's refusal line and by the standing
+ * fact alike (issue #299). The shape is the two handles herdr names for an Agent
+ * (ADR 0043); the dispatch's own holder record carries them beside its tab and
+ * terminal handles.
  *
  * The pane and the workspace are what the operator looks for in herdr: the
  * plane does not own that pane, so it can run no cleanup of its own and the
  * handles are the whole of the pointer (ADR 0098). herdr names no handles for
- * some refusals, and then the fact says so rather than inventing a place.
+ * some refusals, and then the sentence says so rather than inventing a place.
  */
-export function nameCollisionHolder(collision: AgentNameCollision): string {
+export function nameHolderText(
+	holder: { paneId: string | null; workspaceId: string | null } | null,
+): string {
 	const parts = [
-		...(collision.holderPaneId === null ? [] : [`pane ${collision.holderPaneId}`]),
-		...(collision.holderWorkspaceId === null ? [] : [`workspace ${collision.holderWorkspaceId}`]),
+		...(holder === null || holder.paneId === null ? [] : [`pane ${holder.paneId}`]),
+		...(holder === null || holder.workspaceId === null ? [] : [`workspace ${holder.workspaceId}`]),
 	];
 	return parts.length === 0 ? "a pane herdr did not name" : parts.join(" in ");
+}
+
+/** Where the Ticket's standing collision has its name held. */
+export function nameCollisionHolder(collision: AgentNameCollision): string {
+	return nameHolderText({
+		paneId: collision.holderPaneId,
+		workspaceId: collision.holderWorkspaceId,
+	});
 }
 
 /**
@@ -90,6 +109,6 @@ export function nameCollisionHolder(collision: AgentNameCollision): string {
 export function nameCollisionLine(ticketName: string, collision: AgentNameCollision): string {
 	return (
 		`${NAME_COLLISION_PREFIX} ${ticketName} ` +
-		`(the herdr name ${collision.stableName} is held by ${nameCollisionHolder(collision)})`
+		`(the herdr name ${collision.heldName} is held by ${nameCollisionHolder(collision)})`
 	);
 }

@@ -83,6 +83,7 @@
  */
 import type { FactoryConfig, TicketSourceConfig, TransitionPin } from "./config.ts";
 import type { ConfigWriteReport } from "./config-write.ts";
+import { nameHolderText } from "./domain/name-collision.ts";
 import type { EnvironmentKind, RepositoryRef, Ticket } from "./domain/ticket.ts";
 import { fileExists, movePath, readDirectoryNames } from "./fs.ts";
 import { failureLine } from "./lines.ts";
@@ -249,6 +250,13 @@ export interface AgentHolder {
 export interface NameCollision {
 	/** The stable name the handoff asked herdr for first. */
 	stableName: string;
+	/**
+	 * The name the refusal answered for - the candidate herdr held. It is the
+	 * stable name whenever the stable name was the one asked; when the Ticket's
+	 * own Leftover environment held the stable name and the search reached the
+	 * next candidate, it is that candidate (issue #299).
+	 */
+	heldName: string;
 	/** The name the agent started under, or null when nothing started. */
 	startedAs: string | null;
 	/**
@@ -2380,6 +2388,9 @@ async function startAgentUnderAvailableName(
 		const own = nameIsOwnLeftover(ctx.names, holders);
 		collision = {
 			stableName: candidates[0],
+			// The refusal is about the name just asked for, and that is the name the
+			// holder holds - not necessarily the stable name the search started on.
+			heldName: name,
 			startedAs: null,
 			// The operator is sent to find the holder that matters: for an own
 			// collision, the one this ticket's handoffs recorded.
@@ -2419,26 +2430,16 @@ function failedNameUnusable(attempt: AgentStart, ctx: HandoffContext): HandoffOu
 			...collisionFields(collision, attempt.ownCollision),
 		};
 	}
-	const holder = holderText(collision.holder);
+	const holder = nameHolderText(collision.holder);
 	const reason = collision.own
-		? `this ticket's own leftover agent still holds the herdr name ${collision.stableName} (${holder}); end its leftover environment in herdr, then hand off again: ${collision.reason}`
-		: `the herdr name ${collision.stableName} is held by ${holder}, which is no agent of ${ctx.names.owner}: ${collision.reason}`;
+		? `this ticket's own leftover agent still holds the herdr name ${collision.heldName} (${holder}); end its leftover environment in herdr, then hand off again: ${collision.reason}`
+		: `the herdr name ${collision.heldName} is held by ${holder}, which is no agent of ${ctx.names.owner}: ${collision.reason}`;
 	return {
 		status: "failed",
 		reason,
 		notes: ctx.notes,
 		...collisionFields(collision, attempt.ownCollision),
 	};
-}
-
-/** Where a name is held, as herdr named it. */
-function holderText(holder: AgentHolder | null): string {
-	if (holder === null) return "a pane herdr did not name";
-	const parts = [
-		...(holder.paneId === null ? [] : [`pane ${holder.paneId}`]),
-		...(holder.workspaceId === null ? [] : [`workspace ${holder.workspaceId}`]),
-	];
-	return parts.length === 0 ? "a pane herdr did not name" : parts.join(" in ");
 }
 
 /**
