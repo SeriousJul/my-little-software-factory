@@ -9,6 +9,7 @@
  */
 
 import { afterEach, beforeEach, expect, spyOn } from "bun:test";
+import { CliRenderEvents } from "@opentui/core";
 import { type MouseButton, MouseButtons } from "@opentui/core/testing";
 import { createElement } from "@opentui/react";
 import { testRender } from "@opentui/react/test-utils";
@@ -399,6 +400,179 @@ export async function withApp(
 		// outlives the state reads a closed database.
 		setup.stopApp();
 	}
+}
+
+/**
+ * Take the renderer's `frame` event away from every surface, and hand back the
+ * key that puts it back.
+ *
+ * The renderer paints on invalidation, not on a free-running loop: a booted and
+ * idle plane emits no frames at all. A surface that waits for the next `frame`
+ * pass can therefore wait forever, and the plane is under no obligation to give
+ * one (issue #302). With the event withheld, the passes the app's own updates
+ * cause still paint, but no surface can be woken by one: only a change that
+ * asks for nothing shows on the screen. The harness's own waits read the painted
+ * buffer, never the event, so they keep working while it is held back.
+ *
+ * The key counts what it swallowed and refuses to hand the event back on an
+ * empty count, and it refuses a hold that leaked. The renderer only announces a
+ * pass behind its own `listenerCount("frame") > 0` guard, so a fixed restore,
+ * which registers no listener, would leave the count at zero and say nothing.
+ * The harness therefore keeps one listener of its own on the event: the guard
+ * stays open, the wrapper intercepts every announcement a surface could have
+ * been woken by, and the witness counts the ones that reached it anyway. A
+ * future OpenTUI that announces a pass along another path trips the witness
+ * instead of leaving the pin to pass green on a wait nobody tested.
+ */
+export function withholdFrameEvents(setup: Setup): () => void {
+	const renderer = setup.renderer;
+	const emit = renderer.emit.bind(renderer);
+	let framesSwallowed = 0;
+	let framesWitnessed = 0;
+	renderer.emit = (event: string | symbol, ...args: unknown[]) => {
+		if (event !== CliRenderEvents.FRAME) return emit(event, ...args);
+		framesSwallowed += 1;
+		return true;
+	};
+	const witness = () => {
+		framesWitnessed += 1;
+	};
+	renderer.on(CliRenderEvents.FRAME, witness);
+	return () => {
+		renderer.removeListener(CliRenderEvents.FRAME, witness);
+		renderer.emit = emit;
+		expect(
+			framesSwallowed,
+			"withholdFrameEvents swallowed no `frame` emission, so the hold proved nothing",
+		).toBeGreaterThan(0);
+		expect(
+			framesWitnessed,
+			"withholdFrameEvents leaked a `frame` emission to its own listener, so the hold did not hold",
+		).toBe(0);
+	};
+}
+
+/** What a render-ask hold saw while it held. */
+export interface RenderAskWitness {
+	/** How many render asks the hold swallowed. */
+	asksHeld: number;
+	/**
+	 * How many asks came from the control plane's own code. `withholdRenderAsks
+	 * ButThePlanesOwn` lets its first one through; `withholdEveryRenderAsk`
+	 * swallows it along with every other ask and counts it.
+	 */
+	planeAsks: number;
+}
+
+/**
+ * True when the caller of the `requestRender` wrapper is the control plane.
+ *
+ * The wrapper's own frame is on the stack, so the caller is the frame above it.
+ * A path under the repository's own `src/` is a surface asking the renderer
+ * directly; OpenTUI's files, `node_modules/` included, are not the plane, so a
+ * renderable's own ask reads as a renderable's ask.
+ */
+function renderAskComesFromThePlane(): boolean {
+	const caller = (new Error().stack ?? "").split("\n")[3] ?? "";
+	return !caller.includes("node_modules") && /\/src\/[\w./-]+\.ts:\d+:\d+/.test(caller);
+}
+
+/**
+ * Hold back every render ask but the control plane's own, and hand back the key
+ * that puts them back, with what the hold witnessed.
+ *
+ * The renderer paints on invalidation: a surface that changes a renderable asks
+ * for the next pass, and a resting plane asks for nothing (issue #302). A pane
+ * that needs a pass to lay itself out cannot count on some other surface's ask
+ * to supply one. With this hold up, the rig's own resize ask and the asks a
+ * remount's renderable mutations make are all swallowed, so no pass can land
+ * until the control plane asks for one. That also fixes the geometry the pane
+ * meets: with no pass able to run first, a remounted scroll box still answers no
+ * size when its restore effect runs, which is the branch the unheld case takes
+ * only while the runner is quiet.
+ *
+ * The hold reads the direct caller of `requestRender` off the call stack. A
+ * renderable's own ask reaches the renderer from inside OpenTUI, so it is held
+ * like the rig's; only a surface that calls the renderer itself gets through.
+ * The first ask that gets through puts the hold down: the pass it schedules is
+ * the one under test, and the repaint that carries its result to the screen
+ * belongs to the buffer the assertion reads.
+ *
+ * The key counts what it swallowed and refuses to hand the asks back on an empty
+ * count: a hold that swallowed nothing is indistinguishable from no hold at all.
+ */
+export function withholdRenderAsksButThePlanesOwn(setup: Setup): () => RenderAskWitness {
+	const renderer = setup.renderer;
+	const ask = renderer.requestRender.bind(renderer);
+	let held = true;
+	const witness: RenderAskWitness = { asksHeld: 0, planeAsks: 0 };
+	renderer.requestRender = () => {
+		if (renderAskComesFromThePlane()) {
+			witness.planeAsks += 1;
+			held = false;
+			return ask();
+		}
+		if (!held) return ask();
+		witness.asksHeld += 1;
+		return undefined;
+	};
+	return () => {
+		renderer.requestRender = ask;
+		expect(
+			witness.asksHeld,
+			"withholdRenderAsksButThePlanesOwn swallowed no render ask, so the hold proved nothing",
+		).toBeGreaterThan(0);
+		return witness;
+	};
+}
+
+/**
+ * Hold back every render ask, the control plane's own included, and hand back
+ * the key that puts them back with what the hold witnessed.
+ *
+ * `withholdRenderAsksButThePlanesOwn` lets the pane's own ask schedule the pass
+ * under test. This hold lets none through, so no pass ever runs and a scroll box
+ * remounted under it never lays out: it answers no content height and no
+ * viewport on every pass the rig announces. That is the state the restore
+ * effect's give-up path is about, and no reachable app state puts a box there -
+ * the pass the pane asks for always lays it out - so the rig announces the
+ * passes itself with `announceFramePass`.
+ *
+ * The witness counts the asks the control plane made directly on the renderer,
+ * which is what the restore's one-ask bound bounds: an unbounded restore asks
+ * again on every announced pass, forever. The key refuses to hand the asks back
+ * on an empty swallowed count, as the other hold does.
+ */
+export function withholdEveryRenderAsk(setup: Setup): () => RenderAskWitness {
+	const renderer = setup.renderer;
+	const ask = renderer.requestRender.bind(renderer);
+	const witness: RenderAskWitness = { asksHeld: 0, planeAsks: 0 };
+	renderer.requestRender = () => {
+		if (renderAskComesFromThePlane()) witness.planeAsks += 1;
+		witness.asksHeld += 1;
+		return undefined;
+	};
+	return () => {
+		renderer.requestRender = ask;
+		expect(
+			witness.asksHeld,
+			"withholdEveryRenderAsk swallowed no render ask, so the hold proved nothing",
+		).toBeGreaterThan(0);
+		return witness;
+	};
+}
+
+/**
+ * Announce one render pass to the surfaces that registered for it.
+ *
+ * The renderer announces a pass when a pass runs, and no pass can run while
+ * every ask is held. This calls the renderer's own `frame` announcement, which
+ * is what a surface registered with `once("frame", ...)` meets. It is the rig
+ * speaking, not a pass: nothing lays the tree out, so a box that answered no
+ * size before the announcement answers no size after it.
+ */
+export function announceFramePass(setup: Setup): void {
+	setup.renderer.emit(CliRenderEvents.FRAME);
 }
 
 /**

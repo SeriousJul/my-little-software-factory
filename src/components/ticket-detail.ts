@@ -603,8 +603,9 @@ export const TicketDetail = forwardRef<TicketDetailHandle, TicketDetailProps>(fu
 ) {
 	const ticket = fact?.ticket;
 	const geometry = usePaneGeometry("detail", reservedRows);
-	// The renderer reports the frame it has laid out, which is when the scroll
-	// box first knows its own content height and viewport.
+	// The renderer is held to invalidate the tree when the scroll box does not
+	// yet answer its own content height and viewport. It paints on invalidation
+	// and emits no frame at rest, so the pane asks rather than waits (issue #302).
 	const renderer = useRenderer();
 	// The scroll box owns the gutter; see `detailTextCols`.
 	const textCols = detailTextCols(geometry.usableCols);
@@ -676,14 +677,20 @@ export const TicketDetail = forwardRef<TicketDetailHandle, TicketDetailProps>(fu
 		}
 	}, [ticket?.identity, toStart]);
 
-	// A below-minimum resize unmounts the pane. On the next mount of the same
-	// ticket, resume from the offset the unmount saved. That offset was taken at
-	// another size, where the same body wrapped to a different number of rows,
-	// so the pane compares it with what the new layout allows and takes the
-	// nearer end. The renderer reports a frame once it has laid the tree out,
-	// which is the first moment the box knows its own content height and
-	// viewport, so the restore waits for that one pass instead of asking on a
-	// timer while the operator watches.
+	// A below-minimum resize unmounts the pane, and a cross through the other
+	// section unmounts the detail. On the next mount of the same ticket, resume
+	// from the offset the unmount saved. That offset was taken at another size,
+	// where the same body wrapped to a different number of rows, so the pane
+	// compares it with what the new layout allows and takes the nearer end.
+	//
+	// The renderer paints on invalidation, not on a free-running loop: a booted
+	// and resting plane emits no frames at all (issue #302). So the restore runs
+	// on the spot whenever the box already answers its own content height and
+	// viewport, which is what it does at the moment this effect runs after a
+	// cross back. Only when the box does not know its size yet does the pane ask
+	// for the pass that lays it out, and it asks once: waiting for a pass the
+	// plane does not owe leaves the detail at its top until the next key
+	// repaints it, and asking again on every pass would repaint forever.
 	// biome-ignore lint/correctness/useExhaustiveDependencies: the identity in the deps list is deliberate - the effect reads refs only, and it must re-run when a switch lands back on the retained ticket, not only on mount
 	useEffect(() => {
 		const box = scrollboxRef.current;
@@ -691,24 +698,38 @@ export const TicketDetail = forwardRef<TicketDetailHandle, TicketDetailProps>(fu
 		const identity = identityRef.current;
 		if (box === null || slot === null || identity === undefined) return;
 		if (slot.identity !== identity || slot.top === 0) return;
+		let passAsked = false;
 		const restore = () => {
 			if (identityRef.current !== identity) return;
 			const live = scrollSlot.current;
 			if (live === null || live.identity !== identity) return;
-			const max = maxScrollOf(box.scrollHeight, box.viewport.height);
-			// A cross back through the other section can remount the pane before
-			// the renderer has laid it out at its new size. Until the first frame
-			// with real geometry, an offset would clamp to zero and be lost.
-			if (max === 0) {
+			// A remount can land before the renderer has laid the box out at its
+			// new size: until it answers its own content height and viewport, an
+			// offset would clamp to zero and be lost. The pane invalidates the
+			// tree itself rather than wait for a pass nobody owes it, and asks at
+			// most once, so a box that never lays out cannot spin the renderer.
+			//
+			// The give-up path is the second return: when the pass the pane asked
+			// for still answers no size, the offset is not applied and the slot is
+			// left as it was. That is intended. The restore side never rewrites a
+			// fact the save side owns, and the retained value cannot move the scroll
+			// later: every path to another remount runs the save cleanup first, which
+			// writes the offset the pane actually leaves behind - its top, since
+			// nothing was applied - and a zero offset never re-arms the restore.
+			if (box.scrollHeight === 0 || box.viewport.height === 0) {
+				if (passAsked) return;
+				passAsked = true;
 				renderer.once("frame", restore);
+				renderer.requestRender();
 				return;
 			}
+			const max = maxScrollOf(box.scrollHeight, box.viewport.height);
 			box.scrollTop = Math.min(live.top, max);
-			// The pass has run: a later frame must not drag the scroll back to
-			// the offset the operator has since moved on from.
+			// The offset has landed: a later remount of the same Ticket must not
+			// drag the scroll back to where the operator has since moved on from.
 			scrollSlot.current = null;
 		};
-		renderer.once("frame", restore);
+		restore();
 		return () => {
 			renderer.removeListener("frame", restore);
 		};
