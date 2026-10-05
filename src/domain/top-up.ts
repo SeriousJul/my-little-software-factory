@@ -36,6 +36,7 @@ export const AUTOMATIC_HOLD_REASONS = [
 	"continuation-standing",
 	"operator-row-standing",
 	"queue-row-standing",
+	"handoff-failure-park",
 ] as const;
 
 export type AutomaticHoldReason = (typeof AUTOMATIC_HOLD_REASONS)[number];
@@ -56,13 +57,29 @@ export const AUTOMATIC_ROW_HOLD_REASONS = [
 
 export type AutomaticRowHoldReason = (typeof AUTOMATIC_ROW_HOLD_REASONS)[number];
 
+/**
+ * The holds that name the candidate Ticket the walk reached and held out.
+ *
+ * The Failed-start park is the one of these: its gate stands on a candidate the
+ * walk read, not on a Work queue row, and the record has to say which Ticket the
+ * walk left resting - a run with more than one Ticket in play cannot tell a held
+ * Ticket from a held factory (issue #298).
+ */
+export const AUTOMATIC_CANDIDATE_HOLD_REASONS = ["handoff-failure-park"] as const;
+
+export type AutomaticCandidateHoldReason = (typeof AUTOMATIC_CANDIDATE_HOLD_REASONS)[number];
+
 /** The holds whose line states the fact alone, with no row named. */
-export type AutomaticBareHoldReason = Exclude<AutomaticHoldReason, AutomaticRowHoldReason>;
+export type AutomaticBareHoldReason = Exclude<
+	AutomaticHoldReason,
+	AutomaticRowHoldReason | AutomaticCandidateHoldReason
+>;
 
 /** A hold that names no row. */
 export interface AutomaticBareHold {
 	readonly reason: AutomaticBareHoldReason;
 	readonly row?: undefined;
+	readonly candidate?: undefined;
 }
 
 /** A hold that names the Work queue row the walk waits behind. */
@@ -74,10 +91,26 @@ export interface AutomaticRowHold {
 	 * stated yet, so a hold that stands across a hundred polls costs no name read.
 	 */
 	readonly row: string;
+	readonly candidate?: undefined;
 }
 
-/** The hold one automatic walk took: its fact, and the standing row when one names it. */
-export type AutomaticHold = AutomaticBareHold | AutomaticRowHold;
+/** A hold that names the candidate Ticket the walk reached and held out. */
+export interface AutomaticCandidateHold {
+	readonly reason: AutomaticCandidateHoldReason;
+	/**
+	 * The candidate's ticket identity, named the way a standing row is named: the
+	 * rule answers the identity and the walk reads the name only for a fact the
+	 * record has not stated yet.
+	 */
+	readonly candidate: string;
+	readonly row?: undefined;
+}
+
+/**
+ * The hold one automatic walk took: its fact, and the standing row or the held
+ * candidate when one names it.
+ */
+export type AutomaticHold = AutomaticBareHold | AutomaticRowHold | AutomaticCandidateHold;
 
 /**
  * The sentence each hold is stated in.
@@ -100,6 +133,7 @@ export const AUTOMATIC_HOLD_LINES: Readonly<Record<AutomaticHoldReason, string>>
 	"continuation-standing": "automatic walks hold: the Work queue already holds a continuation",
 	"operator-row-standing": "automatic walks hold: the Work queue holds an item the operator staged",
 	"queue-row-standing": "automatic walks hold: the Work queue holds a waiting row",
+	"handoff-failure-park": "automatic walks hold: the Ticket's Handoff starts keep failing",
 };
 
 /**
@@ -111,7 +145,9 @@ export const AUTOMATIC_HOLD_LINES: Readonly<Record<AutomaticHoldReason, string>>
  * is a different fact and states itself again (issue #223 review).
  */
 export function automaticHoldKey(hold: AutomaticHold): string {
-	return hold.row === undefined ? hold.reason : `${hold.reason} ${hold.row}`;
+	if (hold.row !== undefined) return `${hold.reason} ${hold.row}`;
+	if (hold.candidate !== undefined) return `${hold.reason} ${hold.candidate}`;
+	return hold.reason;
 }
 
 /**
@@ -127,7 +163,8 @@ export function automaticHoldLine(
 	rowName: (identity: string) => string,
 ): string {
 	const line = AUTOMATIC_HOLD_LINES[hold.reason];
-	return hold.row === undefined ? line : `${line} (${rowName(hold.row)})`;
+	const named = hold.row ?? hold.candidate;
+	return named === undefined ? line : `${line} (${rowName(named)})`;
 }
 
 /** The gates every automatic add reads (ADR 0051, ADR 0052, ADR 0016). */

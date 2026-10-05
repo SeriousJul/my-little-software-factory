@@ -234,6 +234,14 @@ export interface TicketWorkCycleAggregate {
 	agentNameForTicket(identity: string): string;
 	agentNamesForTickets(identities: readonly string[]): Map<string, string>;
 	automaticStartBlockedTickets(): Set<string>;
+	/**
+	 * Whether this one Ticket stands judged out of the factory's way (ADR 0060,
+	 * ADR 0070): its own ignore, or the mute of one of its sources. The set read
+	 * above answers the predicate for a walk that holds every row; this is the read
+	 * a walk takes when it reached one candidate and the Failed-start park has to
+	 * know whether the operator already answered the failure (issue #298).
+	 */
+	automaticStartBlockedTicket(ticketIdentity: string): boolean;
 	ticketsByState(states: readonly TicketState[]): HandoffTicket[];
 	markTicketRunning(identity: string): boolean;
 	reopenTurn(identity: string, handoffId: string): boolean;
@@ -307,6 +315,9 @@ export class TicketWorkCycleModule implements TicketWorkCycleAggregate {
 		const pendingTickets = this.graph().handoff.ticketsWithUnresolvedAttempts();
 		const newestHandoffs = this.graph().handoff.newestHandoffsFor(identities);
 		const handoffCounts = this.graph().handoff.handoffCountsFor(identities);
+		// The Failed-start park counts the run of failed starts the same way, over
+		// the same ledger for the same rows (issue #298, ADR 0106).
+		const failedStartStreaks = this.graph().handoff.failedStartStreaksFor(identities);
 		const completions = this.lastCompletionsFor(identities);
 		const leftovers = this.graph().handoff.leftoverEnvironmentsFor(identities);
 		const tickets: Ticket[] = [];
@@ -359,6 +370,7 @@ export class TicketWorkCycleModule implements TicketWorkCycleAggregate {
 				handoff,
 				workCycle: row.work_cycle,
 				handoffCount: handoffCounts.get(row.identity) ?? 0,
+				failedStartStreak: failedStartStreaks.get(row.identity) ?? 0,
 				lastCompletion: completions.get(row.identity) ?? null,
 				description: facts.description,
 				sourceKind: facts.sourceKind,
@@ -605,6 +617,17 @@ export class TicketWorkCycleModule implements TicketWorkCycleAggregate {
 		const blocked = new Set(rows.map((row) => row.identity));
 		for (const identity of this.graph().sourceFact.ticketsWithMutedSource()) blocked.add(identity);
 		return blocked;
+	}
+	/**
+	 * Whether this one Ticket stands judged out of the factory's way (ADR 0060,
+	 * ADR 0070): its own ignore, or the mute of one of its sources.
+	 */
+	automaticStartBlockedTicket(ticketIdentity: string): boolean {
+		const row = this.db
+			.prepare("SELECT ignored FROM tickets WHERE identity = ?")
+			.get(ticketIdentity) as { ignored: number } | undefined;
+		if (row !== undefined && row.ignored === 1) return true;
+		return this.graph().sourceFact.ticketHasMutedSource(ticketIdentity);
 	}
 	recordRouteRemovedMark(ticketIdentity: string, decision: string): boolean {
 		const row = this.db

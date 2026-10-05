@@ -95,3 +95,17 @@ stands while any active source is still unrefreshed since the attempt, and it
 releases only once every active source has read the ticket after it. A ticket
 with several active sources therefore waits on its slowest source's refresh
 interval, not on the first refresh to land.
+
+## Amendment: the park stands behind the hold
+
+Date: 2026-10-05
+
+The hold this decision set waits out one failed start, and it releases on the
+source read. That is the right wait for one failure, and one refresh of delay for
+a cause outside the Ticket: the read lands on every refresh and says nothing about
+the failure, so the top-up asks the same failing start again. ADR 0106 owns what
+stands behind the hold - the Failed-start park, in `src/domain/failed-start-park.ts`
+and the top-up's Handoff ask. The hold is unchanged: same wait, same release, same
+gate on the automatic adds only. The park holds the Ticket out of the automatic
+walks once its starts keep failing, and says so on the record, the Message line,
+the row, and the detail.

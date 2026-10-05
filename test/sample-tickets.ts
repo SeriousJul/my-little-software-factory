@@ -31,6 +31,7 @@ function sample(
 	sourceState = "open",
 	handoffCount = 0,
 	lastCompletion: Completion | null = null,
+	failedStartStreak = 0,
 ): Ticket {
 	return {
 		identity: `github:github.com:I_${externalKey.slice(1)}`,
@@ -57,6 +58,7 @@ function sample(
 		actionable: state === "open",
 		handoffRecoveryRequired: false,
 		handoffCount,
+		failedStartStreak,
 		lastCompletion,
 		ignored: false,
 		ignoredAt: null,

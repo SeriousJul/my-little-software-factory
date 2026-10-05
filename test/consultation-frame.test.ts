@@ -124,6 +124,7 @@ const selectedTicket: Ticket = {
 	handoff: null,
 	workCycle: 1,
 	handoffCount: 0,
+	failedStartStreak: 0,
 	lastCompletion: null,
 	description: "Review the authentication design.",
 	sourceKind: "github-issue",

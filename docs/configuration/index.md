@@ -427,7 +427,7 @@ host = "github.com"
 | `max-parallel-agents` | no | `2` | The one cap over all running work: the in-flight ticket seats and every Consultation in `opening` or `working`. `0` means unlimited. |
 | `agent-poll-interval-seconds` | no | `5` | Seconds between herdr polls. A positive number. |
 | `completion-message-lines` | no | `200` | Lines of the agent last message captured when a turn settles. A whole number of 1 or more. |
-| `max-handoffs-per-ticket` | no | `10` | Handoff attempts and plane action attempts per ticket after which auto-handoff stops dispatching it. An attempt that never started an Agent counts (ADR 0101). A manual handoff may pass the limit. |
+| `max-handoffs-per-ticket` | no | `10` | Handoff attempts and plane action attempts per ticket after which auto-handoff stops dispatching it. An attempt that never started an Agent counts (ADR 0101). A manual handoff may pass the limit. The failed-start park holds a ticket whose starts keep failing at half this number (ADR 0106). |
 | `attention-bell` | no | `true` | Ring the terminal bell when a Consultation settles. |
 | `desktop-notification` | no | `true` | Send a desktop notification per standing warning or error fact on the Message line, carrying the full text the line truncates. Switches independently of `attention-bell`. |
 | `interaction-exit-key` | no | `f12` | Exit Agent interaction mode. A function key `f1` to `f24`, or `ctrl` plus one letter. Not `ctrl+c`: the emergency exit owns that key. |
@@ -564,6 +564,7 @@ automatic walks hold: a failed turn waits for the operator
 automatic walks hold: the Work queue already holds a continuation
 automatic walks hold: the Work queue holds an item the operator staged
 automatic walks hold: the Work queue holds a waiting row
+automatic walks hold: the Ticket's Handoff starts keep failing
 ```
 
 A hold that waits behind a standing row names that row in parentheses:
@@ -583,6 +584,31 @@ itself too, because a run with more than one ticket in play has to say which
 owed start the hold blocked and not only that a hold happened; a later hold
 behind a different row is a new fact and states itself again (issue #223
 review). The other holds stay bare: no row is picked where their gate stands.
+
+The last line names the Ticket the walk reached, because the Failed-start park
+stands on one Ticket and not on the cycle (issue #298). Its Handoff starts keep
+failing, so the Top-up adds no automatic start for it; the park arrives at half
+the Handoff limit, and the row and the detail name it while it stands. The record
+names the Ticket the walk reached:
+
+```text
+automatic walks hold: the Ticket's Handoff starts keep failing ("Watch agent turns")
+```
+
+The same fact reaches the Message line as a standing warning, once for as long as
+it stands:
+
+```text
+handoff failure park: "Watch agent turns" (6 Handoff starts in a row never reached an Agent)
+```
+
+The count is the run the park stands on, because how many starts the factory has
+already burned is what the operator weighs. The `handoff failure park:` prefix
+keeps the standing fact apart from the walk's holds and from a start's own
+failure line. A start that reaches its Agent ends the run and the automatic adds
+resume; ignoring the Ticket or muting its source answers the failure the same way
+and takes the fact off the row. See
+[Handoffs](/work-flow/handoffs) for the rule.
 
 The third line names the queue's depth rather than a staging, because the gate
 it states holds on any row at all, a Consultation row included. The staging of

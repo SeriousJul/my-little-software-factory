@@ -77,6 +77,7 @@ import type { FactoryConfig, TransitionOutcome } from "./config.ts";
 // Missing agent rule the observation cycle reads (issue #201). The observation
 // module re-states them for its existing readers.
 import { agentInPane, normalizeAgentStatus } from "./domain/agent.ts";
+import { failedStartParkLine, failedStartParkStands } from "./domain/failed-start-park.ts";
 import { recordTicketName } from "./domain/record-name.ts";
 import {
 	automaticStartBlocked,
@@ -584,6 +585,16 @@ export class ObservationCoordinator {
 	 */
 	private automaticHoldsReported = new Map<string, AutomaticHold>();
 	/**
+	 * The Tickets the Failed-start park stood on when this run last stated it
+	 * (issue #298, ADR 0106). The park is derived on the ask and never stored; this
+	 * only remembers the last report, the way the held Next step's line does, so one
+	 * parked Ticket states its hold and its warning once while it stands and not once
+	 * per poll. A cycle retires the entry when it reads the Ticket and finds the park
+	 * gone - a start that reached its Agent, or the operator's own act - so the next
+	 * run of failures states itself again.
+	 */
+	private readonly parkReports = new Set<string>();
+	/**
 	 * The agents of the last successful list, for the UI's markers. Null
 	 * until the first success: an unreadable herdr must not read as "every
 	 * pane is missing".
@@ -892,6 +903,9 @@ export class ObservationCoordinator {
 		if (this.stopped) return;
 		// The holds both walks took, stated once each for as long as they stand.
 		this.reportAutomaticHolds(freshWorkWalkRan);
+		// The Failed-start parks that no longer stand, retired from the report so the
+		// next run of failures states itself again (issue #298, ADR 0106).
+		this.retireFailedStartParks();
 
 		// Tickets and Consultations share this one successful Herdr list poll.
 		// A Consultation in `opening` or `working` already holds its seat in
@@ -2112,6 +2126,29 @@ export class ObservationCoordinator {
 		// to its next candidate. It gates the automatic adds only - the operator's own
 		// confirm reaches the dispatch past it, the way it passes the Handoff limit.
 		if (this.state.handoff.handoffBlockedUnrefreshed(intent.ticketIdentity)) return "refused";
+		// The Failed-start park (issue #298, ADR 0106): the Ticket's Handoff starts
+		// keep failing, and the Top-up adds no automatic start for it. The hold above
+		// waits out one failure for the source read that carries the Ticket's current
+		// facts; this one stands when the re-ask on that refresh keeps failing, so the
+		// loop that burned one failed start per refresh stops at half the Handoff limit
+		// instead of running to the limit and parking the Ticket in silence. The park
+		// is a standing fact, not a silent skip: the record names the hold once in the
+		// voice the other walk holds wear, and the Message line states it as the
+		// warning the Desktop notification carries (ADR 0080). It gates the automatic
+		// adds only - the operator's own confirm reaches the dispatch past it, the way
+		// it passes the Handoff limit, and the act that reaches an Agent ends the run.
+		const failedStarts = this.failedStartStreakOf(intent.ticketIdentity);
+		if (
+			failedStarts !== 0 &&
+			failedStartParkStands({
+				failedStartStreak: failedStarts,
+				handoffLimit: this.config().maxHandoffsPerTicket,
+				judgedOut: this.state.ticketWorkCycle.automaticStartBlockedTicket(intent.ticketIdentity),
+			})
+		) {
+			this.reportFailedStartPark(intent.ticketIdentity, failedStarts);
+			return "refused";
+		}
 		const result = await this.dispatch(intent);
 		if (this.stopped) return "stopped";
 		if (!result.ok) {
@@ -2123,6 +2160,72 @@ export class ObservationCoordinator {
 		}
 		this.onStatus("info", addedLine);
 		return "added";
+	}
+
+	/**
+	 * The Ticket's run of failed Handoff starts (issue #298, ADR 0106): the length
+	 * of the run of its newest Handoff attempts that settled `failed`.
+	 *
+	 * The ask reads it for the one candidate it reached, the way the Attempt hold
+	 * reads that candidate's newest attempt. The projection carries the same run for
+	 * every row the list rule leaves, and the row's marker reads it from there; this
+	 * is the read for the walk that holds an identity and no row.
+	 */
+	private failedStartStreakOf(ticketIdentity: string): number {
+		return this.state.handoff.failedStartStreaksFor([ticketIdentity]).get(ticketIdentity) ?? 0;
+	}
+
+	/**
+	 * The Failed-start park's report, stated once for as long as it stands
+	 * (issue #298, ADR 0106).
+	 *
+	 * Two channels carry the one fact. The record names the hold in the voice the
+	 * automatic walks' holds wear (`automaticHoldLine`), because a run that adds no
+	 * item leaves the file with no trace of the start that never came; the Message
+	 * line states the standing warning the Desktop notification carries (ADR 0080),
+	 * because the operator has to learn the loop stopped without reading the file.
+	 *
+	 * The park is derived on every ask and never stored, so this only remembers the
+	 * last report, the way the held Next step's line does (`reportHeldNextStep`):
+	 * one parked Ticket states itself once, and a cycle that reads the Ticket and
+	 * finds the park gone (`retireFailedStartParks`) lets the next run state itself
+	 * again.
+	 */
+	private reportFailedStartPark(ticketIdentity: string, failedStartStreak: number): void {
+		if (this.parkReports.has(ticketIdentity)) return;
+		this.parkReports.add(ticketIdentity);
+		this.log.info(
+			automaticHoldLine({ reason: "handoff-failure-park", candidate: ticketIdentity }, (identity) =>
+				this.ticketName(identity),
+			),
+		);
+		this.onStatus(
+			"warning",
+			failedStartParkLine(this.ticketName(ticketIdentity), failedStartStreak),
+		);
+	}
+
+	/**
+	 * The parks this run has stated that no longer stand (issue #298, ADR 0106).
+	 *
+	 * A park clears when a start reaches an Agent and ends the run, or when the
+	 * operator judges the Ticket out. Neither act runs a walk that reaches the
+	 * Ticket's ask, so nothing else retires the report: without this, the next run of
+	 * failures would stay silent. The read runs only over the Tickets already
+	 * reported, which is the parked Tickets and no others.
+	 */
+	private retireFailedStartParks(): void {
+		if (this.parkReports.size === 0) return;
+		const handoffLimit = this.config().maxHandoffsPerTicket;
+		for (const identity of [...this.parkReports]) {
+			const failedStarts = this.failedStartStreakOf(identity);
+			const stands = failedStartParkStands({
+				failedStartStreak: failedStarts,
+				handoffLimit,
+				judgedOut: this.state.ticketWorkCycle.automaticStartBlockedTicket(identity),
+			});
+			if (!stands) this.parkReports.delete(identity);
+		}
 	}
 
 	/**

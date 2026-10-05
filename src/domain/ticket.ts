@@ -405,6 +405,13 @@ export interface Ticket extends TicketIgnoreFacts {
 	workCycle: number;
 	/** The total handoffs ever recorded for the ticket, across work cycles. */
 	handoffCount: number;
+	/**
+	 * The length of this Ticket's newest run of Handoff attempts that settled
+	 * `failed` (issue #298, ADR 0106): the starts that claimed, ran, and started no
+	 * Agent. The Failed-start park counts it against half the Handoff limit; any
+	 * attempt that settled otherwise, or that has not settled yet, ends the run.
+	 */
+	failedStartStreak: number;
 	/** The ticket's latest settled turn, or null when none settled yet. */
 	lastCompletion: Completion | null;
 	description: string;

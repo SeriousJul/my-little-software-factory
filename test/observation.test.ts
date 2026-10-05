@@ -5868,7 +5868,15 @@ describe("the failed Handoff start's hold (ADR 0077 as extended by ADR 0101, iss
 
 	/** One open Ticket, and the automatic start on it that started no Agent. */
 	function failedStartRig(over: { config?: Partial<FactoryConfig> } = {}) {
-		return rig({ autoOn: true, agents: [], startFails: failure, config: over.config });
+		// The Handoff limit stands well above the run these tests build: the Failed-
+		// start park holds the ask at half the limit (ADR 0106), and these tests are
+		// about the Attempt hold's one-refresh wait, which the park sits behind.
+		return rig({
+			autoOn: true,
+			agents: [],
+			startFails: failure,
+			config: { maxHandoffsPerTicket: 20, ...over.config },
+		});
 	}
 
 	/** The re-read that carries the Ticket's current facts, one refresh later. */
@@ -5930,7 +5938,12 @@ describe("the failed Handoff start's hold (ADR 0077 as extended by ADR 0101, iss
 	});
 
 	test("the hold covers the continuation walk's position", async () => {
-		const { state, intents, coordinator } = rig({ autoOn: true, agents: [], startFails: failure });
+		const { state, intents, coordinator } = rig({
+			autoOn: true,
+			agents: [],
+			startFails: failure,
+			config: { maxHandoffsPerTicket: 20 },
+		});
 		state.sourceFact.applyFetch(source, success([fetched("github:github.com:I_6"), fetched()]));
 		// A settled turn whose Next step stands on the open position I_6.
 		settleFor(state, "github:github.com:I_5", "route", routeOutcome("github:github.com:I_6"));
@@ -5994,6 +6007,7 @@ describe("the failed Handoff start's hold (ADR 0077 as extended by ADR 0101, iss
 		const { state, intents, coordinator } = rig({
 			autoOn: true,
 			agents: [],
+			config: { maxHandoffsPerTicket: 20 },
 			pickupWorkQueue: async () => {
 				const [item] = state.workQueue.items();
 				if (item === undefined || item.kind !== "handoff") return 0;
@@ -6026,6 +6040,185 @@ describe("the failed Handoff start's hold (ADR 0077 as extended by ADR 0101, iss
 		refresh(state);
 		await coordinator.tick();
 		expect(intents).toHaveLength(2);
+		state.close();
+	});
+});
+
+/**
+ * The Failed-start park (issue #298, ADR 0106).
+ *
+ * The Attempt hold above waits out one failed start for the source read that
+ * carries the Ticket's current facts. That is the right wait for one failure and
+ * the wrong one for a cause outside the Ticket: the development install asked
+ * Ticket #37 9,365 times over five days, one ask per refresh, and the Handoff
+ * limit that was supposed to bound it only stopped the cycle at 20. The park is
+ * the second brake: at half the limit the Top-up stops asking, and the fact says
+ * so on the record, the Message line, the row, and the detail.
+ */
+describe("the Failed-start park holds a Ticket whose starts keep failing (issue #298)", () => {
+	const failure = "Preparing worktree: the worktree path already exists";
+	const IDENTITY = "github:github.com:I_5";
+	// A Handoff limit of 4 parks the Ticket at 2 failed starts and ends its work
+	// cycle at 4 attempts, so a test can see the park arrive first.
+	const PARK_LIMIT = 4;
+
+	/** One open Ticket, every start on it starting no Agent, and its record. */
+	function parkRig() {
+		const lines: RecordedLine[] = [];
+		const r = rig({
+			autoOn: true,
+			agents: [],
+			startFails: failure,
+			config: { maxHandoffsPerTicket: PARK_LIMIT },
+			log: recordLogger(lines),
+		});
+		return { ...r, lines };
+	}
+
+	/** The re-read that carries the Ticket's current facts, one refresh later. */
+	function refresh(state: FactoryState, identity = IDENTITY): void {
+		state.sourceFact.applyFetch(source, {
+			status: "success",
+			fetchedAt: "2026-08-31T11:30:00Z",
+			tickets: [fetched(identity)],
+		});
+	}
+
+	/**
+	 * Run the loop until the Ticket's newest run holds `streak` failed starts: each
+	 * failure needs its own source re-read, because the Attempt hold waits the ask
+	 * out until the read lands.
+	 */
+	async function failStarts(state: FactoryState, coordinator: Rig["coordinator"], streak: number) {
+		for (let i = 0; i < streak; i += 1) {
+			await coordinator.tick();
+			refresh(state);
+		}
+		await coordinator.tick();
+	}
+
+	const holdLines = (lines: readonly RecordedLine[]) =>
+		lines.filter((line) => line.message.includes("the Ticket's Handoff starts keep failing"));
+	const parkWarnings = (statuses: Rig["statuses"]) =>
+		statuses.filter((status) => status.text.startsWith("handoff failure park:"));
+
+	test("the run of failed starts holds the Top-up out of the Ticket, and the record says so", async () => {
+		const { state, intents, lines, coordinator } = parkRig();
+		// Two failed starts: the park's count at this limit. The first ask ran and
+		// failed, the second ran on the refresh and failed, and the third ask is the
+		// one the park holds.
+		await failStarts(state, coordinator, 2);
+		expect(state.handoff.handoffCount(IDENTITY)).toBe(2);
+		expect(intents).toHaveLength(2);
+		// The record names the hold, and names the Ticket the walk reached: a run
+		// with more than one Ticket in play has to say which one it left resting.
+		expect(holdLines(lines).map((line) => line.message)).toEqual([
+			'automatic walks hold: the Ticket\'s Handoff starts keep failing ("Persist source facts")',
+		]);
+		// The loop stops here. Every other gate reads clear - the Ticket stands open
+		// and actionable, the queue stands empty, the source re-reads it - so without
+		// the park this is where the 9,365 asks ran.
+		for (let i = 0; i < 5; i += 1) {
+			refresh(state);
+			await coordinator.tick();
+		}
+		expect(intents).toHaveLength(2);
+		// One line for a standing fact, not one per poll (issue #223).
+		expect(holdLines(lines)).toHaveLength(1);
+		state.close();
+	});
+
+	test("the park states itself on the Message line as the warning the notification carries", async () => {
+		const { state, coordinator, statuses } = parkRig();
+		await failStarts(state, coordinator, 2);
+		// The standing warning the Desktop notification carries (ADR 0080): the
+		// operator learns the loop stopped without reading the file, and the count is
+		// what they weigh.
+		expect(parkWarnings(statuses).map((status) => status.text)).toEqual([
+			'handoff failure park: "Persist source facts" (2 Handoff starts in a row never reached an Agent)',
+		]);
+		expect(parkWarnings(statuses)[0].kind).toBe("warning");
+		for (let i = 0; i < 5; i += 1) {
+			refresh(state);
+			await coordinator.tick();
+		}
+		expect(parkWarnings(statuses)).toHaveLength(1);
+		state.close();
+	});
+
+	test("the park arrives before the Handoff limit ends the work cycle", async () => {
+		const { state, intents, coordinator } = parkRig();
+		await failStarts(state, coordinator, 2);
+		// The park stands at half the cap, and the cap that ends a work cycle is
+		// still ahead of it: the operator meets the loop while the limit can still
+		// count what comes after.
+		expect(state.handoff.handoffCount(IDENTITY)).toBe(2);
+		expect(state.handoff.handoffCount(IDENTITY)).toBeLessThan(PARK_LIMIT);
+		for (let i = 0; i < 5; i += 1) {
+			refresh(state);
+			await coordinator.tick();
+		}
+		// The limit still counts every attempt, and it never reaches its own cap on
+		// an automatic ask the park holds out.
+		expect(state.handoff.handoffCount(IDENTITY)).toBe(2);
+		expect(intents).toHaveLength(2);
+		state.close();
+	});
+
+	test("a start that reaches its Agent ends the run, and the automatic ask comes back", async () => {
+		const { state, intents, lines, coordinator, advance } = parkRig();
+		await failStarts(state, coordinator, 2);
+		expect(holdLines(lines)).toHaveLength(1);
+		// The operator's own Handoff, the one act the park never holds out. It reaches
+		// its Agent, so the run ends and the park leaves with it; the cycle closes the
+		// way any settled turn does.
+		const attempt = handOut(state, IDENTITY, "research");
+		advance(90_000);
+		state.ticketWorkCycle.settleTurn({
+			ticketIdentity: IDENTITY,
+			handoffId: attempt,
+			taskType: "research",
+			agentType: "pi",
+			message: "the turn is over",
+			turnLog: [{ kind: "text", text: "the turn is over" }],
+			completedAt: "2026-08-31T11:01:30Z",
+		});
+		advance(30_000);
+		state.ticketWorkCycle.applyCompletionDecision({
+			ticketIdentity: IDENTITY,
+			handoffId: attempt,
+			decision: "closed",
+			decidedAt: "2026-08-31T11:02:00Z",
+		});
+		expect(state.handoff.failedStartStreaksFor([IDENTITY]).get(IDENTITY)).toBe(0);
+		// The Ticket rests open with its run ended, and the automatic walk asks it
+		// again: the resume needs no second act.
+		refresh(state);
+		await coordinator.tick();
+		expect(intents).toHaveLength(3);
+		expect(intents[2]).toEqual(
+			expect.objectContaining({ origin: "open", automatic: true, ticketIdentity: IDENTITY }),
+		);
+		state.close();
+	});
+
+	test("the operator's ignore answers the failure, and un-ignoring states the park again", async () => {
+		const { state, coordinator, statuses, lines } = parkRig();
+		await failStarts(state, coordinator, 2);
+		expect(parkWarnings(statuses)).toHaveLength(1);
+		// The ignore is the operator's answer to the failing starts, so the standing
+		// fact retires: the walk holds the Ticket out before it reaches the ask.
+		expect(state.ticketWorkCycle.setTicketIgnored(IDENTITY, true)).toEqual({ ok: true });
+		await coordinator.tick();
+		expect(parkWarnings(statuses)).toHaveLength(1);
+		expect(holdLines(lines)).toHaveLength(1);
+		// The act leaves, the run is still there, and the park is a fact the cycle
+		// derives: it states itself again rather than staying silent forever.
+		expect(state.ticketWorkCycle.setTicketIgnored(IDENTITY, false)).toEqual({ ok: true });
+		refresh(state);
+		await coordinator.tick();
+		expect(parkWarnings(statuses)).toHaveLength(2);
+		expect(holdLines(lines)).toHaveLength(2);
 		state.close();
 	});
 });

@@ -133,6 +133,13 @@ export interface HandoffAggregate {
 	 * for the start, and it gates the automatic adds only.
 	 */
 	handoffBlockedUnrefreshed(identity: string): boolean;
+	/**
+	 * The length of the Ticket's newest run of Handoff attempts that settled
+	 * `failed` - the starts that claimed, ran, and started no Agent (issue #298).
+	 * Any attempt that settled otherwise, or that has not settled yet, ends the
+	 * run, and the Failed-start park counts the run against the Handoff limit.
+	 */
+	failedStartStreaksFor(identities: readonly string[]): Map<string, number>;
 	autoHandoffMode(): boolean;
 	setAutoHandoffMode(enabled: boolean): void;
 	latestHandoff(identity: string): {
@@ -333,6 +340,44 @@ export class HandoffModule implements HandoffAggregate {
 			unrefreshedSince: (at) =>
 				this.graph().sourceFact.hasUnrefreshedActiveMembershipSince(identity, at),
 		});
+	}
+	/**
+	 * The run of failed starts the Failed-start park counts (issue #298, ADR 0106).
+	 *
+	 * The run is the Ticket's newest attempts read back until one settled otherwise
+	 * or is still in flight, so the boundary is the newest attempt that is not a
+	 * failed settle, and the run is every failed settle claimed after it. The
+	 * boundary is the row order, not the claim's time: two claims stamped in the
+	 * same millisecond are told apart by which was claimed first, and a time-only
+	 * boundary would count a failure claimed before a start that reached its Agent
+	 * as a failure after it.
+	 *
+	 * One statement answers the whole chunk. The `reached` rows are the boundary of
+	 * each Ticket's run, and a Ticket with no such row has never started an Agent,
+	 * so its whole ledger is one run. A Ticket the statement returns no row for
+	 * carries no run, and the answer holds a zero for it.
+	 */
+	failedStartStreaksFor(identities: readonly string[]): Map<string, number> {
+		const streaks = new Map<string, number>();
+		for (const chunk of identityChunks(identities)) {
+			const rows = this.db
+				.prepare(
+					`WITH reached AS (
+						 SELECT ticket_identity, MAX(rowid) AS reached_rowid FROM handoff_attempts
+						  WHERE ticket_identity IN (${placeholders(chunk.length)}) AND stage <> 'failed'
+						  GROUP BY ticket_identity
+					  )
+					  SELECT a.ticket_identity AS ticket_identity, COUNT(*) AS streak FROM handoff_attempts a
+					    LEFT JOIN reached r ON r.ticket_identity = a.ticket_identity
+					   WHERE a.ticket_identity IN (${placeholders(chunk.length)}) AND a.stage = 'failed'
+					     AND (r.reached_rowid IS NULL OR a.rowid > r.reached_rowid)
+					   GROUP BY a.ticket_identity`,
+				)
+				.all(...chunk, ...chunk) as Array<{ ticket_identity: string; streak: number }>;
+			for (const row of rows) streaks.set(row.ticket_identity, Number(row.streak));
+		}
+		for (const identity of identities) if (!streaks.has(identity)) streaks.set(identity, 0);
+		return streaks;
 	}
 	/**
 	 * The newest attempt row: the stage its outcome landed with and that time.

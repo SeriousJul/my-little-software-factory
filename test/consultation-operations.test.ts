@@ -1002,6 +1002,7 @@ describe("Consultation operations: live checkout confirmation lifetime", () => {
 			},
 			workCycle: 1,
 			handoffCount: 1,
+			failedStartStreak: 0,
 			lastCompletion: null,
 			description: "",
 			sourceKind: "github",

@@ -46,6 +46,7 @@ const ticket = (title: string, externalKey = "#1"): Ticket => ({
 	muted: false,
 	mutedAt: null,
 	handoffCount: 0,
+	failedStartStreak: 0,
 	lastCompletion: null,
 	leftover: null,
 });

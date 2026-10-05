@@ -217,6 +217,48 @@ describe("the Handoff limit", () => {
 	});
 });
 
+describe("the Failed-start park (issue #298)", () => {
+	test("a Ticket whose run of failed starts reaches half the limit wears its marker", () => {
+		const fact = ticketFactsFor(
+			ticket({ failedStartStreak: 5 }),
+			factInputs({ maxHandoffsPerTicket: 10 }),
+		);
+		expect(fact.failedStartPark).toBe(true);
+	});
+
+	test("a run below the park's count wears none, and the Handoff limit marker stays separate", () => {
+		const fact = ticketFactsFor(
+			ticket({ failedStartStreak: 4, handoffCount: 4 }),
+			factInputs({ maxHandoffsPerTicket: 10 }),
+		);
+		expect(fact.failedStartPark).toBe(false);
+		expect(fact.handoffLimit).toBe(false);
+	});
+
+	test("the operator's own act takes the fact off the row", () => {
+		// The ignore and the source mute answer the failing starts, so the row stops
+		// naming a park the operator has already acted on (ADR 0060, ADR 0070).
+		const inputs = factInputs({ maxHandoffsPerTicket: 10 });
+		expect(
+			ticketFactsFor(ticket({ failedStartStreak: 9, ignored: true }), inputs).failedStartPark,
+		).toBe(false);
+		expect(
+			ticketFactsFor(ticket({ failedStartStreak: 9, muted: true }), inputs).failedStartPark,
+		).toBe(false);
+	});
+
+	test("the park wears its marker beside the Handoff limit's", () => {
+		// Both come from the same ledger and both stand at the row's end: the park
+		// arrives first, and the limit keeps counting every attempt behind it.
+		const fact = ticketFactsFor(
+			ticket({ failedStartStreak: 10, handoffCount: 20 }),
+			factInputs({ maxHandoffsPerTicket: 20 }),
+		);
+		expect(fact.failedStartPark).toBe(true);
+		expect(fact.handoffLimit).toBe(true);
+	});
+});
+
 describe("the in-flight fact", () => {
 	test("a Ticket with an Agent working on it is in flight", () => {
 		expect(inFlight(ticket({ state: "running", handoff: handoff() }))).toBe(true);

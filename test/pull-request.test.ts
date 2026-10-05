@@ -73,6 +73,7 @@ const ticket: Ticket = {
 	muted: false,
 	mutedAt: null,
 	handoffCount: 0,
+	failedStartStreak: 0,
 	lastCompletion: null,
 	leftover: null,
 };

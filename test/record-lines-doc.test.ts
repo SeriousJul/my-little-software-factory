@@ -16,8 +16,10 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { handoffStartFailedLine } from "../src/domain/attempt-record.ts";
+import { failedStartParkLine } from "../src/domain/failed-start-park.ts";
 import { queueStagingOf } from "../src/domain/queue-staging.ts";
 import {
+	AUTOMATIC_CANDIDATE_HOLD_REASONS,
 	AUTOMATIC_HOLD_LINES,
 	AUTOMATIC_ROW_HOLD_REASONS,
 	automaticHoldLine,
@@ -28,6 +30,7 @@ const guide = readFileSync(join(repo, "docs/configuration/index.md"), "utf8");
 const appSource = readFileSync(join(repo, "src/components/app.ts"), "utf8");
 const dispatchSource = readFileSync(join(repo, "src/handoff-dispatch.ts"), "utf8");
 const attemptRecordSource = readFileSync(join(repo, "src/domain/attempt-record.ts"), "utf8");
+const failedStartParkSource = readFileSync(join(repo, "src/domain/failed-start-park.ts"), "utf8");
 
 /** One line of the reference page, with the code that writes it named for the failure. */
 function statedInGuide(line: string, writtenBy: string): void {
@@ -127,6 +130,32 @@ describe("the record lines the configuration reference states", () => {
 		);
 		// And the page says the two lines never answer for one another.
 		statedInGuide("`handoff refused:`", "the gate refusal the failed start is told from");
+	});
+
+	test("the parked Ticket's hold names the Ticket, and the park states its own line", () => {
+		// The Failed-start park stands on one Ticket the walk reached (issue #298), so
+		// its hold names that Ticket the way a standing row names its row, and its
+		// Message-line fact carries the run it stands on. Both sentences come from the
+		// module that owns them, so the checks run the builders.
+		for (const reason of AUTOMATIC_CANDIDATE_HOLD_REASONS) {
+			statedInGuide(
+				automaticHoldLine(
+					{ reason, candidate: "github:github.com:I_5" },
+					() => `"Watch agent turns"`,
+				),
+				`automaticHoldLine(${JSON.stringify(reason)})`,
+			);
+		}
+		statedInGuide(
+			failedStartParkLine('"Watch agent turns"', 6),
+			'failedStartParkLine("Watch agent turns", 6)',
+		);
+		// The prefix is the fact that keeps the park apart from the walk's other
+		// holds, so the check reads it out of the module that states it.
+		statedInGuide(
+			`\`${sourceConstant(failedStartParkSource, "FAILED_START_PARK_PREFIX")}\``,
+			"FAILED_START_PARK_PREFIX",
+		);
 	});
 
 	test("the two facts the operator sets by key state themselves in the guide", () => {

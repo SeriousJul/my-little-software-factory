@@ -422,7 +422,7 @@ _Avoid_: workspace cleanup, environment teardown
 **Handoff attempt**:
 The durable record created before a handoff makes its first external change.
 An unresolved attempt prevents another handoff of the same ticket after a crash.
-An attempt that settled `failed` started no Agent and left no Handoff: it counts toward the Handoff limit, it stands as the Attempt hold (ADR 0101), and it states itself in the record as the `handoff start failed:` line beside the `handoff started:` line the start wrote (issue #295).
+An attempt that settled `failed` started no Agent and left no Handoff: it counts toward the Handoff limit, it stands as the Attempt hold (ADR 0101), it counts toward the run the Failed-start park stands on (ADR 0106), and it states itself in the record as the `handoff start failed:` line beside the `handoff started:` line the start wrote (issue #295).
 _Avoid_: pending ticket, handoff state
 
 **Attempt hold**:
@@ -430,6 +430,12 @@ The condition in which a ticket's newest Handoff attempt settled `failed`, or it
 The start changed nothing on the source, so the position still offers the task the failed start already tried and every other top-up gate still reads clear; the read that carries the ticket's current facts is the signal the next ask waits for. One active source whose last read still predates the attempt keeps the hold, so a ticket with several active sources waits on its slowest source's refresh.
 Any failed start sets it - the automatic ask, the operator's confirm, a pickup, and a force-dispatch all leave the same attempt row - because a start that never reached its Agent refused for a reason that says nothing about who asked. It is silent, and it holds the auto top-up's automatic adds only: the operator's confirm, the pickup's claim, and a force-dispatch pass it. Both start channels read the one rule, and an attempt still in flight holds nothing - the unresolved attempt is what the claim gate owns (ADR 0077 as extended by ADR 0101).
 _Avoid_: retry cooldown, backoff timer, dispatch block
+
+**Failed-start park**:
+The condition in which a Ticket's newest Handoff attempts, in one unbroken run, all settled `failed`, and the run reaches half the Handoff limit (ADR 0106).
+The Attempt hold waits out one failure for the source read that carries the Ticket's current facts. That is the right wait for one failure and the wrong one for a cause outside the Ticket: the read lands on every refresh and says nothing about the failure, so the hold is one refresh of delay and the loop runs one failed start per refresh until the Handoff limit stops the Top-up and leaves the Ticket open with no fact saying why. The park is the second brake, and it is a standing fact rather than a silent skip: while it stands the Top-up adds no automatic start for the Ticket, the row and the detail name it, the record names the hold once, and the Message line states it once as the standing warning the Desktop notification carries (ADR 0080). It arrives before the Handoff limit, so the operator meets the loop while the cap that ends a work cycle still stands behind it, and the cap stays the one number the operator sets.
+Any Handoff attempt that settled otherwise, or one still in flight, ends the run: a start that reaches its Agent clears the park and the automatic adds resume on the same rule, while a manual start that fails extends the run, because the refusal it met is the refusal the park names. The operator's own act on the Ticket - its ignore, or the mute of one of its sources - answers the failure and takes the fact off the row. Like the Attempt hold, it gates the automatic adds only: the operator's confirm, the pickup's claim, and a force-dispatch pass it.
+_Avoid_: failure backoff, circuit breaker, dead letter, retry budget
 
 **Auto-handoff mode**:
 The mode of the factory in which the control plane tops up the Work queue by itself and decides its settled turns without the operator, within the configured limits: a continuation first, then a restart, then an eligible open ticket, one item at a time, the continuation asked before the pickup and the rest only into an empty queue (ADR 0051, with the step order ADR 0094 sets).
@@ -477,7 +483,7 @@ _Avoid_: follow-up, workflow advance
 The one automatic add the observation cycle makes to the Work queue: while Auto-handoff mode is on, a continuation, else a restart, else an eligible open pull request ticket, else an eligible fresh open ticket, else nothing (ADR 0051, ADR 0088). The continuation is asked before the Work queue's pickup and waits only behind a Workflow route row already standing - the factory's own continuation or the row the operator's own route decision left there alike (ADR 0094, ADR 0100, issue #230). The rank ADR 0100 gives the owed continuation is its place in the queue's order, and a row that already stands is never overtaken by a row that has not entered. The restart and open-ticket adds run after the pickup and only into an empty queue (ADR 0094).
 The pull request group stands ahead of the fresh group: the work the machine has started on a pull request moves to the end before the machine starts work on a ticket it has not started. The list's order holds inside each group, and a gate that holds one ticket holds that ticket only: the held ticket rests, and the walk falls to the next candidate, as every gate does.
 It adds one item per cycle, and only into an empty queue, so the queue never piles. A cycle that asked a continuation asks no fresh work, and the queue then holds at most one fresh-work row beside the continuation it outranks (ADR 0094, ADR 0100).
-A ticket whose newest start failed, or whose newest plane action blocked, holds the re-ask until every one of its active sources re-reads it: the Attempt hold (ADR 0077 as extended by ADR 0101).
+A ticket whose newest start failed, or whose newest plane action blocked, holds the re-ask until every one of its active sources re-reads it: the Attempt hold (ADR 0077 as extended by ADR 0101). A ticket whose starts keep failing holds it outright: the Failed-start park (ADR 0106).
 _Avoid_: refill, auto dispatch, queue feed
 
 **Queue pause**:
@@ -489,6 +495,7 @@ _Avoid_: dispatch pause, queue stop, brake
 **Handoff limit**:
 The per-ticket cap on the Handoff attempts and plane action attempts the factory made - the starts that reached an Agent and the starts that never reached one - that stops the close-and-rehandoff loop (ADR 0005 as amended by ADR 0101).
 It gates auto-handoff only; a manual handoff or a manual plane action confirm may pass it (ADR 0068).
+The Failed-start park arrives at half this cap, so a Ticket whose starts keep failing is held, and named, before the cap is reached (ADR 0106).
 _Avoid_: turn counter, dispatch budget
 
 **Dispatch pause**:

@@ -37,6 +37,7 @@ function ticket(state: TicketState, externalUpdatedAt = "2026-01-01T00:00:00Z"):
 		handoff: null,
 		workCycle: 1,
 		handoffCount: 0,
+		failedStartStreak: 0,
 		lastCompletion: null,
 		description: "",
 		sourceKind: "github-issue",

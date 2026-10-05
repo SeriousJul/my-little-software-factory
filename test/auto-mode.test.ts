@@ -1156,6 +1156,60 @@ describe("the Ticket Close key", () => {
 		app.state.close();
 	});
 
+	test("a Ticket whose Handoff starts keep failing names the park on its row and in its detail (issue #298)", async () => {
+		// The Failed-start park stands at half the Handoff limit: two failed starts at
+		// a limit of 4. The row and the detail have to say it, because the loop that
+		// stopped is a fact the operator has to be able to read off the screen.
+		const app = seededApp("open", { maxHandoffsPerTicket: 4 });
+		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+		for (let i = 0; i < 2; i += 1) {
+			const claim = app.state.handoff.claimHandoff(
+				identity,
+				{
+					agentType: "pi",
+					environment: "live-worktree",
+					taskType: "implement",
+					model: "",
+					thinking: "",
+					contextWindow: "",
+				},
+				"open",
+			);
+			if (!claim.ok) throw new Error(claim.reason);
+			app.state.handoff.settleHandoff(
+				claim.claim.attemptId,
+				false,
+				"Preparing worktree: the worktree path already exists",
+			);
+		}
+
+		await withApp(
+			async (setup) => {
+				app.src.settle(success);
+				const frame = await awaitFrame(
+					setup,
+					(f) => ticketRow(f).includes("failed starts"),
+					"the Failed-start park marker",
+				);
+				// The marker rides at the end of the list row, in the lane the Handoff
+				// limit's marker rides.
+				const row = frameText(ticketRow(frame).slice(0, Math.floor(WIDTH / 2))).trimEnd();
+				expect(row.endsWith("failed starts")).toBe(true);
+				// The detail states the run the marker cannot carry, and what the run
+				// holds, beside the count the Handoff limit reads.
+				const detail = detailPaneText(frame);
+				expect(detail).toContain("Handoff attempts: 2/4");
+				expect(detail).toContain(
+					"Handoff starts failing: 2 in a row; the Top-up adds no automatic start",
+				);
+			},
+			WIDTH,
+			HEIGHT,
+			propsOf(app),
+		);
+		app.state.close();
+	});
+
 	test("confirming an in-flight close ends the cycle with no trace and stops the Agent", async () => {
 		const app = seededApp("in-flight", {}, success, "worktree");
 		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
