@@ -108,6 +108,16 @@ is this issue's class in a new file, named on
 the second is #303. No check in this change set is claimed as passing on a run
 that did not pass.
 
+A fourth run, at load 11.81, went red once more, on
+`test/repository-select-panel.test.ts` at 10180.28 ms. Four consecutive full runs
+at load 6.35, 10.42, 11.13, and 11.81 each went red on a frame-deadline case, while
+the three runs recorded above as green all ran `bun test --parallel=4` on a 32-core
+machine, and `bun run test` passes no count and so spreads 137 files over about one
+worker per core. The class is therefore reachable on demand at the unit layer, and
+that is recorded on
+[issue #302](https://github.com/SeriousJul/my-little-software-factory/issues/302)
+as the reproduction its fix needs first.
+
 ## Two defects the run found, and fixed
 
 Both came from driving the hook through real refs instead of reading it.
