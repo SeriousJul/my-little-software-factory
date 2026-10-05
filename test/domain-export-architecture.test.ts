@@ -24,9 +24,14 @@
  *    is refused, and a name that no longer needs the list is refused too, so the
  *    list can only shrink. A type is a module's interface vocabulary, and the
  *    seams `docs/agents/shape.md` documents lean on it, so this class is held
- *    still rather than cleaned here. The 14 names measured on the branch that
- *    added the check are filed as issue #301, which states the three answers each
- *    one can get.
+ *    still rather than cleaned here. Issue #301 answered each of the 14 names the
+ *    branch that added the check measured, and the list stands empty: 13 are
+ *    reached through a value the plane calls, and the suite that drives that value
+ *    now names the type at the seam (the module map names the call site); one,
+ *    `UnreachedOutcome` in `attempt-hold.ts`, types a field of its own module's
+ *    record and is module-private now. A domain type neither side names is
+ *    therefore refused outright until it is read, made private, or written into
+ *    the list with its reason.
  *
  * The rule is a declared dependency rule, not a behavior test: what the operator
  * sees is checked by the flow suites.
@@ -45,28 +50,16 @@ const DOMAIN = "src/domain";
  * asks for by name. Each entry is the module and the name, and the list can only
  * shrink: a name that stops being unread fails the check until it is removed.
  *
- * These are the 14 measured on the branch that added the check. A caller can
- * hold one of these without naming it, because the value it reads carries the
- * shape, so an unread type name is not proof of a dead export the way an unread
- * value is. That is why this class is held still here and policed by the two
- * rules above instead.
+ * The list stands empty since issue #301 answered the 14 names the branch that
+ * added the check measured. It stays as the ratchet: a new domain type neither
+ * side names goes red until a reader asks for it by name, until the module keeps
+ * it privately, or until it is written here with the reason it is interface
+ * vocabulary and no reader. A caller can hold such a type without naming it,
+ * because the value it reads carries the shape, so an unread type name is not
+ * proof of a dead export the way an unread value is. That is why the list is the
+ * escape hatch and the two rules above stay the strict ones.
  */
-const UNREAD_TYPE_BASELINE: string[] = [
-	"src/domain/agent.ts :: AgentStatus (type)",
-	"src/domain/attempt-hold.ts :: UnreachedOutcome (type)",
-	"src/domain/decision-facts.ts :: DecisionFacts (interface)",
-	"src/domain/decision-facts.ts :: DecisionOffer (type)",
-	"src/domain/section-facts.ts :: SectionFacts (interface)",
-	"src/domain/ticket.ts :: TicketIgnoreFacts (interface)",
-	"src/domain/top-up.ts :: AutomaticAddFacts (interface)",
-	"src/domain/top-up.ts :: AutomaticBareHold (interface)",
-	"src/domain/top-up.ts :: AutomaticHoldReason (type)",
-	"src/domain/top-up.ts :: AutomaticRowHold (interface)",
-	"src/domain/top-up.ts :: AutomaticRowHoldReason (type)",
-	"src/domain/top-up.ts :: ContinuationRowFacts (interface)",
-	"src/domain/top-up.ts :: OpenTicketRowGate (type)",
-	"src/domain/top-up.ts :: OpenTicketWaitsFacts (interface)",
-];
+const UNREAD_TYPE_BASELINE: string[] = [];
 
 /** The value export kinds rule 1 polices. */
 const VALUE_KINDS = new Set(["const", "let", "var", "function", "class"]);
@@ -242,6 +235,9 @@ describe("a domain export is read, or it is not an export", () => {
 	});
 
 	test("the unread domain types stay the list the check already holds", () => {
+		// The list stands empty since issue #301, so this is the strict form of the
+		// ratchet: a domain type neither side names is refused, and a name written
+		// into the list that has a reader is refused the other way.
 		const unread: string[] = [];
 		for (const module of domainFiles) {
 			const { src, test, namespace } = readersOf(module);
@@ -274,6 +270,11 @@ describe("a domain export is read, or it is not an export", () => {
  *   rule 2 does not ask whether it has readers.
  * - Probe C, rule 3: add `export interface ABrandNewUnreadType { readonly a: 1 }`
  *   to any file under `src/domain/`. The ratchet case goes red with that one name
- *   added, and the only way it turns green is writing the name into
- *   `UNREAD_TYPE_BASELINE`, which is the point.
+ *   added to a list that stands empty, and the only way it turns green is writing
+ *   the name into `UNREAD_TYPE_BASELINE`, which is the point.
+ * - Probe D, rule 3 the other way: write
+ *   `"src/domain/top-up.ts :: AutomaticHold (interface)"` into
+ *   `UNREAD_TYPE_BASELINE`. `AutomaticHold` has readers, so the ratchet case goes
+ *   red with that one name on the list side and nothing on the unread side. The
+ *   list can only shrink, and a stale entry is refused with it.
  */

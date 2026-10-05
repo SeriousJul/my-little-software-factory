@@ -36,8 +36,13 @@
  * The outcome word that stands for an attempt that ran and never reached its
  * work: `failed` for a Handoff that started no Agent, `blocked` for a Plane
  * action the source refused.
+ *
+ * The name is module-private (issue #301): it types one field of
+ * `AttemptHoldFacts`, and each aggregate hands its own word as the literal the
+ * field names, so no reader asks for the name and the words stand in the
+ * comment above and in `AttemptHoldFacts`.
  */
-export type UnreachedOutcome = "failed" | "blocked";
+type UnreachedOutcome = "failed" | "blocked";
 
 /** The facts one attempt hold reads. */
 export interface AttemptHoldFacts {

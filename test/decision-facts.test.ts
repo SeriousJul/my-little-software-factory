@@ -9,6 +9,8 @@ import { describe, expect, test } from "bun:test";
 import type { TransitionOutcome } from "../src/config.ts";
 import {
 	type DecisionFactInputs,
+	type DecisionFacts,
+	type DecisionOffer,
 	type DecisionPosition,
 	decisionFacts,
 	routeStandingLine,
@@ -125,6 +127,21 @@ describe("the Decision region's facts", () => {
 			position: { ...positionOn(), isPlaneAction: true },
 		});
 		expect(facts.offer).toEqual({ kind: "merge", taskType: "review" });
+	});
+
+	test("the screen holds one record, and the row it offers is one of two kinds (issue #301)", () => {
+		// The App reads this record off `decisionFacts` and never names the type, so
+		// the record and its offer row are stated at the seam: the modal gets one
+		// record, and the row it offers is a handoff or a merge, never a third thing.
+		const facts: DecisionFacts = decisionFacts(decisionInputs());
+		expect(Object.keys(facts)).toEqual(["contextLine", "factLines", "offer"]);
+		const handoffOffer: DecisionOffer | null = facts.offer;
+		expect(handoffOffer).toEqual({ kind: "handoff", taskType: "review" });
+		const merged: DecisionOffer | null = decisionFacts({
+			...decisionInputs(),
+			position: { ...positionOn(), isPlaneAction: true },
+		}).offer;
+		expect(merged).toEqual({ kind: "merge", taskType: "review" });
 	});
 
 	test("a blocked merge stands where the row stood", () => {

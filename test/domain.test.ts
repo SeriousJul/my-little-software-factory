@@ -19,6 +19,7 @@ import {
 	handoffLimitReached,
 	sameTypeHoldHolds,
 	TICKET_STATES,
+	type TicketIgnoreFacts,
 	ticketListRank,
 } from "../src/domain/ticket.ts";
 
@@ -135,6 +136,31 @@ describe("the ticket state machine", () => {
 });
 
 describe("the automatic start gate (ADR 0060, widened by ADR 0070)", () => {
+	/**
+	 * The gate's own facts (issue #301). The observation loop hands the predicate a
+	 * projected row and the work-cycle aggregate and the App hand it a Ticket, and
+	 * none of them names the type, because the row carries the shape. The four
+	 * facts the gate reads are stated here instead.
+	 */
+	function ignoreFacts(over: Partial<TicketIgnoreFacts> = {}): TicketIgnoreFacts {
+		return { ignored: false, ignoredAt: null, muted: false, mutedAt: null, ...over };
+	}
+
+	test("the gate reads the four facts, and only the standing flags hold (issue #301)", () => {
+		const facts: TicketIgnoreFacts = ignoreFacts();
+		expect(Object.keys(facts)).toEqual(["ignored", "ignoredAt", "muted", "mutedAt"]);
+		expect(automaticStartBlocked(facts)).toBe(false);
+		expect(automaticStartBlocked(ignoreFacts({ ignored: true }))).toBe(true);
+		expect(automaticStartBlocked(ignoreFacts({ muted: true }))).toBe(true);
+		// The moment a flag was set never holds on its own: the flag does.
+		expect(automaticStartBlocked(ignoreFacts({ ignoredAt: "2026-01-02T00:00:00Z" }))).toBe(false);
+		expect(automaticStartBlocked(ignoreFacts({ mutedAt: "2026-01-02T00:00:00Z" }))).toBe(false);
+		// The row gate widens the same four facts with the row's own state.
+		expect(flagWithholdsRow({ ...ignoreFacts({ ignored: true }), state: "open" })).toBe(true);
+		expect(flagWithholdsRow({ ...ignoreFacts({ muted: true }), state: "open" })).toBe(true);
+		expect(flagWithholdsRow({ ...ignoreFacts({ ignored: true }), state: "running" })).toBe(false);
+	});
+
 	test("the Ticket's own flag or a muted source blocks the machine's start", () => {
 		// The Top-up walks ask this one predicate instead of restating the rule
 		// at their own sites (issue #202), so the gate is tested on its facts.

@@ -173,6 +173,21 @@ description: The module map of the source tree, for agents working in this repos
 	title in quotes, or the identity when the projection holds no row. The Handoff
 	dispatch, the observation cycle, the App's queue-removal line, and the boot each
 	had their own copy of the rule until issue #295 review; a suite refuses a fifth.
+	The types these modules answer reach their readers through the value that
+	carries them, and issue #301 names the call site of each so a reader can find
+	who holds the shape: `normalizeAgentStatus` answers `AgentStatus` to the
+	observation loop and the App; `decisionFacts` answers `DecisionFacts` and the
+	`DecisionOffer` row it carries to the App's Decision region; `sectionFacts`
+	answers `SectionFacts` to the App and the gallery; `automaticStartBlocked` reads
+	`TicketIgnoreFacts` off a projected row in the observation loop, and
+	`flagWithholdsRow` reads it off a Ticket in the work-cycle aggregate and the
+	App; and the observation loop's walk holds the top-up's fact records
+	(`AutomaticAddFacts`, `ContinuationRowFacts`, `OpenTicketWaitsFacts`), its
+	answers (`AutomaticHold` with its three members, and `OpenTicketRowGate`), and
+	the reason words those answers carry (`AutomaticHoldReason`,
+	`AutomaticRowHoldReason`). `attempt-hold.ts` keeps the word its own record's
+	field takes (`UnreachedOutcome`) to itself: each aggregate hands its own
+	literal, and no reader asks for the name.
 - `src/handoff.ts`: the handoff. One start call (`runHandoffStart`, kept private
 	to the module) behind the two start calls the plane has (issue #204,
 	ADR 0097): it runs the pre-flight in one order, resolves the repository, builds
@@ -285,8 +300,9 @@ description: The module map of the source tree, for agents working in this repos
 - `test/domain-export-architecture.test.ts`: the `src/domain/` interface held to
 	its readers. A domain value export neither `src` nor a test asks for is
 	refused, an export that is a pure alias of another export of its own module is
-	refused, and the types neither side names stand in a baseline that can only
-	shrink (ADR 0105).
+	refused, and a domain type neither side names is refused against a baseline
+	that can only shrink - the list stands empty since issue #301 answered the 14
+	names it was written with (ADR 0105).
 - `src/components/`: the app shell, the ticket list pane, the ticket detail
 	pane, the native ticket detail viewport, the override panel, the decision
 	and missing modals, the turn log and markdown rendering, the shared
