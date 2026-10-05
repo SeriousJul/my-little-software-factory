@@ -181,7 +181,12 @@ description: The module map of the source tree, for agents working in this repos
 		level clears the record's branch row on the strength of that fact - the
 		open writes into no other step's record - so a failed start keeps the
 		branch and its draft for the next start's reuse (issue #296) and the open
-		owns no cleanup of its own.
+		owns no cleanup of its own. A raise after the push is answered inside the
+		open, or inside the prompt step, and carries that handover, so no raise
+		reaches the outer guard with the branch row still standing. The worktree
+		builder asks origin whether the branch stands before it builds one, and
+		fetches the copy it finds: the remote copy stands on its own once a start
+		hands it over.
 	`handoffReportLines` is this module's wording of a start's end: the one order
 	the Message line takes for every report of one, the Handoff dispatch's and the
 	Consultation's alike (ADR 0103).

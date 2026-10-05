@@ -61,14 +61,24 @@ The pull request open hands the branch over. Once the plane's push lands the
 factory branch on the remote, the branch and the draft pull request it carries
 belong to the ticket and not to the start: a start that fails after that push
 removes its herdr environment and nothing else - no draft close, no remote
-branch delete, no local branch delete. Your next handoff of that ticket reopens
-the worktree on the branch that stands and reuses the pull request the branch
-already carries, so a ticket wears at most one Fixing pull request across any
-number of failed starts. Before the push the branch never stood on the remote,
-and the start still removes the local branch it created. The create's retry
-window is a failure after the push: a draft create that never clears the fresh
-branch's lag leaves the branch standing on both sides with no pull request on
-it, and your next handoff opens the first draft on it.
+branch delete, no local branch delete. A command that raises is answered the way
+a refusal is, and a raise after the push carries the same handover. Your next
+handoff of that ticket reopens the worktree on the branch that stands and reuses
+the pull request the branch already carries, so a ticket wears at most one Fixing
+pull request across any number of failed starts. Before the push the branch never
+stood on the remote, and the start still removes the local branch it created. The
+create's retry window is a failure after the push: a draft create that never
+clears the fresh branch's lag leaves the branch standing on both sides with no
+pull request on it, and your next handoff opens the first draft on it.
+
+The branch on the remote is the standing branch. When the checkout no longer
+carries it - you pruned local branches, or a fresh clone carries none - the next
+handoff asks origin, fetches the branch it finds there, and reuses it, instead of
+building a fresh branch whose push the remote would refuse every time. And
+because every failed start removes its checkout and keeps its branch, the retry
+is the start that can meet the directory the removed checkout left behind with a
+build cache in it: the plane moves that leftover aside under a `.leftover` name
+and creates again (ADR 0062).
 
 The standing draft does not hide the ticket. The covered rule that withholds a
 ticket behind its Fixing pull request reads only the rows your sources fetched,

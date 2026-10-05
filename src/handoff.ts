@@ -94,6 +94,7 @@ import {
 } from "./naming.ts";
 import {
 	listOpenPullRequestsByHeadBranch,
+	type OpenPullRequestRecord,
 	openDraftPullRequest,
 	pullRequestBodyFor,
 } from "./pull-request.ts";
@@ -1497,7 +1498,9 @@ async function localHeadBase(
  * the branch or HEAD: the branch is the branch, and herdr's `worktree open` owns
  * it. Otherwise the branch is checked in the checkout first. An existing branch
  * follows the request's branch policy - reused, or refused - and the reuse takes
- * no fetch. A missing branch is created from the worktree base (see
+ * no fetch. A branch the checkout does not carry is then checked on origin, and a
+ * remote copy standing there is fetched and reused (see `remoteBranchStands`).
+ * Only a branch neither copy carries is created from the worktree base (see
  * freshWorktreeBase).
  */
 async function buildWorktreeEnvironment(
@@ -1529,6 +1532,28 @@ async function buildWorktreeEnvironment(
 			return { outcome: failed(`Consultation branch already exists: ${branch}`, ctx) };
 		return reuseBranch(ctx, branch, residue);
 	}
+	// No local copy, but the remote copy may stand: a failed start leaves the
+	// branch on the remote under its draft (issue #296), an operator prunes local
+	// branches, and a fresh clone carries none. A branch built from the Worktree
+	// base would then push against the remote copy's hold commit, every retry
+	// would meet the same refusal, and the Handoff limit would spend on it. The
+	// remote copy is the standing branch: the start fetches its local copy and
+	// takes the reuse path, so the branch is never built twice.
+	if (request.branch.policy === "reuse" && (await remoteBranchStands(checkout, branch, ctx))) {
+		const fetched = await ctx.runner.run(
+			"git",
+			["-C", checkout, "fetch", "origin", `${branch}:refs/heads/${branch}`],
+			{ env: { GIT_TERMINAL_PROMPT: "0" } },
+		);
+		if (fetched.code !== 0)
+			return {
+				outcome: failed(
+					`the standing remote branch ${branch} could not be fetched: ${commandFailureText(fetched)}`,
+					ctx,
+				),
+			};
+		return reuseBranch(ctx, branch, residue);
+	}
 	const base = await freshWorktreeBase(checkout, ctx.runner);
 	if ("fail" in base) return { outcome: failed(base.fail, ctx) };
 	if (base.note !== undefined) ctx.notes = { ...ctx.notes, worktreeBase: base.note };
@@ -1544,6 +1569,29 @@ async function buildWorktreeEnvironment(
 		"--no-focus",
 	]);
 	return createdWorktreeAnswer(created, ctx, branch, true, residue);
+}
+
+/**
+ * Whether origin carries one branch by name.
+ *
+ * The read is the branch check the local one cannot make: the remote copy stands
+ * on its own once a failed start hands it over (issue #296). A read that does not
+ * answer - no origin, no network, an unreadable answer - says nothing, and the
+ * fresh-branch path stays the path the plane took before the standing remote copy
+ * was a case: the open's own read of the same branch answers the outage with its
+ * reason, and no start is refused for a check that could not run.
+ */
+async function remoteBranchStands(
+	checkout: string,
+	branch: string,
+	ctx: HandoffContext,
+): Promise<boolean> {
+	const listed = await ctx.runner.run(
+		"git",
+		["-C", checkout, "ls-remote", "--heads", "origin", branch],
+		{ env: { GIT_TERMINAL_PROMPT: "0" } },
+	);
+	return listed.code === 0 && listed.stdout.trim() !== "";
 }
 
 /**
@@ -2065,12 +2113,26 @@ async function runPullRequestOpen(
 	// one and the next Handoff's branch check finds the branch and opens the
 	// worktree on it instead of building a fresh one the remote then refuses.
 	const handedOver = true as const;
-	const records = await listOpenPullRequestsByHeadBranch(
-		ctx.runner,
-		plan.source,
-		plan.ticket.repositoryRef,
-		plan.branch,
-	);
+	// The source reads answer a raise with their own reason, but the read of a
+	// source's authentication stands outside those guards, and a CommandRunner
+	// adapter is free to raise (see `raisedDuringStart`). A raise here is a
+	// failure the answer carries: the push already landed, so it carries the
+	// handover too, and the start keeps the local copy of the branch beside the
+	// remote one the next Handoff reuses.
+	let records: OpenPullRequestRecord[] | { fail: string };
+	try {
+		records = await listOpenPullRequestsByHeadBranch(
+			ctx.runner,
+			plan.source,
+			plan.ticket.repositoryRef,
+			plan.branch,
+		);
+	} catch (error) {
+		return {
+			fail: `the pull request open could not read the branch's pull requests: ${errorMessage(error)}`,
+			branchHandedOver: handedOver,
+		};
+	}
 	if ("fail" in records)
 		return {
 			fail: `the pull request open could not read the branch's pull requests: ${records.fail}`,
@@ -2079,14 +2141,22 @@ async function runPullRequestOpen(
 	const standing = records[0];
 	if (standing !== undefined)
 		return { url: standing.url, number: standing.number, branchHandedOver: handedOver };
-	const opened = await openDraftPullRequest(
-		ctx.runner,
-		plan.source,
-		plan.ticket.repositoryRef,
-		plan.branch,
-		plan.ticket.title,
-		pullRequestBodyFor(plan.ticket),
-	);
+	let opened: { number: number; url: string } | { fail: string };
+	try {
+		opened = await openDraftPullRequest(
+			ctx.runner,
+			plan.source,
+			plan.ticket.repositoryRef,
+			plan.branch,
+			plan.ticket.title,
+			pullRequestBodyFor(plan.ticket),
+		);
+	} catch (error) {
+		return {
+			fail: `the pull request open could not open the draft pull request: ${errorMessage(error)}`,
+			branchHandedOver: handedOver,
+		};
+	}
 	if ("fail" in opened)
 		return {
 			fail: `the pull request open could not open the draft pull request: ${opened.fail}`,
@@ -2118,7 +2188,21 @@ async function promptBeforeAgent(
 		};
 	const opened = await runPullRequestOpen(ctx, plan);
 	if ("fail" in opened) return { fail: opened.fail, branchHandedOver: opened.branchHandedOver };
-	return { text: await prompt(opened.url), branchHandedOver: opened.branchHandedOver };
+	// The render is a caller's callback, and a callback is free to raise. The
+	// handover is the open's fact, and it holds whatever the render then does: a
+	// raise becomes the failure this step answers, still carrying the handover, so
+	// the start never removes the local copy of a branch the remote already
+	// carries. A raise allowed to escape to `raisedDuringStart` would leave the
+	// remote branch and the draft standing over a checkout with no branch, and
+	// every retry would meet the push that cannot land (issue #296 review).
+	try {
+		return { text: await prompt(opened.url), branchHandedOver: opened.branchHandedOver };
+	} catch (error) {
+		return {
+			fail: `the handoff prompt raised: ${errorMessage(error)}`,
+			branchHandedOver: opened.branchHandedOver,
+		};
+	}
 }
 
 /**

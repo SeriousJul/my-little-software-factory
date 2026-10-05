@@ -116,6 +116,32 @@ worktree reopens on a branch that stands, and the open reads the branch's own
 pull requests before it creates - reaches that work for free once the failed
 start stops tearing it down.
 
+**The standing branch is the branch on the remote.** The reuse path reads the
+checkout's branch list, and the rule above lets the remote copy stand on its
+own, so the two copies can come apart: an operator prunes local branches, a
+fresh clone carries none, a second machine starts with nothing. A ticket branch
+the checkout does not carry is therefore checked on origin before it is built.
+When origin carries it, the start fetches that copy into a local branch and
+takes the reuse path: the branch is never built twice, and the push never meets
+the non-fast-forward refusal every retry would answer the same way until the
+Handoff limit of ADR 0101 spends. A remote read that does not answer - no
+origin, no network - says nothing, and the fresh-branch path stays the path it
+was.
+
+**The handover holds whatever comes after the push.** The handover is the open's
+own fact: its answer carries it, and the start level applies it. A CommandRunner
+adapter is free to raise, and a source's authentication read stands outside the
+raise guards the source reads keep; the open answers such a raise as the failure
+it is, and so does the prompt render a caller supplies. Either answer carries the
+handover once the push landed, so no start removes the local copy of a branch the
+remote already carries.
+
+**The retry runs on the leftover worktree directory.** Every failed start removes
+its checkout and keeps its branch, so the retry's create is the one that can meet
+the directory the removed checkout left behind with a build cache in it. The
+recovery of ADR 0062 - move the leftover aside under a name that says what it is,
+then create again - stands on the mainline reuse path, not only beside it.
+
 **The standing draft does not rest the ticket.** A draft left on the branch
 can hide its ticket only by entering the projection, because the covered rule
 of ADR 0042 reads the projection and nothing else. The default Pull request
