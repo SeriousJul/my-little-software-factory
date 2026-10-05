@@ -10,7 +10,11 @@ they hold a document's claim, a probe's reproducibility, and a report's numbers,
 and only a review measures those. A first round of that review ran on the change
 set itself and is recorded below; it is self-review, and the row that says so
 stands incomplete. The findings the round and the flake investigation produced are
-filed as issues #301, #302, #303, and #304.
+filed as issues #301, #302, #303, and #304, and the rework round of
+[pull request #310](https://github.com/SeriousJul/my-little-software-factory/pull/310)
+filed two more from its own gate runs:
+[#311](https://github.com/SeriousJul/my-little-software-factory/issues/311) and
+[#312](https://github.com/SeriousJul/my-little-software-factory/issues/312).
 
 This record states what was measured, on what, and what was not measured. A
 check that could not run is recorded as incomplete. It is not a pass, and it is
@@ -359,17 +363,42 @@ pass, and the contract now has a test that fails when it does.
 event away from every surface and hands back the key that puts it back. The
 passes the app's own updates cause still paint, and the harness's waits read the
 painted buffer, so the screen keeps working; what is gone is any way for a
-surface to be woken by a pass. A new case, `test/main-view-frame.test.ts` - "the
-Ticket detail resumes at its offset with no render pass to wait on" - walks the
-same cross-section round trip the existing scroll test walks, with the event
-held back for the whole round trip.
+surface to be woken by a pass.
+
+The hold also proves its own reach. The renderer announces a pass only behind its
+own `listenerCount("frame") > 0` guard, so a fixed restore that registers no
+listener leaves the event unannounced, and a hold that swallowed nothing would
+look exactly like one that worked. The harness keeps one listener of its own to
+hold that guard open, counts the announcements it intercepts, and counts the ones
+that reach its listener anyway; the key refuses to hand the event back on an
+empty count, and refuses a hold that leaked.
+
+A new case, `test/main-view-frame.test.ts` - "the Ticket detail resumes at its
+offset while no surface can be woken by a frame" - walks the same cross-section
+round trip the existing scroll test walks, with the event held back for the whole
+round trip. One walk helper takes the withhold flag, so the two cases cannot
+drift apart, and the three probes below stand in its header as steps a reviewer
+can re-run.
 
 | State | Result |
 | --- | --- |
-| The new case on the tree before the fix | Red at 11058.77 ms, the local 10000 ms `FRAME_DEADLINE_MS`. The harness's dump came back fully painted with the detail at its top and its thumb on the first row of its track: the same shape the four remote misses printed at 20155 to 21088 ms |
-| The same case with the fix | Green at 1254.02 ms |
-| `test/main-view-frame.test.ts`, `test/ticket-scroll-frame.test.ts`, `test/ticket-detail.test.ts` | 42 pass / 0 fail in 12.14 s |
-| `test/consultation-frame.test.ts`, `test/repository-select-panel.test.ts` | 71 pass / 0 fail in 23.55 s |
+| Probe A, the retired wait put back: `restore();` replaced by `renderer.once("frame", restore);` in the restore effect | 1 record red at 11031.14 ms, the local 10000 ms `FRAME_DEADLINE_MS`, with the other 24 in the file green. The harness's dump came back fully painted with the detail at its top and its thumb on the first row of its track: the same shape the four remote misses printed at 20155 to 21088 ms. The older round-trip case stays green, which is why only the withheld case pins the contract |
+| The same case with the fix | Green at 1252.89 ms, with the round-trip case beside it at 1284.32 ms |
+| Probe B, the harness's own `frame` listener deleted | 1 record red at 1018.41 ms on the hold's swallowed-count line, 24 green: with no listener of the harness's own the renderer announces nothing, so the hold proves nothing and says so |
+| Probe C, the wrapper handing the event to the real `emit` | 1 record red at 1021.80 ms on the hold's leaked-count line, 24 green: the witness was woken by a pass, so the hold did not hold |
+
+Each probe ran on the tree that landed as `d1b55a00`, with `bun test
+test/main-view-frame.test.ts --isolate --timeout=30000`, and was reverted; a
+`diff` against a copy taken before the probe showed both files byte-identical
+afterwards.
+
+| Scoped run | Result |
+| --- | --- |
+| `test/main-view-frame.test.ts`, `test/ticket-scroll-frame.test.ts`, `test/ticket-detail.test.ts` | 42 pass / 0 fail in 12.21 s |
+| `test/consultation-frame.test.ts`, `test/repository-select-panel.test.ts` | 71 pass / 0 fail in 23.56 s |
+
+These are scoped runs, not the full suite. What the full suite adds is recorded in
+the two tables below.
 
 ### What the fix holds
 
@@ -388,31 +417,46 @@ answers zero" would do on a detail whose body fits the viewport.
 | How to hold "no later repaint available" in a test | The frame event is withheld rather than the render loop stopped. Stopping the loop (`renderer.pause()`) leaves the painted buffer stale, so the assertion could only read the scroll box's own `scrollTop` and could not say what the operator sees. With the event withheld the screen is still the fact under test, and a restore that waits for a pass still cannot run |
 
 Both branches of the restore are live in the app, read by a temporary
-`console.log` probe on the effect that was reverted after the run: at the
-cross-section remount the box answers `scrollHeight=52 viewport=22`, so the
-restore runs on the spot; at the remount back from below the minimum size it
-answers `scrollHeight=0 viewport=0`, so the pane asks for the pass and the
-following pass lands the offset. `test/ticket-scroll-frame.test.ts` - "restores
-the detail offset across a round-trip resize below the minimum size" and
-"resets a new Ticket, preserves same-Ticket refresh offsets, clamps, and
-survives resize" - are the cases that cover the ask path.
+`console.log` probe on the effect in the first round of this branch, reverted
+after the run: at the cross-section remount the box answers
+`scrollHeight=52 viewport=22`, so the restore runs on the spot; at the remount
+back from below the minimum size it answers `scrollHeight=0 viewport=0`, so the
+pane asks for the pass and the following pass lands the offset.
+`test/ticket-scroll-frame.test.ts` - "restores the detail offset across a
+round-trip resize below the minimum size" and "resets a new Ticket, preserves
+same-Ticket refresh offsets, clamps, and survives resize" - are the cases that
+cover the ask path.
 
 ### The gate on this branch
 
-The branch was level with `origin/main` at `dab44a0d` before the run.
+The branch was level with `origin/main` at `dab44a0d` before the runs.
 
 | Check | Result |
 | --- | --- |
-| `bun run lint` | clean over 304 files (132 ms) |
-| `bun run typecheck` | clean (2.88 s) |
-| `bun run docs:build` | complete in 1.59 s, because the branch touches `docs/` |
-| `bun run test` | Two full runs on the branch, both green: 3,021 pass / 0 fail across 138 files in 41.02 s (16,014 `expect()` calls) at load average 9.37 before and 5.91 after, on the tree one docs commit short of the head; then the same 3,021 pass / 0 fail in 41.47 s (16,934 `expect()` calls) at load 6.25 after, on `b8c375bc`. The only change after both runs is this record's own wording of the row. The `expect()` count moves between runs on the timing-read assertions the records already name. No other `bun test` process ran on this machine: the one match was the check's own command line |
+| `bun run lint` | clean over 304 files (129 ms) |
+| `bun run typecheck` | clean (`tsc`, no output) |
+| `bun run docs:build` | complete in 1.67 s, because the branch touches `docs/` |
+| `bun run test` | Run 1 on `d1b55a00`: 3018 pass / 3 fail in 42.57 s (15,052 `expect()` calls) at load average 6.82 before and 6.79 after. Run 2 on the same head: 3020 pass / 1 fail in 42.74 s (15,055 `expect()`) at load 10.54 before and 10.68 after. Every red is named as a load flake in the table below and filed; none sits in a file this branch's production diff touches. Machine: 32 CPUs, and the one `bun test` process check before the runs answered only the check's own command line |
+| The base run, for pre-existence | `dab44a0d` checked out inside this same worktree, one full `bun run test` at load 11.04 before and 10.59 after: 3019 pass / 1 fail in 41.96 s (16,049 `expect()`), its one red the screenshot fixture, [issue #303](https://github.com/SeriousJul/my-little-software-factory/issues/303). That settles that a loaded runner turns some red per run on both trees; it does not settle which miss pre-exists which fix |
+
+### The full-suite reds this branch produced, and where each is filed
+
+The standing triage rule records a file that goes red in the full suite and green
+alone as a load flake. Each file below was run alone in this worktree, and each
+red is filed.
+
+| Case | The miss | Alone | Filed |
+| --- | --- | --- | --- |
+| `test/repository-select-panel.test.ts` - Esc closes the list and keeps the base frame | 10479.56 ms in run 1, the local `FRAME_DEADLINE_MS`. The #310 review reproduced the same case at 10412.69 ms on `b08745fa`, and remote run 37159675095 printed it at 20155 ms | 13 pass / 0 fail in 1.90 s | [issue #311](https://github.com/SeriousJul/my-little-software-factory/issues/311), the frame-deadline class that survives the #302 fix |
+| `test/executable-fields.test.ts` - refuses a non-digit paste in the Context window row and states why | 10007.09 ms in run 1, at the pseudo-terminal rig's own waits (12000 ms and 8000 ms), not at `FRAME_DEADLINE_MS`; which wait missed was not captured | 4 pass / 0 fail in 5.80 s | named in [#311](https://github.com/SeriousJul/my-little-software-factory/issues/311) as the other miss of the same run |
+| `test/decision-modal.test.ts` - no content ever reaches the terminal's edge while the box grows | red in 2 of 2 full runs on `d1b55a00`, at 505.66 ms and 401.24 ms, on "the modal never rendered during the burst; the pop-in window was missed": the check samples a 300 ms wall-clock window and caught no pop-in frame | 12 pass / 0 fail in 3.99 s | [issue #312](https://github.com/SeriousJul/my-little-software-factory/issues/312), the wall-clock window |
+| `test/screenshot-drift.test.ts` - the guide screenshots | 891.35 ms in the base run at `dab44a0d` | not run alone there | [issue #303](https://github.com/SeriousJul/my-little-software-factory/issues/303) stands |
 
 ### What this branch did not measure
 
 | Item | State |
 | --- | --- |
-| Whether the other three remote misses share this mechanism | Not measured. `src/components/ticket-detail.ts` is the only surface under `src/` that reads the renderer's `frame` event, so the mechanism measured here cannot be what `test/consultation-frame.test.ts` - a live checkout conflict blocks the launch until one explicit confirm - and `test/repository-select-panel.test.ts` - Esc closes the list and keeps the base frame - miss on. Both files are green run together here, as they were green alone before the fix |
+| Whether the other three remote misses share this mechanism | Not measured. `src/components/ticket-detail.ts` is the only surface under `src/` that reads the renderer's `frame` event, so the mechanism measured here cannot be what `test/consultation-frame.test.ts` - a live checkout conflict blocks the launch until one explicit confirm - and `test/repository-select-panel.test.ts` - Esc closes the list and keeps the base frame - miss on. The pair is green run together here (71 pass / 0 fail in 23.56 s), and that is a scoped run, not the full suite: the panel case did go red inside a full suite on this head, at 10479.56 ms. The class that survives this fix now stands filed as [issue #311](https://github.com/SeriousJul/my-little-software-factory/issues/311) instead of staying open under #302 |
 | The ordering flip that let a remote run miss at all | Still not pinned. The two probes the section above record stayed green, and this branch does not reproduce the miss; it removes the wait that made the miss a 20-second failure instead of a repaint the next key would have hidden. What is pinned is the contract: no surface can bring the offset back by waiting |
 | The live terminal walk, the screen-reader path, and the theme inheritance inside a real herdr | Open, unchanged, as [the shared control record](./shared-controls.md) states |
 
@@ -424,5 +468,5 @@ The branch was level with `origin/main` at `dab44a0d` before the run.
 | The hook installed in the operator's checkout | Passed. `git config core.hooksPath scripts/git-hooks` is set in this checkout, and the push above is the proof it is live. The setup line stays a documented step on [the commands page](../development/commands.md) for every other checkout |
 | The doc-claim rule, the rename sweep, the documented-line rule, the probe rule, the determinism rule, the fake-fidelity rule, the file-the-defect rule, the failure-mode sweep, and the reporting rules | First measured by the self-review round above, on `b3b5fc38`: the probe rule, the rename sweep, the determinism rule, the file-the-defect rule, and the doc-claim rule each produced a result there, and the doc-claim rule found the stale cost numbers. What stays incomplete is the round's value: every commit was written by the agent that wrote the rules, so this is self-review, and a round on a pull request from a different author is the first independent measurement |
 | The 14 domain types in `UNREAD_TYPE_BASELINE` | Answered on 2026-10-05 in [the section above](#issue-301-the-14-unread-domain-types-2026-10-05): each name took one of [issue #301](https://github.com/SeriousJul/my-little-software-factory/issues/301)'s three answers and the baseline stands empty. What stays unmeasured is whether any of them is dead, which the check still cannot see, and it is recorded in that section |
-| The CI load flake on the frame tests | Investigated on 2026-10-05 and filed as [issue #302](https://github.com/SeriousJul/my-little-software-factory/issues/302): four remote frame-deadline misses, the mechanism measured, no local reproduction, and no fix shipped on that evidence. The scroll half of it is answered on 2026-10-05 in [the section above](#issue-302-the-details-scroll-restore-waits-for-a-pass-the-plane-does-not-owe-2026-10-05-the-fix); what stays open there is whether the other three named misses share the mechanism, which this branch records as not measured. The older records in [the shared control record](./shared-controls.md) and the pull request records stand |
+| The CI load flake on the frame tests | Investigated on 2026-10-05 and filed as [issue #302](https://github.com/SeriousJul/my-little-software-factory/issues/302): four remote frame-deadline misses, the mechanism measured, no local reproduction, and no fix shipped on that evidence. The scroll half of it is answered on 2026-10-05 in [the section above](#issue-302-the-details-scroll-restore-waits-for-a-pass-the-plane-does-not-owe-2026-10-05-the-fix). What stays open is the rest of the class: the other three named misses do not share the mechanism, and the deadline miss itself still reproduces in a full suite on this branch, which is filed on 2026-10-05 as [issue #311](https://github.com/SeriousJul/my-little-software-factory/issues/311) with its reproductions in that section. The older records in [the shared control record](./shared-controls.md) and the pull request records stand |
 | The live terminal walk, the screen-reader path, and the theme inheritance inside a real herdr | Open, as [the shared control record](./shared-controls.md) states. The gate is a claim about the automated checks and the tree they ran on, and it extends no further |
