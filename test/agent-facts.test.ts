@@ -30,19 +30,16 @@ describe("normalizeAgentStatus", () => {
 		expect(normalizeAgentStatus("meditating")).toBe("unknown");
 	});
 
-	test("the status set the plane holds is closed, and every word answers itself (issue #301)", () => {
+	test("the status set the plane holds is closed, and no two words answer alike (issue #301)", () => {
 		// The observation loop and the App hold this shape through the answer of
-		// `normalizeAgentStatus` and never name the type, so the set is stated at
-		// the seam: each word the poll can answer is its own answer, no two words
-		// land on one, and a word outside the set falls back rather than joining it.
+		// `normalizeAgentStatus` and never name the type, so the set the plane holds
+		// is written down here: the words the poll can answer, and no two of them
+		// land on one answer. Each word's own mapping, and the fallback for a word
+		// outside the set, stand in the test above and are not restated.
 		const statuses: readonly AgentStatus[] = ["working", "done", "idle", "blocked", "unknown"];
-		for (const status of statuses) {
-			expect(normalizeAgentStatus(status)).toBe(status);
-		}
 		expect(new Set(statuses.map((status) => normalizeAgentStatus(status))).size).toBe(
 			statuses.length,
 		);
-		expect(normalizeAgentStatus("meditating")).toBe("unknown");
 	});
 });
 

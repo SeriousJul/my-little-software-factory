@@ -129,19 +129,18 @@ describe("the Decision region's facts", () => {
 		expect(facts.offer).toEqual({ kind: "merge", taskType: "review" });
 	});
 
-	test("the screen holds one record, and the row it offers is one of two kinds (issue #301)", () => {
-		// The App reads this record off `decisionFacts` and never names the type, so
+	test("the screen holds one record, and its offer row is one of two kinds (issue #301)", () => {
+		// The App reads this record off `decisionFacts` and never names the types, so
 		// the record and its offer row are stated at the seam: the modal gets one
-		// record, and the row it offers is a handoff or a merge, never a third thing.
+		// record, and the row it offers carries a kind of the two the modal can act
+		// on, never a third. Which offer each position gets is pinned by the tests
+		// above and is not restated here.
 		const facts: DecisionFacts = decisionFacts(decisionInputs());
-		expect(Object.keys(facts)).toEqual(["contextLine", "factLines", "offer"]);
-		const handoffOffer: DecisionOffer | null = facts.offer;
-		expect(handoffOffer).toEqual({ kind: "handoff", taskType: "review" });
-		const merged: DecisionOffer | null = decisionFacts({
-			...decisionInputs(),
-			position: { ...positionOn(), isPlaneAction: true },
-		}).offer;
-		expect(merged).toEqual({ kind: "merge", taskType: "review" });
+		expect(Object.keys(facts).sort()).toEqual(["contextLine", "factLines", "offer"]);
+		const offer: DecisionOffer | null = facts.offer;
+		const kinds: readonly DecisionOffer["kind"][] = ["handoff", "merge"];
+		expect(offer).not.toBeNull();
+		expect(offer === null ? null : kinds.includes(offer.kind)).toBe(true);
 	});
 
 	test("a blocked merge stands where the row stood", () => {

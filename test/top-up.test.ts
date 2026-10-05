@@ -107,7 +107,7 @@ describe("the gates every automatic add reads (ADR 0051, ADR 0052, ADR 0016)", (
 
 	test("the gates read their own record, and their hold names no row (issue #301)", () => {
 		const facts: AutomaticAddFacts = adds();
-		expect(Object.keys(facts)).toEqual(["modeOn", "queuePaused", "dispatchPauseActive"]);
+		expect(Object.keys(facts).sort()).toEqual(["dispatchPauseActive", "modeOn", "queuePaused"]);
 		expect(automaticAddsHold(facts)).toBeNull();
 		// Where one of these gates stands the walk has picked no candidate and knows
 		// no row, so the hold it states carries neither (issue #223).
@@ -287,13 +287,23 @@ describe("the row a continuation must not jump (ADR 0051, ADR 0094, ADR 0100, is
 		// by the row they carry, never by the member's name, so the row hold's own
 		// shape is stated here: its reason, and the identity of the row the walk
 		// waits behind.
-		const held = continuationHold([queueRow()]);
-		if (held === null || held.row === undefined) {
-			throw new Error("a standing Workflow route row holds the add out");
-		}
-		const rowHold: AutomaticRowHold = held;
-		expect(rowHold).toEqual({ reason: "continuation-standing", row: "I_6" });
+		const rowHold: AutomaticRowHold = { reason: "continuation-standing", row: "I_6" };
+		expect(continuationHold([queueRow()])).toEqual(rowHold);
 		expect(automaticHoldKey(rowHold)).toBe("continuation-standing I_6");
+	});
+
+	test("the pace gate answers each row-hold word, and no word outside the set (issue #301)", () => {
+		// The pace gate is the only writer of a row hold's reason, so the word set is
+		// pinned where it is answered and not only written down: the factory's
+		// staging answers the continuation word and the operator's staging the row
+		// word, the two answers are the whole set, and each word has its own line.
+		const rowReasons: readonly AutomaticRowHoldReason[] = AUTOMATIC_ROW_HOLD_REASONS;
+		const answers = [true, false].map((automatic) => continuationHold([queueRow({ automatic })]));
+		expect(answers.map((hold) => hold?.reason).sort()).toEqual([...rowReasons].sort());
+		for (const hold of answers) expect(hold?.row).toBe("I_6");
+		expect(new Set(rowReasons.map((reason) => AUTOMATIC_HOLD_LINES[reason])).size).toBe(
+			rowReasons.length,
+		);
 	});
 
 	test("an empty queue, or a queue of fresh work alone, holds nothing", () => {
@@ -394,10 +404,9 @@ describe("the top-up's open-ticket row gate (ADR 0051, ADR 0060, ADR 0027)", () 
 		// two branches are stated here, and the task is readable only on the one that
 		// stands.
 		const stands: OpenTicketRowGate = openTicketRowGate(row());
-		if (!stands.stands) throw new Error("every row fact is clear");
-		expect(stands.taskType).toBe("implement");
+		expect(stands).toEqual({ stands: true, taskType: "implement" });
 		const held: OpenTicketRowGate = openTicketRowGate(row({ actionable: false }));
-		expect(held.stands).toBe(false);
+		expect(held).toEqual({ stands: false });
 		expect("taskType" in held).toBe(false);
 	});
 });
@@ -414,10 +423,10 @@ describe("the top-up's open-ticket waits (ADR 0051, ADR 0026)", () => {
 
 	test("a re-verified ticket with the hold clear and no item stands", () => {
 		const facts: OpenTicketWaitsFacts = waits();
-		expect(Object.keys(facts)).toEqual([
-			"sourceReverified",
-			"sameTypeHoldActive",
+		expect(Object.keys(facts).sort()).toEqual([
 			"queueItemStands",
+			"sameTypeHoldActive",
+			"sourceReverified",
 		]);
 		expect(openTicketWaitsHold(facts)).toBe(true);
 	});

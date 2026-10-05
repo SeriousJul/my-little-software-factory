@@ -194,17 +194,17 @@ describe("the record the three headers paint", () => {
 		// each with the counts its header paints, and no header reaches past the
 		// record for a count of its own.
 		const counts: SectionFacts = sectionFacts(inputs({ tickets: [ticket("open")] }));
-		expect(Object.keys(counts)).toEqual(["ticket", "consultation", "work"]);
-		expect(Object.keys(counts.ticket)).toEqual([
-			"ignored",
-			"muted",
-			"open",
-			"inFlight",
+		expect(Object.keys(counts).sort()).toEqual(["consultation", "ticket", "work"]);
+		expect(Object.keys(counts.ticket).sort()).toEqual([
 			"awaiting",
 			"held",
+			"ignored",
+			"inFlight",
+			"muted",
+			"open",
 		]);
-		expect(Object.keys(counts.consultation)).toEqual(["awaitingResponse", "recovery"]);
-		expect(Object.keys(counts.work)).toEqual(["waiting"]);
+		expect(Object.keys(counts.consultation).sort()).toEqual(["awaitingResponse", "recovery"]);
+		expect(Object.keys(counts.work).sort()).toEqual(["waiting"]);
 	});
 });
 

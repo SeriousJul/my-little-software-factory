@@ -31,7 +31,9 @@
  *    `UnreachedOutcome` in `attempt-hold.ts`, types a field of its own module's
  *    record and is module-private now. A domain type neither side names is
  *    therefore refused outright until it is read, made private, or written into
- *    the list with its reason.
+ *    the list with the reason it stays exported. Each entry carries that reason
+ *    as a field the check reads, so an entry without one is refused too: the
+ *    reason is not a comment left for a reviewer to catch.
  *
  * The rule is a declared dependency rule, not a behavior test: what the operator
  * sees is checked by the flow suites.
@@ -47,19 +49,20 @@ const DOMAIN = "src/domain";
 
 /**
  * A type or interface export in `src/domain/**` that neither `src/` nor `test/`
- * asks for by name. Each entry is the module and the name, and the list can only
- * shrink: a name that stops being unread fails the check until it is removed.
+ * asks for by name. Each entry carries the name and the reason it stays
+ * exported with no reader, and the list can only shrink: a name that stops
+ * being unread fails the check until it is removed.
  *
  * The list stands empty since issue #301 answered the 14 names the branch that
  * added the check measured. It stays as the ratchet: a new domain type neither
  * side names goes red until a reader asks for it by name, until the module keeps
- * it privately, or until it is written here with the reason it is interface
- * vocabulary and no reader. A caller can hold such a type without naming it,
- * because the value it reads carries the shape, so an unread type name is not
- * proof of a dead export the way an unread value is. That is why the list is the
- * escape hatch and the two rules above stay the strict ones.
+ * it privately, or until it is written here with its reason. A caller can hold
+ * such a type without naming it, because the value it reads carries the shape,
+ * so an unread type name is not proof of a dead export the way an unread value
+ * is. That is why the list is the escape hatch and the two rules above stay the
+ * strict ones.
  */
-const UNREAD_TYPE_BASELINE: string[] = [];
+const UNREAD_TYPE_BASELINE: readonly { readonly name: string; readonly reason: string }[] = [];
 
 /** The value export kinds rule 1 polices. */
 const VALUE_KINDS = new Set(["const", "let", "var", "function", "class"]);
@@ -253,7 +256,17 @@ describe("a domain export is read, or it is not an export", () => {
 				}
 			}
 		}
-		expect(unread.sort()).toEqual(UNREAD_TYPE_BASELINE.slice().sort());
+		expect(unread.sort()).toEqual(UNREAD_TYPE_BASELINE.map((entry) => entry.name).sort());
+	});
+
+	test("every baseline entry states the reason it stays exported", () => {
+		// The reason is a field the check reads, not a comment beside the name: an
+		// entry that names a type and leaves the reason blank is refused, so the
+		// escape hatch cannot be taken without writing down why it is taken.
+		const nameless = UNREAD_TYPE_BASELINE.filter((entry) => entry.reason.trim() === "").map(
+			(entry) => entry.name,
+		);
+		expect(nameless).toEqual([]);
 	});
 });
 
@@ -273,8 +286,13 @@ describe("a domain export is read, or it is not an export", () => {
  *   added to a list that stands empty, and the only way it turns green is writing
  *   the name into `UNREAD_TYPE_BASELINE`, which is the point.
  * - Probe D, rule 3 the other way: write
- *   `"src/domain/top-up.ts :: AutomaticHold (interface)"` into
- *   `UNREAD_TYPE_BASELINE`. `AutomaticHold` has readers, so the ratchet case goes
- *   red with that one name on the list side and nothing on the unread side. The
- *   list can only shrink, and a stale entry is refused with it.
+ *   `{ name: "src/domain/top-up.ts :: AutomaticHold (interface)", reason: "the walk holds it" }`
+ *   into `UNREAD_TYPE_BASELINE`. `AutomaticHold` has readers, so the ratchet case
+ *   goes red with that one name on the list side and nothing on the unread side.
+ *   The list can only shrink, and a stale entry is refused with it.
+ * - Probe E, the reason field: run probe C's `ABrandNewUnreadType` and write
+ *   `{ name: "src/domain/top-up.ts :: ABrandNewUnreadType (interface)", reason: "" }`
+ *   into `UNREAD_TYPE_BASELINE`. The ratchet case goes green, because the name is
+ *   on the list, and the reason case goes red with that one name. An entry cannot
+ *   be taken without its reason.
  */

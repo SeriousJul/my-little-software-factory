@@ -148,7 +148,7 @@ describe("the automatic start gate (ADR 0060, widened by ADR 0070)", () => {
 
 	test("the gate reads the four facts, and only the standing flags hold (issue #301)", () => {
 		const facts: TicketIgnoreFacts = ignoreFacts();
-		expect(Object.keys(facts)).toEqual(["ignored", "ignoredAt", "muted", "mutedAt"]);
+		expect(Object.keys(facts).sort()).toEqual(["ignored", "ignoredAt", "muted", "mutedAt"]);
 		expect(automaticStartBlocked(facts)).toBe(false);
 		expect(automaticStartBlocked(ignoreFacts({ ignored: true }))).toBe(true);
 		expect(automaticStartBlocked(ignoreFacts({ muted: true }))).toBe(true);
