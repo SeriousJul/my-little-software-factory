@@ -7,7 +7,12 @@
  * nothing else does.
  */
 import { describe, expect, test } from "bun:test";
-import { heldBellRang, type SectionFactInputs, sectionFacts } from "../src/domain/section-facts.ts";
+import {
+	heldBellRang,
+	type SectionFactInputs,
+	type SectionFacts,
+	sectionFacts,
+} from "../src/domain/section-facts.ts";
 import type { Completion, Ticket } from "../src/domain/ticket.ts";
 import type { Consultation, ConsultationState } from "../src/state/consultation-record.ts";
 import type { WorkQueueItem } from "../src/state/work-queue.ts";
@@ -179,6 +184,27 @@ describe("the Consultation header's counts", () => {
 		);
 		expect(facts.consultation.awaitingResponse).toBe(1);
 		expect(facts.consultation.recovery).toBe(0);
+	});
+});
+
+describe("the record the three headers paint", () => {
+	test("the counts arrive as one record, in the three groups the headers read (issue #301)", () => {
+		// The App and the gallery hold this record through `sectionFacts` and never
+		// name the type, so the record's shape is stated at the seam: three groups,
+		// each with the counts its header paints, and no header reaches past the
+		// record for a count of its own.
+		const counts: SectionFacts = sectionFacts(inputs({ tickets: [ticket("open")] }));
+		expect(Object.keys(counts).sort()).toEqual(["consultation", "ticket", "work"]);
+		expect(Object.keys(counts.ticket).sort()).toEqual([
+			"awaiting",
+			"held",
+			"ignored",
+			"inFlight",
+			"muted",
+			"open",
+		]);
+		expect(Object.keys(counts.consultation).sort()).toEqual(["awaitingResponse", "recovery"]);
+		expect(Object.keys(counts.work).sort()).toEqual(["waiting"]);
 	});
 });
 

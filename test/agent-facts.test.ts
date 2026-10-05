@@ -9,6 +9,7 @@
  */
 import { describe, expect, test } from "bun:test";
 import {
+	type AgentStatus,
 	agentInPane,
 	agentPoll,
 	normalizeAgentStatus,
@@ -27,6 +28,18 @@ describe("normalizeAgentStatus", () => {
 		expect(normalizeAgentStatus("blocked")).toBe("blocked");
 		expect(normalizeAgentStatus("unknown")).toBe("unknown");
 		expect(normalizeAgentStatus("meditating")).toBe("unknown");
+	});
+
+	test("the status set the plane holds is closed, and no two words answer alike (issue #301)", () => {
+		// The observation loop and the App hold this shape through the answer of
+		// `normalizeAgentStatus` and never name the type, so the set the plane holds
+		// is written down here: the words the poll can answer, and no two of them
+		// land on one answer. Each word's own mapping, and the fallback for a word
+		// outside the set, stand in the test above and are not restated.
+		const statuses: readonly AgentStatus[] = ["working", "done", "idle", "blocked", "unknown"];
+		expect(new Set(statuses.map((status) => normalizeAgentStatus(status))).size).toBe(
+			statuses.length,
+		);
 	});
 });
 

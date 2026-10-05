@@ -12,15 +12,23 @@ import {
 	AUTOMATIC_HOLD_LINES,
 	AUTOMATIC_HOLD_REASONS,
 	AUTOMATIC_ROW_HOLD_REASONS,
+	type AutomaticAddFacts,
+	type AutomaticBareHold,
 	type AutomaticBareHoldReason,
 	type AutomaticCandidateHold,
 	type AutomaticCandidateHoldReason,
+	type AutomaticHoldReason,
+	type AutomaticRowHold,
+	type AutomaticRowHoldReason,
 	automaticAddsHold,
 	automaticHoldKey,
 	automaticHoldLine,
+	type ContinuationRowFacts,
 	continuationHold,
 	freshWorkHold,
 	type OpenTicketRowFacts,
+	type OpenTicketRowGate,
+	type OpenTicketWaitsFacts,
 	openTicketRowGate,
 	openTicketWaitsHold,
 	type RestartCandidateFacts,
@@ -87,6 +95,27 @@ describe("the top-up's cycle gate (ADR 0051)", () => {
 });
 
 describe("the gates every automatic add reads (ADR 0051, ADR 0052, ADR 0016)", () => {
+	/**
+	 * The three facts the standing gates read, on their own (issue #301). The
+	 * observation loop hands them in the same record it builds for the fresh-work
+	 * gate and never names this type, so the record the three gates read is stated
+	 * at the seam.
+	 */
+	function adds(over: Partial<AutomaticAddFacts> = {}): AutomaticAddFacts {
+		return { modeOn: true, queuePaused: false, dispatchPauseActive: false, ...over };
+	}
+
+	test("the gates read their own record, and their hold names no row (issue #301)", () => {
+		const facts: AutomaticAddFacts = adds();
+		expect(Object.keys(facts).sort()).toEqual(["dispatchPauseActive", "modeOn", "queuePaused"]);
+		expect(automaticAddsHold(facts)).toBeNull();
+		// Where one of these gates stands the walk has picked no candidate and knows
+		// no row, so the hold it states carries neither (issue #223).
+		const bare: AutomaticBareHold = { reason: "queue-paused" };
+		expect(automaticHoldKey(bare)).toBe("queue-paused");
+		expect(automaticHoldLine(bare, () => "never read")).toBe(AUTOMATIC_HOLD_LINES["queue-paused"]);
+	});
+
 	test("mode on, brake down, no held turn: the gates hold nothing", () => {
 		expect(automaticAddsHold(cycle())).toBeNull();
 	});
@@ -142,7 +171,7 @@ describe("the gates every automatic add reads (ADR 0051, ADR 0052, ADR 0016)", (
  * share a line.
  */
 describe("each automatic-walk hold names itself in the record (issue #223)", () => {
-	test("every reason has its own line", () => {
+	test("every reason word has its own line, and no line stands without a reason", () => {
 		const lines = AUTOMATIC_HOLD_REASONS.map((reason) => AUTOMATIC_HOLD_LINES[reason]);
 		expect(new Set(lines).size).toBe(AUTOMATIC_HOLD_REASONS.length);
 		expect(lines).toEqual([
@@ -154,6 +183,11 @@ describe("each automatic-walk hold names itself in the record (issue #223)", () 
 			"automatic walks hold: the Work queue holds a waiting row",
 			"automatic walks hold: the Ticket's Handoff starts keep failing",
 		]);
+		// The words and the lines are one set (issue #301 names the type): the walk
+		// can state no reason the words do not cover, and a line no reason reaches
+		// is wording nothing writes.
+		const reasons: AutomaticHoldReason[] = [...AUTOMATIC_HOLD_REASONS];
+		expect(Object.keys(AUTOMATIC_HOLD_LINES).sort()).toEqual(reasons.slice().sort());
 	});
 
 	test("the rule answers only reasons the words cover", () => {
@@ -186,7 +220,10 @@ describe("each automatic-walk hold names itself in the record (issue #223)", () 
 		// stands, so none can be named. The fresh-work gate holds on any row at all,
 		// a Consultation row included, and the staging of the row that stands is what
 		// the queue's own `handoff queued:` line states.
-		expect(AUTOMATIC_ROW_HOLD_REASONS).toEqual(["continuation-standing", "operator-row-standing"]);
+		// The two words are the row hold's own reason set, the way the candidate set
+		// is stated beside them below (issue #301 names the type).
+		const rowReasons: AutomaticRowHoldReason[] = [...AUTOMATIC_ROW_HOLD_REASONS];
+		expect(rowReasons).toEqual(["continuation-standing", "operator-row-standing"]);
 		const bare = AUTOMATIC_HOLD_REASONS.filter(
 			(reason) =>
 				!(AUTOMATIC_ROW_HOLD_REASONS as readonly string[]).includes(reason) &&
@@ -236,6 +273,39 @@ describe("each automatic-walk hold names itself in the record (issue #223)", () 
 });
 
 describe("the row a continuation must not jump (ADR 0051, ADR 0094, ADR 0100, issue #230)", () => {
+	/**
+	 * One Work queue row as the pace gate reads it (issue #301). The observation
+	 * loop builds these off the rows it already walked and never names the type, so
+	 * the three facts the gate reads are stated at the seam.
+	 */
+	function queueRow(over: Partial<ContinuationRowFacts> = {}): ContinuationRowFacts {
+		return { identity: "I_6", continuation: true, automatic: true, ...over };
+	}
+
+	test("the row hold names the standing row it waits behind (issue #301)", () => {
+		// The walk holds the answer as one `AutomaticHold` and tells the three apart
+		// by the row they carry, never by the member's name, so the row hold's own
+		// shape is stated here: its reason, and the identity of the row the walk
+		// waits behind.
+		const rowHold: AutomaticRowHold = { reason: "continuation-standing", row: "I_6" };
+		expect(continuationHold([queueRow()])).toEqual(rowHold);
+		expect(automaticHoldKey(rowHold)).toBe("continuation-standing I_6");
+	});
+
+	test("the pace gate answers each row-hold word, and no word outside the set (issue #301)", () => {
+		// The pace gate is the only writer of a row hold's reason, so the word set is
+		// pinned where it is answered and not only written down: the factory's
+		// staging answers the continuation word and the operator's staging the row
+		// word, the two answers are the whole set, and each word has its own line.
+		const rowReasons: readonly AutomaticRowHoldReason[] = AUTOMATIC_ROW_HOLD_REASONS;
+		const answers = [true, false].map((automatic) => continuationHold([queueRow({ automatic })]));
+		expect(answers.map((hold) => hold?.reason).sort()).toEqual([...rowReasons].sort());
+		for (const hold of answers) expect(hold?.row).toBe("I_6");
+		expect(new Set(rowReasons.map((reason) => AUTOMATIC_HOLD_LINES[reason])).size).toBe(
+			rowReasons.length,
+		);
+	});
+
 	test("an empty queue, or a queue of fresh work alone, holds nothing", () => {
 		expect(continuationHold([])).toBeNull();
 		expect(
@@ -327,40 +397,43 @@ describe("the top-up's open-ticket row gate (ADR 0051, ADR 0060, ADR 0027)", () 
 		// A parking state offers no task (ADR 0027).
 		expect(openTicketRowGate(row({ taskType: null }))).toEqual({ stands: false });
 	});
+
+	test("the answer carries the task only on the branch where the row stands (issue #301)", () => {
+		// The walk reads the task type off this same answer so it never tests the row
+		// twice, and it never names the type: the row it holds carries the shape. The
+		// two branches are stated here, and the task is readable only on the one that
+		// stands.
+		const stands: OpenTicketRowGate = openTicketRowGate(row());
+		expect(stands).toEqual({ stands: true, taskType: "implement" });
+		const held: OpenTicketRowGate = openTicketRowGate(row({ actionable: false }));
+		expect(held).toEqual({ stands: false });
+		expect("taskType" in held).toBe(false);
+	});
 });
 
 describe("the top-up's open-ticket waits (ADR 0051, ADR 0026)", () => {
+	/**
+	 * The three waits the row's own facts could not answer (issue #301). The walk
+	 * hands them from the state reads it made for the row and never names the type,
+	 * so the record the gate reads is stated at the seam.
+	 */
+	function waits(over: Partial<OpenTicketWaitsFacts> = {}): OpenTicketWaitsFacts {
+		return { sourceReverified: true, sameTypeHoldActive: false, queueItemStands: false, ...over };
+	}
+
 	test("a re-verified ticket with the hold clear and no item stands", () => {
-		expect(
-			openTicketWaitsHold({
-				sourceReverified: true,
-				sameTypeHoldActive: false,
-				queueItemStands: false,
-			}),
-		).toBe(true);
+		const facts: OpenTicketWaitsFacts = waits();
+		expect(Object.keys(facts).sort()).toEqual([
+			"queueItemStands",
+			"sameTypeHoldActive",
+			"sourceReverified",
+		]);
+		expect(openTicketWaitsHold(facts)).toBe(true);
 	});
 
 	test("each single wait holds the ticket out", () => {
-		expect(
-			openTicketWaitsHold({
-				sourceReverified: false,
-				sameTypeHoldActive: false,
-				queueItemStands: false,
-			}),
-		).toBe(false);
-		expect(
-			openTicketWaitsHold({
-				sourceReverified: true,
-				sameTypeHoldActive: true,
-				queueItemStands: false,
-			}),
-		).toBe(false);
-		expect(
-			openTicketWaitsHold({
-				sourceReverified: true,
-				sameTypeHoldActive: false,
-				queueItemStands: true,
-			}),
-		).toBe(false);
+		expect(openTicketWaitsHold(waits({ sourceReverified: false }))).toBe(false);
+		expect(openTicketWaitsHold(waits({ sameTypeHoldActive: true }))).toBe(false);
+		expect(openTicketWaitsHold(waits({ queueItemStands: true }))).toBe(false);
 	});
 });
