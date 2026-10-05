@@ -424,8 +424,67 @@ back from below the minimum size it answers `scrollHeight=0 viewport=0`, so the
 pane asks for the pass and the following pass lands the offset.
 `test/ticket-scroll-frame.test.ts` - "restores the detail offset across a
 round-trip resize below the minimum size" and "resets a new Ticket, preserves
-same-Ticket refresh offsets, clamps, and survives resize" - are the cases that
-cover the ask path.
+same-Ticket refresh offsets, clamps, and survives resize" - were named there as
+the cases that cover the ask path. That claim holds only while the runner is
+quiet, and [the section below](#the-ask-half-pinned-the-review-rework-round)
+corrects it and pins the path.
+
+### The ask half, pinned (the review rework round)
+
+The review of `fb373d83` named what the two sections above left unpinned, and
+measured it: with `renderer.requestRender();` deleted from the restore effect, all
+42 records in `test/main-view-frame.test.ts`, `test/ticket-scroll-frame.test.ts`,
+and `test/ticket-detail.test.ts` stayed green. The below-minimum resize case
+passes either way, because `setup.resize()` runs `processResize`, which ends in
+its own `requestRender()`: the pass the restore waited for came from the rig and
+never from the pane.
+
+The claim that the two scroll cases cover the ask path is the first thing that
+measurement unsettles. A temporary `console.log` probe on the restore effect,
+reverted after the runs, read which branch the unheld resize case takes:
+
+| Machine state | The branch, over 5 runs of that one case |
+| --- | --- |
+| The machine's own load | ask 5 of 5 |
+| 24 busy loops alongside, load average 31.83 | ask 3 of 5, on the spot 2 of 5 |
+
+So on a loaded runner the ask path can go unexercised in the very case this record
+named as its coverage. A case that only takes the branch while the machine is
+quiet cannot pin it.
+
+`withholdRenderAsksButThePlanesOwn` in `test/app-harness.ts` swallows every render
+ask but one the control plane makes directly on the renderer, and counts what it
+swallowed. It reads the direct caller of `requestRender` off the call stack, so a
+renderable's own ask - which reaches the renderer from inside OpenTUI - is held
+like the rig's resize ask is. The first ask that gets through puts the hold down,
+because the repaint that carries the restore's result to the screen has to follow
+it. The key refuses to hand the asks back on an empty swallowed count: a hold that
+swallowed nothing is indistinguishable from no hold at all, and it says so instead.
+
+A new case, `test/ticket-scroll-frame.test.ts` - "restores the detail offset
+across a below-minimum resize on its own render ask alone" - walks the same
+below-minimum round trip as the case beside it, through one walk helper that takes
+the hold flag. With the hold up no pass can land before the pane asks, so the
+remounted box still answers no size when the restore effect runs: the branch is
+forced, not waited for, and the only pass that can lay the box out is the pane's
+own. The witness then states that one remount costs the pane exactly one ask.
+
+| State | Result |
+| --- | --- |
+| Both cases with the fix | 13 pass / 0 fail in 3.94 s for the file: the held case at 251.11 ms, the unheld one beside it at 257.16 ms |
+| The held case under 24 busy loops, load average 50.77 | 5 runs, 5 pass / 0 fail, and the same log probe reads the ask branch 5 of 5. The hold is what makes that branch deterministic |
+| Probe D, `renderer.requestRender();` deleted from the restore effect | 1 record red at 10277.00 ms, the local 10000 ms `FRAME_DEADLINE_MS`, and 12 green: the held case. With every outside ask swallowed no pass lands, the box never lays out, and the offset never comes back. The harness's dump is blank rows, because after the resize nothing repainted the buffer at all. The unheld case stays green, which is the gap the review measured |
+| Probe E, the one-ask bound (`if (passAsked) return;` and `passAsked = true;`) deleted | 13 pass / 0 fail, and the witness still counts one ask: the pass the pane asks for lays the box out, so the restore takes the on-the-spot branch and never asks again |
+| Probe F, the hold's caller test widened so OpenTUI's own asks count as the plane's | 1 record red at 296.73 ms, the held case, on the hold's own swallowed-count line: the rig's resize ask is waved through at once, the hold swallows nothing, and the key refuses to hand the asks back |
+
+Each probe edited one file, ran `bun test test/ticket-scroll-frame.test.ts
+--isolate --timeout=30000`, and was reverted; a `diff` against a copy taken before
+the probe showed the file byte-identical afterwards.
+
+| Item the review asked to name | Where it stands |
+| --- | --- |
+| The give-up path: what becomes of `scrollSlot.current` when the one ask's pass still answers no size | Named in the code where it runs, above the second return of `restore()` in `src/components/ticket-detail.ts`. The offset is not applied and the slot is left exactly as the save side wrote it. That is intended: the slot is the save side's fact, and the restore side rewrites it only to say the offset landed. The retained value cannot move the scroll later, because every path to another remount runs the save cleanup first, which writes the offset the pane actually leaves behind - its top, since nothing was applied - and a zero offset never re-arms the restore. No case reaches the path: the pass the pane asks for lays the box out, and a terminal too small for the detail unmounts the pane into the compact frame outright |
+| The `passAsked` bound | A guard no test detects, and Probe E above is the step that shows it. It bounds what a box that keeps answering no size after its own ask would otherwise do: ask again on every pass, forever. Nothing reachable puts the box in that state, so nothing reaches the bound either, and this record states that instead of claiming a pin for it |
 
 ### The gate on this branch
 
@@ -438,6 +497,29 @@ The branch was level with `origin/main` at `dab44a0d` before the runs.
 | `bun run docs:build` | complete in 2.33 s on the merged tree, and in 1.67 s one docs commit earlier, because the branch touches `docs/` |
 | `bun run test` | Run 1 on `d1b55a00`: 3018 pass / 3 fail in 42.57 s (15,052 `expect()` calls) at load average 6.82 before and 6.79 after. Run 2 on the same head: 3020 pass / 1 fail in 42.74 s (15,055 `expect()`) at load 10.54 before and 10.68 after. Run 3, the gate run on the merged tree at `673bb8d3` level with `origin/main` at `dab44a0d`: 3020 pass / 1 fail in 41.10 s (15,055 `expect()`) at load 13.26 before and 7.47 after. Every red is named as a load flake in the table below and filed; none sits in a file this branch's production diff touches. Machine: 32 CPUs, and the `bun test` process check before the gate run answered 0. The only change after run 3 is this record's own wording of these rows |
 | The base run, for pre-existence | `dab44a0d` checked out inside this same worktree, one full `bun run test` at load 11.04 before and 10.59 after: 3019 pass / 1 fail in 41.96 s (16,049 `expect()`), its one red the screenshot fixture, [issue #303](https://github.com/SeriousJul/my-little-software-factory/issues/303). That settles that a loaded runner turns some red per run on both trees; it does not settle which miss pre-exists which fix |
+
+### The gate on the rework head
+
+The head `e4289568` stands level with `origin/main` (0 behind, 9 ahead), and every
+check below ran on it. The only change after these runs is this record's own text,
+in the commit that lands on top of it. Machine: 32 CPUs, and the `bun test` process
+check before the full run answered 0. Load average 7.21 before the full suite and
+6.81 after; the load the probe runs above injected was killed before these checks
+started.
+
+| Check | Result |
+| --- | --- |
+| `bun run lint` | clean over 304 files (128 ms) |
+| `bun run typecheck` | clean (`tsc`, no output) |
+| `bun run docs:build` | complete in 1.62 s; the branch touches `docs/`, and the new section's anchor resolves |
+| Scoped: `test/main-view-frame.test.ts`, `test/ticket-scroll-frame.test.ts`, `test/ticket-detail.test.ts` | 43 pass / 0 fail in 12.67 s, and 43 / 0 again in six further runs of the same trio |
+| `bun run test`, once, on the merged tree | 3022 pass / 0 fail in 42.39 s (16,781 `expect()` calls). No red to name, so the triage table below stands as the previous head left it |
+
+One scoped run of that trio, taken during the rework before the final tree was
+settled, printed 42 pass / 1 fail without this agent capturing which record went
+red. It is not reproducible on the head above: six runs of the trio and the full
+suite all came back clean. It is recorded here rather than dropped, and it is not
+filed, because nothing names it.
 
 ### The full-suite reds this branch produced, and where each is filed
 
