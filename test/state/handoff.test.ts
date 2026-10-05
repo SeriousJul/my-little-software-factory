@@ -1066,6 +1066,48 @@ describe("the settle answers with the attempt's own record (issue #295)", () => 
 		state.close();
 	});
 
+	test("a failed settle that names no reason answers no reason", () => {
+		// The door the record line's fallback stands behind: the settle's own
+		// interface lets a failed settle name no reason, and the attempt's reason
+		// column is nullable in every schema version, so the ledger can hold a
+		// failed attempt with nothing stored in it. The answer says so rather than
+		// making an ending up (issue #295 review).
+		const state = openFactoryState(":memory:", ATTEMPT_NOW);
+		state.sourceFact.initializeSources([sourceA]);
+		state.sourceFact.applyFetch(sourceA, success([fetched()]));
+		const claim = state.handoff.claimHandoff(TICKET, choice, "open");
+		if (!claim.ok) throw new Error(claim.reason);
+		expect(state.handoff.settleHandoff(claim.claim.attemptId, false)).toEqual({
+			ticketIdentity: TICKET,
+			outcome: "failed",
+			failureReason: null,
+		});
+		state.close();
+	});
+
+	test("the stage a start advanced through never answers for the outcome", () => {
+		// The start ran through its stages before herdr refused it. The settle
+		// writes its outcome over those stages, and the answer reads the stage the
+		// write left: a stage the start advanced through is never read as
+		// `agent-started`, which would answer a start that reached its Agent and
+		// hide the failed start's line (issue #295 review).
+		const state = openFactoryState(":memory:", ATTEMPT_NOW);
+		state.sourceFact.initializeSources([sourceA]);
+		state.sourceFact.applyFetch(sourceA, success([fetched()]));
+		const claim = state.handoff.claimHandoff(TICKET, choice, "open");
+		if (!claim.ok) throw new Error(claim.reason);
+		state.handoff.advanceHandoffAttempt(claim.claim.attemptId, "creating-environment");
+		state.handoff.advanceHandoffAttempt(claim.claim.attemptId, "starting-agent");
+		expect(
+			state.handoff.settleHandoff(claim.claim.attemptId, false, "herdr is unavailable"),
+		).toEqual({
+			ticketIdentity: TICKET,
+			outcome: "failed",
+			failureReason: "herdr is unavailable",
+		});
+		state.close();
+	});
+
 	test("a settle that reached its Agent answers the outcome and stores no reason", () => {
 		const state = openFactoryState(":memory:", ATTEMPT_NOW);
 		state.sourceFact.initializeSources([sourceA]);

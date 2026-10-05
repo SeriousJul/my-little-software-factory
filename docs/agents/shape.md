@@ -161,6 +161,10 @@ description: The module map of the source tree, for agents working in this repos
 	reason that attempt's row stores - so the Handoff dispatch's own failed starts
 	and the boot's recovery of a crashed run's claims state the same fact the same
 	way, and the line cannot be mistaken for a pre-start gate refusal (issue #295).
+	`record-name.ts` holds the name every one of those lines reads: the projection
+	title in quotes, or the identity when the projection holds no row. The Handoff
+	dispatch, the observation cycle, the App's queue-removal line, and the boot each
+	had their own copy of the rule until issue #295 review; a suite refuses a fifth.
 - `src/handoff.ts`: the handoff. One start call (`runHandoffStart`, kept private
 	to the module) behind the two start calls the plane has (issue #204,
 	ADR 0097): it runs the pre-flight in one order, resolves the repository, builds

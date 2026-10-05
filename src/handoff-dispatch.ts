@@ -13,6 +13,7 @@ import type { ConfigWriteReport } from "./config-write.ts";
 import type { ConsultationPickupOutcome } from "./consultation-operations.ts";
 import { handoffStartFailedLine } from "./domain/attempt-record.ts";
 import { queueStagingOf } from "./domain/queue-staging.ts";
+import { recordTicketName } from "./domain/record-name.ts";
 import type { StartMode } from "./domain/start-mode.ts";
 import type { EnvironmentKind, Ticket, TicketState } from "./domain/ticket.ts";
 import { inFlightState, issueReferencesOf } from "./domain/ticket.ts";
@@ -1637,14 +1638,19 @@ class HandoffDispatchModule implements HandoffDispatch {
 	}
 
 	/** The name the operator reads on a line: the ticket's title while the
-	 * ticket is still in the projection, its identity once it is gone. */
+	 * ticket is still in the projection, its identity once it is gone. The rule
+	 * is the shared one, so the boot's line for a claim this run left unsettled
+	 * names the Ticket the way this module named it (issue #295 review). */
 	private ticketName(identity: string): string {
 		// The projection, not the visible list: a covered ticket is hidden
 		// from the list while its queued start is still naming it (ADR 0042).
-		const title = this.state.ticketWorkCycle
-			.projectedTickets(this.config().workflowStates, this.config().defaultTaskType)
-			.find((candidate) => candidate.identity === identity)?.title;
-		return title === undefined ? `ticket ${identity}` : `"${title}"`;
+		return recordTicketName(
+			this.state.ticketWorkCycle.ticketProjection(
+				this.config().workflowStates,
+				this.config().defaultTaskType,
+			),
+			identity,
+		);
 	}
 
 	/**
@@ -2026,7 +2032,11 @@ class HandoffDispatchModule implements HandoffDispatch {
 	 */
 	private settleFailedStart(attemptId: string, reason: string): void {
 		const settled = this.state.handoff.settleHandoff(attemptId, false, reason);
-		if (settled === null || settled.outcome !== "failed") return;
+		// The answer is the settle's own: null means the attempt had already
+		// settled, and its line stands from that one write. The outcome needs no
+		// second look here - this settle wrote `failed`, and the ledger refuses a
+		// settled row whose stage names any other stage (issue #295 review).
+		if (settled === null) return;
 		this.log?.warn(
 			handoffStartFailedLine(this.ticketName(settled.ticketIdentity), settled.failureReason),
 		);

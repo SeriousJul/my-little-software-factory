@@ -20,23 +20,33 @@
  *
  * The reason is the attempt's record's own. Every caller passes the reason its
  * settle wrote and reads it back out of the settle's answer, so the file and
- * the ledger cannot state two different endings for one start.
+ * the ledger cannot state two different endings for one start. The Ticket's
+ * name comes from the shared record-name rule, the same one the dispatch's
+ * queue lines and the observation cycle's walk lines read (issue #295 review).
  */
 
 /** The prefix the failed-start line wears. */
 export const HANDOFF_START_FAILED_PREFIX = "handoff start failed:";
 
-/** The words the line states when the attempt's row stores no reason at all. */
+/**
+ * The words the line states when the attempt's row stores no reason at all.
+ *
+ * The settle's own interface lets a failed settle name no reason, and the
+ * attempt's `failure_reason` column is nullable in every schema version, so a
+ * state file an older run wrote can hold a failed attempt with nothing in it.
+ * The line states that fact rather than inventing a reason for it, and the
+ * suite holds both doors: the settle that stores none, and the line it earns.
+ */
 export const NO_FAILURE_RECORDED_FACT = "the attempt recorded no reason";
 
 /**
  * The one line one failed Handoff start leaves: the prefix, the Ticket the
  * attempt names, and the reason that attempt's row stores.
  *
- * `ticketName` is the caller's own name read - the live projection's title in
- * quotes, the way every other record line names a Ticket. `failureReason` is
- * the reason the attempt's record holds, and `null` is a settle that stored
- * none.
+ * `ticketName` is the Ticket read through the shared record-name rule - the
+ * live projection's title in quotes, the way every record line names a Ticket.
+ * `failureReason` is the reason the attempt's record holds, and `null` is a
+ * settle that stored none.
  */
 export function handoffStartFailedLine(ticketName: string, failureReason: string | null): string {
 	return `${HANDOFF_START_FAILED_PREFIX} ${ticketName} (${failureReason ?? NO_FAILURE_RECORDED_FACT})`;

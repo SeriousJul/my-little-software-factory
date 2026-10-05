@@ -33,19 +33,24 @@ export interface HandoffClaim {
 }
 /**
  * What one Handoff settle leaves in the attempt's own record: the Ticket the
- * attempt names, the outcome it settled with, and the reason the attempt's row
- * stores for a start that reached no Agent.
+ * attempt names, the outcome its own stage states, and the reason the attempt's
+ * row stores.
  *
  * The settle answers this so the caller's record line states the reason the
  * ledger holds, not a second copy of the reason the caller handed the write
  * (issue #295). A settle of an attempt that had already settled answers null:
  * the write runs once per attempt, and the line follows the write.
+ *
+ * `failureReason` is null for a start that reached its Agent, and for the failed
+ * settle that stored no reason at all: the column is nullable in every schema
+ * version, so an older state file can hold a failed attempt with no reason in
+ * it. The record line says so rather than inventing one.
  */
 export interface HandoffSettlement {
 	ticketIdentity: string;
 	/** `agent-started` when the start reached its Agent, `failed` when it did not. */
 	outcome: "agent-started" | "failed";
-	/** The reason the attempt's row stores; null when the start reached its Agent. */
+	/** The reason the attempt's row stores; null when it stores none. */
 	failureReason: string | null;
 }
 export type ClaimOutcome = { ok: true; claim: HandoffClaim } | { ok: false; reason: string };
@@ -178,6 +183,17 @@ export interface HandoffAggregate {
 		identity: string,
 		ended: { workspaceId: string } | { tabId: string } | { handoffId: string },
 	): number;
+}
+
+/**
+ * The attempt cells a settle's own write answers (issue #295): the row as the
+ * ledger holds it once the settle landed, not the values the caller passed.
+ */
+interface SettledAttemptRow {
+	attempt_id: string;
+	ticket_identity: string;
+	stage: string;
+	failure_reason: string | null;
 }
 
 /** The handoff cells a read maps into a `StoredHandoff`. */
@@ -576,58 +592,66 @@ export class HandoffModule implements HandoffAggregate {
 						details?.agentName ?? null,
 					);
 			}
-			this.db
+			// The write answers its own row, so the record line a failed start leaves
+			// states the reason the ledger holds rather than a copy of what the
+			// caller passed in (issue #295).
+			const settled = this.db
 				.prepare(
-					"UPDATE handoff_attempts SET stage = ?, resolved_at = ?, failure_reason = ? WHERE attempt_id = ?",
+					"UPDATE handoff_attempts SET stage = ?, resolved_at = ?, failure_reason = ? WHERE attempt_id = ? RETURNING attempt_id, ticket_identity, stage, failure_reason",
 				)
-				.run(
+				.get(
 					agentStarted ? "agent-started" : "failed",
 					new Date(this.db.now()).toISOString(),
 					failureReason ?? null,
 					attemptId,
-				);
-			// The answer is the row the write just settled, read back out of it, so
-			// the record line a failed start leaves states the reason the ledger
-			// holds rather than a copy of what the caller passed in (issue #295).
-			return this.settledAttemptRow(attemptId);
+				) as SettledAttemptRow | undefined;
+			return settled === undefined ? null : this.settledRecord(settled);
 		});
 	}
 	/**
-	 * The attempt's settled record: the Ticket it names, the outcome it settled
-	 * with, and the reason its row stores. Null for an attempt the read does not
-	 * hold.
+	 * The record one settled attempt row answers: the Ticket it names, the outcome
+	 * its stage states, and the reason its row stores.
+	 *
+	 * The stage decides the outcome, and only the two stages a settle writes are
+	 * an outcome. A row that holds a stage the start advanced through - `claimed`,
+	 * `reclaimed`, `creating-environment`, and the rest - settled outside the
+	 * settle whose write this read follows. Reading such a stage as
+	 * `agent-started` would answer a start that reached its Agent and hide the
+	 * failed start's line, so the stage is checked and a stage that is neither
+	 * outcome is refused as the ledger break it is (issue #295 review).
 	 */
-	private settledAttemptRow(attemptId: string): HandoffSettlement | null {
-		const row = this.db
-			.prepare(
-				"SELECT ticket_identity, stage, failure_reason FROM handoff_attempts WHERE attempt_id = ?",
-			)
-			.get(attemptId) as
-			| { ticket_identity: string; stage: string; failure_reason: string | null }
-			| undefined;
-		if (row === undefined) return null;
-		return {
-			ticketIdentity: row.ticket_identity,
-			outcome: row.stage === "failed" ? "failed" : "agent-started",
-			failureReason: row.failure_reason,
-		};
+	private settledRecord(row: SettledAttemptRow): HandoffSettlement {
+		if (row.stage === "failed")
+			return {
+				ticketIdentity: row.ticket_identity,
+				outcome: "failed",
+				failureReason: row.failure_reason,
+			};
+		if (row.stage === "agent-started")
+			return {
+				ticketIdentity: row.ticket_identity,
+				outcome: "agent-started",
+				failureReason: row.failure_reason,
+			};
+		throw new StateError(
+			`the handoff attempt ${row.attempt_id} settled with the stage ${row.stage} at ${this.db.path}`,
+		);
 	}
 	recoverUnsettledHandoffs(): HandoffSettlement[] {
 		return this.db.transaction(() => {
 			const now = new Date(this.db.now()).toISOString();
-			const left = this.db
-				.prepare("SELECT attempt_id FROM handoff_attempts WHERE resolved_at IS NULL")
-				.all() as Array<{ attempt_id: string }>;
-			this.db
-				.prepare(
-					"UPDATE handoff_attempts SET stage = 'failed', resolved_at = ?, failure_reason = ? WHERE resolved_at IS NULL",
-				)
-				.run(now, "the run that claimed this handoff ended before it settled it");
-			// Each recovered claim is a start that ended without its Agent, and the
+			// One write settles every claim the previous run left, and answers each
+			// row it settled. Each is a start that ended without its Agent, and the
 			// boot records each one the way the dispatch records its own (issue #295).
-			return left
-				.map((row) => this.settledAttemptRow(row.attempt_id))
-				.filter((settled) => settled !== null);
+			const settled = this.db
+				.prepare(
+					"UPDATE handoff_attempts SET stage = 'failed', resolved_at = ?, failure_reason = ? WHERE resolved_at IS NULL RETURNING attempt_id, ticket_identity, stage, failure_reason",
+				)
+				.all(
+					now,
+					"the run that claimed this handoff ended before it settled it",
+				) as SettledAttemptRow[];
+			return settled.map((row) => this.settledRecord(row));
 		});
 	}
 	/** The stored Handoff row the ticket's newest Handoff stands on. */

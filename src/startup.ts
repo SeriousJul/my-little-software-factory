@@ -27,6 +27,7 @@ import {
 	statePathFor,
 } from "./config.ts";
 import { handoffStartFailedLine } from "./domain/attempt-record.ts";
+import { recordTicketName } from "./domain/record-name.ts";
 import { createLogger, type Logger, NOOP_LOGGER } from "./logging.ts";
 import { validateConfiguredModels } from "./model-settings.ts";
 import type { CommandRunner } from "./runner.ts";
@@ -225,22 +226,6 @@ export function openStartupState(statePath: string): StartupStateResult {
 }
 
 /**
- * The name the plane's record lines give a Ticket: its projection title in
- * quotes, the way the Work queue's lines and every refusal name it, or its
- * identity when the projection holds no row for it.
- *
- * The boot reads it off the stored projection, the last titles the sources left
- * in the state file: the run that starts has fetched nothing yet, and the start
- * its record line names belongs to the run that ended.
- */
-function recordTicketName(state: FactoryState, config: FactoryConfig, identity: string): string {
-	const row = state.ticketWorkCycle
-		.ticketProjection(config.workflowStates, config.defaultTaskType)
-		.rowFor(identity);
-	return row === undefined ? `ticket ${identity}` : `"${row.title}"`;
-}
-
-/**
  * The process the shutdown attaches to: the hooks it writes, and the exit it
  * asks for. The entry passes the real process; a test passes a recorder.
  */
@@ -361,13 +346,25 @@ export async function runStartup(configPath: string, worldPath?: string): Promis
 	// its Agent. The dead run wrote its `handoff started:` line and nothing after
 	// it, so this boot states the ending beside it: the record for one Ticket then
 	// answers how many starts were made and why each one ended (issue #295).
-	for (const attempt of opened.recovered) {
-		logger.warn(
-			handoffStartFailedLine(
-				recordTicketName(opened.state, loaded.config, attempt.ticketIdentity),
-				attempt.failureReason,
-			),
+	//
+	// The names come off one projection read (ADR 0093): the stored rows are the
+	// last titles the sources left in the state file, since the run that starts
+	// has fetched nothing yet and the starts these lines name belong to the run
+	// that ended. The name rule is the shared one, so the boot names a Ticket the
+	// way the dispatch named it in the line the dead run wrote (issue #295 review).
+	if (opened.recovered.length > 0) {
+		const projection = opened.state.ticketWorkCycle.ticketProjection(
+			loaded.config.workflowStates,
+			loaded.config.defaultTaskType,
 		);
+		for (const attempt of opened.recovered) {
+			logger.warn(
+				handoffStartFailedLine(
+					recordTicketName(projection, attempt.ticketIdentity),
+					attempt.failureReason,
+				),
+			);
+		}
 	}
 
 	const sources = loaded.config.sources.map((source) => createTicketSource(source, runner));

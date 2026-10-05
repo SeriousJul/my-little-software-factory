@@ -56,7 +56,7 @@ import {
 	worktreeListJson,
 } from "./fake-runner.ts";
 import { gatedRunner } from "./gated-runner.ts";
-import { infoLine, type RecordedLine, recordLogger } from "./record-logger.ts";
+import { infoLine, type RecordedLine, recordLogger, warnLine } from "./record-logger.ts";
 
 const paths: string[] = [];
 afterEach(() => {
@@ -935,6 +935,102 @@ describe("the seat a settling turn frees (the dev-run miss on PR #206)", () => {
 				`handoff started: "${PULL_TITLE}" (mode pickup, origin workflow, automatic, seats 0/1)`,
 			),
 		]);
+		state.close();
+	});
+});
+
+/**
+ * The cadence of the failed start's line, read at the observation seam (issue
+ * #295 review).
+ *
+ * The dispatch's own suite pins the line's words. What the acceptance claims is
+ * the cadence: the line follows the attempt and never the poll. The development
+ * install ran exactly this shape - one Ticket whose start kept failing, asked
+ * again on every observation cycle, 9,365 times over five days - so the test
+ * walks the loop the plane runs: the automatic ask enqueues the row, the cycle's
+ * pickup runs the start, herdr refuses it, and the attempt's own settle leaves
+ * one line. The Attempt hold (ADR 0077 as extended by ADR 0101) then holds the
+ * walk's re-ask until a source re-reads the Ticket, and the record stays what
+ * it was. The next attempt is a start the factory made, and it states itself
+ * again.
+ */
+describe("the failed start's line follows the attempt, not the cycle (issue #295)", () => {
+	const failure = "the worktree path already exists";
+
+	/** The record's lines that state how a start ended. */
+	const failedLines = (lines: RecordedLine[]) =>
+		lines.filter((line) => line.message.startsWith("handoff start failed:"));
+	/** The record's lines that state that a start began. */
+	const startedLines = (lines: RecordedLine[]) =>
+		lines.filter((line) => line.message.startsWith("handoff started:"));
+
+	test("the walk re-asks every cycle, and one failed start leaves one line", async () => {
+		// A live seat, so the pickup's start really runs, and a herdr that refuses
+		// it: the claim stands, the start ends, and the attempt settles `failed`.
+		const chain = chainRig({ liveSeats: true });
+		const { state, coordinator } = chain;
+		chain.runner.set("herdr", ["workspace", "list"], { code: 1, stderr: failure });
+		// One open Ticket, and no pull request standing for the walks to route.
+		state.sourceFact.applyFetch(issuesSource, {
+			status: "success",
+			fetchedAt: "2026-08-31T10:00:00Z",
+			tickets: [issueTicket()],
+		});
+		state.sourceFact.applyFetch(pullsSource, {
+			status: "success",
+			fetchedAt: "2026-08-31T10:00:00Z",
+			tickets: [],
+		});
+
+		// The wait the loop implies: the pickup starts the handoff and answers
+		// before the run ends, so the failed start's line lands after the tick.
+		const awaitFailedLines = async (count: number): Promise<void> => {
+			for (let round = 0; round < 100; round += 1) {
+				if (failedLines(chain.lines).length === count) return;
+				await new Promise((resolve) => setTimeout(resolve, 5));
+			}
+			throw new Error(`no ${count} failed-start line in the record`);
+		};
+
+		// Cycle 1: the walk's ask, and the row it leaves in the Work queue.
+		await coordinator.tick();
+		expect(state.workQueue.hasWorkItem(issueIdentity)).toBe(true);
+		// Cycle 2: the cycle's pickup takes the row and runs the start, and herdr
+		// refuses it. The start's own line and its ending stand together.
+		await coordinator.tick();
+		await awaitFailedLines(1);
+		expect(failedLines(chain.lines)).toEqual([
+			warnLine(`handoff start failed: "Persist source facts" (${failure})`),
+		]);
+		// The hold is what stands between the walk and the same failing start.
+		expect(state.handoff.handoffBlockedUnrefreshed(issueIdentity)).toBe(true);
+		// The cycles the development install ran for five days. Each one reaches
+		// the same gate and asks nothing, and the attempt that already settled has
+		// nothing new to say on any of them.
+		await coordinator.tick();
+		await coordinator.tick();
+		await coordinator.tick();
+		expect(failedLines(chain.lines)).toHaveLength(1);
+		// The release: an active source re-reads the Ticket, and the walk asks it
+		// again. The next ask is a new attempt, and it ends the same way.
+		state.sourceFact.applyFetch(issuesSource, {
+			status: "success",
+			fetchedAt: "2026-08-31T11:30:00Z",
+			tickets: [issueTicket()],
+		});
+		await coordinator.tick();
+		await coordinator.tick();
+		await awaitFailedLines(2);
+		// Reading the record for this Ticket answers how many starts the factory
+		// made and why each one ended: one ending line per start line, and no line
+		// for a cycle that started nothing. The two attempts are the ledger's own.
+		expect(startedLines(chain.lines)).toHaveLength(2);
+		expect(failedLines(chain.lines)).toEqual([
+			warnLine(`handoff start failed: "Persist source facts" (${failure})`),
+			warnLine(`handoff start failed: "Persist source facts" (${failure})`),
+		]);
+		expect(state.handoff.handoffCount(issueIdentity)).toBe(2);
+		chain.dispatch.stop();
 		state.close();
 	});
 });
