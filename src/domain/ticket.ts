@@ -99,11 +99,12 @@ export interface CompletionTraceOrder {
 	rowId: number;
 }
 
-/** Compare two traces in the order the trace table sorts them. */
-export function completionTraceOrder(
-	left: CompletionTraceOrder,
-	right: CompletionTraceOrder,
-): number {
+/**
+ * Compare two traces in the order the trace table sorts them. The comparison
+ * stays inside the module: the rules that need it state their order through
+ * `CompletionTraceOrder`, which is the fact, not the comparison.
+ */
+function completionTraceOrder(left: CompletionTraceOrder, right: CompletionTraceOrder): number {
 	return left.completedAt.localeCompare(right.completedAt) || left.rowId - right.rowId;
 }
 
@@ -219,9 +220,11 @@ export interface RepositoryRef {
 
 /**
  * The attribute key a pull request membership stores its Issue references
- * in (ADR 0042, kept by ADR 0050).
+ * in (ADR 0042, kept by ADR 0050). The key is the module's own: every reader
+ * and writer of the fact goes through `issueReferencesOf` and
+ * `withIssueReferences`.
  */
-export const ISSUE_REFERENCES_ATTRIBUTE = "closes";
+const ISSUE_REFERENCES_ATTRIBUTE = "closes";
 
 /**
  * One Issue reference a pull request membership stores as a source fact
@@ -292,8 +295,9 @@ export function withIssueReferences(
 /**
  * The attribute key a pull request membership stores its head branch in
  * (ADR 0042): the branch the pull request pushes from, read from the source.
+ * The key is the module's own, the way the Issue references key is.
  */
-export const HEAD_BRANCH_ATTRIBUTE = "headBranch";
+const HEAD_BRANCH_ATTRIBUTE = "headBranch";
 
 /**
  * The head branch a pull request membership carries, or null when the

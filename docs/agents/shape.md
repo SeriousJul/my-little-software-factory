@@ -261,6 +261,14 @@ description: The module map of the source tree, for agents working in this repos
 	coverage bitmaps the screenshot renderer paints from, rasterized from the
 	vendored terminal font by `npm run font`.
 - `test/sample-tickets.ts`: deterministic data used by legacy frame tests only.
+- `test/shape-doc-paths.test.ts`: this module map held to the tree. Every path it
+	prints either exists or the check goes red, with the entry that printed it
+	named (ADR 0105).
+- `test/domain-export-architecture.test.ts`: the `src/domain/` interface held to
+	its readers. A domain value export neither `src` nor a test asks for is
+	refused, an export that is a pure alias of another export of its own module is
+	refused, and the types neither side names stand in a baseline that can only
+	shrink (ADR 0105).
 - `src/components/`: the app shell, the ticket list pane, the ticket detail
 	pane, the native ticket detail viewport, the override panel, the decision
 	and missing modals, the turn log and markdown rendering, the shared

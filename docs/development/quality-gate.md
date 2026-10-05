@@ -82,6 +82,23 @@ reference's literal lines to the source that writes them. A documented line with
 no test is how a record drifts, and a documented level no fake can tell apart is
 the same drift one level down.
 
+## What a check holds
+
+Three checks read the repository's own prose and sources and refuse the drift a
+review would otherwise have to find:
+
+| Check | What it refuses |
+| --- | --- |
+| `test/record-lines-doc.test.ts` | a record line the configuration reference states that the code does not write, and a level the page states that the code does not send |
+| `test/shape-doc-paths.test.ts` | a path `docs/agents/shape.md` prints that the tree does not hold, resolved against the entry that printed it |
+| `test/domain-export-architecture.test.ts` | a `src/domain/` value export neither `src` nor a test asks for; a domain export that is a pure alias of another export of its own module; and a new domain type that neither side names, against a baseline that can only shrink |
+
+The second rule is the one the #223 review found standing in that directory:
+`topUpCycleOpen` was a wrapper of `freshWorkHold` with no `src` caller and nine
+test callers, and a rule that only asks "does anything read this?" cannot see it.
+The alias rule asks the shape instead, and it does not care whether it has
+readers.
+
 ## A probe is a step a reviewer can re-run
 
 When a change claims its test bites, the claim is written as steps in the test

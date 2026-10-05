@@ -39,8 +39,10 @@ export const DEFAULT_GROUPING_AXIS: GroupingAxis = "none";
  * The sections whose list the plane can group, and so the rows the durable
  * table holds. The Ticket section is the only one today (issue #159); a second
  * list that takes grouping joins this list and needs no new schema version.
+ * The list itself stays inside the module: every caller asks for the section
+ * through `GroupedSection`, which this line's value is the shape of.
  */
-export const GROUPED_SECTIONS = ["tickets"] as const;
+const GROUPED_SECTIONS = ["tickets"] as const;
 export type GroupedSection = (typeof GROUPED_SECTIONS)[number];
 
 /**
