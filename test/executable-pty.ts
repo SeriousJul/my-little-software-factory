@@ -94,7 +94,8 @@ export interface PtySession {
 	output(): Buffer;
 	/**
 	 * Wait until the accumulated output satisfies `predicate`, and return it.
-	 * Throws if the deadline passes first.
+	 * Throws if the deadline passes first, naming the wait and the deadline
+	 * it stood on, so a loaded red says which wait missed (issue #321).
 	 */
 	waitFor(predicate: (out: Buffer) => boolean, what: string, timeoutMs?: number): Promise<Buffer>;
 	/**
@@ -102,8 +103,25 @@ export interface PtySession {
 	 *
 	 * A stable frame means the app has booted, rendered, and settled, which
 	 * is when its keyboard handler is reliably live.
+	 *
+	 * `what` names the wait in the same sense `waitFor` does: the miss at the
+	 * deadline throws with the wait's name and the deadline it stood on, so a
+	 * loaded red says which wait missed (issue #321).
+	 *
+	 * The stillness a bare wait accepts can be the silence before the first
+	 * paint: the bin writes its escape setup in one burst and holds its first
+	 * frame, and a key sent into that silence lands before the boot commit's
+	 * own flush and acts on nothing (issue #321). A boot site passes
+	 * `requireChange`: the wait then ends only on a stillness a painted frame
+	 * already broke, and the miss at the deadline says which pass failed - the
+	 * frame never came, or the frame never settled.
 	 */
-	waitForStable(stableMs: number, timeoutMs?: number): Promise<Buffer>;
+	waitForStable(
+		stableMs: number,
+		what: string,
+		timeoutMs?: number,
+		requireChange?: boolean,
+	): Promise<Buffer>;
 	/** Write input to the PTY, as the host terminal would. */
 	write(data: string): void;
 	/** Wait for the process to exit. */
@@ -208,26 +226,34 @@ export async function openPty(
 				const current = output();
 				if (predicate(current)) return current;
 				if (Date.now() >= deadline) {
-					throw new Error(`timed out waiting for ${what}\ncaptured output:\n${preview(current)}`);
+					throw new Error(
+						`timed out waiting for ${what} after ${timeoutMs} ms\ncaptured output:\n${preview(current)}`,
+					);
 				}
 				await sleep(10);
 			}
 		},
-		async waitForStable(stableMs, timeoutMs = 15000): Promise<Buffer> {
+		async waitForStable(stableMs, what, timeoutMs = 15000, requireChange = false): Promise<Buffer> {
 			const deadline = Date.now() + timeoutMs;
 			let last = output().toString("binary");
 			let stableSince = Date.now();
+			let changed = false;
 			for (;;) {
 				const current = output().toString("binary");
 				if (current !== last) {
 					last = current;
 					stableSince = Date.now();
-				} else if (Date.now() - stableSince >= stableMs) {
+					changed = true;
+				} else if (Date.now() - stableSince >= stableMs && (!requireChange || changed)) {
 					return output();
 				}
 				if (Date.now() >= deadline) {
+					const state =
+						requireChange && !changed
+							? `no frame was painted at all, in ${output().length} bytes`
+							: `the output never settled for ${stableMs} ms`;
 					throw new Error(
-						`output never settled for ${stableMs}ms\ncaptured output:\n${preview(output())}`,
+						`timed out waiting for ${what}: ${state} within ${timeoutMs} ms\ncaptured output:\n${preview(output())}`,
 					);
 				}
 				await sleep(10);

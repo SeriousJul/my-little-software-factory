@@ -126,11 +126,20 @@ async function runSession(baseDir: string, kind: "clean" | "lossy"): Promise<Ses
 			"the alternate screen",
 			STARTUP_TIMEOUT_MS,
 		);
-		await session.waitForStable(500, STABLE_TIMEOUT_MS);
+		// The frame is required: the silence before the first paint is not a
+		// live app (issue #321).
+		await session.waitForStable(500, "the screen to settle after boot", STABLE_TIMEOUT_MS, true);
 		session.write(ENTER_KEY);
-		await session.waitForStable(700, STABLE_TIMEOUT_MS);
+		// The arrow key stands on the modal's own painted title: the commit
+		// that drew it is the one that took the keyboard (issue #321).
+		await session.waitFor(
+			(out) => out.includes(MODAL_MARKER),
+			"the decision modal",
+			STABLE_TIMEOUT_MS,
+		);
+		await session.waitForStable(700, "the screen to settle after the Enter key", STABLE_TIMEOUT_MS);
 		session.write(ARROW_DOWN);
-		await session.waitForStable(700, STABLE_TIMEOUT_MS);
+		await session.waitForStable(700, "the screen to settle after the arrow key", STABLE_TIMEOUT_MS);
 	} finally {
 		session.dispose();
 	}
