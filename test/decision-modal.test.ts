@@ -156,11 +156,19 @@ async function openModal(setup: AppSetup): Promise<string> {
  * up to the settled size, that frame included. A window the pop-in can land
  * outside of is a window the case can miss (issue #312).
  *
- * Probe: hold the event loop for 400 ms right after the key, the way a
- * loaded runner holds it, so the pop-in's first paint lands past any fixed
- * window. The pop-in record must stay green with the hold in place; the old
- * window check went red on exactly this hold with "the modal never rendered
- * during the burst; the pop-in window was missed".
+ * Probe, re-runnable on the pushed head: hold the event loop for 400 ms,
+ * the way a loaded runner holds it, with `const held = Date.now() + 400;
+ * while (Date.now() < held) {}`. The hold's placement decides whether the
+ * pre-fix window check goes red. Placed after the pre-fix file's `const
+ * deadline = Date.now() + 300;` line, the hold consumes the window, the
+ * pop-in's first paint lands past it, and the old check goes red on "the
+ * modal never rendered during the burst; the pop-in window was missed".
+ * Placed right after the key, the old check sets its deadline after the
+ * hold, the pop-in lands inside the window, and the old check goes green:
+ * the red stands on the placement after the deadline line. With this fix
+ * the waits set their own deadlines after the hold, so the pop-in record
+ * stays green with the hold in place at either placement; the hold was
+ * removed before the commit.
  */
 describe("the decision modal's pop-in", () => {
 	test("no content ever reaches the terminal's edge while the box grows", async () => {
@@ -194,7 +202,6 @@ describe("the decision modal's pop-in", () => {
 						// The last row is the shared Action bar, not empty margin.
 						expect(rows[rows.length - 1]).toContain("Help");
 					},
-					undefined,
 					5,
 				);
 				// It opens at the bottom, where the conclusion sits.
