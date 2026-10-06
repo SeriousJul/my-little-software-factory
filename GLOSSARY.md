@@ -562,7 +562,7 @@ It is the settle-time write; the handoff-time write is the Placement (ADR 0045).
 _Avoid_: handoff, label flip, workflow edge
 
 **Scoping label**:
-A label a State's match gates a ticket on - its `labels-any` or `labels-all` - that no Transition writes. No fire adds it or removes it, so it is the operator's signal, not the machine's fact. The Repository init creates the ones the config names, because the machine reaches a gate only when the repository holds the label, and a gate the config does not name stays the operator's own to create (ADR 0115).
+A label a State's match gates a ticket on - its `labels-any` or `labels-all` - that no Transition writes. No fire adds it or removes it, so it is the operator's signal, not the machine's fact. The Repository init creates the ones the config names, because the machine reaches a gate only when the repository holds the label, and a gate the config does not name stays the operator's own to create (ADR 0115). A gate may be the source's own vocabulary rather than a label the operator applies for the machine: the shipped machine gates its diagnosis position on `bug`, the label a repository's triage already writes, and the State order keeps the operator's stronger label ahead of it (ADR 0116).
 _Avoid_: entry label, manual label, filter label
 
 **Judgment**:
