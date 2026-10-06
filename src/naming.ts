@@ -3,10 +3,14 @@
  * herdr name an agent starts under.
  *
  * Both derive from the ticket title through one slug, so the ticket's work
- * is recognizable in git and in herdr by the same words. One ticket owns
- * one branch, while its agent name is stable only until a handoff needs it
- * and its own earlier agent still holds it: that handoff takes the same
- * slug with its work cycle, so the name keeps naming the ticket.
+ * is recognizable in git and in herdr by the same words. The branch a
+ * worktree handoff works answers the ticket's branch statement: the ticket's
+ * own branch through `branchNameFor`, and - for the ticket whose source
+ * records which branch its pull request holds - the branch the pull request
+ * holds through `pullRequestBranchFor` (ADR 0112). The agent name is stable
+ * only until a handoff needs it and its own earlier agent still holds it: that
+ * handoff takes the same slug with its work cycle, so the name keeps naming
+ * the ticket.
  *
  * The branch and the name do not share one uniqueness rule, because they do
  * not live in one space. A branch lives inside one repository, so the ticket
@@ -50,10 +54,82 @@ export function ticketBranchKey(externalKey: string): string {
 
 /**
  * The branch a worktree handoff creates: `factory/<ticket id>-<title slug>`.
- * One ticket owns one branch; a second ticket never shares the first's.
+ *
+ * One ticket owns one branch; a second ticket never shares the first's -
+ * except the two tickets of one cycle (ADR 0112): the issue and the pull
+ * request it opens share the issue's branch, the worktree, and the
+ * workspace. A pull request ticket's statement resolves to the branch its
+ * pull request holds through `pullRequestBranchFor`, and falls back to this
+ * own name when the head branch is missing or stands in neither copy.
  */
 export function branchNameFor(ticket: Ticket): string {
 	return `factory/${ticketBranchKey(ticket.externalKey)}-${titleSlug(ticket.title)}`;
+}
+
+/**
+ * The fallback the pull request ticket's branch statement can take, and why
+ * (ADR 0112). A start is never refused for the fact: the fallback is the
+ * answer, not a refusal.
+ */
+export type PullRequestBranchFallback = "missing-fact" | "unavailable";
+
+/** The answer the pull request ticket's branch statement resolves to. */
+export interface PullRequestBranchAnswer {
+	/** The branch the start works. */
+	branch: string;
+	/** The fallback the rule took, or null when the head branch works. */
+	fallback: PullRequestBranchFallback | null;
+}
+
+/**
+ * The branch a pull request ticket's worktree handoff works (ADR 0112).
+ *
+ * The ticket works the branch its pull request holds - the head branch the
+ * source records on its newest membership - so the issue and the pull
+ * request of one cycle share the branch, the worktree, and the workspace.
+ * The head branch works when it stands in the checkout or on origin. The
+ * fallback is the ticket's own factory branch, taken as the answer's stated
+ * fact when the source never recorded the head, or when the head branch
+ * stands in neither copy - the pull request from a fork. A ticket outside a
+ * cycle the plane opened - a human-made pull request - works whatever branch
+ * its pull request holds, the same way.
+ *
+ * The rule is pure over the stated facts. The caller states the standing
+ * facts with the reads the start's reuse path makes the same way, and the
+ * rule itself takes no egress.
+ */
+export function pullRequestBranchFor(facts: {
+	/** The ticket's own factory branch, the naming rule's answer. */
+	factoryBranch: string;
+	/**
+	 * The head-branch fact of the pull request's newest membership, or null
+	 * when the source never recorded one.
+	 */
+	headBranch: string | null;
+	/** Whether the head branch stands in the checkout. */
+	headStandsInCheckout: boolean;
+	/** Whether the head branch stands on origin. */
+	headStandsOnOrigin: boolean;
+}): PullRequestBranchAnswer {
+	if (facts.headBranch === null) return { branch: facts.factoryBranch, fallback: "missing-fact" };
+	if (facts.headStandsInCheckout || facts.headStandsOnOrigin)
+		return { branch: facts.headBranch, fallback: null };
+	return { branch: facts.factoryBranch, fallback: "unavailable" };
+}
+
+/**
+ * The record's line for the fallback the statement took (ADR 0112): the fact
+ * that took it, and the branch the start works on its strength, so the record
+ * says why a cycle wears its numbered branch.
+ */
+export function pullRequestBranchFallbackLine(
+	fallback: PullRequestBranchFallback,
+	headBranch: string | null,
+	workBranch: string,
+): string {
+	if (fallback === "missing-fact")
+		return `the pull request's head branch is not recorded, so the start works the ticket's own branch ${workBranch}`;
+	return `the pull request's head branch ${headBranch ?? ""} stands neither in the checkout nor on origin, so the start works the ticket's own branch ${workBranch}`;
 }
 
 /**

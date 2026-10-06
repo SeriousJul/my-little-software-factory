@@ -11,6 +11,8 @@ import {
 	consultationBranchName,
 	cycleAgentName,
 	identifyHandoffAgentName,
+	pullRequestBranchFallbackLine,
+	pullRequestBranchFor,
 	shortStableIdentity,
 	ticketAgentNames,
 	ticketNameTag,
@@ -369,5 +371,100 @@ describe("identifyHandoffAgentName", () => {
 		expect(identifyHandoffAgentName(undefined, "persist-source-facts")).toBe("unverifiable");
 		expect(identifyHandoffAgentName("", "persist-source-facts")).toBe("unverifiable");
 		expect(identifyHandoffAgentName("persist-source-facts", "")).toBe("unverifiable");
+	});
+});
+
+describe("pullRequestBranchFor (ADR 0112)", () => {
+	const factoryBranch = "factory/12-persist-source-facts";
+	const headBranch = "factory/5-persist-source-facts";
+
+	test("works the head branch when it stands in the checkout", () => {
+		expect(
+			pullRequestBranchFor({
+				factoryBranch,
+				headBranch,
+				headStandsInCheckout: true,
+				headStandsOnOrigin: false,
+			}),
+		).toEqual({ branch: headBranch, fallback: null });
+	});
+
+	test("works the head branch when it stands only on origin", () => {
+		expect(
+			pullRequestBranchFor({
+				factoryBranch,
+				headBranch,
+				headStandsInCheckout: false,
+				headStandsOnOrigin: true,
+			}),
+		).toEqual({ branch: headBranch, fallback: null });
+	});
+
+	test("falls back to the ticket's own branch when the head stands in neither copy", () => {
+		expect(
+			pullRequestBranchFor({
+				factoryBranch,
+				headBranch,
+				headStandsInCheckout: false,
+				headStandsOnOrigin: false,
+			}),
+		).toEqual({ branch: factoryBranch, fallback: "unavailable" });
+	});
+
+	test("falls back to the ticket's own branch when the head fact is missing", () => {
+		expect(
+			pullRequestBranchFor({
+				factoryBranch,
+				headBranch: null,
+				headStandsInCheckout: false,
+				headStandsOnOrigin: false,
+			}),
+		).toEqual({ branch: factoryBranch, fallback: "missing-fact" });
+	});
+
+	test("a human-made pull request works whatever branch its pull request holds", () => {
+		expect(
+			pullRequestBranchFor({
+				factoryBranch: "factory/44-add-cache",
+				headBranch: "feature/add-cache",
+				headStandsInCheckout: true,
+				headStandsOnOrigin: true,
+			}),
+		).toEqual({ branch: "feature/add-cache", fallback: null });
+	});
+
+	test("every standing fact answers a branch, never a refusal", () => {
+		for (const headBranch of [null, "fork:feature", "factory/5-persist-source-facts"]) {
+			for (const standsInCheckout of [true, false]) {
+				for (const standsOnOrigin of [true, false]) {
+					const answer = pullRequestBranchFor({
+						factoryBranch,
+						headBranch,
+						headStandsInCheckout: standsInCheckout,
+						headStandsOnOrigin: standsOnOrigin,
+					});
+					// The answer always names a branch, and never refuses.
+					expect(answer.branch).not.toBe("");
+					// The fallback stands only where the head branch cannot work.
+					const headWorks = headBranch !== null && (standsInCheckout || standsOnOrigin);
+					expect(answer.fallback === null).toBe(headWorks);
+					expect(answer.branch).toBe(headWorks ? headBranch : factoryBranch);
+				}
+			}
+		}
+	});
+
+	describe("pullRequestBranchFallbackLine", () => {
+		test("names the missing fact and the branch the start works", () => {
+			expect(pullRequestBranchFallbackLine("missing-fact", null, factoryBranch)).toBe(
+				`the pull request's head branch is not recorded, so the start works the ticket's own branch ${factoryBranch}`,
+			);
+		});
+
+		test("names the head branch, both copies, and the branch the start works", () => {
+			expect(pullRequestBranchFallbackLine("unavailable", headBranch, factoryBranch)).toBe(
+				`the pull request's head branch ${headBranch} stands neither in the checkout nor on origin, so the start works the ticket's own branch ${factoryBranch}`,
+			);
+		});
 	});
 });
