@@ -249,7 +249,13 @@ type Panel =
 	| { kind: "consultation-force"; identity: string }
 	| { kind: "consultation-delete"; identity: string }
 	| { kind: "consultation-safety"; identity: string }
-	| { kind: "live"; identity: string }
+	/**
+	 * The Live view, and the work cycle it opened on. The cycle is part of the
+	 * panel because the view is one cycle's screen: when the ticket moves to the
+	 * next cycle, the screen the operator was watching has ended, whatever state
+	 * the ticket's row answers on the render that follows.
+	 */
+	| { kind: "live"; identity: string; workCycle: number }
 	| { kind: "repository-select" }
 	| {
 			kind: "repository-init";
@@ -309,6 +315,12 @@ type PendingOverride =
 			origin: "workflow";
 			/** The ticket panel the route row was on: Esc and the confirm return there. */
 			from: "decision" | "live";
+			/**
+			 * The work cycle that panel stood on. The Live view is one cycle's
+			 * screen, so the return names the cycle it returns to, and the route's
+			 * ask - which ends that cycle - ends the returned screen too (ADR 0072).
+			 */
+			workCycle: number;
 			choice: HandoffChoice;
 	  };
 
@@ -1827,7 +1839,14 @@ export function App({
 			// tick. A refused claim comes back to the decision sub-mode, where
 			// the route row still stands.
 			if (pending.from === "live") {
-				setPanel({ kind: "live", identity: pending.ticketIdentity });
+				// The screen returns to the cycle the operator left, and the route's
+				// ask ends that cycle: the view goes back to the list when the
+				// cycle's number moves (ADR 0072).
+				setPanel({
+					kind: "live",
+					identity: pending.ticketIdentity,
+					workCycle: pending.workCycle,
+				});
 			}
 			runRouteHandoff(ticket, ticket.lastCompletion?.transition ?? null, choice);
 			return;
@@ -1847,7 +1866,15 @@ export function App({
 		const pending = overrideRef.current;
 		setOverride(null);
 		if (pending?.origin === "workflow") {
-			setPanel({ kind: pending.from, identity: pending.ticketIdentity });
+			setPanel(
+				pending.from === "live"
+					? {
+							kind: "live",
+							identity: pending.ticketIdentity,
+							workCycle: pending.workCycle,
+						}
+					: { kind: "decision", identity: pending.ticketIdentity },
+			);
 		}
 	};
 	/**
@@ -2480,6 +2507,7 @@ export function App({
 			ticketIdentity: ticket.identity,
 			origin: "workflow",
 			from,
+			workCycle: ticket.workCycle,
 			choice,
 		});
 	};
@@ -3442,7 +3470,7 @@ export function App({
 					if (ticket === undefined || !inFlight(ticket)) return refuse();
 					if (factsFor(ticket).failure === "missing")
 						setPanel({ kind: "missing", identity: ticket.identity });
-					else setPanel({ kind: "live", identity: ticket.identity });
+					else setPanel({ kind: "live", identity: ticket.identity, workCycle: ticket.workCycle });
 				},
 				// `g` focuses the agent's pane in herdr and changes nothing
 				// (ADR 0033): the catalogue gated the pane, so this runs the
@@ -4930,9 +4958,19 @@ export function App({
 	// operator asking: the stream while the agent works (a settled turn the
 	// factory decides for itself keeps streaming), the decision body when
 	// the factory waits for the operator, the missing box when the pane is
-	// gone, and closed when the ticket leaves the in-flight states.
+	// gone, and closed when the ticket leaves the in-flight states or leaves the
+	// work cycle the view opened on.
 	const liveMode: "stream" | "decision" | "missing" | "closed" =
-		panel?.kind === "live" && panelTicket !== undefined
+		panel?.kind === "live" &&
+		panelTicket !== undefined &&
+		// The cycle the view opened on is the cycle it shows. The write that ends
+		// a cycle moves the ticket to `open` and to the next cycle in one step, and
+		// the queued start of the route moves it on again before the plane next
+		// reads it, so the `open` frame is a moment the plane may never be handed:
+		// a surface that waited for that moment alone can be given the next
+		// cycle's frame first and then wait for a screen change that no longer
+		// comes. The cycle number is the durable form of the same fact (ADR 0072).
+		panelTicket.workCycle === panel.workCycle
 			? panelTicket.state === "open"
 				? // The route confirm ends the ticket's cycle on its own surface and
 					// the screen reads the list when the ticket leaves the stream's

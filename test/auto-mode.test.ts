@@ -2532,7 +2532,15 @@ describe("the decision modal", () => {
 				// same write that landed the decision (ADR 0064, ADR 0072), so
 				// the ticket rests open behind the fact, and the Decision
 				// screen - an awaiting screen again - fell back to the list.
-				const list = await settle(setup);
+				// The fallback is the transition, not the ask's line: the frame the
+				// wait above returned can still be the Decision screen. The wait
+				// takes the fact the assertion reads, so a swap that has not started
+				// cannot pass it (issue #304).
+				const list = await awaitFrame(
+					setup,
+					(f) => !f.includes("Decision:"),
+					"the decision screen to fall back to the list",
+				);
 				expect(list).not.toContain("Decision:");
 				expect(ticketRow(list)).toContain("[open]");
 				expect(app.state.ticketWorkCycle.ticketState(identity)).toBe("open");

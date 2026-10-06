@@ -864,6 +864,40 @@ export async function awaitGoneKeyHandler(
 }
 
 /**
+ * Wait until the key bus holds no subscription outside the set `base` held.
+ *
+ * `awaitGoneKeyHandler` names the handler whose release a test waits on, and a
+ * test cannot name one when the surface that holds the keys was mounted and
+ * unmounted between two facts the test can see: a panel a confirm returns to
+ * can have its reopen elided altogether when the transition that closes it
+ * lands in the same render, so no handler of that surface ever joins the bus.
+ * The fact that covers both branches is the one this waits on - every handler
+ * the bus holds is one of the surfaces that already held keys when `base` was
+ * taken, so no closed surface is left holding a key the base mode means to
+ * take.
+ *
+ * `base` is taken with `keyHandlerListeners` while the plane rests in the mode
+ * the test returns to, before any surface the test opens is mounted.
+ */
+export async function awaitBaseKeyHandlers(
+	setup: Setup,
+	base: unknown[],
+	what: string,
+): Promise<void> {
+	const deadline = Date.now() + FRAME_DEADLINE_MS;
+	for (;;) {
+		const now = keyHandlerListeners(setup);
+		if (!now.some((handler) => !base.includes(handler))) return;
+		if (Date.now() >= deadline) {
+			throw new Error(
+				`timed out waiting for ${what} (key handlers: ${now.length}, base: ${base.length})\nlast frame:\n${setup.captureCharFrame()}`,
+			);
+		}
+		await sleep(FRAME_POLL_MS);
+	}
+}
+
+/**
  * Press a key, wait for its effect, then wait for the app to go quiet.
  *
  * A key that lands while an update chain is still in flight - an observation
@@ -1178,7 +1212,17 @@ export async function confirmPanel(
 /**
  * Wait for the frame to stop changing, and return it.
  *
- * For keys that should change nothing, stability is the assertion.
+ * For keys that should change nothing, stability is the assertion, and this is
+ * the wait for them: a refused control, a key a surface does not take, a row
+ * that keeps its badge.
+ *
+ * What this does not measure is *finished*. A transition that has not started
+ * is exactly as quiet as one that is over, and under a loaded runner the swap
+ * is the thing that has not started, so an assertion that a frame must *not*
+ * hold something a transition takes away cannot stand on this wait: it passes
+ * on the frame before the swap and the test goes red on a stable screen
+ * (issue #304). Such a test waits with `awaitFrame` on the fact it then
+ * asserts, and asserts on the frame that wait returned.
  */
 export async function settle(setup: Setup, maxMs = 300): Promise<string> {
 	await sleep(SETTLE_GRACE_MS);

@@ -28,9 +28,11 @@ import { openFactoryState } from "../src/state.ts";
 import type { FetchOutcome } from "../src/ticket-source.ts";
 import {
 	type AppSetup,
+	awaitBaseKeyHandlers,
 	awaitFrame,
 	frameText,
 	HEIGHT,
+	keyHandlerListeners,
 	openGuide,
 	openPanel,
 	press,
@@ -270,6 +272,17 @@ function ticketRow(frame: string, title = "Persist source facts"): string {
  */
 const inFlightFace = (row: string): boolean =>
 	startingFaceOf(row) !== null || row.includes("[running]");
+
+/**
+ * The states a Ticket stands in once its route's ask ended its cycle (ADR 0072).
+ *
+ * The ask leaves the Ticket `open` with the start waiting in the Work queue, and
+ * the queue's pickup takes it through `handed-off` to `running`. The screen falls
+ * back at the ask, so the frame the fallback wait returns says nothing about
+ * which of the three the state has reached: the durable fact is the recorded
+ * decision, which each test reads on its own.
+ */
+const afterRouteAskStates = ["open", "handed-off", "running"];
 
 describe("the Live view on the ticket list", () => {
 	test("g on an open ticket refuses with the Consultation section's words", async () => {
@@ -1013,6 +1026,10 @@ describe("the Live view against a running factory", () => {
 			async (setup) => {
 				app.src.settle(success);
 				await awaitFrame(setup, (f) => f.includes("Persist source facts"), "the ticket row");
+				// The base mode's key handlers, taken before the Live view is open:
+				// the fallback at the end of the walk waits for the bus to hold
+				// nothing but these, so no closed surface eats the next Enter.
+				const baseHandlers = keyHandlerListeners(setup);
 				await pressReturn(setup, "the Live view", (f) => f.includes("Live: Persist source facts"));
 				await awaitFrame(setup, (f) => f.includes("the implementer is finishing"), "the stream");
 				// The agent reports done: the same box turns into the decision,
@@ -1039,12 +1056,27 @@ describe("the Live view against a running factory", () => {
 					(f) =>
 						f.includes("Persist source facts") && !f.includes("Decision: Persist source facts"),
 				);
-				const listFrame = await settle(setup);
+				// The fallback is a transition of its own: the confirm's frame can
+				// still hold the Live view, streaming the new pane, with the start's
+				// line already on the Message line. The wait takes the fact the
+				// assertion reads, because a swap that has not started is as quiet
+				// as one that is over (issue #304).
+				const listFrame = await awaitFrame(
+					setup,
+					(f) => !f.includes("Live:"),
+					"the Live view to fall back to the list",
+				);
+				// The frame falls back before the closing surface's effect cleanup
+				// releases its keys, and an Enter sent in that window reaches the
+				// stale handler, which runs the route row again and answers that the
+				// ticket is already decided. The released keys are the fact the next
+				// press stands on.
+				await awaitBaseKeyHandlers(setup, baseHandlers, "the Live view to release the keys");
 				expect(listFrame).not.toContain("Live: Persist source facts");
 				expect(app.state.ticketWorkCycle.lastCompletion(identity)?.decision).toBe("handed-off");
-				// The new agent is live: the observation loop may already have
-				// marked the in-flight ticket running.
-				expect(["handed-off", "running"]).toContain(
+				// The new agent is live, or its start still waits in the queue: the
+				// screen fell back at the ask, which is the earlier of the two.
+				expect(afterRouteAskStates).toContain(
 					app.state.ticketWorkCycle.ticketState(identity) ?? "",
 				);
 				// The Live view reopens on the row and streams the new pane: the
@@ -1172,6 +1204,9 @@ describe("the Live view against a running factory", () => {
 			async (setup) => {
 				app.src.settle(success);
 				await awaitFrame(setup, (f) => f.includes("Persist source facts"), "the ticket row");
+				// The base mode's key handlers, taken before the Live view is open,
+				// for the reason the case above states.
+				const baseHandlers = keyHandlerListeners(setup);
 				await pressReturn(setup, "the Live view", (f) => f.includes("Live: Persist source facts"));
 				await awaitFrame(setup, (f) => f.includes("the implementer is finishing"), "the stream");
 				app.runner.set("herdr", ["agent", "list"], { stdout: list("done", "working") });
@@ -1197,11 +1232,21 @@ describe("the Live view against a running factory", () => {
 					(f) =>
 						f.includes("Persist source facts") && !f.includes("Decision: Persist source facts"),
 				);
-				const listFrame = await settle(setup);
+				// The same fallback as the decision sub-mode's case, waited for the
+				// same way: the override's confirm leaves the Live view on screen for
+				// a moment, and the frame that moment holds is quiet (issue #304).
+				const listFrame = await awaitFrame(
+					setup,
+					(f) => !f.includes("Live:"),
+					"the Live view to fall back to the list",
+				);
+				// The next Enter waits for the keys the closed surfaces held, for the
+				// reason the case above states.
+				await awaitBaseKeyHandlers(setup, baseHandlers, "the Live view to release the keys");
 				expect(listFrame).not.toContain("Live: Persist source facts");
 				expect(listFrame).not.toContain("Edit handoff");
 				expect(app.state.ticketWorkCycle.lastCompletion(identity)?.decision).toBe("handed-off");
-				expect(["handed-off", "running"]).toContain(
+				expect(afterRouteAskStates).toContain(
 					app.state.ticketWorkCycle.ticketState(identity) ?? "",
 				);
 				// The Live view reopens on the row and streams the new pane.
