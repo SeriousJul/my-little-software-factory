@@ -225,7 +225,7 @@ import{_ as e,o as t,c as a,a0 as i}from"./chunks/framework.D4fUSYzX.js";const c
 <span class="line"><span style="--shiki-light:#032F62;--shiki-dark:#9ECBFF;">### Rules</span></span>
 <span class="line"></span>
 <span class="line"><span style="--shiki-light:#032F62;--shiki-dark:#9ECBFF;">1. **Ground Yourself**</span></span>
-<span class="line"><span style="--shiki-light:#032F62;--shiki-dark:#9ECBFF;">   - Read the repository&#39;s agent instructions and its domain docs (CONTEXT.md and the ADRs) before your first question.</span></span>
+<span class="line"><span style="--shiki-light:#032F62;--shiki-dark:#9ECBFF;">   - Read the repository&#39;s agent instructions and its domain docs (GLOSSARY.md and the ADRs) before your first question.</span></span>
 <span class="line"><span style="--shiki-light:#032F62;--shiki-dark:#9ECBFF;">   - Read the ticket in full, comments included, so the agreement behind it stands behind your questions.</span></span>
 <span class="line"></span>
 <span class="line"><span style="--shiki-light:#032F62;--shiki-dark:#9ECBFF;">2. **Work the Design Tree**</span></span>
@@ -238,7 +238,7 @@ import{_ as e,o as t,c as a,a0 as i}from"./chunks/framework.D4fUSYzX.js";const c
 <span class="line"><span style="--shiki-light:#032F62;--shiki-dark:#9ECBFF;">   - Never post the interview to the ticket. This terminal is the record.</span></span>
 <span class="line"></span>
 <span class="line"><span style="--shiki-light:#032F62;--shiki-dark:#9ECBFF;">4. **Write the Docs as the Design Settles**</span></span>
-<span class="line"><span style="--shiki-light:#032F62;--shiki-dark:#9ECBFF;">   - When a term resolves, update the repository&#39;s glossary (CONTEXT.md) right there.</span></span>
+<span class="line"><span style="--shiki-light:#032F62;--shiki-dark:#9ECBFF;">   - When a term resolves, update the repository&#39;s glossary (GLOSSARY.md) right there.</span></span>
 <span class="line"><span style="--shiki-light:#032F62;--shiki-dark:#9ECBFF;">   - When a decision is hard to reverse, surprising without context, and the result of a real trade-off, write an ADR.</span></span>
 <span class="line"><span style="--shiki-light:#032F62;--shiki-dark:#9ECBFF;">   - Commit the documentation directly to the repository&#39;s default branch, and never push the ticket&#39;s branch or create or merge a pull request: the branch stands for the implementation that follows.</span></span>
 <span class="line"></span>
