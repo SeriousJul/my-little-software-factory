@@ -107,8 +107,21 @@ export interface PtySession {
 	 * `what` names the wait in the same sense `waitFor` does: the miss at the
 	 * deadline throws with the wait's name and the deadline it stood on, so a
 	 * loaded red says which wait missed (issue #321).
+	 *
+	 * The stillness a bare wait accepts can be the silence before the first
+	 * paint: the bin writes its escape setup in one burst and holds its first
+	 * frame, and a key sent into that silence lands before the boot commit's
+	 * own flush and acts on nothing (issue #321). A boot site passes
+	 * `requireChange`: the wait then ends only on a stillness a painted frame
+	 * already broke, and the miss at the deadline says which pass failed - the
+	 * frame never came, or the frame never settled.
 	 */
-	waitForStable(stableMs: number, what: string, timeoutMs?: number): Promise<Buffer>;
+	waitForStable(
+		stableMs: number,
+		what: string,
+		timeoutMs?: number,
+		requireChange?: boolean,
+	): Promise<Buffer>;
 	/** Write input to the PTY, as the host terminal would. */
 	write(data: string): void;
 	/** Wait for the process to exit. */
@@ -220,21 +233,27 @@ export async function openPty(
 				await sleep(10);
 			}
 		},
-		async waitForStable(stableMs, what, timeoutMs = 15000): Promise<Buffer> {
+		async waitForStable(stableMs, what, timeoutMs = 15000, requireChange = false): Promise<Buffer> {
 			const deadline = Date.now() + timeoutMs;
 			let last = output().toString("binary");
 			let stableSince = Date.now();
+			let changed = false;
 			for (;;) {
 				const current = output().toString("binary");
 				if (current !== last) {
 					last = current;
 					stableSince = Date.now();
-				} else if (Date.now() - stableSince >= stableMs) {
+					changed = true;
+				} else if (Date.now() - stableSince >= stableMs && (!requireChange || changed)) {
 					return output();
 				}
 				if (Date.now() >= deadline) {
+					const state =
+						requireChange && !changed
+							? `no frame was painted at all, in ${output().length} bytes`
+							: `the output never settled for ${stableMs} ms`;
 					throw new Error(
-						`timed out waiting for ${what}: the output never settled for ${stableMs} ms within ${timeoutMs} ms\ncaptured output:\n${preview(output())}`,
+						`timed out waiting for ${what}: ${state} within ${timeoutMs} ms\ncaptured output:\n${preview(output())}`,
 					);
 				}
 				await sleep(10);

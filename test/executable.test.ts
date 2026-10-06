@@ -63,7 +63,14 @@ describe.skipIf(!ptyAvailable())("control plane executable, terminal protocol", 
 				);
 				// Let the app boot, render, and settle: that is when its
 				// keyboard handler is reliably live and the quit key will land.
-				await session.waitForStable(500, "the screen to settle after boot", STABLE_TIMEOUT_MS);
+				// The frame is required: the silence before the first paint is
+				// not a live app (issue #321).
+				await session.waitForStable(
+					500,
+					"the screen to settle after boot",
+					STABLE_TIMEOUT_MS,
+					true,
+				);
 
 				// The executable boundary must enable the reporting modes that
 				// deliver wheel, click, and drag input to the panes.
@@ -106,7 +113,9 @@ describe.skipIf(!ptyAvailable())("control plane executable, terminal protocol", 
 					"the alternate screen",
 					STARTUP_TIMEOUT_MS,
 				);
-				await sig.waitForStable(500, "the screen to settle after boot", STABLE_TIMEOUT_MS);
+				// The frame is required: the silence before the first paint is
+				// not a live app (issue #321).
+				await sig.waitForStable(500, "the screen to settle after boot", STABLE_TIMEOUT_MS, true);
 
 				// SIGINT, as Ctrl-C reaches the running control plane. The entry
 				// runs in the same process as the bin, so the signal must

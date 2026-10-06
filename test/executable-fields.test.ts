@@ -70,7 +70,7 @@ describe("shared fields, real terminal input", () => {
 			"the alternate screen",
 			STARTUP_TIMEOUT_MS,
 		);
-		await opened.waitForStable(500, "the screen to settle after boot", STABLE_TIMEOUT_MS);
+		await opened.waitForStable(500, "the screen to settle after boot", STABLE_TIMEOUT_MS, true);
 		return opened;
 	}
 
@@ -87,10 +87,16 @@ describe("shared fields, real terminal input", () => {
 					"the Consultation launcher",
 					INPUT_TIMEOUT_MS,
 				);
-				// Tab to the Draft field, exactly as the launcher's own guide says.
+				// Tab to the Draft field, exactly as the launcher's own guide says,
+				// and stand on the marker the commit that gives the row the keyboard
+				// paints in front of it (issue #321).
 				opened.write(TAB);
 				opened.write(TAB);
-				await opened.waitForStable(300, "the launcher to settle after the tabs", INPUT_TIMEOUT_MS);
+				await opened.waitFor(
+					(out) => rowHoldsFocus(out, "Initial input"),
+					"the focus to reach the Initial input row",
+					INPUT_TIMEOUT_MS,
+				);
 				opened.write("first draft line");
 				opened.write(ENTER);
 				opened.write("second draft line");
@@ -106,9 +112,9 @@ describe("shared fields, real terminal input", () => {
 
 				// The visible action is the route: Tab reaches it, Enter runs it.
 				opened.write(TAB);
-				await opened.waitForStable(
-					300,
-					"the launcher to settle before the Launch key",
+				await opened.waitFor(
+					(out) => rowHoldsFocus(out, "Launch Consultation"),
+					"the focus to reach the Launch Consultation row",
 					INPUT_TIMEOUT_MS,
 				);
 				opened.write(ENTER);
@@ -142,7 +148,11 @@ describe("shared fields, real terminal input", () => {
 				await opened.waitFor((out) => out.includes("Consultation launcher"), "the launcher");
 				opened.write(TAB);
 				opened.write(TAB);
-				await opened.waitForStable(300, "the launcher to settle after the tabs", INPUT_TIMEOUT_MS);
+				await opened.waitFor(
+					(out) => rowHoldsFocus(out, "Initial input"),
+					"the focus to reach the Initial input row",
+					INPUT_TIMEOUT_MS,
+				);
 				opened.write(`${BRACKETED_PASTE_START}1e3${BRACKETED_PASTE_END}`);
 				const pasted = await opened.waitFor(
 					(out) => out.includes("1e3"),
@@ -224,7 +234,11 @@ describe("shared fields, real terminal input", () => {
 				await opened.waitFor((out) => out.includes("Consultation launcher"), "the launcher");
 				opened.write(TAB);
 				opened.write(TAB);
-				await opened.waitForStable(300, "the launcher to settle after the tabs", INPUT_TIMEOUT_MS);
+				await opened.waitFor(
+					(out) => rowHoldsFocus(out, "Initial input"),
+					"the focus to reach the Initial input row",
+					INPUT_TIMEOUT_MS,
+				);
 				opened.write("selected words");
 				// Select two cells, then press Ctrl+C: a selection must not turn the
 				// plane's safety key into a copy.
@@ -308,6 +322,22 @@ function screenOf(out: Buffer): string {
 		index = cursor + 1;
 	}
 	return screen;
+}
+
+/** The marker the plane paints in front of the row that holds the keyboard. */
+const FOCUS_MARKER = "❯ ";
+
+/**
+ * Whether the row labelled `label` holds the focus marker in the painted bytes.
+ *
+ * The marker is painted in the same commit that gives the row the keyboard, so
+ * it is the fact the next key stands on: a key sent after the marker stands
+ * reaches the field that holds it. A silence wait proves none of this - the
+ * parent's read lags the child's commits, and a key sent into that gap lands
+ * before the commit and acts on nothing (issue #321).
+ */
+function rowHoldsFocus(out: Buffer, label: string): boolean {
+	return screenOf(out).includes(FOCUS_MARKER + label);
 }
 
 /** A config with one Consultation type and no Ticket source. */
