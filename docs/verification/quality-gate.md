@@ -965,6 +965,161 @@ is the frame deadline the first round measured at 10105.23 ms.
 | `bun test test/live-view.test.ts` alone | 21 pass / 0 fail in 10.20 s (100 `expect()`) |
 | The sweep's branch column, re-run from the six rules on this head | 156 files, 300 call sites, 119 assigned results, 105 with an assertion, 34 sites / 36 assertions on the result, 20 sites / 26 assertions loose - the recorded row, unchanged by the rework |
 
+## Issue #311: frame waits still miss the deadline under load in the surfaces the #302 fix does not touch (2026-10-06, the fix)
+
+[Issue #311](https://github.com/SeriousJul/my-little-software-factory/issues/311)
+filed the deadline miss that survives the #302 restore fix: a full-suite red
+on `test/repository-select-panel.test.ts` - "Esc closes the list and keeps
+the base frame" - at the local `FRAME_DEADLINE_MS`, green alone. The fix lands
+on pull request [#318](https://github.com/SeriousJul/my-little-software-factory/pull/318),
+fix commit `82b5e640`, and this section records the rework round the review
+scored 76 / 100.
+
+### What the code does
+
+A surface takes and releases its key handler in a passive effect. The
+reconciler runs the flush a commit queues on the scheduler's clock at the
+normal priority, never on a frame, and the plane paints on invalidation, so on
+a loaded runner the flush lands 2 to 6 ms after the frame the same commit
+drew. The waits that stood in that window are the ones that end on a pass the
+reconciler owes, not a frame the plane owes:
+
+- `closeOverlay` took its key-handler snapshot in the window. The snapshot
+  held only the shell's handlers, which never leave the bus, so the
+  `awaitGoneKeyHandler` that follows could end on nothing and missed
+  `FRAME_DEADLINE_MS` at ~10 s.
+- every `awaitFrame` predicate that waits on a fact a late commit or a late
+  passive flush carries.
+
+`act` was ruled out by measurement: `await act(async () => {})` does not flush
+a pending passive flush, it only yields to the event loop.
+
+### The reproduction, and the probe it carries
+
+`test/passive-flush-hold.ts` puts the rig's own array in the reconciler's
+`actQueue` seam and wraps the scheduler's schedule function, which the
+reconciler takes at its own module init, so the wrap stands through the
+`[test] preload` in `bunfig.toml`. The seam is React's private interior and is
+version-pinned in the file's doc: it stands on the `react 19.3.0` /
+`scheduler 0.27.0` pair this checkout resolves - declared `react ^19.2.0` and
+`scheduler ^0.27.0` in `package.json`, one copy of each - and a bump that moves
+the seam breaks the hold visibly, because a hold that no longer stands on it
+keeps nothing and the pin's kept check goes red. The fix itself - the waits
+running the flush before they read - is not version-bound; only the seam is.
+
+The pin is the case "Esc closes the list when the plane's own flush lands
+late" in `test/repository-select-panel.test.ts`: the hold stands up for the
+loaded case, the open's commit stands in the rig's hand, and the green run
+asserts the hold kept at least one flush. The probe that re-opens the red
+stands in the pin's own doc: delete the `flushPassiveNow();` line of the poll
+loop in `awaitFrame`, and the pin goes red at the deadline on "the list to
+open". Re-measured on this head at `82b5e640`: red at 10029.65 ms, and all
+thirteen other cases in the file stay green. The earlier round recorded the
+same probe at 10.05 s.
+
+### What the fix holds
+
+- `test/app-harness.ts`: every `awaitFrame` poll flushes before it captures;
+  `closeOverlay` flushes before it snapshots; the key-bus waits flush per poll
+  through the shared `awaitKeyBus` loop. The fixpoint the walk takes is named
+  in the hold's file as `FLUSH_FIXPOINT_ROUNDS` (8): a commit the walk lands
+  queues one flush, and a flush it runs can queue the update it settles, so
+  two rounds settle a commit and its flush, and the bound is a margin over
+  that shape, not a measured depth.
+- `package.json` / `bun.lock`: `scheduler` as a dev dependency, the same
+  0.27.0 the reconciler already resolves.
+- No `src/` change: the app was sound; the waits owed themselves a flush they
+  did not run.
+
+### The sweep
+
+Counted on the merged tree (the head above `origin/main`):
+
+- 814 direct `awaitFrame` sites in 34 test files: 813 on
+  `FRAME_DEADLINE_MS`, one on its own 350 ms in `ticket-grouping-frame`.
+- 986 press-family sites that each await one frame through the harness (647
+  `press`, 217 `pressArrow`, 89 `pressReturn`, 19 `pressEnterQuiet`, 12
+  `pressScrollKey`, 2 `pressQuiet`).
+- 188 open- and close-helper sites (32 `closeOverlay`, 13 `confirmPanel`, 143
+  open helpers), each one frame plus one key handler.
+- 193 key handler waits (5 direct, the rest through the helpers).
+
+The ones that can end only on a pass the plane does not owe are the 193 key
+handler waits: they end on the passive-effect flush, the mount subscribe and
+the unmount unsubscribe, owed to the reconciler, not to the renderer. Every
+wait on the deadline now runs `flushPassiveNow` per poll before it reads. The
+counts stand in the `FRAME_DEADLINE_MS` doc in `test/app-harness.ts`, and the
+corrected counts supersede the 807 / 985 / 192 the first round recorded before
+the rebase onto the `#316` tree.
+
+### The loaded runs, and the reds they turned
+
+A 28-loop load rig (load 31 to 41), three full runs on the branch before the
+rebase (head `4a3291e1`):
+
+| Run | Result | Reds, named by file and case |
+| --- | --- | --- |
+| 1 | 3068 pass / 0 fail | - |
+| 2 | 3065 pass / 3 fail | `test/action-bar.test.ts` - "q quits from both base panes" at 721 ms; `test/executable-fields.test.ts` - "opens the launcher" at 10.0 s; `test/consultation-frame.test.ts` - "a rejected prompt keeps the draft" at 262 ms. Re-run alone under the same load: 12 of 12 green for the first two, 11 of 12 for consultation-frame (its one red was a different case, "a launch stays on the launched Consultation", 461 ms), so load flakes by the triage rule |
+| 3, the second full-suite red | 3067 pass / 1 fail | `test/ignored-ticket.test.ts` - "a start the operator asked for after an ignore still runs", at 10.2 s in the wait for the Agent start command. The file passes alone under the same load (7 of 8), and the same case missed the same way on the base commit under the same load (1 of 8): pre-existing, and a different class - that wait's end is an app dispatch through the runner, not a passive flush, so the fix here does not cover it. Recorded, not fixed |
+
+The pseudo-terminal miss in run 2 is the one the issue's own table names at
+10007.09 ms in the earlier branch run. That seam is not covered by this fix -
+nothing in `test/executable-fields.test.ts` runs the harness's flush, and the
+rig's waits stand at 12000 ms and 8000 ms, so which wait missed there is not
+measured - and it is filed on 2026-10-06 as
+[issue #321](https://github.com/SeriousJul/my-little-software-factory/issues/321).
+That is the scope decision: the fix answers the harness's waits, and the
+pseudo-terminal seam is a sibling issue, not a widening of this branch.
+
+### Which wait missed, recorded
+
+The case holds two `awaitFrame` waits and a gone-wait, and the run's record
+carries the case name only. The attribution stands at the reproduction layer
+and the loaded-iteration layer, and this record does not extend it past that:
+
+- The pin's probe ties the open-side wait ("the list to open") to the deadline
+  miss under the held shape: red at 10029.65 ms on this head, measured above.
+- The loaded-iteration run ties the loaded miss to the close-side gone-wait:
+  9 misses in 2160 iterations of the case, all at the deadline, all in the
+  gone-wait, in the window between the commit the open drew and the subscribe
+  it owed.
+- A deterministic close-side red at the unit layer was not reached on this
+  round. A probe that stood the hold before the open missed the close's commit
+  entirely - the close never drew, which is a shape the case does not walk -
+  and that probe is not a reproduction of the case's gone-wait. The gone-wait's
+  exposure is the snapshot window measured at 2 to 6 ms, and the
+  2160-iteration record above stands for it.
+
+### The gate on this head
+
+On `82b5e640` plus the rework commit, merged tree (level with `origin/main`
+at `0a37b118`), load 1.22 before, no other `bun test` on the machine:
+
+| Check | Result |
+| --- | --- |
+| `bun run lint` | Clean over 310 files in 147 ms |
+| `bun run typecheck` | Clean |
+| `bun run docs:build` | Complete in 1.67 s |
+| `bun run test` | 3102 pass / 0 fail across 141 files in 38.53 s (17,245 `expect()`) |
+| `bun run test test/repository-select-panel.test.ts` | 14 pass / 0 fail in 1.97 s (31 `expect()`) |
+
+### The review rework round (2026-10-06)
+
+The review of the branch scored it 76 / 100 and asked for seven changes. Each
+is recorded with what it became, in this section and in the pull request's
+body, which the rework rewrote from the issue's text into the fix's record:
+
+| The review asked for | What it became |
+| --- | --- |
+| The branch sat on `25937453` and `origin/main` had moved to `0a37b118` | Rebased; the rebase takes the #316 tree whole, and the gate above ran on the merged tree |
+| The body's sweep counts stand at the pre-rebase reading (807 / 985 / 192), and its Live view sentence describes a rewrite the rebase dropped | The body is rewritten: the sweep stands at 814 / 986 / 193 on the merged tree, and the Live view cases are re-pointed to the #316 version of `test/live-view.test.ts` that `origin/main` landed, so the sentence no longer describes this branch's work |
+| The second full-suite red is not named by file and case | Named above: `test/ignored-ticket.test.ts` - "a start the operator asked for after an ignore still runs", at 10.2 s, with the three reds of run 2 named in the same table |
+| The fix is not recorded in the gate record, and the #311 rows stand stale | This section, and the CI load flake row in [the table below](#what-was-not-measured) re-pointed to it |
+| The pseudo-terminal miss's scope is not stated | Stated above: filed as [issue #321](https://github.com/SeriousJul/my-little-software-factory/issues/321), out of scope for this branch |
+| The record does not say which wait the original loaded run missed | Recorded above: the pin ties the open-side wait, the 2160-iteration run ties the loaded miss to the gone-wait, and the single full-suite miss is not attributable from the run's own record |
+| The 8-round fixpoint bound is unnamed, and the seam's version stand is unstated | `FLUSH_FIXPOINT_ROUNDS` in `test/passive-flush-hold.ts` carries the bound and why it is a margin, and the file's doc pins the seam to the `react 19.3.0` / `scheduler 0.27.0` pair the checkout resolves |
+
 ## What was not measured
 
 | Item | State |
@@ -973,5 +1128,5 @@ is the frame deadline the first round measured at 10105.23 ms.
 | The hook installed in the operator's checkout | Passed. `git config core.hooksPath scripts/git-hooks` is set in this checkout, and the push above is the proof it is live. The setup line stays a documented step on [the commands page](../development/commands.md) for every other checkout |
 | The doc-claim rule, the rename sweep, the documented-line rule, the probe rule, the determinism rule, the fake-fidelity rule, the file-the-defect rule, the failure-mode sweep, and the reporting rules | First measured by the self-review round above, on `b3b5fc38`: the probe rule, the rename sweep, the determinism rule, the file-the-defect rule, and the doc-claim rule each produced a result there, and the doc-claim rule found the stale cost numbers. What stays incomplete is the round's value: every commit was written by the agent that wrote the rules, so this is self-review, and a round on a pull request from a different author is the first independent measurement |
 | The 14 domain types in `UNREAD_TYPE_BASELINE` | Answered on 2026-10-05 in [the section above](#issue-301-the-14-unread-domain-types-2026-10-05): each name took one of [issue #301](https://github.com/SeriousJul/my-little-software-factory/issues/301)'s three answers and the baseline stands empty. What stays unmeasured is whether any of them is dead, which the check still cannot see, and it is recorded in that section |
-| The CI load flake on the frame tests | Investigated on 2026-10-05 and filed as [issue #302](https://github.com/SeriousJul/my-little-software-factory/issues/302): four remote frame-deadline misses, the mechanism measured, no local reproduction, and no fix shipped on that evidence. The scroll half of it is answered on 2026-10-05 in [the section above](#issue-302-the-details-scroll-restore-waits-for-a-pass-the-plane-does-not-owe-2026-10-05-the-fix). What stays open is the rest of the class: the other three named misses do not share the mechanism, and the deadline miss itself still reproduces in a full suite on this branch, which is filed on 2026-10-05 as [issue #311](https://github.com/SeriousJul/my-little-software-factory/issues/311) with its reproductions in that section. The older records in [the shared control record](./shared-controls.md) and the pull request records stand |
+| The CI load flake on the frame tests | Investigated on 2026-10-05 and filed as [issue #302](https://github.com/SeriousJul/my-little-software-factory/issues/302): four remote frame-deadline misses, the mechanism measured, no local reproduction, and no fix shipped on that evidence. The scroll half of it is answered on 2026-10-05 in [the section above](#issue-302-the-details-scroll-restore-waits-for-a-pass-the-plane-does-not-owe-2026-10-05-the-fix). The deadline miss that survived that fix is [issue #311](https://github.com/SeriousJul/my-little-software-factory/issues/311), answered on 2026-10-06 by the fix in pull request [#318](https://github.com/SeriousJul/my-little-software-factory/pull/318): the harness's waits run the reconciler's flush before they read, and the pin stands in `test/repository-select-panel.test.ts` - recorded in [the #311 section above](#issue-311-frame-waits-still-miss-the-deadline-under-load-in-the-surfaces-the-302-fix-does-not-touch-2026-10-06-the-fix). What stays open is the pseudo-terminal seam that stands beside the class, filed on 2026-10-06 as [issue #321](https://github.com/SeriousJul/my-little-software-factory/issues/321). The older records in [the shared control record](./shared-controls.md) and the pull request records stand |
 | The live terminal walk, the screen-reader path, and the theme inheritance inside a real herdr | Open, as [the shared control record](./shared-controls.md) states. The gate is a claim about the automated checks and the tree they ran on, and it extends no further |

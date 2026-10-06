@@ -13,13 +13,13 @@ import { CliRenderEvents } from "@opentui/core";
 import { type MouseButton, MouseButtons } from "@opentui/core/testing";
 import { createElement } from "@opentui/react";
 import { testRender } from "@opentui/react/test-utils";
-
 import { App, type AppProps } from "../src/components/app.ts";
 import { SPINNER_FRAMES } from "../src/components/shared/spinner.ts";
 import { resolveTheme, type ThemeRole } from "../src/components/shared/theme.ts";
 import { TICKET_STATES, type Ticket } from "../src/domain/ticket.ts";
 import { BASE_CONFIG } from "./base-config.ts";
 import { emptyAgentRunner } from "./fake-runner.ts";
+import { flushPassiveNow } from "./passive-flush-hold.ts";
 import { SAMPLE_TICKETS } from "./sample-tickets.ts";
 import "./theme-isolation.ts";
 
@@ -44,6 +44,25 @@ const FRAME_POLL_MS = 10;
  * deadline was not tuned for. Doubling it there keeps a slow runner slow
  * instead of red; a test whose effect never arrives still fails, at 20000 ms
  * instead of 10000.
+ *
+ * The #311 sweep counts every wait that stands on this deadline, at the
+ * fix's head: 814 direct `awaitFrame` sites in 34 test files (813 on this
+ * deadline, one on its own 350 ms in `ticket-grouping-frame`), 986
+ * press-family sites that each await one frame through this file (647
+ * `press`, 217 `pressArrow`, 89 `pressReturn`, 19 `pressEnterQuiet`, 12
+ * `pressScrollKey`, 2 `pressQuiet`), and 188 open- and close-helper sites
+ * (32 `closeOverlay`, 13 `confirmPanel`, 143 open helpers) that each await
+ * one frame plus one key handler. The 193 key handler waits - 5 direct
+ * (4 `awaitNewKeyHandler`, 1 `awaitBaseKeyHandlers`) and the rest through
+ * the helpers - are the ones that can end only on a pass the plane does
+ * not owe. They end on React's
+ * passive-effect flush - the mount subscribe and the unmount unsubscribe -
+ * scheduled at the normal priority, and owed to the reconciler, not to the
+ * renderer. The plane paints on
+ * invalidation, so no frame ends them on its own (the #302/#310 class was
+ * the renderer-pass mirror of the same shape). Every wait above now runs
+ * `flushPassiveNow` per poll before it reads, so each of them ends on what
+ * it waits for instead of on the scheduler's next turn.
  */
 export const FRAME_DEADLINE_MS = process.env.CI ? 20000 : 10000;
 /** The dispatch grace `settle` waits out before trusting stability. */
@@ -581,6 +600,13 @@ export function announceFramePass(setup: Setup): void {
  * The wait ends when the effect appears, or the deadline fails the test
  * with the last frame. A stale frame can never pass an assertion. A test
  * that holds a seat with a timed command can pass a longer deadline.
+ *
+ * Each poll first flushes what React still owes at the normal priority:
+ * the commit a keypress or a source answer scheduled, and the passive
+ * flush that commit queued, land in the rig's own turn before the frame
+ * the poll captures. On a loaded runner that flush landed 2 to 6 ms
+ * after the frame the same commit drew, and a wait that ended on it
+ * missed `FRAME_DEADLINE_MS` even though the app was sound (issue #311).
  */
 export async function awaitFrame(
 	setup: Setup,
@@ -598,6 +624,7 @@ export async function awaitFrame(
 			throw new Error(`timed out waiting for ${what}\nlast frame:\n${frame}`);
 		}
 		await sleep(FRAME_POLL_MS);
+		flushPassiveNow();
 		frame = setup.captureCharFrame();
 	}
 }
@@ -828,6 +855,10 @@ async function awaitKeyBus(
 ): Promise<void> {
 	const deadline = Date.now() + FRAME_DEADLINE_MS;
 	for (;;) {
+		// The bus takes and drops its handlers in passive effects, and the
+		// flush a commit queues lands on the scheduler's clock, not on any
+		// frame (issue #311): run it in the wait's own turn before the read.
+		flushPassiveNow();
 		const now = keyHandlerListeners(setup);
 		if (settled(now)) return;
 		if (Date.now() >= deadline) {
@@ -1154,6 +1185,14 @@ export async function closeOverlay(
 	what: string,
 	closeKey: "escape" | "F1" | "F2" = "escape",
 ): Promise<string> {
+	// The snapshot must hold the closing surface's own handler. The surface
+	// is mounted and drawn, but its subscribe is a passive effect that the
+	// scheduler has not run yet, and a snapshot taken in that window holds
+	// only the shell's handlers, which never leave the bus: the gone-wait
+	// that follows can end on nothing and misses the deadline (issue #311).
+	// The flush lands every pending subscribe before the snapshot, in the
+	// rig's own turn, whatever the scheduler's clock is doing.
+	flushPassiveNow();
 	const before = keyHandlerListeners(setup);
 	if (closeKey === "F1") pressF1(setup);
 	else if (closeKey === "F2") pressF2(setup);

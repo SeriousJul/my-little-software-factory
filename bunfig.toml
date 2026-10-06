@@ -9,5 +9,10 @@
 # every file, the way the isolation's own header states the contract. Files
 # that boot the app import the same module through the shared harness, and
 # the doubled hook clears twice, which changes nothing.
+#
+# The passive-flush preload patches the scheduler before any test file's
+# imports can load React's reconciler, which takes the scheduler's schedule
+# function at its own module init. It is inert until a test holds the
+# passive flushes, the way the hold's own header states (issue #311).
 [test]
-preload = ["./test/theme-isolation.ts"]
+preload = ["./test/theme-isolation.ts", "./test/passive-flush-hold.ts"]
