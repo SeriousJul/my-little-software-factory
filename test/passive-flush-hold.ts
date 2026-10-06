@@ -39,6 +39,17 @@
  * and records it, so the scheduler's clock runs the world as before and
  * the record keeps what is still owed.
  *
+ * The seam is React's private interior, and it is version-pinned. It stands
+ * on the `react 19.3.0` / `scheduler 0.27.0` pair this checkout resolves -
+ * declared `react ^19.2.0` and `scheduler ^0.27.0` in `package.json`, one
+ * copy of each, the `scheduler` the reconciler already resolves - and the
+ * wrap was verified against that pair, not against a newer one. Neither
+ * `actQueue` nor the wrap is a public contract: a bump that moves either of
+ * them breaks the hold, and the break is visible, because a hold that no
+ * longer stands on the seam keeps nothing, and the pin's kept check goes
+ * red on the break. The fix itself - the waits running the flush before
+ * they read - is not version-bound; only this test seam is.
+ *
  * The key takes the hold down, runs what it kept, and hands back the
  * count it kept. A hold up on top of a hold, or a key used twice, fails:
  * a doubled hold could no longer say whose flush was whose.
@@ -67,6 +78,17 @@ const schedulerExports = require("scheduler") as {
 const realSchedule = schedulerExports.unstable_scheduleCallback;
 const realCancel = schedulerExports.unstable_cancelCallback;
 const normalPriority = schedulerExports.unstable_NormalPriority;
+
+/**
+ * The rounds the fixpoint walk takes before it stops. A commit the walk
+ * lands queues one flush, and a flush it runs can queue the update it
+ * settles, so two rounds settle a commit and its flush, and the bound is
+ * a margin over that shape, not a measured depth: no press the tests make
+ * chains more than one flush behind the commit it owns. A walk that reaches
+ * the bound with work still owed or kept returns holding it, the way the
+ * scheduler's own clock would, and the poll's next turn settles it.
+ */
+const FLUSH_FIXPOINT_ROUNDS = 8;
 
 interface OwedCallback {
 	/** The callback wrapped so its own run retires the record. */
@@ -110,7 +132,7 @@ schedulerExports.unstable_scheduleCallback = (priority, callback, options) => {
  * the record again and the next round settles it.
  */
 export function flushPassiveNow(): void {
-	for (let round = 0; round < 8; round++) {
+	for (let round = 0; round < FLUSH_FIXPOINT_ROUNDS; round++) {
 		let ran = 0;
 		const owed = [...state.owed];
 		for (const entry of owed) {
