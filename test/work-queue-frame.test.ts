@@ -1,8 +1,9 @@
 /**
  * The Work queue's frame tests (ADR 0049): the section stands on the Main
- * view whatever the queue holds, its rows carry the origin and the ticket's
- * title, + and - move the selected item, Delete cancels the start under the
- * cursor, and the emptied section keeps its header with its count.
+ * view whatever the queue holds, its rows carry the task type the start runs
+ * and the ticket's title, + and - move the selected item, Delete cancels the
+ * start under the cursor, and the emptied section keeps its header with its
+ * count.
  *
  * The tests boot the real app against a temporary state with a FakeSource,
  * and they seed the queue straight into the state the way a refused manual
@@ -256,23 +257,22 @@ type AppSetup = Parameters<Parameters<typeof withApp>[0]>[0];
 // queue row instead, where the queue's keys and the detail act on it.
 async function clickWorkHeader(setup: AppSetup): Promise<void> {
 	// The click lands on the first queue row inside the Work queue's own box:
-	// the Ticket rows lead with the same origin-looking state badges, so the
-	// walk starts below the queue's top border, not at the frame's first
-	// match.
+	// the Ticket rows lead with the same state badges, so the walk starts
+	// below the queue's top border, not at the frame's first match.
 	const rows = rowsOf(stripAnsi(setup.captureCharFrame()));
 	const boxTop = rows.findIndex((row) => row.includes("Work queue"));
 	expect(boxTop).toBeGreaterThanOrEqual(0);
-	const row = rows.slice(boxTop + 1).findIndex((row) => /\[(open|workflow|restart)\]\s+/.test(row));
+	const row = rows.slice(boxTop + 1).findIndex((candidate) => candidate.startsWith("│"));
 	expect(row).toBeGreaterThanOrEqual(0);
 	await mouseClick(setup, 2, boxTop + 1 + row);
 }
 
 /**
- * The frame row of a queue row, read by its origin-and-title lead.
+ * The frame row of a queue row, read by its type-and-title lead.
  *
  * The Ticket rows carry their state badge between the marker and the title,
- * so `[open] Add a webhook retry policy` leads a queue row and only a queue
- * row at the width these frames hold.
+ * so `implement Add a webhook retry policy` leads a queue row and only a
+ * queue row at the width these frames hold.
  */
 // The live frame carries the styles as escape sequences between the styled
 // spans, so a lead that crosses a span boundary strips them first.
@@ -285,13 +285,13 @@ const stripAnsi = (text: string): string =>
 const queueRowIndex = (frame: string, lead: RegExp): number =>
 	rowsOf(stripAnsi(frame)).findIndex((row) => lead.test(row));
 
-/** The queue's own rows, by origin lead, for the before-and-after compares. */
+/** The queue's own rows, by their type-word lead, for the before-and-after compares. */
 const queueRowsOf = (frame: string): string[] =>
-	rowsOf(stripAnsi(frame)).filter((row) => /\[(open|workflow|restart)\]\s+/.test(row));
+	rowsOf(stripAnsi(frame)).filter((row) => /^│\s*(❯\s)?implement\s+/.test(row));
 
-/** The queue rows lead with their origin, padded to a fixed width. */
-const openRowLead = /\[open\]\s+Add a webhook retry policy/;
-const workflowRowLead = /\[workflow\]\s+Close the stale deploy branch/;
+/** The queue rows lead with their task type, padded to a fixed width. */
+const firstRowLead = /implement\s+Add a webhook retry policy/;
+const secondRowLead = /implement\s+Close the stale deploy branch/;
 
 describe("the Work queue section", () => {
 	/**
@@ -355,7 +355,7 @@ describe("the Work queue section", () => {
 			await booted(
 				async (setup) => {
 					source.settle(success(twoTickets()));
-					await awaitFrame(setup, (f) => queueRowIndex(f, openRowLead) >= 0, "the queued start");
+					await awaitFrame(setup, (f) => queueRowIndex(f, firstRowLead) >= 0, "the queued start");
 					await clickWorkHeader(setup);
 					// The state file refuses every write, the way a read-only
 					// volume or a full disk does.
@@ -393,7 +393,7 @@ describe("the Work queue section", () => {
 			await booted(
 				async (setup) => {
 					source.settle(success(twoTickets()));
-					await awaitFrame(setup, (f) => queueRowIndex(f, openRowLead) >= 0, "the queued start");
+					await awaitFrame(setup, (f) => queueRowIndex(f, firstRowLead) >= 0, "the queued start");
 					// The header carries no pause fact while the drain runs.
 					const resting = await settle(setup);
 					expect(frameText(resting)).toContain("waiting: 1");
@@ -455,7 +455,7 @@ describe("the Work queue section", () => {
 			await booted(
 				async (setup) => {
 					source.settle(success(twoTickets()));
-					await awaitFrame(setup, (f) => queueRowIndex(f, openRowLead) >= 0, "the queued start");
+					await awaitFrame(setup, (f) => queueRowIndex(f, firstRowLead) >= 0, "the queued start");
 					await clickWorkHeader(setup);
 					await press(setup, "p", "the queue pause", (f) =>
 						messageRowOf(f).includes("Work queue paused"),
@@ -504,7 +504,7 @@ describe("the Work queue section", () => {
 			await booted(
 				async (setup) => {
 					source.settle(success(twoTickets()));
-					await awaitFrame(setup, (f) => queueRowIndex(f, openRowLead) >= 0, "the queued start");
+					await awaitFrame(setup, (f) => queueRowIndex(f, firstRowLead) >= 0, "the queued start");
 					// The real write path, made to fail while the read still works: the
 					// pause table is replaced by a view of the same name, so the plane's
 					// write to it is refused by SQLite while its every-frame read of the
@@ -560,7 +560,7 @@ describe("the Work queue section", () => {
 			await booted(
 				async (setup) => {
 					source.settle(success(twoTickets()));
-					await awaitFrame(setup, (f) => queueRowIndex(f, openRowLead) >= 0, "the queued start");
+					await awaitFrame(setup, (f) => queueRowIndex(f, firstRowLead) >= 0, "the queued start");
 					await clickWorkHeader(setup);
 					await awaitFrame(
 						setup,
@@ -612,7 +612,7 @@ describe("the Work queue section", () => {
 			await booted(
 				async (setup) => {
 					source.settle(success(twoTickets()));
-					await awaitFrame(setup, (f) => queueRowIndex(f, openRowLead) >= 0, "the queued start");
+					await awaitFrame(setup, (f) => queueRowIndex(f, firstRowLead) >= 0, "the queued start");
 					// The cursor is on the queue row, and the list stands.
 					await clickWorkHeader(setup);
 					await awaitFrame(setup, (f) => f.includes("┌─❯ Work queue"), "the queue cursor");
@@ -622,14 +622,14 @@ describe("the Work queue section", () => {
 						f.includes("▸ Work"),
 					);
 					expect(collapsed).toContain("waiting: 1");
-					expect(queueRowIndex(collapsed, openRowLead)).toBe(-1);
+					expect(queueRowIndex(collapsed, firstRowLead)).toBe(-1);
 					// The cursor left with the list: the cross now walks the two
 					// standing sections, and `x` again brings the queue back.
 					const expanded = await press(
 						setup,
 						"x",
 						"the Work section to expand",
-						(f) => queueRowIndex(f, openRowLead) >= 0,
+						(f) => queueRowIndex(f, firstRowLead) >= 0,
 					);
 					expect(expanded).toContain("▾ Work");
 				},
@@ -658,7 +658,7 @@ describe("the Work queue section", () => {
 			await booted(
 				async (setup) => {
 					source.settle(success(twoTickets()));
-					await awaitFrame(setup, (f) => queueRowIndex(f, openRowLead) >= 0, "the queued start");
+					await awaitFrame(setup, (f) => queueRowIndex(f, firstRowLead) >= 0, "the queued start");
 					await clickWorkHeader(setup);
 					const before = await settle(setup);
 					// In the queue list: the press leaves the rows, the order, and
@@ -798,7 +798,7 @@ describe("the Work queue section", () => {
 		}
 	});
 
-	test("the Work header appears with its count, and the rows carry the origin and the title", async () => {
+	test("the Work header appears with its count, and the rows carry the task type and the title", async () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
 		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
 		state.grouping.setGroupingAxis("tickets", "none");
@@ -821,16 +821,16 @@ describe("the Work queue section", () => {
 					await clickWorkHeader(setup);
 					const expanded = await awaitFrame(
 						setup,
-						(f) => f.includes("▾ Work") && f.includes("[open]"),
+						(f) => f.includes("▾ Work") && queueRowIndex(f, firstRowLead) >= 0,
 						"the Work queue item row",
 					);
-					expect(queueRowIndex(expanded, openRowLead)).toBeGreaterThanOrEqual(0);
+					expect(queueRowIndex(expanded, firstRowLead)).toBeGreaterThanOrEqual(0);
 					// Queue order: the earlier enqueue leads, and each row
-					// carries the origin its start came in with.
-					expect(queueRowIndex(expanded, openRowLead)).toBeLessThanOrEqual(
-						queueRowIndex(expanded, workflowRowLead),
+					// carries the task type the start runs.
+					expect(queueRowIndex(expanded, firstRowLead)).toBeLessThanOrEqual(
+						queueRowIndex(expanded, secondRowLead),
 					);
-					expect(frameText(expanded)).toContain(`[workflow] Close the stale deploy branch`);
+					expect(frameText(expanded)).toMatch(/implement\s+Close the stale deploy branch/);
 					// The detail answers for the item under the cursor.
 					expect(detailPaneText(expanded)).toContain("Origin: open");
 					expect(detailPaneText(expanded)).toContain("place 1 of 2");
@@ -899,11 +899,11 @@ describe("the Work queue section", () => {
 					expect(resting).toContain("[open]");
 					// The badge paints the open role: the ticket is still open.
 					expect(spanColors(setup, "[queued]")).toEqual([rgb(roleColor("blue"))]);
-					// The queue row keeps its origin, and the cancel gives the
+					// The queue row keeps its task type, and the cancel gives the
 					// open badge back to the row and the detail.
 					await clickWorkHeader(setup);
 					await awaitFrame(setup, (f) => f.includes("▾ Work"), "the expanded Work section");
-					expect(queueRowIndex(setup.captureCharFrame(), openRowLead)).toBeGreaterThanOrEqual(0);
+					expect(queueRowIndex(setup.captureCharFrame(), firstRowLead)).toBeGreaterThanOrEqual(0);
 					await press(setup, "delete", "the item to cancel", (f) =>
 						f.includes(`waiting start for "Add a webhook retry policy"`),
 					);
@@ -1021,7 +1021,7 @@ describe("the Work queue section", () => {
 						setup,
 						"-",
 						"the first item to move to the back",
-						(f) => queueRowIndex(f, workflowRowLead) < queueRowIndex(f, openRowLead),
+						(f) => queueRowIndex(f, secondRowLead) < queueRowIndex(f, firstRowLead),
 					);
 					expect(detailPaneText(swapped)).toContain("Origin: open");
 					expect(detailPaneText(swapped)).toContain("place 2 of 2");
@@ -1031,7 +1031,7 @@ describe("the Work queue section", () => {
 						setup,
 						"+",
 						"the item to move back to the front",
-						(f) => queueRowIndex(f, openRowLead) < queueRowIndex(f, workflowRowLead),
+						(f) => queueRowIndex(f, firstRowLead) < queueRowIndex(f, secondRowLead),
 					);
 					expect(detailPaneText(restored)).toContain("place 1 of 2");
 				},
@@ -1071,7 +1071,7 @@ describe("the Work queue section", () => {
 					);
 					const frame = await settle(setup);
 					expect(frame).toContain("waiting: 1");
-					expect(frameText(frame)).toContain(`[workflow] Close the stale deploy branch`);
+					expect(frameText(frame)).toMatch(/implement\s+Close the stale deploy branch/);
 					// The Ticket row truncates its title at this width.
 					expect(frameText(frame)).toContain("Add a webhook ret");
 					// The cancel drops the queue to its last item, and the
@@ -1231,7 +1231,7 @@ describe("the Work queue section", () => {
 						"the expanded Work section",
 					);
 					const queueRows = (frame: string) =>
-						rowsOf(stripAnsi(frame)).filter((row) => /\[(open|workflow|restart)\]/.test(row));
+						rowsOf(stripAnsi(frame)).filter((row) => /^│\s*(❯\s)?implement\s+/.test(row));
 					const before = await settle(setup);
 					// In the list `f` is a filter key of two sections - the Ticket
 					// section's List filter and the Consultation section's history - and
@@ -1322,7 +1322,7 @@ describe("the Work queue section", () => {
 					// the state holds, and the refusal moved nothing else.
 					const frame = await settle(setup);
 					expect(frame).toContain("waiting: 1");
-					expect(frameText(frame)).toContain(`[workflow] Close the stale deploy branch`);
+					expect(frameText(frame)).toMatch(/implement\s+Close the stale deploy branch/);
 					expect(state.workQueue.items().map(workQueueIdentityOf)).toEqual([SECOND]);
 				},
 				state,
@@ -1590,7 +1590,9 @@ describe("the Work queue section", () => {
 					const across = await press(setup, "j", "the cursor to cross into the Work queue", (f) =>
 						detailPaneText(f).includes("Origin: open"),
 					);
-					expect(across).toContain("[open]");
+					// The queue row the cursor landed on leads with the start's task
+					// type; the ticket rows behind it wear the queued badge.
+					expect(queueRowIndex(across, firstRowLead)).toBeGreaterThanOrEqual(0);
 					// Cancel both items: the queue empties, and the section keeps its
 					// header with its count (ADR 0049), the way the other sections do.
 					await press(setup, "delete", "the first item to cancel", (f) => f.includes("waiting: 1"));

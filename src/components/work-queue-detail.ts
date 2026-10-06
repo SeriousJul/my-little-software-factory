@@ -10,7 +10,7 @@
 import { DEFAULT_MERGE_METHOD } from "../plane-action-registry.ts";
 import type { Consultation } from "../state/consultation-record.ts";
 import { paint } from "./theme.ts";
-import type { WorkQueueRow } from "./work-queue-list.ts";
+import { type WorkQueueRow, workQueueOriginWord } from "./work-queue-list.ts";
 
 /** One Work queue detail line: the text, the color it paints, the emphasis. */
 export interface WorkQueueDetailLine {
@@ -43,7 +43,7 @@ export function workQueueDetailLines(
 			fg: paint("subtext0"),
 		},
 		{
-			text: `Origin: ${item.kind === "plane-action" ? "merge" : item.kind === "handoff" ? item.origin : "consultation"}   place ${item.position + 1} of ${workQueueDepth}`,
+			text: `Origin: ${workQueueOriginWord(item)}   place ${item.position + 1} of ${workQueueDepth}`,
 			fg: paint("text"),
 		},
 		// Who asked for the start (ADR 0051, ADR 0068): the operator staged

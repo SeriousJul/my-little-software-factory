@@ -231,6 +231,7 @@ import {
 	WorkQueueList,
 	type WorkQueueRow,
 	workQueueCursorFacts,
+	workQueueRowFacts,
 } from "./work-queue-list.ts";
 
 type Pane = "list" | "detail";
@@ -694,22 +695,21 @@ export function App({
 		(identity: string): Ticket | undefined => listViewsRef.current.projection.rowFor(identity),
 		[],
 	);
-	// The row the list draws: the item's ticket by its title while the ticket
-	// is still in the projection, by its identity once it is gone, and the
-	// Consultation's item by the record's identity prefix (ADR 0034, issue #90).
-	const workQueueRows: readonly WorkQueueRow[] = workQueue.map((item) => ({
-		item,
-		title:
-			item.kind === "consultation"
-				? item.consultationId.slice(0, 8)
-				: // The projection before the list rule (ADR 0042, ADR 0060): a waiting
-					// start of an ignored or covered Ticket still names its ticket, not
-					// the raw identity the row would fall back to.
-					(findTicket(item.ticketIdentity)?.title ?? item.ticketIdentity),
-		...(item.kind === "plane-action"
-			? { method: planeActionSettingOf(configRef.current.taskTypes, item.taskType)?.method }
-			: {}),
-	}));
+	// The row the list draws, from the one conversion the detail reads too
+	// (ADR 0034, issue #90): the item's ticket by its title while the ticket
+	// is still in the projection, by its identity once it is gone, the
+	// Consultation's item by the record's identity prefix and the record's
+	// type, and the task type the start runs in every row's cell.
+	const workQueueRows: readonly WorkQueueRow[] = workQueueRowFacts(workQueue, {
+		ticketTitle: (identity) =>
+			// The projection before the list rule (ADR 0042, ADR 0060): a waiting
+			// start of an ignored or covered Ticket still names its ticket, not
+			// the raw identity the row would fall back to.
+			findTicket(identity)?.title,
+		consultationType: (id) => consultations.find((record) => record.id === id)?.typeName,
+		planeActionMethod: (taskType) =>
+			planeActionSettingOf(configRef.current.taskTypes, taskType)?.method,
+	});
 	// The cursor never rests on a queue that no longer holds its row: a pickup
 	// or a cancel that empties the section sends the selection home, and the
 	// retained index clamps to the rows that remain. The bounce fires on the

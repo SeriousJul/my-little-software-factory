@@ -1,9 +1,10 @@
 /**
  * The Work queue's list (ADR 0034): the manual starts waiting for a Parallel
- * limit seat, in the one shared order across kinds. A row carries the
- * identity of the start it waits for - the ticket's title for a handoff, the
- * record's identity prefix for the Consultation's item (issue #90) - the
- * start's origin word, and the item's place in the queue.
+ * limit seat, in the one shared order across kinds. A row carries the task
+ * type the start runs - the handoff's captured choice, the plane action's
+ * task type, the Consultation record's type - the name the row stands under,
+ * and the item's place in the queue. Being in the queue is the item's own
+ * state, so a row wears no state word.
  */
 import type { BoxRenderable } from "@opentui/core";
 import { createElement } from "@opentui/react";
@@ -18,10 +19,53 @@ import { paint } from "./theme.ts";
 export interface WorkQueueRow {
 	/** The queue's item, in queue order. */
 	item: WorkQueueItem;
-	/** The ticket's title while it is still in the projection, its identity once it is gone. */
+	/** The name the row stands under: the ticket's title while it is still in the projection, its identity once it is gone, the Consultation record's identity prefix (issue #90). */
 	title: string;
+	/** The task type the start runs: the handoff's captured choice, the plane action's task type (ADR 0068), the Consultation record's type. Empty when the record the Consultation item names is gone. */
+	taskType: string;
 	/** The method the plane action's item runs with, from its task type's action form (ADR 0068). */
 	method?: string;
+}
+
+/**
+ * The reads the row conversion draws on, owned by the surface that holds the
+ * projections the words stand on. The conversion is the one source of truth
+ * the list and the detail both read, so no surface assembles a row's words
+ * on its own.
+ */
+export interface WorkQueueRowSources {
+	/** The ticket's title while it stands in the projection; undefined once it is gone. */
+	ticketTitle: (ticketIdentity: string) => string | undefined;
+	/** The type the Consultation record the item names stands in; undefined when the record is gone. */
+	consultationType: (consultationId: string) => string | undefined;
+	/** The method the plane action's task type's action form names (ADR 0068). */
+	planeActionMethod: (taskType: string) => string | undefined;
+}
+
+export function workQueueRowFacts(
+	items: readonly WorkQueueItem[],
+	sources: WorkQueueRowSources,
+): readonly WorkQueueRow[] {
+	return items.map((item): WorkQueueRow => {
+		if (item.kind === "consultation") {
+			return {
+				item,
+				title: item.consultationId.slice(0, 8),
+				taskType: sources.consultationType(item.consultationId) ?? "",
+			};
+		}
+		const title = sources.ticketTitle(item.ticketIdentity) ?? item.ticketIdentity;
+		if (item.kind === "plane-action") {
+			const method = sources.planeActionMethod(item.taskType);
+			return {
+				item,
+				title,
+				taskType: item.taskType,
+				...(method === undefined ? {} : { method }),
+			};
+		}
+		return { item, title, taskType: item.choice.taskType };
+	});
 }
 
 interface WorkQueueListProps {
@@ -38,7 +82,8 @@ interface WorkQueueListProps {
 	onMove: (delta: number) => void;
 }
 
-const ORIGIN_WIDTH = 10;
+/** The cell the row's task type stands in, before the row's name. */
+const TYPE_CELL_WIDTH = 10;
 
 export function WorkQueueList({
 	rows,
@@ -113,20 +158,18 @@ function rowKey(item: WorkQueueItem): string {
 	return item.kind === "consultation" ? item.consultationId : item.ticketIdentity;
 }
 
-/** The word a row stands under, in the cell before its identity (ADR 0034,
- * ADR 0068): the handoff's origin the pickup re-checks, the Consultation
- * item's kind, the record the pointer names (issue #90), and the plane
- * action's kind, the merge the action runs. */
-function originWord(item: WorkQueueItem): string {
+/** The origin word the detail pane names (ADR 0034, ADR 0068): the
+ * handoff's origin the pickup re-checks, the Consultation item's kind, and
+ * the plane action's kind, the merge the action runs. */
+export function workQueueOriginWord(item: WorkQueueItem): string {
 	if (item.kind === "plane-action") return "merge";
-	return item.kind === "handoff" ? `[${item.origin}]` : "consultation";
+	return item.kind === "handoff" ? item.origin : "consultation";
 }
 
 function itemRow(row: WorkQueueRow, selected: boolean, width: number) {
 	const marker = selected ? "❯ " : "  ";
-	const origin = originWord(row.item);
 	const place = ` ${row.item.position + 1}`;
-	const prefix = `${marker}${padToWidth(origin, ORIGIN_WIDTH)} `;
+	const prefix = `${marker}${padToWidth(row.taskType, TYPE_CELL_WIDTH)} `;
 	const suffix = place;
 	const available = Math.max(1, width - widthOf(prefix) - widthOf(suffix));
 	// The selected row's prefix and title wear bold: the emphasis the old

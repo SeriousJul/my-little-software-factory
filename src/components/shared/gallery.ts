@@ -64,7 +64,12 @@ import { ticketCloseDialog } from "../ticket-close.ts";
 import { TicketList } from "../ticket-list.ts";
 import { KeyGuide } from "../utility.ts";
 import { workQueueDetailLines } from "../work-queue-detail.ts";
-import { type WorkQueueCursorFacts, WorkQueueList, type WorkQueueRow } from "../work-queue-list.ts";
+import {
+	type WorkQueueCursorFacts,
+	WorkQueueList,
+	type WorkQueueRow,
+	workQueueRowFacts,
+} from "../work-queue-list.ts";
 import { ActionItem, ChoiceRow } from "./choices.ts";
 import { DraftField, type FieldFacts, type FieldHandle, TextField } from "./fields.ts";
 import { copySelectionWith } from "./form.ts";
@@ -2256,9 +2261,10 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 	},
 	{
 		// The Work queue's list (ADR 0034): the rows in the shared order with
-		// the origin word and the place - the handoff's origin and the
-		// Consultation item's kind (issue #90) - the empty state, and the bar
-		// the cursor's own keys come from.
+		// the task type the start runs and the place - the handoff's captured
+		// choice, the plane action's task type, the Consultation record's type
+		// (issue #90) - the empty state, and the bar the cursor's own keys
+		// come from.
 		id: "work-queue",
 		state: "the Work queue: the waiting starts in queue order, and the empty state",
 		render: (columns, _holds, _inputActive, _wiring) => {
@@ -2303,31 +2309,47 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 					automatic: true,
 				},
 				// The `queued` Consultation's item (issue #90): the pointer stands
-				// in the same order, under its kind word and the record's
-				// identity prefix.
+				// in the same order, under the record's type and its identity
+				// prefix.
 				{
 					kind: "consultation",
 					position: 2,
 					consultationId: "c1c1c1c1-1111-4111-8111-111111111111",
 					enqueuedAt: "2026-02-17T10:02:00.000Z",
 				},
+				// The plane action's item (ADR 0068): it carries the task type whose
+				// action form the pickup runs, and no choice of its own.
+				{
+					kind: "plane-action",
+					position: 3,
+					ticketIdentity: "github:github.com:SeriousJul/my-little-software-factory#44",
+					routeFromIdentity: null,
+					automatic: false,
+					origin: "open",
+					taskType: "merge",
+					enqueuedAt: "2026-02-17T10:03:00.000Z",
+				},
 			];
-			const rows: WorkQueueRow[] = items.map((item, index) => ({
-				item,
-				title:
-					index === 0
+			const rows: readonly WorkQueueRow[] = workQueueRowFacts(items, {
+				ticketTitle: (identity) =>
+					identity === "github:github.com:SeriousJul/my-little-software-factory#42"
 						? "Add a webhook retry policy"
-						: index === 1
+						: identity === "github:github.com:SeriousJul/my-little-software-factory#43"
 							? "Close the stale deploy branch"
-							: "c1c1c1c1",
-			}));
+							: identity === "github:github.com:SeriousJul/my-little-software-factory#44"
+								? "Merge the auth fix"
+								: undefined,
+				consultationType: (id) =>
+					id === "c1c1c1c1-1111-4111-8111-111111111111" ? "Review" : undefined,
+				planeActionMethod: (taskType) => (taskType === "merge" ? "squash" : undefined),
+			});
 			return [
 				createElement(WorkQueueList, {
 					key: "queue",
 					rows,
 					selectedIndex: 0,
 					focused: true,
-					height: 6,
+					height: 8,
 					onFocus: () => undefined,
 					onSelect: () => undefined,
 					onMove: () => undefined,
@@ -2458,15 +2480,22 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 			createElement(ConsultationDetail, {
 				key: "work-queue-item-consultation",
 				lines: workQueueDetailLines(
-					{
-						item: {
-							kind: "consultation",
-							position: 2,
-							consultationId: "c1c1c1c1-1111-4111-8111-111111111111",
-							enqueuedAt: "2026-02-17T10:02:00.000Z",
+					workQueueRowFacts(
+						[
+							{
+								kind: "consultation",
+								position: 2,
+								consultationId: "c1c1c1c1-1111-4111-8111-111111111111",
+								enqueuedAt: "2026-02-17T10:02:00.000Z",
+							},
+						],
+						{
+							ticketTitle: () => undefined,
+							consultationType: (id) =>
+								id === "c1c1c1c1-1111-4111-8111-111111111111" ? "Review" : undefined,
+							planeActionMethod: () => undefined,
 						},
-						title: "c1c1c1c1",
-					},
+					)[0],
 					3,
 					sampleConsultation("queued"),
 				),
@@ -2485,15 +2514,21 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 			createElement(ConsultationDetail, {
 				key: "work-queue-item-consultation-gone",
 				lines: workQueueDetailLines(
-					{
-						item: {
-							kind: "consultation",
-							position: 2,
-							consultationId: "c1c1c1c1-1111-4111-8111-111111111111",
-							enqueuedAt: "2026-02-17T10:02:00.000Z",
+					workQueueRowFacts(
+						[
+							{
+								kind: "consultation",
+								position: 2,
+								consultationId: "c1c1c1c1-1111-4111-8111-111111111111",
+								enqueuedAt: "2026-02-17T10:02:00.000Z",
+							},
+						],
+						{
+							ticketTitle: () => undefined,
+							consultationType: () => undefined,
+							planeActionMethod: () => undefined,
 						},
-						title: "c1c1c1c1",
-					},
+					)[0],
 					3,
 				),
 				visibleRows: 7,

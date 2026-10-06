@@ -3254,12 +3254,12 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 						),
 					).toBe(true);
 					expect(detailPaneText(frame)).toContain("State: queued");
-					// The Work queue section shows the item under its kind
-					// word, and the header carries the depth.
+					// The Work queue section shows the item under the record's
+					// type word, and the header carries the depth.
 					expect(frame).toContain("waiting: 1");
 					expect(
 						rowsOf(frame).some(
-							(row) => row.includes("consultation") && row.includes(queued.id.slice(0, 8)),
+							(row) => row.includes("grill") && row.includes(queued.id.slice(0, 8)),
 						),
 					).toBe(true);
 					// The notice names the record and the queue it waits in.

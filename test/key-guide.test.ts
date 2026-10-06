@@ -338,7 +338,7 @@ describe("the in-app Key guide", () => {
 						headerRows
 							.slice(workHeaderRow + 1)
 							.findIndex(
-								(row) => row.includes("[open]") && row.includes("Add a webhook retry policy"),
+								(row) => row.includes("implement") && row.includes("Add a webhook retry policy"),
 							) +
 						workHeaderRow +
 						1;
@@ -348,7 +348,7 @@ describe("the in-app Key guide", () => {
 						(f) => f.includes("▾ Work") && f.includes("Add a webhook retry policy 1"),
 						"the Work queue item row",
 					);
-					expect(list).toMatch(/\[open\]\s+Add a webhook retry policy/);
+					expect(list).toMatch(/implement\s+Add a webhook retry policy/);
 
 					// The list-mode guide holds the queue's keys and none of the
 					// Ticket section's: the reorder pair and the cancel stand in the
