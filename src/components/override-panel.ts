@@ -239,6 +239,19 @@ interface OverridePanelProps {
 	/** The Message fact this panel's own Message line shows. */
 	message: MessageFact | null;
 	onEmergencyExit: () => void;
+	/**
+	 * The Queue pause's key on this panel (issue #319, ADR 0111): the brake
+	 * reaches every surface the plane draws, the panel's list and text rows
+	 * included, on the F4 alias the field modes carry. Required, because a
+	 * surface that resolves the key and swallows it would be a key the plane
+	 * takes and never answers.
+	 */
+	onQueuePause: () => void;
+	/**
+	 * The Auto-handoff mode's key on this panel (issue #319, ADR 0111), on the
+	 * F5 alias: required for the same reason.
+	 */
+	onAutoHandoff: () => void;
 }
 
 /** The desired label column: the widest label plus a gap. */
@@ -353,6 +366,8 @@ export function OverridePanel({
 	onCopy,
 	message,
 	onEmergencyExit,
+	onQueuePause,
+	onAutoHandoff,
 }: OverridePanelProps) {
 	const { width: terminalWidth, height: terminalHeight } = useTerminalDimensions();
 	const [choice, setChoice] = useState<HandoffChoice>({ ...initial });
@@ -610,6 +625,11 @@ export function OverridePanel({
 			},
 			help: () => onHelp?.(currentMode()),
 			message: () => onMessage?.(currentMode()),
+			// The plane-level keys reach the panel's rows too (issue #319,
+			// ADR 0111), on the F4 and F5 aliases the field modes carry: the
+			// letters would type into a row, the F-keys do not.
+			"queue-pause": onQueuePause,
+			"auto-handoff": onAutoHandoff,
 		},
 	});
 	const mode = currentMode();
@@ -639,6 +659,7 @@ export function OverridePanel({
 		},
 		message,
 		bar: { mode, facts: panelFacts(mode) },
+		queuePaused: standing.queuePaused,
 	});
 }
 

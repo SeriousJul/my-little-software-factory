@@ -364,8 +364,21 @@ describe("the in-app Key guide", () => {
 					);
 					expect(listCurrent).toContain("+ Promote - the item is first in the queue");
 					expect(listCurrent).toContain("- Demote - the item is last in the queue");
-					expect(listCurrent.some((row) => row.startsWith("p Pause queue"))).toBe(true);
 					expect(listCurrent).toContain("Delete Remove");
+					// The plane-level keys left the mode's own rows: the brake and
+					// the mode stand in the Control plane group, the catalogue's own
+					// order, in every mode they dispatch in (issue #319, ADR 0111). The
+					// group stands below the opening window here, so the walk reads
+					// it.
+					const listAll = await allGuideRows(setup);
+					const listPlane = listAll.slice(
+						listAll.indexOf("Control plane controls") + 1,
+						listAll.indexOf("Other interaction modes"),
+					);
+					expect(listPlane.some((row) => row.startsWith("p Pause queue"))).toBe(true);
+					expect(listPlane).toContain("a Toggle auto-handoff");
+					expect(listCurrent.some((row) => row.startsWith("p Pause queue"))).toBe(false);
+					expect(listCurrent.some((row) => row.startsWith("a Toggle"))).toBe(false);
 					// Enter is the queue's force-dispatch (issue #89), with its note
 					// saying what the start does and where the failure ends. The note
 					// may flow onto its continuation row at this width, so the check
@@ -457,8 +470,8 @@ describe("the in-app Key guide", () => {
 					}
 				};
 				note(await settle(setup));
-				const ladder = Array.from({ length: 48 }, (_, step) => step + 2).map(
-					(row) => `${row}-${row + 18}/67`,
+				const ladder = Array.from({ length: 49 }, (_, step) => step + 2).map(
+					(row) => `${row}-${row + 18}/68`,
 				);
 				for (const range of ladder) note(await scrollGuide(setup, "j", range));
 				// The Control plane section names the merged Main view's controls -
@@ -543,6 +556,10 @@ describe("the in-app Key guide", () => {
 					"Tab Toggle - marks the row under the cursor for the queue, and unmarks it",
 					"Del Clear search",
 					"Esc Cancel",
+					// The Queue pause's key left the Work queue: it stands in the
+					// plane group in every mode it dispatches in, beside the
+					// Auto-handoff mode's key (issue #319, ADR 0111).
+					"p Pause queue - pauses the queue's drain; the force-dispatch passes it",
 					"Delete Close",
 					"Enter Recovery - opens the recovery surface a broken or stuck Consultation needs",
 					"Enter Respond",
@@ -951,23 +968,23 @@ describe("the in-app Key guide", () => {
 		await withApp(
 			async (setup) => {
 				await openGuide(setup, "?");
-				expect(actionBarRowOf(await settle(setup))).toContain("1-19/67");
+				expect(actionBarRowOf(await settle(setup))).toContain("1-19/68");
 
-				await scrollGuide(setup, "j", "2-20/67");
-				await scrollGuide(setup, "j", "3-21/67");
-				await scrollGuide(setup, "k", "2-20/67");
-				await scrollGuide(setup, "k", "1-19/67");
+				await scrollGuide(setup, "j", "2-20/68");
+				await scrollGuide(setup, "j", "3-21/68");
+				await scrollGuide(setup, "k", "2-20/68");
+				await scrollGuide(setup, "k", "1-19/68");
 				// Top boundary: k holds the range.
 				setup.mockInput.pressKey("k");
-				expect(await settle(setup, 500)).toContain("1-19/67");
+				expect(await settle(setup, 500)).toContain("1-19/68");
 				// Walk to the bottom, one step per frame.
-				const ladder = Array.from({ length: 48 }, (_, step) => step + 2).map(
-					(row) => `${row}-${row + 18}/67`,
+				const ladder = Array.from({ length: 49 }, (_, step) => step + 2).map(
+					(row) => `${row}-${row + 18}/68`,
 				);
 				for (const range of ladder) await scrollGuide(setup, "j", range);
 				// Bottom boundary: j holds the range.
 				setup.mockInput.pressKey("j");
-				expect(await settle(setup, 500)).toContain("49-67/67");
+				expect(await settle(setup, 500)).toContain("50-68/68");
 			},
 			WIDTH,
 			HEIGHT,
@@ -1072,7 +1089,7 @@ describe("the in-app Key guide", () => {
 				setup.mockInput.pressKey("j");
 				await awaitFrame(
 					setup,
-					(f) => actionBarRowOf(f).includes("2-20/67"),
+					(f) => actionBarRowOf(f).includes("2-20/68"),
 					"the guide to scroll",
 				);
 				// e opens no panel, r warns no refresh, q quits nothing,
@@ -1175,7 +1192,7 @@ describe("the in-app Key guide", () => {
 				await openGuide(setup, "?");
 				const bar = actionBarRowOf(await settle(setup));
 				expect(bar).toContain("↑↓/jk Scroll");
-				expect(bar).toContain("1-19/67");
+				expect(bar).toContain("1-19/68");
 				expect(bar).toContain("Esc/F1/? Close");
 				expect(bar).not.toContain("Help");
 				expect(bar).not.toContain("Message");
@@ -1191,7 +1208,7 @@ describe("the in-app Key guide", () => {
 		await withApp(
 			async (setup) => {
 				await openGuide(setup, "?");
-				expect(actionBarRowOf(await settle(setup))).toContain("1-19/67");
+				expect(actionBarRowOf(await settle(setup))).toContain("1-19/68");
 
 				// A short, wide terminal: four visible rows, the full title
 				// still fitting, and more total rows because the reason column is
@@ -1203,20 +1220,21 @@ describe("the in-app Key guide", () => {
 				// The selector's note, the Close reason, the Grouping axis note,
 				// and the Recovery note wrap on this narrow terminal, so the guide
 				// runs longer than at the full width.
-				expect(actionBarRowOf(frame)).toContain("1-4/102");
+				expect(actionBarRowOf(frame)).toContain("1-4/106");
 
-				await scrollGuide(setup, "j", "2-5/102");
+				await scrollGuide(setup, "j", "2-5/106");
 				// Back to size: the scroll the terminal gave back is kept.
 				setup.resize(WIDTH, HEIGHT);
 				frame = await settle(setup);
-				expect(actionBarRowOf(frame)).toContain("2-20/67");
+				expect(actionBarRowOf(frame)).toContain("2-20/68");
 
 				// Below the useful size the terminal takes its compact frame:
 				// the modal caps at the terminal, the title falls back to the
-				// bare word, and the bar keeps only the Help key.
+				// bare word beside the brake's lamp, and the bar keeps only the
+				// Help key.
 				setup.resize(25, 10);
 				frame = await settle(setup);
-				expect(frame).toContain("┌─Key guide─");
+				expect(frame).toContain("┌─Key guide ● running─");
 				expect(frame).not.toContain("Key guide - Ticket list");
 				for (const row of rowsOf(frame)) expect(widthOf(row)).toBe(25);
 				// The utility bar packs the hints that fit; Close is the last
@@ -1227,7 +1245,7 @@ describe("the in-app Key guide", () => {
 				setup.resize(WIDTH, HEIGHT);
 				frame = await settle(setup);
 				expect(frame).toContain("Key guide - Ticket list");
-				expect(actionBarRowOf(frame)).toContain("2-20/67");
+				expect(actionBarRowOf(frame)).toContain("2-20/68");
 			},
 			WIDTH,
 			HEIGHT,

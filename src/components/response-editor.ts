@@ -54,6 +54,18 @@ interface ResponseEditorProps {
 	onCopy: (news: MessageFact) => void;
 	message: MessageFact | null;
 	onEmergencyExit: () => void;
+	/**
+	 * The Queue pause's key on this editor (issue #319, ADR 0111): the field
+	 * mode carries the toggle on the F4 alias, the way it carries Help on F1.
+	 * Required, because a surface that resolves the key and swallows it would
+	 * be a key the plane takes and never answers.
+	 */
+	onQueuePause: () => void;
+	/**
+	 * The Auto-handoff mode's key on this editor (issue #319, ADR 0111), on the
+	 * F5 alias: required for the same reason.
+	 */
+	onAutoHandoff: () => void;
 }
 
 /** The editor's slots: the reply, then the two actions that end it. */
@@ -95,6 +107,8 @@ export function ResponseEditor({
 	onCopy,
 	message,
 	onEmergencyExit,
+	onQueuePause,
+	onAutoHandoff,
 }: ResponseEditorProps): ReactElement {
 	const field = useRef<FieldHandle | null>(null);
 	const text = useRef(draft);
@@ -152,6 +166,11 @@ export function ResponseEditor({
 			},
 			help: () => onHelp?.(),
 			message: () => onMessage?.(),
+			// The plane-level keys reach the field mode on the F4 and F5 aliases
+			// (issue #319, ADR 0111): the letters would type into the draft, the
+			// F-keys do not.
+			"queue-pause": onQueuePause,
+			"auto-handoff": onAutoHandoff,
 		},
 	});
 	const ink = controlInk();

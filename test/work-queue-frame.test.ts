@@ -405,8 +405,10 @@ describe("the Work queue section", () => {
 						(f) => f.includes("┌─❯ Work queue"),
 						"the cursor on the queue row",
 					);
-					// The bar offers the pause while the queue holds a waiting row.
-					expect(actionBarRowOf(setup.captureCharFrame())).toContain("p Pause queue");
+					// The brake stands down: while the queue runs, the bar keeps no
+					// pause hint, and the Key guide carries the key (issue #319,
+					// ADR 0111).
+					expect(actionBarRowOf(setup.captureCharFrame())).not.toContain("Pause queue");
 					// p stands the pause: the header carries the fact and the line
 					// says what happened. The bar's own label flip (Pause queue to
 					// Resume queue) is measured where the bar reads the context: in
@@ -414,9 +416,12 @@ describe("the Work queue section", () => {
 					const paused = await press(setup, "p", "the queue pause", (f) =>
 						messageRowOf(f).includes("Work queue paused"),
 					);
-					// The pause fact stands by its count on the header's own row, in
-					// the raw frame: the two spaces are the header's own padding.
-					expect(paused).toContain("waiting: 1  paused");
+					// The pause fact stands at the Ticket header's corner, in the
+					// raw frame: the unlit lamp and the word, the mode cell's lamp
+					// beside it (issue #319, ADR 0111).
+					expect(paused).toContain("○ paused");
+					// The standing brake takes the bar's hint slot while it stands.
+					expect(actionBarRowOf(paused)).toContain("p Resume queue");
 					expect(messageRowOf(paused)).toContain("Work queue paused");
 					// p again resumes: the fact leaves the header and the line
 					// says so.
@@ -580,8 +585,8 @@ describe("the Work queue section", () => {
 					setup.mockInput.pressKey("p");
 					await awaitFrame(
 						setup,
-						(f) => f.includes("waiting: 1  paused"),
-						"the pause on the header",
+						(f) => f.includes("○ paused"),
+						"the pause on the Ticket header's corner",
 					);
 					const paused = setup.captureCharFrame();
 					expect(messageRowOf(paused)).toBe(messageRowOf(beforePause));

@@ -89,6 +89,19 @@ interface DecisionModalProps {
 	/** The Message fact this modal's own Message line shows. */
 	message: MessageFact | null;
 	onEmergencyExit: () => void;
+	/**
+	 * The Queue pause's key on this surface (issue #319, ADR 0111): the brake
+	 * reaches every surface the plane draws, so the modal dispatches the key
+	 * the way it dispatches Help and Message, and the screen that owns the
+	 * state runs the toggle. Required, because a surface that resolves the key
+	 * and swallows it would be a key the plane takes and never answers.
+	 */
+	onQueuePause: () => void;
+	/**
+	 * The Auto-handoff mode's key on this surface (issue #319, ADR 0111), the
+	 * same reach as the Queue pause's: required for the same reason.
+	 */
+	onAutoHandoff: () => void;
 }
 
 /** The modal leaves one cell of margin on every side. */
@@ -221,6 +234,8 @@ export function DecisionModal({
 	onUnavailable,
 	message,
 	onEmergencyExit,
+	onQueuePause,
+	onAutoHandoff,
 }: DecisionModalProps) {
 	const { width: terminalWidth, height: terminalHeight } = useTerminalDimensions();
 	// The pop-in: a short fade with the box growing to its final size, the
@@ -339,6 +354,12 @@ export function DecisionModal({
 			},
 			"select-action": ({ key }) => region.move(key.name === "up" ? -1 : 1),
 			"scroll-body": ({ key }) => scrollBody(key.name),
+			// The plane-level keys reach every surface the chrome owns (issue
+			// #319, ADR 0111): the brake and the mode flip on the modal the way
+			// they do on the base panes, and the bar's hint and the border's lamp
+			// read the facts the toggle writes.
+			"queue-pause": onQueuePause,
+			"auto-handoff": onAutoHandoff,
 		},
 	});
 
@@ -420,5 +441,6 @@ export function DecisionModal({
 			facts,
 			rangeIndicator: region.rangeText,
 		},
+		queuePaused: standing.queuePaused,
 	});
 }

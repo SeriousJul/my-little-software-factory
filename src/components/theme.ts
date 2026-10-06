@@ -114,6 +114,26 @@ export function autoHandoffColor(mode: AutoHandoffMode): string | undefined {
 const SEAT_ROLES = { room: "green", cap: "red" } as const;
 
 /**
+ * The Queue pause's lamp's roles (issue #319, ADR 0111): the running state's
+ * color while the brake is down, and the error color while the brake stands.
+ */
+const QUEUE_PAUSE_ROLES = { running: "green", paused: "red" } as const;
+
+/**
+ * The color the Queue pause's lamp and its word paint in.
+ *
+ * The lit lamp while the brake is down wears the running state's role, the
+ * same role the manual Auto-handoff lamp wears, and the unlit lamp while the
+ * brake stands wears the error role, the same role the `missing` marker wears.
+ * The written word names the state either way, so the no-color presentation
+ * loses nothing, and the plane's own themes carry the pair at the tested
+ * essential-indicator contrast the lamp is part of.
+ */
+export function queuePauseColor(paused: boolean): string | undefined {
+	return paint(QUEUE_PAUSE_ROLES[paused ? "paused" : "running"]);
+}
+
+/**
  * The color the mode cell's seat reading paints in.
  *
  * The cell carries the Parallel limit gate's answer, not the gate itself: the

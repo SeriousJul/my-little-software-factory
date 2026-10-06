@@ -106,6 +106,19 @@ interface LiveViewProps {
 	/** The Message fact this view's own Message line shows. */
 	message: MessageFact | null;
 	onEmergencyExit: () => void;
+	/**
+	 * The Queue pause's key on this view (issue #319, ADR 0111): the brake
+	 * reaches every surface the plane draws, and the view dispatches the key
+	 * the way it dispatches Help and Message. Required, because a surface that
+	 * resolves the key and swallows it would be a key the plane takes and never
+	 * answers.
+	 */
+	onQueuePause: () => void;
+	/**
+	 * The Auto-handoff mode's key on this view (issue #319, ADR 0111), the same
+	 * reach as the Queue pause's: required for the same reason.
+	 */
+	onAutoHandoff: () => void;
 }
 
 /** One stream row as styled lines: plain text, the palette's prose voice. */
@@ -147,6 +160,8 @@ export function LiveView({
 	onUnavailable,
 	message,
 	onEmergencyExit,
+	onQueuePause,
+	onAutoHandoff,
 }: LiveViewProps) {
 	const { width: terminalWidth, height: terminalHeight } = useTerminalDimensions();
 	// The decision sub-mode, from the body the pane holds: a turn settling
@@ -269,6 +284,11 @@ export function LiveView({
 			message: () => onMessage?.(),
 			"cancel-action": onCancel,
 			"scroll-body": ({ key }) => scrollBody(key.name),
+			// The plane-level keys reach every surface the chrome owns (issue
+			// #319, ADR 0111), the way the border's lamp reads the facts the
+			// toggle writes.
+			"queue-pause": onQueuePause,
+			"auto-handoff": onAutoHandoff,
 			...(decideable
 				? {
 						"confirm-action": () => region.confirm((row) => onAction(row.key)),
@@ -353,5 +373,6 @@ export function LiveView({
 			facts,
 			rangeIndicator: region.rangeText,
 		},
+		queuePaused: standing.queuePaused,
 	});
 }

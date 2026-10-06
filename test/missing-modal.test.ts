@@ -16,6 +16,7 @@ const BASE_STANDING: StandingFacts = {
 	messageTruncated: false,
 	consultationTypesConfigured: false,
 	interactionExitKey: "f12",
+	queuePaused: false,
 };
 
 describe("the Missing modal", () => {
@@ -33,6 +34,10 @@ describe("the Missing modal", () => {
 				standing: BASE_STANDING,
 				message: null,
 				onEmergencyExit: () => undefined,
+				// The plane-level keys resolve to the catalogue's controls; the
+				// modal's own frame is what this suite measures (issue #319).
+				onQueuePause: () => undefined,
+				onAutoHandoff: () => undefined,
 			}),
 			{ width: 90, height: 12 },
 		);

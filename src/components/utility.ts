@@ -61,6 +61,15 @@ function useUtilityKeys(
 		help?: () => void;
 		scroll: (delta: number) => void;
 		emergencyExit: () => void;
+		/**
+		 * The plane-level keys on the overlay (issue #319, ADR 0111): the brake
+		 * and the mode flip reach the Key guide and the Message view the way they
+		 * reach the modals, and the overlay's border lamp reads the facts the
+		 * toggle writes. Wired on the keys the overlay's mode carries, so the
+		 * guide's close and the view's help keep their own routing.
+		 */
+		queuePause?: () => void;
+		autoHandoff?: () => void;
 	},
 ): void {
 	useControlDispatch({
@@ -73,6 +82,8 @@ function useUtilityKeys(
 			...(handlers.help !== undefined ? { help: handlers.help } : {}),
 			"guide-scroll": ({ key }) => handlers.scroll(upKey(key.name) ? -1 : 1),
 			"message-scroll": ({ key }) => handlers.scroll(upKey(key.name) ? -1 : 1),
+			...(handlers.queuePause !== undefined ? { "queue-pause": handlers.queuePause } : {}),
+			...(handlers.autoHandoff !== undefined ? { "auto-handoff": handlers.autoHandoff } : {}),
 		},
 	});
 }
@@ -84,9 +95,29 @@ interface KeyGuideProps {
 	/** The Message fact the overlay's own Message line shows. */
 	message: MessageFact | null;
 	onEmergencyExit: () => void;
+	/**
+	 * The Queue pause's key on this overlay (issue #319, ADR 0111): the brake
+	 * reaches the Key guide the way it reaches the modals. Required, because a
+	 * surface that resolves the key and swallows it would be a key the plane
+	 * takes and never answers.
+	 */
+	onQueuePause: () => void;
+	/**
+	 * The Auto-handoff mode's key on this overlay (issue #319, ADR 0111): required
+	 * for the same reason.
+	 */
+	onAutoHandoff: () => void;
 }
 
-export function KeyGuide({ facts, onClose, onMessage, message, onEmergencyExit }: KeyGuideProps) {
+export function KeyGuide({
+	facts,
+	onClose,
+	onMessage,
+	message,
+	onEmergencyExit,
+	onQueuePause,
+	onAutoHandoff,
+}: KeyGuideProps) {
 	const { width, height } = useTerminalDimensions();
 	const mode = facts.mode;
 	// The guide's own mode owns no rows, so it states no facts of its own
@@ -115,6 +146,8 @@ export function KeyGuide({ facts, onClose, onMessage, message, onEmergencyExit }
 		message: () => onMessage?.(),
 		scroll: scrollBy,
 		emergencyExit: onEmergencyExit,
+		queuePause: onQueuePause,
+		autoHandoff: onAutoHandoff,
 	});
 
 	// The compact readout the bar states behind the Scroll hint: the shared
@@ -145,6 +178,7 @@ export function KeyGuide({ facts, onClose, onMessage, message, onEmergencyExit }
 			facts: guideFacts,
 			rangeIndicator: range,
 		},
+		queuePaused: facts.queuePaused,
 	});
 }
 
@@ -161,6 +195,8 @@ export function MessageView({
 	onHelp,
 	message,
 	onEmergencyExit,
+	onQueuePause,
+	onAutoHandoff,
 }: MessageViewProps) {
 	const { width, height } = useTerminalDimensions();
 	// The Message view's own mode owns no rows, so it states no facts of its
@@ -188,6 +224,8 @@ export function MessageView({
 		help: onHelp,
 		scroll: scrollBy,
 		emergencyExit: onEmergencyExit,
+		queuePause: onQueuePause,
+		autoHandoff: onAutoHandoff,
 	});
 
 	const range = rangeTextOf(scroll, visible.length, wrapped.length);
@@ -213,6 +251,7 @@ export function MessageView({
 			facts: viewFacts,
 			rangeIndicator: range,
 		},
+		queuePaused: facts.queuePaused,
 	});
 }
 

@@ -35,6 +35,7 @@ const BASE_STANDING: StandingFacts = {
 	messageTruncated: false,
 	consultationTypesConfigured: true,
 	interactionExitKey: "f12",
+	queuePaused: false,
 };
 
 async function launcher(
@@ -54,6 +55,10 @@ async function launcher(
 			onClose: () => undefined,
 			onDiscard: () => undefined,
 			onEmergencyExit: () => undefined,
+			// The plane-level keys resolve to the catalogue's controls; the
+			// launcher's own frame is what this suite measures (issue #319).
+			onQueuePause: () => undefined,
+			onAutoHandoff: () => undefined,
 		}),
 		{ width: 100, height: 24 },
 	);

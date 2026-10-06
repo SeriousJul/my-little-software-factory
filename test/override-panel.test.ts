@@ -111,6 +111,7 @@ const BASE_STANDING: StandingFacts = {
 	messageTruncated: false,
 	consultationTypesConfigured: false,
 	interactionExitKey: "f12",
+	queuePaused: false,
 };
 
 /** The choice the panel opens on: the pilot agent, no setting chosen. */
@@ -168,6 +169,10 @@ async function withPanel(
 			onUnavailable: (reason: string) => refusals.push(reason),
 			onCopy: () => undefined,
 			onEmergencyExit: () => undefined,
+			// The plane-level keys resolve to the catalogue's controls; the
+			// the panel's own frame is what this suite measures (issue #319).
+			onQueuePause: () => undefined,
+			onAutoHandoff: () => undefined,
 			planeActionTaskTypes: options.planeActionTaskTypes,
 		}),
 		{ width: options.width ?? WIDTH, height: options.height ?? HEIGHT },

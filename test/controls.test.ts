@@ -35,6 +35,7 @@ const STANDING: StandingFacts = {
 	messageTruncated: false,
 	consultationTypesConfigured: true,
 	interactionExitKey: "f12",
+	queuePaused: false,
 };
 
 /** The facts a mode's controls read when a test says nothing about them. */
@@ -84,13 +85,11 @@ const OWN_FACTS = {
 	"work-queue-list": {
 		selectedWorkQueueItem: null,
 		workQueueDepth: 0,
-		queuePaused: false,
 		listCanMove: true,
 	},
 	"work-queue-detail": {
 		selectedWorkQueueItem: null,
 		workQueueDepth: 0,
-		queuePaused: false,
 		detailCanScroll: true,
 	},
 	"consultation-interaction": {},
@@ -436,12 +435,20 @@ describe("the shared control catalogue", () => {
 		expect(controlForKey({ name: "x" }, context)?.id).toBe("section-toggle");
 	});
 
-	test("the Consultation guide omits Ticket-only controls", () => {
+	test("the plane-level keys stand in the plane group in every section (issue #319)", () => {
+		// The Queue pause's key and the Auto-handoff mode's key left their
+		// sections: the guide lists them under Control plane controls wherever
+		// the operator is, and the key resolves in the mode they dispatch in.
 		const context = facts("consultation-list");
-		const ids = guideControls(context).map(({ control }) => control.id);
-
-		expect(ids).not.toContain("auto-handoff");
-		expect(controlForKey({ name: "a" }, context)).toBeUndefined();
+		const entries = guideControls(context);
+		const plane = entries.filter(({ control }) => control.scope === "control-plane");
+		for (const id of ["queue-pause", "auto-handoff"] as const) {
+			const listed = plane.filter(({ control }) => control.id === id);
+			expect(listed).toHaveLength(1);
+			expect(listed[0].group).toBe("Control plane controls");
+		}
+		expect(controlForKey({ name: "a" }, context)?.id).toBe("auto-handoff");
+		expect(controlForKey({ name: "p" }, context)?.id).toBe("queue-pause");
 	});
 
 	test("the Consultation close is the Delete key, not the section toggle", () => {
@@ -865,39 +872,40 @@ describe("the shared control catalogue", () => {
 		expect(availabilityFor(deleteControl, detail).available).toBe(false);
 	});
 
-	test("p pauses and resumes the queue, and the bar's label rides on the pause", () => {
+	test("p pauses and resumes the queue, and the bar's hint stands while the pause stands", () => {
 		// One item under the cursor, unpaused: the key resolves to the pause,
-		// the bar hints it, and the label names the pause.
+		// and the bar names no hint while the brake is down - the standing
+		// brake earns its width, and the Key guide carries the key the rest of
+		// the time (issue #319, ADR 0111).
 		const open = facts("work-queue-list", { ...queueValues, queuePaused: false });
 		const unpaused = controlForKey({ name: "p" }, open);
 		expect(unpaused?.id).toBe("queue-pause");
 		if (unpaused === undefined) throw new Error("p answers nothing in the queue mode");
 		expect(availabilityFor(unpaused, open)).toEqual({ available: true });
-		expect(actionBarControls("work-queue-list", open).map((control) => control.id)).toContain(
+		expect(actionBarControls("work-queue-list", open).map((control) => control.id)).not.toContain(
 			"queue-pause",
 		);
 		expect(unpaused.barLabel?.(open)).toBe("Pause queue");
-		// Paused: the same key now resolves to the resume, and the bar's label
-		// flips with the fact the shell writes.
+		// Paused: the same key now resolves to the resume, the hint stands in
+		// every mode, and the bar's label flips with the fact the shell writes.
 		const paused = facts("work-queue-list", { ...queueValues, queuePaused: true });
 		const resume = controlForKey({ name: "p" }, paused);
 		expect(resume?.id).toBe("queue-pause");
 		if (resume === undefined) throw new Error("p answers nothing in the queue mode");
 		expect(availabilityFor(resume, paused)).toEqual({ available: true });
+		expect(actionBarControls("work-queue-list", paused).map((control) => control.id)).toContain(
+			"queue-pause",
+		);
 		expect(resume.barLabel?.(paused)).toBe("Resume queue");
 	});
 
 	/**
-	 * Story 48 (ADR 0049, ADR 0052): the queue's own keys refuse outside the
-	 * queue. `p` belongs to the Work queue alone, so in every other section
-	 * the catalogue resolves the key and states the queue's ownership words,
-	 * and the guide and bar of each other section name none of the queue's
-	 * controls. The `+` and `-` keys are the Ticket section's own there (ADR
-	 * 0070): the Group's order keys resolve them and refuse on a row that
-	 * holds no Group header, the way the queue's order keys refuse in the
-	 * Consultation section's words.
+	 * Story 48 (ADR 0049, ADR 0052), amended by ADR 0111: the queue's order
+	 * keys still refuse outside the queue, in the queue's words. The pause's
+	 * key left the queue (issue #319): `p` resolves to the brake in every
+	 * section and answers there, the way the mode's key does.
 	 */
-	test("p, +, and - refuse outside the Work queue, in the queue's words", () => {
+	test("+ and - refuse outside the Work queue, in the queue's words", () => {
 		for (const mode of [
 			"ticket-list",
 			"ticket-detail",
@@ -905,13 +913,12 @@ describe("the shared control catalogue", () => {
 			"consultation-detail",
 		] as const) {
 			const context = facts(mode);
+			// The brake's key reaches the whole plane: the key resolves and the
+			// brake answers from the state it reads in the section.
 			const pause = controlForKey({ name: "p" }, context);
 			if (pause === undefined || pause.id !== "queue-pause")
 				throw new Error(`p does not resolve to queue-pause in ${mode}`);
-			expect(availabilityFor(pause, context)).toEqual({
-				available: false,
-				reason: "this control is available only in the Work queue section",
-			});
+			expect(availabilityFor(pause, context)).toEqual({ available: true });
 			if (mode === "ticket-list" || mode === "ticket-detail") {
 				// The Ticket section's own order keys: the Group move owns the
 				// key, and it refuses on a row that holds no Group header.
@@ -938,11 +945,15 @@ describe("the shared control catalogue", () => {
 					});
 				}
 			}
+			// The guide still names none of the queue's order controls here; the
+			// brake's key stands in the plane group the guide lists in every mode.
 			const ids = guideControls(context).map(({ control }) => control.id);
-			expect(ids).not.toContain("queue-pause");
+			expect(ids).toContain("queue-pause");
 			expect(ids).not.toContain("queue-promote");
 			expect(ids).not.toContain("queue-demote");
 			const hinted = actionBarControls(mode, context).map((control) => control.id);
+			// The brake is down, so its hint stands nowhere, and the order keys
+			// name no hint in a section they do not reach.
 			expect(hinted).not.toContain("queue-pause");
 			expect(hinted).not.toContain("queue-promote");
 			expect(hinted).not.toContain("queue-demote");
@@ -953,6 +964,36 @@ describe("the shared control catalogue", () => {
 		expect(controlForKey({ name: "p" }, queue)?.id).toBe("queue-pause");
 		expect(controlForKey({ name: "+" }, queue)?.id).toBe("queue-promote");
 		expect(controlForKey({ name: "-" }, queue)?.id).toBe("queue-demote");
+	});
+
+	test("the field modes carry the plane keys on the F4 and F5 aliases (issue #319)", () => {
+		// The letters type into the rows the field modes own, so the F-keys carry
+		// the brake and the mode there, the way F1 and F2 carry Help and
+		// Message. The guide shows the alias the mode wears.
+		for (const mode of ["form-field", "override-text", "override-model"] as const) {
+			const context = facts(mode);
+			expect(controlForKey({ name: "f4" }, context)?.id).toBe("queue-pause");
+			expect(controlForKey({ name: "f5" }, context)?.id).toBe("auto-handoff");
+			const pause = guideControls(context).find(({ control }) => control.id === "queue-pause");
+			const modeToggle = guideControls(context).find(
+				({ control }) => control.id === "auto-handoff",
+			);
+			expect(pause?.group).toBe("Control plane controls");
+			expect(modeToggle?.group).toBe("Control plane controls");
+		}
+	});
+
+	test("the agent terminal names the plane keys by absence (issue #319)", () => {
+		// The one surface where neither key reaches the plane: the mode owns its
+		// keys and forwards them to the Agent, so the keys resolve nowhere, and
+		// the guide names the controls by their absence - a key the terminal
+		// gives to the Agent is not a key the guide can promise.
+		const context = facts("consultation-interaction");
+		expect(controlForKey({ name: "p" }, context)).toBeUndefined();
+		expect(controlForKey({ name: "a" }, context)).toBeUndefined();
+		const ids = guideControls(context).map(({ control }) => control.id);
+		expect(ids).not.toContain("queue-pause");
+		expect(ids).not.toContain("auto-handoff");
 	});
 
 	test("g is Goto in both Consultation panes, and it needs the Agent's pane alive", () => {

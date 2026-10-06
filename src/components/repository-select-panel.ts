@@ -68,6 +68,18 @@ interface RepositorySelectPanelProps {
 	/** The Message fact this panel's own Message line shows. */
 	message: MessageFact | null;
 	onEmergencyExit: () => void;
+	/**
+	 * The Queue pause's key on this panel (issue #319, ADR 0111): the brake
+	 * reaches every surface the plane draws. Required, because a surface that
+	 * resolves the key and swallows it would be a key the plane takes and never
+	 * answers.
+	 */
+	onQueuePause: () => void;
+	/**
+	 * The Auto-handoff mode's key on this panel (issue #319, ADR 0111): required
+	 * for the same reason.
+	 */
+	onAutoHandoff: () => void;
 }
 
 /** The content column stops at 60 cells, the launcher's width. */
@@ -99,6 +111,8 @@ export function RepositorySelectPanel({
 	onUnavailable,
 	message,
 	onEmergencyExit,
+	onQueuePause,
+	onAutoHandoff,
 }: RepositorySelectPanelProps): ReactElement {
 	const { width: terminalWidth, height: terminalHeight } = useTerminalDimensions();
 	const [status, setStatus] = useState<RepositorySelectStatus>({ state: "loading" });
@@ -213,6 +227,11 @@ export function RepositorySelectPanel({
 				key.preventDefault?.();
 				onCancel();
 			},
+			// The plane-level keys reach this panel too (issue #319, ADR 0111):
+			// the brake and the mode flip on the select, the way they do on
+			// every surface the chrome owns.
+			"queue-pause": onQueuePause,
+			"auto-handoff": onAutoHandoff,
 		},
 	});
 
@@ -309,5 +328,6 @@ export function RepositorySelectPanel({
 		},
 		message,
 		bar: { mode: "repository-select", facts },
+		queuePaused: standing.queuePaused,
 	});
 }
