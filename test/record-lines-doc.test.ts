@@ -15,6 +15,12 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import {
+	checkoutHoldDropLine,
+	checkoutWaitHolderFact,
+	checkoutWaitLine,
+	checkoutWaitMessageLine,
+} from "../src/checkout-hold.ts";
 import { handoffStartFailedLine } from "../src/domain/attempt-record.ts";
 import { failedStartParkLine } from "../src/domain/failed-start-park.ts";
 import { NAME_COLLISION_PREFIX, nameCollisionLine } from "../src/domain/name-collision.ts";
@@ -26,11 +32,13 @@ import {
 	AUTOMATIC_ROW_HOLD_REASONS,
 	automaticHoldLine,
 } from "../src/domain/top-up.ts";
+import { planeActionCheckoutWord } from "../src/plane-action-registry.ts";
 
 const repo = join(import.meta.dir, "..");
 const guide = readFileSync(join(repo, "docs/configuration/index.md"), "utf8");
 const appSource = readFileSync(join(repo, "src/components/app.ts"), "utf8");
 const dispatchSource = readFileSync(join(repo, "src/handoff-dispatch.ts"), "utf8");
+const checkoutHoldSource = readFileSync(join(repo, "src/checkout-hold.ts"), "utf8");
 const attemptRecordSource = readFileSync(join(repo, "src/domain/attempt-record.ts"), "utf8");
 const failedStartParkSource = readFileSync(join(repo, "src/domain/failed-start-park.ts"), "utf8");
 const nameCollisionSource = readFileSync(join(repo, "src/domain/name-collision.ts"), "utf8");
@@ -49,7 +57,10 @@ function statedInGuide(line: string, writtenBy: string): void {
  * instead of in a doc assertion that would pass on an empty string.
  */
 function sourceConstant(source: string, name: string): string {
-	const match = new RegExp(`const ${name} = "((?:[^"\\\\]|\\\\.)*)";`).exec(source);
+	// The formatter may wrap a long constant's value onto its own line, so the
+	// reading allows the whitespace between `=` and the string and still insists
+	// on a plain string literal.
+	const match = new RegExp(`const ${name} =\\s*"((?:[^"\\\\]|\\\\.)*)";`).exec(source);
 	if (match === null) throw new Error(`${name} is no longer a plain string constant in its module`);
 	return match[1];
 }
@@ -96,12 +107,77 @@ describe("the record lines the configuration reference states", () => {
 				fact: sourceConstant(dispatchSource, "MERGE_RUN_STANDS_FACT"),
 				lines: ['merge refused: "Persist the source facts"'],
 			},
+			{
+				// The bounded end of a Shared checkout wait is a refusal like every
+				// other (ADR 0109): the row leaves the queue with the reason. The other
+				// clock of the bound ends the hold and not the row, and its own line is
+				// checked beside the wait lines below (issue #297 review).
+				fact: sourceConstant(checkoutHoldSource, "CHECKOUT_ROW_OVER_BUDGET_FACT"),
+				lines: ['handoff refused: "Add a webhook retry policy"'],
+			},
 		];
 		for (const shape of shapes) {
 			for (const line of shape.lines) {
 				statedInGuide(`${line} (${shape.fact})`, `the refusal line for ${shape.fact}`);
 			}
 		}
+	});
+
+	/**
+	 * The line of a start the Shared checkout hold keeps in the Work queue
+	 * (issue #297, ADR 0109). It is not a refusal, so it wears its own prefix,
+	 * and it names the start that holds the checkout. The check builds both lines
+	 * from the module that writes them, so a wording that moves in the code
+	 * turns this red instead of quietly redefining the guide.
+	 */
+	test("a start the shared checkout holds states its own line in the guide", () => {
+		statedInGuide(
+			checkoutWaitLine(
+				"handoff",
+				'"Add a webhook retry policy"',
+				checkoutWaitHolderFact("merge", '"Persist the source facts"'),
+			),
+			"the handoff's Shared checkout wait line",
+		);
+		statedInGuide(
+			checkoutWaitLine(
+				planeActionCheckoutWord("merge-pull-request"),
+				'"Persist the source facts"',
+				checkoutWaitHolderFact("handoff", '"Add a webhook retry policy"'),
+			),
+			"the merge's Shared checkout wait line",
+		);
+		// The Message line the force-dispatch key answers a held row with is built
+		// in the dispatch, and the page states it (issue #297 review).
+		statedInGuide(
+			checkoutWaitMessageLine(
+				'"Add a webhook retry policy"',
+				checkoutWaitHolderFact("merge", '"Persist the source facts"'),
+			),
+			"the force-dispatch answer for a row the Shared checkout holds",
+		);
+		// The line of a hold the budget ends names the holder it left behind, and it
+		// is not a refusal: the row that waited runs (issue #297 review).
+		statedInGuide(
+			checkoutHoldDropLine(
+				planeActionCheckoutWord("merge-pull-request"),
+				'"Persist the source facts"',
+				sourceConstant(checkoutHoldSource, "CHECKOUT_HOLD_OVER_BUDGET_FACT"),
+			),
+			"the line of a Shared checkout hold the budget ends",
+		);
+		// The page says what the wait is not: the Parallel limit's cap, and a
+		// refusal. A reader who mistakes one for the other reads a working plane
+		// as a stuck one.
+		statedInGuide("Shared checkout hold", "the term ADR 0109 names");
+		statedInGuide("takes no seat", "the rule that keeps ADR 0068 whole");
+		// The Plane action side of the gate takes its word from the registry, so the
+		// page's merge line is the registry's word and not a second spelling
+		// (issue #297 review).
+		statedInGuide(
+			`\`${planeActionCheckoutWord("merge-pull-request")} waits:\``,
+			"the registry's checkout word for the merge action",
+		);
 	});
 
 	/**

@@ -247,6 +247,22 @@ description: The module map of the source tree, for agents working in this repos
 - `src/operation-serializer.ts`: the per-Repository lock. Work on one Repository
 	is serialized and work on another never waits behind it. It is a concurrency
 	control, not a Consultation rule, so it stands outside `src/consultation/`.
+	`repositoryOperationKey` is the one spelling of one Repository, and the Work
+	queue's Shared checkout hold reads it too, so the plane holds one fact per
+	Repository and not one per spelling (issue #297, ADR 0109). The two locks are
+	still two locks: this one chains a promise the Consultation module owns, and
+	that hold gates the Work queue's starts, so a worktree Consultation and a
+	worktree Handoff of one Repository still reach its checkout together, and
+	ADR 0109 records the gap as open.
+- `src/checkout-hold.ts`: the Shared checkout hold (ADR 0109) - the fact that one
+	start works a Repository's shared checkout at a time. The holds, the two clocks
+	of the bound, the start's classification, the Repository key a hold stands on,
+	and the record lines live here, and nothing else: the module answers whether a
+	start crosses and what the record says, and the caller that owns the Work queue
+	row performs the wait's keep and the refusal's drop. The Handoff dispatch is the
+	first caller; the Consultation's worktree start is the caller issue #315 names,
+	and the row acts stay out of the gate so that seam can be crossed without two
+	modules writing one row (issue #297 review).
 - `src/consultation-operations.ts`: the Consultation lifecycle. Launch, recovery,
 	response, close, Force-close, Replacement, deletion, the Stale Agent output
 	fact, and the Agent input queue, behind one interface with its dependencies
@@ -257,7 +273,14 @@ description: The module map of the source tree, for agents working in this repos
 	seat a handoff or a herdr environment change holds, the handoff queue and
 	its claim order, the durable claim and settle of every origin, the Close
 	cleanup with the leftover fact it leaves, and the name fact of a leftover
-	agent. It reports through plain callbacks,
+	agent. It drives the Shared checkout hold from `src/checkout-hold.ts`: one
+	Repository's checkout is worked by one start at a time, so a merge Plane action
+	and a worktree Handoff of that Repository never reach it at the same time, the
+	start that waits stays in the Work queue, and the hold costs no Parallel limit
+	seat. The dispatch performs the two acts on the row the gate answers for - a
+	wait keeps it, a refusal drops it - and its pickup pass sweeps the waits whose
+	row is gone and the holds no start will ask about again (issue #297, ADR 0109).
+	It reports through plain callbacks,
 	so a test drives it with the fake runner and an in-memory state, and the
 	App and the observation loop cross the same interface.
 - `src/repo.ts`: the repository resolution and the sibling clone.

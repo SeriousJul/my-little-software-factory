@@ -8,19 +8,29 @@
  * chaining.
  */
 
+/**
+ * The one key one Repository is known by, whatever shape the identity arrives
+ * in: a bare `owner/name` and a `github.com/owner/name` name the same
+ * Repository (issue #203). The per-Repository lock below chains on it, and the
+ * Handoff dispatch's shared checkout hold keys on it too, so the plane holds
+ * one fact per Repository and not one per spelling (issue #297).
+ */
+export function repositoryOperationKey(repositoryIdentity: string): string {
+	const normalized = repositoryIdentity.toLowerCase();
+	return normalized === ""
+		? normalized
+		: normalized.startsWith("github.com/")
+			? normalized
+			: `github.com/${normalized}`;
+}
+
 /** Serialize topology and cleanup work per Repository without blocking others. */
 export function serializeRepositoryOperation<T>(
 	queues: Map<string, Promise<void>>,
 	repositoryIdentity: string,
 	operation: () => Promise<T>,
 ): Promise<T> {
-	const normalized = repositoryIdentity.toLowerCase();
-	const key =
-		normalized === ""
-			? normalized
-			: normalized.startsWith("github.com/")
-				? normalized
-				: `github.com/${normalized}`;
+	const key = repositoryOperationKey(repositoryIdentity);
 	const previous = queues.get(key) ?? Promise.resolve();
 	const current = previous.catch(() => undefined).then(operation);
 	const finished = current.then(
