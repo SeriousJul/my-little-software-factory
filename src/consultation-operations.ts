@@ -8,7 +8,7 @@
  * cleanup instead of queueing another one behind it.
  */
 import { randomUUID } from "node:crypto";
-
+import type { ConsultationCheckoutHold } from "./checkout-hold.ts";
 import type { FactoryConfig } from "./config.ts";
 import type { ConfigWriteReport } from "./config-write.ts";
 import { type AgentInputEvent, ConsultationInputQueue } from "./consultation/agent-input.ts";
@@ -71,13 +71,29 @@ import type {
  * same Message line a direct launch leaves, and reports nothing more here:
  * the queue's item went with the claim.
  *
- * The caller removes the item on every answer: the item is the pointer to a
- * record in `queued` state, and no answer leaves the record waiting.
+ * The shared checkout's answers are the third shape of the seat's answer
+ * (issue #315, ADR 0109): `waiting` means a worktree Consultation's row stands
+ * in the queue behind the checkout a start is working, and the record keeps its
+ * `queued` state - the caller keeps the row, because the wait is the row's; and
+ * `refused` means the row's own wait stood past its budget and the row leaves
+ * the queue with the reason, the way every pickup attempt ends in start or drop
+ * (ADR 0049) - the caller refuses the row and leaves the record `failed` on the
+ * seam it calls `refusePickup` on. `held` is the direct start now of a record
+ * that holds no queue row: the checkout is at work and there is no row to stand
+ * the wait, so the start runs nothing, the record keeps its state, and the fact
+ * that holds the checkout answers the key on the Message line.
+ *
+ * The caller removes the item on every answer but the wait: the item is the
+ * pointer to a record in `queued` state, and no answer but the wait leaves the
+ * record waiting.
  */
 export type ConsultationPickupOutcome =
 	| { kind: "started" }
 	| { kind: "failed" }
-	| { kind: "moved" };
+	| { kind: "moved" }
+	| { kind: "waiting"; fact: string }
+	| { kind: "refused"; fact: string }
+	| { kind: "held"; fact: string };
 
 export interface ConsultationStatus {
 	kind: "info" | "warning" | "error";
@@ -134,6 +150,14 @@ export interface ConsultationOperationsOptions {
 	/** Persist a sibling-clone mapping, when repository resolution creates one. */
 	persistRepositoryMapping?: (mapping: RepositoryMapping) => Promise<ConfigWriteReport | undefined>;
 	textBatchBytes?: number;
+	/**
+	 * The Shared checkout hold of the run, the Consultation side's seam into it
+	 * (issue #315, ADR 0109): the gate a worktree Consultation start crosses at
+	 * its claim, the take the claim runs, and the let-go where the opening
+	 * settles. Absent where the plane has no hold, and a start that crosses no
+	 * gate runs the pickup as it ran before the seam.
+	 */
+	checkoutHold?: ConsultationCheckoutHold;
 }
 
 export interface ConsultationCreateInput {
@@ -216,6 +240,7 @@ export class ConsultationOperations {
 	private readonly persistRepositoryMapping?: (
 		mapping: RepositoryMapping,
 	) => Promise<ConfigWriteReport | undefined>;
+	private readonly checkoutHold?: ConsultationCheckoutHold;
 	private readonly operationQueues = new Map<string, Promise<void>>();
 	private readonly openingOperations = new Set<string>();
 	private readonly closeOperations = new Map<string, CloseOperation>();
@@ -231,6 +256,7 @@ export class ConsultationOperations {
 		this.seatCount = options.seatCount;
 		this.log = options.log;
 		this.persistRepositoryMapping = options.persistRepositoryMapping;
+		this.checkoutHold = options.checkoutHold;
 		this.inputQueue = new ConsultationInputQueue(this.runner, options.textBatchBytes);
 	}
 
@@ -313,6 +339,11 @@ export class ConsultationOperations {
 		return this.runOpening(consultation).finally(() => {
 			this.openingOperations.delete(consultation.id);
 			this.endProgress(consultation.id);
+			// The opening settled: the checkout a worktree start took at its claim -
+			// the pickup's claim, or the recovery's - is let go where it settles
+			// (issue #315, ADR 0109). The release is idempotent, so an opening that
+			// took no hold - a start that works no shared checkout - changes nothing.
+			this.checkoutHold?.release(consultation.id);
 		});
 	}
 
@@ -324,6 +355,33 @@ export class ConsultationOperations {
 		)
 			return Promise.resolve();
 		if (current.paneId === null && current.sessionId === null) {
+			// The re-run hands to the launch below, and an opening the record
+			// already holds answers the key first, the way the launch answers it:
+			// no await sits between this read and the launch's own claim, so the
+			// answer the key gets is the one the claim would give.
+			if (this.openingOperations.has(current.id)) {
+				this.status("info", "Consultation opening is already in progress");
+				return Promise.resolve();
+			}
+			// The re-run is another Consultation start, and it works the
+			// Repository's shared checkout the way the opening it re-runs did
+			// (issue #315, ADR 0109): the same gate at its own claim, and the
+			// let-go where the opening settles, in the launch's settle. The record
+			// holds no queue row to stand the wait, so a held checkout answers the
+			// key with the fact that holds it and the record keeps `opening`: the
+			// operator retries the recovery, and the hold's own age ends the hold
+			// the way the row's own wait ends a row.
+			if (current.environment === "worktree" && this.checkoutHold !== undefined) {
+				const gate = this.checkoutHold.cross(current.id);
+				if (!gate.ok) {
+					this.status(
+						"warning",
+						`Consultation ${current.id.slice(0, 8)} did not start: ${gate.fact}`,
+					);
+					return Promise.resolve();
+				}
+				this.checkoutHold.take(current.id, gate.checkoutKey);
+			}
 			this.progress(current.id, `recovering Consultation ${current.id.slice(0, 8)}...`);
 			return this.launch(current);
 		}
@@ -424,6 +482,14 @@ export class ConsultationOperations {
 	 * poll with it. A start that fails after the claim leaves the record
 	 * `failed` with its reason and its Message line, exactly as a failed launch
 	 * does, and the queue's item went with the claim while one stood.
+	 *
+	 * A worktree start crosses the Shared checkout gate at the claim, between the
+	 * settings re-read and the seat move, and the three answers it gives keep their
+	 * rows their own (issue #315, ADR 0109): the wait keeps the row in the queue
+	 * with the record in `queued`, the refusal ends the row in the `failed` record
+	 * this module writes on the `refusePickup` seam, and the direct start now of a
+	 * record that holds no queue row answers the key with the fact that holds the
+	 * checkout and starts nothing. The let-go runs where the opening settles.
 	 */
 	pickup(consultationId: string, mode: StartMode): Promise<ConsultationPickupOutcome> {
 		const current = this.state.consultationRecord.consultation(consultationId);
@@ -455,6 +521,36 @@ export class ConsultationOperations {
 			template: type.template,
 			renderedOpeningPrompt: renderConsultationPrompt(type.template, current.initialInput),
 		});
+		// The Shared checkout gate at the start's claim (issue #315, ADR 0109): a
+		// worktree Consultation works the Repository's shared checkout the way a
+		// worktree Handoff does, and the gate says whether it crosses, waits with
+		// its row, or leaves the queue with the refusal. The gate, the take, and
+		// the seat move below are one synchronous step, the way a handoff's claim
+		// runs them, so no second walk can read a free checkout while this start is
+		// on its way in. A live-worktree Consultation works a checkout the operator
+		// chose and already owns, so it crosses no gate, the way a live-worktree
+		// Handoff does.
+		const worktree = type.environment === "worktree";
+		if (worktree && this.checkoutHold !== undefined) {
+			const gate = this.checkoutHold.cross(current.id);
+			if (!gate.ok) {
+				if (gate.outcome === "refused")
+					return Promise.resolve({ kind: "refused", fact: gate.fact });
+				if (current.state === "queued")
+					return Promise.resolve({ kind: "waiting", fact: gate.fact });
+				// The operator's direct start now of a record that holds no queue row:
+				// there is no row to stand the wait, so the start runs nothing, the
+				// record keeps its state, and the fact that holds the checkout answers
+				// the key beside the record, the way the force-dispatch answers a held
+				// row.
+				this.status(
+					"warning",
+					`Consultation ${current.id.slice(0, 8)} did not start: ${gate.fact}`,
+				);
+				return Promise.resolve({ kind: "held", fact: gate.fact });
+			}
+			this.checkoutHold.take(current.id, gate.checkoutKey);
+		}
 		// The Consultation start line, in the shape the plane's other start lines
 		// use (issue #220): the record's Consultation type beside the identity
 		// prefix every other Consultation line names it by, the path that ran the
@@ -472,6 +568,11 @@ export class ConsultationOperations {
 		// is still `queued` or `unscheduled`, so a close or a delete that
 		// raced the start wins the record and the start runs nothing.
 		if (!this.state.consultationRecord.beginConsultationStart(current.id)) {
+			// The claim lost the race, so the checkout a worktree start took at the
+			// gate is let go at once (issue #315): the close that won the record
+			// settles on its own path, and the hold must not outlive the start that
+			// took it.
+			if (worktree && this.checkoutHold !== undefined) this.checkoutHold.release(current.id);
 			this.callbacks.onConsultationsChanged();
 			return Promise.resolve({ kind: "moved" });
 		}
@@ -488,6 +589,26 @@ export class ConsultationOperations {
 		void this.launch(refreshed);
 		this.callbacks.onConsultationsChanged();
 		return Promise.resolve({ kind: "started" });
+	}
+
+	/**
+	 * The record state a Consultation's bounded checkout wait ends in (issue
+	 * #315, ADR 0109): the row's own wait past the checkout work's budget refuses
+	 * the row the way every pickup attempt ends in start or drop (ADR 0049). The
+	 * dispatch owns the row it drops and the refusal line it records; this is the
+	 * half the refusal owes the record - the `failed` state, the failure fact it
+	 * names, and the Message line - because the Consultation row's refusal belongs
+	 * to the Consultation record and not to the Work queue.
+	 */
+	refusePickup(consultationId: string, fact: string): void {
+		const current = this.state.consultationRecord.consultation(consultationId);
+		// A record that left `queued` before the refusal ran lost to the race the
+		// pickup's own `moved` answer names, and its close owns the state now: the
+		// refusal refuses a `queued` record and nothing else.
+		if (current === undefined || current.state !== "queued") return;
+		this.state.consultationRecord.setConsultationState(consultationId, "failed", fact);
+		this.callbacks.onConsultationsChanged();
+		this.status("error", `Consultation ${consultationId.slice(0, 8)} failed: ${fact}`);
 	}
 
 	/**

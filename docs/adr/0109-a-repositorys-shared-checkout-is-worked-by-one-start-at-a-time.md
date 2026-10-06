@@ -3,9 +3,11 @@
 Status: accepted
 Date: 2026-10-05
 Amends ADR 0068 in one sentence: the Plane action still takes no Parallel limit
-seat, and this decision adds the gate that stands beside the seat. Extends
-ADR 0034 (the Work queue is the one place a start waits) and ADR 0049 (a pickup
-attempt ends in start or drop). Reuses the Repository key ADR 0053's Operation
+seat, and this decision adds the gate that stands beside the seat. Amended by
+ADR 0113: the Consultation's worktree start crosses the gate this decision
+opens, and the second open limit it records is closed. Extends ADR 0034 (the
+Work queue is the one place a start waits) and ADR 0049 (a pickup attempt ends
+in start or drop). Reuses the Repository key ADR 0053's Operation
 serializer normalizes, and follows the record voice issue #231 sets for a
 standing fact.
 
@@ -363,14 +365,14 @@ merge in the hold is the conservative half of that trade, and it is a decision t
 decision records as taken, not as open.
 
 **The second open limit: the Consultation's worktree start.** A worktree
-Consultation and a worktree Handoff of one Repository still reach its checkout
+Consultation and a worktree Handoff of one Repository reached the checkout
 together, because the Consultation's per-Repository serializer and this hold are
-disjoint locks, stated above. The headline this issue set - the plane never works
-one Repository's checkout from two starts at once - is true of the two starts
-this decision gates, the merge Plane action and the worktree Handoff, and it is
-not yet true of the Consultation. Closing it needs the Consultation-side seam the
-Options entry names, it is tracked as issue #315, and the verification record
-carries the gap as incomplete.
+disjoint locks. The headline this issue set - the plane never works one
+Repository's checkout from two starts at once - was true of the two starts this
+decision gates, the merge Plane action and the worktree Handoff, and not yet
+true of the Consultation. ADR 0113 closes the limit: the worktree Consultation
+crosses the gate its start claims, its wait is its row, and its refusal wears
+its own name.
 
 **A dropped hold does not settle the run that left it.** The budget ends the
 hold, not the run: a merge whose commands never answer keeps its Ticket's re-ask

@@ -29,6 +29,8 @@ import {
 	CHECKOUT_WORK_BUDGET_MS,
 } from "../src/checkout-hold.ts";
 import type { FactoryConfig } from "../src/config.ts";
+import type { ConsultationPickupOutcome } from "../src/consultation-operations.ts";
+import type { StartMode } from "../src/domain/start-mode.ts";
 import type { FetchedTicket, RepositoryRef } from "../src/domain/ticket.ts";
 import { queueWait } from "../src/domain/ticket-facts.ts";
 import { baseChoice, type HandoffChoice } from "../src/handoff.ts";
@@ -198,6 +200,20 @@ interface Rig {
 	releaseUntil: (test: () => boolean) => Promise<void>;
 	/** The same state and record, with the Parallel limit read at `seats`. */
 	withSeats: (seats: number) => ReturnType<typeof createHandoffDispatch>;
+	/**
+	 * The same state, record, and runner, with the Consultation side crossed in
+	 * (issue #315): one module the pickup and the starts share, because the
+	 * pickup crosses the module's own Shared checkout hold - a module's ledger is
+	 * the module's, and the handoff's hold must be the hold the pickup reads. The
+	 * pickup factory receives the module it crosses, and the refusal the bound's
+	 * end would ask the Consultation operations to write.
+	 */
+	withConsultation: (
+		pickup: (
+			dispatch: ReturnType<typeof createHandoffDispatch>,
+		) => (consultationId: string, mode: StartMode) => Promise<ConsultationPickupOutcome>,
+		refuse?: (consultationId: string, fact: string) => void,
+	) => ReturnType<typeof createHandoffDispatch>;
 }
 
 /**
@@ -328,7 +344,7 @@ function rig(options: RigOptions = {}): Rig {
 	const make = (
 		runnerOverride: typeof runner | Parameters<typeof createHandoffDispatch>[0]["runner"],
 		seatCount: () => number,
-		overrides: Partial<HandoffDispatchReports> = {},
+		overrides: Partial<Parameters<typeof createHandoffDispatch>[0]> = {},
 	) =>
 		createHandoffDispatch({
 			state,
@@ -375,6 +391,21 @@ function rig(options: RigOptions = {}): Rig {
 			}
 		},
 		withSeats: (seats) => make(gate.runner, () => seats),
+		withConsultation: (pickupFactory, refuse) => {
+			const created: { dispatch?: ReturnType<typeof createHandoffDispatch> } = {};
+			const dispatch = make(gate.runner, () => 0, {
+				// The option is asked at the pickup, after the module is created, so
+				// the factory reads the module it crosses out of this holder.
+				pickupConsultation: (consultationId, mode) =>
+					pickupFactory(created.dispatch as ReturnType<typeof createHandoffDispatch>)(
+						consultationId,
+						mode,
+					),
+				...(refuse === undefined ? {} : { refuseConsultationPickup: refuse }),
+			});
+			created.dispatch = dispatch;
+			return dispatch;
+		},
 	};
 }
 
@@ -397,14 +428,15 @@ async function mergeInFlight(r: Rig, pull: typeof PULL = PULL): Promise<void> {
 	await r.waitForArrivals(r.arrivals() + 1);
 }
 
-/** Ask the worktree Handoff of one ticket. */
+/** Ask the worktree Handoff of one ticket, on one module. */
 async function handoffAsked(
 	r: Rig,
 	ticket: typeof ISSUE,
 	choice = worktreeChoice(),
+	dispatch: Rig["dispatch"] = r.dispatch,
 ): Promise<void> {
 	expect(
-		await r.dispatch.dispatch({
+		await dispatch.dispatch({
 			origin: "open",
 			ticketIdentity: ticket.identity,
 			choice,
@@ -1022,5 +1054,147 @@ describe("the shared checkout of one Repository (issue #297, ADR 0109)", () => {
 		expect(r.lines.filter((line) => line.message.startsWith("handoff waits:"))).toEqual([]);
 		expect(r.lines.some((line) => line.message.startsWith("handoff started:"))).toBe(true);
 		r.release();
+	});
+});
+
+describe("the Consultation side of the shared checkout (issue #315, ADR 0109)", () => {
+	/**
+	 * A Consultation record in `queued` state, with its own row in the Work
+	 * queue: the worktree Consultation that meets the pair the hold names.
+	 */
+	function consultationQueued(r: Rig, repository: RepositoryRef = FACTORY): string {
+		return r.state.consultationRecord.createConsultation({
+			typeName: "grill",
+			agentType: "pi",
+			environment: "worktree",
+			template: "/grill {input}",
+			initialInput: "the checkout gate",
+			renderedOpeningPrompt: "/grill the checkout gate",
+			repository: {
+				identity: repository.identity,
+				displayName: repository.displayName,
+				cloneUrl: repository.cloneUrl,
+				path: join(r.home, "src", "factory"),
+			},
+			agentName: "consultation",
+			initialState: "queued",
+		}).id;
+	}
+
+	/**
+	 * The pickup the Consultation operations would cross (issue #315): the
+	 * seam's acts the operations run at the start's claim - cross the gate, take
+	 * the hold, move the seat - without the opening run the rig's runner would
+	 * hold, so the test reads the gate and the row, not the environment build.
+	 */
+	function consultationPickup(r: Rig, dispatch: Rig["dispatch"]) {
+		return (consultationId: string, _mode: StartMode): Promise<ConsultationPickupOutcome> => {
+			const gate = dispatch.checkoutHold.cross(consultationId);
+			if (!gate.ok)
+				return Promise.resolve(
+					gate.outcome === "refused"
+						? { kind: "refused", fact: gate.fact }
+						: { kind: "waiting", fact: gate.fact },
+				);
+			dispatch.checkoutHold.take(consultationId, gate.checkoutKey);
+			const claimed = r.state.consultationRecord.beginConsultationStart(consultationId);
+			return Promise.resolve(claimed ? { kind: "started" } : { kind: "moved" });
+		};
+	}
+
+	test("a worktree Handoff in flight holds the checkout, and the Consultation of that Repository waits", async () => {
+		const r = rig();
+		const dispatch = r.withConsultation((mod) => consultationPickup(r, mod));
+		// The worktree Handoff takes the factory checkout and holds it, before the
+		// Consultation that meets it is asked.
+		r.hold("herdr worktree create");
+		await handoffAsked(r, ISSUE, worktreeChoice(), dispatch);
+		await r.waitForArrivals(1);
+		const id = consultationQueued(r);
+		// The Consultation row stands in the queue with the wait: the checkout is
+		// at work, the record keeps its `queued` state, and the next pass runs the
+		// start when the checkout is free (issue #315, ADR 0109).
+		await dispatch.pickupWorkQueue();
+		expect(r.state.workQueue.hasConsultationItem(id)).toBe(true);
+		expect(r.state.consultationRecord.consultation(id)?.state).toBe("queued");
+		expect(r.lines).toContainEqual(
+			infoLine(
+				`consultation waits: "grill" ${id.slice(0, 8)} (the shared checkout is at work: the handoff of "${ISSUE.title}" holds it)`,
+			),
+		);
+		// The Handoff settles and lets the checkout go; the row that waited takes
+		// its turn with no second ask.
+		r.release();
+		await r.until(() => !r.state.handoff.handoffInFlight(ISSUE.identity));
+		await dispatch.pickupWorkQueue();
+		expect(r.state.workQueue.hasConsultationItem(id)).toBe(false);
+		expect(r.state.consultationRecord.consultation(id)?.state).toBe("opening");
+	});
+
+	test("the answers of one Consultation pickup keep their rows their own", async () => {
+		const r = rig();
+		const refused: Array<[string, string]> = [];
+		let answer: ConsultationPickupOutcome = {
+			kind: "waiting",
+			fact: "the shared checkout is at work",
+		};
+		const dispatch = r.withConsultation(
+			() => () => Promise.resolve(answer),
+			(consultationId, fact) => {
+				refused.push([consultationId, fact]);
+				r.state.consultationRecord.setConsultationState(consultationId, "failed", fact);
+			},
+		);
+		const id = consultationQueued(r);
+		// The wait: the row stands in the queue, and the record keeps its
+		// `queued` state - the wait is the row's (issue #315, ADR 0109).
+		await dispatch.pickupWorkQueue();
+		expect(r.state.workQueue.hasConsultationItem(id)).toBe(true);
+		expect(r.state.consultationRecord.consultation(id)?.state).toBe("queued");
+		// The refusal: the record's line wears the Consultation's own name, the
+		// record's state is written through the seam, and the row is dropped.
+		answer = { kind: "refused", fact: CHECKOUT_ROW_OVER_BUDGET_FACT };
+		await dispatch.pickupWorkQueue();
+		expect(refused).toEqual([[id, CHECKOUT_ROW_OVER_BUDGET_FACT]]);
+		expect(r.state.workQueue.hasConsultationItem(id)).toBe(false);
+		expect(r.state.consultationRecord.consultation(id)?.state).toBe("failed");
+		expect(r.lines).toContainEqual(
+			warnLine(
+				`consultation refused: "grill" ${id.slice(0, 8)} (${CHECKOUT_ROW_OVER_BUDGET_FACT})`,
+			),
+		);
+	});
+	test("the force-dispatch of a waiting Consultation row answers the key with the fact", async () => {
+		const r = rig();
+		const dispatch = r.withConsultation((mod) => consultationPickup(r, mod));
+		r.hold("herdr worktree create");
+		await handoffAsked(r, ISSUE, worktreeChoice(), dispatch);
+		await r.waitForArrivals(1);
+		const id = consultationQueued(r);
+		// The operator force-dispatches the row the checkout holds: the key
+		// answers with the fact, the row stands, and nothing else passes the cap
+		// (issue #297). The answer runs behind the key, so the line lands after
+		// the key's own step.
+		dispatch.forceDispatchWorkQueueItem(id);
+		await r.settle();
+		expect(r.events).toContain(
+			`notice:"grill" ${id.slice(0, 8)} waits in the Work queue: the shared checkout is at work: the handoff of "${ISSUE.title}" holds it`,
+		);
+		expect(r.state.workQueue.hasConsultationItem(id)).toBe(true);
+	});
+
+	test("the Consultation of the other Repository crosses beside the hold", async () => {
+		const r = rig();
+		const id = consultationQueued(r, BILLING);
+		const dispatch = r.withConsultation((mod) => consultationPickup(r, mod));
+		r.hold("herdr worktree create");
+		await handoffAsked(r, ISSUE, worktreeChoice(), dispatch);
+		await r.waitForArrivals(1);
+		// The hold belongs to one Repository: the billing Consultation's checkout
+		// is free, and the walk starts it past the factory's hold.
+		await dispatch.pickupWorkQueue();
+		expect(r.state.workQueue.hasConsultationItem(id)).toBe(false);
+		expect(r.state.consultationRecord.consultation(id)?.state).toBe("opening");
+		expect(r.lines.filter((line) => line.message.startsWith("consultation waits:"))).toEqual([]);
 	});
 });

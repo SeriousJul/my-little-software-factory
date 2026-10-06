@@ -121,3 +121,4 @@ body states the context, the decision, and the consequences.
 - [ADR 0110: The Live view is one Work cycle's screen](./0110-the-live-view-is-one-work-cycles-screen.md)
 - [ADR 0111: The Queue pause's key and display are plane-wide, and the Dispatch pause's word is held](./0111-the-queue-pauses-key-and-display-are-plane-wide-and-the-dispatch-pauses-word-is-held.md)
 - [ADR 0112: A pull request ticket works the branch its pull request holds](./0112-a-pull-request-ticket-works-the-branch-its-pull-request-holds.md)
+- [ADR 0113: A worktree Consultation crosses the Shared checkout gate, and its wait is its row](./0113-a-worktree-consultation-crosses-the-shared-checkout-gate.md)

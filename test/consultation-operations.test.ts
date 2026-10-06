@@ -17,6 +17,11 @@ import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import {
+	CHECKOUT_ROW_OVER_BUDGET_FACT,
+	type CheckoutGate,
+	type ConsultationCheckoutHold,
+} from "../src/checkout-hold.ts";
 import type { FactoryConfig } from "../src/config.ts";
 import type { ConfigWriteReport } from "../src/config-write.ts";
 import type { ConsultationRepositoryOption } from "../src/consultation/checkout-safety.ts";
@@ -283,6 +288,8 @@ function makeHarness(
 		seatCount?: () => number;
 		/** The logger the module's record lines are read back from. */
 		log?: Logger;
+		/** The Shared checkout hold the module's worktree start crosses (issue #315). */
+		checkoutHold?: ConsultationCheckoutHold;
 	} = {},
 ): Harness {
 	const reported: (ConsultationStatus | null)[] = [];
@@ -300,6 +307,7 @@ function makeHarness(
 			log: options.log,
 			persistRepositoryMapping: options.persistRepositoryMapping,
 			textBatchBytes: options.textBatchBytes,
+			checkoutHold: options.checkoutHold,
 			callbacks: {
 				onStatus: (status) => {
 					reported.push(status);
@@ -3131,5 +3139,324 @@ describe("Consultation operations: the start line (issue #220)", () => {
 				`consultation started: "grill" ${second.id.slice(0, 8)} (mode force-dispatch, origin consultation, seats 1/1)`,
 			),
 		]);
+	});
+});
+
+describe("Consultation operations: the Shared checkout gate (issue #315, ADR 0109)", () => {
+	/** One act the caller performed on the hold seam. */
+	interface HoldCall {
+		kind: "cross" | "take" | "release";
+		consultationId: string;
+		key?: string | null;
+	}
+
+	/**
+	 * A stubbed Shared checkout hold: the answers the gate gives, and the acts
+	 * the caller performs on the seam, so the operations' half of the gate is
+	 * measurable without the dispatch's ledger, which the ledger and the
+	 * dispatch suites own.
+	 */
+	function holdStub(answer: (consultationId: string) => CheckoutGate): {
+		stub: ConsultationCheckoutHold;
+		calls: HoldCall[];
+	} {
+		const calls: HoldCall[] = [];
+		return {
+			calls,
+			stub: {
+				cross: (consultationId) => {
+					calls.push({ kind: "cross", consultationId });
+					return answer(consultationId);
+				},
+				take: (consultationId, key) => {
+					calls.push({ kind: "take", consultationId, key });
+				},
+				release: (consultationId) => {
+					calls.push({ kind: "release", consultationId });
+				},
+			},
+		};
+	}
+
+	test("a queued worktree pickup waits at the gate, and the record keeps its seat in the queue", async () => {
+		const fixture = makeFixture();
+		const runner = new LifecycleRunner();
+		const hold = holdStub(() => ({
+			ok: false,
+			outcome: "waiting",
+			fact: "the shared checkout is at work",
+		}));
+		const harness = makeHarness(fixture, runner, { checkoutHold: hold.stub });
+		const consultation = harness.operations.create({
+			typeName: "grill",
+			repository: fixture.repository,
+			initialInput: "review auth",
+			queued: true,
+		});
+		if (consultation === undefined) throw new Error("the queued submit created no record");
+		const outcome = await harness.operations.pickup(consultation.id, "pickup");
+		expect(outcome).toEqual({ kind: "waiting", fact: "the shared checkout is at work" });
+		// The wait keeps its row: the record keeps its `queued` state, the row
+		// stands in the queue for the pass that finds the checkout free, and no
+		// environment work ran.
+		expect(current(fixture.state, consultation.id).state).toBe("queued");
+		expect(fixture.state.workQueue.hasConsultationItem(consultation.id)).toBe(true);
+		expect(hold.calls.filter((call) => call.kind === "take")).toEqual([]);
+		expect(runner.commands()).toEqual([]);
+	});
+
+	test("the refusal the bound gives is a failed record, on the refusal's own seam", async () => {
+		const fixture = makeFixture();
+		const runner = new LifecycleRunner();
+		const hold = holdStub(() => ({
+			ok: false,
+			outcome: "refused",
+			fact: CHECKOUT_ROW_OVER_BUDGET_FACT,
+			start: { side: "consultation", channel: "consultation" },
+		}));
+		const harness = makeHarness(fixture, runner, { checkoutHold: hold.stub });
+		const consultation = harness.operations.create({
+			typeName: "grill",
+			repository: fixture.repository,
+			initialInput: "review auth",
+			queued: true,
+		});
+		if (consultation === undefined) throw new Error("the queued submit created no record");
+		const outcome = await harness.operations.pickup(consultation.id, "pickup");
+		expect(outcome).toEqual({ kind: "refused", fact: CHECKOUT_ROW_OVER_BUDGET_FACT });
+		// The pickup refuses nothing itself: the record still waits and the row
+		// still stands, until the dispatch's refusal runs on the record's own seam.
+		expect(current(fixture.state, consultation.id).state).toBe("queued");
+		harness.operations.refusePickup(consultation.id, CHECKOUT_ROW_OVER_BUDGET_FACT);
+		expect(current(fixture.state, consultation.id)).toMatchObject({
+			state: "failed",
+			failure: CHECKOUT_ROW_OVER_BUDGET_FACT,
+		});
+		expect(
+			harness.statuses.some(
+				(status) =>
+					status.kind === "error" &&
+					status.text ===
+						`Consultation ${consultation.id.slice(0, 8)} failed: ${CHECKOUT_ROW_OVER_BUDGET_FACT}`,
+			),
+		).toBe(true);
+		// A refusal that finds a record that left `queued` changes nothing: the
+		// state the close owns is not the refusal's to write.
+		harness.operations.refusePickup(consultation.id, "a second refusal");
+		expect(current(fixture.state, consultation.id).failure).toBe(CHECKOUT_ROW_OVER_BUDGET_FACT);
+	});
+
+	test("the direct start now of a record that holds no row answers the key, and starts nothing", async () => {
+		const fixture = makeFixture();
+		const runner = new LifecycleRunner();
+		const hold = holdStub(() => ({
+			ok: false,
+			outcome: "waiting",
+			fact: "the shared checkout is at work",
+		}));
+		const harness = makeHarness(fixture, runner, { checkoutHold: hold.stub });
+		const consultation = harness.operations.create({
+			typeName: "grill",
+			repository: fixture.repository,
+			initialInput: "review auth",
+			queued: true,
+		});
+		if (consultation === undefined) throw new Error("the queued submit created no record");
+		// The operator's Delete of the row: the record moves to `unscheduled` and
+		// the queue holds no row for it.
+		fixture.state.consultationRecord.removeConsultationWorkItem(consultation.id);
+		expect(current(fixture.state, consultation.id).state).toBe("unscheduled");
+		// The operator's start now: the checkout is at work, and there is no row
+		// to stand the wait, so the key answers with the fact and the start runs
+		// nothing.
+		const outcome = await harness.operations.pickup(consultation.id, "force-dispatch");
+		expect(outcome).toEqual({ kind: "held", fact: "the shared checkout is at work" });
+		expect(current(fixture.state, consultation.id).state).toBe("unscheduled");
+		expect(runner.commands()).toEqual([]);
+		expect(
+			harness.statuses.some(
+				(status) =>
+					status.kind === "warning" &&
+					status.text ===
+						`Consultation ${consultation.id.slice(0, 8)} did not start: the shared checkout is at work`,
+			),
+		).toBe(true);
+	});
+
+	test("a pickup that crosses a free gate takes the hold, and the settle lets it go", async () => {
+		const fixture = makeFixture();
+		const runner = new LifecycleRunner();
+		const hold = holdStub(() => ({ ok: true, checkoutKey: "github.com/acme/factory" }));
+		const harness = makeHarness(fixture, runner, { checkoutHold: hold.stub });
+		const consultation = harness.operations.create({
+			typeName: "grill",
+			repository: fixture.repository,
+			initialInput: "review auth",
+			queued: true,
+		});
+		if (consultation === undefined) throw new Error("the queued submit created no record");
+		stubWorktreeLaunch(runner.inner, fixture.checkout, consultation.id);
+		stubPaneRead(runner.inner, LAUNCH.paneId, "Agent: opened");
+		const outcome = await harness.operations.pickup(consultation.id, "pickup");
+		expect(outcome).toEqual({ kind: "started" });
+		// The take ran in the claim's own step, with the gate's key.
+		expect(hold.calls).toContainEqual({
+			kind: "take",
+			consultationId: consultation.id,
+			key: "github.com/acme/factory",
+		});
+		await until(
+			() => current(fixture.state, consultation.id).state === "working",
+			"the picked-up Consultation to work",
+		);
+		// The let-go runs where the opening settles, behind the state move.
+		await until(() => hold.calls.some((call) => call.kind === "release"), "the hold release");
+		expect(hold.calls.filter((call) => call.kind === "release")).toEqual([
+			{ kind: "release", consultationId: consultation.id },
+		]);
+	});
+
+	test("a live-worktree pickup crosses no gate", async () => {
+		const fixture = makeFixture();
+		const runner = new LifecycleRunner();
+		const hold = holdStub(() => ({
+			ok: false,
+			outcome: "waiting",
+			fact: "the shared checkout is at work",
+		}));
+		const harness = makeHarness(fixture, runner, { checkoutHold: hold.stub });
+		const consultation = harness.operations.create({
+			typeName: "grill-live",
+			repository: fixture.repository,
+			initialInput: "review auth",
+			queued: true,
+		});
+		if (consultation === undefined) throw new Error("the queued submit created no record");
+		stubLiveCheckout(runner.inner, fixture.checkout);
+		stubLiveLaunch(runner.inner, fixture.checkout, consultation.id);
+		runner.inner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+		const outcome = await harness.operations.pickup(consultation.id, "pickup");
+		expect(outcome).toEqual({ kind: "started" });
+		await until(
+			() => current(fixture.state, consultation.id).state === "working",
+			"the picked-up Consultation to work",
+		);
+		// The live-worktree start works a checkout the operator chose and already
+		// owns: the seam is never crossed, and the let-go the settle issues is the
+		// idempotent release the hold gives to a start that took none.
+		await until(() => hold.calls.length > 0, "the idempotent let-go");
+		expect(hold.calls).toEqual([{ kind: "release", consultationId: consultation.id }]);
+	});
+
+	test("a recovery that meets a held checkout answers the key, and the record keeps its opening", async () => {
+		const fixture = makeFixture();
+		const runner = new LifecycleRunner();
+		const hold = holdStub(() => ({
+			ok: false,
+			outcome: "waiting",
+			fact: "the shared checkout is at work",
+		}));
+		const harness = makeHarness(fixture, runner, { checkoutHold: hold.stub });
+		const consultation = harness.operations.create({
+			typeName: "grill",
+			repository: fixture.repository,
+			initialInput: "review auth",
+		});
+		if (consultation === undefined) throw new Error("the create made no record");
+		// The record stands `opening` with no pane and no session: the start that
+		// crashed before its Agent stood, the record the operator's recovery
+		// re-runs from the Consultation surface.
+		expect(current(fixture.state, consultation.id)).toMatchObject({
+			state: "opening",
+			paneId: null,
+			sessionId: null,
+		});
+		// The re-run is another start, and it crosses the same gate: the checkout
+		// is at work, the record holds no queue row to stand the wait, so the key
+		// answers with the fact, the record keeps `opening`, and no environment
+		// work ran.
+		await harness.operations.recover(consultation);
+		expect(current(fixture.state, consultation.id).state).toBe("opening");
+		expect(hold.calls).toEqual([{ kind: "cross", consultationId: consultation.id }]);
+		expect(runner.commands()).toEqual([]);
+		expect(
+			harness.statuses.some(
+				(status) =>
+					status.kind === "warning" &&
+					status.text ===
+						`Consultation ${consultation.id.slice(0, 8)} did not start: the shared checkout is at work`,
+			),
+		).toBe(true);
+	});
+
+	test("a recovery that crosses a free gate takes the hold, and the settle lets it go", async () => {
+		const fixture = makeFixture();
+		const runner = new LifecycleRunner();
+		const hold = holdStub(() => ({ ok: true, checkoutKey: "github.com/acme/factory" }));
+		const harness = makeHarness(fixture, runner, { checkoutHold: hold.stub });
+		const consultation = harness.operations.create({
+			typeName: "grill",
+			repository: fixture.repository,
+			initialInput: "review auth",
+		});
+		if (consultation === undefined) throw new Error("the create made no record");
+		expect(current(fixture.state, consultation.id)).toMatchObject({
+			state: "opening",
+			paneId: null,
+			sessionId: null,
+		});
+		stubWorktreeLaunch(runner.inner, fixture.checkout, consultation.id);
+		stubPaneRead(runner.inner, LAUNCH.paneId, "Agent: opened");
+		await harness.operations.recover(consultation);
+		// The take ran in the recovery's own step, with the gate's key, before the
+		// re-run reached its first command.
+		expect(hold.calls).toContainEqual({
+			kind: "take",
+			consultationId: consultation.id,
+			key: "github.com/acme/factory",
+		});
+		await until(
+			() => current(fixture.state, consultation.id).state === "working",
+			"the recovered Consultation to work",
+		);
+		// The let-go runs where the opening settles, behind the state move.
+		await until(() => hold.calls.some((call) => call.kind === "release"), "the hold release");
+		expect(hold.calls.filter((call) => call.kind === "release")).toEqual([
+			{ kind: "release", consultationId: consultation.id },
+		]);
+	});
+
+	test("a live-worktree recovery crosses no gate", async () => {
+		const fixture = makeFixture();
+		const runner = new LifecycleRunner();
+		const hold = holdStub(() => ({
+			ok: false,
+			outcome: "waiting",
+			fact: "the shared checkout is at work",
+		}));
+		const harness = makeHarness(fixture, runner, { checkoutHold: hold.stub });
+		const consultation = harness.operations.create({
+			typeName: "grill-live",
+			repository: fixture.repository,
+			initialInput: "review auth",
+		});
+		if (consultation === undefined) throw new Error("the create made no record");
+		expect(current(fixture.state, consultation.id)).toMatchObject({
+			state: "opening",
+			paneId: null,
+			sessionId: null,
+		});
+		stubLiveCheckout(runner.inner, fixture.checkout);
+		stubLiveLaunch(runner.inner, fixture.checkout, consultation.id);
+		runner.inner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+		await harness.operations.recover(consultation);
+		await until(
+			() => current(fixture.state, consultation.id).state === "working",
+			"the recovered Consultation to work",
+		);
+		// The live-worktree start works a checkout the operator chose and already
+		// owns: the seam is never crossed, and the let-go the settle issues is the
+		// idempotent release the hold gives to a start that took none.
+		expect(hold.calls).toEqual([{ kind: "release", consultationId: consultation.id }]);
 	});
 });

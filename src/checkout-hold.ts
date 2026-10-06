@@ -3,9 +3,12 @@
  * checkout is worked by one start at a time.
  *
  * A worktree Handoff creates its worktree out of the Repository's shared
- * checkout, and the merge Plane action is the other start of the pair the
- * record measured. The Parallel limit cannot separate them, because the Plane
- * action takes no seat (ADR 0068), so this module is the second gate: one hold
+ * checkout, the merge Plane action is the other start the record measured
+ * working it (ADR 0068 takes it outside the seat count), and a worktree
+ * Consultation is the third start the record measured meeting the pair
+ * (issue #315). The Parallel limit cannot separate them, because the Plane
+ * action takes no seat and the Consultation's seat is counted on the same
+ * shared count the gate is not, so this module is the second gate: one hold
  * per Repository, taken at a start's claim and let go where that start settles.
  *
  * This module owns the hold's state machine - the holds, the two clocks of the
@@ -13,9 +16,13 @@
  * and the record lines - and it owns nothing else. It never touches a Work
  * queue row: the gate answers whether a start crosses, waits, or leaves, and
  * the caller that owns the row performs the wait's keep and the refusal's drop.
- * The Handoff dispatch is that caller today (src/handoff-dispatch.ts), and the
- * Consultation's worktree start is the caller issue #315 names, which is why
- * the row acts live here and not inside the gate.
+ * Two callers own two rows: the Handoff dispatch (src/handoff-dispatch.ts)
+ * performs the acts for the Handoff and the Plane action rows, and the
+ * Consultation operations (src/consultation-operations.ts) perform them for the
+ * Consultation row through the `ConsultationCheckoutHold` seam the dispatch
+ * exposes, taken at the Consultation's claim - its move to `opening` - and
+ * let go where the opening settles (issue #315). That is why the row acts live
+ * on the callers and not inside the gate.
  *
  * The hold is in-memory: it lives and dies inside one run, and the record is
  * the durable account of it. A second plane install working one checkout is
@@ -23,7 +30,7 @@
  */
 
 import type { FactoryConfig } from "./config.ts";
-import { recordTicketName } from "./domain/record-name.ts";
+import { recordConsultationName, recordTicketName } from "./domain/record-name.ts";
 import type { RepositoryRef, Ticket } from "./domain/ticket.ts";
 import type { Logger } from "./logging.ts";
 import { repositoryOperationKey } from "./operation-serializer.ts";
@@ -106,7 +113,7 @@ export const CHECKOUT_WORK_BUDGET_MS = COMMAND_TIMEOUT_MS;
  * comes from the registry's action, so a second Plane action the registry gains
  * waits in its own words and the assumption cannot go stale.
  */
-export type CheckoutChannel = "handoff" | PlaneActionCheckoutWord;
+export type CheckoutChannel = "handoff" | "consultation" | PlaneActionCheckoutWord;
 
 /**
  * Which half of the pair works a checkout (issue #297 review). Every settle path
@@ -115,7 +122,7 @@ export type CheckoutChannel = "handoff" | PlaneActionCheckoutWord;
  * the hold is released by the side that took it and the word it wears stays the
  * record's.
  */
-export type CheckoutSide = "handoff" | "plane-action";
+export type CheckoutSide = "handoff" | "plane-action" | "consultation";
 
 /**
  * What one start is to the checkout: the side that releases its hold, and the
@@ -189,9 +196,10 @@ export function checkoutHoldDropLine(
  * record shows meeting that create (ADR 0068 takes it outside the seat count,
  * so nothing else separates the two). A live-worktree Handoff works a checkout
  * the operator chose and already owns, so it takes no hold. A Consultation row
- * is gated here neither: its row, its name, and its refusal belong to the
- * Consultation module, and its own per-Repository lock is a second lock over the
- * same checkout, which is the gap ADR 0109 names as open (issue #297 review).
+ * is classified here neither, because the row the gate walks names the Ticket
+ * of its Ticket and not the Consultation the row stands for, and the
+ * Consultation operations cross the gate on the row's own facts through
+ * `crossConsultation` instead (issue #315, ADR 0109).
  *
  * The Plane action side takes its word from the registry's action, not from the
  * caller (issue #297 review): the hold's channel, the `<word> waits:` prefix,
@@ -199,6 +207,10 @@ export function checkoutHoldDropLine(
  * action the registry gains waits behind the same holds and states them in its
  * own words. A task type the registry holds no action for names no channel, and
  * its run's own gate refuses it.
+ *
+ * A Consultation row is not classified here: the Consultation operations own
+ * its environment read, and they cross the gate through `crossConsultation`
+ * with their own classification at the start's claim (issue #315).
  */
 export function checkoutStartOf(
 	item: WorkQueueHandoffItem | WorkQueuePlaneActionItem,
@@ -274,8 +286,11 @@ interface CheckoutHold {
 	side: CheckoutSide;
 	/** The word the wait line and the holder fact name this start by. */
 	channel: CheckoutChannel;
-	/** The Ticket whose start holds the checkout. */
-	ticketIdentity: string;
+	/**
+	 * The row identity whose start holds the checkout: the ticket of a Handoff
+	 * or a merge, the Consultation id of a worktree Consultation (issue #315).
+	 */
+	identity: string;
 	/**
 	 * The clock reading the start took the checkout: one of the two readings the
 	 * budget above measures (issue #297 review).
@@ -314,10 +329,22 @@ export interface CheckoutHoldFacts {
 	/** The config the Plane action side reads its registry word from. */
 	config(): FactoryConfig;
 	/** Whether the start that took a hold still stands: the merge run's mark,
-	 * the Handoff attempt. */
-	holderStands(side: CheckoutSide, ticketIdentity: string): boolean;
-	/** Whether the Work queue still holds this ticket's row. */
-	rowStands(ticketIdentity: string): boolean;
+	 * the Handoff attempt, the Consultation record's `opening` state. */
+	holderStands(side: CheckoutSide, identity: string): boolean;
+	/** Whether the Work queue still holds this row: the ticket's row, or the
+	 * Consultation's (issue #315). */
+	rowStands(identity: string): boolean;
+	/**
+	 * The Repository identity a Consultation's record works, for the key of its
+	 * hold (issue #315): the record is the caller's fact, the way the
+	 * projection is the caller's read.
+	 */
+	consultationRepository(consultationId: string): string | undefined;
+	/**
+	 * The Consultation type name a record line names a Consultation start by,
+	 * beside the identity prefix (issue #315).
+	 */
+	consultationTypeName(consultationId: string): string | undefined;
 	/** Where the wait line, and the line of a hold the budget ends, are written. */
 	readonly log?: Logger;
 }
@@ -330,13 +357,14 @@ export interface CheckoutHoldFacts {
  * two. It is bounded by the Repositories the plane works at once.
  *
  * The waits map holds the Work queue rows the record has named a checkout wait
- * for, each with the clock reading its wait began and the holder its line
- * named. The rule is the one issue #231 sets for a standing fact: once while it
- * stands, again when the fact changes, never once per poll. The entry stands
- * while the row stands, the way the standing-row refusal's entry does, and the
- * pickup pass sweeps the entries whose row is gone. The clock reading is kept
- * across a hand-off: the row's own wait is one of the two bounds, and a
- * checkout that keeps changing hands must not reset it (issue #297 review).
+ * for - a ticket's row, or a Consultation's row (issue #315) - each with the
+ * clock reading its wait began and the holder its line named. The rule is the
+ * one issue #231 sets for a standing fact: once while it stands, again when the
+ * fact changes, never once per poll. The entry stands while the row stands, the
+ * way the standing-row refusal's entry does, and the pickup pass sweeps the
+ * entries whose row is gone. The clock reading is kept across a hand-off: the
+ * row's own wait is one of the two bounds, and a checkout that keeps changing
+ * hands must not reset it (issue #297 review).
  */
 export class CheckoutHoldLedger {
 	/** The Repository checkouts this run works, one holder per Repository. */
@@ -381,20 +409,69 @@ export class CheckoutHoldLedger {
 		if (start === null) return { ok: true, checkoutKey: null };
 		const projection = checkoutProjection();
 		const key = checkoutKeyOf(item, projection);
+		return this.gateFor(start, item.ticketIdentity, key, projection);
+	}
+
+	/**
+	 * The shared checkout gate one worktree Consultation crosses before its
+	 * claim (issue #315, ADR 0109): the same holds, the same two clocks, the
+	 * same record lines as the gate above, read against the Consultation's own
+	 * facts instead of a Work queue item's.
+	 *
+	 * The classification is the caller's, not the gate's: the Consultation
+	 * operations re-read the type's settings on their own seam, and they cross
+	 * only the start that works a worktree, the way the gate above answers null
+	 * for a live-worktree Handoff. The key is the record's Repository through the
+	 * facts, so a consultation whose record the state no longer holds crosses
+	 * with no key and takes no hold, the way a ticket the projection dropped does
+	 * in the gate above. The projection is the caller's read, and it runs
+	 * whenever the record names a Repository with a key, a held checkout or a
+	 * free one: the holder line a budget may leave names the holder's own start,
+	 * and only a consultation that works no checkout reads no projection.
+	 */
+	crossConsultation(
+		consultationId: string,
+		checkoutProjection: () => TicketProjection,
+	): CheckoutGate {
+		const repository = this.facts.consultationRepository(consultationId);
+		if (repository === undefined) return { ok: true, checkoutKey: null };
+		const key = repositoryOperationKey(repository);
+		if (key === "") return { ok: true, checkoutKey: null };
+		const projection = checkoutProjection();
+		return this.gateFor(
+			{ side: "consultation", channel: "consultation" },
+			consultationId,
+			key,
+			projection,
+		);
+	}
+
+	/**
+	 * The gate's answer for one classified start at one Repository key (issue
+	 * #315): the crossing, the wait, and the refusal the two clocks of the bound
+	 * give. Both gates above share it, so the Handoff row and the Consultation
+	 * row of one Repository answer one rule.
+	 */
+	private gateFor(
+		start: CheckoutStart,
+		identity: string,
+		key: string | null,
+		projection: TicketProjection,
+	): CheckoutGate {
 		if (key === null) return { ok: true, checkoutKey: null };
 		const holder = this.holderOf(key, projection);
 		if (holder === null) {
-			this.waits.delete(item.ticketIdentity);
+			this.waits.delete(identity);
 			return { ok: true, checkoutKey: key };
 		}
-		const stated = this.waits.get(item.ticketIdentity);
+		const stated = this.waits.get(identity);
 		// One clock refuses at the gate: the row's own wait. A checkout that keeps
 		// changing hands gives every new holder a fresh reading, so a row that has
 		// waited a whole budget leaves the queue whatever the chain of holders did
 		// behind it. The other clock, the hold's age, is read where the holder is, and
 		// it ends the hold and not the row (issue #297 review, ADR 0109).
 		if (stated !== undefined && this.facts.now() - stated.since >= CHECKOUT_WORK_BUDGET_MS) {
-			this.waits.delete(item.ticketIdentity);
+			this.waits.delete(identity);
 			// The refusal names the channel the wait line named, and the caller needs
 			// that word to drop the row, so the gate hands back the one classification
 			// it made instead of asking its caller to make it again.
@@ -405,22 +482,28 @@ export class CheckoutHoldLedger {
 				start,
 			};
 		}
-		if (stated === undefined || stated.holder !== holder.ticketIdentity) {
+		if (stated === undefined || stated.holder !== holder.identity) {
 			// A new wait, or the same row waiting behind a different start: the
 			// fact changed, so it states itself again (issue #231). The wait's own
 			// age carries over from the first line, because the row's wait is one
-			// fact and not one per holder.
-			this.waits.set(item.ticketIdentity, {
-				since: stated?.since ?? this.facts.now(),
-				holder: holder.ticketIdentity,
-			});
-			this.facts.log?.info(
-				checkoutWaitLine(
-					start.channel,
-					recordTicketName(projection, item.ticketIdentity),
-					this.waitFact(holder, projection),
-				),
-			);
+			// fact and not one per holder. The entry stands while the row stands:
+			// a start that reaches the gate with no row in the queue - the
+			// Consultation the operator started directly, beside no queue row
+			// (issue #315) - waits on no entry and leaves no line, because the wait
+			// is the row's and the queue holds no row for it.
+			if (this.facts.rowStands(identity)) {
+				this.waits.set(identity, {
+					since: stated?.since ?? this.facts.now(),
+					holder: holder.identity,
+				});
+				this.facts.log?.info(
+					checkoutWaitLine(
+						start.channel,
+						this.nameOf(start.side, identity, projection),
+						this.waitFact(holder, projection),
+					),
+				);
+			}
 		}
 		return { ok: false, outcome: "waiting", fact: this.waitFact(holder, projection) };
 	}
@@ -442,11 +525,30 @@ export class CheckoutHoldLedger {
 			this.holds.set(key, {
 				side: start.side,
 				channel: start.channel,
-				ticketIdentity: item.ticketIdentity,
+				identity: item.ticketIdentity,
 				takenAt: this.facts.now(),
 			});
 		}
 		this.forgetWait(item.ticketIdentity);
+	}
+
+	/**
+	 * Take the checkout hold for one claimed worktree Consultation (issue #315):
+	 * the take of the gate above, on the consultation's facts. The key is the one
+	 * the gate computed for this same start, so the take runs no read of its own,
+	 * and the caller crossed the gate in the claim's own synchronous step, so a
+	 * key that is not null names a worktree start, the way the gate's own key does.
+	 */
+	takeConsultation(consultationId: string, key: string | null): void {
+		if (key !== null) {
+			this.holds.set(key, {
+				side: "consultation",
+				channel: "consultation",
+				identity: consultationId,
+				takenAt: this.facts.now(),
+			});
+		}
+		this.forgetWait(consultationId);
 	}
 
 	/**
@@ -459,15 +561,15 @@ export class CheckoutHoldLedger {
 	 * holder whose hold the budget already ended cannot release the hold a later
 	 * start of that Repository took in its place (issue #297 review).
 	 */
-	release(side: CheckoutSide, ticketIdentity: string): boolean {
+	release(side: CheckoutSide, identity: string): boolean {
 		let released = false;
 		for (const [key, hold] of this.holds) {
-			if (hold.side === side && hold.ticketIdentity === ticketIdentity) {
+			if (hold.side === side && hold.identity === identity) {
 				this.holds.delete(key);
 				released = true;
 			}
 		}
-		this.forgetWait(ticketIdentity);
+		this.forgetWait(identity);
 		return released;
 	}
 
@@ -511,7 +613,7 @@ export class CheckoutHoldLedger {
 	 */
 	sweepHolds(checkoutProjection: () => TicketProjection): void {
 		for (const [key, hold] of [...this.holds]) {
-			if (!this.facts.holderStands(hold.side, hold.ticketIdentity)) {
+			if (!this.facts.holderStands(hold.side, hold.identity)) {
 				this.holds.delete(key);
 				continue;
 			}
@@ -521,7 +623,7 @@ export class CheckoutHoldLedger {
 			this.facts.log?.warn(
 				checkoutHoldDropLine(
 					hold.channel,
-					recordTicketName(projection, hold.ticketIdentity),
+					this.nameOf(hold.side, hold.identity, projection),
 					CHECKOUT_HOLD_OVER_BUDGET_FACT,
 				),
 			);
@@ -537,8 +639,20 @@ export class CheckoutHoldLedger {
 	private waitFact(holder: CheckoutHold, projection: TicketProjection): string {
 		return checkoutWaitHolderFact(
 			holder.channel,
-			recordTicketName(projection, holder.ticketIdentity),
+			this.nameOf(holder.side, holder.identity, projection),
 		);
+	}
+
+	/**
+	 * The name a record line gives the start that stands on one row identity
+	 * (issue #315): the projection's title for a ticket, the record's Consultation
+	 * type beside its identity prefix for a Consultation, so the wait line, the
+	 * holder fact, and the drop line of one start all wear its start line's name.
+	 */
+	private nameOf(side: CheckoutSide, identity: string, projection: TicketProjection): string {
+		if (side === "consultation")
+			return recordConsultationName(this.facts.consultationTypeName(identity), identity);
+		return recordTicketName(projection, identity);
 	}
 
 	/**
@@ -560,13 +674,13 @@ export class CheckoutHoldLedger {
 	private holderOf(key: string, projection: TicketProjection): CheckoutHold | null {
 		const hold = this.holds.get(key);
 		if (hold === undefined) return null;
-		if (this.facts.holderStands(hold.side, hold.ticketIdentity)) {
+		if (this.facts.holderStands(hold.side, hold.identity)) {
 			if (this.facts.now() - hold.takenAt < CHECKOUT_WORK_BUDGET_MS) return hold;
 			this.holds.delete(key);
 			this.facts.log?.warn(
 				checkoutHoldDropLine(
 					hold.channel,
-					recordTicketName(projection, hold.ticketIdentity),
+					this.nameOf(hold.side, hold.identity, projection),
 					CHECKOUT_HOLD_OVER_BUDGET_FACT,
 				),
 			);
@@ -575,4 +689,36 @@ export class CheckoutHoldLedger {
 		this.holds.delete(key);
 		return null;
 	}
+}
+
+/**
+ * The Consultation side's seam into the hold (issue #315, ADR 0109): the acts
+ * a Consultation's worktree start performs at the shared checkout, taken at the
+ * Consultation's claim - its move to `opening` - and let go where the opening
+ * settles.
+ *
+ * The Consultation operations hold the seam and perform the acts the gate
+ * answers for: the wait the row keeps, the refusal that ends the row in a
+ * record state, and the release. The Handoff dispatch owns the ledger the seam
+ * crosses, so the hold stays one state machine - the ledger's - and the row
+ * acts stay on the side that owns the row, the way the dispatch performs them
+ * for the Handoff and the Plane action rows.
+ */
+export interface ConsultationCheckoutHold {
+	/**
+	 * Cross the shared checkout gate for one worktree Consultation start, at its
+	 * claim. The caller crosses only the start that works a worktree, the way
+	 * the dispatch crosses only the rows the ledger classifies.
+	 */
+	cross(consultationId: string): CheckoutGate;
+	/**
+	 * Take the hold the gate let cross, in the claim's own synchronous step,
+	 * with the key the gate computed for this same start.
+	 */
+	take(consultationId: string, checkoutKey: string | null): void;
+	/**
+	 * Let go of the checkout where the opening settles. Idempotent, the way the
+	 * ledger's release is: an opening that took no hold changes nothing.
+	 */
+	release(consultationId: string): void;
 }
