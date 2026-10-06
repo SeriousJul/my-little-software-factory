@@ -1137,14 +1137,21 @@ this one ends on no frame at all.
 ### The reproduction, on the real application flow
 
 The loaded runner is a synchronous hold of the event loop, 400 ms, placed in
-the working tree between the key and the window and never committed: `const
-held = Date.now() + 400; while (Date.now() < held) {}`. The hold consumes the
-window and delays the pop-in's first paint past it: the renderer schedules its
-paints on timers, and a timer does not fire on a loop that is held.
+the working tree and never committed: `const held = Date.now() + 400; while
+(Date.now() < held) {}`. The hold consumes the window and delays the pop-in's
+first paint past it: the renderer schedules its paints on timers, and a timer
+does not fire on a loop that is held. The hold's placement decides whether
+the pre-fix check sees it, and the red stands on the placement after the
+pre-fix file's `const deadline = Date.now() + 300;` line: the deadline is
+set before the hold, the hold runs past it, and the sample loop reads no
+frame that holds `Decision:`. Placed right after the key instead, the old
+check sets its deadline after the hold, the pop-in lands inside the window,
+and the old check goes green.
 
 | State | Result |
 | --- | --- |
-| The pre-fix case on the branch's hold commit, the hold in place | Red at 445.71 ms on "the modal never rendered during the burst; the pop-in window was missed", Expected > 0, Received 0; the other 11 records in the file green |
+| The pre-fix case, the hold after the `const deadline = Date.now() + 300;` line | Red at 445.71 ms on "the modal never rendered during the burst; the pop-in window was missed", Expected > 0, Received 0; the other 11 records in the file green; re-run at 445.63 ms on the rework's base, [the probe below](#the-probe-re-runnable-on-the-pushed-head) |
+| The pre-fix case, the hold right after the key | 12 pass / 0 fail, the pop-in record at 749.41 ms: the deadline is set after the hold, and the pop-in lands inside the window |
 | The same tree, the file alone, no hold | 12 pass / 0 fail in 3.94 s, the load flake the triage rule records |
 
 ### The fix
@@ -1166,24 +1173,47 @@ replaced in the buffer before a read on a quiet machine. The poll is a
 parameter of the wait, and its doc states the rule a caller that must read
 every painted frame has to meet.
 
+The review round scored the branch 72 / 100 and reworked it on the tree
+rebased onto `origin/main` at `1ccbf930`. The #311 fix that landed there
+makes every frame wait in `test/app-harness.ts` run `flushPassiveNow()` per
+poll before it reads, so a loaded runner cannot land the flush 2 to 6 ms
+after the frame the poll reads. The rework took the same shape here: the two
+waits are one loop, `awaitFrameChecking` runs the flush per poll before it
+captures, and `awaitFrame` is that loop with a no-op check. The wait stands
+on `FRAME_DEADLINE_MS`, and the #311 sweep at that constant, in the harness's
+doc, names it. The poll argument stands before the deadline, so the case
+passes its 5 ms poll without an explicit `undefined`.
+
 ### The probe, re-runnable on the pushed head
 
-The case's header writes the step: put the same 400 ms hold right after the
-key, in the working tree. The pop-in record must stay green with the hold in
-place; the hold was removed before the commit.
+The case's header writes the step and the placements. Put the same 400 ms
+hold in the working tree, `const held = Date.now() + 400; while (Date.now() <
+held) {}`. In the pre-fix file, the hold goes red on the old window check
+only after the `const deadline = Date.now() + 300;` line; right after the key
+it goes green there. In the fixed file, the waits set their own deadlines
+after the hold, so the pop-in record stays green with the hold in place after
+the key. The hold was removed before the commit.
 
 | State | Result |
 | --- | --- |
-| The fixed case, the hold in place | 12 pass / 0 fail; the pop-in record at 525.29 ms, the hold plus the pop-in it waited for |
-| 10 consecutive runs of the file, no hold | 10 of 10 green, 12 pass / 0 fail each |
+| The pre-fix file, the hold after the `deadline` line, re-run on the rework's base | Red at 445.63 ms on "the modal never rendered during the burst; the pop-in window was missed", Expected > 0, Received 0; the other 11 records in the file green |
+| The pre-fix file, the hold right after the key, re-run on the rework's base | 12 pass / 0 fail; the pop-in record at 749.41 ms |
+| The fixed case, the hold right after the key | 12 pass / 0 fail; the pop-in record at 539.10 ms, the hold plus the pop-in it waited for |
+| 10 consecutive runs of the fixed file, no hold | 10 of 10 green, 12 pass / 0 fail each |
 
-### The gate on the fix, at `1a1e090a`
+### The gate on the rework, at `36d47dab`
 
 | Check | Result |
 | --- | --- |
-| `bun run lint` | Clean over 309 files in 137 ms |
+| `bun run lint` | Clean over 310 files in 135 ms |
 | `bun run typecheck` | Clean |
-| `bun run test`, the gate run, on the tree rebased on `origin/main` at `a0929ccf`, load 1.81 before and 1.90 after, no other `bun test` process on the machine | 3101 pass / 0 fail across 141 files in 38.37 s (15,601 `expect()`) |
+| `bun run docs:build` | Complete in 1.64 s |
+| `bun run test`, the gate run, on the tree rebased on `origin/main` at `1ccbf930`, load 0.81 before and 0.75 after, no other `bun test` process on the machine | 3102 pass / 0 fail across 141 files in 38.16 s (15,684 `expect()`) |
+
+The gate of the first round, at `1a1e090a` on the tree rebased on
+`origin/main` at `a0929ccf`, stands recorded in the first version of this
+section: 3101 pass / 0 fail across 141 files in 38.37 s (15,601
+`expect()`), lint clean over 309 files in 137 ms, typecheck clean.
 
 ### What this fix did not measure
 
