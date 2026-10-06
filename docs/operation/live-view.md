@@ -44,7 +44,7 @@ The Live view is one work cycle's screen. A route you confirm ends the ticket's
 cycle under it, so the screen closes with the cycle and the list is drawn again -
 on the frame that already shows the next cycle, the way it shows the ticket
 `open`, or on the one after that where the next start has already taken the
-cycle (ADR 0072, ADR 0109).
+cycle (ADR 0072, ADR 0110).
 
 ## The turn log
 

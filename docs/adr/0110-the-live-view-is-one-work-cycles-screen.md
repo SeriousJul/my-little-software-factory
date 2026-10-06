@@ -1,4 +1,4 @@
-# ADR 0109: The Live view is one Work cycle's screen
+# ADR 0110: The Live view is one Work cycle's screen
 
 Status: accepted
 Date: 2026-10-06
@@ -86,7 +86,7 @@ project is not a fact a surface may wait on, in the plane or in its tests.
   fact of the screen, and the plane's `Panel` carries the cycle beside the
   identity, so a surface that reopens the view has to name a cycle.
 - The pin is `test/live-view.test.ts` - **the view ends on the work cycle it
-  opened on, with no frame holding the open state (ADR 0109)**: it ends the
+  opened on, with no frame holding the open state (ADR 0110)**: it ends the
   cycle and claims the next one in one turn of the event loop, with no
   projection read between the two writes, so the plane's first read finds the
   Ticket in flight in the next cycle and no frame ever holds `open`.

@@ -869,7 +869,64 @@ export async function awaitGoneKeyHandler(
 }
 
 /**
- * Wait until the key bus holds no subscription outside the set `base` held.
+ * The key bus at rest in a base mode, taken by the harness for the release wait.
+ *
+ * `baseKeyHandlers` snapshots the subscriptions while the plane rests in the
+ * mode a walk returns to, and keeps watching the bus until the wait ends, so
+ * the wait can tell a release it watched from a wait that never had anything to
+ * watch. See `awaitBaseKeyHandlers`.
+ */
+export interface BaseKeyHandlers {
+	/** The subscriptions the bus held when the snapshot was taken. */
+	readonly base: readonly unknown[];
+	/**
+	 * Whether a handler outside `base` joined the bus after the snapshot: the
+	 * moment a surface the walk opened took the keys.
+	 */
+	readonly grew: boolean;
+	/** Stop watching the bus. The release wait calls it. */
+	stop(): void;
+}
+
+/**
+ * Snapshot the key bus at rest in the base mode, and watch it from here.
+ *
+ * A test takes this *before* it opens the surface whose release it later waits
+ * for, which is the only place the base means anything: the base is the set of
+ * handlers the mode the walk returns to already held.
+ *
+ * The watch is the harness's, not the caller's. The bus announces a subscription
+ * before it lands, so the snapshot sees a surface take the keys even when that
+ * surface let them go before the wait's first poll, and the wait can then say
+ * whether the walk ever mounted one. A snapshot taken too late - after the
+ * surface mounted - is caught by the wait instead of passing silently.
+ */
+export function baseKeyHandlers(setup: Setup): BaseKeyHandlers {
+	const base = keyHandlerListeners(setup);
+	const bus = setup.renderer.keyInput;
+	let grew = false;
+	// The bus announces `newListener` as (event name, listener), which is not
+	// Node's documented order, so the observer takes two arguments and picks the
+	// name out of them by type rather than by place.
+	const observe = (first: unknown, second: unknown): void => {
+		const [event, listener] =
+			typeof first === "string" || typeof first === "symbol" ? [first, second] : [second, first];
+		if (event === "keypress" && !base.includes(listener)) grew = true;
+	};
+	bus.on("newListener", observe);
+	return {
+		base,
+		get grew(): boolean {
+			return grew;
+		},
+		stop(): void {
+			bus.off("newListener", observe);
+		},
+	};
+}
+
+/**
+ * Wait until the key bus holds no subscription outside the snapshot's base.
  *
  * `awaitGoneKeyHandler` names the handler whose release a test waits on, and a
  * test cannot name one when the surface that holds the keys was mounted and
@@ -877,29 +934,36 @@ export async function awaitGoneKeyHandler(
  * can have its reopen elided altogether when the transition that closes it
  * lands in the same render, so no handler of that surface ever joins the bus.
  * The fact that covers both branches is the one this waits on - every handler
- * the bus holds is one of the surfaces that already held keys when `base` was
+ * the bus holds is one of the surfaces that already held keys when the base was
  * taken, so no closed surface is left holding a key the base mode means to
  * take.
  *
- * Two rules make the wait mean something, and a caller that cannot state both
- * should wait with `awaitGoneKeyHandler` on the named handler instead:
- *
- * - `base` is taken with `keyHandlerListeners` while the plane rests in the
- *   mode the test returns to, *before* any surface the test opens is mounted.
- * - the walk does mount and close a surface after that `base`.
- *
- * The reason is the branch this wait cannot see: it returns at once when the
- * bus holds only `base`. A `base` taken after the surface mounted, or a walk
- * that opens nothing, then passes for free and proves nothing about a release.
- * The wait means something only when the walk itself mounted the surface whose
- * release it waits for, and the frame that closed it is already drawn.
+ * The wait would return at once when the bus holds only the base, and that is
+ * the branch a caller could fall into by taking the snapshot too late. The
+ * snapshot watches the bus for its whole life, so the wait refuses that case
+ * out loud: a walk that never mounted a surface with keys to release has no
+ * release to wait for, and it should name its handler with
+ * `awaitGoneKeyHandler` instead.
  */
 export async function awaitBaseKeyHandlers(
 	setup: Setup,
-	base: unknown[],
+	snapshot: BaseKeyHandlers,
 	what: string,
 ): Promise<void> {
-	return awaitKeyBus(setup, what, (now) => !now.some((handler) => !base.includes(handler)));
+	try {
+		await awaitKeyBus(
+			setup,
+			what,
+			(now) => !now.some((handler) => !snapshot.base.includes(handler)),
+		);
+	} finally {
+		snapshot.stop();
+	}
+	if (!snapshot.grew) {
+		throw new Error(
+			`waiting for ${what} proved nothing: no key handler outside the base snapshot ever joined the bus, so this walk never mounted a surface that had a key to release. Take the snapshot before the surface opens, or wait with awaitGoneKeyHandler on the named handler`,
+		);
+	}
 }
 
 /**

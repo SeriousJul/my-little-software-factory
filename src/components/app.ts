@@ -253,7 +253,7 @@ type Panel =
 	 * The Live view, and the work cycle it opened on. The cycle is part of the
 	 * panel because the view is one cycle's screen: when the ticket moves to the
 	 * next cycle, the screen the operator was watching has ended, whatever state
-	 * the ticket's row answers on the render that follows (ADR 0109).
+	 * the ticket's row answers on the render that follows (ADR 0110).
 	 */
 	| { kind: "live"; identity: string; workCycle: number }
 	| { kind: "repository-select" }
@@ -317,7 +317,7 @@ type PendingOverride =
 			 * The ticket panel the route row was on: Esc and a confirmed route return
 			 * there. It is stored as the panel itself, not as the fields that panel
 			 * happens to have today, so the Live view's work cycle - the fact that
-			 * screen is bounded by (ADR 0109) - travels with it and a field the Live
+			 * screen is bounded by (ADR 0110) - travels with it and a field the Live
 			 * panel grows later is carried here by the compiler.
 			 */
 			returnTo: RouteReturnPanel;
@@ -1847,7 +1847,7 @@ export function App({
 			if (pending.returnTo.kind === "live") {
 				// The screen returns to the cycle the operator left, and the route's
 				// ask ends that cycle: the view goes back to the list when the
-				// cycle's number moves (ADR 0072, ADR 0109).
+				// cycle's number moves (ADR 0072, ADR 0110).
 				setPanel(pending.returnTo);
 			}
 			runRouteHandoff(ticket, ticket.lastCompletion?.transition ?? null, choice);
@@ -2495,7 +2495,7 @@ export function App({
 		requestModelList(choice.agentType);
 		// The panel the route row was on is where an Esc and a confirmed route
 		// return: the decision modal, or the Live view's decision sub-mode on the
-		// work cycle that screen opened on (ADR 0109).
+		// work cycle that screen opened on (ADR 0110).
 		const returnTo: RouteReturnPanel =
 			panel?.kind === "live"
 				? { kind: "live", identity: ticket.identity, workCycle: ticket.workCycle }
@@ -4966,12 +4966,12 @@ export function App({
 		// reads it, so the `open` frame is a moment the plane may never be handed:
 		// a surface that waited for that moment alone can be given the next
 		// cycle's frame first and then wait for a screen change that no longer
-		// comes. The cycle number is the durable form of the same fact (ADR 0109).
+		// comes. The cycle number is the durable form of the same fact (ADR 0110).
 		panelTicket.workCycle === panel.workCycle
 			? panelTicket.state === "open"
 				? // The route confirm ends the ticket's cycle on its own surface and
 					// the screen reads the list when the ticket leaves the stream's
-					// states (ADR 0072, ADR 0109).
+					// states (ADR 0072, ADR 0110).
 					"closed"
 				: panelTicket.state === "awaiting"
 					? // Auto-handoff mode decides the settled turn on its own, so

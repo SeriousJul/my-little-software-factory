@@ -30,9 +30,10 @@ import {
 	type AppSetup,
 	awaitBaseKeyHandlers,
 	awaitFrame,
+	type BaseKeyHandlers,
+	baseKeyHandlers,
 	frameText,
 	HEIGHT,
-	keyHandlerListeners,
 	openGuide,
 	openPanel,
 	press,
@@ -274,16 +275,31 @@ const inFlightFace = (row: string): boolean =>
 	startingFaceOf(row) !== null || row.includes("[running]");
 
 /**
- * The states a Ticket can be caught in just after its route's ask ended its cycle.
+ * Wait for a route's ask to end the Live view: the list drawn again, and the
+ * keys the closed surfaces held given back.
  *
- * This is a window, not a domain set: the ask leaves the Ticket `open` with the
- * start waiting in the Work queue, and the queue's pickup takes it through
- * `handed-off` to `running` on its own clock. The screen falls back at the ask,
- * so the frame the fallback wait returns says nothing about which of the three
- * the state has reached. The durable fact is the recorded decision, which each
- * test reads on its own line.
+ * The fallback is a transition of its own. The confirm's own frame can still
+ * hold the Live view, streaming the new pane, with the start's line already on
+ * the Message line, and that frame is exactly as quiet as the one after the
+ * swap, so no `settle` result carries the assertion (issue #304). The wait takes
+ * the list's own box back on screen - the Live view paints the terminal alone,
+ * so the border's return is the fallback drawn - beside the absence the case
+ * then narrows, so a frame with nothing drawn cannot pass it either.
+ *
+ * The keys go next. The frame falls back before the closing surface's effect
+ * cleanup removes its handler, and a press sent in that window reaches the stale
+ * handler, which acts with the closed surface's meaning: the plane carries that
+ * race as issue #317, and the walk's next press stands on the release.
  */
-const statesAfterTheAsk = ["open", "handed-off", "running"];
+async function awaitFallbackToTheList(setup: AppSetup, base: BaseKeyHandlers): Promise<string> {
+	const listFrame = await awaitFrame(
+		setup,
+		(f) => f.includes("┌─❯ Tickets") && !f.includes("Live:"),
+		"the Live view to fall back to the list",
+	);
+	await awaitBaseKeyHandlers(setup, base, "the Live view to release the keys");
+	return listFrame;
+}
 
 describe("the Live view on the ticket list", () => {
 	test("g on an open ticket refuses with the Consultation section's words", async () => {
@@ -1027,12 +1043,11 @@ describe("the Live view against a running factory", () => {
 			async (setup) => {
 				app.src.settle(success);
 				await awaitFrame(setup, (f) => f.includes("Persist source facts"), "the ticket row");
-				// The base mode's key handlers, taken before the Live view is open.
-				// This is the base the release wait at the end of the walk reads, and
-				// the walk meets the wait's two rules: the snapshot predates every
-				// surface it mounts, and it does mount and close the Live view and the
-				// override panel after this point.
-				const baseHandlers = keyHandlerListeners(setup);
+				// The base mode's key handlers, taken at rest on the list before this
+				// walk mounts anything, which is the only place a base means something:
+				// the release wait at the fallback refuses a snapshot that never saw a
+				// surface take the keys.
+				const baseHandlers = baseKeyHandlers(setup);
 				await pressReturn(setup, "the Live view", (f) => f.includes("Live: Persist source facts"));
 				await awaitFrame(setup, (f) => f.includes("the implementer is finishing"), "the stream");
 				// The agent reports done: the same box turns into the decision,
@@ -1059,29 +1074,14 @@ describe("the Live view against a running factory", () => {
 					(f) =>
 						f.includes("Persist source facts") && !f.includes("Decision: Persist source facts"),
 				);
-				// The fallback is a transition of its own: the confirm's frame can
-				// still hold the Live view, streaming the new pane, with the start's
-				// line already on the Message line. The wait takes the fact the
-				// assertion reads, because a swap that has not started is as quiet
-				// as one that is over (issue #304).
-				const listFrame = await awaitFrame(
-					setup,
-					(f) => !f.includes("Live:"),
-					"the Live view to fall back to the list",
-				);
-				// The frame falls back before the closing surface's effect cleanup
-				// releases its keys, and an Enter sent in that window reaches the
-				// stale handler, which runs the route row again and answers that the
-				// ticket is already decided. The released keys are the fact the next
-				// press stands on. The wait proves it because `baseHandlers` predates
-				// every surface this walk mounted: a bus still holding one of them is
-				// a closed surface still holding keys.
-				await awaitBaseKeyHandlers(setup, baseHandlers, "the Live view to release the keys");
+				const listFrame = await awaitFallbackToTheList(setup, baseHandlers);
 				expect(listFrame).not.toContain("Live: Persist source facts");
 				expect(app.state.ticketWorkCycle.lastCompletion(identity)?.decision).toBe("handed-off");
-				// The new agent is live, or its start still waits in the queue: the
-				// screen fell back at the ask, which is the earlier of the two.
-				expect(statesAfterTheAsk).toContain(app.state.ticketWorkCycle.ticketState(identity) ?? "");
+				// No Ticket-state line stands here. The fallback lands at the ask,
+				// before the queue's pickup claims the next cycle, so the state the
+				// frame is drawn over is a window (`open`, then `handed-off`, then
+				// `running`) and not a fact. What is durable is the decision above and
+				// the new pane the walk streams next.
 				// The Live view reopens on the row and streams the new pane: the
 				// stream follows the handoff, and no focus, which is the Goto's
 				// alone.
@@ -1207,10 +1207,9 @@ describe("the Live view against a running factory", () => {
 			async (setup) => {
 				app.src.settle(success);
 				await awaitFrame(setup, (f) => f.includes("Persist source facts"), "the ticket row");
-				// The base mode's key handlers, taken before the Live view is open,
-				// for the reason and under the two rules the case above states: the
-				// snapshot predates every surface this walk mounts.
-				const baseHandlers = keyHandlerListeners(setup);
+				// The base mode's key handlers for the same release wait, taken at the
+				// same place: at rest on the list, before this walk mounts anything.
+				const baseHandlers = baseKeyHandlers(setup);
 				await pressReturn(setup, "the Live view", (f) => f.includes("Live: Persist source facts"));
 				await awaitFrame(setup, (f) => f.includes("the implementer is finishing"), "the stream");
 				app.runner.set("herdr", ["agent", "list"], { stdout: list("done", "working") });
@@ -1239,19 +1238,12 @@ describe("the Live view against a running factory", () => {
 				// The same fallback as the decision sub-mode's case, waited for the
 				// same way: the override's confirm leaves the Live view on screen for
 				// a moment, and the frame that moment holds is quiet (issue #304).
-				const listFrame = await awaitFrame(
-					setup,
-					(f) => !f.includes("Live:"),
-					"the Live view to fall back to the list",
-				);
-				// The next Enter waits for the keys the closed surfaces held, on the
-				// base taken above its own first surface mounted, for the reason the
-				// case above states.
-				await awaitBaseKeyHandlers(setup, baseHandlers, "the Live view to release the keys");
+				const listFrame = await awaitFallbackToTheList(setup, baseHandlers);
 				expect(listFrame).not.toContain("Live: Persist source facts");
 				expect(listFrame).not.toContain("Edit handoff");
 				expect(app.state.ticketWorkCycle.lastCompletion(identity)?.decision).toBe("handed-off");
-				expect(statesAfterTheAsk).toContain(app.state.ticketWorkCycle.ticketState(identity) ?? "");
+				// No Ticket-state line, for the reason the case above states: the
+				// state at the fallback is a window, the decision is the fact.
 				// The Live view reopens on the row and streams the new pane.
 				await pressReturn(
 					setup,
@@ -1267,7 +1259,7 @@ describe("the Live view against a running factory", () => {
 		app.state.close();
 	});
 
-	test("the view ends on the work cycle it opened on, with no frame holding the open state (ADR 0109)", async () => {
+	test("the view ends on the work cycle it opened on, with no frame holding the open state (ADR 0110)", async () => {
 		// The route's ask ends the cycle in one write, and the queue's pickup claims
 		// the next cycle's start before the plane next reads the projection, so the
 		// screen can be handed the next cycle's frame and never see the open state

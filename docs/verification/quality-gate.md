@@ -674,14 +674,14 @@ one step, and the queue's pickup claims the next cycle's start before the plane
 next renders. The `open` frame is therefore a moment the plane may never be
 handed, and `liveMode` derived the fallback from exactly that moment. The Live
 view now ends on the durable form of the same fact: the work cycle it opened on,
-the rule [ADR 0109](../adr/0109-the-live-view-is-one-work-cycles-screen.md)
+the rule [ADR 0110](../adr/0110-the-live-view-is-one-work-cycles-screen.md)
 records. `Panel`'s live variant carries that cycle, and a route override holds
 the panel it returns to as one value, so a return to the Live view returns to the
 cycle it left, and `src/components/app.ts` closes the screen when the Ticket's
 cycle moves.
 
 The pin is `test/live-view.test.ts` - "the view ends on the work cycle it opened
-on, with no frame holding the open state (ADR 0109)": it ends the cycle and
+on, with no frame holding the open state (ADR 0110)": it ends the cycle and
 claims the next one in one turn of the event loop, with no projection read
 between the two writes, so the plane's first read finds the Ticket in flight in
 the next cycle and no frame ever holds `open`.
@@ -735,7 +735,9 @@ the wait went red at 515.34 ms with `Expected to contain: "open"`. The set is no
 the file's `statesAfterTheAsk`: `open`, `handed-off`, `running` - the window a
 Ticket is caught in just after its route's ask ended its cycle, not a domain set -
 and the durable fact, the recorded `handed-off` decision, is asserted on its own
-line as before.
+line as before. The second round below read that set as three of the four
+`TicketState` values and dropped the line; what stands beside the fallback is the
+decision alone.
 
 ### The sweep requirement 2 asks for
 
@@ -755,10 +757,14 @@ the order they read a file:
    `(const|let) <name> = await settle(`. The bound `<name>` is the result.
 4. The **window** is the 40 lines from the assignment's own line.
 5. An assertion **reads the result** when its line holds `expect(` and the bound
-   name as a whole word. An assertion in the window whose receiver is anything
-   else is counted apart, as the loose reading.
-6. A **"must not contain" assertion** is one of those lines that also holds
-   `.not.toContain(`.
+   name as a whole word. A **"must not contain" assertion** is an assertion line
+   that also holds `.not.toContain(`.
+6. A **loose** assertion is a "must not contain" line in the window that does
+   *not* read the result. A site is counted in the loose row when its window
+   holds at least one loose assertion **and** the site holds no "must not
+   contain" on the result, so the loose row and the row above it are disjoint.
+   Assertions are counted per window, not per line: a line inside two
+   overlapping windows counts twice, which is why 23 distinct lines print 26.
 
 | Count | `origin/main` at `518029e5` | This branch |
 | --- | --- | --- |
@@ -767,7 +773,16 @@ the order they read a file:
 | Assigned results | 125 | 119 |
 | Sites with any assertion on the result | 111 | 105 |
 | Sites with a "must not contain" on the result | **40 sites, 43 assertions** | 34 sites, 36 assertions |
-| Sites where the window's "must not contain" reads another receiver | 20 sites, 26 assertions | 20 sites, 26 assertions |
+| Sites whose window has a "must not contain" on another receiver and none on the result | 20 sites, 26 assertions | 20 sites, 26 assertions |
+| Of the 40, sites where the absence is a transition the preceding wait does not cover | **6 sites, 7 assertions** | 0 sites |
+
+The loose row is the row the first version of this section under-specified, and
+the review round named the two readings it is not: "every window holding an
+assertion whose receiver is anything else" prints 30 sites / 40 assertions at
+the base and 29 / 39 here, and "a window with no assertion on the result at all"
+prints 3 / 4 on both trees. The arithmetic above is rule 6, re-run from these
+six rules on both trees on 2026-10-06, and it prints 20 sites and 26 assertions
+on each.
 | Of the 40, sites where the absence is a transition the preceding wait does not cover | **6 sites, 7 assertions** | 0 sites |
 
 The last row is the judgement, not arithmetic, and it is the row the fix works
@@ -842,7 +857,7 @@ result is the *correct* shape for 34 of the 40 sites, so a syntactic check would
 refuse the majority of its own uses. The rule stands where a writer reads it: on
 `settle`'s own doc comment in `test/app-harness.ts`.
 
-### The gate on this branch
+### The gate on this branch, as the first rework round measured it (`6b365016`)
 
 | Check | Result |
 | --- | --- |
@@ -896,23 +911,59 @@ re-measured are corrected in the gate table above.
 
 | The review asked for | What it became |
 | --- | --- |
-| The domain rule is not in the domain docs | `CONTEXT.md`'s Live view entry states the cycle bound as a fact of the screen, [docs/operation/live-view.md](../operation/live-view.md) tells it to the operator, and [ADR 0109](../adr/0109-the-live-view-is-one-work-cycles-screen.md) states the decision, its considered options, and the general rule: a screen bounded by a transition reads the durable form of it, not a state the write only passes through. ADR 0072 stands unedited, corrected there for the screen |
+| The domain rule is not in the domain docs | `CONTEXT.md`'s Live view entry states the cycle bound as a fact of the screen, [docs/operation/live-view.md](../operation/live-view.md) tells it to the operator, and [ADR 0110](../adr/0110-the-live-view-is-one-work-cycles-screen.md) states the decision, its considered options, and the general rule: a screen bounded by a transition reads the durable form of it, not a state the write only passes through. ADR 0072 stands unedited, corrected there for the screen |
 | The key-release window is a product race | Filed as [issue #317](https://github.com/SeriousJul/my-little-software-factory/issues/317) with the reproduction, the mechanism, and the guard the fix should take. The plane will guard it at the dispatch, not only wait behind it; this branch ships the wait and the reproduction, and the issue owns the guard |
 | The sweep's counts do not re-run | The counting rule is written out as six rules, and the counts are re-run from it on `origin/main` at `518029e5` and on this branch. The conclusion stands: the same 6 sites, and no unfixed site of the class |
 | One same-class assertion sits on a `press` result | `test/plane-action-merge.test.ts:2325` now waits for the absence it asserts, in the press's own predicate. The press-side sweep is recorded with its own rule and its 35 mechanical hits, 34 of them read as non-effects |
 | `PendingOverride` mirrors the Live panel field by field | The workflow variant holds `returnTo`, one value of type `Extract<Panel, { kind: "decision" | "live" }>`, and `cancelOverride` and the confirm hand it to `setPanel` unchanged. A field the Live panel grows later is carried by the compiler, with no second list to keep in step |
-| Three copies of the bus loop, one of them able to pass for free | `awaitKeyBus` owns the poll, and the three waits are its predicates. `awaitBaseKeyHandlers`' doc states the branch it cannot see - it returns at once when the bus holds only `base` - the two rules a caller must meet for the wait to mean anything, and what to use instead; both call sites state the rule they meet |
+| Three copies of the bus loop, one of them able to pass for free | `awaitKeyBus` owns the poll, and the three waits are its predicates. `awaitBaseKeyHandlers`' doc stated the branch it cannot see - it returns at once when the bus holds only `base` - and the two rules a caller had to meet; the second round below moved that rule from prose into the harness, where `baseKeyHandlers` takes the snapshot and watches the bus and the wait refuses a base that never saw a surface take the keys |
 | The `test/work-queue-frame.test.ts:1166` wait takes an absence its assertions do not read | Its predicate now takes the row and the badge the assertions read: the row naming `Add a webhook` wearing `[open]`. A frame with no rows fails the wait |
 | Two recorded numbers | The `expect()` count and the mutation probe are restated above with the command each came from: 17,070 for the gate run, beside the two other runs of the same head, because the total moves with the loop counts; and 5003.98 ms for the probe under `bun test test/live-view.test.ts`, against 10105.23 ms inside `bun run test` |
 
 Two notes the review did not require were taken: the state set beside the
-fallback is named `statesAfterTheAsk`, so the name says it is a window and not a
-domain set, and the sweep states what it cannot prove in the false-pass
-direction, not only in the flake direction.
+fallback was named `statesAfterTheAsk`, so the name said it is a window and not a
+domain set (the second round below dropped the line), and the sweep states what it
+cannot prove in the false-pass direction, not only in the flake direction.
 
 The rework changed waits, names, and a type. It added no behavior to the plane
 beyond the cycle check the first round recorded, so the three loaded runs against
 the base tree, recorded above, stand as the branch's load evidence.
+
+### The second review rework round (2026-10-06)
+
+The second review scored the branch 88 / 100, re-measured the sweep and the
+mutation pin on this machine, and asked for six changes. Each is recorded with
+what it became.
+
+| The review asked for | What it became |
+| --- | --- |
+| ADR 0109 is claimed by two open pull requests | This branch took **ADR 0110**: [0110-the-live-view-is-one-work-cycles-screen.md](../adr/0110-the-live-view-is-one-work-cycles-screen.md). Pull request [#306](https://github.com/SeriousJul/my-little-software-factory/pull/306) keeps 0109, and no open pull request holds 0110, so neither merge lands a duplicate number |
+| Three of the new waits take a bare absence | All three take a positive now. Both routed cases wait through the file's `awaitFallbackToTheList`, whose predicate is `f.includes("┌─❯ Tickets") && !f.includes("Live:")` - the Live view paints the terminal alone, so the list's own border returning is the fallback drawn, and a frame with nothing drawn fails it. `test/auto-mode.test.ts` waits `f.includes("Tickets") && ticketRow(f).includes("[open]")`, the row and badge its next line asserts. A probe of each screen confirms the positive is exclusive: the Live view's frame and the Decision screen's frame hold no `Tickets` at all |
+| The assertion the wait was written for is unreachable | The specific `not.toContain` lines stay, and each wait now carries a positive the assertion does not restate: the list drawn. The auto-mode wait's positive (`[open]` on the row) does not entail its absence at all, so that assertion can fail on its own. Where the two screens are mutually exclusive the wait is the drawn fact and the assertion names the border that left |
+| A set of three of four states is not an assertion | The line is gone from both routed cases, with the file's `statesAfterTheAsk` with it. What stands beside the fallback is the durable fact, the recorded `handed-off` decision, and the comment at each site says why no state line stands there: the fallback lands at the ask, before the queue's pickup, so the state is a window and not a fact. The routed start itself is still asserted, by the new pane the walk streams next |
+| Rule 5's loose clause does not print its own row | The clause is rewritten to the arithmetic that printed the row - rule 6 above - and the row is re-run from it on both trees: 20 sites and 26 assertions on each, 23 distinct lines counted per window. The two readings the review got (30 / 40 and 3 / 4 at the base) are recorded as the readings the rule is not |
+| `awaitBaseKeyHandlers` can pass for free, and only prose stops it | The harness owns the rule now. `baseKeyHandlers(setup)` snapshots the bus and keeps watching it through the wait, and `awaitBaseKeyHandlers` refuses a walk that never mounted a surface: it throws that the wait proved nothing. The refusal is measured, not assumed - with the snapshot moved after the Live view opens, `test/live-view.test.ts` - the routed handoff from the decision sub-mode - goes red with exactly that error, and is green with the snapshot where it belongs |
+| The new block is duplicated across the two routed cases | The file's `awaitFallbackToTheList(setup, base)` owns the fallback wait, the release wait, and the frame they return, and both routed cases call it. The snapshot's load-bearing place is one line at each walk's start, beside the comment that says why it is taken before anything is mounted |
+
+The rework changed no behavior in the plane. The cycle check, the waits, and the
+loaded runs recorded above are unchanged by it, and the ADR 0110 pin was re-run
+on this tree with `panelTicket.workCycle === panel.workCycle` replaced by `true`:
+`bun test test/live-view.test.ts` puts that case red at 5000.23 ms, bun's own
+per-test deadline, with the other 20 green, against the 5003.98 ms the first round
+recorded; the same mutation with `--timeout=60000` goes red at 10101.91 ms, which
+is the frame deadline the first round measured at 10105.23 ms.
+
+**The gate on the second round's head.**
+
+| Check | Result |
+| --- | --- |
+| `bun run lint` | Clean over 306 files in 132 ms |
+| `bun run typecheck` | Clean |
+| `bun run docs:build` | Complete in 1.64 s |
+| `bun run test`, the gate run, load 12.61 before, no other `bun test` on the machine | 3068 pass / 0 fail across 139 files in 39.80 s (17,108 `expect()`) |
+| `bun test` over the four changed test files, load 19.64 before | 185 pass / 0 fail in 35.68 s (859 `expect()`) |
+| `bun test test/live-view.test.ts` alone | 21 pass / 0 fail in 10.20 s (100 `expect()`) |
+| The sweep's branch column, re-run from the six rules on this head | 156 files, 300 call sites, 119 assigned results, 105 with an assertion, 34 sites / 36 assertions on the result, 20 sites / 26 assertions loose - the recorded row, unchanged by the rework |
 
 ## What was not measured
 
