@@ -11,6 +11,7 @@ import type { Ticket } from "../src/domain/ticket.ts";
 import {
 	type AppSetup,
 	awaitFrame,
+	awaitFrameChecking,
 	cellColors,
 	press,
 	pressArrow,
@@ -149,18 +150,46 @@ async function openModal(setup: AppSetup): Promise<string> {
  * stay inside the terminal's edge: a line wider than the frame being drawn
  * overflows the modal, and a terminal that wraps at its last column turns
  * the overflow into a smudge of merged and shifted characters.
+ *
+ * The case waits on the frame stream, never on a wall-clock window: it waits
+ * for the first frame that holds the modal, then checks every painted frame
+ * up to the settled size, that frame included. A window the pop-in can land
+ * outside of is a window the case can miss (issue #312).
+ *
+ * Probe, re-runnable on the pushed head: hold the event loop for 400 ms,
+ * the way a loaded runner holds it, with `const held = Date.now() + 400;
+ * while (Date.now() < held) {}`. The hold's placement decides whether the
+ * pre-fix window check goes red. Placed after the pre-fix file's `const
+ * deadline = Date.now() + 300;` line, the hold consumes the window, the
+ * pop-in's first paint lands past it, and the old check goes red on "the
+ * modal never rendered during the burst; the pop-in window was missed".
+ * Placed right after the key, the old check sets its deadline after the
+ * hold, the pop-in lands inside the window, and the old check goes green:
+ * the red stands on the placement after the deadline line. With this fix
+ * the waits set their own deadlines after the hold, so the pop-in record
+ * stays green with the hold in place at either placement; the hold was
+ * removed before the commit.
  */
 describe("the decision modal's pop-in", () => {
 	test("no content ever reaches the terminal's edge while the box grows", async () => {
 		await withApp(
 			async (setup) => {
 				setup.mockInput.pressEnter();
-				// Capture the whole pop-in, frame by frame, as it happens.
-				const deadline = Date.now() + 300;
-				let frames = 0;
-				while (Date.now() < deadline) {
-					const frame = setup.captureCharFrame();
-					if (frame.includes("Decision:")) {
+				// The first frame that holds the modal, waited with the harness's
+				// deadline: a pop-in that lands late lands on a wait that still
+				// reaches it, and a miss names this wait instead of a count that
+				// came to zero.
+				await awaitFrame(setup, (f) => f.includes("Decision:"), "the decision modal's pop-in");
+				// Every painted frame from the pop-in to the settled size, checked
+				// as the stream gives it: while the box grows, no glyph may reach
+				// the terminal's last column, and the settled frame is checked too.
+				// The poll runs faster than the pop-in's own 16 ms tick, so a
+				// painted frame is not replaced in the buffer before a read.
+				const settled = await awaitFrameChecking(
+					setup,
+					(f) => rowsOf(f).some((row) => row[WIDE - 2] === "┐"),
+					"the pop-in to finish",
+					(frame) => {
 						const rows = rowsOf(frame);
 						for (const [i, row] of rows.entries()) {
 							// Above the bar, the last column holds the overlay's
@@ -172,19 +201,8 @@ describe("the decision modal's pop-in", () => {
 						}
 						// The last row is the shared Action bar, not empty margin.
 						expect(rows[rows.length - 1]).toContain("Help");
-						frames += 1;
-					}
-					await sleep(5);
-				}
-				expect(
-					frames,
-					"the modal never rendered during the burst; the pop-in window was missed",
-				).toBeGreaterThan(0);
-				// The modal still settles cleanly at its final size.
-				const settled = await awaitFrame(
-					setup,
-					(f) => rowsOf(f).some((row) => row[WIDE - 2] === "┐"),
-					"the pop-in to finish",
+					},
+					5,
 				);
 				// It opens at the bottom, where the conclusion sits.
 				expect(rowsOf(settled).some((row) => row.includes("352"))).toBe(true);

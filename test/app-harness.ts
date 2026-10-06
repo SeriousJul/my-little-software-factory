@@ -60,9 +60,12 @@ const FRAME_POLL_MS = 10;
  * scheduled at the normal priority, and owed to the reconciler, not to the
  * renderer. The plane paints on
  * invalidation, so no frame ends them on its own (the #302/#310 class was
- * the renderer-pass mirror of the same shape). Every wait above now runs
- * `flushPassiveNow` per poll before it reads, so each of them ends on what
- * it waits for instead of on the scheduler's next turn.
+ * the renderer-pass mirror of the same shape). `awaitFrameChecking`, the
+ * wait that landed for issue #312 after the sweep's head, stands on the
+ * same deadline at its call, and its loop is the one the direct `awaitFrame`
+ * sites run. Every wait above runs `flushPassiveNow` per poll before it
+ * reads, so each of them ends on what it waits for instead of on the
+ * scheduler's next turn.
  */
 export const FRAME_DEADLINE_MS = process.env.CI ? 20000 : 10000;
 /** The dispatch grace `settle` waits out before trusting stability. */
@@ -601,12 +604,14 @@ export function announceFramePass(setup: Setup): void {
  * with the last frame. A stale frame can never pass an assertion. A test
  * that holds a seat with a timed command can pass a longer deadline.
  *
- * Each poll first flushes what React still owes at the normal priority:
- * the commit a keypress or a source answer scheduled, and the passive
- * flush that commit queued, land in the rig's own turn before the frame
- * the poll captures. On a loaded runner that flush landed 2 to 6 ms
- * after the frame the same commit drew, and a wait that ended on it
- * missed `FRAME_DEADLINE_MS` even though the app was sound (issue #311).
+ * The wait is `awaitFrameChecking` with no check on the frames it passes,
+ * so the per-poll flush that lands there runs here, too: each poll first
+ * flushes what React still owes at the normal priority, and the commit a
+ * keypress or a source answer scheduled, and the passive flush that commit
+ * queued, land in the rig's own turn before the frame the poll captures. On
+ * a loaded runner that flush landed 2 to 6 ms after the frame the same
+ * commit drew, and a wait that ended on it missed `FRAME_DEADLINE_MS` even
+ * though the app was sound (issue #311).
  */
 export async function awaitFrame(
 	setup: Setup,
@@ -614,16 +619,51 @@ export async function awaitFrame(
 	what: string,
 	deadlineMs: number = FRAME_DEADLINE_MS,
 ): Promise<string> {
+	return awaitFrameChecking(setup, predicate, what, () => undefined, FRAME_POLL_MS, deadlineMs);
+}
+
+/**
+ * Wait for the rendered frame to satisfy `until`, running `check` on every
+ * frame read on the way, the frame that ends the wait included, and return
+ * that frame.
+ *
+ * The wait steps the frame stream the way `awaitFrame` does: it ends when the
+ * effect appears or the deadline dumps the last frame, and it never stands on
+ * a wall-clock window the effect can land outside of (the rule on the quality
+ * gate page). A case that must hold on every painted frame between two states
+ * - the decision modal's pop-in edge, issue #312 - waits for the end state
+ * this way and checks each frame the stream gives it, instead of sampling a
+ * fixed window that a loaded runner can outrun and miss.
+ *
+ * The buffer holds only the frame last painted, so a painted frame stands to
+ * be read only until the next paint replaces it. `pollMs` is how often the
+ * wait reads the buffer, and a caller that must read every painted frame the
+ * stream gives it polls faster than the paint's own interval, the way the
+ * pop-in case does against its 16 ms tick.
+ *
+ * `awaitFrame` is this loop with a no-op check, and every poll runs
+ * `flushPassiveNow` before it reads, the way the wait it stands for does
+ * (issue #311): a frame wait that reads the buffer before the flush that
+ * commits the paint would be the same failure class as the wall-clock
+ * window this loop replaces (issue #312).
+ */
+export async function awaitFrameChecking(
+	setup: Setup,
+	until: (frame: string) => boolean,
+	what: string,
+	check: (frame: string) => void,
+	pollMs: number = FRAME_POLL_MS,
+	deadlineMs: number = FRAME_DEADLINE_MS,
+): Promise<string> {
 	const deadline = Date.now() + deadlineMs;
 	let frame = setup.captureCharFrame();
 	for (;;) {
-		if (predicate(frame)) {
-			return frame;
-		}
+		check(frame);
+		if (until(frame)) return frame;
 		if (Date.now() >= deadline) {
 			throw new Error(`timed out waiting for ${what}\nlast frame:\n${frame}`);
 		}
-		await sleep(FRAME_POLL_MS);
+		await sleep(pollMs);
 		flushPassiveNow();
 		frame = setup.captureCharFrame();
 	}
