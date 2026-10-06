@@ -814,28 +814,43 @@ export function keyHandlerListeners(setup: Setup): unknown[] {
 }
 
 /**
+ * Poll the key bus until `settled` accepts its subscription list.
+ *
+ * The three waits below are this loop over the same list, and they differ only
+ * in the fact they wait on: a handler that joined, a handler that left, or no
+ * handler outside a base set. The deadline matches the frame waits, and a
+ * timeout dumps the list size and the last frame.
+ */
+async function awaitKeyBus(
+	setup: Setup,
+	what: string,
+	settled: (now: unknown[]) => boolean,
+): Promise<void> {
+	const deadline = Date.now() + FRAME_DEADLINE_MS;
+	for (;;) {
+		const now = keyHandlerListeners(setup);
+		if (settled(now)) return;
+		if (Date.now() >= deadline) {
+			throw new Error(
+				`timed out waiting for ${what} (key handlers: ${now.length})\nlast frame:\n${setup.captureCharFrame()}`,
+			);
+		}
+		await sleep(FRAME_POLL_MS);
+	}
+}
+
+/**
  * Wait until the key bus holds a subscription that `before` did not.
  *
  * That is the moment a mounting surface's key handler takes the keys: until
- * it is subscribed, a key for the surface is dropped by the shell below. The
- * deadline matches the frame waits, and a timeout dumps the list size and
- * the last frame.
+ * it is subscribed, a key for the surface is dropped by the shell below.
  */
 export async function awaitNewKeyHandler(
 	setup: Setup,
 	before: unknown[],
 	what: string,
 ): Promise<void> {
-	const deadline = Date.now() + FRAME_DEADLINE_MS;
-	for (;;) {
-		if (keyHandlerListeners(setup).some((handler) => !before.includes(handler))) return;
-		if (Date.now() >= deadline) {
-			throw new Error(
-				`timed out waiting for ${what} (key handlers: ${keyHandlerListeners(setup).length})\nlast frame:\n${setup.captureCharFrame()}`,
-			);
-		}
-		await sleep(FRAME_POLL_MS);
-	}
+	return awaitKeyBus(setup, what, (now) => now.some((handler) => !before.includes(handler)));
 }
 
 /**
@@ -850,17 +865,7 @@ export async function awaitGoneKeyHandler(
 	before: unknown[],
 	what: string,
 ): Promise<void> {
-	const deadline = Date.now() + FRAME_DEADLINE_MS;
-	for (;;) {
-		const now = keyHandlerListeners(setup);
-		if (before.some((handler) => !now.includes(handler))) return;
-		if (Date.now() >= deadline) {
-			throw new Error(
-				`timed out waiting for ${what} (key handlers: ${now.length})\nlast frame:\n${setup.captureCharFrame()}`,
-			);
-		}
-		await sleep(FRAME_POLL_MS);
-	}
+	return awaitKeyBus(setup, what, (now) => before.some((handler) => !now.includes(handler)));
 }
 
 /**
@@ -876,25 +881,25 @@ export async function awaitGoneKeyHandler(
  * taken, so no closed surface is left holding a key the base mode means to
  * take.
  *
- * `base` is taken with `keyHandlerListeners` while the plane rests in the mode
- * the test returns to, before any surface the test opens is mounted.
+ * Two rules make the wait mean something, and a caller that cannot state both
+ * should wait with `awaitGoneKeyHandler` on the named handler instead:
+ *
+ * - `base` is taken with `keyHandlerListeners` while the plane rests in the
+ *   mode the test returns to, *before* any surface the test opens is mounted.
+ * - the walk does mount and close a surface after that `base`.
+ *
+ * The reason is the branch this wait cannot see: it returns at once when the
+ * bus holds only `base`. A `base` taken after the surface mounted, or a walk
+ * that opens nothing, then passes for free and proves nothing about a release.
+ * The wait means something only when the walk itself mounted the surface whose
+ * release it waits for, and the frame that closed it is already drawn.
  */
 export async function awaitBaseKeyHandlers(
 	setup: Setup,
 	base: unknown[],
 	what: string,
 ): Promise<void> {
-	const deadline = Date.now() + FRAME_DEADLINE_MS;
-	for (;;) {
-		const now = keyHandlerListeners(setup);
-		if (!now.some((handler) => !base.includes(handler))) return;
-		if (Date.now() >= deadline) {
-			throw new Error(
-				`timed out waiting for ${what} (key handlers: ${now.length}, base: ${base.length})\nlast frame:\n${setup.captureCharFrame()}`,
-			);
-		}
-		await sleep(FRAME_POLL_MS);
-	}
+	return awaitKeyBus(setup, what, (now) => !now.some((handler) => !base.includes(handler)));
 }
 
 /**

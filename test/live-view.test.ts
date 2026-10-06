@@ -274,15 +274,16 @@ const inFlightFace = (row: string): boolean =>
 	startingFaceOf(row) !== null || row.includes("[running]");
 
 /**
- * The states a Ticket stands in once its route's ask ended its cycle (ADR 0072).
+ * The states a Ticket can be caught in just after its route's ask ended its cycle.
  *
- * The ask leaves the Ticket `open` with the start waiting in the Work queue, and
- * the queue's pickup takes it through `handed-off` to `running`. The screen falls
- * back at the ask, so the frame the fallback wait returns says nothing about
- * which of the three the state has reached: the durable fact is the recorded
- * decision, which each test reads on its own.
+ * This is a window, not a domain set: the ask leaves the Ticket `open` with the
+ * start waiting in the Work queue, and the queue's pickup takes it through
+ * `handed-off` to `running` on its own clock. The screen falls back at the ask,
+ * so the frame the fallback wait returns says nothing about which of the three
+ * the state has reached. The durable fact is the recorded decision, which each
+ * test reads on its own line.
  */
-const afterRouteAskStates = ["open", "handed-off", "running"];
+const statesAfterTheAsk = ["open", "handed-off", "running"];
 
 describe("the Live view on the ticket list", () => {
 	test("g on an open ticket refuses with the Consultation section's words", async () => {
@@ -1026,9 +1027,11 @@ describe("the Live view against a running factory", () => {
 			async (setup) => {
 				app.src.settle(success);
 				await awaitFrame(setup, (f) => f.includes("Persist source facts"), "the ticket row");
-				// The base mode's key handlers, taken before the Live view is open:
-				// the fallback at the end of the walk waits for the bus to hold
-				// nothing but these, so no closed surface eats the next Enter.
+				// The base mode's key handlers, taken before the Live view is open.
+				// This is the base the release wait at the end of the walk reads, and
+				// the walk meets the wait's two rules: the snapshot predates every
+				// surface it mounts, and it does mount and close the Live view and the
+				// override panel after this point.
 				const baseHandlers = keyHandlerListeners(setup);
 				await pressReturn(setup, "the Live view", (f) => f.includes("Live: Persist source facts"));
 				await awaitFrame(setup, (f) => f.includes("the implementer is finishing"), "the stream");
@@ -1070,15 +1073,15 @@ describe("the Live view against a running factory", () => {
 				// releases its keys, and an Enter sent in that window reaches the
 				// stale handler, which runs the route row again and answers that the
 				// ticket is already decided. The released keys are the fact the next
-				// press stands on.
+				// press stands on. The wait proves it because `baseHandlers` predates
+				// every surface this walk mounted: a bus still holding one of them is
+				// a closed surface still holding keys.
 				await awaitBaseKeyHandlers(setup, baseHandlers, "the Live view to release the keys");
 				expect(listFrame).not.toContain("Live: Persist source facts");
 				expect(app.state.ticketWorkCycle.lastCompletion(identity)?.decision).toBe("handed-off");
 				// The new agent is live, or its start still waits in the queue: the
 				// screen fell back at the ask, which is the earlier of the two.
-				expect(afterRouteAskStates).toContain(
-					app.state.ticketWorkCycle.ticketState(identity) ?? "",
-				);
+				expect(statesAfterTheAsk).toContain(app.state.ticketWorkCycle.ticketState(identity) ?? "");
 				// The Live view reopens on the row and streams the new pane: the
 				// stream follows the handoff, and no focus, which is the Goto's
 				// alone.
@@ -1205,7 +1208,8 @@ describe("the Live view against a running factory", () => {
 				app.src.settle(success);
 				await awaitFrame(setup, (f) => f.includes("Persist source facts"), "the ticket row");
 				// The base mode's key handlers, taken before the Live view is open,
-				// for the reason the case above states.
+				// for the reason and under the two rules the case above states: the
+				// snapshot predates every surface this walk mounts.
 				const baseHandlers = keyHandlerListeners(setup);
 				await pressReturn(setup, "the Live view", (f) => f.includes("Live: Persist source facts"));
 				await awaitFrame(setup, (f) => f.includes("the implementer is finishing"), "the stream");
@@ -1240,15 +1244,14 @@ describe("the Live view against a running factory", () => {
 					(f) => !f.includes("Live:"),
 					"the Live view to fall back to the list",
 				);
-				// The next Enter waits for the keys the closed surfaces held, for the
-				// reason the case above states.
+				// The next Enter waits for the keys the closed surfaces held, on the
+				// base taken above its own first surface mounted, for the reason the
+				// case above states.
 				await awaitBaseKeyHandlers(setup, baseHandlers, "the Live view to release the keys");
 				expect(listFrame).not.toContain("Live: Persist source facts");
 				expect(listFrame).not.toContain("Edit handoff");
 				expect(app.state.ticketWorkCycle.lastCompletion(identity)?.decision).toBe("handed-off");
-				expect(afterRouteAskStates).toContain(
-					app.state.ticketWorkCycle.ticketState(identity) ?? "",
-				);
+				expect(statesAfterTheAsk).toContain(app.state.ticketWorkCycle.ticketState(identity) ?? "");
 				// The Live view reopens on the row and streams the new pane.
 				await pressReturn(
 					setup,
@@ -1264,7 +1267,7 @@ describe("the Live view against a running factory", () => {
 		app.state.close();
 	});
 
-	test("the view ends on the work cycle it opened on, with no frame holding the open state (ADR 0072)", async () => {
+	test("the view ends on the work cycle it opened on, with no frame holding the open state (ADR 0109)", async () => {
 		// The route's ask ends the cycle in one write, and the queue's pickup claims
 		// the next cycle's start before the plane next reads the projection, so the
 		// screen can be handed the next cycle's frame and never see the open state

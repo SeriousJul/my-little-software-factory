@@ -1162,10 +1162,15 @@ describe("the Work queue section", () => {
 						f.includes(`waiting start for "Close the stale deploy branch"`),
 					);
 					// The row's own badge flip is the transition the cancel's line
-					// does not prove, so the wait takes it (issue #304).
+					// does not prove, so the wait takes the badge the assertions read,
+					// on the row it wears: a frame with no rows at all would pass a bare
+					// absence (issue #304).
 					const after = await awaitFrame(
 						setup,
-						(f) => !stripAnsi(f).includes("[queued]"),
+						(f) =>
+							rowsOf(stripAnsi(f)).some(
+								(candidate) => candidate.includes("Add a webhook") && candidate.includes("[open]"),
+							),
 						"the route item's row to rest open again",
 					);
 					// The ticket's row rests open with the state badge again, and
