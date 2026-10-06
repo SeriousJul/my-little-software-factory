@@ -712,7 +712,7 @@ export async function captureScreens(fixtureDir: string): Promise<Map<string, Bu
 	const log = (what: string) => console.error(`screenshots: ${what}`);
 	const capture = async (name: string) => {
 		log(`capturing ${name}`);
-		await session.waitForStable(300, 15000);
+		await session.waitForStable(300, `the screen to settle before ${name}`, 15000);
 		const grid = parseScreen(session.output(), SCREEN.cols, SCREEN.rows);
 		out.set(name, renderPng(grid));
 	};
@@ -777,7 +777,7 @@ export async function captureScreens(fixtureDir: string): Promise<Map<string, Bu
 		await session.waitFor((data) => data.includes("Task type"), "the override panel", 15000);
 		// Let the model list query settle so the Model row shows its value.
 		await sleep(800);
-		await session.waitForStable(400, 15000);
+		await session.waitForStable(400, "the override panel to settle", 15000);
 		await capture("override-panel");
 		log("override panel captured");
 		key("\x1b");
@@ -818,7 +818,7 @@ export async function captureScreens(fixtureDir: string): Promise<Map<string, Bu
 		// label appears: the awaiting ticket's modal offers the merge position.
 		await session.waitFor((data) => data.includes("Handoff: review"), "the settled turn", 30000);
 		await sleep(400);
-		await session.waitForStable(400, 15000);
+		await session.waitForStable(400, "the turn-log screen to settle", 15000);
 		await capture("turn-log");
 	} finally {
 		// Kill rather than wait: the app has no exit key the capture sends.

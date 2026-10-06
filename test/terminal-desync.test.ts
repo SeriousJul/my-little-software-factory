@@ -126,11 +126,11 @@ async function runSession(baseDir: string, kind: "clean" | "lossy"): Promise<Ses
 			"the alternate screen",
 			STARTUP_TIMEOUT_MS,
 		);
-		await session.waitForStable(500, STABLE_TIMEOUT_MS);
+		await session.waitForStable(500, "the screen to settle after boot", STABLE_TIMEOUT_MS);
 		session.write(ENTER_KEY);
-		await session.waitForStable(700, STABLE_TIMEOUT_MS);
+		await session.waitForStable(700, "the screen to settle after the Enter key", STABLE_TIMEOUT_MS);
 		session.write(ARROW_DOWN);
-		await session.waitForStable(700, STABLE_TIMEOUT_MS);
+		await session.waitForStable(700, "the screen to settle after the arrow key", STABLE_TIMEOUT_MS);
 	} finally {
 		session.dispose();
 	}
