@@ -1119,6 +1119,78 @@ body, which the rework rewrote from the issue's text into the fix's record:
 | The pseudo-terminal miss's scope is not stated | Stated above: filed as [issue #321](https://github.com/SeriousJul/my-little-software-factory/issues/321), out of scope for this branch |
 | The record does not say which wait the original loaded run missed | Recorded above: the pin ties the open-side wait, the 2160-iteration run ties the loaded miss to the gone-wait, and the single full-suite miss is not attributable from the run's own record |
 | The 8-round fixpoint bound is unnamed, and the seam's version stand is unstated | `FLUSH_FIXPOINT_ROUNDS` in `test/passive-flush-hold.ts` carries the bound and why it is a margin, and the file's doc pins the seam to the `react 19.3.0` / `scheduler 0.27.0` pair the checkout resolves |
+## Issue #312: the Decision modal's pop-in check samples a 300 ms wall-clock window (2026-10-06, the fix)
+
+[Issue #312](https://github.com/SeriousJul/my-little-software-factory/issues/312) is
+the fourth mechanism [the named red cases](#the-named-red-cases-on-the-same-tree)
+filed. The case `test/decision-modal.test.ts` - no content ever reaches the
+terminal's edge while the box grows - sampled the painted buffer for 300 ms of
+wall-clock time after one key. On a loaded runner the pop-in's first paint lands
+past the window, the sample reads no frame that holds `Decision:`, and the guard
+fails at about 0.4 s with "the modal never rendered during the burst; the pop-in
+window was missed" - before the pop-in the check exists to inspect happens. That
+is the rule on [the quality gate page](../development/quality-gate.md), "A test
+does not stand on wall-clock time". The neighboring failure mode, a wait that
+ends successfully on the wrong frame, is [issue #304](https://github.com/SeriousJul/my-little-software-factory/issues/304);
+this one ends on no frame at all.
+
+### The reproduction, on the real application flow
+
+The loaded runner is a synchronous hold of the event loop, 400 ms, placed in
+the working tree between the key and the window and never committed: `const
+held = Date.now() + 400; while (Date.now() < held) {}`. The hold consumes the
+window and delays the pop-in's first paint past it: the renderer schedules its
+paints on timers, and a timer does not fire on a loop that is held.
+
+| State | Result |
+| --- | --- |
+| The pre-fix case on the branch's hold commit, the hold in place | Red at 445.71 ms on "the modal never rendered during the burst; the pop-in window was missed", Expected > 0, Received 0; the other 11 records in the file green |
+| The same tree, the file alone, no hold | 12 pass / 0 fail in 3.94 s, the load flake the triage rule records |
+
+### The fix
+
+The window is a fact about the frame stream, not about the clock. The case now
+waits for the first frame that holds `Decision:` with the harness's deadline,
+and a miss names that wait. It then checks every painted frame up to the
+settled size through a new harness wait, `awaitFrameChecking` in
+`test/app-harness.ts`: it runs its check on every frame it reads on the way,
+the frame that ends the wait included, and ends on the harness's deadline like
+`awaitFrame`. The settled frame is the one whose box border stands one cell in
+from the terminal's last column, the predicate the window check already used,
+and it is checked like the frames before it. The count that came to zero is
+gone.
+
+The buffer holds only the frame last painted. The case polls the buffer every
+5 ms, faster than the pop-in's own 16 ms tick, so a painted frame is not
+replaced in the buffer before a read on a quiet machine. The poll is a
+parameter of the wait, and its doc states the rule a caller that must read
+every painted frame has to meet.
+
+### The probe, re-runnable on the pushed head
+
+The case's header writes the step: put the same 400 ms hold right after the
+key, in the working tree. The pop-in record must stay green with the hold in
+place; the hold was removed before the commit.
+
+| State | Result |
+| --- | --- |
+| The fixed case, the hold in place | 12 pass / 0 fail; the pop-in record at 525.29 ms, the hold plus the pop-in it waited for |
+| 10 consecutive runs of the file, no hold | 10 of 10 green, 12 pass / 0 fail each |
+
+### The gate on the fix, at `1a1e090a`
+
+| Check | Result |
+| --- | --- |
+| `bun run lint` | Clean over 309 files in 137 ms |
+| `bun run typecheck` | Clean |
+| `bun run test`, the gate run, on the tree rebased on `origin/main` at `a0929ccf`, load 1.81 before and 1.90 after, no other `bun test` process on the machine | 3101 pass / 0 fail across 141 files in 38.37 s (15,601 `expect()`) |
+
+### What this fix did not measure
+
+| Item | State |
+| --- | --- |
+| The full suite under the 96-busy-loop load rig the [issue #304 section](#issue-304-settle-reads-a-stable-frame-as-a-finished-transition-2026-10-06-the-fix) used | Not run. The 400 ms hold is the local equivalent of that state at the case's own seam: it holds the event loop the same way and is re-runnable from the case's header. The gate run above ran on a quiet machine |
+| A painted frame replaced before a read on a loaded runner | Not closed. The 5 ms poll outruns the 16 ms tick on a quiet machine; under load the tick stretches wider than the poll, and a frame can be replaced before a read. The window check the case replaces had the same exposure at its own 5 ms poll, and the check now reads every frame from the first paint to the settled size, a superset of the 300 ms window |
 
 ## What was not measured
 
