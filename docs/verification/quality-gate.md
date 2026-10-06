@@ -1066,9 +1066,10 @@ rebase (head `4a3291e1`):
 The pseudo-terminal miss in run 2 is the one the issue's own table names at
 10007.09 ms in the earlier branch run. That seam is not covered by this fix -
 nothing in `test/executable-fields.test.ts` runs the harness's flush, and the
-rig's waits stand at 12000 ms and 8000 ms, so which wait missed there is not
-measured - and it is filed on 2026-10-06 as
-[issue #321](https://github.com/SeriousJul/my-little-software-factory/issues/321).
+rig's waits stand at 12000 ms, 8000 ms, and the rig's own 15000 ms default, so
+which wait missed there is not measured in the run's record - and it is filed on
+2026-10-06 as [issue #321](https://github.com/SeriousJul/my-little-software-factory/issues/321),
+where [the wait it stood on is named from the layout](#the-original-1000709-ms-miss-named-from-the-wait-layout).
 That is the scope decision: the fix answers the harness's waits, and the
 pseudo-terminal seam is a sibling issue, not a widening of this branch.
 
@@ -1269,7 +1270,40 @@ wait: `test/executable-fields.test.ts` - refuses a non-digit paste in the Contex
 window row - timed out at about 9.5 s on the `waitFor` for the focus marker on the
 Initial input row, the marker the TAB after the launcher's open owes. The TAB had
 been dropped in the open window: the launcher's dispatch was not yet subscribed
-when the key reached the shell, so no frame ever painted the marker.
+when the key reached the shell, so no frame ever painted the marker. The 25 red
+ran on `seriousarch`, the machine this branch's worktree stands on. The 2026-10-06
+review of this branch could not confirm the red there: on the exact pre-fix tree
+`32836ff5`, the same double ran 17 iterations - 72 busy loops, then 272 busy
+loops at load 97 to 239 - and every iteration stood green. The rework round of
+2026-10-06 re-established the red on the same machine: on `32836ff5` under 72
+busy loops, load rising from 8.59 to 72.37 over the run, and two concurrent
+suites of 10 iterations each: the fifth iteration of one suite went red at
+9612.94 ms on the same named wait, the `waitFor` for "the focus to reach the
+Initial input row", while the other suite stood green 10 of 10.
+
+### The original 10007.09 ms miss, named from the wait layout
+
+The original miss - the same case, at 10007.09 ms in the #311 branch run - ran
+on the pre-naming layout, and its record carried the case name only. That
+layout still names the wait it stood on. The waits in the case stood at
+12000 ms for the alternate screen, 8000 ms for each of the three
+`waitForStable`, 15000 ms for the launcher title - the rig's default where the
+call named no deadline - and 8000 ms for the paste's `waitFor`, with the test's
+own deadline at 40000 ms. A total of 10007.09 ms is below both 12000 and
+15000, so the miss cannot stand on the alternate screen or the launcher title:
+each of those goes red at or past its own deadline, and the alternate screen is
+the case's first wait. It stands on one of the 8000 ms waits that started about
+2000 ms into the test. The three silences end on the first 300 ms of stillness
+and take the deadline only while the child paints without stop for 8 s, and the
+case's quiet-machine run paints nothing after the paste. The wait the dropped
+TAB leaves unpaid in this layout is the `waitFor` for the pasted text: the
+paste reaches the Draft field only if the TAB moved focus there, and the
+mechanism the pre-fix red above measured is that drop. The miss therefore stood
+on the `waitFor` for "the pasted text to reach the Draft field as text", at its
+8000 ms deadline, about 2000 ms into the test. The attribution stands at the
+reasoning layer: the run's record carried no wait line, and the pre-naming
+rig cannot print one, so the wait is named from the layout's arithmetic and
+the mechanism, not captured.
 
 ### The fix
 
@@ -1306,16 +1340,16 @@ runs before the key's bytes are parsed on every run measured here.
 ### The sweep: the byte waits and their exposure
 
 The sweep walked every wait in the pseudo-terminal seam on the post-fix tree:
-49 byte waits, 41 in the three test files and 8 in
+42 byte waits, 34 in the three test files and 8 in
 `scripts/screenshot-fixture.ts`.
 
 | Kind | Count | Where |
 | --- | --- | --- |
-| `waitFor` on the bytes a step owes | 34 | 29 in the test files, 5 in the fixture |
+| `waitFor` on the bytes a step owes | 29 | 24 in the test files, 5 in the fixture |
 | `waitForStable` with `requireChange`, the boot settles | 4 | 1 in `test/executable-fields.test.ts`, 2 in `test/executable.test.ts`, 1 in `test/terminal-desync.test.ts` |
 | `waitForStable` on pure silence | 9 | 6 in the test files, 3 in the fixture |
 
-The 34 evidence waits owe their bytes: they end only when the expected bytes are
+The 29 evidence waits owe their bytes: they end only when the expected bytes are
 painted, and a loaded child that never paints them names its wait at the deadline
 instead of passing. The 4 boot settles owe their change pass and not their silence
 pass: they observe at least one frame, then wait for the paint to stop. The 9
@@ -1336,6 +1370,29 @@ an empty screen, a named failure rather than a silent pass.
 | The 11 frame files the dispatch change touches, quiet machine | 240 pass / 0 fail across the two batches, 6 field files in 14.29 s and 5 flow files in 52.21 s |
 | The double load, post-fix, the same rig the reproduction ran | 30 of 30 iterations green: two concurrent suites, 15 iterations each of the three PTY files, 72 busy loops, load 12.9 rising to 75.2 over the run, 16 pass / 0 fail per iteration, 480 passes total. The pre-fix tree on the same rig stood at 25 fail of 25 on the one suite measured there |
 | The push gate, the merged tree, `bun run test` on the tree rebased on `origin/main` at `207e61be`, under the 28-busy-loop standing rig, load 25.07 after the run, no other `bun test` process on the machine | 3132 pass / 0 fail across 141 files in 39.60 s (15,623 `expect()`) |
+
+### The review rework round (2026-10-06)
+
+The review of this branch scored it 78 / 100 and asked for three changes.
+Each is recorded in the place it lands:
+
+| The review asked for | What it became |
+| --- | --- |
+| The sweep's counts stand at 49 waits, 41 in the test files, and the `waitFor` row at 34 with 29 in the test files, while the table's own rows sum to 47 | Re-counted on the post-fix tree: 42 waits, 34 in the three test files and 8 in the fixture, and the `waitFor` row at 29, 24 in the test files and 5 in the fixture. The table's rows now sum to the total |
+| The record never says which wait the original 10007.09 ms miss stood on | [The subsection above](#the-original-1000709-ms-miss-named-from-the-wait-layout) names it from the wait layout the miss ran on: the `waitFor` for the pasted text, at its 8000 ms deadline, with the arithmetic that rules the 12000 ms and 15000 ms waits out |
+| The 25 fail of 25 pre-fix red is not named to a machine, and the review's own 17-iteration re-run on the pre-fix tree to load 239 stood all green | The red is named to `seriousarch` in the reproduction and re-established there in this round, on `32836ff5` under 72 busy loops: the fifth iteration of one concurrent suite red at 9612.94 ms on the focus-marker wait, the other suite green 10 of 10. The review's 17 green iterations stand recorded in the reproduction |
+| The gate line's 15,623 `expect()` count does not match this tree's 15,903 on the same 3132 pass | The gate run below carries the count this round measured |
+
+The gate on the rework head, the merged tree (level with `origin/main` at
+`207e61be`):
+
+| Check | Result |
+| --- | --- |
+| `bun run lint` | Clean over 310 files in 147 ms, no fixes |
+| `bun run typecheck` | Clean |
+| `bun run docs:build` | Complete in 1.80 s |
+| `bun run test`, the first run after the red re-establishment | 3131 pass / 1 fail across 141 files in 40.98 s (15,575 `expect()`): `test/terminal-desync.test.ts` - repaints the screen after the terminal drops bytes from a frame - red at 15977.50 ms with the machine still at load 10.0 from the 72 busy loops of the red re-establishment above, and green alone in 5.13 s. A load flake by the triage rule, recorded as evidence, not a pass |
+| `bun run test`, the gate run, machine at load 2.52 before and 2.26 after, no other `bun test` process on the machine | 3132 pass / 0 fail across 141 files in 38.25 s (15,863 `expect()`) |
 
 ### What this fix did not measure
 
