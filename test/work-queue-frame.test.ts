@@ -778,7 +778,14 @@ describe("the Work queue section", () => {
 					await press(setup, "delete", "the one start to cancel", (f) =>
 						f.includes(`waiting start for "Add a webhook retry policy"`),
 					);
-					const settled = await settle(setup);
+					// The walk home is the transition the cancel's line does not
+					// prove: the frame that carries the Message line can still hold
+					// the cursor on the empty queue, and that frame is quiet (issue #304).
+					const settled = await awaitFrame(
+						setup,
+						(f) => f.includes("┌─❯ Tickets") && !f.includes("┌─❯ Work queue"),
+						"the selection to come home to the Ticket list",
+					);
 					expect(settled).toContain("┌─❯ Tickets");
 					expect(settled).not.toContain("┌─❯ Work queue");
 				},
@@ -900,7 +907,16 @@ describe("the Work queue section", () => {
 					await press(setup, "delete", "the item to cancel", (f) =>
 						f.includes(`waiting start for "Add a webhook retry policy"`),
 					);
-					const returned = await settle(setup);
+					// The badge the cancel takes back is the transition, not the
+					// cancel's line: the frame that carries the line can still wear
+					// the queued badge, and that frame is quiet (issue #304).
+					const returned = await awaitFrame(
+						setup,
+						(f) =>
+							!stripAnsi(f).includes("[queued]") &&
+							frameText(f).includes("open: 2 running: 0 awaiting: 0"),
+						"the row to take its open badge back",
+					);
 					expect(stripAnsi(returned)).not.toContain("[queued]");
 					expect(frameText(returned)).toContain("open: 2 running: 0 awaiting: 0");
 				},
@@ -1145,7 +1161,18 @@ describe("the Work queue section", () => {
 					await press(setup, "delete", "the route item to cancel", (f) =>
 						f.includes(`waiting start for "Close the stale deploy branch"`),
 					);
-					const after = await settle(setup);
+					// The row's own badge flip is the transition the cancel's line
+					// does not prove, so the wait takes the badge the assertions read,
+					// on the row it wears: a frame with no rows at all would pass a bare
+					// absence (issue #304).
+					const after = await awaitFrame(
+						setup,
+						(f) =>
+							rowsOf(stripAnsi(f)).some(
+								(candidate) => candidate.includes("Add a webhook") && candidate.includes("[open]"),
+							),
+						"the route item's row to rest open again",
+					);
 					// The ticket's row rests open with the state badge again, and
 					// the queue stands empty behind it.
 					const row = rowsOf(stripAnsi(after)).find(

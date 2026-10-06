@@ -101,7 +101,8 @@ _Avoid_: action bar, action region, button row, footer
 **Live view**:
 The near-fullscreen Interaction mode above a `handed-off` or `running` ticket: the live Agent view of the ticket's agent, streamed, and the one row it proposes: Goto.
 When the turn settles for the operator, the same screen carries the decision: the border re-titles from `Live:` to `Decision:` in place, the Body pane holds the Turn log, and the Decision region stands at the box's floor. When the agent goes missing it carries the Missing modal. A settled turn the factory decides for itself keeps the streaming body under the `Live:` border.
-The route confirm ends the ticket's cycle under this screen, and the screen falls back to the list with it (ADR 0072).
+The Live view is one Work cycle's screen: it opens on a cycle and ends when the ticket moves to the next one, whatever Ticket state the render that follows answers with.
+The route confirm ends the ticket's cycle under this screen, and the screen falls back to the list with it (ADR 0072, ADR 0110).
 _Avoid_: watch, live log, agent stream
 
 **Missing modal**:

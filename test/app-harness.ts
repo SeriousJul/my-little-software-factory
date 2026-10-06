@@ -814,28 +814,43 @@ export function keyHandlerListeners(setup: Setup): unknown[] {
 }
 
 /**
+ * Poll the key bus until `settled` accepts its subscription list.
+ *
+ * The three waits below are this loop over the same list, and they differ only
+ * in the fact they wait on: a handler that joined, a handler that left, or no
+ * handler outside a base set. The deadline matches the frame waits, and a
+ * timeout dumps the list size and the last frame.
+ */
+async function awaitKeyBus(
+	setup: Setup,
+	what: string,
+	settled: (now: unknown[]) => boolean,
+): Promise<void> {
+	const deadline = Date.now() + FRAME_DEADLINE_MS;
+	for (;;) {
+		const now = keyHandlerListeners(setup);
+		if (settled(now)) return;
+		if (Date.now() >= deadline) {
+			throw new Error(
+				`timed out waiting for ${what} (key handlers: ${now.length})\nlast frame:\n${setup.captureCharFrame()}`,
+			);
+		}
+		await sleep(FRAME_POLL_MS);
+	}
+}
+
+/**
  * Wait until the key bus holds a subscription that `before` did not.
  *
  * That is the moment a mounting surface's key handler takes the keys: until
- * it is subscribed, a key for the surface is dropped by the shell below. The
- * deadline matches the frame waits, and a timeout dumps the list size and
- * the last frame.
+ * it is subscribed, a key for the surface is dropped by the shell below.
  */
 export async function awaitNewKeyHandler(
 	setup: Setup,
 	before: unknown[],
 	what: string,
 ): Promise<void> {
-	const deadline = Date.now() + FRAME_DEADLINE_MS;
-	for (;;) {
-		if (keyHandlerListeners(setup).some((handler) => !before.includes(handler))) return;
-		if (Date.now() >= deadline) {
-			throw new Error(
-				`timed out waiting for ${what} (key handlers: ${keyHandlerListeners(setup).length})\nlast frame:\n${setup.captureCharFrame()}`,
-			);
-		}
-		await sleep(FRAME_POLL_MS);
-	}
+	return awaitKeyBus(setup, what, (now) => now.some((handler) => !before.includes(handler)));
 }
 
 /**
@@ -850,16 +865,104 @@ export async function awaitGoneKeyHandler(
 	before: unknown[],
 	what: string,
 ): Promise<void> {
-	const deadline = Date.now() + FRAME_DEADLINE_MS;
-	for (;;) {
-		const now = keyHandlerListeners(setup);
-		if (before.some((handler) => !now.includes(handler))) return;
-		if (Date.now() >= deadline) {
-			throw new Error(
-				`timed out waiting for ${what} (key handlers: ${now.length})\nlast frame:\n${setup.captureCharFrame()}`,
-			);
-		}
-		await sleep(FRAME_POLL_MS);
+	return awaitKeyBus(setup, what, (now) => before.some((handler) => !now.includes(handler)));
+}
+
+/**
+ * The key bus at rest in a base mode, taken by the harness for the release wait.
+ *
+ * `baseKeyHandlers` snapshots the subscriptions while the plane rests in the
+ * mode a walk returns to, and keeps watching the bus until the wait ends, so
+ * the wait can tell a release it watched from a wait that never had anything to
+ * watch. See `awaitBaseKeyHandlers`.
+ */
+export interface BaseKeyHandlers {
+	/** The subscriptions the bus held when the snapshot was taken. */
+	readonly base: readonly unknown[];
+	/**
+	 * Whether a handler outside `base` joined the bus after the snapshot: the
+	 * moment a surface the walk opened took the keys.
+	 */
+	readonly grew: boolean;
+	/** Stop watching the bus. The release wait calls it. */
+	stop(): void;
+}
+
+/**
+ * Snapshot the key bus at rest in the base mode, and watch it from here.
+ *
+ * A test takes this *before* it opens the surface whose release it later waits
+ * for, which is the only place the base means anything: the base is the set of
+ * handlers the mode the walk returns to already held.
+ *
+ * The watch is the harness's, not the caller's. The bus announces a subscription
+ * before it lands, so the snapshot sees a surface take the keys even when that
+ * surface let them go before the wait's first poll, and the wait can then say
+ * whether the walk ever mounted one. A snapshot taken too late - after the
+ * surface mounted - is caught by the wait instead of passing silently.
+ */
+export function baseKeyHandlers(setup: Setup): BaseKeyHandlers {
+	const base = keyHandlerListeners(setup);
+	const bus = setup.renderer.keyInput;
+	let grew = false;
+	// The bus announces `newListener` as (event name, listener), which is not
+	// Node's documented order, so the observer takes two arguments and picks the
+	// name out of them by type rather than by place.
+	const observe = (first: unknown, second: unknown): void => {
+		const [event, listener] =
+			typeof first === "string" || typeof first === "symbol" ? [first, second] : [second, first];
+		if (event === "keypress" && !base.includes(listener)) grew = true;
+	};
+	bus.on("newListener", observe);
+	return {
+		base,
+		get grew(): boolean {
+			return grew;
+		},
+		stop(): void {
+			bus.off("newListener", observe);
+		},
+	};
+}
+
+/**
+ * Wait until the key bus holds no subscription outside the snapshot's base.
+ *
+ * `awaitGoneKeyHandler` names the handler whose release a test waits on, and a
+ * test cannot name one when the surface that holds the keys was mounted and
+ * unmounted between two facts the test can see: a panel a confirm returns to
+ * can have its reopen elided altogether when the transition that closes it
+ * lands in the same render, so no handler of that surface ever joins the bus.
+ * The fact that covers both branches is the one this waits on - every handler
+ * the bus holds is one of the surfaces that already held keys when the base was
+ * taken, so no closed surface is left holding a key the base mode means to
+ * take.
+ *
+ * The wait would return at once when the bus holds only the base, and that is
+ * the branch a caller could fall into by taking the snapshot too late. The
+ * snapshot watches the bus for its whole life, so the wait refuses that case
+ * out loud: a walk that never mounted a surface with keys to release has no
+ * release to wait for, and it should name its handler with
+ * `awaitGoneKeyHandler` instead.
+ */
+export async function awaitBaseKeyHandlers(
+	setup: Setup,
+	snapshot: BaseKeyHandlers,
+	what: string,
+): Promise<void> {
+	try {
+		await awaitKeyBus(
+			setup,
+			what,
+			(now) => !now.some((handler) => !snapshot.base.includes(handler)),
+		);
+	} finally {
+		snapshot.stop();
+	}
+	if (!snapshot.grew) {
+		throw new Error(
+			`waiting for ${what} proved nothing: no key handler outside the base snapshot ever joined the bus, so this walk never mounted a surface that had a key to release. Take the snapshot before the surface opens, or wait with awaitGoneKeyHandler on the named handler`,
+		);
 	}
 }
 
@@ -1178,7 +1281,17 @@ export async function confirmPanel(
 /**
  * Wait for the frame to stop changing, and return it.
  *
- * For keys that should change nothing, stability is the assertion.
+ * For keys that should change nothing, stability is the assertion, and this is
+ * the wait for them: a refused control, a key a surface does not take, a row
+ * that keeps its badge.
+ *
+ * What this does not measure is *finished*. A transition that has not started
+ * is exactly as quiet as one that is over, and under a loaded runner the swap
+ * is the thing that has not started, so an assertion that a frame must *not*
+ * hold something a transition takes away cannot stand on this wait: it passes
+ * on the frame before the swap and the test goes red on a stable screen
+ * (issue #304). Such a test waits with `awaitFrame` on the fact it then
+ * asserts, and asserts on the frame that wait returned.
  */
 export async function settle(setup: Setup, maxMs = 300): Promise<string> {
 	await sleep(SETTLE_GRACE_MS);

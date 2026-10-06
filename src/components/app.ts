@@ -249,7 +249,13 @@ type Panel =
 	| { kind: "consultation-force"; identity: string }
 	| { kind: "consultation-delete"; identity: string }
 	| { kind: "consultation-safety"; identity: string }
-	| { kind: "live"; identity: string }
+	/**
+	 * The Live view, and the work cycle it opened on. The cycle is part of the
+	 * panel because the view is one cycle's screen: when the ticket moves to the
+	 * next cycle, the screen the operator was watching has ended, whatever state
+	 * the ticket's row answers on the render that follows (ADR 0110).
+	 */
+	| { kind: "live"; identity: string; workCycle: number }
 	| { kind: "repository-select" }
 	| {
 			kind: "repository-init";
@@ -307,10 +313,22 @@ type PendingOverride =
 	| {
 			ticketIdentity: string;
 			origin: "workflow";
-			/** The ticket panel the route row was on: Esc and the confirm return there. */
-			from: "decision" | "live";
+			/**
+			 * The ticket panel the route row was on: Esc and a confirmed route return
+			 * there. It is stored as the panel itself, not as the fields that panel
+			 * happens to have today, so the Live view's work cycle - the fact that
+			 * screen is bounded by (ADR 0110) - travels with it and a field the Live
+			 * panel grows later is carried here by the compiler.
+			 */
+			returnTo: RouteReturnPanel;
 			choice: HandoffChoice;
 	  };
+
+/**
+ * The ticket panel a route override returns to: the screen the route row stood
+ * on when the edit opened the panel, the Decision modal or the Live view.
+ */
+type RouteReturnPanel = Extract<Panel, { kind: "decision" | "live" }>;
 
 export type AppKey =
 	| "j"
@@ -1826,8 +1844,11 @@ export function App({
 			// the direct route: the stream moves to the new pane on the next
 			// tick. A refused claim comes back to the decision sub-mode, where
 			// the route row still stands.
-			if (pending.from === "live") {
-				setPanel({ kind: "live", identity: pending.ticketIdentity });
+			if (pending.returnTo.kind === "live") {
+				// The screen returns to the cycle the operator left, and the route's
+				// ask ends that cycle: the view goes back to the list when the
+				// cycle's number moves (ADR 0072, ADR 0110).
+				setPanel(pending.returnTo);
 			}
 			runRouteHandoff(ticket, ticket.lastCompletion?.transition ?? null, choice);
 			return;
@@ -1847,7 +1868,7 @@ export function App({
 		const pending = overrideRef.current;
 		setOverride(null);
 		if (pending?.origin === "workflow") {
-			setPanel({ kind: pending.from, identity: pending.ticketIdentity });
+			setPanel(pending.returnTo);
 		}
 	};
 	/**
@@ -2473,13 +2494,17 @@ export function App({
 		// The panel opens on this choice's agent: fetch its Model list (ADR 0010).
 		requestModelList(choice.agentType);
 		// The panel the route row was on is where an Esc and a confirmed route
-		// return: the decision modal, or the Live view's decision sub-mode.
-		const from = panel?.kind === "live" ? ("live" as const) : ("decision" as const);
+		// return: the decision modal, or the Live view's decision sub-mode on the
+		// work cycle that screen opened on (ADR 0110).
+		const returnTo: RouteReturnPanel =
+			panel?.kind === "live"
+				? { kind: "live", identity: ticket.identity, workCycle: ticket.workCycle }
+				: { kind: "decision", identity: ticket.identity };
 		setPanel(null);
 		setOverride({
 			ticketIdentity: ticket.identity,
 			origin: "workflow",
-			from,
+			returnTo,
 			choice,
 		});
 	};
@@ -3442,7 +3467,7 @@ export function App({
 					if (ticket === undefined || !inFlight(ticket)) return refuse();
 					if (factsFor(ticket).failure === "missing")
 						setPanel({ kind: "missing", identity: ticket.identity });
-					else setPanel({ kind: "live", identity: ticket.identity });
+					else setPanel({ kind: "live", identity: ticket.identity, workCycle: ticket.workCycle });
 				},
 				// `g` focuses the agent's pane in herdr and changes nothing
 				// (ADR 0033): the catalogue gated the pane, so this runs the
@@ -4930,13 +4955,23 @@ export function App({
 	// operator asking: the stream while the agent works (a settled turn the
 	// factory decides for itself keeps streaming), the decision body when
 	// the factory waits for the operator, the missing box when the pane is
-	// gone, and closed when the ticket leaves the in-flight states.
+	// gone, and closed when the ticket leaves the in-flight states or leaves the
+	// work cycle the view opened on.
 	const liveMode: "stream" | "decision" | "missing" | "closed" =
-		panel?.kind === "live" && panelTicket !== undefined
+		panel?.kind === "live" &&
+		panelTicket !== undefined &&
+		// The cycle the view opened on is the cycle it shows. The write that ends
+		// a cycle moves the ticket to `open` and to the next cycle in one step, and
+		// the queued start of the route moves it on again before the plane next
+		// reads it, so the `open` frame is a moment the plane may never be handed:
+		// a surface that waited for that moment alone can be given the next
+		// cycle's frame first and then wait for a screen change that no longer
+		// comes. The cycle number is the durable form of the same fact (ADR 0110).
+		panelTicket.workCycle === panel.workCycle
 			? panelTicket.state === "open"
 				? // The route confirm ends the ticket's cycle on its own surface and
 					// the screen reads the list when the ticket leaves the stream's
-					// states (ADR 0072).
+					// states (ADR 0072, ADR 0110).
 					"closed"
 				: panelTicket.state === "awaiting"
 					? // Auto-handoff mode decides the settled turn on its own, so

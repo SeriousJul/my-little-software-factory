@@ -2322,8 +2322,16 @@ describe("the decision screen's merge", () => {
 					// 0072): the ticket rests open, the wait stands in the Work
 					// queue, and the Decision screen - an awaiting screen again -
 					// fell back to the list with the ask's line on the Message line.
-					const fallback = await press(setup, "return", "the ask's line", (f) =>
-						messageRowOf(f).includes(`the merge of "${pullTitle}" is in the Work queue`),
+					// The ask's line and the fallback are two renders, not one, and the
+					// frame that carries the line alone is quiet, so the wait takes the
+					// absence the assertion reads (issue #304).
+					const fallback = await press(
+						setup,
+						"return",
+						"the ask's line and the fallen-back list",
+						(f) =>
+							messageRowOf(f).includes(`the merge of "${pullTitle}" is in the Work queue`) &&
+							!f.includes("Decision:"),
 					);
 					expect(fallback).not.toContain("Decision:");
 					expect(state.ticketWorkCycle.ticketState(pullIdentity)).toBe("open");
