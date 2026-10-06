@@ -39,6 +39,7 @@ import {
 } from "../src/config.ts";
 import { writeConfigFile } from "../src/config-write.ts";
 import { THINKING_LEVELS } from "../src/domain/agent.ts";
+import { issueGateLabels } from "../src/repo-init.ts";
 import { BASE_CONFIG } from "./base-config.ts";
 import { stubEnv, unstubAllEnvs } from "./env-stub.ts";
 
@@ -109,9 +110,11 @@ describe("the Default configuration", () => {
 		const { config, fromFile, seeded } = await loadConfigFile(SHIPPED_DEFAULT_CONFIG);
 		expect(fromFile).toBe(true);
 		expect(seeded).toBeUndefined();
-		// The four workflow task types, the three security task types, and
+		// The five workflow task types - the analyze, implement, merge, review,
+		// and rework of the label machine - the three security task types, and
 		// the states of the label workflow machine (ADR 0027).
 		expect(Object.keys(config.taskTypes).sort()).toEqual([
+			"analyze",
 			"implement",
 			"merge",
 			"resolve-dependabot-alert",
@@ -134,6 +137,13 @@ describe("the Default configuration", () => {
 				name: "ready-for-agent",
 				taskType: "implement",
 				match: { sourceKind: "github-issue", labelsAny: ["ready-for-agent"] },
+			},
+			{
+				// The spec position: after ready-for-agent, so a ticket carrying
+				// both labels rests at ready-for-agent (ADR 0085, ADR 0086).
+				name: "ready-for-spec",
+				taskType: "analyze",
+				match: { sourceKind: "github-issue", labelsAny: ["ready-for-spec"] },
 			},
 			{
 				name: "needs-work",
@@ -199,6 +209,15 @@ describe("the Default configuration", () => {
 				{ when: "pull-request-open", pullRequestFacts: ["needs-work"] },
 				{ pullRequestFacts: [] },
 			],
+		});
+		// The analyze grills the ticket's specification (ADR 0085, ADR 0086):
+		// it carries the operator-decides flag that parks its completions for the
+		// operator, a high thinking level, and no transition - the operator's
+		// close of the parked cycle, not a label write, ends the spec position.
+		expect(config.taskTypes.analyze).toEqual({
+			template: expect.stringContaining("/skill:grill-with-docs"),
+			thinking: "xhigh",
+			operatorDecides: true,
 		});
 		// The security transitions write ready-for-review on the opened pull
 		// request; the Next step the fire derives is the review the labels put
@@ -513,21 +532,30 @@ describe("validateConfig", () => {
 					expect(source.repositories).toContain("SeriousJul/my-little-software-factory");
 					expect(source.filter).toBeUndefined();
 				} else {
-					// The init flow's naming, one pair per initialized
-					// repository: the issues side on the ready-for-agent filter,
-					// the pull request side on the default policy.
-					const match = source.name.match(/^(.+)-(issues|pull-requests)$/);
+					// The init flow's naming (ADR 0075): one issues feed per label the
+					// machine gates issues on, in state order (ADR 0115), and one pull
+					// request feed on the source's own default policy.
+					const gates = issueGateLabels(config.workflowStates);
+					const match = source.name.match(/^(.+)-(issues|pull-requests)(?:-([^/]+))?$/);
 					expect(match, `${source.name} follows the init source naming`).not.toBeNull();
-					const repository = match === null ? source.name : match[1];
-					const isIssues = match !== null && match[2] === "issues";
+					if (match === null) continue;
+					const repository = match[1];
+					const isIssues = match[2] === "issues";
 					expect(source.kind).toBe(isIssues ? "github-issues" : "github-pull-requests");
 					expect(source.refreshIntervalSeconds, `${source.name} keeps its refresh interval`).toBe(
 						60,
 					);
 					expect(source.repositories).toEqual([repository]);
-					expect(source.filter).toBe(
-						isIssues ? "label:ready-for-agent,label:ready-for-spec" : undefined,
-					);
+					if (!isIssues) {
+						expect(source.filter).toBeUndefined();
+						continue;
+					}
+					// The plain `-issues` feed carries the machine's first gate, and a
+					// feed named for a label carries that one: no query needs a union
+					// GitHub search cannot express.
+					const gate = match[3] ?? gates[0];
+					expect(gates, `${source.name} names a gate the machine holds`).toContain(gate);
+					expect(source.filter).toBe(`label:${gate}`);
 				}
 			}
 			// The dev path records its run in a log the git tree ignores.

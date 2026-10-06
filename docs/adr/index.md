@@ -123,3 +123,4 @@ body states the context, the decision, and the consequences.
 - [ADR 0112: A pull request ticket works the branch its pull request holds](./0112-a-pull-request-ticket-works-the-branch-its-pull-request-holds.md)
 - [ADR 0113: A worktree Consultation crosses the Shared checkout gate, and its wait is its row](./0113-a-worktree-consultation-crosses-the-shared-checkout-gate.md)
 - [ADR 0114: The Consultation close takes the Delete key, so the queue removal is one key](./0114-the-consultation-close-takes-the-delete-key-the-queue-removal-is-one-key.md)
+- [ADR 0115: The Repository init creates its gate labels, and one issue feed per gate](./0115-the-repository-init-creates-its-gate-labels-and-one-issue-feed-per-gate.md)

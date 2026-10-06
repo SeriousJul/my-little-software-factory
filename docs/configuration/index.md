@@ -323,7 +323,8 @@ context-window = 272000
 # specification before the work is worth implementing. It orders after the
 # ready-for-agent state, so a ticket carrying both labels rests at
 # ready-for-agent and is offered for implementation, not re-specified. The
-# ready-for-spec label is operator-owned: no transition writes it.
+# ready-for-spec label is operator-owned: no transition writes it, and the
+# Repository init creates it because a state gates on it (ADR 0115).
 [[states]]
 name = "ready-for-spec"
 task-type = "analyze"
@@ -828,7 +829,9 @@ can gate on a label the machine never writes, such as `labels-all =
 ["factory"]` keeping the machine to one project's items. A label a
 transition writes must already exist in the repository: a write that names a
 missing label fails, and [the ticket labels page](../development/labels.md)
-carries the command that creates them.
+carries the command that creates them. The Repository init creates both kinds
+for the labels your machine names - the transition facts and the state gates -
+and a gate your states do not name stays yours to create (ADR 0115).
 
 **`[task-types.<name>.transition]`** (one table per task type that fires a transition).
 

@@ -3,6 +3,11 @@
 Status: accepted
 Date: 2026-10-01
 
+Superseded in part by ADR 0115: the label set now holds the scoping labels a
+state match gates on, the act registers one issues feed per issue-side gate,
+and the coverage skip compares the filter. The deterministic generator, the
+throwaway worktree, the init fact, and the panel decisions hold.
+
 ## Context
 
 A repository enters the factory when a ticket source lists it. Before the

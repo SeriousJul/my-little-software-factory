@@ -561,6 +561,10 @@ It adds and removes labels on the ticket and on its fixing pull request, and a b
 It is the settle-time write; the handoff-time write is the Placement (ADR 0045).
 _Avoid_: handoff, label flip, workflow edge
 
+**Scoping label**:
+A label a State's match gates a ticket on - its `labels-any` or `labels-all` - that no Transition writes. No fire adds it or removes it, so it is the operator's signal, not the machine's fact. The Repository init creates the ones the config names, because the machine reaches a gate only when the repository holds the label, and a gate the config does not name stays the operator's own to create (ADR 0115).
+_Avoid_: entry label, manual label, filter label
+
 **Judgment**:
 The condition a Transition branch tests to choose its fact set: the review score against the configured threshold, and whether the fixing pull request is still open.
 The score is read from the pull request's comments and its reviews, and the open state from the pull request's own record, straight from the source at settle time; the projection's last refresh stands as the read's fallback. It is never a stored value, and the read takes the template's fixed score line under whatever markdown the post wears around it (ADR 0057).
@@ -721,7 +725,7 @@ The handoff runs at the sibling, the control plane warns, and the repository map
 _Avoid_: fallback clone, mirror
 
 **Repository init**:
-The act the operator confirms from a Group header to make one repository factory-ready: it creates the missing machine and triage labels, writes the convention files and the Agent skills block on the remote default branch through a throwaway worktree, and registers the repository's sources in the Config file.
+The act the operator confirms from a Group header to make one repository factory-ready: it creates the missing labels the machine names - the labels its Transitions write, the labels its States gate on, and the triage labels - writes the convention files and the Agent skills block on the remote default branch through a throwaway worktree, and registers the repository's sources in the Config file, one issues feed per issue-side gate (ADR 0075, ADR 0115).
 No Repository init runs by itself: the plane signals the unprepared repository, and the operator's confirm starts the act (ADR 0075).
 _Avoid_: repo setup, bootstrap, provisioning
 

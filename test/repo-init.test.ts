@@ -87,8 +87,8 @@ function statesFixture(): WorkflowState[] {
 }
 
 describe("the Repository init generator (ADR 0075)", () => {
-	test("the label set is the transition union plus the triage labels, sorted, without blocked", () => {
-		const set = repositoryInitLabelSet(taskTypesFixture());
+	test("the label set is the transition union, the state gates, and the triage labels, sorted", () => {
+		const set = repositoryInitLabelSet(taskTypesFixture(), statesFixture());
 		expect(set).toEqual([
 			"needs-info",
 			"needs-triage",
@@ -98,25 +98,42 @@ describe("the Repository init generator (ADR 0075)", () => {
 			"ready-for-review",
 			"ready-to-ship",
 			"rework-in-progress",
+			"team-core",
 			"wontfix",
 		]);
 	});
 
-	test("the label set excludes blocked and the scoping labels a state match names", () => {
+	test("the label set excludes blocked and takes the scoping label a state match names", () => {
 		const withBlocked: Record<string, TaskTypeConfig> = {
 			implement: { transition: { ticketFacts: ["blocked"], pullRequestFacts: [] } },
 			review: taskTypesFixture().review,
 		};
-		const set = repositoryInitLabelSet(withBlocked);
+		const set = repositoryInitLabelSet(withBlocked, statesFixture());
 		expect(set).not.toContain("blocked");
-		expect(set).not.toContain("team-core");
+		// A gate the machine names is a gate the machine can reach only when the
+		// repository holds the label (ADR 0115), so the act creates it.
+		expect(set).toContain("team-core");
 		expect(set).toContain("ready-for-agent");
+	});
+
+	test("a labels-none gate is no label the act creates", () => {
+		const set = repositoryInitLabelSet(taskTypesFixture(), [
+			{
+				name: "parked",
+				match: { sourceKind: "github-issue", labelsNone: ["do-not-start"] },
+			},
+		]);
+		expect(set).not.toContain("do-not-start");
 	});
 
 	test("a machine label a transition writes that the palette does not name takes the default", () => {
 		expect(labelColor("rework-in-progress")).toBe(DEFAULT_LABEL_COLOR);
 		expect(labelColor("ready-for-agent")).toBe("0e8a16");
 		expect(labelDescription("ready-for-human")).toBe("Ready for a human");
+		// The shipped machine's spec gate carries its own pair, so a fresh
+		// repository's ready-for-spec label reads the same in every repository.
+		expect(labelColor("ready-for-spec")).toBe("006b75");
+		expect(labelDescription("ready-for-spec")).toBe("Ready for specification");
 	});
 
 	test("every convention file is non-empty, deterministic, and owns the three paths", () => {
@@ -226,22 +243,58 @@ describe("the Repository init generator (ADR 0075)", () => {
 	});
 
 	test("the registered sources follow the naming scheme and the 60-second refresh", () => {
-		const [issues, pullRequests] = repositoryInitSources("acme/factory", "github.com");
+		// One issues feed per label the machine gates issues on (ADR 0115):
+		// GitHub search cannot union two `label:` qualifiers in one query, and the
+		// plane's search rule is one source per query branch.
+		const [issues, specIssues, pullRequests] = repositoryInitSources(
+			"acme/factory",
+			"github.com",
+			statesFixture(),
+		);
 		expect(issues.name).toBe("acme/factory-issues");
 		expect(issues.kind).toBe("github-issues");
 		expect(issues.refreshIntervalSeconds).toBe(60);
 		expect(issues.repositories).toEqual(["acme/factory"]);
 		expect(issues.host).toBe("github.com");
 		expect(issues.filter).toBe("label:ready-for-agent");
+		expect(specIssues.name).toBe("acme/factory-issues-team-core");
+		expect(specIssues.kind).toBe("github-issues");
+		expect(specIssues.refreshIntervalSeconds).toBe(60);
+		expect(specIssues.repositories).toEqual(["acme/factory"]);
+		expect(specIssues.filter).toBe("label:team-core");
 		expect(pullRequests.name).toBe("acme/factory-pull-requests");
 		expect(pullRequests.kind).toBe("github-pull-requests");
 		expect(pullRequests.refreshIntervalSeconds).toBe(60);
 		expect(pullRequests.repositories).toEqual(["acme/factory"]);
 		expect(pullRequests.host).toBe("github.com");
+		expect(pullRequests.filter).toBeUndefined();
+	});
+
+	test("a gate label that is not a plain word reaches the query quoted", () => {
+		const [issues] = repositoryInitSources("acme/factory", "github.com", [
+			{
+				name: "squad",
+				taskType: "implement",
+				match: { sourceKind: "github-issue", labelsAny: ["team core"] },
+			},
+		]);
+		expect(issues.filter).toBe('label:"team core"');
+	});
+
+	test("a machine that gates no issue falls back to the canonical entry label", () => {
+		const [issues] = repositoryInitSources("acme/factory", "github.com", [
+			{
+				name: "ready-for-review",
+				taskType: "review",
+				match: { sourceKind: "github-pull-request", labelsAny: ["ready-for-review"] },
+			},
+		]);
+		expect(issues.name).toBe("acme/factory-issues");
+		expect(issues.filter).toBe("label:ready-for-agent");
 	});
 
 	test("a source the plane registered is its re-init's standing fact, not a collision", () => {
-		const plane = repositoryInitSources("acme/factory", "github.com")[0];
+		const plane = repositoryInitSources("acme/factory", "github.com", statesFixture())[0];
 		// The same name, kind, host, and repository set: the plane's own source.
 		expect(isPlaneInitSource(plane, plane)).toBe(true);
 		// Same name and kind, the operator's own filter: still the plane's source,
@@ -253,14 +306,14 @@ describe("the Repository init generator (ADR 0075)", () => {
 		expect(
 			isPlaneInitSource(
 				{ ...plane, repositories: ["acme/other"] },
-				repositoryInitSources("acme/factory", "github.com")[0],
+				repositoryInitSources("acme/factory", "github.com", statesFixture())[0],
 			),
 		).toBe(false);
 		// Same name and repository, a different host: the operator's own source.
 		expect(
 			isPlaneInitSource(
 				{ ...plane, host: "git.example.com" },
-				repositoryInitSources("acme/factory", "github.com")[0],
+				repositoryInitSources("acme/factory", "github.com", statesFixture())[0],
 			),
 		).toBe(false);
 	});
@@ -308,7 +361,9 @@ describe("the Repository init act (ADR 0075)", () => {
 		if (!result.ok) return;
 		expect(result.pushedCommit).toBe("abc123def");
 		expect(result.targetBranch).toBe("main");
-		expect(result.labelsCreated).toEqual(repositoryInitLabelSet(taskTypesFixture()));
+		expect(result.labelsCreated).toEqual(
+			repositoryInitLabelSet(taskTypesFixture(), statesFixture()),
+		);
 		expect(result.labelsPresent).toEqual([]);
 		expect(result.filesWritten).toEqual([...CONVENTION_FILE_PATHS]);
 
@@ -484,7 +539,7 @@ describe("the Repository init act (ADR 0075)", () => {
 		// branch's HEAD and answers success with no commit and no push, leaving
 		// the pushed commit to stand where it is.
 		const worktree = tempDir("factory-init-wt-");
-		const existing = repositoryInitLabelSet(taskTypesFixture());
+		const existing = repositoryInitLabelSet(taskTypesFixture(), statesFixture());
 		const runner = runnerWith("main", existing);
 		// The worktree stages nothing: every generated byte already stands.
 		runner.set("git", ["-C", worktree, "status", "--porcelain"], { stdout: "" });
@@ -555,6 +610,7 @@ describe("the Repository init plan (ADR 0075)", () => {
 			checkout,
 			identity,
 			displayName,
+			workflowStates: statesFixture(),
 			taskTypes: taskTypesFixture(),
 		});
 		expect(plan).not.toHaveProperty("ok");
@@ -569,7 +625,9 @@ describe("the Repository init plan (ADR 0075)", () => {
 		expect(plan.instructionFileChoiceNeeded).toBe(false);
 		expect(plan.labelsPresent).toEqual(["needs-triage"]);
 		expect(plan.labelsToCreate).toEqual(
-			repositoryInitLabelSet(taskTypesFixture()).filter((l) => l !== "needs-triage"),
+			repositoryInitLabelSet(taskTypesFixture(), statesFixture()).filter(
+				(l) => l !== "needs-triage",
+			),
 		);
 	});
 
@@ -592,6 +650,7 @@ describe("the Repository init plan (ADR 0075)", () => {
 			checkout,
 			identity,
 			displayName,
+			workflowStates: statesFixture(),
 			taskTypes: taskTypesFixture(),
 		});
 		expect(plan).toHaveProperty("ok", false);
@@ -617,6 +676,7 @@ describe("the Repository init plan (ADR 0075)", () => {
 			checkout,
 			identity,
 			displayName,
+			workflowStates: statesFixture(),
 			taskTypes: taskTypesFixture(),
 		});
 		expect(plan).not.toHaveProperty("ok");
@@ -698,7 +758,7 @@ describe("the repository init's commit flow", () => {
 			taskTypes: taskTypesFixture(),
 			plan: {
 				instructionFile: "AGENTS.md",
-				labelsToCreate: repositoryInitLabelSet(taskTypesFixture()),
+				labelsToCreate: repositoryInitLabelSet(taskTypesFixture(), statesFixture()),
 				fileActions: CONVENTION_FILE_PATHS.map((path) => ({ path, action: "new" })),
 			},
 			worktreePath: worktree,
@@ -707,6 +767,7 @@ describe("the repository init's commit flow", () => {
 		if (!result.ok) throw new Error("expected the commit to pass");
 		expect(result.newSources.map((s) => s.name)).toEqual([
 			"acme/factory-issues",
+			"acme/factory-issues-team-core",
 			"acme/factory-pull-requests",
 		]);
 		const fact = state.repositoryInit.repositoryInitFact(identity);
@@ -772,14 +833,14 @@ describe("the repository init's commit flow", () => {
 
 	test("the re-init stands over the sources the plane already registered", async () => {
 		// The drift mechanism's one real use case (ADR 0075, stories 21 to 23):
-		// after the first init, the config carries the plane's two sources, and
+		// after the first init, the config carries the plane's feeds, and
 		// a settings change stands the repository in drift. The same key re-runs
 		// the act, and the plane's own registrations are no collision: the
 		// re-init passes them, re-writes the fact on the new settings, and
 		// registers nothing new, so the config gains no duplicate row.
 		const state = openFactoryState(":memory:");
 		const worktree = tempDir("factory-init-reinit-");
-		const plane = repositoryInitSources(displayName, "github.com");
+		const plane = repositoryInitSources(displayName, "github.com", statesFixture());
 		const reinitConfig = { sources: [...plane] } as unknown as FactoryConfig;
 		const result = await commitRepositoryInit({
 			runner: commitRunner(worktree),
@@ -803,6 +864,10 @@ describe("the repository init's commit flow", () => {
 		// as the plane's own registrations.
 		expect(result.skippedSources).toEqual([
 			{ name: "acme/factory-issues", coveredBy: "acme/factory-issues" },
+			{
+				name: "acme/factory-issues-team-core",
+				coveredBy: "acme/factory-issues-team-core",
+			},
 			{
 				name: "acme/factory-pull-requests",
 				coveredBy: "acme/factory-pull-requests",
@@ -841,7 +906,7 @@ describe("the repository init's commit flow", () => {
 			} as unknown as FactoryConfig;
 		}
 
-		test("a covering source per feed skips the whole pair, names the skips, and leaves the fact standing", async () => {
+		test("a filter-free source per feed skips every feed, names the skips, and leaves the fact standing", async () => {
 			const state = openFactoryState(":memory:");
 			const worktree = tempDir("factory-init-covered-");
 			const result = await commitRepositoryInit({
@@ -860,11 +925,15 @@ describe("the repository init's commit flow", () => {
 			});
 			expect(result.ok).toBe(true);
 			if (!result.ok) throw new Error("expected the commit to pass");
-			// The pair registers nothing: both feeds already stand under the
-			// operator's broad sources.
+			// Every feed registers nothing: each already stands under the
+			// operator's broad, filter-free sources.
 			expect(result.newSources).toEqual([]);
 			expect(result.skippedSources).toEqual([
 				{ name: "acme/factory-issues", coveredBy: "broad-issues" },
+				{
+					name: "acme/factory-issues-team-core",
+					coveredBy: "broad-issues",
+				},
 				{
 					name: "acme/factory-pull-requests",
 					coveredBy: "broad-pull-requests",
@@ -873,7 +942,7 @@ describe("the repository init's commit flow", () => {
 			// The outcome names what it skipped and why, so the operator reads
 			// the decision in the init answer.
 			expect(result.message).toContain(
-				"skipped acme/factory-issues (covered by broad-issues), acme/factory-pull-requests (covered by broad-pull-requests)",
+				"skipped acme/factory-issues (covered by broad-issues), acme/factory-issues-team-core (covered by broad-issues), acme/factory-pull-requests (covered by broad-pull-requests)",
 			);
 			// The act ran and the fact stands on the current settings: the
 			// drift the plane reports is not about sources.
@@ -933,7 +1002,7 @@ describe("the repository init's commit flow", () => {
 			if (!runCovered.ok) throw new Error("expected the commit to pass");
 			expect(runCovered.newSources).toEqual([]);
 			// The operator deleted the covering sources and re-ran the init:
-			// the config holds none of them now, so the pair registers.
+			// the config holds none of them now, so every feed registers.
 			const restored = tempDir("factory-init-restored-");
 			const runRestored = await commitRepositoryInit({
 				runner: commitRunner(restored),
@@ -949,19 +1018,19 @@ describe("the repository init's commit flow", () => {
 			if (!runRestored.ok) throw new Error("expected the re-run to pass");
 			expect(runRestored.newSources.map((s) => s.name)).toEqual([
 				"acme/factory-issues",
+				"acme/factory-issues-team-core",
 				"acme/factory-pull-requests",
 			]);
 			expect(runRestored.skippedSources).toEqual([]);
 		});
 
-		test("a source covering only the issues feed registers only the pull request feed", async () => {
+		test("a filtered source covers only the feed that reads its branch", async () => {
 			const state = openFactoryState(":memory:");
 			const worktree = tempDir("factory-init-covered-");
-			// The broad source carries a different filter than the init's would
-			// and another refresh interval: the coverage test holds on host,
-			// kind, and repository alone, and the machine's label states, which
-			// derive position from labels, stay intact under the operator's
-			// own filter.
+			// The broad source names a filter, so it reads one query branch: it
+			// covers the feed for that same gate and no other (ADR 0115). The
+			// feeds for the gates it does not read still register, and the pull
+			// request feed has no filter to match, so it registers too.
 			const config = {
 				sources: [
 					{
@@ -986,19 +1055,25 @@ describe("the repository init's commit flow", () => {
 			});
 			expect(result.ok).toBe(true);
 			if (!result.ok) throw new Error("expected the commit to pass");
-			// The missing feed completes; the covered feed does not duplicate.
-			expect(result.newSources.map((s) => s.name)).toEqual(["acme/factory-pull-requests"]);
-			expect(result.skippedSources).toEqual([
-				{ name: "acme/factory-issues", coveredBy: "broad-issues" },
+			// The missing feeds complete; the feed on the operator's own gate does
+			// not duplicate.
+			expect(result.newSources.map((s) => s.name)).toEqual([
+				"acme/factory-issues",
+				"acme/factory-pull-requests",
 			]);
-			expect(result.message).toContain("skipped acme/factory-issues (covered by broad-issues)");
+			expect(result.skippedSources).toEqual([
+				{ name: "acme/factory-issues-team-core", coveredBy: "broad-issues" },
+			]);
+			expect(result.message).toContain(
+				"skipped acme/factory-issues-team-core (covered by broad-issues)",
+			);
 		});
 
 		test("a source on another host that names the repository is no coverage", async () => {
 			const state = openFactoryState(":memory:");
 			const worktree = tempDir("factory-init-covered-");
 			// The same owner and name under a different host: coverage is per
-			// host, so the pair registers as on a fresh config.
+			// host, so every feed registers as on a fresh config.
 			const config = broadConfig();
 			for (const source of config.sources) source.host = "github.example.com";
 			const result = await commitRepositoryInit({
@@ -1015,6 +1090,7 @@ describe("the repository init's commit flow", () => {
 			if (!result.ok) throw new Error("expected the commit to pass");
 			expect(result.newSources.map((s) => s.name)).toEqual([
 				"acme/factory-issues",
+				"acme/factory-issues-team-core",
 				"acme/factory-pull-requests",
 			]);
 			expect(result.skippedSources).toEqual([]);

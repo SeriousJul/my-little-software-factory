@@ -449,7 +449,7 @@ host = "github.com"
 				// The world stands the label set the act created, and the refusal
 				// log is empty: the stub answered every command the act issued.
 				expect(store.world.repositories[0].labels).toEqual(
-					repositoryInitLabelSet(config.taskTypes),
+					repositoryInitLabelSet(config.taskTypes, config.workflowStates),
 				);
 				expect(store.refusals).toEqual([]);
 
@@ -853,8 +853,10 @@ describe("the act runs end to end through the stub (ADR 0075)", () => {
 		if (!result.ok) return;
 		// Every machine label the act writes stands in the world now, and the
 		// act names none of them as already present.
-		expect(store.world.repositories[0].labels).toEqual(repositoryInitLabelSet(taskTypes));
-		expect(result.labelsCreated).toEqual(repositoryInitLabelSet(taskTypes));
+		expect(store.world.repositories[0].labels).toEqual(
+			repositoryInitLabelSet(taskTypes, statesFixture()),
+		);
+		expect(result.labelsCreated).toEqual(repositoryInitLabelSet(taskTypes, statesFixture()));
 		expect(result.labelsPresent).toEqual([]);
 		// The label pass made no refusal: every create the act issued was answered.
 		expect(store.refusals).toEqual([]);

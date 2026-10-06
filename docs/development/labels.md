@@ -19,6 +19,7 @@ label write stands until the next transition.
 | `ready-for-review` | A non-draft pull request is ready for review. |
 | `ready-to-ship` | A non-draft pull request passed review with a score that reached the review transition's configured threshold (90 in the default machine). It is ready for the plane's merge: the plane runs the merge as a plane action without an agent (ADR 0068), with the method the merge task type names (squash in the default machine). |
 | `needs-work` | A pull request needs rework. This takes priority over `ready-for-review` and can apply to a draft. A blocked merge of a `ready-to-ship` pull request lands here. |
+| `ready-for-spec` | An open GitHub issue needs a specification before the work is worth implementing. No transition writes it: the operator applies it to put the ticket on the analyze position, and the analyze agent applies `ready-for-agent` when the specification settles (ADR 0085, ADR 0086). |
 
 A pull request that carries none of these labels is on the machine's parking
 state: the default source lists it, because that is how the implement
@@ -28,7 +29,11 @@ suggests nothing for it until a transition or a human labels it.
 A label a state match names but no transition writes is a scoping label the
 operator owns: the fire leaves it on the surface, so a state may gate on a
 label the machine never touches, such as a `labels-all = ["factory"]` filter
-that keeps the machine to one project's items.
+that keeps the machine to one project's items. The Repository init creates the
+gates the config names - a `labels-any` or `labels-all` label of any state -
+because the machine reaches a gate only when the repository holds the label
+(ADR 0115). A `labels-none` label, and a label no state and no transition
+names, stay the operator's own to create.
 
 ## Making a repository factory-ready
 
@@ -39,9 +44,15 @@ and routes nothing from it. The labels a repository needs stand in its
 repository's label set before the first fire can succeed.
 
 The Repository init makes one repository factory-ready in one confirmed act
-(ADR 0075): it creates the missing labels, writes the convention files and the
-Agent skills block, and registers the repository's sources - all generated
-deterministically from the factory's own settings, with no agent. In the
+(ADR 0075, the gates and the feeds by ADR 0115): it creates the missing labels,
+writes the convention files and the Agent skills block, and registers the
+repository's sources - all generated deterministically from the factory's own
+settings, with no agent. The labels it creates are the labels the machine
+names: every label a transition writes, every label a state match gates on,
+and the five canonical triage labels, `blocked` aside. It registers one issues
+feed per label the machine gates issues on, because GitHub search cannot union
+two `label:` qualifiers in one query, and one pull request feed with no filter.
+In the
 Ticket list, group by repository and press `i` on the repository's Group
 header: the panel shows what the act will change, and confirming runs it. The
 act pushes to the remote default branch through a throwaway worktree, so the

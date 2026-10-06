@@ -4480,6 +4480,7 @@ export function App({
 			checkout,
 			identity: ref.identity,
 			displayName: ref.displayName,
+			workflowStates: cfg.workflowStates,
 			taskTypes: cfg.taskTypes,
 			ghOptions,
 		});
@@ -4593,6 +4594,7 @@ export function App({
 			checkout,
 			identity: choice.identity,
 			displayName: choice.displayName,
+			workflowStates: cfg.workflowStates,
 			taskTypes: cfg.taskTypes,
 		});
 		if ("reason" in plan) {

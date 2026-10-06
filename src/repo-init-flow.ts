@@ -153,7 +153,11 @@ export async function commitRepositoryInit(
 	// repository it serves) is no collision: it is the re-init's own standing
 	// fact (story 21), and the re-init stands its fact over it without
 	// re-registering it.
-	const sources = repositoryInitSources(input.repository.displayName, input.repository.host);
+	const sources = repositoryInitSources(
+		input.repository.displayName,
+		input.repository.host,
+		input.workflowStates,
+	);
 	const configured = input.config.sources ?? [];
 	for (const source of sources) {
 		for (const held of configured) {
@@ -162,9 +166,11 @@ export async function commitRepositoryInit(
 		}
 	}
 	// The coverage split (issue 195): a planned source an existing source on
-	// the same host and of the same kind already lists the repository under is
-	// not registered again, so the same ticket is not fetched twice every
-	// refresh. It is derived from the current config alone, so the skip stands
+	// the same host and of the same kind already lists the repository under,
+	// and already reads the same query branch, is not registered again, so the
+	// same ticket is not fetched twice every refresh. A source that names a
+	// filter reads one branch, so it covers only the feed with that filter
+	// (ADR 0115). It is derived from the current config alone, so the skip stands
 	// on a re-run while the covering source stands and the pair registers when
 	// the covering source leaves the config. The collision refusal above holds
 	// unchanged: a name the operator took for any other purpose still refuses.

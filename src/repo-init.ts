@@ -7,8 +7,8 @@
  *
  * - the label set, derived from the workflow config - the union of every label
  *   a transition writes (the ticket facts and the pull request facts of every
- *   task type and branch) plus the five canonical triage labels, with `blocked`
- *   and the scoping labels excluded;
+ *   task type and branch), every label a state match gates on, and the five
+ *   canonical triage labels, with `blocked` excluded;
  * - the three convention files and the Agent skills block, from templates the
  *   plane owns in its own repository;
  * - the fixed label palette, one known color and description per canonical
@@ -51,13 +51,19 @@ import { remoteDefaultBranch } from "./worktree-base.ts";
  * rule bumps it, and the bump stands every Initialized repository in Init
  * drift at once, with no read of the repositories.
  */
-export const GENERATOR_VERSION = "1";
+export const GENERATOR_VERSION = "2";
+
+/**
+ * The triage vocabulary's entry label: the gate an issues feed falls back to
+ * when the workflow machine names no issue-side gate of its own.
+ */
+export const CANONICAL_ENTRY_LABEL = "ready-for-agent";
 
 /** The five canonical triage roles the triage skill speaks in. */
 export const CANONICAL_TRIAGE_LABELS = [
 	"needs-triage",
 	"needs-info",
-	"ready-for-agent",
+	CANONICAL_ENTRY_LABEL,
 	"ready-for-human",
 	"wontfix",
 ] as const;
@@ -73,14 +79,17 @@ export interface LabelPaletteEntry {
 
 /**
  * The fixed label palette (ADR 0075): one known color and description per
- * canonical triage label. A machine label a transition writes that the palette
- * does not name takes the default, so a new transition label never leaves the
- * act without a color.
+ * canonical triage label and per the scoping label the shipped machine gates
+ * specifications on. A label the act creates that the palette does not name -
+ * a machine label a transition writes, or a scoping label of the operator's own
+ * machine - takes the default, so a new label never leaves the act without a
+ * color.
  */
 export const LABEL_PALETTE: Readonly<Record<string, LabelPaletteEntry>> = {
 	"needs-triage": { color: "ffd60a", description: "Needs triage" },
 	"needs-info": { color: "c2e0c6", description: "Needs information" },
 	"ready-for-agent": { color: "0e8a16", description: "Ready for an agent" },
+	"ready-for-spec": { color: "006b75", description: "Ready for specification" },
 	"ready-for-human": { color: "5319e7", description: "Ready for a human" },
 	wontfix: { color: "e99695", description: "Will not fix" },
 };
@@ -126,16 +135,68 @@ export function transitionWrittenLabels(taskTypes: Record<string, TaskTypeConfig
 }
 
 /**
- * The label set the Repository init creates in one repository (ADR 0075): the
- * union of every label a transition writes plus the five canonical triage
- * labels, with `blocked` excluded. The scoping labels a state match gates on
- * are absent by construction - a state match is not a transition, so a label
- * only a state names never reaches this set, and those gates stay the
- * operator's own to create. Sorted so the act and the panel list labels in
- * one order and a fresh repository's created set is stable.
+ * The labels one state's match gates a ticket on: its `labels-all` and its
+ * `labels-any`. A ticket must carry each of them to stand on that state, so
+ * the repository must hold each of them before the gate is writable at all
+ * (ADR 0115). A `labels-none` label stays out: the state asks for its absence,
+ * and nothing in the machine needs to write it.
  */
-export function repositoryInitLabelSet(taskTypes: Record<string, TaskTypeConfig>): string[] {
+function stateGateLabels(state: WorkflowState): string[] {
+	return [...(state.match.labelsAll ?? []), ...(state.match.labelsAny ?? [])];
+}
+
+/**
+ * The scoping labels of the whole machine (ADR 0115): every label any state
+ * gates on, in state order with duplicates folded.
+ */
+export function stateScopingLabels(workflowStates: readonly WorkflowState[]): string[] {
+	const labels: string[] = [];
+	for (const state of workflowStates) {
+		for (const label of stateGateLabels(state)) {
+			if (!labels.includes(label)) labels.push(label);
+		}
+	}
+	return labels;
+}
+
+/**
+ * The labels the issues feed has to be able to select (ADR 0115): the state
+ * gates an issue ticket can stand on. A state whose match names another source
+ * kind - a pull request position or a security feed - is skipped, and a state
+ * that names no kind counts, because an issue can match it. The list keeps
+ * state order, so the feeds the init registers read in the machine's order.
+ *
+ * An empty list answers the canonical entry label: the machine gates no issue
+ * at all, so the feed takes the label the triage vocabulary uses for ready
+ * work rather than pulling every open issue of the repository into the machine.
+ */
+export function issueGateLabels(workflowStates: readonly WorkflowState[]): string[] {
+	const gates: string[] = [];
+	for (const state of workflowStates) {
+		if (state.match.sourceKind !== undefined && state.match.sourceKind !== "github-issue") continue;
+		for (const label of stateGateLabels(state)) {
+			if (!gates.includes(label)) gates.push(label);
+		}
+	}
+	return gates.length === 0 ? [CANONICAL_ENTRY_LABEL] : gates;
+}
+
+/**
+ * The label set the Repository init creates in one repository (ADR 0075, the
+ * scoping half added by ADR 0115): the union of every label a transition
+ * writes, every label a state match gates on, and the five canonical triage
+ * labels, with `blocked` excluded. A gate the machine names is a gate the
+ * machine can reach only when the repository holds the label, so the act
+ * creates it; a gate the config does not name stays the operator's own, as
+ * before. Sorted so the act and the panel list labels in one order and a fresh
+ * repository's created set is stable.
+ */
+export function repositoryInitLabelSet(
+	taskTypes: Record<string, TaskTypeConfig>,
+	workflowStates: readonly WorkflowState[],
+): string[] {
 	const set = transitionWrittenLabels(taskTypes);
+	for (const label of stateScopingLabels(workflowStates)) set.add(label);
 	for (const label of CANONICAL_TRIAGE_LABELS) set.add(label);
 	set.delete(BLOCKED_LABEL);
 	return [...set].sort();
@@ -288,26 +349,44 @@ export function repositoryInitSettingsHash(
 }
 
 /**
- * The two sources the Repository init registers in the Config file (ADR
- * 0075), named by the predictable scheme: the repository's display name plus
- * the feed. Each refreshes every 60 seconds. The issues source carries the
- * `ready-for-agent` rank, so the machine sees the repository's ready work
- * from the first refresh; the pull request source carries no filter and so
- * lists the machine's pull request positions and its parking state the way the
- * source's own default policy does.
+ * The `label:` qualifier value for one label name. GitHub takes a bare word
+ * for a plain name and a quoted phrase for a name with a space, and the
+ * config's own filter validation rejects a query with an unbalanced quote, so
+ * a name that is not a plain word goes quoted and never splits into two
+ * tokens. A quote inside the name has no representation in the query and goes.
+ */
+function labelFilterTerm(label: string): string {
+	return /^[\w.-]+$/.test(label) ? label : `"${label.replaceAll('"', "")}"`;
+}
+
+/**
+ * The sources the Repository init registers in the Config file (ADR 0075, the
+ * issue feeds derived by ADR 0115), named by the predictable scheme: the
+ * repository's display name plus the feed. Each refreshes every 60 seconds.
+ *
+ * The init registers one issues feed per label the machine gates issues on, in
+ * state order: GitHub search cannot union two `label:` qualifiers in one query,
+ * and the plane's own search rule is one source per query branch. The first
+ * feed keeps the plain `-issues` name and each further feed appends its label,
+ * so the names stay predictable and distinct. The pull request feed carries no
+ * filter and so lists the machine's pull request positions and its parking
+ * state the way the source's own default policy does.
  */
 export function repositoryInitSources(
 	repository: string,
 	host: string,
-): [TicketSourceConfig, TicketSourceConfig] {
-	const issues: TicketSourceConfig = {
-		name: `${repository}-issues`,
-		kind: "github-issues",
-		refreshIntervalSeconds: 60,
-		repositories: [repository],
-		host,
-		filter: "label:ready-for-agent",
-	};
+	workflowStates: readonly WorkflowState[],
+): TicketSourceConfig[] {
+	const issues = issueGateLabels(workflowStates).map(
+		(label, index): TicketSourceConfig => ({
+			name: index === 0 ? `${repository}-issues` : `${repository}-issues-${label}`,
+			kind: "github-issues",
+			refreshIntervalSeconds: 60,
+			repositories: [repository],
+			host,
+			filter: `label:${labelFilterTerm(label)}`,
+		}),
+	);
 	const pullRequests: TicketSourceConfig = {
 		name: `${repository}-pull-requests`,
 		kind: "github-pull-requests",
@@ -315,7 +394,7 @@ export function repositoryInitSources(
 		repositories: [repository],
 		host,
 	};
-	return [issues, pullRequests];
+	return [...issues, pullRequests];
 }
 
 /**
@@ -345,14 +424,20 @@ export function isPlaneInitSource(
 }
 
 /**
- * Whether a configured source covers a planned source (issue 195): the host
- * is equal, the kind is equal, and the configured source's repository set
- * contains every repository the planned source names - the init's planned
- * sources each name exactly one. The name, the filter, and the refresh
- * interval do not count: coverage holds on host, kind, and repository alone,
- * so a broad operator source listing the repository alongside others covers
- * the feed with any filter it carries, and a source on another host is no
- * coverage even when it names the same owner and name.
+ * Whether a configured source covers a planned source (issue 195, the filter
+ * clause added by ADR 0115): the host is equal, the kind is equal, the
+ * configured source's repository set contains every repository the planned
+ * source names - the init's planned sources each name exactly one - and the
+ * configured source reads the planned source's query branch. The name and the
+ * refresh interval never count.
+ *
+ * A source that names no filter lists its kind's whole open set, so it covers
+ * every branch of that kind: that is the broad operator feed whose pair made
+ * issue 195 fetch every ticket twice. A source that names a filter reads one
+ * branch, and GitHub search cannot union two `label:` qualifiers in one query,
+ * so it covers only the feed that names the same filter - a feed for a gate it
+ * does not read still has to stand. A source on another host is no coverage
+ * even when it names the same owner and name.
  *
  * The plane-source test implies this one: a source the plane registered
  * covers itself, so the re-init registers nothing new under either rule.
@@ -361,7 +446,8 @@ export function sourceCovers(configured: TicketSourceConfig, planned: TicketSour
 	return (
 		configured.host === planned.host &&
 		configured.kind === planned.kind &&
-		planned.repositories.every((repository) => configured.repositories.includes(repository))
+		planned.repositories.every((repository) => configured.repositories.includes(repository)) &&
+		(configured.filter === undefined || configured.filter === planned.filter)
 	);
 }
 
@@ -541,7 +627,7 @@ export async function runRepositoryInit(
 		};
 
 	// Step 1: the labels. Read what stands and create the rest.
-	const labels = repositoryInitLabelSet(taskTypes);
+	const labels = repositoryInitLabelSet(taskTypes, input.workflowStates);
 	const existing = await existingRepositoryLabels(runner, identity, input.ghOptions);
 	if (!Array.isArray(existing)) return existing;
 	const labelResult = await createMissingLabels(
@@ -735,10 +821,11 @@ export async function planRepositoryInit(input: {
 	checkout: string;
 	identity: string;
 	displayName: string;
+	workflowStates: readonly WorkflowState[];
 	taskTypes: Record<string, TaskTypeConfig>;
 	ghOptions?: CommandOptions;
 }): Promise<RepositoryInitPlanResult> {
-	const { runner, checkout, identity, displayName, taskTypes } = input;
+	const { runner, checkout, identity, displayName, workflowStates, taskTypes } = input;
 	const branch = await remoteDefaultBranch(checkout, runner);
 	if (branch === null) {
 		return {
@@ -750,7 +837,7 @@ export async function planRepositoryInit(input: {
 	if (fetch.code !== 0)
 		return { ok: false, reason: `cannot plan: fetching origin/${branch} failed` };
 
-	const labels = repositoryInitLabelSet(taskTypes);
+	const labels = repositoryInitLabelSet(taskTypes, workflowStates);
 	const present = await existingRepositoryLabels(runner, identity, input.ghOptions);
 	if (!Array.isArray(present)) return present;
 	const presentSet = new Set(present);

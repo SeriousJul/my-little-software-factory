@@ -3,6 +3,12 @@
 Status: accepted
 Date: 2026-10-02
 
+Superseded in part by ADR 0115: a configured source that names a filter covers
+only the planned feed that names the same filter, and the act plans one issues
+feed per issue-side gate rather than one per repository. A source that names no
+filter still covers every feed of its kind, which is the double fetch this
+decision retired.
+
 ## Context
 
 The Repository init (ADR 0075) registers one issues source and one pull
