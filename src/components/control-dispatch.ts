@@ -12,6 +12,7 @@
 
 import type { KeyEvent } from "@opentui/core";
 import { useKeyboard } from "@opentui/react";
+import { useLayoutEffect, useRef } from "react";
 
 import {
 	type AvailabilityFacts,
@@ -80,6 +81,18 @@ interface ControlDispatchSpec {
 	onEmergencyExit: () => void;
 	/** False while a surface above this one owns input. Default: true. */
 	active?: boolean;
+	/**
+	 * Whether the surface that owns this dispatch is still drawn.
+	 *
+	 * The close's commit draws the fallback frame, and the passive cleanup
+	 * that removes the subscription can stand pending on the scheduler's
+	 * clock long past it (issue #317). A key in that window must not run a
+	 * behavior the operator no longer sees, so the dispatch reads the flag on
+	 * every key: a handler of an undrawn surface runs no behavior, claims
+	 * nothing, and reports nothing. `useControlDispatch` supplies it, and a
+	 * spec built by hand passes none and stands live.
+	 */
+	isLive?: () => boolean;
 	/** Keys this surface must not touch, checked before the catalogue. */
 	skip?: (key: KeyEvent) => boolean;
 	/** Handles keys not claimed by the catalogue, such as Agent input. */
@@ -97,6 +110,13 @@ interface ControlDispatchSpec {
 export function createControlDispatch(spec: ControlDispatchSpec): (key: KeyEvent) => boolean {
 	if (spec.active === false) return () => false;
 	return (key) => {
+		// The subscription outlives the frame: the close's commit drew the
+		// fallback already, and the cleanup that removes the handler stands
+		// pending. The layout effect's cleanup set the flag down in that same
+		// commit, before the frame was drawn, so by this key the flag says the
+		// surface is gone and the key goes to the surface the operator sees
+		// (issue #317).
+		if (spec.isLive !== undefined && !spec.isLive()) return false;
 		// The super key is the terminal's own, and a skipped key is the
 		// surface's own text field.
 		if (key.meta || spec.skip?.(key)) return false;
@@ -121,7 +141,25 @@ export function createControlDispatch(spec: ControlDispatchSpec): (key: KeyEvent
 	};
 }
 
-/** Subscribe one surface's controls to the keyboard. */
+/**
+ * Subscribe one surface's controls to the keyboard.
+ *
+ * The subscription lives longer than the surface that drew it: the passive
+ * cleanup that removes it flushes after the close's commit, and under load
+ * the flush lags the drawn frame by far more than a keypress (issue #317).
+ * The flag the dispatch reads drops in a layout effect's cleanup, which
+ * React runs in the commit that unmounts the surface, before the frame is
+ * drawn: the flag is already down when the frame the operator sees says the
+ * surface is gone, and a key in the window reaches the subscription but
+ * runs no behavior.
+ */
 export function useControlDispatch(spec: ControlDispatchSpec): void {
-	useKeyboard(createControlDispatch(spec));
+	const live = useRef(true);
+	useLayoutEffect(() => {
+		live.current = true;
+		return () => {
+			live.current = false;
+		};
+	});
+	useKeyboard(createControlDispatch({ ...spec, isLive: () => live.current }));
 }

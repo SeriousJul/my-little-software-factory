@@ -20,6 +20,8 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import type { KeyEvent } from "@opentui/core";
+
 import type { AppProps } from "../src/components/app.ts";
 import type { FactoryConfig } from "../src/config.ts";
 import type { FetchedTicket } from "../src/domain/ticket.ts";
@@ -34,6 +36,7 @@ import {
 	baseKeyHandlers,
 	frameText,
 	HEIGHT,
+	keyHandlerListeners,
 	openGuide,
 	openPanel,
 	press,
@@ -59,6 +62,7 @@ import {
 	workspaceListJson,
 } from "./fake-runner.ts";
 import { FakeSource } from "./fake-source.ts";
+import { flushPassiveNow } from "./passive-flush-hold.ts";
 import { SAMPLE_TICKETS } from "./sample-tickets.ts";
 
 /** The pane read the Live view's stream runs, for a pane and its tail. */
@@ -1092,6 +1096,118 @@ describe("the Live view against a running factory", () => {
 				);
 				expect(app.runner.commands()).toContain(READ_COMMAND("pane-9"));
 				expect(app.runner.commands().join("\n")).not.toContain("agent focus");
+			},
+			WIDTH,
+			HEIGHT,
+			propsOf(app),
+		);
+		app.state.close();
+	});
+
+	/**
+	 * The key a window reproduction dispatches to a stale handler: the walk's
+	 * Enter, read off the same fields the dispatch loop reads.
+	 */
+	function windowKey(): KeyEvent {
+		return {
+			name: "return",
+			ctrl: false,
+			meta: false,
+			shift: false,
+			option: false,
+			preventDefault(): void {},
+		} as unknown as KeyEvent;
+	}
+
+	test("an Enter in the window between the Live view's last frame and its key release runs no stale behavior (issue #317)", async () => {
+		const app = seededApp();
+		stubCheckout(app);
+		const checkoutPath = Object.values(app.config.repos)[0];
+		const list = (status1: string, status9: string) =>
+			agentListJson([
+				{
+					paneId: "pane-1",
+					tabId: "tab-1",
+					workspaceId: "ws-1",
+					agent: "persist-source-facts",
+					status: status1,
+					sessionId: settledSession("the implementer is finishing"),
+				},
+				{
+					paneId: "pane-9",
+					tabId: "tab-9",
+					workspaceId: "ws-1",
+					agent: "persist-source-facts",
+					status: status9,
+				},
+			]);
+		app.runner.set("herdr", ["agent", "list"], { stdout: list("working", "working") });
+		app.runner.set("herdr", ["workspace", "list"], {
+			stdout: workspaceListJson([{ id: "ws-1", checkoutPath }]),
+		});
+		app.runner.set("herdr", ["tab", "create", "--workspace", "ws-1", "--no-focus"], {
+			stdout: tabCreateJson("pane-9", "tab-9"),
+		});
+		app.runner.set("herdr", [...READ("pane-1")], { stdout: "the implementer is finishing\n" });
+		app.runner.set("herdr", [...READ("pane-9")], { stdout: "the reviewer is on it\n" });
+
+		await withApp(
+			async (setup) => {
+				app.src.settle(success);
+				await awaitFrame(setup, (f) => f.includes("Persist source facts"), "the ticket row");
+				// The base mode's key handlers, taken at rest on the list before this
+				// walk mounts anything, the release wait's witness.
+				const base = baseKeyHandlers(setup);
+				await pressReturn(setup, "the Live view", (f) => f.includes("Live: Persist source facts"));
+				await awaitFrame(setup, (f) => f.includes("the implementer is finishing"), "the stream");
+				app.runner.set("herdr", ["agent", "list"], { stdout: list("done", "working") });
+				await awaitFrame(
+					setup,
+					(f) => f.includes("Decision: Persist source facts") && f.includes("Handoff: review"),
+					"the decision",
+				);
+				await pressArrow(setup, "down", "the goto row", (f) => frameText(f).includes("❯ Goto"));
+				await pressArrow(setup, "down", "the handoff row", (f) =>
+					frameText(f).includes("❯ Handoff: review"),
+				);
+				// The bus while the Live view owns the keys, its mount's subscribe
+				// landed in the rig's own turn. The view's own dispatch is the one
+				// subscription the base mode did not hold.
+				flushPassiveNow();
+				const whileLive = keyHandlerListeners(setup);
+				const stale = whileLive.filter((handler) => !base.base.includes(handler));
+				expect(stale.length).toBe(1);
+				// The confirm: the route lands, the close's commit draws the fallback
+				// frame, and the view's layout cleanup drops the liveness flag in that
+				// same commit, before the frame is drawn.
+				setup.mockInput.pressEnter();
+				await awaitFrame(
+					setup,
+					(f) => f.includes("┌─❯ Tickets") && !f.includes("Live: Persist source facts"),
+					"the fallback to the list",
+				);
+				// The window is the gap between that fallback frame and the close's
+				// passive cleanup removing the stale subscription from the bus, and the
+				// key bus probe is the measure of it: until the cleanup lands, the view's
+				// handler still stands on the bus, and a key the bus dispatches reaches it.
+				// The release wait lands the removal and proves the handler left.
+				await awaitBaseKeyHandlers(setup, base, "the Live view to release the keys");
+				// The window's key, dispatched to the stale handler: the walk's Enter, the
+				// key that confirms the route row. In the window the bus dispatches it to
+				// this handler - the subscription the close's cleanup had not yet removed -
+				// and the guard makes the handler of the undrawn surface run nothing: it
+				// claims the key no, runs no behavior, and reports nothing.
+				const claimed = (stale[0] as (key: KeyEvent) => boolean)(windowKey());
+				expect(claimed).toBe(false);
+				// The closed surface ran no behavior on the window's key: the route never
+				// ran twice, the confirm's one decision stands, and the screen is still the
+				// list with no warning the closed view would have written.
+				flushPassiveNow();
+				const frame = setup.captureCharFrame();
+				expect(frame).not.toContain("already decided");
+				expect(frame).toContain("┌─❯ Tickets");
+				expect(frame).not.toContain("Live: Persist source facts");
+				expect(app.state.ticketWorkCycle.lastCompletion(identity)?.decision).toBe("handed-off");
 			},
 			WIDTH,
 			HEIGHT,
