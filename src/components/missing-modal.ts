@@ -50,6 +50,19 @@ interface MissingModalProps {
 	/** The Message fact this modal's own Message line shows. */
 	message: MessageFact | null;
 	onEmergencyExit: () => void;
+	/**
+	 * The Queue pause's key on this surface (issue #319, ADR 0111): the brake
+	 * reaches every surface the plane draws, so the surface dispatches the key
+	 * the way it dispatches Help and Message, and the screen that owns the
+	 * state runs the toggle. Required, because a surface that resolves the key
+	 * and swallows it would be a key the plane takes and never answers.
+	 */
+	onQueuePause: () => void;
+	/**
+	 * The Auto-handoff mode's key on this surface (issue #319, ADR 0111), the
+	 * same reach as the Queue pause's: required for the same reason.
+	 */
+	onAutoHandoff: () => void;
 }
 
 /** The message column stops at 80 cells: a line that wide is hard to read. */
@@ -75,6 +88,8 @@ export function MissingModal({
 	onUnavailable,
 	message,
 	onEmergencyExit,
+	onQueuePause,
+	onAutoHandoff,
 }: MissingModalProps) {
 	const { width: terminalWidth, height: terminalHeight } = useTerminalDimensions();
 	const body = bodyLines ?? [];
@@ -126,6 +141,11 @@ export function MissingModal({
 				if (key.name === "j") setBodyScroll((current) => Math.min(current + 1, maxBodyScroll));
 				else setBodyScroll((current) => Math.max(0, current - 1));
 			},
+			// The plane-level keys reach every surface the chrome owns (issue
+			// #319, ADR 0111), the way the bar's hint and the border's lamp read
+			// the facts the toggle writes.
+			"queue-pause": onQueuePause,
+			"auto-handoff": onAutoHandoff,
 		},
 	});
 
@@ -163,5 +183,6 @@ export function MissingModal({
 		},
 		message,
 		bar: { mode: "missing-modal", facts },
+		queuePaused: standing.queuePaused,
 	});
 }

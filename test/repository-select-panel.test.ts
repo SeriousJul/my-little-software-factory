@@ -375,9 +375,14 @@ describe("the repository select panel", () => {
 					messageTruncated: false,
 					consultationTypesConfigured: true,
 					interactionExitKey: "f12",
+					queuePaused: false,
 				} satisfies StandingFacts,
 				message: null,
 				onEmergencyExit: () => undefined,
+				// The plane-level keys resolve to the catalogue's controls; the
+				// the panel's own frame is what this suite measures (issue #319).
+				onQueuePause: () => undefined,
+				onAutoHandoff: () => undefined,
 			}),
 			{ width: WIDTH, height: HEIGHT, exitOnCtrlC: false },
 		);

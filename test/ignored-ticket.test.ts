@@ -1397,10 +1397,11 @@ describe("the ignored marker's frame", () => {
 		try {
 			await withApp(
 				async (setup) => {
-					// 68 columns is the narrowest row that still holds the pile cell beside
-					// the whole mode cell: 55 columns of counts and 13 of lamp, seat
-					// reading, and word. One column less and the pile gives way whole.
-					setup.resize(68, HEIGHT);
+					// 74 columns is the narrowest row that still holds the pile cell
+					// beside the bare corner: 55 columns of counts and 19 of brake lamp
+					// and mode lamp (issue #319, ADR 0111). One column less and the pile
+					// gives way whole.
+					setup.resize(74, HEIGHT);
 					src.settle(success(twoTickets()));
 					const frame = await awaitFrame(
 						setup,
@@ -1560,9 +1561,10 @@ describe("the ignored marker's frame", () => {
 		try {
 			await withApp(
 				async (setup) => {
-					// 77 columns is the narrowest row that names the held turn and the
-					// pile beside the whole mode cell: 64 columns of counts and 13 of cell.
-					setup.resize(77, HEIGHT);
+					// 87 columns is the narrowest row that names the held turn and the
+					// pile beside the whole corner: 64 columns of counts and 23 of the
+					// brake lamp, the mode lamp, and the seat reading (issue #319, ADR 0111).
+					setup.resize(87, HEIGHT);
 					src.settle(outcome);
 					const wide = await awaitFrame(
 						setup,
@@ -1573,10 +1575,11 @@ describe("the ignored marker's frame", () => {
 					expect(headerRow(wide)).toContain("ignored: 1");
 					// A row that cannot hold both spends its last cells on the machine's
 					// fact: the held count stands and the ignored cell is dropped whole.
-					// 57 columns is the narrowest row that keeps it - 48 columns of counts
-					// beside the 9 of the bare lamp - and there the seat reading gives way
-					// before the held count does.
-					setup.resize(57, HEIGHT);
+					// 71 columns is the narrowest row that keeps it - 52 columns of wide
+					// counts beside the 19 of the bare corner, the brake lamp and the mode
+					// lamp - and there the seat reading gives way before the held count
+					// does.
+					setup.resize(71, HEIGHT);
 					const narrow = await awaitFrame(
 						setup,
 						(f) => headerRow(f).includes("held") && !headerRow(f).includes("ignored"),

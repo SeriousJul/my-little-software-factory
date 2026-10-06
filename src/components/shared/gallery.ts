@@ -333,6 +333,10 @@ function closeDialogElement(
 		actions: panel.actions,
 		onAction: () => undefined,
 		onCancel: () => undefined,
+		// The gallery is a preview, not a plane surface: the plane-level keys
+		// resolve to the catalogue's controls and stand still here (issue #319).
+		onQueuePause: () => undefined,
+		onAutoHandoff: () => undefined,
 	});
 }
 
@@ -357,6 +361,10 @@ function recoveryDialogElement(state: "opening" | "missing" | "failed", key: str
 		actions: panel.actions,
 		onAction: () => undefined,
 		onCancel: () => undefined,
+		// The gallery is a preview, not a plane surface: the plane-level keys
+		// resolve to the catalogue's controls and stand still here (issue #319).
+		onQueuePause: () => undefined,
+		onAutoHandoff: () => undefined,
 	});
 }
 
@@ -707,6 +715,7 @@ const GALLERY_STANDING: StandingFacts = {
 	sourceCount: 0,
 	refreshingSourceCount: 0,
 	interactionExitKey: "f12",
+	queuePaused: false,
 };
 /** A list the grouping axis leaves flat, so no Group header stands under the cursor. */
 const NO_GROUP: GroupCursorFacts = {
@@ -722,11 +731,10 @@ const NO_TICKET_ROW = {
 	ticketPaneAlive: false,
 	ticketPaneForeign: false,
 };
-/** A queue that holds nothing and stands unpaused. */
+/** A queue that holds nothing. */
 const NO_QUEUE: WorkQueueCursorFacts = {
 	selectedWorkQueueItem: null,
 	workQueueDepth: 0,
-	queuePaused: false,
 };
 
 /** The Ticket-base-mode context the Source-mute example runs on (ADR 0070).
@@ -963,6 +971,10 @@ function GalleryRepositorySelect(): ReactElement {
 		standing: GALLERY_STANDING,
 		message: null,
 		onEmergencyExit: () => undefined,
+		// The gallery is a preview, not a plane surface: the plane-level keys
+		// resolve to the catalogue's controls and stand still here (issue #319).
+		onQueuePause: () => undefined,
+		onAutoHandoff: () => undefined,
 	});
 }
 
@@ -1208,12 +1220,13 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 		],
 	},
 	{
-		// The queue order's own controls (ADR 0049, ADR 0052): + and - move the
-		// selected item, p pauses the queue and the header wears the word, and
-		// the Message lines carry the pause and the resume.
+		// The queue order's own controls (ADR 0049, ADR 0052, ADR 0111): + and -
+		// move the selected item, p pauses the queue - the brake the whole plane
+		// can reach - and the bar's hint stands only while the pause stands, the
+		// way the Message lines carry the pause and the resume.
 		id: "queue-order",
 		state:
-			"the queue order: + and - move the selected item, p pauses the queue, and the header wears the word",
+			"the queue order: + and - move the selected item, p pauses the queue, and the bar hint stands while the pause stands",
 		render: (columns, _holds, _inputActive, _wiring) => {
 			const ink = controlInk();
 			const item: WorkQueueItem = {
@@ -1235,8 +1248,9 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 				automatic: false,
 			};
 			return [
-				// The Work section's header in its two queue states: the depth
-				// count, and the depth count with the pause word beside it.
+				// The Work section's header: its depth cell, whole. The Queue
+				// pause's display stands at the Ticket header's corner and the
+				// modal's border lamp (issue #319, ADR 0111), not beside the depth.
 				createElement(SectionHeader, {
 					key: "work-header",
 					section: "work",
@@ -1247,20 +1261,9 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 					waiting: 1,
 					onToggle: () => undefined,
 				}),
-				createElement(SectionHeader, {
-					key: "work-header-paused",
-					section: "work",
-					active: true,
-					terminalWidth: columns.contentWidth,
-					width: columns.contentWidth,
-					expanded: true,
-					waiting: 1,
-					queuePaused: true,
-					onToggle: () => undefined,
-				}),
-				// The bar the queue's own keys come from: the order-move keys and
-				// the pause stand on it in the queue modes alone, and the pause
-				// key reads its own state.
+				// The bar the queue's own keys come from: the order-move keys stand
+				// on it, and the pause key's hint stands on it only while the
+				// pause stands, the label flipping to the word the brake offers.
 				createElement(ActionBar, {
 					key: "queue-bar",
 					mode: "work-queue-list",
@@ -1275,13 +1278,16 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 				createElement(ActionBar, {
 					key: "queue-bar-paused",
 					mode: "work-queue-list",
-					facts: availabilityFacts("work-queue-list", GALLERY_STANDING, {
-						...NO_QUEUE,
-						selectedWorkQueueItem: item,
-						workQueueDepth: 1,
-						queuePaused: true,
-						listCanMove: true,
-					}),
+					facts: availabilityFacts(
+						"work-queue-list",
+						{ ...GALLERY_STANDING, queuePaused: true },
+						{
+							...NO_QUEUE,
+							selectedWorkQueueItem: item,
+							workQueueDepth: 1,
+							listCanMove: true,
+						},
+					),
 					width: columns.contentWidth,
 				}),
 				// The Message lines the pause and the resume leave, in the words
@@ -1356,8 +1362,9 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 					mode: autoHandoffCell("manual", 1, 2),
 					onToggle: () => undefined,
 				}),
-				// The Dispatch pause (ADR 0016): the word the cell wears while the
-				// pause holds the automatic works.
+				// The Dispatch pause (ADR 0016, ADR 0111): the word the cell wears
+				// while the pause holds the automatic works - the word the plane
+				// now says is `held`, the Dispatch pause's own word.
 				createElement(SectionHeader, {
 					key: "tickets-header-paused",
 					section: "tickets",
@@ -1370,6 +1377,38 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 					awaiting: 1,
 					held: 1,
 					mode: autoHandoffCell("auto", 2, 3, true),
+					onToggle: () => undefined,
+				}),
+				// The Queue pause's two lamp states beside the Auto-handoff cell
+				// (issue #319, ADR 0111): the lit lamp with `running` while the brake
+				// is down, and the unlit lamp with `paused` while it stands, one
+				// space of room between the two cells.
+				createElement(SectionHeader, {
+					key: "tickets-header-queue-running",
+					section: "tickets",
+					active: true,
+					terminalWidth: columns.contentWidth,
+					width: columns.contentWidth,
+					expanded: true,
+					open: 2,
+					running: 1,
+					awaiting: 0,
+					mode: autoHandoffCell("manual", 1, 2),
+					queuePaused: false,
+					onToggle: () => undefined,
+				}),
+				createElement(SectionHeader, {
+					key: "tickets-header-queue-paused",
+					section: "tickets",
+					active: true,
+					terminalWidth: columns.contentWidth,
+					width: columns.contentWidth,
+					expanded: true,
+					open: 2,
+					running: 1,
+					awaiting: 0,
+					mode: autoHandoffCell("manual", 1, 2),
+					queuePaused: true,
 					onToggle: () => undefined,
 				}),
 				// The drop rule on a row too short for the whole count line beside the
@@ -1395,7 +1434,7 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 					"text",
 					{ key: "auto-mode-note", fg: paint("subtext0") },
 					truncateToWidth(
-						`\`a\` flips the mode; the ${dropColumns}-column row gives counts up whole and grows the seat reading back`,
+						`\`a\` flips the mode; the Queue pause's lamp stands beside it, and the ${dropColumns}-column row gives counts up whole, then the seat reading, then the held word`,
 						columns.contentWidth,
 					),
 				),
@@ -1883,6 +1922,8 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 				...ticketCloseDialog(sampleTicket("running")),
 				onAction: () => undefined,
 				onCancel: () => undefined,
+				onQueuePause: () => undefined,
+				onAutoHandoff: () => undefined,
 			}),
 		],
 	},
@@ -1899,6 +1940,8 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 				...ticketCloseDialog(sampleTicket("awaiting", "live-worktree")),
 				onAction: () => undefined,
 				onCancel: () => undefined,
+				onQueuePause: () => undefined,
+				onAutoHandoff: () => undefined,
 			}),
 		],
 	},
@@ -2912,6 +2955,11 @@ export function Gallery({
 				facts: barFacts,
 				onClose: () => setGuideOpen(false),
 				onEmergencyExit,
+				// The gallery is a preview, not a plane surface: the plane-level
+				// keys resolve to the catalogue's controls and stand still here
+				// (issue #319).
+				onQueuePause: () => undefined,
+				onAutoHandoff: () => undefined,
 			}),
 	);
 }

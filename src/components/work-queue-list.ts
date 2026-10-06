@@ -200,21 +200,21 @@ function itemRow(row: WorkQueueRow, selected: boolean, width: number) {
 /**
  * The Availability facts the Work queue's own rows produce for one cursor.
  *
- * The item under the cursor, the queue's depth, and the pause all come from the
- * queue this section draws, so the queue's order keys, its pause hint, and its
- * force-dispatch cannot disagree with the queue itself (ADR 0034, ADR 0052).
+ * The item under the cursor and the queue's depth come from the queue this
+ * section draws, so the queue's order keys and its force-dispatch cannot
+ * disagree with the queue itself (ADR 0034). The queue pause stands in the
+ * plane's standing facts (ADR 0111): it is the fact a control every mode
+ * dispatches reads, and the queue's rows read it from there.
  */
 export type WorkQueueCursorFacts = WorkQueueSectionFacts;
 
 export function workQueueCursorFacts(
 	items: readonly WorkQueueItem[],
 	index: number,
-	paused: boolean,
 ): WorkQueueCursorFacts {
 	return {
 		selectedWorkQueueItem: items[index] ?? null,
 		workQueueDepth: items.length,
-		queuePaused: paused,
 	};
 }
 

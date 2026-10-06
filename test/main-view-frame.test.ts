@@ -572,12 +572,13 @@ describe("the merged Main view", () => {
 						detailPaneText(f).includes("consultation-dddddddd"),
 					);
 					expect(detailPaneText(second)).toContain("consultation-dddddddd");
-					// The auto-handoff switch has no meaning in the Consultation
-					// section: the Ticket header's mode cell stays put.
+					// The auto-handoff key is plane-wide (issue #319, ADR 0111): it
+					// flips the mode even from the Consultation section, and the
+					// Ticket header's corner reads the flip.
 					setup.mockInput.pressKey("a");
 					const afterAuto = await settle(setup);
-					expect(afterAuto).toContain("● manual");
-					expect(afterAuto).not.toContain("○ auto");
+					expect(afterAuto).toContain("○ auto");
+					expect(afterAuto).not.toContain("● manual");
 					// The walk back lands on the last visible Ticket, and the
 					// next step moves the Ticket list, not the Consultation
 					// detail left behind.

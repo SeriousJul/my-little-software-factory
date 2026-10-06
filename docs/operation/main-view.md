@@ -18,31 +18,42 @@ header row; the same toggle restores it.
   Its header shows the pipeline counts - open, running, awaiting - and, only
   when non-zero, the held count with its bell marker and the ignored and
   muted counts. A held count means a turn ended badly and the decision is
-  yours. The header's right corner carries the Auto-handoff mode cell: an
-  unlit lamp with `auto` when the factory hands off settled tickets on its
-  own, a lit lamp with `manual` when it waits for you, the Parallel limit
-  seat reading `N/M` beside it, and the word `paused` while the Dispatch
-  pause holds the automatic works. The lamp and its word wear the mode's own
-  color: the warning color for `auto`, the running state's color for
-  `manual`. The seat reading wears the running color while the limit still
-  holds room and the error color from the frame the seats reach the limit.
-  The written word names the mode either way, so a terminal that paints no
-  color loses nothing. A row too short for the whole cell gives whole count
-  cells up from the counts' tail - the pile first, then the bell, then the
-  held count - and only as far as the lamp and its word need them gone; the
-  cell then takes back what the room it now has allows, the seat reading
-  first and then the pause word. At every width the plane supports - its
-  floor is 40 columns - the row cuts no cell in half and never loses the
-  lamp.
+  yours. The header's right corner carries two lamps. The left one is the
+  Queue pause's brake (issue #319, ADR 0111): a lit lamp with `running` in
+  the running state's color while the factory may start work, an unlit lamp
+  with `paused` in the error color while the brake holds the starts. Beside
+  it, the Auto-handoff mode cell: an unlit lamp with `auto` when the factory
+  hands off settled tickets on its own, a lit lamp with `manual` when it
+  waits for you, the Parallel limit seat reading `N/M` beside it, and the
+  word `held` while the Dispatch pause holds the automatic works. The mode
+  lamp and its word wear the mode's own color: the warning color for `auto`,
+  the running state's color for `manual`. The seat reading wears the running
+  color while the limit still holds room and the error color from the frame
+  the seats reach the limit. The written words name the states either way,
+  so a terminal that paints no color loses nothing. A row too short for the
+  whole corner gives whole count cells up from the counts' tail - the pile
+  first, then the bell, then the held count - and only as far as both lamps
+  need them gone; the corner then takes back what the room it now has
+  allows, the seat reading first and then the Dispatch pause's word. At
+  every width the plane supports - its floor is 40 columns - the row cuts no
+  cell in half and never loses a lamp. The brake stands on every surface the
+  plane owns: the same lamp, lit or unlit, rides the right corner of the top
+  border of every modal and panel - the Decision modal, the Live view, the
+  panels, and the Key guide - so the brake's state is visible from anywhere
+  the cursor can be.
 - **The Consultation section** lists your Consultations. Its header shows how
   many wait for your answer and how many need recovery, so a Consultation
   that needs you is visible whether the section is open or folded.
 - **The Work section** holds every start that waits for a seat: the manual
   starts you staged, the starts the auto-handoff adds, and the Consultation
-  starts. Its header shows the queue depth and the `paused` word while the
-  drain is paused. `+` and `-` move the item under the cursor toward the
-  front or the back, `Delete` removes it, `p` pauses or resumes the drain,
-  and Enter starts the item now, even over the limit.
+  starts. Its header shows the queue depth; the brake's state stands at the
+  Ticket header's corner and on every modal's border, not beside the depth.
+  `+` and `-` move the item under the cursor toward the front or the back,
+  `Delete` removes it, and Enter starts the item now, even over the limit.
+  `p` pauses or resumes the drain from any surface the plane owns - the
+  modals and the Live view included - and in the field modes, where the
+  letter types into the row, `F4` carries the same toggle. `a` turns the
+  auto-handoff on or off with the same reach, `F5` as its field-mode alias.
 
 The Consultation header and the Work header stand in the left column's own
 width - half the terminal - while the Ticket header spans the whole terminal.

@@ -79,6 +79,19 @@ interface ConsultationLauncherProps {
 	/** The Message fact this surface's own Message line shows. */
 	message: MessageFact | null;
 	onEmergencyExit: () => void;
+	/**
+	 * The Queue pause's key on this launcher (issue #319, ADR 0111): the brake
+	 * reaches every surface the plane draws, the form's selector and action rows
+	 * included, on the F4 alias the field modes carry. Required, because a
+	 * surface that resolves the key and swallows it would be a key the plane
+	 * takes and never answers.
+	 */
+	onQueuePause: () => void;
+	/**
+	 * The Auto-handoff mode's key on this launcher (issue #319, ADR 0111), on
+	 * the F5 alias: required for the same reason.
+	 */
+	onAutoHandoff: () => void;
 }
 
 /** The launcher's slots, in the order Tab walks them. */
@@ -129,6 +142,8 @@ export function ConsultationLauncher({
 	onCopy,
 	message,
 	onEmergencyExit,
+	onQueuePause,
+	onAutoHandoff,
 }: ConsultationLauncherProps) {
 	const { width: terminalWidth, height: terminalHeight } = useTerminalDimensions();
 	const names = Object.keys(types);
@@ -224,6 +239,11 @@ export function ConsultationLauncher({
 			},
 			help: () => onHelp?.(formModeFacts.mode),
 			message: () => onMessage?.(formModeFacts.mode),
+			// The plane-level keys reach the form's rows too (issue #319,
+			// ADR 0111), on the F4 and F5 aliases the field modes carry: the
+			// letters would type into the Draft field, the F-keys do not.
+			"queue-pause": onQueuePause,
+			"auto-handoff": onAutoHandoff,
 		},
 	});
 
@@ -321,5 +341,6 @@ export function ConsultationLauncher({
 		},
 		message,
 		bar: { mode: formModeFacts.mode, facts: formModeFacts },
+		queuePaused: standing.queuePaused,
 	});
 }

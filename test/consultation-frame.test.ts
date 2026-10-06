@@ -2802,9 +2802,10 @@ describe("The full Consultation operator flow", () => {
 					);
 					await sleep(150);
 					expect(bells.count()).toBe(1);
-					// a is a Ticket-section control, so it is inert in Consultations.
+					// a is plane-wide (issue #319, ADR 0111): it flips the mode
+					// even from the Consultation section.
 					setup.mockInput.pressKey("a");
-					expect((await settle(setup)).match(/○ auto/g)).toBeNull();
+					expect((await settle(setup)).match(/○ auto/g)).not.toBeNull();
 					// The Agent is idle: Enter opens the response editor.
 					await pressEnter(setup, "the response editor", (f) => f.includes("Response draft"));
 					setup.mockInput.typeText("answer one");

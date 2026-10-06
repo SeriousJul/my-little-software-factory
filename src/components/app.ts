@@ -1933,6 +1933,49 @@ export function App({
 		}
 	};
 
+	/**
+	 * `p` pauses or resumes the Work queue's drain (ADR 0052): the pickup takes
+	 * no item and the top-up adds none while the pause stands, and the
+	 * force-dispatch passes it. The state's one write owns the fact; resuming
+	 * asks the pickup for one more item, so the seat the pause gave back frees
+	 * in the same frame the key landed.
+	 *
+	 * The brake reaches the whole plane (issue #319, ADR 0111), so the toggle
+	 * stands in one place and every surface that dispatches the key runs it:
+	 * the base panes and the modals, the Live view, the panels, and the
+	 * utility overlays all press through to this one write. The write is
+	 * guarded the way the Auto-handoff mode's identical fact is (ADR 0052).
+	 * What differs is what a refused write means: the pickup and the top-up
+	 * read the pause from the state, not from this shell's copy, so a write
+	 * that failed left the brake where it stood. The key says so and moves
+	 * nothing - the corner's lamp, the border's lamp, the bar's hint, and the
+	 * drain all keep reading the value that stands.
+	 */
+	const toggleQueuePause = () => {
+		if (state === undefined) return;
+		const next = !state.workQueue.queuePaused();
+		try {
+			state.workQueue.setQueuePaused(next);
+		} catch (error) {
+			const reason = errorMessage(error);
+			// The refused write leaves its record line the way the Auto-handoff
+			// mode's identical failure does, so two facts of one kind do not fail
+			// two ways (issue #223 review). The line is `warn`: the operator
+			// pressed the key and the brake did not move.
+			logger?.warn(`queue: the Work queue pause did not move: ${reason}`);
+			setErrorMessage(`the queue pause did not move: ${reason}`);
+			return;
+		}
+		setQueuePaused(next);
+		// The pause is the other fact the operator sets by key, and it holds
+		// every automatic add while it stands (issue #223). The `queue:` prefix
+		// keeps this line in its own family: the cycle states its own hold line
+		// about the same fact, and a reader grepping one must not get the other.
+		logger?.info(next ? "queue: the Work queue is paused" : "queue: the Work queue resumed");
+		setNoticeMessage(next ? "Work queue paused" : "Work queue resumed");
+		if (!next) void handoffDispatch?.pickupWorkQueue();
+	};
+
 	/** The method the merge action runs with, from the task type's action form (ADR 0068). */
 	const mergeMethodOf = (taskType: string): string =>
 		planeActionSettingOf(configRef.current.taskTypes, taskType)?.method ?? DEFAULT_MERGE_METHOD;
@@ -3132,6 +3175,11 @@ export function App({
 			(source) => coordinatorRef.current?.isFetching(source.name) === true,
 		).length,
 		interactionExitKey: configRef.current.interactionExitKey,
+		// The Queue pause's one read for the plane (ADR 0111): the brake the
+		// operator set by key stands here, beside the other standing facts, and
+		// the header's corner lamp and the border lamp read it from here, the
+		// same value the key toggles and the drain honors.
+		queuePaused,
 	};
 	/**
 	 * The Group facts, from the module that owns the row list they count (issue
@@ -3144,8 +3192,7 @@ export function App({
 			ticketsExpandedRef.current ? selectedIndexRef.current : -1,
 		);
 	/** The queue facts, from the module that draws the queue it counts (ADR 0034, ADR 0052). */
-	const queueFacts = () =>
-		workQueueCursorFacts(workQueueRef.current, workQueueIndexRef.current, queuePausedRef.current);
+	const queueFacts = () => workQueueCursorFacts(workQueueRef.current, workQueueIndexRef.current);
 	/** The Ticket facts the Ticket section's two modes read. */
 	const ticketCursor = () => ({
 		selectedTicket: ticketAtCursor(),
@@ -3735,42 +3782,10 @@ export function App({
 						replaceConsultations();
 					refreshNow();
 				},
-				// `p` pauses or resumes the Work queue's drain (ADR 0052): the
-				// pickup takes no item and the top-up adds none while the pause
-				// stands, and the force-dispatch passes it. The state's one write
-				// owns the fact; resuming asks the pickup for one more item, so
-				// the seat the pause gave back frees in the same frame the key
-				// landed.
-				"queue-pause": () => {
-					if (state === undefined) return;
-					const next = !state.workQueue.queuePaused();
-					// The write is guarded the way the Auto-handoff mode's identical fact
-					// is (ADR 0052). What differs is what a refused write means: the
-					// pickup and the top-up read the pause from the state, not from this
-					// shell's copy, so a write that failed left the brake where it
-					// stood. The key says so and moves nothing - the section's header, the
-					// bar's hint, and the drain all keep reading the value that stands.
-					try {
-						state.workQueue.setQueuePaused(next);
-					} catch (error) {
-						const reason = errorMessage(error);
-						// The refused write leaves its record line the way the Auto-handoff
-						// mode's identical failure does, so two facts of one kind do not fail
-						// two ways (issue #223 review). The line is `warn`: the operator pressed
-						// the key and the brake did not move.
-						logger?.warn(`queue: the Work queue pause did not move: ${reason}`);
-						setErrorMessage(`the queue pause did not move: ${reason}`);
-						return;
-					}
-					setQueuePaused(next);
-					// The pause is the other fact the operator sets by key, and it holds
-					// every automatic add while it stands (issue #223). The `queue:` prefix
-					// keeps this line in its own family: the cycle states its own hold line
-					// about the same fact, and a reader grepping one must not get the other.
-					logger?.info(next ? "queue: the Work queue is paused" : "queue: the Work queue resumed");
-					setNoticeMessage(next ? "Work queue paused" : "Work queue resumed");
-					if (!next) void handoffDispatch?.pickupWorkQueue();
-				},
+				// The brake reaches the whole plane (issue #319, ADR 0111): the
+				// one toggle stands in its own function, and every surface that
+				// dispatches the key runs it through the callback the screen owns.
+				"queue-pause": () => toggleQueuePause(),
 				// Enter on a Ticket or Consultation row that waits in the Work
 				// queue (ADR 0049): the cursor jumps to the item's row, where the
 				// queue's keys act on it. The catalogue resolved it ahead of the
@@ -5257,6 +5272,10 @@ export function App({
 						muted: mutedCount,
 						heldBell,
 						mode: autoHandoffCell,
+						// The Queue pause's corner lamp (issue #319, ADR 0111): the
+						// standing brake reads beside the mode lamp at the corner
+						// of the plane, from the same standing fact the key sets.
+						queuePaused,
 						active: mainSurfaceActive,
 						onToggle: () => clickSection("tickets"),
 					}),
@@ -5361,7 +5380,6 @@ export function App({
 								terminalWidth,
 								width: leftCols,
 								waiting: headerFacts.work.waiting,
-								queuePaused,
 								active: mainSurfaceActive,
 								onToggle: () => clickSection("work"),
 							}),
@@ -5452,6 +5470,8 @@ export function App({
 												onCopy: reportMessage,
 												message: visibleMessage,
 												onEmergencyExit: () => renderer.destroy(),
+												onQueuePause: toggleQueuePause,
+												onAutoHandoff: toggleAutoHandoff,
 											}),
 									),
 					),
@@ -5488,6 +5508,8 @@ export function App({
 				onCopy: reportMessage,
 				message: visibleMessage,
 				onEmergencyExit: () => renderer.destroy(),
+				onQueuePause: toggleQueuePause,
+				onAutoHandoff: toggleAutoHandoff,
 			}),
 		terminalHeight >= 2 && messageRowElement(visibleMessage, terminalWidth),
 		createElement(ActionBar, {
@@ -5519,6 +5541,8 @@ export function App({
 				onEmergencyExit: () => renderer.destroy(),
 				onConfirm: confirmOverride,
 				onCancel: cancelOverride,
+				onQueuePause: toggleQueuePause,
+				onAutoHandoff: toggleAutoHandoff,
 			}),
 		// Each ticket panel kind renders its own modal: a decision is neither a
 		// live view nor a missing-agent choice, and must not fall through to one.
@@ -5544,6 +5568,8 @@ export function App({
 				onUnavailable: setWarningMessage,
 				message: visibleMessage,
 				onEmergencyExit: () => renderer.destroy(),
+				onQueuePause: toggleQueuePause,
+				onAutoHandoff: toggleAutoHandoff,
 			}),
 		// The Live view streams the agent's terminal while the ticket is in
 		// flight. When the turn settles and the factory waits for the
@@ -5594,6 +5620,8 @@ export function App({
 				onUnavailable: setWarningMessage,
 				message: visibleMessage,
 				onEmergencyExit: () => renderer.destroy(),
+				onQueuePause: toggleQueuePause,
+				onAutoHandoff: toggleAutoHandoff,
 			}),
 		panel !== null &&
 			panelTicket !== undefined &&
@@ -5617,6 +5645,8 @@ export function App({
 				onUnavailable: setWarningMessage,
 				message: visibleMessage,
 				onEmergencyExit: () => renderer.destroy(),
+				onQueuePause: toggleQueuePause,
+				onAutoHandoff: toggleAutoHandoff,
 			}),
 		panel !== null &&
 			panel.kind === "repository-init" &&
@@ -5649,6 +5679,8 @@ export function App({
 				onMessage: () => openMessage("action-panel"),
 				onUnavailable: setWarningMessage,
 				onEmergencyExit: () => renderer.destroy(),
+				onQueuePause: toggleQueuePause,
+				onAutoHandoff: toggleAutoHandoff,
 			}),
 		panel !== null &&
 			panel.kind === "repository-select" &&
@@ -5666,6 +5698,8 @@ export function App({
 				onUnavailable: setWarningMessage,
 				message: visibleMessage,
 				onEmergencyExit: () => renderer.destroy(),
+				onQueuePause: toggleQueuePause,
+				onAutoHandoff: toggleAutoHandoff,
 			}),
 		panel !== null &&
 			panel.kind === "ticket-close" &&
@@ -5686,6 +5720,8 @@ export function App({
 				onMessage: () => openMessage("action-panel"),
 				onUnavailable: setWarningMessage,
 				onEmergencyExit: () => renderer.destroy(),
+				onQueuePause: toggleQueuePause,
+				onAutoHandoff: toggleAutoHandoff,
 			}),
 		panel !== null &&
 			panel.kind === "consultation-safety" &&
@@ -5726,6 +5762,8 @@ export function App({
 						text: "Consultation launch cancelled; recover or close it explicitly",
 					});
 				},
+				onQueuePause: toggleQueuePause,
+				onAutoHandoff: toggleAutoHandoff,
 			}),
 		// One panel element for the Consultation recovery: the record's state
 		// names its rows through consultationRecoveryPanel, the retry of an
@@ -5757,6 +5795,8 @@ export function App({
 					}
 				},
 				onCancel: () => setPanel(null),
+				onQueuePause: toggleQueuePause,
+				onAutoHandoff: toggleAutoHandoff,
 			}),
 		// One panel element for the Consultation close: the record's state
 		// selects the shape through consultationClosePanel, the recovery rows
@@ -5785,6 +5825,8 @@ export function App({
 					}
 				},
 				onCancel: () => setPanel(null),
+				onQueuePause: toggleQueuePause,
+				onAutoHandoff: toggleAutoHandoff,
 			}),
 		panel !== null &&
 			panel.kind === "consultation-force" &&
@@ -5816,6 +5858,8 @@ export function App({
 					if (key === "force") forceCloseConsultation(panelConsultation);
 				},
 				onCancel: () => setPanel(null),
+				onQueuePause: toggleQueuePause,
+				onAutoHandoff: toggleAutoHandoff,
 			}),
 		panel !== null &&
 			panelConsultation !== undefined &&
@@ -5836,6 +5880,8 @@ export function App({
 					if (key === "delete") deleteConsultation(panelConsultation);
 				},
 				onCancel: () => setPanel(null),
+				onQueuePause: toggleQueuePause,
+				onAutoHandoff: toggleAutoHandoff,
 			}),
 		utility?.kind === "guide" &&
 			createElement(KeyGuide, {
@@ -5844,6 +5890,8 @@ export function App({
 				onClose: () => setUtility(null),
 				onMessage: () => openMessage(utilityFacts.mode),
 				onEmergencyExit: () => renderer.destroy(),
+				onQueuePause: toggleQueuePause,
+				onAutoHandoff: toggleAutoHandoff,
 			}),
 		utility?.kind === "message" &&
 			createElement(MessageView, {
@@ -5853,6 +5901,8 @@ export function App({
 				onClose: () => setUtility(null),
 				onHelp: () => openGuide(utilityFacts.mode),
 				onEmergencyExit: () => renderer.destroy(),
+				onQueuePause: toggleQueuePause,
+				onAutoHandoff: toggleAutoHandoff,
 			}),
 	);
 }

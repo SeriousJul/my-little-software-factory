@@ -161,6 +161,14 @@ export interface StandingFacts {
 	refreshingSourceCount: number;
 	/** The configured key that leaves Agent interaction mode. */
 	interactionExitKey: string;
+	/**
+	 * The Queue pause (ADR 0052, ADR 0111): the operator's brake on the Work
+	 * queue's drain. It is a standing fact because the control every mode
+	 * dispatches must read a fact every mode states, and a missing one is a
+	 * compile error: the surfaces that state the facts fill it from the queue
+	 * module's one read, the way the other standing facts do.
+	 */
+	queuePaused: boolean;
 }
 
 /**
@@ -293,9 +301,10 @@ export interface ConsultationDetailFacts extends StandingFacts, ConsultationSect
 /**
  * The facts the Work queue module states for its own rows.
  *
- * The item under the cursor, the queue's depth, and the pause come from the
- * queue itself, so the queue's keys cannot disagree with the queue (ADR 0034,
- * ADR 0052).
+ * The item under the cursor and the queue's depth come from the queue itself,
+ * so the queue's keys cannot disagree with the queue (ADR 0034). The queue
+ * pause stands in the plane's standing facts (ADR 0111): it is the fact a
+ * control every mode dispatches reads.
  */
 export interface WorkQueueSectionFacts {
 	/**
@@ -305,12 +314,6 @@ export interface WorkQueueSectionFacts {
 	selectedWorkQueueItem: WorkQueueItem | null;
 	/** The queue's depth: the items it holds. */
 	workQueueDepth: number;
-	/**
-	 * The queue pause for the Work queue's section (ADR 0052): the `p` key's
-	 * hint reads its own state, and the other sections refuse it in the
-	 * catalogue's words.
-	 */
-	queuePaused: boolean;
 }
 
 /** The facts the Work queue's list pane states for its own cursor. */
@@ -1279,7 +1282,7 @@ const groupFoldShown = (facts: TicketBaseFacts): boolean => facts.groupHeaderSel
 const groupFoldAvailability = (facts: TicketBaseFacts): ControlAvailability =>
 	facts.groupHeaderSelected ? available() : unavailable("no Group header is under the cursor");
 const groupMoveShown = (facts: TicketBaseFacts): boolean => facts.selectedGroupHeader !== null;
-const queuePauseLabel = (facts: WorkQueueBaseFacts): string =>
+const queuePauseLabel = (facts: StandingFacts): string =>
 	facts.queuePaused ? "Resume queue" : "Pause queue";
 /** The `e` key on a base-mode row: the Ticket section's override, nowhere else. */
 const overrideControl = (facts: BaseFacts): ControlAvailability =>
@@ -1983,18 +1986,24 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		// `p` pauses the Work queue's drain (ADR 0052): the pickup takes no
 		// item and the top-up adds none while it stands, and the force-dispatch
 		// passes it the way it passes the cap. The key takes no other meaning
-		// in the plane, so the queue section claims it outright, and the other
-		// sections refuse it in the catalogue's words.
+		// in the plane, and the brake reaches the whole plane (ADR 0111):
+		// every plane mode names the letter key, the field modes - where the
+		// letter types into the row - name the F4 alias the way F1 and F2
+		// already carry Help and Message, and the Agent terminal names neither
+		// and forwards both to the Agent. The bar hint stands only while the
+		// pause stands, in every mode: the standing brake earns its width at the
+		// point of action, and the Key guide carries the key the rest of the
+		// time.
 		id: "queue-pause",
 		label: "Pause queue",
 		barLabel: queuePauseLabel,
-		keys: () => ["p"],
-		keyLabel: "p",
-		scope: "work-queue-list",
+		keys: (mode) => (fieldModes.includes(mode) ? ["f4"] : ["p"]),
+		keyLabel: "p/F4",
+		scope: "control-plane",
 		actionBar: true,
+		showInBar: (facts) => facts.queuePaused,
 		priority: 58,
-		modes: [...baseModes],
-		queueSectionOnly: true,
+		modes: [...planeModes],
 		availability: available,
 		guideNote: "pauses the queue's drain; the force-dispatch passes it",
 	},
@@ -2370,14 +2379,20 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		showInBar: (facts) => facts.messageTruncated,
 	},
 	{
+		// `a` flips the Auto-handoff mode (ADR 0036), and it carries the same
+		// reach as the Queue pause does (ADR 0111): every plane mode names the
+		// letter key, the field modes name the F5 alias, and the Agent terminal
+		// names neither and forwards both to the Agent. The two plane-level
+		// mode keys carry one reach rule. The mode gets no bar hint: the
+		// lamp's word already states the mode.
 		id: "auto-handoff",
 		label: "Toggle auto-handoff",
-		keys: () => ["a"],
-		keyLabel: "a",
+		keys: (mode) => (fieldModes.includes(mode) ? ["f5"] : ["a"]),
+		keyLabel: "a/F5",
 		scope: "control-plane",
 		actionBar: false,
 		priority: 10,
-		modes: [...ticketBaseModes],
+		modes: [...planeModes],
 		availability: available,
 	},
 	{
@@ -2739,6 +2754,20 @@ export function availabilityFor(
 	return control.availability(facts);
 }
 
+/**
+ * Whether the control reaches every mode of the plane and stops at the Agent
+ * terminal's door (issue #319, ADR 0111): the Queue pause and the
+ * Auto-handoff mode keys. Their reach is a standing fact of the plane, not a
+ * property of the mode the guide is open in, so the guide states them once,
+ * under the Control plane controls group, in every mode they dispatch in,
+ * and the Agent terminal - whose door they stop at - names them nowhere.
+ */
+function isPlaneWide(control: ControlDefinition): boolean {
+	return (
+		control.scope === "control-plane" && planeModes.every((mode) => control.modes.includes(mode))
+	);
+}
+
 /** Ticket-section controls have no useful meaning in a Consultation guide. */
 function omitFromGuide(mode: InteractionMode, control: ControlDefinition): boolean {
 	if (
@@ -2753,10 +2782,16 @@ function omitFromGuide(mode: InteractionMode, control: ControlDefinition): boole
 	// The Work queue's own keys stay out of the other sections' guides
 	// (ADR 0034): each section's guide names the keys it dispatches, and the
 	// queue's reorder, cancel, and list-focus keys belong to the queue alone.
-	return (
+	if (
 		!workQueueMode(mode) &&
 		(control.scope === "work-queue-list" || control.scope === "work-queue-detail")
-	);
+	)
+		return true;
+	// The Agent terminal forwards every key to the Agent, so the plane-level
+	// keys - the controls every other mode of the plane dispatches - name
+	// nowhere in its guide (issue #319, ADR 0111): a key the terminal gives to
+	// the Agent is not a key the guide can promise.
+	return mode === "consultation-interaction" && isPlaneWide(control);
 }
 
 /**
@@ -2824,6 +2859,10 @@ export function guideControls(facts: AvailabilityFacts): Array<{
 			control.actionBar &&
 			control.id !== "emergency-exit" &&
 			control.guideOnly !== true &&
+			// The plane-level keys stand in the Control plane controls group in
+			// every mode (issue #319, ADR 0111), not in the mode's own rows: their
+			// reach is a standing fact of the plane, and the guide states it once.
+			!isPlaneWide(control) &&
 			!omitFromOtherSection(mode, control) &&
 			isCataloguedInMode(mode, control, facts),
 	);
@@ -2924,6 +2963,12 @@ function displayKeyLabel(
 			return includeAllAliases ? "m/F2" : "m";
 		return "F2";
 	}
+	if (control.id === "queue-pause") {
+		// A field owns its printable keys, and `p` is one of them: in the field
+		// modes only F4 pauses the queue, the way only F1 opens the guide.
+		return fieldModes.includes(mode) ? "F4" : "p";
+	}
+	if (control.id === "auto-handoff") return fieldModes.includes(mode) ? "F5" : "a";
 	return control.keyLabel;
 }
 

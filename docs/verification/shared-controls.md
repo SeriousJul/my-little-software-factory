@@ -1504,3 +1504,51 @@ open item, and it is the one the test layer cannot close. The design question th
 review raised - whether `manual` should wear the running state's color at all, in
 a mode where the machine starts nothing on its own - is a judgment about what the
 operator should see in that corner, and it belongs to that same walk.
+
+## The Queue pause's plane-wide key and display (issue #319, ADR 0111)
+
+Status: the automated checks pass. What was measured: the `p` key and the `a`
+key resolve in every Interaction mode the plane owns - the field modes
+included, where `F4` and `F5` carry the same toggles - and the Agent terminal
+is the one mode where neither reaches the plane, measured through the catalogue
+itself in `test/controls.test.ts`. The mode cell's word for the Dispatch pause
+is `held`, the Work header keeps its depth cell alone, and the Ticket header's
+corner carries the brake's lamp - lit with `running` in the running state's
+color, unlit with `paused` in the error color, left of the mode cell and one
+space of room from it - measured in `test/section-header.test.ts` both through
+the renderer and through `planHeaderRow` with no renderer, including the drop
+ladder at the widths where the held count and the seat reading give way and the
+40-column floor that keeps the section name and both lamps. The modal chrome's
+border carries the same lamp in the top border's right corner on every surface
+that draws the chrome, measured in `test/reserved-rows.test.ts` against the
+rule OpenTUI's buffer draw enforces on titles: a title longer than the inner
+width minus two is dropped whole, so the border's lamp and the title share the
+inner width minus two. The Key guide lists both keys under its Control plane
+controls group in every mode and by absence in the Agent terminal's, measured
+in `test/key-guide.test.ts`. The bar's hint stands only while the pause stands,
+measured in `test/work-queue-frame.test.ts`, and the held turn's own frame
+measured through the real app flow in `test/turn-end-cause-frame.test.ts`. The
+plane's own theme carries the lamp's two colors at the essential-indicator
+contrast on the panel surface, measured in `test/shared-presentation.test.ts`.
+The gallery carries the two lamp states beside the mode cell in its `auto-mode`
+example and the pause's bar states in its `queue-order` example, and
+`test/shared-gallery.test.ts` holds both.
+
+The guide screenshots were regenerated for this head: the brake's lamp stands
+on the Main view's Ticket header and on every modal's border the fixture's
+screens show, and `test/screenshot-drift.test.ts` reads the committed PNGs
+against a fresh capture of the same fixture world.
+
+The whole suite ran on this head, on the tree as merged: `bun run lint` clean
+over 310 files with no warnings, `bun run typecheck` clean, and one full
+`bun run test` green at 3132 tests over 141 files, 0 fail, no skips, 15823
+assertions in 38.22 s, the screenshot drift check among them. No other `bun
+test` process ran on the machine during that gate (load average 4.48 on 32
+cores).
+
+What was not measured: no screen reader has read this application, and no claim
+of screen-reader support is made here. The terminal walks in Ghostty and foot
+have not been re-run for this change, so the brake's lamp pair, its two colors,
+and the `held` word stand as not walked in a live terminal by a person on this
+head. That remains the open item, and it is the one the test layer cannot
+close.

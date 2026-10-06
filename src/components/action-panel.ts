@@ -42,6 +42,19 @@ interface ActionPanelProps {
 	onMessage?: () => void;
 	onUnavailable?: (reason: string) => void;
 	onEmergencyExit?: () => void;
+	/**
+	 * The Queue pause's key on this panel (issue #319, ADR 0111): the brake
+	 * reaches every surface the plane draws, and the panel dispatches the key
+	 * the way it dispatches Help and Message. Required, because a surface that
+	 * resolves the key and swallows it would be a key the plane takes and never
+	 * answers.
+	 */
+	onQueuePause: () => void;
+	/**
+	 * The Auto-handoff mode's key on this panel (issue #319, ADR 0111), the
+	 * same reach as the Queue pause's: required for the same reason.
+	 */
+	onAutoHandoff: () => void;
 }
 
 /** The message column stops at 60 cells: a confirmation line is short. */
@@ -68,6 +81,8 @@ export function ActionPanel({
 	onMessage,
 	onUnavailable,
 	onEmergencyExit = () => undefined,
+	onQueuePause,
+	onAutoHandoff,
 }: ActionPanelProps) {
 	const { width: terminalWidth, height: terminalHeight } = useTerminalDimensions();
 	const body = bodyLines ?? [];
@@ -118,6 +133,11 @@ export function ActionPanel({
 				setBodyScroll((current) =>
 					key.name === "j" ? Math.min(current + 1, maxBodyScroll) : Math.max(0, current - 1),
 				),
+			// The plane-level keys reach every surface the chrome owns (issue
+			// #319, ADR 0111), the way the border's lamp reads the facts the
+			// toggle writes.
+			"queue-pause": onQueuePause,
+			"auto-handoff": onAutoHandoff,
 		},
 	});
 	const scroll = Math.min(bodyScroll, maxBodyScroll);
@@ -155,5 +175,6 @@ export function ActionPanel({
 		},
 		message,
 		bar: { mode: "action-panel", facts },
+		queuePaused: standing.queuePaused,
 	});
 }

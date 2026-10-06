@@ -92,6 +92,18 @@ describe("the shared control ink", () => {
 		}
 	});
 
+	test("the Queue pause lamp's colors clear the contrast the standard sets", () => {
+		// The lit lamp wears the running state's color, and the unlit lamp wears
+		// the error color (issue #319, ADR 0111): the plane's own theme carries
+		// the pair at the essential-indicator contrast on the panel surface.
+		const panel = STANDALONE_THEME.roles.panel_bg;
+		for (const role of ["green", "red"] as const) {
+			expect(contrastRatio(STANDALONE_THEME.roles[role], panel)).toBeGreaterThanOrEqual(
+				MIN_INDICATOR_CONTRAST,
+			);
+		}
+	});
+
 	test("the numbers the check measures are the ones the theme paints", () => {
 		// The ratios are recomputed from the hex pairs, so a declared theme
 		// cannot pass a test that only repeats it.

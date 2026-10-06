@@ -25,7 +25,7 @@ import { ActionBar } from "./action-bar.ts";
 import type { AvailabilityFacts, InteractionMode } from "./controls.ts";
 import { maxScrollOf } from "./geometry.ts";
 import { type MessageFact, messageRowElement } from "./messages.ts";
-import { controlInk } from "./shared/presentation.ts";
+import { controlInk, LAMP_GLYPHS } from "./shared/presentation.ts";
 import { padToWidth, truncateToWidth, widthOf } from "./text.ts";
 import { paint } from "./theme.ts";
 
@@ -253,8 +253,37 @@ interface ModalSurfaceProps {
 	message: MessageFact | null;
 	/** The catalogue bar this surface owns, if it owns one. */
 	bar?: { mode: InteractionMode; facts: AvailabilityFacts; rangeIndicator?: string };
+	/**
+	 * The Queue pause's fact the border lamp reads (issue #319, ADR 0111): the
+	 * same fact the Ticket header's corner lamp reads, drawn at the box's top
+	 * border's right corner on every surface that draws the chrome. The chrome
+	 * takes the fact from the surface that owns it, the way it takes the mode
+	 * and the facts it already takes, so a surface never reads the queue
+	 * itself.
+	 */
+	queuePaused?: boolean;
 	opacity?: number;
 	zIndex?: number;
+}
+
+/**
+ * The border lamp the chrome draws at the box's top border's right corner
+ * (issue #319, ADR 0111).
+ *
+ * The lit lamp and the word `running` while the brake is down, the unlit
+ * lamp and the word `paused` while it stands: the same lamp the Ticket
+ * header's corner wears, in the border's own ink, the box and its lamp
+ * sharing one color the way the box and its title already do. The written
+ * word carries the state, so the border rule stays one and the no-color
+ * presentation loses nothing. A box too narrow to hold the lamp whole holds
+ * the title instead: the corner is a standing fact, and the chrome never
+ * states a fact it can only cut.
+ */
+function borderLamp(title: string, fullWidth: number, queuePaused: boolean): string {
+	const lamp = queuePaused ? ` ${LAMP_GLYPHS.off} paused` : ` ${LAMP_GLYPHS.on} running`;
+	if (fullWidth <= widthOf(lamp)) return truncateToWidth(title, Math.max(0, fullWidth));
+	const room = fullWidth - widthOf(lamp);
+	return padToWidth(truncateToWidth(title, room), room) + lamp;
 }
 
 /**
@@ -274,6 +303,7 @@ export function ModalSurface({
 	body,
 	message,
 	bar,
+	queuePaused = false,
 	opacity,
 	zIndex = 10,
 }: ModalSurfaceProps) {
@@ -310,7 +340,15 @@ export function ModalSurface({
 							// no-color presentation and the inherited theme reach
 							// every border at once (ADR 0040).
 							borderColor: controlInk().indicator.fg ?? undefined,
-							title: truncateToWidth(title, frame.contentWidth),
+							// The title runs the border's inner width minus two,
+							// the renderer's own title ceiling: a title that
+							// fills the inner width is dropped whole, and a box
+							// that gave its padding up would fill it (issue #319,
+							// ADR 0111). The Queue pause's lamp stands at the
+							// title's right end: the border's row is the surface's
+							// one always visible row, so the standing brake reads
+							// on every surface the chrome owns.
+							title: borderLamp(title, Math.max(0, frame.boxWidth - BORDERS - 2), queuePaused),
 							padding: frame.padding,
 							style: {
 								width: frame.boxWidth,

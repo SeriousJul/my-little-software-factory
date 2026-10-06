@@ -11,7 +11,7 @@
  * held, the dispatch pause arms, and the factory does not restart the
  * missing ticket, does not hand off the open one, and does not clean the
  * held ticket up. The frame shows the held badge, the `held: 1` attention
- * line, the `paused` mode cell, the warning in the detail pane above the
+ * line, the `held` mode cell, the warning in the detail pane above the
  * last-completion line, and the turn's cause in the decision modal above
  * its action rows.
  */
@@ -284,14 +284,15 @@ describe("the held turn through the real app flow", () => {
 				expect(state.ticketWorkCycle.ticketState(identityB)).toBe("running");
 				expect(state.ticketWorkCycle.ticketState(identityD)).toBe("open");
 
-				// The frame: the mode cell says paused, the row shows the
+				// The frame: the mode cell says held (issue #319, ADR 0111), the
+				// row shows the
 				// held badge in place of the state badge, the attention line
 				// counts the held turn, and the message line names it.
 				const frame = setup.captureCharFrame();
 				const rows = rowsOf(frame);
 				// The combined seat count (ADR 0034): the running ticket and the
 				// held turn's own seat both stand against the cap of 3.
-				expect(rows[0]).toContain("○ auto 2/3 paused");
+				expect(rows[0]).toContain("○ auto 2/3 held");
 				// The row is the list's own row in the left column; the detail
 				// pane's title carries the same title in the right column.
 				const rowA = rows.find((row) => row.slice(0, 60).includes("Persist source facts"));
@@ -344,15 +345,16 @@ describe("the held turn through the real app flow", () => {
 					(f) => !f.includes("Decision:"),
 				);
 
-				// The same held header below sixty columns: the narrow form
-				// with the held count is whole on the header's own full-width
-				// row. The held count is the steady fact the row carries; the
-				// bell that rang when it rose is a 250 ms flash and has rested.
-				// The mode cell gives up its seat reading before a count does,
-				// so the lamp and its word stand beside the whole count line.
+				// The same held header below sixty columns: the narrow form on
+				// the header's own full-width row. The brake's lamp never gives
+				// way (issue #319, ADR 0111): the held count and the seat reading
+				// give way first, and the two lamps stand beside what is left of
+				// the count line.
 				setup.resize(59, 27);
 				const narrowRow = rowsOf(await settle(setup)).find((row) => row.startsWith("▾ Tickets"));
-				expect(narrowRow).toContain("awaiting 1  held 1");
+				expect(narrowRow).toContain("awaiting 1");
+				expect(narrowRow).not.toContain("held");
+				expect(narrowRow).toContain("● running ● manual");
 				expect(narrowRow?.trim().endsWith("● manual")).toBe(true);
 			},
 			undefined,

@@ -197,14 +197,15 @@ describe("the shared control gallery", () => {
 	// right corner, the Dispatch pause word beside them, and the drop rule on a
 	// row too short for the whole cell.
 	test("the auto mode example shows the lamp in both modes, the pause word, and the drop", async () => {
-		const setup = await gallery("auto-mode", 100, 20);
+		const setup = await gallery("auto-mode", 160, 20);
 		const text = frameText(setup.captureCharFrame());
 		expect(text).toContain(stateLine("auto-mode"));
 		expect(text).toContain("○ auto 1/2");
 		expect(text).toContain("● manual 1/2");
 		// The Dispatch pause (ADR 0016) rides the cell, and the seat reading
-		// stands with it.
-		expect(text).toContain("○ auto 2/3 paused");
+		// stands with it; its word is `held` (issue #319, ADR 0111), the word
+		// `paused` belongs to the operator's brake alone.
+		expect(text).toContain("○ auto 2/3 held");
 		// The example's ink is the mode's own: the warning color for the mode the
 		// factory runs in on its own, the running state's color for the mode that
 		// waits for the operator.
@@ -223,24 +224,26 @@ describe("the shared control gallery", () => {
 				"● manual",
 			),
 		).toEqual(rgb(roleColor("green")));
-		// The pause word rides the header's own ink, not the mode's.
+		// The held word rides the header's own ink, not the mode's.
 		expect(
 			spanColorAt(
 				setup,
-				rows.findIndex((row) => row.includes("paused")),
-				"paused",
+				rows.findIndex((row) => row.includes("○ auto 2/3 held")),
+				"held",
 			),
 		).toEqual(rgb(roleColor("text")));
-		// The drop rule, on the example's 54-column row: the pile, the bell, and
-		// the held count give way whole, and the seat reading grows back.
-		const dropped =
-			rows.find((row) => row.includes("open 2  running 1  awaiting 1  ● manual")) ?? "";
-		expect(dropped).toContain("▾ Tickets  open 2  running 1  awaiting 1  ● manual 1/2");
+		// The drop rule, on the example's 54-column row: the counts give way
+		// whole from their tail, and the corner - the brake lamp, the mode lamp,
+		// and the seat reading - grows back into the room they left.
+		const dropped = rows.find((row) => row.includes("open 2  running 1")) ?? "";
+		expect(dropped).toContain("▾ Tickets  open 2  running 1");
+		expect(dropped).toContain("● running ● manual 1/2");
+		expect(dropped).not.toContain("awaiting");
 		expect(dropped).not.toContain("ignored");
 		expect(dropped).not.toContain("!!!");
 		expect(dropped).not.toContain("held");
 		expect(text).toContain(
-			"the 54-column row gives counts up whole and grows the seat reading back",
+			"the 54-column row gives counts up whole, then the seat reading, then the held word",
 		);
 	});
 
@@ -295,7 +298,11 @@ describe("the shared control gallery", () => {
 	});
 
 	test("the gallery walks past the select list without losing its keys", async () => {
-		const setup = await gallery("repository-select");
+		// The walk reads each state word from the border title, and the title
+		// now shares its width with the border's brake lamp (issue #319, ADR
+		// 0111), so the walk opens where the longest state the walk reaches
+		// stands whole.
+		const setup = await gallery("repository-select", 96);
 		await awaitFrame(setup, (f) => f.includes("jul/notes"), "the list rows");
 		// Tab is the gallery's own key: the panel sits with its dispatch
 		// inactive, so the walk passes it the way it passes every other example.
@@ -737,7 +744,7 @@ describe("the shared control gallery", () => {
 		// The dialog examples own a taller frame than the shared one, so the
 		// example opens at the plane's minimum height, where the dialog box
 		// must still hold its title, body, and every action row.
-		const setup = await gallery("close-dialog-opening", 80, 19);
+		const setup = await gallery("close-dialog-opening", 96, 19);
 		let frame = frameText(setup.captureCharFrame());
 		expect(frame).toContain(stateLine("close-dialog-opening"));
 		expect(frame).toContain("Close Consultation c1c1c1c1?");
@@ -783,7 +790,7 @@ describe("the shared control gallery", () => {
 	test("the recovery panel examples hold every state that needs recovery", async () => {
 		// The same production panel the Consultation's Enter opens, drawn at
 		// the plane's minimum height where the box must hold its rows.
-		const setup = await gallery("recovery-panel-opening", 80, 19);
+		const setup = await gallery("recovery-panel-opening", 96, 19);
 		let frame = frameText(setup.captureCharFrame());
 		expect(frame).toContain(stateLine("recovery-panel-opening"));
 		expect(frame).toContain("Recover Consultation c1c1c1c1");
@@ -906,7 +913,7 @@ describe("the shared control gallery", () => {
 	});
 
 	test("the Ticket Close live-worktree example shows the settled turn and the tab", async () => {
-		const setup = await gallery("ticket-close-live-worktree", 100, 30);
+		const setup = await gallery("ticket-close-live-worktree", 110, 30);
 		const frame = frameText(setup.captureCharFrame());
 		expect(frame).toContain(stateLine("ticket-close-live-worktree"));
 		expect(frame).toContain("The turn has settled, and no Agent works.");
@@ -951,15 +958,18 @@ describe("the shared control gallery", () => {
 	});
 
 	test("the queue order example shows the pause header word, the queue keys, and the pause lines", async () => {
-		const setup = await gallery("queue-order", 120, 24);
+		const setup = await gallery("queue-order", 130, 24);
 		const raw = setup.captureCharFrame();
 		const text = frameText(raw);
 		expect(text).toContain(stateLine("queue-order"));
-		// The Work header in its two states: the depth count, and the depth
-		// count with the pause word beside it. The raw frame keeps the word's
-		// spacing.
+		// The Work header keeps its depth cell alone (issue #319, ADR 0111):
+		// the pause's display stands at the Ticket header's corner and the
+		// modal's border, not beside the depth.
 		expect(raw).toContain("waiting: 1");
-		expect(raw).toContain("waiting: 1  paused");
+		// The bar's hint stands only while the pause stands: the running bar
+		// names no pause key, the paused bar offers the resume.
+		expect(text).not.toContain("p Pause queue");
+		expect(text).toContain("p Resume queue");
 		// The queue's own keys on the bar: the order-move keys and the pause,
 		// the pause reading its own state.
 		expect(text).toContain(
