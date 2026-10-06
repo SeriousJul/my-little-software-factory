@@ -1331,10 +1331,11 @@ an empty screen, a named failure rather than a silent pass.
 
 | Check | Result |
 | --- | --- |
-| `bun run fmt`, `bun run lint`, `bun run typecheck` | Clean |
+| `bun run fmt`, `bun run lint`, `bun run typecheck` | Clean; lint over 310 files in 424 ms, no fixes |
+| `bun run docs:build` | Complete in 2.98 s |
 | The 11 frame files the dispatch change touches, quiet machine | 240 pass / 0 fail across the two batches, 6 field files in 14.29 s and 5 flow files in 52.21 s |
 | The double load, post-fix, the same rig the reproduction ran | 30 of 30 iterations green: two concurrent suites, 15 iterations each of the three PTY files, 72 busy loops, load 12.9 rising to 75.2 over the run, 16 pass / 0 fail per iteration, 480 passes total. The pre-fix tree on the same rig stood at 25 fail of 25 on the one suite measured there |
-| The push gate, the merged tree | PENDING |
+| The push gate, the merged tree, `bun run test` on the tree rebased on `origin/main` at `207e61be`, under the 28-busy-loop standing rig, load 25.07 after the run, no other `bun test` process on the machine | 3132 pass / 0 fail across 141 files in 39.60 s (15,623 `expect()`) |
 
 ### What this fix did not measure
 
