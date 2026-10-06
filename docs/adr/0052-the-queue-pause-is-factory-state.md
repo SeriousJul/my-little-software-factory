@@ -2,6 +2,7 @@
 
 Status: accepted
 Date: 2026-09-22
+Amended by ADR 0111: the `p` key's reach and the pause's display are plane-wide, the Work header's `paused` word is retired, and the Dispatch pause's corner word is `held`. Its hold rules stand.
 
 ## Context
 

@@ -23,7 +23,7 @@ An independently collapsable list in the Main view. The Ticket section holds the
 _Avoid_: tab, pane, view, accordion, group
 
 **Section header**:
-The row that names one section of the Main view. A collapsed section is nothing but its header row. The Ticket section's header carries the pipeline counts (open, running, awaiting) with the conditional held count and its bell, then the conditional ignored count - the machine's own fact first, so a short row cuts the count of the pile and never a decision the operator owes. The Consultation section's header carries that section's attention facts (awaiting response, recovery). The Work section's header carries the queue's depth. A click on the header toggles that section.
+The row that names one section of the Main view. A collapsed section is nothing but its header row. The Ticket section's header carries the pipeline counts (open, running, awaiting) with the conditional held count and its bell, then the conditional ignored count - the machine's own fact first, so a short row cuts the count of the pile and never a decision the operator owes. Its corner carries the Queue pause's lamp beside the Auto-handoff mode cell (ADR 0111). The Consultation section's header carries that section's attention facts (awaiting response, recovery). The Work section's header carries the queue's depth. A click on the header toggles that section.
 _Avoid_: title bar, tab label, accordion toggle, group header
 
 **List filter**:
@@ -69,7 +69,7 @@ It is why a hint, a refusal, and a Key guide row cannot be built from a fact no 
 _Avoid_: control context, context bag, facts bag
 
 **Standing facts**:
-The part of the Availability facts the whole plane owns: the run state, the two source counts, the Message line's truncation, the configured Consultation types, and the configured exit key.
+The part of the Availability facts the whole plane owns: the run state, the queue pause, the two source counts, the Message line's truncation, the configured Consultation types, and the configured exit key.
 One record of them is read the same way in every Interaction mode, and no surface restates one.
 _Avoid_: global context, shared facts bag
 
@@ -442,7 +442,7 @@ _Avoid_: failure backoff, circuit breaker, dead letter, retry budget
 
 **Auto-handoff mode**:
 The mode of the factory in which the control plane tops up the Work queue by itself and decides its settled turns without the operator, within the configured limits: a continuation first, then a restart, then an eligible open ticket, one item at a time, the continuation asked before the pickup and the rest only into an empty queue (ADR 0051, with the step order ADR 0094 sets).
-The mode is factory state on the state file: it survives a restart and a dev reload, and a fresh state file starts with the mode off. The operator changes it with the `a` key in the Ticket section.
+The mode is factory state on the state file: it survives a restart and a dev reload, and a fresh state file starts with the mode off. The operator changes it with the `a` key in every Interaction mode except the field modes and the Agent terminal, with the F5 alias in the field modes (ADR 0111).
 _Avoid_: auto dispatch, dispatch mode
 
 **Parallel limit**:
@@ -492,7 +492,9 @@ _Avoid_: refill, auto dispatch, queue feed
 
 **Queue pause**:
 The operator's brake on the Work queue itself: while it stands, the pickup takes no item, the auto top-up adds none, and a manual enqueue that lands waits without starting. A force-dispatch passes it, the way it passes the cap (ADR 0052).
-It is factory state on the state file, toggled with the `p` key in the Work queue section.
+It is factory state on the state file, toggled with the `p` key in every Interaction mode except the field modes and the Agent terminal, with the F4 alias in the field modes (ADR 0111).
+It is a brake on the starts, not a stop of the factory: the running Agents keep running, their turns settle, their Transitions write, and the auto Completion decisions keep deciding those turns.
+Its face is the lamp in the Ticket header's corner and the shared modal chrome's top border: the lit lamp with the word `running`, the unlit lamp with the word `paused`, the word carrying the meaning and the color secondary (ADR 0111).
 It is distinct from the Dispatch pause, which is automatic and holds the top-up's adds.
 _Avoid_: dispatch pause, queue stop, brake
 
@@ -505,6 +507,7 @@ _Avoid_: turn counter, dispatch budget
 **Dispatch pause**:
 The condition in which Auto-handoff mode starts no agent by itself, because the newest Held turn settled `failed` and no turn has settled `completed` since it.
 It is derived from the completion traces on every cycle, never stored, so it survives a restart and cannot drift from the fact it describes. It ends at the next `completed` settle, or when the operator decides the Held turn that started it. It never blocks a manual Handoff or a route the operator confirms, and it holds only the automatic adds of the auto top-up: the continuation, the restart, and the open ticket (ADR 0051).
+The auto cell's corner word for it is `held` (ADR 0111), and the word `paused` belongs to the queue pause alone.
 It is distinct from the queue pause, the operator's brake on the queue itself (ADR 0052).
 _Avoid_: circuit breaker, cooldown, backoff
 
