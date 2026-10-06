@@ -126,3 +126,5 @@ body states the context, the decision, and the consequences.
 - [ADR 0115: The Repository init creates its gate labels, and one issue feed per gate](./0115-the-repository-init-creates-its-gate-labels-and-one-issue-feed-per-gate.md)
 - [ADR 0116: The shipped machine gates a position on the source's own type label](./0116-the-shipped-machine-gates-a-position-on-the-sources-own-type-label.md)
 - [ADR 0117: Operator-decides holds its Task type out of every automatic add](./0117-operator-decides-holds-its-task-type-out-of-every-automatic-add.md)
+- [ADR 0118: A Fault is the only Message fact that leaves the terminal](./0118-a-fault-is-the-only-message-fact-that-leaves-the-terminal.md)
+- [ADR 0119: The Message view shows the Message line's own per-run history](./0119-the-message-view-shows-the-message-lines-own-per-run-history.md)

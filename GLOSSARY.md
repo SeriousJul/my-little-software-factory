@@ -45,12 +45,24 @@ _Avoid_: status bar, shortcut bar, footer
 The temporary surface for progress, warnings, errors, and other operational feedback.
 _Avoid_: status line, notification bar
 
+**Message severity**:
+The word and the color one Message fact wears: Working, Info, Warning, or Error. An Error is a try that failed and leaves the work unable to move on without the operator, a Warning is something that did not happen or a condition that stands, and an Info is what a control did or a fact with nothing wrong in it.
+_Avoid_: status, message kind
+
+**Message history**:
+The Message line's own record of the facts it has been asked to state during one run, oldest first, each with the time of its write. It holds the facts that stand and no progress line, and a run's restart empties it.
+_Avoid_: message log, message buffer, scrollback
+
 **Message view**:
-The on-demand, read-only presentation of a full message that does not fit on the Message line.
+The on-demand, read-only presentation of the Message history: every fact the Message line has stated this run, each with its time, its level word, and its full text.
 _Avoid_: message modal, error popup
 
+**Fault**:
+A warning or an error the plane met on its own rather than an answer to a key the operator pressed. It is the only Message fact that leaves the terminal, so the operator who is away still hears it.
+_Avoid_: alert, failure, problem, incident
+
 **Desktop notification**:
-The out-of-band signal the control plane sends to the operating system when it writes a warning or an error to the Message line. It carries the full text the line truncates, so the operator can read the fact and act on it while away from the terminal, the auto-handoff case first.
+The out-of-band signal the control plane sends to the operating system for a Fault. It carries the full text the line truncates, so the operator can read the fact and act on it while away from the terminal, the auto-handoff case first.
 The plane sends one per standing fact: while the same fact stands it sends none, and when the fact stands again after a different one it sends.
 _Avoid_: toast, system alert, popup
 
@@ -69,7 +81,7 @@ It is why a hint, a refusal, and a Key guide row cannot be built from a fact no 
 _Avoid_: control context, context bag, facts bag
 
 **Standing facts**:
-The part of the Availability facts the whole plane owns: the run state, the queue pause, the two source counts, the Message line's truncation, the configured Consultation types, and the configured exit key.
+The part of the Availability facts the whole plane owns: the run state, the queue pause, the two source counts, whether the Message history holds an entry, the configured Consultation types, and the configured exit key.
 One record of them is read the same way in every Interaction mode, and no surface restates one.
 _Avoid_: global context, shared facts bag
 
