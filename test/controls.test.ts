@@ -444,10 +444,10 @@ describe("the shared control catalogue", () => {
 		expect(controlForKey({ name: "a" }, context)).toBeUndefined();
 	});
 
-	test("the Consultation close is w, not the section toggle", () => {
+	test("the Consultation close is the Delete key, not the section toggle", () => {
 		const context = facts("consultation-detail");
 
-		expect(controlForKey({ name: "w" }, context)?.id).toBe("consultation-close");
+		expect(controlForKey({ name: "delete" }, context)?.id).toBe("consultation-close");
 		expect(controlForKey({ name: "x" }, context)?.id).toBe("section-toggle");
 	});
 
@@ -1051,15 +1051,16 @@ describe("the shared control catalogue", () => {
 		expect(availabilityFor(control, context).available).toBe(true);
 	});
 
-	test("each section's w closes its own section, and only that section claims it", () => {
-		// Both sections answer `w` with their own Close: the Consultation's (ADR
-		// 0032) and the Ticket work cycle's (ADR 0031). A key belongs to one mode,
-		// so the guide lists the other section's Close among the control-plane
-		// controls it catalogues on its own terms, never as this mode's key.
+	test("each section's Close claims its own key: the Ticket's w, the Consultation's Delete", () => {
+		// The two Closes answer different keys: the Ticket work cycle's (ADR
+		// 0031) stays on `w`, the Consultation's takes the Delete key the Work
+		// queue removes an item with. A key belongs to one mode, so the guide
+		// lists the other section's Close among the control-plane controls it
+		// catalogues on its own terms, never as this mode's key.
 		const consultation = facts("consultation-detail", {
 			selectedConsultation: consultationWithPane,
 		});
-		expect(controlForKey({ name: "w" }, consultation)?.id).toBe("consultation-close");
+		expect(controlForKey({ name: "delete" }, consultation)?.id).toBe("consultation-close");
 		expect(guideGroupsFor(consultation, "consultation-close")).toContain(
 			"Current interaction mode",
 		);
@@ -1068,6 +1069,11 @@ describe("the shared control catalogue", () => {
 		expect(controlForKey({ name: "w" }, ticket)?.id).toBe("ticket-close");
 		expect(guideGroupsFor(ticket, "ticket-close")).toContain("Current interaction mode");
 		expect(guideGroupsFor(ticket, "consultation-close")).toEqual(["Control plane controls"]);
+		// Each key reaches its own section's Close alone: `w` answers nothing in
+		// the Consultation section, and the Delete key answers nothing in the
+		// Ticket section.
+		expect(controlForKey({ name: "w" }, consultation)).toBeUndefined();
+		expect(controlForKey({ name: "delete" }, ticket)).toBeUndefined();
 	});
 
 	test("the Ticket guide names Goto in its own section, and the Consultation guide omits it", () => {

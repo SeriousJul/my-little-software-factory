@@ -1401,7 +1401,7 @@ describe("Consultation close and cleanup through the UI", () => {
 							if (current === undefined) throw new Error(`no record for ${id8}`);
 							// The confirmation names the live Agent and the work the
 							// close keeps; a cancel leaves the state unchanged.
-							await openConsultationPanel(setup, "w", "the close confirmation", (f) =>
+							await openConsultationPanel(setup, "delete", "the close confirmation", (f) =>
 								f.includes("Close Consultation"),
 							);
 							const dialog = await settle(setup);
@@ -1417,11 +1417,11 @@ describe("Consultation close and cleanup through the UI", () => {
 							);
 							expect(state.consultationRecord.consultation(current.id)?.state).toBe(current.state);
 							// Reopen the dialog for the confirm.
-							await openConsultationPanel(setup, "w", "the close confirmation", (f) =>
+							await openConsultationPanel(setup, "delete", "the close confirmation", (f) =>
 								f.includes("Close Consultation"),
 							);
 						} else {
-							await openConsultationPanel(setup, "w", "the close panel", (f) =>
+							await openConsultationPanel(setup, "delete", "the close panel", (f) =>
 								f.includes("Close Consultation"),
 							);
 						}
@@ -1489,7 +1489,7 @@ describe("Consultation close and cleanup through the UI", () => {
 					await toConsultations(setup, "the consultations view", (f) =>
 						detailPaneText(f).includes("State: "),
 					);
-					await openConsultationPanel(setup, "w", "the close panel", (f) =>
+					await openConsultationPanel(setup, "delete", "the close panel", (f) =>
 						f.includes("Close Consultation"),
 					);
 					await confirmPanel(setup, "the failed cleanup status", (f) =>
@@ -1497,7 +1497,7 @@ describe("Consultation close and cleanup through the UI", () => {
 					);
 					expect(state.consultationRecord.consultation(FORCE_ID)?.state).toBe("closing");
 					// Retry offers force-close once the cleanup is stuck.
-					await openConsultationPanel(setup, "w", "the recovery close panel", (f) =>
+					await openConsultationPanel(setup, "delete", "the recovery close panel", (f) =>
 						f.includes("Close Consultation"),
 					);
 					await pressArrow(setup, "down", "the force-close action to be selected", (f) =>
@@ -1566,7 +1566,7 @@ describe("Consultation close and cleanup through the UI", () => {
 						messageRowOf(frame).includes(`${failed8} closed`);
 					// The first row closes the moment the key lands: no dialog
 					// stands between the key and the result.
-					await press(setup, "w", "the direct close", closed);
+					await press(setup, "delete", "the direct close", closed);
 					// The closed row leaves the open list, so the cursor holds the
 					// other one: it closes directly the same way.
 					const otherMissing =
@@ -1576,7 +1576,7 @@ describe("Consultation close and cleanup through the UI", () => {
 						(f) => detailPaneText(f).includes(`State: ${otherMissing ? "failed" : "missing"}`),
 						"the other Consultation under the cursor",
 					);
-					const frame = await press(setup, "w", "the second direct close", (f) =>
+					const frame = await press(setup, "delete", "the second direct close", (f) =>
 						messageRowOf(f).includes(`${otherMissing ? failed8 : missing8} closed`),
 					);
 					expect(state.consultationRecord.consultation(MISSING_DIRECT_ID)?.state).toBe("closed");
@@ -1606,7 +1606,7 @@ describe("Consultation close and cleanup through the UI", () => {
 						f.includes("no open Consultations"),
 					);
 					await press(setup, "f", "the closed history filter", (f) => f.includes("State: closed"));
-					await press(setup, "w", "the close refusal", (f) =>
+					await press(setup, "delete", "the close refusal", (f) =>
 						f.includes("the selected Consultation is already closed"),
 					);
 					expect(state.consultationRecord.consultation(CLOSED_DIRECT_ID)?.state).toBe("closed");
@@ -1649,7 +1649,7 @@ describe("Consultation close and cleanup through the UI", () => {
 						detailPaneText(f).includes("State: working"),
 					);
 					// The live Agent asks first: the confirmation stands open.
-					await openConsultationPanel(setup, "w", "the close confirmation", (f) =>
+					await openConsultationPanel(setup, "delete", "the close confirmation", (f) =>
 						f.includes("Close Consultation"),
 					);
 					// A refresh finds the Agent gone while the dialog is open, so
@@ -1668,7 +1668,7 @@ describe("Consultation close and cleanup through the UI", () => {
 					expect(detailPaneText(released)).toContain("State: missing");
 					// A missing Consultation closes directly: the key reaches the
 					// section, so no invisible panel was holding it.
-					await press(setup, "w", "the direct close after the panel let go", (f) =>
+					await press(setup, "delete", "the direct close after the panel let go", (f) =>
 						messageRowOf(f).includes(`${gone8} closed`),
 					);
 					expect(state.consultationRecord.consultation(CONFIRM_GONE_ID)?.state).toBe("closed");
@@ -2529,7 +2529,7 @@ describe("Consultation live-worktree launch through the UI", () => {
 					);
 					// The live Agent asks first: the confirmation names the Agent
 					// that is alive and the checkout the close keeps.
-					await openConsultationPanel(setup, "w", "the close confirmation", (f) =>
+					await openConsultationPanel(setup, "delete", "the close confirmation", (f) =>
 						f.includes("Close Consultation"),
 					);
 					const dialog = await settle(setup);
@@ -2847,7 +2847,7 @@ describe("The full Consultation operator flow", () => {
 					expect(bells.count()).toBe(3);
 					// Close stops the live Agent, so the confirmation asks first;
 					// the confirm takes down the owned workspace.
-					await openConsultationPanel(setup, "w", "the close confirmation", (f) =>
+					await openConsultationPanel(setup, "delete", "the close confirmation", (f) =>
 						f.includes("Close Consultation"),
 					);
 					// The awaiting-response state names the Agent that answered and
@@ -3487,7 +3487,7 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 					// A queued record holds no Agent to stop, so `w` closes it on the
 					// keypress: no confirmation panel, no cleanup command, and its
 					// Work queue item goes with the record out of `queued`.
-					await press(setup, "w", "the queued Consultation closed", (f) =>
+					await press(setup, "delete", "the queued Consultation closed", (f) =>
 						messageRowOf(f).includes(`${gone8} closed`),
 					);
 					expect(state.consultationRecord.consultation(queued.id)?.state).toBe("closed");

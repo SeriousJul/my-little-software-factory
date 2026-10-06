@@ -1035,7 +1035,7 @@ describe("the contextual Action bar", () => {
 					async (setup) => {
 						await crossToConsultations(setup);
 						await awaitFrame(setup, (f) => f.includes("State: opening"), "the consultations view");
-						await press(setup, "w", "the close confirmation", (f) =>
+						await press(setup, "delete", "the close confirmation", (f) =>
 							f.includes("Close Consultation"),
 						);
 						pressCtrlC(setup);

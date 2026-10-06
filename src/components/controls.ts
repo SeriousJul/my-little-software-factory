@@ -2063,9 +2063,13 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 	{
 		id: "consultation-close",
 		label: "Close",
-		// `w` closes the Consultation: `x` is the shared section toggle.
-		keys: () => ["w"],
-		keyLabel: "w",
+		// The Delete key closes the Consultation: the same key the Work queue
+		// removes an item with, so taking a Consultation out of the queue is
+		// one key in both sections. `w` is retired here - the Ticket section
+		// keeps it for its own Close, which ends a work cycle rather than
+		// removing a queue row.
+		keys: () => ["delete"],
+		keyLabel: "Delete",
 		scope: "control-plane",
 		actionBar: true,
 		priority: 50,

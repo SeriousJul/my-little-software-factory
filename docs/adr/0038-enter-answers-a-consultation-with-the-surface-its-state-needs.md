@@ -3,6 +3,9 @@
 Status: accepted
 Date: 2026-09-20
 
+Superseded in part by ADR 0114 where it names `w` for the Consultation close:
+the close and its panel answer the Delete key. Its Enter decisions hold.
+
 ## Context
 
 Enter carried two meanings in the Consultation section: the response on an

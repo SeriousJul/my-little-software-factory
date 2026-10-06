@@ -24,9 +24,10 @@ tickets.
   stuck one - a recovery panel with the options its state offers. The editor
   keeps your draft between starts, `Enter` sends the response, and `Esc`
   closes it with the draft saved.
-- `w` closes the selected Consultation. A close that stops a live agent
-  confirms first and names what it keeps; a `missing`, `failed`, `queued`, or
-  `unscheduled` one closes without a dialog.
+- The `Delete` key closes the selected Consultation - the same key the Work
+  queue removes an item with. A close that stops a live agent confirms first
+  and names what it keeps; a `missing`, `failed`, `queued`, or `unscheduled`
+  one closes without a dialog.
 - `d` deletes a closed or an unscheduled Consultation.
 - `s` schedules an `unscheduled` Consultation back into the Work queue.
 - `f` cycles the history filter through open, closed, and all. `r` refreshes

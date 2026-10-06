@@ -543,7 +543,7 @@ describe("the in-app Key guide", () => {
 					"Tab Toggle - marks the row under the cursor for the queue, and unmarks it",
 					"Del Clear search",
 					"Esc Cancel",
-					"w Close",
+					"Delete Close",
 					"Enter Recovery - opens the recovery surface a broken or stuck Consultation needs",
 					"Enter Respond",
 					"Enter Interact",

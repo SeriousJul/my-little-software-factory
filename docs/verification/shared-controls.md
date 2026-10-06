@@ -115,7 +115,7 @@ and `bun run test`.
 | Type-ahead shows its search, matches by substring, keeps an unmatched query with `no match`, edits with Backspace, clears with one key, and keeps query and value distinct | `test/shared-gallery.test.ts`, `test/handoff-frame.test.ts`, `test/override-panel.test.ts` | Passed |
 | The Action bar and Key guide agree with dispatch, and field editing is named in the guide | `test/key-guide.test.ts`, `test/action-bar.test.ts`, `test/consultation-frame.test.ts` | Passed |
 | Consultation list and Agent view navigation, response gating, recovery, history, close, delete, and refresh use the shared catalogue, and Enter opens the recovery surface each broken or stuck state needs (ADR 0038) | `test/controls.test.ts`, `test/consultation-frame.test.ts`, `test/shared-gallery.test.ts` | Passed |
-| Consultation close is key `w` in both Consultation modes (#80): a closed record refuses readably, a `missing` or a `failed` one closes directly, a live Agent stops behind the shared panel, a `closing` one opens the panel with its retry and force-close, and the Ticket section's `w` stays its own Close in each section's guide and bar | `test/controls.test.ts`, `test/consultation-frame.test.ts`, `test/action-bar.test.ts`, `test/key-guide.test.ts`, `test/shared-gallery.test.ts` | Passed |
+| Consultation close is the Delete key in both Consultation modes (#80, ADR 0114): a closed record refuses readably, a `missing`, a `failed`, or a `queued` one closes directly, a live Agent stops behind the shared panel, a `closing` one opens the panel with its retry and force-close, and the Ticket section's `w` stays its own Close in each section's guide and bar | `test/controls.test.ts`, `test/consultation-frame.test.ts`, `test/action-bar.test.ts`, `test/key-guide.test.ts`, `test/shared-gallery.test.ts` | Passed |
 | The Consultation close verifies the Agent's identity before it takes anything down (ADR 0044): the close's first herdr call is an `agent list` probe, a reused tab or pane id whose pane holds a bare shell or a foreign Agent retires the record with no command and its owned resources recorded as remaining, an unverified opening stays `closing` for a retry or a Force-close, an ambiguous name or an unreadable list refuses the cleanup as a recovery, a matched Agent that moved is followed and closed where it stands, and an unnamed herdr falls back to the stored session and then the stored pane | `test/consultation-operations.test.ts`, `test/consultation-frame.test.ts` | Passed |
 | The Consultation detail reads the Agent's session record as its body (operator input, agent text, tool notes), capped, and keeps the Agent view and captured history as its fallbacks | `test/turn-log.test.ts`, `test/consultation-detail.test.ts`, `test/consultation-frame.test.ts` | Passed |
 | The Consultation-only key `d` refuses in both Ticket base modes and in both Work queue modes with the section's own words, claims the key so nothing else answers it, and the guide and bar of each section that does not own it omits the control. `f` has two list owners now - the Ticket section's List filter and the Consultation section's History - so each section dispatches its own control there, and the Work queue, which owns neither, states the two owners' words in one sentence whichever candidate the catalogue reaches (ADR 0060) | `test/controls.test.ts`, `test/action-bar.test.ts`, `test/key-guide.test.ts`, `test/main-view-frame.test.ts`, `test/work-queue-frame.test.ts` | Passed |
@@ -482,12 +482,15 @@ pass. The screen-reader target remains unverified.
 ## The Ticket section's Close key (issue #83, ADR 0031)
 
 ADR 0031 makes key `w` a base-mode control of the Ticket section, in both base
-modes, on the key ADR 0032 freed. ADR 0037 later gave the same key to the
-Consultation section's close, so `w` closes whichever section holds the cursor:
-the catalogue resolves it per mode, and the Key guide of a Ticket pane lists the
-Consultation close among the control-plane controls it catalogues on its own
-terms, never as this mode's key (`test/controls.test.ts`). It refuses an `open`
-ticket with its reason, and asks first on every state that has work behind it.
+modes, on the key ADR 0032 freed. ADR 0037 later gave it to the Consultation
+section's close, and ADR 0114 moved that close to the Delete key the Work
+queue removes an item with - so `w` closes only the Ticket section's work
+cycle, and the Delete key closes the Consultation. A key the catalogue
+resolves to nothing in a section answers no control there, and the Key guide
+of a Ticket pane lists the Consultation close among the control-plane controls
+it catalogues on its own terms, never as this mode's key
+(`test/controls.test.ts`). It refuses an `open` ticket with its reason, and
+asks first on every state that has work behind it.
 The shared confirmation panel states who is alive - the Agent working, the pane
 herdr no longer lists, or the turn settled - and then what survives, read off
 that ticket's own environment: the worktree checkout and the workspace behind
@@ -659,9 +662,9 @@ state, or the record gone in its place. The Consultation section's list
 stands the record under the same ask word, with its state, its
 repository, and its start time beside it, the suffix held whole or dropped
 the way the Ticket row holds its repository. The Consultation
-section's own keys meet the `queued` record: `w` closes it without a dialog
-and takes its item out of the queue, and Enter refuses it in the section's
-words - its start is the Work queue's Enter. The Work queue's `Delete` takes
+section's own keys meet the `queued` record: the Delete key closes it without
+a dialog and takes its item out of the queue, and Enter refuses it in the
+section's words - its start is the Work queue's Enter. The Work queue's `Delete` takes
 the item out and leaves the record in `queued` state with its ask: the
 removal is the item's, not the record's (issue #91 lands the `unscheduled`
 state and the Consultation section's schedule-back, start-over-the-cap, and
@@ -724,8 +727,9 @@ alignment touched, by the automated checks rather than by this pass's walk:
 in the four base modes the catalogue-wide guard fails if a bar hint names a
 key the mode refuses while its guide does not name it, and the per-mode
 tests press each aligned key where dispatch claims it - `g` in the Ticket
-and the Consultation panes, `w` in each section's own modes, and `Enter` on
-the broken and stuck Consultations - and check the operation, while the
+and the Consultation panes, `w` in the Ticket section's modes, the Delete key
+in the Consultation section's modes, and `Enter` on the broken and stuck
+Consultations - and check the operation, while the
 refused keys refuse on the Message line and leave every row unchanged
 (`test/controls.test.ts`, `test/action-bar.test.ts`, `test/key-guide.test.ts`,
 `test/main-view-frame.test.ts`, `test/live-view.test.ts`,

@@ -931,7 +931,10 @@ describe("the merged Main view", () => {
 		seedConsultation(state, uid("6"));
 		try {
 			await booted(async (setup) => {
-				await awaitFrame(setup, (f) => f.includes("grill"), "the Consultation list");
+				// The row stands under the ask and the repository, the state word
+				// beside them: the repository is the row's own identity word at
+				// boot, before the observation demotes the record.
+				await awaitFrame(setup, (f) => f.includes("acme/factory"), "the Consultation list");
 				// The Consultation header and box sit below the Ticket
 				// section's: at this size the Ticket section holds the cursor,
 				// so the Consultation box keeps its minimum of three content
@@ -977,7 +980,9 @@ describe("the merged Main view", () => {
 					// such refusal here - the Ticket section owns it now (ADR 0060),
 					// and the ignored pile the empty list shows is the next test's.
 					const consultationSection = (frame: string) =>
-						rowsOf(frame).filter((row) => row.includes("Consultations") || row.includes("grill"));
+						rowsOf(frame).filter(
+							(row) => row.includes("Consultations") || row.includes("acme/factory"),
+						);
 					const ticketSection = (frame: string) => {
 						const rows = rowsOf(frame);
 						const header = rows.findIndex((row) => row.includes("Tickets"));
@@ -1035,7 +1040,14 @@ describe("the merged Main view", () => {
 		seedConsultation(state, uid("2"));
 		try {
 			await booted(async (setup) => {
-				const frame = await awaitFrame(setup, (f) => f.includes("grill"), "the Consultation list");
+				// The row stands under the ask and the repository, the state word
+				// beside them: the repository is the row's own identity word at
+				// boot, before the observation demotes the record.
+				const frame = await awaitFrame(
+					setup,
+					(f) => f.includes("acme/factory"),
+					"the Consultation list",
+				);
 				const rows = rowsOf(frame);
 				// The Ticket header with its mode cell, then the headers and the
 				// boxes, then the Message line and the Action bar: one frame, in
@@ -1051,9 +1063,13 @@ describe("the merged Main view", () => {
 				await crossToConsultations(setup);
 				const across = await settle(setup);
 				expect(rowsOf(across)[0]).toContain("● manual");
-				expect(actionBarRowOf(across)).toContain("w Close");
+				expect(actionBarRowOf(across)).toContain("Delete Close");
 				expect(actionBarRowOf(across)).toContain("f History");
-				expect(actionBarRowOf(across)).toContain("x Section");
+				// The packing at this width drops the two lowest-priority hints,
+				// Launch (40) and Section (45): the Delete key's wider label than
+				// the old `w` puts the Section hint past the edge at 120, and the
+				// Key guide keeps it. The Ticket bar above still shows its own.
+				expect(actionBarRowOf(across)).not.toContain("x Section");
 				// The corner's ink comes from the Theme the environment resolved:
 				// the mode's own role for the lamp and its word, and the room color
 				// for the seat reading under the cap (ADR 0024, ADR 0034).
@@ -1092,7 +1108,7 @@ describe("the merged Main view", () => {
 					for (const hint of [
 						"c Launch",
 						"f History",
-						"w Close",
+						"Delete Close",
 						"d Delete",
 						"s Schedule",
 						"Enter Start now",

@@ -3,6 +3,10 @@
 Status: accepted
 Date: 2026-09-19
 
+Superseded in part by ADR 0114: the Consultation close no longer takes `w`;
+it takes the Delete key the Work queue removes an item with, and the Ticket
+work-cycle close keeps `w`. Its confirmation decisions hold.
+
 ## Context
 
 ADR 0019 moved the Consultation close onto key `z` when `x` became the
