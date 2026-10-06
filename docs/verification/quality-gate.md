@@ -673,13 +673,15 @@ The write that ends a cycle moves the Ticket to `open` and to the next cycle in
 one step, and the queue's pickup claims the next cycle's start before the plane
 next renders. The `open` frame is therefore a moment the plane may never be
 handed, and `liveMode` derived the fallback from exactly that moment. The Live
-view now ends on the durable form of the same fact: the work cycle it opened on.
-`Panel`'s live variant and `PendingOverride` carry that cycle, so a route override
-that returns to the Live view returns to the cycle it left, and
-`src/components/app.ts` closes the screen when the Ticket's cycle moves.
+view now ends on the durable form of the same fact: the work cycle it opened on,
+the rule [ADR 0109](../adr/0109-the-live-view-is-one-work-cycles-screen.md)
+records. `Panel`'s live variant carries that cycle, and a route override holds
+the panel it returns to as one value, so a return to the Live view returns to the
+cycle it left, and `src/components/app.ts` closes the screen when the Ticket's
+cycle moves.
 
 The pin is `test/live-view.test.ts` - "the view ends on the work cycle it opened
-on, with no frame holding the open state (ADR 0072)": it ends the cycle and
+on, with no frame holding the open state (ADR 0109)": it ends the cycle and
 claims the next one in one turn of the event loop, with no projection read
 between the two writes, so the plane's first read finds the Ticket in flight in
 the next cycle and no frame ever holds `open`.
@@ -687,7 +689,7 @@ the next cycle and no frame ever holds `open`.
 | State | Result |
 | --- | --- |
 | The case on this tree | Green at 164.32 ms |
-| Probe: `panelTicket.workCycle === panel.workCycle` replaced by `true` in the `liveMode` derivation | That case red at 10105.23 ms with the last frame the Decision sub-mode, and the other 20 in the file green. The two routed-handoff cases stay green on an idle machine, which is why the deterministic case exists beside them |
+| Probe: `panelTicket.workCycle === panel.workCycle` replaced by `true` in the `liveMode` derivation | `bun test test/live-view.test.ts` alone: that case red at 5003.98 ms, which is `bun test`'s own 5000 ms per-test deadline, and the other 20 in the file green. The same mutation inside `bun run test` - the harness raises the per-test deadline to 10000 ms there - went red at 10105.23 ms with the last frame the Decision sub-mode. The two routed-handoff cases stay green on an idle machine, which is why the deterministic case exists beside them |
 
 ### What the wait exposed second: the keys outlive the frame
 
@@ -708,32 +710,70 @@ on an idle machine, which is what the new wait is written against. It waits that
 the bus holds no subscription outside the set taken while the plane rested in the
 base mode, which covers the surface remounting and the reopen being elided alike.
 
+The wait makes the test honest about the window; it does not close it for the
+operator. The plane still answers a keypress with a surface that already left
+the screen, and an Enter twice at normal speed is inside the window. That is a
+product race, filed as
+[issue #317](https://github.com/SeriousJul/my-little-software-factory/issues/317),
+and the answer recorded there is a guard at the dispatch, not only a wait behind
+it: `createControlDispatch` is the one loop every surface's keys run through, so
+a liveness flag on the subscription - down in a layout effect's cleanup, which
+React runs in the commit that unmounts the surface, before the frame is drawn -
+leaves a handler of an undrawn surface unable to act. This branch does not
+implement it: the guard needs its own measurement of how long a stale
+subscription stands, idle and under load, and the issue names that as its first
+step. What this branch ships is the reproduction the issue points at - the second
+Enter of the routed walk - and the wait that keeps the test off the race while
+the plane still carries it.
+
 ### The state assertion the earlier fallback moved
 
 The assertion beside the fallback read `["handed-off", "running"]`, which was true
 because `settle`'s fixed grace outlasted the queue's pickup. The waited-for
 fallback lands at the ask, before the pickup claims, so the first loaded run after
 the wait went red at 515.34 ms with `Expected to contain: "open"`. The set is now
-the file's `afterRouteAskStates`: `open`, `handed-off`, `running` - the three
-states a Ticket stands in once its route's ask ended its cycle - and the durable
-fact, the recorded `handed-off` decision, is asserted on its own line as before.
+the file's `statesAfterTheAsk`: `open`, `handed-off`, `running` - the window a
+Ticket is caught in just after its route's ask ended its cycle, not a domain set -
+and the durable fact, the recorded `handed-off` decision, is asserted on its own
+line as before.
 
 ### The sweep requirement 2 asks for
 
 The question was asked of every `settle` result that feeds a "must not contain"
-assertion, by script over `test/**` outside the harness, reading each site's
-assertions within 40 lines of the assignment, on `origin/main` at `518029e5`.
+assertion. The first version of this section printed counts without printing the
+rule that printed them, and a recount on the same tree did not reproduce them.
+The rule is written out below and the counts are re-run from it on both trees.
 
-| Count | Value |
-| --- | --- |
-| `settle(` call sites outside `test/app-harness.ts` | 304 |
-| Results assigned to a variable | 125 |
-| Assignment sites with any assertion on that result | 108 |
-| Assignment sites with at least one "must not contain" assertion | **40 sites, 45 assertions** |
-| Of those, sites where the absence is a transition the preceding wait does not cover | **6 sites, 7 assertions** |
-| Sites left as correct uses | 34 sites, 38 assertions |
+**The counting rule.** One script over a checkout's `test/` tree, six rules, in
+the order they read a file:
 
-The six that shared the mechanism, all now waited for:
+1. A **file** is every `*.ts` under `test/` except `test/app-harness.ts`.
+2. A **call site** is a line holding `settle(` with no `.` or word character
+   before it, so the harness function is named and a method of the same word is
+   not (`app.src.settle(...)`, `settleHandoff(...)`).
+3. An **assigned result** is a call site on a line matching
+   `(const|let) <name> = await settle(`. The bound `<name>` is the result.
+4. The **window** is the 40 lines from the assignment's own line.
+5. An assertion **reads the result** when its line holds `expect(` and the bound
+   name as a whole word. An assertion in the window whose receiver is anything
+   else is counted apart, as the loose reading.
+6. A **"must not contain" assertion** is one of those lines that also holds
+   `.not.toContain(`.
+
+| Count | `origin/main` at `518029e5` | This branch |
+| --- | --- | --- |
+| Files scanned | 156 | 156 |
+| Call sites | 306 | 300 |
+| Assigned results | 125 | 119 |
+| Sites with any assertion on the result | 111 | 105 |
+| Sites with a "must not contain" on the result | **40 sites, 43 assertions** | 34 sites, 36 assertions |
+| Sites where the window's "must not contain" reads another receiver | 20 sites, 26 assertions | 20 sites, 26 assertions |
+| Of the 40, sites where the absence is a transition the preceding wait does not cover | **6 sites, 7 assertions** | 0 sites |
+
+The last row is the judgement, not arithmetic, and it is the row the fix works
+on: which of the 40 absences names a screen or a badge a later render takes
+away. The site rows below name the base tree's line numbers, since that is where
+the sweep read them. The 6 that shared the mechanism, all now waited for:
 
 | Site | The absence it asserted on a quiet frame |
 | --- | --- |
@@ -757,6 +797,40 @@ run's settle brings *no* decision screen back, and `test/repository-select-panel
 repeats an absence its `closeOverlay` call has already waited for. Both are
 non-effects, so both keep `settle`.
 
+**The same class on a `press` result.** The rule above is scoped to a `settle`
+result, and `press`, `pressArrow`, `pressReturn`, and `pressEnter` hand back a
+frame too - the first frame carrying their predicate - so the same question was
+asked with rule 3 widened to
+`(const|let) <name> = await (press|pressArrow|pressReturn|pressEnter)(`: on the
+base tree, 181 assigned press results and **35 sites with a "must not contain"
+on the press result**. The judgement that narrows 35 is the settle side's and is
+a read, not a count: the class is an absence of a screen a later render takes
+away, and 34 of the 35 assert a non-effect on the very frame the key's own
+predicate names - a panel that did not open (`test/auto-mode.test.ts:2328`), a
+cursor that did not move (`test/decision-modal.test.ts:324`), a Message line that
+stayed a notice (`test/main-view-frame.test.ts:699`), a badge a row keeps
+(`test/starting-face.test.ts:338`). One site shared the mechanism, and the review
+round found it outside this sweep's own scope:
+
+| Site | The absence |
+| --- | --- |
+| `test/plane-action-merge.test.ts:2325` | The Decision screen gone after the merge ask's confirm, asserted on the frame that carries the ask's Message line - one wait earlier than `test/auto-mode.test.ts:2535`, the same story |
+
+Its wait now takes the absence it asserts: the predicate reads
+`messageRowOf(f).includes("... is in the Work queue") && !f.includes("Decision:")`,
+so the frame the press returns is the fallen-back list, and a fallback that has
+not started cannot pass it.
+
+**What the sweep cannot prove, in both directions.** The 34 left alone are right
+in the flake direction: `settle` measures a non-effect, and a non-effect has no
+transition to miss. The other direction is a false pass, and the sweep does not
+close it: an effect that lands after `settle`'s 300 ms cap is asserted away by
+the same absence, and nothing here distinguishes it from a non-effect, because a
+test that passes leaves no evidence. The two are told apart only by holding the
+transition and watching the assertion go red, which is what the reproduction did
+for the 6. A site whose transition is merely slow looks, from this sweep, exactly
+like a site whose absence is a non-effect.
+
 The harness helpers that hand back a `settle` result (`openPanel`, `openGuide`,
 `openMessageView`, `openLauncher`, `openSurface`, `closeOverlay`, `pressQuiet`,
 `pressEnterQuiet`, `tabUntilSlot`) were asked the same question: each waits its
@@ -772,11 +846,26 @@ refuse the majority of its own uses. The rule stands where a writer reads it: on
 
 | Check | Result |
 | --- | --- |
-| `bun run lint` | Clean over 306 files in 140 ms |
+| `bun run lint` | Clean over 306 files in 147 ms |
 | `bun run typecheck` | Clean |
-| `bun run docs:build` | Complete in 1.60 s |
-| `bun run test`, one full run, load 7.50 before | 3068 pass / 0 fail across 139 files in 39.80 s (17,190 `expect()`) |
-| `bun test test/live-view.test.ts` alone | 21 pass / 0 fail in 10.23 s (102 `expect()`) |
+| `bun run docs:build` | Complete in 1.63 s |
+| `bun run test`, the gate run, load 14.3 before, no other `bun test` on the machine | 3068 pass / 0 fail across 139 files in 43.74 s (17,070 `expect()`) |
+| `bun run test`, two earlier runs on the same head | 3068 pass / 0 fail in 43.86 s (17,270 `expect()`); 3067 pass / 1 fail in 44.59 s (17,069 `expect()`), the one red recorded below |
+| `bun test test/live-view.test.ts` alone | 21 pass / 0 fail in 10.22 s (102 `expect()`) |
+
+The `expect()` total is a per-run measurement, not a property of the tree: three
+runs of one head printed 17,069, 17,070, and 17,270, because a test that asserts
+inside a loop - the scroll walks, the frame sweeps - calls `expect()` as many
+times as it iterates. A recorded total therefore names its run.
+
+The one red of the earlier run is recorded as a load flake, per `AGENTS.md`:
+`test/repository-select-panel.test.ts` - **a failed act stops the queue, and
+names the repository on the line** - at 10743.67 ms, which is
+[issue #311](https://github.com/SeriousJul/my-little-software-factory/issues/311)'s
+frame-deadline class at the local deadline, the same case the table below names
+on both trees. It passes alone at 158.21 ms (13 pass / 0 fail in 1.99 s), and the
+machine's load average was 16.26 while that suite ran. The gate run above is
+green on the same head.
 
 The same load rig, three full runs on this tree, against the three recorded above
 on `origin/main`:
@@ -798,6 +887,32 @@ screenshot fixture. They stand on both trees at this load and are not answered h
 | The same coalescing on other surfaces | Not swept. `liveMode` is the only derivation this branch found that reads a state the write only passes through; the Decision modal closes in the key handler's own turn, and the failed-route case the sweep fixed rests `open` durably, so neither shares the exposure. No other surface was checked |
 | The loaded runs as a rate | Three runs per tree is not a rate. The base tree missed 3 of 18 routed cases; this branch missed 0 of 18 in its three runs, and 18 cases cannot separate a 1-in-6 rate from a 1-in-20 one |
 | The screen-reader path, the live terminal walk, and the theme inheritance inside a real herdr | Open, unchanged, as [the shared control record](./shared-controls.md) states |
+
+### The review rework round (2026-10-06)
+
+The review of pull request #316 scored the branch 80 / 100 and asked for eight
+changes. Each is recorded with what it became, and the two numbers the review
+re-measured are corrected in the gate table above.
+
+| The review asked for | What it became |
+| --- | --- |
+| The domain rule is not in the domain docs | `CONTEXT.md`'s Live view entry states the cycle bound as a fact of the screen, [docs/operation/live-view.md](../operation/live-view.md) tells it to the operator, and [ADR 0109](../adr/0109-the-live-view-is-one-work-cycles-screen.md) states the decision, its considered options, and the general rule: a screen bounded by a transition reads the durable form of it, not a state the write only passes through. ADR 0072 stands unedited, corrected there for the screen |
+| The key-release window is a product race | Filed as [issue #317](https://github.com/SeriousJul/my-little-software-factory/issues/317) with the reproduction, the mechanism, and the guard the fix should take. The plane will guard it at the dispatch, not only wait behind it; this branch ships the wait and the reproduction, and the issue owns the guard |
+| The sweep's counts do not re-run | The counting rule is written out as six rules, and the counts are re-run from it on `origin/main` at `518029e5` and on this branch. The conclusion stands: the same 6 sites, and no unfixed site of the class |
+| One same-class assertion sits on a `press` result | `test/plane-action-merge.test.ts:2325` now waits for the absence it asserts, in the press's own predicate. The press-side sweep is recorded with its own rule and its 35 mechanical hits, 34 of them read as non-effects |
+| `PendingOverride` mirrors the Live panel field by field | The workflow variant holds `returnTo`, one value of type `Extract<Panel, { kind: "decision" | "live" }>`, and `cancelOverride` and the confirm hand it to `setPanel` unchanged. A field the Live panel grows later is carried by the compiler, with no second list to keep in step |
+| Three copies of the bus loop, one of them able to pass for free | `awaitKeyBus` owns the poll, and the three waits are its predicates. `awaitBaseKeyHandlers`' doc states the branch it cannot see - it returns at once when the bus holds only `base` - the two rules a caller must meet for the wait to mean anything, and what to use instead; both call sites state the rule they meet |
+| The `test/work-queue-frame.test.ts:1166` wait takes an absence its assertions do not read | Its predicate now takes the row and the badge the assertions read: the row naming `Add a webhook` wearing `[open]`. A frame with no rows fails the wait |
+| Two recorded numbers | The `expect()` count and the mutation probe are restated above with the command each came from: 17,070 for the gate run, beside the two other runs of the same head, because the total moves with the loop counts; and 5003.98 ms for the probe under `bun test test/live-view.test.ts`, against 10105.23 ms inside `bun run test` |
+
+Two notes the review did not require were taken: the state set beside the
+fallback is named `statesAfterTheAsk`, so the name says it is a window and not a
+domain set, and the sweep states what it cannot prove in the false-pass
+direction, not only in the flake direction.
+
+The rework changed waits, names, and a type. It added no behavior to the plane
+beyond the cycle check the first round recorded, so the three loaded runs against
+the base tree, recorded above, stand as the branch's load evidence.
 
 ## What was not measured
 

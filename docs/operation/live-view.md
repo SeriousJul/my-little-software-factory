@@ -40,6 +40,12 @@ When the agent leaves herdr, the screen carries the
 [missing modal](modals.md) in its place. A settled turn the factory decides
 for itself never hands the screen over: the pane keeps streaming.
 
+The Live view is one work cycle's screen. A route you confirm ends the ticket's
+cycle under it, so the screen closes with the cycle and the list is drawn again -
+on the frame that already shows the next cycle, the way it shows the ticket
+`open`, or on the one after that where the next start has already taken the
+cycle (ADR 0072, ADR 0109).
+
 ## The turn log
 
 ![The same Live view after the turn settles: the border re-titled to
