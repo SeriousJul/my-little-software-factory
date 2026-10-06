@@ -404,6 +404,7 @@ _Avoid_: jump, follow, attach
 **Handoff**:
 Assigning a ticket to an agent type and an environment with a task type, and starting the agent's execution.
 It asks Herdr for the ticket's stable Agent name, which names that ticket and no other (ADR 0098), and takes the name of its work cycle when the ticket's own Leftover environment still holds the stable one.
+A worktree Handoff of a pull request ticket works the branch its pull request holds - the issue and the pull request of one cycle share the branch, the worktree, and the workspace - and works the ticket's own factory branch only when the pull request's branch cannot stand in the repository (ADR 0112).
 When a pane the plane cannot tie to the ticket holds the stable name, the start fails and leaves the Agent name collision on the ticket (ADR 0107).
 _Avoid_: assign, dispatch, launch
 
