@@ -188,7 +188,7 @@ not the same. Four things are:
 | The wait | Every deadline miss ends in `awaitFrame` or `awaitNewKeyHandler` in `test/app-harness.ts`, against `FRAME_DEADLINE_MS`: 10000 ms here, 20000 ms on CI. Local misses land at 10180 to 11453 ms, remote ones at 20155 to 21088 ms |
 | The file set | Only tests that boot the real renderer and the real state database. No unit file has gone red |
 | The exposure | The cases that fail hold the most waits in one test: 8 `awaitFrame` waits in `test/repository-select-panel.test.ts` - a failed act stops the queue, about 9 in `test/repo-init-stub.test.ts` - the TUI walk of the init, about 16 in `test/main-view-frame.test.ts` - the scroll round trip. Which file loses one is which worker got starved that run |
-| Three mechanisms, not one | #302 misses a deadline (10000 ms local, 20000 ms CI). #303 fails at 796 to 1282 ms on a fixed `sleep(150)` in `stepUntilRow`. A third, filed as [issue #304](https://github.com/SeriousJul/my-little-software-factory/issues/304), fails fast at 360 to 425 ms because `settle` reads a stable frame as a finished transition: `test/live-view.test.ts` asserted on a `settle` result and caught the Live view still open. #303 is the most frequent local failure, so fixing it alone would quiet the noise while #302 and #304 stand |
+| Three mechanisms, not one | #302 misses a deadline (10000 ms local, 20000 ms CI). #303 fails at 796 to 1282 ms on a fixed `sleep(150)` in `stepUntilRow`. A third, filed as [issue #304](https://github.com/SeriousJul/my-little-software-factory/issues/304), fails fast at 360 to 425 ms because `settle` reads a stable frame as a finished transition: `test/live-view.test.ts` asserted on a `settle` result and caught the Live view still open. #303 is the most frequent local failure, so fixing it alone would quiet the noise while #302 and #304 stand. #304 is answered on 2026-10-06 in [the section below](#issue-304-settle-reads-a-stable-frame-as-a-finished-transition-2026-10-06-the-fix), and what that fix exposed is the Live view missing its fallback outright |
 
 A final full run at `50b4a51f`, load 6.66 before, went red three times in 40.39 s:
 the screenshot fixture at 1244.35 ms (#303), `test/live-view.test.ts` at 360.95 ms
@@ -623,6 +623,181 @@ red is filed.
 | Whether the other three remote misses share this mechanism | Not measured. `src/components/ticket-detail.ts` is the only surface under `src/` that reads the renderer's `frame` event, so the mechanism measured here cannot be what `test/consultation-frame.test.ts` - a live checkout conflict blocks the launch until one explicit confirm - and `test/repository-select-panel.test.ts` - Esc closes the list and keeps the base frame - miss on. The pair is green run together here (71 pass / 0 fail in 23.56 s), and that is a scoped run, not the full suite: the panel case did go red inside a full suite on this head, at 10479.56 ms. The class that survives this fix now stands filed as [issue #311](https://github.com/SeriousJul/my-little-software-factory/issues/311) instead of staying open under #302 |
 | The ordering flip that let a remote run miss at all | Still not pinned. The two probes the section above record stayed green, and this branch does not reproduce the miss; it removes the wait that made the miss a 20-second failure instead of a repaint the next key would have hidden. What is pinned is the contract: no surface can bring the offset back by waiting |
 | The live terminal walk, the screen-reader path, and the theme inheritance inside a real herdr | Open, unchanged, as [the shared control record](./shared-controls.md) states |
+
+## Issue #304: `settle` reads a stable frame as a finished transition (2026-10-06, the fix)
+
+[Issue #304](https://github.com/SeriousJul/my-little-software-factory/issues/304)
+is the third mechanism of [the section above](#what-the-failures-have-in-common):
+`settle` in `test/app-harness.ts` waits out a 30 ms grace and returns once the
+frame has stopped changing, so it measures quiet, not finished. The routed-handoff
+cases in `test/live-view.test.ts` asserted on that result that the Live view had
+fallen back to the list, and a loaded runner handed them the Live view still
+streaming the new pane.
+
+The fix is the wait the issue names, and the wait then exposed two facts the fixed
+grace had been covering: the Live view can miss its fallback outright, and the
+frame falls back before the closing surface releases its keys. Both are recorded
+below with the measurement that found them.
+
+### The reproduction, on the real application flow
+
+The load rig is 96 bash busy loops (`while :; do :; done`) started beside
+`bun run test`, which is the state the miss needs: the machine's own load average
+was 13 to 16 before the rig and 96 to 98 during the runs. A local inference
+engine held about 860 % CPU through every run here, and no other `bun test`
+process was running.
+
+| State | Result |
+| --- | --- |
+| The miss, on `origin/main` at `518029e5`, first reproduction (load 29 before the run) | `test/live-view.test.ts` - a routed handoff from the decision sub-mode falls back to the list, and the Live view follows the new pane (ADR 0072) - red at 525.80 ms on `expect(listFrame).not.toContain("Live: Persist source facts")`, inside a full suite. The frame the assertion received is the Live view fully painted: its `Live: Persist source facts` border, its Agent body reading `the reviewer is on it` (the new pane), and `Warning: "Persist source facts" started from the Work queue` on the Message line. That is the shape the issue prints, and it is a stable frame, not a missing one |
+| The same tree, three full runs at the load rig | Red in 3 of 3 runs on one of the two routed cases: 584.42 ms, 754.31 ms, 544.61 ms. 18 routed cases ran, 3 missed |
+| The same file alone | 20 pass / 0 fail in 10.05 s, every time it was run alone |
+
+### What the wait exposed first: the plane can miss the fallback entirely
+
+With only the test change the issue names - `awaitFrame` on `!f.includes("Live:")`
+- the same load did not go green. It went red at the frame deadline instead: 3 of 3
+runs at 10434.11, 10472.98, and 10542.26 ms, with the last frame the Live view
+still open. A wait cannot pass a fact the plane never produces, so the fallback
+itself was the defect.
+
+A probe recorded every render of the App while the confirm ran, as `panel`,
+`liveMode`, the projected ticket `state`, and `workCycle`:
+
+| Run | The render sequence after the confirm |
+| --- | --- |
+| Green run | `panel=live liveMode=decision pstate=awaiting cycle=1` then `panel=live liveMode=closed pstate=open cycle=2` then `panel=-`. One render holds the `open` state, and the screen falls back in it |
+| Red run, 3 of 3 at the load rig | `panel=live liveMode=decision pstate=awaiting cycle=1` then `liveMode=stream pstate=handed-off cycle=2` then `liveMode=stream pstate=running cycle=2`, over 404, 419, and 428 renders, and **no render holds `open` at all** |
+
+The write that ends a cycle moves the Ticket to `open` and to the next cycle in
+one step, and the queue's pickup claims the next cycle's start before the plane
+next renders. The `open` frame is therefore a moment the plane may never be
+handed, and `liveMode` derived the fallback from exactly that moment. The Live
+view now ends on the durable form of the same fact: the work cycle it opened on.
+`Panel`'s live variant and `PendingOverride` carry that cycle, so a route override
+that returns to the Live view returns to the cycle it left, and
+`src/components/app.ts` closes the screen when the Ticket's cycle moves.
+
+The pin is `test/live-view.test.ts` - "the view ends on the work cycle it opened
+on, with no frame holding the open state (ADR 0072)": it ends the cycle and
+claims the next one in one turn of the event loop, with no projection read
+between the two writes, so the plane's first read finds the Ticket in flight in
+the next cycle and no frame ever holds `open`.
+
+| State | Result |
+| --- | --- |
+| The case on this tree | Green at 164.32 ms |
+| Probe: `panelTicket.workCycle === panel.workCycle` replaced by `true` in the `liveMode` derivation | That case red at 10105.23 ms with the last frame the Decision sub-mode, and the other 20 in the file green. The two routed-handoff cases stay green on an idle machine, which is why the deterministic case exists beside them |
+
+### What the wait exposed second: the keys outlive the frame
+
+With the fallback waited for and the plane fixed, the next step of the walk -
+Enter to reopen the Live view - timed out at 10472.98 ms with
+`Warning: ticket github:github.com:I_5 already decided` on the Message line: the
+frame falls back before the closing surface's effect cleanup removes its key
+handler, and the Enter reached that stale handler, which ran the route row again.
+This is the window `test/app-harness.ts` documents above `awaitGoneKeyHandler`,
+and both routed cases now wait for the release.
+
+They wait with a new harness wait, `awaitBaseKeyHandlers`, because
+`awaitGoneKeyHandler` cannot name the handler here: the override path's confirm
+returns to the Live view, and that reopen can be elided when the cycle's write
+lands in the same render, so no handler of that surface ever joins the bus. A
+probe that waited for the join with `awaitNewKeyHandler` timed out at 10455.16 ms
+on an idle machine, which is what the new wait is written against. It waits that
+the bus holds no subscription outside the set taken while the plane rested in the
+base mode, which covers the surface remounting and the reopen being elided alike.
+
+### The state assertion the earlier fallback moved
+
+The assertion beside the fallback read `["handed-off", "running"]`, which was true
+because `settle`'s fixed grace outlasted the queue's pickup. The waited-for
+fallback lands at the ask, before the pickup claims, so the first loaded run after
+the wait went red at 515.34 ms with `Expected to contain: "open"`. The set is now
+the file's `afterRouteAskStates`: `open`, `handed-off`, `running` - the three
+states a Ticket stands in once its route's ask ended its cycle - and the durable
+fact, the recorded `handed-off` decision, is asserted on its own line as before.
+
+### The sweep requirement 2 asks for
+
+The question was asked of every `settle` result that feeds a "must not contain"
+assertion, by script over `test/**` outside the harness, reading each site's
+assertions within 40 lines of the assignment, on `origin/main` at `518029e5`.
+
+| Count | Value |
+| --- | --- |
+| `settle(` call sites outside `test/app-harness.ts` | 304 |
+| Results assigned to a variable | 125 |
+| Assignment sites with any assertion on that result | 108 |
+| Assignment sites with at least one "must not contain" assertion | **40 sites, 45 assertions** |
+| Of those, sites where the absence is a transition the preceding wait does not cover | **6 sites, 7 assertions** |
+| Sites left as correct uses | 34 sites, 38 assertions |
+
+The six that shared the mechanism, all now waited for:
+
+| Site | The absence it asserted on a quiet frame |
+| --- | --- |
+| `test/live-view.test.ts:1042` | The Live view gone after the route confirm - the case the issue names |
+| `test/live-view.test.ts:1200` | The same, through the override (2 assertions) |
+| `test/auto-mode.test.ts:2535` | The Decision screen gone after a failed route |
+| `test/work-queue-frame.test.ts:781` | The cursor gone from the queue a Delete emptied |
+| `test/work-queue-frame.test.ts:903` | The `[queued]` badge gone from the row whose start was cancelled |
+| `test/work-queue-frame.test.ts:1148` | The same on the route item's own row |
+
+The 34 left alone assert a non-effect, which is what `settle` measures: a refused
+control that opens no panel (`test/action-bar.test.ts`, `test/handoff-frame.test.ts`,
+`test/source-frame.test.ts`), a key a surface does not take
+(`test/key-guide.test.ts`, `test/consultation-frame.test.ts`), a row that keeps its
+badge, a header that drops a cell, a boot frame with no warning on it
+(`test/theme-frame.test.ts`, `test/ticket-grouping-frame.test.ts`,
+`test/work-queue-frame.test.ts:398`), and a Message line that stays a notice rather
+than a Working line (`test/message-line.test.ts`). Two of them were read twice
+before they were left: `test/plane-action-merge.test.ts:2342` asserts that the
+run's settle brings *no* decision screen back, and `test/repository-select-panel.test.ts:175`
+repeats an absence its `closeOverlay` call has already waited for. Both are
+non-effects, so both keep `settle`.
+
+The harness helpers that hand back a `settle` result (`openPanel`, `openGuide`,
+`openMessageView`, `openLauncher`, `openSurface`, `closeOverlay`, `pressQuiet`,
+`pressEnterQuiet`, `tabUntilSlot`) were asked the same question: each waits its
+own fact first - the open frame, the key subscription, the close - so the frame
+they return is after a wait, not after quiet. None of them carries the mechanism.
+
+No automated check was added for this class. A "must not contain" on a `settle`
+result is the *correct* shape for 34 of the 40 sites, so a syntactic check would
+refuse the majority of its own uses. The rule stands where a writer reads it: on
+`settle`'s own doc comment in `test/app-harness.ts`.
+
+### The gate on this branch
+
+| Check | Result |
+| --- | --- |
+| `bun run lint` | Clean over 306 files in 140 ms |
+| `bun run typecheck` | Clean |
+| `bun run docs:build` | Complete in 1.60 s |
+| `bun run test`, one full run, load 7.50 before | 3068 pass / 0 fail across 139 files in 39.80 s (17,190 `expect()`) |
+| `bun test test/live-view.test.ts` alone | 21 pass / 0 fail in 10.23 s (102 `expect()`) |
+
+The same load rig, three full runs on this tree, against the three recorded above
+on `origin/main`:
+
+| Tree | Routed-handoff reds in 3 runs | Other reds in the same runs |
+| --- | --- | --- |
+| `origin/main` at `518029e5` | 3 of 3 runs (584.42, 754.31, 544.61 ms) | 11 misses: the scroll round trip, the init TUI walk, the repository select queue and its Esc case, the Consultation launch, the pseudo-terminal paste case, the screenshot fixture, the Action bar `q` case |
+| This branch | 0 of 3 runs, and 0 of the 18 routed cases in them | 15 misses, the same class: the scroll round trip twice, the detail's withheld-frame case, the init TUI walk, the repository select queue and its Esc case, the Consultation launch, the screenshot fixture twice, the Action bar `q` case twice, and the two pseudo-terminal cases (the launcher walk, the non-digit paste) |
+
+The other misses are [issue #311](https://github.com/SeriousJul/my-little-software-factory/issues/311)'s
+frame-deadline class and [issue #303](https://github.com/SeriousJul/my-little-software-factory/issues/303)'s
+screenshot fixture. They stand on both trees at this load and are not answered here.
+
+### What this branch did not measure
+
+| Item | State |
+| --- | --- |
+| Why no render held the `open` state | Not pinned. The render log shows the plane was never handed a projection with the Ticket `open`; whether the update was coalesced inside React or the projection read fell between the two writes was not measured. The fix does not depend on which: the cycle number is durable under both |
+| The same coalescing on other surfaces | Not swept. `liveMode` is the only derivation this branch found that reads a state the write only passes through; the Decision modal closes in the key handler's own turn, and the failed-route case the sweep fixed rests `open` durably, so neither shares the exposure. No other surface was checked |
+| The loaded runs as a rate | Three runs per tree is not a rate. The base tree missed 3 of 18 routed cases; this branch missed 0 of 18 in its three runs, and 18 cases cannot separate a 1-in-6 rate from a 1-in-20 one |
+| The screen-reader path, the live terminal walk, and the theme inheritance inside a real herdr | Open, unchanged, as [the shared control record](./shared-controls.md) states |
 
 ## What was not measured
 

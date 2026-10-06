@@ -1264,6 +1264,119 @@ describe("the Live view against a running factory", () => {
 		app.state.close();
 	});
 
+	test("the view ends on the work cycle it opened on, with no frame holding the open state (ADR 0072)", async () => {
+		// The route's ask ends the cycle in one write, and the queue's pickup claims
+		// the next cycle's start before the plane next reads the projection, so the
+		// screen can be handed the next cycle's frame and never see the open state
+		// at all (issue #304). The two writes run here by hand, with no projection
+		// read between them, and the view still has to end: the cycle it opened on
+		// is the fact it ends on, not the state a frame happens to catch.
+		const app = seededApp();
+		app.runner.set("herdr", ["agent", "list"], {
+			stdout: agentListJson([
+				{
+					paneId: "pane-1",
+					tabId: "tab-1",
+					workspaceId: "ws-1",
+					agent: "persist-source-facts",
+					status: "working",
+					sessionId: settledSession("the implementer is finishing"),
+				},
+			]),
+		});
+		app.runner.set("herdr", [...READ("pane-1")], {
+			stdout: "the implementer is finishing\n",
+		});
+
+		await withApp(
+			async (setup) => {
+				app.src.settle(success);
+				await awaitFrame(setup, (f) => f.includes("Persist source facts"), "the ticket row");
+				await pressReturn(setup, "the Live view", (f) => f.includes("Live: Persist source facts"));
+				await awaitFrame(setup, (f) => f.includes("the implementer is finishing"), "the stream");
+				// The turn settles, so the Ticket rests awaiting with the ask owed:
+				// the state the route's ask ends.
+				app.runner.set("herdr", ["agent", "list"], {
+					stdout: agentListJson([
+						{
+							paneId: "pane-1",
+							tabId: "tab-1",
+							workspaceId: "ws-1",
+							agent: "persist-source-facts",
+							status: "done",
+							sessionId: settledSession("the implementer is finishing"),
+						},
+					]),
+				});
+				await awaitFrame(
+					setup,
+					(f) => f.includes("Decision: Persist source facts") && f.includes("Handoff: review"),
+					"the decision",
+				);
+				const attempt = app.state.handoff.latestHandoff(identity);
+				expect(attempt).not.toBeNull();
+				// The ask's write: the decision lands and the cycle ends with it.
+				expect(
+					app.state.ticketWorkCycle.applyCompletionDecision({
+						ticketIdentity: identity,
+						handoffId: attempt?.handoffId ?? "",
+						decision: "handed-off",
+						decidedAt: "2026-08-31T11:00:00Z",
+					}),
+				).toBe(true);
+				// The pickup's claim, in the same turn of the event loop: the Ticket
+				// goes straight from its settled turn to the next cycle's in-flight
+				// state, and no read of the projection can stand between them.
+				const claim = app.state.handoff.claimHandoff(
+					identity,
+					{
+						agentType: "pi",
+						environment: "live-worktree",
+						taskType: "review",
+						model: "",
+						thinking: "",
+						contextWindow: "",
+					},
+					"open",
+				);
+				if (!claim.ok) throw new Error(claim.reason);
+				app.state.handoff.settleHandoff(claim.claim.attemptId, true, undefined, {
+					paneId: "pane-9",
+					tabId: "tab-9",
+					workspaceId: "ws-1",
+				});
+				expect(app.state.ticketWorkCycle.ticketState(identity)).toBe("handed-off");
+				// The new agent is live in herdr, so the observation reports it and
+				// the plane reads the projection again: the first read that can see
+				// the Ticket at all finds it in the next cycle, in flight.
+				app.runner.set("herdr", ["agent", "list"], {
+					stdout: agentListJson([
+						{
+							paneId: "pane-9",
+							tabId: "tab-9",
+							workspaceId: "ws-1",
+							agent: "persist-source-facts",
+							status: "working",
+						},
+					]),
+				});
+				app.runner.set("herdr", [...READ("pane-9")], { stdout: "the reviewer is on it\n" });
+				// The screen ends on the cycle, so the list is drawn again with the
+				// Ticket's own row on it.
+				const frame = await awaitFrame(
+					setup,
+					(f) => f.includes("┌─❯ Tickets") && !f.includes("Live:"),
+					"the Live view to end with its work cycle",
+				);
+				expect(frameText(frame)).toContain("Persist source facts");
+			},
+			WIDTH,
+			HEIGHT,
+			propsOf(app),
+		);
+		app.state.close();
+	});
+
 	test("the cycle ending while the view is open closes the screen", async () => {
 		// A task type the factory closes by itself: the transition fires and
 		// derives no Next step, so the turn can only end the cycle, never hand
