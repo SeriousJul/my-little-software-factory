@@ -86,6 +86,22 @@ export function truncateTailToWidth(text: string, width: number): string {
 /** The cut marker: one cell, and never ambiguous with a model name. */
 const ELLIPSIS = "…";
 
+/**
+ * The first line of a multi-line text that holds a character, trimmed.
+ *
+ * A list row stands one line: the Consultation's opening prompt can carry
+ * more, and the row keeps the line that names the ask. The blank prompt
+ * yields "", so the caller holds the word the row fell back to.
+ */
+export function firstLineOf(text: string): string {
+	return (
+		text
+			.split("\n")
+			.map((line) => line.trim())
+			.find((line) => line !== "") ?? ""
+	);
+}
+
 /** Pad a string with trailing spaces to exactly `width` cells. */
 export function padToWidth(text: string, width: number): string {
 	const w = widthOf(text);

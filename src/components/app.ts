@@ -698,8 +698,8 @@ export function App({
 	// The row the list draws, from the one conversion the detail reads too
 	// (ADR 0034, issue #90): the item's ticket by its title while the ticket
 	// is still in the projection, by its identity once it is gone, the
-	// Consultation's item by the record's identity prefix and the record's
-	// type, and the task type the start runs in every row's cell.
+	// Consultation's item by the ask the operator typed and the record's type,
+	// and the task type the start runs in every row's cell.
 	const workQueueRows: readonly WorkQueueRow[] = workQueueRowFacts(workQueue, {
 		ticketTitle: (identity) =>
 			// The projection before the list rule (ADR 0042, ADR 0060): a waiting
@@ -707,6 +707,7 @@ export function App({
 			// the raw identity the row would fall back to.
 			findTicket(identity)?.title,
 		consultationType: (id) => consultations.find((record) => record.id === id)?.typeName,
+		consultationInput: (id) => consultations.find((record) => record.id === id)?.initialInput,
 		planeActionMethod: (taskType) =>
 			planeActionSettingOf(configRef.current.taskTypes, taskType)?.method,
 	});

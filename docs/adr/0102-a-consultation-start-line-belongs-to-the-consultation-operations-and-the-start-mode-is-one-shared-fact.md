@@ -90,8 +90,10 @@ place so they cannot drift.
   no line, and a start that claims nothing - a record that left the queue's
   wait, a type that left the config - writes none either.
 - A Consultation line's `origin` is always `consultation`, the word the Work
-  queue stands a Consultation row under. The configuration guide states the four
-  origin words together instead of three plus a note.
+  queue's detail stands a Consultation item under: the queue's row stands under
+  the task type and the ask instead (issue #90's row wording). The
+  configuration guide states the four origin words together instead of three
+  plus a note.
 - The plane's three start lines now read as one family in the log file, and a
   reviewer can tell a Consultation pickup from a Consultation force-dispatch.
   For a Consultation the mode names the key, so a reader must not read

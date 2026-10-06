@@ -742,7 +742,7 @@ lines the `handoff start failed:` endings stand beside - needs `info`.
 A Consultation's start line is the Consultation operations' own. Its name is the
 record's Consultation type beside the identity prefix the plane's other
 Consultation lines name it by, and its origin word is `consultation`, the same
-word the Work queue stands a Consultation row under. The seat reading is
+word the Work queue's detail stands a Consultation item under. The seat reading is
 measured before the record takes its seat, so it names the count the Parallel
 limit stood on. For a Consultation the mode names the key, not a cap crossing:
 the Work queue's Pickup reads `mode pickup`, and your own start now key reads

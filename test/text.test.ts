@@ -7,6 +7,7 @@
 import { describe, expect, test } from "bun:test";
 
 import {
+	firstLineOf,
 	padToWidth,
 	truncateTailToWidth,
 	truncateToWidth,
@@ -78,5 +79,19 @@ describe("padToWidth", () => {
 	test("pads to the column and leaves a wider string alone", () => {
 		expect(padToWidth("ab", 5)).toBe("ab   ");
 		expect(padToWidth("abcdef", 3)).toBe("abcdef");
+	});
+});
+
+describe("firstLineOf", () => {
+	test("keeps the line that names the ask, trimmed", () => {
+		expect(firstLineOf("review the auth design")).toBe("review the auth design");
+		expect(firstLineOf("/grill review auth\ncheck the docs too")).toBe("/grill review auth");
+		expect(firstLineOf("  indented line  ")).toBe("indented line");
+	});
+
+	test("skips the blank lines at the top, and yields none for a blank prompt", () => {
+		expect(firstLineOf("\n\nsecond line\nthird line")).toBe("second line");
+		expect(firstLineOf("")).toBe("");
+		expect(firstLineOf("  \n\t\n")).toBe("");
 	});
 });

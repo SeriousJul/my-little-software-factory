@@ -3246,22 +3246,23 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 					if (queued === undefined) throw new Error("the queued Consultation is not recorded");
 					expect(queued.paneId).toBeNull();
 					expect(queued.workspaceId).toBeNull();
-					// The Consultation section lists the record under its
-					// state word, the same row the cursor selected.
+					// The Consultation section lists the record under the ask
+					// the operator typed, beside its state word: the same row
+					// the cursor selected, whole at this width - 56 usable,
+					// 23 for the marker and the state cell, 19 for the
+					// repository and the start time, 11 for the input's first
+					// line.
 					expect(
 						rowsOf(frame).some(
-							(row) => row.startsWith("│") && row.includes("queued") && row.includes("grill"),
+							(row) => row.startsWith("│") && row.includes("queued") && row.includes("review auth"),
 						),
 					).toBe(true);
 					expect(detailPaneText(frame)).toContain("State: queued");
-					// The Work queue section shows the item under the record's
-					// type word, and the header carries the depth.
+					// The Work queue section shows the item under the ask the
+					// operator typed, beside the record's type word, and the
+					// header carries the depth.
 					expect(frame).toContain("waiting: 1");
-					expect(
-						rowsOf(frame).some(
-							(row) => row.includes("grill") && row.includes(queued.id.slice(0, 8)),
-						),
-					).toBe(true);
+					expect(rowsOf(frame).some((row) => row.includes("review auth"))).toBe(true);
 					// The notice names the record and the queue it waits in.
 					expect(messageRowOf(frame)).toContain(
 						`consultation queued: ${queued.id.slice(0, 8)} waits in the Work queue for a free Parallel limit seat`,

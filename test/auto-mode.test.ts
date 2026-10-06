@@ -4579,6 +4579,15 @@ describe("the handoff queue", () => {
 			(command) => command === `herdr agent start ${AGENT} --kind pi --pane pane-1`,
 		);
 		const src = new FakeSource("issues", "github-issues", pairMoved);
+		// The queue's marked row, by the title it stands under: the box
+		// title's line holds the border, so the queue's rows sit below it,
+		// and the Ticket list's rows never do.
+		const queueRowLeads = (frame: string, lead: string): boolean => {
+			const lines = rowsOf(frame);
+			const box = lines.findIndex((line) => line.includes("Work queue"));
+			if (box < 0) return false;
+			return lines.slice(box + 1).some((line) => line.includes("❯") && line.includes(lead));
+		};
 
 		await withApp(
 			async (setup) => {
@@ -4623,13 +4632,13 @@ describe("the handoff queue", () => {
 				// (ADR 0049), and the operator removes it there; the queue
 				// emptying sends the selection home to the Ticket list.
 				await pressReturnQuietFor("the jump to the queued restart", (f) =>
-					rowsOf(f).some((line) => line.includes("❯") && line.includes("[restart]")),
+					queueRowLeads(f, "Watch agent turns"),
 				);
 				// The Working line outranks the removal notice, so the effect is
 				// read on the queue's own row: the handoff's item keeps the queue
 				// holding one row, and the selection clamps onto it.
 				await pressQuietFor("delete", "the item removed", (f) =>
-					rowsOf(f).some((line) => line.includes("❯") && line.includes("[open]")),
+					queueRowLeads(f, "Persist source facts"),
 				);
 				// Back to the Ticket list: up crosses the empty Consultation
 				// section to the last Ticket, and one more step lands the

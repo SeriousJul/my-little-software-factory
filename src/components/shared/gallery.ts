@@ -36,6 +36,7 @@ import { ActionBar } from "../action-bar.ts";
 import { ActionPanel } from "../action-panel.ts";
 import { consultationClosePanel } from "../consultation-close-panel.ts";
 import { ConsultationDetail, consultationDetailLines } from "../consultation-detail.ts";
+import { ConsultationList } from "../consultation-list.ts";
 import { consultationRecoveryPanel } from "../consultation-recovery-panel.ts";
 import { refusalText, useControlDispatch } from "../control-dispatch.ts";
 import {
@@ -276,9 +277,9 @@ function sampleConsultation(
 		model: "openai/gpt-5.1",
 		thinking: "",
 		contextWindow: "",
-		template: "",
+		template: "/review {input}",
 		initialInput: "review the auth design",
-		renderedOpeningPrompt: "",
+		renderedOpeningPrompt: "/review the auth design",
 		repository: {
 			identity: "SeriousJul/my-little-software-factory",
 			displayName: "my-little-software-factory",
@@ -1979,6 +1980,43 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 		],
 	},
 	{
+		// The Consultation section's list: the record stands under the ask the
+		// operator typed - the first line of the input the record holds - with
+		// its state, its repository, and its start time beside it, the suffix
+		// held whole or dropped the way the Ticket row holds its repository, so
+		// a long repository never crushes the ask to a fragment. The row falls
+		// back to the type's word where the input holds no line, the way the
+		// Work queue's row for the same record does.
+		id: "consultation-list",
+		state: "the Consultation section: the records under the ask the operator typed",
+		render: (_columns, _holds, _inputActive, _wiring) => [
+			createElement(ConsultationList, {
+				key: "consultations",
+				consultations: [
+					sampleConsultation("working"),
+					{
+						...sampleConsultation("queued"),
+						id: "c2c2c2c2-2222-4222-8222-222222222222",
+						repository: {
+							...sampleConsultation("queued").repository,
+							displayName: "acme/factory",
+						},
+					},
+					{
+						...sampleConsultation("awaiting-response"),
+						id: "c3c3c3c3-3333-4333-8333-333333333333",
+					},
+				],
+				selectedIndex: 0,
+				focused: true,
+				rows: 8,
+				onFocus: () => undefined,
+				onSelect: () => undefined,
+				onMove: () => undefined,
+			}),
+		],
+	},
+	{
 		// The record the queue's removal leaves behind (issue #91): an
 		// `unscheduled` Consultation's own detail. The ask stands on its type,
 		// repository, and initial input, and the hint names the three answers the
@@ -2341,6 +2379,8 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 								: undefined,
 				consultationType: (id) =>
 					id === "c1c1c1c1-1111-4111-8111-111111111111" ? "Review" : undefined,
+				consultationInput: (id) =>
+					id === "c1c1c1c1-1111-4111-8111-111111111111" ? "review the auth design" : undefined,
 				planeActionMethod: (taskType) => (taskType === "merge" ? "squash" : undefined),
 			});
 			return [
@@ -2493,6 +2533,10 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 							ticketTitle: () => undefined,
 							consultationType: (id) =>
 								id === "c1c1c1c1-1111-4111-8111-111111111111" ? "Review" : undefined,
+							consultationInput: (id) =>
+								id === "c1c1c1c1-1111-4111-8111-111111111111"
+									? "review the auth design"
+									: undefined,
 							planeActionMethod: () => undefined,
 						},
 					)[0],
@@ -2526,6 +2570,7 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 						{
 							ticketTitle: () => undefined,
 							consultationType: () => undefined,
+							consultationInput: () => undefined,
 							planeActionMethod: () => undefined,
 						},
 					)[0],

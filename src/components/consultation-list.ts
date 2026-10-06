@@ -5,7 +5,7 @@ import { useRef } from "react";
 import type { Consultation } from "../state/consultation-record.ts";
 import { usePaneGeometry } from "./geometry.ts";
 import { listMouse, listWindow } from "./list-pane.ts";
-import { padToWidth, truncateToWidth, widthOf } from "./text.ts";
+import { firstLineOf, padToWidth, truncateToWidth, widthOf } from "./text.ts";
 import { paint } from "./theme.ts";
 
 interface ConsultationListProps {
@@ -91,28 +91,38 @@ export function ConsultationList({
 	);
 }
 
+/** The cells the row must leave the ask: its gap and one text cell. */
+const IDENTITY_MINIMUM = 2;
+
 function row(consultation: Consultation, selected: boolean, width: number) {
 	const marker = selected ? "❯ " : "  ";
 	const state = consultation.state;
-	const identity = consultation.typeName;
+	// The row stands under the ask the operator typed on the new consultation
+	// screen, the first line of the record's input, the same word the Work
+	// queue's row stands under. The type keeps its word in the detail's title,
+	// and the row falls back to it where the input holds no line.
+	const identity = firstLineOf(consultation.initialInput) || consultation.typeName;
 	const repo = consultation.repository.displayName;
 	const start = consultation.createdAt.slice(11, 16);
 	const prefix = `${marker}${padToWidth(state, STATE_WIDTH)} `;
 	const suffix = ` ${repo} ${start}`;
-	const available = Math.max(1, width - widthOf(prefix) - widthOf(suffix));
+	// The repository and the start time hold the row's end as one unit, and
+	// the Ticket row's rule decides them: the row keeps the whole suffix or
+	// drops it, so a long repository never crushes the ask to a fragment.
+	const suffixFits = width - widthOf(prefix) >= widthOf(suffix) + IDENTITY_MINIMUM;
+	const available = Math.max(1, width - widthOf(prefix) - (suffixFits ? widthOf(suffix) : 0));
 	// The selected row's prefix and identity wear bold: the emphasis the old
 	// palette carried in a brighter text color.
-	return [
+	const spans = [
 		selected
 			? createElement("b", { fg: paint("text") }, prefix)
 			: createElement("span", { fg: paint("subtext0") }, prefix),
 		selected
 			? createElement("b", { fg: paint("text") }, truncateToWidth(identity, available))
 			: createElement("span", { fg: paint("text") }, truncateToWidth(identity, available)),
-		createElement(
-			"span",
-			{ fg: paint("subtext0") },
-			truncateToWidth(suffix, Math.max(0, width - widthOf(prefix) - available)),
-		),
 	];
+	if (suffixFits) {
+		spans.push(createElement("span", { fg: paint("subtext0") }, suffix));
+	}
+	return spans;
 }

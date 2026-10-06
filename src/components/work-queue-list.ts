@@ -3,8 +3,10 @@
  * limit seat, in the one shared order across kinds. A row carries the task
  * type the start runs - the handoff's captured choice, the plane action's
  * task type, the Consultation record's type - the name the row stands under,
- * and the item's place in the queue. Being in the queue is the item's own
- * state, so a row wears no state word.
+ * and the item's place in the queue. The name is the ask: the ticket's
+ * title, the Consultation's input, the text the operator typed on the new
+ * consultation screen. Being in the queue is the item's own state, so a row
+ * wears no state word.
  */
 import type { BoxRenderable } from "@opentui/core";
 import { createElement } from "@opentui/react";
@@ -13,13 +15,13 @@ import type { WorkQueueItem } from "../state/work-queue.ts";
 import type { WorkQueueSectionFacts } from "./controls.ts";
 import { usePaneGeometry } from "./geometry.ts";
 import { listMouse, listWindow } from "./list-pane.ts";
-import { padToWidth, truncateToWidth, widthOf } from "./text.ts";
+import { firstLineOf, padToWidth, truncateToWidth, widthOf } from "./text.ts";
 import { paint } from "./theme.ts";
 
 export interface WorkQueueRow {
 	/** The queue's item, in queue order. */
 	item: WorkQueueItem;
-	/** The name the row stands under: the ticket's title while it is still in the projection, its identity once it is gone, the Consultation record's identity prefix (issue #90). */
+	/** The name the row stands under: the ticket's title while it is still in the projection, its identity once it is gone, the Consultation's input while the record holds one, the record's identity prefix once it is gone or its input holds no line (issue #90). */
 	title: string;
 	/** The task type the start runs: the handoff's captured choice, the plane action's task type (ADR 0068), the Consultation record's type. Empty when the record the Consultation item names is gone. */
 	taskType: string;
@@ -38,6 +40,8 @@ export interface WorkQueueRowSources {
 	ticketTitle: (ticketIdentity: string) => string | undefined;
 	/** The type the Consultation record the item names stands in; undefined when the record is gone. */
 	consultationType: (consultationId: string) => string | undefined;
+	/** The input the operator typed for the Consultation record the item names, on the new consultation screen; undefined when the record is gone. */
+	consultationInput: (consultationId: string) => string | undefined;
 	/** The method the plane action's task type's action form names (ADR 0068). */
 	planeActionMethod: (taskType: string) => string | undefined;
 }
@@ -48,9 +52,13 @@ export function workQueueRowFacts(
 ): readonly WorkQueueRow[] {
 	return items.map((item): WorkQueueRow => {
 		if (item.kind === "consultation") {
+			// The row stands under the ask the operator typed, the word the
+			// Consultation section's list stands the record under, and keeps
+			// the identity prefix where the input holds no line.
+			const ask = firstLineOf(sources.consultationInput(item.consultationId) ?? "");
 			return {
 				item,
-				title: item.consultationId.slice(0, 8),
+				title: ask === "" ? item.consultationId.slice(0, 8) : ask,
 				taskType: sources.consultationType(item.consultationId) ?? "",
 			};
 		}

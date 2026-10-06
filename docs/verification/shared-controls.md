@@ -651,9 +651,14 @@ every answer: a started record holds its seat, a start that fails leaves a
 terminal `failed` record with its reason on the Message line, and a record a
 close or a delete out-waited the pickup leaves its row with the warning.
 
-The surface reads the record the item names: the row carries the kind word
-and the record's identity prefix, and the detail pane shows the ask, the
-type, and the state - or the record gone in its place. The Consultation
+The surface reads the record the item names: the row carries the record's
+type word and the ask the operator typed - the first line of the record's
+input, the record's identity prefix where the input holds no line or the
+record is gone - and the detail pane shows the ask, the type, and the
+state, or the record gone in its place. The Consultation section's list
+stands the record under the same ask word, with its state, its
+repository, and its start time beside it, the suffix held whole or dropped
+the way the Ticket row holds its repository. The Consultation
 section's own keys meet the `queued` record: `w` closes it without a dialog
 and takes its item out of the queue, and Enter refuses it in the section's
 words - its start is the Work queue's Enter. The Work queue's `Delete` takes
