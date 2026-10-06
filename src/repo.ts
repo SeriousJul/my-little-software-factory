@@ -62,6 +62,13 @@ export interface ResolutionNotes {
 	 * that directory aside and never deletes it.
 	 */
 	leftoverWorktree?: string;
+	/**
+	 * The pull request ticket's branch statement took its fallback (ADR
+	 * 0112): the note names the fact that took it and the branch the start
+	 * works on its strength, so the record says why a cycle wears the
+	 * ticket's numbered branch.
+	 */
+	branchFallback?: string;
 }
 
 /** A repository resolved to a checkout path on this machine. */

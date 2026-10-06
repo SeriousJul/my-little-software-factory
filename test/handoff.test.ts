@@ -14,6 +14,7 @@ import { join } from "node:path";
 
 import type { FactoryConfig, TicketSourceConfig } from "../src/config.ts";
 import type { Ticket } from "../src/domain/ticket.ts";
+import { withHeadBranch } from "../src/domain/ticket.ts";
 import {
 	checkStart,
 	closeHandoffEnvironment,
@@ -27,7 +28,7 @@ import {
 	reviewVerdictFill,
 	settingArgs,
 } from "../src/handoff.ts";
-import { agentNameFor, cycleAgentName } from "../src/naming.ts";
+import { agentNameFor, cycleAgentName, pullRequestBranchFallbackLine } from "../src/naming.ts";
 import type {
 	CommandOptions,
 	CommandResult,
@@ -6549,7 +6550,314 @@ describe("the Message lines one start's outcome leaves (ADR 0103)", () => {
 			"cloned acme/billing to a sibling",
 			"worktree base fell back to the local HEAD",
 		]);
+		// The fallback the pull request ticket's branch statement took (ADR
+		// 0112) trails the worktree base, and the moved directory stays last.
+		expect(
+			handoffReportLines({
+				warning: "cloned acme/billing to a sibling",
+				worktreeBase: "worktree base fell back to the local HEAD",
+				branchFallback:
+					"the head branch could not be worked, so the start works the ticket's own branch",
+				leftoverWorktree: "moved aside the leftover worktree",
+			}),
+		).toEqual([
+			"cloned acme/billing to a sibling",
+			"worktree base fell back to the local HEAD",
+			"the head branch could not be worked, so the start works the ticket's own branch",
+			"moved aside the leftover worktree",
+		]);
 		// A start with nothing to say leaves no line at all.
 		expect(handoffReportLines({})).toEqual([]);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// ADR 0112: the pull request ticket works the branch its pull request holds.
+// ---------------------------------------------------------------------------
+
+/** The issue's factory branch: the head the pull request's membership records. */
+const HEAD_BRANCH = "factory/7-retry-policy-for-webhooks";
+/** The pull request ticket's own numbered branch: the statement's fallback. */
+const NUMBERED_BRANCH = "factory/12-retry-policy-for-webhooks";
+
+/**
+ * The pull request ticket the issue's cycle opens: the pair of one cycle, with
+ * the head-branch fact its newest membership records. The worktree handoff
+ * states the fact with the start, and the start resolves it against the
+ * checkout once the checkout is known.
+ */
+const pullRequestTicket: Ticket = {
+	...ticket,
+	identity: "github:github.com:P_12",
+	sourceKind: "github-pull-request",
+	externalKey: "#12",
+	url: "https://github.com/acme/billing/pulls/12",
+	memberships: [
+		{
+			sourceName: "issues",
+			health: "healthy",
+			identity: "github:github.com:P_12",
+			sourceKind: "github-pull-request",
+			externalKey: "#12",
+			sourceState: "open",
+			url: "https://github.com/acme/billing/pulls/12",
+			title: "Retry policy for webhooks",
+			description: "Add a retry policy.",
+			labels: [],
+			externalUpdatedAt: "2026-01-01T00:00:00Z",
+			repository: ticket.repositoryRef,
+			attributes: withHeadBranch({}, HEAD_BRANCH),
+		},
+	],
+};
+
+/** The same ticket whose source never recorded the head-branch fact. */
+const pullRequestTicketWithoutHead: Ticket = {
+	...pullRequestTicket,
+	memberships: pullRequestTicket.memberships.map((membership) => ({
+		...membership,
+		attributes: {},
+	})),
+};
+
+const PULL_AGENT = agentNameFor(pullRequestTicket);
+const PULL_PROMPT = renderPrompt(templateOf(BASE_CONFIG.taskTypes.implement), pullRequestTicket);
+
+describe("handOffTicket: the pull request ticket's branch (ADR 0112)", () => {
+	test("works the head branch its pull request holds, in the worktree that holds it", async () => {
+		const runner = new FakeRunner();
+		conventionCheckout(runner);
+		runner.set("git", ["-C", CHECKOUT, "branch", "--list", HEAD_BRANCH], {
+			stdout: `  ${HEAD_BRANCH}\n`,
+		});
+		runner.set(
+			"herdr",
+			["worktree", "open", "--cwd", CHECKOUT, "--branch", HEAD_BRANCH, "--no-focus"],
+			{
+				stdout: worktreeOpenJson("ws-impl", "pane-root", {
+					alreadyOpen: true,
+					worktreePath: WORKTREE_PATH,
+				}),
+			},
+		);
+		runner.set(
+			"herdr",
+			["tab", "create", "--workspace", "ws-impl", "--cwd", WORKTREE_PATH, "--no-focus"],
+			{ stdout: tabCreateJson("pane-tab") },
+		);
+
+		const outcome = await handOffTicket(
+			pullRequestTicket,
+			{ ...defaultChoice, environment: "worktree" },
+			{
+				claim: "open",
+				config: BASE_CONFIG,
+				runner,
+				home: HOME,
+			},
+		);
+
+		expect(outcome.status).toBe("ok");
+		// The head branch works, so the statement takes no fallback and the
+		// start states no note.
+		expect(outcome.notes).toBeUndefined();
+		expect(runner.commands()).toEqual([
+			`git -C ${CHECKOUT} rev-parse --git-dir`,
+			`git -C ${CHECKOUT} remote get-url origin`,
+			// The statement's read: the head fact answers against the checkout.
+			`git -C ${CHECKOUT} branch --list ${HEAD_BRANCH}`,
+			// The builder's own read of the branch it works.
+			`git -C ${CHECKOUT} branch --list ${HEAD_BRANCH}`,
+			`herdr worktree open --cwd ${CHECKOUT} --branch ${HEAD_BRANCH} --no-focus`,
+			`herdr tab create --workspace ws-impl --cwd ${WORKTREE_PATH} --no-focus`,
+			`herdr agent start ${PULL_AGENT} --kind pi --pane pane-tab`,
+			`herdr agent prompt ${PULL_AGENT} ${PULL_PROMPT}`,
+		]);
+		// The reuse takes no fetch, builds no worktree, and the ticket's own
+		// numbered branch is never named.
+		expectNoCommand(runner.commands(), "worktree create");
+		expectNoCommand(runner.commands(), "fetch");
+		expectNoCommand(runner.commands(), NUMBERED_BRANCH);
+	});
+
+	test("works the head branch standing only on origin: fetches it and reuses it", async () => {
+		const runner = new FakeRunner();
+		conventionCheckout(runner);
+		runner.set("git", ["-C", CHECKOUT, "branch", "--list", HEAD_BRANCH], { stdout: "" });
+		runner.set("git", ["-C", CHECKOUT, "ls-remote", "--heads", "origin", HEAD_BRANCH], {
+			stdout: `abc123\trefs/heads/${HEAD_BRANCH}\n`,
+		});
+		runner.set(
+			"git",
+			["-C", CHECKOUT, "fetch", "origin", `${HEAD_BRANCH}:refs/heads/${HEAD_BRANCH}`],
+			{ stdout: "" },
+		);
+		runner.set(
+			"herdr",
+			["worktree", "open", "--cwd", CHECKOUT, "--branch", HEAD_BRANCH, "--no-focus"],
+			{
+				stdout: worktreeOpenJson("ws-impl", "pane-root", {
+					alreadyOpen: true,
+					worktreePath: WORKTREE_PATH,
+				}),
+			},
+		);
+		runner.set(
+			"herdr",
+			["tab", "create", "--workspace", "ws-impl", "--cwd", WORKTREE_PATH, "--no-focus"],
+			{ stdout: tabCreateJson("pane-tab") },
+		);
+
+		const outcome = await handOffTicket(
+			pullRequestTicket,
+			{ ...defaultChoice, environment: "worktree" },
+			{
+				claim: "open",
+				config: BASE_CONFIG,
+				runner,
+				home: HOME,
+			},
+		);
+
+		expect(outcome.status).toBe("ok");
+		expect(outcome.notes).toBeUndefined();
+		expect(runner.commands()).toEqual([
+			`git -C ${CHECKOUT} rev-parse --git-dir`,
+			`git -C ${CHECKOUT} remote get-url origin`,
+			// The statement's reads: the head stands on no local branch, but the
+			// origin copy stands.
+			`git -C ${CHECKOUT} branch --list ${HEAD_BRANCH}`,
+			`git -C ${CHECKOUT} ls-remote --heads origin ${HEAD_BRANCH}`,
+			// The builder's own reads of the branch it works.
+			`git -C ${CHECKOUT} branch --list ${HEAD_BRANCH}`,
+			`git -C ${CHECKOUT} ls-remote --heads origin ${HEAD_BRANCH}`,
+			// The standing remote copy is the branch: the fetch takes the reuse
+			// path, the way the builder has always taken it.
+			`git -C ${CHECKOUT} fetch origin ${HEAD_BRANCH}:refs/heads/${HEAD_BRANCH}`,
+			`herdr worktree open --cwd ${CHECKOUT} --branch ${HEAD_BRANCH} --no-focus`,
+			`herdr tab create --workspace ws-impl --cwd ${WORKTREE_PATH} --no-focus`,
+			`herdr agent start ${PULL_AGENT} --kind pi --pane pane-tab`,
+			`herdr agent prompt ${PULL_AGENT} ${PULL_PROMPT}`,
+		]);
+		expectNoCommand(runner.commands(), "worktree create");
+		expectNoCommand(runner.commands(), NUMBERED_BRANCH);
+	});
+
+	test("a missing head fact takes the ticket's own branch, and the note says why", async () => {
+		const runner = new FakeRunner();
+		conventionCheckout(runner);
+		runner.set("git", ["-C", CHECKOUT, "branch", "--list", NUMBERED_BRANCH], { stdout: "" });
+		stubRemoteDefaultBranch(runner);
+		runner.set(
+			"herdr",
+			[
+				"worktree",
+				"create",
+				"--cwd",
+				CHECKOUT,
+				"--branch",
+				NUMBERED_BRANCH,
+				"--base",
+				"origin/main",
+				"--no-focus",
+			],
+			{ stdout: worktreeCreateJson("ws-wt", "pane-wt") },
+		);
+
+		const outcome = await handOffTicket(
+			pullRequestTicketWithoutHead,
+			{ ...defaultChoice, environment: "worktree" },
+			{
+				claim: "open",
+				config: BASE_CONFIG,
+				runner,
+				home: HOME,
+			},
+		);
+
+		expect(outcome.status).toBe("ok");
+		// The fallback is the start's own note: it names the fact that took it
+		// and the branch the start works on its strength.
+		expect(outcome.notes?.branchFallback).toBe(
+			pullRequestBranchFallbackLine("missing-fact", null, NUMBERED_BRANCH),
+		);
+		// No read of the head ran: there was no fact to read. The builder's
+		// own check of the numbered branch on origin is its standing path.
+		expectNoCommand(runner.commands(), `ls-remote --heads origin ${HEAD_BRANCH}`);
+		expect(runner.commands()).toContain(
+			`herdr worktree create --cwd ${CHECKOUT} --branch ${NUMBERED_BRANCH} --base origin/main --no-focus`,
+		);
+	});
+
+	test("a head branch that stands in neither copy takes the ticket's own branch, and the note says why", async () => {
+		const runner = new FakeRunner();
+		conventionCheckout(runner);
+		runner.set("git", ["-C", CHECKOUT, "branch", "--list", HEAD_BRANCH], { stdout: "" });
+		runner.set("git", ["-C", CHECKOUT, "ls-remote", "--heads", "origin", HEAD_BRANCH], {
+			stdout: "",
+		});
+		runner.set("git", ["-C", CHECKOUT, "branch", "--list", NUMBERED_BRANCH], { stdout: "" });
+		stubRemoteDefaultBranch(runner);
+		runner.set(
+			"herdr",
+			[
+				"worktree",
+				"create",
+				"--cwd",
+				CHECKOUT,
+				"--branch",
+				NUMBERED_BRANCH,
+				"--base",
+				"origin/main",
+				"--no-focus",
+			],
+			{ stdout: worktreeCreateJson("ws-wt", "pane-wt") },
+		);
+
+		const outcome = await handOffTicket(
+			pullRequestTicket,
+			{ ...defaultChoice, environment: "worktree" },
+			{
+				claim: "open",
+				config: BASE_CONFIG,
+				runner,
+				home: HOME,
+			},
+		);
+
+		expect(outcome.status).toBe("ok");
+		// The fallback says why a cycle wears its numbered branch: the head
+		// stands in neither copy, and the branch worked is the ticket's own.
+		expect(outcome.notes?.branchFallback).toBe(
+			pullRequestBranchFallbackLine("unavailable", HEAD_BRANCH, NUMBERED_BRANCH),
+		);
+		// The head was checked in both copies, and the start was never refused:
+		// the numbered branch was built and worked.
+		expect(runner.commands()).toContain(`git -C ${CHECKOUT} branch --list ${HEAD_BRANCH}`);
+		expect(runner.commands()).toContain(
+			`git -C ${CHECKOUT} ls-remote --heads origin ${HEAD_BRANCH}`,
+		);
+		expect(runner.commands()).toContain(
+			`herdr worktree create --cwd ${CHECKOUT} --branch ${NUMBERED_BRANCH} --base origin/main --no-focus`,
+		);
+	});
+
+	test("a live worktree handoff of a pull request ticket states no head fact and takes no head read", async () => {
+		const runner = new FakeRunner();
+		conventionCheckout(runner);
+		stubLiveWorkspace(runner);
+
+		const outcome = await handOffTicket(pullRequestTicket, defaultChoice, {
+			claim: "open",
+			config: BASE_CONFIG,
+			runner,
+			home: HOME,
+		});
+
+		expect(outcome.status).toBe("ok");
+		expect(outcome.notes).toBeUndefined();
+		// The live environment works the checkout: no branch read of the head,
+		// and none of the ticket's own branch.
+		expectNoCommand(runner.commands(), "branch --list");
 	});
 });

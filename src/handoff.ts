@@ -5,8 +5,11 @@
  * A handoff runs through herdr (ADR 0002): the control plane never starts an
  * agent process itself. The live worktree environment reuses the herdr
  * workspace of the checkout and adds a fresh tab; the worktree environment
- * works the ticket on its own branch factory/<ticket id>-<title slug>: a
- * missing branch is created from the worktree base (the fetched remote
+ * works the ticket on the branch its branch statement names (ADR 0112): the
+ * ticket's own branch factory/<ticket id>-<title slug>, and - for a pull
+ * request ticket - the branch its pull request holds, with the ticket's own
+ * branch the stated fallback. A missing branch is created from the worktree
+ * base (the fetched remote
  * default branch, or the local HEAD with a note on the fallback), an
  * existing branch is reused in the worktree that holds it, and a branch
  * no worktree holds is checked out into a fresh worktree - the ticket's
@@ -85,12 +88,15 @@ import type { FactoryConfig, TicketSourceConfig, TransitionPin } from "./config.
 import type { ConfigWriteReport } from "./config-write.ts";
 import { nameHolderText } from "./domain/name-collision.ts";
 import type { EnvironmentKind, RepositoryRef, Ticket } from "./domain/ticket.ts";
+import { headBranchOf } from "./domain/ticket.ts";
 import { fileExists, movePath, readDirectoryNames } from "./fs.ts";
 import { failureLine } from "./lines.ts";
 import {
 	branchNameFor,
 	consultationAgentName,
 	consultationBranchName,
+	pullRequestBranchFallbackLine,
+	pullRequestBranchFor,
 	ticketAgentNames,
 } from "./naming.ts";
 import {
@@ -404,6 +410,8 @@ export function handoffReportLines(facts: {
 	write?: ConfigWriteReport;
 	/** The worktree base the start used, when the plane had to say which. */
 	worktreeBase?: string;
+	/** The fallback the pull request ticket's branch statement took (ADR 0112). */
+	branchFallback?: string;
 	/** The directory the plane moved aside. */
 	leftoverWorktree?: string;
 }): string[] {
@@ -424,6 +432,7 @@ export function handoffReportLines(facts: {
 		...(facts.warning === undefined ? [] : [facts.warning]),
 		...trail,
 		...(facts.worktreeBase === undefined ? [] : [facts.worktreeBase]),
+		...(facts.branchFallback === undefined ? [] : [facts.branchFallback]),
 		...(facts.leftoverWorktree === undefined ? [] : [facts.leftoverWorktree]),
 	];
 }
@@ -647,8 +656,21 @@ export async function handOffTicket(
 		workspace: ticketWorkspaceFact(choice, previous),
 		previousTabId: previous?.tabId ?? null,
 		// The branch policy is a fact, not a merge (issue #204): the ticket keeps
-		// its branch and the work a finished cycle left on it.
-		branch: { name: branchNameFor(ticket), policy: "reuse" },
+		// its branch and the work a finished cycle left on it. A worktree handoff
+		// of a pull request ticket also states the head-branch fact its pull
+		// request's newest membership carries (ADR 0112): the start resolves it
+		// against the checkout once the checkout is known.
+		branch: {
+			name: branchNameFor(ticket),
+			policy: "reuse",
+			...(choice.environment === "worktree" && ticket.sourceKind === "github-pull-request"
+				? {
+						pullRequestHeadBranch: headBranchOf(
+							newestMembership(ticket.memberships)?.attributes ?? {},
+						),
+					}
+				: {}),
+		},
 		prompt: answer.prompt,
 		pullRequestOpen: answer.pullRequestOpen,
 		names: ticketNamePlan(ticket, names),
@@ -903,6 +925,15 @@ type StartWorkspace =
 interface StartBranch {
 	name: string;
 	policy: "reuse" | "refuse";
+	/**
+	 * The head-branch fact of the pull request a pull request ticket holds,
+	 * stated by a worktree handoff of a pull request ticket and absent on every
+	 * other start (ADR 0112). Null when the source never recorded the fact. The
+	 * start resolves it against the checkout once the checkout is known; the
+	 * answer - the branch worked and the fallback taken - is the fact the start
+	 * states, never a choice the Environment builder makes.
+	 */
+	pullRequestHeadBranch?: string | null;
 }
 
 /**
@@ -1128,6 +1159,40 @@ async function runHandoffStart(request: HandoffStartRequest): Promise<HandoffOut
 		names: request.names,
 		pullRequestOpen: request.pullRequestOpen,
 	};
+	// The branch statement of a pull request ticket resolves here, where the
+	// checkout is known (ADR 0112): the head-branch fact answers against the
+	// checkout and origin through the same reads the Environment's reuse path
+	// makes, the answer names the branch the builder works, and the fallback it
+	// takes is the start's own note. The builder keeps its one reuse policy over
+	// whatever branch the statement names, and learns nothing.
+	if (request.branch.pullRequestHeadBranch !== undefined) {
+		const headBranch = request.branch.pullRequestHeadBranch;
+		let headStandsInCheckout = false;
+		let headStandsOnOrigin = false;
+		if (headBranch !== null) {
+			const listed = await ctx.runner.run("git", ["-C", checkout, "branch", "--list", headBranch]);
+			if (listed.code === 0 && listed.stdout.trim() !== "") {
+				headStandsInCheckout = true;
+			} else {
+				headStandsOnOrigin = await remoteBranchStands(checkout, headBranch, ctx);
+			}
+		}
+		const answer = pullRequestBranchFor({
+			factoryBranch: request.branch.name,
+			headBranch,
+			headStandsInCheckout,
+			headStandsOnOrigin,
+		});
+		request.branch.name = answer.branch;
+		if (answer.fallback !== null)
+			ctx.notes = {
+				...ctx.notes,
+				branchFallback: pullRequestBranchFallbackLine(answer.fallback, headBranch, answer.branch),
+			};
+		// The pull request open stands on the branch the start works, so the
+		// open and the Environment never name two branches for one start.
+		if (ctx.pullRequestOpen !== undefined) ctx.pullRequestOpen.branch = answer.branch;
+	}
 	// What this start creates, and what it has already put into the world, stand
 	// outside its steps. A command that raises in the middle of a start therefore
 	// still leaves the start able to name what it made and what it must not roll

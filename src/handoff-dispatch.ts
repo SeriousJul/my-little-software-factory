@@ -248,6 +248,9 @@ export async function reportHandoffOutcome(
 		warning: outcome.status === "ok" ? outcome.notes?.warning : undefined,
 		write: persistReport,
 		worktreeBase: outcome.status === "ok" ? outcome.notes?.worktreeBase : undefined,
+		// The fallback the branch statement took, like the worktree base: a
+		// note of what the start that landed worked.
+		branchFallback: outcome.status === "ok" ? outcome.notes?.branchFallback : undefined,
 		// The moved directory is a fact on the operator's disk whether or not
 		// the start landed, so this fact carries no status gate.
 		leftoverWorktree: outcome.notes?.leftoverWorktree,

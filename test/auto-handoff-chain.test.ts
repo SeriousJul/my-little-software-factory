@@ -30,7 +30,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import type { FactoryConfig, TransitionOutcome } from "../src/config.ts";
-import { type FetchedTicket, withIssueReferences } from "../src/domain/ticket.ts";
+import {
+	type EnvironmentKind,
+	type FetchedTicket,
+	withHeadBranch,
+	withIssueReferences,
+} from "../src/domain/ticket.ts";
 import {
 	createHandoffDispatch,
 	type HandoffIntent,
@@ -54,6 +59,7 @@ import {
 	workspaceCreateJson,
 	workspaceListJson,
 	worktreeListJson,
+	worktreeOpenJson,
 } from "./fake-runner.ts";
 import { gatedRunner } from "./gated-runner.ts";
 import { infoLine, type RecordedLine, recordLogger, warnLine } from "./record-logger.ts";
@@ -205,6 +211,21 @@ function pullTicket(labels: readonly string[] = []): FetchedTicket {
 	};
 }
 
+/** The issue's factory branch, the branch the cycle's work stands on. */
+const ISSUE_FACTORY_BRANCH = "factory/5-persist-source-facts";
+
+/**
+ * The pull request the pair of one cycle carries (ADR 0112): the source's own
+ * fact, its head branch, names the issue's factory branch.
+ */
+function pullTicketWithHead(labels: readonly string[] = []): FetchedTicket {
+	const pull = pullTicket(labels);
+	return {
+		...pull,
+		attributes: withHeadBranch(pull.attributes, ISSUE_FACTORY_BRANCH),
+	};
+}
+
 /** The second pull request: open, and its labels suggest a rework of its own. */
 function reworkPullTicket(): FetchedTicket {
 	return {
@@ -237,6 +258,8 @@ interface ChainRigOptions {
 	 * full, and no queue item ever starts an Agent.
 	 */
 	liveSeats?: boolean;
+	/** The default Environment the rig's starts resolve to. */
+	defaultEnvironment?: EnvironmentKind;
 }
 
 interface Chain {
@@ -280,6 +303,8 @@ interface Chain {
 	statuses: Array<{ kind: string; text: string }>;
 	coordinator: ObservationCoordinator;
 	dispatch: ReturnType<typeof createHandoffDispatch>;
+	/** The checkout the live rig resolves to; null on a rig with no live seats. */
+	checkout: string | null;
 	/** Land the two sources' rows, the way a refresh does. */
 	refresh: (issue: FetchedTicket, pull: FetchedTicket) => void;
 	/**
@@ -309,6 +334,7 @@ function chainRig(options: ChainRigOptions = {}): Chain {
 	const config: FactoryConfig = {
 		...CHAIN_CONFIG,
 		maxParallelAgents: options.maxParallelAgents ?? CHAIN_CONFIG.maxParallelAgents,
+		defaultEnvironment: options.defaultEnvironment ?? CHAIN_CONFIG.defaultEnvironment,
 	};
 	// The app's own agent reference: the probe's list and the seat count read
 	// the same array, so the rig cannot hold a seat the count does not see.
@@ -320,8 +346,10 @@ function chainRig(options: ChainRigOptions = {}): Chain {
 		options.liveSeats === true
 			? gatedRunner(runner, (name) => name.startsWith("herdr agent start"))
 			: null;
-	if (options.liveSeats === true) {
-		const checkout = join(dir, "src", "factory");
+	// The live rig's checkout: a real directory the resolution finds, mapped by
+	// identity in the config the rig builds.
+	const checkout = options.liveSeats === true ? join(dir, "src", "factory") : null;
+	if (checkout !== null) {
 		mkdirSync(checkout, { recursive: true });
 		config.repos = { [repoIdentity]: checkout };
 		runner.set("git", ["-C", checkout, "rev-parse", "--git-dir"], { stdout: ".git\n" });
@@ -563,6 +591,7 @@ function chainRig(options: ChainRigOptions = {}): Chain {
 		statuses,
 		coordinator,
 		dispatch,
+		checkout,
 		refresh,
 		settleTurnWithFire,
 		awaitAttempt,
@@ -1037,4 +1066,120 @@ describe("the failed start's line follows the attempt, not the cycle (issue #295
 		chain.dispatch.stop();
 		state.close();
 	});
+});
+
+/**
+ * The two tickets of one cycle share the worktree (ADR 0112).
+ *
+ * The acceptance: the issue and the pull request its cycle opens work one
+ * worktree and one workspace, on the issue's factory branch. The review's
+ * start is the seam that proves it: it resolves the branch the pull request
+ * holds against the checkout, finds the worktree the implementation left on
+ * that branch, and reuses its workspace instead of building the pull request
+ * ticket's numbered branch from the Worktree base.
+ */
+describe("the pair of one cycle shares its worktree (ADR 0112)", () => {
+	test(
+		"the review start of the issue's pull request works the issue's factory branch " +
+			"in the implementation's worktree",
+		async () => {
+			// A live seat, so the continuation's start really runs, and the
+			// worktree Environment, so the start builds the Environment its branch
+			// statement names.
+			const chain = chainRig({ liveSeats: true, defaultEnvironment: "worktree" });
+			const { state, runner, coordinator } = chain;
+			const checkout = chain.checkout;
+			if (checkout === null) throw new Error("the live rig holds no checkout");
+
+			// The pair: the pull request's head is the issue's factory branch, the
+			// branch the implementation's cycle works.
+			chain.refresh(issueTicket(["ready-for-agent"]), pullTicketWithHead());
+
+			// The issue's cycle is in flight: its implementation turn runs, and the
+			// seat it holds stands full.
+			const runningAttempt = chain.seedRunningTurn(issueIdentity, "implement");
+			chain.setAgents([
+				{
+					paneId: `pane-${issueIdentity}`,
+					tabId: "tab-1",
+					workspaceId: "ws-1",
+					sessionId: "",
+					agent: "pi",
+					status: "working",
+				},
+			]);
+
+			// The implementation ends: its fire writes ready-for-review on the
+			// linked pull request and derives the review there. Its agent is gone,
+			// and the seat stands free. The implementation's worktree still stands
+			// on the issue's factory branch, and its workspace still holds.
+			const implementRun = await chain.settleRunningTurnWithFire(
+				issueIdentity,
+				"implement",
+				runningAttempt,
+			);
+			expect(implementRun).toMatchObject({
+				fired: true,
+				pullRequestIdentity: pullIdentity,
+				pullRequestWrite: { added: ["ready-for-review"], removed: [] },
+				positionTaskType: "review",
+				positionTicketIdentity: pullIdentity,
+			});
+			chain.setAgents([]);
+
+			// The branch the review works stands in the checkout, in the worktree
+			// the implementation left, and herdr's open finds the worktree in its
+			// own workspace.
+			const implWorkspace = "ws-1";
+			const implWorktreePath = "/worktrees/factory-5-persist-source-facts";
+			runner.set("git", ["-C", checkout, "branch", "--list", ISSUE_FACTORY_BRANCH], {
+				stdout: `  ${ISSUE_FACTORY_BRANCH}\n`,
+			});
+			runner.set(
+				"herdr",
+				["worktree", "open", "--cwd", checkout, "--branch", ISSUE_FACTORY_BRANCH, "--no-focus"],
+				{
+					stdout: worktreeOpenJson(implWorkspace, "pane-impl", {
+						alreadyOpen: true,
+						worktreePath: implWorktreePath,
+					}),
+				},
+			);
+			runner.set(
+				"herdr",
+				["tab", "create", "--workspace", implWorkspace, "--cwd", implWorktreePath, "--no-focus"],
+				{ stdout: tabCreateJson("pane-review", "tab-review") },
+			);
+
+			// The freed seat, and the continuation's start running inside the held
+			// herdr call.
+			await coordinator.tick();
+			await chain.awaitHandoffInFlight();
+
+			// The seat the settling turn freed went to that turn's own next step:
+			// the review on the pull request, claimed and running.
+			expect(state.handoff.openAttemptTickets()).toEqual([pullIdentity]);
+			expect(chain.heldCommands()).toEqual([
+				expect.stringContaining(
+					`herdr agent start ${agentNameFor({ identity: pullIdentity, title: "Persist source facts in state" })}`,
+				),
+			]);
+			const commands = runner.commands();
+			// The review works the branch the pull request holds - the issue's
+			// factory branch - and the open finds it in the implementation's
+			// workspace, where a fresh tab lands.
+			expect(commands).toContain(`git -C ${checkout} branch --list ${ISSUE_FACTORY_BRANCH}`);
+			expect(commands).toContain(
+				`herdr worktree open --cwd ${checkout} --branch ${ISSUE_FACTORY_BRANCH} --no-focus`,
+			);
+			expect(commands).toContain(
+				`herdr tab create --workspace ${implWorkspace} --cwd ${implWorktreePath} --no-focus`,
+			);
+			// The pull request ticket's numbered branch is never named: nothing is
+			// created, fetched, or built from the Worktree base.
+			expect(commands.find((command) => command.includes("factory/12-"))).toBeUndefined();
+			expect(commands.find((command) => command.includes("worktree create"))).toBeUndefined();
+			state.close();
+		},
+	);
 });
