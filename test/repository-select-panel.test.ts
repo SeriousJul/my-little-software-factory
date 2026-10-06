@@ -33,6 +33,7 @@ import {
 } from "./app-harness.ts";
 import { BASE_CONFIG } from "./base-config.ts";
 import { agentListJson, FakeRunner } from "./fake-runner.ts";
+import { withholdPassiveFlushes } from "./passive-flush-hold.ts";
 import { cleanupStateFixtures, freshState } from "./state-fixture.ts";
 
 /** The viewer answer the list stands on in these tests. */
@@ -174,6 +175,73 @@ describe("the repository select panel", () => {
 				await closeOverlay(setup, "Init a repository", "the list to close");
 				const frame = await settle(setup);
 				expect(frame).not.toContain("Init a repository");
+			},
+			WIDTH,
+			HEIGHT,
+			{ config: BASE_CONFIG, runner },
+		);
+	});
+
+	/**
+	 * The pin for the deadline the loaded suite missed (issue #311).
+	 *
+	 * The case above is the one the loaded runs red at `FRAME_DEADLINE_MS`,
+	 * and the hold puts the measured miss on a schedule a test can name.
+	 * A keypress schedules the commit it owns and the commit queues the
+	 * flush of the passive effects it mounted, and the reconciler puts
+	 * both on a queue it runs from its own `act` completion while a queue
+	 * stands in its internal seam, and on the scheduler's clock while
+	 * none does. On a loaded runner that clock ran 2 to 6 ms behind the
+	 * frame the same commit drew, and a wait that ended on the flush -
+	 * the frame wait for the closed panel, the key-handler wait for the
+	 * panel's handler to leave the bus - missed `FRAME_DEADLINE_MS` even
+	 * though the app was sound. The hold here stands up the seam, so
+	 * every commit and flush the case makes stands in the rig's hand
+	 * until the rig runs it, and the window the loaded runner opened by
+	 * chance stands open by design.
+	 *
+	 * The fixed wait runs what the rig holds before it reads the state it
+	 * waits on: each `awaitFrame` poll flushes before it captures, and
+	 * `closeOverlay` and the key-handler waits flush before they read,
+	 * through `flushPassiveNow` in `test/passive-flush-hold.ts`, which
+	 * walks to the fixpoint a commit and its flush need, in the rig's
+	 * own turn, on every poll, hold up or not.
+	 *
+	 * Where this pin bites, written as a step a reviewer can re-run. The
+	 * probe edits one file and is then reverted: in `test/app-harness.ts`,
+	 * delete the `flushPassiveNow();` line of the poll loop in
+	 * `awaitFrame`. The hold then keeps the commit the open scheduled in
+	 * the rig's hand, the panel never reaches the frame, and this record
+	 * goes red at the `FRAME_DEADLINE_MS` deadline on "the list to open".
+	 * Every other record in this file stays green, because the hold stands
+	 * only for this case's open and close.
+	 */
+	test("Esc closes the list when the plane's own flush lands late", async () => {
+		const runner = new FakeRunner();
+		runner.set("gh", viewerArgs(), { stdout: viewerJson() });
+		await withApp(
+			async (setup) => {
+				// The plane's passive flushes land in the rig's hand, not on
+				// the scheduler's clock: the loaded runner's shape, by design.
+				const handFlushesBack = withholdPassiveFlushes();
+				let bodyFailed = false;
+				try {
+					setup.mockInput.pressKey("o");
+					await awaitFrame(setup, (f) => f.includes("Init a repository"), "the list to open");
+					await closeOverlay(setup, "Init a repository", "the list to close");
+					const frame = await settle(setup);
+					expect(frame).not.toContain("Init a repository");
+				} catch (error) {
+					// The failure the body hit is the failure the record reports.
+					// The kept check stands only for the green run.
+					bodyFailed = true;
+					throw error;
+				} finally {
+					const kept = handFlushesBack();
+					if (!bodyFailed) {
+						expect(kept, "the hold kept no passive flush, so it proved nothing").toBeGreaterThan(0);
+					}
+				}
 			},
 			WIDTH,
 			HEIGHT,

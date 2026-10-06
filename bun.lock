@@ -14,6 +14,7 @@
         "@types/react": "^19.2.0",
         "fontkit": "^2.0.4",
         "react": "^19.2.0",
+        "scheduler": "^0.27.0",
         "smol-toml": "^1.8.0",
         "string-width": "^8.2.2",
         "typescript": "^5.9.0",
