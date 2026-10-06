@@ -630,6 +630,46 @@ export async function awaitFrame(
 }
 
 /**
+ * Wait for the rendered frame to satisfy `until`, running `check` on every
+ * frame read on the way, the frame that ends the wait included, and return
+ * that frame.
+ *
+ * The wait steps the frame stream the way `awaitFrame` does: it ends when the
+ * effect appears or the deadline dumps the last frame, and it never stands on
+ * a wall-clock window the effect can land outside of (the rule on the quality
+ * gate page). A case that must hold on every painted frame between two states
+ * - the decision modal's pop-in edge, issue #312 - waits for the end state
+ * this way and checks each frame the stream gives it, instead of sampling a
+ * fixed window that a loaded runner can outrun and miss.
+ *
+ * The buffer holds only the frame last painted, so a painted frame stands to
+ * be read only until the next paint replaces it. `pollMs` is how often the
+ * wait reads the buffer, and a caller that must read every painted frame the
+ * stream gives it polls faster than the paint's own interval, the way the
+ * pop-in case does against its 16 ms tick.
+ */
+export async function awaitFrameChecking(
+	setup: Setup,
+	until: (frame: string) => boolean,
+	what: string,
+	check: (frame: string) => void,
+	deadlineMs: number = FRAME_DEADLINE_MS,
+	pollMs: number = FRAME_POLL_MS,
+): Promise<string> {
+	const deadline = Date.now() + deadlineMs;
+	let frame = setup.captureCharFrame();
+	for (;;) {
+		check(frame);
+		if (until(frame)) return frame;
+		if (Date.now() >= deadline) {
+			throw new Error(`timed out waiting for ${what}\nlast frame:\n${frame}`);
+		}
+		await sleep(pollMs);
+		frame = setup.captureCharFrame();
+	}
+}
+
+/**
  * The keys `press` can send: one pressable character or named key.
  * Arrow keys, F1, F2, and Ctrl+C have their own helpers: the mock input
  * types a bare `"f1"` string as two characters, and arrows need their
