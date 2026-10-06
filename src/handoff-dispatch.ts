@@ -15,6 +15,7 @@ import {
 	CheckoutHoldLedger,
 	type CheckoutSide,
 	type CheckoutStart,
+	type ConsultationCheckoutHold,
 	checkoutWaitMessageLine,
 } from "./checkout-hold.ts";
 import type { FactoryConfig } from "./config.ts";
@@ -22,7 +23,7 @@ import type { ConfigWriteReport } from "./config-write.ts";
 import type { ConsultationPickupOutcome } from "./consultation-operations.ts";
 import { handoffStartFailedLine } from "./domain/attempt-record.ts";
 import { queueStagingOf } from "./domain/queue-staging.ts";
-import { recordTicketName } from "./domain/record-name.ts";
+import { recordConsultationName, recordTicketName } from "./domain/record-name.ts";
 import type { StartMode } from "./domain/start-mode.ts";
 import type { EnvironmentKind, Ticket, TicketState } from "./domain/ticket.ts";
 import { inFlightState, issueReferencesOf } from "./domain/ticket.ts";
@@ -54,6 +55,7 @@ import type {
 	WorkQueueAggregate,
 	WorkQueueConsultationItem,
 	WorkQueueHandoffItem,
+	WorkQueueItem,
 	WorkQueuePlaneActionItem,
 } from "./state/work-queue.ts";
 import { workQueueIdentityOf } from "./state/work-queue.ts";
@@ -306,6 +308,17 @@ export interface HandoffDispatchOptions extends HandoffDispatchReports {
 		consultationId: string,
 		mode: StartMode,
 	) => Promise<ConsultationPickupOutcome>;
+	/**
+	 * The Consultation side of the Shared checkout gate (issue #315, ADR 0109):
+	 * refuse one Consultation's row when the row's own wait stands past the
+	 * checkout work's budget. The dispatch owns the row it drops and the refusal
+	 * line it records; the Consultation operations own the record state the
+	 * refusal ends in, because the Consultation row's refusal belongs to the
+	 * Consultation record and not to the Work queue. Absent where the app has no
+	 * Consultation side, and the row the bound ends leaves without its record
+	 * state then.
+	 */
+	refuseConsultationPickup?: (consultationId: string, fact: string) => void;
 	home: string;
 	/** Persist a repository mapping discovered during handoff, if one is found. */
 	persistMapping?: (mapping: RepositoryMapping) => Promise<ConfigWriteReport | undefined>;
@@ -400,6 +413,15 @@ export interface HandoffDispatch {
 	 */
 	removeConsultationQueueItem(consultationId: string): boolean;
 	/**
+	 * The Consultation side of the Shared checkout hold (issue #315, ADR 0109):
+	 * the gate a worktree Consultation's start crosses at its claim, the take the
+	 * claim runs, and the let-go where the opening settles. The dispatch owns the
+	 * ledger the seam crosses, so the hold stays one state machine and the
+	 * Consultation operations own only the acts of the row they own - the wait's
+	 * keep, the refusal's record state, and the release.
+	 */
+	readonly checkoutHold: ConsultationCheckoutHold;
+	/**
 	 * The Close cleanup of one ended cycle. Returns the failure reason, or
 	 * undefined. `end` stays on the seam so manual and observation callers share
 	 * the same operation shape; the caller owns the wording of the answer.
@@ -486,6 +508,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 		consultationId: string,
 		mode: StartMode,
 	) => Promise<ConsultationPickupOutcome>;
+	private readonly refuseConsultationPickup?: (consultationId: string, fact: string) => void;
 	private readonly home: string;
 	private readonly reports: HandoffDispatchReports;
 	private readonly persistMapping?: (
@@ -539,6 +562,13 @@ class HandoffDispatchModule implements HandoffDispatch {
 	 * started, not when its turn ends.
 	 */
 	private readonly checkout: CheckoutHoldLedger;
+	/**
+	 * The Consultation side's seam into the hold above (issue #315, ADR 0109):
+	 * the dispatch owns the ledger, and the seam is the dispatch's own answers on
+	 * the consultation's facts, so the Consultation operations cross one gate and
+	 * never hold a second state machine beside it.
+	 */
+	readonly checkoutHold: ConsultationCheckoutHold;
 
 	/**
 	 * How many pickup passes this module is running now, and whether a checkout
@@ -613,6 +643,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 		this.seatCount = options.seatCount;
 		this.missingSeatTickets = options.missingSeatTickets ?? (() => []);
 		this.pickupConsultation = options.pickupConsultation;
+		this.refuseConsultationPickup = options.refuseConsultationPickup;
 		this.home = options.home;
 		this.persistMapping = options.persistMapping;
 		this.log = options.log;
@@ -633,13 +664,32 @@ class HandoffDispatchModule implements HandoffDispatch {
 		this.checkout = new CheckoutHoldLedger({
 			now: () => this.state.now(),
 			config: () => this.config(),
-			holderStands: (side, ticketIdentity) =>
+			holderStands: (side, identity) =>
 				side === "handoff"
-					? this.state.handoff.handoffInFlight(ticketIdentity)
-					: this.planeActionRunsInFlight.has(ticketIdentity),
-			rowStands: (ticketIdentity) => this.state.workQueue.hasWorkItem(ticketIdentity),
+					? this.state.handoff.handoffInFlight(identity)
+					: side === "consultation"
+						? this.state.consultationRecord.consultation(identity)?.state === "opening"
+						: this.planeActionRunsInFlight.has(identity),
+			rowStands: (identity) =>
+				this.state.workQueue.hasWorkItem(identity) ||
+				this.state.workQueue.hasConsultationItem(identity),
+			consultationRepository: (consultationId) =>
+				this.state.consultationRecord.consultation(consultationId)?.repository.identity,
+			consultationTypeName: (consultationId) =>
+				this.state.consultationRecord.consultation(consultationId)?.typeName,
 			log: this.log,
 		});
+		// The Consultation side's seam into the hold (issue #315): the gate and the
+		// take cross the ledger on the consultation's facts, and the release runs
+		// the settle path's own re-ask, so the rows waiting on the checkout a
+		// Consultation lets go take their turn the way a Handoff's release does.
+		this.checkoutHold = {
+			cross: (consultationId) =>
+				this.checkout.crossConsultation(consultationId, this.checkoutProjectionReader()),
+			take: (consultationId, checkoutKey) =>
+				this.checkout.takeConsultation(consultationId, checkoutKey),
+			release: (consultationId) => this.releaseCheckoutAndReask("consultation", consultationId),
+		};
 	}
 
 	handoffActive(): boolean {
@@ -1239,7 +1289,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 		fact: string,
 	): void {
 		this.checkout.forgetWait(item.ticketIdentity);
-		this.log?.warn(this.refusalLine(start.channel, item.ticketIdentity, fact));
+		this.log?.warn(this.refusalLine(start.channel, this.ticketName(item.ticketIdentity), fact));
 		if (item.kind === "plane-action") {
 			this.removeQueueRow(item.ticketIdentity);
 			this.settleIntentOnStarted(item.ticketIdentity, { ok: false, reason: fact });
@@ -1261,8 +1311,24 @@ class HandoffDispatchModule implements HandoffDispatch {
 	 * a `waits:` fact for a row that left the queue would tell the operator a
 	 * working queue and a dropped row in the same act (issue #297 review).
 	 */
-	private reportCheckoutWait(itemIdentity: string, fact: string): void {
-		this.reports.notice(checkoutWaitMessageLine(this.ticketName(itemIdentity), fact));
+	private reportCheckoutWait(name: string, fact: string): void {
+		this.reports.notice(checkoutWaitMessageLine(name, fact));
+	}
+
+	/**
+	 * The name a Work queue row's record line wears (issue #315): the ticket's
+	 * projection title for a Handoff row and a merge row, the record's
+	 * Consultation type beside its identity prefix for a Consultation row - the
+	 * name the row's start line wears, so the wait and the refusal read beside
+	 * the start in one record per start.
+	 */
+	private rowName(item: WorkQueueItem): string {
+		if (item.kind === "consultation")
+			return recordConsultationName(
+				this.state.consultationRecord.consultation(item.consultationId)?.typeName,
+				item.consultationId,
+			);
+		return this.ticketName(item.ticketIdentity);
 	}
 
 	/**
@@ -1511,7 +1577,12 @@ class HandoffDispatchModule implements HandoffDispatch {
 	}
 
 	removeConsultationQueueItem(consultationId: string): boolean {
-		return this.state.consultationRecord.removeConsultationWorkItem(consultationId);
+		const removed = this.state.consultationRecord.removeConsultationWorkItem(consultationId);
+		// The wait's entry stands while the row stands (issue #315): a row that
+		// leaves through the operator's hand forgets its wait, the way a handoff's
+		// removal does through `removeQueueRow`.
+		this.checkout.forgetWait(consultationId);
+		return removed;
 	}
 
 	/**
@@ -1595,12 +1666,39 @@ class HandoffDispatchModule implements HandoffDispatch {
 		if (pickup === undefined) return false;
 		const outcome = await pickup(item.consultationId, mode);
 		if (this.stopped) return false;
+		if (outcome.kind === "waiting") {
+			// The row stands in the queue with the wait (issue #315, ADR 0109): the
+			// checkout is at work, the record keeps its `queued` state, and the next
+			// pass runs the start when the checkout is free, the way a handoff row
+			// that met a held checkout stands. The wait takes no seat, so the walk
+			// reaches the starts behind the row. A force-dispatch that met the held
+			// checkout answers the key with the fact that holds it: the key passes
+			// the cap and nothing else (issue #297).
+			if (mode === "force-dispatch") this.reportCheckoutWait(this.rowName(item), outcome.fact);
+			return false;
+		}
+		if (outcome.kind === "refused") {
+			// The row's own wait stood past the budget and the bound ended it (issue
+			// #315, ADR 0109): the refusal is one act on two owners. The record line
+			// and the row are this module's, and the record state the refusal ends in
+			// is the Consultation operations' - refuse the record first, so the row's
+			// removal below finds a `failed` record and not the `queued` one it would
+			// otherwise move to `unscheduled` on the way out.
+			this.log?.warn(this.refusalLine("consultation", this.rowName(item), outcome.fact));
+			this.refuseConsultationPickup?.(item.consultationId, outcome.fact);
+			this.state.consultationRecord.removeConsultationWorkItem(item.consultationId);
+			this.checkout.forgetWait(item.consultationId);
+			this.reports.refresh();
+			return false;
+		}
 		// The claim took the pointer with it for a `started` answer; this
 		// removal clears it for the answers that claimed nothing, so no item is
 		// left standing for a record that no longer waits. The item leaves the
-		// queue on every answer (ADR 0034, issue #90): the record keeps the ask,
-		// and the queue holds the pointer only while the record waits.
+		// queue on every answer but the wait (ADR 0034, issue #90): the record
+		// keeps the ask, and the queue holds the pointer only while the record
+		// waits.
 		this.state.consultationRecord.removeConsultationWorkItem(item.consultationId);
+		this.checkout.forgetWait(item.consultationId);
 		this.reports.refresh();
 		if (outcome.kind === "started") {
 			// The record holds its seat in `opening` now, and the opening runs on
@@ -1902,7 +2000,8 @@ class HandoffDispatchModule implements HandoffDispatch {
 			// row that works no checkout reads nothing.
 			const gate = this.crossCheckoutGate(item, this.checkoutProjectionReader());
 			if (!gate.ok) {
-				if (gate.outcome === "waiting") this.reportCheckoutWait(item.ticketIdentity, gate.fact);
+				if (gate.outcome === "waiting")
+					this.reportCheckoutWait(this.ticketName(item.ticketIdentity), gate.fact);
 				return;
 			}
 			const limit = this.config().maxParallelAgents;
@@ -1916,7 +2015,8 @@ class HandoffDispatchModule implements HandoffDispatch {
 		const overCap = overParallelLimit(limit, this.seatCount());
 		const gate = this.crossCheckoutGate(item, this.checkoutProjectionReader());
 		if (!gate.ok) {
-			if (gate.outcome === "waiting") this.reportCheckoutWait(item.ticketIdentity, gate.fact);
+			if (gate.outcome === "waiting")
+				this.reportCheckoutWait(this.ticketName(item.ticketIdentity), gate.fact);
 			return;
 		}
 		const claimed = this.claimQueueItem(item, "force-dispatch", gate.checkoutKey);
@@ -2022,7 +2122,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 		// and the line names the channel that reached it first (issue #223 review).
 		if (!this.queueItemRefusals.has(identity)) {
 			this.queueItemRefusals.add(identity);
-			this.log?.warn(this.refusalLine(prefix, identity, QUEUE_ITEM_STANDS_FACT));
+			this.log?.warn(this.refusalLine(prefix, this.ticketName(identity), QUEUE_ITEM_STANDS_FACT));
 		}
 		return { ok: false, reason: this.queueItemStandsReason(identity) };
 	}
@@ -2039,7 +2139,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 	private refuseMergeRunStanding(identity: string): DispatchResult {
 		if (!this.mergeRunRefusals.has(identity)) {
 			this.mergeRunRefusals.add(identity);
-			this.log?.warn(this.refusalLine("merge", identity, MERGE_RUN_STANDS_FACT));
+			this.log?.warn(this.refusalLine("merge", this.ticketName(identity), MERGE_RUN_STANDS_FACT));
 		}
 		return {
 			ok: false,
@@ -2069,8 +2169,8 @@ class HandoffDispatchModule implements HandoffDispatch {
 	 * own wording; the line names the ticket first, the way the queue's other lines
 	 * name it.
 	 */
-	private refusalLine(prefix: CheckoutChannel, identity: string, fact: string): string {
-		return `${prefix} refused: ${this.ticketName(identity)} (${fact})`;
+	private refusalLine(prefix: CheckoutChannel, name: string, fact: string): string {
+		return `${prefix} refused: ${name} (${fact})`;
 	}
 
 	/**
@@ -2092,7 +2192,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 		const stated = this.claimRefusals.get(key);
 		if (stated !== undefined && stated.fact === fact && stated.attempts === attempts) return;
 		this.claimRefusals.set(key, { fact, attempts });
-		this.log?.warn(this.refusalLine(prefix, identity, fact));
+		this.log?.warn(this.refusalLine(prefix, this.ticketName(identity), fact));
 	}
 
 	/**

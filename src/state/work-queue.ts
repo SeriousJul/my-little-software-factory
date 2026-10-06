@@ -82,6 +82,8 @@ export interface WorkQueueAggregate {
 	setQueuePaused(paused: boolean): void;
 	items(): WorkQueueItem[];
 	hasWorkItem(ticketIdentity: string): boolean;
+	/** Whether a Consultation row waits in the queue (ADR 0034, issue #90). */
+	hasConsultationItem(consultationId: string): boolean;
 	enqueueWork(entry: {
 		ticketIdentity: string;
 		/** The ticket the route's handoff continues; null for a start that is no route. */

@@ -26,12 +26,13 @@ import {
 	checkoutStartOf,
 } from "../src/checkout-hold.ts";
 import type { FactoryConfig } from "../src/config.ts";
+import { recordConsultationName } from "../src/domain/record-name.ts";
 import type { Ticket } from "../src/domain/ticket.ts";
 import type { TicketProjection } from "../src/state/ticket-work-cycle.ts";
 import type { WorkQueueHandoffItem, WorkQueuePlaneActionItem } from "../src/state/work-queue.ts";
 import { BASE_CONFIG } from "./base-config.ts";
 import { queueItem, ticket } from "./fact-fixtures.ts";
-import { type RecordedLine, recordLogger, warnLine } from "./record-logger.ts";
+import { infoLine, type RecordedLine, recordLogger, warnLine } from "./record-logger.ts";
 
 // The two Repositories, and the Ticket each one holds.
 const FACTORY = "github.com/acme/factory";
@@ -54,6 +55,10 @@ const BILLING_TICKET = ticket({
 	title: "Invoice pdf",
 	repositoryRef: repo(BILLING),
 });
+// One Consultation record, for the Consultation side of the hold (issue #315):
+// the id every record line names by its prefix, and the type it wears beside it.
+const CONSULTATION = "c0ffee00-1111-4222-8333-abcdefabcdef";
+const CONSULTATION_TYPE = "grill";
 
 function repo(identity: string): NonNullable<Ticket["repositoryRef"]> {
 	return { identity, displayName: identity, cloneUrl: "" };
@@ -95,6 +100,8 @@ interface Rig {
 	holder: (side: CheckoutSide, ticketIdentity: string, stands: boolean) => void;
 	/** Say whether the Work queue still holds one row. */
 	row: (ticketIdentity: string, stands: boolean) => void;
+	/** Say which Repository and type one Consultation record works (issue #315). */
+	consultation: (id: string, repository: string, typeName: string) => void;
 	/** The projection the gate and the drop line read. */
 	projection: () => TicketProjection;
 	/** The one read the caller hands the gate and the sweeps. */
@@ -113,6 +120,7 @@ function rig(): Rig {
 		NEXT_TICKET.identity,
 	]);
 	const lines: RecordedLine[] = [];
+	const consultations = new Map<string, { repository: string; typeName: string }>();
 	const rows_ = [FACTORY_TICKET, OTHER_TICKET, BILLING_TICKET, NEXT_TICKET];
 	const projection: TicketProjection = {
 		rows: rows_,
@@ -124,6 +132,8 @@ function rig(): Rig {
 		config: () => CONFIG,
 		holderStands: (side, ticketIdentity) => standing.has(`${side}:${ticketIdentity}`),
 		rowStands: (ticketIdentity) => rows.has(ticketIdentity),
+		consultationRepository: (consultationId) => consultations.get(consultationId)?.repository,
+		consultationTypeName: (consultationId) => consultations.get(consultationId)?.typeName,
 		log: recordLogger(lines),
 	};
 	const reader = () => {
@@ -145,10 +155,18 @@ function rig(): Rig {
 			if (stands) rows.add(ticketIdentity);
 			else rows.delete(ticketIdentity);
 		},
+		consultation: (id, repository, typeName) => {
+			consultations.set(id, { repository, typeName });
+		},
 		projection: () => projection,
 		reader,
 		reads: () => reads,
 	};
+}
+
+/** The holder phrase a Consultation start wears in the record's lines. */
+function checkoutHoldPhrase(): string {
+	return `consultation of ${recordConsultationName(CONSULTATION_TYPE, CONSULTATION)}`;
 }
 
 /** Take a hold for one start, the way a claim does: cross, then take. */
@@ -335,6 +353,146 @@ describe("the Shared checkout hold's own state machine (issue #297, ADR 0109)", 
 		expect(gate).toEqual({ ok: true, checkoutKey: null });
 		r.ledger.take(live, gate.ok ? gate.checkoutKey : null);
 		expect(r.ledger.cross(worktreeRow(OTHER_TICKET.identity), r.reader).ok).toBe(true);
+	});
+
+	describe("the Consultation side of the hold (issue #315, ADR 0109)", () => {
+		test("a worktree Consultation crosses, takes the hold, and the next start waits behind it", () => {
+			const r = rig();
+			r.consultation(CONSULTATION, FACTORY, CONSULTATION_TYPE);
+			r.row(CONSULTATION, true);
+			const gate = r.ledger.crossConsultation(CONSULTATION, r.reader);
+			expect(gate.ok).toBe(true);
+			if (!gate.ok) return;
+			r.holder("consultation", CONSULTATION, true);
+			r.ledger.takeConsultation(CONSULTATION, gate.checkoutKey);
+			const fact = `the shared checkout is at work: the ${checkoutHoldPhrase()} holds it`;
+			const other = r.ledger.cross(worktreeRow(OTHER_TICKET.identity), r.reader);
+			expect(other).toEqual({ ok: false, outcome: "waiting", fact });
+			expect(r.lines).toContainEqual(infoLine(`handoff waits: "${OTHER_TICKET.title}" (${fact})`));
+		});
+
+		test("a Consultation row waits behind a handoff hold, with its own wait line", () => {
+			const r = rig();
+			takeHold(r, worktreeRow(FACTORY_TICKET.identity));
+			r.consultation(CONSULTATION, FACTORY, CONSULTATION_TYPE);
+			r.row(CONSULTATION, true);
+			const fact = `the shared checkout is at work: the handoff of "${FACTORY_TICKET.title}" holds it`;
+			const gate = r.ledger.crossConsultation(CONSULTATION, r.reader);
+			expect(gate).toEqual({ ok: false, outcome: "waiting", fact });
+			// The wait line wears the Consultation's own name - its type beside its
+			// identity prefix - and states once while it stands (issue #231).
+			const name = recordConsultationName(CONSULTATION_TYPE, CONSULTATION);
+			expect(r.lines).toContainEqual(infoLine(`consultation waits: ${name} (${fact})`));
+			r.ledger.crossConsultation(CONSULTATION, r.reader);
+			expect(r.lines.filter((line) => line.message.startsWith("consultation waits:"))).toHaveLength(
+				1,
+			);
+		});
+
+		test("a start that holds no queue row waits on no entry and leaves no line", () => {
+			const r = rig();
+			takeHold(r, worktreeRow(FACTORY_TICKET.identity));
+			r.consultation(CONSULTATION, FACTORY, CONSULTATION_TYPE);
+			// No `r.row(CONSULTATION, true)`: the record holds no Work queue row, the
+			// operator's direct start now.
+			const gate = r.ledger.crossConsultation(CONSULTATION, r.reader);
+			// The gate still answers the wait, so the caller can answer the key with
+			// the fact - but the queue holds no row, so the record states nothing.
+			if (!gate.ok) expect(gate.outcome).toBe("waiting");
+			expect(r.lines).toEqual([]);
+		});
+
+		test("the Consultation row's own wait ends it with the refusal", () => {
+			const r = rig();
+			takeHold(r, worktreeRow(FACTORY_TICKET.identity));
+			r.consultation(CONSULTATION, FACTORY, CONSULTATION_TYPE);
+			r.row(CONSULTATION, true);
+			r.ledger.crossConsultation(CONSULTATION, r.reader);
+			// The checkout keeps changing hands: every holder is young, so the hold's
+			// age never fires, and the row's own wait is what bounds it (issue #297
+			// review), the way the handoff row's refusal test runs.
+			r.advance(CHECKOUT_WORK_BUDGET_MS / 2);
+			r.ledger.release("handoff", FACTORY_TICKET.identity);
+			r.holder("handoff", FACTORY_TICKET.identity, false);
+			takeHold(r, worktreeRow(NEXT_TICKET.identity));
+			r.advance(CHECKOUT_WORK_BUDGET_MS / 2);
+			expect(r.ledger.crossConsultation(CONSULTATION, r.reader)).toEqual({
+				ok: false,
+				outcome: "refused",
+				fact: CHECKOUT_ROW_OVER_BUDGET_FACT,
+				// The refusal carries the classification the gate made, so the caller
+				// that drops the row names the channel the wait line named.
+				start: { side: "consultation", channel: "consultation" },
+			});
+		});
+
+		test("a Consultation crosses beside a hold of another Repository", () => {
+			const r = rig();
+			takeHold(r, worktreeRow(FACTORY_TICKET.identity));
+			r.consultation(CONSULTATION, BILLING, CONSULTATION_TYPE);
+			r.row(CONSULTATION, true);
+			expect(r.ledger.crossConsultation(CONSULTATION, r.reader).ok).toBe(true);
+		});
+
+		test("a Consultation record the state no longer holds crosses and takes no hold", () => {
+			const r = rig();
+			takeHold(r, worktreeRow(FACTORY_TICKET.identity));
+			// The record is gone: no Repository, no key, no wait - the way a ticket the
+			// projection dropped crosses the gate above with no key.
+			const gate = r.ledger.crossConsultation(CONSULTATION, r.reader);
+			expect(gate).toEqual({ ok: true, checkoutKey: null });
+		});
+
+		test("a release matches the side and the id, and a Consultation hold settles", () => {
+			const r = rig();
+			r.consultation(CONSULTATION, FACTORY, CONSULTATION_TYPE);
+			r.row(CONSULTATION, true);
+			const gate = r.ledger.crossConsultation(CONSULTATION, r.reader);
+			expect(gate.ok).toBe(true);
+			if (!gate.ok) return;
+			r.holder("consultation", CONSULTATION, true);
+			r.ledger.takeConsultation(CONSULTATION, gate.checkoutKey);
+			// The wrong side settles nothing, and the right side lets the next start
+			// cross.
+			expect(r.ledger.release("handoff", CONSULTATION)).toBe(false);
+			expect(r.ledger.release("consultation", CONSULTATION)).toBe(true);
+			expect(r.ledger.cross(worktreeRow(OTHER_TICKET.identity), r.reader).ok).toBe(true);
+		});
+
+		test("a hold whose Consultation record left opening is dropped by the read", () => {
+			const r = rig();
+			r.consultation(CONSULTATION, FACTORY, CONSULTATION_TYPE);
+			r.row(CONSULTATION, true);
+			const gate = r.ledger.crossConsultation(CONSULTATION, r.reader);
+			expect(gate.ok).toBe(true);
+			if (!gate.ok) return;
+			r.holder("consultation", CONSULTATION, true);
+			r.ledger.takeConsultation(CONSULTATION, gate.checkoutKey);
+			// The record moved off `opening` on a path that let nothing go: the plane
+			// keeps the Repository working rather than lock it out, and says nothing.
+			r.holder("consultation", CONSULTATION, false);
+			expect(r.ledger.cross(worktreeRow(OTHER_TICKET.identity), r.reader).ok).toBe(true);
+			expect(r.lines).toEqual([]);
+		});
+
+		test("the hold's age ends a Consultation hold and states its line", () => {
+			const r = rig();
+			r.consultation(CONSULTATION, FACTORY, CONSULTATION_TYPE);
+			r.row(CONSULTATION, true);
+			const gate = r.ledger.crossConsultation(CONSULTATION, r.reader);
+			expect(gate.ok).toBe(true);
+			if (!gate.ok) return;
+			r.holder("consultation", CONSULTATION, true);
+			r.ledger.takeConsultation(CONSULTATION, gate.checkoutKey);
+			r.advance(CHECKOUT_WORK_BUDGET_MS);
+			expect(r.ledger.cross(worktreeRow(OTHER_TICKET.identity), r.reader).ok).toBe(true);
+			const name = recordConsultationName(CONSULTATION_TYPE, CONSULTATION);
+			expect(r.lines).toContainEqual(
+				warnLine(
+					`checkout hold dropped: the consultation of ${name} (${CHECKOUT_HOLD_OVER_BUDGET_FACT})`,
+				),
+			);
+		});
 	});
 
 	test("one classification names a start's side and its word together", () => {

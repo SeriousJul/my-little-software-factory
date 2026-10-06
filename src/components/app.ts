@@ -1536,43 +1536,6 @@ export function App({
 		return write;
 	};
 	const consultationOperationsRef = useRef<ConsultationOperations | undefined>(undefined);
-	// Capture state, replaceConsultations, and persistMapping once per mount.
-	// The state is created once by factory.ts, and the other callbacks read
-	// the current config and projections through refs.
-	if (consultationOperationsRef.current === undefined && state !== undefined) {
-		consultationOperationsRef.current = createConsultationOperations({
-			state,
-			runner: commandRunner,
-			config: () => configRef.current,
-			home: homeDir,
-			// The rows the machine reads, never the operator's List filter (ADR 0060):
-			// the live-checkout conflict read names the in-flight Ticket whose Agent
-			// holds the checkout, and a Ticket the operator judged out of the list is
-			// still live work the confirmation has to name.
-			tickets: () => listViewsRef.current.active,
-			// The one shared seat count the Parallel limit gate and the mode cell
-			// read: the Consultation start line states the reading this seam
-			// answers, measured before the start takes its own seat (issue #220).
-			seatCount: currentSeatCount,
-			log: logger,
-			persistRepositoryMapping: persistMapping,
-			callbacks: {
-				onStatus: setStatus,
-				// Each Consultation operation owns its progress line, so two
-				// operations in two repositories never erase one another.
-				onProgress: (text, owner) =>
-					text === null
-						? clearProgressMessage(consultationProgressOwner(owner))
-						: setWorkingMessage(text, consultationProgressOwner(owner)),
-				onConsultationsChanged: replaceConsultations,
-				onSafetyConflict: ({ consultationId, safety }) => {
-					setConsultationSafety({ consultationId, safety });
-					setPanel({ kind: "consultation-safety", identity: consultationId });
-				},
-			},
-		});
-	}
-	const consultationOperations = consultationOperationsRef.current;
 	if (state === undefined) handoffDispatchRef.current = undefined;
 	else if (handoffDispatchRef.current?.state !== state) {
 		handoffDispatchRef.current = {
@@ -1597,6 +1560,13 @@ export function App({
 				pickupConsultation: (consultationId, mode) =>
 					consultationOperationsRef.current?.pickup(consultationId, mode) ??
 					Promise.resolve({ kind: "moved" } as const),
+				// The Consultation side of the Shared checkout gate (issue #315,
+				// ADR 0109): the row the bound ends refuses in the record state the
+				// Consultation operations write, beside the row the dispatch drops and
+				// the refusal line it records.
+				refuseConsultationPickup: (consultationId, fact) => {
+					consultationOperationsRef.current?.refusePickup(consultationId, fact);
+				},
 				home: homeDir,
 				working: (text) => setWorkingMessage(text, "handoff"),
 				warning: setWarningMessage,
@@ -1618,6 +1588,52 @@ export function App({
 			}),
 		};
 	}
+	// Capture state, replaceConsultations, and persistMapping once per mount.
+	// The state is created once by factory.ts, and the other callbacks read
+	// the current config and projections through refs. The dispatch block above
+	// runs first on purpose (issue #315, ADR 0109): the operations cross the
+	// dispatch's Shared checkout hold through the seam it exposes, and the
+	// dispatch is built on this same state.
+	if (consultationOperationsRef.current === undefined && state !== undefined) {
+		consultationOperationsRef.current = createConsultationOperations({
+			state,
+			runner: commandRunner,
+			config: () => configRef.current,
+			home: homeDir,
+			// The rows the machine reads, never the operator's List filter (ADR 0060):
+			// the live-checkout conflict read names the in-flight Ticket whose Agent
+			// holds the checkout, and a Ticket the operator judged out of the list is
+			// still live work the confirmation has to name.
+			tickets: () => listViewsRef.current.active,
+			// The one shared seat count the Parallel limit gate and the mode cell
+			// read: the Consultation start line states the reading this seam
+			// answers, measured before the start takes its own seat (issue #220).
+			seatCount: currentSeatCount,
+			log: logger,
+			persistRepositoryMapping: persistMapping,
+			// The Shared checkout hold of the run (issue #315, ADR 0109): the gate a
+			// worktree Consultation start crosses at its claim, the take the claim
+			// runs, and the let-go where the opening settles. The dispatch owns the
+			// ledger the seam crosses, so the module crosses the dispatch's one gate
+			// and never a second state machine beside it.
+			checkoutHold: handoffDispatchRef.current?.dispatch.checkoutHold,
+			callbacks: {
+				onStatus: setStatus,
+				// Each Consultation operation owns its progress line, so two
+				// operations in two repositories never erase one another.
+				onProgress: (text, owner) =>
+					text === null
+						? clearProgressMessage(consultationProgressOwner(owner))
+						: setWorkingMessage(text, consultationProgressOwner(owner)),
+				onConsultationsChanged: replaceConsultations,
+				onSafetyConflict: ({ consultationId, safety }) => {
+					setConsultationSafety({ consultationId, safety });
+					setPanel({ kind: "consultation-safety", identity: consultationId });
+				},
+			},
+		});
+	}
+	const consultationOperations = consultationOperationsRef.current;
 	const handoffDispatch = handoffDispatchRef.current?.dispatch;
 	/**
 	 * The Handoff dispatch is stopped when its owner leaves, never when the
