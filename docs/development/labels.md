@@ -19,7 +19,7 @@ label write stands until the next transition.
 | `ready-for-review` | A non-draft pull request is ready for review. |
 | `ready-to-ship` | A non-draft pull request passed review with a score that reached the review transition's configured threshold (90 in the default machine). It is ready for the plane's merge: the plane runs the merge as a plane action without an agent (ADR 0068), with the method the merge task type names (squash in the default machine). |
 | `needs-work` | A pull request needs rework. This takes priority over `ready-for-review` and can apply to a draft. A blocked merge of a `ready-to-ship` pull request lands here. |
-| `ready-for-spec` | An open GitHub issue needs a specification before the work is worth implementing. No transition writes it: the operator applies it to put the ticket on the analyze position, and the analyze agent applies `ready-for-agent` when the specification settles (ADR 0085, ADR 0086). |
+| `ready-for-spec` | An open GitHub issue needs a specification before the work is worth implementing. No transition writes it: the operator applies it to put the ticket on the analyze position, and the analyze agent applies `ready-for-agent` when the specification settles (ADR 0085, ADR 0086). The analyze type carries Operator-decides, so auto-handoff mode never starts that interview by itself: the operator's own handoff opens it (ADR 0117). |
 
 A pull request that carries none of these labels is on the machine's parking
 state: the default source lists it, because that is how the implement

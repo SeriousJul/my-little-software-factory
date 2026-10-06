@@ -158,8 +158,9 @@ labels-any = ["ready-for-agent"]
 # `ready-for-spec` label is operator-owned: no transition writes it, so no fire
 # adds or removes it. The Repository init creates it and registers an issues
 # feed on `label:ready-for-spec`, because GitHub search cannot union two label
-# qualifiers in one query (ADR 0115). Your agents need the grill-with-docs
-# skill for the analyze type below.
+# qualifiers in one query (ADR 0115). The analyze type carries operator-decides,
+# so auto-handoff mode never starts the interview by itself (ADR 0117). Your
+# agents need the grill-with-docs skill for the analyze type below.
 [[states]]
 name = "ready-for-spec"
 task-type = "analyze"
@@ -379,8 +380,11 @@ pull-request-facts = []
 # the branch stands for the implementation that follows. The operator-decides
 # flag parks its completions for the operator, so unattended mode keeps the
 # live session alive between the agent's questions and the operator's
-# answers. Your agents need the grill-with-docs skill for it: without the
-# skill the analyze handoff opens on a slash command the agent does not know.
+# answers, and the same flag keeps unattended mode from starting the interview
+# at all: the operator opens it, and the ticket keeps its row and its badge
+# until they do (ADR 0117). Your agents need the grill-with-docs skill for it:
+# without the skill the analyze handoff opens on a slash command the agent does
+# not know.
 
 [task-types.analyze]
 thinking = "xhigh"

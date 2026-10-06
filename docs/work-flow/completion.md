@@ -24,14 +24,27 @@ that ends the awaiting state. What happens next depends on your mode:
   of work without you. A turn with no Next step - no branch held, or labels
   that land on a parking state - closes the cycle. A turn whose label write
   failed parks for you: the plane does not route from labels it did not write.
-  A step a gate holds - the position offers no such task, the position is not
-  actionable, the Same-type hold - rests `awaiting`, and the Message line names it for
+  A step a gate holds - the task type carries Operator-decides, the position
+  offers no such task, the position is not actionable, the Same-type hold - rests
+  `awaiting`, and the Message line names it for
   you beside the settle that produced it: the held step, the ticket that position
   stands on when that is not your settled ticket, and the gate that holds it. The
   decision modal never opens on that turn, so the line is where the hold is stated
   while the mode runs.
 - A turn that ended in a failure is never decided for you, in either mode:
   see held turns below.
+
+## A task type you own
+
+A task type you flagged `operator-decides` is yours in both directions. Auto mode
+never decides its settled turns, and it never starts it: not as fresh work, not
+as the next step a Transition derives, not as the restart of a missing agent, and
+not as an automatic merge (ADR 0117). The ticket keeps its row, its task badge,
+and its position where it stands, and the skip is quiet - the flag is your own
+config, not a fault the plane reports. Your handoff of the ticket, the override
+panel, a decision row's key, and a force-dispatch all still start it. The shipped
+`analyze` type carries the flag, so the `ready-for-spec` position is one you open
+by hand.
 
 ## Held turns and the dispatch pause
 
@@ -48,7 +61,10 @@ that already stands in the Work queue still takes its seat.
 
 A missing agent behaves the same way in auto mode: the factory restarts the
 handoff once, with the last message as the previous message, and at the
-per-ticket handoff limit it abandons the cycle instead. In manual mode the
+per-ticket handoff limit it abandons the cycle instead. A handoff of a task type
+you flagged `operator-decides` is the exception: the flag holds that automatic
+restart, the ticket keeps its missing fact, and the missing modal waits for your
+restart or abandon (ADR 0117). In manual mode the
 factory never touches a missing agent: the `missing` badge stays until you
 restart or abandon it from the [missing modal](../operation/modals.md).
 

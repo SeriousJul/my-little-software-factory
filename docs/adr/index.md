@@ -125,3 +125,4 @@ body states the context, the decision, and the consequences.
 - [ADR 0114: The Consultation close takes the Delete key, so the queue removal is one key](./0114-the-consultation-close-takes-the-delete-key-the-queue-removal-is-one-key.md)
 - [ADR 0115: The Repository init creates its gate labels, and one issue feed per gate](./0115-the-repository-init-creates-its-gate-labels-and-one-issue-feed-per-gate.md)
 - [ADR 0116: The shipped machine gates a position on the source's own type label](./0116-the-shipped-machine-gates-a-position-on-the-sources-own-type-label.md)
+- [ADR 0117: Operator-decides holds its Task type out of every automatic add](./0117-operator-decides-holds-its-task-type-out-of-every-automatic-add.md)

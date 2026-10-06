@@ -153,9 +153,12 @@ context-window = "--autocompact {value}"
 # default-model, and an omitted level or window leaves it to the agent. The
 # override panel prefills all four, and each one applies to its own setting
 # only. The action form takes no profile keys.
-# operator-decides is a boolean either form carries: when set, the automatic
-# Completion rule parks the type's completions for the operator ahead of its
-# outcome checks (ADR 0085, renamed by ADR 0092).
+# operator-decides is a boolean either form carries: when set, the type is your
+# own. The automatic Completion rule parks the type's completions for you ahead
+# of its outcome checks (ADR 0085, renamed by ADR 0092), and Auto-handoff mode
+# asks no start of the type at all - no fresh-work row, no continuation, no
+# restart, and no automatic merge (ADR 0117). Your own handoff, the override
+# panel, a decision row, and a force-dispatch still start it.
 # A [task-types.X.transition] table fires when a turn of this type
 # completes - or, for the action form, when the action's run answers:
 # it writes the label facts on the ticket and its linked pull
@@ -230,9 +233,11 @@ environment = "worktree"
 
 # The analyze grills the ticket's specification with the operator in the live
 # session and writes it back to the ticket (ADR 0085, ADR 0086). Its
-# operator-decides flag parks its completions for the operator, so
-# unattended mode keeps the live session alive between the agent's questions
-# and the operator's answers. It carries no transition and no pull request.
+# operator-decides flag parks its completions for the operator, so unattended
+# mode keeps the live session alive between the agent's questions and the
+# operator's answers, and the same flag keeps unattended mode from starting the
+# interview at all: you open it (ADR 0117). It carries no transition and no pull
+# request.
 [task-types.analyze]
 thinking = "xhigh"
 operator-decides = true
@@ -324,7 +329,10 @@ context-window = 272000
 # ready-for-agent state, so a ticket carrying both labels rests at
 # ready-for-agent and is offered for implementation, not re-specified. The
 # ready-for-spec label is operator-owned: no transition writes it, and the
-# Repository init creates it because a state gates on it (ADR 0115).
+# Repository init creates it because a state gates on it (ADR 0115). The
+# analyze type carries operator-decides, so Auto-handoff mode never starts the
+# interview for you: the ticket keeps its row and its badge until you hand it
+# off (ADR 0117).
 [[states]]
 name = "ready-for-spec"
 task-type = "analyze"
@@ -771,7 +779,7 @@ beside `seats 0/2` is a normal start, not a breach of the cap.
 | `model` | no | `default-model` | The Task profile's model: free text the resolved agent's model template renders, so that agent must define one. The override panel prefills it, and clearing that row leaves the model to the agent. |
 | `thinking` | no | - | The Task profile's thinking level: the level this task type's handoffs start on, and the starting value of the override panel's thinking row. It must be one of the profile agent's `thinking-values`. |
 | `context-window` | no | - | The Task profile's context window: a whole count of tokens, written as digits with no separators, that this task type's handoffs start their agent with. The profile agent must define a `context-window` template. There is no top-level default: a profile that names none leaves the room to the agent. |
-| `operator-decides` | no | `false` | The Operator-decides flag (ADR 0085, renamed by ADR 0092). When set, the automatic Completion rule parks every completion of the type for the operator ahead of its outcome checks: the ticket rests in `awaiting` in Auto-handoff mode, the environment and the agent stay untouched, and the operator's explicit close or route still runs. The auto top-up leaves the ticket alone: a Next step needs a transition that fired, and a parked ticket is not open. Allowed on both forms; the shipped `analyze` type is its only user. |
+| `operator-decides` | no | `false` | The Operator-decides flag (ADR 0085, renamed by ADR 0092, extended to the starts by ADR 0117). When set, the type is yours and Auto-handoff mode neither decides its turns nor asks its starts. On the completion: the automatic rule parks every completion of the type for you ahead of its outcome checks, so the ticket rests in `awaiting`, the environment and the agent stay untouched, and your explicit close or route still runs. On the starts: no automatic add resolves on the type - the open ticket's fresh-work row, a Next step whose task type carries the flag, the restart of a missing agent, and a plane action's automatic merge all hold, and the walk falls to its next candidate. A Next step the flag holds rests the settled turn in `awaiting` and states its gate on the Message line, in the record, and on the Decision screen beside the row your key still confirms. The skip of a fresh-work or restart candidate is silent. Allowed on both forms; the shipped `analyze` type is its only user. |
 | `transition` | no | none | The transition that fires when a turn of this type completes. |
 
 **`[consultation-types.<name>]`** (one table per Consultation type).
@@ -864,11 +872,13 @@ settled turn has a Next step" - so no config key stands between a Transition
 and the route it derives. A turn with no Next step closes its cycle: the facts
 landed on a parking state, or no branch held. A turn whose label write failed
 parks for the operator: the plane does not route from labels it did not write.
-A step a gate holds - the position offers no task, the position is not
-actionable, the Same-type hold, or the Handoff limit - rests in `awaiting` for
-the operator, and the Decision screen states the hold; a step the Handoff limit
-holds closes the cycle. Manual mode runs no top-up, so a settled turn rests in
-`awaiting` for the operator's Decision screen in every case.
+A step a gate holds - the task type carries Operator-decides, the position offers
+no task, the position is not actionable, the Same-type hold, or the Handoff limit
+- rests in `awaiting` for the operator, and the Decision screen states the hold;
+a step the Handoff limit holds closes the cycle. The Operator-decides gate is read
+before the limit's, so a step the operator owns is never closed away by a cap
+(ADR 0117). Manual mode runs no top-up, so a settled turn rests in `awaiting` for
+the operator's Decision screen in every case.
 
 Every gate reads the position the step stands on, not the ticket the settled turn
 ran on. When a route crosses from an issue to its linked pull request, the pull

@@ -450,7 +450,7 @@ _Avoid_: auto dispatch, dispatch mode
 **Parallel limit**:
 The maximum number of works in flight, counting a ticket Handoff and a Consultation alike. A seat is held by an in-flight ticket whose agent the latest poll listed, by every in-progress handoff, by a started agent still inside its Startup grace (ADR 0021), and by a Consultation in `opening` or `working`.
 It gates every start: a start that cannot take a seat waits in the Work queue for its pickup (ADR 0049). A Plane action's start takes no seat, because it holds no agent: the pickup runs it whatever the limit reads (ADR 0068).
-The seat a Missing agent left is reserved: the Pickup hands it to that Ticket's own Restart row and to no other start, and the Top-up asks that row past the rows standing in the queue (ADR 0108). A seat no Restart can take - the flag, the Handoff limit, or the mode stands - is not reserved.
+The seat a Missing agent left is reserved: the Pickup hands it to that Ticket's own Restart row and to no other start, and the Top-up asks that row past the rows standing in the queue (ADR 0108). A seat no Restart can take - the flag, the Handoff limit, the Operator-decides brake, or the mode stands - is not reserved.
 It is not the only gate the Work queue has, and it says nothing about the Shared checkout hold: a start that waits on a checkout takes no seat, and the Pickup reaches the starts behind it (ADR 0109).
 _Avoid_: concurrency cap, max agents
 
@@ -497,7 +497,7 @@ _Avoid_: follow-up, workflow advance
 The one automatic add the observation cycle makes to the Work queue: while Auto-handoff mode is on, a continuation, else a restart, else an eligible open pull request ticket, else an eligible fresh open ticket, else nothing (ADR 0051, ADR 0088). The continuation is asked before the Work queue's pickup and waits only behind a Workflow route row already standing - the factory's own continuation or the row the operator's own route decision left there alike (ADR 0094, ADR 0100, issue #230). The rank ADR 0100 gives the owed continuation is its place in the queue's order, and a row that already stands is never overtaken by a row that has not entered. The restart and open-ticket adds run after the pickup and only into an empty queue (ADR 0094). The Missing agent's restart is the exception the seat reservation forces (ADR 0108): the seat that agent left is reserved for that row, so a standing row does not hold the restart out, and its row enters behind the owed continuation and ahead of the standing rows.
 The pull request group stands ahead of the fresh group: the work the machine has started on a pull request moves to the end before the machine starts work on a ticket it has not started. The list's order holds inside each group, and a gate that holds one ticket holds that ticket only: the held ticket rests, and the walk falls to the next candidate, as every gate does.
 It adds one item per cycle, and only into an empty queue, so the queue never piles. A cycle that asked a continuation asks no fresh work, and the queue then holds at most one fresh-work row beside the continuation it outranks (ADR 0094, ADR 0100). The restart walked past a standing row asks no open-ticket add in the same cycle: the standing row is its hold (ADR 0108).
-A ticket whose newest start failed, or whose newest plane action blocked, holds the re-ask until every one of its active sources re-reads it: the Attempt hold (ADR 0077 as extended by ADR 0101). A ticket whose starts keep failing holds it outright: the Failed-start park (ADR 0106).
+A ticket whose newest start failed, or whose newest plane action blocked, holds the re-ask until every one of its active sources re-reads it: the Attempt hold (ADR 0077 as extended by ADR 0101). A ticket whose starts keep failing holds it outright: the Failed-start park (ADR 0106). No walk asks a Task type that carries Operator-decides: the flag holds the fresh-work row, the continuation, the restart, and the automatic merge ask alike, and the walk falls to its next candidate (ADR 0117).
 _Avoid_: refill, auto dispatch, queue feed
 
 **Queue pause**:
@@ -585,9 +585,11 @@ On a task type that carries a Transition, the Transition has written its label f
 _Avoid_: verdict, outcome
 
 **Operator-decides**:
-A property of a Task type. When it is set, Auto-handoff mode never makes the Completion decision on that type's settled turns: the turn rests in `awaiting` for the operator, the environment and the agent stay untouched, and the operator's explicit close or route still runs (ADR 0085, renamed by ADR 0092).
-It is the only per-task-type brake Auto-handoff mode carries. The auto top-up leaves the ticket alone: a continuation needs a Next step, and a parked ticket is not open.
-_Avoid_: no-auto-decision, no auto close, manual completion
+A property of a Task type: the type is the operator's own, and Auto-handoff mode neither decides its settled turns nor asks its starts. On the completion, the turn rests in `awaiting` for the operator, the environment and the agent stay untouched, and the operator's explicit close or route still runs (ADR 0085, renamed by ADR 0092, extended to the starts by ADR 0117).
+The brake covers every automatic add the Top-up makes: the open Ticket's fresh-work row, a Continuation whose Next step lands on the type, the Restart of a Missing agent, and a Plane action's automatic merge ask. A Next step the flag holds is a gated step: the automatic rule answers `hold`, so the turn rests in `awaiting` with no decision, and the Decision screen, the Message line, and the record state the gate. The gate is read before the Handoff limit's, which degrades a held step to a cycle close, so a step the operator owns is never closed away by a cap.
+The fresh-work and restart skips are silent, the way the Same-type hold and the parking state are silent: the flag is the operator's own config, not a fault the plane diagnoses, and the row's task badge and position name already answer what the Ticket waits on.
+It is the only per-task-type brake Auto-handoff mode carries, and it gates the machine's own asks only: the operator's handoff, the override panel, the Decision screen's row, the Pickup of a standing Work queue row, and a force-dispatch all start the type.
+_Avoid_: no-auto-decision, no auto close, manual completion, no-auto-start
 
 **Turn log**:
 The agent's messages of one settled turn, in order: the agent's text, and one short note per tool call.
