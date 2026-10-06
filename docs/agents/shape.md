@@ -271,9 +271,10 @@ description: The module map of the source tree, for agents working in this repos
 	injected. The App renders the Consultation screens and forwards the
 	operator's actions here; the tests drive the lifecycle through this seam,
 	with a fake command runner and a real state file. Its worktree start crosses
-	the Shared checkout hold from its claim until its start settles, and its
-	pickup answers the gate's wait, its refusal, and its held direct start
-	(issue #315, ADR 0113).
+	the Shared checkout hold from its claim until its start settles, its
+	pickup answers the gate's wait, its refusal, and its held direct start, and
+	its recovery crosses the same gate: a held checkout answers the operator's
+	key with the fact, and the record keeps `opening` (issue #315, ADR 0113).
 - `src/handoff-dispatch.ts`: the Handoff dispatch module (ADR 0012). The one
 	seat a handoff or a herdr environment change holds, the handoff queue and
 	its claim order, the durable claim and settle of every origin, the Close

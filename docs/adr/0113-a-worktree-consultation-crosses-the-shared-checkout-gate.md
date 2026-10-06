@@ -50,6 +50,17 @@ pass through - so the gate covers the start paths the queue does not hold: a
 direct start that fails the gate is refused with a reason like any start the
 operator asked for, and nothing about it is a queue matter.
 
+**The recovery that re-runs a left-behind opening is a start, and it crosses
+too.** The record the operator's recovery re-runs is an `opening` record that
+holds no pane and no session: the re-run works the Repository's shared checkout
+the way the opening it re-runs did, so it crosses the same gate and takes the
+same hold at its own claim, and the let-go runs where the re-run settles. The
+record holds no queue row to stand the wait, so a held checkout answers the
+operator's key with the fact that holds the checkout, the record keeps
+`opening`, and the operator retries: the hold's own age ends the hold the way
+the row's own wait ends a row, so the recovery is bounded the same way without
+the row's clock ever touching the record.
+
 **The three acts of a Consultation that finds the checkout at work are: name
 the wait, keep the row, refuse with a reason.**
 

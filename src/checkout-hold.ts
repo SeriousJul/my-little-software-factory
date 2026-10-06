@@ -424,9 +424,10 @@ export class CheckoutHoldLedger {
 	 * for a live-worktree Handoff. The key is the record's Repository through the
 	 * facts, so a consultation whose record the state no longer holds crosses
 	 * with no key and takes no hold, the way a ticket the projection dropped does
-	 * in the gate above. The projection is the caller's read and is lazy: a
-	 * consultation whose checkout is free reads nothing but the record's
-	 * Repository.
+	 * in the gate above. The projection is the caller's read, and it runs
+	 * whenever the record names a Repository with a key, a held checkout or a
+	 * free one: the holder line a budget may leave names the holder's own start,
+	 * and only a consultation that works no checkout reads no projection.
 	 */
 	crossConsultation(
 		consultationId: string,

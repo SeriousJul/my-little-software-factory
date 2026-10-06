@@ -339,10 +339,10 @@ export class ConsultationOperations {
 		return this.runOpening(consultation).finally(() => {
 			this.openingOperations.delete(consultation.id);
 			this.endProgress(consultation.id);
-			// The opening settled: the checkout a worktree start took at its claim is
-			// let go where it settles (issue #315, ADR 0109). The release is
-			// idempotent, so an opening that took no hold - the direct launch, the
-			// recovery - changes nothing.
+			// The opening settled: the checkout a worktree start took at its claim -
+			// the pickup's claim, or the recovery's - is let go where it settles
+			// (issue #315, ADR 0109). The release is idempotent, so an opening that
+			// took no hold - a start that works no shared checkout - changes nothing.
 			this.checkoutHold?.release(consultation.id);
 		});
 	}
@@ -355,6 +355,33 @@ export class ConsultationOperations {
 		)
 			return Promise.resolve();
 		if (current.paneId === null && current.sessionId === null) {
+			// The re-run hands to the launch below, and an opening the record
+			// already holds answers the key first, the way the launch answers it:
+			// no await sits between this read and the launch's own claim, so the
+			// answer the key gets is the one the claim would give.
+			if (this.openingOperations.has(current.id)) {
+				this.status("info", "Consultation opening is already in progress");
+				return Promise.resolve();
+			}
+			// The re-run is another Consultation start, and it works the
+			// Repository's shared checkout the way the opening it re-runs did
+			// (issue #315, ADR 0109): the same gate at its own claim, and the
+			// let-go where the opening settles, in the launch's settle. The record
+			// holds no queue row to stand the wait, so a held checkout answers the
+			// key with the fact that holds it and the record keeps `opening`: the
+			// operator retries the recovery, and the hold's own age ends the hold
+			// the way the row's own wait ends a row.
+			if (current.environment === "worktree" && this.checkoutHold !== undefined) {
+				const gate = this.checkoutHold.cross(current.id);
+				if (!gate.ok) {
+					this.status(
+						"warning",
+						`Consultation ${current.id.slice(0, 8)} did not start: ${gate.fact}`,
+					);
+					return Promise.resolve();
+				}
+				this.checkoutHold.take(current.id, gate.checkoutKey);
+			}
 			this.progress(current.id, `recovering Consultation ${current.id.slice(0, 8)}...`);
 			return this.launch(current);
 		}
