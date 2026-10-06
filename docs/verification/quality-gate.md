@@ -1222,6 +1222,129 @@ section: 3101 pass / 0 fail across 141 files in 38.37 s (15,601
 | The full suite under the 96-busy-loop load rig the [issue #304 section](#issue-304-settle-reads-a-stable-frame-as-a-finished-transition-2026-10-06-the-fix) used | Not run. The 400 ms hold is the local equivalent of that state at the case's own seam: it holds the event loop the same way and is re-runnable from the case's header. The gate run above ran on a quiet machine |
 | A painted frame replaced before a read on a loaded runner | Not closed. The 5 ms poll outruns the 16 ms tick on a quiet machine; under load the tick stretches wider than the poll, and a frame can be replaced before a read. The window check the case replaces had the same exposure at its own 5 ms poll, and the check now reads every frame from the first paint to the settled size, a superset of the 300 ms window |
 
+## Issue #321: pseudo-terminal waits miss their deadline under load in the executable-fields rig (2026-10-06, the fix)
+
+[Issue #321](https://github.com/SeriousJul/my-little-software-factory/issues/321) is the
+pseudo-terminal seam [the #311 section](#issue-311-frame-waits-still-miss-the-deadline-under-load-in-the-surfaces-the-302-fix-does-not-touch-2026-10-06-the-fix)
+left standing: `test/executable-pty.ts` drives the built executable through a real
+terminal, and its two waits, `waitFor` on the bytes a step owes and
+`waitForStable` on output silence, both stood on a fact a loaded child process does
+not owe on time. The frame-harness fix of [issue #311](https://github.com/SeriousJul/my-little-software-factory/issues/311)
+cannot reach this seam: the parent process cannot run the child's reconciler flush
+before it reads, because the flush lives in the child. The two windows were measured
+separately, and each took its own fix.
+
+### The two windows, measured
+
+**The evidence window, in the rig.** The rig's `waitForStable` ended on output
+silence: read the PTY, and when the read comes back unchanged for the stable
+interval, call the screen settled. Silence on the parent's read is not a fact about
+the child's commits: the child's React reconciler flushes its passive effects on
+the child's own scheduler, and a loaded child can sit silent on the parent's read
+while a commit that puts a row on the keyboard is still pending in the child. The
+keys the rig sent in that gap were typed into the row that no longer held the
+keyboard, or dropped where no handler claimed them, and the wait the next key owed
+then missed its deadline with no byte ever painted.
+
+**The open window, in the source.** `useControlDispatch` subscribed a surface's
+controls in a passive effect, through the `useKeyboard` hook. The subscription
+therefore landed in the flush after the commit that drew the surface's first
+frame, and on a loaded host that flush stands open past the frame by far more than
+a keypress. A key the operator sent as the frame stands reached the shell's own
+handler, which sees the open surface and returns without claiming, and no other
+handler was subscribed yet: the key was dropped. The frame harness had named the
+hazard in `openLauncher`'s doc, "a key sent before the launcher's key handler
+subscribes is dropped by the shell below", and closed it for its own tests with a
+wait on the bus subscription, `awaitNewKeyHandler`. The pseudo-terminal seam has
+no bus to wait on, so the window stood open there.
+
+### The reproduction, on the real application flow
+
+The loaded runner is the double: 72 busy loops on the machine, and two concurrent
+PTY suites each iterating `bun test test/executable-fields.test.ts
+test/executable.test.ts test/terminal-desync.test.ts` against the same tree. On
+the tree with the rig's evidence waits landed and the source pre-fix, all 25
+iterations of one of the suites went red, load 73.7 to 75.3, on the same named
+wait: `test/executable-fields.test.ts` - refuses a non-digit paste in the Context
+window row - timed out at about 9.5 s on the `waitFor` for the focus marker on the
+Initial input row, the marker the TAB after the launcher's open owes. The TAB had
+been dropped in the open window: the launcher's dispatch was not yet subscribed
+when the key reached the shell, so no frame ever painted the marker.
+
+### The fix
+
+**The rig, in [commit `32836ff5`](32836ff5).** The rig's input now stands on the
+painted fact the previous key owed, not on a silence. The four post-TAB settles in
+`test/executable-fields.test.ts` wait for the focus marker the TAB owes, `rowHoldsFocus`
+on the row that takes the keys: the marker can only be painted by the commit that
+put the row on the keyboard, so the wait ends on the fact the next key needs.
+`test/terminal-desync.test.ts` waits for the decision modal's painted title after
+its open key, the same way. And the four boot settles take a `requireChange`
+flag: the old settle could end on the silence of an empty buffer, before the child
+painted anything at all, and the silence before the first paint is not a live app.
+The flag makes the boot wait observe at least one frame before it declares
+stability, and its error tells the two cases apart, no frame painted against a
+frame that never settled.
+
+**The source, in this commit.** `useControlDispatch` takes the keys in the commit
+that draws the surface's first frame, and gives them back in the commit that closes
+the surface. The subscription is a layout effect on the renderer's key bus,
+`renderer.keyInput`, so it stands when the frame stands, and its cleanup runs in
+the close's commit, before the fallback frame is drawn, the way the #317 flag
+already required. The bus holds one stable wrapper per surface, and the wrapper
+calls the dispatch the latest render built, so a key resolves against the facts
+the frame the operator sees states. The close side keeps its guarantee: the
+liveness flag drops in the close's layout pass, and a key in the window between
+the fallback frame and the cleanup reaches no behavior. Every surface the
+catalogue drives takes the fix through this one hook: the Consultation launcher,
+the decision modal, the utility overlays, the response editor, and the Repository
+select. The shell's own boot-side subscription was left on its passive hook: the
+boot flush is queued at the first commit, the parent cannot write a key until it
+has read a painted frame, and the frame paints after that commit, so the flush
+runs before the key's bytes are parsed on every run measured here.
+
+### The sweep: the byte waits and their exposure
+
+The sweep walked every wait in the pseudo-terminal seam on the post-fix tree:
+49 byte waits, 41 in the three test files and 8 in
+`scripts/screenshot-fixture.ts`.
+
+| Kind | Count | Where |
+| --- | --- | --- |
+| `waitFor` on the bytes a step owes | 34 | 29 in the test files, 5 in the fixture |
+| `waitForStable` with `requireChange`, the boot settles | 4 | 1 in `test/executable-fields.test.ts`, 2 in `test/executable.test.ts`, 1 in `test/terminal-desync.test.ts` |
+| `waitForStable` on pure silence | 9 | 6 in the test files, 3 in the fixture |
+
+The 34 evidence waits owe their bytes: they end only when the expected bytes are
+painted, and a loaded child that never paints them names its wait at the deadline
+instead of passing. The 4 boot settles owe their change pass and not their silence
+pass: they observe at least one frame, then wait for the paint to stop. The 9
+pure-silence settles stand on the ordering the source fix states: each is preceded
+by painted evidence or by a key that owes nothing, and the key sent after them
+depends on no commit still pending in the child, because the child's event loop
+drains the flush it queued at the commit before it parses the bytes the parent
+writes after reading the painted evidence. The fixture's first capture is a pure
+silence with no painted evidence before it, and the walk that follows throws on
+an empty screen, a named failure rather than a silent pass.
+
+### The gate
+
+| Check | Result |
+| --- | --- |
+| `bun run fmt`, `bun run lint`, `bun run typecheck` | Clean |
+| The 11 frame files the dispatch change touches, quiet machine | 240 pass / 0 fail across the two batches, 6 field files in 14.29 s and 5 flow files in 52.21 s |
+| The double load, post-fix, the same rig the reproduction ran | 30 of 30 iterations green: two concurrent suites, 15 iterations each of the three PTY files, 72 busy loops, load 12.9 rising to 75.2 over the run, 16 pass / 0 fail per iteration, 480 passes total. The pre-fix tree on the same rig stood at 25 fail of 25 on the one suite measured there |
+| The push gate, the merged tree | PENDING |
+
+### What this fix did not measure
+
+| Item | State |
+| --- | --- |
+| The shell's boot-side window | Closed by the ordering the source fix states, green in every run measured here, not measured as a window the way the open window was. The shell's own `useKeyboard` was left on its passive hook on purpose: moving it is a second timing change with no measured red behind it |
+| The fixture's first capture | A pure silence before painted evidence, and it could end on the empty buffer the way the boot settles could before `requireChange`. The walk that follows throws on an empty screen, so a miss is named rather than silent |
+| The double load beyond the 30 iterations measured | Not run. The 30 green iterations stand on the same rig the 25 red ones did, and the record does not extend the claim past that count |
+| The live terminal walk, the screen-reader path | Open, as [the shared control record](./shared-controls.md) states. The fix changes when a surface's keys are live, and the walk has not been re-run on that change |
+
 ## What was not measured
 
 | Item | State |
@@ -1230,5 +1353,5 @@ section: 3101 pass / 0 fail across 141 files in 38.37 s (15,601
 | The hook installed in the operator's checkout | Passed. `git config core.hooksPath scripts/git-hooks` is set in this checkout, and the push above is the proof it is live. The setup line stays a documented step on [the commands page](../development/commands.md) for every other checkout |
 | The doc-claim rule, the rename sweep, the documented-line rule, the probe rule, the determinism rule, the fake-fidelity rule, the file-the-defect rule, the failure-mode sweep, and the reporting rules | First measured by the self-review round above, on `b3b5fc38`: the probe rule, the rename sweep, the determinism rule, the file-the-defect rule, and the doc-claim rule each produced a result there, and the doc-claim rule found the stale cost numbers. What stays incomplete is the round's value: every commit was written by the agent that wrote the rules, so this is self-review, and a round on a pull request from a different author is the first independent measurement |
 | The 14 domain types in `UNREAD_TYPE_BASELINE` | Answered on 2026-10-05 in [the section above](#issue-301-the-14-unread-domain-types-2026-10-05): each name took one of [issue #301](https://github.com/SeriousJul/my-little-software-factory/issues/301)'s three answers and the baseline stands empty. What stays unmeasured is whether any of them is dead, which the check still cannot see, and it is recorded in that section |
-| The CI load flake on the frame tests | Investigated on 2026-10-05 and filed as [issue #302](https://github.com/SeriousJul/my-little-software-factory/issues/302): four remote frame-deadline misses, the mechanism measured, no local reproduction, and no fix shipped on that evidence. The scroll half of it is answered on 2026-10-05 in [the section above](#issue-302-the-details-scroll-restore-waits-for-a-pass-the-plane-does-not-owe-2026-10-05-the-fix). The deadline miss that survived that fix is [issue #311](https://github.com/SeriousJul/my-little-software-factory/issues/311), answered on 2026-10-06 by the fix in pull request [#318](https://github.com/SeriousJul/my-little-software-factory/pull/318): the harness's waits run the reconciler's flush before they read, and the pin stands in `test/repository-select-panel.test.ts` - recorded in [the #311 section above](#issue-311-frame-waits-still-miss-the-deadline-under-load-in-the-surfaces-the-302-fix-does-not-touch-2026-10-06-the-fix). What stays open is the pseudo-terminal seam that stands beside the class, filed on 2026-10-06 as [issue #321](https://github.com/SeriousJul/my-little-software-factory/issues/321). The older records in [the shared control record](./shared-controls.md) and the pull request records stand |
+| The CI load flake on the frame tests | Investigated on 2026-10-05 and filed as [issue #302](https://github.com/SeriousJul/my-little-software-factory/issues/302): four remote frame-deadline misses, the mechanism measured, no local reproduction, and no fix shipped on that evidence. The scroll half of it is answered on 2026-10-05 in [the section above](#issue-302-the-details-scroll-restore-waits-for-a-pass-the-plane-does-not-owe-2026-10-05-the-fix). The deadline miss that survived that fix is [issue #311](https://github.com/SeriousJul/my-little-software-factory/issues/311), answered on 2026-10-06 by the fix in pull request [#318](https://github.com/SeriousJul/my-little-software-factory/pull/318): the harness's waits run the reconciler's flush before they read, and the pin stands in `test/repository-select-panel.test.ts` - recorded in [the #311 section above](#issue-311-frame-waits-still-miss-the-deadline-under-load-in-the-surfaces-the-302-fix-does-not-touch-2026-10-06-the-fix). The pseudo-terminal seam that stood beside the class is answered on 2026-10-06 in [the section above](#issue-321-pseudo-terminal-waits-miss-their-deadline-under-load-in-the-executable-fields-rig-2026-10-06-the-fix): the rig's input stands on the painted fact the previous key owed, and the open window between a surface's first frame and its key taking is closed in the source, in [issue #321](https://github.com/SeriousJul/my-little-software-factory/issues/321). The older records in [the shared control record](./shared-controls.md) and the pull request records stand |
 | The live terminal walk, the screen-reader path, and the theme inheritance inside a real herdr | Open, as [the shared control record](./shared-controls.md) states. The gate is a claim about the automated checks and the tree they ran on, and it extends no further |
