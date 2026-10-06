@@ -85,7 +85,7 @@ export interface TicketRowFacts {
 	 * while a marker stands.
 	 */
 	starting: boolean;
-	/** The Queue wait's `queued` badge (CONTEXT.md). */
+	/** The Queue wait's `queued` badge (GLOSSARY.md). */
 	queueWait: boolean;
 	/** The Handoff limit marker the row wears at its end. */
 	handoffLimit: boolean;
@@ -172,7 +172,7 @@ export function turnTaskType(ticket: Ticket, defaultTaskType: string): string {
 }
 
 /**
- * The failure badge of an in-flight Ticket (CONTEXT.md), or null.
+ * The failure badge of an in-flight Ticket (GLOSSARY.md), or null.
  *
  * The row wears `blocked` or `missing` in place of its state badge. No poll has
  * landed: an unreadable herdr must not read as "every pane is missing", so the
@@ -207,7 +207,7 @@ export function startingWindow(ticket: Ticket, claimHeld: boolean): boolean {
 }
 
 /**
- * The Queue wait (CONTEXT.md) one Ticket reads: the item that holds its start.
+ * The Queue wait (GLOSSARY.md) one Ticket reads: the item that holds its start.
  *
  * An open-origin item stands while the Ticket rests open; a route's item stands
  * on the position the route chose, open or awaiting alike (ADR 0064, ADR 0072),

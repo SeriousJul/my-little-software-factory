@@ -154,7 +154,7 @@ export function detailContent(
 	// never disagree. The `[handed-off]` and `[running]` badges are never drawn
 	// while a failure marker stands: the marker's own word holds the slot, the
 	// word the row wears beside it, on a resting handoff and on a running turn
-	// alike (issue #201, story 5). The Queue wait badge (CONTEXT.md) takes the
+	// alike (issue #201, story 5). The Queue wait badge (GLOSSARY.md) takes the
 	// slot the same way the list row wears it, so the two surfaces never
 	// disagree there either.
 	if (fact.starting) lines.push({ text: " ", fg: undefined, spinner: true });

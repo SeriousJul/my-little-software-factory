@@ -92,7 +92,7 @@ design decisions behind this one.
 
 For changes to controls, follow the shared control standard: use and extend
 the shared modules in `src/components/shared`, and run `bun run gallery` to
-see a control. See [CONTEXT.md](./CONTEXT.md),
+see a control. See [GLOSSARY.md](./GLOSSARY.md),
 [the shared control standard](./docs/development/shared-controls.md), and
 [the verification record](./docs/verification/shared-controls.md) for the open
 items.

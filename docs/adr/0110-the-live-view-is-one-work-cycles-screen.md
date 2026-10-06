@@ -82,7 +82,7 @@ project is not a fact a surface may wait on, in the plane or in its tests.
 - The routed handoff's fallback no longer depends on which projection the plane
   happens to be handed. The screen ends at the ask on the first frame that shows
   the next cycle, and the list is drawn again behind it.
-- The Live view's contract in `CONTEXT.md` states the cycle bound as a state
+- The Live view's contract in `GLOSSARY.md` states the cycle bound as a state
   fact of the screen, and the plane's `Panel` carries the cycle beside the
   identity, so a surface that reopens the view has to name a cycle.
 - The pin is `test/live-view.test.ts` - **the view ends on the work cycle it

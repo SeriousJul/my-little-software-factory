@@ -247,7 +247,7 @@ export interface ContinuationRowFacts {
 	 */
 	continuation: boolean;
 	/**
-	 * The staging of that row - the factory's own add or the operator's (CONTEXT.md
+	 * The staging of that row - the factory's own add or the operator's (GLOSSARY.md
 	 * "Staging"). The gate holds on `continuation` alone; this fact answers which
 	 * fact the hold line states, because the origin cannot: the operator's route and
 	 * the factory's continuation are both `workflow` (issue #223).

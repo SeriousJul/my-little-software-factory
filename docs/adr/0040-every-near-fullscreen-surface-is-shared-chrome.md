@@ -29,7 +29,7 @@ surface, gains the Message line and the Action bar, and its keys dispatch
 from the Control catalogue. Its stream sub-mode answers to a `live-view`
 mode of its own, whose controls are the body's scroll, the Goto, and the
 cancel. Its settled sub-mode dispatches in the existing `decision-modal`
-mode, which `CONTEXT.md` already states: the Live view becomes the Decision
+mode, which `GLOSSARY.md` already states: the Live view becomes the Decision
 modal when the turn settles.
 
 **The sub-mode switch happens in place.** One surface, one pop-in per

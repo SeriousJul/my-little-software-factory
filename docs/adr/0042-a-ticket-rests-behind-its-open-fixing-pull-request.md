@@ -156,5 +156,5 @@ wrote stand on the position only from the next refresh on.
   states and `resolve-*` task types when the failure was observed, is synced
   to the full machine in a separate configuration change. The rules above
   are plane-owned and hold whatever machine the configuration carries.
-- `CONTEXT.md` names the association: the **Fixing pull request**, and the
+- `GLOSSARY.md` names the association: the **Fixing pull request**, and the
   Ticket priority entry reads "the tickets it fixes".

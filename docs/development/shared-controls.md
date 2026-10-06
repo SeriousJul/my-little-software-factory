@@ -18,7 +18,7 @@ support is made anywhere in this repository.
 
 This is the required baseline for human and agent contributors.
 
-See [the glossary](../../CONTEXT.md) for domain terms,
+See [the glossary](../../GLOSSARY.md) for domain terms,
 [ADR 0014](../adr/0014-shared-modules-own-control-behavior.md) for ownership, and
 [the accessibility research](../research/terminal-accessibility.md) for evidence.
 

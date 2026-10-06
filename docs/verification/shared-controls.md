@@ -968,7 +968,7 @@ remains unverified.
 
 A ticket whose manual start waits in the Work queue wears the `queued`
 badge in the state badge's slot of its list row and of its detail's state
-line, painted in the open role (CONTEXT.md, Queue wait). The badge is a
+line, painted in the open role (GLOSSARY.md, Queue wait). The badge is a
 presentation fact, not a ticket state: the ticket keeps its `open` state, so
 the section counts, the pickup gate, and the state file all keep it `open`,
 and a removal, a failed pickup, or a pickup that starts the work gives the

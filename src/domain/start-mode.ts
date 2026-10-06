@@ -1,5 +1,5 @@
 /**
- * The start mode (CONTEXT.md "Start mode"): the path that took the seat for a
+ * The start mode (GLOSSARY.md "Start mode"): the path that took the seat for a
  * start, and the fact every start line's `mode` field names.
  *
  * The mode is not the origin. The origin says where the ask came from (`open`,

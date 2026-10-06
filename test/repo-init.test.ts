@@ -1090,7 +1090,7 @@ describe("the Repository init panel (ADR 0075)", () => {
 		targetBranch: "main",
 		labelsPresent: [],
 		labelsToCreate: ["ready-for-review", "needs-work"],
-		files: [{ path: "CONTEXT.md", action: "new" }],
+		files: [{ path: "GLOSSARY.md", action: "new" }],
 		instructionFile: "AGENTS.md",
 		instructionFileChoiceNeeded: false,
 		instructionFileAction: "new",
@@ -1104,7 +1104,7 @@ describe("the Repository init panel (ADR 0075)", () => {
 		expect(panel.bodyLines).toContain("Creates 2 labels:");
 		expect(panel.bodyLines).toContain("  ready-for-review");
 		expect(panel.bodyLines).toContain("  needs-work");
-		expect(panel.bodyLines).toContain("CONTEXT.md will be written");
+		expect(panel.bodyLines).toContain("GLOSSARY.md will be written");
 		expect(panel.bodyLines).toContain(
 			"The Agent skills block lands in AGENTS.md (will be created).",
 		);

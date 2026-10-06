@@ -157,7 +157,7 @@ export function sameTypeHoldHolds(
 }
 
 /**
- * The Handoff limit (CONTEXT.md, ADR 0005): the per-ticket cap on started
+ * The Handoff limit (GLOSSARY.md, ADR 0005): the per-ticket cap on started
  * handoffs and plane action attempts that stops the close-and-rehandoff loop.
  *
  * The rule takes its facts as data (issue #202 review): the count the aggregate
@@ -173,7 +173,7 @@ export function handoffLimitReached(handoffCount: number, limit: number): boolea
 }
 
 /**
- * The in-flight fact of one Ticket state (CONTEXT.md): an Agent works on the
+ * The in-flight fact of one Ticket state (GLOSSARY.md): an Agent works on the
  * Ticket or its start is pending.
  *
  * The state is all the rule reads, so every reader of the fact asks it from the

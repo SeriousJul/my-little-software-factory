@@ -55,7 +55,7 @@ Exactly one full `bun run test` gates the push, and it runs against the merged
 tree: rebase onto `origin/main`, then run `bun run lint`, `bun run typecheck`,
 and `bun run test`. A branch that falls behind again during a rework round
 rebases and runs all three again. `bun run docs:build` joins the gate when the
-change touches `docs/`, `CONTEXT.md`, or an ADR, because CI blocks on that build.
+change touches `docs/`, `GLOSSARY.md`, or an ADR, because CI blocks on that build.
 A new ADR number is checked against `origin/main` after the rebase.
 
 **A committed hook owns the two cheap checks and the behind check.**

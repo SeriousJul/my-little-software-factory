@@ -1,5 +1,5 @@
 /**
- * The staging of a Work queue row (CONTEXT.md "Staging"): whose ask put the row
+ * The staging of a Work queue row (GLOSSARY.md "Staging"): whose ask put the row
  * in the queue, and the fact every queue line's staging word names.
  *
  * The two rows read differently because they mean different things. An

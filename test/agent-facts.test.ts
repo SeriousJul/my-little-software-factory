@@ -1,7 +1,7 @@
 /**
  * The Agent-side domain facts, tested at the module's interface (issue #201).
  *
- * The Missing agent rule has one home (CONTEXT.md): every reader of the fact -
+ * The Missing agent rule has one home (GLOSSARY.md): every reader of the fact -
  * the row's failure badge, the in-flight pass, the Restart walk, the Parallel
  * limit seat count, and the observation cycle's reads - calls `agentInPane`.
  * These tests stand at that interface so the rule cannot be read two ways

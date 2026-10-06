@@ -2,7 +2,7 @@
 
 ## Shared controls
 
-- Read [CONTEXT.md](CONTEXT.md) for domain terms before changing control behavior.
+- Read [GLOSSARY.md](GLOSSARY.md) for domain terms before changing control behavior.
 - Follow [the shared control standard](docs/development/shared-controls.md) and
   [ADR 0014](docs/adr/0014-shared-modules-own-control-behavior.md) for all controls
   owned by the control plane.
@@ -64,7 +64,7 @@ Exactly one full `bun run test` gates the push, and it runs against the merged
 tree: rebase onto `origin/main` first, then run `bun run lint`, `bun run
 typecheck`, and `bun run test`. If the branch falls behind again during a rework
 round, rebase and run all three again. When the change touches `docs/`,
-`CONTEXT.md`, or an ADR, `bun run docs:build` joins the gate. A new ADR number is
+`GLOSSARY.md`, or an ADR, `bun run docs:build` joins the gate. A new ADR number is
 checked against `origin/main` after the rebase.
 
 `scripts/git-hooks/pre-push` runs lint and typecheck, and refuses a push on a
@@ -144,4 +144,4 @@ Default five-role vocabulary, each label string equal to its name. See `docs/age
 
 ### Domain docs
 
-Single-context: `CONTEXT.md` at the repo root plus `docs/adr/`. See `docs/agents/domain.md`.
+Single-context: `GLOSSARY.md` at the repo root plus `docs/adr/`. See `docs/agents/domain.md`.

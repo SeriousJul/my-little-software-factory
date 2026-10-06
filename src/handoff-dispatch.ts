@@ -2826,7 +2826,7 @@ type QueueItemClaimResult =
 	| { ok: false; reason: string }
 	| { ok: "cancelled" };
 
-// The start mode this module names on its start lines (issue #209, CONTEXT.md)
+// The start mode this module names on its start lines (issue #209, GLOSSARY.md)
 // is the shared fact in `domain/start-mode.ts`. A Consultation's start is the
 // Consultation operations' fact, not this module's, so no line here names it;
 // the dispatch hands the mode to the Consultation side at the pickup seam so

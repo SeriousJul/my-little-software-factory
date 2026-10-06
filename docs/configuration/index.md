@@ -253,7 +253,7 @@ Description:
 ### Rules
 
 1. **Ground Yourself**
-   - Read the repository's agent instructions and its domain docs (CONTEXT.md and the ADRs) before your first question.
+   - Read the repository's agent instructions and its domain docs (GLOSSARY.md and the ADRs) before your first question.
    - Read the ticket in full, comments included, so the agreement behind it stands behind your questions.
 
 2. **Work the Design Tree**
@@ -266,7 +266,7 @@ Description:
    - Never post the interview to the ticket. This terminal is the record.
 
 4. **Write the Docs as the Design Settles**
-   - When a term resolves, update the repository's glossary (CONTEXT.md) right there.
+   - When a term resolves, update the repository's glossary (GLOSSARY.md) right there.
    - When a decision is hard to reverse, surprising without context, and the result of a real trade-off, write an ADR.
    - Commit the documentation directly to the repository's default branch, and never push the ticket's branch or create or merge a pull request: the branch stands for the implementation that follows.
 

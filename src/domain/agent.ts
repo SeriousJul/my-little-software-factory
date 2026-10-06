@@ -8,7 +8,7 @@
  * list to work with, and a config never depends on an agent's own spelling of
  * a level.
  *
- * The Missing agent rule stands here too (CONTEXT.md): the stored pane is gone
+ * The Missing agent rule stands here too (GLOSSARY.md): the stored pane is gone
  * or holds no Agent. One function owns it, and every reader of the fact calls
  * it - the row's failure badge, the in-flight pass, the Restart walk, the
  * Parallel limit seat count, and the observation cycle's reads - so the six
@@ -64,7 +64,7 @@ export function normalizeAgentStatus(raw: string): AgentStatus {
 }
 
 /**
- * The Missing agent rule (CONTEXT.md): the stored pane is gone or holds no
+ * The Missing agent rule (GLOSSARY.md): the stored pane is gone or holds no
  * Agent of the Ticket's own.
  *
  * Herdr hands the id of a closed pane out again, so a pane the poll reports

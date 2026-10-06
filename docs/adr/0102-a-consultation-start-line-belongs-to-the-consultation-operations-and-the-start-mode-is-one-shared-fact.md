@@ -60,7 +60,7 @@ section's own start now key.
 
 **For a Consultation the mode names the key, not a cap crossing.** The
 Consultation section's key names `force-dispatch` whatever the seat count reads,
-because the key is the pickup seam with the cap skipped (CONTEXT.md
+because the key is the pickup seam with the cap skipped (GLOSSARY.md
 "Force-dispatch"). So `mode force-dispatch` beside `seats 0/2` is a legal line
 and a normal start. ADR 0092's reading rule - a pickup's reading always sits
 under the limit, and a reading at the limit is the force-dispatch that crossed

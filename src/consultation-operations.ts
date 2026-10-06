@@ -460,7 +460,7 @@ export class ConsultationOperations {
 	 * scheduler's check, not the start's, and the seat move below is the claim
 	 * in either case.
 	 *
-	 * `mode` is the path that ran the start (CONTEXT.md "Start mode", issue
+	 * `mode` is the path that ran the start (GLOSSARY.md "Start mode", issue
 	 * #220): the Work queue's `pickup` for the pass that takes a free seat, and
 	 * the `force-dispatch` for the operator's start now key on the record. The
 	 * mode names the key, never a cap crossing: the caller names the key's mode

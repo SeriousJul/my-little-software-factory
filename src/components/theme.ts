@@ -74,7 +74,7 @@ export function stateBadge(state: TicketState): string {
 }
 
 /**
- * The badge the Queue wait (CONTEXT.md) wears in the state badge's slot:
+ * The badge the Queue wait (GLOSSARY.md) wears in the state badge's slot:
  * the ticket's manual start waits in the Work queue, and the ticket keeps
  * its open state, so the badge paints the open role.
  */

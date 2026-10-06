@@ -10,7 +10,7 @@
 import { describe, expect, test } from "bun:test";
 import { type QueueStaging, queueStagingOf } from "../src/domain/queue-staging.ts";
 
-describe('the staging of a Work queue row (CONTEXT.md "Staging")', () => {
+describe('the staging of a Work queue row (GLOSSARY.md "Staging")', () => {
 	test("the row's automatic mark names the staging", () => {
 		expect(queueStagingOf(true)).toBe("automatic");
 		expect(queueStagingOf(false)).toBe("operator-staged");

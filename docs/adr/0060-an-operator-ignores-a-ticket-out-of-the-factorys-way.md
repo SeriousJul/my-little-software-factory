@@ -246,7 +246,7 @@ are.
 - `f` is one key with two section owners, Ticket and Consultation, and no third.
   The Work queue keeps its refusal, and the refusal's words must name a key two
   lists own rather than the Consultation section alone.
-- `CONTEXT.md` names the **Ignored ticket** and the **List filter**, and the
+- `GLOSSARY.md` names the **Ignored ticket** and the **List filter**, and the
   List filter entry keeps itself apart from the Grouping axis and the fold.
 - The pile is the ledger of the operator's own acts, so the `ignored` view reads
   the flag over the projection that stands before the list rule, while the drawn

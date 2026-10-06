@@ -152,7 +152,7 @@ comes back clean.
   control's gallery gains the states a reviewer must see, exercised by the suite.
 - The Work queue's refusal of `f`, a key two sections own, stands as ADR 0060
   left it.
-- `CONTEXT.md` names the **Muted source**, and the **List filter** entry's
+- `GLOSSARY.md` names the **Muted source**, and the **List filter** entry's
   Ticket cycle takes the `muted` view.
 - `docs/operation/main-view.md` states current behavior, so it changes with the
   implementation and not with this decision.

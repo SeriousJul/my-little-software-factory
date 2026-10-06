@@ -37,7 +37,7 @@ tree, in this order:
 3. `bun run lint`.
 4. `bun run typecheck`.
 5. `bun run test`, once.
-6. `bun run docs:build`, when the change touches `docs/`, `CONTEXT.md`, or an
+6. `bun run docs:build`, when the change touches `docs/`, `GLOSSARY.md`, or an
    ADR. CI runs the same build and blocks on it.
 
 A branch that falls behind `origin/main` again during a rework round rebases and
@@ -64,7 +64,7 @@ moves the failure to a red check on the pull request.
 
 ## A claim a document makes is a claim the code keeps
 
-Every sentence written into `docs/`, `CONTEXT.md`, an ADR, or a module header
+Every sentence written into `docs/`, `GLOSSARY.md`, an ADR, or a module header
 that states behavior is re-read against the code path that produces that
 behavior before the push. The reviews found the same finding on four of the six
 pull requests: a page that says the header shrinks the mode cell first when the
@@ -72,7 +72,7 @@ code gives up the seat reading first, a header comment that stated a record
 field backwards, a glossary entry that read as a pass through a standing row, an
 operator page that promised a rule the write-back does not follow.
 
-A rename sweeps the old name. `docs/`, `CONTEXT.md`, the ADRs, and the
+A rename sweeps the old name. `docs/`, `GLOSSARY.md`, the ADRs, and the
 verification records are searched for the name that left the tree, and each hit
 is updated or keeps the old name beside the probe it was measured under. Two
 reviews found a verification record and the module map naming a name the branch

@@ -850,7 +850,7 @@ describe("the Work queue section", () => {
 	});
 
 	/**
-	 * The Queue wait (CONTEXT.md): a ticket whose manual start waits in the
+	 * The Queue wait (GLOSSARY.md): a ticket whose manual start waits in the
 	 * queue keeps its open state, and its row and its detail wear the
 	 * `queued` badge in the state badge's place, in the open badge's color.
 	 * A ticket without a waiting start keeps its open badge, the queue row
