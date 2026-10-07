@@ -100,6 +100,7 @@ import {
 import {
 	type AutomaticCandidateHold,
 	type AutomaticHold,
+	type AutomaticNextStepHold,
 	automaticAddsHold,
 	automaticHoldKey,
 	automaticHoldLine,
@@ -577,6 +578,11 @@ export class ObservationCoordinator {
 	 * never stored; this only remembers the last report, the way the Dispatch
 	 * pause line does, so one held turn states itself once and not once per poll.
 	 * The entry leaves when the ticket leaves awaiting.
+	 *
+	 * The stored value is `automaticHoldKey` of the hold, the same fact the
+	 * record outlet keys on (issue #232): each outlet states the fact once while
+	 * it stands and again when it changes, and the key that names the fact lives
+	 * in the module that owns the gates for both outlets alike.
 	 */
 	private readonly holdReports = new Map<string, string>();
 	/**
@@ -927,8 +933,8 @@ export class ObservationCoordinator {
 		const freshWorkWalkRan = !continued;
 		if (freshWorkWalkRan) changed = (await this.topUpFreshWork(probe.agents)) || changed;
 		if (this.stopped) return;
-		// The holds both walks took, stated once each for as long as they stand.
-		this.reportAutomaticHolds(freshWorkWalkRan);
+		// The holds the walks took, stated once each for as long as they stand.
+		this.reportAutomaticHolds(freshWorkWalkRan, this.mode());
 		// The Failed-start parks that no longer stand, retired from the report so the
 		// next run of failures states itself again (issue #298, ADR 0106).
 		this.retireFailedStartParks();
@@ -1517,7 +1523,7 @@ export class ObservationCoordinator {
 
 	/**
 	 * The Message line for a Next step a gate holds (ADR 0092), beside the settle
-	 * that produced it.
+	 * that produces it.
 	 *
 	 * In Auto-handoff mode the Decision screen never opens on a settled turn, so
 	 * this line is where a held step stands while the mode runs. It names the step
@@ -1533,33 +1539,35 @@ export class ObservationCoordinator {
 	 * would pin the Message line and ring the desktop for a condition the machine
 	 * resolves on its own.
 	 *
-	 * The same fact leaves one line in the plane's record (issue #223). The Message
-	 * line is gone by the time anyone reads the file, so a gated Next step was the
-	 * one automatic hold a reviewer could not see after the run: the file showed the
-	 * start that never came and nothing about the gate that held it. The record line
-	 * names the ticket the way the record's other lines name it, and the gate in
-	 * parentheses the way every refusal line names its fact. One dedupe serves both
-	 * outlets: the fact states itself once, on each outlet, while it stands.
+	 * The same fact leaves one line in the plane's record (issue #223), and the
+	 * record outlet runs the pattern the cycle's other standing holds use (issue
+	 * #232): the fact is noted beside them and states itself when the cycle's walks
+	 * are done (`reportAutomaticHolds`), so the module that owns the gates owns the
+	 * words, the key, and the repeat rule for this hold as for theirs. The Message
+	 * outlet keeps its own per-turn map, keyed on the same `automaticHoldKey`, so
+	 * each outlet states the fact once while it stands and again when it changes.
 	 */
 	private reportHeldNextStep(ticket: HandoffTicket, step: NextStep): void {
 		if (step.gate === null) return;
-		const key = `${step.taskType}|${step.ticketIdentity}|${step.gate}`;
+		const hold: AutomaticNextStepHold = {
+			reason: "next-step-held",
+			ticket: ticket.ticketIdentity,
+			step: step.taskType,
+			...(step.ticketIdentity === ticket.ticketIdentity ? {} : { position: step.ticketIdentity }),
+			gate: step.gate,
+		};
+		// The record outlet: noted beside the walks' holds, and stated with them
+		// when the cycle's walks are done (issue #232).
+		this.noteAutomaticHold(hold);
+		// The Message outlet: one line per settled turn, keyed on the same fact
+		// the record keys on.
+		const key = automaticHoldKey(hold);
 		if (this.holdReports.get(ticket.ticketIdentity) === key) return;
 		this.holdReports.set(ticket.ticketIdentity, key);
 		const where = step.ticketIdentity === ticket.ticketIdentity ? "" : ` on ${step.ticketIdentity}`;
 		this.onStatus(
 			"info",
 			`ticket ${ticket.ticketIdentity} holds its Next step ${step.taskType}${where}: ${NEXT_STEP_GATE_LINES[step.gate]}`,
-		);
-		// The name read runs only for a hold the record has not stated yet, so a
-		// hold that stands across the whole run costs no projection read at the
-		// poll's cadence.
-		this.log.info(
-			`next step held: ${this.ticketName(ticket.ticketIdentity)} ${step.taskType}` +
-				(step.ticketIdentity === ticket.ticketIdentity
-					? ""
-					: ` on ${this.ticketName(step.ticketIdentity)}`) +
-				` (${NEXT_STEP_GATE_LINES[step.gate]})`,
 		);
 	}
 
@@ -1846,11 +1854,13 @@ export class ObservationCoordinator {
 	 * row, so the record answers which owed start the hold blocked and not only
 	 * that a hold happened.
 	 *
-	 * One line per standing fact, the way a held Next step states itself
-	 * (`reportHeldNextStep`): the holds are re-derived on every poll, and a fact
-	 * that stood last cycle too says nothing again. A fact that left and came back,
-	 * a new fact the cycle reached, or the same fact behind a different row states
-	 * itself once more.
+	 * One line per standing fact: the holds are re-derived on every poll, and a
+	 * fact that stood last cycle too says nothing again. A fact that left and came
+	 * back, a new fact the cycle reached, or the same fact behind a different row
+	 * states itself once more. The held Next step rides this same rule (issue
+	 * #232): the awaiting walk notes it beside the walks' holds, and the fact is
+	 * the ticket, the step, the position, and the gate, so a hold that changes its
+	 * gate or its position is a new fact the record states again.
 	 *
 	 * A walk the cycle did not run states nothing new and clears nothing. The cycle
 	 * that asks a continuation asks no fresh work (ADR 0051), so the row that
@@ -1865,7 +1875,7 @@ export class ObservationCoordinator {
 	 * cadence. A cycle that throws between its walks and this report keeps no note:
 	 * its holds state themselves on the next cycle that reaches here.
 	 */
-	private reportAutomaticHolds(freshWorkWalkRan: boolean): void {
+	private reportAutomaticHolds(freshWorkWalkRan: boolean, modeOn: boolean): void {
 		for (const [key, hold] of this.automaticHolds) {
 			if (this.automaticHoldsReported.has(key)) continue;
 			this.log.info(automaticHoldLine(hold, (identity) => this.ticketName(identity)));
@@ -1878,6 +1888,15 @@ export class ObservationCoordinator {
 			// over names one reason, and it is the one the skipped walk owns.
 			for (const [key, hold] of this.automaticHoldsReported)
 				if (hold.reason === "queue-row-standing") reported.set(key, hold);
+		}
+		if (!modeOn) {
+			// `next-step-held` is the fact only the awaiting walk states (ADR 0092),
+			// and the walk reads no held step while the mode is off: the skip is the
+			// cycle's own choice, not the fact leaving, so a hold that stood through
+			// the toggle is carried the way the skipped walk's row is, and the mode
+			// returning to a still-standing hold is not a new fact (issue #232).
+			for (const [key, hold] of this.automaticHoldsReported)
+				if (hold.reason === "next-step-held") reported.set(key, hold);
 		}
 		this.automaticHoldsReported = reported;
 		this.automaticHolds = new Map();

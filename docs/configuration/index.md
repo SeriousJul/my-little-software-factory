@@ -833,7 +833,12 @@ next step held: "Persist the source facts" review on "Add a webhook retry policy
 The line names the settled turn, the task the position offers, the position the
 step stands on when that is not the settled turn, and the gate in parentheses -
 the same gate sentence the Decision screen states in manual mode. It states
-itself once while the hold stands, on both outlets.
+itself once while the hold stands, on both outlets, and it is one standing fact
+in the record's standing-fact rule, the one the cycle's other holds use (issue
+#232): the fact is the settled turn's ticket, the step, the position, and the
+gate. A hold that changes its gate or its position is a new fact and states
+itself again, and a mode that leaves and returns to a still-standing hold
+states it once.
 
 Auto-handoff mode and the Work queue pause are the two facts you set by key, and
 each flip states itself under its own prefix, so a grep for one family does not

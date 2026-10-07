@@ -152,9 +152,12 @@ description: The module map of the source tree, for agents working in this repos
 	so a walk that added nothing names its own reason in the record, and the
 	reason for a held continuation names the staging of the row it waits behind
 	and that row itself, so the record answers which owed start the hold blocked
-	(issue #223, issue #223 review). A hold names either the Work queue row the walk
-	waits behind or the candidate Ticket the walk held out (issue #298), and the one
-	key (`automaticHoldKey`) keeps the two apart. `queue-staging.ts` holds the staging - the
+	(issue #223, issue #223 review). A hold names the Work queue row the walk
+	waits behind, the candidate Ticket the walk held out (issue #298), or the
+	Ticket whose settled turn the gate holds the Next step of (issue #232), and the
+	one key (`automaticHoldKey`) keeps them apart; for the held step the key is the
+	whole fact - the ticket, the step, the position, and the gate - so a hold that
+	changes its gate or its position is a new fact. `queue-staging.ts` holds the staging - the
 	one name the `handoff queued:`, `handoff started:`, `merge queued:`, and
 	`merge started:` lines read for who put the row in the queue (issue #223). It
 	states no hold line of its own: the hold sentences are `top-up.ts`'s.
