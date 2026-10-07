@@ -2349,6 +2349,186 @@ describe("the awaiting rule", () => {
 			expect(state.ticketWorkCycle.ticketState("github:github.com:I_5")).toBe("awaiting");
 			state.close();
 		});
+
+		/**
+		 * A settled turn whose facts land the ticket on an Operator-decides position
+		 * (ADR 0117): the automatic rule answers hold, the turn rests awaiting with no
+		 * decision, and the gate's sentence reaches both surfaces the held step states
+		 * on - the Message line and the record.
+		 */
+		test("a step on an Operator-decides type holds, and the line and the record state its gate (ADR 0117)", async () => {
+			const lines: RecordedLine[] = [];
+			const { state, coordinator, statuses } = rig({
+				autoOn: true,
+				agents: [],
+				log: recordLogger(lines),
+			});
+			// The settled turn ran an unflagged type: the park stands on the position's
+			// type, the one the fire's labels put the ticket on.
+			settleFor(
+				state,
+				"github:github.com:I_5",
+				"route",
+				outcome({ positionTaskType: "park", positionTicketIdentity: "github:github.com:I_5" }),
+			);
+			await coordinator.tick();
+			// The hold moves nothing: the turn rests in awaiting, undecided, and the
+			// environment stays untouched - the same rest the position's other gates
+			// owe, on its own sentence.
+			expect(state.ticketWorkCycle.ticketState("github:github.com:I_5")).toBe("awaiting");
+			expect(state.ticketWorkCycle.lastCompletion("github:github.com:I_5")?.decision).toBeNull();
+			expect(state.workQueue.items()).toHaveLength(0);
+			expect(statuses).toContainEqual({
+				kind: "info",
+				text: "ticket github:github.com:I_5 holds its Next step park: the task type carries Operator-decides",
+			});
+			// One fact, one line: the record states the hold once while it stands.
+			expect(lines.filter((line) => line.message.startsWith("next step held:"))).toEqual([
+				infoLine(
+					'next step held: "Persist source facts" park (the task type carries Operator-decides)',
+				),
+			]);
+			await coordinator.tick();
+			await coordinator.tick();
+			expect(lines.filter((line) => line.message.startsWith("next step held:"))).toHaveLength(1);
+			expect(statuses.filter((status) => status.text.includes("holds its Next step"))).toHaveLength(
+				1,
+			);
+			state.close();
+		});
+	});
+
+	describe("the Operator-decides brake holds the type's automatic adds (ADR 0117)", () => {
+		/**
+		 * The config the walk tests run on: the flagged position offers the park
+		 * type, the plain position offers the implement type, and the ship position
+		 * offers the merge Plane action the flag's brake also covers.
+		 */
+		const walkConfig: Partial<FactoryConfig> = {
+			workflowStates: [
+				{
+					name: "spec",
+					taskType: "park",
+					match: { sourceKind: "github-issue", labelsAny: ["ready-for-spec"] },
+				},
+				{
+					name: "agent",
+					taskType: "implement",
+					match: { sourceKind: "github-issue", labelsAny: ["ready-for-agent"] },
+				},
+				{
+					name: "ship",
+					taskType: "merge",
+					match: { sourceKind: "github-issue", labelsAny: ["ready-to-ship"] },
+				},
+			],
+		};
+
+		test("the open walk holds the flagged row, stays silent, and falls to the next candidate", async () => {
+			const { state, coordinator, intents, statuses } = rig({
+				autoOn: true,
+				agents: [],
+				config: walkConfig,
+			});
+			// The flagged ticket leads the list: the walk holds it only, falls to the
+			// plain row behind it, and asks that start - the hold is not a cycle
+			// wait, and it states nothing, the way the parking state's silence is
+			// designed.
+			state.sourceFact.applyFetch(
+				source,
+				success([{ ...fetched("github:github.com:I_4"), labels: ["ready-for-spec"] }, fetched()]),
+			);
+			await coordinator.tick();
+			expect(intents).toHaveLength(1);
+			expect(intents[0].ticketIdentity).toBe("github:github.com:I_5");
+			expect(state.ticketWorkCycle.ticketState("github:github.com:I_4")).toBe("open");
+			// The silence is part of the rule: no hold line stands for the row the
+			// flag held.
+			expect(statuses.filter((status) => status.text.includes("holds")).length).toBe(0);
+			expect(statuses.filter((status) => status.text.includes("Operator-decides")).length).toBe(0);
+			state.close();
+		});
+
+		test("the open walk asks no merge of a flagged Plane action type", async () => {
+			const r = rig({
+				autoOn: true,
+				agents: [],
+				order: [],
+				config: {
+					...walkConfig,
+					taskTypes: {
+						...config.taskTypes,
+						merge: { action: "merge-pull-request", operatorDecides: true },
+					},
+				},
+			});
+			// The ticket's labels put it on the ship position, whose task type is the
+			// merge. The walk holds the row on the flag's brake and asks no start of
+			// the type, handoff or merge: the seat no automatic add takes is not
+			// reserved (ADR 0108), and the Decision screen's key is the operator's.
+			r.state.sourceFact.applyFetch(source, success([{ ...fetched(), labels: ["ready-to-ship"] }]));
+			await r.coordinator.tick();
+			expect(r.order).toEqual([]);
+			expect(r.state.workQueue.items()).toHaveLength(0);
+			expect(r.state.ticketWorkCycle.ticketState("github:github.com:I_5")).toBe("open");
+			r.state.close();
+		});
+
+		test("the continuation walk answers hold on the flag's gate and asks nothing (ADR 0117)", async () => {
+			const r = rig({
+				autoOn: true,
+				agents: [],
+				order: [],
+				config: {
+					...walkConfig,
+					taskTypes: {
+						...config.taskTypes,
+						merge: { action: "merge-pull-request", operatorDecides: true },
+					},
+				},
+			});
+			// The settled turn's fire put the ticket on the ship position, whose task
+			// type is the flagged merge. The re-fired skip's route and the
+			// continuation's route both read the gate before the position, so neither
+			// asks a start of the type, and the turn rests awaiting, undecided, on
+			// its own gate's sentence.
+			r.state.sourceFact.applyFetch(source, success([{ ...fetched(), labels: ["ready-to-ship"] }]));
+			settleFor(
+				r.state,
+				"github:github.com:I_5",
+				"route",
+				outcome({ positionTaskType: "merge", positionTicketIdentity: "github:github.com:I_5" }),
+			);
+			await r.coordinator.tick();
+			expect(r.order).toEqual([]);
+			expect(r.state.workQueue.items()).toHaveLength(0);
+			expect(r.state.ticketWorkCycle.ticketState("github:github.com:I_5")).toBe("awaiting");
+			expect(r.state.ticketWorkCycle.lastCompletion("github:github.com:I_5")?.decision).toBeNull();
+			expect(r.statuses).toContainEqual({
+				kind: "info",
+				text: "ticket github:github.com:I_5 holds its Next step merge: the task type carries Operator-decides",
+			});
+			r.state.close();
+		});
+
+		test("the restart walk asks no start of a flagged type, and the Ticket keeps its Missing fact", async () => {
+			const { state, coordinator, intents, advance } = rig({ autoOn: true, agents: [] });
+			// The interrupted handoff ran the flagged type and its Agent has
+			// disappeared: the facts that would make the Ticket the restart
+			// candidate all stand, and the flag's brake holds it out. The Missing
+			// fact is the operator's surface: their Restart or abandon is the act
+			// that answers.
+			handOut(state, "github:github.com:I_5", "park");
+			advance(STARTUP_GRACE_MS + 1);
+			await coordinator.tick();
+			await coordinator.tick();
+			expect(intents).toEqual([]);
+			// The handoff keeps its place: the walk asked no restart, and the
+			// Ticket rests in flight on its Missing fact.
+			const inFlight = state.ticketWorkCycle.ticketsByState(["handed-off", "running"]);
+			expect(inFlight.map((ticket) => ticket.ticketIdentity)).toContain("github:github.com:I_5");
+			state.close();
+		});
 	});
 
 	describe("the Next step chain runs unattended (ADR 0092)", () => {

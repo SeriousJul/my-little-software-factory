@@ -2097,6 +2097,56 @@ describe("the decision screen's merge", () => {
 		state.close();
 	});
 
+	test("a flagged merge stands its held Next step beside the row, and the operator's key still runs it", async () => {
+		// ADR 0117: the merge's task type carries Operator-decides. The
+		// Decision screen states the gate's sentence beside the row it
+		// still stands, and the row's key is the operator's: the confirm
+		// runs the merge.
+		const state = planeState();
+		seed(state, "awaiting", mergeRoute());
+		const runner = new FakeRunner();
+		runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+		stubReadSequence(runner, [{ state: "open" }, { merged: true }]);
+		stubMerge(runner, 0);
+		const src = new FakeSource("pulls", "github-pull-requests", pullSuccess());
+		const props = decisionProps(state, runner, src, {
+			taskTypes: {
+				...PLANE_TASK_TYPES,
+				merge: { ...PLANE_TASK_TYPES.merge, operatorDecides: true },
+			},
+		});
+
+		await withApp(
+			async (setup) => {
+				await awaitFrame(setup, (f) => f.includes(pullTitle.slice(0, 3)), "the row");
+				await press(
+					setup,
+					"return",
+					"the decision modal",
+					(f) => f.includes("Decision:") && f.includes("Merge pull request"),
+				);
+				const modal = await settle(setup);
+				expect(modal).toContain("the Next step is held: the task type carries Operator-decides");
+				await pressArrow(setup, "down", "the Goto row", () => true);
+				await pressArrow(setup, "down", "the merge row's focus", mergeRowFocused);
+				await press(setup, "return", "the run's line", (f) =>
+					messageRowOf(f).includes(`the merge of "${pullTitle}" ran from the Work queue`),
+				);
+			},
+			WIDTH,
+			30,
+			props,
+		);
+
+		// The record stands the way the operator's merge always does: the
+		// merged outcome beside the operator's decision word.
+		const attempt = state.planeAction.latestPlaneActionAttempt(pullIdentity);
+		expect(attempt?.outcome).toBe("merged");
+		expect(attempt?.decision).toBe("merged");
+		expect(runner.commands()).toContain("gh pr merge #12 --squash --repo github.com/acme/factory");
+		state.close();
+	});
+
 	test(
 		"the ticket detail shows the latest attempt beside the handoff facts",
 		async () => {

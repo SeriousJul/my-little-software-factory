@@ -1223,10 +1223,12 @@ describe("the pair of one cycle shares its worktree (ADR 0112)", () => {
 /**
  * The bug position's machine (issue #330, ADR 0116).
  *
- * The acceptance the ADR's brake claim carries, as one unattended run on the
- * chain's rig: an issue the source labels `bug` and no stronger label claims
- * stands on the diagnosis position, the open walk offers the `diagnose` type,
- * the Handoff's start opens the draft pull request on the issue's factory
+ * The acceptance the ADR's brake claim carries, as one run on the chain's
+ * rig: an issue the source labels `bug` and no stronger label claims stands
+ * on the diagnosis position. The Open walk offers the `diagnose` type, and
+ * the Operator-decides brake holds the machine's ask of it (ADR 0117), so
+ * the operator's own Handoff is the start: its row takes the queue, the
+ * start opens the draft pull request on the issue's factory
  * branch before the Agent stands, and the settled turn's Transition publishes
  * the draft and writes `ready-for-review` on it. The Operator-decides brake
  * parks the turn for the operator, the operator's close re-derives the issue
@@ -1409,23 +1411,37 @@ describe("the bug position runs the diagnosis machine (issue #330, ADR 0116)", (
 				},
 			);
 
-			// Cycle 1: the bug position offers the diagnosis, and the ask takes
-			// its row in the Work queue.
+			// Cycle 1: the bug position offers the diagnosis, and the Operator-
+			// decides brake holds the machine's ask of it (ADR 0117): the walk
+			// holds the Ticket only, and the silence is designed, the way the
+			// parking state's is. The operator's own Handoff is the start that
+			// the brake leaves, and its row takes the queue.
 			await coordinator.tick();
-			expect(chain.handoffAsks).toEqual([
-				expect.objectContaining({
+			expect(chain.handoffAsks).toEqual([]);
+			expect(state.workQueue.items()).toHaveLength(0);
+			expect(state.ticketWorkCycle.ticketState(issueIdentity)).toBe("open");
+			await expect(
+				chain.dispatch.dispatch({
 					origin: "open",
-					automatic: true,
 					ticketIdentity: issueIdentity,
-					choice: expect.objectContaining({
-						taskType: "diagnose",
+					choice: {
+						agentType: "pi",
 						environment: "worktree",
+						taskType: "diagnose",
+						model: "",
 						thinking: "xhigh",
-					}),
+						contextWindow: "",
+					},
+					previousMessage: "",
 				}),
-			]);
+			).resolves.toEqual({ ok: true });
 			expect(state.workQueue.items()).toEqual([
-				expect.objectContaining({ kind: "handoff", origin: "open", ticketIdentity: issueIdentity }),
+				expect.objectContaining({
+					kind: "handoff",
+					origin: "open",
+					automatic: false,
+					ticketIdentity: issueIdentity,
+				}),
 			]);
 
 			// Cycle 2: the pickup takes the row and runs the start: the worktree
@@ -1531,11 +1547,12 @@ describe("the bug position runs the diagnosis machine (issue #330, ADR 0116)", (
 			);
 
 			// Cycle 3: the parked turn stays parked, and the open walk asks the
-			// review on the pull request the diagnosis published.
+			// review on the pull request the diagnosis published. The issue's own
+			// row never re-enters the walk's asks: its start is the operator's,
+			// and the brake stands on its type.
 			await coordinator.tick();
 			expect(state.ticketWorkCycle.lastCompletion(issueIdentity)?.decision).toBe(null);
 			expect(chain.handoffAsks).toEqual([
-				expect.objectContaining({ origin: "open", ticketIdentity: issueIdentity }),
 				expect.objectContaining({
 					origin: "open",
 					automatic: true,
@@ -1600,7 +1617,7 @@ describe("the bug position runs the diagnosis machine (issue #330, ADR 0116)", (
 			// Worktree base for it.
 			expect(reviewCommands.find((command) => command.includes("factory/12-"))).toBeUndefined();
 			// The issue never re-enters the pile: the walk asked nothing more.
-			expect(chain.handoffAsks).toHaveLength(2);
+			expect(chain.handoffAsks).toHaveLength(1);
 			// The review's row stands in the queue until its start settles, the
 			// way the chain's held starts keep theirs.
 			expect(state.workQueue.items()).toEqual([

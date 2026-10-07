@@ -52,6 +52,7 @@ function cycle(overrides: Partial<TopUpCycleFacts> = {}): TopUpCycleFacts {
 function restart(overrides: Partial<RestartCandidateFacts> = {}): RestartCandidateFacts {
 	return {
 		ignoreBlocked: false,
+		operatorDecides: false,
 		pastStartupGrace: true,
 		hasPane: true,
 		agentMissing: true,
@@ -382,13 +383,17 @@ describe("the row a continuation must not jump (ADR 0051, ADR 0094, ADR 0100, is
 	});
 });
 
-describe("the restart candidate (ADR 0051, ADR 0060, ADR 0070)", () => {
+describe("the restart candidate (ADR 0051, ADR 0060, ADR 0070, ADR 0117)", () => {
 	test("a flagged in-flight Ticket with a missing Agent is the candidate", () => {
 		expect(restartCandidateHolds(restart())).toBe(true);
 	});
 
 	test("each single gate holds the ticket out", () => {
 		expect(restartCandidateHolds(restart({ ignoreBlocked: true }))).toBe(false);
+		// The Operator-decides brake: a restart repeats the interrupted handoff's
+		// start, and the machine makes no start of a type the operator owns.
+		// The Missing modal stands, and the operator's Restart or abandon answers.
+		expect(restartCandidateHolds(restart({ operatorDecides: true }))).toBe(false);
 		expect(restartCandidateHolds(restart({ pastStartupGrace: false }))).toBe(false);
 		expect(restartCandidateHolds(restart({ hasPane: false }))).toBe(false);
 		expect(restartCandidateHolds(restart({ agentMissing: false }))).toBe(false);
@@ -409,6 +414,7 @@ describe("the top-up's open-ticket row gate (ADR 0051, ADR 0060, ADR 0027)", () 
 			handoffCount: 0,
 			handoffLimit: 10,
 			taskType: "implement",
+			operatorDecides: false,
 			...overrides,
 		};
 	}
@@ -425,6 +431,16 @@ describe("the top-up's open-ticket row gate (ADR 0051, ADR 0060, ADR 0027)", () 
 		expect(openTicketRowGate(row({ handoffCount: 10 }))).toEqual({ stands: false });
 		// A parking state offers no task (ADR 0027).
 		expect(openTicketRowGate(row({ taskType: null }))).toEqual({ stands: false });
+	});
+
+	test("a row whose position offers an Operator-decides task type holds (ADR 0117)", () => {
+		// The walk holds that Ticket only and falls to the next candidate, and the
+		// hold states nothing: the flag the operator set in their own config is a
+		// designed silence, the way the parking state is. The answer carries no
+		// task, so the walk never asks a start of the type.
+		const held: OpenTicketRowGate = openTicketRowGate(row({ operatorDecides: true }));
+		expect(held).toEqual({ stands: false });
+		expect("taskType" in held).toBe(false);
 	});
 
 	test("the answer carries the task only on the branch where the row stands (issue #301)", () => {

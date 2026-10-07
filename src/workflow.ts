@@ -30,6 +30,7 @@ import {
 	handoffLimitReached,
 	headBranchOf,
 	issueReferencesOf,
+	operatorDecidesType,
 	type SourceMembership,
 	type Ticket,
 } from "./domain/ticket.ts";
@@ -1343,8 +1344,9 @@ export async function writeMembershipLabels(
  * task type the written labels put the ticket on, the ticket that position
  * stands on, and whether the step runs as a Handoff or as a Plane action. The
  * position is derived, never stored, so the step also carries the gate that
- * holds it when it will not run: the position no longer offers the task, the
- * position is not actionable, the Same-type hold, or the Handoff limit.
+ * holds it when it will not run: the task type carries Operator-decides,
+ * the position no longer offers the task, the position is not actionable, the
+ * Same-type hold, or the Handoff limit.
  *
  * One derivation serves every reader - the automatic Completion rule, the
  * top-up's continuation walks, and the Decision screen's fact line - so no
@@ -1362,6 +1364,7 @@ export async function writeMembershipLabels(
  * copy and no machine module reaches into the presentation layer for a sentence.
  */
 export const NEXT_STEP_GATES = [
+	"operator-decides-type",
 	"position-offers-no-task",
 	"position-not-actionable",
 	"same-type-hold",
@@ -1372,6 +1375,7 @@ export type NextStepGate = (typeof NEXT_STEP_GATES)[number];
 
 /** The sentence each gate is stated in, on either surface that names it. */
 export const NEXT_STEP_GATE_LINES: Readonly<Record<NextStepGate, string>> = {
+	"operator-decides-type": "the task type carries Operator-decides",
 	"position-offers-no-task": "the position no longer offers the task",
 	"position-not-actionable": "the position is not actionable",
 	"same-type-hold": "the Same-type hold stands on the position",
@@ -1437,6 +1441,14 @@ export function deriveNextStep(
 		kind: isPlaneActionTaskType(config.taskTypes, taskType) ? "plane-action" : "handoff",
 		gate: null,
 	};
+	// The Operator-decides brake (ADR 0085, ADR 0117) is read first: before the
+	// position lookup and before the Handoff limit, because the limit degrades a
+	// held step to `close` and ends the work cycle, and a step the operator owns
+	// must not be closed away by a cap. The order is behavior, not wording.
+	if (operatorDecidesType(config.taskTypes, taskType)) {
+		step.gate = "operator-decides-type";
+		return step;
+	}
 	const position = projection.rowFor(ticketIdentity);
 	// The position is derived, never stored: between the write and the start the
 	// ticket can leave its source, and a refresh can move it off the task the
