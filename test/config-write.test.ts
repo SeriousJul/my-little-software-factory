@@ -1215,11 +1215,13 @@ describe("the config write-back (ADR 0103)", () => {
 //     if (regionHoldsValuePastLine(scanned, region)) return false;
 //
 // with a helper that answers true when any line of the region is an assignment
-// whose `valueRunsPastLine` answer is true. 2 records go red, both in the unread
-// table: "a multiline array inside a [[sources]] block the plane holds" and "a
-// source name written as a multiline string inside a block the plane holds". The
-// first is the record that says today's scan costs that shape nothing, so a
-// wider refusal cannot pass quietly.
+// whose `valueRunsPastLine` answer is true. 1 record goes red, in the unread
+// table: "a multiline array inside a [[sources]] block the plane holds", the
+// record that says today's scan costs that shape nothing, so a wider refusal
+// cannot pass quietly. The record for a source name written as a multiline
+// string does not go red under the probe: the scan already refuses that shape
+// by its own rule (issue #234), and the probe's wider refusal reaches the same
+// file by a different road.
 //
 // Probe B, a scan that reads less. In `editReposRegion`, delete the line
 // `if (row.startsInString) continue;`. 2 records go red: one here, "the scan
@@ -1852,31 +1854,24 @@ const UNREAD_SHAPE_COSTS: readonly ShapeRecord[] = [
 	{
 		shape: "a source name written as a multiline string inside a block the plane holds",
 		why:
-			"the scan names the block as a single quote character instead of refusing it, so the plane " +
-			"appends its own copy of the source it holds (issue #234)",
+			"the name line's value runs past the end of its line, the scan cannot name the block, " +
+			"and the edit beside it is refused the way a block with no name is refused " +
+			"(issue #234)",
 		file: withSourceShape(SOURCE_NAME_AS_MULTILINE_STRING),
+		// The rewrite writes the plane's own text, and the plane holds no multiline
+		// name: the operator's block is swept away along with the comments.
+		shapeGone: SOURCE_NAME_AS_MULTILINE_STRING,
 		costs: [
-			{ ...sectionCost(ADD_A_MAPPING), sources: ["acme-issues\n", "acme-issues"] },
-			{ ...sectionCost(REPOINT_A_HELD_MAPPING), sources: ["acme-issues\n", "acme-issues"] },
-			{
-				...sectionCost(APPEND_A_SOURCE),
-				sources: ["acme-issues\n", "acme-issues", "acme/factory-pull-requests"],
-			},
-			{ ...sectionCost(NOTHING_NEW), sources: ["acme-issues\n", "acme-issues"] },
-			// The duplicate stands in the file the first write left, so the next
-			// write-back pays for it again: the check will not vouch for an edit of a
-			// file that holds the plane's source twice, and every comment line goes.
+			...rewriteCosts(),
+			// The rewrite is paid once: the file it leaves is the plane's own
+			// writing, so the next write has nothing to change and no comment left.
 			{
 				after: ADD_A_MAPPING,
-				afterMode: "sections",
-				...rewriteCost(ADD_A_MAPPING),
-				sources: ["acme-issues\n", "acme-issues"],
-			},
-			{
-				after: ADD_A_MAPPING,
-				afterMode: "sections",
-				...rewriteCost(APPEND_A_SOURCE),
-				sources: ["acme-issues\n", "acme-issues", "acme/factory-pull-requests"],
+				afterMode: "rewrite",
+				via: ADD_A_MAPPING,
+				mode: "unchanged",
+				commentsLost: "none",
+				message: "",
 			},
 		],
 	},
@@ -1990,6 +1985,22 @@ const READ_SHAPE_COSTS: readonly ShapeRecord[] = [
 		why: "the scan reads the comment apart from the value, so the plane rewrites the value and keeps the note",
 		file: withReposShape(`${HELD_MAPPING_LINE} # the checkout I keep`),
 		costs: sectionEditCosts(NOTHING_NEW_WRITES_NOTHING),
+	},
+	{
+		shape: "a source name written as a multiline string that closes on its own line",
+		why:
+			"the scan decodes the triple-quoted value the line says, so the block is named by it, " +
+			"stands byte for byte, and no second copy of the source is written beside it (issue #234)",
+		file: withSourceShape(
+			HELD_SOURCE_BLOCK.replace('name = "acme-issues"', 'name = """acme-issues"""'),
+		),
+		shapeStands: 'name = """acme-issues"""',
+		costs: [
+			{ ...sectionCost(ADD_A_MAPPING), sources: ["acme-issues"] },
+			{ ...sectionCost(REPOINT_A_HELD_MAPPING), sources: ["acme-issues"] },
+			{ ...sectionCost(APPEND_A_SOURCE), sources: ["acme-issues", "acme/factory-pull-requests"] },
+			NOTHING_NEW_WRITES_NOTHING,
+		],
 	},
 ];
 
