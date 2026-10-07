@@ -18,7 +18,12 @@
  */
 
 import { describe, expect, it } from "bun:test";
-import { type ScreenWalk, stepUntilRow } from "../scripts/screenshot-fixture.ts";
+import {
+	PRESS_DEADLINE_MS,
+	type ScreenWalk,
+	stepUntilRow,
+	WALK_DEADLINE_MS,
+} from "../scripts/screenshot-fixture.ts";
 
 /**
  * The old walk, kept here as the reproduction, not the implementation: a
@@ -177,8 +182,9 @@ describe("the screenshot fixture's walk", () => {
 			stepUntilRow(screen, MATCH, "j", MAX_STEPS, screen.sleepFn, screen.now),
 		).rejects.toThrow(`never reached a row matching "${MATCH}"`);
 		// One press at the start, one re-press every press deadline up to the
-		// walk's deadline.
-		expect(screen.presses.length).toBe(10);
+		// walk's deadline: the walk's budget in press-deadlines, the harness's
+		// doubling in CI included.
+		expect(screen.presses.length).toBe(WALK_DEADLINE_MS / PRESS_DEADLINE_MS);
 	});
 
 	it("does not count a mid-redraw frame as a move", async () => {
@@ -189,6 +195,41 @@ describe("the screenshot fixture's walk", () => {
 		const screen = fakeScreen(ROWS, 0, 0, 3);
 		await stepUntilRow(screen, MATCH, "j", MAX_STEPS, screen.sleepFn, screen.now);
 		expect(screen.cursorIndex()).toBe(3);
+		expect(screen.presses).toEqual(["j", "j", "j"]);
+	});
+
+	it("does not charge a dropped press when the glitch spans two polls", async () => {
+		// The glitch window lasts two polls: two reads back to back stand on
+		// the mid-redraw frame, the hold the capture met crossing a section
+		// border, and the screen swallows the walk's first press, the boot
+		// window. The two together hand the walk a confirmed -1 row, and the
+		// dropped press then meets the first confirmed real row: the index
+		// differs from -1, so the press the screen spent no row on reads as a
+		// move and spends a step of the budget the cursor never crossed.
+		const screen = fakeScreen(ROWS, 0, 0);
+		const realCursorRow = screen.cursorRow;
+		let reads = 0;
+		screen.cursorRow = () => {
+			reads += 1;
+			// Two real reads, then two glitch reads, then two real: the
+			// glitch window spans the walk's poll gap, the way a section
+			// transition's did under load.
+			if ((reads - 1) % 4 >= 2) return { index: -1, text: "" };
+			return realCursorRow();
+		};
+		let pressed = 0;
+		const realKey = screen.key;
+		screen.key = (bytes: string) => {
+			pressed += 1;
+			if (pressed === 1) return;
+			realKey(bytes);
+		};
+		await stepUntilRow(screen, MATCH, "j", MAX_STEPS, screen.sleepFn, screen.now);
+		expect(screen.cursorIndex()).toBe(3);
+		// One press dropped in the boot window, three rows landed: the
+		// dropped press spent no row, so it spent no step of the three-step
+		// budget.
+		expect(pressed).toBe(4);
 		expect(screen.presses).toEqual(["j", "j", "j"]);
 	});
 

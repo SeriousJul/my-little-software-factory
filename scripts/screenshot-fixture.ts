@@ -722,15 +722,18 @@ const STEP_POLL_MS = 10;
  * by this deadline did not land, and the walk presses again. The press is
  * not charged to the step budget, because the screen spent no row on it.
  */
-const PRESS_DEADLINE_MS = 1000;
+export const PRESS_DEADLINE_MS = 1000;
 /**
  * How long the whole walk may run before the capture fails.
  *
  * The deadline fails the capture with the screen as it stands, the way
  * the harness's frame wait fails at its deadline: a screen whose cursor
- * never moves still fails the walk, only at this deadline.
+ * never moves still fails the walk, only at this deadline. The harness's
+ * frame deadline doubles in CI, where the shared runners run the suite
+ * under load, and the walk takes the same doubling: a loaded runner gets
+ * a loaded walk, not a local one.
  */
-const WALK_DEADLINE_MS = 10000;
+export const WALK_DEADLINE_MS = process.env.CI ? 20000 : 10000;
 
 /**
  * The cursor's row once two polls a frame apart agree on it.
@@ -740,6 +743,14 @@ const WALK_DEADLINE_MS = 10000;
  * and the read reports -1. One such read is not a move - the walk acts
  * only on a row the next poll confirms, so a single glitch frame can
  * neither read a move that did not happen nor hide one that did.
+ *
+ * A pair that agrees on -1 is not a stable row: a glitch window that
+ * spans two polls would hand the mid-redraw frame to the walk, and the -1
+ * index would read as a move against whatever real row stands before it -
+ * a dropped press meeting its first confirmed real row, or a real row
+ * meeting a confirmed -1. The pair is accepted only on a real row, so a
+ * screen that stands mid-redraw for the whole deadline fails at the
+ * walk's deadline, the way a screen whose cursor never moves does.
  */
 async function stableCursorRow(
 	screen: ScreenWalk,
@@ -753,7 +764,7 @@ async function stableCursorRow(
 		if (now() >= walkDeadline) throw failure();
 		await sleepFn(STEP_POLL_MS);
 		const current = screen.cursorRow();
-		if (current.index === previous.index) return current;
+		if (current.index >= 0 && current.index === previous.index) return current;
 		previous = current;
 	}
 }
