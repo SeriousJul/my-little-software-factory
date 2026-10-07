@@ -171,6 +171,58 @@ describe("the turn end cause and the Dispatch pause", () => {
 		state.close();
 	});
 
+	test("a failed turn whose Agent works again is no Held turn, and no longer pauses", () => {
+		const state = twoTicketState();
+		const attempt = settleCause(state, t5, "failed", "2026-08-31T11:00:00Z");
+		expect(state.ticketWorkCycle.dispatchPauseActive()).toBe(true);
+		// The Agent reports working again: the turn reopens (ADR 0016), the row
+		// leaves `awaiting` for `running`, and its `held` badge and its decision
+		// surface leave with the state. The trace stays pending until the Agent
+		// settles again, and no surface can land a decision on it.
+		expect(state.ticketWorkCycle.reopenTurn(t5, attempt)).toBe(true);
+		expect(state.ticketWorkCycle.ticketState(t5)).toBe("running");
+		// The pause reads the newest Held turn, so with no Held turn standing it
+		// stands down: the factory keeps dispatching while that Agent works.
+		expect(state.ticketWorkCycle.dispatchPauseActive()).toBe(false);
+		state.close();
+	});
+
+	test("the reopened turn's next failed settle pauses again", () => {
+		const state = twoTicketState();
+		const attempt = settleCause(state, t5, "failed", "2026-08-31T11:00:00Z");
+		expect(state.ticketWorkCycle.reopenTurn(t5, attempt)).toBe(true);
+		expect(state.ticketWorkCycle.dispatchPauseActive()).toBe(false);
+		// The same turn settles failed again: it rests held in `awaiting`, and the
+		// pause stands on it exactly as it did on the first settle.
+		state.ticketWorkCycle.settleTurn({
+			ticketIdentity: t5,
+			handoffId: attempt,
+			taskType: "implement",
+			agentType: "pi",
+			message: "failed again",
+			turnLog: textLog("failed again"),
+			completedAt: "2026-08-31T11:05:00Z",
+			cause: "failed",
+			detail: "Connection error.",
+		});
+		expect(state.ticketWorkCycle.dispatchPauseActive()).toBe(true);
+		state.close();
+	});
+
+	test("the operator's close of a failed turn's cycle does not keep the pause", () => {
+		const state = twoTicketState();
+		const attempt = settleCause(state, t5, "failed", "2026-08-31T11:00:00Z");
+		expect(state.ticketWorkCycle.reopenTurn(t5, attempt)).toBe(true);
+		// The operator closes the in-flight cycle (ADR 0031). The pending trace
+		// stays undecided - the close ends the cycle, it lands no decision - and
+		// the Ticket rests `open` in the next cycle, where no surface offers that
+		// trace a decision. A pause that kept reading it would have no release.
+		expect(state.ticketWorkCycle.closeWorkCycle(t5)).toBe(true);
+		expect(state.ticketWorkCycle.ticketState(t5)).toBe("open");
+		expect(state.ticketWorkCycle.dispatchPauseActive()).toBe(false);
+		state.close();
+	});
+
 	test("only a failed cause pauses: aborted and truncated hold but do not pause", () => {
 		const state = twoTicketState();
 		settleCause(state, t5, "aborted", "2026-08-31T11:00:00Z");

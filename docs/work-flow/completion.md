@@ -59,6 +59,16 @@ of a failure. The pause ends when you decide the held turn, or when a later
 turn completes. Your own manual handoffs are never blocked by it, and a start
 that already stands in the Work queue still takes its seat.
 
+The pause stands on a Held turn only while it is one (ADR 0016). An Agent that
+reports working again reopens its turn: the row leaves `awaiting`, its `held`
+badge leaves with it, and the pause stands down while that Agent works - if the
+same turn settles `failed` again it rests held and pauses the starts once more.
+Closing the cycle of a turn that never settled leaves its undecided trace in
+the cycle behind, and the pause reads no trace from a closed cycle. Both cases
+matter because the pause holds every automatic start, and a `completed` settle
+is its only release besides your decision: a pause that kept reading a trace no
+screen offers you would never clear.
+
 A missing agent behaves the same way in auto mode: the factory restarts the
 handoff once, with the last message as the previous message, and at the
 per-ticket handoff limit it abandons the cycle instead. A handoff of a task type

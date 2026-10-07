@@ -109,15 +109,22 @@ function completionTraceOrder(left: CompletionTraceOrder, right: CompletionTrace
 }
 
 /**
- * The Dispatch pause (ADR 0016): the newest trace whose turn settled `failed`
- * and whose decision has not landed holds every automatic start until the
- * operator decides that turn or another turn settles `completed`.
+ * The Dispatch pause (ADR 0016): the newest Held turn that settled `failed`
+ * holds every automatic start until the operator decides that turn or another
+ * turn settles `completed`.
  *
  * The rule takes the two facts the traces answer as data (issue #202): the
  * held failure, and the newest `completed` trace. The pause clears when a
  * completed trace is newer than the held failure, and the trace order - the
  * completion time, then the row - is what "newer" means. The aggregate reads
  * the two facts and stores no pause: the derived fact stays derived.
+ *
+ * The held failure the aggregate answers is a Held turn, not any undecided
+ * `failed` row: the trace must still stand as the decision the operator owes,
+ * the Ticket resting `awaiting` on its cycle. A reopened turn and a trace of a
+ * closed cycle have no surface that can decide them, and the pause holds the
+ * starts whose settle is its only other release, so reading them would leave
+ * the pause with no way out (issue #338).
  */
 export function dispatchPauseHolds(
 	heldFailure: CompletionTraceOrder | null,
