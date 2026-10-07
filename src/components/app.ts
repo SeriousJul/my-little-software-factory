@@ -187,12 +187,7 @@ import { DecisionModal } from "./decision-modal.ts";
 import { maxScrollOf, usePaneGeometry } from "./geometry.ts";
 import { LiveView } from "./live-view.ts";
 import { consultationProgressOwner, useMessageFacts } from "./message-facts.ts";
-import {
-	messageColor as colorOfMessage,
-	formatMessage,
-	type MessageFact,
-	messageRowElement,
-} from "./messages.ts";
+import { messageColor as colorOfMessage, formatMessage, messageRowElement } from "./messages.ts";
 import { MissingModal } from "./missing-modal.ts";
 import { type ActionRow, belowMinimum, TOO_SMALL_TEXT } from "./modal-chrome.ts";
 import { type AgentModelList, type ModelListStatus, OverridePanel } from "./override-panel.ts";
@@ -218,7 +213,7 @@ import {
 	ticketRows,
 	toggleFold,
 } from "./shared/grouping.ts";
-import { padToWidth, truncateToWidth, widthOf } from "./text.ts";
+import { padToWidth, truncateToWidth } from "./text.ts";
 import { paint } from "./theme.ts";
 import { ticketCloseDialog } from "./ticket-close.ts";
 import { detailScrollRoom, TicketDetail, type TicketDetailHandle } from "./ticket-detail.ts";
@@ -363,7 +358,7 @@ export type AppKey =
 type Utility =
 	| null
 	| { kind: "guide"; mode: InteractionMode }
-	| { kind: "message"; mode: InteractionMode; fact: MessageFact };
+	| { kind: "message"; mode: InteractionMode };
 
 /**
  * The aggregates the app shell reads, as a list (issue #202), and the clock it
@@ -762,7 +757,7 @@ export function App({
 	const refuseInitInFlight = (): boolean => {
 		const inFlight = repositoryInitInFlight.current;
 		if (inFlight === null) return false;
-		setErrorMessage(`the init for ${inFlight} is running`);
+		setWarningMessage(`the init for ${inFlight} is running`);
 		return true;
 	};
 	/**
@@ -998,50 +993,65 @@ export function App({
 	// removed source is the operator's own config decision: the plane stops
 	// reading it and pins no line for it, while its in-flight tickets keep
 	// showing with the removed membership.
-	const sourceHealthMessage = healths
+	// The Ticket sources that are stale right now, in the order the sources
+	// list holds: the fact the shared Message module turns into the line and
+	// the source health's own Fault at the change (ADR 0118 and ADR 0119).
+	const staleSourceFacts = healths
 		.filter((health) => health.health === "stale")
-		.map(
-			(health) =>
-				`${health.name}: ${health.health}${health.error === undefined ? "" : ` - ${health.error}`}`,
-		)
-		.join("; ");
+		.map((health) => ({ name: health.name, error: health.error }));
+	// The Theme the control plane paints in, resolved once for the run: the
+	// herdr theme when the app runs inside herdr, the standalone dark theme
+	// otherwise (ADR 0024). A fallback lands on the Message line and the
+	// history's first row as an info notice: it never pins the line, so real
+	// news takes over.
+	const themeWarning = currentThemeResolution().warning;
 	const {
 		message: visibleMessage,
+		// The run's Message history, oldest first: the record the Message view
+		// shows, and the fact the Message control gates on (ADR 0119).
+		history: messageHistory,
 		working: setWorkingMessage,
+		news: setNewsMessage,
 		notice: setNoticeMessage,
 		warning: setWarningMessage,
 		error: setErrorMessage,
+		// The Fault writers (ADR 0118): the line plus the desktop notification,
+		// for the facts the plane met on its own rather than answers to a key
+		// the operator pressed.
+		faultWarning: setFaultWarningMessage,
+		faultError: setFaultErrorMessage,
 		clearOperation: clearOperationMessage,
 		clearWorking: clearWorkingMessage,
 		clearProgress: clearProgressMessage,
 		// What a control that ran did, routed by the severity it named: a copy
 		// that took is news, and a copy the terminal refused is a warning.
 		report: reportMessage,
-		// The Theme the control plane paints in, resolved once for the run: the
-		// herdr theme when the app runs inside herdr, the standalone dark theme
-		// otherwise (ADR 0024). A fallback lands on the Message line as a
-		// notice: it never pins the line, so real news takes over.
 	} = useMessageFacts(
-		sourceHealthMessage === "" ? undefined : sourceHealthMessage,
-		currentThemeResolution().warning ?? undefined,
+		staleSourceFacts,
+		themeWarning === null || themeWarning === undefined
+			? undefined
+			: { severity: "info", text: themeWarning },
 		attention,
 	);
 	/**
-	 * Write one Consultation outcome onto the shared Message facts.
+	 * Write one machine outcome onto the shared Message facts.
 	 *
 	 * A `null` outcome ends the fact a previous operation left and leaves every
 	 * progress line alone: only the operation that owns a line ends it, and it
-	 * says so through `onProgress`. Info becomes a notice, warning a warning,
-	 * and error an error, so Consultation results read like Ticket results.
+	 * says so through `onProgress`. The caller is the machine: the observation
+	 * loop, the Consultation operations, and a control the app runs without the
+	 * operator. Info becomes a notice, and warning and error are Faults, the
+	 * line plus the desktop notification (ADR 0118): the plane met these on its
+	 * own, so the operator must hear them even away from the terminal.
 	 */
 	const setStatus = useCallback(
 		(next: StatusMessage | null): void => {
 			if (next === null) clearOperationMessage("none");
-			else if (next.kind === "info") setNoticeMessage(next.text);
-			else if (next.kind === "warning") setWarningMessage(next.text);
-			else setErrorMessage(next.text);
+			else if (next.kind === "info") setNoticeMessage(next.text, "info");
+			else if (next.kind === "warning") setFaultWarningMessage(next.text);
+			else setFaultErrorMessage(next.text);
 		},
-		[clearOperationMessage, setNoticeMessage, setWarningMessage, setErrorMessage],
+		[clearOperationMessage, setNoticeMessage, setFaultWarningMessage, setFaultErrorMessage],
 	);
 	/**
 	 * Auto copy: the renderer runs the mouse selection the operator drags (left
@@ -1071,7 +1081,9 @@ export function App({
 		};
 	}, [renderer, setWarningMessage]);
 	const visibleMessageText = visibleMessage === null ? "" : formatMessage(visibleMessage);
-	const messageTruncated = visibleMessage !== null && widthOf(visibleMessageText) > terminalWidth;
+	// The fact the Message control gates on (ADR 0119): the history holds an
+	// entry, and the truncation fact goes with the old view it gated.
+	const messageRecorded = messageHistory.length > 0;
 	// The Ticket header's mode cell carries the auto-handoff state and the
 	// Parallel limit seat count: the same shared seat count the observation
 	// gates and the dispatch gate read (issue #87, ADR 0034) - the in-flight
@@ -1570,8 +1582,14 @@ export function App({
 				},
 				home: homeDir,
 				working: (text) => setWorkingMessage(text, "handoff"),
+				// The line-only writers (ADR 0118): the module's attended answers
+				// and the plain results of the operator's own keys.
 				warning: setWarningMessage,
 				error: setErrorMessage,
+				// The Fault writers: the line plus the desktop notification, for
+				// the facts the plane met on its own.
+				faultWarning: setFaultWarningMessage,
+				faultError: setFaultErrorMessage,
 				notice: setNoticeMessage,
 				clearWorking: () => clearWorkingMessage("handoff"),
 				refresh: replaceTickets,
@@ -1671,10 +1689,10 @@ export function App({
 		void handoffDispatch.closeCleanup(identity, handoff, end).then(
 			(failure) => {
 				if (failure !== undefined)
-					setErrorMessage(`ticket ${identity} ${end}; the close cleanup failed: ${failure}`);
+					setFaultErrorMessage(`ticket ${identity} ${end}; the close cleanup failed: ${failure}`);
 			},
 			(error) => {
-				setErrorMessage(
+				setFaultErrorMessage(
 					`ticket ${identity} ${end}; the close cleanup could not be reported: ${errorMessage(error)}`,
 				);
 			},
@@ -1713,8 +1731,10 @@ export function App({
 			outcome,
 			{
 				clearWorking: () => clearWorkingMessage("handoff"),
-				warning: setWarningMessage,
-				error: setErrorMessage,
+				// The outcome of a start the plane ran: a Fault (ADR 0118), the
+				// way the state-backed dispatch reports it.
+				faultWarning: setFaultWarningMessage,
+				faultError: setFaultErrorMessage,
 			},
 			persistMapping,
 		);
@@ -1810,7 +1830,7 @@ export function App({
 					next.delete(ticket.identity);
 					return next;
 				});
-				setErrorMessage(`handoff failed: ${errorMessage(error)}`);
+				setFaultErrorMessage(`handoff failed: ${errorMessage(error)}`);
 				noStateHandoffInFlightRef.current = false;
 			});
 	};
@@ -1972,7 +1992,7 @@ export function App({
 		// keeps this line in its own family: the cycle states its own hold line
 		// about the same fact, and a reader grepping one must not get the other.
 		logger?.info(next ? "queue: the Work queue is paused" : "queue: the Work queue resumed");
-		setNoticeMessage(next ? "Work queue paused" : "Work queue resumed");
+		setNoticeMessage(next ? "Work queue paused" : "Work queue resumed", "info");
 		if (!next) void handoffDispatch?.pickupWorkQueue();
 	};
 
@@ -2331,9 +2351,10 @@ export function App({
 	 * The cycle-end draft close (ADR 0076): when the cycle ends - the Close of
 	 * a decided cycle, the Abandon, the handoff limit, the auto-close - the
 	 * draft the ticket still wears is read off the factory branch and closed.
-	 * It runs best-effort, after the close: a failure is a warning on the
-	 * line, and a branch that carries no draft - or nothing at all - closes
-	 * nothing and says nothing.
+	 * It runs best-effort, after the close: a failure is an error on the line
+	 * and the run's only notification (the Close settled, and the cleanup is
+	 * the plane's own act, the auto-close's included), and a branch that
+	 * carries no draft - or nothing at all - closes nothing and says nothing.
 	 */
 	const closeCycleEndDraft = useCallback(
 		(identity: string): void => {
@@ -2341,11 +2362,11 @@ export function App({
 			if (ticket === undefined) return;
 			void closeCycleEndDraftPullRequest(commandRunner, configRef.current.sources, ticket).then(
 				(failure) => {
-					if (failure !== null) setWarningMessage(failure);
+					if (failure !== null) setFaultErrorMessage(failure);
 				},
 			);
 		},
-		[commandRunner, findTicket, setWarningMessage],
+		[commandRunner, findTicket, setFaultErrorMessage],
 	);
 
 	/**
@@ -2370,16 +2391,16 @@ export function App({
 				// The ended cycle may have changed the ticket's source item.
 				refreshTicketSources(ticket.identity);
 				if (outcome.cleanupFailure === undefined)
-					// The stop of a live Agent is the fact the operator asked for, so
-					// it reads like the Abandon of a missing one: a warning, not an error.
-					setWarningMessage(`ticket ${ticket.identity} closed`);
+					// The fact the operator asked for, and nothing went wrong: the
+					// line wears its own prefix, the way the Abandon's does.
+					setNewsMessage(`ticket ${ticket.identity} closed`);
 				else
-					setErrorMessage(
+					setFaultErrorMessage(
 						`ticket ${ticket.identity} closed; the close cleanup failed: ${outcome.cleanupFailure}`,
 					);
 			},
 			(error) =>
-				setErrorMessage(
+				setFaultErrorMessage(
 					`ticket ${ticket.identity} closed; the close could not be reported: ${errorMessage(error)}`,
 				),
 		);
@@ -2575,7 +2596,7 @@ export function App({
 		input: string,
 	) => {
 		if (state === undefined || consultationOperations === undefined) {
-			setStatus({ kind: "error", text: "Consultations require durable SQLite state" });
+			setWarningMessage("Consultations require durable SQLite state");
 			return;
 		}
 		// The Consultation submit goes through the Work queue (ADR 0049). The
@@ -2588,7 +2609,7 @@ export function App({
 		// ask does.
 		void consultationOperations.checkEnqueue(typeName).then(async (refusal) => {
 			if (refusal !== undefined) {
-				setErrorMessage(`consultation not queued: ${refusal}`);
+				setWarningMessage(`consultation not queued: ${refusal}`);
 				return;
 			}
 			const replaced =
@@ -2634,6 +2655,7 @@ export function App({
 				state.workQueue.queuePaused()
 					? `consultation queued: ${consultation.id.slice(0, 8)} waits in the Work queue; the queue is paused`
 					: `consultation queued: ${consultation.id.slice(0, 8)} waits in the Work queue for a free Parallel limit seat`,
+				"info",
 			);
 		});
 	};
@@ -2695,7 +2717,7 @@ export function App({
 	};
 	const beginResponse = (consultation: Consultation) => {
 		if (consultation.state !== "awaiting-response") {
-			setStatus({ kind: "warning", text: "the Consultation is not awaiting a response" });
+			setWarningMessage("the Consultation is not awaiting a response");
 			return;
 		}
 		responseDraftRef.current = consultation.draft;
@@ -2715,7 +2737,7 @@ export function App({
 		// respond repeats it at the module boundary for non-UI callers.
 		const validation = validateResponseInput(draft);
 		if (validation !== undefined) {
-			setStatus({ kind: "error", text: validation });
+			setWarningMessage(validation);
 			return;
 		}
 		setResponseEditor(false);
@@ -2759,7 +2781,7 @@ export function App({
 		if (state !== undefined && selectedConsultation !== undefined)
 			state.consultationRecord.setConsultationDraft(selectedConsultation.id, "");
 		setResponseEditor(false);
-		setStatus({ kind: "info", text: "the saved Response draft was discarded" });
+		setNoticeMessage("the saved Response draft was discarded", "info");
 	};
 	/** Close the editor. The Response draft it leaves is the one already stored. */
 	const closeResponseEditor = () => {
@@ -2997,7 +3019,7 @@ export function App({
 			closeCycleEndDraft(ticket.identity);
 			const stored = state.handoff.latestHandoff(ticket.identity);
 			if (stored !== null) runCloseCleanup(ticket.identity, stored, "abandoned");
-			setWarningMessage(`ticket ${ticket.identity} abandoned`);
+			setNewsMessage(`ticket ${ticket.identity} abandoned`);
 			return;
 		}
 		// Restart: the same choices, in the workspace the handoff recorded.
@@ -3082,6 +3104,7 @@ export function App({
 			if (removed) {
 				setNoticeMessage(
 					`consultation ${item.consultationId.slice(0, 8)}: removed from the queue; the record is unscheduled`,
+					"info",
 				);
 			} else {
 				setWarningMessage(
@@ -3108,7 +3131,7 @@ export function App({
 		// the boot read, so one Ticket wears one name (issue #295 review).
 		const name = recordTicketName(listViewsRef.current.projection, item.ticketIdentity);
 		if (removed) {
-			setNoticeMessage(`the waiting start for ${name} was removed`);
+			setNoticeMessage(`the waiting start for ${name} was removed`, "info");
 		} else {
 			// Nothing to cancel: the keypress met a queue that no longer held the
 			// row, so the line refuses the removal it could not make.
@@ -3168,7 +3191,7 @@ export function App({
 	 */
 	const standing: StandingFacts = {
 		handoffActive: handoffDispatch?.handoffActive() ?? noStateHandoffInFlightRef.current,
-		messageTruncated,
+		messageRecorded,
 		consultationTypesConfigured: Object.keys(config.consultationTypes).length > 0,
 		sourceCount: liveSources.length,
 		refreshingSourceCount: liveSources.filter(
@@ -3374,9 +3397,15 @@ export function App({
 					formRefusal: null,
 				});
 			case "key-guide":
-			case "message-view":
-				// The overlay's own two modes read nothing beside the standing facts.
+				// The guide reads nothing beside the standing facts.
 				return availabilityFacts(mode, standing, {});
+			case "message-view":
+				// The view owns its body's window, so it states the pane's facts
+				// itself: this case stands as the live-view's placeholder does.
+				return availabilityFacts("message-view", standing, {
+					bodyScrollable: true,
+					bodyEmpty: false,
+				});
 			default: {
 				// A mode the plane has never seen. The assertion is the check: a new
 				// Interaction mode reaches this line as a compile error, not as a
@@ -3392,10 +3421,11 @@ export function App({
 		setUtility({ kind: "guide", mode });
 	};
 	const openMessage = (mode: InteractionMode = currentBaseMode()) => {
-		if (visibleMessage === null || !messageTruncated) return;
-		// The object is captured in the Utility value. Later source or operation
-		// changes cannot replace the text in a Message view already open.
-		setUtility({ kind: "message", mode, fact: { ...visibleMessage } });
+		if (messageHistory.length === 0) return;
+		// The view reads the live history, so an entry that lands while it
+		// stands shows at the bottom, and the history the run recorded stays the
+		// record the view shows (ADR 0119).
+		setUtility({ kind: "message", mode });
 	};
 	const manualRefreshPending = useRef(new Set<string>());
 	/**
@@ -3458,7 +3488,7 @@ export function App({
 				// Settle the queued input before announcing the exit: the last
 				// key the operator sent still belongs to the Agent.
 				void (consultationOperations?.flush() ?? Promise.resolve()).then(() =>
-					setStatus({ kind: "info", text: "left Agent interaction mode" }),
+					setNoticeMessage("left Agent interaction mode", "info"),
 				);
 				return;
 			}
@@ -3478,16 +3508,11 @@ export function App({
 							// the pane now, not on the next interval tick.
 							outputRefreshRef.current?.();
 						} else
-							setStatus({
-								kind: "error",
-								text: `Agent interaction failed: ${result.stderr.trim() || `exit code ${result.code}`}`,
-							});
+							setErrorMessage(
+								`Agent interaction failed: ${result.stderr.trim() || `exit code ${result.code}`}`,
+							);
 					},
-					(error) =>
-						setStatus({
-							kind: "error",
-							text: `Agent interaction failed: ${errorMessage(error)}`,
-						}),
+					(error) => setErrorMessage(`Agent interaction failed: ${errorMessage(error)}`),
 				);
 			}
 			return;
@@ -3681,7 +3706,7 @@ export function App({
 					}
 					void consultationOperations.checkEnqueue(selected.typeName).then((refusal) => {
 						if (refusal !== undefined) {
-							setErrorMessage(`consultation not scheduled: ${refusal}`);
+							setWarningMessage(`consultation not scheduled: ${refusal}`);
 							return;
 						}
 						// The operations own the Message line and the Consultation rows,
@@ -3731,6 +3756,7 @@ export function App({
 								overCap
 									? `starting Consultation ${selected.id.slice(0, 8)} over the Parallel limit`
 									: `starting Consultation ${selected.id.slice(0, 8)}`,
+								"info",
 							);
 					});
 				},
@@ -3839,7 +3865,7 @@ export function App({
 			// notice on the Message line, and the observation makes the
 			// decision in the background. A notice is not progress, so it holds
 			// its own slot and the next fact takes the line back.
-			setNoticeMessage("auto-handoff is on: the factory decides this ticket");
+			setNoticeMessage("auto-handoff is on: the factory decides this ticket", "info");
 			return;
 		}
 		// The mode decides the route at runtime (ADR 0092), so in manual mode the
@@ -4019,7 +4045,11 @@ export function App({
 				// The pull request source's one warning line surfaces on the
 				// Message line (ADR 0023).
 				if (outcome?.status === "success")
-					for (const warning of outcome.warnings ?? []) setWarningMessage(warning);
+					// The warnings a successful source read carries: a security
+					// source the read skipped. The plane met them on its own, so
+					// they are Faults (ADR 0118), and the dedup on the same
+					// fact keeps the record quiet while they stand.
+					for (const warning of outcome.warnings ?? []) setFaultWarningMessage(warning);
 				replaceTickets();
 				replaceConsultations();
 				// A fetch may have made a ticket actionable: let the observation
@@ -4048,7 +4078,7 @@ export function App({
 		replaceTickets,
 		replaceConsultations,
 		clearWorkingMessage,
-		setWarningMessage,
+		setFaultWarningMessage,
 		logger,
 	]);
 	// The observation loop runs only on the real projection: a test
@@ -4279,7 +4309,7 @@ export function App({
 		setSelectedIndex(nextIndex);
 		if (writeFailure !== undefined)
 			setErrorMessage(`the grouping axis did not save: ${writeFailure}`);
-		else setNoticeMessage(groupingAxisNotice(next));
+		else setNoticeMessage(groupingAxisNotice(next), "info");
 	}
 	/**
 	 * Fold or open one Group (issue #159).
@@ -4425,19 +4455,19 @@ export function App({
 	async function openRepositoryInitFor(displayName: string) {
 		const factoryState = state;
 		if (factoryState === undefined) {
-			setErrorMessage("the repository init needs SQLite state");
+			setWarningMessage("the repository init needs SQLite state");
 			return;
 		}
 		const cfg = configRef.current;
 		const ticket = ticketsRef.current.find((item) => item.repository === displayName);
 		if (ticket === undefined) {
-			setErrorMessage(`no ticket names the repository ${displayName}`);
+			setWarningMessage(`no ticket names the repository ${displayName}`);
 			return;
 		}
 		const ref = ticket.repositoryRef;
 		const source = cfg.sources.find((item) => item.repositories.includes(ref.displayName));
 		if (source === undefined) {
-			setErrorMessage(`no source is configured for ${ref.displayName}`);
+			setWarningMessage(`no source is configured for ${ref.displayName}`);
 			return;
 		}
 		// The plan runs async with the base view's keyboard live (ADR 0083):
@@ -4451,7 +4481,7 @@ export function App({
 		// an unmapped convention all find the checkout the operator already has.
 		const checkout = repositoryInitCheckoutPath(cfg.repos, ref.identity, ref.displayName, homeDir);
 		if (!(await fileExists(checkout))) {
-			setErrorMessage(
+			setWarningMessage(
 				`${ref.displayName} has no local checkout at ${checkout} to work a throwaway worktree in`,
 			);
 			repositoryInitInFlight.current = null;
@@ -4485,7 +4515,7 @@ export function App({
 			ghOptions,
 		});
 		if ("reason" in plan) {
-			setErrorMessage(plan.reason);
+			setWarningMessage(plan.reason);
 			repositoryInitInFlight.current = null;
 			return;
 		}
@@ -4542,6 +4572,7 @@ export function App({
 			clearOperationMessage("none");
 			setNoticeMessage(
 				`the init queue settled: ${queue.ran} ran, ${queue.skipped} skipped, ${queue.refused} refused`,
+				"info",
 			);
 			return;
 		}
@@ -4566,7 +4597,7 @@ export function App({
 	// a queue skips the entry and moves on (ADR 0083).
 	async function openRepositorySelectFor(choice: InitableRepository) {
 		if (state === undefined) {
-			setErrorMessage("the repository init needs SQLite state");
+			setWarningMessage("the repository init needs SQLite state");
 			advanceRepositoryInitQueue("failed");
 			return;
 		}
@@ -4582,7 +4613,7 @@ export function App({
 			homeDir,
 		);
 		if (!(await fileExists(checkout))) {
-			setErrorMessage(
+			setWarningMessage(
 				`${choice.displayName} has no local checkout at ${checkout} to work a throwaway worktree in`,
 			);
 			repositoryInitInFlight.current = null;
@@ -4598,7 +4629,7 @@ export function App({
 			taskTypes: cfg.taskTypes,
 		});
 		if ("reason" in plan) {
-			setErrorMessage(plan.reason);
+			setWarningMessage(plan.reason);
 			repositoryInitInFlight.current = null;
 			advanceRepositoryInitQueue("refused");
 			return;
@@ -4627,7 +4658,7 @@ export function App({
 	) {
 		const factoryState = state;
 		if (factoryState === undefined) {
-			setErrorMessage("the repository init needs SQLite state");
+			setWarningMessage("the repository init needs SQLite state");
 			advanceRepositoryInitQueue("failed");
 			return;
 		}
@@ -5467,8 +5498,7 @@ export function App({
 												onClose: closeResponseEditor,
 												onHelp: () => openGuide("form-field"),
 												onMessage: () => openMessage("form-field"),
-												onUnavailable: (reason: string) =>
-													setStatus({ kind: "warning", text: reason }),
+												onUnavailable: (reason: string) => setWarningMessage(reason),
 												onCopy: reportMessage,
 												message: visibleMessage,
 												onEmergencyExit: () => renderer.destroy(),
@@ -5759,10 +5789,7 @@ export function App({
 				onCancel: () => {
 					setPanel(null);
 					setConsultationSafety(null);
-					setStatus({
-						kind: "warning",
-						text: "Consultation launch cancelled; recover or close it explicitly",
-					});
+					setWarningMessage("Consultation launch cancelled; recover or close it explicitly");
 				},
 				onQueuePause: toggleQueuePause,
 				onAutoHandoff: toggleAutoHandoff,
@@ -5898,8 +5925,8 @@ export function App({
 		utility?.kind === "message" &&
 			createElement(MessageView, {
 				message: visibleMessage,
-				fact: utility.fact,
-				facts: utilityFacts,
+				history: messageHistory,
+				facts: standing,
 				onClose: () => setUtility(null),
 				onHelp: () => openGuide(utilityFacts.mode),
 				onEmergencyExit: () => renderer.destroy(),

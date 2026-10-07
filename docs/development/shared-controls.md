@@ -325,9 +325,14 @@ window it stands for (issue #122). The Live view is a shared-chrome surface
 it renders on the modal surface with its Message line and its Action bar, its
 stream sub-mode answers to its own `live-view` catalogue mode, and its
 settled sub-mode dispatches in the `decision-modal` mode, with the border
-re-titling `Live:` to `Decision:` on settle. A surface that paints decision
-rows without the library's region state is refused by the architecture
-check, with the shared chrome as the one stated exemption.
+re-titling `Live:` to `Decision:` on settle. The Message view joins the
+same family on the lighter side (ADR 0119): its only body is the run's
+history in the shared Body pane, titled `Messages`, scrolled by the
+catalogue's `scroll-body` with `message-view` on its modes, and it states
+the body-pane facts so the bar's scroll hint and range readout follow the
+shared rule. A surface that paints decision rows without the library's
+region state is refused by the architecture check, with the shared chrome
+as the one stated exemption.
 
 ## Draft retention
 

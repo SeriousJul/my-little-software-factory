@@ -868,9 +868,12 @@ describe("the merged Main view", () => {
 					expect(actionBarRowOf(tickets)).toContain("m Message");
 					await press(setup, "m", "the Message view", (f) => f.includes("Message view"));
 					const view = await settle(setup);
-					// The view shows the whole message, wrapped at the pane width.
-					expect(view).toContain("no Consultation types configured; add");
-					expect(view).toContain("[consultation-types.<name>] to the config file");
+					// The view shows the whole message, wrapped at the pane width
+					// the row's time and chip columns leave.
+					expect(view).toContain("no Consultation types");
+					expect(view).toContain("configured; add");
+					expect(view).toContain("[consultation-types.<name");
+					expect(view).toContain(">] to the config file");
 				},
 				60,
 				27,
@@ -1064,13 +1067,15 @@ describe("the merged Main view", () => {
 				await crossToConsultations(setup);
 				const across = await settle(setup);
 				expect(rowsOf(across)[0]).toContain("● manual");
-				expect(actionBarRowOf(across)).toContain("Delete Close");
 				expect(actionBarRowOf(across)).toContain("f History");
-				// The packing at this width drops the two lowest-priority hints,
-				// Launch (40) and Section (45): the Delete key's wider label than
-				// the old `w` puts the Section hint past the edge at 120, and the
-				// Key guide keeps it. The Ticket bar above still shows its own.
+				// The packing at this width drops the four lowest-priority hints -
+				// Delete (35), Launch (40), Section (45), and Close (50) - once
+				// the Message hint the recorded facts put on the bar (ADR 0119)
+				// takes its cells, and the Key guide keeps every key. The Ticket
+				// bar above still shows its own Section hint.
 				expect(actionBarRowOf(across)).not.toContain("x Section");
+				expect(actionBarRowOf(across)).not.toContain("Delete");
+				expect(actionBarRowOf(across)).not.toContain("Close");
 				// The corner's ink comes from the Theme the environment resolved:
 				// the mode's own role for the lamp and its word, and the room color
 				// for the seat reading under the cap (ADR 0024, ADR 0034).

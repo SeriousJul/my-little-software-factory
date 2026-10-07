@@ -416,19 +416,21 @@ describe("the Message line's fact to the desktop", () => {
 		}
 	});
 
-	test("a warning fact sends one notification, the identical standing fact none", async () => {
-		const runner = new FakeRunner();
+	test("a fault error fact sends one notification, the identical standing fact none", async () => {
+		// The fault split (ADR 0118): the fact the plane met on its own sends,
+		// and the standing-fact rule keeps the second copy of it quiet.
+		const runner = failingHandoffRunner();
 		await withApp(
 			async (setup) => {
-				await press(setup, "r", "the warning", (f) =>
-					messageRowOf(f).includes("no Ticket sources exist"),
+				await press(setup, "return", "the fault", (f) =>
+					messageRowOf(f).includes("the daemon is down"),
 				);
 				const calls = notificationCalls(runner);
 				expect(calls).toHaveLength(1);
-				expect(calls[0].args.join(" ")).toContain("Factory: warning");
-				expect(calls[0].args.join(" ")).toContain("no Ticket sources exist");
-				// The same fact stands again: no second send.
-				setup.mockInput.pressKey("r");
+				expect(calls[0].args.join(" ")).toContain("Factory: error");
+				expect(calls[0].args.join(" ")).toContain("the daemon is down");
+				// The same fault stands again from the next attempt: no second send.
+				setup.mockInput.pressEnter();
 				await settle(setup);
 				expect(notificationCalls(runner)).toHaveLength(1);
 			},
@@ -438,34 +440,36 @@ describe("the Message line's fact to the desktop", () => {
 		);
 	});
 
-	test("an error fact sends, a different fact resets the rule, and the warning stands again", async () => {
+	test("a line-only warning fact sends nothing and wakes no rule", async () => {
+		// The fault split (ADR 0118): the answer to a key writes its line only.
+		// It neither sends nor touches the standing-fact rule: the fault that
+		// takes the line sends once, and the refusal that stands again sends
+		// nothing.
 		const runner = failingHandoffRunner();
 		await withApp(
 			async (setup) => {
-				// The warning stands, and it notifies once.
-				await press(setup, "r", "the warning", (f) =>
+				// The refusal the key meets: line only, no send.
+				await press(setup, "r", "the refusal", (f) =>
 					messageRowOf(f).includes("no Ticket sources exist"),
 				);
-				expect(notificationCalls(runner)).toHaveLength(1);
-				// The failing handoff's error takes the line: a different fact,
-				// and it notifies.
-				await press(setup, "return", "the error", (f) =>
+				expect(notificationCalls(runner)).toHaveLength(0);
+				// The failing handoff's fault takes the line: a different fact,
+				// and it sends.
+				await press(setup, "return", "the fault", (f) =>
 					messageRowOf(f).includes("the daemon is down"),
 				);
 				const afterError = notificationCalls(runner);
-				expect(afterError.length).toBeGreaterThan(1);
+				expect(afterError.length).toBe(1);
 				expect(afterError.at(-1)?.args.join(" ")).toContain("Factory: error");
 				expect(afterError.at(-1)?.args.join(" ")).toContain("the daemon is down");
-				// The warning fact stands again after a different one: it notifies again.
+				// The refusal stands again after a different fact: still line only.
 				setup.mockInput.pressKey("r");
 				await awaitFrame(
 					setup,
 					(f) => messageRowOf(f).includes("no Ticket sources exist"),
-					"the warning to stand again",
+					"the refusal to stand again",
 				);
-				const afterWarning = notificationCalls(runner);
-				expect(afterWarning.length).toBe(afterError.length + 1);
-				expect(afterWarning.at(-1)?.args.join(" ")).toContain("Factory: warning");
+				expect(notificationCalls(runner)).toHaveLength(1);
 			},
 			WIDTH,
 			HEIGHT,

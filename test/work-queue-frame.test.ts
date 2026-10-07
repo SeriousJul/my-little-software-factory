@@ -236,8 +236,9 @@ const booted = (
 	source: FakeSource,
 	runner: CommandRunner,
 	logger?: Logger,
+	width: number = WIDTH,
 ): Promise<void> =>
-	withApp(body, WIDTH, 34, {
+	withApp(body, width, 34, {
 		state,
 		config: zeroSeatConfig,
 		home,
@@ -437,6 +438,12 @@ describe("the Work queue section", () => {
 				state,
 				source,
 				runner,
+				undefined,
+				// Wide enough for the queue's keys beside the Message hint: the
+				// pause's own outcome is a recorded fact (ADR 0119), so the bar
+				// carries `m Message` with it, and this test reads its key's
+				// hint there.
+				170,
 			);
 		} finally {
 			state.close();

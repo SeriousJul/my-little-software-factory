@@ -821,7 +821,9 @@ describe("the dispatch's ask and pickup", () => {
 		return {
 			working: (text) => events.push(`working: ${text}`),
 			warning: (text) => events.push(`warning: ${text}`),
+			faultWarning: (text) => events.push(`faultWarning: ${text}`),
 			error: (text) => events.push(`error: ${text}`),
+			faultError: (text) => events.push(`faultError: ${text}`),
 			notice: (text) => events.push(`notice: ${text}`),
 			clearWorking: () => {},
 			refresh: () => {},
@@ -2014,7 +2016,7 @@ describe("the dispatch's ask and pickup", () => {
 			state.ticketWorkCycle.lastCompletion(issueIdentity)?.transition?.routeRemoved,
 		).toBeUndefined();
 		expect(events).toContain(
-			`warning: the merge of "${pullTitle}" was not run: task type merge carries no plane action`,
+			`faultWarning: the merge of "${pullTitle}" was not run: task type merge carries no plane action`,
 		);
 		state.close();
 	});

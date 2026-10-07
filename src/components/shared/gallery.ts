@@ -47,6 +47,7 @@ import {
 	type StandingFacts,
 } from "../controls.ts";
 import { EMPTY_TURN_LOG_NOTE, turnLogBody } from "../decision-modal.ts";
+import type { MessageHistoryEntry } from "../message-facts.ts";
 import { type MessageFact, messageRowElement } from "../messages.ts";
 import {
 	type ActionRow,
@@ -63,7 +64,7 @@ import { truncateToWidth } from "../text.ts";
 import { paint } from "../theme.ts";
 import { ticketCloseDialog } from "../ticket-close.ts";
 import { TicketList } from "../ticket-list.ts";
-import { KeyGuide } from "../utility.ts";
+import { KeyGuide, messageHistoryBody } from "../utility.ts";
 import { workQueueDetailLines } from "../work-queue-detail.ts";
 import {
 	type WorkQueueCursorFacts,
@@ -710,7 +711,7 @@ const MUTE_SOURCE_NAME = "acme/factory-issues";
  */
 const GALLERY_STANDING: StandingFacts = {
 	handoffActive: false,
-	messageTruncated: false,
+	messageRecorded: false,
 	consultationTypesConfigured: true,
 	sourceCount: 0,
 	refreshingSourceCount: 0,
@@ -2781,6 +2782,53 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 				}),
 			),
 		],
+	},
+	{
+		id: "message-history",
+		state: "the Message view's history: the run's facts, oldest first",
+		render: (columns) => {
+			// The kinds the run records (ADR 0119): the notice, the refusal, and
+			// the fault that wraps past the pane's width. The times stand fixed,
+			// so the frame a reviewer sees is the one the view builds.
+			const entries: MessageHistoryEntry[] = [
+				{
+					severity: "info",
+					at: 1761638400000,
+					text: 'the merge of "Persist the source facts" is in the Work queue',
+				},
+				{ severity: "warning", at: 1761638412000, text: "no Ticket sources exist" },
+				{
+					severity: "error",
+					at: 1761638425000,
+					text: "the herdr name fix-the-merge-4c4d97ed is held by a pane herdr did not name, which is no agent of this ticket: agent name fix-the-merge-4c4d97ed is already used (agent_name_taken)",
+				},
+			];
+			// The pane's border and its padding leave the body four cells inside
+			// the box's content, the way the view's layout pays them.
+			const bodyWidth = Math.max(1, columns.contentWidth - 4);
+			const lines = messageHistoryBody(entries, bodyWidth);
+			return [
+				createElement(
+					"box",
+					{ key: "message-history-pane", style: { flexDirection: "column" } },
+					paneElement(
+						{
+							title: "Messages",
+							rows: lines.map((line, index) =>
+								createElement(
+									"text",
+									{ key: `message-history-${index}` },
+									...bodyRowSpans(line, bodyWidth, undefined),
+								),
+							),
+							vpad: 1,
+							height: lines.length + 4,
+						},
+						columns.contentWidth,
+					),
+				),
+			];
+		},
 	},
 	{
 		id: "narrow",

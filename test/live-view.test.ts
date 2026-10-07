@@ -672,7 +672,7 @@ describe("the Live view on the ticket list", () => {
 				const between = (top: number, bottom: number) => rows.slice(top + 1, bottom).map(contentOf);
 				expect(between(indexOf("Current interaction mode"), indexOf("Global controls"))).toEqual([
 					"F1/? Help",
-					"F2 Message - the current Message fits on the Message line",
+					"F2 Message - no message has been recorded yet",
 					"j/k Scroll body",
 					"Esc Cancel",
 					// The fake runner lists no agent, so the Goto's pane is not

@@ -129,6 +129,7 @@ describe("the shared control gallery", () => {
 			"theme-light",
 			"theme-override",
 			"no-color",
+			"message-history",
 			"narrow",
 		]);
 		const states = GALLERY_EXAMPLES.map((example) => example.state).join(" ");

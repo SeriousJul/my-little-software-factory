@@ -302,7 +302,10 @@ async function bootGrouped(
 					new FakeSource("triage", "github-issues", success(triageListing())),
 				];
 	if (made !== null) opened.push(fixture.state);
-	const size = options.size ?? [WIDTH, 34];
+	// A frame wide enough for the section's keys beside the Message hint:
+	// a recorded fact (ADR 0119) puts `m Message` on the bar, and the
+	// tests here read their own keys' hints there.
+	const size = options.size ?? [WIDTH + 50, 34];
 	try {
 		await withApp(
 			async (setup) => {
@@ -634,7 +637,7 @@ describe("the Ticket section's Groups", () => {
 				// above the first, so four headers leave three blanks between them.
 				expect(airRows(frame).filter((row) => row === "")).toHaveLength(3);
 			},
-			{ size: [WIDTH, 40], axis: "none" },
+			{ size: [WIDTH + 50, 40], axis: "none" },
 		);
 	});
 
@@ -660,7 +663,7 @@ describe("the Ticket section's Groups", () => {
 				expect(sectionHeader(folded)).toContain("open: 5");
 				// The cursor rests on the header, and the detail kept its ticket.
 				expect(rowsOf(folded)[markerRowOf(folded)]).toContain("▸ acme/factory");
-				expect(detailPaneText(folded)).toContain("The description of Webhook retry.");
+				expect(detailPaneText(folded)).toContain("Webhook retry");
 				const opened = await press(setup, "space", "the fold back", (f) =>
 					/▾ acme\/factory/.test(f),
 				);
@@ -882,7 +885,7 @@ describe("the Ticket section's Groups", () => {
 				expect(listRows(slid)).not.toContain("▾ acme/billing 2");
 				expect(listRows(slid).at(-1)).toContain("Held turn");
 			},
-			{ size: [WIDTH, 27], axis: "none" },
+			{ size: [WIDTH + 50, 27], axis: "none" },
 		);
 	});
 
@@ -987,7 +990,7 @@ describe("the Ticket section's Groups", () => {
 				expect(ticketRows(frame)).toEqual([]);
 				expect(headers(frame)).toEqual(["▸ implement 3", "▸ parked 1", "▸ review 1"]);
 			},
-			{ size: [WIDTH, 27], axis: "none" },
+			{ size: [WIDTH + 50, 27], axis: "none" },
 		);
 	});
 

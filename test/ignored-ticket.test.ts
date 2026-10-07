@@ -298,6 +298,11 @@ describe("the ignore key", () => {
 
 	test("the same key on an ignored row takes the Ticket back", async () => {
 		const { state, src, props } = rig();
+		// A frame wide enough for the row keys beside the Message hint: the
+		// ignore's outcome is a recorded fact (ADR 0119), so the bar carries
+		// `m Message` with it, and the hint's width is part of what this test
+		// reads.
+		const wide = 170;
 		try {
 			await withApp(
 				async (setup) => {
@@ -338,7 +343,7 @@ describe("the ignore key", () => {
 					);
 					expect(listRowOf(active, SECOND_LEAD)).toBeGreaterThanOrEqual(0);
 				},
-				WIDTH,
+				wide,
 				HEIGHT,
 				props,
 			);
@@ -483,8 +488,9 @@ describe("the ignore key", () => {
 
 	test("the hint names the state the filter moves to, in both Ticket panes", async () => {
 		const { state, src, props } = rig();
-		// A frame wide enough to hold the section's whole ladder.
-		const wide = 150;
+		// A frame wide enough to hold the section's whole ladder beside the
+		// Message hint the ignore's recorded outcome puts on the bar (ADR 0119).
+		const wide = 170;
 		try {
 			await withApp(
 				async (setup) => {
@@ -1307,6 +1313,10 @@ describe("the ignore and the machine", () => {
 		// herdr stops listing it after.
 		runner.set("herdr", ["agent", "list"], { stdout: workingAgent() });
 		const src = new FakeSource("issues", "github-issues", outcome);
+		// A frame wide enough for the row keys beside the Message hint: the
+		// ignore's outcome is a recorded fact (ADR 0119), so the bar carries
+		// `m Message` with it.
+		const wide = 170;
 		try {
 			await withApp(
 				async (setup) => {
@@ -1348,7 +1358,7 @@ describe("the ignore and the machine", () => {
 					expect(actionBarRowOf(gone)).toContain("i Un-ignore");
 					expect(headerRow(gone)).toContain("running: 1");
 				},
-				WIDTH,
+				wide,
 				HEIGHT,
 				{ config: fixtureConfig(), state, sources: [src], runner, pollIntervalMs: 25 },
 			);

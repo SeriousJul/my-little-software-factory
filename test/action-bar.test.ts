@@ -212,14 +212,14 @@ describe("the contextual Action bar", () => {
 				// surface is still in front of them.
 				const open = await awaitFrame(
 					setup,
-					(f) => messageRowOf(f).includes("the current Message fits on the Message line"),
+					(f) => messageRowOf(f).includes("no message has been recorded yet"),
 					"the refusal on the panel's Message line",
 				);
 				expect(rowsOf(open)).toHaveLength(HEIGHT);
 				expect(open).toContain("┌─Override");
 				await press(setup, "escape", "the panel to close", (f) => !f.includes("┌─Override"));
 				expect(messageRowOf(await settle(setup))).toContain(
-					"Warning: the current Message fits on the Message line",
+					"Warning: no message has been recorded yet",
 				);
 			},
 			WIDTH,
@@ -242,18 +242,16 @@ describe("the contextual Action bar", () => {
 				pressF2(setup);
 				const open = await awaitFrame(
 					setup,
-					(f) => messageRowOf(f).includes("the current Message fits on the Message line"),
+					(f) => messageRowOf(f).includes("no message has been recorded yet"),
 					"the refusal on the modal's Message line",
 				);
 				// The refusal is on the surface, not only under it: the modal's
 				// box still owns its rows and the base frame stays covered.
 				expect(open).toContain("Decision:");
-				expect(messageRowOf(open).trim()).toBe(
-					"Warning: the current Message fits on the Message line",
-				);
+				expect(messageRowOf(open).trim()).toBe("Warning: no message has been recorded yet");
 				await press(setup, "escape", "the modal to close", (f) => !f.includes("Decision:"));
 				expect(messageRowOf(await settle(setup))).toContain(
-					"Warning: the current Message fits on the Message line",
+					"Warning: no message has been recorded yet",
 				);
 			},
 			WIDTH,
@@ -301,7 +299,7 @@ describe("the contextual Action bar", () => {
 					(f) => !f.includes("Decision:"),
 				);
 				expect(messageRowOf(await settle(setup))).toContain(
-					"Warning: the current Message fits on the Message line",
+					"Warning: no message has been recorded yet",
 				);
 			},
 			WIDTH,
@@ -330,16 +328,14 @@ describe("the contextual Action bar", () => {
 					pressF2(setup);
 					const open = await awaitFrame(
 						setup,
-						(f) => messageRowOf(f).includes("the current Message fits on the Message line"),
+						(f) => messageRowOf(f).includes("no message has been recorded yet"),
 						"the refusal on the modal's Message line",
 					);
 					expect(open).toContain("Missing:");
-					expect(messageRowOf(open).trim()).toBe(
-						"Warning: the current Message fits on the Message line",
-					);
+					expect(messageRowOf(open).trim()).toBe("Warning: no message has been recorded yet");
 					await press(setup, "escape", "the modal to close", (f) => !f.includes("Missing:"));
 					expect(messageRowOf(await settle(setup))).toContain(
-						"Warning: the current Message fits on the Message line",
+						"Warning: no message has been recorded yet",
 					);
 				},
 				WIDTH,

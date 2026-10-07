@@ -108,7 +108,7 @@ const BASE_STANDING: StandingFacts = {
 	sourceCount: 1,
 	refreshingSourceCount: 0,
 	handoffActive: false,
-	messageTruncated: false,
+	messageRecorded: false,
 	consultationTypesConfigured: false,
 	interactionExitKey: "f12",
 	queuePaused: false,

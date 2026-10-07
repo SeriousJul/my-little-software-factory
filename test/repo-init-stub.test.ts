@@ -544,14 +544,17 @@ host = "github.com"
 				expect(reInitText).toContain(
 					"acme/factory-pull-requests (covered by acme/factory-pull-requests)",
 				);
-				expect(reInitText).not.toContain("registered 0 new source");
-				expect(reInitText).not.toContain("new source in");
-				await press(
+				// The record keeps the first init's line above the re-init's own, and
+				// its count stands there (ADR 0119): the no-count rule is read on the
+				// fact the re-init itself wrote.
+				const closedOnReInit = await press(
 					setup,
 					"escape",
 					"the Message view to close on the re-init",
 					(f) => !f.includes("Message view"),
 				);
+				expect(messageRowOf(closedOnReInit)).not.toContain("registered 0 new source");
+				expect(messageRowOf(closedOnReInit)).not.toContain("new source in");
 				expect(readFileSync(configPath, "utf8")).toBe(saved);
 				expect(statSync(configPath).mtimeMs).toBe(savedStat.mtimeMs);
 
