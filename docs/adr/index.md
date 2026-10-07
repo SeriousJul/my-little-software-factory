@@ -128,3 +128,5 @@ body states the context, the decision, and the consequences.
 - [ADR 0117: Operator-decides holds its Task type out of every automatic add](./0117-operator-decides-holds-its-task-type-out-of-every-automatic-add.md)
 - [ADR 0118: A Fault is the only Message fact that leaves the terminal](./0118-a-fault-is-the-only-message-fact-that-leaves-the-terminal.md)
 - [ADR 0119: The Message view shows the Message line's own per-run history](./0119-the-message-view-shows-the-message-lines-own-per-run-history.md)
+- [ADR 0120: Biome owns every quality metric of this repository](./0120-biome-owns-every-quality-metric-of-this-repository.md)
+- [ADR 0121: The Quality baseline only shrinks, and one Quality audit reads it](./0121-the-quality-baseline-only-shrinks-and-one-audit-reads-it.md)

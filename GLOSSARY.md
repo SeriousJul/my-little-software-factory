@@ -797,3 +797,14 @@ It holds the stub repositories and their issues and pull requests, the labels, t
 The plane's own label writes, merges, and comments mutate it, and a restart reads it back.
 The world file is the source of truth of the Stub run, and the seed is its initial content.
 _Avoid_: mock server, fake GitHub, test double
+
+**Quality audit**:
+The one command this repository runs to check itself: `bun run audit` runs the type check, Biome, jscpd, and the code-scanning read, and prints one payload on stdout - a status line, one count per metric, then the findings as `path:line rule message`.
+`--changed` narrows the findings to the files that differ from the changed base, and never the counts.
+It writes no report file inside the worktree, and it runs no test suite (ADR 0121).
+_Avoid_: quality gate, lint run, code audit, sonar scan
+
+**Quality baseline**:
+The committed count per metric that the Quality audit refuses to let grow: a count above it fails the audit, and a count below it is rewritten down in the same change.
+It stands in `.quality-baseline.json`, beside the `.quality.json` that states the audit's own values, and no threshold lives in the audit script (ADR 0121).
+_Avoid_: debt list, ignore list, suppression list, ratchet
