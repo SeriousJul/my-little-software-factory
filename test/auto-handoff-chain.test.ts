@@ -987,13 +987,16 @@ describe("the seat a settling turn frees (the dev-run miss on PR #206)", () => {
 			[pullIdentity, "workflow", true],
 			[otherPullIdentity, "open", false],
 		]);
-		// The record the run could not make then (issue #223). The operator's row
+		// The record the run could not make then (issue #223). The restart
+		// candidate the walk reads holds its startup grace, the operator's row
 		// and the factory's own row read differently on one origin, the hold the
-		// fresh-work walk took is stated, and the continuation the settled turn owed
-		// stands in the file with the path that started it. Every line of this chain
-		// is a fact about the run, not a warning, so each carries `info`.
+		// fresh-work walk took is stated, and the continuation the settled turn
+		// owed stands in the file with the path that started it. Every line of
+		// this chain is a fact about the run, not a warning, so each carries
+		// `info`.
 		expect(chain.lines).toEqual([
 			infoLine(`handoff queued: "${STAGED_TITLE}" (origin open, operator-staged)`),
+			infoLine(`automatic walks hold: the Ticket's startup grace has not passed ("${PULL_TITLE}")`),
 			infoLine("automatic walks hold: the Work queue holds a waiting row"),
 			infoLine(`handoff queued: "${PULL_TITLE}" (origin workflow, automatic)`),
 			infoLine(

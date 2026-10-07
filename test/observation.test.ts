@@ -7083,3 +7083,195 @@ describe("the automatic walks state their holds in the record (issue #223)", () 
 		state.close();
 	});
 });
+
+describe("the fresh-work walk's per-candidate waits name their facts (issue #231)", () => {
+	/** One cycle over the default feed, with its record lines read back. */
+	function candidateRig(configOver: Partial<FactoryConfig> = {}) {
+		const lines: RecordedLine[] = [];
+		const r = rig({
+			autoOn: true,
+			agents: [],
+			config: configOver,
+			log: recordLogger(lines),
+		});
+		return { ...r, lines };
+	}
+
+	/** The two fetch rows the tests below re-read, with I_6's title of its own. */
+	function bothTickets(): FetchedTicket[] {
+		return [
+			{ ...fetched("github:github.com:I_6"), title: "Add a webhook retry policy" },
+			fetched(),
+		];
+	}
+
+	/** Stand one row in the queue the way an operator's staging does. */
+	function stageRow(state: FactoryState, identity: string): void {
+		const enqueued = state.workQueue.enqueueWork({
+			ticketIdentity: identity,
+			routeFromIdentity: null,
+			origin: "open",
+			choice,
+			previousMessage: "",
+			automatic: false,
+		});
+		if (!enqueued.ok) throw new Error(enqueued.reason);
+	}
+
+	test("a fact the walk holds states once while it stands, and again when it changes", async () => {
+		const { state, intents, lines, coordinator } = candidateRig();
+		// The walk reads one candidate alone.
+		state.sourceFact.applyFetch(source, success([fetched("github:github.com:I_6")]));
+		// The candidate's last cycle completed the task its labels still suggest,
+		// and the sources never re-read it since: the walk's first wait stands on
+		// the re-read, and the Same-type hold the closed cycle stands on waits
+		// behind it.
+		const attempt = settleForCause(state, "github:github.com:I_6", "implement", "completed");
+		state.ticketWorkCycle.applyCompletionDecision({
+			ticketIdentity: "github:github.com:I_6",
+			handoffId: attempt,
+			decision: "closed",
+			decidedAt: "2026-08-31T11:00:30Z",
+		});
+		await coordinator.tick();
+		expect(intents).toHaveLength(0);
+		expect(lines).toEqual([
+			infoLine(
+				'automatic walks hold: the source has not re-read the Ticket since its last cycle ended ("Persist source facts")',
+			),
+		]);
+		// The fact stands across the next polls: one line for the fact, not one
+		// per poll.
+		await coordinator.tick();
+		expect(lines).toHaveLength(1);
+		// The sources re-read the ticket and the labels stand put: the fact the
+		// walk holds on moved to the Same-type hold, and a moved fact states
+		// itself again.
+		state.sourceFact.applyFetch(source, {
+			status: "success",
+			fetchedAt: "2026-08-31T11:02:00Z",
+			tickets: [fetched("github:github.com:I_6")],
+		});
+		await coordinator.tick();
+		expect(lines.slice(1)).toEqual([
+			infoLine('automatic walks hold: the Same-type hold stands ("Persist source facts")'),
+		]);
+		await coordinator.tick();
+		expect(lines).toHaveLength(2);
+		state.close();
+	});
+
+	test("a candidate the walk stopped before keeps the fact its last line stated", async () => {
+		const { state, lines, coordinator } = candidateRig();
+		state.sourceFact.applyFetch(source, success(bothTickets()));
+		// Both tickets close a cycle that completed the task their labels still
+		// suggest, so both stand on the Same-type hold, and each re-read keeps
+		// the hold standing clear of the re-read wait.
+		for (const identity of ["github:github.com:I_5", "github:github.com:I_6"]) {
+			const attempt = settleForCause(state, identity, "implement", "completed");
+			state.ticketWorkCycle.applyCompletionDecision({
+				ticketIdentity: identity,
+				handoffId: attempt,
+				decision: "closed",
+				decidedAt: "2026-08-31T11:00:30Z",
+			});
+			state.sourceFact.applyFetch(source, {
+				status: "success",
+				fetchedAt: "2026-08-31T11:02:00Z",
+				tickets: bothTickets(),
+			});
+		}
+		// Each held candidate states its own fact, beside the Ticket's name.
+		await coordinator.tick();
+		expect(lines).toEqual([
+			infoLine('automatic walks hold: the Same-type hold stands ("Persist source facts")'),
+			infoLine('automatic walks hold: the Same-type hold stands ("Add a webhook retry policy")'),
+		]);
+		// The operator's row stands in the queue: the fresh-work walk stops at its
+		// own gate and reads no candidate, so the two facts keep standing.
+		stageRow(state, "github:github.com:I_5");
+		await coordinator.tick();
+		expect(lines[2]).toEqual(infoLine("automatic walks hold: the Work queue holds a waiting row"));
+		// The operator's row leaves, and the walk reads the candidates again: the
+		// facts stand unchanged, so neither states itself - the skipped walk kept
+		// them standing, the way a skipped walk's row does (issue #223 review).
+		expect(state.workQueue.removeWorkItem("github:github.com:I_5")).toBe(true);
+		await coordinator.tick();
+		expect(lines).toHaveLength(3);
+		state.close();
+	});
+
+	test("the restart candidate states the gate that holds it", async () => {
+		const { state, intents, lines, coordinator, advance } = candidateRig();
+		handOut(state, "github:github.com:I_5");
+		await coordinator.tick();
+		expect(intents).toHaveLength(0);
+		// The restart walk reads the candidate before the open walk does, and the
+		// open walk reads the ticket's own row: each states the fact it holds.
+		expect(lines).toEqual([
+			infoLine(
+				'automatic walks hold: the Ticket\'s startup grace has not passed ("Persist source facts")',
+			),
+			infoLine('automatic walks hold: the row is not open ("Persist source facts")'),
+		]);
+		// The facts stand across polls: one line for each, not one per poll.
+		await coordinator.tick();
+		expect(lines).toHaveLength(2);
+		// The grace passes and the restart gate answers nothing: the walk asks
+		// the restart, and the fact leaves.
+		advance(STARTUP_GRACE_MS + 1);
+		await coordinator.tick();
+		expect(intents.filter((intent) => intent.origin === "restart")).toHaveLength(1);
+		expect(lines).toHaveLength(2);
+		state.close();
+	});
+
+	test("the open walk states each row fact it holds on, and the brake states none", async () => {
+		// The issues' states: a parking state offers no task, and a state that
+		// offers the Operator-decides type is the brake's own (ADR 0117).
+		const { state, intents, lines, coordinator } = candidateRig({
+			workflowStates: [
+				...config.workflowStates,
+				{ name: "parked", match: { sourceKind: "github-issue", labelsAny: ["parked"] } },
+				{
+					name: "needs-operator",
+					match: { sourceKind: "github-issue", labelsAny: ["needs-operator"] },
+					taskType: "park",
+				},
+			],
+		});
+		state.sourceFact.applyFetch(
+			source,
+			success([
+				{ ...fetched("github:github.com:I_5"), labels: ["parked"] },
+				{
+					...fetched("github:github.com:I_6"),
+					labels: ["needs-operator"],
+					title: "Add a webhook retry policy",
+				},
+				{ ...fetched("github:github.com:I_7"), title: "A third ticket" },
+			]),
+		);
+		await coordinator.tick();
+		// The parking row offers no task, and the walk states it: the ticket
+		// rests, and only an external label write moves it (ADR 0027).
+		expect(lines).toEqual([
+			infoLine('automatic walks hold: the row offers no task ("Persist source facts")'),
+		]);
+		// The Operator-decides row holds the walk out with the designed silence:
+		// the flag the operator set in their own config states no fact, and the
+		// machine asks no start of the type.
+		expect(
+			intents.filter((intent) => intent.ticketIdentity === "github:github.com:I_6"),
+		).toHaveLength(0);
+		// The walk fell through the held rows to the one that stands, and asked it.
+		expect(intents).toEqual([
+			expect.objectContaining({
+				origin: "open",
+				automatic: true,
+				ticketIdentity: "github:github.com:I_7",
+			}),
+		]);
+		state.close();
+	});
+});

@@ -41,6 +41,17 @@ export const AUTOMATIC_HOLD_REASONS = [
 	"queue-row-standing",
 	"agent-name-held",
 	"handoff-failure-park",
+	"ticket-ignored",
+	"startup-grace",
+	"agent-present",
+	"handoff-limit",
+	"queue-item-standing",
+	"restart-mark-standing",
+	"row-not-open",
+	"row-not-actionable",
+	"row-offers-no-task",
+	"source-not-reverified",
+	"same-type-hold",
 	"next-step-held",
 ] as const;
 
@@ -65,15 +76,32 @@ export type AutomaticRowHoldReason = (typeof AUTOMATIC_ROW_HOLD_REASONS)[number]
 /**
  * The holds that name the candidate Ticket the walk reached and held out.
  *
- * The Agent name collision and the Failed-start park are the two of these: each
- * gate stands on a candidate the walk read, not on a Work queue row, and the
- * record has to say which Ticket the walk left resting - a run with more than
- * one Ticket in play cannot tell a held Ticket from a held factory (issue #298,
- * issue #299).
+ * The Agent name collision and the Failed-start park are the first of these:
+ * each gate stands on a candidate the walk read, not on a Work queue row, and
+ * the record has to say which Ticket the walk left resting - a run with more
+ * than one Ticket in play cannot tell a held Ticket from a held factory
+ * (issue #298, issue #299).
+ *
+ * The rest are the facts the fresh-work walk's per-candidate gates stand on
+ * (issue #231): the restart candidate's gates, then the open-ticket row gate
+ * and the waits it reads, in the order the walks read them. A run that reads
+ * candidates and adds nothing states the fact each candidate rested on, and the
+ * record has to say which candidate it left resting the same way.
  */
 export const AUTOMATIC_CANDIDATE_HOLD_REASONS = [
 	"agent-name-held",
 	"handoff-failure-park",
+	"ticket-ignored",
+	"startup-grace",
+	"agent-present",
+	"handoff-limit",
+	"queue-item-standing",
+	"restart-mark-standing",
+	"row-not-open",
+	"row-not-actionable",
+	"row-offers-no-task",
+	"source-not-reverified",
+	"same-type-hold",
 ] as const;
 
 export type AutomaticCandidateHoldReason = (typeof AUTOMATIC_CANDIDATE_HOLD_REASONS)[number];
@@ -196,6 +224,25 @@ export const AUTOMATIC_HOLD_LINES: Readonly<Record<AutomaticHoldReason, string>>
 	"queue-row-standing": "automatic walks hold: the Work queue holds a waiting row",
 	"agent-name-held": "automatic walks hold: another pane holds the Ticket's Agent name",
 	"handoff-failure-park": "automatic walks hold: the Ticket's Handoff starts keep failing",
+	// The fresh-work walk's per-candidate facts (issue #231). The first five are
+	// the restart candidate's gates; the last six the open-ticket row gate and
+	// the waits it reads. The three facts the two candidate gates share - the
+	// ignore, the Handoff limit, and the standing item - are one word here and
+	// one fact in the record: a hold keyed on the fact and the Ticket it stands
+	// on, whatever walk read it.
+	"ticket-ignored": "automatic walks hold: the Ticket is ignored or a source is muted",
+	"startup-grace": "automatic walks hold: the Ticket's startup grace has not passed",
+	"agent-present": "automatic walks hold: the Ticket's Agent is not missing",
+	"handoff-limit": "automatic walks hold: the Ticket is at the Handoff limit",
+	"queue-item-standing":
+		"automatic walks hold: the Work queue already holds an item for the Ticket",
+	"restart-mark-standing": "automatic walks hold: the episode already asked the Ticket's restart",
+	"row-not-open": "automatic walks hold: the row is not open",
+	"row-not-actionable": "automatic walks hold: the row is not actionable",
+	"row-offers-no-task": "automatic walks hold: the row offers no task",
+	"source-not-reverified":
+		"automatic walks hold: the source has not re-read the Ticket since its last cycle ended",
+	"same-type-hold": "automatic walks hold: the Same-type hold stands",
 	"next-step-held": "next step held:",
 };
 
@@ -367,26 +414,31 @@ export interface RestartCandidateFacts {
 }
 
 /**
- * Whether this in-flight Ticket is the restart candidate: the flags are out,
- * the grace has passed, the Agent is missing, the loop guard leaves room, no
- * item or mark already stands for it.
+ * The restart gate's answer: the candidate holds, with the fact the hold
+ * states when one names it, or it does not.
  *
- * The Operator-decides brake (ADR 0117) joins the flag: a restart repeats the
- * interrupted handoff's start, and the seat no restart can take is not
- * reserved (ADR 0108). The Missing modal stands, and the operator's Restart
- * or abandon is the act that answers.
+ * The gates are the flag, the startup grace, the missing Agent, the loop
+ * guard, the standing item, and the episode's restart mark. The fact is the
+ * first gate that stands, the way the cycle gate states one fact and not six
+ * (issue #231). A null fact is a hold that states none: the Operator-decides
+ * brake is the designed silence the Missing modal answers (ADR 0117), and a
+ * ticket with no pane names no seat the record can state beside.
  */
-export function restartCandidateHolds(facts: RestartCandidateFacts): boolean {
-	return (
-		!facts.ignoreBlocked &&
-		!facts.operatorDecides &&
-		facts.pastStartupGrace &&
-		facts.hasPane &&
-		facts.agentMissing &&
-		!handoffLimitReached(facts.handoffCount, facts.handoffLimit) &&
-		!facts.queueItemStands &&
-		!facts.restartMarkStands
-	);
+export type RestartCandidateGate =
+	| { holds: false }
+	| { holds: true; reason: AutomaticCandidateHoldReason | null };
+
+export function restartCandidateGate(facts: RestartCandidateFacts): RestartCandidateGate {
+	if (facts.ignoreBlocked) return { holds: true, reason: "ticket-ignored" };
+	if (facts.operatorDecides) return { holds: true, reason: null };
+	if (!facts.pastStartupGrace) return { holds: true, reason: "startup-grace" };
+	if (!facts.hasPane) return { holds: true, reason: null };
+	if (!facts.agentMissing) return { holds: true, reason: "agent-present" };
+	if (handoffLimitReached(facts.handoffCount, facts.handoffLimit))
+		return { holds: true, reason: "handoff-limit" };
+	if (facts.queueItemStands) return { holds: true, reason: "queue-item-standing" };
+	if (facts.restartMarkStands) return { holds: true, reason: "restart-mark-standing" };
+	return { holds: false };
 }
 
 /** The facts the open-ticket add reads off the row it holds (ADR 0051, ADR 0060, ADR 0027, ADR 0117). */
@@ -405,10 +457,16 @@ export interface OpenTicketRowFacts {
 
 /**
  * The row gate's answer: the row stands for the add, together with the task it
- * offers, or it does not. The task type is part of the answer so the walk never
- * tests it twice.
+ * offers, or it does not - and the fact the hold states when it does not.
+ *
+ * The task type is part of the answer so the walk never tests it twice. The
+ * fact is the first gate that stands, the way the cycle gate states one fact
+ * and not three (issue #231); a null fact is the designed silence the
+ * Operator-decides brake keeps (ADR 0117), the way the parking state is.
  */
-export type OpenTicketRowGate = { stands: true; taskType: string } | { stands: false };
+export type OpenTicketRowGate =
+	| { stands: true; taskType: string }
+	| { stands: false; hold: AutomaticCandidateHoldReason | null };
 
 /**
  * Whether the row the walk holds stands on its own facts: an open actionable
@@ -421,11 +479,15 @@ export type OpenTicketRowGate = { stands: true; taskType: string } | { stands: f
  * own config is a designed silence, the way the parking state is.
  */
 export function openTicketRowGate(facts: OpenTicketRowFacts): OpenTicketRowGate {
-	if (facts.state !== "open" || !facts.actionable) return { stands: false };
-	if (facts.ignoreBlocked) return { stands: false };
-	if (handoffLimitReached(facts.handoffCount, facts.handoffLimit)) return { stands: false };
-	if (facts.taskType === null) return { stands: false };
-	if (facts.operatorDecides) return { stands: false };
+	if (facts.state !== "open") return { stands: false, hold: "row-not-open" };
+	if (!facts.actionable) return { stands: false, hold: "row-not-actionable" };
+	if (facts.ignoreBlocked) return { stands: false, hold: "ticket-ignored" };
+	if (handoffLimitReached(facts.handoffCount, facts.handoffLimit))
+		return { stands: false, hold: "handoff-limit" };
+	if (facts.taskType === null) return { stands: false, hold: "row-offers-no-task" };
+	// The designed silence states no fact (ADR 0117): the hold is real, the
+	// record is not.
+	if (facts.operatorDecides) return { stands: false, hold: null };
 	return { stands: true, taskType: facts.taskType };
 }
 
@@ -440,9 +502,15 @@ export interface OpenTicketWaitsFacts {
 }
 
 /**
- * Whether the waits the row's own facts could not answer all pass: the source
- * has re-read the ticket, the Same-type hold is clear, and no item stands.
+ * The fact the waits hold the candidate on - the first wait the walk reads -
+ * or null when every wait passes: the source has re-read the ticket, the
+ * Same-type hold is clear, and no item stands.
  */
-export function openTicketWaitsHold(facts: OpenTicketWaitsFacts): boolean {
-	return facts.sourceReverified && !facts.sameTypeHoldActive && !facts.queueItemStands;
+export function openTicketWaitsHold(
+	facts: OpenTicketWaitsFacts,
+): AutomaticCandidateHoldReason | null {
+	if (!facts.sourceReverified) return "source-not-reverified";
+	if (facts.sameTypeHoldActive) return "same-type-hold";
+	if (facts.queueItemStands) return "queue-item-standing";
+	return null;
 }
