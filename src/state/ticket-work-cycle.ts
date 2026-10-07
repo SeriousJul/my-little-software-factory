@@ -335,6 +335,19 @@ export class TicketWorkCycleModule implements TicketWorkCycleAggregate {
 				row.state === "open" &&
 				!pending &&
 				active.some((membership) => membership.health === "healthy");
+			// The standing the Ticket list's Attention band reads (issue #345): the
+			// row lists on a source the Config still holds, and that source's last
+			// read did not fail. A `removed` source is already out of `active`, so the
+			// one health left that holds a row out of the pile is `stale`: a read that
+			// failed. `loading` is this run's fetch schedule and no fact about the
+			// Ticket, so it moves no row - the boot, and the config write-back that
+			// re-runs the refresh, never reorder the open work.
+			const listActionable =
+				row.state === "open" &&
+				!pending &&
+				active.some(
+					(membership) => membership.health === "healthy" || membership.health === "loading",
+				);
 			const ignored = row.ignored === 1;
 			if (storedMemberships.length === 0 && !inFlightState(row.state) && row.state !== "awaiting")
 				continue;
@@ -391,6 +404,7 @@ export class TicketWorkCycleModule implements TicketWorkCycleAggregate {
 				suggestedTaskType: taskTypeOfMatch(matched, fallbackTaskType),
 				matchedStateName: matched === null ? null : matched.name,
 				actionable,
+				listActionable,
 				handoffRecoveryRequired: pending,
 				leftover: leftovers.get(row.identity)?.[0] ?? null,
 				nameCollision: nameCollisions.get(row.identity) ?? null,

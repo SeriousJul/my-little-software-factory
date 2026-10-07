@@ -492,6 +492,24 @@ export interface Ticket extends TicketIgnoreFacts {
 	 */
 	suggestedTaskType: string | null;
 	actionable: boolean;
+	/**
+	 * Whether the row stands in the Ticket list's actionable Attention band
+	 * (issue #345).
+	 *
+	 * The band answers the operator's "what needs me now", so it reads the
+	 * Ticket's own standing: the row lists on a source the Config still holds,
+	 * that source's last read did not fail, and no start of this Ticket already
+	 * stands. The plane's fetch schedule is no fact about the Ticket, so the
+	 * `loading` mark a boot leaves on every source - and a config write-back
+	 * leaves again - moves no row: a list that reorders itself before any
+	 * source has answered is the list lying about the work.
+	 *
+	 * `actionable` above is the machine's gate, and it is stricter: it waits on
+	 * a source whose last read stands good, so no start runs on facts the run
+	 * has not read. The two agree everywhere except while a read is outstanding,
+	 * and there the gate's own refusal states itself on the Message line.
+	 */
+	listActionable: boolean;
 	handoffRecoveryRequired: boolean;
 	/**
 	 * The ticket's newest leftover environment that stands unresolved, or
@@ -653,12 +671,18 @@ export function flagWithholdsRow(ticket: TicketIgnoreFacts & { state: TicketStat
  * the handoff that started it, then open work the factory can act on, then
  * open work it cannot. A state the plane has no band for stands last, so a
  * fact it does not know cannot outrank a decision.
+ *
+ * The two open bands read the row's own standing (`listActionable`), never the
+ * run's fetch schedule: a source this run has not read yet holds no row out of
+ * the pile, so the boot and a config write-back never reorder the open work
+ * (issue #345). The machine's gate is the stricter `actionable`, and it does
+ * wait for the read.
  */
 export function attentionBand(ticket: Ticket): number {
 	if (ticket.state === "awaiting") return 0;
 	if (ticket.state === "running") return 1;
 	if (ticket.state === "handed-off") return 2;
-	if (ticket.state === "open" && ticket.actionable) return 3;
+	if (ticket.state === "open" && ticket.listActionable) return 3;
 	if (ticket.state === "open") return 4;
 	return 5;
 }
