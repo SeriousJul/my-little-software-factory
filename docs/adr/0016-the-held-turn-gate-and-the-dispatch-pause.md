@@ -57,11 +57,17 @@ that is visibly working. Its next settle overwrites the same trace, cause and
 detail included.
 
 **The Dispatch pause.** The pause is on when the newest held turn settled
-`failed` and no turn has settled `completed` since it. It is derived from the
-completion traces on every cycle and never stored, so it survives a restart
-and cannot drift from the fact it describes. While it is on, auto-handoff mode
-starts no agent by itself. It ends at the next `completed` settle, or the
-moment the operator decides the held turn that started it.
+`failed`, no turn has settled `completed` since it, and the trace still stands
+as the decision the operator owes: the Ticket rests `awaiting` on the cycle
+the trace belongs to. The guard is the `held` badge's display rule narrowed to
+the `failed` cause, so the pause and the badge never disagree on a trace
+(issue #338). It is derived from the completion traces on every cycle and
+never stored, so it survives a restart and cannot drift from the fact it
+describes. While it is on, auto-handoff mode starts no agent by itself. It
+ends at the next `completed` settle, the moment the operator decides the held
+turn that started it, or the moment the trace stops standing as a held turn:
+the Agent of the held turn reports working again and the turn reopens, or the
+operator closes the in-flight cycle the trace stands in (ADR 0031).
 
 The pause holds only the three automatic origins: the open handoff, the
 workflow route, and the restart of a missing agent. It never blocks a manual
@@ -108,11 +114,17 @@ The considered alternatives:
   shown as held in the ticket list, the detail pane, and the attention line,
   and its cause and detail named in the decision modal. The operator decides
   it instead of the control plane deciding for them.
-- A `failed` turn with no `completed` settle since pauses the automatic open
-  handoff, the workflow route, and the restart. The open handoff and the
-  restart run only in auto-handoff mode; the route block applies in manual
-  mode too, because the auto-close types route there. A manual handoff
-  always starts.
+- A `failed` turn that stands held, with no `completed` settle since, pauses
+  the automatic open handoff, the workflow route, and the restart. The open
+  handoff and the restart run only in auto-handoff mode; the route block
+  applies in manual mode too, because the auto-close types route there. A
+  manual handoff always starts.
+- A trace that stops standing as a held turn ends the pause without a
+  decision: the Agent of the held turn reports working again and the turn
+  reopens, or the operator closes the in-flight cycle the trace stands in,
+  leaving the pending trace in the closed cycle. A reopened turn that settles
+  `failed` again re-arms the pause: the settle refreshes the same trace, and
+  the Ticket rests `awaiting` on its cycle once more.
 - A turn the control plane could not read is never held: `unknown` fails open
   (ADR 0015), so a runtime that changes its record format holds nothing.
 - The pause is never stored. It is recomputed from the completion traces each

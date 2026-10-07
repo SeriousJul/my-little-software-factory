@@ -55,19 +55,22 @@ manual mode.
 
 A failed turn also pauses the automatic starts: while the pause stands, auto
 mode starts no agent by itself, so the factory does not pile more work on top
-of a failure. The pause ends when you decide the held turn, or when a later
-turn completes. Your own manual handoffs are never blocked by it, and a start
-that already stands in the Work queue still takes its seat.
+of a failure. The pause ends when you decide the held turn, when a later turn
+completes, or when the trace stops standing as a held turn: its Agent reports
+working again and the turn reopens, or you close the in-flight cycle it stands
+in. Your own manual handoffs are never blocked by it, and a start that already
+stands in the Work queue still takes its seat.
 
 The pause stands on a Held turn only while it is one (ADR 0016). An Agent that
 reports working again reopens its turn: the row leaves `awaiting`, its `held`
 badge leaves with it, and the pause stands down while that Agent works - if the
 same turn settles `failed` again it rests held and pauses the starts once more.
-Closing the cycle of a turn that never settled leaves its undecided trace in
-the cycle behind, and the pause reads no trace from a closed cycle. Both cases
-matter because the pause holds every automatic start, and a `completed` settle
-is its only release besides your decision: a pause that kept reading a trace no
-screen offers you would never clear.
+Closing the in-flight cycle of a settled and reopened turn leaves its pending
+trace in the cycle behind, and the pause reads no trace from a closed cycle.
+Both stand-downs matter because the pause holds every automatic start: such a
+trace wears no held badge and offers no decision row, so your decision cannot
+land on it, and the starts that would settle a `completed` turn are held by
+the pause itself - a pause that kept reading it would never clear.
 
 A missing agent behaves the same way in auto mode: the factory restarts the
 handoff once, with the last message as the previous message, and at the

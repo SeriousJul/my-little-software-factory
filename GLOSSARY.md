@@ -533,8 +533,8 @@ The Failed-start park arrives at half this cap, so a Ticket whose starts keep fa
 _Avoid_: turn counter, dispatch budget
 
 **Dispatch pause**:
-The condition in which Auto-handoff mode starts no agent by itself, because the newest Held turn settled `failed` and no turn has settled `completed` since it.
-It is derived from the completion traces on every cycle, never stored, so it survives a restart and cannot drift from the fact it describes. It ends at the next `completed` settle, or when the operator decides the Held turn that started it. It never blocks a manual Handoff or a route the operator confirms, and it holds only the automatic adds of the auto top-up: the continuation, the restart, and the open ticket (ADR 0051).
+The condition in which Auto-handoff mode starts no agent by itself, because the newest Held turn settled `failed`, no turn has settled `completed` since it, and the trace still stands as the decision the operator owes - the Ticket rests `awaiting` on the cycle the trace belongs to (issue #338).
+It is derived from the completion traces on every cycle, never stored, so it survives a restart and cannot drift from the fact it describes. It ends at the next `completed` settle, when the operator decides the Held turn that started it, or when the trace stops standing as a Held turn: the Agent of the held turn reports working again and the turn reopens, or the operator closes the in-flight cycle the trace stands in (ADR 0031). It never blocks a manual Handoff or a route the operator confirms, and it holds only the automatic adds of the auto top-up: the continuation, the restart, and the open ticket (ADR 0051).
 The auto cell's corner word for it is `held` (ADR 0111), and the word `paused` belongs to the queue pause alone.
 It is distinct from the queue pause, the operator's brake on the queue itself (ADR 0052).
 _Avoid_: circuit breaker, cooldown, backoff
