@@ -132,7 +132,7 @@ scrolls and the terminal resizes.
 | Send / Launch | Visible, keyboard-reachable actions that submit the draft. |
 | Modified Enter | May supplement submission; never its only route. |
 | F1 | Open the Key guide without modifying the field. |
-| F2 | Open the Message view when available. |
+| F2 | Open the Message view when available. The view dispatches in the `message-view` mode, and its body is the shared Body pane. |
 | Ctrl+C | Emergency exit for control-plane input; selection does not change it into Copy. |
 | Copy selection | A keyboard-reachable action, separate from emergency exit. |
 

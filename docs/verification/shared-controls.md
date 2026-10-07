@@ -1585,6 +1585,198 @@ gallery holds the view's history state in its `message-history` example and
 the same cells on the narrow frame in its `narrow` example, and
 `test/shared-gallery.test.ts` renders both.
 
+### The categorization pass over the write sites
+
+The pass of ADR 0118 reads the table of issue #331, and the lists below are
+its record: every warning and error write site, group by group, with the
+severity and the Fault answer the site took. The channel is visible where the
+fact is written: the line-only writers - `warning`, `error`, `notice`,
+`report` - never send, and the Fault writers - `faultWarning`,
+`faultError` - write the same line and send. The send itself has one home:
+the facts module. The two Fault writers and the stale-source transition in
+`src/components/message-facts.ts` are the only `attention.notify` calls in the
+plane, so a site's Fault answer is exactly the writer the site took. Sites
+that flow in through a module's status channel ride the shell's own mapping
+(`src/components/app.ts:1047`): info becomes the line-only notice, and
+warning and error become the Fault writers, because those modules report facts
+the plane met on its own while the operator may be away from the key. The line
+numbers name the head this record was written on.
+
+The table's two info rows carry no per-site rows: their writers - `news`,
+`notice` at info, `report` at info - are line-only by construction, so no site
+on those rows can send. The control-result row is the closed and abandoned
+ticket news (`src/components/app.ts:2396`, `src/components/app.ts:3022`), the
+queue and launcher notices, the dispatch's placement and start notices, the
+observation's recovered and settled lines, and the focus, re-fire, ignore, and
+mute results the shell reports. The covered queued-start removal - the ADR 0118
+boundary - takes the plain info notice at
+`src/handoff-dispatch.ts:1831`. The degraded-boot row is the Theme fallback
+notice the app starts with (`src/components/app.ts:1007`), which rides the
+facts module's initial notice into the history's first row.
+
+**A key the catalogue refused. Warning, line-only, no Fault.** The operator
+pressed the key and nothing ran, so the `Warning:` word stands and the send
+goes nowhere. The dispatch's refusals answer the key the ask pressed, and the
+force-dispatch's checkout wait answers the key that met the held checkout:
+the wait takes the line-only word on purpose (ADR 0118).
+
+| Site | The fact the site writes |
+| --- | --- |
+| `src/components/app.ts:760` | `the init for X is running` |
+| `src/components/app.ts:1076` | the terminal's refusal of the copy, in the shared refusal wording |
+| `src/components/app.ts:1744` | the handoff key's catalogue refusal |
+| `src/components/app.ts:1756` | the dispatch's refusal of a handoff ask, in its reason |
+| `src/components/app.ts:1769` | the in-flight handoff's refusal |
+| `src/components/app.ts:1841` | the override key's catalogue refusal |
+| `src/components/app.ts:1876` | the ticket the override named is gone |
+| `src/components/app.ts:2139` | the Goto's no-pane-recorded refusal |
+| `src/components/app.ts:2148` | the Goto's foreign-pane refusal |
+| `src/components/app.ts:2262`, `:2279`, `:2292` | the re-fire's refused answers, in the report's wordings (no outcome recorded, no ticket reached, the record moved first) |
+| `src/components/app.ts:2304` | `no transition branch held on the re-fire: reason` |
+| `src/components/app.ts:2338`, `:3015` | `ticket X already decided` |
+| `src/components/app.ts:2388`, `:2432` | `ticket X did not close: reason` / `the ticket is state` (the Close key refused) |
+| `src/components/app.ts:2448`, `:2471` | `no transition position is recorded for ticket X` |
+| `src/components/app.ts:2486`, `:2525`, `:3047` | the dispatch's refusal of a restart or route ask, in its reason |
+| `src/components/app.ts:2599` | the Consultations' durable-state refusal |
+| `src/components/app.ts:2612` | `consultation not queued: refusal` |
+| `src/components/app.ts:2720` | the response key's not-awaiting refusal |
+| `src/components/app.ts:2740` | the response draft's validation answer |
+| `src/components/app.ts:2840` | the list filter's state refusal |
+| `src/components/app.ts:2875`, `:2885` | the ignore's refusals, in the state and record answers |
+| `src/components/app.ts:2948` | the mute's state refusal |
+| `src/components/app.ts:2955` | the row names no source to mute |
+| `src/components/app.ts:2963` | the mute's refusal, in the record's answer |
+| `src/components/app.ts:3067` | the queue move at the first or last item |
+| `src/components/app.ts:3110` | `consultation X: the queue item was already gone` |
+| `src/components/app.ts:3138` | `the Work queue no longer held a waiting start for X` |
+| `src/components/app.ts:3445` | the refresh key's refusals (no sources exist, every source already refreshing) |
+| `src/components/app.ts:3582` | the Close key's state refusal |
+| `src/components/app.ts:3645` | the launcher's no-types-configured refusal |
+| `src/components/app.ts:3704`, `:3709` | the launcher's refusals, in the state and scheduling answers |
+| `src/components/app.ts:3739`, `:3749` | the launcher's refusals, in the state and record answers |
+| `src/components/app.ts:4391` | the group move at the first or last row |
+| `src/components/app.ts:4458`, `:4600`, `:4661` | the init's state refusal |
+| `src/components/app.ts:4464` | `no ticket names the repository X` |
+| `src/components/app.ts:4470` | `no source is configured for X` |
+| `src/components/app.ts:4484`, `:4616` | `X has no local checkout at path to work a throwaway worktree in` |
+| `src/components/app.ts:4518`, `:4632` | the init plan's refusal, in its reason |
+| `src/components/app.ts:5501` | the catalogue's unavailability answer, in its reason |
+| `src/components/app.ts:5792` | the safety panel's cancel answer (the launch is cancelled, and the recovery or the close is the operator's act) |
+| `src/handoff-dispatch.ts:1694` | the force-dispatch's checkout-wait answer for a Consultation pickup, in the hold's fact |
+| `src/handoff-dispatch.ts:2030`, `:2049` | the force-dispatch's checkout-wait answer for a Handoff or Plane action ask, in the hold's fact |
+| `src/handoff-dispatch.ts:2064` | `force-dispatch of X failed: reason` (the claim's answer) |
+| `src/handoff-dispatch.ts:2107` | `force-dispatch of X failed: reason` (the start's answer) |
+
+**A failure of the action the operator just started. Error, line-only, no
+Fault.** The work cannot move on, but the operator is at the key that started
+the action, so the line says it and the send goes nowhere.
+
+| Site | The fact the site writes |
+| --- | --- |
+| `src/components/app.ts:1952` | the auto-handoff mode's persist failure, session only |
+| `src/components/app.ts:1986` | `the queue pause did not move: reason` |
+| `src/components/app.ts:2153` | `agent focus failed: ...` (the Goto) |
+| `src/components/app.ts:3511`, `:3515` | `Agent interaction failed: ...` |
+| `src/components/app.ts:3783` | `agent focus failed: ...` (the Consultation's pane) |
+| `src/components/app.ts:4311` | `the grouping axis did not save: ...` |
+| `src/components/app.ts:4438` | `the group order did not save: ...` |
+| `src/components/app.ts:4452` | the init plan's open failure, in the error's wording |
+| `src/components/app.ts:4502` | `the source's auth for host did not resolve: reason` |
+| `src/components/app.ts:4550`, `:4581` | the repository-select's open failure, in the error's wording |
+| `src/components/app.ts:4684` | the confirmed init flow's failure, in its reason |
+| `src/components/app.ts:4722` | `the init's sources did not save: ...` |
+| `src/components/app.ts:5692`, `:5698`, `:5702` | the init confirm's failure, in the error's wording |
+
+**A machine operation that failed. Error, Fault yes.**
+
+| Site | The fact the site writes |
+| --- | --- |
+| `src/components/app.ts:1833` | `handoff failed: ...` (the no-state projection's settle) |
+| `src/handoff-dispatch.ts:2577` | `handoff failed: reason` |
+| `src/handoff-dispatch.ts:1134` | `the merge of X was blocked: reason` |
+| `src/handoff-dispatch.ts:275` | the failed handoff outcome's lines (the outcome's report) |
+| `src/consultation-operations.ts:418`, `:428` | `Consultation X failed: reason` (the start and the re-open) |
+| `src/consultation-operations.ts:422`, `:447` | `cannot verify Consultation Agent: ...` |
+| `src/consultation-operations.ts:611` | `Consultation X failed: fact` (the pickup's refusal) |
+| `src/consultation-operations.ts:667`, `:704`, `:729` | `response failed: ...` |
+| `src/consultation-operations.ts:903` | `Consultation close needs recovery: ...` |
+| `src/consultation-operations.ts:1340` | the opening's prompt failure, in its reason |
+
+**A machine step that was asked for and not run. Warning, Fault yes.**
+
+| Site | The fact the site writes |
+| --- | --- |
+| `src/handoff-dispatch.ts:990` | `the merge of X was not run: reason` (the pre-run check's refusal) |
+| `src/handoff-dispatch.ts:1003` | `the merge of X was not run: ...` (the task type carries no plane action) |
+| `src/handoff-dispatch.ts:1021` | `the merge of X was not run: ...` (the ticket is no longer visible) |
+| `src/handoff-dispatch.ts:1038` | `the merge of X was not run: ...` (no linked pull request was found) |
+| `src/handoff-dispatch.ts:1324` | `the channel of X was not run: fact` (the pickup's drop) |
+| `src/handoff-dispatch.ts:1738` | `Work queue pickup of Consultation X was not run: ...` (the record is no longer queued) |
+| `src/handoff-dispatch.ts:1982` | `queued handoff for X was not run: reason` |
+| `src/handoff-dispatch.ts:2719` | `queued handoff for X was not run: reason` (the ticket moved on) |
+
+**A standing condition the plane is in. Warning, Fault yes.** The stale source
+lands one entry and one send at the change, stays quiet while it stands, and
+recovers with one info entry (ADR 0119).
+
+| Site | The fact the site writes |
+| --- | --- |
+| `src/components/message-facts.ts:353` | one stale source lands, in the source's line. The recovery at `:358` is the info entry |
+| `src/observation.ts:748` | `herdr is unreachable: ...; the observation is holding` |
+| `src/observation.ts:960` | the dispatch pause's hold line (a held failed turn blocks the automatic dispatch) |
+| `src/observation.ts:1147` | `agent still works on ticket X after its cycle closed; ...` |
+| `src/observation.ts:1177` | `Consultation X needs recovery` |
+| `src/observation.ts:1190` | the ambiguous-match and missing-Agent answers for Consultation X |
+| `src/observation.ts:1232` | the unknown-Agent-status line for Consultation X |
+| `src/observation.ts:1387` | `ticket X held (cause)` |
+| `src/observation.ts:1444`, the warning half | `ticket X abandoned: its handoff limit is N` |
+| `src/observation.ts:2221`, `:2388` | the automatic add's refusal, in the walk's prefix and the dispatch's reason |
+| `src/observation.ts:2275` | the Failed-start park's line, in the streak's wording |
+| `src/observation.ts:2339` | the agent-name collision's line |
+| `src/handoff-dispatch.ts:276` | a clean handoff start that leaves a warning line (the collision, the leftover) |
+| `src/consultation-operations.ts:1288` | the live checkout conflict's confirmation demand |
+| `src/consultation-operations.ts:1341` | a clean Consultation start that carries its lines (the collision's note) |
+| `src/consultation-operations.ts:1344` | the Consultation record's stored warning, stated at the start's settle |
+
+**A Consultation turn that ended failed, aborted, truncated, or with no turn.
+Warning, Fault yes.**
+
+| Site | The fact the site writes |
+| --- | --- |
+| `src/observation.ts:1312` | `Consultation X turn ended <cause>` |
+
+**A warning a successful source read carries. Warning, Fault yes.**
+
+| Site | The fact the site writes |
+| --- | --- |
+| `src/components/app.ts:4052` | the warnings a successful read carries, one send each (the security source's skip line) |
+
+**A Close's cleanup that failed after the Close settled. Error, Fault yes.**
+
+| Site | The fact the site writes |
+| --- | --- |
+| `src/components/app.ts:1692` | `ticket X end; the close cleanup failed: ...` |
+| `src/components/app.ts:1695` | `ticket X end; the close cleanup could not be reported: ...` |
+| `src/components/app.ts:2365` | the close-cycle end's draft close's failure, in its wording |
+| `src/components/app.ts:2398` | `ticket X closed; the close cleanup failed: ...` |
+| `src/components/app.ts:2403` | `ticket X closed; the close could not be reported: ...` |
+| `src/observation.ts:1444`, the error half | `ticket X abandoned; the close cleanup failed: ...` |
+| `src/observation.ts:1508`, the error half | `ticket X auto-closed; the close cleanup failed: ...` |
+
+**The sites the table has no row for.** Each takes the answer below, and the
+reason stands here so a reader of the record does not re-read the code to find
+it.
+
+| Site | The fact the site writes | The answer it took, and why |
+| --- | --- | --- |
+| `src/handoff-dispatch.ts:851`, `:1194`, `:2407` | `the previous handoff's environment did not close: ...` | A cleanup failure the plane met on its own. It takes the warning word and the Fault channel. The error word fits it better, but the table carries no row for it. |
+| `src/observation.ts:712` | `observation cycle failed: ...` | A machine operation that failed, wearing the warning word where the table's machine-failure row is the error. Fault yes. |
+| `src/observation.ts:868` | `the recorded skip of ticket X re-fired, and its label write failed: ...` | A machine write failure wearing the warning word. Fault yes. |
+| `src/observation.ts:1401` | `ticket X settled, and its label write failed: ...` | A machine write failure wearing the warning word. Fault yes. |
+| `src/components/app.ts:3929` | the Not-initialized note, with the repository names and the `i` key's offer | A standing condition the plane is in, taken as the line-only notice warning. The table's standing-condition row sends, but this note stands once per run and the Group headers carry the marker, so the line-only word holds. Fault no. |
+| `src/components/app.ts:4733` | the confirmed init's write-back line, where the write-back's warning reads (ADR 0103) | The result of the act the operator just confirmed, taken as the line-only notice warning. Fault no. |
+| `src/consultation-operations.ts:299`, `:304`, `:659`, `:748`, `:755`, `:1052`, `:1059`, `:1093` | the Consultation module's boundary answers (`unknown Consultation type X`, the input validations, `Consultation close is already in progress`, `Consultation is already closing or closed`, `Consultation cleanup has already finished`, the schedule's refusal) | The module reports through its one status channel, and the shell's mapping takes every warning and error the module states to the Fault channel. The module does not separate a key's answer from a machine fact, so a key's answer rides the Fault channel. Fault yes. |
+
 The whole suite ran on this head, on the tree as merged: the push gate's
 `bun run lint`, `bun run typecheck`, and one full `bun run test`.
 
