@@ -108,7 +108,7 @@ import {
 	freshWorkHold,
 	openTicketRowGate,
 	openTicketWaitsHold,
-	restartCandidateHolds,
+	restartCandidateGate,
 	type TopUpCycleFacts,
 } from "./domain/top-up.ts";
 import { baseChoice, resolveHandoffChoice } from "./handoff.ts";
@@ -618,6 +618,15 @@ export class ObservationCoordinator {
 	 */
 	private readonly parkReports = new Map<string, AutomaticCandidateHold>();
 	/**
+	 * The candidates the fresh-work walk read this cycle (issue #231). The cycle
+	 * resets it before the walk, and the report reads it: a per-candidate fact
+	 * the walk did not re-read keeps standing the way a skipped walk's row does -
+	 * the skip is the cycle's own choice, not the fact leaving - and a candidate
+	 * the walk read retires its last-stated facts and stands whatever the gate
+	 * answers now.
+	 */
+	private freshWorkCandidatesRead = new Set<string>();
+	/**
 	 * The Agent name collisions this run has stated (issue #299, ADR 0107), held
 	 * the same way the parks are: one standing fact states its record line and its
 	 * Message warning once, and a cycle that reads the Ticket and finds the fact
@@ -931,6 +940,9 @@ export class ObservationCoordinator {
 		// the queue pause down, and the Dispatch pause clear, the cycle adds one
 		// item - a restart, then a new open ticket, else nothing.
 		const freshWorkWalkRan = !continued;
+		// The per-candidate facts the fresh-work walk read reset with the walk
+		// (issue #231): a walk that runs none reads no candidate.
+		this.freshWorkCandidatesRead = new Set();
 		if (freshWorkWalkRan) changed = (await this.topUpFreshWork(probe.agents)) || changed;
 		if (this.stopped) return;
 		// The holds the walks took, stated once each for as long as they stand.
@@ -1870,6 +1882,14 @@ export class ObservationCoordinator {
 	 * gone retires it, so the row that really leaves the queue is stated again when
 	 * a row comes back.
 	 *
+	 * The walk's per-candidate facts (issue #231) clear and carry per candidate,
+	 * not per walk. The walk reads a candidate when its gate holds it, and the
+	 * candidate's facts then stand only on what the gate answered this cycle: a
+	 * fact that changed is a new fact and states itself again, and a fact the gate
+	 * no longer answers retires. A candidate the walk stopped before is never
+	 * read, and its last-stated facts keep standing the same way a skipped walk's
+	 * row does.
+	 *
 	 * The name read for a standing row runs here and not where the walk noted the
 	 * hold, so a fact that stands across a hundred polls costs no read at the poll's
 	 * cadence. A cycle that throws between its walks and this report keeps no note:
@@ -1897,6 +1917,15 @@ export class ObservationCoordinator {
 			// returning to a still-standing hold is not a new fact (issue #232).
 			for (const [key, hold] of this.automaticHoldsReported)
 				if (hold.reason === "next-step-held") reported.set(key, hold);
+		}
+		// The fresh-work walk's per-candidate facts (issue #231) carry per candidate,
+		// not per walk: the walk read the candidates its gate left standing, and the
+		// ones it stopped before keep the facts the last line stated - the stop is the
+		// cycle's own choice, not the fact leaving. A candidate the walk read retires
+		// every fact it stands on and stands whatever the gate answers now.
+		for (const [key, hold] of this.automaticHoldsReported) {
+			if (hold.candidate === undefined) continue;
+			if (!this.freshWorkCandidatesRead.has(hold.candidate)) reported.set(key, hold);
 		}
 		this.automaticHoldsReported = reported;
 		this.automaticHolds = new Map();
@@ -1975,31 +2004,41 @@ export class ObservationCoordinator {
 			// judged out, and it would keep starting it for as long as the flag
 			// stood. The identity is all this walk holds, so it asks the cycle's
 			// own read of the pile, the ticket's flag or its source's.
+			// The candidate the walk reads, the way the open walk's candidates are
+			// named: its per-candidate facts retire and stand on the read (issue #231).
+			this.freshWorkCandidatesRead.add(ticket.ticketIdentity);
 			// The restart candidate's gate (ADR 0051, ADR 0060, ADR 0070): the flag,
 			// the startup grace, the missing Agent, the loop guard, and the marks
-			// that already stand for this ticket. The rule decides.
-			if (
-				!restartCandidateHolds({
-					ignoreBlocked: blocked.has(ticket.ticketIdentity),
-					// The Operator-decides brake (ADR 0117): the restart repeats the
-					// interrupted handoff's start, and a start the machine makes alone
-					// of a type the operator owns is the fault the flag exists to keep
-					// out. The Missing modal stands, and the operator's Restart or
-					// abandon answers.
-					operatorDecides: operatorDecidesType(config.taskTypes, ticket.taskType),
-					pastStartupGrace: this.now() - Date.parse(ticket.startedAt) >= this.startupGraceMs,
-					hasPane: ticket.paneId !== null,
-					// The one missing-Agent rule, read the way the in-flight pass reads it.
-					agentMissing:
-						agentInPane(byPane, ticket.paneId, restartNames.get(ticket.ticketIdentity) ?? "") ===
-						null,
-					handoffCount: restartStartCounts.get(ticket.ticketIdentity) ?? 0,
-					handoffLimit: config.maxHandoffsPerTicket,
-					queueItemStands: queuedTickets.has(ticket.ticketIdentity),
-					restartMarkStands: this.restarted.has(ticket.ticketIdentity),
-				})
-			)
+			// that already stand for this ticket. The rule decides, and it answers
+			// the fact the hold states, the first gate that stands (issue #231).
+			const gate = restartCandidateGate({
+				ignoreBlocked: blocked.has(ticket.ticketIdentity),
+				// The Operator-decides brake (ADR 0117): the restart repeats the
+				// interrupted handoff's start, and a start the machine makes alone
+				// of a type the operator owns is the fault the flag exists to keep
+				// out. The Missing modal stands, and the operator's Restart or
+				// abandon answers. The brake is the designed silence: the gate holds
+				// without stating a fact.
+				operatorDecides: operatorDecidesType(config.taskTypes, ticket.taskType),
+				pastStartupGrace: this.now() - Date.parse(ticket.startedAt) >= this.startupGraceMs,
+				hasPane: ticket.paneId !== null,
+				// The one missing-Agent rule, read the way the in-flight pass reads it.
+				agentMissing:
+					agentInPane(byPane, ticket.paneId, restartNames.get(ticket.ticketIdentity) ?? "") ===
+					null,
+				handoffCount: restartStartCounts.get(ticket.ticketIdentity) ?? 0,
+				handoffLimit: config.maxHandoffsPerTicket,
+				queueItemStands: queuedTickets.has(ticket.ticketIdentity),
+				restartMarkStands: this.restarted.has(ticket.ticketIdentity),
+			});
+			if (gate.holds) {
+				if (gate.reason !== null)
+					this.noteAutomaticHold({
+						reason: gate.reason,
+						candidate: ticket.ticketIdentity,
+					});
 				continue;
+			}
 			this.restarted.add(ticket.ticketIdentity);
 			const previous = this.state.ticketWorkCycle.lastCompletion(ticket.ticketIdentity);
 			const added = await this.topUpAsk(
@@ -2067,6 +2106,9 @@ export class ObservationCoordinator {
 			list.rows.filter((ticket) => ticket.sourceKind !== "github-pull-request"),
 		]) {
 			for (const ticket of group) {
+				// The candidate the walk reads: its per-candidate facts retire and
+				// stand on the read (issue #231).
+				this.freshWorkCandidatesRead.add(ticket.identity);
 				if (await this.topUpOpenTicket(config, ticket, queuedTickets)) return true;
 			}
 		}
@@ -2104,23 +2146,29 @@ export class ObservationCoordinator {
 			// the next candidate.
 			operatorDecides: operatorDecidesType(config.taskTypes, ticket.suggestedTaskType),
 		});
-		if (!row.stands) return false;
+		if (!row.stands) {
+			// The fact the row gate acted on names itself in the record (issue #231);
+			// the Operator-decides brake is the designed silence that states none
+			// (ADR 0117).
+			if (row.hold !== null)
+				this.noteAutomaticHold({ reason: row.hold, candidate: ticket.identity });
+			return false;
+		}
 		const taskType = row.taskType;
 		// The waits the row's own facts cannot answer (ADR 0051, ADR 0026): the
 		// ticket's last cycle may have ended on a source change the agent made, so
 		// the sources must have re-read it; and the Same-type hold must be clear.
-		// The gate holds the ticket, not a parallel slot.
-		if (
-			!openTicketWaitsHold({
-				sourceReverified: this.state.ticketWorkCycle.sourceReverifiedSinceCycleEnd(ticket.identity),
-				sameTypeHoldActive: this.state.ticketWorkCycle.sameTypeHoldActive(
-					ticket.identity,
-					taskType,
-				),
-				queueItemStands: queuedTickets.has(ticket.identity),
-			})
-		)
+		// The gate holds the ticket, not a parallel slot, and it answers the fact
+		// the hold states, the first wait that stands (issue #231).
+		const wait = openTicketWaitsHold({
+			sourceReverified: this.state.ticketWorkCycle.sourceReverifiedSinceCycleEnd(ticket.identity),
+			sameTypeHoldActive: this.state.ticketWorkCycle.sameTypeHoldActive(ticket.identity, taskType),
+			queueItemStands: queuedTickets.has(ticket.identity),
+		});
+		if (wait !== null) {
+			this.noteAutomaticHold({ reason: wait, candidate: ticket.identity });
 			return false;
+		}
 		// The ready position the list offers (ADR 0068): the task type
 		// resolves on the plane action, so the top-up asks for the merge,
 		// not for a handoff. The guards the handoff's add ran still ran

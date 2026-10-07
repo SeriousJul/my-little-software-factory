@@ -750,7 +750,8 @@ earlier - not a pass through a row that already stands. The line names the row
 itself too, because a run with more than one ticket in play has to say which
 owed start the hold blocked and not only that a hold happened; a later hold
 behind a different row is a new fact and states itself again (issue #223
-review). The other holds stay bare: no row is picked where their gate stands.
+review). The other holds in this list stay bare: no row is picked where their
+gate stands.
 
 The last line names the Ticket the walk reached, because the Failed-start park
 stands on one Ticket and not on the cycle (issue #298). Its Handoff starts keep
@@ -761,6 +762,30 @@ names the Ticket the walk reached:
 ```text
 automatic walks hold: the Ticket's Handoff starts keep failing ("Watch agent turns")
 ```
+
+The fresh-work walk's per-candidate holds stand the same way: the walk reads a
+candidate when its gate holds it, and it states the first gate that stands
+beside the Ticket's name (issue #231). The fact is the candidate and the word,
+so a fact that stands for the whole time says nothing again, a fact that
+changed states itself again, and a candidate the walk stopped before is never
+read, so its last-stated facts keep standing until the walk reads it again:
+
+```text
+automatic walks hold: the Ticket is ignored or a source is muted ("Watch agent turns")
+automatic walks hold: the Ticket's startup grace has not passed ("Watch agent turns")
+automatic walks hold: the Ticket's Agent is not missing ("Watch agent turns")
+automatic walks hold: the Ticket is at the Handoff limit ("Watch agent turns")
+automatic walks hold: the Work queue already holds an item for the Ticket ("Watch agent turns")
+automatic walks hold: the episode already asked the Ticket's restart ("Watch agent turns")
+automatic walks hold: the row is not open ("Watch agent turns")
+automatic walks hold: the row is not actionable ("Watch agent turns")
+automatic walks hold: the row offers no task ("Watch agent turns")
+automatic walks hold: the source has not re-read the Ticket since its last cycle ended ("Watch agent turns")
+automatic walks hold: the Same-type hold stands ("Watch agent turns")
+```
+
+The Operator-decides brake keeps its designed silence (ADR 0117): the walk
+holds the Ticket it reaches, and it states no fact for it.
 
 The same fact reaches the Message line as a standing warning, once for as long as
 it stands:

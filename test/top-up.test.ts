@@ -35,7 +35,8 @@ import {
 	openTicketRowGate,
 	openTicketWaitsHold,
 	type RestartCandidateFacts,
-	restartCandidateHolds,
+	type RestartCandidateGate,
+	restartCandidateGate,
 	type TopUpCycleFacts,
 } from "../src/domain/top-up.ts";
 import { NEXT_STEP_GATE_LINES } from "../src/workflow.ts";
@@ -66,6 +67,65 @@ function restart(overrides: Partial<RestartCandidateFacts> = {}): RestartCandida
 		restartMarkStands: false,
 		...overrides,
 	};
+}
+
+/** The row gate's facts with every gate clear. */
+function row(overrides: Partial<OpenTicketRowFacts> = {}): OpenTicketRowFacts {
+	return {
+		state: "open",
+		actionable: true,
+		ignoreBlocked: false,
+		handoffCount: 0,
+		handoffLimit: 10,
+		taskType: "implement",
+		operatorDecides: false,
+		...overrides,
+	};
+}
+
+/** The waits' facts with every wait clear. */
+function waits(overrides: Partial<OpenTicketWaitsFacts> = {}): OpenTicketWaitsFacts {
+	return {
+		sourceReverified: true,
+		sameTypeHoldActive: false,
+		queueItemStands: false,
+		...overrides,
+	};
+}
+
+/** The restart gate's facts, one per fact it can hold on. */
+function restartAnswers(): RestartCandidateFacts[] {
+	return [
+		restart({ ignoreBlocked: true }),
+		restart({ operatorDecides: true }),
+		restart({ pastStartupGrace: false }),
+		restart({ hasPane: false }),
+		restart({ agentMissing: false }),
+		restart({ handoffCount: 10 }),
+		restart({ queueItemStands: true }),
+		restart({ restartMarkStands: true }),
+	];
+}
+
+/** The row gate's facts, one per fact it can hold on. */
+function rowAnswers(): OpenTicketRowFacts[] {
+	return [
+		row({ state: "awaiting" }),
+		row({ actionable: false }),
+		row({ ignoreBlocked: true }),
+		row({ handoffCount: 10 }),
+		row({ taskType: null }),
+		row({ operatorDecides: true }),
+	];
+}
+
+/** The waits' facts, one per wait that can stand. */
+function waitAnswers(): OpenTicketWaitsFacts[] {
+	return [
+		waits({ sourceReverified: false }),
+		waits({ sameTypeHoldActive: true }),
+		waits({ queueItemStands: true }),
+	];
 }
 
 describe("the Handoff limit is one rule (ADR 0005)", () => {
@@ -188,6 +248,17 @@ describe("each automatic-walk hold names itself in the record (issue #223)", () 
 			"automatic walks hold: the Work queue holds a waiting row",
 			"automatic walks hold: another pane holds the Ticket's Agent name",
 			"automatic walks hold: the Ticket's Handoff starts keep failing",
+			"automatic walks hold: the Ticket is ignored or a source is muted",
+			"automatic walks hold: the Ticket's startup grace has not passed",
+			"automatic walks hold: the Ticket's Agent is not missing",
+			"automatic walks hold: the Ticket is at the Handoff limit",
+			"automatic walks hold: the Work queue already holds an item for the Ticket",
+			"automatic walks hold: the episode already asked the Ticket's restart",
+			"automatic walks hold: the row is not open",
+			"automatic walks hold: the row is not actionable",
+			"automatic walks hold: the row offers no task",
+			"automatic walks hold: the source has not re-read the Ticket since its last cycle ended",
+			"automatic walks hold: the Same-type hold stands",
 			"next step held:",
 		]);
 		// The words and the lines are one set (issue #301 names the type): the walk
@@ -208,6 +279,19 @@ describe("each automatic-walk hold names itself in the record (issue #223)", () 
 			if (hold === null) throw new Error("the gate holds nothing for these facts");
 			expect(AUTOMATIC_HOLD_LINES[hold.reason]).not.toBeUndefined();
 		}
+		// The per-candidate gates answer only the candidate's own words (issue #231):
+		// a gate that answers a word outside the set names a fact the words do not
+		// cover, and a word the set holds that no gate answers is wording nothing
+		// writes.
+		const candidateWords = new Set<string>([...AUTOMATIC_CANDIDATE_HOLD_REASONS, ""]);
+		const restartGates: readonly RestartCandidateGate[] =
+			restartAnswers().map(restartCandidateGate);
+		for (const gate of restartGates)
+			if (gate.holds) expect(candidateWords.has(gate.reason ?? "")).toBe(true);
+		for (const gate of rowAnswers().map(openTicketRowGate))
+			if (!gate.stands) expect(candidateWords.has(gate.hold ?? "")).toBe(true);
+		for (const word of waitAnswers().map(openTicketWaitsHold))
+			expect(candidateWords.has(word ?? "")).toBe(true);
 	});
 
 	/**
@@ -253,7 +337,21 @@ describe("each automatic-walk hold names itself in the record (issue #223)", () 
 		// its line names the Ticket the walk held out - the same reason a standing-row
 		// line names its row (issue #223 review).
 		const reasons: AutomaticCandidateHoldReason[] = [...AUTOMATIC_CANDIDATE_HOLD_REASONS];
-		expect(reasons).toEqual(["agent-name-held", "handoff-failure-park"]);
+		expect(reasons).toEqual([
+			"agent-name-held",
+			"handoff-failure-park",
+			"ticket-ignored",
+			"startup-grace",
+			"agent-present",
+			"handoff-limit",
+			"queue-item-standing",
+			"restart-mark-standing",
+			"row-not-open",
+			"row-not-actionable",
+			"row-offers-no-task",
+			"source-not-reverified",
+			"same-type-hold",
+		]);
 		const hold: AutomaticCandidateHold = {
 			reason: "handoff-failure-park",
 			candidate: "github:github.com:I_5",
@@ -458,64 +556,125 @@ describe("the row a continuation must not jump (ADR 0051, ADR 0094, ADR 0100, is
 	});
 });
 
-describe("the restart candidate (ADR 0051, ADR 0060, ADR 0070, ADR 0117)", () => {
+describe("the restart candidate (ADR 0051, ADR 0060, ADR 0070, ADR 0117, issue #231)", () => {
 	test("a flagged in-flight Ticket with a missing Agent is the candidate", () => {
-		expect(restartCandidateHolds(restart())).toBe(true);
+		expect(restartCandidateGate(restart())).toEqual({ holds: false });
 	});
 
-	test("each single gate holds the ticket out", () => {
-		expect(restartCandidateHolds(restart({ ignoreBlocked: true }))).toBe(false);
+	test("each single gate holds the ticket out, and answers its own fact", () => {
+		expect(restartCandidateGate(restart({ ignoreBlocked: true }))).toEqual({
+			holds: true,
+			reason: "ticket-ignored",
+		});
 		// The Operator-decides brake: a restart repeats the interrupted handoff's
 		// start, and the machine makes no start of a type the operator owns.
 		// The Missing modal stands, and the operator's Restart or abandon answers.
-		expect(restartCandidateHolds(restart({ operatorDecides: true }))).toBe(false);
-		expect(restartCandidateHolds(restart({ pastStartupGrace: false }))).toBe(false);
-		expect(restartCandidateHolds(restart({ hasPane: false }))).toBe(false);
-		expect(restartCandidateHolds(restart({ agentMissing: false }))).toBe(false);
-		expect(restartCandidateHolds(restart({ handoffCount: 10 }))).toBe(false);
-		expect(restartCandidateHolds(restart({ queueItemStands: true }))).toBe(false);
+		// The brake is the designed silence: the gate holds, and it answers no
+		// fact.
+		expect(restartCandidateGate(restart({ operatorDecides: true }))).toEqual({
+			holds: true,
+			reason: null,
+		});
+		// A ticket with no pane names no seat the record can state beside: the same
+		// designed silence.
+		expect(restartCandidateGate(restart({ hasPane: false }))).toEqual({
+			holds: true,
+			reason: null,
+		});
+		expect(restartCandidateGate(restart({ pastStartupGrace: false }))).toEqual({
+			holds: true,
+			reason: "startup-grace",
+		});
+		expect(restartCandidateGate(restart({ agentMissing: false }))).toEqual({
+			holds: true,
+			reason: "agent-present",
+		});
+		expect(restartCandidateGate(restart({ handoffCount: 10 }))).toEqual({
+			holds: true,
+			reason: "handoff-limit",
+		});
+		expect(restartCandidateGate(restart({ queueItemStands: true }))).toEqual({
+			holds: true,
+			reason: "queue-item-standing",
+		});
 		// The episode mark stands while the asked-for start holds its place or runs.
-		expect(restartCandidateHolds(restart({ restartMarkStands: true }))).toBe(false);
+		expect(restartCandidateGate(restart({ restartMarkStands: true }))).toEqual({
+			holds: true,
+			reason: "restart-mark-standing",
+		});
+	});
+
+	test("the first gate the walk reads is the fact it states", () => {
+		// Several gates stand at once: one fact is stated, and it is the one the
+		// walk reached first.
+		expect(
+			restartCandidateGate(
+				restart({ ignoreBlocked: true, pastStartupGrace: false, agentMissing: false }),
+			),
+		).toEqual({ holds: true, reason: "ticket-ignored" });
+		expect(
+			restartCandidateGate(
+				restart({ pastStartupGrace: false, handoffCount: 10, restartMarkStands: true }),
+			),
+		).toEqual({ holds: true, reason: "startup-grace" });
 	});
 });
 
-describe("the top-up's open-ticket row gate (ADR 0051, ADR 0060, ADR 0027)", () => {
-	/** The row facts with every gate clear. */
-	function row(overrides: Partial<OpenTicketRowFacts> = {}): OpenTicketRowFacts {
-		return {
-			state: "open",
-			actionable: true,
-			ignoreBlocked: false,
-			handoffCount: 0,
-			handoffLimit: 10,
-			taskType: "implement",
-			operatorDecides: false,
-			...overrides,
-		};
-	}
-
+describe("the top-up's open-ticket row gate (ADR 0051, ADR 0060, ADR 0027, ADR 0117, issue #231)", () => {
 	test("an open actionable row under the limit answers with the task it offers", () => {
 		expect(openTicketRowGate(row())).toEqual({ stands: true, taskType: "implement" });
 	});
 
-	test("each single row fact holds the row out", () => {
-		expect(openTicketRowGate(row({ state: "awaiting" }))).toEqual({ stands: false });
-		expect(openTicketRowGate(row({ state: "running" }))).toEqual({ stands: false });
-		expect(openTicketRowGate(row({ actionable: false }))).toEqual({ stands: false });
-		expect(openTicketRowGate(row({ ignoreBlocked: true }))).toEqual({ stands: false });
-		expect(openTicketRowGate(row({ handoffCount: 10 }))).toEqual({ stands: false });
+	test("each single row fact holds the row out, and answers its own fact", () => {
+		expect(openTicketRowGate(row({ state: "awaiting" }))).toEqual({
+			stands: false,
+			hold: "row-not-open",
+		});
+		expect(openTicketRowGate(row({ state: "running" }))).toEqual({
+			stands: false,
+			hold: "row-not-open",
+		});
+		expect(openTicketRowGate(row({ actionable: false }))).toEqual({
+			stands: false,
+			hold: "row-not-actionable",
+		});
+		expect(openTicketRowGate(row({ ignoreBlocked: true }))).toEqual({
+			stands: false,
+			hold: "ticket-ignored",
+		});
+		expect(openTicketRowGate(row({ handoffCount: 10 }))).toEqual({
+			stands: false,
+			hold: "handoff-limit",
+		});
 		// A parking state offers no task (ADR 0027).
-		expect(openTicketRowGate(row({ taskType: null }))).toEqual({ stands: false });
+		expect(openTicketRowGate(row({ taskType: null }))).toEqual({
+			stands: false,
+			hold: "row-offers-no-task",
+		});
 	});
 
-	test("a row whose position offers an Operator-decides task type holds (ADR 0117)", () => {
+	test("a row whose position offers an Operator-decides task type holds, and states nothing (ADR 0117)", () => {
 		// The walk holds that Ticket only and falls to the next candidate, and the
 		// hold states nothing: the flag the operator set in their own config is a
 		// designed silence, the way the parking state is. The answer carries no
 		// task, so the walk never asks a start of the type.
 		const held: OpenTicketRowGate = openTicketRowGate(row({ operatorDecides: true }));
-		expect(held).toEqual({ stands: false });
+		expect(held).toEqual({ stands: false, hold: null });
 		expect("taskType" in held).toBe(false);
+	});
+
+	test("the first gate the walk reads is the fact it states", () => {
+		// Several facts stand at once: one hold is stated, and it is the one the
+		// gate reached first.
+		expect(
+			openTicketRowGate(row({ actionable: false, ignoreBlocked: true, taskType: null })),
+		).toEqual({ stands: false, hold: "row-not-actionable" });
+		expect(
+			openTicketRowGate(row({ ignoreBlocked: true, handoffCount: 10, taskType: null })),
+		).toEqual({
+			stands: false,
+			hold: "ticket-ignored",
+		});
 	});
 
 	test("the answer carries the task only on the branch where the row stands (issue #301)", () => {
@@ -526,21 +685,12 @@ describe("the top-up's open-ticket row gate (ADR 0051, ADR 0060, ADR 0027)", () 
 		const stands: OpenTicketRowGate = openTicketRowGate(row());
 		expect(stands).toEqual({ stands: true, taskType: "implement" });
 		const held: OpenTicketRowGate = openTicketRowGate(row({ actionable: false }));
-		expect(held).toEqual({ stands: false });
+		expect(held).toEqual({ stands: false, hold: "row-not-actionable" });
 		expect("taskType" in held).toBe(false);
 	});
 });
 
-describe("the top-up's open-ticket waits (ADR 0051, ADR 0026)", () => {
-	/**
-	 * The three waits the row's own facts could not answer (issue #301). The walk
-	 * hands them from the state reads it made for the row and never names the type,
-	 * so the record the gate reads is stated at the seam.
-	 */
-	function waits(over: Partial<OpenTicketWaitsFacts> = {}): OpenTicketWaitsFacts {
-		return { sourceReverified: true, sameTypeHoldActive: false, queueItemStands: false, ...over };
-	}
-
+describe("the top-up's open-ticket waits (ADR 0051, ADR 0026, issue #231)", () => {
 	test("a re-verified ticket with the hold clear and no item stands", () => {
 		const facts: OpenTicketWaitsFacts = waits();
 		expect(Object.keys(facts).sort()).toEqual([
@@ -548,12 +698,25 @@ describe("the top-up's open-ticket waits (ADR 0051, ADR 0026)", () => {
 			"sameTypeHoldActive",
 			"sourceReverified",
 		]);
-		expect(openTicketWaitsHold(facts)).toBe(true);
+		expect(openTicketWaitsHold(facts)).toBeNull();
 	});
 
-	test("each single wait holds the ticket out", () => {
-		expect(openTicketWaitsHold(waits({ sourceReverified: false }))).toBe(false);
-		expect(openTicketWaitsHold(waits({ sameTypeHoldActive: true }))).toBe(false);
-		expect(openTicketWaitsHold(waits({ queueItemStands: true }))).toBe(false);
+	test("each single wait holds the ticket out, and answers its own fact", () => {
+		expect(openTicketWaitsHold(waits({ sourceReverified: false }))).toBe("source-not-reverified");
+		expect(openTicketWaitsHold(waits({ sameTypeHoldActive: true }))).toBe("same-type-hold");
+		expect(openTicketWaitsHold(waits({ queueItemStands: true }))).toBe("queue-item-standing");
+	});
+
+	test("the first wait the walk reads is the fact it states", () => {
+		// Several waits stand at once: one fact is stated, and it is the one the
+		// walk reached first.
+		expect(
+			openTicketWaitsHold(
+				waits({ sourceReverified: false, sameTypeHoldActive: true, queueItemStands: true }),
+			),
+		).toBe("source-not-reverified");
+		expect(openTicketWaitsHold(waits({ sameTypeHoldActive: true, queueItemStands: true }))).toBe(
+			"same-type-hold",
+		);
 	});
 });
