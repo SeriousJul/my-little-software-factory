@@ -4622,6 +4622,195 @@ describe("the Operator-decides type parks its completions for the operator (ADR 
 	});
 });
 
+describe("auto handoff should not pickup operator tasks (ADR 0117)", () => {
+	/**
+	 * The config the ADR 0117 tests boot on: the spec position offers the
+	 * analyze type, and the analyze type carries the flag the operator sets in
+	 * their own config.
+	 */
+	const flaggedConfig: Partial<FactoryConfig> = {
+		workflowStates: [
+			{ name: "spec", taskType: "analyze", match: { labelsAny: ["ready-for-spec"] } },
+		],
+		taskTypes: {
+			...BASE_CONFIG.taskTypes,
+			analyze: {
+				template:
+					"Analyze the following {source-kind}.\n\nRepository: {repository}\n\n" +
+					"{external-key}: {title}\n\nURL: {source-url}\n\nDescription:\n{description}",
+				operatorDecides: true,
+			},
+		},
+	};
+
+	/** The open ticket on the spec position, fetched the way the live source answers. */
+	const specSuccess: FetchOutcome = {
+		status: "success",
+		fetchedAt: "2026-08-31T10:00:00Z",
+		tickets: [fetched(5, "Persist source facts", ["ready-for-spec"])],
+	};
+
+	/** Stub the live-worktree handoff's sequence at the convention checkout. */
+	function stubHandoff(app: SeededApp): void {
+		const path = Object.values(app.config.repos)[0];
+		app.runner.set("herdr", ["workspace", "list"], { stdout: workspaceListJson([]) });
+		app.runner.set("herdr", ["workspace", "create", "--cwd", path, "--no-focus"], {
+			stdout: workspaceCreateJson("ws-1"),
+		});
+		app.runner.set("herdr", ["tab", "create", "--workspace", "ws-1", "--cwd", path, "--no-focus"], {
+			stdout: tabCreateJson("pane-1"),
+		});
+	}
+
+	test("the machine never hands off a flagged type, and the operator's handoff starts it", async () => {
+		const app = seededAppInAutoMode("open", flaggedConfig, specSuccess);
+		stubCheckout(app);
+		stubHandoff(app);
+
+		await withApp(
+			async (setup) => {
+				app.src.settle(specSuccess);
+				await awaitFrame(setup, (f) => ticketRow(f).includes("[open]"), "the open ticket");
+				await settle(setup);
+				// The machine's walk has had its cycles, and it never asked a start
+				// of the flagged type: the ticket stays listed, open, and unhanded,
+				// with no queue item and no start command. The walk holds that row
+				// only, and it states nothing for the hold.
+				expect(app.state.ticketWorkCycle.ticketState(identity)).toBe("open");
+				expect(app.state.workQueue.items()).toHaveLength(0);
+				expect(
+					app.runner.commands().filter((command) => command.startsWith("herdr agent start")),
+				).toHaveLength(0);
+
+				// The operator's handoff is the operator's: Enter on the row hands the
+				// ticket off with the position's suggestion, and the start runs the
+				// flagged type.
+				await pressReturn(setup, "the settled handoff", (f) =>
+					frameText(f).includes("Handoff task type: analyze"),
+				);
+				expect(
+					app.runner.commands().some((command) => command.startsWith("herdr agent start")),
+				).toBe(true);
+			},
+			WIDTH,
+			HEIGHT,
+			{ ...propsOf(app), pollIntervalMs: 40 },
+		);
+		app.state.close();
+	});
+
+	test("the Decision screen stands the held Next step on the flag's gate, and the row's key starts it", async () => {
+		const app = seededAppInAutoMode("awaiting", flaggedConfig, specSuccess, "live-worktree", {
+			taskType: "implement",
+			cause: "completed",
+			transition: {
+				fired: true,
+				when: null,
+				reason: "",
+				ticketFacts: ["ready-for-spec"],
+				pullRequestFacts: [],
+				ticketWrite: { added: ["ready-for-spec"], removed: ["ready-for-agent"] },
+				pullRequestWrite: null,
+				pullRequestIdentity: null,
+				pullRequestKey: null,
+				writeFailure: "",
+				positionTaskType: "analyze",
+				positionTicketIdentity: identity,
+			},
+		});
+		stubCheckout(app);
+		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+		stubHandoff(app);
+
+		await withApp(
+			async (setup) => {
+				app.src.settle(specSuccess);
+				await awaitFrame(setup, (f) => ticketRow(f).includes("[awaiting]"), "the parked ticket");
+				// The hold stands: no decision, and the environment is untouched.
+				expect(app.state.ticketWorkCycle.ticketState(identity)).toBe("awaiting");
+				expect(app.state.ticketWorkCycle.lastCompletion(identity)?.decision).toBeNull();
+				expect(
+					app.runner.commands().filter((command) => command.startsWith("herdr agent start")),
+				).toHaveLength(0);
+				// The operator's surface is the Decision screen, and the factory's
+				// mode never opens it: the flip to manual is the operator's act,
+				// and the Enter on the parked ticket opens the modal.
+				await press(setup, "a", "manual mode", (f) => f.includes("manual"));
+				await pressReturn(
+					setup,
+					"the decision modal",
+					(f) => f.includes("Decision:") && f.includes("Handoff: analyze"),
+				);
+				const modal = frameText(await settle(setup));
+				expect(modal).toContain("the Next step is held: the task type carries Operator-decides");
+				// The row's key is still the operator's: the confirm runs the start.
+				await pressArrow(setup, "down", "the goto row", () => true);
+				await pressArrow(setup, "down", "the handoff row", (f) =>
+					frameText(f).includes("❯ Handoff: analyze"),
+				);
+				await pressReturn(setup, "the settled handoff", (f) =>
+					frameText(f).includes("Handoff task type: analyze"),
+				);
+				expect(
+					app.runner.commands().some((command) => command.startsWith("herdr agent start")),
+				).toBe(true);
+			},
+			WIDTH,
+			HEIGHT,
+			{ ...propsOf(app), pollIntervalMs: 40 },
+		);
+		app.state.close();
+	});
+
+	test("the machine never restarts a flagged type's ticket, and the Missing modal's Restart starts it", async () => {
+		const app = seededAppInAutoMode("in-flight", flaggedConfig, success, "live-worktree", {
+			taskType: "analyze",
+		});
+		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+		stubCheckout(app);
+		app.runner.set("herdr", ["workspace", "list"], { stdout: workspaceListJson([{ id: "ws-1" }]) });
+		app.runner.set("herdr", ["tab", "create", "--workspace", "ws-1", "--no-focus"], {
+			stdout: tabCreateJson("pane-restart", "tab-restart"),
+		});
+
+		await withApp(
+			async (setup) => {
+				app.src.settle(success);
+				await awaitFrame(setup, (f) => ticketRow(f).includes("missing"), "the missing badge");
+				await settle(setup);
+				// The restart walk's candidate facts all stand, and the flag's brake
+				// holds the ticket out: the machine asks no start and abandons
+				// nothing, and the Ticket keeps its Missing fact for the operator.
+				expect(
+					app.runner.commands().filter((command) => command.startsWith("herdr agent start")),
+				).toHaveLength(0);
+				expect(
+					app.runner.commands().filter((command) => command.startsWith("herdr tab close")),
+				).toHaveLength(0);
+				// The Missing modal is the operator's surface, and its Restart is the
+				// operator's act.
+				await pressReturn(setup, "the Missing modal", (f) => f.includes("Missing:"));
+				await pressReturn(setup, "the restart handoff", (_f) =>
+					app.runner.commands().some((command) => command.startsWith("herdr agent prompt")),
+				);
+				expect(
+					app.runner
+						.commands()
+						.some(
+							(command) =>
+								command.startsWith(`herdr agent start ${AGENT}`) &&
+								command.includes("--pane pane-restart"),
+						),
+				).toBe(true);
+			},
+			WIDTH,
+			HEIGHT,
+			{ ...propsOf(app), pollIntervalMs: 40 },
+		);
+		app.state.close();
+	});
+});
+
 describe("the handoff queue", () => {
 	test("a queued handoff whose ticket moved on settles its claim as failed", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "factory-auto-state-"));

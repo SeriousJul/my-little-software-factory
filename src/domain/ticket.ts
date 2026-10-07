@@ -1,6 +1,6 @@
 /** Provider-neutral factory ticket types and state transitions. */
 
-import type { TransitionOutcome } from "../config.ts";
+import type { TaskTypeConfig, TransitionOutcome } from "../config.ts";
 import { isHeldCause, type TurnEndCause, type TurnLogEntry } from "../turn-log.ts";
 
 /**
@@ -170,6 +170,25 @@ export function sameTypeHoldHolds(
  */
 export function handoffLimitReached(handoffCount: number, limit: number): boolean {
 	return handoffCount >= limit;
+}
+
+/**
+ * The Operator-decides brake (ADR 0085, ADR 0117): the Task type is the
+ * operator's, and the machine makes no start of it on its own.
+ *
+ * The rule takes the type record as data (issue #202 review): every gate that
+ * holds one of the type's automatic adds - the Next step derivation, the
+ * open-ticket row gate, and the restart candidate gate - asks this rule
+ * instead of reading the flag itself, so one key keeps one meaning (ADR
+ * 0117). The completion's own brake reads it the same way. A name that
+ * resolves to no record holds nothing: the flag stands on the record, not on
+ * the name.
+ */
+export function operatorDecidesType(
+	taskTypes: Record<string, TaskTypeConfig>,
+	taskType: string | null,
+): boolean {
+	return taskType !== null && taskTypes[taskType]?.operatorDecides === true;
 }
 
 /**

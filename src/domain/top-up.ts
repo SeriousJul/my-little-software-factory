@@ -280,10 +280,12 @@ export function continuationHold(rows: readonly ContinuationRowFacts[]): Automat
 	};
 }
 
-/** The facts the restart walk reads for one in-flight Ticket (ADR 0051, ADR 0060, ADR 0070). */
+/** The facts the restart walk reads for one in-flight Ticket (ADR 0051, ADR 0060, ADR 0070, ADR 0117). */
 export interface RestartCandidateFacts {
 	/** The Ticket or its source carries the ignore flag. */
 	ignoreBlocked: boolean;
+	/** The handoff's Task type carries Operator-decides. */
+	operatorDecides: boolean;
 	/** The handoff has stood longer than the startup grace. */
 	pastStartupGrace: boolean;
 	/** The ticket names the pane its Agent ran in. */
@@ -299,13 +301,19 @@ export interface RestartCandidateFacts {
 }
 
 /**
- * Whether this in-flight Ticket is the restart candidate: the flag is out, the
- * grace has passed, the Agent is missing, the loop guard leaves room, no item
- * or mark already stands for it.
+ * Whether this in-flight Ticket is the restart candidate: the flags are out,
+ * the grace has passed, the Agent is missing, the loop guard leaves room, no
+ * item or mark already stands for it.
+ *
+ * The Operator-decides brake (ADR 0117) joins the flag: a restart repeats the
+ * interrupted handoff's start, and the seat no restart can take is not
+ * reserved (ADR 0108). The Missing modal stands, and the operator's Restart
+ * or abandon is the act that answers.
  */
 export function restartCandidateHolds(facts: RestartCandidateFacts): boolean {
 	return (
 		!facts.ignoreBlocked &&
+		!facts.operatorDecides &&
 		facts.pastStartupGrace &&
 		facts.hasPane &&
 		facts.agentMissing &&
@@ -315,7 +323,7 @@ export function restartCandidateHolds(facts: RestartCandidateFacts): boolean {
 	);
 }
 
-/** The facts the open-ticket add reads off the row it holds (ADR 0051, ADR 0060, ADR 0027). */
+/** The facts the open-ticket add reads off the row it holds (ADR 0051, ADR 0060, ADR 0027, ADR 0117). */
 export interface OpenTicketRowFacts {
 	/** The row's own state on the walk's view. */
 	state: TicketState;
@@ -325,6 +333,8 @@ export interface OpenTicketRowFacts {
 	handoffLimit: number;
 	/** The task the row's labels suggest; a parking state suggests none. */
 	taskType: string | null;
+	/** The task the row offers carries Operator-decides; false for a parking row. */
+	operatorDecides: boolean;
 }
 
 /**
@@ -336,13 +346,20 @@ export type OpenTicketRowGate = { stands: true; taskType: string } | { stands: f
 
 /**
  * Whether the row the walk holds stands on its own facts: an open actionable
- * Ticket, not ignored, under the loop guard, and offering a task.
+ * Ticket, not ignored, under the loop guard, and offering a task the machine
+ * may start on its own.
+ *
+ * A row whose position offers an Operator-decides task type holds the same
+ * way (ADR 0117): the walk holds that Ticket only and falls to the next
+ * candidate, and the hold states nothing - the flag the operator set in their
+ * own config is a designed silence, the way the parking state is.
  */
 export function openTicketRowGate(facts: OpenTicketRowFacts): OpenTicketRowGate {
 	if (facts.state !== "open" || !facts.actionable) return { stands: false };
 	if (facts.ignoreBlocked) return { stands: false };
 	if (handoffLimitReached(facts.handoffCount, facts.handoffLimit)) return { stands: false };
 	if (facts.taskType === null) return { stands: false };
+	if (facts.operatorDecides) return { stands: false };
 	return { stands: true, taskType: facts.taskType };
 }
 

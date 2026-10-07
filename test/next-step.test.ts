@@ -33,10 +33,12 @@ const config: FactoryConfig = {
 		implement: { template: "implement" },
 		review: { template: "review" },
 		merge: { action: "merge-pull-request" },
+		analyze: { template: "analyze", operatorDecides: true },
 	},
 	maxHandoffsPerTicket: 2,
 	workflowStates: [
 		{ name: "review-state", taskType: "review", match: { labelsAny: ["ready-for-review"] } },
+		{ name: "spec-state", taskType: "analyze", match: { labelsAny: ["ready-for-spec"] } },
 		{ name: "merge-state", taskType: "merge", match: { labelsAny: ["ready-to-merge"] } },
 		{ name: "parking-state", match: { labelsAny: ["parked"] } },
 	],
@@ -313,6 +315,49 @@ describe("deriveNextStep (ADR 0092)", () => {
 		state.close();
 	});
 
+	test("a position that offers an Operator-decides task type holds the step (ADR 0117)", () => {
+		// The flag's brake covers the starts: the step the operator owns stands held
+		// on its own gate, and the automatic rule answers hold for it instead of
+		// routing the start the machine would make alone.
+		const state = stateWith(fetched(position, ["ready-for-spec"]));
+		expect(stepFor(state, { positionTaskType: "analyze" })).toEqual({
+			taskType: "analyze",
+			ticketIdentity: position,
+			kind: "handoff",
+			gate: "operator-decides-type",
+		});
+		state.close();
+	});
+
+	test("the brake is read before the Handoff limit: the limit closes, the operator holds (ADR 0117)", () => {
+		// The order is behavior, not wording: the limit degrades a held step to
+		// `close` and ends the work cycle, and a step the operator owns must not be
+		// closed away by a cap. The same position at its limit, whose task type
+		// carries the flag, stands on the flag's gate, not the limit's.
+		const state = stateWith(fetched(position, ["ready-for-spec"]));
+		for (const cause of ["aborted", "aborted"] as const) {
+			runTurn(state, "implement", cause, "closed");
+			state.sourceFact.applyFetch(source, {
+				status: "success",
+				fetchedAt: "2026-08-31T11:02:00Z",
+				tickets: [fetched(position, ["ready-for-spec"])],
+			});
+		}
+		expect(state.handoff.handoffCount(position)).toBe(config.maxHandoffsPerTicket);
+		expect(stepFor(state, { positionTaskType: "analyze" })?.gate).toBe("operator-decides-type");
+		state.close();
+	});
+
+	test("the brake is read before the position lookup: a moved position still stands on it (ADR 0117)", () => {
+		// The flag stands on the type the fire wrote, not on the row the position
+		// wears now: the write landed and the source has not re-read the ticket, so
+		// the row offers something else, and the gate is the type's, not the
+		// position's.
+		const state = stateWith(fetched(position, ["ready-for-agent"]));
+		expect(stepFor(state, { positionTaskType: "analyze" })?.gate).toBe("operator-decides-type");
+		state.close();
+	});
+
 	test("a position at the Handoff limit holds the step", () => {
 		// The limit counts the position's own starts, not the settled ticket's.
 		const state = stateWith();
@@ -351,9 +396,12 @@ describe("deriveNextStep (ADR 0092)", () => {
 	});
 
 	test("every gate has the line both surfaces state", () => {
-		// The four gates are the four holds the Message line and the Decision screen
+		// The five gates are the five holds the Message line and the Decision screen
 		// can name; a gate added without a line, or a line reworded, fails here.
+		// The Operator-decides gate reads first in the derivation, and it stands
+		// first in the list.
 		expect(NEXT_STEP_GATES).toEqual([
+			"operator-decides-type",
 			"position-offers-no-task",
 			"position-not-actionable",
 			"same-type-hold",
@@ -361,6 +409,7 @@ describe("deriveNextStep (ADR 0092)", () => {
 		]);
 		const lines = NEXT_STEP_GATES.map((gate: NextStepGate) => NEXT_STEP_GATE_LINES[gate]);
 		expect(lines).toEqual([
+			"the task type carries Operator-decides",
 			"the position no longer offers the task",
 			"the position is not actionable",
 			"the Same-type hold stands on the position",

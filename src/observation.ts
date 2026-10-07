@@ -94,6 +94,7 @@ import {
 	type Completion,
 	handoffLimitReached,
 	isHeldCompletion,
+	operatorDecidesType,
 	type Ticket,
 } from "./domain/ticket.ts";
 import {
@@ -1592,10 +1593,7 @@ export class ObservationCoordinator {
 		// outcome check: a live session the parked turn holds stays untouched,
 		// and the operator's close is the gate from its turn to whatever the
 		// ticket's new position offers next.
-		if (
-			completion !== null &&
-			this.config().taskTypes[completion.taskType]?.operatorDecides === true
-		)
+		if (completion !== null && operatorDecidesType(this.config().taskTypes, completion.taskType))
 			return { decision: "park", step: null };
 		if (outcome === null || outcome.fired !== true) return { decision: "close", step: null };
 		if (outcome.writeFailure !== "") return { decision: "park", step: null };
@@ -1964,6 +1962,12 @@ export class ObservationCoordinator {
 			if (
 				!restartCandidateHolds({
 					ignoreBlocked: blocked.has(ticket.ticketIdentity),
+					// The Operator-decides brake (ADR 0117): the restart repeats the
+					// interrupted handoff's start, and a start the machine makes alone
+					// of a type the operator owns is the fault the flag exists to keep
+					// out. The Missing modal stands, and the operator's Restart or
+					// abandon answers.
+					operatorDecides: operatorDecidesType(config.taskTypes, ticket.taskType),
 					pastStartupGrace: this.now() - Date.parse(ticket.startedAt) >= this.startupGraceMs,
 					hasPane: ticket.paneId !== null,
 					// The one missing-Agent rule, read the way the in-flight pass reads it.
@@ -2076,6 +2080,10 @@ export class ObservationCoordinator {
 			handoffCount: ticket.handoffCount,
 			handoffLimit: config.maxHandoffsPerTicket,
 			taskType: ticket.suggestedTaskType,
+			// The Operator-decides brake (ADR 0117): the row gate holds the Ticket
+			// whose position offers a flagged type, silently, and the walk falls to
+			// the next candidate.
+			operatorDecides: operatorDecidesType(config.taskTypes, ticket.suggestedTaskType),
 		});
 		if (!row.stands) return false;
 		const taskType = row.taskType;
