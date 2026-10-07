@@ -34,11 +34,13 @@ repository mappings. Everything else is on:
   and `merge`
 - the three security task types, one per security feed source kind
 - the workflow's states and the transitions that move a ticket between them
-- the `consult`, `pair`, and `improve-codebase-architecture` Consultation
-  types: `consult` passes your input straight through, `pair` runs a pair
-  programming session with the agent as the driver, and
-  `improve-codebase-architecture` runs the architecture review skill on a
-  fresh worktree, scoped to the focus you type
+- the `consult`, `diagnose`, `pair`, and
+  `improve-codebase-architecture` Consultation types: `consult` passes
+  your input straight through, `diagnose` runs the bug-diagnosis loop
+  (the diagnosing-bugs skill) on the bug report you type, in a fresh
+  worktree, `pair` runs a pair programming session with the agent as the
+  driver, and `improve-codebase-architecture` runs the architecture
+  review skill on a fresh worktree, scoped to the focus you type
 
 [The key reference](../configuration/index.md#key-reference) names every key,
 its default, and what it does.

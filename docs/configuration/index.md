@@ -1136,11 +1136,13 @@ The shipped defaults define the three agent types `pi`, `codex`, and
 `claude`, the five task types `analyze`, `implement`, `review`, `rework`,
 and `merge`, the three security task types, and the states of the label
 workflow with the transitions that move a ticket between them. They also
-define the `consult`, `pair`, and `improve-codebase-architecture`
-Consultation types. The `improve-codebase-architecture` type needs the
-architecture review skill installed on the agents, and its docs writes -
-the glossary entries and the ADRs - land on its own worktree branch, so the
-operator moves them by hand. They have no ticket sources and no repository
-mappings, so [the minimal
+define the `consult`, `diagnose`, `pair`, and
+`improve-codebase-architecture` Consultation types. The `diagnose` type
+runs the bug-diagnosis loop (the diagnosing-bugs skill) on the bug report
+you type, in a fresh worktree. The `improve-codebase-architecture` type
+needs the architecture review skill installed on the agents, and its docs
+writes - the glossary entries and the ADRs - land on its own worktree
+branch, so the operator moves them by hand. They have no ticket sources
+and no repository mappings, so [the minimal
 config](../getting-started/minimal-config.md) is the only setup a fresh
 install needs.
