@@ -11,6 +11,7 @@ import {
 	AUTOMATIC_CANDIDATE_HOLD_REASONS,
 	AUTOMATIC_HOLD_LINES,
 	AUTOMATIC_HOLD_REASONS,
+	AUTOMATIC_NEXT_STEP_HOLD_REASONS,
 	AUTOMATIC_ROW_HOLD_REASONS,
 	type AutomaticAddFacts,
 	type AutomaticBareHold,
@@ -18,6 +19,8 @@ import {
 	type AutomaticCandidateHold,
 	type AutomaticCandidateHoldReason,
 	type AutomaticHoldReason,
+	type AutomaticNextStepHold,
+	type AutomaticNextStepHoldReason,
 	type AutomaticRowHold,
 	type AutomaticRowHoldReason,
 	automaticAddsHold,
@@ -35,6 +38,7 @@ import {
 	restartCandidateHolds,
 	type TopUpCycleFacts,
 } from "../src/domain/top-up.ts";
+import { NEXT_STEP_GATE_LINES } from "../src/workflow.ts";
 import { sourceFiles } from "./static-checks.ts";
 
 /** The cycle facts with every wait clear. */
@@ -184,6 +188,7 @@ describe("each automatic-walk hold names itself in the record (issue #223)", () 
 			"automatic walks hold: the Work queue holds a waiting row",
 			"automatic walks hold: another pane holds the Ticket's Agent name",
 			"automatic walks hold: the Ticket's Handoff starts keep failing",
+			"next step held:",
 		]);
 		// The words and the lines are one set (issue #301 names the type): the walk
 		// can state no reason the words do not cover, and a line no reason reaches
@@ -229,12 +234,14 @@ describe("each automatic-walk hold names itself in the record (issue #223)", () 
 		const bare = AUTOMATIC_HOLD_REASONS.filter(
 			(reason) =>
 				!(AUTOMATIC_ROW_HOLD_REASONS as readonly string[]).includes(reason) &&
-				!(AUTOMATIC_CANDIDATE_HOLD_REASONS as readonly string[]).includes(reason),
+				!(AUTOMATIC_CANDIDATE_HOLD_REASONS as readonly string[]).includes(reason) &&
+				!(AUTOMATIC_NEXT_STEP_HOLD_REASONS as readonly string[]).includes(reason),
 		) as AutomaticBareHoldReason[];
 		expect(bare).toHaveLength(
 			AUTOMATIC_HOLD_REASONS.length -
 				AUTOMATIC_ROW_HOLD_REASONS.length -
-				AUTOMATIC_CANDIDATE_HOLD_REASONS.length,
+				AUTOMATIC_CANDIDATE_HOLD_REASONS.length -
+				AUTOMATIC_NEXT_STEP_HOLD_REASONS.length,
 		);
 		for (const reason of bare) {
 			expect(automaticHoldLine({ reason }, name)).toBe(AUTOMATIC_HOLD_LINES[reason]);
@@ -285,6 +292,74 @@ describe("each automatic-walk hold names itself in the record (issue #223)", () 
 			automaticHoldKey({ reason: "agent-name-held", candidate: "github:github.com:I_6" }),
 		);
 		// And the collision is not the park: two facts on one Ticket, two keys.
+		expect(automaticHoldKey(hold)).not.toBe(
+			automaticHoldKey({ reason: "handoff-failure-park", candidate: "github:github.com:I_5" }),
+		);
+	});
+
+	/**
+	 * The awaiting walk's gate (ADR 0092, issue #232). The hold names the ticket
+	 * whose Next step stands held, and the record states it the way every other
+	 * standing hold states itself: once while the fact stands, again when the
+	 * fact changes.
+	 */
+	test("a held Next step names its ticket, its step, and its gate (issue #232)", () => {
+		const reasons: readonly AutomaticNextStepHoldReason[] = AUTOMATIC_NEXT_STEP_HOLD_REASONS;
+		expect([...reasons]).toEqual(["next-step-held"]);
+		// The line the awaiting walk stated inline before the hold joined the
+		// walks' pattern stands here, word for word: the ticket the record names,
+		// the step, the position beside it when that is not the ticket, and the
+		// gate's own sentence under the same parentheses the other holds use.
+		const hold: AutomaticNextStepHold = {
+			reason: "next-step-held",
+			ticket: "github:github.com:I_5",
+			step: "review",
+			position: "github:github.com:I_6",
+			gate: "position-offers-no-task",
+		};
+		const name = (identity: string) => `"${identity} title"`;
+		expect(automaticHoldLine(hold, name)).toBe(
+			'next step held: "github:github.com:I_5 title" review on "github:github.com:I_6 title" ' +
+				`(${NEXT_STEP_GATE_LINES["position-offers-no-task"]})`,
+		);
+		// The gate's own sentence stands in the line, the way the Message line and
+		// the Decision screen state it: no surface holds a copy of the gate's
+		// words.
+		expect(automaticHoldLine(hold, name)).toContain(
+			NEXT_STEP_GATE_LINES["position-offers-no-task"],
+		);
+		// A step on the settled ticket's own position names one ticket, and no
+		// position stands beside it.
+		expect(
+			automaticHoldLine(
+				{
+					reason: "next-step-held",
+					ticket: "github:github.com:I_5",
+					step: "review",
+					gate: "operator-decides-type",
+				},
+				name,
+			),
+		).toBe(
+			`next step held: "github:github.com:I_5 title" review ` +
+				`(${NEXT_STEP_GATE_LINES["operator-decides-type"]})`,
+		);
+		// The key carries the whole fact: the ticket, the step, the position, and
+		// the gate. A hold that changes any of them is a new fact and states
+		// itself again.
+		expect(automaticHoldKey(hold)).toBe(
+			"next-step-held github:github.com:I_5 review github:github.com:I_6 position-offers-no-task",
+		);
+		expect(automaticHoldKey(hold)).not.toBe(automaticHoldKey({ ...hold, gate: "same-type-hold" }));
+		expect(automaticHoldKey(hold)).not.toBe(
+			automaticHoldKey({ ...hold, position: "github:github.com:I_7" }),
+		);
+		expect(automaticHoldKey(hold)).not.toBe(
+			automaticHoldKey({ ...hold, ticket: "github:github.com:I_7" }),
+		);
+		expect(automaticHoldKey(hold)).not.toBe(automaticHoldKey({ ...hold, step: "implement" }));
+		// And it is not a walk hold on the same ticket: the gate and the ticket the
+		// hold stands on are the fact, and the walk's gates hold different facts.
 		expect(automaticHoldKey(hold)).not.toBe(
 			automaticHoldKey({ reason: "handoff-failure-park", candidate: "github:github.com:I_5" }),
 		);

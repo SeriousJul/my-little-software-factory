@@ -19,15 +19,18 @@
  * The rules decide; the walk decides nothing.
  */
 
+import { NEXT_STEP_GATE_LINES, type NextStepGate } from "../workflow.ts";
 import { handoffLimitReached, type TicketState } from "./ticket.ts";
 
 /**
- * The fact an automatic walk acted on when it added nothing (issue #223).
+ * The fact a standing gate stood before the machine added anything (issue #223).
  *
- * Every one of these holds the walk out before it asks for a candidate, so the
- * run shows nothing but the start that never came. Each reason names itself in
- * the plane's record, so a reviewer can tell a correct hold from a broken one.
- * The reasons are the walk's own gates, in the order the walk reads them.
+ * Every one of these holds the walk out before it asks for a candidate - or, for
+ * the held Next step, holds the settled turn's step - so the run shows nothing
+ * but the start that never came. Each reason names itself in the plane's record,
+ * so a reviewer can tell a correct hold from a broken one. The walk-hold reasons
+ * are the walks' own gates, in the order the walks read them, and the awaiting
+ * walk's gate stands last.
  */
 export const AUTOMATIC_HOLD_REASONS = [
 	"auto-handoff-off",
@@ -38,6 +41,7 @@ export const AUTOMATIC_HOLD_REASONS = [
 	"queue-row-standing",
 	"agent-name-held",
 	"handoff-failure-park",
+	"next-step-held",
 ] as const;
 
 export type AutomaticHoldReason = (typeof AUTOMATIC_HOLD_REASONS)[number];
@@ -74,10 +78,24 @@ export const AUTOMATIC_CANDIDATE_HOLD_REASONS = [
 
 export type AutomaticCandidateHoldReason = (typeof AUTOMATIC_CANDIDATE_HOLD_REASONS)[number];
 
+/**
+ * The holds that name the Ticket whose settled turn the gate holds the Next
+ * step of (ADR 0092, issue #232).
+ *
+ * The awaiting walk is the walk that takes this hold: the settled turn rests in
+ * awaiting while the gate stands, and the hold names the ticket, the step the
+ * turn owes, the position the step stands on when that is not the ticket
+ * itself, and the gate that holds it - four facts the record line states and
+ * the key carries.
+ */
+export const AUTOMATIC_NEXT_STEP_HOLD_REASONS = ["next-step-held"] as const;
+
+export type AutomaticNextStepHoldReason = (typeof AUTOMATIC_NEXT_STEP_HOLD_REASONS)[number];
+
 /** The holds whose line states the fact alone, with no row named. */
 export type AutomaticBareHoldReason = Exclude<
 	AutomaticHoldReason,
-	AutomaticRowHoldReason | AutomaticCandidateHoldReason
+	AutomaticRowHoldReason | AutomaticCandidateHoldReason | AutomaticNextStepHoldReason
 >;
 
 /** A hold that names no row. */
@@ -119,11 +137,36 @@ export interface AutomaticCandidateHold {
 	readonly row?: undefined;
 }
 
+/** A hold that names the Ticket whose Next step the gate holds (ADR 0092). */
+export interface AutomaticNextStepHold {
+	readonly reason: AutomaticNextStepHoldReason;
+	/**
+	 * The Ticket whose settled turn owes the step. The walk answers with the
+	 * identity and not the name: the record reads a name only for a fact it has
+	 * not stated yet, so a hold that stands across a hundred polls costs no
+	 * projection read.
+	 */
+	readonly ticket: string;
+	/** The task type the derived position offers. */
+	readonly step: string;
+	/** The ticket the position stands on, when that is not the holding ticket. */
+	readonly position?: string;
+	/** The gate that holds the step: the line states the gate's own sentence. */
+	readonly gate: NextStepGate;
+	readonly row?: undefined;
+	readonly candidate?: undefined;
+	readonly detail?: undefined;
+}
+
 /**
- * The hold one automatic walk took: its fact, and the standing row or the held
- * candidate when one names it.
+ * The hold one automatic walk took: its fact, and the standing row, the held
+ * candidate, or the held step's ticket when one names it.
  */
-export type AutomaticHold = AutomaticBareHold | AutomaticRowHold | AutomaticCandidateHold;
+export type AutomaticHold =
+	| AutomaticBareHold
+	| AutomaticRowHold
+	| AutomaticCandidateHold
+	| AutomaticNextStepHold;
 
 /**
  * The sentence each hold is stated in.
@@ -138,6 +181,11 @@ export type AutomaticHold = AutomaticBareHold | AutomaticRowHold | AutomaticCand
  * queue's depth instead: the fresh-work gate holds on any row at all, a
  * Consultation row included, and the staging of the row that stands is what the
  * queue's own `handoff queued:` line already states (issue #223 review).
+ *
+ * The held Next step's entry is a prefix and not a sentence: that hold always
+ * names the ticket its step stands on, so its line never stands bare, and the
+ * gate's own sentence stands in parentheses at the end (`automaticHoldLine`)
+ * (issue #232).
  */
 export const AUTOMATIC_HOLD_LINES: Readonly<Record<AutomaticHoldReason, string>> = {
 	"auto-handoff-off": "automatic walks hold: auto-handoff is off",
@@ -148,17 +196,25 @@ export const AUTOMATIC_HOLD_LINES: Readonly<Record<AutomaticHoldReason, string>>
 	"queue-row-standing": "automatic walks hold: the Work queue holds a waiting row",
 	"agent-name-held": "automatic walks hold: another pane holds the Ticket's Agent name",
 	"handoff-failure-park": "automatic walks hold: the Ticket's Handoff starts keep failing",
+	"next-step-held": "next step held:",
 };
 
 /**
- * The key a hold states itself under: the fact, and the row when the fact names
- * one.
+ * The key a hold states itself under: the fact, and the row, the candidate, or
+ * the step's position when the fact names one.
  *
  * A hold is one standing fact, so the key is the fact and not the cycle that
  * reached it. The row is part of it because a later hold behind a different row
- * is a different fact and states itself again (issue #223 review).
+ * is a different fact and states itself again (issue #223 review). The held
+ * step's key carries the whole fact - the ticket, the step, the position, and
+ * the gate - the same way, so a hold that changes its gate or its position is a
+ * new fact and states itself again (issue #232).
  */
 export function automaticHoldKey(hold: AutomaticHold): string {
+	if (hold.reason === "next-step-held") {
+		const position = hold.position === undefined ? "" : ` ${hold.position}`;
+		return `next-step-held ${hold.ticket} ${hold.step}${position} ${hold.gate}`;
+	}
 	if (hold.row !== undefined) return `${hold.reason} ${hold.row}`;
 	if (hold.candidate !== undefined) return `${hold.reason} ${hold.candidate}`;
 	return hold.reason;
@@ -176,11 +232,21 @@ export function automaticHoldKey(hold: AutomaticHold): string {
  * parentheses: the Agent name collision names the refusal its attempt stored,
  * so one line answers which Ticket the walk left resting and what stood in its
  * way (issue #299).
+ *
+ * The held Next step names the ticket the step stands on, the step itself, the
+ * position beside it when that is not the ticket, and the gate's own sentence
+ * under the same parentheses the other holds use for their fact (issue #232):
+ * the line the awaiting walk stated inline before the hold joined the walks'
+ * pattern stands here, word for word.
  */
 export function automaticHoldLine(
 	hold: AutomaticHold,
 	rowName: (identity: string) => string,
 ): string {
+	if (hold.reason === "next-step-held") {
+		const where = hold.position === undefined ? "" : ` on ${rowName(hold.position)}`;
+		return `${AUTOMATIC_HOLD_LINES[hold.reason]} ${rowName(hold.ticket)} ${hold.step}${where} (${NEXT_STEP_GATE_LINES[hold.gate]})`;
+	}
 	const line = AUTOMATIC_HOLD_LINES[hold.reason];
 	const named = hold.row ?? hold.candidate;
 	if (named === undefined) return line;

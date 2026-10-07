@@ -2342,6 +2342,174 @@ describe("the awaiting rule", () => {
 			r.state.close();
 		});
 
+		/**
+		 * The dedupe the record line uses is the shared standing-fact one (issue
+		 * #232): the fact is the ticket, the step, the position, and the gate, and a
+		 * hold that changes any of them is a new fact that states itself again, on
+		 * both outlets.
+		 */
+		test("a held Next step whose gate changes is a new fact both outlets state again (issue #232)", async () => {
+			const lines: RecordedLine[] = [];
+			const r = rig({
+				autoOn: true,
+				agents: [],
+				log: recordLogger(lines),
+				config: {
+					// The two positions the test moves the step between: the plain
+					// position offers implement, the review position the very task
+					// the outcome owes.
+					workflowStates: [
+						{
+							name: "ready-for-agent",
+							taskType: "implement",
+							match: { sourceKind: "github-issue", labelsAny: ["ready-for-agent"] },
+						},
+						{
+							name: "ready-for-review",
+							taskType: "review",
+							match: { sourceKind: "github-issue", labelsAny: ["ready-for-review"] },
+						},
+					],
+				},
+			});
+			r.state.sourceFact.applyFetch(
+				source,
+				success([
+					{ ...fetched("github:github.com:I_6"), title: "Add a webhook retry policy" },
+					fetched(),
+				]),
+			);
+			// The position's newest closed turn completed the review the step owes,
+			// so the moment its labels come to offer it the Same-type hold stands
+			// ready. Ignored, so the fresh-work walk leaves the test's position
+			// alone and the only fact that moves is the gate.
+			const written = r.state.ticketWorkCycle.setTicketIgnored("github:github.com:I_6", true, null);
+			if (!written.ok) throw new Error(written.reason);
+			const attempt = settleForCause(r.state, "github:github.com:I_6", "review", "completed");
+			r.state.ticketWorkCycle.applyCompletionDecision({
+				ticketIdentity: "github:github.com:I_6",
+				handoffId: attempt,
+				decision: "closed",
+				decidedAt: "2026-08-31T10:00:30Z",
+			});
+			settleFor(
+				r.state,
+				"github:github.com:I_5",
+				"route",
+				outcome({ positionTaskType: "review", positionTicketIdentity: "github:github.com:I_6" }),
+			);
+			await r.coordinator.tick();
+			const held = () => lines.filter((line) => line.message.startsWith("next step held:"));
+			expect(held()).toEqual([
+				infoLine(
+					'next step held: "Persist source facts" review on "Add a webhook retry policy" (the position no longer offers the task)',
+				),
+			]);
+			// The refresh moves the position's labels onto the position that offers
+			// the review: same ticket, same step, same position, a new gate - a new
+			// fact, on both outlets.
+			r.state.sourceFact.applyFetch(
+				source,
+				success([
+					{
+						...fetched("github:github.com:I_6", ["ready-for-review"]),
+						title: "Add a webhook retry policy",
+					},
+					fetched(),
+				]),
+			);
+			await r.coordinator.tick();
+			expect(held()).toEqual([
+				infoLine(
+					'next step held: "Persist source facts" review on "Add a webhook retry policy" (the position no longer offers the task)',
+				),
+				infoLine(
+					'next step held: "Persist source facts" review on "Add a webhook retry policy" (the Same-type hold stands on the position)',
+				),
+			]);
+			const holdLines = r.statuses.filter((status) => status.text.includes("holds its Next step"));
+			expect(holdLines).toHaveLength(2);
+			expect(holdLines[1]).toEqual({
+				kind: "info",
+				text: "ticket github:github.com:I_5 holds its Next step review on github:github.com:I_6: the Same-type hold stands on the position",
+			});
+			// The stand holds: the new fact, like the old one, states itself once.
+			await r.coordinator.tick();
+			expect(held()).toHaveLength(2);
+			expect(
+				r.statuses.filter((status) => status.text.includes("holds its Next step")),
+			).toHaveLength(2);
+			r.state.close();
+		});
+
+		/**
+		 * The awaiting walk owns the fact, and the walk reads no held step while the
+		 * mode is off: the skip is the cycle's own choice, not the fact leaving, so a
+		 * mode that returns to a still-standing hold states nothing again on either
+		 * outlet (issue #232).
+		 */
+		test("a mode that leaves and returns to a standing hold states it once, on both outlets (issue #232)", async () => {
+			const lines: RecordedLine[] = [];
+			const r = rig({ autoOn: true, agents: [], log: recordLogger(lines) });
+			r.state.sourceFact.applyFetch(
+				source,
+				success([
+					{ ...fetched("github:github.com:I_6"), title: "Add a webhook retry policy" },
+					fetched(),
+				]),
+			);
+			const attempt = settleFor(
+				r.state,
+				"github:github.com:I_5",
+				"route",
+				outcome({ positionTaskType: "review", positionTicketIdentity: "github:github.com:I_6" }),
+			);
+			await r.coordinator.tick();
+			const held = () => lines.filter((line) => line.message.startsWith("next step held:"));
+			expect(held()).toHaveLength(1);
+			// The mode leaves: the awaiting walk stops running, and the hold's fact
+			// stands the whole time.
+			r.setAutoMode(false);
+			await r.coordinator.tick();
+			await r.coordinator.tick();
+			// The mode returns to the still-standing hold: no second line, on either
+			// outlet.
+			r.setAutoMode(true);
+			await r.coordinator.tick();
+			expect(held()).toHaveLength(1);
+			expect(
+				r.statuses.filter((status) => status.text.includes("holds its Next step")),
+			).toHaveLength(1);
+			// And the fact still retires the way it always did: the ticket that leaves
+			// awaiting states a later hold again.
+			r.state.ticketWorkCycle.applyCompletionDecision({
+				ticketIdentity: "github:github.com:I_5",
+				handoffId: attempt,
+				decision: "closed",
+				decidedAt: "2026-08-31T10:05:00Z",
+			});
+			// The source re-read the claim demands after the closed cycle, at its own
+			// time.
+			r.state.sourceFact.applyFetch(source, {
+				status: "success",
+				fetchedAt: "2026-08-31T10:06:00Z",
+				tickets: [
+					{ ...fetched("github:github.com:I_6"), title: "Add a webhook retry policy" },
+					fetched(),
+				],
+			});
+			settleFor(
+				r.state,
+				"github:github.com:I_5",
+				"route",
+				outcome({ positionTaskType: "park", positionTicketIdentity: "github:github.com:I_5" }),
+			);
+			await r.coordinator.tick();
+			await r.coordinator.tick();
+			expect(held()).toHaveLength(2);
+			r.state.close();
+		});
+
 		test("manual mode states nothing on the line: the Decision screen is its surface", async () => {
 			const { state, coordinator, statuses } = heldRig(false);
 			await coordinator.tick();
