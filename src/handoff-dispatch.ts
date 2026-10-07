@@ -1126,10 +1126,11 @@ class HandoffDispatchModule implements HandoffDispatch {
 				"info",
 			);
 		} else {
-			// The block stands on the Message line in the warning voice, with
-			// no bell (ADR 0068): the pull request's comment carries the fact
-			// to the source, and the needs-work label the fire wrote carries it
-			// to the machine.
+			// The block is a Fault the plane met on its own (ADR 0118): the
+			// error voice with the notification, not the warning of a refusal
+			// the operator just pressed. The pull request's comment carries the
+			// fact to the source, and the needs-work label the fire wrote carries
+			// it to the machine.
 			this.reports.faultError(`the merge of ${name} was blocked: ${result.reason}`);
 		}
 	}
@@ -1824,6 +1825,9 @@ class HandoffDispatchModule implements HandoffDispatch {
 			if (waiting !== undefined && isCoveredByFixingPullRequest(projection, waiting)) {
 				this.removeQueueRow(item.ticketIdentity);
 				this.reports.refresh();
+				// A covered outcome, not a Fault (ADR 0118): the open fixing pull
+				// request is already doing the work, so nothing waits on the
+				// operator and the plain info notice stands, with no notification.
 				this.reports.notice(
 					`the queued start of ${this.ticketName(item.ticketIdentity)} is removed: an open fixing pull request covers the ticket`,
 					"info",

@@ -89,8 +89,9 @@ the settings that handoff started with.
 | `?` / `F1` | Open the Key guide, from anywhere                                        |
 
 `h`/`l` or `Left`/`Right` move between the list and the detail pane,
-`j`/`k` and the arrows move the selection, `m` or `F2` reads a truncated
-Message line, and `q` quits.
+`j`/`k` and the arrows move the selection, `m` or `F2` opens the Message view,
+the run's own record of the facts the Message line has been asked to state
+(ADR 0119), and `q` quits.
 
 ## The badges
 

@@ -1054,8 +1054,8 @@ sources it generated as `[[sources]]` blocks. The write-back edits only those
 sections, so your comments, your blank lines, and the order you wrote your
 keys in stay where you put them. A comment you wrote beside a mapping key the
 plane re-points stays on that line. The Message line names the file each write
-lands on, and when the line is longer than the terminal the Message view on
-`F2` holds the whole fact. A write that replaced your whole file leads the line
+lands on, and the Message view on `F2` holds the fact whole, beside every
+other the run recorded (ADR 0119). A write that replaced your whole file leads the line
 it lands on, so the warning that your comments did not survive is what stands on
 the visible row. A write that changed nothing leaves the file untouched,
 timestamp included, and says nothing. The write keeps the mode your

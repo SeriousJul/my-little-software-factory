@@ -2834,26 +2834,61 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 		id: "narrow",
 		state: "narrow terminal",
 		narrow: true,
-		render: (columns, holds, _inputActive, wiring) => [
-			createElement(TextField, {
-				key: "model",
-				label: "Model",
-				value: "anthropic/claude-sonnet-4-5-with-a-long-tail",
-				focused: holds === "model",
-				width: columns.valueWidth,
-				labelWidth: columns.labelWidth,
-			}),
-			createElement(DraftField, {
-				key: "draft",
-				label: "Initial input",
-				value: "a draft wide enough that its own column has to scroll to the caret",
-				focused: holds === "draft",
-				width: columns.valueWidth,
-				labelWidth: columns.labelWidth,
-				height: 2,
-				...(holds === "draft" ? { fieldRef: wiring.fieldRef, onValueChange: wiring.report } : {}),
-			}),
-		],
+		render: (columns, holds, _inputActive, wiring) => {
+			// The Message view's history on the narrow frame (ADR 0119): the same
+			// cells as the wide example, wrapped to the room the frame leaves.
+			const entries: MessageHistoryEntry[] = [
+				{
+					severity: "info",
+					at: 1761638400000,
+					text: 'the merge of "Persist the source facts" is in the Work queue',
+				},
+				{ severity: "warning", at: 1761638412000, text: "no Ticket sources exist" },
+			];
+			// The pane's border and its padding leave the body four cells inside
+			// the box's content, the way the view's layout pays them.
+			const bodyWidth = Math.max(1, columns.contentWidth - 4);
+			const lines = messageHistoryBody(entries, bodyWidth);
+			return [
+				createElement(TextField, {
+					key: "model",
+					label: "Model",
+					value: "anthropic/claude-sonnet-4-5-with-a-long-tail",
+					focused: holds === "model",
+					width: columns.valueWidth,
+					labelWidth: columns.labelWidth,
+				}),
+				createElement(DraftField, {
+					key: "draft",
+					label: "Initial input",
+					value: "a draft wide enough that its own column has to scroll to the caret",
+					focused: holds === "draft",
+					width: columns.valueWidth,
+					labelWidth: columns.labelWidth,
+					height: 2,
+					...(holds === "draft" ? { fieldRef: wiring.fieldRef, onValueChange: wiring.report } : {}),
+				}),
+				createElement(
+					"box",
+					{ key: "narrow-message-history", style: { flexDirection: "column" } },
+					paneElement(
+						{
+							title: "Messages",
+							rows: lines.map((line, index) =>
+								createElement(
+									"text",
+									{ key: `narrow-message-history-${index}` },
+									...bodyRowSpans(line, bodyWidth, undefined),
+								),
+							),
+							vpad: 1,
+							height: lines.length + 4,
+						},
+						columns.contentWidth,
+					),
+				),
+			];
+		},
 	},
 ];
 

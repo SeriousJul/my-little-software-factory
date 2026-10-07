@@ -15,7 +15,13 @@ import {
 import { maxScrollOf, windowOf } from "./geometry.ts";
 import type { MessageHistoryEntry } from "./message-facts.ts";
 import type { MessageFact } from "./messages.ts";
-import { type BodySpan, bodyRowSpans, ModalSurface, modalFrame } from "./modal-chrome.ts";
+import {
+	type BodySpan,
+	bodyRowSpans,
+	ModalSurface,
+	modalFrame,
+	scrollbarRows,
+} from "./modal-chrome.ts";
 import { controlInk } from "./shared/presentation.ts";
 import { bodyPaneFacts, rangeTextOf } from "./shared/region.ts";
 import { padToWidth, truncateToWidth, widthOf, wrapToWidth } from "./text.ts";
@@ -388,6 +394,9 @@ export function MessageView({
 	const scroll = bodyScroll === null ? maxScroll : Math.min(bodyScroll, maxScroll);
 	const visible = windowOf(body, scroll, visibleRows);
 	const range = rangeTextOf(scroll, visible.length, body.length);
+	// The Decision modal's thumb, on the view's own window: the gutter holds
+	// the track and the thumb the position it wears, not a blank column.
+	const thumbRows = hasScrollbar ? scrollbarRows(body.length, visibleRows, scroll) : null;
 
 	return createElement(ModalSurface, {
 		frame,
@@ -401,7 +410,7 @@ export function MessageView({
 					createElement(
 						"text",
 						{ key: `${scroll}-${index}` },
-						...bodyRowSpans(line, bodyWidth, undefined),
+						...bodyRowSpans(line, bodyWidth, thumbRows?.has(index)),
 					),
 				),
 				vpad: panePadding,

@@ -84,6 +84,29 @@ export interface InitialNotice {
 export const MESSAGE_HISTORY_LIMIT = 500;
 
 /**
+ * Append one fact to the run's history, in order.
+ *
+ * A write that repeats the previous entry's severity and text adds no entry,
+ * and past the bound the oldest entry drops, the view's scroll clamp
+ * following (ADR 0119). Each entry carries the local time of its write, not
+ * the moment the row showed it, so the record follows the order the plane
+ * stated its facts rather than one row's paint order.
+ */
+export function appendHistoryEntry(
+	current: MessageHistoryEntry[],
+	severity: MessageHistorySeverity,
+	text: string,
+	at: number,
+): MessageHistoryEntry[] {
+	const last = current.at(-1);
+	if (last !== undefined && last.severity === severity && last.text === text) return current;
+	const next = [...current, { severity, text, at }];
+	return next.length > MESSAGE_HISTORY_LIMIT
+		? next.slice(next.length - MESSAGE_HISTORY_LIMIT)
+		: next;
+}
+
+/**
  * The line one stale source's fact wears, in the order the source facts give:
  * the name, the health word, and the error the read left beside it.
  */
@@ -133,24 +156,9 @@ export function useMessageFacts(
 	// the line to whichever operation still runs.
 	const workingLines = useRef(new Map<WorkingOwner, string>());
 
-	/**
-	 * Add one fact to the history.
-	 *
-	 * A write that repeats the previous entry's severity and text adds no
-	 * entry, and past the bound the oldest entry drops. Each entry carries the
-	 * local time of its write, not the moment the row showed it, so the record
-	 * follows the order the plane stated its facts rather than one row's paint
-	 * order.
-	 */
+	/** Add one fact to the history, on the append's own rule. */
 	const record = useCallback((severity: MessageHistorySeverity, text: string) => {
-		setHistory((current) => {
-			const last = current.at(-1);
-			if (last !== undefined && last.severity === severity && last.text === text) return current;
-			const next = [...current, { severity, text, at: Date.now() }];
-			return next.length > MESSAGE_HISTORY_LIMIT
-				? next.slice(next.length - MESSAGE_HISTORY_LIMIT)
-				: next;
-		});
+		setHistory((current) => appendHistoryEntry(current, severity, text, Date.now()));
 	}, []);
 
 	/** The line a settle leaves on the Message line: the next runner's, if any. */

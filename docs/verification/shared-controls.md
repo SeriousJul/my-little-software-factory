@@ -1552,3 +1552,45 @@ have not been re-run for this change, so the brake's lamp pair, its two colors,
 and the `held` word stand as not walked in a live terminal by a person on this
 head. That remains the open item, and it is the one the test layer cannot
 close.
+
+## The revamped Message view and the Fault channel (issue #331, ADR 0118, ADR 0119)
+
+Status: the automated checks pass. What was measured: the Message control
+gates on the history fact - `m` and F2 refuse with the refusal's own words
+while the record holds nothing, and the bar's hint stands and falls with the
+same fact - and the view holds the run's record: oldest first, opened pinned
+to the newest entry, entries appended while it stands, the scroll clamped to
+the record's rows, and the range readout naming the window. The row's cells
+stand as decision 10 states them: the nineteen-cell datetime, the five-cell
+chip, the text wrapped to its column, and the chips wearing `text`, `yellow`,
+and `red` beside the time's `subtext0`. The overflow's gutter is painted, not
+reserved: every row of the window wears the track, and the thumb stands on
+the rows the position covers, measured from the frame the view draws in
+`test/message-line.test.ts`, the frame's arithmetic the test states. The
+append rule answers at the facts module's interface: a repeat of the
+previous entry's severity and text adds no entry, the bound holds at 500
+entries with the oldest dropping, and the entries keep the order the plane
+stated them, measured in `test/message-facts.test.ts`. The source health's
+transition is the source health's own Fault, measured on the FakeSource
+settle path in `test/message-line.test.ts`: a source that goes stale lands
+one warning entry and one notification, a refresh that fails on the same
+standing fact lands no second entry and no second send, and a clean refresh
+lands one info entry that names the recovery with no notification. The
+channel split is measured the way the dispatch and notification suites hold
+it: the line-only writers - the key answers, the control results, and the
+covered queued-start removal the covering gate takes - send nothing, and the
+Fault writers send one notification per standing fact, in
+`test/desktop-notification.test.ts` and the dispatch suites it crosses. The
+gallery holds the view's history state in its `message-history` example and
+the same cells on the narrow frame in its `narrow` example, and
+`test/shared-gallery.test.ts` renders both.
+
+The whole suite ran on this head, on the tree as merged: the push gate's
+`bun run lint`, `bun run typecheck`, and one full `bun run test`.
+
+What was not measured: no screen reader has read this application, and no
+claim of screen-reader support is made here for the view or the channel
+split. The terminal walks in Ghostty and foot have not been re-run for this
+change, so the view's frame, the chip colors, and the painted scrollbar
+stand as not walked in a live terminal by a person on this head. That
+remains the open item, and it is the one the test layer cannot close.

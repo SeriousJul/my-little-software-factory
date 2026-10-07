@@ -84,6 +84,24 @@ function failingHandoffRunner(): FakeRunner {
 	return runner;
 }
 
+/** The notification commands the runner recorded, whatever the platform. */
+function notificationCalls(runner: FakeRunner): string[] {
+	return runner.calls
+		.filter(
+			(call) =>
+				call.command === "notify-send" ||
+				call.command === "osascript" ||
+				call.command === "powershell",
+		)
+		.map((call) => call.args.join(" "));
+}
+
+/** The history entries one chip wears in a Message view frame. */
+function historyEntries(view: string, chip: "INFO" | "WARN" | "ERROR"): number {
+	const face = new RegExp(`\\d{2}:\\d{2}:\\d{2} ${chip} `);
+	return view.split("\n").filter((row) => face.test(row)).length;
+}
+
 /** A handoff that fails on a deliberately long stderr line. */
 const LONG_LINE = `error: the daemon refused the request after the outage. ${"x".repeat(240)}`;
 
@@ -655,6 +673,20 @@ describe("the permanent Message line", () => {
 				const [top, bottom, total] = range;
 				const visible = bottom - top + 1;
 				expect(bottom).toBe(total);
+				// The gutter holds the scrollbar the record needs: every row of
+				// the window wears the track or the thumb, the thumb standing
+				// on the rows the position covers, the way the Decision
+				// modal's turn log paints it.
+				// The gutter holds the scrollbar the record needs: the body's
+				// last column, the pane's border and the box's border standing to
+				// its right. Every row of the window wears the track, and the
+				// thumb stands on the rows the position covers, the way the
+				// Decision modal's turn log paints it.
+				const trimmed = frame.split("\n").map((row) => row.trimEnd());
+				const thumb = trimmed.filter((row) => row.endsWith("█ │ │")).length;
+				const track = trimmed.filter((row) => row.endsWith("│ │ │")).length;
+				expect(thumb + track).toBe(visible);
+				expect(thumb).toBeGreaterThanOrEqual(1);
 				// k steps up one row of the record, and j returns to the bottom.
 				await press(setup, "k", "the scroll up", (f) =>
 					f.includes(`${top - 1}-${bottom - 1}/${total}`),
@@ -892,6 +924,73 @@ describe("the permanent Message line", () => {
 				WIDTH,
 				HEIGHT,
 				{ config: cappedConfig, state, runner, sources: [source] },
+			);
+		} finally {
+			state.close();
+		}
+	});
+
+	test("records the source health at the change, stays silent while it stands, and names the recovery", async () => {
+		const state = freshState();
+		const runner = new FakeRunner();
+		// The observation loop's own read stays hermetic, the way the
+		// notification's tests do: a readable agent list, so its only fact
+		// is the one with no state change at all.
+		runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+		const source = new FakeSource("issues", "github-issues", success([issueTicket()]));
+		try {
+			await withApp(
+				async (setup) => {
+					// The boot's own refresh settles clean.
+					source.settle(success([issueTicket()]));
+					await awaitFrame(setup, (f) => f.includes("Add a webhook retry policy"), "the ticket");
+					// A source that goes stale lands one warning entry and one
+					// notification, at the change.
+					await press(setup, "r", "the working", (f) => f.includes("refreshing 1 sources"));
+					await callsReached(source, 2);
+					source.settle(RATE_LIMITED);
+					await awaitFrame(
+						setup,
+						(f) => messageRowOf(f).includes("issues: stale - GitHub rate limit exceeded"),
+						"the stale warning",
+					);
+					const sent = notificationCalls(runner);
+					expect(sent).toHaveLength(1);
+					expect(sent[0]).toContain("issues: stale - GitHub rate limit exceeded");
+					const changed = await openMessageView(setup, "m", "Message view");
+					expect(historyEntries(changed, "WARN")).toBe(1);
+					expect(historyEntries(changed, "INFO")).toBe(0);
+					await closeOverlay(setup, "Message view", "the view to close");
+					// The next refresh fails on the same standing fact: the source
+					// stays stale, so no second entry and no second send.
+					await press(setup, "r", "the working", (f) => f.includes("refreshing 1 sources"));
+					await callsReached(source, 3);
+					source.settle(RATE_LIMITED);
+					await awaitFrame(
+						setup,
+						(f) => messageRowOf(f).includes("issues: stale - GitHub rate limit exceeded"),
+						"the standing stale warning",
+					);
+					expect(notificationCalls(runner)).toHaveLength(1);
+					const standing = await openMessageView(setup, "m", "Message view");
+					expect(historyEntries(standing, "WARN")).toBe(1);
+					expect(historyEntries(standing, "INFO")).toBe(0);
+					await closeOverlay(setup, "Message view", "the view to close");
+					// A clean refresh recovers the source: one info entry names
+					// the recovery, and the info fact sends no notification.
+					await press(setup, "r", "the working", (f) => f.includes("refreshing 1 sources"));
+					await callsReached(source, 4);
+					source.settle(success([issueTicket()]));
+					await awaitFrame(setup, (f) => messageRowOf(f).trim() === "", "the line to clear");
+					expect(notificationCalls(runner)).toHaveLength(1);
+					const healed = await openMessageView(setup, "m", "Message view");
+					expect(historyEntries(healed, "WARN")).toBe(1);
+					expect(historyEntries(healed, "INFO")).toBe(1);
+					expect(healed).toContain("issues: recovered");
+				},
+				WIDTH,
+				HEIGHT,
+				{ config: issuesConfig, state, sources: [source], runner },
 			);
 		} finally {
 			state.close();
