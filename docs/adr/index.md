@@ -130,3 +130,4 @@ body states the context, the decision, and the consequences.
 - [ADR 0119: The Message view shows the Message line's own per-run history](./0119-the-message-view-shows-the-message-lines-own-per-run-history.md)
 - [ADR 0120: Biome owns every quality metric of this repository](./0120-biome-owns-every-quality-metric-of-this-repository.md)
 - [ADR 0121: The Quality baseline only shrinks, and one Quality audit reads it](./0121-the-quality-baseline-only-shrinks-and-one-audit-reads-it.md)
+- [ADR 0122: The Delete key is the plane's one destructive key](./0122-the-delete-key-is-the-planes-one-destructive-key.md)

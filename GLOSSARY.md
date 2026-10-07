@@ -295,7 +295,7 @@ The Consultation state where the Consultation waits in the Work queue for its pi
 _Avoid_: pending, waiting to start
 
 **Unscheduled**:
-The Consultation state where the Consultation exists but is not started and is not in the Work queue. It waits for the operator to schedule it, start it, or delete it.
+The Consultation state where the Consultation exists but is not started and is not in the Work queue. It waits for the operator to schedule it, start it, or remove it.
 _Avoid_: parked, on hold
 
 **Response draft**:
@@ -397,7 +397,7 @@ A `closing` Consultation keeps its recovery in the close panel's Retry and Force
 _Avoid_: error dialog, retry box, close panel
 
 **Close**:
-The operator action that ends live work, key `w` in both sections.
+The operator action that ends live work, answered by the Delete key in the Ticket and Consultation sections (ADR 0122).
 On a Ticket it ends the work cycle, runs the Close cleanup, and returns the ticket to `open` with an incremented cycle number. A Close on a settled turn records the `closed` decision on its trace; a Close on an in-flight turn ends the cycle with no completion trace, because the turn never settled (ADR 0031).
 On a Consultation it verifies the Agent's identity, then stops the Agent and cleans up the environment the Agent holds, keeping the worktree and branch. When no Agent is found it issues no command and retires the record, its owned resources recorded as remaining (ADR 0044).
 It asks for confirmation when it stops a live agent.
@@ -407,6 +407,11 @@ _Avoid_: stop, kill, abort, cancel
 Closing a Consultation record after resource cleanup cannot be confirmed.
 It records the resources that might remain and never removes a worktree or branch.
 _Avoid_: abandon, force delete
+
+**Remove**:
+The act that takes an item out of where it stands: a waiting start out of the Work queue, or a finished Consultation record and its history out of the plane.
+It is what the Delete key answers where no live work is in flight, and it never ends a work cycle: that act is the Close.
+_Avoid_: delete, cancel, drop, clear, discard
 
 **Goto**:
 The control that moves herdr's view to the Agent's pane from a Ticket or Consultation row, key `g` in both sections.
