@@ -140,8 +140,10 @@ function recorder(events: string[]): HandoffDispatchReports {
 	return {
 		working: (text) => events.push(`working:${text}`),
 		warning: (text) => events.push(`warning:${text}`),
+		faultWarning: (text) => events.push(`faultWarning:${text}`),
 		notice: (text) => events.push(`notice:${text}`),
 		error: (text) => events.push(`error:${text}`),
+		faultError: (text) => events.push(`faultError:${text}`),
 		clearWorking: () => events.push("clear-working"),
 		refresh: () => events.push("refresh"),
 		starting: (identity, active) => events.push(`starting:${identity}:${active ? "on" : "off"}`),
@@ -416,7 +418,7 @@ describe("the refusal", () => {
 		expect(rigRef.commands().some((command) => command.startsWith("herdr "))).toBe(false);
 		expect(rigRef.state.ticketWorkCycle.ticketState(ISSUE.identity)).toBe("open");
 		expect(rigRef.events).toContain(
-			"error:task type review is not offered by any state that matches a github-issue ticket",
+			"faultError:task type review is not offered by any state that matches a github-issue ticket",
 		);
 	});
 
@@ -450,7 +452,7 @@ describe("the refusal", () => {
 		// have built: herdr hears nothing at all.
 		expect(rigRef.commands().some((command) => command.startsWith("herdr "))).toBe(false);
 		expect(rigRef.state.ticketWorkCycle.ticketState(PULL.identity)).toBe("open");
-		expect(rigRef.events).toContain("error:gh pr edit #5 failed: gh is unavailable");
+		expect(rigRef.events).toContain("faultError:gh pr edit #5 failed: gh is unavailable");
 	});
 
 	test("a start failure after the successful write keeps the write", async () => {
@@ -580,7 +582,7 @@ describe("the queue", () => {
 			rigRef,
 			(event) =>
 				event ===
-				`warning:queued handoff for "${PULL.title}" was not run: state ready-for-review excludes label wip, and the ticket carries it`,
+				`faultWarning:queued handoff for "${PULL.title}" was not run: state ready-for-review excludes label wip, and the ticket carries it`,
 			"the pickup's refusal",
 		);
 		// The pickup's drop (ADR 0049): a pickup that fails a check leaves the

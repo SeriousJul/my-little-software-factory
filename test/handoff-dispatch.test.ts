@@ -257,8 +257,10 @@ function recorder(events: string[]): HandoffDispatchReports {
 	return {
 		working: (text) => events.push(`working:${text}`),
 		warning: (text) => events.push(`warning:${text}`),
+		faultWarning: (text) => events.push(`faultWarning:${text}`),
 		notice: (text) => events.push(`notice:${text}`),
 		error: (text) => events.push(`error:${text}`),
+		faultError: (text) => events.push(`faultError:${text}`),
 		clearWorking: () => events.push("clear-working"),
 		refresh: () => events.push("refresh"),
 		starting: (identity, active) => events.push(`starting:${identity}:${active ? "on" : "off"}`),
@@ -721,7 +723,7 @@ describe("the seat", () => {
 			.closeCleanup(SECOND.identity, stored, "closed")
 			.then((failure) => {
 				// The operator's Close words the failure the module answered with.
-				if (failure !== undefined) rigRef.events.push(`error:${failure}`);
+				if (failure !== undefined) rigRef.events.push(`faultError:${failure}`);
 			});
 		await rigRef.waitForArrivals(1);
 		const started = start(rigRef, FIRST, "open");
@@ -731,7 +733,7 @@ describe("the seat", () => {
 		// The failed cleanup is on the line first, and the next handoff's
 		// Working line is the last fact written over it: the order this code had
 		// before the module, pinned so a drain rewrite cannot invert it.
-		const reported = rigRef.events.indexOf("error:tab is busy");
+		const reported = rigRef.events.indexOf("faultError:tab is busy");
 		expect(reported).toBeGreaterThanOrEqual(0);
 		expect(rigRef.events.lastIndexOf(workingLine(FIRST))).toBeGreaterThan(reported);
 	});
@@ -763,7 +765,7 @@ describe("the queue drain", () => {
 		expect(rigRef.state.ticketWorkCycle.ticketState(SECOND.identity)).toBe("open");
 		expect(secondStarted).toEqual([{ ok: false, reason: "the ticket is now open" }]);
 		expect(rigRef.events).toContain(
-			`warning:queued handoff for "${SECOND.title}" was not run: the ticket is now open`,
+			`faultWarning:queued handoff for "${SECOND.title}" was not run: the ticket is now open`,
 		);
 		// The drain did not stop at the failure: the third claim ran, and herdr
 		// heard two agents, not three.
@@ -849,7 +851,7 @@ describe("the queue drain", () => {
 		await rigRef.waitForStarted(FIRST.identity);
 		expect(rigRef.state.ticketWorkCycle.ticketState(SECOND.identity)).toBe("open");
 		expect(rigRef.events).toContain(
-			`warning:queued handoff for "${SECOND.title}" was not run: the ticket is now open`,
+			`faultWarning:queued handoff for "${SECOND.title}" was not run: the ticket is now open`,
 		);
 		// The closed cycle's restart never reached herdr.
 		expect(rigRef.held()).toEqual([agentStart(FIRST.name)]);
@@ -1007,7 +1009,7 @@ describe("the claim, the settle, and every origin", () => {
 			reason: "herdr is unavailable",
 		});
 		expect(started).toEqual([{ ok: false, reason: "herdr is unavailable" }]);
-		expect(rigRef.events).toContain("error:herdr is unavailable");
+		expect(rigRef.events).toContain("faultError:herdr is unavailable");
 		expect(rigRef.state.ticketWorkCycle.ticketState(FIRST.identity)).toBe("open");
 		expect(rigRef.dispatch.handoffActive()).toBe(false);
 	});
@@ -1143,7 +1145,7 @@ describe("the claim, the settle, and every origin", () => {
 			reason: "herdr is gone",
 		});
 		expect(started).toEqual([{ ok: false, reason: "herdr is gone" }]);
-		expect(rigRef.events).toContain("error:herdr is gone");
+		expect(rigRef.events).toContain("faultError:herdr is gone");
 		// The failed settle leaves the ticket where the claim left it: awaiting
 		// its route still, with the reason on the line.
 		expect(rigRef.state.ticketWorkCycle.ticketState(FIRST.identity)).toBe("awaiting");
@@ -1228,7 +1230,7 @@ describe("the claim, the settle, and every origin", () => {
 			reason: "herdr did not answer (ipc_timeout)",
 		});
 		expect(started).toEqual([{ ok: false, reason: "herdr did not answer (ipc_timeout)" }]);
-		expect(rigRef.events).toContain("error:herdr did not answer (ipc_timeout)");
+		expect(rigRef.events).toContain("faultError:herdr did not answer (ipc_timeout)");
 		expect(rigRef.dispatch.handoffActive()).toBe(false);
 	});
 
@@ -1290,7 +1292,7 @@ describe("the claim, the settle, and every origin", () => {
 		// and the refresh of the projection it changed comes first. A raise the
 		// start answered reads on the Message line like any other start failure.
 		const failedAt = rigRef.events.indexOf(
-			"error:the handoff could not run a command: the pipe broke",
+			"faultError:the handoff could not run a command: the pipe broke",
 		);
 		expect(failedAt).toBeGreaterThan(0);
 		expect(rigRef.events.slice(0, failedAt)).toContain("refresh");
@@ -1328,7 +1330,7 @@ describe("the claim, the settle, and every origin", () => {
 		expect(await rigRef.waitForStarted(FIRST.identity)).toEqual({ ok: true });
 		expect(rigRef.state.ticketWorkCycle.ticketState(FIRST.identity)).toBe("handed-off");
 		expect(rigRef.events).toContain(
-			`error:agent ${FIRST.name} started, but the prompt failed: the pipe broke`,
+			`faultError:agent ${FIRST.name} started, but the prompt failed: the pipe broke`,
 		);
 		// The running Agent's Environment stands: the failure cleanup ran neither
 		// the workspace close nor the tab close.
@@ -1388,14 +1390,14 @@ describe("the outcome wording", () => {
 	/** The Message line one outcome leaves, captured in place of the app. */
 	function sink(): {
 		events: string[];
-		reports: Pick<HandoffDispatchReports, "clearWorking" | "warning" | "error">;
+		reports: Pick<HandoffDispatchReports, "clearWorking" | "faultWarning" | "faultError">;
 	} {
 		const events: string[] = [];
 		return {
 			events,
 			reports: {
-				warning: (text) => events.push(`warning:${text}`),
-				error: (text) => events.push(`error:${text}`),
+				faultWarning: (text) => events.push(`faultWarning:${text}`),
+				faultError: (text) => events.push(`faultError:${text}`),
 				clearWorking: () => events.push("clear-working"),
 			},
 		};
@@ -1437,7 +1439,7 @@ describe("the outcome wording", () => {
 		);
 		expect(line.events).toEqual([
 			"clear-working",
-			"warning:could not persist the repository mapping; the checkout was a sibling clone",
+			"faultWarning:could not persist the repository mapping; the checkout was a sibling clone",
 		]);
 	});
 
@@ -1465,7 +1467,7 @@ describe("the outcome wording", () => {
 		// write-back fact follows it (ADR 0103).
 		expect(line.events).toEqual([
 			"clear-working",
-			"warning:the checkout was a sibling clone; saved the mapping in /home/me/config.toml",
+			"faultWarning:the checkout was a sibling clone; saved the mapping in /home/me/config.toml",
 		]);
 	});
 
@@ -1493,7 +1495,7 @@ describe("the outcome wording", () => {
 		// rode in on (ADR 0103).
 		expect(line.events).toEqual([
 			"clear-working",
-			"warning:saved the mapping in /home/me/config.toml; the whole config file was rewritten, and the comments in it did not survive; the checkout was a sibling clone",
+			"faultWarning:saved the mapping in /home/me/config.toml; the whole config file was rewritten, and the comments in it did not survive; the checkout was a sibling clone",
 		]);
 	});
 
@@ -1512,7 +1514,7 @@ describe("the outcome wording", () => {
 		);
 		expect(line.events).toEqual([
 			"clear-working",
-			"warning:the plane moved the leftover worktree directory /w/x aside to /w/x.leftover",
+			"faultWarning:the plane moved the leftover worktree directory /w/x aside to /w/x.leftover",
 		]);
 	});
 
@@ -1531,7 +1533,7 @@ describe("the outcome wording", () => {
 		);
 		expect(line.events).toEqual([
 			"clear-working",
-			"error:herdr is unavailable; the plane moved the leftover worktree directory /w/x aside to /w/x.leftover",
+			"faultError:herdr is unavailable; the plane moved the leftover worktree directory /w/x aside to /w/x.leftover",
 		]);
 	});
 
@@ -1545,7 +1547,7 @@ describe("the outcome wording", () => {
 			},
 			line.reports,
 		);
-		expect(line.events).toEqual(["clear-working", "error:herdr is unavailable"]);
+		expect(line.events).toEqual(["clear-working", "faultError:herdr is unavailable"]);
 	});
 
 	test("a name the handoff could not take says so, and claims no name it started under", async () => {
@@ -1554,7 +1556,7 @@ describe("the outcome wording", () => {
 			{ status: "failed", reason: "the name is held", collision: held },
 			line.reports,
 		);
-		expect(line.events).toEqual(["clear-working", "error:the name is held"]);
+		expect(line.events).toEqual(["clear-working", "faultError:the name is held"]);
 	});
 
 	test("an agent that started beside its own leftover names both facts in one line", async () => {
@@ -1565,7 +1567,7 @@ describe("the outcome wording", () => {
 		);
 		expect(line.events).toEqual([
 			"clear-working",
-			"warning:a leftover agent holds webhook-retry; this agent started as webhook-retry-c2",
+			"faultWarning:a leftover agent holds webhook-retry; this agent started as webhook-retry-c2",
 		]);
 	});
 
@@ -1597,7 +1599,7 @@ describe("the outcome wording", () => {
 		);
 		expect(line.events).toEqual([
 			"clear-working",
-			"error:agent webhook-retry started, but the prompt failed: herdr is gone; a leftover agent holds webhook-retry; this agent started as webhook-retry-c2",
+			"faultError:agent webhook-retry started, but the prompt failed: herdr is gone; a leftover agent holds webhook-retry; this agent started as webhook-retry-c2",
 		]);
 	});
 });
@@ -1819,7 +1821,7 @@ describe("the Close cleanup", () => {
 			},
 		});
 		await expect(dispatch.closeCleanup(SECOND.identity, stored, "closed")).resolves.toBeUndefined();
-		expect(rigRef.events).not.toContain("error:the frame is gone");
+		expect(rigRef.events).not.toContain("faultError:the frame is gone");
 		expect(rigRef.dispatch.handoffActive()).toBe(false);
 		await expect(start(rigRef, FIRST, "open")).resolves.toEqual({ ok: true });
 		await rigRef.waitForStarted(FIRST.identity);
@@ -1908,7 +1910,7 @@ describe("the name fact", () => {
 		);
 		// And the line says which name the agent actually runs under.
 		expect(rigRef.events).toContain(
-			`warning:a leftover agent holds ${FIRST.name}; this agent started as ${cycleAgentName(FIRST, 3)}`,
+			`faultWarning:a leftover agent holds ${FIRST.name}; this agent started as ${cycleAgentName(FIRST, 3)}`,
 		);
 	});
 
@@ -1984,9 +1986,9 @@ describe("the name fact", () => {
 		// The fact's reason is the refusal the attempt's own row stores, which names
 		// the pane and the workspace - so the row, the detail, and the record state
 		// one refusal and not three (issue #231).
-		const line = rigRef.events.find((event) => event.startsWith("error:the herdr name"));
+		const line = rigRef.events.find((event) => event.startsWith("faultError:the herdr name"));
 		if (line === undefined) throw new Error("the refusal never reached the Message line");
-		expect(collision?.reason).toBe(line.slice("error:".length));
+		expect(collision?.reason).toBe(line.slice("faultError:".length));
 		expect(collision?.reason).toContain("pane pane-stranger in workspace ws-stranger");
 	});
 
@@ -2066,7 +2068,7 @@ describe("the name fact", () => {
 		// herdr named no holder: the line says so, and no fact lands on the
 		// ticket's own closed cycle.
 		expect(rigRef.events).toContain(
-			`error:the herdr name ${FIRST.name} is held by a pane herdr did not name, which is no agent of this ticket: agent name ${FIRST.name} is already used (agent_name_taken)`,
+			`faultError:the herdr name ${FIRST.name} is held by a pane herdr did not name, which is no agent of this ticket: agent name ${FIRST.name} is already used (agent_name_taken)`,
 		);
 		expect(rigRef.state.handoff.leftoverEnvironment(FIRST.identity)).toBeNull();
 		// herdr named no candidate, so the fact names none: the row and the detail say
@@ -2099,7 +2101,7 @@ describe("the name fact", () => {
 		expect(rigRef.state.handoff.leftoverEnvironment(ROUTE_SETTLED.identity)).toBeNull();
 		// And the line says which name the agent actually runs under.
 		expect(rigRef.events).toContain(
-			`warning:a leftover agent holds ${ROUTE_TARGET.name}; this agent started as ${cycleAgentName(ROUTE_TARGET, 1)}`,
+			`faultWarning:a leftover agent holds ${ROUTE_TARGET.name}; this agent started as ${cycleAgentName(ROUTE_TARGET, 1)}`,
 		);
 	});
 
@@ -2123,7 +2125,7 @@ describe("the name fact", () => {
 		// The line names the stranger's handles, so the operator can find the
 		// pane, and carries herdr's refusal behind the fact.
 		expect(rigRef.events).toContain(
-			`error:the herdr name ${ROUTE_TARGET.name} is held by pane pane-stranger in workspace ws-stranger, which is no agent of this ticket: agent name ${ROUTE_TARGET.name} is already used; candidates: terminal_id=term-pane-stranger pane_id=pane-stranger workspace_id=ws-stranger tab_id=tab-pane-stranger cwd=unknown status=Idle (agent_name_taken)`,
+			`faultError:the herdr name ${ROUTE_TARGET.name} is held by pane pane-stranger in workspace ws-stranger, which is no agent of this ticket: agent name ${ROUTE_TARGET.name} is already used; candidates: terminal_id=term-pane-stranger pane_id=pane-stranger workspace_id=ws-stranger tab_id=tab-pane-stranger cwd=unknown status=Idle (agent_name_taken)`,
 		);
 		expect(
 			rigRef.commands().filter((command) => command.startsWith("herdr agent start")),
@@ -2546,7 +2548,14 @@ describe("the Parallel limit and the Work queue", () => {
 			reason: `"${FIRST.title}" already has a waiting queue item; the first item keeps its place`,
 		});
 		expect(rigRef.state.workQueue.items()).toHaveLength(1);
-		expect(rigRef.events.filter((event) => event.startsWith("warning:"))).toHaveLength(0);
+		expect(
+			rigRef.events.filter(
+				(event) =>
+					event.startsWith("warning:") ||
+					event.startsWith("faultWarning:") ||
+					event.startsWith("faultError:"),
+			),
+		).toHaveLength(0);
 		// The enqueue's own notice stands: the second refusal says nothing new
 		// about the first item.
 		expect(rigRef.events.filter((event) => event.startsWith("notice:"))).toHaveLength(1);
@@ -2656,7 +2665,7 @@ describe("the Parallel limit and the Work queue", () => {
 			rigRef.state.ticketWorkCycle.sameTypeHoldActive(FIRST.identity, liveChoice.taskType),
 		).toBe(true);
 		expect(
-			rigRef.events.filter((event) => event.startsWith("warning:queued handoff")),
+			rigRef.events.filter((event) => event.startsWith("faultWarning:queued handoff")),
 		).toHaveLength(0);
 	});
 
@@ -2875,12 +2884,12 @@ describe("the Parallel limit and the Work queue", () => {
 		expect(await picking.pickupWorkQueue()).toBe(0);
 		expect(rigRef.state.workQueue.items()).toHaveLength(0);
 		expect(rigRef.events).toContain(
-			`warning:queued handoff for "${FIRST.title}" was not run: the ticket is now open`,
+			`faultWarning:queued handoff for "${FIRST.title}" was not run: the ticket is now open`,
 		);
 		// The drop is final: the item left the queue, so the next pickup finds nothing.
 		expect(await picking.pickupWorkQueue()).toBe(0);
 		expect(
-			rigRef.events.filter((event) => event.startsWith("warning:queued handoff")),
+			rigRef.events.filter((event) => event.startsWith("faultWarning:queued handoff")),
 		).toHaveLength(1);
 	});
 
@@ -2995,7 +3004,7 @@ describe("the Parallel limit and the Work queue", () => {
 		// The cancel is the operator's own act, so the module adds no warning
 		// line: the removal notice the app writes is the one line it says.
 		expect(
-			rigRef.events.filter((event) => event.startsWith("warning:queued handoff")),
+			rigRef.events.filter((event) => event.startsWith("faultWarning:queued handoff")),
 		).toHaveLength(0);
 	});
 
@@ -3045,10 +3054,10 @@ describe("the Parallel limit and the Work queue", () => {
 		gate.release();
 		await startedSecond;
 		const warned = () =>
-			rigRef.events.filter((event) => event.startsWith("warning:queued handoff")).length;
+			rigRef.events.filter((event) => event.startsWith("faultWarning:queued handoff")).length;
 		await seatReleased();
 		expect(rigRef.events).toContain(
-			`warning:queued handoff for "${FIRST.title}" was not run: the ticket is now open`,
+			`faultWarning:queued handoff for "${FIRST.title}" was not run: the ticket is now open`,
 		);
 		expect(warned()).toBe(1);
 		// The item dropped with the refusal (ADR 0049), so the next pickup has
@@ -3303,7 +3312,7 @@ describe("the Parallel limit and the Work queue", () => {
 		);
 		expect(rigRef.events).not.toContain(`notice:"${FIRST.title}" started from the Work queue`);
 		expect(rigRef.events).not.toContain(
-			`warning:queued handoff for "${FIRST.title}" was not run: the ticket is now handed-off`,
+			`faultWarning:queued handoff for "${FIRST.title}" was not run: the ticket is now handed-off`,
 		);
 	});
 
@@ -3584,7 +3593,7 @@ describe("the Work queue's Consultation pickup (ADR 0034, issue #90)", () => {
 		expect(rigRef.state.workQueue.items()).toHaveLength(0);
 		expect(rigRef.events).toEqual([
 			"refresh",
-			"warning:Work queue pickup of Consultation 22222222 was not run: the record is no longer queued",
+			"faultWarning:Work queue pickup of Consultation 22222222 was not run: the record is no longer queued",
 		]);
 	});
 
@@ -3693,7 +3702,7 @@ describe("the force-dispatch of a Consultation queue item (issue #89, #90, ADR 0
 		expect(rigRef.state.workQueue.items()).toHaveLength(0);
 		expect(rigRef.events).toEqual([
 			"refresh",
-			"warning:Work queue pickup of Consultation 22222222 was not run: the record is no longer queued",
+			"faultWarning:Work queue pickup of Consultation 22222222 was not run: the record is no longer queued",
 		]);
 	});
 
@@ -3876,8 +3885,16 @@ describe("the decision screen's route close", () => {
 		// The ask ended the cycle with the decision it recorded (ADR 0072):
 		// while the item waits, the ticket rests open.
 		expect(rigRef.state.ticketWorkCycle.ticketState(FIRST.identity)).toBe("open");
-		// A clean close says nothing on the line: the queue's notice stands.
-		expect(rigRef.events.filter((event) => event.startsWith("warning:"))).toHaveLength(0);
+		// A clean close says nothing on the line, on no channel: the queue's
+		// notice stands.
+		expect(
+			rigRef.events.filter(
+				(event) =>
+					event.startsWith("warning:") ||
+					event.startsWith("faultWarning:") ||
+					event.startsWith("faultError:"),
+			),
+		).toHaveLength(0);
 	});
 
 	test("a queued route that crosses closes the settled ticket's environment, not the position's", async () => {
@@ -4095,7 +4112,7 @@ describe("the decision screen's route close", () => {
 		expect(started).toEqual([{ ok: true }]);
 		expect(rigRef.state.ticketWorkCycle.ticketState(FIRST.identity)).toBe("handed-off");
 		expect(rigRef.events).toContain(
-			"warning:the previous handoff's environment did not close: the tab is busy (tab_close_failed)",
+			"faultWarning:the previous handoff's environment did not close: the tab is busy (tab_close_failed)",
 		);
 		const commands = rigRef.commands();
 		expect(
@@ -4908,7 +4925,7 @@ describe("the seat a missing Agent left (ADR 0108)", () => {
 		// The walk reached the row: its run answered it, and the seat the
 		// missing Agent left held nothing over it.
 		expect(rigRef.events).toContain(
-			'warning:the merge of "Close the stale deploy branch" was not run: task type merge carries no plane action',
+			'faultWarning:the merge of "Close the stale deploy branch" was not run: task type merge carries no plane action',
 		);
 		mod.stop();
 	});

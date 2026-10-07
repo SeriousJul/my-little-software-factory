@@ -59,6 +59,15 @@ The groups, and what each one is:
 | A warning a successful source read carries | warning | yes |
 | The plane's own degraded boot, such as the Theme fallback | info notice | no |
 
+One boundary the table's row does not carry: a queued start the covering gate
+removes (ADR 0042). That step was asked for and not run, but the work it was
+asked to do is already running behind the open fixing pull request that covers
+the ticket: nothing waits on the operator, and the start's own ticket keeps the
+state it wore while it waited. The cancel is a covered outcome, so it wears the
+plain info notice with no notification, not the warning Fault of the row
+above. A step that was asked for and not run while nothing covers its work
+keeps the Fault channel.
+
 The notification's standing-fact rule (ADR 0080) and its `desktop-notification`
 gate are unchanged, and no new config key joins them: whether a fact is a Fault
 is a fact about the event, not a setting the operator tunes per run.

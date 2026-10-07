@@ -154,7 +154,11 @@ export interface StandingFacts {
 	 * the one control that tears the process down mid-run.
 	 */
 	handoffActive: boolean;
-	messageTruncated: boolean;
+	/**
+	 * Whether the run's Message history holds an entry (ADR 0119): the fact the
+	 * Message control gates on, with the truncation fact gone in its place.
+	 */
+	messageRecorded: boolean;
 	/** Whether the config defines any [consultation-types.<name>] block. */
 	consultationTypesConfigured: boolean;
 	sourceCount: number;
@@ -475,9 +479,15 @@ export interface KeyGuideFacts extends StandingFacts {
 	mode: "key-guide";
 }
 
-/** The facts the Message view states. It owns no rows, so it states none. */
+/**
+ * The facts the Message view states. Its body is the shared Body pane over the
+ * run's history, so it states the pane's window beside the standing facts,
+ * the way the Decision modal and the Live view do.
+ */
 export interface MessageViewFacts extends StandingFacts {
 	mode: "message-view";
+	bodyScrollable: boolean;
+	bodyEmpty: boolean;
 }
 
 /** The facts Agent interaction mode states. The Agent owns every other key. */
@@ -563,7 +573,7 @@ type FormFacts = FormFieldFacts | FormSelectorFacts | FormActionFacts;
 /** The modes that show action rows in a Decision region. */
 type ActionRegionFacts = DecisionModalFacts | MissingModalFacts | ActionPanelFacts;
 /** The modes whose surface owns a Body pane. */
-type BodyPaneFacts = DecisionModalFacts | LiveViewFacts;
+type BodyPaneFacts = DecisionModalFacts | LiveViewFacts | MessageViewFacts;
 /** The modes that own a list the cursor steps through. */
 type ListFacts =
 	| TicketListFacts
@@ -1233,9 +1243,7 @@ const consultationStartNow = (facts: ConsultationBaseFacts): ControlAvailability
 const activeQuit = (facts: StandingFacts): ControlAvailability =>
 	facts.handoffActive ? unavailable("normal Quit is unavailable during a Handoff") : available();
 const message = (facts: StandingFacts): ControlAvailability =>
-	facts.messageTruncated
-		? available()
-		: unavailable("the current Message fits on the Message line");
+	facts.messageRecorded ? available() : unavailable("no message has been recorded yet");
 /**
  * Why the body's scroll answers nothing (ADR 0039).
  *
@@ -2375,8 +2383,8 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		modes: [...planeModes],
 		availability: message,
 		// The bar never offers a Message view with nothing to read: the hint
-		// belongs to a Message the terminal has cut short.
-		showInBar: (facts) => facts.messageTruncated,
+		// belongs to a history that holds an entry.
+		showInBar: (facts) => facts.messageRecorded,
 	},
 	{
 		// `a` flips the Auto-handoff mode (ADR 0036), and it carries the same
@@ -2447,7 +2455,7 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		scope: "modal",
 		actionBar: true,
 		priority: 75,
-		modes: ["decision-modal", "live-view"],
+		modes: ["decision-modal", "live-view", "message-view"],
 		availability: bodyScroll,
 	},
 	{
@@ -2536,18 +2544,6 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		barAnchor: true,
 		priority: 1100,
 		modes: ["key-guide"],
-		availability: available,
-	},
-	{
-		id: "message-scroll",
-		label: "Scroll",
-		keys: () => ["up", "down", "j", "k"],
-		keyLabel: "↑↓/jk",
-		scope: "utility",
-		actionBar: true,
-		rangeAnchor: true,
-		priority: 70,
-		modes: ["message-view"],
 		availability: available,
 	},
 	{

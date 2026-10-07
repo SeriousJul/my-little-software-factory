@@ -18,6 +18,7 @@
  *   body that overflowed would paint through the border and the bar: every
  *   surface counts its rows against `contentRows` and drops the rest.
  */
+import { RGBA } from "@opentui/core";
 import { createElement } from "@opentui/react";
 import { Fragment, type ReactElement, useEffect, useState } from "react";
 
@@ -459,10 +460,17 @@ function messageLineRow(
  *
  * The surface is the ink's own surface role, so the ink a surface paints on it
  * is the ink that pair was derived against: the theme's panel surface under
- * its own text. A surface the theme or the no-color presentation resolves to
- * the terminal default paints no background at all, so the terminal's own
- * default shows through.
+ * its own text. The fill always covers the surface's whole region, and it
+ * erases the base frame the surface draws over, so the base's rows never
+ * show through the surface's blank cells.
  */
+/**
+ * The fill a surface whose role resolved to the terminal default paints with.
+ * A default-intent background makes the terminal draw its own background, so
+ * the fill stands invisible while it still clears the base frame.
+ */
+const DEFAULT_SURFACE_FILL = RGBA.defaultBackground();
+
 function overlaySurfaceStyle(zIndex: number): Record<string, unknown> {
 	const surface = controlInk().surface;
 	return {
@@ -472,7 +480,7 @@ function overlaySurfaceStyle(zIndex: number): Record<string, unknown> {
 		width: "100%",
 		height: "100%",
 		zIndex,
-		backgroundColor: surface.on === "default" ? undefined : surface.on,
+		backgroundColor: surface.on === "default" ? DEFAULT_SURFACE_FILL : surface.on,
 		flexDirection: "column",
 	};
 }

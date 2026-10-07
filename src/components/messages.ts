@@ -29,14 +29,16 @@ export interface MessageFact {
  * `news` is the result of a control that ran and has nothing to warn about, so
  * it states what it did rather than wearing a problem's word. `notice` answers
  * a control the app will decide without the operator, so it never outranks a
- * fact an operation wrote. `sourceHealth` is a standing condition of the Ticket
- * sources rather than the result of a request.
+ * fact an operation wrote; it wears the severity it was written with, a
+ * refusal's warning by default and the info of a plain result. `sourceHealth`
+ * is a standing condition of the Ticket sources rather than the result of a
+ * request.
  */
 export interface MessageFacts {
 	working?: string;
 	operation?: { severity: "warning" | "error"; text: string };
 	news?: string;
-	notice?: string;
+	notice?: { severity: "info" | "warning"; text: string };
 	sourceHealth?: string;
 }
 
@@ -60,8 +62,10 @@ export function selectMessage(facts: MessageFacts): MessageFact | null {
 	// fact an operation wrote.
 	if (facts.news !== undefined) return { severity: "info", text: facts.news };
 	// A notice states that the app will decide without the operator, which is
-	// the same fact a refusal states, so it wears the same prefix.
-	if (facts.notice !== undefined) return { severity: "warning", text: facts.notice };
+	// the same fact a refusal states, so it wears the same prefix by default,
+	// and the info of a plain result where it was written with one.
+	if (facts.notice !== undefined)
+		return { severity: facts.notice.severity, text: facts.notice.text };
 	if (facts.sourceHealth !== undefined) return { severity: "warning", text: facts.sourceHealth };
 	return null;
 }

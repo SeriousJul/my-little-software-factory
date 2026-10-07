@@ -47,6 +47,7 @@ import {
 	type StandingFacts,
 } from "../controls.ts";
 import { EMPTY_TURN_LOG_NOTE, turnLogBody } from "../decision-modal.ts";
+import type { MessageHistoryEntry } from "../message-facts.ts";
 import { type MessageFact, messageRowElement } from "../messages.ts";
 import {
 	type ActionRow,
@@ -63,7 +64,7 @@ import { truncateToWidth } from "../text.ts";
 import { paint } from "../theme.ts";
 import { ticketCloseDialog } from "../ticket-close.ts";
 import { TicketList } from "../ticket-list.ts";
-import { KeyGuide } from "../utility.ts";
+import { KeyGuide, messageHistoryBody } from "../utility.ts";
 import { workQueueDetailLines } from "../work-queue-detail.ts";
 import {
 	type WorkQueueCursorFacts,
@@ -710,7 +711,7 @@ const MUTE_SOURCE_NAME = "acme/factory-issues";
  */
 const GALLERY_STANDING: StandingFacts = {
 	handoffActive: false,
-	messageTruncated: false,
+	messageRecorded: false,
 	consultationTypesConfigured: true,
 	sourceCount: 0,
 	refreshingSourceCount: 0,
@@ -2739,73 +2740,204 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 	{
 		id: "no-color",
 		state: "the no-color presentation: the same controls, painted with no color",
-		render: (columns, holds, inputActive, wiring) => [
-			createElement(TextField, {
-				key: "no-color-model",
-				label: "Model",
-				value: "openai/gpt-5.1",
-				focused: holds === "no-color-model",
-				inputActive,
-				width: columns.valueWidth,
-				labelWidth: columns.labelWidth,
-				ink: NO_COLOR_INK,
-				...(holds === "no-color-model"
-					? { fieldRef: wiring.fieldRef, onValueChange: wiring.report }
-					: {}),
-			}),
-			createElement(ChoiceRow, {
-				key: "no-color-repository",
-				label: "Repository",
-				value: "my-little-software-factory",
-				focused: holds === "no-color-repository",
-				width: columns.valueWidth,
-				labelWidth: columns.labelWidth,
-				ink: NO_COLOR_INK,
-			}),
-			// The spinner face in the no-color ink: the written word stands,
-			// and the renderer's default shows through where the color would be.
-			createElement(Spinner, {
-				key: "no-color-starting",
-				word: "starting",
-				width: 12,
-				ink: NO_COLOR_INK,
-			}),
-			createElement(
-				"box",
-				{ key: "no-color-actions", style: { flexDirection: "column" } },
-				createElement(ActionItem, {
-					row: { key: "no-color-launch", label: "Launch Consultation" } satisfies ActionRow,
-					focused: holds === "no-color-launch",
-					width: columns.contentWidth,
+		// The example's controls cost fifteen content rows at the width the
+		// gallery shows them: the state row, the field, the selection row,
+		// the spinner, the action, and the history pane with its six rows and
+		// its chrome. Two rows keep the floor clear.
+		rows: 17,
+		render: (columns, holds, inputActive, wiring) => {
+			// The Message view's history in the no-color presentation (issue #331):
+			// the module builds the rows, and the presentation drops the color the
+			// roles would carry, the way NO_COLOR_INK does for every control here.
+			// The chip's written word is the whole message.
+			const entries: MessageHistoryEntry[] = [
+				{
+					severity: "info",
+					at: 1761638400000,
+					text: 'the merge of "Persist the source facts" is in the Work queue',
+				},
+				{ severity: "warning", at: 1761638412000, text: "no Ticket sources exist" },
+				{
+					severity: "error",
+					at: 1761638425000,
+					text: "the herdr name fix-the-merge-4c4d97ed is held by a pane herdr did not name, which is no agent of this ticket: agent name fix-the-merge-4c4d97ed is already used (agent_name_taken)",
+				},
+			];
+			// The pane's border and its padding leave the body four cells inside
+			// the box's content, the way the view's layout pays them.
+			const bodyWidth = Math.max(1, columns.contentWidth - 4);
+			const lines = messageHistoryBody(entries, bodyWidth).map((line) =>
+				line.map((span) => ({ ...span, fg: undefined })),
+			);
+			return [
+				createElement(TextField, {
+					key: "no-color-model",
+					label: "Model",
+					value: "openai/gpt-5.1",
+					focused: holds === "no-color-model",
+					inputActive,
+					width: columns.valueWidth,
+					labelWidth: columns.labelWidth,
+					ink: NO_COLOR_INK,
+					...(holds === "no-color-model"
+						? { fieldRef: wiring.fieldRef, onValueChange: wiring.report }
+						: {}),
+				}),
+				createElement(ChoiceRow, {
+					key: "no-color-repository",
+					label: "Repository",
+					value: "my-little-software-factory",
+					focused: holds === "no-color-repository",
+					width: columns.valueWidth,
+					labelWidth: columns.labelWidth,
 					ink: NO_COLOR_INK,
 				}),
-			),
-		],
+				// The spinner face in the no-color ink: the written word stands,
+				// and the renderer's default shows through where the color would be.
+				createElement(Spinner, {
+					key: "no-color-starting",
+					word: "starting",
+					width: 12,
+					ink: NO_COLOR_INK,
+				}),
+				createElement(
+					"box",
+					{ key: "no-color-actions", style: { flexDirection: "column" } },
+					createElement(ActionItem, {
+						row: { key: "no-color-launch", label: "Launch Consultation" } satisfies ActionRow,
+						focused: holds === "no-color-launch",
+						width: columns.contentWidth,
+						ink: NO_COLOR_INK,
+					}),
+				),
+				createElement(
+					"box",
+					{ key: "no-color-message-history", style: { flexDirection: "column" } },
+					paneElement(
+						{
+							title: "Messages",
+							rows: lines.map((line, index) =>
+								createElement(
+									"text",
+									{ key: `no-color-message-history-${index}` },
+									...bodyRowSpans(line, bodyWidth, undefined),
+								),
+							),
+							vpad: 1,
+							height: lines.length + 4,
+						},
+						columns.contentWidth,
+					),
+				),
+			];
+		},
+	},
+	{
+		id: "message-history",
+		state: "the Message view's history: the run's facts, oldest first",
+		render: (columns) => {
+			// The kinds the run records (ADR 0119): the notice, the refusal, and
+			// the fault that wraps past the pane's width. The times stand fixed,
+			// so the frame a reviewer sees is the one the view builds.
+			const entries: MessageHistoryEntry[] = [
+				{
+					severity: "info",
+					at: 1761638400000,
+					text: 'the merge of "Persist the source facts" is in the Work queue',
+				},
+				{ severity: "warning", at: 1761638412000, text: "no Ticket sources exist" },
+				{
+					severity: "error",
+					at: 1761638425000,
+					text: "the herdr name fix-the-merge-4c4d97ed is held by a pane herdr did not name, which is no agent of this ticket: agent name fix-the-merge-4c4d97ed is already used (agent_name_taken)",
+				},
+			];
+			// The pane's border and its padding leave the body four cells inside
+			// the box's content, the way the view's layout pays them.
+			const bodyWidth = Math.max(1, columns.contentWidth - 4);
+			const lines = messageHistoryBody(entries, bodyWidth);
+			return [
+				createElement(
+					"box",
+					{ key: "message-history-pane", style: { flexDirection: "column" } },
+					paneElement(
+						{
+							title: "Messages",
+							rows: lines.map((line, index) =>
+								createElement(
+									"text",
+									{ key: `message-history-${index}` },
+									...bodyRowSpans(line, bodyWidth, undefined),
+								),
+							),
+							vpad: 1,
+							height: lines.length + 4,
+						},
+						columns.contentWidth,
+					),
+				),
+			];
+		},
 	},
 	{
 		id: "narrow",
 		state: "narrow terminal",
 		narrow: true,
-		render: (columns, holds, _inputActive, wiring) => [
-			createElement(TextField, {
-				key: "model",
-				label: "Model",
-				value: "anthropic/claude-sonnet-4-5-with-a-long-tail",
-				focused: holds === "model",
-				width: columns.valueWidth,
-				labelWidth: columns.labelWidth,
-			}),
-			createElement(DraftField, {
-				key: "draft",
-				label: "Initial input",
-				value: "a draft wide enough that its own column has to scroll to the caret",
-				focused: holds === "draft",
-				width: columns.valueWidth,
-				labelWidth: columns.labelWidth,
-				height: 2,
-				...(holds === "draft" ? { fieldRef: wiring.fieldRef, onValueChange: wiring.report } : {}),
-			}),
-		],
+		render: (columns, holds, _inputActive, wiring) => {
+			// The Message view's history on the narrow frame (ADR 0119): the same
+			// cells as the wide example, wrapped to the room the frame leaves.
+			const entries: MessageHistoryEntry[] = [
+				{
+					severity: "info",
+					at: 1761638400000,
+					text: 'the merge of "Persist the source facts" is in the Work queue',
+				},
+				{ severity: "warning", at: 1761638412000, text: "no Ticket sources exist" },
+			];
+			// The pane's border and its padding leave the body four cells inside
+			// the box's content, the way the view's layout pays them.
+			const bodyWidth = Math.max(1, columns.contentWidth - 4);
+			const lines = messageHistoryBody(entries, bodyWidth);
+			return [
+				createElement(TextField, {
+					key: "model",
+					label: "Model",
+					value: "anthropic/claude-sonnet-4-5-with-a-long-tail",
+					focused: holds === "model",
+					width: columns.valueWidth,
+					labelWidth: columns.labelWidth,
+				}),
+				createElement(DraftField, {
+					key: "draft",
+					label: "Initial input",
+					value: "a draft wide enough that its own column has to scroll to the caret",
+					focused: holds === "draft",
+					width: columns.valueWidth,
+					labelWidth: columns.labelWidth,
+					height: 2,
+					...(holds === "draft" ? { fieldRef: wiring.fieldRef, onValueChange: wiring.report } : {}),
+				}),
+				createElement(
+					"box",
+					{ key: "narrow-message-history", style: { flexDirection: "column" } },
+					paneElement(
+						{
+							title: "Messages",
+							rows: lines.map((line, index) =>
+								createElement(
+									"text",
+									{ key: `narrow-message-history-${index}` },
+									...bodyRowSpans(line, bodyWidth, undefined),
+								),
+							),
+							vpad: 1,
+							height: lines.length + 4,
+						},
+						columns.contentWidth,
+					),
+				),
+			];
+		},
 	},
 ];
 

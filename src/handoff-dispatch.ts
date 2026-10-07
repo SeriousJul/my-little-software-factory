@@ -198,10 +198,22 @@ export interface PlaneActionIntent {
  */
 export interface HandoffDispatchReports {
 	working: (text: string) => void;
+	/**
+	 * The line-only writers (ADR 0118): the line, and no desktop notification.
+	 * The fact answers a key the operator pressed, or it has no severity the
+	 * desktop carries. The Fault writers write the same line and send the
+	 * notification, for the facts the plane met on its own.
+	 */
 	warning: (text: string) => void;
 	error: (text: string) => void;
-	/** The Message line notice: news the operator should see but no error. */
-	notice: (text: string) => void;
+	faultWarning: (text: string) => void;
+	faultError: (text: string) => void;
+	/**
+	 * The Message line notice: news the operator should see but no error, worn
+	 * with the severity the site names: a refusal's warning by default, the
+	 * info of a plain result where the site says so.
+	 */
+	notice: (text: string, severity?: "info" | "warning") => void;
 	clearWorking: () => void;
 	refresh: () => void;
 	/**
@@ -228,7 +240,7 @@ export interface HandoffDispatchReports {
  */
 export async function reportHandoffOutcome(
 	outcome: HandoffOutcome,
-	reports: Pick<HandoffDispatchReports, "clearWorking" | "warning" | "error">,
+	reports: Pick<HandoffDispatchReports, "clearWorking" | "faultWarning" | "faultError">,
 	persistMapping?: (mapping: RepositoryMapping) => Promise<ConfigWriteReport | undefined>,
 ): Promise<void> {
 	const persistReport =
@@ -256,8 +268,12 @@ export async function reportHandoffOutcome(
 		leftoverWorktree: outcome.notes?.leftoverWorktree,
 	});
 	reports.clearWorking();
-	if (outcome.status !== "ok") reports.error(lines.join("; "));
-	else if (lines.length > 0) reports.warning(lines.join("; "));
+	// The outcome of a start the plane ran: a failure is a Fault error, and a
+	// clean start that leaves a warning is a Fault warning (ADR 0118): the
+	// plane met the fact on its own, and the operator may have left the
+	// terminal.
+	if (outcome.status !== "ok") reports.faultError(lines.join("; "));
+	else if (lines.length > 0) reports.faultWarning(lines.join("; "));
 }
 
 /**
@@ -654,7 +670,9 @@ class HandoffDispatchModule implements HandoffDispatch {
 			working: (text) => safeReport(() => options.working(text)),
 			warning: (text) => safeReport(() => options.warning(text)),
 			error: (text) => safeReport(() => options.error(text)),
-			notice: (text) => safeReport(() => options.notice(text)),
+			faultWarning: (text) => safeReport(() => options.faultWarning(text)),
+			faultError: (text) => safeReport(() => options.faultError(text)),
+			notice: (text, severity) => safeReport(() => options.notice(text, severity)),
 			clearWorking: () => safeReport(options.clearWorking),
 			refresh: () => safeReport(options.refresh),
 			starting: (identity, active) => safeReport(() => options.starting(identity, active)),
@@ -754,6 +772,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 		if (this.state.workQueue.queuePaused()) {
 			this.reports.notice(
 				`handoff of ${this.ticketName(intent.ticketIdentity)} is in the Work queue; the queue is paused`,
+				"info",
 			);
 			return Promise.resolve({ ok: true });
 		}
@@ -829,7 +848,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 			void this.queueCleanup(async () => {
 				const failure = await this.closePreviousHandoffEnvironment(closeIdentity);
 				if (failure !== undefined)
-					this.reports.warning(`the previous handoff's environment did not close: ${failure}`);
+					this.reports.faultWarning(`the previous handoff's environment did not close: ${failure}`);
 				this.reports.refresh();
 			});
 		}
@@ -840,12 +859,14 @@ class HandoffDispatchModule implements HandoffDispatch {
 		this.reports.refresh();
 		this.reports.notice(
 			`the merge of ${this.ticketName(intent.ticketIdentity)} is in the Work queue`,
+			"info",
 		);
 		// The queue pause (ADR 0052): the ask sits in the queue until the
 		// resume, and the resume starts the pickup that takes it.
 		if (this.state.workQueue.queuePaused()) {
 			this.reports.notice(
 				`the merge of ${this.ticketName(intent.ticketIdentity)} waits in the Work queue; the queue is paused`,
+				"info",
 			);
 			return Promise.resolve({ ok: true });
 		}
@@ -966,7 +987,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 		if (!check.ok) {
 			this.settleIntentOnStarted(item.ticketIdentity, { ok: false, reason: check.reason });
 			this.reports.refresh();
-			this.reports.warning(
+			this.reports.faultWarning(
 				`the merge of ${this.ticketName(item.ticketIdentity)} was not run: ${check.reason}`,
 			);
 			return;
@@ -979,7 +1000,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 				reason: `task type ${item.taskType} carries no plane action`,
 			});
 			this.reports.refresh();
-			this.reports.warning(
+			this.reports.faultWarning(
 				`the merge of ${this.ticketName(item.ticketIdentity)} was not run: task type ${item.taskType} carries no plane action`,
 			);
 			return;
@@ -997,7 +1018,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 				reason: "the ticket is no longer visible",
 			});
 			this.reports.refresh();
-			this.reports.warning(
+			this.reports.faultWarning(
 				`the merge of ${this.ticketName(item.ticketIdentity)} was not run: the ticket is no longer visible`,
 			);
 			return;
@@ -1014,7 +1035,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 				reason: "no linked pull request was found for the ticket",
 			});
 			this.reports.refresh();
-			this.reports.warning(
+			this.reports.faultWarning(
 				`the merge of ${this.ticketName(item.ticketIdentity)} was not run: no linked pull request was found for the ticket`,
 			);
 			return;
@@ -1102,13 +1123,15 @@ class HandoffDispatchModule implements HandoffDispatch {
 				overCap
 					? `force-dispatched the merge of ${name} over the Parallel limit`
 					: `the merge of ${name} ran from the Work queue`,
+				"info",
 			);
 		} else {
-			// The block stands on the Message line in the warning voice, with
-			// no bell (ADR 0068): the pull request's comment carries the fact
-			// to the source, and the needs-work label the fire wrote carries it
-			// to the machine.
-			this.reports.warning(`the merge of ${name} was blocked: ${result.reason}`);
+			// The block is a Fault the plane met on its own (ADR 0118): the
+			// error voice with the notification, not the warning of a refusal
+			// the operator just pressed. The pull request's comment carries the
+			// fact to the source, and the needs-work label the fire wrote carries
+			// it to the machine.
+			this.reports.faultError(`the merge of ${name} was blocked: ${result.reason}`);
 		}
 	}
 
@@ -1155,6 +1178,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 		this.reports.refresh();
 		this.reports.notice(
 			`handoff of ${this.ticketName(intent.ticketIdentity)} is in the Work queue; it starts when a seat frees`,
+			"info",
 		);
 		if (intent.origin === "workflow" && intent.automatic !== true) {
 			// The decision screen's route: the previous environment goes at the
@@ -1167,7 +1191,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 			void this.queueCleanup(async () => {
 				const failure = await this.closePreviousHandoffEnvironment(closeIdentity);
 				if (failure !== undefined)
-					this.reports.warning(`the previous handoff's environment did not close: ${failure}`);
+					this.reports.faultWarning(`the previous handoff's environment did not close: ${failure}`);
 				this.reports.refresh();
 			});
 		}
@@ -1297,25 +1321,12 @@ class HandoffDispatchModule implements HandoffDispatch {
 			this.removeQueueRow(item.ticketIdentity);
 			this.settleIntentOnStarted(item.ticketIdentity, { ok: false, reason: fact });
 			this.reports.refresh();
-			this.reports.warning(
+			this.reports.faultWarning(
 				`the ${start.channel} of ${this.ticketName(item.ticketIdentity)} was not run: ${fact}`,
 			);
 			return;
 		}
 		this.dropPickup(item, fact);
-	}
-
-	/**
-	 * What the operator's force-dispatch key answers when the checkout gate
-	 * holds the row: the key passes the Parallel limit's cap and nothing else,
-	 * so the row stands and the fact that holds it reaches the Message line
-	 * beside the record (issue #297). A row the gate refused is not reported
-	 * here: the refusal has already answered the key with its own warning, and
-	 * a `waits:` fact for a row that left the queue would tell the operator a
-	 * working queue and a dropped row in the same act (issue #297 review).
-	 */
-	private reportCheckoutWait(name: string, fact: string): void {
-		this.reports.notice(checkoutWaitMessageLine(name, fact));
 	}
 
 	/**
@@ -1677,7 +1688,10 @@ class HandoffDispatchModule implements HandoffDispatch {
 			// reaches the starts behind the row. A force-dispatch that met the held
 			// checkout answers the key with the fact that holds it: the key passes
 			// the cap and nothing else (issue #297).
-			if (mode === "force-dispatch") this.reportCheckoutWait(this.rowName(item), outcome.fact);
+			if (mode === "force-dispatch")
+				// The key the operator pressed: the wait is its answer, and the
+				// answer is line-only (ADR 0118).
+				this.reports.warning(checkoutWaitMessageLine(this.rowName(item), outcome.fact));
 			return false;
 		}
 		if (outcome.kind === "refused") {
@@ -1713,6 +1727,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 				overCap
 					? `force-dispatched Consultation ${item.consultationId.slice(0, 8)} over the Parallel limit`
 					: `Work queue: opening Consultation ${item.consultationId.slice(0, 8)}`,
+				"info",
 			);
 			return true;
 		}
@@ -1720,7 +1735,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 			// The record left the queue's wait before the pickup ran - a close or a
 			// delete that won the race. The pickup names the record it found, once:
 			// the row is gone after this answer, so a repeat is impossible.
-			this.reports.warning(
+			this.reports.faultWarning(
 				`Work queue pickup of Consultation ${item.consultationId.slice(0, 8)} was not run: the record is no longer queued`,
 			);
 			return false;
@@ -1770,6 +1785,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 					item.origin === "restart"
 						? `${this.ticketName(item.ticketIdentity)} restarted while its restart waited in the Work queue; the queue item is removed`
 						: `${this.ticketName(item.ticketIdentity)} routed while its route waited in the Work queue; the queue item is removed`,
+					"info",
 				);
 				this.settleIntentOnStarted(item.ticketIdentity, {
 					ok: false,
@@ -1809,8 +1825,12 @@ class HandoffDispatchModule implements HandoffDispatch {
 			if (waiting !== undefined && isCoveredByFixingPullRequest(projection, waiting)) {
 				this.removeQueueRow(item.ticketIdentity);
 				this.reports.refresh();
+				// A covered outcome, not a Fault (ADR 0118): the open fixing pull
+				// request is already doing the work, so nothing waits on the
+				// operator and the plain info notice stands, with no notification.
 				this.reports.notice(
 					`the queued start of ${this.ticketName(item.ticketIdentity)} is removed: an open fixing pull request covers the ticket`,
+					"info",
 				);
 				this.settleIntentOnStarted(item.ticketIdentity, {
 					ok: false,
@@ -1935,6 +1955,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 					if (rowStands) {
 						this.reports.notice(
 							`${this.ticketName(item.ticketIdentity)} started from the Work queue`,
+							"info",
 						);
 					}
 				} else if (this.state.workQueue.hasWorkItem(item.ticketIdentity)) {
@@ -1958,7 +1979,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 		this.removeQueueRow(item.ticketIdentity);
 		this.settleIntentOnStarted(item.ticketIdentity, { ok: false, reason });
 		this.reports.refresh();
-		this.reports.warning(
+		this.reports.faultWarning(
 			`queued handoff for ${this.ticketName(item.ticketIdentity)} was not run: ${reason}`,
 		);
 	}
@@ -2003,8 +2024,12 @@ class HandoffDispatchModule implements HandoffDispatch {
 			// row that works no checkout reads nothing.
 			const gate = this.crossCheckoutGate(item, this.checkoutProjectionReader());
 			if (!gate.ok) {
+				// The key the operator pressed: the wait is its answer, and the
+				// answer is line-only (ADR 0118).
 				if (gate.outcome === "waiting")
-					this.reportCheckoutWait(this.ticketName(item.ticketIdentity), gate.fact);
+					this.reports.warning(
+						checkoutWaitMessageLine(this.ticketName(item.ticketIdentity), gate.fact),
+					);
 				return;
 			}
 			const limit = this.config().maxParallelAgents;
@@ -2018,8 +2043,12 @@ class HandoffDispatchModule implements HandoffDispatch {
 		const overCap = overParallelLimit(limit, this.seatCount());
 		const gate = this.crossCheckoutGate(item, this.checkoutProjectionReader());
 		if (!gate.ok) {
+			// The key the operator pressed: the wait is its answer, and the
+			// answer is line-only (ADR 0118).
 			if (gate.outcome === "waiting")
-				this.reportCheckoutWait(this.ticketName(item.ticketIdentity), gate.fact);
+				this.reports.warning(
+					checkoutWaitMessageLine(this.ticketName(item.ticketIdentity), gate.fact),
+				);
 			return;
 		}
 		const claimed = this.claimQueueItem(item, "force-dispatch", gate.checkoutKey);
@@ -2068,6 +2097,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 							overCap
 								? `force-dispatched ${this.ticketName(item.ticketIdentity)} over the Parallel limit`
 								: `${this.ticketName(item.ticketIdentity)} started from the Work queue`,
+							"info",
 						);
 				} else if (this.state.workQueue.hasWorkItem(item.ticketIdentity)) {
 					// The ask is answered: a failed start leaves the queue, and the
@@ -2374,7 +2404,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 					claimed.routeFromIdentity ?? ticket.identity,
 				);
 				if (failure !== undefined)
-					this.reports.warning(`the previous handoff's environment did not close: ${failure}`);
+					this.reports.faultWarning(`the previous handoff's environment did not close: ${failure}`);
 			}
 			return handOffTicket(ticket, choice, {
 				config: this.config(),
@@ -2465,6 +2495,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 			if (parts.length > 0)
 				this.reports.notice(
 					`placement of ${this.ticketName(claimed.ticket.identity)}: ${parts.join("; ")}`,
+					"info",
 				);
 		}
 		return null;
@@ -2543,7 +2574,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 		this.reports.starting(identity, false);
 		this.reports.refresh();
 		this.reports.clearWorking();
-		this.reports.error(`handoff failed: ${reason}`);
+		this.reports.faultError(`handoff failed: ${reason}`);
 		reportStarted({ ok: false, reason });
 		this.inFlight = false;
 		this.drainCleanupQueue();
@@ -2685,7 +2716,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 				// other drain line reads: the live projection's title, so the
 				// warning names the ticket the operator sees, not the snapshot the
 				// claim took.
-				this.reports.warning(
+				this.reports.faultWarning(
 					`queued handoff for ${this.ticketName(next.ticket.identity)} was not run: ${movedOn}`,
 				);
 				if (next.workQueuePickup === true) {

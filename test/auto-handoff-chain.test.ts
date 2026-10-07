@@ -425,7 +425,9 @@ function chainRig(options: ChainRigOptions = {}): Chain {
 		home: dir,
 		working: () => undefined,
 		warning: () => undefined,
+		faultWarning: () => undefined,
 		error: () => undefined,
+		faultError: () => undefined,
 		notice: (text) => {
 			notices.push(text);
 		},

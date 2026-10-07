@@ -335,8 +335,10 @@ function rig(options: RigOptions = {}): Rig {
 	const reports: HandoffDispatchReports = {
 		working: (text) => events.push(`working:${text}`),
 		warning: (text) => events.push(`warning:${text}`),
+		faultWarning: (text) => events.push(`faultWarning:${text}`),
 		notice: (text) => events.push(`notice:${text}`),
 		error: (text) => events.push(`error:${text}`),
+		faultError: (text) => events.push(`faultError:${text}`),
 		clearWorking: () => events.push("clear-working"),
 		refresh: () => events.push("refresh"),
 		starting: (identity, active) => events.push(`starting:${identity}:${active ? "on" : "off"}`),
@@ -701,7 +703,7 @@ describe("the shared checkout of one Repository (issue #297, ADR 0109)", () => {
 		expect(r.state.workQueue.hasWorkItem(ISSUE.identity)).toBe(true);
 		expect(r.commands().filter((command) => command.startsWith("herdr worktree"))).toEqual([]);
 		expect(r.events).toContain(
-			`notice:"${ISSUE.title}" waits in the Work queue: the shared checkout is at work: the merge of "${PULL.title}" holds it`,
+			`warning:"${ISSUE.title}" waits in the Work queue: the shared checkout is at work: the merge of "${PULL.title}" holds it`,
 		);
 		r.release();
 	});
@@ -734,7 +736,7 @@ describe("the shared checkout of one Repository (issue #297, ADR 0109)", () => {
 		// working queue and a dropped row in the same act (issue #297).
 		expect(r.state.workQueue.hasWorkItem(PULL.identity)).toBe(false);
 		expect(r.events).toContain(
-			`warning:the merge of "${PULL.title}" was not run: ${CHECKOUT_ROW_OVER_BUDGET_FACT}`,
+			`faultWarning:the merge of "${PULL.title}" was not run: ${CHECKOUT_ROW_OVER_BUDGET_FACT}`,
 		);
 		expect(r.events.filter((event) => event.includes("waits in the Work queue"))).toEqual([]);
 		r.release();
@@ -822,7 +824,7 @@ describe("the shared checkout of one Repository (issue #297, ADR 0109)", () => {
 			warnLine(`merge refused: "${PULL.title}" (${CHECKOUT_ROW_OVER_BUDGET_FACT})`),
 		);
 		expect(r.events).toContain(
-			`warning:the merge of "${PULL.title}" was not run: ${CHECKOUT_ROW_OVER_BUDGET_FACT}`,
+			`faultWarning:the merge of "${PULL.title}" was not run: ${CHECKOUT_ROW_OVER_BUDGET_FACT}`,
 		);
 		expect(answers).toEqual([CHECKOUT_ROW_OVER_BUDGET_FACT]);
 		r.release();
@@ -1036,7 +1038,7 @@ describe("the shared checkout of one Repository (issue #297, ADR 0109)", () => {
 			warnLine(`${word} refused: "${PULL.title}" (${CHECKOUT_ROW_OVER_BUDGET_FACT})`),
 		);
 		expect(r2.events).toContain(
-			`warning:the ${word} of "${PULL.title}" was not run: ${CHECKOUT_ROW_OVER_BUDGET_FACT}`,
+			`faultWarning:the ${word} of "${PULL.title}" was not run: ${CHECKOUT_ROW_OVER_BUDGET_FACT}`,
 		);
 		r2.release();
 	});
@@ -1178,7 +1180,7 @@ describe("the Consultation side of the shared checkout (issue #315, ADR 0109)", 
 		dispatch.forceDispatchWorkQueueItem(id);
 		await r.settle();
 		expect(r.events).toContain(
-			`notice:"grill" ${id.slice(0, 8)} waits in the Work queue: the shared checkout is at work: the handoff of "${ISSUE.title}" holds it`,
+			`warning:"grill" ${id.slice(0, 8)} waits in the Work queue: the shared checkout is at work: the handoff of "${ISSUE.title}" holds it`,
 		);
 		expect(r.state.workQueue.hasConsultationItem(id)).toBe(true);
 	});

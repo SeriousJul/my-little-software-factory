@@ -372,7 +372,7 @@ describe("the repository select panel", () => {
 					sourceCount: 0,
 					refreshingSourceCount: 0,
 					handoffActive: false,
-					messageTruncated: false,
+					messageRecorded: false,
 					consultationTypesConfigured: true,
 					interactionExitKey: "f12",
 					queuePaused: false,

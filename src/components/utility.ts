@@ -10,13 +10,22 @@ import {
 	guideControls,
 	guideKeyLabel,
 	modeTitle,
+	type StandingFacts,
 } from "./controls.ts";
-import { type MessageFact, messageColor } from "./messages.ts";
-import { ModalSurface, modalFrame } from "./modal-chrome.ts";
+import { maxScrollOf, windowOf } from "./geometry.ts";
+import type { MessageHistoryEntry } from "./message-facts.ts";
+import type { MessageFact } from "./messages.ts";
+import {
+	type BodySpan,
+	bodyRowSpans,
+	ModalSurface,
+	modalFrame,
+	scrollbarRows,
+} from "./modal-chrome.ts";
 import { controlInk } from "./shared/presentation.ts";
-import { rangeTextOf } from "./shared/region.ts";
+import { bodyPaneFacts, rangeTextOf } from "./shared/region.ts";
 import { padToWidth, truncateToWidth, widthOf, wrapToWidth } from "./text.ts";
-import { prefixForSeverity } from "./theme.ts";
+import { paint } from "./theme.ts";
 
 /** Whether the named key moves a window up. */
 const upKey = (name: string): boolean => name === "up" || name === "k";
@@ -25,6 +34,9 @@ const upKey = (name: string): boolean => name === "up" || name === "k";
  *  hard to read, and a short terminal caps its height. */
 const UTILITY_MAX_WIDTH = 100;
 const UTILITY_MAX_HEIGHT = 24;
+
+/** The cells the Body pane's border takes, the one the modals pay. */
+const PANE_BORDERS = 2;
 
 /** The shared scroll clamp: content changes never leave the cursor past the end. */
 function useClampedScroll(maxScroll: number) {
@@ -48,8 +60,9 @@ function useClampedScroll(maxScroll: number) {
  * close control outranks the shared keys, so F1 and ? resolve to
  * guide-close (not to the Help it would only close again) and F2 resolves to
  * message-close (not to the Message it would only reopen). The guide wires
- * the one control its mode still dispatches, the Message control on F2, and
- * the Message view wires the Help control on F1.
+ * the one control its mode still dispatches, the Message control on F2, the
+ * Message view wires the Help control on F1, and the Message view's body
+ * scrolls through the shared body scroll, `scroll-body`.
  */
 function useUtilityKeys(
 	facts: AvailabilityFacts,
@@ -59,7 +72,10 @@ function useUtilityKeys(
 		message?: () => void;
 		/** The Help control, on the Message view's F1. */
 		help?: () => void;
-		scroll: (delta: number) => void;
+		/** The guide's own scroll, on its ↑/↓ and j/k. */
+		scroll?: (delta: number) => void;
+		/** The shared body scroll, on the Message view's j/k and page keys. */
+		scrollBody?: (name: string) => void;
 		emergencyExit: () => void;
 		/**
 		 * The plane-level keys on the overlay (issue #319, ADR 0111): the brake
@@ -72,6 +88,8 @@ function useUtilityKeys(
 		autoHandoff?: () => void;
 	},
 ): void {
+	const guideScroll = handlers.scroll;
+	const bodyScrollHandler = handlers.scrollBody;
 	useControlDispatch({
 		facts,
 		onEmergencyExit: handlers.emergencyExit,
@@ -80,8 +98,15 @@ function useUtilityKeys(
 			"message-close": handlers.close,
 			...(handlers.message !== undefined ? { message: handlers.message } : {}),
 			...(handlers.help !== undefined ? { help: handlers.help } : {}),
-			"guide-scroll": ({ key }) => handlers.scroll(upKey(key.name) ? -1 : 1),
-			"message-scroll": ({ key }) => handlers.scroll(upKey(key.name) ? -1 : 1),
+			...(guideScroll !== undefined
+				? {
+						"guide-scroll": ({ key }: { key: { name: string } }) =>
+							guideScroll(upKey(key.name) ? -1 : 1),
+					}
+				: {}),
+			...(bodyScrollHandler !== undefined
+				? { "scroll-body": ({ key }: { key: { name: string } }) => bodyScrollHandler(key.name) }
+				: {}),
 			...(handlers.queuePause !== undefined ? { "queue-pause": handlers.queuePause } : {}),
 			...(handlers.autoHandoff !== undefined ? { "auto-handoff": handlers.autoHandoff } : {}),
 		},
@@ -182,67 +207,225 @@ export function KeyGuide({
 	});
 }
 
-interface MessageViewProps extends KeyGuideProps {
-	fact: MessageFact;
-	/** The Message view hands its Help and Message keys to the guide. */
+/**
+ * The Message view, the Message line's own record of the run (ADR 0119).
+ *
+ * It shows the run's Message history, oldest first and newest at the bottom, and
+ * opens pinned to the newest entry. The frame is the near-fullscreen box the
+ * Decision modal uses, and the history rides the shared Body pane titled
+ * `Messages`: the same pane, the same window, and the same body scroll the
+ * modal's turn log holds. The Key guide keeps its own 100 by 24 frame.
+ *
+ * A row wears three cells in fixed width: the datetime of the entry's write,
+ * `YYYY-MM-DD HH:MM:SS`, the five-cell level chip of its severity,
+ * `INFO`, `WARN`, or `ERROR`, and the entry's text, wrapped to the
+ * remaining width, indented under the chip on its continuation rows. The chip
+ * wears the color of the severity it names, and the view is the live
+ * history: an entry that lands while it stands shows at the bottom, and a
+ * source health that clears or recovers reads the way it did on the line.
+ */
+
+// The Message view's frame: the near-fullscreen box, the margin the
+// Decision modal's box keeps from the terminal's edges.
+const MESSAGE_VIEW_MARGIN = 1;
+
+// The fixed-width cells of a history row: the datetime takes nineteen cells,
+// the chip its five, one separator cell, and the text starts where the
+// separator ends. The separator is its own cell, not the chip's padding, so
+// every chip - the four-letter faces and the five-letter ERROR - keeps one
+// cell of air between its face and the text.
+const HISTORY_TIME_WIDTH = 19;
+const HISTORY_CHIP_WIDTH = 5;
+const HISTORY_TEXT_INDENT = HISTORY_TIME_WIDTH + 1 + HISTORY_CHIP_WIDTH + 1;
+
+/**
+ * The datetime a history entry wears, in the entry's local time: the fixed
+ * nineteen cells `YYYY-MM-DD HH:MM:SS`.
+ */
+export function historyEntryTime(at: number): string {
+	const d = new Date(at);
+	const cell = (value: number, digits: number) => String(value).padStart(digits, "0");
+	return (
+		`${cell(d.getFullYear(), 4)}-${cell(d.getMonth() + 1, 2)}-${cell(d.getDate(), 2)}` +
+		` ${cell(d.getHours(), 2)}:${cell(d.getMinutes(), 2)}:${cell(d.getSeconds(), 2)}`
+	);
+}
+
+/** The chip the entry's severity wears, padded to the chip's five cells. */
+export function historyChip(severity: MessageHistoryEntry["severity"]): string {
+	const face = severity === "info" ? "INFO" : severity === "warning" ? "WARN" : "ERROR";
+	return face.padEnd(HISTORY_CHIP_WIDTH);
+}
+
+/** The color the chip of one severity wears: red, yellow, and the theme's text. */
+export function historyChipColor(severity: MessageHistoryEntry["severity"]): string | undefined {
+	return severity === "error"
+		? paint("red")
+		: severity === "warning"
+			? paint("yellow")
+			: paint("text");
+}
+
+/**
+ * The body rows one history occupies, at the width the pane holds, oldest
+ * first. Each entry leads with its datetime, its chip, and its text's first
+ * row, and wraps its text to the width left of the chip's column, its
+ * continuation rows indented under the text. An entry with no text keeps its
+ * datetime and chip alone.
+ */
+export function messageHistoryBody(
+	history: readonly MessageHistoryEntry[],
+	width: number,
+): BodySpan[][] {
+	const rows: BodySpan[][] = [];
+	const timeColor = paint("subtext0");
+	const textColor = paint("text");
+	const textWidth = Math.max(1, width - HISTORY_TEXT_INDENT);
+	for (const entry of history) {
+		const time = historyEntryTime(entry.at);
+		const chip = historyChip(entry.severity);
+		const chipColor = historyChipColor(entry.severity);
+		const textLines = entry.text
+			.split("\n")
+			.flatMap((line) => (line === "" ? [""] : wrapToWidth(line, textWidth)));
+		const body = textLines.length === 0 ? [""] : textLines;
+		body.forEach((line, index) => {
+			const spans: BodySpan[] =
+				index === 0
+					? [
+							{ text: time, fg: timeColor },
+							{ text: " " },
+							{ text: chip, fg: chipColor },
+							{ text: " " },
+						]
+					: [{ text: " ".repeat(HISTORY_TEXT_INDENT) }];
+			spans.push({ text: line, fg: textColor });
+			rows.push(spans);
+		});
+	}
+	return rows;
+}
+
+interface MessageViewProps {
+	/**
+	 * The plane's standing facts: the view builds its own mode facts from them,
+	 * beside the body facts it owns, the way the modals and the Live view do.
+	 */
+	facts: StandingFacts;
+	/** The run's Message history, oldest first: the record the view shows. */
+	history: readonly MessageHistoryEntry[];
+	/** The Message fact the overlay's own Message line shows. */
+	message: MessageFact | null;
+	onClose: () => void;
+	/** The Message view hands its Help key to the guide. */
 	onHelp: () => void;
+	onEmergencyExit: () => void;
+	/**
+	 * The Queue pause's key on this view (issue #319, ADR 0111): the brake
+	 * reaches the view the way it reaches the modals.
+	 */
+	onQueuePause: () => void;
+	/**
+	 * The Auto-handoff mode's key on this view (issue #319, ADR 0111). Required
+	 * for the same reason.
+	 */
+	onAutoHandoff: () => void;
 }
 
 export function MessageView({
-	fact,
+	history,
 	facts,
+	message,
 	onClose,
 	onHelp,
-	message,
 	onEmergencyExit,
 	onQueuePause,
 	onAutoHandoff,
 }: MessageViewProps) {
 	const { width, height } = useTerminalDimensions();
-	// The Message view's own mode owns no rows, so it states no facts of its
-	// own beside the plane's standing facts.
-	const viewFacts = availabilityFacts("message-view", facts, {});
-	const frame = modalFrame(width, height, {
-		maxWidth: UTILITY_MAX_WIDTH,
-		maxHeight: UTILITY_MAX_HEIGHT,
-	});
-	const fullTitle = `Message view - ${prefixForSeverity(fact.severity).slice(0, -1)}`;
-	const modalTitle = widthOf(fullTitle) <= frame.contentWidth ? fullTitle : "Message view";
-	const wrapped = useMemo(
-		() =>
-			fact.text
-				.split("\n")
-				.flatMap((line) => (line === "" ? [""] : wrapToWidth(line, frame.contentWidth))),
-		[fact, frame.contentWidth],
+	// The near-fullscreen frame the Decision modal uses: the room the terminal
+	// offers above the bar, the same margin, and no cap. The pane's chrome
+	// yields before the history yields rows: padding first, and the scrollbar
+	// is decided at the final size, so the thumb does not flicker in and out
+	// while a row lands.
+	const frame = modalFrame(width, height, { margin: MESSAGE_VIEW_MARGIN });
+	const panePadding: 0 | 1 = frame.padding === 1 ? 1 : 0;
+	const paneInnerWidth = Math.max(1, frame.contentWidth - PANE_BORDERS - 2 * panePadding);
+	const visibleRows = Math.max(0, frame.contentRows - PANE_BORDERS - 2 * panePadding);
+	const fullWidthBody = useMemo(
+		() => messageHistoryBody(history, paneInnerWidth),
+		[history, paneInnerWidth],
 	);
-	const visibleRows = Math.max(1, frame.contentRows);
-	const { scroll, scrollBy } = useClampedScroll(Math.max(0, wrapped.length - visibleRows));
-	const visible = wrapped.slice(scroll, scroll + visibleRows);
+	const hasScrollbar = fullWidthBody.length > visibleRows;
+	const bodyWidth = Math.max(1, paneInnerWidth - (hasScrollbar ? 1 : 0));
+	const body = useMemo(() => messageHistoryBody(history, bodyWidth), [history, bodyWidth]);
+	const maxScroll = maxScrollOf(body.length, visibleRows);
+	// The view opens pinned to the newest entry: `null` keeps it there while
+	// entries land, and the operator's first step takes a real index.
+	const [bodyScroll, setBodyScroll] = useState<number | null>(null);
+
+	// Scroll the body by one step of the named key: a page moves one viewport,
+	// and the jump keys take either edge. A null view is the bottom, so the
+	// first step reads the bottom's index.
+	const scrollBody = (name: string) => {
+		if (name === "pageup")
+			setBodyScroll((current) => Math.max(0, (current ?? maxScroll) - Math.max(1, visibleRows)));
+		else if (name === "pagedown")
+			setBodyScroll((current) =>
+				Math.min(maxScroll, (current ?? maxScroll) + Math.max(1, visibleRows)),
+			);
+		else if (name === "home") setBodyScroll(0);
+		else if (name === "end") setBodyScroll(maxScroll);
+		else if (name === "j")
+			setBodyScroll((current) => Math.min((current ?? maxScroll) + 1, maxScroll));
+		else setBodyScroll((current) => Math.max(0, (current ?? maxScroll) - 1));
+	};
+
+	// The view states the facts its own body produces, beside the plane's
+	// standing facts: the pane's window, the shared fact the bar's gate and
+	// its range text read.
+	const viewFacts = availabilityFacts(
+		"message-view",
+		facts,
+		bodyPaneFacts(body.length, visibleRows, history.length === 0),
+	);
 
 	useUtilityKeys(viewFacts, {
 		close: onClose,
 		help: onHelp,
-		scroll: scrollBy,
+		scrollBody,
 		emergencyExit: onEmergencyExit,
 		queuePause: onQueuePause,
 		autoHandoff: onAutoHandoff,
 	});
 
-	const range = rangeTextOf(scroll, visible.length, wrapped.length);
+	const scroll = bodyScroll === null ? maxScroll : Math.min(bodyScroll, maxScroll);
+	const visible = windowOf(body, scroll, visibleRows);
+	const range = rangeTextOf(scroll, visible.length, body.length);
+	// The Decision modal's thumb, on the view's own window: the gutter holds
+	// the track and the thumb the position it wears, not a blank column.
+	const thumbRows = hasScrollbar ? scrollbarRows(body.length, visibleRows, scroll) : null;
+
 	return createElement(ModalSurface, {
 		frame,
 		width,
-		title: modalTitle,
+		title: "Message view",
 		body: {
 			above: [],
-			below: visible.map((line, index) =>
-				createElement(
-					"text",
-					{ key: `${scroll}-${index}`, fg: messageColor(fact) },
-					padToWidth(truncateToWidth(line, frame.contentWidth), frame.contentWidth),
+			pane: {
+				title: "Messages",
+				rows: visible.map((line, index) =>
+					createElement(
+						"text",
+						{ key: `${scroll}-${index}` },
+						...bodyRowSpans(line, bodyWidth, thumbRows?.has(index)),
+					),
 				),
-			),
-			minRows: 1,
+				vpad: panePadding,
+				height: visibleRows + PANE_BORDERS + 2 * panePadding,
+			},
+			below: [],
+			minRows: PANE_BORDERS + 1,
 		},
 		zIndex: 20,
 		message,

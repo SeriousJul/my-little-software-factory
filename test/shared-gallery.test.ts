@@ -129,6 +129,7 @@ describe("the shared control gallery", () => {
 			"theme-light",
 			"theme-override",
 			"no-color",
+			"message-history",
 			"narrow",
 		]);
 		const states = GALLERY_EXAMPLES.map((example) => example.state).join(" ");
@@ -527,7 +528,7 @@ describe("the shared control gallery", () => {
 	});
 
 	test("the no-color example paints the same controls with no color", async () => {
-		const setup = await gallery("no-color");
+		const setup = await gallery("no-color", 80, 30);
 		const frame = frameText(setup.captureCharFrame());
 		// The same controls a colored panel holds: a field, a selection row,
 		// and an action - with their labels and values.
@@ -543,6 +544,17 @@ describe("the shared control gallery", () => {
 		// renderer's own default is not a paint.
 		expect(spanColors(setup, "openai/gpt-5.1")).toEqual([[255, 255, 255]]);
 		expect(spanColors(setup, "Launch Consultation")).toEqual([[255, 255, 255]]);
+		// The Message view's history row wears the no-color presentation too
+		// (issue #331): the chip's word, the datetime, and the text keep
+		// standing, and none of them paints a color of its own.
+		const rows = rowsOf(setup.captureCharFrame());
+		const warnRow = rows.findIndex((row) => row.includes("no Ticket sources exist"));
+		expect(warnRow).toBeGreaterThan(-1);
+		const warnTime = rows[warnRow].match(/\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}/);
+		expect(warnTime).not.toBeNull();
+		expect(spanColorAt(setup, warnRow, "WARN")).toEqual([255, 255, 255]);
+		expect(spanColorAt(setup, warnRow, warnTime?.[0] ?? "")).toEqual([255, 255, 255]);
+		expect(spanColorAt(setup, warnRow, "no Ticket sources exist")).toEqual([255, 255, 255]);
 	});
 
 	/**

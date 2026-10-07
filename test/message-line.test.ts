@@ -4,9 +4,11 @@
  * The line sits between the panes and the Action bar in every frame, and the
  * frame never shifts for or against it. Facts stay separate behind it: an
  * operation error, a working, an operation warning, and the source-health
- * warning, in that priority. Long messages truncate to the terminal width
- * and only then earn the m Message hint and the view, which holds the text
- * it opened with.
+ * warning, in that priority. Messages truncate to the terminal width, and the
+ * record behind them earns the m Message hint as soon as it holds a fact
+ * (ADR 0119): the view is a near-fullscreen record of the run's facts, oldest
+ * first, pinned to the newest, each entry wearing its datetime and its
+ * severity chip. Progress lines never enter the record.
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
@@ -27,12 +29,10 @@ import {
 	openMessageView,
 	press,
 	pressArrow,
-	pressF2,
 	rgb,
 	roleColor,
 	rowsOf,
 	settle,
-	sleep,
 	spanColorAt,
 	WIDTH,
 	withApp,
@@ -84,6 +84,30 @@ function failingHandoffRunner(): FakeRunner {
 	return runner;
 }
 
+/** The notification commands the runner recorded, whatever the platform. */
+function notificationCalls(runner: FakeRunner): string[] {
+	return runner.calls
+		.filter(
+			(call) =>
+				call.command === "notify-send" ||
+				call.command === "osascript" ||
+				call.command === "powershell",
+		)
+		.map((call) => call.args.join(" "));
+}
+
+/** The history entries one chip wears in a Message view frame. */
+function historyEntries(view: string, chip: "INFO" | "WARN" | "ERROR"): number {
+	const face = new RegExp(`\\d{2}:\\d{2}:\\d{2} ${chip} `);
+	return view.split("\n").filter((row) => face.test(row)).length;
+}
+
+/** The nineteen-cell datetime a history row leads with, in the row it wears. */
+function historyTimeOf(row: string): string {
+	const match = row.match(/\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}/);
+	return match === null ? "" : match[0];
+}
+
 /** A handoff that fails on a deliberately long stderr line. */
 const LONG_LINE = `error: the daemon refused the request after the outage. ${"x".repeat(240)}`;
 
@@ -105,13 +129,17 @@ describe("the permanent Message line", () => {
 		await withApp(
 			async (setup) => {
 				const before = await settle(setup);
+				expect(actionBarRowOf(before)).not.toContain("m Message");
 				// An unavailable refresh explains itself on the line.
 				await press(setup, "r", "the warning", (f) =>
 					messageRowOf(f).includes("no Ticket sources exist"),
 				);
 				const frame = await settle(setup);
+				// The fact is recorded, so the Message hint lands on the row the bar
+				// always wears: the layout never shifts for or against the line, and
+				// the marker never moves for the hint or the fact it names.
 				expect(markerRowOf(frame)).toBe(markerRowOf(before));
-				expect(actionBarRowOf(frame)).toBe(actionBarRowOf(before));
+				expect(actionBarRowOf(frame)).toContain("m Message");
 				expect(messageRowOf(frame).trim()).toBe("Warning: no Ticket sources exist");
 				// Changing auto-handoff is not an operation. It must not clear the
 				// durable warning that the rejected refresh produced.
@@ -386,6 +414,21 @@ describe("the permanent Message line", () => {
 		seedAwaitingTurn(state, success([issueTicket()]));
 		const runner = new FakeRunner();
 		runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+		// The cycle-end draft close reads the branch's open pull requests:
+		// the branch carries none, so the close says nothing, and the line
+		// keeps the in-flight refresh's progress.
+		runner.set(
+			"gh",
+			[
+				"api",
+				"--hostname",
+				"github.com",
+				`repos/acme/factory/pulls?state=open&head=${encodeURIComponent(
+					"acme:factory/5-add-a-webhook-retry-policy",
+				)}`,
+			],
+			{ stdout: "[]" },
+		);
 		const source = new FakeSource("issues", "github-issues", success([issueTicket()]));
 		try {
 			await withApp(
@@ -421,7 +464,8 @@ describe("the permanent Message line", () => {
 		}
 	});
 
-	test("truncates to the terminal width, and only then offers the Message view", async () => {
+	test("truncates to the terminal width, and offers the view once a fact is recorded", async () => {
+		// The line is cut at the terminal edge, and the fact earns the hint.
 		await withApp(
 			async (setup) => {
 				await press(setup, "return", "the error", (f) => messageRowOf(f).startsWith("Error: "));
@@ -429,19 +473,44 @@ describe("the permanent Message line", () => {
 				const expected = padToWidth(truncateToWidth(`Error: ${LONG_LINE}`, WIDTH), WIDTH);
 				expect(messageRowOf(frame)).toBe(expected);
 				expect(actionBarRowOf(frame)).toContain("m Message");
+				// The view holds the whole fact the line cut: the entry wraps the
+				// text, and it leads with its datetime and its chip.
+				const view = await openMessageView(setup, "m", "Message view");
+				expect(view).toContain("the daemon refused the request after the outage");
+				expect(view).toContain("ERROR");
 			},
 			WIDTH,
 			HEIGHT,
 			{ config: BASE_CONFIG, runner: longLineHandoffRunner(), initialTickets: SAMPLE_TICKETS },
 		);
 
-		// A fitting message earns no hint.
+		// A fact that fits on the line still earns the view: the record is the
+		// point, not the cut.
 		await withApp(
 			async (setup) => {
 				await press(setup, "r", "the warning", (f) =>
 					messageRowOf(f).includes("no Ticket sources exist"),
 				);
-				expect(actionBarRowOf(await settle(setup))).not.toContain("m Message");
+				expect(actionBarRowOf(await settle(setup))).toContain("m Message");
+				const view = await openMessageView(setup, "m", "Message view");
+				expect(view).toContain("WARN");
+				expect(view).toContain("no Ticket sources exist");
+			},
+			WIDTH,
+			HEIGHT,
+			{ config: BASE_CONFIG, runner: new FakeRunner(), initialTickets: SAMPLE_TICKETS },
+		);
+
+		// No fact at all: the control refuses on the line, and the record stays
+		// what the record is.
+		await withApp(
+			async (setup) => {
+				setup.mockInput.pressKey("m");
+				await awaitFrame(
+					setup,
+					(f) => messageRowOf(f).trim() === "Warning: no message has been recorded yet",
+					"the refusal on the line",
+				);
 			},
 			WIDTH,
 			HEIGHT,
@@ -465,7 +534,7 @@ describe("the permanent Message line", () => {
 				setup.mockInput.pressKey("HOME");
 				setup.mockInput.pressArrow("right", { shift: true });
 				setup.mockInput.pressArrow("right", { shift: true });
-				const view = await openMessageView(setup, "F2", "Message view - Error");
+				const view = await openMessageView(setup, "F2", "Message view");
 				expect(view).toContain("the daemon refused the request after the outage");
 				await closeOverlay(setup, "Message view", "the view to close");
 				// The field kept the text, the caret, and the selection: asking to read
@@ -492,27 +561,40 @@ describe("the permanent Message line", () => {
 		);
 	});
 
-	test("the view holds the text it opened with, across a working-to-error turn", async () => {
+	test("the working is no fact, and the record shows the turn it covered", async () => {
 		const runner = new DelayedRunner(failingHandoffRunner(), 2500);
 		await withApp(
 			async (setup) => {
 				await press(setup, "return", "the working", (f) =>
 					messageRowOf(f).startsWith("Working: handing off"),
 				);
-				// The truncated working earns the view.
-				await openMessageView(setup, "m", "Message view - Working");
-				// The failure lands while the view is open.
-				await sleep(4000);
-				const frame = await settle(setup);
-				expect(frame).toContain("Message view - Working");
-				// The view's own rows keep the fact it captured: the newer one
-				// never rewrites the text the operator asked to read.
-				const boxRows = rowsOf(frame).slice(0, -2).join("\n");
-				expect(boxRows).toContain("handing off");
-				expect(boxRows).not.toContain("the daemon is down");
-				// The Message line the view owns carries the fact that landed
-				// after it opened, so the surface reports it like any other.
-				expect(messageRowOf(frame).trim()).toBe("Error: error: the daemon is down");
+				// The working is progress, not a fact: while it runs the record
+				// holds nothing, and the refusal to open waits behind the working
+				// line, where a refusal ranks. The failure settles behind the
+				// working and takes the line from it.
+				setup.mockInput.pressKey("m");
+				await awaitFrame(
+					setup,
+					(f) => messageRowOf(f).trim() === "Error: error: the daemon is down",
+					"the error to take the line",
+				);
+				// The record holds the refusal and the error, and no Working line
+				// of the handoff: progress was never a fact.
+				const view = await openMessageView(setup, "m", "Message view");
+				expect(view).toContain("no message has been recorded yet");
+				expect(view).toContain("the daemon is down");
+				expect(view).not.toContain("handing off");
+				// The record is oldest first: the refusal stands above the error.
+				const rows = view.split("\n");
+				const refusalRow = rows.findIndex((row) =>
+					row.includes("no message has been recorded yet"),
+				);
+				const errorRow = rows.findIndex((row) => row.includes("the daemon is down"));
+				expect(refusalRow).toBeGreaterThan(-1);
+				expect(errorRow).toBeGreaterThan(refusalRow);
+				// The view's own Message line carries the fact that landed, the
+				// way every surface's line does.
+				expect(view).toContain("Error: error: the daemon is down");
 				// And the base frame behind it says the same.
 				await closeOverlay(setup, "Message view", "the view to close");
 				expect(messageRowOf(await settle(setup)).trim()).toBe("Error: error: the daemon is down");
@@ -523,7 +605,7 @@ describe("the permanent Message line", () => {
 		);
 	});
 
-	test("states an operation notice, and lets a refusal take the line back", async () => {
+	test("states a plain notice, and lets a refusal take the line back", async () => {
 		await withApp(
 			async (setup) => {
 				// The mode is factory state, not a config default (ADR 0036): the
@@ -535,26 +617,42 @@ describe("the permanent Message line", () => {
 				for (const row of [4, 5, 6]) {
 					await press(setup, "j", "the next ticket", (f) => markerRowOf(f) === row);
 				}
-				// Enter belongs to the factory in auto mode. The fact says so; it
-				// is not a Working line, because no operation started and a
-				// progress line has no end the operator can point at.
+				// Enter belongs to the factory in auto mode. The fact says so with
+				// the plain info the record wears: no operation failed, so the line
+				// carries no warning's word.
 				await press(setup, "return", "the notice", (f) =>
 					messageRowOf(f).includes("the factory decides this ticket"),
 				);
 				const notice = await settle(setup);
 				expect(messageRowOf(notice).trim()).toBe(
-					"Warning: auto-handoff is on: the factory decides this ticket",
+					"Info: auto-handoff is on: the factory decides this ticket",
 				);
 				expect(messageRowOf(notice)).not.toContain("Working:");
-				expect(spanColorAt(setup, rowsOf(notice).length - 2, "Warning:")).toEqual(
-					rgb(roleColor("yellow")),
+				expect(spanColorAt(setup, rowsOf(notice).length - 2, "Info:")).toEqual(
+					rgb(roleColor("text")),
 				);
-				// The notice must not pin the line: a refused control is the reason
-				// the operator just asked for, and it outranks the notice.
-				pressF2(setup);
+				// The notice is a fact the record holds: the view shows it, beside
+				// its chip.
+				const view = await openMessageView(setup, "F2", "Message view");
+				expect(view).toContain("INFO");
+				expect(view).toContain("the factory decides this ticket");
+				// The row wears the roles decision 10 names (issue #331): the chip
+				// paints the severity the Message line wears, and the datetime the
+				// time's own subtext0.
+				const rows = rowsOf(view);
+				const infoRow = rows.findIndex((row) => row.includes("auto-handoff is on"));
+				expect(infoRow).toBeGreaterThan(-1);
+				expect(spanColorAt(setup, infoRow, "INFO")).toEqual(rgb(roleColor("text")));
+				expect(spanColorAt(setup, infoRow, historyTimeOf(rows[infoRow]))).toEqual(
+					rgb(roleColor("subtext0")),
+				);
+				await closeOverlay(setup, "Message view", "the view to close");
+				// The notice must not pin the line: a refused control takes it
+				// back, the way every operation fact outranks a notice.
+				setup.mockInput.pressKey("r");
 				const refused = await awaitFrame(
 					setup,
-					(f) => messageRowOf(f).trim() === "Warning: the current Message fits on the Message line",
+					(f) => messageRowOf(f).trim() === "Warning: no Ticket sources exist",
 					"the refusal to take the line back",
 				);
 				expect(refused).not.toContain("auto-handoff is on");
@@ -577,18 +675,56 @@ describe("the permanent Message line", () => {
 		await withApp(
 			async (setup) => {
 				await press(setup, "return", "the error", (f) => messageRowOf(f).startsWith("Error: "));
-				let frame = await openMessageView(setup, "F2", "Message view - Error");
-				// 2056 characters wrap to 22 rows; 20 fit.
-				expect(frame).toContain("1-20/22");
-				await press(setup, "j", "the scroll down", (f) => f.includes("2-21/22"));
-				frame = await settle(setup);
-				expect(frame).toContain("2-21/22");
-				await press(setup, "k", "the scroll up", (f) => f.includes("1-20/22"));
+				const frame = await openMessageView(setup, "F2", "Message view");
+				// The entry wraps to more rows than the pane shows: the bar's range
+				// says so, and the view opens pinned to the newest row of the
+				// record, the bottom of the record's one entry.
+				const rangeOf = (f: string): number[] | null => {
+					const match = f.match(/(\d+)-(\d+)\/(\d+)/);
+					return match === null ? null : [Number(match[1]), Number(match[2]), Number(match[3])];
+				};
+				const range = rangeOf(frame);
+				expect(range).not.toBeNull();
+				if (range === null) return;
+				const [top, bottom, total] = range;
+				const visible = bottom - top + 1;
+				expect(bottom).toBe(total);
+				// The gutter holds the scrollbar the record needs: the body's
+				// last column, the pane's border and the box's border standing to
+				// its right. Every row of the window wears the track, and the
+				// thumb stands on the rows the position covers, the way the
+				// Decision modal's turn log paints it.
+				const trimmed = frame.split("\n").map((row) => row.trimEnd());
+				const thumb = trimmed.filter((row) => row.endsWith("█ │ │")).length;
+				const track = trimmed.filter((row) => row.endsWith("│ │ │")).length;
+				expect(thumb + track).toBe(visible);
+				expect(thumb).toBeGreaterThanOrEqual(1);
+				// k steps up one row of the record, and j returns to the bottom.
+				await press(setup, "k", "the scroll up", (f) =>
+					f.includes(`${top - 1}-${bottom - 1}/${total}`),
+				);
+				await press(setup, "j", "the scroll down", (f) => f.includes(`${top}-${bottom}/${total}`));
+				// home takes the record's first row.
+				const topFrame = await press(setup, "home", "the jump to the top", (f) =>
+					f.includes(`1-${visible}/${total}`),
+				);
+				// The entry's first row stands where the record leads: the ERROR
+				// chip wears the error's red beside the time's subtext0, the
+				// roles decision 10 names (issue #331).
+				const topRows = rowsOf(topFrame);
+				const errorRow = topRows.findIndex((row) =>
+					row.includes("ERROR error: the daemon refused"),
+				);
+				expect(errorRow).toBeGreaterThan(-1);
+				expect(spanColorAt(setup, errorRow, "ERROR")).toEqual(rgb(roleColor("red")));
+				expect(spanColorAt(setup, errorRow, historyTimeOf(topRows[errorRow]))).toEqual(
+					rgb(roleColor("subtext0")),
+				);
 				// Esc closes; the error is back on the base line.
 				await closeOverlay(setup, "Message view", "the view to close");
 				expect(messageRowOf(await settle(setup))).toContain("the daemon refused");
 				// F2 closes too.
-				await openMessageView(setup, "F2", "Message view - Error");
+				await openMessageView(setup, "F2", "Message view");
 				await closeOverlay(setup, "Message view", "the view to close", "F2");
 				expect(messageRowOf(setup.captureCharFrame())).toContain("the daemon refused");
 			},
@@ -605,26 +741,30 @@ describe("the permanent Message line", () => {
 		await withApp(
 			async (setup) => {
 				await press(setup, "return", "the error", (f) => messageRowOf(f).startsWith("Error: "));
-				await openMessageView(setup, "F2", "Message view - Error");
+				await openMessageView(setup, "F2", "Message view");
 				// The view's Close owns the row's end cells, so a frame that
 				// cannot hold the hint states one whole key instead. It never
 				// states part of a key, and only falls silent where no key of
-				// this control fits at all (user stories 66 and 73).
+				// this control fits at all (user stories 66 and 73). The bar row is
+				// the one inside the frame that states the Close's key, above the
+				// frame's bottom border.
+				const barRowOf = (rows: string[]) =>
+					rows.find((row) => /Esc|F2|Close/.test(row))?.trim() ?? "";
 				for (let width = 20; width >= 1; width -= 1) {
 					setup.resize(width, 8);
 					const rows = rowsOf(await settle(setup));
 					for (const row of rows) expect(widthOf(row)).toBe(width);
-					const bar = (rows.at(-1) ?? "").trim();
-					if (width >= 12) expect(bar).toBe("Esc/F2 Close");
-					else if (width >= 3) expect(bar).toBe("Esc");
-					else if (width === 2) expect(bar).toBe("F2");
+					const bar = barRowOf(rows);
+					if (width >= 12) expect(bar).toContain("Esc/F2 Close");
+					else if (width >= 3) expect(bar).toContain("Esc");
+					else if (width === 2) expect(bar).toContain("F2");
 					else expect(bar).toBe("");
 				}
 				// The row is the surface's own again at a usable width.
 				setup.resize(30, 8);
 				await awaitFrame(
 					setup,
-					(f) => actionBarRowOf(f).includes("Esc/F2 Close"),
+					(f) => barRowOf(rowsOf(f)).includes("Esc/F2 Close"),
 					"the view's full Close hint",
 				);
 				await closeOverlay(setup, "Message view", "the view to close");
@@ -641,7 +781,7 @@ describe("the permanent Message line", () => {
 		await withApp(
 			async (setup) => {
 				await press(setup, "return", "the error", (f) => messageRowOf(f).startsWith("Error: "));
-				await openMessageView(setup, "m", "Message view - Error");
+				await openMessageView(setup, "m", "Message view");
 				await openGuide(setup, "F1", "Key guide - Ticket list");
 				await closeOverlay(setup, "Key guide", "the guide to close");
 				// The view closed with the guide: the base holds the truncated error.
@@ -658,7 +798,7 @@ describe("the permanent Message line", () => {
 		await withApp(
 			async (setup) => {
 				await press(setup, "return", "the error", (f) => messageRowOf(f).startsWith("Error: "));
-				await openMessageView(setup, "m", "Message view - Error");
+				await openMessageView(setup, "m", "Message view");
 				await openGuide(setup, "?", "Key guide - Ticket list");
 				await closeOverlay(setup, "Key guide", "the guide to close");
 				expect(messageRowOf(setup.captureCharFrame()).trim()).toBe(
@@ -814,6 +954,88 @@ describe("the permanent Message line", () => {
 		}
 	});
 
+	test("records the source health at the change, stays silent while it stands, and names the recovery", async () => {
+		const state = freshState();
+		const runner = new FakeRunner();
+		// The observation loop's own read stays hermetic, the way the
+		// notification's tests do: a readable agent list, so its only fact
+		// is the one with no state change at all.
+		runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+		const source = new FakeSource("issues", "github-issues", success([issueTicket()]));
+		try {
+			await withApp(
+				async (setup) => {
+					// The boot's own refresh settles clean.
+					source.settle(success([issueTicket()]));
+					await awaitFrame(setup, (f) => f.includes("Add a webhook retry policy"), "the ticket");
+					// A source that goes stale lands one warning entry and one
+					// notification, at the change.
+					await press(setup, "r", "the working", (f) => f.includes("refreshing 1 sources"));
+					await callsReached(source, 2);
+					source.settle(RATE_LIMITED);
+					await awaitFrame(
+						setup,
+						(f) => messageRowOf(f).includes("issues: stale - GitHub rate limit exceeded"),
+						"the stale warning",
+					);
+					const sent = notificationCalls(runner);
+					expect(sent).toHaveLength(1);
+					expect(sent[0]).toContain("issues: stale - GitHub rate limit exceeded");
+					const changed = await openMessageView(setup, "m", "Message view");
+					expect(historyEntries(changed, "WARN")).toBe(1);
+					expect(historyEntries(changed, "INFO")).toBe(0);
+					await closeOverlay(setup, "Message view", "the view to close");
+					// The next refresh fails on the same standing fact: the source
+					// stays stale, so no second entry and no second send.
+					await press(setup, "r", "the working", (f) => f.includes("refreshing 1 sources"));
+					await callsReached(source, 3);
+					source.settle(RATE_LIMITED);
+					await awaitFrame(
+						setup,
+						(f) => messageRowOf(f).includes("issues: stale - GitHub rate limit exceeded"),
+						"the standing stale warning",
+					);
+					expect(notificationCalls(runner)).toHaveLength(1);
+					const standing = await openMessageView(setup, "m", "Message view");
+					expect(historyEntries(standing, "WARN")).toBe(1);
+					expect(historyEntries(standing, "INFO")).toBe(0);
+					await closeOverlay(setup, "Message view", "the view to close");
+					// A clean refresh recovers the source: one info entry names
+					// the recovery, and the info fact sends no notification.
+					await press(setup, "r", "the working", (f) => f.includes("refreshing 1 sources"));
+					await callsReached(source, 4);
+					source.settle(success([issueTicket()]));
+					await awaitFrame(setup, (f) => messageRowOf(f).trim() === "", "the line to clear");
+					expect(notificationCalls(runner)).toHaveLength(1);
+					const healed = await openMessageView(setup, "m", "Message view");
+					expect(historyEntries(healed, "WARN")).toBe(1);
+					expect(historyEntries(healed, "INFO")).toBe(1);
+					expect(healed).toContain("issues: recovered");
+					// The rows wear the roles decision 10 names (issue #331): the
+					// WARN chip wears the warning's yellow, the INFO chip the line's
+					// text, and both datetimes the time's subtext0.
+					const rows = rowsOf(healed);
+					const warnRow = rows.findIndex((row) => row.includes("issues: stale"));
+					const infoRow = rows.findIndex((row) => row.includes("issues: recovered"));
+					expect(warnRow).toBeGreaterThan(-1);
+					expect(infoRow).toBeGreaterThan(warnRow);
+					expect(spanColorAt(setup, warnRow, "WARN")).toEqual(rgb(roleColor("yellow")));
+					expect(spanColorAt(setup, infoRow, "INFO")).toEqual(rgb(roleColor("text")));
+					for (const row of [warnRow, infoRow]) {
+						expect(spanColorAt(setup, row, historyTimeOf(rows[row]))).toEqual(
+							rgb(roleColor("subtext0")),
+						);
+					}
+				},
+				WIDTH,
+				HEIGHT,
+				{ config: issuesConfig, state, sources: [source], runner },
+			);
+		} finally {
+			state.close();
+		}
+	});
+
 	test("is silent for scheduled refreshes, and warns on a failed fetch", async () => {
 		const state = freshState();
 		const source = new FakeSource("issues", "github-issues", success([issueTicket()]));
@@ -844,6 +1066,39 @@ describe("the permanent Message line", () => {
 			);
 		} finally {
 			state.close();
+		}
+	});
+
+	// The no-color presentation of the history (issue #331, decision 10): the
+	// chip, the datetime, and the text paint no color at all, and the level
+	// still stands in its written word.
+	test("NO_COLOR paints the history rows with no color, and the words keep standing", async () => {
+		process.env.NO_COLOR = "1";
+		try {
+			await withApp(
+				async (setup) => {
+					// A refused refresh records its warning, and the view shows it.
+					await press(setup, "r", "the warning", (f) => messageRowOf(f).startsWith("Warning: "));
+					const view = await openMessageView(setup, "F2", "Message view");
+					const rows = rowsOf(view);
+					const row = rows.findIndex((row) => row.includes("no Ticket sources"));
+					expect(row).toBeGreaterThan(-1);
+					// Nothing in the row paints: the chip, the datetime, and the text
+					// all wear the terminal's own default, the renderer's, not a
+					// paint of the theme's roles.
+					expect(spanColorAt(setup, row, "WARN")).toEqual([255, 255, 255]);
+					expect(spanColorAt(setup, row, historyTimeOf(rows[row]))).toEqual([255, 255, 255]);
+					expect(spanColorAt(setup, row, "no Ticket sources exist")).toEqual([255, 255, 255]);
+				},
+				WIDTH,
+				HEIGHT,
+				{ config: BASE_CONFIG, runner: new FakeRunner(), initialTickets: SAMPLE_TICKETS },
+			);
+		} finally {
+			// The worker's environment is shared with the files that run
+			// beside this one: a NO_COLOR left behind paints their frames
+			// white for the rest of the run.
+			delete process.env.NO_COLOR;
 		}
 	});
 });

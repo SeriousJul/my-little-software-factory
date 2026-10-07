@@ -82,10 +82,12 @@ describe("theme inheritance", () => {
 		const theme = resolveTheme(config, true).theme;
 		try {
 			await withApp(async (setup) => {
+				// The fallback lands as the boot's info notice (ADR 0118): a fact
+				// the plane met on its own degraded boot, stated without a fault.
 				const frame = await awaitFrame(
 					setup,
-					(f) => f.includes("Warning:"),
-					"the fallback warning on the Message line",
+					(f) => f.includes("Info:"),
+					"the fallback notice on the Message line",
 				);
 				expect(frame).toContain(`unknown theme name "frobnicate" in herdr's config`);
 				expect(frame).toContain("using the built-in default catppuccin");
@@ -94,9 +96,10 @@ describe("theme inheritance", () => {
 				const borderRow = rows.findIndex((row) => row.includes("┌"));
 				expect(spanColorAt(setup, borderRow, "─")).toEqual([0x89, 0xb4, 0xfa]);
 				// And the Message line's severity color is the fallback theme's:
-				// a warning wears the theme's yellow, on the row above the bar.
+				// the info notice wears the theme's text ink, on the row above
+				// the bar.
 				const messageRow = rows.length - 2;
-				expect(spanColorAt(setup, messageRow, "Warning:")).toEqual(rgb(theme.roles.yellow));
+				expect(spanColorAt(setup, messageRow, "Info:")).toEqual(rgb(theme.roles.text));
 			});
 		} finally {
 			cleanup();
