@@ -63,11 +63,14 @@ queue (ADR 0108). The queue removal answers only an `open` Ticket, the case
 where the waiting row is the only thing the Ticket holds.
 
 **The queue removal is one control, not one control per section.** The
-catalogue's `queue-remove` claims the Delete key in all six base modes, reads
-"the row under the cursor waits with a Work queue item", and drops its
-`queueSectionOnly` marker and its `work-queue-list` scope, the way `queue-jump`
-already did for Enter. `ticket-close` takes the `ticketSectionOnly` marker, so
-each section's Action bar and Key guide name only the act that mode runs.
+catalogue's `queue-remove` claims the Delete key in all six base modes and reads
+"the row under the cursor waits with a Work queue item". It leaves its
+`work-queue-list` scope and its single-mode binding, the way `queue-jump`
+already did for Enter, and it takes no section marker, because the key is
+genuinely dispatched in every base section. The queue's `queue-promote` and
+`queue-demote` keep their `queueSectionOnly` marker: those keys stay inside the
+queue. `ticket-close` takes the `ticketSectionOnly` marker, so each section's
+Action bar and Key guide name only the act that mode runs.
 
 **Two act words carry the key: Close and Remove.** The bar and the guide print
 `Delete Close` or `Delete Remove`, and the guide's note states what each Remove
