@@ -20,6 +20,7 @@ import {
 	type AutomaticCandidateHoldReason,
 	type AutomaticHoldReason,
 	type AutomaticNextStepHold,
+	type AutomaticNextStepHoldReason,
 	type AutomaticRowHold,
 	type AutomaticRowHoldReason,
 	automaticAddsHold,
@@ -303,7 +304,7 @@ describe("each automatic-walk hold names itself in the record (issue #223)", () 
 	 * fact changes.
 	 */
 	test("a held Next step names its ticket, its step, and its gate (issue #232)", () => {
-		const reasons: readonly string[] = AUTOMATIC_NEXT_STEP_HOLD_REASONS;
+		const reasons: readonly AutomaticNextStepHoldReason[] = AUTOMATIC_NEXT_STEP_HOLD_REASONS;
 		expect([...reasons]).toEqual(["next-step-held"]);
 		// The line the awaiting walk stated inline before the hold joined the
 		// walks' pattern stands here, word for word: the ticket the record names,
