@@ -682,6 +682,162 @@ export function buildFixture(root: string): string {
 }
 
 /**
+ * The screen the walk drives: the cursor's row, the cursor's row index, the
+ * whole screen text, and the key write.
+ *
+ * The walk is pure over this seam, so the unit test drives it with a fake
+ * screen and a fake clock instead of a PTY: the reproduction of the load
+ * flake holds the fake screen's repaint, and the walk has to win that race
+ * on the frame, not on a sleep.
+ */
+export interface ScreenWalk {
+	/**
+	 * The row the keyboard cursor holds, read from one frame parse: the row's
+	 * index and the full text of the row under the cursor.
+	 *
+	 * The index and the text come from the same parse, so the two can never
+	 * describe different frames. The index is the walk's move predicate: a
+	 * row can repaint in place (the Starting window's spinner face ticks)
+	 * while the cursor holds it, and that repaint is not a move. The text is
+	 * the walk's match.
+	 *
+	 * A frame caught mid-redraw reports -1 and "": a section transition
+	 * leaves the box's border and the cursor mark briefly undrawn. The walk
+	 * must not read that frame as a move.
+	 */
+	cursorRow(): { index: number; text: string };
+	/** The whole screen, as parsed lines. */
+	gridText(): string;
+	/** Write input bytes, as the host terminal would. */
+	key(bytes: string): void;
+}
+
+/** The walk's frame poll, the harness's own poll interval. */
+const STEP_POLL_MS = 10;
+/**
+ * How long one press's frame wait may run before the press is read dropped.
+ *
+ * The keyboard is live once the screen settles, and a live cursor moves
+ * within a fraction of that: a press that has not moved the cursor's row
+ * by this deadline did not land, and the walk presses again. The press is
+ * not charged to the step budget, because the screen spent no row on it.
+ */
+export const PRESS_DEADLINE_MS = 1000;
+/**
+ * How long the whole walk may run before the capture fails.
+ *
+ * The deadline fails the capture with the screen as it stands, the way
+ * the harness's frame wait fails at its deadline: a screen whose cursor
+ * never moves still fails the walk, only at this deadline. The harness's
+ * frame deadline doubles in CI, where the shared runners run the suite
+ * under load, and the walk takes the same doubling: a loaded runner gets
+ * a loaded walk, not a local one.
+ */
+export const WALK_DEADLINE_MS = process.env.CI ? 20000 : 10000;
+
+/**
+ * The cursor's row once two polls a frame apart agree on it.
+ *
+ * A single frame read can catch the screen mid-redraw: a section
+ * transition leaves the box's border and the cursor mark briefly undrawn,
+ * and the read reports -1. One such read is not a move - the walk acts
+ * only on a row the next poll confirms, so a single glitch frame can
+ * neither read a move that did not happen nor hide one that did.
+ *
+ * A pair that agrees on -1 is not a stable row: a glitch window that
+ * spans two polls would hand the mid-redraw frame to the walk, and the -1
+ * index would read as a move against whatever real row stands before it -
+ * a dropped press meeting its first confirmed real row, or a real row
+ * meeting a confirmed -1. The pair is accepted only on a real row, so a
+ * screen that stands mid-redraw for the whole deadline fails at the
+ * walk's deadline, the way a screen whose cursor never moves does.
+ */
+async function stableCursorRow(
+	screen: ScreenWalk,
+	sleepFn: (ms: number) => Promise<void>,
+	now: () => number,
+	walkDeadline: number,
+	failure: () => Error,
+): Promise<{ index: number; text: string }> {
+	let previous = screen.cursorRow();
+	for (;;) {
+		if (now() >= walkDeadline) throw failure();
+		await sleepFn(STEP_POLL_MS);
+		const current = screen.cursorRow();
+		if (current.index >= 0 && current.index === previous.index) return current;
+		previous = current;
+	}
+}
+
+/**
+ * Step one row at a time until the cursor holds a row that carries the
+ * match, so the walk holds its aim across the Group headers, the blank
+ * row between Groups, and the section borders without counting rows.
+ *
+ * The walk waits on the frame, not on the clock: after each press it polls
+ * until the cursor's row moves, and fails at the walk's deadline, the way
+ * the suite's frame wait does. A fixed sleep after a press is the defect
+ * this replaces - on a loaded runner the repaint can land later than the
+ * sleep, and the next step read the frame the previous press had not yet
+ * painted, so a late repaint spent a step of the budget.
+ *
+ * The frame can also lie in the other direction: a repaint in flight
+ * leaves one frame mid-redraw (the border or the mark undrawn), and a
+ * frame one press behind the screen is a late repaint, not a standstill.
+ * The walk reads both the cursor's row index and its row text from one
+ * parse, and acts only on a row two polls confirm: a glitch frame neither
+ * reads as a move nor as the match, and a press counts as landed only when
+ * the confirmed row says the cursor moved. That is what keeps the walk's
+ * press count equal to the screen's cursor position, the invariant a
+ * stale read breaks - with it, the next key the capture presses lands on
+ * the row the frame shows, not one the screen has already crossed.
+ *
+ * A press that the screen never paints is read dropped - the boot window
+ * swallows a key the list has not yet taken - and the walk presses again
+ * without charging the step. `maxSteps` is a statement about the screen,
+ * not about time: it counts rows, every counted press having moved the
+ * cursor one row on the frame. A Group header the cursor has to cross is
+ * a row the budget says so.
+ */
+export async function stepUntilRow(
+	screen: ScreenWalk,
+	match: string,
+	keyName: string,
+	maxSteps: number,
+	sleepFn: (ms: number) => Promise<void> = sleep,
+	now: () => number = Date.now,
+): Promise<void> {
+	const walkDeadline = now() + WALK_DEADLINE_MS;
+	const failure = () =>
+		new Error(
+			`screenshots: the cursor never reached a row matching "${match}" within ${maxSteps} "${keyName}" steps\n${screen.gridText()}`,
+		);
+	const stable = () => stableCursorRow(screen, sleepFn, now, walkDeadline, failure);
+	const holdsMatch = (row: { index: number; text: string }) =>
+		row.index >= 0 && row.text.includes(match);
+	for (let steps = 0; steps < maxSteps; steps++) {
+		if (holdsMatch(await stable())) return;
+		let before = await stable();
+		screen.key(keyName);
+		let pressDeadline = now() + PRESS_DEADLINE_MS;
+		for (;;) {
+			const row = await stable();
+			if (row.index !== before.index) break;
+			if (holdsMatch(row)) return;
+			if (now() >= pressDeadline) {
+				// The press did not land: the confirmed row never moved.
+				// Press again; the row the screen has not spent is not
+				// charged to the step budget.
+				before = row;
+				screen.key(keyName);
+				pressDeadline = now() + PRESS_DEADLINE_MS;
+			}
+		}
+	}
+	if (!holdsMatch(await stable())) throw failure();
+}
+
+/**
  * Walk one PTY session through the six screens and return each as a PNG.
  *
  * The session accumulates bytes; each capture renders the stream so far into
@@ -726,36 +882,24 @@ export async function captureScreens(fixtureDir: string): Promise<Map<string, Bu
 		parseScreen(session.output(), SCREEN.cols, SCREEN.rows)
 			.map((row) => row.map((cell) => cell.char).join(""))
 			.join("\n");
-	// The row the keyboard cursor holds. Every section's list keeps its own
+	// The row the keyboard cursor holds, as one parse: the index and the
+	// text from the same frame. Every section's list keeps its own
 	// remembered cursor mark, so the mark alone does not name the keyboard's
-	// row: the keyboard's row is the mark inside the box whose border carries
-	// the section-focus mark.
-	const focusRow = (): string => {
+	// row: the keyboard's row is the mark inside the box whose border
+	// carries the section-focus mark. A frame mid-redraw shows no border or
+	// no mark, and reports -1 with no text.
+	const cursorRow = (): { index: number; text: string } => {
 		const rows = gridText().split("\n");
 		const border = rows.findIndex((line) => line.includes("─❯"));
-		if (border === -1) return "";
+		if (border === -1) return { index: -1, text: "" };
 		for (let i = border + 1; i < rows.length; i++) {
 			const line = rows[i];
 			if (line.startsWith("└")) break;
-			if (line.includes("❯")) return line.replace("❯", " ").trim();
+			if (line.includes("❯")) return { index: i, text: line.replace("❯", " ").trim() };
 		}
-		return "";
+		return { index: -1, text: "" };
 	};
-	// Step one row at a time until the cursor holds a row that carries the
-	// match, so the walk holds its aim across the Group headers, the blank
-	// row between Groups, and the section borders without counting rows.
-	const stepUntilRow = async (match: string, keyName: string, maxSteps: number): Promise<void> => {
-		for (let steps = 0; steps < maxSteps; steps++) {
-			if (focusRow().includes(match)) return;
-			key(keyName);
-			await sleep(150);
-		}
-		if (!focusRow().includes(match)) {
-			throw new Error(
-				`screenshots: the cursor never reached a row matching "${match}" within ${maxSteps} "${keyName}" steps\n${gridText()}`,
-			);
-		}
-	};
+	const screen: ScreenWalk = { cursorRow, gridText, key };
 
 	try {
 		// 1. The Main view, once the fetch lands its tickets and the observation
@@ -767,11 +911,17 @@ export async function captureScreens(fixtureDir: string): Promise<Map<string, Bu
 			30000,
 		);
 		log("main view ready");
-		await stepUntilRow("Rank tickets by priori", "j", 3);
+		// Settle before the walk's first press: the keyboard is live when the
+		// screen settles, and a press in the boot window the list has not yet
+		// taken is swallowed, not queued.
+		await session.waitForStable(200, "the main view settle", 15000);
+		// The budget counts rows: the header the cursor starts on, the two
+		// rows above the target, the target itself.
+		await stepUntilRow(screen, "Rank tickets by priori", "j", 3);
 		await capture("main-view");
 
 		// 2. The Override panel on the open ticket.
-		await stepUntilRow("Split the README into", "j", 4);
+		await stepUntilRow(screen, "Split the README into", "j", 4);
 		key("e");
 		log("pressed e for the override panel");
 		await session.waitFor((data) => data.includes("Task type"), "the override panel", 15000);
@@ -785,7 +935,7 @@ export async function captureScreens(fixtureDir: string): Promise<Map<string, Bu
 
 		// 3. The decision modal on the awaiting ticket: Enter on it is Decide,
 		// and the modal opens with the turn log as its body.
-		await stepUntilRow("Rank tickets by priori", "k", 4);
+		await stepUntilRow(screen, "Rank tickets by priori", "k", 4);
 		key("\r");
 		log("pressed Enter for the decision modal");
 		await session.waitFor((data) => data.includes("Decision: "), "the decision modal", 15000);
@@ -797,13 +947,13 @@ export async function captureScreens(fixtureDir: string): Promise<Map<string, Bu
 		// the blank row between Groups, into the Consultations section, until
 		// the detail pane shows its input.
 		log("moving into the consultations section");
-		await stepUntilRow("working", "j", 8);
+		await stepUntilRow(screen, "working", "j", 8);
 		await sleep(1200);
 		await capture("consultation");
 
 		// 5. The Live view on the in-flight ticket: step up to it, and Enter
 		// opens the agent's stream in the left box.
-		await stepUntilRow("Retry failed webhook", "k", 8);
+		await stepUntilRow(screen, "Retry failed webhook", "k", 8);
 		key("\r");
 		log("opened the live view");
 		await session.waitFor((data) => data.includes("bounded backoff"), "the live stream", 20000);
