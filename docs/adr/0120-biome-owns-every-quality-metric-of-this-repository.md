@@ -3,6 +3,10 @@
 Status: accepted
 Date: 2026-10-07
 
+Amended by ADR 0123: the generated screen font table that this record's
+`noSecrets` override names no longer exists, and that override leaves with it.
+Every other decision here stands.
+
 ## Context
 
 Issue #340 arrived as a guide for a SonarQube-like local stack: `tsc --noEmit`, ESLint with
@@ -62,7 +66,8 @@ the measured curve is 84 findings at the default 41, 15 at 45, 2 at 50, and 0 at
 setting is 50, where the rule keeps its teeth: a planted GitHub PAT, a planted AWS key id, and
 a planted random 32-character token all still fire, and the SQL strings that made the default
 useless stay silent. The two findings left are answered where they stand: an `overrides` entry
-with `includes: ["**/screen-font.ts"]` turns the rule off for the generated screen font table,
+with `includes: ["**/screen-font.ts"]` turns the rule off for the generated screen font table
+(this entry is superseded by ADR 0123, which retires that table and the entry with it),
 which the `font` script regenerates and which stays formatted and linted for every other rule,
 and one `biome-ignore lint/security/noSecrets` suppression with its reason stands at
 `test/handoff-frame.test.ts:2744`.

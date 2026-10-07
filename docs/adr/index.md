@@ -131,3 +131,4 @@ body states the context, the decision, and the consequences.
 - [ADR 0120: Biome owns every quality metric of this repository](./0120-biome-owns-every-quality-metric-of-this-repository.md)
 - [ADR 0121: The Quality baseline only shrinks, and one Quality audit reads it](./0121-the-quality-baseline-only-shrinks-and-one-audit-reads-it.md)
 - [ADR 0122: The Delete key is the plane's one destructive key](./0122-the-delete-key-is-the-planes-one-destructive-key.md)
+- [ADR 0123: The guide screenshots paint the desktop's font, weight, and colors at display scale](./0123-the-guide-screenshots-paint-the-desktops-font-weight-and-colors-at-display-scale.md)
