@@ -30,12 +30,17 @@ it cannot know about your machine left out - no ticket sources and no
 repository mappings. Everything else is on:
 
 - the three agent types `pi`, `codex`, and `claude`
-- the four workflow task types: `implement`, `review`, `rework`, and `merge`
+- the five workflow task types: `analyze`, `implement`, `review`, `rework`,
+  and `merge`
 - the three security task types, one per security feed source kind
 - the workflow's states and the transitions that move a ticket between them
-- the `consult` and `pair` Consultation types: `consult` passes your input
-  straight through, and `pair` runs a pair programming session with the agent
-  as the driver
+- the `consult`, `diagnose`, `pair`, and
+  `improve-codebase-architecture` Consultation types: `consult` passes
+  your input straight through, `diagnose` runs the bug-diagnosis loop
+  (the diagnosing-bugs skill) on the bug report you type, in a fresh
+  worktree, `pair` runs a pair programming session with the agent as the
+  driver, and `improve-codebase-architecture` runs the architecture
+  review skill on a fresh worktree, scoped to the focus you type
 
 [The key reference](../configuration/index.md#key-reference) names every key,
 its default, and what it does.

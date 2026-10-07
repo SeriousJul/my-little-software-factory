@@ -14,6 +14,9 @@
 #   - The pair Consultation type starts a pair programming session: the
 #     agent drives the code, and the operator steers the work and runs the
 #     tests.
+#   - The improve-codebase-architecture Consultation type runs the
+#     improve-codebase-architecture skill in a fresh worktree, scoped to the
+#     focus you type. Your agents need the skill installed for it.
 #
 # The plane owns the workflow labels (ADR 0027). A ticket's position is the
 # first state whose match holds on it, re-derived on every refresh. When a
@@ -158,6 +161,23 @@ You are the driver in a pair programming session. The operator is the navigator:
 ### First instruction
 
 {input}'''
+
+# The improve-codebase-architecture Consultation type: the
+# operator types a focus, and the agent runs the
+# improve-codebase-architecture skill on a fresh worktree of the default
+# branch. Your agents need the improve-codebase-architecture skill, and the
+# codebase-design, grilling, and domain-modeling skills it calls: without
+# the skill the handoff opens on a slash command the agent does not know,
+# the way the analyze type names grill-with-docs. The interview's docs
+# writes - the glossary entries and the ADRs - land on the Consultation's
+# own branch; the Consultation has no pull request, so the operator moves
+# them by hand.
+
+[consultation-types.improve-codebase-architecture]
+agent = "pi"
+environment = "worktree"
+thinking = "xhigh"
+template = "/skill:improve-codebase-architecture {input}"
 
 # --- The workflow machine (ADR 0027) --------------------------------------
 # The states of the label workflow. A state's match names the labels

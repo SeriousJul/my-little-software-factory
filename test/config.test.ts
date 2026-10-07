@@ -252,8 +252,10 @@ describe("the Default configuration", () => {
 			});
 		}
 		// One neutral Consultation type that passes the operator's input
-		// straight through, and the pair programming type on the high
-		// thinking level.
+		// straight through, the pair programming type on the high thinking
+		// level, and the skill-backed architecture review type that runs the
+		// operator's focus through the improve-codebase-architecture skill in
+		// a fresh worktree.
 		expect(config.consultationTypes).toEqual({
 			consult: { agent: "pi", environment: "worktree", template: "{input}" },
 			// The by-hand bug diagnosis (issue #330): one input slot, no model,
@@ -269,6 +271,12 @@ describe("the Default configuration", () => {
 				environment: "worktree",
 				thinking: "xhigh",
 				template: expect.stringContaining("pair programming session"),
+			},
+			"improve-codebase-architecture": {
+				agent: "pi",
+				environment: "worktree",
+				thinking: "xhigh",
+				template: expect.stringContaining("/skill:improve-codebase-architecture {input}"),
 			},
 		});
 		// No ticket sources, no repository mappings, and no state file entry:
