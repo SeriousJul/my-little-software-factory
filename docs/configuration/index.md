@@ -142,7 +142,9 @@ context-window = "--autocompact {value}"
 # turns run on, or the plane action the type runs without an agent.
 # Placeholders in a template: {repository}, {title},
 # {description}, {source-kind}, {external-key}, {source-url}, {labels},
-# {previous-message}, {review-verdict}. Any other brace pair is a startup
+# {previous-message}, {review-verdict}, and {pull-request-url}, which a type
+# that opens the pull request fills with the url of the draft the plane
+# opened at the Handoff start (ADR 0076). Any other brace pair is a startup
 # error.
 # agent, model, thinking, and context-window are the Task profile: the
 # settings this task type's handoffs start on. agent must name an
@@ -163,9 +165,12 @@ context-window = "--autocompact {value}"
 # completes - or, for the action form, when the action's run answers:
 # it writes the label facts on the ticket and its linked pull
 # request, and the machine re-derives every position from the written labels.
-# The agents never write the labels the machine writes: the one sanctioned
-# exception is the analyze type's settling agent, which applies the
-# operator-owned labels its own template names (ADR 0086).
+# The agents never write the labels the machine writes: the sanctioned
+# exceptions are the settling agents of the two operator-decides types, which
+# apply only the operator-owned labels their own templates name (ADR 0086) -
+# the analyze agent applies ready-for-agent, and spec:<number> on a locked
+# ticket, and the diagnose agent applies needs-info on the skill's honest
+# stop.
 [task-types.implement]
 agent = "pi"
 model = "anthropic/claude-sonnet-4-5"
@@ -287,6 +292,81 @@ Repository: {repository}
 
 Previous session message (empty on a first session): {previous-message}'''
 
+# The diagnose runs the bug-diagnosis loop on the ticket's own context
+# (ADR 0116): the plane opens the ticket's draft pull request at the Handoff
+# start, the agent runs the skill on the ticket's factory branch, and the
+# transition writes ready-for-review on the pull request, so the review,
+# rework, and merge machine takes over unchanged. Its operator-decides flag
+# parks its completions for the operator, so the environment stays alive
+# between the skill's checkpoints and your close, and Auto-handoff mode never
+# starts the diagnosis by itself (ADR 0117). The agents need the
+# diagnosing-bugs skill for it: without the skill the diagnose handoff opens
+# on a slash command the agent does not know.
+[task-types.diagnose]
+opens-pull-request = true
+thinking = "xhigh"
+operator-decides = true
+template = '''
+/skill:diagnosing-bugs
+
+Repository: {repository}
+
+{external-key}: {title}
+
+URL: {source-url}
+
+Pull request: {pull-request-url}
+
+Labels: {labels}
+
+Description:
+{description}
+
+### Rules
+
+1. **Ground Yourself**
+   - Read the repository's agent instructions and its domain docs (GLOSSARY.md and the ADRs in the area) before your first command.
+   - Read the ticket in full, comments included, so the report stands behind the loop.
+
+2. **Redact Every Secret**
+   - Redact every secret in anything you show: the loop's output, the debug logs, and your final message alike.
+
+3. **Build the Loop Before Any Theory**
+   - One command, already run at least once, red-capable, deterministic, fast, and runnable unattended. No red-capable command, no hypothesis.
+
+4. **Reproduce and Minimise**
+   - Reproduce the reporter's exact symptom, then minimise the repro until every remaining element is load-bearing.
+
+5. **Rank the Hypotheses**
+   - Rank three to five falsifiable hypotheses and show the list before you test any of them.
+
+6. **Instrument Against the Predictions**
+   - Test one variable at a time against the hypotheses' predictions. Tag every debug log with one prefix.
+
+7. **Regression Test Before the Fix**
+   - Write the regression test before the fix, at a seam that exercises the real bug pattern. Where no correct seam exists, state that as the finding.
+
+8. **Commit the Fix and Push**
+   - Commit the test and the fix to this branch and push: the pull request that already stands carries the commits you push.
+   - State the hypothesis that proved correct in the fix commit's message.
+
+9. **Post the Diagnosis Report**
+   - Post a diagnosis report as a comment on the pull request: the loop command with its red and green verdicts, the ranked hypotheses, the one that proved correct, and the regression seam used or the seam that does not exist.
+
+10. **Clean Up Before the Turn Ends**
+   - Remove the tagged instrumentation and the throwaway harness before the turn ends.
+
+11. **Stay Inside the Limits**
+   - Never create, merge, or edit the pull request, and never close, resolve, or withdraw the ticket: the merge closes it.
+
+12. **The Honest Stop**
+   - When no red-capable loop stands: stop, list what was tried, name what is needed from the operator, apply the needs-info label to the ticket through gh, and end the turn. No other label, ever.
+
+Previous session message (empty on a first session): {previous-message}'''
+[task-types.diagnose.transition]
+ticket-facts = []
+pull-request-facts = ["ready-for-review"]
+
 # The merge is a plane action: the plane runs it without an
 # agent and without a worktree, and its transition takes the needs-work
 # path on a blocked merge and the empty facts on a landed one.
@@ -316,6 +396,33 @@ model = "gpt-5.6-codex"
 thinking = "medium"
 context-window = 272000
 
+# The diagnose Consultation type runs the bug-diagnosis loop by hand (issue
+# #330): the operator names a Repository in the launcher and types the bug
+# report as the input. The worktree environment is the skill's own first rule
+# - a deterministic, isolated loop. An operator who needs their live checkout
+# sets the Environment in the launcher for that one start.
+[consultation-types.diagnose]
+agent = "pi"
+environment = "worktree"
+thinking = "xhigh"
+template = """/skill:diagnosing-bugs
+
+The operator's words are the bug report for this session: they stand in for a ticket, and this branch is the work surface. Your final message is the report the operator reads.
+
+### Rules
+
+1. Build the feedback loop before any theory: one command, already run at least once, red-capable, deterministic, fast, and runnable unattended. No red-capable command, no hypothesis.
+2. Reproduce the report's exact symptom, then minimise the repro until every remaining element is load-bearing.
+3. Rank three to five falsifiable hypotheses and show the list before you test any of them.
+4. Instrument against those predictions, one variable at a time. Tag every debug log with one prefix, and keep it tagged.
+5. When no red-capable loop stands, stop and name what is needed from the operator: the environment access or the captured artifact. End the turn.
+6. Write the regression test before the fix, at a seam that exercises the real bug pattern. Where no correct seam exists, state that as the finding.
+7. Commit any fix, with its test, on this branch. Never push, never open a pull request, and never touch the default branch.
+8. Remove the tagged instrumentation and the throwaway harness before the turn ends.
+9. End each turn with the loop command, its verdict, the hypothesis that proved correct, and what the operator must check. The operator closes the session.
+
+{input}"""
+
 # --- The workflow machine -----------------------------------------------------
 
 # The states a ticket can sit in. name is one word. task-type names a
@@ -339,6 +446,20 @@ task-type = "analyze"
 [states.match]
 source-kind = "github-issue"
 labels-any = ["ready-for-spec"]
+
+# The diagnosis position (ADR 0116): an open issue the repository's own
+# triage has labelled a bug. It orders after the ready-for-agent and
+# ready-for-spec states, so a ticket carrying either stronger operator label
+# rests there and is never offered a diagnosis: the state order carries the
+# precedence. The bug label is operator-owned: no transition writes it, and
+# the Repository init creates it and registers an issues feed on label:bug
+# (ADR 0115).
+[[states]]
+name = "bug"
+task-type = "diagnose"
+[states.match]
+source-kind = "github-issue"
+labels-any = ["bug"]
 
 [[states]]
 name = "needs-work"
@@ -772,14 +893,15 @@ beside `seats 0/2` is a normal start, not a breach of the cap.
 
 | Key | Required | Default | What it does |
 | --- | --- | --- | --- |
-| `template` | exactly one of `template` or `action` | - | The prompt. Placeholders: `{repository}`, `{title}`, `{description}`, `{source-kind}`, `{external-key}`, `{source-url}`, `{labels}`, `{previous-message}`, `{review-verdict}`. Any other brace pair is a startup error, so an unknown name cannot stay literal in the prompt an agent receives. `{previous-message}` is empty on a first handoff and carries the previous agent's last message on a workflow handoff. `{review-verdict}` carries the pull request's review verdict, read live from the source when the handoff renders the prompt: the newest post on the pull request's comment and review timelines that carries the review template's fixed score line, under a one-line header naming its posting timeline and post time. A template without the placeholder issues no read. When no verdict stands or the read fails, the placeholder carries the fact and the agent reads the pull request's comments itself. A verdict score that stands at or above the score-threshold of the transition that tests a score judgment fills the gates fact instead: the review passed, so the failure stands in the pull request's gates - a merge conflict or a failing CI check - and the prompt sends the agent to rebase the branch and fix what the gates report. |
+| `template` | exactly one of `template` or `action` | - | The prompt. Placeholders: `{repository}`, `{title}`, `{description}`, `{source-kind}`, `{external-key}`, `{source-url}`, `{labels}`, `{previous-message}`, `{review-verdict}`, and `{pull-request-url}`, which a type that opens the pull request fills with the url of the draft the plane opened at the Handoff start (ADR 0076). Any other brace pair is a startup error, so an unknown name cannot stay literal in the prompt an agent receives. `{previous-message}` is empty on a first handoff and carries the previous agent's last message on a workflow handoff. `{review-verdict}` carries the pull request's review verdict, read live from the source when the handoff renders the prompt: the newest post on the pull request's comment and review timelines that carries the review template's fixed score line, under a one-line header naming its posting timeline and post time. A template without the placeholder issues no read. When no verdict stands or the read fails, the placeholder carries the fact and the agent reads the pull request's comments itself. A verdict score that stands at or above the score-threshold of the transition that tests a score judgment fills the gates fact instead: the review passed, so the failure stands in the pull request's gates - a merge conflict or a failing CI check - and the prompt sends the agent to rebase the branch and fix what the gates report. |
 | `action` | exactly one of `template` or `action` | - | The plane action the type runs instead of an agent's turn: the plane starts it with no agent and no worktree, and the Handoff limit counts its attempts. The registry holds one action, `merge-pull-request`: the squash merge of the ticket's pull request. The action form takes no profile keys. |
 | `method` | no | `squash` | The merge method the `merge-pull-request` action runs with: `squash`, `merge`, or `rebase`. An omitted method takes the default. |
 | `agent` | no | `default-agent` | The Task profile's agent type: the agent a handoff of this type starts on. It must name an `[agents.*]` table. A transition's pin beats it. |
 | `model` | no | `default-model` | The Task profile's model: free text the resolved agent's model template renders, so that agent must define one. The override panel prefills it, and clearing that row leaves the model to the agent. |
 | `thinking` | no | - | The Task profile's thinking level: the level this task type's handoffs start on, and the starting value of the override panel's thinking row. It must be one of the profile agent's `thinking-values`. |
 | `context-window` | no | - | The Task profile's context window: a whole count of tokens, written as digits with no separators, that this task type's handoffs start their agent with. The profile agent must define a `context-window` template. There is no top-level default: a profile that names none leaves the room to the agent. |
-| `operator-decides` | no | `false` | The Operator-decides flag (ADR 0085, renamed by ADR 0092, extended to the starts by ADR 0117). When set, the type is yours and Auto-handoff mode neither decides its turns nor asks its starts. On the completion: the automatic rule parks every completion of the type for you ahead of its outcome checks, so the ticket rests in `awaiting`, the environment and the agent stay untouched, and your explicit close or route still runs. On the starts: no automatic add resolves on the type - the open ticket's fresh-work row, a Next step whose task type carries the flag, the restart of a missing agent, and a plane action's automatic merge all hold, and the walk falls to its next candidate. A Next step the flag holds rests the settled turn in `awaiting` and states its gate on the Message line, in the record, and on the Decision screen beside the row your key still confirms. The skip of a fresh-work or restart candidate is silent. Allowed on both forms; the shipped `analyze` type is its only user. |
+| `operator-decides` | no | `false` | The Operator-decides flag (ADR 0085, renamed by ADR 0092, extended to the starts by ADR 0117). When set, the type is yours and Auto-handoff mode neither decides its turns nor asks its starts. On the completion: the automatic rule parks every completion of the type for you ahead of its outcome checks, so the ticket rests in `awaiting`, the environment and the agent stay untouched, and your explicit close or route still runs. On the starts: no automatic add resolves on the type - the open ticket's fresh-work row, a Next step whose task type carries the flag, the restart of a missing agent, and a plane action's automatic merge all hold, and the walk falls to its next candidate. A Next step the flag holds rests the settled turn in `awaiting` and states its gate on the Message line, in the record, and on the Decision screen beside the row your key still confirms. The skip of a fresh-work or restart candidate is silent. Allowed on both forms; the shipped `analyze` and `diagnose` types are its users. |
+| `opens-pull-request` | no | `false` | The pull request open (ADR 0076): when set, at the Handoff start, before the agent's first commit, the plane pushes the ticket's factory branch and opens the pull request on it as a draft, and the template's `{pull-request-url}` placeholder carries the url of the pull request that stands. A type without the fact works the branch as before, and the live worktree refuses the open. |
 | `transition` | no | none | The transition that fires when a turn of this type completes. |
 
 **`[consultation-types.<name>]`** (one table per Consultation type).

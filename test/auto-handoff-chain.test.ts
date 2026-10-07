@@ -51,13 +51,14 @@ import {
 } from "../src/parallel.ts";
 import type { PlaneActionAggregate } from "../src/state/plane-action.ts";
 import { type FactoryState, openFactoryState } from "../src/state.ts";
-import { fireTransition } from "../src/workflow.ts";
+import { fireTransition, isCoveredByFixingPullRequest } from "../src/workflow.ts";
 import { BASE_CONFIG } from "./base-config.ts";
 import {
 	FakeRunner,
 	tabCreateJson,
 	workspaceCreateJson,
 	workspaceListJson,
+	worktreeCreateJson,
 	worktreeListJson,
 	worktreeOpenJson,
 } from "./fake-runner.ts";
@@ -260,6 +261,9 @@ interface ChainRigOptions {
 	liveSeats?: boolean;
 	/** The default Environment the rig's starts resolve to. */
 	defaultEnvironment?: EnvironmentKind;
+	/** The workflow states the rig's config carries; the chain's by default. */
+	workflowStates?: FactoryConfig["workflowStates"];
+	/** The task types the rig's config carries; the chain's by default. */ taskTypes?: FactoryConfig["taskTypes"];
 }
 
 interface Chain {
@@ -285,8 +289,15 @@ interface Chain {
 		taskType: string,
 		attemptId: string,
 	) => Promise<TransitionOutcome>;
-	/** Wait until one started handoff stands inside the held herdr call. */
-	awaitHandoffInFlight: () => Promise<void>;
+	/** Wait until `count` started handoffs stand inside the held herdr calls. */
+	awaitHandoffInFlight: (count?: number) => Promise<void>;
+	/** Let the oldest held herdr call answer, the way one herdr call finishing does. */
+	releaseHeld: () => void;
+	/**
+	 * Resolve when a start of the Ticket settles - the report stands beside the
+	 * settle, so the waiter reads the settled ledger and the freed checkout.
+	 */
+	awaitStartSettled: (identity: string) => Promise<void>;
 	/** The herdr calls the rig holds, in arrival order. */
 	heldCommands: () => string[];
 	/** The handoff asks the top-up made, in order. */
@@ -335,6 +346,8 @@ function chainRig(options: ChainRigOptions = {}): Chain {
 		...CHAIN_CONFIG,
 		maxParallelAgents: options.maxParallelAgents ?? CHAIN_CONFIG.maxParallelAgents,
 		defaultEnvironment: options.defaultEnvironment ?? CHAIN_CONFIG.defaultEnvironment,
+		...(options.workflowStates === undefined ? {} : { workflowStates: options.workflowStates }),
+		...(options.taskTypes === undefined ? {} : { taskTypes: options.taskTypes }),
 	};
 	// The app's own agent reference: the probe's list and the seat count read
 	// the same array, so the rig cannot hold a seat the count does not see.
@@ -372,6 +385,10 @@ function chainRig(options: ChainRigOptions = {}): Chain {
 	const notices: string[] = [];
 	const lines: RecordedLine[] = [];
 	const statuses: Chain["statuses"] = [];
+	// The start-settle signal: the dispatch reports a start's end through its
+	// `starting` report, after the settle ran, so the waiter reads the settled
+	// ledger and the freed checkout.
+	const settledWaiters: Array<{ identity: string; resolve: () => void }> = [];
 
 	// The dispatch the app builds, on the fake runner and the test state. The
 	// seat count reads full on purpose: the review item waits in the queue
@@ -414,7 +431,16 @@ function chainRig(options: ChainRigOptions = {}): Chain {
 		},
 		clearWorking: () => undefined,
 		refresh: () => undefined,
-		starting: () => undefined,
+		starting: (identity, active) => {
+			if (active) return;
+			for (let index = settledWaiters.length - 1; index >= 0; index -= 1) {
+				const waiter = settledWaiters[index];
+				if (waiter !== undefined && waiter.identity === identity) {
+					settledWaiters.splice(index, 1);
+					waiter.resolve();
+				}
+			}
+		},
 		log: recordLogger(lines),
 	});
 
@@ -579,10 +605,18 @@ function chainRig(options: ChainRigOptions = {}): Chain {
 		landPulls,
 		seedRunningTurn,
 		settleRunningTurnWithFire,
-		awaitHandoffInFlight: async () => {
+		awaitHandoffInFlight: async (count = 1) => {
 			if (gate === null) throw new Error("the rig holds no herdr gate");
-			await gate.waitForArrivals(1);
+			await gate.waitForArrivals(count);
 		},
+		releaseHeld: () => {
+			if (gate === null) throw new Error("the rig holds no herdr gate");
+			gate.release();
+		},
+		awaitStartSettled: (identity) =>
+			new Promise<void>((resolve) => {
+				settledWaiters.push({ identity, resolve });
+			}),
 		heldCommands: () => gate?.heldCommands() ?? [],
 		handoffAsks,
 		planeAsks,
@@ -1179,6 +1213,397 @@ describe("the pair of one cycle shares its worktree (ADR 0112)", () => {
 			// created, fetched, or built from the Worktree base.
 			expect(commands.find((command) => command.includes("factory/12-"))).toBeUndefined();
 			expect(commands.find((command) => command.includes("worktree create"))).toBeUndefined();
+			state.close();
+		},
+	);
+});
+
+/**
+ * The bug position's machine (issue #330, ADR 0116).
+ *
+ * The acceptance the ADR's brake claim carries, as one unattended run on the
+ * chain's rig: an issue the source labels `bug` and no stronger label claims
+ * stands on the diagnosis position, the open walk offers the `diagnose` type,
+ * the Handoff's start opens the draft pull request on the issue's factory
+ * branch before the Agent stands, and the settled turn's Transition publishes
+ * the draft and writes `ready-for-review` on it. The Operator-decides brake
+ * parks the turn for the operator, the operator's close re-derives the issue
+ * to open, and from there the issue rests behind its Fixing pull request -
+ * the list rule's coverage withholds it from the pile - while the pull
+ * request, on the label the fire wrote, runs the review machine in the
+ * worktree the diagnosis left, the pair's shared worktree (ADR 0112).
+ *
+ * Every hop runs through the real modules, the way the chain's cases do: the
+ * observation cycle and its walks, the dispatch's claim and pickup, the real
+ * start with its worktree build and its pull request open, and the transition
+ * fire with its publish and its label writes. The doubles are the suite's
+ * standing ones, and the Agent start is the hop the rig holds back, the way
+ * the chain holds it.
+ */
+describe("the bug position runs the diagnosis machine (issue #330, ADR 0116)", () => {
+	/** The machine the ADR gates on the source's own type label. */
+	const BUG_STATES: FactoryConfig["workflowStates"] = [
+		{
+			name: "bug",
+			taskType: "diagnose",
+			match: { sourceKind: "github-issue", labelsAny: ["bug"] },
+		},
+		{
+			name: "ready-for-review",
+			taskType: "review",
+			match: { sourceKind: "github-pull-request", labelsAny: ["ready-for-review"] },
+		},
+	];
+	const BUG_TYPES: FactoryConfig["taskTypes"] = {
+		diagnose: {
+			template:
+				"/skill:diagnosing-bugs\n\nRepository: {repository}\n\n{external-key}: {title}\n\n" +
+				"URL: {source-url}\n\nPull request: {pull-request-url}\n\nLabels: {labels}\n\n" +
+				"Description:\n{description}\n\n" +
+				"Previous session message (empty on a first session): {previous-message}",
+			thinking: "xhigh",
+			operatorDecides: true,
+			opensPullRequest: true,
+			transition: { ticketFacts: [], pullRequestFacts: ["ready-for-review"] },
+		},
+		review: { template: "review" },
+	};
+	/** The direct head-branch read, in the exact argv the open and the fire issue. */
+	const OWN_DRAFT_READ_ARGS = [
+		"api",
+		"--hostname",
+		"github.com",
+		// The read's path carries the repository's display name, the way the
+		// source builds it; the gh commands take the repository's identity.
+		`repos/acme/factory/pulls?state=open&head=acme%3Afactory%2F5-persist-source-facts`,
+	];
+	/** The draft the plane opened, as the direct read answers it. */
+	const OWN_DRAFT_RECORD = {
+		number: 12,
+		state: "open",
+		draft: true,
+		html_url: "https://github.com/acme/factory/pull/12",
+		head: { ref: ISSUE_FACTORY_BRANCH },
+		base: { ref: "main" },
+		labels: [],
+	};
+	/** The body the plane writes on the open, closing the issue. */
+	const OPEN_BODY =
+		"Closes #5\n\nhttps://github.com/acme/factory/issues/5\n\nKeep state independent from GitHub.";
+
+	test(
+		"a bug-labeled issue offers diagnose, the Handoff opens the draft pull request, " +
+			"the settled turn writes ready-for-review, the issue rests behind its Fixing " +
+			"pull request, and the pull request runs the review machine",
+		async () => {
+			const chain = chainRig({
+				liveSeats: true,
+				defaultEnvironment: "worktree",
+				workflowStates: BUG_STATES,
+				taskTypes: BUG_TYPES,
+			});
+			const { state, runner, coordinator } = chain;
+			const checkout = chain.checkout;
+			if (checkout === null) throw new Error("the live rig holds no checkout");
+
+			// One open issue the source labels `bug`, no pull request standing yet:
+			// the position the machine gates on the source's own type label.
+			state.sourceFact.applyFetch(issuesSource, {
+				status: "success",
+				fetchedAt: "2026-08-31T10:00:00Z",
+				tickets: [issueTicket(["bug"])],
+			});
+			state.sourceFact.applyFetch(pullsSource, {
+				status: "success",
+				fetchedAt: "2026-08-31T10:00:00Z",
+				tickets: [],
+			});
+
+			// The start's environment and the pull request open, on the issue's
+			// factory branch, fresh on both copies: the base off origin's default
+			// branch, the hold commit on a branch the remote does not carry, the
+			// push, and the draft the open creates.
+			runner.set("git", ["-C", checkout, "symbolic-ref", "refs/remotes/origin/HEAD"], {
+				stdout: "refs/remotes/origin/main\n",
+			});
+			runner.set(
+				"git",
+				["-C", checkout, "rev-parse", ISSUE_FACTORY_BRANCH, `${ISSUE_FACTORY_BRANCH}^{tree}`],
+				{ stdout: "tip-sha\ntree-sha\n" },
+			);
+			runner.set(
+				"git",
+				[
+					"-C",
+					checkout,
+					"commit-tree",
+					"tree-sha",
+					"-p",
+					"tip-sha",
+					"-m",
+					"factory: hold the branch for the pull request",
+				],
+				{ stdout: "hold-sha\n" },
+			);
+			runner.set(
+				"git",
+				["-C", checkout, "update-ref", `refs/heads/${ISSUE_FACTORY_BRANCH}`, "hold-sha"],
+				{ code: 0 },
+			);
+			runner.set(
+				"herdr",
+				[
+					"worktree",
+					"create",
+					"--cwd",
+					checkout,
+					"--branch",
+					ISSUE_FACTORY_BRANCH,
+					"--base",
+					"origin/main",
+					"--no-focus",
+				],
+				{ stdout: worktreeCreateJson("ws-diag", "pane-diag") },
+			);
+			// The one direct read, twice: the start's open finds no pull request
+			// yet, and the fire's publish read finds the draft it created.
+			runner.setSequence("gh", OWN_DRAFT_READ_ARGS, [
+				{ stdout: "[]" },
+				{ stdout: JSON.stringify([OWN_DRAFT_RECORD]) },
+			]);
+			runner.set(
+				"gh",
+				[
+					"pr",
+					"create",
+					"--repo",
+					repoIdentity,
+					"--head",
+					ISSUE_FACTORY_BRANCH,
+					"--draft",
+					"--title",
+					"Persist source facts",
+					"--body",
+					OPEN_BODY,
+				],
+				{ stdout: "https://github.com/acme/factory/pull/12\n" },
+			);
+			// The fire's publish: the work test of the head against the base, the
+			// ready mark of the draft, and the label write on it.
+			runner.set("git", ["-C", checkout, "fetch", "origin", ISSUE_FACTORY_BRANCH, "main"], {
+				code: 0,
+			});
+			runner.set(
+				"git",
+				["-C", checkout, "diff", "--quiet", "origin/main", `origin/${ISSUE_FACTORY_BRANCH}`],
+				{ code: 1 },
+			);
+			runner.set("gh", ["pr", "ready", "12", "--repo", repoIdentity], { code: 0 });
+			runner.set(
+				"gh",
+				["pr", "edit", "#12", "--repo", repoIdentity, "--add-label", "ready-for-review"],
+				{
+					code: 0,
+				},
+			);
+
+			// Cycle 1: the bug position offers the diagnosis, and the ask takes
+			// its row in the Work queue.
+			await coordinator.tick();
+			expect(chain.handoffAsks).toEqual([
+				expect.objectContaining({
+					origin: "open",
+					automatic: true,
+					ticketIdentity: issueIdentity,
+					choice: expect.objectContaining({
+						taskType: "diagnose",
+						environment: "worktree",
+						thinking: "xhigh",
+					}),
+				}),
+			]);
+			expect(state.workQueue.items()).toEqual([
+				expect.objectContaining({ kind: "handoff", origin: "open", ticketIdentity: issueIdentity }),
+			]);
+
+			// Cycle 2: the pickup takes the row and runs the start: the worktree
+			// stands on the factory branch, the branch is pushed with its hold
+			// commit, the Handoff opens the draft pull request, and the gate
+			// holds the Agent start behind it.
+			await coordinator.tick();
+			await chain.awaitHandoffInFlight();
+			expect(state.handoff.openAttemptTickets()).toEqual([issueIdentity]);
+			expect(chain.heldCommands()).toEqual([
+				expect.stringContaining(
+					`herdr agent start ${agentNameFor({
+						identity: issueIdentity,
+						title: "Persist source facts",
+					})} --kind pi --pane pane-diag -- --thinking xhigh`,
+				),
+			]);
+			const startCommands = runner.commands();
+			expect(startCommands).toContain(`git -C ${checkout} push origin ${ISSUE_FACTORY_BRANCH}`);
+			expect(
+				startCommands.some((command) =>
+					command.startsWith(
+						`gh pr create --repo ${repoIdentity} --head ${ISSUE_FACTORY_BRANCH} --draft --title Persist source facts --body Closes #5`,
+					),
+				),
+			).toBe(true);
+
+			// The gate lets the start through: the agent stands, the prompt
+			// lands, the attempt settles agent-started, and the start lets the
+			// shared checkout go (ADR 0109), the way the diagnosis's end does on
+			// a real run.
+			const settled = chain.awaitStartSettled(issueIdentity);
+			chain.releaseHeld();
+			await settled;
+			expect(state.handoff.openAttemptTickets()).toEqual([]);
+			expect(state.handoff.latestHandoff(issueIdentity)).toMatchObject({
+				paneId: "pane-diag",
+				tabId: "tab-ws-diag",
+				workspaceId: "ws-diag",
+			});
+			// The agent works: its turn stands in the probe the way a started
+			// Agent does.
+			chain.setAgents([
+				{
+					paneId: "pane-diag",
+					tabId: "tab-ws-diag",
+					workspaceId: "ws-diag",
+					sessionId: "",
+					agent: "pi",
+					status: "working",
+				},
+			]);
+
+			// The diagnosis turn settles: the fire reaches the ticket's own
+			// draft through the direct head-branch read, because a draft the
+			// machine has not labeled never stands in the ticket list. The
+			// refresh that lands the published pull request stands behind the
+			// publish, the way the source's next refresh does.
+			const settledHandoff = state.handoff.latestHandoff(issueIdentity);
+			if (settledHandoff === null) throw new Error("the diagnosis handoff never settled");
+			const attemptId = settledHandoff.handoffId;
+			chain.landPulls(pullTicketWithHead());
+			const outcome = await chain.settleRunningTurnWithFire(issueIdentity, "diagnose", attemptId);
+			expect(outcome).toMatchObject({
+				fired: true,
+				writeFailure: "",
+				pullRequestWrite: { added: ["ready-for-review"], removed: [] },
+				positionTaskType: "review",
+				positionTicketIdentity: pullIdentity,
+			});
+			expect(runner.commands()).toContain(`gh pr ready 12 --repo ${repoIdentity}`);
+			expect(runner.commands()).toContain(
+				`gh pr edit #12 --repo ${repoIdentity} --add-label ready-for-review`,
+			);
+			// The Operator-decides brake (ADR 0085): the settled turn rests in
+			// awaiting, and the machine decides nothing on it.
+			expect(state.ticketWorkCycle.ticketState(issueIdentity)).toBe("awaiting");
+
+			// The source's next refresh overwrites the label the fire wrote, and
+			// the review start of the pair works the branch the pull request
+			// holds in the worktree the diagnosis left (ADR 0112): the branch
+			// stands in the checkout, and the open finds the worktree in its
+			// workspace, where a fresh tab lands.
+			chain.landPulls(pullTicketWithHead(["ready-for-review"]));
+			const implWorktreePath = "/worktrees/factory-5-persist-source-facts";
+			runner.set("git", ["-C", checkout, "branch", "--list", ISSUE_FACTORY_BRANCH], {
+				stdout: `  ${ISSUE_FACTORY_BRANCH}\n`,
+			});
+			runner.set(
+				"herdr",
+				["worktree", "open", "--cwd", checkout, "--branch", ISSUE_FACTORY_BRANCH, "--no-focus"],
+				{
+					stdout: worktreeOpenJson("ws-diag", "pane-diag", {
+						alreadyOpen: true,
+						worktreePath: implWorktreePath,
+					}),
+				},
+			);
+			runner.set(
+				"herdr",
+				["tab", "create", "--workspace", "ws-diag", "--cwd", implWorktreePath, "--no-focus"],
+				{ stdout: tabCreateJson("pane-review", "tab-review") },
+			);
+
+			// Cycle 3: the parked turn stays parked, and the open walk asks the
+			// review on the pull request the diagnosis published.
+			await coordinator.tick();
+			expect(state.ticketWorkCycle.lastCompletion(issueIdentity)?.decision).toBe(null);
+			expect(chain.handoffAsks).toEqual([
+				expect.objectContaining({ origin: "open", ticketIdentity: issueIdentity }),
+				expect.objectContaining({
+					origin: "open",
+					automatic: true,
+					ticketIdentity: pullIdentity,
+					choice: expect.objectContaining({ taskType: "review", environment: "worktree" }),
+				}),
+			]);
+			expect(state.workQueue.items()).toEqual([
+				expect.objectContaining({ kind: "handoff", origin: "open", ticketIdentity: pullIdentity }),
+			]);
+
+			// The operator's close is the gate out of the parked turn (ADR 0085),
+			// and the issue re-derives to open behind the pull request that fixes
+			// it: the two brakes that keep it off the pile stand, coverage and
+			// the Same-type hold.
+			expect(
+				state.ticketWorkCycle.applyCompletionDecision({
+					ticketIdentity: issueIdentity,
+					handoffId: attemptId,
+					decision: "closed",
+					decidedAt: "2026-08-31T11:05:00.000Z",
+				}),
+			).toBe(true);
+			expect(state.ticketWorkCycle.ticketState(issueIdentity)).toBe("open");
+			const projection = state.ticketWorkCycle.projectedTickets(
+				CHAIN_CONFIG.workflowStates,
+				CHAIN_CONFIG.defaultTaskType,
+			);
+			const issueRow = projection.find((row) => row.identity === issueIdentity);
+			if (issueRow === undefined) throw new Error("the issue left the projection");
+			expect(isCoveredByFixingPullRequest(projection, issueRow)).toBe(true);
+			expect(state.ticketWorkCycle.sameTypeHoldActive(issueIdentity, "diagnose")).toBe(true);
+
+			// Cycle 4: the pickup takes the review's row, and the start works
+			// the branch the pull request holds in the worktree the diagnosis
+			// left. The open walk asks nothing new: the issue is covered by
+			// its Fixing pull request and the Same-type hold stands, and the
+			// pull request's own row stands behind its in-flight attempt.
+			await coordinator.tick();
+			await chain.awaitHandoffInFlight(2);
+			expect(state.handoff.openAttemptTickets()).toEqual([pullIdentity]);
+			expect(chain.heldCommands()).toEqual([
+				expect.stringContaining(
+					`herdr agent start ${agentNameFor({ identity: issueIdentity, title: "Persist source facts" })}`,
+				),
+				expect.stringContaining(
+					`herdr agent start ${agentNameFor({
+						identity: pullIdentity,
+						title: "Persist source facts in state",
+					})} --kind pi --pane pane-review`,
+				),
+			]);
+			const reviewCommands = runner.commands();
+			expect(reviewCommands).toContain(
+				`herdr worktree open --cwd ${checkout} --branch ${ISSUE_FACTORY_BRANCH} --no-focus`,
+			);
+			expect(reviewCommands).toContain(
+				`herdr tab create --workspace ws-diag --cwd ${implWorktreePath} --no-focus`,
+			);
+			// The pair shares the worktree (ADR 0112): the pull request ticket's
+			// numbered branch is never named, and nothing is built from the
+			// Worktree base for it.
+			expect(reviewCommands.find((command) => command.includes("factory/12-"))).toBeUndefined();
+			// The issue never re-enters the pile: the walk asked nothing more.
+			expect(chain.handoffAsks).toHaveLength(2);
+			// The review's row stands in the queue until its start settles, the
+			// way the chain's held starts keep theirs.
+			expect(state.workQueue.items()).toEqual([
+				expect.objectContaining({ kind: "handoff", origin: "open", ticketIdentity: pullIdentity }),
+			]);
 			state.close();
 		},
 	);

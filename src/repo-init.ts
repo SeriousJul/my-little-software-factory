@@ -79,17 +79,20 @@ export interface LabelPaletteEntry {
 
 /**
  * The fixed label palette (ADR 0075): one known color and description per
- * canonical triage label and per the scoping label the shipped machine gates
- * specifications on. A label the act creates that the palette does not name -
- * a machine label a transition writes, or a scoping label of the operator's own
- * machine - takes the default, so a new label never leaves the act without a
- * color.
+ * canonical triage label and per the scoping labels the shipped machine gates
+ * its positions on (ADR 0116). A label the act creates that the palette does
+ * not name - a machine label a transition writes, or a scoping label of the
+ * operator's own machine - takes the default, so a new label never leaves the
+ * act without a color.
  */
 export const LABEL_PALETTE: Readonly<Record<string, LabelPaletteEntry>> = {
 	"needs-triage": { color: "ffd60a", description: "Needs triage" },
 	"needs-info": { color: "c2e0c6", description: "Needs information" },
 	"ready-for-agent": { color: "0e8a16", description: "Ready for an agent" },
 	"ready-for-spec": { color: "006b75", description: "Ready for specification" },
+	// GitHub's own spelling of its bug label: the act leaves an existing bug
+	// label looking as the repository's owner made it (ADR 0116).
+	bug: { color: "d73a4a", description: "Something isn't working" },
 	"ready-for-human": { color: "5319e7", description: "Ready for a human" },
 	wontfix: { color: "e99695", description: "Will not fix" },
 };

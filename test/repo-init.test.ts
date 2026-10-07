@@ -134,6 +134,11 @@ describe("the Repository init generator (ADR 0075)", () => {
 		// repository's ready-for-spec label reads the same in every repository.
 		expect(labelColor("ready-for-spec")).toBe("006b75");
 		expect(labelDescription("ready-for-spec")).toBe("Ready for specification");
+		// The shipped machine's diagnosis gate takes GitHub's own spelling of
+		// its bug label, so the act leaves an existing label looking as the
+		// repository's owner made it (ADR 0116).
+		expect(labelColor("bug")).toBe("d73a4a");
+		expect(labelDescription("bug")).toBe("Something isn't working");
 	});
 
 	test("every convention file is non-empty, deterministic, and owns the three paths", () => {
