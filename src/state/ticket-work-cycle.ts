@@ -507,11 +507,30 @@ export class TicketWorkCycleModule implements TicketWorkCycleAggregate {
 	dispatchPauseActive(): boolean {
 		return dispatchPauseHolds(this.heldFailureTrace(), this.newestCompletedTrace());
 	}
-	/** The newest trace whose turn settled `failed` and owes its decision. */
+	/**
+	 * The newest Held turn that settled `failed` (GLOSSARY.md, ADR 0016): an
+	 * undecided `failed` trace that still stands as the decision the operator
+	 * owes - the Ticket rests `awaiting` on the cycle the trace belongs to.
+	 *
+	 * The two guards are what keep the pause releasable (issue #338). An Agent
+	 * that reports working again reopens its turn (ADR 0016): the row leaves
+	 * `awaiting` for `running`, and its `held` badge, its `held` count, and its
+	 * Decision screen leave with the state, so no surface can land a decision on
+	 * that trace until the Agent settles again. A cycle the operator closes
+	 * (ADR 0031) leaves the pending trace behind in the closed cycle, where no
+	 * surface offers it one either. The pause holds every automatic start, and a
+	 * `completed` settle is the only release besides the operator's decision, so
+	 * a pause that read a trace neither of them can answer never releases: the
+	 * factory stops on a fact the operator cannot see and cannot decide.
+	 */
 	private heldFailureTrace(): CompletionTraceOrder | null {
 		const row = this.db
 			.prepare(
-				"SELECT completed_at, rowid FROM completion_traces WHERE cause = 'failed' AND decision IS NULL ORDER BY completed_at DESC, rowid DESC LIMIT 1",
+				`SELECT t.completed_at, t.rowid FROM completion_traces t
+				 JOIN tickets k ON k.identity = t.ticket_identity
+				 WHERE t.cause = 'failed' AND t.decision IS NULL
+				   AND k.state = 'awaiting' AND k.work_cycle = t.work_cycle
+				 ORDER BY t.completed_at DESC, t.rowid DESC LIMIT 1`,
 			)
 			.get() as { completed_at: string; rowid: number } | null;
 		return row == null ? null : { completedAt: row.completed_at, rowId: row.rowid };

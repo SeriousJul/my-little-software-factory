@@ -4343,6 +4343,28 @@ describe("the held turn and the Dispatch pause", () => {
 		state.close();
 	});
 
+	test("a failed turn whose Agent works again frees the top-up's add", async () => {
+		const { state, intents, coordinator } = rig({ autoOn: true, agents: [] });
+		state.sourceFact.applyFetch(source, success([fetched(), fetched("github:github.com:I_6")]));
+		// The failed settle arms the pause, and the fresh open ticket is held out.
+		const attempt = settleForCause(state, "github:github.com:I_5", "review", "failed");
+		await coordinator.tick();
+		expect(intents).toHaveLength(0);
+		// The Agent reports working again: the turn reopens (ADR 0016), the row
+		// leaves `awaiting` for `running`, and the `held` badge and the decision
+		// surface leave with the state. No Held turn stands, and the pause's only
+		// other release - a `completed` settle - is the very start the pause holds.
+		// The factory keeps working while that Agent works.
+		expect(state.ticketWorkCycle.reopenTurn("github:github.com:I_5", attempt)).toBe(true);
+		await coordinator.tick();
+		expect(
+			intents.some(
+				(intent) => intent.origin === "open" && intent.ticketIdentity === "github:github.com:I_6",
+			),
+		).toBe(true);
+		state.close();
+	});
+
 	test("a completed turn after the held failure ends the pause and frees dispatch", async () => {
 		const { state, intents, coordinator } = rig({ autoOn: true, agents: [] });
 		state.sourceFact.applyFetch(source, success([fetched(), fetched("github:github.com:I_6")]));
