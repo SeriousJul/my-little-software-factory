@@ -23,14 +23,15 @@
  * operator their comments, even a line the scan never looks at in a table the
  * plane never edits.
  *
- * One limit sits inside that check rather than under it, stated so the next
- * contributor does not read "a source block with no name" as every unread name.
- * `sourceNameOf` answers what the scan makes of the line rather than refusing an
- * unread one, and for a `name = """` line that answer is a single quote
- * character. The plane then does not recognise the operator's block and appends
- * its own copy of that source beside it: issue #234 tracks that defect, the
- * source-name records in `test/config-write.test.ts` measure what it costs, and
- * `docs/configuration/index.md` states it to the operator.
+ * A `[[sources]]` block names itself only through a `name` line the scan can
+ * read, and a `name` line whose value runs past the end of its line - a
+ * multiline string opened on it - names no block. The edit beside such a block
+ * is refused, and the file takes the named rewrite the other unread shapes
+ * take (issue #234). A multiline string name that closes on its own line is
+ * decoded as the value it says, and the block it names stands byte for byte the
+ * way every block the scan names does. The source-name records in
+ * `test/config-write.test.ts` measure both sides, and
+ * `docs/configuration/index.md` states them to the operator.
  *
  * Inside the two regions the plane's own copy is what stands. A `[repos]` key
  * the plane holds is written from that copy, so an operator who re-points that
@@ -470,11 +471,23 @@ function emptySourcesKeyLine(scanned: ScannedLine[]): number {
 	return -1;
 }
 
-/** The `name` of the source a `[[sources]]` region holds, or null when it names none. */
+/**
+ * The `name` of the source a `[[sources]]` region holds, or null when it names
+ * none.
+ *
+ * A line that stands inside an operator's multiline string is prose, not a
+ * `name` line, and a `name` line whose value runs past the end of its line - a
+ * multiline string opened on it - is a line the scan cannot name (issue #234).
+ * Both leave the block unnamed, so the caller refuses the edit beside it the
+ * way it refuses a block with no `name` at all. A multiline string that closes
+ * on its own line is named by the value it says.
+ */
 function sourceNameOf(scanned: ScannedLine[], region: Region): string | null {
 	for (let i = region.start + 1; i < region.end; i++) {
 		if (scanned[i].header !== null) break;
+		if (scanned[i].startsInString) continue;
 		if (assignmentKey(scanned[i].body) !== "name") continue;
+		if (valueRunsPastLine(scanned[i].body)) return null;
 		const value = assignmentValue(scanned[i].body);
 		return value === null ? "" : value;
 	}
@@ -714,32 +727,47 @@ function trailingComment(line: ScannedLine): string | null {
 }
 
 function unquote(text: string): string | null {
+	// A multiline string form that closes on its own line: the delimiters are the
+	// triple quotes, and the content decodes the way a basic string's does.
+	// A line whose value opens one and runs past the end of the line never
+	// reaches this, because its caller has already refused the line.
+	if (text.startsWith('"""') && text.endsWith('"""') && text.length >= 6) {
+		return decodeBasicString(text.slice(3, -3));
+	}
+	if (text.startsWith("'''") && text.endsWith("'''") && text.length >= 6) {
+		return text.slice(3, -3);
+	}
 	if (text.startsWith('"') && text.endsWith('"') && text.length >= 2) {
-		let out = "";
-		for (let i = 1; i < text.length - 1; i++) {
-			const ch = text[i];
-			if (ch !== "\\") {
-				out += ch;
-				continue;
-			}
-			const next = text[i + 1];
-			if (next === undefined) return null;
-			if (next === "n") out += "\n";
-			else if (next === "t") out += "\t";
-			else if (next === "r") out += "\r";
-			else if (next === "u") {
-				const hex = text.slice(i + 2, i + 6);
-				if (!/^[0-9a-fA-F]{4}$/.test(hex)) return null;
-				out += String.fromCodePoint(Number.parseInt(hex, 16));
-				i += 4;
-			} else out += next;
-			i += 1;
-		}
-		return out;
+		return decodeBasicString(text.slice(1, -1));
 	}
 	if (text.startsWith("'") && text.endsWith("'") && text.length >= 2) return text.slice(1, -1);
 	if (/^[A-Za-z0-9_.-]+$/u.test(text)) return text;
 	return null;
+}
+
+/** The content of a basic string with its escapes decoded, or null on a bad escape. */
+function decodeBasicString(content: string): string | null {
+	let out = "";
+	for (let i = 0; i < content.length; i++) {
+		const ch = content[i];
+		if (ch !== "\\") {
+			out += ch;
+			continue;
+		}
+		const next = content[i + 1];
+		if (next === undefined) return null;
+		if (next === "n") out += "\n";
+		else if (next === "t") out += "\t";
+		else if (next === "r") out += "\r";
+		else if (next === "u") {
+			const hex = content.slice(i + 2, i + 6);
+			if (!/^[0-9a-fA-F]{4}$/.test(hex)) return null;
+			out += String.fromCodePoint(Number.parseInt(hex, 16));
+			i += 4;
+		} else out += next;
+		i += 1;
+	}
+	return out;
 }
 
 /** A key in the form the plane writes it: quoted when it is not a bare key. */

@@ -1122,15 +1122,17 @@ plane's own serializer writes LF, so a file whose lines end CRLF loses them with
 the comments - and every byte the plane's own serializer does not write go with
 them.
 
-One shape takes no rewrite and still costs you, and it is a shape the loader
-accepts: a `[[sources]]` block whose `name` you wrote as a multiline string. The
-plane reads that `name` as a single quote character instead of refusing the
-block, so it does not recognise the block as one it holds, and the next
-write-back appends the plane's own copy of that source at the end of the file.
-That write keeps your comments, and its Message line says only what it wrote.
-The write after it rewrites the whole file, and your comments do not survive
-that one. [Issue #234](https://github.com/SeriousJul/my-little-software-factory/issues/234)
-tracks it; until it is settled, write a source's `name` on one line.
+One shape the loader accepts still takes the rewrite: a `[[sources]]` block
+whose `name` you wrote as a multiline string that runs past the end of its line,
+a `name = """` opened on the line. The scan reads no value that spans lines, so
+it cannot name the block, and an edit beside a block it cannot name is refused
+the way a block with no `name` is refused. Every write-back over that file takes
+the named rewrite, and your comments do not survive it. A multiline string name
+that closes on its own line is read as the value it says, and its block stands
+where you wrote it. Write a source's `name` on one line. The defect this shape
+used to cost - a second copy of your source written beside your own block - is
+the one [issue #234](https://github.com/SeriousJul/my-little-software-factory/issues/234)
+filed.
 
 The shipped defaults define the three agent types `pi`, `codex`, and
 `claude`, the five task types `analyze`, `implement`, `review`, `rework`,
