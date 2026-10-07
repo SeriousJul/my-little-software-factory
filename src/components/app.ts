@@ -996,9 +996,16 @@ export function App({
 	// The Ticket sources that are stale right now, in the order the sources
 	// list holds: the fact the shared Message module turns into the line and
 	// the source health's own Fault at the change (ADR 0118 and ADR 0119).
-	const staleSourceFacts = healths
-		.filter((health) => health.health === "stale")
-		.map((health) => ({ name: health.name, error: health.error }));
+	// Memoized on the healths: the module's transition effect compares the
+	// facts it receives, and it should receive the same reference while the
+	// set stands rather than a fresh array on every render.
+	const staleSourceFacts = useMemo(
+		() =>
+			healths
+				.filter((health) => health.health === "stale")
+				.map((health) => ({ name: health.name, error: health.error })),
+		[healths],
+	);
 	// The Theme the control plane paints in, resolved once for the run: the
 	// herdr theme when the app runs inside herdr, the standalone dark theme
 	// otherwise (ADR 0024). A fallback lands on the Message line and the

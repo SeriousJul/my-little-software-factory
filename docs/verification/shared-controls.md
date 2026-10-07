@@ -1562,8 +1562,12 @@ same fact - and the view holds the run's record: oldest first, opened pinned
 to the newest entry, entries appended while it stands, the scroll clamped to
 the record's rows, and the range readout naming the window. The row's cells
 stand as decision 10 states them: the nineteen-cell datetime, the five-cell
-chip, the text wrapped to its column, and the chips wearing `text`, `yellow`,
-and `red` beside the time's `subtext0`. The overflow's gutter is painted, not
+chip, the text wrapped to its column, and the cells wear their roles on the
+frame the view draws - the chips in `text`, `yellow`, and `red`, the datetime
+in `subtext0` - measured in `test/message-line.test.ts`. The no-color
+presentation of the rows is measured the same way, in the same file: `NO_COLOR`
+set, the view's row paints no color at all on chip, time, or text, and every
+level keeps its written word. The overflow's gutter is painted, not
 reserved: every row of the window wears the track, and the thumb stands on
 the rows the position covers, measured from the frame the view draws in
 `test/message-line.test.ts`, the frame's arithmetic the test states. The
@@ -1581,9 +1585,11 @@ it: the line-only writers - the key answers, the control results, and the
 covered queued-start removal the covering gate takes - send nothing, and the
 Fault writers send one notification per standing fact, in
 `test/desktop-notification.test.ts` and the dispatch suites it crosses. The
-gallery holds the view's history state in its `message-history` example and
-the same cells on the narrow frame in its `narrow` example, and
-`test/shared-gallery.test.ts` renders both.
+gallery holds the view's history state in its `message-history` example, the
+same cells on the narrow frame in its `narrow` example, and a history row of
+the no-color presentation in its `no-color` example, and
+`test/shared-gallery.test.ts` measures that row to paint no color on chip,
+time, or text.
 
 ### The categorization pass over the write sites
 

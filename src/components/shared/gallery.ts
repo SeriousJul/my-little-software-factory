@@ -2740,48 +2740,97 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 	{
 		id: "no-color",
 		state: "the no-color presentation: the same controls, painted with no color",
-		render: (columns, holds, inputActive, wiring) => [
-			createElement(TextField, {
-				key: "no-color-model",
-				label: "Model",
-				value: "openai/gpt-5.1",
-				focused: holds === "no-color-model",
-				inputActive,
-				width: columns.valueWidth,
-				labelWidth: columns.labelWidth,
-				ink: NO_COLOR_INK,
-				...(holds === "no-color-model"
-					? { fieldRef: wiring.fieldRef, onValueChange: wiring.report }
-					: {}),
-			}),
-			createElement(ChoiceRow, {
-				key: "no-color-repository",
-				label: "Repository",
-				value: "my-little-software-factory",
-				focused: holds === "no-color-repository",
-				width: columns.valueWidth,
-				labelWidth: columns.labelWidth,
-				ink: NO_COLOR_INK,
-			}),
-			// The spinner face in the no-color ink: the written word stands,
-			// and the renderer's default shows through where the color would be.
-			createElement(Spinner, {
-				key: "no-color-starting",
-				word: "starting",
-				width: 12,
-				ink: NO_COLOR_INK,
-			}),
-			createElement(
-				"box",
-				{ key: "no-color-actions", style: { flexDirection: "column" } },
-				createElement(ActionItem, {
-					row: { key: "no-color-launch", label: "Launch Consultation" } satisfies ActionRow,
-					focused: holds === "no-color-launch",
-					width: columns.contentWidth,
+		// The example's controls cost fifteen content rows at the width the
+		// gallery shows them: the state row, the field, the selection row,
+		// the spinner, the action, and the history pane with its six rows and
+		// its chrome. Two rows keep the floor clear.
+		rows: 17,
+		render: (columns, holds, inputActive, wiring) => {
+			// The Message view's history in the no-color presentation (issue #331):
+			// the module builds the rows, and the presentation drops the color the
+			// roles would carry, the way NO_COLOR_INK does for every control here.
+			// The chip's written word is the whole message.
+			const entries: MessageHistoryEntry[] = [
+				{
+					severity: "info",
+					at: 1761638400000,
+					text: 'the merge of "Persist the source facts" is in the Work queue',
+				},
+				{ severity: "warning", at: 1761638412000, text: "no Ticket sources exist" },
+				{
+					severity: "error",
+					at: 1761638425000,
+					text: "the herdr name fix-the-merge-4c4d97ed is held by a pane herdr did not name, which is no agent of this ticket: agent name fix-the-merge-4c4d97ed is already used (agent_name_taken)",
+				},
+			];
+			// The pane's border and its padding leave the body four cells inside
+			// the box's content, the way the view's layout pays them.
+			const bodyWidth = Math.max(1, columns.contentWidth - 4);
+			const lines = messageHistoryBody(entries, bodyWidth).map((line) =>
+				line.map((span) => ({ ...span, fg: undefined })),
+			);
+			return [
+				createElement(TextField, {
+					key: "no-color-model",
+					label: "Model",
+					value: "openai/gpt-5.1",
+					focused: holds === "no-color-model",
+					inputActive,
+					width: columns.valueWidth,
+					labelWidth: columns.labelWidth,
+					ink: NO_COLOR_INK,
+					...(holds === "no-color-model"
+						? { fieldRef: wiring.fieldRef, onValueChange: wiring.report }
+						: {}),
+				}),
+				createElement(ChoiceRow, {
+					key: "no-color-repository",
+					label: "Repository",
+					value: "my-little-software-factory",
+					focused: holds === "no-color-repository",
+					width: columns.valueWidth,
+					labelWidth: columns.labelWidth,
 					ink: NO_COLOR_INK,
 				}),
-			),
-		],
+				// The spinner face in the no-color ink: the written word stands,
+				// and the renderer's default shows through where the color would be.
+				createElement(Spinner, {
+					key: "no-color-starting",
+					word: "starting",
+					width: 12,
+					ink: NO_COLOR_INK,
+				}),
+				createElement(
+					"box",
+					{ key: "no-color-actions", style: { flexDirection: "column" } },
+					createElement(ActionItem, {
+						row: { key: "no-color-launch", label: "Launch Consultation" } satisfies ActionRow,
+						focused: holds === "no-color-launch",
+						width: columns.contentWidth,
+						ink: NO_COLOR_INK,
+					}),
+				),
+				createElement(
+					"box",
+					{ key: "no-color-message-history", style: { flexDirection: "column" } },
+					paneElement(
+						{
+							title: "Messages",
+							rows: lines.map((line, index) =>
+								createElement(
+									"text",
+									{ key: `no-color-message-history-${index}` },
+									...bodyRowSpans(line, bodyWidth, undefined),
+								),
+							),
+							vpad: 1,
+							height: lines.length + 4,
+						},
+						columns.contentWidth,
+					),
+				),
+			];
+		},
 	},
 	{
 		id: "message-history",

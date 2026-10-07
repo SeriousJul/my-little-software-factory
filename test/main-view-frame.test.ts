@@ -872,8 +872,8 @@ describe("the merged Main view", () => {
 					// the row's time and chip columns leave.
 					expect(view).toContain("no Consultation types");
 					expect(view).toContain("configured; add");
-					expect(view).toContain("[consultation-types.<name");
-					expect(view).toContain(">] to the config file");
+					expect(view).toContain("[consultation-types.");
+					expect(view).toContain("to the config file");
 				},
 				60,
 				27,

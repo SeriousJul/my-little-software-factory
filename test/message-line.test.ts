@@ -102,6 +102,12 @@ function historyEntries(view: string, chip: "INFO" | "WARN" | "ERROR"): number {
 	return view.split("\n").filter((row) => face.test(row)).length;
 }
 
+/** The nineteen-cell datetime a history row leads with, in the row it wears. */
+function historyTimeOf(row: string): string {
+	const match = row.match(/\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}/);
+	return match === null ? "" : match[0];
+}
+
 /** A handoff that fails on a deliberately long stderr line. */
 const LONG_LINE = `error: the daemon refused the request after the outage. ${"x".repeat(240)}`;
 
@@ -630,6 +636,16 @@ describe("the permanent Message line", () => {
 				const view = await openMessageView(setup, "F2", "Message view");
 				expect(view).toContain("INFO");
 				expect(view).toContain("the factory decides this ticket");
+				// The row wears the roles decision 10 names (issue #331): the chip
+				// paints the severity the Message line wears, and the datetime the
+				// time's own subtext0.
+				const rows = rowsOf(view);
+				const infoRow = rows.findIndex((row) => row.includes("auto-handoff is on"));
+				expect(infoRow).toBeGreaterThan(-1);
+				expect(spanColorAt(setup, infoRow, "INFO")).toEqual(rgb(roleColor("text")));
+				expect(spanColorAt(setup, infoRow, historyTimeOf(rows[infoRow]))).toEqual(
+					rgb(roleColor("subtext0")),
+				);
 				await closeOverlay(setup, "Message view", "the view to close");
 				// The notice must not pin the line: a refused control takes it
 				// back, the way every operation fact outranks a notice.
@@ -673,10 +689,6 @@ describe("the permanent Message line", () => {
 				const [top, bottom, total] = range;
 				const visible = bottom - top + 1;
 				expect(bottom).toBe(total);
-				// The gutter holds the scrollbar the record needs: every row of
-				// the window wears the track or the thumb, the thumb standing
-				// on the rows the position covers, the way the Decision
-				// modal's turn log paints it.
 				// The gutter holds the scrollbar the record needs: the body's
 				// last column, the pane's border and the box's border standing to
 				// its right. Every row of the window wears the track, and the
@@ -693,8 +705,20 @@ describe("the permanent Message line", () => {
 				);
 				await press(setup, "j", "the scroll down", (f) => f.includes(`${top}-${bottom}/${total}`));
 				// home takes the record's first row.
-				await press(setup, "home", "the jump to the top", (f) =>
+				const topFrame = await press(setup, "home", "the jump to the top", (f) =>
 					f.includes(`1-${visible}/${total}`),
+				);
+				// The entry's first row stands where the record leads: the ERROR
+				// chip wears the error's red beside the time's subtext0, the
+				// roles decision 10 names (issue #331).
+				const topRows = rowsOf(topFrame);
+				const errorRow = topRows.findIndex((row) =>
+					row.includes("ERROR error: the daemon refused"),
+				);
+				expect(errorRow).toBeGreaterThan(-1);
+				expect(spanColorAt(setup, errorRow, "ERROR")).toEqual(rgb(roleColor("red")));
+				expect(spanColorAt(setup, errorRow, historyTimeOf(topRows[errorRow]))).toEqual(
+					rgb(roleColor("subtext0")),
 				);
 				// Esc closes; the error is back on the base line.
 				await closeOverlay(setup, "Message view", "the view to close");
@@ -987,6 +1011,21 @@ describe("the permanent Message line", () => {
 					expect(historyEntries(healed, "WARN")).toBe(1);
 					expect(historyEntries(healed, "INFO")).toBe(1);
 					expect(healed).toContain("issues: recovered");
+					// The rows wear the roles decision 10 names (issue #331): the
+					// WARN chip wears the warning's yellow, the INFO chip the line's
+					// text, and both datetimes the time's subtext0.
+					const rows = rowsOf(healed);
+					const warnRow = rows.findIndex((row) => row.includes("issues: stale"));
+					const infoRow = rows.findIndex((row) => row.includes("issues: recovered"));
+					expect(warnRow).toBeGreaterThan(-1);
+					expect(infoRow).toBeGreaterThan(warnRow);
+					expect(spanColorAt(setup, warnRow, "WARN")).toEqual(rgb(roleColor("yellow")));
+					expect(spanColorAt(setup, infoRow, "INFO")).toEqual(rgb(roleColor("text")));
+					for (const row of [warnRow, infoRow]) {
+						expect(spanColorAt(setup, row, historyTimeOf(rows[row]))).toEqual(
+							rgb(roleColor("subtext0")),
+						);
+					}
 				},
 				WIDTH,
 				HEIGHT,
@@ -1027,6 +1066,39 @@ describe("the permanent Message line", () => {
 			);
 		} finally {
 			state.close();
+		}
+	});
+
+	// The no-color presentation of the history (issue #331, decision 10): the
+	// chip, the datetime, and the text paint no color at all, and the level
+	// still stands in its written word.
+	test("NO_COLOR paints the history rows with no color, and the words keep standing", async () => {
+		process.env.NO_COLOR = "1";
+		try {
+			await withApp(
+				async (setup) => {
+					// A refused refresh records its warning, and the view shows it.
+					await press(setup, "r", "the warning", (f) => messageRowOf(f).startsWith("Warning: "));
+					const view = await openMessageView(setup, "F2", "Message view");
+					const rows = rowsOf(view);
+					const row = rows.findIndex((row) => row.includes("no Ticket sources"));
+					expect(row).toBeGreaterThan(-1);
+					// Nothing in the row paints: the chip, the datetime, and the text
+					// all wear the terminal's own default, the renderer's, not a
+					// paint of the theme's roles.
+					expect(spanColorAt(setup, row, "WARN")).toEqual([255, 255, 255]);
+					expect(spanColorAt(setup, row, historyTimeOf(rows[row]))).toEqual([255, 255, 255]);
+					expect(spanColorAt(setup, row, "no Ticket sources exist")).toEqual([255, 255, 255]);
+				},
+				WIDTH,
+				HEIGHT,
+				{ config: BASE_CONFIG, runner: new FakeRunner(), initialTickets: SAMPLE_TICKETS },
+			);
+		} finally {
+			// The worker's environment is shared with the files that run
+			// beside this one: a NO_COLOR left behind paints their frames
+			// white for the rest of the run.
+			delete process.env.NO_COLOR;
 		}
 	});
 });

@@ -230,10 +230,13 @@ export function KeyGuide({
 const MESSAGE_VIEW_MARGIN = 1;
 
 // The fixed-width cells of a history row: the datetime takes nineteen cells,
-// the chip its five, and the text starts one cell past the chip.
+// the chip its five, one separator cell, and the text starts where the
+// separator ends. The separator is its own cell, not the chip's padding, so
+// every chip - the four-letter faces and the five-letter ERROR - keeps one
+// cell of air between its face and the text.
 const HISTORY_TIME_WIDTH = 19;
 const HISTORY_CHIP_WIDTH = 5;
-const HISTORY_TEXT_INDENT = HISTORY_TIME_WIDTH + 1 + HISTORY_CHIP_WIDTH;
+const HISTORY_TEXT_INDENT = HISTORY_TIME_WIDTH + 1 + HISTORY_CHIP_WIDTH + 1;
 
 /**
  * The datetime a history entry wears, in the entry's local time: the fixed
@@ -289,7 +292,12 @@ export function messageHistoryBody(
 		body.forEach((line, index) => {
 			const spans: BodySpan[] =
 				index === 0
-					? [{ text: time, fg: timeColor }, { text: " " }, { text: chip, fg: chipColor }]
+					? [
+							{ text: time, fg: timeColor },
+							{ text: " " },
+							{ text: chip, fg: chipColor },
+							{ text: " " },
+						]
 					: [{ text: " ".repeat(HISTORY_TEXT_INDENT) }];
 			spans.push({ text: line, fg: textColor });
 			rows.push(spans);
