@@ -1236,6 +1236,7 @@ function stubTicket(
 		// no State, so the `position` grouping files them as `unmatched`.
 		matchedStateName: null,
 		actionable: true,
+		listActionable: true,
 		handoffRecoveryRequired: false,
 		ignored: false,
 		ignoredAt: null,

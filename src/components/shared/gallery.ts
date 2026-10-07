@@ -689,6 +689,7 @@ function sampleTicket(
 		suggestedTaskType: "implement",
 		matchedStateName: null,
 		actionable: true,
+		listActionable: true,
 		handoffRecoveryRequired: false,
 		ignored,
 		ignoredAt: ignored ? "2026-02-17T10:00:00.000Z" : null,

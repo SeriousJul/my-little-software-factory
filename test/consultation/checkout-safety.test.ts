@@ -78,6 +78,7 @@ function ticketAt(
 		suggestedTaskType: "implement",
 		matchedStateName: null,
 		actionable: false,
+		listActionable: false,
 		handoffRecoveryRequired: false,
 		leftover: null,
 		nameCollision: null,

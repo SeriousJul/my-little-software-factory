@@ -50,6 +50,7 @@ function ticket(state: TicketState, externalUpdatedAt = "2026-01-01T00:00:00Z"):
 		memberships: [],
 		suggestedTaskType: "implement",
 		actionable: state === "open",
+		listActionable: state === "open",
 		handoffRecoveryRequired: false,
 		ignored: false,
 		ignoredAt: null,
@@ -124,6 +125,17 @@ describe("the ticket state machine", () => {
 		expect(attentionBand(ticket("awaiting"))).toBeLessThan(attentionBand(ticket("running")));
 		expect(attentionBand(ticket("running"))).toBeLessThan(attentionBand(ticket("handed-off")));
 		expect(attentionBand(ticket("handed-off"))).toBeLessThan(attentionBand(ticket("open")));
+	});
+
+	test("the open bands sort on the row's standing, not on the run's read (issue #345)", () => {
+		// The boot leaves every source `loading`, and a config write-back leaves it
+		// again: the machine's gate holds such a row, and the list's pile keeps it.
+		// The band reads the row's own standing, so a read that has not answered
+		// moves nothing, and only a read that failed does.
+		const outstanding = { ...ticket("open"), actionable: false, listActionable: true };
+		const failedRead = { ...ticket("open"), actionable: false, listActionable: false };
+		expect(attentionBand(outstanding)).toBe(attentionBand(ticket("open")));
+		expect(attentionBand(ticket("open"))).toBeLessThan(attentionBand(failedRead));
 	});
 
 	test("the list rank reads a routed ticket into the open band (ADR 0072)", () => {

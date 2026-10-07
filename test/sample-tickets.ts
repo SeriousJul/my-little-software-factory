@@ -56,6 +56,7 @@ function sample(
 		suggestedTaskType: "implement",
 		matchedStateName: null,
 		actionable: state === "open",
+		listActionable: state === "open",
 		handoffRecoveryRequired: false,
 		handoffCount,
 		failedStartStreak,

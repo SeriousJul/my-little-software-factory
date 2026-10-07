@@ -55,6 +55,7 @@ function ticket(state: TicketState, environment: (typeof ENVIRONMENT_KINDS)[numb
 		suggestedTaskType: "implement",
 		matchedStateName: null,
 		actionable: true,
+		listActionable: true,
 		handoffRecoveryRequired: false,
 		ignored: false,
 		ignoredAt: null,

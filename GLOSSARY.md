@@ -194,6 +194,7 @@ _Avoid_: hidden source, silenced source, muted repository
 
 **Attention band**:
 The ticket list's first sort: awaiting tickets first, then the in-flight states, running before handed-off, then open actionable tickets, then open tickets that are not actionable.
+The band reads the row's own standing: a source whose read is still outstanding keeps its rows actionable, and only a read that failed, a source that left the Config, or a start that already stands withholds a row (ADR 0126).
 Within its band the list sorts by the band's own second rank (ADR 0050, ADR 0065): the live bands by newest external update, the open bands by ticket number ascending with the no-number ticket last, and the ticket identity breaks the tie.
 _Avoid_: attention group, list bucket, triage group
 

@@ -67,6 +67,7 @@ const ticket: Ticket = {
 	suggestedTaskType: "implement",
 	matchedStateName: null,
 	actionable: true,
+	listActionable: true,
 	handoffRecoveryRequired: false,
 	ignored: false,
 	ignoredAt: null,

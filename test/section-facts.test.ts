@@ -44,6 +44,7 @@ function ticket(state: Ticket["state"], over: Partial<Ticket> = {}): Ticket {
 		suggestedTaskType: null,
 		matchedStateName: null,
 		actionable: state === "open",
+		listActionable: state === "open",
 		handoffRecoveryRequired: false,
 		ignored: false,
 		ignoredAt: null,

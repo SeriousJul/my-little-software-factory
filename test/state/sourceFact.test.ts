@@ -97,6 +97,50 @@ describe("the sourceFact aggregate", () => {
 		);
 		state.close();
 	});
+	test("an outstanding read keeps its row in the pile and still holds the start (issue #345)", () => {
+		// The refresh effect re-runs at the boot and on a config write-back, and
+		// every configured source goes back to `loading` with the snapshot it last
+		// returned. That is the run's fetch schedule, not a fact about the Ticket:
+		// the row keeps its place in the list's pile, and the machine's own gate
+		// still waits for the read.
+		const state = openFactoryState(":memory:");
+		state.sourceFact.initializeSources([sourceA]);
+		state.sourceFact.applyFetch(sourceA, success([labeled(["ready-for-agent"])]));
+		state.sourceFact.initializeSources([sourceA]);
+		const [row] = state.ticketWorkCycle.ticketListViews(POSITION_STATES, "implement").rows;
+		expect(row.memberships?.[0]).toEqual(expect.objectContaining({ health: "loading" }));
+		expect(row).toEqual(expect.objectContaining({ actionable: false, listActionable: true }));
+		expect(state.handoff.claimHandoff(row.identity, choice, "open")).toEqual(
+			expect.objectContaining({ ok: false, reason: expect.stringContaining("not actionable") }),
+		);
+		state.close();
+	});
+
+	test("the pile withholds the row whose read failed, and the order follows the band", () => {
+		// The band crossing a refresh is the one ADR 0065 allows: it stands when a
+		// read fails, and not when a read is merely outstanding.
+		const state = openFactoryState(":memory:");
+		const ninth = { ...labeled(["ready-for-agent"], "github:github.com:I_9"), externalKey: "#9" };
+		const fourth = { ...labeled(["ready-for-agent"], "github:github.com:I_4"), externalKey: "#4" };
+		state.sourceFact.initializeSources([sourceA, sourceB]);
+		state.sourceFact.applyFetch(sourceA, success([ninth]));
+		state.sourceFact.applyFetch(sourceB, success([fourth]));
+		const keys = () =>
+			state.ticketWorkCycle
+				.ticketListViews(POSITION_STATES, "implement")
+				.rows.map((row) => row.externalKey);
+		// Both reads are outstanding: the two open rows stand in one band, by
+		// number, exactly as they did with both reads good.
+		state.sourceFact.initializeSources([sourceA, sourceB]);
+		expect(keys()).toEqual(["#4", "#9"]);
+		state.sourceFact.applyFetch(sourceB, {
+			status: "failed",
+			reason: "GitHub rate limit exceeded",
+		});
+		expect(keys()).toEqual(["#9", "#4"]);
+		state.close();
+	});
+
 	test("merges overlapping memberships, lets a healthy source act, and preserves durable handoff state", () => {
 		const path = statePath();
 		const state = openFactoryState(path);

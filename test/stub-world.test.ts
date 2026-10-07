@@ -100,6 +100,7 @@ function pullTicket(repository: string, number: number, sourceName: string): Tic
 		suggestedTaskType: "merge",
 		matchedStateName: "ready-to-ship",
 		actionable: true,
+		listActionable: true,
 		handoffRecoveryRequired: false,
 		handoffCount: 0,
 		failedStartStreak: 0,
