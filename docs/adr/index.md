@@ -132,3 +132,5 @@ body states the context, the decision, and the consequences.
 - [ADR 0121: The Quality baseline only shrinks, and one Quality audit reads it](./0121-the-quality-baseline-only-shrinks-and-one-audit-reads-it.md)
 - [ADR 0122: The Delete key is the plane's one destructive key](./0122-the-delete-key-is-the-planes-one-destructive-key.md)
 - [ADR 0123: The guide screenshots paint the desktop's font, weight, and colors at display scale](./0123-the-guide-screenshots-paint-the-desktops-font-weight-and-colors-at-display-scale.md)
+- [ADR 0124: The merge ask takes the merged Ticket's checkout down with its workspace](./0124-the-merge-ask-takes-the-merged-ticket-s-checkout-down-with-its-workspace.md)
+- [ADR 0125: A standing refusal answers the automatic walks as a hold, not a failure](./0125-a-standing-refusal-answers-the-automatic-walks-as-a-hold-not-a-failure.md)

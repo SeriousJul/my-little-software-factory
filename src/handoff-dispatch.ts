@@ -146,7 +146,22 @@ export interface HandoffIntent {
  * `onStarted`: `{ ok: true }` when the agent is live, `{ ok: false, reason }`
  * when the start failed or the row was cancelled.
  */
-export type DispatchResult = { ok: true } | { ok: false; reason: string };
+export type DispatchResult =
+	| { ok: true }
+	| { ok: false; reason: string; stands?: StandingWorkFact };
+
+/**
+ * The standing work a refusal answers for, when the refusal is not a failure
+ * (issue #327): the ask asked for a start the plane already holds.
+ *
+ * `queue-row` is the Work queue's one-item-per-ticket rule (ADR 0049): the row
+ * of the ask before it still waits. `merge-run` is the Plane action's run mark
+ * (ADR 0104): the row left the queue at its claim and the merge command is out.
+ * Both stand for the same fact the automatic walks read as a hold - the work is
+ * entered - so the caller that asked for it can tell this refusal from one that
+ * says the start cannot run.
+ */
+export type StandingWorkFact = "queue-row" | "merge-run";
 
 /**
  * The answer's refusal reason where the dispatch has been stopped.
@@ -843,10 +858,13 @@ class HandoffDispatchModule implements HandoffDispatch {
 			// builds no environment of its own, so the close is the ask's whole
 			// act on the environment. A merge that keeps the environment keeps it
 			// for nobody: the run retires the ticket the moment it lands, and no
-			// later act reaches the workspace herdr still holds.
+			// later act reaches the workspace herdr still holds, or the checkout
+			// standing under it (issue #327, ADR 0124).
 			const closeIdentity = intent.routeFromIdentity ?? intent.ticketIdentity;
 			void this.queueCleanup(async () => {
-				const failure = await this.closePreviousHandoffEnvironment(closeIdentity);
+				// The merge's close takes the Close cleanup reach: the checkout goes with
+				// the workspace, because no next turn of this ticket ever reads it.
+				const failure = await this.closePreviousHandoffEnvironment(closeIdentity, "cleanup");
 				if (failure !== undefined)
 					this.reports.faultWarning(`the previous handoff's environment did not close: ${failure}`);
 				this.reports.refresh();
@@ -2157,7 +2175,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 			this.queueItemRefusals.add(identity);
 			this.log?.warn(this.refusalLine(prefix, this.ticketName(identity), QUEUE_ITEM_STANDS_FACT));
 		}
-		return { ok: false, reason: this.queueItemStandsReason(identity) };
+		return { ok: false, reason: this.queueItemStandsReason(identity), stands: "queue-row" };
 	}
 
 	/**
@@ -2177,6 +2195,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 		return {
 			ok: false,
 			reason: `${this.ticketName(identity)} ${MERGE_RUN_STANDS_FACT}`,
+			stands: "merge-run",
 		};
 	}
 
@@ -2513,19 +2532,32 @@ class HandoffDispatchModule implements HandoffDispatch {
 	 * answer is the close, and the environment already gone: herdr's
 	 * `workspace_not_found` and `tab_not_found` both stand for it, the way
 	 * the Close cleanup reads them.
+	 *
+	 * `reach` says how far the close takes the Environment down (issue #327,
+	 * ADR 0124). The Route close (`"route"`) is the handoff ask's act: the herdr
+	 * workspace goes and the checkout and the branch stay, because the handoff
+	 * that follows builds its own workspace on that checkout. The Close cleanup
+	 * (`"cleanup"`) is the merge ask's act: the checkout goes with the
+	 * workspace, because the merge builds no Environment of its own and retires
+	 * the ticket the moment it lands, so no later turn of that ticket ever
+	 * reads the checkout. Both reaches leave the branch standing, so a blocked
+	 * merge's rework reopens the worktree on the branch it keeps.
 	 */
-	private async closePreviousHandoffEnvironment(identity: string): Promise<string | undefined> {
+	private async closePreviousHandoffEnvironment(
+		identity: string,
+		reach: "route" | "cleanup" = "route",
+	): Promise<string | undefined> {
 		const stored = this.state.handoff.latestHandoff(identity);
 		if (stored === null) return undefined;
+		const environment = {
+			environment: stored.environment,
+			tabId: stored.tabId,
+			workspaceId: stored.workspaceId,
+		};
 		try {
-			return await closeStoredEnvironment(
-				{
-					environment: stored.environment,
-					tabId: stored.tabId,
-					workspaceId: stored.workspaceId,
-				},
-				this.runner,
-			);
+			return reach === "cleanup"
+				? await closeHandoffEnvironment(environment, this.runner)
+				: await closeStoredEnvironment(environment, this.runner);
 		} catch (error) {
 			return `the close did not run: ${errorMessage(error)}`;
 		}

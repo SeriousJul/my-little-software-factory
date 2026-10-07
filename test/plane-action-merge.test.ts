@@ -1327,6 +1327,9 @@ describe("the dispatch's ask and pickup", () => {
 		expect(second).toEqual({
 			ok: false,
 			reason: `"${pullTitle}" already has a waiting queue item; the first item keeps its place`,
+			// The refusal stands for work the plane already holds, so the answer
+			// names it: the automatic walks hold on it instead of warning (issue #327).
+			stands: "queue-row",
 		});
 		// The refusal reaches the plane's record on the merge channel too (issue
 		// #223), in the one shape every refusal line wears and at the `warn` level
@@ -1576,6 +1579,9 @@ describe("the dispatch's ask and pickup", () => {
 		expect(second).toEqual({
 			ok: false,
 			reason: `"${pullTitle}" already has a merge running; the first run stands`,
+			// The run's mark answers, and says so: the merge is entered, so the
+			// automatic walks hold on it and the Message line stays clear (issue #327).
+			stands: "merge-run",
 		});
 		expect(third).toEqual(second);
 		// The refusal reaches the file in the one shape every refusal line wears, once
@@ -1822,7 +1828,7 @@ describe("the dispatch's ask and pickup", () => {
 	);
 
 	test(
-		"the automatic merge ask closes the settled turn's environment, the way the confirm does",
+		"the automatic merge ask takes the settled turn's checkout down with its workspace",
 		async () => {
 			const state = planeState();
 			withIssueSource(state);
@@ -1891,16 +1897,109 @@ describe("the dispatch's ask and pickup", () => {
 			// it lands behind the ask's answer on the cleanup's own pass, and the
 			// merge run stands beside it.
 			const deadline = Date.now() + 5000;
-			while (!runner.commands().includes("herdr workspace close ws-1")) {
+			while (!runner.commands().includes("herdr worktree remove --workspace ws-1")) {
 				if (Date.now() >= deadline) throw new Error("the ask never closed the environment");
 				await new Promise((resolve) => setTimeout(resolve, 20));
 			}
 			// The merge still ran, and the close is the ask's whole act on the
-			// environment: the workspace goes, the checkout and the branch stay,
-			// and no other herdr command stands.
+			// environment: herdr `worktree remove` takes the checkout and the
+			// workspace behind it in one command, and leaves the branch, so no
+			// checkout stands on disk under a retired ticket (issue #327, ADR 0124).
 			expect(state.planeAction.latestPlaneActionAttempt(pullIdentity)?.outcome).toBe("merged");
 			expect(runner.commands().filter((command) => command.startsWith("herdr"))).toEqual([
-				"herdr workspace close ws-1",
+				"herdr worktree remove --workspace ws-1",
+			]);
+			state.close();
+		},
+		{ timeout: 15_000 },
+	);
+
+	test(
+		"the blocked merge ask takes the settled turn's checkout down, the way a landing one does",
+		async () => {
+			const state = planeState();
+			withIssueSource(state);
+			// The settled turn ran in the shipped machine's own environment: the
+			// worktree environment, so herdr holds a workspace the merge must take
+			// down. The reach is the ask's act, so a merge that blocks runs the
+			// same close as one that lands (issue #327, ADR 0124).
+			const claim = state.handoff.claimHandoff(
+				issueIdentity,
+				{
+					agentType: "pi",
+					environment: "worktree",
+					taskType: "review",
+					model: "",
+					thinking: "",
+					contextWindow: "",
+				},
+				"open",
+			);
+			if (!claim.ok) throw new Error(claim.reason);
+			state.handoff.settleHandoff(claim.claim.attemptId, true, undefined, {
+				paneId: "pane-1",
+				tabId: "tab-1",
+				workspaceId: "ws-1",
+			});
+			state.ticketWorkCycle.settleTurn({
+				ticketIdentity: issueIdentity,
+				handoffId: claim.claim.attemptId,
+				taskType: "review",
+				agentType: "pi",
+				message: "Score: 95 / 100.",
+				turnLog: [{ kind: "text", text: "Score: 95 / 100." }],
+				completedAt: "2026-08-31T11:00:00Z",
+				cause: "completed",
+				transition: mergeRoute(),
+			});
+			const runner = new FakeRunner();
+			// The run's fresh read finds the pull request open, and the fire's read
+			// finds it open too: the block's path, which writes the needs-work fact
+			// on the pull request.
+			stubReadSequence(runner, [{ state: "open" }, { state: "open" }]);
+			stubMerge(runner, 1, "GraphQL: PullRequest is not mergeable.\n");
+			const events: string[] = [];
+			let resolveStarted: () => void = () => {};
+			const startedSettled = new Promise<void>((resolve) => {
+				resolveStarted = resolve;
+			});
+			const dispatch = createHandoffDispatch({
+				state,
+				runner,
+				config: () => PLANE_CONFIG,
+				seatCount: () => 0,
+				home: home(),
+				...recorder(events),
+			});
+			const result = await dispatch.dispatchPlaneAction({
+				origin: "workflow",
+				automatic: true,
+				ticketIdentity: pullIdentity,
+				routeFromIdentity: issueIdentity,
+				taskType: "merge",
+				onStarted: (started) => {
+					expect(started).toEqual({ ok: true });
+					resolveStarted();
+				},
+			});
+			expect(result).toEqual({ ok: true });
+			await startedSettled;
+			// The close takes the seat, the way every environment change does, so
+			// it lands behind the ask's answer on the cleanup's own pass, and the
+			// merge run stands beside it.
+			const deadline = Date.now() + 5000;
+			while (!runner.commands().includes("herdr worktree remove --workspace ws-1")) {
+				if (Date.now() >= deadline) throw new Error("the ask never closed the environment");
+				await new Promise((resolve) => setTimeout(resolve, 20));
+			}
+			// The merge blocked, and the close still ran: the block is the run's
+			// outcome, and the close is the ask's whole act on the environment, the
+			// same command a landing merge sends. herdr `worktree remove` takes the
+			// checkout and the workspace behind it in one command, and leaves the
+			// branch (issue #327, ADR 0124).
+			expect(state.planeAction.latestPlaneActionAttempt(pullIdentity)?.outcome).toBe("blocked");
+			expect(runner.commands().filter((command) => command.startsWith("herdr"))).toEqual([
+				"herdr worktree remove --workspace ws-1",
 			]);
 			state.close();
 		},

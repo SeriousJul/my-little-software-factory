@@ -259,6 +259,12 @@ interface ChainRigOptions {
 	 * full, and no queue item ever starts an Agent.
 	 */
 	liveSeats?: boolean;
+	/**
+	 * Hold every `gh pr merge` command inside the runner, the way a real merge
+	 * runs for seconds (issue #327): the Plane action's run stands while the
+	 * observation cycle's next tick re-asks the same position.
+	 */
+	gateMerge?: boolean;
 	/** The default Environment the rig's starts resolve to. */
 	defaultEnvironment?: EnvironmentKind;
 	/** The workflow states the rig's config carries; the chain's by default. */
@@ -291,6 +297,8 @@ interface Chain {
 	) => Promise<TransitionOutcome>;
 	/** Wait until `count` started handoffs stand inside the held herdr calls. */
 	awaitHandoffInFlight: (count?: number) => Promise<void>;
+	/** Wait until `count` merge commands stand inside the held gate (issue #327). */
+	awaitMergeInFlight: (count?: number) => Promise<void>;
 	/** Let the oldest held herdr call answer, the way one herdr call finishing does. */
 	releaseHeld: () => void;
 	/**
@@ -358,7 +366,9 @@ function chainRig(options: ChainRigOptions = {}): Chain {
 	const gate =
 		options.liveSeats === true
 			? gatedRunner(runner, (name) => name.startsWith("herdr agent start"))
-			: null;
+			: options.gateMerge === true
+				? gatedRunner(runner, (name) => name.startsWith("gh pr merge"))
+				: null;
 	// The live rig's checkout: a real directory the resolution finds, mapped by
 	// identity in the config the rig builds.
 	const checkout = options.liveSeats === true ? join(dir, "src", "factory") : null;
@@ -611,6 +621,11 @@ function chainRig(options: ChainRigOptions = {}): Chain {
 			if (gate === null) throw new Error("the rig holds no herdr gate");
 			await gate.waitForArrivals(count);
 		},
+		awaitMergeInFlight: async (count = 1) => {
+			if (options.gateMerge !== true || gate === null)
+				throw new Error("the rig holds no merge command");
+			await gate.waitForArrivals(count);
+		},
 		releaseHeld: () => {
 			if (gate === null) throw new Error("the rig holds no herdr gate");
 			gate.release();
@@ -808,6 +823,86 @@ describe("the ADR 0092 chain runs unattended (issue #208)", () => {
 				choice: expect.objectContaining({ taskType: "rework" }),
 			}),
 		]);
+		state.close();
+	});
+});
+
+/**
+ * The merge run that stands (issue #327, ADR 0104).
+ *
+ * The development install's log carries this shape beside every merge it made:
+ * the walk's ask enters the row, the pickup's claim takes the row out of the
+ * queue, the `gh pr merge` command runs for seconds, and the next observation
+ * cycle re-asks the same position. The run's mark refuses that re-ask - the
+ * refusal is right, because a second ask would run the same merge twice over one
+ * pull request - and the walk answered it with a failure: a warning on the
+ * Message line, and the Desktop notification a standing warning carries, over a
+ * merge that was landing.
+ */
+describe("the merge run that stands (issue #327, ADR 0104)", () => {
+	test("the walk re-asks a merge already in flight, holds on the refusal, and states no failure", async () => {
+		const chain = chainRig({ gateMerge: true });
+		const { state, runner, coordinator, lines, statuses } = chain;
+		chain.refresh(issueTicket(), pullTicket());
+		// The chain up to the merge: the implement turn routes the review, and the
+		// review's score branch offers the merge on the pull request.
+		await chain.settleTurnWithFire(issueIdentity, "implement");
+		await coordinator.tick();
+		expect(state.workQueue.removeWorkItem(pullIdentity)).toBe(true);
+		runner.set("gh", COMMENT_READ_ARGS, { stdout: "[]" });
+		runner.set("gh", REVIEW_READ_ARGS, {
+			stdout: JSON.stringify([{ body: VERDICT_BODY, submitted_at: "2026-08-31T11:00:30Z" }]),
+		});
+		// The run's fresh read finds the pull request open, the fire's read finds it
+		// merged: the way the source answers while one merge lands.
+		runner.setSequence("gh", PR_READ_ARGS, [
+			{ stdout: JSON.stringify({ state: "open", merged: false }) },
+			{ stdout: JSON.stringify({ state: "closed", merged: true }) },
+		]);
+		runner.set("gh", PR_MERGE_ARGS, { code: 0 });
+		await chain.settleTurnWithFire(pullIdentity, "review");
+
+		// The ask, and the run: the claim took the row out of the queue, and the
+		// merge command stands inside the runner the way it stands at GitHub for
+		// seconds.
+		await coordinator.tick();
+		await chain.awaitMergeInFlight();
+		expect(state.workQueue.items()).toEqual([]);
+
+		// The cycles that follow re-ask the same position, the way the poll and
+		// every source fetch do on the shipped machine.
+		await coordinator.tick();
+		await coordinator.tick();
+		// Every cycle asks again: the ask's count is not the fact, the refusal's
+		// one line is.
+		expect(chain.planeAsks.length).toBeGreaterThan(1);
+
+		// The Message line carries nothing about a merge that is landing: the
+		// refusal is a hold on work the plane already entered, not a start that
+		// could not run.
+		expect(statuses.filter((status) => status.text.includes("could not merge"))).toEqual([]);
+		// The refusal still reaches the record, once for the run that stands, in
+		// the one shape every refusal line wears (issue #223, ADR 0104).
+		expect(lines.filter((line) => line.message.startsWith("merge refused:"))).toEqual([
+			warnLine(
+				'merge refused: "Persist source facts in state" (already has a merge running; the first run stands)',
+			),
+		]);
+		// The walk takes the refusal as a standing gate, the way it takes the rest:
+		// the record states the hold in the holds' own voice.
+		expect(lines).toContainEqual(
+			infoLine(
+				'automatic walks hold: the Ticket\'s merge is already running ("Persist source facts in state")',
+			),
+		);
+
+		// The merge the walk used to call a failure is the merge that lands, once.
+		chain.releaseHeld();
+		const attempt = await chain.awaitAttempt();
+		expect(attempt).toMatchObject({ outcome: "merged", decision: "auto-merged" });
+		expect(runner.commands().filter((command) => command.startsWith("gh pr merge"))).toHaveLength(
+			1,
+		);
 		state.close();
 	});
 });
