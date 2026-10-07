@@ -534,6 +534,22 @@ agent = "pi"
 environment = "worktree"
 template = "{input}"
 
+# The improve-codebase-architecture Consultation type: the
+# operator types a focus, and the agent runs the
+# improve-codebase-architecture skill on a fresh worktree of the default
+# branch. Your agents need the improve-codebase-architecture skill, and the
+# codebase-design, grilling, and domain-modeling skills it calls: without
+# the skill the handoff opens on a slash command the agent does not know.
+# The interview's docs writes - the glossary entries and the ADRs - land on
+# the Consultation's own branch; the Consultation has no pull request, so
+# the operator moves them by hand.
+
+[consultation-types.improve-codebase-architecture]
+agent = "pi"
+environment = "worktree"
+thinking = "xhigh"
+template = "/skill:improve-codebase-architecture {input}"
+
 [logging]
 level = "debug"
 file = ".factory-development.log"
