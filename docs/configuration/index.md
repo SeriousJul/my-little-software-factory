@@ -626,11 +626,19 @@ handoff refused: "Add a webhook retry policy" (the row waited behind the shared 
 ```
 
 The Work queue holds one item per ticket, so a second ask for a ticket that
-already waits is refused. The refusal reaches the Message line and the file
-alike. Every refusal line wears one shape - the prefix, the ticket's name, and
-the fact in parentheses - so one rule reads them all (issue #223). A merge whose
-run is already in flight is refused the same way, and its line names the run
-that stands (ADR 0104).
+already waits is refused. The refusal reaches the file, and the Message line for
+the ask your own key made. Every refusal line wears one shape - the prefix, the
+ticket's name, and the fact in parentheses - so one rule reads them all (issue
+#223). A merge whose run is already in flight is refused the same way, and its
+line names the run that stands (ADR 0104).
+
+The two refusals that stand for work the plane already holds - the row that
+still waits, and the merge whose command is still out - are not starts that
+could not run. The automatic walks take them as a hold: the record states the
+hold once while it stands, and the Message line states no warning, because a
+warning there reads as a merge that failed over a merge that is landing (issue
+#327). The refusal line above still lands once per standing fact, and the
+operator's own ask still reads the refusal on the Message line.
 
 A `waits:` line is not a refusal: the row stays in the Work queue, keeps its
 place and its `queued` badge, and starts on a later pickup. Its prefix names the
@@ -782,7 +790,13 @@ automatic walks hold: the row is not actionable ("Watch agent turns")
 automatic walks hold: the row offers no task ("Watch agent turns")
 automatic walks hold: the source has not re-read the Ticket since its last cycle ended ("Watch agent turns")
 automatic walks hold: the Same-type hold stands ("Watch agent turns")
+automatic walks hold: the Ticket's merge is already running ("Watch agent turns")
 ```
+
+The last of these is the Plane action's run mark (ADR 0104): the walk re-asked a
+merge whose row left the queue at its claim and whose command is still out, so
+the merge is entered and the walk holds instead of warning (issue #327). The
+same walk holds on the Work queue's row for the Ticket above it.
 
 The Operator-decides brake keeps its designed silence (ADR 0117): the walk
 holds the Ticket it reaches, and it states no fact for it.

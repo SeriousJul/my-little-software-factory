@@ -2520,6 +2520,9 @@ describe("the Parallel limit and the Work queue", () => {
 			reason:
 				`"${ROUTE_TARGET.title}" already has a waiting queue item; ` +
 				"the first item keeps its place",
+			// The refusal stands for work the plane already entered, and the answer
+			// says so: the automatic walks hold on it instead of warning (issue #327).
+			stands: "queue-row",
 		});
 		expect(rigRef.state.workQueue.items()).toHaveLength(1);
 		expect(rigRef.state.ticketWorkCycle.lastCompletion(ROUTE_SETTLED.identity)?.decision).toBe(
@@ -2546,6 +2549,7 @@ describe("the Parallel limit and the Work queue", () => {
 		await expect(capped.dispatch(intent)).resolves.toEqual({
 			ok: false,
 			reason: `"${FIRST.title}" already has a waiting queue item; the first item keeps its place`,
+			stands: "queue-row",
 		});
 		expect(rigRef.state.workQueue.items()).toHaveLength(1);
 		expect(

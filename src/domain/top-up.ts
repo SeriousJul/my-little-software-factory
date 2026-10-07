@@ -46,6 +46,7 @@ export const AUTOMATIC_HOLD_REASONS = [
 	"agent-present",
 	"handoff-limit",
 	"queue-item-standing",
+	"merge-run-standing",
 	"restart-mark-standing",
 	"row-not-open",
 	"row-not-actionable",
@@ -96,6 +97,7 @@ export const AUTOMATIC_CANDIDATE_HOLD_REASONS = [
 	"agent-present",
 	"handoff-limit",
 	"queue-item-standing",
+	"merge-run-standing",
 	"restart-mark-standing",
 	"row-not-open",
 	"row-not-actionable",
@@ -236,6 +238,10 @@ export const AUTOMATIC_HOLD_LINES: Readonly<Record<AutomaticHoldReason, string>>
 	"handoff-limit": "automatic walks hold: the Ticket is at the Handoff limit",
 	"queue-item-standing":
 		"automatic walks hold: the Work queue already holds an item for the Ticket",
+	// The Plane action's run mark (ADR 0104): the merge the walk asked for left
+	// the queue at its claim and its command is still out, so the work is
+	// entered and the walk holds (issue #327).
+	"merge-run-standing": "automatic walks hold: the Ticket's merge is already running",
 	"restart-mark-standing": "automatic walks hold: the episode already asked the Ticket's restart",
 	"row-not-open": "automatic walks hold: the row is not open",
 	"row-not-actionable": "automatic walks hold: the row is not actionable",

@@ -117,6 +117,7 @@ import {
 	type HandoffIntent,
 	type PlaneActionIntent,
 	STOPPED_DISPATCH_REASON,
+	type StandingWorkFact,
 } from "./handoff-dispatch.ts";
 import type { HerdrAgent } from "./herdr.ts";
 import { type Logger, NOOP_LOGGER } from "./logging.ts";
@@ -2293,11 +2294,36 @@ export class ObservationCoordinator {
 			// The stopped dispatch is the teardown's fact, not a handoff
 			// refusal (ADR 0051): the answer ends the walk without a line.
 			if (result.reason === STOPPED_DISPATCH_REASON) return "stopped";
+			// The standing-work refusal is a gate that stands, not a start that
+			// could not run (issue #327): the row the walk asked for is already in
+			// the queue. It is held, not warned.
+			if (result.stands !== undefined) {
+				this.noteStandingWorkHold(result.stands, intent.ticketIdentity);
+				return "refused";
+			}
 			this.onStatus("warning", `${refusedPrefix}: ${result.reason}`);
 			return "refused";
 		}
 		this.onStatus("info", addedLine);
 		return "added";
+	}
+
+	/**
+	 * The hold the walks take for a refusal that stands for work the plane
+	 * already holds (issue #327).
+	 *
+	 * `queue-row` is the Work queue's one-item-per-ticket rule (ADR 0049) and
+	 * `merge-run` the Plane action's run mark (ADR 0104): either way the start
+	 * the walk wanted is entered, so the walk holds the way it holds at every
+	 * other standing gate. The record states the fact once while it stands, in
+	 * the holds' own voice, and the Message line stays clear: a warning there
+	 * reads as a merge that failed, over a merge that is landing.
+	 */
+	private noteStandingWorkHold(stands: StandingWorkFact, ticketIdentity: string): void {
+		this.noteAutomaticHold({
+			reason: stands === "merge-run" ? "merge-run-standing" : "queue-item-standing",
+			candidate: ticketIdentity,
+		});
 	}
 
 	/**
@@ -2460,6 +2486,13 @@ export class ObservationCoordinator {
 			// The stopped dispatch is the teardown's fact, not a merge refusal
 			// (ADR 0051): the answer ends the walk without a line.
 			if (result.reason === STOPPED_DISPATCH_REASON) return "stopped";
+			// The standing-work refusal is a gate that stands, not a start that
+			// could not run (issue #327): the merge the walk asked for is the one
+			// already queued or already landing. It is held, not warned.
+			if (result.stands !== undefined) {
+				this.noteStandingWorkHold(result.stands, intent.ticketIdentity);
+				return "refused";
+			}
 			this.onStatus("warning", `${refusedPrefix}: ${result.reason}`);
 			return "refused";
 		}
