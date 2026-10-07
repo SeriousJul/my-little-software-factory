@@ -20,10 +20,11 @@
 # task completes, the plane fires that task type's transition: it writes the
 # label facts on the ticket and its linked pull request, and the machine
 # re-derives every position from the written labels. The agents never write
-# the labels the machine writes: the one sanctioned exception is the analyze
-# type's settling agent, which applies the operator-owned labels its own
-# template names - ready-for-agent, and spec:<number> on a locked ticket
-# (ADR 0086).
+# the labels the machine writes: the sanctioned exceptions are the settling
+# agents of the two operator-decides types, which apply only the
+# operator-owned labels their own templates name (ADR 0086) - the analyze
+# agent applies ready-for-agent, and spec:<number> on a locked ticket, and the
+# diagnose agent applies needs-info on the skill's honest stop.
 
 default-agent = "pi"
 default-environment = "worktree"
@@ -75,6 +76,35 @@ context-window = "--autocompact {value}"
 [consultation-types.consult]
 agent = "pi"
 template = "{input}"
+
+# The diagnose Consultation type runs the bug-diagnosis loop by hand (issue
+# #330): the operator picks the type in the launcher, names a Repository, and
+# types the bug report as the input. The worktree environment is the skill's
+# own first rule - a deterministic, isolated loop. An operator who needs their
+# live checkout sets the Environment in the launcher for that one start.
+# The agents need the diagnosing-bugs skill for it: without the skill the
+# Consultation opens on a slash command the agent does not know.
+[consultation-types.diagnose]
+agent = "pi"
+environment = "worktree"
+thinking = "xhigh"
+template = '''/skill:diagnosing-bugs
+
+The operator's words are the bug report for this session: they stand in for a ticket, and this branch is the work surface. Your final message is the report the operator reads.
+
+### Rules
+
+1. Build the feedback loop before any theory: one command, already run at least once, red-capable, deterministic, fast, and runnable unattended. No red-capable command, no hypothesis.
+2. Reproduce the report's exact symptom, then minimise the repro until every remaining element is load-bearing.
+3. Rank three to five falsifiable hypotheses and show the list before you test any of them.
+4. Instrument against those predictions, one variable at a time. Tag every debug log with one prefix, and keep it tagged.
+5. When no red-capable loop stands, stop and name what is needed from the operator: the environment access or the captured artifact. End the turn.
+6. Write the regression test before the fix, at a seam that exercises the real bug pattern. Where no correct seam exists, state that as the finding.
+7. Commit any fix, with its test, on this branch. Never push, never open a pull request, and never touch the default branch.
+8. Remove the tagged instrumentation and the throwaway harness before the turn ends.
+9. End each turn with the loop command, its verdict, the hypothesis that proved correct, and what the operator must check. The operator closes the session.
+
+{input}'''
 
 [consultation-types.pair]
 agent = "pi"
@@ -168,6 +198,22 @@ task-type = "analyze"
 source-kind = "github-issue"
 labels-any = ["ready-for-spec"]
 
+# The diagnosis position (ADR 0116): an open issue the repository's own triage
+# has labelled a bug. It sits after the ready-for-agent and ready-for-spec
+# states, so a ticket carrying either stronger operator label rests there and
+# is never offered a diagnosis: the state order carries the precedence. The
+# bug label is operator-owned: no transition writes it. The Repository init
+# creates it and registers an issues feed on label:bug, because GitHub search
+# cannot union two label qualifiers in one query (ADR 0115). The diagnose type
+# carries operator-decides, so Auto-handoff mode never starts the diagnosis by
+# itself (ADR 0117).
+[[states]]
+name = "bug"
+task-type = "diagnose"
+[states.match]
+source-kind = "github-issue"
+labels-any = ["bug"]
+
 [[states]]
 name = "needs-work"
 task-type = "rework"
@@ -228,10 +274,12 @@ labels-none = ["needs-work", "ready-for-review", "ready-to-ship"]
 # prompt template and a task profile, or the action form, the plane action it
 # resolves on and the method that action runs with. The transition hangs off
 # the type that completes it and writes the label facts the machine then
-# reads. The agents never write the labels the machine writes: the one
-# sanctioned exception is the analyze type's settling agent, which applies
-# the operator-owned labels its own template names - ready-for-agent, and
-# spec:<number> on a locked ticket (ADR 0086).
+# reads. The agents never write the labels the machine writes: the sanctioned
+# exceptions are the settling agents of the two operator-decides types, which
+# apply only the operator-owned labels their own templates name (ADR 0086) -
+# the analyze agent applies ready-for-agent, and spec:<number> on a locked
+# ticket, and the diagnose agent applies needs-info on the skill's honest
+# stop.
 #
 # The pull request open (ADR 0076): a task type that opens a pull request
 # carries `opens-pull-request = true`. At the Handoff start, before the
@@ -438,6 +486,88 @@ Description:
 Repository: {repository}
 
 Previous session message (empty on a first session): {previous-message}'''
+
+# The diagnose runs the bug-diagnosis loop on the ticket's own context (issue
+# #330): the plane opens the ticket's draft pull request at the Handoff start,
+# the agent runs the skill on the ticket's factory branch, and the transition
+# writes ready-for-review on the pull request, so the review, rework, and
+# merge machine takes over unchanged (ADR 0116). A turn that settles with a
+# head that carries no commit ahead of its base rests as the missing pull
+# request, and the Same-type hold rests the ticket the fire published nothing
+# on. The operator-decides flag parks its completions for the operator, so the
+# environment stays alive between the skill's checkpoints and the operator's
+# close (ADR 0085), and the same flag keeps Auto-handoff mode from starting
+# the diagnosis by itself (ADR 0117). The type pins no agent and no
+# environment, the way implement and analyze do. The one sanctioned label
+# write is the skill's honest stop: the template names needs-info, and the
+# agent applies only the operator-owned labels its template names (ADR 0086).
+# Your agents need the diagnosing-bugs skill for it: without the skill the
+# diagnose handoff opens on a slash command the agent does not know.
+
+[task-types.diagnose]
+thinking = "xhigh"
+operator-decides = true
+opens-pull-request = true
+template = '''
+/skill:diagnosing-bugs
+
+Repository: {repository}
+
+{external-key}: {title}
+
+URL: {source-url}
+
+Pull request: {pull-request-url}
+
+Labels: {labels}
+
+Description:
+{description}
+
+### Rules
+
+1. **Ground Yourself**
+   - Read the repository's agent instructions and its domain docs (GLOSSARY.md and the ADRs in the area) before your first command.
+   - Read the ticket in full, comments included, so the report stands behind the loop.
+
+2. **Redact Every Secret**
+   - Redact every secret in anything you show: the loop's output, the debug logs, and your final message alike.
+
+3. **Build the Loop Before Any Theory**
+   - One command, already run at least once, red-capable, deterministic, fast, and runnable unattended. No red-capable command, no hypothesis.
+
+4. **Reproduce and Minimise**
+   - Reproduce the reporter's exact symptom, then minimise the repro until every remaining element is load-bearing.
+
+5. **Rank the Hypotheses**
+   - Rank three to five falsifiable hypotheses and show the list before you test any of them.
+
+6. **Instrument Against the Predictions**
+   - Test one variable at a time against the hypotheses' predictions. Tag every debug log with one prefix.
+
+7. **Regression Test Before the Fix**
+   - Write the regression test before the fix, at a seam that exercises the real bug pattern. Where no correct seam exists, state that as the finding.
+
+8. **Commit the Fix and Push**
+   - Commit the test and the fix to this branch and push: the pull request that already stands carries the commits you push.
+   - State the hypothesis that proved correct in the fix commit's message.
+
+9. **Post the Diagnosis Report**
+   - Post a diagnosis report as a comment on the pull request: the loop command with its red and green verdicts, the ranked hypotheses, the one that proved correct, and the regression seam used or the seam that does not exist.
+
+10. **Clean Up Before the Turn Ends**
+   - Remove the tagged instrumentation and the throwaway harness before the turn ends.
+
+11. **Stay Inside the Limits**
+   - Never create, merge, or edit the pull request, and never close, resolve, or withdraw the ticket: the merge closes it.
+
+12. **The Honest Stop**
+   - When no red-capable loop stands: stop, list what was tried, name what is needed from the operator, apply the needs-info label to the ticket through gh, and end the turn. No other label, ever.
+
+Previous session message (empty on a first session): {previous-message}'''
+[task-types.diagnose.transition]
+ticket-facts = []
+pull-request-facts = ["ready-for-review"]
 
 # --- Security task types ----------------------------------------------------
 # One task type per security ticket source, a sibling of implement. Each one

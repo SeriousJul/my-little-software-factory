@@ -4489,6 +4489,137 @@ describe("the Operator-decides type parks its completions for the operator (ADR 
 		);
 		app.state.close();
 	});
+
+	// The config the diagnose case runs on (issue #330, ADR 0116): the bug
+	// position third among the issue states, and the diagnose type beside the
+	// shipped shape - the park, the opened pull request, and the transition
+	// on one type.
+	const withDiagnose: Partial<FactoryConfig> = {
+		workflowStates: [
+			{
+				name: "bug",
+				taskType: "diagnose",
+				match: { sourceKind: "github-issue", labelsAny: ["bug"] },
+			},
+			{
+				name: "ready-for-review",
+				taskType: "review",
+				match: { sourceKind: "github-pull-request", labelsAny: ["ready-for-review"] },
+			},
+		],
+		taskTypes: {
+			...BASE_CONFIG.taskTypes,
+			diagnose: {
+				template:
+					"/skill:diagnosing-bugs\n\nRepository: {repository}\n\n{external-key}: {title}\n\n" +
+					"URL: {source-url}\n\nPull request: {pull-request-url}\n\nLabels: {labels}\n\n" +
+					"Description:\n{description}\n\n" +
+					"Previous session message (empty on a first session): {previous-message}",
+				thinking: "xhigh",
+				operatorDecides: true,
+				opensPullRequest: true,
+				transition: { ticketFacts: [], pullRequestFacts: ["ready-for-review"] },
+			},
+		},
+	};
+
+	test("a completed diagnose turn parks, offers the review route, and the operator's close releases it (issue #330)", async () => {
+		// The park, the opened pull request, and a fired Transition on one type:
+		// the fire wrote ready-for-review on the fixing pull request, the ticket
+		// it rests behind holds no decision, and the Decision region offers the
+		// review the labels put the pull request on (ADR 0116).
+		const pullIdentity = "github:github.com:P_12";
+		const bugOutcome: FetchOutcome = {
+			status: "success",
+			fetchedAt: "2026-08-31T10:01:00Z",
+			tickets: [fetched(5, "Persist source facts", ["bug"])],
+		};
+		const pullFetched = (labels: string[] = []): FetchedTicket => ({
+			identity: pullIdentity,
+			sourceKind: "github-pull-request",
+			externalKey: "#12",
+			sourceState: "open",
+			url: "https://github.com/acme/factory/pulls/12",
+			title: "Diagnose Persist source facts",
+			description: "The diagnosis of #5.",
+			labels,
+			externalUpdatedAt: "2026-08-31T10:30:00Z",
+			repository: {
+				identity: repoIdentity,
+				displayName: "acme/factory",
+				cloneUrl: "https://github.com/acme/factory.git",
+			},
+			attributes: withIssueReferences({ draft: "false" }, [
+				{ identity, number: 5, repository: "acme/factory" },
+			]),
+		});
+		const pullOutcome: FetchOutcome = {
+			status: "success",
+			fetchedAt: "2026-08-31T10:02:00Z",
+			tickets: [pullFetched(["ready-for-review"])],
+		};
+		const app = seededApp(
+			"awaiting",
+			withDiagnose,
+			bugOutcome,
+			"live-worktree",
+			{
+				taskType: "diagnose",
+				cause: "completed",
+				transition: {
+					fired: true,
+					when: null,
+					reason: "",
+					ticketFacts: [],
+					pullRequestFacts: ["ready-for-review"],
+					ticketWrite: null,
+					pullRequestWrite: { added: ["ready-for-review"], removed: [] },
+					pullRequestIdentity: pullIdentity,
+					pullRequestKey: "#12",
+					writeFailure: "",
+					positionTaskType: "review",
+					positionTicketIdentity: pullIdentity,
+				},
+			},
+			pullOutcome,
+		);
+		const pull = app.pullSrc;
+		if (pull === undefined) throw new Error("the pull source is missing");
+		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+
+		await withApp(
+			async (setup) => {
+				app.src.settle(bugOutcome);
+				pull.settle(pullOutcome);
+				await awaitFrame(setup, (f) => ticketRow(f).includes("[awaiting]"), "the parked ticket");
+				// The park stands ahead of the outcome checks: the fired
+				// transition did not route, the turn rests in awaiting with no
+				// decision on it, and the environment stayed untouched.
+				expect(app.state.ticketWorkCycle.ticketState(identity)).toBe("awaiting");
+				expect(app.state.ticketWorkCycle.lastCompletion(identity)?.decision).toBeNull();
+				expect(app.runner.commands().filter((c) => c.startsWith("herdr tab close"))).toHaveLength(
+					0,
+				);
+				await pressReturn(setup, "the decision modal", (f) => f.includes("Decision:"));
+				const panel = frameText(await settle(setup));
+				// The Decision region offers the review the fire's labels put the
+				// fixing pull request on, beside the write it states, and no gate
+				// holds the step.
+				expect(panel).toContain("Handoff: review");
+				expect(panel).toContain("pull request #12 · added ready-for-review");
+				expect(panel).not.toContain("the Next step is held");
+				// The Close row is the default; confirming it releases the park
+				// and ends the cycle.
+				await pressReturn(setup, "the close", (f) => ticketRow(f).includes("[open]"));
+				expect(app.state.ticketWorkCycle.lastCompletion(identity)?.decision).toBe("closed");
+				expect(app.state.ticketWorkCycle.ticketState(identity)).toBe("open");
+			},
+			WIDTH,
+			HEIGHT,
+			propsOf(app),
+		);
+		app.state.close();
+	});
 });
 
 describe("the handoff queue", () => {

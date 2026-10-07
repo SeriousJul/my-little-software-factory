@@ -115,6 +115,7 @@ describe("the Default configuration", () => {
 		// the states of the label workflow machine (ADR 0027).
 		expect(Object.keys(config.taskTypes).sort()).toEqual([
 			"analyze",
+			"diagnose",
 			"implement",
 			"merge",
 			"resolve-dependabot-alert",
@@ -144,6 +145,13 @@ describe("the Default configuration", () => {
 				name: "ready-for-spec",
 				taskType: "analyze",
 				match: { sourceKind: "github-issue", labelsAny: ["ready-for-spec"] },
+			},
+			{
+				// The diagnosis position (ADR 0116): third among the issue states,
+				// after the operator's two stronger labels.
+				name: "bug",
+				taskType: "diagnose",
+				match: { sourceKind: "github-issue", labelsAny: ["bug"] },
 			},
 			{
 				name: "needs-work",
@@ -219,6 +227,17 @@ describe("the Default configuration", () => {
 			thinking: "xhigh",
 			operatorDecides: true,
 		});
+		// The diagnose runs the bug-diagnosis loop on the ticket's own context
+		// (issue #330): it opens the ticket's draft pull request at the Handoff
+		// start, parks its completions for the operator, and fires the transition
+		// that writes ready-for-review on the pull request (ADR 0116).
+		expect(config.taskTypes.diagnose).toEqual({
+			template: expect.stringContaining("/skill:diagnosing-bugs"),
+			thinking: "xhigh",
+			operatorDecides: true,
+			opensPullRequest: true,
+			transition: { ticketFacts: [], pullRequestFacts: ["ready-for-review"] },
+		});
 		// The security transitions write ready-for-review on the opened pull
 		// request; the Next step the fire derives is the review the labels put
 		// the pull request on (ADR 0092).
@@ -237,6 +256,14 @@ describe("the Default configuration", () => {
 		// thinking level.
 		expect(config.consultationTypes).toEqual({
 			consult: { agent: "pi", environment: "worktree", template: "{input}" },
+			// The by-hand bug diagnosis (issue #330): one input slot, no model,
+			// the worktree environment the skill's isolated loop asks for.
+			diagnose: {
+				agent: "pi",
+				environment: "worktree",
+				thinking: "xhigh",
+				template: expect.stringContaining("/skill:diagnosing-bugs"),
+			},
 			pair: {
 				agent: "pi",
 				environment: "worktree",
@@ -249,6 +276,13 @@ describe("the Default configuration", () => {
 		expect(config.sources).toEqual([]);
 		expect(config.repos).toEqual({});
 		expect(config.stateFile).toBeUndefined();
+		// The issues feed's gates (ADR 0115): the three issue-side states in
+		// state order, so an initialized repository gains the bug feed.
+		expect(issueGateLabels(config.workflowStates)).toEqual([
+			"ready-for-agent",
+			"ready-for-spec",
+			"bug",
+		]);
 		// The agent types and the existing default limits.
 		expect(Object.keys(config.agents).sort()).toEqual(["claude", "codex", "pi"]);
 		expect(config.defaultAgent).toBe("pi");
@@ -602,6 +636,25 @@ describe("validateConfig", () => {
 				thinking: "xhigh",
 				operatorDecides: true,
 			});
+			// The diagnose runs the bug-diagnosis loop on the ticket's own context
+			// (issue #330): it opens the ticket's draft pull request at the Handoff
+			// start, parks its completions for the operator, and fires the
+			// transition that writes ready-for-review on the pull request (ADR 0116).
+			expect(config.taskTypes.diagnose).toEqual({
+				template: expect.stringContaining("/skill:diagnosing-bugs"),
+				thinking: "xhigh",
+				operatorDecides: true,
+				opensPullRequest: true,
+				transition: { ticketFacts: [], pullRequestFacts: ["ready-for-review"] },
+			});
+			// The by-hand bug diagnosis (issue #330): one input slot, no model,
+			// the worktree environment the skill's isolated loop asks for.
+			expect(config.consultationTypes.diagnose).toEqual({
+				agent: "pi",
+				environment: "worktree",
+				thinking: "xhigh",
+				template: expect.stringContaining("/skill:diagnosing-bugs"),
+			});
 			// The review task type carries a template only: the live development
 			// path pins no Task profile settings in the file. The profile
 			// feature itself is covered by the inline config tests in this file,
@@ -634,6 +687,13 @@ describe("validateConfig", () => {
 					name: "ready-for-spec",
 					taskType: "analyze",
 					match: { sourceKind: "github-issue", labelsAny: ["ready-for-spec"] },
+				},
+				{
+					// The diagnosis position (ADR 0116): third among the issue
+					// states, after the operator's two stronger labels.
+					name: "bug",
+					taskType: "diagnose",
+					match: { sourceKind: "github-issue", labelsAny: ["bug"] },
 				},
 				{
 					name: "needs-work",
