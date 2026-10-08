@@ -49,12 +49,17 @@ interface Cell {
 	bold: boolean;
 }
 
-/** The 240-entry cube and the 24 gray ramp, as the standard xterm-256 terminal resolves them. */
+/**
+ * The 240-entry cube and the 24 gray ramp, as the standard xterm-256
+ * terminal resolves them: the cube lays out as 16 + 36*r + 6*g + b, each axis
+ * step 0 standing at 0 and step n at 55 + 40*n, and the ramp runs from 8 to
+ * 238 in steps of 10. The caller passes an index from 16 to 255.
+ */
 function xterm256(index: number): [number, number, number] {
 	if (index < 232) {
 		const i = index - 16;
 		const cubed = (n: number) => (n === 0 ? 0 : 55 + n * 40);
-		return [cubed(i >> 6), cubed((i >> 3) & 7), cubed(i & 7)];
+		return [cubed(Math.floor(i / 36)), cubed(Math.floor((i % 36) / 6)), cubed(i % 6)];
 	}
 	const gray = (index - 232) * 10 + 8;
 	return [gray, gray, gray];
@@ -96,8 +101,15 @@ export function parseScreen(data: Uint8Array, cols: number, rows: number): Cell[
 		text = "";
 	};
 
-	/** One 256-color index, as the terminal resolves it: a basic index, or the exact RGB. */
-	const colorOf256 = (index: number): CellColor => (index < 16 ? index : xterm256(index));
+	/**
+	 * One 256-color index, as the terminal resolves it: a basic index, or the
+	 * exact RGB of the cube or ramp. An index no terminal names - a broken
+	 * stream past 255, or a negative one - falls back to black.
+	 */
+	const colorOf256 = (index: number): CellColor => {
+		if (index < 0 || index > 255) return [0, 0, 0];
+		return index < 16 ? index : xterm256(index);
+	};
 
 	/**
 	 * Read one extended SGR color: `38`/`48`, a mode, and the values.

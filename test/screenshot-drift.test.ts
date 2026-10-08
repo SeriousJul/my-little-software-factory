@@ -186,4 +186,28 @@ describe("the screenshot renderer", () => {
 		);
 		expect(firstPixelOf(blank)).toEqual([26, 27, 38]);
 	});
+
+	it("resolves an extended 256 index as the standard xterm-256 terminal does", () => {
+		// 231 is the cube's far corner: 16 + 36*5 + 6*5 + 5, all three axes at step 5.
+		const corner = parseScreen(Buffer.from("\x1b[38;5;231mX\x1b[0m"), 2, 1);
+		expect(corner[0][0].fg).toEqual([255, 255, 255]);
+		// 52 is one red step of the cube: 16 + 36.
+		const red = parseScreen(Buffer.from("\x1b[38;5;52mX\x1b[0m"), 2, 1);
+		expect(red[0][0].fg).toEqual([95, 0, 0]);
+		// 232 opens the gray ramp at 8.
+		const ramp = parseScreen(Buffer.from("\x1b[38;5;232mX\x1b[0m"), 2, 1);
+		expect(ramp[0][0].fg).toEqual([8, 8, 8]);
+		// 256 is an index no terminal names: the fallback stands in.
+		const broken = parseScreen(Buffer.from("\x1b[38;5;256mX\x1b[0m"), 2, 1);
+		expect(broken[0][0].fg).toEqual([0, 0, 0]);
+	});
+
+	it("paints a pinned basic color as the terminal's own RGB", () => {
+		// SGR 31 names basic index 1, not a brightened one.
+		const cells = parseScreen(Buffer.from("\x1b[31mX\x1b[0m"), 2, 1);
+		expect(cells[0][0].fg).toBe(1);
+		// Painted as a background, the cell is the pinned tokyo-night red.
+		const painted = renderPng(parseScreen(Buffer.from("\x1b[41m "), 1, 1), TERMINAL_COLORS);
+		expect(firstPixelOf(painted)).toEqual([247, 118, 142]);
+	});
 });
