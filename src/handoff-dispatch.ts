@@ -1943,48 +1943,32 @@ class HandoffDispatchModule implements HandoffDispatch {
 			this.dropPickup(item, claimed.reason);
 			return false;
 		}
-		this.runClaimedHandoff(
-			{
-				ticket: claimed.ticket,
-				choice: item.choice,
-				origin: item.origin,
-				claim: claimed.claim,
-				claimedState: claimed.ticket.state,
-				previousMessage: item.previousMessage,
-				routeFromIdentity: item.routeFromIdentity,
-				// The route's ask: the close ran at the enqueue, and this close
-				// is its own answer when the environment herdr holds no more.
-				closePreviousEnvironment: item.origin === "workflow" && item.automatic !== true,
-				workQueuePickup: true,
-				automatic: item.automatic === true,
-			},
-			(started) => {
-				this.settleIntentOnStarted(item.ticketIdentity, started);
-				if (started.ok) {
-					// Whether the row still stands when the start answers is the
-					// operator's cancel seen from the module: a run already inside herdr
-					// cannot be recalled, so it finishes, keeps the row gone, and earns no
-					// "started from the Work queue" line for a start the operator ended.
-					const rowStands = this.state.workQueue.hasWorkItem(item.ticketIdentity);
-					if (rowStands) this.removeQueueRow(item.ticketIdentity);
-					// The route's decision stands at the ask (ADR 0064); the start
-					// answers the ask's refresh and start report only.
-					this.reports.refresh();
-					if (rowStands) {
-						this.reports.notice(
-							`${this.ticketName(item.ticketIdentity)} started from the Work queue`,
-							"info",
-						);
-					}
-				} else if (this.state.workQueue.hasWorkItem(item.ticketIdentity)) {
-					// The start never went live, so the item drops with the warning
-					// and the ticket keeps its state (ADR 0049). A row the operator
-					// already removed says its own goodbye on the line, so the
-					// cancel needs no second line here (ADR 0034).
-					this.dropPickup(item, started.reason);
+		this.runClaimedHandoff(this.pickupHandoff(claimed, item), (started) => {
+			this.settleIntentOnStarted(item.ticketIdentity, started);
+			if (started.ok) {
+				// Whether the row still stands when the start answers is the
+				// operator's cancel seen from the module: a run already inside herdr
+				// cannot be recalled, so it finishes, keeps the row gone, and earns no
+				// "started from the Work queue" line for a start the operator ended.
+				const rowStands = this.state.workQueue.hasWorkItem(item.ticketIdentity);
+				if (rowStands) this.removeQueueRow(item.ticketIdentity);
+				// The route's decision stands at the ask (ADR 0064); the start
+				// answers the ask's refresh and start report only.
+				this.reports.refresh();
+				if (rowStands) {
+					this.reports.notice(
+						`${this.ticketName(item.ticketIdentity)} started from the Work queue`,
+						"info",
+					);
 				}
-			},
-		);
+			} else if (this.state.workQueue.hasWorkItem(item.ticketIdentity)) {
+				// The start never went live, so the item drops with the warning
+				// and the ticket keeps its state (ADR 0049). A row the operator
+				// already removed says its own goodbye on the line, so the
+				// cancel needs no second line here (ADR 0034).
+				this.dropPickup(item, started.reason);
+			}
+		});
 		return true;
 	}
 
@@ -2084,50 +2068,34 @@ class HandoffDispatchModule implements HandoffDispatch {
 			);
 			return;
 		}
-		this.runClaimedHandoff(
-			{
-				ticket: claimed.ticket,
-				choice: item.choice,
-				origin: item.origin,
-				claim: claimed.claim,
-				claimedState: claimed.ticket.state,
-				previousMessage: item.previousMessage,
-				routeFromIdentity: item.routeFromIdentity,
-				// The route's ask: the close ran at the enqueue, and this close
-				// is its own answer when the environment herdr holds no more.
-				closePreviousEnvironment: item.origin === "workflow" && item.automatic !== true,
-				workQueuePickup: true,
-				automatic: item.automatic === true,
-			},
-			(started) => {
-				this.settleIntentOnStarted(item.ticketIdentity, started);
-				if (started.ok) {
-					// The ask is answered, either way: the item leaves the queue when
-					// the start settles. A row the operator already removed leaves no
-					// second line: the run it ended earns no start line of its own.
-					const rowStands = this.state.workQueue.hasWorkItem(item.ticketIdentity);
-					if (rowStands) this.removeQueueRow(item.ticketIdentity);
-					// The route's decision stands at the ask (ADR 0064); the start
-					// answers the ask's refresh and start report only.
-					this.reports.refresh();
-					if (rowStands)
-						this.reports.notice(
-							overCap
-								? `force-dispatched ${this.ticketName(item.ticketIdentity)} over the Parallel limit`
-								: `${this.ticketName(item.ticketIdentity)} started from the Work queue`,
-							"info",
-						);
-				} else if (this.state.workQueue.hasWorkItem(item.ticketIdentity)) {
-					// The ask is answered: a failed start leaves the queue, and the
-					// warning names the operation and the reason, one line for the
-					// failure the handoff's own line already carries.
-					this.removeQueueRow(item.ticketIdentity);
-					this.reports.warning(
-						`force-dispatch of ${this.ticketName(item.ticketIdentity)} failed: ${started.reason}`,
+		this.runClaimedHandoff(this.pickupHandoff(claimed, item), (started) => {
+			this.settleIntentOnStarted(item.ticketIdentity, started);
+			if (started.ok) {
+				// The ask is answered, either way: the item leaves the queue when
+				// the start settles. A row the operator already removed leaves no
+				// second line: the run it ended earns no start line of its own.
+				const rowStands = this.state.workQueue.hasWorkItem(item.ticketIdentity);
+				if (rowStands) this.removeQueueRow(item.ticketIdentity);
+				// The route's decision stands at the ask (ADR 0064); the start
+				// answers the ask's refresh and start report only.
+				this.reports.refresh();
+				if (rowStands)
+					this.reports.notice(
+						overCap
+							? `force-dispatched ${this.ticketName(item.ticketIdentity)} over the Parallel limit`
+							: `${this.ticketName(item.ticketIdentity)} started from the Work queue`,
+						"info",
 					);
-				}
-			},
-		);
+			} else if (this.state.workQueue.hasWorkItem(item.ticketIdentity)) {
+				// The ask is answered: a failed start leaves the queue, and the
+				// warning names the operation and the reason, one line for the
+				// failure the handoff's own line already carries.
+				this.removeQueueRow(item.ticketIdentity);
+				this.reports.warning(
+					`force-dispatch of ${this.ticketName(item.ticketIdentity)} failed: ${started.reason}`,
+				);
+			}
+		});
 	}
 
 	/** The name the operator reads on a line: the ticket's title while the
@@ -2377,6 +2345,30 @@ class HandoffDispatchModule implements HandoffDispatch {
 			paneId: collision.holder?.paneId ?? null,
 			reason: `the leftover agent still holds the herdr name ${collision.heldName}: ${collision.reason}`,
 		});
+	}
+
+	/**
+	 * The ClaimedHandoff a queue pickup runs: the claim's ticket and the
+	 * item's route facts, with the item's origin deciding the close ask.
+	 */
+	private pickupHandoff(
+		claimed: Extract<QueueItemClaimResult, { ok: true }>,
+		item: WorkQueueHandoffItem,
+	): ClaimedHandoff {
+		return {
+			ticket: claimed.ticket,
+			choice: item.choice,
+			origin: item.origin,
+			claim: claimed.claim,
+			claimedState: claimed.ticket.state,
+			previousMessage: item.previousMessage,
+			routeFromIdentity: item.routeFromIdentity,
+			// The route's ask: the close ran at the enqueue, and this close
+			// is its own answer when the environment herdr holds no more.
+			closePreviousEnvironment: item.origin === "workflow" && item.automatic !== true,
+			workQueuePickup: true,
+			automatic: item.automatic === true,
+		};
 	}
 
 	private runClaimedHandoff(

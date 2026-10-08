@@ -714,10 +714,16 @@ export class StubWorldStore {
 		return { code: 0, stdout: `${this.itemUrl(repository, "pr", number)}\n`, stderr: "" };
 	}
 
-	// The publish (ADR 0076): the draft the plane opened is marked ready for
-	// review. A pull request that is not a draft stands as it stands, and the
-	// act is never a conversion back to a draft.
-	private answerPullReady(rest: string[]): Answer {
+	/**
+	 * The flag walk the pull answers share: the item number, the repository,
+	 * and the refusal the walk earns. `allowed` names the extra flags the
+	 * answer accepts beside the repo flag.
+	 */
+	private parsePullFlags(
+		rest: string[],
+		verb: string,
+		allowed: readonly string[] = [],
+	): { number: number; repositoryIdentity: string } | Answer {
 		const number = externalKeyNumber(rest[0]);
 		let repositoryIdentity: string | null = null;
 		for (let i = 1; i < rest.length; i += 1) {
@@ -726,12 +732,27 @@ export class StubWorldStore {
 				if (i + 1 >= rest.length) return this.refusal(rest, "the repo flag has no value");
 				repositoryIdentity = rest[i + 1];
 				i += 1;
+			} else if (allowed.includes(token)) {
+				// The method the plane names. The stub's merge settles the same
+				// way for every method, so the flag is validated and not stored.
 			} else {
-				return this.refusal(rest, `an unknown ready flag: ${token}`);
+				return this.refusal(rest, `an unknown ${verb} flag: ${token}`);
 			}
 		}
 		if (number === null || repositoryIdentity === null)
 			return this.refusal(rest, "no item or no repository");
+		return { number, repositoryIdentity };
+	}
+
+	/**
+	 * The pull the flags name, and the repository it stands in: the refusals
+	 * for no repository and no pull are the GraphQL words the real gh
+	 * answers with.
+	 */
+	private pullOf(
+		repositoryIdentity: string,
+		number: number,
+	): { repository: StubRepository; pull: StubPullRequest } | Answer {
 		const repository = this.repositoryOfIdentity(repositoryIdentity);
 		if (repository === null)
 			return { code: 1, stdout: "", stderr: "GraphQL: Could not resolve the repository.\n" };
@@ -742,52 +763,55 @@ export class StubWorldStore {
 				stdout: "",
 				stderr: `GraphQL: Could not resolve to a PullRequest with the number of ${number}.\n`,
 			};
-		if (pull.merged)
+		return { repository, pull };
+	}
+
+	/**
+	 * The gate the ready, close, and merge answers run before they act: a
+	 * pull that is already merged or closed refuses, the way the real gh
+	 * does. `closedWord` is the answer's own word for the closed pull: the
+	 * close answer says `already closed`, the ready and merge say `closed`.
+	 */
+	private pullGate(
+		repositoryIdentity: string,
+		number: number,
+		closedWord: string,
+	): { repository: StubRepository; pull: StubPullRequest } | Answer {
+		const found = this.pullOf(repositoryIdentity, number);
+		if ("code" in found) return found;
+		if (found.pull.merged)
 			return { code: 1, stdout: "", stderr: "GraphQL: Pull request is already merged.\n" };
-		if (pull.state === "closed")
-			return { code: 1, stdout: "", stderr: "GraphQL: Pull request is closed.\n" };
-		pull.draft = false;
-		pull.updatedAt = now();
+		if (found.pull.state === "closed")
+			return { code: 1, stdout: "", stderr: `GraphQL: Pull request is ${closedWord}.\n` };
+		return found;
+	}
+
+	// The publish (ADR 0076): the draft the plane opened is marked ready for
+	// review. A pull request that is not a draft stands as it stands, and the
+	// act is never a conversion back to a draft.
+	private answerPullReady(rest: string[]): Answer {
+		const parsed = this.parsePullFlags(rest, "ready");
+		if ("code" in parsed) return parsed;
+		const gate = this.pullGate(parsed.repositoryIdentity, parsed.number, "closed");
+		if ("code" in gate) return gate;
+		gate.pull.draft = false;
+		gate.pull.updatedAt = now();
 		this.save();
-		return { code: 0, stdout: this.itemUrl(repository, "pr", number), stderr: "" };
+		return { code: 0, stdout: this.itemUrl(gate.repository, "pr", gate.pull.number), stderr: "" };
 	}
 
 	// The close the cycle end runs (ADR 0076): the draft leaves the open state,
 	// and the labels it carried stay with it. A failed Handoff start runs no
 	// close - the draft it opened stands for the next start to reuse (issue #296).
 	private answerPullClose(rest: string[]): Answer {
-		const number = externalKeyNumber(rest[0]);
-		let repositoryIdentity: string | null = null;
-		for (let i = 1; i < rest.length; i += 1) {
-			const token = rest[i];
-			if (token === "--repo") {
-				if (i + 1 >= rest.length) return this.refusal(rest, "the repo flag has no value");
-				repositoryIdentity = rest[i + 1];
-				i += 1;
-			} else {
-				return this.refusal(rest, `an unknown close flag: ${token}`);
-			}
-		}
-		if (number === null || repositoryIdentity === null)
-			return this.refusal(rest, "no item or no repository");
-		const repository = this.repositoryOfIdentity(repositoryIdentity);
-		if (repository === null)
-			return { code: 1, stdout: "", stderr: "GraphQL: Could not resolve the repository.\n" };
-		const pull = repository.pullRequests.find((entry) => entry.number === number);
-		if (pull === undefined)
-			return {
-				code: 1,
-				stdout: "",
-				stderr: `GraphQL: Could not resolve to a PullRequest with the number of ${number}.\n`,
-			};
-		if (pull.merged)
-			return { code: 1, stdout: "", stderr: "GraphQL: Pull request is already merged.\n" };
-		if (pull.state === "closed")
-			return { code: 1, stdout: "", stderr: "GraphQL: Pull request is already closed.\n" };
-		pull.state = "closed";
-		pull.updatedAt = now();
+		const parsed = this.parsePullFlags(rest, "close");
+		if ("code" in parsed) return parsed;
+		const gate = this.pullGate(parsed.repositoryIdentity, parsed.number, "already closed");
+		if ("code" in gate) return gate;
+		gate.pull.state = "closed";
+		gate.pull.updatedAt = now();
 		this.save();
-		return { code: 0, stdout: this.itemUrl(repository, "pr", number), stderr: "" };
+		return { code: 0, stdout: this.itemUrl(gate.repository, "pr", gate.pull.number), stderr: "" };
 	}
 
 	private answerEdit(kind: "issue" | "pr", rest: string[]): Answer {
@@ -858,51 +882,24 @@ export class StubWorldStore {
 	}
 
 	private answerMerge(rest: string[]): Answer {
-		const number = externalKeyNumber(rest[0]);
-		let repositoryIdentity: string | null = null;
-		for (let i = 1; i < rest.length; i += 1) {
-			const token = rest[i];
-			if (token === "--repo") {
-				if (i + 1 >= rest.length) return this.refusal(rest, "the repo flag has no value");
-				repositoryIdentity = rest[i + 1];
-				i += 1;
-			} else if (token === "--squash" || token === "--merge" || token === "--rebase") {
-				// The method the plane names. The stub's merge settles the same
-				// way for every method, so the flag is validated and not stored.
-			} else {
-				return this.refusal(rest, `an unknown merge flag: ${token}`);
-			}
-		}
-		if (number === null || repositoryIdentity === null)
-			return this.refusal(rest, "no item or no repository");
-		const repository = this.repositoryOfIdentity(repositoryIdentity);
-		if (repository === null)
-			return { code: 1, stdout: "", stderr: "GraphQL: Could not resolve the repository.\n" };
-		const pull = repository.pullRequests.find((entry) => entry.number === number);
-		if (pull === undefined)
+		const parsed = this.parsePullFlags(rest, "merge", ["--squash", "--merge", "--rebase"]);
+		if ("code" in parsed) return parsed;
+		const gate = this.pullGate(parsed.repositoryIdentity, parsed.number, "closed");
+		if ("code" in gate) return gate;
+		const mergeGate = gate.repository.mergeGates[String(parsed.number)];
+		if (mergeGate !== undefined && !mergeGate.passing)
 			return {
 				code: 1,
 				stdout: "",
-				stderr: `GraphQL: Could not resolve to a PullRequest with the number of ${number}.\n`,
+				stderr: `GraphQL: Pull request is not mergeable: ${mergeGate.reason || "the merge gate is failing"}\n`,
 			};
-		if (pull.merged)
-			return { code: 1, stdout: "", stderr: "GraphQL: Pull request is already merged.\n" };
-		if (pull.state === "closed")
-			return { code: 1, stdout: "", stderr: "GraphQL: Pull request is closed.\n" };
-		const gate = repository.mergeGates[String(number)];
-		if (gate !== undefined && !gate.passing)
-			return {
-				code: 1,
-				stdout: "",
-				stderr: `GraphQL: Pull request is not mergeable: ${gate.reason || "the merge gate is failing"}\n`,
-			};
-		pull.merged = true;
-		pull.state = "closed";
-		pull.updatedAt = now();
+		gate.pull.merged = true;
+		gate.pull.state = "closed";
+		gate.pull.updatedAt = now();
 		// The GitHub semantics: a merged pull request closes the issues it
 		// closes, so both tickets leave the list on a clean merge.
-		for (const issue of repository.issues) {
-			if (pull.closingIssueNumbers.includes(issue.number)) {
+		for (const issue of gate.repository.issues) {
+			if (gate.pull.closingIssueNumbers.includes(issue.number)) {
 				issue.state = "closed";
 				issue.updatedAt = now();
 			}
@@ -910,7 +907,7 @@ export class StubWorldStore {
 		this.save();
 		return {
 			code: 0,
-			stdout: `Successfully merged pull request #${number} in ${this.world.owner}/${repository.name}.\n`,
+			stdout: `Successfully merged pull request #${parsed.number} in ${this.world.owner}/${gate.repository.name}.\n`,
 			stderr: "",
 		};
 	}
@@ -935,22 +932,14 @@ export class StubWorldStore {
 		}
 		if (number === null || repositoryIdentity === null || body === null)
 			return this.refusal(rest, "no item, no repository, or no body");
-		const repository = this.repositoryOfIdentity(repositoryIdentity);
-		if (repository === null)
-			return { code: 1, stdout: "", stderr: "GraphQL: Could not resolve the repository.\n" };
-		const pull = repository.pullRequests.find((entry) => entry.number === number);
-		if (pull === undefined)
-			return {
-				code: 1,
-				stdout: "",
-				stderr: `GraphQL: Could not resolve to a PullRequest with the number of ${number}.\n`,
-			};
-		pull.comments.push({ body, createdAt: now() });
-		pull.updatedAt = now();
+		const found = this.pullOf(repositoryIdentity, number);
+		if ("code" in found) return found;
+		found.pull.comments.push({ body, createdAt: now() });
+		found.pull.updatedAt = now();
 		this.save();
 		return {
 			code: 0,
-			stdout: this.itemUrl(repository, "pr", number),
+			stdout: this.itemUrl(found.repository, "pr", found.pull.number),
 			stderr: "",
 		};
 	}

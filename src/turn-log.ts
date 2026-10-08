@@ -125,6 +125,24 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /**
+ * One line of a JSONL record, in the shape its readers take: the parsed
+ * record, `null` for a line the reader skips, and `"unavailable"` for a
+ * line that is not a JSON record at all.
+ */
+type JsonlLine = Record<string, unknown> | "unavailable" | null;
+
+function jsonlLine(line: string): JsonlLine {
+	if (line.trim() === "") return null;
+	let record: unknown;
+	try {
+		record = JSON.parse(line);
+	} catch {
+		return "unavailable";
+	}
+	return isRecord(record) ? record : null;
+}
+
+/**
  * Parse a timestamp the record may carry: an ISO string or epoch
  * milliseconds. Returns null when absent or unparseable, so the staleness
  * guard can fail open instead of guessing.
@@ -191,14 +209,10 @@ export function turnEndFromPiSession(jsonl: string, startedAt: string | null): S
 	let lastError: string | undefined;
 	let lastTs: number | null = null;
 	for (const line of jsonl.split("\n")) {
-		if (line.trim() === "") continue;
-		let record: unknown;
-		try {
-			record = JSON.parse(line);
-		} catch {
-			return { kind: "unavailable" };
-		}
-		if (!isRecord(record) || record.type !== "message") continue;
+		const record = jsonlLine(line);
+		if (record === "unavailable") return { kind: "unavailable" };
+		if (record === null) continue;
+		if (record.type !== "message") continue;
 		const message = isRecord(record.message) ? record.message : undefined;
 		if (message === undefined || typeof message.role !== "string") continue;
 		sawMessage = true;
@@ -303,14 +317,9 @@ export function turnEndFromCodexSession(jsonl: string, startedAt: string | null)
 	let detail = "";
 	let lastTs: number | null = null;
 	for (const line of jsonl.split("\n")) {
-		if (line.trim() === "") continue;
-		let record: unknown;
-		try {
-			record = JSON.parse(line);
-		} catch {
-			return { kind: "unavailable" };
-		}
-		if (!isRecord(record)) continue;
+		const record = jsonlLine(line);
+		if (record === "unavailable") return { kind: "unavailable" };
+		if (record === null) continue;
 		const payload = isRecord(record.payload) ? record.payload : undefined;
 		if (payload === undefined || typeof payload.type !== "string") continue;
 		if (payload.type === "agent_message") {
@@ -395,14 +404,10 @@ export function turnEndFromClaudeSession(jsonl: string, startedAt: string | null
 	let detail = "";
 	let lastTs: number | null = null;
 	for (const line of jsonl.split("\n")) {
-		if (line.trim() === "") continue;
-		let record: unknown;
-		try {
-			record = JSON.parse(line);
-		} catch {
-			return { kind: "unavailable" };
-		}
-		if (!isRecord(record) || record.type !== "assistant") continue;
+		const record = jsonlLine(line);
+		if (record === "unavailable") return { kind: "unavailable" };
+		if (record === null) continue;
+		if (record.type !== "assistant") continue;
 		const message = isRecord(record.message) ? record.message : undefined;
 		if (message === undefined) continue;
 		const content = Array.isArray(message.content) ? message.content : [];
@@ -488,14 +493,10 @@ export function sessionFromPiSession(jsonl: string): SessionExchangeRead {
 	const entries: SessionEntry[] = [];
 	const toolById = new Map<string, Extract<SessionEntry, { kind: "tool" }>>();
 	for (const line of jsonl.split("\n")) {
-		if (line.trim() === "") continue;
-		let record: unknown;
-		try {
-			record = JSON.parse(line);
-		} catch {
-			return { kind: "unavailable" };
-		}
-		if (!isRecord(record) || record.type !== "message") continue;
+		const record = jsonlLine(line);
+		if (record === "unavailable") return { kind: "unavailable" };
+		if (record === null) continue;
+		if (record.type !== "message") continue;
 		const message = isRecord(record.message) ? record.message : undefined;
 		if (message === undefined || typeof message.role !== "string") continue;
 		const content = Array.isArray(message.content) ? message.content : [];

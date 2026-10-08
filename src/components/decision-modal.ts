@@ -41,17 +41,18 @@ import { type MdColors, type MdLine, renderMarkdown } from "./markdown.ts";
 import type { MessageFact } from "./messages.ts";
 import {
 	type ActionRow,
-	bodyRowSpans,
+	decisionActionRows,
 	decisionTitle,
+	heldCauseRow,
 	type ModalBody,
 	ModalSurface,
 	modalFrame,
+	PANE_BORDERS,
 	scrollbarRows,
 	TURN_LOG_PANE,
+	turnLogPane,
 	useModalPopScale,
 } from "./modal-chrome.ts";
-import { ActionItem } from "./shared/choices.ts";
-import { turnEndCauseLine } from "./shared/presentation.ts";
 import { bodyPaneFacts, useDecisionRegion } from "./shared/region.ts";
 import { truncateToWidth } from "./text.ts";
 import { paint } from "./theme.ts";
@@ -109,7 +110,7 @@ const MARGIN = 1;
 /** The one row under the border that names the context. */
 const CONTEXT_ROWS = 1;
 /** The pane's border cells, top and bottom. */
-const PANE_BORDERS = 2;
+
 /** The pane's vertical padding cells, one per side: its full chrome with the border. */
 const PANE_PADDING = 2;
 /** The rows the Turn log keeps before the pane yields its chrome. */
@@ -375,33 +376,16 @@ export function DecisionModal({
 				truncateToWidth(contextLine, frame.contentWidth),
 			),
 		],
-		pane:
-			layout === null
-				? undefined
-				: {
-						title: TURN_LOG_PANE,
-						rows: visibleBody.map((line, index) =>
-							createElement(
-								"text",
-								{ key: `body-${index}` },
-								...bodyRowSpans(line, bodyWidth, thumbRows?.has(index)),
-							),
-						),
-						// The pane's padding is the one its layout decided, and the
-						// height is the one the layout reserved it.
-						vpad: panePadding,
-						height: layout.paneRows + PANE_BORDERS + 2 * panePadding,
-					},
+		pane: turnLogPane({
+			paneRows: layout?.paneRows ?? null,
+			panePadding,
+			visibleBody,
+			bodyWidth,
+			thumbRows,
+			title: TURN_LOG_PANE,
+		}),
 		below: [
-			...(held
-				? [
-						createElement(
-							"text",
-							{ key: "held", fg: paint("yellow") },
-							truncateToWidth(turnEndCauseLine(cause, detail), frame.contentWidth),
-						),
-					]
-				: []),
+			...(held ? [heldCauseRow(cause, detail, frame.contentWidth)] : []),
 			...factLines.map((line, index) =>
 				createElement(
 					"text",
@@ -409,16 +393,7 @@ export function DecisionModal({
 					truncateToWidth(line, frame.contentWidth),
 				),
 			),
-			...region.window.map((row) =>
-				createElement(ActionItem, {
-					key: row.key,
-					row,
-					// The window's rows are objects of `actions`: the selected
-					// row is the one the region's selection stands on.
-					focused: actions[region.at] === row,
-					width: frame.contentWidth,
-				}),
-			),
+			...decisionActionRows(region, actions, frame.contentWidth),
 		],
 		minRows:
 			CONTEXT_ROWS +

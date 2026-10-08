@@ -310,13 +310,13 @@ function rowSpans(
 		createElement(selected ? "b" : "span", { fg: paint("text") }, text);
 	const repoWidth = widthOf(fact.ticket.repository);
 
-	// The trailing markers keep their gaps and their text at the row's end,
-	// and the title keeps its gap and one text cell for itself.
-	const markersCost = trailing.reduce((sum, marker) => sum + MARKER_GAP + widthOf(marker.text), 0);
-	if (trailing.length > 0 && budget >= markersCost + TITLE_MINIMUM) {
-		const afterMarkers = budget - markersCost;
-		const repoFits = afterMarkers >= REPO_GAP + repoWidth + TITLE_MINIMUM;
-		let titleField = Math.max(0, afterMarkers - (repoFits ? REPO_GAP + repoWidth : 0));
+	// The title takes whatever the budget leaves, and the repository drops
+	// when it would leave the title less than a gap column and one text
+	// cell, so the title drops last: the title keeps its gap and one text
+	// cell for itself.
+	const pushTitleAndRepository = (budget: number): void => {
+		const repoFits = budget >= REPO_GAP + repoWidth + TITLE_MINIMUM;
+		let titleField = Math.max(0, budget - (repoFits ? REPO_GAP + repoWidth : 0));
 		if (titleField >= 1) {
 			spans.push(titleEl(" "));
 			titleField -= 1;
@@ -333,6 +333,12 @@ function rowSpans(
 				),
 			);
 		}
+	};
+
+	// The trailing markers keep their gaps and their text at the row's end.
+	const markersCost = trailing.reduce((sum, marker) => sum + MARKER_GAP + widthOf(marker.text), 0);
+	if (trailing.length > 0 && budget >= markersCost + TITLE_MINIMUM) {
+		pushTitleAndRepository(budget - markersCost);
 		for (const marker of trailing) {
 			spans.push(
 				createElement("span", { fg: marker.fg }, `${" ".repeat(MARKER_GAP)}${marker.text}`),
@@ -341,27 +347,9 @@ function rowSpans(
 		return spans;
 	}
 
-	// No trailing marker on this row: the title takes whatever the repository
-	// leaves, and the repository drops when it would leave the title less
-	// than a gap column and one text cell, so the title drops last.
-	const repoFits = budget >= REPO_GAP + repoWidth + TITLE_MINIMUM;
-	let titleField = Math.max(0, budget - (repoFits ? REPO_GAP + repoWidth : 0));
-	if (titleField >= 1) {
-		spans.push(titleEl(" "));
-		titleField -= 1;
-	}
-	if (titleField > 0) {
-		spans.push(titleEl(padToWidth(truncateToWidth(fact.ticket.title, titleField), titleField)));
-	}
-	if (repoFits) {
-		spans.push(
-			createElement(
-				"span",
-				{ fg: paint("subtext0") },
-				`${" ".repeat(REPO_GAP)}${fact.ticket.repository}`,
-			),
-		);
-	}
+	// No trailing marker on this row: the title and the repository take the
+	// budget as it stands.
+	pushTitleAndRepository(budget);
 
 	return spans;
 }

@@ -15,8 +15,7 @@
  */
 import { createElement, useTerminalDimensions } from "@opentui/react";
 import { useState } from "react";
-import { useControlDispatch } from "./control-dispatch.ts";
-import { availabilityFacts, type StandingFacts } from "./controls.ts";
+import type { StandingFacts } from "./controls.ts";
 import { maxScrollOf, windowOf } from "./geometry.ts";
 import type { MessageFact } from "./messages.ts";
 import {
@@ -25,6 +24,7 @@ import {
 	ModalSurface,
 	modalFrame,
 	scrollbarRows,
+	useActionChromeDispatch,
 } from "./modal-chrome.ts";
 import { ActionItem } from "./shared/choices.ts";
 import { useDecisionRegion } from "./shared/region.ts";
@@ -123,30 +123,24 @@ export function MissingModal({
 	const scroll = Math.min(bodyScroll, maxBodyScroll);
 
 	// The modal owns one fact: the rows its Decision region holds.
-	const facts = availabilityFacts("missing-modal", standing, {
-		actionRowCount: actions.length,
-	});
-	useControlDispatch({
-		facts,
+	const facts = useActionChromeDispatch({
+		mode: "missing-modal",
+		standing,
+		actionRows: actions.length,
 		active: inputActive,
 		onUnavailable,
 		onEmergencyExit,
-		handlers: {
-			help: () => onHelp?.(),
-			message: () => onMessage?.(),
-			"cancel-action": onCancel,
-			"confirm-action": () => selection.confirm((row) => onAction(row.key)),
-			"select-action": ({ key }) => selection.move(key.name === "up" ? -1 : 1),
-			"scroll-message": ({ key }) => {
-				if (key.name === "j") setBodyScroll((current) => Math.min(current + 1, maxBodyScroll));
-				else setBodyScroll((current) => Math.max(0, current - 1));
-			},
-			// The plane-level keys reach every surface the chrome owns (issue
-			// #319, ADR 0111), the way the bar's hint and the border's lamp read
-			// the facts the toggle writes.
-			"queue-pause": onQueuePause,
-			"auto-handoff": onAutoHandoff,
-		},
+		selection,
+		confirm: onAction,
+		cancel: onCancel,
+		help: onHelp,
+		message: onMessage,
+		scrollMessage: (direction) =>
+			setBodyScroll((current) =>
+				direction === 1 ? Math.min(current + 1, maxBodyScroll) : Math.max(0, current - 1),
+			),
+		queuePause: onQueuePause,
+		autoHandoff: onAutoHandoff,
 	});
 
 	const thumbRows = hasScrollbar ? scrollbarRows(wrapped.length, bodyRows, scroll) : null;

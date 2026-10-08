@@ -17,11 +17,15 @@
 import { createElement, useTerminalDimensions } from "@opentui/react";
 import { useState } from "react";
 
-import { useControlDispatch } from "./control-dispatch.ts";
-import { availabilityFacts, type StandingFacts } from "./controls.ts";
+import type { StandingFacts } from "./controls.ts";
 import { windowOf } from "./geometry.ts";
 import type { MessageFact } from "./messages.ts";
-import { type ActionRow, ModalSurface, modalFrame } from "./modal-chrome.ts";
+import {
+	type ActionRow,
+	ModalSurface,
+	modalFrame,
+	useActionChromeDispatch,
+} from "./modal-chrome.ts";
 import { ActionItem } from "./shared/choices.ts";
 import { useDecisionRegion } from "./shared/region.ts";
 import { truncateToWidth, wrapToWidth } from "./text.ts";
@@ -116,30 +120,24 @@ export function ActionPanel({
 	// The panel owns one fact: the rows its Decision region holds. The plane's
 	// standing facts come to it as they are, and it states nothing it does not
 	// own.
-	const facts = availabilityFacts("action-panel", standing, {
-		actionRowCount: actions.length,
-	});
-	useControlDispatch({
-		facts,
+	const facts = useActionChromeDispatch({
+		mode: "action-panel",
+		standing,
+		actionRows: actions.length,
 		active: inputActive,
 		onUnavailable,
 		onEmergencyExit,
-		handlers: {
-			help: () => onHelp?.(),
-			message: () => onMessage?.(),
-			"cancel-action": onCancel,
-			"confirm-action": () => selection.confirm((row) => onAction(row.key)),
-			"select-action": ({ key }) => selection.move(key.name === "up" ? -1 : 1),
-			"scroll-message": ({ key }) =>
-				setBodyScroll((current) =>
-					key.name === "j" ? Math.min(current + 1, maxBodyScroll) : Math.max(0, current - 1),
-				),
-			// The plane-level keys reach every surface the chrome owns (issue
-			// #319, ADR 0111), the way the border's lamp reads the facts the
-			// toggle writes.
-			"queue-pause": onQueuePause,
-			"auto-handoff": onAutoHandoff,
-		},
+		selection,
+		confirm: onAction,
+		cancel: onCancel,
+		help: onHelp,
+		message: onMessage,
+		scrollMessage: (direction) =>
+			setBodyScroll((current) =>
+				direction === 1 ? Math.min(current + 1, maxBodyScroll) : Math.max(0, current - 1),
+			),
+		queuePause: onQueuePause,
+		autoHandoff: onAutoHandoff,
 	});
 	const scroll = Math.min(bodyScroll, maxBodyScroll);
 	const shownBody = windowOf(wrapped, scroll, shownBodyRows);

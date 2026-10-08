@@ -37,18 +37,19 @@ import type { MessageFact } from "./messages.ts";
 import {
 	type ActionRow,
 	AGENT_VIEW_PANE,
-	bodyRowSpans,
+	decisionActionRows,
 	decisionTitle,
+	heldCauseRow,
 	liveTitle,
 	type ModalBody,
 	ModalSurface,
 	modalFrame,
+	PANE_BORDERS,
 	scrollbarRows,
 	TURN_LOG_PANE,
+	turnLogPane,
 	useModalPopScale,
 } from "./modal-chrome.ts";
-import { ActionItem } from "./shared/choices.ts";
-import { turnEndCauseLine } from "./shared/presentation.ts";
 import { bodyPaneFacts, useDecisionRegion } from "./shared/region.ts";
 import { truncateToWidth, widthOf, wrapToWidth } from "./text.ts";
 import { paint } from "./theme.ts";
@@ -57,8 +58,6 @@ import { paint } from "./theme.ts";
 const MARGIN = 1;
 /** The one row under the border that names the context. */
 const CONTEXT_ROWS = 1;
-/** The pane's border cells, top and bottom. */
-const PANE_BORDERS = 2;
 /** The rows the body keeps behind the pane's border alone. */
 const BODY_MIN = 1;
 
@@ -321,39 +320,17 @@ export function LiveView({
 				blocked && createElement("span", { fg: paint("yellow") }, blockedSuffix),
 			),
 		],
-		pane:
-			layout === null
-				? undefined
-				: {
-						title: decideable ? TURN_LOG_PANE : AGENT_VIEW_PANE,
-						rows: visibleBody.map((line, index) =>
-							createElement(
-								"text",
-								{ key: `body-${index}` },
-								...bodyRowSpans(line, bodyWidth, thumbRows?.has(index)),
-							),
-						),
-						vpad: panePadding,
-						height: layout.paneRows + PANE_BORDERS + 2 * panePadding,
-					},
+		pane: turnLogPane({
+			paneRows: layout?.paneRows ?? null,
+			panePadding,
+			visibleBody,
+			bodyWidth,
+			thumbRows,
+			title: decideable ? TURN_LOG_PANE : AGENT_VIEW_PANE,
+		}),
 		below: [
-			...(held
-				? [
-						createElement(
-							"text",
-							{ key: "held", fg: paint("yellow") },
-							truncateToWidth(turnEndCauseLine(cause, detail), frame.contentWidth),
-						),
-					]
-				: []),
-			...region.window.map((row) =>
-				createElement(ActionItem, {
-					key: row.key,
-					row,
-					focused: actions[region.at] === row,
-					width: frame.contentWidth,
-				}),
-			),
+			...(held ? [heldCauseRow(cause, detail, frame.contentWidth)] : []),
+			...decisionActionRows(region, actions, frame.contentWidth),
 		],
 		minRows: CONTEXT_ROWS + (held ? 1 : 0) + PANE_BORDERS + BODY_MIN + Math.min(1, regionRows),
 	};
