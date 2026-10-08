@@ -18,7 +18,7 @@ after every edit is the cost that makes an agent skip a check.
 | Command | What it covers | Measured cost |
 | --- | --- | --- |
 | `bun run audit` | The type check, Biome, jscpd, and the code-scanning read, in the Quality audit's one payload | 1.0 s at head 30d603c4 (three runs: 1.04 s, 1.01 s, 1.09 s) |
-| `bun test <file>` | The suite of the file you changed | 0.16 s for a static check over the tree; 13.8 s for the 22 frame tests in `test/action-bar.test.ts`; 21.9 s for the 58 in `test/consultation-frame.test.ts` |
+| `bun test <file>` | The suite of the file you changed | 0.16 s for a static check over the tree; 13.8 s for the 22 frame tests in `test/action-bar.test.ts`; 21.9 s for the 58 in `test/consultation-frame.test.ts`; about 10.7 s for the guide screenshots in `test/screenshot-drift.test.ts`, re-measured on 2026-10-08 (three runs: 10.66 s, 10.68 s, 10.92 s), against 10.6 s for the same case on the pre-change tree |
 | `bun run test:changed` | The test files the current changes can affect | near zero when nothing changed |
 
 The audit stands in place of the separate `bun run lint` and `bun run
@@ -90,9 +90,8 @@ The probes the branch's tests claim, each re-run on the head that is pushed:
 3. The ratchet: lower one count in `.quality-baseline.json` below the count
    the tree stands at. The audit exits non-zero and prints that count below
    its baseline.
-4. The secrets rule: remove the `overrides` entry in `biome.json` that turns
-   `noSecrets` off for the generated screen font table, `scripts/screen-font.ts`.
-   The `secrets` count goes to 1 and the audit exits non-zero.
+4. The secrets rule: plant a high-entropy 32-character token in a file under
+   `src`. The `secrets` count grows by one and the audit exits non-zero.
 
 ## The push gate
 

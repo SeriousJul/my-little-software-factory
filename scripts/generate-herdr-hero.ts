@@ -30,7 +30,12 @@ import { fileURLToPath } from "node:url";
 
 import { openPty } from "../test/executable-pty.ts";
 import { parseScreen, renderPng } from "./ansi-render.ts";
-import { buildFixture, HERDR_THEME_NAME } from "./screenshot-fixture.ts";
+import {
+	buildFixture,
+	HERDR_THEME_NAME,
+	HERO_SCREEN,
+	TERMINAL_COLORS,
+} from "./screenshot-fixture.ts";
 
 type Grid = ReturnType<typeof parseScreen>;
 
@@ -42,9 +47,6 @@ function preview(out: Buffer): string {
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const CONTROLLER_BIN = join(ROOT, "bin", "factory.mjs");
 const OUT = join(ROOT, "docs", "public", "hero.png");
-
-/** The screen the hero shot shows: the plane full width, plus herdr's sidebar. */
-const SCREEN = { cols: 256, rows: 56 } as const;
 
 /** Resolve the real herdr binary from the operator's PATH. */
 function herdrBin(): string {
@@ -74,6 +76,10 @@ async function main(): Promise<void> {
 		XDG_DATA_HOME: join(home, ".data"),
 		HERDR_SOCKET_PATH: join(tmp, "herdr.sock"),
 		TERM: "xterm-256color",
+		// The color half of the pair herdr gives every pane (ADR 0123): the
+		// client's chrome and the plane's pane take the same 24-bit path the
+		// desktop takes.
+		COLORTERM: "truecolor",
 	};
 	// The server's PATH puts the fixture's stub executables first, so
 	// every process a pane launches resolves the stubs, not the real
@@ -149,7 +155,7 @@ async function main(): Promise<void> {
 			[],
 			{ ...isoEnv, PATH: process.env.PATH ?? "/usr/bin:/bin" },
 			{
-				size: { cols: SCREEN.cols, rows: SCREEN.rows },
+				size: { cols: HERO_SCREEN.cols, rows: HERO_SCREEN.rows },
 			},
 		);
 		if (client === null) throw new Error("hero: this platform cannot open a PTY");
@@ -185,7 +191,7 @@ async function main(): Promise<void> {
 			);
 		const headerDeadline = Date.now() + 60000;
 		for (;;) {
-			if (hasHeader(parseScreen(client.output(), SCREEN.cols, SCREEN.rows))) break;
+			if (hasHeader(parseScreen(client.output(), HERO_SCREEN.cols, HERO_SCREEN.rows))) break;
 			if (Date.now() >= headerDeadline) {
 				throw new Error(
 					`timed out waiting for the Main view to render in the pane\ncaptured output:\n${preview(client.output())}`,
@@ -211,7 +217,7 @@ async function main(): Promise<void> {
 			);
 		const detailDeadline = Date.now() + 30000;
 		for (;;) {
-			if (hasDetailText(parseScreen(client.output(), SCREEN.cols, SCREEN.rows))) break;
+			if (hasDetailText(parseScreen(client.output(), HERO_SCREEN.cols, HERO_SCREEN.rows))) break;
 			if (Date.now() >= detailDeadline) {
 				throw new Error(
 					`hero: the Detail pane never showed the running ticket\ncaptured output:\n${preview(client.output())}`,
@@ -251,9 +257,9 @@ async function main(): Promise<void> {
 			}
 			if (Date.now() >= deadline) break;
 		}
-		const grid = parseScreen(client.output(), SCREEN.cols, SCREEN.rows);
+		const grid = parseScreen(client.output(), HERO_SCREEN.cols, HERO_SCREEN.rows);
 		mkdirSync(dirname(OUT), { recursive: true });
-		writeFileSync(OUT, renderPng(grid));
+		writeFileSync(OUT, renderPng(grid, TERMINAL_COLORS));
 		console.log(`hero: wrote ${OUT}`);
 	} catch (err) {
 		failed = true;
@@ -293,7 +299,7 @@ async function main(): Promise<void> {
 
 /** A fingerprint of the parsed screen, to tell a settled frame from a redraw. */
 function gridKey(frame: Buffer): string {
-	return parseScreen(frame, SCREEN.cols, SCREEN.rows)
+	return parseScreen(frame, HERO_SCREEN.cols, HERO_SCREEN.rows)
 		.flatMap((row) => row.map((cell) => cell.char))
 		.join("");
 }
