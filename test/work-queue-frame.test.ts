@@ -26,6 +26,7 @@ import { openFactoryState } from "../src/state.ts";
 import {
 	actionBarRowOf,
 	awaitFrame,
+	detailFocused,
 	detailPaneText,
 	frameText,
 	markerRowOf,
@@ -810,6 +811,198 @@ describe("the Work queue section", () => {
 		}
 	});
 
+	/**
+	 * ADR 0122: the Delete key answers the `open` Ticket that waits with a
+	 * Work queue row, in the Ticket list. The retired `w` key states nothing
+	 * on the row, the way the plane answers every unclaimed key, and the
+	 * removal takes the waiting start out of the queue with no
+	 * confirmation - the operator can ask for the start again - while the
+	 * Ticket keeps the state it wears behind the row it loses.
+	 */
+	test("w states nothing, and Delete takes the open Ticket's waiting start from the Ticket list, and the Ticket stays open", async () => {
+		const state = openFactoryState(join(home, "state.sqlite"));
+		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
+		state.grouping.setGroupingAxis("tickets", "none");
+		const { source, enqueue, runner } = queuedFixture(state);
+		enqueue(FIRST);
+		try {
+			await booted(
+				async (setup) => {
+					source.settle(success(twoTickets()));
+					await awaitFrame(setup, (f) => f.includes("waiting: 1"), "the queue's wait");
+					// The cursor rests on the open Ticket that waits with the
+					// row: the counts read both tickets open, and the row
+					// wears the queued badge in its state badge's place.
+					const before = await settle(setup);
+					expect(frameText(before)).toContain("open: 2 running: 0 awaiting: 0");
+					const waitingRow = rowsOf(stripAnsi(before)).find((row) => row.includes("Add a webhook"));
+					expect(waitingRow).toContain("[queued]");
+					// The retired key states nothing: `w` left the catalogue
+					// with the Close's move to the Delete key (ADR 0122), so
+					// a press of it answers like every unclaimed key, and the
+					// frame the key would have written is the frame it left.
+					setup.mockInput.pressKey("w");
+					const silent = await settle(setup, 300);
+					expect(silent).toBe(before);
+					// The Delete key takes the waiting start out of the queue,
+					// with no confirmation: the Message line names the
+					// removal, and nothing else moves.
+					await press(setup, "delete", "the removal notice", (f) =>
+						f.includes('waiting start for "Add a webhook retry policy"'),
+					);
+					const frame = await awaitFrame(
+						setup,
+						(f) =>
+							f.includes("waiting: 0") &&
+							f.includes('waiting start for "Add a webhook retry policy"'),
+						"the emptied queue's header",
+					);
+					expect(messageRowOf(frame)).toContain(
+						'the waiting start for "Add a webhook retry policy" was removed',
+					);
+					// The Ticket keeps the state it wore while it waited: the
+					// counts hold both tickets open, and the row takes its
+					// open badge back in the queued badge's place.
+					expect(frameText(frame)).toContain("open: 2 running: 0 awaiting: 0");
+					const row = rowsOf(stripAnsi(frame)).find((candidate) =>
+						candidate.includes("Add a webhook"),
+					);
+					expect(row).toContain("[open]");
+					// The durable state stands behind the frame: the queue
+					// holds no row, and the Ticket rests open.
+					expect(state.workQueue.items()).toHaveLength(0);
+					const ticket = state.ticketWorkCycle
+						.ticketListViews([], "implement")
+						.rows.find((candidate) => candidate.identity === FIRST);
+					expect(ticket?.state).toBe("open");
+				},
+				state,
+				source,
+				runner,
+			);
+		} finally {
+			state.close();
+		}
+	});
+
+	/**
+	 * ADR 0122: the waiting-row fact does not stop at the pane border. The
+	 * Ticket detail states the queue item the cursor's Ticket waits with,
+	 * and the Delete key takes it out from there the way the list does: no
+	 * confirmation, the line names the removal, and the Ticket keeps its
+	 * open state.
+	 */
+	test("Delete takes the open Ticket's waiting start from the Ticket detail, and the Ticket stays open", async () => {
+		const state = openFactoryState(join(home, "state.sqlite"));
+		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
+		state.grouping.setGroupingAxis("tickets", "none");
+		const { source, enqueue, runner } = queuedFixture(state);
+		enqueue(FIRST);
+		try {
+			await booted(
+				async (setup) => {
+					source.settle(success(twoTickets()));
+					await awaitFrame(setup, (f) => f.includes("waiting: 1"), "the queue's wait");
+					// The detail states the waiting fact too: the cursor's
+					// Ticket wears the queued badge in the detail's state
+					// slot, the same badge the list row wears.
+					const detail = await press(setup, "l", "the detail to take focus", detailFocused);
+					expect(detailPaneText(detail)).toContain("[queued]");
+					// The Delete key in the detail takes the waiting start
+					// out of the queue, the way the list does: no
+					// confirmation, and the line names the removal.
+					await press(setup, "delete", "the removal notice", (f) =>
+						f.includes('waiting start for "Add a webhook retry policy"'),
+					);
+					const frame = await awaitFrame(
+						setup,
+						(f) => f.includes("waiting: 0") && detailPaneText(f).includes("[open]"),
+						"the detail to take its open badge back",
+					);
+					expect(messageRowOf(frame)).toContain(
+						'the waiting start for "Add a webhook retry policy" was removed',
+					);
+					// The Ticket keeps the state it wore while it waited.
+					expect(frameText(frame)).toContain("open: 2 running: 0 awaiting: 0");
+					// The durable state stands behind the frame: the queue
+					// holds no row, and the Ticket rests open.
+					expect(state.workQueue.items()).toHaveLength(0);
+					const ticket = state.ticketWorkCycle
+						.ticketListViews([], "implement")
+						.rows.find((candidate) => candidate.identity === FIRST);
+					expect(ticket?.state).toBe("open");
+				},
+				state,
+				source,
+				runner,
+			);
+		} finally {
+			state.close();
+		}
+	});
+
+	/**
+	 * ADR 0122: the queue answers the Delete key in its own detail pane,
+	 * where the key answered nothing before. The removal takes the item
+	 * under the cursor out of the queue, the way the list does: no
+	 * confirmation, the line names the removal, and the queue loses its
+	 * depth.
+	 */
+	test("Delete in the Work queue detail takes the item under the cursor out of the queue", async () => {
+		const state = openFactoryState(join(home, "state.sqlite"));
+		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
+		state.grouping.setGroupingAxis("tickets", "none");
+		const { source, enqueue, runner } = queuedFixture(state);
+		enqueue(FIRST);
+		enqueue(SECOND, "workflow");
+		try {
+			await booted(
+				async (setup) => {
+					source.settle(success(twoTickets()));
+					await awaitFrame(setup, (f) => f.includes("waiting: 2"), "the Work header");
+					await clickWorkHeader(setup);
+					// The detail answers for the item under the cursor, where
+					// the key answered nothing before: the item's own facts
+					// stand in the pane, at its place in the shared order.
+					setup.mockInput.pressKey("l");
+					const detail = await awaitFrame(
+						setup,
+						(f) =>
+							f.includes("❯ Work queue") === false && detailPaneText(f).includes("Origin: open"),
+						"the Work queue detail pane",
+					);
+					expect(detailPaneText(detail)).toContain("place 1 of 2");
+					// The Delete key in the detail takes the item under the
+					// cursor out of the queue, the way the list does: no
+					// confirmation, and the line names the removal.
+					await press(setup, "delete", "the removal notice", (f) =>
+						f.includes('waiting start for "Add a webhook retry policy"'),
+					);
+					const frame = await awaitFrame(
+						setup,
+						(f) => f.includes("waiting: 1") && detailPaneText(f).includes("Origin: workflow"),
+						"the queue to lose its depth",
+					);
+					expect(messageRowOf(frame)).toContain(
+						'the waiting start for "Add a webhook retry policy" was removed',
+					);
+					// The cursor keeps the queue, and the detail answers for
+					// the row that now stands first: the operator's route at
+					// the place the removal freed.
+					expect(detailPaneText(frame)).toContain("place 1 of 1");
+					// The durable state stands behind the frame: only the
+					// route's item keeps its place.
+					expect(state.workQueue.items().map(workQueueIdentityOf)).toEqual([SECOND]);
+				},
+				state,
+				source,
+				runner,
+			);
+		} finally {
+			state.close();
+		}
+	});
+
 	test("the Work header appears with its count, and the rows carry the task type and the title", async () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
 		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
@@ -1250,7 +1443,7 @@ describe("the Work queue section", () => {
 					// the queue owns neither, so it refuses the key in the two owners'
 					// words (ADR 0060): the refusal moves nothing, and the queue keeps
 					// its rows and its depth.
-					let refusal = await press(setup, "f", "the filter refusal in the queue list", (f) =>
+					const refusal = await press(setup, "f", "the filter refusal in the queue list", (f) =>
 						messageRowOf(f).includes("only in the Ticket section and the Consultation section"),
 					);
 					expect(messageRowOf(refusal)).toContain(
@@ -1259,31 +1452,29 @@ describe("the Work queue section", () => {
 					expect(queueRows(refusal)).toEqual(queueRows(before));
 					expect(markerRowOf(refusal)).toBe(markerRowOf(list));
 					expect(detailPaneText(refusal)).toContain("place 1 of 2");
-					// The detail pane: ADR 0049 retired the queue's own `d` reorder
-					// key, so the Consultation's Delete resolves and refuses, and the
-					// detail keeps the item under its cursor.
+					// The detail pane: `d` left the catalogue with the record
+					// removal's move to the Delete key (ADR 0049, ADR 0122), so the
+					// retired key resolves nowhere: a press of it states nothing,
+					// and the detail keeps the item under its cursor.
 					setup.mockInput.pressKey("l");
 					const detail = await awaitFrame(
 						setup,
 						(f) => f.includes("❯ Work queue") === false && f.includes("Origin: open"),
 						"the Work queue detail pane",
 					);
-					// The first press puts the Consultation refusal on the Message
-					// line, so the line the queue's own `f` refusal left stands aside
-					// before the pane is compared: the frame the key writes is measured
-					// against the frame the same line already held.
-					await press(setup, "d", "the delete refusal in the queue detail", (f) =>
-						messageRowOf(f).includes("only in the Consultation section"),
-					);
 					const detailBefore = await settle(setup);
-					refusal = await press(setup, "d", "the delete refusal again in the queue detail", (f) =>
-						messageRowOf(f).includes("only in the Consultation section"),
+					setup.mockInput.pressKey("d");
+					const silent = await settle(setup, 300);
+					// The press states nothing: the `f` refusal the list left stands
+					// on the line, and the frame the key would have written is the
+					// frame it left.
+					expect(messageRowOf(silent)).toContain(
+						"only in the Ticket section and the Consultation section",
 					);
-					expect(messageRowOf(refusal)).toContain("only in the Consultation section");
-					expect(queueRows(refusal)).toEqual(queueRows(detail));
-					expect(detailPaneText(refusal)).toBe(detailPaneText(detailBefore));
+					expect(queueRows(silent)).toEqual(queueRows(detail));
+					expect(detailPaneText(silent)).toBe(detailPaneText(detailBefore));
 					// The queue still holds both starts at the same depth.
-					expect(frameText(refusal)).toContain("waiting: 2");
+					expect(frameText(silent)).toContain("waiting: 2");
 				},
 				state,
 				source,

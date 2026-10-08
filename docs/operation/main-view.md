@@ -77,7 +77,7 @@ the settings that handoff started with.
 | ---------- | ------------------------------------------------------------------------ |
 | `Enter`    | Hand an open ticket off; open the decision on an `awaiting` one         |
 | `e`        | Open the override panel: change the handoff's settings before it starts  |
-| `w`        | Close the selected ticket's work cycle, behind a confirmation            |
+| `Delete`   | The plane's one destructive key (ADR 0122): in the Ticket section it closes the selected ticket's work cycle behind a confirmation, and on an `open` ticket with a waiting queue row it takes that row out of the Work section |
 | `i`        | Ignore the selected ticket, or take the ignore back                      |
 | `u`        | Mute the source the selected ticket came in on, or take the mute back    |
 | `f`        | Cycle the list filter: the active rows, the ignored, the muted, both     |

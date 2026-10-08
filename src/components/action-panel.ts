@@ -4,7 +4,8 @@
  *
  * It serves the surfaces that ask before they act: the Consultation close,
  * delete, and live-checkout conflict, and the Ticket close the control plane
- * confirms key `w` behind (ADR 0031). The plane's turn decisions render
+ * confirms the Delete key behind (ADR 0031, ADR 0122). The plane's turn
+ * decisions render
  * through the decision modal and the missing modal, which share this
  * module's chrome and dispatch.
  *

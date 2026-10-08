@@ -795,7 +795,7 @@ describe("the Ticket section's Groups", () => {
 				);
 				// The pane did not blank out under the operator (story 40).
 				expect(detailPaneText(setup.captureCharFrame())).toContain("Webhook retry");
-				for (const key of ["w", "g", "e"] as const) {
+				for (const key of ["delete", "g", "e"] as const) {
 					const refused = await press(setup, key, "the refusal", (f) =>
 						messageRowOf(f).includes("no Ticket is selected"),
 					);

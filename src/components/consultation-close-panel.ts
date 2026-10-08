@@ -67,3 +67,28 @@ export function consultationClosePanel(consultation: Consultation):
 		],
 	};
 }
+
+/**
+ * The Consultation removal panel's copy (issue #91, ADR 0122).
+ *
+ * The record removal always confirms, on a `closed` and on an `unscheduled`
+ * record alike: the panel names what it destroys, the record and its saved
+ * history, and nothing else stands beside it, because the record holds no
+ * environment and no Agent.
+ */
+export function consultationDeletePanel(id: string): {
+	title: string;
+	bodyLines: string[];
+	actions: ActionRow[];
+} {
+	return {
+		title: `Delete Consultation ${id.slice(0, 8)}`,
+		bodyLines: [
+			"Saved history will be removed. Backups and filesystem snapshots may retain copies. Data is not encrypted.",
+		],
+		actions: [
+			{ key: "delete", label: "Delete", detail: "remove local history" },
+			{ key: "cancel", label: "Cancel" },
+		],
+	};
+}

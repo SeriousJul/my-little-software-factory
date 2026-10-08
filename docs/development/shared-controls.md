@@ -96,22 +96,33 @@ rule, not drift:
   refused keys included: `e` Override appears there dim, because its modes
   claim the key in the Consultation section and the operator pressing it
   gets the Ticket section's refusal.
-- The Ticket section's guide omits the Consultation section's Delete (`d`)
-  and History (`f`) (issue #85): the Ticket section does not ask the
-  operator to learn those keys, and the Ticket bar follows its guide, so it
+- The Ticket section's guide omits the Consultation section's Close and
+  Remove and History (`f`) (issue #85, ADR 0122): the Ticket section does
+  not ask the operator to learn those keys, and the Ticket bar follows its
+  guide, so it hints neither. The Consultation section's acts take the
+  Delete key, and the act word for the removal is Remove, so the guide
+  reads `Delete Remove` in the Consultation section, never `Delete Delete`.
+- The Work queue section omits the same two Consultation controls
+  (ADR 0034, ADR 0049, ADR 0122). Its two modes join the shared base modes,
+  so the Consultation section's keys reach them as a key the queue can
+  never dispatch: the Consultation's Close and its Remove refuse there in
+  the owning section's words, and `f` belongs to no queue control at all
+  now that ADR 0049 retired the queue's `u` and `d` reorder keys. The
+  queue keeps its own `Delete Remove` row instead: its removal answers the
+  Delete key in both of the queue's modes, so the queue's guide and bar
+  name the key there, and each section's guide names the keys that section
+  dispatches - a queue cursor shows neither Consultation row, and its bar
   hints neither.
-- The Work queue section omits the same two controls (ADR 0034, ADR 0049).
-  Its two modes join the shared base modes, so the Consultation section's keys
-  reach them as a key the queue can never dispatch: `d` and `f` belong to no
-  queue control at all now that ADR 0049 retired the queue's `u` and `d`
-  reorder keys. Each section's guide names the keys that section dispatches,
-  so a queue cursor shows neither row, and its bar hints neither.
 
-The catalogue states the section ownership once per control
-(`consultationSectionOnly`), and the refusal, the guide, and the bar read
-it; neither the bar nor the guide special-cases a control by id. The rule
-names the owning section, so it reaches every section that does not own
-the control, and adding a section to the plane cannot reopen the gap. The
+The catalogue states the section ownership once per control, with the
+three section markers - `ticketSectionOnly`, `consultationSectionOnly`,
+and `queueSectionOnly` - and the refusal, the guide, and the bar read
+them; neither the bar nor the guide special-cases a control by id. The
+rule names the owning section, so it reaches every section that does not
+own the control, and adding a section to the plane cannot reopen the gap.
+The queue's removal takes no marker at all: the Delete key is dispatched
+in every base section, so every base guide names the queue's `Delete
+Remove` row among its own (ADR 0122). The
 [verification record](../verification/shared-controls.md) carries the
 catalogue-wide guard test that fails if a refused key is hinted by a bar
 whose guide does not name it, walked in every base mode of every section.

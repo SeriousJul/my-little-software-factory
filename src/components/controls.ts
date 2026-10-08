@@ -97,8 +97,6 @@ type ControlKey =
 	| "s"
 	| "p"
 	| "x"
-	| "d"
-	| "w"
 	| "u"
 	| "delete"
 	| "f1"
@@ -267,6 +265,12 @@ export interface TicketDetailFacts extends StandingFacts {
 	ticketListFilter: TicketListFilter;
 	ticketPaneAlive: boolean;
 	ticketPaneForeign: boolean;
+	/**
+	 * The Work queue item the row under the cursor waits with (ADR 0122):
+	 * Delete on an `open` Ticket that waits with a row removes that row,
+	 * and the detail pane answers the key the way the list does.
+	 */
+	queueItemForSelectedRow: WorkQueueItem | null;
 	detailCanScroll: boolean;
 }
 
@@ -299,6 +303,12 @@ export interface ConsultationListFacts extends StandingFacts, ConsultationSectio
 /** The facts the Consultation section's detail pane states for its own Body. */
 export interface ConsultationDetailFacts extends StandingFacts, ConsultationSectionFacts {
 	mode: "consultation-detail";
+	/**
+	 * The Work queue item the row under the cursor waits with (ADR 0122):
+	 * Delete on a `queued` record removes that row and leaves the record
+	 * `unscheduled`, and the detail pane answers the key the way the list does.
+	 */
+	queueItemForSelectedRow: WorkQueueItem | null;
 	detailCanScroll: boolean;
 }
 
@@ -965,10 +975,42 @@ const groupOrderMove =
 			direction === "up" ? "the group is first in the list" : "the group is last in the list",
 		);
 	};
-const queueRemove = (facts: WorkQueueListFacts): ControlAvailability =>
-	facts.selectedWorkQueueItem !== null
+/**
+ * Why the Delete key answers with the queue's removal (ADR 0122).
+ *
+ * The queue's removal is one control in all six base modes: in the queue's
+ * own panes it takes the item under the cursor out of the queue, and in the
+ * Ticket and Consultation panes it takes the row the cursor's item waits
+ * with. The state split comes before the row: the Ticket's Close claims every
+ * state that holds live or settled work, so the removal answers an `open`
+ * Ticket alone, where the waiting row is the only thing the Ticket holds,
+ * and a `queued` Consultation, where the record stays `unscheduled` behind
+ * the row it loses. A row that waits nowhere is its own refusal.
+ */
+const queueRemove = (facts: BaseFacts): ControlAvailability => {
+	if (facts.mode === "work-queue-list" || facts.mode === "work-queue-detail")
+		return facts.selectedWorkQueueItem !== null
+			? available()
+			: unavailable("no queue item is under the cursor");
+	if (facts.mode === "ticket-list" || facts.mode === "ticket-detail") {
+		const ticket = facts.selectedTicket;
+		if (ticket === undefined) return unavailable("no Ticket is selected");
+		if (ticket.state !== "open")
+			return unavailable("the selected Ticket is not open: Delete closes its work cycle");
+		return facts.queueItemForSelectedRow !== null
+			? available()
+			: unavailable("the selected Ticket has no waiting queue item");
+	}
+	const consultation = facts.selectedConsultation;
+	if (consultation === undefined) return unavailable("no Consultation is selected");
+	// The close answers every other state of the record, so the removal
+	// answers the `queued` one alone: the row the record waits with.
+	if (consultation.state !== "queued")
+		return unavailable("the selected row has no waiting queue item");
+	return facts.queueItemForSelectedRow !== null
 		? available()
-		: unavailable("no queue item is under the cursor");
+		: unavailable("the selected row has no waiting queue item");
+};
 /**
  * Why Enter answers a Work queue item with the force-dispatch (issue #89,
  * ADR 0034).
@@ -1092,13 +1134,17 @@ const ticketGoto = (facts: TicketGotoFacts): ControlAvailability => {
 	return unavailable("the Agent's pane is not alive in the last poll");
 };
 /**
- * Why Close answers nothing on a Ticket (ADR 0031). Key `w` ends the work
- * cycle of the selected Ticket, in both Ticket base modes. An `open` Ticket
- * holds no work in flight, so the close refuses it with that reason, a routed
- * Ticket among them (ADR 0072): the wait is the Work queue's to remove. Every
- * state the close runs on - `handed-off`, `running`, and `awaiting` - has a
- * live agent or a settled turn behind it, and all open the confirmation
- * dialog before anything moves (ADR 0067).
+ * Why the Delete key's Close answers nothing on a Ticket (ADR 0031, ADR 0122).
+ * Delete ends the work cycle of the selected Ticket, in both Ticket base
+ * modes. An `open` Ticket holds no work in flight, so the close refuses it
+ * with that reason, a routed Ticket among them (ADR 0072): the wait is the
+ * Work queue's to remove. Every state the close runs on - `handed-off`,
+ * `running`, and `awaiting` - has a live agent or a settled turn behind it,
+ * and all open the confirmation dialog before anything moves (ADR 0067).
+ * The state split comes before the row (ADR 0122): a Ticket that holds live
+ * or settled work always closes, even when a Restart row also waits for it
+ * in the queue (ADR 0108); the queue's removal answers the `open` Ticket
+ * alone.
  *
  * A Handoff in flight is no refusal here: the close takes the shared
  * environment seat and queues behind that Handoff, so a hung start still ends
@@ -1188,23 +1234,44 @@ const ticketMuteLabel = (facts: TicketBaseFacts): string => {
 	const name = sources.length === 0 ? "source" : sources.join(", ");
 	return ticket.muted === true ? `Un-mute ${name}` : `Mute ${name}`;
 };
+/**
+ * Why the Delete key's Close answers nothing on a Consultation (ADR 0122).
+ *
+ * The close runs the states that hold a live Agent or a broken one -
+ * `opening`, `working`, `awaiting-response`, `missing`, `failed`, and
+ * `closing` - and confirms behind the panel where a live Agent stands.
+ * The two states that hold no Agent no longer close at the key: a `queued`
+ * record gives the key to the queue's removal, which takes its Work queue
+ * row out and leaves the record `unscheduled`, and an `unscheduled` record
+ * gives it to the record's removal, which takes the record and its history.
+ * A `closed` record refuses with the one reason a closed record gives.
+ */
 const consultationClose = (facts: ConsultationBaseFacts): ControlAvailability => {
 	const consultation = facts.selectedConsultation;
 	if (consultation === undefined) return unavailable("no Consultation is selected");
+	if (consultation.state === "queued")
+		return unavailable(
+			"the selected Consultation waits in the Work queue: Delete takes its row out",
+		);
+	if (consultation.state === "unscheduled")
+		return unavailable(
+			"the selected Consultation is unscheduled: Delete removes the record and its history",
+		);
 	return consultation.state === "closed" ? unavailable(CONSULTATION_CLOSED_REASON) : available();
 };
 /**
- * Why Delete answers nothing (issue #91).
+ * Why the Delete key's record removal answers nothing (issue #91, ADR 0122).
  *
  * A `closed` record's history is removable, and an `unscheduled` record is
- * the ask itself: it holds no environment and no Agent, so deleting it
- * removes the record and nothing else. Every other state still runs - the
- * close or the recovery answers the key - and the delete refuses it.
+ * the ask itself: it holds no environment and no Agent, so removing it
+ * takes the record and its history and nothing else. Every other state still
+ * runs - the close or the queue's removal answers the key - and the removal
+ * refuses it.
  */
 const consultationDelete = (facts: ConsultationBaseFacts): ControlAvailability => {
 	const state = facts.selectedConsultation?.state;
 	if (state === "closed" || state === "unscheduled") return available();
-	return unavailable("only a closed or unscheduled Consultation can be deleted");
+	return unavailable("only a closed or unscheduled Consultation can be removed");
 };
 /**
  * Why Schedule answers nothing (issue #91).
@@ -1648,19 +1715,25 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 	{
 		id: "ticket-close",
 		label: "Close",
-		// `w` ends the selected Ticket's work cycle from either Ticket pane,
-		// behind the shared confirmation panel, the way the Consultation section's
-		// Close asks (ADR 0031). The Decision modal keeps its Close row: it is the
-		// close with the turn log beside it, and `w` is the direct route to that
-		// same action.
-		keys: () => ["w"],
-		keyLabel: "w",
+		// The Delete key ends the selected Ticket's work cycle from either
+		// Ticket pane, behind the shared confirmation panel, the way the
+		// Consultation section's Close asks (ADR 0031, ADR 0122). The Decision
+		// modal keeps its Close row: it is the close with the turn log beside
+		// it, and the Delete key is the direct route to that same action.
+		// `w` is gone (ADR 0122): the Delete key is the plane's one destructive
+		// key, and the act follows the item the cursor stands on.
+		keys: () => ["delete"],
+		keyLabel: "Delete",
 		scope: "control-plane",
 		actionBar: true,
 		// One ladder place with the Consultation section's Close: below Goto and
 		// the re-read, above the section toggle and the Launch.
 		priority: 50,
 		modes: [...ticketBaseModes],
+		// The Ticket section's own act: the other sections' guides and bars
+		// name only the act their own mode runs, and the queue's removal
+		// answers the Delete key in them (ADR 0122).
+		ticketSectionOnly: true,
 		availability: ticketClose,
 	},
 	{
@@ -1825,7 +1898,7 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		// one keypress from view in either direction. The filter is a view, not
 		// factory state, and it opens on the active rows at every boot. The
 		// Consultation section's history answers the same key in its own section,
-		// the way `w` and `g` carry one meaning per section.
+		// the way `g` carries one meaning per section.
 		id: "ticket-filter",
 		label: "Filter",
 		barLabel: ticketFilterLabel,
@@ -1962,9 +2035,11 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 	{
 		// The queue's order keys (ADR 0049): `+` (or `=`, its unshifted form)
 		// promotes the item under the cursor, `-` demotes it, the keys the
-		// operator already knew for raising and lowering a rank. `u` and `d`
-		// are gone, so the queue has one key system. Reordering never changes
-		// an item's captured choice.
+		// operator already knew for raising and lowering a rank. The queue's
+		// own `u` and `d` reorder keys are gone (ADR 0049), and `d` left the
+		// catalogue with the record removal's move to the Delete key (ADR 0122),
+		// so the queue has one key system. Reordering never changes an item's
+		// captured choice.
 		id: "queue-promote",
 		label: "Promote",
 		keys: () => ["=", "+"],
@@ -2016,15 +2091,28 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		guideNote: "pauses the queue's drain; the force-dispatch passes it",
 	},
 	{
+		// The queue's removal is one control in all six base modes (ADR 0122):
+		// the Delete key answers in the queue's own panes with the item under
+		// the cursor, and in the Ticket and Consultation panes with the row the
+		// cursor's item waits with. It leaves its `work-queue-list` scope and
+		// its single-mode binding, the way `queue-jump` did for Enter, and it
+		// takes no section marker, because the key is genuinely dispatched in
+		// every base section. The removal never confirms: it ends a waiting
+		// start, and the operator can ask for that start again.
 		id: "queue-remove",
 		label: "Remove",
 		keys: () => ["delete"],
 		keyLabel: "Delete",
-		scope: "work-queue-list",
+		scope: "control-plane",
 		actionBar: true,
-		priority: 55,
-		modes: ["work-queue-list"],
+		// Beside the Consultation's Close (50) and History (55): the removal is
+		// the section's row key in every base mode, so it outranks the
+		// Consultation section's record removal and the Launch it sits with.
+		priority: 56,
+		modes: [...baseModes],
 		availability: queueRemove,
+		guideNote:
+			"takes the row's waiting item out of the Work queue: the Ticket stays open, and the Consultation record becomes unscheduled",
 	},
 	{
 		// Enter on a queue row force-dispatches the item under the cursor
@@ -2080,24 +2168,35 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 	{
 		id: "consultation-close",
 		label: "Close",
-		// The Delete key closes the Consultation: the same key the Work queue
-		// removes an item with, so taking a Consultation out of the queue is
-		// one key in both sections. `w` is retired here - the Ticket section
-		// keeps it for its own Close, which ends a work cycle rather than
-		// removing a queue row.
+		// The Delete key closes the Consultation (ADR 0122): the same key the
+		// Work queue removes an item with, so taking a Consultation out of the
+		// queue is one key in every base section. A `queued` record no longer
+		// closes at the key: the queue's removal takes its row out, and the
+		// record stays `unscheduled`, the way the queue's own Remove runs it.
 		keys: () => ["delete"],
 		keyLabel: "Delete",
 		scope: "control-plane",
 		actionBar: true,
 		priority: 50,
 		modes: [...consultationBaseModes],
+		// The Consultation section's own act, the way the Ticket section's
+		// Close keeps its own: the other sections' guides and bars name only
+		// the act their own mode runs, and the queue's removal answers the
+		// Delete key in them (ADR 0122).
+		consultationSectionOnly: true,
 		availability: consultationClose,
 	},
 	{
+		// The record removal (issue #91, ADR 0122): the Delete key takes a
+		// `closed` or `unscheduled` record and its history out of the plane,
+		// behind the removal panel that always confirms. `d` is gone (ADR
+		// 0122), and the act word is Remove, not Delete: the key word and the
+		// act word stay apart, and the bar reads `Delete Remove`, never
+		// `Delete Delete`.
 		id: "consultation-delete",
-		label: "Delete",
-		keys: () => ["d"],
-		keyLabel: "d",
+		label: "Remove",
+		keys: () => ["delete"],
+		keyLabel: "Delete",
 		scope: "control-plane",
 		actionBar: true,
 		priority: 35,
@@ -2646,7 +2745,6 @@ const KEY_NAMES: Record<string, string> = {
 	f: "f",
 	i: "i",
 	x: "x",
-	d: "d",
 	r: "r",
 	a: "a",
 	m: "m",
@@ -2777,7 +2875,9 @@ function omitFromGuide(mode: InteractionMode, control: ControlDefinition): boole
 		return true;
 	// The Work queue's own keys stay out of the other sections' guides
 	// (ADR 0034): each section's guide names the keys it dispatches, and the
-	// queue's reorder, cancel, and list-focus keys belong to the queue alone.
+	// queue's reorder and force-dispatch keys belong to the queue alone.
+	// The queue's removal left that scope (ADR 0122): it is dispatched in
+	// every base section, the way the queue's jump did for Enter.
 	if (
 		!workQueueMode(mode) &&
 		(control.scope === "work-queue-list" || control.scope === "work-queue-detail")
@@ -2794,9 +2894,11 @@ function omitFromGuide(mode: InteractionMode, control: ControlDefinition): boole
  * Whether a section other than a control's own omits it from its guide and
  * its bar.
  *
- * Delete and History keep their catalog place in the Consultation section
- * alone (issue #85), and the queue's order and pause keys keep theirs in the
- * Work queue section alone (ADR 0049, ADR 0052): a key still resolves in the
+ * Each section's own Delete act keeps its catalog place in its own section
+ * alone (ADR 0122): the Ticket section's Close, and the Consultation
+ * section's Close and its record removal beside its History (issue #85),
+ * while the queue's order and pause keys keep theirs in the Work queue
+ * section alone (ADR 0049, ADR 0052): a key still resolves in the
  * sections that do not own the control and refuses there, in the catalogue's
  * words, but those sections name the control nowhere, and the bar hints no
  * key its guide omits. The rule reads each section marker against the modes

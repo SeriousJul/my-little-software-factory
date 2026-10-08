@@ -1605,7 +1605,8 @@ describe("the outcome wording", () => {
 });
 
 describe("the Close cleanup", () => {
-	// The in-flight Close (ADR 0031): key `w` ends a cycle whose turn never
+	// The in-flight Close (ADR 0031, ADR 0122): the Delete key ends a cycle
+	// whose turn never
 	// settled, writes no completion trace, and stops the Agent through the same
 	// cleanup every other close path runs.
 	test("the in-flight Close ends the cycle, writes no trace, and closes the environment", async () => {

@@ -161,7 +161,7 @@ import { deriveNextStep, fireTransition, refireRecordedSkips } from "../workflow
 import { ActionBar } from "./action-bar.ts";
 import { ActionPanel } from "./action-panel.ts";
 import { renderAnsiScreen } from "./ansi-screen.ts";
-import { consultationClosePanel } from "./consultation-close-panel.ts";
+import { consultationClosePanel, consultationDeletePanel } from "./consultation-close-panel.ts";
 import {
 	ConsultationDetail,
 	consultationDetailBody,
@@ -338,8 +338,6 @@ export type AppKey =
 	| "c"
 	| "f"
 	| "x"
-	| "w"
-	| "d"
 	| "up"
 	| "down"
 	| "left"
@@ -2324,8 +2322,8 @@ export function App({
 	 * its settled turn, then the Close cleanup.
 	 *
 	 * One function runs the close the Decision modal's Close row offers and the
-	 * one key `w` confirms (ADR 0031): the two routes are the same operation, so
-	 * they cannot drift. The Close cleanup goes through the dispatch seat, which
+	 * Delete key confirms (ADR 0031, ADR 0122): the two routes are the same
+	 * operation, so they cannot drift. The Close cleanup goes through the dispatch seat, which
 	 * already holds it behind a Handoff of the same ticket. A ticket that stands
 	 * for a route item loses it in the same answer: a closed cycle never
 	 * leaves a live start in the queue (ADR 0067, ADR 0072).
@@ -2414,7 +2412,7 @@ export function App({
 	};
 
 	/**
-	 * Run the Close the operator confirmed on `w`.
+	 * Run the Close the operator confirmed on the Delete key.
 	 *
 	 * The route reads the Ticket's state now, not the state the dialog was drawn
 	 * on: the poll can settle the turn, or a decision can land, while the
@@ -2681,15 +2679,15 @@ export function App({
 	/**
 	 * Whether this record's close has nothing to stop and nothing to keep.
 	 *
-	 * The two states Recovery names, plus a `queued` or an `unscheduled`
-	 * record (issue #90, issue #91): it has never had an Agent, an
-	 * environment, or a worktree, so its close confirms nothing and cleans
-	 * nothing. It is not one the launcher replaces: its ask still stands, and
-	 * the record closes to the delete that follows it.
+	 * The two states Recovery names (issue #90): a `missing` or a `failed`
+	 * record has no Agent to stop and no environment to clean, so its close
+	 * runs on the keypress. A `queued` or an `unscheduled` record no longer
+	 * closes at the key (ADR 0122): the Delete key takes the queue's row out of
+	 * the first, and takes the second's record and history out, and neither
+	 * record reaches a close. A no-Agent record is not one the launcher
+	 * replaces: its ask still stands.
 	 */
 	const consultationCloseNeedsNoAgent = (consultation: Consultation) =>
-		consultation.state === "queued" ||
-		consultation.state === "unscheduled" ||
 		consultationHasNoAgent(consultation);
 	/**
 	 * Whether this record is one a Replacement continues.
@@ -3340,6 +3338,7 @@ export function App({
 					...ticketCursor(),
 					...groupFacts(),
 					groupingAxis: groupingAxisRef.current,
+					queueItemForSelectedRow: queueItemForSelectedRow(),
 					detailCanScroll: detailMaxScroll > 0,
 				});
 			case "consultation-list":
@@ -3351,6 +3350,7 @@ export function App({
 			case "consultation-detail":
 				return availabilityFacts("consultation-detail", standing, {
 					...consultationCursor(),
+					queueItemForSelectedRow: queueItemForSelectedRow(),
 					detailCanScroll: consultationMaxScroll > 0,
 				});
 			case "work-queue-list":
@@ -3573,11 +3573,11 @@ export function App({
 					const ticket = facts.selectedTicket;
 					if (ticket !== undefined) runGoto(ticket);
 				},
-				// `w` ends the selected Ticket's work cycle (ADR 0031). The catalogue
-				// refused an open Ticket, so every Ticket that reaches here has a live
-				// Agent or a settled turn behind it, and both confirm first: the dialog
-				// states who is alive and what survives, and nothing runs until the
-				// operator answers it.
+				// The Delete key ends the selected Ticket's work cycle (ADR 0031,
+				// ADR 0122). The catalogue refused an open Ticket, so every Ticket
+				// that reaches here has a live Agent or a settled turn behind it,
+				// and both confirm first: the dialog states who is alive and what
+				// survives, and nothing runs until the operator answers it.
 				"ticket-close": ({ facts }) => {
 					if (!ticketSectionFacts(facts)) return;
 					const ticket = facts.selectedTicket;
@@ -3608,9 +3608,15 @@ export function App({
 					if (!workQueueSectionFacts(facts)) return;
 					moveQueueItem("down", facts.selectedWorkQueueItem);
 				},
+				// The queue's removal is one control in every base section
+				// (ADR 0122): the queue's own panes remove the item under the
+				// cursor, and the Ticket and Consultation panes remove the row
+				// the cursor's item waits with, where the catalogue gated the
+				// key on the state under the cursor.
 				"queue-remove": ({ facts }) => {
-					if (!workQueueSectionFacts(facts)) return;
-					removeQueueItem(facts.selectedWorkQueueItem);
+					if (workQueueSectionFacts(facts)) removeQueueItem(facts.selectedWorkQueueItem);
+					else if (ticketSectionFacts(facts)) removeQueueItem(facts.queueItemForSelectedRow);
+					else if (consultationSectionFacts(facts)) removeQueueItem(facts.queueItemForSelectedRow);
 				},
 				// Enter on a queue row force-dispatches the item under the cursor over a
 				// full Parallel limit (issue #89). The catalogue gated the availability,
@@ -3685,12 +3691,20 @@ export function App({
 						identity: selected.id,
 					});
 				},
+				// The Delete key's Consultation Close (ADR 0122): the catalogue
+				// refused a `queued`, an `unscheduled`, and a `closed` record, so
+				// every record that reaches here is a live one the panel confirms,
+				// a no-Agent one that closes direct, or a `closing` one the panel
+				// recovers with its Retry and Force-close rows.
 				"consultation-close": ({ facts }) => {
 					if (!consultationSectionFacts(facts)) return;
 					const selected = facts.selectedConsultation;
 					if (selected === undefined) return;
 					runConsultationClose(selected);
 				},
+				// The Delete key's record removal (issue #91, ADR 0122): a `closed`
+				// or an `unscheduled` record goes behind the removal panel, which
+				// always confirms before the record and its history leave.
 				"consultation-delete": ({ facts }) => {
 					if (!consultationSectionFacts(facts)) return;
 					const selected = facts.selectedConsultation;
@@ -5903,14 +5917,7 @@ export function App({
 			createElement(ActionPanel, {
 				message: visibleMessage,
 				standing,
-				title: `Delete Consultation ${panelConsultation.id.slice(0, 8)}`,
-				bodyLines: [
-					"Saved history will be removed. Backups and filesystem snapshots may retain copies. Data is not encrypted.",
-				],
-				actions: [
-					{ key: "delete", label: "Delete", detail: "remove local history" },
-					{ key: "cancel", label: "Cancel" },
-				],
+				...consultationDeletePanel(panelConsultation.id),
 				onAction: (key) => {
 					setPanel(null);
 					if (key === "delete") deleteConsultation(panelConsultation);

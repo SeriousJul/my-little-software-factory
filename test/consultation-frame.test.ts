@@ -1593,7 +1593,7 @@ describe("Consultation close and cleanup through the UI", () => {
 		}
 	});
 
-	test("w on a closed Consultation refuses readably", async () => {
+	test("the Delete key on a closed Consultation removes it behind the confirmation", async () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
 		seed(state, CLOSED_DIRECT_ID);
 		state.consultationRecord.settleConsultationTurn(CLOSED_DIRECT_ID, null, "done", "idle");
@@ -1607,10 +1607,19 @@ describe("Consultation close and cleanup through the UI", () => {
 						f.includes("no open Consultations"),
 					);
 					await press(setup, "f", "the closed history filter", (f) => f.includes("State: closed"));
-					await press(setup, "delete", "the close refusal", (f) =>
-						f.includes("the selected Consultation is already closed"),
+					// The closed record answers the Delete key with the section's own
+					// removal (ADR 0122): the record's removal outranks the close's
+					// refusal, so the panel names what goes before anything leaves.
+					await openConsultationPanel(setup, "delete", "the removal panel", (f) =>
+						f.includes(`Delete Consultation ${CLOSED_DIRECT_ID.slice(0, 8)}`),
 					);
-					expect(state.consultationRecord.consultation(CLOSED_DIRECT_ID)?.state).toBe("closed");
+					const frame = await confirmPanel(setup, "the removal", (f) =>
+						f.includes("deleted; backups may retain data"),
+					);
+					expect(messageRowOf(frame)).toContain(
+						`Consultation ${CLOSED_DIRECT_ID.slice(0, 8)} deleted; backups may retain data`,
+					);
+					expect(state.consultationRecord.consultation(CLOSED_DIRECT_ID)).toBeUndefined();
 				},
 				WIDTH,
 				32,
@@ -1749,7 +1758,7 @@ describe("Consultation geometry, privacy, and history through the UI", () => {
 					);
 					expect(detailPaneText(detail)).toContain("Input 2026-09-01 10:00: review auth");
 					// Delete removes the local history.
-					await openConsultationPanel(setup, "d", "the delete panel", (f) =>
+					await openConsultationPanel(setup, "delete", "the delete panel", (f) =>
 						f.includes("Delete Consultation"),
 					);
 					await pressEnter(setup, "the empty closed history", (f) =>
@@ -3453,7 +3462,7 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 		}
 	});
 
-	test("key w abandons a queued Consultation and takes its item out of the queue", async () => {
+	test("the Delete key takes a queued Consultation's item out of the queue, and the record stays", async () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
 		seed(state, seatId);
 		const paneId = `pane-${seatId.slice(0, 8)}`;
@@ -3486,13 +3495,18 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 					const gone8 = queued.id.slice(0, 8);
 					// The cursor stands on the new record: the submit selected it.
 					expect(detailPaneText(setup.captureCharFrame())).toContain("State: queued");
-					// A queued record holds no Agent to stop, so `w` closes it on the
-					// keypress: no confirmation panel, no cleanup command, and its
-					// Work queue item goes with the record out of `queued`.
-					await press(setup, "delete", "the queued Consultation closed", (f) =>
-						messageRowOf(f).includes(`${gone8} closed`),
+					// A queued record holds no Agent to stop (ADR 0122): the Delete
+					// key gives the Consultation section the queue's removal, which
+					// takes the Work queue item out without confirmation. The record
+					// stays `unscheduled` behind the row it loses, and nothing
+					// cleans up: no panel, no pane or workspace command.
+					await press(setup, "delete", "the removal notice", (f) =>
+						messageRowOf(f).includes(`${gone8}: removed from the queue`),
 					);
-					expect(state.consultationRecord.consultation(queued.id)?.state).toBe("closed");
+					expect(messageRowOf(setup.captureCharFrame())).toContain(
+						`consultation ${gone8}: removed from the queue; the record is unscheduled`,
+					);
+					expect(state.consultationRecord.consultation(queued.id)?.state).toBe("unscheduled");
 					expect(state.workQueue.items()).toHaveLength(0);
 					expectNoCommand(runner.commands(), "pane close");
 					expectNoCommand(runner.commands(), "workspace close");
@@ -3987,9 +4001,9 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 			await withApp(
 				async (setup) => {
 					const id = await unscheduleThroughTheQueue(setup, state);
-					// `d` asks first: the delete removes the record and its
-					// history, and nothing else can run behind it.
-					await openConsultationPanel(setup, "d", "the delete confirmation", (f) =>
+					// The Delete key asks first: the removal takes the record
+					// and its history, and nothing else can run behind it.
+					await openConsultationPanel(setup, "delete", "the delete confirmation", (f) =>
 						f.includes(`Delete Consultation ${id.slice(0, 8)}`),
 					);
 					const frame = await confirmPanel(setup, "the delete", (f) =>

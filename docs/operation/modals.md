@@ -51,12 +51,15 @@ the badge fact and the handoff attempt count, and it offers two rows:
 
 ## Ticket close
 
-Key `w` in either Ticket pane ends the work cycle of the selected ticket,
-behind a confirmation that names what is alive and what survives. A close
-leaves the git branch, the pushed commits, and the pull requests behind: it
-takes only the environment the handoff built, and it never moves your view in
-herdr. The ticket returns to open, and the ended cycle counts toward the
-ticket's handoff limit.
+The `Delete` key in either Ticket pane is the plane's one destructive key
+(ADR 0122). On a ticket that holds a work cycle in flight it ends that cycle,
+behind a confirmation that names what is alive and what survives. On an
+`open` ticket that waits with a queue row it takes the row out of the Work
+section without a confirmation: the ticket stays open, and nothing of the
+cycle's history is touched. A close leaves the git branch, the pushed commits,
+and the pull requests behind: it takes only the environment the handoff built,
+and it never moves your view in herdr. The ticket returns to open, and the
+ended cycle counts toward the ticket's handoff limit.
 
 ## Leftover environment
 

@@ -109,15 +109,15 @@ export function workQueueDetailLines(
 		}
 	}
 	lines.push({
-		// The three keys run in the queue's list, not in this pane:
+		// The queue's row keys run in the queue's list, not in this pane:
 		// the detail says where they answer instead of hinting keys the
 		// mode it stands in never dispatches. The Consultation's Delete
-		// unschedules the record instead of cancelling a start (issue #91),
-		// so the hint names what the record keeps.
+		// unschedules the record instead of cancelling a start (issue #91,
+		// ADR 0122), so the hint names what the record keeps.
 		text:
 			item.kind === "consultation"
-				? "In the list: u/d reorder, Delete unschedules the Consultation"
-				: "In the list: u/d reorder, Delete removes the start",
+				? "In the list: + and - reorder, Delete unschedules the Consultation"
+				: "In the list: + and - reorder, Delete removes the start",
 		fg: paint("subtext0"),
 	});
 	return lines;

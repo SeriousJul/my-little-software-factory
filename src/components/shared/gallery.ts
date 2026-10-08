@@ -34,7 +34,7 @@ import { currentThemeResolution } from "../../theme-source.ts";
 import type { TurnLogEntry } from "../../turn-log.ts";
 import { ActionBar } from "../action-bar.ts";
 import { ActionPanel } from "../action-panel.ts";
-import { consultationClosePanel } from "../consultation-close-panel.ts";
+import { consultationClosePanel, consultationDeletePanel } from "../consultation-close-panel.ts";
 import { ConsultationDetail, consultationDetailLines } from "../consultation-detail.ts";
 import { ConsultationList } from "../consultation-list.ts";
 import { consultationRecoveryPanel } from "../consultation-recovery-panel.ts";
@@ -783,6 +783,7 @@ function ticketMuteContext(
 				...NO_TICKET_ROW,
 				groupingAxis: "none" as const,
 				...NO_GROUP,
+				queueItemForSelectedRow: null,
 				detailCanScroll: true,
 			})
 		: availabilityFacts("ticket-list", GALLERY_STANDING, {
@@ -819,6 +820,7 @@ function ticketGotoContext(paneAlive: boolean): AvailabilityFacts {
 				ticketPaneAlive: paneAlive,
 				groupingAxis: "none" as const,
 				...NO_GROUP,
+				queueItemForSelectedRow: null,
 				detailCanScroll: true,
 			})
 		: availabilityFacts("ticket-list", GALLERY_STANDING, {
@@ -855,6 +857,7 @@ function ticketIgnoreContext(
 				selectedTicketMarker: marker,
 				groupingAxis: "none" as const,
 				...NO_GROUP,
+				queueItemForSelectedRow: null,
 				detailCanScroll: true,
 			})
 		: availabilityFacts("ticket-list", GALLERY_STANDING, {
@@ -889,7 +892,11 @@ function ticketFilterContext(filter: "active" | "ignored" | "muted" | "all"): Av
 		...NO_GROUP,
 	};
 	return detail
-		? availabilityFacts("ticket-detail", GALLERY_STANDING, { ...own, detailCanScroll: true })
+		? availabilityFacts("ticket-detail", GALLERY_STANDING, {
+				...own,
+				queueItemForSelectedRow: null,
+				detailCanScroll: true,
+			})
 		: availabilityFacts("ticket-list", GALLERY_STANDING, {
 				...own,
 				listCanMove: true,
@@ -922,6 +929,7 @@ function gotoContext(paneAlive: boolean): AvailabilityFacts {
 		consultationRefreshAvailable: true,
 		consultationAgentStatus: null,
 		consultationPaneAlive: paneAlive,
+		queueItemForSelectedRow: null,
 		detailCanScroll: true,
 	});
 }
@@ -1908,10 +1916,10 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 		render: (_columns) => [closeDialogElement("closing", "close-closing")],
 	},
 	{
-		// The Ticket Close confirmation (ADR 0031): key `w` on a ticket with work
-		// in flight asks first, and the body names the Agent that is alive and the
-		// Environment the Close cleanup ends. The two Environments read
-		// differently, so the example shows both.
+		// The Ticket Close confirmation (ADR 0031, ADR 0122): the Delete key on a
+		// ticket with work in flight asks first, and the body names the Agent
+		// that is alive and the Environment the Close cleanup ends. The two
+		// Environments read differently, so the example shows both.
 		id: "ticket-close",
 		state: "Ticket Close: the worktree checkout goes, a dirty one stays",
 		rows: 17,
@@ -1948,6 +1956,30 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 		],
 	},
 	{
+		// The Consultation removal panel (issue #91, ADR 0122): the Delete key
+		// on a `closed` or an `unscheduled` record removes the record and its
+		// history, and the removal always confirms: the panel names what it
+		// destroys before anything leaves.
+		id: "consultation-delete",
+		state: "Consultation removal: the record and its history go behind the confirm",
+		rows: 17,
+		render: (_columns, _holds, _inputActive, _wiring) => [
+			createElement(ActionPanel, {
+				key: "consultation-delete",
+				standing: GALLERY_STANDING,
+				message: null,
+				inputActive: false,
+				...consultationDeletePanel("c1c1c1c1-1111-4111-8111-111111111111"),
+				onAction: () => undefined,
+				onCancel: () => undefined,
+				// The gallery is a preview, not a plane surface: the plane-level keys
+				// resolve to the catalogue's controls and stand still here (issue #319).
+				onQueuePause: () => undefined,
+				onAutoHandoff: () => undefined,
+			}),
+		],
+	},
+	{
 		// The select list that opens the init of a repository the factory has
 		// never seen (ADR 0082): the search, the list rows, and the note stand
 		// in the one frame the operator reads before choosing.
@@ -1955,6 +1987,97 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 		state: "Repository select: the list the init stands on",
 		rows: 12,
 		render: () => [createElement(GalleryRepositorySelect, { key: "repository-select" })],
+	},
+	{
+		// The Delete key by the section under the cursor (ADR 0122): the plane's
+		// one destructive key answers in every base section, and the act follows
+		// the item the cursor stands on. Each bar names the one meaning its mode
+		// runs - `Delete Close` on a ticket that holds live or settled work and on
+		// a live Consultation, `Delete Remove` on the waiting row of an `open`
+		// Ticket, on a `queued` Consultation's row, and on the queue's own item.
+		// The Key guide of each section names that meaning with its note.
+		id: "delete-key",
+		state: "Delete: one destructive key, by the section under the cursor",
+		render: (columns, _holds, _inputActive, _wiring) => {
+			const now = "2026-02-17T10:00:00.000Z";
+			const waitingItem: WorkQueueItem = {
+				kind: "handoff",
+				position: 0,
+				ticketIdentity: sampleTicket("open").identity,
+				automatic: false,
+				routeFromIdentity: null,
+				origin: "open",
+				choice: {
+					agentType: "pi",
+					environment: "worktree",
+					taskType: "implement",
+					model: "",
+					thinking: "",
+					contextWindow: "",
+				},
+				previousMessage: "",
+				enqueuedAt: now,
+			};
+			const bar = (
+				key: string,
+				mode: "ticket-list" | "consultation-list" | "work-queue-list",
+				facts: AvailabilityFacts,
+			) =>
+				createElement(ActionBar, {
+					key,
+					mode,
+					facts,
+					width: columns.contentWidth,
+				});
+			const ticketFacts = (ticket: Ticket, queueItem: WorkQueueItem | null): AvailabilityFacts =>
+				availabilityFacts("ticket-list", GALLERY_STANDING, {
+					selectedTicket: ticket,
+					...NO_TICKET_ROW,
+					groupingAxis: "none" as const,
+					...NO_GROUP,
+					listCanMove: true,
+					queueItemForSelectedRow: queueItem,
+				});
+			const consultationFacts = (record: Consultation): AvailabilityFacts =>
+				availabilityFacts("consultation-list", GALLERY_STANDING, {
+					selectedConsultation: record,
+					consultationRefreshAvailable: true,
+					consultationAgentStatus: null,
+					consultationPaneAlive: false,
+					listCanMove: true,
+					queueItemForSelectedRow: null,
+				});
+			return [
+				bar("delete-ticket-close", "ticket-list", ticketFacts(sampleTicket("running"), null)),
+				bar("delete-ticket-remove", "ticket-list", ticketFacts(sampleTicket("open"), waitingItem)),
+				bar(
+					"delete-consultation-close",
+					"consultation-list",
+					consultationFacts(sampleConsultation("working")),
+				),
+				bar(
+					"delete-consultation-remove",
+					"consultation-list",
+					availabilityFacts("consultation-list", GALLERY_STANDING, {
+						selectedConsultation: sampleConsultation("closed"),
+						consultationRefreshAvailable: false,
+						consultationAgentStatus: null,
+						consultationPaneAlive: false,
+						listCanMove: true,
+						queueItemForSelectedRow: null,
+					}),
+				),
+				bar(
+					"delete-queue-remove",
+					"work-queue-list",
+					availabilityFacts("work-queue-list", GALLERY_STANDING, {
+						selectedWorkQueueItem: waitingItem,
+						workQueueDepth: 1,
+						listCanMove: true,
+					}),
+				),
+			];
+		},
 	},
 	{
 		// Enter on an interrupted opening: the panel offers the retry of the
@@ -2103,11 +2226,12 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 	},
 	{
 		// The unscheduled record's three answers in the Consultation section
-		// (issue #91): `s` schedules it back into the Work queue, Enter starts
-		// it now over the cap, and `d` deletes the record. The bar holds the
-		// hints available on the unscheduled record, and the bar of a working
-		// record shows none of them: the start and the schedule refuse it in
-		// the catalogue's words, and the delete waits for the close.
+		// (issue #91, ADR 0122): `s` schedules it back into the Work queue,
+		// Enter starts it now over the cap, and the Delete key removes the
+		// record. The bar holds the hints available on the unscheduled record,
+		// and the bar of a working record shows none of them: the start and the
+		// schedule refuse it in the catalogue's words, and the Delete key is the
+		// close there.
 		id: "consultation-unscheduled-actions",
 		state: "Unscheduling: schedule, start now over the cap, or delete the record",
 		render: (columns, _holds, _inputActive, _wiring) => {

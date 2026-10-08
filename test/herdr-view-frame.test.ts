@@ -301,7 +301,7 @@ describe("the Close cleanup moves no view", () => {
 				async (setup) => {
 					source.settle(outcome);
 					await awaitFrame(setup, (f) => f.includes("missing"), "the in-flight ticket");
-					await press(setup, "w", "the Close confirmation", (f) =>
+					await press(setup, "delete", "the Close confirmation", (f) =>
 						f.includes("Close: Add a webhook retry policy"),
 					);
 					const frame = await press(setup, "return", "the close to end the cycle", (f) =>
@@ -345,7 +345,7 @@ describe("the Close cleanup moves no view", () => {
 				async (setup) => {
 					source.settle(outcome);
 					await awaitFrame(setup, (f) => f.includes("missing"), "the in-flight ticket");
-					await press(setup, "w", "the Close confirmation", (f) =>
+					await press(setup, "delete", "the Close confirmation", (f) =>
 						f.includes("Close: Add a webhook retry policy"),
 					);
 					await press(setup, "return", "the close to run", (f) => f.includes("[open]"));

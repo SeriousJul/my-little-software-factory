@@ -115,14 +115,14 @@ and `bun run test`.
 | Type-ahead shows its search, matches by substring, keeps an unmatched query with `no match`, edits with Backspace, clears with one key, and keeps query and value distinct | `test/shared-gallery.test.ts`, `test/handoff-frame.test.ts`, `test/override-panel.test.ts` | Passed |
 | The Action bar and Key guide agree with dispatch, and field editing is named in the guide | `test/key-guide.test.ts`, `test/action-bar.test.ts`, `test/consultation-frame.test.ts` | Passed |
 | Consultation list and Agent view navigation, response gating, recovery, history, close, delete, and refresh use the shared catalogue, and Enter opens the recovery surface each broken or stuck state needs (ADR 0038) | `test/controls.test.ts`, `test/consultation-frame.test.ts`, `test/shared-gallery.test.ts` | Passed |
-| Consultation close is the Delete key in both Consultation modes (#80, ADR 0114): a closed record refuses readably, a `missing`, a `failed`, or a `queued` one closes directly, a live Agent stops behind the shared panel, a `closing` one opens the panel with its retry and force-close, and the Ticket section's `w` stays its own Close in each section's guide and bar | `test/controls.test.ts`, `test/consultation-frame.test.ts`, `test/action-bar.test.ts`, `test/key-guide.test.ts`, `test/shared-gallery.test.ts` | Passed |
+| The Delete key is the Consultation section's own Close and removal in both Consultation modes (#80, ADR 0114, #336, ADR 0122): a live record closes behind the shared panel, a `missing` or a `failed` one closes directly, a `closing` one opens the panel with its retry and force-close, a `queued` one gives the key to the queue's removal, and a `closed` or an `unscheduled` one gives it to the record's removal behind its panel; each section's guide and bar names only its own Delete acts | `test/controls.test.ts`, `test/consultation-frame.test.ts`, `test/action-bar.test.ts`, `test/key-guide.test.ts`, `test/shared-gallery.test.ts` | Passed |
 | The Consultation close verifies the Agent's identity before it takes anything down (ADR 0044): the close's first herdr call is an `agent list` probe, a reused tab or pane id whose pane holds a bare shell or a foreign Agent retires the record with no command and its owned resources recorded as remaining, an unverified opening stays `closing` for a retry or a Force-close, an ambiguous name or an unreadable list refuses the cleanup as a recovery, a matched Agent that moved is followed and closed where it stands, and an unnamed herdr falls back to the stored session and then the stored pane | `test/consultation-operations.test.ts`, `test/consultation-frame.test.ts` | Passed |
 | The Consultation detail reads the Agent's session record as its body (operator input, agent text, tool notes), capped, and keeps the Agent view and captured history as its fallbacks | `test/turn-log.test.ts`, `test/consultation-detail.test.ts`, `test/consultation-frame.test.ts` | Passed |
-| The Consultation-only key `d` refuses in both Ticket base modes and in both Work queue modes with the section's own words, claims the key so nothing else answers it, and the guide and bar of each section that does not own it omits the control. `f` has two list owners now - the Ticket section's List filter and the Consultation section's History - so each section dispatches its own control there, and the Work queue, which owns neither, states the two owners' words in one sentence whichever candidate the catalogue reaches (ADR 0060) | `test/controls.test.ts`, `test/action-bar.test.ts`, `test/key-guide.test.ts`, `test/main-view-frame.test.ts`, `test/work-queue-frame.test.ts` | Passed |
+| The retired key `d` resolves to no control in any base mode and states nothing, so no guide or bar names it. `f` has two list owners - the Ticket section's List filter and the Consultation section's History - so each section dispatches its own control there, and the Work queue, which owns neither, states the two owners' words in one sentence whichever candidate the catalogue reaches (ADR 0060, ADR 0122) | `test/controls.test.ts`, `test/action-bar.test.ts`, `test/key-guide.test.ts`, `test/main-view-frame.test.ts`, `test/work-queue-frame.test.ts` | Passed |
 | No refused key is hinted by the Action bar unless the Key guide names it, in every base mode of all three sections (the catalogue-wide guard that keeps the refusal, the guide, and the bar in step) | `test/controls.test.ts` | Passed |
 | Goto in the Consultation base mode focuses the Agent pane while the pane is alive in the last poll and states its reason otherwise, and never changes the Consultation | `test/controls.test.ts`, `test/consultation-frame.test.ts` | Passed |
 | Goto in the Ticket base modes (`g`) focuses the agent's pane on an in-flight ticket while the pane is alive in the last poll, on an `awaiting` ticket while the handoff recorded a pane, and states the Consultation's own refusal otherwise; it never moves the ticket's state, and the Decision modal's and Live view's Goto rows moved none | `test/controls.test.ts`, `test/live-view.test.ts`, `test/auto-mode.test.ts`, `test/domain.test.ts`, `test/state.test.ts` | Passed |
-| The Work queue section dispatches its list, detail, order-move, pause, and removal from the shared catalogue; its list and detail modes name themselves in the Key guide and keep each section's keys in its own guide, the Consultation section's `d` and the two lists' `f` refused there in the owning sections' words and named in neither the queue's guide nor its bar; the Section stands on the Main view whatever the queue holds (ADR 0049), and the cursor crosses into it while it is expanded | `test/work-queue-frame.test.ts`, `test/key-guide.test.ts`, `test/controls.test.ts`, `test/shared-gallery.test.ts` | Passed |
+| The Work queue section dispatches its list, detail, order-move, pause, and removal from the shared catalogue; its list and detail modes name themselves in the Key guide and keep each section's keys in its own guide, the two lists' `f` refused there in the owning sections' words and named in neither the queue's guide nor its bar, and the Delete key takes the row under the cursor out of the queue in both modes (ADR 0049, ADR 0122); the Section stands on the Main view whatever the queue holds (ADR 0049), and the cursor crosses into it while it is expanded | `test/work-queue-frame.test.ts`, `test/key-guide.test.ts`, `test/controls.test.ts`, `test/shared-gallery.test.ts` | Passed |
 | The Work queue's detail names whose start a waiting row is - the operator's or the factory's auto top-up - so an automatic continuation route and the operator's own route of the same origin read apart on the pane (ADR 0051), and the Work header's depth counts the rows whatever asked | `test/work-queue-frame.test.ts` | Passed |
 | The Consultation submit runs the Work queue's enqueue check ahead of any write: a type the config no longer names, and a type whose settings do not fit, refuse the ask with the reason on the Message line, leave no record and no queue row, and run no external step - no repository resolve, no clone, no herdr call - while the launcher keeps the operator's form (ADR 0049) | `test/consultation-operations.test.ts`, `test/consultation-frame.test.ts` | Passed |
 | The queue pause holds the auto top-up's adds at the observation seam: auto mode on, the queue empty, an eligible ticket ready, and the paused cycle adds nothing; the resume adds the one item (ADR 0052) | `test/observation.test.ts` | Passed |
@@ -1792,3 +1792,57 @@ split. The terminal walks in Ghostty and foot have not been re-run for this
 change, so the view's frame, the chip colors, and the painted scrollbar
 stand as not walked in a live terminal by a person on this head. That
 remains the open item, and it is the one the test layer cannot close.
+
+## The Delete key as the plane's one destructive key (issue #336, ADR 0122)
+
+Status: the automated checks pass. What was measured: one key now answers
+the destructive act in all three sections, and the act follows the item the
+cursor stands on. The catalogue claims the Delete key with four controls -
+the Ticket section's Close, the queue's removal, the Consultation section's
+Close, and the Consultation section's record removal - and the resolution
+is the section's own order: in the Ticket panes the Close claims every state
+that holds live or settled work and the removal answers the `open` Ticket
+alone, in the Consultation panes the Close claims every state that holds an
+Agent and the removal answers the `closed` and the `unscheduled` record,
+and in both Work queue modes the removal takes the item under the cursor.
+The state gate comes before the row: the removal refuses an `open` Ticket
+that waits nowhere and a `queued` Consultation whose row is already gone,
+in the section's own words, and a row that waits nowhere is its own refusal.
+
+The removal itself is the domain's own act: it takes the queue's row out and
+says so on the Message line, the Consultation record stands as `unscheduled`
+behind the row it lost, and the Ticket stays `open`. The Ticket close's
+dialog, the Consultation close's panel, and the record removal's panel all
+keep the confirmation they had: the new key changes which key opens them,
+not what they ask. The record removal's panel names what it destroys - the
+saved history, with backups and filesystem snapshots kept as copies the
+plane does not reach - and the gallery's `consultation-delete` example
+stands in for it, the same copy the app's handler spreads from the shared
+module, so the preview cannot drift from the control.
+
+The retired keys `w` and `d` resolve to no control in any base mode, so
+they state nothing, and the guide and bar of every section name neither of
+them. The catalogue-wide guard that keeps a refused key out of the bar
+unless the guide names it still walks all six base modes, and the guide's
+rows and the bar's packing ladder were re-measured at their widths, not
+computed: the Ticket guide gains the queue's removal row and loses the
+Consultation section's close row for a net zero at the full width, and the
+Consultation guide gains the removal row.
+
+The automatic suite measures the catalogue's resolution and refusals in all
+six base modes (`test/controls.test.ts`), the Ticket close's dialog facts
+(`test/ticket-close.test.ts`), the Consultation close's panel, the queued
+row's removal, and the record's removal through the real app
+(`test/consultation-frame.test.ts`), the queue's removal in both queue
+modes, its removal of the open Ticket's waiting row from the Ticket list
+and the Ticket detail, and the retired `d`'s and `w`'s silences
+(`test/work-queue-frame.test.ts`), the Delete key's refusal on the open
+Ticket in auto mode and the close cleanup it runs (`test/auto-mode.test.ts`),
+the bar's hints per section at the packed widths (`test/action-bar.test.ts`),
+the guide's rows per section (`test/key-guide.test.ts`), and the gallery's
+`consultation-delete` and `delete-key` examples (`test/shared-gallery.test.ts`).
+
+What was not measured: the terminal walks have not been re-run on the
+changed bar and guide rows, so the new rows stand as not walked in a live
+terminal, and the screen-reader path remains unverified, as this record has
+always held it. A skipped required check is not a pass.
