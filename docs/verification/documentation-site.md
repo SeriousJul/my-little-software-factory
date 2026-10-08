@@ -104,6 +104,7 @@ home page and the single Contributing entry.
 
 ## What has not been measured
 
+- The operator's visual check of the built site through `bun run docs:preview`: how the screenshots read on the page, inline and in the lightbox. It has not been run in this environment, because the app is tested only at the unit layer and no desktop browser is driven here. What the preview server can establish without a display stands in the table above: the served-bytes row, measured 2026-10-08 through the preview server on port 4173, which holds every served screenshot to its committed asset byte for byte. Record the result here when the check has been done by hand.
 - The interactive image lightbox flow. The lightbox code and CSS are in the
   build, but the click-to-open and the close paths (Escape, the backdrop, the
   close button) have not been exercised in a real browser, because the app is
