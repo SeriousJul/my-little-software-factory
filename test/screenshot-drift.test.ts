@@ -17,6 +17,20 @@
  * partial coverage for a curved glyph, so a regression to a hard-edged
  * raster goes red, and a bold cell is checked to stand on the Bold face
  * with no palette index brightened.
+ *
+ * The probes the guards claim, each re-run on the tree:
+ *
+ * - The scale probe: move the pinned FONT_SIZE in `scripts/screen-font.ts`.
+ *   The committed images no longer stand on the pinned scale, and the
+ *   dimension check goes red with one line per image, the header size beside
+ *   the pinned one.
+ * - The antialias probe: drop the SS supersampling in `scripts/screen-font.ts`
+ *   to 1. The curved glyph's coverage becomes hard-edged, no byte stands
+ *   strictly between 0 and 255, and the partial-coverage check goes red.
+ * - The bold probe: make `glyphOf` ignore its bold argument. The Bold face's
+ *   coverage becomes the Regular face's, and the bold check goes red; or
+ *   brighten the bold basic color in the renderer's decode, and the check
+ *   that SGR 1 with a basic color keeps the index goes red.
  */
 
 import { describe, expect, it } from "bun:test";
