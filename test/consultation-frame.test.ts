@@ -3495,19 +3495,19 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 					const gone8 = queued.id.slice(0, 8);
 					// The cursor stands on the new record: the submit selected it.
 					expect(detailPaneText(setup.captureCharFrame())).toContain("State: queued");
-						// A queued record holds no Agent to stop (ADR 0122): the Delete
-						// key gives the Consultation section the queue's removal, which
-						// takes the Work queue item out without confirmation. The record
-						// stays `unscheduled` behind the row it loses, and nothing
-						// cleans up: no panel, no pane or workspace command.
-						await press(setup, "delete", "the removal notice", (f) =>
-							messageRowOf(f).includes(`${gone8}: removed from the queue`),
-						);
-						expect(messageRowOf(setup.captureCharFrame())).toContain(
-							`consultation ${gone8}: removed from the queue; the record is unscheduled`,
-						);
-						expect(state.consultationRecord.consultation(queued.id)?.state).toBe("unscheduled");
-						expect(state.workQueue.items()).toHaveLength(0);
+					// A queued record holds no Agent to stop (ADR 0122): the Delete
+					// key gives the Consultation section the queue's removal, which
+					// takes the Work queue item out without confirmation. The record
+					// stays `unscheduled` behind the row it loses, and nothing
+					// cleans up: no panel, no pane or workspace command.
+					await press(setup, "delete", "the removal notice", (f) =>
+						messageRowOf(f).includes(`${gone8}: removed from the queue`),
+					);
+					expect(messageRowOf(setup.captureCharFrame())).toContain(
+						`consultation ${gone8}: removed from the queue; the record is unscheduled`,
+					);
+					expect(state.consultationRecord.consultation(queued.id)?.state).toBe("unscheduled");
+					expect(state.workQueue.items()).toHaveLength(0);
 					expectNoCommand(runner.commands(), "pane close");
 					expectNoCommand(runner.commands(), "workspace close");
 				},
@@ -4001,9 +4001,9 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 			await withApp(
 				async (setup) => {
 					const id = await unscheduleThroughTheQueue(setup, state);
-						// The Delete key asks first: the removal takes the record
-						// and its history, and nothing else can run behind it.
-						await openConsultationPanel(setup, "delete", "the delete confirmation", (f) =>
+					// The Delete key asks first: the removal takes the record
+					// and its history, and nothing else can run behind it.
+					await openConsultationPanel(setup, "delete", "the delete confirmation", (f) =>
 						f.includes(`Delete Consultation ${id.slice(0, 8)}`),
 					);
 					const frame = await confirmPanel(setup, "the delete", (f) =>

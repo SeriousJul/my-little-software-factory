@@ -514,7 +514,8 @@ describe("the shared control catalogue", () => {
 				),
 			).toEqual({
 				available: false,
-				reason: "the selected Consultation is unscheduled: Delete removes the record and its history",
+				reason:
+					"the selected Consultation is unscheduled: Delete removes the record and its history",
 			});
 			expect(
 				availabilityFor(
@@ -1325,9 +1326,12 @@ describe("the shared control catalogue", () => {
 			// removal, which takes the record and its history out.
 			for (const state of ["closed", "unscheduled"] as const) {
 				expect(
-					controlForKey({ name: "delete" }, facts(mode, {
-						selectedConsultation: { state } as unknown as Consultation,
-					}))?.id,
+					controlForKey(
+						{ name: "delete" },
+						facts(mode, {
+							selectedConsultation: { state } as unknown as Consultation,
+						}),
+					)?.id,
 				).toBe("consultation-delete");
 			}
 		}

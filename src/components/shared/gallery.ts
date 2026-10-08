@@ -2029,10 +2029,7 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 					facts,
 					width: columns.contentWidth,
 				});
-			const ticketFacts = (
-				ticket: Ticket,
-				queueItem: WorkQueueItem | null,
-			): AvailabilityFacts =>
+			const ticketFacts = (ticket: Ticket, queueItem: WorkQueueItem | null): AvailabilityFacts =>
 				availabilityFacts("ticket-list", GALLERY_STANDING, {
 					selectedTicket: ticket,
 					...NO_TICKET_ROW,
@@ -2041,9 +2038,7 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 					listCanMove: true,
 					queueItemForSelectedRow: queueItem,
 				});
-			const consultationFacts = (
-				record: Consultation,
-			): AvailabilityFacts =>
+			const consultationFacts = (record: Consultation): AvailabilityFacts =>
 				availabilityFacts("consultation-list", GALLERY_STANDING, {
 					selectedConsultation: record,
 					consultationRefreshAvailable: true,
@@ -2053,16 +2048,8 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 					queueItemForSelectedRow: null,
 				});
 			return [
-				bar(
-					"delete-ticket-close",
-					"ticket-list",
-					ticketFacts(sampleTicket("running"), null),
-				),
-				bar(
-					"delete-ticket-remove",
-					"ticket-list",
-					ticketFacts(sampleTicket("open"), waitingItem),
-				),
+				bar("delete-ticket-close", "ticket-list", ticketFacts(sampleTicket("running"), null)),
+				bar("delete-ticket-remove", "ticket-list", ticketFacts(sampleTicket("open"), waitingItem)),
 				bar(
 					"delete-consultation-close",
 					"consultation-list",
@@ -2071,7 +2058,14 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 				bar(
 					"delete-consultation-remove",
 					"consultation-list",
-					{ ...consultationFacts(sampleConsultation("closed")), consultationRefreshAvailable: false },
+					availabilityFacts("consultation-list", GALLERY_STANDING, {
+						selectedConsultation: sampleConsultation("closed"),
+						consultationRefreshAvailable: false,
+						consultationAgentStatus: null,
+						consultationPaneAlive: false,
+						listCanMove: true,
+						queueItemForSelectedRow: null,
+					}),
 				),
 				bar(
 					"delete-queue-remove",

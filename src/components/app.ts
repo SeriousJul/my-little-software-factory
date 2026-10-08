@@ -3575,12 +3575,12 @@ export function App({
 					const ticket = facts.selectedTicket;
 					if (ticket !== undefined) runGoto(ticket);
 				},
-					// The Delete key ends the selected Ticket's work cycle (ADR 0031,
-					// ADR 0122). The catalogue refused an open Ticket, so every Ticket
-					// that reaches here has a live Agent or a settled turn behind it,
-					// and both confirm first: the dialog states who is alive and what
-					// survives, and nothing runs until the operator answers it.
-					"ticket-close": ({ facts }) => {
+				// The Delete key ends the selected Ticket's work cycle (ADR 0031,
+				// ADR 0122). The catalogue refused an open Ticket, so every Ticket
+				// that reaches here has a live Agent or a settled turn behind it,
+				// and both confirm first: the dialog states who is alive and what
+				// survives, and nothing runs until the operator answers it.
+				"ticket-close": ({ facts }) => {
 					if (!ticketSectionFacts(facts)) return;
 					const ticket = facts.selectedTicket;
 					if (ticket === undefined) return;
@@ -3610,17 +3610,16 @@ export function App({
 					if (!workQueueSectionFacts(facts)) return;
 					moveQueueItem("down", facts.selectedWorkQueueItem);
 				},
-					// The queue's removal is one control in every base section
-					// (ADR 0122): the queue's own panes remove the item under the
-					// cursor, and the Ticket and Consultation panes remove the row
-					// the cursor's item waits with, where the catalogue gated the
-					// key on the state under the cursor.
-					"queue-remove": ({ facts }) => {
-						if (workQueueSectionFacts(facts)) removeQueueItem(facts.selectedWorkQueueItem);
-						else if (ticketSectionFacts(facts)) removeQueueItem(facts.queueItemForSelectedRow);
-						else if (consultationSectionFacts(facts))
-							removeQueueItem(facts.queueItemForSelectedRow);
-					},
+				// The queue's removal is one control in every base section
+				// (ADR 0122): the queue's own panes remove the item under the
+				// cursor, and the Ticket and Consultation panes remove the row
+				// the cursor's item waits with, where the catalogue gated the
+				// key on the state under the cursor.
+				"queue-remove": ({ facts }) => {
+					if (workQueueSectionFacts(facts)) removeQueueItem(facts.selectedWorkQueueItem);
+					else if (ticketSectionFacts(facts)) removeQueueItem(facts.queueItemForSelectedRow);
+					else if (consultationSectionFacts(facts)) removeQueueItem(facts.queueItemForSelectedRow);
+				},
 				// Enter on a queue row force-dispatches the item under the cursor over a
 				// full Parallel limit (issue #89). The catalogue gated the availability,
 				// so this runs the dispatch and nothing else; the module owns every line
@@ -3694,21 +3693,21 @@ export function App({
 						identity: selected.id,
 					});
 				},
-					// The Delete key's Consultation Close (ADR 0122): the catalogue
-					// refused a `queued`, an `unscheduled`, and a `closed` record, so
-					// every record that reaches here is a live one the panel confirms,
-					// a no-Agent one that closes direct, or a `closing` one the panel
-					// recovers with its Retry and Force-close rows.
-					"consultation-close": ({ facts }) => {
-						if (!consultationSectionFacts(facts)) return;
-						const selected = facts.selectedConsultation;
-						if (selected === undefined) return;
-						runConsultationClose(selected);
-					},
-					// The Delete key's record removal (issue #91, ADR 0122): a `closed`
-					// or an `unscheduled` record goes behind the removal panel, which
-					// always confirms before the record and its history leave.
-					"consultation-delete": ({ facts }) => {
+				// The Delete key's Consultation Close (ADR 0122): the catalogue
+				// refused a `queued`, an `unscheduled`, and a `closed` record, so
+				// every record that reaches here is a live one the panel confirms,
+				// a no-Agent one that closes direct, or a `closing` one the panel
+				// recovers with its Retry and Force-close rows.
+				"consultation-close": ({ facts }) => {
+					if (!consultationSectionFacts(facts)) return;
+					const selected = facts.selectedConsultation;
+					if (selected === undefined) return;
+					runConsultationClose(selected);
+				},
+				// The Delete key's record removal (issue #91, ADR 0122): a `closed`
+				// or an `unscheduled` record goes behind the removal panel, which
+				// always confirms before the record and its history leave.
+				"consultation-delete": ({ facts }) => {
 					if (!consultationSectionFacts(facts)) return;
 					const selected = facts.selectedConsultation;
 					if (selected === undefined) return;

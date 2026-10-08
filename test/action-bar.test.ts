@@ -43,12 +43,12 @@ import {
 	pressF2,
 	rgb,
 	roleColor,
+	rowSpans,
 	rowsOf,
 	settle,
 	sleep,
 	spanColorAt,
 	startingFaceOf,
-	rowSpans,
 	WIDTH,
 	withApp,
 } from "./app-harness.ts";
@@ -1186,20 +1186,20 @@ describe("the contextual Action bar", () => {
 				);
 				const frame = await settle(setup);
 				const barRow = rowsOf(frame).length - 1;
-						// The ask never waits on a run (ADR 0064): the hints stay lit
-						// while a Handoff runs, and a second ask answers with the
-						// shell's own words. The key paints the accent and the label the
-						// text: the hint the operator sees is the hint that runs.
-						expect(spanColorAt(setup, barRow, "Enter ")).toEqual(rgb(roleColor("accent")));
-						expect(spanColorAt(setup, barRow, "Hand off")).toEqual(rgb(roleColor("text")));
-						// The Override key's own spans: the Delete key's wider span
-						// stands beside it now, so the pair is read by span, not by
-						// a needle the Delete key's span could answer for (ADR 0122).
-						const spans = rowSpans(setup, barRow);
-						const overrideLabel = spans.findIndex((span) => span.text === "Override");
-						expect(spans[overrideLabel - 1].text).toBe("e ");
-						expect(spans[overrideLabel - 1].fg).toEqual(rgb(roleColor("accent")));
-						expect(spans[overrideLabel].fg).toEqual(rgb(roleColor("text")));
+				// The ask never waits on a run (ADR 0064): the hints stay lit
+				// while a Handoff runs, and a second ask answers with the
+				// shell's own words. The key paints the accent and the label the
+				// text: the hint the operator sees is the hint that runs.
+				expect(spanColorAt(setup, barRow, "Enter ")).toEqual(rgb(roleColor("accent")));
+				expect(spanColorAt(setup, barRow, "Hand off")).toEqual(rgb(roleColor("text")));
+				// The Override key's own spans: the Delete key's wider span
+				// stands beside it now, so the pair is read by span, not by
+				// a needle the Delete key's span could answer for (ADR 0122).
+				const spans = rowSpans(setup, barRow);
+				const overrideLabel = spans.findIndex((span) => span.text === "Override");
+				expect(spans[overrideLabel - 1].text).toBe("e ");
+				expect(spans[overrideLabel - 1].fg).toEqual(rgb(roleColor("accent")));
+				expect(spans[overrideLabel].fg).toEqual(rgb(roleColor("text")));
 				// The second Enter is refused. The refusal is an operation
 				// Warning, and active progress outranks it (user story 51), so
 				// the Handoff's own Working keeps the line: an answer never

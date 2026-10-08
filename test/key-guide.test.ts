@@ -362,16 +362,16 @@ describe("the in-app Key guide", () => {
 						listIndexOf("Current interaction mode"),
 						listIndexOf("Global controls"),
 					);
-						expect(listCurrent).toContain("+ Promote - the item is first in the queue");
-						expect(listCurrent).toContain("- Demote - the item is last in the queue");
-						// The queue's removal dispatches in the queue mode itself now
-						// (ADR 0122): the row names the key, and its note states what
-						// the removal does. The note may flow onto its continuation row
-						// at this width, so the check reads the joined rows.
-						expect(listCurrent.some((row) => row.startsWith("Delete Remove"))).toBe(true);
-						expect(listCurrent.join(" ")).toContain(
-							"takes the row's waiting item out of the Work queue: the Ticket stays open, and the Consultation record becomes unscheduled",
-						);
+					expect(listCurrent).toContain("+ Promote - the item is first in the queue");
+					expect(listCurrent).toContain("- Demote - the item is last in the queue");
+					// The queue's removal dispatches in the queue mode itself now
+					// (ADR 0122): the row names the key, and its note states what
+					// the removal does. The note may flow onto its continuation row
+					// at this width, so the check reads the joined rows.
+					expect(listCurrent.some((row) => row.startsWith("Delete Remove"))).toBe(true);
+					expect(listCurrent.join(" ")).toContain(
+						"takes the row's waiting item out of the Work queue: the Ticket stays open, and the Consultation record becomes unscheduled",
+					);
 					// The plane-level keys left the mode's own rows: the brake and
 					// the mode stand in the Control plane group, the catalogue's own
 					// order, in every mode they dispatch in (issue #319, ADR 0111). The
@@ -403,9 +403,7 @@ describe("the in-app Key guide", () => {
 					// its own removal among them - and the other section's rows stay
 					// out (ADR 0122).
 					expect(
-						listCurrent.some((row) =>
-							row.includes("removes a closed or unscheduled record"),
-					),
+						listCurrent.some((row) => row.includes("removes a closed or unscheduled record")),
 					).toBe(false);
 					expect(listCurrent.some((row) => row.startsWith("f History"))).toBe(false);
 					await closeOverlay(setup, "Key guide", "the guide to close");
@@ -436,9 +434,7 @@ describe("the in-app Key guide", () => {
 					// cannot dispatch is the leak issue #85 closed for the Ticket
 					// section, closed here for the queue (ADR 0122).
 					expect(
-						detailCurrent.some((row) =>
-							row.includes("removes a closed or unscheduled record"),
-					),
+						detailCurrent.some((row) => row.includes("removes a closed or unscheduled record")),
 					).toBe(false);
 					expect(detailCurrent.some((row) => row.startsWith("f History"))).toBe(false);
 					await closeOverlay(setup, "Key guide", "the guide to close");
@@ -946,15 +942,15 @@ describe("the in-app Key guide", () => {
 					await awaitFrame(setup, (f) => f.includes("loading tickets..."), "loading");
 					await openGuide(setup, "?");
 					await settle(setup);
-						// The queue's removal row beside the section toggle and the
-						// mute and the move rows push Refresh below the opening window
-						// (ADR 0122): step the guide down until its row is on screen.
-						for (let step = 0; step < 5; step += 1) {
-							setup.mockInput.pressKey("j");
-							if ((await settle(setup)).includes("r Refresh")) break;
-						}
-						let rows = rowsOf(setup.captureCharFrame());
-						let refreshRow = rows.findIndex((row) => norm(row).includes("r Refresh"));
+					// The queue's removal row beside the section toggle and the
+					// mute and the move rows push Refresh below the opening window
+					// (ADR 0122): step the guide down until its row is on screen.
+					for (let step = 0; step < 5; step += 1) {
+						setup.mockInput.pressKey("j");
+						if ((await settle(setup)).includes("r Refresh")) break;
+					}
+					let rows = rowsOf(setup.captureCharFrame());
+					let refreshRow = rows.findIndex((row) => norm(row).includes("r Refresh"));
 					expect(rows[refreshRow]).toContain("every Ticket source is already refreshing");
 					expect(spanColorAt(setup, refreshRow, "r")).toEqual(rgb(roleColor("subtext0")));
 
@@ -970,21 +966,21 @@ describe("the in-app Key guide", () => {
 								?.includes("already refreshing"),
 						"the refresh row to clear",
 					);
-						rows = rowsOf(setup.captureCharFrame());
-						refreshRow = rows.findIndex((row) => norm(row).includes("r Refresh"));
-						expect(rows[refreshRow]).not.toContain(" - ");
-						expect(spanColorAt(setup, refreshRow, "r")).toEqual(rgb(roleColor("accent")));
-						// The current section follows the state too: the fetched open
-						// Ticket is selected, so Hand off loses its reason as well.
-						// The queue's removal row now stands below the section toggle
-						// (ADR 0122), so one step back reads Hand off beside the
-						// refresh's own row.
-						setup.mockInput.pressKey("k");
-						rows = rowsOf(await settle(setup));
-						expect(rows.find((row) => norm(row).includes("Enter Hand off"))).not.toContain(
-							"no Ticket is selected",
-						);
-					},
+					rows = rowsOf(setup.captureCharFrame());
+					refreshRow = rows.findIndex((row) => norm(row).includes("r Refresh"));
+					expect(rows[refreshRow]).not.toContain(" - ");
+					expect(spanColorAt(setup, refreshRow, "r")).toEqual(rgb(roleColor("accent")));
+					// The current section follows the state too: the fetched open
+					// Ticket is selected, so Hand off loses its reason as well.
+					// The queue's removal row now stands below the section toggle
+					// (ADR 0122), so one step back reads Hand off beside the
+					// refresh's own row.
+					setup.mockInput.pressKey("k");
+					rows = rowsOf(await settle(setup));
+					expect(rows.find((row) => norm(row).includes("Enter Hand off"))).not.toContain(
+						"no Ticket is selected",
+					);
+				},
 				WIDTH,
 				HEIGHT,
 				{ config: issuesConfig, state, sources: [source] },
@@ -1248,13 +1244,13 @@ describe("the in-app Key guide", () => {
 				setup.resize(60, 12);
 				let frame = await settle(setup);
 				expect(frame).toContain("Key guide - Ticket list");
-					// The selector's note, the Close reason, the queue removal's
-					// reason, the Grouping axis note, and the Recovery note wrap on
-					// this narrow terminal, so the guide runs longer than at the full
-					// width.
-					expect(actionBarRowOf(frame)).toContain("1-4/106");
+				// The selector's note, the Close reason, the queue removal's
+				// reason, the Grouping axis note, and the Recovery note wrap on
+				// this narrow terminal, so the guide runs longer than at the full
+				// width.
+				expect(actionBarRowOf(frame)).toContain("1-4/106");
 
-					await scrollGuide(setup, "j", "2-5/106");
+				await scrollGuide(setup, "j", "2-5/106");
 				// Back to size: the scroll the terminal gave back is kept.
 				setup.resize(WIDTH, HEIGHT);
 				frame = await settle(setup);

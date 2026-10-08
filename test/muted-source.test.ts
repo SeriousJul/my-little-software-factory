@@ -267,8 +267,9 @@ describe("the mute key", () => {
 
 	test("the bar names the source the mute reaches, in both Ticket panes", async () => {
 		const { state, src, props } = rig();
-		// A frame wide enough to hold the section's whole ladder.
-		const wide = 150;
+		// A frame wide enough to hold the section's whole ladder, the
+		// Delete key's wider hint included (ADR 0122).
+		const wide = 156;
 		try {
 			await withApp(
 				async (setup) => {

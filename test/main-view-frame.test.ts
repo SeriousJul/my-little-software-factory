@@ -976,12 +976,12 @@ describe("the merged Main view", () => {
 		try {
 			await booted(
 				async (setup) => {
-						// The Delete key is the plane's one destructive key (ADR 0122):
-						// in the Ticket section it answers the Ticket's own Close, and a
-						// Ticket-section key answers the Consultation section the same
-						// way: the key states what is missing, and nothing changes. The
-						// frame holds the proof: every row of both sections, and both
-						// list selections, come back unchanged after each press.
+					// The Delete key is the plane's one destructive key (ADR 0122):
+					// in the Ticket section it answers the Ticket's own Close, and a
+					// Ticket-section key answers the Consultation section the same
+					// way: the key states what is missing, and nothing changes. The
+					// frame holds the proof: every row of both sections, and both
+					// list selections, come back unchanged after each press.
 					const consultationSection = (frame: string) =>
 						rowsOf(frame).filter(
 							(row) => row.includes("Consultations") || row.includes("acme/factory"),
@@ -997,26 +997,26 @@ describe("the merged Main view", () => {
 						expect(ticketSection(after), what).toBe(ticketSection(before));
 						expect(consultationSection(after), what).toEqual(consultationSection(before));
 					};
-						// The Ticket list refuses first: the list holds no Ticket for
-						// the Delete key's Close, and the Consultation section's own
-						// Delete acts do not reach the Ticket section.
-						const listBefore = await settle(setup);
-						let refusal = await press(setup, "delete", "the close refusal", (f) =>
-							messageRowOf(f).includes("no Ticket is selected"),
-						);
-						expect(messageRowOf(refusal)).toContain("no Ticket is selected");
-						unchanged(listBefore, refusal, "after Delete in the Ticket list");
-						// ...and the Ticket detail pane carries the same refusal, the
-						// seeded Consultation untouched by the key.
-						await focusDetail(setup);
-						const detailBefore = await settle(setup);
-						refusal = await press(setup, "delete", "the close refusal on the detail pane", (f) =>
-							messageRowOf(f).includes("no Ticket is selected"),
-						);
-						expect(messageRowOf(refusal)).toContain("no Ticket is selected");
-						// The refusal changes no Consultation state: the section's header
-						// facts and its rows come back exactly as they were.
-						unchanged(detailBefore, refusal, "after Delete on the Ticket detail pane");
+					// The Ticket list refuses first: the list holds no Ticket for
+					// the Delete key's Close, and the Consultation section's own
+					// Delete acts do not reach the Ticket section.
+					const listBefore = await settle(setup);
+					let refusal = await press(setup, "delete", "the close refusal", (f) =>
+						messageRowOf(f).includes("no Ticket is selected"),
+					);
+					expect(messageRowOf(refusal)).toContain("no Ticket is selected");
+					unchanged(listBefore, refusal, "after Delete in the Ticket list");
+					// ...and the Ticket detail pane carries the same refusal, the
+					// seeded Consultation untouched by the key.
+					await focusDetail(setup);
+					const detailBefore = await settle(setup);
+					refusal = await press(setup, "delete", "the close refusal on the detail pane", (f) =>
+						messageRowOf(f).includes("no Ticket is selected"),
+					);
+					expect(messageRowOf(refusal)).toContain("no Ticket is selected");
+					// The refusal changes no Consultation state: the section's header
+					// facts and its rows come back exactly as they were.
+					unchanged(detailBefore, refusal, "after Delete on the Ticket detail pane");
 
 					// A Ticket-section control answers the same way in the
 					// Consultation section: the key states what is missing.
@@ -1106,27 +1106,27 @@ describe("the merged Main view", () => {
 						f.includes("Key guide - Consultation list"),
 					);
 					const rows = overlayRows(await settle(setup));
-						// The Consultation controls the merged Main view reached for,
-						// each named once with the key the section accepts. The section's
-						// own tail sits past the first window, so the scroll step below
-						// reads it: the Recovery row of Enter joins the two live meanings,
-						// and the refresh keeps the last row of the group.
-						for (const hint of [
-							"c Launch",
-							"f History",
-							"Delete Close",
-							"s Schedule",
-							"Enter Start now",
-							"Enter Recovery",
-							"Enter Respond",
-							"x Section",
-						])
-							expect(rows.filter((row) => row.includes(hint))).toHaveLength(1);
-						// The Delete key carries the section's two other acts, each
-						// with its own row (ADR 0122): the queue's removal, which
-						// takes the row the cursor's record waits with, and the record's
-						// removal, which takes the record and its history.
-						expect(rows.filter((row) => row.includes("Delete Remove"))).toHaveLength(2);
+					// The Consultation controls the merged Main view reached for,
+					// each named once with the key the section accepts. The section's
+					// own tail sits past the first window, so the scroll step below
+					// reads it: the Recovery row of Enter joins the two live meanings,
+					// and the refresh keeps the last row of the group.
+					for (const hint of [
+						"c Launch",
+						"f History",
+						"Delete Close",
+						"s Schedule",
+						"Enter Start now",
+						"Enter Recovery",
+						"Enter Respond",
+						"x Section",
+					])
+						expect(rows.filter((row) => row.includes(hint))).toHaveLength(1);
+					// The Delete key carries the section's two other acts, each
+					// with its own row (ADR 0122): the queue's removal, which
+					// takes the row the cursor's record waits with, and the record's
+					// removal, which takes the record and its history.
+					expect(rows.filter((row) => row.includes("Delete Remove"))).toHaveLength(2);
 					// The guide states no second Message or Help control: the
 					// frame holds one of each, whatever section is expanded. The
 					// Consultation section runs past the first window (Goto, ADR

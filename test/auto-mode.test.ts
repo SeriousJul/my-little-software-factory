@@ -3012,13 +3012,13 @@ describe("the leftover environment", () => {
 				await awaitFrame(setup, (f) => ticketRow(f).includes("[awaiting]"), "the awaiting ticket");
 				await pressReturn(setup, "the decision modal", (f) => f.includes("Decision:"));
 				await pressReturn(setup, "the close", (f) => ticketRow(f).includes("leftover"));
-						const commandsBefore = app.runner.commands();
-						const frame = await press(setup, "delete", "the close refusal", (f) =>
-							messageRowOf(f).includes("no work is in flight to close"),
-						);
-						// The refusal is readable on the Message line, in the catalogue's
-						// own words, and no panel opened under it.
-						expect(messageRowOf(frame)).toContain("no work is in flight to close");
+				const commandsBefore = app.runner.commands();
+				const frame = await press(setup, "delete", "the close refusal", (f) =>
+					messageRowOf(f).includes("no work is in flight to close"),
+				);
+				// The refusal is readable on the Message line, in the catalogue's
+				// own words, and no panel opened under it.
+				expect(messageRowOf(frame)).toContain("no work is in flight to close");
 				expect(frame).not.toContain("Close: Persist source facts");
 				// No panel and no reopened decision, and no herdr command ran:
 				// the refusal's fact sends its own desktop notification (ADR 0080),

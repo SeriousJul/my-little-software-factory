@@ -1250,7 +1250,9 @@ const consultationClose = (facts: ConsultationBaseFacts): ControlAvailability =>
 	const consultation = facts.selectedConsultation;
 	if (consultation === undefined) return unavailable("no Consultation is selected");
 	if (consultation.state === "queued")
-		return unavailable("the selected Consultation waits in the Work queue: Delete takes its row out");
+		return unavailable(
+			"the selected Consultation waits in the Work queue: Delete takes its row out",
+		);
 	if (consultation.state === "unscheduled")
 		return unavailable(
 			"the selected Consultation is unscheduled: Delete removes the record and its history",
