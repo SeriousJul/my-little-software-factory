@@ -53,19 +53,23 @@
 
 During development run the small loop, never the full suite:
 
-- `bun run fmt` on the files you touched, or `bun run lint` (0.25 s)
-- `bun run typecheck` (2.8 s)
+- `bun run audit`, the Quality audit, after your edits: the type check, Biome,
+  jscpd, and the code-scanning read in one payload
 - `bun test <file>` for the file you changed, or `bun run test:changed` when
   several files changed
 
-That loop costs about 5 seconds. `bun run test` does not belong in it.
+The audit is the command an agent reads after its edits, in place of the
+separate `bun run lint` and `bun run typecheck` runs: one payload covers the
+type check, lint, secrets, complexity, duplication, and the open SAST
+alerts. It runs no test suite, so the scoped test is its own step, and
+`bun run test` does not belong in the loop either way.
 
 Exactly one full `bun run test` gates the push, and it runs against the merged
 tree: rebase onto `origin/main` first, then run `bun run lint`, `bun run
-typecheck`, and `bun run test`. If the branch falls behind again during a rework
-round, rebase and run all three again. When the change touches `docs/`,
-`GLOSSARY.md`, or an ADR, `bun run docs:build` joins the gate. A new ADR number is
-checked against `origin/main` after the rebase.
+typecheck`, `bun run audit`, and `bun run test`. If the branch falls behind
+again during a rework round, rebase and run all four again. When the change
+touches `docs/`, `GLOSSARY.md`, or an ADR, `bun run docs:build` joins the
+gate. A new ADR number is checked against `origin/main` after the rebase.
 
 `scripts/git-hooks/pre-push` runs lint and typecheck, and refuses a push on a
 branch behind `origin/main`. It is active only where

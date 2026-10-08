@@ -17,15 +17,82 @@ after every edit is the cost that makes an agent skip a check.
 
 | Command | What it covers | Measured cost |
 | --- | --- | --- |
-| `bun run fmt`, or `bun run lint` on the files you touched | Format and lint with Biome | 0.18 s over 302 files (three runs: 175 ms, 178 ms, 181 ms) |
-| `bun run typecheck` | TypeScript over `src` and `test` | 2.7 s (two runs: 2.74 s, 2.78 s) |
+| `bun run audit` | The type check, Biome, jscpd, and the code-scanning read, in the Quality audit's one payload | 1.0 s at head 30d603c4 (three runs: 1.04 s, 1.01 s, 1.09 s) |
 | `bun test <file>` | The suite of the file you changed | 0.16 s for a static check over the tree; 13.8 s for the 22 frame tests in `test/action-bar.test.ts`; 21.9 s for the 58 in `test/consultation-frame.test.ts` |
 | `bun run test:changed` | The test files the current changes can affect | near zero when nothing changed |
 
-Lint and typecheck together cost under 3 seconds. The scoped run is the part that
-moves: a unit file costs a fraction of a second, and a frame file that boots the
-real renderer costs 14 to 22 seconds. That is still far below the full suite, and
-`bun run test` does not belong in the loop either way.
+The audit stands in place of the separate `bun run lint` and `bun run
+typecheck` runs an agent read after its edits; [the Quality
+audit](#the-quality-audit) states its metrics, its baseline, and its cost by
+component. The scoped run is the part that moves: a unit file costs a fraction
+of a second, and a frame file that boots the real renderer costs 14 to 22
+seconds. That is still far below the full suite, and `bun run test` does not
+belong in the loop either way.
+
+## The Quality audit
+
+`bun run audit` is the one command this repository runs to check itself
+(ADR 0120, ADR 0121). It runs the type check, Biome over `src scripts bin
+test` with the audit's config, jscpd over `src scripts bin`, and one `gh api`
+read of the open code-scanning alerts, and prints one payload on stdout: a
+status line, one count per metric, then the findings as `  path:line rule
+message`. It runs no test suite, and it writes nothing inside the worktree:
+jscpd's JSON report lands in a temp directory outside the repository and is
+removed.
+
+| Metric | Tool | Where the value stands |
+| --- | --- | --- |
+| Type correctness | `tsc --noEmit` over `src` and `test` | `tsconfig.json` |
+| Lint and format | Biome `check` | `biome.json`, through `bun run lint` and the editor |
+| Secrets | Biome `security/noSecrets` at `entropyThreshold: 50` | `biome.json` |
+| Cognitive complexity | Biome `complexity/noExcessiveCognitiveComplexity`, default 15 | `.quality/biome.json` |
+| Function length | Biome `complexity/noExcessiveLinesPerFunction`, `maxLines: 50`, `skipBlankLines: true`, off for `test/**` | `.quality/biome.json` |
+| Parameter count | Biome `complexity/useMaxParams`, default 4 | `.quality/biome.json` |
+| Duplication | jscpd 5.4.0, `minTokens: 100`, `minLines: 5`, over `src scripts bin` | `.jscpd.json` |
+| SAST | CodeQL, read through one `gh api` call over the open alerts | the repository's code scanning |
+
+No threshold stands in the audit script. `.quality.json` states the metric
+list, the scopes, the finding cap (20), and the changed base (`origin/main`,
+overridable with `QUALITY_CHANGED_BASE`), and `.quality-baseline.json` holds
+one count per metric, beside the head it was measured on. Findings cap at 20
+per metric, with one `and N more` line.
+
+The baseline only shrinks: a count above it fails the audit, and a count
+below it is rewritten down in the same change. Issue #350 is the campaign that
+shrinks it, and a finding is never silenced to meet a count: a suppression
+needs its reason beside it. A non-zero exit means the tree is worse than its
+baseline: a type error, a lint error, a duplication clone above the baseline,
+or any count above its baseline. The code-scanning read never fails the audit
+on its own; a failed read prints its reason as a fact line. `bun run audit
+--changed` lists only findings in files that differ from the changed base, and
+never the counts, so the ratchet never reads a partial tree.
+
+The counts stand at 168 cognitive complexity, 87 function length, 49 parameter
+count, and 11 duplication clones at head 30d603c4, where the audit landed.
+Issue #353 landed between the spec's measurement at head b4c305e6 and this
+head, and it added the one function-length finding that moves 86 to 87.
+
+Measured at head 30d603c4: the audit costs 1.0 s (three runs: 1.04 s, 1.01 s,
+1.09 s), of which the type check is 0.42 s (three runs: 0.422 s, 0.424 s,
+0.429 s), the Biome run is 0.21 s (three runs: 203 ms, 208 ms, 207 ms), and
+jscpd is 0.04 s (three runs: 39 ms, 40 ms, 43 ms), plus one `gh api` call.
+
+### The audit's probes
+
+The probes the branch's tests claim, each re-run on the head that is pushed:
+
+1. The duplication teeth: paste a block of at least 100 tokens that already
+   stands elsewhere in `src` into a function of `src`. The `duplicates` count
+   grows by one and the audit exits non-zero.
+2. The cognitive teeth: raise one function's cognitive score past 15 by
+   nesting an `if` in a body that already stands over 15. The `cognitive`
+   count grows by one and the audit exits non-zero.
+3. The ratchet: lower one count in `.quality-baseline.json` below the count
+   the tree stands at. The audit exits non-zero and prints that count below
+   its baseline.
+4. The secrets rule: remove the `overrides` entry in `biome.json` that turns
+   `noSecrets` off for the generated screen font table, `scripts/screen-font.ts`.
+   The `secrets` count goes to 1 and the audit exits non-zero.
 
 ## The push gate
 
@@ -36,8 +103,9 @@ tree, in this order:
 2. Check that a new ADR number is still free on the merged tree.
 3. `bun run lint`.
 4. `bun run typecheck`.
-5. `bun run test`, once.
-6. `bun run docs:build`, when the change touches `docs/`, `GLOSSARY.md`, or an
+5. `bun run audit`, the Quality audit.
+6. `bun run test`, once.
+7. `bun run docs:build`, when the change touches `docs/`, `GLOSSARY.md`, or an
    ADR. CI runs the same build and blocks on it.
 
 A branch that falls behind `origin/main` again during a rework round rebases and

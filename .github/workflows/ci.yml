@@ -17,6 +17,7 @@ jobs:
       - run: bun install
       - run: bun run lint
       - run: bun run typecheck
+      - run: bun run audit
       - run: bun run test
 
   site-build:

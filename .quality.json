@@ -1,0 +1,9 @@
+{
+	"metrics": ["type", "lint", "secrets", "cognitive", "function", "params", "duplicates"],
+	"scopes": {
+		"biome": ["src", "scripts", "bin", "test"],
+		"jscpd": ["src", "scripts", "bin"]
+	},
+	"finding-cap": 20,
+	"changed-base": "origin/main"
+}

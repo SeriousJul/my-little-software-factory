@@ -1,0 +1,5 @@
+{
+	"minTokens": 100,
+	"minLines": 5,
+	"reporters": ["json"]
+}
