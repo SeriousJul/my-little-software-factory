@@ -12,7 +12,29 @@
 	"linter": {
 		"enabled": true,
 		"rules": {
-			"preset": "recommended"
+			"preset": "recommended",
+			"security": {
+				"noSecrets": {
+					"level": "error",
+					"options": {
+						"entropyThreshold": 50
+					}
+				}
+			}
 		}
-	}
+	},
+	"overrides": [
+		{
+			"includes": ["**/screen-font.ts"],
+			"linter": {
+				"rules": {
+					"security": {
+						"noSecrets": {
+							"level": "off"
+						}
+					}
+				}
+			}
+		}
+	]
 }

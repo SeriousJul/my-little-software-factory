@@ -155,3 +155,7 @@ factory.log*
 # Mutation testing artifacts
 reports/
 .stryker-tmp/
+
+# The Quality audit's nested Biome config: tracked, but hidden from the root
+# `biome check .` scan so it is not read as a second root configuration (ADR 0121).
+.quality/

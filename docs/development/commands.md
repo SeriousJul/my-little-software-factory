@@ -15,6 +15,7 @@ description: The bun commands of the repository, the shared control gallery, and
 | `bun run lint`        | Lint and check formatting with Biome                   |
 | `bun run fmt`         | Lint, format, and fix with Biome                       |
 | `bun run typecheck`   | Typecheck with TypeScript                              |
+| `bun run audit`       | Run the Quality audit: type check, Biome, jscpd, and the code-scanning read, in one payload |
 | `bun run build`       | Compile one prebuilt binary of the control plane        |
 | `bun run screenshots` | Regenerate the guide screenshots from fixture state     |
 | `bun run hero`        | Regenerate the documentation homepage's hero shot       |

@@ -2741,6 +2741,7 @@ describe("the override panel", () => {
 		stubCheckout(runner);
 		stubLiveHandoff(runner);
 		const props = { config: BASE_CONFIG, runner, home, configPath };
+		// biome-ignore lint/security/noSecrets: a fixed test fixture, not a credential
 		const longValue = "abcdefghijklmnopqrstuv9876543210";
 		await withApp(
 			async (setup) => {
