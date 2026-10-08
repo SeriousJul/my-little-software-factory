@@ -45,10 +45,13 @@ import { repositoryInitSettingsHash } from "../src/repo-init.ts";
 import type { SourceDefinition } from "../src/state/source-fact.ts";
 import { openFactoryState } from "../src/state.ts";
 import { openControlPlanePty } from "../test/executable-pty.ts";
-import { parseScreen, renderPng } from "./ansi-render.ts";
+import { parseScreen, renderPng, type TerminalColors } from "./ansi-render.ts";
 
 /** The screen the screenshots show: the size the PTY opens with. */
 export const SCREEN = { cols: 180, rows: 40 } as const;
+
+/** The screen the hero shot shows: the plane full width, plus herdr's sidebar. */
+export const HERO_SCREEN = { cols: 256, rows: 56 } as const;
 
 /**
  * The herdr theme the screenshots render with: the theme the operator's
@@ -60,6 +63,38 @@ export const SCREEN = { cols: 180, rows: 40 } as const;
  * `npm run screenshots` and `npm run hero`.
  */
 export const HERDR_THEME_NAME = "one-dark";
+
+/**
+ * The terminal colors the screenshots paint with, pinned beside the theme
+ * (ADR 0123): the terminal background, the terminal foreground, and the
+ * sixteen basic colors, copied from the theme the operator's desktop stands
+ * on, which is tokyo-night today. A capture reads nothing from the machine
+ * it runs on, so the committed bytes stay the same on every machine. The
+ * block moves by hand when the desktop theme moves, and
+ * `npm run screenshots` and `npm run hero` re-run after it.
+ */
+export const TERMINAL_COLORS: TerminalColors = {
+	background: [26, 27, 38], // #1a1b26
+	foreground: [169, 177, 214], // #a9b1d6
+	basic: [
+		[26, 27, 38], // #1a1b26
+		[247, 118, 142], // #f7768e
+		[158, 206, 106], // #9ece6a
+		[224, 175, 104], // #e0af68
+		[122, 162, 247], // #7aa2f7
+		[173, 142, 230], // #ad8ee6
+		[68, 157, 171], // #449dab
+		[169, 177, 214], // #a9b1d6
+		[65, 72, 104], // #414868
+		[255, 122, 147], // #ff7a93
+		[185, 242, 124], // #b9f27c
+		[255, 158, 100], // #ff9e64
+		[125, 166, 255], // #7da6ff
+		[187, 154, 247], // #bb9af7
+		[13, 185, 215], // #0db9d7
+		[192, 202, 245], // #c0caf5
+	],
+};
 
 /** The six screens, in capture order, with the doc page each belongs to. */
 export interface ScreenshotTarget {
@@ -854,6 +889,9 @@ export async function captureScreens(fixtureDir: string): Promise<Map<string, Bu
 			// The mark of a herdr child pane (ADR 0024): with it, the plane
 			// resolves its theme from the herdr config the fixture holds.
 			HERDR_ENV: "1",
+			// The color half of the pair herdr gives every pane (ADR 0123):
+			// with it, the plane writes the Theme's exact hex in the stream.
+			COLORTERM: "truecolor",
 			HOME: fixtureDir,
 			XDG_CONFIG_HOME: join(fixtureDir, ".config"),
 			XDG_STATE_HOME: join(fixtureDir, ".state"),
@@ -870,7 +908,7 @@ export async function captureScreens(fixtureDir: string): Promise<Map<string, Bu
 		log(`capturing ${name}`);
 		await session.waitForStable(300, `the screen to settle before ${name}`, 15000);
 		const grid = parseScreen(session.output(), SCREEN.cols, SCREEN.rows);
-		out.set(name, renderPng(grid));
+		out.set(name, renderPng(grid, TERMINAL_COLORS));
 	};
 	const key = (bytes: string) => {
 		session.write(bytes);

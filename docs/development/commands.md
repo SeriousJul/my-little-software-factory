@@ -19,7 +19,6 @@ description: The bun commands of the repository, the shared control gallery, and
 | `bun run build`       | Compile one prebuilt binary of the control plane        |
 | `bun run screenshots` | Regenerate the guide screenshots from fixture state     |
 | `bun run hero`        | Regenerate the documentation homepage's hero shot       |
-| `bun run font`        | Regenerate the committed screen font table from the vendored terminal font |
 | `bun run docs:dev`    | Start the documentation site in development mode        |
 | `bun run docs:build`  | Build the documentation site                            |
 | `bun run docs:preview`| Preview the built documentation site                    |
@@ -127,9 +126,9 @@ control. See [the shared control standard](./shared-controls.md).
 production binary on a pseudo-terminal, the production keys, and the
 cell-grid render. The drift test in `bun run test` reruns the same path and fails
 when a committed image no longer matches the screen, so a screen change
-always lands with its image. The screenshots are painted from per-cell
-coverage bitmaps the committed font table holds, so a font change lands
-with `bun run font` and the images it moves.
+always lands with its image. The renderer rasterizes every glyph at run time
+from the two vendored terminal faces, so a font change lands with the faces
+and the images it moves (ADR 0123).
 
 `bun run hero` refreshes the documentation homepage's hero shot: the same
 fixture world, running in one pane of an isolated herdr workspace. The shot

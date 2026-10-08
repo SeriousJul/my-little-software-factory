@@ -1,14 +1,16 @@
 /**
- * The screenshot renderer: one terminal cell per rectangle, the real palette.
+ * The screenshot renderer: one terminal cell per rectangle, the real colors.
  *
  * It reads the ANSI byte stream a PTY session captured from the production
  * renderer and reduces it to the screen the operator sees: a grid of
- * (character, foreground, background) cells. It then paints that grid to a
- * PNG: each cell in its background color, its glyph blended over the
- * background by the per-pixel coverage the font table carries, the 256-color
- * palette expanded to the RGB values the stream named. The committed
- * screenshots are the output of this renderer over the captured stream, so
- * an image change is always a screen change.
+ * (character, foreground, background, weight) cells. It then paints that
+ * grid to a PNG: each cell in its background color, its glyph blended over
+ * the background by the per-pixel coverage the screen font rasterizes, and
+ * a bold cell on the Bold face. A 24-bit color the stream names is painted
+ * exactly; a basic color is painted from the terminal's own sixteen; a cell
+ * that names no color is painted with the terminal's own background and
+ * foreground. The committed screenshots are the output of this renderer over
+ * the captured stream, so an image change is always a screen change.
  *
  * The parser keeps only what the production stream uses: cursor addressing
  * and movement, character attributes (SGR), line endings, and everything
@@ -20,52 +22,48 @@ import { deflateSync } from "node:zlib";
 
 import { CELL_H, CELL_W, glyphOf } from "./screen-font.ts";
 
+/**
+ * The terminal's own colors: the background and foreground a cell falls back
+ * to when the stream names none, and the sixteen basic colors SGR 30-37 and
+ * 90-97 name. A capture pins these beside its theme in
+ * `scripts/screenshot-fixture.ts` (ADR 0123), because a capture reads nothing
+ * from the machine it runs on.
+ */
+export interface TerminalColors {
+	/** The terminal's own background. */
+	readonly background: readonly [number, number, number];
+	/** The terminal's own foreground. */
+	readonly foreground: readonly [number, number, number];
+	/** The terminal's sixteen basic colors, in SGR order. */
+	readonly basic: readonly (readonly [number, number, number])[];
+}
+
+/** One cell's color: a basic index, an exact 24-bit triple, or -1 for the terminal's own. */
+type CellColor = number | readonly [number, number, number];
+
 /** One cell of the terminal grid. */
 interface Cell {
 	char: string;
-	fg: number;
-	bg: number;
+	fg: CellColor;
+	bg: CellColor;
+	bold: boolean;
 }
 
-/** The xterm 256-color palette, as the terminal that paints the app has it. */
-const PALETTE: readonly [number, number, number][] = (() => {
-	const colors: [number, number, number][] = [];
-	// The 16 system colors: the xterm defaults.
-	const system: [number, number, number][] = [
-		[0, 0, 0],
-		[205, 0, 0],
-		[0, 205, 0],
-		[205, 205, 0],
-		[0, 0, 238],
-		[205, 0, 205],
-		[0, 205, 205],
-		[229, 229, 229],
-		[127, 127, 127],
-		[255, 0, 0],
-		[0, 255, 0],
-		[255, 255, 0],
-		[92, 92, 255],
-		[255, 0, 255],
-		[0, 255, 255],
-		[255, 255, 255],
-	];
-	colors.push(...system);
-	// The 216-color cube.
-	for (let r = 0; r < 6; r++)
-		for (let g = 0; g < 6; g++)
-			for (let b = 0; b < 6; b++)
-				colors.push([r * 42 + (r ? 55 : 0), g * 42 + (g ? 55 : 0), b * 42 + (b ? 55 : 0)]);
-	// The 24 gray ramp.
-	for (let i = 0; i < 24; i++) colors.push([8 + i * 10, 8 + i * 10, 8 + i * 10]);
-	return colors;
-})();
-
-const rgbOf = (index: number): [number, number, number] => PALETTE[index] ?? [0, 0, 0];
-
-/** The background one terminal cell has when the stream names no color for it. */
-const DEFAULT_BG = [17, 17, 27] as const;
-/** The default foreground, xterm's bright white. */
-const DEFAULT_FG = 15;
+/**
+ * The 240-entry cube and the 24 gray ramp, as the standard xterm-256
+ * terminal resolves them: the cube lays out as 16 + 36*r + 6*g + b, each axis
+ * step 0 standing at 0 and step n at 55 + 40*n, and the ramp runs from 8 to
+ * 238 in steps of 10. The caller passes an index from 16 to 255.
+ */
+function xterm256(index: number): [number, number, number] {
+	if (index < 232) {
+		const i = index - 16;
+		const cubed = (n: number) => (n === 0 ? 0 : 55 + n * 40);
+		return [cubed(Math.floor(i / 36)), cubed(Math.floor((i % 36) / 6)), cubed(i % 6)];
+	}
+	const gray = (index - 232) * 10 + 8;
+	return [gray, gray, gray];
+}
 
 /**
  * Reduce an ANSI byte stream to the cell grid of the screen it ends on.
@@ -75,27 +73,24 @@ const DEFAULT_FG = 15;
  */
 export function parseScreen(data: Uint8Array, cols: number, rows: number): Cell[][] {
 	const cells: Cell[][] = Array.from({ length: rows }, () =>
-		Array.from({ length: cols }, () => ({ char: " ", fg: DEFAULT_FG, bg: -1 })),
+		Array.from({ length: cols }, () => ({ char: " ", fg: -1, bg: -1, bold: false })),
 	);
 	let row = 0;
 	let col = 0;
-	let fg = DEFAULT_FG;
-	let bg = -1;
+	let fg: CellColor = -1;
+	let bg: CellColor = -1;
 	let bold = false;
 	let text = "";
 	const decoder = new TextDecoder();
 
 	const emit = (ch: string) => {
 		if (row < 0 || row >= rows || col < 0 || col >= cols) return;
-		cells[row][col] = { char: ch, fg, bg };
+		cells[row][col] = { char: ch, fg, bg, bold };
 		col += 1;
 		if (col >= cols) {
 			col = 0;
 			row += 1;
 		}
-	};
-	const applyFg = (value: number) => {
-		fg = bold && value < 8 ? value + 8 : value;
 	};
 
 	/** Finish the pending plain-text run and reset the SGR state for a CSI. */
@@ -106,73 +101,65 @@ export function parseScreen(data: Uint8Array, cols: number, rows: number): Cell[
 		text = "";
 	};
 
-	const decode = (params: string): void => {
-		const p = params
-			.split(";")
-			.map((part) => (part === "" ? 0 : Number(part)))
-			.filter((n) => Number.isFinite(n));
-		if (params.trim() === "") return;
-		switch (p[p.length - 1]) {
-			case 49:
-				bg = -1;
-				break;
-			case 0:
-				fg = DEFAULT_FG;
-				bg = -1;
-				bold = false;
-				break;
-			case 1:
-				bold = true;
-				break;
-			case 22:
-				bold = false;
-				break;
-			case 39:
-				fg = DEFAULT_FG;
-				break;
-			default:
-				break;
-		}
-		for (let i = 0; i < p.length; i++) {
-			const code = p[i];
-			if (code >= 30 && code <= 37) applyFg(code - 30);
-			else if (code >= 90 && code <= 97) applyFg(code - 90 + 8);
-			else if (code === 40 || (code >= 40 && code <= 47)) bg = code - 40;
-			else if (code >= 100 && code <= 107) bg = code - 100 + 8;
-			else if (code === 38) {
-				if (p[i + 1] === 5 && p[i + 2] !== undefined) {
-					applyFg(p[i + 2]);
-					i += 2;
-				} else if (p[i + 1] === 2) {
-					fg = indexFromTrueColor(p.slice(i + 2, i + 5));
-					i += 4;
-				}
-			} else if (code === 48) {
-				if (p[i + 1] === 5 && p[i + 2] !== undefined) {
-					bg = p[i + 2];
-					i += 2;
-				} else if (p[i + 1] === 2) {
-					bg = indexFromTrueColor(p.slice(i + 2, i + 5));
-					i += 4;
-				}
-			}
-		}
+	/**
+	 * One 256-color index, as the terminal resolves it: a basic index, or the
+	 * exact RGB of the cube or ramp. An index no terminal names - a broken
+	 * stream past 255, or a negative one - falls back to black.
+	 */
+	const colorOf256 = (index: number): CellColor => {
+		if (index < 0 || index > 255) return [0, 0, 0];
+		return index < 16 ? index : xterm256(index);
 	};
 
-	const indexFromTrueColor = (rgb: number[]): number => {
-		const [r, g, b] = [rgb[0] ?? 0, rgb[1] ?? 0, rgb[2] ?? 0];
-		// Nearest palette entry: screenshots must be palette-exact.
-		let best = 0;
-		let bestDist = Infinity;
-		for (let i = 0; i < PALETTE.length; i++) {
-			const [pr, pg, pb] = PALETTE[i];
-			const dist = (pr - r) ** 2 + (pg - g) ** 2 + (pb - b) ** 2;
-			if (dist < bestDist) {
-				bestDist = dist;
-				best = i;
+	/**
+	 * Read one extended SGR color: `38`/`48`, a mode, and the values.
+	 * Returns the color and the index past the sequence, or null when the
+	 * parameters name no color.
+	 */
+	const extendedColor = (p: number[], i: number): { color: CellColor; next: number } | null => {
+		if (p[i + 1] === 5 && Number.isFinite(p[i + 2])) {
+			return { color: colorOf256(p[i + 2]), next: i + 3 };
+		}
+		if (p[i + 1] === 2) {
+			return { color: [p[i + 2] ?? 0, p[i + 3] ?? 0, p[i + 4] ?? 0], next: i + 5 };
+		}
+		return null;
+	};
+
+	const decode = (params: string): void => {
+		const p = params.split(";").map((part) => (part === "" ? 0 : Number(part)));
+		if (params.trim() === "") return;
+		for (let i = 0; i < p.length; i++) {
+			const code = p[i];
+			if (code === 0) {
+				fg = -1;
+				bg = -1;
+				bold = false;
+			} else if (code === 1) {
+				bold = true;
+			} else if (code === 22) {
+				bold = false;
+			} else if (code === 39) {
+				fg = -1;
+			} else if (code === 49) {
+				bg = -1;
+			} else if (code >= 30 && code <= 37) {
+				fg = code - 30;
+			} else if (code >= 90 && code <= 97) {
+				fg = code - 90 + 8;
+			} else if (code >= 40 && code <= 47) {
+				bg = code - 40;
+			} else if (code >= 100 && code <= 107) {
+				bg = code - 100 + 8;
+			} else if (code === 38 || code === 48) {
+				const extended = extendedColor(p, i);
+				if (extended !== null) {
+					if (code === 38) fg = extended.color;
+					else bg = extended.color;
+					i = extended.next - 1;
+				}
 			}
 		}
-		return best;
 	};
 
 	let i = 0;
@@ -227,13 +214,13 @@ export function parseScreen(data: Uint8Array, cols: number, rows: number): Cell[
 									: which === 1
 										? (r === row && c >= col) || r > row
 										: true;
-							if (inCursor) cells[r][c] = { char: " ", fg: DEFAULT_FG, bg: -1 };
+							if (inCursor) cells[r][c] = { char: " ", fg: -1, bg: -1, bold: false };
 						}
 				} else if (final === "K") {
 					const which = Number(params) || 0;
 					for (let c = 0; c < cols; c++) {
 						const inCursor = which === 0 ? c >= col : which === 1 ? c <= col : true;
-						if (inCursor) cells[row][c] = { char: " ", fg: DEFAULT_FG, bg: -1 };
+						if (inCursor) cells[row][c] = { char: " ", fg: -1, bg: -1, bold: false };
 					}
 				}
 				// Modes (?25l, ?1049h, ?1006h, ...), queries (6n), and the
@@ -295,23 +282,28 @@ export function parseScreen(data: Uint8Array, cols: number, rows: number): Cell[
  * Paint a cell grid to a PNG.
  *
  * One cell per font cell: the background fills the cell, and the glyph's
- * coverage blends the foreground over it, pixel by pixel. A background of -1
- * is the terminal's own background, which the stream does not name: it is
- * painted with the theme's base.
+ * coverage blends the foreground over it, pixel by pixel. A -1 names the
+ * terminal's own color: the background for a cell the stream gives none, the
+ * foreground for a cell the stream gives none. A basic index stands in the
+ * terminal's own sixteen, and an exact triple paints as the stream named it.
  */
-export function renderPng(cells: Cell[][], bgOverride?: [number, number, number]): Buffer {
+export function renderPng(cells: Cell[][], colors: TerminalColors): Buffer {
 	const cols = cells[0]?.length ?? 0;
 	const rows = cells.length;
 	const width = cols * CELL_W;
 	const height = rows * CELL_H;
 	const pixels = Buffer.alloc(width * height * 3);
-	const bg = bgOverride ?? DEFAULT_BG;
+	const resolve = (
+		value: CellColor,
+		fallback: readonly [number, number, number],
+	): readonly [number, number, number] =>
+		value === -1 ? fallback : typeof value === "number" ? colors.basic[value] : value;
 
 	for (let r = 0; r < rows; r++) {
 		for (let c = 0; c < cols; c++) {
 			const cell = cells[r][c];
-			const cellBg = cell.bg === -1 ? bg : rgbOf(cell.bg);
-			const cellFg = rgbOf(cell.fg);
+			const cellBg = resolve(cell.bg, colors.background);
+			const cellFg = resolve(cell.fg, colors.foreground);
 			const x0 = c * CELL_W;
 			const y0 = r * CELL_H;
 			// The rectangle.
@@ -324,7 +316,7 @@ export function renderPng(cells: Cell[][], bgOverride?: [number, number, number]
 					pixels[off + 2] = cellBg[2];
 				}
 			}
-			const glyph = glyphOf(cell.char);
+			const glyph = glyphOf(cell.char, cell.bold);
 			if (glyph === undefined) continue;
 			for (let y = 0; y < CELL_H; y++) {
 				for (let x = 0; x < CELL_W; x++) {

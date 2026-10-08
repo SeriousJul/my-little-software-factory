@@ -180,8 +180,9 @@ export function markerText(focused: boolean): string {
  * a filled circle and an open circle are two shapes, so the no-color
  * presentation keeps both states readable and the lamp needs no palette of its
  * own. Both glyphs are plain Unicode Geometric Shapes, so an ordinary terminal
- * font paints them, and both already stand in the screen-font table the
- * screenshots rasterize from.
+ * font paints them, and the screenshot renderer rasterizes them from the
+ * vendored face: the committed screen-font table they stood in leaves with
+ * ADR 0123.
  */
 export const LAMP_GLYPHS = { on: "●", off: "○" } as const;
 

@@ -22,19 +22,5 @@
 				}
 			}
 		}
-	},
-	"overrides": [
-		{
-			"includes": ["**/screen-font.ts"],
-			"linter": {
-				"rules": {
-					"security": {
-						"noSecrets": {
-							"level": "off"
-						}
-					}
-				}
-			}
-		}
-	]
+	}
 }

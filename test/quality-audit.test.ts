@@ -22,10 +22,9 @@
  * - Probe 3, the ratchet: lower one count in `.quality-baseline.json` below
  *   the count the tree stands at. The audit exits non-zero and prints that
  *   count below its baseline.
- * - Probe 4, the secrets rule: remove the `overrides` entry in `biome.json`
- *   that turns `noSecrets` off for the generated screen font table,
- *   `scripts/screen-font.ts`. The `secrets` count goes to 1 and the audit
- *   exits non-zero.
+ * - Probe 4, the secrets rule: plant a high-entropy 32-character token in a
+ *   file under `src`. The `secrets` count grows by one and the audit exits
+ *   non-zero.
  */
 
 import { describe, expect, test } from "bun:test";
@@ -244,7 +243,7 @@ describe("the dotfiles state the audit's values", () => {
 		const baseline = JSON.parse(
 			readFileSync(join(ROOT, ".quality-baseline.json"), "utf8"),
 		) as BaselineFile;
-		expect(baseline.cognitive).toBe(168);
+		expect(baseline.cognitive).toBe(167);
 		expect(baseline.function).toBe(87);
 		expect(baseline.params).toBe(49);
 		expect(baseline.duplicates).toBe(11);

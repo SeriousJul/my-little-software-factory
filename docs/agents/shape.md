@@ -336,9 +336,10 @@ description: The module map of the source tree, for agents working in this repos
 	an isolated herdr - a fresh server in a temporary directory with its own
 	socket and home - and renders the workspace with the same ANSI renderer as
 	the doc screenshots. Refreshed by hand; it is outside the drift test.
-- `scripts/generate-screen-font.ts` and `scripts/screen-font.ts`: the per-cell
-	coverage bitmaps the screenshot renderer paints from, rasterized from the
-	vendored terminal font by `npm run font`.
+- `scripts/screen-font.ts`: the glyph rasterizer the screenshot renderer
+	paints from: each glyph rasterizes at run time from the two vendored
+	terminal faces (Regular and Bold) beside it in `scripts/fonts/`, and its
+	coverage is cached per face and character.
 - `test/sample-tickets.ts`: deterministic data used by legacy frame tests only.
 - `test/shape-doc-paths.test.ts`: this module map held to the tree. Every path it
 	prints either exists or the check goes red, with the entry that printed it
