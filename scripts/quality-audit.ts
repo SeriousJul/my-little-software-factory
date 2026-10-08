@@ -558,7 +558,8 @@ function narrowFindings(findings: Finding[], changed: Set<string>): Finding[] {
 	);
 }
 
-function main(): void {
+/** The audit run: the payload on stdout, and the exit code the status states. */
+function run(): number {
 	const root = process.cwd();
 	const started = Date.now();
 	const config = readJson<QualityConfig>(join(root, QUALITY_CONFIG));
@@ -603,12 +604,12 @@ function main(): void {
 				cap: config["finding-cap"],
 			})}\n`,
 		);
-		process.exit(status === "OK" ? 0 : 1);
+		return status === "OK" ? 0 : 1;
 	} finally {
 		rmSync(tempDir, { recursive: true, force: true });
 	}
 }
 
 if (import.meta.main) {
-	main();
+	process.exitCode = run();
 }

@@ -51,9 +51,9 @@ the run says so.
 ## The pre-push hook
 
 `scripts/git-hooks/pre-push` is the cheap half of the push gate (ADR 0105): it
-runs `bun run lint` and `bun run typecheck`, about 3 seconds, and refuses a push
-whose branch is behind the remote-tracking ref the checkout already holds. It
-fetches nothing, and it never runs the suite.
+runs `bun run lint` and `bun run typecheck`, about 0.6 s at head 30d603c4, and
+refuses a push whose branch is behind the remote-tracking ref the checkout
+already holds. It fetches nothing, and it never runs the suite.
 
 A committed hook is not active by itself. Set it once per checkout:
 
