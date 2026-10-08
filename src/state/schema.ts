@@ -336,6 +336,42 @@ export function hasIndex(db: Database, name: string): boolean {
 		db.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name = ?").get(name) != null
 	);
 }
+/** The refusal a stamped version earns before any step runs. */
+function validateSchemaVersion(db: Database, version: number, path: string): void {
+	if (version > SCHEMA_VERSION)
+		throw new StateError(`database ${path} uses newer schema version ${version}`);
+	// A database which claims a known version but lacks that version's
+	// core aggregate is not a valid state database. Treat it as newer.
+	const coreTable = version >= 4 ? "consultations" : "tickets";
+	if (version > 0 && !hasTable(db, coreTable))
+		throw new StateError(`database ${path} uses newer schema version ${version}`);
+}
+
+/** The migration steps the file takes while it stands below version 15. */
+function migrateThroughV14(db: Database, version: number): void {
+	if (version < 1) db.exec(SCHEMA_V1);
+	if (version < 2) {
+		db.exec(MIGRATION_V1_TO_V2);
+		// Legacy `done` means that the Agent settled. Preserve its work
+		// cycle and expose the missing Completion decision.
+		db.exec("UPDATE tickets SET state = 'awaiting' WHERE state = 'done'");
+		// The absent flag only served the old done-cycle bump.
+		db.exec("ALTER TABLE tickets DROP COLUMN absent");
+	}
+	if (version < 3) db.exec(MIGRATION_V2_TO_V3);
+	if (version < 4) db.exec(MIGRATION_V3_TO_V4);
+	if (version < 5) db.exec(MIGRATION_V4_TO_V5);
+	if (version < 6) db.exec(MIGRATION_V5_TO_V6);
+	if (version < 7) db.exec(MIGRATION_V6_TO_V7);
+	if (version < 8) db.exec(MIGRATION_V7_TO_V8);
+	if (version < 9) db.exec(MIGRATION_V8_TO_V9);
+	if (version < 10) db.exec(MIGRATION_V9_TO_V10);
+	if (version < 11) db.exec(MIGRATION_V10_TO_V11);
+	if (version < 12) db.exec(MIGRATION_V11_TO_V12);
+	if (version < 13) db.exec(MIGRATION_V12_TO_V13);
+	if (version < 14) db.exec(MIGRATION_V13_TO_V14);
+}
+
 export function migrate(db: Database, path: string): void {
 	db.exec("BEGIN IMMEDIATE");
 	try {
@@ -344,34 +380,8 @@ export function migrate(db: Database, path: string): void {
 			version: number;
 		} | null;
 		const version = row?.version ?? 0;
-		if (version > SCHEMA_VERSION)
-			throw new StateError(`database ${path} uses newer schema version ${version}`);
-		// A database which claims a known version but lacks that version's
-		// core aggregate is not a valid state database. Treat it as newer.
-		const coreTable = version >= 4 ? "consultations" : "tickets";
-		if (version > 0 && !hasTable(db, coreTable))
-			throw new StateError(`database ${path} uses newer schema version ${version}`);
-		if (version < 1) db.exec(SCHEMA_V1);
-		if (version < 2) {
-			db.exec(MIGRATION_V1_TO_V2);
-			// Legacy `done` means that the Agent settled. Preserve its work
-			// cycle and expose the missing Completion decision.
-			db.exec("UPDATE tickets SET state = 'awaiting' WHERE state = 'done'");
-			// The absent flag only served the old done-cycle bump.
-			db.exec("ALTER TABLE tickets DROP COLUMN absent");
-		}
-		if (version < 3) db.exec(MIGRATION_V2_TO_V3);
-		if (version < 4) db.exec(MIGRATION_V3_TO_V4);
-		if (version < 5) db.exec(MIGRATION_V4_TO_V5);
-		if (version < 6) db.exec(MIGRATION_V5_TO_V6);
-		if (version < 7) db.exec(MIGRATION_V6_TO_V7);
-		if (version < 8) db.exec(MIGRATION_V7_TO_V8);
-		if (version < 9) db.exec(MIGRATION_V8_TO_V9);
-		if (version < 10) db.exec(MIGRATION_V9_TO_V10);
-		if (version < 11) db.exec(MIGRATION_V10_TO_V11);
-		if (version < 12) db.exec(MIGRATION_V11_TO_V12);
-		if (version < 13) db.exec(MIGRATION_V12_TO_V13);
-		if (version < 14) db.exec(MIGRATION_V13_TO_V14);
+		validateSchemaVersion(db, version, path);
+		migrateThroughV14(db, version);
 		// The v14 number was reused while the queue was new, so the stamp alone
 		// cannot tell the two shapes apart. Ask the file: only the table that
 		// lacks its `position` column is unreadable, and a sound queue keeps

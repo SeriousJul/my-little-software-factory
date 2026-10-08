@@ -479,31 +479,46 @@ export class StubWorldStore {
 		if (repository === null)
 			return { code: 1, stdout: "", stderr: "HTTP 404: Not Found (stub world)\n" };
 		const rest = parts.slice(3);
-		if (rest[0] === "issues" && rest[1] !== undefined && rest[2] === "comments") {
-			const number = Number(rest[1]);
-			// The plane reads a pull request's verdicts on the issues path with
-			// the pull request's number, so the pull request wins the match.
-			const pull = repository.pullRequests.find((item) => item.number === number);
-			if (pull !== undefined) {
-				this.applyAutoScore(pull);
-				return {
-					code: 0,
-					stdout: JSON.stringify(
-						pull.comments.map((comment) => ({
-							body: comment.body,
-							created_at: comment.createdAt,
-						})),
-					),
-					stderr: "",
-				};
-			}
-			const issue = repository.issues.find((item) => item.number === number);
-			if (issue === undefined)
-				return { code: 1, stdout: "", stderr: "HTTP 404: Not Found (stub world)\n" };
+		if (rest[0] === "issues" && rest[1] !== undefined && rest[2] === "comments")
+			return this.answerIssueComments(repository, rest);
+		if (rest[0] === "pulls" && rest[1] !== undefined && rest[2] === "reviews")
+			return this.answerPullReviews(repository, rest);
+		if (rest[0] === "pulls" && rest.length === 1)
+			return this.answerPullList(repository, query, tokens);
+		if (rest[0] === "pulls" && rest[1] !== undefined && rest.length === 2)
+			return this.answerPullOne(repository, rest);
+		if (rest[0] === "security-advisories")
+			return this.answerStateFeed(tokens, fields, {
+				read: () => repository.security.advisories,
+				name: "advisory",
+			});
+		if (rest[0] === "dependabot" && rest[1] === "alerts")
+			return this.answerStateFeed(tokens, fields, {
+				read: () => repository.security.dependabotAlerts,
+				name: "dependabot",
+			});
+		if (rest[0] === "secret-scanning" && rest[1] === "alerts")
+			return this.answerStateFeed(tokens, fields, {
+				read: () => repository.security.secretScanningAlerts,
+				name: "secret scanning",
+			});
+		return this.refusal(tokens, `an endpoint the world does not know: ${path}`);
+	}
+
+	/**
+	 * The comments of one issue number: the pull request's verdicts win the
+	 * match, because the plane reads a pull request's verdicts on the issues
+	 * path with the pull request's number.
+	 */
+	private answerIssueComments(repository: StubRepository, rest: readonly string[]): Answer {
+		const number = Number(rest[1]);
+		const pull = repository.pullRequests.find((item) => item.number === number);
+		if (pull !== undefined) {
+			this.applyAutoScore(pull);
 			return {
 				code: 0,
 				stdout: JSON.stringify(
-					issue.comments.map((comment) => ({
+					pull.comments.map((comment) => ({
 						body: comment.body,
 						created_at: comment.createdAt,
 					})),
@@ -511,102 +526,105 @@ export class StubWorldStore {
 				stderr: "",
 			};
 		}
-		if (rest[0] === "pulls" && rest[1] !== undefined && rest[2] === "reviews") {
-			const number = Number(rest[1]);
-			const pull = repository.pullRequests.find((item) => item.number === number);
-			if (pull === undefined)
-				return { code: 1, stdout: "", stderr: "HTTP 404: Not Found (stub world)\n" };
-			return {
-				code: 0,
-				stdout: JSON.stringify(
-					pull.reviews.map((review) => ({
-						body: review.body,
-						submitted_at: review.submittedAt,
-					})),
-				),
-				stderr: "",
-			};
+		const issue = repository.issues.find((item) => item.number === number);
+		if (issue === undefined)
+			return { code: 1, stdout: "", stderr: "HTTP 404: Not Found (stub world)\n" };
+		return {
+			code: 0,
+			stdout: JSON.stringify(
+				issue.comments.map((comment) => ({
+					body: comment.body,
+					created_at: comment.createdAt,
+				})),
+			),
+			stderr: "",
+		};
+	}
+
+	/** The reviews of one pull request. */
+	private answerPullReviews(repository: StubRepository, rest: readonly string[]): Answer {
+		const number = Number(rest[1]);
+		const pull = repository.pullRequests.find((item) => item.number === number);
+		if (pull === undefined)
+			return { code: 1, stdout: "", stderr: "HTTP 404: Not Found (stub world)\n" };
+		return {
+			code: 0,
+			stdout: JSON.stringify(
+				pull.reviews.map((review) => ({
+					body: review.body,
+					submitted_at: review.submittedAt,
+				})),
+			),
+			stderr: "",
+		};
+	}
+
+	/**
+	 * The direct read of the open pull requests of one head branch (ADR 0076):
+	 * the plane reaches the draft the projection hides through this list, by
+	 * the branch the head parameter names.
+	 */
+	private answerPullList(
+		repository: StubRepository,
+		query: Map<string, string>,
+		tokens: readonly string[],
+	): Answer {
+		const state = query.get("state") ?? "open";
+		const head = query.get("head");
+		let headOwner: string | null = null;
+		let headBranch: string | null = null;
+		if (head !== undefined) {
+			const colon = head.indexOf(":");
+			if (colon <= 0) return this.refusal(tokens, `an unreadable head parameter: ${head}`);
+			headOwner = head.slice(0, colon);
+			headBranch = head.slice(colon + 1);
 		}
-		if (rest[0] === "pulls" && rest.length === 1) {
-			// The direct read of the open pull requests of one head branch
-			// (ADR 0076): the plane reaches the draft the projection hides
-			// through this list, by the branch the head parameter names.
-			const state = query.get("state") ?? "open";
-			const head = query.get("head");
-			let headOwner: string | null = null;
-			let headBranch: string | null = null;
-			if (head !== undefined) {
-				const colon = head.indexOf(":");
-				if (colon <= 0) return this.refusal(tokens, `an unreadable head parameter: ${head}`);
-				headOwner = head.slice(0, colon);
-				headBranch = head.slice(colon + 1);
-			}
-			const matches = repository.pullRequests.filter((pull) => {
-				if (pull.state !== state) return false;
-				if (headOwner !== null && headOwner.toLowerCase() !== this.world.owner.toLowerCase())
-					return false;
-				if (headBranch !== null && pull.headBranch !== headBranch) return false;
-				return true;
-			});
-			return {
-				code: 0,
-				stdout: JSON.stringify(matches.map((pull) => this.pullRest(repository, pull))),
-				stderr: "",
-			};
-		}
-		if (rest[0] === "pulls" && rest[1] !== undefined && rest.length === 2) {
-			const number = Number(rest[1]);
-			const pull = repository.pullRequests.find((item) => item.number === number);
-			if (pull === undefined)
-				return { code: 1, stdout: "", stderr: "HTTP 404: Not Found (stub world)\n" };
-			return {
-				code: 0,
-				stdout: JSON.stringify({
-					number: pull.number,
-					state: pull.state,
-					merged: pull.merged,
-					html_url: `https://${this.world.host}/${this.world.owner}/${repository.name}/pull/${pull.number}`,
-				}),
-				stderr: "",
-			};
-		}
-		if (rest[0] === "security-advisories") {
-			const state = fields.get("state");
-			if (state === undefined)
-				return this.refusal(tokens, "the advisory feed was read without a state");
-			return {
-				code: 0,
-				stdout: JSON.stringify(
-					repository.security.advisories.filter((item) => item.state === state),
-				),
-				stderr: "",
-			};
-		}
-		if (rest[0] === "dependabot" && rest[1] === "alerts") {
-			const state = fields.get("state");
-			if (state === undefined)
-				return this.refusal(tokens, "the dependabot feed was read without a state");
-			return {
-				code: 0,
-				stdout: JSON.stringify(
-					repository.security.dependabotAlerts.filter((item) => item.state === state),
-				),
-				stderr: "",
-			};
-		}
-		if (rest[0] === "secret-scanning" && rest[1] === "alerts") {
-			const state = fields.get("state");
-			if (state === undefined)
-				return this.refusal(tokens, "the secret scanning feed was read without a state");
-			return {
-				code: 0,
-				stdout: JSON.stringify(
-					repository.security.secretScanningAlerts.filter((item) => item.state === state),
-				),
-				stderr: "",
-			};
-		}
-		return this.refusal(tokens, `an endpoint the world does not know: ${path}`);
+		const matches = repository.pullRequests.filter((pull) => {
+			if (pull.state !== state) return false;
+			if (headOwner !== null && headOwner.toLowerCase() !== this.world.owner.toLowerCase())
+				return false;
+			if (headBranch !== null && pull.headBranch !== headBranch) return false;
+			return true;
+		});
+		return {
+			code: 0,
+			stdout: JSON.stringify(matches.map((pull) => this.pullRest(repository, pull))),
+			stderr: "",
+		};
+	}
+
+	/** The open fact of one pull request number. */
+	private answerPullOne(repository: StubRepository, rest: readonly string[]): Answer {
+		const number = Number(rest[1]);
+		const pull = repository.pullRequests.find((item) => item.number === number);
+		if (pull === undefined)
+			return { code: 1, stdout: "", stderr: "HTTP 404: Not Found (stub world)\n" };
+		return {
+			code: 0,
+			stdout: JSON.stringify({
+				number: pull.number,
+				state: pull.state,
+				merged: pull.merged,
+				html_url: `https://${this.world.host}/${this.world.owner}/${repository.name}/pull/${pull.number}`,
+			}),
+			stderr: "",
+		};
+	}
+
+	/** The security feed of one state, by the feed the route names. */
+	private answerStateFeed(
+		tokens: readonly string[],
+		fields: Map<string, string>,
+		feed: { read: () => Array<Record<string, unknown>>; name: string },
+	): Answer {
+		const state = fields.get("state");
+		if (state === undefined)
+			return this.refusal(tokens, `the ${feed.name} feed was read without a state`);
+		return {
+			code: 0,
+			stdout: JSON.stringify(feed.read().filter((item) => item.state === state)),
+			stderr: "",
+		};
 	}
 
 	// The pull request record the direct read answers (ADR 0076): the shape
@@ -653,37 +671,9 @@ export class StubWorldStore {
 	// puts on the branch before the agent works. The world numbers it after
 	// its own items and takes the closing references the body carries.
 	private answerPullCreate(rest: string[]): Answer {
-		let repositoryIdentity: string | null = null;
-		let head: string | null = null;
-		let draft = false;
-		let title = "";
-		let body = "";
-		for (let i = 0; i < rest.length; i += 1) {
-			const token = rest[i];
-			if (token === "--repo") {
-				if (i + 1 >= rest.length) return this.refusal(rest, "the repo flag has no value");
-				repositoryIdentity = rest[i + 1];
-				i += 1;
-			} else if (token === "--head") {
-				if (i + 1 >= rest.length) return this.refusal(rest, "the head flag has no value");
-				head = rest[i + 1];
-				i += 1;
-			} else if (token === "--draft") {
-				draft = true;
-			} else if (token === "--title") {
-				if (i + 1 >= rest.length) return this.refusal(rest, "the title flag has no value");
-				title = rest[i + 1];
-				i += 1;
-			} else if (token === "--body") {
-				if (i + 1 >= rest.length) return this.refusal(rest, "the body flag has no value");
-				body = rest[i + 1];
-				i += 1;
-			} else {
-				return this.refusal(rest, `an unknown create flag: ${token}`);
-			}
-		}
-		if (repositoryIdentity === null || head === null || title === "")
-			return this.refusal(rest, "no repository, no head, or no title");
+		const parsed = this.parsePullCreateFlags(rest);
+		if (!parsed.ok) return this.refusal(rest, parsed.reason);
+		const { repositoryIdentity, head, draft, title, body } = parsed.facts;
 		const repository = this.repositoryOfIdentity(repositoryIdentity);
 		if (repository === null)
 			return { code: 1, stdout: "", stderr: "GraphQL: Could not resolve the repository.\n" };
@@ -712,6 +702,56 @@ export class StubWorldStore {
 		});
 		this.save();
 		return { code: 0, stdout: `${this.itemUrl(repository, "pr", number)}\n`, stderr: "" };
+	}
+
+	/**
+	 * The flags of the pull request open: the repo, the head, the draft, the
+	 * title, and the body, and the refusal the walk earns.
+	 */
+	private parsePullCreateFlags(rest: readonly string[]):
+		| {
+				ok: true;
+				facts: {
+					repositoryIdentity: string;
+					head: string;
+					draft: boolean;
+					title: string;
+					body: string;
+				};
+		  }
+		| { ok: false; reason: string } {
+		let repositoryIdentity: string | null = null;
+		let head: string | null = null;
+		let draft = false;
+		let title = "";
+		let body = "";
+		for (let i = 0; i < rest.length; i += 1) {
+			const token = rest[i];
+			if (token === "--repo") {
+				if (i + 1 >= rest.length) return { ok: false, reason: "the repo flag has no value" };
+				repositoryIdentity = rest[i + 1];
+				i += 1;
+			} else if (token === "--head") {
+				if (i + 1 >= rest.length) return { ok: false, reason: "the head flag has no value" };
+				head = rest[i + 1];
+				i += 1;
+			} else if (token === "--draft") {
+				draft = true;
+			} else if (token === "--title") {
+				if (i + 1 >= rest.length) return { ok: false, reason: "the title flag has no value" };
+				title = rest[i + 1];
+				i += 1;
+			} else if (token === "--body") {
+				if (i + 1 >= rest.length) return { ok: false, reason: "the body flag has no value" };
+				body = rest[i + 1];
+				i += 1;
+			} else {
+				return { ok: false, reason: `an unknown create flag: ${token}` };
+			}
+		}
+		if (repositoryIdentity === null || head === null || title === "")
+			return { ok: false, reason: "no repository, no head, or no title" };
+		return { ok: true, facts: { repositoryIdentity, head, draft, title, body } };
 	}
 
 	/**
@@ -815,28 +855,9 @@ export class StubWorldStore {
 	}
 
 	private answerEdit(kind: "issue" | "pr", rest: string[]): Answer {
-		const number = externalKeyNumber(rest[0]);
-		let repositoryIdentity: string | null = null;
-		const added: string[] = [];
-		const removed: string[] = [];
-		for (let i = 1; i < rest.length; i += 1) {
-			const token = rest[i];
-			if (token === "--repo") {
-				if (i + 1 >= rest.length) return this.refusal(rest, "the repo flag has no value");
-				repositoryIdentity = rest[i + 1];
-				i += 1;
-			} else if (token === "--add-label") {
-				if (i + 1 >= rest.length) return this.refusal(rest, "the label flag has no value");
-				added.push(...rest[i + 1].split(",").filter((item) => item !== ""));
-				i += 1;
-			} else if (token === "--remove-label") {
-				if (i + 1 >= rest.length) return this.refusal(rest, "the label flag has no value");
-				removed.push(...rest[i + 1].split(",").filter((item) => item !== ""));
-				i += 1;
-			} else {
-				return this.refusal(rest, `an unknown edit flag: ${token}`);
-			}
-		}
+		const parsed = this.parseEditFlags(rest);
+		if (!parsed.ok) return this.refusal(rest, parsed.reason);
+		const { number, repositoryIdentity, added, removed } = parsed.facts;
 		if (number === null || repositoryIdentity === null)
 			return this.refusal(rest, "no item or no repository");
 		const repository = this.repositoryOfIdentity(repositoryIdentity);
@@ -879,6 +900,46 @@ export class StubWorldStore {
 		item.updatedAt = now();
 		this.save();
 		return { code: 0, stdout: this.itemUrl(repository, kind, number), stderr: "" };
+	}
+
+	/**
+	 * The flags of the item edit: the item number, the repository, the labels
+	 * added and removed, and the refusal the walk earns.
+	 */
+	private parseEditFlags(rest: readonly string[]):
+		| {
+				ok: true;
+				facts: {
+					number: number | null;
+					repositoryIdentity: string | null;
+					added: string[];
+					removed: string[];
+				};
+		  }
+		| { ok: false; reason: string } {
+		const number = externalKeyNumber(rest[0]);
+		let repositoryIdentity: string | null = null;
+		const added: string[] = [];
+		const removed: string[] = [];
+		for (let i = 1; i < rest.length; i += 1) {
+			const token = rest[i];
+			if (token === "--repo") {
+				if (i + 1 >= rest.length) return { ok: false, reason: "the repo flag has no value" };
+				repositoryIdentity = rest[i + 1];
+				i += 1;
+			} else if (token === "--add-label") {
+				if (i + 1 >= rest.length) return { ok: false, reason: "the label flag has no value" };
+				added.push(...rest[i + 1].split(",").filter((item) => item !== ""));
+				i += 1;
+			} else if (token === "--remove-label") {
+				if (i + 1 >= rest.length) return { ok: false, reason: "the label flag has no value" };
+				removed.push(...rest[i + 1].split(",").filter((item) => item !== ""));
+				i += 1;
+			} else {
+				return { ok: false, reason: `an unknown edit flag: ${token}` };
+			}
+		}
+		return { ok: true, facts: { number, repositoryIdentity, added, removed } };
 	}
 
 	private answerMerge(rest: string[]): Answer {
@@ -1100,6 +1161,25 @@ function validateWorld(raw: unknown): StubWorld {
 	const record = raw as Record<string, unknown>;
 	if (record === null || typeof record !== "object" || Array.isArray(record))
 		throw new StubWorldError("the world file is not an object");
+	const top = validateWorldTop(record);
+	const repositories = (record.repositories as unknown[]).map((entry) =>
+		validateWorldRepository(entry as Record<string, unknown>),
+	);
+	return {
+		version: 1,
+		host: top.host,
+		owner: top.owner,
+		autoScore: top.autoScore,
+		repositories,
+	};
+}
+
+/** The world file's top: the version, the host, the owner, the auto score. */
+function validateWorldTop(record: Record<string, unknown>): {
+	host: string;
+	owner: string;
+	autoScore: { enabled: boolean; score: number };
+} {
 	if (record.version !== 1) throw new StubWorldError("the world file is not version 1");
 	if (typeof record.host !== "string" || record.host === "")
 		throw new StubWorldError("the world file has no host");
@@ -1114,62 +1194,62 @@ function validateWorld(raw: unknown): StubWorld {
 		throw new StubWorldError("the world file has no auto score setting");
 	if (!Array.isArray(record.repositories))
 		throw new StubWorldError("the world file has no repositories");
-	const securityOf = (entry: Record<string, unknown>, label: string): StubSecurity => {
-		const security = isRecord(entry.security) ? entry.security : {};
-		const listOf = (name: string): Array<Record<string, unknown>> => {
-			const value = security[name] ?? [];
-			if (!Array.isArray(value) || !value.every(isRecord))
-				throw new StubWorldError(`${label} has a bad ${name} list`);
-			return value as Array<Record<string, unknown>>;
-		};
-		return {
-			advisories: listOf("advisories"),
-			dependabotAlerts: listOf("dependabotAlerts"),
-			secretScanningAlerts: listOf("secretScanningAlerts"),
-		};
-	};
-	const repositories: StubRepository[] = [];
-	for (const entry of record.repositories as unknown[]) {
-		const item = entry as Record<string, unknown>;
-		if (typeof item.name !== "string" || item.name === "")
-			throw new StubWorldError("a repository in the world file has no name");
-		if (!Array.isArray(item.issues) || !Array.isArray(item.pullRequests))
-			throw new StubWorldError(`repository ${item.name} has no items`);
-		const label = `repository ${item.name}`;
-		// The repository's label set, absent where the file does not name it.
-		let labels: string[] | undefined;
-		if (item.labels !== undefined) {
-			if (!Array.isArray(item.labels) || !item.labels.every((entry) => typeof entry === "string"))
-				throw new StubWorldError(`${label} has a bad label set`);
-			labels = [...item.labels];
-		}
-		const mergeGates: Record<string, StubMergeGate> = {};
-		const gates = item.mergeGates ?? {};
-		if (!isRecord(gates)) throw new StubWorldError(`${label} has a bad merge gate table`);
-		for (const [key, value] of Object.entries(gates)) {
-			const gate = value as Record<string, unknown>;
-			if (!isRecord(gate) || typeof gate.passing !== "boolean" || typeof gate.reason !== "string")
-				throw new StubWorldError(`${label} has a bad merge gate for pull request ${key}`);
-			mergeGates[key] = { passing: gate.passing, reason: gate.reason };
-		}
-		repositories.push({
-			name: item.name,
-			...(labels === undefined ? {} : { labels }),
-			issues: item.issues.map((entry, index) =>
-				validateIssue(entry, `${label} issue at index ${index}`),
-			),
-			pullRequests: item.pullRequests.map((entry, index) =>
-				validatePullRequest(entry, `${label} pull request at index ${index}`),
-			),
-			mergeGates,
-			security: securityOf(item, label),
-		});
-	}
 	return {
-		version: 1,
 		host: record.host,
 		owner: record.owner,
 		autoScore: { enabled: autoScore.enabled, score: autoScore.score },
-		repositories,
+	};
+}
+
+/** One repository of the world file: the items, the gates, the security. */
+function validateWorldRepository(item: Record<string, unknown>): StubRepository {
+	if (typeof item.name !== "string" || item.name === "")
+		throw new StubWorldError("a repository in the world file has no name");
+	if (!Array.isArray(item.issues) || !Array.isArray(item.pullRequests))
+		throw new StubWorldError(`repository ${item.name} has no items`);
+	const label = `repository ${item.name}`;
+	// The repository's label set, absent where the file does not name it.
+	let labels: string[] | undefined;
+	if (item.labels !== undefined) {
+		if (!Array.isArray(item.labels) || !item.labels.every((entry) => typeof entry === "string"))
+			throw new StubWorldError(`${label} has a bad label set`);
+		labels = [...item.labels];
+	}
+	const mergeGates: Record<string, StubMergeGate> = {};
+	const gates = item.mergeGates ?? {};
+	if (!isRecord(gates)) throw new StubWorldError(`${label} has a bad merge gate table`);
+	for (const [key, value] of Object.entries(gates)) {
+		const gate = value as Record<string, unknown>;
+		if (!isRecord(gate) || typeof gate.passing !== "boolean" || typeof gate.reason !== "string")
+			throw new StubWorldError(`${label} has a bad merge gate for pull request ${key}`);
+		mergeGates[key] = { passing: gate.passing, reason: gate.reason };
+	}
+	return {
+		name: item.name,
+		...(labels === undefined ? {} : { labels }),
+		issues: item.issues.map((entry, index) =>
+			validateIssue(entry, `${label} issue at index ${index}`),
+		),
+		pullRequests: item.pullRequests.map((entry, index) =>
+			validatePullRequest(entry, `${label} pull request at index ${index}`),
+		),
+		mergeGates,
+		security: worldSecurityOf(item, label),
+	};
+}
+
+/** The security feed of one repository of the world file. */
+function worldSecurityOf(entry: Record<string, unknown>, label: string): StubSecurity {
+	const security = isRecord(entry.security) ? entry.security : {};
+	const listOf = (name: string): Array<Record<string, unknown>> => {
+		const value = security[name] ?? [];
+		if (!Array.isArray(value) || !value.every(isRecord))
+			throw new StubWorldError(`${label} has a bad ${name} list`);
+		return value as Array<Record<string, unknown>>;
+	};
+	return {
+		advisories: listOf("advisories"),
+		dependabotAlerts: listOf("dependabotAlerts"),
+		secretScanningAlerts: listOf("secretScanningAlerts"),
 	};
 }

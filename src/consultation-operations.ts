@@ -32,6 +32,7 @@ import {
 	handOffConsultation,
 	handoffReportLines,
 	renderConsultationPrompt,
+	type StartCheck,
 } from "./handoff.ts";
 import type { HerdrAgent } from "./herdr.ts";
 import type { Logger } from "./logging.ts";
@@ -228,6 +229,13 @@ export interface ConsultationOperationsAggregates {
 }
 
 /** The Consultation lifecycle interface: one owner for every external change. */
+/** The result a recovery's verification of its Agent reads from Herdr. */
+type RecoveryVerificationResult =
+	| { kind: "fit-failed"; reason: string }
+	| { kind: "error"; reason: string }
+	| { kind: "missing"; reason: string }
+	| { kind: "agent"; agent: HerdrAgent };
+
 export class ConsultationOperations {
 	private readonly state: ConsultationOperationsAggregates;
 	private readonly runner: CommandRunner;
@@ -355,41 +363,53 @@ export class ConsultationOperations {
 		)
 			return Promise.resolve();
 		if (current.paneId === null && current.sessionId === null) {
-			// The re-run hands to the launch below, and an opening the record
-			// already holds answers the key first, the way the launch answers it:
-			// no await sits between this read and the launch's own claim, so the
-			// answer the key gets is the one the claim would give.
-			if (this.openingOperations.has(current.id)) {
-				this.status("info", "Consultation opening is already in progress");
-				return Promise.resolve();
-			}
-			// The re-run is another Consultation start, and it works the
-			// Repository's shared checkout the way the opening it re-runs did
-			// (issue #315, ADR 0109): the same gate at its own claim, and the
-			// let-go where the opening settles, in the launch's settle. The record
-			// holds no queue row to stand the wait, so a held checkout answers the
-			// key with the fact that holds it and the record keeps `opening`: the
-			// operator retries the recovery, and the hold's own age ends the hold
-			// the way the row's own wait ends a row.
-			if (current.environment === "worktree" && this.checkoutHold !== undefined) {
-				const gate = this.checkoutHold.cross(current.id);
-				if (!gate.ok) {
-					this.status(
-						"warning",
-						`Consultation ${current.id.slice(0, 8)} did not start: ${gate.fact}`,
-					);
-					return Promise.resolve();
-				}
-				this.checkoutHold.take(current.id, gate.checkoutKey);
-			}
-			this.progress(current.id, `recovering Consultation ${current.id.slice(0, 8)}...`);
-			return this.launch(current);
+			return this.restartOpening(current);
 		}
 		if (!this.claimOpening(current.id)) {
 			this.status("info", "Consultation opening is already in progress");
 			return Promise.resolve();
 		}
 		this.progress(current.id, `verifying Consultation ${current.id.slice(0, 8)} Agent...`);
+		return this.verifyRecoveryAgent(current);
+	}
+
+	/**
+	 * The recovery's re-run: the record holds no Agent handle, so the re-run
+	 * hands to the launch. An opening the record already holds answers the key
+	 * first, the way the launch answers it: no await sits between this read and
+	 * the launch's own claim, so the answer the key gets is the one the claim
+	 * would give.
+	 */
+	private restartOpening(current: Consultation): Promise<void> {
+		if (this.openingOperations.has(current.id)) {
+			this.status("info", "Consultation opening is already in progress");
+			return Promise.resolve();
+		}
+		// The re-run is another Consultation start, and it works the
+		// Repository's shared checkout the way the opening it re-runs did
+		// (issue #315, ADR 0109): the same gate at its own claim, and the
+		// let-go where the opening settles, in the launch's settle. The record
+		// holds no queue row to stand the wait, so a held checkout answers the
+		// key with the fact that holds it and the record keeps `opening`: the
+		// operator retries the recovery, and the hold's own age ends the hold
+		// the way the row's own wait ends a row.
+		if (current.environment === "worktree" && this.checkoutHold !== undefined) {
+			const gate = this.checkoutHold.cross(current.id);
+			if (!gate.ok) {
+				this.status(
+					"warning",
+					`Consultation ${current.id.slice(0, 8)} did not start: ${gate.fact}`,
+				);
+				return Promise.resolve();
+			}
+			this.checkoutHold.take(current.id, gate.checkoutKey);
+		}
+		this.progress(current.id, `recovering Consultation ${current.id.slice(0, 8)}...`);
+		return this.launch(current);
+	}
+
+	/** The recovery's verification of the Agent the opening already holds. */
+	private verifyRecoveryAgent(current: Consultation): Promise<void> {
 		return serializeRepositoryOperation(
 			this.operationQueues,
 			current.repository.identity,
@@ -411,38 +431,7 @@ export class ConsultationOperations {
 					: { kind: "agent" as const, agent };
 			},
 		)
-			.then((result) => {
-				if (result.kind === "fit-failed") {
-					this.state.consultationRecord.failConsultationOpening(current.id, result.reason);
-					this.callbacks.onConsultationsChanged();
-					this.status("error", `Consultation ${current.id.slice(0, 8)} failed: ${result.reason}`);
-					return;
-				}
-				if (result.kind === "error") {
-					this.status("error", `cannot verify Consultation Agent: ${result.reason}`);
-					return;
-				}
-				if (result.kind === "missing") {
-					this.state.consultationRecord.failConsultationOpening(current.id, result.reason);
-					this.callbacks.onConsultationsChanged();
-					this.status("error", `Consultation ${current.id.slice(0, 8)} failed: ${result.reason}`);
-					return;
-				}
-				this.state.consultationRecord.updateConsultationAgentHandles(current.id, {
-					paneId: result.agent.paneId,
-					tabId: result.agent.tabId,
-					workspaceId: result.agent.workspaceId,
-					sessionId: result.agent.stableSessionId ?? current.sessionId,
-				});
-				this.state.consultationRecord.setConsultationAgent(current.id, {
-					paneId: result.agent.paneId,
-					tabId: result.agent.tabId,
-					workspaceId: result.agent.workspaceId,
-					sessionId: result.agent.stableSessionId ?? current.sessionId,
-				});
-				this.callbacks.onConsultationsChanged();
-				this.status("info", `Consultation ${current.id.slice(0, 8)} reconnected`);
-			})
+			.then((result) => this.settleRecoveryVerification(current, result))
 			.catch((error) => {
 				this.status("error", `cannot verify Consultation Agent: ${errorMessage(error)}`);
 			})
@@ -450,6 +439,43 @@ export class ConsultationOperations {
 				this.openingOperations.delete(current.id);
 				this.endProgress(current.id);
 			});
+	}
+
+	/** The settle the recovery's verification leaves on the record. */
+	private settleRecoveryVerification(
+		current: Consultation,
+		result: RecoveryVerificationResult,
+	): void {
+		if (result.kind === "fit-failed") {
+			this.state.consultationRecord.failConsultationOpening(current.id, result.reason);
+			this.callbacks.onConsultationsChanged();
+			this.status("error", `Consultation ${current.id.slice(0, 8)} failed: ${result.reason}`);
+			return;
+		}
+		if (result.kind === "error") {
+			this.status("error", `cannot verify Consultation Agent: ${result.reason}`);
+			return;
+		}
+		if (result.kind === "missing") {
+			this.state.consultationRecord.failConsultationOpening(current.id, result.reason);
+			this.callbacks.onConsultationsChanged();
+			this.status("error", `Consultation ${current.id.slice(0, 8)} failed: ${result.reason}`);
+			return;
+		}
+		this.state.consultationRecord.updateConsultationAgentHandles(current.id, {
+			paneId: result.agent.paneId,
+			tabId: result.agent.tabId,
+			workspaceId: result.agent.workspaceId,
+			sessionId: result.agent.stableSessionId ?? current.sessionId,
+		});
+		this.state.consultationRecord.setConsultationAgent(current.id, {
+			paneId: result.agent.paneId,
+			tabId: result.agent.tabId,
+			workspaceId: result.agent.workspaceId,
+			sessionId: result.agent.stableSessionId ?? current.sessionId,
+		});
+		this.callbacks.onConsultationsChanged();
+		this.status("info", `Consultation ${current.id.slice(0, 8)} reconnected`);
 	}
 
 	/**
@@ -521,49 +547,10 @@ export class ConsultationOperations {
 			template: type.template,
 			renderedOpeningPrompt: renderConsultationPrompt(type.template, current.initialInput),
 		});
-		// The Shared checkout gate at the start's claim (issue #315, ADR 0109): a
-		// worktree Consultation works the Repository's shared checkout the way a
-		// worktree Handoff does, and the gate says whether it crosses, waits with
-		// its row, or leaves the queue with the refusal. The gate, the take, and
-		// the seat move below are one synchronous step, the way a handoff's claim
-		// runs them, so no second walk can read a free checkout while this start is
-		// on its way in. A live-worktree Consultation works a checkout the operator
-		// chose and already owns, so it crosses no gate, the way a live-worktree
-		// Handoff does.
 		const worktree = type.environment === "worktree";
-		if (worktree && this.checkoutHold !== undefined) {
-			const gate = this.checkoutHold.cross(current.id);
-			if (!gate.ok) {
-				if (gate.outcome === "refused")
-					return Promise.resolve({ kind: "refused", fact: gate.fact });
-				if (current.state === "queued")
-					return Promise.resolve({ kind: "waiting", fact: gate.fact });
-				// The operator's direct start now of a record that holds no queue row:
-				// there is no row to stand the wait, so the start runs nothing, the
-				// record keeps its state, and the fact that holds the checkout answers
-				// the key beside the record, the way the force-dispatch answers a held
-				// row.
-				this.status(
-					"warning",
-					`Consultation ${current.id.slice(0, 8)} did not start: ${gate.fact}`,
-				);
-				return Promise.resolve({ kind: "held", fact: gate.fact });
-			}
-			this.checkoutHold.take(current.id, gate.checkoutKey);
-		}
-		// The Consultation start line, in the shape the plane's other start lines
-		// use (issue #220): the record's Consultation type beside the identity
-		// prefix every other Consultation line names it by, the path that ran the
-		// start, the origin word the Work queue stands a Consultation row under,
-		// and the seat reading. The reading is measured here, before this start
-		// takes its own seat, so it names the count the Parallel limit gate stood
-		// on, never a count this start raised. The line is this module's only
-		// reader of the seat count, so a module with no logger runs no read.
-		const startLine =
-			this.log === undefined
-				? undefined
-				: `consultation started: "${current.typeName}" ${current.id.slice(0, 8)} ` +
-					`(mode ${mode}, origin consultation, ${this.seatReading(this.seatCount())})`;
+		const gate = this.pickupCheckoutGate(current, worktree);
+		if (gate !== null) return Promise.resolve(gate);
+		const startLine = this.pickupStartLine(current, mode);
 		// The atomic step is the seat: the record moves to `opening` only if it
 		// is still `queued` or `unscheduled`, so a close or a delete that
 		// raced the start wins the record and the start runs nothing.
@@ -589,6 +576,55 @@ export class ConsultationOperations {
 		void this.launch(refreshed);
 		this.callbacks.onConsultationsChanged();
 		return Promise.resolve({ kind: "started" });
+	}
+
+	/**
+	 * The Shared checkout gate at the start's claim (issue #315, ADR 0109): a
+	 * worktree Consultation works the Repository's shared checkout the way a
+	 * worktree Handoff does, and the gate says whether it crosses, waits with
+	 * its row, or leaves the queue with the refusal. The gate, the take, and
+	 * the seat move below are one synchronous step, the way a handoff's claim
+	 * runs them, so no second walk can read a free checkout while this start is
+	 * on its way in. A live-worktree Consultation works a checkout the operator
+	 * chose and already owns, so it crosses no gate, the way a live-worktree
+	 * Handoff does.
+	 */
+	private pickupCheckoutGate(
+		current: Consultation,
+		worktree: boolean,
+	): { kind: "refused" | "waiting" | "held"; fact: string } | null {
+		if (!worktree || this.checkoutHold === undefined) return null;
+		const gate = this.checkoutHold.cross(current.id);
+		if (!gate.ok) {
+			if (gate.outcome === "refused") return { kind: "refused", fact: gate.fact };
+			if (current.state === "queued") return { kind: "waiting", fact: gate.fact };
+			// The operator's direct start now of a record that holds no queue row:
+			// there is no row to stand the wait, so the start runs nothing, the
+			// record keeps its state, and the fact that holds the checkout answers
+			// the key beside the record, the way the force-dispatch answers a held
+			// row.
+			this.status("warning", `Consultation ${current.id.slice(0, 8)} did not start: ${gate.fact}`);
+			return { kind: "held", fact: gate.fact };
+		}
+		this.checkoutHold.take(current.id, gate.checkoutKey);
+		return null;
+	}
+
+	/**
+	 * The Consultation start line, in the shape the plane's other start lines
+	 * use (issue #220): the record's Consultation type beside the identity
+	 * prefix every other Consultation line names it by, the path that ran the
+	 * start, the origin word the Work queue stands a Consultation row under,
+	 * and the seat reading. The reading is measured here, before this start
+	 * takes its own seat, so it names the count the Parallel limit gate stood
+	 * on, never a count this start raised. The line is this module's only
+	 * reader of the seat count, so a module with no logger runs no read.
+	 */
+	private pickupStartLine(current: Consultation, mode: StartMode): string | undefined {
+		return this.log === undefined
+			? undefined
+			: `consultation started: "${current.typeName}" ${current.id.slice(0, 8)} ` +
+					`(mode ${mode}, origin consultation, ${this.seatReading(this.seatCount())})`;
 	}
 
 	/**
@@ -668,70 +704,75 @@ export class ConsultationOperations {
 			return;
 		}
 
-		await serializeRepositoryOperation(
-			this.operationQueues,
-			current.repository.identity,
-			async () => {
-				let latest: Consultation | undefined;
-				let pending: ConsultationPendingResponse | undefined;
-				let progressStarted = false;
-				try {
-					latest = this.state.consultationRecord.consultation(current.id) ?? current;
-					this.state.consultationRecord.setConsultationDraft(latest.id, draft);
-					pending = this.state.consultationRecord.beginConsultationResponse(
-						latest.id,
-						draft,
-						latest.latestSequence,
-					);
-					if (pending === undefined) {
-						this.status(
-							"warning",
-							"a response delivery is already pending or the Consultation changed; inspect the Agent before retrying",
-						);
-						return;
-					}
-					this.progress(current.id, `sending response to Consultation ${latest.id.slice(0, 8)}...`);
-					progressStarted = true;
-					const result = await this.runner.run("herdr", [
-						"agent",
-						"prompt",
-						latest.agentName,
-						draft,
-					]);
-					if (result.code !== 0) {
-						this.state.consultationRecord.cancelConsultationResponse(latest.id, pending.id);
-						this.callbacks.onConsultationsChanged();
-						this.status("error", `response failed: ${commandFailureText(result)}`);
-						return;
-					}
-					const accepted = this.state.consultationRecord.acceptConsultationResponse(
-						latest.id,
-						pending.id,
-					);
-					this.callbacks.onConsultationsChanged();
-					if (accepted === undefined) {
-						this.status(
-							"warning",
-							"response was delivered; inspect the Agent output and the saved draft",
-						);
-					} else {
-						this.callbacks.onStatus(null);
-					}
-				} catch (error) {
-					if (latest !== undefined && pending !== undefined) {
-						try {
-							this.state.consultationRecord.cancelConsultationResponse(latest.id, pending.id);
-						} catch {}
-					}
-					try {
-						this.callbacks.onConsultationsChanged();
-					} catch {}
-					this.status("error", `response failed: ${errorMessage(error)}`);
-				} finally {
-					if (progressStarted) this.endProgress(current.id);
-				}
-			},
+		await serializeRepositoryOperation(this.operationQueues, current.repository.identity, () =>
+			this.runRespond(current, draft),
 		);
+	}
+
+	/** The response send on the Repository queue, with its settle and failure. */
+	private async runRespond(current: Consultation, draft: string): Promise<void> {
+		let latest: Consultation | undefined;
+		let pending: ConsultationPendingResponse | undefined;
+		let progressStarted = false;
+		try {
+			latest = this.state.consultationRecord.consultation(current.id) ?? current;
+			this.state.consultationRecord.setConsultationDraft(latest.id, draft);
+			pending = this.state.consultationRecord.beginConsultationResponse(
+				latest.id,
+				draft,
+				latest.latestSequence,
+			);
+			if (pending === undefined) {
+				this.status(
+					"warning",
+					"a response delivery is already pending or the Consultation changed; inspect the Agent before retrying",
+				);
+				return;
+			}
+			this.progress(current.id, `sending response to Consultation ${latest.id.slice(0, 8)}...`);
+			progressStarted = true;
+			const result = await this.runner.run("herdr", ["agent", "prompt", latest.agentName, draft]);
+			if (result.code !== 0) {
+				this.state.consultationRecord.cancelConsultationResponse(latest.id, pending.id);
+				this.callbacks.onConsultationsChanged();
+				this.status("error", `response failed: ${commandFailureText(result)}`);
+				return;
+			}
+			const accepted = this.state.consultationRecord.acceptConsultationResponse(
+				latest.id,
+				pending.id,
+			);
+			this.callbacks.onConsultationsChanged();
+			if (accepted === undefined) {
+				this.status(
+					"warning",
+					"response was delivered; inspect the Agent output and the saved draft",
+				);
+			} else {
+				this.callbacks.onStatus(null);
+			}
+		} catch (error) {
+			this.failRespond(latest, pending, error);
+		} finally {
+			if (progressStarted) this.endProgress(current.id);
+		}
+	}
+
+	/** The failure a response send leaves: the pending delivery cancelled, the line. */
+	private failRespond(
+		latest: Consultation | undefined,
+		pending: ConsultationPendingResponse | undefined,
+		error: unknown,
+	): void {
+		if (latest !== undefined && pending !== undefined) {
+			try {
+				this.state.consultationRecord.cancelConsultationResponse(latest.id, pending.id);
+			} catch {}
+		}
+		try {
+			this.callbacks.onConsultationsChanged();
+		} catch {}
+		this.status("error", `response failed: ${errorMessage(error)}`);
 	}
 
 	/**
@@ -786,15 +827,9 @@ export class ConsultationOperations {
 		if (operation.cancelled) return;
 		try {
 			const refreshed = this.state.consultationRecord.consultation(current.id) ?? current;
-			const owned = refreshed.resources.filter((item) => item.owned && !item.confirmedClosed);
 			// The launch recorded no pane to take down: the record closes with no
 			// command at all, and herdr is left alone.
-			if (owned.find((item) => item.kind === "pane") === undefined) {
-				this.state.consultationRecord.finishConsultationClose(current.id);
-				this.callbacks.onConsultationsChanged();
-				this.status("info", `Consultation ${current.id.slice(0, 8)} closed`);
-				return;
-			}
+			if (this.closeNoCommand(refreshed)) return;
 			// Verify whose environment the stored handles still hold before the
 			// close may take anything down: after a herdr restart, a pane or tab
 			// id may be a reused id herdr gave another environment, and only the
@@ -804,46 +839,10 @@ export class ConsultationOperations {
 			// stops the cleanup here, before any resource is taken down.
 			if (operation.cancelled) return;
 			if (identity.kind === "none") {
-				// An opening may still be booting its Agent: the close cannot tell
-				// a missing Agent from a starting one, so it takes nothing down
-				// and leaves the record for a retry or a Force-close. `current`
-				// is the pre-close snapshot; the record is already `closing`.
-				if (current.state === "opening")
-					throw new Error(
-						"the Agent is not visible, so the opening is unverified and the close cannot take down its environment",
-					);
-				// The Agent is gone, so there is nothing to stop: retire the
-				// record and leave herdr untouched, the way the close of a record
-				// with no Agent promises. The owned resources stay recorded as
-				// remaining, so the operator sees what stands.
-				this.state.consultationRecord.finishConsultationClose(
-					current.id,
-					"closed without a command; its Agent is missing and its resources remain in herdr",
-					true,
-				);
-				this.callbacks.onConsultationsChanged();
-				this.status(
-					"info",
-					`Consultation ${current.id.slice(0, 8)} closed; its Agent is missing, so herdr was left untouched`,
-				);
+				this.closeAgentMissing(current);
 				return;
 			}
-			const agent = identity.agent;
-			// Follow a matched Agent that moved: the close then addresses the
-			// pane and tab the Agent holds, never the ones it left.
-			if (
-				agent.paneId !== refreshed.paneId ||
-				(agent.tabId || null) !== refreshed.tabId ||
-				(agent.workspaceId || null) !== refreshed.workspaceId ||
-				(agent.stableSessionId !== undefined && agent.stableSessionId !== refreshed.sessionId)
-			) {
-				this.state.consultationRecord.updateConsultationAgentHandles(current.id, {
-					paneId: agent.paneId,
-					tabId: agent.tabId || null,
-					workspaceId: agent.workspaceId || null,
-					sessionId: agent.stableSessionId ?? refreshed.sessionId,
-				});
-			}
+			this.closeFollowedAgent(identity.agent, refreshed);
 			const latest = this.state.consultationRecord.consultation(current.id) ?? refreshed;
 			const output =
 				latest.paneId === null
@@ -858,42 +857,7 @@ export class ConsultationOperations {
 			if (output !== null)
 				this.state.consultationRecord.captureConsultationPartial(current.id, output);
 			const settled = this.state.consultationRecord.consultation(current.id) ?? latest;
-			const plan = await this.planCloseCleanup(
-				settled,
-				settled.resources.filter((item) => item.owned && !item.confirmedClosed),
-			);
-			// The last check before the destructive call: a Force-close that ran
-			// during the topology probe stops the cleanup here, not on the next
-			// command.
-			if (operation.cancelled) return;
-			for (const retained of plan.retains)
-				this.state.consultationRecord.markConsultationResourceShared(
-					current.id,
-					retained.kind,
-					retained.resourceId,
-					retained.details,
-				);
-			// Retaining shared resources is durable work too. Do not let a
-			// Force-close between the loop and the command produce a partial plan.
-			if (operation.cancelled) return;
-			if (plan.command !== undefined) {
-				const result = await this.runner.run("herdr", plan.command);
-				if (result.code !== 0) throw new Error(commandFailureText(result));
-				// A close sends no focus command, whatever it takes down: the plane
-				// never moves herdr's view on its own (ADR 0061), and a close of a
-				// workspace the client is not viewing leaves that view alone.
-				if (operation.cancelled) return;
-				for (const resource of plan.closes)
-					this.state.consultationRecord.markConsultationResourceClosed(
-						current.id,
-						resource.kind,
-						resource.resourceId,
-					);
-			}
-			if (operation.cancelled) return;
-			this.state.consultationRecord.finishConsultationClose(current.id);
-			this.callbacks.onConsultationsChanged();
-			this.status("info", `Consultation ${current.id.slice(0, 8)} closed`);
+			await this.closeExecutePlan(settled, operation);
 		} catch (error) {
 			// A force-closed record needs no recovery warning: the operator
 			// already accepted the resources that may remain.
@@ -902,6 +866,104 @@ export class ConsultationOperations {
 			this.callbacks.onConsultationsChanged();
 			this.status("error", `Consultation close needs recovery: ${errorMessage(error)}`);
 		}
+	}
+
+	/** Plan the cleanup and run it, with the Force-close guard at each step. */
+	private async closeExecutePlan(settled: Consultation, operation: CloseOperation): Promise<void> {
+		const plan = await this.planCloseCleanup(
+			settled,
+			settled.resources.filter((item) => item.owned && !item.confirmedClosed),
+		);
+		// The last check before the destructive call: a Force-close that ran
+		// during the topology probe stops the cleanup here, not on the next
+		// command.
+		if (operation.cancelled) return;
+		for (const retained of plan.retains)
+			this.state.consultationRecord.markConsultationResourceShared(
+				settled.id,
+				retained.kind,
+				retained.resourceId,
+				retained.details,
+			);
+		// Retaining shared resources is durable work too. Do not let a
+		// Force-close between the loop and the command produce a partial plan.
+		if (operation.cancelled) return;
+		if (plan.command !== undefined) {
+			const result = await this.runner.run("herdr", plan.command);
+			if (result.code !== 0) throw new Error(commandFailureText(result));
+			// A close sends no focus command, whatever it takes down: the plane
+			// never moves herdr's view on its own (ADR 0061), and a close of a
+			// workspace the client is not viewing leaves that view alone.
+			if (operation.cancelled) return;
+			for (const resource of plan.closes)
+				this.state.consultationRecord.markConsultationResourceClosed(
+					settled.id,
+					resource.kind,
+					resource.resourceId,
+				);
+		}
+		if (operation.cancelled) return;
+		this.state.consultationRecord.finishConsultationClose(settled.id);
+		this.callbacks.onConsultationsChanged();
+		this.status("info", `Consultation ${settled.id.slice(0, 8)} closed`);
+	}
+
+	/**
+	 * The close of a record that owns no pane: it closes with no command at
+	 * all, and herdr is left alone.
+	 */
+	private closeNoCommand(refreshed: Consultation): boolean {
+		const owned = refreshed.resources.filter((item) => item.owned && !item.confirmedClosed);
+		if (owned.find((item) => item.kind === "pane") !== undefined) return false;
+		this.state.consultationRecord.finishConsultationClose(refreshed.id);
+		this.callbacks.onConsultationsChanged();
+		this.status("info", `Consultation ${refreshed.id.slice(0, 8)} closed`);
+		return true;
+	}
+
+	/**
+	 * The close of a record whose Agent is gone. An opening may still be
+	 * booting its Agent: the close cannot tell a missing Agent from a
+	 * starting one, so it takes nothing down and leaves the record for a
+	 * retry or a Force-close. `current` is the pre-close snapshot; the record
+	 * is already `closing`.
+	 */
+	private closeAgentMissing(current: Consultation): void {
+		if (current.state === "opening")
+			throw new Error(
+				"the Agent is not visible, so the opening is unverified and the close cannot take down its environment",
+			);
+		// The Agent is gone, so there is nothing to stop: retire the
+		// record and leave herdr untouched, the way the close of a record
+		// with no Agent promises. The owned resources stay recorded as
+		// remaining, so the operator sees what stands.
+		this.state.consultationRecord.finishConsultationClose(
+			current.id,
+			"closed without a command; its Agent is missing and its resources remain in herdr",
+			true,
+		);
+		this.callbacks.onConsultationsChanged();
+		this.status(
+			"info",
+			`Consultation ${current.id.slice(0, 8)} closed; its Agent is missing, so herdr was left untouched`,
+		);
+	}
+
+	/** Follow a matched Agent that moved: the close then addresses the pane and tab the Agent holds. */
+	private closeFollowedAgent(agent: HerdrAgent, refreshed: Consultation): void {
+		if (
+			agent.paneId === refreshed.paneId &&
+			(agent.tabId || null) === refreshed.tabId &&
+			(agent.workspaceId || null) === refreshed.workspaceId &&
+			(agent.stableSessionId === undefined || agent.stableSessionId === refreshed.sessionId)
+		)
+			return;
+		this.state.consultationRecord.updateConsultationAgentHandles(refreshed.id, {
+			paneId: agent.paneId,
+			tabId: agent.tabId || null,
+			workspaceId: agent.workspaceId || null,
+			sessionId: agent.stableSessionId ?? refreshed.sessionId,
+		});
 	}
 
 	/**
@@ -1174,110 +1236,7 @@ export class ConsultationOperations {
 			const outcome = await serializeRepositoryOperation(
 				this.operationQueues,
 				consultation.repository.identity,
-				async (): Promise<LaunchOutcome | undefined> => {
-					const current =
-						this.state.consultationRecord.consultation(consultation.id) ?? consultation;
-					// A queued opening can outlive a close or Force-close. Do not start
-					// an Agent after the operator has settled that record.
-					if (current.state !== "opening") return undefined;
-					const onStage = (stage: string) =>
-						this.progress(current.id, `Consultation ${current.id.slice(0, 8)}: ${stage}`);
-					const startCheck = await checkStart(
-						consultationStartFacts(current),
-						this.config(),
-						this.runner,
-					);
-					if (!startCheck.ok) return { status: "failed", reason: startCheck.reason };
-					let resolvedRepository: ResolvedRepository | undefined;
-					if (current.environment === "live-worktree") {
-						onStage("resolving-repository");
-						const resolution = await resolveRepository(
-							{
-								identity: current.repository.identity,
-								displayName: current.repository.displayName,
-								cloneUrl: current.repository.cloneUrl,
-							},
-							this.config(),
-							{ runner: this.runner, home: this.home },
-						);
-						if (!resolution.ok) return { status: "failed", reason: resolution.reason };
-						resolvedRepository = resolution.repository;
-						this.state.consultationRecord.setConsultationRepositoryPath(
-							current.id,
-							resolvedRepository.path,
-						);
-						onStage("checking-live-checkout-safety");
-						const probe = await new HerdrAgentReader(this.runner).listAgents();
-						if (probe.kind === "error")
-							return {
-								status: "failed",
-								reason: `cannot verify live checkout safety: ${probe.reason}`,
-							};
-						const safety = await inspectLiveCheckout({
-							checkout: resolvedRepository.path,
-							runner: this.runner,
-							tickets: this.tickets(),
-							consultations: this.state.consultationRecord.consultations("open"),
-							agents: probe.agents,
-						});
-						if (safety.warning !== undefined)
-							this.state.consultationRecord.setConsultationWarning(current.id, safety.warning);
-						// The safety question belongs to the checkout, not to this
-						// opening: the launch asks again only when the current
-						// conflict set holds an identity the checkout has not
-						// confirmed, and a launch that proceeds stores the current
-						// set, so a shrunken set is persisted and never re-asked.
-						const key = await realPathOf(resolvedRepository.path);
-						const confirmed = this.state.consultationRecord.confirmedCheckoutConflicts(key);
-						if (safety.conflicts.some((conflict) => !confirmed.includes(conflict.identity)))
-							return { status: "conflict", safety };
-						this.state.consultationRecord.recordCheckoutConflictConfirmation(
-							key,
-							safety.conflicts.map((conflict) => conflict.identity),
-						);
-					}
-					return handOffConsultation({
-						consultation: current,
-						config: this.config(),
-						runner: this.runner,
-						home: this.home,
-						onStage,
-						startCheck,
-						resolvedRepository,
-						onRepositoryResolved: (path) =>
-							this.state.consultationRecord.setConsultationRepositoryPath(current.id, path),
-						onAgentStarted: (agent) => {
-							this.state.consultationRecord.recordConsultationAgentHandles(current.id, agent);
-							this.state.consultationRecord.recordConsultationResource(current.id, {
-								kind: "pane",
-								resourceId: agent.paneId,
-								owned: true,
-								details: "Consultation Agent pane",
-							});
-							this.state.consultationRecord.recordConsultationResource(current.id, {
-								kind: "agent",
-								resourceId: current.agentName,
-								owned: true,
-								details: `Agent hosted by pane ${agent.paneId}`,
-							});
-						},
-						onResource: (kind, resourceId, owned, details) =>
-							this.state.consultationRecord.recordConsultationResource(current.id, {
-								kind,
-								resourceId,
-								owned,
-								details: details ?? "",
-							}),
-						// The start's own cleanup confirms what it removed, so the record
-						// does not keep a row for a handle the plane already took down.
-						onResourceRemoved: (kind, resourceId) =>
-							this.state.consultationRecord.markConsultationResourceClosed(
-								current.id,
-								kind,
-								resourceId,
-							),
-					});
-				},
+				() => this.runOpeningStart(consultation),
 			);
 			if (outcome === undefined) return;
 			if (outcome.status === "conflict") {
@@ -1298,6 +1257,128 @@ export class ConsultationOperations {
 				`Consultation ${consultation.id.slice(0, 8)} failed: ${errorMessage(error)}`,
 			);
 		}
+	}
+
+	/** The start on the Repository queue: the checks, then the handoff. */
+	private async runOpeningStart(consultation: Consultation): Promise<LaunchOutcome | undefined> {
+		const current = this.state.consultationRecord.consultation(consultation.id) ?? consultation;
+		// A queued opening can outlive a close or Force-close. Do not start
+		// an Agent after the operator has settled that record.
+		if (current.state !== "opening") return undefined;
+		const onStage = (stage: string) =>
+			this.progress(current.id, `Consultation ${current.id.slice(0, 8)}: ${stage}`);
+		const startCheck = await checkStart(
+			consultationStartFacts(current),
+			this.config(),
+			this.runner,
+		);
+		if (!startCheck.ok) return { status: "failed", reason: startCheck.reason };
+		let resolvedRepository: ResolvedRepository | undefined;
+		if (current.environment === "live-worktree") {
+			onStage("resolving-repository");
+			const resolution = await resolveRepository(
+				{
+					identity: current.repository.identity,
+					displayName: current.repository.displayName,
+					cloneUrl: current.repository.cloneUrl,
+				},
+				this.config(),
+				{ runner: this.runner, home: this.home },
+			);
+			if (!resolution.ok) return { status: "failed", reason: resolution.reason };
+			resolvedRepository = resolution.repository;
+			this.state.consultationRecord.setConsultationRepositoryPath(
+				current.id,
+				resolvedRepository.path,
+			);
+			const safety = await this.checkLiveCheckoutSafety(current, resolvedRepository);
+			if (safety !== null) return safety;
+		}
+		return this.launchConsultation(current, onStage, startCheck, resolvedRepository);
+	}
+
+	/**
+	 * The live checkout safety probe: the safety question belongs to the
+	 * checkout, not to this opening. The launch asks again only when the
+	 * current conflict set holds an identity the checkout has not confirmed,
+	 * and a launch that proceeds stores the current set, so a shrunken set is
+	 * persisted and never re-asked.
+	 */
+	private async checkLiveCheckoutSafety(
+		current: Consultation,
+		resolvedRepository: ResolvedRepository,
+	): Promise<LaunchOutcome | null> {
+		this.progress(
+			current.id,
+			`Consultation ${current.id.slice(0, 8)}: checking-live-checkout-safety`,
+		);
+		const probe = await new HerdrAgentReader(this.runner).listAgents();
+		if (probe.kind === "error")
+			return { status: "failed", reason: `cannot verify live checkout safety: ${probe.reason}` };
+		const safety = await inspectLiveCheckout({
+			checkout: resolvedRepository.path,
+			runner: this.runner,
+			tickets: this.tickets(),
+			consultations: this.state.consultationRecord.consultations("open"),
+			agents: probe.agents,
+		});
+		if (safety.warning !== undefined)
+			this.state.consultationRecord.setConsultationWarning(current.id, safety.warning);
+		const key = await realPathOf(resolvedRepository.path);
+		const confirmed = this.state.consultationRecord.confirmedCheckoutConflicts(key);
+		if (safety.conflicts.some((conflict) => !confirmed.includes(conflict.identity)))
+			return { status: "conflict", safety };
+		this.state.consultationRecord.recordCheckoutConflictConfirmation(
+			key,
+			safety.conflicts.map((conflict) => conflict.identity),
+		);
+		return null;
+	}
+
+	/** The handoff that starts the Consultation's Agent, on the resolved repository. */
+	private launchConsultation(
+		current: Consultation,
+		onStage: (stage: string) => void,
+		startCheck: StartCheck,
+		resolvedRepository: ResolvedRepository | undefined,
+	): Promise<HandoffOutcome> {
+		return handOffConsultation({
+			consultation: current,
+			config: this.config(),
+			runner: this.runner,
+			home: this.home,
+			onStage,
+			startCheck,
+			resolvedRepository,
+			onRepositoryResolved: (path) =>
+				this.state.consultationRecord.setConsultationRepositoryPath(current.id, path),
+			onAgentStarted: (agent) => {
+				this.state.consultationRecord.recordConsultationAgentHandles(current.id, agent);
+				this.state.consultationRecord.recordConsultationResource(current.id, {
+					kind: "pane",
+					resourceId: agent.paneId,
+					owned: true,
+					details: "Consultation Agent pane",
+				});
+				this.state.consultationRecord.recordConsultationResource(current.id, {
+					kind: "agent",
+					resourceId: current.agentName,
+					owned: true,
+					details: `Agent hosted by pane ${agent.paneId}`,
+				});
+			},
+			onResource: (kind, resourceId, owned, details) =>
+				this.state.consultationRecord.recordConsultationResource(current.id, {
+					kind,
+					resourceId,
+					owned,
+					details: details ?? "",
+				}),
+			// The start's own cleanup confirms what it removed, so the record
+			// does not keep a row for a handle the plane already took down.
+			onResourceRemoved: (kind, resourceId) =>
+				this.state.consultationRecord.markConsultationResourceClosed(current.id, kind, resourceId),
+		});
 	}
 
 	private async finishOpening(consultation: Consultation, outcome: HandoffOutcome): Promise<void> {

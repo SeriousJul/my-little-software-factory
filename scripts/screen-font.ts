@@ -30,7 +30,7 @@
 
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { create, type Font } from "fontkit";
+import { create, type Font, type Path } from "fontkit";
 
 /** The font size the glyphs rasterize at, in device pixels. */
 const FONT_SIZE = 45;
@@ -72,13 +72,18 @@ interface Seg {
 function segmentsOf(codePoint: number, font: Font): Seg[] {
 	const glyph = font.glyphForCodePoint(codePoint);
 	// The path is in the font's design units, baseline at y = 0, y up.
-	const path = glyph.path;
 	const scale = FONT_SIZE / font.unitsPerEm;
 	// The baseline sits at the ascent; the cell y axis points down.
 	const baseY = (font.ascent * FONT_SIZE) / font.unitsPerEm;
-	const toX = (x: number) => x * scale;
-	const toY = (y: number) => baseY - y * scale;
+	return pathSegments(
+		glyph.path,
+		(x) => x * scale,
+		(y) => baseY - y * scale,
+	);
+}
 
+/** The path's commands, flattened to line segments the caller maps to cells. */
+function pathSegments(path: Path, toX: (x: number) => number, toY: (y: number) => number): Seg[] {
 	const segs: Seg[] = [];
 	let cx = 0;
 	let cy = 0;

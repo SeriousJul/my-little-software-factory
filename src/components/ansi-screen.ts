@@ -49,55 +49,19 @@ const ANSI_BRIGHT_COLORS = [
  * renderer, so a pane cannot alter the control plane terminal outside this
  * bounded cell grid.
  */
+/**
+ * Interpret only terminal display controls. Escape sequences never reach the
+ * renderer, so a pane cannot alter the control plane terminal outside this
+ * bounded cell grid.
+ */
 export function renderAnsiScreen(input: string, width: number, maxRows = 512): AnsiLine[] {
-	const columns = Math.max(1, width);
-	const rows: Cell[][] = [[]];
-	let x = 0;
-	let y = 0;
-	let style = { ...DEFAULT_STYLE };
-	const ensureRow = (row: number) => {
-		while (rows.length <= row && rows.length < maxRows) rows.push([]);
-		return rows[Math.min(row, maxRows - 1)];
-	};
-	const eraseLine = (mode: number) => {
-		const row = ensureRow(y);
-		// EL 0: cursor to end. EL 1: start to cursor. EL 2: the whole line.
-		const start = mode === 0 ? x : 0;
-		const end = mode === 1 ? x : columns;
-		for (let index = start; index < end; index += 1) row[index] = blank(style);
-	};
-	const eraseScreen = (mode: number) => {
-		if (mode === 2 || mode === 3) {
-			rows.splice(0, rows.length, []);
-			x = 0;
-			y = 0;
-			return;
-		}
-		for (let row = y; row < rows.length; row += 1) {
-			const cells = ensureRow(row);
-			const start = row === y ? x : 0;
-			for (let column = start; column < columns; column += 1) cells[column] = blank(style);
-		}
-	};
-	const write = (text: string) => {
-		for (const character of text) {
-			const cellWidth = Math.max(0, widthOf(character));
-			if (cellWidth === 0) {
-				const row = ensureRow(y);
-				const previous = row[Math.max(0, x - 1)];
-				if (previous !== undefined) previous.text += character;
-				continue;
-			}
-			if (x + cellWidth > columns) {
-				x = 0;
-				y = Math.min(maxRows - 1, y + 1);
-			}
-			const row = ensureRow(y);
-			row[x] = { text: character, style: { ...style } };
-			if (cellWidth === 2 && x + 1 < columns)
-				row[x + 1] = { text: "", style: { ...style }, continuation: true };
-			x = Math.min(columns, x + cellWidth);
-		}
+	const state: AnsiScreenState = {
+		rows: [[]],
+		columns: Math.max(1, width),
+		maxRows,
+		x: 0,
+		y: 0,
+		style: { ...DEFAULT_STYLE },
 	};
 	for (let index = 0; index < input.length; ) {
 		const code = input.codePointAt(index) as number;
@@ -110,45 +74,7 @@ export function renderAnsiScreen(input: string, width: number, maxRows = 512): A
 				const params = input.slice(index + 1, end);
 				const command = input[end];
 				index = end + 1;
-				const values = params
-					.replace(/^[?>!]/, "")
-					.split(";")
-					.map((value) => (value === "" ? 0 : Number(value)))
-					.map((value) => (Number.isFinite(value) ? value : 0));
-				const count = Math.max(1, values[0] ?? 0);
-				switch (command) {
-					case "m":
-						style = applySgr(style, values);
-						break;
-					case "H":
-					case "f":
-						y = Math.min(maxRows - 1, Math.max(0, (values[0] || 1) - 1));
-						x = Math.min(columns - 1, Math.max(0, (values[1] || 1) - 1));
-						ensureRow(y);
-						break;
-					case "A":
-						y = Math.max(0, y - count);
-						break;
-					case "B":
-						y = Math.min(maxRows - 1, y + count);
-						ensureRow(y);
-						break;
-					case "C":
-						x = Math.min(columns - 1, x + count);
-						break;
-					case "D":
-						x = Math.max(0, x - count);
-						break;
-					case "G":
-						x = Math.min(columns - 1, Math.max(0, count - 1));
-						break;
-					case "J":
-						eraseScreen(values[0] ?? 0);
-						break;
-					case "K":
-						eraseLine(values[0] ?? 0);
-						break;
-				}
+				applyCsiCommand(state, command, parseCsiValues(params));
 				continue;
 			}
 			if (input[index] === "]") {
@@ -159,15 +85,126 @@ export function renderAnsiScreen(input: string, width: number, maxRows = 512): A
 			continue;
 		}
 		if (character === "\n") {
-			x = 0;
-			y = Math.min(maxRows - 1, y + 1);
-			ensureRow(y);
-		} else if (character === "\r") x = 0;
-		else if (character === "\b") x = Math.max(0, x - 1);
-		else if (character === "\t") x = Math.min(columns - 1, x + (8 - (x % 8)));
-		else if (!/\p{Cc}/u.test(character)) write(character);
+			state.x = 0;
+			state.y = Math.min(state.maxRows - 1, state.y + 1);
+			ansiEnsureRow(state, state.y);
+		} else if (character === "\r") state.x = 0;
+		else if (character === "\b") state.x = Math.max(0, state.x - 1);
+		else if (character === "\t")
+			state.x = Math.min(state.columns - 1, state.x + (8 - (state.x % 8)));
+		else if (!/\p{Cc}/u.test(character)) ansiWrite(state, character);
 	}
-	return rows.map((row) => cellsToSpans(row, columns));
+	return state.rows.map((row) => cellsToSpans(row, state.columns));
+}
+
+/** The screen's state: the cell grid, the cursor, the running style. */
+interface AnsiScreenState {
+	rows: Cell[][];
+	columns: number;
+	maxRows: number;
+	x: number;
+	y: number;
+	style: AnsiStyle;
+}
+
+/** The CSI's parameter list, parsed to the command's values. */
+function parseCsiValues(params: string): number[] {
+	return params
+		.replace(/^[?>!]/, "")
+		.split(";")
+		.map((value) => (value === "" ? 0 : Number(value)))
+		.map((value) => (Number.isFinite(value) ? value : 0));
+}
+
+/** One CSI command against the screen's state. */
+function applyCsiCommand(state: AnsiScreenState, command: string, values: number[]): void {
+	const count = Math.max(1, values[0] ?? 0);
+	switch (command) {
+		case "m":
+			state.style = applySgr(state.style, values);
+			break;
+		case "H":
+		case "f":
+			state.y = Math.min(state.maxRows - 1, Math.max(0, (values[0] || 1) - 1));
+			state.x = Math.min(state.columns - 1, Math.max(0, (values[1] || 1) - 1));
+			ansiEnsureRow(state, state.y);
+			break;
+		case "A":
+			state.y = Math.max(0, state.y - count);
+			break;
+		case "B":
+			state.y = Math.min(state.maxRows - 1, state.y + count);
+			ansiEnsureRow(state, state.y);
+			break;
+		case "C":
+			state.x = Math.min(state.columns - 1, state.x + count);
+			break;
+		case "D":
+			state.x = Math.max(0, state.x - count);
+			break;
+		case "G":
+			state.x = Math.min(state.columns - 1, Math.max(0, count - 1));
+			break;
+		case "J":
+			ansiEraseScreen(state, values[0] ?? 0);
+			break;
+		case "K":
+			ansiEraseLine(state, values[0] ?? 0);
+			break;
+	}
+}
+
+/** Grow the grid to the row, and hand it back. */
+function ansiEnsureRow(state: AnsiScreenState, row: number): Cell[] {
+	while (state.rows.length <= row && state.rows.length < state.maxRows) state.rows.push([]);
+	return state.rows[Math.min(row, state.maxRows - 1)];
+}
+
+/** One line's erase: EL 0 the cursor to end, EL 1 the start to cursor, EL 2 all. */
+function ansiEraseLine(state: AnsiScreenState, mode: number): void {
+	const row = ansiEnsureRow(state, state.y);
+	// EL 0: cursor to end. EL 1: start to cursor. EL 2: the whole line.
+	const start = mode === 0 ? state.x : 0;
+	const end = mode === 1 ? state.x : state.columns;
+	for (let index = start; index < end; index += 1) row[index] = blank(state.style);
+}
+
+/** The screen's erase: ED 2 and ED 3 reset the grid, ED 0 clears down. */
+function ansiEraseScreen(state: AnsiScreenState, mode: number): void {
+	if (mode === 2 || mode === 3) {
+		state.rows.splice(0, state.rows.length, []);
+		state.x = 0;
+		state.y = 0;
+		return;
+	}
+	for (let row = state.y; row < state.rows.length; row += 1) {
+		const cells = ansiEnsureRow(state, row);
+		const start = row === state.y ? state.x : 0;
+		for (let column = start; column < state.columns; column += 1)
+			cells[column] = blank(state.style);
+	}
+}
+
+/** Write printable text to the grid, wrapping at the grid's edge. */
+function ansiWrite(state: AnsiScreenState, text: string): void {
+	for (const character of text) {
+		const cellWidth = Math.max(0, widthOf(character));
+		if (cellWidth === 0) {
+			const row = ansiEnsureRow(state, state.y);
+			const previous = row[Math.max(0, state.x - 1)];
+			if (previous !== undefined) previous.text += character;
+			continue;
+		}
+		if (state.x + cellWidth > state.columns) {
+			state.x = 0;
+			state.y = Math.min(state.maxRows - 1, state.y + 1);
+		}
+		const row = ansiEnsureRow(state, state.y);
+		row[state.x] = { text: character, style: { ...state.style } };
+		if (cellWidth === 2 && state.x + 1 < state.columns)
+			row[state.x + 1] = { text: "", style: { ...state.style }, continuation: true };
+		state.x = Math.min(state.columns, state.x + cellWidth);
+	}
 }
 
 function blank(style: AnsiStyle): Cell {

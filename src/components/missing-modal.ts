@@ -14,7 +14,7 @@
  * catalogs them. While it is open, the keys of the app below are disabled.
  */
 import { createElement, useTerminalDimensions } from "@opentui/react";
-import { useState } from "react";
+import { type ReactElement, useState } from "react";
 import type { StandingFacts } from "./controls.ts";
 import { maxScrollOf, windowOf } from "./geometry.ts";
 import type { MessageFact } from "./messages.ts";
@@ -27,7 +27,7 @@ import {
 	useActionChromeDispatch,
 } from "./modal-chrome.ts";
 import { ActionItem } from "./shared/choices.ts";
-import { useDecisionRegion } from "./shared/region.ts";
+import { type DecisionRegion, useDecisionRegion } from "./shared/region.ts";
 import { wrapToWidth } from "./text.ts";
 import { paint } from "./theme.ts";
 
@@ -75,6 +75,77 @@ function wrapBody(lines: readonly string[], width: number): string[] {
 	return lines.flatMap((line) => (line === "" ? [""] : wrapToWidth(line, width)));
 }
 
+/** The modal's frame and the message window it holds. */
+function missingModalLayout(
+	body: readonly string[],
+	actionRows: number,
+	terminalWidth: number,
+	terminalHeight: number,
+): {
+	frame: ReturnType<typeof modalFrame>;
+	bodyRows: number;
+	hasScrollbar: boolean;
+	bodyWidth: number;
+	wrapped: string[];
+	maxBodyScroll: number;
+} {
+	// The text column is set by the terminal width alone, so measure it once
+	// and read the message at it. Reserve a column for the scrollbar only when
+	// the message needs one: wrapping can add rows, so the overflow question
+	// is answered at the full width before the narrower window is built.
+	const widthFrame = modalFrame(terminalWidth, terminalHeight, { maxWidth: CONTENT_WIDTH + 4 });
+	const fullWidthBody = wrapBody(body, widthFrame.contentWidth);
+	// The box is only as tall as its own content: a two-line message with two
+	// actions does not claim the whole terminal.
+	const frame = modalFrame(terminalWidth, terminalHeight, {
+		maxWidth: CONTENT_WIDTH + 4,
+		rows: actionRows + Math.min(MAX_BODY_ROWS, fullWidthBody.length),
+		// Every action row plus one line of the message: the message is the
+		// part that scrolls.
+		minRows: actionRows + 1,
+	});
+	const bodyRows = Math.max(0, frame.contentRows - actionRows);
+	const hasScrollbar = fullWidthBody.length > bodyRows;
+	const bodyWidth = Math.max(1, frame.contentWidth - (hasScrollbar ? 1 : 0));
+	const wrapped = hasScrollbar ? wrapBody(body, bodyWidth) : fullWidthBody;
+	const maxBodyScroll = maxScrollOf(wrapped.length, bodyRows);
+	return { frame, bodyRows, hasScrollbar, bodyWidth, wrapped, maxBodyScroll };
+}
+
+/** The modal's body: the message window, then the action rows. */
+function missingModalBodyRows(fields: {
+	wrapped: string[];
+	scroll: number;
+	bodyRows: number;
+	bodyWidth: number;
+	contentWidth: number;
+	thumbRows: ReadonlySet<number> | null;
+	selection: DecisionRegion;
+	actions: readonly ActionRow[];
+}): ReactElement[] {
+	return [
+		...windowOf(fields.wrapped, fields.scroll, fields.bodyRows).map((line, index) =>
+			createElement(
+				"text",
+				{ key: `body-${index}` },
+				...bodyRowSpans(
+					[{ text: line, fg: paint("subtext0") }],
+					fields.bodyWidth,
+					fields.thumbRows?.has(index),
+				),
+			),
+		),
+		...fields.selection.window.map((row) =>
+			createElement(ActionItem, {
+				key: row.key,
+				row,
+				focused: fields.actions[fields.selection.at] === row,
+				width: fields.contentWidth,
+			}),
+		),
+	];
+}
+
 export function MissingModal({
 	title,
 	bodyLines,
@@ -93,34 +164,15 @@ export function MissingModal({
 }: MissingModalProps) {
 	const { width: terminalWidth, height: terminalHeight } = useTerminalDimensions();
 	const body = bodyLines ?? [];
-	// The text column is set by the terminal width alone, so measure it once
-	// and read the message at it. Reserve a column for the scrollbar only when
-	// the message needs one: wrapping can add rows, so the overflow question
-	// is answered at the full width before the narrower window is built.
-	const widthFrame = modalFrame(terminalWidth, terminalHeight, { maxWidth: CONTENT_WIDTH + 4 });
-	const fullWidthBody = wrapBody(body, widthFrame.contentWidth);
-	// The box is only as tall as its own content: a two-line message with two
-	// actions does not claim the whole terminal.
-	const frame = modalFrame(terminalWidth, terminalHeight, {
-		maxWidth: CONTENT_WIDTH + 4,
-		rows: actions.length + Math.min(MAX_BODY_ROWS, fullWidthBody.length),
-		// Every action row plus one line of the message: the message is the
-		// part that scrolls.
-		minRows: actions.length + 1,
-	});
-	const bodyRows = Math.max(0, frame.contentRows - actions.length);
-	const hasScrollbar = fullWidthBody.length > bodyRows;
-	const bodyWidth = Math.max(1, frame.contentWidth - (hasScrollbar ? 1 : 0));
-	const wrapped = hasScrollbar ? wrapBody(body, bodyWidth) : fullWidthBody;
-	const maxBodyScroll = maxScrollOf(wrapped.length, bodyRows);
+	const layout = missingModalLayout(body, actions.length, terminalWidth, terminalHeight);
 	// A completed turn ends with its conclusion, so open the panel at the
 	// newest message row. The current position stays stable while the
 	// operator uses j and k.
-	const [bodyScroll, setBodyScroll] = useState(maxBodyScroll);
+	const [bodyScroll, setBodyScroll] = useState(layout.maxBodyScroll);
 	// The panel's rows are the region's: the shared selection, its wrap, and
 	// its window, with every row shown, the way the decision's region does.
 	const selection = useDecisionRegion(actions, actions.length);
-	const scroll = Math.min(bodyScroll, maxBodyScroll);
+	const scroll = Math.min(bodyScroll, layout.maxBodyScroll);
 
 	// The modal owns one fact: the rows its Decision region holds.
 	const facts = useActionChromeDispatch({
@@ -137,42 +189,33 @@ export function MissingModal({
 		message: onMessage,
 		scrollMessage: (direction) =>
 			setBodyScroll((current) =>
-				direction === 1 ? Math.min(current + 1, maxBodyScroll) : Math.max(0, current - 1),
+				direction === 1 ? Math.min(current + 1, layout.maxBodyScroll) : Math.max(0, current - 1),
 			),
 		queuePause: onQueuePause,
 		autoHandoff: onAutoHandoff,
 	});
 
-	const thumbRows = hasScrollbar ? scrollbarRows(wrapped.length, bodyRows, scroll) : null;
+	const thumbRows = layout.hasScrollbar
+		? scrollbarRows(layout.wrapped.length, layout.bodyRows, scroll)
+		: null;
 	return createElement(ModalSurface, {
-		frame,
+		frame: layout.frame,
 		width: terminalWidth,
 		title,
 		// Every action row: without one of them the modal has no way out, so
 		// it holds itself back at that size.
 		body: {
 			above: [],
-			below: [
-				...windowOf(wrapped, scroll, bodyRows).map((line, index) =>
-					createElement(
-						"text",
-						{ key: `body-${index}` },
-						...bodyRowSpans(
-							[{ text: line, fg: paint("subtext0") }],
-							bodyWidth,
-							thumbRows?.has(index),
-						),
-					),
-				),
-				...selection.window.map((row) =>
-					createElement(ActionItem, {
-						key: row.key,
-						row,
-						focused: actions[selection.at] === row,
-						width: frame.contentWidth,
-					}),
-				),
-			],
+			below: missingModalBodyRows({
+				wrapped: layout.wrapped,
+				scroll,
+				bodyRows: layout.bodyRows,
+				bodyWidth: layout.bodyWidth,
+				contentWidth: layout.frame.contentWidth,
+				thumbRows,
+				selection,
+				actions,
+			}),
 			minRows: actions.length,
 		},
 		message,

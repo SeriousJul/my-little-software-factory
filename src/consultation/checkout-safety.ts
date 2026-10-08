@@ -138,6 +138,31 @@ export async function inspectLiveCheckout(fields: {
 	// identity: a worktree handoff of the same repository does not share
 	// this live checkout, and a different mapping of the same repository
 	// does.
+	await ticketCheckoutConflicts({ target, tickets, agents, countedPanes, conflicts });
+	await consultationCheckoutConflicts({
+		checkout,
+		target,
+		consultations,
+		agents,
+		countedPanes,
+		conflicts,
+	});
+	return {
+		dirty,
+		...(dirty ? { warning: "the live checkout has uncommitted changes" } : {}),
+		conflicts: uniqueConflicts(conflicts),
+	};
+}
+
+/** The in-flight tickets whose Agent works in the live checkout itself. */
+async function ticketCheckoutConflicts(fields: {
+	target: string;
+	tickets: readonly Ticket[];
+	agents: readonly HerdrAgent[];
+	countedPanes: Set<string>;
+	conflicts: CheckoutConflict[];
+}): Promise<void> {
+	const { target, tickets, agents, countedPanes, conflicts } = fields;
 	for (const ticket of tickets) {
 		if (ticket.handoff === null || !inFlightState(ticket.state)) continue;
 		if (ticket.handoff.paneId === null) continue;
@@ -157,6 +182,18 @@ export async function inspectLiveCheckout(fields: {
 			label: `Ticket ${ticket.identity}`,
 		});
 	}
+}
+
+/** The Consultations and bare Agents whose panes work in the live checkout. */
+async function consultationCheckoutConflicts(fields: {
+	checkout: string;
+	target: string;
+	consultations: readonly Consultation[];
+	agents: readonly HerdrAgent[];
+	countedPanes: Set<string>;
+	conflicts: CheckoutConflict[];
+}): Promise<void> {
+	const { checkout, target, consultations, agents, countedPanes, conflicts } = fields;
 	for (const consultation of consultations) {
 		if (
 			consultation.state !== "working" &&
@@ -193,11 +230,6 @@ export async function inspectLiveCheckout(fields: {
 			label: `Herdr Agent ${agent.agent} (${agent.paneId})`,
 		});
 	}
-	return {
-		dirty,
-		...(dirty ? { warning: "the live checkout has uncommitted changes" } : {}),
-		conflicts: uniqueConflicts(conflicts),
-	};
 }
 
 function uniqueConflicts(conflicts: readonly CheckoutConflict[]): CheckoutConflict[] {

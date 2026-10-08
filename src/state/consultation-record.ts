@@ -776,37 +776,8 @@ export class ConsultationRecordModule implements ConsultationRecordAggregate {
 					"UPDATE consultation_turns SET settled_at = ?, settled_status = ?, cause = ?, detail = ? WHERE id = ? AND settled_at IS NULL",
 				)
 				.run(capturedAt, settledStatus, cause, detail, turn.id);
-			if (output !== null) {
-				const bounded = boundedSnapshot(output);
-				const snapshotId = randomUUID();
-				this.db
-					.prepare(
-						"INSERT INTO consultation_snapshots(id, consultation_id, turn_id, text, captured_at, partial, truncated) VALUES (?, ?, ?, ?, ?, 0, ?)",
-					)
-					.run(snapshotId, id, turn.id, bounded.text, capturedAt, bounded.truncated ? 1 : 0);
-				this.db
-					.prepare("UPDATE consultation_turns SET snapshot_id = ? WHERE id = ?")
-					.run(snapshotId, turn.id);
-			}
-			// A turn the Agent settled rests the Consultation in awaiting-response
-			// whatever the cause: the Agent is alive and has answered its turn, so a
-			// response, the Agent terminal, Goto, and close all stand. A turn that
-			// ended failed or aborted is not a normal answer, so it names itself on
-			// the record - the operator reads the cause and the agent's own words
-			// instead of finding it silently waiting (ADR 0015).
-			const endWarning = turnEndWarning(cause, detail);
-			// A turn that settled without its output read leaves the Stale Agent
-			// output warning; a turn that settled with output clears only that
-			// warning. A settled turn also clears the turn-end warning a previous
-			// failed or aborted turn left, so a later answer is quiet again.
-			const baseWarning =
-				output === null
-					? STALE_AGENT_OUTPUT_WARNING
-					: isStaleAgentOutputWarning(consultation.warning)
-						? null
-						: consultation.warning;
-			const warning =
-				endWarning !== null ? endWarning : isTurnEndWarning(baseWarning) ? null : baseWarning;
+			if (output !== null) this.storeSettledSnapshot(id, turn.id, output, capturedAt);
+			const warning = this.settledWarning(consultation.warning, output, cause, detail);
 			this.db
 				.prepare(
 					"UPDATE consultations SET state = 'awaiting-response', latest_sequence = ?, attention_at = ?, updated_at = ?, draft = CASE WHEN draft = (SELECT input FROM consultation_turns WHERE id = ?) THEN '' ELSE draft END, draft_updated_at = CASE WHEN draft = (SELECT input FROM consultation_turns WHERE id = ?) THEN NULL ELSE draft_updated_at END, draft_old = CASE WHEN draft = (SELECT input FROM consultation_turns WHERE id = ?) THEN 0 ELSE draft_old END, warning = ? WHERE id = ?",
@@ -814,6 +785,50 @@ export class ConsultationRecordModule implements ConsultationRecordAggregate {
 				.run(sequence, capturedAt, capturedAt, turn.id, turn.id, turn.id, warning, id);
 			return true;
 		});
+	}
+	/** The settled turn's output, stored and named on the turn. */
+	private storeSettledSnapshot(
+		id: string,
+		turnId: string,
+		output: string,
+		capturedAt: string,
+	): void {
+		const bounded = boundedSnapshot(output);
+		const snapshotId = randomUUID();
+		this.db
+			.prepare(
+				"INSERT INTO consultation_snapshots(id, consultation_id, turn_id, text, captured_at, partial, truncated) VALUES (?, ?, ?, ?, ?, 0, ?)",
+			)
+			.run(snapshotId, id, turnId, bounded.text, capturedAt, bounded.truncated ? 1 : 0);
+		this.db
+			.prepare("UPDATE consultation_turns SET snapshot_id = ? WHERE id = ?")
+			.run(snapshotId, turnId);
+	}
+	/** The warning the Consultation wears once its turn settles (ADR 0015). */
+	private settledWarning(
+		warning: string | null,
+		output: string | null,
+		cause: TurnEndCause,
+		detail: string,
+	): string | null {
+		// A turn the Agent settled rests the Consultation in awaiting-response
+		// whatever the cause: the Agent is alive and has answered its turn, so a
+		// response, the Agent terminal, Goto, and close all stand. A turn that
+		// ended failed or aborted is not a normal answer, so it names itself on
+		// the record - the operator reads the cause and the agent's own words
+		// instead of finding it silently waiting (ADR 0015).
+		const endWarning = turnEndWarning(cause, detail);
+		// A turn that settled without its output read leaves the Stale Agent
+		// output warning; a turn that settled with output clears only that
+		// warning. A settled turn also clears the turn-end warning a previous
+		// failed or aborted turn left, so a later answer is quiet again.
+		const baseWarning =
+			output === null
+				? STALE_AGENT_OUTPUT_WARNING
+				: isStaleAgentOutputWarning(warning)
+					? null
+					: warning;
+		return endWarning !== null ? endWarning : isTurnEndWarning(baseWarning) ? null : baseWarning;
 	}
 	captureConsultationPartial(
 		id: string,

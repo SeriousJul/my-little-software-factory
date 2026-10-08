@@ -3,6 +3,7 @@ import type { ScrollBoxRenderable } from "@opentui/core";
 import { createElement, useRenderer } from "@opentui/react";
 import {
 	forwardRef,
+	type ReactElement,
 	type RefObject,
 	useCallback,
 	useEffect,
@@ -152,6 +153,59 @@ export function detailContent(
 	// stands out of the flat fact rows. The repository flows on the same
 	// lines in its dim, so the identity reads as one place, not two.
 	lines.push(...identityLines(ticket.title, ticket.repository, usableCols));
+	detailStateLine({ lines, fact, ticket });
+	lines.push(
+		...detailWorkColumns({
+			ticket,
+			fact,
+			choice: detailChoice(ticket, suggestedChoice),
+			handoffLimit,
+			usableCols,
+		}),
+	);
+	detailFlagLines({ ticket, fact, pushWrapped });
+	detailCompletionLines({ lines, ticket, fact, pushWrapped, usableCols });
+	if (mergeAttempt !== null) detailMergeAttempt(pushWrapped, mergeAttempt);
+	if (ticket.handoffRecoveryRequired) pushWrapped("Handoff: recovery required", paint("yellow"));
+	// The link to the ticket's GitHub page wears the blue role: the one row
+	// the operator opens in a browser, kept out of the flat fact rows. It
+	// keeps the full text width, because the link is what the operator opens
+	// in a browser and a column break would cut it.
+	pushWrapped(`GitHub: ${ticket.url}`, paint("blue"));
+	// One blank closes the static groups above - the columns, the warnings,
+	// and the turn's log - and opens the description: the ticket's own words,
+	// set apart from everything the plane and the source know about it.
+	lines.push({ text: " ", fg: paint("subtext0") });
+	pushWrapped(ticket.description, paint("subtext0"));
+	const truncated = lines.map((line) => ({
+		text: truncateToWidth(line.text, usableCols),
+		fg: line.fg,
+		bold: line.bold,
+		...(line.spinner === true ? { spinner: true } : {}),
+		...(line.cells !== undefined ? { cells: line.cells } : {}),
+	}));
+	return {
+		lines: truncated,
+		rows: truncated.length,
+	};
+}
+
+/** The push the detail's own blocks share. */
+type DetailPush = (text: string, fg: string | undefined, bold?: boolean) => void;
+/** One fact cell of a work column, already wrapped at the column's width. */
+type WorkFactCell = { text: string; fg: string | undefined };
+
+/**
+ * The state line: the Starting window, the failure badge, the Queue wait
+ * badge, or the state badge, in the order the list row wears them, so the
+ * list and the detail never disagree.
+ */
+function detailStateLine(fields: {
+	lines: DetailLine[];
+	fact: TicketRowFacts;
+	ticket: Ticket;
+}): void {
+	const { lines, fact, ticket } = fields;
 	// The Starting window (ADR 0030) takes the state line's slot in place of
 	// the badge, the same face the list row wears, so the list and the detail
 	// never disagree. The `[handed-off]` and `[running]` badges are never drawn
@@ -168,6 +222,20 @@ export function detailContent(
 		// open state while its start waits for a seat.
 		lines.push({ text: queuedBadge(), fg: stateColor("open") });
 	else lines.push({ text: stateBadge(ticket.state), fg: stateColor(ticket.state) });
+}
+
+/**
+ * The work columns: the Agent column's facts and the Source column's facts,
+ * joined where the width holds both, stacked where it does not.
+ */
+function detailWorkColumns(fields: {
+	ticket: Ticket;
+	fact: TicketRowFacts;
+	choice: DetailChoice | undefined;
+	handoffLimit: number;
+	usableCols: number;
+}): DetailLine[] {
+	const { ticket, fact, choice, handoffLimit, usableCols } = fields;
 	// The work columns: what runs the ticket beside where the ticket comes
 	// from. The two stand side by side where the width holds both, and one
 	// above the other where it does not: the Agent column must hold its
@@ -179,17 +247,51 @@ export function detailContent(
 	const twoCol = usableCols >= TWO_COLUMN_MIN;
 	const leftCols = twoCol ? Math.min(usableCols - 2 - 23, Math.ceil((usableCols - 2) / 2) + 3) : 0;
 	const rightCols = twoCol ? usableCols - 2 - leftCols : 0;
-	const leftFacts: { text: string; fg: string | undefined }[] = [];
+	const leftFacts = detailLeftFacts({ ticket, fact, choice, handoffLimit, leftCols, usableCols });
+	const rightFacts = detailRightFacts(ticket, rightCols, usableCols);
+	if (twoCol) {
+		// The joined row wears one span per column: the Agent column padded to
+		// its width plus the gap, then the Source column. A side the other
+		// column has outgrown pads with blanks, the way every row pads its tail.
+		const blockRows = Math.max(leftFacts.length, rightFacts.length);
+		const joined: DetailLine[] = [];
+		for (let i = 0; i < blockRows; i += 1) {
+			const l = leftFacts[i];
+			const r = rightFacts[i];
+			const leftText = l === undefined ? " ".repeat(leftCols) : padToWidth(l.text, leftCols);
+			const rightText = r === undefined ? " ".repeat(rightCols) : padToWidth(r.text, rightCols);
+			joined.push({
+				text: leftText + GAP + rightText,
+				fg: (l ?? r).fg,
+				cells: [
+					{ text: leftText + GAP, fg: l?.fg },
+					{ text: rightText, fg: r?.fg },
+				],
+			});
+		}
+		return joined;
+	}
+	return [
+		...leftFacts.map((cell) => ({ text: cell.text, fg: cell.fg })),
+		...rightFacts.map((cell) => ({ text: cell.text, fg: cell.fg })),
+	];
+}
+
+/** The Agent column's facts: the choice, the task type, the attempts. */
+function detailLeftFacts(fields: {
+	ticket: Ticket;
+	fact: TicketRowFacts;
+	choice: DetailChoice | undefined;
+	handoffLimit: number;
+	leftCols: number;
+	usableCols: number;
+}): WorkFactCell[] {
+	const { ticket, fact, choice, handoffLimit, leftCols, usableCols } = fields;
+	const leftFacts: WorkFactCell[] = [];
 	const addLeft = (text: string, fg: string | undefined) => {
-		for (const wrapped of wrapToWidth(text, twoCol ? leftCols : usableCols))
+		for (const wrapped of wrapToWidth(text, leftCols > 0 ? leftCols : usableCols))
 			leftFacts.push({ text: wrapped, fg });
 	};
-	const rightFacts: { text: string; fg: string | undefined }[] = [];
-	const addRight = (text: string, fg: string | undefined) => {
-		for (const wrapped of wrapToWidth(text, twoCol ? rightCols : usableCols))
-			rightFacts.push({ text: wrapped, fg });
-	};
-	const choice = detailChoice(ticket, suggestedChoice);
 	addLeft(`Agent: ${choice?.agentType ?? "unassigned"}`, paint("text"));
 	if (choice !== undefined) {
 		// The Environment rides beside the Agent, the way the override panel
@@ -231,6 +333,16 @@ export function detailContent(
 			`Handoff starts failing: ${ticket.failedStartStreak} in a row; the Top-up adds no automatic start`,
 			paint("yellow"),
 		);
+	return leftFacts;
+}
+
+/** The Source column's facts: the kind, the key, the state, the labels. */
+function detailRightFacts(ticket: Ticket, rightCols: number, usableCols: number): WorkFactCell[] {
+	const rightFacts: WorkFactCell[] = [];
+	const addRight = (text: string, fg: string | undefined) => {
+		for (const wrapped of wrapToWidth(text, rightCols > 0 ? rightCols : usableCols))
+			rightFacts.push({ text: wrapped, fg });
+	};
 	// The Source column: where the ticket comes from, the way the operator
 	// reads the source facts in one column.
 	addRight(`Source kind: ${ticket.sourceKind}`, paint("text"));
@@ -248,29 +360,19 @@ export function detailContent(
 			membership.health === "stale" ? paint("yellow") : paint("subtext0"),
 		);
 	}
-	if (twoCol) {
-		// The joined row wears one span per column: the Agent column padded to
-		// its width plus the gap, then the Source column. A side the other
-		// column has outgrown pads with blanks, the way every row pads its tail.
-		const blockRows = Math.max(leftFacts.length, rightFacts.length);
-		for (let i = 0; i < blockRows; i += 1) {
-			const l = leftFacts[i];
-			const r = rightFacts[i];
-			const leftText = l === undefined ? " ".repeat(leftCols) : padToWidth(l.text, leftCols);
-			const rightText = r === undefined ? " ".repeat(rightCols) : padToWidth(r.text, rightCols);
-			lines.push({
-				text: leftText + GAP + rightText,
-				fg: (l ?? r).fg,
-				cells: [
-					{ text: leftText + GAP, fg: l?.fg },
-					{ text: rightText, fg: r?.fg },
-				],
-			});
-		}
-	} else {
-		for (const cell of leftFacts) lines.push({ text: cell.text, fg: cell.fg });
-		for (const cell of rightFacts) lines.push({ text: cell.text, fg: cell.fg });
-	}
+	return rightFacts;
+}
+
+/**
+ * The operator's own facts on the ticket: the ignore, the source mute, the
+ * leftover environment, and the Agent name collision.
+ */
+function detailFlagLines(fields: {
+	ticket: Ticket;
+	fact: TicketRowFacts;
+	pushWrapped: DetailPush;
+}): void {
+	const { ticket, fact, pushWrapped } = fields;
 	// The ignore is the operator's own fact on this Ticket (ADR 0060): the pane
 	// names it, names the moment the key wrote it, and names the key that clears
 	// it, so a row that says what it says never leaves the operator guessing.
@@ -344,79 +446,75 @@ export function detailContent(
 			paint("yellow"),
 		);
 	}
-	if (ticket.lastCompletion !== null) {
-		const completion = ticket.lastCompletion;
-		// The held-turn warning (ADR 0016): the turn ended without completing
-		// and now blocks the automatic decisions. It stands above the
-		// last-completion line, so the warning reads before the fact it
-		// warns on, and it wears the warning color of the Leftover block above:
-		// the turn needs the operator, and red stays reserved for a pane that
-		// is gone. The last line states what the control plane refuses to do.
-		// It only shows while the ticket rests in awaiting: a held turn whose
-		// agent works again is retried, not held, and the pane says so without
-		// a warning.
-		if (fact.held) {
-			const causeLine = turnEndCauseLine(completion.cause, completion.detail);
-			for (const wrapped of wrapToWidth(causeLine, usableCols))
-				lines.push({ text: wrapped, fg: paint("yellow") });
-			pushWrapped("no automatic decision runs on this turn", paint("yellow"));
-		}
-		// The date is the first minute of the stored completion time; the
-		// decision is `pending` until one is made on the turn.
-		const date = factTime(completion.completedAt);
-		const decision = completion.decision ?? "pending";
-		// The green label opens the turn's log: the report the agent left
-		// behind, kept apart from the static facts by its color and its
-		// indented, dimmed message, not by a row the budget does not have.
-		pushWrapped(
-			`Last completion: ${date} ${completion.taskType} by ${completion.agentName} (${completion.agentType}) ${decision}`,
-			paint("green"),
-		);
-		// The message indents under its label: wrap first, then prefix, because
-		// the wrap drops leading spaces. It drops the indent where the columns
-		// cannot hold it.
-		const indent = usableCols >= 8 ? "  " : "";
-		for (const line of completion.message.split("\n")) {
-			for (const wrapped of wrapToWidth(line, Math.max(1, usableCols - indent.length)))
-				lines.push({ text: indent + wrapped, fg: paint("subtext0") });
-		}
+}
+
+/**
+ * The last completion: the held-turn warning, the completion line, and the
+ * agent's message under it.
+ */
+function detailCompletionLines(fields: {
+	lines: DetailLine[];
+	ticket: Ticket;
+	fact: TicketRowFacts;
+	pushWrapped: DetailPush;
+	usableCols: number;
+}): void {
+	const { lines, ticket, fact, pushWrapped, usableCols } = fields;
+	if (ticket.lastCompletion === null) return;
+	const completion = ticket.lastCompletion;
+	// The held-turn warning (ADR 0016): the turn ended without completing
+	// and now blocks the automatic decisions. It stands above the
+	// last-completion line, so the warning reads before the fact it
+	// warns on, and it wears the warning color of the Leftover block above:
+	// the turn needs the operator, and red stays reserved for a pane that
+	// is gone. The last line states what the control plane refuses to do.
+	// It only shows while the ticket rests in awaiting: a held turn whose
+	// agent works again is retried, not held, and the pane says so without
+	// a warning.
+	if (fact.held) {
+		const causeLine = turnEndCauseLine(completion.cause, completion.detail);
+		for (const wrapped of wrapToWidth(causeLine, usableCols))
+			lines.push({ text: wrapped, fg: paint("yellow") });
+		pushWrapped("no automatic decision runs on this turn", paint("yellow"));
 	}
+	// The date is the first minute of the stored completion time; the
+	// decision is `pending` until one is made on the turn.
+	const date = factTime(completion.completedAt);
+	const decision = completion.decision ?? "pending";
+	// The green label opens the turn's log: the report the agent left
+	// behind, kept apart from the static facts by its color and its
+	// indented, dimmed message, not by a row the budget does not have.
+	pushWrapped(
+		`Last completion: ${date} ${completion.taskType} by ${completion.agentName} (${completion.agentType}) ${decision}`,
+		paint("green"),
+	);
+	// The message indents under its label: wrap first, then prefix, because
+	// the wrap drops leading spaces. It drops the indent where the columns
+	// cannot hold it.
+	const indent = usableCols >= 8 ? "  " : "";
+	for (const line of completion.message.split("\n")) {
+		for (const wrapped of wrapToWidth(line, Math.max(1, usableCols - indent.length)))
+			lines.push({ text: indent + wrapped, fg: paint("subtext0") });
+	}
+}
+
+/**
+ * The latest plane action attempt (ADR 0068): the merge the plane ran on the
+ * ticket's pull request, in the turn's green or the needs-work yellow.
+ */
+function detailMergeAttempt(pushWrapped: DetailPush, mergeAttempt: PlaneActionAttempt): void {
 	// The latest plane action attempt (ADR 0068): the merge the plane ran on
 	// the ticket's pull request. No Completion trace stands for the action, so
 	// the attempt's record is the fact the detail reads: the merged outcome in
 	// the turn's green, the block in the needs-work yellow, with the reason it
 	// names beside it.
-	if (mergeAttempt !== null) {
-		const date = factTime(mergeAttempt.at);
-		if (mergeAttempt.outcome === "merged")
-			pushWrapped(
-				`Merge: ${date} merged by ${mergeAttempt.decision === "auto-merged" ? "the factory's auto top-up" : "the operator"}`,
-				paint("green"),
-			);
-		else pushWrapped(`Merge: ${date} blocked - ${mergeAttempt.reason}`, paint("yellow"));
-	}
-	if (ticket.handoffRecoveryRequired) pushWrapped("Handoff: recovery required", paint("yellow"));
-	// The link to the ticket's GitHub page wears the blue role: the one row
-	// the operator opens in a browser, kept out of the flat fact rows. It
-	// keeps the full text width, because the link is what the operator opens
-	// in a browser and a column break would cut it.
-	pushWrapped(`GitHub: ${ticket.url}`, paint("blue"));
-	// One blank closes the static groups above - the columns, the warnings,
-	// and the turn's log - and opens the description: the ticket's own words,
-	// set apart from everything the plane and the source know about it.
-	lines.push({ text: " ", fg: paint("subtext0") });
-	pushWrapped(ticket.description, paint("subtext0"));
-	const truncated = lines.map((line) => ({
-		text: truncateToWidth(line.text, usableCols),
-		fg: line.fg,
-		bold: line.bold,
-		...(line.spinner === true ? { spinner: true } : {}),
-		...(line.cells !== undefined ? { cells: line.cells } : {}),
-	}));
-	return {
-		lines: truncated,
-		rows: truncated.length,
-	};
+	const date = factTime(mergeAttempt.at);
+	if (mergeAttempt.outcome === "merged")
+		pushWrapped(
+			`Merge: ${date} merged by ${mergeAttempt.decision === "auto-merged" ? "the factory's auto top-up" : "the operator"}`,
+			paint("green"),
+		);
+	else pushWrapped(`Merge: ${date} blocked - ${mergeAttempt.reason}`, paint("yellow"));
 }
 
 export function detailLines(
@@ -591,50 +689,72 @@ interface TicketDetailProps {
  * translates and culls the viewport itself, so a rapid input burst never
  * replaces a React-owned visible-row window.
  */
-export const TicketDetail = forwardRef<TicketDetailHandle, TicketDetailProps>(function TicketDetail(
-	{
-		fact,
-		focused,
-		active,
-		reservedRows,
-		handoffLimit,
-		suggestedChoice,
-		scroll,
-		onFocus,
-		scrollSlot,
-		mergeAttempt = null,
+export const TicketDetail = forwardRef<TicketDetailHandle, TicketDetailProps>(
+	function TicketDetail(props, ref) {
+		const refs = useTicketDetailRefs(props);
+		const geometry = usePaneGeometry("detail", props.reservedRows);
+		// The renderer is held to invalidate the tree when the scroll box does not
+		// yet answer its own content height and viewport. It paints on invalidation
+		// and emits no frame at rest, so the pane asks rather than waits (issue #302).
+		const renderer = useRenderer();
+		// The scroll box owns the gutter; see `detailTextCols`.
+		const textCols = detailTextCols(geometry.usableCols);
+		const reserveGutter = textCols < geometry.usableCols;
+		const content = detailContent(props.fact, textCols, {
+			handoffLimit: props.handoffLimit,
+			suggestedChoice: props.suggestedChoice,
+			mergeAttempt: props.mergeAttempt,
+		});
+		const lines = content.lines;
+		const hasOverflow = content.rows > geometry.visibleRows;
+		const movers = useTicketDetailMovers(refs);
+		useImperativeHandle(
+			ref,
+			() => ({
+				moveBy: movers.moveBy,
+				movePage: (direction) =>
+					movers.moveBy((geometry.visibleRows - 1) * (direction === "down" ? 1 : -1)),
+				toStart: movers.toStart,
+				toEnd: movers.toEnd,
+			}),
+			[geometry.visibleRows, movers],
+		);
+		useTicketDetailEffects({
+			refs,
+			scrollSlot: props.scrollSlot,
+			renderer,
+			onFocus: props.onFocus,
+			toStart: movers.toStart,
+		});
+		const handleMouse = ticketDetailMouse(refs, props.onFocus);
+		const scrollbarOptions = ticketDetailScrollbarOptions(reserveGutter, hasOverflow);
+		return ticketDetailElement({
+			focused: props.focused,
+			geometry,
+			lines,
+			scrollboxRef: refs.scrollboxRef,
+			nativeAcceleration: refs.nativeAcceleration,
+			scrollbarOptions,
+			handleMouse,
+		});
 	},
-	ref,
-) {
-	const ticket = fact?.ticket;
-	const geometry = usePaneGeometry("detail", reservedRows);
-	// The renderer is held to invalidate the tree when the scroll box does not
-	// yet answer its own content height and viewport. It paints on invalidation
-	// and emits no frame at rest, so the pane asks rather than waits (issue #302).
-	const renderer = useRenderer();
-	// The scroll box owns the gutter; see `detailTextCols`.
-	const textCols = detailTextCols(geometry.usableCols);
-	const reserveGutter = textCols < geometry.usableCols;
-	const content = detailContent(fact, textCols, {
-		handoffLimit,
-		suggestedChoice,
-		mergeAttempt,
-	});
-	const lines = content.lines;
-	const hasOverflow = content.rows > geometry.visibleRows;
+);
+
+/** The pane's refs, held beside the ticket's identity. */
+function useTicketDetailRefs(props: TicketDetailProps) {
+	const ticket = props.fact?.ticket;
 	const scrollboxRef = useRef<ScrollBoxRenderable | null>(null);
 	const previousIdentity = useRef(ticket?.identity);
 	// Always the identity the pane currently shows; the unmount cleanup reads
 	// it so it never saves an offset under a switched identity.
 	const identityRef = useRef(ticket?.identity);
 	identityRef.current = ticket?.identity;
-	const activeRef = useRef(active);
-	const scrollRef = useRef(scroll);
+	const activeRef = useRef(props.active);
+	const scrollRef = useRef(props.scroll);
 	const burstRef = useRef<WheelBurst>(newWheelBurst());
 	const multiplierRef = useRef(1);
-	activeRef.current = active;
-	scrollRef.current = scroll;
-
+	activeRef.current = props.active;
+	scrollRef.current = props.scroll;
 	// OpenTUI asks this object for a multiplier after our mouse handler has
 	// resolved the Config policy. It then applies native viewport translation
 	// and culling, without a React render for each moved row.
@@ -642,50 +762,69 @@ export const TicketDetail = forwardRef<TicketDetailHandle, TicketDetailProps>(fu
 		tick: () => multiplierRef.current,
 		reset: () => resetWheelBurst(burstRef.current),
 	}).current;
+	return {
+		ticket,
+		scrollboxRef,
+		previousIdentity,
+		identityRef,
+		activeRef,
+		scrollRef,
+		burstRef,
+		multiplierRef,
+		nativeAcceleration,
+	};
+}
 
+/** The pane's scroll movers, for the handle and the wheel's burst. */
+function useTicketDetailMovers(refs: ReturnType<typeof useTicketDetailRefs>) {
+	const { scrollboxRef, burstRef, multiplierRef } = refs;
 	const resetBurst = useCallback(() => {
 		resetWheelBurst(burstRef.current);
 		multiplierRef.current = 1;
-	}, []);
+	}, [burstRef, multiplierRef]);
 	const moveBy = useCallback(
 		(rows: number) => {
 			resetBurst();
 			scrollboxRef.current?.scrollBy(rows);
 		},
-		[resetBurst],
+		[resetBurst, scrollboxRef],
 	);
 	const toStart = useCallback(() => {
 		resetBurst();
 		const box = scrollboxRef.current;
 		if (box !== null) box.scrollTop = 0;
-	}, [resetBurst]);
+	}, [resetBurst, scrollboxRef]);
 	const toEnd = useCallback(() => {
 		resetBurst();
 		const box = scrollboxRef.current;
 		if (box !== null) box.scrollTop = box.scrollHeight;
-	}, [resetBurst]);
+	}, [resetBurst, scrollboxRef]);
+	return { resetBurst, moveBy, toStart, toEnd };
+}
 
-	useImperativeHandle(
-		ref,
-		() => ({
-			moveBy,
-			movePage: (direction) => moveBy((geometry.visibleRows - 1) * (direction === "down" ? 1 : -1)),
-			toStart,
-			toEnd,
-		}),
-		[geometry.visibleRows, moveBy, toEnd, toStart],
-	);
-
+/**
+ * The pane's effects: the offset's restore and save, the slider's focus,
+ * and the switch's restart.
+ */
+function useTicketDetailEffects(fields: {
+	refs: ReturnType<typeof useTicketDetailRefs>;
+	scrollSlot: RefObject<{ identity: string; top: number } | null>;
+	renderer: ReturnType<typeof useRenderer>;
+	onFocus: () => void;
+	toStart: () => void;
+}): void {
+	const { refs, scrollSlot, renderer, onFocus, toStart } = fields;
+	const identity = refs.ticket?.identity;
 	// A different ticket always opens at its start. Replacing facts of the
 	// same identity and a terminal resize leave the native offset in place;
 	// ScrollBox clamps it when its content or viewport changes.
 	useEffect(() => {
-		if (previousIdentity.current !== ticket?.identity) {
-			previousIdentity.current = ticket?.identity;
+		if (refs.previousIdentity.current !== identity) {
+			refs.previousIdentity.current = identity;
 			toStart();
 		}
-	}, [ticket?.identity, toStart]);
-
+	}, [identity, toStart, refs.previousIdentity]);
+	//
 	// A below-minimum resize unmounts the pane, and a cross through the other
 	// section unmounts the detail. On the next mount of the same ticket, resume
 	// from the offset the unmount saved. That offset was taken at another size,
@@ -702,16 +841,16 @@ export const TicketDetail = forwardRef<TicketDetailHandle, TicketDetailProps>(fu
 	// repaints it, and asking again on every pass would repaint forever.
 	// biome-ignore lint/correctness/useExhaustiveDependencies: the identity in the deps list is deliberate - the effect reads refs only, and it must re-run when a switch lands back on the retained ticket, not only on mount
 	useEffect(() => {
-		const box = scrollboxRef.current;
+		const box = refs.scrollboxRef.current;
 		const slot = scrollSlot.current;
-		const identity = identityRef.current;
-		if (box === null || slot === null || identity === undefined) return;
-		if (slot.identity !== identity || slot.top === 0) return;
+		const liveIdentity = refs.identityRef.current;
+		if (box === null || slot === null || liveIdentity === undefined) return;
+		if (slot.identity !== liveIdentity || slot.top === 0) return;
 		let passAsked = false;
 		const restore = () => {
-			if (identityRef.current !== identity) return;
+			if (refs.identityRef.current !== liveIdentity) return;
 			const live = scrollSlot.current;
-			if (live === null || live.identity !== identity) return;
+			if (live === null || live.identity !== liveIdentity) return;
 			// A remount can land before the renderer has laid the box out at its
 			// new size: until it answers its own content height and viewport, an
 			// offset would clamp to zero and be lost. The pane invalidates the
@@ -744,8 +883,7 @@ export const TicketDetail = forwardRef<TicketDetailHandle, TicketDetailProps>(fu
 		};
 		// The pane is one instance for the whole section, so the effect must
 		// re-run when a switch lands on the retained ticket, not only on mount.
-	}, [renderer, scrollSlot, ticket?.identity]);
-
+	}, [renderer, scrollSlot, identity]);
 	// The slot keeps the offset of the ticket the operator scrolled. A ticket
 	// switch saves the offset the pane leaves behind, but a switch at top never
 	// clobbers a scrolled offset: the cross into the other section walks
@@ -754,32 +892,37 @@ export const TicketDetail = forwardRef<TicketDetailHandle, TicketDetailProps>(fu
 	// render's cleanup, so a plain switch saves the old identity and the true
 	// unmount saves the current one.
 	useEffect(() => {
-		const box = scrollboxRef.current;
+		const box = refs.scrollboxRef.current;
 		return () => {
-			const identity = ticket?.identity;
 			if (box === null || identity === undefined) return;
 			const top = box.scrollTop;
 			const live = scrollSlot.current;
 			if (live !== null && live.identity !== identity && top === 0) return;
 			scrollSlot.current = { identity, top };
 		};
-	}, [scrollSlot, ticket?.identity]);
-
+	}, [scrollSlot, identity, refs.scrollboxRef]);
 	// Slider track clicks stop propagation inside OpenTUI so they can start a
 	// drag. Listen on the slider itself as well, which keeps pane focus in
 	// agreement with a direct track or thumb action.
 	useEffect(() => {
-		const slider = scrollboxRef.current?.verticalScrollBar.slider;
+		const slider = refs.scrollboxRef.current?.verticalScrollBar.slider;
 		if (slider === undefined) return;
 		slider.onMouse = () => {
-			if (activeRef.current) onFocus();
+			onFocus();
 		};
 		return () => {
 			slider.onMouse = undefined;
 		};
-	}, [onFocus]);
+	}, [onFocus, refs.scrollboxRef]);
+}
 
-	const handleMouse = paneMouse({
+/** The pane's mouse handler: the focus, the wheel, the blocked wheel. */
+function ticketDetailMouse(
+	refs: ReturnType<typeof useTicketDetailRefs>,
+	onFocus: () => void,
+): ReturnType<typeof paneMouse> {
+	const { scrollboxRef, activeRef, scrollRef, burstRef, multiplierRef } = refs;
+	return paneMouse({
 		active: () => activeRef.current,
 		onFocus,
 		onWheel: (direction, event) => {
@@ -804,8 +947,19 @@ export const TicketDetail = forwardRef<TicketDetailHandle, TicketDetailProps>(fu
 			multiplierRef.current = 0;
 		},
 	});
+}
 
-	const scrollbarOptions = {
+/** The pane's scrollbar: the gutter it reserves, the track's tones. */
+function ticketDetailScrollbarOptions(
+	reserveGutter: boolean,
+	hasOverflow: boolean,
+): {
+	visible: boolean;
+	width: number;
+	showArrows: boolean;
+	trackOptions: { backgroundColor: string; foregroundColor: string };
+} {
+	return {
 		visible: reserveGutter,
 		width: reserveGutter ? 1 : 0,
 		showArrows: false,
@@ -817,7 +971,27 @@ export const TicketDetail = forwardRef<TicketDetailHandle, TicketDetailProps>(fu
 			foregroundColor: hasOverflow ? (paint("accent") ?? "transparent") : "transparent",
 		},
 	};
+}
 
+/** The pane's element: the scroll box, its props, its lines. */
+function ticketDetailElement(fields: {
+	focused: boolean;
+	geometry: ReturnType<typeof usePaneGeometry>;
+	lines: readonly DetailLine[];
+	scrollboxRef: RefObject<ScrollBoxRenderable | null>;
+	nativeAcceleration: { tick: () => number; reset: () => void };
+	scrollbarOptions: ReturnType<typeof ticketDetailScrollbarOptions>;
+	handleMouse: ReturnType<typeof paneMouse>;
+}): ReactElement {
+	const {
+		focused,
+		geometry,
+		lines,
+		scrollboxRef,
+		nativeAcceleration,
+		scrollbarOptions,
+		handleMouse,
+	} = fields;
 	return createElement(
 		"scrollbox",
 		{
@@ -851,32 +1025,37 @@ export const TicketDetail = forwardRef<TicketDetailHandle, TicketDetailProps>(fu
 			// scrollbar are siblings. The content inside the wrapper is a column.
 			style: { flexGrow: 1, flexShrink: 1, overflow: "hidden" },
 		},
-		...lines.flatMap((line, index) => [
-			line.spinner === true
-				? createElement(Spinner, {
-						key: `detail-${index}`,
-						word: STARTING_WORD,
-						width: BADGE_WIDTH,
-					})
-				: line.cells !== undefined
-					? createElement(
-							"text",
-							{ key: `detail-${index}`, fg: line.fg },
-							// One span per cell: the joined row wears each column's
-							// own color, and the pane never holds its own palette.
-							...line.cells.map((cell, i) =>
-								createElement(
-									"span",
-									{ key: i, fg: cell.fg ?? undefined },
-									cell.bold ? createElement("b", undefined, cell.text) : cell.text,
-								),
-							),
-						)
-					: createElement(
-							"text",
-							{ key: `detail-${index}`, fg: line.fg },
-							line.bold ? createElement("b", undefined, line.text) : line.text,
-						),
-		]),
+		...ticketDetailChildren(lines),
 	);
-});
+}
+
+/** The pane's line children: the spinner, the cells, the plain line. */
+function ticketDetailChildren(lines: readonly DetailLine[]): ReactElement[] {
+	return lines.flatMap((line, index) => [
+		line.spinner === true
+			? createElement(Spinner, {
+					key: `detail-${index}`,
+					word: STARTING_WORD,
+					width: BADGE_WIDTH,
+				})
+			: line.cells !== undefined
+				? createElement(
+						"text",
+						{ key: `detail-${index}`, fg: line.fg },
+						// One span per cell: the joined row wears each column's
+						// own color, and the pane never holds its own palette.
+						...line.cells.map((cell, i) =>
+							createElement(
+								"span",
+								{ key: i, fg: cell.fg ?? undefined },
+								cell.bold ? createElement("b", undefined, cell.text) : cell.text,
+							),
+						),
+					)
+				: createElement(
+						"text",
+						{ key: `detail-${index}`, fg: line.fg },
+						line.bold ? createElement("b", undefined, line.text) : line.text,
+					),
+	]);
+}

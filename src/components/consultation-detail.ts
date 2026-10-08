@@ -78,6 +78,24 @@ export function consultationDetailLines(fields: {
 		for (const line of wrapToWidth(text, width))
 			lines.push({ text: line, fg, ...(bold ? { bold: true } : {}) });
 	};
+	consultationStatusLines({ consultation, agentStatus, push });
+	consultationResourceLines({ consultation, replacementIds, remainingResources, push });
+	lines.push({ text: " ", fg: paint("subtext0") });
+	const session = sessionEntries !== null && sessionEntries.length > 0 ? sessionEntries : null;
+	consultationHistoryLines({ consultation, turns, snapshots, liveOutput, session, push });
+	return lines.map((line) => ({ ...line, text: truncateToWidth(line.text, width) }));
+}
+
+/** The push the detail section's lines share. */
+type DetailPush = (text: string, fg?: string, bold?: boolean) => void;
+
+/** The Consultation's standing facts: the state, the agent, the warnings. */
+function consultationStatusLines(fields: {
+	consultation: Consultation;
+	agentStatus: string | null;
+	push: DetailPush;
+}): void {
+	const { consultation, agentStatus, push } = fields;
 	push(`${consultation.typeName} - ${consultation.repository.displayName}`, paint("text"), true);
 	push(`State: ${consultation.state}`);
 	// The `unscheduled` record (issue #91) owns three answers in the section:
@@ -98,6 +116,16 @@ export function consultationDetailLines(fields: {
 	if (consultation.failure !== null) push(`Failure: ${consultation.failure}`, paint("red"));
 	if (consultation.closeResult !== null)
 		push(`Close result: ${consultation.closeResult}`, paint("yellow"));
+}
+
+/** The Consultation's resources, its replacements, and its draft. */
+function consultationResourceLines(fields: {
+	consultation: Consultation;
+	replacementIds: readonly string[];
+	remainingResources: readonly ConsultationResource[];
+	push: DetailPush;
+}): void {
+	const { consultation, replacementIds, remainingResources, push } = fields;
 	const unclosedResources = consultation.resources.filter(
 		(resource) => resource.owned && !resource.confirmedClosed,
 	);
@@ -129,8 +157,21 @@ export function consultationDetailLines(fields: {
 			`Response draft${consultation.draftOld ? " (old - review before sending)" : ""}: ${consultation.draft}`,
 			consultation.draftOld ? paint("yellow") : paint("subtext0"),
 		);
-	lines.push({ text: " ", fg: paint("subtext0") });
-	const session = sessionEntries !== null && sessionEntries.length > 0 ? sessionEntries : null;
+}
+
+/**
+ * The Consultation's history: the session view, the live Agent view, or the
+ * captured turns and snapshots.
+ */
+function consultationHistoryLines(fields: {
+	consultation: Consultation;
+	turns: readonly ConsultationTurn[];
+	snapshots: readonly ConsultationSnapshot[];
+	liveOutput: string | null;
+	session: readonly SessionEntry[] | null;
+	push: DetailPush;
+}): void {
+	const { consultation, turns, snapshots, liveOutput, session, push } = fields;
 	if (session !== null) {
 		push("Session view:", paint("text"), true);
 		for (const entry of session) {
@@ -164,7 +205,6 @@ export function consultationDetailLines(fields: {
 			if (snapshot.truncated) push("[start of snapshot removed]", paint("yellow"));
 		}
 	}
-	return lines.map((line) => ({ ...line, text: truncateToWidth(line.text, width) }));
 }
 
 interface ConsultationDetailProps {

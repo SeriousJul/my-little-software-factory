@@ -806,6 +806,93 @@ export async function fireTransition(
 	);
 	const ticket = tickets.find((item) => item.identity === request.ticketIdentity);
 	if (ticket === undefined) return null;
+	const { pullRequest, emptyOwnPullRequest, opensPullRequest } = await resolveFirePullRequest(
+		request,
+		tickets,
+		ticket,
+	);
+	// The review verdict is the pull request's own post, the place the review
+	// template names for the score: a comment or a review body. It is read
+	// only when this transition tests a score judgment and only for a pull
+	// request that is there to read.
+	const score =
+		transitionReadsScore(transition) && pullRequest !== null
+			? await readPullRequestScore(request, pullRequest)
+			: null;
+	const pullRequestOpen =
+		pullRequest === null ? null : await readPullRequestState(request, transition, pullRequest);
+	const evaluation = evaluateTransition(transition, { score, pullRequestOpen });
+	const outcome = emptyTransitionOutcome(evaluation, pullRequest);
+	if (!evaluation.fired) return outcome;
+	// The publish stands before the label write (ADR 0076): the draft the
+	// plane opened is marked ready for review, so the machine can act on it
+	// and the list can hold it, before the fire writes the facts it named.
+	// The act runs only for a task type that opens a pull request, and only
+	// on a draft: a pull request that is not a draft stands as it stands,
+	// and the fire never converts a pull request back to a draft.
+	if (opensPullRequest && pullRequest !== null && isDraft(pullRequest)) {
+		const readyFailure = await publishReadyPullRequest(request, pullRequest);
+		if (readyFailure !== null) {
+			outcome.writeFailure = readyFailure;
+			return outcome;
+		}
+	}
+	const machine = transitionLabelSet(request.config);
+	// The two surfaces the facts name. A pull request ticket is its own fixing
+	// pull request, so one surface carries both fact lists and the plane
+	// converges it once: a second write would strip what the first wrote.
+	const surfaces = fireSurfaces(ticket, pullRequest, evaluation);
+	// No fixing pull request, and the transition named facts for one: the skip
+	// is the fire's visible fact, not a silent gap in the written labels. The
+	// fire derives no position from it either: the position the facts were
+	// meant to stand on is the pull request's, and deriving one on the ticket
+	// instead derives no Next step on the ticket's own state, re-firing the
+	// same transition on the next turn while the pull request is still
+	// missing.
+	const missingPullRequest = pullRequest === null && evaluation.pullRequestFacts.length > 0;
+	recordFireSkips(outcome, missingPullRequest, emptyOwnPullRequest);
+	await writeFireSurfaces(request, surfaces, machine, outcome);
+	// A failed write stands as the failure fact; the plane does not re-derive
+	// a position from labels it did not manage to write.
+	if (outcome.writeFailure !== "") return outcome;
+	convergeWrittenSurfaces(request, surfaces, outcome);
+	const surface = pullRequest ?? ticket;
+	const surfaceWrite = pullRequest !== null ? outcome.pullRequestWrite : outcome.ticketWrite;
+	const postLabels = postWriteLabels(surface.labels, surfaceWrite);
+	const pseudo: SourceMembership = {
+		...newestMembershipOf(surface),
+		labels: postLabels,
+	};
+	// The new position: the first state whose match holds on the surface's
+	// post-write labels. A parking state offers no task: the plane does
+	// nothing on it, so the position offers no handoff. A missing fixing
+	// pull request derives no position: see the skip above.
+	await deriveFirePosition(request, {
+		pseudo,
+		surface,
+		pullRequest,
+		opensPullRequest,
+		outcome,
+		missingPullRequest,
+	});
+	return outcome;
+}
+
+/**
+ * The pull request the fire acts on: the projection's fixing pull request,
+ * or - for a task type that opens a pull request - the ticket's own draft
+ * through the direct head-branch read, the work test before the publish
+ * (ADR 0076).
+ */
+async function resolveFirePullRequest(
+	request: FireTransitionRequest,
+	tickets: readonly Ticket[],
+	ticket: Ticket,
+): Promise<{
+	pullRequest: Ticket | null;
+	emptyOwnPullRequest: boolean;
+	opensPullRequest: boolean;
+}> {
 	let pullRequest = mergeTargetPullRequest(tickets, ticket);
 	// The pull request publish (ADR 0076): a completed turn of a task type
 	// that opens a pull request reaches the ticket's own draft through the
@@ -843,18 +930,15 @@ export async function fireTransition(
 			pullRequest = own;
 		}
 	}
-	// The review verdict is the pull request's own post, the place the review
-	// template names for the score: a comment or a review body. It is read
-	// only when this transition tests a score judgment and only for a pull
-	// request that is there to read.
-	const score =
-		transitionReadsScore(transition) && pullRequest !== null
-			? await readPullRequestScore(request, pullRequest)
-			: null;
-	const pullRequestOpen =
-		pullRequest === null ? null : await readPullRequestState(request, transition, pullRequest);
-	const evaluation = evaluateTransition(transition, { score, pullRequestOpen });
-	const outcome: TransitionOutcome = {
+	return { pullRequest, emptyOwnPullRequest, opensPullRequest };
+}
+
+/** The outcome the evaluation answers with, before the fire writes anything. */
+function emptyTransitionOutcome(
+	evaluation: TransitionEvaluation,
+	pullRequest: Ticket | null,
+): TransitionOutcome {
+	return {
 		fired: evaluation.fired,
 		when: evaluation.when,
 		reason: evaluation.reason,
@@ -870,92 +954,116 @@ export async function fireTransition(
 		positionTaskType: null,
 		positionTicketIdentity: null,
 	};
-	if (!evaluation.fired) return outcome;
-	// The publish stands before the label write (ADR 0076): the draft the
-	// plane opened is marked ready for review, so the machine can act on it
-	// and the list can hold it, before the fire writes the facts it named.
-	// The act runs only for a task type that opens a pull request, and only
-	// on a draft: a pull request that is not a draft stands as it stands,
-	// and the fire never converts a pull request back to a draft.
-	if (opensPullRequest && pullRequest !== null && isDraft(pullRequest)) {
-		const number = externalKeyNumber(pullRequest.externalKey);
-		const membership = newestMembershipOf(pullRequest);
-		const source = request.config.sources.find((item) => item.name === membership.sourceName);
-		if (number !== null && source !== undefined) {
-			const readyFailure = await markPullRequestReady(
-				request.runner,
-				source,
-				pullRequest.repositoryRef,
-				number,
-			);
-			if (readyFailure !== null) {
-				outcome.writeFailure = `marking the pull request ready for review failed: ${readyFailure}`;
-				return outcome;
-			}
-		}
-	}
-	const machine = transitionLabelSet(request.config);
-	// The two surfaces the facts name. A pull request ticket is its own fixing
-	// pull request, so one surface carries both fact lists and the plane
-	// converges it once: a second write would strip what the first wrote.
-	const surfaces: PullRequestSurface[] =
-		ticket.sourceKind === "github-pull-request"
-			? [
-					{
-						kind: "pull-request",
-						command: editCommandFor(ticket),
-						ticket,
-						facts: [...new Set([...evaluation.ticketFacts, ...evaluation.pullRequestFacts])],
-					},
-				]
-			: [
-					{
-						kind: "ticket",
-						command: editCommandFor(ticket),
-						ticket,
-						facts: evaluation.ticketFacts,
-					},
-					...(pullRequest === null
-						? []
-						: [
-								{
-									kind: "pull-request" as const,
-									command: editCommandFor(pullRequest),
-									ticket: pullRequest,
-									facts: evaluation.pullRequestFacts,
-								},
-							]),
-				];
-	// No fixing pull request, and the transition named facts for one: the skip
-	// is the fire's visible fact, not a silent gap in the written labels. The
-	// fire derives no position from it either: the position the facts were
-	// meant to stand on is the pull request's, and deriving one on the ticket
-	// instead derives no Next step on the ticket's own state, re-firing the
-	// same transition on the next turn while the pull request is still
-	// missing.
-	const missingPullRequest = pullRequest === null && evaluation.pullRequestFacts.length > 0;
+}
+
+/**
+ * The publish's ready mark (ADR 0076): the draft the plane opened is marked
+ * ready for review, so the machine can act on it and the list can hold it,
+ * before the fire writes the facts it named. The act runs only for a task
+ * type that opens a pull request, and only on a draft: a pull request that
+ * is not a draft stands as it stands, and the fire never converts a pull
+ * request back to a draft.
+ */
+async function publishReadyPullRequest(
+	request: FireTransitionRequest,
+	pullRequest: Ticket,
+): Promise<string | null> {
+	const number = externalKeyNumber(pullRequest.externalKey);
+	const membership = newestMembershipOf(pullRequest);
+	const source = request.config.sources.find((item) => item.name === membership.sourceName);
+	if (number === null || source === undefined) return null;
+	const readyFailure = await markPullRequestReady(
+		request.runner,
+		source,
+		pullRequest.repositoryRef,
+		number,
+	);
+	if (readyFailure === null) return null;
+	return `marking the pull request ready for review failed: ${readyFailure}`;
+}
+
+/**
+ * The two surfaces the facts name. A pull request ticket is its own fixing
+ * pull request, so one surface carries both fact lists and the plane
+ * converges it once: a second write would strip what the first wrote.
+ */
+function fireSurfaces(
+	ticket: Ticket,
+	pullRequest: Ticket | null,
+	evaluation: TransitionEvaluation,
+): PullRequestSurface[] {
+	return ticket.sourceKind === "github-pull-request"
+		? [
+				{
+					kind: "pull-request",
+					command: editCommandFor(ticket),
+					ticket,
+					facts: [...new Set([...evaluation.ticketFacts, ...evaluation.pullRequestFacts])],
+				},
+			]
+		: [
+				{
+					kind: "ticket",
+					command: editCommandFor(ticket),
+					ticket,
+					facts: evaluation.ticketFacts,
+				},
+				...(pullRequest === null
+					? []
+					: [
+							{
+								kind: "pull-request" as const,
+								command: editCommandFor(pullRequest),
+								ticket: pullRequest,
+								facts: evaluation.pullRequestFacts,
+							},
+						]),
+			];
+}
+
+/** The skips the fire states: the missing pull request, the empty one. */
+function recordFireSkips(
+	outcome: TransitionOutcome,
+	missingPullRequest: boolean,
+	emptyOwnPullRequest: boolean,
+): void {
 	if (missingPullRequest) outcome.reason = NO_LINKED_PULL_REQUEST_SKIP;
 	// The empty pull request records its own reason: the Decision screen
 	// states why nothing was published, and the re-fire sweep re-fires this
 	// skip the way it re-fires the missing one (ADR 0076).
 	if (emptyOwnPullRequest) outcome.reason = EMPTY_PULL_REQUEST_SKIP;
+}
+
+/** The write the fire runs on each surface, in the machine's label set. */
+async function writeFireSurfaces(
+	request: FireTransitionRequest,
+	surfaces: readonly PullRequestSurface[],
+	machine: ReturnType<typeof transitionLabelSet>,
+	outcome: TransitionOutcome,
+): Promise<void> {
 	for (const target of surfaces) {
 		const write = await writeSurfaceLabels(request, target, machine);
 		const applied = applyWrite(outcome, write);
 		if (target.kind === "ticket") outcome.ticketWrite = applied;
 		else outcome.pullRequestWrite = applied;
 	}
-	// A failed write stands as the failure fact; the plane does not re-derive
-	// a position from labels it did not manage to write.
-	if (outcome.writeFailure !== "") return outcome;
-	// The fire's convergence (ADR 0079): a write that took lands on the
-	// projection's labels at once, so the position the machine derives stands
-	// on the labels the machine wrote, not on the labels the source last
-	// fetched. The blocked merge is the case the convergence exists for: the
-	// block's `needs-work` write leaves the position offering the merge for a
-	// whole refresh without it, and the top-up and the operator both read
-	// that position. The source's next refresh overwrites the set with its
-	// own truth, the way it overwrites every fact the projection holds.
+}
+
+/**
+ * The fire's convergence (ADR 0079): a write that took lands on the
+ * projection's labels at once, so the position the machine derives stands
+ * on the labels the machine wrote, not on the labels the source last
+ * fetched. The blocked merge is the case the convergence exists for: the
+ * block's `needs-work` write leaves the position offering the merge for a
+ * whole refresh without it, and the top-up and the operator both read
+ * that position. The source's next refresh overwrites the set with its
+ * own truth, the way it overwrites every fact the projection holds.
+ */
+function convergeWrittenSurfaces(
+	request: FireTransitionRequest,
+	surfaces: readonly PullRequestSurface[],
+	outcome: TransitionOutcome,
+): void {
 	for (const target of surfaces) {
 		const write = target.kind === "ticket" ? outcome.ticketWrite : outcome.pullRequestWrite;
 		if (write !== null)
@@ -964,39 +1072,46 @@ export async function fireTransition(
 				postWriteLabels(target.ticket.labels, write),
 			);
 	}
-	const surface = pullRequest ?? ticket;
-	const surfaceWrite = pullRequest !== null ? outcome.pullRequestWrite : outcome.ticketWrite;
-	const postLabels = postWriteLabels(surface.labels, surfaceWrite);
-	const pseudo: SourceMembership = {
-		...newestMembershipOf(surface),
-		labels: postLabels,
-	};
-	// The new position: the first state whose match holds on the surface's
-	// post-write labels. A parking state offers no task: the plane does
-	// nothing on it, so the position offers no handoff. A missing fixing
-	// pull request derives no position: see the skip above.
-	if (!missingPullRequest) {
-		for (const state of request.config.workflowStates) {
-			if (membershipMatchesState(pseudo, state)) {
-				if (state.taskType !== undefined) {
-					outcome.positionTaskType = state.taskType;
-					outcome.positionTicketIdentity = surface.identity;
-					// The position stands on the identity the source gives the
-					// pull request (ADR 0076): the identity the direct read
-					// synthesized resolves to the source's, and the consumers
-					// look the position up by it.
-					const sourceIdentity = await sourceIdentityOfOwnPullRequest(
-						request,
-						pullRequest,
-						opensPullRequest,
-					);
-					if (sourceIdentity !== null) outcome.positionTicketIdentity = sourceIdentity;
-				}
-				break;
+}
+
+/**
+ * The new position: the first state whose match holds on the surface's
+ * post-write labels. A parking state offers no task: the plane does
+ * nothing on it, so the position offers no handoff. A missing fixing
+ * pull request derives no position: see the skip above.
+ */
+async function deriveFirePosition(
+	request: FireTransitionRequest,
+	fields: {
+		pseudo: SourceMembership;
+		surface: Ticket;
+		pullRequest: Ticket | null;
+		opensPullRequest: boolean;
+		outcome: TransitionOutcome;
+		missingPullRequest: boolean;
+	},
+): Promise<void> {
+	const { pseudo, surface, pullRequest, opensPullRequest, outcome, missingPullRequest } = fields;
+	if (missingPullRequest) return;
+	for (const state of request.config.workflowStates) {
+		if (membershipMatchesState(pseudo, state)) {
+			if (state.taskType !== undefined) {
+				outcome.positionTaskType = state.taskType;
+				outcome.positionTicketIdentity = surface.identity;
+				// The position stands on the identity the source gives the
+				// pull request (ADR 0076): the identity the direct read
+				// synthesized resolves to the source's, and the consumers
+				// look the position up by it.
+				const sourceIdentity = await sourceIdentityOfOwnPullRequest(
+					request,
+					pullRequest,
+					opensPullRequest,
+				);
+				if (sourceIdentity !== null) outcome.positionTicketIdentity = sourceIdentity;
 			}
+			break;
 		}
 	}
-	return outcome;
 }
 
 /**

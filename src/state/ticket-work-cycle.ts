@@ -12,8 +12,10 @@
 import { randomUUID } from "node:crypto";
 import type { TransitionOutcome, WorkflowState } from "../config.ts";
 import type {
+	AgentNameCollision,
 	Completion,
 	CompletionDecision,
+	LeftoverEnvironment,
 	Ticket,
 	TicketListFilter,
 	TicketMarker,
@@ -41,8 +43,9 @@ import {
 } from "../workflow.ts";
 import { identityChunks, placeholders } from "./batch.ts";
 import type { StateGraph } from "./graph.ts";
-import { type HandoffTicket, ticketHandoffFact } from "./handoff.ts";
+import { type HandoffTicket, type StoredHandoff, ticketHandoffFact } from "./handoff.ts";
 import { transitionOf, turnEndCauseOf, turnLogOf } from "./json.ts";
+import type { StoredMembership } from "./source-fact.ts";
 import type { StateScope, StateStore } from "./store.ts";
 import { TABLES_OWNED } from "./tables.ts";
 
@@ -286,6 +289,138 @@ function completionFromRow(row: CompletionRow): Completion {
 	};
 }
 
+/** One row of the tickets table, as the projection read names it. */
+type TicketRow = {
+	identity: string;
+	state: TicketState;
+	work_cycle: number;
+	ignored: number;
+	ignored_at: string | null;
+};
+
+/** The projection's batched reads, one statement per chunk of the list. */
+interface ProjectionReads {
+	memberships: Map<string, StoredMembership[]>;
+	pendingTickets: Set<string>;
+	newestHandoffs: Map<string, StoredHandoff>;
+	handoffCounts: Map<string, number>;
+	failedStartStreaks: Map<string, number>;
+	completions: Map<string, Completion | null>;
+	leftovers: Map<string, LeftoverEnvironment[]>;
+	nameCollisions: Map<string, AgentNameCollision>;
+}
+
+/** The standing the row's state and its memberships give it (issue #345). */
+function ticketStanding(
+	row: TicketRow,
+	storedMemberships: StoredMembership[],
+	pending: boolean,
+): { actionable: boolean; listActionable: boolean; ignored: boolean } {
+	const active = storedMemberships.filter(
+		(membership) => membership.active && membership.health !== "removed",
+	);
+	const actionable =
+		row.state === "open" &&
+		!pending &&
+		active.some((membership) => membership.health === "healthy");
+	// The standing the Ticket list's Attention band reads (issue #345): the
+	// row lists on a source the Config still holds, and that source's last
+	// read did not fail. A `removed` source is already out of `active`, so the
+	// one health left that holds a row out of the pile is `stale`: a read that
+	// failed. `loading` is this run's fetch schedule and no fact about the
+	// Ticket, so it moves no row - the boot, and the config write-back that
+	// re-runs the refresh, never reorder the open work.
+	const listActionable =
+		row.state === "open" &&
+		!pending &&
+		active.some((membership) => membership.health === "healthy" || membership.health === "loading");
+	const ignored = row.ignored === 1;
+	return { actionable, listActionable, ignored };
+}
+
+/** The source facts the row's newest membership carries. */
+function ticketFactsOf(storedMemberships: StoredMembership[]): StoredMembership | undefined {
+	return [...storedMemberships].sort(
+		(a, b) =>
+			b.externalUpdatedAt.localeCompare(a.externalUpdatedAt) ||
+			a.sourceName.localeCompare(b.sourceName),
+	)[0];
+}
+
+/** The mute of the ticket's sources (ADR 0070). */
+function ticketMute(storedMemberships: StoredMembership[]): {
+	muted: boolean;
+	mutedAt: string | null;
+} {
+	// The mute of the ticket's sources, folded into the row's facts in this
+	// one read (ADR 0070): the gate and the list rule both read the facts,
+	// and a ticket is withheld and blocked while any of its sources' mute
+	// stands. The moment any of them was set is the newest of them.
+	let muted = false;
+	let mutedAt: string | null = null;
+	for (const membership of storedMemberships) {
+		if (!membership.sourceMuted) continue;
+		muted = true;
+		if (
+			mutedAt === null ||
+			(membership.sourceMutedAt !== null && membership.sourceMutedAt > mutedAt)
+		)
+			mutedAt = membership.sourceMutedAt;
+	}
+	return { muted, mutedAt: muted ? mutedAt : null };
+}
+
+/** The Ticket one row's facts build. */
+function projectedTicketOf(fields: {
+	row: TicketRow;
+	facts: StoredMembership;
+	handoff: ReturnType<typeof ticketHandoffFact>;
+	matched: WorkflowState | null;
+	standing: { actionable: boolean; listActionable: boolean; ignored: boolean };
+	mute: { muted: boolean; mutedAt: string | null };
+	reads: ProjectionReads;
+	states: readonly WorkflowState[];
+	fallbackTaskType: string;
+	memberships: StoredMembership[];
+}): Ticket {
+	const { row, facts, handoff, matched, standing, mute, reads, fallbackTaskType, memberships } =
+		fields;
+	return {
+		identity: row.identity,
+		title: facts.title,
+		repository: facts.repository.displayName,
+		state: row.state,
+		handoff,
+		workCycle: row.work_cycle,
+		handoffCount: reads.handoffCounts.get(row.identity) ?? 0,
+		failedStartStreak: reads.failedStartStreaks.get(row.identity) ?? 0,
+		lastCompletion: reads.completions.get(row.identity) ?? null,
+		description: facts.description,
+		sourceKind: facts.sourceKind,
+		externalKey: facts.externalKey,
+		sourceState: facts.sourceState,
+		url: facts.url,
+		labels: facts.labels,
+		externalUpdatedAt: facts.externalUpdatedAt,
+		repositoryRef: facts.repository,
+		memberships: memberships.map(
+			({ active: _active, sourceMuted: _muted, sourceMutedAt: _mutedAt, ...membership }) =>
+				membership,
+		),
+		suggestedTaskType: taskTypeOfMatch(matched, fallbackTaskType),
+		matchedStateName: matched === null ? null : matched.name,
+		actionable: standing.actionable,
+		listActionable: standing.listActionable,
+		handoffRecoveryRequired: reads.pendingTickets.has(row.identity),
+		leftover: reads.leftovers.get(row.identity)?.[0] ?? null,
+		nameCollision: reads.nameCollisions.get(row.identity) ?? null,
+		ignored: standing.ignored,
+		ignoredAt: standing.ignored ? row.ignored_at : null,
+		muted: mute.muted,
+		mutedAt: mute.muted ? mute.mutedAt : null,
+	};
+}
+
 export class TicketWorkCycleModule implements TicketWorkCycleAggregate {
 	private readonly db: StateScope;
 	readonly graph: () => StateGraph;
@@ -293,21 +428,14 @@ export class TicketWorkCycleModule implements TicketWorkCycleAggregate {
 		this.db = store.scopeOf("ticketWorkCycle", TABLES_OWNED.ticketWorkCycle);
 		this.graph = graph;
 	}
-	projectedTickets(states: readonly WorkflowState[], fallbackTaskType: string): Ticket[] {
-		const rows = this.db
-			.prepare("SELECT identity, state, work_cycle, ignored, ignored_at FROM tickets")
-			.all() as Array<{
-			identity: string;
-			state: TicketState;
-			work_cycle: number;
-			ignored: number;
-			ignored_at: string | null;
-		}>;
-		// Every fact the row carries is read once for the whole list (issue
-		// #202, ADR 0095): the memberships, the unresolved attempts, the newest
-		// handoffs, the start counts, the completion traces, and the leftover
-		// environments each cost one statement per chunk of Tickets, not one per
-		// Ticket. The observation loop runs this read every cycle.
+	/**
+	 * Every fact the row carries is read once for the whole list (issue
+	 * #202, ADR 0095): the memberships, the unresolved attempts, the newest
+	 * handoffs, the start counts, the completion traces, and the leftover
+	 * environments each cost one statement per chunk of Tickets, not one per
+	 * Ticket. The observation loop runs this read every cycle.
+	 */
+	private projectionReads(rows: Array<{ identity: string; state: TicketState }>): ProjectionReads {
 		const identities = rows.map((row) => row.identity);
 		const memberships = this.graph().sourceFact.membershipsForTickets(
 			rows.map((row) => ({ identity: row.identity, state: row.state })),
@@ -324,97 +452,63 @@ export class TicketWorkCycleModule implements TicketWorkCycleAggregate {
 		// ADR 0107): the row's marker and the detail's block state it without a rule
 		// of their own, the way the leftover's do.
 		const nameCollisions = this.graph().handoff.nameCollisionsFor(identities);
+		return {
+			memberships,
+			pendingTickets,
+			newestHandoffs,
+			handoffCounts,
+			failedStartStreaks,
+			completions,
+			leftovers,
+			nameCollisions,
+		};
+	}
+	projectedTickets(states: readonly WorkflowState[], fallbackTaskType: string): Ticket[] {
+		const rows = this.db
+			.prepare("SELECT identity, state, work_cycle, ignored, ignored_at FROM tickets")
+			.all() as TicketRow[];
+		const reads = this.projectionReads(rows);
 		const tickets: Ticket[] = [];
 		for (const row of rows) {
-			const storedMemberships = memberships.get(row.identity) ?? [];
-			const active = storedMemberships.filter(
-				(membership) => membership.active && membership.health !== "removed",
-			);
-			const pending = pendingTickets.has(row.identity);
-			const actionable =
-				row.state === "open" &&
-				!pending &&
-				active.some((membership) => membership.health === "healthy");
-			// The standing the Ticket list's Attention band reads (issue #345): the
-			// row lists on a source the Config still holds, and that source's last
-			// read did not fail. A `removed` source is already out of `active`, so the
-			// one health left that holds a row out of the pile is `stale`: a read that
-			// failed. `loading` is this run's fetch schedule and no fact about the
-			// Ticket, so it moves no row - the boot, and the config write-back that
-			// re-runs the refresh, never reorder the open work.
-			const listActionable =
-				row.state === "open" &&
-				!pending &&
-				active.some(
-					(membership) => membership.health === "healthy" || membership.health === "loading",
-				);
-			const ignored = row.ignored === 1;
-			if (storedMemberships.length === 0 && !inFlightState(row.state) && row.state !== "awaiting")
-				continue;
-			const facts = [...storedMemberships].sort(
-				(a, b) =>
-					b.externalUpdatedAt.localeCompare(a.externalUpdatedAt) ||
-					a.sourceName.localeCompare(b.sourceName),
-			)[0];
-			if (facts == null) continue;
-			const handoff = ticketHandoffFact(newestHandoffs.get(row.identity) ?? null);
-			// One match answers both facts the list reads: the task the machine
-			// suggests and the name of the position that suggests it. The name is
-			// derived here and never stored, and no rule but the list's grouping
-			// reads it (issue #159).
-			const listed = storedMemberships.filter((membership) => membership.active);
-			const matched = matchState(listed, states);
-			// The mute of the ticket's sources, folded into the row's facts in this
-			// one read (ADR 0070): the gate and the list rule both read the facts,
-			// and a ticket is withheld and blocked while any of its sources' mute
-			// stands. The moment any of them was set is the newest of them.
-			let muted = false;
-			let mutedAt: string | null = null;
-			for (const membership of storedMemberships) {
-				if (!membership.sourceMuted) continue;
-				muted = true;
-				if (
-					mutedAt === null ||
-					(membership.sourceMutedAt !== null && membership.sourceMutedAt > mutedAt)
-				)
-					mutedAt = membership.sourceMutedAt;
-			}
-			tickets.push({
-				identity: row.identity,
-				title: facts.title,
-				repository: facts.repository.displayName,
-				state: row.state,
-				handoff,
-				workCycle: row.work_cycle,
-				handoffCount: handoffCounts.get(row.identity) ?? 0,
-				failedStartStreak: failedStartStreaks.get(row.identity) ?? 0,
-				lastCompletion: completions.get(row.identity) ?? null,
-				description: facts.description,
-				sourceKind: facts.sourceKind,
-				externalKey: facts.externalKey,
-				sourceState: facts.sourceState,
-				url: facts.url,
-				labels: facts.labels,
-				externalUpdatedAt: facts.externalUpdatedAt,
-				repositoryRef: facts.repository,
-				memberships: storedMemberships.map(
-					({ active: _active, sourceMuted: _muted, sourceMutedAt: _mutedAt, ...membership }) =>
-						membership,
-				),
-				suggestedTaskType: taskTypeOfMatch(matched, fallbackTaskType),
-				matchedStateName: matched === null ? null : matched.name,
-				actionable,
-				listActionable,
-				handoffRecoveryRequired: pending,
-				leftover: leftovers.get(row.identity)?.[0] ?? null,
-				nameCollision: nameCollisions.get(row.identity) ?? null,
-				ignored,
-				ignoredAt: ignored ? row.ignored_at : null,
-				muted,
-				mutedAt: muted ? mutedAt : null,
-			});
+			const ticket = this.projectedTicketFor(row, reads, states, fallbackTaskType);
+			if (ticket !== null) tickets.push(ticket);
 		}
 		return tickets;
+	}
+	/** The Ticket one row projects to, or nothing while the row stands unread. */
+	private projectedTicketFor(
+		row: TicketRow,
+		reads: ProjectionReads,
+		states: readonly WorkflowState[],
+		fallbackTaskType: string,
+	): Ticket | null {
+		const storedMemberships = reads.memberships.get(row.identity) ?? [];
+		const pending = reads.pendingTickets.has(row.identity);
+		const standing = ticketStanding(row, storedMemberships, pending);
+		if (storedMemberships.length === 0 && !inFlightState(row.state) && row.state !== "awaiting")
+			return null;
+		const facts = ticketFactsOf(storedMemberships);
+		if (facts == null) return null;
+		const handoff = ticketHandoffFact(reads.newestHandoffs.get(row.identity) ?? null);
+		// One match answers both facts the list reads: the task the machine
+		// suggests and the name of the position that suggests it. The name is
+		// derived here and never stored, and no rule but the list's grouping
+		// reads it (issue #159).
+		const listed = storedMemberships.filter((membership) => membership.active);
+		const matched = matchState(listed, states);
+		const mute = ticketMute(storedMemberships);
+		return projectedTicketOf({
+			row,
+			facts,
+			handoff,
+			matched,
+			standing,
+			mute,
+			reads,
+			states,
+			fallbackTaskType,
+			memberships: storedMemberships,
+		});
 	}
 	/**
 	 * The projection read a derivation takes (ADR 0042, ADR 0093): one

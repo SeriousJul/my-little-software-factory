@@ -31,7 +31,7 @@ import {
 	type InteractionMode,
 	type StandingFacts,
 } from "./controls.ts";
-import { maxScrollOf } from "./geometry.ts";
+import { maxScrollOf, windowOf } from "./geometry.ts";
 import type { MdLine } from "./markdown.ts";
 import { type MessageFact, messageRowElement } from "./messages.ts";
 import { ActionItem } from "./shared/choices.ts";
@@ -550,6 +550,31 @@ export function scrollbarRows(
 	const maxScroll = maxScrollOf(lineCount, visibleRows);
 	const start = maxScroll === 0 ? 0 : Math.round((scroll / maxScroll) * travel);
 	return new Set(Array.from({ length: thumbHeight }, (_, index) => start + index));
+}
+
+/**
+ * The body's visible window at the body's own scroll: the scroll the body
+ * holds, the lines the window shows, and the scrollbar marks, read through
+ * the geometry's own window and this module's scrollbar rule. The Decision
+ * modal and the Live view hold their body facts in different shapes, and
+ * both read this one window from them.
+ */
+export function bodyScrollWindow(facts: {
+	bodyScroll: number | null;
+	maxBodyScroll: number;
+	bodyRows: number;
+	hasScrollbar: boolean;
+	renderedBody: readonly MdLine[];
+}): { scroll: number; visibleBody: MdLine[]; thumbRows: ReadonlySet<number> | null } {
+	const scroll =
+		facts.bodyScroll === null
+			? facts.maxBodyScroll
+			: Math.min(facts.bodyScroll, facts.maxBodyScroll);
+	const visibleBody = windowOf(facts.renderedBody, scroll, facts.bodyRows);
+	const thumbRows = facts.hasScrollbar
+		? scrollbarRows(facts.renderedBody.length, facts.bodyRows, scroll)
+		: null;
+	return { scroll, visibleBody, thumbRows };
 }
 
 /** One colored piece of a body row. */

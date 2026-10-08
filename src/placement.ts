@@ -179,6 +179,27 @@ export function evaluatePlacement(input: PlacementInput): PlacementEvaluation {
 	// The post-write set: the ticket's labels minus the labels the machine
 	// owns, plus the target state's all and any labels, each in the
 	// configured spelling the ticket does not already wear.
+	const { toAdd, toRemove, postLabels } = postWriteLabels(states, target, writeTarget);
+
+	return placementFeasibility(states, {
+		memberships,
+		writeTarget,
+		target,
+		postLabels,
+		toAdd,
+		toRemove,
+	});
+}
+
+/**
+ * The post-write label set: the ticket's labels minus the machine's owned
+ * labels the target does not name, plus the target's all and any labels.
+ */
+function postWriteLabels(
+	states: readonly WorkflowState[],
+	target: WorkflowState,
+	writeTarget: SourceMembership,
+): { toAdd: string[]; toRemove: string[]; postLabels: string[] } {
 	const owned = placementLabelSet(states);
 	const named = new Set<string>();
 	const added: string[] = [];
@@ -198,10 +219,26 @@ export function evaluatePlacement(input: PlacementInput): PlacementEvaluation {
 		...writeTarget.labels.filter((label) => !removedSet.has(label.toLocaleLowerCase())),
 		...toAdd,
 	];
+	return { toAdd, toRemove, postLabels };
+}
 
-	// Face 3: feasibility. The walk is the fire's walk: the first state that
-	// matches the post-write label set, over the ticket's memberships, must
-	// offer the chosen task.
+/**
+ * Face 3: feasibility. The walk is the fire's walk: the first state that
+ * matches the post-write label set, over the ticket's memberships, must
+ * offer the chosen task.
+ */
+function placementFeasibility(
+	states: readonly WorkflowState[],
+	fields: {
+		memberships: readonly SourceMembership[];
+		writeTarget: SourceMembership;
+		target: WorkflowState;
+		postLabels: string[];
+		toAdd: string[];
+		toRemove: string[];
+	},
+): PlacementEvaluation {
+	const { memberships, writeTarget, target, postLabels, toAdd, toRemove } = fields;
 	const effective = memberships.map((membership) =>
 		membership === writeTarget ? { ...membership, labels: postLabels } : membership,
 	);
@@ -226,7 +263,6 @@ export function evaluatePlacement(input: PlacementInput): PlacementEvaluation {
 			removed: toRemove,
 			postLabels,
 		};
-
 	// An earlier state still matches the post-write set. When it claims one
 	// of the labels the placement stands on, the machine's flaw stands in the
 	// reason, with both states named.

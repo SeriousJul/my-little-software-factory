@@ -83,6 +83,65 @@ export interface TypeAheadRowProps {
 	ink?: ControlInk;
 }
 
+/** The row's choice cell: the value the search stands under. */
+function typeAheadChoiceRow(props: TypeAheadRowProps): ReactElement {
+	return createElement(ChoiceRow, {
+		label: props.label,
+		value: props.value,
+		focused: props.focused,
+		width: props.width,
+		labelWidth: props.labelWidth,
+		placeholder: props.placeholder,
+		warning: props.warning === true,
+		error: props.error,
+		noteWidth: props.noteWidth,
+		// A model list tells its members apart at their end, so the row keeps
+		// the tail of a value wider than its column.
+		clipTail: true,
+		ink: props.ink,
+	});
+}
+
+/** The row's editable search, and the no-match word it shows. */
+function typeAheadSearchBox(fields: {
+	query: string;
+	focused: boolean;
+	inputActive: boolean | undefined;
+	width: number;
+	labelWidth: number;
+	ink?: ControlInk;
+	noMatch: boolean;
+	fieldRef: TypeAheadRowProps["fieldRef"];
+	onValueChange: (facts: FieldFacts) => void;
+}): ReactElement {
+	return createElement(
+		"box",
+		{ key: "search", style: { flexDirection: "row", height: 1 } },
+		createElement(TextField, {
+			label: SEARCH_LABEL,
+			value: fields.query,
+			focused: fields.focused && fields.inputActive !== false,
+			inputActive: fields.inputActive,
+			// The no-match word holds its own cells only while it is the news, so
+			// a query the operator is reading is never cut to make room for a word
+			// that says nothing.
+			width: Math.max(1, fields.width - (fields.noMatch ? NO_MATCH_CELLS : 0)),
+			labelWidth: fields.labelWidth - MARKER_WIDTH,
+			marked: false,
+			ink: fields.ink,
+			fieldRef: fields.fieldRef,
+			onValueChange: fields.onValueChange,
+		}),
+		fields.noMatch
+			? createElement(
+					"text",
+					{ fg: (fields.ink ?? controlInk()).error.fg ?? undefined },
+					STATE_WORDS.noMatch,
+				)
+			: null,
+	);
+}
+
 /** The shared Type-ahead row: the value, and the editable search under it. */
 export function TypeAheadRow(props: TypeAheadRowProps): ReactElement {
 	const [query, setQuery] = useState("");
@@ -113,50 +172,21 @@ export function TypeAheadRow(props: TypeAheadRowProps): ReactElement {
 	return createElement(
 		"box",
 		{ key: props.label, style: { flexDirection: "column" } },
-		createElement(ChoiceRow, {
-			label: props.label,
-			value: props.value,
+		typeAheadChoiceRow(props),
+		typeAheadSearchBox({
+			query,
 			focused: props.focused,
+			inputActive: props.inputActive,
 			width: props.width,
 			labelWidth: props.labelWidth,
-			placeholder: props.placeholder,
-			warning: props.warning === true,
-			error: props.error,
-			noteWidth: props.noteWidth,
-			// A model list tells its members apart at their end, so the row keeps
-			// the tail of a value wider than its column.
-			clipTail: true,
 			ink: props.ink,
+			noMatch,
+			fieldRef: props.fieldRef,
+			onValueChange: (facts) => {
+				queryRef.current = facts.value;
+				setQuery(facts.value);
+				props.onQueryChange?.(facts.value, typeAheadMatch(props.options, facts.value), facts);
+			},
 		}),
-		createElement(
-			"box",
-			{ key: "search", style: { flexDirection: "row", height: 1 } },
-			createElement(TextField, {
-				label: SEARCH_LABEL,
-				value: query,
-				focused: props.focused && props.inputActive !== false,
-				inputActive: props.inputActive,
-				// The no-match word holds its own cells only while it is the news, so
-				// a query the operator is reading is never cut to make room for a word
-				// that says nothing.
-				width: Math.max(1, props.width - (noMatch ? NO_MATCH_CELLS : 0)),
-				labelWidth: props.labelWidth - MARKER_WIDTH,
-				marked: false,
-				ink: props.ink,
-				fieldRef: props.fieldRef,
-				onValueChange: (facts) => {
-					queryRef.current = facts.value;
-					setQuery(facts.value);
-					props.onQueryChange?.(facts.value, typeAheadMatch(props.options, facts.value), facts);
-				},
-			}),
-			noMatch
-				? createElement(
-						"text",
-						{ fg: (props.ink ?? controlInk()).error.fg ?? undefined },
-						STATE_WORDS.noMatch,
-					)
-				: null,
-		),
 	);
 }

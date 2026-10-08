@@ -2064,138 +2064,23 @@ async function runPullRequestOpen(
 	// but the read still decides whether the fresh branch needs the plane's hold
 	// commit. A command that raises is a failure the answer carries, the way the
 	// module's reads do.
-	let listed: CommandResult;
-	try {
-		listed = await ctx.runner.run(
-			"git",
-			["-C", ctx.checkout, "ls-remote", "--heads", "origin", plan.branch],
-			{ env: { GIT_TERMINAL_PROMPT: "0" } },
-		);
-	} catch (error) {
-		return {
-			fail: `the pull request open could not read the factory branch from origin: ${errorMessage(
-				error,
-			)}`,
-			branchHandedOver: false,
-		};
-	}
-	if (listed.code !== 0)
-		return {
-			fail: `the pull request open could not read the factory branch from origin: ${commandFailureText(
-				listed,
-			)}`,
-			branchHandedOver: false,
-		};
-	const existedBefore = listed.stdout.trim() !== "";
+	const listed = await remoteBranchListed(ctx, plan.branch);
+	if (!listed.ok) return { fail: listed.reason, branchHandedOver: false };
 	// A branch the remote did not carry stands at its base: the create would
 	// answer "No commits between", and no retry of the create clears it. The
-	// hold commit gives the open a commit to stand on, before the push. The
-	// commit moves the factory branch by its name - the refs read, the empty
-	// commit built on it, the branch moved to it - and never the checkout's
-	// current branch, which the open runs from and owns no part of.
-	if (!existedBefore) {
-		let refs: CommandResult;
-		try {
-			refs = await ctx.runner.run("git", [
-				"-C",
-				ctx.checkout,
-				"rev-parse",
-				plan.branch,
-				`${plan.branch}^{tree}`,
-			]);
-		} catch (error) {
-			return {
-				fail: `the pull request open could not read the factory branch: ${errorMessage(error)}`,
-				branchHandedOver: false,
-			};
-		}
-		const refLines = refs.stdout
-			.split(/\r?\n/)
-			.map((line) => line.trim())
-			.filter((line) => line !== "");
-		if (refs.code !== 0 || refLines.length !== 2)
-			return {
-				fail: `the pull request open could not read the factory branch: ${commandFailureText(refs)}`,
-				branchHandedOver: false,
-			};
-		const [tip, tree] = refLines as [string, string];
-		let held: CommandResult;
-		try {
-			held = await ctx.runner.run("git", [
-				"-C",
-				ctx.checkout,
-				"commit-tree",
-				tree,
-				"-p",
-				tip,
-				"-m",
-				PULL_REQUEST_HOLD_COMMIT_MESSAGE,
-			]);
-		} catch (error) {
-			return {
-				fail: `the pull request open could not commit the hold: ${errorMessage(error)}`,
-				branchHandedOver: false,
-			};
-		}
-		const holdSha = held.stdout.trim();
-		if (held.code !== 0 || holdSha === "")
-			return {
-				fail: `the pull request open could not commit the hold: ${commandFailureText(held)}`,
-				branchHandedOver: false,
-			};
-		let moved: CommandResult;
-		try {
-			moved = await ctx.runner.run("git", [
-				"-C",
-				ctx.checkout,
-				"update-ref",
-				`refs/heads/${plan.branch}`,
-				holdSha,
-			]);
-		} catch (error) {
-			return {
-				fail: `the pull request open could not move the factory branch to the hold: ${errorMessage(
-					error,
-				)}`,
-				branchHandedOver: false,
-			};
-		}
-		if (moved.code !== 0)
-			return {
-				fail: `the pull request open could not move the factory branch to the hold: ${commandFailureText(
-					moved,
-				)}`,
-				branchHandedOver: false,
-			};
+	// hold commit gives the open a commit to stand on, before the push.
+	if (!listed.existedBefore) {
+		const held = await holdFreshBranch(ctx, plan.branch);
+		if (!held.ok) return { fail: held.reason, branchHandedOver: false };
 	}
-	let pushed: CommandResult;
-	try {
-		pushed = await ctx.runner.run("git", ["-C", ctx.checkout, "push", "origin", plan.branch], {
-			env: { GIT_TERMINAL_PROMPT: "0" },
-		});
-	} catch (error) {
-		return {
-			fail: `pushing the factory branch ${plan.branch} raised: ${errorMessage(error)}`,
-			// A push that raises may still have created the remote branch, and the
-			// local branch carries the hold commit either way: the answer hands the
-			// branch over, so the next Handoff reuses both copies instead of building
-			// a fresh branch the remote may then refuse.
-			branchHandedOver: true,
-		};
-	}
-	if (pushed.code !== 0)
-		return {
-			fail: `pushing the factory branch ${plan.branch} failed: ${commandFailureText(pushed)}`,
-			// A failed push created no remote branch, and the start still owns the
-			// local copy it created.
-			branchHandedOver: false,
-		};
-	// The push landed the branch on the remote, and from here the branch belongs
+	// The push lands the branch on the remote, and from here the branch belongs
 	// to the ticket's pull request, not to this start (issue #296). The answer
 	// states the handover; the start level drops the branch row out of its
 	// residue record, so a later failure keeps the local copy beside the remote
 	// one and the next Handoff's branch check finds the branch and opens the
 	// worktree on it instead of building a fresh one the remote then refuses.
+	const pushed = await pushFactoryBranch(ctx, plan.branch);
+	if (!pushed.ok) return { fail: pushed.reason, branchHandedOver: pushed.handedOver };
 	const handedOver = true as const;
 	// The source reads answer a raise with their own reason, but the read of a
 	// source's authentication stands outside those guards, and a CommandRunner
@@ -2203,6 +2088,175 @@ async function runPullRequestOpen(
 	// failure the answer carries: the push already landed, so it carries the
 	// handover too, and the start keeps the local copy of the branch beside the
 	// remote one the next Handoff reuses.
+	const opened = await openedPullRequestForBranch(ctx, plan);
+	if ("fail" in opened) return { fail: opened.fail, branchHandedOver: handedOver };
+	return { url: opened.url, number: opened.number, branchHandedOver: handedOver };
+}
+
+/** The remote's answer on whether the factory branch already stands. */
+async function remoteBranchListed(
+	ctx: HandoffContext,
+	branch: string,
+): Promise<{ ok: true; existedBefore: boolean } | { ok: false; reason: string }> {
+	let listed: CommandResult;
+	try {
+		listed = await ctx.runner.run(
+			"git",
+			["-C", ctx.checkout, "ls-remote", "--heads", "origin", branch],
+			{ env: { GIT_TERMINAL_PROMPT: "0" } },
+		);
+	} catch (error) {
+		return {
+			ok: false,
+			reason: `the pull request open could not read the factory branch from origin: ${errorMessage(
+				error,
+			)}`,
+		};
+	}
+	if (listed.code !== 0)
+		return {
+			ok: false,
+			reason: `the pull request open could not read the factory branch from origin: ${commandFailureText(
+				listed,
+			)}`,
+		};
+	return { ok: true, existedBefore: listed.stdout.trim() !== "" };
+}
+
+/** The factory branch's tip and tree, read before the hold commit. */
+async function branchTipAndTree(
+	ctx: HandoffContext,
+	branch: string,
+): Promise<{ ok: true; tip: string; tree: string } | { ok: false; reason: string }> {
+	let refs: CommandResult;
+	try {
+		refs = await ctx.runner.run("git", [
+			"-C",
+			ctx.checkout,
+			"rev-parse",
+			branch,
+			`${branch}^{tree}`,
+		]);
+	} catch (error) {
+		return {
+			ok: false,
+			reason: `the pull request open could not read the factory branch: ${errorMessage(error)}`,
+		};
+	}
+	const refLines = refs.stdout
+		.split(/\r?\n/)
+		.map((line) => line.trim())
+		.filter((line) => line !== "");
+	if (refs.code !== 0 || refLines.length !== 2)
+		return {
+			ok: false,
+			reason: `the pull request open could not read the factory branch: ${commandFailureText(refs)}`,
+		};
+	const [tip, tree] = refLines as [string, string];
+	return { ok: true, tip, tree };
+}
+
+/**
+ * The hold commit a fresh factory branch stands on before the push (ADR 0076):
+ * the commit moves the factory branch by its name - the empty commit built on
+ * the tip, the branch moved to it - and never the checkout's current branch,
+ * which the open runs from and owns no part of.
+ */
+async function holdFreshBranch(
+	ctx: HandoffContext,
+	branch: string,
+): Promise<{ ok: true } | { ok: false; reason: string }> {
+	const refs = await branchTipAndTree(ctx, branch);
+	if (!refs.ok) return refs;
+	const { tip, tree } = refs;
+	let held: CommandResult;
+	try {
+		held = await ctx.runner.run("git", [
+			"-C",
+			ctx.checkout,
+			"commit-tree",
+			tree,
+			"-p",
+			tip,
+			"-m",
+			PULL_REQUEST_HOLD_COMMIT_MESSAGE,
+		]);
+	} catch (error) {
+		return {
+			ok: false,
+			reason: `the pull request open could not commit the hold: ${errorMessage(error)}`,
+		};
+	}
+	const holdSha = held.stdout.trim();
+	if (held.code !== 0 || holdSha === "")
+		return {
+			ok: false,
+			reason: `the pull request open could not commit the hold: ${commandFailureText(held)}`,
+		};
+	let moved: CommandResult;
+	try {
+		moved = await ctx.runner.run("git", [
+			"-C",
+			ctx.checkout,
+			"update-ref",
+			`refs/heads/${branch}`,
+			holdSha,
+		]);
+	} catch (error) {
+		return {
+			ok: false,
+			reason: `the pull request open could not move the factory branch to the hold: ${errorMessage(
+				error,
+			)}`,
+		};
+	}
+	if (moved.code !== 0)
+		return {
+			ok: false,
+			reason: `the pull request open could not move the factory branch to the hold: ${commandFailureText(
+				moved,
+			)}`,
+		};
+	return { ok: true };
+}
+
+/** The branch push, and the handover a push that raises still leaves. */
+async function pushFactoryBranch(
+	ctx: HandoffContext,
+	branch: string,
+): Promise<{ ok: true } | { ok: false; reason: string; handedOver: boolean }> {
+	let pushed: CommandResult;
+	try {
+		pushed = await ctx.runner.run("git", ["-C", ctx.checkout, "push", "origin", branch], {
+			env: { GIT_TERMINAL_PROMPT: "0" },
+		});
+	} catch (error) {
+		return {
+			ok: false,
+			reason: `pushing the factory branch ${branch} raised: ${errorMessage(error)}`,
+			// A push that raises may still have created the remote branch, and the
+			// local branch carries the hold commit either way: the answer hands the
+			// branch over, so the next Handoff reuses both copies instead of building
+			// a fresh branch the remote may then refuse.
+			handedOver: true,
+		};
+	}
+	if (pushed.code !== 0)
+		return {
+			ok: false,
+			reason: `pushing the factory branch ${branch} failed: ${commandFailureText(pushed)}`,
+			// A failed push created no remote branch, and the start still owns the
+			// local copy it created.
+			handedOver: false,
+		};
+	return { ok: true };
+}
+
+/** The branch's standing pull request, or the draft the open creates. */
+async function openedPullRequestForBranch(
+	ctx: HandoffContext,
+	plan: PullRequestOpenPlan,
+): Promise<{ number: number; url: string } | { fail: string }> {
 	let records: OpenPullRequestRecord[] | { fail: string };
 	try {
 		records = await listOpenPullRequestsByHeadBranch(
@@ -2214,17 +2268,14 @@ async function runPullRequestOpen(
 	} catch (error) {
 		return {
 			fail: `the pull request open could not read the branch's pull requests: ${errorMessage(error)}`,
-			branchHandedOver: handedOver,
 		};
 	}
 	if ("fail" in records)
 		return {
 			fail: `the pull request open could not read the branch's pull requests: ${records.fail}`,
-			branchHandedOver: handedOver,
 		};
 	const standing = records[0];
-	if (standing !== undefined)
-		return { url: standing.url, number: standing.number, branchHandedOver: handedOver };
+	if (standing !== undefined) return { url: standing.url, number: standing.number };
 	let opened: { number: number; url: string } | { fail: string };
 	try {
 		opened = await openDraftPullRequest(ctx.runner, plan.source, {
@@ -2236,15 +2287,11 @@ async function runPullRequestOpen(
 	} catch (error) {
 		return {
 			fail: `the pull request open could not open the draft pull request: ${errorMessage(error)}`,
-			branchHandedOver: handedOver,
 		};
 	}
 	if ("fail" in opened)
-		return {
-			fail: `the pull request open could not open the draft pull request: ${opened.fail}`,
-			branchHandedOver: handedOver,
-		};
-	return { url: opened.url, number: opened.number, branchHandedOver: handedOver };
+		return { fail: `the pull request open could not open the draft pull request: ${opened.fail}` };
+	return opened;
 }
 
 /**

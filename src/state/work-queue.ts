@@ -110,6 +110,20 @@ export interface WorkQueueAggregate {
 	moveWorkItem(identity: string, direction: "up" | "down"): boolean;
 }
 
+/** One row of the work_queue table, as the queue's read names it. */
+type WorkQueueRow = {
+	position: number;
+	ticket_identity: string | null;
+	consultation_id: string | null;
+	origin: string | null;
+	choice_json: string | null;
+	previous_message: string;
+	enqueued_at: string;
+	route_from_identity: string | null;
+	is_automatic: number;
+	action_task_type: string | null;
+};
+
 export class WorkQueueModule implements WorkQueueAggregate {
 	private readonly db: StateScope;
 	readonly graph: () => StateGraph;
@@ -140,73 +154,64 @@ export class WorkQueueModule implements WorkQueueAggregate {
 			.prepare(
 				"SELECT position, ticket_identity, consultation_id, origin, choice_json, previous_message, enqueued_at, route_from_identity, is_automatic, action_task_type FROM work_queue ORDER BY position ASC",
 			)
-			.all() as Array<{
-			position: number;
-			ticket_identity: string | null;
-			consultation_id: string | null;
-			origin: string | null;
-			choice_json: string | null;
-			previous_message: string;
-			enqueued_at: string;
-			route_from_identity: string | null;
-			is_automatic: number;
-			action_task_type: string | null;
-		}>;
+			.all() as WorkQueueRow[];
 		const items: WorkQueueItem[] = [];
 		for (const row of rows) {
-			if (row.ticket_identity !== null) {
-				const origin =
-					row.origin === "open" || row.origin === "workflow" || row.origin === "restart"
-						? (row.origin as HandoffOrigin)
-						: undefined;
-				// The action cell stands for the plane action's row (ADR 0068):
-				// the task type whose action form the pickup runs, and no choice
-				// to lose, so a row the reader cannot read as one is a row the
-				// schema never committed.
-				if (row.action_task_type !== null) {
-					if (origin === undefined) continue;
-					items.push({
-						kind: "plane-action",
-						position: row.position,
-						ticketIdentity: row.ticket_identity,
-						routeFromIdentity: row.route_from_identity,
-						automatic: row.is_automatic === 1,
-						origin,
-						taskType: row.action_task_type,
-						enqueuedAt: row.enqueued_at,
-					});
-					continue;
-				}
-				const choice = row.choice_json === null ? undefined : jsonChoice(row.choice_json);
-				if (origin === undefined || choice === undefined) continue;
-				items.push({
-					kind: "handoff",
+			const item = this.queueItemOf(row);
+			if (item !== undefined) items.push(item);
+		}
+		return items;
+	}
+	/** The item one queue row carries; a row with no identity is refused. */
+	private queueItemOf(row: WorkQueueRow): WorkQueueItem | undefined {
+		if (row.ticket_identity !== null) {
+			const origin =
+				row.origin === "open" || row.origin === "workflow" || row.origin === "restart"
+					? (row.origin as HandoffOrigin)
+					: undefined;
+			// The action cell stands for the plane action's row (ADR 0068):
+			// the task type whose action form the pickup runs, and no choice
+			// to lose, so a row the reader cannot read as one is a row the
+			// schema never committed.
+			if (row.action_task_type !== null) {
+				if (origin === undefined) return undefined;
+				return {
+					kind: "plane-action",
 					position: row.position,
 					ticketIdentity: row.ticket_identity,
 					routeFromIdentity: row.route_from_identity,
 					automatic: row.is_automatic === 1,
 					origin,
-					choice,
-					previousMessage: row.previous_message,
+					taskType: row.action_task_type,
 					enqueuedAt: row.enqueued_at,
-				});
-				continue;
+				};
 			}
-			if (row.consultation_id !== null) {
-				items.push({
-					kind: "consultation",
-					position: row.position,
-					consultationId: row.consultation_id,
-					enqueuedAt: row.enqueued_at,
-				});
-				continue;
-			}
-			// The CHECK holds every row to one identity, so this arm stands for a
-			// row the constraint cannot name: refuse to read it rather than guess
-			// what it asks for.
-			throw new StateError("the Work queue holds a row with no identity");
+			const choice = row.choice_json === null ? undefined : jsonChoice(row.choice_json);
+			if (origin === undefined || choice === undefined) return undefined;
+			return {
+				kind: "handoff",
+				position: row.position,
+				ticketIdentity: row.ticket_identity,
+				routeFromIdentity: row.route_from_identity,
+				automatic: row.is_automatic === 1,
+				origin,
+				choice,
+				previousMessage: row.previous_message,
+				enqueuedAt: row.enqueued_at,
+			};
 		}
-		return items;
+		if (row.consultation_id !== null) {
+			return {
+				kind: "consultation",
+				position: row.position,
+				consultationId: row.consultation_id,
+				enqueuedAt: row.enqueued_at,
+			};
+		}
+		// The CHECK holds every row to one identity, so this arm stands for a
+		// row the constraint cannot name: refuse to read it rather than guess
+		// what it asks for.
+		throw new StateError("the Work queue holds a row with no identity");
 	}
 	hasWorkItem(ticketIdentity: string): boolean {
 		return (

@@ -25,18 +25,19 @@
  * its scroll, and its box, and no in-box hint row stands in the box.
  */
 import { createElement, useTerminalDimensions } from "@opentui/react";
-import { useMemo, useState } from "react";
+import { type Dispatch, type SetStateAction, useMemo, useState } from "react";
 import type { Ticket } from "../domain/ticket.ts";
 import { isHeldCause, type TurnEndCause, type TurnLogEntry } from "../turn-log.ts";
-import { useControlDispatch } from "./control-dispatch.ts";
+import { type ControlHandler, useControlDispatch } from "./control-dispatch.ts";
 import { availabilityFacts, type StandingFacts } from "./controls.ts";
 import { decisionBodyLayout, turnLogBody } from "./decision-modal.ts";
-import { maxScrollOf, windowOf } from "./geometry.ts";
+import { maxScrollOf } from "./geometry.ts";
 import type { MdLine, MdSpan } from "./markdown.ts";
 import type { MessageFact } from "./messages.ts";
 import {
 	type ActionRow,
 	AGENT_VIEW_PANE,
+	bodyScrollWindow,
 	decisionActionRows,
 	decisionTitle,
 	heldCauseRow,
@@ -45,12 +46,11 @@ import {
 	ModalSurface,
 	modalFrame,
 	PANE_BORDERS,
-	scrollbarRows,
 	TURN_LOG_PANE,
 	turnLogPane,
 	useModalPopScale,
 } from "./modal-chrome.ts";
-import { bodyPaneFacts, useDecisionRegion } from "./shared/region.ts";
+import { bodyPaneFacts, type DecisionRegion, useDecisionRegion } from "./shared/region.ts";
 import { truncateToWidth, widthOf, wrapToWidth } from "./text.ts";
 import { paint } from "./theme.ts";
 
@@ -137,50 +137,107 @@ function streamLines(lines: readonly string[], note: string | null, width: numbe
 	return out;
 }
 
-export function LiveView({
-	title,
-	contextLine,
-	blocked,
-	body,
-	cause = null,
-	detail = "",
-	actions,
-	onAction,
-	onEditAction,
-	onGoto,
-	onCancel,
-	standing,
-	ticket,
-	paneAlive,
-	paneForeign,
-	inputActive = true,
-	onHelp,
-	onMessage,
-	onUnavailable,
-	message,
-	onEmergencyExit,
-	onQueuePause,
-	onAutoHandoff,
-}: LiveViewProps) {
+export function LiveView(props: LiveViewProps) {
 	const { width: terminalWidth, height: terminalHeight } = useTerminalDimensions();
 	// The decision sub-mode, from the body the pane holds: a turn settling
 	// for the operator flips it in place, without a second pop-in.
-	const decideable = body.kind === "turn-log";
+	const decideable = props.body.kind === "turn-log";
 	const { pop, scale } = useModalPopScale();
 	const frame = modalFrame(terminalWidth, terminalHeight, { margin: MARGIN, scale });
 	// A held turn shows its cause in the region, above the rows it refuses
 	// (ADR 0016): one row the body yields to, so the operator reads why the
 	// turn is held before the rows that decide it.
-	const held = decideable && cause !== null && isHeldCause(cause);
-	const regionRows = decideable ? actions.length : 0;
+	const held = decideable && props.cause !== null && isHeldCause(props.cause);
+	const regionRows = decideable ? props.actions.length : 0;
 	// The regions of the box: the pane's chrome, the body's rows, the
 	// region's visible rows. The layout is decided at the final size, so
 	// the scrollbar never flickers in and out while the pop-in grows the box.
-	const finalLayout = decisionBodyLayout(
-		modalFrame(terminalWidth, terminalHeight, { margin: MARGIN }).contentRows,
-		regionRows,
-		held,
+	const unscaled = modalFrame(terminalWidth, terminalHeight, { margin: MARGIN });
+	const bodyFacts = useLiveBodyFacts(props, { frame, decideable, held, contentFrame: unscaled });
+	// The region's selection, its wrap, its auto-scroll, its visible window,
+	// and its range text are the shared region's, beside the field, the
+	// selector row, and the form (ADR 0039 and ADR 0040).
+	const region = useDecisionRegion(
+		decideable ? props.actions : [],
+		bodyFacts.layout?.regionVisible ?? 0,
 	);
+	const editableActionSelected =
+		decideable && props.onEditAction !== undefined && props.actions[region.at]?.editable === true;
+	// The plane action's row holds no settings (ADR 0068): the surface states
+	// it, and the catalogue keeps the one gate with the reason it names.
+	const planeActionSelected = decideable && props.actions[region.at]?.planeAction === true;
+	// The sub-mode dispatches from the catalogue: the streaming sub-mode
+	// answers to a live-view mode of its own, the settled sub-mode to the
+	// decision-modal mode the glossary already names. The record names which
+	// one it is.
+	//
+	// The view states the facts its own Body pane and its own Decision region
+	// produce, beside the Ticket it streams. The settled sub-mode adds the
+	// action rows' facts; the streaming sub-mode names none of them.
+	const facts = liveViewFacts(props, {
+		decideable,
+		regionRows,
+		editableActionSelected,
+		planeActionSelected,
+		pane: bodyFacts.pane,
+	});
+	const scrollBody = useLiveScroll(bodyFacts);
+	useControlDispatch({
+		facts,
+		active: props.inputActive,
+		onUnavailable: props.onUnavailable,
+		onEmergencyExit: props.onEmergencyExit,
+		handlers: liveViewHandlers(props, { decideable, region, editableActionSelected, scrollBody }),
+	});
+
+	const liveBody = liveViewBody(props, { frame, decideable, held, region, bodyFacts });
+
+	return createElement(ModalSurface, {
+		frame,
+		width: terminalWidth,
+		// The border re-titles `Live:` to `Decision:` when the turn settles
+		// for the operator: the prefix is the chrome's, so both paths into
+		// the decision end at one screen with one name (ADR 0040).
+		title: decideable ? decisionTitle(props.title) : liveTitle(props.title),
+		opacity: pop,
+		body: liveBody,
+		message: props.message,
+		bar: {
+			mode: facts.mode,
+			facts,
+			rangeIndicator: region.rangeText,
+		},
+		queuePaused: props.standing.queuePaused,
+	});
+}
+
+/** The body pane's facts: the layout, the body, the scroll's range, the pane. */
+interface LiveBodyFacts {
+	layout: ReturnType<typeof decisionBodyLayout>;
+	panePadding: 0 | 1;
+	hasScrollbar: boolean;
+	bodyWidth: number;
+	renderedBody: MdLine[];
+	bodyRows: number;
+	maxBodyScroll: number;
+	bodyScroll: number | null;
+	setBodyScroll: Dispatch<SetStateAction<number | null>>;
+	pane: ReturnType<typeof bodyPaneFacts>;
+}
+
+/** The body pane's facts: the layout, the body, the scroll's range, the pane. */
+function useLiveBodyFacts(
+	props: LiveViewProps,
+	fields: {
+		frame: ReturnType<typeof modalFrame>;
+		decideable: boolean;
+		held: boolean;
+		contentFrame: ReturnType<typeof modalFrame>;
+	},
+): LiveBodyFacts {
+	const { frame, decideable, held, contentFrame } = fields;
+	const regionRows = decideable ? props.actions.length : 0;
+	const finalLayout = decisionBodyLayout(contentFrame.contentRows, regionRows, held);
 	const layout = decisionBodyLayout(frame.contentRows, regionRows, held);
 	// The pane's padding is the one its layout decided, on every side: the
 	// body's width is the box's content minus the pane's border and padding,
@@ -191,10 +248,10 @@ export function LiveView({
 	const paneInnerWidth = Math.max(1, frame.contentWidth - PANE_BORDERS - 2 * panePadding);
 	const fullWidthBody = useMemo(
 		() =>
-			body.kind === "turn-log"
-				? turnLogBody(body.entries, paneInnerWidth)
-				: streamLines(body.lines, body.note, paneInnerWidth),
-		[body, paneInnerWidth],
+			props.body.kind === "turn-log"
+				? turnLogBody(props.body.entries, paneInnerWidth)
+				: streamLines(props.body.lines, props.body.note, paneInnerWidth),
+		[props.body, paneInnerWidth],
 	);
 	const hasScrollbar = finalLayout !== null && fullWidthBody.length > finalLayout.paneRows;
 	const bodyWidth = Math.max(1, paneInnerWidth - (hasScrollbar ? 1 : 0));
@@ -202,58 +259,68 @@ export function LiveView({
 	// than the frame being drawn while the pop-in grows the box.
 	const renderedBody = useMemo(
 		() =>
-			body.kind === "turn-log"
-				? turnLogBody(body.entries, bodyWidth)
-				: streamLines(body.lines, body.note, bodyWidth),
-		[body, bodyWidth],
+			props.body.kind === "turn-log"
+				? turnLogBody(props.body.entries, bodyWidth)
+				: streamLines(props.body.lines, props.body.note, bodyWidth),
+		[props.body, bodyWidth],
 	);
 	const bodyRows = layout === null ? 0 : Math.min(renderedBody.length, layout.paneRows);
 	const maxBodyScroll = maxScrollOf(renderedBody.length, bodyRows);
 	// The newest output is in front: the body opens at its bottom and stays
 	// pinned to it while new rows arrive, until the operator scrolls.
 	const [bodyScroll, setBodyScroll] = useState<number | null>(null);
-	// The region's selection, its wrap, its auto-scroll, its visible window,
-	// and its range text are the shared region's, beside the field, the
-	// selector row, and the form (ADR 0039 and ADR 0040).
-	const region = useDecisionRegion(decideable ? actions : [], layout?.regionVisible ?? 0);
 	const bodyEmpty =
-		body.kind === "turn-log"
-			? body.entries.length === 0
-			: body.lines.length === 0 && body.note === null;
-	const editableActionSelected =
-		decideable && onEditAction !== undefined && actions[region.at]?.editable === true;
-	// The plane action's row holds no settings (ADR 0068): the surface states
-	// it, and the catalogue keeps the one gate with the reason it names.
-	const planeActionSelected = decideable && actions[region.at]?.planeAction === true;
-	// The sub-mode dispatches from the catalogue: the streaming sub-mode
-	// answers to a live-view mode of its own, the settled sub-mode to the
-	// decision-modal mode the glossary already names. The record names which
-	// one it is.
-	//
-	// The view states the facts its own Body pane and its own Decision region
-	// produce, beside the Ticket it streams. The settled sub-mode adds the
-	// action rows' facts; the streaming sub-mode names none of them.
-	const pane = bodyPaneFacts(renderedBody.length, bodyRows, bodyEmpty);
-	const facts = decideable
-		? availabilityFacts("decision-modal", standing, {
+		props.body.kind === "turn-log"
+			? props.body.entries.length === 0
+			: props.body.lines.length === 0 && props.body.note === null;
+	return {
+		layout,
+		panePadding,
+		hasScrollbar,
+		bodyWidth,
+		renderedBody,
+		bodyRows,
+		maxBodyScroll,
+		bodyScroll,
+		setBodyScroll,
+		pane: bodyPaneFacts(renderedBody.length, bodyRows, bodyEmpty),
+	};
+}
+
+/** The view's control facts, by the sub-mode that stands. */
+function liveViewFacts(
+	props: LiveViewProps,
+	fields: {
+		decideable: boolean;
+		regionRows: number;
+		editableActionSelected: boolean;
+		planeActionSelected: boolean;
+		pane: ReturnType<typeof bodyPaneFacts>;
+	},
+) {
+	const { decideable, regionRows, editableActionSelected, planeActionSelected, pane } = fields;
+	return decideable
+		? availabilityFacts("decision-modal", props.standing, {
 				editableActionSelected,
 				planeActionSelected,
 				...pane,
 				actionRowCount: regionRows,
 			})
-		: availabilityFacts("live-view", standing, {
-				selectedTicket: ticket,
-				ticketPaneAlive: paneAlive,
-				ticketPaneForeign: paneForeign,
+		: availabilityFacts("live-view", props.standing, {
+				selectedTicket: props.ticket,
+				ticketPaneAlive: props.paneAlive,
+				ticketPaneForeign: props.paneForeign,
 				...pane,
 			});
+}
 
-	// Scroll the body by one step of the named key: a page moves one viewport
-	// minus the shared row, and the jump keys take either edge. A null view
-	// is the bottom, so the first step reads the bottom's index. Reaching
-	// the bottom re-pins the stream: new output comes into view again without
-	// the operator asking.
-	const scrollBody = (name: string) => {
+/**
+ * The body's scroll step for one named key. Reaching the bottom re-pins the
+ * stream: new output comes into view again without the operator asking.
+ */
+function useLiveScroll(facts: LiveBodyFacts): (name: string) => void {
+	const { maxBodyScroll, bodyRows, setBodyScroll } = facts;
+	return (name: string) => {
 		if (name === "pageup")
 			setBodyScroll((current) => Math.max(0, (current ?? maxBodyScroll) - Math.max(1, bodyRows)));
 		else if (name === "pagedown")
@@ -272,84 +339,88 @@ export function LiveView({
 		// name is a no-op, not a guess for `k`.
 		else if (name === "k") setBodyScroll((current) => Math.max(0, (current ?? maxBodyScroll) - 1));
 	};
+}
 
-	useControlDispatch({
-		facts,
-		active: inputActive,
-		onUnavailable,
-		onEmergencyExit,
-		handlers: {
-			help: () => onHelp?.(),
-			message: () => onMessage?.(),
-			"cancel-action": onCancel,
-			"scroll-body": ({ key }) => scrollBody(key.name),
-			// The plane-level keys reach every surface the chrome owns (issue
-			// #319, ADR 0111), the way the border's lamp reads the facts the
-			// toggle writes.
-			"queue-pause": onQueuePause,
-			"auto-handoff": onAutoHandoff,
-			...(decideable
-				? {
-						"confirm-action": () => region.confirm((row) => onAction(row.key)),
-						"select-action": ({ key }) => region.move(key.name === "up" ? -1 : 1),
-						"edit-action": () => {
-							const row = actions[region.at];
-							if (row !== undefined && editableActionSelected) onEditAction?.(row.key);
-						},
-					}
-				: { "live-goto": () => onGoto() }),
-		},
-	});
+/** The view's control catalogue handlers, by the sub-mode that stands. */
+function liveViewHandlers(
+	props: LiveViewProps,
+	fields: {
+		decideable: boolean;
+		region: DecisionRegion;
+		editableActionSelected: boolean;
+		scrollBody: (name: string) => void;
+	},
+): Record<string, ControlHandler> {
+	const { decideable, region, editableActionSelected, scrollBody } = fields;
+	return {
+		help: () => props.onHelp?.(),
+		message: () => props.onMessage?.(),
+		"cancel-action": props.onCancel,
+		"scroll-body": ({ key }) => scrollBody(key.name),
+		// The plane-level keys reach every surface the chrome owns (issue
+		// #319, ADR 0111), the way the border's lamp reads the facts the
+		// toggle writes.
+		"queue-pause": props.onQueuePause,
+		"auto-handoff": props.onAutoHandoff,
+		...(decideable
+			? {
+					"confirm-action": () => region.confirm((row) => props.onAction(row.key)),
+					"select-action": ({ key }) => region.move(key.name === "up" ? -1 : 1),
+					"edit-action": () => {
+						const row = props.actions[region.at];
+						if (row !== undefined && editableActionSelected) props.onEditAction?.(row.key);
+					},
+				}
+			: { "live-goto": () => props.onGoto() }),
+	};
+}
 
-	const scroll = bodyScroll === null ? maxBodyScroll : Math.min(bodyScroll, maxBodyScroll);
-	const visibleBody = windowOf(renderedBody, scroll, bodyRows);
-	const thumbRows = hasScrollbar ? scrollbarRows(renderedBody.length, bodyRows, scroll) : null;
-
+/** The view's body: the context row, the pane, the region's rows. */
+function liveViewBody(
+	props: LiveViewProps,
+	fields: {
+		frame: ReturnType<typeof modalFrame>;
+		decideable: boolean;
+		held: boolean;
+		region: DecisionRegion;
+		bodyFacts: LiveBodyFacts;
+	},
+): ModalBody {
+	const { frame, decideable, held, region, bodyFacts } = fields;
+	const regionRows = decideable ? props.actions.length : 0;
+	const { visibleBody, thumbRows } = bodyScrollWindow(bodyFacts);
 	// The context row carries the blocked status in the warning color.
 	const blockedSuffix = " · blocked";
-	const baseWidth = blocked
+	const baseWidth = props.blocked
 		? Math.max(0, frame.contentWidth - widthOf(blockedSuffix))
 		: frame.contentWidth;
-
-	const liveBody: ModalBody = {
+	return {
 		above: [
 			createElement(
 				"text",
 				{ key: "context" },
-				createElement("span", { fg: paint("subtext0") }, truncateToWidth(contextLine, baseWidth)),
-				blocked && createElement("span", { fg: paint("yellow") }, blockedSuffix),
+				createElement(
+					"span",
+					{ fg: paint("subtext0") },
+					truncateToWidth(props.contextLine, baseWidth),
+				),
+				props.blocked && createElement("span", { fg: paint("yellow") }, blockedSuffix),
 			),
 		],
 		pane: turnLogPane({
-			paneRows: layout?.paneRows ?? null,
-			panePadding,
+			paneRows: bodyFacts.layout?.paneRows ?? null,
+			panePadding: bodyFacts.panePadding,
 			visibleBody,
-			bodyWidth,
+			bodyWidth: bodyFacts.bodyWidth,
 			thumbRows,
 			title: decideable ? TURN_LOG_PANE : AGENT_VIEW_PANE,
 		}),
 		below: [
-			...(held ? [heldCauseRow(cause, detail, frame.contentWidth)] : []),
-			...decisionActionRows(region, actions, frame.contentWidth),
+			...(held && props.cause != null
+				? [heldCauseRow(props.cause, props.detail ?? "", frame.contentWidth)]
+				: []),
+			...decisionActionRows(region, props.actions, frame.contentWidth),
 		],
 		minRows: CONTEXT_ROWS + (held ? 1 : 0) + PANE_BORDERS + BODY_MIN + Math.min(1, regionRows),
 	};
-
-	return createElement(ModalSurface, {
-		frame,
-		width: terminalWidth,
-		// The border re-titles `Live:` to `Decision:` when the turn settles
-		// for the operator: the prefix is the chrome's, so both paths into
-		// the decision end at one screen with one name (ADR 0040).
-		title: decideable ? decisionTitle(title) : liveTitle(title),
-		opacity: pop,
-		body: liveBody,
-		message,
-		bar: {
-			mode: facts.mode,
-			facts,
-			rangeIndicator: region.rangeText,
-		},
-		queuePaused: standing.queuePaused,
-	});
 }

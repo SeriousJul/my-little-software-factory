@@ -201,7 +201,42 @@ export function turnLogFromPiSession(jsonl: string): TurnLogEntry[] | null {
  * line yields `unavailable`; a well-formed record without messages yields
  * `no-turn`.
  */
-export function turnEndFromPiSession(jsonl: string, startedAt: string | null): SessionTurnRead {
+/** The assistant message's entries: its text and its tool calls. */
+function assistantEntries(
+	message: Record<string, unknown>,
+	entries: TurnLogEntry[],
+	toolById: Map<string, ToolEntry>,
+): void {
+	const content = Array.isArray(message.content) ? message.content : [];
+	for (const part of content) {
+		if (!isRecord(part)) continue;
+		if (part.type === "text" && typeof part.text === "string" && part.text.trim() !== "") {
+			entries.push({ kind: "text", text: part.text });
+		} else if (part.type === "toolCall" && typeof part.name === "string") {
+			const entry: ToolEntry = {
+				kind: "tool",
+				name: part.name,
+				target: toolTarget(part.name, isRecord(part.arguments) ? part.arguments : {}),
+				failed: false,
+			};
+			entries.push(entry);
+			if (typeof part.id === "string") toolById.set(part.id, entry);
+		}
+		// thinking parts are the agent's inner notes: not part of the work.
+	}
+}
+
+/** The session's lines, read into the turn's entries and its stop facts. */
+function piSessionScan(jsonl: string):
+	| { kind: "unavailable" }
+	| { kind: "no-turn" }
+	| {
+			kind: "scanned";
+			entries: TurnLogEntry[];
+			lastStop: string | undefined;
+			lastError: string | undefined;
+			lastTs: number | null;
+	  } {
 	const entries: TurnLogEntry[] = [];
 	const toolById = new Map<string, ToolEntry>();
 	let sawMessage = false;
@@ -220,23 +255,7 @@ export function turnEndFromPiSession(jsonl: string, startedAt: string | null): S
 			lastStop = typeof message.stopReason === "string" ? message.stopReason : undefined;
 			lastError = typeof message.errorMessage === "string" ? message.errorMessage : undefined;
 			lastTs = parseTimestamp(record.timestamp ?? message.timestamp) ?? lastTs;
-			const content = Array.isArray(message.content) ? message.content : [];
-			for (const part of content) {
-				if (!isRecord(part)) continue;
-				if (part.type === "text" && typeof part.text === "string" && part.text.trim() !== "") {
-					entries.push({ kind: "text", text: part.text });
-				} else if (part.type === "toolCall" && typeof part.name === "string") {
-					const entry: ToolEntry = {
-						kind: "tool",
-						name: part.name,
-						target: toolTarget(part.name, isRecord(part.arguments) ? part.arguments : {}),
-						failed: false,
-					};
-					entries.push(entry);
-					if (typeof part.id === "string") toolById.set(part.id, entry);
-				}
-				// thinking parts are the agent's inner notes: not part of the work.
-			}
+			assistantEntries(message, entries, toolById);
 		} else if (message.role === "toolResult") {
 			// The result follows the call: mark the matching note failed when
 			// the runtime reports an error.
@@ -248,6 +267,14 @@ export function turnEndFromPiSession(jsonl: string, startedAt: string | null): S
 		}
 	}
 	if (!sawMessage) return { kind: "no-turn" };
+	return { kind: "scanned", entries, lastStop, lastError, lastTs };
+}
+
+/** The cause and detail the last assistant message's stop reason states. */
+function piStopCause(
+	lastStop: string | undefined,
+	lastError: string | undefined,
+): { cause: TurnEndCause; detail: string } {
 	let cause: TurnEndCause;
 	let detail = "";
 	switch (lastStop) {
@@ -268,11 +295,18 @@ export function turnEndFromPiSession(jsonl: string, startedAt: string | null): S
 		default:
 			cause = "unknown";
 	}
+	return { cause, detail };
+}
+
+export function turnEndFromPiSession(jsonl: string, startedAt: string | null): SessionTurnRead {
+	const scan = piSessionScan(jsonl);
+	if (scan.kind !== "scanned") return { kind: scan.kind };
+	const { cause, detail } = piStopCause(scan.lastStop, scan.lastError);
 	return {
 		kind: "ended",
 		turnEnd: {
-			log: entries,
-			cause: applyStalenessGuard(cause, lastTs, startedAt),
+			log: scan.entries,
+			cause: applyStalenessGuard(cause, scan.lastTs, startedAt),
 			detail: capDetail(detail),
 		},
 	};

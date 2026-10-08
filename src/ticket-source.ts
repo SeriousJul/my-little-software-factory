@@ -448,6 +448,73 @@ function normalizeGitHubNode(
 	| { ok: true; ticket: FetchedTicket; blocked: boolean; open: boolean }
 	| { ok: false; reason: string } {
 	const item = node as Record<string, unknown>;
+	const gate = githubNodeGate(config, item);
+	if (!gate.ok) return { ok: false, reason: gate.reason };
+	const { id, number, title, url, state, updatedAt, nameWithOwner } = gate;
+	const labelNames = labelNamesOf(item.labels);
+	if (labelNames === undefined) return { ok: false, reason: "GitHub returned an unreadable label" };
+	const isDraft = item.isDraft;
+	const headRefName = stringOf(item.headRefName);
+	if (
+		config.kind === "github-pull-requests" &&
+		(typeof isDraft !== "boolean" || headRefName === undefined)
+	)
+		return { ok: false, reason: "GitHub returned an unreadable pull request" };
+	// The pull request's closing-issue references, stored as source facts on
+	// its membership (ADR 0042). A refresh can change them.
+	const references =
+		config.kind === "github-pull-requests"
+			? parseClosingReferences(item.closingIssuesReferences, config.host)
+			: [];
+	// The issue's native "blocked by" links. A pull request carries no
+	// links, and a server that answers without the field blocks nothing:
+	// only a present but unreadable field fails the source.
+	const blocked = isBlockedByOpenIssue(item.blockedBy);
+	if (blocked === undefined)
+		return { ok: false, reason: "GitHub returned an unreadable blocked-by link" };
+	return {
+		ok: true,
+		// The one live state every source lists: a node in any other state
+		// has left the open work, whatever the search index still answers.
+		open: state.toUpperCase() === "OPEN",
+		ticket: githubTicketOf(config, item, {
+			id,
+			number,
+			title,
+			url,
+			state,
+			updatedAt,
+			nameWithOwner,
+			labelNames,
+			isDraft,
+			headRefName,
+			references,
+			blocked,
+		}),
+		blocked,
+	};
+}
+
+/**
+ * The node's verified fields: the kind the source configured, the fields the
+ * node must hold, and the repository it must name.
+ */
+function githubNodeGate(
+	config: TicketSourceConfig,
+	item: Record<string, unknown>,
+):
+	| {
+			ok: true;
+			id: string;
+			number: number;
+			title: string;
+			url: string;
+			state: string;
+			updatedAt: string;
+			nameWithOwner: string;
+			displayName: string;
+	  }
+	| { ok: false; reason: string } {
 	const expectedTypename = config.kind === "github-issues" ? "Issue" : "PullRequest";
 	// The search query and this result check both enforce the configured kind.
 	// A custom filter cannot turn an Issues source into a pull request source.
@@ -487,59 +554,55 @@ function normalizeGitHubNode(
 			reason: `GitHub returned a ticket outside configured repositories: ${nameWithOwner}`,
 		};
 	}
-	const labelNames = labelNamesOf(item.labels);
-	if (labelNames === undefined) return { ok: false, reason: "GitHub returned an unreadable label" };
-	const isDraft = item.isDraft;
-	const headRefName = stringOf(item.headRefName);
-	if (
-		config.kind === "github-pull-requests" &&
-		(typeof isDraft !== "boolean" || headRefName === undefined)
-	)
-		return { ok: false, reason: "GitHub returned an unreadable pull request" };
-	// The pull request's closing-issue references, stored as source facts on
-	// its membership (ADR 0042). A refresh can change them.
-	const references =
-		config.kind === "github-pull-requests"
-			? parseClosingReferences(item.closingIssuesReferences, config.host)
-			: [];
-	// The issue's native "blocked by" links. A pull request carries no
-	// links, and a server that answers without the field blocks nothing:
-	// only a present but unreadable field fails the source.
-	const blocked = isBlockedByOpenIssue(item.blockedBy);
-	if (blocked === undefined)
-		return { ok: false, reason: "GitHub returned an unreadable blocked-by link" };
+	return { ok: true, id, number, title, url, state, updatedAt, nameWithOwner, displayName };
+}
+
+/** The fetched ticket the verified node names. */
+function githubTicketOf(
+	config: TicketSourceConfig,
+	item: Record<string, unknown>,
+	facts: {
+		id: string;
+		number: number;
+		title: string;
+		url: string;
+		state: string;
+		updatedAt: string;
+		nameWithOwner: string;
+		labelNames: string[];
+		isDraft: unknown;
+		headRefName: string | undefined;
+		references: IssueReference[];
+		blocked: boolean;
+	},
+): FetchedTicket {
+	const { id, number, title, url, state, updatedAt, nameWithOwner } = facts;
+	const { labelNames, isDraft, headRefName, references } = facts;
 	return {
-		ok: true,
-		// The one live state every source lists: a node in any other state
-		// has left the open work, whatever the search index still answers.
-		open: state.toUpperCase() === "OPEN",
-		ticket: {
-			identity: `github:${config.host.toLowerCase()}:${id}`,
-			sourceKind: config.kind === "github-issues" ? "github-issue" : "github-pull-request",
-			externalKey: `#${number}`,
-			sourceState: state.toLowerCase(),
-			url,
-			title,
-			description: typeof item.body === "string" ? item.body : "",
-			labels: labelNames,
-			externalUpdatedAt: updatedAt,
-			repository: {
-				// The canonical repository identity is lowercase (the config
-				// contract): the owner casing the API answers stays in the
-				// display name only. A stored identity that keeps the API
-				// casing breaks the case-insensitive repository equality every
-				// cross-source rule reads, the fixing pull request's branch
-				// link among them (ADR 0042).
-				identity: `${config.host.toLowerCase()}/${nameWithOwner.toLowerCase()}`,
-				displayName: nameWithOwner,
-				cloneUrl: `https://${config.host}/${nameWithOwner}.git`,
-			},
-			attributes:
-				config.kind === "github-pull-requests" && headRefName !== undefined
-					? withHeadBranch(withIssueReferences({ draft: String(isDraft) }, references), headRefName)
-					: {},
+		identity: `github:${config.host.toLowerCase()}:${id}`,
+		sourceKind: config.kind === "github-issues" ? "github-issue" : "github-pull-request",
+		externalKey: `#${number}`,
+		sourceState: state.toLowerCase(),
+		url,
+		title,
+		description: typeof item.body === "string" ? item.body : "",
+		labels: labelNames,
+		externalUpdatedAt: updatedAt,
+		repository: {
+			// The canonical repository identity is lowercase (the config
+			// contract): the owner casing the API answers stays in the
+			// display name only. A stored identity that keeps the API
+			// casing breaks the case-insensitive repository equality every
+			// cross-source rule reads, the fixing pull request's branch
+			// link among them (ADR 0042).
+			identity: `${config.host.toLowerCase()}/${nameWithOwner.toLowerCase()}`,
+			displayName: nameWithOwner,
+			cloneUrl: `https://${config.host}/${nameWithOwner}.git`,
 		},
-		blocked,
+		attributes:
+			config.kind === "github-pull-requests" && headRefName !== undefined
+				? withHeadBranch(withIssueReferences({ draft: String(isDraft) }, references), headRefName)
+				: {},
 	};
 }
 

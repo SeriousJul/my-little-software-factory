@@ -14,7 +14,7 @@
  */
 import { createElement, useTerminalDimensions } from "@opentui/react";
 import type { ReactElement } from "react";
-import { useRef, useState } from "react";
+import { type RefObject, useRef, useState } from "react";
 import { CONSULTATION_INPUT_LIMIT, responseOversize } from "../../consultation/response-draft.ts";
 import { agentPoll } from "../../domain/agent.ts";
 import type { AutoHandoffCell, AutoHandoffMode } from "../../domain/section-facts.ts";
@@ -77,6 +77,7 @@ import { DraftField, type FieldFacts, type FieldHandle, TextField } from "./fiel
 import { copySelectionWith } from "./form.ts";
 import { type GroupCursorFacts, type ListedRow, ticketRows } from "./grouping.ts";
 import {
+	type ControlInk,
 	controlInk,
 	inkForTheme,
 	NO_COLOR_INK,
@@ -623,6 +624,43 @@ function heldCompletion(): Completion {
 }
 
 /** The Ticket the Ticket-Goto and Ticket-Close examples render under. */
+/** The handoff a sample Ticket carries while its state is not open. */
+function sampleHandoff(environment: "worktree" | "live-worktree"): NonNullable<Ticket["handoff"]> {
+	return {
+		agentType: "pi",
+		environment,
+		taskType: "implement",
+		model: "",
+		thinking: "",
+		contextWindow: "",
+		attemptId: "attempt-t1",
+		paneId: "pane-t1",
+		tabId: "tab-ws-t",
+		workspaceId: "ws-t",
+		herdrName: "fix-the-layout-math",
+	};
+}
+
+/** The settled turn an `awaiting` sample Ticket holds. */
+function sampleCompletion(): NonNullable<Ticket["lastCompletion"]> {
+	const now = "2026-02-17T10:00:00.000Z";
+	return {
+		taskType: "implement",
+		transition: null,
+		agentType: "pi",
+		agentName: "fix-the-layout-math",
+		model: "",
+		thinking: "",
+		contextWindow: "",
+		completedAt: now,
+		message: "The turn is done.",
+		turnLog: [{ kind: "text", text: "The turn is done." }],
+		cause: "completed",
+		detail: "",
+		decision: null,
+	};
+}
+
 function sampleTicket(
 	state: "running" | "awaiting" | "open",
 	environment: "worktree" | "live-worktree" = "worktree",
@@ -640,45 +678,13 @@ function sampleTicket(
 			cloneUrl: "",
 		},
 		state,
-		handoff:
-			state === "open"
-				? null
-				: {
-						agentType: "pi",
-						environment,
-						taskType: "implement",
-						model: "",
-						thinking: "",
-						contextWindow: "",
-						attemptId: "attempt-t1",
-						paneId: "pane-t1",
-						tabId: "tab-ws-t",
-						workspaceId: "ws-t",
-						herdrName: "fix-the-layout-math",
-					},
+		handoff: state === "open" ? null : sampleHandoff(environment),
 		workCycle: 1,
 		handoffCount: 1,
 		failedStartStreak: 0,
 		// An `awaiting` Ticket holds the settled turn the Close decision records
 		// on, so the confirmation's first line can name the turn that settled.
-		lastCompletion:
-			state === "awaiting"
-				? {
-						taskType: "implement",
-						transition: null,
-						agentType: "pi",
-						agentName: "fix-the-layout-math",
-						model: "",
-						thinking: "",
-						contextWindow: "",
-						completedAt: now,
-						message: "The turn is done.",
-						turnLog: [{ kind: "text", text: "The turn is done." }],
-						cause: "completed",
-						detail: "",
-						decision: null,
-					}
-				: null,
+		lastCompletion: state === "awaiting" ? sampleCompletion() : null,
 		description: "",
 		sourceKind: "github-issue",
 		externalKey: "17",
@@ -699,6 +705,652 @@ function sampleTicket(
 		leftover: null,
 		nameCollision: null,
 	};
+}
+
+/** The item the Work queue example's row waits on. */
+function sampleQueueItem(): WorkQueueItem {
+	return {
+		kind: "handoff",
+		position: 1,
+		ticketIdentity: "github:github.com:SeriousJul/my-little-software-factory#43",
+		routeFromIdentity: null,
+		origin: "restart",
+		choice: {
+			agentType: "pi",
+			environment: "worktree",
+			taskType: "implement",
+			model: "",
+			thinking: "",
+			contextWindow: "",
+		},
+		previousMessage: "",
+		enqueuedAt: "2026-02-17T10:03:00.000Z",
+		automatic: false,
+	};
+}
+
+/** The two bars the queue's keys come from, open and paused. */
+function workQueueSampleBars(columns: GalleryColumns, item: WorkQueueItem): ReactElement[] {
+	return [
+		// The bar the queue's own keys come from: the order-move keys stand
+		// on it, and the pause key's hint stands on it only while the
+		// pause stands, the label flipping to the word the brake offers.
+		createElement(ActionBar, {
+			key: "queue-bar",
+			mode: "work-queue-list",
+			facts: availabilityFacts("work-queue-list", GALLERY_STANDING, {
+				...NO_QUEUE,
+				selectedWorkQueueItem: item,
+				workQueueDepth: 1,
+				listCanMove: true,
+			}),
+			width: columns.contentWidth,
+		}),
+		createElement(ActionBar, {
+			key: "queue-bar-paused",
+			mode: "work-queue-list",
+			facts: availabilityFacts(
+				"work-queue-list",
+				{ ...GALLERY_STANDING, queuePaused: true },
+				{
+					...NO_QUEUE,
+					selectedWorkQueueItem: item,
+					workQueueDepth: 1,
+					listCanMove: true,
+				},
+			),
+			width: columns.contentWidth,
+		}),
+	];
+}
+
+/** The Work queue example's rows: the header, the bars, the lines. */
+function workQueueSampleRows(
+	columns: GalleryColumns,
+	item: WorkQueueItem,
+	ink: ControlInk,
+): ReactElement[] {
+	return [
+		// The Work section's header: its depth cell, whole. The Queue
+		// pause's display stands at the Ticket header's corner and the
+		// modal's border lamp (issue #319, ADR 0111), not beside the depth.
+		createElement(SectionHeader, {
+			key: "work-header",
+			section: "work",
+			active: true,
+			terminalWidth: columns.contentWidth,
+			width: columns.contentWidth,
+			expanded: true,
+			waiting: 1,
+			onToggle: () => undefined,
+		}),
+		...workQueueSampleBars(columns, item),
+		// The Message lines the pause and the resume leave, in the words
+		// the plane says them (app.ts: the toggle's own notice).
+		messageRowElement(
+			{
+				severity: "info",
+				text: "Work queue paused",
+			},
+			columns.contentWidth,
+		),
+		messageRowElement(
+			{
+				severity: "info",
+				text: "Work queue resumed",
+			},
+			columns.contentWidth,
+		),
+		createElement(
+			"text",
+			{
+				key: "queue-order-note",
+				style: { width: "100%", height: 1 },
+				fg: ink.detail.fg ?? undefined,
+			},
+			truncateToWidth(
+				"+ promotes the selected item, - demotes it, and the top item is next in line for a seat",
+				columns.contentWidth,
+			),
+		),
+	];
+}
+
+/** The rows the grouping example's lists hold. */
+function ticketGroupsListed(): readonly Ticket[] {
+	return [
+		groupTicket({
+			number: 1,
+			repository: "acme/billing",
+			title: "Webhook retry policy",
+			state: "open",
+			taskType: "implement",
+		}),
+		{
+			...groupTicket({
+				number: 2,
+				repository: "acme/billing",
+				title: "Hold the failed turn",
+				state: "awaiting",
+				taskType: "implement",
+			}),
+			lastCompletion: heldCompletion(),
+		},
+		// The routed row is an open ticket that wears the Queue wait
+		// badge (ADR 0072): the route's ask ended the cycle and the
+		// wait stands on the item alone.
+		groupTicket({
+			number: 3,
+			repository: "acme/factory",
+			title: "Route the settled review",
+			state: "open",
+			taskType: "review",
+		}),
+		groupTicket({
+			number: 4,
+			repository: "acme/factory",
+			title: "Split the gallery view",
+			state: "open",
+			taskType: "review",
+		}),
+		groupTicket({
+			number: 5,
+			repository: "acme/factory",
+			title: "Park the legacy importer",
+			state: "running",
+			taskType: "fix",
+		}),
+	];
+}
+
+/** The grouping example's note row, under its lists. */
+function ticketGroupsNote(columns: GalleryColumns): ReactElement {
+	return createElement(
+		"text",
+		{
+			key: "groups-note",
+			style: { width: "100%", height: 1 },
+			fg: controlInk().detail.fg ?? undefined,
+		},
+		truncateToWidth(
+			"Tab cycles the axis; Space on a Group header folds it, x folds the Section, and + and - move the Group, the order saving with the state",
+			columns.contentWidth,
+		),
+	);
+}
+
+/** The grouping example's Ticket list, on its rows and its height. */
+function ticketGroupsList(
+	key: string,
+	rows: readonly ListedRow<TicketRowFacts>[],
+	height: number,
+): ReactElement {
+	return createElement(TicketList, {
+		key,
+		rows,
+		selectedIndex: key === "grouped" ? 1 : 0,
+		focused: true,
+		height,
+		active: true,
+		onFocus: () => undefined,
+		onSelect: () => undefined,
+		onMove: () => undefined,
+	});
+}
+
+/** The grouping example's bar, on a row or on a Group header. */
+function ticketGroupsBar(columns: GalleryColumns, key: string, header: boolean): ReactElement {
+	return createElement(ActionBar, {
+		key,
+		mode: "ticket-list",
+		facts: availabilityFacts("ticket-list", GALLERY_STANDING, {
+			listCanMove: true,
+			selectedTicket: header ? undefined : ticketGroupsListed()[0],
+			...NO_TICKET_ROW,
+			groupingAxis: "repository",
+			...NO_GROUP,
+			groupHeaderSelected: header,
+			selectedGroupHeader: header
+				? { value: "acme/billing", count: 2, held: 1, collapsed: false }
+				: null,
+			visibleGroupHeaderCount: 1,
+			queueItemForSelectedRow: null,
+		}),
+		width: columns.contentWidth,
+	});
+}
+
+/** The item the delete example's open Ticket waits on. */
+function deleteWaitingItem(): WorkQueueItem {
+	const now = "2026-02-17T10:00:00.000Z";
+	return {
+		kind: "handoff",
+		position: 0,
+		ticketIdentity: sampleTicket("open").identity,
+		automatic: false,
+		routeFromIdentity: null,
+		origin: "open",
+		choice: {
+			agentType: "pi",
+			environment: "worktree",
+			taskType: "implement",
+			model: "",
+			thinking: "",
+			contextWindow: "",
+		},
+		previousMessage: "",
+		enqueuedAt: now,
+	};
+}
+
+/** The facts the delete key's ticket bar reads. */
+function deleteTicketFacts(queueItem: WorkQueueItem | null): AvailabilityFacts {
+	return availabilityFacts("ticket-list", GALLERY_STANDING, {
+		selectedTicket: sampleTicket(queueItem === null ? "running" : "open"),
+		...NO_TICKET_ROW,
+		groupingAxis: "none" as const,
+		...NO_GROUP,
+		listCanMove: true,
+		queueItemForSelectedRow: queueItem,
+	});
+}
+
+/** The facts the delete key's consultation bar reads. */
+function deleteConsultationFacts(
+	record: Consultation,
+	refreshAvailable: boolean,
+): AvailabilityFacts {
+	return availabilityFacts("consultation-list", GALLERY_STANDING, {
+		selectedConsultation: record,
+		consultationRefreshAvailable: refreshAvailable,
+		consultationAgentStatus: null,
+		consultationPaneAlive: false,
+		listCanMove: true,
+		queueItemForSelectedRow: null,
+	});
+}
+
+/** The facts the delete key's queue bar reads. */
+function deleteQueueFacts(item: WorkQueueItem): AvailabilityFacts {
+	return availabilityFacts("work-queue-list", GALLERY_STANDING, {
+		selectedWorkQueueItem: item,
+		workQueueDepth: 1,
+		listCanMove: true,
+	});
+}
+
+/** The delete key's example bars, one per surface the key reaches. */
+function deleteSampleRows(columns: GalleryColumns): ReactElement[] {
+	const bar = (
+		key: string,
+		mode: "ticket-list" | "consultation-list" | "work-queue-list",
+		facts: AvailabilityFacts,
+	) =>
+		createElement(ActionBar, {
+			key,
+			mode,
+			facts,
+			width: columns.contentWidth,
+		});
+	const waitingItem = deleteWaitingItem();
+	return [
+		bar("delete-ticket-close", "ticket-list", deleteTicketFacts(null)),
+		bar("delete-ticket-remove", "ticket-list", deleteTicketFacts(waitingItem)),
+		bar(
+			"delete-consultation-close",
+			"consultation-list",
+			deleteConsultationFacts(sampleConsultation("working"), true),
+		),
+		bar(
+			"delete-consultation-remove",
+			"consultation-list",
+			deleteConsultationFacts(sampleConsultation("closed"), false),
+		),
+		bar("delete-queue-remove", "work-queue-list", deleteQueueFacts(waitingItem)),
+	];
+}
+
+/**
+ * The three rows the ignore key refuses, each with its own line: the awaiting
+ * state, the held turn beside its undecided decision, and the last poll's
+ * missing-Agent marker - the same marker the row's badge wears.
+ */
+function ticketIgnoreRefusedRows(columns: GalleryColumns): ReactElement[] {
+	const awaiting = ticketIgnoreContext("awaiting", false);
+	const held = ticketIgnoreContext("held", false);
+	const missing = ticketIgnoreContext("running", false, "missing");
+	const refusedBar = (key: string, facts: AvailabilityFacts) =>
+		createElement(ActionBar, {
+			key,
+			mode: facts.mode,
+			facts,
+			width: columns.contentWidth,
+		});
+	const rows: ReactElement[] = [
+		// The awaiting row: the key is there, dimmed, and the reason is one
+		// press away on the line the operator already watches.
+		refusedBar("awaiting-refused", awaiting),
+		messageRowElement(
+			{ severity: "warning", text: ticketIgnoreRefusal(awaiting) },
+			columns.contentWidth,
+		),
+		// The held row: the same sentence, in the held turn's own clause.
+		refusedBar("held-refused", held),
+		messageRowElement(
+			{ severity: "warning", text: ticketIgnoreRefusal(held) },
+			columns.contentWidth,
+		),
+		// The missing Agent's refusal reads the marker the row's own badge
+		// wears, and the refused key leaves no hint on the bar.
+		refusedBar("missing-refused", missing),
+		messageRowElement(
+			{ severity: "warning", text: ticketIgnoreRefusal(missing) },
+			columns.contentWidth,
+		),
+	];
+	return rows;
+}
+
+/** The items the Work queue list's rows wait on, in queue order. */
+function workQueueListItems(): WorkQueueItem[] {
+	return [
+		{
+			kind: "handoff",
+			position: 0,
+			ticketIdentity: "github:github.com:SeriousJul/my-little-software-factory#42",
+			routeFromIdentity: null,
+			origin: "open",
+			choice: {
+				agentType: "pi",
+				environment: "worktree",
+				taskType: "implement",
+				model: "",
+				thinking: "",
+				contextWindow: "",
+			},
+			previousMessage: "",
+			enqueuedAt: "2026-02-17T10:00:00.000Z",
+			automatic: false,
+		},
+		{
+			kind: "handoff",
+			position: 1,
+			ticketIdentity: "github:github.com:SeriousJul/my-little-software-factory#43",
+			routeFromIdentity: "github:github.com:SeriousJul/my-little-software-factory#41",
+			origin: "workflow",
+			choice: {
+				agentType: "pi",
+				environment: "worktree",
+				taskType: "implement",
+				model: "",
+				thinking: "",
+				contextWindow: "",
+			},
+			previousMessage: "the workflow named the next task",
+			enqueuedAt: "2026-02-17T10:01:00.000Z",
+			// The automatic flag marks the top-up's adds (ADR 0051): this
+			// route is one the auto top-up asked for, and its start lands the
+			// route's decision the automatic way.
+			automatic: true,
+		},
+		// The `queued` Consultation's item (issue #90): the pointer stands
+		// in the same order, under the record's type and its identity
+		// prefix.
+		{
+			kind: "consultation",
+			position: 2,
+			consultationId: "c1c1c1c1-1111-4111-8111-111111111111",
+			enqueuedAt: "2026-02-17T10:02:00.000Z",
+		},
+		// The plane action's item (ADR 0068): it carries the task type whose
+		// action form the pickup runs, and no choice of its own.
+		{
+			kind: "plane-action",
+			position: 3,
+			ticketIdentity: "github:github.com:SeriousJul/my-little-software-factory#44",
+			routeFromIdentity: null,
+			automatic: false,
+			origin: "open",
+			taskType: "merge",
+			enqueuedAt: "2026-02-17T10:03:00.000Z",
+		},
+	];
+}
+
+/** The Work queue list's rows, on the items it holds. */
+function workQueueListRowFacts(items: WorkQueueItem[]): readonly WorkQueueRow[] {
+	return workQueueRowFacts(items, {
+		ticketTitle: (identity) =>
+			identity === "github:github.com:SeriousJul/my-little-software-factory#42"
+				? "Add a webhook retry policy"
+				: identity === "github:github.com:SeriousJul/my-little-software-factory#43"
+					? "Close the stale deploy branch"
+					: identity === "github:github.com:SeriousJul/my-little-software-factory#44"
+						? "Merge the auth fix"
+						: undefined,
+		consultationType: (id) =>
+			id === "c1c1c1c1-1111-4111-8111-111111111111" ? "Review" : undefined,
+		consultationInput: (id) =>
+			id === "c1c1c1c1-1111-4111-8111-111111111111" ? "review the auth design" : undefined,
+		planeActionMethod: (taskType) => (taskType === "merge" ? "squash" : undefined),
+	});
+}
+
+/** The Work queue list's rows: the queue, the empty state, the bar. */
+function workQueueListSampleRows(columns: GalleryColumns, items: WorkQueueItem[]): ReactElement[] {
+	return [
+		createElement(WorkQueueList, {
+			key: "queue",
+			rows: workQueueListRowFacts(items),
+			selectedIndex: 0,
+			focused: true,
+			height: 8,
+			onFocus: () => undefined,
+			onSelect: () => undefined,
+			onMove: () => undefined,
+		}),
+		// The empty state with the cursor resting on it (ADR 0049): the
+		// empty message is the row the cursor takes, and the focus holds
+		// there, the way the other sections' empty lists do.
+		createElement(WorkQueueList, {
+			key: "queue-empty",
+			rows: [],
+			selectedIndex: 0,
+			focused: true,
+			height: 3,
+			onFocus: () => undefined,
+			onSelect: () => undefined,
+			onMove: () => undefined,
+		}),
+		createElement(ActionBar, {
+			key: "queue-bar",
+			mode: "work-queue-list",
+			facts: availabilityFacts("work-queue-list", GALLERY_STANDING, {
+				...NO_QUEUE,
+				selectedWorkQueueItem: items[0],
+				workQueueDepth: items.length,
+				listCanMove: true,
+			}),
+			width: columns.contentWidth,
+		}),
+	];
+}
+
+/** The entries the narrow example's history pane holds. */
+function narrowSampleEntries(): MessageHistoryEntry[] {
+	return [
+		{
+			severity: "info",
+			at: 1761638400000,
+			text: 'the merge of "Persist the source facts" is in the Work queue',
+		},
+		{ severity: "warning", at: 1761638412000, text: "no Ticket sources exist" },
+	];
+}
+
+/** The narrow example's Model field and Initial input draft. */
+function narrowSampleFields(fields: {
+	columns: GalleryColumns;
+	holds: string;
+	wiring: GalleryFieldWiring;
+}): ReactElement[] {
+	const { columns, holds, wiring } = fields;
+	return [
+		createElement(TextField, {
+			key: "model",
+			label: "Model",
+			value: "anthropic/claude-sonnet-4-5-with-a-long-tail",
+			focused: holds === "model",
+			width: columns.valueWidth,
+			labelWidth: columns.labelWidth,
+		}),
+		createElement(DraftField, {
+			key: "draft",
+			label: "Initial input",
+			value: "a draft wide enough that its own column has to scroll to the caret",
+			focused: holds === "draft",
+			width: columns.valueWidth,
+			labelWidth: columns.labelWidth,
+			height: 2,
+			...(holds === "draft" ? { fieldRef: wiring.fieldRef, onValueChange: wiring.report } : {}),
+		}),
+	];
+}
+
+/**
+ * The Message view's history on the narrow frame (ADR 0119): the same
+ * cells as the wide example, wrapped to the room the frame leaves.
+ */
+function narrowSampleHistory(
+	columns: GalleryColumns,
+	entries: MessageHistoryEntry[],
+): ReactElement {
+	// The pane's border and its padding leave the body four cells inside
+	// the box's content, the way the view's layout pays them.
+	const bodyWidth = Math.max(1, columns.contentWidth - 4);
+	const lines = messageHistoryBody(entries, bodyWidth);
+	return createElement(
+		"box",
+		{ key: "narrow-message-history", style: { flexDirection: "column" } },
+		paneElement(
+			{
+				title: "Messages",
+				rows: lines.map((line, index) =>
+					createElement(
+						"text",
+						{ key: `narrow-message-history-${index}` },
+						...bodyRowSpans(line, bodyWidth, undefined),
+					),
+				),
+				vpad: 1,
+				height: lines.length + 4,
+			},
+			columns.contentWidth,
+		),
+	);
+}
+
+/** The entries the no-color example's history pane holds. */
+function noColorEntries(): MessageHistoryEntry[] {
+	return [
+		{
+			severity: "info",
+			at: 1761638400000,
+			text: 'the merge of "Persist the source facts" is in the Work queue',
+		},
+		{ severity: "warning", at: 1761638412000, text: "no Ticket sources exist" },
+		{
+			severity: "error",
+			at: 1761638425000,
+			text: "the herdr name fix-the-merge-4c4d97ed is held by a pane herdr did not name, which is no agent of this ticket: agent name fix-the-merge-4c4d97ed is already used (agent_name_taken)",
+		},
+	];
+}
+
+/** The no-color example's field, choice, spinner, and action rows. */
+function noColorControls(fields: {
+	columns: GalleryColumns;
+	holds: string;
+	inputActive: boolean;
+	wiring: GalleryFieldWiring;
+}): ReactElement[] {
+	const { columns, holds, inputActive, wiring } = fields;
+	return [
+		createElement(TextField, {
+			key: "no-color-model",
+			label: "Model",
+			value: "openai/gpt-5.1",
+			focused: holds === "no-color-model",
+			inputActive,
+			width: columns.valueWidth,
+			labelWidth: columns.labelWidth,
+			ink: NO_COLOR_INK,
+			...(holds === "no-color-model"
+				? { fieldRef: wiring.fieldRef, onValueChange: wiring.report }
+				: {}),
+		}),
+		createElement(ChoiceRow, {
+			key: "no-color-repository",
+			label: "Repository",
+			value: "my-little-software-factory",
+			focused: holds === "no-color-repository",
+			width: columns.valueWidth,
+			labelWidth: columns.labelWidth,
+			ink: NO_COLOR_INK,
+		}),
+		// The spinner face in the no-color ink: the written word stands,
+		// and the renderer's default shows through where the color would be.
+		createElement(Spinner, {
+			key: "no-color-starting",
+			word: "starting",
+			width: 12,
+			ink: NO_COLOR_INK,
+		}),
+		createElement(
+			"box",
+			{ key: "no-color-actions", style: { flexDirection: "column" } },
+			createElement(ActionItem, {
+				row: { key: "no-color-launch", label: "Launch Consultation" } satisfies ActionRow,
+				focused: holds === "no-color-launch",
+				width: columns.contentWidth,
+				ink: NO_COLOR_INK,
+			}),
+		),
+	];
+}
+
+/**
+ * The Message view's history in the no-color presentation (issue #331):
+ * the module builds the rows, and the presentation drops the color the
+ * roles would carry, the way NO_COLOR_INK does for every control here.
+ * The chip's written word is the whole message.
+ */
+function noColorHistory(columns: GalleryColumns, entries: MessageHistoryEntry[]): ReactElement {
+	// The pane's border and its padding leave the body four cells inside
+	// the box's content, the way the view's layout pays them.
+	const bodyWidth = Math.max(1, columns.contentWidth - 4);
+	const lines = messageHistoryBody(entries, bodyWidth).map((line) =>
+		line.map((span) => ({ ...span, fg: undefined })),
+	);
+	return createElement(
+		"box",
+		{ key: "no-color-message-history", style: { flexDirection: "column" } },
+		paneElement(
+			{
+				title: "Messages",
+				rows: lines.map((line, index) =>
+					createElement(
+						"text",
+						{ key: `no-color-message-history-${index}` },
+						...bodyRowSpans(line, bodyWidth, undefined),
+					),
+				),
+				vpad: 1,
+				height: lines.length + 4,
+			},
+			columns.contentWidth,
+		),
+	);
 }
 
 /** The source name the mute examples act on (ADR 0070). */
@@ -1029,6 +1681,112 @@ function autoHandoffCell(
 	};
 }
 
+/** The Auto-handoff example's headers: the mode's own three states. */
+function autoModePrimaryHeaders(columns: GalleryColumns): ReactElement[] {
+	return [
+		createElement(SectionHeader, {
+			key: "tickets-header-auto",
+			section: "tickets",
+			active: true,
+			terminalWidth: columns.contentWidth,
+			width: columns.contentWidth,
+			expanded: true,
+			open: 2,
+			running: 1,
+			awaiting: 0,
+			mode: autoHandoffCell("auto", 1, 2),
+			onToggle: () => undefined,
+		}),
+		createElement(SectionHeader, {
+			key: "tickets-header-manual",
+			section: "tickets",
+			active: true,
+			terminalWidth: columns.contentWidth,
+			width: columns.contentWidth,
+			expanded: true,
+			open: 2,
+			running: 1,
+			awaiting: 0,
+			mode: autoHandoffCell("manual", 1, 2),
+			onToggle: () => undefined,
+		}),
+		// The Dispatch pause (ADR 0016, ADR 0111): the word the cell wears
+		// while the pause holds the automatic works - the word the plane
+		// now says is `held`, the Dispatch pause's own word.
+		createElement(SectionHeader, {
+			key: "tickets-header-paused",
+			section: "tickets",
+			active: true,
+			terminalWidth: columns.contentWidth,
+			width: columns.contentWidth,
+			expanded: true,
+			open: 2,
+			running: 1,
+			awaiting: 1,
+			held: 1,
+			mode: autoHandoffCell("auto", 2, 3, true),
+			onToggle: () => undefined,
+		}),
+	];
+}
+
+/** The example's Queue-pause lamp headers, and the drop rule's row. */
+function autoModeQueueHeaders(columns: GalleryColumns, dropColumns: number): ReactElement[] {
+	return [
+		// The Queue pause's two lamp states beside the Auto-handoff cell
+		// (issue #319, ADR 0111): the lit lamp with `running` while the brake
+		// is down, and the unlit lamp with `paused` while it stands, one
+		// space of room between the two cells.
+		createElement(SectionHeader, {
+			key: "tickets-header-queue-running",
+			section: "tickets",
+			active: true,
+			terminalWidth: columns.contentWidth,
+			width: columns.contentWidth,
+			expanded: true,
+			open: 2,
+			running: 1,
+			awaiting: 0,
+			mode: autoHandoffCell("manual", 1, 2),
+			queuePaused: false,
+			onToggle: () => undefined,
+		}),
+		createElement(SectionHeader, {
+			key: "tickets-header-queue-paused",
+			section: "tickets",
+			active: true,
+			terminalWidth: columns.contentWidth,
+			width: columns.contentWidth,
+			expanded: true,
+			open: 2,
+			running: 1,
+			awaiting: 0,
+			mode: autoHandoffCell("manual", 1, 2),
+			queuePaused: true,
+			onToggle: () => undefined,
+		}),
+		// The drop rule on a row too short for the whole count line beside the
+		// whole cell: the pile, the bell, and the held count go whole, and the
+		// seat reading stands again in the room they left.
+		createElement(SectionHeader, {
+			key: "tickets-header-dropped",
+			section: "tickets",
+			active: true,
+			terminalWidth: dropColumns,
+			width: dropColumns,
+			expanded: true,
+			open: 2,
+			running: 1,
+			awaiting: 1,
+			held: 1,
+			heldBell: true,
+			ignored: 3,
+			mode: autoHandoffCell("manual", 1, 2),
+			onToggle: () => undefined,
+		}),
+	];
+}
+
 export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 	{
 		id: "fields",
@@ -1238,99 +1996,8 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 		id: "queue-order",
 		state:
 			"the queue order: + and - move the selected item, p pauses the queue, and the bar hint stands while the pause stands",
-		render: (columns, _holds, _inputActive, _wiring) => {
-			const ink = controlInk();
-			const item: WorkQueueItem = {
-				kind: "handoff",
-				position: 1,
-				ticketIdentity: "github:github.com:SeriousJul/my-little-software-factory#43",
-				routeFromIdentity: null,
-				origin: "restart",
-				choice: {
-					agentType: "pi",
-					environment: "worktree",
-					taskType: "implement",
-					model: "",
-					thinking: "",
-					contextWindow: "",
-				},
-				previousMessage: "",
-				enqueuedAt: "2026-02-17T10:03:00.000Z",
-				automatic: false,
-			};
-			return [
-				// The Work section's header: its depth cell, whole. The Queue
-				// pause's display stands at the Ticket header's corner and the
-				// modal's border lamp (issue #319, ADR 0111), not beside the depth.
-				createElement(SectionHeader, {
-					key: "work-header",
-					section: "work",
-					active: true,
-					terminalWidth: columns.contentWidth,
-					width: columns.contentWidth,
-					expanded: true,
-					waiting: 1,
-					onToggle: () => undefined,
-				}),
-				// The bar the queue's own keys come from: the order-move keys stand
-				// on it, and the pause key's hint stands on it only while the
-				// pause stands, the label flipping to the word the brake offers.
-				createElement(ActionBar, {
-					key: "queue-bar",
-					mode: "work-queue-list",
-					facts: availabilityFacts("work-queue-list", GALLERY_STANDING, {
-						...NO_QUEUE,
-						selectedWorkQueueItem: item,
-						workQueueDepth: 1,
-						listCanMove: true,
-					}),
-					width: columns.contentWidth,
-				}),
-				createElement(ActionBar, {
-					key: "queue-bar-paused",
-					mode: "work-queue-list",
-					facts: availabilityFacts(
-						"work-queue-list",
-						{ ...GALLERY_STANDING, queuePaused: true },
-						{
-							...NO_QUEUE,
-							selectedWorkQueueItem: item,
-							workQueueDepth: 1,
-							listCanMove: true,
-						},
-					),
-					width: columns.contentWidth,
-				}),
-				// The Message lines the pause and the resume leave, in the words
-				// the plane says them (app.ts: the toggle's own notice).
-				messageRowElement(
-					{
-						severity: "info",
-						text: "Work queue paused",
-					},
-					columns.contentWidth,
-				),
-				messageRowElement(
-					{
-						severity: "info",
-						text: "Work queue resumed",
-					},
-					columns.contentWidth,
-				),
-				createElement(
-					"text",
-					{
-						key: "queue-order-note",
-						style: { width: "100%", height: 1 },
-						fg: ink.detail.fg ?? undefined,
-					},
-					truncateToWidth(
-						"+ promotes the selected item, - demotes it, and the top item is next in line for a seat",
-						columns.contentWidth,
-					),
-				),
-			];
-		},
+		render: (columns, _holds, _inputActive, _wiring) =>
+			workQueueSampleRows(columns, sampleQueueItem(), controlInk()),
 	},
 	{
 		// The Auto-handoff mode's lamp cell on the Ticket header's right corner:
@@ -1347,100 +2014,8 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 			// the row instead of clipping its corner cell.
 			const dropColumns = Math.min(DROP_RULE_ROW_COLUMNS, columns.contentWidth);
 			return [
-				createElement(SectionHeader, {
-					key: "tickets-header-auto",
-					section: "tickets",
-					active: true,
-					terminalWidth: columns.contentWidth,
-					width: columns.contentWidth,
-					expanded: true,
-					open: 2,
-					running: 1,
-					awaiting: 0,
-					mode: autoHandoffCell("auto", 1, 2),
-					onToggle: () => undefined,
-				}),
-				createElement(SectionHeader, {
-					key: "tickets-header-manual",
-					section: "tickets",
-					active: true,
-					terminalWidth: columns.contentWidth,
-					width: columns.contentWidth,
-					expanded: true,
-					open: 2,
-					running: 1,
-					awaiting: 0,
-					mode: autoHandoffCell("manual", 1, 2),
-					onToggle: () => undefined,
-				}),
-				// The Dispatch pause (ADR 0016, ADR 0111): the word the cell wears
-				// while the pause holds the automatic works - the word the plane
-				// now says is `held`, the Dispatch pause's own word.
-				createElement(SectionHeader, {
-					key: "tickets-header-paused",
-					section: "tickets",
-					active: true,
-					terminalWidth: columns.contentWidth,
-					width: columns.contentWidth,
-					expanded: true,
-					open: 2,
-					running: 1,
-					awaiting: 1,
-					held: 1,
-					mode: autoHandoffCell("auto", 2, 3, true),
-					onToggle: () => undefined,
-				}),
-				// The Queue pause's two lamp states beside the Auto-handoff cell
-				// (issue #319, ADR 0111): the lit lamp with `running` while the brake
-				// is down, and the unlit lamp with `paused` while it stands, one
-				// space of room between the two cells.
-				createElement(SectionHeader, {
-					key: "tickets-header-queue-running",
-					section: "tickets",
-					active: true,
-					terminalWidth: columns.contentWidth,
-					width: columns.contentWidth,
-					expanded: true,
-					open: 2,
-					running: 1,
-					awaiting: 0,
-					mode: autoHandoffCell("manual", 1, 2),
-					queuePaused: false,
-					onToggle: () => undefined,
-				}),
-				createElement(SectionHeader, {
-					key: "tickets-header-queue-paused",
-					section: "tickets",
-					active: true,
-					terminalWidth: columns.contentWidth,
-					width: columns.contentWidth,
-					expanded: true,
-					open: 2,
-					running: 1,
-					awaiting: 0,
-					mode: autoHandoffCell("manual", 1, 2),
-					queuePaused: true,
-					onToggle: () => undefined,
-				}),
-				// The drop rule on a row too short for the whole count line beside the
-				// whole cell: the pile, the bell, and the held count go whole, and the
-				// seat reading stands again in the room they left.
-				createElement(SectionHeader, {
-					key: "tickets-header-dropped",
-					section: "tickets",
-					active: true,
-					terminalWidth: dropColumns,
-					width: dropColumns,
-					expanded: true,
-					open: 2,
-					running: 1,
-					awaiting: 1,
-					held: 1,
-					heldBell: true,
-					ignored: 3,
-					mode: autoHandoffCell("manual", 1, 2),
-					onToggle: () => undefined,
-				}),
+				...autoModePrimaryHeaders(columns),
+				...autoModeQueueHeaders(columns, dropColumns),
 				createElement(
 					"text",
 					{ key: "auto-mode-note", fg: paint("subtext0") },
@@ -1462,19 +2037,6 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 		id: "ticket-ignore",
 		state: "Ticket ignore: the flip, and the three obligations the key refuses",
 		render: (columns, _holds, _inputActive, _wiring) => {
-			// The three rows the key refuses, on the facts each obligation reads: the
-			// awaiting state, the held turn beside its undecided decision, and the
-			// last poll's missing-Agent marker - the same marker the row's badge wears.
-			const awaiting = ticketIgnoreContext("awaiting", false);
-			const held = ticketIgnoreContext("held", false);
-			const missing = ticketIgnoreContext("running", false, "missing");
-			const refusedBar = (key: string, facts: AvailabilityFacts) =>
-				createElement(ActionBar, {
-					key,
-					mode: facts.mode,
-					facts,
-					width: columns.contentWidth,
-				});
 			return [
 				// The bar beside an active row: the key puts the Ticket away.
 				createElement(ActionBar, {
@@ -1505,26 +2067,7 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 					ignored: 1,
 					onToggle: () => undefined,
 				}),
-				// The awaiting row: the key is there, dimmed, and the reason is one
-				// press away on the line the operator already watches.
-				refusedBar("awaiting-refused", awaiting),
-				messageRowElement(
-					{ severity: "warning", text: ticketIgnoreRefusal(awaiting) },
-					columns.contentWidth,
-				),
-				// The held row: the same sentence, in the held turn's own clause.
-				refusedBar("held-refused", held),
-				messageRowElement(
-					{ severity: "warning", text: ticketIgnoreRefusal(held) },
-					columns.contentWidth,
-				),
-				// The missing Agent's refusal reads the marker the row's own badge
-				// wears, and the refused key leaves no hint on the bar.
-				refusedBar("missing-refused", missing),
-				messageRowElement(
-					{ severity: "warning", text: ticketIgnoreRefusal(missing) },
-					columns.contentWidth,
-				),
+				...ticketIgnoreRefusedRows(columns),
 				createElement(
 					"text",
 					{ key: "ticket-ignore-note", fg: paint("subtext0") },
@@ -1997,86 +2540,7 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 		// The Key guide of each section names that meaning with its note.
 		id: "delete-key",
 		state: "Delete: one destructive key, by the section under the cursor",
-		render: (columns, _holds, _inputActive, _wiring) => {
-			const now = "2026-02-17T10:00:00.000Z";
-			const waitingItem: WorkQueueItem = {
-				kind: "handoff",
-				position: 0,
-				ticketIdentity: sampleTicket("open").identity,
-				automatic: false,
-				routeFromIdentity: null,
-				origin: "open",
-				choice: {
-					agentType: "pi",
-					environment: "worktree",
-					taskType: "implement",
-					model: "",
-					thinking: "",
-					contextWindow: "",
-				},
-				previousMessage: "",
-				enqueuedAt: now,
-			};
-			const bar = (
-				key: string,
-				mode: "ticket-list" | "consultation-list" | "work-queue-list",
-				facts: AvailabilityFacts,
-			) =>
-				createElement(ActionBar, {
-					key,
-					mode,
-					facts,
-					width: columns.contentWidth,
-				});
-			const ticketFacts = (ticket: Ticket, queueItem: WorkQueueItem | null): AvailabilityFacts =>
-				availabilityFacts("ticket-list", GALLERY_STANDING, {
-					selectedTicket: ticket,
-					...NO_TICKET_ROW,
-					groupingAxis: "none" as const,
-					...NO_GROUP,
-					listCanMove: true,
-					queueItemForSelectedRow: queueItem,
-				});
-			const consultationFacts = (record: Consultation): AvailabilityFacts =>
-				availabilityFacts("consultation-list", GALLERY_STANDING, {
-					selectedConsultation: record,
-					consultationRefreshAvailable: true,
-					consultationAgentStatus: null,
-					consultationPaneAlive: false,
-					listCanMove: true,
-					queueItemForSelectedRow: null,
-				});
-			return [
-				bar("delete-ticket-close", "ticket-list", ticketFacts(sampleTicket("running"), null)),
-				bar("delete-ticket-remove", "ticket-list", ticketFacts(sampleTicket("open"), waitingItem)),
-				bar(
-					"delete-consultation-close",
-					"consultation-list",
-					consultationFacts(sampleConsultation("working")),
-				),
-				bar(
-					"delete-consultation-remove",
-					"consultation-list",
-					availabilityFacts("consultation-list", GALLERY_STANDING, {
-						selectedConsultation: sampleConsultation("closed"),
-						consultationRefreshAvailable: false,
-						consultationAgentStatus: null,
-						consultationPaneAlive: false,
-						listCanMove: true,
-						queueItemForSelectedRow: null,
-					}),
-				),
-				bar(
-					"delete-queue-remove",
-					"work-queue-list",
-					availabilityFacts("work-queue-list", GALLERY_STANDING, {
-						selectedWorkQueueItem: waitingItem,
-						workQueueDepth: 1,
-						listCanMove: true,
-					}),
-				),
-			];
-		},
+		render: (columns, _holds, _inputActive, _wiring) => deleteSampleRows(columns),
 	},
 	{
 		// Enter on an interrupted opening: the panel offers the retry of the
@@ -2310,135 +2774,50 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 		state: "grouped list, collapsed Group with a held count, and the cursor on a header",
 		rows: 29,
 		render: (columns) => {
-			const listed = [
-				groupTicket({
-					number: 1,
-					repository: "acme/billing",
-					title: "Webhook retry policy",
-					state: "open",
-					taskType: "implement",
-				}),
-				{
-					...groupTicket({
-						number: 2,
-						repository: "acme/billing",
-						title: "Hold the failed turn",
-						state: "awaiting",
-						taskType: "implement",
-					}),
-					lastCompletion: heldCompletion(),
-				},
-				// The routed row is an open ticket that wears the Queue wait
-				// badge (ADR 0072): the route's ask ended the cycle and the
-				// wait stands on the item alone.
-				groupTicket({
-					number: 3,
-					repository: "acme/factory",
-					title: "Route the settled review",
-					state: "open",
-					taskType: "review",
-				}),
-				groupTicket({
-					number: 4,
-					repository: "acme/factory",
-					title: "Split the gallery view",
-					state: "open",
-					taskType: "review",
-				}),
-				groupTicket({
-					number: 5,
-					repository: "acme/factory",
-					title: "Park the legacy importer",
-					state: "running",
-					taskType: "fix",
-				}),
-			];
-			const bar = (key: string, header: boolean) =>
-				createElement(ActionBar, {
-					key,
-					mode: "ticket-list",
-					facts: availabilityFacts("ticket-list", GALLERY_STANDING, {
-						listCanMove: true,
-						selectedTicket: header ? undefined : listed[0],
-						...NO_TICKET_ROW,
-						groupingAxis: "repository",
-						...NO_GROUP,
-						groupHeaderSelected: header,
-						selectedGroupHeader: header
-							? { value: "acme/billing", count: 2, held: 1, collapsed: false }
-							: null,
-						visibleGroupHeaderCount: 1,
-						queueItemForSelectedRow: null,
-					}),
-					width: columns.contentWidth,
-				});
+			const listed = ticketGroupsListed();
 			const folded = new Set<string>(["acme/billing"]);
 			return [
-				createElement(TicketList, {
-					key: "grouped",
-					// The routed row wears its badge: the wait is the item's, and
-					// the ticket keeps its open state (ADR 0072). The fact module
-					// answers it from the queue item below.
-					rows: ticketRows(
+				// The routed row wears its badge: the wait is the item's, and
+				// the ticket keeps its open state (ADR 0072). The fact module
+				// answers it from the queue item below.
+				ticketGroupsList(
+					"grouped",
+					ticketRows(
 						factRows(listed, { queue: [queueItem("github:github.com:I_3", "workflow")] }),
 						"repository",
 						{ folds: {}, storedOrder: [], positionOrder: [] },
 					),
-					selectedIndex: 1,
-					focused: true,
-					height: 10,
-					active: true,
-					onFocus: () => undefined,
-					onSelect: () => undefined,
-					onMove: () => undefined,
-				}),
-				createElement(TicketList, {
-					key: "folded",
-					rows: ticketRows(factRows(listed), "repository", {
+					10,
+				),
+				ticketGroupsList(
+					"folded",
+					ticketRows(factRows(listed), "repository", {
 						folds: { repository: folded },
 						storedOrder: [],
 						positionOrder: [],
 					}),
-					selectedIndex: 0,
-					focused: true,
-					height: 5,
-					active: true,
-					onFocus: () => undefined,
-					onSelect: () => undefined,
-					onMove: () => undefined,
-				}),
-				createElement(TicketList, {
-					key: "ordered",
-					rows: ticketRows(factRows(listed), "repository", {
+					5,
+				),
+				ticketGroupsList(
+					"ordered",
+					ticketRows(factRows(listed), "repository", {
 						folds: {},
 						storedOrder: ["acme/factory"],
 						positionOrder: [],
 					}),
-					selectedIndex: 0,
-					focused: true,
-					height: 4,
-					active: true,
-					onFocus: () => undefined,
-					onSelect: () => undefined,
-					onMove: () => undefined,
-				}),
-				createElement(TicketList, {
-					key: "on-header",
-					rows: ticketRows(factRows(listed), "task", {
+					4,
+				),
+				ticketGroupsList(
+					"on-header",
+					ticketRows(factRows(listed), "task", {
 						folds: {},
 						storedOrder: [],
 						positionOrder: [],
 					}),
-					selectedIndex: 0,
-					focused: true,
-					height: 5,
-					active: true,
-					onFocus: () => undefined,
-					onSelect: () => undefined,
-					onMove: () => undefined,
-				}),
-				bar("bar-row", false),
-				bar("bar-header", true),
+					5,
+				),
+				ticketGroupsBar(columns, "bar-row", false),
+				ticketGroupsBar(columns, "bar-header", true),
 				// The two Message lines the axis control leaves in turn: the
 				// split the press chose, and the way back to the flat list.
 				messageRowElement(
@@ -2449,18 +2828,7 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 					{ severity: "info", text: "Ticket list grouping off: the flat list" },
 					columns.contentWidth,
 				),
-				createElement(
-					"text",
-					{
-						key: "groups-note",
-						style: { width: "100%", height: 1 },
-						fg: controlInk().detail.fg ?? undefined,
-					},
-					truncateToWidth(
-						"Tab cycles the axis; Space on a Group header folds it, x folds the Section, and + and - move the Group, the order saving with the state",
-						columns.contentWidth,
-					),
-				),
+				ticketGroupsNote(columns),
 			];
 		},
 	},
@@ -2533,121 +2901,8 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 		// come from.
 		id: "work-queue",
 		state: "the Work queue: the waiting starts in queue order, and the empty state",
-		render: (columns, _holds, _inputActive, _wiring) => {
-			const items: WorkQueueItem[] = [
-				{
-					kind: "handoff",
-					position: 0,
-					ticketIdentity: "github:github.com:SeriousJul/my-little-software-factory#42",
-					routeFromIdentity: null,
-					origin: "open",
-					choice: {
-						agentType: "pi",
-						environment: "worktree",
-						taskType: "implement",
-						model: "",
-						thinking: "",
-						contextWindow: "",
-					},
-					previousMessage: "",
-					enqueuedAt: "2026-02-17T10:00:00.000Z",
-					automatic: false,
-				},
-				{
-					kind: "handoff",
-					position: 1,
-					ticketIdentity: "github:github.com:SeriousJul/my-little-software-factory#43",
-					routeFromIdentity: "github:github.com:SeriousJul/my-little-software-factory#41",
-					origin: "workflow",
-					choice: {
-						agentType: "pi",
-						environment: "worktree",
-						taskType: "implement",
-						model: "",
-						thinking: "",
-						contextWindow: "",
-					},
-					previousMessage: "the workflow named the next task",
-					enqueuedAt: "2026-02-17T10:01:00.000Z",
-					// The automatic flag marks the top-up's adds (ADR 0051): this
-					// route is one the auto top-up asked for, and its start lands the
-					// route's decision the automatic way.
-					automatic: true,
-				},
-				// The `queued` Consultation's item (issue #90): the pointer stands
-				// in the same order, under the record's type and its identity
-				// prefix.
-				{
-					kind: "consultation",
-					position: 2,
-					consultationId: "c1c1c1c1-1111-4111-8111-111111111111",
-					enqueuedAt: "2026-02-17T10:02:00.000Z",
-				},
-				// The plane action's item (ADR 0068): it carries the task type whose
-				// action form the pickup runs, and no choice of its own.
-				{
-					kind: "plane-action",
-					position: 3,
-					ticketIdentity: "github:github.com:SeriousJul/my-little-software-factory#44",
-					routeFromIdentity: null,
-					automatic: false,
-					origin: "open",
-					taskType: "merge",
-					enqueuedAt: "2026-02-17T10:03:00.000Z",
-				},
-			];
-			const rows: readonly WorkQueueRow[] = workQueueRowFacts(items, {
-				ticketTitle: (identity) =>
-					identity === "github:github.com:SeriousJul/my-little-software-factory#42"
-						? "Add a webhook retry policy"
-						: identity === "github:github.com:SeriousJul/my-little-software-factory#43"
-							? "Close the stale deploy branch"
-							: identity === "github:github.com:SeriousJul/my-little-software-factory#44"
-								? "Merge the auth fix"
-								: undefined,
-				consultationType: (id) =>
-					id === "c1c1c1c1-1111-4111-8111-111111111111" ? "Review" : undefined,
-				consultationInput: (id) =>
-					id === "c1c1c1c1-1111-4111-8111-111111111111" ? "review the auth design" : undefined,
-				planeActionMethod: (taskType) => (taskType === "merge" ? "squash" : undefined),
-			});
-			return [
-				createElement(WorkQueueList, {
-					key: "queue",
-					rows,
-					selectedIndex: 0,
-					focused: true,
-					height: 8,
-					onFocus: () => undefined,
-					onSelect: () => undefined,
-					onMove: () => undefined,
-				}),
-				// The empty state with the cursor resting on it (ADR 0049): the
-				// empty message is the row the cursor takes, and the focus holds
-				// there, the way the other sections' empty lists do.
-				createElement(WorkQueueList, {
-					key: "queue-empty",
-					rows: [],
-					selectedIndex: 0,
-					focused: true,
-					height: 3,
-					onFocus: () => undefined,
-					onSelect: () => undefined,
-					onMove: () => undefined,
-				}),
-				createElement(ActionBar, {
-					key: "queue-bar",
-					mode: "work-queue-list",
-					facts: availabilityFacts("work-queue-list", GALLERY_STANDING, {
-						...NO_QUEUE,
-						selectedWorkQueueItem: items[0],
-						workQueueDepth: items.length,
-						listCanMove: true,
-					}),
-					width: columns.contentWidth,
-				}),
-			];
-		},
+		render: (columns, _holds, _inputActive, _wiring) =>
+			workQueueListSampleRows(columns, workQueueListItems()),
 	},
 	{
 		// The force-dispatch from the Work queue (issue #89, ADR 0034): Enter on
@@ -2930,89 +3185,9 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 		// its chrome. Two rows keep the floor clear.
 		rows: 17,
 		render: (columns, holds, inputActive, wiring) => {
-			// The Message view's history in the no-color presentation (issue #331):
-			// the module builds the rows, and the presentation drops the color the
-			// roles would carry, the way NO_COLOR_INK does for every control here.
-			// The chip's written word is the whole message.
-			const entries: MessageHistoryEntry[] = [
-				{
-					severity: "info",
-					at: 1761638400000,
-					text: 'the merge of "Persist the source facts" is in the Work queue',
-				},
-				{ severity: "warning", at: 1761638412000, text: "no Ticket sources exist" },
-				{
-					severity: "error",
-					at: 1761638425000,
-					text: "the herdr name fix-the-merge-4c4d97ed is held by a pane herdr did not name, which is no agent of this ticket: agent name fix-the-merge-4c4d97ed is already used (agent_name_taken)",
-				},
-			];
-			// The pane's border and its padding leave the body four cells inside
-			// the box's content, the way the view's layout pays them.
-			const bodyWidth = Math.max(1, columns.contentWidth - 4);
-			const lines = messageHistoryBody(entries, bodyWidth).map((line) =>
-				line.map((span) => ({ ...span, fg: undefined })),
-			);
 			return [
-				createElement(TextField, {
-					key: "no-color-model",
-					label: "Model",
-					value: "openai/gpt-5.1",
-					focused: holds === "no-color-model",
-					inputActive,
-					width: columns.valueWidth,
-					labelWidth: columns.labelWidth,
-					ink: NO_COLOR_INK,
-					...(holds === "no-color-model"
-						? { fieldRef: wiring.fieldRef, onValueChange: wiring.report }
-						: {}),
-				}),
-				createElement(ChoiceRow, {
-					key: "no-color-repository",
-					label: "Repository",
-					value: "my-little-software-factory",
-					focused: holds === "no-color-repository",
-					width: columns.valueWidth,
-					labelWidth: columns.labelWidth,
-					ink: NO_COLOR_INK,
-				}),
-				// The spinner face in the no-color ink: the written word stands,
-				// and the renderer's default shows through where the color would be.
-				createElement(Spinner, {
-					key: "no-color-starting",
-					word: "starting",
-					width: 12,
-					ink: NO_COLOR_INK,
-				}),
-				createElement(
-					"box",
-					{ key: "no-color-actions", style: { flexDirection: "column" } },
-					createElement(ActionItem, {
-						row: { key: "no-color-launch", label: "Launch Consultation" } satisfies ActionRow,
-						focused: holds === "no-color-launch",
-						width: columns.contentWidth,
-						ink: NO_COLOR_INK,
-					}),
-				),
-				createElement(
-					"box",
-					{ key: "no-color-message-history", style: { flexDirection: "column" } },
-					paneElement(
-						{
-							title: "Messages",
-							rows: lines.map((line, index) =>
-								createElement(
-									"text",
-									{ key: `no-color-message-history-${index}` },
-									...bodyRowSpans(line, bodyWidth, undefined),
-								),
-							),
-							vpad: 1,
-							height: lines.length + 4,
-						},
-						columns.contentWidth,
-					),
-				),
+				...noColorControls({ columns, holds, inputActive, wiring }),
+				noColorHistory(columns, noColorEntries()),
 			];
 		},
 	},
@@ -3068,58 +3243,10 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 		state: "narrow terminal",
 		narrow: true,
 		render: (columns, holds, _inputActive, wiring) => {
-			// The Message view's history on the narrow frame (ADR 0119): the same
-			// cells as the wide example, wrapped to the room the frame leaves.
-			const entries: MessageHistoryEntry[] = [
-				{
-					severity: "info",
-					at: 1761638400000,
-					text: 'the merge of "Persist the source facts" is in the Work queue',
-				},
-				{ severity: "warning", at: 1761638412000, text: "no Ticket sources exist" },
-			];
-			// The pane's border and its padding leave the body four cells inside
-			// the box's content, the way the view's layout pays them.
-			const bodyWidth = Math.max(1, columns.contentWidth - 4);
-			const lines = messageHistoryBody(entries, bodyWidth);
+			const entries = narrowSampleEntries();
 			return [
-				createElement(TextField, {
-					key: "model",
-					label: "Model",
-					value: "anthropic/claude-sonnet-4-5-with-a-long-tail",
-					focused: holds === "model",
-					width: columns.valueWidth,
-					labelWidth: columns.labelWidth,
-				}),
-				createElement(DraftField, {
-					key: "draft",
-					label: "Initial input",
-					value: "a draft wide enough that its own column has to scroll to the caret",
-					focused: holds === "draft",
-					width: columns.valueWidth,
-					labelWidth: columns.labelWidth,
-					height: 2,
-					...(holds === "draft" ? { fieldRef: wiring.fieldRef, onValueChange: wiring.report } : {}),
-				}),
-				createElement(
-					"box",
-					{ key: "narrow-message-history", style: { flexDirection: "column" } },
-					paneElement(
-						{
-							title: "Messages",
-							rows: lines.map((line, index) =>
-								createElement(
-									"text",
-									{ key: `narrow-message-history-${index}` },
-									...bodyRowSpans(line, bodyWidth, undefined),
-								),
-							),
-							vpad: 1,
-							height: lines.length + 4,
-						},
-						columns.contentWidth,
-					),
-				),
+				...narrowSampleFields({ columns, holds, wiring }),
+				narrowSampleHistory(columns, entries),
 			];
 		},
 	},
@@ -3207,12 +3334,69 @@ export function Gallery({
 	const barFacts = availabilityFacts("form-field", GALLERY_STANDING, {
 		fieldHasSelection: hasSelection,
 	});
-	// The gallery's own keys come from the same catalogue the application runs,
-	// so a contributor exercises the real dispatch and the real Action bar.
-	useControlDispatch({
+	useGalleryDispatch({
 		facts: barFacts,
-		onEmergencyExit,
 		active: guideOpen === false,
+		ids,
+		indexRef,
+		setIndex,
+		setHasSelection,
+		setMessage,
+		setGuideOpen,
+		field,
+		onEmergencyExit,
+	});
+	const shown = GALLERY_EXAMPLES[index] ?? GALLERY_EXAMPLES[0];
+	const narrow = shown.narrow === true;
+	return galleryElement({
+		width,
+		height,
+		ids,
+		shown,
+		narrow,
+		inputActive,
+		wiring,
+		ink,
+		guideOpen,
+		barFacts,
+		message,
+		setGuideOpen,
+		onEmergencyExit,
+	});
+}
+
+/**
+ * The gallery's own keys: the shared dispatch the application runs, so a
+ * contributor exercises the real dispatch and the real Action bar.
+ */
+function useGalleryDispatch(fields: {
+	facts: AvailabilityFacts;
+	active: boolean;
+	ids: string[];
+	indexRef: RefObject<number>;
+	setIndex: (index: number) => void;
+	setHasSelection: (has: boolean) => void;
+	setMessage: (message: MessageFact | null) => void;
+	setGuideOpen: (open: boolean) => void;
+	field: RefObject<FieldHandle | null>;
+	onEmergencyExit: () => void;
+}) {
+	const {
+		facts,
+		active,
+		ids,
+		indexRef,
+		setIndex,
+		setHasSelection,
+		setMessage,
+		setGuideOpen,
+		field,
+		onEmergencyExit,
+	} = fields;
+	useControlDispatch({
+		facts,
+		onEmergencyExit,
+		active,
 		handlers: {
 			help: () => setGuideOpen(true),
 			// The gallery is the surface here, so closing its form leaves it the
@@ -3234,8 +3418,39 @@ export function Gallery({
 			),
 		},
 	});
-	const shown = GALLERY_EXAMPLES[index] ?? GALLERY_EXAMPLES[0];
-	const narrow = shown.narrow === true;
+}
+
+/** The gallery surface's frame: its box, its state row, and the example. */
+function galleryElement(fields: {
+	width: number;
+	height: number;
+	ids: string[];
+	shown: GalleryExample;
+	narrow: boolean;
+	inputActive: boolean;
+	wiring: GalleryFieldWiring;
+	ink: ControlInk;
+	guideOpen: boolean;
+	barFacts: AvailabilityFacts;
+	message: MessageFact | null;
+	setGuideOpen: (open: boolean) => void;
+	onEmergencyExit: () => void;
+}): ReactElement {
+	const {
+		width,
+		height,
+		ids,
+		shown,
+		narrow,
+		inputActive,
+		wiring,
+		ink,
+		guideOpen,
+		barFacts,
+		message,
+		setGuideOpen,
+		onEmergencyExit,
+	} = fields;
 	const frame = modalFrame(narrow ? 28 : width, height, {
 		rows: shown.rows ?? 12,
 		margin: 1,

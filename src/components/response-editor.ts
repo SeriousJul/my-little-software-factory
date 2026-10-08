@@ -12,9 +12,8 @@
  * is the one action that deletes the saved text, and it says so on the row.
  */
 import { createElement } from "@opentui/react";
-import type { ReactElement } from "react";
+import type { ReactElement, RefObject } from "react";
 import { useRef } from "react";
-
 import { responseOversize, validateResponseInput } from "../consultation/response-draft.ts";
 import { useControlDispatch } from "./control-dispatch.ts";
 import type { StandingFacts } from "./controls.ts";
@@ -90,28 +89,9 @@ const MINIMUM_DRAFT_ROWS = 1;
 /** The rows the response editor needs to draw itself at all. */
 export const RESPONSE_EDITOR_ROWS = FIXED_ROWS + 1;
 
-export function ResponseEditor({
-	draft,
-	width,
-	rows,
-	focused,
-	standing,
-	inputActive = true,
-	onSend,
-	onDiscard,
-	onDraftChange,
-	onClose,
-	onHelp,
-	onMessage,
-	onUnavailable,
-	onCopy,
-	message,
-	onEmergencyExit,
-	onQueuePause,
-	onAutoHandoff,
-}: ResponseEditorProps): ReactElement {
+export function ResponseEditor(props: ResponseEditorProps): ReactElement {
 	const field = useRef<FieldHandle | null>(null);
-	const text = useRef(draft);
+	const text = useRef(props.draft);
 	const selection = useRef(false);
 	const focus: FormFocus = useFormSlots(SLOTS);
 	const moveField = moveFieldWith(focus);
@@ -132,10 +112,69 @@ export function ResponseEditor({
 	// the focused slot owns, so a key that moves the focus moves the mode with
 	// it in the same tick.
 	const formFacts = () =>
-		focus.facts(standing, {
+		focus.facts(props.standing, {
 			fieldHasSelection: selection.current,
 			formRefusal: focus.holds("send") ? refusal() : undefined,
 		});
+	const inputActive = props.inputActive ?? true;
+	useResponseEditorDispatch(props, {
+		focus,
+		moveField,
+		liveDraft,
+		refusal,
+		formFacts,
+		field,
+		text,
+		selection,
+		inputActive,
+	});
+	const ink = controlInk();
+	// The box owns two border cells and one padding cell per side, so the rows
+	// inside it are what the fields and actions may take.
+	const contentWidth = Math.max(1, props.width - 6);
+	const draftHeight = Math.max(MINIMUM_DRAFT_ROWS, props.rows - FIXED_ROWS);
+	return responseEditorElement(props, {
+		ink,
+		contentWidth,
+		draftHeight,
+		focus,
+		field,
+		refusal,
+		text,
+		selection,
+		inputActive,
+	});
+}
+
+/** The editor's key routes: the form module's slots, the send, the close. */
+function useResponseEditorDispatch(
+	props: ResponseEditorProps,
+	fields: {
+		focus: FormFocus;
+		moveField: ReturnType<typeof moveFieldWith>;
+		liveDraft: () => string;
+		refusal: () => string | undefined;
+		formFacts: () => ReturnType<FormFocus["facts"]>;
+		field: RefObject<FieldHandle | null>;
+		text: RefObject<string>;
+		selection: RefObject<boolean>;
+		inputActive: boolean;
+	},
+): void {
+	const { focus, moveField, field, formFacts, inputActive, liveDraft } = fields;
+	const {
+		focused,
+		onSend,
+		onDiscard,
+		onClose,
+		onHelp,
+		onMessage,
+		onUnavailable,
+		onCopy,
+		onEmergencyExit,
+		onQueuePause,
+		onAutoHandoff,
+	} = props;
 	useControlDispatch({
 		facts: formFacts,
 		active: focused && inputActive,
@@ -173,11 +212,26 @@ export function ResponseEditor({
 			"auto-handoff": onAutoHandoff,
 		},
 	});
-	const ink = controlInk();
-	// The box owns two border cells and one padding cell per side, so the rows
-	// inside it are what the fields and actions may take.
-	const contentWidth = Math.max(1, width - 6);
-	const draftHeight = Math.max(MINIMUM_DRAFT_ROWS, rows - FIXED_ROWS);
+}
+
+/** The editor's surface: the draft field, the actions, and the Message line. */
+function responseEditorElement(
+	props: ResponseEditorProps,
+	fields: {
+		ink: ReturnType<typeof controlInk>;
+		contentWidth: number;
+		draftHeight: number;
+		focus: FormFocus;
+		field: RefObject<FieldHandle | null>;
+		refusal: () => string | undefined;
+		text: RefObject<string>;
+		selection: RefObject<boolean>;
+		inputActive: boolean;
+	},
+): ReactElement {
+	const { ink, contentWidth, draftHeight, focus, field, refusal, text, selection, inputActive } =
+		fields;
+	const { draft, rows, focused, onDraftChange, onUnavailable, message } = props;
 	return createElement(
 		"box",
 		{

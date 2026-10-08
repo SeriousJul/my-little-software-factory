@@ -43,7 +43,7 @@ import type { Logger } from "./logging.ts";
 import { overParallelLimit, parallelSeatReading } from "./parallel.ts";
 import { evaluatePlacement } from "./placement.ts";
 import { isPlaneActionTaskType, planeActionSettingOf } from "./plane-action-registry.ts";
-import { runMergePullRequest } from "./plane-actions.ts";
+import { type MergeRunResult, runMergePullRequest } from "./plane-actions.ts";
 import type { RepositoryMapping } from "./repo.ts";
 import { type CommandRunner, errorMessage } from "./runner.ts";
 import type { ConsultationRecordAggregate } from "./state/consultation-record.ts";
@@ -996,72 +996,14 @@ class HandoffDispatchModule implements HandoffDispatch {
 		}
 	}
 
-	private async runPlaneActionItem(
-		item: WorkQueuePlaneActionItem,
-		overCap: boolean,
-		mode: StartMode,
-	): Promise<void> {
-		const check = this.planeActionClaimCheck(item.ticketIdentity);
-		if (!check.ok) {
-			this.settleIntentOnStarted(item.ticketIdentity, { ok: false, reason: check.reason });
-			this.reports.refresh();
-			this.reports.faultWarning(
-				`the merge of ${this.ticketName(item.ticketIdentity)} was not run: ${check.reason}`,
-			);
-			return;
-		}
-		const config = this.config();
-		const setting = planeActionSettingOf(config.taskTypes, item.taskType);
-		if (setting === null) {
-			this.settleIntentOnStarted(item.ticketIdentity, {
-				ok: false,
-				reason: `task type ${item.taskType} carries no plane action`,
-			});
-			this.reports.refresh();
-			this.reports.faultWarning(
-				`the merge of ${this.ticketName(item.ticketIdentity)} was not run: task type ${item.taskType} carries no plane action`,
-			);
-			return;
-		}
-		// The projection before the list rule, the way the pickup's covered gate
-		// reads it: the rule withholds exactly the ticket this pickup asked for.
-		const projection = this.state.ticketWorkCycle.projectedTickets(
-			config.workflowStates,
-			config.defaultTaskType,
-		);
-		const ticket = projection.find((candidate) => candidate.identity === item.ticketIdentity);
-		if (ticket === undefined) {
-			this.settleIntentOnStarted(item.ticketIdentity, {
-				ok: false,
-				reason: "the ticket is no longer visible",
-			});
-			this.reports.refresh();
-			this.reports.faultWarning(
-				`the merge of ${this.ticketName(item.ticketIdentity)} was not run: the ticket is no longer visible`,
-			);
-			return;
-		}
-		// The merge runs on the ticket's pull request: the position's own pull
-		// request when the position is one, and its fixing pull request when
-		// the position is the ticket the pull request fixes.
-		const pullRequest = mergeTargetPullRequest(projection, ticket);
-		if (pullRequest === null) {
-			// No attempt for a merge that could not aim: the row drops with its
-			// warning.
-			this.settleIntentOnStarted(item.ticketIdentity, {
-				ok: false,
-				reason: "no linked pull request was found for the ticket",
-			});
-			this.reports.refresh();
-			this.reports.faultWarning(
-				`the merge of ${this.ticketName(item.ticketIdentity)} was not run: no linked pull request was found for the ticket`,
-			);
-			return;
-		}
-		// The name the run's line words the ticket by, read while the ticket
-		// still stands: the merged ticket's retirement leaves it from the
-		// projection before the line lands (ADR 0068).
-		const name = this.ticketName(item.ticketIdentity);
+	/** The refusal a failed claim, a lost ticket, or an unaimed merge leaves. */
+	private refusePlaneAction(identity: string, reason: string): void {
+		this.settleIntentOnStarted(identity, { ok: false, reason });
+		this.reports.refresh();
+		this.reports.faultWarning(`the merge of ${this.ticketName(identity)} was not run: ${reason}`);
+	}
+	/** The merge's start line and the Starting window (issue #209, ADR 0030). */
+	private startMergeLine(item: WorkQueuePlaneActionItem, name: string, mode: StartMode): void {
 		// The merge's start line, the way a handoff's start is reported (issue
 		// #209): the mode that ran it, the item's origin, and the seat reading.
 		// The action takes no seat, so its reading is the count the plane stood
@@ -1074,18 +1016,12 @@ class HandoffDispatchModule implements HandoffDispatch {
 		// ADR 0068): the merge wears the same face the start wears while its
 		// command runs, so the operator sees the plane at work.
 		this.reports.starting(item.ticketIdentity, true);
-		const result = await runMergePullRequest({
-			runner: this.runner,
-			sources: config.sources,
-			pullRequest,
-			method: setting.method,
-		});
-		// A stop over the run's commands: the app closed or is closing the
-		// state behind the run, and a settle it writes into it reads a closed
-		// database. The run's settle stands on the restart the way a crash
-		// does: the fresh read finds the merge landed, and the source leaves
-		// the merged pull request at its next refresh.
-		if (this.stopped) return;
+	}
+	/** The attempt the plane's merge writes after the run (ADR 0068). */
+	private recordPlaneAttempt(
+		item: WorkQueuePlaneActionItem,
+		result: MergeRunResult,
+	): { id: string } {
 		// The attempt is the durable record of the merge the plane ran (ADR
 		// 0068): the row stands for the Handoff limit's count, and the
 		// outcome's fire lands its fact on the row, because no Completion
@@ -1093,7 +1029,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 		// external change: the row is the record of the run, written after the
 		// run, and a crash between the change and the record settles the same
 		// way on the restart, through the fresh read.
-		const attempt = this.state.planeAction.recordPlaneActionAttempt({
+		return this.state.planeAction.recordPlaneActionAttempt({
 			ticketIdentity: item.ticketIdentity,
 			taskType: item.taskType,
 			decision: item.automatic ? "auto-merged" : "merged",
@@ -1101,6 +1037,13 @@ class HandoffDispatchModule implements HandoffDispatch {
 			reason: result.reason,
 			at: new Date(this.state.now()).toISOString(),
 		});
+	}
+	/** The merge's fire, and the stop it reads before its label lands. */
+	private async firePlaneAction(
+		item: WorkQueuePlaneActionItem,
+		config: FactoryConfig,
+		attempt: { id: string },
+	): Promise<boolean> {
 		// The fire runs on both outcomes alike, and its fact lands on the
 		// attempt's record; the label writes it converges, the way a blocked
 		// merge's needs-work label does on the crash-restart.
@@ -1116,19 +1059,24 @@ class HandoffDispatchModule implements HandoffDispatch {
 		// The stop over the fire's label reads: the retirement writes into the
 		// state the stop closed, and a settle it skips stands on the restart
 		// the same way.
-		if (this.stopped) return;
-		// The merged pull request leaves the projection the moment the merge
-		// lands, and so does every issue it closed on the merge: the sources
-		// stop returning them at the next refresh, and the retirement does it
-		// now, the way that refresh would (ADR 0068).
-		if (result.outcome === "merged") {
-			const closedIssueIdentities = new Set<string>();
-			for (const membership of pullRequest.memberships)
-				for (const reference of issueReferencesOf(membership.attributes))
-					if (reference.identity !== null) closedIssueIdentities.add(reference.identity);
-			this.state.sourceFact.retireTicket(pullRequest.identity);
-			for (const identity of closedIssueIdentities) this.state.sourceFact.retireTicket(identity);
-		}
+		return this.stopped;
+	}
+	/** The retirement a landed merge does (ADR 0068). */
+	private retireMergedTicket(pullRequest: Ticket): void {
+		const closedIssueIdentities = new Set<string>();
+		for (const membership of pullRequest.memberships)
+			for (const reference of issueReferencesOf(membership.attributes))
+				if (reference.identity !== null) closedIssueIdentities.add(reference.identity);
+		this.state.sourceFact.retireTicket(pullRequest.identity);
+		for (const identity of closedIssueIdentities) this.state.sourceFact.retireTicket(identity);
+	}
+	/** The outcome's report and the row the plane leaves at the claim (ADR 0072). */
+	private reportMergeOutcome(
+		item: WorkQueuePlaneActionItem,
+		result: MergeRunResult,
+		name: string,
+		overCap: boolean,
+	): void {
 		// The row left at the claim, the way the Consultation's pickup
 		// leaves it. The tickets keep the states the ask left them in
 		// (ADR 0072): the source ended its cycle at the ask, and the open
@@ -1151,6 +1099,75 @@ class HandoffDispatchModule implements HandoffDispatch {
 			// it to the machine.
 			this.reports.faultError(`the merge of ${name} was blocked: ${result.reason}`);
 		}
+	}
+	private async runPlaneActionItem(
+		item: WorkQueuePlaneActionItem,
+		overCap: boolean,
+		mode: StartMode,
+	): Promise<void> {
+		const check = this.planeActionClaimCheck(item.ticketIdentity);
+		if (!check.ok) {
+			this.refusePlaneAction(item.ticketIdentity, check.reason);
+			return;
+		}
+		const config = this.config();
+		const setting = planeActionSettingOf(config.taskTypes, item.taskType);
+		if (setting === null) {
+			this.refusePlaneAction(
+				item.ticketIdentity,
+				`task type ${item.taskType} carries no plane action`,
+			);
+			return;
+		}
+		// The projection before the list rule, the way the pickup's covered gate
+		// reads it: the rule withholds exactly the ticket this pickup asked for.
+		const projection = this.state.ticketWorkCycle.projectedTickets(
+			config.workflowStates,
+			config.defaultTaskType,
+		);
+		const ticket = projection.find((candidate) => candidate.identity === item.ticketIdentity);
+		if (ticket === undefined) {
+			this.refusePlaneAction(item.ticketIdentity, "the ticket is no longer visible");
+			return;
+		}
+		// The merge runs on the ticket's pull request: the position's own pull
+		// request when the position is one, and its fixing pull request when
+		// the position is the ticket the pull request fixes.
+		const pullRequest = mergeTargetPullRequest(projection, ticket);
+		if (pullRequest === null) {
+			// No attempt for a merge that could not aim: the row drops with its
+			// warning.
+			this.refusePlaneAction(
+				item.ticketIdentity,
+				"no linked pull request was found for the ticket",
+			);
+			return;
+		}
+		// The name the run's line words the ticket by, read while the ticket
+		// still stands: the merged ticket's retirement leaves it from the
+		// projection before the line lands (ADR 0068).
+		const name = this.ticketName(item.ticketIdentity);
+		this.startMergeLine(item, name, mode);
+		const result = await runMergePullRequest({
+			runner: this.runner,
+			sources: config.sources,
+			pullRequest,
+			method: setting.method,
+		});
+		// A stop over the run's commands: the app closed or is closing the
+		// state behind the run, and a settle it writes into it reads a closed
+		// database. The run's settle stands on the restart the way a crash
+		// does: the fresh read finds the merge landed, and the source leaves
+		// the merged pull request at its next refresh.
+		if (this.stopped) return;
+		const attempt = this.recordPlaneAttempt(item, result);
+		if (await this.firePlaneAction(item, config, attempt)) return;
+		// The merged pull request leaves the projection the moment the merge
+		// lands, and so does every issue it closed on the merge: the sources
+		// stop returning them at the next refresh, and the retirement does it
+		// now, the way that refresh would (ADR 0068).
+		if (result.outcome === "merged") this.retireMergedTicket(pullRequest);
+		this.reportMergeOutcome(item, result, name, overCap);
 	}
 
 	/**
@@ -1425,6 +1442,42 @@ class HandoffDispatchModule implements HandoffDispatch {
 		}
 	}
 
+	/**
+	 * The lap's seat reading: the seats the Missing Agents reserved, the open
+	 * seats, and the rows that lift the early return (ADR 0108, ADR 0068).
+	 */
+	private pickupSeatReading(
+		limit: number,
+		items: WorkQueueItem[],
+	): {
+		reserved: Set<string>;
+		openSeats: number;
+		hasPlaneAction: boolean;
+		hasReservedRow: boolean;
+	} {
+		// The seats a Missing Agent left (ADR 0108): each one belongs to that
+		// ticket's own restart row. The walk keeps them out of the free seats
+		// every other start reads, and hands each one to that row alone - the
+		// way ADR 0094 gives the seat a settling turn freed to that turn's own
+		// next step. A limit of 0 lifts the cap, so nothing stands reserved.
+		const reserved = new Set(limit === 0 ? [] : this.missingSeatTickets());
+		const openSeats =
+			limit === 0 ? items.length : Math.max(0, limit - this.seatCount() - reserved.size);
+		// The plane action's items take no seat and are not held by the cap
+		// (ADR 0068): the walk runs them when it reaches them, and a queue
+		// that stands under a full cap is one whose first plane item sits
+		// behind a seats-bound item the walk breaks at.
+		const hasPlaneAction = items.some((candidate) => candidate.kind === "plane-action");
+		// A reserved seat stands open for its own restart row even when no free
+		// seat reads open, so the early return has to see that row too.
+		const hasReservedRow = items.some(
+			(candidate) =>
+				candidate.kind === "handoff" &&
+				candidate.origin === "restart" &&
+				reserved.has(candidate.ticketIdentity),
+		);
+		return { reserved, openSeats, hasPlaneAction, hasReservedRow };
+	}
 	private async runPickupLap(directAskIdentity?: string): Promise<number> {
 		// One walk of the queue's rows. The pass above owns the laps, so a checkout
 		// let go by a settle inside this walk asks for another lap here and not for a
@@ -1447,29 +1500,9 @@ class HandoffDispatchModule implements HandoffDispatch {
 		const limit = this.config().maxParallelAgents;
 		const items = this.state.workQueue.items();
 		if (items.length === 0) return 0;
-		// The seats a Missing Agent left (ADR 0108): each one belongs to that
-		// ticket's own restart row. The walk keeps them out of the free seats
-		// every other start reads, and hands each one to that row alone - the
-		// way ADR 0094 gives the seat a settling turn freed to that turn's own
-		// next step. A limit of 0 lifts the cap, so nothing stands reserved.
-		const reserved = new Set(limit === 0 ? [] : this.missingSeatTickets());
-		const reservedLeft = new Set(reserved);
-		const openSeats =
-			limit === 0 ? items.length : Math.max(0, limit - this.seatCount() - reserved.size);
-		// The plane action's items take no seat and are not held by the cap
-		// (ADR 0068): the walk runs them when it reaches them, and a queue
-		// that stands under a full cap is one whose first plane item sits
-		// behind a seats-bound item the walk breaks at.
-		const hasPlaneAction = items.some((candidate) => candidate.kind === "plane-action");
-		// A reserved seat stands open for its own restart row even when no free
-		// seat reads open, so the early return has to see that row too.
-		const hasReservedRow = items.some(
-			(candidate) =>
-				candidate.kind === "handoff" &&
-				candidate.origin === "restart" &&
-				reserved.has(candidate.ticketIdentity),
-		);
-		if (openSeats <= 0 && !hasPlaneAction && !hasReservedRow) return 0;
+		const seats = this.pickupSeatReading(limit, items);
+		const reservedLeft = new Set(seats.reserved);
+		if (seats.openSeats <= 0 && !seats.hasPlaneAction && !seats.hasReservedRow) return 0;
 		// One count for the whole call, on purpose: the loop takes at most
 		// `freeSeats` items, so it cannot start more than the cap allows even when
 		// a claim dedups to a seat the ticket already holds. That dedup is real and
@@ -1512,7 +1545,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 				item.origin === "restart" &&
 				reservedLeft.has(item.ticketIdentity);
 			if (!reservedSeat) {
-				if (claimed >= openSeats) break;
+				if (claimed >= seats.openSeats) break;
 				// The head's figure is a snapshot, and this walk awaits: the Plane
 				// action's run, the Consultation's claim. The pass is also not the only
 				// taker of a seat - every enqueue, the observation cycle, and every
@@ -1777,6 +1810,65 @@ class HandoffDispatchModule implements HandoffDispatch {
 	 * this same row, and the worktree claim takes the hold with it (issue #297
 	 * review).
 	 */
+	/**
+	 * The race a restart or a route row meets: its ticket wears a handoff newer
+	 * than the item's enqueue, so the item is cancelled, not a second start.
+	 */
+	private cancelRaceItem(item: WorkQueueHandoffItem): boolean {
+		if (item.origin !== "restart" && item.origin !== "workflow") return false;
+		const inFlight = this.state.ticketWorkCycle
+			.ticketsByState(["handed-off", "running"])
+			.find((candidate) => candidate.ticketIdentity === item.ticketIdentity);
+		if (inFlight === undefined || Date.parse(inFlight.startedAt) <= Date.parse(item.enqueuedAt))
+			return false;
+		this.removeQueueRow(item.ticketIdentity);
+		this.reports.refresh();
+		this.reports.notice(
+			item.origin === "restart"
+				? `${this.ticketName(item.ticketIdentity)} restarted while its restart waited in the Work queue; the queue item is removed`
+				: `${this.ticketName(item.ticketIdentity)} routed while its route waited in the Work queue; the queue item is removed`,
+			"info",
+		);
+		this.settleIntentOnStarted(item.ticketIdentity, {
+			ok: false,
+			reason: "the queue item was removed",
+		});
+		return true;
+	}
+	/**
+	 * The covered gate (ADR 0042): a queued open start whose ticket gained an
+	 * open fixing pull request while it waited is cancelled.
+	 */
+	private cancelCoveredItem(item: WorkQueueHandoffItem): boolean {
+		if (item.origin !== "open") return false;
+		// The covered gate (ADR 0042): a queued start whose open ticket gained
+		// an open fixing pull request while it waited is cancelled, and the
+		// ticket keeps the state it wears while it waited: the list rule
+		// withholds the ticket's task, and the start would hand the work to a
+		// second agent. The ticket is read from the projection before the list
+		// rule, because the rule withholds exactly the ticket this gate
+		// refuses.
+		const projection = this.state.ticketWorkCycle.projectedTickets(
+			this.config().workflowStates,
+			this.config().defaultTaskType,
+		);
+		const waiting = projection.find((candidate) => candidate.identity === item.ticketIdentity);
+		if (waiting === undefined || !isCoveredByFixingPullRequest(projection, waiting)) return false;
+		this.removeQueueRow(item.ticketIdentity);
+		this.reports.refresh();
+		// A covered outcome, not a Fault (ADR 0118): the open fixing pull
+		// request is already doing the work, so nothing waits on the
+		// operator and the plain info notice stands, with no notification.
+		this.reports.notice(
+			`the queued start of ${this.ticketName(item.ticketIdentity)} is removed: an open fixing pull request covers the ticket`,
+			"info",
+		);
+		this.settleIntentOnStarted(item.ticketIdentity, {
+			ok: false,
+			reason: "the queue item was removed",
+		});
+		return true;
+	}
 	private claimQueueItem(
 		item: WorkQueueHandoffItem,
 		mode: StartMode,
@@ -1792,26 +1884,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 		// It runs before the state gate below: a ticket the race already routed
 		// is in the very state that gate refuses, and the answer there is the
 		// cancellation, not a "the ticket is now ..." failure.
-		if (item.origin === "restart" || item.origin === "workflow") {
-			const inFlight = this.state.ticketWorkCycle
-				.ticketsByState(["handed-off", "running"])
-				.find((candidate) => candidate.ticketIdentity === item.ticketIdentity);
-			if (inFlight !== undefined && Date.parse(inFlight.startedAt) > Date.parse(item.enqueuedAt)) {
-				this.removeQueueRow(item.ticketIdentity);
-				this.reports.refresh();
-				this.reports.notice(
-					item.origin === "restart"
-						? `${this.ticketName(item.ticketIdentity)} restarted while its restart waited in the Work queue; the queue item is removed`
-						: `${this.ticketName(item.ticketIdentity)} routed while its route waited in the Work queue; the queue item is removed`,
-					"info",
-				);
-				this.settleIntentOnStarted(item.ticketIdentity, {
-					ok: false,
-					reason: "the queue item was removed",
-				});
-				return { ok: "cancelled" };
-			}
-		}
+		if (this.cancelRaceItem(item)) return { ok: "cancelled" };
 		const currentState = this.state.ticketWorkCycle.ticketState(item.ticketIdentity);
 		// The state gate reads the position the item names (ADR 0072): the
 		// position stands open or awaiting, the way the continuation's position
@@ -1827,36 +1900,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 						: `the ticket is now ${currentState}`,
 			};
 		}
-		// The covered gate (ADR 0042): a queued start whose open ticket gained
-		// an open fixing pull request while it waited is cancelled, and the
-		// ticket keeps the state it wears while it waited: the list rule
-		// withholds the ticket's task, and the start would hand the work to a
-		// second agent. The ticket is read from the projection before the list
-		// rule, because the rule withholds exactly the ticket this gate
-		// refuses.
-		if (item.origin === "open") {
-			const projection = this.state.ticketWorkCycle.projectedTickets(
-				this.config().workflowStates,
-				this.config().defaultTaskType,
-			);
-			const waiting = projection.find((candidate) => candidate.identity === item.ticketIdentity);
-			if (waiting !== undefined && isCoveredByFixingPullRequest(projection, waiting)) {
-				this.removeQueueRow(item.ticketIdentity);
-				this.reports.refresh();
-				// A covered outcome, not a Fault (ADR 0118): the open fixing pull
-				// request is already doing the work, so nothing waits on the
-				// operator and the plain info notice stands, with no notification.
-				this.reports.notice(
-					`the queued start of ${this.ticketName(item.ticketIdentity)} is removed: an open fixing pull request covers the ticket`,
-					"info",
-				);
-				this.settleIntentOnStarted(item.ticketIdentity, {
-					ok: false,
-					reason: "the queue item was removed",
-				});
-				return { ok: "cancelled" };
-			}
-		}
+		if (this.cancelCoveredItem(item)) return { ok: "cancelled" };
 		// The seat reading the start line states, taken before the claim: the
 		// count the Parallel limit gate stood on, not a count this start's own
 		// claim raised (issue #209).
@@ -1997,6 +2041,39 @@ class HandoffDispatchModule implements HandoffDispatch {
 	 * the key runs no dispatch and says nothing: the catalogue gated the
 	 * availability, so a key this race meets has no answer to give.
 	 */
+	/** Whether the force-dispatch stands over the cap at its dispatch. */
+	private forceOverCap(): boolean {
+		return overParallelLimit(this.config().maxParallelAgents, this.seatCount());
+	}
+	/** The force-dispatch's checkout gate, and its wait line (issue #297). */
+	private forceDispatchGate(
+		item: WorkQueueHandoffItem | WorkQueuePlaneActionItem,
+	): { ok: true; checkoutKey: string | null } | { ok: false } {
+		const gate = this.crossCheckoutGate(item, this.checkoutProjectionReader());
+		if (!gate.ok) {
+			// The key the operator pressed: the wait is its answer, and the
+			// answer is line-only (ADR 0118).
+			if (gate.outcome === "waiting")
+				this.reports.warning(
+					checkoutWaitMessageLine(this.ticketName(item.ticketIdentity), gate.fact),
+				);
+			return { ok: false };
+		}
+		return { ok: true, checkoutKey: gate.checkoutKey };
+	}
+	/** The refused force-dispatch claim's answer: the row leaves with its line. */
+	private refuseForcedClaim(item: WorkQueueHandoffItem, reason: string): void {
+		// The claim refused the start: the ticket no longer holds the state
+		// its origin requires, its source is gone, or the ledger is unclear.
+		// The item leaves the queue with the warning the failed pickup
+		// leaves, the pickup's own words for the fact, and the ticket keeps
+		// its state.
+		this.removeQueueRow(item.ticketIdentity);
+		this.settleIntentOnStarted(item.ticketIdentity, { ok: false, reason });
+		this.reports.warning(
+			`force-dispatch of ${this.ticketName(item.ticketIdentity)} failed: ${reason}`,
+		);
+	}
 	forceDispatchWorkQueueItem(itemIdentity: string): void {
 		if (this.stopped) return;
 		const item = this.state.workQueue
@@ -2008,9 +2085,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 			// scheduler's check, not the pickup's: the seam re-runs every start
 			// check the pickup runs and skips only the cap, and the item leaves
 			// the queue on every answer, the way its pickup does.
-			const limit = this.config().maxParallelAgents;
-			const overCap = overParallelLimit(limit, this.seatCount());
-			void this.pickupConsultationItem(item, "force-dispatch", overCap);
+			void this.pickupConsultationItem(item, "force-dispatch", this.forceOverCap());
 			return;
 		}
 		if (item.kind === "plane-action") {
@@ -2024,48 +2099,25 @@ class HandoffDispatchModule implements HandoffDispatch {
 			// force-dispatch runs no pickup pass, so it reads the pile for itself,
 			// lazily and once, and hands that one read to the gate and the take. A
 			// row that works no checkout reads nothing.
-			const gate = this.crossCheckoutGate(item, this.checkoutProjectionReader());
-			if (!gate.ok) {
-				// The key the operator pressed: the wait is its answer, and the
-				// answer is line-only (ADR 0118).
-				if (gate.outcome === "waiting")
-					this.reports.warning(
-						checkoutWaitMessageLine(this.ticketName(item.ticketIdentity), gate.fact),
-					);
-				return;
-			}
-			const limit = this.config().maxParallelAgents;
-			const overCap = overParallelLimit(limit, this.seatCount());
-			void this.pickupPlaneActionItem(item, overCap, "force-dispatch", gate.checkoutKey);
+			const gate = this.forceDispatchGate(item);
+			if (!gate.ok) return;
+			void this.pickupPlaneActionItem(
+				item,
+				this.forceOverCap(),
+				"force-dispatch",
+				gate.checkoutKey,
+			);
 			return;
 		}
 		// Measured before the claim, on the shared count: the line states the
 		// start over the cap only when the cap was full at the dispatch.
-		const limit = this.config().maxParallelAgents;
-		const overCap = overParallelLimit(limit, this.seatCount());
-		const gate = this.crossCheckoutGate(item, this.checkoutProjectionReader());
-		if (!gate.ok) {
-			// The key the operator pressed: the wait is its answer, and the
-			// answer is line-only (ADR 0118).
-			if (gate.outcome === "waiting")
-				this.reports.warning(
-					checkoutWaitMessageLine(this.ticketName(item.ticketIdentity), gate.fact),
-				);
-			return;
-		}
+		const overCap = this.forceOverCap();
+		const gate = this.forceDispatchGate(item);
+		if (!gate.ok) return;
 		const claimed = this.claimQueueItem(item, "force-dispatch", gate.checkoutKey);
 		if (claimed.ok === "cancelled") return;
 		if (claimed.ok === false) {
-			// The claim refused the start: the ticket no longer holds the state
-			// its origin requires, its source is gone, or the ledger is unclear.
-			// The item leaves the queue with the warning the failed pickup
-			// leaves, the pickup's own words for the fact, and the ticket keeps
-			// its state.
-			this.removeQueueRow(item.ticketIdentity);
-			this.settleIntentOnStarted(item.ticketIdentity, { ok: false, reason: claimed.reason });
-			this.reports.warning(
-				`force-dispatch of ${this.ticketName(item.ticketIdentity)} failed: ${claimed.reason}`,
-			);
+			this.refuseForcedClaim(item, claimed.reason);
 			return;
 		}
 		this.runClaimedHandoff(this.pickupHandoff(claimed, item), (started) => {

@@ -31,16 +31,17 @@
  * app below are disabled.
  */
 import { createElement, useTerminalDimensions } from "@opentui/react";
-import { useMemo, useState } from "react";
+import { type Dispatch, type SetStateAction, useMemo, useState } from "react";
 
 import { isHeldCause, type TurnEndCause, type TurnLogEntry } from "../turn-log.ts";
-import { useControlDispatch } from "./control-dispatch.ts";
+import { type ControlHandler, useControlDispatch } from "./control-dispatch.ts";
 import { availabilityFacts, type StandingFacts } from "./controls.ts";
-import { maxScrollOf, windowOf } from "./geometry.ts";
+import { maxScrollOf } from "./geometry.ts";
 import { type MdColors, type MdLine, renderMarkdown } from "./markdown.ts";
 import type { MessageFact } from "./messages.ts";
 import {
 	type ActionRow,
+	bodyScrollWindow,
 	decisionActionRows,
 	decisionTitle,
 	heldCauseRow,
@@ -48,12 +49,11 @@ import {
 	ModalSurface,
 	modalFrame,
 	PANE_BORDERS,
-	scrollbarRows,
 	TURN_LOG_PANE,
 	turnLogPane,
 	useModalPopScale,
 } from "./modal-chrome.ts";
-import { bodyPaneFacts, useDecisionRegion } from "./shared/region.ts";
+import { bodyPaneFacts, type DecisionRegion, useDecisionRegion } from "./shared/region.ts";
 import { truncateToWidth } from "./text.ts";
 import { paint } from "./theme.ts";
 
@@ -217,27 +217,7 @@ export function turnLogBody(entries: readonly TurnLogEntry[], width: number): Md
 	return out;
 }
 
-export function DecisionModal({
-	title,
-	contextLine,
-	entries,
-	cause = null,
-	detail = "",
-	factLines = [],
-	actions,
-	onAction,
-	onEditAction,
-	onCancel,
-	standing,
-	inputActive = true,
-	onHelp,
-	onMessage,
-	onUnavailable,
-	message,
-	onEmergencyExit,
-	onQueuePause,
-	onAutoHandoff,
-}: DecisionModalProps) {
+export function DecisionModal(props: DecisionModalProps) {
 	const { width: terminalWidth, height: terminalHeight } = useTerminalDimensions();
 	// The pop-in: a short fade with the box growing to its final size, the
 	// one the shared chrome owns for every surface it boxes.
@@ -250,7 +230,81 @@ export function DecisionModal({
 	// A held turn shows its cause in the region, above the rows it refuses
 	// (ADR 0016): one row the log yields to, so the operator reads why the
 	// turn is held before the rows that decide it.
-	const held = cause !== null && isHeldCause(cause);
+	const held = props.cause !== null && isHeldCause(props.cause);
+	const unscaled = modalFrame(terminalWidth, terminalHeight, { margin: MARGIN });
+	const bodyFacts = useDecisionBodyFacts(props, frame, held, unscaled.contentRows);
+	// The region's selection, its wrap, its auto-scroll, its visible window,
+	// and its range text are the shared region's, beside the field, the
+	// selector row, and the form (ADR 0039 and ADR 0040).
+	const region = useDecisionRegion(props.actions, bodyFacts.layout?.regionVisible ?? 0);
+	// The fact the gate and the bar share: the row under the cursor carries
+	// settings to edit, and this surface can open the panel for them. Close
+	// and Goto decide about the turn that ended, so their rows leave the
+	// control dimmed and say why when it is pressed.
+	const editableActionSelected =
+		props.onEditAction !== undefined && props.actions[region.at]?.editable === true;
+	// The plane action's row holds no settings (ADR 0068): the surface states
+	// it, and the catalogue keeps the one gate with the reason it names.
+	const planeActionSelected = props.actions[region.at]?.planeAction === true;
+	// The modal states the facts its own regions produce: the Decision
+	// region's row count, and the Body pane's window beside it.
+	const facts = availabilityFacts("decision-modal", props.standing, {
+		editableActionSelected,
+		planeActionSelected,
+		...bodyPaneFacts(bodyFacts.renderedBody.length, bodyFacts.bodyRows, bodyFacts.emptyLog),
+		actionRowCount: props.actions.length,
+	});
+	const scrollBody = useDecisionScroll(
+		bodyFacts.maxBodyScroll,
+		bodyFacts.bodyRows,
+		bodyFacts.setBodyScroll,
+	);
+	const { visibleBody, thumbRows } = bodyScrollWindow(bodyFacts);
+	useControlDispatch({
+		facts,
+		active: props.inputActive,
+		onUnavailable: props.onUnavailable,
+		onEmergencyExit: props.onEmergencyExit,
+		handlers: decisionModalHandlers(props, {
+			region,
+			editableActionSelected,
+			scrollBody,
+		}),
+	});
+
+	const modalBody = decisionModalBody(props, {
+		frame,
+		held,
+		region,
+		bodyFacts,
+		visibleBody,
+		thumbRows,
+	});
+
+	return createElement(ModalSurface, {
+		frame,
+		width: terminalWidth,
+		title: decisionTitle(props.title),
+		opacity: pop,
+		body: modalBody,
+		message: props.message,
+		bar: {
+			mode: "decision-modal",
+			facts,
+			rangeIndicator: region.rangeText,
+		},
+		queuePaused: props.standing.queuePaused,
+	});
+}
+
+/** The body pane's facts: the layout, the body, the scroll's range. */
+function useDecisionBodyFacts(
+	props: DecisionModalProps,
+	frame: ReturnType<typeof modalFrame>,
+	held: boolean,
+	contentRows: number,
+): DecisionBodyFacts {
+	const { entries, actions, factLines = [] } = props;
 	// The pane's chrome yields before the log yields rows: padding first,
 	// border second, and only then does the surface stand down to the size
 	// message. The scrollbar is decided at the final size, so the thumb does
@@ -258,14 +312,8 @@ export function DecisionModal({
 	// The transition's fact lines stand above the action rows, like the
 	// held-cause row: the rows decide on the facts, so the log yields to
 	// them (ADR 0027).
-	const factRows = factLines.length;
-	const finalLayout = decisionBodyLayout(
-		modalFrame(terminalWidth, terminalHeight, { margin: MARGIN }).contentRows,
-		actions.length,
-		held,
-		factRows,
-	);
-	const layout = decisionBodyLayout(frame.contentRows, actions.length, held, factRows);
+	const finalLayout = decisionBodyLayout(contentRows, actions.length, held, factLines.length);
+	const layout = decisionBodyLayout(frame.contentRows, actions.length, held, factLines.length);
 	// An empty turn log states its reason as one row inside the pane, and
 	// the pane keeps its chrome.
 	const emptyLog = entries.length === 0;
@@ -300,32 +348,77 @@ export function DecisionModal({
 	// newest line in view. `null` pins the view to the bottom until the
 	// operator scrolls: the bottom's index moves while the box grows in.
 	const [bodyScroll, setBodyScroll] = useState<number | null>(null);
-	// The region's selection, its wrap, its auto-scroll, its visible window,
-	// and its range text are the shared region's, beside the field, the
-	// selector row, and the form (ADR 0039 and ADR 0040).
-	const region = useDecisionRegion(actions, layout?.regionVisible ?? 0);
-	// The fact the gate and the bar share: the row under the cursor carries
-	// settings to edit, and this surface can open the panel for them. Close
-	// and Goto decide about the turn that ended, so their rows leave the
-	// control dimmed and say why when it is pressed.
-	const editableActionSelected =
-		onEditAction !== undefined && actions[region.at]?.editable === true;
-	// The plane action's row holds no settings (ADR 0068): the surface states
-	// it, and the catalogue keeps the one gate with the reason it names.
-	const planeActionSelected = actions[region.at]?.planeAction === true;
-	// The modal states the facts its own regions produce: the Decision
-	// region's row count, and the Body pane's window beside it.
-	const facts = availabilityFacts("decision-modal", standing, {
-		editableActionSelected,
-		planeActionSelected,
-		...bodyPaneFacts(renderedBody.length, bodyRows, emptyLog),
-		actionRowCount: actions.length,
-	});
+	return {
+		layout,
+		emptyLog,
+		panePadding,
+		hasScrollbar,
+		bodyWidth,
+		renderedBody,
+		bodyRows,
+		maxBodyScroll,
+		bodyScroll,
+		setBodyScroll,
+	};
+}
 
+/**
+ * The body pane's facts: the layout, the body, the scroll's range, and the
+ * view the body stands at.
+ */
+interface DecisionBodyFacts {
+	layout: ReturnType<typeof decisionBodyLayout>;
+	emptyLog: boolean;
+	panePadding: 0 | 1;
+	hasScrollbar: boolean;
+	bodyWidth: number;
+	renderedBody: MdLine[];
+	bodyRows: number;
+	maxBodyScroll: number;
+	bodyScroll: number | null;
+	setBodyScroll: Dispatch<SetStateAction<number | null>>;
+}
+
+/** The modal's control catalogue handlers. */
+function decisionModalHandlers(
+	props: DecisionModalProps,
+	fields: {
+		region: DecisionRegion;
+		editableActionSelected: boolean;
+		scrollBody: (name: string) => void;
+	},
+): Record<string, ControlHandler> {
+	const { region, editableActionSelected, scrollBody } = fields;
 	// Scroll the body by one step of the named key: a page moves one viewport
 	// minus the shared row, and the jump keys take either edge. A null view
 	// is the bottom, so the first step reads the bottom's index.
-	const scrollBody = (name: string) => {
+	return {
+		help: () => props.onHelp?.(),
+		message: () => props.onMessage?.(),
+		"cancel-action": props.onCancel,
+		"confirm-action": () => region.confirm((row) => props.onAction(row.key)),
+		"edit-action": () => {
+			const row = props.actions[region.at];
+			if (row !== undefined && editableActionSelected) props.onEditAction?.(row.key);
+		},
+		"select-action": ({ key }) => region.move(key.name === "up" ? -1 : 1),
+		"scroll-body": ({ key }) => scrollBody(key.name),
+		// The plane-level keys reach every surface the chrome owns (issue
+		// #319, ADR 0111): the brake and the mode flip on the modal the way
+		// they do on the base panes, and the bar's hint and the border's lamp
+		// read the facts the toggle writes.
+		"queue-pause": props.onQueuePause,
+		"auto-handoff": props.onAutoHandoff,
+	};
+}
+
+/** The body's scroll step for one named key. */
+function useDecisionScroll(
+	maxBodyScroll: number,
+	bodyRows: number,
+	setBodyScroll: Dispatch<SetStateAction<number | null>>,
+): (name: string) => void {
+	return (name: string) => {
 		if (name === "pageup")
 			setBodyScroll((current) => Math.max(0, (current ?? maxBodyScroll) - Math.max(1, bodyRows)));
 		else if (name === "pagedown")
@@ -338,84 +431,56 @@ export function DecisionModal({
 			setBodyScroll((current) => Math.min((current ?? maxBodyScroll) + 1, maxBodyScroll));
 		else setBodyScroll((current) => Math.max(0, (current ?? maxBodyScroll) - 1));
 	};
+}
 
-	useControlDispatch({
-		facts,
-		active: inputActive,
-		onUnavailable,
-		onEmergencyExit,
-		handlers: {
-			help: () => onHelp?.(),
-			message: () => onMessage?.(),
-			"cancel-action": onCancel,
-			"confirm-action": () => region.confirm((row) => onAction(row.key)),
-			"edit-action": () => {
-				const row = actions[region.at];
-				if (row !== undefined && editableActionSelected) onEditAction?.(row.key);
-			},
-			"select-action": ({ key }) => region.move(key.name === "up" ? -1 : 1),
-			"scroll-body": ({ key }) => scrollBody(key.name),
-			// The plane-level keys reach every surface the chrome owns (issue
-			// #319, ADR 0111): the brake and the mode flip on the modal the way
-			// they do on the base panes, and the bar's hint and the border's lamp
-			// read the facts the toggle writes.
-			"queue-pause": onQueuePause,
-			"auto-handoff": onAutoHandoff,
-		},
-	});
-
-	const scroll = bodyScroll === null ? maxBodyScroll : Math.min(bodyScroll, maxBodyScroll);
-	const visibleBody = windowOf(renderedBody, scroll, bodyRows);
-	const thumbRows = hasScrollbar ? scrollbarRows(renderedBody.length, bodyRows, scroll) : null;
-
-	const modalBody: ModalBody = {
+/** The modal's body: the context line, the turn log pane, the region rows. */
+function decisionModalBody(
+	props: DecisionModalProps,
+	fields: {
+		frame: ReturnType<typeof modalFrame>;
+		held: boolean;
+		region: DecisionRegion;
+		bodyFacts: DecisionBodyFacts;
+		visibleBody: MdLine[];
+		thumbRows: ReadonlySet<number> | null;
+	},
+): ModalBody {
+	const { frame, held, region, bodyFacts, visibleBody, thumbRows } = fields;
+	return {
 		above: [
 			createElement(
 				"text",
 				{ key: "context", fg: paint("subtext0") },
-				truncateToWidth(contextLine, frame.contentWidth),
+				truncateToWidth(props.contextLine, frame.contentWidth),
 			),
 		],
 		pane: turnLogPane({
-			paneRows: layout?.paneRows ?? null,
-			panePadding,
+			paneRows: bodyFacts.layout?.paneRows ?? null,
+			panePadding: bodyFacts.panePadding,
 			visibleBody,
-			bodyWidth,
+			bodyWidth: bodyFacts.bodyWidth,
 			thumbRows,
 			title: TURN_LOG_PANE,
 		}),
 		below: [
-			...(held ? [heldCauseRow(cause, detail, frame.contentWidth)] : []),
-			...factLines.map((line, index) =>
+			...(held && props.cause != null
+				? [heldCauseRow(props.cause, props.detail ?? "", frame.contentWidth)]
+				: []),
+			...(props.factLines ?? []).map((line, index) =>
 				createElement(
 					"text",
 					{ key: `fact-${index}`, fg: paint("blue") },
 					truncateToWidth(line, frame.contentWidth),
 				),
 			),
-			...decisionActionRows(region, actions, frame.contentWidth),
+			...decisionActionRows(region, props.actions, frame.contentWidth),
 		],
 		minRows:
 			CONTEXT_ROWS +
 			(held ? 1 : 0) +
-			factRows +
+			(props.factLines ?? []).length +
 			PANE_BORDERS +
 			DECISION_LOG_MIN +
-			Math.min(1, actions.length),
+			Math.min(1, props.actions.length),
 	};
-
-	return createElement(ModalSurface, {
-		frame,
-		width: terminalWidth,
-		title: decisionTitle(title),
-		opacity: pop,
-		body: modalBody,
-		message,
-		bar: {
-			mode: "decision-modal",
-			facts,
-			rangeIndicator: region.rangeText,
-		},
-		queuePaused: standing.queuePaused,
-	});
 }

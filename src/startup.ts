@@ -279,6 +279,32 @@ export function installStateShutdown(
 }
 
 /**
+ * The runner the boot runs on: the stub world on the real runner when the
+ * flag names one (issue #178, ADR 0073). The stub runner serves only the
+ * `gh` commands from the world and passes every other command to the real
+ * binaries. A world file that cannot be read is the boot's refusal.
+ */
+function stubRunnerGate(
+	realRunner: CommandRunner,
+	worldPath: string | undefined,
+	notes: string[],
+): { ok: true; runner: CommandRunner } | { ok: false; reason: string } {
+	if (worldPath === undefined) return { ok: true, runner: realRunner };
+	let world: StubWorldStore;
+	try {
+		world = StubWorldStore.load(worldPath);
+	} catch (error) {
+		const reason =
+			error instanceof StubWorldError
+				? error.message
+				: `the stub world could not be loaded: ${String(error)}`;
+		return { ok: false, reason };
+	}
+	notes.push(`the stub world answers the GitHub commands from ${worldPath}`);
+	return { ok: true, runner: createStubRunner(realRunner, world) };
+}
+
+/**
  * The whole startup: the config, the model list check, and the state open,
  * in the boot order.
  *
@@ -298,27 +324,12 @@ export async function runStartup(configPath: string, worldPath?: string): Promis
 
 	const statePath = statePathFor(loaded.config, configPath);
 	const logger = startupLogger(loaded.config, configPath);
-	// The Stub run (issue #178, ADR 0073): the world file flag wraps the real
-	// runner in the stub runner, which serves only the `gh` commands from the
-	// world and passes every other command to the real binaries. A world file
-	// that cannot be read stops the boot before it opens anything.
-	const realRunner = createChildProcessRunner();
-	let runner: CommandRunner = realRunner;
-	if (worldPath !== undefined) {
-		let world: StubWorldStore;
-		try {
-			world = StubWorldStore.load(worldPath);
-		} catch (error) {
-			const reason =
-				error instanceof StubWorldError
-					? error.message
-					: `the stub world could not be loaded: ${String(error)}`;
-			logger.error(`startup failed: ${reason}`);
-			return { ok: false, lines: [...notes, reason], exitCode: 1 };
-		}
-		runner = createStubRunner(realRunner, world);
-		notes.push(`the stub world answers the GitHub commands from ${worldPath}`);
+	const stub = stubRunnerGate(createChildProcessRunner(), worldPath, notes);
+	if (!stub.ok) {
+		logger.error(`startup failed: ${stub.reason}`);
+		return { ok: false, lines: [...notes, stub.reason], exitCode: 1 };
 	}
+	const runner = stub.runner;
 	// The config's model values, checked against what the agent runtimes
 	// actually offer. An unavailable list only warns: one agent kind that
 	// cannot answer must not block the control plane.

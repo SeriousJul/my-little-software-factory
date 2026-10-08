@@ -605,10 +605,8 @@ export function validateConfig(data: unknown): FactoryConfig {
 	return parseConfig(data);
 }
 
-function parseConfig(data: unknown): FactoryConfig {
-	if (!isRecord(data)) {
-		throw new ConfigError("config: the top level must be a table of key = value pairs");
-	}
+/** The top-level keys the config admits, before any field is read. */
+function checkConfigTopKeys(data: Record<string, unknown>): void {
 	const knownTop = new Set([
 		"default-agent",
 		"default-model",
@@ -657,6 +655,49 @@ function parseConfig(data: unknown): FactoryConfig {
 	if ("sources" in data && "ticket-sources" in data) {
 		throw new ConfigError("config: use either sources or ticket-sources, not both");
 	}
+}
+
+/** The numeric limits the top level holds, with the defaults a plane seeds. */
+type ParsedConfigLimits = Pick<
+	FactoryConfig,
+	| "maxParallelAgents"
+	| "agentPollIntervalSeconds"
+	| "completionMessageLines"
+	| "maxHandoffsPerTicket"
+	| "scroll"
+>;
+
+function parseConfigLimits(data: Record<string, unknown>): ParsedConfigLimits {
+	return {
+		maxParallelAgents: nonNegativeIntField(data, "max-parallel-agents", 2),
+		agentPollIntervalSeconds: positiveNumberField(data, "agent-poll-interval-seconds", 5),
+		completionMessageLines: positiveIntField(data, "completion-message-lines", 200),
+		maxHandoffsPerTicket: positiveIntField(data, "max-handoffs-per-ticket", 10),
+		scroll: validateScroll(data.scroll),
+	};
+}
+
+/** The resolved top-level fields, before the config is assembled. */
+type ParsedConfigFields = Pick<
+	FactoryConfig,
+	| "defaultAgent"
+	| "defaultModel"
+	| "defaultEnvironment"
+	| "defaultTaskType"
+	| "agents"
+	| "taskTypes"
+	| "consultationTypes"
+	| "attentionBell"
+	| "desktopNotification"
+	| "interactionExitKey"
+	| "workflowStates"
+	| "repos"
+	| "sources"
+	| "stateFile"
+	| "logging"
+> & { limits: ParsedConfigLimits };
+
+function parseConfigFields(data: Record<string, unknown>): ParsedConfigFields {
 	const defaultAgent = stringField(data, "default-agent");
 	const defaultEnvironment = stringField(data, "default-environment");
 	const handoffKinds = HANDOFF_ENVIRONMENT_KINDS as readonly string[];
@@ -683,17 +724,7 @@ function parseConfig(data: unknown): FactoryConfig {
 	const workflowStates = validateWorkflowStates(data.states, taskTypes);
 	const stateFile = data["state-file"] === undefined ? undefined : stringField(data, "state-file");
 	const logging = validateLogging(data.logging);
-	const maxParallelAgents = nonNegativeIntField(data, "max-parallel-agents", 2);
-	const agentPollIntervalSeconds = positiveNumberField(data, "agent-poll-interval-seconds", 5);
-	const completionMessageLines = positiveIntField(data, "completion-message-lines", 200);
-	const maxHandoffsPerTicket = positiveIntField(data, "max-handoffs-per-ticket", 10);
-	const scroll = validateScroll(data.scroll);
-	if (!(defaultTaskType in taskTypes)) {
-		throw new ConfigError(
-			`config: default-task-type "${defaultTaskType}" does not match any task type`,
-		);
-	}
-	const config: FactoryConfig = {
+	return {
 		defaultAgent,
 		...(defaultModel === undefined ? {} : { defaultModel }),
 		defaultEnvironment: defaultEnvironment as EnvironmentKind,
@@ -704,16 +735,34 @@ function parseConfig(data: unknown): FactoryConfig {
 		attentionBell,
 		desktopNotification,
 		interactionExitKey,
-		maxParallelAgents,
-		agentPollIntervalSeconds,
-		completionMessageLines,
-		maxHandoffsPerTicket,
-		scroll,
 		workflowStates,
 		repos,
 		sources,
 		...(stateFile === undefined ? {} : { stateFile }),
 		...(logging === undefined ? {} : { logging }),
+		limits: parseConfigLimits(data),
+	};
+}
+
+function parseConfig(data: unknown): FactoryConfig {
+	if (!isRecord(data)) {
+		throw new ConfigError("config: the top level must be a table of key = value pairs");
+	}
+	checkConfigTopKeys(data);
+	const { limits, agents, ...top } = parseConfigFields(data);
+	if (!(top.defaultTaskType in top.taskTypes)) {
+		throw new ConfigError(
+			`config: default-task-type "${top.defaultTaskType}" does not match any task type`,
+		);
+	}
+	const config: FactoryConfig = {
+		...top,
+		agents,
+		maxParallelAgents: limits.maxParallelAgents,
+		agentPollIntervalSeconds: limits.agentPollIntervalSeconds,
+		completionMessageLines: limits.completionMessageLines,
+		maxHandoffsPerTicket: limits.maxHandoffsPerTicket,
+		scroll: limits.scroll,
 	};
 	return config;
 }
@@ -954,111 +1003,155 @@ function validateTaskTypes(
 		const hasTemplate = raw.template !== undefined;
 		if (hasAction === hasTemplate)
 			throw new ConfigError(`config: ${where}: exactly one of "template" or "action" is required`);
-		const transition = validateTransition(raw.transition, agents, where);
 		if (hasAction) {
-			// The action form's whole surface: the action's name, its method,
-			// and the transition its outcome fires. No profile keys: the
-			// action holds no settings an operator edits before a run.
-			for (const key of Object.keys(raw))
-				if (!["action", "method", "transition", "operator-decides"].includes(key))
-					throw new ConfigError(
-						`config: ${where}: unknown key "${key}"; the action form takes no profile keys`,
-					);
-			const action = stringField(raw, "action", where);
-			if (!isPlaneActionName(action))
-				throw new ConfigError(
-					`config: ${where}.action: "${action}" is not a known plane action (${PLANE_ACTION_NAMES.join(", ")})`,
-				);
-			let method = DEFAULT_MERGE_METHOD;
-			if (raw.method !== undefined) {
-				const named = stringField(raw, "method", where);
-				if (!isMergeMethod(named))
-					throw new ConfigError(
-						`config: ${where}.method: "${named}" is not a merge method (${MERGE_METHODS.join(", ")})`,
-					);
-				method = named;
-			}
-			const operatorDecides = optionalBooleanField(raw, "operator-decides", where);
-			out[name] = {
-				action,
-				method,
-				...(transition === undefined ? {} : { transition }),
-				...(operatorDecides === undefined ? {} : { operatorDecides }),
-			};
+			out[name] = validateActionTaskType({ raw, where, agents });
 			continue;
 		}
-		for (const key of Object.keys(raw))
-			if (
-				![
-					"template",
-					"agent",
-					"model",
-					"thinking",
-					"context-window",
-					"transition",
-					"opens-pull-request",
-					"operator-decides",
-				].includes(key)
-			)
-				throw new ConfigError(`config: ${where}: unknown key "${key}"`);
-		const template = stringField(raw, "template", where);
-		// The pull request open fact (ADR 0076): a boolean the prompt form
-		// alone carries; omitted or false stands the task type where it was.
-		let opensPullRequest = false;
-		if (raw["opens-pull-request"] !== undefined) {
-			if (raw["opens-pull-request"] !== true && raw["opens-pull-request"] !== false)
-				throw new ConfigError(`config: ${where}.opens-pull-request: must be a boolean`);
-			opensPullRequest = raw["opens-pull-request"] === true;
-		}
-		// The Operator-decides property (ADR 0085, renamed by ADR 0092): a
-		// boolean either form carries; omitted or false lets Auto-handoff mode
-		// make the Completion decision on the type's settled turns.
-		const operatorDecides = optionalBooleanField(raw, "operator-decides", where);
-		for (const placeholder of placeholderNames(template)) {
-			if (!PROMPT_PLACEHOLDERS.includes(placeholder)) {
-				throw new ConfigError(
-					`config: ${where}.template: unknown placeholder {${placeholder}}; use ${PROMPT_PLACEHOLDERS.map((name) => `{${name}}`).join(", ")}`,
-				);
-			}
-		}
-		// The Task profile (ADR 0009): its own agent, model, and thinking level.
-		// An omitted agent leaves the agent to `default-agent`, so the profile's
-		// settings are checked against the agent its handoffs start on.
-		const agent = optionalStringField(raw, "agent", where);
-		if (agent !== undefined && !(agent in agents))
-			throw new ConfigError(`config: ${where}.agent: unknown agent "${agent}"`);
-		const profileAgent: ResolvedAgentType = {
-			agentType: agent ?? defaultAgent,
-			// The named Agent type is checked below when the file names one, and
-			// `validateAgents` holds the default to a record the config has.
-			agent: agents[agent ?? defaultAgent],
-		};
-		const model = optionalStringField(raw, "model", where);
-		if (model !== undefined) {
-			const verdict = modelSettingFit(profileAgent, model);
-			if (!verdict.ok) throw new ConfigError(`config: ${where}.model: ${verdict.reason}`);
-		}
-		const thinking = validateThinkingLevel(
-			optionalStringField(raw, "thinking", where),
-			profileAgent,
-			`${where}.thinking`,
-		);
-		// The profile's own agent is the one its context window must reach. A
-		// transition can reroute the handoff onto another agent later; that
-		// pair is caught at handoff time by the same module.
-		const contextWindow = tokenCountField(raw, "context-window", where, profileAgent);
-		out[name] = {
-			template,
-			...(agent === undefined ? {} : { agent }),
-			...(model === undefined ? {} : { model }),
-			...(thinking === undefined ? {} : { thinking }),
-			...(contextWindow === undefined ? {} : { contextWindow }),
-			...(transition === undefined ? {} : { transition }),
-			...(opensPullRequest ? { opensPullRequest } : {}),
-			...(operatorDecides === undefined ? {} : { operatorDecides }),
-		};
+		out[name] = validateTemplateTaskType({ raw, where, agents, defaultAgent });
 	}
 	return out;
+}
+
+/**
+ * The action form's whole surface (ADR 0068): the action's name, its method,
+ * and the transition its outcome fires. No profile keys: the action holds no
+ * settings an operator edits before a run.
+ */
+function validateActionTaskType(fields: {
+	raw: Record<string, unknown>;
+	where: string;
+	agents: Record<string, AgentTypeConfig>;
+}): TaskTypeConfig {
+	const { raw, where, agents } = fields;
+	for (const key of Object.keys(raw))
+		if (!["action", "method", "transition", "operator-decides"].includes(key))
+			throw new ConfigError(
+				`config: ${where}: unknown key "${key}"; the action form takes no profile keys`,
+			);
+	const action = stringField(raw, "action", where);
+	if (!isPlaneActionName(action))
+		throw new ConfigError(
+			`config: ${where}.action: "${action}" is not a known plane action (${PLANE_ACTION_NAMES.join(", ")})`,
+		);
+	let method = DEFAULT_MERGE_METHOD;
+	if (raw.method !== undefined) {
+		const named = stringField(raw, "method", where);
+		if (!isMergeMethod(named))
+			throw new ConfigError(
+				`config: ${where}.method: "${named}" is not a merge method (${MERGE_METHODS.join(", ")})`,
+			);
+		method = named;
+	}
+	const transition = validateTransition(raw.transition, agents, where);
+	const operatorDecides = optionalBooleanField(raw, "operator-decides", where);
+	return {
+		action,
+		method,
+		...(transition === undefined ? {} : { transition }),
+		...(operatorDecides === undefined ? {} : { operatorDecides }),
+	};
+}
+
+/** The prompt form's template and the profile the handoff starts on. */
+function validateTemplateTaskType(fields: {
+	raw: Record<string, unknown>;
+	where: string;
+	agents: Record<string, AgentTypeConfig>;
+	defaultAgent: string;
+}): TaskTypeConfig {
+	const { raw, where, agents, defaultAgent } = fields;
+	for (const key of Object.keys(raw))
+		if (
+			![
+				"template",
+				"agent",
+				"model",
+				"thinking",
+				"context-window",
+				"transition",
+				"opens-pull-request",
+				"operator-decides",
+			].includes(key)
+		)
+			throw new ConfigError(`config: ${where}: unknown key "${key}"`);
+	const template = stringField(raw, "template", where);
+	// The pull request open fact (ADR 0076): a boolean the prompt form
+	// alone carries; omitted or false stands the task type where it was.
+	let opensPullRequest = false;
+	if (raw["opens-pull-request"] !== undefined) {
+		if (raw["opens-pull-request"] !== true && raw["opens-pull-request"] !== false)
+			throw new ConfigError(`config: ${where}.opens-pull-request: must be a boolean`);
+		opensPullRequest = raw["opens-pull-request"] === true;
+	}
+	// The Operator-decides property (ADR 0085, renamed by ADR 0092): a
+	// boolean either form carries; omitted or false lets Auto-handoff mode
+	// make the Completion decision on the type's settled turns.
+	const operatorDecides = optionalBooleanField(raw, "operator-decides", where);
+	for (const placeholder of placeholderNames(template)) {
+		if (!PROMPT_PLACEHOLDERS.includes(placeholder)) {
+			throw new ConfigError(
+				`config: ${where}.template: unknown placeholder {${placeholder}}; use ${PROMPT_PLACEHOLDERS.map((name) => `{${name}}`).join(", ")}`,
+			);
+		}
+	}
+	return validateTaskProfile({
+		raw,
+		where,
+		agents,
+		defaultAgent,
+		template,
+		opensPullRequest,
+		operatorDecides,
+	});
+}
+
+/** The Task profile (ADR 0009): the agent, model, and thinking the prompt form starts on. */
+function validateTaskProfile(fields: {
+	raw: Record<string, unknown>;
+	where: string;
+	agents: Record<string, AgentTypeConfig>;
+	defaultAgent: string;
+	template: string;
+	opensPullRequest: boolean;
+	operatorDecides: boolean | undefined;
+}): TaskTypeConfig {
+	const { raw, where, agents, defaultAgent, template, opensPullRequest, operatorDecides } = fields;
+	// An omitted agent leaves the agent to `default-agent`, so the profile's
+	// settings are checked against the agent its handoffs start on.
+	const agent = optionalStringField(raw, "agent", where);
+	if (agent !== undefined && !(agent in agents))
+		throw new ConfigError(`config: ${where}.agent: unknown agent "${agent}"`);
+	const profileAgent: ResolvedAgentType = {
+		agentType: agent ?? defaultAgent,
+		// The named Agent type is checked below when the file names one, and
+		// `validateAgents` holds the default to a record the config has.
+		agent: agents[agent ?? defaultAgent],
+	};
+	const model = optionalStringField(raw, "model", where);
+	if (model !== undefined) {
+		const verdict = modelSettingFit(profileAgent, model);
+		if (!verdict.ok) throw new ConfigError(`config: ${where}.model: ${verdict.reason}`);
+	}
+	const thinking = validateThinkingLevel(
+		optionalStringField(raw, "thinking", where),
+		profileAgent,
+		`${where}.thinking`,
+	);
+	// The profile's own agent is the one its context window must reach. A
+	// transition can reroute the handoff onto another agent later; that
+	// pair is caught at handoff time by the same module.
+	const contextWindow = tokenCountField(raw, "context-window", where, profileAgent);
+	const transition = validateTransition(raw.transition, agents, where);
+	return {
+		template,
+		...(agent === undefined ? {} : { agent }),
+		...(model === undefined ? {} : { model }),
+		...(thinking === undefined ? {} : { thinking }),
+		...(contextWindow === undefined ? {} : { contextWindow }),
+		...(transition === undefined ? {} : { transition }),
+		...(opensPullRequest ? { opensPullRequest } : {}),
+		...(operatorDecides === undefined ? {} : { operatorDecides }),
+	};
 }
 
 /**
@@ -1285,6 +1378,33 @@ function validateTransition(
 ): WorkflowTransition | undefined {
 	if (value === undefined) return undefined;
 	if (!isRecord(value)) throw new ConfigError(`config: ${where}.transition: must be a table`);
+	checkTransitionKeys(value, where);
+	const facts = (key: "ticket-facts" | "pull-request-facts") => {
+		const rawFacts = value[key];
+		if (rawFacts === undefined) return [] as string[];
+		if (
+			!Array.isArray(rawFacts) ||
+			rawFacts.some((label) => typeof label !== "string" || label === "")
+		)
+			throw new ConfigError(`config: ${where}.transition.${key}: must be a list of label names`);
+		return [...rawFacts] as string[];
+	};
+	const scoreThreshold = parseScoreThreshold(value, where);
+	const pins = parseTransitionPins(value, agents, where);
+	const branches = validateTransitionBranches(value.branches, `${where}.transition`, agents);
+	checkBranchScoreJudgments(branches, scoreThreshold, where);
+	return {
+		ticketFacts: facts("ticket-facts"),
+		pullRequestFacts: facts("pull-request-facts"),
+		...(scoreThreshold === undefined ? {} : { scoreThreshold }),
+		...(branches === undefined ? {} : { branches }),
+		...(pins.agent === undefined ? {} : { agent: pins.agent }),
+		...(pins.environment === undefined ? {} : { environment: pins.environment }),
+	};
+}
+
+/** The keys a transition table admits, the retired key named first. */
+function checkTransitionKeys(value: Record<string, unknown>, where: string): void {
 	for (const key of Object.keys(value)) {
 		if (key === RETIRED_AUTO_ADVANCE_KEY) throw new ConfigError(retiredAutoAdvance(where));
 		if (
@@ -1299,30 +1419,30 @@ function validateTransition(
 		)
 			throw new ConfigError(`config: ${where}.transition: unknown key "${key}"`);
 	}
-	const facts = (key: "ticket-facts" | "pull-request-facts") => {
-		const rawFacts = value[key];
-		if (rawFacts === undefined) return [] as string[];
-		if (
-			!Array.isArray(rawFacts) ||
-			rawFacts.some((label) => typeof label !== "string" || label === "")
-		)
-			throw new ConfigError(`config: ${where}.transition.${key}: must be a list of label names`);
-		return [...rawFacts] as string[];
-	};
-	let scoreThreshold: number | undefined;
-	if (value["score-threshold"] !== undefined) {
-		const rawThreshold = value["score-threshold"];
-		if (
-			typeof rawThreshold !== "number" ||
-			!Number.isFinite(rawThreshold) ||
-			rawThreshold < 0 ||
-			rawThreshold > 100
-		)
-			throw new ConfigError(
-				`config: ${where}.transition.score-threshold: must be a number between 0 and 100`,
-			);
-		scoreThreshold = rawThreshold;
-	}
+}
+
+/** The optional score threshold a score judgment scores against. */
+function parseScoreThreshold(value: Record<string, unknown>, where: string): number | undefined {
+	const rawThreshold = value["score-threshold"];
+	if (rawThreshold === undefined) return undefined;
+	if (
+		typeof rawThreshold !== "number" ||
+		!Number.isFinite(rawThreshold) ||
+		rawThreshold < 0 ||
+		rawThreshold > 100
+	)
+		throw new ConfigError(
+			`config: ${where}.transition.score-threshold: must be a number between 0 and 100`,
+		);
+	return rawThreshold;
+}
+
+/** The optional agent and environment pins the transition carries. */
+function parseTransitionPins(
+	value: Record<string, unknown>,
+	agents: Record<string, AgentTypeConfig>,
+	where: string,
+): { agent: string | undefined; environment: EnvironmentKind | undefined } {
 	let agent: string | undefined;
 	if (value.agent !== undefined) {
 		agent = stringField(value, "agent", `${where}.transition`);
@@ -1339,98 +1459,116 @@ function validateTransition(
 		}
 		environment = kind as EnvironmentKind;
 	}
-	const branches: TransitionBranch[] | undefined =
-		value.branches === undefined
-			? undefined
-			: (() => {
-					if (!Array.isArray(value.branches))
-						throw new ConfigError(`config: ${where}.transition.branches: must be a list of tables`);
-					return value.branches.map((rawBranch, index) => {
-						const branchWhere = `${where}.transition.branches[${index}]`;
-						if (!isRecord(rawBranch))
-							throw new ConfigError(`config: ${branchWhere}: must be a table`);
-						for (const key of Object.keys(rawBranch)) {
-							if (key === RETIRED_AUTO_ADVANCE_KEY)
-								throw new ConfigError(retiredAutoAdvance(branchWhere));
-							if (
-								!["when", "ticket-facts", "pull-request-facts", "agent", "environment"].includes(
-									key,
-								)
-							)
-								throw new ConfigError(`config: ${branchWhere}: unknown key "${key}"`);
-						}
-						let when: TransitionJudgment | undefined;
-						if (rawBranch.when !== undefined) {
-							const judgment = stringField(rawBranch, "when", branchWhere);
-							if (!(TRANSITION_JUDGMENTS as readonly string[]).includes(judgment))
-								throw new ConfigError(
-									`config: ${branchWhere}.when: must be one of: ${TRANSITION_JUDGMENTS.join(", ")}`,
-								);
-							when = judgment as TransitionJudgment;
-						}
-						const branchFacts = (key: "ticket-facts" | "pull-request-facts") => {
-							const rawFacts = rawBranch[key];
-							if (rawFacts === undefined) return undefined;
-							if (
-								!Array.isArray(rawFacts) ||
-								rawFacts.some((label) => typeof label !== "string" || label === "")
-							)
-								throw new ConfigError(
-									`config: ${branchWhere}.${key}: must be a list of label names`,
-								);
-							return [...rawFacts] as string[];
-						};
-						let branchAgent: string | undefined;
-						if (rawBranch.agent !== undefined) {
-							branchAgent = stringField(rawBranch, "agent", branchWhere);
-							if (!(branchAgent in agents))
-								throw new ConfigError(
-									`config: ${branchWhere}.agent: unknown agent "${branchAgent}"`,
-								);
-						}
-						let branchEnvironment: EnvironmentKind | undefined;
-						if (rawBranch.environment !== undefined) {
-							const kind = stringField(rawBranch, "environment", branchWhere);
-							if (!(HANDOFF_ENVIRONMENT_KINDS as readonly string[]).includes(kind)) {
-								throw new ConfigError(
-									`config: ${branchWhere}.environment: must be one of: ${HANDOFF_ENVIRONMENT_KINDS.join(", ")}`,
-								);
-							}
-							branchEnvironment = kind as EnvironmentKind;
-						}
-						return {
-							...(when === undefined ? {} : { when }),
-							...(branchFacts("ticket-facts") === undefined
-								? {}
-								: { ticketFacts: branchFacts("ticket-facts") }),
-							...(branchFacts("pull-request-facts") === undefined
-								? {}
-								: { pullRequestFacts: branchFacts("pull-request-facts") }),
-							...(branchAgent === undefined ? {} : { agent: branchAgent }),
-							...(branchEnvironment === undefined ? {} : { environment: branchEnvironment }),
-						};
-					});
-				})();
-	if (branches !== undefined) {
-		const scoreJudgments: TransitionJudgment[] = ["score-above-threshold", "score-below-threshold"];
-		if (
-			branches.some((branch) => branch.when !== undefined && scoreJudgments.includes(branch.when))
-		) {
-			if (scoreThreshold === undefined) {
-				throw new ConfigError(
-					`config: ${where}.transition: a score judgment needs score-threshold`,
-				);
-			}
+	return { agent, environment };
+}
+
+/**
+ * A score judgment in a branch needs the threshold it scores against, or the
+ * transition's own threshold the judgment rides on.
+ */
+function checkBranchScoreJudgments(
+	branches: TransitionBranch[] | undefined,
+	scoreThreshold: number | undefined,
+	where: string,
+): void {
+	if (branches === undefined) return;
+	const scoreJudgments: TransitionJudgment[] = ["score-above-threshold", "score-below-threshold"];
+	if (
+		branches.some((branch) => branch.when !== undefined && scoreJudgments.includes(branch.when))
+	) {
+		if (scoreThreshold === undefined) {
+			throw new ConfigError(`config: ${where}.transition: a score judgment needs score-threshold`);
 		}
 	}
+}
+
+/** The branches a transition carries, or undefined where the file names none. */
+function validateTransitionBranches(
+	rawBranches: unknown,
+	where: string,
+	agents: Record<string, AgentTypeConfig>,
+): TransitionBranch[] | undefined {
+	if (rawBranches === undefined) return undefined;
+	if (!Array.isArray(rawBranches))
+		throw new ConfigError(`config: ${where}.branches: must be a list of tables`);
+	return rawBranches.map((rawBranch, index) => {
+		const branchWhere = `${where}.branches[${index}]`;
+		if (!isRecord(rawBranch)) throw new ConfigError(`config: ${branchWhere}: must be a table`);
+		return validateTransitionBranch({ rawBranch, branchWhere, agents });
+	});
+}
+
+/** One branch of a transition: its judgment, its facts, and its pins. */
+function validateTransitionBranch(fields: {
+	rawBranch: Record<string, unknown>;
+	branchWhere: string;
+	agents: Record<string, AgentTypeConfig>;
+}): TransitionBranch {
+	const { rawBranch, branchWhere, agents } = fields;
+	for (const key of Object.keys(rawBranch)) {
+		if (key === RETIRED_AUTO_ADVANCE_KEY) throw new ConfigError(retiredAutoAdvance(branchWhere));
+		if (!["when", "ticket-facts", "pull-request-facts", "agent", "environment"].includes(key))
+			throw new ConfigError(`config: ${branchWhere}: unknown key "${key}"`);
+	}
+	let when: TransitionJudgment | undefined;
+	if (rawBranch.when !== undefined) {
+		const judgment = stringField(rawBranch, "when", branchWhere);
+		if (!(TRANSITION_JUDGMENTS as readonly string[]).includes(judgment))
+			throw new ConfigError(
+				`config: ${branchWhere}.when: must be one of: ${TRANSITION_JUDGMENTS.join(", ")}`,
+			);
+		when = judgment as TransitionJudgment;
+	}
+	const ticketFacts = transitionBranchFactsList({
+		raw: rawBranch,
+		where: branchWhere,
+		key: "ticket-facts",
+	});
+	const pullRequestFacts = transitionBranchFactsList({
+		raw: rawBranch,
+		where: branchWhere,
+		key: "pull-request-facts",
+	});
+	let agent: string | undefined;
+	if (rawBranch.agent !== undefined) {
+		agent = stringField(rawBranch, "agent", branchWhere);
+		if (!(agent in agents))
+			throw new ConfigError(`config: ${branchWhere}.agent: unknown agent "${agent}"`);
+	}
+	let environment: EnvironmentKind | undefined;
+	if (rawBranch.environment !== undefined) {
+		const kind = stringField(rawBranch, "environment", branchWhere);
+		if (!(HANDOFF_ENVIRONMENT_KINDS as readonly string[]).includes(kind)) {
+			throw new ConfigError(
+				`config: ${branchWhere}.environment: must be one of: ${HANDOFF_ENVIRONMENT_KINDS.join(", ")}`,
+			);
+		}
+		environment = kind as EnvironmentKind;
+	}
 	return {
-		ticketFacts: facts("ticket-facts"),
-		pullRequestFacts: facts("pull-request-facts"),
-		...(scoreThreshold === undefined ? {} : { scoreThreshold }),
-		...(branches === undefined ? {} : { branches }),
+		...(when === undefined ? {} : { when }),
+		...(ticketFacts === undefined ? {} : { ticketFacts }),
+		...(pullRequestFacts === undefined ? {} : { pullRequestFacts }),
 		...(agent === undefined ? {} : { agent }),
 		...(environment === undefined ? {} : { environment }),
 	};
+}
+
+/** One branch's fact list, or undefined where the branch names none. */
+function transitionBranchFactsList(fields: {
+	raw: Record<string, unknown>;
+	where: string;
+	key: "ticket-facts" | "pull-request-facts";
+}): string[] | undefined {
+	const { raw, where, key } = fields;
+	const rawFacts = raw[key];
+	if (rawFacts === undefined) return undefined;
+	if (
+		!Array.isArray(rawFacts) ||
+		rawFacts.some((label) => typeof label !== "string" || label === "")
+	)
+		throw new ConfigError(`config: ${where}.${key}: must be a list of label names`);
+	return [...rawFacts] as string[];
 }
 
 function validateRepos(value: unknown): Record<string, string> {
@@ -1446,74 +1584,86 @@ function validateRepos(value: unknown): Record<string, string> {
 	return out;
 }
 
+/** The keys a source table admits. */
+function checkSourceKeys(raw: Record<string, unknown>, where: string): void {
+	for (const key of Object.keys(raw)) {
+		if (
+			!new Set([
+				"name",
+				"kind",
+				"refresh-interval-seconds",
+				"repositories",
+				"host",
+				"filter",
+				"auth",
+			]).has(key)
+		) {
+			throw new ConfigError(`config: ${where}: unknown key "${key}"`);
+		}
+	}
+}
+
 function validateSources(value: unknown): TicketSourceConfig[] {
 	if (value === undefined) return [];
 	if (!Array.isArray(value))
 		throw new ConfigError("config: sources: must be a list of source tables");
 	const names = new Set<string>();
-	return value.map((raw, index) => {
-		const where = `sources[${index}]`;
-		if (!isRecord(raw)) throw new ConfigError(`config: ${where}: must be a table`);
-		for (const key of Object.keys(raw)) {
-			if (
-				!new Set([
-					"name",
-					"kind",
-					"refresh-interval-seconds",
-					"repositories",
-					"host",
-					"filter",
-					"auth",
-				]).has(key)
-			) {
-				throw new ConfigError(`config: ${where}: unknown key "${key}"`);
-			}
-		}
-		const name = stringField(raw, "name", where);
-		if (names.has(name)) throw new ConfigError(`config: duplicate source name "${name}"`);
-		names.add(name);
-		const kind = stringField(raw, "kind", where);
-		if (!(GITHUB_SOURCE_KINDS as readonly string[]).includes(kind)) {
-			throw new ConfigError(
-				`config: ${where}.kind: unknown source kind "${kind}"; use ${GITHUB_SOURCE_KINDS.join(", ")}`,
-			);
-		}
-		// The security feeds are REST endpoints, not GitHub searches. A filter
-		// on one would be silently ignored, so a source that misreads it as
-		// applied never starts (issue #73).
-		if (isSecuritySourceKind(kind) && raw.filter !== undefined) {
-			throw new ConfigError(
-				`config: ${where}.filter: the ${kind} source kind lists its items by state and takes no filter; a filter would be silently ignored`,
-			);
-		}
-		const interval = raw["refresh-interval-seconds"];
-		if (typeof interval !== "number" || !Number.isFinite(interval) || interval <= 0) {
-			throw new ConfigError(`config: ${where}.refresh-interval-seconds: must be a positive number`);
-		}
-		if (
-			!Array.isArray(raw.repositories) ||
-			raw.repositories.length === 0 ||
-			raw.repositories.some((repo) => typeof repo !== "string" || !/^[^/\s]+\/[^/\s]+$/.test(repo))
-		) {
-			throw new ConfigError(
-				`config: ${where}.repositories: must be a non-empty list of owner/name strings`,
-			);
-		}
-		const host =
-			raw.host === undefined ? "github.com" : stringField(raw, "host", where).toLowerCase();
-		const filter = raw.filter === undefined ? undefined : stringField(raw, "filter", where);
-		if (filter !== undefined) validateSearchFilter(filter, `${where}.filter`);
-		const auth = raw.auth === undefined ? undefined : validateAuth(raw.auth, `${where}.auth`);
-		return {
-			name,
-			kind: kind as GitHubSourceKind,
-			refreshIntervalSeconds: interval,
-			repositories: [...raw.repositories] as string[],
-			host,
-			...(filter === undefined ? {} : { filter }),
-			...(auth === undefined ? {} : { auth }),
-		};
-	});
+	return value.map((raw, index) => validateSource({ raw, where: `sources[${index}]`, names }));
+}
+
+/** One source table, judged against the file's other names. */
+function validateSource(fields: {
+	raw: unknown;
+	where: string;
+	names: Set<string>;
+}): TicketSourceConfig {
+	const { raw, where, names } = fields;
+	if (!isRecord(raw)) throw new ConfigError(`config: ${where}: must be a table`);
+	checkSourceKeys(raw, where);
+	const name = stringField(raw, "name", where);
+	if (names.has(name)) throw new ConfigError(`config: duplicate source name "${name}"`);
+	names.add(name);
+	const kind = stringField(raw, "kind", where);
+	if (!(GITHUB_SOURCE_KINDS as readonly string[]).includes(kind)) {
+		throw new ConfigError(
+			`config: ${where}.kind: unknown source kind "${kind}"; use ${GITHUB_SOURCE_KINDS.join(", ")}`,
+		);
+	}
+	// The security feeds are REST endpoints, not GitHub searches. A filter
+	// on one would be silently ignored, so a source that misreads it as
+	// applied never starts (issue #73).
+	if (isSecuritySourceKind(kind) && raw.filter !== undefined) {
+		throw new ConfigError(
+			`config: ${where}.filter: the ${kind} source kind lists its items by state and takes no filter; a filter would be silently ignored`,
+		);
+	}
+	const interval = raw["refresh-interval-seconds"];
+	if (typeof interval !== "number" || !Number.isFinite(interval) || interval <= 0) {
+		throw new ConfigError(`config: ${where}.refresh-interval-seconds: must be a positive number`);
+	}
+	if (
+		!Array.isArray(raw.repositories) ||
+		raw.repositories.length === 0 ||
+		raw.repositories.some((repo) => typeof repo !== "string" || !/^[^/\s]+\/[^/\s]+$/.test(repo))
+	) {
+		throw new ConfigError(
+			`config: ${where}.repositories: must be a non-empty list of owner/name strings`,
+		);
+	}
+	const host =
+		raw.host === undefined ? "github.com" : stringField(raw, "host", where).toLowerCase();
+	const filter = raw.filter === undefined ? undefined : stringField(raw, "filter", where);
+	if (filter !== undefined) validateSearchFilter(filter, `${where}.filter`);
+	const auth = raw.auth === undefined ? undefined : validateAuth(raw.auth, `${where}.auth`);
+	return {
+		name,
+		kind: kind as GitHubSourceKind,
+		refreshIntervalSeconds: interval,
+		repositories: [...raw.repositories] as string[],
+		host,
+		...(filter === undefined ? {} : { filter }),
+		...(auth === undefined ? {} : { auth }),
+	};
 }
 
 function validateAuth(value: unknown, where: string): GitHubAuthentication {
@@ -1677,58 +1827,9 @@ export function configToToml(config: FactoryConfig): string {
 			"default-environment": config.defaultEnvironment,
 			"default-task-type": config.defaultTaskType,
 			...(config.stateFile === undefined ? {} : { "state-file": config.stateFile }),
-			agents: Object.fromEntries(
-				Object.entries(config.agents).map(([name, agent]) => [
-					name,
-					{
-						kind: agent.kind,
-						...(agent.model === undefined ? {} : { model: agent.model }),
-						...(agent.thinking === undefined ? {} : { thinking: agent.thinking }),
-						...(agent.contextWindow === undefined ? {} : { "context-window": agent.contextWindow }),
-						...(agent.thinkingValues === undefined
-							? {}
-							: { "thinking-values": agent.thinkingValues }),
-					},
-				]),
-			),
-			"task-types": Object.fromEntries(
-				Object.entries(config.taskTypes).map(([name, task]) => [
-					name,
-					{
-						...(task.template === undefined ? {} : { template: task.template }),
-						...(task.action === undefined ? {} : { action: task.action }),
-						...(task.method === undefined ? {} : { method: task.method }),
-						...(task.agent === undefined ? {} : { agent: task.agent }),
-						...(task.model === undefined ? {} : { model: task.model }),
-						...(task.thinking === undefined ? {} : { thinking: task.thinking }),
-						...(task.contextWindow === undefined ? {} : { "context-window": task.contextWindow }),
-						...(task.opensPullRequest === undefined
-							? {}
-							: { "opens-pull-request": task.opensPullRequest }),
-						...(task.operatorDecides === undefined
-							? {}
-							: { "operator-decides": task.operatorDecides }),
-						...(task.transition === undefined
-							? {}
-							: { transition: transitionToToml(task.transition) }),
-					},
-				]),
-			),
-			"consultation-types": Object.fromEntries(
-				Object.entries(config.consultationTypes).map(([name, consultation]) => [
-					name,
-					{
-						agent: consultation.agent,
-						environment: consultation.environment,
-						template: consultation.template,
-						...(consultation.model === undefined ? {} : { model: consultation.model }),
-						...(consultation.thinking === undefined ? {} : { thinking: consultation.thinking }),
-						...(consultation.contextWindow === undefined
-							? {}
-							: { "context-window": consultation.contextWindow }),
-					},
-				]),
-			),
+			agents: agentsToToml(config.agents),
+			"task-types": taskTypesToToml(config.taskTypes),
+			"consultation-types": consultationTypesToToml(config.consultationTypes),
 			"attention-bell": config.attentionBell,
 			"desktop-notification": config.desktopNotification,
 			"interaction-exit-key": config.interactionExitKey,
@@ -1736,16 +1837,7 @@ export function configToToml(config: FactoryConfig): string {
 			"agent-poll-interval-seconds": config.agentPollIntervalSeconds,
 			"completion-message-lines": config.completionMessageLines,
 			"max-handoffs-per-ticket": config.maxHandoffsPerTicket,
-			...(config.logging === undefined
-				? {}
-				: {
-						logging: {
-							level: config.logging.level,
-							...(config.logging.file === undefined ? {} : { file: config.logging.file }),
-							"max-size-mib": config.logging.maxSizeMib,
-							keep: config.logging.keep,
-						},
-					}),
+			...(config.logging === undefined ? {} : { logging: loggingToToml(config.logging) }),
 			scroll: {
 				speed: config.scroll.speed,
 				acceleration: config.scroll.acceleration,
@@ -1773,6 +1865,76 @@ export function configToToml(config: FactoryConfig): string {
  * stands in the file as the prompt it sends. A value that cannot take that
  * form keeps the single line.
  */
+/** The [agents] table the writer keeps, one block per agent. */
+function agentsToToml(agents: Record<string, AgentTypeConfig>): Record<string, unknown> {
+	return Object.fromEntries(
+		Object.entries(agents).map(([name, agent]) => [
+			name,
+			{
+				kind: agent.kind,
+				...(agent.model === undefined ? {} : { model: agent.model }),
+				...(agent.thinking === undefined ? {} : { thinking: agent.thinking }),
+				...(agent.contextWindow === undefined ? {} : { "context-window": agent.contextWindow }),
+				...(agent.thinkingValues === undefined ? {} : { "thinking-values": agent.thinkingValues }),
+			},
+		]),
+	);
+}
+
+/** The [task-types] table, one block per type, the form it carries. */
+function taskTypesToToml(taskTypes: Record<string, TaskTypeConfig>): Record<string, unknown> {
+	return Object.fromEntries(
+		Object.entries(taskTypes).map(([name, task]) => [
+			name,
+			{
+				...(task.template === undefined ? {} : { template: task.template }),
+				...(task.action === undefined ? {} : { action: task.action }),
+				...(task.method === undefined ? {} : { method: task.method }),
+				...(task.agent === undefined ? {} : { agent: task.agent }),
+				...(task.model === undefined ? {} : { model: task.model }),
+				...(task.thinking === undefined ? {} : { thinking: task.thinking }),
+				...(task.contextWindow === undefined ? {} : { "context-window": task.contextWindow }),
+				...(task.opensPullRequest === undefined
+					? {}
+					: { "opens-pull-request": task.opensPullRequest }),
+				...(task.operatorDecides === undefined ? {} : { "operator-decides": task.operatorDecides }),
+				...(task.transition === undefined ? {} : { transition: transitionToToml(task.transition) }),
+			},
+		]),
+	);
+}
+
+/** The [consultation-types] table, one block per type. */
+function consultationTypesToToml(
+	types: Record<string, ConsultationTypeConfig>,
+): Record<string, unknown> {
+	return Object.fromEntries(
+		Object.entries(types).map(([name, consultation]) => [
+			name,
+			{
+				agent: consultation.agent,
+				environment: consultation.environment,
+				template: consultation.template,
+				...(consultation.model === undefined ? {} : { model: consultation.model }),
+				...(consultation.thinking === undefined ? {} : { thinking: consultation.thinking }),
+				...(consultation.contextWindow === undefined
+					? {}
+					: { "context-window": consultation.contextWindow }),
+			},
+		]),
+	);
+}
+
+/** The [logging] table, where the config carries one. */
+function loggingToToml(logging: LoggingConfig): Record<string, unknown> {
+	return {
+		level: logging.level,
+		...(logging.file === undefined ? {} : { file: logging.file }),
+		"max-size-mib": logging.maxSizeMib,
+		keep: logging.keep,
+	};
+}
+
 function formatMultilineStrings(text: string): string {
 	return text
 		.split("\n")

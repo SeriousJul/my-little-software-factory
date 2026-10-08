@@ -15,7 +15,15 @@
  * outcome, a control's news, a notice, and source health - and no `Working`
  * progress line.
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+	type Dispatch,
+	type SetStateAction,
+	useCallback,
+	useEffect,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
 
 import type { AttentionService } from "../attention.ts";
 import { type MessageFact, type MessageFacts, selectMessage } from "./messages.ts";
@@ -151,214 +159,25 @@ export function useMessageFacts(
 			? []
 			: [{ severity: initialNotice.severity, text: initialNotice.text, at: Date.now() }],
 	);
-	// The progress lines of the operations that are running right now, oldest
-	// first. One Message line shows the last one written, and a settle returns
-	// the line to whichever operation still runs.
-	const workingLines = useRef(new Map<WorkingOwner, string>());
 
 	/** Add one fact to the history, on the append's own rule. */
 	const record = useCallback((severity: MessageHistorySeverity, text: string) => {
 		setHistory((current) => appendHistoryEntry(current, severity, text, Date.now()));
 	}, []);
 
-	/** The line a settle leaves on the Message line: the next runner's, if any. */
-	const visibleWorking = useCallback((): string | undefined => {
-		const entries = [...workingLines.current.values()];
-		return entries.at(-1);
-	}, []);
-
-	const dropWorking = useCallback((owner: WorkingOwner) => {
-		if (!workingLines.current.has(owner)) return false;
-		workingLines.current.delete(owner);
-		return true;
-	}, []);
-
-	/**
-	 * Write one operation's progress line.
-	 *
-	 * A new operation replaces the outcome the last one left on the line with
-	 * its own Working progress, and the covered operation's own line returns
-	 * when it settles. Source health is not an operation: it survives so it can
-	 * return when the progress clears. No Working line enters the history:
-	 * progress is transient by design, it would flood the record, and the
-	 * outcome that ends it already states the result.
-	 */
-	const working = useCallback((text: string, owner: WorkingOwner) => {
-		// Rewrite the owner's entry last, so it is the line the Message shows.
-		workingLines.current.delete(owner);
-		workingLines.current.set(owner, text);
-		setFacts((current) => ({ ...current, working: text, operation: undefined }));
-	}, []);
-
-	/**
-	 * State what a control did, when it did it and there is nothing to warn about.
-	 *
-	 * A result is not a refusal and not progress, so it holds its own slot and
-	 * wears its own prefix: the line an operator reads after a control that ran
-	 * must not say `Warning:` about a copy that took. It records an info entry,
-	 * because the result the line states is the fact the history holds.
-	 */
-	const news = useCallback(
-		(text: string) => {
-			setFacts((current) => ({
-				...current,
-				operation: undefined,
-				notice: undefined,
-				news: text,
-			}));
-			record("info", text);
-		},
-		[record],
+	const { working, visibleWorking, dropWorking } = useWorkingFacts(setFacts);
+	const { warning, error, faultWarning, faultError } = useOutcomeWriters(
+		setFacts,
+		record,
+		attention,
 	);
-
-	/**
-	 * Answer a control the app will decide without the operator.
-	 *
-	 * A notice is not progress: it holds its own slot, below the facts an
-	 * operation writes, and the next fact of any kind, or the end of the
-	 * progress line it waits behind, takes the line back. It can never pin
-	 * the Message line. It never outranks a fact an operation wrote, so it
-	 * keeps the operation fact it lands beside: the outcome warning the start
-	 * it answers leaves on the line stands over the notice, and the next
-	 * operation's own fact takes the line from both. The severity it wears is
-	 * the one it was written with: a refusal's warning by default, and the
-	 * info of a plain result where the site says so.
-	 */
-	const notice = useCallback(
-		(text: string, severity: "info" | "warning" = "warning") => {
-			setFacts((current) => ({ ...current, news: undefined, notice: { severity, text } }));
-			record(severity, text);
-		},
-		[record],
+	const { news, notice } = useLineWriters(setFacts, record);
+	const { clearOperation, clearWorking, clearProgress } = useClearWriters(
+		setFacts,
+		dropWorking,
+		visibleWorking,
 	);
-
-	// An outcome never destroys the active progress: the selector ranks the
-	// facts, so a Warning written during a refresh waits behind its Working
-	// line and appears when the refresh settles (user story 51). Only a new
-	// operation, which writes its own Working, replaces an outcome.
-	//
-	// The line-only writers write the line and record the history entry, and
-	// send nothing: the fact answers a key the operator pressed, or it has no
-	// severity the desktop carries. The fault writers do the same write and
-	// send the notification, one per standing fact (ADR 0080).
-	const warning = useCallback(
-		(text: string) => {
-			setFacts((current) => ({
-				...current,
-				operation: { severity: "warning", text },
-				news: undefined,
-				notice: undefined,
-			}));
-			record("warning", text);
-		},
-		[record],
-	);
-
-	const error = useCallback(
-		(text: string) => {
-			setFacts((current) => ({
-				...current,
-				operation: { severity: "error", text },
-				news: undefined,
-				notice: undefined,
-			}));
-			record("error", text);
-		},
-		[record],
-	);
-
-	const faultWarning = useCallback(
-		(text: string) => {
-			warning(text);
-			attention.notify({ severity: "warning", text });
-		},
-		[warning, attention],
-	);
-
-	const faultError = useCallback(
-		(text: string) => {
-			error(text);
-			attention.notify({ severity: "error", text });
-		},
-		[error, attention],
-	);
-
-	/**
-	 * End one operation: its outcome, and only the progress line it owns.
-	 *
-	 * A clean success clears its own `Working:` line and reveals any source
-	 * health still under it. The progress of an operation still running is
-	 * never erased: a Handoff that settles while a Consultation runs returns
-	 * the line to that Consultation rather than leaving it blank (user
-	 * story 16), and so does the notice that answers the operator's last
-	 * control.
-	 */
-	const clearOperation = useCallback(
-		(owner: ProgressOwner) => {
-			const owned = owner === "none" ? false : dropWorking(owner);
-			setFacts((current) => ({
-				...current,
-				operation: undefined,
-				news: undefined,
-				notice: undefined,
-				working: owned ? visibleWorking() : current.working,
-			}));
-		},
-		[dropWorking, visibleWorking],
-	);
-
-	/** End one operation's progress line, and only that one. */
-	const clearWorking = useCallback(
-		(owner: ProgressOwner) => {
-			const owned = owner === "none" ? false : dropWorking(owner);
-			if (!owned) return;
-			setFacts((current) => ({
-				...current,
-				working: visibleWorking(),
-				notice: undefined,
-			}));
-		},
-		[dropWorking, visibleWorking],
-	);
-
-	/** End progress while preserving the outcome it uncovered. */
-	const clearProgress = useCallback(
-		(owner: ProgressOwner) => {
-			const owned = owner === "none" ? false : dropWorking(owner);
-			if (!owned) return;
-			setFacts((current) => ({ ...current, working: visibleWorking() }));
-		},
-		[dropWorking, visibleWorking],
-	);
-
-	// The line the Message shows for the sources that are stale right now: the
-	// same join the line always stated, one fact per source, in the order the
-	// sources list holds. The selector ranks it below every fact an operation
-	// wrote, the way it always did.
-	const sourceHealth = useMemo(
-		() => (staleSources.length === 0 ? undefined : staleSources.map(staleSourceLine).join("; ")),
-		[staleSources],
-	);
-
-	// Source health is a Fault at the change (ADR 0118 and ADR 0119): a source
-	// that goes stale lands one history entry and one notification, sends none
-	// again while it stays stale, and a source that recovers lands one info
-	// entry, so the record reads the whole condition.
-	const prevStale = useRef(new Map<string, string>());
-	useEffect(() => {
-		const current = new Map(staleSources.map((source) => [source.name, staleSourceLine(source)]));
-		const previous = prevStale.current;
-		for (const [name, line] of current) {
-			if (!previous.has(name)) {
-				record("warning", line);
-				attention.notify({ severity: "warning", text: line });
-			}
-		}
-		for (const name of previous.keys()) {
-			if (!current.has(name)) record("info", `${name}: recovered`);
-		}
-		prevStale.current = current;
-	}, [staleSources, attention, record]);
+	const sourceHealth = useSourceHealth(staleSources, record, attention);
 
 	const message = useMemo(() => selectMessage({ ...facts, sourceHealth }), [facts, sourceHealth]);
 
@@ -397,4 +216,264 @@ export function useMessageFacts(
 		clearWorking,
 		clearProgress,
 	};
+}
+
+/**
+ * The progress lines of the operations that are running right now, oldest
+ * first. One Message line shows the last one written, and a settle returns
+ * the line to whichever operation still runs.
+ */
+function useWorkingFacts(setFacts: Dispatch<SetStateAction<MessageFacts>>) {
+	const workingLines = useRef(new Map<WorkingOwner, string>());
+
+	/** The line a settle leaves on the Message line: the next runner's, if any. */
+	const visibleWorking = useCallback((): string | undefined => {
+		const entries = [...workingLines.current.values()];
+		return entries.at(-1);
+	}, []);
+
+	const dropWorking = useCallback((owner: WorkingOwner) => {
+		if (!workingLines.current.has(owner)) return false;
+		workingLines.current.delete(owner);
+		return true;
+	}, []);
+
+	/**
+	 * Write one operation's progress line.
+	 *
+	 * A new operation replaces the outcome the last one left on the line with
+	 * its own Working progress, and the covered operation's own line returns
+	 * when it settles. Source health is not an operation: it survives so it can
+	 * return when the progress clears. No Working line enters the history:
+	 * progress is transient by design, it would flood the record, and the
+	 * outcome that ends it already states the result.
+	 */
+	const working = useCallback(
+		(text: string, owner: WorkingOwner) => {
+			// Rewrite the owner's entry last, so it is the line the Message shows.
+			workingLines.current.delete(owner);
+			workingLines.current.set(owner, text);
+			setFacts((current) => ({ ...current, working: text, operation: undefined }));
+		},
+		[setFacts],
+	);
+
+	return { working, visibleWorking, dropWorking };
+}
+
+/**
+ * The outcome writers: the line-only `warning` and `error`, and the Fault
+ * writers that send the notification beside the line (ADR 0080).
+ */
+function useOutcomeWriters(
+	setFacts: Dispatch<SetStateAction<MessageFacts>>,
+	record: (severity: MessageHistorySeverity, text: string) => void,
+	attention: AttentionService,
+): {
+	warning: (text: string) => void;
+	error: (text: string) => void;
+	faultWarning: (text: string) => void;
+	faultError: (text: string) => void;
+} {
+	// An outcome never destroys the active progress: the selector ranks the
+	// facts, so a Warning written during a refresh waits behind its Working
+	// line and appears when the refresh settles (user story 51). Only a new
+	// operation, which writes its own Working, replaces an outcome.
+	//
+	// The line-only writers write the line and record the history entry, and
+	// send nothing: the fact answers a key the operator pressed, or it has no
+	// severity the desktop carries. The fault writers do the same write and
+	// send the notification, one per standing fact (ADR 0080).
+	const warning = useCallback(
+		(text: string) => {
+			setFacts((current) => ({
+				...current,
+				operation: { severity: "warning", text },
+				news: undefined,
+				notice: undefined,
+			}));
+			record("warning", text);
+		},
+		[record, setFacts],
+	);
+
+	const error = useCallback(
+		(text: string) => {
+			setFacts((current) => ({
+				...current,
+				operation: { severity: "error", text },
+				news: undefined,
+				notice: undefined,
+			}));
+			record("error", text);
+		},
+		[record, setFacts],
+	);
+
+	const faultWarning = useCallback(
+		(text: string) => {
+			warning(text);
+			attention.notify({ severity: "warning", text });
+		},
+		[warning, attention],
+	);
+
+	const faultError = useCallback(
+		(text: string) => {
+			error(text);
+			attention.notify({ severity: "error", text });
+		},
+		[error, attention],
+	);
+
+	return { warning, error, faultWarning, faultError };
+}
+
+/** The line-only writers: the news of a control, and the notice. */
+function useLineWriters(
+	setFacts: Dispatch<SetStateAction<MessageFacts>>,
+	record: (severity: MessageHistorySeverity, text: string) => void,
+): { news: (text: string) => void; notice: (text: string, severity?: "info" | "warning") => void } {
+	/**
+	 * State what a control did, when it did it and there is nothing to warn about.
+	 *
+	 * A result is not a refusal and not progress, so it holds its own slot and
+	 * wears its own prefix: the line an operator reads after a control that ran
+	 * must not say `Warning:` about a copy that took. It records an info entry,
+	 * because the result the line states is the fact the history holds.
+	 */
+	const news = useCallback(
+		(text: string) => {
+			setFacts((current) => ({
+				...current,
+				operation: undefined,
+				notice: undefined,
+				news: text,
+			}));
+			record("info", text);
+		},
+		[record, setFacts],
+	);
+
+	/**
+	 * Answer a control the app will decide without the operator.
+	 *
+	 * A notice is not progress: it holds its own slot, below the facts an
+	 * operation writes, and the next fact of any kind, or the end of the
+	 * progress line it waits behind, takes the line back. It can never pin
+	 * the Message line. It never outranks a fact an operation wrote, so it
+	 * keeps the operation fact it lands beside: the outcome warning the start
+	 * it answers leaves on the line stands over the notice, and the next
+	 * operation's own fact takes the line from both. The severity it wears is
+	 * the one it was written with: a refusal's warning by default, and the
+	 * info of a plain result where the site says so.
+	 */
+	const notice = useCallback(
+		(text: string, severity: "info" | "warning" = "warning") => {
+			setFacts((current) => ({ ...current, news: undefined, notice: { severity, text } }));
+			record(severity, text);
+		},
+		[record, setFacts],
+	);
+
+	return { news, notice };
+}
+
+/** The clears: the operation's outcome, the progress line, the both. */
+function useClearWriters(
+	setFacts: Dispatch<SetStateAction<MessageFacts>>,
+	dropWorking: (owner: WorkingOwner) => boolean,
+	visibleWorking: () => string | undefined,
+): {
+	clearOperation: (owner: ProgressOwner) => void;
+	clearWorking: (owner: ProgressOwner) => void;
+	clearProgress: (owner: ProgressOwner) => void;
+} {
+	/**
+	 * End one operation: its outcome, and only the progress line it owns.
+	 *
+	 * A clean success clears its own `Working:` line and reveals any source
+	 * health still under it. The progress of an operation still running is
+	 * never erased: a Handoff that settles while a Consultation runs returns
+	 * the line to that Consultation rather than leaving it blank (user
+	 * story 16), and so does the notice that answers the operator's last
+	 * control.
+	 */
+	const clearOperation = useCallback(
+		(owner: ProgressOwner) => {
+			const owned = owner === "none" ? false : dropWorking(owner);
+			setFacts((current) => ({
+				...current,
+				operation: undefined,
+				news: undefined,
+				notice: undefined,
+				working: owned ? visibleWorking() : current.working,
+			}));
+		},
+		[dropWorking, visibleWorking, setFacts],
+	);
+
+	/** End one operation's progress line, and only that one. */
+	const clearWorking = useCallback(
+		(owner: ProgressOwner) => {
+			const owned = owner === "none" ? false : dropWorking(owner);
+			if (!owned) return;
+			setFacts((current) => ({
+				...current,
+				working: visibleWorking(),
+				notice: undefined,
+			}));
+		},
+		[dropWorking, visibleWorking, setFacts],
+	);
+
+	/** End progress while preserving the outcome it uncovered. */
+	const clearProgress = useCallback(
+		(owner: ProgressOwner) => {
+			const owned = owner === "none" ? false : dropWorking(owner);
+			if (!owned) return;
+			setFacts((current) => ({ ...current, working: visibleWorking() }));
+		},
+		[dropWorking, visibleWorking, setFacts],
+	);
+
+	return { clearOperation, clearWorking, clearProgress };
+}
+
+/**
+ * The source health: the line for the stale sources, and the Fault entries
+ * at the change (ADR 0118 and ADR 0119): a source that goes stale lands one
+ * history entry and one notification, sends none again while it stays stale,
+ * and a source that recovers lands one info entry, so the record reads the
+ * whole condition.
+ */
+function useSourceHealth(
+	staleSources: readonly StaleSourceFact[],
+	record: (severity: MessageHistorySeverity, text: string) => void,
+	attention: AttentionService,
+): string | undefined {
+	// The line the Message shows for the sources that are stale right now: the
+	// same join the line always stated, one fact per source, in the order the
+	// sources list holds. The selector ranks it below every fact an operation
+	// wrote, the way it always did.
+	const sourceHealth = useMemo(
+		() => (staleSources.length === 0 ? undefined : staleSources.map(staleSourceLine).join("; ")),
+		[staleSources],
+	);
+	const prevStale = useRef(new Map<string, string>());
+	useEffect(() => {
+		const current = new Map(staleSources.map((source) => [source.name, staleSourceLine(source)]));
+		const previous = prevStale.current;
+		for (const [name, line] of current) {
+			if (!previous.has(name)) {
+				record("warning", line);
+				attention.notify({ severity: "warning", text: line });
+			}
+		}
+		for (const name of previous.keys()) {
+			if (!current.has(name)) record("info", `${name}: recovered`);
+		}
+		prevStale.current = current;
+	}, [staleSources, attention, record]);
+	return sourceHealth;
 }

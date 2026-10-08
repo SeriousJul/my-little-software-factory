@@ -128,7 +128,11 @@ import { type CommandRunner, commandFailureText } from "./runner.ts";
 import type { Consultation, ConsultationRecordAggregate } from "./state/consultation-record.ts";
 import type { HandoffAggregate, HandoffTicket } from "./state/handoff.ts";
 import type { PlaneActionAggregate } from "./state/plane-action.ts";
-import type { TicketProjection, TicketWorkCycleAggregate } from "./state/ticket-work-cycle.ts";
+import type {
+	TicketListViews,
+	TicketProjection,
+	TicketWorkCycleAggregate,
+} from "./state/ticket-work-cycle.ts";
 import type { WorkQueueAggregate } from "./state/work-queue.ts";
 import { workQueueIdentityOf } from "./state/work-queue.ts";
 import {
@@ -529,6 +533,16 @@ interface ObservationOptions {
 	refireRecordedSkips?: () => Promise<RefiredSkip[]>;
 }
 
+/** The restart walk's fields: the walk's read, its batched start counts, and its gates. */
+type RestartWalkFields = {
+	config: FactoryConfig;
+	agents: readonly HerdrAgent[];
+	blocked: ReadonlySet<string>;
+	queuedTickets: ReadonlySet<string>;
+	restartTickets: readonly HandoffTicket[];
+	restartStartCounts: ReadonlyMap<string, number>;
+};
+
 export class ObservationCoordinator {
 	private readonly state: ObservationAggregates;
 	private readonly herdr: AgentReader;
@@ -748,10 +762,134 @@ export class ObservationCoordinator {
 		);
 	}
 
+	/** The walk over the in-flight tickets: the missing path, the correction, the settle. */
+	private async walkInFlight(
+		byPane: Map<string, HerdrAgent>,
+		inFlightNames: Map<string, string>,
+		autoOn: boolean,
+	): Promise<boolean> {
+		let changed = false;
+		const inFlight = this.state.ticketWorkCycle.ticketsByState(["handed-off", "running"]);
+		for (const ticket of inFlight) {
+			if (ticket.paneId === null) continue;
+			// The one missing-Agent rule: the id of a closed pane is handed out
+			// again, so a live agent in the ticket's pane that is not the ticket's
+			// own leaves the ticket's agent missing, and the missing path runs
+			// instead of the settle.
+			const own = agentInPane(
+				byPane,
+				ticket.paneId,
+				inFlightNames.get(ticket.ticketIdentity) ?? "",
+			);
+			if (own === null) {
+				if (autoOn) {
+					changed = (await this.handleMissing(ticket)) || changed;
+					if (this.stopped) return changed;
+				}
+				continue;
+			}
+			const status = normalizeAgentStatus(own.status);
+			// A state correction on read: herdr owns the fact of whether the
+			// agent is working, so the poll corrects the stored state to
+			// match it, and the list shows reality without the control plane
+			// ever writing to herdr.
+			if (
+				status === "working" &&
+				this.state.ticketWorkCycle.markTicketRunning(ticket.ticketIdentity)
+			) {
+				changed = true;
+			}
+			if (status === "done" || status === "idle") {
+				// One read serves the decision and the trace: the same session
+				// read that settles the turn supplies its log, cause, and
+				// detail (ADR 0015).
+				const turnEnd = await this.maybeReadTurnEnd(ticket, own);
+				if (this.maybeSettles(ticket, turnEnd)) {
+					changed = (await this.settle(ticket, own, turnEnd)) || changed;
+					if (this.stopped) return changed;
+				}
+			}
+		}
+		return changed;
+	}
+
+	/** The walk over the awaiting tickets: a working Agent resumes the pending turn. */
+	private async resumeAwaitingTurns(byPane: Map<string, HerdrAgent>): Promise<boolean> {
+		let changed = false;
+		const awaiting = this.state.ticketWorkCycle.ticketsByState(["awaiting"]);
+		const awaitingNames = this.agentNames(awaiting);
+		for (const ticket of awaiting) {
+			if (ticket.paneId === null) continue;
+			// The same identity rule as the in-flight loop: a working agent in
+			// the ticket's reused pane id that is not the ticket's own does not
+			// resume the ticket's pending turn.
+			const own = agentInPane(
+				byPane,
+				ticket.paneId,
+				awaitingNames.get(ticket.ticketIdentity) ?? "",
+			);
+			if (own === null || normalizeAgentStatus(own.status) !== "working") continue;
+			if (this.state.ticketWorkCycle.reopenTurn(ticket.ticketIdentity, ticket.handoffAttemptId)) {
+				changed = true;
+			}
+		}
+		return changed;
+	}
+
+	/** The re-fire of the recorded skips (ADR 0042), with the failures it names. */
+	private async refireSkips(): Promise<boolean> {
+		if (this.refireRecordedSkips === undefined) return false;
+		const refired = await this.refireRecordedSkips();
+		if (this.stopped) return false;
+		if (refired.length === 0) return false;
+		for (const entry of refired) {
+			if (entry.outcome.writeFailure === "") continue;
+			// The failure stands on the trace, the way a settle-time
+			// failure stands: the operator reads it beside the facts the
+			// fire did write.
+			this.onStatus(
+				"warning",
+				`the recorded skip of ticket ${entry.ticketIdentity} re-fired, and its label write failed: ${entry.outcome.writeFailure}`,
+			);
+		}
+		return true;
+	}
+
+	/** The awaiting walk: the machine's closings, one projection read at a time. */
+	private async walkAwaitingRows(autoOn: boolean): Promise<boolean> {
+		let changed = false;
+		const awaitingRows = this.state.ticketWorkCycle.ticketsByState(["awaiting"]);
+		// A hold states itself once per settled turn (ADR 0092): the report map is
+		// pruned to this cycle's awaiting rows, so a ticket the machine decided,
+		// closed, or routed states a later hold again.
+		for (const identity of [...this.holdReports.keys()]) {
+			if (!awaitingRows.some((ticket) => ticket.ticketIdentity === identity))
+				this.holdReports.delete(identity);
+		}
+		if (!autoOn || awaitingRows.length === 0) return false;
+		const readProjection = (): TicketProjection =>
+			this.state.ticketWorkCycle.ticketProjection(
+				this.config().workflowStates,
+				this.config().defaultTaskType,
+			);
+		let awaitingProjection = readProjection();
+		for (const ticket of awaitingRows) {
+			const moved = await this.handleAwaiting(ticket, awaitingProjection);
+			changed = moved || changed;
+			if (this.stopped) return changed;
+			if (moved) awaitingProjection = readProjection();
+		}
+		return changed;
+	}
+
+	/**
+	 * One observation cycle.
+	 *
+	 * A cycle notes the holds its walks take and states them when its walks
+	 * are done; a cycle that never reached that point keeps no note, and the
+	 * facts it acted on state themselves next cycle as new ones.
+	 */
 	private async cycle(): Promise<void> {
-		// A cycle notes the holds its walks take and states them when its walks
-		// are done; a cycle that never reached that point keeps no note, and the
-		// facts it acted on state themselves next cycle as new ones.
 		this.automaticHolds = new Map();
 		const probe = await this.herdr.listAgents();
 		// The probe can outlive the app: stop() during it must not touch the
@@ -804,66 +942,13 @@ export class ObservationCoordinator {
 		}
 
 		let changed = reclaimed;
-		for (const ticket of inFlight) {
-			if (ticket.paneId === null) continue;
-			// The one missing-Agent rule: the id of a closed pane is handed out
-			// again, so a live agent in the ticket's pane that is not the ticket's
-			// own leaves the ticket's agent missing, and the missing path runs
-			// instead of the settle.
-			const own = agentInPane(
-				byPane,
-				ticket.paneId,
-				inFlightNames.get(ticket.ticketIdentity) ?? "",
-			);
-			if (own === null) {
-				if (autoOn) {
-					changed = (await this.handleMissing(ticket)) || changed;
-					if (this.stopped) return;
-				}
-				continue;
-			}
-			const status = normalizeAgentStatus(own.status);
-			// A state correction on read: herdr owns the fact of whether the
-			// agent is working, so the poll corrects the stored state to
-			// match it, and the list shows reality without the control plane
-			// ever writing to herdr.
-			if (
-				status === "working" &&
-				this.state.ticketWorkCycle.markTicketRunning(ticket.ticketIdentity)
-			) {
-				changed = true;
-			}
-			if (status === "done" || status === "idle") {
-				// One read serves the decision and the trace: the same session
-				// read that settles the turn supplies its log, cause, and
-				// detail (ADR 0015).
-				const turnEnd = await this.maybeReadTurnEnd(ticket, own);
-				if (this.maybeSettles(ticket, turnEnd)) {
-					changed = (await this.settle(ticket, own, turnEnd)) || changed;
-					if (this.stopped) return;
-				}
-			}
-		}
+		changed = (await this.walkInFlight(byPane, inFlightNames, autoOn)) || changed;
+		if (this.stopped) return;
 
 		// An awaiting ticket that reports working again resumes its still-pending
 		// turn. It holds a slot and its next settle refreshes the same trace.
-		const awaiting = this.state.ticketWorkCycle.ticketsByState(["awaiting"]);
-		const awaitingNames = this.agentNames(awaiting);
-		for (const ticket of awaiting) {
-			if (ticket.paneId === null) continue;
-			// The same identity rule as the in-flight loop: a working agent in
-			// the ticket's reused pane id that is not the ticket's own does not
-			// resume the ticket's pending turn.
-			const own = agentInPane(
-				byPane,
-				ticket.paneId,
-				awaitingNames.get(ticket.ticketIdentity) ?? "",
-			);
-			if (own === null || normalizeAgentStatus(own.status) !== "working") continue;
-			if (this.state.ticketWorkCycle.reopenTurn(ticket.ticketIdentity, ticket.handoffAttemptId)) {
-				changed = true;
-			}
-		}
+		changed = (await this.resumeAwaitingTurns(byPane)) || changed;
+		if (this.stopped) return;
 
 		// The re-fire of the recorded skips (ADR 0042): a refresh that found
 		// the fixing pull request re-fires the transition the ticket's newest
@@ -872,23 +957,8 @@ export class ObservationCoordinator {
 		// cycle settled re-fires in the same cycle the pull request already
 		// lists, and before the top-up, so the re-fired skip's route is the
 		// top-up's continuation candidate in this same cycle (ADR 0051).
-		if (this.refireRecordedSkips !== undefined) {
-			const refired = await this.refireRecordedSkips();
-			if (this.stopped) return;
-			if (refired.length > 0) {
-				changed = true;
-				for (const entry of refired) {
-					if (entry.outcome.writeFailure === "") continue;
-					// The failure stands on the trace, the way a settle-time
-					// failure stands: the operator reads it beside the facts the
-					// fire did write.
-					this.onStatus(
-						"warning",
-						`the recorded skip of ticket ${entry.ticketIdentity} re-fired, and its label write failed: ${entry.outcome.writeFailure}`,
-					);
-				}
-			}
-		}
+		changed = (await this.refireSkips()) || changed;
+		if (this.stopped) return;
 
 		// The awaiting walk resolves the completions the machine closes (ADR
 		// 0051): a routable completion rests in awaiting, and its route is the
@@ -896,36 +966,28 @@ export class ObservationCoordinator {
 		// derivations (ADR 0092): the walk reads the pile once, and re-reads it
 		// only after a close moved a row another turn's derivation reads. Manual
 		// mode runs no automatic rule, so it reads no pile for one.
-		const awaitingRows = this.state.ticketWorkCycle.ticketsByState(["awaiting"]);
-		// A hold states itself once per settled turn (ADR 0092): the report map is
-		// pruned to this cycle's awaiting rows, so a ticket the machine decided,
-		// closed, or routed states a later hold again.
-		for (const identity of [...this.holdReports.keys()]) {
-			if (!awaitingRows.some((ticket) => ticket.ticketIdentity === identity))
-				this.holdReports.delete(identity);
-		}
-		if (autoOn && awaitingRows.length > 0) {
-			const readProjection = (): TicketProjection =>
-				this.state.ticketWorkCycle.ticketProjection(
-					this.config().workflowStates,
-					this.config().defaultTaskType,
-				);
-			let awaitingProjection = readProjection();
-			for (const ticket of awaitingRows) {
-				const moved = await this.handleAwaiting(ticket, awaitingProjection);
-				changed = moved || changed;
-				if (this.stopped) return;
-				if (moved) awaitingProjection = readProjection();
-			}
-		}
+		changed = (await this.walkAwaitingRows(autoOn)) || changed;
+		if (this.stopped) return;
 
+		await this.finishCycle(probe.agents, byPane, changed);
+	}
+
+	/**
+	 * The tail of the cycle: the continuation, the pickup, the fresh work,
+	 * the holds it reports, and the Dispatch pause it reads.
+	 */
+	private async finishCycle(
+		agents: readonly HerdrAgent[],
+		byPane: Map<string, HerdrAgent>,
+		changed: boolean,
+	): Promise<void> {
 		// The continuation the machine owes runs before the Work queue's pickup
 		// (ADR 0094): the item a settled turn earns is in the queue when the free
 		// seats are handed out, so the seat that turn freed goes to that turn's own
 		// next step. One item per cycle still holds (ADR 0051): the cycle that asked
 		// a continuation asks no fresh work.
 		const continued = await this.askContinuations();
-		changed = continued || changed;
+		let walked = continued || changed;
 		if (this.stopped) return;
 
 		// The Work queue's pickup (ADR 0051): the items the free seats take, in
@@ -934,7 +996,7 @@ export class ObservationCoordinator {
 		if (this.pickupWorkQueue !== undefined) {
 			const picked = await this.pickupWorkQueue();
 			if (this.stopped) return;
-			if (picked > 0) changed = true;
+			if (picked > 0) walked = true;
 		}
 
 		// The fresh-work adds (ADR 0051): with Auto-handoff on, the queue empty,
@@ -944,7 +1006,7 @@ export class ObservationCoordinator {
 		// The per-candidate facts the fresh-work walk read reset with the walk
 		// (issue #231): a walk that runs none reads no candidate.
 		this.freshWorkCandidatesRead = new Set();
-		if (freshWorkWalkRan) changed = (await this.topUpFreshWork(probe.agents)) || changed;
+		if (freshWorkWalkRan) walked = (await this.topUpFreshWork(agents)) || walked;
 		if (this.stopped) return;
 		// The holds the walks took, stated once each for as long as they stand.
 		this.reportAutomaticHolds(freshWorkWalkRan, this.mode());
@@ -959,8 +1021,8 @@ export class ObservationCoordinator {
 		// Tickets and Consultations share this one successful Herdr list poll.
 		// A Consultation in `opening` or `working` already holds its seat in
 		// the shared count above (ADR 0034).
-		const consultationChanged = await this.observeConsultations(probe.agents);
-		changed = consultationChanged || changed;
+		const consultationChanged = await this.observeConsultations(agents);
+		walked = consultationChanged || walked;
 
 		// The wake arm (ADR 0084): every working agent the probe shows on an
 		// in-flight ticket or a working Consultation holds a `herdr agent
@@ -984,8 +1046,8 @@ export class ObservationCoordinator {
 					: "Dispatch pause cleared: automatic dispatch resumes",
 			);
 		}
-		if (changed) this.onChanged();
-		this.onAgents?.(probe.agents);
+		if (walked) this.onChanged();
+		this.onAgents?.(agents);
 	}
 
 	/**
@@ -1184,49 +1246,11 @@ export class ObservationCoordinator {
 			if (this.stopped) return changed;
 			const match = matchConsultationAgent(consultation, agents);
 			if (match === "ambiguous" || match === undefined) {
-				if (consultation.state === "opening") {
-					// A restart can interrupt launch between durable steps. The
-					// operator, not the poll, decides whether recovery continues.
-					const warning =
-						match === "ambiguous"
-							? "Opening Agent match is ambiguous; explicit recovery is required"
-							: "Opening Agent is not visible; explicit recovery is required";
-					if (consultation.warning !== warning) {
-						this.state.consultationRecord.setConsultationWarning(consultation.id, warning);
-						changed = true;
-						this.onStatus("warning", `Consultation ${consultation.id.slice(0, 8)} needs recovery`);
-					}
-					continue;
-				}
-				const reason =
-					match === "ambiguous" ? "Agent session match is ambiguous" : "Agent is missing";
-				const moved = this.state.consultationRecord.setConsultationState(
-					consultation.id,
-					"missing",
-					reason,
-				);
-				changed = moved || changed;
-				if (moved)
-					this.onStatus("warning", `${reason} for Consultation ${consultation.id.slice(0, 8)}`);
+				changed = this.consultationUnmatched(consultation, match) || changed;
 				continue;
 			}
 			if (consultation.state === "opening") {
-				// A uniquely verified Agent may refresh its durable handles, but
-				// remains opening until the operator chooses recovery.
-				this.state.consultationRecord.recordConsultationAgentHandles(consultation.id, {
-					paneId: match.paneId,
-					tabId: match.tabId,
-					workspaceId: match.workspaceId,
-					sessionId: match.stableSessionId ?? consultation.sessionId,
-				});
-				const warning =
-					normalizeAgentStatus(match.status) === "unknown"
-						? "Agent status is unknown"
-						: "Opening Agent verified; explicit recovery is required";
-				if (consultation.warning !== warning) {
-					this.state.consultationRecord.setConsultationWarning(consultation.id, warning);
-					changed = true;
-				}
+				changed = this.consultationOpening(consultation, match) || changed;
 				continue;
 			}
 			if (
@@ -1261,83 +1285,149 @@ export class ObservationCoordinator {
 				this.state.consultationRecord.setConsultationWarning(consultation.id, null);
 				changed = true;
 			}
-			if (
-				consultation.state === "awaiting-response" &&
-				match.sequence !== undefined &&
-				(consultation.latestSequence === null || match.sequence > consultation.latestSequence)
-			)
-				changed =
-					this.state.consultationRecord.recordExternalConsultationTurn(
-						consultation.id,
-						match.sequence,
-						new Date(this.now()).toISOString(),
-					) || changed;
-			const before = this.state.consultationRecord.consultation(consultation.id);
-			if (
-				before?.state === "awaiting-response" &&
-				this.state.consultationRecord.consultationNeedsSnapshot(consultation.id)
-			) {
-				const output = await this.herdr.readPane(
-					match.paneId,
-					this.config().completionMessageLines,
-				);
-				if (this.stopped) return changed;
-				if (
-					output !== null &&
-					this.state.consultationRecord.fillConsultationSnapshot(consultation.id, output)
-				) {
-					changed = true;
-					this.onConsultationsChanged?.();
-				}
-			}
+			changed = (await this.consultationExternalTurn(consultation, match)) || changed;
 			const current = this.state.consultationRecord.consultation(consultation.id);
 			if (current?.state !== "working" || status === "working") continue;
-			const output = await this.herdr.readPane(match.paneId, this.config().completionMessageLines);
-			if (this.stopped) return changed;
-			// The turn's end cause comes from the agent's session record, the
-			// same reader the ticket settle uses (ADR 0015). The pending turn's
-			// accepted time feeds the staleness guard.
-			const kind = this.config().agents[consultation.agentType]?.kind;
-			const pendingTurn = this.state.consultationRecord
-				.consultationTurns(consultation.id)
-				.filter((turn) => turn.settledAt === null)
-				.at(-1);
-			// A record that holds no turn, or cannot be read, settles
-			// `unknown`, the fail-open cause (ADR 0017): a Consultation
-			// auto-decides nothing, and its operator is present at the screen
-			// it settles on.
-			const turnRead =
-				kind !== undefined && match.sessionId !== ""
-					? await this.turnLogs.read(kind, match.sessionId, pendingTurn?.acceptedAt ?? null)
-					: ({ kind: "unavailable" } as SessionTurnRead);
-			const turnEnd = turnRead.kind === "ended" ? turnRead.turnEnd : null;
-			const endCause: TurnEndCause = turnEnd?.cause ?? "unknown";
-			const endDetail: string = turnEnd?.detail ?? "";
-			const settled = this.state.consultationRecord.settleConsultationTurn(
-				consultation.id,
-				match.sequence ?? null,
-				output,
-				{
-					settledStatus: status,
-					capturedAt: new Date(this.now()).toISOString(),
-					cause: endCause,
-					detail: endDetail,
-				},
-			);
-			if (!settled) continue;
-			changed = true;
-			this.onConsultationsChanged?.();
-			if (!this.suppressConsultationAttention) this.onConsultationAttention?.(consultation.id);
-			// A turn that failed or aborted is named on the Message line, so the
-			// operator reads why it did not answer. Any other cause settles quiet.
-			if (endCause === "failed" || endCause === "aborted")
-				this.onStatus(
-					"warning",
-					`Consultation ${consultation.id.slice(0, 8)} turn ended ${endCause}${endDetail === "" ? "" : `: ${endDetail}`}`,
-				);
-			else this.onStatus("info", `Consultation ${consultation.id.slice(0, 8)} awaits a response`);
+			changed = (await this.settleWorkingConsultation(consultation, match, status)) || changed;
 		}
 		return changed;
+	}
+
+	/**
+	 * The unmatched Consultation: no Agent, or an Agent whose identity the poll
+	 * cannot tell apart from another's.
+	 */
+	private consultationUnmatched(
+		consultation: Consultation,
+		match: HerdrAgent | "ambiguous" | undefined,
+	): boolean {
+		if (consultation.state === "opening") {
+			// A restart can interrupt launch between durable steps. The
+			// operator, not the poll, decides whether recovery continues.
+			const warning =
+				match === "ambiguous"
+					? "Opening Agent match is ambiguous; explicit recovery is required"
+					: "Opening Agent is not visible; explicit recovery is required";
+			if (consultation.warning === warning) return false;
+			this.state.consultationRecord.setConsultationWarning(consultation.id, warning);
+			this.onStatus("warning", `Consultation ${consultation.id.slice(0, 8)} needs recovery`);
+			return true;
+		}
+		const reason = match === "ambiguous" ? "Agent session match is ambiguous" : "Agent is missing";
+		const moved = this.state.consultationRecord.setConsultationState(
+			consultation.id,
+			"missing",
+			reason,
+		);
+		if (moved)
+			this.onStatus("warning", `${reason} for Consultation ${consultation.id.slice(0, 8)}`);
+		return moved;
+	}
+
+	/** The opening Consultation: its verified Agent refreshes its durable handles. */
+	private consultationOpening(consultation: Consultation, match: HerdrAgent): boolean {
+		// A uniquely verified Agent may refresh its durable handles, but
+		// remains opening until the operator chooses recovery.
+		this.state.consultationRecord.recordConsultationAgentHandles(consultation.id, {
+			paneId: match.paneId,
+			tabId: match.tabId,
+			workspaceId: match.workspaceId,
+			sessionId: match.stableSessionId ?? consultation.sessionId,
+		});
+		const warning =
+			normalizeAgentStatus(match.status) === "unknown"
+				? "Agent status is unknown"
+				: "Opening Agent verified; explicit recovery is required";
+		if (consultation.warning === warning) return false;
+		this.state.consultationRecord.setConsultationWarning(consultation.id, warning);
+		return true;
+	}
+
+	/** The external turn an awaiting Consultation's Agent sends, and its snapshot. */
+	private async consultationExternalTurn(
+		consultation: Consultation,
+		match: HerdrAgent,
+	): Promise<boolean> {
+		let changed = false;
+		if (
+			consultation.state === "awaiting-response" &&
+			match.sequence !== undefined &&
+			(consultation.latestSequence === null || match.sequence > consultation.latestSequence)
+		)
+			changed =
+				this.state.consultationRecord.recordExternalConsultationTurn(
+					consultation.id,
+					match.sequence,
+					new Date(this.now()).toISOString(),
+				) || changed;
+		const before = this.state.consultationRecord.consultation(consultation.id);
+		if (
+			before?.state === "awaiting-response" &&
+			this.state.consultationRecord.consultationNeedsSnapshot(consultation.id)
+		) {
+			const output = await this.herdr.readPane(match.paneId, this.config().completionMessageLines);
+			if (this.stopped) return changed;
+			if (
+				output !== null &&
+				this.state.consultationRecord.fillConsultationSnapshot(consultation.id, output)
+			) {
+				changed = true;
+				this.onConsultationsChanged?.();
+			}
+		}
+		return changed;
+	}
+
+	/** The settle of a working Consultation whose Agent reports done or idle. */
+	private async settleWorkingConsultation(
+		consultation: Consultation,
+		match: HerdrAgent,
+		status: string,
+	): Promise<boolean> {
+		const output = await this.herdr.readPane(match.paneId, this.config().completionMessageLines);
+		if (this.stopped) return false;
+		// The turn's end cause comes from the agent's session record, the
+		// same reader the ticket settle uses (ADR 0015). The pending turn's
+		// accepted time feeds the staleness guard.
+		const kind = this.config().agents[consultation.agentType]?.kind;
+		const pendingTurn = this.state.consultationRecord
+			.consultationTurns(consultation.id)
+			.filter((turn) => turn.settledAt === null)
+			.at(-1);
+		// A record that holds no turn, or cannot be read, settles
+		// `unknown`, the fail-open cause (ADR 0017): a Consultation
+		// auto-decides nothing, and its operator is present at the screen
+		// it settles on.
+		const turnRead =
+			kind !== undefined && match.sessionId !== ""
+				? await this.turnLogs.read(kind, match.sessionId, pendingTurn?.acceptedAt ?? null)
+				: ({ kind: "unavailable" } as SessionTurnRead);
+		const turnEnd = turnRead.kind === "ended" ? turnRead.turnEnd : null;
+		const endCause: TurnEndCause = turnEnd?.cause ?? "unknown";
+		const endDetail: string = turnEnd?.detail ?? "";
+		const settled = this.state.consultationRecord.settleConsultationTurn(
+			consultation.id,
+			match.sequence ?? null,
+			output,
+			{
+				settledStatus: status,
+				capturedAt: new Date(this.now()).toISOString(),
+				cause: endCause,
+				detail: endDetail,
+			},
+		);
+		if (!settled) return false;
+		this.onConsultationsChanged?.();
+		if (!this.suppressConsultationAttention) this.onConsultationAttention?.(consultation.id);
+		// A turn that failed or aborted is named on the Message line, so the
+		// operator reads why it did not answer. Any other cause settles quiet.
+		if (endCause === "failed" || endCause === "aborted")
+			this.onStatus(
+				"warning",
+				`Consultation ${consultation.id.slice(0, 8)} turn ended ${endCause}${endDetail === "" ? "" : `: ${endDetail}`}`,
+			);
+		else this.onStatus("info", `Consultation ${consultation.id.slice(0, 8)} awaits a response`);
+		return true;
 	}
 
 	/**
@@ -1712,124 +1802,148 @@ export class ObservationCoordinator {
 		// the operator's removal left the route unrun while the decision stands
 		// on the trace. In the ticket list's order, in one read.
 		for (const ticket of tickets) {
-			if (ticket.state !== "awaiting" && ticket.state !== "open") continue;
-			// The ignore gate (ADR 0060): an ignored Ticket is no automatic start.
-			// The row is here in the active view the whole time its Agent works or
-			// its decision stays owed, so this test - not the filter - is what holds
-			// the machine out, and it is the one gate predicate on the row's flag.
-			if (automaticStartBlocked(ticket)) continue;
-			const target = this.continuationTarget(ticket, projection);
-			if (target === null) continue;
-			const { position, step } = target;
-			// The merged position the turn routes to (ADR 0068): the Next step
-			// resolves on the plane action, so the top-up asks for the merge, not
-			// for a handoff, and the item takes no seat when it runs.
-			if (step.kind === "plane-action") {
-				const added = await this.topUpPlaneActionAsk(
-					{
-						origin: "workflow",
-						automatic: true,
-						ticketIdentity: position.identity,
-						routeFromIdentity: ticket.identity,
-						taskType: step.taskType,
-					},
-					`work queue top-up: merging ${this.ticketName(position.identity)}`,
-					`work queue top-up could not merge ${this.ticketName(position.identity)}`,
-				);
-				if (added !== "refused") return true;
-				continue;
-			}
-			const completion = this.state.ticketWorkCycle.lastCompletion(ticket.identity);
-			const outcome = completion?.transition ?? null;
-			const added = await this.topUpAsk(
-				{
-					origin: "workflow",
-					automatic: true,
-					ticketIdentity: position.identity,
-					// The route continues this ticket's settled turn: its leftover
-					// environment is the handoff's own, so a name that leftover
-					// agent still holds falls to the cycle name instead of failing
-					// as a stranger (ADR 0027).
-					routeFromIdentity: ticket.identity,
-					choice: resolveHandoffChoice(config, step.taskType, {
-						...(outcome === null || outcome.agent === undefined ? {} : { agent: outcome.agent }),
-						...(outcome === null || outcome.environment === undefined
-							? {}
-							: { environment: outcome.environment }),
-					}),
-					previousMessage: this.promptPreviousMessage(completion),
-				},
-				`work queue top-up: routing ${this.ticketName(ticket.identity)} to ${step.taskType}`,
-				`work queue top-up could not route ${this.ticketName(ticket.identity)}`,
-			);
-			// One add per cycle: the walk stops at the first item the queue took,
-			// and a refused ask moves on to the next candidate.
-			if (added !== "refused") return true;
+			if (await this.askContinuationTicket(config, projection, ticket)) return true;
 		}
 		// 2. The re-fired skip's route (ADR 0042) is a continuation: the skip
 		// closed its cycle and the ticket rests open behind it, so the awaiting
 		// walk never covered it. It enqueues like the rest, on the same Next step
 		// derivation and the same gates the continuation walk reads.
 		for (const ticket of tickets) {
-			if (ticket.state !== "open") continue;
-			const completion = this.state.ticketWorkCycle.lastCompletion(ticket.identity);
-			const outcome = completion?.transition ?? null;
-			// The marker carries the shape: `refired` is set only on an outcome
-			// that fired and derived a position, so a re-fired trace with no fire
-			// is not a state the plane writes. The marker holds the record against
-			// a damaged trace; no walk reaches it on its own.
-			if (outcome === null || outcome.refired !== true) continue;
-			const step = deriveNextStep(config, this.state.ticketWorkCycle, outcome, projection);
-			if (step === null || step.gate !== null) continue;
-			// The projection before the list rule (ADR 0042): the rule withholds
-			// a covered ticket's row from the operator's list, and the add must
-			// still reach the position it starts on.
-			const position = projection.rowFor(step.ticketIdentity);
-			if (position === undefined) continue;
-			// The ignore gate (ADR 0060): this walk reads the projection before the
-			// list rule on purpose, because ADR 0042's route must reach its position
-			// even when the row is withheld, and a resting ignored position is
-			// withheld while a live one is listed. Either way the one gate predicate on
-			// the row the walk holds is what answers.
-			if (automaticStartBlocked(position)) continue;
-			// The merged position the skip routes to (ADR 0068): the plane
-			// action's merge stands for the handoff the skip would start, and the
-			// standing, hold, and limit guards the derivation ran hold the add the
-			// way the handoff's add held: an automatic merge add holds wherever the
-			// handoff's add would have held.
-			if (step.kind === "plane-action") {
-				const added = await this.topUpPlaneActionAsk(
-					{
-						origin: "workflow",
-						automatic: true,
-						ticketIdentity: position.identity,
-						routeFromIdentity: ticket.identity,
-						taskType: step.taskType,
-					},
-					`work queue top-up: merging ${this.ticketName(position.identity)}`,
-					`work queue top-up could not merge ${this.ticketName(position.identity)}`,
-				);
-				if (added !== "refused") return true;
-				continue;
-			}
-			const added = await this.topUpAsk(
-				{
-					origin: "workflow",
-					automatic: true,
-					ticketIdentity: position.identity,
-					routeFromIdentity: ticket.identity,
-					choice: resolveHandoffChoice(config, step.taskType, {
-						...(outcome.agent === undefined ? {} : { agent: outcome.agent }),
-						...(outcome.environment === undefined ? {} : { environment: outcome.environment }),
-					}),
-					previousMessage: this.promptPreviousMessage(completion),
-				},
-				`work queue top-up: routing ${this.ticketName(ticket.identity)} to ${step.taskType}`,
-				`work queue top-up could not route ${this.ticketName(ticket.identity)}`,
-			);
-			if (added !== "refused") return true;
+			if (await this.askRefiredSkipTicket(config, projection, ticket)) return true;
 		}
 		return false;
+	}
+
+	/** The continuation walk's add for one row: the gates, the step, and the ask. */
+	private async askContinuationTicket(
+		config: FactoryConfig,
+		projection: TicketProjection,
+		ticket: Ticket,
+	): Promise<boolean> {
+		if (ticket.state !== "awaiting" && ticket.state !== "open") return false;
+		// The ignore gate (ADR 0060): an ignored Ticket is no automatic start.
+		// The row is here in the active view the whole time its Agent works or
+		// its decision stays owed, so this test - not the filter - is what holds
+		// the machine out, and it is the one gate predicate on the row's flag.
+		if (automaticStartBlocked(ticket)) return false;
+		const target = this.continuationTarget(ticket, projection);
+		if (target === null) return false;
+		const { position, step } = target;
+		// The merged position the turn routes to (ADR 0068): the Next step
+		// resolves on the plane action, so the top-up asks for the merge, not
+		// for a handoff, and the item takes no seat when it runs.
+		if (step.kind === "plane-action")
+			return (await this.askPlaneActionAdd(position, ticket.identity, step.taskType)) !== "refused";
+		const completion = this.state.ticketWorkCycle.lastCompletion(ticket.identity);
+		const outcome = completion?.transition ?? null;
+		const added = await this.topUpAsk(
+			this.continuationAskFields({ config, step, ticket, position, outcome, completion }),
+			`work queue top-up: routing ${this.ticketName(ticket.identity)} to ${step.taskType}`,
+			`work queue top-up could not route ${this.ticketName(ticket.identity)}`,
+		);
+		// One add per cycle: the walk stops at the first item the queue took,
+		// and a refused ask moves on to the next candidate.
+		return added !== "refused";
+	}
+
+	/** The continuation ask's fields, the route's choice among them. */
+	private continuationAskFields(fields: {
+		config: FactoryConfig;
+		step: NextStep;
+		ticket: Ticket;
+		position: { identity: string };
+		outcome: TransitionOutcome | null;
+		completion: Completion | null;
+	}): HandoffIntent {
+		const { config, step, ticket, position, outcome, completion } = fields;
+		return {
+			origin: "workflow",
+			automatic: true,
+			ticketIdentity: position.identity,
+			// The route continues this ticket's settled turn: its leftover
+			// environment is the handoff's own, so a name that leftover
+			// agent still holds falls to the cycle name instead of failing
+			// as a stranger (ADR 0027).
+			routeFromIdentity: ticket.identity,
+			choice: resolveHandoffChoice(config, step.taskType, {
+				...(outcome === null || outcome.agent === undefined ? {} : { agent: outcome.agent }),
+				...(outcome === null || outcome.environment === undefined
+					? {}
+					: { environment: outcome.environment }),
+			}),
+			previousMessage: this.promptPreviousMessage(completion),
+		};
+	}
+
+	/** The re-fired skip's add for one row: the marker, the step, and the ask. */
+	private async askRefiredSkipTicket(
+		config: FactoryConfig,
+		projection: TicketProjection,
+		ticket: Ticket,
+	): Promise<boolean> {
+		if (ticket.state !== "open") return false;
+		const completion = this.state.ticketWorkCycle.lastCompletion(ticket.identity);
+		const outcome = completion?.transition ?? null;
+		// The marker carries the shape: `refired` is set only on an outcome
+		// that fired and derived a position, so a re-fired trace with no fire
+		// is not a state the plane writes. The marker holds the record against
+		// a damaged trace; no walk reaches it on its own.
+		if (outcome === null || outcome.refired !== true) return false;
+		const step = deriveNextStep(config, this.state.ticketWorkCycle, outcome, projection);
+		if (step === null || step.gate !== null) return false;
+		// The projection before the list rule (ADR 0042): the rule withholds
+		// a covered ticket's row from the operator's list, and the add must
+		// still reach the position it starts on.
+		const position = projection.rowFor(step.ticketIdentity);
+		if (position === undefined) return false;
+		// The ignore gate (ADR 0060): this walk reads the projection before the
+		// list rule on purpose, because ADR 0042's route must reach its position
+		// even when the row is withheld, and a resting ignored position is
+		// withheld while a live one is listed. Either way the one gate predicate on
+		// the row the walk holds is what answers.
+		if (automaticStartBlocked(position)) return false;
+		// The merged position the skip routes to (ADR 0068): the plane
+		// action's merge stands for the handoff the skip would start, and the
+		// standing, hold, and limit guards the derivation ran hold the add the
+		// way the handoff's add held: an automatic merge add holds wherever the
+		// handoff's add would have held.
+		if (step.kind === "plane-action")
+			return (await this.askPlaneActionAdd(position, ticket.identity, step.taskType)) !== "refused";
+		const added = await this.topUpAsk(
+			{
+				origin: "workflow",
+				automatic: true,
+				ticketIdentity: position.identity,
+				routeFromIdentity: ticket.identity,
+				choice: resolveHandoffChoice(config, step.taskType, {
+					...(outcome.agent === undefined ? {} : { agent: outcome.agent }),
+					...(outcome.environment === undefined ? {} : { environment: outcome.environment }),
+				}),
+				previousMessage: this.promptPreviousMessage(completion),
+			},
+			`work queue top-up: routing ${this.ticketName(ticket.identity)} to ${step.taskType}`,
+			`work queue top-up could not route ${this.ticketName(ticket.identity)}`,
+		);
+		return added !== "refused";
+	}
+
+	/** The plane action's merge add, in the top-up's words. */
+	private askPlaneActionAdd(
+		position: { identity: string },
+		routeFrom: string,
+		taskType: string,
+	): Promise<"added" | "refused" | "stopped"> {
+		return this.topUpPlaneActionAsk(
+			{
+				origin: "workflow",
+				automatic: true,
+				ticketIdentity: position.identity,
+				routeFromIdentity: routeFrom,
+				taskType,
+			},
+			`work queue top-up: merging ${this.ticketName(position.identity)}`,
+			`work queue top-up could not merge ${this.ticketName(position.identity)}`,
+		);
 	}
 
 	/**
@@ -1988,10 +2102,7 @@ export class ObservationCoordinator {
 		// episode: the mark stands while the asked-for start holds its place in
 		// the queue or runs, and a refused ask clears it again, so the next
 		// empty-queue cycle reconsiders the restart the way ADR 0051 states.
-		const byPane = new Map<string, HerdrAgent>();
-		for (const agent of agents) byPane.set(agent.paneId, agent);
 		const restartTickets = this.state.ticketWorkCycle.ticketsByState(["handed-off", "running"]);
-		const restartNames = this.agentNames(restartTickets);
 		// The start count each candidate needs arrives as one batched read for the
 		// in-flight list, the same shape the projection pays (issue #202, ADR 0095).
 		// Asked per candidate it cost two statements for every in-flight Ticket on
@@ -1999,6 +2110,45 @@ export class ObservationCoordinator {
 		const restartStartCounts = this.state.handoff.handoffCountsFor(
 			restartTickets.map((ticket) => ticket.ticketIdentity),
 		);
+		if (
+			await this.topUpRestartAdds({
+				config,
+				agents,
+				blocked,
+				queuedTickets,
+				restartTickets,
+				restartStartCounts,
+			})
+		)
+			return true;
+		// The standing row the restart walked past is the open-ticket add's hold
+		// (ADR 0051, ADR 0108): the restart asked above, and the queue keeps its
+		// one-item pace for every other fresh-work add.
+		if (standingRowHold !== null) {
+			this.noteAutomaticHold(standingRowHold);
+			return false;
+		}
+		// 4. A new open ticket (ADR 0051, ADR 0088): the first open ticket in
+		// the list's order that every wait the auto-dispatch checked still
+		// passes - actionable, under the handoff limit, re-verified since its
+		// last cycle ended, offering a task, and past the Same-type hold. The
+		// open pull request tickets stand in their own group ahead of the
+		// rest: the work the machine has started on a pull request - the
+		// review, the rework, the merge - moves to the end before the machine
+		// starts work on a ticket it has not started. The list's order holds
+		// inside each group, and a gate that holds one ticket holds that
+		// ticket only: the walk falls to the next candidate, as before. A
+		// full parallel seat is no longer a hold here: the item rests in the
+		// queue until a seat frees.
+		return await this.topUpOpenTicketGroups(config, list, queuedTickets);
+	}
+
+	/** The restart walk: the in-flight tickets whose Agent is missing past grace. */
+	private async topUpRestartAdds(fields: RestartWalkFields): Promise<boolean> {
+		const { config, agents, blocked, queuedTickets, restartTickets, restartStartCounts } = fields;
+		const byPane = new Map<string, HerdrAgent>();
+		for (const agent of agents) byPane.set(agent.paneId, agent);
+		const restartNames = this.agentNames(restartTickets);
 		for (const ticket of restartTickets) {
 			// The gate (ADR 0060, widened by ADR 0070): this walk reads the
 			// in-flight tickets directly, not the list, and a flagged Ticket whose
@@ -2045,31 +2195,7 @@ export class ObservationCoordinator {
 			this.restarted.add(ticket.ticketIdentity);
 			const previous = this.state.ticketWorkCycle.lastCompletion(ticket.ticketIdentity);
 			const added = await this.topUpAsk(
-				{
-					origin: "restart",
-					automatic: true,
-					ticketIdentity: ticket.ticketIdentity,
-					// The episode mark stands only for a restart that holds its place
-					// or runs. Every exit that ends the item without a start - the
-					// pickup's drop, the operator's remove, a race cancel - clears the
-					// mark through this answer, so the next empty-queue cycle asks
-					// again. That is ADR 0051's re-entry rule read at the drop, and a
-					// gate that still holds the ticket parks it again there: the
-					// re-verify gate and the handoff limit stand in the claim, and the
-					// dispatch's warning names them (ADR 0049).
-					onStarted: (started) => {
-						if (!started.ok) this.restarted.delete(ticket.ticketIdentity);
-					},
-					// The same choices the previous handoff ran with: the
-					// operator's restart keeps the model, thinking level, and
-					// context window, and the auto one matches it.
-					choice: baseChoice(ticket.agentType, ticket.environment, ticket.taskType, {
-						model: ticket.model,
-						thinking: ticket.thinking,
-						contextWindow: ticket.contextWindow,
-					}),
-					previousMessage: this.promptPreviousMessage(previous),
-				},
+				this.restartAskIntent(ticket, previous),
 				`work queue top-up: restarting ${this.ticketName(ticket.ticketIdentity)}`,
 				`work queue top-up could not restart ${this.ticketName(ticket.ticketIdentity)}`,
 			);
@@ -2082,25 +2208,44 @@ export class ObservationCoordinator {
 			}
 			return true;
 		}
-		// The standing row the restart walked past is the open-ticket add's hold
-		// (ADR 0051, ADR 0108): the restart asked above, and the queue keeps its
-		// one-item pace for every other fresh-work add.
-		if (standingRowHold !== null) {
-			this.noteAutomaticHold(standingRowHold);
-			return false;
-		}
-		// 4. A new open ticket (ADR 0051, ADR 0088): the first open ticket in
-		// the list's order that every wait the auto-dispatch checked still
-		// passes - actionable, under the handoff limit, re-verified since its
-		// last cycle ended, offering a task, and past the Same-type hold. The
-		// open pull request tickets stand in their own group ahead of the
-		// rest: the work the machine has started on a pull request - the
-		// review, the rework, the merge - moves to the end before the machine
-		// starts work on a ticket it has not started. The list's order holds
-		// inside each group, and a gate that holds one ticket holds that
-		// ticket only: the walk falls to the next candidate, as before. A
-		// full parallel seat is no longer a hold here: the item rests in the
-		// queue until a seat frees.
+		return false;
+	}
+
+	/** The restart ask's intent: the mark's exits, the previous handoff's choices. */
+	private restartAskIntent(ticket: HandoffTicket, previous: Completion | null): HandoffIntent {
+		return {
+			origin: "restart",
+			automatic: true,
+			ticketIdentity: ticket.ticketIdentity,
+			// The episode mark stands only for a restart that holds its place
+			// or runs. Every exit that ends the item without a start - the
+			// pickup's drop, the operator's remove, a race cancel - clears the
+			// mark through this answer, so the next empty-queue cycle asks
+			// again. That is ADR 0051's re-entry rule read at the drop, and a
+			// gate that still holds the ticket parks it again there: the
+			// re-verify gate and the handoff limit stand in the claim, and the
+			// dispatch's warning names them (ADR 0049).
+			onStarted: (started) => {
+				if (!started.ok) this.restarted.delete(ticket.ticketIdentity);
+			},
+			// The same choices the previous handoff ran with: the
+			// operator's restart keeps the model, thinking level, and
+			// context window, and the auto one matches it.
+			choice: baseChoice(ticket.agentType, ticket.environment, ticket.taskType, {
+				model: ticket.model,
+				thinking: ticket.thinking,
+				contextWindow: ticket.contextWindow,
+			}),
+			previousMessage: this.promptPreviousMessage(previous),
+		};
+	}
+
+	/** The open-ticket walk: the pull request group first, the rest behind it. */
+	private async topUpOpenTicketGroups(
+		config: FactoryConfig,
+		list: TicketListViews,
+		queuedTickets: ReadonlySet<string>,
+	): Promise<boolean> {
 		for (const group of [
 			list.rows.filter((ticket) => ticket.sourceKind === "github-pull-request"),
 			list.rows.filter((ticket) => ticket.sourceKind !== "github-pull-request"),

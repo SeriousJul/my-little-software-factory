@@ -1,6 +1,6 @@
 /** The mutually exclusive Key guide and Message view utility overlays. */
 import { createElement, useTerminalDimensions } from "@opentui/react";
-import type { ReactElement } from "react";
+import type { Dispatch, ReactElement, SetStateAction } from "react";
 import { useEffect, useMemo, useState } from "react";
 import { useControlDispatch } from "./control-dispatch.ts";
 import {
@@ -352,34 +352,15 @@ export function MessageView({
 	const panePadding: 0 | 1 = frame.padding === 1 ? 1 : 0;
 	const paneInnerWidth = Math.max(1, frame.contentWidth - PANE_BORDERS - 2 * panePadding);
 	const visibleRows = Math.max(0, frame.contentRows - PANE_BORDERS - 2 * panePadding);
-	const fullWidthBody = useMemo(
-		() => messageHistoryBody(history, paneInnerWidth),
-		[history, paneInnerWidth],
+	const { hasScrollbar, bodyWidth, body, maxScroll } = useMessageViewBody(
+		history,
+		paneInnerWidth,
+		visibleRows,
 	);
-	const hasScrollbar = fullWidthBody.length > visibleRows;
-	const bodyWidth = Math.max(1, paneInnerWidth - (hasScrollbar ? 1 : 0));
-	const body = useMemo(() => messageHistoryBody(history, bodyWidth), [history, bodyWidth]);
-	const maxScroll = maxScrollOf(body.length, visibleRows);
 	// The view opens pinned to the newest entry: `null` keeps it there while
 	// entries land, and the operator's first step takes a real index.
 	const [bodyScroll, setBodyScroll] = useState<number | null>(null);
-
-	// Scroll the body by one step of the named key: a page moves one viewport,
-	// and the jump keys take either edge. A null view is the bottom, so the
-	// first step reads the bottom's index.
-	const scrollBody = (name: string) => {
-		if (name === "pageup")
-			setBodyScroll((current) => Math.max(0, (current ?? maxScroll) - Math.max(1, visibleRows)));
-		else if (name === "pagedown")
-			setBodyScroll((current) =>
-				Math.min(maxScroll, (current ?? maxScroll) + Math.max(1, visibleRows)),
-			);
-		else if (name === "home") setBodyScroll(0);
-		else if (name === "end") setBodyScroll(maxScroll);
-		else if (name === "j")
-			setBodyScroll((current) => Math.min((current ?? maxScroll) + 1, maxScroll));
-		else setBodyScroll((current) => Math.max(0, (current ?? maxScroll) - 1));
-	};
+	const scrollBody = useMessageViewScroll(maxScroll, visibleRows, setBodyScroll);
 
 	// The view states the facts its own body produces, beside the plane's
 	// standing facts: the pane's window, the shared fact the bar's gate and
@@ -406,6 +387,87 @@ export function MessageView({
 	// the track and the thumb the position it wears, not a blank column.
 	const thumbRows = hasScrollbar ? scrollbarRows(body.length, visibleRows, scroll) : null;
 
+	return messageViewElement({
+		frame,
+		width,
+		visible,
+		bodyWidth,
+		thumbRows,
+		scroll,
+		panePadding,
+		visibleRows,
+		message,
+		viewFacts,
+		range,
+		queuePaused: facts.queuePaused,
+	});
+}
+
+/** The body the view draws, and the width it flows at. */
+function useMessageViewBody(
+	history: MessageViewProps["history"],
+	paneInnerWidth: number,
+	visibleRows: number,
+): {
+	fullWidthBody: BodySpan[][];
+	hasScrollbar: boolean;
+	bodyWidth: number;
+	body: BodySpan[][];
+	maxScroll: number;
+} {
+	const fullWidthBody = useMemo(
+		() => messageHistoryBody(history, paneInnerWidth),
+		[history, paneInnerWidth],
+	);
+	const hasScrollbar = fullWidthBody.length > visibleRows;
+	const bodyWidth = Math.max(1, paneInnerWidth - (hasScrollbar ? 1 : 0));
+	const body = useMemo(() => messageHistoryBody(history, bodyWidth), [history, bodyWidth]);
+	const maxScroll = maxScrollOf(body.length, visibleRows);
+	return { fullWidthBody, hasScrollbar, bodyWidth, body, maxScroll };
+}
+
+/**
+ * Scroll the body by one step of the named key: a page moves one viewport,
+ * and the jump keys take either edge. A null view is the bottom, so the
+ * first step reads the bottom's index.
+ */
+function useMessageViewScroll(
+	maxScroll: number,
+	visibleRows: number,
+	setBodyScroll: Dispatch<SetStateAction<number | null>>,
+): (name: string) => void {
+	return (name: string) => {
+		if (name === "pageup")
+			setBodyScroll((current) => Math.max(0, (current ?? maxScroll) - Math.max(1, visibleRows)));
+		else if (name === "pagedown")
+			setBodyScroll((current) =>
+				Math.min(maxScroll, (current ?? maxScroll) + Math.max(1, visibleRows)),
+			);
+		else if (name === "home") setBodyScroll(0);
+		else if (name === "end") setBodyScroll(maxScroll);
+		else if (name === "j")
+			setBodyScroll((current) => Math.min((current ?? maxScroll) + 1, maxScroll));
+		else setBodyScroll((current) => Math.max(0, (current ?? maxScroll) - 1));
+	};
+}
+
+/** The view's surface: the pane, the bar, and the thumb it wears. */
+function messageViewElement(fields: {
+	frame: ReturnType<typeof modalFrame>;
+	width: number;
+	visible: BodySpan[][];
+	bodyWidth: number;
+	thumbRows: ReadonlySet<number> | null;
+	scroll: number;
+	panePadding: 0 | 1;
+	visibleRows: number;
+	message: MessageViewProps["message"];
+	viewFacts: ReturnType<typeof availabilityFacts>;
+	range: string;
+	queuePaused: boolean;
+}): ReactElement {
+	const { frame, width, visible, bodyWidth, thumbRows, scroll, panePadding, visibleRows } = fields;
+	const { message, viewFacts, range, queuePaused } = fields;
 	return createElement(ModalSurface, {
 		frame,
 		width,
@@ -434,7 +496,7 @@ export function MessageView({
 			facts: viewFacts,
 			rangeIndicator: range,
 		},
-		queuePaused: facts.queuePaused,
+		queuePaused,
 	});
 }
 
