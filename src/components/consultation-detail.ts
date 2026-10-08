@@ -49,17 +49,28 @@ export function consultationDetailTitle(body: ConsultationDetailBody): string {
 	return body === "session" ? "Session view" : "Agent view";
 }
 
-export function consultationDetailLines(
-	consultation: Consultation | undefined,
-	turns: readonly ConsultationTurn[],
-	snapshots: readonly ConsultationSnapshot[],
-	width: number,
-	liveOutput: string | null,
-	sessionEntries: readonly SessionEntry[] | null = null,
-	replacementIds: readonly string[] = [],
-	agentStatus: string | null = null,
-	remainingResources: readonly ConsultationResource[] = [],
-): ConsultationDetailLine[] {
+export function consultationDetailLines(fields: {
+	consultation: Consultation | undefined;
+	turns: readonly ConsultationTurn[];
+	snapshots: readonly ConsultationSnapshot[];
+	width: number;
+	liveOutput: string | null;
+	sessionEntries?: readonly SessionEntry[] | null;
+	replacementIds?: readonly string[];
+	agentStatus?: string | null;
+	remainingResources?: readonly ConsultationResource[];
+}): ConsultationDetailLine[] {
+	const {
+		consultation,
+		turns,
+		snapshots,
+		width,
+		liveOutput,
+		sessionEntries = null,
+		replacementIds = [],
+		agentStatus = null,
+		remainingResources = [],
+	} = fields;
 	if (consultation === undefined)
 		return [{ text: "no Consultation selected", fg: paint("subtext0") }];
 	const lines: ConsultationDetailLine[] = [];

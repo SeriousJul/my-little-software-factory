@@ -407,9 +407,11 @@ describe("the Message line's fact to the desktop", () => {
 					await awaitFrame(setup, (f) => !f.includes("refreshing"), "the working line to clear");
 					expect(notificationCalls(runner)).toHaveLength(0);
 				},
-				WIDTH,
-				HEIGHT,
-				{ config: BASE_CONFIG, runner, state, sources: [source] },
+				{
+					width: WIDTH,
+					height: HEIGHT,
+					props: { config: BASE_CONFIG, runner, state, sources: [source] },
+				},
 			);
 		} finally {
 			state.close();
@@ -434,9 +436,11 @@ describe("the Message line's fact to the desktop", () => {
 				await settle(setup);
 				expect(notificationCalls(runner)).toHaveLength(1);
 			},
-			WIDTH,
-			HEIGHT,
-			{ config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				props: { config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+			},
 		);
 	});
 
@@ -471,9 +475,11 @@ describe("the Message line's fact to the desktop", () => {
 				);
 				expect(notificationCalls(runner)).toHaveLength(1);
 			},
-			WIDTH,
-			HEIGHT,
-			{ config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				props: { config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+			},
 		);
 	});
 
@@ -497,9 +503,11 @@ describe("the Message line's fact to the desktop", () => {
 				const sent = calls.find((call) => call.args.join(" ").includes("the daemon refused"));
 				expect(sent?.args.join(" ")).toContain(line);
 			},
-			WIDTH,
-			HEIGHT,
-			{ config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				props: { config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+			},
 		);
 	});
 
@@ -513,12 +521,14 @@ describe("the Message line's fact to the desktop", () => {
 				expect(messageRowOf(await settle(setup)).trim()).toBe("Warning: no Ticket sources exist");
 				expect(notificationCalls(runner)).toHaveLength(0);
 			},
-			WIDTH,
-			HEIGHT,
 			{
-				config: { ...BASE_CONFIG, desktopNotification: false },
-				runner,
-				initialTickets: SAMPLE_TICKETS,
+				width: WIDTH,
+				height: HEIGHT,
+				props: {
+					config: { ...BASE_CONFIG, desktopNotification: false },
+					runner,
+					initialTickets: SAMPLE_TICKETS,
+				},
 			},
 		);
 	});
@@ -545,12 +555,14 @@ describe("the Message line's fact to the desktop", () => {
 					runner.calls.filter((call) => call.command === "herdr" || call.command === "git"),
 				).toHaveLength(0);
 			},
-			WIDTH,
-			HEIGHT,
 			{
-				config: { ...BASE_CONFIG, defaultAgent: "nope" },
-				runner,
-				initialTickets: SAMPLE_TICKETS,
+				width: WIDTH,
+				height: HEIGHT,
+				props: {
+					config: { ...BASE_CONFIG, defaultAgent: "nope" },
+					runner,
+					initialTickets: SAMPLE_TICKETS,
+				},
 			},
 		);
 	});
@@ -601,14 +613,16 @@ describe("the Message line's fact to the desktop", () => {
 						'handoff failure park: "Persist source facts" (2 Handoff starts in a row never reached an Agent)',
 					);
 				},
-				WIDTH,
-				HEIGHT,
 				{
-					config: { ...BASE_CONFIG, maxHandoffsPerTicket: 4 },
-					runner,
-					state,
-					sources: [src],
-					pollIntervalMs: 60_000,
+					width: WIDTH,
+					height: HEIGHT,
+					props: {
+						config: { ...BASE_CONFIG, maxHandoffsPerTicket: 4 },
+						runner,
+						state,
+						sources: [src],
+						pollIntervalMs: 60_000,
+					},
 				},
 			);
 		} finally {

@@ -99,9 +99,7 @@ describe("the control plane", () => {
 					);
 					expect(frame).not.toContain(SAMPLE_TICKETS[0].title);
 				},
-				WIDTH,
-				30,
-				{ state },
+				{ width: WIDTH, height: 30, props: { state } },
 			);
 		} finally {
 			state.close();
@@ -207,9 +205,7 @@ describe("the control plane", () => {
 					expect(messageRowOf(after)).toContain("the Agent's pane is not alive in the last poll");
 					expect(runner.commands()).not.toContain("herdr agent focus pane-1");
 				},
-				WIDTH,
-				30,
-				{ state, runner, pollIntervalMs: 100 },
+				{ width: WIDTH, height: 30, props: { state, runner, pollIntervalMs: 100 } },
 			);
 		} finally {
 			state.close();
@@ -324,9 +320,7 @@ describe("the control plane", () => {
 					);
 					expect(runner.commands()).not.toContain("herdr agent focus pane-1");
 				},
-				WIDTH,
-				30,
-				{ state, runner, pollIntervalMs: 100 },
+				{ width: WIDTH, height: 30, props: { state, runner, pollIntervalMs: 100 } },
 			);
 		} finally {
 			state.close();
@@ -438,9 +432,11 @@ describe("the control plane", () => {
 					);
 					expect(commands).toContain("gh pr close 12 --repo github.com/acme/factory");
 				},
-				WIDTH,
-				30,
-				{ state, runner, sources: [source], config, pollIntervalMs: 100 },
+				{
+					width: WIDTH,
+					height: 30,
+					props: { state, runner, sources: [source], config, pollIntervalMs: 100 },
+				},
 			);
 		} finally {
 			state.close();
@@ -553,9 +549,11 @@ describe("the control plane", () => {
 					expect(commands).toContain("gh pr close 12 --repo github.com/acme/factory");
 					expect(messageRowOf(frame)).toContain("abandoned");
 				},
-				WIDTH,
-				30,
-				{ state, runner, sources: [source], config, pollIntervalMs: 100 },
+				{
+					width: WIDTH,
+					height: 30,
+					props: { state, runner, sources: [source], config, pollIntervalMs: 100 },
+				},
 			);
 		} finally {
 			state.close();
@@ -604,9 +602,11 @@ describe("the control plane", () => {
 				// warning color, unlike `unknown`.
 				expect(detailPaneText(frame)).toContain("Suggested task type: parked");
 			},
-			undefined,
-			undefined,
-			{ initialTickets: [parked], config: BASE_CONFIG },
+			{
+				width: undefined,
+				height: undefined,
+				props: { initialTickets: [parked], config: BASE_CONFIG },
+			},
 		);
 	});
 
@@ -791,8 +791,7 @@ describe("the control plane", () => {
 				);
 				expect(markerRowOf(back)).toBe(3);
 			},
-			60,
-			27,
+			{ width: 60, height: 27 },
 		);
 	});
 
@@ -829,8 +828,7 @@ describe("the control plane", () => {
 				// The selection never moved.
 				expect(markerRowOf(atBottom)).toBe(3);
 			},
-			60,
-			27,
+			{ width: 60, height: 27 },
 		);
 	});
 
@@ -876,8 +874,7 @@ describe("the control plane", () => {
 				expect(frame).toContain("Observe the agent");
 				expect(frame).not.toContain("Retry polic");
 			},
-			WIDTH,
-			27,
+			{ width: WIDTH, height: 27 },
 		);
 	});
 
@@ -992,8 +989,7 @@ describe("the control plane", () => {
 					expect(frame).toContain("Detail");
 					expectStateBadges(frame);
 				},
-				width,
-				height,
+				{ width: width, height: height },
 			);
 		}
 	});
@@ -1028,8 +1024,7 @@ describe("the control plane", () => {
 				// The detail pane carries its content at this size.
 				expect(frameText(setup.captureCharFrame())).toContain("Source state: open");
 			},
-			75,
-			27,
+			{ width: 75, height: 27 },
 		);
 	});
 
@@ -1059,8 +1054,7 @@ describe("the control plane", () => {
 				// selected ticket.
 				expect(frameText(setup.captureCharFrame())).toContain("acme/billing");
 			},
-			60,
-			27,
+			{ width: 60, height: 27 },
 		);
 	});
 
@@ -1086,8 +1080,7 @@ describe("the control plane", () => {
 				// The repository is dropped from the row, not interleaved into it.
 				expect(listHalf).not.toContain("acme/");
 			},
-			40,
-			27,
+			{ width: 40, height: 27 },
 		);
 	});
 
@@ -1144,9 +1137,7 @@ describe("the control plane", () => {
 				expect(detail).toContain("Suggested task type: rework");
 				expect(detail).not.toContain("Handoff task type:");
 			},
-			WIDTH,
-			30,
-			{ initialTickets: [stale] },
+			{ width: WIDTH, height: 30, props: { initialTickets: [stale] } },
 		);
 	});
 
@@ -1161,9 +1152,7 @@ describe("the control plane", () => {
 				expect(detail).toContain("Handoff task type: review");
 				expect(detail).not.toContain("Suggested task type:");
 			},
-			WIDTH,
-			30,
-			{ initialTickets: [drifted] },
+			{ width: WIDTH, height: 30, props: { initialTickets: [drifted] } },
 		);
 	});
 
@@ -1195,9 +1184,7 @@ describe("the control plane", () => {
 				expect(detail).toContain("Handoff: recovery required");
 				expect(detail).toContain("Suggested task type: review");
 			},
-			WIDTH,
-			30,
-			{ initialTickets: [blocked, recovery] },
+			{ width: WIDTH, height: 30, props: { initialTickets: [blocked, recovery] } },
 		);
 	});
 
@@ -1218,9 +1205,7 @@ describe("the control plane", () => {
 				expect(detail).toContain("Handoff task type: unknown");
 				expect(detail).not.toContain("Suggested task type:");
 			},
-			WIDTH,
-			30,
-			{ initialTickets: [orphan] },
+			{ width: WIDTH, height: 30, props: { initialTickets: [orphan] } },
 		);
 	});
 
@@ -1248,8 +1233,7 @@ describe("the control plane", () => {
 					}
 					row = listHalfOf(rows[markerRowOf(frame)]);
 				},
-				width,
-				height,
+				{ width: width, height: height },
 			);
 			return row;
 		};
@@ -1298,8 +1282,7 @@ describe("the control plane", () => {
 				);
 				expect(detailPaneText(detail, 60)).toContain("Handoff task type: implement");
 			},
-			60,
-			27,
+			{ width: 60, height: 27 },
 		);
 	});
 
@@ -1336,9 +1319,7 @@ describe("the control plane", () => {
 					"Suggested task type: consultation",
 				);
 			},
-			120,
-			30,
-			props,
+			{ width: 120, height: 30, props: props },
 		);
 
 		await withApp(
@@ -1360,9 +1341,7 @@ describe("the control plane", () => {
 					detailPaneText(candidate, 60).includes("Suggested task type: consultation"),
 				);
 			},
-			60,
-			27,
-			props,
+			{ width: 60, height: 27, props: props },
 		);
 	});
 
@@ -1406,8 +1385,7 @@ describe("the control plane", () => {
 				expect(stillFrame(await settle(setup))).toBe(stillFrame(home));
 				expect(stillFrame(top)).not.toBe(stillFrame(page));
 			},
-			60,
-			27,
+			{ width: 60, height: 27 },
 		);
 	});
 
@@ -1428,8 +1406,7 @@ describe("the control plane", () => {
 					selectedState(frame).includes("Retry polic"),
 				);
 			},
-			60,
-			27,
+			{ width: 60, height: 27 },
 		);
 	});
 
@@ -1447,7 +1424,7 @@ describe("the control plane", () => {
 				);
 				// List wheels select exactly one adjacent Ticket. They have no
 				// detail speed profile or acceleration.
-				await mouseWheel(setup, 4, paneRow(3), "down");
+				await mouseWheel(setup, { x: 4, y: paneRow(3), direction: "down" });
 				await awaitFrame(
 					setup,
 					(frame) =>
@@ -1458,7 +1435,7 @@ describe("the control plane", () => {
 
 				// Detail content receives a normal wheel event and takes focus.
 				const before = setup.captureCharFrame();
-				await mouseWheel(setup, 45, paneRow(3), "down");
+				await mouseWheel(setup, { x: 45, y: paneRow(3), direction: "down" });
 				const scrolled = await awaitFrame(
 					setup,
 					(frame) => detailFocused(frame) && stillFrame(frame) !== stillFrame(before),
@@ -1468,12 +1445,11 @@ describe("the control plane", () => {
 
 				// Horizontal and Shift-wheel gestures are inert for wrapped detail text.
 				const stable = setup.captureCharFrame();
-				await mouseWheel(setup, 45, paneRow(3), "left");
-				await mouseWheel(setup, 45, paneRow(3), "down", true);
+				await mouseWheel(setup, { x: 45, y: paneRow(3), direction: "left" });
+				await mouseWheel(setup, { x: 45, y: paneRow(3), direction: "down", shift: true });
 				expect(stillFrame(await settle(setup))).toBe(stillFrame(stable));
 			},
-			60,
-			27,
+			{ width: 60, height: 27 },
 		);
 	});
 
@@ -1511,8 +1487,7 @@ describe("the control plane", () => {
 					"a scrollbar thumb drag to move toward the start",
 				);
 			},
-			60,
-			27,
+			{ width: 60, height: 27 },
 		);
 	});
 
@@ -1532,9 +1507,7 @@ describe("the control plane", () => {
 					(frame) => agentRowOf(frame) === before - 2,
 				);
 			},
-			60,
-			27,
-			{ config },
+			{ width: 60, height: 27, props: { config } },
 		);
 	});
 
@@ -1546,16 +1519,14 @@ describe("the control plane", () => {
 		await withApp(
 			async (setup) => {
 				const before = agentRowOf(setup.captureCharFrame());
-				await mouseWheel(setup, 45, paneRow(3), "down");
+				await mouseWheel(setup, { x: 45, y: paneRow(3), direction: "down" });
 				await awaitFrame(
 					setup,
 					(frame) => detailFocused(frame) && agentRowOf(frame) === before - 2,
 					"the configured linear wheel step to move two rows",
 				);
 			},
-			60,
-			27,
-			{ config },
+			{ width: 60, height: 27, props: { config } },
 		);
 	});
 
@@ -1565,7 +1536,7 @@ describe("the control plane", () => {
 				const wheelAt = async (now: number) => {
 					const clock = spyOn(Date, "now").mockReturnValue(now);
 					try {
-						await mouseWheel(setup, 45, paneRow(3), "down");
+						await mouseWheel(setup, { x: 45, y: paneRow(3), direction: "down" });
 					} finally {
 						clock.mockRestore();
 					}
@@ -1584,8 +1555,7 @@ describe("the control plane", () => {
 					"the accelerated second wheel step",
 				);
 			},
-			60,
-			27,
+			{ width: 60, height: 27 },
 		);
 	});
 
@@ -1601,7 +1571,7 @@ describe("the control plane", () => {
 				setup.renderer.on(CliRenderEvents.FRAME, record);
 				try {
 					for (let event = 0; event < 10; event += 1) {
-						await mouseWheel(setup, 45, paneRow(3), "down");
+						await mouseWheel(setup, { x: 45, y: paneRow(3), direction: "down" });
 					}
 					await sleep(80);
 				} finally {
@@ -1618,9 +1588,7 @@ describe("the control plane", () => {
 					expect(detailPaneText(frame, 60).trim()).not.toBe("");
 				}
 			},
-			60,
-			27,
-			{ config },
+			{ width: 60, height: 27, props: { config } },
 		);
 	});
 
@@ -1629,12 +1597,11 @@ describe("the control plane", () => {
 			async (setup) => {
 				await openPanel(setup);
 				const before = setup.captureCharFrame();
-				await mouseWheel(setup, 45, paneRow(3), "down");
+				await mouseWheel(setup, { x: 45, y: paneRow(3), direction: "down" });
 				await mouseClick(setup, 4, paneRow(3));
 				expect(stillFrame(await settle(setup))).toBe(stillFrame(before));
 			},
-			60,
-			27,
+			{ width: 60, height: 27 },
 		);
 	});
 
@@ -1720,9 +1687,7 @@ describe("the control plane", () => {
 						"the Key guide to close",
 					);
 				},
-				WIDTH,
-				30,
-				{ state },
+				{ width: WIDTH, height: 30, props: { state } },
 			);
 		} finally {
 			state.close();
@@ -1738,8 +1703,7 @@ describe("the control plane", () => {
 					expect(row.length).toBe(8);
 				}
 			},
-			8,
-			8,
+			{ width: 8, height: 8 },
 		);
 	});
 });

@@ -320,10 +320,12 @@ export interface ConsultationRecordAggregate {
 		id: string,
 		sequence: number | null,
 		output: string | null,
-		settledStatus?: string,
-		capturedAt?: string,
-		cause?: TurnEndCause,
-		detail?: string,
+		fields?: {
+			settledStatus?: string;
+			capturedAt?: string;
+			cause?: TurnEndCause;
+			detail?: string;
+		},
 	): boolean;
 	captureConsultationPartial(id: string, output: string | null, capturedAt?: string): void;
 	consultationTurns(id: string): ConsultationTurn[];
@@ -733,11 +735,19 @@ export class ConsultationRecordModule implements ConsultationRecordAggregate {
 		id: string,
 		sequence: number | null,
 		output: string | null,
-		settledStatus = "idle",
-		capturedAt = new Date().toISOString(),
-		cause: TurnEndCause = "unknown",
-		detail = "",
+		fields?: {
+			settledStatus?: string;
+			capturedAt?: string;
+			cause?: TurnEndCause;
+			detail?: string;
+		},
 	): boolean {
+		const {
+			settledStatus = "idle",
+			capturedAt = new Date().toISOString(),
+			cause = "unknown",
+			detail = "",
+		} = fields ?? {};
 		return this.db.transaction(() => {
 			const consultation = this.db
 				.prepare("SELECT state, warning FROM consultations WHERE id = ?")

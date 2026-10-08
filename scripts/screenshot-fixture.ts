@@ -119,80 +119,83 @@ const REPO_B = "SeriousJul/pi-extensions";
 const REPO_B_URL = `https://github.com/${REPO_B}`;
 const NOW = "2026-07-07T09:00:00.000Z";
 
-const issue = (
-	number: number,
-	title: string,
-	body: string,
-	labels: string[],
-	updatedAt: string,
-	repository: string,
-	repositoryUrl: string,
-): FetchedTicket => ({
-	identity: `github:github.com:I_fixture${number}`,
-	sourceKind: "github-issue",
-	externalKey: `#${number}`,
-	sourceState: "open",
-	url: `${repositoryUrl}/issues/${number}`,
-	title,
-	description: body,
-	labels,
-	externalUpdatedAt: updatedAt,
-	repository: {
-		identity: `github.com/${repository.toLowerCase()}`,
-		displayName: repository,
-		cloneUrl: `${repositoryUrl}.git`,
-	},
-	attributes: {},
-});
+const issue = (fields: {
+	number: number;
+	title: string;
+	body: string;
+	labels: string[];
+	updatedAt: string;
+	repository: string;
+	repositoryUrl: string;
+}): FetchedTicket => {
+	const { number, title, body, labels, updatedAt, repository, repositoryUrl } = fields;
+	return {
+		identity: `github:github.com:I_fixture${number}`,
+		sourceKind: "github-issue",
+		externalKey: `#${number}`,
+		sourceState: "open",
+		url: `${repositoryUrl}/issues/${number}`,
+		title,
+		description: body,
+		labels,
+		externalUpdatedAt: updatedAt,
+		repository: {
+			identity: `github.com/${repository.toLowerCase()}`,
+			displayName: repository,
+			cloneUrl: `${repositoryUrl}.git`,
+		},
+		attributes: {},
+	};
+};
 
 /** The tickets: three in the factory repository, two in pi-extensions. */
-const OPEN_TICKET = issue(
-	53,
-	"Split the README into published guides",
-	"Move the long README sections into the documentation site and keep the\nREADME a short landing page.",
-	["ready-for-agent"],
-	"2026-07-07T08:41:00Z",
-	REPO_A,
-	REPO_A_URL,
-);
-const RUNNING_TICKET = issue(
-	52,
-	"Retry failed webhook deliveries with a bounded backoff",
-	"Deliveries that fail with a 5xx are dropped. Retry them with a bounded\nexponential backoff and give up after the third attempt.",
-	["ready-for-agent", "needs-work"],
-	"2026-07-07T07:58:00Z",
-	REPO_A,
-	REPO_A_URL,
-);
+const OPEN_TICKET = issue({
+	number: 53,
+	title: "Split the README into published guides",
+	body: "Move the long README sections into the documentation site and keep the\nREADME a short landing page.",
+	labels: ["ready-for-agent"],
+	updatedAt: "2026-07-07T08:41:00Z",
+	repository: REPO_A,
+	repositoryUrl: REPO_A_URL,
+});
+const RUNNING_TICKET = issue({
+	number: 52,
+	title: "Retry failed webhook deliveries with a bounded backoff",
+	body: "Deliveries that fail with a 5xx are dropped. Retry them with a bounded\nexponential backoff and give up after the third attempt.",
+	labels: ["ready-for-agent", "needs-work"],
+	updatedAt: "2026-07-07T07:58:00Z",
+	repository: REPO_A,
+	repositoryUrl: REPO_A_URL,
+});
 // The source's own truth after the review's write: the ticket wears the ship
 // fact the machine landed on it, the way GitHub does once the write lands.
-const AWAITING_TICKET = issue(
-	51,
-	"Rank tickets by priority label",
-	"Ranked tickets stay ahead of unranked ones. The operator bumps a\npriority with =, +, and -.",
-	["ready-to-ship"],
-	"2026-07-07T06:12:00Z",
-	REPO_A,
-	REPO_A_URL,
-);
-const SKILL_REPORT_TICKET = issue(
-	87,
-	"Give the code review skill a shared report format",
-	"The code review skill prints its findings in its own shape. Give it one\nshared report format the operator can file.",
-	["ready-for-agent"],
-	"2026-07-07T08:55:00Z",
-	REPO_B,
-	REPO_B_URL,
-);
-const SKILL_INDEX_TICKET = issue(
-	88,
-	"Let find-skills index the local skill directories",
-	"The find-skills search covers installed skills only. Let it index the\nlocal skill directories too.",
-	[],
-	"2026-07-07T08:20:00Z",
-	REPO_B,
-	REPO_B_URL,
-);
+const AWAITING_TICKET = issue({
+	number: 51,
+	title: "Rank tickets by priority label",
+	body: "Ranked tickets stay ahead of unranked ones. The operator bumps a\npriority with =, +, and -.",
+	labels: ["ready-to-ship"],
+	updatedAt: "2026-07-07T06:12:00Z",
+	repository: REPO_A,
+	repositoryUrl: REPO_A_URL,
+});
+const SKILL_REPORT_TICKET = issue({
+	number: 87,
+	title: "Give the code review skill a shared report format",
+	body: "The code review skill prints its findings in its own shape. Give it one\nshared report format the operator can file.",
+	labels: ["ready-for-agent"],
+	updatedAt: "2026-07-07T08:55:00Z",
+	repository: REPO_B,
+	repositoryUrl: REPO_B_URL,
+});
+const SKILL_INDEX_TICKET = issue({
+	number: 88,
+	title: "Let find-skills index the local skill directories",
+	body: "The find-skills search covers installed skills only. Let it index the\nlocal skill directories too.",
+	labels: [],
+	updatedAt: "2026-07-07T08:20:00Z",
+	repository: REPO_B,
+	repositoryUrl: REPO_B_URL,
+});
 const TICKETS: readonly FetchedTicket[] = [
 	OPEN_TICKET,
 	RUNNING_TICKET,
@@ -787,13 +790,14 @@ export const WALK_DEADLINE_MS = process.env.CI ? 20000 : 10000;
  * screen that stands mid-redraw for the whole deadline fails at the
  * walk's deadline, the way a screen whose cursor never moves does.
  */
-async function stableCursorRow(
-	screen: ScreenWalk,
-	sleepFn: (ms: number) => Promise<void>,
-	now: () => number,
-	walkDeadline: number,
-	failure: () => Error,
-): Promise<{ index: number; text: string }> {
+async function stableCursorRow(fields: {
+	screen: ScreenWalk;
+	sleepFn: (ms: number) => Promise<void>;
+	now: () => number;
+	walkDeadline: number;
+	failure: () => Error;
+}): Promise<{ index: number; text: string }> {
+	const { screen, sleepFn, now, walkDeadline, failure } = fields;
 	let previous = screen.cursorRow();
 	for (;;) {
 		if (now() >= walkDeadline) throw failure();
@@ -838,16 +842,19 @@ export async function stepUntilRow(
 	screen: ScreenWalk,
 	match: string,
 	keyName: string,
-	maxSteps: number,
-	sleepFn: (ms: number) => Promise<void> = sleep,
-	now: () => number = Date.now,
+	fields: {
+		maxSteps: number;
+		sleepFn?: (ms: number) => Promise<void>;
+		now?: () => number;
+	},
 ): Promise<void> {
+	const { maxSteps, sleepFn = sleep, now = Date.now } = fields;
 	const walkDeadline = now() + WALK_DEADLINE_MS;
 	const failure = () =>
 		new Error(
 			`screenshots: the cursor never reached a row matching "${match}" within ${maxSteps} "${keyName}" steps\n${screen.gridText()}`,
 		);
-	const stable = () => stableCursorRow(screen, sleepFn, now, walkDeadline, failure);
+	const stable = () => stableCursorRow({ screen, sleepFn, now, walkDeadline, failure });
 	const holdsMatch = (row: { index: number; text: string }) =>
 		row.index >= 0 && row.text.includes(match);
 	for (let steps = 0; steps < maxSteps; steps++) {
@@ -955,11 +962,11 @@ export async function captureScreens(fixtureDir: string): Promise<Map<string, Bu
 		await session.waitForStable(200, "the main view settle", 15000);
 		// The budget counts rows: the header the cursor starts on, the two
 		// rows above the target, the target itself.
-		await stepUntilRow(screen, "Rank tickets by priori", "j", 3);
+		await stepUntilRow(screen, "Rank tickets by priori", "j", { maxSteps: 3 });
 		await capture("main-view");
 
 		// 2. The Override panel on the open ticket.
-		await stepUntilRow(screen, "Split the README into", "j", 4);
+		await stepUntilRow(screen, "Split the README into", "j", { maxSteps: 4 });
 		key("e");
 		log("pressed e for the override panel");
 		await session.waitFor((data) => data.includes("Task type"), "the override panel", 15000);
@@ -973,7 +980,7 @@ export async function captureScreens(fixtureDir: string): Promise<Map<string, Bu
 
 		// 3. The decision modal on the awaiting ticket: Enter on it is Decide,
 		// and the modal opens with the turn log as its body.
-		await stepUntilRow(screen, "Rank tickets by priori", "k", 4);
+		await stepUntilRow(screen, "Rank tickets by priori", "k", { maxSteps: 4 });
 		key("\r");
 		log("pressed Enter for the decision modal");
 		await session.waitFor((data) => data.includes("Decision: "), "the decision modal", 15000);
@@ -985,13 +992,13 @@ export async function captureScreens(fixtureDir: string): Promise<Map<string, Bu
 		// the blank row between Groups, into the Consultations section, until
 		// the detail pane shows its input.
 		log("moving into the consultations section");
-		await stepUntilRow(screen, "working", "j", 8);
+		await stepUntilRow(screen, "working", "j", { maxSteps: 8 });
 		await sleep(1200);
 		await capture("consultation");
 
 		// 5. The Live view on the in-flight ticket: step up to it, and Enter
 		// opens the agent's stream in the left box.
-		await stepUntilRow(screen, "Retry failed webhook", "k", 8);
+		await stepUntilRow(screen, "Retry failed webhook", "k", { maxSteps: 8 });
 		key("\r");
 		log("opened the live view");
 		await session.waitFor((data) => data.includes("bounded backoff"), "the live stream", 20000);

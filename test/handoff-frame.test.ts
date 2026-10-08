@@ -452,9 +452,7 @@ describe("the Enter handoff", () => {
 					`herdr agent prompt ${firstAgent} ${firstPrompt}`,
 				]);
 			},
-			WIDTH,
-			HEIGHT,
-			props,
+			{ width: WIDTH, height: HEIGHT, props: props },
 		);
 	});
 	test("a failed herdr step leaves the ticket open and shows the reason", async () => {
@@ -482,9 +480,7 @@ describe("the Enter handoff", () => {
 				expect(row).toContain("[implement]");
 				expect(detailPaneText(frame)).toContain("Suggested task type: implement");
 			},
-			WIDTH,
-			HEIGHT,
-			props,
+			{ width: WIDTH, height: HEIGHT, props: props },
 		);
 	});
 	test("an unreadable workspace list fails with a reason and creates no workspace", async () => {
@@ -506,9 +502,7 @@ describe("the Enter handoff", () => {
 				// unreadable is not "no workspace".
 				expectNoCommand(runner.commands(), "workspace create");
 			},
-			WIDTH,
-			HEIGHT,
-			props,
+			{ width: WIDTH, height: HEIGHT, props: props },
 		);
 	});
 
@@ -564,9 +558,7 @@ describe("the Enter handoff", () => {
 				expect(refused).not.toContain("❯ Agent");
 				expect(messageRowOf(refused)).toContain("only an open Ticket can be handed off");
 			},
-			WIDTH,
-			HEIGHT,
-			props,
+			{ width: WIDTH, height: HEIGHT, props: props },
 		);
 	});
 	test("a filesystem error on the clone path shows the reason and keeps the app alive", async () => {
@@ -620,9 +612,7 @@ describe("the Enter handoff", () => {
 				);
 				expect(selectedRow(moved)).toContain("Fix pan drift");
 			},
-			WIDTH,
-			HEIGHT,
-			props,
+			{ width: WIDTH, height: HEIGHT, props: props },
 		);
 	});
 });
@@ -647,9 +637,7 @@ describe("the in-flight guard", () => {
 				// The status cleared after the handoff settled.
 				expect(frame).not.toContain("handing off");
 			},
-			WIDTH,
-			HEIGHT,
-			props,
+			{ width: WIDTH, height: HEIGHT, props: props },
 		);
 	});
 	test("two Enters in one tick start one handoff", async () => {
@@ -669,9 +657,7 @@ describe("the in-flight guard", () => {
 				// Exactly one handoff ran, not two.
 				expect(runner.commands()).toHaveLength(7);
 			},
-			WIDTH,
-			HEIGHT,
-			props,
+			{ width: WIDTH, height: HEIGHT, props: props },
 		);
 	});
 	test("j and k keep moving the selection while a handoff is in flight", async () => {
@@ -701,9 +687,7 @@ describe("the in-flight guard", () => {
 				// The first handoff still settles, on the ticket it started on.
 				await awaitFrame(setup, handoffSettled, "the handoff to settle");
 			},
-			WIDTH,
-			HEIGHT,
-			props,
+			{ width: WIDTH, height: HEIGHT, props: props },
 		);
 	});
 });
@@ -762,9 +746,7 @@ describe("the override panel", () => {
 					`herdr agent start ${firstAgent} --kind codex --pane pane-wt`,
 				);
 			},
-			WIDTH,
-			HEIGHT,
-			props,
+			{ width: WIDTH, height: HEIGHT, props: props },
 		);
 	});
 	test("an override that differs from the suggestion rides on the handoff", async () => {
@@ -824,9 +806,7 @@ describe("the override panel", () => {
 				const fixPrompt = renderPrompt(templateOf(BASE_CONFIG.taskTypes.fix), first);
 				expect(runner.commands()).toContain(`herdr agent prompt ${firstAgent} ${fixPrompt}`);
 			},
-			WIDTH,
-			HEIGHT,
-			props,
+			{ width: WIDTH, height: HEIGHT, props: props },
 		);
 	});
 	test("a failure after agent start keeps the actual task type on the row", async () => {
@@ -863,9 +843,7 @@ describe("the override panel", () => {
 				// The prompt failure still shows its reason.
 				expect(frame).toContain("the prompt failed");
 			},
-			WIDTH,
-			HEIGHT,
-			props,
+			{ width: WIDTH, height: HEIGHT, props: props },
 		);
 	});
 	test("an unset thinking row cycles to the first option on the first right", async () => {
@@ -897,9 +875,7 @@ describe("the override panel", () => {
 				);
 				expect(cycled).not.toContain("(unset)");
 			},
-			WIDTH,
-			HEIGHT,
-			props,
+			{ width: WIDTH, height: HEIGHT, props: props },
 		);
 	});
 
@@ -964,9 +940,7 @@ describe("the override panel", () => {
 					"272000",
 				]);
 			},
-			WIDTH,
-			HEIGHT,
-			props,
+			{ width: WIDTH, height: HEIGHT, props: props },
 		);
 	});
 
@@ -1048,9 +1022,7 @@ describe("the override panel", () => {
 					"pane-1",
 				]);
 			},
-			WIDTH,
-			HEIGHT,
-			props,
+			{ width: WIDTH, height: HEIGHT, props: props },
 		);
 	});
 
@@ -1098,9 +1070,7 @@ describe("the override panel", () => {
 				expect(selectedRow(frame)).toContain("[open]");
 				expect(detailPaneText(frame)).toContain("Agent: codex");
 			},
-			WIDTH,
-			HEIGHT,
-			props,
+			{ width: WIDTH, height: HEIGHT, props: props },
 		);
 	});
 
@@ -1141,9 +1111,7 @@ describe("the override panel", () => {
 				);
 				expect(start?.args).not.toContain("--model");
 			},
-			WIDTH,
-			HEIGHT,
-			props,
+			{ width: WIDTH, height: HEIGHT, props: props },
 		);
 	});
 
@@ -1181,9 +1149,7 @@ describe("the override panel", () => {
 				);
 				expect(start?.args).not.toContain("--thinking");
 			},
-			WIDTH,
-			HEIGHT,
-			props,
+			{ width: WIDTH, height: HEIGHT, props: props },
 		);
 	});
 
@@ -1219,9 +1185,7 @@ describe("the override panel", () => {
 				// command the failure may send.
 				expect(handoffCommands(runner)).toHaveLength(0);
 			},
-			WIDTH,
-			HEIGHT,
-			props,
+			{ width: WIDTH, height: HEIGHT, props: props },
 		);
 	});
 
@@ -1286,9 +1250,7 @@ describe("the override panel", () => {
 					"pane-1",
 				]);
 			},
-			WIDTH,
-			HEIGHT,
-			props,
+			{ width: WIDTH, height: HEIGHT, props: props },
 		);
 	});
 
@@ -1332,9 +1294,7 @@ describe("the override panel", () => {
 					"low",
 				]);
 			},
-			WIDTH,
-			HEIGHT,
-			props,
+			{ width: WIDTH, height: HEIGHT, props: props },
 		);
 	});
 	test("switching the task type re-derives an untouched thinking row", async () => {
@@ -1387,9 +1347,7 @@ describe("the override panel", () => {
 				);
 				expect(frameText(back)).toContain("Thinking low");
 			},
-			WIDTH,
-			HEIGHT,
-			props,
+			{ width: WIDTH, height: HEIGHT, props: props },
 		);
 	});
 	test("a touched thinking row survives a task type switch", async () => {
@@ -1443,9 +1401,7 @@ describe("the override panel", () => {
 				expect(start?.args).toContain("--thinking");
 				expect(start?.args).toContain("medium");
 			},
-			WIDTH,
-			HEIGHT,
-			props,
+			{ width: WIDTH, height: HEIGHT, props: props },
 		);
 	});
 	test("the settings rows hide for an agent that does not map them", async () => {
@@ -1477,9 +1433,7 @@ describe("the override panel", () => {
 				expect(frame).toContain("Environment");
 				expect(frame).toContain("Task type");
 			},
-			WIDTH,
-			HEIGHT,
-			props,
+			{ width: WIDTH, height: HEIGHT, props: props },
 		);
 	});
 	test("the task type row cycles through the task types and wraps", async () => {
@@ -1509,9 +1463,7 @@ describe("the override panel", () => {
 				);
 				expect(frameText(wrapped)).toContain("Task type implement");
 			},
-			WIDTH,
-			HEIGHT,
-			props,
+			{ width: WIDTH, height: HEIGHT, props: props },
 		);
 	});
 	test("the container environment is never offered", async () => {
@@ -1535,9 +1487,7 @@ describe("the override panel", () => {
 				);
 				expect(wrapped).not.toContain("container");
 			},
-			WIDTH,
-			HEIGHT,
-			props,
+			{ width: WIDTH, height: HEIGHT, props: props },
 		);
 	});
 	test("escape cancels the panel without a handoff", async () => {
@@ -1558,9 +1508,7 @@ describe("the override panel", () => {
 				// No command ever ran.
 				expect(runner.calls).toHaveLength(0);
 			},
-			WIDTH,
-			HEIGHT,
-			props,
+			{ width: WIDTH, height: HEIGHT, props: props },
 		);
 	});
 
@@ -1628,9 +1576,7 @@ describe("the override panel", () => {
 				);
 				expect(frameText(back)).toContain("Context 655368");
 			},
-			WIDTH,
-			HEIGHT,
-			props,
+			{ width: WIDTH, height: HEIGHT, props: props },
 		);
 	});
 
@@ -1699,9 +1645,7 @@ describe("the override panel", () => {
 					"model_context_window=1232720005",
 				]);
 			},
-			WIDTH,
-			HEIGHT,
-			props,
+			{ width: WIDTH, height: HEIGHT, props: props },
 		);
 	});
 
@@ -1742,9 +1686,7 @@ describe("the override panel", () => {
 				);
 				expect(start?.args).toContain("model_context_window=7");
 			},
-			WIDTH,
-			HEIGHT,
-			props,
+			{ width: WIDTH, height: HEIGHT, props: props },
 		);
 	});
 
@@ -1793,9 +1735,7 @@ describe("the override panel", () => {
 				// and the handoff ran none of its own commands.
 				expect(handoffCommands(runner)).toHaveLength(0);
 			},
-			WIDTH,
-			HEIGHT,
-			props,
+			{ width: WIDTH, height: HEIGHT, props: props },
 		);
 	});
 
@@ -1893,9 +1833,7 @@ describe("the override panel", () => {
 					"pane-1",
 				]);
 			},
-			WIDTH,
-			HEIGHT,
-			props,
+			{ width: WIDTH, height: HEIGHT, props: props },
 		);
 	});
 
@@ -2005,9 +1943,7 @@ describe("the override panel", () => {
 					"pane-1",
 				]);
 			},
-			WIDTH,
-			HEIGHT,
-			props,
+			{ width: WIDTH, height: HEIGHT, props: props },
 		);
 	});
 
@@ -2045,9 +1981,7 @@ describe("the override panel", () => {
 					"gpt-5.6",
 				]);
 			},
-			WIDTH,
-			HEIGHT,
-			props,
+			{ width: WIDTH, height: HEIGHT, props: props },
 		);
 	});
 	test("the selected text field has a focused background and bright text", async () => {
@@ -2076,9 +2010,7 @@ describe("the override panel", () => {
 				expect(valueSpan?.fg.toInts().slice(0, 3)).toEqual(rgb(roleColor("text")));
 				expect(valueSpan?.bg.toInts().slice(0, 3)).toEqual(rgb(roleColor("active_row_bg")));
 			},
-			WIDTH,
-			HEIGHT,
-			props,
+			{ width: WIDTH, height: HEIGHT, props: props },
 		);
 	});
 	test("a non-ASCII model name types into the free-text row and rides on the start", async () => {
@@ -2121,9 +2053,7 @@ describe("the override panel", () => {
 					"gpt-é",
 				]);
 			},
-			WIDTH,
-			HEIGHT,
-			props,
+			{ width: WIDTH, height: HEIGHT, props: props },
 		);
 	});
 	test("a move and a cycle in the same tick act on the moved row", async () => {
@@ -2147,9 +2077,7 @@ describe("the override panel", () => {
 				expect(frameText(frame)).not.toContain("Agent codex");
 				expect(frame).toContain("❯ Environment");
 			},
-			WIDTH,
-			HEIGHT,
-			props,
+			{ width: WIDTH, height: HEIGHT, props: props },
 		);
 	});
 	test("Tab and Shift+Tab move from list and text rows", async () => {
@@ -2181,9 +2109,7 @@ describe("the override panel", () => {
 				setup.mockInput.pressTab();
 				await awaitFrame(setup, (f) => f.includes("❯ Thinking"), "Tab from a text row");
 			},
-			WIDTH,
-			HEIGHT,
-			props,
+			{ width: WIDTH, height: HEIGHT, props: props },
 		);
 	});
 	test("a sibling clone hands off, warns, and writes the mapping back to the config file", async () => {
@@ -2234,9 +2160,7 @@ describe("the override panel", () => {
 				// The handoff ran at the sibling, not the conflicting path.
 				expect(runner.commands()).toContain(`herdr workspace create --cwd ${sibling} --no-focus`);
 			},
-			WIDTH,
-			HEIGHT,
-			props,
+			{ width: WIDTH, height: HEIGHT, props: props },
 		);
 	});
 	test("e opens the Override panel while a handoff is in flight (ADR 0064)", async () => {
@@ -2268,9 +2192,7 @@ describe("the override panel", () => {
 				);
 				await awaitFrame(setup, handoffSettled, "the handoff to settle");
 			},
-			WIDTH,
-			HEIGHT,
-			props,
+			{ width: WIDTH, height: HEIGHT, props: props },
 		);
 	});
 	test("a failed mapping write-back warns on the Message line", async () => {
@@ -2304,9 +2226,7 @@ describe("the override panel", () => {
 				expect(startingFaceOf(selectedRow(frame))).not.toBeNull();
 				expect(messageRowOf(frame)).toContain("could not persist");
 			},
-			WIDTH,
-			HEIGHT,
-			props,
+			{ width: WIDTH, height: HEIGHT, props: props },
 		);
 	});
 	test("j, k, h, and l type into the selected free-text row", async () => {
@@ -2350,9 +2270,7 @@ describe("the override panel", () => {
 					"claude",
 				]);
 			},
-			WIDTH,
-			HEIGHT,
-			props,
+			{ width: WIDTH, height: HEIGHT, props: props },
 		);
 	});
 	test("the free-text row moves the caret and inserts at it", async () => {
@@ -2396,9 +2314,7 @@ describe("the override panel", () => {
 					"abcXd",
 				]);
 			},
-			WIDTH,
-			HEIGHT,
-			props,
+			{ width: WIDTH, height: HEIGHT, props: props },
 		);
 	});
 	test("the free-text row jumps to the ends with Home and End", async () => {
@@ -2444,9 +2360,7 @@ describe("the override panel", () => {
 					"YabcdZ",
 				]);
 			},
-			WIDTH,
-			HEIGHT,
-			props,
+			{ width: WIDTH, height: HEIGHT, props: props },
 		);
 	});
 	test("the free-text row deletes with backspace and forward delete", async () => {
@@ -2496,9 +2410,7 @@ describe("the override panel", () => {
 					"bc",
 				]);
 			},
-			WIDTH,
-			HEIGHT,
-			props,
+			{ width: WIDTH, height: HEIGHT, props: props },
 		);
 	});
 	test("the free-text row deletes a caret selection", async () => {
@@ -2543,9 +2455,7 @@ describe("the override panel", () => {
 					"hel",
 				]);
 			},
-			WIDTH,
-			HEIGHT,
-			props,
+			{ width: WIDTH, height: HEIGHT, props: props },
 		);
 	});
 	test("the free-text row undoes with Ctrl+Z and redoes with Ctrl+Y", async () => {
@@ -2600,9 +2510,7 @@ describe("the override panel", () => {
 					"hello",
 				]);
 			},
-			WIDTH,
-			HEIGHT,
-			props,
+			{ width: WIDTH, height: HEIGHT, props: props },
 		);
 	});
 	test("bracketed paste works in the free-text Model row of a kind with no model list", async () => {
@@ -2645,9 +2553,7 @@ describe("the override panel", () => {
 				const start = runner.calls.find((c) => c.args[0] === "agent" && c.args[1] === "start");
 				expect(start?.args).toContain("gpt-5.1-codex");
 			},
-			WIDTH,
-			HEIGHT,
-			props,
+			{ width: WIDTH, height: HEIGHT, props: props },
 		);
 	});
 	test("a bracketed paste is sanitized of ANSI escapes and line breaks", async () => {
@@ -2690,9 +2596,7 @@ describe("the override panel", () => {
 					"helloworld",
 				]);
 			},
-			WIDTH,
-			HEIGHT,
-			props,
+			{ width: WIDTH, height: HEIGHT, props: props },
 		);
 	});
 	test("pasting at the start, middle, end, and over a selection edits in place", async () => {
@@ -2731,9 +2635,7 @@ describe("the override panel", () => {
 				);
 				expect(frameText(frame)).toContain("Model XMabE");
 			},
-			WIDTH,
-			HEIGHT,
-			props,
+			{ width: WIDTH, height: HEIGHT, props: props },
 		);
 	});
 	test("a long free-text value scrolls in its column and hands off whole", async () => {
@@ -2780,9 +2682,7 @@ describe("the override panel", () => {
 					longValue,
 				]);
 			},
-			WIDTH,
-			HEIGHT,
-			props,
+			{ width: WIDTH, height: HEIGHT, props: props },
 		);
 	});
 	test("word deletion removes a word in either direction", async () => {
@@ -2814,9 +2714,7 @@ describe("the override panel", () => {
 				);
 				expect(frameText(frame)).toContain("Model (empty - query failed)");
 			},
-			WIDTH,
-			HEIGHT,
-			props,
+			{ width: WIDTH, height: HEIGHT, props: props },
 		);
 	});
 	test("question mark and m type into a selected free-text row", async () => {
@@ -2840,9 +2738,7 @@ describe("the override panel", () => {
 				);
 				expect(frameText(frame)).toContain("Model ?m");
 			},
-			WIDTH,
-			HEIGHT,
-			props,
+			{ width: WIDTH, height: HEIGHT, props: props },
 		);
 	});
 	test("typing and confirming in one tick hands off the complete value", async () => {
@@ -2866,9 +2762,7 @@ describe("the override panel", () => {
 				const start = runner.calls.find((c) => c.args[0] === "agent" && c.args[1] === "start");
 				expect(start?.args).toContain("gpt");
 			},
-			WIDTH,
-			HEIGHT,
-			props,
+			{ width: WIDTH, height: HEIGHT, props: props },
 		);
 	});
 	test("a text draft survives an agent change and terminal resize", async () => {
@@ -2931,9 +2825,7 @@ describe("the override panel", () => {
 				);
 				expect(frameText(restored)).toContain("Model draft");
 			},
-			WIDTH,
-			HEIGHT,
-			props,
+			{ width: WIDTH, height: HEIGHT, props: props },
 		);
 	});
 	test("a short terminal scrolls the rows to keep the selected one on screen", async () => {
@@ -2964,9 +2856,7 @@ describe("the override panel", () => {
 				expect(frameText(frame)).toContain("❯ Thinking");
 				expect(frameText(frame)).not.toContain("Agent");
 			},
-			24,
-			6,
-			props,
+			{ width: 24, height: 6, props: props },
 		);
 	});
 	test("the shared Action bar documents the list-row controls", async () => {
@@ -3016,9 +2906,7 @@ describe("the override panel", () => {
 					"↑↓/jk Move ←→/hl Change ⌫ Clear Enter Hand off Esc Cancel F1 Help",
 				);
 			},
-			WIDTH,
-			HEIGHT,
-			props,
+			{ width: WIDTH, height: HEIGHT, props: props },
 		);
 	});
 	test("a narrow terminal sizes the panel instead of corrupting rows", async () => {
@@ -3048,9 +2936,7 @@ describe("the override panel", () => {
 				expect(bar).not.toContain("Change");
 				expect(bar).not.toContain("Hand off");
 			},
-			30,
-			12,
-			props,
+			{ width: 30, height: 12, props: props },
 		);
 		await withApp(
 			async (setup) => {
@@ -3068,9 +2954,7 @@ describe("the override panel", () => {
 				expect(frameText(frame)).not.toContain("Model");
 				expect(frameText(frame)).not.toContain("Thinking");
 			},
-			24,
-			7,
-			props,
+			{ width: 24, height: 7, props: props },
 		);
 	});
 	/**
@@ -3120,9 +3004,7 @@ describe("the override panel", () => {
 					const start = runner.calls.find((c) => c.args[0] === "agent" && c.args[1] === "start");
 					expect(start?.args).toContain("openai/gpt-5.1-codex");
 				},
-				size.width,
-				size.height,
-				props,
+				{ width: size.width, height: size.height, props: props },
 			);
 		});
 		test(`a query that matches nothing keeps its text and says so (${size.width}x${size.height})`, async () => {
@@ -3177,9 +3059,7 @@ describe("the override panel", () => {
 					const start = runner.calls.find((c) => c.args[0] === "agent" && c.args[1] === "start");
 					expect(start?.args).toContain("openai/gpt-5.1");
 				},
-				size.width,
-				size.height,
-				props,
+				{ width: size.width, height: size.height, props: props },
 			);
 		});
 		test(`Delete on an empty search gives the Model back to the agent (${size.width}x${size.height})`, async () => {
@@ -3214,9 +3094,7 @@ describe("the override panel", () => {
 					// A row the operator cleared names no model: the agent starts on its own.
 					expect(start?.args).not.toContain("--model");
 				},
-				size.width,
-				size.height,
-				props,
+				{ width: size.width, height: size.height, props: props },
 			);
 		});
 		test(`an unset Model is not a warning with any available list (${size.width}x${size.height})`, async () => {
@@ -3239,9 +3117,7 @@ describe("the override panel", () => {
 						expect(frameText(frame)).toContain(expected);
 						expect(spanColors(setup, placeholder)).not.toContainEqual(rgb(roleColor("yellow")));
 					},
-					size.width,
-					size.height,
-					props,
+					{ width: size.width, height: size.height, props: props },
 				);
 			}
 		});
@@ -3287,9 +3163,7 @@ describe("the override panel", () => {
 						"the match",
 					);
 				},
-				size.width,
-				size.height,
-				props,
+				{ width: size.width, height: size.height, props: props },
 			);
 		});
 		test(`the Model row says so when the agent reports no models (${size.width}x${size.height})`, async () => {
@@ -3313,9 +3187,7 @@ describe("the override panel", () => {
 					const start = runner.calls.find((c) => c.args[0] === "agent" && c.args[1] === "start");
 					expect(start?.args).not.toContain("--model");
 				},
-				size.width,
-				size.height,
-				props,
+				{ width: size.width, height: size.height, props: props },
 			);
 		});
 		test(`a Model the selected agent cannot run shows in the warning color (${size.width}x${size.height})`, async () => {
@@ -3357,9 +3229,7 @@ describe("the override panel", () => {
 						rgb(roleColor("text")),
 					]);
 				},
-				size.width,
-				size.height,
-				props,
+				{ width: size.width, height: size.height, props: props },
 			);
 		});
 		test(`a Model the config prefilled is not judged while its list loads (${size.width}x${size.height})`, async () => {
@@ -3408,9 +3278,7 @@ describe("the override panel", () => {
 					// typed letters instead of j and k.
 					expect(frameText(setup.captureCharFrame())).toContain("Type Edit");
 				},
-				size.width,
-				size.height,
-				props,
+				{ width: size.width, height: size.height, props: props },
 			);
 		});
 		test(`a Thinking level the selected agent does not declare shows in the warning color (${size.width}x${size.height})`, async () => {
@@ -3453,9 +3321,7 @@ describe("the override panel", () => {
 					expect(spanColors(setup, "xhigh")).toEqual([]);
 					expect(spanColors(setup, "minimal")).toEqual([rgb(roleColor("text"))]);
 				},
-				size.width,
-				size.height,
-				props,
+				{ width: size.width, height: size.height, props: props },
 			);
 		});
 		test(`switching the agent keeps an untouched Model and queries the new agent's list (${size.width}x${size.height})`, async () => {
@@ -3483,9 +3349,7 @@ describe("the override panel", () => {
 					// codex reports no list, so no query runs for it.
 					expect(runner.modelListCalls).toEqual(["pi"]);
 				},
-				size.width,
-				size.height,
-				props,
+				{ width: size.width, height: size.height, props: props },
 			);
 		});
 		test(`switching the task type re-derives an untouched Model row (${size.width}x${size.height})`, async () => {
@@ -3542,9 +3406,7 @@ describe("the override panel", () => {
 					const start = runner.calls.find((c) => c.args[0] === "agent" && c.args[1] === "start");
 					expect(start?.args).toContain("openai/gpt-5.1");
 				},
-				size.width,
-				size.height,
-				props,
+				{ width: size.width, height: size.height, props: props },
 			);
 		});
 		test(`a Model wider than its column shows its end and rides on whole (${size.width}x${size.height})`, async () => {
@@ -3577,9 +3439,7 @@ describe("the override panel", () => {
 					// The clip is display only: the handoff names the whole value.
 					expect(start?.args).toContain(long);
 				},
-				size.width,
-				size.height,
-				props,
+				{ width: size.width, height: size.height, props: props },
 			);
 		});
 		test(`a failed model list query falls the Model row back to free text (${size.width}x${size.height})`, async () => {
@@ -3601,9 +3461,7 @@ describe("the override panel", () => {
 					const start = runner.calls.find((c) => c.args[0] === "agent" && c.args[1] === "start");
 					expect(start?.args).toContain("gpt-4o");
 				},
-				size.width,
-				size.height,
-				props,
+				{ width: size.width, height: size.height, props: props },
 			);
 		});
 		test(`a Model row the agent's kind cannot list names that cause (${size.width}x${size.height})`, async () => {
@@ -3623,9 +3481,7 @@ describe("the override panel", () => {
 					// No query ran for a kind that has no list command.
 					expect(runner.modelListCalls).toEqual([]);
 				},
-				size.width,
-				size.height,
-				props,
+				{ width: size.width, height: size.height, props: props },
 			);
 		});
 		test(`a Model the operator typed survives a task type switch (${size.width}x${size.height})`, async () => {
@@ -3673,9 +3529,7 @@ describe("the override panel", () => {
 					const backOnModel = await moveToModelRowFromTaskType(setup);
 					expect(frameText(backOnModel)).toContain("Model anthropic/claude-sonnet-4-5");
 				},
-				size.width,
-				size.height,
-				props,
+				{ width: size.width, height: size.height, props: props },
 			);
 		});
 		test(`a Model the operator cleared survives a task type switch (${size.width}x${size.height})`, async () => {
@@ -3730,9 +3584,7 @@ describe("the override panel", () => {
 					expect(frameText(toMerge)).toContain("Model (unset)");
 					expect(frameText(toMerge)).not.toContain("Model openai/gpt-5.1");
 				},
-				size.width,
-				size.height,
-				props,
+				{ width: size.width, height: size.height, props: props },
 			);
 		});
 		test(`switching the task type re-derives an untouched Agent row (${size.width}x${size.height})`, async () => {
@@ -3807,9 +3659,7 @@ describe("the override panel", () => {
 					// merge names claude, and the row the operator set keeps codex.
 					expect(frameText(toMerge)).toContain("Agent codex");
 				},
-				size.width,
-				size.height,
-				props,
+				{ width: size.width, height: size.height, props: props },
 			);
 		});
 	}
@@ -3838,9 +3688,7 @@ describe("the override panel", () => {
 				);
 				expect(rowLineOf(shown, "Model")).not.toContain("\u2026");
 			},
-			24,
-			8,
-			{ config: BASE_CONFIG, runner: none, home, configPath },
+			{ width: 24, height: 8, props: { config: BASE_CONFIG, runner: none, home, configPath } },
 		);
 		await withApp(
 			async (setup) => {
@@ -3853,9 +3701,7 @@ describe("the override panel", () => {
 				);
 				expect(rowLineOf(shown, "Model")).not.toContain("\u2026");
 			},
-			24,
-			8,
-			{ config: BASE_CONFIG, runner: held, home, configPath },
+			{ width: 24, height: 8, props: { config: BASE_CONFIG, runner: held, home, configPath } },
 		);
 	});
 	test("the Thinking row offers the selected agent's levels, and backspace clears it", async () => {
@@ -3893,9 +3739,7 @@ describe("the override panel", () => {
 				const start = runner.calls.find((c) => c.args[0] === "agent" && c.args[1] === "start");
 				expect(start?.args).not.toContain("--effort");
 			},
-			WIDTH,
-			HEIGHT,
-			props,
+			{ width: WIDTH, height: HEIGHT, props: props },
 		);
 	});
 	test("a failed worktree handoff removes its residue and keeps the ticket open", async () => {
@@ -3934,9 +3778,7 @@ describe("the override panel", () => {
 					`git -C ${checkout()} branch -D factory/${first.externalKey.slice(1)}-${firstSlug}`,
 				);
 			},
-			WIDTH,
-			HEIGHT,
-			props,
+			{ width: WIDTH, height: HEIGHT, props: props },
 		);
 	});
 });

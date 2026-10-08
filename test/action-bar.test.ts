@@ -150,9 +150,11 @@ describe("the contextual Action bar", () => {
 				expect(spanColorAt(setup, barRow, "Delete ")).toEqual(rgb(roleColor("subtext0")));
 				expect(spanColorAt(setup, barRow, "Close")).toEqual(rgb(roleColor("subtext0")));
 			},
-			WIDTH,
-			HEIGHT,
-			{ config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				props: { config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+			},
 		);
 	});
 
@@ -171,9 +173,11 @@ describe("the contextual Action bar", () => {
 				// The list's navigation is gone: the bar names this mode's keys.
 				expect(bar).not.toContain("Move");
 			},
-			WIDTH,
-			HEIGHT,
-			{ config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				props: { config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+			},
 		);
 	});
 
@@ -201,9 +205,11 @@ describe("the contextual Action bar", () => {
 				expect(textBar).toContain("Esc Cancel");
 				expect(textBar).toContain("F1 Help");
 			},
-			WIDTH,
-			HEIGHT,
-			{ config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				props: { config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+			},
 		);
 	});
 
@@ -228,9 +234,11 @@ describe("the contextual Action bar", () => {
 					"Warning: no message has been recorded yet",
 				);
 			},
-			WIDTH,
-			HEIGHT,
-			{ config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				props: { config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+			},
 		);
 	});
 
@@ -260,9 +268,11 @@ describe("the contextual Action bar", () => {
 					"Warning: no message has been recorded yet",
 				);
 			},
-			WIDTH,
-			HEIGHT,
-			{ config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				props: { config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+			},
 		);
 	});
 
@@ -308,9 +318,11 @@ describe("the contextual Action bar", () => {
 					"Warning: no message has been recorded yet",
 				);
 			},
-			WIDTH,
-			HEIGHT,
-			{ config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				props: { config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+			},
 		);
 	});
 
@@ -344,9 +356,11 @@ describe("the contextual Action bar", () => {
 						"Warning: no message has been recorded yet",
 					);
 				},
-				WIDTH,
-				HEIGHT,
-				{ config: issuesConfig, state, sources: [source], runner, pollIntervalMs: 60_000 },
+				{
+					width: WIDTH,
+					height: HEIGHT,
+					props: { config: issuesConfig, state, sources: [source], runner, pollIntervalMs: 60_000 },
+				},
 			);
 		} finally {
 			state.close();
@@ -459,9 +473,11 @@ describe("the contextual Action bar", () => {
 				for (const row of tinyRows) expect(widthOf(row)).toBe(4);
 				expect((tinyRows.at(-1) ?? "").trimEnd()).toBe("?");
 			},
-			120,
-			HEIGHT,
-			{ config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+			{
+				width: 120,
+				height: HEIGHT,
+				props: { config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+			},
 		);
 	});
 
@@ -488,9 +504,11 @@ describe("the contextual Action bar", () => {
 				// And the key the row named is the key that ends the surface.
 				await press(setup, "escape", "the guide to close", (f) => !f.includes("Key guide"));
 			},
-			WIDTH,
-			HEIGHT,
-			{ config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				props: { config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+			},
 		);
 	});
 
@@ -509,26 +527,30 @@ describe("the contextual Action bar", () => {
 				);
 				expect(await settle(setup)).not.toContain("Consultation launcher");
 			},
-			120,
-			HEIGHT,
-			{ config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+			{
+				width: 120,
+				height: HEIGHT,
+				props: { config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+			},
 		);
 		// With a type configured: c opens the launcher from the Ticket view.
 		await withApp(
 			async (setup) => {
 				await openLauncher(setup);
 			},
-			120,
-			HEIGHT,
 			{
-				config: {
-					...BASE_CONFIG,
-					consultationTypes: {
-						grill: { agent: "pi", environment: "worktree", template: "/grill {input}" },
+				width: 120,
+				height: HEIGHT,
+				props: {
+					config: {
+						...BASE_CONFIG,
+						consultationTypes: {
+							grill: { agent: "pi", environment: "worktree", template: "/grill {input}" },
+						},
 					},
+					runner,
+					initialTickets: SAMPLE_TICKETS,
 				},
-				runner,
-				initialTickets: SAMPLE_TICKETS,
 			},
 		);
 	});
@@ -548,9 +570,11 @@ describe("the contextual Action bar", () => {
 				// every row still ends exactly at the terminal edge.
 				for (const row of rowsOf(setup.captureCharFrame())) expect(widthOf(row)).toBe(WIDTH);
 			},
-			WIDTH,
-			HEIGHT,
-			{ config: BASE_CONFIG, runner, initialTickets: [cjk], home, configPath },
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				props: { config: BASE_CONFIG, runner, initialTickets: [cjk], home, configPath },
+			},
 		);
 	});
 
@@ -598,9 +622,7 @@ describe("the contextual Action bar", () => {
 				);
 				expect(runner.commands()).toHaveLength(7);
 			},
-			WIDTH,
-			HEIGHT,
-			props,
+			{ width: WIDTH, height: HEIGHT, props: props },
 		);
 	});
 
@@ -626,9 +648,7 @@ describe("the contextual Action bar", () => {
 					source.settle(success([issueTicket()]));
 					await awaitFrame(setup, (f) => messageRowOf(f).trim() === "", "the refresh to clear");
 				},
-				WIDTH,
-				HEIGHT,
-				{ config: issuesConfig, state, sources: [source] },
+				{ width: WIDTH, height: HEIGHT, props: { config: issuesConfig, state, sources: [source] } },
 			);
 		} finally {
 			state.close();
@@ -653,9 +673,7 @@ describe("the contextual Action bar", () => {
 				setup.mockInput.pressKey("q");
 				await destroyed(setup);
 			},
-			WIDTH,
-			HEIGHT,
-			props,
+			{ width: WIDTH, height: HEIGHT, props: props },
 		);
 
 		// Ticket detail.
@@ -665,9 +683,7 @@ describe("the contextual Action bar", () => {
 				setup.mockInput.pressKey("q");
 				await destroyed(setup);
 			},
-			WIDTH,
-			HEIGHT,
-			props,
+			{ width: WIDTH, height: HEIGHT, props: props },
 		);
 
 		// During an active Handoff: q explains itself instead of quitting.
@@ -698,9 +714,11 @@ describe("the contextual Action bar", () => {
 					8000,
 				);
 			},
-			WIDTH,
-			HEIGHT,
-			{ config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS, home, configPath },
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				props: { config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS, home, configPath },
+			},
 		);
 
 		// On the override list row: q is inert - no panel, no quit.
@@ -711,9 +729,7 @@ describe("the contextual Action bar", () => {
 				const frame = await settle(setup);
 				expect(frame).toContain("┌─Override");
 			},
-			WIDTH,
-			HEIGHT,
-			props,
+			{ width: WIDTH, height: HEIGHT, props: props },
 		);
 	});
 
@@ -735,9 +751,7 @@ describe("the contextual Action bar", () => {
 				pressCtrlC(setup);
 				await destroyed(setup);
 			},
-			WIDTH,
-			HEIGHT,
-			props,
+			{ width: WIDTH, height: HEIGHT, props: props },
 		);
 		// Ticket detail.
 		await withApp(
@@ -746,9 +760,7 @@ describe("the contextual Action bar", () => {
 				pressCtrlC(setup);
 				await destroyed(setup);
 			},
-			WIDTH,
-			HEIGHT,
-			props,
+			{ width: WIDTH, height: HEIGHT, props: props },
 		);
 		// Override list row.
 		await withApp(
@@ -757,9 +769,7 @@ describe("the contextual Action bar", () => {
 				pressCtrlC(setup);
 				await destroyed(setup);
 			},
-			WIDTH,
-			HEIGHT,
-			props,
+			{ width: WIDTH, height: HEIGHT, props: props },
 		);
 		// Override text row.
 		await withApp(
@@ -771,9 +781,7 @@ describe("the contextual Action bar", () => {
 				pressCtrlC(setup);
 				await destroyed(setup);
 			},
-			WIDTH,
-			HEIGHT,
-			props,
+			{ width: WIDTH, height: HEIGHT, props: props },
 		);
 		// Key guide.
 		await withApp(
@@ -782,9 +790,7 @@ describe("the contextual Action bar", () => {
 				pressCtrlC(setup);
 				await destroyed(setup);
 			},
-			WIDTH,
-			HEIGHT,
-			props,
+			{ width: WIDTH, height: HEIGHT, props: props },
 		);
 		// Message view, over a truncated failure.
 		const failing = new FakeRunner();
@@ -802,9 +808,7 @@ describe("the contextual Action bar", () => {
 				pressCtrlC(setup);
 				await destroyed(setup);
 			},
-			WIDTH,
-			HEIGHT,
-			{ ...props, runner: failing },
+			{ width: WIDTH, height: HEIGHT, props: { ...props, runner: failing } },
 		);
 	});
 
@@ -883,9 +887,7 @@ describe("the contextual Action bar", () => {
 				pressCtrlC(setup);
 				await destroyed(setup);
 			},
-			WIDTH,
-			HEIGHT,
-			{ config, runner: new FakeRunner(), home },
+			{ width: WIDTH, height: HEIGHT, props: { config, runner: new FakeRunner(), home } },
 		);
 
 		// The Consultation launcher open: Ctrl+C destroys, Esc would cancel.
@@ -901,9 +903,7 @@ describe("the contextual Action bar", () => {
 				pressCtrlC(setup);
 				await destroyed(setup);
 			},
-			WIDTH,
-			HEIGHT,
-			{ config, runner: new FakeRunner(), home },
+			{ width: WIDTH, height: HEIGHT, props: { config, runner: new FakeRunner(), home } },
 		);
 
 		// The legacy Key guide open over the Consultations view.
@@ -919,9 +919,7 @@ describe("the contextual Action bar", () => {
 				pressCtrlC(setup);
 				await destroyed(setup);
 			},
-			WIDTH,
-			HEIGHT,
-			{ config, runner: new FakeRunner(), home },
+			{ width: WIDTH, height: HEIGHT, props: { config, runner: new FakeRunner(), home } },
 		);
 
 		// The response editor open on an awaiting-response Consultation.
@@ -929,7 +927,9 @@ describe("the contextual Action bar", () => {
 			const state = freshState();
 			const id = "bbbbbbbb-1111-4111-8111-111111111111";
 			seed(state, id, true);
-			state.consultationRecord.settleConsultationTurn(id, null, "first answer", "idle");
+			state.consultationRecord.settleConsultationTurn(id, null, "first answer", {
+				settledStatus: "idle",
+			});
 			const runner = new FakeRunner();
 			runner.set("herdr", ["agent", "list"], { stdout: listJson(id, "idle") });
 			runner.set(
@@ -962,9 +962,7 @@ describe("the contextual Action bar", () => {
 						pressCtrlC(setup);
 						await destroyed(setup);
 					},
-					WIDTH,
-					30,
-					bootProps(state, runner),
+					{ width: WIDTH, height: 30, props: bootProps(state, runner) },
 				);
 			} finally {
 				state.close();
@@ -976,7 +974,9 @@ describe("the contextual Action bar", () => {
 			const state = freshState();
 			const id = "55555555-1111-4111-8111-111111111111";
 			seed(state, id, true);
-			state.consultationRecord.settleConsultationTurn(id, null, "first answer", "blocked");
+			state.consultationRecord.settleConsultationTurn(id, null, "first answer", {
+				settledStatus: "blocked",
+			});
 			const paneId = `pane-${id.slice(0, 8)}`;
 			const runner = new FakeRunner();
 			runner.set("herdr", ["agent", "list"], { stdout: listJson(id, "blocked") });
@@ -1015,9 +1015,7 @@ describe("the contextual Action bar", () => {
 						pressCtrlC(setup);
 						await destroyed(setup);
 					},
-					WIDTH,
-					30,
-					bootProps(state, runner),
+					{ width: WIDTH, height: 30, props: bootProps(state, runner) },
 				);
 			} finally {
 				state.close();
@@ -1042,9 +1040,7 @@ describe("the contextual Action bar", () => {
 						pressCtrlC(setup);
 						await destroyed(setup);
 					},
-					WIDTH,
-					30,
-					bootProps(state, runner),
+					{ width: WIDTH, height: 30, props: bootProps(state, runner) },
 				);
 			} finally {
 				state.close();
@@ -1079,9 +1075,11 @@ describe("the contextual Action bar", () => {
 				);
 				expect(messageRowOf(refused)).toContain("Warning: no Ticket sources exist");
 			},
-			WIDTH,
-			HEIGHT,
-			{ config: BASE_CONFIG, runner, initialTickets: [SAMPLE_TICKETS[0]] },
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				props: { config: BASE_CONFIG, runner, initialTickets: [SAMPLE_TICKETS[0]] },
+			},
 		);
 	});
 
@@ -1096,9 +1094,7 @@ describe("the contextual Action bar", () => {
 					messageRowOf(f).includes("no Ticket is selected"),
 				);
 			},
-			WIDTH,
-			HEIGHT,
-			{ config: BASE_CONFIG, runner, initialTickets: [] },
+			{ width: WIDTH, height: HEIGHT, props: { config: BASE_CONFIG, runner, initialTickets: [] } },
 		);
 	});
 
@@ -1126,9 +1122,11 @@ describe("the contextual Action bar", () => {
 					f.includes("Live: Fix pan drift in split panes"),
 				);
 			},
-			WIDTH,
-			HEIGHT,
-			{ config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				props: { config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+			},
 		);
 	});
 
@@ -1158,9 +1156,7 @@ describe("the contextual Action bar", () => {
 						),
 					);
 				},
-				WIDTH,
-				HEIGHT,
-				{ config: issuesConfig, state, sources: [source] },
+				{ width: WIDTH, height: HEIGHT, props: { config: issuesConfig, state, sources: [source] } },
 			);
 		} finally {
 			state.close();
@@ -1216,9 +1212,7 @@ describe("the contextual Action bar", () => {
 					8000,
 				);
 			},
-			WIDTH,
-			HEIGHT,
-			props,
+			{ width: WIDTH, height: HEIGHT, props: props },
 		);
 	});
 
@@ -1232,9 +1226,11 @@ describe("the contextual Action bar", () => {
 				const after = await settle(setup);
 				expect(actionBarRowOf(after)).toBe(before);
 			},
-			WIDTH,
-			HEIGHT,
-			{ config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				props: { config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+			},
 		);
 	});
 });

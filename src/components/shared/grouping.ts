@@ -73,13 +73,14 @@ export function rowAnchorOf<T extends IdentifiedItem>(
  * lands on that Group's header: the place stays the operator's own, the fold
  * never opens itself, and nothing is lost to a re-read (ADR 0059).
  */
-export function rowIndexForAnchor<T extends IdentifiedItem>(
-	rows: readonly ListedRow<T>[],
-	anchor: RowAnchor | undefined,
-	fallbackIndex: number,
-	items: readonly T[],
-	keyOf: (item: T) => string,
-): number {
+export function rowIndexForAnchor<T extends IdentifiedItem>(fields: {
+	rows: readonly ListedRow<T>[];
+	anchor: RowAnchor | undefined;
+	fallbackIndex: number;
+	items: readonly T[];
+	keyOf: (item: T) => string;
+}): number {
+	const { rows, anchor, fallbackIndex, items, keyOf } = fields;
 	const clamped = (index: number) =>
 		settleRowIndex(rows, Math.max(0, Math.min(index, Math.max(0, rows.length - 1))));
 	if (anchor === undefined) return clamped(fallbackIndex);
@@ -104,12 +105,16 @@ export function ticketRowIndexForAnchor(
 	rows: readonly ListedRow<TicketRowFacts>[],
 	anchor: RowAnchor | undefined,
 	fallbackIndex: number,
-	facts: readonly TicketRowFacts[],
-	axis: GroupingAxis,
+	fields: { facts: readonly TicketRowFacts[]; axis: GroupingAxis },
 ): number {
-	return rowIndexForAnchor(rows, anchor, fallbackIndex, facts, (fact) =>
-		ticketGroupKey(axis, fact),
-	);
+	const { facts, axis } = fields;
+	return rowIndexForAnchor({
+		rows,
+		anchor,
+		fallbackIndex,
+		items: facts,
+		keyOf: (fact) => ticketGroupKey(axis, fact),
+	});
 }
 
 /**
@@ -370,9 +375,9 @@ export function movedGroupOrder(
 	stored: readonly string[],
 	present: readonly string[],
 	defaultCompare: (a: string, b: string) => number,
-	value: string,
-	neighbor: string,
+	move: { value: string; neighbor: string },
 ): readonly string[] | null {
+	const { value, neighbor } = move;
 	const full = fullOrderOf(stored, present, defaultCompare);
 	const from = full.indexOf(value);
 	const to = full.indexOf(neighbor);
@@ -517,11 +522,14 @@ export function toggleFold(folds: GroupFolds, axis: GroupingAxis, value: string)
 export function ticketRows(
 	facts: readonly TicketRowFacts[],
 	axis: GroupingAxis,
-	folds: GroupFolds,
-	storedOrder: readonly string[],
-	positionOrder: readonly string[],
-	groupMarker?: (value: string) => string | null,
+	fields: {
+		folds: GroupFolds;
+		storedOrder: readonly string[];
+		positionOrder: readonly string[];
+		groupMarker?: (value: string) => string | null;
+	},
 ): readonly ListedRow<TicketRowFacts>[] {
+	const { folds, storedOrder, positionOrder, groupMarker } = fields;
 	const folded = foldedValues(folds, axis);
 	return groupedRows(facts, {
 		axis,

@@ -287,9 +287,7 @@ describe("the ignore key", () => {
 						expect.objectContaining({ identity: SECOND, ignored: false }),
 					]);
 				},
-				WIDTH,
-				HEIGHT,
-				props,
+				{ width: WIDTH, height: HEIGHT, props: props },
 			);
 		} finally {
 			state.close();
@@ -343,9 +341,7 @@ describe("the ignore key", () => {
 					);
 					expect(listRowOf(active, SECOND_LEAD)).toBeGreaterThanOrEqual(0);
 				},
-				wide,
-				HEIGHT,
-				props,
+				{ width: wide, height: HEIGHT, props: props },
 			);
 		} finally {
 			state.close();
@@ -409,9 +405,7 @@ describe("the ignore key", () => {
 							.rows.map((ticket) => ticket.identity),
 					).toEqual([SECOND]);
 				},
-				WIDTH,
-				HEIGHT,
-				props,
+				{ width: WIDTH, height: HEIGHT, props: props },
 			);
 		} finally {
 			state.close();
@@ -476,9 +470,11 @@ describe("the ignore key", () => {
 						expect(bells.count()).toBe(bellsAfterBoot);
 					}
 				},
-				WIDTH,
-				HEIGHT,
-				{ config: fixtureConfig(), state, sources: [src], runner, pollIntervalMs: 60_000 },
+				{
+					width: WIDTH,
+					height: HEIGHT,
+					props: { config: fixtureConfig(), state, sources: [src], runner, pollIntervalMs: 60_000 },
+				},
 			);
 		} finally {
 			bells.restore();
@@ -515,9 +511,7 @@ describe("the ignore key", () => {
 					// reads the clear there.
 					expect(actionBarRowOf(detailed)).toContain("i Un-ignore");
 				},
-				wide,
-				HEIGHT,
-				props,
+				{ width: wide, height: HEIGHT, props: props },
 			);
 		} finally {
 			state.close();
@@ -569,9 +563,7 @@ describe("the ignore key", () => {
 					);
 					expect(detailPaneText(back)).toContain(secondTitle);
 				},
-				WIDTH,
-				HEIGHT,
-				props,
+				{ width: WIDTH, height: HEIGHT, props: props },
 			);
 		} finally {
 			state.close();
@@ -614,9 +606,7 @@ describe("the ignore key", () => {
 					);
 					expect(listRowOf(back, FIRST_LEAD)).toBeGreaterThanOrEqual(0);
 				},
-				WIDTH,
-				HEIGHT,
-				props,
+				{ width: WIDTH, height: HEIGHT, props: props },
 			);
 		} finally {
 			state.close();
@@ -656,9 +646,7 @@ describe("the ignore key", () => {
 					);
 					expect(pile).toContain("ignored");
 				},
-				WIDTH,
-				HEIGHT,
-				props,
+				{ width: WIDTH, height: HEIGHT, props: props },
 			);
 		} finally {
 			state.close();
@@ -683,9 +671,7 @@ describe("the ignore key", () => {
 					expect(detail).toContain("no automatic start, and no row while the Ticket rests");
 					expect(detail).toContain("press i to take this Ticket back");
 				},
-				WIDTH,
-				HEIGHT,
-				props,
+				{ width: WIDTH, height: HEIGHT, props: props },
 			);
 		} finally {
 			state.close();
@@ -722,9 +708,7 @@ describe("the ignore key", () => {
 					expect(guide).toContain("mutes the source the Ticket came in on, and the key un-mutes");
 					expect(guide).toContain("cycles the Ticket list: active, ignored, muted, all");
 				},
-				WIDTH,
-				HEIGHT,
-				props,
+				{ width: WIDTH, height: HEIGHT, props: props },
 			);
 		} finally {
 			state.close();
@@ -760,13 +744,15 @@ test("the no-state shell refuses i and f with the same missing fact", async () =
 			expect(ticketRowHolds(refusedFilter, FIRST_LEAD)).toBe(true);
 			expect(refusedFilter).not.toContain("ignored:");
 		},
-		WIDTH,
-		HEIGHT,
 		{
-			config: fixtureConfig(),
-			runner: emptyAgentRunner(),
-			initialTickets: projection,
-			pollIntervalMs: 60_000,
+			width: WIDTH,
+			height: HEIGHT,
+			props: {
+				config: fixtureConfig(),
+				runner: emptyAgentRunner(),
+				initialTickets: projection,
+				pollIntervalMs: 60_000,
+			},
 		},
 	);
 });
@@ -809,14 +795,16 @@ describe("the obligation gate", () => {
 					expect(state.ticketWorkCycle.ignoredTickets().has(FIRST)).toBe(false);
 					expect(listRowOf(refused, FIRST_LEAD)).toBeGreaterThanOrEqual(0);
 				},
-				WIDTH,
-				HEIGHT,
 				{
-					config: fixtureConfig(),
-					state,
-					sources: [src],
-					runner: emptyAgentRunner(),
-					pollIntervalMs: 60_000,
+					width: WIDTH,
+					height: HEIGHT,
+					props: {
+						config: fixtureConfig(),
+						state,
+						sources: [src],
+						runner: emptyAgentRunner(),
+						pollIntervalMs: 60_000,
+					},
 				},
 			);
 		} finally {
@@ -852,9 +840,11 @@ describe("the obligation gate", () => {
 					expect(state.ticketWorkCycle.ignoredTickets().has(FIRST)).toBe(false);
 					expect(refused).toContain("missing");
 				},
-				WIDTH,
-				HEIGHT,
-				{ config: fixtureConfig(), state, sources: [src], runner, pollIntervalMs: 60_000 },
+				{
+					width: WIDTH,
+					height: HEIGHT,
+					props: { config: fixtureConfig(), state, sources: [src], runner, pollIntervalMs: 60_000 },
+				},
 			);
 		} finally {
 			state.close();
@@ -909,9 +899,11 @@ describe("the ignore and the machine", () => {
 					);
 					expect(state.ticketWorkCycle.ignoredTickets().has(FIRST)).toBe(false);
 				},
-				WIDTH,
-				HEIGHT,
-				{ config: fixtureConfig(), state, sources: [src], runner, pollIntervalMs: 60_000 },
+				{
+					width: WIDTH,
+					height: HEIGHT,
+					props: { config: fixtureConfig(), state, sources: [src], runner, pollIntervalMs: 60_000 },
+				},
 			);
 		} finally {
 			state.close();
@@ -953,14 +945,16 @@ describe("the ignore and the machine", () => {
 					expect(state.ticketWorkCycle.ticketState(SECOND)).toBe("open");
 					expect(state.workQueue.items()).toEqual([]);
 				},
-				WIDTH,
-				HEIGHT,
 				{
-					config: fixtureConfig({ maxParallelAgents: 1 }),
-					state,
-					sources: [src],
-					runner,
-					pollIntervalMs: 60_000,
+					width: WIDTH,
+					height: HEIGHT,
+					props: {
+						config: fixtureConfig({ maxParallelAgents: 1 }),
+						state,
+						sources: [src],
+						runner,
+						pollIntervalMs: 60_000,
+					},
 				},
 			);
 		} finally {
@@ -1005,9 +999,7 @@ describe("the ignore and the machine", () => {
 					expect(state.ticketWorkCycle.ignoredTickets().has(FIRST)).toBe(true);
 					expect(listRowOf(frame, FIRST_LEAD)).toBeGreaterThanOrEqual(0);
 				},
-				WIDTH,
-				HEIGHT,
-				props,
+				{ width: WIDTH, height: HEIGHT, props: props },
 			);
 		} finally {
 			state.close();
@@ -1082,14 +1074,16 @@ describe("the ignore and the machine", () => {
 					expect(frame).toContain(firstTitle.slice(0, 9));
 					expect(frame).not.toContain(FIRST);
 				},
-				WIDTH,
-				HEIGHT,
 				{
-					config: fixtureConfig({ maxParallelAgents: 1 }),
-					state,
-					sources: [src],
-					runner,
-					pollIntervalMs: 60_000,
+					width: WIDTH,
+					height: HEIGHT,
+					props: {
+						config: fixtureConfig({ maxParallelAgents: 1 }),
+						state,
+						sources: [src],
+						runner,
+						pollIntervalMs: 60_000,
+					},
 				},
 			);
 		} finally {
@@ -1166,14 +1160,16 @@ describe("the ignore and the machine", () => {
 					expect(messageRowOf(line)).toContain(`the waiting start for "${firstTitle}" was removed`);
 					expect(messageRowOf(line)).not.toContain(FIRST);
 				},
-				WIDTH,
-				HEIGHT,
 				{
-					config: fixtureConfig({ maxParallelAgents: 1 }),
-					state,
-					sources: [src],
-					runner,
-					pollIntervalMs: 60_000,
+					width: WIDTH,
+					height: HEIGHT,
+					props: {
+						config: fixtureConfig({ maxParallelAgents: 1 }),
+						state,
+						sources: [src],
+						runner,
+						pollIntervalMs: 60_000,
+					},
 				},
 			);
 		} finally {
@@ -1208,9 +1204,7 @@ describe("the ignore and the machine", () => {
 							.rows.map((ticket) => ticket.identity),
 					).toEqual([FIRST]);
 				},
-				WIDTH,
-				HEIGHT,
-				{ ...props, pollIntervalMs: 25 },
+				{ width: WIDTH, height: HEIGHT, props: { ...props, pollIntervalMs: 25 } },
 			);
 		} finally {
 			state.close();
@@ -1252,9 +1246,7 @@ describe("the ignore and the machine", () => {
 					expect(listRowOf(back, FIRST_LEAD)).toBe(-1);
 					expect(headerRow(back)).toContain("open: 1");
 				},
-				WIDTH,
-				HEIGHT,
-				props,
+				{ width: WIDTH, height: HEIGHT, props: props },
 			);
 			// A second plane on the same state file reads the same flag: two planes
 			// never disagree about one Ticket.
@@ -1274,14 +1266,16 @@ describe("the ignore and the machine", () => {
 						expect(headerRow(frame)).toContain("ignored: 1");
 						expect(listRowOf(frame, FIRST_LEAD)).toBe(-1);
 					},
-					WIDTH,
-					HEIGHT,
 					{
-						config: fixtureConfig(),
-						state: reopened,
-						sources: [secondSrc],
-						runner: emptyAgentRunner(),
-						pollIntervalMs: 60_000,
+						width: WIDTH,
+						height: HEIGHT,
+						props: {
+							config: fixtureConfig(),
+							state: reopened,
+							sources: [secondSrc],
+							runner: emptyAgentRunner(),
+							pollIntervalMs: 60_000,
+						},
 					},
 				);
 			} finally {
@@ -1358,9 +1352,11 @@ describe("the ignore and the machine", () => {
 					expect(actionBarRowOf(gone)).toContain("i Un-ignore");
 					expect(headerRow(gone)).toContain("running: 1");
 				},
-				wide,
-				HEIGHT,
-				{ config: fixtureConfig(), state, sources: [src], runner, pollIntervalMs: 25 },
+				{
+					width: wide,
+					height: HEIGHT,
+					props: { config: fixtureConfig(), state, sources: [src], runner, pollIntervalMs: 25 },
+				},
 			);
 		} finally {
 			state.close();
@@ -1389,9 +1385,7 @@ describe("the ignored marker's frame", () => {
 					expect(row).toContain("[open]");
 					expect(headerRow(pile)).toContain("ignored: 1");
 				},
-				WIDTH,
-				HEIGHT,
-				props,
+				{ width: WIDTH, height: HEIGHT, props: props },
 			);
 		} finally {
 			// The worker's environment is shared with the files that run beside
@@ -1426,9 +1420,7 @@ describe("the ignored marker's frame", () => {
 					const tinyHeader = rowsOf(tiny).find((r) => r.includes("Tickets")) ?? "";
 					expect(tinyHeader).toContain("Tickets");
 				},
-				WIDTH,
-				HEIGHT,
-				props,
+				{ width: WIDTH, height: HEIGHT, props: props },
 			);
 		} finally {
 			state.close();
@@ -1529,9 +1521,11 @@ describe("the ignored marker's frame", () => {
 					expect(headerRow(cleared)).not.toContain("ignored:");
 					expect(state.ticketWorkCycle.ignoredTickets().has(FIRST)).toBe(false);
 				},
-				WIDTH,
-				HEIGHT,
-				{ config: fixtureConfig(), state, sources: [src], runner, pollIntervalMs: 60_000 },
+				{
+					width: WIDTH,
+					height: HEIGHT,
+					props: { config: fixtureConfig(), state, sources: [src], runner, pollIntervalMs: 60_000 },
+				},
 			);
 		} finally {
 			state.close();
@@ -1599,14 +1593,16 @@ describe("the ignored marker's frame", () => {
 					expect(headerRow(narrow)).toContain("held");
 					expect(headerRow(narrow)).not.toContain("ignored");
 				},
-				WIDTH,
-				HEIGHT,
 				{
-					config: fixtureConfig(),
-					state,
-					sources: [src],
-					runner: emptyAgentRunner(),
-					pollIntervalMs: 60_000,
+					width: WIDTH,
+					height: HEIGHT,
+					props: {
+						config: fixtureConfig(),
+						state,
+						sources: [src],
+						runner: emptyAgentRunner(),
+						pollIntervalMs: 60_000,
+					},
 				},
 			);
 		} finally {

@@ -357,9 +357,7 @@ describe("the Starting window's timeline", () => {
 				expect(face(running)).toBeNull();
 				expect(running).toContain("open: 0  running: 1  awaiting: 0");
 			},
-			WIDTH,
-			HEIGHT,
-			{ ...propsOf(app), runner: gate.runner },
+			{ width: WIDTH, height: HEIGHT, props: { ...propsOf(app), runner: gate.runner } },
 		);
 		app.state.close();
 	});
@@ -403,9 +401,7 @@ describe("the Starting window's timeline", () => {
 					'Warning: queued handoff for "Persist source facts" was not run: error: the workspace is not creatable',
 				);
 			},
-			WIDTH,
-			HEIGHT,
-			{ ...propsOf(app), runner: gate.runner },
+			{ width: WIDTH, height: HEIGHT, props: { ...propsOf(app), runner: gate.runner } },
 		);
 		app.state.close();
 	});
@@ -430,9 +426,7 @@ describe("the Starting window's timeline", () => {
 				await releaseHeld(gate);
 				await awaitFrame(setup, (f) => badgeRow(f).includes("[running]"), "the ticket to run");
 			},
-			WIDTH,
-			HEIGHT,
-			{ ...propsOf(app), runner: gate.runner },
+			{ width: WIDTH, height: HEIGHT, props: { ...propsOf(app), runner: gate.runner } },
 		);
 		app.state.close();
 	});
@@ -528,9 +522,7 @@ describe("the Starting window's timeline", () => {
 				// And the decision stands where the ask put it.
 				expect(app.state.ticketWorkCycle.lastCompletion(identity)?.decision).toBe("handed-off");
 			},
-			WIDTH,
-			HEIGHT,
-			{ ...propsOf(app), runner: gate.runner },
+			{ width: WIDTH, height: HEIGHT, props: { ...propsOf(app), runner: gate.runner } },
 		);
 		app.state.close();
 	});
@@ -596,9 +588,7 @@ describe("the Starting window's timeline", () => {
 				app.runner.set("herdr", ["agent", "list"], { stdout: list("working") });
 				await awaitFrame(setup, (f) => badgeRow(f).includes("[running]"), "the ticket to run");
 			},
-			WIDTH,
-			HEIGHT,
-			{ ...propsOf(app), runner: gate.runner },
+			{ width: WIDTH, height: HEIGHT, props: { ...propsOf(app), runner: gate.runner } },
 		);
 		app.state.close();
 	});
@@ -632,9 +622,7 @@ describe("the Starting window's timeline", () => {
 				expect(resting).not.toContain("[handed-off]");
 				expect(faceCount(resting)).toBe(0);
 			},
-			WIDTH,
-			HEIGHT,
-			{ ...propsOf(app), runner: gate.runner },
+			{ width: WIDTH, height: HEIGHT, props: { ...propsOf(app), runner: gate.runner } },
 		);
 		app.state.close();
 	});
@@ -672,9 +660,7 @@ describe("the Starting window's timeline", () => {
 				expect(blocked).not.toContain("[handed-off]");
 				expect(faceCount(blocked)).toBe(0);
 			},
-			WIDTH,
-			HEIGHT,
-			{ ...propsOf(app), runner: gate.runner },
+			{ width: WIDTH, height: HEIGHT, props: { ...propsOf(app), runner: gate.runner } },
 		);
 		app.state.close();
 	});
@@ -694,9 +680,7 @@ describe("the Starting window's timeline", () => {
 				expect(face(resting)).toBeNull();
 				expect(resting).not.toContain(" starting");
 			},
-			WIDTH,
-			HEIGHT,
-			propsOf(app),
+			{ width: WIDTH, height: HEIGHT, props: propsOf(app) },
 		);
 		app.state.close();
 	});

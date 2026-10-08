@@ -252,7 +252,9 @@ describe("durable Consultation lifecycle", () => {
 		});
 		expect(state.consultationRecord.consultation(consultation.id)?.state).toBe("working");
 		expect(
-			state.consultationRecord.settleConsultationTurn(consultation.id, 1, "first answer", "idle"),
+			state.consultationRecord.settleConsultationTurn(consultation.id, 1, "first answer", {
+				settledStatus: "idle",
+			}),
 		).toBe(true);
 		state.consultationRecord.setConsultationDraft(consultation.id, "draft response");
 		// A response is a durable pending delivery until Herdr accepts it.
@@ -270,12 +272,9 @@ describe("durable Consultation lifecycle", () => {
 		expect(turn).toMatchObject({ input: "second question", sequenceBaseline: 1 });
 		// The Consultation is working after accepting its own second turn.
 		expect(
-			state.consultationRecord.settleConsultationTurn(
-				consultation.id,
-				2,
-				"second answer",
-				"blocked",
-			),
+			state.consultationRecord.settleConsultationTurn(consultation.id, 2, "second answer", {
+				settledStatus: "blocked",
+			}),
 		).toBe(true);
 		const stored = state.consultationRecord.consultation(consultation.id);
 		expect(stored).toMatchObject({ state: "awaiting-response", latestSequence: 2, draft: "" });
@@ -431,9 +430,11 @@ describe("durable Consultation lifecycle", () => {
 		const consultation = createConsultation(state);
 		state.consultationRecord.setConsultationAgent(consultation.id, { paneId: "pane-1" });
 		// The first poll saw the Agent settle before any output was captured.
-		expect(state.consultationRecord.settleConsultationTurn(consultation.id, 1, null, "idle")).toBe(
-			true,
-		);
+		expect(
+			state.consultationRecord.settleConsultationTurn(consultation.id, 1, null, {
+				settledStatus: "idle",
+			}),
+		).toBe(true);
 		expect(state.consultationRecord.consultationNeedsSnapshot(consultation.id)).toBe(true);
 		expect(state.consultationRecord.fillConsultationSnapshot(consultation.id, "late output")).toBe(
 			true,
@@ -505,15 +506,12 @@ describe("durable Consultation lifecycle", () => {
 			const state = makeState();
 			const id = working(state);
 			expect(
-				state.consultationRecord.settleConsultationTurn(
-					id,
-					1,
-					"boom",
-					"idle",
-					"2026-09-01T00:01:00Z",
-					"failed",
-					"the API rejected the request",
-				),
+				state.consultationRecord.settleConsultationTurn(id, 1, "boom", {
+					settledStatus: "idle",
+					capturedAt: "2026-09-01T00:01:00Z",
+					cause: "failed",
+					detail: "the API rejected the request",
+				}),
 			).toBe(true);
 			// The turn is not an answer, but the Agent is alive: the Consultation
 			// rests where it can be answered or closed, not the terminal line, and
@@ -532,14 +530,11 @@ describe("durable Consultation lifecycle", () => {
 			const state = makeState();
 			const id = working(state);
 			expect(
-				state.consultationRecord.settleConsultationTurn(
-					id,
-					1,
-					"",
-					"idle",
-					"2026-09-01T00:01:00Z",
-					"aborted",
-				),
+				state.consultationRecord.settleConsultationTurn(id, 1, "", {
+					settledStatus: "idle",
+					capturedAt: "2026-09-01T00:01:00Z",
+					cause: "aborted",
+				}),
 			).toBe(true);
 			expect(state.consultationRecord.consultation(id)?.state).toBe("awaiting-response");
 			expect(state.consultationRecord.consultation(id)?.warning).toBe("Turn ended aborted");
@@ -550,27 +545,21 @@ describe("durable Consultation lifecycle", () => {
 		test("a settled turn clears a failed turn's warning", () => {
 			const state = makeState();
 			const id = working(state);
-			state.consultationRecord.settleConsultationTurn(
-				id,
-				1,
-				"boom",
-				"idle",
-				"2026-09-01T00:01:00Z",
-				"aborted",
-			);
+			state.consultationRecord.settleConsultationTurn(id, 1, "boom", {
+				settledStatus: "idle",
+				capturedAt: "2026-09-01T00:01:00Z",
+				cause: "aborted",
+			});
 			expect(state.consultationRecord.consultation(id)?.warning).toBe("Turn ended aborted");
 			// The Agent answers again: the later turn is quiet, the failure stays on
 			// the turn record, and the Consultation stays awaiting.
 			const pending = state.consultationRecord.beginConsultationResponse(id, "try again", null);
 			if (pending === undefined) throw new Error("no pending response");
 			state.consultationRecord.acceptConsultationResponse(id, pending.id);
-			state.consultationRecord.settleConsultationTurn(
-				id,
-				2,
-				"answer",
-				"idle",
-				"2026-09-01T00:02:00Z",
-			);
+			state.consultationRecord.settleConsultationTurn(id, 2, "answer", {
+				settledStatus: "idle",
+				capturedAt: "2026-09-01T00:02:00Z",
+			});
 			expect(state.consultationRecord.consultation(id)?.state).toBe("awaiting-response");
 			expect(state.consultationRecord.consultation(id)?.warning).toBeNull();
 			state.close();
@@ -581,14 +570,11 @@ describe("durable Consultation lifecycle", () => {
 				const state = makeState();
 				const id = working(state, `consultation-${cause}`);
 				expect(
-					state.consultationRecord.settleConsultationTurn(
-						id,
-						1,
-						"answer",
-						"idle",
-						"2026-09-01T00:01:00Z",
-						cause,
-					),
+					state.consultationRecord.settleConsultationTurn(id, 1, "answer", {
+						settledStatus: "idle",
+						capturedAt: "2026-09-01T00:01:00Z",
+						cause: cause,
+					}),
 				).toBe(true);
 				expect(state.consultationRecord.consultation(id)?.state).toBe("awaiting-response");
 				expect(state.consultationRecord.consultation(id)?.warning).toBeNull();
@@ -600,7 +586,9 @@ describe("durable Consultation lifecycle", () => {
 		test("a settle without a cause defaults to unknown and stays awaiting", () => {
 			const state = makeState();
 			const id = working(state);
-			expect(state.consultationRecord.settleConsultationTurn(id, 1, "answer", "idle")).toBe(true);
+			expect(
+				state.consultationRecord.settleConsultationTurn(id, 1, "answer", { settledStatus: "idle" }),
+			).toBe(true);
 			expect(state.consultationRecord.consultationTurns(id)[0].cause).toBe("unknown");
 			expect(state.consultationRecord.consultationTurns(id)[0].detail).toBe("");
 			expect(state.consultationRecord.consultation(id)?.state).toBe("awaiting-response");
@@ -616,7 +604,9 @@ describe("durable Consultation privacy", () => {
 		const id = consultation.id;
 		state.consultationRecord.setConsultationAgent(id, { paneId: "pane-11111111" });
 		state.consultationRecord.setConsultationState(id, "working");
-		state.consultationRecord.settleConsultationTurn(id, 1, "a".repeat(2 * 1024 * 1024), "idle");
+		state.consultationRecord.settleConsultationTurn(id, 1, "a".repeat(2 * 1024 * 1024), {
+			settledStatus: "idle",
+		});
 		const [snapshot] = state.consultationRecord.consultationSnapshots(id);
 		expect(snapshot).toBeDefined();
 		expect(snapshot.truncated).toBe(true);
@@ -661,7 +651,9 @@ describe("durable Consultation privacy", () => {
 		});
 		state.consultationRecord.setConsultationAgent(id, { paneId: "pane-11111111" });
 		state.consultationRecord.setConsultationState(id, "working");
-		state.consultationRecord.settleConsultationTurn(id, 1, `settled ${marker}`, "idle");
+		state.consultationRecord.settleConsultationTurn(id, 1, `settled ${marker}`, {
+			settledStatus: "idle",
+		});
 		state.consultationRecord.setConsultationState(id, "closing");
 		state.consultationRecord.finishConsultationClose(id);
 		expect(state.consultationRecord.consultation(id)).toBeDefined();
@@ -711,7 +703,9 @@ describe("pending responses across restart and migration", () => {
 		const { state, path } = makeStateFile();
 		const consultation = createConsultation(state);
 		state.consultationRecord.setConsultationAgent(consultation.id, { paneId: "pane-1" });
-		state.consultationRecord.settleConsultationTurn(consultation.id, 1, "first answer", "idle");
+		state.consultationRecord.settleConsultationTurn(consultation.id, 1, "first answer", {
+			settledStatus: "idle",
+		});
 		state.close();
 		// Downgrade the record to the v4 shape.
 		const db = new Database(path);

@@ -212,13 +212,13 @@ describe("the Checkout safety module's live checkout conflict set", () => {
 
 	test("names dirty state a warning and not a block", async () => {
 		const checkout = makeCheckout();
-		const safety = await inspectLiveCheckout(
+		const safety = await inspectLiveCheckout({
 			checkout,
-			statusRunner(checkout, " M src/app.ts\n"),
-			[],
-			[],
-			[],
-		);
+			runner: statusRunner(checkout, " M src/app.ts\n"),
+			tickets: [],
+			consultations: [],
+			agents: [],
+		});
 		expect(safety.dirty).toBe(true);
 		expect(safety.warning).toBe("the live checkout has uncommitted changes");
 		expect(safety.conflicts).toEqual([]);
@@ -226,13 +226,13 @@ describe("the Checkout safety module's live checkout conflict set", () => {
 
 	test("names a live checkout conflict by the ticket that owns the Agent", async () => {
 		const checkout = makeCheckout();
-		const safety = await inspectLiveCheckout(
+		const safety = await inspectLiveCheckout({
 			checkout,
-			statusRunner(checkout, ""),
-			[ticketAt("pane-1", "running", "live-worktree")],
-			[],
-			[agentIn("pane-1", checkout)],
-		);
+			runner: statusRunner(checkout, ""),
+			tickets: [ticketAt("pane-1", "running", "live-worktree")],
+			consultations: [],
+			agents: [agentIn("pane-1", checkout)],
+		});
 		expect(safety.conflicts).toEqual([
 			{
 				kind: "ticket",
@@ -244,13 +244,13 @@ describe("the Checkout safety module's live checkout conflict set", () => {
 
 	test("reports one conflict per underlying Agent, never the same Agent twice", async () => {
 		const checkout = makeCheckout();
-		const safety = await inspectLiveCheckout(
+		const safety = await inspectLiveCheckout({
 			checkout,
-			statusRunner(checkout, ""),
-			[ticketAt("pane-1", "handed-off", "live-worktree")],
-			[],
-			[agentIn("pane-1", checkout), agentIn("pane-2", checkout)],
-		);
+			runner: statusRunner(checkout, ""),
+			tickets: [ticketAt("pane-1", "handed-off", "live-worktree")],
+			consultations: [],
+			agents: [agentIn("pane-1", checkout), agentIn("pane-2", checkout)],
+		});
 		// The counted pane stays named by its ticket; only the bare Agent gets
 		// its own line.
 		expect(safety.conflicts.map((conflict) => conflict.kind)).toEqual(["ticket", "herdr-agent"]);
@@ -260,13 +260,13 @@ describe("the Checkout safety module's live checkout conflict set", () => {
 	test("leaves a checkout an Agent does not stand in out of the conflict set", async () => {
 		const checkout = makeCheckout();
 		const other = makeCheckout();
-		const safety = await inspectLiveCheckout(
+		const safety = await inspectLiveCheckout({
 			checkout,
-			statusRunner(checkout, ""),
-			[ticketAt("pane-1", "running", "worktree")],
-			[],
-			[agentIn("pane-1", other)],
-		);
+			runner: statusRunner(checkout, ""),
+			tickets: [ticketAt("pane-1", "running", "worktree")],
+			consultations: [],
+			agents: [agentIn("pane-1", other)],
+		});
 		expect(safety.conflicts).toEqual([]);
 	});
 });

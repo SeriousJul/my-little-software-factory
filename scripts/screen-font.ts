@@ -90,7 +90,8 @@ function segmentsOf(codePoint: number, font: Font): Seg[] {
 		segs.push({ x0: toX(cx), y0: toY(cy), x1: toX(startX), y1: toY(startY) });
 		open = false;
 	};
-	const flattenCurve = (x1: number, y1: number, x2: number, y2: number, x3: number, y3: number) => {
+	const flattenCurve = (pts: readonly number[]) => {
+		const [x1, y1, x2, y2, x3, y3] = pts;
 		// De Casteljau subdivision into CURVE_PIECES pieces.
 		let px = cx;
 		let py = cy;
@@ -119,18 +120,18 @@ function segmentsOf(codePoint: number, font: Font): Seg[] {
 		} else if (cmd.command === "quadraticCurveTo") {
 			const [qx, qy, rx, ry] = cmd.args;
 			// Promote the quadratic to a cubic.
-			flattenCurve(
+			flattenCurve([
 				cx + (2 / 3) * (qx - cx),
 				cy + (2 / 3) * (qy - cy),
 				rx + (2 / 3) * (qx - rx),
 				ry + (2 / 3) * (qy - ry),
 				rx,
 				ry,
-			);
+			]);
 			cx = rx;
 			cy = ry;
 		} else if (cmd.command === "bezierCurveTo") {
-			flattenCurve(cmd.args[0], cmd.args[1], cmd.args[2], cmd.args[3], cmd.args[4], cmd.args[5]);
+			flattenCurve(cmd.args);
 			cx = cmd.args[4];
 			cy = cmd.args[5];
 		} else if (cmd.command === "closePath") {

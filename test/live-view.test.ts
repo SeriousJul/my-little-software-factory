@@ -320,9 +320,7 @@ describe("the Live view on the ticket list", () => {
 				expect(frame).toContain("Warning:");
 				expect(runner.commands()).not.toContain("herdr agent focus");
 			},
-			WIDTH,
-			HEIGHT,
-			{ config: BASE_CONFIG, runner },
+			{ width: WIDTH, height: HEIGHT, props: { config: BASE_CONFIG, runner } },
 		);
 	});
 
@@ -357,9 +355,7 @@ describe("the Live view on the ticket list", () => {
 				expect(frame).toContain("Agent view");
 				expect(frame).toContain("Enter Goto");
 			},
-			WIDTH,
-			HEIGHT,
-			{ config: BASE_CONFIG, runner },
+			{ width: WIDTH, height: HEIGHT, props: { config: BASE_CONFIG, runner } },
 		);
 	});
 
@@ -390,9 +386,7 @@ describe("the Live view on the ticket list", () => {
 					rgb(roleColor("text")),
 				);
 			},
-			WIDTH,
-			HEIGHT,
-			{ config: BASE_CONFIG, runner },
+			{ width: WIDTH, height: HEIGHT, props: { config: BASE_CONFIG, runner } },
 		);
 	});
 
@@ -424,9 +418,7 @@ describe("the Live view on the ticket list", () => {
 					runner.commands().filter((c) => c === READ_COMMAND("pane-implement")).length,
 				).toBeGreaterThanOrEqual(2);
 			},
-			WIDTH,
-			HEIGHT,
-			{ config: BASE_CONFIG, runner },
+			{ width: WIDTH, height: HEIGHT, props: { config: BASE_CONFIG, runner } },
 		);
 	});
 
@@ -461,9 +453,7 @@ describe("the Live view on the ticket list", () => {
 				await awaitFrame(setup, (f) => f.includes("tick 35"), "the next read");
 				expect(frameText(setup.captureCharFrame())).not.toContain("tick 10");
 			},
-			WIDTH,
-			HEIGHT,
-			{ config: BASE_CONFIG, runner },
+			{ width: WIDTH, height: HEIGHT, props: { config: BASE_CONFIG, runner } },
 		);
 	});
 
@@ -505,9 +495,7 @@ describe("the Live view on the ticket list", () => {
 				).toBeGreaterThanOrEqual(2);
 				expect(frameText(setup.captureCharFrame())).not.toContain("tick 35");
 			},
-			WIDTH,
-			HEIGHT,
-			{ config: BASE_CONFIG, runner },
+			{ width: WIDTH, height: HEIGHT, props: { config: BASE_CONFIG, runner } },
 		);
 	});
 
@@ -548,9 +536,7 @@ describe("the Live view on the ticket list", () => {
 				await awaitFrame(setup, (f) => f.includes("tick 35"), "the re-pinned stream");
 				expect(frameText(setup.captureCharFrame())).not.toContain("tick 01");
 			},
-			WIDTH,
-			HEIGHT,
-			{ config: BASE_CONFIG, runner },
+			{ width: WIDTH, height: HEIGHT, props: { config: BASE_CONFIG, runner } },
 		);
 	});
 
@@ -584,9 +570,7 @@ describe("the Live view on the ticket list", () => {
 				expect(frame).toContain("last good lines");
 				expect(spanColors(setup, "Stale Agent output")).toContainEqual(rgb(roleColor("subtext0")));
 			},
-			WIDTH,
-			HEIGHT,
-			{ config: BASE_CONFIG, runner },
+			{ width: WIDTH, height: HEIGHT, props: { config: BASE_CONFIG, runner } },
 		);
 	});
 
@@ -610,9 +594,7 @@ describe("the Live view on the ticket list", () => {
 				expect(runner.commands().join("\n")).not.toContain("agent focus");
 				expect(runner.commands().every((c) => c === READ_COMMAND("pane-implement"))).toBe(true);
 			},
-			WIDTH,
-			HEIGHT,
-			{ config: BASE_CONFIG, runner },
+			{ width: WIDTH, height: HEIGHT, props: { config: BASE_CONFIG, runner } },
 		);
 	});
 
@@ -641,12 +623,14 @@ describe("the Live view on the ticket list", () => {
 				// No pane to read: the runner was never asked for one.
 				expect(runner.calls).toHaveLength(0);
 			},
-			WIDTH,
-			HEIGHT,
 			{
-				config: BASE_CONFIG,
-				runner,
-				initialTickets: [...SAMPLE_TICKETS.slice(0, 2), { ...SAMPLE_TICKETS[2], handoff: null }],
+				width: WIDTH,
+				height: HEIGHT,
+				props: {
+					config: BASE_CONFIG,
+					runner,
+					initialTickets: [...SAMPLE_TICKETS.slice(0, 2), { ...SAMPLE_TICKETS[2], handoff: null }],
+				},
 			},
 		);
 	});
@@ -680,9 +664,7 @@ describe("the Live view on the ticket list", () => {
 					"Enter Goto - the Agent's pane is not alive in the last poll",
 				]);
 			},
-			WIDTH,
-			HEIGHT,
-			{ config: BASE_CONFIG, runner },
+			{ width: WIDTH, height: HEIGHT, props: { config: BASE_CONFIG, runner } },
 		);
 	});
 });
@@ -747,9 +729,7 @@ describe("the Live view against a running factory", () => {
 				expect(frame).not.toContain("Live:");
 				expect(inFlightFace(ticketRow(await settle(setup)))).toBe(true);
 			},
-			WIDTH,
-			HEIGHT,
-			propsOf(app),
+			{ width: WIDTH, height: HEIGHT, props: propsOf(app) },
 		);
 		app.state.close();
 	});
@@ -789,9 +769,7 @@ describe("the Live view against a running factory", () => {
 				expect(frame).not.toContain("Live:");
 				expect(inFlightFace(ticketRow(await settle(setup)))).toBe(true);
 			},
-			WIDTH,
-			HEIGHT,
-			propsOf(app),
+			{ width: WIDTH, height: HEIGHT, props: propsOf(app) },
 		);
 		app.state.close();
 	});
@@ -872,9 +850,7 @@ describe("the Live view against a running factory", () => {
 				await pressReturn(setup, "the close", (f) => f.includes("[open]"));
 				expect(ticketRow(await settle(setup))).toContain("[open]");
 			},
-			WIDTH,
-			HEIGHT,
-			propsOf(app),
+			{ width: WIDTH, height: HEIGHT, props: propsOf(app) },
 		);
 		app.state.close();
 	});
@@ -952,9 +928,7 @@ describe("the Live view against a running factory", () => {
 				expect(app.state.ticketWorkCycle.lastCompletion(identity)?.decision).toBeNull();
 				expect(app.state.workQueue.items()).toEqual([]);
 			},
-			WIDTH,
-			HEIGHT,
-			propsOf(app),
+			{ width: WIDTH, height: HEIGHT, props: propsOf(app) },
 		);
 		app.state.close();
 	});
@@ -999,9 +973,7 @@ describe("the Live view against a running factory", () => {
 				);
 				expect(app.state.ticketWorkCycle.ticketState(identity)).toBe("running");
 			},
-			WIDTH,
-			HEIGHT,
-			propsOf(app),
+			{ width: WIDTH, height: HEIGHT, props: propsOf(app) },
 		);
 		app.state.close();
 	});
@@ -1097,9 +1069,7 @@ describe("the Live view against a running factory", () => {
 				expect(app.runner.commands()).toContain(READ_COMMAND("pane-9"));
 				expect(app.runner.commands().join("\n")).not.toContain("agent focus");
 			},
-			WIDTH,
-			HEIGHT,
-			propsOf(app),
+			{ width: WIDTH, height: HEIGHT, props: propsOf(app) },
 		);
 		app.state.close();
 	});
@@ -1209,9 +1179,7 @@ describe("the Live view against a running factory", () => {
 				expect(frame).not.toContain("Live: Persist source facts");
 				expect(app.state.ticketWorkCycle.lastCompletion(identity)?.decision).toBe("handed-off");
 			},
-			WIDTH,
-			HEIGHT,
-			propsOf(app),
+			{ width: WIDTH, height: HEIGHT, props: propsOf(app) },
 		);
 		app.state.close();
 	});
@@ -1280,9 +1248,7 @@ describe("the Live view against a running factory", () => {
 				expect(app.state.ticketWorkCycle.lastCompletion(identity)?.decision).toBe(null);
 				expect(app.state.handoff.handoffCount(identity)).toBe(1);
 			},
-			WIDTH,
-			HEIGHT,
-			propsOf(app),
+			{ width: WIDTH, height: HEIGHT, props: propsOf(app) },
 		);
 		app.state.close();
 	});
@@ -1368,9 +1334,7 @@ describe("the Live view against a running factory", () => {
 				);
 				expect(app.runner.commands()).toContain(READ_COMMAND("pane-9"));
 			},
-			WIDTH,
-			HEIGHT,
-			propsOf(app),
+			{ width: WIDTH, height: HEIGHT, props: propsOf(app) },
 		);
 		app.state.close();
 	});
@@ -1481,9 +1445,7 @@ describe("the Live view against a running factory", () => {
 				);
 				expect(frameText(frame)).toContain("Persist source facts");
 			},
-			WIDTH,
-			HEIGHT,
-			propsOf(app),
+			{ width: WIDTH, height: HEIGHT, props: propsOf(app) },
 		);
 		app.state.close();
 	});
@@ -1549,9 +1511,7 @@ describe("the Live view against a running factory", () => {
 				expect(app.state.ticketWorkCycle.lastCompletion(identity)?.decision).toBe("auto-closed");
 				expect(app.state.ticketWorkCycle.ticketState(identity)).toBe("open");
 			},
-			WIDTH,
-			HEIGHT,
-			propsOf(app),
+			{ width: WIDTH, height: HEIGHT, props: propsOf(app) },
 		);
 		app.state.close();
 	});

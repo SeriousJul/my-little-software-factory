@@ -277,61 +277,59 @@ export class WorkQueueModule implements WorkQueueAggregate {
 		/** True for the automatic add the top-up makes (ADR 0051). */
 		automatic?: boolean;
 	}): { ok: true } | { ok: false; reason: string } {
-		return this.enqueueEntry({
-			ticketIdentity: entry.ticketIdentity,
-			origin: entry.origin,
-			automatic: entry.automatic === true,
-			refusal: "cannot enqueue the handoff",
-			insert: (position) =>
-				this.db
-					.prepare(
-						"INSERT INTO work_queue(position, ticket_identity, route_from_identity, origin, choice_json, previous_message, enqueued_at, is_automatic) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-					)
-					.run(
-						position,
-						entry.ticketIdentity,
-						normalizeRouteFromIdentity(entry.ticketIdentity, entry.routeFromIdentity),
-						entry.origin,
-						JSON.stringify(entry.choice),
-						entry.previousMessage,
-						new Date(this.db.now()).toISOString(),
-						entry.automatic === true ? 1 : 0,
-					),
-		});
+		try {
+			return this.db.transaction(() =>
+				this.enqueueEntry({
+					ticketIdentity: entry.ticketIdentity,
+					origin: entry.origin,
+					automatic: entry.automatic === true,
+					insert: (position) =>
+						this.db
+							.prepare(
+								"INSERT INTO work_queue(position, ticket_identity, route_from_identity, origin, choice_json, previous_message, enqueued_at, is_automatic) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+							)
+							.run(
+								position,
+								entry.ticketIdentity,
+								normalizeRouteFromIdentity(entry.ticketIdentity, entry.routeFromIdentity),
+								entry.origin,
+								JSON.stringify(entry.choice),
+								entry.previousMessage,
+								new Date(this.db.now()).toISOString(),
+								entry.automatic === true ? 1 : 0,
+							),
+				}),
+			);
+		} catch (error) {
+			return {
+				ok: false,
+				reason: `cannot enqueue the handoff: ${error instanceof Error ? error.message : String(error)}`,
+			};
+		}
 	}
 	/**
-	 * The enqueue both the handoff entry and the plane action entry run: the
-	 * refusal for a ticket the queue already holds, the position the row
-	 * takes, and the entry's own insert. `refusal` is the words the failure
-	 * reports.
+	 * The enqueue body both the handoff entry and the plane action entry run:
+	 * the refusal for a ticket the queue already holds, the position the row
+	 * takes, and the entry's own insert. It runs inside the caller's
+	 * transaction (ADR 0095): the interface method owns the open.
 	 */
 	private enqueueEntry(entry: {
 		ticketIdentity: string;
 		origin: HandoffOrigin;
 		automatic: boolean;
-		refusal: string;
 		insert: (position: number) => void;
 	}): { ok: true } | { ok: false; reason: string } {
-		try {
-			return this.db.transaction(() => {
-				const existing = this.db
-					.prepare("SELECT 1 FROM work_queue WHERE ticket_identity = ?")
-					.get(entry.ticketIdentity);
-				if (existing !== null && existing !== undefined)
-					return {
-						ok: false,
-						reason: `ticket ${entry.ticketIdentity} already has a waiting queue item`,
-					};
-				const position = this.workQueuePosition(entry.automatic, entry.origin);
-				entry.insert(position);
-				return { ok: true };
-			});
-		} catch (error) {
+		const existing = this.db
+			.prepare("SELECT 1 FROM work_queue WHERE ticket_identity = ?")
+			.get(entry.ticketIdentity);
+		if (existing !== null && existing !== undefined)
 			return {
 				ok: false,
-				reason: `${entry.refusal}: ${error instanceof Error ? error.message : String(error)}`,
+				reason: `ticket ${entry.ticketIdentity} already has a waiting queue item`,
 			};
-		}
+		const position = this.workQueuePosition(entry.automatic, entry.origin);
+		entry.insert(position);
+		return { ok: true };
 	}
 	enqueuePlaneActionWork(entry: {
 		ticketIdentity: string;
@@ -343,26 +341,34 @@ export class WorkQueueModule implements WorkQueueAggregate {
 		/** True for the automatic add the top-up makes. */
 		automatic?: boolean;
 	}): { ok: true } | { ok: false; reason: string } {
-		return this.enqueueEntry({
-			ticketIdentity: entry.ticketIdentity,
-			origin: entry.origin,
-			automatic: entry.automatic === true,
-			refusal: "cannot enqueue the plane action",
-			insert: (position) =>
-				this.db
-					.prepare(
-						"INSERT INTO work_queue(position, ticket_identity, route_from_identity, origin, choice_json, previous_message, enqueued_at, is_automatic, action_task_type) VALUES (?, ?, ?, ?, NULL, '', ?, ?, ?)",
-					)
-					.run(
-						position,
-						entry.ticketIdentity,
-						normalizeRouteFromIdentity(entry.ticketIdentity, entry.routeFromIdentity),
-						entry.origin,
-						new Date(this.db.now()).toISOString(),
-						entry.automatic === true ? 1 : 0,
-						entry.taskType,
-					),
-		});
+		try {
+			return this.db.transaction(() =>
+				this.enqueueEntry({
+					ticketIdentity: entry.ticketIdentity,
+					origin: entry.origin,
+					automatic: entry.automatic === true,
+					insert: (position) =>
+						this.db
+							.prepare(
+								"INSERT INTO work_queue(position, ticket_identity, route_from_identity, origin, choice_json, previous_message, enqueued_at, is_automatic, action_task_type) VALUES (?, ?, ?, ?, NULL, '', ?, ?, ?)",
+							)
+							.run(
+								position,
+								entry.ticketIdentity,
+								normalizeRouteFromIdentity(entry.ticketIdentity, entry.routeFromIdentity),
+								entry.origin,
+								new Date(this.db.now()).toISOString(),
+								entry.automatic === true ? 1 : 0,
+								entry.taskType,
+							),
+				}),
+			);
+		} catch (error) {
+			return {
+				ok: false,
+				reason: `cannot enqueue the plane action: ${error instanceof Error ? error.message : String(error)}`,
+			};
+		}
 	}
 	removeWorkItem(ticketIdentity: string): boolean {
 		return this.db.transaction(() => {

@@ -159,11 +159,9 @@ function freshBranchNotStanding(result: CommandResult): boolean {
 export async function openDraftPullRequest(
 	runner: CommandRunner,
 	source: TicketSourceConfig,
-	repository: RepositoryRef,
-	branch: string,
-	title: string,
-	body: string,
+	fields: { repository: RepositoryRef; branch: string; title: string; body: string },
 ): Promise<{ number: number; url: string } | { fail: string }> {
+	const { repository, branch, title, body } = fields;
 	const auth = await sourceGhOptions(runner, source);
 	if ("fail" in auth) return auth;
 	const args = [

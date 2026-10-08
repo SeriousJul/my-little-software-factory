@@ -71,9 +71,9 @@ function issue(
 	number: number,
 	title: string,
 	repository: string,
-	labels: string[],
-	externalUpdatedAt = "2026-08-31T10:00:00Z",
+	fields: { labels: string[]; externalUpdatedAt?: string },
 ): FetchedTicket {
+	const { labels, externalUpdatedAt = "2026-08-31T10:00:00Z" } = fields;
 	return {
 		identity: `github:github.com:I_${number}`,
 		sourceKind: "github-issue",
@@ -96,14 +96,17 @@ function issue(
 /** The fixture's six tickets, one per fact an axis can read. */
 function tickets(): FetchedTicket[] {
 	return [
-		issue(1, "Webhook retry", FACTORY, ["ready-for-agent"]),
+		issue(1, "Webhook retry", FACTORY, { labels: ["ready-for-agent"] }),
 		// The Review-labeled ticket stands on both feeds, and its `triage`
 		// listing is the newer one, so the row's facts - and its Group on the
 		// `source` axis - come from `triage`.
-		issue(2, "Deploy gate", FACTORY, ["needs-review"], "2026-08-31T10:00:00Z"),
-		issue(3, "Legacy import", BILLING, ["hold"]),
-		issue(4, "Unlabeled work", BILLING, []),
-		issue(5, "Held turn", FACTORY, ["ready-for-agent"]),
+		issue(2, "Deploy gate", FACTORY, {
+			labels: ["needs-review"],
+			externalUpdatedAt: "2026-08-31T10:00:00Z",
+		}),
+		issue(3, "Legacy import", BILLING, { labels: ["hold"] }),
+		issue(4, "Unlabeled work", BILLING, { labels: [] }),
+		issue(5, "Held turn", FACTORY, { labels: ["ready-for-agent"] }),
 	];
 }
 
@@ -116,14 +119,17 @@ const ZETA = "acme/zeta";
  */
 function crowdFirst(extra: number): FetchedTicket[] {
 	const crowd = Array.from({ length: extra }, (_unused, index) =>
-		issue(100 + index, `Crowd ticket ${index + 1}`, FACTORY, ["ready-for-agent"]),
+		issue(100 + index, `Crowd ticket ${index + 1}`, FACTORY, { labels: ["ready-for-agent"] }),
 	);
 	return [
-		issue(1, "Webhook retry", FACTORY, ["ready-for-agent"]),
-		issue(2, "Deploy gate", FACTORY, ["needs-review"], "2026-08-31T10:00:00Z"),
-		issue(3, "Legacy import", ZETA, ["hold"]),
-		issue(4, "Unlabeled work", ZETA, []),
-		issue(5, "Held turn", FACTORY, ["ready-for-agent"]),
+		issue(1, "Webhook retry", FACTORY, { labels: ["ready-for-agent"] }),
+		issue(2, "Deploy gate", FACTORY, {
+			labels: ["needs-review"],
+			externalUpdatedAt: "2026-08-31T10:00:00Z",
+		}),
+		issue(3, "Legacy import", ZETA, { labels: ["hold"] }),
+		issue(4, "Unlabeled work", ZETA, { labels: [] }),
+		issue(5, "Held turn", FACTORY, { labels: ["ready-for-agent"] }),
 		...crowd,
 	];
 }
@@ -139,7 +145,12 @@ const success = (listed: FetchedTicket[]): FetchOutcome => ({
 
 /** The listing the second feed reports: only the Review ticket. */
 function triageListing(): FetchedTicket[] {
-	return [issue(2, "Deploy gate", FACTORY, ["needs-review"], "2026-09-02T09:00:00Z")];
+	return [
+		issue(2, "Deploy gate", FACTORY, {
+			labels: ["needs-review"],
+			externalUpdatedAt: "2026-09-02T09:00:00Z",
+		}),
+	];
 }
 
 /**
@@ -314,14 +325,16 @@ async function bootGrouped(
 				await awaitFrame(setup, (frame) => frame.includes("❯ Tickets"), "the ticket list");
 				await body(setup, { state: fixture.state, sources });
 			},
-			size[0],
-			size[1],
 			{
-				state: fixture.state,
-				config: groupConfig,
-				home,
-				runner: emptyAgentRunner(),
-				sources,
+				width: size[0],
+				height: size[1],
+				props: {
+					state: fixture.state,
+					config: groupConfig,
+					home,
+					runner: emptyAgentRunner(),
+					sources,
+				},
 			},
 		);
 	} finally {
@@ -1078,9 +1091,17 @@ describe("the Ticket section's Groups", () => {
 					"no tickets match the configured sources - grouped by repository",
 				);
 			},
-			160,
-			34,
-			{ state, config: groupConfig, home, runner: emptyAgentRunner(), sources: [issues, triage] },
+			{
+				width: 160,
+				height: 34,
+				props: {
+					state,
+					config: groupConfig,
+					home,
+					runner: emptyAgentRunner(),
+					sources: [issues, triage],
+				},
+			},
 		);
 	});
 
@@ -1100,14 +1121,16 @@ describe("the Ticket section's Groups", () => {
 				);
 				await press(setup, "space", "the fold", (f) => /▸ acme\/factory/.test(f));
 			},
-			WIDTH,
-			34,
 			{
-				state: first.state,
-				config: groupConfig,
-				home,
-				runner: emptyAgentRunner(),
-				sources: first.sources,
+				width: WIDTH,
+				height: 34,
+				props: {
+					state: first.state,
+					config: groupConfig,
+					home,
+					runner: emptyAgentRunner(),
+					sources: first.sources,
+				},
 			},
 		);
 		expect(first.state.grouping.groupingAxis("tickets")).toBe("repository");
@@ -1150,14 +1173,16 @@ describe("the Ticket section's Groups", () => {
 				// The view still moved: the headers stand for this run.
 				expect(headers(told)).toEqual(["▾ acme/billing 2", "▾ acme/factory 3"]);
 			},
-			WIDTH,
-			34,
 			{
-				state: fixture.state,
-				config: groupConfig,
-				home,
-				runner: emptyAgentRunner(),
-				sources: fixture.sources,
+				width: WIDTH,
+				height: 34,
+				props: {
+					state: fixture.state,
+					config: groupConfig,
+					home,
+					runner: emptyAgentRunner(),
+					sources: fixture.sources,
+				},
 			},
 		);
 	});
@@ -1176,12 +1201,14 @@ describe("the Ticket section's Groups", () => {
 				expect(grouped).toContain("▾ acme/portal");
 				expect(headers(grouped).length).toBeGreaterThan(1);
 			},
-			WIDTH,
-			40,
 			{
-				config: BASE_CONFIG,
-				runner: emptyAgentRunner(),
-				initialTickets: SAMPLE_TICKETS,
+				width: WIDTH,
+				height: 40,
+				props: {
+					config: BASE_CONFIG,
+					runner: emptyAgentRunner(),
+					initialTickets: SAMPLE_TICKETS,
+				},
 			},
 		);
 	});
@@ -1196,11 +1223,16 @@ describe("the Ticket section's Groups", () => {
 		state.sourceFact.initializeSources([ISSUES, TRIAGE]);
 		state.sourceFact.applyFetch(
 			ISSUES,
-			success([issue(1, "Webhook retry", FACTORY, ["ready-for-agent"])]),
+			success([issue(1, "Webhook retry", FACTORY, { labels: ["ready-for-agent"] })]),
 		);
 		state.sourceFact.applyFetch(
 			TRIAGE,
-			success([issue(2, "Deploy gate", FACTORY, ["needs-review"], "2026-09-02T09:00:00Z")]),
+			success([
+				issue(2, "Deploy gate", FACTORY, {
+					labels: ["needs-review"],
+					externalUpdatedAt: "2026-09-02T09:00:00Z",
+				}),
+			]),
 		);
 		const claim = state.handoff.claimHandoff(
 			"github:github.com:I_2",
@@ -1227,7 +1259,9 @@ describe("the Ticket section's Groups", () => {
 		const issues = new FakeSource("issues", "github-issues", success([]));
 		await withApp(
 			async (setup) => {
-				issues.settle(success([issue(1, "Webhook retry", FACTORY, ["ready-for-agent"])]));
+				issues.settle(
+					success([issue(1, "Webhook retry", FACTORY, { labels: ["ready-for-agent"] })]),
+				);
 				await awaitFrame(setup, (f) => f.includes("❯ Tickets"), "the ticket list");
 				await pressTab(setup, "the source axis", (f) =>
 					messageRowOf(f).includes("grouped by source"),
@@ -1238,14 +1272,16 @@ describe("the Ticket section's Groups", () => {
 				expect(headers(frame)).toEqual(["▾ issues 1", "▾ triage 1"]);
 				expect(listRows(frame).some((row) => row.includes("Deploy gate"))).toBe(true);
 			},
-			WIDTH,
-			34,
 			{
-				state,
-				config: { ...groupConfig, sources: [groupConfig.sources[0]] },
-				home,
-				runner: emptyAgentRunner(),
-				sources: [issues],
+				width: WIDTH,
+				height: 34,
+				props: {
+					state,
+					config: { ...groupConfig, sources: [groupConfig.sources[0]] },
+					home,
+					runner: emptyAgentRunner(),
+					sources: [issues],
+				},
 			},
 		);
 	});
@@ -1262,13 +1298,21 @@ describe("the Ticket section's Groups", () => {
 				// rows behind it (story 35).
 				await refreshWith(setup, fixture, [
 					[
-						issue(2, "Deploy gate", FACTORY, ["needs-review"], "2026-09-02T09:00:00Z"),
-						issue(5, "Held turn", FACTORY, ["ready-for-agent"]),
-						issue(1, "Webhook retry", BILLING, ["ready-for-agent"]),
-						issue(3, "Legacy import", BILLING, ["hold"]),
-						issue(4, "Unlabeled work", BILLING, []),
+						issue(2, "Deploy gate", FACTORY, {
+							labels: ["needs-review"],
+							externalUpdatedAt: "2026-09-02T09:00:00Z",
+						}),
+						issue(5, "Held turn", FACTORY, { labels: ["ready-for-agent"] }),
+						issue(1, "Webhook retry", BILLING, { labels: ["ready-for-agent"] }),
+						issue(3, "Legacy import", BILLING, { labels: ["hold"] }),
+						issue(4, "Unlabeled work", BILLING, { labels: [] }),
 					],
-					[issue(2, "Deploy gate", FACTORY, ["needs-review"], "2026-09-02T09:00:00Z")],
+					[
+						issue(2, "Deploy gate", FACTORY, {
+							labels: ["needs-review"],
+							externalUpdatedAt: "2026-09-02T09:00:00Z",
+						}),
+					],
 				]);
 				const moved = await awaitFrame(
 					setup,
@@ -1283,10 +1327,18 @@ describe("the Ticket section's Groups", () => {
 				// it: a stale fold costs nothing (story 64).
 				await refreshWith(setup, fixture, [
 					[
-						issue(2, "Deploy gate", FACTORY, ["needs-review"], "2026-09-02T09:00:00Z"),
-						issue(5, "Held turn", FACTORY, ["ready-for-agent"]),
+						issue(2, "Deploy gate", FACTORY, {
+							labels: ["needs-review"],
+							externalUpdatedAt: "2026-09-02T09:00:00Z",
+						}),
+						issue(5, "Held turn", FACTORY, { labels: ["ready-for-agent"] }),
 					],
-					[issue(2, "Deploy gate", FACTORY, ["needs-review"], "2026-09-02T09:00:00Z")],
+					[
+						issue(2, "Deploy gate", FACTORY, {
+							labels: ["needs-review"],
+							externalUpdatedAt: "2026-09-02T09:00:00Z",
+						}),
+					],
 				]);
 				await awaitFrame(setup, (f) => headers(f).length === 1, "the gone value");
 				expect(headers(setup.captureCharFrame())).toEqual(["▾ acme/factory 2"]);
@@ -1382,12 +1434,20 @@ describe("the Ticket section's Groups", () => {
 				);
 				await refreshWith(setup, fixture, [
 					[
-						issue(1, "Webhook retry", FACTORY, ["ready-for-agent"]),
-						issue(2, "Deploy gate", FACTORY, ["needs-review"], "2026-09-02T09:00:00Z"),
-						issue(4, "Unlabeled work", BILLING, []),
-						issue(5, "Held turn", FACTORY, ["ready-for-agent"]),
+						issue(1, "Webhook retry", FACTORY, { labels: ["ready-for-agent"] }),
+						issue(2, "Deploy gate", FACTORY, {
+							labels: ["needs-review"],
+							externalUpdatedAt: "2026-09-02T09:00:00Z",
+						}),
+						issue(4, "Unlabeled work", BILLING, { labels: [] }),
+						issue(5, "Held turn", FACTORY, { labels: ["ready-for-agent"] }),
 					],
-					[issue(2, "Deploy gate", FACTORY, ["needs-review"], "2026-09-02T09:00:00Z")],
+					[
+						issue(2, "Deploy gate", FACTORY, {
+							labels: ["needs-review"],
+							externalUpdatedAt: "2026-09-02T09:00:00Z",
+						}),
+					],
 				]);
 				const after = await awaitFrame(
 					setup,
@@ -1450,13 +1510,21 @@ describe("the Ticket section's Groups", () => {
 				// every attention fact the old order read all change at once.
 				await refreshWith(setup, fixture, [
 					[
-						issue(1, "Webhook retry", BILLING, ["ready-for-agent"]),
-						issue(2, "Deploy gate", FACTORY, ["needs-review"], "2026-09-02T09:00:00Z"),
-						issue(3, "Legacy import", BILLING, ["hold"]),
-						issue(4, "Unlabeled work", BILLING, []),
-						issue(5, "Held turn", FACTORY, ["ready-for-agent"]),
+						issue(1, "Webhook retry", BILLING, { labels: ["ready-for-agent"] }),
+						issue(2, "Deploy gate", FACTORY, {
+							labels: ["needs-review"],
+							externalUpdatedAt: "2026-09-02T09:00:00Z",
+						}),
+						issue(3, "Legacy import", BILLING, { labels: ["hold"] }),
+						issue(4, "Unlabeled work", BILLING, { labels: [] }),
+						issue(5, "Held turn", FACTORY, { labels: ["ready-for-agent"] }),
 					],
-					[issue(2, "Deploy gate", FACTORY, ["needs-review"], "2026-09-02T09:00:00Z")],
+					[
+						issue(2, "Deploy gate", FACTORY, {
+							labels: ["needs-review"],
+							externalUpdatedAt: "2026-09-02T09:00:00Z",
+						}),
+					],
 				]);
 				const frame = await awaitFrame(
 					setup,
@@ -1477,10 +1545,10 @@ describe("the Ticket section's Groups", () => {
 		// rule read by the tickets' facts puts it first, and the Workflow's own
 		// order of its positions puts it third (ADR 0071).
 		const drifted = [
-			issue(1, "Webhook retry", BILLING, ["hold"]),
-			issue(2, "Deploy gate", FACTORY, ["needs-review"]),
-			issue(3, "Legacy import", BILLING, ["ready-for-agent"]),
-			issue(4, "Unlabeled work", BILLING, []),
+			issue(1, "Webhook retry", BILLING, { labels: ["hold"] }),
+			issue(2, "Deploy gate", FACTORY, { labels: ["needs-review"] }),
+			issue(3, "Legacy import", BILLING, { labels: ["ready-for-agent"] }),
+			issue(4, "Unlabeled work", BILLING, { labels: [] }),
 		];
 		await bootGrouped(
 			async (setup, fixture) => {
@@ -1503,11 +1571,16 @@ describe("the Ticket section's Groups", () => {
 				// their slots.
 				await refreshWith(setup, fixture, [
 					[
-						issue(1, "Webhook retry", BILLING, ["ready-for-agent"]),
-						issue(2, "Deploy gate", FACTORY, ["needs-review"]),
-						issue(3, "Legacy import", BILLING, ["ready-for-agent"]),
+						issue(1, "Webhook retry", BILLING, { labels: ["ready-for-agent"] }),
+						issue(2, "Deploy gate", FACTORY, { labels: ["needs-review"] }),
+						issue(3, "Legacy import", BILLING, { labels: ["ready-for-agent"] }),
 					],
-					[issue(2, "Deploy gate", FACTORY, ["needs-review"], "2026-09-02T09:00:00Z")],
+					[
+						issue(2, "Deploy gate", FACTORY, {
+							labels: ["needs-review"],
+							externalUpdatedAt: "2026-09-02T09:00:00Z",
+						}),
+					],
 				]);
 				const moved = await awaitFrame(
 					setup,
@@ -1702,14 +1775,16 @@ describe("the operator's Group order (ADR 0071)", () => {
 					"acme/billing",
 				]);
 			},
-			WIDTH,
-			34,
 			{
-				state: first.state,
-				config: groupConfig,
-				home,
-				runner: emptyAgentRunner(),
-				sources: first.sources,
+				width: WIDTH,
+				height: 34,
+				props: {
+					state: first.state,
+					config: groupConfig,
+					home,
+					runner: emptyAgentRunner(),
+					sources: first.sources,
+				},
 			},
 		);
 		first.state.close();
@@ -1748,14 +1823,16 @@ describe("the operator's Group order (ADR 0071)", () => {
 				// The view still moved: the order stands for this run.
 				expect(groupOrderWords(told)).toEqual(["acme/factory", "acme/billing"]);
 			},
-			WIDTH,
-			34,
 			{
-				state: fixture.state,
-				config: groupConfig,
-				home,
-				runner: emptyAgentRunner(),
-				sources: fixture.sources,
+				width: WIDTH,
+				height: 34,
+				props: {
+					state: fixture.state,
+					config: groupConfig,
+					home,
+					runner: emptyAgentRunner(),
+					sources: fixture.sources,
+				},
 			},
 		);
 	});
@@ -1782,12 +1859,14 @@ describe("the operator's Group order (ADR 0071)", () => {
 				);
 				expect(groupOrderWords(setup.captureCharFrame())[0]).toBe(words[1]);
 			},
-			WIDTH,
-			40,
 			{
-				config: BASE_CONFIG,
-				runner: emptyAgentRunner(),
-				initialTickets: SAMPLE_TICKETS,
+				width: WIDTH,
+				height: 40,
+				props: {
+					config: BASE_CONFIG,
+					runner: emptyAgentRunner(),
+					initialTickets: SAMPLE_TICKETS,
+				},
 			},
 		);
 	});

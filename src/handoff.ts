@@ -168,11 +168,16 @@ export function baseChoice(
 	agentType: string,
 	environment: EnvironmentKind,
 	taskType: string,
-	model = "",
-	thinking = "",
-	contextWindow = "",
+	settings?: { model?: string; thinking?: string; contextWindow?: string },
 ): HandoffChoice {
-	return { agentType, environment, taskType, model, thinking, contextWindow };
+	return {
+		agentType,
+		environment,
+		taskType,
+		model: settings?.model ?? "",
+		thinking: settings?.thinking ?? "",
+		contextWindow: settings?.contextWindow ?? "",
+	};
 }
 
 /**
@@ -198,9 +203,7 @@ export function resolveHandoffChoice(
 		settings.agentType,
 		resolveEnvironment(config, pin?.environment),
 		taskType,
-		settings.model,
-		settings.thinking,
-		settings.contextWindow,
+		settings,
 	);
 }
 
@@ -636,15 +639,15 @@ export async function handOffTicket(
 	// fact it owns.
 	const taskType = check.taskType;
 	if (taskType === undefined) return { status: "failed", reason: "the handoff names no task type" };
-	const answer = await ticketPrompt(
+	const answer = await ticketPrompt({
 		taskType,
-		choice.taskType,
+		taskTypeName: choice.taskType,
 		ticket,
 		runner,
-		config.sources,
+		sources: config.sources,
 		previousMessage,
-		workflowScoreThreshold(config),
-	);
+		scoreThreshold: workflowScoreThreshold(config),
+	});
 	if ("fail" in answer) return { status: "failed", reason: answer.fail };
 	return runHandoffStart({
 		choice,
@@ -742,28 +745,29 @@ function ticketWorkspaceFact(
  * the handoff's own answers are: a pass carries the prompt to send and the open
  * to run, a failure its reason.
  */
-async function ticketPrompt(
-	taskType: FactoryConfig["taskTypes"][string],
-	taskTypeName: string,
-	ticket: Ticket,
-	runner: CommandRunner,
-	sources: readonly TicketSourceConfig[],
-	previousMessage?: string,
-	scoreThreshold?: number,
-): Promise<{ prompt: HandoffPrompt; pullRequestOpen?: PullRequestOpenPlan } | { fail: string }> {
+async function ticketPrompt(fields: {
+	taskType: FactoryConfig["taskTypes"][string];
+	taskTypeName: string;
+	ticket: Ticket;
+	runner: CommandRunner;
+	sources: readonly TicketSourceConfig[];
+	previousMessage?: string;
+	scoreThreshold?: number;
+}): Promise<{ prompt: HandoffPrompt; pullRequestOpen?: PullRequestOpenPlan } | { fail: string }> {
+	const { taskType, taskTypeName, ticket, runner, sources, previousMessage, scoreThreshold } =
+		fields;
 	const template = taskType.template;
 	if (template === undefined) return { fail: "the task type carries no prompt template" };
 	if (taskType.opensPullRequest !== true)
 		return {
-			prompt: await renderTicketPrompt(
+			prompt: await renderTicketPrompt({
 				template,
 				ticket,
 				runner,
 				sources,
 				previousMessage,
-				"",
 				scoreThreshold,
-			),
+			}),
 		};
 	const membership = newestMembership(ticket.memberships);
 	const source =
@@ -776,7 +780,15 @@ async function ticketPrompt(
 		};
 	return {
 		prompt: (url) =>
-			renderTicketPrompt(template, ticket, runner, sources, previousMessage, url, scoreThreshold),
+			renderTicketPrompt({
+				template,
+				ticket,
+				runner,
+				sources,
+				previousMessage,
+				pullRequestUrl: url,
+				scoreThreshold,
+			}),
 		pullRequestOpen: { ticket, branch: branchNameFor(ticket), source },
 	};
 }
@@ -851,14 +863,11 @@ export async function handOffConsultation({
 	if (!check.ok) return { status: "failed", reason: check.reason };
 	const name = consultation.agentName || consultationAgentName(consultation.id);
 	return runHandoffStart({
-		choice: baseChoice(
-			consultation.agentType,
-			consultation.environment,
-			"",
-			consultation.model,
-			consultation.thinking,
-			consultation.contextWindow,
-		),
+		choice: baseChoice(consultation.agentType, consultation.environment, "", {
+			model: consultation.model,
+			thinking: consultation.thinking,
+			contextWindow: consultation.contextWindow,
+		}),
 		config,
 		runner,
 		home,
@@ -1201,7 +1210,7 @@ async function runHandoffStart(request: HandoffStartRequest): Promise<HandoffOut
 	const progress: StartProgress = { agent: null };
 	let outcome: HandoffOutcome;
 	try {
-		outcome = await runStartSteps(request, check, ctx, residue, progress);
+		outcome = await runStartSteps({ request, check, ctx, residue, progress });
 	} catch (error) {
 		outcome = raisedDuringStart(error, ctx, progress);
 	}
@@ -1220,13 +1229,14 @@ async function runHandoffStart(request: HandoffStartRequest): Promise<HandoffOut
  * names, the Pull request open of a task type that opens one, the Agent start,
  * and the prompt.
  */
-async function runStartSteps(
-	request: HandoffStartRequest,
-	check: StartCheck & { ok: true },
-	ctx: HandoffContext,
-	residue: Residue,
-	progress: StartProgress,
-): Promise<HandoffOutcome> {
+async function runStartSteps(fields: {
+	request: HandoffStartRequest;
+	check: StartCheck & { ok: true };
+	ctx: HandoffContext;
+	residue: Residue;
+	progress: StartProgress;
+}): Promise<HandoffOutcome> {
+	const { request, check, ctx, residue, progress } = fields;
 	const environment = await buildEnvironment(request, ctx, residue);
 	if ("outcome" in environment) return environment.outcome;
 	// The step between the environment and the Agent is the Pull request open of
@@ -1243,14 +1253,14 @@ async function runStartSteps(
 	// created.
 	if (pre.branchHandedOver) residue.branch = null;
 	if ("fail" in pre) return failed(pre.fail, ctx);
-	return await startAgentAndPrompt(
-		check.agent,
-		settingArgs(check.agent, request.choice),
-		pre.text,
+	return await startAgentAndPrompt({
+		agent: check.agent,
+		args: settingArgs(check.agent, request.choice),
+		prompt: pre.text,
 		ctx,
-		{ ...environment.handles, previousTabId: request.previousTabId },
+		handles: { ...environment.handles, previousTabId: request.previousTabId },
 		progress,
-	);
+	});
 }
 
 /**
@@ -1641,7 +1651,7 @@ async function buildWorktreeEnvironment(
 		base.reference,
 		"--no-focus",
 	]);
-	return createdWorktreeAnswer(created, ctx, branch, true, residue);
+	return createdWorktreeAnswer({ created, ctx, branch, createdBranch: true, residue });
 }
 
 /**
@@ -1720,7 +1730,7 @@ async function reuseBranch(
 		branch,
 		"--no-focus",
 	]);
-	return createdWorktreeAnswer(created, ctx, branch, false, residue);
+	return createdWorktreeAnswer({ created, ctx, branch, createdBranch: false, residue });
 }
 
 /**
@@ -1728,13 +1738,14 @@ async function reuseBranch(
  * the tab that holds it. `createdBranch` says whether this start made the branch,
  * which is what the cleanup may delete.
  */
-function createdWorktreeAnswer(
-	created: CommandResult,
-	ctx: HandoffContext,
-	branch: string,
-	createdBranch: boolean,
-	residue: Residue,
-): EnvironmentAnswer {
+function createdWorktreeAnswer(fields: {
+	created: CommandResult;
+	ctx: HandoffContext;
+	branch: string;
+	createdBranch: boolean;
+	residue: Residue;
+}): EnvironmentAnswer {
+	const { created, ctx, branch, createdBranch, residue } = fields;
 	if (created.code !== 0) return { outcome: failedCommand(created, ctx) };
 	const handles = herdrHandles(created);
 	if (handles.workspaceId === null) {
@@ -2216,14 +2227,12 @@ async function runPullRequestOpen(
 		return { url: standing.url, number: standing.number, branchHandedOver: handedOver };
 	let opened: { number: number; url: string } | { fail: string };
 	try {
-		opened = await openDraftPullRequest(
-			ctx.runner,
-			plan.source,
-			plan.ticket.repositoryRef,
-			plan.branch,
-			plan.ticket.title,
-			pullRequestBodyFor(plan.ticket),
-		);
+		opened = await openDraftPullRequest(ctx.runner, plan.source, {
+			repository: plan.ticket.repositoryRef,
+			branch: plan.branch,
+			title: plan.ticket.title,
+			body: pullRequestBodyFor(plan.ticket),
+		});
 	} catch (error) {
 		return {
 			fail: `the pull request open could not open the draft pull request: ${errorMessage(error)}`,
@@ -2334,14 +2343,15 @@ async function closeTab(tabId: string, ctx: HandoffContext): Promise<boolean> {
  * residue, and the new tab is where the work continues. A close failure
  * does not fail the handoff: the agent is running either way.
  */
-async function startAgentAndPrompt(
-	agent: FactoryConfig["agents"][string],
-	args: string[],
-	prompt: string,
-	ctx: HandoffContext,
-	handles: AgentHandles,
-	progress: StartProgress,
-): Promise<HandoffOutcome> {
+async function startAgentAndPrompt(fields: {
+	agent: FactoryConfig["agents"][string];
+	args: string[];
+	prompt: string;
+	ctx: HandoffContext;
+	handles: AgentHandles;
+	progress: StartProgress;
+}): Promise<HandoffOutcome> {
+	const { agent, args, prompt, ctx, handles, progress } = fields;
 	const attempt = await startAgentUnderAvailableName(agent, args, handles.paneId, ctx);
 	if (attempt.name === null) {
 		return failedNameUnusable(attempt, ctx);
@@ -2932,10 +2942,9 @@ export function renderSettingArgs(template: string, value: string): string[] {
 export function renderPrompt(
 	template: string,
 	ticket: Ticket,
-	previousMessage = "",
-	reviewVerdict = "",
-	pullRequestUrl = "",
+	fills: { previousMessage?: string; reviewVerdict?: string; pullRequestUrl?: string } = {},
 ): string {
+	const { previousMessage = "", reviewVerdict = "", pullRequestUrl = "" } = fills;
 	const values: Record<string, string> = {
 		repository: ticket.repository,
 		title: ticket.title,
@@ -2998,22 +3007,27 @@ export function reviewVerdictFill(read: ReviewVerdictRead, scoreThreshold?: numb
  * the same read the score judgment runs at settle. A template without the
  * reference issues no read and renders the prompt as before.
  */
-async function renderTicketPrompt(
-	template: string,
-	ticket: Ticket,
-	runner: CommandRunner,
-	sources: readonly TicketSourceConfig[],
-	previousMessage = "",
-	pullRequestUrl = "",
-	scoreThreshold?: number,
-): Promise<string> {
+async function renderTicketPrompt(fields: {
+	template: string;
+	ticket: Ticket;
+	runner: CommandRunner;
+	sources: readonly TicketSourceConfig[];
+	previousMessage?: string;
+	pullRequestUrl?: string;
+	scoreThreshold?: number;
+}): Promise<string> {
+	const { template, ticket, runner, sources } = fields;
 	let reviewVerdict = "";
 	if (template.includes("{review-verdict}"))
 		reviewVerdict = reviewVerdictFill(
 			await readReviewVerdict(runner, sources, ticket),
-			scoreThreshold,
+			fields.scoreThreshold,
 		);
-	return renderPrompt(template, ticket, previousMessage, reviewVerdict, pullRequestUrl);
+	return renderPrompt(template, ticket, {
+		previousMessage: fields.previousMessage,
+		reviewVerdict,
+		pullRequestUrl: fields.pullRequestUrl,
+	});
 }
 
 /**

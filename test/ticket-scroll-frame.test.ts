@@ -81,7 +81,7 @@ async function wheelAt(
 ): Promise<void> {
 	const clock = spyOn(Date, "now").mockReturnValue(now);
 	try {
-		await mouseWheel(setup, 45, detailRow(3), direction);
+		await mouseWheel(setup, { x: 45, y: detailRow(3), direction });
 	} finally {
 		clock.mockRestore();
 	}
@@ -182,8 +182,7 @@ describe("native Ticket detail viewport", () => {
 				const endThumb = thumbRows(end);
 				expect(endThumb.at(-1)).toBeGreaterThan(thumb[0]);
 			},
-			SCROLL_WIDTH,
-			SCROLL_HEIGHT,
+			{ width: SCROLL_WIDTH, height: SCROLL_HEIGHT },
 		);
 	});
 
@@ -230,8 +229,7 @@ describe("native Ticket detail viewport", () => {
 					"a thumb drag toward the start",
 				);
 			},
-			SCROLL_WIDTH,
-			SCROLL_HEIGHT,
+			{ width: SCROLL_WIDTH, height: SCROLL_HEIGHT },
 		);
 	});
 
@@ -245,7 +243,7 @@ describe("native Ticket detail viewport", () => {
 			await withApp(
 				async (setup) => {
 					const before = setup.captureCharFrame();
-					await mouseWheel(setup, x, y, "down");
+					await mouseWheel(setup, { x: x, y: y, direction: "down" });
 					const moved = await awaitFrame(
 						setup,
 						(frame) => detailFocused(frame) && stillFrame(frame) !== stillFrame(before),
@@ -253,8 +251,7 @@ describe("native Ticket detail viewport", () => {
 					);
 					expect(markerRowOf(moved)).toBe(3);
 				},
-				SCROLL_WIDTH,
-				SCROLL_HEIGHT,
+				{ width: SCROLL_WIDTH, height: SCROLL_HEIGHT },
 			);
 		}
 	});
@@ -271,8 +268,7 @@ describe("native Ticket detail viewport", () => {
 				);
 				expect(markerRowOf(page)).toBe(3);
 			},
-			SCROLL_WIDTH,
-			SCROLL_HEIGHT,
+			{ width: SCROLL_WIDTH, height: SCROLL_HEIGHT },
 		);
 	});
 
@@ -311,8 +307,7 @@ describe("native Ticket detail viewport", () => {
 				setup.mockInput.pressKey("HOME");
 				expect(stillFrame(await settle(setup))).toBe(stillFrame(home));
 			},
-			SCROLL_WIDTH,
-			SCROLL_HEIGHT,
+			{ width: SCROLL_WIDTH, height: SCROLL_HEIGHT },
 		);
 	});
 
@@ -320,7 +315,7 @@ describe("native Ticket detail viewport", () => {
 		await withApp(
 			async (setup) => {
 				const top = setup.captureCharFrame();
-				await mouseWheel(setup, 4, paneRow(2), "up");
+				await mouseWheel(setup, { x: 4, y: paneRow(2), direction: "up" });
 				expect(stillFrame(await settle(setup))).toBe(stillFrame(top));
 
 				await pressArrow(
@@ -344,7 +339,7 @@ describe("native Ticket detail viewport", () => {
 					selectedRow(frame).includes("Ticket id"),
 				);
 				const bottom = setup.captureCharFrame();
-				await mouseWheel(setup, 4, paneRow(3), "down");
+				await mouseWheel(setup, { x: 4, y: paneRow(3), direction: "down" });
 				expect(stillFrame(await settle(setup))).toBe(stillFrame(bottom));
 				await press(setup, "home", "Home to select the first Ticket", (frame) =>
 					selectedRow(frame).includes("Retry polic"),
@@ -363,8 +358,7 @@ describe("native Ticket detail viewport", () => {
 					expect(selectedRow(selected)).toContain(ticket.title.slice(0, 8));
 				}
 			},
-			SCROLL_WIDTH,
-			SCROLL_HEIGHT,
+			{ width: SCROLL_WIDTH, height: SCROLL_HEIGHT },
 		);
 	});
 
@@ -385,9 +379,7 @@ describe("native Ticket detail viewport", () => {
 					"a slow base wheel step",
 				);
 			},
-			SCROLL_WIDTH,
-			SCROLL_HEIGHT,
-			{ config: LONG_SCROLL_CONFIG },
+			{ width: SCROLL_WIDTH, height: SCROLL_HEIGHT, props: { config: LONG_SCROLL_CONFIG } },
 		);
 
 		const capped = {
@@ -410,9 +402,7 @@ describe("native Ticket detail viewport", () => {
 					"the maximum-speed cap",
 				);
 			},
-			SCROLL_WIDTH,
-			SCROLL_HEIGHT,
-			{ config: capped },
+			{ width: SCROLL_WIDTH, height: SCROLL_HEIGHT, props: { config: capped } },
 		);
 
 		const reset = {
@@ -441,9 +431,7 @@ describe("native Ticket detail viewport", () => {
 					"the 150 ms reset step",
 				);
 			},
-			SCROLL_WIDTH,
-			SCROLL_HEIGHT,
-			{ config: reset },
+			{ width: SCROLL_WIDTH, height: SCROLL_HEIGHT, props: { config: reset } },
 		);
 		await withApp(
 			async (setup) => {
@@ -467,9 +455,7 @@ describe("native Ticket detail viewport", () => {
 					"the reversed base step",
 				);
 			},
-			SCROLL_WIDTH,
-			SCROLL_HEIGHT,
-			{ config: reset },
+			{ width: SCROLL_WIDTH, height: SCROLL_HEIGHT, props: { config: reset } },
 		);
 	});
 
@@ -506,9 +492,7 @@ describe("native Ticket detail viewport", () => {
 					"the precise first step away from the lower edge",
 				);
 			},
-			SCROLL_WIDTH,
-			SCROLL_HEIGHT,
-			{ config },
+			{ width: SCROLL_WIDTH, height: SCROLL_HEIGHT, props: { config } },
 		);
 	});
 
@@ -542,9 +526,11 @@ describe("native Ticket detail viewport", () => {
 						);
 					}
 				},
-				SCROLL_WIDTH,
-				SCROLL_HEIGHT,
-				{ config: linear, state, sources: [source] },
+				{
+					width: SCROLL_WIDTH,
+					height: SCROLL_HEIGHT,
+					props: { config: linear, state, sources: [source] },
+				},
 			);
 
 			await withApp(
@@ -558,7 +544,7 @@ describe("native Ticket detail viewport", () => {
 					setup.renderer.on(CliRenderEvents.FRAME, record);
 					try {
 						for (let event = 0; event < 10; event += 1) {
-							await mouseWheel(setup, 45, detailRow(3), "down");
+							await mouseWheel(setup, { x: 45, y: detailRow(3), direction: "down" });
 						}
 						const final = await awaitFrame(
 							setup,
@@ -581,9 +567,11 @@ describe("native Ticket detail viewport", () => {
 						expect(frame.slice(GUTTER_X, GUTTER_X + 1)).toBeDefined();
 					}
 				},
-				SCROLL_WIDTH,
-				SCROLL_HEIGHT,
-				{ config: linear, state, sources: [source] },
+				{
+					width: SCROLL_WIDTH,
+					height: SCROLL_HEIGHT,
+					props: { config: linear, state, sources: [source] },
+				},
 			);
 		} finally {
 			state.close();
@@ -616,9 +604,7 @@ describe("native Ticket detail viewport", () => {
 					);
 					expect(rowsOf(frame).at(-2)).not.toContain("manual");
 				},
-				73,
-				27,
-				{ state, sources: [] },
+				{ width: 73, height: 27, props: { state, sources: [] } },
 			);
 		} finally {
 			state.close();
@@ -641,8 +627,7 @@ describe("native Ticket detail viewport", () => {
 				);
 				expect(nextTicket).toContain("Fix pan drift in split");
 			},
-			SCROLL_WIDTH,
-			SCROLL_HEIGHT,
+			{ width: SCROLL_WIDTH, height: SCROLL_HEIGHT },
 		);
 
 		const state = openFactoryState(":memory:");
@@ -703,9 +688,11 @@ describe("native Ticket detail viewport", () => {
 					);
 					expect(clamped).toContain("Detail");
 				},
-				SCROLL_WIDTH,
-				SCROLL_HEIGHT,
-				{ config: sourceConfig, state, sources: [source] },
+				{
+					width: SCROLL_WIDTH,
+					height: SCROLL_HEIGHT,
+					props: { config: sourceConfig, state, sources: [source] },
+				},
 			);
 		} finally {
 			state.close();
@@ -765,9 +752,7 @@ describe("native Ticket detail viewport", () => {
 					"the normal width with the restored detail offset",
 				);
 			},
-			80,
-			SCROLL_HEIGHT,
-			{ initialTickets: OVERFLOW_TICKETS },
+			{ width: 80, height: SCROLL_HEIGHT, props: { initialTickets: OVERFLOW_TICKETS } },
 		);
 	});
 
@@ -889,9 +874,7 @@ describe("native Ticket detail viewport", () => {
 			async (setup) => {
 				await resizeBelowTheMinimumAndBack(setup, false);
 			},
-			80,
-			SCROLL_HEIGHT,
-			{ initialTickets: OVERFLOW_TICKETS },
+			{ width: 80, height: SCROLL_HEIGHT, props: { initialTickets: OVERFLOW_TICKETS } },
 		);
 	});
 
@@ -900,9 +883,7 @@ describe("native Ticket detail viewport", () => {
 			async (setup) => {
 				await resizeBelowTheMinimumAndBack(setup, true);
 			},
-			80,
-			SCROLL_HEIGHT,
-			{ initialTickets: OVERFLOW_TICKETS },
+			{ width: 80, height: SCROLL_HEIGHT, props: { initialTickets: OVERFLOW_TICKETS } },
 		);
 	});
 
@@ -933,9 +914,7 @@ describe("native Ticket detail viewport", () => {
 				expect(painted).not.toContain("Detail");
 				expect(painted).not.toMatch(/[▀▄█]/);
 			},
-			80,
-			SCROLL_HEIGHT,
-			{ initialTickets: OVERFLOW_TICKETS },
+			{ width: 80, height: SCROLL_HEIGHT, props: { initialTickets: OVERFLOW_TICKETS } },
 		);
 	});
 });

@@ -76,7 +76,7 @@ describe("RefreshCoordinator", () => {
 		const state = openFactoryState(":memory:");
 		const source = new ControlledSource("issues", 60_000);
 		const clock = new FakeClock();
-		const coordinator = new RefreshCoordinator([source], state, () => undefined, clock);
+		const coordinator = new RefreshCoordinator([source], state, () => undefined, { clock });
 		coordinator.start();
 		await turns();
 		expect(source.calls).toBe(1);
@@ -103,7 +103,7 @@ describe("RefreshCoordinator", () => {
 		const slow = new ControlledSource("slow", 60_000);
 		const fast = new ControlledSource("fast", 10_000);
 		const clock = new FakeClock();
-		const coordinator = new RefreshCoordinator([slow, fast], state, () => undefined, clock);
+		const coordinator = new RefreshCoordinator([slow, fast], state, () => undefined, { clock });
 		coordinator.start();
 		await turns();
 		expect(slow.calls).toBe(1);
@@ -146,7 +146,7 @@ describe("RefreshCoordinator", () => {
 		const state = openFactoryState(":memory:");
 		const source = new ControlledSource("issues", 60_000);
 		const clock = new FakeClock();
-		const coordinator = new RefreshCoordinator([source], state, () => undefined, clock);
+		const coordinator = new RefreshCoordinator([source], state, () => undefined, { clock });
 		coordinator.start();
 		await turns();
 		source.settle(RATE_LIMITED);
@@ -172,7 +172,7 @@ describe("RefreshCoordinator", () => {
 		const state = openFactoryState(":memory:");
 		const source = new ControlledSource("issues", 60_000);
 		const clock = new FakeClock();
-		const coordinator = new RefreshCoordinator([source], state, () => undefined, clock);
+		const coordinator = new RefreshCoordinator([source], state, () => undefined, { clock });
 		coordinator.start();
 		await turns();
 		expect(source.calls).toBe(1);
@@ -209,7 +209,7 @@ describe("RefreshCoordinator", () => {
 			fetch: () => Promise.reject(new Error("adapter defect")),
 		};
 		const clock = new FakeClock();
-		const coordinator = new RefreshCoordinator([broken], state, () => undefined, clock);
+		const coordinator = new RefreshCoordinator([broken], state, () => undefined, { clock });
 		coordinator.start();
 		await turns();
 		expect(state.sourceFact.sourceHealths()).toEqual([
@@ -237,7 +237,7 @@ describe("refreshAndWait", () => {
 		const state = openFactoryState(":memory:");
 		const source = new ControlledSource("pulls", 60_000);
 		const clock = new FakeClock();
-		const coordinator = new RefreshCoordinator([source], state, () => undefined, clock);
+		const coordinator = new RefreshCoordinator([source], state, () => undefined, { clock });
 		coordinator.start();
 		await turns();
 		expect(source.calls).toBe(1);
@@ -262,7 +262,7 @@ describe("refreshAndWait", () => {
 		const state = openFactoryState(":memory:");
 		const source = new ControlledSource("pulls", 60_000);
 		const clock = new FakeClock();
-		const coordinator = new RefreshCoordinator([source], state, () => undefined, clock);
+		const coordinator = new RefreshCoordinator([source], state, () => undefined, { clock });
 		coordinator.start();
 		await turns();
 		source.settle(EMPTY);
@@ -285,7 +285,9 @@ describe("refreshAndWait", () => {
 	test("an unknown or stopped source resolves without fetching", async () => {
 		const state = openFactoryState(":memory:");
 		const source = new ControlledSource("pulls", 60_000);
-		const coordinator = new RefreshCoordinator([source], state, () => undefined, new FakeClock());
+		const coordinator = new RefreshCoordinator([source], state, () => undefined, {
+			clock: new FakeClock(),
+		});
 		coordinator.start();
 		await turns();
 		source.settle(EMPTY);
@@ -312,7 +314,8 @@ describe("refreshAndWait", () => {
 			warn: (message: string) => lines.push(`warn ${message}`),
 			error: () => {},
 		};
-		const coordinator = new RefreshCoordinator([source], state, () => undefined, clock, {
+		const coordinator = new RefreshCoordinator([source], state, () => undefined, {
+			clock: clock,
 			log: logger,
 		});
 		coordinator.start();
@@ -344,7 +347,8 @@ describe("refreshAndWait", () => {
 			warn: (message: string) => lines.push(`warn ${message}`),
 			error: () => {},
 		};
-		const coordinator = new RefreshCoordinator([source], state, () => undefined, clock, {
+		const coordinator = new RefreshCoordinator([source], state, () => undefined, {
+			clock: clock,
 			log: logger,
 		});
 		coordinator.start();
@@ -370,7 +374,8 @@ describe("refreshAndWait", () => {
 			warn: (message: string) => lines.push(`warn ${message}`),
 			error: () => {},
 		};
-		const coordinator = new RefreshCoordinator([metered, bare], state, () => undefined, clock, {
+		const coordinator = new RefreshCoordinator([metered, bare], state, () => undefined, {
+			clock: clock,
 			log: logger,
 		});
 		coordinator.start();

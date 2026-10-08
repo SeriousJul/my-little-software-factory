@@ -129,11 +129,14 @@ export function detailContent(
 	/** The Ticket's facts, read by the fact module: the pane holds no rule of its own. */
 	fact: TicketRowFacts | undefined,
 	usableCols: number,
-	/** The Handoff limit the resolved config names, for the `Handoff attempts: n/limit` line. */
-	handoffLimit: number,
-	suggestedChoice?: HandoffChoice,
-	mergeAttempt: PlaneActionAttempt | null = null,
+	fields: {
+		/** The Handoff limit the resolved config names, for the `Handoff attempts: n/limit` line. */
+		handoffLimit: number;
+		suggestedChoice?: HandoffChoice;
+		mergeAttempt?: PlaneActionAttempt | null;
+	},
 ): DetailContent {
+	const { handoffLimit, suggestedChoice, mergeAttempt = null } = fields;
 	if (fact === undefined)
 		return {
 			lines: [{ text: "no ticket selected", fg: paint("subtext0") }],
@@ -422,7 +425,7 @@ export function detailLines(
 	handoffLimit: number,
 	suggestedChoice?: HandoffChoice,
 ): DetailLine[] {
-	return detailContent(fact, usableCols, handoffLimit, suggestedChoice).lines;
+	return detailContent(fact, usableCols, { handoffLimit, suggestedChoice }).lines;
 }
 
 /**
@@ -475,10 +478,9 @@ export function resetWheelBurst(burst: WheelBurst): void {
 export function wheelRows(
 	settings: ScrollConfig,
 	burst: WheelBurst,
-	direction: WheelDirection,
-	now: number,
-	canMove: boolean,
+	event: { direction: WheelDirection; now: number; canMove: boolean },
 ): number {
+	const { direction, now, canMove } = event;
 	if (!canMove) {
 		resetWheelBurst(burst);
 		return 0;
@@ -544,12 +546,15 @@ function detailTextCols(usableCols: number): number {
 export function detailScrollRoom(
 	fact: TicketRowFacts | undefined,
 	usableCols: number,
-	visibleRows: number,
-	handoffLimit: number,
-	mergeAttempt: PlaneActionAttempt | null = null,
+	fields: {
+		visibleRows: number;
+		handoffLimit: number;
+		mergeAttempt?: PlaneActionAttempt | null;
+	},
 ): number {
+	const { visibleRows, handoffLimit, mergeAttempt } = fields;
 	return maxScrollOf(
-		detailContent(fact, detailTextCols(usableCols), handoffLimit, undefined, mergeAttempt).rows,
+		detailContent(fact, detailTextCols(usableCols), { handoffLimit, mergeAttempt }).rows,
 		visibleRows,
 	);
 }
@@ -610,7 +615,11 @@ export const TicketDetail = forwardRef<TicketDetailHandle, TicketDetailProps>(fu
 	// The scroll box owns the gutter; see `detailTextCols`.
 	const textCols = detailTextCols(geometry.usableCols);
 	const reserveGutter = textCols < geometry.usableCols;
-	const content = detailContent(fact, textCols, handoffLimit, suggestedChoice, mergeAttempt);
+	const content = detailContent(fact, textCols, {
+		handoffLimit,
+		suggestedChoice,
+		mergeAttempt,
+	});
 	const lines = content.lines;
 	const hasOverflow = content.rows > geometry.visibleRows;
 	const scrollboxRef = useRef<ScrollBoxRenderable | null>(null);
@@ -778,7 +787,11 @@ export const TicketDetail = forwardRef<TicketDetailHandle, TicketDetailProps>(fu
 			if (box === null) return;
 			const maxScroll = Math.max(0, box.scrollHeight - box.viewport.height);
 			const canMove = direction === "up" ? box.scrollTop > 0 : box.scrollTop < maxScroll;
-			const rows = wheelRows(scrollRef.current, burstRef.current, direction, Date.now(), canMove);
+			const rows = wheelRows(scrollRef.current, burstRef.current, {
+				direction,
+				now: Date.now(),
+				canMove,
+			});
 			// OpenTUI supplies the event delta. Convert the desired whole-row
 			// step to its multiplier so terminals that report a larger delta
 			// stay sane.

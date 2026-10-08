@@ -51,12 +51,12 @@ describe("the move that trades two visible Groups", () => {
 	const present = ["acme/a", "acme/b", "acme/c"];
 
 	test("the move trades the two values and answers the full order to store", () => {
-		expect(movedGroupOrder([], present, byName, "acme/a", "acme/b")).toEqual([
+		expect(movedGroupOrder([], present, byName, { value: "acme/a", neighbor: "acme/b" })).toEqual([
 			"acme/b",
 			"acme/a",
 			"acme/c",
 		]);
-		expect(movedGroupOrder([], present, byName, "acme/c", "acme/b")).toEqual([
+		expect(movedGroupOrder([], present, byName, { value: "acme/c", neighbor: "acme/b" })).toEqual([
 			"acme/a",
 			"acme/c",
 			"acme/b",
@@ -65,27 +65,27 @@ describe("the move that trades two visible Groups", () => {
 
 	test("a first move stores the whole list's order, not only the two moved values", () => {
 		// The list holds a and c, b is hidden: the write carries c's slot.
-		expect(movedGroupOrder([], ["acme/a", "acme/c"], byName, "acme/a", "acme/c")).toEqual([
-			"acme/c",
-			"acme/a",
-		]);
+		expect(
+			movedGroupOrder([], ["acme/a", "acme/c"], byName, { value: "acme/a", neighbor: "acme/c" }),
+		).toEqual(["acme/c", "acme/a"]);
 	});
 
 	test("a value no row carries answers no move", () => {
-		expect(movedGroupOrder([], present, byName, "acme/ghost", "acme/b")).toBeNull();
-		expect(movedGroupOrder([], present, byName, "acme/a", "acme/ghost")).toBeNull();
+		expect(
+			movedGroupOrder([], present, byName, { value: "acme/ghost", neighbor: "acme/b" }),
+		).toBeNull();
+		expect(
+			movedGroupOrder([], present, byName, { value: "acme/a", neighbor: "acme/ghost" }),
+		).toBeNull();
 	});
 
 	test("a value the filter hides keeps its slot in the stored order", () => {
 		// The list holds a and c, and the operator ordered a above c while b
 		// was hidden. b's slot stands where the order wrote it.
-		const moved = movedGroupOrder(
-			["acme/a", "acme/b", "acme/c"],
-			["acme/a", "acme/c"],
-			byName,
-			"acme/c",
-			"acme/a",
-		);
+		const moved = movedGroupOrder(["acme/a", "acme/b", "acme/c"], ["acme/a", "acme/c"], byName, {
+			value: "acme/c",
+			neighbor: "acme/a",
+		});
 		expect(moved).toEqual(["acme/c", "acme/b", "acme/a"]);
 	});
 });

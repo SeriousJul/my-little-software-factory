@@ -129,9 +129,7 @@ describe("the repository select panel", () => {
 				expect(runner.calls.filter((call) => call.command === "gh")).toHaveLength(1);
 				void frame;
 			},
-			WIDTH,
-			HEIGHT,
-			{ config: BASE_CONFIG, runner },
+			{ width: WIDTH, height: HEIGHT, props: { config: BASE_CONFIG, runner } },
 		);
 	});
 
@@ -158,9 +156,7 @@ describe("the repository select panel", () => {
 					"the list to clear back",
 				);
 			},
-			WIDTH,
-			HEIGHT,
-			{ config: BASE_CONFIG, runner },
+			{ width: WIDTH, height: HEIGHT, props: { config: BASE_CONFIG, runner } },
 		);
 	});
 
@@ -176,9 +172,7 @@ describe("the repository select panel", () => {
 				const frame = await settle(setup);
 				expect(frame).not.toContain("Init a repository");
 			},
-			WIDTH,
-			HEIGHT,
-			{ config: BASE_CONFIG, runner },
+			{ width: WIDTH, height: HEIGHT, props: { config: BASE_CONFIG, runner } },
 		);
 	});
 
@@ -243,9 +237,7 @@ describe("the repository select panel", () => {
 					}
 				}
 			},
-			WIDTH,
-			HEIGHT,
-			{ config: BASE_CONFIG, runner },
+			{ width: WIDTH, height: HEIGHT, props: { config: BASE_CONFIG, runner } },
 		);
 	});
 
@@ -257,9 +249,7 @@ describe("the repository select panel", () => {
 				setup.mockInput.pressKey("o");
 				await awaitFrame(setup, (f) => f.includes("Not logged in"), "the failure line");
 			},
-			WIDTH,
-			HEIGHT,
-			{ config: BASE_CONFIG, runner },
+			{ width: WIDTH, height: HEIGHT, props: { config: BASE_CONFIG, runner } },
 		);
 	});
 
@@ -284,9 +274,7 @@ describe("the repository select panel", () => {
 					);
 					expect(messageRowOf(await settle(setup))).toContain("no local checkout at");
 				},
-				WIDTH,
-				HEIGHT,
-				{ config: BASE_CONFIG, runner, home, state },
+				{ width: WIDTH, height: HEIGHT, props: { config: BASE_CONFIG, runner, home, state } },
 			);
 		} finally {
 			cleanupStateFixtures();
@@ -347,9 +335,7 @@ describe("the repository select panel", () => {
 					(f) => f.includes("acme/repo-00") && !f.includes("acme/repo-39"),
 				);
 			},
-			WIDTH,
-			HEIGHT,
-			{ config: BASE_CONFIG, runner },
+			{ width: WIDTH, height: HEIGHT, props: { config: BASE_CONFIG, runner } },
 		);
 	});
 
@@ -444,9 +430,7 @@ describe("the repository select panel", () => {
 					);
 					expect(frame).toContain("run the act now");
 				},
-				WIDTH,
-				HEIGHT,
-				{ config: BASE_CONFIG, runner, home, state },
+				{ width: WIDTH, height: HEIGHT, props: { config: BASE_CONFIG, runner, home, state } },
 			);
 		} finally {
 			cleanupStateFixtures();
@@ -494,9 +478,7 @@ describe("the repository select panel", () => {
 					// The plan lands, and the panel stands where the open asked for.
 					await awaitFrame(setup, (f) => f.includes("Init acme/factory"), "the confirmation");
 				},
-				WIDTH,
-				HEIGHT,
-				{ config: BASE_CONFIG, runner, home, state },
+				{ width: WIDTH, height: HEIGHT, props: { config: BASE_CONFIG, runner, home, state } },
 			);
 		} finally {
 			cleanupStateFixtures();
@@ -517,9 +499,7 @@ describe("the repository select panel", () => {
 				setup.mockInput.pressTab();
 				await awaitFrame(setup, (f) => !f.includes("queued"), "the mark to lift");
 			},
-			WIDTH,
-			HEIGHT,
-			{ config: BASE_CONFIG, runner },
+			{ width: WIDTH, height: HEIGHT, props: { config: BASE_CONFIG, runner } },
 		);
 	});
 
@@ -586,9 +566,7 @@ describe("the repository select panel", () => {
 					);
 					expect(frame).not.toContain("Init acme");
 				},
-				WIDTH,
-				HEIGHT,
-				{ config: BASE_CONFIG, runner, home, state },
+				{ width: WIDTH, height: HEIGHT, props: { config: BASE_CONFIG, runner, home, state } },
 			);
 		} finally {
 			cleanupStateFixtures();
@@ -656,9 +634,7 @@ describe("the repository select panel", () => {
 					);
 					expect(settled).not.toContain("Init acme");
 				},
-				WIDTH,
-				HEIGHT,
-				{ config: BASE_CONFIG, runner, home, state },
+				{ width: WIDTH, height: HEIGHT, props: { config: BASE_CONFIG, runner, home, state } },
 			);
 		} finally {
 			cleanupStateFixtures();
@@ -749,9 +725,7 @@ describe("the repository select panel", () => {
 					// The queue stopped: the next row's panel never opens.
 					expect(frame).not.toContain("Init acme/billing");
 				},
-				WIDTH,
-				HEIGHT,
-				{ config, runner, home, state },
+				{ width: WIDTH, height: HEIGHT, props: { config, runner, home, state } },
 			);
 		} finally {
 			cleanupStateFixtures();

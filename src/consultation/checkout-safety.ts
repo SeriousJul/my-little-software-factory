@@ -105,13 +105,14 @@ export interface CheckoutConflict {
  * whether the checkout's confirmed set covers the reported identities. Dirty
  * state is a warning, not a block.
  */
-export async function inspectLiveCheckout(
-	checkout: string,
-	runner: CommandRunner,
-	tickets: readonly Ticket[],
-	consultations: readonly Consultation[],
-	agents: readonly HerdrAgent[],
-): Promise<LiveCheckoutSafety> {
+export async function inspectLiveCheckout(fields: {
+	checkout: string;
+	runner: CommandRunner;
+	tickets: readonly Ticket[];
+	consultations: readonly Consultation[];
+	agents: readonly HerdrAgent[];
+}): Promise<LiveCheckoutSafety> {
+	const { checkout, runner, tickets, consultations, agents } = fields;
 	if (!(await fileExists(checkout))) return { dirty: false, conflicts: [] };
 	const status = await runner.run("git", [
 		"-C",

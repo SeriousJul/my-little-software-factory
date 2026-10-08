@@ -574,10 +574,9 @@ export async function existingRepositoryLabels(
 export async function createMissingLabels(
 	runner: CommandRunner,
 	identity: string,
-	labels: readonly string[],
-	existing: readonly string[],
-	ghOptions?: CommandOptions,
+	fields: { labels: readonly string[]; existing: readonly string[]; ghOptions?: CommandOptions },
 ): Promise<RepositoryInitOutcome | LabelCreationResult> {
+	const { labels, existing, ghOptions } = fields;
 	const presentSet = new Set(existing);
 	const toCreate = labels.filter((label) => !presentSet.has(label));
 	const created: string[] = [];
@@ -633,13 +632,11 @@ export async function runRepositoryInit(
 	const labels = repositoryInitLabelSet(taskTypes, input.workflowStates);
 	const existing = await existingRepositoryLabels(runner, identity, input.ghOptions);
 	if (!Array.isArray(existing)) return existing;
-	const labelResult = await createMissingLabels(
-		runner,
-		identity,
+	const labelResult = await createMissingLabels(runner, identity, {
 		labels,
 		existing,
-		input.ghOptions,
-	);
+		ghOptions: input.ghOptions,
+	});
 	if (!("created" in labelResult)) return labelResult;
 
 	// Steps 2 and 3: the throwaway worktree on the fetched branch.

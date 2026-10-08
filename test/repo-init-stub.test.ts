@@ -591,9 +591,11 @@ host = "github.com"
 				expect(agents).toContain(AGENT_SKILLS_HEADING);
 				expect(agents).toContain("# Factory");
 			},
-			undefined,
-			undefined,
-			{ config, state, runner, sources, home: dir, configPath },
+			{
+				width: undefined,
+				height: undefined,
+				props: { config, state, runner, sources, home: dir, configPath },
+			},
 		);
 		state.close();
 	});
@@ -800,9 +802,11 @@ pull-request-facts = []
 				expect(listed).toContain("an open issue");
 				expect(listed).toContain("acme/beta");
 			},
-			undefined,
-			undefined,
-			{ config, state, runner, sources: [], home: dir, configPath },
+			{
+				width: undefined,
+				height: undefined,
+				props: { config, state, runner, sources: [], home: dir, configPath },
+			},
 		);
 		state.close();
 	});

@@ -155,9 +155,11 @@ describe("the in-app Key guide", () => {
 				await openGuide(setup, "F1");
 				await closeOverlay(setup, "Key guide", "the guide to close", "F1");
 			},
-			WIDTH,
-			HEIGHT,
-			{ config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				props: { config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+			},
 		);
 	});
 
@@ -203,9 +205,11 @@ describe("the in-app Key guide", () => {
 				// The panel survived the guide.
 				expect(setup.captureCharFrame()).toContain("Decision:");
 			},
-			WIDTH,
-			HEIGHT,
-			{ config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				props: { config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+			},
 		);
 
 		// Missing modal: an in-flight Ticket whose pane herdr no longer
@@ -266,14 +270,16 @@ describe("the in-app Key guide", () => {
 						// The panel survived the guide.
 						expect(setup.captureCharFrame()).toContain("Missing:");
 					},
-					WIDTH,
-					HEIGHT,
 					{
-						config: issuesConfig,
-						state,
-						sources: [source],
-						runner: missingRunner,
-						pollIntervalMs: 60_000,
+						width: WIDTH,
+						height: HEIGHT,
+						props: {
+							config: issuesConfig,
+							state,
+							sources: [source],
+							runner: missingRunner,
+							pollIntervalMs: 60_000,
+						},
 					},
 				);
 			} finally {
@@ -439,9 +445,11 @@ describe("the in-app Key guide", () => {
 					expect(detailCurrent.some((row) => row.startsWith("f History"))).toBe(false);
 					await closeOverlay(setup, "Key guide", "the guide to close");
 				},
-				WIDTH,
-				34,
-				{ config: zeroSeatConfig, state, sources: [source], runner },
+				{
+					width: WIDTH,
+					height: 34,
+					props: { config: zeroSeatConfig, state, sources: [source], runner },
+				},
 			);
 		} finally {
 			state.close();
@@ -621,9 +629,11 @@ describe("the in-app Key guide", () => {
 					"Esc/F2 Close",
 				]);
 			},
-			WIDTH,
-			HEIGHT,
-			{ config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				props: { config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+			},
 		);
 	});
 
@@ -712,9 +722,11 @@ describe("the in-app Key guide", () => {
 					for (const row of rowsOf(await settle(setup))) expect(widthOf(row)).toBe(width);
 					await closeOverlay(setup, "Key guide", "the guide closed");
 				},
-				width,
-				height,
-				{ config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+				{
+					width: width,
+					height: height,
+					props: { config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+				},
 			);
 		});
 	}
@@ -800,9 +812,11 @@ describe("the in-app Key guide", () => {
 				expect(bar).not.toContain("Hand off");
 				expect(bar).not.toContain("Decide");
 			},
-			WIDTH,
-			HEIGHT,
-			{ config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				props: { config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+			},
 		);
 	});
 
@@ -829,9 +843,11 @@ describe("the in-app Key guide", () => {
 					"Esc Cancel",
 				]);
 			},
-			WIDTH,
-			HEIGHT,
-			{ config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				props: { config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+			},
 		);
 	});
 
@@ -873,9 +889,11 @@ describe("the in-app Key guide", () => {
 					expect(row).not.toContain(" - ");
 				}
 			},
-			WIDTH,
-			HEIGHT,
-			{ config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				props: { config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+			},
 		);
 	});
 
@@ -925,9 +943,11 @@ describe("the in-app Key guide", () => {
 				const groupRow = rowOf("Global controls");
 				expect(spanColorAt(setup, groupRow, "Global controls")).toEqual(rgb(roleColor("text")));
 			},
-			WIDTH,
-			HEIGHT,
-			{ config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				props: { config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+			},
 		);
 	});
 
@@ -981,9 +1001,7 @@ describe("the in-app Key guide", () => {
 						"no Ticket is selected",
 					);
 				},
-				WIDTH,
-				HEIGHT,
-				{ config: issuesConfig, state, sources: [source] },
+				{ width: WIDTH, height: HEIGHT, props: { config: issuesConfig, state, sources: [source] } },
 			);
 		} finally {
 			state.close();
@@ -1013,9 +1031,11 @@ describe("the in-app Key guide", () => {
 				setup.mockInput.pressKey("j");
 				expect(await settle(setup, 500)).toContain("49-67/67");
 			},
-			WIDTH,
-			HEIGHT,
-			{ config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				props: { config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+			},
 		);
 	});
 
@@ -1082,9 +1102,11 @@ describe("the in-app Key guide", () => {
 				frame = await settle(setup);
 				expect(modelValueOf(frame)).toBe("ab");
 			},
-			WIDTH,
-			HEIGHT,
-			{ config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				props: { config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+			},
 		);
 	});
 
@@ -1098,9 +1120,11 @@ describe("the in-app Key guide", () => {
 				await openGuide(setup, "?");
 				await press(setup, "?", "the guide to close", (f) => !f.includes("Key guide"));
 			},
-			WIDTH,
-			HEIGHT,
-			{ config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				props: { config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+			},
 		);
 	});
 
@@ -1138,9 +1162,11 @@ describe("the in-app Key guide", () => {
 				expect(messageRowOf(frame).trim()).toBe("");
 				expect(actionBarRowOf(frame)).toBe(actionBarRowOf(before));
 			},
-			WIDTH,
-			HEIGHT,
-			{ config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				props: { config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+			},
 		);
 	});
 
@@ -1164,9 +1190,11 @@ describe("the in-app Key guide", () => {
 				const frame = await settle(setup);
 				expect(modelValueOf(frame)).toBe("?q");
 			},
-			WIDTH,
-			HEIGHT,
-			{ config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				props: { config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+			},
 		);
 	});
 
@@ -1204,9 +1232,11 @@ describe("the in-app Key guide", () => {
 				const closed = await settle(setup);
 				expect(messageRowOf(closed)).toContain("the daemon refused the request");
 			},
-			WIDTH,
-			HEIGHT,
-			{ config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS, home, configPath },
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				props: { config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS, home, configPath },
+			},
 		);
 	});
 
@@ -1224,9 +1254,11 @@ describe("the in-app Key guide", () => {
 				expect(bar).not.toContain("Help");
 				expect(bar).not.toContain("Message");
 			},
-			WIDTH,
-			HEIGHT,
-			{ config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				props: { config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+			},
 		);
 	});
 
@@ -1275,9 +1307,11 @@ describe("the in-app Key guide", () => {
 				expect(frame).toContain("Key guide - Ticket list");
 				expect(actionBarRowOf(frame)).toContain("2-20/67");
 			},
-			WIDTH,
-			HEIGHT,
-			{ config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				props: { config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+			},
 		);
 	});
 });

@@ -31,11 +31,14 @@ import {
  */
 async function stepUntilRowOnFixedSleeps(
 	screen: ScreenWalk,
-	match: string,
-	keyName: string,
-	maxSteps: number,
-	sleep: (ms: number) => Promise<void>,
+	fields: {
+		match: string;
+		keyName: string;
+		maxSteps: number;
+		sleep: (ms: number) => Promise<void>;
+	},
 ): Promise<void> {
+	const { match, keyName, maxSteps, sleep } = fields;
 	for (let steps = 0; steps < maxSteps; steps++) {
 		if (screen.cursorRow().text.includes(match)) return;
 		screen.key(keyName);
@@ -135,27 +138,44 @@ describe("the screenshot fixture's walk", () => {
 	it("the fixed-sleep walk goes red under a held repaint", async () => {
 		const screen = fakeScreen(ROWS, 0, HELD_REPAINT_MS);
 		await expect(
-			stepUntilRowOnFixedSleeps(screen, MATCH, "j", MAX_STEPS, screen.sleepFn),
+			stepUntilRowOnFixedSleeps(screen, {
+				match: MATCH,
+				keyName: "j",
+				maxSteps: MAX_STEPS,
+				sleep: screen.sleepFn,
+			}),
 		).rejects.toThrow(`never reached a row matching "${MATCH}"`);
 	});
 
 	it("goes green under the same held repaint, on the frame", async () => {
 		const screen = fakeScreen(ROWS, 0, HELD_REPAINT_MS);
-		await stepUntilRow(screen, MATCH, "j", MAX_STEPS, screen.sleepFn, screen.now);
+		await stepUntilRow(screen, MATCH, "j", {
+			maxSteps: MAX_STEPS,
+			sleepFn: screen.sleepFn,
+			now: screen.now,
+		});
 		expect(screen.cursorIndex()).toBe(3);
 		expect(screen.presses).toEqual(["j", "j", "j"]);
 	});
 
 	it("steps a fast screen one row per press", async () => {
 		const screen = fakeScreen(ROWS, 0, 0);
-		await stepUntilRow(screen, MATCH, "j", MAX_STEPS, screen.sleepFn, screen.now);
+		await stepUntilRow(screen, MATCH, "j", {
+			maxSteps: MAX_STEPS,
+			sleepFn: screen.sleepFn,
+			now: screen.now,
+		});
 		expect(screen.cursorIndex()).toBe(3);
 		expect(screen.presses).toEqual(["j", "j", "j"]);
 	});
 
 	it("presses no key when the cursor already holds the match", async () => {
 		const screen = fakeScreen(ROWS, 3, 0);
-		await stepUntilRow(screen, MATCH, "j", MAX_STEPS, screen.sleepFn, screen.now);
+		await stepUntilRow(screen, MATCH, "j", {
+			maxSteps: MAX_STEPS,
+			sleepFn: screen.sleepFn,
+			now: screen.now,
+		});
 		expect(screen.presses).toEqual([]);
 	});
 
@@ -171,7 +191,11 @@ describe("the screenshot fixture's walk", () => {
 			if (pressed % 2 === 1) return;
 			realKey(bytes);
 		};
-		await stepUntilRow(screen, MATCH, "j", MAX_STEPS, screen.sleepFn, screen.now);
+		await stepUntilRow(screen, MATCH, "j", {
+			maxSteps: MAX_STEPS,
+			sleepFn: screen.sleepFn,
+			now: screen.now,
+		});
 		expect(screen.cursorIndex()).toBe(3);
 		expect(pressed).toBe(6); // three dropped, three landed
 	});
@@ -179,7 +203,11 @@ describe("the screenshot fixture's walk", () => {
 	it("fails at the walk's deadline when the screen never repaints", async () => {
 		const screen = fakeScreen(ROWS, 0, Number.POSITIVE_INFINITY);
 		await expect(
-			stepUntilRow(screen, MATCH, "j", MAX_STEPS, screen.sleepFn, screen.now),
+			stepUntilRow(screen, MATCH, "j", {
+				maxSteps: MAX_STEPS,
+				sleepFn: screen.sleepFn,
+				now: screen.now,
+			}),
 		).rejects.toThrow(`never reached a row matching "${MATCH}"`);
 		// One press at the start, one re-press every press deadline up to the
 		// walk's deadline: the walk's budget in press-deadlines, the harness's
@@ -193,7 +221,11 @@ describe("the screenshot fixture's walk", () => {
 		// briefly undrawn, index -1. The walk has to press exactly the rows
 		// it counts - no press spent on a frame that showed no row.
 		const screen = fakeScreen(ROWS, 0, 0, 3);
-		await stepUntilRow(screen, MATCH, "j", MAX_STEPS, screen.sleepFn, screen.now);
+		await stepUntilRow(screen, MATCH, "j", {
+			maxSteps: MAX_STEPS,
+			sleepFn: screen.sleepFn,
+			now: screen.now,
+		});
 		expect(screen.cursorIndex()).toBe(3);
 		expect(screen.presses).toEqual(["j", "j", "j"]);
 	});
@@ -224,7 +256,11 @@ describe("the screenshot fixture's walk", () => {
 			if (pressed === 1) return;
 			realKey(bytes);
 		};
-		await stepUntilRow(screen, MATCH, "j", MAX_STEPS, screen.sleepFn, screen.now);
+		await stepUntilRow(screen, MATCH, "j", {
+			maxSteps: MAX_STEPS,
+			sleepFn: screen.sleepFn,
+			now: screen.now,
+		});
 		expect(screen.cursorIndex()).toBe(3);
 		// One press dropped in the boot window, three rows landed: the
 		// dropped press spent no row, so it spent no step of the three-step
@@ -239,7 +275,11 @@ describe("the screenshot fixture's walk", () => {
 		// stands still, the walk stands with it: the press count equals the
 		// rows the cursor crossed, never one ahead of the screen.
 		const screen = fakeScreen(ROWS, 0, 30);
-		await stepUntilRow(screen, MATCH, "j", MAX_STEPS, screen.sleepFn, screen.now);
+		await stepUntilRow(screen, MATCH, "j", {
+			maxSteps: MAX_STEPS,
+			sleepFn: screen.sleepFn,
+			now: screen.now,
+		});
 		expect(screen.cursorIndex()).toBe(3);
 		expect(screen.presses).toEqual(["j", "j", "j"]);
 	});

@@ -379,18 +379,18 @@ describe("renderPrompt", () => {
 	});
 
 	test("{previous-message} takes the last captured message, empty for open tickets", () => {
-		const prompt = renderPrompt("Prev: {previous-message}\n{description}", ticket, "settled");
+		const prompt = renderPrompt("Prev: {previous-message}\n{description}", ticket, {
+			previousMessage: "settled",
+		});
 		expect(prompt).toBe("Prev: settled\nAdd a retry policy.");
 		expect(renderPrompt("Prev: {previous-message}", ticket)).toBe("Prev: ");
 	});
 
 	test("{review-verdict} takes the verdict fill, empty for a plain render", () => {
-		const prompt = renderPrompt(
-			"Verdict: {review-verdict}\n{description}",
-			ticket,
-			"settled",
-			"Posted as a review at 2026-08-31T12:00:00Z:\n- **Score:** 85 / 100",
-		);
+		const prompt = renderPrompt("Verdict: {review-verdict}\n{description}", ticket, {
+			previousMessage: "settled",
+			reviewVerdict: "Posted as a review at 2026-08-31T12:00:00Z:\n- **Score:** 85 / 100",
+		});
 		expect(prompt).toBe(
 			"Verdict: Posted as a review at 2026-08-31T12:00:00Z:\n- **Score:** 85 / 100\nAdd a retry policy.",
 		);

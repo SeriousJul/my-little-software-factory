@@ -938,10 +938,12 @@ export function App({
 	const ticketRowsState: readonly ListedRow<TicketRowFacts>[] = ticketRows(
 		factRows(tickets),
 		groupingAxis,
-		groupFolds,
-		groupOrderList,
-		positionOrderOf(),
-		repositoryInitMarkerOf,
+		{
+			folds: groupFolds,
+			storedOrder: groupOrderList,
+			positionOrder: positionOrderOf(),
+			groupMarker: repositoryInitMarkerOf,
+		},
 	);
 	const ticketRowsRef = useRef<readonly ListedRow<TicketRowFacts>[]>(ticketRowsState);
 	ticketRowsRef.current = ticketRowsState;
@@ -1262,11 +1264,14 @@ export function App({
 	const detailMaxScroll = detailScrollRoom(
 		detailTicket === undefined ? undefined : factsFor(detailTicket),
 		detailGeometry.usableCols,
-		detailGeometry.visibleRows,
-		config.maxHandoffsPerTicket,
-		detailTicket === undefined || state === undefined
-			? null
-			: state.planeAction.latestPlaneActionAttempt(detailTicket.identity),
+		{
+			visibleRows: detailGeometry.visibleRows,
+			handoffLimit: config.maxHandoffsPerTicket,
+			mergeAttempt:
+				detailTicket === undefined || state === undefined
+					? null
+					: state.planeAction.latestPlaneActionAttempt(detailTicket.identity),
+		},
 	);
 	// The write of the render's own answer, for the next render and for the key
 	// handlers; the read above is the one this frame's pane paints with.
@@ -1347,17 +1352,17 @@ export function App({
 		interaction ? null : liveOutput,
 		interaction ? null : sessionEntries,
 	);
-	const consultationLines = consultationDetailLines(
-		selectedConsultation,
-		consultationTurns,
-		consultationSnapshots,
-		consultationWidth,
-		interaction ? null : liveOutput,
-		interaction ? null : sessionEntries,
+	const consultationLines = consultationDetailLines({
+		consultation: selectedConsultation,
+		turns: consultationTurns,
+		snapshots: consultationSnapshots,
+		width: consultationWidth,
+		liveOutput: interaction ? null : liveOutput,
+		sessionEntries: interaction ? null : sessionEntries,
 		replacementIds,
-		selectedConsultationAgentStatus,
+		agentStatus: selectedConsultationAgentStatus,
 		remainingResources,
-	);
+	});
 	const ansiLines =
 		interaction && liveOutput !== null
 			? renderAnsiScreen(liveOutput, consultationWidth)
@@ -1408,23 +1413,18 @@ export function App({
 		const currentIndex = selectedIndexRef.current;
 		const anchor = rowAnchorOf(ticketRowsRef.current, currentIndex);
 		const nextFacts = factRows(next.rows);
-		const nextRows = ticketRows(
-			nextFacts,
-			groupingAxisRef.current,
-			groupFoldsRef.current,
-			groupOrderListRef.current,
-			positionOrderOf(),
-		);
+		const nextRows = ticketRows(nextFacts, groupingAxisRef.current, {
+			folds: groupFoldsRef.current,
+			storedOrder: groupOrderListRef.current,
+			positionOrder: positionOrderOf(),
+		});
 		// The cursor keeps the ticket it held through a re-read and through a change
 		// of the operator's List filter; a ticket that left the row list lands the
 		// cursor on the row nearest the one it held (issue #159, user story 43).
-		const nextIndex = ticketRowIndexForAnchor(
-			nextRows,
-			anchor,
-			currentIndex,
-			nextFacts,
-			groupingAxisRef.current,
-		);
+		const nextIndex = ticketRowIndexForAnchor(nextRows, anchor, currentIndex, {
+			facts: nextFacts,
+			axis: groupingAxisRef.current,
+		});
 		listViewsRef.current = next;
 		ticketsRef.current = next.rows;
 		ticketRowsRef.current = nextRows;
@@ -3032,14 +3032,11 @@ export function App({
 		const choice =
 			stored === null
 				? choiceFor(ticket)
-				: baseChoice(
-						stored.agentType,
-						stored.environment,
-						stored.taskType,
-						stored.model,
-						stored.thinking,
-						stored.contextWindow,
-					);
+				: baseChoice(stored.agentType, stored.environment, stored.taskType, {
+						model: stored.model,
+						thinking: stored.thinking,
+						contextWindow: stored.contextWindow,
+					});
 		if (handoffDispatch === undefined) return;
 		void handoffDispatch
 			.dispatch({
@@ -4077,7 +4074,6 @@ export function App({
 				// loop act on it now instead of on the next poll.
 				observationRef.current?.tick();
 			},
-			undefined,
 			{
 				settled: (sourceName) => {
 					if (!manualRefreshPending.current.has(sourceName)) return;
@@ -4307,20 +4303,15 @@ export function App({
 		const anchor = rowAnchorOf(ticketRowsRef.current, selectedIndexRef.current);
 		const nextOrder = next === "none" ? [] : storedGroupOrderOf(next);
 		const nextFacts = factRows(ticketsRef.current);
-		const nextRows = ticketRows(
-			nextFacts,
-			next,
-			groupFoldsRef.current,
-			nextOrder,
-			positionOrderOf(),
-		);
-		const nextIndex = ticketRowIndexForAnchor(
-			nextRows,
-			anchor,
-			selectedIndexRef.current,
-			nextFacts,
-			next,
-		);
+		const nextRows = ticketRows(nextFacts, next, {
+			folds: groupFoldsRef.current,
+			storedOrder: nextOrder,
+			positionOrder: positionOrderOf(),
+		});
+		const nextIndex = ticketRowIndexForAnchor(nextRows, anchor, selectedIndexRef.current, {
+			facts: nextFacts,
+			axis: next,
+		});
 		groupingAxisRef.current = next;
 		setGroupingAxis(next);
 		groupOrderListRef.current = nextOrder;
@@ -4345,20 +4336,21 @@ export function App({
 		const nextFolds = toggleFold(groupFoldsRef.current, axis, value);
 		const anchor = rowAnchorOf(ticketRowsRef.current, selectedIndexRef.current);
 		const nextFacts = factRows(ticketsRef.current);
-		const nextRows = ticketRows(
-			nextFacts,
-			axis,
-			nextFolds,
-			groupOrderListRef.current,
-			positionOrderOf(),
-		);
+		const nextRows = ticketRows(nextFacts, axis, {
+			folds: nextFolds,
+			storedOrder: groupOrderListRef.current,
+			positionOrder: positionOrderOf(),
+		});
 		const headerIndex = nextRows.findIndex(
 			(row) => row.kind === "group" && row.group.value === value,
 		);
 		const nextIndex =
 			headerIndex >= 0
 				? headerIndex
-				: ticketRowIndexForAnchor(nextRows, anchor, selectedIndexRef.current, nextFacts, axis);
+				: ticketRowIndexForAnchor(nextRows, anchor, selectedIndexRef.current, {
+						facts: nextFacts,
+						axis,
+					});
 		groupFoldsRef.current = nextFolds;
 		setGroupFolds(nextFolds);
 		ticketRowsRef.current = nextRows;
@@ -4418,13 +4410,10 @@ export function App({
 			.filter((r) => r.kind === "group")
 			.map((r) => (r.kind === "group" ? r.group.value : ""));
 		const compare = ticketGroupCompare(axis, positionOrderOf());
-		const moved = movedGroupOrder(
-			groupOrderListRef.current,
-			present,
-			compare,
+		const moved = movedGroupOrder(groupOrderListRef.current, present, compare, {
 			value,
-			neighborRow.group.value,
-		);
+			neighbor: neighborRow.group.value,
+		});
 		if (moved === null) return;
 		const writeFailure =
 			state === undefined
@@ -4442,13 +4431,11 @@ export function App({
 				...groupOrdersForRunRef.current,
 				[axis]: [...moved],
 			};
-		const nextRows = ticketRows(
-			factRows(ticketsRef.current),
-			axis,
-			groupFoldsRef.current,
-			moved,
-			positionOrderOf(),
-		);
+		const nextRows = ticketRows(factRows(ticketsRef.current), axis, {
+			folds: groupFoldsRef.current,
+			storedOrder: moved,
+			positionOrder: positionOrderOf(),
+		});
 		const headerIndex = nextRows.findIndex((r) => r.kind === "group" && r.group.value === value);
 		groupOrderListRef.current = [...moved];
 		setGroupOrderList([...moved]);

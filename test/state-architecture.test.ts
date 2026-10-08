@@ -672,9 +672,9 @@ function methodReaches(
 	key: string,
 	method: string,
 	read: (file: string) => string,
-	seen = new Set<string>(),
-	unresolved: Set<string> = new Set<string>(),
+	fields: { seen?: Set<string>; unresolved?: Set<string> } = {},
 ): Array<{ id: string; body: string }> {
+	const { seen = new Set<string>(), unresolved = new Set<string>() } = fields;
 	const shape = shapeByKey().get(key);
 	const id = `${key}.${method}`;
 	if (shape === undefined) {
@@ -694,7 +694,9 @@ function methodReaches(
 	}
 	const reached: Array<{ id: string; body: string }> = [{ id, body }];
 	for (const call of callsIn(body))
-		reached.push(...methodReaches(call.key ?? key, call.method, read, seen, unresolved));
+		reached.push(
+			...methodReaches(call.key ?? key, call.method, read, { seen: seen, unresolved: unresolved }),
+		);
 	return reached;
 }
 
@@ -740,13 +742,10 @@ function transactionOffenders(
 			/\bgraph\(\)\.([A-Za-z_$][\w$]*)\.([A-Za-z_$][\w$]*)\s*\(/gu,
 		)) {
 			acrossCovered.add(`${match[1]}.${match[2]}`);
-			for (const reached of methodReaches(
-				match[1],
-				match[2],
-				read,
-				new Set<string>(),
-				acrossUnresolved,
-			)) {
+			for (const reached of methodReaches(match[1], match[2], read, {
+				seen: new Set<string>(),
+				unresolved: acrossUnresolved,
+			})) {
 				acrossResolved.add(reached.id);
 				if (!/\btransaction\s*\(/u.test(reached.body)) continue;
 				acrossOffenders.push(
@@ -758,13 +757,10 @@ function transactionOffenders(
 		// inside whoever opened the write (issue #202, ADR 0095).
 		for (const method of [...shape.internalMethods, ...shape.privateMethods]) {
 			publishedCovered.add(`${shape.key}.${method}`);
-			for (const reached of methodReaches(
-				shape.key,
-				method,
-				read,
-				new Set<string>(),
-				publishedUnresolved,
-			)) {
+			for (const reached of methodReaches(shape.key, method, read, {
+				seen: new Set<string>(),
+				unresolved: publishedUnresolved,
+			})) {
 				publishedResolved.add(reached.id);
 				if (!/\btransaction\s*\(/u.test(reached.body)) continue;
 				publishedOffenders.push(

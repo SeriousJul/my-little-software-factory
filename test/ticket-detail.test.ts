@@ -124,22 +124,34 @@ describe("Ticket detail task profile", () => {
 describe("Ticket detail wheel acceleration", () => {
 	test("starts precisely, accelerates during a burst, and caps speed", () => {
 		const burst = newWheelBurst();
-		expect(wheelRows(settings, burst, "down", 0, true)).toBe(1);
-		expect(wheelRows(settings, burst, "down", 50, true)).toBeGreaterThan(1);
+		expect(wheelRows(settings, burst, { direction: "down", now: 0, canMove: true })).toBe(1);
+		expect(
+			wheelRows(settings, burst, { direction: "down", now: 50, canMove: true }),
+		).toBeGreaterThan(1);
 		for (let now = 55; now < 100; now += 5) {
-			wheelRows(settings, burst, "down", now, true);
+			wheelRows(settings, burst, { direction: "down", now: now, canMove: true });
 		}
-		expect(wheelRows(settings, burst, "down", 105, true)).toBeLessThanOrEqual(6);
+		expect(
+			wheelRows(settings, burst, { direction: "down", now: 105, canMove: true }),
+		).toBeLessThanOrEqual(6);
 	});
 
 	test("resets after a pause, reversal, or blocked movement", () => {
 		const burst = newWheelBurst();
-		expect(wheelRows(settings, burst, "down", 0, true)).toBe(1);
-		expect(wheelRows(settings, burst, "down", 50, true)).toBeGreaterThan(1);
-		expect(wheelRows(settings, burst, "down", 50 + WHEEL_ACCELERATION_PAUSE_MS + 1, true)).toBe(1);
-		expect(wheelRows(settings, burst, "up", 250, true)).toBe(1);
-		expect(wheelRows(settings, burst, "up", 260, false)).toBe(0);
-		expect(wheelRows(settings, burst, "up", 270, true)).toBe(1);
+		expect(wheelRows(settings, burst, { direction: "down", now: 0, canMove: true })).toBe(1);
+		expect(
+			wheelRows(settings, burst, { direction: "down", now: 50, canMove: true }),
+		).toBeGreaterThan(1);
+		expect(
+			wheelRows(settings, burst, {
+				direction: "down",
+				now: 50 + WHEEL_ACCELERATION_PAUSE_MS + 1,
+				canMove: true,
+			}),
+		).toBe(1);
+		expect(wheelRows(settings, burst, { direction: "up", now: 250, canMove: true })).toBe(1);
+		expect(wheelRows(settings, burst, { direction: "up", now: 260, canMove: false })).toBe(0);
+		expect(wheelRows(settings, burst, { direction: "up", now: 270, canMove: true })).toBe(1);
 	});
 
 	test("keeps wheel movement linear when either Config limit disables acceleration", () => {
@@ -148,9 +160,9 @@ describe("Ticket detail wheel acceleration", () => {
 			{ speed: 3, acceleration: 4, maximumSpeed: 3 },
 		] satisfies ScrollConfig[]) {
 			const burst = newWheelBurst();
-			expect(wheelRows(linear, burst, "down", 0, true)).toBe(3);
-			expect(wheelRows(linear, burst, "down", 1, true)).toBe(3);
-			expect(wheelRows(linear, burst, "down", 2, true)).toBe(3);
+			expect(wheelRows(linear, burst, { direction: "down", now: 0, canMove: true })).toBe(3);
+			expect(wheelRows(linear, burst, { direction: "down", now: 1, canMove: true })).toBe(3);
+			expect(wheelRows(linear, burst, { direction: "down", now: 2, canMove: true })).toBe(3);
 		}
 	});
 });

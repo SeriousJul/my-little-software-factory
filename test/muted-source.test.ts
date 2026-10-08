@@ -256,9 +256,7 @@ describe("the mute key", () => {
 					);
 					expect(headerRow(rowsBack)).toContain("open: 2");
 				},
-				WIDTH,
-				HEIGHT,
-				props,
+				{ width: WIDTH, height: HEIGHT, props: props },
 			);
 		} finally {
 			state.close();
@@ -312,9 +310,7 @@ describe("the mute key", () => {
 					expect(actionBarRowOf(detailed)).toContain("u Un-mute issues");
 					expect(listRowOf(ledger, FIRST_LEAD)).toBeGreaterThanOrEqual(0);
 				},
-				wide,
-				HEIGHT,
-				props,
+				{ width: wide, height: HEIGHT, props: props },
 			);
 		} finally {
 			state.close();
@@ -361,9 +357,7 @@ describe("the mute key", () => {
 					);
 					expect(headerRow(active)).toContain("muted: 2");
 				},
-				WIDTH,
-				HEIGHT,
-				props,
+				{ width: WIDTH, height: HEIGHT, props: props },
 			);
 		} finally {
 			state.close();
@@ -424,9 +418,11 @@ describe("the mute key", () => {
 						"source issues is not muted: its rows come back from the list, and the machine may start them",
 					);
 				},
-				WIDTH,
-				HEIGHT,
-				{ config: fixtureConfig(), state, sources: [src], runner, pollIntervalMs: 60_000 },
+				{
+					width: WIDTH,
+					height: HEIGHT,
+					props: { config: fixtureConfig(), state, sources: [src], runner, pollIntervalMs: 60_000 },
+				},
 			);
 		} finally {
 			state.close();
@@ -470,14 +466,16 @@ describe("the mute key", () => {
 					expect(state.ticketWorkCycle.ticketState(SECOND)).toBe("open");
 					expect(state.workQueue.items()).toEqual([]);
 				},
-				WIDTH,
-				HEIGHT,
 				{
-					config: fixtureConfig({ maxParallelAgents: 1 }),
-					state,
-					sources: [src],
-					runner,
-					pollIntervalMs: 60_000,
+					width: WIDTH,
+					height: HEIGHT,
+					props: {
+						config: fixtureConfig({ maxParallelAgents: 1 }),
+						state,
+						sources: [src],
+						runner,
+						pollIntervalMs: 60_000,
+					},
 				},
 			);
 		} finally {
@@ -529,9 +527,7 @@ describe("the mute key", () => {
 					);
 					expect(headerRow(rowsBack)).toContain("open: 2");
 				},
-				WIDTH,
-				HEIGHT,
-				props,
+				{ width: WIDTH, height: HEIGHT, props: props },
 			);
 		} finally {
 			state.close();
@@ -562,9 +558,7 @@ describe("the mute key", () => {
 					);
 					expect(headerRow(ledger)).toContain("muted: 2");
 				},
-				WIDTH,
-				HEIGHT,
-				props,
+				{ width: WIDTH, height: HEIGHT, props: props },
 			);
 		} finally {
 			state.close();
@@ -595,9 +589,7 @@ describe("the mute key", () => {
 					expect(detail).toContain("no automatic start, and no row while the Ticket rests");
 					expect(detail).toContain("press u to take the mute back");
 				},
-				WIDTH,
-				HEIGHT,
-				props,
+				{ width: WIDTH, height: HEIGHT, props: props },
 			);
 		} finally {
 			state.close();
@@ -632,13 +624,15 @@ test("the no-state shell refuses u with the missing fact", async () => {
 			expect(frameText(refused)).toContain(firstTitle.slice(0, 9));
 			expect(refused).not.toContain("muted:");
 		},
-		WIDTH,
-		HEIGHT,
 		{
-			config: fixtureConfig(),
-			runner: emptyAgentRunner(),
-			initialTickets: projection,
-			pollIntervalMs: 60_000,
+			width: WIDTH,
+			height: HEIGHT,
+			props: {
+				config: fixtureConfig(),
+				runner: emptyAgentRunner(),
+				initialTickets: projection,
+				pollIntervalMs: 60_000,
+			},
 		},
 	);
 });

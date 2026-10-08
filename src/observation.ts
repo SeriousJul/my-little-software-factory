@@ -1317,10 +1317,12 @@ export class ObservationCoordinator {
 				consultation.id,
 				match.sequence ?? null,
 				output,
-				status,
-				new Date(this.now()).toISOString(),
-				endCause,
-				endDetail,
+				{
+					settledStatus: status,
+					capturedAt: new Date(this.now()).toISOString(),
+					cause: endCause,
+					detail: endDetail,
+				},
 			);
 			if (!settled) continue;
 			changed = true;
@@ -2061,14 +2063,11 @@ export class ObservationCoordinator {
 					// The same choices the previous handoff ran with: the
 					// operator's restart keeps the model, thinking level, and
 					// context window, and the auto one matches it.
-					choice: baseChoice(
-						ticket.agentType,
-						ticket.environment,
-						ticket.taskType,
-						ticket.model,
-						ticket.thinking,
-						ticket.contextWindow,
-					),
+					choice: baseChoice(ticket.agentType, ticket.environment, ticket.taskType, {
+						model: ticket.model,
+						thinking: ticket.thinking,
+						contextWindow: ticket.contextWindow,
+					}),
 					previousMessage: this.promptPreviousMessage(previous),
 				},
 				`work queue top-up: restarting ${this.ticketName(ticket.ticketIdentity)}`,

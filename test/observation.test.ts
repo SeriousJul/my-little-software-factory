@@ -155,11 +155,9 @@ function reader(
 
 function agent(
 	paneId: string,
-	status = "working",
-	sessionId = "",
-	stableSessionId?: string,
-	name?: string,
+	fields: { status?: string; sessionId?: string; stableSessionId?: string; name?: string } = {},
 ): HerdrAgent {
+	const { status = "working", sessionId = "", stableSessionId, name } = fields;
 	return {
 		paneId,
 		tabId: "tab-1",
@@ -454,11 +452,14 @@ function settleFor(
 function settleForCause(
 	state: FactoryState,
 	identity: string,
-	taskType: string,
-	cause: TurnEndCause,
-	detail = "",
-	transition: TransitionOutcome | null = null,
+	fields: {
+		taskType: string;
+		cause: TurnEndCause;
+		detail?: string;
+		transition?: TransitionOutcome | null;
+	},
 ): string {
+	const { taskType, cause, detail = "", transition = null } = fields;
 	const attempt = handOut(state, identity, taskType);
 	state.ticketWorkCycle.settleTurn({
 		ticketIdentity: identity,
@@ -769,7 +770,9 @@ describe("HerdrAgentReader.listAgents", () => {
 
 describe("the observation cycle", () => {
 	test("marks a working agent's ticket running and settles a done one into awaiting", async () => {
-		const { state, coordinator } = rig({ agents: [agent("pane-implement", "working")] });
+		const { state, coordinator } = rig({
+			agents: [agent("pane-implement", { status: "working" })],
+		});
 		handOut(state, "github:github.com:I_5");
 		await coordinator.tick();
 		expect(state.ticketWorkCycle.ticketsByState(["running"])).toEqual([
@@ -777,7 +780,7 @@ describe("the observation cycle", () => {
 		]);
 		state.close();
 
-		const done = rig({ agents: [agent("pane-implement", "done")] });
+		const done = rig({ agents: [agent("pane-implement", { status: "done" })] });
 		handOut(done.state, "github:github.com:I_5");
 		done.advance(30_001);
 		await done.coordinator.tick();
@@ -803,7 +806,7 @@ describe("the observation cycle", () => {
 			{ kind: "text", text: "Done. The tests pass." },
 		];
 		const { state, coordinator, advance } = rig({
-			agents: [agent("pane-implement", "done", "/tmp/session.jsonl")],
+			agents: [agent("pane-implement", { status: "done", sessionId: "/tmp/session.jsonl" })],
 			turnLogs: async (kind, sessionId) => {
 				calls.push({ kind, sessionId });
 				return { kind: "ended", turnEnd: { log: entries, cause: "completed", detail: "" } };
@@ -834,7 +837,7 @@ describe("the observation cycle", () => {
 
 	test("settle falls back to the pane capture when the session log is missing", async () => {
 		const { state, coordinator, advance } = rig({
-			agents: [agent("pane-implement", "done", "/tmp/session.jsonl")],
+			agents: [agent("pane-implement", { status: "done", sessionId: "/tmp/session.jsonl" })],
 			turnLogs: async () => ({ kind: "unavailable" }),
 		});
 		handOut(state, "github:github.com:I_5");
@@ -857,7 +860,7 @@ describe("the observation cycle", () => {
 	test("an agent herdr gives no session for falls back without asking a reader", async () => {
 		let asked = false;
 		const { state, coordinator, advance } = rig({
-			agents: [agent("pane-implement", "done")],
+			agents: [agent("pane-implement", { status: "done" })],
 			turnLogs: async () => {
 				asked = true;
 				return {
@@ -876,7 +879,9 @@ describe("the observation cycle", () => {
 	});
 
 	test("an idle agent settles too: the turn ended, even without an explicit done", async () => {
-		const { state, coordinator, advance } = rig({ agents: [agent("pane-implement", "idle")] });
+		const { state, coordinator, advance } = rig({
+			agents: [agent("pane-implement", { status: "idle" })],
+		});
 		handOut(state, "github:github.com:I_5");
 		advance(30_001);
 		await coordinator.tick();
@@ -888,7 +893,7 @@ describe("the observation cycle", () => {
 
 	test("an idle agent in the startup window does not settle: the handoff is still booting", async () => {
 		const { state, coordinator, advance, statuses } = rig({
-			agents: [agent("pane-implement", "idle")],
+			agents: [agent("pane-implement", { status: "idle" })],
 		});
 		handOut(state, "github:github.com:I_5");
 		await coordinator.tick();
@@ -910,7 +915,9 @@ describe("the observation cycle", () => {
 	test("the grace window is inclusive: one ms short holds, the last ms settles", async () => {
 		// The window's last millisecond still settles the turn, so a
 		// comparison that reads the boundary as exclusive fails here.
-		const { state, coordinator, advance } = rig({ agents: [agent("pane-implement", "idle")] });
+		const { state, coordinator, advance } = rig({
+			agents: [agent("pane-implement", { status: "idle" })],
+		});
 		handOut(state, "github:github.com:I_5");
 		advance(STARTUP_GRACE_MS - 1);
 		await coordinator.tick();
@@ -931,13 +938,13 @@ describe("the observation cycle", () => {
 		// while it parks. The record holds no turn, so the grace stays until
 		// the clock says otherwise (ADR 0017).
 		const { state, coordinator, setAgents, advance, statuses } = rig({
-			agents: [agent("pane-implement", "working", "session-1")],
+			agents: [agent("pane-implement", { status: "working", sessionId: "session-1" })],
 			turnLogs: async () => ({ kind: "no-turn" }),
 		});
 		handOut(state, "github:github.com:I_5");
 		await coordinator.tick();
 		expect(state.ticketWorkCycle.ticketsByState(["running"])).toHaveLength(1);
-		setAgents([agent("pane-implement", "idle", "session-1")]);
+		setAgents([agent("pane-implement", { status: "idle", sessionId: "session-1" })]);
 		await coordinator.tick();
 		// Inside the startup window the parked agent does not settle: the
 		// turn never started, and the flap did not lift the grace.
@@ -969,12 +976,12 @@ describe("the observation cycle", () => {
 	test("a no-turn settle is held: auto mode does not close the cycle", async () => {
 		const { state, coordinator, setAgents, advance } = rig({
 			autoOn: true,
-			agents: [agent("pane-implement", "working", "session-1")],
+			agents: [agent("pane-implement", { status: "working", sessionId: "session-1" })],
 			turnLogs: async () => ({ kind: "no-turn" }),
 		});
 		handOut(state, "github:github.com:I_5");
 		await coordinator.tick();
-		setAgents([agent("pane-implement", "idle", "session-1")]);
+		setAgents([agent("pane-implement", { status: "idle", sessionId: "session-1" })]);
 		await coordinator.tick();
 		advance(30_001);
 		await coordinator.tick();
@@ -990,7 +997,7 @@ describe("the observation cycle", () => {
 
 	test("a real turn that ends inside the grace settles at once, on its record", async () => {
 		const { state, coordinator, setAgents } = rig({
-			agents: [agent("pane-implement", "working", "session-1")],
+			agents: [agent("pane-implement", { status: "working", sessionId: "session-1" })],
 			turnLogs: async () => ({
 				kind: "ended",
 				turnEnd: {
@@ -1005,7 +1012,7 @@ describe("the observation cycle", () => {
 		expect(state.ticketWorkCycle.ticketsByState(["running"])).toHaveLength(1);
 		// The record holds the turn's end, so the idle agent settles at once,
 		// without waiting out the boot window.
-		setAgents([agent("pane-implement", "idle", "session-1")]);
+		setAgents([agent("pane-implement", { status: "idle", sessionId: "session-1" })]);
 		await coordinator.tick();
 		expect(state.ticketWorkCycle.ticketsByState(["awaiting"])).toHaveLength(1);
 		state.close();
@@ -1013,7 +1020,7 @@ describe("the observation cycle", () => {
 
 	test("a held turn settles at once: the startup grace does not guard a failure", async () => {
 		const { state, coordinator } = rig({
-			agents: [agent("pane-implement", "done", "session-1")],
+			agents: [agent("pane-implement", { status: "done", sessionId: "session-1" })],
 			turnLogs: async () => ({
 				kind: "ended",
 				turnEnd: {
@@ -1043,7 +1050,7 @@ describe("the observation cycle", () => {
 
 	test("an awaiting ticket whose agent works again reopens its pending turn", async () => {
 		const { state, coordinator, setAgents, advance } = rig({
-			agents: [agent("pane-implement", "idle")],
+			agents: [agent("pane-implement", { status: "idle" })],
 		});
 		handOut(state, "github:github.com:I_5");
 		advance(30_001);
@@ -1051,12 +1058,12 @@ describe("the observation cycle", () => {
 		expect(state.ticketWorkCycle.ticketsByState(["awaiting"])).toHaveLength(1);
 		// The agent works again: the settle was premature, and the ticket
 		// goes back to running.
-		setAgents([agent("pane-implement", "working")]);
+		setAgents([agent("pane-implement", { status: "working" })]);
 		await coordinator.tick();
 		expect(state.ticketWorkCycle.ticketsByState(["running"])).toHaveLength(1);
 		// The next settle refreshes the pending trace in place.
 		advance(1_000);
-		setAgents([agent("pane-implement", "done")]);
+		setAgents([agent("pane-implement", { status: "done" })]);
 		await coordinator.tick();
 		const [ticket] = state.ticketWorkCycle.ticketListViews([], "implement").rows;
 		expect(ticket).toEqual(
@@ -1073,7 +1080,7 @@ describe("the observation cycle", () => {
 
 	test("an awaiting ticket with a decided trace does not reopen on a working agent", async () => {
 		const { state, coordinator, setAgents, advance } = rig({
-			agents: [agent("pane-implement", "idle")],
+			agents: [agent("pane-implement", { status: "idle" })],
 		});
 		const attempt = handOut(state, "github:github.com:I_5");
 		advance(30_001);
@@ -1088,7 +1095,7 @@ describe("the observation cycle", () => {
 			decidedAt: "2026-08-31T11:01:00Z",
 		});
 		expect(state.ticketWorkCycle.ticketsByState(["open"])).toHaveLength(1);
-		setAgents([agent("pane-implement", "working")]);
+		setAgents([agent("pane-implement", { status: "working" })]);
 		await coordinator.tick();
 		// The working agent does not reopen a decided turn: the ticket rests
 		// open, and the pending-turn resume reads awaiting alone.
@@ -1097,7 +1104,9 @@ describe("the observation cycle", () => {
 	});
 
 	test("an unknown agent neither runs nor settles", async () => {
-		const { state, coordinator } = rig({ agents: [agent("pane-implement", "meditating")] });
+		const { state, coordinator } = rig({
+			agents: [agent("pane-implement", { status: "meditating" })],
+		});
 		handOut(state, "github:github.com:I_5");
 		await coordinator.tick();
 		expect(state.ticketWorkCycle.ticketsByState(["handed-off"])).toEqual([
@@ -1109,7 +1118,7 @@ describe("the observation cycle", () => {
 	test("settle reads the last completion lines from the pane", async () => {
 		const seen: Array<[string, number]> = [];
 		const { state, coordinator, advance } = rig({
-			agents: [agent("pane-implement", "done")],
+			agents: [agent("pane-implement", { status: "done" })],
 			readPane: async (paneId, lines) => {
 				seen.push([paneId, lines]);
 				return `line one of ${paneId}\nline two`;
@@ -1172,7 +1181,7 @@ describe("the transition fire of a completed settle", () => {
 		const { state, coordinator, advance } = rig({
 			// A session record gives the settle its `completed` cause: the fire
 			// reads that cause, so the test must land one.
-			agents: [agent("pane-implement", "done", "/tmp/session.jsonl")],
+			agents: [agent("pane-implement", { status: "done", sessionId: "/tmp/session.jsonl" })],
 			turnLogs: async () => ({
 				kind: "ended",
 				turnEnd: {
@@ -1208,7 +1217,7 @@ describe("the transition fire of a completed settle", () => {
 		// reason lands on the Message line beside the settle that produced it.
 		const { state, coordinator, advance, statuses, intents } = rig({
 			autoOn: true,
-			agents: [agent("pane-implement", "done", "/tmp/session.jsonl")],
+			agents: [agent("pane-implement", { status: "done", sessionId: "/tmp/session.jsonl" })],
 			turnLogs: async () => ({
 				kind: "ended",
 				turnEnd: {
@@ -1244,7 +1253,7 @@ describe("the transition fire of a completed settle", () => {
 	test("a held settle fires no transition: the plane writes no label on a turn that did not complete", async () => {
 		let fired = 0;
 		const { state, coordinator, advance } = rig({
-			agents: [agent("pane-implement", "done")],
+			agents: [agent("pane-implement", { status: "done" })],
 			turnLogs: async () => ({
 				kind: "ended",
 				turnEnd: { log: [{ kind: "text", text: "It failed." }], cause: "failed", detail: "" },
@@ -1270,7 +1279,7 @@ describe("the transition fire of a completed settle", () => {
 		const order: string[] = [];
 		const { state, coordinator, advance, intents } = rig({
 			autoOn: true,
-			agents: [agent("pane-implement", "done", "/tmp/session.jsonl")],
+			agents: [agent("pane-implement", { status: "done", sessionId: "/tmp/session.jsonl" })],
 			turnLogs: async () => ({
 				kind: "ended",
 				turnEnd: {
@@ -1344,7 +1353,7 @@ describe("missing agents", () => {
 		// The poll sees the agent working on its still-pending turn: the
 		// ticket is in flight again on the same pane, which then disappears
 		// from the herdr list.
-		rigHandle.setAgents([agent("pane-implement", "working")]);
+		rigHandle.setAgents([agent("pane-implement", { status: "working" })]);
 		await coordinator.tick();
 		expect(state.ticketWorkCycle.ticketsByState(["running"])).toEqual([
 			expect.objectContaining({ ticketIdentity: identity }),
@@ -1417,7 +1426,14 @@ describe("missing agents", () => {
 		// Herdr handed the closed pane's id out again: a different agent works
 		// in the ticket's pane. The ticket's own agent is gone, so the missing
 		// path runs, not the settle.
-		setAgents([agent("pane-implement", "working", "session-1", undefined, "some-other-agent")]);
+		setAgents([
+			agent("pane-implement", {
+				status: "working",
+				sessionId: "session-1",
+				stableSessionId: undefined,
+				name: "some-other-agent",
+			}),
+		]);
 		advance(STARTUP_GRACE_MS + 1);
 		await coordinator.tick();
 		expect(intents).toEqual([
@@ -1429,7 +1445,14 @@ describe("missing agents", () => {
 	test("manual mode leaves a ticket whose pane holds a foreign agent for the operator", async () => {
 		const { state, intents, coordinator, setAgents } = rig({ autoOn: false, agents: [] });
 		handOut(state, "github:github.com:I_5");
-		setAgents([agent("pane-implement", "working", "session-1", undefined, "some-other-agent")]);
+		setAgents([
+			agent("pane-implement", {
+				status: "working",
+				sessionId: "session-1",
+				stableSessionId: undefined,
+				name: "some-other-agent",
+			}),
+		]);
 		await coordinator.tick();
 		// No automatic restart, and no state correction from the foreign agent.
 		expect(intents).toHaveLength(0);
@@ -1442,7 +1465,14 @@ describe("missing agents", () => {
 		const { state, coordinator, setAgents } = rig({ agents: [] });
 		settleFor(state, "github:github.com:I_5", "implement");
 		expect(state.ticketWorkCycle.ticketsByState(["awaiting"])).toHaveLength(1);
-		setAgents([agent("pane-implement", "working", "session-1", undefined, "some-other-agent")]);
+		setAgents([
+			agent("pane-implement", {
+				status: "working",
+				sessionId: "session-1",
+				stableSessionId: undefined,
+				name: "some-other-agent",
+			}),
+		]);
 		await coordinator.tick();
 		// The pending turn stays pending: the working agent is not the
 		// ticket's own.
@@ -1484,8 +1514,8 @@ describe("missing agents", () => {
 		const { state, intents, coordinator, advance } = rig({
 			autoOn: true,
 			agents: [
-				agent("pane-github:github.com:I_6", "working"),
-				agent("pane-github:github.com:I_7", "working"),
+				agent("pane-github:github.com:I_6", { status: "working" }),
+				agent("pane-github:github.com:I_7", { status: "working" }),
 			],
 		});
 		state.sourceFact.applyFetch(
@@ -1603,7 +1633,7 @@ describe("missing agents", () => {
 	test("a missing agent's restart enters the queue beside the live agents", async () => {
 		const { state, intents, coordinator, advance } = rig({
 			autoOn: true,
-			agents: [agent("pane-github:github.com:I_6", "working")],
+			agents: [agent("pane-github:github.com:I_6", { status: "working" })],
 		});
 		state.sourceFact.applyFetch(source, success([fetched("github:github.com:I_6"), fetched()]));
 		// One in-flight ticket holds a live seat...
@@ -1972,7 +2002,7 @@ describe("the awaiting rule", () => {
 			// The position runs a live turn of its own: it is not open, and the
 			// route starts nothing on it.
 			handOut(state, "github:github.com:I_6", "implement");
-			setAgents([agent("pane-implement", "working")]);
+			setAgents([agent("pane-implement", { status: "working" })]);
 			await coordinator.tick();
 			expect(routes(intents)).toHaveLength(0);
 			expect(state.ticketWorkCycle.ticketState("github:github.com:I_6")).toBe("running");
@@ -2072,7 +2102,10 @@ describe("the awaiting rule", () => {
 			// The turn settles `completed`: the hold reads the cause of the
 			// cycle's last trace, and only a completed turn of the suggested task
 			// holds a repeat.
-			const attempt = settleForCause(state, identity, "implement", "completed");
+			const attempt = settleForCause(state, identity, {
+				taskType: "implement",
+				cause: "completed",
+			});
 			state.ticketWorkCycle.applyCompletionDecision({
 				ticketIdentity: identity,
 				handoffId: attempt,
@@ -2113,7 +2146,10 @@ describe("the awaiting rule", () => {
 			// the add; each closes with its source re-read, so the ticket stands
 			// open and eligible to start.
 			for (let cycle = 0; cycle < 2; cycle += 1) {
-				const attempt = settleForCause(state, "github:github.com:I_6", "review", "aborted");
+				const attempt = settleForCause(state, "github:github.com:I_6", {
+					taskType: "review",
+					cause: "aborted",
+				});
 				state.ticketWorkCycle.applyCompletionDecision({
 					ticketIdentity: "github:github.com:I_6",
 					handoffId: attempt,
@@ -2169,7 +2205,7 @@ describe("the awaiting rule", () => {
 				});
 			// The position at the rig's limit of two, the way the test above leaves it.
 			for (let cycle = 0; cycle < 2; cycle += 1) {
-				const attempt = settleForCause(state, position, "review", "aborted");
+				const attempt = settleForCause(state, position, { taskType: "review", cause: "aborted" });
 				state.ticketWorkCycle.applyCompletionDecision({
 					ticketIdentity: position,
 					handoffId: attempt,
@@ -2385,7 +2421,10 @@ describe("the awaiting rule", () => {
 			// alone and the only fact that moves is the gate.
 			const written = r.state.ticketWorkCycle.setTicketIgnored("github:github.com:I_6", true, null);
 			if (!written.ok) throw new Error(written.reason);
-			const attempt = settleForCause(r.state, "github:github.com:I_6", "review", "completed");
+			const attempt = settleForCause(r.state, "github:github.com:I_6", {
+				taskType: "review",
+				cause: "completed",
+			});
 			r.state.ticketWorkCycle.applyCompletionDecision({
 				ticketIdentity: "github:github.com:I_6",
 				handoffId: attempt,
@@ -2948,7 +2987,7 @@ describe("the awaiting rule", () => {
 		test("a settle keeps the ignore and reveals the row the held count reads", async () => {
 			const { state, coordinator, advance, statuses } = rig({
 				autoOn: false,
-				agents: [agent("pane-implement", "idle")],
+				agents: [agent("pane-implement", { status: "idle" })],
 			});
 			handOut(state, "github:github.com:I_5");
 			ignore(state, "github:github.com:I_5");
@@ -2984,7 +3023,7 @@ describe("the awaiting rule", () => {
 		test("a held settle keeps the ignore, and the row the bell reads", async () => {
 			const { state, coordinator } = rig({
 				autoOn: false,
-				agents: [agent("pane-implement", "done", "session-1")],
+				agents: [agent("pane-implement", { status: "done", sessionId: "session-1" })],
 				// The session record ends the turn failed: the settle rests held.
 				turnLogs: async () => ({
 					kind: "ended",
@@ -3027,7 +3066,7 @@ describe("the awaiting rule", () => {
 			const written = outcome({ ticketWrite: { added: ["ready-for-review"], removed: [] } });
 			const { state, coordinator, advance } = rig({
 				autoOn: false,
-				agents: [agent("pane-implement", "done", "/tmp/session.jsonl")],
+				agents: [agent("pane-implement", { status: "done", sessionId: "/tmp/session.jsonl" })],
 				turnLogs: async () => ({
 					kind: "ended",
 					turnEnd: {
@@ -3065,7 +3104,7 @@ describe("the awaiting rule", () => {
 		test("an ignored resting Ticket leaves the list, and a live one keeps it", async () => {
 			const { state, coordinator } = rig({
 				autoOn: false,
-				agents: [agent("pane-implement", "working")],
+				agents: [agent("pane-implement", { status: "working" })],
 			});
 			handOut(state, "github:github.com:I_5");
 			ignore(state, "github:github.com:I_5");
@@ -3234,8 +3273,8 @@ describe("the awaiting rule", () => {
 		const { state, intents, coordinator } = rig({
 			autoOn: true,
 			agents: [
-				agent("pane-github:github.com:I_6", "working"),
-				agent("pane-github:github.com:I_7", "working"),
+				agent("pane-github:github.com:I_6", { status: "working" }),
+				agent("pane-github:github.com:I_7", { status: "working" }),
 			],
 		});
 		state.sourceFact.applyFetch(source, success([fetched("github:github.com:I_6"), fetched()]));
@@ -3838,7 +3877,7 @@ describe("the open dispatch", () => {
 	test("a live agent holding every seat does not hold the open add", async () => {
 		const { state, intents, coordinator } = rig({
 			autoOn: true,
-			agents: [agent("pane-github:github.com:I_6", "working")],
+			agents: [agent("pane-github:github.com:I_6", { status: "working" })],
 		});
 		state.sourceFact.applyFetch(source, success([fetched("github:github.com:I_6"), fetched()]));
 		const claim = state.handoff.claimHandoff("github:github.com:I_6", choice, "open");
@@ -4046,7 +4085,11 @@ describe("the open dispatch", () => {
 describe("the held turn and the Dispatch pause", () => {
 	test("auto mode holds a failed route instead of routing it", async () => {
 		const { state, intents, coordinator } = rig({ autoOn: true, agents: [] });
-		settleForCause(state, "github:github.com:I_5", "route", "failed", "the build broke");
+		settleForCause(state, "github:github.com:I_5", {
+			taskType: "route",
+			cause: "failed",
+			detail: "the build broke",
+		});
 		await coordinator.tick();
 		// The held gate stops the automatic route: nothing is dispatched.
 		expect(intents).toHaveLength(0);
@@ -4066,7 +4109,7 @@ describe("the held turn and the Dispatch pause", () => {
 
 	test("auto mode holds a failed review instead of auto-closing it", async () => {
 		const { state, intents, coordinator } = rig({ autoOn: true, agents: [] });
-		settleForCause(state, "github:github.com:I_5", "review", "failed");
+		settleForCause(state, "github:github.com:I_5", { taskType: "review", cause: "failed" });
 		await coordinator.tick();
 		expect(intents).toHaveLength(0);
 		const [ticket] = state.ticketWorkCycle.ticketListViews([], "implement").rows;
@@ -4082,7 +4125,7 @@ describe("the held turn and the Dispatch pause", () => {
 	test("auto mode holds a truncated and an aborted turn, not just a failed one", async () => {
 		for (const cause of ["truncated", "aborted"] as const) {
 			const { state, intents, coordinator } = rig({ autoOn: true, agents: [] });
-			settleForCause(state, "github:github.com:I_5", "review", cause);
+			settleForCause(state, "github:github.com:I_5", { taskType: "review", cause: cause });
 			await coordinator.tick();
 			expect(intents).toHaveLength(0);
 			const [ticket] = state.ticketWorkCycle.ticketListViews([], "implement").rows;
@@ -4095,7 +4138,11 @@ describe("the held turn and the Dispatch pause", () => {
 	test("manual mode holds an auto-close type's held turn: no close, no route", async () => {
 		for (const taskType of ["review", "route"]) {
 			const { state, intents, coordinator } = rig({ autoOn: false, agents: [] });
-			settleForCause(state, "github:github.com:I_5", taskType, "failed", "the build broke");
+			settleForCause(state, "github:github.com:I_5", {
+				taskType: taskType,
+				cause: "failed",
+				detail: "the build broke",
+			});
 			await coordinator.tick();
 			// The gate holds the auto-close type's automatic decision without the
 			// operator too: no close, no route, and the turn rests held with its
@@ -4118,7 +4165,7 @@ describe("the held turn and the Dispatch pause", () => {
 
 	test("auto mode still decides an unknown turn, which fails open", async () => {
 		const { state, coordinator } = rig({ autoOn: true, agents: [] });
-		settleForCause(state, "github:github.com:I_5", "review", "unknown");
+		settleForCause(state, "github:github.com:I_5", { taskType: "review", cause: "unknown" });
 		await coordinator.tick();
 		// unknown is not held: the review auto-closes as it normally would, then
 		// the loop re-dispatches the now-open ticket. It never rests as held.
@@ -4130,14 +4177,12 @@ describe("the held turn and the Dispatch pause", () => {
 	test("auto mode still closes a completed route's turn and routes it", async () => {
 		const { state, intents, coordinator } = rig({ autoOn: true, agents: [] });
 		state.sourceFact.applyFetch(source, success([fetched("github:github.com:I_6"), fetched()]));
-		const attempt = settleForCause(
-			state,
-			"github:github.com:I_5",
-			"route",
-			"completed",
-			"",
-			routeOutcome("github:github.com:I_6"),
-		);
+		const attempt = settleForCause(state, "github:github.com:I_5", {
+			taskType: "route",
+			cause: "completed",
+			detail: "",
+			transition: routeOutcome("github:github.com:I_6"),
+		});
 		await coordinator.tick();
 		expect(intents).toHaveLength(1);
 		expect(intents[0]).toEqual(
@@ -4157,7 +4202,10 @@ describe("the held turn and the Dispatch pause", () => {
 
 	test("a decided held turn is no longer held and no longer pauses", async () => {
 		const { state, intents, coordinator } = rig({ autoOn: true, agents: [] });
-		const attempt = settleForCause(state, "github:github.com:I_5", "route", "failed");
+		const attempt = settleForCause(state, "github:github.com:I_5", {
+			taskType: "route",
+			cause: "failed",
+		});
 		expect(state.ticketWorkCycle.dispatchPauseActive()).toBe(true);
 		// The operator decides the held turn: it is no longer held, and the
 		// pause ends.
@@ -4186,7 +4234,7 @@ describe("the held turn and the Dispatch pause", () => {
 		const { state, intents, coordinator } = rig({ autoOn: true, agents: [] });
 		// A held failed trace sits on one ticket. The pause is global, so the
 		// fresh open ticket the loop would otherwise dispatch is held too.
-		settleForCause(state, "github:github.com:I_5", "review", "failed");
+		settleForCause(state, "github:github.com:I_5", { taskType: "review", cause: "failed" });
 		state.sourceFact.applyFetch(source, success([fetched("github:github.com:I_6")]));
 		await coordinator.tick();
 		expect(intents).toHaveLength(0);
@@ -4196,7 +4244,7 @@ describe("the held turn and the Dispatch pause", () => {
 
 	test("manual mode never dispatches an open ticket, pause or no", async () => {
 		const { state, intents, coordinator } = rig({ autoOn: false, agents: [] });
-		settleForCause(state, "github:github.com:I_5", "review", "failed");
+		settleForCause(state, "github:github.com:I_5", { taskType: "review", cause: "failed" });
 		state.sourceFact.applyFetch(source, success([fetched("github:github.com:I_6")]));
 		await coordinator.tick();
 		expect(intents).toHaveLength(0);
@@ -4215,7 +4263,7 @@ describe("the held turn and the Dispatch pause", () => {
 		// dispatches the open tickets, but the auto-close route still runs
 		// there - and the pause holds it, exactly as a full Parallel limit
 		// would.
-		settleForCause(state, "github:github.com:I_5", "review", "failed");
+		settleForCause(state, "github:github.com:I_5", { taskType: "review", cause: "failed" });
 		const claim = state.handoff.claimHandoff(
 			"github:github.com:I_6",
 			{ ...choice, taskType: "route" },
@@ -4266,7 +4314,10 @@ describe("the held turn and the Dispatch pause", () => {
 		// I_5's held failure trips the pause after I_6's completed turn waited
 		// for its route: the pause holds the top-up, the trace stays
 		// undecided, and the turn rests in awaiting.
-		const heldAttempt = settleForCause(state, "github:github.com:I_5", "review", "failed");
+		const heldAttempt = settleForCause(state, "github:github.com:I_5", {
+			taskType: "review",
+			cause: "failed",
+		});
 		const claim = state.handoff.claimHandoff(
 			"github:github.com:I_6",
 			{ ...choice, taskType: "route" },
@@ -4335,7 +4386,7 @@ describe("the held turn and the Dispatch pause", () => {
 		state.sourceFact.applyFetch(source, success([fetched(), fetched("github:github.com:I_6")]));
 		// A held failed trace sits on one ticket; a different ticket's agent has
 		// gone missing. The pause holds the restart, not just the open dispatch.
-		settleForCause(state, "github:github.com:I_5", "review", "failed");
+		settleForCause(state, "github:github.com:I_5", { taskType: "review", cause: "failed" });
 		handOut(state, "github:github.com:I_6");
 		await coordinator.tick();
 		expect(intents).toHaveLength(0);
@@ -4347,7 +4398,10 @@ describe("the held turn and the Dispatch pause", () => {
 		const { state, intents, coordinator } = rig({ autoOn: true, agents: [] });
 		state.sourceFact.applyFetch(source, success([fetched(), fetched("github:github.com:I_6")]));
 		// The failed settle arms the pause, and the fresh open ticket is held out.
-		const attempt = settleForCause(state, "github:github.com:I_5", "review", "failed");
+		const attempt = settleForCause(state, "github:github.com:I_5", {
+			taskType: "review",
+			cause: "failed",
+		});
 		await coordinator.tick();
 		expect(intents).toHaveLength(0);
 		// The Agent reports working again: the turn reopens (ADR 0016), the row
@@ -4368,10 +4422,10 @@ describe("the held turn and the Dispatch pause", () => {
 	test("a completed turn after the held failure ends the pause and frees dispatch", async () => {
 		const { state, intents, coordinator } = rig({ autoOn: true, agents: [] });
 		state.sourceFact.applyFetch(source, success([fetched(), fetched("github:github.com:I_6")]));
-		settleForCause(state, "github:github.com:I_5", "review", "failed");
+		settleForCause(state, "github:github.com:I_5", { taskType: "review", cause: "failed" });
 		expect(state.ticketWorkCycle.dispatchPauseActive()).toBe(true);
 		// A completed settle after the held failure clears the pause.
-		settleForCause(state, "github:github.com:I_6", "review", "completed");
+		settleForCause(state, "github:github.com:I_6", { taskType: "review", cause: "completed" });
 		expect(state.ticketWorkCycle.dispatchPauseActive()).toBe(false);
 		await coordinator.tick();
 		// The held failure stays held; the completed one auto-closes. The gate
@@ -4397,7 +4451,7 @@ describe("the held turn and the Dispatch pause", () => {
 	test("the Message line reports the hold and the pause as they happen", async () => {
 		const { state, coordinator, statuses } = rig({
 			autoOn: true,
-			agents: [agent("pane-implement", "done", "session-1")],
+			agents: [agent("pane-implement", { status: "done", sessionId: "session-1" })],
 			turnLogs: async () => ({
 				kind: "ended",
 				turnEnd: {
@@ -4424,7 +4478,7 @@ describe("the held turn and the Dispatch pause", () => {
 		);
 		// A completed settle after the held failure clears the pause: the next
 		// cycle tells the operator the dispatch resumes.
-		settleForCause(state, "github:github.com:I_6", "review", "completed");
+		settleForCause(state, "github:github.com:I_6", { taskType: "review", cause: "completed" });
 		await coordinator.tick();
 		expect(
 			statuses.some((s) => s.kind === "info" && s.text.startsWith("Dispatch pause cleared:")),
@@ -4436,7 +4490,7 @@ describe("the held turn and the Dispatch pause", () => {
 		// No startup grace: the agents of this test are about to die, not to boot.
 		const { state, intents, setAgents, coordinator } = rig({
 			autoOn: true,
-			agents: [agent("pane-implement", "working")],
+			agents: [agent("pane-implement", { status: "working" })],
 			startupGraceMs: 0,
 		});
 		state.sourceFact.applyFetch(source, success([fetched(), fetched("github:github.com:I_6")]));
@@ -4455,7 +4509,7 @@ describe("the held turn and the Dispatch pause", () => {
 			cause: "failed",
 			detail: "the build broke",
 		});
-		settleForCause(state, "github:github.com:I_6", "review", "completed");
+		settleForCause(state, "github:github.com:I_6", { taskType: "review", cause: "completed" });
 		expect(state.ticketWorkCycle.dispatchPauseActive()).toBe(false);
 		await coordinator.tick();
 		// I_5's agent still works: the held ticket reopens, and its next settle
@@ -4594,7 +4648,7 @@ describe("the Consultation parallel seats", () => {
 	test("a working Consultation holds a seat the top-up does not wait on", async () => {
 		const { state, intents, coordinator } = rig({
 			autoOn: true,
-			agents: [agent("pane-consult", "working")],
+			agents: [agent("pane-consult", { status: "working" })],
 			dispatchClaims: true,
 		});
 		try {
@@ -4618,7 +4672,7 @@ describe("the Consultation parallel seats", () => {
 	test("a working Consultation holds a seat the restart does not wait on", async () => {
 		const { state, intents, coordinator, advance } = rig({
 			autoOn: true,
-			agents: [agent("pane-consult", "working")],
+			agents: [agent("pane-consult", { status: "working" })],
 			config: { maxParallelAgents: 1 },
 		});
 		try {
@@ -4639,7 +4693,7 @@ describe("the Consultation parallel seats", () => {
 	test("a Consultation in any state holds no gate over the top-up", async () => {
 		const { state, intents, coordinator } = rig({
 			autoOn: true,
-			agents: [agent("pane-consult", "working")],
+			agents: [agent("pane-consult", { status: "working" })],
 			dispatchClaims: true,
 		});
 		try {
@@ -4687,7 +4741,7 @@ describe("Consultation observation identity", () => {
 
 	test("keeps a restart-interrupted opening until explicit recovery", async () => {
 		const { state, coordinator } = rig({
-			agents: [agent("pane-1", "idle", "", "session-1")],
+			agents: [agent("pane-1", { status: "idle", sessionId: "", stableSessionId: "session-1" })],
 		});
 		try {
 			openingConsultation(state, "consultation-opening");
@@ -4704,7 +4758,9 @@ describe("Consultation observation identity", () => {
 
 	test("warns when an opening Consultation has an ambiguous Agent match", async () => {
 		const { state, coordinator, statuses } = rig({
-			agents: [agent("pane-1", "idle", "", "replacement-session")],
+			agents: [
+				agent("pane-1", { status: "idle", sessionId: "", stableSessionId: "replacement-session" }),
+			],
 		});
 		try {
 			openingConsultation(state, "opening-ambiguous");
@@ -4760,7 +4816,7 @@ describe("Consultation observation identity", () => {
 						`missing-${stateName}`,
 						null,
 						"output",
-						"idle",
+						{ settledStatus: "idle" },
 					);
 				await rigged.coordinator.tick();
 				expect(rigged.state.consultationRecord.consultation(`missing-${stateName}`)).toMatchObject({
@@ -4781,7 +4837,11 @@ describe("Consultation observation identity", () => {
 
 	test("moves a working or awaiting Consultation with an ambiguous Agent to missing", async () => {
 		for (const stateName of ["working", "awaiting-response"] as const) {
-			const rigged = rig({ agents: [agent("pane-1", "idle", "", "other-session")] });
+			const rigged = rig({
+				agents: [
+					agent("pane-1", { status: "idle", sessionId: "", stableSessionId: "other-session" }),
+				],
+			});
 			try {
 				openingConsultation(rigged.state, `ambiguous-${stateName}`);
 				rigged.state.consultationRecord.setConsultationAgent(`ambiguous-${stateName}`, {
@@ -4795,7 +4855,7 @@ describe("Consultation observation identity", () => {
 						`ambiguous-${stateName}`,
 						null,
 						"output",
-						"idle",
+						{ settledStatus: "idle" },
 					);
 				await rigged.coordinator.tick();
 				expect(
@@ -4812,7 +4872,7 @@ describe("Consultation observation identity", () => {
 
 	test("keeps a uniquely verified opening state and refreshes its handles", async () => {
 		const verified = {
-			...agent("pane-new", "idle", "", "session-1"),
+			...agent("pane-new", { status: "idle", sessionId: "", stableSessionId: "session-1" }),
 			tabId: "tab-new",
 			workspaceId: "ws-new",
 		};
@@ -4835,7 +4895,9 @@ describe("Consultation observation identity", () => {
 
 	test("gives a verified opening Agent with unknown status the weaker warning", async () => {
 		const { state, coordinator } = rig({
-			agents: [agent("pane-1", "not reported", "", "session-1")],
+			agents: [
+				agent("pane-1", { status: "not reported", sessionId: "", stableSessionId: "session-1" }),
+			],
 		});
 		try {
 			openingConsultation(state, "opening-unknown");
@@ -4852,7 +4914,7 @@ describe("Consultation observation identity", () => {
 	// Issue #24: Herdr can omit this optional handle. The known pane is
 	// verified at weaker certainty and the stored session id is preserved.
 	test("keeps the stored session id when a verified opening Agent has no stable session id", async () => {
-		const { state, coordinator } = rig({ agents: [agent("pane-1", "idle")] });
+		const { state, coordinator } = rig({ agents: [agent("pane-1", { status: "idle" })] });
 		try {
 			openingConsultation(state, "opening-without-stable-id");
 			await coordinator.tick();
@@ -4898,7 +4960,7 @@ describe("Consultation observation identity", () => {
 		] as const) {
 			const id = `live-${moved}`;
 			const reported = {
-				...agent("pane-1", "working", "", "session-1"),
+				...agent("pane-1", { status: "working", sessionId: "", stableSessionId: "session-1" }),
 				[moved]: value,
 			};
 			const { state, coordinator } = rig({ agents: [reported] });
@@ -4925,7 +4987,9 @@ describe("Consultation observation identity", () => {
 
 	test("holds a live Consultation's unknown-status warning only while herdr is unsure", async () => {
 		const { state, coordinator, statuses, setAgents } = rig({
-			agents: [agent("pane-1", "meditating", "", "session-1")],
+			agents: [
+				agent("pane-1", { status: "meditating", sessionId: "", stableSessionId: "session-1" }),
+			],
 		});
 		try {
 			openingConsultation(state, "live-unknown");
@@ -4946,7 +5010,9 @@ describe("Consultation observation identity", () => {
 			});
 			// A known status clears it: the warning is the poll's current read,
 			// not a mark the Consultation carries for good.
-			setAgents([agent("pane-1", "working", "", "session-1")]);
+			setAgents([
+				agent("pane-1", { status: "working", sessionId: "", stableSessionId: "session-1" }),
+			]);
 			await coordinator.tick();
 			expect(state.consultationRecord.consultation("live-unknown")?.warning).toBeNull();
 		} finally {
@@ -4957,7 +5023,12 @@ describe("Consultation observation identity", () => {
 	test("records an external turn only when herdr reports a newer sequence", async () => {
 		const open = (sequence: number | undefined) => {
 			const rigged = rig({
-				agents: [{ ...agent("pane-1", "idle", "", "session-1"), sequence }],
+				agents: [
+					{
+						...agent("pane-1", { status: "idle", sessionId: "", stableSessionId: "session-1" }),
+						sequence,
+					},
+				],
 			});
 			openingConsultation(rigged.state, "live-sequence");
 			rigged.state.consultationRecord.setConsultationAgent("live-sequence", {
@@ -4970,7 +5041,7 @@ describe("Consultation observation identity", () => {
 				"live-sequence",
 				5,
 				"the settled turn",
-				"idle",
+				{ settledStatus: "idle" },
 			);
 			return rigged;
 		};
@@ -5014,7 +5085,13 @@ describe("Consultation observation identity", () => {
 
 	test("rejects a reused pane whose stable session differs", async () => {
 		const { state, coordinator } = rig({
-			agents: [agent("pane-1", "working", "", "replacement-session")],
+			agents: [
+				agent("pane-1", {
+					status: "working",
+					sessionId: "",
+					stableSessionId: "replacement-session",
+				}),
+			],
 		});
 		try {
 			openingConsultation(state, "consultation-mismatch");
@@ -5036,7 +5113,7 @@ describe("Consultation observation identity", () => {
 
 	test("follows a uniquely matched moved session and retargets cleanup resources", async () => {
 		const moved = {
-			...agent("pane-new", "working", "", "session-1"),
+			...agent("pane-new", { status: "working", sessionId: "", stableSessionId: "session-1" }),
 			tabId: "tab-new",
 			workspaceId: "ws-new",
 		};
@@ -5131,7 +5208,9 @@ describe("an agent that outlives its work cycle", () => {
 		closedCycle(r);
 		expect(ticketOf(state)).toEqual(expect.objectContaining({ state: "open", handoffCount: 1 }));
 		// The operator re-prompts the agent in its herdr pane.
-		setAgents([agent(PANE, "working", "", undefined, NAME)]);
+		setAgents([
+			agent(PANE, { status: "working", sessionId: "", stableSessionId: undefined, name: NAME }),
+		]);
 		await coordinator.tick();
 		expect(state.ticketWorkCycle.ticketsByState(["running"])).toEqual([
 			expect.objectContaining({
@@ -5180,9 +5259,23 @@ describe("an agent that outlives its work cycle", () => {
 		});
 		const { state, coordinator, setAgents } = r;
 		closedCycle(r);
-		setAgents([agent(PANE, "working", "session-1", undefined, NAME)]);
+		setAgents([
+			agent(PANE, {
+				status: "working",
+				sessionId: "session-1",
+				stableSessionId: undefined,
+				name: NAME,
+			}),
+		]);
 		await coordinator.tick();
-		setAgents([agent(PANE, "idle", "session-1", undefined, NAME)]);
+		setAgents([
+			agent(PANE, {
+				status: "idle",
+				sessionId: "session-1",
+				stableSessionId: undefined,
+				name: NAME,
+			}),
+		]);
 		await coordinator.tick();
 		expect(state.ticketWorkCycle.ticketsByState(["awaiting"])).toEqual([
 			expect.objectContaining({ ticketIdentity: identity, workCycle: 2, taskType: "research" }),
@@ -5198,7 +5291,7 @@ describe("an agent that outlives its work cycle", () => {
 			const rig_ = rig({ agents: [] });
 			const { state, coordinator, setAgents } = rig_;
 			closedCycle(rig_);
-			setAgents([agent(PANE, status)]);
+			setAgents([agent(PANE, { status: status })]);
 			await coordinator.tick();
 			expect(state.ticketWorkCycle.ticketsByState(["handed-off", "running", "awaiting"])).toEqual(
 				[],
@@ -5212,7 +5305,9 @@ describe("an agent that outlives its work cycle", () => {
 		const r = rig({ agents: [] });
 		const { state, coordinator, setAgents } = r;
 		closedCycle(r);
-		setAgents([agent(PANE, "blocked", "", undefined, NAME)]);
+		setAgents([
+			agent(PANE, { status: "blocked", sessionId: "", stableSessionId: undefined, name: NAME }),
+		]);
 		await coordinator.tick();
 		expect(state.ticketWorkCycle.ticketsByState(["running"])).toEqual([
 			expect.objectContaining({ ticketIdentity: identity }),
@@ -5237,7 +5332,7 @@ describe("an agent that outlives its work cycle", () => {
 			tabId: "tab-1",
 			workspaceId: "ws-1",
 		});
-		setAgents([agent(PANE, "working")]);
+		setAgents([agent(PANE, { status: "working" })]);
 		await coordinator.tick();
 		expect(state.ticketWorkCycle.ticketsByState(["running"])).toEqual([
 			expect.objectContaining({ ticketIdentity: "github:github.com:I_6" }),
@@ -5251,7 +5346,9 @@ describe("an agent that outlives its work cycle", () => {
 		const { state, intents, coordinator, setAgents } = r;
 		closedCycle(r);
 		state.sourceFact.applyFetch(source, success([fetched("github:github.com:I_6"), fetched()]));
-		setAgents([agent(PANE, "working", "", undefined, NAME)]);
+		setAgents([
+			agent(PANE, { status: "working", sessionId: "", stableSessionId: undefined, name: NAME }),
+		]);
 		await coordinator.tick();
 		// The reclaimed agent is live: its ticket runs. The slot it holds
 		// waits at the pickup, not the top-up (ADR 0051), so the open
@@ -5272,7 +5369,14 @@ describe("an agent that outlives its work cycle", () => {
 		// Herdr handed the closed pane's id out again: a Consultation's agent
 		// works in it now. The ticket's stale handle names that pane, but the
 		// agent is not the ticket's own, so the poll adopts nothing.
-		setAgents([agent(PANE, "working", "", undefined, "consultation-01234567")]);
+		setAgents([
+			agent(PANE, {
+				status: "working",
+				sessionId: "",
+				stableSessionId: undefined,
+				name: "consultation-01234567",
+			}),
+		]);
 		await coordinator.tick();
 		expect(state.ticketWorkCycle.ticketsByState(["handed-off", "running", "awaiting"])).toEqual([]);
 		expect(ticketOf(state)).toEqual(expect.objectContaining({ state: "open", handoffCount: 1 }));
@@ -5285,7 +5389,7 @@ describe("an agent that outlives its work cycle", () => {
 		closedCycle(r);
 		// The reader cannot verify the agent's identity, so it adopts nothing:
 		// a wrong adoption moves the ticket to running on a foreign pane.
-		setAgents([agent(PANE, "working")]);
+		setAgents([agent(PANE, { status: "working" })]);
 		await coordinator.tick();
 		expect(state.ticketWorkCycle.ticketsByState(["handed-off", "running", "awaiting"])).toEqual([]);
 		expect(ticketOf(state)).toEqual(expect.objectContaining({ state: "open", handoffCount: 1 }));
@@ -5296,7 +5400,7 @@ describe("an agent that outlives its work cycle", () => {
 		const r = rig({ agents: [] });
 		const { state, setAgents, statuses } = r;
 		closedCycle(r);
-		setAgents([agent(PANE, "working")]);
+		setAgents([agent(PANE, { status: "working" })]);
 		const holding = new ObservationCoordinator({
 			state,
 			herdr: {
@@ -5382,7 +5486,12 @@ describe("the re-fired skip's route (ADR 0042)", () => {
 	 * while the pull request carries the work.
 	 */
 	function refiredCycle(state: FactoryState, transition: TransitionOutcome): void {
-		const attempt = settleForCause(state, issueIdentity, "implement", "completed", "", transition);
+		const attempt = settleForCause(state, issueIdentity, {
+			taskType: "implement",
+			cause: "completed",
+			detail: "",
+			transition: transition,
+		});
 		state.ticketWorkCycle.applyCompletionDecision({
 			ticketIdentity: issueIdentity,
 			handoffId: attempt,
@@ -5478,8 +5587,8 @@ describe("the re-fired skip's route (ADR 0042)", () => {
 		const { state, intents, coordinator } = rig({
 			autoOn: true,
 			agents: [
-				agent("pane-github:github.com:I_6", "working"),
-				agent("pane-github:github.com:I_7", "working"),
+				agent("pane-github:github.com:I_6", { status: "working" }),
+				agent("pane-github:github.com:I_7", { status: "working" }),
 			],
 		});
 		state.sourceFact.applyFetch(
@@ -5515,7 +5624,11 @@ describe("the re-fired skip's route (ADR 0042)", () => {
 		refiredCycle(state, refiredOutcome());
 		// A held failed turn that settled after the completed one pauses
 		// automatic dispatch: a completed trace after it would end the pause.
-		settleForCause(state, "github:github.com:I_6", "implement", "failed", "the build broke");
+		settleForCause(state, "github:github.com:I_6", {
+			taskType: "implement",
+			cause: "failed",
+			detail: "the build broke",
+		});
 		expect(state.ticketWorkCycle.dispatchPauseActive()).toBe(true);
 		await coordinator.tick();
 		expect(intents).toHaveLength(0);
@@ -5560,7 +5673,7 @@ describe("the re-fired skip's route (ADR 0042)", () => {
 			workspaceId: "ws-1",
 		});
 		if (shape === "running") {
-			setAgents([agent("pane-pull", "working")]);
+			setAgents([agent("pane-pull", { status: "working" })]);
 			return;
 		}
 		state.ticketWorkCycle.settleTurn({
@@ -5915,7 +6028,7 @@ describe("the agent wake wait (ADR 0084)", () => {
 	test("a settle state match runs a cycle now, so the turn settles without a poll", async () => {
 		const wake = wakeFake();
 		const fake = rig({
-			agents: [agent("pane-implement", "working")],
+			agents: [agent("pane-implement", { status: "working" })],
 			waitAgent: wake.option,
 		});
 		handOut(fake.state, identity);
@@ -5925,7 +6038,7 @@ describe("the agent wake wait (ADR 0084)", () => {
 		// name, the identity the live agent belongs to by.
 		expect(wake.targets).toEqual([fake.state.ticketWorkCycle.agentNameForTicket(identity)]);
 		// The agent finishes its turn between polls. The wake is the cycle.
-		fake.setAgents([agent("pane-implement", "idle")]);
+		fake.setAgents([agent("pane-implement", { status: "idle" })]);
 		wake.fire(true);
 		await sleep(10);
 		expect(
@@ -5940,7 +6053,7 @@ describe("the agent wake wait (ADR 0084)", () => {
 	test("the wait arms on the working report only: a booted idle agent holds no wait", async () => {
 		const wake = wakeFake();
 		const fake = rig({
-			agents: [agent("pane-implement", "idle")],
+			agents: [agent("pane-implement", { status: "idle" })],
 			waitAgent: wake.option,
 		});
 		handOut(fake.state, identity);
@@ -5949,7 +6062,7 @@ describe("the agent wake wait (ADR 0084)", () => {
 		// An idle report inside the startup grace is a boot, not a settle:
 		// arming on it would match at once, in a loop the poll never had.
 		expect(wake.targets).toEqual([]);
-		fake.setAgents([agent("pane-implement", "working")]);
+		fake.setAgents([agent("pane-implement", { status: "working" })]);
 		await fake.coordinator.tick();
 		expect(wake.targets).toEqual([fake.state.ticketWorkCycle.agentNameForTicket(identity)]);
 		fake.coordinator.stop();
@@ -5970,7 +6083,7 @@ describe("the agent wake wait (ADR 0084)", () => {
 	test("one wait per agent across cycles, and a settled ticket drops its arm", async () => {
 		const wake = wakeFake();
 		const fake = rig({
-			agents: [agent("pane-implement", "working")],
+			agents: [agent("pane-implement", { status: "working" })],
 			waitAgent: wake.option,
 		});
 		handOut(fake.state, identity);
@@ -5981,7 +6094,7 @@ describe("the agent wake wait (ADR 0084)", () => {
 		expect(wake.targets).toHaveLength(1);
 		// The wait answers with the settle: the turn settles, and the ticket
 		// rests out of in-flight, so the next cycle arms nothing on it.
-		fake.setAgents([agent("pane-implement", "idle")]);
+		fake.setAgents([agent("pane-implement", { status: "idle" })]);
 		wake.fire(true);
 		await sleep(10);
 		await fake.coordinator.tick();
@@ -5996,7 +6109,7 @@ describe("the agent wake wait (ADR 0084)", () => {
 		const fake = rig({
 			agents: () => {
 				listCalls += 1;
-				return [agent("pane-implement", "working")];
+				return [agent("pane-implement", { status: "working" })];
 			},
 			waitAgent: wake.option,
 		});
@@ -6057,7 +6170,7 @@ describe("the agent wake wait (ADR 0084)", () => {
 	test("a working Consultation whose agent works arms a wait on the Consultation's name", async () => {
 		const wake = wakeFake();
 		const fake = rig({
-			agents: [agent("pane-consult", "working")],
+			agents: [agent("pane-consult", { status: "working" })],
 			waitAgent: wake.option,
 		});
 		workingConsultationWithTurn(fake.state, "c-arm", "pane-consult");
@@ -6070,7 +6183,7 @@ describe("the agent wake wait (ADR 0084)", () => {
 	test("a Consultation whose agent is not working or not its own arms no wait", async () => {
 		const wake = wakeFake();
 		const fake = rig({
-			agents: [agent("pane-consult", "idle")],
+			agents: [agent("pane-consult", { status: "idle" })],
 			waitAgent: wake.option,
 		});
 		workingConsultationWithTurn(fake.state, "c-idle", "pane-consult");
@@ -6083,14 +6196,14 @@ describe("the agent wake wait (ADR 0084)", () => {
 	test("a Consultation wait match settles its turn without a poll", async () => {
 		const wake = wakeFake();
 		const fake = rig({
-			agents: [agent("pane-consult", "working")],
+			agents: [agent("pane-consult", { status: "working" })],
 			waitAgent: wake.option,
 		});
 		workingConsultationWithTurn(fake.state, "c-settle", "pane-consult");
 		await fake.coordinator.tick();
 		expect(wake.targets).toEqual(["consultation-c-settle"]);
 		// The agent finishes its answer between polls. The wake is the cycle.
-		fake.setAgents([agent("pane-consult", "idle")]);
+		fake.setAgents([agent("pane-consult", { status: "idle" })]);
 		wake.fire(true);
 		await sleep(10);
 		expect(fake.state.consultationRecord.consultation("c-settle")?.state).toBe("awaiting-response");
@@ -6222,7 +6335,12 @@ describe("the open dispatch: the pull request group (ADR 0088)", () => {
 		// The pull request's review completes without an advance: the cycle
 		// closes, and the Same-type hold stands over the position the pull
 		// request still offers.
-		settleForCause(state, "github:github.com:P_100", "review", "completed", "", outcome());
+		settleForCause(state, "github:github.com:P_100", {
+			taskType: "review",
+			cause: "completed",
+			detail: "",
+			transition: outcome(),
+		});
 		await coordinator.tick();
 		// The auto-close ends the cycle, and the re-verify gate holds the
 		// pull request until the source re-reads it. The gate holds the pull
@@ -6969,7 +7087,11 @@ describe("the automatic walks state their holds in the record (issue #223)", () 
 
 		// The Dispatch pause: a held failed turn stands undecided (ADR 0016).
 		const held = recordRig();
-		settleForCause(held.state, "github:github.com:I_5", "route", "failed", "the build broke");
+		settleForCause(held.state, "github:github.com:I_5", {
+			taskType: "route",
+			cause: "failed",
+			detail: "the build broke",
+		});
 		await held.coordinator.tick();
 		expect(held.lines).toEqual([
 			infoLine("automatic walks hold: a failed turn waits for the operator"),
@@ -7148,7 +7270,10 @@ describe("the fresh-work walk's per-candidate waits name their facts (issue #231
 		// and the sources never re-read it since: the walk's first wait stands on
 		// the re-read, and the Same-type hold the closed cycle stands on waits
 		// behind it.
-		const attempt = settleForCause(state, "github:github.com:I_6", "implement", "completed");
+		const attempt = settleForCause(state, "github:github.com:I_6", {
+			taskType: "implement",
+			cause: "completed",
+		});
 		state.ticketWorkCycle.applyCompletionDecision({
 			ticketIdentity: "github:github.com:I_6",
 			handoffId: attempt,
@@ -7190,7 +7315,10 @@ describe("the fresh-work walk's per-candidate waits name their facts (issue #231
 		// suggest, so both stand on the Same-type hold, and each re-read keeps
 		// the hold standing clear of the re-read wait.
 		for (const identity of ["github:github.com:I_5", "github:github.com:I_6"]) {
-			const attempt = settleForCause(state, identity, "implement", "completed");
+			const attempt = settleForCause(state, identity, {
+				taskType: "implement",
+				cause: "completed",
+			});
 			state.ticketWorkCycle.applyCompletionDecision({
 				ticketIdentity: identity,
 				handoffId: attempt,

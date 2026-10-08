@@ -494,13 +494,14 @@ function decisionModalRegions(
  * One Ticket for the grouped-list example: a repository, a state, and a
  * suggested task, with no source membership and no Handoff.
  */
-function groupTicket(
-	number: number,
-	repository: string,
-	title: string,
-	state: "open" | "running" | "awaiting",
-	taskType: string,
-): Ticket {
+function groupTicket(fields: {
+	number: number;
+	repository: string;
+	title: string;
+	state: "open" | "running" | "awaiting";
+	taskType: string;
+}): Ticket {
+	const { number, repository, title, state, taskType } = fields;
 	const base = sampleTicket(state);
 	return {
 		...base,
@@ -574,13 +575,13 @@ function factRowTicket(
 	state: Ticket["state"],
 	paneId: string,
 ): Ticket {
-	const base = groupTicket(
+	const base = groupTicket({
 		number,
-		"acme/facts",
+		repository: "acme/facts",
 		title,
-		state === "open" ? "open" : "running",
-		"implement",
-	);
+		state: state === "open" ? "open" : "running",
+		taskType: "implement",
+	});
 	return {
 		...base,
 		state,
@@ -800,13 +801,13 @@ function ticketMuteContext(
  * live row that keeps its face under the flag, both wearing the marker.
  */
 function mutedRowTicket(state: "open" | "running"): Ticket {
-	const base = groupTicket(
-		state === "open" ? 11 : 12,
-		"acme/factory",
-		state === "open" ? "Watch agent turns" : "Fix the layout math",
+	const base = groupTicket({
+		number: state === "open" ? 11 : 12,
+		repository: "acme/factory",
+		title: state === "open" ? "Watch agent turns" : "Fix the layout math",
 		state,
-		"implement",
-	);
+		taskType: "implement",
+	});
 	return { ...base, muted: true, mutedAt: "2026-02-17T10:00:00.000Z" };
 }
 
@@ -1748,19 +1749,19 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 				// four cells narrower than the box's content, and the
 				// gallery's box holds seven content rows: the sample sits
 				// scrolled onto its body, the way the operator reads it.
-				lines: consultationDetailLines(
-					sampleConsultation("working"),
-					[],
-					[],
-					columns.contentWidth - 4,
-					null,
-					[
+				lines: consultationDetailLines({
+					consultation: sampleConsultation("working"),
+					turns: [],
+					snapshots: [],
+					width: columns.contentWidth - 4,
+					liveOutput: null,
+					sessionEntries: [
 						{ kind: "input", text: "review the auth design" },
 						{ kind: "text", text: "The design keeps the session in memory." },
 						{ kind: "tool", name: "bash", target: "npm test", failed: false },
 						{ kind: "text", text: "All 571 tests pass." },
 					],
-				),
+				}),
 				visibleRows: 7,
 				scroll: 3,
 				focused: false,
@@ -1776,14 +1777,13 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 		render: (columns, _holds, _inputActive, _wiring) => [
 			createElement(ConsultationDetail, {
 				key: "agent",
-				lines: consultationDetailLines(
-					sampleConsultation("working"),
-					[],
-					[],
-					columns.contentWidth - 4,
-					"Agent: reading src/auth.ts\nAgent: running the tests",
-					null,
-				),
+				lines: consultationDetailLines({
+					consultation: sampleConsultation("working"),
+					turns: [],
+					snapshots: [],
+					width: columns.contentWidth - 4,
+					liveOutput: "Agent: reading src/auth.ts\nAgent: running the tests",
+				}),
 				visibleRows: 7,
 				scroll: 1,
 				focused: false,
@@ -1798,9 +1798,9 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 		render: (columns, _holds, _inputActive, _wiring) => [
 			createElement(ConsultationDetail, {
 				key: "captured",
-				lines: consultationDetailLines(
-					sampleConsultation("closed"),
-					[
+				lines: consultationDetailLines({
+					consultation: sampleConsultation("closed"),
+					turns: [
 						{
 							id: "turn-1",
 							consultationId: sampleConsultation("closed").id,
@@ -1814,7 +1814,7 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 							snapshotId: "snap-1",
 						},
 					],
-					[
+					snapshots: [
 						{
 							id: "snap-1",
 							consultationId: sampleConsultation("closed").id,
@@ -1825,10 +1825,9 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 							truncated: false,
 						},
 					],
-					columns.contentWidth - 4,
-					null,
-					null,
-				),
+					width: columns.contentWidth - 4,
+					liveOutput: null,
+				}),
 				visibleRows: 7,
 				scroll: 3,
 				focused: false,
@@ -2195,9 +2194,9 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 		render: (columns, _holds, _inputActive, _wiring) => [
 			createElement(ConsultationDetail, {
 				key: "unscheduled",
-				lines: consultationDetailLines(
-					sampleConsultation("unscheduled"),
-					[
+				lines: consultationDetailLines({
+					consultation: sampleConsultation("unscheduled"),
+					turns: [
 						{
 							id: "turn-0",
 							consultationId: sampleConsultation("unscheduled").id,
@@ -2211,11 +2210,10 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 							snapshotId: null,
 						},
 					],
-					[],
-					columns.contentWidth - 4,
-					null,
-					null,
-				),
+					snapshots: [],
+					width: columns.contentWidth - 4,
+					liveOutput: null,
+				}),
 				visibleRows: 7,
 				scroll: 0,
 				focused: false,
@@ -2288,14 +2286,13 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 		render: (columns, _holds, _inputActive, _wiring) => [
 			createElement(ConsultationDetail, {
 				key: "queued",
-				lines: consultationDetailLines(
-					sampleConsultation("queued"),
-					[],
-					[],
-					columns.contentWidth - 4,
-					null,
-					null,
-				),
+				lines: consultationDetailLines({
+					consultation: sampleConsultation("queued"),
+					turns: [],
+					snapshots: [],
+					width: columns.contentWidth - 4,
+					liveOutput: null,
+				}),
 				visibleRows: 7,
 				scroll: 0,
 				focused: false,
@@ -2314,17 +2311,47 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 		rows: 29,
 		render: (columns) => {
 			const listed = [
-				groupTicket(1, "acme/billing", "Webhook retry policy", "open", "implement"),
+				groupTicket({
+					number: 1,
+					repository: "acme/billing",
+					title: "Webhook retry policy",
+					state: "open",
+					taskType: "implement",
+				}),
 				{
-					...groupTicket(2, "acme/billing", "Hold the failed turn", "awaiting", "implement"),
+					...groupTicket({
+						number: 2,
+						repository: "acme/billing",
+						title: "Hold the failed turn",
+						state: "awaiting",
+						taskType: "implement",
+					}),
 					lastCompletion: heldCompletion(),
 				},
 				// The routed row is an open ticket that wears the Queue wait
 				// badge (ADR 0072): the route's ask ended the cycle and the
 				// wait stands on the item alone.
-				groupTicket(3, "acme/factory", "Route the settled review", "open", "review"),
-				groupTicket(4, "acme/factory", "Split the gallery view", "open", "review"),
-				groupTicket(5, "acme/factory", "Park the legacy importer", "running", "fix"),
+				groupTicket({
+					number: 3,
+					repository: "acme/factory",
+					title: "Route the settled review",
+					state: "open",
+					taskType: "review",
+				}),
+				groupTicket({
+					number: 4,
+					repository: "acme/factory",
+					title: "Split the gallery view",
+					state: "open",
+					taskType: "review",
+				}),
+				groupTicket({
+					number: 5,
+					repository: "acme/factory",
+					title: "Park the legacy importer",
+					state: "running",
+					taskType: "fix",
+				}),
 			];
 			const bar = (key: string, header: boolean) =>
 				createElement(ActionBar, {
@@ -2355,9 +2382,7 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 					rows: ticketRows(
 						factRows(listed, { queue: [queueItem("github:github.com:I_3", "workflow")] }),
 						"repository",
-						{},
-						[],
-						[],
+						{ folds: {}, storedOrder: [], positionOrder: [] },
 					),
 					selectedIndex: 1,
 					focused: true,
@@ -2369,7 +2394,11 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 				}),
 				createElement(TicketList, {
 					key: "folded",
-					rows: ticketRows(factRows(listed), "repository", { repository: folded }, [], []),
+					rows: ticketRows(factRows(listed), "repository", {
+						folds: { repository: folded },
+						storedOrder: [],
+						positionOrder: [],
+					}),
 					selectedIndex: 0,
 					focused: true,
 					height: 5,
@@ -2380,7 +2409,11 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 				}),
 				createElement(TicketList, {
 					key: "ordered",
-					rows: ticketRows(factRows(listed), "repository", {}, ["acme/factory"], []),
+					rows: ticketRows(factRows(listed), "repository", {
+						folds: {},
+						storedOrder: ["acme/factory"],
+						positionOrder: [],
+					}),
 					selectedIndex: 0,
 					focused: true,
 					height: 4,
@@ -2391,7 +2424,11 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 				}),
 				createElement(TicketList, {
 					key: "on-header",
-					rows: ticketRows(factRows(listed), "task", {}, [], []),
+					rows: ticketRows(factRows(listed), "task", {
+						folds: {},
+						storedOrder: [],
+						positionOrder: [],
+					}),
 					selectedIndex: 0,
 					focused: true,
 					height: 5,
@@ -2438,16 +2475,38 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 		rows: 30,
 		render: (columns) => {
 			const listed = [
-				groupTicket(1, "acme/billing", "Webhook retry policy", "open", "implement"),
-				groupTicket(2, "acme/factory", "Route the settled review", "open", "review"),
-				groupTicket(3, "acme/ledger", "Stand the ship date", "open", "review"),
+				groupTicket({
+					number: 1,
+					repository: "acme/billing",
+					title: "Webhook retry policy",
+					state: "open",
+					taskType: "implement",
+				}),
+				groupTicket({
+					number: 2,
+					repository: "acme/factory",
+					title: "Route the settled review",
+					state: "open",
+					taskType: "review",
+				}),
+				groupTicket({
+					number: 3,
+					repository: "acme/ledger",
+					title: "Stand the ship date",
+					state: "open",
+					taskType: "review",
+				}),
 			];
 			return [
 				createElement(TicketList, {
 					key: "marker",
-					rows: ticketRows(factRows(listed), "repository", {}, [], [], (value) =>
-						value === "acme/billing" ? "drift" : value === "acme/factory" ? "uninit" : null,
-					),
+					rows: ticketRows(factRows(listed), "repository", {
+						folds: {},
+						storedOrder: [],
+						positionOrder: [],
+						groupMarker: (value) =>
+							value === "acme/billing" ? "drift" : value === "acme/factory" ? "uninit" : null,
+					}),
 					selectedIndex: 0,
 					focused: true,
 					height: 16,

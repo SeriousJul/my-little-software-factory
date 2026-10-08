@@ -161,11 +161,19 @@ function configFor(): FactoryConfig {
 function seed(
 	state: FactoryState,
 	id: string,
-	agent = true,
-	createdAt = "2026-09-01T10:00:00.000Z",
-	contextWindow = "",
-	environment: "worktree" | "live-worktree" = "worktree",
+	fields: {
+		agent?: boolean;
+		createdAt?: string;
+		contextWindow?: string;
+		environment?: "worktree" | "live-worktree";
+	} = {},
 ): void {
+	const {
+		agent = true,
+		createdAt = "2026-09-01T10:00:00.000Z",
+		contextWindow = "",
+		environment = "worktree",
+	} = fields;
 	state.consultationRecord.createConsultation({
 		id,
 		typeName: "grill",
@@ -584,12 +592,14 @@ describe("Consultation launch and monitoring through the UI", () => {
 					expect(started[0].paneId).toBe("pane-c1");
 					expect(state.consultationRecord.consultation(started[0].id)?.pendingResponse).toBeNull();
 				},
-				WIDTH,
-				32,
 				{
-					...bootProps(state, runner),
-					config: { ...configFor(), repos: {} },
-					sources: [source],
+					width: WIDTH,
+					height: 32,
+					props: {
+						...bootProps(state, runner),
+						config: { ...configFor(), repos: {} },
+						sources: [source],
+					},
 				},
 			);
 		} finally {
@@ -628,14 +638,16 @@ describe("Consultation launch and monitoring through the UI", () => {
 						state.consultationRecord.consultationTurns(WORKING_ID)[0].settledAt,
 					).not.toBeNull();
 				},
-				WIDTH,
-				32,
 				{
-					state,
-					runner,
-					config: configFor(),
-					home,
-					pollIntervalMs: 100,
+					width: WIDTH,
+					height: 32,
+					props: {
+						state,
+						runner,
+						config: configFor(),
+						home,
+						pollIntervalMs: 100,
+					},
 				},
 			);
 		} finally {
@@ -719,12 +731,14 @@ test("the mode cell counts the ticket seat and the Consultation seat against one
 				);
 				await awaitFrame(setup, (f) => f.includes("● manual 1/2"), "the dropped seat");
 			},
-			WIDTH,
-			32,
-			// No initialTickets: the observation loop must poll herdr for the
-			// seat count's agent list, and it stands down on a test
-			// projection.
-			{ state, runner, config: configFor(), home, pollIntervalMs: 100 },
+			{
+				width: WIDTH,
+				height: 32,
+				props: // No initialTickets: the observation loop must poll herdr for the
+					// seat count's agent list, and it stands down on a test
+					// projection.
+					{ state, runner, config: configFor(), home, pollIntervalMs: 100 },
+			},
 		);
 	} finally {
 		state.close();
@@ -733,7 +747,7 @@ test("the mode cell counts the ticket seat and the Consultation seat against one
 describe("Consultation recovery and replacement through the UI", () => {
 	test("an interrupted opening recovers with r", async () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
-		seed(state, OPENING_ID, false);
+		seed(state, OPENING_ID, { agent: false });
 		const inner = new FakeRunner();
 		stubCheckout(inner);
 		stubWorktreeLaunch(inner);
@@ -760,9 +774,7 @@ describe("Consultation recovery and replacement through the UI", () => {
 					);
 					expect(state.consultationRecord.consultation(OPENING_ID)?.state).toBe("working");
 				},
-				WIDTH,
-				32,
-				bootProps(state, runner),
+				{ width: WIDTH, height: 32, props: bootProps(state, runner) },
 			);
 		} finally {
 			state.close();
@@ -775,7 +787,11 @@ describe("Consultation recovery and replacement through the UI", () => {
 		// named, and never reached a settled state. Herdr reports no Agent, so the
 		// stored count is the one thing that can refuse this recovery: pi maps no
 		// context window setting.
-		seed(state, OPENING_ID, false, "2026-09-01T10:00:00.000Z", "131072");
+		seed(state, OPENING_ID, {
+			agent: false,
+			createdAt: "2026-09-01T10:00:00.000Z",
+			contextWindow: "131072",
+		});
 		const short = OPENING_ID.slice(0, 8);
 		state.consultationRecord.recordConsultationAgentHandles(OPENING_ID, {
 			paneId: `pane-${short}`,
@@ -803,9 +819,7 @@ describe("Consultation recovery and replacement through the UI", () => {
 					expect(commands).not.toContain("agent start");
 					expect(commands).not.toContain("agent prompt");
 				},
-				WIDTH,
-				30,
-				bootProps(state, runner),
+				{ width: WIDTH, height: 30, props: bootProps(state, runner) },
 			);
 		} finally {
 			state.close();
@@ -814,7 +828,7 @@ describe("Consultation recovery and replacement through the UI", () => {
 
 	test("a failed Consultation refuses r and opens a Replacement launcher from c", async () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
-		seed(state, FAILED_ID, false);
+		seed(state, FAILED_ID, { agent: false });
 		state.consultationRecord.failConsultationOpening(FAILED_ID, "herdr refused the launch");
 		const inner = new FakeRunner();
 		stubCheckout(inner);
@@ -879,9 +893,7 @@ describe("Consultation recovery and replacement through the UI", () => {
 					expect(replacements[0].replacementOf).toBe(FAILED_ID);
 					expect(replacements[0].state).toBe("working");
 				},
-				WIDTH,
-				32,
-				bootProps(state, runner),
+				{ width: WIDTH, height: 32, props: bootProps(state, runner) },
 			);
 		} finally {
 			state.close();
@@ -898,7 +910,7 @@ describe("Consultation recovery and replacement through the UI", () => {
 describe("Consultation Enter reaches the recovery surface its state needs", () => {
 	test("Enter on an opening Consultation opens the recovery panel, and Recover retries it", async () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
-		seed(state, OPENING_ID, false);
+		seed(state, OPENING_ID, { agent: false });
 		const inner = new FakeRunner();
 		stubCheckout(inner);
 		stubWorktreeLaunch(inner);
@@ -934,9 +946,7 @@ describe("Consultation Enter reaches the recovery surface its state needs", () =
 					);
 					expect(state.consultationRecord.consultation(OPENING_ID)?.state).toBe("working");
 				},
-				WIDTH,
-				32,
-				bootProps(state, runner),
+				{ width: WIDTH, height: 32, props: bootProps(state, runner) },
 			);
 		} finally {
 			state.close();
@@ -945,7 +955,7 @@ describe("Consultation Enter reaches the recovery surface its state needs", () =
 
 	test("the recovery panel's Close takes an opening Consultation through its dialog", async () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
-		seed(state, OPENING_ID, false);
+		seed(state, OPENING_ID, { agent: false });
 		const runner = new ConsultationRunner(new FakeRunner(), agentListJson([]));
 		try {
 			await withApp(
@@ -974,9 +984,7 @@ describe("Consultation Enter reaches the recovery surface its state needs", () =
 					);
 					expect(state.consultationRecord.consultation(OPENING_ID)?.state).toBe("opening");
 				},
-				WIDTH,
-				32,
-				bootProps(state, runner),
+				{ width: WIDTH, height: 32, props: bootProps(state, runner) },
 			);
 		} finally {
 			state.close();
@@ -985,7 +993,7 @@ describe("Consultation Enter reaches the recovery surface its state needs", () =
 
 	test("Enter on a missing Consultation opens the recovery panel, and Replace links its replacement", async () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
-		seed(state, MISSING_ID, false);
+		seed(state, MISSING_ID, { agent: false });
 		state.consultationRecord.setConsultationState(MISSING_ID, "missing", "the Agent pane is gone");
 		const inner = new FakeRunner();
 		stubCheckout(inner);
@@ -1031,9 +1039,7 @@ describe("Consultation Enter reaches the recovery surface its state needs", () =
 					// The replaced record keeps its own state beside the new one.
 					expect(state.consultationRecord.consultation(MISSING_ID)?.state).toBe("missing");
 				},
-				WIDTH,
-				32,
-				bootProps(state, runner),
+				{ width: WIDTH, height: 32, props: bootProps(state, runner) },
 			);
 		} finally {
 			state.close();
@@ -1042,7 +1048,7 @@ describe("Consultation Enter reaches the recovery surface its state needs", () =
 
 	test("the recovery panel's Close retires a failed record without a dialog", async () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
-		seed(state, FAILED_ID, false);
+		seed(state, FAILED_ID, { agent: false });
 		state.consultationRecord.failConsultationOpening(FAILED_ID, "herdr refused the launch");
 		const short = FAILED_ID.slice(0, 8);
 		const runner = new ConsultationRunner(new FakeRunner(), agentListJson([]));
@@ -1066,9 +1072,7 @@ describe("Consultation Enter reaches the recovery surface its state needs", () =
 					expect(frame).not.toContain("Close Consultation");
 					expect(state.consultationRecord.consultation(FAILED_ID)?.state).toBe("closed");
 				},
-				WIDTH,
-				32,
-				bootProps(state, runner),
+				{ width: WIDTH, height: 32, props: bootProps(state, runner) },
 			);
 		} finally {
 			state.close();
@@ -1097,9 +1101,7 @@ describe("Consultation Enter reaches the recovery surface its state needs", () =
 					expect(frameText(panel)).toContain("Force-close");
 					expect(state.consultationRecord.consultation(CLOSE_A_ID)?.state).toBe("closing");
 				},
-				WIDTH,
-				32,
-				bootProps(state, runner),
+				{ width: WIDTH, height: 32, props: bootProps(state, runner) },
 			);
 		} finally {
 			state.close();
@@ -1109,7 +1111,9 @@ describe("Consultation Enter reaches the recovery surface its state needs", () =
 	test("Enter on a closed Consultation says the record is already closed", async () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
 		seed(state, CLOSED_DIRECT_ID);
-		state.consultationRecord.settleConsultationTurn(CLOSED_DIRECT_ID, null, "done", "idle");
+		state.consultationRecord.settleConsultationTurn(CLOSED_DIRECT_ID, null, "done", {
+			settledStatus: "idle",
+		});
 		state.consultationRecord.beginConsultationClose(CLOSED_DIRECT_ID);
 		state.consultationRecord.finishConsultationClose(CLOSED_DIRECT_ID);
 		const runner = new ConsultationRunner(new FakeRunner(), agentListJson([]));
@@ -1125,9 +1129,7 @@ describe("Consultation Enter reaches the recovery surface its state needs", () =
 					);
 					expect(state.consultationRecord.consultation(CLOSED_DIRECT_ID)?.state).toBe("closed");
 				},
-				WIDTH,
-				32,
-				bootProps(state, runner),
+				{ width: WIDTH, height: 32, props: bootProps(state, runner) },
 			);
 		} finally {
 			state.close();
@@ -1139,7 +1141,9 @@ describe("Consultation responses through the UI", () => {
 	test("a response becomes a turn only after Herdr accepts the prompt", async () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
 		seed(state, RESPONSE_ID);
-		state.consultationRecord.settleConsultationTurn(RESPONSE_ID, null, "first answer", "idle");
+		state.consultationRecord.settleConsultationTurn(RESPONSE_ID, null, "first answer", {
+			settledStatus: "idle",
+		});
 		state.consultationRecord.setConsultationDraft(RESPONSE_ID, "follow up");
 		const inner = new FakeRunner();
 		stubPaneReadText(inner, `pane-${RESPONSE_ID.slice(0, 8)}`, "Agent: waiting");
@@ -1169,9 +1173,7 @@ describe("Consultation responses through the UI", () => {
 					expect(turns).toHaveLength(2);
 					expect(turns[1].input).toBe("follow up");
 				},
-				WIDTH,
-				32,
-				bootProps(state, runner),
+				{ width: WIDTH, height: 32, props: bootProps(state, runner) },
 			);
 		} finally {
 			state.close();
@@ -1181,7 +1183,9 @@ describe("Consultation responses through the UI", () => {
 	test("a rejected prompt keeps the draft and leaves no pending delivery", async () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
 		seed(state, RESPONSE_ID);
-		state.consultationRecord.settleConsultationTurn(RESPONSE_ID, null, "first answer", "idle");
+		state.consultationRecord.settleConsultationTurn(RESPONSE_ID, null, "first answer", {
+			settledStatus: "idle",
+		});
 		state.consultationRecord.setConsultationDraft(RESPONSE_ID, "follow up");
 		const inner = new FakeRunner();
 		inner.set("herdr", ["agent", "prompt", AGENT, "follow up"], {
@@ -1211,9 +1215,7 @@ describe("Consultation responses through the UI", () => {
 					expect(state.consultationRecord.consultationTurns(RESPONSE_ID)).toHaveLength(1);
 					expect(frameText(setup.captureCharFrame())).toContain("follow up");
 				},
-				WIDTH,
-				32,
-				bootProps(state, runner),
+				{ width: WIDTH, height: 32, props: bootProps(state, runner) },
 			);
 		} finally {
 			state.close();
@@ -1223,7 +1225,9 @@ describe("Consultation responses through the UI", () => {
 	test("the settled Agent output stays visible until an accepted response opens the next turn", async () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
 		seed(state, RESPONSE_ID);
-		state.consultationRecord.settleConsultationTurn(RESPONSE_ID, null, "the design holds", "idle");
+		state.consultationRecord.settleConsultationTurn(RESPONSE_ID, null, "the design holds", {
+			settledStatus: "idle",
+		});
 		const paneId = `pane-${RESPONSE_ID.slice(0, 8)}`;
 		const inner = new FakeRunner();
 		stubPaneReadText(inner, paneId, "Agent: the design holds");
@@ -1263,9 +1267,11 @@ describe("Consultation responses through the UI", () => {
 					expect(turns).toHaveLength(2);
 					expect(turns.at(-1)?.input).toBe("then ship it");
 				},
-				WIDTH,
-				32,
-				{ state, runner, config: configFor(), home, pollIntervalMs: 100 },
+				{
+					width: WIDTH,
+					height: 32,
+					props: { state, runner, config: configFor(), home, pollIntervalMs: 100 },
+				},
 			);
 		} finally {
 			state.close();
@@ -1323,9 +1329,7 @@ describe("Agent interaction through the UI", () => {
 						f.includes("left Agent interaction mode"),
 					);
 				},
-				WIDTH,
-				32,
-				bootProps(state, runner),
+				{ width: WIDTH, height: 32, props: bootProps(state, runner) },
 			);
 		} finally {
 			state.close();
@@ -1452,9 +1456,7 @@ describe("Consultation close and cleanup through the UI", () => {
 						expect(retained[0].details).toContain("retained after close");
 					}
 				},
-				WIDTH,
-				32,
-				bootProps(state, runner),
+				{ width: WIDTH, height: 32, props: bootProps(state, runner) },
 			);
 		} finally {
 			state.close();
@@ -1529,9 +1531,7 @@ describe("Consultation close and cleanup through the UI", () => {
 						.filter((resource) => resource.kind === "worktree");
 					expect(worktrees[0]).toMatchObject({ owned: false });
 				},
-				WIDTH,
-				32,
-				bootProps(state, runner),
+				{ width: WIDTH, height: 32, props: bootProps(state, runner) },
 			);
 		} finally {
 			state.close();
@@ -1541,8 +1541,8 @@ describe("Consultation close and cleanup through the UI", () => {
 	test("a missing or a failed Consultation closes directly, without a dialog", async () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
 		// Neither record holds an Agent, so the close has nothing to confirm.
-		seed(state, MISSING_DIRECT_ID, false);
-		seed(state, FAILED_DIRECT_ID, false);
+		seed(state, MISSING_DIRECT_ID, { agent: false });
+		seed(state, FAILED_DIRECT_ID, { agent: false });
 		state.consultationRecord.setConsultationState(
 			MISSING_DIRECT_ID,
 			"missing",
@@ -1584,9 +1584,7 @@ describe("Consultation close and cleanup through the UI", () => {
 					expect(state.consultationRecord.consultation(FAILED_DIRECT_ID)?.state).toBe("closed");
 					expect(frame).not.toContain("Close Consultation");
 				},
-				WIDTH,
-				32,
-				bootProps(state, runner),
+				{ width: WIDTH, height: 32, props: bootProps(state, runner) },
 			);
 		} finally {
 			state.close();
@@ -1596,7 +1594,9 @@ describe("Consultation close and cleanup through the UI", () => {
 	test("the Delete key on a closed Consultation removes it behind the confirmation", async () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
 		seed(state, CLOSED_DIRECT_ID);
-		state.consultationRecord.settleConsultationTurn(CLOSED_DIRECT_ID, null, "done", "idle");
+		state.consultationRecord.settleConsultationTurn(CLOSED_DIRECT_ID, null, "done", {
+			settledStatus: "idle",
+		});
 		state.consultationRecord.beginConsultationClose(CLOSED_DIRECT_ID);
 		state.consultationRecord.finishConsultationClose(CLOSED_DIRECT_ID);
 		const runner = new ConsultationRunner(new FakeRunner(), agentListJson([]));
@@ -1621,9 +1621,7 @@ describe("Consultation close and cleanup through the UI", () => {
 					);
 					expect(state.consultationRecord.consultation(CLOSED_DIRECT_ID)).toBeUndefined();
 				},
-				WIDTH,
-				32,
-				bootProps(state, runner),
+				{ width: WIDTH, height: 32, props: bootProps(state, runner) },
 			);
 		} finally {
 			state.close();
@@ -1683,11 +1681,13 @@ describe("Consultation close and cleanup through the UI", () => {
 					);
 					expect(state.consultationRecord.consultation(CONFIRM_GONE_ID)?.state).toBe("closed");
 				},
-				WIDTH,
-				32,
-				// The observation loop runs only on the real projection, so this
-				// boot carries no initialTickets, like the settle test above.
-				{ state, runner, config: configFor(), home, pollIntervalMs: 100 },
+				{
+					width: WIDTH,
+					height: 32,
+					props: // The observation loop runs only on the real projection, so this
+						// boot carries no initialTickets, like the settle test above.
+						{ state, runner, config: configFor(), home, pollIntervalMs: 100 },
+				},
 			);
 		} finally {
 			state.close();
@@ -1718,9 +1718,7 @@ describe("Consultation geometry, privacy, and history through the UI", () => {
 					expect(frameText(crossed)).toContain("no ticket selected");
 					expect(crossed).toContain("┌─❯ Tickets");
 				},
-				70,
-				32,
-				bootProps(state, runner),
+				{ width: 70, height: 32, props: bootProps(state, runner) },
 			);
 		} finally {
 			state.close();
@@ -1730,7 +1728,9 @@ describe("Consultation geometry, privacy, and history through the UI", () => {
 	test("consultation history stays out of the ticket view and delete removes it", async () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
 		seed(state, CLOSED_ID);
-		state.consultationRecord.settleConsultationTurn(CLOSED_ID, null, "secret output", "idle");
+		state.consultationRecord.settleConsultationTurn(CLOSED_ID, null, "secret output", {
+			settledStatus: "idle",
+		});
 		state.consultationRecord.beginConsultationClose(CLOSED_ID);
 		state.consultationRecord.finishConsultationClose(CLOSED_ID);
 		const inner = new FakeRunner();
@@ -1766,9 +1766,7 @@ describe("Consultation geometry, privacy, and history through the UI", () => {
 					);
 					expect(state.consultationRecord.consultation(CLOSED_ID)).toBeUndefined();
 				},
-				WIDTH,
-				32,
-				bootProps(state, runner),
+				{ width: WIDTH, height: 32, props: bootProps(state, runner) },
 			);
 		} finally {
 			state.close();
@@ -1826,9 +1824,11 @@ describe("Consultation attention through the UI", () => {
 					await sleep(150);
 					expect(bells.count()).toBe(2);
 				},
-				WIDTH,
-				32,
-				{ state, runner, config: configFor(), home, pollIntervalMs: 50 },
+				{
+					width: WIDTH,
+					height: 32,
+					props: { state, runner, config: configFor(), home, pollIntervalMs: 50 },
+				},
 			);
 		} finally {
 			bells.restore();
@@ -1868,9 +1868,11 @@ describe("Consultation attention through the UI", () => {
 					await sleep(150);
 					expect(bells.count()).toBe(1);
 				},
-				WIDTH,
-				32,
-				{ state, runner, config: configFor(), home, pollIntervalMs: 50 },
+				{
+					width: WIDTH,
+					height: 32,
+					props: { state, runner, config: configFor(), home, pollIntervalMs: 50 },
+				},
 			);
 		} finally {
 			bells.restore();
@@ -1883,12 +1885,12 @@ describe("Consultation attention through the UI", () => {
 		// Creation order is future-dated so the wall-clock stamps of the state
 		// transitions (now) stay older than every seeded created_at.
 		const t = (minutes: number) => new Date(Date.now() + minutes * 60_000).toISOString();
-		seed(state, FAILED_ID, false, t(1));
+		seed(state, FAILED_ID, { agent: false, createdAt: t(1) });
 		state.consultationRecord.failConsultationOpening(FAILED_ID, "herdr refused the launch");
 		await sleep(20);
-		seed(state, MISSING_ID, true, t(3));
+		seed(state, MISSING_ID, { agent: true, createdAt: t(3) });
 		state.consultationRecord.setConsultationState(MISSING_ID, "missing", "the Agent pane is gone");
-		seed(state, OPENING_ID, false, t(2));
+		seed(state, OPENING_ID, { agent: false, createdAt: t(2) });
 		const inner = new FakeRunner();
 		const runner = new ConsultationRunner(inner, agentListJson([]));
 		try {
@@ -1905,8 +1907,10 @@ describe("Consultation attention through the UI", () => {
 					// hold the observation off, so the Refresh key re-projects the
 					// list; the new row takes the top and the cursor follows its
 					// retained row. One more step up takes it.
-					seed(state, AWAITING_ID, true, t(4));
-					state.consultationRecord.settleConsultationTurn(AWAITING_ID, null, "answer", "idle");
+					seed(state, AWAITING_ID, { agent: true, createdAt: t(4) });
+					state.consultationRecord.settleConsultationTurn(AWAITING_ID, null, "answer", {
+						settledStatus: "idle",
+					});
 					setup.mockInput.pressKey("r");
 					await awaitFrame(setup, (f) => f.includes("awaiting response: 1"), "the awaiting row");
 					// The Refresh re-projection keeps the cursor on its retained
@@ -1925,9 +1929,7 @@ describe("Consultation attention through the UI", () => {
 					);
 					expect(detailPaneText(selected)).toContain("State: awaiting-response");
 				},
-				WIDTH,
-				32,
-				bootProps(state, runner),
+				{ width: WIDTH, height: 32, props: bootProps(state, runner) },
 			);
 		} finally {
 			state.close();
@@ -1936,8 +1938,10 @@ describe("Consultation attention through the UI", () => {
 
 	test("a Consultation that needs the operator adds no row to the compact frame", async () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
-		seed(state, AWAITING_ID, true);
-		state.consultationRecord.settleConsultationTurn(AWAITING_ID, null, "answer", "idle");
+		seed(state, AWAITING_ID, { agent: true });
+		state.consultationRecord.settleConsultationTurn(AWAITING_ID, null, "answer", {
+			settledStatus: "idle",
+		});
 		const paneId = `pane-${AWAITING_ID.slice(0, 8)}`;
 		const inner = new FakeRunner();
 		stubPaneReadText(inner, paneId, "Agent: waiting");
@@ -1963,9 +1967,7 @@ describe("Consultation attention through the UI", () => {
 					expect(rows[1]).toContain("Terminal too small");
 					expect(rows.join("\n")).not.toContain("awaiting response");
 				},
-				WIDTH,
-				32,
-				bootProps(state, runner),
+				{ width: WIDTH, height: 32, props: bootProps(state, runner) },
 			);
 		} finally {
 			state.close();
@@ -2007,9 +2009,7 @@ describe("Consultation live-worktree launch through the UI", () => {
 					expect(consultation.paneId).toBe("pane-c1");
 					expect(consultation.workspaceId).toBe("ws-live");
 				},
-				WIDTH,
-				32,
-				{ state, runner, config: liveConfigFor(), home },
+				{ width: WIDTH, height: 32, props: { state, runner, config: liveConfigFor(), home } },
 			);
 		} finally {
 			state.close();
@@ -2069,9 +2069,7 @@ describe("Consultation live-worktree launch through the UI", () => {
 					const [consultation] = state.consultationRecord.consultations("open");
 					expect(consultation.contextWindow).toBe("131072");
 				},
-				WIDTH,
-				32,
-				{ state, runner, config, home },
+				{ width: WIDTH, height: 32, props: { state, runner, config, home } },
 			);
 		} finally {
 			state.close();
@@ -2101,9 +2099,7 @@ describe("Consultation live-worktree launch through the UI", () => {
 					expect(consultation.paneId).toBe("pane-c1");
 					expect(consultation.workspaceId).toBe("ws-new");
 				},
-				WIDTH,
-				32,
-				{ state, runner, config: liveConfigFor(), home },
+				{ width: WIDTH, height: 32, props: { state, runner, config: liveConfigFor(), home } },
 			);
 		} finally {
 			state.close();
@@ -2218,9 +2214,11 @@ describe("Consultation live-worktree launch through the UI", () => {
 					expect(frameText(panel)).toContain(`Conflict: Ticket ${listedTicket}`);
 					expect(frameText(panel)).not.toContain("Conflict: Herdr Agent");
 				},
-				WIDTH,
-				32,
-				{ state, runner, config: { ...liveConfigFor(), maxParallelAgents: 4 }, home },
+				{
+					width: WIDTH,
+					height: 32,
+					props: { state, runner, config: { ...liveConfigFor(), maxParallelAgents: 4 }, home },
+				},
 			);
 		} finally {
 			state.close();
@@ -2326,9 +2324,7 @@ describe("Consultation live-worktree launch through the UI", () => {
 						.filter((command) => command.includes("rev-parse")).length;
 					expect(validatedAfter).toBe(validatedBefore);
 				},
-				WIDTH,
-				32,
-				{ state, runner, config: liveConfigFor(), home },
+				{ width: WIDTH, height: 32, props: { state, runner, config: liveConfigFor(), home } },
 			);
 		} finally {
 			state.close();
@@ -2398,9 +2394,7 @@ describe("Consultation live-worktree launch through the UI", () => {
 						state.consultationRecord.confirmedCheckoutConflicts(realpathSync(checkout)),
 					).toContain("pane-herdr");
 				},
-				WIDTH,
-				32,
-				{ state, runner, config: liveConfigFor(), home },
+				{ width: WIDTH, height: 32, props: { state, runner, config: liveConfigFor(), home } },
 			);
 		} finally {
 			state.close();
@@ -2477,9 +2471,7 @@ describe("Consultation live-worktree launch through the UI", () => {
 					// The ask asks the Agent's CLI once.
 					expect(inner.modelListCalls).toEqual(["pi"]);
 				},
-				WIDTH,
-				32,
-				{ state, runner, config, home },
+				{ width: WIDTH, height: 32, props: { state, runner, config, home } },
 			);
 		} finally {
 			state.close();
@@ -2509,9 +2501,7 @@ describe("Consultation live-worktree launch through the UI", () => {
 					expect(consultation.state).toBe("working");
 					expect(consultation.warning).toBe("the live checkout has uncommitted changes");
 				},
-				WIDTH,
-				32,
-				{ state, runner, config: liveConfigFor(), home },
+				{ width: WIDTH, height: 32, props: { state, runner, config: liveConfigFor(), home } },
 			);
 		} finally {
 			state.close();
@@ -2523,7 +2513,12 @@ describe("Consultation live-worktree launch through the UI", () => {
 		// The live Consultation works in the operator's own checkout, so the
 		// confirmation names the checkout as the resource the close keeps,
 		// not the worktree and branch a worktree Consultation keeps.
-		seed(state, LIVE_CLOSE_ID, true, "2026-09-01T10:00:00.000Z", "", "live-worktree");
+		seed(state, LIVE_CLOSE_ID, {
+			agent: true,
+			createdAt: "2026-09-01T10:00:00.000Z",
+			contextWindow: "",
+			environment: "live-worktree",
+		});
 		state.consultationRecord.setConsultationState(LIVE_CLOSE_ID, "working");
 		// The Agent is alive at the recorded pane: the observation loop keeps
 		// the record working while the dialog stands.
@@ -2555,9 +2550,7 @@ describe("Consultation live-worktree launch through the UI", () => {
 					);
 					expect(state.consultationRecord.consultation(LIVE_CLOSE_ID)?.state).toBe("working");
 				},
-				WIDTH,
-				32,
-				{ state, runner, config: liveConfigFor(), home },
+				{ width: WIDTH, height: 32, props: { state, runner, config: liveConfigFor(), home } },
 			);
 		} finally {
 			state.close();
@@ -2569,12 +2562,9 @@ describe("Consultation response gating by observed Agent status", () => {
 	test("a blocked Agent takes Enter into interaction, with the exit key shown first", async () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
 		seed(state, INTERACTION_ID);
-		state.consultationRecord.settleConsultationTurn(
-			INTERACTION_ID,
-			null,
-			"first answer",
-			"blocked",
-		);
+		state.consultationRecord.settleConsultationTurn(INTERACTION_ID, null, "first answer", {
+			settledStatus: "blocked",
+		});
 		const paneId = `pane-${INTERACTION_ID.slice(0, 8)}`;
 		const inner = new FakeRunner();
 		stubPaneReadText(inner, paneId, "Agent: blocked on approval");
@@ -2614,9 +2604,11 @@ describe("Consultation response gating by observed Agent status", () => {
 						f.includes("left Agent interaction mode"),
 					);
 				},
-				WIDTH,
-				32,
-				{ state, runner, config: configFor(), home, pollIntervalMs: 50 },
+				{
+					width: WIDTH,
+					height: 32,
+					props: { state, runner, config: configFor(), home, pollIntervalMs: 50 },
+				},
 			);
 		} finally {
 			state.close();
@@ -2627,12 +2619,9 @@ describe("Consultation response gating by observed Agent status", () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
 		seed(state, INTERACTION_ID);
 		// The last settled turn was blocked, but the Agent itself is idle now.
-		state.consultationRecord.settleConsultationTurn(
-			INTERACTION_ID,
-			null,
-			"first answer",
-			"blocked",
-		);
+		state.consultationRecord.settleConsultationTurn(INTERACTION_ID, null, "first answer", {
+			settledStatus: "blocked",
+		});
 		const paneId = `pane-${INTERACTION_ID.slice(0, 8)}`;
 		const inner = new FakeRunner();
 		stubPaneReadText(inner, paneId, "Agent: now idle");
@@ -2663,9 +2652,11 @@ describe("Consultation response gating by observed Agent status", () => {
 					);
 					expect(afterEditor).toContain("┌─❯ Consultations");
 				},
-				WIDTH,
-				32,
-				{ state, runner, config: configFor(), home, pollIntervalMs: 50 },
+				{
+					width: WIDTH,
+					height: 32,
+					props: { state, runner, config: configFor(), home, pollIntervalMs: 50 },
+				},
 			);
 		} finally {
 			state.close();
@@ -2707,9 +2698,11 @@ describe("Consultation response gating by observed Agent status", () => {
 						f.includes("left Agent interaction mode"),
 					);
 				},
-				WIDTH,
-				32,
-				{ state, runner, config: configFor(), home, pollIntervalMs: 50 },
+				{
+					width: WIDTH,
+					height: 32,
+					props: { state, runner, config: configFor(), home, pollIntervalMs: 50 },
+				},
 			);
 		} finally {
 			state.close();
@@ -2763,10 +2756,17 @@ for (const exitCase of interactionExitCases) {
 					);
 					expect(runner.commands().join("\n")).not.toContain("send-text");
 				},
-				WIDTH,
-				32,
-				{ state, runner, config: { ...configFor(), interactionExitKey: exitCase.config }, home },
-				{ kittyKeyboard: true },
+				{
+					width: WIDTH,
+					height: 32,
+					props: {
+						state,
+						runner,
+						config: { ...configFor(), interactionExitKey: exitCase.config },
+						home,
+					},
+					rendererOptions: { kittyKeyboard: true },
+				},
 			);
 		} finally {
 			state.close();
@@ -2885,9 +2885,11 @@ describe("The full Consultation operator flow", () => {
 					expect(history).toContain("[external Agent input not captured]");
 					expect(history).toContain("Agent: answer one");
 				},
-				WIDTH,
-				30,
-				{ state, runner, config: configFor(), home, pollIntervalMs: 50 },
+				{
+					width: WIDTH,
+					height: 30,
+					props: { state, runner, config: configFor(), home, pollIntervalMs: 50 },
+				},
 			);
 		} finally {
 			bells.restore();
@@ -2901,7 +2903,7 @@ describe("The full Consultation operator flow", () => {
 		// not jump the view onto it: the operator is watching the one it
 		// just created.
 		const t = (minutes: number) => new Date(Date.now() + minutes * 60_000).toISOString();
-		seed(state, MISSING_ID, true, t(1));
+		seed(state, MISSING_ID, { agent: true, createdAt: t(1) });
 		state.consultationRecord.setConsultationState(MISSING_ID, "missing", "the Agent pane is gone");
 		const inner = new FakeRunner();
 		stubCheckout(inner);
@@ -2930,9 +2932,11 @@ describe("The full Consultation operator flow", () => {
 					expect(detailPaneText(frame)).toContain("State: working");
 					expect(detailPaneText(frame)).not.toContain("State: missing");
 				},
-				WIDTH,
-				30,
-				{ state, runner, config: configFor(), home, pollIntervalMs: 50 },
+				{
+					width: WIDTH,
+					height: 30,
+					props: { state, runner, config: configFor(), home, pollIntervalMs: 50 },
+				},
 			);
 		} finally {
 			state.close();
@@ -3016,16 +3020,18 @@ describe("The full Consultation operator flow", () => {
 					);
 					expect(messageRowOf(returned)).not.toContain("refreshing");
 				},
-				WIDTH,
-				32,
 				{
-					state,
-					runner,
-					config: { ...configFor(), sources: [sourceConfig] },
-					home,
-					sources: [source],
-					pollIntervalMs: 60_000,
-					initialTickets: [],
+					width: WIDTH,
+					height: 32,
+					props: {
+						state,
+						runner,
+						config: { ...configFor(), sources: [sourceConfig] },
+						home,
+						sources: [source],
+						pollIntervalMs: 60_000,
+						initialTickets: [],
+					},
 				},
 			);
 		} finally {
@@ -3097,11 +3103,13 @@ describe("the Consultation detail reads the Agent's session record (ADR 0025)", 
 					);
 					expect(state.consultationRecord.consultation(WORKING_ID)?.pendingResponse).toBeNull();
 				},
-				WIDTH,
-				32,
-				// No initialTickets: the observation loop must poll herdr for
-				// the record path, and it stands down on a test projection.
-				{ state, runner, config: configFor(), home, pollIntervalMs: 100 },
+				{
+					width: WIDTH,
+					height: 32,
+					props: // No initialTickets: the observation loop must poll herdr for
+						// the record path, and it stands down on a test projection.
+						{ state, runner, config: configFor(), home, pollIntervalMs: 100 },
+				},
 			);
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
@@ -3144,11 +3152,13 @@ describe("the Consultation detail reads the Agent's session record (ADR 0025)", 
 					expect(runner.commands()).toContain(`herdr agent focus ${paneId}`);
 					expect(runner.commands()).toContain(`herdr workspace get ${workspaceId}`);
 				},
-				WIDTH,
-				32,
-				// No initialTickets: the observation loop must poll herdr for
-				// the record path, and it stands down on a test projection.
-				{ state, runner, config: configFor(), home, pollIntervalMs: 100 },
+				{
+					width: WIDTH,
+					height: 32,
+					props: // No initialTickets: the observation loop must poll herdr for
+						// the record path, and it stands down on a test projection.
+						{ state, runner, config: configFor(), home, pollIntervalMs: 100 },
+				},
 			);
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
@@ -3200,11 +3210,13 @@ describe("the Consultation detail reads the Agent's session record (ADR 0025)", 
 					);
 					expect(runner.commands()).not.toContain(`herdr agent focus ${paneId}`);
 				},
-				WIDTH,
-				32,
-				// No initialTickets: the observation loop must poll herdr for
-				// the record path, and it stands down on a test projection.
-				{ state, runner, config: configFor(), home, pollIntervalMs: 100 },
+				{
+					width: WIDTH,
+					height: 32,
+					props: // No initialTickets: the observation loop must poll herdr for
+						// the record path, and it stands down on a test projection.
+						{ state, runner, config: configFor(), home, pollIntervalMs: 100 },
+				},
 			);
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
@@ -3289,16 +3301,18 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 					expectNoCommand(runner.commands(), "worktree create");
 					expectNoCommand(runner.commands(), "agent start");
 				},
-				WIDTH,
-				32,
-				// The test projection holds the seat: no poll can free it or
-				// pick the item up out from under the test.
 				{
-					state,
-					runner,
-					config: { ...configFor(), maxParallelAgents: 1 },
-					home,
-					initialTickets: [],
+					width: WIDTH,
+					height: 32,
+					props: // The test projection holds the seat: no poll can free it or
+						// pick the item up out from under the test.
+						{
+							state,
+							runner,
+							config: { ...configFor(), maxParallelAgents: 1 },
+							home,
+							initialTickets: [],
+						},
 				},
 			);
 		} finally {
@@ -3381,15 +3395,17 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 					expect(settledFrame).not.toContain("waits in the Work queue");
 					expect(messageRowOf(settledFrame)).not.toContain("consultation queued");
 				},
-				WIDTH,
-				32,
 				{
-					state,
-					runner,
-					config: { ...configFor(), maxParallelAgents: 1 },
-					home,
-					pollIntervalMs: 100,
-					initialTickets: [],
+					width: WIDTH,
+					height: 32,
+					props: {
+						state,
+						runner,
+						config: { ...configFor(), maxParallelAgents: 1 },
+						home,
+						pollIntervalMs: 100,
+						initialTickets: [],
+					},
 				},
 			);
 		} finally {
@@ -3447,14 +3463,16 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 					expectNoCommand(runner.commands(), "worktree create");
 					expectNoCommand(runner.commands(), "agent start");
 				},
-				WIDTH,
-				32,
 				{
-					state,
-					runner,
-					config: { ...configFor(), maxParallelAgents: 1 },
-					home,
-					initialTickets: [],
+					width: WIDTH,
+					height: 32,
+					props: {
+						state,
+						runner,
+						config: { ...configFor(), maxParallelAgents: 1 },
+						home,
+						initialTickets: [],
+					},
 				},
 			);
 		} finally {
@@ -3511,14 +3529,16 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 					expectNoCommand(runner.commands(), "pane close");
 					expectNoCommand(runner.commands(), "workspace close");
 				},
-				WIDTH,
-				32,
 				{
-					state,
-					runner,
-					config: { ...configFor(), maxParallelAgents: 1 },
-					home,
-					initialTickets: [],
+					width: WIDTH,
+					height: 32,
+					props: {
+						state,
+						runner,
+						config: { ...configFor(), maxParallelAgents: 1 },
+						home,
+						initialTickets: [],
+					},
 				},
 			);
 		} finally {
@@ -3594,14 +3614,16 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 					// awaiting-response and holds none.
 					expect(state.consultationRecord.consultation(seatId)?.state).toBe("awaiting-response");
 				},
-				WIDTH,
-				32,
 				{
-					state,
-					runner,
-					config: { ...configFor(), maxParallelAgents: 1 },
-					home,
-					pollIntervalMs: 100,
+					width: WIDTH,
+					height: 32,
+					props: {
+						state,
+						runner,
+						config: { ...configFor(), maxParallelAgents: 1 },
+						home,
+						pollIntervalMs: 100,
+					},
 				},
 			);
 		} finally {
@@ -3678,21 +3700,23 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 					expect(state.consultationRecord.consultation(queued.id)?.state).not.toBe("queued");
 					expect(state.consultationRecord.consultation(seatId)?.state).toBe("working");
 				},
-				WIDTH,
-				32,
 				{
-					state,
-					runner,
-					config: { ...configFor(), maxParallelAgents: 1 },
-					home,
-					// The test projection holds the seat: no poll can free it or
-					// pick the item up out from under the test. The projection also
-					// keeps the observation loop off the start's Message line: a tick
-					// that lands while the record stands in `opening` cannot verify
-					// its Agent yet and would clear the start's notice with its
-					// recovery warning, so the line the test asserts on stays where
-					// the start left it.
-					initialTickets: [],
+					width: WIDTH,
+					height: 32,
+					props: {
+						state,
+						runner,
+						config: { ...configFor(), maxParallelAgents: 1 },
+						home,
+						// The test projection holds the seat: no poll can free it or
+						// pick the item up out from under the test. The projection also
+						// keeps the observation loop off the start's Message line: a tick
+						// that lands while the record stands in `opening` cannot verify
+						// its Agent yet and would clear the start's notice with its
+						// recovery warning, so the line the test asserts on stays where
+						// the start left it.
+						initialTickets: [],
+					},
 				},
 			);
 		} finally {
@@ -3774,16 +3798,18 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 					expect(detail).toContain(`grill - acme/factory`);
 					expect(detail).toContain("review auth");
 				},
-				WIDTH,
-				32,
-				// The test projection holds the seat: no poll can free it or
-				// pick the item up out from under the test.
 				{
-					state,
-					runner,
-					config: { ...configFor(), maxParallelAgents: 1 },
-					home,
-					initialTickets: [],
+					width: WIDTH,
+					height: 32,
+					props: // The test projection holds the seat: no poll can free it or
+						// pick the item up out from under the test.
+						{
+							state,
+							runner,
+							config: { ...configFor(), maxParallelAgents: 1 },
+							home,
+							initialTickets: [],
+						},
 				},
 			);
 		} finally {
@@ -3843,14 +3869,16 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 					);
 					expect(state.consultationRecord.consultation(id)?.state).toBe("queued");
 				},
-				WIDTH,
-				32,
 				{
-					state,
-					runner,
-					config: { ...configFor(), maxParallelAgents: 1 },
-					home,
-					initialTickets: [],
+					width: WIDTH,
+					height: 32,
+					props: {
+						state,
+						runner,
+						config: { ...configFor(), maxParallelAgents: 1 },
+						home,
+						initialTickets: [],
+					},
 				},
 			);
 		} finally {
@@ -3898,21 +3926,23 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 					expect(state.consultationRecord.consultation(id)?.state).not.toBe("unscheduled");
 					expect(state.consultationRecord.consultation(seatId)?.state).toBe("working");
 				},
-				WIDTH,
-				32,
 				{
-					state,
-					runner,
-					config: { ...configFor(), maxParallelAgents: 1 },
-					home,
-					// The test projection holds the seat: no poll can free it or
-					// pick the item up out from under the test. The projection also
-					// keeps the observation loop off the start's Message line: a tick
-					// that lands while the record stands in `opening` cannot verify
-					// its Agent yet and would clear the start's notice with its
-					// recovery warning, so the line the test asserts on stays where
-					// the start left it.
-					initialTickets: [],
+					width: WIDTH,
+					height: 32,
+					props: {
+						state,
+						runner,
+						config: { ...configFor(), maxParallelAgents: 1 },
+						home,
+						// The test projection holds the seat: no poll can free it or
+						// pick the item up out from under the test. The projection also
+						// keeps the observation loop off the start's Message line: a tick
+						// that lands while the record stands in `opening` cannot verify
+						// its Agent yet and would clear the start's notice with its
+						// recovery warning, so the line the test asserts on stays where
+						// the start left it.
+						initialTickets: [],
+					},
 				},
 			);
 		} finally {
@@ -3969,21 +3999,23 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 					expect(state.consultationRecord.consultation(id)?.state).not.toBe("unscheduled");
 					expect(state.consultationRecord.consultation(seatId)?.state).toBe("awaiting-response");
 				},
-				WIDTH,
-				32,
 				{
-					state,
-					runner,
-					config: { ...configFor(), maxParallelAgents: 1 },
-					home,
-					// The test projection holds the seat: no poll can free it or
-					// pick the item up out from under the test. The projection also
-					// keeps the observation loop off the start's Message line: a tick
-					// that lands while the record stands in `opening` cannot verify
-					// its Agent yet and would clear the start's notice with its
-					// recovery warning, so the line the test asserts on stays where
-					// the start left it.
-					initialTickets: [],
+					width: WIDTH,
+					height: 32,
+					props: {
+						state,
+						runner,
+						config: { ...configFor(), maxParallelAgents: 1 },
+						home,
+						// The test projection holds the seat: no poll can free it or
+						// pick the item up out from under the test. The projection also
+						// keeps the observation loop off the start's Message line: a tick
+						// that lands while the record stands in `opening` cannot verify
+						// its Agent yet and would clear the start's notice with its
+						// recovery warning, so the line the test asserts on stays where
+						// the start left it.
+						initialTickets: [],
+					},
 				},
 			);
 		} finally {
@@ -4014,14 +4046,16 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 					);
 					expect(state.consultationRecord.consultation(id)).toBeUndefined();
 				},
-				WIDTH,
-				32,
 				{
-					state,
-					runner,
-					config: { ...configFor(), maxParallelAgents: 1 },
-					home,
-					initialTickets: [],
+					width: WIDTH,
+					height: 32,
+					props: {
+						state,
+						runner,
+						config: { ...configFor(), maxParallelAgents: 1 },
+						home,
+						initialTickets: [],
+					},
 				},
 			);
 		} finally {

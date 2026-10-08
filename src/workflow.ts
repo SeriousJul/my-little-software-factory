@@ -430,22 +430,16 @@ export async function readReviewVerdict(
 	}
 	const repository = membership.repository.displayName;
 	const [comments, reviews] = await Promise.all([
-		readVerdictTimeline(
-			runner,
-			source,
-			ghOptions,
-			`repos/${repository}/issues/${number}/comments?per_page=100`,
-			"created_at",
-			"comment",
-		),
-		readVerdictTimeline(
-			runner,
-			source,
-			ghOptions,
-			`repos/${repository}/pulls/${number}/reviews?per_page=100`,
-			"submitted_at",
-			"review",
-		),
+		readVerdictTimeline(runner, source, ghOptions, {
+			path: `repos/${repository}/issues/${number}/comments?per_page=100`,
+			timeField: "created_at",
+			timeline: "comment",
+		}),
+		readVerdictTimeline(runner, source, ghOptions, {
+			path: `repos/${repository}/pulls/${number}/reviews?per_page=100`,
+			timeField: "submitted_at",
+			timeline: "review",
+		}),
 	]);
 	if (comments.records === undefined && reviews.records === undefined) {
 		// Every timeline's read failed: the failure is the fact, and the
@@ -478,10 +472,13 @@ async function readVerdictTimeline(
 	runner: CommandRunner,
 	source: TicketSourceConfig,
 	ghOptions: CommandOptions,
-	path: string,
-	timeField: "created_at" | "submitted_at",
-	timeline: VerdictTimeline,
+	fields: {
+		path: string;
+		timeField: "created_at" | "submitted_at";
+		timeline: VerdictTimeline;
+	},
 ): Promise<{ records?: ReviewVerdict[]; reason?: string }> {
+	const { path, timeField, timeline } = fields;
 	let result: CommandResult;
 	try {
 		result = await runner.run(
@@ -1245,14 +1242,12 @@ async function writeSurfaceLabels(
 	const removed = item.labels.filter(
 		(label) => machine.has(label.toLocaleLowerCase()) && !factSet.has(label.toLocaleLowerCase()),
 	);
-	return writeMembershipLabels(
-		request.config.sources,
-		request.runner,
-		newestMembershipOf(item),
-		kind,
+	return writeMembershipLabels(request.config.sources, request.runner, {
+		membership: newestMembershipOf(item),
+		command: kind,
 		added,
 		removed,
-	);
+	});
 }
 
 /**
@@ -1277,11 +1272,14 @@ export function editCommandFor(item: { readonly sourceKind: string }): "issue" |
 export async function writeMembershipLabels(
 	sources: readonly TicketSourceConfig[],
 	runner: CommandRunner,
-	membership: SourceMembership,
-	command: "issue" | "pr",
-	added: readonly string[],
-	removed: readonly string[],
+	fields: {
+		membership: SourceMembership;
+		command: "issue" | "pr";
+		added: readonly string[];
+		removed: readonly string[];
+	},
 ): Promise<{ added: string[]; removed: string[]; failure?: string } | null> {
+	const { membership, command, added, removed } = fields;
 	if (added.length === 0 && removed.length === 0) return null;
 	// The write runs as the source the item lists on: the source's auth
 	// table resolves to a token the command carries in its environment, so

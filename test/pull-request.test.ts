@@ -169,14 +169,12 @@ describe("openDraftPullRequest", () => {
 					"Opening draft pull request for factory/7 into main from acme...\nhttps://github.com/acme/billing/pull/42\n",
 			},
 		);
-		const answer = await openDraftPullRequest(
-			runner,
-			source,
+		const answer = await openDraftPullRequest(runner, source, {
 			repository,
 			branch,
-			"Retry policy for webhooks",
-			"The body",
-		);
+			title: "Retry policy for webhooks",
+			body: "The body",
+		});
 		expect(answer).toEqual({ number: 42, url: "https://github.com/acme/billing/pull/42" });
 	});
 
@@ -204,14 +202,12 @@ describe("openDraftPullRequest", () => {
 			},
 			{ stdout: "https://github.com/acme/billing/pull/42\n" },
 		]);
-		const answer = await openDraftPullRequest(
-			runner,
-			source,
+		const answer = await openDraftPullRequest(runner, source, {
 			repository,
 			branch,
-			"Retry policy for webhooks",
-			"The body",
-		);
+			title: "Retry policy for webhooks",
+			body: "The body",
+		});
 		expect(answer).toEqual({ number: 42, url: "https://github.com/acme/billing/pull/42" });
 		const creates = runner.commands().filter((command) => command === `gh ${createArgs.join(" ")}`);
 		expect(creates).toHaveLength(2);
@@ -224,14 +220,12 @@ describe("openDraftPullRequest", () => {
 			stderr:
 				"GraphQL: No commits exist on github.com:acme/billing:factory/7-retry-policy-for-webhooks. (HTTP 400)\n",
 		});
-		const answer = await openDraftPullRequest(
-			runner,
-			source,
+		const answer = await openDraftPullRequest(runner, source, {
 			repository,
 			branch,
-			"Retry policy for webhooks",
-			"The body",
-		);
+			title: "Retry policy for webhooks",
+			body: "The body",
+		});
 		expect("fail" in answer).toBe(true);
 		if ("fail" in answer) expect(answer.fail).toContain("No commits exist");
 		const creates = runner.commands().filter((command) => command === `gh ${createArgs.join(" ")}`);
@@ -244,14 +238,12 @@ describe("openDraftPullRequest", () => {
 			code: 1,
 			stderr: "GraphQL: Pull request already exists: acme/billing#43\n",
 		});
-		const answer = await openDraftPullRequest(
-			runner,
-			source,
+		const answer = await openDraftPullRequest(runner, source, {
 			repository,
 			branch,
-			"Retry policy for webhooks",
-			"The body",
-		);
+			title: "Retry policy for webhooks",
+			body: "The body",
+		});
 		expect("fail" in answer).toBe(true);
 		const creates = runner.commands().filter((command) => command === `gh ${createArgs.join(" ")}`);
 		expect(creates).toHaveLength(1);
@@ -276,14 +268,12 @@ describe("openDraftPullRequest", () => {
 			],
 			{ stdout: "" },
 		);
-		const answer = await openDraftPullRequest(
-			runner,
-			source,
+		const answer = await openDraftPullRequest(runner, source, {
 			repository,
 			branch,
-			"Retry policy for webhooks",
-			"The body",
-		);
+			title: "Retry policy for webhooks",
+			body: "The body",
+		});
 		expect("fail" in answer).toBe(true);
 	});
 });

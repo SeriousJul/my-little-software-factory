@@ -1213,13 +1213,13 @@ export class ConsultationOperations {
 								status: "failed",
 								reason: `cannot verify live checkout safety: ${probe.reason}`,
 							};
-						const safety = await inspectLiveCheckout(
-							resolvedRepository.path,
-							this.runner,
-							this.tickets(),
-							this.state.consultationRecord.consultations("open"),
-							probe.agents,
-						);
+						const safety = await inspectLiveCheckout({
+							checkout: resolvedRepository.path,
+							runner: this.runner,
+							tickets: this.tickets(),
+							consultations: this.state.consultationRecord.consultations("open"),
+							agents: probe.agents,
+						});
 						if (safety.warning !== undefined)
 							this.state.consultationRecord.setConsultationWarning(current.id, safety.warning);
 						// The safety question belongs to the checkout, not to this

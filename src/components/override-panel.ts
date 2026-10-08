@@ -402,15 +402,14 @@ export function OverridePanel({
 	const [hasSelection, setHasSelection] = useState(false);
 
 	const rowsForChoice = (value: HandoffChoice): PanelRow[] =>
-		rowsFor(
-			value,
+		rowsFor(value, {
 			agents,
 			environments,
 			taskTypes,
-			listFor(value, modelList),
+			modelStatus: listFor(value, modelList),
 			taskPlacements,
 			planeActionTaskTypes,
-		);
+		});
 	const allRows = rowsForChoice(choice);
 	const focus = useFormSlots(
 		allRows.map((item, index) => ({
@@ -640,10 +639,9 @@ export function OverridePanel({
 		body: {
 			above: [],
 			below: rows.map((r) =>
-				rowElement(
-					r,
-					choice[r.key],
-					r.key === row.key,
+				rowElement(r, {
+					value: choice[r.key],
+					selected: r.key === row.key,
 					geometry,
 					inputActive,
 					fieldChanged,
@@ -651,8 +649,8 @@ export function OverridePanel({
 					typeAhead,
 					fields,
 					searchField,
-					setHasSelection,
-				),
+					reportSelection: setHasSelection,
+				}),
 			),
 			// One row is enough to be a panel: the rows that do not fit scroll.
 			minRows: 1,
@@ -685,16 +683,18 @@ function rowCells(row: PanelRow): number {
 	);
 }
 
+/** The facts the row builders read for the choice the panel holds. */
+type PanelSurface = {
+	agents: Readonly<Record<string, AgentTypeConfig>>;
+	environments: readonly string[];
+	taskTypes: readonly string[];
+	modelStatus: ModelListStatus;
+	taskPlacements: Record<string, PlacementEvaluation> | undefined;
+	planeActionTaskTypes: readonly string[] | undefined;
+};
+
 /** The rows the panel offers for the current choice, in order. */
-function rowsFor(
-	choice: HandoffChoice,
-	agents: Readonly<Record<string, AgentTypeConfig>>,
-	environments: readonly string[],
-	taskTypes: readonly string[],
-	modelStatus: ModelListStatus,
-	taskPlacements: Record<string, PlacementEvaluation> | undefined,
-	planeActionTaskTypes: readonly string[] | undefined,
-): PanelRow[] {
+function rowsFor(choice: HandoffChoice, surface: PanelSurface): PanelRow[] {
 	// An Agent type the config no longer names reads as one that maps nothing:
 	// every value the choice carries then shows in its warning row, where the
 	// operator can clear it. The record is gone, so its runtime kind is not
@@ -702,15 +702,15 @@ function rowsFor(
 	// not known.
 	const agent: ResolvedAgentType = {
 		agentType: choice.agentType,
-		agent: agents[choice.agentType] ?? { kind: "" },
+		agent: surface.agents[choice.agentType] ?? { kind: "" },
 	};
 	const staticVerdicts = settingFit.staticFit(agent, choice);
 	// A fetched list is the only fact beyond static fit. A loading or an
 	// unavailable list leaves the static Model verdict in place: a list that
 	// cannot be fetched skips the Model list question, just as a handoff does.
 	const modelVerdict =
-		modelStatus.status === "available"
-			? settingFit.modelInList(agent, choice.model, modelStatus.models)
+		surface.modelStatus.status === "available"
+			? settingFit.modelInList(agent, choice.model, surface.modelStatus.models)
 			: staticVerdicts.model;
 	// The Task row carries the placement the choice's task type takes on the
 	// panel's ticket (ADR 0045): the note names the state the ticket stands on
@@ -720,16 +720,16 @@ function rowsFor(
 		label: "Task type",
 		key: "taskType",
 		kind: "list",
-		options: taskTypes,
+		options: surface.taskTypes,
 	};
-	const taskPlacement = taskPlacements?.[choice.taskType];
+	const taskPlacement = surface.taskPlacements?.[choice.taskType];
 	if (taskPlacement?.kind === "placement")
 		taskRow.placement = `places the ticket on state ${taskPlacement.state.name}`;
 	else if (taskPlacement?.kind === "infeasible")
 		taskRow.unfit = { ok: false, reason: taskPlacement.reason, placement: true };
 	const rows: PanelRow[] = [
-		{ label: "Agent", key: "agentType", kind: "list", options: Object.keys(agents) },
-		{ label: "Environment", key: "environment", kind: "list", options: environments },
+		{ label: "Agent", key: "agentType", kind: "list", options: Object.keys(surface.agents) },
+		{ label: "Environment", key: "environment", kind: "list", options: surface.environments },
 		taskRow,
 	];
 	// A row shows when its Agent maps the setting. It also shows, wearing the
@@ -737,7 +737,7 @@ function rowsFor(
 	// cannot take: hiding it would strand that value where no key can reach it,
 	// and the panel must never show something other than what the handoff sends.
 	if (agent.agent.model !== undefined) {
-		rows.push(modelRow(modelStatus, modelVerdict));
+		rows.push(modelRow(surface.modelStatus, modelVerdict));
 	} else if (choice.model !== "") {
 		rows.push({ label: "Model", key: "model", kind: "text", unfit: unfitVerdict(modelVerdict) });
 	}
@@ -773,7 +773,7 @@ function rowsFor(
 	// values on the setting rows ride on the ask and go unrun, so the Task
 	// row states the fact and every setting row wears the written refusal the
 	// decision screen's edit key states.
-	if (planeActionTaskTypes?.includes(choice.taskType) === true) {
+	if (surface.planeActionTaskTypes?.includes(choice.taskType) === true) {
 		// The plane action runs no placement write, so the Task row's own
 		// placement note and refusal give way to the fact that the start runs
 		// no Agent at all.
@@ -837,17 +837,31 @@ function modelRow(status: ModelListStatus, verdict: FitVerdict): PanelRow {
  */
 function rowElement(
 	r: PanelRow,
-	value: string,
-	selected: boolean,
-	geometry: PanelGeometry,
-	inputActive: boolean,
-	fieldChanged: (key: TextKey) => (facts: FieldFacts) => void,
-	searchChanged: (query: string, match: TypeAheadMatch, facts: FieldFacts) => void,
-	typeAhead: RefObject<TypeAheadHandle | null>,
-	fields: Record<TextKey, RefObject<FieldHandle | null>>,
-	searchField: RefObject<FieldHandle | null>,
-	reportSelection: (has: boolean) => void,
+	surface: {
+		value: string;
+		selected: boolean;
+		geometry: PanelGeometry;
+		inputActive: boolean;
+		fieldChanged: (key: TextKey) => (facts: FieldFacts) => void;
+		searchChanged: (query: string, match: TypeAheadMatch, facts: FieldFacts) => void;
+		typeAhead: RefObject<TypeAheadHandle | null>;
+		fields: Record<TextKey, RefObject<FieldHandle | null>>;
+		searchField: RefObject<FieldHandle | null>;
+		reportSelection: (has: boolean) => void;
+	},
 ): ReactElement {
+	const {
+		value,
+		selected,
+		geometry,
+		inputActive,
+		fieldChanged,
+		searchChanged,
+		typeAhead,
+		fields,
+		searchField,
+		reportSelection,
+	} = surface;
 	if (r.kind === "text") {
 		return createElement(TextField, {
 			key: r.key,

@@ -2445,13 +2445,11 @@ class HandoffDispatchModule implements HandoffDispatch {
 
 		void run
 			.then((outcome) =>
-				this.finishHandoff(
-					ticket.identity,
-					claim,
+				this.finishHandoff(ticket.identity, claim, {
 					outcome,
 					reportStarted,
-					claimed.routeFromIdentity,
-				),
+					routeFromIdentity: claimed.routeFromIdentity,
+				}),
 			)
 			.catch((error) => this.failHandoff(ticket.identity, claim, reportStarted, error));
 	}
@@ -2488,14 +2486,12 @@ class HandoffDispatchModule implements HandoffDispatch {
 		// The write command is the item's own: the issue edit on an issue
 		// ticket, the pull request edit on a pull request ticket.
 		const command = editCommandFor(evaluation.membership);
-		const write = await writeMembershipLabels(
-			config.sources,
-			this.runner,
-			evaluation.membership,
+		const write = await writeMembershipLabels(config.sources, this.runner, {
+			membership: evaluation.membership,
 			command,
-			evaluation.added,
-			evaluation.removed,
-		);
+			added: evaluation.added,
+			removed: evaluation.removed,
+		});
 		if (write !== null && write.failure !== undefined)
 			return { status: "failed", reason: write.failure };
 		if (write !== null) {
@@ -2607,11 +2603,14 @@ class HandoffDispatchModule implements HandoffDispatch {
 	private async finishHandoff(
 		identity: string,
 		claim: HandoffClaim,
-		outcome: HandoffOutcome,
-		reportStarted: (started: DispatchResult) => void,
-		/** The ticket the started handoff routes from; null for a no-route start (ADR 0067). */
-		routeFromIdentity: string | null,
+		fields: {
+			outcome: HandoffOutcome;
+			reportStarted: (started: DispatchResult) => void;
+			/** The ticket the started handoff routes from; null for a no-route start (ADR 0067). */
+			routeFromIdentity: string | null;
+		},
 	): Promise<void> {
+		const { outcome, reportStarted, routeFromIdentity } = fields;
 		if (this.stopped) return;
 		this.recordNameCollisions(identity, outcome);
 		// The start settled, so the checkout it worked is free again, and the rows
