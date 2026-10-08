@@ -1,5 +1,6 @@
 /**
- * The Ticket Close dialog: the facts key `w` states (ADR 0031).
+ * The Ticket Close dialog: the facts the Delete key states (ADR 0031,
+ * ADR 0122).
  *
  * The dialog is the shared confirmation panel, and its body is the whole
  * warning before the operator confirms: who is alive, and what survives the

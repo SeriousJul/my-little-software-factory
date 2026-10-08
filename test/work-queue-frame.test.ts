@@ -1259,31 +1259,29 @@ describe("the Work queue section", () => {
 					expect(queueRows(refusal)).toEqual(queueRows(before));
 					expect(markerRowOf(refusal)).toBe(markerRowOf(list));
 					expect(detailPaneText(refusal)).toContain("place 1 of 2");
-					// The detail pane: ADR 0049 retired the queue's own `d` reorder
-					// key, so the Consultation's Delete resolves and refuses, and the
-					// detail keeps the item under its cursor.
-					setup.mockInput.pressKey("l");
-					const detail = await awaitFrame(
-						setup,
-						(f) => f.includes("❯ Work queue") === false && f.includes("Origin: open"),
-						"the Work queue detail pane",
-					);
-					// The first press puts the Consultation refusal on the Message
-					// line, so the line the queue's own `f` refusal left stands aside
-					// before the pane is compared: the frame the key writes is measured
-					// against the frame the same line already held.
-					await press(setup, "d", "the delete refusal in the queue detail", (f) =>
-						messageRowOf(f).includes("only in the Consultation section"),
-					);
-					const detailBefore = await settle(setup);
-					refusal = await press(setup, "d", "the delete refusal again in the queue detail", (f) =>
-						messageRowOf(f).includes("only in the Consultation section"),
-					);
-					expect(messageRowOf(refusal)).toContain("only in the Consultation section");
-					expect(queueRows(refusal)).toEqual(queueRows(detail));
-					expect(detailPaneText(refusal)).toBe(detailPaneText(detailBefore));
-					// The queue still holds both starts at the same depth.
-					expect(frameText(refusal)).toContain("waiting: 2");
+						// The detail pane: `d` left the catalogue with the record
+						// removal's move to the Delete key (ADR 0049, ADR 0122), so the
+						// retired key resolves nowhere: a press of it states nothing,
+						// and the detail keeps the item under its cursor.
+						setup.mockInput.pressKey("l");
+						const detail = await awaitFrame(
+							setup,
+							(f) => f.includes("❯ Work queue") === false && f.includes("Origin: open"),
+							"the Work queue detail pane",
+						);
+						const detailBefore = await settle(setup);
+						setup.mockInput.pressKey("d");
+						const silent = await settle(setup, 300);
+						// The press states nothing: the `f` refusal the list left stands
+						// on the line, and the frame the key would have written is the
+						// frame it left.
+						expect(messageRowOf(silent)).toContain(
+							"only in the Ticket section and the Consultation section",
+						);
+						expect(queueRows(silent)).toEqual(queueRows(detail));
+						expect(detailPaneText(silent)).toBe(detailPaneText(detailBefore));
+						// The queue still holds both starts at the same depth.
+						expect(frameText(silent)).toContain("waiting: 2");
 				},
 				state,
 				source,

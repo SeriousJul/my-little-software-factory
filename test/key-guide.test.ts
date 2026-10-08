@@ -362,9 +362,16 @@ describe("the in-app Key guide", () => {
 						listIndexOf("Current interaction mode"),
 						listIndexOf("Global controls"),
 					);
-					expect(listCurrent).toContain("+ Promote - the item is first in the queue");
-					expect(listCurrent).toContain("- Demote - the item is last in the queue");
-					expect(listCurrent).toContain("Delete Remove");
+						expect(listCurrent).toContain("+ Promote - the item is first in the queue");
+						expect(listCurrent).toContain("- Demote - the item is last in the queue");
+						// The queue's removal dispatches in the queue mode itself now
+						// (ADR 0122): the row names the key, and its note states what
+						// the removal does. The note may flow onto its continuation row
+						// at this width, so the check reads the joined rows.
+						expect(listCurrent.some((row) => row.startsWith("Delete Remove"))).toBe(true);
+						expect(listCurrent.join(" ")).toContain(
+							"takes the row's waiting item out of the Work queue: the Ticket stays open, and the Consultation record becomes unscheduled",
+						);
 					// The plane-level keys left the mode's own rows: the brake and
 					// the mode stand in the Control plane group, the catalogue's own
 					// order, in every mode they dispatch in (issue #319, ADR 0111). The
@@ -389,12 +396,17 @@ describe("the in-app Key guide", () => {
 					);
 					expect(listCurrent.some((row) => row.includes("Hand off"))).toBe(false);
 					expect(listCurrent.some((row) => row.includes("Decide"))).toBe(false);
-					// The Consultation section's `d Delete` and `f History` run on
-					// the shared base modes, so they reach a queue mode as a key the
+					// The Consultation section's record removal and `f History` run on
+					// the shared base modes, so they reach a queue mode as keys the
 					// queue can never dispatch. Each section's guide names only the
-					// keys it owns (issue #85, ADR 0034): the queue's own keys stand,
-					// and the other section's two rows stay out.
-					expect(listCurrent.some((row) => row.startsWith("d Delete"))).toBe(false);
+					// keys it owns (issue #85, ADR 0034): the queue's own keys stand -
+					// its own removal among them - and the other section's rows stay
+					// out (ADR 0122).
+					expect(
+						listCurrent.some((row) =>
+							row.includes("removes a closed or unscheduled record"),
+					),
+					).toBe(false);
 					expect(listCurrent.some((row) => row.startsWith("f History"))).toBe(false);
 					await closeOverlay(setup, "Key guide", "the guide to close");
 
@@ -413,14 +425,21 @@ describe("the in-app Key guide", () => {
 					);
 					expect(detailCurrent).toContain("←/h List");
 					expect(detailCurrent.some((row) => row.includes("Queue up"))).toBe(false);
-					expect(detailCurrent.some((row) => row.includes("Remove"))).toBe(false);
+					// The queue's removal left its list scope (ADR 0122): it is
+					// dispatched in every base mode, so the detail pane's guide names
+					// it with the item under the cursor.
+					expect(detailCurrent.some((row) => row.startsWith("Delete Remove"))).toBe(true);
 					expect(detailCurrent.some((row) => row.includes("Force-dispatch"))).toBe(false);
-					// The detail pane holds no queue key of its own for `d` or `f`,
-					// so the Consultation section's two refuse there and appear in
-					// this guide nowhere: the row that would name the key the mode
+					// The detail pane holds no queue key of its own for `f`, and the
+					// Consultation section's record removal reaches the detail pane
+					// only as a refusal: the row that would name the key the mode
 					// cannot dispatch is the leak issue #85 closed for the Ticket
-					// section, closed here for the queue.
-					expect(detailCurrent.some((row) => row.startsWith("d Delete"))).toBe(false);
+					// section, closed here for the queue (ADR 0122).
+					expect(
+						detailCurrent.some((row) =>
+							row.includes("removes a closed or unscheduled record"),
+					),
+					).toBe(false);
 					expect(detailCurrent.some((row) => row.startsWith("f History"))).toBe(false);
 					await closeOverlay(setup, "Key guide", "the guide to close");
 				},
@@ -498,9 +517,10 @@ describe("the in-app Key guide", () => {
 					"Enter Live view - only an in-flight Ticket has a Live view",
 					"Enter Decide - the selected Ticket has no completion to decide",
 					"g Goto - the Agent's pane is not alive in the last poll",
-					// Close sits beside Goto: the key that ends the work cycle,
-					// refused here with the open Ticket's own reason (ADR 0031).
-					"w Close - the selected Ticket is open: no work is in flight to close",
+					// The Delete key's Close sits beside Goto: the key that ends the
+					// work cycle, refused here with the open Ticket's own reason
+					// (ADR 0031, ADR 0122).
+					"Delete Close - the selected Ticket is open: no work is in flight to close",
 					// The ignore and the List filter name the Ticket section's own
 					// two keys (ADR 0060); the section's guide holds them and the
 					// Consultation section's guide holds nothing of either.
@@ -520,6 +540,10 @@ describe("the in-app Key guide", () => {
 					"+ Move group up - no Group header is under the cursor",
 					"- Move group down - no Group header is under the cursor",
 					"x Section - collapses the section the cursor is in, or expands it back",
+					// The queue's removal answers the Delete key in the Ticket section
+					// too (ADR 0122): it takes the row the cursor's Ticket waits with,
+					// and here it refuses with the open Ticket's row fact.
+					"Delete Remove - the selected Ticket has no waiting queue item",
 					// The reason is the longest in the guide: the label column
 					// is sized to its content, and what still does not fit
 					// flows onto its own continuation row rather than being
@@ -544,11 +568,13 @@ describe("the in-app Key guide", () => {
 				]);
 				const otherStart = shown.indexOf("Other interaction modes");
 				expect(otherStart).toBeGreaterThan(planeStart);
-				// Delete and History stay cataloged in the Consultation section
-				// alone: the Ticket guide omits them, and their keys refuse in
-				// this section instead. Recovery leads the Enter rows: a live record
-				// resolves past it to Respond and Interact, and a broken or stuck
-				// one reads it as the meaning Enter takes here (ADR 0038).
+				// The Consultation section's Delete acts stay cataloged in the
+				// Consultation section alone (ADR 0122): the Ticket guide omits its
+				// Close and the record removal, and the Delete key refuses in this
+				// section with the section's own words. Recovery leads the Enter
+				// rows: a live record resolves past it to Respond and Interact, and
+				// a broken or stuck one reads it as the meaning Enter takes here
+				// (ADR 0038).
 				expect(shown.slice(planeStart + 1, otherStart)).toEqual([
 					// The init's select list states its own keys beside the plane's
 					// other contextual acts (ADR 0082, ADR 0083).
@@ -560,7 +586,6 @@ describe("the in-app Key guide", () => {
 					// plane group in every mode it dispatches in, beside the
 					// Auto-handoff mode's key (issue #319, ADR 0111).
 					"p Pause queue - pauses the queue's drain; the force-dispatch passes it",
-					"Delete Close",
 					"Enter Recovery - opens the recovery surface a broken or stuck Consultation needs",
 					"Enter Respond",
 					"Enter Interact",
@@ -875,7 +900,7 @@ describe("the in-app Key guide", () => {
 				// The mute and the move rows pushed Refresh below the opening
 				// window: step the guide down until its row is on screen, then
 				// read it.
-				for (let step = 0; step < 4; step += 1) {
+				for (let step = 0; step < 5; step += 1) {
 					setup.mockInput.pressKey("j");
 					if ((await settle(setup)).includes("r Refresh")) break;
 				}
@@ -921,14 +946,15 @@ describe("the in-app Key guide", () => {
 					await awaitFrame(setup, (f) => f.includes("loading tickets..."), "loading");
 					await openGuide(setup, "?");
 					await settle(setup);
-					// The mute and the move rows pushed Refresh below the opening
-					// window: step the guide down until its row is on screen.
-					for (let step = 0; step < 4; step += 1) {
-						setup.mockInput.pressKey("j");
-						if ((await settle(setup)).includes("r Refresh")) break;
-					}
-					let rows = rowsOf(setup.captureCharFrame());
-					let refreshRow = rows.findIndex((row) => norm(row).includes("r Refresh"));
+						// The queue's removal row beside the section toggle and the
+						// mute and the move rows push Refresh below the opening window
+						// (ADR 0122): step the guide down until its row is on screen.
+						for (let step = 0; step < 5; step += 1) {
+							setup.mockInput.pressKey("j");
+							if ((await settle(setup)).includes("r Refresh")) break;
+						}
+						let rows = rowsOf(setup.captureCharFrame());
+						let refreshRow = rows.findIndex((row) => norm(row).includes("r Refresh"));
 					expect(rows[refreshRow]).toContain("every Ticket source is already refreshing");
 					expect(spanColorAt(setup, refreshRow, "r")).toEqual(rgb(roleColor("subtext0")));
 
@@ -944,16 +970,21 @@ describe("the in-app Key guide", () => {
 								?.includes("already refreshing"),
 						"the refresh row to clear",
 					);
-					rows = rowsOf(setup.captureCharFrame());
-					refreshRow = rows.findIndex((row) => norm(row).includes("r Refresh"));
-					expect(rows[refreshRow]).not.toContain(" - ");
-					expect(spanColorAt(setup, refreshRow, "r")).toEqual(rgb(roleColor("accent")));
-					// The current section follows the state too: the fetched open
-					// Ticket is selected, so Hand off loses its reason as well.
-					expect(rows.find((row) => norm(row).includes("Enter Hand off"))).not.toContain(
-						"no Ticket is selected",
-					);
-				},
+						rows = rowsOf(setup.captureCharFrame());
+						refreshRow = rows.findIndex((row) => norm(row).includes("r Refresh"));
+						expect(rows[refreshRow]).not.toContain(" - ");
+						expect(spanColorAt(setup, refreshRow, "r")).toEqual(rgb(roleColor("accent")));
+						// The current section follows the state too: the fetched open
+						// Ticket is selected, so Hand off loses its reason as well.
+						// The queue's removal row now stands below the section toggle
+						// (ADR 0122), so one step back reads Hand off beside the
+						// refresh's own row.
+						setup.mockInput.pressKey("k");
+						rows = rowsOf(await settle(setup));
+						expect(rows.find((row) => norm(row).includes("Enter Hand off"))).not.toContain(
+							"no Ticket is selected",
+						);
+					},
 				WIDTH,
 				HEIGHT,
 				{ config: issuesConfig, state, sources: [source] },
@@ -1217,12 +1248,13 @@ describe("the in-app Key guide", () => {
 				setup.resize(60, 12);
 				let frame = await settle(setup);
 				expect(frame).toContain("Key guide - Ticket list");
-				// The selector's note, the Close reason, the Grouping axis note,
-				// and the Recovery note wrap on this narrow terminal, so the guide
-				// runs longer than at the full width.
-				expect(actionBarRowOf(frame)).toContain("1-4/104");
+					// The selector's note, the Close reason, the queue removal's
+					// reason, the Grouping axis note, and the Recovery note wrap on
+					// this narrow terminal, so the guide runs longer than at the full
+					// width.
+					expect(actionBarRowOf(frame)).toContain("1-4/106");
 
-				await scrollGuide(setup, "j", "2-5/104");
+					await scrollGuide(setup, "j", "2-5/106");
 				// Back to size: the scroll the terminal gave back is kept.
 				setup.resize(WIDTH, HEIGHT);
 				frame = await settle(setup);

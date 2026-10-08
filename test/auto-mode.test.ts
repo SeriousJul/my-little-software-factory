@@ -1003,14 +1003,14 @@ describe("the failure markers", () => {
 	});
 });
 
-// Key `w` closes the work cycle of the selected Ticket from either Ticket
-// pane (ADR 0031). An open Ticket is refused with its reason; every state that
-// has work behind it asks first, and the dialog states who is alive and what
-// survives. An in-flight cycle ends with no completion trace, because its turn
-// never settled; an `awaiting` one records the closed decision, the same
-// action the Decision modal's Close row offers.
+// The Delete key closes the work cycle of the selected Ticket from either
+// Ticket pane (ADR 0031, ADR 0122). An open Ticket is refused with its
+// reason; every state that has work behind it asks first, and the dialog
+// states who is alive and what survives. An in-flight cycle ends with no
+// completion trace, because its turn never settled; an `awaiting` one records
+// the closed decision, the same action the Decision modal's Close row offers.
 describe("the Ticket Close key", () => {
-	test("the Action bar names Close on w beside the Ticket section's Goto", async () => {
+	test("the Action bar names Close on the Delete key beside the Ticket section's Goto", async () => {
 		const app = seededApp("in-flight");
 		app.runner.set("herdr", ["agent", "list"], {
 			stdout: agentListJson([
@@ -1023,14 +1023,14 @@ describe("the Ticket Close key", () => {
 				app.src.settle(success);
 				const frame = await awaitFrame(
 					setup,
-					(f) => actionBarRowOf(f).includes("w Close"),
+					(f) => actionBarRowOf(f).includes("Delete Close"),
 					"the Close hint on the bar",
 				);
 				const bar = actionBarRowOf(frame);
 				// Close and Goto stand beside each other on an in-flight Ticket's
 				// bar (ADR 0031, ADR 0033): the key that stops the work, and the
 				// key that looks at it.
-				expect(bar).toContain("w Close");
+				expect(bar).toContain("Delete Close");
 				expect(bar).toContain("g Goto");
 				expect(bar).toContain("Enter Live view");
 			},
@@ -1041,7 +1041,7 @@ describe("the Ticket Close key", () => {
 		app.state.close();
 	});
 
-	test("w on an in-flight Ticket asks first, and Cancel changes nothing", async () => {
+	test("the Delete key on an in-flight Ticket asks first, and Cancel changes nothing", async () => {
 		const app = seededApp("in-flight", {}, success, "worktree");
 		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
 
@@ -1053,7 +1053,7 @@ describe("the Ticket Close key", () => {
 				// with no Agent to stop, and the close is the way out of it.
 				await awaitFrame(setup, (f) => ticketRow(f).includes("missing"), "the missing badge");
 				const before = app.runner.commands();
-				const opened = await openSurface(setup, "w", "the Close confirmation", (f) =>
+				const opened = await openSurface(setup, "delete", "the Close confirmation", (f) =>
 					f.includes("Close: Persist source facts"),
 				);
 				const body = frameText(opened);
@@ -1112,7 +1112,7 @@ describe("the Ticket Close key", () => {
 				// with no Agent to stop, and the close is the way out of it.
 				await awaitFrame(setup, (f) => ticketRow(f).includes("missing"), "the missing badge");
 				await focusDetail(setup);
-				const opened = await openSurface(setup, "w", "the Close confirmation", (f) =>
+				const opened = await openSurface(setup, "delete", "the Close confirmation", (f) =>
 					f.includes("Close: Persist source facts"),
 				);
 				expect(frameText(opened)).toContain(
@@ -1138,7 +1138,7 @@ describe("the Ticket Close key", () => {
 				// ADR 0030 puts before the Starting face: the Ticket is in flight
 				// with no Agent to stop, and the close is the way out of it.
 				await awaitFrame(setup, (f) => ticketRow(f).includes("missing"), "the missing badge");
-				const opened = await openSurface(setup, "w", "the Close confirmation", (f) =>
+				const opened = await openSurface(setup, "delete", "the Close confirmation", (f) =>
 					f.includes("Close: Persist source facts"),
 				);
 				const body = frameText(opened);
@@ -1282,7 +1282,7 @@ describe("the Ticket Close key", () => {
 				// ADR 0030 puts before the Starting face: the Ticket is in flight
 				// with no Agent to stop, and the close is the way out of it.
 				await awaitFrame(setup, (f) => ticketRow(f).includes("missing"), "the missing badge");
-				await openSurface(setup, "w", "the Close confirmation", (f) =>
+				await openSurface(setup, "delete", "the Close confirmation", (f) =>
 					f.includes("Close: Persist source facts"),
 				);
 				const frame = await confirmPanel(setup, "the close", (f) =>
@@ -1324,7 +1324,7 @@ describe("the Ticket Close key", () => {
 				// ADR 0030 puts before the Starting face: the Ticket is in flight
 				// with no Agent to stop, and the close is the way out of it.
 				await awaitFrame(setup, (f) => ticketRow(f).includes("missing"), "the missing badge");
-				await openSurface(setup, "w", "the Close confirmation", (f) =>
+				await openSurface(setup, "delete", "the Close confirmation", (f) =>
 					f.includes("Close: Persist source facts"),
 				);
 				// The dialog warned about this outcome before the answer was given.
@@ -1389,7 +1389,7 @@ describe("the Ticket Close key", () => {
 					(f) => detailPaneText(f).includes("[running]"),
 					"the in-flight ticket",
 				);
-				await openSurface(setup, "w", "the Close confirmation", (f) =>
+				await openSurface(setup, "delete", "the Close confirmation", (f) =>
 					f.includes("Close: Persist source facts"),
 				);
 				// The Agent dies while the dialog stands. Auto mode ends the missing
@@ -1404,7 +1404,7 @@ describe("the Ticket Close key", () => {
 				);
 				expect(app.state.ticketWorkCycle.ticketState(identity)).toBe("open");
 				// The base pane answers its keys again: no invisible panel swallows them.
-				const refused = await press(setup, "w", "the refusal on the open ticket", (f) =>
+				const refused = await press(setup, "delete", "the refusal on the open ticket", (f) =>
 					messageRowOf(f).includes("no work is in flight to close"),
 				);
 				expect(frameText(refused)).not.toContain("Close: Persist source facts");
@@ -1425,7 +1425,7 @@ describe("the Ticket Close key", () => {
 			async (setup) => {
 				app.src.settle(success);
 				await awaitFrame(setup, (f) => ticketRow(f).includes("[awaiting]"), "the awaiting ticket");
-				const opened = await openSurface(setup, "w", "the Close confirmation", (f) =>
+				const opened = await openSurface(setup, "delete", "the Close confirmation", (f) =>
 					f.includes("Close: Persist source facts"),
 				);
 				expect(frameText(opened)).toContain("The turn has settled, and no Agent works.");
@@ -2997,10 +2997,11 @@ describe("the leftover environment", () => {
 		app.state.close();
 	});
 
-	test("w on an open ticket states its reason and runs no command; the fact stands", async () => {
-		// An open ticket holds no work in flight, so key `w` refuses it with that
-		// reason (ADR 0031) and the leftover the closed cycle left keeps standing
-		// as the fact it is: no panel, no herdr command, nothing cleared.
+	test("the Delete key on an open ticket states its reason and runs no command; the fact stands", async () => {
+		// An open ticket holds no work in flight, so the Delete key refuses it
+		// with that reason (ADR 0031, ADR 0122) and the leftover the closed
+		// cycle left keeps standing as the fact it is: no panel, no herdr
+		// command, nothing cleared.
 		const app = seededApp("awaiting", {}, success, "worktree");
 		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
 		app.runner.set("herdr", ["worktree", "remove", "--workspace", "ws-1"], DIRTY_REMOVAL);
@@ -3011,12 +3012,13 @@ describe("the leftover environment", () => {
 				await awaitFrame(setup, (f) => ticketRow(f).includes("[awaiting]"), "the awaiting ticket");
 				await pressReturn(setup, "the decision modal", (f) => f.includes("Decision:"));
 				await pressReturn(setup, "the close", (f) => ticketRow(f).includes("leftover"));
-				const commandsBefore = app.runner.commands();
-				setup.mockInput.pressKey("w");
-				const frame = await settle(setup);
-				// The refusal is readable on the Message line, in the catalogue's
-				// own words, and no panel opened under it.
-				expect(messageRowOf(frame)).toContain("no work is in flight to close");
+						const commandsBefore = app.runner.commands();
+						const frame = await press(setup, "delete", "the close refusal", (f) =>
+							messageRowOf(f).includes("no work is in flight to close"),
+						);
+						// The refusal is readable on the Message line, in the catalogue's
+						// own words, and no panel opened under it.
+						expect(messageRowOf(frame)).toContain("no work is in flight to close");
 				expect(frame).not.toContain("Close: Persist source facts");
 				// No panel and no reopened decision, and no herdr command ran:
 				// the refusal's fact sends its own desktop notification (ADR 0080),
@@ -4416,7 +4418,7 @@ describe("the Operator-decides type parks its completions for the operator (ADR 
 				// settling agent applied (ADR 0086), and the ticket's position
 				// re-derives where the machine offers it next - open, and ready
 				// to be offered for implementation.
-				const opened = await openSurface(setup, "w", "the Close confirmation", (f) =>
+				const opened = await openSurface(setup, "delete", "the Close confirmation", (f) =>
 					f.includes("Close: Persist source facts"),
 				);
 				expect(frameText(opened)).toContain("The closed decision lands on the settled turn.");

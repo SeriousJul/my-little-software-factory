@@ -757,8 +757,8 @@ export function holdsDecision(ticket: Ticket): boolean {
  * then waits out the startup grace, the window in which a booted agent
  * reports idle before it picks up the prompt and starts working.
  *
- * The two in-flight states reach `open` directly, because key `w` closes a
- * cycle the agent is still working in (ADR 0031). That close ends the cycle
+ * The two in-flight states reach `open` directly, because the Delete key
+ * closes a cycle the agent is still working in (ADR 0031, ADR 0122). That close ends the cycle
  * with no completion trace, so the cycle-end gates read no row for it: the
  * move stands in the state line, and no trace row carries it.
  */

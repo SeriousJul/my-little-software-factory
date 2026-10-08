@@ -106,9 +106,11 @@ describe("the shared control gallery", () => {
 			"close-dialog-working",
 			"close-dialog-awaiting-response",
 			"close-panel-closing",
-			"ticket-close",
-			"ticket-close-live-worktree",
-			"repository-select",
+				"ticket-close",
+				"ticket-close-live-worktree",
+				"consultation-delete",
+				"repository-select",
+				"delete-key",
 			"recovery-panel-opening",
 			"recovery-panel-missing",
 			"recovery-panel-failed",
@@ -307,6 +309,12 @@ describe("the shared control gallery", () => {
 		await awaitFrame(setup, (f) => f.includes("jul/notes"), "the list rows");
 		// Tab is the gallery's own key: the panel sits with its dispatch
 		// inactive, so the walk passes it the way it passes every other example.
+		setup.mockInput.pressTab();
+		await awaitFrame(
+			setup,
+			(f) => f.includes(stateLine("delete-key")),
+			"the Delete key example's state word",
+		);
 		setup.mockInput.pressTab();
 		await awaitFrame(
 			setup,
@@ -567,7 +575,10 @@ describe("the shared control gallery", () => {
 	 * three Message rows stand in it beside the header and the note.
 	 */
 	test("the Ticket ignore example holds the flip and the three refusals", async () => {
-		const setup = await gallery("ticket-ignore", 120, 30);
+		// The frame stands wide enough that the detail pane's bar keeps the
+		// flip's hint: the Delete key's wider Close pushes the flip out of a
+		// narrow bar's packing (ADR 0122).
+		const setup = await gallery("ticket-ignore", 124, 30);
 		const charFrame = setup.captureCharFrame();
 		const text = frameText(charFrame);
 		const lines = rowsOf(charFrame);
@@ -597,7 +608,10 @@ describe("the shared control gallery", () => {
 	});
 
 	test("the List filter example holds the cycle's four hints and the queue refusal", async () => {
-		const setup = await gallery("ticket-filter", 160, 28);
+		// The frame stands wide enough that the detail pane's bar keeps the
+		// filter's hint: the Delete key's wider Close pushes the filter out of
+		// a narrow bar's packing (ADR 0122).
+		const setup = await gallery("ticket-filter", 170, 28);
 		const text = frameText(setup.captureCharFrame());
 		expect(text).toContain(stateLine("ticket-filter"));
 		// The hint names the view the cycle moves to, in all four states. The
@@ -621,7 +635,10 @@ describe("the shared control gallery", () => {
 	 * marker the row wears while the flag stands beside its own state badge.
 	 */
 	test("the Ticket mute example holds the flip, the header's cell, and the marker", async () => {
-		const setup = await gallery("ticket-mute", 160, 30);
+		// The frame stands wide enough that the detail pane's bar keeps the
+		// flip's hint: the Delete key's wider Close pushes the flip out of a
+		// narrow bar's packing (ADR 0122).
+		const setup = await gallery("ticket-mute", 170, 30);
 		const text = frameText(setup.captureCharFrame());
 		expect(text).toContain(stateLine("ticket-mute"));
 		// The flip, in the words the two rows read: the key beside an un-muted row
@@ -937,6 +954,41 @@ describe("the shared control gallery", () => {
 		expect(frame).toContain("The closed decision lands on the settled turn.");
 		expect(frame).toContain("Cancel keep the turn undecided");
 		expect(frame).not.toContain("more (j/k)");
+	});
+
+	// The Consultation removal panel (issue #91, ADR 0122): the same
+	// production copy the Delete key's panel reads, drawn at the width that
+	// holds its body whole.
+	test("the Consultation removal example names the record and its history", async () => {
+		// The frame stands where the state word and the body both hold whole: the
+		// title shares its width with the border's brake lamp (issue #319).
+		const setup = await gallery("consultation-delete", 110, 20);
+		const frame = frameText(setup.captureCharFrame());
+		expect(frame).toContain(stateLine("consultation-delete"));
+		expect(frame).toContain("Delete Consultation c1c1c1c1");
+		expect(frame).toContain(
+			"Saved history will be removed. Backups and filesystem snapshots may retain copies. Data is not encrypted.",
+		);
+		// The rows the operator answers with, and the panel's own bar.
+		expect(frame).toContain("Delete remove local history");
+		expect(frame).toContain("Cancel");
+	});
+
+	// The Delete key by the section under the cursor (ADR 0122): one bar per
+	// base section, each naming the one meaning its mode runs. The frame holds
+	// all five bars at once, so the counts below are the sections' acts: Close
+	// on the ticket that holds live work and on the live Consultation, Remove
+	// on the open Ticket's waiting row, on the closed Consultation's record,
+	// and on the queue's own item. The frame stands wide enough that the
+	// closed Consultation's bar keeps the removal beside the section's own
+	// rows: the removal's rank is the section's last, so a narrow bar packs
+	// it away before it touches the rows above it.
+	test("the Delete key example names each section's own act", async () => {
+		const setup = await gallery("delete-key", 170, 24);
+		const frame = frameText(setup.captureCharFrame());
+		expect(frame).toContain(stateLine("delete-key"));
+		expect(frame.split("Delete Close").length - 1).toBe(2);
+		expect(frame.split("Delete Remove").length - 1).toBe(3);
 	});
 
 	test("Esc leaves the gallery, the way its bar says", async () => {

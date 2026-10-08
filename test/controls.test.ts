@@ -65,6 +65,7 @@ const OWN_FACTS = {
 		groupHeaderSelected: false,
 		selectedGroupPosition: 0,
 		visibleGroupHeaderCount: 0,
+		queueItemForSelectedRow: null,
 		detailCanScroll: true,
 	},
 	"consultation-list": {
@@ -80,6 +81,7 @@ const OWN_FACTS = {
 		consultationRefreshAvailable: false,
 		consultationAgentStatus: null,
 		consultationPaneAlive: false,
+		queueItemForSelectedRow: null,
 		detailCanScroll: true,
 	},
 	"work-queue-list": {
@@ -451,11 +453,115 @@ describe("the shared control catalogue", () => {
 		expect(controlForKey({ name: "p" }, context)?.id).toBe("queue-pause");
 	});
 
-	test("the Consultation close is the Delete key, not the section toggle", () => {
+	test("the Delete key is the Consultation section's own row key, not the section toggle", () => {
+		// No Consultation under the cursor: the queue's removal owns the key's
+		// words in the Consultation section, and the section toggle keeps `x`.
 		const context = facts("consultation-detail");
 
-		expect(controlForKey({ name: "delete" }, context)?.id).toBe("consultation-close");
+		expect(controlForKey({ name: "delete" }, context)?.id).toBe("queue-remove");
 		expect(controlForKey({ name: "x" }, context)?.id).toBe("section-toggle");
+		// A live Consultation under the cursor: the section's own Close is the
+		// act, and the removal and the record's removal refuse behind it.
+		const live = facts("consultation-detail", {
+			selectedConsultation: { state: "working" } as unknown as Consultation,
+		});
+		expect(controlForKey({ name: "delete" }, live)?.id).toBe("consultation-close");
+	});
+
+	// ADR 0122: the Consultation's Close answers the Delete key on every state
+	// that holds an Agent - a live one the panel confirms, a broken one that
+	// closes direct, and the stuck one the panel recovers. The two states that
+	// hold no Agent no longer close at the key: a `queued` record gives it to
+	// the queue's removal, and an `unscheduled` one gives it to the record's
+	// removal.
+	test("the Consultation close answers the Delete key on every state that holds an Agent", () => {
+		const close = controlById("consultation-close");
+		for (const mode of ["consultation-list", "consultation-detail"] as const) {
+			expect(availabilityFor(close, facts(mode))).toEqual({
+				available: false,
+				reason: "no Consultation is selected",
+			});
+			for (const state of [
+				"opening",
+				"working",
+				"awaiting-response",
+				"missing",
+				"failed",
+				"closing",
+			] as const) {
+				expect(
+					availabilityFor(
+						close,
+						facts(mode, { selectedConsultation: { state } as unknown as Consultation }),
+					),
+				).toEqual({ available: true });
+			}
+			expect(
+				availabilityFor(
+					close,
+					facts(mode, { selectedConsultation: { state: "queued" } as unknown as Consultation }),
+				),
+			).toEqual({
+				available: false,
+				reason: "the selected Consultation waits in the Work queue: Delete takes its row out",
+			});
+			expect(
+				availabilityFor(
+					close,
+					facts(mode, {
+						selectedConsultation: { state: "unscheduled" } as unknown as Consultation,
+					}),
+				),
+			).toEqual({
+				available: false,
+				reason: "the selected Consultation is unscheduled: Delete removes the record and its history",
+			});
+			expect(
+				availabilityFor(
+					close,
+					facts(mode, { selectedConsultation: { state: "closed" } as unknown as Consultation }),
+				),
+			).toEqual({
+				available: false,
+				reason: "the selected Consultation is already closed",
+			});
+		}
+	});
+
+	// Issue #91, ADR 0122: the record removal answers the Delete key on a
+	// `closed` and on an `unscheduled` record, and refuses the states that
+	// still run - the close or the queue's removal answers them.
+	test("the Consultation removal answers the Delete key on the closed and the unscheduled record", () => {
+		const remove = controlById("consultation-delete");
+		for (const mode of ["consultation-list", "consultation-detail"] as const) {
+			for (const state of ["closed", "unscheduled"] as const) {
+				expect(
+					availabilityFor(
+						remove,
+						facts(mode, { selectedConsultation: { state } as unknown as Consultation }),
+					),
+				).toEqual({ available: true });
+			}
+			for (const state of [
+				"queued",
+				"opening",
+				"working",
+				"awaiting-response",
+				"missing",
+				"failed",
+				"closing",
+			] as const) {
+				expect(
+					availabilityFor(
+						remove,
+						facts(mode, { selectedConsultation: { state } as unknown as Consultation }),
+					),
+				).toEqual({
+					available: false,
+					reason: "only a closed or unscheduled Consultation can be removed",
+				});
+			}
+		}
 	});
 
 	test("z answers nothing in the Consultation section", () => {
@@ -463,16 +569,22 @@ describe("the shared control catalogue", () => {
 			expect(controlForKey({ name: "z" }, facts(mode))).toBeUndefined();
 	});
 
-	test("d refuses in both Ticket modes, and f cycles the Ticket section's own filter", () => {
+	test("d resolves nowhere, and f cycles the Ticket section's own filter", () => {
+		// ADR 0122: `d` left the catalogue with the record removal's move to the
+		// Delete key, so the retired key resolves to no control in any mode, and
+		// a press of it states nothing, the way every unclaimed key does.
+		for (const mode of [
+			"ticket-list",
+			"ticket-detail",
+			"consultation-list",
+			"consultation-detail",
+			"work-queue-list",
+			"work-queue-detail",
+		] as const) {
+			expect(controlForKey({ name: "d" }, facts(mode))).toBeUndefined();
+		}
 		for (const mode of ["ticket-list", "ticket-detail"] as const) {
 			const context = facts(mode);
-			const deleteControl = controlForKey({ name: "d" }, context);
-			expect(deleteControl?.id).toBe("consultation-delete");
-			if (deleteControl === undefined) throw new Error("Delete is missing from the catalogue");
-			expect(availabilityFor(deleteControl, context)).toEqual({
-				available: false,
-				reason: "this control is available only in the Consultation section",
-			});
 			// The Ticket section owns `f` in its own modes now (ADR 0060): the key
 			// cycles the List filter, and the Consultation section's History keeps
 			// its section-only place behind it.
@@ -485,17 +597,18 @@ describe("the shared control catalogue", () => {
 				reason: "this control is available only in the Consultation section",
 			});
 		}
-		// In the Consultation section the keys keep their own meanings.
+		// In the Consultation section the keys keep their own meanings: the
+		// record removal answers the Delete key, and History keeps its `f`.
 		const consultation = facts("consultation-list");
-		expect(controlForKey({ name: "d" }, consultation)?.id).toBe("consultation-delete");
 		expect(controlForKey({ name: "f" }, consultation)?.id).toBe("history");
 		const closed = facts("consultation-list", {
 			selectedConsultation: { state: "closed" } as unknown as Consultation,
 		});
-		const closedDelete = controlForKey({ name: "d" }, closed);
+		const closedDelete = controlForKey({ name: "delete" }, closed);
 		const closedHistory = controlForKey({ name: "f" }, closed);
 		if (closedDelete === undefined || closedHistory === undefined)
-			throw new Error("Delete and History are missing from the catalogue");
+			throw new Error("Remove and History are missing from the catalogue");
+		expect(closedDelete.id).toBe("consultation-delete");
 		expect(availabilityFor(closedDelete, closed).available).toBe(true);
 		expect(availabilityFor(closedHistory, closed).available).toBe(true);
 	});
@@ -803,30 +916,66 @@ describe("the shared control catalogue", () => {
 		expect(availabilityFor(quit, facts("ticket-list"))).toEqual({ available: true });
 	});
 
-	test("the Ticket guide omits Delete and History, and the Consultation guide keeps them", () => {
+	// ADR 0122: the Delete key answers in every base section, and each
+	// section's guide names the Delete acts its own mode runs - never the other
+	// sections' acts, which refuse there in the catalogue's words. The queue's
+	// removal is dispatched in every base mode, so every base guide names it
+	// among its own rows; the Ticket section's Close and the Consultation
+	// section's Close and record removal keep their places in their own guides
+	// alone.
+	test("each base guide names only the Delete acts its own mode runs", () => {
 		for (const mode of ["ticket-list", "ticket-detail"] as const) {
 			const ids = guideControls(facts(mode)).map(({ control }) => control.id);
 			expect(ids).not.toContain("history");
 			expect(ids).not.toContain("consultation-delete");
+			expect(ids).not.toContain("consultation-close");
+			expect(ids).toContain("queue-remove");
+			const ticketClose = guideControls(facts(mode)).find(
+				({ control }) => control.id === "ticket-close",
+			);
+			expect(ticketClose?.group).toBe("Current interaction mode");
 		}
 		for (const mode of ["consultation-list", "consultation-detail"] as const) {
 			const entries = guideControls(facts(mode));
-			for (const id of ["history", "consultation-delete"]) {
+			const ids = entries.map(({ control }) => control.id);
+			expect(ids).not.toContain("ticket-close");
+			for (const id of ["history", "consultation-delete", "consultation-close", "queue-remove"]) {
+				expect(ids).toContain(id);
 				expect(entries.find(({ control }) => control.id === id)?.group).toBe(
 					"Current interaction mode",
 				);
 			}
 		}
+		for (const mode of ["work-queue-list", "work-queue-detail"] as const) {
+			const ids = guideControls(facts(mode, queueValues)).map(({ control }) => control.id);
+			expect(ids).not.toContain("history");
+			expect(ids).not.toContain("consultation-delete");
+			expect(ids).not.toContain("consultation-close");
+			expect(ids).toContain("queue-remove");
+		}
 	});
 
 	// The Work queue shares the list surface with the other two sections, so the
-	// Consultation section's Delete and History reach its modes by way of the
+	// Consultation section's removal and History reach its modes by way of the
 	// common base modes. They refuse there in the owning section's words, and
 	// the queue's guide and bar name them nowhere: each section's guide names
-	// the keys it dispatches (issue #85, ADR 0034).
-	test("d and f refuse in both Work queue modes, and its guide and bar omit them", () => {
+	// the keys it dispatches (issue #85, ADR 0034). The queue's own removal is
+	// the queue section's own Delete act (ADR 0122), and it answers the key in
+	// the queue's own modes with the item under the cursor.
+	test("the Delete key removes the queue item in both Work queue modes, and f refuses", () => {
 		for (const mode of ["work-queue-list", "work-queue-detail"] as const) {
 			const context = facts(mode, queueValues);
+			// The queue's removal answers the Delete key with the item under the
+			// cursor, and the bar and the guide name it in the queue's own modes.
+			const remove = controlForKey({ name: "delete" }, context);
+			expect(remove?.id).toBe("queue-remove");
+			if (remove === undefined) throw new Error("the queue lost its removal");
+			expect(availabilityFor(remove, context)).toEqual({ available: true });
+			// An empty queue refuses with the queue's row key's one reason.
+			expect(availabilityFor(controlById("queue-remove"), facts(mode))).toEqual({
+				available: false,
+				reason: "no queue item is under the cursor",
+			});
 			// `f` now belongs to two lists, so the queue's refusal names both
 			// owners instead of the Consultation section alone (ADR 0060).
 			const filterControl = controlForKey({ name: "f" }, context);
@@ -842,27 +991,25 @@ describe("the shared control catalogue", () => {
 				available: false,
 				reason: "this control is available only in the Ticket section and the Consultation section",
 			});
-			// The queue's own `u` and `d` reorder keys are gone (ADR 0049), so no
-			// queue key answers `d`: the Consultation's Delete resolves there and
-			// states the section refusal, not its own closed-Consultation reason.
-			const deleteControl = controlForKey({ name: "d" }, context);
-			if (deleteControl === undefined) throw new Error("d answers nothing in the queue modes");
-			const deleteAvailability = availabilityFor(deleteControl, context);
-			expect(deleteControl.id).toBe("consultation-delete");
-			expect(deleteAvailability).toEqual({
+			// The Consultation section's record removal reaches the queue's modes
+			// by way of the common base modes, and refuses there in the owning
+			// section's words, not its own closed-Consultation reason.
+			expect(availabilityFor(controlById("consultation-delete"), context)).toEqual({
 				available: false,
 				reason: "this control is available only in the Consultation section",
 			});
 			const ids = guideControls(context).map(({ control }) => control.id);
 			expect(ids).not.toContain("history");
 			expect(ids).not.toContain("consultation-delete");
+			expect(ids).toContain("queue-remove");
 			const hinted = actionBarControls(mode, context).map((control) => control.id);
 			expect(hinted).not.toContain("history");
 			expect(hinted).not.toContain("consultation-delete");
+			expect(hinted).toContain("queue-remove");
 		}
 		// A closed Consultation under the cursor changes nothing in the queue:
-		// the queue's modes still refuse the key in the Consultation's words,
-		// because the ownership, not the row, decides.
+		// the record removal still refuses in the Consultation's words, because
+		// the ownership, not the row, decides.
 		const withClosedConsultation: Partial<ModeOwn & StandingFacts> = {
 			...queueValues,
 			selectedConsultation: { state: "closed" } as unknown as Consultation,
@@ -1055,16 +1202,16 @@ describe("the shared control catalogue", () => {
 		});
 	});
 
-	test("w is Close in both Ticket panes, on every state but open (ADR 0031)", () => {
+	test("the Delete key is Close in both Ticket panes, on every state but open (ADR 0031)", () => {
 		const inFlight: Partial<ModeOwn & StandingFacts> = {
 			selectedTicket: runningTicketWithPane,
 		};
 		const detail = facts("ticket-detail", inFlight);
 		const list = facts("ticket-list", inFlight);
-		const control: ControlDefinition | undefined = controlForKey({ name: "w" }, detail);
+		const control: ControlDefinition | undefined = controlForKey({ name: "delete" }, detail);
 
 		expect(control?.id).toBe("ticket-close");
-		expect(controlForKey({ name: "w" }, list)?.id).toBe("ticket-close");
+		expect(controlForKey({ name: "delete" }, list)?.id).toBe("ticket-close");
 		if (control === undefined) throw new Error("Close is missing from the catalogue");
 		expect(availabilityFor(control, detail).available).toBe(true);
 		// An awaiting ticket has a settled turn to close, and it asks too.
@@ -1081,6 +1228,111 @@ describe("the shared control catalogue", () => {
 		expect(availabilityFor(control, facts("ticket-list")).available).toBe(false);
 	});
 
+	// ADR 0122: the queue's removal answers the Delete key in the Ticket panes
+	// with the row the cursor's item waits with. The state split comes before
+	// the row: the Ticket's Close claims every state that holds live or settled
+	// work, even one that also waits with a Restart row (ADR 0108), so the
+	// removal answers the `open` Ticket alone.
+	test("queue-remove answers the Delete key in both Ticket panes, on an open Ticket that waits", () => {
+		const remove = controlById("queue-remove");
+		for (const mode of ["ticket-list", "ticket-detail"] as const) {
+			// No row under the cursor: the Ticket's Close owns the key and states
+			// its own refusal.
+			expect(controlForKey({ name: "delete" }, facts(mode))?.id).toBe("ticket-close");
+			// The open Ticket that waits with a row: the removal is the act, and
+			// the Ticket's Close refuses the open state first.
+			const waiting = facts(mode, {
+				selectedTicket: openTicket,
+				queueItemForSelectedRow: queueValues.selectedWorkQueueItem,
+			});
+			expect(controlForKey({ name: "delete" }, waiting)?.id).toBe("queue-remove");
+			expect(availabilityFor(remove, waiting)).toEqual({ available: true });
+			expect(availabilityFor(remove, facts(mode, { selectedTicket: openTicket }))).toEqual({
+				available: false,
+				reason: "the selected Ticket has no waiting queue item",
+			});
+			// The states the Close claims refuse the removal: the Ticket's work
+			// cycle stands behind the key.
+			for (const state of ["handed-off", "running", "awaiting"] as const) {
+				expect(
+					availabilityFor(remove, facts(mode, { selectedTicket: rowTicket({ state }) })),
+				).toEqual({
+					available: false,
+					reason: "the selected Ticket is not open: Delete closes its work cycle",
+				});
+			}
+		}
+	});
+
+	// ADR 0122: the queue's removal answers the Delete key in the Consultation
+	// panes with the row the cursor's record waits with. A `queued` record
+	// loses its row and stays `unscheduled` behind it (issue #90), the states
+	// the Close runs on refuse the row's removal, and the two states that hold
+	// no Agent give the key to the record's removal instead.
+	test("queue-remove answers the Delete key in both Consultation panes, on the queued record", () => {
+		const remove = controlById("queue-remove");
+		for (const mode of ["consultation-list", "consultation-detail"] as const) {
+			// No row under the cursor: the removal states the queue's row refusal,
+			// and it owns the key's words in the Consultation section.
+			expect(controlForKey({ name: "delete" }, facts(mode))?.id).toBe("queue-remove");
+			expect(availabilityFor(remove, facts(mode))).toEqual({
+				available: false,
+				reason: "no Consultation is selected",
+			});
+			// The queued record that waits with a row: the removal takes the row
+			// out, and the record stays unscheduled behind it.
+			const queued = facts(mode, {
+				selectedConsultation: { state: "queued" } as unknown as Consultation,
+				queueItemForSelectedRow: queueConsultationValues.selectedWorkQueueItem,
+			});
+			expect(controlForKey({ name: "delete" }, queued)?.id).toBe("queue-remove");
+			expect(availabilityFor(remove, queued)).toEqual({ available: true });
+			// A queued record the queue has emptied mid-removal keeps the row's
+			// refusal, and the Close refuses the queued state in its own words.
+			expect(
+				availabilityFor(
+					remove,
+					facts(mode, { selectedConsultation: { state: "queued" } as unknown as Consultation }),
+				),
+			).toEqual({
+				available: false,
+				reason: "the selected row has no waiting queue item",
+			});
+			// The states the Close answers refuse the row's removal: their work
+			// stands behind the key, not a waiting start.
+			for (const state of [
+				"opening",
+				"working",
+				"awaiting-response",
+				"missing",
+				"failed",
+				"closing",
+			] as const) {
+				expect(
+					availabilityFor(
+						remove,
+						facts(mode, {
+							selectedConsultation: { state } as unknown as Consultation,
+							queueItemForSelectedRow: queueConsultationValues.selectedWorkQueueItem,
+						}),
+					),
+				).toEqual({
+					available: false,
+					reason: "the selected row has no waiting queue item",
+				});
+			}
+			// The two states that hold no Agent give the key to the record's
+			// removal, which takes the record and its history out.
+			for (const state of ["closed", "unscheduled"] as const) {
+				expect(
+					controlForKey({ name: "delete" }, facts(mode, {
+						selectedConsultation: { state } as unknown as Consultation,
+					}))?.id,
+				).toBe("consultation-delete");
+			}
+		}
+	});
+
 	test("a Handoff in flight is no refusal for the Ticket close: the close queues", () => {
 		// ADR 0031 holds the close on the shared environment seat instead of
 		// refusing it, so a hung start still ends in the close asked for.
@@ -1092,12 +1344,11 @@ describe("the shared control catalogue", () => {
 		expect(availabilityFor(control, context).available).toBe(true);
 	});
 
-	test("each section's Close claims its own key: the Ticket's w, the Consultation's Delete", () => {
-		// The two Closes answer different keys: the Ticket work cycle's (ADR
-		// 0031) stays on `w`, the Consultation's takes the Delete key the Work
-		// queue removes an item with. A key belongs to one mode, so the guide
-		// lists the other section's Close among the control-plane controls it
-		// catalogues on its own terms, never as this mode's key.
+	// ADR 0122: the two Closes share the Delete key, and the act follows the
+	// section under the cursor. Each section's guide names its own Close among
+	// its own rows and omits the other section's Close, and the retired `w`
+	// resolves nowhere in either section.
+	test("the Delete key is each section's own Close, and the guides keep them apart", () => {
 		const consultation = facts("consultation-detail", {
 			selectedConsultation: consultationWithPane,
 		});
@@ -1107,14 +1358,13 @@ describe("the shared control catalogue", () => {
 		);
 		expect(guideGroupsFor(consultation, "ticket-close")).toEqual([]);
 		const ticket = facts("ticket-list", { selectedTicket: runningTicketWithPane });
-		expect(controlForKey({ name: "w" }, ticket)?.id).toBe("ticket-close");
+		expect(controlForKey({ name: "delete" }, ticket)?.id).toBe("ticket-close");
 		expect(guideGroupsFor(ticket, "ticket-close")).toContain("Current interaction mode");
-		expect(guideGroupsFor(ticket, "consultation-close")).toEqual(["Control plane controls"]);
-		// Each key reaches its own section's Close alone: `w` answers nothing in
-		// the Consultation section, and the Delete key answers nothing in the
-		// Ticket section.
+		expect(guideGroupsFor(ticket, "consultation-close")).toEqual([]);
+		// The retired `w` answers nothing in either section: a press of it
+		// states nothing, the way every unclaimed key does.
 		expect(controlForKey({ name: "w" }, consultation)).toBeUndefined();
-		expect(controlForKey({ name: "delete" }, ticket)).toBeUndefined();
+		expect(controlForKey({ name: "w" }, ticket)).toBeUndefined();
 	});
 
 	test("the Ticket guide names Goto in its own section, and the Consultation guide omits it", () => {

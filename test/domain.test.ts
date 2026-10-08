@@ -93,7 +93,7 @@ describe("the ticket state machine", () => {
 		expect(canTransition("awaiting", "open")).toBe(true);
 	});
 
-	test("key w closes a cycle whose turn never settled (ADR 0031)", () => {
+	test("the Delete key closes a cycle whose turn never settled (ADR 0031, ADR 0122)", () => {
 		expect(canTransition("handed-off", "open")).toBe(true);
 		expect(canTransition("running", "open")).toBe(true);
 	});

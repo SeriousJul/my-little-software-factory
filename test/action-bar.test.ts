@@ -48,6 +48,7 @@ import {
 	sleep,
 	spanColorAt,
 	startingFaceOf,
+	rowSpans,
 	WIDTH,
 	withApp,
 } from "./app-harness.ts";
@@ -121,8 +122,10 @@ describe("the contextual Action bar", () => {
 					"↑↓/jk Move",
 					"→/l Detail",
 					"Enter Hand off",
+					"g Goto",
+					"Delete Close",
+					"i Ignore",
 					"x Section",
-					"c Launch",
 					"e Override",
 					"r Refresh",
 				]) {
@@ -130,19 +133,22 @@ describe("the contextual Action bar", () => {
 				}
 				// Help stays discoverable at the right end of the row.
 				expect(bar.endsWith("? Help")).toBe(true);
-				// Delete and History belong to the Consultation section's
-				// catalog: the Ticket bar omits the keys the Ticket guide omits.
+				// The Consultation section's Delete acts belong to its catalog, and
+				// the open Ticket waits with no row: the Ticket bar names no removal
+				// (ADR 0122).
 				expect(bar).not.toContain("f History");
-				expect(bar).not.toContain("d Delete");
+				expect(bar).not.toContain("Delete Remove");
 				const barRow = rowsOf(frame).length - 1;
 				// Available: the key wears the focus color, the label the text color.
 				expect(spanColorAt(setup, barRow, "→/l ")).toEqual(rgb(roleColor("accent")));
 				expect(spanColorAt(setup, barRow, "Detail")).toEqual(rgb(roleColor("text")));
 				expect(spanColorAt(setup, barRow, "x ")).toEqual(rgb(roleColor("accent")));
 				expect(spanColorAt(setup, barRow, "Section")).toEqual(rgb(roleColor("text")));
-				// Unavailable: the whole hint is dim.
+				// Unavailable: the whole hint is dim. The Delete key's Close stands
+				// dimmed beside the open Ticket: no work is in flight to close.
 				expect(spanColorAt(setup, barRow, "r Refresh")).toEqual(rgb(roleColor("subtext0")));
-				expect(spanColorAt(setup, barRow, "c Launch")).toEqual(rgb(roleColor("subtext0")));
+				expect(spanColorAt(setup, barRow, "Delete ")).toEqual(rgb(roleColor("subtext0")));
+				expect(spanColorAt(setup, barRow, "Close")).toEqual(rgb(roleColor("subtext0")));
 			},
 			WIDTH,
 			HEIGHT,
@@ -353,11 +359,11 @@ describe("the contextual Action bar", () => {
 			async (setup) => {
 				// Every step of the packing ladder, with the hints that must
 				// survive it. The removal order is the catalogue priority:
-				// Launch, Section, Close, Refresh, Override, Goto, Hand off,
-				// Detail, Move, and Help last. The spec's common controls of the
-				// base modes, Override and Refresh, therefore outlive the Launch
-				// entry the control plane reached for, and the Ticket's Close
-				// (ADR 0031) keeps the Consultation section's rank.
+				// the Ticket section's reveals, the Launch, the ignore, the
+				// section toggle, the Delete key's Close, Refresh, Override,
+				// Goto, Hand off, Detail, Move, and Help last (ADR 0122). The
+				// Delete key's Close keeps the Consultation section's rank,
+				// outliving the Launch entry the control plane reached for.
 				const ladder: Array<[number, string[]]> = [
 					[
 						120,
@@ -366,16 +372,14 @@ describe("the contextual Action bar", () => {
 							"→/l Detail",
 							"Enter Hand off",
 							"g Goto",
-							"w Close",
+							"Delete Close",
+							"i Ignore",
 							"x Section",
-							"c Launch",
 							"e Override",
 							"r Refresh",
 							"? Help",
 						],
 					],
-					// The widths the last review measured: the spec's common
-					// controls stay.
 					[
 						100,
 						[
@@ -383,8 +387,7 @@ describe("the contextual Action bar", () => {
 							"→/l Detail",
 							"Enter Hand off",
 							"g Goto",
-							"w Close",
-							"x Section",
+							"Delete Close",
 							"e Override",
 							"r Refresh",
 							"? Help",
@@ -397,7 +400,6 @@ describe("the contextual Action bar", () => {
 							"→/l Detail",
 							"Enter Hand off",
 							"g Goto",
-							"w Close",
 							"e Override",
 							"r Refresh",
 							"? Help",
@@ -437,6 +439,9 @@ describe("the contextual Action bar", () => {
 						"Close",
 						"Override",
 						"Refresh",
+						"Ignore",
+						"Mute",
+						"Filter",
 					]) {
 						if (!kept.some((hint) => hint.includes(gone))) expect(bar).not.toContain(gone);
 					}
@@ -1181,14 +1186,20 @@ describe("the contextual Action bar", () => {
 				);
 				const frame = await settle(setup);
 				const barRow = rowsOf(frame).length - 1;
-				// The ask never waits on a run (ADR 0064): the hints stay lit
-				// while a Handoff runs, and a second ask answers with the
-				// shell's own words. The key paints the accent and the label the
-				// text: the hint the operator sees is the hint that runs.
-				expect(spanColorAt(setup, barRow, "Enter ")).toEqual(rgb(roleColor("accent")));
-				expect(spanColorAt(setup, barRow, "Hand off")).toEqual(rgb(roleColor("text")));
-				expect(spanColorAt(setup, barRow, "e ")).toEqual(rgb(roleColor("accent")));
-				expect(spanColorAt(setup, barRow, "Override")).toEqual(rgb(roleColor("text")));
+						// The ask never waits on a run (ADR 0064): the hints stay lit
+						// while a Handoff runs, and a second ask answers with the
+						// shell's own words. The key paints the accent and the label the
+						// text: the hint the operator sees is the hint that runs.
+						expect(spanColorAt(setup, barRow, "Enter ")).toEqual(rgb(roleColor("accent")));
+						expect(spanColorAt(setup, barRow, "Hand off")).toEqual(rgb(roleColor("text")));
+						// The Override key's own spans: the Delete key's wider span
+						// stands beside it now, so the pair is read by span, not by
+						// a needle the Delete key's span could answer for (ADR 0122).
+						const spans = rowSpans(setup, barRow);
+						const overrideLabel = spans.findIndex((span) => span.text === "Override");
+						expect(spans[overrideLabel - 1].text).toBe("e ");
+						expect(spans[overrideLabel - 1].fg).toEqual(rgb(roleColor("accent")));
+						expect(spans[overrideLabel].fg).toEqual(rgb(roleColor("text")));
 				// The second Enter is refused. The refusal is an operation
 				// Warning, and active progress outranks it (user story 51), so
 				// the Handoff's own Working keeps the line: an answer never

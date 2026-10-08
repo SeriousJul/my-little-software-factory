@@ -24,11 +24,14 @@ tickets.
   stuck one - a recovery panel with the options its state offers. The editor
   keeps your draft between starts, `Enter` sends the response, and `Esc`
   closes it with the draft saved.
-- The `Delete` key closes the selected Consultation - the same key the Work
-  queue removes an item with. A close that stops a live agent confirms first
-  and names what it keeps; a `missing`, `failed`, `queued`, or `unscheduled`
-  one closes without a dialog.
-- `d` deletes a closed or an unscheduled Consultation.
+- The `Delete` key is the plane's one destructive key (ADR 0122). On a
+  Consultation that holds an agent it closes it: a close that stops a live
+  agent confirms first and names what it keeps, and a `missing` or a `failed`
+  one closes without a dialog. On a `queued` record it takes the row the
+  record waits with out of the Work queue without a dialog, and the record
+  stays as `unscheduled`. On a `closed` or an `unscheduled` record it removes
+  the record and its history, behind a confirmation that names what it
+  destroys.
 - `s` schedules an `unscheduled` Consultation back into the Work queue.
 - `f` cycles the history filter through open, closed, and all. `r` refreshes
   the Consultation list. `x` folds or restores the section, and `h`/`l` move
