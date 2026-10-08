@@ -1833,13 +1833,14 @@ The automatic suite measures the catalogue's resolution and refusals in all
 six base modes (`test/controls.test.ts`), the Ticket close's dialog facts
 (`test/ticket-close.test.ts`), the Consultation close's panel, the queued
 row's removal, and the record's removal through the real app
-(`test/consultation-frame.test.ts`), the queue's removal in both queue modes
-and the retired `d`'s silence (`test/work-queue-frame.test.ts`), the Delete
-key's refusal on the open Ticket in auto mode and the close cleanup it
-runs (`test/auto-mode.test.ts`), the bar's hints per section at the packed
-widths (`test/action-bar.test.ts`), the guide's rows per section
-(`test/key-guide.test.ts`), and the gallery's `consultation-delete` and
-`delete-key` examples (`test/shared-gallery.test.ts`).
+(`test/consultation-frame.test.ts`), the queue's removal in both queue
+modes, its removal of the open Ticket's waiting row from the Ticket list
+and the Ticket detail, and the retired `d`'s and `w`'s silences
+(`test/work-queue-frame.test.ts`), the Delete key's refusal on the open
+Ticket in auto mode and the close cleanup it runs (`test/auto-mode.test.ts`),
+the bar's hints per section at the packed widths (`test/action-bar.test.ts`),
+the guide's rows per section (`test/key-guide.test.ts`), and the gallery's
+`consultation-delete` and `delete-key` examples (`test/shared-gallery.test.ts`).
 
 What was not measured: the terminal walks have not been re-run on the
 changed bar and guide rows, so the new rows stand as not walked in a live

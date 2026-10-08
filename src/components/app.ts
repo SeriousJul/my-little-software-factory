@@ -338,8 +338,6 @@ export type AppKey =
 	| "c"
 	| "f"
 	| "x"
-	| "w"
-	| "d"
 	| "up"
 	| "down"
 	| "left"
