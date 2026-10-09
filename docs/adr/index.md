@@ -136,3 +136,4 @@ body states the context, the decision, and the consequences.
 - [ADR 0125: A standing refusal answers the automatic walks as a hold, not a failure](./0125-a-standing-refusal-answers-the-automatic-walks-as-a-hold-not-a-failure.md)
 - [ADR 0126: The Attention band reads the row's standing, and the machine's gate waits for the read](./0126-the-attention-band-reads-the-rows-own-standing-and-the-machines-gate-waits-for-the-read.md)
 - [ADR 0127: The plane pushes its own branches outside the contributor pre-push hook](./0127-the-plane-pushes-its-own-branches-outside-the-contributor-pre-push-hook.md)
+- [ADR 0128: The frame rig runs controls, not keys](./0128-the-frame-rig-runs-controls-not-keys.md)

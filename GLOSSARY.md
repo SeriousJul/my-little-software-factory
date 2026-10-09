@@ -780,6 +780,12 @@ The single egress for external commands: the control plane runs every herdr, git
 The automated tests inject a fake runner that records safe command facts, so no test touches a real herdr session, repository, ticket source, or agent runtime.
 _Avoid_: executor, spawner
 
+**Frame rig**:
+The shared test module that boots the control plane at a fixed terminal size and runs its controls for the frame tests.
+It resolves a Control catalogue id to the key the Action bar states on the current frame, sends that key, and waits for one named outcome: `opens`, `closes`, `refuses`, `shows`, `hides`, `moved`, or `quiet`.
+A test names a control and an outcome; it names no key, no frame predicate, and no deadline. The frame poll, the passive-effect flush, a surface's key ownership, and the deadline all stand behind the interface.
+_Avoid_: test harness, frame harness, UI test helper, key presser
+
 **Documentation site**:
 The static site that GitHub Pages publishes from the `docs/` folder.
 It shows the published subset (the ADRs, the standards, and the guides) and keeps the agent instruction, verification, and research folders out of the build.
