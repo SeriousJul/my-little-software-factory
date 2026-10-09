@@ -1534,6 +1534,19 @@ their scopes, and needs no wording change. No new ADR number collision:
 `0135` is checked against `origin/main` at `95dfd69a`, where `0134` is the
 highest number that stands.
 
+### The gate on this branch
+
+The branch was level with `origin/main` at `95dfd69a` (0 behind, 3 ahead)
+before the runs, and every check below ran on the tree of `c019d37c`.
+
+| Check | Result |
+| --- | --- |
+| `bun run lint` | clean over 320 files (143 ms), no fixes; the five standing warnings stand in files this change does not touch |
+| `bun run typecheck` | clean (`tsc`, no output) |
+| `bun run audit` | OK: type 0, lint 0, secrets 0, cognitive 0 / baseline 0, function 0 / baseline 0, params 0 / baseline 0, duplicates 0 / baseline 0, test-dup 282 / baseline 282, and 6 open code-scanning alerts |
+| `bun run test`, once | 3241 pass / 0 fail across 147 files in 40.42 s (16,626 `expect()` calls). Load average 2.53 before the run and 1.99 after, 32 CPUs, and no other `bun test` process ran on this machine |
+| `bun run docs:build` | complete in 1.57 s |
+
 ### What this change did not measure
 
 | Item | State |
