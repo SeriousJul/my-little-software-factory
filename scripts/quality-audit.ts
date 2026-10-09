@@ -4,10 +4,10 @@
  * One command checks the tree and prints one payload on stdout: a status
  * line, one count per metric, and the findings as `path:line rule message`.
  * It runs the type check, Biome over the audit's scope with the audit's
- * config, jscpd over its scope, and one `gh api` read of the open
- * code-scanning alerts. It runs no test suite, and it writes nothing inside
- * the worktree: jscpd's JSON report lands in a temp directory outside the
- * repository and is removed.
+ * config, jscpd once per duplication scope, and one `gh api` read of the
+ * open code-scanning alerts. It runs no test suite, and it writes nothing
+ * inside the worktree: each jscpd run's JSON report lands in its own
+ * subdirectory of a temp directory outside the repository and is removed.
  *
  * The script owns no number: the Biome rules and thresholds stand in
  * `biome.json` and `.quality/biome.json`, the jscpd thresholds in
@@ -41,10 +41,18 @@ const BIOME_CONFIG_DIR = ".quality";
 /** The one code-scanning read: the open alerts of this repository. */
 const CODEQL_ENDPOINT = "/repos/:owner/:repo/code-scanning/alerts?state=open&per_page=100";
 /** The count metrics the baseline can hold, in the payload's order. */
-const BASELINE_METRICS = ["cognitive", "function", "params", "duplicates"] as const;
+const BASELINE_METRICS = ["cognitive", "function", "params", "duplicates", "test-dup"] as const;
 
 /** One count metric of the payload, in its line order. */
-type MetricName = "type" | "lint" | "secrets" | "cognitive" | "function" | "params" | "duplicates";
+type MetricName =
+	| "type"
+	| "lint"
+	| "secrets"
+	| "cognitive"
+	| "function"
+	| "params"
+	| "duplicates"
+	| "test-dup";
 
 /** A finding of one metric, printed as `file:line <text>`. */
 export interface Finding {
@@ -197,6 +205,7 @@ export interface QualityConfig {
 	scopes: {
 		biome: string[];
 		jscpd: string[];
+		jscpdTest: string[];
 	};
 	"finding-cap": number;
 	"changed-base": string;
@@ -210,6 +219,7 @@ export interface QualityBaseline {
 	function: number;
 	params: number;
 	duplicates: number;
+	"test-dup": number;
 }
 
 function readJson<T>(path: string): T {
@@ -458,14 +468,15 @@ function duplicateFindings(input: JscpdInput): Finding[] {
 
 /**
  * The jscpd run: the scope as its paths, its settings from `.jscpd.json`,
- * and the JSON report written to the temp directory outside the worktree.
+ * and the JSON report written to the output directory inside the temp
+ * directory outside the worktree.
  */
-function jscpdReport(root: string, scope: string[], tempDir: string): JscpdReport {
+function jscpdReport(root: string, scope: string[], outputDir: string): JscpdReport {
 	const result = spawn(
-		[join(root, "node_modules", ".bin", "jscpd"), ...scope, "--output", tempDir],
+		[join(root, "node_modules", ".bin", "jscpd"), ...scope, "--output", outputDir],
 		root,
 	);
-	const reportPath = join(tempDir, "jscpd-report.json");
+	const reportPath = join(outputDir, "jscpd-report.json");
 	if (!existsSync(reportPath)) {
 		throw new Error(`jscpd wrote no report: ${spawnFailureReason(result)}`);
 	}
@@ -573,13 +584,23 @@ function run(): number {
 	try {
 		const type = typeCheck(root);
 		const diagnostics = biomeCheck(root, config.scopes.biome);
-		const report = jscpdReport(root, config.scopes.jscpd, tempDir);
+		const sourceReport = jscpdReport(root, config.scopes.jscpd, join(tempDir, "src"));
+		const testReport = jscpdReport(root, config.scopes.jscpdTest, join(tempDir, "test"));
 		const scanning = codeScanning(root);
 		const findings: Record<string, Finding[]> = {
 			...biomeFindings(diagnostics),
 			type: type.findings,
 		};
-		findings.duplicates = duplicateFindings({ report, scope: config.scopes.jscpd, root });
+		findings.duplicates = duplicateFindings({
+			report: sourceReport,
+			scope: config.scopes.jscpd,
+			root,
+		});
+		findings["test-dup"] = duplicateFindings({
+			report: testReport,
+			scope: config.scopes.jscpdTest,
+			root,
+		});
 		const codeql: CodeqlReading =
 			scanning.kind === "read"
 				? { count: scanning.alerts.length, findings: codeqlFindings(scanning.alerts) }

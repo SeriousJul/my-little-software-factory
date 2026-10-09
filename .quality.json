@@ -1,8 +1,18 @@
 {
-	"metrics": ["type", "lint", "secrets", "cognitive", "function", "params", "duplicates"],
+	"metrics": [
+		"type",
+		"lint",
+		"secrets",
+		"cognitive",
+		"function",
+		"params",
+		"duplicates",
+		"test-dup"
+	],
 	"scopes": {
 		"biome": ["src", "scripts", "bin", "test"],
-		"jscpd": ["src", "scripts", "bin"]
+		"jscpd": ["src", "scripts", "bin"],
+		"jscpdTest": ["test"]
 	},
 	"finding-cap": 20,
 	"changed-base": "origin/main"
