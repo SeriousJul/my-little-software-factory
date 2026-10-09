@@ -7,6 +7,7 @@ import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import type { TransitionOutcome } from "../../src/config.ts";
+import { holdsDecision } from "../../src/domain/ticket.ts";
 import { SCHEMA_V1 } from "../../src/state/schema.ts";
 import { openFactoryState } from "../../src/state.ts";
 import {
@@ -267,6 +268,243 @@ describe("the ticketWorkCycle aggregate", () => {
 			.prepare("SELECT COUNT(*) AS n FROM completion_traces WHERE ticket_identity = ?")
 			.get(ticket.identity) as { n: number };
 		expect(traceCount.n).toBe(1);
+		state.close();
+	});
+	test("a later settle decides the traces it supersedes (ADR 0134)", () => {
+		const path = statePath();
+		const state = openFactoryState(path);
+		state.sourceFact.initializeSources([sourceA]);
+		state.sourceFact.applyFetch(sourceA, success([fetched()]));
+		const identity = "github:github.com:I_5";
+		// The first turn settles failed and rests held in awaiting.
+		const first = state.handoff.claimHandoff(identity, choice, "open");
+		if (!first.ok) throw new Error(first.reason);
+		state.handoff.settleHandoff(first.claim.attemptId, true);
+		state.ticketWorkCycle.settleTurn({
+			ticketIdentity: identity,
+			handoffId: first.claim.attemptId,
+			taskType: "implement",
+			agentType: "pi",
+			message: "the failed turn",
+			turnLog: textLog("the failed turn"),
+			completedAt: "2026-08-31T11:00:00Z",
+			cause: "failed",
+			detail: "the build broke",
+		});
+		// The Agent works again, and the restart of a missing Agent takes the
+		// Ticket's turn: its settle reads no session record, fails open to
+		// `unknown`, and supersedes the held trace (issue #351).
+		expect(state.ticketWorkCycle.reopenTurn(identity, first.claim.attemptId)).toBe(true);
+		const second = state.handoff.claimHandoff(identity, choice, "restart");
+		if (!second.ok) throw new Error(second.reason);
+		state.handoff.settleHandoff(second.claim.attemptId, true);
+		state.ticketWorkCycle.settleTurn({
+			ticketIdentity: identity,
+			handoffId: second.claim.attemptId,
+			taskType: "implement",
+			agentType: "pi",
+			message: "the restarted turn",
+			turnLog: textLog("the restarted turn"),
+			completedAt: "2026-08-31T11:05:00Z",
+			cause: "unknown",
+		});
+
+		// The record closes the failure the first turn recorded: the
+		// superseded trace keeps its cause and detail, and the decision
+		// states why no surface offers it - the settle that took the
+		// Ticket's turn decided it, at the moment it took it. The newest
+		// trace stays undecided: it is the turn the row shows, and the
+		// decision the operator still owes.
+		const db = new Database(path);
+		const traces = db
+			.prepare(
+				"SELECT cause, detail, decision, decided_at FROM completion_traces WHERE ticket_identity = ? ORDER BY rowid",
+			)
+			.all(identity) as Array<{
+			cause: string | null;
+			detail: string | null;
+			decision: string | null;
+			decided_at: string | null;
+		}>;
+		db.close();
+		expect(traces).toEqual([
+			{
+				cause: "failed",
+				detail: "the build broke",
+				decision: "superseded",
+				decided_at: "2026-08-31T11:05:00Z",
+			},
+			{ cause: "unknown", detail: "", decision: null, decided_at: null },
+		]);
+		// The row wears no held badge, and the pause stands down with it:
+		// the failure is no longer a decision the operator owes.
+		const listed = state.ticketWorkCycle.ticketListViews([], "implement", "active").rows;
+		expect(listed.filter(holdsDecision)).toHaveLength(0);
+		expect(state.ticketWorkCycle.dispatchPauseActive()).toBe(false);
+		state.close();
+	});
+	test("the superseded decision reaches the pending trace a closed cycle leaves", () => {
+		const path = statePath();
+		const state = openFactoryState(path);
+		state.sourceFact.initializeSources([sourceA]);
+		state.sourceFact.applyFetch(sourceA, success([fetched()]));
+		const identity = "github:github.com:I_5";
+		// The first turn settles failed, the Agent works again, and the
+		// operator closes the in-flight cycle: the pending trace stays
+		// behind in the closed cycle (ADR 0031).
+		const first = state.handoff.claimHandoff(identity, choice, "open");
+		if (!first.ok) throw new Error(first.reason);
+		state.handoff.settleHandoff(first.claim.attemptId, true);
+		state.ticketWorkCycle.settleTurn({
+			ticketIdentity: identity,
+			handoffId: first.claim.attemptId,
+			taskType: "implement",
+			agentType: "pi",
+			message: "the failed turn",
+			turnLog: textLog("the failed turn"),
+			completedAt: "2026-08-31T11:00:00Z",
+			cause: "failed",
+		});
+		expect(state.ticketWorkCycle.reopenTurn(identity, first.claim.attemptId)).toBe(true);
+		expect(state.ticketWorkCycle.closeWorkCycle(identity)).toBe(true);
+		// The next turn of the Ticket settles in the new cycle and takes its
+		// newest settled turn: the closed cycle's pending trace is
+		// superseded by the same settle.
+		const second = state.handoff.claimHandoff(identity, choice, "open");
+		if (!second.ok) throw new Error(second.reason);
+		state.handoff.settleHandoff(second.claim.attemptId, true);
+		state.ticketWorkCycle.settleTurn({
+			ticketIdentity: identity,
+			handoffId: second.claim.attemptId,
+			taskType: "implement",
+			agentType: "pi",
+			message: "the next turn",
+			turnLog: textLog("the next turn"),
+			completedAt: "2026-08-31T12:00:00Z",
+			cause: "completed",
+		});
+		const db = new Database(path);
+		const traces = db
+			.prepare(
+				"SELECT work_cycle, decision FROM completion_traces WHERE ticket_identity = ? ORDER BY rowid",
+			)
+			.all(identity) as Array<{ work_cycle: number; decision: string | null }>;
+		db.close();
+		expect(traces).toEqual([
+			{ work_cycle: 1, decision: "superseded" },
+			{ work_cycle: 2, decision: null },
+		]);
+		state.close();
+	});
+	test("a decided trace keeps the decision it wears when a later turn settles", () => {
+		const path = statePath();
+		const state = openFactoryState(path);
+		state.sourceFact.initializeSources([sourceA]);
+		state.sourceFact.applyFetch(sourceA, success([fetched()]));
+		const identity = "github:github.com:I_5";
+		const first = state.handoff.claimHandoff(identity, choice, "open");
+		if (!first.ok) throw new Error(first.reason);
+		state.handoff.settleHandoff(first.claim.attemptId, true);
+		state.ticketWorkCycle.settleTurn({
+			ticketIdentity: identity,
+			handoffId: first.claim.attemptId,
+			taskType: "implement",
+			agentType: "pi",
+			message: "the failed turn",
+			turnLog: textLog("the failed turn"),
+			completedAt: "2026-08-31T11:00:00Z",
+			cause: "failed",
+		});
+		// The operator decides the failed turn, and the cycle ends behind it.
+		expect(
+			state.ticketWorkCycle.applyCompletionDecision({
+				ticketIdentity: identity,
+				handoffId: first.claim.attemptId,
+				decision: "closed",
+				decidedAt: "2026-08-31T11:10:00Z",
+			}),
+		).toBe(true);
+		// The cycle end re-reads the ticket's source, so a later open claim of
+		// it passes the re-verification gate.
+		state.sourceFact.applyFetch(sourceA, {
+			status: "success",
+			fetchedAt: "2026-08-31T11:20:00Z",
+			tickets: [fetched()],
+		});
+		const second = state.handoff.claimHandoff(identity, choice, "open");
+		if (!second.ok) throw new Error(second.reason);
+		state.handoff.settleHandoff(second.claim.attemptId, true);
+		state.ticketWorkCycle.settleTurn({
+			ticketIdentity: identity,
+			handoffId: second.claim.attemptId,
+			taskType: "implement",
+			agentType: "pi",
+			message: "the next turn",
+			turnLog: textLog("the next turn"),
+			completedAt: "2026-08-31T12:00:00Z",
+			cause: "completed",
+		});
+		const db = new Database(path);
+		const traces = db
+			.prepare(
+				"SELECT work_cycle, decision FROM completion_traces WHERE ticket_identity = ? ORDER BY rowid",
+			)
+			.all(identity) as Array<{ work_cycle: number; decision: string | null }>;
+		db.close();
+		// The record is not rewritten: a fact a decision already landed on
+		// keeps it, and only the undecided trace the settle supersedes moves.
+		expect(traces).toEqual([
+			{ work_cycle: 1, decision: "closed" },
+			{ work_cycle: 2, decision: null },
+		]);
+		state.close();
+	});
+	test("a superseded trace is no longer a turn a reopen or a decision answers", () => {
+		const path = statePath();
+		const state = openFactoryState(path);
+		state.sourceFact.initializeSources([sourceA]);
+		state.sourceFact.applyFetch(sourceA, success([fetched()]));
+		const identity = "github:github.com:I_5";
+		const first = state.handoff.claimHandoff(identity, choice, "open");
+		if (!first.ok) throw new Error(first.reason);
+		state.handoff.settleHandoff(first.claim.attemptId, true);
+		state.ticketWorkCycle.settleTurn({
+			ticketIdentity: identity,
+			handoffId: first.claim.attemptId,
+			taskType: "implement",
+			agentType: "pi",
+			message: "the failed turn",
+			turnLog: textLog("the failed turn"),
+			completedAt: "2026-08-31T11:00:00Z",
+			cause: "failed",
+		});
+		expect(state.ticketWorkCycle.reopenTurn(identity, first.claim.attemptId)).toBe(true);
+		const second = state.handoff.claimHandoff(identity, choice, "restart");
+		if (!second.ok) throw new Error(second.reason);
+		state.handoff.settleHandoff(second.claim.attemptId, true);
+		state.ticketWorkCycle.settleTurn({
+			ticketIdentity: identity,
+			handoffId: second.claim.attemptId,
+			taskType: "implement",
+			agentType: "pi",
+			message: "the restarted turn",
+			turnLog: textLog("the restarted turn"),
+			completedAt: "2026-08-31T11:05:00Z",
+			cause: "unknown",
+		});
+		// The reopen reads no pending trace on the superseded handoff, so the
+		// turn that can settle again is the one the Ticket is on.
+		expect(state.ticketWorkCycle.reopenTurn(identity, first.claim.attemptId)).toBe(false);
+		// And a decision on the superseded turn lands nowhere: the writer
+		// takes the first decision on a turn, and the supersede is it.
+		expect(
+			state.ticketWorkCycle.applyCompletionDecision({
+				ticketIdentity: identity,
+				handoffId: first.claim.attemptId,
+				decision: "handed-off",
+				decidedAt: "2026-08-31T12:00:00Z",
+			}),
+		).toBe(false);
 		state.close();
 	});
 	test("the route ask ends the cycle, and a close on the decided turn stands a no-op", () => {

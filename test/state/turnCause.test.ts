@@ -17,6 +17,21 @@ describe("the turn end cause and the Dispatch pause", () => {
 	const t6 = "github:github.com:I_6";
 	type State = ReturnType<typeof openFactoryState>;
 
+	/** The Ticket's completion traces as the record stores them, oldest first. */
+	function tracesOf(
+		state: State,
+		identity: string,
+	): Array<{ cause: string | null; decision: string | null }> {
+		const db = new Database(state.path);
+		const rows = db
+			.prepare(
+				"SELECT cause, decision FROM completion_traces WHERE ticket_identity = ? ORDER BY completed_at, rowid",
+			)
+			.all(identity) as Array<{ cause: string | null; decision: string | null }>;
+		db.close();
+		return rows;
+	}
+
 	function twoTicketState(): State {
 		const state = openFactoryState(statePath());
 		state.sourceFact.initializeSources([sourceA]);
@@ -260,11 +275,17 @@ describe("the turn end cause and the Dispatch pause", () => {
 			detail: "",
 		});
 		// The row wears no `held` badge: the Ticket's newest turn ended `unknown`,
-		// which fails open. The older undecided `failed` trace is no longer the
-		// decision the operator owes, so it answers no Held turn: the pause and the
-		// badge agree, and the factory keeps dispatching (ADR 0016, issue #351).
+		// which fails open. The settle that took the Ticket's turn decided the
+		// older `failed` trace `superseded`, so the failure the record plainly
+		// recorded stands decided once, and no trace is left undecided with no
+		// surface that can decide it (ADR 0134): the pause and the badge agree, and
+		// the factory keeps dispatching (ADR 0016, issue #351).
 		const listed = state.ticketWorkCycle.ticketListViews([], "implement", "active").rows;
 		expect(listed.filter(holdsDecision)).toHaveLength(0);
+		expect(tracesOf(state, t5)).toEqual([
+			{ cause: "failed", decision: "superseded" },
+			{ cause: "unknown", decision: null },
+		]);
 		expect(state.ticketWorkCycle.lastCompletion(t5)?.cause).toBe("unknown");
 		// The other Ticket never owed a decision, so it holds no row out and
 		// answers no pause of its own.
@@ -298,13 +319,19 @@ describe("the turn end cause and the Dispatch pause", () => {
 			detail: "",
 		});
 		// The guard is per Ticket inside a read that spans every Ticket. t5's
-		// failure is superseded and answers nothing, but t6 still owes its held
-		// `failed` turn: the pause stands, and the row that answers it is in the
-		// list (ADR 0016, issue #351).
+		// failure is superseded - its settle decided the trace `superseded`, so it
+		// answers nothing (ADR 0134) - but t6 still owes its held `failed` turn:
+		// the pause stands, and the row that answers it is in the list
+		// (ADR 0016, issue #351).
 		const held = state.ticketWorkCycle
 			.ticketListViews([], "implement", "active")
 			.rows.filter(holdsDecision);
 		expect(held.map((row) => row.identity)).toEqual([t6]);
+		expect(tracesOf(state, t5)).toEqual([
+			{ cause: "failed", decision: "superseded" },
+			{ cause: "unknown", decision: null },
+		]);
+		expect(tracesOf(state, t6)).toEqual([{ cause: "failed", decision: null }]);
 		expect(state.ticketWorkCycle.lastCompletion(t5)?.cause).toBe("unknown");
 		expect(state.ticketWorkCycle.lastCompletion(t6)?.cause).toBe("failed");
 		expect(state.ticketWorkCycle.dispatchPauseActive()).toBe(true);

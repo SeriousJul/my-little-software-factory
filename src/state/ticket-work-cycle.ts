@@ -926,6 +926,29 @@ export class TicketWorkCycleModule implements TicketWorkCycleAggregate {
 					input.transition == null ? null : JSON.stringify(input.transition),
 				);
 		}
+		// The settle that takes the Ticket's newest settled turn decides the
+		// undecided traces it supersedes (ADR 0134).
+		this.decideSupersededTraces(input);
+	}
+
+	/**
+	 * The superseded decision (ADR 0134): the trace the settle supersedes keeps
+	 * its cause and its failure detail, and the decision states why no surface
+	 * offers it - the Ticket's turn moved on. The newest settled trace stays
+	 * undecided, and a decided trace keeps the decision it wears. The order is
+	 * the one the badge's reads and the pause's guard share, so the trace the
+	 * settle decides is the one the row stops showing.
+	 */
+	private decideSupersededTraces(input: SettleTurnInput): void {
+		this.db
+			.prepare(
+				`UPDATE completion_traces SET decision = 'superseded', decided_at = ?
+				 WHERE ticket_identity = ? AND decision IS NULL
+				   AND rowid != (SELECT n.rowid FROM completion_traces n
+				                  WHERE n.ticket_identity = ?
+				                  ORDER BY ${newestTraceOrder("n.")} LIMIT 1)`,
+			)
+			.run(input.completedAt, input.ticketIdentity, input.ticketIdentity);
 	}
 	applyCompletionDecision(input: CompletionDecisionInput): boolean {
 		return this.db.transaction(() => {

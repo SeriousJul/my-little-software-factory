@@ -34,8 +34,13 @@ export const HANDOFF_ENVIRONMENT_KINDS = ["live-worktree", "worktree"] as const;
  * awaiting state; `merged` and `auto-merged` started the plane action's
  * merge route from the awaiting state (ADR 0068); `closed` and `auto-closed`
  * ended the work cycle; `abandoned` ended a cycle whose agent went
- * missing. Goto is navigation, not a decision (ADR 0033): it focuses the
- * agent's pane and records nothing here.
+ * missing. `superseded` is the settle's own decision on a turn a later turn
+ * of the same Ticket supersedes: the trace is no longer the Ticket's newest
+ * settled turn, and the settle that took it decides it, so the record closes
+ * the failure the turn recorded (ADR 0134). It ends no cycle, and no surface
+ * offers it: the operator's decisions act on the Ticket's live turn, and a
+ * superseded turn is no longer live. Goto is navigation, not a decision
+ * (ADR 0033): it focuses the agent's pane and records nothing here.
  */
 export type CompletionDecision =
 	| "closed"
@@ -44,7 +49,8 @@ export type CompletionDecision =
 	| "handed-off"
 	| "auto-handed-off"
 	| "merged"
-	| "auto-merged";
+	| "auto-merged"
+	| "superseded";
 
 /** One settled turn of one handoff, as the control plane stored it. */
 export interface Completion {
