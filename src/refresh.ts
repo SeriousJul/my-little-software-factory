@@ -32,15 +32,18 @@ export class RefreshCoordinator {
 		sources: readonly TicketSource[],
 		state: RefreshAggregates,
 		changed: (outcome?: FetchOutcome) => void,
-		clock: RefreshClock = SYSTEM_CLOCK,
-		options: { settled?: (sourceName: string) => void; log?: Logger } = {},
+		fields: {
+			clock?: RefreshClock;
+			settled?: (sourceName: string) => void;
+			log?: Logger;
+		} = {},
 	) {
 		this.sources = sources;
 		this.state = state;
 		this.changed = changed;
-		this.clock = clock;
-		this.settled = options.settled;
-		this.log = options.log;
+		this.clock = fields.clock ?? SYSTEM_CLOCK;
+		this.settled = fields.settled;
+		this.log = fields.log;
 	}
 
 	start(): void {

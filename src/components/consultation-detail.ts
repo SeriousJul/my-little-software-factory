@@ -49,17 +49,28 @@ export function consultationDetailTitle(body: ConsultationDetailBody): string {
 	return body === "session" ? "Session view" : "Agent view";
 }
 
-export function consultationDetailLines(
-	consultation: Consultation | undefined,
-	turns: readonly ConsultationTurn[],
-	snapshots: readonly ConsultationSnapshot[],
-	width: number,
-	liveOutput: string | null,
-	sessionEntries: readonly SessionEntry[] | null = null,
-	replacementIds: readonly string[] = [],
-	agentStatus: string | null = null,
-	remainingResources: readonly ConsultationResource[] = [],
-): ConsultationDetailLine[] {
+export function consultationDetailLines(fields: {
+	consultation: Consultation | undefined;
+	turns: readonly ConsultationTurn[];
+	snapshots: readonly ConsultationSnapshot[];
+	width: number;
+	liveOutput: string | null;
+	sessionEntries?: readonly SessionEntry[] | null;
+	replacementIds?: readonly string[];
+	agentStatus?: string | null;
+	remainingResources?: readonly ConsultationResource[];
+}): ConsultationDetailLine[] {
+	const {
+		consultation,
+		turns,
+		snapshots,
+		width,
+		liveOutput,
+		sessionEntries = null,
+		replacementIds = [],
+		agentStatus = null,
+		remainingResources = [],
+	} = fields;
 	if (consultation === undefined)
 		return [{ text: "no Consultation selected", fg: paint("subtext0") }];
 	const lines: ConsultationDetailLine[] = [];
@@ -67,6 +78,37 @@ export function consultationDetailLines(
 		for (const line of wrapToWidth(text, width))
 			lines.push({ text: line, fg, ...(bold ? { bold: true } : {}) });
 	};
+	consultationStatusLines({ consultation, agentStatus, push });
+	consultationResourceLines({ consultation, replacementIds, remainingResources, push });
+	lines.push({ text: " ", fg: paint("subtext0") });
+	const session = sessionEntries !== null && sessionEntries.length > 0 ? sessionEntries : null;
+	consultationHistoryLines({ consultation, turns, snapshots, liveOutput, session, push });
+	return lines.map((line) => ({ ...line, text: truncateToWidth(line.text, width) }));
+}
+
+/** The push the detail section's lines share. */
+type DetailPush = (text: string, fg?: string, bold?: boolean) => void;
+
+/** The lines one set of Consultation resources states, in the voice the set wears. */
+function resourceListLines(
+	resources: readonly ConsultationResource[],
+	label: string,
+	fg: string | undefined,
+	push: DetailPush,
+): void {
+	if (resources.length === 0) return;
+	push(label, fg);
+	for (const resource of resources)
+		push(`${resource.kind} ${resource.resourceId} - ${resource.details}`, fg);
+}
+
+/** The Consultation's standing facts: the state, the agent, the warnings. */
+function consultationStatusLines(fields: {
+	consultation: Consultation;
+	agentStatus: string | null;
+	push: DetailPush;
+}): void {
+	const { consultation, agentStatus, push } = fields;
 	push(`${consultation.typeName} - ${consultation.repository.displayName}`, paint("text"), true);
 	push(`State: ${consultation.state}`);
 	// The `unscheduled` record (issue #91) owns three answers in the section:
@@ -87,20 +129,28 @@ export function consultationDetailLines(
 	if (consultation.failure !== null) push(`Failure: ${consultation.failure}`, paint("red"));
 	if (consultation.closeResult !== null)
 		push(`Close result: ${consultation.closeResult}`, paint("yellow"));
-	const unclosedResources = consultation.resources.filter(
-		(resource) => resource.owned && !resource.confirmedClosed,
+}
+
+/** The Consultation's resources, its replacements, and its draft. */
+function consultationResourceLines(fields: {
+	consultation: Consultation;
+	replacementIds: readonly string[];
+	remainingResources: readonly ConsultationResource[];
+	push: DetailPush;
+}): void {
+	const { consultation, replacementIds, remainingResources, push } = fields;
+	resourceListLines(
+		consultation.resources.filter((resource) => resource.owned && !resource.confirmedClosed),
+		"Unclosed owned resources:",
+		paint("yellow"),
+		push,
 	);
-	if (unclosedResources.length > 0) {
-		push("Unclosed owned resources:", paint("yellow"));
-		for (const resource of unclosedResources)
-			push(`${resource.kind} ${resource.resourceId} - ${resource.details}`, paint("yellow"));
-	}
-	const retainedResources = consultation.resources.filter((resource) => !resource.owned);
-	if (retainedResources.length > 0) {
-		push("Retained shared resources:", paint("subtext0"));
-		for (const resource of retainedResources)
-			push(`${resource.kind} ${resource.resourceId} - ${resource.details}`, paint("subtext0"));
-	}
+	resourceListLines(
+		consultation.resources.filter((resource) => !resource.owned),
+		"Retained shared resources:",
+		paint("subtext0"),
+		push,
+	);
 	if (consultation.replacementOf !== null)
 		push(`Replacement of: ${consultation.replacementOf.slice(0, 8)}`, paint("subtext0"));
 	if (replacementIds.length > 0)
@@ -108,52 +158,86 @@ export function consultationDetailLines(
 			`Replaced by: ${replacementIds.map((id) => id.slice(0, 8)).join(", ")}`,
 			paint("subtext0"),
 		);
-	if (remainingResources.length > 0) {
-		push("Remaining resources (recover them in herdr):", paint("yellow"));
-		for (const resource of remainingResources)
-			push(`${resource.kind} ${resource.resourceId} - ${resource.details}`, paint("yellow"));
-	}
+	resourceListLines(
+		remainingResources,
+		"Remaining resources (recover them in herdr):",
+		paint("yellow"),
+		push,
+	);
 	if (consultation.draft !== "")
 		push(
 			`Response draft${consultation.draftOld ? " (old - review before sending)" : ""}: ${consultation.draft}`,
 			consultation.draftOld ? paint("yellow") : paint("subtext0"),
 		);
-	lines.push({ text: " ", fg: paint("subtext0") });
-	const session = sessionEntries !== null && sessionEntries.length > 0 ? sessionEntries : null;
+}
+
+/**
+ * The Consultation's history: the session view, the live Agent view, or the
+ * captured turns and snapshots.
+ */
+function consultationHistoryLines(fields: {
+	consultation: Consultation;
+	turns: readonly ConsultationTurn[];
+	snapshots: readonly ConsultationSnapshot[];
+	liveOutput: string | null;
+	session: readonly SessionEntry[] | null;
+	push: DetailPush;
+}): void {
+	const { consultation, turns, snapshots, liveOutput, session, push } = fields;
 	if (session !== null) {
-		push("Session view:", paint("text"), true);
-		for (const entry of session) {
-			if (entry.kind === "input") push(`❯ ${entry.text}`);
-			else if (entry.kind === "text") push(entry.text);
-			else {
-				const note = entry.target === "" ? entry.name : `${entry.name}: ${entry.target}`;
-				push(`▸ ${note}`, entry.failed ? paint("yellow") : paint("subtext0"));
-			}
-		}
+		sessionViewLines(session, push);
 	} else if (liveOutput !== null && consultation.state !== "closed") {
 		push("Agent view:", paint("text"), true);
 		for (const line of liveOutput.split("\n")) push(line);
 	} else {
-		push("Captured history:", paint("text"), true);
-		for (const turn of turns) {
-			push(`Input ${turn.acceptedAt.slice(0, 16).replace("T", " ")}: ${turn.input}`);
-			const snapshot = snapshots.find((item) => item.turnId === turn.id);
-			if (snapshot !== undefined) {
-				push(snapshot.partial ? "Captured partial output:" : "Captured output:", paint("subtext0"));
-				for (const line of snapshot.text.split("\n")) push(line, paint("subtext0"));
-				if (snapshot.truncated) push("[start of snapshot removed]", paint("yellow"));
-			}
-		}
-		for (const snapshot of snapshots.filter((item) => item.partial)) {
-			push(
-				`Partial output ${snapshot.capturedAt.slice(0, 16).replace("T", " ")}:`,
-				paint("subtext0"),
-			);
-			for (const line of snapshot.text.split("\n")) push(line, paint("subtext0"));
-			if (snapshot.truncated) push("[start of snapshot removed]", paint("yellow"));
-		}
+		capturedHistoryLines(turns, snapshots, push);
 	}
-	return lines.map((line) => ({ ...line, text: truncateToWidth(line.text, width) }));
+}
+
+/** The lines one Consultation's session view states. */
+function sessionViewLines(session: readonly SessionEntry[], push: DetailPush): void {
+	push("Session view:", paint("text"), true);
+	for (const entry of session) sessionEntryLine(entry, push);
+}
+
+/** The one line one session entry states. */
+function sessionEntryLine(entry: SessionEntry, push: DetailPush): void {
+	if (entry.kind === "input") push(`❯ ${entry.text}`);
+	else if (entry.kind === "text") push(entry.text);
+	else {
+		const note = entry.target === "" ? entry.name : `${entry.name}: ${entry.target}`;
+		push(`▸ ${note}`, entry.failed ? paint("yellow") : paint("subtext0"));
+	}
+}
+
+/** The lines one Consultation's captured history states. */
+function capturedHistoryLines(
+	turns: readonly ConsultationTurn[],
+	snapshots: readonly ConsultationSnapshot[],
+	push: DetailPush,
+): void {
+	push("Captured history:", paint("text"), true);
+	for (const turn of turns) {
+		push(`Input ${turn.acceptedAt.slice(0, 16).replace("T", " ")}: ${turn.input}`);
+		const snapshot = snapshots.find((item) => item.turnId === turn.id);
+		if (snapshot !== undefined) snapshotLines(snapshot, push);
+	}
+	for (const snapshot of snapshots.filter((item) => item.partial))
+		partialSnapshotLine(snapshot, push);
+}
+
+/** The lines one turn's snapshot states. */
+function snapshotLines(snapshot: ConsultationSnapshot, push: DetailPush): void {
+	push(snapshot.partial ? "Captured partial output:" : "Captured output:", paint("subtext0"));
+	for (const line of snapshot.text.split("\n")) push(line, paint("subtext0"));
+	if (snapshot.truncated) push("[start of snapshot removed]", paint("yellow"));
+}
+
+/** The header line one partial snapshot's run of text states. */
+function partialSnapshotLine(snapshot: ConsultationSnapshot, push: DetailPush): void {
+	push(`Partial output ${snapshot.capturedAt.slice(0, 16).replace("T", " ")}:`, paint("subtext0"));
+	for (const line of snapshot.text.split("\n")) push(line, paint("subtext0"));
+	if (snapshot.truncated) push("[start of snapshot removed]", paint("yellow"));
 }
 
 interface ConsultationDetailProps {

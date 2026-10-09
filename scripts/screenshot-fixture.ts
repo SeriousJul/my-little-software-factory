@@ -43,7 +43,7 @@ import { validateConfig } from "../src/config.ts";
 import type { FetchedTicket } from "../src/domain/ticket.ts";
 import { repositoryInitSettingsHash } from "../src/repo-init.ts";
 import type { SourceDefinition } from "../src/state/source-fact.ts";
-import { openFactoryState } from "../src/state.ts";
+import { type FactoryState, openFactoryState } from "../src/state.ts";
 import { openControlPlanePty } from "../test/executable-pty.ts";
 import { parseScreen, renderPng, type TerminalColors } from "./ansi-render.ts";
 
@@ -119,80 +119,83 @@ const REPO_B = "SeriousJul/pi-extensions";
 const REPO_B_URL = `https://github.com/${REPO_B}`;
 const NOW = "2026-07-07T09:00:00.000Z";
 
-const issue = (
-	number: number,
-	title: string,
-	body: string,
-	labels: string[],
-	updatedAt: string,
-	repository: string,
-	repositoryUrl: string,
-): FetchedTicket => ({
-	identity: `github:github.com:I_fixture${number}`,
-	sourceKind: "github-issue",
-	externalKey: `#${number}`,
-	sourceState: "open",
-	url: `${repositoryUrl}/issues/${number}`,
-	title,
-	description: body,
-	labels,
-	externalUpdatedAt: updatedAt,
-	repository: {
-		identity: `github.com/${repository.toLowerCase()}`,
-		displayName: repository,
-		cloneUrl: `${repositoryUrl}.git`,
-	},
-	attributes: {},
-});
+const issue = (fields: {
+	number: number;
+	title: string;
+	body: string;
+	labels: string[];
+	updatedAt: string;
+	repository: string;
+	repositoryUrl: string;
+}): FetchedTicket => {
+	const { number, title, body, labels, updatedAt, repository, repositoryUrl } = fields;
+	return {
+		identity: `github:github.com:I_fixture${number}`,
+		sourceKind: "github-issue",
+		externalKey: `#${number}`,
+		sourceState: "open",
+		url: `${repositoryUrl}/issues/${number}`,
+		title,
+		description: body,
+		labels,
+		externalUpdatedAt: updatedAt,
+		repository: {
+			identity: `github.com/${repository.toLowerCase()}`,
+			displayName: repository,
+			cloneUrl: `${repositoryUrl}.git`,
+		},
+		attributes: {},
+	};
+};
 
 /** The tickets: three in the factory repository, two in pi-extensions. */
-const OPEN_TICKET = issue(
-	53,
-	"Split the README into published guides",
-	"Move the long README sections into the documentation site and keep the\nREADME a short landing page.",
-	["ready-for-agent"],
-	"2026-07-07T08:41:00Z",
-	REPO_A,
-	REPO_A_URL,
-);
-const RUNNING_TICKET = issue(
-	52,
-	"Retry failed webhook deliveries with a bounded backoff",
-	"Deliveries that fail with a 5xx are dropped. Retry them with a bounded\nexponential backoff and give up after the third attempt.",
-	["ready-for-agent", "needs-work"],
-	"2026-07-07T07:58:00Z",
-	REPO_A,
-	REPO_A_URL,
-);
+const OPEN_TICKET = issue({
+	number: 53,
+	title: "Split the README into published guides",
+	body: "Move the long README sections into the documentation site and keep the\nREADME a short landing page.",
+	labels: ["ready-for-agent"],
+	updatedAt: "2026-07-07T08:41:00Z",
+	repository: REPO_A,
+	repositoryUrl: REPO_A_URL,
+});
+const RUNNING_TICKET = issue({
+	number: 52,
+	title: "Retry failed webhook deliveries with a bounded backoff",
+	body: "Deliveries that fail with a 5xx are dropped. Retry them with a bounded\nexponential backoff and give up after the third attempt.",
+	labels: ["ready-for-agent", "needs-work"],
+	updatedAt: "2026-07-07T07:58:00Z",
+	repository: REPO_A,
+	repositoryUrl: REPO_A_URL,
+});
 // The source's own truth after the review's write: the ticket wears the ship
 // fact the machine landed on it, the way GitHub does once the write lands.
-const AWAITING_TICKET = issue(
-	51,
-	"Rank tickets by priority label",
-	"Ranked tickets stay ahead of unranked ones. The operator bumps a\npriority with =, +, and -.",
-	["ready-to-ship"],
-	"2026-07-07T06:12:00Z",
-	REPO_A,
-	REPO_A_URL,
-);
-const SKILL_REPORT_TICKET = issue(
-	87,
-	"Give the code review skill a shared report format",
-	"The code review skill prints its findings in its own shape. Give it one\nshared report format the operator can file.",
-	["ready-for-agent"],
-	"2026-07-07T08:55:00Z",
-	REPO_B,
-	REPO_B_URL,
-);
-const SKILL_INDEX_TICKET = issue(
-	88,
-	"Let find-skills index the local skill directories",
-	"The find-skills search covers installed skills only. Let it index the\nlocal skill directories too.",
-	[],
-	"2026-07-07T08:20:00Z",
-	REPO_B,
-	REPO_B_URL,
-);
+const AWAITING_TICKET = issue({
+	number: 51,
+	title: "Rank tickets by priority label",
+	body: "Ranked tickets stay ahead of unranked ones. The operator bumps a\npriority with =, +, and -.",
+	labels: ["ready-to-ship"],
+	updatedAt: "2026-07-07T06:12:00Z",
+	repository: REPO_A,
+	repositoryUrl: REPO_A_URL,
+});
+const SKILL_REPORT_TICKET = issue({
+	number: 87,
+	title: "Give the code review skill a shared report format",
+	body: "The code review skill prints its findings in its own shape. Give it one\nshared report format the operator can file.",
+	labels: ["ready-for-agent"],
+	updatedAt: "2026-07-07T08:55:00Z",
+	repository: REPO_B,
+	repositoryUrl: REPO_B_URL,
+});
+const SKILL_INDEX_TICKET = issue({
+	number: 88,
+	title: "Let find-skills index the local skill directories",
+	body: "The find-skills search covers installed skills only. Let it index the\nlocal skill directories too.",
+	labels: [],
+	updatedAt: "2026-07-07T08:20:00Z",
+	repository: REPO_B,
+	repositoryUrl: REPO_B_URL,
+});
 const TICKETS: readonly FetchedTicket[] = [
 	OPEN_TICKET,
 	RUNNING_TICKET,
@@ -502,11 +505,29 @@ esac
  * Seed the state file: five tickets across two repositories, the ticket list
  * grouped by repository, one queue item, and two Consultations.
  */
+/**
+ * Seed the state file: five tickets across two repositories, the ticket list
+ * grouped by repository, one queue item, and two Consultations.
+ */
 function seedState(path: string, settingsHash: string): void {
 	const state = openFactoryState(path, () => Date.parse(NOW));
 	const source: SourceDefinition = { name: "issues", kind: "github-issues" };
 	state.sourceFact.initializeSources([source]);
 	state.sourceFact.applyFetch(source, { status: "success", fetchedAt: NOW, tickets: [...TICKETS] });
+	seedInit(state, settingsHash);
+	seedRunningTicket(state);
+	seedAwaitingTicket(state);
+	seedQueuedTicket(state);
+	// The grouping axis the operator chose (ADR 0058): the ticket list splits
+	// by repository, so the two repositories stand as two Groups.
+	state.grouping.setGroupingAxis("tickets", "repository");
+	seedRetryConsultation(state);
+	seedIndexConsultation(state);
+	state.close();
+}
+
+/** The two repositories' init facts, at the world's own settings hash. */
+function seedInit(state: FactoryState, settingsHash: string): void {
 	// The guide screens stand on a world the operator has already initialized
 	// (ADR 0075): both repositories carry an init fact at the world's own
 	// settings hash, so the init marker stays off the Group headers and the
@@ -519,18 +540,13 @@ function seedState(path: string, settingsHash: string): void {
 			"fixture-init",
 		);
 	}
+}
 
-	// The in-flight ticket: claimed and started, its agent working in pane-2.
+/** The in-flight ticket: claimed and started, its agent working in pane-2. */
+function seedRunningTicket(state: FactoryState): void {
 	const runningClaim = state.handoff.claimHandoff(
 		RUNNING_TICKET.identity,
-		{
-			agentType: "pi",
-			environment: "live-worktree",
-			taskType: "implement",
-			model: "anthropic/claude-sonnet-4-5",
-			thinking: "medium",
-			contextWindow: "",
-		},
+		SEED_CLAIM_CHOICE,
 		"open",
 	);
 	if (!runningClaim.ok) throw new Error(`fixture: running claim: ${runningClaim.reason}`);
@@ -539,18 +555,13 @@ function seedState(path: string, settingsHash: string): void {
 		tabId: "tab-2",
 		workspaceId: "ws-2",
 	});
+}
 
-	// The awaiting ticket: claimed, started, and its turn settled.
+/** The awaiting ticket: claimed, started, and its turn settled. */
+function seedAwaitingTicket(state: FactoryState): void {
 	const awaitingClaim = state.handoff.claimHandoff(
 		AWAITING_TICKET.identity,
-		{
-			agentType: "pi",
-			environment: "live-worktree",
-			taskType: "implement",
-			model: "anthropic/claude-sonnet-4-5",
-			thinking: "medium",
-			contextWindow: "",
-		},
+		SEED_CLAIM_CHOICE,
 		"open",
 	);
 	if (!awaitingClaim.ok) throw new Error(`fixture: awaiting claim: ${awaitingClaim.reason}`);
@@ -586,7 +597,20 @@ function seedState(path: string, settingsHash: string): void {
 			positionTicketIdentity: AWAITING_TICKET.identity,
 		},
 	});
+}
 
+/** The fixture world's claim and queue choice: one pi implement, live. */
+const SEED_CLAIM_CHOICE = {
+	agentType: "pi",
+	environment: "live-worktree",
+	taskType: "implement",
+	model: "anthropic/claude-sonnet-4-5",
+	thinking: "medium",
+	contextWindow: "",
+} as const;
+
+/** The Work queue's item: the pi-extensions ticket, paused behind it. */
+function seedQueuedTicket(state: FactoryState): void {
 	// The pi-extensions ticket that waits in the Work queue (ADR 0049): the
 	// queue holds the start, and the ticket's row wears the `queued` badge
 	// under the open state. The queue pause (ADR 0052) holds the drain, so
@@ -596,23 +620,14 @@ function seedState(path: string, settingsHash: string): void {
 	const queued = state.workQueue.enqueueWork({
 		ticketIdentity: SKILL_INDEX_TICKET.identity,
 		origin: "open",
-		choice: {
-			agentType: "pi",
-			environment: "live-worktree",
-			taskType: "implement",
-			model: "anthropic/claude-sonnet-4-5",
-			thinking: "medium",
-			contextWindow: "",
-		},
+		choice: SEED_CLAIM_CHOICE,
 		previousMessage: "",
 	});
 	if (!queued.ok) throw new Error(`fixture: queue item: ${queued.reason}`);
+}
 
-	// The grouping axis the operator chose (ADR 0058): the ticket list splits
-	// by repository, so the two repositories stand as two Groups.
-	state.grouping.setGroupingAxis("tickets", "repository");
-
-	// The working Consultation: launched, its agent working in pane-3.
+/** The working Consultation: launched, its agent working in pane-3. */
+function seedRetryConsultation(state: FactoryState): void {
 	const retryConsultation = state.consultationRecord.createConsultation({
 		typeName: "grill-with-docs",
 		agentType: "codex",
@@ -635,7 +650,10 @@ function seedState(path: string, settingsHash: string): void {
 		tabId: "tab-3",
 		workspaceId: "ws-3",
 	});
+}
 
+/** The Consultation that awaits its answer: idle in pane-4, awaiting. */
+function seedIndexConsultation(state: FactoryState): void {
 	// The Consultation that awaits its answer: its agent is idle in pane-4,
 	// and the section header's attention count reads it.
 	const indexConsultation = state.consultationRecord.createConsultation({
@@ -662,7 +680,6 @@ function seedState(path: string, settingsHash: string): void {
 		workspaceId: "ws-4",
 	});
 	state.consultationRecord.setConsultationState(indexConsultation.id, "awaiting-response");
-	state.close();
 }
 
 /** Write the fixture world into a fresh directory and return its path. */
@@ -787,13 +804,14 @@ export const WALK_DEADLINE_MS = process.env.CI ? 20000 : 10000;
  * screen that stands mid-redraw for the whole deadline fails at the
  * walk's deadline, the way a screen whose cursor never moves does.
  */
-async function stableCursorRow(
-	screen: ScreenWalk,
-	sleepFn: (ms: number) => Promise<void>,
-	now: () => number,
-	walkDeadline: number,
-	failure: () => Error,
-): Promise<{ index: number; text: string }> {
+async function stableCursorRow(fields: {
+	screen: ScreenWalk;
+	sleepFn: (ms: number) => Promise<void>;
+	now: () => number;
+	walkDeadline: number;
+	failure: () => Error;
+}): Promise<{ index: number; text: string }> {
+	const { screen, sleepFn, now, walkDeadline, failure } = fields;
 	let previous = screen.cursorRow();
 	for (;;) {
 		if (now() >= walkDeadline) throw failure();
@@ -838,16 +856,19 @@ export async function stepUntilRow(
 	screen: ScreenWalk,
 	match: string,
 	keyName: string,
-	maxSteps: number,
-	sleepFn: (ms: number) => Promise<void> = sleep,
-	now: () => number = Date.now,
+	fields: {
+		maxSteps: number;
+		sleepFn?: (ms: number) => Promise<void>;
+		now?: () => number;
+	},
 ): Promise<void> {
+	const { maxSteps, sleepFn = sleep, now = Date.now } = fields;
 	const walkDeadline = now() + WALK_DEADLINE_MS;
 	const failure = () =>
 		new Error(
 			`screenshots: the cursor never reached a row matching "${match}" within ${maxSteps} "${keyName}" steps\n${screen.gridText()}`,
 		);
-	const stable = () => stableCursorRow(screen, sleepFn, now, walkDeadline, failure);
+	const stable = () => stableCursorRow({ screen, sleepFn, now, walkDeadline, failure });
 	const holdsMatch = (row: { index: number; text: string }) =>
 		row.index >= 0 && row.text.includes(match);
 	for (let steps = 0; steps < maxSteps; steps++) {
@@ -883,6 +904,36 @@ export async function stepUntilRow(
  */
 export async function captureScreens(fixtureDir: string): Promise<Map<string, Buffer>> {
 	const out = new Map<string, Buffer>();
+	const session = await captureSession(fixtureDir);
+	const walk = captureWalk(session, out);
+	try {
+		await walkMainView(walk);
+		await walkOverridePanel(walk);
+		await walkDecisionModal(walk);
+		await walkConsultation(walk);
+		await walkLiveView(walk);
+		await walkTurnLog(walk, fixtureDir);
+	} finally {
+		// Kill rather than wait: the app has no exit key the capture sends.
+		session.dispose();
+	}
+	return out;
+}
+
+/** The PTY's type: a session the walk drives. */
+type CaptureSession = NonNullable<Awaited<ReturnType<typeof openControlPlanePty>>>;
+
+/** The walk's handles: the keys, the captures, the screen's own rows. */
+interface CaptureWalk {
+	session: CaptureSession;
+	screen: ScreenWalk;
+	capture: (name: string) => Promise<void>;
+	key: (bytes: string) => void;
+	log: (what: string) => void;
+}
+
+/** The PTY the walk drives, with the fixture's world as its home. */
+async function captureSession(fixtureDir: string): Promise<CaptureSession> {
 	const session = await openControlPlanePty(
 		["--config", join(fixtureDir, "config.toml")],
 		{
@@ -902,7 +953,11 @@ export async function captureScreens(fixtureDir: string): Promise<Map<string, Bu
 		{ size: { cols: SCREEN.cols, rows: SCREEN.rows } },
 	);
 	if (session === null) throw new Error("screenshots: this platform cannot open a PTY");
+	return session;
+}
 
+/** The walk's handles, built on the session and its own captures. */
+function captureWalk(session: CaptureSession, out: Map<string, Buffer>): CaptureWalk {
 	const log = (what: string) => console.error(`screenshots: ${what}`);
 	const capture = async (name: string) => {
 		log(`capturing ${name}`);
@@ -920,99 +975,115 @@ export async function captureScreens(fixtureDir: string): Promise<Map<string, Bu
 		parseScreen(session.output(), SCREEN.cols, SCREEN.rows)
 			.map((row) => row.map((cell) => cell.char).join(""))
 			.join("\n");
-	// The row the keyboard cursor holds, as one parse: the index and the
-	// text from the same frame. Every section's list keeps its own
-	// remembered cursor mark, so the mark alone does not name the keyboard's
-	// row: the keyboard's row is the mark inside the box whose border
-	// carries the section-focus mark. A frame mid-redraw shows no border or
-	// no mark, and reports -1 with no text.
-	const cursorRow = (): { index: number; text: string } => {
-		const rows = gridText().split("\n");
-		const border = rows.findIndex((line) => line.includes("─❯"));
-		if (border === -1) return { index: -1, text: "" };
-		for (let i = border + 1; i < rows.length; i++) {
-			const line = rows[i];
-			if (line.startsWith("└")) break;
-			if (line.includes("❯")) return { index: i, text: line.replace("❯", " ").trim() };
-		}
-		return { index: -1, text: "" };
-	};
-	const screen: ScreenWalk = { cursorRow, gridText, key };
+	const screen: ScreenWalk = { cursorRow: () => cursorRowOf(gridText), gridText, key };
+	return { session, screen, capture, key, log };
+}
 
-	try {
-		// 1. The Main view, once the fetch lands its tickets and the observation
-		// marks the in-flight one running. One step down from the first Group's
-		// header, onto the ticket awaiting a decision.
-		await session.waitFor(
-			(data) => data.includes("open: 3  running: 1  awaiting: 1"),
-			"the full ticket list",
-			30000,
-		);
-		log("main view ready");
-		// Settle before the walk's first press: the keyboard is live when the
-		// screen settles, and a press in the boot window the list has not yet
-		// taken is swallowed, not queued.
-		await session.waitForStable(200, "the main view settle", 15000);
-		// The budget counts rows: the header the cursor starts on, the two
-		// rows above the target, the target itself.
-		await stepUntilRow(screen, "Rank tickets by priori", "j", 3);
-		await capture("main-view");
-
-		// 2. The Override panel on the open ticket.
-		await stepUntilRow(screen, "Split the README into", "j", 4);
-		key("e");
-		log("pressed e for the override panel");
-		await session.waitFor((data) => data.includes("Task type"), "the override panel", 15000);
-		// Let the model list query settle so the Model row shows its value.
-		await sleep(800);
-		await session.waitForStable(400, "the override panel to settle", 15000);
-		await capture("override-panel");
-		log("override panel captured");
-		key("\x1b");
-		await sleep(250);
-
-		// 3. The decision modal on the awaiting ticket: Enter on it is Decide,
-		// and the modal opens with the turn log as its body.
-		await stepUntilRow(screen, "Rank tickets by priori", "k", 4);
-		key("\r");
-		log("pressed Enter for the decision modal");
-		await session.waitFor((data) => data.includes("Decision: "), "the decision modal", 15000);
-		await capture("decision-modal");
-		key("\x1b");
-		await sleep(250);
-
-		// 4. The working Consultation: step down through the ticket section and
-		// the blank row between Groups, into the Consultations section, until
-		// the detail pane shows its input.
-		log("moving into the consultations section");
-		await stepUntilRow(screen, "working", "j", 8);
-		await sleep(1200);
-		await capture("consultation");
-
-		// 5. The Live view on the in-flight ticket: step up to it, and Enter
-		// opens the agent's stream in the left box.
-		await stepUntilRow(screen, "Retry failed webhook", "k", 8);
-		key("\r");
-		log("opened the live view");
-		await session.waitFor((data) => data.includes("bounded backoff"), "the live stream", 20000);
-		await capture("live-view");
-
-		// 6. The same box after the turn settles: touch the flag, wait for the
-		// observation poll to settle the turn (the awaiting count moves), and
-		// the Live view switches to the decision.
-		log("live view captured; flagging the turn settled");
-		writeFileSync(join(fixtureDir, "done.flag"), "");
-		// The live decision's implement-to-review row is the first place that
-		// label appears: the awaiting ticket's modal offers the merge position.
-		await session.waitFor((data) => data.includes("Handoff: review"), "the settled turn", 30000);
-		await sleep(400);
-		await session.waitForStable(400, "the turn-log screen to settle", 15000);
-		await capture("turn-log");
-	} finally {
-		// Kill rather than wait: the app has no exit key the capture sends.
-		session.dispose();
+/**
+ * The row the keyboard cursor holds, as one parse: the index and the
+ * text from the same frame. Every section's list keeps its own
+ * remembered cursor mark, so the mark alone does not name the keyboard's
+ * row: the keyboard's row is the mark inside the box whose border
+ * carries the section-focus mark. A frame mid-redraw shows no border or
+ * no mark, and reports -1 with no text.
+ */
+function cursorRowOf(gridText: () => string): { index: number; text: string } {
+	const rows = gridText().split("\n");
+	const border = rows.findIndex((line) => line.includes("─❯"));
+	if (border === -1) return { index: -1, text: "" };
+	for (let i = border + 1; i < rows.length; i++) {
+		const line = rows[i];
+		if (line.startsWith("└")) break;
+		if (line.includes("❯")) return { index: i, text: line.replace("❯", " ").trim() };
 	}
-	return out;
+	return { index: -1, text: "" };
+}
+
+/** 1. The Main view, settled on the ticket awaiting a decision. */
+async function walkMainView(walk: CaptureWalk): Promise<void> {
+	// 1. The Main view, once the fetch lands its tickets and the observation
+	// marks the in-flight one running. One step down from the first Group's
+	// header, onto the ticket awaiting a decision.
+	await walk.session.waitFor(
+		(data) => data.includes("open: 3  running: 1  awaiting: 1"),
+		"the full ticket list",
+		30000,
+	);
+	walk.log("main view ready");
+	// Settle before the walk's first press: the keyboard is live when the
+	// screen settles, and a press in the boot window the list has not yet
+	// taken is swallowed, not queued.
+	await walk.session.waitForStable(200, "the main view settle", 15000);
+	// The budget counts rows: the header the cursor starts on, the two
+	// rows above the target, the target itself.
+	await stepUntilRow(walk.screen, "Rank tickets by priori", "j", { maxSteps: 3 });
+	await walk.capture("main-view");
+}
+
+/** 2. The Override panel on the open ticket, closed behind it. */
+async function walkOverridePanel(walk: CaptureWalk): Promise<void> {
+	// 2. The Override panel on the open ticket.
+	await stepUntilRow(walk.screen, "Split the README into", "j", { maxSteps: 4 });
+	walk.key("e");
+	walk.log("pressed e for the override panel");
+	await walk.session.waitFor((data) => data.includes("Task type"), "the override panel", 15000);
+	// Let the model list query settle so the Model row shows its value.
+	await sleep(800);
+	await walk.session.waitForStable(400, "the override panel to settle", 15000);
+	await walk.capture("override-panel");
+	walk.log("override panel captured");
+	walk.key("\x1b");
+	await sleep(250);
+}
+
+/** 3. The decision modal on the awaiting ticket, closed behind it. */
+async function walkDecisionModal(walk: CaptureWalk): Promise<void> {
+	// 3. The decision modal on the awaiting ticket: Enter on it is Decide,
+	// and the modal opens with the turn log as its body.
+	await stepUntilRow(walk.screen, "Rank tickets by priori", "k", { maxSteps: 4 });
+	walk.key("\r");
+	walk.log("pressed Enter for the decision modal");
+	await walk.session.waitFor((data) => data.includes("Decision: "), "the decision modal", 15000);
+	await walk.capture("decision-modal");
+	walk.key("\x1b");
+	await sleep(250);
+}
+
+/** 4. The working Consultation, its detail showing its input. */
+async function walkConsultation(walk: CaptureWalk): Promise<void> {
+	// 4. The working Consultation: step down through the ticket section and
+	// the blank row between Groups, into the Consultations section, until
+	// the detail pane shows its input.
+	walk.log("moving into the consultations section");
+	await stepUntilRow(walk.screen, "working", "j", { maxSteps: 8 });
+	await sleep(1200);
+	await walk.capture("consultation");
+}
+
+/** 5. The Live view on the in-flight ticket, its stream open. */
+async function walkLiveView(walk: CaptureWalk): Promise<void> {
+	// 5. The Live view on the in-flight ticket: step up to it, and Enter
+	// opens the agent's stream in the left box.
+	await stepUntilRow(walk.screen, "Retry failed webhook", "k", { maxSteps: 8 });
+	walk.key("\r");
+	walk.log("opened the live view");
+	await walk.session.waitFor((data) => data.includes("bounded backoff"), "the live stream", 20000);
+	await walk.capture("live-view");
+}
+
+/** 6. The turn-log screen, after the turn settles on the flag. */
+async function walkTurnLog(walk: CaptureWalk, fixtureDir: string): Promise<void> {
+	// 6. The same box after the turn settles: touch the flag, wait for the
+	// observation poll to settle the turn (the awaiting count moves), and
+	// the Live view switches to the decision.
+	walk.log("live view captured; flagging the turn settled");
+	writeFileSync(join(fixtureDir, "done.flag"), "");
+	// The live decision's implement-to-review row is the first place that
+	// label appears: the awaiting ticket's modal offers the merge position.
+	await walk.session.waitFor((data) => data.includes("Handoff: review"), "the settled turn", 30000);
+	await sleep(400);
+	await walk.session.waitForStable(400, "the turn-log screen to settle", 15000);
+	await walk.capture("turn-log");
 }
 
 /** Run the capture end to end: build the world, capture, clean up. */

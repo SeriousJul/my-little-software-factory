@@ -98,9 +98,11 @@ async function withLauncher(
 		async (setup) => {
 			await body(Object.assign(setup, { runner, state }));
 		},
-		WIDTH,
-		HEIGHT,
-		{ config: launcherConfig(), runner, initialTickets: [], state },
+		{
+			width: WIDTH,
+			height: HEIGHT,
+			props: { config: launcherConfig(), runner, initialTickets: [], state },
+		},
 	);
 }
 

@@ -22,11 +22,21 @@ import { RGBA } from "@opentui/core";
 import { createElement } from "@opentui/react";
 import { Fragment, type ReactElement, useEffect, useState } from "react";
 
+import type { TurnEndCause } from "../turn-log.ts";
 import { ActionBar } from "./action-bar.ts";
-import type { AvailabilityFacts, InteractionMode } from "./controls.ts";
-import { maxScrollOf } from "./geometry.ts";
+import { type ControlCall, type ControlHandler, useControlDispatch } from "./control-dispatch.ts";
+import {
+	type AvailabilityFacts,
+	availabilityFacts,
+	type InteractionMode,
+	type StandingFacts,
+} from "./controls.ts";
+import { maxScrollOf, windowOf } from "./geometry.ts";
+import type { MdLine } from "./markdown.ts";
 import { type MessageFact, messageRowElement } from "./messages.ts";
-import { controlInk, LAMP_GLYPHS } from "./shared/presentation.ts";
+import { ActionItem } from "./shared/choices.ts";
+import { controlInk, LAMP_GLYPHS, turnEndCauseLine } from "./shared/presentation.ts";
+import type { DecisionRegion } from "./shared/region.ts";
 import { padToWidth, truncateToWidth, widthOf } from "./text.ts";
 import { paint } from "./theme.ts";
 
@@ -51,6 +61,8 @@ const MESSAGE_ROWS = 1;
 const BAR_ROWS = 1;
 /** The modal chrome: one border on each side. */
 const BORDERS = 2;
+/** The Body pane's borders: one on each side of the body. */
+export const PANE_BORDERS = 2;
 /** The padding cells a box keeps when it can pay for them, per side. */
 const PADDING = 1;
 /** The marker column: "❯ " when the row is selected, two spaces otherwise. */
@@ -540,6 +552,31 @@ export function scrollbarRows(
 	return new Set(Array.from({ length: thumbHeight }, (_, index) => start + index));
 }
 
+/**
+ * The body's visible window at the body's own scroll: the scroll the body
+ * holds, the lines the window shows, and the scrollbar marks, read through
+ * the geometry's own window and this module's scrollbar rule. The Decision
+ * modal and the Live view hold their body facts in different shapes, and
+ * both read this one window from them.
+ */
+export function bodyScrollWindow(facts: {
+	bodyScroll: number | null;
+	maxBodyScroll: number;
+	bodyRows: number;
+	hasScrollbar: boolean;
+	renderedBody: readonly MdLine[];
+}): { scroll: number; visibleBody: MdLine[]; thumbRows: ReadonlySet<number> | null } {
+	const scroll =
+		facts.bodyScroll === null
+			? facts.maxBodyScroll
+			: Math.min(facts.bodyScroll, facts.maxBodyScroll);
+	const visibleBody = windowOf(facts.renderedBody, scroll, facts.bodyRows);
+	const thumbRows = facts.hasScrollbar
+		? scrollbarRows(facts.renderedBody.length, facts.bodyRows, scroll)
+		: null;
+	return { scroll, visibleBody, thumbRows };
+}
+
 /** One colored piece of a body row. */
 export interface BodySpan {
 	text: string;
@@ -554,6 +591,139 @@ export interface BodySpan {
  * and track float behind short lines: a block in the middle of the row reads
  * as an artifact.
  */
+/**
+ * The turn log's pane in a modal body: the layout's rows, wrapped at the
+ * body width, with the thumb marks the scrollbar reads. The pane's padding
+ * is the one its layout decided, and the height is the one the layout
+ * reserved it.
+ */
+export function turnLogPane(input: {
+	paneRows: number | null;
+	panePadding: 0 | 1;
+	visibleBody: readonly MdLine[];
+	bodyWidth: number;
+	thumbRows: ReadonlySet<number> | null;
+	title: string;
+}): ModalBody["pane"] {
+	if (input.paneRows === null) return undefined;
+	return {
+		title: input.title,
+		rows: input.visibleBody.map((line, index) =>
+			createElement(
+				"text",
+				{ key: `body-${index}` },
+				...bodyRowSpans(line, input.bodyWidth, input.thumbRows?.has(index)),
+			),
+		),
+		vpad: input.panePadding,
+		height: input.paneRows + PANE_BORDERS + 2 * input.panePadding,
+	};
+}
+
+/**
+ * The catalogue handlers of the action panel's chrome: the row the operator
+ * confirms, the cancel, the message scroll, and the plane-level keys.
+ */
+function actionChromeHandlers(input: {
+	selection: DecisionRegion;
+	confirm: (key: string) => void;
+	cancel: () => void;
+	help?: () => void;
+	message?: () => void;
+	scrollMessage: (direction: 1 | -1) => void;
+	queuePause: () => void;
+	autoHandoff: () => void;
+}): Readonly<Record<string, ControlHandler>> {
+	return {
+		help: () => input.help?.(),
+		message: () => input.message?.(),
+		"cancel-action": input.cancel,
+		"confirm-action": () => input.selection.confirm((row) => input.confirm(row.key)),
+		"select-action": ({ key }: ControlCall) => input.selection.move(key.name === "up" ? -1 : 1),
+		"scroll-message": ({ key }: ControlCall) => input.scrollMessage(key.name === "j" ? 1 : -1),
+		"queue-pause": input.queuePause,
+		"auto-handoff": input.autoHandoff,
+	};
+}
+
+/**
+ * The action panel chrome's dispatch: the mode's availability facts and the
+ * catalogue's one handler set, in one hook call, and the facts the surface's
+ * bar states. The Action panel and the Missing modal dispatch this one set;
+ * only their mode, their message state, and their own callbacks are their
+ * own. The plane-level keys reach every surface the chrome owns (issue
+ * #319, ADR 0111), the way the border's lamp reads the facts the toggle
+ * writes.
+ */
+export function useActionChromeDispatch(input: {
+	mode: InteractionMode;
+	standing: StandingFacts;
+	actionRows: number;
+	active: boolean;
+	onUnavailable?: (reason: string) => void;
+	onEmergencyExit: () => void;
+	selection: DecisionRegion;
+	confirm: (key: string) => void;
+	cancel: () => void;
+	help?: () => void;
+	message?: () => void;
+	scrollMessage: (direction: 1 | -1) => void;
+	queuePause: () => void;
+	autoHandoff: () => void;
+}): AvailabilityFacts {
+	const facts = availabilityFacts(input.mode, input.standing, {
+		actionRowCount: input.actionRows,
+	});
+	useControlDispatch({
+		facts,
+		active: input.active,
+		onUnavailable: input.onUnavailable,
+		onEmergencyExit: input.onEmergencyExit,
+		handlers: actionChromeHandlers({
+			selection: input.selection,
+			confirm: input.confirm,
+			cancel: input.cancel,
+			help: input.help,
+			message: input.message,
+			scrollMessage: input.scrollMessage,
+			queuePause: input.queuePause,
+			autoHandoff: input.autoHandoff,
+		}),
+	});
+	return facts;
+}
+
+/**
+ * The held row of a modal body: the turn's end cause in the warning color.
+ * A surface shows it only when the turn ended on a hold.
+ */
+export function heldCauseRow(cause: TurnEndCause, detail: string, width: number): ReactElement {
+	return createElement(
+		"text",
+		{ key: "held", fg: paint("yellow") },
+		truncateToWidth(turnEndCauseLine(cause, detail), width),
+	);
+}
+
+/**
+ * The decision rows of a modal body: the region's window, with the selected
+ * row the one the region's selection stands on.
+ */
+export function decisionActionRows(
+	region: DecisionRegion,
+	actions: readonly ActionRow[],
+	width: number,
+): ReactElement[] {
+	return region.window.map((row) =>
+		createElement(ActionItem, {
+			key: row.key,
+			row,
+			focused: actions[region.at] === row,
+			width,
+		}),
+	);
+}
+
 export function bodyRowSpans(
 	parts: readonly BodySpan[],
 	width: number,

@@ -49,125 +49,168 @@ const ANSI_BRIGHT_COLORS = [
  * renderer, so a pane cannot alter the control plane terminal outside this
  * bounded cell grid.
  */
+/**
+ * Interpret only terminal display controls. Escape sequences never reach the
+ * renderer, so a pane cannot alter the control plane terminal outside this
+ * bounded cell grid.
+ */
 export function renderAnsiScreen(input: string, width: number, maxRows = 512): AnsiLine[] {
-	const columns = Math.max(1, width);
-	const rows: Cell[][] = [[]];
-	let x = 0;
-	let y = 0;
-	let style = { ...DEFAULT_STYLE };
-	const ensureRow = (row: number) => {
-		while (rows.length <= row && rows.length < maxRows) rows.push([]);
-		return rows[Math.min(row, maxRows - 1)];
-	};
-	const eraseLine = (mode: number) => {
-		const row = ensureRow(y);
-		// EL 0: cursor to end. EL 1: start to cursor. EL 2: the whole line.
-		const start = mode === 0 ? x : 0;
-		const end = mode === 1 ? x : columns;
-		for (let index = start; index < end; index += 1) row[index] = blank(style);
-	};
-	const eraseScreen = (mode: number) => {
-		if (mode === 2 || mode === 3) {
-			rows.splice(0, rows.length, []);
-			x = 0;
-			y = 0;
-			return;
-		}
-		for (let row = y; row < rows.length; row += 1) {
-			const cells = ensureRow(row);
-			const start = row === y ? x : 0;
-			for (let column = start; column < columns; column += 1) cells[column] = blank(style);
-		}
-	};
-	const write = (text: string) => {
-		for (const character of text) {
-			const cellWidth = Math.max(0, widthOf(character));
-			if (cellWidth === 0) {
-				const row = ensureRow(y);
-				const previous = row[Math.max(0, x - 1)];
-				if (previous !== undefined) previous.text += character;
-				continue;
-			}
-			if (x + cellWidth > columns) {
-				x = 0;
-				y = Math.min(maxRows - 1, y + 1);
-			}
-			const row = ensureRow(y);
-			row[x] = { text: character, style: { ...style } };
-			if (cellWidth === 2 && x + 1 < columns)
-				row[x + 1] = { text: "", style: { ...style }, continuation: true };
-			x = Math.min(columns, x + cellWidth);
-		}
+	const state: AnsiScreenState = {
+		rows: [[]],
+		columns: Math.max(1, width),
+		maxRows,
+		x: 0,
+		y: 0,
+		style: { ...DEFAULT_STYLE },
 	};
 	for (let index = 0; index < input.length; ) {
 		const code = input.codePointAt(index) as number;
 		const character = String.fromCodePoint(code);
 		index += character.length;
 		if (character === "\u001b") {
-			if (input[index] === "[") {
-				const end = findCsiEnd(input, index + 1);
-				if (end === -1) break;
-				const params = input.slice(index + 1, end);
-				const command = input[end];
-				index = end + 1;
-				const values = params
-					.replace(/^[?>!]/, "")
-					.split(";")
-					.map((value) => (value === "" ? 0 : Number(value)))
-					.map((value) => (Number.isFinite(value) ? value : 0));
-				const count = Math.max(1, values[0] ?? 0);
-				switch (command) {
-					case "m":
-						style = applySgr(style, values);
-						break;
-					case "H":
-					case "f":
-						y = Math.min(maxRows - 1, Math.max(0, (values[0] || 1) - 1));
-						x = Math.min(columns - 1, Math.max(0, (values[1] || 1) - 1));
-						ensureRow(y);
-						break;
-					case "A":
-						y = Math.max(0, y - count);
-						break;
-					case "B":
-						y = Math.min(maxRows - 1, y + count);
-						ensureRow(y);
-						break;
-					case "C":
-						x = Math.min(columns - 1, x + count);
-						break;
-					case "D":
-						x = Math.max(0, x - count);
-						break;
-					case "G":
-						x = Math.min(columns - 1, Math.max(0, count - 1));
-						break;
-					case "J":
-						eraseScreen(values[0] ?? 0);
-						break;
-					case "K":
-						eraseLine(values[0] ?? 0);
-						break;
-				}
-				continue;
-			}
-			if (input[index] === "]") {
-				index = skipOsc(input, index + 1);
-				continue;
-			}
-			index += 1;
+			index = escapeStep(input, index, state);
+			if (index === -1) break;
 			continue;
 		}
-		if (character === "\n") {
-			x = 0;
-			y = Math.min(maxRows - 1, y + 1);
-			ensureRow(y);
-		} else if (character === "\r") x = 0;
-		else if (character === "\b") x = Math.max(0, x - 1);
-		else if (character === "\t") x = Math.min(columns - 1, x + (8 - (x % 8)));
-		else if (!/\p{Cc}/u.test(character)) write(character);
+		plainCharacterStep(state, character);
 	}
-	return rows.map((row) => cellsToSpans(row, columns));
+	return state.rows.map((row) => cellsToSpans(row, state.columns));
+}
+
+/** The one cell one ordinary character places on the screen. */
+function plainCharacterStep(state: AnsiScreenState, character: string): void {
+	if (character === "\n") {
+		state.x = 0;
+		state.y = Math.min(state.maxRows - 1, state.y + 1);
+		ansiEnsureRow(state, state.y);
+	} else if (character === "\r") state.x = 0;
+	else if (character === "\b") state.x = Math.max(0, state.x - 1);
+	else if (character === "\t") state.x = Math.min(state.columns - 1, state.x + (8 - (state.x % 8)));
+	else if (!/\p{Cc}/u.test(character)) ansiWrite(state, character);
+}
+
+/** The screen state's index after one escape character's sequence, or -1 to stop. */
+function escapeStep(input: string, index: number, state: AnsiScreenState): number {
+	if (input[index] === "[") {
+		const end = findCsiEnd(input, index + 1);
+		if (end === -1) return -1;
+		const params = input.slice(index + 1, end);
+		const command = input[end];
+		applyCsiCommand(state, command, parseCsiValues(params));
+		return end + 1;
+	}
+	if (input[index] === "]") return skipOsc(input, index + 1);
+	return index + 1;
+}
+
+/** The screen's state: the cell grid, the cursor, the running style. */
+interface AnsiScreenState {
+	rows: Cell[][];
+	columns: number;
+	maxRows: number;
+	x: number;
+	y: number;
+	style: AnsiStyle;
+}
+
+/** The CSI's parameter list, parsed to the command's values. */
+function parseCsiValues(params: string): number[] {
+	return params
+		.replace(/^[?>!]/, "")
+		.split(";")
+		.map((value) => (value === "" ? 0 : Number(value)))
+		.map((value) => (Number.isFinite(value) ? value : 0));
+}
+
+/** One CSI command against the screen's state. */
+function applyCsiCommand(state: AnsiScreenState, command: string, values: number[]): void {
+	const count = Math.max(1, values[0] ?? 0);
+	switch (command) {
+		case "m":
+			state.style = applySgr(state.style, values);
+			break;
+		case "H":
+		case "f":
+			state.y = Math.min(state.maxRows - 1, Math.max(0, (values[0] || 1) - 1));
+			state.x = Math.min(state.columns - 1, Math.max(0, (values[1] || 1) - 1));
+			ansiEnsureRow(state, state.y);
+			break;
+		case "A":
+			state.y = Math.max(0, state.y - count);
+			break;
+		case "B":
+			state.y = Math.min(state.maxRows - 1, state.y + count);
+			ansiEnsureRow(state, state.y);
+			break;
+		case "C":
+			state.x = Math.min(state.columns - 1, state.x + count);
+			break;
+		case "D":
+			state.x = Math.max(0, state.x - count);
+			break;
+		case "G":
+			state.x = Math.min(state.columns - 1, Math.max(0, count - 1));
+			break;
+		case "J":
+			ansiEraseScreen(state, values[0] ?? 0);
+			break;
+		case "K":
+			ansiEraseLine(state, values[0] ?? 0);
+			break;
+	}
+}
+
+/** Grow the grid to the row, and hand it back. */
+function ansiEnsureRow(state: AnsiScreenState, row: number): Cell[] {
+	while (state.rows.length <= row && state.rows.length < state.maxRows) state.rows.push([]);
+	return state.rows[Math.min(row, state.maxRows - 1)];
+}
+
+/** One line's erase: EL 0 the cursor to end, EL 1 the start to cursor, EL 2 all. */
+function ansiEraseLine(state: AnsiScreenState, mode: number): void {
+	const row = ansiEnsureRow(state, state.y);
+	// EL 0: cursor to end. EL 1: start to cursor. EL 2: the whole line.
+	const start = mode === 0 ? state.x : 0;
+	const end = mode === 1 ? state.x : state.columns;
+	for (let index = start; index < end; index += 1) row[index] = blank(state.style);
+}
+
+/** The screen's erase: ED 2 and ED 3 reset the grid, ED 0 clears down. */
+function ansiEraseScreen(state: AnsiScreenState, mode: number): void {
+	if (mode === 2 || mode === 3) {
+		state.rows.splice(0, state.rows.length, []);
+		state.x = 0;
+		state.y = 0;
+		return;
+	}
+	for (let row = state.y; row < state.rows.length; row += 1) {
+		const cells = ansiEnsureRow(state, row);
+		const start = row === state.y ? state.x : 0;
+		for (let column = start; column < state.columns; column += 1)
+			cells[column] = blank(state.style);
+	}
+}
+
+/** Write printable text to the grid, wrapping at the grid's edge. */
+function ansiWrite(state: AnsiScreenState, text: string): void {
+	for (const character of text) {
+		const cellWidth = Math.max(0, widthOf(character));
+		if (cellWidth === 0) {
+			const row = ansiEnsureRow(state, state.y);
+			const previous = row[Math.max(0, state.x - 1)];
+			if (previous !== undefined) previous.text += character;
+			continue;
+		}
+		if (state.x + cellWidth > state.columns) {
+			state.x = 0;
+			state.y = Math.min(state.maxRows - 1, state.y + 1);
+		}
+		const row = ansiEnsureRow(state, state.y);
+		row[state.x] = { text: character, style: { ...state.style } };
+		if (cellWidth === 2 && state.x + 1 < state.columns)
+			row[state.x + 1] = { text: "", style: { ...state.style }, continuation: true };
+		state.x = Math.min(state.columns, state.x + cellWidth);
+	}
 }
 
 function blank(style: AnsiStyle): Cell {
@@ -190,51 +233,124 @@ function skipOsc(input: string, from: number): number {
 	return input.length;
 }
 
+/** The style's attribute flags, while the values land. */
+interface SgrFlags {
+	bold: boolean;
+	dim: boolean;
+	italic: boolean;
+	underline: boolean;
+	inverse: boolean;
+	strikethrough: boolean;
+}
+
+/** The style's draft: the colors and the attribute flags, while the values land. */
+interface SgrDraft {
+	fg: string | undefined;
+	bg: string | undefined;
+	flags: SgrFlags;
+}
+
+/** The one attribute one simple SGR value sets, with the on or off it wears. */
+const SGR_SINGLETONS: Array<[number, keyof SgrFlags, boolean]> = [
+	[1, "bold", true],
+	[2, "dim", true],
+	[3, "italic", true],
+	[4, "underline", true],
+	[7, "inverse", true],
+	[9, "strikethrough", true],
+	[23, "italic", false],
+	[24, "underline", false],
+	[27, "inverse", false],
+	[29, "strikethrough", false],
+];
+
+/** The one color one SGR range code names, and the slot it stands in. */
+function sgrRangeColor(value: number): { color: string; background: boolean } | undefined {
+	if (value >= 30 && value <= 37) return { color: ANSI_COLORS[value - 30], background: false };
+	if (value >= 40 && value <= 47) return { color: ANSI_COLORS[value - 40], background: true };
+	if (value >= 90 && value <= 97)
+		return { color: ANSI_BRIGHT_COLORS[value - 90], background: false };
+	if (value >= 100 && value <= 107)
+		return { color: ANSI_BRIGHT_COLORS[value - 100], background: true };
+	return undefined;
+}
+
+/** The index one extended SGR color passes to, after it lands on the draft. */
+function sgrExtendedStep(
+	draft: SgrDraft,
+	value: number,
+	values: number[],
+	index: number,
+): number | undefined {
+	const color = sgrExtendedColor(values, index + 1);
+	if (color === undefined) return undefined;
+	if (value === 38) draft.fg = color.value;
+	else draft.bg = color.value;
+	return color.last + 1;
+}
+
+/** The index one SGR value consumes, after it lands on the draft. */
+function sgrValueStep(draft: SgrDraft, values: number[], index: number): number {
+	const value = values[index] ?? 0;
+	if (value === 0) {
+		draft.fg = undefined;
+		draft.bg = undefined;
+		draft.flags.bold =
+			draft.flags.dim =
+			draft.flags.italic =
+			draft.flags.underline =
+			draft.flags.inverse =
+			draft.flags.strikethrough =
+				false;
+		return index + 1;
+	}
+	if (value === 22) {
+		draft.flags.bold = false;
+		draft.flags.dim = false;
+		return index + 1;
+	}
+	if (value === 39) {
+		draft.fg = undefined;
+		return index + 1;
+	}
+	if (value === 49) {
+		draft.bg = undefined;
+		return index + 1;
+	}
+	if (value === 38 || value === 48) {
+		const last = sgrExtendedStep(draft, value, values, index);
+		if (last !== undefined) return last;
+	}
+	const singleton = SGR_SINGLETONS.find(([code]) => code === value);
+	if (singleton !== undefined) draft.flags[singleton[1]] = singleton[2];
+	const range = sgrRangeColor(value);
+	if (range !== undefined) {
+		if (range.background) draft.bg = range.color;
+		else draft.fg = range.color;
+	}
+	return index + 1;
+}
+
 function applySgr(current: AnsiStyle, values: number[]): AnsiStyle {
-	let fg = current.fg;
-	let bg = current.bg;
-	let bold = false;
-	let dim = false;
-	let italic = false;
-	let underline = false;
-	let inverse = false;
-	let strikethrough = false;
-	for (let index = 0; index < values.length; index += 1) {
-		const value = values[index] ?? 0;
-		if (value === 0) {
-			fg = undefined;
-			bg = undefined;
-			bold = dim = italic = underline = inverse = strikethrough = false;
-		} else if (value === 1) bold = true;
-		else if (value === 2) dim = true;
-		else if (value === 3) italic = true;
-		else if (value === 4) underline = true;
-		else if (value === 7) inverse = true;
-		else if (value === 9) strikethrough = true;
-		else if (value === 22) bold = dim = false;
-		else if (value === 23) italic = false;
-		else if (value === 24) underline = false;
-		else if (value === 27) inverse = false;
-		else if (value === 29) strikethrough = false;
-		else if (value === 39) fg = undefined;
-		else if (value === 49) bg = undefined;
-		else if (value >= 30 && value <= 37) fg = ANSI_COLORS[value - 30];
-		else if (value >= 90 && value <= 97) fg = ANSI_BRIGHT_COLORS[value - 90];
-		else if (value >= 40 && value <= 47) bg = ANSI_COLORS[value - 40];
-		else if (value >= 100 && value <= 107) bg = ANSI_BRIGHT_COLORS[value - 100];
-		else if (value === 38 || value === 48) {
-			const color = sgrExtendedColor(values, index + 1);
-			if (color !== undefined) {
-				if (value === 38) fg = color.value;
-				else bg = color.value;
-				index = color.last;
-			}
-		}
+	const draft: SgrDraft = {
+		fg: current.fg,
+		bg: current.bg,
+		flags: {
+			bold: false,
+			dim: false,
+			italic: false,
+			underline: false,
+			inverse: false,
+			strikethrough: false,
+		},
+	};
+	for (let index = 0; index < values.length; index = sgrValueStep(draft, values, index)) {
+		// The step lands the value on the draft and names the index it consumed.
 	}
 	return {
-		fg,
-		bg,
-		attributes: createTextAttributes({ bold, dim, italic, underline, inverse, strikethrough }),
+		fg: draft.fg,
+		bg: draft.bg,
+		attributes: createTextAttributes(draft.flags),
 	};
 }
 

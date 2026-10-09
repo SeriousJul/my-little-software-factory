@@ -29,6 +29,7 @@ import {
 	rowSpans,
 	rowsOf,
 	type Setup,
+	type SpanInfo,
 	settle,
 	spanColorAt,
 	spanColors,
@@ -487,6 +488,20 @@ describe("the shared control gallery", () => {
 		expect(headingCell.bg).toEqual([0xef, 0xf1, 0xf5]);
 	});
 
+	/** The background one role name's swatch holds, thrown for when the example loses it. */
+	function swatchBg(swatches: SpanInfo[], name: string, word: string): [number, number, number] {
+		const swatch = swatchSpan(swatches, name, word);
+		if (swatch.bg === null) throw new Error(`the override example lost its ${word} swatch`);
+		return swatch.bg;
+	}
+
+	/** The span one role name holds on the swatch row, thrown for when the example loses it. */
+	function swatchSpan(swatches: SpanInfo[], name: string, word: string): SpanInfo {
+		const swatch = swatches.find((span) => span.text.trim() === name);
+		if (swatch === undefined) throw new Error(`the override example lost its ${word} swatch`);
+		return swatch;
+	}
+
 	test("the override example wears the token values the [theme.custom] section holds", async () => {
 		const setup = await gallery("theme-override");
 		const raw = setup.captureCharFrame();
@@ -510,27 +525,14 @@ describe("the shared control gallery", () => {
 		expect(swatchRow).toBeGreaterThanOrEqual(0);
 		const swatches = rowSpans(setup, swatchRow);
 		// The overridden tokens wear the override's own values...
-		const accent = swatches.find((span) => span.text.trim() === "accent");
-		if (accent === undefined || accent.bg === null) {
-			throw new Error("the override example lost its accent swatch");
-		}
-		expect(hexOf(accent.bg)).toBe("#ffb86c");
-		const text = swatches.find((span) => span.text.trim() === "text");
-		if (text === undefined || text.bg === null) {
-			throw new Error("the override example lost its text swatch");
-		}
-		expect(hexOf(text.bg)).toBe("#ffffff");
+		expect(hexOf(swatchBg(swatches, "accent", "accent"))).toBe("#ffb86c");
+		expect(hexOf(swatchBg(swatches, "text", "text"))).toBe("#ffffff");
 		// ...a token the override drops keeps the base theme, and a token
 		// that resolves to `reset` paints no swatch at all.
-		const subtext = swatches.find((span) => span.text.trim() === "subtext0");
-		if (subtext === undefined || subtext.bg === null) {
-			throw new Error("the override example lost its subtext0 swatch");
-		}
-		expect(hexOf(subtext.bg)).toBe("#a6adc8");
+		expect(hexOf(swatchBg(swatches, "subtext0", "subtext0"))).toBe("#a6adc8");
 		// A token that resolves to `reset` paints no swatch of its own: the
 		// surface behind it stands, and the base theme's value never shows.
-		const panel = swatches.find((span) => span.text.trim() === "panel_bg");
-		if (panel === undefined) throw new Error("the override example lost its panel_bg swatch");
+		const panel = swatchSpan(swatches, "panel_bg", "panel_bg");
 		if (panel.bg !== null)
 			expect(hexOf(panel.bg)).not.toBe(BUILTIN_THEMES.catppuccin.roles.panel_bg);
 	});

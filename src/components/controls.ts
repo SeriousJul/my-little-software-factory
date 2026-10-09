@@ -3048,26 +3048,44 @@ function displayKeyLabel(
 	if (control.id === "consultation-interact") return "Enter";
 	if (control.id === "move-list" && (mode === "override-text" || mode === "override-model"))
 		return "↑↓";
-	if (control.id === "help") {
-		// A field owns its printable keys, and `?` is one of them: in the field
-		// modes only F1 opens the guide.
-		if (fieldModes.includes(mode)) return "F1";
-		if (mode === "override-list") return includeAllAliases ? "F1/?" : "F1";
-		if (ticketBaseMode(mode) || consultationMode(mode) || workQueueMode(mode))
-			return includeAllAliases ? "F1/?" : "?";
-	}
-	if (control.id === "message") {
-		if (ticketBaseMode(mode) || consultationMode(mode) || workQueueMode(mode))
-			return includeAllAliases ? "m/F2" : "m";
-		return "F2";
-	}
+	const label = specialKeyLabel(control, { mode, includeAllAliases, facts });
+	if (label !== undefined) return label;
+	return control.keyLabel;
+}
+
+/** The key label one control holds beside its own key, or undefined for the plain label. */
+function specialKeyLabel(
+	control: ControlDefinition,
+	fields: { mode: InteractionMode; includeAllAliases: boolean; facts: AvailabilityFacts },
+): string | undefined {
+	const { mode, includeAllAliases } = fields;
+	if (control.id === "help") return helpKeyLabel(mode, includeAllAliases);
+	if (control.id === "message") return messageKeyLabel(mode, includeAllAliases);
 	if (control.id === "queue-pause") {
 		// A field owns its printable keys, and `p` is one of them: in the field
 		// modes only F4 pauses the queue, the way only F1 opens the guide.
 		return fieldModes.includes(mode) ? "F4" : "p";
 	}
 	if (control.id === "auto-handoff") return fieldModes.includes(mode) ? "F5" : "a";
-	return control.keyLabel;
+	return undefined;
+}
+
+/** The guide's key in the mode it lists: the field F-key, or the plane alias. */
+function helpKeyLabel(mode: InteractionMode, includeAllAliases: boolean): string | undefined {
+	// A field owns its printable keys, and `?` is one of them: in the field
+	// modes only F1 opens the guide.
+	if (fieldModes.includes(mode)) return "F1";
+	if (mode === "override-list") return includeAllAliases ? "F1/?" : "F1";
+	if (ticketBaseMode(mode) || consultationMode(mode) || workQueueMode(mode))
+		return includeAllAliases ? "F1/?" : "?";
+	return undefined;
+}
+
+/** The Message key in the mode it lists: the plane alias, or the field F-key. */
+function messageKeyLabel(mode: InteractionMode, includeAllAliases: boolean): string {
+	if (ticketBaseMode(mode) || consultationMode(mode) || workQueueMode(mode))
+		return includeAllAliases ? "m/F2" : "m";
+	return "F2";
 }
 
 export function keyLabelFor(

@@ -152,7 +152,11 @@ describe("the route close moves no view", () => {
 		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
 		state.grouping.setGroupingAxis("tickets", "none");
 		const outcome = success([issueTicket(FIRST)]);
-		seedAwaitingTurn(state, outcome, FIRST, reviewRoute, "worktree");
+		seedAwaitingTurn(state, outcome, {
+			identity: FIRST,
+			transition: reviewRoute,
+			environment: "worktree",
+		});
 		const runner = routeRunner();
 		runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
 		const source = new FakeSource("issues", "github-issues", outcome);
@@ -184,9 +188,11 @@ describe("the route close moves no view", () => {
 					// (ADR 0061): the operator's view never moved.
 					expect(herdrFocusCommands(commands)).toEqual([]);
 				},
-				WIDTH,
-				34,
-				{ state, config: routeConfig(), home, runner, sources: [source] },
+				{
+					width: WIDTH,
+					height: 34,
+					props: { state, config: routeConfig(), home, runner, sources: [source] },
+				},
 			);
 		} finally {
 			state.close();
@@ -200,7 +206,11 @@ describe("the route close moves no view", () => {
 		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
 		state.grouping.setGroupingAxis("tickets", "none");
 		const outcome = success(twoTickets());
-		seedAwaitingTurn(state, outcome, FIRST, reviewRoute, "worktree");
+		seedAwaitingTurn(state, outcome, {
+			identity: FIRST,
+			transition: reviewRoute,
+			environment: "worktree",
+		});
 		// The second ticket holds the factory's one seat with a live agent. Its
 		// handoff is aged past the Startup grace, so the seat is the agent's own:
 		// when herdr stops listing it, the seat frees and the queue drains.
@@ -274,9 +284,11 @@ describe("the route close moves no view", () => {
 					expect(commands).toContain(`herdr workspace create --cwd ${checkout} --no-focus`);
 					expect(herdrFocusCommands(commands)).toEqual([]);
 				},
-				WIDTH,
-				34,
-				{ state, config, home, runner, sources: [source], pollIntervalMs: 100 },
+				{
+					width: WIDTH,
+					height: 34,
+					props: { state, config, home, runner, sources: [source], pollIntervalMs: 100 },
+				},
 			);
 		} finally {
 			state.close();
@@ -314,9 +326,11 @@ describe("the Close cleanup moves no view", () => {
 					// Message line names the closed ticket.
 					expect(messageRowOf(frame)).toContain("closed");
 				},
-				WIDTH,
-				34,
-				{ state, config: routeConfig(), home, runner, sources: [source] },
+				{
+					width: WIDTH,
+					height: 34,
+					props: { state, config: routeConfig(), home, runner, sources: [source] },
+				},
 			);
 		} finally {
 			state.close();
@@ -367,9 +381,11 @@ describe("the Close cleanup moves no view", () => {
 					);
 					expect(herdrFocusCommands(runner.commands())).toEqual([]);
 				},
-				WIDE_STATUS,
-				34,
-				{ state, config: routeConfig(), home, runner, sources: [source] },
+				{
+					width: WIDE_STATUS,
+					height: 34,
+					props: { state, config: routeConfig(), home, runner, sources: [source] },
+				},
 			);
 		} finally {
 			state.close();
@@ -386,7 +402,11 @@ describe("Goto stays the one focus move", () => {
 		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
 		state.grouping.setGroupingAxis("tickets", "none");
 		const outcome = success([issueTicket(FIRST)]);
-		seedAwaitingTurn(state, outcome, FIRST, null, "worktree");
+		seedAwaitingTurn(state, outcome, {
+			identity: FIRST,
+			transition: null,
+			environment: "worktree",
+		});
 		const runner = new FakeRunner();
 		runner.set("herdr", ["agent", "list"], {
 			stdout: agentListJson([
@@ -425,9 +445,11 @@ describe("Goto stays the one focus move", () => {
 					// The confirmation names the workspace it landed in (story 8).
 					expect(messageRowOf(frame)).toContain("in workspace retry");
 				},
-				WIDTH,
-				34,
-				{ state, config: routeConfig(), home, runner, sources: [source] },
+				{
+					width: WIDTH,
+					height: 34,
+					props: { state, config: routeConfig(), home, runner, sources: [source] },
+				},
 			);
 		} finally {
 			state.close();
@@ -493,9 +515,11 @@ describe("the environment a handoff builds stays out of the view", () => {
 						expect(create.split(" ")).not.toContain("--focus");
 					}
 				},
-				WIDTH,
-				34,
-				{ state, config: routeConfig(), home, runner, sources: [source] },
+				{
+					width: WIDTH,
+					height: 34,
+					props: { state, config: routeConfig(), home, runner, sources: [source] },
+				},
 			);
 		} finally {
 			state.close();

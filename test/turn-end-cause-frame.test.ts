@@ -357,9 +357,11 @@ describe("the held turn through the real app flow", () => {
 				expect(narrowRow).toContain("● running ● manual");
 				expect(narrowRow?.trim().endsWith("● manual")).toBe(true);
 			},
-			undefined,
-			undefined,
-			{ config, state, runner, sources: [src], pollIntervalMs: 20 },
+			{
+				width: undefined,
+				height: undefined,
+				props: { config, state, runner, sources: [src], pollIntervalMs: 20 },
+			},
 		);
 	});
 });

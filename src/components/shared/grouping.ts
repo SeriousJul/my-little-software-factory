@@ -73,13 +73,14 @@ export function rowAnchorOf<T extends IdentifiedItem>(
  * lands on that Group's header: the place stays the operator's own, the fold
  * never opens itself, and nothing is lost to a re-read (ADR 0059).
  */
-export function rowIndexForAnchor<T extends IdentifiedItem>(
-	rows: readonly ListedRow<T>[],
-	anchor: RowAnchor | undefined,
-	fallbackIndex: number,
-	items: readonly T[],
-	keyOf: (item: T) => string,
-): number {
+export function rowIndexForAnchor<T extends IdentifiedItem>(fields: {
+	rows: readonly ListedRow<T>[];
+	anchor: RowAnchor | undefined;
+	fallbackIndex: number;
+	items: readonly T[];
+	keyOf: (item: T) => string;
+}): number {
+	const { rows, anchor, fallbackIndex, items, keyOf } = fields;
 	const clamped = (index: number) =>
 		settleRowIndex(rows, Math.max(0, Math.min(index, Math.max(0, rows.length - 1))));
 	if (anchor === undefined) return clamped(fallbackIndex);
@@ -104,12 +105,16 @@ export function ticketRowIndexForAnchor(
 	rows: readonly ListedRow<TicketRowFacts>[],
 	anchor: RowAnchor | undefined,
 	fallbackIndex: number,
-	facts: readonly TicketRowFacts[],
-	axis: GroupingAxis,
+	fields: { facts: readonly TicketRowFacts[]; axis: GroupingAxis },
 ): number {
-	return rowIndexForAnchor(rows, anchor, fallbackIndex, facts, (fact) =>
-		ticketGroupKey(axis, fact),
-	);
+	const { facts, axis } = fields;
+	return rowIndexForAnchor({
+		rows,
+		anchor,
+		fallbackIndex,
+		items: facts,
+		keyOf: (fact) => ticketGroupKey(axis, fact),
+	});
 }
 
 /**
@@ -370,9 +375,9 @@ export function movedGroupOrder(
 	stored: readonly string[],
 	present: readonly string[],
 	defaultCompare: (a: string, b: string) => number,
-	value: string,
-	neighbor: string,
+	move: { value: string; neighbor: string },
 ): readonly string[] | null {
+	const { value, neighbor } = move;
 	const full = fullOrderOf(stored, present, defaultCompare);
 	const from = full.indexOf(value);
 	const to = full.indexOf(neighbor);
@@ -426,24 +431,7 @@ export function groupedRows<T>(
 	grouping: GroupingOf<T>,
 ): readonly ListedRow<T>[] {
 	if (grouping.axis === "none") return items.map((item): ListedRow<T> => ({ kind: "item", item }));
-	interface Running {
-		value: string;
-		items: T[];
-		held: number;
-	}
-	const byValue = new Map<string, Running>();
-	const groups: Running[] = [];
-	for (const item of items) {
-		const value = grouping.keyOf(item);
-		let group = byValue.get(value);
-		if (group === undefined) {
-			group = { value, items: [], held: 0 };
-			byValue.set(value, group);
-			groups.push(group);
-		}
-		group.items.push(item);
-		if (grouping.heldOf(item)) group.held += 1;
-	}
+	const groups = runningGroupsOf(items, grouping);
 	// A Group with no tickets cannot come from the rows, so no stale header
 	// ever stands: the header set is derived from the rows on every read
 	// (story 26, story 64). The order the Groups stand in is the order the axis
@@ -457,27 +445,56 @@ export function groupedRows<T>(
 	const slot = new Map(order.map((value, index) => [value, index]));
 	groups.sort((left, right) => (slot.get(left.value) ?? 0) - (slot.get(right.value) ?? 0));
 	const rows: ListedRow<T>[] = [];
-	for (const group of groups) {
-		const collapsed = grouping.isFolded(group.value);
-		const marker = grouping.groupMarker?.(group.value) ?? null;
-		// One blank row parts a Group from the one above it, and none stands
-		// above the first: the list opens on its header exactly as it did before
-		// the spacing, and every Group keeps the same air at its head.
-		if (rows.length > 0) rows.push({ kind: "gap" });
-		rows.push({
-			kind: "group",
-			group: {
-				value: group.value,
-				count: group.items.length,
-				held: group.held,
-				collapsed,
-				...(marker === null ? {} : { marker }),
-			},
-		});
-		if (collapsed) continue;
-		for (const item of group.items) rows.push({ kind: "item", item });
-	}
+	for (const group of groups) groupRowsOf(rows, group, grouping);
 	return rows;
+}
+
+/** The running groups one flat list accumulates, in first-seen order. */
+function runningGroupsOf<T>(
+	items: readonly T[],
+	grouping: GroupingOf<T>,
+): Array<{ value: string; items: T[]; held: number }> {
+	type Running = { value: string; items: T[]; held: number };
+	const byValue = new Map<string, Running>();
+	const groups: Running[] = [];
+	for (const item of items) {
+		const value = grouping.keyOf(item);
+		let group = byValue.get(value);
+		if (group === undefined) {
+			group = { value, items: [], held: 0 };
+			byValue.set(value, group);
+			groups.push(group);
+		}
+		group.items.push(item);
+		if (grouping.heldOf(item)) group.held += 1;
+	}
+	return groups;
+}
+
+/** The row one Group's run lands in the list's rows. */
+function groupRowsOf<T>(
+	rows: ListedRow<T>[],
+	group: { value: string; items: T[]; held: number },
+	grouping: GroupingOf<T>,
+): void {
+	const collapsed = grouping.isFolded(group.value);
+	const marker = grouping.groupMarker?.(group.value) ?? null;
+	// One blank row parts a Group from the one above it, and none stands
+	// above the first: the list opens on its header exactly as it did before
+	// the spacing, and every Group keeps the same air at its head.
+	if (rows.length > 0) rows.push({ kind: "gap" });
+	rows.push({
+		kind: "group",
+		group: {
+			value: group.value,
+			count: group.items.length,
+			held: group.held,
+			collapsed,
+			...(marker === null ? {} : { marker }),
+		},
+	});
+	if (collapsed) return;
+	for (const item of group.items) rows.push({ kind: "item", item });
 }
 
 /**
@@ -517,11 +534,14 @@ export function toggleFold(folds: GroupFolds, axis: GroupingAxis, value: string)
 export function ticketRows(
 	facts: readonly TicketRowFacts[],
 	axis: GroupingAxis,
-	folds: GroupFolds,
-	storedOrder: readonly string[],
-	positionOrder: readonly string[],
-	groupMarker?: (value: string) => string | null,
+	fields: {
+		folds: GroupFolds;
+		storedOrder: readonly string[];
+		positionOrder: readonly string[];
+		groupMarker?: (value: string) => string | null;
+	},
 ): readonly ListedRow<TicketRowFacts>[] {
+	const { folds, storedOrder, positionOrder, groupMarker } = fields;
 	const folded = foldedValues(folds, axis);
 	return groupedRows(facts, {
 		axis,

@@ -2175,9 +2175,7 @@ describe("the decision screen's merge", () => {
 					messageRowOf(f).includes(`the merge of "${pullTitle}" ran from the Work queue`),
 				);
 			},
-			WIDTH,
-			30,
-			props,
+			{ width: WIDTH, height: 30, props: props },
 		);
 
 		// The record: the operator's decision word, the merged outcome, and
@@ -2232,9 +2230,7 @@ describe("the decision screen's merge", () => {
 					messageRowOf(f).includes(`the merge of "${pullTitle}" ran from the Work queue`),
 				);
 			},
-			WIDTH,
-			30,
-			props,
+			{ width: WIDTH, height: 30, props: props },
 		);
 
 		// The record stands the way the operator's merge always does: the
@@ -2289,9 +2285,7 @@ describe("the decision screen's merge", () => {
 						"the attempt's line",
 					);
 				},
-				WIDTH,
-				30,
-				props,
+				{ width: WIDTH, height: 30, props: props },
 			);
 
 			// The line the pane painted is the block the run recorded: the record
@@ -2323,9 +2317,7 @@ describe("the decision screen's merge", () => {
 					messageRowOf(f).includes("the plane action holds no settings"),
 				);
 			},
-			WIDTH,
-			30,
-			props,
+			{ width: WIDTH, height: 30, props: props },
 		);
 		state.close();
 	});
@@ -2362,9 +2354,7 @@ describe("the decision screen's merge", () => {
 				);
 				expect(frame).not.toContain("the merge was blocked");
 			},
-			WIDTH,
-			30,
-			props,
+			{ width: WIDTH, height: 30, props: props },
 		);
 		state.close();
 	});
@@ -2406,9 +2396,7 @@ describe("the decision screen's merge", () => {
 					messageRowOf(f).includes(`the merge of "${pullTitle}" ran from the Work queue`),
 				);
 			},
-			WIDTH,
-			30,
-			props,
+			{ width: WIDTH, height: 30, props: props },
 		);
 
 		// The confirm passed the full count: the run's attempt stands as the
@@ -2501,9 +2489,7 @@ describe("the decision screen's merge", () => {
 					const list = await settle(setup);
 					expect(list).not.toContain("Decision:");
 				},
-				WIDTH,
-				30,
-				props,
+				{ width: WIDTH, height: 30, props: props },
 			);
 
 			// The record stands for the outcome the screen read: the operator's
@@ -2553,9 +2539,7 @@ describe("the decision screen's merge", () => {
 				expect(naming).toHaveLength(1);
 				expect(naming[0]).toContain("ran from the Work queue");
 			},
-			WIDTH,
-			30,
-			props,
+			{ width: WIDTH, height: 30, props: props },
 		);
 
 		// The record stands for the outcome the line read: the operator's
@@ -2612,9 +2596,7 @@ describe("the auto top-up merge", () => {
 				src.settle(pullSuccess());
 				await body(setup);
 			},
-			WIDTH,
-			34,
-			props,
+			{ width: WIDTH, height: 34, props: props },
 		);
 		return { state, runner };
 	}

@@ -244,44 +244,66 @@ const PI_MODEL_TABLE_MIN_COLUMNS = PI_MODEL_TABLE_TRAILING + 2;
  * around; it is never a crash and never a partial list.
  */
 export function parsePiModelList(stdout: string, command = "pi"): ModelListResult {
-	const models: string[] = [];
-	let header = false;
-	for (const line of stdout.split("\n")) {
-		const trimmed = line.trim();
-		if (trimmed === "") continue;
-		const columns = trimmed.split(/\s{2,}/);
-		// Fifth from the end: the four columns after the model are fixed, and
-		// the provider is everything before it.
-		const at = columns.length - (PI_MODEL_TABLE_TRAILING + 1);
-		const model = at >= 0 ? columns[at] : "";
-		const provider = at >= 0 ? columns.slice(0, at).join("  ") : "";
-		if (!header) {
-			// Look for the header row wherever it sits, and skip whatever came
-			// before it.
-			if (provider === "provider" && model === "model") {
-				header = true;
-			}
-			continue;
-		}
-		if (columns.length < PI_MODEL_TABLE_MIN_COLUMNS) {
-			return unparseableModelTable(
-				command,
-				`a row holds ${columns.length} columns, not at least ${PI_MODEL_TABLE_MIN_COLUMNS}`,
-			);
-		}
-		const value = `${provider}/${model}`;
-		if (/\s/.test(value)) {
-			// A provider that spans two printed cells, or a model the reader has
-			// mis-cut: the value could never reach the agent as one argument cell,
-			// so the whole table is refused rather than half-offered.
-			return unparseableModelTable(command, `a row's model value holds whitespace (${value})`);
-		}
-		models.push(value);
-	}
-	if (!header) {
+	const lines = stdout.split("\n");
+	const headerIndex = piModelHeaderIndex(lines);
+	if (headerIndex === null) {
 		return unparseableModelTable(command, "it printed no header row");
 	}
+	const models: string[] = [];
+	for (const line of lines.slice(headerIndex + 1)) {
+		const row = piModelRowOf(line);
+		if (row === null) continue;
+		if (row.unreadable !== undefined) {
+			return unparseableModelTable(command, row.unreadable);
+		}
+		models.push(row.value);
+	}
 	return { ok: true, models };
+}
+
+/** The index of the header row of the table, wherever it sits, or none. */
+function piModelHeaderIndex(lines: string[]): number | null {
+	for (let i = 0; i < lines.length; i += 1) {
+		const row = piModelColumnsOf(lines[i]);
+		if (row === null) continue;
+		if (row.provider === "provider" && row.model === "model") return i;
+	}
+	return null;
+}
+
+/** The columns of one table line, and the provider and model cells they hold. */
+function piModelColumnsOf(
+	line: string,
+): { columns: string[]; provider: string; model: string } | null {
+	const trimmed = line.trim();
+	if (trimmed === "") return null;
+	const columns = trimmed.split(/\s{2,}/);
+	// Fifth from the end: the four columns after the model are fixed, and
+	// the provider is everything before it.
+	const at = columns.length - (PI_MODEL_TABLE_TRAILING + 1);
+	const model = at >= 0 ? columns[at] : "";
+	const provider = at >= 0 ? columns.slice(0, at).join("  ") : "";
+	return { columns, provider, model };
+}
+
+/** The model value one data row of the table names, and its refusal. */
+function piModelRowOf(line: string): { value: string; unreadable?: string } | null {
+	const row = piModelColumnsOf(line);
+	if (row === null) return null;
+	if (row.columns.length < PI_MODEL_TABLE_MIN_COLUMNS) {
+		return {
+			value: "",
+			unreadable: `a row holds ${row.columns.length} columns, not at least ${PI_MODEL_TABLE_MIN_COLUMNS}`,
+		};
+	}
+	const value = `${row.provider}/${row.model}`;
+	// A provider that spans two printed cells, or a model the reader has
+	// mis-cut: the value could never reach the agent as one argument cell,
+	// so the whole table is refused rather than half-offered.
+	if (/\s/.test(value)) {
+		return { value: "", unreadable: `a row's model value holds whitespace (${value})` };
+	}
+	return { value };
 }
 
 function unparseableModelTable(command: string, detail: string): ModelListResult {

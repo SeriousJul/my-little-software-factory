@@ -185,11 +185,10 @@ describe("the decision modal's pop-in", () => {
 				// the terminal's last column, and the settled frame is checked too.
 				// The poll runs faster than the pop-in's own 16 ms tick, so a
 				// painted frame is not replaced in the buffer before a read.
-				const settled = await awaitFrameChecking(
-					setup,
-					(f) => rowsOf(f).some((row) => row[WIDE - 2] === "┐"),
-					"the pop-in to finish",
-					(frame) => {
+				const settled = await awaitFrameChecking(setup, {
+					until: (f) => rowsOf(f).some((row) => row[WIDE - 2] === "┐"),
+					what: "the pop-in to finish",
+					check: (frame) => {
 						const rows = rowsOf(frame);
 						for (const [i, row] of rows.entries()) {
 							// Above the bar, the last column holds the overlay's
@@ -202,14 +201,12 @@ describe("the decision modal's pop-in", () => {
 						// The last row is the shared Action bar, not empty margin.
 						expect(rows[rows.length - 1]).toContain("Help");
 					},
-					5,
-				);
+					pollMs: 5,
+				});
 				// It opens at the bottom, where the conclusion sits.
 				expect(rowsOf(settled).some((row) => row.includes("352"))).toBe(true);
 			},
-			WIDE,
-			WIDE_HEIGHT,
-			{ initialTickets: [longLogTicket] },
+			{ width: WIDE, height: WIDE_HEIGHT, props: { initialTickets: [longLogTicket] } },
 		);
 	});
 });
@@ -238,9 +235,7 @@ describe("the decision modal's scrollbar", () => {
 					rgb(roleColor("subtext0")),
 				);
 			},
-			WIDTH,
-			HEIGHT,
-			{ initialTickets: [awaitingTicket] },
+			{ width: WIDTH, height: HEIGHT, props: { initialTickets: [awaitingTicket] } },
 		);
 	});
 
@@ -260,9 +255,7 @@ describe("the decision modal's scrollbar", () => {
 				// not a lone mark next to the left border.
 				expectPinnedScrollbar(frame);
 			},
-			WIDTH,
-			HEIGHT,
-			{ initialTickets: [awaitingTicket] },
+			{ width: WIDTH, height: HEIGHT, props: { initialTickets: [awaitingTicket] } },
 		);
 	});
 });
@@ -321,9 +314,7 @@ describe("the decision modal's nested border at the declared minimum", () => {
 				const bar = rows[MIN_HEIGHT - 1];
 				expect(bar).toContain("Select action");
 			},
-			MIN_WIDTH,
-			MIN_HEIGHT,
-			{ initialTickets: [awaitingTicket] },
+			{ width: MIN_WIDTH, height: MIN_HEIGHT, props: { initialTickets: [awaitingTicket] } },
 		);
 	});
 
@@ -350,9 +341,7 @@ describe("the decision modal's nested border at the declared minimum", () => {
 					f.includes("First I read the ticket"),
 				);
 			},
-			MIN_WIDTH,
-			MIN_HEIGHT,
-			{ initialTickets: [longLogTicket] },
+			{ width: MIN_WIDTH, height: MIN_HEIGHT, props: { initialTickets: [longLogTicket] } },
 		);
 	});
 });
@@ -464,9 +453,7 @@ describe("the decision modal's region and the log's floor", () => {
 				expect(rows[bottom + 2]).toContain("Goto");
 				expect(rows[bottom + 4].slice(0, 2)).toBe(" └");
 			},
-			FLOOR_WIDTH,
-			22,
-			{ initialTickets: [oneLineTicket] },
+			{ width: FLOOR_WIDTH, height: 22, props: { initialTickets: [oneLineTicket] } },
 		);
 	});
 
@@ -511,9 +498,7 @@ describe("the decision modal's region and the log's floor", () => {
 				);
 				expect(slid).toContain("❯ Handoff: fix");
 			},
-			FLOOR_WIDTH,
-			21,
-			{ initialTickets: [denseTicket] },
+			{ width: FLOOR_WIDTH, height: 21, props: { initialTickets: [denseTicket] } },
 		);
 	});
 
@@ -558,9 +543,11 @@ describe("the decision modal's region and the log's floor", () => {
 					expect(frame).toContain("❯ Close");
 					expect(frame).toContain("Goto");
 				},
-				FLOOR_WIDTH,
-				21,
-				{ initialTickets: [routedAt("running"), position] },
+				{
+					width: FLOOR_WIDTH,
+					height: 21,
+					props: { initialTickets: [routedAt("running"), position] },
+				},
 			);
 		});
 
@@ -574,9 +561,7 @@ describe("the decision modal's region and the log's floor", () => {
 					expect(frame).not.toContain("the route is running on its position ticket");
 					expect(frame).toContain("Handoff: fix");
 				},
-				FLOOR_WIDTH,
-				21,
-				{ initialTickets: [routedAt("open"), position] },
+				{ width: FLOOR_WIDTH, height: 21, props: { initialTickets: [routedAt("open"), position] } },
 			);
 		});
 	});
@@ -628,9 +613,7 @@ describe("the decision modal's region and the log's floor", () => {
 				);
 				expect(atRefire).toContain("3-3/3");
 			},
-			WIDTH,
-			HEIGHT,
-			{ initialTickets: [noFireTicket] },
+			{ width: WIDTH, height: HEIGHT, props: { initialTickets: [noFireTicket] } },
 		);
 	});
 
@@ -701,9 +684,7 @@ describe("the decision modal's region and the log's floor", () => {
 					expect(frame).not.toContain("Turn log");
 					expect(rowsOf(frame).slice(-1)[0]).toContain("Cancel");
 				},
-				FLOOR_WIDTH,
-				22,
-				{ initialTickets: [awaitingTicket] },
+				{ width: FLOOR_WIDTH, height: 22, props: { initialTickets: [awaitingTicket] } },
 			);
 		});
 	});
@@ -734,9 +715,7 @@ describe("the decision modal's region and the log's floor", () => {
 				expect(refusedRows[refusedBorders.bottom + 1]).toContain("❯ Close");
 				expect(refusedRows[refusedBorders.bottom + 2]).toContain("Goto");
 			},
-			FLOOR_WIDTH,
-			15,
-			{ initialTickets: [emptyLogTicket] },
+			{ width: FLOOR_WIDTH, height: 15, props: { initialTickets: [emptyLogTicket] } },
 		);
 	});
 });

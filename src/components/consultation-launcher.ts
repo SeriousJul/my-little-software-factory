@@ -35,7 +35,7 @@ import {
 	validateConsultationInput,
 } from "../consultation/response-draft.ts";
 import { utf8ByteLength } from "../text-bounds.ts";
-import { useControlDispatch } from "./control-dispatch.ts";
+import { type ControlHandler, useControlDispatch } from "./control-dispatch.ts";
 import type { InteractionMode, StandingFacts } from "./controls.ts";
 
 import type { MessageFact } from "./messages.ts";
@@ -126,26 +126,61 @@ function launcherColumns(contentWidth: number): { labelWidth: number; valueWidth
 	return { labelWidth, valueWidth: Math.max(1, contentWidth - labelWidth - MARKER_WIDTH) };
 }
 
-export function ConsultationLauncher({
-	types,
-	repositories,
-	draft,
-	title = "Consultation launcher",
-	onLaunch,
-	onClose,
-	onDiscard,
-	standing,
-	inputActive = true,
-	onHelp,
-	onMessage,
-	onUnavailable,
-	onCopy,
-	message,
-	onEmergencyExit,
-	onQueuePause,
-	onAutoHandoff,
-}: ConsultationLauncherProps) {
+export function ConsultationLauncher(props: ConsultationLauncherProps) {
 	const { width: terminalWidth, height: terminalHeight } = useTerminalDimensions();
+	const choices = useLauncherChoices(props.types, props.repositories, props.draft);
+	const form = useLauncherForm(props, choices);
+	const formFacts = launcherFormFacts(props, form);
+	const modeFacts = formFacts();
+	const frameFacts = useLauncherFrame({
+		draftSize: form.draftSize,
+		focus: form.focus,
+		inputActive: props.inputActive ?? true,
+		refusal: form.refusal,
+		terminalWidth,
+		terminalHeight,
+	});
+	useControlDispatch({
+		facts: formFacts,
+		active: props.inputActive,
+		onUnavailable: props.onUnavailable,
+		onEmergencyExit: props.onEmergencyExit,
+		// The arrows inside a Draft field belong to its caret, so only the
+		// selector and action slots let the form move.
+		handlers: launcherHandlers(props, { form, mode: modeFacts.mode }),
+	});
+
+	const rows = launcherRows(props, form, frameFacts);
+	const ink = controlInk();
+
+	return createElement(ModalSurface, {
+		frame: frameFacts.frame,
+		width: terminalWidth,
+		title: props.title ?? "Consultation launcher",
+		body: {
+			above: [],
+			below: [
+				...rows,
+				createElement(
+					"text",
+					{ key: "note", fg: ink.detail.fg ?? undefined },
+					truncateToWidth(RETENTION_NOTE, frameFacts.frame.contentWidth),
+				),
+			],
+			minRows: FIXED_ROWS + MINIMUM_DRAFT_ROWS,
+		},
+		message: props.message,
+		bar: { mode: modeFacts.mode, facts: modeFacts },
+		queuePaused: props.standing.queuePaused,
+	});
+}
+
+/** The launcher's two choices: the Consultation type, the Repository. */
+function useLauncherChoices(
+	types: Readonly<Record<string, ConsultationTypeConfig>>,
+	repositories: readonly ConsultationRepositoryOption[],
+	draft: LauncherDraft | null | undefined,
+) {
 	const names = Object.keys(types);
 	const typeChoice = useChoice(names, draft?.typeName);
 	const repositoryChoice = useChoice(
@@ -156,6 +191,16 @@ export function ConsultationLauncher({
 			(item) => item.identity.toLowerCase() === (draft?.repositoryIdentity ?? "").toLowerCase(),
 		),
 	);
+	return { names, typeChoice, repositoryChoice };
+}
+
+/** The launcher's form: the slots, the draft's bytes, the send rules. */
+function useLauncherForm(
+	props: ConsultationLauncherProps,
+	choices: ReturnType<typeof useLauncherChoices>,
+) {
+	const { names, typeChoice, repositoryChoice } = choices;
+	const { repositories, draft, onLaunch } = props;
 	const inputRef = useRef(draft?.input ?? "");
 	const selectionRef = useRef(false);
 	const field = useRef<FieldHandle | null>(null);
@@ -191,64 +236,93 @@ export function ConsultationLauncher({
 		if (typeName === undefined || repository === undefined) return;
 		onLaunch(typeName, repository, formOf().input);
 	};
+	return {
+		names,
+		repositories,
+		draftSize,
+		setDraftSize,
+		inputRef,
+		selectionRef,
+		field,
+		focus,
+		currentType,
+		currentRepository,
+		formOf,
+		cycle,
+		refusal,
+		launch,
+	};
+}
 
-	const moveField = moveFieldWith(focus);
-	// The form module states the slot facts: which slot holds the focus, and
-	// the cycle count and the refusal this launcher owns. The record names the
-	// mode the focused slot owns, so a Tab in the same tick as another key
-	// still gates on the slot it landed on.
-	const formFacts = () =>
-		focus.facts(standing, {
-			fieldHasSelection: selectionRef.current,
-			formCycleCount: focus.holds("type")
-				? names.length
-				: focus.holds("repository")
-					? repositories.length
+/** The form module's slot facts: the cycle count, the refusal. */
+function launcherFormFacts(
+	props: ConsultationLauncherProps,
+	form: ReturnType<typeof useLauncherForm>,
+): () => ReturnType<FormFocus["facts"]> {
+	return () =>
+		form.focus.facts(props.standing, {
+			fieldHasSelection: form.selectionRef.current,
+			formCycleCount: form.focus.holds("type")
+				? form.names.length
+				: form.focus.holds("repository")
+					? form.repositories.length
 					: undefined,
-			formRefusal: focus.holds("launch") ? refusal() : undefined,
+			formRefusal: form.focus.holds("launch") ? form.refusal() : undefined,
 		});
-	const formModeFacts = formFacts();
-	useControlDispatch({
-		facts: formFacts,
-		active: inputActive,
-		onUnavailable,
-		onEmergencyExit,
-		// The arrows inside a Draft field belong to its caret, so only the
-		// selector and action slots let the form move.
-		handlers: {
-			"move-field": ({ key }) => {
-				moveField(key.name, key.shift === true);
-				key.preventDefault?.();
-			},
-			"cycle-choice": ({ key }) => {
-				cycle(key.name === "left" ? -1 : 1);
-				key.preventDefault?.();
-			},
-			"confirm-choice": ({ key }) => {
-				const slot = focus.current();
-				// Enter on the Draft field belongs to the field, and its action only
-				// runs from the row that names it.
-				key.preventDefault?.();
-				if (slot?.id === "launch") launch();
-				else if (slot?.id === "discard") onDiscard();
-			},
-			"copy-selection": copySelectionWith(() => field.current, onCopy),
-			"close-form": ({ key }) => {
-				key.preventDefault?.();
-				onClose(formOf());
-			},
-			help: () => onHelp?.(formModeFacts.mode),
-			message: () => onMessage?.(formModeFacts.mode),
-			// The plane-level keys reach the form's rows too (issue #319,
-			// ADR 0111), on the F4 and F5 aliases the field modes carry: the
-			// letters would type into the Draft field, the F-keys do not.
-			"queue-pause": onQueuePause,
-			"auto-handoff": onAutoHandoff,
-		},
-	});
+}
 
-	const ink = controlInk();
-	const bytes = utf8ByteLength(draftSize);
+/** The launcher's control catalogue handlers. */
+function launcherHandlers(
+	props: ConsultationLauncherProps,
+	fields: {
+		form: ReturnType<typeof useLauncherForm>;
+		mode: ReturnType<FormFocus["facts"]>["mode"];
+	},
+): Record<string, ControlHandler> {
+	const { form, mode } = fields;
+	const moveField = moveFieldWith(form.focus);
+	return {
+		"move-field": ({ key }) => {
+			moveField(key.name, key.shift === true);
+			key.preventDefault?.();
+		},
+		"cycle-choice": ({ key }) => {
+			form.cycle(key.name === "left" ? -1 : 1);
+			key.preventDefault?.();
+		},
+		"confirm-choice": ({ key }) => {
+			const slot = form.focus.current();
+			// Enter on the Draft field belongs to the field, and its action only
+			// runs from the row that names it.
+			key.preventDefault?.();
+			if (slot?.id === "launch") form.launch();
+			else if (slot?.id === "discard") props.onDiscard();
+		},
+		"copy-selection": copySelectionWith(() => form.field.current, props.onCopy),
+		"close-form": ({ key }) => {
+			key.preventDefault?.();
+			props.onClose(form.formOf());
+		},
+		help: () => props.onHelp?.(mode),
+		message: () => props.onMessage?.(mode),
+		// The plane-level keys reach the form's rows too (issue #319,
+		// ADR 0111), on the F4 and F5 aliases the field modes carry: the
+		// letters would type into the Draft field, the F-keys do not.
+		"queue-pause": props.onQueuePause,
+		"auto-handoff": props.onAutoHandoff,
+	};
+}
+
+/** The launcher's box: the rows the reasons add, the columns, the draft height. */
+function useLauncherFrame(fields: {
+	draftSize: string;
+	focus: FormFocus;
+	inputActive: boolean;
+	refusal: () => string | undefined;
+	terminalWidth: number;
+	terminalHeight: number;
+}) {
+	const { draftSize, focus, inputActive, refusal, terminalWidth, terminalHeight } = fields;
 	// The rows are counted before the box is sized, because a surface is handed
 	// no more rows than it holds: a written reason that pushed the box past its
 	// own height would paint through the border instead of explaining anything.
@@ -265,12 +339,36 @@ export function ConsultationLauncher({
 	});
 	const columns = launcherColumns(frame.contentWidth);
 	const draftHeight = Math.max(MINIMUM_DRAFT_ROWS, frame.contentRows - FIXED_ROWS - noteRows);
-	const rows: ReactElement[] = [
+	return { frame, columns, draftHeight, draftError, actionError };
+}
+
+/** The launcher's rows: the choices, the draft, the actions. */
+function launcherRows(
+	props: ConsultationLauncherProps,
+	form: ReturnType<typeof useLauncherForm>,
+	frameFacts: ReturnType<typeof useLauncherFrame>,
+): ReactElement[] {
+	const { frame, columns, draftHeight, draftError, actionError } = frameFacts;
+	const inputActive = props.inputActive ?? true;
+	return [
+		...launcherChoiceRows(form, columns, inputActive),
+		launcherDraftRow({ props, form, columns, draftHeight, draftError, inputActive }),
+		launcherActionRows(form, frame, actionError, inputActive),
+	];
+}
+
+/** The two selector rows: the Consultation type, the Repository. */
+function launcherChoiceRows(
+	form: ReturnType<typeof useLauncherForm>,
+	columns: ReturnType<typeof launcherColumns>,
+	inputActive: boolean,
+): ReactElement[] {
+	return [
 		createElement(ChoiceRow, {
 			key: "type",
 			label: "Type",
-			value: currentType() ?? "",
-			focused: focus.paints("type") && inputActive,
+			value: form.currentType() ?? "",
+			focused: form.focus.paints("type") && inputActive,
 			width: columns.valueWidth,
 			labelWidth: columns.labelWidth,
 			placeholder: "(none)",
@@ -278,69 +376,70 @@ export function ConsultationLauncher({
 		createElement(ChoiceRow, {
 			key: "repository",
 			label: "Repository",
-			value: currentRepository()?.displayName ?? "",
-			focused: focus.paints("repository") && inputActive,
+			value: form.currentRepository()?.displayName ?? "",
+			focused: form.focus.paints("repository") && inputActive,
 			width: columns.valueWidth,
 			labelWidth: columns.labelWidth,
 			placeholder: STATE_WORDS.unavailable,
 		}),
-		createElement(DraftField, {
-			key: "input",
-			label: "Initial input",
-			value: draft?.input ?? "",
-			focused: focus.paints("input") && inputActive,
-			inputActive,
-			width: columns.valueWidth,
-			labelWidth: columns.labelWidth,
-			height: draftHeight,
-			fieldRef: field,
-			hint: `UTF-8 bytes: ${bytes}/${CONSULTATION_INPUT_LIMIT}`,
-			// The size reason belongs on the field, because the field is where the
-			// oversized text is: the text stays editable so the operator can shorten
-			// it. An empty draft is the Launch action's news, not the field's.
-			oversize: () => draftError ?? null,
-			onValueChange: (facts) => {
-				inputRef.current = facts.value;
-				selectionRef.current = facts.selection !== "";
-				setDraftSize(facts.value);
-			},
-			onRefuse: (reason: string) => onUnavailable?.(reason),
-		}),
-		createElement(
-			"box",
-			{ key: "actions", style: { flexDirection: "column" } },
-			createElement(ActionItem, {
-				row: { key: "launch", label: "Launch Consultation" } satisfies ActionRow,
-				focused: focus.paints("launch") && inputActive,
-				width: frame.contentWidth,
-				refusal: actionError ?? null,
-			}),
-			createElement(ActionItem, {
-				row: { key: "discard", label: "Discard draft text" } satisfies ActionRow,
-				focused: focus.paints("discard") && inputActive,
-				width: frame.contentWidth,
-			}),
-		),
 	];
+}
 
-	return createElement(ModalSurface, {
-		frame,
-		width: terminalWidth,
-		title,
-		body: {
-			above: [],
-			below: [
-				...rows,
-				createElement(
-					"text",
-					{ key: "note", fg: ink.detail.fg ?? undefined },
-					truncateToWidth(RETENTION_NOTE, frame.contentWidth),
-				),
-			],
-			minRows: FIXED_ROWS + MINIMUM_DRAFT_ROWS,
+/** The Draft field row, with its size reason and its selection. */
+function launcherDraftRow(fields: {
+	props: ConsultationLauncherProps;
+	form: ReturnType<typeof useLauncherForm>;
+	columns: ReturnType<typeof launcherColumns>;
+	draftHeight: number;
+	draftError: string | undefined;
+	inputActive: boolean;
+}): ReactElement {
+	const { props, form, columns, draftHeight, draftError, inputActive } = fields;
+	const bytes = utf8ByteLength(form.draftSize);
+	return createElement(DraftField, {
+		key: "input",
+		label: "Initial input",
+		value: props.draft?.input ?? "",
+		focused: form.focus.paints("input") && inputActive,
+		inputActive,
+		width: columns.valueWidth,
+		labelWidth: columns.labelWidth,
+		height: draftHeight,
+		fieldRef: form.field,
+		hint: `UTF-8 bytes: ${bytes}/${CONSULTATION_INPUT_LIMIT}`,
+		// The size reason belongs on the field, because the field is where the
+		// oversized text is: the text stays editable so the operator can shorten
+		// it. An empty draft is the Launch action's news, not the field's.
+		oversize: () => draftError ?? null,
+		onValueChange: (facts) => {
+			form.inputRef.current = facts.value;
+			form.selectionRef.current = facts.selection !== "";
+			form.setDraftSize(facts.value);
 		},
-		message,
-		bar: { mode: formModeFacts.mode, facts: formModeFacts },
-		queuePaused: standing.queuePaused,
+		onRefuse: (reason: string) => props.onUnavailable?.(reason),
 	});
+}
+
+/** The two action rows: the launch, the discard. */
+function launcherActionRows(
+	form: ReturnType<typeof useLauncherForm>,
+	frame: ReturnType<typeof modalFrame>,
+	actionError: string | undefined,
+	inputActive: boolean,
+): ReactElement {
+	return createElement(
+		"box",
+		{ key: "actions", style: { flexDirection: "column" } },
+		createElement(ActionItem, {
+			row: { key: "launch", label: "Launch Consultation" } satisfies ActionRow,
+			focused: form.focus.paints("launch") && inputActive,
+			width: frame.contentWidth,
+			refusal: actionError ?? null,
+		}),
+		createElement(ActionItem, {
+			row: { key: "discard", label: "Discard draft text" } satisfies ActionRow,
+			focused: form.focus.paints("discard") && inputActive,
+			width: frame.contentWidth,
+		}),
+	);
 }

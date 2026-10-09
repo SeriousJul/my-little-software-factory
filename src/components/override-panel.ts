@@ -99,7 +99,7 @@ import {
 	type UnfitVerdict,
 } from "../setting-fit.ts";
 import type { TaskProfileStart } from "../setting-resolution.ts";
-import { useControlDispatch } from "./control-dispatch.ts";
+import { type ControlHandler, useControlDispatch } from "./control-dispatch.ts";
 import { type AvailabilityFacts, availabilityFacts, type StandingFacts } from "./controls.ts";
 import type { MessageFact } from "./messages.ts";
 import { MARKER_WIDTH, ModalSurface, modalFrame } from "./modal-chrome.ts";
@@ -346,34 +346,119 @@ export function panelNoteCells(width: number, height: number): number {
 	return panelGeometry(frame.contentWidth, frame.contentRows).noteWidth;
 }
 
-export function OverridePanel({
-	agents,
-	environments,
-	taskTypes,
-	profiles,
-	modelList,
-	onAgentChange,
-	initial,
-	onConfirm,
-	onCancel,
-	taskPlacements,
-	planeActionTaskTypes,
-	standing,
-	inputActive = true,
-	onHelp,
-	onMessage,
-	onUnavailable,
-	onCopy,
-	message,
-	onEmergencyExit,
-	onQueuePause,
-	onAutoHandoff,
-}: OverridePanelProps) {
+export function OverridePanel(props: OverridePanelProps) {
 	const { width: terminalWidth, height: terminalHeight } = useTerminalDimensions();
-	const [choice, setChoice] = useState<HandoffChoice>({ ...initial });
+	const choiceState = useOverrideChoice(props.initial, props.onAgentChange, props.profiles);
+	const fieldRefs = useOverrideFieldRefs();
+	const rowsForChoice = (value: HandoffChoice): PanelRow[] =>
+		rowsFor(value, overrideSurface(props, value));
+	const allRows = rowsForChoice(choiceState.choice);
 	// The shared form route owns the selected row. Its ref keeps two keys in one
 	// renderer tick on the row the first key reached, while its state repaints
 	// the viewport around that row.
+	const focus = useFormSlots(
+		allRows.map((item, index) => ({
+			id: `${item.key}-${index}`,
+			kind:
+				item.kind === "text" || item.kind === "type-ahead"
+					? ("field" as const)
+					: ("selector" as const),
+			label: item.label,
+		})),
+	);
+	const cursor = useOverrideCursor(focus, fieldRefs, choiceState.choiceRef, rowsForChoice);
+	const edits = useOverrideEdits(choiceState, cursor, fieldRefs);
+	const viewport = useOverrideViewport(terminalWidth, terminalHeight, focus.at, allRows);
+	const panelFacts = overridePanelFacts(props, cursor);
+	useControlDispatch({
+		// The Copy control is gated on a fact only this panel knows, so the
+		// panel states it and the catalogue decides. The record names the mode
+		// the cursor's row owns, and one key can move that cursor.
+		facts: () => panelFacts(cursor.currentMode()),
+		active: props.inputActive,
+		// The Ctrl combos the catalogue does not name (undo, redo, word
+		// movement and word delete) belong to the focused field. Ctrl+C stays
+		// the emergency exit whatever a field holds.
+		skip: (key) => key.ctrl === true && key.name !== "c",
+		onUnavailable: props.onUnavailable,
+		onEmergencyExit: props.onEmergencyExit,
+		handlers: overridePanelHandlers(props, {
+			focus,
+			cursor,
+			edits,
+			choiceRef: choiceState.choiceRef,
+		}),
+	});
+	const mode = cursor.currentMode();
+	return createElement(ModalSurface, {
+		frame: viewport.frame,
+		width: terminalWidth,
+		title: "Override",
+		body: {
+			above: [],
+			below: overridePanelRows(props, {
+				choice: choiceState.choice,
+				viewport,
+				cursor,
+				fieldRefs,
+				edits,
+			}),
+			// One row is enough to be a panel: the rows that do not fit scroll.
+			minRows: 1,
+		},
+		message: props.message,
+		bar: { mode, facts: panelFacts(mode) },
+		queuePaused: props.standing.queuePaused,
+	});
+}
+
+type OverrideChoice = ReturnType<typeof useOverrideChoice>;
+type OverrideCursor = ReturnType<typeof useOverrideCursor>;
+type OverrideViewport = ReturnType<typeof useOverrideViewport>;
+type OverrideEdits = ReturnType<typeof useOverrideEdits>;
+type OverridePanelFacts = (mode: OverrideMode) => AvailabilityFacts;
+
+/**
+ * The facts the catalogue gates on, stated by the row the cursor is on. The
+ * panel owns one fact: the field's own selection, which the Copy control
+ * reads. The list's step and the Handoff's state rule belong to the plane,
+ * so the panel states nothing it does not own.
+ */
+function overridePanelFacts(props: OverridePanelProps, cursor: OverrideCursor): OverridePanelFacts {
+	return (mode) =>
+		mode === "override-list"
+			? availabilityFacts("override-list", props.standing, {})
+			: mode === "override-model"
+				? availabilityFacts("override-model", props.standing, {
+						fieldHasSelection: cursor.hasSelection,
+					})
+				: availabilityFacts("override-text", props.standing, {
+						fieldHasSelection: cursor.hasSelection,
+					});
+}
+
+/** The surface facts the panel's rows read for the choice. */
+function overrideSurface(props: OverridePanelProps, value: HandoffChoice): PanelSurface {
+	return {
+		agents: props.agents,
+		environments: props.environments,
+		taskTypes: props.taskTypes,
+		modelStatus: listFor(value, props.modelList),
+		taskPlacements: props.taskPlacements,
+		planeActionTaskTypes: props.planeActionTaskTypes,
+	};
+}
+
+/**
+ * The panel's choice: its value, the ref the keys read, the operator's
+ * touches, and the commit that moves them.
+ */
+function useOverrideChoice(
+	initial: HandoffChoice,
+	onAgentChange: (agentType: string) => void,
+	profiles: Readonly<Record<string, TaskProfileStart>>,
+) {
+	const [choice, setChoice] = useState<HandoffChoice>({ ...initial });
 	const choiceRef = useRef<HandoffChoice>(choice);
 	// An untouched Task-profile setting follows a Task type change. Once an
 	// operator changes or clears it, their one-shot override stays in force.
@@ -386,6 +471,43 @@ export function OverridePanel({
 		thinking: false,
 		contextWindow: false,
 	});
+	/** Move to another agent: its Model list is the one the row must offer. */
+	const selectAgent = (next: HandoffChoice, previous: HandoffChoice) => {
+		if (next.agentType !== previous.agentType) onAgentChange(next.agentType);
+	};
+	const commit = (update: (current: HandoffChoice) => HandoffChoice) => {
+		const previous = choiceRef.current;
+		choiceRef.current = update(previous);
+		setChoice(choiceRef.current);
+		selectAgent(choiceRef.current, previous);
+	};
+	/**
+	 * The rows a task type switch re-derives: every setting the operator has
+	 * not touched, from the new task type's profile (ADR 0009). A touched row
+	 * keeps the operator's value.
+	 */
+	const reDerive = (current: HandoffChoice, taskType: string): HandoffChoice => {
+		const profile = profiles[taskType];
+		if (profile === undefined) return { ...current, taskType };
+		const touched = touchedRef.current;
+		return {
+			...current,
+			taskType,
+			agentType: touched.agentType ? current.agentType : profile.agentType,
+			model: touched.model ? current.model : profile.model,
+			thinking: touched.thinking ? current.thinking : profile.thinking,
+			contextWindow: touched.contextWindow ? current.contextWindow : profile.contextWindow,
+		};
+	};
+	/** Record that the operator set one of the rows a task type switch re-derives. */
+	const touch = (key: DerivedKey) => {
+		touchedRef.current[key] = true;
+	};
+	return { choice, choiceRef, commit, touch, reDerive };
+}
+
+/** The panel's field handles: the text fields, the Model search. */
+function useOverrideFieldRefs() {
 	// The Model row's visible search. The shared row owns its text; this handle
 	// is only how the panel's explicit clear key reaches it.
 	const typeAhead = useRef<TypeAheadHandle | null>(null);
@@ -397,54 +519,31 @@ export function OverridePanel({
 		contextWindow: useRef<FieldHandle | null>(null),
 	};
 	const searchField = useRef<FieldHandle | null>(null);
-	// Whether the field under the cursor holds a selection the Copy control can
-	// hand over. The frame reads it, and the field reports it on every change.
-	const [hasSelection, setHasSelection] = useState(false);
+	return { typeAhead, fields, searchField };
+}
 
-	const rowsForChoice = (value: HandoffChoice): PanelRow[] =>
-		rowsFor(
-			value,
-			agents,
-			environments,
-			taskTypes,
-			listFor(value, modelList),
-			taskPlacements,
-			planeActionTaskTypes,
-		);
-	const allRows = rowsForChoice(choice);
-	const focus = useFormSlots(
-		allRows.map((item, index) => ({
-			id: `${item.key}-${index}`,
-			kind:
-				item.kind === "text" || item.kind === "type-ahead"
-					? ("field" as const)
-					: ("selector" as const),
-			label: item.label,
-		})),
-	);
-	const selected = focus.at;
+/** The viewport: the frame, the rows it holds, the selected row. */
+function useOverrideViewport(
+	terminalWidth: number,
+	terminalHeight: number,
+	selected: number,
+	allRows: readonly PanelRow[],
+) {
 	// The Type-ahead row draws its search under its value, and a row that
 	// carries a Setting fit reason draws that sentence under itself, so a row
 	// takes the rows it paints. The panel counts them, because a surface is
 	// handed no more rows than it holds and a row that overflowed would paint
 	// through the row below it.
 	const spans = allRows.map((r) => rowCells(r));
-
 	const rowSpan = (index: number): number => spans[index] ?? 1;
 	const totalRows = spans.reduce((sum, span) => sum + span, 0);
 	// The shared chrome sizes the box: the terminal's rows above the Action
 	// bar, or the rows the panel needs, whichever are fewer. The panel spans
 	// the terminal edge to edge, so its value column keeps every cell it can.
-	const frame = modalFrame(terminalWidth, terminalHeight, {
-		rows: totalRows,
-		margin: 0,
-	});
+	const frame = modalFrame(terminalWidth, terminalHeight, { rows: totalRows, margin: 0 });
 	const geometry = panelGeometry(frame.contentWidth, frame.contentRows);
 	// Switching the agent can hide the rows below the selection; clamp it.
 	const safeSelected = Math.min(selected, allRows.length - 1);
-	// The rows the terminal height holds, scrolled to keep the selected row on
-	// screen. A short terminal scrolls the viewport; a row never wraps, and a
-	// two-row row is moved whole.
 	const startAt = (index: number): number =>
 		spans.slice(0, index).reduce((sum, span) => sum + span, 0);
 	// The first row the viewport shows: the earliest one that still leaves the
@@ -464,16 +563,16 @@ export function OverridePanel({
 	}
 	const rows = allRows.slice(start, Math.max(start + 1, end));
 	const row = rows[Math.max(0, safeSelected - start)];
-	/** Move to another agent: its Model list is the one the row must offer. */
-	const selectAgent = (next: HandoffChoice, previous: HandoffChoice) => {
-		if (next.agentType !== previous.agentType) onAgentChange(next.agentType);
-	};
-	const commit = (update: (current: HandoffChoice) => HandoffChoice) => {
-		const previous = choiceRef.current;
-		choiceRef.current = update(previous);
-		setChoice(choiceRef.current);
-		selectAgent(choiceRef.current, previous);
-	};
+	return { frame, geometry, rows, row, safeSelected };
+}
+
+/** The cursor: the row under it, its field, its selection, its mode. */
+function useOverrideCursor(
+	focus: ReturnType<typeof useFormSlots>,
+	fieldRefs: ReturnType<typeof useOverrideFieldRefs>,
+	choiceRef: RefObject<HandoffChoice>,
+	rowsForChoice: (value: HandoffChoice) => PanelRow[],
+) {
 	// The row under the cursor, clamped the way the render clamps it.
 	const cursorRow = (): PanelRow => {
 		const all = rowsForChoice(choiceRef.current);
@@ -481,47 +580,46 @@ export function OverridePanel({
 	};
 	const activeField = (): FieldHandle | null => {
 		const target = cursorRow();
-		if (target.kind === "type-ahead") return searchField.current;
-		if (target.kind === "text") return fields[target.key as TextKey]?.current ?? null;
+		if (target.kind === "type-ahead") return fieldRefs.searchField.current;
+		if (target.kind === "text") return fieldRefs.fields[target.key as TextKey]?.current ?? null;
 		return null;
 	};
 	// A selection belongs to the focused field only. Re-read it after the shared
 	// route moves focus so an old selection cannot keep F3 on the Action bar.
+	const [hasSelection, setHasSelection] = useState(false);
 	// biome-ignore lint/correctness/useExhaustiveDependencies: activeField is derived from the focused row and stable refs
 	useEffect(() => {
 		setHasSelection(activeField()?.hasSelection() === true);
 	}, [focus.at]);
-	/**
-	 * The rows a task type switch re-derives: every setting the operator has
-	 * not touched, from the new task type's profile (ADR 0009). A touched row
-	 * keeps the operator's value.
-	 */
-	const reDerive = (current: HandoffChoice, taskType: string): HandoffChoice => {
-		const profile = profiles[taskType];
-		if (profile === undefined) return { ...current, taskType };
-		const touched = touchedRef.current;
-		return {
-			...current,
-			taskType,
-			agentType: touched.agentType ? current.agentType : profile.agentType,
-			model: touched.model ? current.model : profile.model,
-			thinking: touched.thinking ? current.thinking : profile.thinking,
-			contextWindow: touched.contextWindow ? current.contextWindow : profile.contextWindow,
-		};
+	// The panel's mode follows the row the cursor is on, so it is read at key
+	// time: one key can move the cursor, and the next belongs to the new row.
+	const currentMode = (): OverrideMode => {
+		const target = cursorRow();
+		if (target.kind === "text") return "override-text";
+		if (target.kind === "type-ahead") return "override-model";
+		return "override-list";
 	};
+	return { cursorRow, activeField, hasSelection, setHasSelection, currentMode };
+}
+
+/** The edits: the list's step and clear, the search's clear, the field's change. */
+function useOverrideEdits(
+	choiceState: OverrideChoice,
+	cursor: OverrideCursor,
+	fieldRefs: ReturnType<typeof useOverrideFieldRefs>,
+) {
+	const { commit, touch, reDerive } = choiceState;
+	const { typeAhead } = fieldRefs;
+	const cursorRow = cursor.cursorRow;
 	const cycle = (delta: number) => {
 		const target = cursorRow();
 		if (target.kind !== "list" || target.options === undefined) return;
-		const next = cycleChoice(target.options, choiceRef.current[target.key], delta);
+		const next = cycleChoice(target.options, choiceState.choiceRef.current[target.key], delta);
 		if (next === undefined) return;
 		if (target.key !== "environment" && target.key !== "taskType") touch(target.key);
 		commit((current) =>
 			target.key === "taskType" ? reDerive(current, next) : { ...current, [target.key]: next },
 		);
-	};
-	/** Record that the operator set one of the rows a task type switch re-derives. */
-	const touch = (key: DerivedKey) => {
-		touchedRef.current[key] = true;
 	};
 	/** Backspace or Delete on a list row: leave that setting to the agent. */
 	const clearRow = () => {
@@ -539,7 +637,7 @@ export function OverridePanel({
 		if (typeAhead.current === null) return;
 		if (typeAhead.current.query() !== "") {
 			typeAhead.current.clear();
-			setHasSelection(false);
+			cursor.setHasSelection(false);
 			return;
 		}
 		// With no query left to remove, the same key gives the Model back to the
@@ -549,118 +647,101 @@ export function OverridePanel({
 	};
 	/** One shared field's change: mirror the value into the panel's choice. */
 	const fieldChanged = (key: TextKey) => (facts: FieldFacts) => {
-		if (choiceRef.current[key] === facts.value) return;
+		if (choiceState.choiceRef.current[key] === facts.value) return;
 		touch(key);
 		commit((current) => ({ ...current, [key]: facts.value }));
 	};
 	/** One Type-ahead search's change: the value follows the first match. */
 	const searchChanged = (_query: string, match: TypeAheadMatch, facts: FieldFacts) => {
-		setHasSelection(facts.selection !== "");
-		if (match.first === undefined || choiceRef.current.model === match.first) return;
+		cursor.setHasSelection(facts.selection !== "");
+		if (match.first === undefined || choiceState.choiceRef.current.model === match.first) return;
 		touch("model");
 		commit((current) => ({ ...current, model: match.first as string }));
 	};
-	// The panel's mode follows the row the cursor is on, so it is read at key
-	// time: one key can move the cursor, and the next belongs to the new row.
-	const currentMode = (): OverrideMode => {
-		const target = cursorRow();
-		if (target.kind === "text") return "override-text";
-		if (target.kind === "type-ahead") return "override-model";
-		return "override-list";
+	return { cycle, clearRow, clearSearch, fieldChanged, searchChanged };
+}
+
+/** The panel's control catalogue handlers. */
+function overridePanelHandlers(
+	props: OverridePanelProps,
+	fields: {
+		focus: ReturnType<typeof useFormSlots>;
+		cursor: OverrideCursor;
+		edits: OverrideEdits;
+		choiceRef: RefObject<HandoffChoice>;
+	},
+): Record<string, ControlHandler> {
+	const { focus, cursor, edits, choiceRef } = fields;
+	return {
+		"move-list": ({ key }) => {
+			// The shared form route owns Tab and row movement. A selection is
+			// only current while its field still owns the focus.
+			focus.move(
+				key.name === "up" || key.name === "k" || (key.name === "tab" && key.shift) ? -1 : 1,
+			);
+			cursor.setHasSelection(false);
+			key.preventDefault?.();
+		},
+		"change-override": ({ key }) => {
+			edits.cycle(key.name === "left" || key.name === "h" ? -1 : 1);
+			key.preventDefault?.();
+		},
+		handoff: ({ key }) => {
+			props.onConfirm(choiceRef.current);
+			key.preventDefault?.();
+		},
+		"clear-override": ({ key }) => {
+			edits.clearRow();
+			key.preventDefault?.();
+		},
+		"clear-search": ({ key }) => {
+			edits.clearSearch();
+			// The search field would otherwise delete a character with the same
+			// key that clears the whole query.
+			key.preventDefault?.();
+		},
+		"copy-selection": copySelectionWith(() => cursor.activeField(), props.onCopy),
+		cancel: ({ key }) => {
+			props.onCancel();
+			key.preventDefault?.();
+		},
+		help: () => props.onHelp?.(cursor.currentMode()),
+		message: () => props.onMessage?.(cursor.currentMode()),
+		// The plane-level keys reach the panel's rows too (issue #319,
+		// ADR 0111), on the F4 and F5 aliases the field modes carry: the
+		// letters would type into a row, the F-keys do not.
+		"queue-pause": props.onQueuePause,
+		"auto-handoff": props.onAutoHandoff,
 	};
-	// The facts the catalogue gates on, stated by the row the cursor is on. The
-	// panel owns one fact: the field's own selection, which the Copy control
-	// reads. The list's step and the Handoff's state rule belong to the plane,
-	// so the panel states nothing it does not own.
-	const panelFacts = (mode: OverrideMode): AvailabilityFacts =>
-		mode === "override-list"
-			? availabilityFacts("override-list", standing, {})
-			: mode === "override-model"
-				? availabilityFacts("override-model", standing, { fieldHasSelection: hasSelection })
-				: availabilityFacts("override-text", standing, { fieldHasSelection: hasSelection });
-	useControlDispatch({
-		// The Copy control is gated on a fact only this panel knows, so the
-		// panel states it and the catalogue decides. The record names the mode
-		// the cursor's row owns, and one key can move that cursor.
-		facts: () => panelFacts(currentMode()),
-		active: inputActive,
-		// The Ctrl combos the catalogue does not name (undo, redo, word
-		// movement and word delete) belong to the focused field. Ctrl+C stays
-		// the emergency exit whatever a field holds.
-		skip: (key) => key.ctrl === true && key.name !== "c",
-		onUnavailable,
-		onEmergencyExit,
-		handlers: {
-			"move-list": ({ key }) => {
-				// The shared form route owns Tab and row movement. A selection is
-				// only current while its field still owns the focus.
-				focus.move(
-					key.name === "up" || key.name === "k" || (key.name === "tab" && key.shift) ? -1 : 1,
-				);
-				setHasSelection(false);
-				key.preventDefault?.();
-			},
-			"change-override": ({ key }) => {
-				cycle(key.name === "left" || key.name === "h" ? -1 : 1);
-				key.preventDefault?.();
-			},
-			handoff: ({ key }) => {
-				onConfirm(choiceRef.current);
-				key.preventDefault?.();
-			},
-			"clear-override": ({ key }) => {
-				clearRow();
-				key.preventDefault?.();
-			},
-			"clear-search": ({ key }) => {
-				clearSearch();
-				// The search field would otherwise delete a character with the same
-				// key that clears the whole query.
-				key.preventDefault?.();
-			},
-			"copy-selection": copySelectionWith(() => activeField(), onCopy),
-			cancel: ({ key }) => {
-				onCancel();
-				key.preventDefault?.();
-			},
-			help: () => onHelp?.(currentMode()),
-			message: () => onMessage?.(currentMode()),
-			// The plane-level keys reach the panel's rows too (issue #319,
-			// ADR 0111), on the F4 and F5 aliases the field modes carry: the
-			// letters would type into a row, the F-keys do not.
-			"queue-pause": onQueuePause,
-			"auto-handoff": onAutoHandoff,
-		},
-	});
-	const mode = currentMode();
-	return createElement(ModalSurface, {
-		frame,
-		width: terminalWidth,
-		title: "Override",
-		body: {
-			above: [],
-			below: rows.map((r) =>
-				rowElement(
-					r,
-					choice[r.key],
-					r.key === row.key,
-					geometry,
-					inputActive,
-					fieldChanged,
-					searchChanged,
-					typeAhead,
-					fields,
-					searchField,
-					setHasSelection,
-				),
-			),
-			// One row is enough to be a panel: the rows that do not fit scroll.
-			minRows: 1,
-		},
-		message,
-		bar: { mode, facts: panelFacts(mode) },
-		queuePaused: standing.queuePaused,
-	});
+}
+
+/** The rows the viewport paints, each with the surface its row reads. */
+function overridePanelRows(
+	props: OverridePanelProps,
+	fields: {
+		choice: HandoffChoice;
+		viewport: OverrideViewport;
+		cursor: OverrideCursor;
+		fieldRefs: ReturnType<typeof useOverrideFieldRefs>;
+		edits: OverrideEdits;
+	},
+): ReactElement[] {
+	const { choice, viewport, cursor, fieldRefs, edits } = fields;
+	const { geometry, rows, row } = viewport;
+	return rows.map((r) =>
+		rowElement(r, {
+			value: choice[r.key],
+			selected: r.key === row.key,
+			geometry,
+			inputActive: props.inputActive ?? true,
+			fieldChanged: edits.fieldChanged,
+			searchChanged: edits.searchChanged,
+			typeAhead: fieldRefs.typeAhead,
+			fields: fieldRefs.fields,
+			searchField: fieldRefs.searchField,
+			reportSelection: cursor.setHasSelection,
+		}),
+	);
 }
 
 /**
@@ -685,16 +766,18 @@ function rowCells(row: PanelRow): number {
 	);
 }
 
+/** The facts the row builders read for the choice the panel holds. */
+type PanelSurface = {
+	agents: Readonly<Record<string, AgentTypeConfig>>;
+	environments: readonly string[];
+	taskTypes: readonly string[];
+	modelStatus: ModelListStatus;
+	taskPlacements: Record<string, PlacementEvaluation> | undefined;
+	planeActionTaskTypes: readonly string[] | undefined;
+};
+
 /** The rows the panel offers for the current choice, in order. */
-function rowsFor(
-	choice: HandoffChoice,
-	agents: Readonly<Record<string, AgentTypeConfig>>,
-	environments: readonly string[],
-	taskTypes: readonly string[],
-	modelStatus: ModelListStatus,
-	taskPlacements: Record<string, PlacementEvaluation> | undefined,
-	planeActionTaskTypes: readonly string[] | undefined,
-): PanelRow[] {
+function rowsFor(choice: HandoffChoice, surface: PanelSurface): PanelRow[] {
 	// An Agent type the config no longer names reads as one that maps nothing:
 	// every value the choice carries then shows in its warning row, where the
 	// operator can clear it. The record is gone, so its runtime kind is not
@@ -702,15 +785,15 @@ function rowsFor(
 	// not known.
 	const agent: ResolvedAgentType = {
 		agentType: choice.agentType,
-		agent: agents[choice.agentType] ?? { kind: "" },
+		agent: surface.agents[choice.agentType] ?? { kind: "" },
 	};
 	const staticVerdicts = settingFit.staticFit(agent, choice);
 	// A fetched list is the only fact beyond static fit. A loading or an
 	// unavailable list leaves the static Model verdict in place: a list that
 	// cannot be fetched skips the Model list question, just as a handoff does.
 	const modelVerdict =
-		modelStatus.status === "available"
-			? settingFit.modelInList(agent, choice.model, modelStatus.models)
+		surface.modelStatus.status === "available"
+			? settingFit.modelInList(agent, choice.model, surface.modelStatus.models)
 			: staticVerdicts.model;
 	// The Task row carries the placement the choice's task type takes on the
 	// panel's ticket (ADR 0045): the note names the state the ticket stands on
@@ -720,43 +803,23 @@ function rowsFor(
 		label: "Task type",
 		key: "taskType",
 		kind: "list",
-		options: taskTypes,
+		options: surface.taskTypes,
 	};
-	const taskPlacement = taskPlacements?.[choice.taskType];
-	if (taskPlacement?.kind === "placement")
-		taskRow.placement = `places the ticket on state ${taskPlacement.state.name}`;
-	else if (taskPlacement?.kind === "infeasible")
-		taskRow.unfit = { ok: false, reason: taskPlacement.reason, placement: true };
+	const taskPlacement = surface.taskPlacements?.[choice.taskType];
+	taskPlacementNote(taskRow, taskPlacement);
 	const rows: PanelRow[] = [
-		{ label: "Agent", key: "agentType", kind: "list", options: Object.keys(agents) },
-		{ label: "Environment", key: "environment", kind: "list", options: environments },
+		{ label: "Agent", key: "agentType", kind: "list", options: Object.keys(surface.agents) },
+		{ label: "Environment", key: "environment", kind: "list", options: surface.environments },
 		taskRow,
 	];
 	// A row shows when its Agent maps the setting. It also shows, wearing the
 	// warning the shared verdict gives, while it carries a value the Agent
 	// cannot take: hiding it would strand that value where no key can reach it,
 	// and the panel must never show something other than what the handoff sends.
-	if (agent.agent.model !== undefined) {
-		rows.push(modelRow(modelStatus, modelVerdict));
-	} else if (choice.model !== "") {
-		rows.push({ label: "Model", key: "model", kind: "text", unfit: unfitVerdict(modelVerdict) });
-	}
-	if (agent.agent.thinking !== undefined) {
-		rows.push({
-			label: "Thinking",
-			key: "thinking",
-			kind: "list",
-			options: agent.agent.thinkingValues ?? [],
-			unfit: unfitVerdict(staticVerdicts.thinking),
-		});
-	} else if (choice.thinking !== "") {
-		rows.push({
-			label: "Thinking",
-			key: "thinking",
-			kind: "text",
-			unfit: unfitVerdict(staticVerdicts.thinking),
-		});
-	}
+	const modelRowRow = modelSettingRow(agent, choice, surface.modelStatus, modelVerdict);
+	if (modelRowRow !== null) rows.push(modelRowRow);
+	const thinkingRow = thinkingSettingRow(agent, choice, staticVerdicts.thinking);
+	if (thinkingRow !== null) rows.push(thinkingRow);
 	// The token row reads the same way as the model row: its Agent's
 	// capability opens it, and a value the Agent cannot take keeps it open so
 	// the operator can clear it.
@@ -773,21 +836,65 @@ function rowsFor(
 	// values on the setting rows ride on the ask and go unrun, so the Task
 	// row states the fact and every setting row wears the written refusal the
 	// decision screen's edit key states.
-	if (planeActionTaskTypes?.includes(choice.taskType) === true) {
-		// The plane action runs no placement write, so the Task row's own
-		// placement note and refusal give way to the fact that the start runs
-		// no Agent at all.
-		taskRow.unfit = undefined;
-		taskRow.placement = PLANE_ACTION_SETTINGS;
-		for (const row of rows) {
-			if (row.key !== "taskType")
-				row.unfit = { ok: false, reason: PLANE_ACTION_SETTINGS, plane: true };
-		}
-	}
+	const plane = surface.planeActionTaskTypes?.includes(choice.taskType) === true;
+	if (plane) planeActionRefusal(rows, taskRow);
 	return rows;
 }
 
 /** The failing verdict a row carries, or nothing when the value fits. */
+/** The placement note one choice's task type owes the Task row. */
+function taskPlacementNote(row: PanelRow, taskPlacement: PlacementEvaluation | undefined): void {
+	if (taskPlacement?.kind === "placement")
+		row.placement = `places the ticket on state ${taskPlacement.state.name}`;
+	else if (taskPlacement?.kind === "infeasible")
+		row.unfit = { ok: false, reason: taskPlacement.reason, placement: true };
+}
+
+/** The row one choice's model setting owes the panel, when it owes one. */
+function modelSettingRow(
+	agent: ResolvedAgentType,
+	choice: HandoffChoice,
+	status: ModelListStatus,
+	verdict: FitVerdict,
+): PanelRow | null {
+	if (agent.agent.model !== undefined) return modelRow(status, verdict);
+	if (choice.model !== "")
+		return { label: "Model", key: "model", kind: "text", unfit: unfitVerdict(verdict) };
+	return null;
+}
+
+/** The row one choice's thinking setting owes the panel, when it owes one. */
+function thinkingSettingRow(
+	agent: ResolvedAgentType,
+	choice: HandoffChoice,
+	verdict: FitVerdict,
+): PanelRow | null {
+	if (agent.agent.thinking !== undefined)
+		return {
+			label: "Thinking",
+			key: "thinking",
+			kind: "list",
+			options: agent.agent.thinkingValues ?? [],
+			unfit: unfitVerdict(verdict),
+		};
+	if (choice.thinking !== "")
+		return { label: "Thinking", key: "thinking", kind: "text", unfit: unfitVerdict(verdict) };
+	return null;
+}
+
+/** The written refusal one start on a plane action's task type states. */
+function planeActionRefusal(rows: PanelRow[], taskRow: PanelRow): void {
+	// The plane action runs no placement write, so the Task row's own
+	// placement note and refusal give way to the fact that the start runs
+	// no Agent at all.
+	taskRow.unfit = undefined;
+	taskRow.placement = PLANE_ACTION_SETTINGS;
+	for (const row of rows) {
+		if (row.key !== "taskType")
+			row.unfit = { ok: false, reason: PLANE_ACTION_SETTINGS, plane: true };
+	}
+}
+
 function unfitVerdict(verdict: FitVerdict): UnfitVerdict | undefined {
 	return verdict.ok ? undefined : verdict;
 }
@@ -835,73 +942,98 @@ function modelRow(status: ModelListStatus, verdict: FitVerdict): PanelRow {
  * is the shared selector row: it states its own value, its unset word, and the
  * written reason of a value the Agent cannot take.
  */
-function rowElement(
-	r: PanelRow,
-	value: string,
-	selected: boolean,
-	geometry: PanelGeometry,
-	inputActive: boolean,
-	fieldChanged: (key: TextKey) => (facts: FieldFacts) => void,
-	searchChanged: (query: string, match: TypeAheadMatch, facts: FieldFacts) => void,
-	typeAhead: RefObject<TypeAheadHandle | null>,
-	fields: Record<TextKey, RefObject<FieldHandle | null>>,
-	searchField: RefObject<FieldHandle | null>,
-	reportSelection: (has: boolean) => void,
-): ReactElement {
-	if (r.kind === "text") {
-		return createElement(TextField, {
-			key: r.key,
-			label: r.label,
-			value,
-			focused: selected && inputActive,
-			inputActive,
-			width: geometry.valueWidth,
-			labelWidth: geometry.labelWidth,
-			digits: r.digits === true,
-			// A count keeps one spelling: the row folds a leading zero the same
-			// way the config parser does, so what the panel shows is the count the
-			// agent gets. The field owns the caret through the fold.
-			normalize: r.digits === true ? tokenCountDigits : undefined,
-			placeholder:
-				r.fallbackCause === undefined ? EMPTY_HINT : FALLBACK_PLACEHOLDERS[r.fallbackCause],
-			// A value the target cannot take is the field's own news: the shared
-			// field writes the exact sentence the start will answer with, and the
-			// warning tone only agrees with it.
-			error: r.unfit?.reason ?? null,
-			noteWidth: geometry.noteWidth,
-			fieldRef: fields[r.key as TextKey],
-			refusals: CONTEXT_REFUSALS,
-			onValueChange: (facts) => {
-				fieldChanged(r.key as TextKey)(facts);
-				reportSelection(selected && facts.selection !== "");
-			},
-		});
-	}
-	if (r.kind === "type-ahead") {
-		return createElement(TypeAheadRow, {
-			key: r.key,
-			label: r.label,
-			value,
-			options: r.options ?? [],
-			focused: selected && inputActive,
-			inputActive,
-			width: geometry.valueWidth,
-			labelWidth: geometry.labelWidth,
-			placeholder: r.placeholder ?? STATE_WORDS.unset,
-			// The shared verdict owns whether the Model reaches the Agent, so an
-			// empty value is fit even when the runtime reports no Models, and the
-			// row writes the sentence the Handoff would answer with.
-			warning: r.unfit !== undefined,
-			error: r.unfit?.reason ?? null,
-			noteWidth: geometry.noteWidth,
-			typeAheadRef: typeAhead,
-			fieldRef: searchField,
-			onQueryChange: (query, match, facts) => {
-				searchChanged(query, match, facts);
-				reportSelection(selected && facts.selection !== "");
-			},
-		});
-	}
+/** The surface facts one row element reads. */
+interface RowElementSurface {
+	value: string;
+	selected: boolean;
+	geometry: PanelGeometry;
+	inputActive: boolean;
+	fieldChanged: (key: TextKey) => (facts: FieldFacts) => void;
+	searchChanged: (query: string, match: TypeAheadMatch, facts: FieldFacts) => void;
+	typeAhead: RefObject<TypeAheadHandle | null>;
+	fields: Record<TextKey, RefObject<FieldHandle | null>>;
+	searchField: RefObject<FieldHandle | null>;
+	reportSelection: (has: boolean) => void;
+}
+
+function rowElement(r: PanelRow, surface: RowElementSurface): ReactElement {
+	if (r.kind === "text") return rowTextField(r, surface);
+	if (r.kind === "type-ahead") return rowTypeAhead(r, surface);
+	return rowListRow(r, surface);
+}
+
+/** The text row: the shared field, with the row's fit facts. */
+function rowTextField(r: PanelRow, surface: RowElementSurface): ReactElement {
+	const { value, selected, geometry, inputActive, fieldChanged, fields, reportSelection } = surface;
+	return createElement(TextField, {
+		key: r.key,
+		label: r.label,
+		value,
+		focused: selected && inputActive,
+		inputActive,
+		width: geometry.valueWidth,
+		labelWidth: geometry.labelWidth,
+		digits: r.digits === true,
+		// A count keeps one spelling: the row folds a leading zero the same
+		// way the config parser does, so what the panel shows is the count the
+		// agent gets. The field owns the caret through the fold.
+		normalize: r.digits === true ? tokenCountDigits : undefined,
+		placeholder:
+			r.fallbackCause === undefined ? EMPTY_HINT : FALLBACK_PLACEHOLDERS[r.fallbackCause],
+		// A value the target cannot take is the field's own news: the shared
+		// field writes the exact sentence the start will answer with, and the
+		// warning tone only agrees with it.
+		error: r.unfit?.reason ?? null,
+		noteWidth: geometry.noteWidth,
+		fieldRef: fields[r.key as TextKey],
+		refusals: CONTEXT_REFUSALS,
+		onValueChange: (facts) => {
+			fieldChanged(r.key as TextKey)(facts);
+			reportSelection(selected && facts.selection !== "");
+		},
+	});
+}
+
+/** The Model row: the shared type-ahead row, with the list's status. */
+function rowTypeAhead(r: PanelRow, surface: RowElementSurface): ReactElement {
+	const {
+		value,
+		selected,
+		geometry,
+		inputActive,
+		searchChanged,
+		typeAhead,
+		searchField,
+		reportSelection,
+	} = surface;
+	return createElement(TypeAheadRow, {
+		key: r.key,
+		label: r.label,
+		value,
+		options: r.options ?? [],
+		focused: selected && inputActive,
+		inputActive,
+		width: geometry.valueWidth,
+		labelWidth: geometry.labelWidth,
+		placeholder: r.placeholder ?? STATE_WORDS.unset,
+		// The shared verdict owns whether the Model reaches the Agent, so an
+		// empty value is fit even when the runtime reports no Models, and the
+		// row writes the sentence the Handoff would answer with.
+		warning: r.unfit !== undefined,
+		error: r.unfit?.reason ?? null,
+		noteWidth: geometry.noteWidth,
+		typeAheadRef: typeAhead,
+		fieldRef: searchField,
+		onQueryChange: (query, match, facts) => {
+			searchChanged(query, match, facts);
+			reportSelection(selected && facts.selection !== "");
+		},
+	});
+}
+
+/** The list row: the shared selector row, with the row's placement note. */
+function rowListRow(r: PanelRow, surface: RowElementSurface): ReactElement {
+	const { value, selected, geometry, inputActive } = surface;
 	// A list row, or the row that waits for a list, is the shared selector row:
 	// its marker, its tones, its unset word, and the written reason of a value
 	// the Agent cannot take are the ones every other form row uses.

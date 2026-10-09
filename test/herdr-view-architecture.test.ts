@@ -113,35 +113,57 @@ describe("the plane sends herdr no workspace focus", () => {
 		// The next test refuses the ask side: a create argv that also carries
 		// `--focus` states nothing, because herdr takes the last flag it reads.
 		const offenders: string[] = [];
-		for (const file of sources) {
-			const source = readFileSync(file, "utf8");
-			for (const match of source.matchAll(/(?:const|let)\s+(\w+)\s*=\s*(\[[^\]]*\])/gsu)) {
-				const [, variable, literal] = match;
-				if (!/"(?:workspace|tab|worktree)"\s*,\s*"(?:create|open)"/u.test(literal)) continue;
-				if (/--no-focus/u.test(literal)) continue;
-				// The assembled argv: the flag must be pushed onto the same
-				// variable after its declaration and before the first runner
-				// call that carries it, so a push written after the call, or
-				// beside a different same-named argv, cannot pass. A create the
-				// check cannot read at all - an argv a function assembles and
-				// returns, or a call that passes the argv under another name -
-				// stays outside this scan; the frame seam owns those shapes.
-				const declared = source.slice(match.index ?? 0);
-				const push = new RegExp(`${variable}\\.push\\(\\s*"--no-focus"`, "u").exec(declared);
-				const call = new RegExp(`run\\(\\s*"herdr"\\s*,\\s*${variable}\\b`, "u").exec(declared);
-				if (push !== null && (call === null || push.index < call.index)) continue;
-				offenders.push(`${file}: ${variable}`);
-			}
-			// A create argv written inline, with no variable to push onto, must
-			// carry the flag in the literal itself.
-			for (const match of source.matchAll(/run\(\s*"herdr"\s*,\s*(\[[^\]]*\])/gsu)) {
-				const [, literal] = match;
-				if (!/"(?:workspace|tab|worktree)"\s*,\s*"(?:create|open)"/u.test(literal)) continue;
-				if (!/--no-focus/u.test(literal)) offenders.push(`${file}: inline create argv`);
-			}
-		}
+		for (const file of sources)
+			offenders.push(...noFocusOffenders(file, readFileSync(file, "utf8")));
 		expect(offenders).toEqual([]);
 	});
+
+	/** The create argvs one file holds that state no no-focus default. */
+	function noFocusOffenders(file: string, source: string): string[] {
+		return [...declaredCreateOffenders(file, source), ...inlineCreateOffenders(file, source)];
+	}
+
+	/** The declared create argvs one file holds that no push saves. */
+	function declaredCreateOffenders(file: string, source: string): string[] {
+		const offenders: string[] = [];
+		for (const match of source.matchAll(/(?:const|let)\s+(\w+)\s*=\s*(\[[^\]]*\])/gsu)) {
+			const [, variable, literal] = match;
+			if (!/"(?:workspace|tab|worktree)"\s*,\s*"(?:create|open)"/u.test(literal)) continue;
+			if (/--no-focus/u.test(literal)) continue;
+			if (pushSavesVariable(source, variable, match.index ?? 0)) continue;
+			offenders.push(`${file}: ${variable}`);
+		}
+		return offenders;
+	}
+
+	/**
+	 * Whether the push saves a declared create argv from the scan. The flag must be
+	 * pushed onto the same variable after its declaration and before the first
+	 * runner call that carries it, so a push written after the call, or beside a
+	 * different same-named argv, cannot pass. A create the check cannot read at
+	 * all - an argv a function assembles and returns, or a call that passes the
+	 * argv under another name - stays outside this scan; the frame seam owns
+	 * those shapes.
+	 */
+	function pushSavesVariable(source: string, variable: string, matchIndex: number): boolean {
+		const declared = source.slice(matchIndex);
+		const push = new RegExp(`${variable}\\.push\\(\\s*"--no-focus"`, "u").exec(declared);
+		const call = new RegExp(`run\\(\\s*"herdr"\\s*,\\s*${variable}\\b`, "u").exec(declared);
+		return push !== null && (call === null || push.index < call.index);
+	}
+
+	/** The inline create argvs one file holds that carry no no-focus flag. */
+	function inlineCreateOffenders(file: string, source: string): string[] {
+		const offenders: string[] = [];
+		// A create argv written inline, with no variable to push onto, must
+		// carry the flag in the literal itself.
+		for (const match of source.matchAll(/run\(\s*"herdr"\s*,\s*(\[[^\]]*\])/gsu)) {
+			const [, literal] = match;
+			if (!/"(?:workspace|tab|worktree)"\s*,\s*"(?:create|open)"/u.test(literal)) continue;
+			if (!/--no-focus/u.test(literal)) offenders.push(`${file}: inline create argv`);
+		}
+		return offenders;
+	}
 
 	test("no source hands herdr a focus flag", () => {
 		// herdr applies its flags in argv order, so `--no-focus --focus` leaves

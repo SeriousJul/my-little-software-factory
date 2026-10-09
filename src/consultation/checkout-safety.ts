@@ -105,13 +105,14 @@ export interface CheckoutConflict {
  * whether the checkout's confirmed set covers the reported identities. Dirty
  * state is a warning, not a block.
  */
-export async function inspectLiveCheckout(
-	checkout: string,
-	runner: CommandRunner,
-	tickets: readonly Ticket[],
-	consultations: readonly Consultation[],
-	agents: readonly HerdrAgent[],
-): Promise<LiveCheckoutSafety> {
+export async function inspectLiveCheckout(fields: {
+	checkout: string;
+	runner: CommandRunner;
+	tickets: readonly Ticket[];
+	consultations: readonly Consultation[];
+	agents: readonly HerdrAgent[];
+}): Promise<LiveCheckoutSafety> {
+	const { checkout, runner, tickets, consultations, agents } = fields;
 	if (!(await fileExists(checkout))) return { dirty: false, conflicts: [] };
 	const status = await runner.run("git", [
 		"-C",
@@ -137,66 +138,133 @@ export async function inspectLiveCheckout(
 	// identity: a worktree handoff of the same repository does not share
 	// this live checkout, and a different mapping of the same repository
 	// does.
-	for (const ticket of tickets) {
-		if (ticket.handoff === null || !inFlightState(ticket.state)) continue;
-		if (ticket.handoff.paneId === null) continue;
-		const agent = agents.find((candidate) => candidate.paneId === ticket.handoff?.paneId);
-		if (agent === undefined) continue;
-		const agentCheckout =
-			agent.checkoutPath === undefined ? null : await realPathOf(agent.checkoutPath);
-		if (agentCheckout !== null) {
-			if (agentCheckout !== target) continue;
-		} else if (ticket.handoff.environment !== "live-worktree") continue;
-		// An unknown checkout of a live-worktree handoff cannot be proven
-		// separate: keep it a conflict instead of sharing a shared checkout.
-		countedPanes.add(agent.paneId);
-		conflicts.push({
-			kind: "ticket",
-			identity: ticket.identity,
-			label: `Ticket ${ticket.identity}`,
-		});
-	}
-	for (const consultation of consultations) {
-		if (
-			consultation.state !== "working" &&
-			consultation.state !== "opening" &&
-			consultation.state !== "awaiting-response"
-		)
-			continue;
-		if (
-			consultation.repository.path !== checkout &&
-			(await realPathOf(consultation.repository.path)) !== target
-		)
-			continue;
-		if (
-			consultation.paneId !== null &&
-			agents.some((agent) => agent.paneId === consultation.paneId)
-		) {
-			countedPanes.add(consultation.paneId);
-			conflicts.push({
-				kind: "consultation",
-				identity: consultation.id,
-				label: `Consultation ${consultation.id.slice(0, 8)}`,
-			});
-		}
-	}
-	for (const agent of agents) {
-		// One panel line per underlying Agent: a pane counted above stays named
-		// by the Consultation or ticket that owns it.
-		if (countedPanes.has(agent.paneId)) continue;
-		if (agent.checkoutPath === undefined || (await realPathOf(agent.checkoutPath)) !== target)
-			continue;
-		conflicts.push({
-			kind: "herdr-agent",
-			identity: agent.paneId,
-			label: `Herdr Agent ${agent.agent} (${agent.paneId})`,
-		});
-	}
+	await ticketCheckoutConflicts({ target, tickets, agents, countedPanes, conflicts });
+	await consultationCheckoutConflicts({
+		checkout,
+		target,
+		consultations,
+		agents,
+		countedPanes,
+		conflicts,
+	});
 	return {
 		dirty,
 		...(dirty ? { warning: "the live checkout has uncommitted changes" } : {}),
 		conflicts: uniqueConflicts(conflicts),
 	};
+}
+
+/** The in-flight tickets whose Agent works in the live checkout itself. */
+async function ticketCheckoutConflicts(fields: {
+	target: string;
+	tickets: readonly Ticket[];
+	agents: readonly HerdrAgent[];
+	countedPanes: Set<string>;
+	conflicts: CheckoutConflict[];
+}): Promise<void> {
+	const { target, tickets, agents, countedPanes, conflicts } = fields;
+	for (const ticket of tickets)
+		await ticketCheckoutConflictOf({ ticket, target, agents, countedPanes, conflicts });
+}
+
+/** The one ticket row one live checkout asks for a conflict. */
+async function ticketCheckoutConflictOf(fields: {
+	ticket: Ticket;
+	target: string;
+	agents: readonly HerdrAgent[];
+	countedPanes: Set<string>;
+	conflicts: CheckoutConflict[];
+}): Promise<void> {
+	const { ticket, target, agents, countedPanes, conflicts } = fields;
+	if (ticket.handoff === null || !inFlightState(ticket.state)) return;
+	if (ticket.handoff.paneId === null) return;
+	const agent = agents.find((candidate) => candidate.paneId === ticket.handoff?.paneId);
+	if (agent === undefined) return;
+	const agentCheckout =
+		agent.checkoutPath === undefined ? null : await realPathOf(agent.checkoutPath);
+	if (agentCheckout !== null) {
+		if (agentCheckout !== target) return;
+	} else if (ticket.handoff.environment !== "live-worktree") return;
+	// An unknown checkout of a live-worktree handoff cannot be proven
+	// separate: keep it a conflict instead of sharing a shared checkout.
+	countedPanes.add(agent.paneId);
+	conflicts.push({
+		kind: "ticket",
+		identity: ticket.identity,
+		label: `Ticket ${ticket.identity}`,
+	});
+}
+
+/** The Consultations and bare Agents whose panes work in the live checkout. */
+async function consultationCheckoutConflicts(fields: {
+	checkout: string;
+	target: string;
+	consultations: readonly Consultation[];
+	agents: readonly HerdrAgent[];
+	countedPanes: Set<string>;
+	conflicts: CheckoutConflict[];
+}): Promise<void> {
+	const { checkout, target, consultations, agents, countedPanes, conflicts } = fields;
+	for (const consultation of consultations)
+		await consultationCheckoutConflictOf({
+			consultation,
+			checkout,
+			target,
+			agents,
+			countedPanes,
+			conflicts,
+		});
+	for (const agent of agents) await bareAgentConflictOf({ agent, target, countedPanes, conflicts });
+}
+
+/** The one Consultation row one live checkout asks for a conflict. */
+async function consultationCheckoutConflictOf(fields: {
+	consultation: Consultation;
+	checkout: string;
+	target: string;
+	agents: readonly HerdrAgent[];
+	countedPanes: Set<string>;
+	conflicts: CheckoutConflict[];
+}): Promise<void> {
+	const { consultation, checkout, target, agents, countedPanes, conflicts } = fields;
+	if (
+		consultation.state !== "working" &&
+		consultation.state !== "opening" &&
+		consultation.state !== "awaiting-response"
+	)
+		return;
+	if (
+		consultation.repository.path !== checkout &&
+		(await realPathOf(consultation.repository.path)) !== target
+	)
+		return;
+	if (consultation.paneId === null) return;
+	if (!agents.some((agent) => agent.paneId === consultation.paneId)) return;
+	countedPanes.add(consultation.paneId);
+	conflicts.push({
+		kind: "consultation",
+		identity: consultation.id,
+		label: `Consultation ${consultation.id.slice(0, 8)}`,
+	});
+}
+
+/** The one bare Agent row one live checkout asks for a conflict. */
+async function bareAgentConflictOf(fields: {
+	agent: HerdrAgent;
+	target: string;
+	countedPanes: Set<string>;
+	conflicts: CheckoutConflict[];
+}): Promise<void> {
+	const { agent, target, countedPanes, conflicts } = fields;
+	// One panel line per underlying Agent: a pane counted above stays named
+	// by the Consultation or ticket that owns it.
+	if (countedPanes.has(agent.paneId)) return;
+	if (agent.checkoutPath === undefined || (await realPathOf(agent.checkoutPath)) !== target) return;
+	conflicts.push({
+		kind: "herdr-agent",
+		identity: agent.paneId,
+		label: `Herdr Agent ${agent.agent} (${agent.paneId})`,
+	});
 }
 
 function uniqueConflicts(conflicts: readonly CheckoutConflict[]): CheckoutConflict[] {

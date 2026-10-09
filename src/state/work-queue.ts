@@ -77,6 +77,15 @@ export function normalizeRouteFromIdentity(
 	return routeFromIdentity === ticketIdentity ? null : routeFromIdentity;
 }
 
+/** The decision word one removed workflow route marks on its trace (ADR 0064). */
+export function routeRemovedDecisionOf(
+	actionTaskType: string | null,
+	isAutomatic: number,
+): "auto-merged" | "merged" | "auto-handed-off" | "handed-off" {
+	if (actionTaskType === null) return isAutomatic === 1 ? "auto-handed-off" : "handed-off";
+	return isAutomatic === 1 ? "auto-merged" : "merged";
+}
+
 export interface WorkQueueAggregate {
 	queuePaused(): boolean;
 	setQueuePaused(paused: boolean): void;
@@ -110,6 +119,20 @@ export interface WorkQueueAggregate {
 	moveWorkItem(identity: string, direction: "up" | "down"): boolean;
 }
 
+/** One row of the work_queue table, as the queue's read names it. */
+type WorkQueueRow = {
+	position: number;
+	ticket_identity: string | null;
+	consultation_id: string | null;
+	origin: string | null;
+	choice_json: string | null;
+	previous_message: string;
+	enqueued_at: string;
+	route_from_identity: string | null;
+	is_automatic: number;
+	action_task_type: string | null;
+};
+
 export class WorkQueueModule implements WorkQueueAggregate {
 	private readonly db: StateScope;
 	readonly graph: () => StateGraph;
@@ -140,73 +163,64 @@ export class WorkQueueModule implements WorkQueueAggregate {
 			.prepare(
 				"SELECT position, ticket_identity, consultation_id, origin, choice_json, previous_message, enqueued_at, route_from_identity, is_automatic, action_task_type FROM work_queue ORDER BY position ASC",
 			)
-			.all() as Array<{
-			position: number;
-			ticket_identity: string | null;
-			consultation_id: string | null;
-			origin: string | null;
-			choice_json: string | null;
-			previous_message: string;
-			enqueued_at: string;
-			route_from_identity: string | null;
-			is_automatic: number;
-			action_task_type: string | null;
-		}>;
+			.all() as WorkQueueRow[];
 		const items: WorkQueueItem[] = [];
 		for (const row of rows) {
-			if (row.ticket_identity !== null) {
-				const origin =
-					row.origin === "open" || row.origin === "workflow" || row.origin === "restart"
-						? (row.origin as HandoffOrigin)
-						: undefined;
-				// The action cell stands for the plane action's row (ADR 0068):
-				// the task type whose action form the pickup runs, and no choice
-				// to lose, so a row the reader cannot read as one is a row the
-				// schema never committed.
-				if (row.action_task_type !== null) {
-					if (origin === undefined) continue;
-					items.push({
-						kind: "plane-action",
-						position: row.position,
-						ticketIdentity: row.ticket_identity,
-						routeFromIdentity: row.route_from_identity,
-						automatic: row.is_automatic === 1,
-						origin,
-						taskType: row.action_task_type,
-						enqueuedAt: row.enqueued_at,
-					});
-					continue;
-				}
-				const choice = row.choice_json === null ? undefined : jsonChoice(row.choice_json);
-				if (origin === undefined || choice === undefined) continue;
-				items.push({
-					kind: "handoff",
+			const item = this.queueItemOf(row);
+			if (item !== undefined) items.push(item);
+		}
+		return items;
+	}
+	/** The item one queue row carries; a row with no identity is refused. */
+	private queueItemOf(row: WorkQueueRow): WorkQueueItem | undefined {
+		if (row.ticket_identity !== null) {
+			const origin =
+				row.origin === "open" || row.origin === "workflow" || row.origin === "restart"
+					? (row.origin as HandoffOrigin)
+					: undefined;
+			// The action cell stands for the plane action's row (ADR 0068):
+			// the task type whose action form the pickup runs, and no choice
+			// to lose, so a row the reader cannot read as one is a row the
+			// schema never committed.
+			if (row.action_task_type !== null) {
+				if (origin === undefined) return undefined;
+				return {
+					kind: "plane-action",
 					position: row.position,
 					ticketIdentity: row.ticket_identity,
 					routeFromIdentity: row.route_from_identity,
 					automatic: row.is_automatic === 1,
 					origin,
-					choice,
-					previousMessage: row.previous_message,
+					taskType: row.action_task_type,
 					enqueuedAt: row.enqueued_at,
-				});
-				continue;
+				};
 			}
-			if (row.consultation_id !== null) {
-				items.push({
-					kind: "consultation",
-					position: row.position,
-					consultationId: row.consultation_id,
-					enqueuedAt: row.enqueued_at,
-				});
-				continue;
-			}
-			// The CHECK holds every row to one identity, so this arm stands for a
-			// row the constraint cannot name: refuse to read it rather than guess
-			// what it asks for.
-			throw new StateError("the Work queue holds a row with no identity");
+			const choice = row.choice_json === null ? undefined : jsonChoice(row.choice_json);
+			if (origin === undefined || choice === undefined) return undefined;
+			return {
+				kind: "handoff",
+				position: row.position,
+				ticketIdentity: row.ticket_identity,
+				routeFromIdentity: row.route_from_identity,
+				automatic: row.is_automatic === 1,
+				origin,
+				choice,
+				previousMessage: row.previous_message,
+				enqueuedAt: row.enqueued_at,
+			};
 		}
-		return items;
+		if (row.consultation_id !== null) {
+			return {
+				kind: "consultation",
+				position: row.position,
+				consultationId: row.consultation_id,
+				enqueuedAt: row.enqueued_at,
+			};
+		}
+		// The CHECK holds every row to one identity, so this arm stands for a
+		// row the constraint cannot name: refuse to read it rather than guess
+		// what it asks for.
+		throw new StateError("the Work queue holds a row with no identity");
 	}
 	hasWorkItem(ticketIdentity: string): boolean {
 		return (
@@ -278,38 +292,58 @@ export class WorkQueueModule implements WorkQueueAggregate {
 		automatic?: boolean;
 	}): { ok: true } | { ok: false; reason: string } {
 		try {
-			return this.db.transaction(() => {
-				const existing = this.db
-					.prepare("SELECT 1 FROM work_queue WHERE ticket_identity = ?")
-					.get(entry.ticketIdentity);
-				if (existing !== null && existing !== undefined)
-					return {
-						ok: false,
-						reason: `ticket ${entry.ticketIdentity} already has a waiting queue item`,
-					};
-				const position = this.workQueuePosition(entry.automatic === true, entry.origin);
-				this.db
-					.prepare(
-						"INSERT INTO work_queue(position, ticket_identity, route_from_identity, origin, choice_json, previous_message, enqueued_at, is_automatic) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-					)
-					.run(
-						position,
-						entry.ticketIdentity,
-						normalizeRouteFromIdentity(entry.ticketIdentity, entry.routeFromIdentity),
-						entry.origin,
-						JSON.stringify(entry.choice),
-						entry.previousMessage,
-						new Date(this.db.now()).toISOString(),
-						entry.automatic === true ? 1 : 0,
-					);
-				return { ok: true };
-			});
+			return this.db.transaction(() =>
+				this.enqueueEntry({
+					ticketIdentity: entry.ticketIdentity,
+					origin: entry.origin,
+					automatic: entry.automatic === true,
+					insert: (position) =>
+						this.db
+							.prepare(
+								"INSERT INTO work_queue(position, ticket_identity, route_from_identity, origin, choice_json, previous_message, enqueued_at, is_automatic) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+							)
+							.run(
+								position,
+								entry.ticketIdentity,
+								normalizeRouteFromIdentity(entry.ticketIdentity, entry.routeFromIdentity),
+								entry.origin,
+								JSON.stringify(entry.choice),
+								entry.previousMessage,
+								new Date(this.db.now()).toISOString(),
+								entry.automatic === true ? 1 : 0,
+							),
+				}),
+			);
 		} catch (error) {
 			return {
 				ok: false,
 				reason: `cannot enqueue the handoff: ${error instanceof Error ? error.message : String(error)}`,
 			};
 		}
+	}
+	/**
+	 * The enqueue body both the handoff entry and the plane action entry run:
+	 * the refusal for a ticket the queue already holds, the position the row
+	 * takes, and the entry's own insert. It runs inside the caller's
+	 * transaction (ADR 0095): the interface method owns the open.
+	 */
+	private enqueueEntry(entry: {
+		ticketIdentity: string;
+		origin: HandoffOrigin;
+		automatic: boolean;
+		insert: (position: number) => void;
+	}): { ok: true } | { ok: false; reason: string } {
+		const existing = this.db
+			.prepare("SELECT 1 FROM work_queue WHERE ticket_identity = ?")
+			.get(entry.ticketIdentity);
+		if (existing !== null && existing !== undefined)
+			return {
+				ok: false,
+				reason: `ticket ${entry.ticketIdentity} already has a waiting queue item`,
+			};
+		const position = this.workQueuePosition(entry.automatic, entry.origin);
+		entry.insert(position);
+		return { ok: true };
 	}
 	enqueuePlaneActionWork(entry: {
 		ticketIdentity: string;
@@ -322,31 +356,27 @@ export class WorkQueueModule implements WorkQueueAggregate {
 		automatic?: boolean;
 	}): { ok: true } | { ok: false; reason: string } {
 		try {
-			return this.db.transaction(() => {
-				const existing = this.db
-					.prepare("SELECT 1 FROM work_queue WHERE ticket_identity = ?")
-					.get(entry.ticketIdentity);
-				if (existing !== null && existing !== undefined)
-					return {
-						ok: false,
-						reason: `ticket ${entry.ticketIdentity} already has a waiting queue item`,
-					};
-				const position = this.workQueuePosition(entry.automatic === true, entry.origin);
-				this.db
-					.prepare(
-						"INSERT INTO work_queue(position, ticket_identity, route_from_identity, origin, choice_json, previous_message, enqueued_at, is_automatic, action_task_type) VALUES (?, ?, ?, ?, NULL, '', ?, ?, ?)",
-					)
-					.run(
-						position,
-						entry.ticketIdentity,
-						normalizeRouteFromIdentity(entry.ticketIdentity, entry.routeFromIdentity),
-						entry.origin,
-						new Date(this.db.now()).toISOString(),
-						entry.automatic === true ? 1 : 0,
-						entry.taskType,
-					);
-				return { ok: true };
-			});
+			return this.db.transaction(() =>
+				this.enqueueEntry({
+					ticketIdentity: entry.ticketIdentity,
+					origin: entry.origin,
+					automatic: entry.automatic === true,
+					insert: (position) =>
+						this.db
+							.prepare(
+								"INSERT INTO work_queue(position, ticket_identity, route_from_identity, origin, choice_json, previous_message, enqueued_at, is_automatic, action_task_type) VALUES (?, ?, ?, ?, NULL, '', ?, ?, ?)",
+							)
+							.run(
+								position,
+								entry.ticketIdentity,
+								normalizeRouteFromIdentity(entry.ticketIdentity, entry.routeFromIdentity),
+								entry.origin,
+								new Date(this.db.now()).toISOString(),
+								entry.automatic === true ? 1 : 0,
+								entry.taskType,
+							),
+				}),
+			);
 		} catch (error) {
 			return {
 				ok: false,
@@ -366,38 +396,36 @@ export class WorkQueueModule implements WorkQueueAggregate {
 	}
 	cancelWorkItem(ticketIdentity: string): boolean {
 		return this.db.transaction(() => {
-			const row = this.db
-				.prepare(
-					"SELECT origin, route_from_identity, is_automatic, action_task_type FROM work_queue WHERE ticket_identity = ?",
-				)
-				.get(ticketIdentity) as {
-				origin: string | null;
-				route_from_identity: string | null;
-				is_automatic: number;
-				action_task_type: string | null;
-			} | null;
-			if (row === null) return false;
-			this.db.prepare("DELETE FROM work_queue WHERE ticket_identity = ?").run(ticketIdentity);
-			this.repackWorkQueuePositions();
-			if (row.origin === "workflow") {
-				// The source the route routed from: the item's route from, or the
-				// item's own ticket for a route onto the ticket's own position.
-				const source = row.route_from_identity ?? ticketIdentity;
-				// The decision word the item's ask landed on its trace (ADR 0064):
-				// the mark answers the same decision, so a turn that settled
-				// behind the wait takes no mark from the removal.
-				const decision =
-					row.action_task_type !== null
-						? row.is_automatic === 1
-							? "auto-merged"
-							: "merged"
-						: row.is_automatic === 1
-							? "auto-handed-off"
-							: "handed-off";
-				this.graph().ticketWorkCycle.recordRouteRemovedMark(source, decision);
-			}
-			return true;
+			return this.cancelWorkItemWrites(ticketIdentity);
 		});
+	}
+
+	/** The one cancel write set a removed work item lands. */
+	private cancelWorkItemWrites(ticketIdentity: string): boolean {
+		const row = this.db
+			.prepare(
+				"SELECT origin, route_from_identity, is_automatic, action_task_type FROM work_queue WHERE ticket_identity = ?",
+			)
+			.get(ticketIdentity) as {
+			origin: string | null;
+			route_from_identity: string | null;
+			is_automatic: number;
+			action_task_type: string | null;
+		} | null;
+		if (row === null) return false;
+		this.db.prepare("DELETE FROM work_queue WHERE ticket_identity = ?").run(ticketIdentity);
+		this.repackWorkQueuePositions();
+		if (row.origin === "workflow") {
+			// The source the route routed from: the item's route from, or the
+			// item's own ticket for a route onto the ticket's own position.
+			const source = row.route_from_identity ?? ticketIdentity;
+			// The decision word the item's ask landed on its trace (ADR 0064):
+			// the mark answers the same decision, so a turn that settled
+			// behind the wait takes no mark from the removal.
+			const decision = routeRemovedDecisionOf(row.action_task_type, row.is_automatic);
+			this.graph().ticketWorkCycle.recordRouteRemovedMark(source, decision);
+		}
+		return true;
 	}
 	removeWorkflowRouteItem(ticketIdentity: string): number {
 		return this.db.transaction(() => {

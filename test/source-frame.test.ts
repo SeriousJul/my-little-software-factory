@@ -198,9 +198,7 @@ describe("source-driven frames", () => {
 					expect(settled).toContain("[open]");
 					expect(settled).not.toContain("loading tickets...");
 				},
-				WIDTH,
-				HEIGHT,
-				{ config: issuesConfig, state, sources: [source] },
+				{ width: WIDTH, height: HEIGHT, props: { config: issuesConfig, state, sources: [source] } },
 			);
 		} finally {
 			state.close();
@@ -221,9 +219,7 @@ describe("source-driven frames", () => {
 					);
 					expect(frame).not.toContain("loading tickets...");
 				},
-				WIDTH,
-				HEIGHT,
-				{ config: issuesConfig, state, sources: [source] },
+				{ width: WIDTH, height: HEIGHT, props: { config: issuesConfig, state, sources: [source] } },
 			);
 		} finally {
 			state.close();
@@ -260,9 +256,7 @@ describe("source-driven frames", () => {
 						"Ticket is not actionable because source data is stale",
 					);
 				},
-				WIDTH,
-				HEIGHT,
-				{ config: issuesConfig, state, sources: [source] },
+				{ width: WIDTH, height: HEIGHT, props: { config: issuesConfig, state, sources: [source] } },
 			);
 		} finally {
 			state.close();
@@ -306,9 +300,7 @@ describe("source-driven frames", () => {
 				// ...and the operator's config decision pins no warning line.
 				expect(frame).not.toContain("source removed from config");
 			},
-			WIDTH,
-			HEIGHT,
-			{ config: BASE_CONFIG, state, sources: [] },
+			{ width: WIDTH, height: HEIGHT, props: { config: BASE_CONFIG, state, sources: [] } },
 		);
 		state.close();
 	});
@@ -339,9 +331,7 @@ describe("source-driven frames", () => {
 					expect(detail).toContain("GitHub: https://github.com/acme/factory/issues/5");
 					expect(detail).toContain("Labels: ready-for-agent");
 				},
-				WIDTH,
-				HEIGHT,
-				{ config: issuesConfig, state, sources: [source] },
+				{ width: WIDTH, height: HEIGHT, props: { config: issuesConfig, state, sources: [source] } },
 			);
 		} finally {
 			state.close();
@@ -394,9 +384,7 @@ describe("source-driven frames", () => {
 					expect(detail).toContain("Model: factory-model");
 					expect(detail).toContain("Thinking: left to agent");
 				},
-				WIDTH,
-				HEIGHT,
-				{ config, state, sources: [source] },
+				{ width: WIDTH, height: HEIGHT, props: { config, state, sources: [source] } },
 			);
 		} finally {
 			state.close();
@@ -452,9 +440,11 @@ describe("source-driven frames", () => {
 					detailPaneText(f).includes(secondLine),
 				);
 			},
-			WIDTH,
-			HEIGHT,
-			{ config: pullsConfig, state, sources: [issuesSource, pullsSource] },
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				props: { config: pullsConfig, state, sources: [issuesSource, pullsSource] },
+			},
 		);
 		state.close();
 	});
@@ -548,9 +538,11 @@ describe("source-driven frames", () => {
 				expect(new Set(positions).size).toBe(order.length);
 				expect(positions).toEqual([...positions].sort((a, b) => a - b));
 			},
-			WIDTH,
-			HEIGHT,
-			{ config: pullsConfig, state, sources: [issuesSource, pullsSource] },
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				props: { config: pullsConfig, state, sources: [issuesSource, pullsSource] },
+			},
 		);
 		state.close();
 	});
@@ -591,9 +583,7 @@ describe("source-driven frames", () => {
 					const markerRow = rowsOf(frame)[markerRowOf(frame)];
 					expect(markerRow).toContain("First ticket");
 				},
-				WIDTH,
-				HEIGHT,
-				{ config: issuesConfig, state, sources: [source] },
+				{ width: WIDTH, height: HEIGHT, props: { config: issuesConfig, state, sources: [source] } },
 			);
 		} finally {
 			state.close();
@@ -623,9 +613,7 @@ describe("source-driven frames", () => {
 					await awaitFrame(setup, (f) => f.includes("Second ticket"), "the new ticket");
 					expect(source.calls).toBe(2);
 				},
-				WIDTH,
-				HEIGHT,
-				{ config: issuesConfig, state, sources: [source] },
+				{ width: WIDTH, height: HEIGHT, props: { config: issuesConfig, state, sources: [source] } },
 			);
 		} finally {
 			state.close();
@@ -673,9 +661,7 @@ describe("source-driven frames", () => {
 					"Handoff recovery is required before another handoff",
 				);
 			},
-			WIDTH,
-			HEIGHT,
-			{ config: issuesConfig, state, sources: [source] },
+			{ width: WIDTH, height: HEIGHT, props: { config: issuesConfig, state, sources: [source] } },
 		);
 		state.close();
 	});

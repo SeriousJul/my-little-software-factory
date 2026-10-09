@@ -202,9 +202,17 @@ describe("the Ticket list's order through the boot", () => {
 						.join(" then ")}`,
 				).toHaveLength(1);
 			},
-			120,
-			30,
-			{ config, state, sources: [issues, pulls], runner: emptyAgentRunner(), pollIntervalMs: 5000 },
+			{
+				width: 120,
+				height: 30,
+				props: {
+					config,
+					state,
+					sources: [issues, pulls],
+					runner: emptyAgentRunner(),
+					pollIntervalMs: 5000,
+				},
+			},
 		);
 	});
 });

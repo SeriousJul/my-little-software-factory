@@ -180,9 +180,7 @@ describe("the Task row's placement note", () => {
 				// the note writes carries no third, warning, paint.
 				expect(spanColors(setup, "review")).toEqual([tone("focusedText"), tone("detail")]);
 			},
-			WIDTH,
-			30,
-			app.props,
+			{ width: WIDTH, height: 30, props: app.props },
 		);
 	});
 
@@ -218,9 +216,7 @@ describe("the Task row's placement note", () => {
 				// the reason it writes.
 				expect(spanColors(setup, "review")).toEqual([tone("warning"), tone("error")]);
 			},
-			220,
-			30,
-			app.props,
+			{ width: 220, height: 30, props: app.props },
 		);
 	});
 
@@ -246,9 +242,7 @@ describe("the Task row's placement note", () => {
 				expect(frameText(implement)).not.toContain("not offered by any state");
 				expect(spanColors(setup, "implement")).toEqual([tone("focusedText")]);
 			},
-			WIDTH,
-			30,
-			app.props,
+			{ width: WIDTH, height: 30, props: app.props },
 		);
 	});
 });

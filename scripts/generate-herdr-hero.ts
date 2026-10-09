@@ -67,8 +67,63 @@ async function main(): Promise<void> {
 	const tmp = mkdtempSync(join(tmpdir(), "mlsf-hero-"));
 	const home = join(tmp, "home");
 	mkdirSync(home, { recursive: true });
-	// The isolated namespace: its own socket and home, nothing of the
-	// operator's session.
+	const envs = heroEnv(tmp, home);
+	const fixture = buildFixture(tmp);
+	// buildFixture puts the stubs in <fixture>/bin; the server PATH
+	// expects <tmp>/bin. Rebuild the PATH over the fixture's own bin.
+	envs.serverEnv.PATH = `${join(fixture, "bin")}:${process.env.PATH ?? "/usr/bin:/bin"}`;
+	writeFileSync(join(fixture, "agent-pane.sh"), AGENT_PANE_SCRIPT);
+	writeHerdrConfig(home);
+	const serverLog = openSync(join(tmp, "herdr-server.log"), "a");
+	const server = spawn(bin, ["server"], {
+		env: envs.serverEnv,
+		stdio: ["ignore", serverLog, serverLog],
+	});
+	let client: Awaited<ReturnType<typeof openPty>> = null;
+	let paneA = "";
+	let paneB = "";
+	let failed = false;
+	try {
+		await waitForServer(bin, envs.isoEnv);
+		const panes = await heroWorkspaces(bin, envs.isoEnv, fixture);
+		paneA = panes.paneA;
+		paneB = panes.paneB;
+		client = await heroClient(bin, envs.isoEnv);
+		await heroRunPanes(bin, envs.isoEnv, { fixture, paneA, paneB });
+		await heroTicketHeader(client);
+		await heroDetailSelect(bin, envs.isoEnv, paneA);
+		await heroReportAgent(bin, envs.isoEnv, paneB);
+		await heroSettle(client);
+		const grid = parseScreen(client.output(), HERO_SCREEN.cols, HERO_SCREEN.rows);
+		mkdirSync(dirname(OUT), { recursive: true });
+		writeFileSync(OUT, renderPng(grid, TERMINAL_COLORS));
+		console.log(`hero: wrote ${OUT}`);
+	} catch (err) {
+		failed = true;
+		heroFailureDiagnostics(bin, { isoEnv: envs.isoEnv, tmp, paneA, paneB });
+		throw err;
+	} finally {
+		client?.dispose();
+		spawnSync(bin, ["server", "stop"], { env: envs.isoEnv });
+		if (server.exitCode === null && server.signalCode === null) {
+			server.kill("SIGKILL");
+		}
+		if (failed) {
+			console.error(`hero: kept ${tmp} for inspection`);
+		} else {
+			rmSync(tmp, { recursive: true, force: true });
+		}
+	}
+}
+
+/** The isolated namespace: its own socket and home, nothing of the operator's. */
+function heroEnv(
+	tmp: string,
+	home: string,
+): {
+	isoEnv: Record<string, string>;
+	serverEnv: Record<string, string>;
+} {
 	const isoEnv: Record<string, string> = {
 		HOME: home,
 		XDG_CONFIG_HOME: join(home, ".config"),
@@ -88,12 +143,11 @@ async function main(): Promise<void> {
 		...isoEnv,
 		PATH: `${join(tmp, "bin")}:${process.env.PATH ?? "/usr/bin:/bin"}`,
 	};
+	return { isoEnv, serverEnv };
+}
 
-	const fixture = buildFixture(tmp);
-	// buildFixture puts the stubs in <fixture>/bin; the server PATH
-	// expects <tmp>/bin. Rebuild the PATH over the fixture's own bin.
-	serverEnv.PATH = `${join(fixture, "bin")}:${process.env.PATH ?? "/usr/bin:/bin"}`;
-	writeFileSync(join(fixture, "agent-pane.sh"), AGENT_PANE_SCRIPT);
+/** The herdr config the isolated home starts from: no tour, named theme. */
+function writeHerdrConfig(home: string): void {
 	// A fresh herdr home shows a first-run onboarding modal on the first
 	// client attach. Suppress it so the shot is the workspace, not the tour.
 	// Name the theme explicitly: inside herdr the plane reads this same config
@@ -107,193 +161,229 @@ async function main(): Promise<void> {
 		join(herdrConfigDir, "config.toml"),
 		`onboarding = false\n\n[theme]\nname = "${HERDR_THEME_NAME}"\n`,
 	);
+}
 
-	const serverLog = openSync(join(tmp, "herdr-server.log"), "a");
-	const server = spawn(bin, ["server"], {
-		env: serverEnv,
-		stdio: ["ignore", serverLog, serverLog],
-	});
-	let client: Awaited<ReturnType<typeof openPty>> = null;
-	let paneA = "";
-	let paneB = "";
-	let failed = false;
-	try {
-		await waitForServer(bin, isoEnv);
-		const rootPane = await cliJson(bin, isoEnv, [
-			"workspace",
-			"create",
-			"--cwd",
-			fixture,
-			"--label",
-			"my-little-software-factory",
-		]);
-		paneA = rootPane.result.root_pane.pane_id as string;
-		// The running ticket's handoff environment: its own workspace on its
-		// own checkout, the way a real handoff stands (one workspace per
-		// repository checkout, never a pane beside the plane). The workspace
-		// stays unfocused, so the shot shows the plane, and the sidebar
-		// carries the agent's workspace and state.
-		const agentCheckout = join(
-			fixture,
-			"checkouts",
-			"52-retry-failed-webhook-deliveries-with-a-bounded-backoff",
-		);
-		mkdirSync(agentCheckout, { recursive: true });
-		const agentWorkspace = await cliJson(bin, isoEnv, [
-			"workspace",
-			"create",
-			"--cwd",
-			agentCheckout,
-			"--no-focus",
-		]);
-		paneB = agentWorkspace.result.root_pane.pane_id as string;
+/** The two workspaces: the plane's, and the running ticket's agent. */
+async function heroWorkspaces(
+	bin: string,
+	isoEnv: Record<string, string>,
+	fixture: string,
+): Promise<{ paneA: string; paneB: string }> {
+	const rootPane = await cliJson(bin, isoEnv, [
+		"workspace",
+		"create",
+		"--cwd",
+		fixture,
+		"--label",
+		"my-little-software-factory",
+	]);
+	const paneA = rootPane.result.root_pane.pane_id as string;
+	// The running ticket's handoff environment: its own workspace on its
+	// own checkout, the way a real handoff stands (one workspace per
+	// repository checkout, never a pane beside the plane). The workspace
+	// stays unfocused, so the shot shows the plane, and the sidebar
+	// carries the agent's workspace and state.
+	const agentCheckout = join(
+		fixture,
+		"checkouts",
+		"52-retry-failed-webhook-deliveries-with-a-bounded-backoff",
+	);
+	mkdirSync(agentCheckout, { recursive: true });
+	const agentWorkspace = await cliJson(bin, isoEnv, [
+		"workspace",
+		"create",
+		"--cwd",
+		agentCheckout,
+		"--no-focus",
+	]);
+	const paneB = agentWorkspace.result.root_pane.pane_id as string;
+	return { paneA, paneB };
+}
 
-		// Attach the client first, so the panes size to its window
-		// before the app renders.
-		client = await openPty(
-			bin,
-			[],
-			{ ...isoEnv, PATH: process.env.PATH ?? "/usr/bin:/bin" },
-			{
-				size: { cols: HERO_SCREEN.cols, rows: HERO_SCREEN.rows },
-			},
-		);
-		if (client === null) throw new Error("hero: this platform cannot open a PTY");
-		await client.waitFor(
-			(out) => out.toString("utf8").includes("my-little-software-factory"),
-			"the workspace to appear in the client",
-			30000,
-		);
+/** The attached client, settled on the workspace's own line. */
+async function heroClient(
+	bin: string,
+	isoEnv: Record<string, string>,
+): Promise<NonNullable<Awaited<ReturnType<typeof openPty>>>> {
+	// Attach the client first, so the panes size to its window
+	// before the app renders.
+	const client = await openPty(
+		bin,
+		[],
+		{ ...isoEnv, PATH: process.env.PATH ?? "/usr/bin:/bin" },
+		{
+			size: { cols: HERO_SCREEN.cols, rows: HERO_SCREEN.rows },
+		},
+	);
+	if (client === null) throw new Error("hero: this platform cannot open a PTY");
+	await client.waitFor(
+		(out) => out.toString("utf8").includes("my-little-software-factory"),
+		"the workspace to appear in the client",
+		30000,
+	);
+	return client;
+}
 
-		await cli(bin, isoEnv, ["pane", "run", paneB, "sh", join(fixture, "agent-pane.sh")]);
-		await cli(bin, isoEnv, [
-			"pane",
-			"run",
-			paneA,
-			process.execPath,
-			CONTROLLER_BIN,
-			"--config",
-			join(fixture, "config.toml"),
-		]);
-		// Wait for the ticket header, not a ticket title: the list column
-		// truncates titles, and the Detail pane shows the focused ticket,
-		// so a title string is not a reliable settle signal. The herdr client
-		// is a full-screen TUI: it redraws with cursor moves and SGR codes
-		// between characters, so a multi-word string never appears contiguous
-		// in the raw byte stream. Settle on the parsed grid instead.
-		const header = "open: 3  running: 1  awaiting: 1";
-		const hasHeader = (grid: Grid): boolean =>
-			grid.some((row) =>
-				row
-					.map((c) => c.char)
-					.join("")
-					.includes(header),
+/** The two panes' processes: the agent's sleeper, the plane itself. */
+async function heroRunPanes(
+	bin: string,
+	isoEnv: Record<string, string>,
+	fields: { fixture: string; paneA: string; paneB: string },
+): Promise<void> {
+	await cli(bin, isoEnv, [
+		"pane",
+		"run",
+		fields.paneB,
+		"sh",
+		join(fields.fixture, "agent-pane.sh"),
+	]);
+	await cli(bin, isoEnv, [
+		"pane",
+		"run",
+		fields.paneA,
+		process.execPath,
+		CONTROLLER_BIN,
+		"--config",
+		join(fields.fixture, "config.toml"),
+	]);
+}
+
+/** The settle on the Main view's header, read from the parsed grid. */
+async function heroTicketHeader(
+	client: NonNullable<Awaited<ReturnType<typeof openPty>>>,
+): Promise<void> {
+	// Wait for the ticket header, not a ticket title: the list column
+	// truncates titles, and the Detail pane shows the focused ticket,
+	// so a title string is not a reliable settle signal. The herdr client
+	// is a full-screen TUI: it redraws with cursor moves and SGR codes
+	// between characters, so a multi-word string never appears contiguous
+	// in the raw byte stream. Settle on the parsed grid instead.
+	const header = "open: 3  running: 1  awaiting: 1";
+	const hasHeader = (grid: Grid): boolean =>
+		grid.some((row) =>
+			row
+				.map((c) => c.char)
+				.join("")
+				.includes(header),
+		);
+	const headerDeadline = Date.now() + 60000;
+	for (;;) {
+		if (hasHeader(parseScreen(client.output(), HERO_SCREEN.cols, HERO_SCREEN.rows))) break;
+		if (Date.now() >= headerDeadline) {
+			throw new Error(
+				`timed out waiting for the Main view to render in the pane\ncaptured output:\n${preview(client.output())}`,
 			);
-		const headerDeadline = Date.now() + 60000;
-		for (;;) {
-			if (hasHeader(parseScreen(client.output(), HERO_SCREEN.cols, HERO_SCREEN.rows))) break;
-			if (Date.now() >= headerDeadline) {
-				throw new Error(
-					`timed out waiting for the Main view to render in the pane\ncaptured output:\n${preview(client.output())}`,
-				);
-			}
-			await sleep(250);
 		}
-		// Select the running ticket: the Detail pane shows the ticket the
-		// agent works. The cursor starts on the first row, so step with `j`
-		// until the Detail shows the ticket's description. The description
-		// stands nowhere in the list, whatever the list's width truncates,
-		// so it is the settle signal (the same reason the header wait above
-		// settles on the grid, not the byte stream). Keys go through the CLI
-		// to the pane directly: client keystrokes land on whichever pane
-		// holds the focus.
-		const detailText = "Deliveries that fail with a 5xx are dropped.";
-		const hasDetailText = (grid: Grid): boolean =>
-			grid.some((row) =>
-				row
-					.map((c) => c.char)
-					.join("")
-					.includes(detailText),
+		await sleep(250);
+	}
+}
+
+/** The select of the running ticket, settled on its description. */
+async function heroDetailSelect(
+	bin: string,
+	isoEnv: Record<string, string>,
+	paneA: string,
+): Promise<void> {
+	// Select the running ticket: the Detail pane shows the ticket the
+	// agent works. The cursor starts on the first row, so step with `j`
+	// until the Detail shows the ticket's description. The description
+	// stands nowhere in the list, whatever the list's width truncates,
+	// so it is the settle signal (the same reason the header wait above
+	// settles on the grid, not the byte stream). Keys go through the CLI
+	// to the pane directly: client keystrokes land on whichever pane
+	// holds the focus.
+	const detailText = "Deliveries that fail with a 5xx are dropped.";
+	const hasDetailText = (grid: Grid): boolean =>
+		grid.some((row) =>
+			row
+				.map((c) => c.char)
+				.join("")
+				.includes(detailText),
+		);
+	const detailDeadline = Date.now() + 30000;
+	for (;;) {
+		if (hasDetailText(parseScreen(client.output(), HERO_SCREEN.cols, HERO_SCREEN.rows))) break;
+		if (Date.now() >= detailDeadline) {
+			throw new Error(
+				`hero: the Detail pane never showed the running ticket\ncaptured output:\n${preview(client.output())}`,
 			);
-		const detailDeadline = Date.now() + 30000;
-		for (;;) {
-			if (hasDetailText(parseScreen(client.output(), HERO_SCREEN.cols, HERO_SCREEN.rows))) break;
-			if (Date.now() >= detailDeadline) {
-				throw new Error(
-					`hero: the Detail pane never showed the running ticket\ncaptured output:\n${preview(client.output())}`,
-				);
-			}
-			cli(bin, isoEnv, ["pane", "send-keys", paneA, "j"]);
-			await sleep(250);
 		}
-		// The agent workspace's pane holds a static process, so herdr's own
-		// detection names no agent in it. Report the pane's state so the
-		// sidebar shows the agent working, matching the ticket's running row.
-		cli(bin, isoEnv, [
-			"pane",
-			"report-agent",
-			paneB,
-			"--source",
-			"custom:hero",
-			"--agent",
-			"pi",
-			"--state",
-			"working",
-		]);
-		// The client redraws its chrome on a timer, so the byte stream never
-		// rests. Settle on the parsed screen grid instead: capture, re-capture
-		// once the grid stops changing, and render that.
-		let last = gridKey(client.output());
-		let stableSince = Date.now();
-		const deadline = Date.now() + 30000;
-		for (;;) {
-			await sleep(250);
-			const key = gridKey(client.output());
-			if (key !== last) {
-				last = key;
-				stableSince = Date.now();
-			} else if (Date.now() - stableSince >= 1200) {
-				break;
-			}
-			if (Date.now() >= deadline) break;
+		cli(bin, isoEnv, ["pane", "send-keys", paneA, "j"]);
+		await sleep(250);
+	}
+}
+
+/** The agent's reported state: the sidebar shows it working. */
+async function heroReportAgent(
+	bin: string,
+	isoEnv: Record<string, string>,
+	paneB: string,
+): Promise<void> {
+	// The agent workspace's pane holds a static process, so herdr's own
+	// detection names no agent in it. Report the pane's state so the
+	// sidebar shows the agent working, matching the ticket's running row.
+	await cli(bin, isoEnv, [
+		"pane",
+		"report-agent",
+		paneB,
+		"--source",
+		"custom:hero",
+		"--agent",
+		"pi",
+		"--state",
+		"working",
+	]);
+}
+
+/** The settle on a still grid: capture, re-capture, render that. */
+async function heroSettle(client: NonNullable<Awaited<ReturnType<typeof openPty>>>): Promise<void> {
+	// The client redraws its chrome on a timer, so the byte stream never
+	// rests. Settle on the parsed screen grid instead: capture, re-capture
+	// once the grid stops changing, and render that.
+	let last = gridKey(client.output());
+	let stableSince = Date.now();
+	const deadline = Date.now() + 30000;
+	for (;;) {
+		await sleep(250);
+		const key = gridKey(client.output());
+		if (key !== last) {
+			last = key;
+			stableSince = Date.now();
+		} else if (Date.now() - stableSince >= 1200) {
+			break;
 		}
-		const grid = parseScreen(client.output(), HERO_SCREEN.cols, HERO_SCREEN.rows);
-		mkdirSync(dirname(OUT), { recursive: true });
-		writeFileSync(OUT, renderPng(grid, TERMINAL_COLORS));
-		console.log(`hero: wrote ${OUT}`);
-	} catch (err) {
-		failed = true;
-		for (const [label, pane] of [
-			["plane", paneA],
-			["agent", paneB],
-		] as const) {
-			if (pane === "") continue;
-			try {
-				const out = spawnSync(bin, ["pane", "read", pane], { env: isoEnv }).stdout.toString();
-				console.error(`--- ${label} pane ${pane} ---\n${out.slice(-2000)}`);
-			} catch {
-				// The pane is gone; the server is already down.
-			}
-		}
+		if (Date.now() >= deadline) break;
+	}
+}
+
+/** The failure's evidence: both panes' tails, the server log's tail. */
+function heroFailureDiagnostics(
+	bin: string,
+	fields: {
+		isoEnv: Record<string, string>;
+		tmp: string;
+		paneA: string;
+		paneB: string;
+	},
+): void {
+	for (const [label, pane] of [
+		["plane", fields.paneA],
+		["agent", fields.paneB],
+	] as const) {
+		if (pane === "") continue;
 		try {
-			console.error(
-				`--- herdr server log ---\n${readFileSync(join(tmp, "herdr-server.log"), "utf8").slice(-2000)}`,
-			);
+			const out = spawnSync(bin, ["pane", "read", pane], { env: fields.isoEnv }).stdout.toString();
+			console.error(`--- ${label} pane ${pane} ---\n${out.slice(-2000)}`);
 		} catch {
-			// No log yet.
+			// The pane is gone; the server is already down.
 		}
-		throw err;
-	} finally {
-		client?.dispose();
-		spawnSync(bin, ["server", "stop"], { env: isoEnv });
-		if (server.exitCode === null && server.signalCode === null) {
-			server.kill("SIGKILL");
-		}
-		if (failed) {
-			console.error(`hero: kept ${tmp} for inspection`);
-		} else {
-			rmSync(tmp, { recursive: true, force: true });
-		}
+	}
+	try {
+		console.error(
+			`--- herdr server log ---\n${readFileSync(join(fields.tmp, "herdr-server.log"), "utf8").slice(-2000)}`,
+		);
+	} catch {
+		// No log yet.
 	}
 }
 

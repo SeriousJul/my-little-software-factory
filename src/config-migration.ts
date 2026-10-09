@@ -117,32 +117,93 @@ export function migrateWorkflowMachineConfig(
 	const shippedTaskTypes = isRecord(shipped["task-types"]) ? shipped["task-types"] : {};
 	const taskTypes = isRecord(originalData["task-types"]) ? originalData["task-types"] : {};
 
+	const statesOut = migrateStates({ rules, shipped });
+	const transitionsOut = migrateTransitions({
+		taskTypes,
+		edges,
+		stateForTask: statesOut.stateForTask,
+	});
+	const taskTypesOut = migrateTaskTypes({
+		taskTypes,
+		shippedTaskTypes,
+		transitions: transitionsOut.transitions,
+	});
+	const { states, stateLines, installedParks } = statesOut;
+	const { transitions, droppedEdges } = transitionsOut;
+	const { newTaskTypes, templateLines, installedTransitions, autoCloseLines } = taskTypesOut;
+
+	const { autoHandoffLine, priorityLine } = droppedKeyLines(originalData);
+	const newData = reassembleConfig(originalData, states, newTaskTypes);
+
+	// A file the machine keys mark is a workflow machine migration: the
+	// pre-machine keys, and the pre-action merge seed template, which rides
+	// the same rewrite (ADR 0068). A file only the retired Priority table
+	// marks is a priority retirement (ADR 0050), and the two word their own
+	// header and report title.
+	const machineMigrated = isMachineMigration(originalData, autoCloseLines);
+	const configText = buildConfigText({
+		newData,
+		backupFileName,
+		reportFileName,
+		machineMigrated,
+		date,
+	});
+	const reportText = buildReportText({
+		configPath,
+		date,
+		machineMigrated,
+		backupFileName,
+		reportFileName,
+		stateLines,
+		installedParks,
+		transitions,
+		installedTransitions,
+		droppedEdges,
+		templateLines,
+		autoCloseLines,
+		autoHandoffLine,
+		priorityLine,
+		originalData,
+	});
+	const noteText = machineMigrated
+		? `the config at ${configPath} was migrated to the workflow machine; the pre-migration file is at ${backupFileName} and the report at ${reportFileName}`
+		: `the config at ${configPath} was migrated off the retired priority table; the pre-migration file is at ${backupFileName} and the report at ${reportFileName}`;
+
+	return { configText, reportText, backupFileName, reportFileName, noteText };
+}
+
+/** One state per rule, and the shipped machine's parking states. */
+function migrateStates(fields: {
+	rules: Record<string, unknown>[];
+	shipped: Record<string, unknown>;
+}): {
+	states: Record<string, unknown>[];
+	stateNames: Set<string>;
+	stateForTask: Map<string, { name: string; match: Record<string, unknown> }>;
+	stateLines: string[];
+	installedParks: string[];
+} {
+	const { rules, shipped } = fields;
 	// One state per rule: the state is named for the rule's task type, and
 	// its match is the rule's when table, carried over verbatim.
 	const states: Record<string, unknown>[] = [];
 	const stateNames = new Set<string>();
 	const stateForTask = new Map<string, { name: string; match: Record<string, unknown> }>();
 	const stateLines: string[] = [];
-	const shippedStates = (Array.isArray(shipped.states) ? shipped.states : []).filter(isRecord);
 	const installedParks: string[] = [];
 	for (const rule of rules) {
-		const taskType = rule["task-type"];
-		if (typeof taskType !== "string" || taskType === "") {
-			throw new ConfigMigrationError("a [[task-rules]] entry has no task-type string");
-		}
-		const match = isRecord(rule.when) ? rule.when : {};
-		let name = taskType;
-		for (let suffix = 2; stateNames.has(name); suffix++) name = `${taskType}-${suffix}`;
-		stateNames.add(name);
-		stateForTask.set(taskType, { name, match });
-		states.push({ name, "task-type": taskType, match: { ...match } });
-		stateLines.push(`- \`${name}\`: task \`${taskType}\`, matches ${matchDescription(match)}.`);
+		const state = ruleStateEntry(rule, stateNames);
+		stateForTask.set(state.taskType, { name: state.name, match: state.match });
+		states.push({ name: state.name, "task-type": state.taskType, match: { ...state.match } });
+		stateLines.push(
+			`- \`${state.name}\`: task \`${state.taskType}\`, matches ${matchDescription(state.match)}.`,
+		);
 	}
-
 	// The shipped machine's parking states come over with the migration. The
 	// default source list carries an open pull request before it holds a label,
 	// so a config whose rules name only the labeled states would otherwise hand
 	// the default task type to a stranger's pull request.
+	const shippedStates = (Array.isArray(shipped.states) ? shipped.states : []).filter(isRecord);
 	for (const shippedState of shippedStates) {
 		if (shippedState["task-type"] !== undefined) continue;
 		const name = shippedState.name;
@@ -154,7 +215,37 @@ export function migrateWorkflowMachineConfig(
 			`\`${name}\`: the shipped seed's parking state, appended so a pull request the machine has not placed suggests nothing.`,
 		);
 	}
+	return { states, stateNames, stateForTask, stateLines, installedParks };
+}
 
+/** The one state row one task rule carries into the new machine. */
+function ruleStateEntry(
+	rule: Record<string, unknown>,
+	stateNames: Set<string>,
+): { taskType: string; name: string; match: Record<string, unknown> } {
+	// One state per rule: the state is named for the rule's task type, and
+	// its match is the rule's when table, carried over verbatim.
+	const taskType = rule["task-type"];
+	if (typeof taskType !== "string" || taskType === "") {
+		throw new ConfigMigrationError("a [[task-rules]] entry has no task-type string");
+	}
+	const match = isRecord(rule.when) ? rule.when : {};
+	let name = taskType;
+	for (let suffix = 2; stateNames.has(name); suffix++) name = `${taskType}-${suffix}`;
+	stateNames.add(name);
+	return { taskType, name, match };
+}
+
+/** One transition per expressible edge, and the edges it drops, named. */
+function migrateTransitions(fields: {
+	taskTypes: Record<string, unknown>;
+	edges: Record<string, unknown>[];
+	stateForTask: Map<string, { name: string; match: Record<string, unknown> }>;
+}): {
+	transitions: Map<string, { transition: Record<string, unknown>; line: string }>;
+	droppedEdges: string[];
+} {
+	const { taskTypes, edges, stateForTask } = fields;
 	// One transition per expressible edge: the single edge out of a task
 	// type whose target one state suggests. The transition writes that
 	// state's label facts, on the surface the state names, and it carries
@@ -163,59 +254,84 @@ export function migrateWorkflowMachineConfig(
 	const droppedEdges: string[] = [];
 	for (const [taskType, rawTask] of Object.entries(taskTypes)) {
 		if (!isRecord(rawTask)) continue;
-		const fromEdges = edges.filter((edge) => edge.from === taskType);
-		if (fromEdges.length === 0) continue;
-		if (fromEdges.length > 1) {
-			droppedEdges.push(
-				`the ${fromEdges.length} outgoing edges from \`${taskType}\`: a transition has one, and the edges offered a choice the machine's transitions do not express. Route them by hand from the decision modal.`,
-			);
-			continue;
-		}
-		const edge = fromEdges[0];
-		const targets = Array.isArray(edge.to) ? (edge.to as unknown[]) : [];
-		if (targets.length !== 1 || typeof targets[0] !== "string" || targets[0] === "") {
-			droppedEdges.push(
-				`the edge from \`${taskType}\` to ${targetList(targets)}: a transition's single edge must name exactly one task type.`,
-			);
-			continue;
-		}
-		const target = targets[0] as string;
-		const state = stateForTask.get(target);
-		if (state === undefined) {
-			droppedEdges.push(
-				`the edge from \`${taskType}\` to \`${target}\`: no state suggests \`${target}\`, so the transition has no facts to write.`,
-			);
-			continue;
-		}
-		const facts = [
-			...stringList(state.match["labels-all"]),
-			...stringList(state.match["labels-any"]),
-		];
-		if (facts.length === 0) {
-			droppedEdges.push(
-				`the edge from \`${taskType}\` to \`${target}\`: the state \`${state.name}\` matches without naming any labels, so it has no facts to write.`,
-			);
-			continue;
-		}
-		const onPullRequest = state.match["source-kind"] === "github-pull-request";
-		const transition: Record<string, unknown> = { "ticket-facts": [], "pull-request-facts": [] };
-		if (onPullRequest) transition["pull-request-facts"] = facts;
-		else transition["ticket-facts"] = facts;
-		if (typeof edge.agent === "string") transition.agent = edge.agent;
-		if (typeof edge.environment === "string") transition.environment = edge.environment;
-		transitions.set(taskType, {
+		const out = migrateTransitionForTask({ taskType, edges, stateForTask });
+		if (out.dropped !== undefined) droppedEdges.push(out.dropped);
+		if (out.entry !== undefined) transitions.set(taskType, out.entry);
+	}
+	return { transitions, droppedEdges };
+}
+
+/** The one transition a task type's single outgoing edge expresses, if any. */
+function migrateTransitionForTask(fields: {
+	taskType: string;
+	edges: Record<string, unknown>[];
+	stateForTask: Map<string, { name: string; match: Record<string, unknown> }>;
+}): { entry?: { transition: Record<string, unknown>; line: string }; dropped?: string } {
+	const { taskType, edges, stateForTask } = fields;
+	const fromEdges = edges.filter((edge) => edge.from === taskType);
+	if (fromEdges.length === 0) return {};
+	if (fromEdges.length > 1) {
+		return {
+			dropped: `the ${fromEdges.length} outgoing edges from \`${taskType}\`: a transition has one, and the edges offered a choice the machine's transitions do not express. Route them by hand from the decision modal.`,
+		};
+	}
+	const edge = fromEdges[0];
+	const targets = Array.isArray(edge.to) ? (edge.to as unknown[]) : [];
+	if (targets.length !== 1 || typeof targets[0] !== "string" || targets[0] === "") {
+		return {
+			dropped: `the edge from \`${taskType}\` to ${targetList(targets)}: a transition's single edge must name exactly one task type.`,
+		};
+	}
+	const target = targets[0] as string;
+	const state = stateForTask.get(target);
+	if (state === undefined) {
+		return {
+			dropped: `the edge from \`${taskType}\` to \`${target}\`: no state suggests \`${target}\`, so the transition has no facts to write.`,
+		};
+	}
+	const facts = [
+		...stringList(state.match["labels-all"]),
+		...stringList(state.match["labels-any"]),
+	];
+	if (facts.length === 0) {
+		return {
+			dropped: `the edge from \`${taskType}\` to \`${target}\`: the state \`${state.name}\` matches without naming any labels, so it has no facts to write.`,
+		};
+	}
+	const onPullRequest = state.match["source-kind"] === "github-pull-request";
+	const transition: Record<string, unknown> = { "ticket-facts": [], "pull-request-facts": [] };
+	if (onPullRequest) transition["pull-request-facts"] = facts;
+	else transition["ticket-facts"] = facts;
+	if (typeof edge.agent === "string") transition.agent = edge.agent;
+	if (typeof edge.environment === "string") transition.environment = edge.environment;
+	return {
+		entry: {
 			transition,
 			line: `\`${taskType}\`: writes the ${onPullRequest ? "pull request" : "ticket"} facts ${labelList(facts)} (from the edge to \`${target}\` and the state \`${state.name}\`).`,
-		});
-	}
+		},
+	};
+}
 
-	// Task types: auto-close is dropped (named), and a seed template that
-	// matches the pre-machine seed exactly is replaced by the clean one. The
-	// clean template drops the label prose that made the agents write the
-	// labels, so the same exact match installs the shipped seed's transition on
-	// that type when no edge expressed one: the plane takes over the labels the
-	// template let go. A customized template keeps its prose and gets no
-	// transition, and the report names it.
+/**
+ * Task types: auto-close is dropped (named), and a seed template that
+ * matches the pre-machine seed exactly is replaced by the clean one. The
+ * clean template drops the label prose that made the agents write the
+ * labels, so the same exact match installs the shipped seed's transition on
+ * that type when no edge expressed one: the plane takes over the labels the
+ * template let go. A customized template keeps its prose and gets no
+ * transition, and the report names it.
+ */
+function migrateTaskTypes(fields: {
+	taskTypes: Record<string, unknown>;
+	shippedTaskTypes: Record<string, unknown>;
+	transitions: Map<string, { transition: Record<string, unknown>; line: string }>;
+}): {
+	newTaskTypes: Record<string, unknown>;
+	templateLines: string[];
+	installedTransitions: string[];
+	autoCloseLines: string[];
+} {
+	const { taskTypes, shippedTaskTypes, transitions } = fields;
 	const newTaskTypes: Record<string, unknown> = {};
 	const templateLines: string[] = [];
 	const installedTransitions: string[] = [];
@@ -225,75 +341,143 @@ export function migrateWorkflowMachineConfig(
 			newTaskTypes[name] = rawTask;
 			continue;
 		}
-		const task: Record<string, unknown> = {};
-		let seedTemplateMatched = false;
-		let actionFormReplaced = false;
-		for (const [key, value] of Object.entries(rawTask)) {
-			if (key === "auto-close") {
-				if (value === true) {
-					autoCloseLines.push(
-						`\`auto-close = true\` on \`${name}\`: dropped. Auto-handoff mode decides the route from the settled turn's Next step, so no flag replaces it.`,
-					);
-				}
-				continue;
-			}
-			if (key === "template" && typeof value === "string") {
-				const replacement = seedTemplateReplacement(name, value, shippedTaskTypes);
-				task.template = replacement.template;
-				seedTemplateMatched = replacement.replaced;
-				if (OLD_SEED_TEMPLATES[name] !== undefined) {
-					templateLines.push(
-						replacement.replaced
-							? `\`${name}\`: replaced with the clean seed template (the pre-migration template matched the seed exactly).`
-							: `\`${name}\`: left untouched (the template does not match the pre-migration seed). Its own label prose is the only writer of the labels this type's turns leave behind.`,
-					);
-				}
-				continue;
-			}
-			task[key] = value;
-		}
-		// The merge's conversion to the action form (ADR 0068): a prompt-form
-		// type whose template matched the shipped merge seed exactly takes the
-		// action form the seed was replaced by, with its profile keys dropped -
-		// the plane runs the merge, and the action holds no settings the
-		// profile keys would edit. A customized template stays a prompt task
-		// type, named in the report.
-		if (
-			name === "merge" &&
-			typeof task.template === "string" &&
-			(task.template === OLD_SEED_TEMPLATES.merge || task.template === MERGE_PROMPT_SEED_TEMPLATE)
-		) {
-			const shippedTask = shippedTaskTypes.merge;
-			if (isRecord(shippedTask) && typeof shippedTask.action === "string") {
-				const previousTransition = task.transition;
-				for (const key of Object.keys(task)) delete task[key];
-				task.action = shippedTask.action;
-				if (typeof shippedTask.method === "string") task.method = shippedTask.method;
-				if (previousTransition !== undefined) task.transition = previousTransition;
-				actionFormReplaced = true;
-				templateLines.push(
-					`\`merge\`: converted to the action form (the template matched the shipped seed exactly). The merge runs on the plane, with no agent, and the action form's profile keys are dropped.`,
-				);
-			}
-		}
-		const transition = transitions.get(name);
-		if (transition !== undefined) {
-			task.transition = transition.transition;
-		} else if (seedTemplateMatched || actionFormReplaced) {
-			const shippedTransition = shippedSeedTransition(name, shippedTaskTypes);
-			if (shippedTransition !== undefined) {
-				task.transition = shippedTransition;
-				installedTransitions.push(
-					`\`${name}\`: the shipped seed's transition, installed with the clean template or action form (no pre-migration edge expressed it).`,
-				);
-			}
-		}
-		newTaskTypes[name] = task;
+		newTaskTypes[name] = migrateTaskType({
+			name,
+			rawTask,
+			shippedTaskTypes,
+			transition: transitions.get(name),
+			templateLines,
+			installedTransitions,
+			autoCloseLines,
+		});
 	}
+	return { newTaskTypes, templateLines, installedTransitions, autoCloseLines };
+}
 
-	// Reassemble with the old key order: states take the task-rules
-	// position, task-types keeps its own, and the old keys are gone. The
-	// top-level `auto-handoff` key is the pre-ADR-0036 default for the
+/** One task type, carried over with its retired keys and seed template judged. */
+/** The one raw key one task type's row carries into its new row. */
+function migrateTaskTypeKey(
+	key: string,
+	value: unknown,
+	draft: { task: Record<string, unknown>; seedTemplateMatched: boolean },
+	one: {
+		name: string;
+		shippedTaskTypes: Record<string, unknown>;
+		templateLines: string[];
+		autoCloseLines: string[];
+	},
+): void {
+	if (key === "auto-close") {
+		if (value === true) {
+			one.autoCloseLines.push(
+				`\`auto-close = true\` on \`${one.name}\`: dropped. Auto-handoff mode decides the route from the settled turn's Next step, so no flag replaces it.`,
+			);
+		}
+		return;
+	}
+	if (key === "template" && typeof value === "string") {
+		const replacement = seedTemplateReplacement(one.name, value, one.shippedTaskTypes);
+		draft.task.template = replacement.template;
+		draft.seedTemplateMatched = replacement.replaced;
+		if (OLD_SEED_TEMPLATES[one.name] !== undefined) {
+			one.templateLines.push(
+				replacement.replaced
+					? `\`${one.name}\`: replaced with the clean seed template (the pre-migration template matched the seed exactly).`
+					: `\`${one.name}\`: left untouched (the template does not match the pre-migration seed). Its own label prose is the only writer of the labels this type's turns leave behind.`,
+			);
+		}
+		return;
+	}
+	draft.task[key] = value;
+}
+
+function migrateTaskType(fields: {
+	name: string;
+	rawTask: Record<string, unknown>;
+	shippedTaskTypes: Record<string, unknown>;
+	transition: { transition: Record<string, unknown>; line: string } | undefined;
+	templateLines: string[];
+	installedTransitions: string[];
+	autoCloseLines: string[];
+}): Record<string, unknown> {
+	const {
+		name,
+		rawTask,
+		shippedTaskTypes,
+		transition,
+		templateLines,
+		installedTransitions,
+		autoCloseLines,
+	} = fields;
+	const task: Record<string, unknown> = {};
+	const draft = { task, seedTemplateMatched: false };
+	for (const [key, value] of Object.entries(rawTask)) {
+		migrateTaskTypeKey(key, value, draft, {
+			name,
+			shippedTaskTypes,
+			templateLines,
+			autoCloseLines,
+		});
+	}
+	const seedTemplateMatched = draft.seedTemplateMatched;
+	const actionFormReplaced = applyMergeActionForm({ task, name, shippedTaskTypes, templateLines });
+	if (transition !== undefined) {
+		task.transition = transition.transition;
+	} else if (seedTemplateMatched || actionFormReplaced) {
+		const shippedTransition = shippedSeedTransition(name, shippedTaskTypes);
+		if (shippedTransition !== undefined) {
+			task.transition = shippedTransition;
+			installedTransitions.push(
+				`\`${name}\`: the shipped seed's transition, installed with the clean template or action form (no pre-migration edge expressed it).`,
+			);
+		}
+	}
+	return task;
+}
+
+/**
+ * The merge's conversion to the action form (ADR 0068): a prompt-form
+ * type whose template matched the shipped merge seed exactly takes the
+ * action form the seed was replaced by, with its profile keys dropped -
+ * the plane runs the merge, and the action holds no settings the
+ * profile keys would edit. A customized template stays a prompt task
+ * type, named in the report.
+ */
+function applyMergeActionForm(fields: {
+	task: Record<string, unknown>;
+	name: string;
+	shippedTaskTypes: Record<string, unknown>;
+	templateLines: string[];
+}): boolean {
+	const { task, name, shippedTaskTypes, templateLines } = fields;
+	if (
+		name !== "merge" ||
+		typeof task.template !== "string" ||
+		(task.template !== OLD_SEED_TEMPLATES.merge && task.template !== MERGE_PROMPT_SEED_TEMPLATE)
+	) {
+		return false;
+	}
+	const shippedTask = shippedTaskTypes.merge;
+	if (isRecord(shippedTask) && typeof shippedTask.action === "string") {
+		const previousTransition = task.transition;
+		for (const key of Object.keys(task)) delete task[key];
+		task.action = shippedTask.action;
+		if (typeof shippedTask.method === "string") task.method = shippedTask.method;
+		if (previousTransition !== undefined) task.transition = previousTransition;
+		templateLines.push(
+			`\`merge\`: converted to the action form (the template matched the shipped seed exactly). The merge runs on the plane, with no agent, and the action form's profile keys are dropped.`,
+		);
+		return true;
+	}
+	return false;
+}
+
+/** The lines the dropped keys leave in the report, where the file held them. */
+function droppedKeyLines(originalData: Record<string, unknown>): {
+	autoHandoffLine: string | null;
+	priorityLine: string | null;
+} {
+	// The top-level `auto-handoff` key is the pre-ADR-0036 default for the
 	// Auto-handoff mode, which lives in the state file the `a` key toggles:
 	// the rewrite drops it and names the fact in the report.
 	let autoHandoffLine: string | null = null;
@@ -311,6 +495,18 @@ export function migrateWorkflowMachineConfig(
 			`of work, and the ticket list orders by attention: the newest external ` +
 			`update first, then the ticket identity.`;
 	}
+	return { autoHandoffLine, priorityLine };
+}
+
+/**
+ * Reassemble with the old key order: states take the task-rules
+ * position, task-types keeps its own, and the old keys are gone.
+ */
+function reassembleConfig(
+	originalData: Record<string, unknown>,
+	states: Record<string, unknown>[],
+	newTaskTypes: Record<string, unknown>,
+): Record<string, unknown> {
 	const newData: Record<string, unknown> = {};
 	for (const [key, value] of Object.entries(originalData)) {
 		if (key === "task-rules") {
@@ -326,25 +522,38 @@ export function migrateWorkflowMachineConfig(
 	}
 	if (newData.states === undefined) newData.states = states;
 	if (newData["task-types"] === undefined) newData["task-types"] = newTaskTypes;
+	return newData;
+}
 
-	// A file the machine keys mark is a workflow machine migration: the
-	// pre-machine keys, and the pre-action merge seed template, which rides
-	// the same rewrite (ADR 0068). A file only the retired Priority table
-	// marks is a priority retirement (ADR 0050), and the two word their own
-	// header and report title.
-	const machineMigrated =
+/** Whether the file marks a workflow machine migration or a priority retirement. */
+function isMachineMigration(
+	originalData: Record<string, unknown>,
+	autoCloseLines: string[],
+): boolean {
+	return (
 		"task-rules" in originalData ||
 		"workflows" in originalData ||
 		autoCloseLines.length > 0 ||
 		(isRecord(originalData["task-types"]) &&
 			Object.values(originalData["task-types"]).some(
 				(task) => isRecord(task) && oldMergeSeedMatch(task),
-			));
+			))
+	);
+}
+
+/** The migrated config, with the report's pointer lines on top. */
+function buildConfigText(fields: {
+	newData: Record<string, unknown>;
+	backupFileName: string;
+	reportFileName: string;
+	machineMigrated: boolean;
+	date: string;
+}): string {
+	const { newData, backupFileName, reportFileName, machineMigrated, date } = fields;
 	const migrationHeader = machineMigrated
 		? `# Migrated to the workflow machine on ${date} (ADR 0027).`
 		: `# The retired [priority] table was removed on ${date} (ADR 0050).`;
-	const migrationTitle = machineMigrated ? "Workflow machine migration" : "Priority retirement";
-	const configText = [
+	return [
 		migrationHeader,
 		`# The pre-migration file is at ${backupFileName}; the migration report at ${reportFileName}.`,
 		"# The plane owns the workflow labels: states name the machine's states,",
@@ -353,58 +562,145 @@ export function migrateWorkflowMachineConfig(
 		"",
 		stringify(newData),
 	].join("\n");
+}
 
+/** The report's sections for a machine migration, in order. */
+function machineReportSections(fields: {
+	stateLines: string[];
+	installedParks: string[];
+	transitions: Map<string, { transition: Record<string, unknown>; line: string }>;
+	installedTransitions: string[];
+	droppedEdges: string[];
+	templateLines: string[];
+	autoCloseLines: string[];
+}): string[] {
+	const {
+		stateLines,
+		installedParks,
+		transitions,
+		installedTransitions,
+		droppedEdges,
+		templateLines,
+		autoCloseLines,
+	} = fields;
+	return [
+		...statesReportSection(stateLines, installedParks),
+		...transitionsReportSection(transitions, installedTransitions, droppedEdges),
+		...templatesReportSection(templateLines, autoCloseLines),
+	];
+}
+
+function statesReportSection(stateLines: string[], installedParks: string[]): string[] {
+	return [
+		"## States",
+		"",
+		"Rules became states: one state per rule, named for the rule's task type,",
+		"with the rule's match carried over.",
+		"",
+		...(stateLines.length > 0 ? stateLines : ["No task rules: no states were derived."]),
+		...(installedParks.length > 0
+			? ["", "Parking states appended from the shipped machine:", "", ...installedParks]
+			: []),
+		"",
+	];
+}
+
+function transitionsReportSection(
+	transitions: Map<string, { transition: Record<string, unknown>; line: string }>,
+	installedTransitions: string[],
+	droppedEdges: string[],
+): string[] {
+	return [
+		"## Transitions",
+		"",
+		"Expressible edges became transitions: the transition writes the state",
+		"label facts of the edge's single target, on the surface the state",
+		"names, and carries the edge's agent and environment pins.",
+		"",
+		...(transitions.size > 0
+			? [...transitions.values()].map((entry) => `- ${entry.line}`)
+			: ["No edges were expressible as transitions."]),
+		...(installedTransitions.length > 0
+			? [
+					"",
+					"Transitions installed from the shipped seed with the clean template:",
+					"",
+					...installedTransitions.map((line) => `- ${line}`),
+				]
+			: []),
+		...(droppedEdges.length > 0
+			? ["", "Dropped edges, named:", "", ...droppedEdges.map((line) => `- ${line}`)]
+			: []),
+		"",
+	];
+}
+
+function templatesReportSection(templateLines: string[], autoCloseLines: string[]): string[] {
+	return [
+		"## Templates",
+		"",
+		"The four seed templates are replaced on exact match; a customized",
+		"template is left untouched.",
+		"",
+		...(templateLines.length > 0 ? templateLines : ["No seed task types: no template actions."]),
+		"",
+		"## Dropped keys",
+		"",
+		...(autoCloseLines.length > 0 ? autoCloseLines : ["No `auto-close` flags were set."]),
+	];
+}
+
+/** The report: what the rewrite did, in the sections the machine migration names. */
+function buildReportText(fields: {
+	configPath: string;
+	date: string;
+	machineMigrated: boolean;
+	backupFileName: string;
+	reportFileName: string;
+	stateLines: string[];
+	installedParks: string[];
+	transitions: Map<string, { transition: Record<string, unknown>; line: string }>;
+	installedTransitions: string[];
+	droppedEdges: string[];
+	templateLines: string[];
+	autoCloseLines: string[];
+	autoHandoffLine: string | null;
+	priorityLine: string | null;
+	originalData: Record<string, unknown>;
+}): string {
+	const {
+		configPath,
+		date,
+		machineMigrated,
+		backupFileName,
+		reportFileName,
+		stateLines,
+		installedParks,
+		transitions,
+		installedTransitions,
+		droppedEdges,
+		templateLines,
+		autoCloseLines,
+		autoHandoffLine,
+		priorityLine,
+		originalData,
+	} = fields;
+	const migrationTitle = machineMigrated ? "Workflow machine migration" : "Priority retirement";
 	// The report says what the rewrite did. A machine migration rewrote the
 	// whole workflow: its sections name the states, the transitions, and the
 	// templates. A priority-only rewrite touched one table: its sections name
 	// that table and nothing else, so the file never claims a change it did
 	// not make (ADR 0050).
 	const machineSections = machineMigrated
-		? [
-				"## States",
-				"",
-				"Rules became states: one state per rule, named for the rule's task type,",
-				"with the rule's match carried over.",
-				"",
-				...(stateLines.length > 0 ? stateLines : ["No task rules: no states were derived."]),
-				...(installedParks.length > 0
-					? ["", "Parking states appended from the shipped machine:", "", ...installedParks]
-					: []),
-				"",
-				"## Transitions",
-				"",
-				"Expressible edges became transitions: the transition writes the state",
-				"label facts of the edge's single target, on the surface the state",
-				"names, and carries the edge's agent and environment pins.",
-				"",
-				...(transitions.size > 0
-					? [...transitions.values()].map((entry) => `- ${entry.line}`)
-					: ["No edges were expressible as transitions."]),
-				...(installedTransitions.length > 0
-					? [
-							"",
-							"Transitions installed from the shipped seed with the clean template:",
-							"",
-							...installedTransitions.map((line) => `- ${line}`),
-						]
-					: []),
-				...(droppedEdges.length > 0
-					? ["", "Dropped edges, named:", "", ...droppedEdges.map((line) => `- ${line}`)]
-					: []),
-				"",
-				"## Templates",
-				"",
-				"The four seed templates are replaced on exact match; a customized",
-				"template is left untouched.",
-				"",
-				...(templateLines.length > 0
-					? templateLines
-					: ["No seed task types: no template actions."]),
-				"",
-				"## Dropped keys",
-				"",
-				...(autoCloseLines.length > 0 ? autoCloseLines : ["No `auto-close` flags were set."]),
-			]
+		? machineReportSections({
+				stateLines,
+				installedParks,
+				transitions,
+				installedTransitions,
+				droppedEdges,
+				templateLines,
+				autoCloseLines,
+			})
 		: [
 				"## Dropped keys",
 				"",
@@ -412,8 +708,7 @@ export function migrateWorkflowMachineConfig(
 				"the transitions, and the templates in the file are the ones the file",
 				"already carried.",
 			];
-
-	const reportText = [
+	return [
 		`# ${migrationTitle}`,
 		"",
 		`The config at \`${configPath}\` carried ${
@@ -425,6 +720,17 @@ export function migrateWorkflowMachineConfig(
 		...machineSections,
 		...(autoHandoffLine === null ? [] : ["", autoHandoffLine]),
 		...(priorityLine === null ? [] : ["", priorityLine]),
+		...behaviorChangesSection(machineMigrated, originalData, backupFileName),
+	].join("\n");
+}
+
+/** The report's closing section: what the operator's machine must now do differently. */
+function behaviorChangesSection(
+	machineMigrated: boolean,
+	originalData: Record<string, unknown>,
+	backupFileName: string,
+): string[] {
+	return [
 		"",
 		"## Behavior changes to know",
 		"",
@@ -444,13 +750,7 @@ export function migrateWorkflowMachineConfig(
 				]
 			: []),
 		"",
-	].join("\n");
-
-	const noteText = machineMigrated
-		? `the config at ${configPath} was migrated to the workflow machine; the pre-migration file is at ${backupFileName} and the report at ${reportFileName}`
-		: `the config at ${configPath} was migrated off the retired priority table; the pre-migration file is at ${backupFileName} and the report at ${reportFileName}`;
-
-	return { configText, reportText, backupFileName, reportFileName, noteText };
+	];
 }
 
 /**

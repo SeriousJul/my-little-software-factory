@@ -235,43 +235,51 @@ function seed(
 	state.grouping.setGroupingAxis("tickets", "none");
 	state.sourceFact.initializeSources([source]);
 	state.sourceFact.applyFetch(source, outcome);
-	if (shape !== "open") {
-		const message = detail.message ?? "The turn is done.";
-		const claim = state.handoff.claimHandoff(
-			identity,
-			{
-				agentType: "pi",
-				environment,
-				taskType: detail.taskType ?? "implement",
-				model: detail.model ?? "",
-				thinking: detail.thinking ?? "",
-				contextWindow: detail.contextWindow ?? "",
-			},
-			"open",
-		);
-		if (!claim.ok) throw new Error(claim.reason);
-		state.handoff.settleHandoff(claim.claim.attemptId, true, undefined, {
-			paneId: "pane-1",
-			tabId: "tab-1",
-			workspaceId: "ws-1",
-		});
-		if (shape === "awaiting") {
-			state.ticketWorkCycle.settleTurn({
-				ticketIdentity: identity,
-				handoffId: claim.claim.attemptId,
-				taskType: detail.taskType ?? "implement",
-				agentType: "pi",
-				message,
-				turnLog: detail.turnLog ?? [{ kind: "text", text: message }],
-				completedAt: "2026-08-31T11:00:00Z",
-				cause: detail.cause,
-				...(detail.transition === undefined || detail.transition === null
-					? {}
-					: { transition: detail.transition }),
-			});
-		}
-	}
+	if (shape !== "open") seedStoredHandoff(state, shape, environment, detail);
 	return state;
+}
+
+/** The stored handoff one non-open shape claims, settles, and settles the turn for. */
+function seedStoredHandoff(
+	state: FactoryState,
+	shape: "in-flight" | "awaiting",
+	environment: "live-worktree" | "worktree",
+	detail: SeedDetail,
+): void {
+	const message = detail.message ?? "The turn is done.";
+	const claim = state.handoff.claimHandoff(
+		identity,
+		{
+			agentType: "pi",
+			environment,
+			taskType: detail.taskType ?? "implement",
+			model: detail.model ?? "",
+			thinking: detail.thinking ?? "",
+			contextWindow: detail.contextWindow ?? "",
+		},
+		"open",
+	);
+	if (!claim.ok) throw new Error(claim.reason);
+	state.handoff.settleHandoff(claim.claim.attemptId, true, undefined, {
+		paneId: "pane-1",
+		tabId: "tab-1",
+		workspaceId: "ws-1",
+	});
+	if (shape === "awaiting") {
+		state.ticketWorkCycle.settleTurn({
+			ticketIdentity: identity,
+			handoffId: claim.claim.attemptId,
+			taskType: detail.taskType ?? "implement",
+			agentType: "pi",
+			message,
+			turnLog: detail.turnLog ?? [{ kind: "text", text: message }],
+			completedAt: "2026-08-31T11:00:00Z",
+			cause: detail.cause,
+			...(detail.transition === undefined || detail.transition === null
+				? {}
+				: { transition: detail.transition }),
+		});
+	}
 }
 
 interface SeededApp {
@@ -287,12 +295,21 @@ interface SeededApp {
 /** A seeded state plus the app props that match it: config, runner, source. */
 function seededApp(
 	shape: "open" | "in-flight" | "awaiting",
-	extra: Partial<FactoryConfig> = {},
-	outcome: FetchOutcome = success,
-	environment: "live-worktree" | "worktree" = "live-worktree",
-	detail: SeedDetail = {},
-	pullOutcome?: FetchOutcome,
+	fields: {
+		extra?: Partial<FactoryConfig>;
+		outcome?: FetchOutcome;
+		environment?: "live-worktree" | "worktree";
+		detail?: SeedDetail;
+		pullOutcome?: FetchOutcome;
+	} = {},
 ): SeededApp {
+	const {
+		extra = {},
+		outcome = success,
+		environment = "live-worktree",
+		detail = {},
+		pullOutcome,
+	} = fields;
 	const state = seed(shape, outcome, environment, detail);
 	// The operator's last choice of the mode is a fact of the state file, not
 	// of the config (ADR 0036), so the seed writes it before the app mounts.
@@ -346,13 +363,22 @@ function propsOf(app: SeededApp): AppProps {
  */
 function seededAppInAutoMode(
 	shape: "open" | "in-flight" | "awaiting",
-	extra: Partial<FactoryConfig> = {},
-	outcome: FetchOutcome = success,
-	environment: "live-worktree" | "worktree" = "live-worktree",
-	detail: SeedDetail = {},
-	pullOutcome?: FetchOutcome,
+	fields: {
+		extra?: Partial<FactoryConfig>;
+		outcome?: FetchOutcome;
+		environment?: "live-worktree" | "worktree";
+		detail?: SeedDetail;
+		pullOutcome?: FetchOutcome;
+	} = {},
 ): SeededApp {
-	return seededApp(shape, extra, outcome, environment, { ...detail, autoMode: true }, pullOutcome);
+	const { extra, outcome, environment, detail, pullOutcome } = fields;
+	return seededApp(shape, {
+		extra,
+		outcome,
+		environment,
+		detail: { ...detail, autoMode: true },
+		pullOutcome,
+	});
 }
 
 /**
@@ -443,9 +469,7 @@ describe("the mode cell and the a key", () => {
 				expect(app.state.handoff.autoHandoffMode()).toBe(false);
 				expect(readFileSync(app.configPath, "utf8")).toBe(before);
 			},
-			WIDTH,
-			HEIGHT,
-			propsOf(app),
+			{ width: WIDTH, height: HEIGHT, props: propsOf(app) },
 		);
 		app.state.close();
 	});
@@ -461,9 +485,7 @@ describe("the mode cell and the a key", () => {
 				await awaitFrame(setup, (f) => f.includes("● manual 0/2"), "the mode cell");
 				await press(setup, "a", "auto on", (f) => f.includes("○ auto 0/2"));
 			},
-			WIDTH,
-			HEIGHT,
-			propsOf(app),
+			{ width: WIDTH, height: HEIGHT, props: propsOf(app) },
 		);
 		// The end of the run: the plane closes its state file, as a restart or a
 		// dev reload does.
@@ -483,15 +505,17 @@ describe("the mode cell and the a key", () => {
 				);
 				expect(frame).not.toContain("● manual");
 			},
-			WIDTH,
-			HEIGHT,
 			{
-				config: app.config,
-				state: reopened,
-				runner: app.runner,
-				configPath: app.configPath,
-				sources: [src],
-				pollIntervalMs: 60_000,
+				width: WIDTH,
+				height: HEIGHT,
+				props: {
+					config: app.config,
+					state: reopened,
+					runner: app.runner,
+					configPath: app.configPath,
+					sources: [src],
+					pollIntervalMs: 60_000,
+				},
 			},
 		);
 		reopened.close();
@@ -510,9 +534,7 @@ describe("the mode cell and the a key", () => {
 				expect(frame).not.toContain("○ auto");
 				expect(app.state.handoff.autoHandoffMode()).toBe(false);
 			},
-			WIDTH,
-			HEIGHT,
-			propsOf(app),
+			{ width: WIDTH, height: HEIGHT, props: propsOf(app) },
 		);
 		app.state.close();
 	});
@@ -541,9 +563,7 @@ describe("the mode cell and the a key", () => {
 					infoLine("mode: auto-handoff is off"),
 				]);
 			},
-			WIDTH,
-			HEIGHT,
-			{ ...propsOf(app), logger: recordLogger(lines) },
+			{ width: WIDTH, height: HEIGHT, props: { ...propsOf(app), logger: recordLogger(lines) } },
 		);
 		app.state.close();
 	});
@@ -575,9 +595,11 @@ describe("the mode cell and the a key", () => {
 					),
 				]);
 			},
-			WIDTH,
-			HEIGHT,
-			{ config: BASE_CONFIG, runner, initialTickets: [], logger: recordLogger(lines) },
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				props: { config: BASE_CONFIG, runner, initialTickets: [], logger: recordLogger(lines) },
+			},
 		);
 	});
 
@@ -618,15 +640,17 @@ describe("the mode cell and the a key", () => {
 				expect(recorded[0]?.message).toContain("mode: auto-handoff is on for this session only:");
 				expect(recorded[0]?.message).toContain(app.state.path);
 			},
-			WIDE_STATUS,
-			HEIGHT,
-			{ ...propsOf(app), logger: recordLogger(lines) },
+			{
+				width: WIDE_STATUS,
+				height: HEIGHT,
+				props: { ...propsOf(app), logger: recordLogger(lines) },
+			},
 		);
 		app.state.close();
 	});
 
 	test("an unlimited parallel limit shows the bare count on the mode cell", async () => {
-		const app = seededApp("in-flight", { maxParallelAgents: 0 });
+		const app = seededApp("in-flight", { extra: { maxParallelAgents: 0 } });
 		app.runner.set("herdr", ["agent", "list"], {
 			stdout: agentListJson([
 				{
@@ -653,9 +677,7 @@ describe("the mode cell and the a key", () => {
 				// The blocked agent still holds its seat, with no limit to hold it to.
 				expect(ticketRow(frame)).toContain("blocked");
 			},
-			WIDTH,
-			HEIGHT,
-			propsOf(app),
+			{ width: WIDTH, height: HEIGHT, props: propsOf(app) },
 		);
 		app.state.close();
 	});
@@ -715,9 +737,7 @@ describe("the mode cell and the a key", () => {
 				// two in one number on the mode cell.
 				await awaitFrame(setup, (f) => f.includes("● manual 2/2"), "the mode cell");
 			},
-			WIDTH,
-			HEIGHT,
-			propsOf(app),
+			{ width: WIDTH, height: HEIGHT, props: propsOf(app) },
 		);
 		app.state.close();
 	});
@@ -751,24 +771,21 @@ describe("the failure markers", () => {
 				expect(ticketRow(frame)).toContain("blocked");
 				expect(frame).toContain("● manual 1/2");
 			},
-			WIDTH,
-			HEIGHT,
-			propsOf(app),
+			{ width: WIDTH, height: HEIGHT, props: propsOf(app) },
 		);
 		app.state.close();
 	});
 
 	test("a missing agent gets the missing marker and the missing modal", async () => {
-		const app = seededApp(
-			"in-flight",
-			{},
-			success,
-			"live-worktree",
-			// The agent ran a while before it died: the handoff is past the
-			// startup grace, so the missing agent is not a booted one and
-			// holds no seat.
-			{ stateNow: () => Date.now() - 600_000 },
-		);
+		const app = seededApp("in-flight", {
+			extra: {},
+			outcome: success,
+			environment: "live-worktree",
+			detail: // The agent ran a while before it died: the handoff is past the
+				// startup grace, so the missing agent is not a booted one and
+				// holds no seat.
+				{ stateNow: () => Date.now() - 600_000 },
+		});
 		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
 
 		await withApp(
@@ -799,18 +816,21 @@ describe("the failure markers", () => {
 				// The open ticket keeps no failure badge.
 				expect(ticketRow(await settle(setup))).not.toContain("missing");
 			},
-			WIDTH,
-			HEIGHT,
-			propsOf(app),
+			{ width: WIDTH, height: HEIGHT, props: propsOf(app) },
 		);
 		app.state.close();
 	});
 
 	test("restart in the Missing modal repeats the interrupted handoff choices", async () => {
-		const app = seededApp("in-flight", {}, success, "live-worktree", {
-			message: "",
-			model: "gpt-5.6",
-			thinking: "high",
+		const app = seededApp("in-flight", {
+			extra: {},
+			outcome: success,
+			environment: "live-worktree",
+			detail: {
+				message: "",
+				model: "gpt-5.6",
+				thinking: "high",
+			},
 		});
 		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
 		stubCheckout(app);
@@ -844,9 +864,7 @@ describe("the failure markers", () => {
 					}),
 				);
 			},
-			WIDTH,
-			HEIGHT,
-			propsOf(app),
+			{ width: WIDTH, height: HEIGHT, props: propsOf(app) },
 		);
 		app.state.close();
 	});
@@ -865,9 +883,7 @@ describe("the failure markers", () => {
 				);
 				await pressReturn(setup, "the abandonment", (f) => ticketRow(f).includes("[open]"));
 			},
-			WIDTH,
-			HEIGHT,
-			propsOf(app),
+			{ width: WIDTH, height: HEIGHT, props: propsOf(app) },
 		);
 		reverify(app, success, new Date(Date.now() + 60_000).toISOString());
 		const next = app.state.handoff.claimHandoff(
@@ -942,9 +958,7 @@ describe("the failure markers", () => {
 				expect(app.state.ticketWorkCycle.ticketState(identity)).toBe("handed-off");
 				expect(ticketRow(await settle(setup))).toContain("blocked");
 			},
-			WIDTH,
-			HEIGHT,
-			propsOf(app),
+			{ width: WIDTH, height: HEIGHT, props: propsOf(app) },
 		);
 		app.state.close();
 	});
@@ -967,15 +981,13 @@ describe("the failure markers", () => {
 				expect(app.state.ticketWorkCycle.ticketState(identity)).toBe("handed-off");
 				expect(ticketRow(await settle(setup))).toContain("missing");
 			},
-			WIDTH,
-			HEIGHT,
-			propsOf(app),
+			{ width: WIDTH, height: HEIGHT, props: propsOf(app) },
 		);
 		app.state.close();
 	});
 
 	test("a ticket at the handoff limit wears the trailing marker on its row", async () => {
-		const app = seededApp("in-flight", { maxHandoffsPerTicket: 1 });
+		const app = seededApp("in-flight", { extra: { maxHandoffsPerTicket: 1 } });
 		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
 
 		await withApp(
@@ -995,9 +1007,7 @@ describe("the failure markers", () => {
 				expect(row).toContain("missing");
 				expect(app.state.ticketWorkCycle.ticketState(identity)).toBe("handed-off");
 			},
-			WIDTH,
-			HEIGHT,
-			propsOf(app),
+			{ width: WIDTH, height: HEIGHT, props: propsOf(app) },
 		);
 		app.state.close();
 	});
@@ -1034,15 +1044,13 @@ describe("the Ticket Close key", () => {
 				expect(bar).toContain("g Goto");
 				expect(bar).toContain("Enter Live view");
 			},
-			WIDTH,
-			HEIGHT,
-			propsOf(app),
+			{ width: WIDTH, height: HEIGHT, props: propsOf(app) },
 		);
 		app.state.close();
 	});
 
 	test("the Delete key on an in-flight Ticket asks first, and Cancel changes nothing", async () => {
-		const app = seededApp("in-flight", {}, success, "worktree");
+		const app = seededApp("in-flight", { extra: {}, outcome: success, environment: "worktree" });
 		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
 
 		await withApp(
@@ -1091,9 +1099,7 @@ describe("the Ticket Close key", () => {
 				expect(changed(app.runner.commands())).toEqual(changed(before));
 				expect(frameText(cancelled)).not.toContain("❯ Close");
 			},
-			WIDTH,
-			HEIGHT,
-			propsOf(app),
+			{ width: WIDTH, height: HEIGHT, props: propsOf(app) },
 		);
 		app.state.close();
 	});
@@ -1101,7 +1107,7 @@ describe("the Ticket Close key", () => {
 	// The control is a base-mode control of the section, so the Detail pane
 	// answers it exactly as the list does (ADR 0031).
 	test("w closes from the detail pane too, with the same confirmation", async () => {
-		const app = seededApp("in-flight", {}, success, "worktree");
+		const app = seededApp("in-flight", { extra: {}, outcome: success, environment: "worktree" });
 		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
 
 		await withApp(
@@ -1120,9 +1126,7 @@ describe("the Ticket Close key", () => {
 				);
 				expect(app.state.ticketWorkCycle.ticketState(identity)).toBe("handed-off");
 			},
-			WIDTH,
-			HEIGHT,
-			propsOf(app),
+			{ width: WIDTH, height: HEIGHT, props: propsOf(app) },
 		);
 		app.state.close();
 	});
@@ -1149,9 +1153,7 @@ describe("the Ticket Close key", () => {
 				// other Environment, so the dialog does not state them here.
 				expect(body).not.toContain("removes the worktree checkout");
 			},
-			WIDTH,
-			HEIGHT,
-			propsOf(app),
+			{ width: WIDTH, height: HEIGHT, props: propsOf(app) },
 		);
 		app.state.close();
 	});
@@ -1160,7 +1162,7 @@ describe("the Ticket Close key", () => {
 		// The Failed-start park stands at half the Handoff limit: two failed starts at
 		// a limit of 4. The row and the detail have to say it, because the loop that
 		// stopped is a fact the operator has to be able to read off the screen.
-		const app = seededApp("open", { maxHandoffsPerTicket: 4 });
+		const app = seededApp("open", { extra: { maxHandoffsPerTicket: 4 } });
 		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
 		for (let i = 0; i < 2; i += 1) {
 			const claim = app.state.handoff.claimHandoff(
@@ -1203,9 +1205,7 @@ describe("the Ticket Close key", () => {
 					"Handoff starts failing: 2 in a row; the Top-up adds no automatic start",
 				);
 			},
-			WIDTH,
-			HEIGHT,
-			propsOf(app),
+			{ width: WIDTH, height: HEIGHT, props: propsOf(app) },
 		);
 		app.state.close();
 	});
@@ -1264,15 +1264,13 @@ describe("the Ticket Close key", () => {
 				// And the Leftover block states its own fact beside it, never this one.
 				expect(detail).toContain("its cleanup runs in herdr");
 			},
-			WIDTH,
-			HEIGHT,
-			propsOf(app),
+			{ width: WIDTH, height: HEIGHT, props: propsOf(app) },
 		);
 		app.state.close();
 	});
 
 	test("confirming an in-flight close ends the cycle with no trace and stops the Agent", async () => {
-		const app = seededApp("in-flight", {}, success, "worktree");
+		const app = seededApp("in-flight", { extra: {}, outcome: success, environment: "worktree" });
 		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
 
 		await withApp(
@@ -1305,15 +1303,13 @@ describe("the Ticket Close key", () => {
 				expect(detailPaneText(frame)).toContain("Handoff attempts: 1/10");
 				expect(messageRowOf(frame)).toContain(`ticket ${identity} closed`);
 			},
-			WIDTH,
-			HEIGHT,
-			propsOf(app),
+			{ width: WIDTH, height: HEIGHT, props: propsOf(app) },
 		);
 		app.state.close();
 	});
 
 	test("an in-flight close herdr refuses records the leftover fact", async () => {
-		const app = seededApp("in-flight", {}, success, "worktree");
+		const app = seededApp("in-flight", { extra: {}, outcome: success, environment: "worktree" });
 		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
 		app.runner.set("herdr", ["worktree", "remove", "--workspace", "ws-1"], DIRTY_REMOVAL);
 
@@ -1345,9 +1341,7 @@ describe("the Ticket Close key", () => {
 				);
 				expect(messageRowOf(frame)).toContain("the close cleanup failed");
 			},
-			WIDTH,
-			HEIGHT,
-			propsOf(app),
+			{ width: WIDTH, height: HEIGHT, props: propsOf(app) },
 		);
 		app.state.close();
 	});
@@ -1357,15 +1351,14 @@ describe("the Ticket Close key", () => {
 		// Ticket Close confirmation joins it (ADR 0031): a cycle that ends while the
 		// dialog stands leaves the panel with nothing to show, and a panel that is
 		// not drawn must keep holding the keys the base panes answer.
-		const app = seededAppInAutoMode(
-			"in-flight",
-			{ maxHandoffsPerTicket: 1 },
-			success,
-			"worktree",
-			// Past the startup grace: a pane herdr stops listing is a missing Agent,
-			// not one that is still booting.
-			{ stateNow: () => Date.now() - 600_000 },
-		);
+		const app = seededAppInAutoMode("in-flight", {
+			extra: { maxHandoffsPerTicket: 1 },
+			outcome: success,
+			environment: "worktree",
+			detail: // Past the startup grace: a pane herdr stops listing is a missing Agent,
+				// not one that is still booting.
+				{ stateNow: () => Date.now() - 600_000 },
+		});
 		// Herdr lists the Agent's pane alive, so the observation ends nothing and
 		// the close has a live Agent to ask about.
 		app.runner.set("herdr", ["agent", "list"], {
@@ -1410,15 +1403,17 @@ describe("the Ticket Close key", () => {
 				expect(frameText(refused)).not.toContain("Close: Persist source facts");
 				expect(frameText(released)).toContain("[open]");
 			},
-			WIDTH,
-			HEIGHT,
-			{ ...propsOf(app), pollIntervalMs: 100 },
+			{ width: WIDTH, height: HEIGHT, props: { ...propsOf(app), pollIntervalMs: 100 } },
 		);
 		app.state.close();
 	});
 
 	test("confirming an awaiting close records the closed decision, the modal's own row", async () => {
-		const app = seededApp("awaiting", {}, success, "live-worktree");
+		const app = seededApp("awaiting", {
+			extra: {},
+			outcome: success,
+			environment: "live-worktree",
+		});
 		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
 
 		await withApp(
@@ -1437,9 +1432,7 @@ describe("the Ticket Close key", () => {
 				expect(app.state.ticketWorkCycle.ticketState(identity)).toBe("open");
 				expect(app.runner.commands()).toContain("herdr tab close tab-1");
 			},
-			WIDTH,
-			HEIGHT,
-			propsOf(app),
+			{ width: WIDTH, height: HEIGHT, props: propsOf(app) },
 		);
 		app.state.close();
 	});
@@ -1469,9 +1462,7 @@ describe("the detail pane", () => {
 				);
 				expect(detail).toContain("The turn is done.");
 			},
-			WIDTH,
-			HEIGHT,
-			propsOf(app),
+			{ width: WIDTH, height: HEIGHT, props: propsOf(app) },
 		);
 		app.state.close();
 	});
@@ -1481,13 +1472,12 @@ describe("the decision modal", () => {
 	test("enter on an awaiting ticket shows the completion and routes on confirm", async () => {
 		const review = { ...BASE_CONFIG.taskTypes.review };
 		review.template += "\n\nPrevious work message:\n{previous-message}";
-		const app = seededApp(
-			"awaiting",
-			{ taskTypes: { ...BASE_CONFIG.taskTypes, review } },
-			success,
-			"live-worktree",
-			{ transition: reviewRoute() },
-		);
+		const app = seededApp("awaiting", {
+			extra: { taskTypes: { ...BASE_CONFIG.taskTypes, review } },
+			outcome: success,
+			environment: "live-worktree",
+			detail: { transition: reviewRoute() },
+		});
 		stubCheckout(app);
 		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
 		// The stored workspace still holds: the route reuses it in a new tab.
@@ -1534,9 +1524,7 @@ describe("the decision modal", () => {
 				// the routed handoff started, not at the claim.
 				expect(app.state.ticketWorkCycle.lastCompletion(identity)?.decision).toBe("handed-off");
 			},
-			WIDTH,
-			HEIGHT,
-			propsOf(app),
+			{ width: WIDTH, height: HEIGHT, props: propsOf(app) },
 		);
 		app.state.close();
 	});
@@ -1544,15 +1532,20 @@ describe("the decision modal", () => {
 	test("the modal states a fire that found no linked pull request", async () => {
 		// No pending record and no retry: the skip is a fact the operator reads
 		// beside the write the ticket did get (ADR 0027).
-		const app = seededApp("awaiting", {}, success, "live-worktree", {
-			transition: reviewRoute({
-				pullRequestWrite: null,
-				pullRequestIdentity: null,
-				pullRequestKey: null,
-				positionTaskType: null,
-				positionTicketIdentity: null,
-				reason: "no linked pull request was found for the ticket",
-			}),
+		const app = seededApp("awaiting", {
+			extra: {},
+			outcome: success,
+			environment: "live-worktree",
+			detail: {
+				transition: reviewRoute({
+					pullRequestWrite: null,
+					pullRequestIdentity: null,
+					pullRequestKey: null,
+					positionTaskType: null,
+					positionTicketIdentity: null,
+					reason: "no linked pull request was found for the ticket",
+				}),
+			},
 		});
 		await withApp(
 			async (setup) => {
@@ -1564,9 +1557,7 @@ describe("the decision modal", () => {
 				// No position: no handoff row stands.
 				expect(panel).not.toContain("Handoff: review");
 			},
-			WIDTH,
-			HEIGHT,
-			propsOf(app),
+			{ width: WIDTH, height: HEIGHT, props: propsOf(app) },
 		);
 		app.state.close();
 	});
@@ -1577,7 +1568,12 @@ describe("the decision modal", () => {
 		// review stands held and the automatic route would not take it. The row
 		// stands for the operator's own key, and the fact line names the hold the
 		// machine reads beside it.
-		const app = seededApp("awaiting", {}, success, "live-worktree", { transition: reviewRoute() });
+		const app = seededApp("awaiting", {
+			extra: {},
+			outcome: success,
+			environment: "live-worktree",
+			detail: { transition: reviewRoute() },
+		});
 		stubCheckout(app);
 		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
 		await withApp(
@@ -1589,9 +1585,7 @@ describe("the decision modal", () => {
 				expect(panel).toContain("Handoff: review");
 				expect(panel).toContain("the Next step is held: the position no longer offers the task");
 			},
-			WIDTH,
-			HEIGHT,
-			propsOf(app),
+			{ width: WIDTH, height: HEIGHT, props: propsOf(app) },
 		);
 		app.state.close();
 	});
@@ -1605,8 +1599,13 @@ describe("the decision modal", () => {
 			fetchedAt: "2026-08-31T10:01:00Z",
 			tickets: [fetched(5, "Persist source facts", ["ready-for-review"])],
 		};
-		const app = seededApp("awaiting", { maxHandoffsPerTicket: 1 }, landed, "live-worktree", {
-			transition: reviewRoute(),
+		const app = seededApp("awaiting", {
+			extra: { maxHandoffsPerTicket: 1 },
+			outcome: landed,
+			environment: "live-worktree",
+			detail: {
+				transition: reviewRoute(),
+			},
 		});
 		stubCheckout(app);
 		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
@@ -1619,9 +1618,7 @@ describe("the decision modal", () => {
 				expect(panel).toContain("Handoff: review");
 				expect(panel).toContain("the Next step is held: the position is at the handoff limit");
 			},
-			WIDTH,
-			HEIGHT,
-			propsOf(app),
+			{ width: WIDTH, height: HEIGHT, props: propsOf(app) },
 		);
 		app.state.close();
 	});
@@ -1635,7 +1632,12 @@ describe("the decision modal", () => {
 			fetchedAt: "2026-08-31T10:01:00Z",
 			tickets: [fetched(5, "Persist source facts", ["ready-for-review"])],
 		};
-		const app = seededApp("awaiting", {}, landed, "live-worktree", { transition: reviewRoute() });
+		const app = seededApp("awaiting", {
+			extra: {},
+			outcome: landed,
+			environment: "live-worktree",
+			detail: { transition: reviewRoute() },
+		});
 		stubCheckout(app);
 		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
 		await withApp(
@@ -1647,9 +1649,7 @@ describe("the decision modal", () => {
 				expect(panel).toContain("Handoff: review");
 				expect(panel).not.toContain("the Next step is held");
 			},
-			WIDTH,
-			HEIGHT,
-			propsOf(app),
+			{ width: WIDTH, height: HEIGHT, props: propsOf(app) },
 		);
 		app.state.close();
 	});
@@ -1668,7 +1668,12 @@ describe("the decision modal", () => {
 			positionTaskType: null,
 			positionTicketIdentity: null,
 		});
-		const app = seededApp("awaiting", {}, success, "live-worktree", { transition: noFire });
+		const app = seededApp("awaiting", {
+			extra: {},
+			outcome: success,
+			environment: "live-worktree",
+			detail: { transition: noFire },
+		});
 		stubCheckout(app);
 		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
 
@@ -1723,20 +1728,23 @@ describe("the decision modal", () => {
 				});
 				expect(app.state.ticketWorkCycle.lastCompletion(identity)?.decision).toBeNull();
 			},
-			WIDTH,
-			HEIGHT,
-			propsOf(app),
+			{ width: WIDTH, height: HEIGHT, props: propsOf(app) },
 		);
 		app.state.close();
 	});
 
 	test("the modal states a label write that failed", async () => {
-		const app = seededApp("awaiting", {}, success, "live-worktree", {
-			transition: reviewRoute({
-				writeFailure: "gh pr edit #12 failed: HTTP 403: Must have admin rights to Repository.",
-				positionTaskType: null,
-				positionTicketIdentity: null,
-			}),
+		const app = seededApp("awaiting", {
+			extra: {},
+			outcome: success,
+			environment: "live-worktree",
+			detail: {
+				transition: reviewRoute({
+					writeFailure: "gh pr edit #12 failed: HTTP 403: Must have admin rights to Repository.",
+					positionTaskType: null,
+					positionTicketIdentity: null,
+				}),
+			},
 		});
 		await withApp(
 			async (setup) => {
@@ -1748,9 +1756,7 @@ describe("the decision modal", () => {
 				// The write did not complete: the Re-fire row stands on it too.
 				expect(panel).toContain("Re-fire");
 			},
-			WIDE_STATUS,
-			HEIGHT,
-			propsOf(app),
+			{ width: WIDE_STATUS, height: HEIGHT, props: propsOf(app) },
 		);
 		app.state.close();
 	});
@@ -1811,14 +1817,13 @@ describe("the decision modal", () => {
 		}
 
 		test("a position that left its source withdraws the handoff and states the fact", async () => {
-			const app = seededApp(
-				"awaiting",
-				{},
-				success,
-				"live-worktree",
-				{ transition: pullPositionRoute() },
-				pullOpen,
-			);
+			const app = seededApp("awaiting", {
+				extra: {},
+				outcome: success,
+				environment: "live-worktree",
+				detail: { transition: pullPositionRoute() },
+				pullOutcome: pullOpen,
+			});
 			// The last refresh listed the pull request: it stands in the state
 			// active, where the outcome's position points.
 			app.state.sourceFact.applyFetch(pullSource, pullOpen);
@@ -1850,22 +1855,19 @@ describe("the decision modal", () => {
 					expect(panel).toContain("Close");
 					expect(panel).toContain("Goto");
 				},
-				WIDTH,
-				HEIGHT,
-				propsOf(app),
+				{ width: WIDTH, height: HEIGHT, props: propsOf(app) },
 			);
 			app.state.close();
 		});
 
 		test("a position that still lists its ticket keeps the handoff", async () => {
-			const app = seededApp(
-				"awaiting",
-				{},
-				success,
-				"live-worktree",
-				{ transition: pullPositionRoute() },
-				pullOpen,
-			);
+			const app = seededApp("awaiting", {
+				extra: {},
+				outcome: success,
+				environment: "live-worktree",
+				detail: { transition: pullPositionRoute() },
+				pullOutcome: pullOpen,
+			});
 			app.state.sourceFact.applyFetch(pullSource, pullOpen);
 			const pull = app.pullSrc;
 			if (pull === undefined) throw new Error("the pull source is missing");
@@ -1890,22 +1892,19 @@ describe("the decision modal", () => {
 					expect(panel).toContain("Handoff: review");
 					expect(panel).not.toContain("no handoff stands");
 				},
-				WIDTH,
-				HEIGHT,
-				propsOf(app),
+				{ width: WIDTH, height: HEIGHT, props: propsOf(app) },
 			);
 			app.state.close();
 		});
 
 		test("an open decision withdraws the handoff when its refresh finds the position gone", async () => {
-			const app = seededApp(
-				"awaiting",
-				{},
-				success,
-				"live-worktree",
-				{ transition: pullPositionRoute() },
-				pullOpen,
-			);
+			const app = seededApp("awaiting", {
+				extra: {},
+				outcome: success,
+				environment: "live-worktree",
+				detail: { transition: pullPositionRoute() },
+				pullOutcome: pullOpen,
+			});
 			app.state.sourceFact.applyFetch(pullSource, pullOpen);
 			const pull = app.pullSrc;
 			if (pull === undefined) throw new Error("the pull source is missing");
@@ -1935,16 +1934,19 @@ describe("the decision modal", () => {
 					expect(after).not.toContain("Handoff: review");
 					expect(after).toContain("the position's ticket left its source; no handoff stands");
 				},
-				WIDTH,
-				HEIGHT,
-				propsOf(app),
+				{ width: WIDTH, height: HEIGHT, props: propsOf(app) },
 			);
 			app.state.close();
 		});
 	});
 
 	test("a routed handoff does not record the predecessor it closed as leftover", async () => {
-		const app = seededApp("awaiting", {}, success, "live-worktree", { transition: reviewRoute() });
+		const app = seededApp("awaiting", {
+			extra: {},
+			outcome: success,
+			environment: "live-worktree",
+			detail: { transition: reviewRoute() },
+		});
 		stubCheckout(app);
 		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
 		app.runner.set("herdr", ["workspace", "list"], {
@@ -1978,31 +1980,28 @@ describe("the decision modal", () => {
 				expect(app.state.handoff.leftoverEnvironment(identity)).toBe(null);
 				expect(ticketRow(setup.captureCharFrame())).not.toContain("leftover");
 			},
-			WIDTH,
-			HEIGHT,
-			propsOf(app),
+			{ width: WIDTH, height: HEIGHT, props: propsOf(app) },
 		);
 		app.state.close();
 	});
 
 	test("a manual workflow route starts with fresh model and target thinking", async () => {
-		const app = seededApp(
-			"awaiting",
-			{
+		const app = seededApp("awaiting", {
+			extra: {
 				taskTypes: {
 					...BASE_CONFIG.taskTypes,
 					review: { ...BASE_CONFIG.taskTypes.review, thinking: "low" },
 				},
 			},
-			success,
-			"live-worktree",
-			{
+			outcome: success,
+			environment: "live-worktree",
+			detail: {
 				message: "The turn is done.",
 				model: "opus-4",
 				thinking: "high",
 				transition: reviewRoute(),
 			},
-		);
+		});
 		stubCheckout(app);
 		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
 		app.runner.set("herdr", ["workspace", "list"], {
@@ -2031,17 +2030,14 @@ describe("the decision modal", () => {
 				expect(start).toContain("--kind pi --pane pane-9 -- --thinking low");
 				expect(start).not.toContain("--model");
 			},
-			WIDTH,
-			HEIGHT,
-			propsOf(app),
+			{ width: WIDTH, height: HEIGHT, props: propsOf(app) },
 		);
 		app.state.close();
 	});
 
 	test("a manual workflow route starts with its target task profile", async () => {
-		const app = seededApp(
-			"awaiting",
-			{
+		const app = seededApp("awaiting", {
+			extra: {
 				taskTypes: {
 					...BASE_CONFIG.taskTypes,
 					review: {
@@ -2052,15 +2048,15 @@ describe("the decision modal", () => {
 					},
 				},
 			},
-			success,
-			"live-worktree",
-			{
+			outcome: success,
+			environment: "live-worktree",
+			detail: {
 				message: "The turn is done.",
 				model: "opus-4",
 				thinking: "high",
 				transition: reviewRoute(),
 			},
-		);
+		});
 		stubCheckout(app);
 		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
 		app.runner.set("herdr", ["workspace", "list"], {
@@ -2090,17 +2086,14 @@ describe("the decision modal", () => {
 					"--kind codex --pane pane-9 -- --model review-model -c model_reasoning_effort=high",
 				);
 			},
-			WIDTH,
-			HEIGHT,
-			propsOf(app),
+			{ width: WIDTH, height: HEIGHT, props: propsOf(app) },
 		);
 		app.state.close();
 	});
 
 	test("e on the route row edits the route's settings before it starts", async () => {
-		const app = seededApp(
-			"awaiting",
-			{
+		const app = seededApp("awaiting", {
+			extra: {
 				agents: {
 					...BASE_CONFIG.agents,
 					pi: {
@@ -2125,10 +2118,10 @@ describe("the decision modal", () => {
 					},
 				},
 			},
-			success,
-			"live-worktree",
-			{ transition: reviewRoute({ agent: "pi" }) },
-		);
+			outcome: success,
+			environment: "live-worktree",
+			detail: { transition: reviewRoute({ agent: "pi" }) },
+		});
 		stubCheckout(app);
 		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
 		app.runner.set("herdr", ["workspace", "list"], {
@@ -2194,9 +2187,7 @@ describe("the decision modal", () => {
 				expect(app.state.ticketWorkCycle.ticketState(identity)).toBe("handed-off");
 				expect(app.state.ticketWorkCycle.lastCompletion(identity)?.decision).toBe("handed-off");
 			},
-			WIDTH,
-			HEIGHT,
-			propsOf(app),
+			{ width: WIDTH, height: HEIGHT, props: propsOf(app) },
 		);
 		app.state.close();
 	});
@@ -2205,9 +2196,8 @@ describe("the decision modal", () => {
 		// The one place the panel can undo a transition pin without a keystroke
 		// on the Agent row: the transition pins the Agent of the route it
 		// writes, and a Task type the operator moves to owns its own profile.
-		const app = seededApp(
-			"awaiting",
-			{
+		const app = seededApp("awaiting", {
+			extra: {
 				// The machine places both task types the test moves between: the
 				// confirm of the route writes the labels of the state it moves to.
 				workflowStates: [
@@ -2232,10 +2222,10 @@ describe("the decision modal", () => {
 					fix: { ...BASE_CONFIG.taskTypes.fix, agent: "pi", model: "fix-model" },
 				},
 			},
-			success,
-			"live-worktree",
-			{ transition: reviewRoute({ agent: "claude" }) },
-		);
+			outcome: success,
+			environment: "live-worktree",
+			detail: { transition: reviewRoute({ agent: "claude" }) },
+		});
 		stubCheckout(app);
 		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
 		app.runner.set("herdr", ["workspace", "list"], {
@@ -2277,15 +2267,18 @@ describe("the decision modal", () => {
 					.find((command) => command.startsWith("herdr agent start"));
 				expect(start).toContain("--kind pi --pane pane-9 -- --model fix-model");
 			},
-			WIDTH,
-			HEIGHT,
-			propsOf(app),
+			{ width: WIDTH, height: HEIGHT, props: propsOf(app) },
 		);
 		app.state.close();
 	});
 
 	test("escape in a route edit returns to the decision with no claim", async () => {
-		const app = seededApp("awaiting", {}, success, "live-worktree", { transition: reviewRoute() });
+		const app = seededApp("awaiting", {
+			extra: {},
+			outcome: success,
+			environment: "live-worktree",
+			detail: { transition: reviewRoute() },
+		});
 		stubCheckout(app);
 		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
 
@@ -2310,9 +2303,7 @@ describe("the decision modal", () => {
 				expect(app.state.ticketWorkCycle.ticketState(identity)).toBe("awaiting");
 				expect(app.runner.commands().join("\n")).not.toContain("herdr agent start");
 			},
-			WIDTH,
-			HEIGHT,
-			propsOf(app),
+			{ width: WIDTH, height: HEIGHT, props: propsOf(app) },
 		);
 		app.state.close();
 	});
@@ -2334,26 +2325,23 @@ describe("the decision modal", () => {
 				expect(app.state.ticketWorkCycle.ticketState(identity)).toBe("awaiting");
 				expect(app.runner.commands().join("\n")).not.toContain("herdr agent start");
 			},
-			WIDTH,
-			HEIGHT,
-			propsOf(app),
+			{ width: WIDTH, height: HEIGHT, props: propsOf(app) },
 		);
 		app.state.close();
 	});
 
 	test("the route row shows the arriving task profile's effective agent", async () => {
-		const app = seededApp(
-			"awaiting",
-			{
+		const app = seededApp("awaiting", {
+			extra: {
 				taskTypes: {
 					...BASE_CONFIG.taskTypes,
 					review: { ...BASE_CONFIG.taskTypes.review, agent: "codex" },
 				},
 			},
-			success,
-			"live-worktree",
-			{ transition: reviewRoute() },
-		);
+			outcome: success,
+			environment: "live-worktree",
+			detail: { transition: reviewRoute() },
+		});
 		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
 
 		await withApp(
@@ -2367,9 +2355,7 @@ describe("the decision modal", () => {
 				await pressReturn(setup, "the decision modal", (frame) => frame.includes("Decision:"));
 				expect(frameText(await settle(setup))).toContain("Handoff: review agent codex");
 			},
-			WIDTH,
-			HEIGHT,
-			propsOf(app),
+			{ width: WIDTH, height: HEIGHT, props: propsOf(app) },
 		);
 		app.state.close();
 	});
@@ -2379,9 +2365,8 @@ describe("the decision modal", () => {
 		// the target task profile's chain, not from the handoff that just settled.
 		// A route that started on an empty model would be the bug ADR 0009 exists
 		// to remove.
-		const app = seededApp(
-			"awaiting",
-			{
+		const app = seededApp("awaiting", {
+			extra: {
 				taskTypes: {
 					...BASE_CONFIG.taskTypes,
 					review: {
@@ -2390,15 +2375,15 @@ describe("the decision modal", () => {
 					},
 				},
 			},
-			success,
-			"live-worktree",
-			{
+			outcome: success,
+			environment: "live-worktree",
+			detail: {
 				message: "The turn is done.",
 				model: "opus-4",
 				thinking: "high",
 				transition: reviewRoute(),
 			},
-		);
+		});
 		stubCheckout(app);
 		app.runner.setModelList("pi", ["anthropic/claude-review-4"]);
 		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
@@ -2428,9 +2413,7 @@ describe("the decision modal", () => {
 				expect(start).toContain("--model anthropic/claude-review-4");
 				expect(start).not.toContain("opus-4");
 			},
-			WIDTH,
-			HEIGHT,
-			propsOf(app),
+			{ width: WIDTH, height: HEIGHT, props: propsOf(app) },
 		);
 		app.state.close();
 	});
@@ -2439,9 +2422,8 @@ describe("the decision modal", () => {
 		// The transition names no destination: it writes the facts, and the
 		// machine re-derives the one position on them. The row's detail shows
 		// the transition's pinning beside the position's agent.
-		const app = seededApp(
-			"awaiting",
-			{
+		const app = seededApp("awaiting", {
+			extra: {
 				taskTypes: {
 					...BASE_CONFIG.taskTypes,
 					implement: {
@@ -2455,10 +2437,10 @@ describe("the decision modal", () => {
 					},
 				},
 			},
-			success,
-			"worktree",
-			{ transition: reviewRoute({ agent: "codex", environment: "worktree" }) },
-		);
+			outcome: success,
+			environment: "worktree",
+			detail: { transition: reviewRoute({ agent: "codex", environment: "worktree" }) },
+		});
 		stubCheckout(app);
 		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
 		app.runner.set("herdr", ["workspace", "list"], {
@@ -2496,15 +2478,18 @@ describe("the decision modal", () => {
 				);
 				expect(app.state.ticketWorkCycle.lastCompletion(identity)?.decision).toBe("handed-off");
 			},
-			WIDTH,
-			HEIGHT,
-			propsOf(app),
+			{ width: WIDTH, height: HEIGHT, props: propsOf(app) },
 		);
 		app.state.close();
 	});
 
 	test("a failed route keeps the decision the ask recorded, and Close still ends the cycle (ADR 0064)", async () => {
-		const app = seededApp("awaiting", {}, success, "live-worktree", { transition: reviewRoute() });
+		const app = seededApp("awaiting", {
+			extra: {},
+			outcome: success,
+			environment: "live-worktree",
+			detail: { transition: reviewRoute() },
+		});
 		stubCheckout(app);
 		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
 		// The stored workspace still lists, but the fresh tab cannot be made:
@@ -2551,9 +2536,7 @@ describe("the decision modal", () => {
 				// rewritten.
 				expect(app.state.ticketWorkCycle.lastCompletion(identity)?.decision).toBe("handed-off");
 			},
-			WIDTH,
-			HEIGHT,
-			propsOf(app),
+			{ width: WIDTH, height: HEIGHT, props: propsOf(app) },
 		);
 		app.state.close();
 	});
@@ -2588,9 +2571,7 @@ describe("the decision modal", () => {
 				expect(ticketRow(await settle(setup))).toContain("[awaiting]");
 				expect(app.state.ticketWorkCycle.lastCompletion(identity)?.decision ?? null).toBeNull();
 			},
-			WIDTH,
-			HEIGHT,
-			propsOf(app),
+			{ width: WIDTH, height: HEIGHT, props: propsOf(app) },
 		);
 		app.state.close();
 	});
@@ -2624,9 +2605,7 @@ describe("the decision modal", () => {
 				expect(ticketRow(frame)).toContain("[awaiting]");
 				expect(frame).not.toContain("Live:");
 			},
-			WIDTH,
-			HEIGHT,
-			propsOf(app),
+			{ width: WIDTH, height: HEIGHT, props: propsOf(app) },
 		);
 		app.state.close();
 	});
@@ -2637,7 +2616,12 @@ describe("the decision modal", () => {
 			{ length: 40 },
 			(_, i) => `log ${String(i + 1).padStart(3, "0")}`,
 		).join("\n");
-		const app = seededApp("awaiting", {}, success, "live-worktree", { message: lines });
+		const app = seededApp("awaiting", {
+			extra: {},
+			outcome: success,
+			environment: "live-worktree",
+			detail: { message: lines },
+		});
 		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
 		const thumbRowOf = (frame: string) => rowsOf(frame).findIndex((row) => row.includes("█"));
 
@@ -2686,9 +2670,7 @@ describe("the decision modal", () => {
 				await pressArrow(setup, "down", "the goto row", (f) => frameText(f).includes("❯ Goto"));
 				await pressArrow(setup, "up", "back to close", (f) => frameText(f).includes("❯ Close"));
 			},
-			WIDTH,
-			HEIGHT,
-			propsOf(app),
+			{ width: WIDTH, height: HEIGHT, props: propsOf(app) },
 		);
 		app.state.close();
 	});
@@ -2712,23 +2694,26 @@ describe("the decision modal", () => {
 				expect(app.state.ticketWorkCycle.lastCompletion(identity)?.decision).toBeNull();
 				expect(ticketRow(await settle(setup))).toContain("[awaiting]");
 			},
-			WIDTH,
-			HEIGHT,
-			propsOf(app),
+			{ width: WIDTH, height: HEIGHT, props: propsOf(app) },
 		);
 		app.state.close();
 	});
 
 	test("the modal shows the border title, the context line, and the log's notes", async () => {
 		const conclusion = "## Result\n\n**All 142 tests pass.**";
-		const app = seededApp("awaiting", {}, success, "live-worktree", {
-			message: conclusion,
-			turnLog: [
-				{ kind: "text", text: "I will run the tests." },
-				{ kind: "tool", name: "bash", target: "npm test", failed: false },
-				{ kind: "tool", name: "bash", target: "npm run lint", failed: true },
-				{ kind: "text", text: conclusion },
-			],
+		const app = seededApp("awaiting", {
+			extra: {},
+			outcome: success,
+			environment: "live-worktree",
+			detail: {
+				message: conclusion,
+				turnLog: [
+					{ kind: "text", text: "I will run the tests." },
+					{ kind: "tool", name: "bash", target: "npm test", failed: false },
+					{ kind: "tool", name: "bash", target: "npm run lint", failed: true },
+					{ kind: "text", text: conclusion },
+				],
+			},
 		});
 		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
 
@@ -2762,9 +2747,7 @@ describe("the decision modal", () => {
 				expect(spanColors(setup, "npm run lint")).toContainEqual(rgb(roleColor("yellow")));
 				expect(spanColors(setup, "npm test")).toContainEqual(rgb(roleColor("subtext0")));
 			},
-			WIDTH,
-			HEIGHT,
-			propsOf(app),
+			{ width: WIDTH, height: HEIGHT, props: propsOf(app) },
 		);
 		app.state.close();
 	});
@@ -2775,7 +2758,12 @@ describe("the decision modal", () => {
 			{ length: 40 },
 			(_, i) => `log ${String(i + 1).padStart(3, "0")}`,
 		).join("\n");
-		const app = seededApp("awaiting", {}, success, "live-worktree", { message: lines });
+		const app = seededApp("awaiting", {
+			extra: {},
+			outcome: success,
+			environment: "live-worktree",
+			detail: { message: lines },
+		});
 		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
 
 		await withApp(
@@ -2810,9 +2798,7 @@ describe("the decision modal", () => {
 					(f) => f.includes("log 040") && !f.includes("log 001"),
 				);
 			},
-			WIDTH,
-			HEIGHT,
-			propsOf(app),
+			{ width: WIDTH, height: HEIGHT, props: propsOf(app) },
 		);
 		app.state.close();
 	});
@@ -2837,9 +2823,7 @@ describe("the herdr-unreachable line", () => {
 				expect(ticketRow(setup.captureCharFrame())).not.toContain("missing");
 				expect(ticketRow(setup.captureCharFrame())).not.toContain("blocked");
 			},
-			WIDTH,
-			HEIGHT,
-			propsOf(app),
+			{ width: WIDTH, height: HEIGHT, props: propsOf(app) },
 		);
 		app.state.close();
 	});
@@ -2847,7 +2831,7 @@ describe("the herdr-unreachable line", () => {
 
 describe("the Close cleanup", () => {
 	test("close on a worktree handoff removes the checkout and the herdr workspace", async () => {
-		const app = seededApp("awaiting", {}, success, "worktree");
+		const app = seededApp("awaiting", { extra: {}, outcome: success, environment: "worktree" });
 		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
 
 		await withApp(
@@ -2872,9 +2856,7 @@ describe("the Close cleanup", () => {
 				// were reading.
 				expect(herdrFocusCommands(commands)).toEqual([]);
 			},
-			WIDTH,
-			HEIGHT,
-			propsOf(app),
+			{ width: WIDTH, height: HEIGHT, props: propsOf(app) },
 		);
 		app.state.close();
 	});
@@ -2895,15 +2877,13 @@ describe("the Close cleanup", () => {
 				expect(joined).not.toContain("worktree remove");
 				expect(joined).not.toContain("workspace close");
 			},
-			WIDTH,
-			HEIGHT,
-			propsOf(app),
+			{ width: WIDTH, height: HEIGHT, props: propsOf(app) },
 		);
 		app.state.close();
 	});
 
 	test("abandon on a worktree handoff removes the checkout and the herdr workspace", async () => {
-		const app = seededApp("in-flight", {}, success, "worktree");
+		const app = seededApp("in-flight", { extra: {}, outcome: success, environment: "worktree" });
 		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
 
 		await withApp(
@@ -2925,9 +2905,7 @@ describe("the Close cleanup", () => {
 				expect(joined).not.toContain("workspace close");
 				expect(joined).not.toContain("tab close");
 			},
-			WIDTH,
-			HEIGHT,
-			propsOf(app),
+			{ width: WIDTH, height: HEIGHT, props: propsOf(app) },
 		);
 		app.state.close();
 	});
@@ -2951,9 +2929,7 @@ describe("the Close cleanup", () => {
 				expect(joined).not.toContain("worktree remove");
 				expect(joined).not.toContain("workspace close");
 			},
-			WIDTH,
-			HEIGHT,
-			propsOf(app),
+			{ width: WIDTH, height: HEIGHT, props: propsOf(app) },
 		);
 		app.state.close();
 	});
@@ -2962,7 +2938,7 @@ describe("the Close cleanup", () => {
 describe("the leftover environment", () => {
 	/** The herdr answer that refuses to remove a dirty checkout. */
 	test("a Close cleanup that fails leaves the ticket carrying the leftover", async () => {
-		const app = seededApp("awaiting", {}, success, "worktree");
+		const app = seededApp("awaiting", { extra: {}, outcome: success, environment: "worktree" });
 		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
 		app.runner.set("herdr", ["worktree", "remove", "--workspace", "ws-1"], DIRTY_REMOVAL);
 
@@ -2990,9 +2966,7 @@ describe("the leftover environment", () => {
 				expect(detail).toContain("Leftover: herdr workspace ws-1");
 				expect(detail).toContain("its cleanup runs in herdr");
 			},
-			WIDTH,
-			HEIGHT,
-			propsOf(app),
+			{ width: WIDTH, height: HEIGHT, props: propsOf(app) },
 		);
 		app.state.close();
 	});
@@ -3002,7 +2976,7 @@ describe("the leftover environment", () => {
 		// with that reason (ADR 0031, ADR 0122) and the leftover the closed
 		// cycle left keeps standing as the fact it is: no panel, no herdr
 		// command, nothing cleared.
-		const app = seededApp("awaiting", {}, success, "worktree");
+		const app = seededApp("awaiting", { extra: {}, outcome: success, environment: "worktree" });
 		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
 		app.runner.set("herdr", ["worktree", "remove", "--workspace", "ws-1"], DIRTY_REMOVAL);
 
@@ -3037,15 +3011,13 @@ describe("the leftover environment", () => {
 				expect(detail).toContain("Leftover: herdr workspace ws-1");
 				expect(detail).toContain("its cleanup runs in herdr");
 			},
-			WIDTH,
-			HEIGHT,
-			propsOf(app),
+			{ width: WIDTH, height: HEIGHT, props: propsOf(app) },
 		);
 		app.state.close();
 	});
 
 	test("a cleanup that cannot run at all is still the ticket's fact", async () => {
-		const app = seededApp("awaiting", {}, success, "worktree");
+		const app = seededApp("awaiting", { extra: {}, outcome: success, environment: "worktree" });
 		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
 		// herdr is unreachable: the command throws instead of answering, and
 		// the environment the ticket cannot close is a fact either way.
@@ -3074,23 +3046,20 @@ describe("the leftover environment", () => {
 					"the close cleanup failed: the close cleanup did not run",
 				);
 			},
-			WIDTH,
-			HEIGHT,
-			{ ...propsOf(app), runner: brokenRunner },
+			{ width: WIDTH, height: HEIGHT, props: { ...propsOf(app), runner: brokenRunner } },
 		);
 		app.state.close();
 	});
 
 	test("the observation abandons a missing cycle at the limit, and records the failed cleanup", async () => {
-		const app = seededAppInAutoMode(
-			"in-flight",
-			{ maxHandoffsPerTicket: 1 },
-			success,
-			"worktree",
-			// The agent ran a while before it died: the handoff is past the
-			// startup grace, so the missing agent is not a booted one.
-			{ stateNow: () => Date.now() - 600_000 },
-		);
+		const app = seededAppInAutoMode("in-flight", {
+			extra: { maxHandoffsPerTicket: 1 },
+			outcome: success,
+			environment: "worktree",
+			detail: // The agent ran a while before it died: the handoff is past the
+				// startup grace, so the missing agent is not a booted one.
+				{ stateNow: () => Date.now() - 600_000 },
+		});
 		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
 		app.runner.set("herdr", ["worktree", "remove", "--workspace", "ws-1"], {
 			code: 1,
@@ -3122,9 +3091,7 @@ describe("the leftover environment", () => {
 				const row = frameText(ticketRow(frame).slice(0, Math.floor(WIDTH / 2))).trimEnd();
 				expect(row.endsWith("handoff limit leftover")).toBe(true);
 			},
-			WIDTH,
-			HEIGHT,
-			propsOf(app),
+			{ width: WIDTH, height: HEIGHT, props: propsOf(app) },
 		);
 		app.state.close();
 	});
@@ -3133,7 +3100,7 @@ describe("the leftover environment", () => {
 		// The Abandon row of the missing panel ends the cycle, and its Close
 		// cleanup is the same cleanup the automatic end runs: a checkout herdr
 		// will not remove lands as the ticket's fact.
-		const app = seededApp("in-flight", {}, success, "worktree");
+		const app = seededApp("in-flight", { extra: {}, outcome: success, environment: "worktree" });
 		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
 		app.runner.set("herdr", ["worktree", "remove", "--workspace", "ws-1"], DIRTY_REMOVAL);
 
@@ -3158,9 +3125,7 @@ describe("the leftover environment", () => {
 					}),
 				);
 			},
-			WIDTH,
-			HEIGHT,
-			propsOf(app),
+			{ width: WIDTH, height: HEIGHT, props: propsOf(app) },
 		);
 		app.state.close();
 	});
@@ -3170,7 +3135,9 @@ describe("the leftover environment", () => {
 		// settled turn itself, and its cleanup is the same call. A tab herdr
 		// will not close is the ticket's fact to carry.
 		const app = seededAppInAutoMode("awaiting", {
-			maxHandoffsPerTicket: 1,
+			extra: {
+				maxHandoffsPerTicket: 1,
+			},
 		});
 		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
 		app.runner.set("herdr", ["tab", "close", "tab-1"], {
@@ -3192,15 +3159,13 @@ describe("the leftover environment", () => {
 					}),
 				);
 			},
-			WIDTH,
-			HEIGHT,
-			{ ...propsOf(app), pollIntervalMs: 20 },
+			{ width: WIDTH, height: HEIGHT, props: { ...propsOf(app), pollIntervalMs: 20 } },
 		);
 		app.state.close();
 	});
 
 	test("queued Close cleanups finish before their queued handoff starts", async () => {
-		const app = seededApp("awaiting", {}, pairSuccess, "worktree");
+		const app = seededApp("awaiting", { extra: {}, outcome: pairSuccess, environment: "worktree" });
 		stubCheckout(app);
 		const second = app.state.handoff.claimHandoff(
 			secondIdentity,
@@ -3269,15 +3234,13 @@ describe("the leftover environment", () => {
 					"the queued handoff after both cleanups",
 				);
 			},
-			WIDTH,
-			HEIGHT,
-			{ ...propsOf(app), runner: gate.runner },
+			{ width: WIDTH, height: HEIGHT, props: { ...propsOf(app), runner: gate.runner } },
 		);
 		app.state.close();
 	});
 
 	test("a cleanup that ran no command ends only the fact of its own row", async () => {
-		const app = seededApp("awaiting", {}, success, "worktree");
+		const app = seededApp("awaiting", { extra: {}, outcome: success, environment: "worktree" });
 		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
 		const first = app.state.handoff.latestHandoff(identity);
 		if (first === null) throw new Error("the seeded handoff is missing");
@@ -3336,15 +3299,13 @@ describe("the leftover environment", () => {
 					expect.objectContaining({ handoffId: first.handoffId, workspaceId: "ws-1" }),
 				);
 			},
-			WIDTH,
-			HEIGHT,
-			propsOf(app),
+			{ width: WIDTH, height: HEIGHT, props: propsOf(app) },
 		);
 		app.state.close();
 	});
 
 	test("the leftover block keeps its warning colour", async () => {
-		const app = seededApp("awaiting", {}, success, "worktree");
+		const app = seededApp("awaiting", { extra: {}, outcome: success, environment: "worktree" });
 		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
 		app.runner.set("herdr", ["worktree", "remove", "--workspace", "ws-1"], DIRTY_REMOVAL);
 
@@ -3361,9 +3322,7 @@ describe("the leftover environment", () => {
 				]);
 				expect(spanColors(setup, "its cleanup runs in herdr")).toEqual([rgb(roleColor("yellow"))]);
 			},
-			WIDTH,
-			HEIGHT,
-			propsOf(app),
+			{ width: WIDTH, height: HEIGHT, props: propsOf(app) },
 		);
 		app.state.close();
 	});
@@ -3388,7 +3347,11 @@ describe("the leftover environment", () => {
 	 * and the handoff the operator starts then meets its own leftover name.
 	 */
 	function leftoverNameApp(): SeededApp {
-		const app = seededApp("awaiting", { defaultEnvironment: "worktree" }, success, "worktree");
+		const app = seededApp("awaiting", {
+			extra: { defaultEnvironment: "worktree" },
+			outcome: success,
+			environment: "worktree",
+		});
 		// The leftover agent reports idle: herdr sees no live work in it, so
 		// nothing reclaims it, and it is exactly the agent that holds the name.
 		app.runner.set("herdr", ["agent", "list"], {
@@ -3484,12 +3447,14 @@ describe("the leftover environment", () => {
 				// completion trace will name the agent that actually ran.
 				expect(app.state.ticketWorkCycle.agentNameForTicket(identity)).toBe(CYCLE2);
 			},
-			// The warning names both herdr names on the one status row, and the
-			// suite reads it at the ordinary terminal width: a cut line would hide
-			// the name the agent actually started as.
-			WIDTH,
-			HEIGHT,
-			propsOf(app),
+			{
+				width: // The warning names both herdr names on the one status row, and the
+					// suite reads it at the ordinary terminal width: a cut line would hide
+					// the name the agent actually started as.
+					WIDTH,
+				height: HEIGHT,
+				props: propsOf(app),
+			},
 		);
 		app.state.close();
 	});
@@ -3531,9 +3496,7 @@ describe("the leftover environment", () => {
 				);
 				expect(ticketRow(setup.captureCharFrame())).toContain("leftover");
 			},
-			WIDE_STATUS,
-			HEIGHT,
-			{ ...propsOf(app), runner: collisionRunner },
+			{ width: WIDE_STATUS, height: HEIGHT, props: { ...propsOf(app), runner: collisionRunner } },
 		);
 		app.state.close();
 	});
@@ -3571,9 +3534,7 @@ describe("the leftover environment", () => {
 				// The agent runs, so the cycle stands: the ticket is handed off.
 				expect(app.state.ticketWorkCycle.ticketState(identity)).toBe("handed-off");
 			},
-			WIDE_STATUS,
-			HEIGHT,
-			{ ...propsOf(app), runner: promptRunner },
+			{ width: WIDE_STATUS, height: HEIGHT, props: { ...propsOf(app), runner: promptRunner } },
 		);
 		app.state.close();
 	});
@@ -3611,9 +3572,7 @@ describe("the auto dispatch", () => {
 				expect(commands).toContain(`herdr workspace create --cwd ${path} --no-focus`);
 				expect(commands.some((c) => c.startsWith("herdr agent prompt"))).toBe(true);
 			},
-			WIDTH,
-			HEIGHT,
-			propsOf(app),
+			{ width: WIDTH, height: HEIGHT, props: propsOf(app) },
 		);
 		app.state.close();
 	});
@@ -3622,13 +3581,15 @@ describe("the auto dispatch", () => {
 		// ADR 0009: an unattended handoff resolves through the same chain the
 		// panel shows, so the profile's own agent, model, and level start it.
 		const app = seededAppInAutoMode("open", {
-			defaultModel: "anthropic/claude-sonnet-4-5",
-			taskTypes: {
-				...BASE_CONFIG.taskTypes,
-				implement: {
-					...BASE_CONFIG.taskTypes.implement,
-					agent: "codex",
-					thinking: "high",
+			extra: {
+				defaultModel: "anthropic/claude-sonnet-4-5",
+				taskTypes: {
+					...BASE_CONFIG.taskTypes,
+					implement: {
+						...BASE_CONFIG.taskTypes.implement,
+						agent: "codex",
+						thinking: "high",
+					},
 				},
 			},
 		});
@@ -3660,9 +3621,7 @@ describe("the auto dispatch", () => {
 					"--kind codex --pane pane-1 -- --model anthropic/claude-sonnet-4-5 -c model_reasoning_effort=high",
 				);
 			},
-			WIDTH,
-			HEIGHT,
-			propsOf(app),
+			{ width: WIDTH, height: HEIGHT, props: propsOf(app) },
 		);
 		app.state.close();
 	});
@@ -3672,9 +3631,11 @@ describe("the auto dispatch", () => {
 		// reports a pi list without the profile's model, so the dispatch dies
 		// on the check, not inside an agent terminal.
 		const app = seededAppInAutoMode("open", {
-			taskTypes: {
-				...BASE_CONFIG.taskTypes,
-				implement: { ...BASE_CONFIG.taskTypes.implement, model: "gpt-4o" },
+			extra: {
+				taskTypes: {
+					...BASE_CONFIG.taskTypes,
+					implement: { ...BASE_CONFIG.taskTypes.implement, model: "gpt-4o" },
+				},
 			},
 		});
 		stubCheckout(app);
@@ -3691,15 +3652,13 @@ describe("the auto dispatch", () => {
 				// The ticket stays open and dispatchable once the config is fixed.
 				expect(ticketRow(setup.captureCharFrame())).toContain("[open]");
 			},
-			WIDTH,
-			HEIGHT,
-			propsOf(app),
+			{ width: WIDTH, height: HEIGHT, props: propsOf(app) },
 		);
 		app.state.close();
 	});
 
 	test("two open tickets dispatch one per top-up cycle, in list order", async () => {
-		const app = seededAppInAutoMode("open", {}, pairSuccess);
+		const app = seededAppInAutoMode("open", { extra: {}, outcome: pairSuccess });
 		stubCheckout(app);
 		const path = Object.values(app.config.repos)[0];
 		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
@@ -3746,11 +3705,13 @@ describe("the auto dispatch", () => {
 					expect(ticket.state).toBe("handed-off");
 				}
 			},
-			WIDTH,
-			HEIGHT,
-			// A short interval lets the second top-up cycle run while the test
-			// waits: the poll the default config asks for is a minute long.
-			{ ...propsOf(app), pollIntervalMs: 25 },
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				props: // A short interval lets the second top-up cycle run while the test
+					// waits: the poll the default config asks for is a minute long.
+					{ ...propsOf(app), pollIntervalMs: 25 },
+			},
 		);
 		app.state.close();
 	});
@@ -3764,7 +3725,7 @@ describe("the auto dispatch", () => {
 		// stopped` while the plane still reads as auto.
 		// The fixture holds no mapping, so the convention checkout is the one
 		// that resolves the repository, and it holds a different repository.
-		const app = seededAppInAutoMode("open", { repos: {} }, pairSuccess);
+		const app = seededAppInAutoMode("open", { extra: { repos: {} }, outcome: pairSuccess });
 		const home = mkdtempSync(join(tmpdir(), "factory-auto-home-"));
 		paths.push(home);
 		const convention = join(home, "src", "factory");
@@ -3823,9 +3784,7 @@ describe("the auto dispatch", () => {
 					`"github.com/acme/factory" = "${sibling}"`,
 				);
 			},
-			WIDTH,
-			HEIGHT,
-			{ ...propsOf(app), home, pollIntervalMs: 25 },
+			{ width: WIDTH, height: HEIGHT, props: { ...propsOf(app), home, pollIntervalMs: 25 } },
 		);
 		app.state.close();
 	});
@@ -3839,8 +3798,13 @@ describe("the auto dispatch", () => {
 		// hold the ticket instead of re-running the completed type. A pair
 		// ticket with no closed cycle dispatches in the same cycle: the loop
 		// runs, and the finished work does not repeat.
-		const app = seededAppInAutoMode("awaiting", {}, pairSuccess, "live-worktree", {
-			cause: "completed",
+		const app = seededAppInAutoMode("awaiting", {
+			extra: {},
+			outcome: pairSuccess,
+			environment: "live-worktree",
+			detail: {
+				cause: "completed",
+			},
 		});
 		stubCheckout(app);
 		const path = Object.values(app.config.repos)[0];
@@ -3880,9 +3844,7 @@ describe("the auto dispatch", () => {
 					`herdr agent start ${SECOND_AGENT} --kind pi --pane pane-1`,
 				]);
 			},
-			WIDTH,
-			HEIGHT,
-			{ ...propsOf(app), pollIntervalMs: 20 },
+			{ width: WIDTH, height: HEIGHT, props: { ...propsOf(app), pollIntervalMs: 20 } },
 		);
 		app.state.close();
 	});
@@ -3892,11 +3854,13 @@ describe("the auto dispatch", () => {
 		// handoff resolves a Model its Agent maps no argument for, so nothing
 		// starts, and the report names the ticket rather than only the reason.
 		const app = seededAppInAutoMode("open", {
-			defaultModel: "factory-model",
-			agents: { ...BASE_CONFIG.agents, cursor: { kind: "cursor" } },
-			taskTypes: {
-				...BASE_CONFIG.taskTypes,
-				implement: { ...BASE_CONFIG.taskTypes.implement, agent: "cursor" },
+			extra: {
+				defaultModel: "factory-model",
+				agents: { ...BASE_CONFIG.agents, cursor: { kind: "cursor" } },
+				taskTypes: {
+					...BASE_CONFIG.taskTypes,
+					implement: { ...BASE_CONFIG.taskTypes.implement, agent: "cursor" },
+				},
 			},
 		});
 		stubCheckout(app);
@@ -3916,9 +3880,7 @@ describe("the auto dispatch", () => {
 				expect(app.state.ticketWorkCycle.ticketState(identity)).toBe("open");
 				expect(ticketRow(failed)).toContain("[open]");
 			},
-			WIDTH,
-			HEIGHT,
-			propsOf(app),
+			{ width: WIDTH, height: HEIGHT, props: propsOf(app) },
 		);
 		app.state.close();
 	});
@@ -3946,9 +3908,7 @@ describe("the auto dispatch", () => {
 					),
 				).toBe(true);
 			},
-			WIDTH,
-			HEIGHT,
-			propsOf(app),
+			{ width: WIDTH, height: HEIGHT, props: propsOf(app) },
 		);
 		app.state.close();
 	});
@@ -3958,13 +3918,12 @@ describe("the auto decision", () => {
 	test("auto mode routes a settled turn to the workflow target without the operator", async () => {
 		const review = { ...BASE_CONFIG.taskTypes.review };
 		review.template += "\n\nPrevious work message:\n{previous-message}";
-		const app = seededAppInAutoMode(
-			"awaiting",
-			{ taskTypes: { ...BASE_CONFIG.taskTypes, review } },
-			success,
-			"live-worktree",
-			{ transition: reviewRoute() },
-		);
+		const app = seededAppInAutoMode("awaiting", {
+			extra: { taskTypes: { ...BASE_CONFIG.taskTypes, review } },
+			outcome: success,
+			environment: "live-worktree",
+			detail: { transition: reviewRoute() },
+		});
 		stubCheckout(app);
 		// The routed agent's pane is live from the first list: a later tick
 		// must not read it as missing and restart it.
@@ -4028,9 +3987,7 @@ describe("the auto decision", () => {
 				expect(prompt?.includes("The turn is done.")).toBe(true);
 				expect(commands).toContain("herdr tab close tab-1");
 			},
-			WIDTH,
-			HEIGHT,
-			propsOf(app),
+			{ width: WIDTH, height: HEIGHT, props: propsOf(app) },
 		);
 		app.state.close();
 	});
@@ -4039,24 +3996,23 @@ describe("the auto decision", () => {
 		// Story 25 and story 26 on the unattended path: the loop's route resolves
 		// agent, model, and thinking through the target task profile's chain, and
 		// its fit check reads the same resolved value the start carries.
-		const app = seededAppInAutoMode(
-			"awaiting",
-			{
+		const app = seededAppInAutoMode("awaiting", {
+			extra: {
 				taskTypes: {
 					...BASE_CONFIG.taskTypes,
 					review: { ...BASE_CONFIG.taskTypes.review, model: "anthropic/claude-review-4" },
 				},
 			},
-			success,
-			"live-worktree",
-			{
+			outcome: success,
+			environment: "live-worktree",
+			detail: {
 				message: "The turn is done.",
 				// The model the settled handoff ran on: a route must not inherit it.
 				model: "opus-4",
 				thinking: "high",
 				transition: reviewRoute(),
 			},
-		);
+		});
 		stubCheckout(app);
 		app.runner.setModelList("pi", ["anthropic/claude-review-4"]);
 		app.runner.set("herdr", ["agent", "list"], {
@@ -4104,9 +4060,7 @@ describe("the auto decision", () => {
 				// The settled handoff's own model never rides on the route.
 				expect(start).not.toContain("opus-4");
 			},
-			WIDTH,
-			HEIGHT,
-			propsOf(app),
+			{ width: WIDTH, height: HEIGHT, props: propsOf(app) },
 		);
 		app.state.close();
 	});
@@ -4117,17 +4071,16 @@ describe("the auto decision", () => {
 		// configured default model. The route can only fail, and it fails before
 		// any external step: the ask still recorded its decision, and the drop
 		// keeps it (ADR 0064).
-		const app = seededAppInAutoMode(
-			"awaiting",
-			{
+		const app = seededAppInAutoMode("awaiting", {
+			extra: {
 				defaultAgent: "claude",
 				defaultModel: "factory-model",
 				agents: { ...BASE_CONFIG.agents, claude: { kind: "claude" } },
 			},
-			success,
-			"live-worktree",
-			{ transition: reviewRoute() },
-		);
+			outcome: success,
+			environment: "live-worktree",
+			detail: { transition: reviewRoute() },
+		});
 		stubCheckout(app);
 		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
 		app.runner.set("herdr", ["workspace", "list"], {
@@ -4181,11 +4134,13 @@ describe("the auto decision", () => {
 					"auto-handed-off",
 				);
 			},
-			WIDTH,
-			HEIGHT,
-			// A short interval keeps the route coming back each cycle: the failed
-			// start must not consume the turn it came from, cycle after cycle.
-			{ ...propsOf(app), pollIntervalMs: 25 },
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				props: // A short interval keeps the route coming back each cycle: the failed
+					// start must not consume the turn it came from, cycle after cycle.
+					{ ...propsOf(app), pollIntervalMs: 25 },
+			},
 		);
 		app.state.close();
 	});
@@ -4194,7 +4149,9 @@ describe("the auto decision", () => {
 		// The handoff limit equals the ticket's one handoff: the close is the
 		// limit degrade, and it keeps the open ticket from being re-handed.
 		const app = seededAppInAutoMode("awaiting", {
-			maxHandoffsPerTicket: 1,
+			extra: {
+				maxHandoffsPerTicket: 1,
+			},
 		});
 		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
 
@@ -4216,21 +4173,18 @@ describe("the auto decision", () => {
 				// alone: no agent start ran.
 				expect(commands.filter((c) => c.startsWith("herdr agent start"))).toHaveLength(0);
 			},
-			WIDTH,
-			HEIGHT,
-			propsOf(app),
+			{ width: WIDTH, height: HEIGHT, props: propsOf(app) },
 		);
 		app.state.close();
 	});
 
 	test("enter on an awaiting ticket in auto mode reports the factory's decision", async () => {
-		const app = seededAppInAutoMode(
-			"awaiting",
-			{ maxParallelAgents: 1 },
-			pairSuccess,
-			"live-worktree",
-			{ transition: reviewRoute() },
-		);
+		const app = seededAppInAutoMode("awaiting", {
+			extra: { maxParallelAgents: 1 },
+			outcome: pairSuccess,
+			environment: "live-worktree",
+			detail: { transition: reviewRoute() },
+		});
 		// The second ticket holds the single parallel seat with a live agent,
 		// so the route waits and the ticket stays awaiting.
 		const claim = app.state.handoff.claimHandoff(
@@ -4277,9 +4231,7 @@ describe("the auto decision", () => {
 				expect(app.state.ticketWorkCycle.ticketState(identity)).toBe("awaiting");
 				expect(app.state.ticketWorkCycle.lastCompletion(identity)?.decision).toBeNull();
 			},
-			WIDTH,
-			HEIGHT,
-			propsOf(app),
+			{ width: WIDTH, height: HEIGHT, props: propsOf(app) },
 		);
 		app.state.close();
 	});
@@ -4293,13 +4245,12 @@ describe("the auto decision", () => {
 		// The seeded turn's fire derived its review on the ticket, and the source's
 		// own labels still offer the implement task: the step stands held, and the
 		// turn rests awaiting.
-		const app = seededAppInAutoMode(
-			"awaiting",
-			{ maxParallelAgents: 1 },
-			pairSuccess,
-			"live-worktree",
-			{ transition: reviewRoute() },
-		);
+		const app = seededAppInAutoMode("awaiting", {
+			extra: { maxParallelAgents: 1 },
+			outcome: pairSuccess,
+			environment: "live-worktree",
+			detail: { transition: reviewRoute() },
+		});
 		// No Agent works: the cycle's only fact is the settled turn it resolves.
 		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
 		await withApp(
@@ -4318,9 +4269,7 @@ describe("the auto decision", () => {
 				expect(app.state.ticketWorkCycle.ticketState(identity)).toBe("awaiting");
 				expect(app.state.ticketWorkCycle.lastCompletion(identity)?.decision).toBeNull();
 			},
-			WIDTH,
-			HEIGHT,
-			propsOf(app),
+			{ width: WIDTH, height: HEIGHT, props: propsOf(app) },
 		);
 		app.state.close();
 	});
@@ -4347,8 +4296,13 @@ describe("the Operator-decides type parks its completions for the operator (ADR 
 	};
 
 	test("a parked turn rests in awaiting across cycles while the session stays alive", async () => {
-		const app = seededAppInAutoMode("awaiting", withAnalyze, success, "live-worktree", {
-			taskType: "analyze",
+		const app = seededAppInAutoMode("awaiting", {
+			extra: withAnalyze,
+			outcome: success,
+			environment: "live-worktree",
+			detail: {
+				taskType: "analyze",
+			},
 		});
 		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
 
@@ -4373,15 +4327,17 @@ describe("the Operator-decides type parks its completions for the operator (ADR 
 				expect(commands.filter((c) => c.startsWith("herdr tab close"))).toHaveLength(0);
 				expect(commands.filter((c) => c.startsWith("herdr agent start"))).toHaveLength(0);
 			},
-			WIDTH,
-			HEIGHT,
-			{ ...propsOf(app), pollIntervalMs: 40 },
+			{ width: WIDTH, height: HEIGHT, props: { ...propsOf(app), pollIntervalMs: 40 } },
 		);
 		app.state.close();
 	});
 
 	test("a control type with no transition still closes its turn: the flag is the only difference", async () => {
-		const app = seededAppInAutoMode("awaiting", withAnalyze, success, "live-worktree");
+		const app = seededAppInAutoMode("awaiting", {
+			extra: withAnalyze,
+			outcome: success,
+			environment: "live-worktree",
+		});
 		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
 
 		await withApp(
@@ -4395,16 +4351,19 @@ describe("the Operator-decides type parks its completions for the operator (ADR 
 				expect(app.state.ticketWorkCycle.lastCompletion(identity)?.decision).toBe("auto-closed");
 				expect(app.runner.commands()).toContain("herdr tab close tab-1");
 			},
-			WIDTH,
-			HEIGHT,
-			propsOf(app),
+			{ width: WIDTH, height: HEIGHT, props: propsOf(app) },
 		);
 		app.state.close();
 	});
 
 	test("the operator's explicit close ends the parked turn, and the ticket re-derives to open", async () => {
-		const app = seededAppInAutoMode("awaiting", withAnalyze, success, "live-worktree", {
-			taskType: "analyze",
+		const app = seededAppInAutoMode("awaiting", {
+			extra: withAnalyze,
+			outcome: success,
+			environment: "live-worktree",
+			detail: {
+				taskType: "analyze",
+			},
 		});
 		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
 
@@ -4427,17 +4386,20 @@ describe("the Operator-decides type parks its completions for the operator (ADR 
 				expect(app.state.ticketWorkCycle.ticketState(identity)).toBe("open");
 				expect(app.runner.commands()).toContain("herdr tab close tab-1");
 			},
-			WIDTH,
-			HEIGHT,
-			propsOf(app),
+			{ width: WIDTH, height: HEIGHT, props: propsOf(app) },
 		);
 		app.state.close();
 	});
 
 	test("the awaiting ticket reopens when its agent reports working again, and parks again on the next settle", async () => {
-		const app = seededAppInAutoMode("awaiting", withAnalyze, success, "live-worktree", {
-			taskType: "analyze",
-			stateNow: () => Date.now() - 600_000,
+		const app = seededAppInAutoMode("awaiting", {
+			extra: withAnalyze,
+			outcome: success,
+			environment: "live-worktree",
+			detail: {
+				taskType: "analyze",
+				stateNow: () => Date.now() - 600_000,
+			},
 		});
 		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
 
@@ -4485,9 +4447,7 @@ describe("the Operator-decides type parks its completions for the operator (ADR 
 					0,
 				);
 			},
-			WIDTH,
-			HEIGHT,
-			{ ...propsOf(app), pollIntervalMs: 40 },
+			{ width: WIDTH, height: HEIGHT, props: { ...propsOf(app), pollIntervalMs: 40 } },
 		);
 		app.state.close();
 	});
@@ -4560,12 +4520,11 @@ describe("the Operator-decides type parks its completions for the operator (ADR 
 			fetchedAt: "2026-08-31T10:02:00Z",
 			tickets: [pullFetched(["ready-for-review"])],
 		};
-		const app = seededApp(
-			"awaiting",
-			withDiagnose,
-			bugOutcome,
-			"live-worktree",
-			{
+		const app = seededApp("awaiting", {
+			extra: withDiagnose,
+			outcome: bugOutcome,
+			environment: "live-worktree",
+			detail: {
 				taskType: "diagnose",
 				cause: "completed",
 				transition: {
@@ -4583,8 +4542,8 @@ describe("the Operator-decides type parks its completions for the operator (ADR 
 					positionTicketIdentity: pullIdentity,
 				},
 			},
-			pullOutcome,
-		);
+			pullOutcome: pullOutcome,
+		});
 		const pull = app.pullSrc;
 		if (pull === undefined) throw new Error("the pull source is missing");
 		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
@@ -4616,9 +4575,7 @@ describe("the Operator-decides type parks its completions for the operator (ADR 
 				expect(app.state.ticketWorkCycle.lastCompletion(identity)?.decision).toBe("closed");
 				expect(app.state.ticketWorkCycle.ticketState(identity)).toBe("open");
 			},
-			WIDTH,
-			HEIGHT,
-			propsOf(app),
+			{ width: WIDTH, height: HEIGHT, props: propsOf(app) },
 		);
 		app.state.close();
 	});
@@ -4665,7 +4622,7 @@ describe("auto handoff should not pickup operator tasks (ADR 0117)", () => {
 	}
 
 	test("the machine never hands off a flagged type, and the operator's handoff starts it", async () => {
-		const app = seededAppInAutoMode("open", flaggedConfig, specSuccess);
+		const app = seededAppInAutoMode("open", { extra: flaggedConfig, outcome: specSuccess });
 		stubCheckout(app);
 		stubHandoff(app);
 
@@ -4694,30 +4651,33 @@ describe("auto handoff should not pickup operator tasks (ADR 0117)", () => {
 					app.runner.commands().some((command) => command.startsWith("herdr agent start")),
 				).toBe(true);
 			},
-			WIDTH,
-			HEIGHT,
-			{ ...propsOf(app), pollIntervalMs: 40 },
+			{ width: WIDTH, height: HEIGHT, props: { ...propsOf(app), pollIntervalMs: 40 } },
 		);
 		app.state.close();
 	});
 
 	test("the Decision screen stands the held Next step on the flag's gate, and the row's key starts it", async () => {
-		const app = seededAppInAutoMode("awaiting", flaggedConfig, specSuccess, "live-worktree", {
-			taskType: "implement",
-			cause: "completed",
-			transition: {
-				fired: true,
-				when: null,
-				reason: "",
-				ticketFacts: ["ready-for-spec"],
-				pullRequestFacts: [],
-				ticketWrite: { added: ["ready-for-spec"], removed: ["ready-for-agent"] },
-				pullRequestWrite: null,
-				pullRequestIdentity: null,
-				pullRequestKey: null,
-				writeFailure: "",
-				positionTaskType: "analyze",
-				positionTicketIdentity: identity,
+		const app = seededAppInAutoMode("awaiting", {
+			extra: flaggedConfig,
+			outcome: specSuccess,
+			environment: "live-worktree",
+			detail: {
+				taskType: "implement",
+				cause: "completed",
+				transition: {
+					fired: true,
+					when: null,
+					reason: "",
+					ticketFacts: ["ready-for-spec"],
+					pullRequestFacts: [],
+					ticketWrite: { added: ["ready-for-spec"], removed: ["ready-for-agent"] },
+					pullRequestWrite: null,
+					pullRequestIdentity: null,
+					pullRequestKey: null,
+					writeFailure: "",
+					positionTaskType: "analyze",
+					positionTicketIdentity: identity,
+				},
 			},
 		});
 		stubCheckout(app);
@@ -4757,16 +4717,19 @@ describe("auto handoff should not pickup operator tasks (ADR 0117)", () => {
 					app.runner.commands().some((command) => command.startsWith("herdr agent start")),
 				).toBe(true);
 			},
-			WIDTH,
-			HEIGHT,
-			{ ...propsOf(app), pollIntervalMs: 40 },
+			{ width: WIDTH, height: HEIGHT, props: { ...propsOf(app), pollIntervalMs: 40 } },
 		);
 		app.state.close();
 	});
 
 	test("the machine never restarts a flagged type's ticket, and the Missing modal's Restart starts it", async () => {
-		const app = seededAppInAutoMode("in-flight", flaggedConfig, success, "live-worktree", {
-			taskType: "analyze",
+		const app = seededAppInAutoMode("in-flight", {
+			extra: flaggedConfig,
+			outcome: success,
+			environment: "live-worktree",
+			detail: {
+				taskType: "analyze",
+			},
 		});
 		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
 		stubCheckout(app);
@@ -4805,9 +4768,7 @@ describe("auto handoff should not pickup operator tasks (ADR 0117)", () => {
 						),
 				).toBe(true);
 			},
-			WIDTH,
-			HEIGHT,
-			{ ...propsOf(app), pollIntervalMs: 40 },
+			{ width: WIDTH, height: HEIGHT, props: { ...propsOf(app), pollIntervalMs: 40 } },
 		);
 		app.state.close();
 	});
@@ -5061,15 +5022,17 @@ describe("the handoff queue", () => {
 				expect(reHandled?.state).toBe("handed-off");
 				expect(reHandled?.handoffRecoveryRequired).toBe(false);
 			},
-			WIDTH,
-			HEIGHT,
 			{
-				config,
-				state,
-				runner: gate.runner,
-				configPath,
-				sources: [src],
-				pollIntervalMs: 60_000,
+				width: WIDTH,
+				height: HEIGHT,
+				props: {
+					config,
+					state,
+					runner: gate.runner,
+					configPath,
+					sources: [src],
+					pollIntervalMs: 60_000,
+				},
 			},
 		);
 		state.close();
@@ -5087,8 +5050,13 @@ describe("the handoff queue", () => {
 	 * a free seat, and started the queued task on top of the live one - 2/1.
 	 */
 	test("a restart counts the live agent's seat before the queue's pickup", async () => {
-		const app = seededApp("in-flight", { maxParallelAgents: 1 }, pairSuccess, "live-worktree", {
-			stateNow: () => Date.now() - 2 * 60 * 60 * 1000,
+		const app = seededApp("in-flight", {
+			extra: { maxParallelAgents: 1 },
+			outcome: pairSuccess,
+			environment: "live-worktree",
+			detail: {
+				stateNow: () => Date.now() - 2 * 60 * 60 * 1000,
+			},
 		});
 		stubCheckout(app);
 		// The start the previous run queued, still waiting when the plane opens.
@@ -5142,9 +5110,7 @@ describe("the handoff queue", () => {
 				expect(app.state.handoff.openAttemptTickets()).toEqual([]);
 				expect(app.runner.commands().join("\n")).not.toContain("herdr agent start");
 			},
-			WIDTH,
-			HEIGHT,
-			propsOf(app),
+			{ width: WIDTH, height: HEIGHT, props: propsOf(app) },
 		);
 		app.state.close();
 	});
@@ -5199,9 +5165,8 @@ describe("the re-fire of a recorded skip (ADR 0042)", () => {
 	}
 
 	test("a refresh that finds the fixing pull request re-fires the skip, writes the labels, and the route follows", async () => {
-		const app = seededAppInAutoMode(
-			"awaiting",
-			{
+		const app = seededAppInAutoMode("awaiting", {
+			extra: {
 				taskTypes: {
 					...BASE_CONFIG.taskTypes,
 					implement: {
@@ -5212,9 +5177,9 @@ describe("the re-fire of a recorded skip (ADR 0042)", () => {
 					},
 				},
 			},
-			success,
-			"live-worktree",
-			{
+			outcome: success,
+			environment: "live-worktree",
+			detail: {
 				// The skip's turn: the agent completed the work. The completed
 				// cause puts the closed cycle behind the Same-type hold, so
 				// the open dispatch does not re-run the issue in the same
@@ -5222,8 +5187,8 @@ describe("the re-fire of a recorded skip (ADR 0042)", () => {
 				transition: skipTransition(),
 				cause: "completed",
 			},
-			{ status: "success", fetchedAt: "2026-08-31T10:01:00Z", tickets: [] },
-		);
+			pullOutcome: { status: "success", fetchedAt: "2026-08-31T10:01:00Z", tickets: [] },
+		});
 		const pull = app.pullSrc;
 		if (pull === undefined) throw new Error("the pull source is missing");
 		stubCheckout(app);
@@ -5319,9 +5284,7 @@ describe("the re-fire of a recorded skip (ADR 0042)", () => {
 				// The issue stands open and covered behind the pull request.
 				expect(app.state.ticketWorkCycle.ticketState(identity)).toBe("open");
 			},
-			WIDTH,
-			HEIGHT,
-			propsOf(app),
+			{ width: WIDTH, height: HEIGHT, props: propsOf(app) },
 		);
 		app.state.close();
 	});

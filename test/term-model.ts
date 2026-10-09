@@ -125,143 +125,144 @@ export function feedGrid(grid: Grid, data: Buffer): void {
 		const b = data[i];
 		if (b === 0x1b) {
 			if (i + 1 < n && data[i + 1] === 0x5b) {
-				const m = CSI_RE.exec(data.subarray(i, Math.min(i + 32, n)).toString("latin1"));
-				if (m === null) {
-					i += 1;
-					continue;
-				}
-				const params = m[1];
-				const fin = m[2];
-				if (fin === "H") {
-					grid.advance();
-					const parts = (params || "1;1").split(";");
-					const r = parts[0] === "" ? 1 : Number.parseInt(parts[0], 10);
-					const c = parts.length > 1 && parts[1] !== "" ? Number.parseInt(parts[1], 10) : 1;
-					grid.row = Math.min(Math.max(r - 1, 0), grid.height - 1);
-					grid.col = Math.min(Math.max(c - 1, 0), grid.width - 1);
-					grid.pendingWrap = false;
-				} else if (fin === "s" && !params.startsWith("?")) {
-					grid.savedRow = grid.row;
-					grid.savedCol = grid.col;
-				} else if (fin === "u" && !params.startsWith("?")) {
-					grid.row = grid.savedRow;
-					grid.col = grid.savedCol;
-					grid.pendingWrap = false;
-				} else if ((params === "?1049" && fin === "h") || (params === "?1049" && fin === "l")) {
-					grid.reset();
-				}
-				// m, n, c, t, q, other modes: no grid effect
-				i += m[0].length;
+				i = feedCsi(grid, data, i, n);
 				continue;
 			}
 			if (i + 1 < n && data[i + 1] === 0x5d) {
-				// OSC: consume to BEL or ST
-				let j = i + 2;
-				let end = -1;
-				while (j < n) {
-					if (data[j] === 0x07) {
-						end = j + 1;
-						break;
-					}
-					if (data[j] === 0x1b && j + 1 < n && data[j + 1] === 0x5c) {
-						end = j + 2;
-						break;
-					}
-					j += 1;
-				}
-				i = end === -1 ? n : end;
+				i = feedOsc(data, i, n);
 				continue;
 			}
-			if (i + 1 < n) {
-				const esc2 = data[i + 1];
-				if (esc2 === 0x37) {
-					// ESC 7: save cursor
-					grid.savedRow = grid.row;
-					grid.savedCol = grid.col;
-					i += 2;
-					continue;
-				}
-				if (esc2 === 0x38) {
-					// ESC 8: restore cursor
-					grid.row = grid.savedRow;
-					grid.col = grid.savedCol;
-					grid.pendingWrap = false;
-					i += 2;
-					continue;
-				}
-				if (esc2 === 0x3d || esc2 === 0x3e) {
-					i += 2;
-					continue;
-				}
-				if (esc2 === 0x28 || esc2 === 0x29 || esc2 === 0x2a || esc2 === 0x2b) {
-					i += 3;
-					continue;
-				}
-				if (esc2 === 0x5c) {
-					// bare ST
-					i += 2;
-					continue;
-				}
-				if (esc2 === 0x50 || esc2 === 0x5f || esc2 === 0x5e || esc2 === 0x52) {
-					// DCS/APC/PM/SOS: consume to ST or BEL
-					let j = i + 2;
-					let end = -1;
-					while (j < n) {
-						if (data[j] === 0x07) {
-							end = j + 1;
-							break;
-						}
-						if (data[j] === 0x1b && j + 1 < n && data[j + 1] === 0x5c) {
-							end = j + 2;
-							break;
-						}
-						j += 1;
-					}
-					i = end === -1 ? n : end;
-					continue;
-				}
-			}
-			i += 1;
+			i = feedEsc2(grid, data, i, n);
 			continue;
 		}
-		if (b === 0x0d) {
-			grid.advance();
-			grid.col = 0;
-			i += 1;
+		const step = feedControl(grid, b);
+		if (step !== -1) {
+			i += step;
 			continue;
 		}
-		if (b === 0x0a || b === 0x0b || b === 0x0c) {
-			grid.advance();
-			grid.row = Math.min(grid.row + 1, grid.height - 1);
-			i += 1;
-			continue;
-		}
-		if (b === 0x08) {
-			grid.col = Math.max(0, grid.col - 1);
-			i += 1;
-			continue;
-		}
-		if (b < 0x20) {
-			i += 1;
-			continue;
-		}
-		let ch: string;
-		if (b < 0x80) {
-			ch = String.fromCharCode(b);
-			i += 1;
-		} else {
-			const ln = b < 0xe0 ? 2 : b < 0xf0 ? 3 : 4;
-			let raw = data.subarray(i, i + ln);
-			try {
-				ch = new TextDecoder("utf-8", { fatal: true }).decode(raw);
-			} catch {
-				ch = "?";
-				raw = data.subarray(i, i + 1);
-			}
-			i += raw.length;
-		}
+		const { ch, step: charStep } = feedChar(data, i);
 		grid.advance();
 		grid.put(ch);
+		i += charStep;
+	}
+}
+
+/** The index one CSI sequence at `i` consumes, or one past it when it names no command. */
+function feedCsi(grid: Grid, data: Buffer, i: number, n: number): number {
+	const m = CSI_RE.exec(data.subarray(i, Math.min(i + 32, n)).toString("latin1"));
+	if (m === null) return i + 1;
+	const params = m[1];
+	const fin = m[2];
+	if (fin === "H") {
+		grid.advance();
+		cupPlace(grid, params);
+	} else if (fin === "s" && !params.startsWith("?")) {
+		grid.savedRow = grid.row;
+		grid.savedCol = grid.col;
+	} else if (fin === "u" && !params.startsWith("?")) {
+		grid.row = grid.savedRow;
+		grid.col = grid.savedCol;
+		grid.pendingWrap = false;
+	} else if ((params === "?1049" && fin === "h") || (params === "?1049" && fin === "l")) {
+		grid.reset();
+	}
+	// m, n, c, t, q, other modes: no grid effect
+	return i + m[0].length;
+}
+
+/** The cursor one CUP sequence places at, clamped to the grid. */
+function cupPlace(grid: Grid, params: string): void {
+	const parts = (params || "1;1").split(";");
+	const r = parts[0] === "" ? 1 : Number.parseInt(parts[0], 10);
+	const c = parts.length > 1 && parts[1] !== "" ? Number.parseInt(parts[1], 10) : 1;
+	grid.row = Math.min(Math.max(r - 1, 0), grid.height - 1);
+	grid.col = Math.min(Math.max(c - 1, 0), grid.width - 1);
+	grid.pendingWrap = false;
+}
+
+/** The index one OSC at `i` consumes: its payload to the BEL or ST, or the end. */
+function feedOsc(data: Buffer, i: number, n: number): number {
+	// OSC: consume to BEL or ST
+	return consumeToSt(data, i + 2, n);
+}
+
+/** The index one two-byte escape at `i` consumes. */
+function feedEsc2(grid: Grid, data: Buffer, i: number, n: number): number {
+	if (i + 1 >= n) return i + 1;
+	const esc2 = data[i + 1];
+	if (esc2 === 0x37) {
+		// ESC 7: save cursor
+		grid.savedRow = grid.row;
+		grid.savedCol = grid.col;
+		return i + 2;
+	}
+	if (esc2 === 0x38) {
+		// ESC 8: restore cursor
+		grid.row = grid.savedRow;
+		grid.col = grid.savedCol;
+		grid.pendingWrap = false;
+		return i + 2;
+	}
+	if (esc2 === 0x3d || esc2 === 0x3e) return i + 2;
+	if (esc2 === 0x28 || esc2 === 0x29 || esc2 === 0x2a || esc2 === 0x2b) return i + 3;
+	if (esc2 === 0x5c) {
+		// bare ST
+		return i + 2;
+	}
+	if (esc2 === 0x50 || esc2 === 0x5f || esc2 === 0x5e || esc2 === 0x52) {
+		// DCS/APC/PM/SOS: consume to ST or BEL
+		return consumeToSt(data, i + 2, n);
+	}
+	return i + 1;
+}
+
+/** The index one OSC or DCS payload at `j` consumes: to its BEL or ST, or the end. */
+function consumeToSt(data: Buffer, j: number, n: number): number {
+	let end = -1;
+	while (j < n) {
+		if (data[j] === 0x07) {
+			end = j + 1;
+			break;
+		}
+		if (data[j] === 0x1b && j + 1 < n && data[j + 1] === 0x5c) {
+			end = j + 2;
+			break;
+		}
+		j += 1;
+	}
+	return end === -1 ? n : end;
+}
+
+/** The bytes one control byte consumes, or -1 when it is no control. */
+function feedControl(grid: Grid, b: number): number {
+	if (b === 0x0d) {
+		grid.advance();
+		grid.col = 0;
+		return 1;
+	}
+	if (b === 0x0a || b === 0x0b || b === 0x0c) {
+		grid.advance();
+		grid.row = Math.min(grid.row + 1, grid.height - 1);
+		return 1;
+	}
+	if (b === 0x08) {
+		grid.col = Math.max(0, grid.col - 1);
+		return 1;
+	}
+	if (b < 0x20) return 1;
+	return -1;
+}
+
+/** The character one code point's bytes decode to, and the bytes it took. */
+function feedChar(data: Buffer, i: number): { ch: string; step: number } {
+	const b = data[i];
+	if (b < 0x80) return { ch: String.fromCharCode(b), step: 1 };
+	const ln = b < 0xe0 ? 2 : b < 0xf0 ? 3 : 4;
+	const raw = data.subarray(i, i + ln);
+	try {
+		return { ch: new TextDecoder("utf-8", { fatal: true }).decode(raw), step: raw.length };
+	} catch {
+		return { ch: "?", step: 1 };
 	}
 }
 

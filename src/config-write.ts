@@ -265,7 +265,11 @@ function patchOwnedSections(text: string, updated: FactoryConfig): string | null
 	const scanned = scanToml(lines);
 	if (!editReposRegion(scanned, updated, edit)) return null;
 	if (!editSourcesRegion(scanned, updated, edit)) return null;
+	return assembleLines(lines, edit).join("\n");
+}
 
+/** The file's lines after the edit's replaces, drops, and inserts. */
+function assembleLines(lines: string[], edit: SectionEdit): string[] {
 	const out: string[] = [];
 	for (let i = 0; i < lines.length; i++) {
 		if (!edit.remove.has(i)) {
@@ -275,21 +279,26 @@ function patchOwnedSections(text: string, updated: FactoryConfig): string | null
 		const inserted = edit.insertAfter.get(i);
 		if (inserted !== undefined) out.push(...inserted);
 	}
-	if (edit.tail.length > 0) {
-		// The file's own final newline is the empty element the split yields at the
-		// end. It is set aside so the appended lines land before it and keep that
-		// ending, and the operator's last line is still a line.
-		const endsWithNewline = lines[lines.length - 1] === "";
-		if (endsWithNewline) out.pop();
-		// One blank line separates what the plane appends from what the operator
-		// wrote, the same separator an in-region insert writes. A file whose own
-		// last line is blank carries that separator already, so the plane adds no
-		// second one.
-		if (out.at(-1)?.trim() !== "") out.push(edit.eol);
-		out.push(...edit.tail);
-		if (endsWithNewline) out.push("");
-	}
-	return out.join("\n");
+	appendTail(out, lines, edit);
+	return out;
+}
+
+/**
+ * The lines the edit appends at the end of the file, and the file's own final
+ * newline set aside so the appended lines land before it and keep that
+ * ending, the operator's last line still a line.
+ */
+function appendTail(out: string[], lines: string[], edit: SectionEdit): void {
+	if (edit.tail.length === 0) return;
+	const endsWithNewline = lines[lines.length - 1] === "";
+	if (endsWithNewline) out.pop();
+	// One blank line separates what the plane appends from what the operator
+	// wrote, the same separator an in-region insert writes. A file whose own
+	// last line is blank carries that separator already, so the plane adds no
+	// second one.
+	if (out.at(-1)?.trim() !== "") out.push(edit.eol);
+	out.push(...edit.tail);
+	if (endsWithNewline) out.push("");
 }
 
 /**
@@ -323,30 +332,8 @@ function editReposRegion(
 	const region = regions[0];
 	const written = new Set<string>();
 	for (let i = region.start + 1; i < region.end; i++) {
-		const row = scanned[i];
-		// A line that stands inside an operator's multiline string is prose, not
-		// an assignment, and a line whose value runs past the end of the line (a
-		// multiline array, an inline table written across lines) is a form the
-		// plane's own serializer has no in-place writing for. Neither is a line the
-		// plane rewrites: the key such a line names still counts as standing, so
-		// the plane does not add a second one beside it, and the verify step
-		// decides whether what stands carries what the plane holds.
-		if (row.startsInString) continue;
-		const key = assignmentKey(row.body);
-		if (key === null) continue;
-		const value = updated.repos[key];
-		// A key the plane does not hold is one the operator wrote by hand
-		// since the plane read the file. The plane owns its own keys, not theirs.
-		if (value === undefined) continue;
-		written.add(key);
-		if (row.opensString || valueRunsPastLine(row.body)) continue;
-		if (assignmentValue(row.body) === value) continue;
-		const indent = /^\s*/.exec(row.body)?.[0] ?? "";
-		// The line's own comment is the operator's prose about the value, and it
-		// survives the plane's new value (ADR 0103).
-		const comment = trailingComment(row);
-		const cr = row.text.endsWith("\r") ? "\r" : "";
-		edit.replace.set(i, `${indent}${tomlKey(key)} = ${tomlString(value)}${comment ?? ""}${cr}`);
+		const key = rewriteRepoRow(scanned[i], i, updated.repos, edit);
+		if (key !== null) written.add(key);
 	}
 	const missing = entries.filter(([key]) => !written.has(key));
 	if (missing.length > 0) {
@@ -362,6 +349,43 @@ function editReposRegion(
 /** A `key = value` line the plane writes, in the file's own line ending. */
 function assignmentLine(edit: SectionEdit, key: string, value: string): string {
 	return `${tomlKey(key)} = ${tomlString(value)}${edit.eol}`;
+}
+
+/**
+ * Rewrite one line of the `[repos]` table in place when the plane can, and
+ * answer the key the line names when the plane holds it, so the missing-key
+ * pass counts it as standing.
+ *
+ * A line that stands inside an operator's multiline string is prose, not an
+ * assignment, and a line whose value runs past the end of the line (a
+ * multiline array, an inline table written across lines) is a form the
+ * plane's own serializer has no in-place writing for. Neither is a line the
+ * plane rewrites: the key such a line names still counts as standing, so
+ * the plane does not add a second one beside it, and the verify step
+ * decides whether what stands carries what the plane holds.
+ */
+function rewriteRepoRow(
+	row: ScannedLine,
+	at: number,
+	repos: Record<string, string>,
+	edit: SectionEdit,
+): string | null {
+	if (row.startsInString) return null;
+	const key = assignmentKey(row.body);
+	if (key === null) return null;
+	const value = repos[key];
+	// A key the plane does not hold is one the operator wrote by hand
+	// since the plane read the file. The plane owns its own keys, not theirs.
+	if (value === undefined) return null;
+	if (row.opensString || valueRunsPastLine(row.body)) return key;
+	if (assignmentValue(row.body) === value) return key;
+	const indent = /^\s*/.exec(row.body)?.[0] ?? "";
+	// The line's own comment is the operator's prose about the value, and it
+	// survives the plane's new value (ADR 0103).
+	const comment = trailingComment(row);
+	const cr = row.text.endsWith("\r") ? "\r" : "";
+	edit.replace.set(at, `${indent}${tomlKey(key)} = ${tomlString(value)}${comment ?? ""}${cr}`);
+	return key;
 }
 
 /**
@@ -538,60 +562,97 @@ function scanToml(lines: string[]): ScannedLine[] {
 	const out: ScannedLine[] = [];
 	let open: string | null = null;
 	for (const text of lines) {
-		const body = text.endsWith("\r") ? text.slice(0, -1) : text;
-		let from = 0;
-		const startsInString = open !== null;
-		if (open !== null) {
-			const close = findClose(body, 0, open, true);
-			if (close === null) {
-				out.push({
-					text,
-					body,
-					header: null,
-					startsInString,
-					opensString: true,
-					commentAt: null,
-				});
-				continue;
-			}
-			open = null;
-			from = close + 3;
-		}
-		const header = headerAt(body, from);
-		if (header !== null) {
-			out.push({ text, body, header, startsInString, opensString: false, commentAt: null });
-			continue;
-		}
-		let i = from;
-		let opensString = false;
-		let commentAt: number | null = null;
-		while (i < body.length) {
-			const ch = body[i];
-			if (ch === "#") {
-				commentAt = i;
-				break;
-			}
-			if (ch === '"' || ch === "'") {
-				if (body.startsWith(ch.repeat(3), i)) {
-					const close = findClose(body, i + 3, ch, true);
-					if (close === null) {
-						open = ch;
-						opensString = true;
-						break;
-					}
-					i = close + 3;
-					continue;
-				}
-				const close = findClose(body, i + 1, ch, false);
-				if (close === null) break;
-				i = close + 1;
-				continue;
-			}
-			i += 1;
-		}
-		out.push({ text, body, header: null, startsInString, opensString, commentAt });
+		const step = scanLine(text, open);
+		open = step.open;
+		out.push(step.line);
 	}
 	return out;
+}
+
+/** The one line the scan classifies, and the multiline string it leaves open. */
+function scanLine(text: string, open: string | null): { line: ScannedLine; open: string | null } {
+	const body = text.endsWith("\r") ? text.slice(0, -1) : text;
+	let from = 0;
+	const startsInString = open !== null;
+	if (open !== null) {
+		const close = findClose(body, 0, open, true);
+		if (close === null) {
+			return {
+				line: { text, body, header: null, startsInString, opensString: true, commentAt: null },
+				open,
+			};
+		}
+		open = null;
+		from = close + 3;
+	}
+	const header = headerAt(body, from);
+	if (header !== null) {
+		return {
+			line: { text, body, header, startsInString, opensString: false, commentAt: null },
+			open: null,
+		};
+	}
+	const value = scanValueLine(body, from);
+	return {
+		line: {
+			text,
+			body,
+			header: null,
+			startsInString,
+			opensString: value.opensString,
+			commentAt: value.commentAt,
+		},
+		open: value.open,
+	};
+}
+
+/**
+ * The walk over a body line past its key: the string forms it holds, and the
+ * comment index where the line's value ends.
+ */
+function scanValueLine(
+	body: string,
+	from: number,
+): { commentAt: number | null; opensString: boolean; open: string | null } {
+	let i = from;
+	let opensString = false;
+	let commentAt: number | null = null;
+	let open: string | null = null;
+	while (i < body.length) {
+		const ch = body[i];
+		if (ch === "#") {
+			commentAt = i;
+			break;
+		}
+		if (ch === '"' || ch === "'") {
+			const skip = skipString(body, i, ch);
+			if (skip.unclosed) {
+				if (body.startsWith(ch.repeat(3), i)) {
+					open = ch;
+					opensString = true;
+				}
+				break;
+			}
+			i = skip.next;
+			continue;
+		}
+		i += 1;
+	}
+	return { commentAt, opensString, open };
+}
+
+/**
+ * Where a string opened at `i` closes on the line, or that it does not: a
+ * triple-quote form opens past the line, and a single-quote form leaves the
+ * line holding what stands.
+ */
+function skipString(text: string, i: number, quote: string): { next: number; unclosed: boolean } {
+	if (text.startsWith(quote.repeat(3), i)) {
+		const close = findClose(text, i + 3, quote, true);
+		return close === null ? { next: i, unclosed: true } : { next: close + 3, unclosed: false };
+	}
+	const close = findClose(text, i + 1, quote, false);
+	return close === null ? { next: i, unclosed: true } : { next: close + 1, unclosed: false };
 }
 
 function headerAt(text: string, from: number): TomlHeader | null {
@@ -605,26 +666,14 @@ function headerAt(text: string, from: number): TomlHeader | null {
 
 /** The index of the delimiter that closes the string, or null when the line holds none. */
 function findClose(text: string, from: number, quote: string, multiline: boolean): number | null {
-	if (multiline) {
-		const delimiter = quote.repeat(3);
-		let i = from;
-		while (i < text.length) {
-			if (quote === '"' && text[i] === "\\") {
-				i += 2;
-				continue;
-			}
-			if (text.startsWith(delimiter, i)) return i;
-			i += 1;
-		}
-		return null;
-	}
+	const delimiter = multiline ? quote.repeat(3) : quote;
 	let i = from;
 	while (i < text.length) {
 		if (quote === '"' && text[i] === "\\") {
 			i += 2;
 			continue;
 		}
-		if (text[i] === quote) return i;
+		if (text.startsWith(delimiter, i)) return i;
 		i += 1;
 	}
 	return null;
@@ -678,24 +727,17 @@ function valueRunsPastLine(text: string): boolean {
 	// the end of the match minus its own length.
 	let i = match.index + match[0].length - match[2].length;
 	let depth = 0;
-	while (i < text.length) {
+	while (i < text.length && text[i] !== "#") {
 		const ch = text[i];
-		if (ch === "#") break;
 		if (ch === '"' || ch === "'") {
-			if (text.startsWith(ch.repeat(3), i)) {
-				const close = findClose(text, i + 3, ch, true);
-				if (close === null) return true;
-				i = close + 3;
-				continue;
-			}
-			const close = findClose(text, i + 1, ch, false);
-			if (close === null) return true;
-			i = close + 1;
+			const skip = skipString(text, i, ch);
+			if (skip.unclosed) return true;
+			i = skip.next;
 			continue;
 		}
+		i += 1;
 		if (ch === "[" || ch === "{") depth += 1;
 		else if (ch === "]" || ch === "}") depth -= 1;
-		i += 1;
 	}
 	return depth > 0;
 }
@@ -754,20 +796,27 @@ function decodeBasicString(content: string): string | null {
 			out += ch;
 			continue;
 		}
-		const next = content[i + 1];
-		if (next === undefined) return null;
-		if (next === "n") out += "\n";
-		else if (next === "t") out += "\t";
-		else if (next === "r") out += "\r";
-		else if (next === "u") {
-			const hex = content.slice(i + 2, i + 6);
-			if (!/^[0-9a-fA-F]{4}$/.test(hex)) return null;
-			out += String.fromCodePoint(Number.parseInt(hex, 16));
-			i += 4;
-		} else out += next;
-		i += 1;
+		const step = decodeEscape(content, i);
+		if (step === null) return null;
+		out += step.value;
+		i += step.skip;
 	}
 	return out;
+}
+
+/** The characters one escape at `i` decodes to, and how far the walk moves. */
+function decodeEscape(content: string, i: number): { value: string; skip: number } | null {
+	const next = content[i + 1];
+	if (next === undefined) return null;
+	if (next === "n") return { value: "\n", skip: 1 };
+	if (next === "t") return { value: "\t", skip: 1 };
+	if (next === "r") return { value: "\r", skip: 1 };
+	if (next === "u") {
+		const hex = content.slice(i + 2, i + 6);
+		if (!/^[0-9a-fA-F]{4}$/.test(hex)) return null;
+		return { value: String.fromCodePoint(Number.parseInt(hex, 16)), skip: 4 };
+	}
+	return { value: next, skip: 1 };
 }
 
 /** A key in the form the plane writes it: quoted when it is not a bare key. */

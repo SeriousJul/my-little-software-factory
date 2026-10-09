@@ -28,7 +28,7 @@ import type { ReactElement } from "react";
 import { useEffect, useRef, useState } from "react";
 
 import type { InitableRepository } from "../repository-list.ts";
-import { useControlDispatch } from "./control-dispatch.ts";
+import { type ControlHandler, useControlDispatch } from "./control-dispatch.ts";
 import { availabilityFacts, type StandingFacts } from "./controls.ts";
 import type { MessageFact } from "./messages.ts";
 import { type ActionRow, MARKER_WIDTH, ModalSurface, modalFrame } from "./modal-chrome.ts";
@@ -99,29 +99,76 @@ const MIN_LIST_ROWS = 1;
 /** The badge word a row marked for the queue wears at its end (ADR 0083). */
 const QUEUED_BADGE = " queued";
 
-export function RepositorySelectPanel({
-	fetchRepositories,
-	onSelect,
-	initialPending,
-	onCancel,
-	standing,
-	inputActive = true,
-	onHelp,
-	onMessage,
-	onUnavailable,
-	message,
-	onEmergencyExit,
-	onQueuePause,
-	onAutoHandoff,
-}: RepositorySelectPanelProps): ReactElement {
-	const { width: terminalWidth, height: terminalHeight } = useTerminalDimensions();
-	const [status, setStatus] = useState<RepositorySelectStatus>({ state: "loading" });
+export function RepositorySelectPanel(props: RepositorySelectPanelProps): ReactElement {
+	const { width: terminalWidth } = useTerminalDimensions();
+	const status = useRepositorySelectFetch(props.fetchRepositories);
 	const [query, setQuery] = useState("");
 	// The rows the operator marked for the queue (ADR 0083). The mark is the
 	// panel's own state: the list keeps no draft, so a close discards it.
-	const [pending, setPending] = useState<ReadonlySet<string>>(() => new Set(initialPending ?? []));
-	// The read runs once per open: the panel unmounts on close, so a new
-	// open is a new read, and the fetch the screen hands in owns the egress.
+	const [pending, setPending] = useState<ReadonlySet<string>>(
+		() => new Set(props.initialPending ?? []),
+	);
+	const list = useRepositorySelectList(status.state === "ready" ? status.repositories : [], query);
+	const ink = controlInk();
+
+	// The panel states the facts its own list produces: the rows it holds, the
+	// search's text, and the rows the operator marked for the queue.
+	const facts = availabilityFacts("repository-select", props.standing, {
+		listCanMove: list.filtered.length > 0,
+		repositoryCount: list.filtered.length,
+		searchText: query,
+		pendingCount: pending.size,
+	});
+	useControlDispatch({
+		facts,
+		active: props.inputActive,
+		onUnavailable: props.onUnavailable,
+		onEmergencyExit: props.onEmergencyExit,
+		handlers: repositorySelectHandlers(props, {
+			region: list.region,
+			rows: list.rows,
+			repositories: status.state === "ready" ? status.repositories : [],
+			pending,
+			setPending,
+			setQuery,
+		}),
+	});
+
+	const note = repositorySelectNote(list.region, list.frame);
+	const above = repositorySelectAbove({
+		status,
+		list,
+		pending,
+		ink,
+		query,
+		note,
+		inputActive: props.inputActive ?? true,
+		setQuery,
+	});
+
+	return createElement(ModalSurface, {
+		frame: list.frame,
+		width: terminalWidth,
+		title: "Init a repository",
+		body: { above, below: [], minRows: SEARCH_ROWS + NOTE_ROWS + MIN_LIST_ROWS },
+		message: props.message,
+		bar: { mode: "repository-select", facts },
+		queuePaused: props.standing.queuePaused,
+	});
+}
+
+/**
+ * The panel's read: the repositories the fetch hands over, or its failure.
+ * The read runs once per open: the panel unmounts on close, so a new open is
+ * a new read, and the fetch the screen hands in owns the egress.
+ */
+function useRepositorySelectFetch(
+	fetchRepositories: () => Promise<
+		| { status: "success"; repositories: readonly InitableRepository[] }
+		| { status: "failed"; reason: string }
+	>,
+): RepositorySelectStatus {
+	const [status, setStatus] = useState<RepositorySelectStatus>({ state: "loading" });
 	const fetchRef = useRef(fetchRepositories);
 	fetchRef.current = fetchRepositories;
 	useEffect(() => {
@@ -136,15 +183,18 @@ export function RepositorySelectPanel({
 			open = false;
 		};
 	}, []);
+	return status;
+}
 
-	const repositories = status.state === "ready" ? status.repositories : [];
+/** The list: the search filter, the frame, the region, the rows. */
+function useRepositorySelectList(repositories: readonly InitableRepository[], query: string) {
+	const { width: terminalWidth, height: terminalHeight } = useTerminalDimensions();
 	// The search filters the list by substring, the way the shared type-ahead
 	// matches: containment of the whole query, case-insensitive.
 	const filtered =
 		query === ""
 			? repositories
 			: repositories.filter((item) => item.displayName.toLowerCase().includes(query.toLowerCase()));
-
 	const listRows = Math.max(MIN_LIST_ROWS, Math.min(PREFERRED_LIST_ROWS, filtered.length));
 	const frame = modalFrame(terminalWidth, terminalHeight, {
 		maxWidth: CONTENT_WIDTH + 4,
@@ -159,83 +209,142 @@ export function RepositorySelectPanel({
 		label: item.displayName,
 	}));
 	const region = useDecisionRegion(rows, visibleRows);
-	const ink = controlInk();
+	return { filtered, frame, visibleRows, rows, region };
+}
 
-	// The panel states the facts its own list produces: the rows it holds, the
-	// search's text, and the rows the operator marked for the queue.
-	const facts = availabilityFacts("repository-select", standing, {
-		listCanMove: filtered.length > 0,
-		repositoryCount: filtered.length,
-		searchText: query,
-		pendingCount: pending.size,
-	});
-	useControlDispatch({
-		facts,
-		active: inputActive,
-		onUnavailable,
-		onEmergencyExit,
-		handlers: {
-			help: () => onHelp?.(),
-			message: () => onMessage?.(),
-			"move-list": ({ key }) => {
-				// The keys the ticket lists run: a step per row, a page per
-				// window, and the edge to the end, with the region's own window
-				// sliding to keep the row visible.
-				const name = key.name;
-				if (name === "pageup") region.pageMove(-1);
-				else if (name === "pagedown") region.pageMove(1);
-				else if (name === "home") region.moveEdge("start");
-				else if (name === "end") region.moveEdge("end");
-				else region.move(name === "up" || name === "k" ? -1 : 1);
-				key.preventDefault?.();
-			},
-			"select-repository": ({ key }) => {
-				key.preventDefault?.();
-				region.confirm(() => {
-					// The queue the marking holds, in list order. A marking of two
-					// or more runs the queue; anything else is the select of the
-					// row under the cursor (ADR 0083).
-					const marked = rows
-						.filter((row) => pending.has(row.key))
-						.map((row) => repositories.find((item) => item.identity === row.key))
-						.filter((item): item is InitableRepository => item !== undefined);
-					const queue =
-						marked.length >= 2
-							? marked
-							: [repositories.find((item) => item.identity === rows[region.at]?.key)].filter(
-									(item): item is InitableRepository => item !== undefined,
-								);
-					if (queue.length > 0) onSelect(queue);
-				});
-			},
-			"repository-select-toggle": ({ key }) => {
-				key.preventDefault?.();
-				const row = rows[region.at];
-				if (row === undefined) return;
-				setPending((prev) => {
-					const next = new Set(prev);
-					if (next.has(row.key)) next.delete(row.key);
-					else next.add(row.key);
-					return next;
-				});
-			},
-			"repository-select-clear": ({ key }) => {
-				key.preventDefault?.();
-				setQuery("");
-			},
-			"repository-select-cancel": ({ key }) => {
-				key.preventDefault?.();
-				onCancel();
-			},
-			// The plane-level keys reach this panel too (issue #319, ADR 0111):
-			// the brake and the mode flip on the select, the way they do on
-			// every surface the chrome owns.
-			"queue-pause": onQueuePause,
-			"auto-handoff": onAutoHandoff,
+/** The select panel's control catalogue handlers. */
+function repositorySelectHandlers(
+	props: RepositorySelectPanelProps,
+	fields: {
+		region: ReturnType<typeof useDecisionRegion>;
+		rows: readonly ActionRow[];
+		repositories: readonly InitableRepository[];
+		pending: ReadonlySet<string>;
+		setPending: (update: (prev: ReadonlySet<string>) => ReadonlySet<string>) => void;
+		setQuery: (query: string) => void;
+	},
+): Record<string, ControlHandler> {
+	const { region, rows, repositories, pending, setPending, setQuery } = fields;
+	return {
+		help: () => props.onHelp?.(),
+		message: () => props.onMessage?.(),
+		"move-list": ({ key }) => {
+			// The keys the ticket lists run: a step per row, a page per
+			// window, and the edge to the end, with the region's own window
+			// sliding to keep the row visible.
+			const name = key.name;
+			if (name === "pageup") region.pageMove(-1);
+			else if (name === "pagedown") region.pageMove(1);
+			else if (name === "home") region.moveEdge("start");
+			else if (name === "end") region.moveEdge("end");
+			else region.move(name === "up" || name === "k" ? -1 : 1);
+			key.preventDefault?.();
 		},
-	});
+		"select-repository": ({ key }) => {
+			key.preventDefault?.();
+			region.confirm(() => {
+				// The queue the marking holds, in list order. A marking of two
+				// or more runs the queue; anything else is the select of the
+				// row under the cursor (ADR 0083).
+				const marked = rows
+					.filter((row) => pending.has(row.key))
+					.map((row) => repositories.find((item) => item.identity === row.key))
+					.filter((item): item is InitableRepository => item !== undefined);
+				const queue =
+					marked.length >= 2
+						? marked
+						: [repositories.find((item) => item.identity === rows[region.at]?.key)].filter(
+								(item): item is InitableRepository => item !== undefined,
+							);
+				if (queue.length > 0) props.onSelect(queue);
+			});
+		},
+		"repository-select-toggle": ({ key }) => {
+			key.preventDefault?.();
+			const row = rows[region.at];
+			if (row === undefined) return;
+			setPending((prev) => {
+				const next = new Set(prev);
+				if (next.has(row.key)) next.delete(row.key);
+				else next.add(row.key);
+				return next;
+			});
+		},
+		"repository-select-clear": ({ key }) => {
+			key.preventDefault?.();
+			setQuery("");
+		},
+		"repository-select-cancel": ({ key }) => {
+			key.preventDefault?.();
+			props.onCancel();
+		},
+		// The plane-level keys reach this panel too (issue #319, ADR 0111):
+		// the brake and the mode flip on the select, the way they do on
+		// every surface the chrome owns.
+		"queue-pause": props.onQueuePause,
+		"auto-handoff": props.onAutoHandoff,
+	};
+}
 
-	// The list area: the window's rows, or the one row the state stands on.
+/** The box's above rows: the search, the list, the note. */
+function repositorySelectAbove(fields: {
+	status: RepositorySelectStatus;
+	list: ReturnType<typeof useRepositorySelectList>;
+	pending: ReadonlySet<string>;
+	ink: ReturnType<typeof controlInk>;
+	query: string;
+	note: string;
+	inputActive: boolean;
+	setQuery: (query: string) => void;
+}): ReactElement[] {
+	const { status, list, pending, ink, query, note, inputActive, setQuery } = fields;
+	const bodyRows = repositorySelectBodyRows({ status, list, pending, ink, query });
+	return [
+		createElement(TextField, {
+			label: "Search",
+			value: query,
+			focused: true,
+			inputActive,
+			width: list.frame.contentWidth,
+			marked: false,
+			ink,
+			hint: "Type to filter the list.",
+			onValueChange: (facts) => setQuery(facts.value),
+		}),
+		...bodyRows,
+		createElement(
+			"text",
+			{ style: { width: "100%", height: 1 }, fg: ink.detail.fg ?? undefined },
+			note,
+		),
+	];
+}
+
+/** The note row: the range, and the keys the list answers to. */
+function repositorySelectNote(
+	region: ReturnType<typeof useDecisionRegion>,
+	frame: ReturnType<typeof modalFrame>,
+): string {
+	const rangePart = region.rangeText !== undefined ? `${region.rangeText}  ` : "";
+	return padToWidth(
+		truncateToWidth(
+			`${rangePart}Tab toggles the queue. Enter selects. Esc closes.`,
+			frame.contentWidth,
+		),
+		frame.contentWidth,
+	);
+}
+
+/** The list's body rows: the state the read stands on, or the window's rows. */
+function repositorySelectBodyRows(fields: {
+	status: RepositorySelectStatus;
+	list: ReturnType<typeof useRepositorySelectList>;
+	pending: ReadonlySet<string>;
+	ink: ReturnType<typeof controlInk>;
+	query: string;
+}): ReactElement[] {
+	const { status, list, pending, ink, query } = fields;
+	const { frame } = list;
 	const listContentWidth = frame.contentWidth - MARKER_WIDTH;
 	const bodyRows: ReactElement[] = [];
 	if (status.state === "loading") {
@@ -250,7 +359,7 @@ export function RepositorySelectPanel({
 				truncateToWidth(status.reason, frame.contentWidth),
 			),
 		);
-	} else if (rows.length === 0) {
+	} else if (list.rows.length === 0) {
 		bodyRows.push(
 			createElement(
 				"text",
@@ -259,75 +368,49 @@ export function RepositorySelectPanel({
 			),
 		);
 	} else {
-		// The row is the repository's display name, whole: the Action item's
-		// 20-cell label column would cut an owner/name the operator is choosing.
-		// A marked row wears the queue's badge word at its end, the way the
-		// list's state badges stand (ADR 0083).
-		const selectedKey = rows[region.at]?.key;
-		for (const row of region.window) {
-			const isCursor = row.key === selectedKey;
-			const isPending = pending.has(row.key);
-			const name = truncateToWidth(
-				`${isCursor ? "❯ " : "  "}${row.label}`,
-				frame.contentWidth - (isPending ? QUEUED_BADGE.length : 0),
-			);
-			bodyRows.push(
-				createElement(
-					"box",
-					{ key: row.key, style: { width: "100%", height: 1, flexDirection: "row" } },
-					createElement(
-						"text",
-						{
-							fg: isCursor ? (ink.focusedText.fg ?? undefined) : (ink.text.fg ?? undefined),
-						},
-						padToWidth(name, frame.contentWidth - (isPending ? QUEUED_BADGE.length : 0)),
-					),
-					isPending
-						? createElement("text", { fg: ink.detail.fg ?? undefined }, QUEUED_BADGE)
-						: null,
-				),
-			);
-		}
+		bodyRows.push(
+			...repositorySelectListRows({ region: list.region, rows: list.rows, pending, frame, ink }),
+		);
 	}
+	return bodyRows;
+}
 
-	const rangePart = region.rangeText !== undefined ? `${region.rangeText}  ` : "";
-	const note = padToWidth(
-		truncateToWidth(
-			`${rangePart}Tab toggles the queue. Enter selects. Esc closes.`,
-			frame.contentWidth,
-		),
-		frame.contentWidth,
-	);
-
-	return createElement(ModalSurface, {
-		frame,
-		width: terminalWidth,
-		title: "Init a repository",
-		body: {
-			above: [
-				createElement(TextField, {
-					label: "Search",
-					value: query,
-					focused: true,
-					inputActive,
-					width: frame.contentWidth,
-					marked: false,
-					ink,
-					hint: "Type to filter the list.",
-					onValueChange: (facts) => setQuery(facts.value),
-				}),
-				...bodyRows,
+/** The rows the window holds: the cursor, the list order, the queue's badge. */
+function repositorySelectListRows(fields: {
+	region: ReturnType<typeof useDecisionRegion>;
+	rows: readonly ActionRow[];
+	pending: ReadonlySet<string>;
+	frame: ReturnType<typeof modalFrame>;
+	ink: ReturnType<typeof controlInk>;
+}): ReactElement[] {
+	const { region, rows, pending, frame, ink } = fields;
+	// The row is the repository's display name, whole: the Action item's
+	// 20-cell label column would cut an owner/name the operator is choosing.
+	// A marked row wears the queue's badge word at its end, the way the
+	// list's state badges stand (ADR 0083).
+	const selectedKey = rows[region.at]?.key;
+	const listRows: ReactElement[] = [];
+	for (const row of region.window) {
+		const isCursor = row.key === selectedKey;
+		const isPending = pending.has(row.key);
+		const name = truncateToWidth(
+			`${isCursor ? "❯ " : "  "}${row.label}`,
+			frame.contentWidth - (isPending ? QUEUED_BADGE.length : 0),
+		);
+		listRows.push(
+			createElement(
+				"box",
+				{ key: row.key, style: { width: "100%", height: 1, flexDirection: "row" } },
 				createElement(
 					"text",
-					{ style: { width: "100%", height: 1 }, fg: ink.detail.fg ?? undefined },
-					note,
+					{
+						fg: isCursor ? (ink.focusedText.fg ?? undefined) : (ink.text.fg ?? undefined),
+					},
+					padToWidth(name, frame.contentWidth - (isPending ? QUEUED_BADGE.length : 0)),
 				),
-			],
-			below: [],
-			minRows: SEARCH_ROWS + NOTE_ROWS + MIN_LIST_ROWS,
-		},
-		message,
-		bar: { mode: "repository-select", facts },
-		queuePaused: standing.queuePaused,
-	});
+				isPending ? createElement("text", { fg: ink.detail.fg ?? undefined }, QUEUED_BADGE) : null,
+			),
+		);
+	}
+	return listRows;
 }

@@ -72,210 +72,333 @@ function xterm256(index: number): [number, number, number] {
  * renderer drew into, and the size the screenshot shows.
  */
 export function parseScreen(data: Uint8Array, cols: number, rows: number): Cell[][] {
-	const cells: Cell[][] = Array.from({ length: rows }, () =>
-		Array.from({ length: cols }, () => ({ char: " ", fg: -1, bg: -1, bold: false })),
-	);
-	let row = 0;
-	let col = 0;
-	let fg: CellColor = -1;
-	let bg: CellColor = -1;
-	let bold = false;
-	let text = "";
-	const decoder = new TextDecoder();
-
-	const emit = (ch: string) => {
-		if (row < 0 || row >= rows || col < 0 || col >= cols) return;
-		cells[row][col] = { char: ch, fg, bg, bold };
-		col += 1;
-		if (col >= cols) {
-			col = 0;
-			row += 1;
-		}
-	};
-
-	/** Finish the pending plain-text run and reset the SGR state for a CSI. */
-	const flush = () => {
-		for (const ch of decoder.decode(text ? Buffer.from(text, "latin1") : new Uint8Array())) {
-			emit(ch);
-		}
-		text = "";
-	};
-
-	/**
-	 * One 256-color index, as the terminal resolves it: a basic index, or the
-	 * exact RGB of the cube or ramp. An index no terminal names - a broken
-	 * stream past 255, or a negative one - falls back to black.
-	 */
-	const colorOf256 = (index: number): CellColor => {
-		if (index < 0 || index > 255) return [0, 0, 0];
-		return index < 16 ? index : xterm256(index);
-	};
-
-	/**
-	 * Read one extended SGR color: `38`/`48`, a mode, and the values.
-	 * Returns the color and the index past the sequence, or null when the
-	 * parameters name no color.
-	 */
-	const extendedColor = (p: number[], i: number): { color: CellColor; next: number } | null => {
-		if (p[i + 1] === 5 && Number.isFinite(p[i + 2])) {
-			return { color: colorOf256(p[i + 2]), next: i + 3 };
-		}
-		if (p[i + 1] === 2) {
-			return { color: [p[i + 2] ?? 0, p[i + 3] ?? 0, p[i + 4] ?? 0], next: i + 5 };
-		}
-		return null;
-	};
-
-	const decode = (params: string): void => {
-		const p = params.split(";").map((part) => (part === "" ? 0 : Number(part)));
-		if (params.trim() === "") return;
-		for (let i = 0; i < p.length; i++) {
-			const code = p[i];
-			if (code === 0) {
-				fg = -1;
-				bg = -1;
-				bold = false;
-			} else if (code === 1) {
-				bold = true;
-			} else if (code === 22) {
-				bold = false;
-			} else if (code === 39) {
-				fg = -1;
-			} else if (code === 49) {
-				bg = -1;
-			} else if (code >= 30 && code <= 37) {
-				fg = code - 30;
-			} else if (code >= 90 && code <= 97) {
-				fg = code - 90 + 8;
-			} else if (code >= 40 && code <= 47) {
-				bg = code - 40;
-			} else if (code >= 100 && code <= 107) {
-				bg = code - 100 + 8;
-			} else if (code === 38 || code === 48) {
-				const extended = extendedColor(p, i);
-				if (extended !== null) {
-					if (code === 38) fg = extended.color;
-					else bg = extended.color;
-					i = extended.next - 1;
-				}
-			}
-		}
+	const state: ScreenState = {
+		cells: Array.from({ length: rows }, () =>
+			Array.from({ length: cols }, () => ({ char: " ", fg: -1, bg: -1, bold: false })),
+		),
+		rows,
+		cols,
+		row: 0,
+		col: 0,
+		fg: -1,
+		bg: -1,
+		bold: false,
+		text: "",
+		decoder: new TextDecoder(),
 	};
 
 	let i = 0;
 	while (i < data.length) {
-		const byte = data[i];
-		if (byte === 0x1b) {
-			flush();
-			if (i + 1 >= data.length) break;
-			const next = data[i + 1];
-			if (next === 0x5b) {
-				// CSI: parameters up to a final byte 0x40-0x7e.
-				let j = i + 2;
-				let params = "";
-				if (data[j] === 0x3f) j += 1; // private marker, never read
-				while (j < data.length && (data[j] < 0x40 || data[j] > 0x7e)) {
-					params += String.fromCharCode(data[j]);
-					j += 1;
-				}
-				if (j >= data.length) break;
-				const final = String.fromCharCode(data[j]);
-				if (final === "m") {
-					if (params !== "") decode(params);
-				} else if (final === "H" || final === "f") {
-					const [r = "1", c = "1"] = (params === "" ? "" : params).split(";");
-					row = Number(r) - 1;
-					col = Number(c) - 1;
-				} else if (final === "A") {
-					row = Math.max(0, row - (Number(params) || 1));
-				} else if (final === "B" || final === "e") {
-					row = Math.min(rows - 1, row + (Number(params) || 1));
-				} else if (final === "C" || final === "a") {
-					col = Math.min(cols - 1, col + (Number(params) || 1));
-				} else if (final === "D") {
-					col = Math.max(0, col - (Number(params) || 1));
-				} else if (final === "E") {
-					row = Math.min(rows - 1, row + (Number(params) || 1));
-					col = 0;
-				} else if (final === "F") {
-					row = Math.max(0, row - (Number(params) || 1));
-					col = 0;
-				} else if (final === "G" || final === "`") {
-					col = Math.max(0, Number(params) - 1);
-				} else if (final === "d") {
-					row = Math.max(0, Number(params) - 1);
-				} else if (final === "J") {
-					const which = Number(params) || 0;
-					for (let r = 0; r < rows; r++)
-						for (let c = 0; c < cols; c++) {
-							const inCursor =
-								which === 0
-									? (r === row && c <= col) || r < row
-									: which === 1
-										? (r === row && c >= col) || r > row
-										: true;
-							if (inCursor) cells[r][c] = { char: " ", fg: -1, bg: -1, bold: false };
-						}
-				} else if (final === "K") {
-					const which = Number(params) || 0;
-					for (let c = 0; c < cols; c++) {
-						const inCursor = which === 0 ? c >= col : which === 1 ? c <= col : true;
-						if (inCursor) cells[row][c] = { char: " ", fg: -1, bg: -1, bold: false };
-					}
-				}
-				// Modes (?25l, ?1049h, ?1006h, ...), queries (6n), and the
-				// rest never touch the grid.
-				i = j + 1;
-				continue;
-			}
-			if (next === 0x5d) {
-				// OSC: ends at BEL or ST.
-				let j = i + 2;
-				while (j < data.length && data[j] !== 0x07) {
-					if (data[j] === 0x1b && j + 1 < data.length && data[j + 1] === 0x5c) {
-						j += 1;
-						break;
-					}
-					j += 1;
-				}
-				i = j + 1;
-				continue;
-			}
-			// Other escapes: a two-byte sequence (charset select, etc.).
-			i += 2;
-			continue;
-		}
-		if (byte === 0x0d) {
-			flush();
-			col = 0;
-			i += 1;
-			continue;
-		}
-		if (byte === 0x0a) {
-			flush();
-			row = Math.min(rows - 1, row + 1);
-			i += 1;
-			continue;
-		}
-		if (byte === 0x08) {
-			flush();
-			col = Math.max(0, col - 1);
-			i += 1;
-			continue;
-		}
-		if (byte === 0x07) {
-			i += 1;
-			continue;
-		}
-		if (byte < 0x20) {
-			i += 1;
-			continue;
-		}
-		text += String.fromCharCode(byte);
-		i += 1;
+		i = screenByteStep(state, data, i, rows);
+		if (i === -1) break;
 	}
-	flush();
-	return cells;
+	screenFlush(state);
+	return state.cells;
+}
+
+/** The index one byte consumes, or -1 to stop the parse. */
+function screenByteStep(state: ScreenState, data: Uint8Array, i: number, rows: number): number {
+	const byte = data[i];
+	if (byte === 0x1b) {
+		const next = screenParseEscape(state, data, i);
+		if (next === -1) return -1;
+		return next;
+	}
+	if (byte === 0x0d) {
+		screenFlush(state);
+		state.col = 0;
+		return i + 1;
+	}
+	if (byte === 0x0a) {
+		screenFlush(state);
+		state.row = Math.min(rows - 1, state.row + 1);
+		return i + 1;
+	}
+	if (byte === 0x08) {
+		screenFlush(state);
+		state.col = Math.max(0, state.col - 1);
+		return i + 1;
+	}
+	if (byte === 0x07) return i + 1;
+	if (byte < 0x20) return i + 1;
+	state.text += String.fromCharCode(byte);
+	return i + 1;
+}
+
+/** The parse's state: the grid, the cursor, the SGR style, the pending text. */
+interface ScreenState {
+	cells: Cell[][];
+	rows: number;
+	cols: number;
+	row: number;
+	col: number;
+	fg: CellColor;
+	bg: CellColor;
+	bold: boolean;
+	text: string;
+	decoder: TextDecoder;
+}
+
+/** One escape at `i`; the index past it, or -1 when the stream ends mid-way. */
+function screenParseEscape(state: ScreenState, data: Uint8Array, i: number): number {
+	screenFlush(state);
+	if (i + 1 >= data.length) return -1;
+	const next = data[i + 1];
+	if (next === 0x5b) return screenParseCsi(state, data, i + 2);
+	if (next === 0x5d) return screenParseOsc(data, i + 2);
+	// Other escapes: a two-byte sequence (charset select, etc.).
+	return i + 2;
+}
+
+/** The index one CSI sequence at `j` consumes, or -1 when the stream ends mid-way. */
+function screenParseCsi(state: ScreenState, data: Uint8Array, j: number): number {
+	// CSI: parameters up to a final byte 0x40-0x7e.
+	let params = "";
+	if (data[j] === 0x3f) j += 1; // private marker, never read
+	while (j < data.length && (data[j] < 0x40 || data[j] > 0x7e)) {
+		params += String.fromCharCode(data[j]);
+		j += 1;
+	}
+	if (j >= data.length) return -1;
+	const final = String.fromCharCode(data[j]);
+	if (final === "m") {
+		if (params !== "") screenSgr(state, params);
+	} else if (final === "J" || final === "K") {
+		screenErase(state, final, Number(params) || 0);
+	} else {
+		screenCsiMove(state, final, params);
+	}
+	return j + 1;
+}
+
+/** The index one OSC sequence at `j` consumes. */
+function screenParseOsc(data: Uint8Array, j: number): number {
+	// OSC: ends at BEL or ST.
+	while (j < data.length && data[j] !== 0x07) {
+		if (data[j] === 0x1b && j + 1 < data.length && data[j + 1] === 0x5c) {
+			j += 1;
+			break;
+		}
+		j += 1;
+	}
+	return j + 1;
+}
+
+/** One SGR sequence against the parse's style. */
+function screenSgr(state: ScreenState, params: string): void {
+	const p = params.split(";").map((part) => (part === "" ? 0 : Number(part)));
+	if (params.trim() === "") return;
+	for (let i = 0; i < p.length; i = screenSgrCode(state, p[i], p, i)) {
+		// The code lands on the style and names the index it consumed.
+	}
+}
+
+/** The one color one SGR range code names, and the slot it stands in. */
+function screenSgrRange(code: number): { color: number; background: boolean } | undefined {
+	if (code >= 30 && code <= 37) return { color: code - 30, background: false };
+	if (code >= 40 && code <= 47) return { color: code - 40, background: true };
+	if (code >= 90 && code <= 97) return { color: code - 90 + 8, background: false };
+	if (code >= 100 && code <= 107) return { color: code - 100 + 8, background: true };
+	return undefined;
+}
+
+/** The index one extended SGR code consumes, after it lands on the parse's style. */
+function screenExtendedStep(
+	state: ScreenState,
+	code: number,
+	p: number[],
+	i: number,
+): number | undefined {
+	const extended = screenExtendedColor(p, i);
+	if (extended === null) return undefined;
+	if (code === 38) state.fg = extended.color;
+	else state.bg = extended.color;
+	return extended.next;
+}
+
+/** The index one SGR code consumes, after it lands on the parse's style. */
+function screenSgrCode(state: ScreenState, code: number, p: number[], i: number): number {
+	if (code === 0) {
+		state.fg = -1;
+		state.bg = -1;
+		state.bold = false;
+		return i + 1;
+	}
+	if (code === 1) {
+		state.bold = true;
+		return i + 1;
+	}
+	if (code === 22) {
+		state.bold = false;
+		return i + 1;
+	}
+	if (code === 39) {
+		state.fg = -1;
+		return i + 1;
+	}
+	if (code === 49) {
+		state.bg = -1;
+		return i + 1;
+	}
+	if (code === 38 || code === 48) {
+		const extended = screenExtendedStep(state, code, p, i);
+		if (extended !== undefined) return extended;
+	}
+	const range = screenSgrRange(code);
+	if (range !== undefined) {
+		if (range.background) state.bg = range.color;
+		else state.fg = range.color;
+	}
+	return i + 1;
+}
+
+/**
+ * One extended SGR color: `38`/`48`, a mode, and the values.
+ * Returns the color and the index past the sequence, or null when the
+ * parameters name no color.
+ */
+function screenExtendedColor(p: number[], i: number): { color: CellColor; next: number } | null {
+	if (p[i + 1] === 5 && Number.isFinite(p[i + 2])) {
+		return { color: screenColorOf256(p[i + 2]), next: i + 3 };
+	}
+	if (p[i + 1] === 2) {
+		return { color: [p[i + 2] ?? 0, p[i + 3] ?? 0, p[i + 4] ?? 0], next: i + 5 };
+	}
+	return null;
+}
+
+/**
+ * One 256-color index, as the terminal resolves it: a basic index, or the
+ * exact RGB of the cube or ramp. An index no terminal names - a broken
+ * stream past 255, or a negative one - falls back to black.
+ */
+function screenColorOf256(index: number): CellColor {
+	if (index < 0 || index > 255) return [0, 0, 0];
+	return index < 16 ? index : xterm256(index);
+}
+
+/** The cursor-moving CSI finals: H, f, A, B, C, D, E, F, G, and d. */
+function screenCsiMove(state: ScreenState, final: string, params: string): void {
+	if (final === "H" || final === "f") {
+		csiHome(state, params);
+		return;
+	}
+	if (final === "A") {
+		csiRowStep(state, -1, params);
+		return;
+	}
+	if (final === "B" || final === "e") {
+		csiRowStep(state, 1, params);
+		return;
+	}
+	if (final === "C" || final === "a") {
+		csiColStep(state, 1, params);
+		return;
+	}
+	if (final === "D") {
+		csiColStep(state, -1, params);
+		return;
+	}
+	if (final === "E") {
+		csiRowStep(state, 1, params);
+		state.col = 0;
+		return;
+	}
+	if (final === "F") {
+		csiRowStep(state, -1, params);
+		state.col = 0;
+		return;
+	}
+	if (final === "G" || final === "`") {
+		csiColSet(state, params);
+		return;
+	}
+	if (final === "d") csiRowSet(state, params);
+}
+
+/** The cursor's home move: the row and column the parameters name. */
+function csiHome(state: ScreenState, params: string): void {
+	const [r = "1", c = "1"] = (params === "" ? "" : params).split(";");
+	state.row = Number(r) - 1;
+	state.col = Number(c) - 1;
+}
+
+/** The row step: one row up or down, by the count the parameters name. */
+function csiRowStep(state: ScreenState, direction: 1 | -1, params: string): void {
+	const n = Number(params) || 1;
+	if (direction === -1) state.row = Math.max(0, state.row - n);
+	else state.row = Math.min(state.rows - 1, state.row + n);
+}
+
+/** The column step: one column left or right, by the count the parameters name. */
+function csiColStep(state: ScreenState, direction: 1 | -1, params: string): void {
+	const n = Number(params) || 1;
+	if (direction === -1) state.col = Math.max(0, state.col - n);
+	else state.col = Math.min(state.cols - 1, state.col + n);
+}
+
+/** The row set: the row the parameters name, clamped to the grid. */
+function csiRowSet(state: ScreenState, params: string): void {
+	state.row = Math.max(0, Number(params) - 1);
+}
+
+/** The column set: the column the parameters name, clamped to the grid. */
+function csiColSet(state: ScreenState, params: string): void {
+	state.col = Math.max(0, Number(params) - 1);
+}
+
+/** The grid-erasing CSI finals: J the screen, K the line. */
+function screenErase(state: ScreenState, final: string, which: number): void {
+	const blankCell: Cell = { char: " ", fg: -1, bg: -1, bold: false };
+	if (final === "J") {
+		eraseScreen(state, which, blankCell);
+	} else {
+		eraseLine(state, which, blankCell);
+	}
+}
+
+/** The rows one J erase blanks, for the mode it wears. */
+function eraseScreen(state: ScreenState, which: number, blankCell: Cell): void {
+	for (let r = 0; r < state.rows; r++)
+		for (let c = 0; c < state.cols; c++) {
+			if (jCellInCursor(state, which, r, c)) state.cells[r][c] = { ...blankCell };
+		}
+}
+
+/** Whether the cell at (r, c) is inside the region the J mode names. */
+function jCellInCursor(state: ScreenState, which: number, r: number, c: number): boolean {
+	if (which === 0) return (r === state.row && c <= state.col) || r < state.row;
+	if (which === 1) return (r === state.row && c >= state.col) || r > state.row;
+	return true;
+}
+
+/** The row one K erase blanks, for the mode it wears. */
+function eraseLine(state: ScreenState, which: number, blankCell: Cell): void {
+	for (let c = 0; c < state.cols; c++) {
+		const inCursor = which === 0 ? c >= state.col : which === 1 ? c <= state.col : true;
+		if (inCursor) state.cells[state.row][c] = { ...blankCell };
+	}
+}
+
+/** One cell, at the cursor, wrapping to the row below at the grid's edge. */
+function screenEmit(state: ScreenState, ch: string): void {
+	if (state.row < 0 || state.row >= state.rows || state.col < 0 || state.col >= state.cols) return;
+	state.cells[state.row][state.col] = { char: ch, fg: state.fg, bg: state.bg, bold: state.bold };
+	state.col += 1;
+	if (state.col >= state.cols) {
+		state.col = 0;
+		state.row += 1;
+	}
+}
+
+/** Finish the pending plain-text run and reset the SGR state for a CSI. */
+function screenFlush(state: ScreenState): void {
+	for (const ch of state.decoder.decode(
+		state.text ? Buffer.from(state.text, "latin1") : new Uint8Array(),
+	)) {
+		screenEmit(state, ch);
+	}
+	state.text = "";
 }
 
 /**
@@ -293,44 +416,74 @@ export function renderPng(cells: Cell[][], colors: TerminalColors): Buffer {
 	const width = cols * CELL_W;
 	const height = rows * CELL_H;
 	const pixels = Buffer.alloc(width * height * 3);
-	const resolve = (
-		value: CellColor,
-		fallback: readonly [number, number, number],
-	): readonly [number, number, number] =>
-		value === -1 ? fallback : typeof value === "number" ? colors.basic[value] : value;
-
 	for (let r = 0; r < rows; r++) {
 		for (let c = 0; c < cols; c++) {
 			const cell = cells[r][c];
-			const cellBg = resolve(cell.bg, colors.background);
-			const cellFg = resolve(cell.fg, colors.foreground);
+			const cellBg = resolveColor(cell.bg, colors.background, colors);
+			const cellFg = resolveColor(cell.fg, colors.foreground, colors);
 			const x0 = c * CELL_W;
 			const y0 = r * CELL_H;
 			// The rectangle.
-			for (let y = 0; y < CELL_H; y++) {
-				const rowStart = ((y0 + y) * width + x0) * 3;
-				for (let x = 0; x < CELL_W; x++) {
-					const off = rowStart + x * 3;
-					pixels[off] = cellBg[0];
-					pixels[off + 1] = cellBg[1];
-					pixels[off + 2] = cellBg[2];
-				}
-			}
+			paintCellBackground(pixels, x0, y0, { width, bg: cellBg });
 			const glyph = glyphOf(cell.char, cell.bold);
 			if (glyph === undefined) continue;
-			for (let y = 0; y < CELL_H; y++) {
-				for (let x = 0; x < CELL_W; x++) {
-					const coverage = glyph[y * CELL_W + x] / 255;
-					if (coverage === 0) continue;
-					const off = ((y0 + y) * width + x0 + x) * 3;
-					pixels[off] = Math.round(cellBg[0] * (1 - coverage) + cellFg[0] * coverage);
-					pixels[off + 1] = Math.round(cellBg[1] * (1 - coverage) + cellFg[1] * coverage);
-					pixels[off + 2] = Math.round(cellBg[2] * (1 - coverage) + cellFg[2] * coverage);
-				}
-			}
+			paintCellGlyph(pixels, x0, y0, { width, glyph, bg: cellBg, fg: cellFg });
 		}
 	}
 	return encodePng(pixels, width, height);
+}
+
+/** The color one cell's value resolves to, or the fallback it takes. */
+function resolveColor(
+	value: CellColor,
+	fallback: readonly [number, number, number],
+	colors: TerminalColors,
+): readonly [number, number, number] {
+	return value === -1 ? fallback : typeof value === "number" ? colors.basic[value] : value;
+}
+
+/** The rectangle one cell's background fills. */
+function paintCellBackground(
+	pixels: Buffer,
+	x0: number,
+	y0: number,
+	fields: { width: number; bg: readonly [number, number, number] },
+): void {
+	const { width, bg } = fields;
+	for (let y = 0; y < CELL_H; y++) {
+		const rowStart = ((y0 + y) * width + x0) * 3;
+		for (let x = 0; x < CELL_W; x++) {
+			const off = rowStart + x * 3;
+			pixels[off] = bg[0];
+			pixels[off + 1] = bg[1];
+			pixels[off + 2] = bg[2];
+		}
+	}
+}
+
+/** The glyph one cell's character paints over its background. */
+function paintCellGlyph(
+	pixels: Buffer,
+	x0: number,
+	y0: number,
+	fields: {
+		width: number;
+		glyph: Uint8Array;
+		bg: readonly [number, number, number];
+		fg: readonly [number, number, number];
+	},
+): void {
+	const { width, glyph, bg, fg } = fields;
+	for (let y = 0; y < CELL_H; y++) {
+		for (let x = 0; x < CELL_W; x++) {
+			const coverage = glyph[y * CELL_W + x] / 255;
+			if (coverage === 0) continue;
+			const off = ((y0 + y) * width + x0 + x) * 3;
+			pixels[off] = Math.round(bg[0] * (1 - coverage) + fg[0] * coverage);
+			pixels[off + 1] = Math.round(bg[1] * (1 - coverage) + fg[1] * coverage);
+			pixels[off + 2] = Math.round(bg[2] * (1 - coverage) + fg[2] * coverage);
+		}
+	}
 }
 
 // --- A minimal PNG encoder: one IDAT of raw filter-0 scanlines. ---

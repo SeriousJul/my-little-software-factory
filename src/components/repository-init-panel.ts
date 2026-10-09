@@ -9,7 +9,7 @@
  * Cancel keys the shared action chrome runs.
  */
 
-import type { RepositoryInitPlan } from "../repo-init.ts";
+import type { FileAction, RepositoryInitPlan } from "../repo-init.ts";
 import type { ActionRow } from "./modal-chrome.ts";
 
 /** How the panel names each file treatment, in the operator's words. */
@@ -36,25 +36,7 @@ export function repositoryInitPanel(plan: RepositoryInitPlan): {
 	const lines: string[] = [];
 	lines.push(`Pushes to ${plan.targetBranch} with a throwaway worktree.`);
 	lines.push("");
-	if (plan.labelsToCreate.length === 0 && plan.labelsPresent.length === 0) {
-		lines.push("No labels to create, and none stand in the repository.");
-	} else {
-		if (plan.labelsToCreate.length === 0) {
-			lines.push("Every label the act writes already stands.");
-		} else {
-			lines.push(
-				`Creates ${plan.labelsToCreate.length} label${plan.labelsToCreate.length === 1 ? "" : "s"}:`,
-			);
-			for (const label of plan.labelsToCreate) lines.push(`  ${label}`);
-		}
-		// The labels the act leaves stand, beside the ones it creates (ADR 0075,
-		// story 2): the operator sees the whole label picture, not only the diff.
-		if (plan.labelsPresent.length > 0) {
-			lines.push(
-				`Already present (${plan.labelsPresent.length}): ${plan.labelsPresent.join(", ")}`,
-			);
-		}
-	}
+	lines.push(...initLabelLines(plan));
 	lines.push("");
 	for (const file of plan.files) {
 		lines.push(`${file.path} ${FILE_ACTION_WORDS[file.action]}`);
@@ -74,13 +56,9 @@ export function repositoryInitPanel(plan: RepositoryInitPlan): {
 			],
 		};
 	}
-	const word =
-		plan.instructionFileAction === "new"
-			? "will be created"
-			: plan.instructionFileAction === "unchanged"
-				? "is already in place"
-				: "will be updated";
-	lines.push(`The Agent skills block lands in ${plan.instructionFile} (${word}).`);
+	lines.push(
+		`The Agent skills block lands in ${plan.instructionFile} (${instructionFileWord(plan.instructionFileAction)}).`,
+	);
 
 	return {
 		title: `Init ${plan.repository}`,
@@ -90,4 +68,34 @@ export function repositoryInitPanel(plan: RepositoryInitPlan): {
 			{ key: "cancel", label: "Cancel", detail: "leave the repository as it is" },
 		],
 	};
+}
+
+/** The label lines one init act's plan states. */
+function initLabelLines(plan: RepositoryInitPlan): string[] {
+	const lines: string[] = [];
+	if (plan.labelsToCreate.length === 0 && plan.labelsPresent.length === 0) {
+		lines.push("No labels to create, and none stand in the repository.");
+		return lines;
+	}
+	if (plan.labelsToCreate.length === 0) {
+		lines.push("Every label the act writes already stands.");
+	} else {
+		lines.push(
+			`Creates ${plan.labelsToCreate.length} label${plan.labelsToCreate.length === 1 ? "" : "s"}:`,
+		);
+		for (const label of plan.labelsToCreate) lines.push(`  ${label}`);
+	}
+	// The labels the act leaves stand, beside the ones it creates (ADR 0075,
+	// story 2): the operator sees the whole label picture, not only the diff.
+	if (plan.labelsPresent.length > 0) {
+		lines.push(`Already present (${plan.labelsPresent.length}): ${plan.labelsPresent.join(", ")}`);
+	}
+	return lines;
+}
+
+/** The word one instruction file's action lands as. */
+function instructionFileWord(action: FileAction): string {
+	if (action === "new") return "will be created";
+	if (action === "unchanged") return "is already in place";
+	return "will be updated";
 }

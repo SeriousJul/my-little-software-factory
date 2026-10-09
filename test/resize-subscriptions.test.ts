@@ -96,9 +96,11 @@ describe("the renderer's resize listeners", () => {
 				await settle(setup);
 				expect(await settledListeners(setup)).toBe(base);
 			},
-			WIDTH,
-			HEIGHT,
-			{ config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				props: { config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+			},
 		);
 	});
 });

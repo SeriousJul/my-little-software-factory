@@ -398,10 +398,13 @@ function withRunner(
 function start(
 	rig: Rig,
 	seed: Seed,
-	origin: HandoffOrigin = "open",
-	onStarted?: (started: DispatchResult) => void,
-	choice: HandoffChoice = liveChoice,
+	fields: {
+		origin?: HandoffOrigin;
+		onStarted?: (started: DispatchResult) => void;
+		choice?: HandoffChoice;
+	} = {},
 ): Promise<DispatchResult> {
+	const { origin = "open", onStarted, choice = liveChoice } = fields;
 	return rig.dispatch.dispatch({
 		origin,
 		ticketIdentity: seed.identity,
@@ -427,7 +430,7 @@ async function seatReleased(): Promise<void> {
 
 /** A clean live-worktree handoff, awaited to the settle that moved the ticket. */
 async function handOff(rig: Rig, seed: Seed): Promise<StoredHandoffFacts> {
-	await expect(start(rig, seed, "open")).resolves.toEqual({ ok: true });
+	await expect(start(rig, seed, { origin: "open" })).resolves.toEqual({ ok: true });
 	await rig.waitForStarted(seed.identity);
 	const stored = rig.state.handoff.latestHandoff(seed.identity);
 	if (stored === null) throw new Error("the handoff left no record");
@@ -605,9 +608,9 @@ describe("the seat", () => {
 	test("one handoff holds the seat, and the next waits behind it", async () => {
 		const rigRef = rig([FIRST, SECOND]);
 		rigRef.hold("herdr agent start");
-		await expect(start(rigRef, FIRST, "open")).resolves.toEqual({ ok: true });
+		await expect(start(rigRef, FIRST, { origin: "open" })).resolves.toEqual({ ok: true });
 		expect(rigRef.dispatch.handoffActive()).toBe(true);
-		await expect(start(rigRef, SECOND, "open")).resolves.toEqual({ ok: true });
+		await expect(start(rigRef, SECOND, { origin: "open" })).resolves.toEqual({ ok: true });
 		await rigRef.waitForArrivals(1);
 		// The claim moved the second ticket at once, and its work waits: herdr
 		// has heard of one agent, not two.
@@ -623,7 +626,7 @@ describe("the seat", () => {
 		const rigRef = rig([FIRST, SECOND]);
 		const stored = seedClosedHandoff(rigRef, SECOND);
 		rigRef.hold("herdr workspace list");
-		const started = start(rigRef, FIRST, "open");
+		const started = start(rigRef, FIRST, { origin: "open" });
 		expect(rigRef.dispatch.handoffActive()).toBe(true);
 		const cleanup = rigRef.dispatch.closeCleanup(SECOND.identity, stored, "closed");
 		await rigRef.waitForArrivals(1);
@@ -647,7 +650,7 @@ describe("the seat", () => {
 		rigRef.hold("herdr tab close");
 		const cleanup = rigRef.dispatch.closeCleanup(SECOND.identity, stored, "closed");
 		await rigRef.waitForArrivals(1);
-		await expect(start(rigRef, FIRST, "open")).resolves.toEqual({ ok: true });
+		await expect(start(rigRef, FIRST, { origin: "open" })).resolves.toEqual({ ok: true });
 		// The cleanup reserved the seat the moment it queued: the handoff the
 		// operator starts beside it builds nothing yet.
 		expect(rigRef.held()).toEqual([`herdr tab close ${stored.tabId}`]);
@@ -696,9 +699,9 @@ describe("the seat", () => {
 	test("two handoffs wait behind the one in flight, and take the seat one at a time", async () => {
 		const rigRef = rig([FIRST, SECOND, THIRD]);
 		rigRef.hold("herdr agent start");
-		await start(rigRef, FIRST, "open");
-		await start(rigRef, SECOND, "open");
-		await start(rigRef, THIRD, "open");
+		await start(rigRef, FIRST, { origin: "open" });
+		await start(rigRef, SECOND, { origin: "open" });
+		await start(rigRef, THIRD, { origin: "open" });
 		await rigRef.waitForArrivals(1);
 		await releaseHeld(rigRef, 1);
 		await rigRef.waitForArrivals(2);
@@ -726,7 +729,7 @@ describe("the seat", () => {
 				if (failure !== undefined) rigRef.events.push(`faultError:${failure}`);
 			});
 		await rigRef.waitForArrivals(1);
-		const started = start(rigRef, FIRST, "open");
+		const started = start(rigRef, FIRST, { origin: "open" });
 		rigRef.release();
 		await Promise.all([cleanup, started]);
 		await rigRef.waitForStarted(FIRST.identity);
@@ -747,11 +750,17 @@ describe("the queue drain", () => {
 		const secondStarted: DispatchResult[] = [];
 		const thirdStarted: DispatchResult[] = [];
 		rigRef.hold("herdr agent start");
-		await start(rigRef, FIRST, "open");
+		await start(rigRef, FIRST, { origin: "open" });
 		await expect(
-			start(rigRef, SECOND, "workflow", (r) => secondStarted.push(r), liveChoice),
+			start(rigRef, SECOND, {
+				origin: "workflow",
+				onStarted: (r) => secondStarted.push(r),
+				choice: liveChoice,
+			}),
 		).resolves.toEqual({ ok: true });
-		await expect(start(rigRef, THIRD, "open", (r) => thirdStarted.push(r))).resolves.toEqual({
+		await expect(
+			start(rigRef, THIRD, { origin: "open", onStarted: (r) => thirdStarted.push(r) }),
+		).resolves.toEqual({
 			ok: true,
 		});
 		// The middle ticket's awaited turn closes while it waits: the handoff
@@ -776,8 +785,8 @@ describe("the queue drain", () => {
 	test("a queued handoff runs on the ticket the state holds when its turn comes", async () => {
 		const rigRef = rig([FIRST, SECOND]);
 		rigRef.hold("herdr agent start");
-		await start(rigRef, FIRST, "open");
-		await start(rigRef, SECOND, "open");
+		await start(rigRef, FIRST, { origin: "open" });
+		await start(rigRef, SECOND, { origin: "open" });
 		// The source renames the queued ticket while it waits: the handoff runs
 		// on the fresh projection, and the line the operator reads says so.
 		const renamed = { ...SECOND, title: "Close the renamed deploy branch" };
@@ -797,8 +806,8 @@ describe("the queue drain", () => {
 		const second = seedHandoff(rigRef, SECOND);
 		settleTurn(rigRef, SECOND, second.handoffId);
 		rigRef.hold("herdr agent start");
-		await start(rigRef, FIRST, "open");
-		await start(rigRef, SECOND, "workflow", undefined, liveChoice);
+		await start(rigRef, FIRST, { origin: "open" });
+		await start(rigRef, SECOND, { origin: "workflow", onStarted: undefined, choice: liveChoice });
 		await releaseHeld(rigRef, 1);
 		await releaseHeld(rigRef, 2);
 		await rigRef.waitForStarted(SECOND.identity);
@@ -810,8 +819,8 @@ describe("the queue drain", () => {
 		const second = seedHandoff(rigRef, SECOND);
 		const started: DispatchResult[] = [];
 		rigRef.hold("herdr agent start");
-		await start(rigRef, FIRST, "open");
-		await start(rigRef, SECOND, "restart", (r) => started.push(r));
+		await start(rigRef, FIRST, { origin: "open" });
+		await start(rigRef, SECOND, { origin: "restart", onStarted: (r) => started.push(r) });
 		await releaseHeld(rigRef, 1);
 		await releaseHeld(rigRef, 2);
 		await rigRef.waitForStarted(SECOND.identity);
@@ -830,8 +839,8 @@ describe("the queue drain", () => {
 		// seat like any other handoff, and the seat still answers for it.
 		expect(rigRef.state.ticketWorkCycle.markTicketRunning(SECOND.identity)).toBe(true);
 		rigRef.hold("herdr agent start");
-		await start(rigRef, FIRST, "open");
-		await start(rigRef, SECOND, "restart");
+		await start(rigRef, FIRST, { origin: "open" });
+		await start(rigRef, SECOND, { origin: "restart" });
 		await releaseHeld(rigRef, 1);
 		await releaseHeld(rigRef, 2);
 		await rigRef.waitForArrivals(2);
@@ -843,8 +852,8 @@ describe("the queue drain", () => {
 		const rigRef = rig([FIRST, SECOND]);
 		const second = seedHandoff(rigRef, SECOND);
 		rigRef.hold("herdr agent start");
-		await start(rigRef, FIRST, "open");
-		await start(rigRef, SECOND, "restart");
+		await start(rigRef, FIRST, { origin: "open" });
+		await start(rigRef, SECOND, { origin: "restart" });
 		settleTurn(rigRef, SECOND, second.handoffId);
 		closeCycle(rigRef, SECOND, second.handoffId);
 		await releaseHeld(rigRef, 1);
@@ -861,7 +870,7 @@ describe("the queue drain", () => {
 describe("the starting report", () => {
 	test("a claim adds the ticket to the set, and the settle removes it", async () => {
 		const rigRef = rig();
-		await expect(start(rigRef, FIRST, "open")).resolves.toEqual({ ok: true });
+		await expect(start(rigRef, FIRST, { origin: "open" })).resolves.toEqual({ ok: true });
 		// The add is the claim's fact: it lands before the work starts to build.
 		expect(rigRef.events.indexOf(`starting:${FIRST.identity}:on`)).toBeLessThan(
 			rigRef.events.indexOf(workingLine(FIRST)),
@@ -877,7 +886,7 @@ describe("the starting report", () => {
 	test("a failed settle removes the ticket the same way", async () => {
 		const rigRef = rig();
 		rigRef.runner.set("herdr", ["workspace", "list"], { code: 1, stderr: "herdr is unavailable" });
-		await expect(start(rigRef, FIRST, "open")).resolves.toEqual({ ok: true });
+		await expect(start(rigRef, FIRST, { origin: "open" })).resolves.toEqual({ ok: true });
 		expect(await rigRef.waitForStarted(FIRST.identity)).toEqual({
 			ok: false,
 			reason: "herdr is unavailable",
@@ -889,8 +898,8 @@ describe("the starting report", () => {
 	test("a hand-off queued behind the in-flight seat is in the set while it is queued", async () => {
 		const rigRef = rig([FIRST, SECOND]);
 		rigRef.hold("herdr agent start");
-		await start(rigRef, FIRST, "open");
-		await start(rigRef, SECOND, "open");
+		await start(rigRef, FIRST, { origin: "open" });
+		await start(rigRef, SECOND, { origin: "open" });
 		await rigRef.waitForArrivals(1);
 		// Both claims are in, so both tickets are in the set while only the
 		// first holds the seat: the second's add did not wait for its work.
@@ -909,8 +918,8 @@ describe("the starting report", () => {
 		const second = seedHandoff(rigRef, SECOND);
 		settleTurn(rigRef, SECOND, second.handoffId);
 		rigRef.hold("herdr agent start");
-		await start(rigRef, FIRST, "open");
-		await start(rigRef, SECOND, "workflow", undefined, liveChoice);
+		await start(rigRef, FIRST, { origin: "open" });
+		await start(rigRef, SECOND, { origin: "workflow", onStarted: undefined, choice: liveChoice });
 		// The queued ticket's cycle closes while it waits: the drain settles its
 		// claim as failed without running it.
 		closeCycle(rigRef, SECOND, second.handoffId);
@@ -927,7 +936,7 @@ describe("the starting report", () => {
 	test("after a restart the set is empty: a crash remnant is not in it", async () => {
 		const rigRef = rig();
 		rigRef.hold("herdr agent start");
-		await start(rigRef, FIRST, "open");
+		await start(rigRef, FIRST, { origin: "open" });
 		await rigRef.waitForArrivals(1);
 		// The run dies mid-handoff: the claim stays unresolved in the durable
 		// state, and the module that made it reports its add and never its
@@ -965,7 +974,7 @@ describe("the starting report", () => {
 	test("a stopped module reports into nothing while the app tears down", async () => {
 		const rigRef = rig();
 		rigRef.hold("herdr agent start");
-		await start(rigRef, FIRST, "open");
+		await start(rigRef, FIRST, { origin: "open" });
 		await rigRef.waitForArrivals(1);
 		rigRef.dispatch.stop();
 		// The run settles neither the state nor the reports after the stop:
@@ -983,9 +992,12 @@ describe("the claim, the settle, and every origin", () => {
 		const rigRef = rig();
 		const started: DispatchResult[] = [];
 		await expect(
-			start(rigRef, FIRST, "open", (result) => {
-				started.push(result);
-				rigRef.events.push("started");
+			start(rigRef, FIRST, {
+				origin: "open",
+				onStarted: (result) => {
+					started.push(result);
+					rigRef.events.push("started");
+				},
 			}),
 		).resolves.toEqual({ ok: true });
 		await rigRef.waitForStarted(FIRST.identity);
@@ -1001,7 +1013,9 @@ describe("the claim, the settle, and every origin", () => {
 		const rigRef = rig();
 		rigRef.runner.set("herdr", ["workspace", "list"], { code: 1, stderr: "herdr is unavailable" });
 		const started: DispatchResult[] = [];
-		await expect(start(rigRef, FIRST, "open", (r) => started.push(r))).resolves.toEqual({
+		await expect(
+			start(rigRef, FIRST, { origin: "open", onStarted: (r) => started.push(r) }),
+		).resolves.toEqual({
 			ok: true,
 		});
 		expect(await rigRef.waitForStarted(FIRST.identity)).toEqual({
@@ -1023,7 +1037,7 @@ describe("the claim, the settle, and every origin", () => {
 			code: 1,
 			stderr: "the worktree build failed",
 		});
-		await expect(start(rigRef, FIRST, "open")).resolves.toEqual({ ok: true });
+		await expect(start(rigRef, FIRST, { origin: "open" })).resolves.toEqual({ ok: true });
 		await rigRef.waitForStarted(FIRST.identity);
 		expect(rigRef.state.handoff.handoffBlockedUnrefreshed(FIRST.identity)).toBe(true);
 		// The operator's ask is not the automatic one. The hold stands on the
@@ -1031,7 +1045,9 @@ describe("the claim, the settle, and every origin", () => {
 		// one past the Handoff limit and the Same-type hold.
 		rigRef.runner.set("herdr", ["workspace", "list"], { stdout: workspaceListJson([]) });
 		const started: DispatchResult[] = [];
-		await expect(start(rigRef, FIRST, "open", (r) => started.push(r))).resolves.toEqual({
+		await expect(
+			start(rigRef, FIRST, { origin: "open", onStarted: (r) => started.push(r) }),
+		).resolves.toEqual({
 			ok: true,
 		});
 		expect(await rigRef.waitForStarted(FIRST.identity)).toEqual({ ok: true });
@@ -1071,7 +1087,9 @@ describe("the claim, the settle, and every origin", () => {
 		// this start the way they take one past the Attempt hold and the Handoff limit.
 		expect(rigRef.state.handoff.handoffClaimCheck(FIRST.identity, "open")).toEqual({ ok: true });
 		const started: DispatchResult[] = [];
-		await expect(start(rigRef, FIRST, "open", (r) => started.push(r))).resolves.toEqual({
+		await expect(
+			start(rigRef, FIRST, { origin: "open", onStarted: (r) => started.push(r) }),
+		).resolves.toEqual({
 			ok: true,
 		});
 		expect(await rigRef.waitForStarted(FIRST.identity)).toEqual({ ok: true });
@@ -1095,7 +1113,7 @@ describe("the claim, the settle, and every origin", () => {
 			code: 1,
 			stderr: "the worktree path already exists",
 		});
-		await expect(start(rigRef, FIRST, "open")).resolves.toEqual({ ok: true });
+		await expect(start(rigRef, FIRST, { origin: "open" })).resolves.toEqual({ ok: true });
 		expect(await rigRef.waitForStarted(FIRST.identity)).toEqual(
 			expect.objectContaining({ ok: false }),
 		);
@@ -1119,7 +1137,11 @@ describe("the claim, the settle, and every origin", () => {
 		});
 		const started: DispatchResult[] = [];
 		await expect(
-			start(rigRef, FIRST, "workflow", (r) => started.push(r), liveChoice),
+			start(rigRef, FIRST, {
+				origin: "workflow",
+				onStarted: (r) => started.push(r),
+				choice: liveChoice,
+			}),
 		).resolves.toEqual({ ok: true });
 		await rigRef.waitForStarted(FIRST.identity);
 		expect(started).toEqual([{ ok: true }]);
@@ -1138,7 +1160,11 @@ describe("the claim, the settle, and every origin", () => {
 		rigRef.runner.set("herdr", ["workspace", "list"], { code: 1, stderr: "herdr is gone" });
 		const started: DispatchResult[] = [];
 		await expect(
-			start(rigRef, FIRST, "workflow", (r) => started.push(r), liveChoice),
+			start(rigRef, FIRST, {
+				origin: "workflow",
+				onStarted: (r) => started.push(r),
+				choice: liveChoice,
+			}),
 		).resolves.toEqual({ ok: true });
 		expect(await rigRef.waitForStarted(FIRST.identity)).toEqual({
 			ok: false,
@@ -1162,7 +1188,9 @@ describe("the claim, the settle, and every origin", () => {
 			stdout: tabCreateJson("pane-again", "tab-again"),
 		});
 		const started: DispatchResult[] = [];
-		await expect(start(rigRef, FIRST, "restart", (r) => started.push(r))).resolves.toEqual({
+		await expect(
+			start(rigRef, FIRST, { origin: "restart", onStarted: (r) => started.push(r) }),
+		).resolves.toEqual({
 			ok: true,
 		});
 		await rigRef.waitForStarted(FIRST.identity);
@@ -1198,7 +1226,11 @@ describe("the claim, the settle, and every origin", () => {
 		);
 		const started: DispatchResult[] = [];
 		await expect(
-			start(rigRef, FIRST, "restart", (r) => started.push(r), worktreeChoice),
+			start(rigRef, FIRST, {
+				origin: "restart",
+				onStarted: (r) => started.push(r),
+				choice: worktreeChoice,
+			}),
 		).resolves.toEqual({ ok: true });
 		await rigRef.waitForStarted(FIRST.identity);
 		expect(started).toEqual([{ ok: true }]);
@@ -1222,7 +1254,9 @@ describe("the claim, the settle, and every origin", () => {
 				'{"error":{"code":"ipc_timeout","message":"herdr did not answer"},"id":"cli:workspace:list"}\n',
 		});
 		const started: DispatchResult[] = [];
-		await expect(start(rigRef, FIRST, "restart", (r) => started.push(r))).resolves.toEqual({
+		await expect(
+			start(rigRef, FIRST, { origin: "restart", onStarted: (r) => started.push(r) }),
+		).resolves.toEqual({
 			ok: true,
 		});
 		expect(await rigRef.waitForStarted(FIRST.identity)).toEqual({
@@ -1237,7 +1271,7 @@ describe("the claim, the settle, and every origin", () => {
 	test("a claim herdr refuses starts nothing and answers with the claim's reason", async () => {
 		const rigRef = rig();
 		await handOff(rigRef, FIRST);
-		await expect(start(rigRef, FIRST, "open")).resolves.toEqual({
+		await expect(start(rigRef, FIRST, { origin: "open" })).resolves.toEqual({
 			ok: false,
 			reason: expect.stringContaining("only open tickets can be handed off"),
 		});
@@ -1251,7 +1285,7 @@ describe("the claim, the settle, and every origin", () => {
 			fetchedAt: "2026-09-02T00:00:00Z",
 			tickets: [],
 		});
-		await expect(start(rigRef, FIRST, "open")).resolves.toEqual({
+		await expect(start(rigRef, FIRST, { origin: "open" })).resolves.toEqual({
 			ok: false,
 			reason: "Ticket is not actionable because source data is stale, removed, or absent",
 		});
@@ -1275,12 +1309,14 @@ describe("the claim, the settle, and every origin", () => {
 		};
 		rigRef.dispatch = withRunner(rigRef, throwing);
 		const started: DispatchResult[] = [];
-		await expect(start(rigRef, FIRST, "open", (r) => started.push(r))).resolves.toEqual({
+		await expect(
+			start(rigRef, FIRST, { origin: "open", onStarted: (r) => started.push(r) }),
+		).resolves.toEqual({
 			ok: true,
 		});
 		// A second claim queues behind the one that is about to break: the drain
 		// the failed settle runs is the only thing that starts it.
-		await expect(start(rigRef, SECOND, "open")).resolves.toEqual({ ok: true });
+		await expect(start(rigRef, SECOND, { origin: "open" })).resolves.toEqual({ ok: true });
 		expect(await rigRef.waitForStarted(FIRST.identity)).toEqual({
 			ok: false,
 			reason: "the handoff could not run a command: the pipe broke",
@@ -1326,7 +1362,7 @@ describe("the claim, the settle, and every origin", () => {
 			listModels: (kind) => rigRef.runner.listModels(kind),
 		};
 		rigRef.dispatch = withRunner(rigRef, throwing);
-		await expect(start(rigRef, FIRST, "open")).resolves.toEqual({ ok: true });
+		await expect(start(rigRef, FIRST, { origin: "open" })).resolves.toEqual({ ok: true });
 		expect(await rigRef.waitForStarted(FIRST.identity)).toEqual({ ok: true });
 		expect(rigRef.state.ticketWorkCycle.ticketState(FIRST.identity)).toBe("handed-off");
 		expect(rigRef.events).toContain(
@@ -1639,7 +1675,7 @@ describe("the Close cleanup", () => {
 		// A restart of the same ticket is building its agent when the operator
 		// asks for the close: the close waits, and a hung start still ends in it.
 		rigRef.hold("herdr agent start");
-		await start(rigRef, FIRST, "restart");
+		await start(rigRef, FIRST, { origin: "restart" });
 		await rigRef.waitForArrivals(1);
 		const closed = rigRef.dispatch.closeWorkCycle(FIRST.identity);
 		await seatReleased();
@@ -1824,7 +1860,7 @@ describe("the Close cleanup", () => {
 		await expect(dispatch.closeCleanup(SECOND.identity, stored, "closed")).resolves.toBeUndefined();
 		expect(rigRef.events).not.toContain("faultError:the frame is gone");
 		expect(rigRef.dispatch.handoffActive()).toBe(false);
-		await expect(start(rigRef, FIRST, "open")).resolves.toEqual({ ok: true });
+		await expect(start(rigRef, FIRST, { origin: "open" })).resolves.toEqual({ ok: true });
 		await rigRef.waitForStarted(FIRST.identity);
 	});
 
@@ -1888,7 +1924,9 @@ describe("the name fact", () => {
 			},
 		);
 		const started: DispatchResult[] = [];
-		await expect(start(rigRef, FIRST, "open", (r) => started.push(r))).resolves.toEqual({
+		await expect(
+			start(rigRef, FIRST, { origin: "open", onStarted: (r) => started.push(r) }),
+		).resolves.toEqual({
 			ok: true,
 		});
 		await rigRef.waitForStarted(FIRST.identity);
@@ -1936,7 +1974,9 @@ describe("the name fact", () => {
 			},
 		);
 		const started: DispatchResult[] = [];
-		await expect(start(rigRef, FIRST, "open", (r) => started.push(r))).resolves.toEqual({
+		await expect(
+			start(rigRef, FIRST, { origin: "open", onStarted: (r) => started.push(r) }),
+		).resolves.toEqual({
 			ok: true,
 		});
 		await rigRef.waitForStarted(FIRST.identity);
@@ -1963,7 +2003,9 @@ describe("the name fact", () => {
 			},
 		);
 		const started: DispatchResult[] = [];
-		await expect(start(rigRef, FIRST, "open", (r) => started.push(r))).resolves.toEqual({
+		await expect(
+			start(rigRef, FIRST, { origin: "open", onStarted: (r) => started.push(r) }),
+		).resolves.toEqual({
 			ok: true,
 		});
 		await rigRef.waitForStarted(FIRST.identity);
@@ -2003,14 +2045,14 @@ describe("the name fact", () => {
 		rigRef.dispatch = withRunner(rigRef, herdr);
 		const startedA: DispatchResult[] = [];
 		await expect(
-			start(rigRef, SHARED_A, "open", (result) => startedA.push(result)),
+			start(rigRef, SHARED_A, { origin: "open", onStarted: (result) => startedA.push(result) }),
 		).resolves.toEqual({
 			ok: true,
 		});
 		await rigRef.waitForStarted(SHARED_A.identity);
 		const startedB: DispatchResult[] = [];
 		await expect(
-			start(rigRef, SHARED_B, "open", (result) => startedB.push(result)),
+			start(rigRef, SHARED_B, { origin: "open", onStarted: (result) => startedB.push(result) }),
 		).resolves.toEqual({
 			ok: true,
 		});
@@ -2061,7 +2103,9 @@ describe("the name fact", () => {
 			},
 		);
 		const started: DispatchResult[] = [];
-		await expect(start(rigRef, FIRST, "open", (r) => started.push(r))).resolves.toEqual({
+		await expect(
+			start(rigRef, FIRST, { origin: "open", onStarted: (r) => started.push(r) }),
+		).resolves.toEqual({
 			ok: true,
 		});
 		await rigRef.waitForStarted(FIRST.identity);
@@ -2142,7 +2186,9 @@ describe("the name fact", () => {
 		]);
 		rigRef.dispatch = withRunner(rigRef, herdrWithItsOwnNameSpace(rigRef, held));
 		const refused: DispatchResult[] = [];
-		await expect(start(rigRef, FIRST, "open", (r) => refused.push(r))).resolves.toEqual({
+		await expect(
+			start(rigRef, FIRST, { origin: "open", onStarted: (r) => refused.push(r) }),
+		).resolves.toEqual({
 			ok: true,
 		});
 		await rigRef.waitForStarted(FIRST.identity);
@@ -2154,7 +2200,9 @@ describe("the name fact", () => {
 		// with it - the automatic adds resume on the same rule, with no second act.
 		held.delete(FIRST.name);
 		const second: DispatchResult[] = [];
-		await expect(start(rigRef, FIRST, "open", (r) => second.push(r))).resolves.toEqual({
+		await expect(
+			start(rigRef, FIRST, { origin: "open", onStarted: (r) => second.push(r) }),
+		).resolves.toEqual({
 			ok: true,
 		});
 		await rigRef.waitForStarted(FIRST.identity);
@@ -2174,7 +2222,7 @@ describe("the name fact", () => {
 				stderr: nameTaken(FIRST.name, [{ paneId: "pane-stranger", workspaceId: "ws-stranger" }]),
 			},
 		);
-		await expect(start(rigRef, FIRST, "open")).resolves.toEqual({ ok: true });
+		await expect(start(rigRef, FIRST, { origin: "open" })).resolves.toEqual({ ok: true });
 		await rigRef.waitForStarted(FIRST.identity);
 		const first = rigRef.state.handoff.nameCollision(FIRST.identity);
 		expect(first).not.toBeNull();
@@ -2190,7 +2238,7 @@ describe("the name fact", () => {
 					'{"error":{"code":"agent_pane_gone","message":"the pane is gone"},"id":"cli:agent:start"}\n',
 			},
 		);
-		await expect(start(rigRef, FIRST, "open")).resolves.toEqual({ ok: true });
+		await expect(start(rigRef, FIRST, { origin: "open" })).resolves.toEqual({ ok: true });
 		await rigRef.waitForStarted(FIRST.identity);
 		expect(rigRef.state.handoff.nameCollision(FIRST.identity)).toEqual(first);
 	});
@@ -2209,7 +2257,7 @@ describe("the name fact", () => {
 				stderr: nameTaken(FIRST.name, [{ paneId: FIRST.paneId, workspaceId: FIRST.workspaceId }]),
 			},
 		);
-		await expect(start(rigRef, FIRST, "open")).resolves.toEqual({ ok: true });
+		await expect(start(rigRef, FIRST, { origin: "open" })).resolves.toEqual({ ok: true });
 		await rigRef.waitForStarted(FIRST.identity);
 		expect(rigRef.state.ticketWorkCycle.ticketState(FIRST.identity)).toBe("handed-off");
 		expect(rigRef.state.handoff.leftoverEnvironment(FIRST.identity)?.handoffId).toBe(
@@ -2238,7 +2286,9 @@ describe("the name fact", () => {
 			stderr: nameTaken(cycle, [{ paneId: "pane-stranger", workspaceId: "ws-stranger" }]),
 		});
 		const started: DispatchResult[] = [];
-		await expect(start(rigRef, FIRST, "open", (r) => started.push(r))).resolves.toEqual({
+		await expect(
+			start(rigRef, FIRST, { origin: "open", onStarted: (r) => started.push(r) }),
+		).resolves.toEqual({
 			ok: true,
 		});
 		await rigRef.waitForStarted(FIRST.identity);
@@ -3785,7 +3835,11 @@ describe("the decision screen's route close", () => {
 	 */
 	async function directRoute(rigRef: Rig, choice: HandoffChoice): Promise<DispatchResult> {
 		const started: DispatchResult[] = [];
-		const answer = await start(rigRef, FIRST, "workflow", (result) => started.push(result), choice);
+		const answer = await start(rigRef, FIRST, {
+			origin: "workflow",
+			onStarted: (result) => started.push(result),
+			choice: choice,
+		});
 		await rigRef.waitForStarted(FIRST.identity);
 		expect(started).toEqual([{ ok: true }]);
 		return answer;
@@ -4110,7 +4164,9 @@ describe("the decision screen's route close", () => {
 			stdout: tabCreateJson("pane-route", "tab-route"),
 		});
 		const started: DispatchResult[] = [];
-		await expect(start(rigRef, FIRST, "workflow", (r) => started.push(r))).resolves.toEqual({
+		await expect(
+			start(rigRef, FIRST, { origin: "workflow", onStarted: (r) => started.push(r) }),
+		).resolves.toEqual({
 			ok: true,
 		});
 		await rigRef.waitForStarted(FIRST.identity);
@@ -4193,10 +4249,10 @@ describe("the record lines", () => {
 		const hold = gatedRunner(rigRef.runner, () => true);
 		const dispatch = withRunner(rigRef, hold.runner, { log: recordLogger(lines) });
 		rigRef.dispatch = dispatch;
-		const first = await start(rigRef, FIRST, "open");
+		const first = await start(rigRef, FIRST, { origin: "open" });
 		expect(first).toMatchObject({ ok: true });
 		// A second start on the same ticket meets the unresolved claim.
-		const second = await start(rigRef, FIRST, "open");
+		const second = await start(rigRef, FIRST, { origin: "open" });
 		expect(second).toMatchObject({
 			ok: false,
 			reason: "handoff recovery is required before another handoff",
@@ -4268,7 +4324,7 @@ describe("the record lines", () => {
 			seatCount: () => 2,
 		});
 		rigRef.dispatch = mod;
-		await expect(start(rigRef, FIRST, "open")).resolves.toMatchObject({ ok: true });
+		await expect(start(rigRef, FIRST, { origin: "open" })).resolves.toMatchObject({ ok: true });
 		expect(lines).toEqual([
 			infoLine(`handoff queued: "${FIRST.title}" (origin open, operator-staged)`),
 			infoLine(
@@ -4295,11 +4351,11 @@ describe("the record lines", () => {
 		rigRef.dispatch = mod;
 		// The operator's ask on the first ticket: the cap has room, and the ask's
 		// own pass takes it.
-		await expect(start(rigRef, FIRST, "open")).resolves.toMatchObject({ ok: true });
+		await expect(start(rigRef, FIRST, { origin: "open" })).resolves.toMatchObject({ ok: true });
 		expect(rigRef.state.handoff.openAttemptTickets()).toEqual([FIRST.identity]);
 		// The cap is full now: the one seat belongs to the start that took it, so
 		// the second ask finds no free seat and its row waits.
-		await expect(start(rigRef, SECOND, "open")).resolves.toMatchObject({ ok: true });
+		await expect(start(rigRef, SECOND, { origin: "open" })).resolves.toMatchObject({ ok: true });
 		expect(rigRef.state.workQueue.hasWorkItem(SECOND.identity)).toBe(true);
 		expect(rigRef.state.ticketWorkCycle.ticketState(SECOND.identity)).toBe("open");
 		// The operator's key starts the waiting row over the full cap.
@@ -4335,7 +4391,7 @@ describe("the record lines", () => {
 			seatCount: () => rigRef.config.maxParallelAgents,
 		});
 		rigRef.dispatch = mod;
-		await expect(start(rigRef, FIRST, "open")).resolves.toEqual({ ok: true });
+		await expect(start(rigRef, FIRST, { origin: "open" })).resolves.toEqual({ ok: true });
 		await expect(
 			mod.dispatch({
 				origin: "open",
@@ -4368,7 +4424,7 @@ describe("the record lines", () => {
 		});
 		rigRef.dispatch = mod;
 		// The operator stages the row by hand while the cap is full.
-		await expect(start(rigRef, FIRST, "open")).resolves.toEqual({ ok: true });
+		await expect(start(rigRef, FIRST, { origin: "open" })).resolves.toEqual({ ok: true });
 		expect(rigRef.state.workQueue.hasWorkItem(FIRST.identity)).toBe(true);
 		// The factory's continuation ask for the same ticket: the row stands, and
 		// the first item keeps its place.
@@ -4416,7 +4472,7 @@ describe("the record lines", () => {
 			seatCount: () => rigRef.config.maxParallelAgents,
 		});
 		rigRef.dispatch = mod;
-		await expect(start(rigRef, FIRST, "open")).resolves.toEqual({ ok: true });
+		await expect(start(rigRef, FIRST, { origin: "open" })).resolves.toEqual({ ok: true });
 		const continuationAsk = () =>
 			mod.dispatch({
 				origin: "workflow",
@@ -4441,7 +4497,7 @@ describe("the record lines", () => {
 		// standing fact: the refusal states itself again.
 		expect(mod.removeQueueItem(FIRST.identity)).toBe(true);
 		clockMs += 60_000;
-		await expect(start(rigRef, FIRST, "open")).resolves.toEqual({ ok: true });
+		await expect(start(rigRef, FIRST, { origin: "open" })).resolves.toEqual({ ok: true });
 		await expect(continuationAsk()).resolves.toMatchObject({ ok: false });
 		expect(refusal()).toEqual([standingRow(), standingRow()]);
 		mod.stop();
@@ -4463,7 +4519,7 @@ describe("the record lines", () => {
 			seatCount: () => rigRef.config.maxParallelAgents,
 		});
 		rigRef.dispatch = mod;
-		await expect(start(rigRef, FIRST, "open")).resolves.toEqual({ ok: true });
+		await expect(start(rigRef, FIRST, { origin: "open" })).resolves.toEqual({ ok: true });
 		const continuationAsk = () =>
 			mod.dispatch({
 				origin: "workflow",
@@ -4479,7 +4535,7 @@ describe("the record lines", () => {
 		// its drop.
 		expect(rigRef.state.workQueue.removeWorkItem(FIRST.identity)).toBe(true);
 		clockMs += 60_000;
-		await expect(start(rigRef, FIRST, "open")).resolves.toEqual({ ok: true });
+		await expect(start(rigRef, FIRST, { origin: "open" })).resolves.toEqual({ ok: true });
 		await expect(continuationAsk()).resolves.toMatchObject({ ok: false });
 		expect(
 			lines.filter(
@@ -4514,16 +4570,16 @@ describe("the record lines", () => {
 		const hold = gatedRunner(rigRef.runner, () => true);
 		const mod = withRunner(rigRef, hold.runner, { log: recordLogger(lines) });
 		rigRef.dispatch = mod;
-		await expect(start(rigRef, FIRST, "open")).resolves.toMatchObject({ ok: true });
+		await expect(start(rigRef, FIRST, { origin: "open" })).resolves.toMatchObject({ ok: true });
 		const recovery = () =>
 			warnLine(
 				`handoff refused: "${FIRST.title}" (handoff recovery is required before another handoff)`,
 			);
 		const refusals = () => lines.filter((line) => line.message.startsWith("handoff refused:"));
 		// Three cycles' worth of re-asks on the one refused claim.
-		await expect(start(rigRef, FIRST, "open")).resolves.toMatchObject({ ok: false });
-		await expect(start(rigRef, FIRST, "open")).resolves.toMatchObject({ ok: false });
-		await expect(start(rigRef, FIRST, "open")).resolves.toMatchObject({ ok: false });
+		await expect(start(rigRef, FIRST, { origin: "open" })).resolves.toMatchObject({ ok: false });
+		await expect(start(rigRef, FIRST, { origin: "open" })).resolves.toMatchObject({ ok: false });
+		await expect(start(rigRef, FIRST, { origin: "open" })).resolves.toMatchObject({ ok: false });
 		expect(refusals()).toEqual([recovery()]);
 		// The fact moves: the run ends and its recovery settles the stale claim, the
 		// way a restart does, and the row the held start left behind goes with it.
@@ -4531,8 +4587,8 @@ describe("the record lines", () => {
 		// fact and states itself once more.
 		expect(rigRef.state.handoff.recoverUnsettledHandoffs()).toHaveLength(1);
 		expect(mod.removeQueueItem(FIRST.identity)).toBe(true);
-		await expect(start(rigRef, FIRST, "open")).resolves.toMatchObject({ ok: true });
-		await expect(start(rigRef, FIRST, "open")).resolves.toMatchObject({ ok: false });
+		await expect(start(rigRef, FIRST, { origin: "open" })).resolves.toMatchObject({ ok: true });
+		await expect(start(rigRef, FIRST, { origin: "open" })).resolves.toMatchObject({ ok: false });
 		expect(refusals()).toEqual([recovery(), recovery()]);
 		mod.stop();
 	});
@@ -4551,15 +4607,15 @@ describe("the record lines", () => {
 		const hold = gatedRunner(rigRef.runner, () => true);
 		const mod = withRunner(rigRef, hold.runner, { log: recordLogger(lines) });
 		rigRef.dispatch = mod;
-		await expect(start(rigRef, FIRST, "open")).resolves.toMatchObject({ ok: true });
+		await expect(start(rigRef, FIRST, { origin: "open" })).resolves.toMatchObject({ ok: true });
 		const recovery = () =>
 			warnLine(
 				`handoff refused: "${FIRST.title}" (handoff recovery is required before another handoff)`,
 			);
 		const refusals = () => lines.filter((line) => line.message.startsWith("handoff refused:"));
 		// The standing fact: the same unresolved claim, refused again and again.
-		await expect(start(rigRef, FIRST, "open")).resolves.toMatchObject({ ok: false });
-		await expect(start(rigRef, FIRST, "open")).resolves.toMatchObject({ ok: false });
+		await expect(start(rigRef, FIRST, { origin: "open" })).resolves.toMatchObject({ ok: false });
+		await expect(start(rigRef, FIRST, { origin: "open" })).resolves.toMatchObject({ ok: false });
 		expect(refusals()).toEqual([recovery()]);
 		// The stale claim settles outside the dispatch, and a start the dispatch never
 		// ran claims again - the shape of the observation cycle's reclaim of a stale
@@ -4569,10 +4625,10 @@ describe("the record lines", () => {
 		expect(otherClaim.ok).toBe(true);
 		// The next ask meets the same words over a new claim: a new fact, and it
 		// states itself.
-		await expect(start(rigRef, FIRST, "open")).resolves.toMatchObject({ ok: false });
+		await expect(start(rigRef, FIRST, { origin: "open" })).resolves.toMatchObject({ ok: false });
 		expect(refusals()).toEqual([recovery(), recovery()]);
 		// And it stands: the same claim refused again says nothing more.
-		await expect(start(rigRef, FIRST, "open")).resolves.toMatchObject({ ok: false });
+		await expect(start(rigRef, FIRST, { origin: "open" })).resolves.toMatchObject({ ok: false });
 		expect(refusals()).toHaveLength(2);
 		mod.stop();
 	});
@@ -4596,7 +4652,7 @@ describe("the record lines", () => {
 			seatCount: () => rigRef.config.maxParallelAgents,
 		});
 		rigRef.dispatch = mod;
-		await expect(start(rigRef, FIRST, "open")).resolves.toMatchObject({ ok: true });
+		await expect(start(rigRef, FIRST, { origin: "open" })).resolves.toMatchObject({ ok: true });
 		const continuationAsk = () =>
 			mod.dispatch({
 				origin: "workflow",
@@ -4656,7 +4712,7 @@ describe("the record lines", () => {
 		});
 		const mod = withRunner(rigRef, rigRef.runner, { log: recordLogger(lines) });
 		rigRef.dispatch = mod;
-		await expect(start(rigRef, FIRST, "open")).resolves.toEqual({ ok: true });
+		await expect(start(rigRef, FIRST, { origin: "open" })).resolves.toEqual({ ok: true });
 		await rigRef.waitForStarted(FIRST.identity);
 		// The start line stands, and the line for how it ended stands beside it.
 		expect(lines).toEqual([
@@ -4688,7 +4744,7 @@ describe("the record lines", () => {
 		});
 		const mod = withRunner(rigRef, rigRef.runner, { log: recordLogger(lines) });
 		rigRef.dispatch = mod;
-		await expect(start(rigRef, FIRST, "open")).resolves.toEqual({ ok: true });
+		await expect(start(rigRef, FIRST, { origin: "open" })).resolves.toEqual({ ok: true });
 		await rigRef.waitForStarted(FIRST.identity);
 		const failedLine = () =>
 			warnLine(`handoff start failed: "${FIRST.title}" (a herdr Agent name a stranger holds)`);
@@ -4698,7 +4754,7 @@ describe("the record lines", () => {
 		for (let cycle = 0; cycle < 3; cycle += 1) expect(await mod.pickupWorkQueue()).toBe(0);
 		expect(failures()).toEqual([failedLine()]);
 		// The next attempt is a start the factory made, and it ends the same way.
-		await expect(start(rigRef, FIRST, "open")).resolves.toEqual({ ok: true });
+		await expect(start(rigRef, FIRST, { origin: "open" })).resolves.toEqual({ ok: true });
 		await rigRef.waitForStarted(FIRST.identity);
 		expect(failures()).toEqual([failedLine(), failedLine()]);
 		expect(rigRef.state.handoff.handoffCount(FIRST.identity)).toBe(2);
@@ -4721,7 +4777,7 @@ describe("the record lines", () => {
 			seatCount: () => rigRef.config.maxParallelAgents,
 		});
 		rigRef.dispatch = gated;
-		await expect(start(rigRef, FIRST, "open")).resolves.toEqual({ ok: true });
+		await expect(start(rigRef, FIRST, { origin: "open" })).resolves.toEqual({ ok: true });
 		await expect(
 			gated.dispatch({
 				origin: "workflow",
@@ -4745,7 +4801,7 @@ describe("the record lines", () => {
 		const failing = withRunner(rigRef, rigRef.runner, { log: recordLogger(lines) });
 		rigRef.dispatch = failing;
 		expect(failing.removeQueueItem(FIRST.identity)).toBe(true);
-		await expect(start(rigRef, FIRST, "open")).resolves.toEqual({ ok: true });
+		await expect(start(rigRef, FIRST, { origin: "open" })).resolves.toEqual({ ok: true });
 		await rigRef.waitForStarted(FIRST.identity);
 		expect(refusals()).toHaveLength(1);
 		expect(failures()).toEqual([
@@ -4770,9 +4826,9 @@ describe("the record lines", () => {
 		rigRef.dispatch = mod;
 		const second = seedHandoff(rigRef, SECOND);
 		settleTurn(rigRef, SECOND, second.handoffId);
-		await start(rigRef, FIRST, "open");
-		await expect(start(rigRef, SECOND, "workflow")).resolves.toEqual({ ok: true });
-		await expect(start(rigRef, THIRD, "open")).resolves.toEqual({ ok: true });
+		await start(rigRef, FIRST, { origin: "open" });
+		await expect(start(rigRef, SECOND, { origin: "workflow" })).resolves.toEqual({ ok: true });
+		await expect(start(rigRef, THIRD, { origin: "open" })).resolves.toEqual({ ok: true });
 		// The awaited turn of the middle ticket closes while its route waits: the
 		// parked claim has nothing to start.
 		closeCycle(rigRef, SECOND, second.handoffId);

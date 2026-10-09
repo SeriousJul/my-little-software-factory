@@ -146,9 +146,11 @@ describe("the permanent Message line", () => {
 				setup.mockInput.pressKey("a");
 				expect(messageRowOf(await settle(setup)).trim()).toBe("Warning: no Ticket sources exist");
 			},
-			WIDTH,
-			HEIGHT,
-			{ config: BASE_CONFIG, runner: new FakeRunner(), initialTickets: SAMPLE_TICKETS },
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				props: { config: BASE_CONFIG, runner: new FakeRunner(), initialTickets: SAMPLE_TICKETS },
+			},
 		);
 	});
 
@@ -162,9 +164,11 @@ describe("the permanent Message line", () => {
 				expect(messageRowOf(frame).trim()).toBe("Warning: no Ticket sources exist");
 				expect(spanColorAt(setup, row, "Warning:")).toEqual(rgb(roleColor("yellow")));
 			},
-			WIDTH,
-			HEIGHT,
-			{ config: BASE_CONFIG, runner: new FakeRunner(), initialTickets: SAMPLE_TICKETS },
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				props: { config: BASE_CONFIG, runner: new FakeRunner(), initialTickets: SAMPLE_TICKETS },
+			},
 		);
 
 		// A refused refresh warns on the line. A source app needs state to
@@ -182,9 +186,11 @@ describe("the permanent Message line", () => {
 				);
 				refused.settle(success([issueTicket()]));
 			},
-			WIDTH,
-			HEIGHT,
-			{ config: issuesConfig, state: freshState(), sources: [refused] },
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				props: { config: issuesConfig, state: freshState(), sources: [refused] },
+			},
 		);
 
 		// Working.
@@ -204,9 +210,11 @@ describe("the permanent Message line", () => {
 				source.settle(success([issueTicket()]));
 				await awaitFrame(setup, (f) => messageRowOf(f).trim() === "", "the working to clear");
 			},
-			WIDTH,
-			HEIGHT,
-			{ config: issuesConfig, state: freshState(), sources: [source] },
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				props: { config: issuesConfig, state: freshState(), sources: [source] },
+			},
 		);
 
 		// Error.
@@ -218,12 +226,14 @@ describe("the permanent Message line", () => {
 				expect(messageRowOf(frame).trim()).toBe("Error: error: the daemon is down");
 				expect(spanColorAt(setup, row, "Error:")).toEqual(rgb(roleColor("red")));
 			},
-			WIDTH,
-			HEIGHT,
 			{
-				config: BASE_CONFIG,
-				runner: failingHandoffRunner(),
-				initialTickets: SAMPLE_TICKETS,
+				width: WIDTH,
+				height: HEIGHT,
+				props: {
+					config: BASE_CONFIG,
+					runner: failingHandoffRunner(),
+					initialTickets: SAMPLE_TICKETS,
+				},
 			},
 		);
 	});
@@ -241,9 +251,11 @@ describe("the permanent Message line", () => {
 					"Error: error: the daemon is down",
 				);
 			},
-			WIDTH,
-			HEIGHT,
-			{ config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				props: { config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+			},
 		);
 	});
 
@@ -276,9 +288,7 @@ describe("the permanent Message line", () => {
 						"the warning to return",
 					);
 				},
-				WIDTH,
-				HEIGHT,
-				{ config: issuesConfig, state, sources: [source] },
+				{ width: WIDTH, height: HEIGHT, props: { config: issuesConfig, state, sources: [source] } },
 			);
 		} finally {
 			state.close();
@@ -320,9 +330,7 @@ describe("the permanent Message line", () => {
 					expect(messageRowOf(frame).trim()).toBe(`Warning: ${disabled}`);
 					source.settle(success([issueTicket()]));
 				},
-				WIDTH,
-				HEIGHT,
-				{ config: issuesConfig, state, sources: [source] },
+				{ width: WIDTH, height: HEIGHT, props: { config: issuesConfig, state, sources: [source] } },
 			);
 		} finally {
 			state.close();
@@ -398,9 +406,11 @@ describe("the permanent Message line", () => {
 						"the refusal after the refresh",
 					);
 				},
-				WIDTH,
-				HEIGHT,
-				{ config: issuesConfig, state, sources: [source], runner },
+				{
+					width: WIDTH,
+					height: HEIGHT,
+					props: { config: issuesConfig, state, sources: [source], runner },
+				},
 			);
 		} finally {
 			state.close();
@@ -455,9 +465,11 @@ describe("the permanent Message line", () => {
 						"the working to clear",
 					);
 				},
-				WIDTH,
-				HEIGHT,
-				{ config: issuesConfig, state, sources: [source], runner },
+				{
+					width: WIDTH,
+					height: HEIGHT,
+					props: { config: issuesConfig, state, sources: [source], runner },
+				},
 			);
 		} finally {
 			state.close();
@@ -479,9 +491,15 @@ describe("the permanent Message line", () => {
 				expect(view).toContain("the daemon refused the request after the outage");
 				expect(view).toContain("ERROR");
 			},
-			WIDTH,
-			HEIGHT,
-			{ config: BASE_CONFIG, runner: longLineHandoffRunner(), initialTickets: SAMPLE_TICKETS },
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				props: {
+					config: BASE_CONFIG,
+					runner: longLineHandoffRunner(),
+					initialTickets: SAMPLE_TICKETS,
+				},
+			},
 		);
 
 		// A fact that fits on the line still earns the view: the record is the
@@ -496,9 +514,11 @@ describe("the permanent Message line", () => {
 				expect(view).toContain("WARN");
 				expect(view).toContain("no Ticket sources exist");
 			},
-			WIDTH,
-			HEIGHT,
-			{ config: BASE_CONFIG, runner: new FakeRunner(), initialTickets: SAMPLE_TICKETS },
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				props: { config: BASE_CONFIG, runner: new FakeRunner(), initialTickets: SAMPLE_TICKETS },
+			},
 		);
 
 		// No fact at all: the control refuses on the line, and the record stays
@@ -512,9 +532,11 @@ describe("the permanent Message line", () => {
 					"the refusal on the line",
 				);
 			},
-			WIDTH,
-			HEIGHT,
-			{ config: BASE_CONFIG, runner: new FakeRunner(), initialTickets: SAMPLE_TICKETS },
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				props: { config: BASE_CONFIG, runner: new FakeRunner(), initialTickets: SAMPLE_TICKETS },
+			},
 		);
 	});
 
@@ -546,17 +568,19 @@ describe("the permanent Message line", () => {
 					"the typed character to replace the selection",
 				);
 			},
-			WIDTH,
-			HEIGHT,
 			{
-				config: {
-					...BASE_CONFIG,
-					consultationTypes: {
-						grill: { agent: "claude", environment: "live-worktree", template: "/grill {input}" },
+				width: WIDTH,
+				height: HEIGHT,
+				props: {
+					config: {
+						...BASE_CONFIG,
+						consultationTypes: {
+							grill: { agent: "claude", environment: "live-worktree", template: "/grill {input}" },
+						},
 					},
+					runner: longLineHandoffRunner(),
+					initialTickets: SAMPLE_TICKETS,
 				},
-				runner: longLineHandoffRunner(),
-				initialTickets: SAMPLE_TICKETS,
 			},
 		);
 	});
@@ -599,9 +623,11 @@ describe("the permanent Message line", () => {
 				await closeOverlay(setup, "Message view", "the view to close");
 				expect(messageRowOf(await settle(setup)).trim()).toBe("Error: error: the daemon is down");
 			},
-			WIDTH,
-			HEIGHT,
-			{ config: BASE_CONFIG, runner, initialTickets: [WORKING_TICKET] },
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				props: { config: BASE_CONFIG, runner, initialTickets: [WORKING_TICKET] },
+			},
 		);
 	});
 
@@ -657,12 +683,14 @@ describe("the permanent Message line", () => {
 				);
 				expect(refused).not.toContain("auto-handoff is on");
 			},
-			WIDTH,
-			HEIGHT,
 			{
-				config: BASE_CONFIG,
-				runner: new FakeRunner(),
-				initialTickets: SAMPLE_TICKETS,
+				width: WIDTH,
+				height: HEIGHT,
+				props: {
+					config: BASE_CONFIG,
+					runner: new FakeRunner(),
+					initialTickets: SAMPLE_TICKETS,
+				},
 			},
 		);
 	});
@@ -728,11 +756,21 @@ describe("the permanent Message line", () => {
 				await closeOverlay(setup, "Message view", "the view to close", "F2");
 				expect(messageRowOf(setup.captureCharFrame())).toContain("the daemon refused");
 			},
-			WIDTH,
-			HEIGHT,
-			{ config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				props: { config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+			},
 		);
 	});
+
+	/** The Close hint one bar of this width must name, or none when no key fits. */
+	function closeBarWord(width: number): string {
+		if (width >= 12) return "Esc/F2 Close";
+		if (width >= 3) return "Esc";
+		if (width === 2) return "F2";
+		return "";
+	}
 
 	test("its bar names the Close control down to one whole key", async () => {
 		const runner = new FakeRunner();
@@ -755,10 +793,9 @@ describe("the permanent Message line", () => {
 					const rows = rowsOf(await settle(setup));
 					for (const row of rows) expect(widthOf(row)).toBe(width);
 					const bar = barRowOf(rows);
-					if (width >= 12) expect(bar).toContain("Esc/F2 Close");
-					else if (width >= 3) expect(bar).toContain("Esc");
-					else if (width === 2) expect(bar).toContain("F2");
-					else expect(bar).toBe("");
+					const word = closeBarWord(width);
+					if (word === "") expect(bar).toBe("");
+					else expect(bar).toContain(word);
 				}
 				// The row is the surface's own again at a usable width.
 				setup.resize(30, 8);
@@ -770,9 +807,11 @@ describe("the permanent Message line", () => {
 				await closeOverlay(setup, "Message view", "the view to close");
 				expect(actionBarRowOf(await settle(setup))).toContain("Help");
 			},
-			WIDTH,
-			HEIGHT,
-			{ config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				props: { config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+			},
 		);
 	});
 
@@ -789,9 +828,15 @@ describe("the permanent Message line", () => {
 					truncateToWidth(`Error: ${LONG_LINE}`, WIDTH),
 				);
 			},
-			WIDTH,
-			HEIGHT,
-			{ config: BASE_CONFIG, runner: longLineHandoffRunner(), initialTickets: SAMPLE_TICKETS },
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				props: {
+					config: BASE_CONFIG,
+					runner: longLineHandoffRunner(),
+					initialTickets: SAMPLE_TICKETS,
+				},
+			},
 		);
 
 		// Question mark.
@@ -805,9 +850,15 @@ describe("the permanent Message line", () => {
 					truncateToWidth(`Error: ${LONG_LINE}`, WIDTH),
 				);
 			},
-			WIDTH,
-			HEIGHT,
-			{ config: BASE_CONFIG, runner: longLineHandoffRunner(), initialTickets: SAMPLE_TICKETS },
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				props: {
+					config: BASE_CONFIG,
+					runner: longLineHandoffRunner(),
+					initialTickets: SAMPLE_TICKETS,
+				},
+			},
 		);
 	});
 
@@ -824,9 +875,15 @@ describe("the permanent Message line", () => {
 				expect(rows[8]).toBe(padToWidth(truncateToWidth(`Error: ${LONG_LINE}`, 25), 25));
 				expect(rows[9].trim()).toBe("? Help");
 			},
-			WIDTH,
-			HEIGHT,
-			{ config: BASE_CONFIG, runner: longLineHandoffRunner(), initialTickets: SAMPLE_TICKETS },
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				props: {
+					config: BASE_CONFIG,
+					runner: longLineHandoffRunner(),
+					initialTickets: SAMPLE_TICKETS,
+				},
+			},
 		);
 
 		// Warning: no important line - warnings are not important below the
@@ -844,9 +901,11 @@ describe("the permanent Message line", () => {
 					padToWidth(truncateToWidth("Warning: no Ticket sources exist", 25), 25),
 				);
 			},
-			WIDTH,
-			HEIGHT,
-			{ config: BASE_CONFIG, runner: new FakeRunner(), initialTickets: SAMPLE_TICKETS },
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				props: { config: BASE_CONFIG, runner: new FakeRunner(), initialTickets: SAMPLE_TICKETS },
+			},
 		);
 	});
 
@@ -864,9 +923,11 @@ describe("the permanent Message line", () => {
 				setup.resize(WIDTH, HEIGHT);
 				expect(messageRowOf(await settle(setup))).toContain("no Ticket sources exist");
 			},
-			WIDTH,
-			HEIGHT,
-			{ config: BASE_CONFIG, runner: new FakeRunner(), initialTickets: SAMPLE_TICKETS },
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				props: { config: BASE_CONFIG, runner: new FakeRunner(), initialTickets: SAMPLE_TICKETS },
+			},
 		);
 
 		// Error round trip: the truncation and the hint return with the width.
@@ -884,9 +945,15 @@ describe("the permanent Message line", () => {
 				);
 				expect(actionBarRowOf(frame)).toContain("m Message");
 			},
-			WIDTH,
-			HEIGHT,
-			{ config: BASE_CONFIG, runner: longLineHandoffRunner(), initialTickets: SAMPLE_TICKETS },
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				props: {
+					config: BASE_CONFIG,
+					runner: longLineHandoffRunner(),
+					initialTickets: SAMPLE_TICKETS,
+				},
+			},
 		);
 	});
 
@@ -945,9 +1012,11 @@ describe("the permanent Message line", () => {
 					);
 					expect(frameText(frame)).toContain("waiting: 0");
 				},
-				WIDTH,
-				HEIGHT,
-				{ config: cappedConfig, state, runner, sources: [source] },
+				{
+					width: WIDTH,
+					height: HEIGHT,
+					props: { config: cappedConfig, state, runner, sources: [source] },
+				},
 			);
 		} finally {
 			state.close();
@@ -1027,9 +1096,11 @@ describe("the permanent Message line", () => {
 						);
 					}
 				},
-				WIDTH,
-				HEIGHT,
-				{ config: issuesConfig, state, sources: [source], runner },
+				{
+					width: WIDTH,
+					height: HEIGHT,
+					props: { config: issuesConfig, state, sources: [source], runner },
+				},
 			);
 		} finally {
 			state.close();
@@ -1060,9 +1131,7 @@ describe("the permanent Message line", () => {
 					source.settle(success([issueTicket()]));
 					await awaitFrame(setup, (f) => messageRowOf(f).trim() === "", "the line to clear");
 				},
-				WIDTH,
-				HEIGHT,
-				{ config: issuesConfig, state, sources: [source] },
+				{ width: WIDTH, height: HEIGHT, props: { config: issuesConfig, state, sources: [source] } },
 			);
 		} finally {
 			state.close();
@@ -1090,9 +1159,11 @@ describe("the permanent Message line", () => {
 					expect(spanColorAt(setup, row, historyTimeOf(rows[row]))).toEqual([255, 255, 255]);
 					expect(spanColorAt(setup, row, "no Ticket sources exist")).toEqual([255, 255, 255]);
 				},
-				WIDTH,
-				HEIGHT,
-				{ config: BASE_CONFIG, runner: new FakeRunner(), initialTickets: SAMPLE_TICKETS },
+				{
+					width: WIDTH,
+					height: HEIGHT,
+					props: { config: BASE_CONFIG, runner: new FakeRunner(), initialTickets: SAMPLE_TICKETS },
+				},
 			);
 		} finally {
 			// The worker's environment is shared with the files that run

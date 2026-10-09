@@ -159,7 +159,9 @@ function seedConsultation(
 		workspaceId: `ws-${id.slice(0, 8)}`,
 		sessionId: `sess-${id.slice(0, 8)}`,
 	});
-	state.consultationRecord.settleConsultationTurn(id, null, "the design holds", "idle");
+	state.consultationRecord.settleConsultationTurn(id, null, "the design holds", {
+		settledStatus: "idle",
+	});
 }
 
 const uid = (lead: string) => `${lead.repeat(8)}-1111-4111-8111-111111111111`;
@@ -314,11 +316,16 @@ const consultMarkerRowOf = (frame: string): number => {
 const booted = (
 	body: Parameters<typeof withApp>[0],
 	state: FactoryState,
-	options: { sources?: readonly TicketSource[]; config?: FactoryConfig } = {},
-	width = WIDTH,
-	height = 32,
-	runner: CommandRunner = emptyAgentRunner(),
-): Promise<void> => withApp(body, width, height, { state, config, home, runner, ...options });
+	fields: {
+		options?: { sources?: readonly TicketSource[]; config?: FactoryConfig };
+		width?: number;
+		height?: number;
+		runner?: CommandRunner;
+	} = {},
+): Promise<void> => {
+	const { options = {}, width = WIDTH, height = 32, runner = emptyAgentRunner() } = fields;
+	return withApp(body, { width, height, props: { state, config, home, runner, ...options } });
+};
 
 describe("the merged Main view", () => {
 	test("one frame holds both sections, one shared detail pane, and the steady Ticket counts", async () => {
@@ -346,12 +353,14 @@ describe("the merged Main view", () => {
 				// the bar names the toggle.
 				expect(actionBarRowOf(frame)).toContain("x Section");
 			},
-			WIDTH,
-			32,
 			{
-				config: BASE_CONFIG,
-				runner: emptyAgentRunner(),
-				initialTickets: SAMPLE_TICKETS,
+				width: WIDTH,
+				height: 32,
+				props: {
+					config: BASE_CONFIG,
+					runner: emptyAgentRunner(),
+					initialTickets: SAMPLE_TICKETS,
+				},
 			},
 		);
 	});
@@ -367,12 +376,14 @@ describe("the merged Main view", () => {
 					"▾ Tickets  open: 5  running: 2  awaiting: 1",
 				);
 			},
-			WIDTH,
-			32,
 			{
-				config: BASE_CONFIG,
-				runner: emptyAgentRunner(),
-				initialTickets: SAMPLE_TICKETS,
+				width: WIDTH,
+				height: 32,
+				props: {
+					config: BASE_CONFIG,
+					runner: emptyAgentRunner(),
+					initialTickets: SAMPLE_TICKETS,
+				},
 			},
 		);
 		// The same ticket with a held turn (a failed end, no decision yet) is
@@ -390,12 +401,14 @@ describe("the merged Main view", () => {
 					"▾ Tickets  open: 5  running: 2  awaiting: 1  held: 1",
 				);
 			},
-			WIDTH,
-			32,
 			{
-				config: BASE_CONFIG,
-				runner: emptyAgentRunner(),
-				initialTickets: [...SAMPLE_TICKETS.slice(0, 3), held, ...SAMPLE_TICKETS.slice(4)],
+				width: WIDTH,
+				height: 32,
+				props: {
+					config: BASE_CONFIG,
+					runner: emptyAgentRunner(),
+					initialTickets: [...SAMPLE_TICKETS.slice(0, 3), held, ...SAMPLE_TICKETS.slice(4)],
+				},
 			},
 		);
 	});
@@ -412,12 +425,14 @@ describe("the merged Main view", () => {
 					"▾ Tickets  open 5  running 2  awaiting 1",
 				);
 			},
-			59,
-			27,
 			{
-				config: BASE_CONFIG,
-				runner: emptyAgentRunner(),
-				initialTickets: SAMPLE_TICKETS,
+				width: 59,
+				height: 27,
+				props: {
+					config: BASE_CONFIG,
+					runner: emptyAgentRunner(),
+					initialTickets: SAMPLE_TICKETS,
+				},
 			},
 		);
 		// At the minimum frame the same row holds the same text, edge to
@@ -429,12 +444,14 @@ describe("the merged Main view", () => {
 					"▾ Tickets  open 5  running 2  awaiting 1",
 				);
 			},
-			40,
-			27,
 			{
-				config: BASE_CONFIG,
-				runner: emptyAgentRunner(),
-				initialTickets: SAMPLE_TICKETS,
+				width: 40,
+				height: 27,
+				props: {
+					config: BASE_CONFIG,
+					runner: emptyAgentRunner(),
+					initialTickets: SAMPLE_TICKETS,
+				},
 			},
 		);
 	});
@@ -456,12 +473,14 @@ describe("the merged Main view", () => {
 					"▾ Tickets  open 5  running 2  awaiting 1  held 1",
 				);
 			},
-			59,
-			27,
 			{
-				config: BASE_CONFIG,
-				runner: emptyAgentRunner(),
-				initialTickets: [...SAMPLE_TICKETS.slice(0, 3), held, ...SAMPLE_TICKETS.slice(4)],
+				width: 59,
+				height: 27,
+				props: {
+					config: BASE_CONFIG,
+					runner: emptyAgentRunner(),
+					initialTickets: [...SAMPLE_TICKETS.slice(0, 3), held, ...SAMPLE_TICKETS.slice(4)],
+				},
 			},
 		);
 	});
@@ -477,12 +496,14 @@ describe("the merged Main view", () => {
 					"▾ Tickets  open: 0  running: 0  awaiting: 0",
 				);
 			},
-			WIDTH,
-			32,
 			{
-				config: BASE_CONFIG,
-				runner: emptyAgentRunner(),
-				initialTickets: [],
+				width: WIDTH,
+				height: 32,
+				props: {
+					config: BASE_CONFIG,
+					runner: emptyAgentRunner(),
+					initialTickets: [],
+				},
 			},
 		);
 	});
@@ -540,10 +561,12 @@ describe("the merged Main view", () => {
 					expect(restored).toContain("┌─❯ Consultations");
 				},
 				state,
-				{ sources: [source] },
-				WIDTH,
-				32,
-				liveConsultationAgents([uid("c")]),
+				{
+					options: { sources: [source] },
+					width: WIDTH,
+					height: 32,
+					runner: liveConsultationAgents([uid("c")]),
+				},
 			);
 		} finally {
 			source.settle(sampleOutcome());
@@ -592,10 +615,12 @@ describe("the merged Main view", () => {
 					expect(markerRowOf(moved)).toBe(9);
 				},
 				state,
-				{ sources: [source] },
-				WIDTH,
-				32,
-				liveConsultationAgents(ids),
+				{
+					options: { sources: [source] },
+					width: WIDTH,
+					height: 32,
+					runner: liveConsultationAgents(ids),
+				},
 			);
 		} finally {
 			source.settle(sampleOutcome());
@@ -633,10 +658,12 @@ describe("the merged Main view", () => {
 					expect(consultMarkerRowOf(moved)).toBe(12);
 				},
 				state,
-				{ sources: [source] },
-				WIDTH,
-				32,
-				liveConsultationAgents(ids),
+				{
+					options: { sources: [source] },
+					width: WIDTH,
+					height: 32,
+					runner: liveConsultationAgents(ids),
+				},
 			);
 		} finally {
 			source.settle(sampleOutcome());
@@ -703,7 +730,7 @@ describe("the merged Main view", () => {
 					expect(messageRowOf(refreshed)).not.toContain("refreshing 0 sources");
 				},
 				state,
-				{ config: noSource },
+				{ options: { config: noSource } },
 			);
 		} finally {
 			state.close();
@@ -727,7 +754,7 @@ describe("the merged Main view", () => {
 					source.settle(sampleOutcome());
 				},
 				state,
-				{ sources: [source] },
+				{ options: { sources: [source] } },
 			);
 		} finally {
 			source.settle(sampleOutcome());
@@ -788,9 +815,7 @@ describe("the merged Main view", () => {
 					expect(rowsOf(frame)).toHaveLength(32);
 				},
 				state,
-				{},
-				64,
-				32,
+				{ options: {}, width: 64, height: 32 },
 			);
 		} finally {
 			state.close();
@@ -875,9 +900,17 @@ describe("the merged Main view", () => {
 					expect(view).toContain("[consultation-types.");
 					expect(view).toContain("to the config file");
 				},
-				60,
-				27,
-				{ state, config: narrowConfig, home, runner: emptyAgentRunner(), sources: [source] },
+				{
+					width: 60,
+					height: 27,
+					props: {
+						state,
+						config: narrowConfig,
+						home,
+						runner: emptyAgentRunner(),
+						sources: [source],
+					},
+				},
 			);
 		} finally {
 			source.settle(sampleOutcome());
@@ -918,9 +951,7 @@ describe("the merged Main view", () => {
 					expect(rowsOf(collapsed).at(-3)).toContain("└─");
 				},
 				state,
-				undefined,
-				40,
-				26,
+				{ options: undefined, width: 40, height: 26 },
 			);
 		} finally {
 			state.close();
@@ -1027,10 +1058,12 @@ describe("the merged Main view", () => {
 					expect(messageRowOf(ticketRefusal)).toContain("only in the Ticket section");
 				},
 				state,
-				undefined,
-				WIDTH,
-				32,
-				liveConsultationAgents([uid("r")]),
+				{
+					options: undefined,
+					width: WIDTH,
+					height: 32,
+					runner: liveConsultationAgents([uid("r")]),
+				},
 			);
 		} finally {
 			state.close();
@@ -1147,10 +1180,12 @@ describe("the merged Main view", () => {
 					expect(window.filter((row) => row.includes("? Help"))).toHaveLength(1);
 				},
 				state,
-				undefined,
-				WIDTH,
-				32,
-				liveConsultationAgents([uid("3")]),
+				{
+					options: undefined,
+					width: WIDTH,
+					height: 32,
+					runner: liveConsultationAgents([uid("3")]),
+				},
 			);
 		} finally {
 			state.close();
@@ -1182,7 +1217,7 @@ describe("the merged Main view", () => {
 					expect(back).toContain("Fix pan drift");
 				},
 				state,
-				{ sources: [source] },
+				{ options: { sources: [source] } },
 			);
 		} finally {
 			source.settle(sampleOutcome());
@@ -1297,10 +1332,12 @@ describe("the merged Main view", () => {
 				await body(setup);
 			},
 			state,
-			{ sources: [source] },
-			WIDTH,
-			27,
-			liveConsultationAgents([uid("t")]),
+			{
+				options: { sources: [source] },
+				width: WIDTH,
+				height: 27,
+				runner: liveConsultationAgents([uid("t")]),
+			},
 		).finally(() => {
 			source.settle(outcome);
 			state.close();
@@ -1372,9 +1409,7 @@ describe("the merged Main view", () => {
 					);
 					expect(headerOf(collapsedBell, "Consultations").startsWith("▸")).toBe(true);
 				},
-				WIDTH,
-				32,
-				{ state, config, home, runner, pollIntervalMs: 50 },
+				{ width: WIDTH, height: 32, props: { state, config, home, runner, pollIntervalMs: 50 } },
 			);
 		} finally {
 			state.close();
@@ -1426,9 +1461,7 @@ describe("the merged Main view", () => {
 					);
 					expect(headerOf(collapsed, "Consultations")).toContain("new output");
 				},
-				160,
-				32,
-				{ state, config, home, runner },
+				{ width: 160, height: 32, props: { state, config, home, runner } },
 			);
 		} finally {
 			state.close();

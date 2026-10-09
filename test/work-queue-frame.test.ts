@@ -150,7 +150,11 @@ function forceDispatchApp(fixture: ReturnType<typeof forcedFixture>) {
 		if (!result.ok) throw new Error(result.reason);
 	};
 	const boot = (body: Parameters<typeof withApp>[0]): Promise<void> =>
-		withApp(body, WIDTH, 34, { state, config, home, runner, sources: [source] });
+		withApp(body, {
+			width: WIDTH,
+			height: 34,
+			props: { state, config, home, runner, sources: [source] },
+		});
 	return { enqueue, boot };
 }
 
@@ -234,19 +238,22 @@ const zeroSeatConfig: FactoryConfig = {
 const booted = (
 	body: Parameters<typeof withApp>[0],
 	state: FactoryState,
-	source: FakeSource,
-	runner: CommandRunner,
-	logger?: Logger,
-	width: number = WIDTH,
-): Promise<void> =>
-	withApp(body, width, 34, {
-		state,
-		config: zeroSeatConfig,
-		home,
-		runner,
-		sources: [source],
-		...(logger === undefined ? {} : { logger }),
+	fields: { source: FakeSource; runner: CommandRunner; logger?: Logger; width?: number },
+): Promise<void> => {
+	const { source, runner, logger, width = WIDTH } = fields;
+	return withApp(body, {
+		width,
+		height: 34,
+		props: {
+			state,
+			config: zeroSeatConfig,
+			home,
+			runner,
+			sources: [source],
+			...(logger === undefined ? {} : { logger }),
+		},
 	});
+};
 
 /** The terminal row of the Work section's header, or -1 while it is hidden. */
 const workHeaderRow = (frame: string): number =>
@@ -332,8 +339,7 @@ describe("the Work queue section", () => {
 					expect(detailPaneText(setup.captureCharFrame())).toContain("Origin: workflow");
 				},
 				state,
-				source,
-				runner,
+				{ source: source, runner: runner },
 			);
 		} finally {
 			state.close();
@@ -377,8 +383,7 @@ describe("the Work queue section", () => {
 					pauseSpy.mockRestore();
 				},
 				state,
-				source,
-				runner,
+				{ source: source, runner: runner },
 			);
 		} finally {
 			state.close();
@@ -437,14 +442,16 @@ describe("the Work queue section", () => {
 					expect(state.workQueue.queuePaused()).toBe(false);
 				},
 				state,
-				source,
-				runner,
-				undefined,
-				// Wide enough for the queue's keys beside the Message hint: the
-				// pause's own outcome is a recorded fact (ADR 0119), so the bar
-				// carries `m Message` with it, and this test reads its key's
-				// hint there.
-				170,
+				{
+					source: source,
+					runner: runner,
+					logger: undefined,
+					width: // Wide enough for the queue's keys beside the Message hint: the
+						// pause's own outcome is a recorded fact (ADR 0119), so the bar
+						// carries `m Message` with it, and this test reads its key's
+						// hint there.
+						170,
+				},
 			);
 		} finally {
 			state.close();
@@ -487,9 +494,7 @@ describe("the Work queue section", () => {
 					]);
 				},
 				state,
-				source,
-				runner,
-				recordLogger(lines),
+				{ source: source, runner: runner, logger: recordLogger(lines) },
 			);
 		} finally {
 			state.close();
@@ -544,9 +549,7 @@ describe("the Work queue section", () => {
 					expect(stated[0]?.message).toContain(state.path);
 				},
 				state,
-				source,
-				runner,
-				recordLogger(lines),
+				{ source: source, runner: runner, logger: recordLogger(lines) },
 			);
 		} finally {
 			state.close();
@@ -602,8 +605,7 @@ describe("the Work queue section", () => {
 					expect(state.workQueue.queuePaused()).toBe(true);
 				},
 				state,
-				source,
-				runner,
+				{ source: source, runner: runner },
 			);
 		} finally {
 			state.close();
@@ -647,8 +649,7 @@ describe("the Work queue section", () => {
 					expect(expanded).toContain("▾ Work");
 				},
 				state,
-				source,
-				runner,
+				{ source: source, runner: runner },
 			);
 		} finally {
 			state.close();
@@ -684,8 +685,7 @@ describe("the Work queue section", () => {
 					expect(messageRowOf(pressed)).toBe(messageRowOf(before));
 				},
 				state,
-				source,
-				runner,
+				{ source: source, runner: runner },
 			);
 		} finally {
 			state.close();
@@ -713,8 +713,7 @@ describe("the Work queue section", () => {
 					expect(frameText(frame)).toContain("waiting: 0");
 				},
 				state,
-				source,
-				runner,
+				{ source: source, runner: runner },
 			);
 		} finally {
 			state.close();
@@ -755,8 +754,7 @@ describe("the Work queue section", () => {
 					expect(detailPaneText(settled)).toContain("no queue item is selected");
 				},
 				state,
-				source,
-				runner,
+				{ source: source, runner: runner },
 			);
 		} finally {
 			state.close();
@@ -803,8 +801,7 @@ describe("the Work queue section", () => {
 					expect(settled).not.toContain("┌─❯ Work queue");
 				},
 				state,
-				source,
-				runner,
+				{ source: source, runner: runner },
 			);
 		} finally {
 			state.close();
@@ -877,8 +874,7 @@ describe("the Work queue section", () => {
 					expect(ticket?.state).toBe("open");
 				},
 				state,
-				source,
-				runner,
+				{ source: source, runner: runner },
 			);
 		} finally {
 			state.close();
@@ -933,8 +929,7 @@ describe("the Work queue section", () => {
 					expect(ticket?.state).toBe("open");
 				},
 				state,
-				source,
-				runner,
+				{ source: source, runner: runner },
 			);
 		} finally {
 			state.close();
@@ -995,8 +990,7 @@ describe("the Work queue section", () => {
 					expect(state.workQueue.items().map(workQueueIdentityOf)).toEqual([SECOND]);
 				},
 				state,
-				source,
-				runner,
+				{ source: source, runner: runner },
 			);
 		} finally {
 			state.close();
@@ -1041,8 +1035,7 @@ describe("the Work queue section", () => {
 					expect(detailPaneText(expanded)).toContain("place 1 of 2");
 				},
 				state,
-				source,
-				runner,
+				{ source: source, runner: runner },
 			);
 		} finally {
 			state.close();
@@ -1126,8 +1119,7 @@ describe("the Work queue section", () => {
 					expect(frameText(returned)).toContain("open: 2 running: 0 awaiting: 0");
 				},
 				state,
-				source,
-				runner,
+				{ source: source, runner: runner },
 			);
 		} finally {
 			state.close();
@@ -1151,7 +1143,7 @@ describe("the Work queue section", () => {
 		// the decision records at the ask and ends the source's cycle in the
 		// same write, so the source rests open. The second ticket's own
 		// durable claim holds the factory's one seat, so the route waits.
-		const attemptId = seedAwaitingTurn(state, outcome, FIRST);
+		const attemptId = seedAwaitingTurn(state, outcome, { identity: FIRST });
 		expect(
 			state.ticketWorkCycle.applyCompletionDecision({
 				ticketIdentity: FIRST,
@@ -1194,8 +1186,7 @@ describe("the Work queue section", () => {
 					expect(positionRow).toContain("[queued]");
 				},
 				state,
-				source,
-				runner,
+				{ source: source, runner: runner },
 			);
 		} finally {
 			state.close();
@@ -1241,8 +1232,7 @@ describe("the Work queue section", () => {
 					expect(detailPaneText(restored)).toContain("place 1 of 2");
 				},
 				state,
-				source,
-				runner,
+				{ source: source, runner: runner },
 			);
 		} finally {
 			state.close();
@@ -1284,8 +1274,7 @@ describe("the Work queue section", () => {
 					expect(detailPaneText(frame)).toContain("Origin: workflow");
 				},
 				state,
-				source,
-				runner,
+				{ source: source, runner: runner },
 			);
 		} finally {
 			state.close();
@@ -1312,19 +1301,22 @@ describe("the Work queue section", () => {
 		// seat, so the route's item waits in the queue. The settled turn's
 		// transition carries the route the ask decides, which the Delete's
 		// mark lands on.
-		const attemptId = seedAwaitingTurn(state, outcome, FIRST, {
-			fired: true,
-			when: null,
-			reason: "",
-			ticketFacts: [],
-			pullRequestFacts: [],
-			ticketWrite: null,
-			pullRequestWrite: null,
-			pullRequestIdentity: null,
-			pullRequestKey: null,
-			writeFailure: "",
-			positionTaskType: "implement",
-			positionTicketIdentity: SECOND,
+		const attemptId = seedAwaitingTurn(state, outcome, {
+			identity: FIRST,
+			transition: {
+				fired: true,
+				when: null,
+				reason: "",
+				ticketFacts: [],
+				pullRequestFacts: [],
+				ticketWrite: null,
+				pullRequestWrite: null,
+				pullRequestIdentity: null,
+				pullRequestKey: null,
+				writeFailure: "",
+				positionTaskType: "implement",
+				positionTicketIdentity: SECOND,
+			},
 		});
 		expect(
 			state.ticketWorkCycle.applyCompletionDecision({
@@ -1397,8 +1389,7 @@ describe("the Work queue section", () => {
 					expect(state.ticketWorkCycle.lastCompletion(FIRST)?.transition?.routeRemoved).toBe(true);
 				},
 				state,
-				source,
-				runner,
+				{ source: source, runner: runner },
 			);
 		} finally {
 			state.close();
@@ -1477,8 +1468,7 @@ describe("the Work queue section", () => {
 					expect(frameText(silent)).toContain("waiting: 2");
 				},
 				state,
-				source,
-				runner,
+				{ source: source, runner: runner },
 			);
 			expect(state.workQueue.items().length).toBe(2);
 		} finally {
@@ -1529,8 +1519,7 @@ describe("the Work queue section", () => {
 					expect(state.workQueue.items().map(workQueueIdentityOf)).toEqual([SECOND]);
 				},
 				state,
-				source,
-				runner,
+				{ source: source, runner: runner },
 			);
 		} finally {
 			state.close();
@@ -1557,19 +1546,22 @@ describe("the Work queue section", () => {
 		// factory's one seat with a live agent.
 		// The settled turn's transition wrote the review position on this
 		// ticket: the decision modal offers the handoff from it (ADR 0027).
-		seedAwaitingTurn(state, outcome, FIRST, {
-			fired: true,
-			when: null,
-			reason: "",
-			ticketFacts: [],
-			pullRequestFacts: [],
-			ticketWrite: null,
-			pullRequestWrite: null,
-			pullRequestIdentity: null,
-			pullRequestKey: null,
-			writeFailure: "",
-			positionTaskType: "review",
-			positionTicketIdentity: FIRST,
+		seedAwaitingTurn(state, outcome, {
+			identity: FIRST,
+			transition: {
+				fired: true,
+				when: null,
+				reason: "",
+				ticketFacts: [],
+				pullRequestFacts: [],
+				ticketWrite: null,
+				pullRequestWrite: null,
+				pullRequestIdentity: null,
+				pullRequestKey: null,
+				writeFailure: "",
+				positionTaskType: "review",
+				positionTicketIdentity: FIRST,
+			},
 		});
 		const held = state.handoff.claimHandoff(
 			SECOND,
@@ -1632,9 +1624,7 @@ describe("the Work queue section", () => {
 					// the queue, not when a seat frees it.
 					expect(state.ticketWorkCycle.lastCompletion(FIRST)?.decision).toBe("handed-off");
 				},
-				WIDTH,
-				34,
-				{ state, config, home, runner, sources: [source] },
+				{ width: WIDTH, height: 34, props: { state, config, home, runner, sources: [source] } },
 			);
 		} finally {
 			state.close();
@@ -1808,8 +1798,7 @@ describe("the Work queue section", () => {
 					expect(workHeaderRow(empty)).toBeGreaterThanOrEqual(0);
 				},
 				state,
-				source,
-				runner,
+				{ source: source, runner: runner },
 			);
 		} finally {
 			state.close();
@@ -1846,8 +1835,7 @@ describe("the Work queue section", () => {
 					expect(frameText(up)).not.toContain("nowhere to move");
 				},
 				state,
-				source,
-				runner,
+				{ source: source, runner: runner },
 			);
 		} finally {
 			state.close();

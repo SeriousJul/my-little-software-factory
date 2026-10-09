@@ -342,6 +342,79 @@ interface SharedFieldProps {
  * so a fix to the caret or to paste safety reaches the override panel, the
  * Consultation launcher, and the response editor together.
  */
+/** Refuse one edit before it reaches the buffer. */
+function useRefuseEdit(
+	onRefuse: ((reason: string) => void) | undefined,
+	setRefusal: (reason: string | null) => void,
+): (event: { preventDefault?: () => void }, reason: string) => void {
+	// Nothing has to be put back, because nothing was taken: the value, the
+	// caret, the selection, and the undo history all stay as the operator left
+	// them. The field states the reason in its own written line, and the surface
+	// that holds it may repeat the reason in its own words.
+	return useCallback(
+		(event: { preventDefault?: () => void }, reason: string) => {
+			event.preventDefault?.();
+			setRefusal(reason);
+			onRefuse?.(reason);
+		},
+		[onRefuse, setRefusal],
+	);
+}
+
+/** The cells the field has free, or `null` when it states no limit. */
+function useFreeCells(
+	node: RefObject<FieldNode | null>,
+	limit: number | undefined,
+): () => number | null {
+	// A selection is text the next edit replaces, so its cells are free ones:
+	// what the operator sees selected is what an edit would take.
+	return useCallback((): number | null => {
+		if (limit === undefined) return null;
+		const field = node.current;
+		if (field === null) return limit;
+		const replaced = field.hasSelection() ? nodeSelection(field).length : 0;
+		return Math.max(0, limit - (field.plainText.length - replaced));
+	}, [limit, node]);
+}
+
+/** The field's stable handle: the methods that read the node when they run. */
+function useFieldHandle(node: RefObject<FieldNode | null>): FieldHandle {
+	const renderer = useRenderer();
+	// The handle is one stable object whose methods read the node when they run,
+	// so a render writes nothing: React discards a render it never commits, and
+	// a handle written during one would point at a field nobody painted.
+	return useMemo<FieldHandle>(
+		() => ({
+			value: () => nodeValue(node.current),
+			caret: () => node.current?.cursorOffset ?? 0,
+			selection: () => nodeSelection(node.current),
+			hasSelection: () => nodeSelection(node.current) !== "",
+			copySelection: () => {
+				const text = nodeSelection(node.current);
+				if (text === "") return { kind: "empty", reason: COPY_EMPTY_REASON };
+				if (!renderer.copyToClipboardOSC52(text)) {
+					return { kind: "unsupported", text, reason: COPY_REFUSED_REASON };
+				}
+				return {
+					kind: "copied",
+					text,
+					reason: `Copied ${widthOf(text)} cells of selected text`,
+				};
+			},
+			focus: () => node.current?.focus(),
+			blur: () => node.current?.blur(),
+			setValue: (value: string) => {
+				const field = node.current;
+				if (field === null) return;
+				field.setText(value);
+				field.cursorOffset = Math.min(value.length, field.cursorOffset);
+				field.requestRender();
+			},
+		}),
+		[node, renderer],
+	);
+}
+
 function useFieldEditing(
 	node: RefObject<FieldNode | null>,
 	props: {
@@ -363,7 +436,6 @@ function useFieldEditing(
 	refusal: string | null;
 	handle: FieldHandle;
 } {
-	const renderer = useRenderer();
 	// The reason of the edit the field just refused. It is the field's own news,
 	// so the field states it: a caller that also puts it on its Message line is
 	// repeating it in its own words, not carrying it instead.
@@ -380,37 +452,8 @@ function useFieldEditing(
 	const words = props.refusals ?? PLAIN_REFUSALS;
 	const sizeWords = limit === undefined ? null : limitRefusals(limit);
 
-	/**
-	 * Refuse one edit before it reaches the buffer.
-	 *
-	 * Nothing has to be put back, because nothing was taken: the value, the
-	 * caret, the selection, and the undo history all stay as the operator left
-	 * them. The field states the reason in its own written line, and the surface
-	 * that holds it may repeat the reason in its own words.
-	 */
-	const refuseEdit = useCallback(
-		(event: { preventDefault?: () => void }, reason: string) => {
-			event.preventDefault?.();
-			setRefusal(reason);
-			onRefuse?.(reason);
-		},
-		[onRefuse],
-	);
-
-	/**
-	 * The cells the field has free, or `null` when it states no limit.
-	 *
-	 * A selection is text the next edit replaces, so its cells are free ones:
-	 * what the operator sees selected is what an edit would take.
-	 */
-	const freeCells = useCallback((): number | null => {
-		if (limit === undefined) return null;
-		const field = node.current;
-		if (field === null) return limit;
-		const replaced = field.hasSelection() ? nodeSelection(field).length : 0;
-		return Math.max(0, limit - (field.plainText.length - replaced));
-	}, [limit, node]);
-
+	const refuseEdit = useRefuseEdit(onRefuse, setRefusal);
+	const freeCells = useFreeCells(node, limit);
 	const keyDown = useCallback(
 		(key: KeyEvent) => {
 			// A modified key is the renderer's own binding, never a character.
@@ -456,54 +499,9 @@ function useFieldEditing(
 		});
 	}, [node, report]);
 
-	const changed = useCallback(() => {
-		const field = node.current;
-		if (field === null) return;
-		// A change that actually took the text ends the refusal: the reason was
-		// about the run that did not go in, and it must not linger under a field
-		// that has moved on. The comparison is with the text the field last
-		// reported, because an event that changed nothing reports nothing.
-		if (field.plainText !== lastText.current) setRefusal(null);
-		lastText.current = field.plainText;
-		const before = field.plainText;
-		const folded = normalize === undefined ? before : normalize(before);
-		if (folded !== before) foldNodeText(field, folded);
-		reportFacts();
-	}, [node, normalize, reportFacts]);
+	const changed = useFieldChanged(node, { normalize, reportFacts, lastText, setRefusal });
 
-	// The handle is one stable object whose methods read the node when they run,
-	// so a render writes nothing: React discards a render it never commits, and
-	// a handle written during one would point at a field nobody painted.
-	const handle = useMemo<FieldHandle>(
-		() => ({
-			value: () => nodeValue(node.current),
-			caret: () => node.current?.cursorOffset ?? 0,
-			selection: () => nodeSelection(node.current),
-			hasSelection: () => nodeSelection(node.current) !== "",
-			copySelection: () => {
-				const text = nodeSelection(node.current);
-				if (text === "") return { kind: "empty", reason: COPY_EMPTY_REASON };
-				if (!renderer.copyToClipboardOSC52(text)) {
-					return { kind: "unsupported", text, reason: COPY_REFUSED_REASON };
-				}
-				return {
-					kind: "copied",
-					text,
-					reason: `Copied ${widthOf(text)} cells of selected text`,
-				};
-			},
-			focus: () => node.current?.focus(),
-			blur: () => node.current?.blur(),
-			setValue: (value: string) => {
-				const field = node.current;
-				if (field === null) return;
-				field.setText(value);
-				field.cursorOffset = Math.min(value.length, field.cursorOffset);
-				field.requestRender();
-			},
-		}),
-		[node, renderer],
-	);
+	const handle = useFieldHandle(node);
 	return { keyDown, paste, changed, reportFacts, refusal, handle };
 }
 
@@ -620,6 +618,182 @@ export interface DraftFieldProps extends SharedFieldProps {
 }
 
 /** The Draft field: the operator's own lines, addressed to an Agent. */
+/**
+ * The operator's own keys on a draft: the edit marker, and the routes that set
+ * it. The marker is set by the field's key and paste routes only, never by a
+ * write the field makes for its caller, so it says exactly what it names: text
+ * the operator typed.
+ */
+function useOperatorEditing(fields: {
+	changed: () => void;
+	keyDown: (key: KeyEvent) => void;
+	paste: (event: PasteEvent) => void;
+	node: RefObject<TextareaRenderable | null>;
+	reported: RefObject<string>;
+}): {
+	content: (event: ContentChangeEvent) => void;
+	operatorKey: (key: KeyEvent) => void;
+	operatorPaste: (event: PasteEvent) => void;
+	edited: RefObject<boolean>;
+} {
+	const { changed, keyDown, paste, node, reported } = fields;
+	const content = useCallback(
+		(_event: ContentChangeEvent) => {
+			changed();
+			reported.current = nodeValue(node.current);
+		},
+		[changed, node, reported],
+	);
+	const edited = useRef(false);
+	const operatorKey = useCallback(
+		(key: KeyEvent) => {
+			edited.current = true;
+			keyDown(key);
+		},
+		[keyDown],
+	);
+	const operatorPaste = useCallback(
+		(event: PasteEvent) => {
+			edited.current = true;
+			paste(event);
+		},
+		[paste],
+	);
+	return { content, operatorKey, operatorPaste, edited };
+}
+
+/**
+ * The caret a draft opens on, decided once at mount.
+ *
+ * A draft the field starts on is the operator's own unfinished text. The caret
+ * opens at its end when the whole draft fits the rows the field was given,
+ * because that is where the next line belongs. A draft larger than the field
+ * opens at its start instead: the visible caret and the next edit must agree,
+ * and a caret parked past the field's last row would point at text the
+ * operator cannot see.
+ */
+function useDraftOpenCaret(node: RefObject<TextareaRenderable | null>, height: number): void {
+	// biome-ignore lint/correctness/useExhaustiveDependencies: the opening caret is a mount decision; the operator's own keys decide where it goes after that, and a resize must never move it
+	useEffect(() => {
+		const field = node.current;
+		if (field === null) return;
+		if (field.virtualLineCount <= Math.max(1, height)) {
+			field.cursorOffset = field.plainText.length;
+		} else {
+			field.gotoBufferHome();
+		}
+		field.requestRender();
+		// The rows are read once at mount: the operator's own keys decide where
+		// the caret goes after that, and a resize never moves it for them.
+	}, []);
+}
+
+/**
+ * Take a draft the caller hands this field, and only before the operator has
+ * written it.
+ *
+ * A draft the field starts on is the caller's text, so the field takes it.
+ * Once the operator's own keys have written the field, its text is the
+ * operator's: a screen that means to give it another draft closes the field
+ * and opens it on the new text, which is the route every restore in the plane
+ * already takes - a reopened response editor, a delivery the Agent refused.
+ *
+ * A screen that stores what the field reports paints that same text back at
+ * the field on its next render, and a render can land after the operator has
+ * typed past it. Writing that older text into the field deletes the keys the
+ * operator just typed, so the field refuses a write it is behind.
+ */
+function useDraftValueSync(
+	node: RefObject<TextareaRenderable | null>,
+	value: string,
+	reported: RefObject<string>,
+	edited: RefObject<boolean>,
+): void {
+	useEffect(() => {
+		const field = node.current;
+		if (field === null || value === reported.current) return;
+		if (edited.current) return;
+		field.setText(value);
+		field.cursorOffset = Math.min(value.length, field.cursorOffset);
+		reported.current = value;
+		field.requestRender();
+	}, [value, node, edited, reported]);
+}
+
+/**
+ * The change a field takes, with the refusal it ends and the fold it applies.
+ */
+function useFieldChanged(
+	node: RefObject<FieldNode | null>,
+	fields: {
+		normalize: ((value: string) => string) | undefined;
+		reportFacts: () => void;
+		lastText: RefObject<string>;
+		setRefusal: (reason: string | null) => void;
+	},
+): () => void {
+	const { normalize, reportFacts, lastText, setRefusal } = fields;
+	return useCallback(() => {
+		const field = node.current;
+		if (field === null) return;
+		// A change that actually took the text ends the refusal: the reason was
+		// about the run that did not go in, and it must not linger under a field
+		// that has moved on. The comparison is with the text the field last
+		// reported, because an event that changed nothing reports nothing.
+		if (field.plainText !== lastText.current) setRefusal(null);
+		lastText.current = field.plainText;
+		const before = field.plainText;
+		const folded = normalize === undefined ? before : normalize(before);
+		if (folded !== before) foldNodeText(field, folded);
+		reportFacts();
+	}, [node, normalize, reportFacts, lastText, setRefusal]);
+}
+
+/** The field's textarea, on its ink. */
+function draftTextareaElement(fields: {
+	props: DraftFieldProps;
+	ink: ControlInk;
+	node: RefObject<TextareaRenderable | null>;
+	tint: string | null;
+	operatorKey: (key: KeyEvent) => void;
+	operatorPaste: (event: PasteEvent) => void;
+	content: (event: ContentChangeEvent) => void;
+	reportFacts: () => void;
+	reported: RefObject<string>;
+}): ReactElement {
+	const { props, ink, node, tint, operatorKey, operatorPaste, content, reportFacts, reported } =
+		fields;
+	return createElement("textarea", {
+		ref: node,
+		width: Math.max(1, props.width),
+		height: Math.max(1, props.height),
+		initialValue: props.value,
+		focused: props.focused && props.inputActive !== false,
+		placeholder: props.placeholder ?? "",
+		placeholderColor: ink.detail.fg ?? undefined,
+		textColor: tint ?? ink.text.fg ?? undefined,
+		focusedTextColor: tint ?? ink.focusedText.fg ?? undefined,
+		backgroundColor: "transparent",
+		focusedBackgroundColor: ink.focusedField.on === "default" ? "transparent" : ink.focusedField.on,
+		cursorColor: ink.indicator.fg ?? undefined,
+		selectionBg: ink.selectionBackground.fg ?? undefined,
+		selectionFg: ink.selectionText.fg ?? undefined,
+		cursorStyle: { style: "line", blinking: false },
+		selectionOccupancy: "boundary",
+		wrapMode: "word",
+		keyBindings: props.onSubmit === undefined ? FIELD_KEY_BINDINGS : DRAFT_SUBMIT_BINDINGS,
+		onKeyDown: operatorKey,
+		onPaste: operatorPaste,
+		onContentChange: content,
+		onCursorChange: () => {
+			reportFacts();
+			reported.current = nodeValue(node.current);
+		},
+		onSubmit:
+			props.onSubmit === undefined ? undefined : () => props.onSubmit?.(nodeValue(node.current)),
+	});
+}
+
 export function DraftField(props: DraftFieldProps): ReactElement {
 	const ink = props.ink ?? controlInk();
 	const node = useRef<TextareaRenderable | null>(null);
@@ -639,73 +813,15 @@ export function DraftField(props: DraftFieldProps): ReactElement {
 			? null
 			: ink.warning.fg;
 	const reported = useRef(props.value);
-	// A draft the field starts on is the operator's own unfinished text. The
-	// caret opens at its end when the whole draft fits the rows the field was
-	// given, because that is where the next line belongs. A draft larger than
-	// the field opens at its start instead: the visible caret and the next edit
-	// must agree, and a caret parked past the field's last row would point at
-	// text the operator cannot see.
-	// biome-ignore lint/correctness/useExhaustiveDependencies: the opening caret is a mount decision; the operator's own keys decide where it goes after that, and a resize must never move it
-	useEffect(() => {
-		const field = node.current;
-		if (field === null) return;
-		if (field.virtualLineCount <= Math.max(1, props.height)) {
-			field.cursorOffset = field.plainText.length;
-		} else {
-			field.gotoBufferHome();
-		}
-		field.requestRender();
-		// The rows are read once at mount: the operator's own keys decide where
-		// the caret goes after that, and a resize never moves it for them.
-	}, []);
-	const content = useCallback(
-		(_event: ContentChangeEvent) => {
-			changed();
-			reported.current = nodeValue(node.current);
-		},
-		[changed],
-	);
-	// Whether the operator's own keys have written this field. The marker is set
-	// by the field's key and paste routes only, never by a write the field makes
-	// for its caller, so it says exactly what it names: text the operator typed.
-	const edited = useRef(false);
-	const operatorKey = useCallback(
-		(key: KeyEvent) => {
-			edited.current = true;
-			keyDown(key);
-		},
-		[keyDown],
-	);
-	const operatorPaste = useCallback(
-		(event: PasteEvent) => {
-			edited.current = true;
-			paste(event);
-		},
-		[paste],
-	);
-	/**
-	 * Take a draft the caller hands this field, and only before the operator has written it.
-	 *
-	 * A draft the field starts on is the caller's text, so the field takes it.
-	 * Once the operator's own keys have written the field, its text is the
-	 * operator's: a screen that means to give it another draft closes the field
-	 * and opens it on the new text, which is the route every restore in the plane
-	 * already takes - a reopened response editor, a delivery the Agent refused.
-	 *
-	 * A screen that stores what the field reports paints that same text back at
-	 * the field on its next render, and a render can land after the operator has
-	 * typed past it. Writing that older text into the field deletes the keys the
-	 * operator just typed, so the field refuses a write it is behind.
-	 */
-	useEffect(() => {
-		const field = node.current;
-		if (field === null || props.value === reported.current) return;
-		if (edited.current) return;
-		field.setText(props.value);
-		field.cursorOffset = Math.min(props.value.length, field.cursorOffset);
-		reported.current = props.value;
-		field.requestRender();
-	}, [props.value]);
+	useDraftOpenCaret(node, props.height);
+	const { content, operatorKey, operatorPaste, edited } = useOperatorEditing({
+		changed,
+		keyDown,
+		paste,
+		node,
+		reported,
+	});
+	useDraftValueSync(node, props.value, reported, edited);
 	return createElement(
 		Fragment,
 		{},
@@ -717,37 +833,16 @@ export function DraftField(props: DraftFieldProps): ReactElement {
 				{ key: "label", style: { flexDirection: "row", height: 1 } },
 				...fieldLabelCells(props, ink),
 			),
-			createElement("textarea", {
-				ref: node,
-				width: Math.max(1, props.width),
-				height: Math.max(1, props.height),
-				initialValue: props.value,
-				focused: props.focused && props.inputActive !== false,
-				placeholder: props.placeholder ?? "",
-				placeholderColor: ink.detail.fg ?? undefined,
-				textColor: tint ?? ink.text.fg ?? undefined,
-				focusedTextColor: tint ?? ink.focusedText.fg ?? undefined,
-				backgroundColor: "transparent",
-				focusedBackgroundColor:
-					ink.focusedField.on === "default" ? "transparent" : ink.focusedField.on,
-				cursorColor: ink.indicator.fg ?? undefined,
-				selectionBg: ink.selectionBackground.fg ?? undefined,
-				selectionFg: ink.selectionText.fg ?? undefined,
-				cursorStyle: { style: "line", blinking: false },
-				selectionOccupancy: "boundary",
-				wrapMode: "word",
-				keyBindings: props.onSubmit === undefined ? FIELD_KEY_BINDINGS : DRAFT_SUBMIT_BINDINGS,
-				onKeyDown: operatorKey,
-				onPaste: operatorPaste,
-				onContentChange: content,
-				onCursorChange: () => {
-					reportFacts();
-					reported.current = nodeValue(node.current);
-				},
-				onSubmit:
-					props.onSubmit === undefined
-						? undefined
-						: () => props.onSubmit?.(nodeValue(node.current)),
+			draftTextareaElement({
+				props,
+				ink,
+				node,
+				tint,
+				operatorKey,
+				operatorPaste,
+				content,
+				reportFacts,
+				reported,
 			}),
 		),
 		...fieldNoteRows(props, ink, oversizeReason, refusal),

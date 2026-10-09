@@ -274,7 +274,9 @@ describe("the shared control library is the only control implementation", () => 
 		// An action row is shared presentation: the marker, the label, the
 		// refusal word, and the ink all come from one place. Each surface that
 		// offers actions must draw them through the shared `ActionItem`, so a
-		// row cannot paint itself in a palette the presentation does not own.
+		// row cannot paint itself in a palette the presentation does not own. A
+		// surface may reach the row through the shared decision-row helper, which
+		// draws the `ActionItem` for the two modal surfaces that share it.
 		const required = [
 			"src/components/action-panel.ts",
 			"src/components/decision-modal.ts",
@@ -285,9 +287,10 @@ describe("the shared control library is the only control implementation", () => 
 		];
 		for (const file of required) {
 			const source = readFileSync(file, "utf8");
-			expect(source, `${file} must draw its action rows through the shared row`).toContain(
-				"ActionItem",
-			);
+			expect(
+				source.includes("ActionItem") || source.includes("decisionActionRows"),
+				`${file} must draw its action rows through the shared row`,
+			).toBe(true);
 		}
 	});
 

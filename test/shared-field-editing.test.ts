@@ -47,9 +47,11 @@ async function withLauncher(
 		async (setup) => {
 			await body(setup, runner);
 		},
-		WIDTH,
-		HEIGHT,
-		{ config: launcherConfig(checkout), runner, initialTickets: [] },
+		{
+			width: WIDTH,
+			height: HEIGHT,
+			props: { config: launcherConfig(checkout), runner, initialTickets: [] },
+		},
 	);
 }
 

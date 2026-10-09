@@ -290,38 +290,45 @@ const DELETE_CODE = 127;
  */
 function screenOf(out: Buffer): string {
 	const text = out.toString("utf8");
-	let screen = "";
+	const parts: string[] = [];
 	let index = 0;
-	while (index < text.length) {
-		const character = text[index] as string;
-		if (character !== ESC) {
-			const code = character.codePointAt(0) ?? 0;
-			if (!(code >= CONTROL_START && code <= CONTROL_END) && code !== DELETE_CODE) {
-				screen += character;
-			}
-			index += 1;
-			continue;
+	while (index < text.length) index = screenCharStep(text, index, parts);
+	return parts.join("");
+}
+
+/** The index one screen character passes to, keeping the character it shows. */
+function screenCharStep(text: string, index: number, parts: string[]): number {
+	const character = text[index] as string;
+	if (character !== ESC) {
+		const code = character.codePointAt(0) ?? 0;
+		if (!(code >= CONTROL_START && code <= CONTROL_END) && code !== DELETE_CODE) {
+			parts.push(character);
 		}
-		const introducer = text[index + 1];
-		let cursor = index + 2;
-		if (introducer === "[") {
-			// A CSI sequence ends at its first alphabetic byte.
-			while (cursor < text.length && !/[A-Za-z]/u.test(text[cursor] as string)) cursor += 1;
-		} else if (introducer === "]" || introducer === "P" || introducer === "_") {
-			// An OSC or device-control string ends at BEL, or at the ST sequence.
-			while (cursor < text.length) {
-				const step = text[cursor] as string;
-				if (step === BEL) break;
-				if (step === ESC && text[cursor + 1] === "\\") {
-					cursor += 1;
-					break;
-				}
-				cursor += 1;
-			}
-		}
-		index = cursor + 1;
+		return index + 1;
 	}
-	return screen;
+	return escapeSequenceEnd(text, index + 1);
+}
+
+/** The index one escape sequence at `introducer` passes to. */
+function escapeSequenceEnd(text: string, index: number): number {
+	const introducer = text[index];
+	let cursor = index + 1;
+	if (introducer === "[") {
+		// A CSI sequence ends at its first alphabetic byte.
+		while (cursor < text.length && !/[A-Za-z]/u.test(text[cursor] as string)) cursor += 1;
+	} else if (introducer === "]" || introducer === "P" || introducer === "_") {
+		// An OSC or device-control string ends at BEL, or at the ST sequence.
+		while (cursor < text.length) {
+			const step = text[cursor] as string;
+			if (step === BEL) break;
+			if (step === ESC && text[cursor + 1] === "\\") {
+				cursor += 1;
+				break;
+			}
+			cursor += 1;
+		}
+	}
+	return cursor + 1;
 }
 
 /** The marker the plane paints in front of the row that holds the keyboard. */

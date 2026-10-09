@@ -18,7 +18,7 @@ import type { PlaneActionAttempt } from "../state/plane-action.ts";
 import type { WorkQueueItem } from "../state/work-queue.ts";
 import type { NextStepGate } from "../workflow.ts";
 import { NEXT_STEP_GATE_LINES } from "../workflow.ts";
-import type { Ticket } from "./ticket.ts";
+import type { Completion, Ticket } from "./ticket.ts";
 import { inFlight, turnTaskType } from "./ticket-facts.ts";
 
 /**
@@ -140,71 +140,96 @@ export function decisionFacts(inputs: DecisionFactInputs): DecisionFacts {
 	const outcome = completion?.transition ?? null;
 	if (outcome === null) return { contextLine, factLines, offer: null };
 
-	// The reason is a visible fact either way: the branch that did not hold, or
-	// the pull-request fact the fire skipped because no linked pull request was
-	// found (ADR 0027).
-	if (outcome.reason !== "") {
-		factLines.push(outcome.fired ? outcome.reason : `no transition branch held: ${outcome.reason}`);
-	}
-	if (outcome.ticketWrite !== null)
-		factLines.push(transitionFactLine("ticket", outcome.ticketWrite));
-	if (outcome.pullRequestWrite !== null && outcome.pullRequestIdentity !== null) {
-		const surface =
-			outcome.pullRequestKey !== null ? `pull request ${outcome.pullRequestKey}` : "pull request";
-		factLines.push(transitionFactLine(surface, outcome.pullRequestWrite));
-	}
-	if (outcome.writeFailure !== "") factLines.push(`label write failed: ${outcome.writeFailure}`);
-
-	let offer: DecisionOffer | null = null;
-	if (outcome.positionTaskType !== null) {
-		// The merged position the transition offers (ADR 0068): the task type
-		// resolves on the plane action, so the row asks for the merge, not for a
-		// handoff. While the route is alive the row reads as the fact line that
-		// names where it stands, and takes no key (ADR 0064). The record settles
-		// only the turn that ran it: it stands while it postdates the turn's
-		// completion, so a blocked merge never hides the re-merge the following
-		// review asks for.
-		const attempt = inputs.position.latestAttempt;
-		const attemptStands = attempt !== null && attempt.at >= (completion?.completedAt ?? "");
-		const standing = routeStandingLine(ticket, outcome, inputs.position.isPlaneAction, inputs);
-		if (standing !== null) {
-			factLines.push(standing);
-		} else if (attemptStands && attempt !== null) {
-			// The outcome stands where the row stood (ADR 0068).
-			factLines.push(
-				attempt.outcome === "merged"
-					? `the merge ${attempt.decision === "auto-merged" ? "ran" : "landed"}`
-					: `the merge was blocked: ${attempt.reason}`,
-			);
-			if (attempt.transition !== null && attempt.transition.pullRequestWrite !== null) {
-				factLines.push(transitionFactLine("pull request", attempt.transition.pullRequestWrite));
-			}
-		} else if (inputs.position.stillListed) {
-			// The position is derived, never stored (ADR 0027): the Ticket it
-			// sits on can leave its source between the fire and the decision. No
-			// list holds such a Ticket, and no task can host on it, so the offer
-			// stands withdrawn.
-			offer = inputs.position.isPlaneAction
-				? { kind: "merge", taskType: outcome.positionTaskType }
-				: { kind: "handoff", taskType: outcome.positionTaskType };
-			// The hold on the machine's own step, stated beside the key the
-			// operator still holds (ADR 0092). The operator's own key passes the
-			// gates, so the row stands and the fact line says what the factory
-			// will not take on its own.
-			if (inputs.nextStepGate !== null) {
-				factLines.push(`the Next step is held: ${NEXT_STEP_GATE_LINES[inputs.nextStepGate]}`);
-			}
-		} else {
-			factLines.push(
-				inputs.position.isPlaneAction
-					? "the position's ticket left its source; no merge stands"
-					: "the position's ticket left its source; no handoff stands",
-			);
-		}
-	}
+	factLines.push(...outcomeFactLines(outcome));
+	// The merged position the transition offers (ADR 0068): the task type
+	// resolves on the plane action, so the row asks for the merge, not for a
+	// handoff. While the route is alive the row reads as the fact line that
+	// names where it stands, and takes no key (ADR 0064). The record settles
+	// only the turn that ran it: it stands while it postdates the turn's
+	// completion, so a blocked merge never hides the re-merge the following
+	// review asks for.
+	const position = positionOutcomeFacts({ ticket, completion, outcome, inputs });
+	if (position !== null) factLines.push(...position.lines);
 
 	// The re-fire row stands on an outcome the fire did not complete (ADR 0054):
 	// no branch held, or the label write failed. A complete outcome states no
 	// fact line here.
-	return { contextLine, factLines, offer };
+	return { contextLine, factLines, offer: position?.offer ?? null };
+}
+
+/** The fact lines one settled outcome states before the position offer. */
+function outcomeFactLines(outcome: TransitionOutcome): string[] {
+	const lines: string[] = [];
+	// The reason is a visible fact either way: the branch that did not hold, or
+	// the pull-request fact the fire skipped because no linked pull request was
+	// found (ADR 0027).
+	if (outcome.reason !== "") {
+		lines.push(outcome.fired ? outcome.reason : `no transition branch held: ${outcome.reason}`);
+	}
+	if (outcome.ticketWrite !== null) lines.push(transitionFactLine("ticket", outcome.ticketWrite));
+	if (outcome.pullRequestWrite !== null && outcome.pullRequestIdentity !== null) {
+		const surface =
+			outcome.pullRequestKey !== null ? `pull request ${outcome.pullRequestKey}` : "pull request";
+		lines.push(transitionFactLine(surface, outcome.pullRequestWrite));
+	}
+	if (outcome.writeFailure !== "") lines.push(`label write failed: ${outcome.writeFailure}`);
+	return lines;
+}
+
+/** The fact lines and offer one position task type's outcome stands as. */
+function positionOutcomeFacts(fields: {
+	ticket: Ticket;
+	completion: Completion | null;
+	outcome: TransitionOutcome;
+	inputs: DecisionFactInputs;
+}): { lines: string[]; offer: DecisionOffer | null } | null {
+	const { ticket, completion, outcome, inputs } = fields;
+	const taskType = outcome.positionTaskType;
+	if (taskType === null) return null;
+	const lines: string[] = [];
+	const attempt = inputs.position.latestAttempt;
+	const attemptStands = attempt !== null && attempt.at >= (completion?.completedAt ?? "");
+	const standing = routeStandingLine(ticket, outcome, inputs.position.isPlaneAction, inputs);
+	if (standing !== null) {
+		lines.push(standing);
+		return { lines, offer: null };
+	}
+	if (attemptStands && attempt !== null) {
+		// The outcome stands where the row stood (ADR 0068).
+		lines.push(mergeAttemptLine(attempt));
+		if (attempt.transition !== null && attempt.transition.pullRequestWrite !== null) {
+			lines.push(transitionFactLine("pull request", attempt.transition.pullRequestWrite));
+		}
+		return { lines, offer: null };
+	}
+	if (inputs.position.stillListed) {
+		// The position is derived, never stored (ADR 0027): the Ticket it
+		// sits on can leave its source between the fire and the decision. No
+		// list holds such a Ticket, and no task can host on it, so the offer
+		// stands withdrawn.
+		const offer: DecisionOffer = inputs.position.isPlaneAction
+			? { kind: "merge", taskType }
+			: { kind: "handoff", taskType };
+		// The hold on the machine's own step, stated beside the key the
+		// operator still holds (ADR 0092). The operator's own key passes the
+		// gates, so the row stands and the fact line says what the factory
+		// will not take on its own.
+		if (inputs.nextStepGate !== null) {
+			lines.push(`the Next step is held: ${NEXT_STEP_GATE_LINES[inputs.nextStepGate]}`);
+		}
+		return { lines, offer };
+	}
+	lines.push(
+		inputs.position.isPlaneAction
+			? "the position's ticket left its source; no merge stands"
+			: "the position's ticket left its source; no handoff stands",
+	);
+	return { lines, offer: null };
+}
+
+/** The one line one merged position attempt states. */
+function mergeAttemptLine(attempt: PlaneActionAttempt): string {
+	return attempt.outcome === "merged"
+		? `the merge ${attempt.decision === "auto-merged" ? "ran" : "landed"}`
+		: `the merge was blocked: ${attempt.reason}`;
 }

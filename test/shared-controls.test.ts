@@ -39,10 +39,13 @@ afterEach(async () => {
 async function withField(
 	element: Parameters<typeof testRender>[0],
 	width: number,
-	height: number,
-	body: (setup: Awaited<ReturnType<typeof testRender>>) => Promise<void>,
-	enhancedKeys = false,
+	fields: {
+		height: number;
+		body: (setup: Awaited<ReturnType<typeof testRender>>) => Promise<void>;
+		enhancedKeys?: boolean;
+	},
 ): Promise<void> {
+	const { height, body, enhancedKeys = false } = fields;
 	const setup = await testRender(element, { width, height, kittyKeyboard: enhancedKeys });
 	await setup.flush();
 	renderer = setup.renderer;
@@ -113,19 +116,21 @@ describe("the shared Draft field", () => {
 				onValueChange,
 			}),
 			50,
-			10,
-			async (setup) => {
-				expect(frameText(setup.captureCharFrame())).toContain("Initial input");
-				setup.mockInput.pressArrow("left");
-				setup.mockInput.pressEnter();
-				await awaitFrame(
-					setup,
-					() =>
-						onValueChange.mock.calls.some(
-							([facts]) => (facts as FieldFacts).value === "review desig\nn",
-						),
-					"Enter to insert a newline at the caret",
-				);
+			{
+				height: 10,
+				body: async (setup) => {
+					expect(frameText(setup.captureCharFrame())).toContain("Initial input");
+					setup.mockInput.pressArrow("left");
+					setup.mockInput.pressEnter();
+					await awaitFrame(
+						setup,
+						() =>
+							onValueChange.mock.calls.some(
+								([facts]) => (facts as FieldFacts).value === "review desig\nn",
+							),
+						"Enter to insert a newline at the caret",
+					);
+				},
 			},
 		);
 	});
@@ -141,51 +146,53 @@ describe("the shared Draft field", () => {
 				fieldRef: field,
 			}),
 			40,
-			6,
-			async (setup) => {
-				await setup.mockInput.typeText("anthropic/sonnet");
-				setup.mockInput.pressKey("HOME");
-				setup.mockInput.pressArrow("right", { shift: true });
-				setup.mockInput.pressArrow("right", { shift: true });
-				setup.mockInput.pressArrow("right", { shift: true });
-				const frame = await awaitFrame(
-					setup,
-					() => field.current?.selection() === "ant",
-					"a three-cell selection",
-				);
-				expect(field.current?.caret()).toBe(3);
-				// A Key guide above the field takes the keys: the editing state the
-				// operator left behind is still there when the field gets them back.
-				field.current?.blur();
-				setup.mockInput.typeText("x");
-				await setup.flush();
-				expect(field.current?.value()).toBe("anthropic/sonnet");
-				field.current?.focus();
-				expect(field.current?.selection()).toBe("ant");
-				expect(field.current?.caret()).toBe(3);
-				// Typing replaces the selected text, and undo gives it back.
-				setup.mockInput.pressKey("q");
-				await awaitFrame(
-					setup,
-					() => field.current?.value() === "qhropic/sonnet",
-					"the typed character to replace the selection",
-				);
-				// Replacing a selection is two operations, so undo steps back
-				// through them one at a time: the character the operator typed, then
-				// the text that character replaced.
-				setup.mockInput.pressKey("z", { ctrl: true });
-				await awaitFrame(
-					setup,
-					() => field.current?.value() === "hropic/sonnet",
-					"undo to take the typed character back out",
-				);
-				setup.mockInput.pressKey("z", { ctrl: true });
-				await awaitFrame(
-					setup,
-					() => field.current?.value() === "anthropic/sonnet",
-					"the second undo to give the replaced text back",
-				);
-				expect(frameText(frame)).toContain("Model");
+			{
+				height: 6,
+				body: async (setup) => {
+					await setup.mockInput.typeText("anthropic/sonnet");
+					setup.mockInput.pressKey("HOME");
+					setup.mockInput.pressArrow("right", { shift: true });
+					setup.mockInput.pressArrow("right", { shift: true });
+					setup.mockInput.pressArrow("right", { shift: true });
+					const frame = await awaitFrame(
+						setup,
+						() => field.current?.selection() === "ant",
+						"a three-cell selection",
+					);
+					expect(field.current?.caret()).toBe(3);
+					// A Key guide above the field takes the keys: the editing state the
+					// operator left behind is still there when the field gets them back.
+					field.current?.blur();
+					setup.mockInput.typeText("x");
+					await setup.flush();
+					expect(field.current?.value()).toBe("anthropic/sonnet");
+					field.current?.focus();
+					expect(field.current?.selection()).toBe("ant");
+					expect(field.current?.caret()).toBe(3);
+					// Typing replaces the selected text, and undo gives it back.
+					setup.mockInput.pressKey("q");
+					await awaitFrame(
+						setup,
+						() => field.current?.value() === "qhropic/sonnet",
+						"the typed character to replace the selection",
+					);
+					// Replacing a selection is two operations, so undo steps back
+					// through them one at a time: the character the operator typed, then
+					// the text that character replaced.
+					setup.mockInput.pressKey("z", { ctrl: true });
+					await awaitFrame(
+						setup,
+						() => field.current?.value() === "hropic/sonnet",
+						"undo to take the typed character back out",
+					);
+					setup.mockInput.pressKey("z", { ctrl: true });
+					await awaitFrame(
+						setup,
+						() => field.current?.value() === "anthropic/sonnet",
+						"the second undo to give the replaced text back",
+					);
+					expect(frameText(frame)).toContain("Model");
+				},
 			},
 		);
 	});
@@ -204,20 +211,22 @@ describe("the shared Draft field", () => {
 				fieldRef: draft,
 			}),
 			50,
-			10,
-			async (setup) => {
-				setup.mockInput.pressKey("a", { ctrl: true });
-				await awaitFrame(
-					setup,
-					() => draft.current?.selection() === "copy this part",
-					"the whole draft selected",
-				);
-				setup.mockInput.pressKey("q");
-				await awaitFrame(
-					setup,
-					() => draft.current?.value() === "q",
-					"the typed character to replace the selection",
-				);
+			{
+				height: 10,
+				body: async (setup) => {
+					setup.mockInput.pressKey("a", { ctrl: true });
+					await awaitFrame(
+						setup,
+						() => draft.current?.selection() === "copy this part",
+						"the whole draft selected",
+					);
+					setup.mockInput.pressKey("q");
+					await awaitFrame(
+						setup,
+						() => draft.current?.value() === "q",
+						"the typed character to replace the selection",
+					);
+				},
 			},
 		);
 		// The Text field, where Home still means line start and Ctrl+A means
@@ -232,20 +241,22 @@ describe("the shared Draft field", () => {
 				fieldRef: text,
 			}),
 			50,
-			10,
-			async (setup) => {
-				setup.mockInput.pressKey("a", { ctrl: true });
-				await awaitFrame(
-					setup,
-					() => text.current?.selection() === "openai/gpt-5.1",
-					"the whole value selected",
-				);
-				setup.mockInput.pressKey("q");
-				await awaitFrame(
-					setup,
-					() => text.current?.value() === "q",
-					"the typed character to replace the selection",
-				);
+			{
+				height: 10,
+				body: async (setup) => {
+					setup.mockInput.pressKey("a", { ctrl: true });
+					await awaitFrame(
+						setup,
+						() => text.current?.selection() === "openai/gpt-5.1",
+						"the whole value selected",
+					);
+					setup.mockInput.pressKey("q");
+					await awaitFrame(
+						setup,
+						() => text.current?.value() === "q",
+						"the typed character to replace the selection",
+					);
+				},
 			},
 		);
 	});
@@ -297,24 +308,26 @@ describe("the shared Text field", () => {
 				onRefuse,
 			}),
 			40,
-			6,
-			async (setup) => {
-				await setup.mockInput.pasteBracketedText("1e3");
-				const frame = await awaitFrame(
-					setup,
-					() => onRefuse.mock.calls.length > 0,
-					"the paste refusal",
-				);
-				expect(onRefuse).toHaveBeenCalledWith(
-					"Context window accepts digits only: the pasted text was refused as a whole",
-				);
-				// A refusal reports the field's state and never a new value: what the
-				// caller holds is still the count the operator had typed.
-				expect(onValueChange.mock.calls.map(([facts]) => facts.value)).toEqual([
-					"272000",
-					"272000",
-				]);
-				expect(frameText(frame)).toContain("Context 272000");
+			{
+				height: 6,
+				body: async (setup) => {
+					await setup.mockInput.pasteBracketedText("1e3");
+					const frame = await awaitFrame(
+						setup,
+						() => onRefuse.mock.calls.length > 0,
+						"the paste refusal",
+					);
+					expect(onRefuse).toHaveBeenCalledWith(
+						"Context window accepts digits only: the pasted text was refused as a whole",
+					);
+					// A refusal reports the field's state and never a new value: what the
+					// caller holds is still the count the operator had typed.
+					expect(onValueChange.mock.calls.map(([facts]) => facts.value)).toEqual([
+						"272000",
+						"272000",
+					]);
+					expect(frameText(frame)).toContain("Context 272000");
+				},
 			},
 		);
 	});
@@ -331,15 +344,17 @@ describe("the shared Text field", () => {
 				onValueChange,
 			}),
 			40,
-			6,
-			async (setup) => {
-				await setup.mockInput.pasteBracketedText("3456");
-				await awaitFrame(
-					setup,
-					() =>
-						onValueChange.mock.calls.some(([facts]) => (facts as FieldFacts).value === "123456"),
-					"the pasted digits to be taken",
-				);
+			{
+				height: 6,
+				body: async (setup) => {
+					await setup.mockInput.pasteBracketedText("3456");
+					await awaitFrame(
+						setup,
+						() =>
+							onValueChange.mock.calls.some(([facts]) => (facts as FieldFacts).value === "123456"),
+						"the pasted digits to be taken",
+					);
+				},
 			},
 		);
 	});
@@ -359,14 +374,16 @@ describe("the shared Text field", () => {
 				onRefuse,
 			}),
 			40,
-			6,
-			async (setup) => {
-				setup.mockInput.pressKey("HOME");
-				setup.mockInput.pressArrow("right");
-				setup.mockInput.pressKey("x");
-				await awaitFrame(setup, () => onRefuse.mock.calls.length > 0, "the typed refusal");
-				expect(field.current?.value()).toBe("1234");
-				expect(field.current?.caret()).toBe(1);
+			{
+				height: 6,
+				body: async (setup) => {
+					setup.mockInput.pressKey("HOME");
+					setup.mockInput.pressArrow("right");
+					setup.mockInput.pressKey("x");
+					await awaitFrame(setup, () => onRefuse.mock.calls.length > 0, "the typed refusal");
+					expect(field.current?.value()).toBe("1234");
+					expect(field.current?.caret()).toBe(1);
+				},
 			},
 		);
 	});
@@ -385,16 +402,18 @@ describe("the shared Text field", () => {
 				onRefuse,
 			}),
 			40,
-			6,
-			async (setup) => {
-				await setup.mockInput.typeText("é١");
-				await awaitFrame(
-					setup,
-					() => onRefuse.mock.calls.length === 2,
-					"both non-ASCII typed refusals",
-				);
-				expect(onRefuse).toHaveBeenCalledTimes(2);
-				expect(field.current?.value()).toBe("12");
+			{
+				height: 6,
+				body: async (setup) => {
+					await setup.mockInput.typeText("é١");
+					await awaitFrame(
+						setup,
+						() => onRefuse.mock.calls.length === 2,
+						"both non-ASCII typed refusals",
+					);
+					expect(onRefuse).toHaveBeenCalledTimes(2);
+					expect(field.current?.value()).toBe("12");
+				},
 			},
 		);
 	});
@@ -417,22 +436,24 @@ describe("the shared Text field", () => {
 				onRefuse,
 			}),
 			40,
-			6,
-			async (setup) => {
-				// Hold a two-cell selection from the start of the value.
-				setup.mockInput.pressKey("HOME");
-				setup.mockInput.pressArrow("right", { shift: true });
-				setup.mockInput.pressArrow("right", { shift: true });
-				await awaitFrame(setup, () => field.current?.selection() === "27", "the held selection");
-				await setup.mockInput.pasteBracketedText("1e3");
-				await awaitFrame(setup, () => onRefuse.mock.calls.length > 0, "the paste refusal");
-				expect(onRefuse).toHaveBeenCalledWith(
-					"This field takes digits only: the pasted text was refused as a whole",
-				);
-				// The refusal was whole: the value, the caret, and the selection all stand.
-				expect(field.current?.value()).toBe("272000");
-				expect(field.current?.caret()).toBe(2);
-				expect(field.current?.selection()).toBe("27");
+			{
+				height: 6,
+				body: async (setup) => {
+					// Hold a two-cell selection from the start of the value.
+					setup.mockInput.pressKey("HOME");
+					setup.mockInput.pressArrow("right", { shift: true });
+					setup.mockInput.pressArrow("right", { shift: true });
+					await awaitFrame(setup, () => field.current?.selection() === "27", "the held selection");
+					await setup.mockInput.pasteBracketedText("1e3");
+					await awaitFrame(setup, () => onRefuse.mock.calls.length > 0, "the paste refusal");
+					expect(onRefuse).toHaveBeenCalledWith(
+						"This field takes digits only: the pasted text was refused as a whole",
+					);
+					// The refusal was whole: the value, the caret, and the selection all stand.
+					expect(field.current?.value()).toBe("272000");
+					expect(field.current?.caret()).toBe(2);
+					expect(field.current?.selection()).toBe("27");
+				},
 			},
 		);
 	});
@@ -451,43 +472,45 @@ describe("the shared Text field", () => {
 				onRefuse,
 			}),
 			100,
-			6,
-			async (setup) => {
-				// A paste that would cross the limit is refused whole, and the row
-				// states the limit in the field's own words.
-				await setup.mockInput.pasteBracketedText("12345");
-				await awaitFrame(
-					setup,
-					(f) => frameText(f).includes("the pasted text was refused as a whole"),
-					"the limit refusal to be stated on the screen",
-				);
-				expect(onRefuse).toHaveBeenCalledWith(
-					"This field holds at most 5 characters: the pasted text was refused as a whole",
-				);
-				expect(field.current?.value()).toBe("abc");
-				// Edits that stay inside the limit are taken...
-				setup.mockInput.pressKey("d");
-				await awaitFrame(
-					setup,
-					() => field.current?.value() === "abcd",
-					"the edit inside the limit",
-				);
-				setup.mockInput.pressKey("e");
-				await awaitFrame(
-					setup,
-					() => field.current?.value() === "abcde",
-					"the edit that fills the limit",
-				);
-				// ...and the one that crosses it is refused, with the limit stated.
-				setup.mockInput.pressKey("f");
-				await awaitFrame(setup, () => onRefuse.mock.calls.length === 2, "the second refusal");
-				await awaitFrame(
-					setup,
-					(f) => frameText(f).includes("This field holds at most 5 characters"),
-					"the second refusal to be stated on the screen",
-				);
-				expect(onRefuse).toHaveBeenLastCalledWith("This field holds at most 5 characters");
-				expect(field.current?.value()).toBe("abcde");
+			{
+				height: 6,
+				body: async (setup) => {
+					// A paste that would cross the limit is refused whole, and the row
+					// states the limit in the field's own words.
+					await setup.mockInput.pasteBracketedText("12345");
+					await awaitFrame(
+						setup,
+						(f) => frameText(f).includes("the pasted text was refused as a whole"),
+						"the limit refusal to be stated on the screen",
+					);
+					expect(onRefuse).toHaveBeenCalledWith(
+						"This field holds at most 5 characters: the pasted text was refused as a whole",
+					);
+					expect(field.current?.value()).toBe("abc");
+					// Edits that stay inside the limit are taken...
+					setup.mockInput.pressKey("d");
+					await awaitFrame(
+						setup,
+						() => field.current?.value() === "abcd",
+						"the edit inside the limit",
+					);
+					setup.mockInput.pressKey("e");
+					await awaitFrame(
+						setup,
+						() => field.current?.value() === "abcde",
+						"the edit that fills the limit",
+					);
+					// ...and the one that crosses it is refused, with the limit stated.
+					setup.mockInput.pressKey("f");
+					await awaitFrame(setup, () => onRefuse.mock.calls.length === 2, "the second refusal");
+					await awaitFrame(
+						setup,
+						(f) => frameText(f).includes("This field holds at most 5 characters"),
+						"the second refusal to be stated on the screen",
+					);
+					expect(onRefuse).toHaveBeenLastCalledWith("This field holds at most 5 characters");
+					expect(field.current?.value()).toBe("abcde");
+				},
 			},
 		);
 	});
@@ -505,16 +528,18 @@ describe("the shared Text field", () => {
 				normalize: (value: string) => (/^[0-9]+$/u.test(value) ? String(Number(value)) : value),
 			}),
 			40,
-			6,
-			async (setup) => {
-				await setup.mockInput.typeText("007");
-				const _folded = await awaitFrame(
-					setup,
-					(f) => frameText(f).includes("Context 7"),
-					"the row to hold one spelling of the count",
-				);
-				expect(field.current?.value()).toBe("7");
-				expect(field.current?.caret()).toBe(1);
+			{
+				height: 6,
+				body: async (setup) => {
+					await setup.mockInput.typeText("007");
+					const _folded = await awaitFrame(
+						setup,
+						(f) => frameText(f).includes("Context 7"),
+						"the row to hold one spelling of the count",
+					);
+					expect(field.current?.value()).toBe("7");
+					expect(field.current?.caret()).toBe(1);
+				},
 			},
 		);
 	});
@@ -533,24 +558,27 @@ describe("both key protocols", () => {
 				onValueChange,
 			}),
 			46,
-			8,
-			async (setup) => {
-				await setup.mockInput.typeText("alpha beta");
-				const values = () => onValueChange.mock.calls.map(([facts]) => (facts as FieldFacts).value);
-				// The caret moves one grapheme left, Enter draws a new line there,
-				// and Ctrl+Z takes the new line back: an enhanced terminal changes
-				// how a key is encoded, never what the key does.
-				setup.mockInput.pressArrow("left");
-				setup.mockInput.pressEnter();
-				await awaitFrame(
-					setup,
-					() => values().includes("alpha bet\na"),
-					"the enhanced Enter to add a line",
-				);
-				setup.mockInput.pressKey("z", { ctrl: true });
-				await awaitFrame(setup, () => values().at(-1) === "alpha beta", "the enhanced undo");
+			{
+				height: 8,
+				body: async (setup) => {
+					await setup.mockInput.typeText("alpha beta");
+					const values = () =>
+						onValueChange.mock.calls.map(([facts]) => (facts as FieldFacts).value);
+					// The caret moves one grapheme left, Enter draws a new line there,
+					// and Ctrl+Z takes the new line back: an enhanced terminal changes
+					// how a key is encoded, never what the key does.
+					setup.mockInput.pressArrow("left");
+					setup.mockInput.pressEnter();
+					await awaitFrame(
+						setup,
+						() => values().includes("alpha bet\na"),
+						"the enhanced Enter to add a line",
+					);
+					setup.mockInput.pressKey("z", { ctrl: true });
+					await awaitFrame(setup, () => values().at(-1) === "alpha beta", "the enhanced undo");
+				},
+				enhancedKeys: true,
 			},
-			true,
 		);
 	});
 
@@ -566,13 +594,15 @@ describe("both key protocols", () => {
 				onRefuse,
 			}),
 			40,
-			6,
-			async (setup) => {
-				setup.mockInput.pressKey("e");
-				await awaitFrame(setup, () => onRefuse.mock.calls.length > 0, "the enhanced refusal");
-				expect(onRefuse).toHaveBeenCalledWith("This field takes digits only");
+			{
+				height: 6,
+				body: async (setup) => {
+					setup.mockInput.pressKey("e");
+					await awaitFrame(setup, () => onRefuse.mock.calls.length > 0, "the enhanced refusal");
+					expect(onRefuse).toHaveBeenCalledWith("This field takes digits only");
+				},
+				enhancedKeys: true,
 			},
-			true,
 		);
 	});
 });
@@ -600,14 +630,16 @@ describe("the written reason a control states", () => {
 				noteWidth: 116,
 			}),
 			120,
-			6,
-			async (setup) => {
-				const frame = await awaitFrame(
-					setup,
-					(candidate) => candidate.includes(REASON),
-					"the whole reason under the field",
-				);
-				expect(frameText(reasonRow(frame)).trim()).toBe(`Error: Context: ${REASON}`);
+			{
+				height: 6,
+				body: async (setup) => {
+					const frame = await awaitFrame(
+						setup,
+						(candidate) => candidate.includes(REASON),
+						"the whole reason under the field",
+					);
+					expect(frameText(reasonRow(frame)).trim()).toBe(`Error: Context: ${REASON}`);
+				},
 			},
 		);
 	});
@@ -624,16 +656,18 @@ describe("the written reason a control states", () => {
 				error: REASON,
 			}),
 			120,
-			6,
-			async (setup) => {
-				const frame = await awaitFrame(
-					setup,
-					(candidate) => candidate.includes("Error: Context:"),
-					"the reason under the field",
-				);
-				expect(frameText(reasonRow(frame)).trim()).toBe(
-					`Error: Context: ${REASON}`.slice(0, cells).trim(),
-				);
+			{
+				height: 6,
+				body: async (setup) => {
+					const frame = await awaitFrame(
+						setup,
+						(candidate) => candidate.includes("Error: Context:"),
+						"the reason under the field",
+					);
+					expect(frameText(reasonRow(frame)).trim()).toBe(
+						`Error: Context: ${REASON}`.slice(0, cells).trim(),
+					);
+				},
 			},
 		);
 	});
@@ -652,14 +686,16 @@ describe("the written reason a control states", () => {
 				noteWidth: 116,
 			}),
 			120,
-			8,
-			async (setup) => {
-				const frame = await awaitFrame(
-					setup,
-					(candidate) => candidate.includes(REASON),
-					"the reason under the value the row stands on",
-				);
-				expect(frameText(reasonRow(frame)).trim()).toBe(`Error: Model: ${REASON}`);
+			{
+				height: 8,
+				body: async (setup) => {
+					const frame = await awaitFrame(
+						setup,
+						(candidate) => candidate.includes(REASON),
+						"the reason under the value the row stands on",
+					);
+					expect(frameText(reasonRow(frame)).trim()).toBe(`Error: Model: ${REASON}`);
+				},
 			},
 		);
 	});
@@ -688,18 +724,21 @@ describe("the written reason a control states", () => {
 				}),
 			),
 			60,
-			6,
-			async (setup) => {
-				const frame = await awaitFrame(
-					setup,
-					(candidate) => candidate.includes("openai/gpt-4o") && candidate.includes("openai/gpt-5"),
-					"both rows of the pair",
-				);
-				expect(frameText(frame)).toContain("Model openai/gpt-4o");
-				// A value the row cannot yet judge keeps the tone of a hint, while
-				// the confirmed one beside it keeps the tone of a value.
-				expect(spanColors(setup, "openai/gpt-4o")).toEqual([rgb(roleColor("subtext0"))]);
-				expect(spanColors(setup, "openai/gpt-5")).toEqual([rgb(roleColor("text"))]);
+			{
+				height: 6,
+				body: async (setup) => {
+					const frame = await awaitFrame(
+						setup,
+						(candidate) =>
+							candidate.includes("openai/gpt-4o") && candidate.includes("openai/gpt-5"),
+						"both rows of the pair",
+					);
+					expect(frameText(frame)).toContain("Model openai/gpt-4o");
+					// A value the row cannot yet judge keeps the tone of a hint, while
+					// the confirmed one beside it keeps the tone of a value.
+					expect(spanColors(setup, "openai/gpt-4o")).toEqual([rgb(roleColor("subtext0"))]);
+					expect(spanColors(setup, "openai/gpt-5")).toEqual([rgb(roleColor("text"))]);
+				},
 			},
 		);
 	});
@@ -707,11 +746,9 @@ describe("the written reason a control states", () => {
 
 describe("the shared spinner", () => {
 	test("paints the frame it is named beside its written word, in the tone a state word wears", async () => {
-		await withField(
-			createElement(Spinner, { word: "starting", width: 12, frame: 0 }),
-			30,
-			3,
-			async (setup) => {
+		await withField(createElement(Spinner, { word: "starting", width: 12, frame: 0 }), 30, {
+			height: 3,
+			body: async (setup) => {
 				const frame = await awaitFrame(
 					setup,
 					(candidate) => candidate.includes(`${SPINNER_FRAMES[0]} starting`),
@@ -726,34 +763,34 @@ describe("the shared spinner", () => {
 				// shared state words wear, from the Theme in force.
 				expect(spanColors(setup, "starting")).toEqual([rgb(roleColor("subtext0"))]);
 			},
-		);
+		});
 	});
 
 	test("under the no-color ink keeps its word and drops its color", async () => {
 		await withField(
 			createElement(Spinner, { word: "starting", width: 12, frame: 2, ink: NO_COLOR_INK }),
 			30,
-			3,
-			async (setup) => {
-				await awaitFrame(
-					setup,
-					(candidate) => candidate.includes(`${SPINNER_FRAMES[2]} starting`),
-					"the face beside its word",
-				);
-				// The word stands as the whole message. The renderer's own default
-				// is the paint, and the default is not a paint: no color of the
-				// face's own shows anywhere on the row.
-				expect(spanColors(setup, "starting")).toEqual([[255, 255, 255]]);
+			{
+				height: 3,
+				body: async (setup) => {
+					await awaitFrame(
+						setup,
+						(candidate) => candidate.includes(`${SPINNER_FRAMES[2]} starting`),
+						"the face beside its word",
+					);
+					// The word stands as the whole message. The renderer's own default
+					// is the paint, and the default is not a paint: no color of the
+					// face's own shows anywhere on the row.
+					expect(spanColors(setup, "starting")).toEqual([[255, 255, 255]]);
+				},
 			},
 		);
 	});
 
 	test("drives its own frames the way the pop-in drives its own", async () => {
-		await withField(
-			createElement(Spinner, { word: "starting", width: 12 }),
-			30,
-			3,
-			async (setup) => {
+		await withField(createElement(Spinner, { word: "starting", width: 12 }), 30, {
+			height: 3,
+			body: async (setup) => {
 				const first = setup.captureCharFrame();
 				const firstGlyph = SPINNER_FRAMES.find((glyph) => first.includes(`${glyph} starting`));
 				// The mount paints the face on one of its frames: the first frame
@@ -772,7 +809,7 @@ describe("the shared spinner", () => {
 					"the face to step to another frame",
 				);
 			},
-		);
+		});
 	});
 
 	test("owes no motion to a slot that says no face is on screen", async () => {
@@ -782,14 +819,17 @@ describe("the shared spinner", () => {
 			const at = useSpinnerFrame(props.active);
 			return createElement("text", undefined, spinnerFace(at, "starting", 12));
 		};
-		await withField(createElement(StaticFace, { active: false }), 30, 3, async (setup) => {
-			const first = setup.captureCharFrame();
-			expect(first).toContain(`${SPINNER_FRAMES[0]} starting`);
-			// Three frame ticks of wall time pass, and the face stands: the gate
-			// runs no interval, so nothing can move it.
-			await sleep(SPINNER_FRAME_MS * 3);
-			expect(setup.captureCharFrame()).toContain(`${SPINNER_FRAMES[0]} starting`);
-			expect(setup.captureCharFrame()).toBe(first);
+		await withField(createElement(StaticFace, { active: false }), 30, {
+			height: 3,
+			body: async (setup) => {
+				const first = setup.captureCharFrame();
+				expect(first).toContain(`${SPINNER_FRAMES[0]} starting`);
+				// Three frame ticks of wall time pass, and the face stands: the gate
+				// runs no interval, so nothing can move it.
+				await sleep(SPINNER_FRAME_MS * 3);
+				expect(setup.captureCharFrame()).toContain(`${SPINNER_FRAMES[0]} starting`);
+				expect(setup.captureCharFrame()).toBe(first);
+			},
 		});
 	});
 });

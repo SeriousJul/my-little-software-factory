@@ -148,10 +148,13 @@ export function seedInFlightTurn(
 export function seedAwaitingTurn(
 	state: FactoryState,
 	outcome: FetchOutcome,
-	identity = "github:github.com:I_5",
-	transition?: TransitionOutcome | null,
-	environment: EnvironmentKind = "live-worktree",
+	fields: {
+		identity?: string;
+		transition?: TransitionOutcome | null;
+		environment?: EnvironmentKind;
+	} = {},
 ): string {
+	const { identity = "github:github.com:I_5", transition, environment = "live-worktree" } = fields;
 	const attemptId = seedInFlightTurn(state, outcome, identity, environment);
 	state.ticketWorkCycle.settleTurn({
 		ticketIdentity: identity,

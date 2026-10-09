@@ -108,6 +108,57 @@ interface TicketListProps {
 	onMove: (delta: number) => void;
 }
 
+/** The window's rows: the empty word, the gaps, the group headers, the items. */
+function ticketListRows(fields: {
+	visible: readonly ListedRow<TicketRowFacts>[];
+	start: number;
+	selectedIndex: number;
+	emptyMessage: string | undefined;
+	usableCols: number;
+	faceFrame: number;
+}): ReactElement[] {
+	if (fields.visible.length === 0 && fields.emptyMessage !== undefined) {
+		return [
+			createElement(
+				"text",
+				{ key: "empty", fg: paint("subtext0") },
+				truncateToWidth(fields.emptyMessage, fields.usableCols),
+			),
+		];
+	}
+	return fields.visible.map((row, offset) =>
+		row.kind === "gap"
+			? createElement(
+					// The blank row that parts one Group from the one above it: it
+					// holds no word and no cursor, and the window counts it like any
+					// other row.
+					"text",
+					{ key: `gap:${fields.start + offset}`, style: { width: "100%", height: 1 } },
+					"",
+				)
+			: row.kind === "group"
+				? createElement(
+						"text",
+						{ key: `group:${row.group.value}` },
+						...groupHeaderSpans(
+							row.group,
+							fields.start + offset === fields.selectedIndex,
+							fields.usableCols,
+						),
+					)
+				: createElement(
+						"text",
+						{ key: row.item.identity },
+						...rowSpans(
+							row.item,
+							fields.start + offset === fields.selectedIndex,
+							fields.usableCols,
+							fields.faceFrame,
+						),
+					),
+	);
+}
+
 export function TicketList({
 	rows,
 	selectedIndex,
@@ -172,45 +223,14 @@ export function TicketList({
 				overflow: "hidden",
 			},
 		},
-		...(visible.length === 0 && emptyMessage !== undefined
-			? [
-					createElement(
-						"text",
-						{ key: "empty", fg: paint("subtext0") },
-						truncateToWidth(emptyMessage, geometry.usableCols),
-					),
-				]
-			: visible.map((row, offset) =>
-					row.kind === "gap"
-						? createElement(
-								// The blank row that parts one Group from the one above it: it
-								// holds no word and no cursor, and the window counts it like any
-								// other row.
-								"text",
-								{ key: `gap:${start + offset}`, style: { width: "100%", height: 1 } },
-								"",
-							)
-						: row.kind === "group"
-							? createElement(
-									"text",
-									{ key: `group:${row.group.value}` },
-									...groupHeaderSpans(
-										row.group,
-										start + offset === selectedIndex,
-										geometry.usableCols,
-									),
-								)
-							: createElement(
-									"text",
-									{ key: row.item.identity },
-									...rowSpans(
-										row.item,
-										start + offset === selectedIndex,
-										geometry.usableCols,
-										faceFrame,
-									),
-								),
-				)),
+		...ticketListRows({
+			visible,
+			start,
+			selectedIndex,
+			emptyMessage,
+			usableCols: geometry.usableCols,
+			faceFrame,
+		}),
 	);
 }
 
@@ -226,14 +246,8 @@ export function TicketList({
  * text plus the title minimum would not fit, and the title always keeps its
  * gap plus one text cell.
  */
-function rowSpans(
-	fact: TicketRowFacts,
-	selected: boolean,
-	usableCols: number,
-	faceFrame: number,
-): ReactElement[] {
-	const spans: ReactElement[] = [];
-	let budget = usableCols;
+/** The trailing markers a row carries, in the order the row states them. */
+function rowTrailingMarkers(fact: TicketRowFacts): { text: string; fg: string | undefined }[] {
 	const trailing: { text: string; fg: string | undefined }[] = [];
 	if (fact.handoffLimit) trailing.push({ text: LIMIT_TEXT, fg: paint("yellow") });
 	if (fact.failedStartPark) trailing.push({ text: PARK_TEXT, fg: paint("yellow") });
@@ -246,18 +260,11 @@ function rowSpans(
 	// mute of the Ticket's sources rides it the same way (ADR 0070).
 	if (fact.ticket.ignored) trailing.push({ text: IGNORED_TEXT, fg: paint("subtext0") });
 	if (fact.ticket.muted) trailing.push({ text: MUTED_TEXT, fg: paint("subtext0") });
+	return trailing;
+}
 
-	if (budget >= SELECTION_WIDTH) {
-		// The selected row's marker and title wear bold: the emphasis the
-		// old palette carried in a brighter text color.
-		spans.push(
-			selected
-				? createElement("b", { fg: paint("text") }, "❯ ")
-				: createElement("span", { fg: paint("subtext0") }, "  "),
-		);
-		budget -= SELECTION_WIDTH;
-	}
-
+/** The badge the row wears in the state badge's slot (ADR 0016, ADR 0030). */
+function rowStateBadge(fact: TicketRowFacts, faceFrame: number): ReactElement {
 	// The failure badge replaces the state badge: the agent blocked or the
 	// pane gone stand out in the badge's own place. A held turn wears its
 	// own badge in the state's place (ADR 0016): it is the fact the operator
@@ -268,84 +275,65 @@ function rowSpans(
 	// takes the badge's slot while the window holds; a failure marker beats
 	// it the way it beats the state badge, so a dead or blocked agent is
 	// never hidden behind the motion.
-	if (budget >= BADGE_WIDTH) {
-		if (fact.failure !== null)
-			spans.push(
-				createElement("span", { fg: markerColor(fact.failure) }, failureBadge(fact.failure)),
-			);
-		else if (fact.starting)
-			spans.push(
-				createElement(
-					"span",
-					{ fg: paint("subtext0") },
-					spinnerFace(faceFrame, STARTING_WORD, BADGE_WIDTH),
-				),
-			);
-		else if (fact.held) spans.push(createElement("span", { fg: paint("yellow") }, heldBadge()));
-		else if (fact.queueWait)
-			// The Queue wait badge wears the open role: the ticket keeps its
-			// open state while its start waits for a seat.
-			spans.push(createElement("span", { fg: stateColor("open") }, queuedBadge()));
-		else
-			spans.push(
-				createElement("span", { fg: stateColor(fact.ticket.state) }, stateBadge(fact.ticket.state)),
-			);
-		budget -= BADGE_WIDTH;
-	}
+	if (fact.failure !== null)
+		return createElement("span", { fg: markerColor(fact.failure) }, failureBadge(fact.failure));
+	if (fact.starting)
+		return createElement(
+			"span",
+			{ fg: paint("subtext0") },
+			spinnerFace(faceFrame, STARTING_WORD, BADGE_WIDTH),
+		);
+	if (fact.held) return createElement("span", { fg: paint("yellow") }, heldBadge());
+	if (fact.queueWait)
+		// The Queue wait badge wears the open role: the ticket keeps its
+		// open state while its start waits for a seat.
+		return createElement("span", { fg: stateColor("open") }, queuedBadge());
+	return createElement(
+		"span",
+		{ fg: stateColor(fact.ticket.state) },
+		stateBadge(fact.ticket.state),
+	);
+}
 
+/** The task type badge the row holds whole, or nothing. */
+function rowTaskTypeBadge(
+	fact: TicketRowFacts,
+	budget: number,
+): { element: ReactElement; width: number } | null {
 	// The task type badge sits between the state badge and the title. It is
 	// complete or absent: a partial badge could read as another task type,
 	// so the row must hold the whole badge, its gap, and the title minimum,
 	// or the badge drops and the title keeps the cells.
 	const presentation = fact.taskType;
 	const badgeWidth = widthOf(taskTypeBadge(presentation.value));
-	if (budget >= badgeWidth + TITLE_MINIMUM) {
-		spans.push(
-			createElement("span", { fg: taskTypeColor(presentation) }, taskTypeBadge(presentation.value)),
-		);
-		budget -= badgeWidth;
-	}
+	if (budget < badgeWidth + TITLE_MINIMUM) return null;
+	return {
+		element: createElement(
+			"span",
+			{ fg: taskTypeColor(presentation) },
+			taskTypeBadge(presentation.value),
+		),
+		width: badgeWidth,
+	};
+}
 
+/** The title and the repository, in the cells the budget leaves. */
+function rowTitleAndRepository(fields: {
+	fact: TicketRowFacts;
+	selected: boolean;
+	budget: number;
+}): ReactElement[] {
+	const { fact, selected, budget } = fields;
 	const titleEl = (text: string): ReactElement =>
 		createElement(selected ? "b" : "span", { fg: paint("text") }, text);
 	const repoWidth = widthOf(fact.ticket.repository);
-
-	// The trailing markers keep their gaps and their text at the row's end,
-	// and the title keeps its gap and one text cell for itself.
-	const markersCost = trailing.reduce((sum, marker) => sum + MARKER_GAP + widthOf(marker.text), 0);
-	if (trailing.length > 0 && budget >= markersCost + TITLE_MINIMUM) {
-		const afterMarkers = budget - markersCost;
-		const repoFits = afterMarkers >= REPO_GAP + repoWidth + TITLE_MINIMUM;
-		let titleField = Math.max(0, afterMarkers - (repoFits ? REPO_GAP + repoWidth : 0));
-		if (titleField >= 1) {
-			spans.push(titleEl(" "));
-			titleField -= 1;
-		}
-		if (titleField > 0) {
-			spans.push(titleEl(padToWidth(truncateToWidth(fact.ticket.title, titleField), titleField)));
-		}
-		if (repoFits) {
-			spans.push(
-				createElement(
-					"span",
-					{ fg: paint("subtext0") },
-					`${" ".repeat(REPO_GAP)}${fact.ticket.repository}`,
-				),
-			);
-		}
-		for (const marker of trailing) {
-			spans.push(
-				createElement("span", { fg: marker.fg }, `${" ".repeat(MARKER_GAP)}${marker.text}`),
-			);
-		}
-		return spans;
-	}
-
-	// No trailing marker on this row: the title takes whatever the repository
-	// leaves, and the repository drops when it would leave the title less
-	// than a gap column and one text cell, so the title drops last.
 	const repoFits = budget >= REPO_GAP + repoWidth + TITLE_MINIMUM;
 	let titleField = Math.max(0, budget - (repoFits ? REPO_GAP + repoWidth : 0));
+	const spans: ReactElement[] = [];
+	// The title takes whatever the budget leaves, and the repository drops
+	// when it would leave the title less than a gap column and one text
+	// cell, so the title drops last: the title keeps its gap and one text
+	// cell for itself.
 	if (titleField >= 1) {
 		spans.push(titleEl(" "));
 		titleField -= 1;
@@ -362,6 +350,51 @@ function rowSpans(
 			),
 		);
 	}
+	return spans;
+}
+
+function rowSpans(
+	fact: TicketRowFacts,
+	selected: boolean,
+	usableCols: number,
+	faceFrame: number,
+): ReactElement[] {
+	const spans: ReactElement[] = [];
+	let budget = usableCols;
+	const trailing = rowTrailingMarkers(fact);
+	if (budget >= SELECTION_WIDTH) {
+		// The selected row's marker and title wear bold: the emphasis the
+		// old palette carried in a brighter text color.
+		spans.push(
+			selected
+				? createElement("b", { fg: paint("text") }, "❯ ")
+				: createElement("span", { fg: paint("subtext0") }, "  "),
+		);
+		budget -= SELECTION_WIDTH;
+	}
+	if (budget >= BADGE_WIDTH) {
+		spans.push(rowStateBadge(fact, faceFrame));
+		budget -= BADGE_WIDTH;
+	}
+	const taskType = rowTaskTypeBadge(fact, budget);
+	if (taskType !== null) {
+		spans.push(taskType.element);
+		budget -= taskType.width;
+	}
+	// The trailing markers keep their gaps and their text at the row's end.
+	const markersCost = trailing.reduce((sum, marker) => sum + MARKER_GAP + widthOf(marker.text), 0);
+	if (trailing.length > 0 && budget >= markersCost + TITLE_MINIMUM) {
+		spans.push(...rowTitleAndRepository({ fact, selected, budget: budget - markersCost }));
+		for (const marker of trailing) {
+			spans.push(
+				createElement("span", { fg: marker.fg }, `${" ".repeat(MARKER_GAP)}${marker.text}`),
+			);
+		}
+		return spans;
+	}
+	// No trailing marker on this row: the title and the repository take the
+	// budget as it stands.
+	spans.push(...rowTitleAndRepository({ fact, selected, budget }));
 
 	return spans;
 }

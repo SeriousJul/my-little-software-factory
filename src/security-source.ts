@@ -296,11 +296,21 @@ function advisoryComponentLines(raw: unknown): string[] {
 	return lines;
 }
 
-function normalizeDependabotAlert(
+/** The alert's defined facts, once the gate has read them. */
+type DependabotFacts = {
+	number: number;
+	state: string;
+	url: string;
+	updatedAt: string;
+	full_name: string;
+};
+
+/** The alert's own facts: the refusal they earn, or the defined facts they hold. */
+function dependabotGate(
 	record: Record<string, unknown>,
 	config: TicketSourceConfig,
 	repository: string,
-): { ok: true; ticket: FetchedTicket } | { ok: false; reason: string } {
+): { ok: true; facts: DependabotFacts } | { ok: false; reason: string } {
 	const number = record.number;
 	const state = stringOf(record.state);
 	const url = stringOf(record.html_url);
@@ -329,17 +339,25 @@ function normalizeDependabotAlert(
 			reason: `GitHub returned a ticket outside configured repositories: ${declared}`,
 		};
 	}
-	const advisory = (record.security_advisory ?? {}) as Record<string, unknown>;
-	const vulnerability = (record.security_vulnerability ?? {}) as Record<string, unknown>;
-	const packageInfo = (vulnerability.package ?? {}) as Record<string, unknown>;
+	return { ok: true, facts: { number, state, url, updatedAt, full_name } };
+}
+
+/** The title an advisory's facts name: the CVE, the GHSa, or both. */
+function dependabotTitle(advisory: Record<string, unknown>): string {
 	const cveId = stringOf(advisory.cve_id);
 	const ghsaId = stringOf(advisory.ghsa_id);
 	const id = cveId ?? ghsaId;
 	const summary = stringOf(advisory.summary);
-	const title =
-		id === undefined ? (summary ?? "") : summary === undefined ? id : `${id}: ${summary}`;
-	if (title === "") return { ok: false, reason: "GitHub returned an unreadable Dependabot alert" };
-	const lines: string[] = [];
+	return id === undefined ? (summary ?? "") : summary === undefined ? id : `${id}: ${summary}`;
+}
+
+/** The description lines the advisory's facts carry, and the severity they hold. */
+function dependabotDescription(
+	record: Record<string, unknown>,
+	advisory: Record<string, unknown>,
+	vulnerability: Record<string, unknown>,
+): { lines: string[]; severity: string | undefined } {
+	const packageInfo = (vulnerability.package ?? {}) as Record<string, unknown>;
 	const facts: Array<[string, unknown]> = [
 		["Package", stringOf(packageInfo.name)],
 		["Ecosystem", stringOf(packageInfo.ecosystem)],
@@ -349,6 +367,7 @@ function normalizeDependabotAlert(
 		["Vulnerable range", stringOf(vulnerability.vulnerable_version_range)],
 		["First patched version", stringOf(vulnerability.first_patched_version)],
 	];
+	const lines: string[] = [];
 	for (const [label, value] of facts) if (value !== undefined) lines.push(`${label}: ${value}`);
 	// The severity is the advisory's, with the embedded vulnerability's as
 	// the fallback (ADR 0029).
@@ -356,6 +375,22 @@ function normalizeDependabotAlert(
 	if (severity !== undefined) lines.push(`Severity: ${severity}`);
 	const cvssScore = (advisory.cvss as Record<string, unknown> | undefined)?.score;
 	if (typeof cvssScore === "number") lines.push(`CVSS score: ${cvssScore}`);
+	return { lines, severity };
+}
+
+function normalizeDependabotAlert(
+	record: Record<string, unknown>,
+	config: TicketSourceConfig,
+	repository: string,
+): { ok: true; ticket: FetchedTicket } | { ok: false; reason: string } {
+	const gate = dependabotGate(record, config, repository);
+	if (!gate.ok) return { ok: false, reason: gate.reason };
+	const { number, state, url, updatedAt, full_name } = gate.facts;
+	const advisory = (record.security_advisory ?? {}) as Record<string, unknown>;
+	const vulnerability = (record.security_vulnerability ?? {}) as Record<string, unknown>;
+	const title = dependabotTitle(advisory);
+	if (title === "") return { ok: false, reason: "GitHub returned an unreadable Dependabot alert" };
+	const { lines, severity } = dependabotDescription(record, advisory, vulnerability);
 	const advisoryDescription = typeof advisory.description === "string" ? advisory.description : "";
 	const description =
 		lines.length > 0

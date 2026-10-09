@@ -18,7 +18,7 @@
  * the walk undrafts the pull request and re-fires the recorded skip, the
  * same route the #148 walk walked in the live factory.
  */
-import type { StubWorld } from "./world.ts";
+import type { StubRepository, StubSecurity, StubWorld } from "./world.ts";
 
 /** The host the stub configuration and the world agree on. */
 export const STUB_HOST = "github.com";
@@ -50,169 +50,191 @@ export function stubWorldSeed(): StubWorld {
 		host: STUB_HOST,
 		owner: STUB_OWNER,
 		autoScore: { enabled: true, score: 92 },
-		repositories: [
+		repositories: [seedAlphaRepository(), seedBetaRepository()],
+	};
+}
+
+/** The seed's alpha repository: the scenario issues and the security feed. */
+function seedAlphaRepository(): StubRepository {
+	return {
+		name: "alpha",
+		labels: [...SEED_MACHINE_LABELS],
+		issues: [
 			{
-				name: "alpha",
-				labels: [...SEED_MACHINE_LABELS],
-				issues: [
-					{
-						number: 1,
-						title: "Add a greeting command",
-						body: "Greet the operator by name.",
-						labels: ["ready-for-agent"],
-						state: "open",
-						updatedAt: minutes(0),
-						comments: [],
-					},
-					{
-						number: 2,
-						title: "Fix the greeting punctuation",
-						body: "The greeting ends without a period.",
-						labels: [],
-						state: "open",
-						updatedAt: minutes(5),
-						comments: [],
-					},
-				],
-				pullRequests: [
-					{
-						number: 1,
-						title: "Add a greeting command",
-						body: "Add the greeting command.\n\nFixes #1",
-						labels: [],
-						state: "open",
-						merged: false,
-						draft: true,
-						headBranch: "factory/1-add-a-greeting-command",
-						closingIssueNumbers: [1],
-						comments: [],
-						reviews: [],
-						updatedAt: minutes(10),
-					},
-				],
-				mergeGates: { "1": { passing: true, reason: "" } },
-				security: {
-					advisories: [
-						{
-							ghsa_id: "GHSAA-STUB-ALPHA",
-							summary: "The stub advisory for alpha",
-							state: "published",
-							severity: "moderate",
-							description: "A stub vulnerability with no real exposure.",
-							vulnerabilities: [
-								{
-									package: { ecosystem: "npm", name: "stub-package" },
-									vulnerable_version_range: "< 1.1.0",
-									first_patched_version: "1.1.0",
-								},
-							],
-							html_url: `https://${STUB_HOST}/${STUB_OWNER}/alpha/security/advisories/GHSAA-STUB-ALPHA`,
-							updated_at: minutes(15),
-						},
-					],
-					dependabotAlerts: [],
-					secretScanningAlerts: [
-						{
-							id: 1,
-							number: 1,
-							state: "open",
-							html_url: `https://${STUB_HOST}/${STUB_OWNER}/alpha/security/secret-scanning/alerts/1`,
-							secret_type: { name: "AWS access token" },
-							location: { file: "config/stub.toml", start_line: 3, end_line: 3 },
-							updated_at: minutes(20),
-							created_at: minutes(20),
-						},
-					],
-				},
+				number: 1,
+				title: "Add a greeting command",
+				body: "Greet the operator by name.",
+				labels: ["ready-for-agent"],
+				state: "open",
+				updatedAt: minutes(0),
+				comments: [],
 			},
 			{
-				name: "beta",
-				labels: [...SEED_MACHINE_LABELS],
-				issues: [
+				number: 2,
+				title: "Fix the greeting punctuation",
+				body: "The greeting ends without a period.",
+				labels: [],
+				state: "open",
+				updatedAt: minutes(5),
+				comments: [],
+			},
+		],
+		pullRequests: seedBetaPullRequests(),
+		mergeGates: { "1": { passing: true, reason: "" } },
+		security: seedAlphaSecurity(),
+	};
+}
+
+/** The seed's beta repository: the scenario issues and the security feed. */
+function seedBetaRepository(): StubRepository {
+	return {
+		name: "beta",
+		labels: [...SEED_MACHINE_LABELS],
+		issues: [
+			{
+				number: 1,
+				title: "Add a farewell command",
+				body: "Say goodbye to the operator by name.",
+				labels: ["ready-for-agent"],
+				state: "open",
+				updatedAt: minutes(25),
+				comments: [],
+			},
+			{
+				number: 2,
+				title: "Tune the farewell pacing",
+				body: "The farewell is too fast.",
+				labels: ["ready-for-agent"],
+				state: "open",
+				updatedAt: minutes(30),
+				comments: [],
+			},
+		],
+		pullRequests: [
+			{
+				number: 1,
+				title: "Add a farewell command",
+				body: "Add the farewell command.\n\nFixes #1",
+				labels: [],
+				state: "open",
+				merged: false,
+				draft: true,
+				headBranch: "factory/1-add-a-farewell-command",
+				closingIssueNumbers: [1],
+				comments: [],
+				reviews: [],
+				updatedAt: minutes(35),
+			},
+			{
+				number: 2,
+				title: "Tune the farewell pacing",
+				body: "Slow the farewell down.\n\nFixes #2",
+				labels: [],
+				state: "open",
+				merged: false,
+				draft: true,
+				headBranch: "factory/2-tune-the-farewell-pacing",
+				closingIssueNumbers: [2],
+				comments: [],
+				reviews: [],
+				updatedAt: minutes(40),
+			},
+		],
+		mergeGates: {
+			"1": { passing: false, reason: "the stub CI gate is failing the build" },
+			"2": { passing: true, reason: "" },
+		},
+		security: seedBetaSecurity(),
+	};
+}
+
+/** The seed alpha security feed. */
+function seedAlphaSecurity(): StubSecurity {
+	return {
+		advisories: [
+			{
+				ghsa_id: "GHSAA-STUB-ALPHA",
+				summary: "The stub advisory for alpha",
+				state: "published",
+				severity: "moderate",
+				description: "A stub vulnerability with no real exposure.",
+				vulnerabilities: [
 					{
-						number: 1,
-						title: "Add a farewell command",
-						body: "Say goodbye to the operator by name.",
-						labels: ["ready-for-agent"],
-						state: "open",
-						updatedAt: minutes(25),
-						comments: [],
-					},
-					{
-						number: 2,
-						title: "Tune the farewell pacing",
-						body: "The farewell is too fast.",
-						labels: ["ready-for-agent"],
-						state: "open",
-						updatedAt: minutes(30),
-						comments: [],
+						package: { ecosystem: "npm", name: "stub-package" },
+						vulnerable_version_range: "< 1.1.0",
+						first_patched_version: "1.1.0",
 					},
 				],
-				pullRequests: [
-					{
-						number: 1,
-						title: "Add a farewell command",
-						body: "Add the farewell command.\n\nFixes #1",
-						labels: [],
-						state: "open",
-						merged: false,
-						draft: true,
-						headBranch: "factory/1-add-a-farewell-command",
-						closingIssueNumbers: [1],
-						comments: [],
-						reviews: [],
-						updatedAt: minutes(35),
-					},
-					{
-						number: 2,
-						title: "Tune the farewell pacing",
-						body: "Slow the farewell down.\n\nFixes #2",
-						labels: [],
-						state: "open",
-						merged: false,
-						draft: true,
-						headBranch: "factory/2-tune-the-farewell-pacing",
-						closingIssueNumbers: [2],
-						comments: [],
-						reviews: [],
-						updatedAt: minutes(40),
-					},
-				],
-				mergeGates: {
-					"1": { passing: false, reason: "the stub CI gate is failing the build" },
-					"2": { passing: true, reason: "" },
-				},
-				security: {
-					advisories: [],
-					dependabotAlerts: [
-						{
-							number: 1,
-							state: "open",
-							html_url: `https://${STUB_HOST}/${STUB_OWNER}/beta/security/dependabot/1`,
-							manifest_path: "package.json",
-							scope: "package.json",
-							relationship: "direct",
-							security_advisory: {
-								cve_id: "CVE-2026-00001",
-								ghsa_id: "GHSAA-STUB-BETA",
-								summary: "The stub dependency vulnerability",
-								severity: "high",
-								description: "A stub vulnerability in the stub dependency.",
-							},
-							security_vulnerability: {
-								package: { ecosystem: "npm", name: "stub-dependency" },
-								vulnerable_version_range: "< 2.0.0",
-								first_patched_version: "2.0.0",
-							},
-							updated_at: minutes(45),
-							created_at: minutes(45),
-						},
-					],
-					secretScanningAlerts: [],
-				},
+				html_url: `https://${STUB_HOST}/${STUB_OWNER}/alpha/security/advisories/GHSAA-STUB-ALPHA`,
+				updated_at: minutes(15),
+			},
+		],
+		dependabotAlerts: [],
+		secretScanningAlerts: [
+			{
+				id: 1,
+				number: 1,
+				state: "open",
+				html_url: `https://${STUB_HOST}/${STUB_OWNER}/alpha/security/secret-scanning/alerts/1`,
+				secret_type: { name: "AWS access token" },
+				location: { file: "config/stub.toml", start_line: 3, end_line: 3 },
+				updated_at: minutes(20),
+				created_at: minutes(20),
 			},
 		],
 	};
+}
+
+/** The seed beta security feed. */
+function seedBetaSecurity(): StubSecurity {
+	return {
+		advisories: [],
+		dependabotAlerts: [
+			{
+				number: 1,
+				state: "open",
+				html_url: `https://${STUB_HOST}/${STUB_OWNER}/beta/security/dependabot/1`,
+				manifest_path: "package.json",
+				scope: "package.json",
+				relationship: "direct",
+				security_advisory: {
+					cve_id: "CVE-2026-00001",
+					ghsa_id: "GHSAA-STUB-BETA",
+					summary: "The stub dependency vulnerability",
+					severity: "high",
+					description: "A stub vulnerability in the stub dependency.",
+				},
+				security_vulnerability: {
+					package: { ecosystem: "npm", name: "stub-dependency" },
+					vulnerable_version_range: "< 2.0.0",
+					first_patched_version: "2.0.0",
+				},
+				updated_at: minutes(45),
+				created_at: minutes(45),
+			},
+		],
+		secretScanningAlerts: [],
+	};
+}
+
+/** The seed beta pull requests. */
+function seedBetaPullRequests(): StubRepository["pullRequests"] {
+	return [
+		{
+			number: 1,
+			title: "Add a greeting command",
+			body: "Add the greeting command.\n\nFixes #1",
+			labels: [],
+			state: "open",
+			merged: false,
+			draft: true,
+			headBranch: "factory/1-add-a-greeting-command",
+			closingIssueNumbers: [1],
+			comments: [],
+			reviews: [],
+			updatedAt: minutes(10),
+		},
+	];
 }
 
 /**

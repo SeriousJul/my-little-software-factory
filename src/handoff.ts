@@ -168,11 +168,16 @@ export function baseChoice(
 	agentType: string,
 	environment: EnvironmentKind,
 	taskType: string,
-	model = "",
-	thinking = "",
-	contextWindow = "",
+	settings?: { model?: string; thinking?: string; contextWindow?: string },
 ): HandoffChoice {
-	return { agentType, environment, taskType, model, thinking, contextWindow };
+	return {
+		agentType,
+		environment,
+		taskType,
+		model: settings?.model ?? "",
+		thinking: settings?.thinking ?? "",
+		contextWindow: settings?.contextWindow ?? "",
+	};
 }
 
 /**
@@ -198,9 +203,7 @@ export function resolveHandoffChoice(
 		settings.agentType,
 		resolveEnvironment(config, pin?.environment),
 		taskType,
-		settings.model,
-		settings.thinking,
-		settings.contextWindow,
+		settings,
 	);
 }
 
@@ -636,15 +639,15 @@ export async function handOffTicket(
 	// fact it owns.
 	const taskType = check.taskType;
 	if (taskType === undefined) return { status: "failed", reason: "the handoff names no task type" };
-	const answer = await ticketPrompt(
+	const answer = await ticketPrompt({
 		taskType,
-		choice.taskType,
+		taskTypeName: choice.taskType,
 		ticket,
 		runner,
-		config.sources,
+		sources: config.sources,
 		previousMessage,
-		workflowScoreThreshold(config),
-	);
+		scoreThreshold: workflowScoreThreshold(config),
+	});
 	if ("fail" in answer) return { status: "failed", reason: answer.fail };
 	return runHandoffStart({
 		choice,
@@ -742,28 +745,29 @@ function ticketWorkspaceFact(
  * the handoff's own answers are: a pass carries the prompt to send and the open
  * to run, a failure its reason.
  */
-async function ticketPrompt(
-	taskType: FactoryConfig["taskTypes"][string],
-	taskTypeName: string,
-	ticket: Ticket,
-	runner: CommandRunner,
-	sources: readonly TicketSourceConfig[],
-	previousMessage?: string,
-	scoreThreshold?: number,
-): Promise<{ prompt: HandoffPrompt; pullRequestOpen?: PullRequestOpenPlan } | { fail: string }> {
+async function ticketPrompt(fields: {
+	taskType: FactoryConfig["taskTypes"][string];
+	taskTypeName: string;
+	ticket: Ticket;
+	runner: CommandRunner;
+	sources: readonly TicketSourceConfig[];
+	previousMessage?: string;
+	scoreThreshold?: number;
+}): Promise<{ prompt: HandoffPrompt; pullRequestOpen?: PullRequestOpenPlan } | { fail: string }> {
+	const { taskType, taskTypeName, ticket, runner, sources, previousMessage, scoreThreshold } =
+		fields;
 	const template = taskType.template;
 	if (template === undefined) return { fail: "the task type carries no prompt template" };
 	if (taskType.opensPullRequest !== true)
 		return {
-			prompt: await renderTicketPrompt(
+			prompt: await renderTicketPrompt({
 				template,
 				ticket,
 				runner,
 				sources,
 				previousMessage,
-				"",
 				scoreThreshold,
-			),
+			}),
 		};
 	const membership = newestMembership(ticket.memberships);
 	const source =
@@ -776,7 +780,15 @@ async function ticketPrompt(
 		};
 	return {
 		prompt: (url) =>
-			renderTicketPrompt(template, ticket, runner, sources, previousMessage, url, scoreThreshold),
+			renderTicketPrompt({
+				template,
+				ticket,
+				runner,
+				sources,
+				previousMessage,
+				pullRequestUrl: url,
+				scoreThreshold,
+			}),
 		pullRequestOpen: { ticket, branch: branchNameFor(ticket), source },
 	};
 }
@@ -851,14 +863,11 @@ export async function handOffConsultation({
 	if (!check.ok) return { status: "failed", reason: check.reason };
 	const name = consultation.agentName || consultationAgentName(consultation.id);
 	return runHandoffStart({
-		choice: baseChoice(
-			consultation.agentType,
-			consultation.environment,
-			"",
-			consultation.model,
-			consultation.thinking,
-			consultation.contextWindow,
-		),
+		choice: baseChoice(consultation.agentType, consultation.environment, "", {
+			model: consultation.model,
+			thinking: consultation.thinking,
+			contextWindow: consultation.contextWindow,
+		}),
 		config,
 		runner,
 		home,
@@ -1165,34 +1174,7 @@ async function runHandoffStart(request: HandoffStartRequest): Promise<HandoffOut
 	// makes, the answer names the branch the builder works, and the fallback it
 	// takes is the start's own note. The builder keeps its one reuse policy over
 	// whatever branch the statement names, and learns nothing.
-	if (request.branch.pullRequestHeadBranch !== undefined) {
-		const headBranch = request.branch.pullRequestHeadBranch;
-		let headStandsInCheckout = false;
-		let headStandsOnOrigin = false;
-		if (headBranch !== null) {
-			const listed = await ctx.runner.run("git", ["-C", checkout, "branch", "--list", headBranch]);
-			if (listed.code === 0 && listed.stdout.trim() !== "") {
-				headStandsInCheckout = true;
-			} else {
-				headStandsOnOrigin = await remoteBranchStands(checkout, headBranch, ctx);
-			}
-		}
-		const answer = pullRequestBranchFor({
-			factoryBranch: request.branch.name,
-			headBranch,
-			headStandsInCheckout,
-			headStandsOnOrigin,
-		});
-		request.branch.name = answer.branch;
-		if (answer.fallback !== null)
-			ctx.notes = {
-				...ctx.notes,
-				branchFallback: pullRequestBranchFallbackLine(answer.fallback, headBranch, answer.branch),
-			};
-		// The pull request open stands on the branch the start works, so the
-		// open and the Environment never name two branches for one start.
-		if (ctx.pullRequestOpen !== undefined) ctx.pullRequestOpen.branch = answer.branch;
-	}
+	await resolvePullRequestBranch(request, ctx, checkout);
 	// What this start creates, and what it has already put into the world, stand
 	// outside its steps. A command that raises in the middle of a start therefore
 	// still leaves the start able to name what it made and what it must not roll
@@ -1201,7 +1183,7 @@ async function runHandoffStart(request: HandoffStartRequest): Promise<HandoffOut
 	const progress: StartProgress = { agent: null };
 	let outcome: HandoffOutcome;
 	try {
-		outcome = await runStartSteps(request, check, ctx, residue, progress);
+		outcome = await runStartSteps({ request, check, ctx, residue, progress });
 	} catch (error) {
 		outcome = raisedDuringStart(error, ctx, progress);
 	}
@@ -1216,17 +1198,66 @@ async function runHandoffStart(request: HandoffStartRequest): Promise<HandoffOut
 }
 
 /**
+ * The branch the start works, resolved for a pull request ticket: the
+ * head-branch fact against the checkout and origin, the answer, and the
+ * fallback note the start carries when the answer fell back.
+ */
+async function resolvePullRequestBranch(
+	request: HandoffStartRequest,
+	ctx: HandoffContext,
+	checkout: string,
+): Promise<void> {
+	if (request.branch.pullRequestHeadBranch === undefined) return;
+	const headBranch = request.branch.pullRequestHeadBranch;
+	const stands = await headBranchStands(checkout, headBranch, ctx);
+	const answer = pullRequestBranchFor({
+		factoryBranch: request.branch.name,
+		headBranch,
+		headStandsInCheckout: stands.inCheckout,
+		headStandsOnOrigin: stands.onOrigin,
+	});
+	request.branch.name = answer.branch;
+	if (answer.fallback !== null)
+		ctx.notes = {
+			...ctx.notes,
+			branchFallback: pullRequestBranchFallbackLine(answer.fallback, headBranch, answer.branch),
+		};
+	// The pull request open stands on the branch the start works, so the
+	// open and the Environment never name two branches for one start.
+	if (ctx.pullRequestOpen !== undefined) ctx.pullRequestOpen.branch = answer.branch;
+}
+
+/** The places one head branch stands: in the checkout, and on origin. */
+async function headBranchStands(
+	checkout: string,
+	headBranch: string | null,
+	ctx: HandoffContext,
+): Promise<{ inCheckout: boolean; onOrigin: boolean }> {
+	let inCheckout = false;
+	let onOrigin = false;
+	if (headBranch === null) return { inCheckout, onOrigin };
+	const listed = await ctx.runner.run("git", ["-C", checkout, "branch", "--list", headBranch]);
+	if (listed.code === 0 && listed.stdout.trim() !== "") {
+		inCheckout = true;
+	} else {
+		onOrigin = await remoteBranchStands(checkout, headBranch, ctx);
+	}
+	return { inCheckout, onOrigin };
+}
+
+/**
  * The steps one start runs, in their one order: the Environment the choice
  * names, the Pull request open of a task type that opens one, the Agent start,
  * and the prompt.
  */
-async function runStartSteps(
-	request: HandoffStartRequest,
-	check: StartCheck & { ok: true },
-	ctx: HandoffContext,
-	residue: Residue,
-	progress: StartProgress,
-): Promise<HandoffOutcome> {
+async function runStartSteps(fields: {
+	request: HandoffStartRequest;
+	check: StartCheck & { ok: true };
+	ctx: HandoffContext;
+	residue: Residue;
+	progress: StartProgress;
+}): Promise<HandoffOutcome> {
+	const { request, check, ctx, residue, progress } = fields;
 	const environment = await buildEnvironment(request, ctx, residue);
 	if ("outcome" in environment) return environment.outcome;
 	// The step between the environment and the Agent is the Pull request open of
@@ -1243,14 +1274,14 @@ async function runStartSteps(
 	// created.
 	if (pre.branchHandedOver) residue.branch = null;
 	if ("fail" in pre) return failed(pre.fail, ctx);
-	return await startAgentAndPrompt(
-		check.agent,
-		settingArgs(check.agent, request.choice),
-		pre.text,
+	return await startAgentAndPrompt({
+		agent: check.agent,
+		args: settingArgs(check.agent, request.choice),
+		prompt: pre.text,
 		ctx,
-		{ ...environment.handles, previousTabId: request.previousTabId },
+		handles: { ...environment.handles, previousTabId: request.previousTabId },
 		progress,
-	);
+	});
 }
 
 /**
@@ -1465,31 +1496,52 @@ function recordResource(
  * the operator's Close has to be able to reach it.
  */
 async function removeResidue(ctx: HandoffContext, residue: Residue): Promise<void> {
-	if (residue.tab !== null && (await closeTab(residue.tab.resourceId, ctx)))
-		confirmRemoved(ctx, residue.tab);
+	await removeResidueTab(ctx, residue);
+	await removeResidueCheckout(ctx, residue);
+	await removeResidueBranch(ctx, residue);
+}
+
+/** The tab half of the start's residue, closed when it still stands. */
+async function removeResidueTab(ctx: HandoffContext, residue: Residue): Promise<void> {
+	if (residue.tab === null) return;
+	if (!(await closeTab(residue.tab.resourceId, ctx))) return;
+	confirmRemoved(ctx, residue.tab);
+}
+
+/** The checkout half of the start's residue: the worktree, or the workspace alone. */
+async function removeResidueCheckout(ctx: HandoffContext, residue: Residue): Promise<void> {
 	if (residue.worktree !== null) {
 		if (await removeWorktreeCheckout(residue.worktree.resourceId, ctx)) {
 			// `worktree remove` takes the workspace herdr created together with its
 			// checkout, and the root tab between them, so all three rows go.
 			confirmRemoved(ctx, residue.worktree);
 			if (residue.workspace !== null) confirmRemoved(ctx, residue.workspace);
-			if (residue.rootTab !== null) confirmRemoved(ctx, residue.rootTab);
+			confirmResidueRootTab(ctx, residue);
 		}
-	} else if (residue.workspace !== null) {
-		if (await closeWorkspace(residue.workspace.resourceId, ctx)) {
-			confirmRemoved(ctx, residue.workspace);
-			if (residue.rootTab !== null) confirmRemoved(ctx, residue.rootTab);
-		}
+		return;
 	}
-	if (residue.branch !== null) {
-		// A branch delete is cleanup like every other half of this rule: a command
-		// that raises is answered the way a refusal is, so it cannot escape the
-		// start and take the rest of the cleanup with it.
-		try {
-			await ctx.runner.run("git", ["-C", ctx.checkout, "branch", "-D", residue.branch]);
-		} catch {
-			// Best effort.
-		}
+	if (residue.workspace === null) return;
+	if (await closeWorkspace(residue.workspace.resourceId, ctx)) {
+		confirmRemoved(ctx, residue.workspace);
+		confirmResidueRootTab(ctx, residue);
+	}
+}
+
+/** The root tab half of the start's residue, gone with the checkout that held it. */
+function confirmResidueRootTab(ctx: HandoffContext, residue: Residue): void {
+	if (residue.rootTab !== null) confirmRemoved(ctx, residue.rootTab);
+}
+
+/** The branch half of the start's residue, deleted best effort. */
+async function removeResidueBranch(ctx: HandoffContext, residue: Residue): Promise<void> {
+	if (residue.branch === null) return;
+	// A branch delete is cleanup like every other half of this rule: a command
+	// that raises is answered the way a refusal is, so it cannot escape the
+	// start and take the rest of the cleanup with it.
+	try {
+		await ctx.runner.run("git", ["-C", ctx.checkout, "branch", "-D", residue.branch]);
+	} catch {
+		// Best effort.
 	}
 }
 
@@ -1641,7 +1693,7 @@ async function buildWorktreeEnvironment(
 		base.reference,
 		"--no-focus",
 	]);
-	return createdWorktreeAnswer(created, ctx, branch, true, residue);
+	return createdWorktreeAnswer({ created, ctx, branch, createdBranch: true, residue });
 }
 
 /**
@@ -1720,7 +1772,7 @@ async function reuseBranch(
 		branch,
 		"--no-focus",
 	]);
-	return createdWorktreeAnswer(created, ctx, branch, false, residue);
+	return createdWorktreeAnswer({ created, ctx, branch, createdBranch: false, residue });
 }
 
 /**
@@ -1728,13 +1780,14 @@ async function reuseBranch(
  * the tab that holds it. `createdBranch` says whether this start made the branch,
  * which is what the cleanup may delete.
  */
-function createdWorktreeAnswer(
-	created: CommandResult,
-	ctx: HandoffContext,
-	branch: string,
-	createdBranch: boolean,
-	residue: Residue,
-): EnvironmentAnswer {
+function createdWorktreeAnswer(fields: {
+	created: CommandResult;
+	ctx: HandoffContext;
+	branch: string;
+	createdBranch: boolean;
+	residue: Residue;
+}): EnvironmentAnswer {
+	const { created, ctx, branch, createdBranch, residue } = fields;
 	if (created.code !== 0) return { outcome: failedCommand(created, ctx) };
 	const handles = herdrHandles(created);
 	if (handles.workspaceId === null) {
@@ -2053,138 +2106,23 @@ async function runPullRequestOpen(
 	// but the read still decides whether the fresh branch needs the plane's hold
 	// commit. A command that raises is a failure the answer carries, the way the
 	// module's reads do.
-	let listed: CommandResult;
-	try {
-		listed = await ctx.runner.run(
-			"git",
-			["-C", ctx.checkout, "ls-remote", "--heads", "origin", plan.branch],
-			{ env: { GIT_TERMINAL_PROMPT: "0" } },
-		);
-	} catch (error) {
-		return {
-			fail: `the pull request open could not read the factory branch from origin: ${errorMessage(
-				error,
-			)}`,
-			branchHandedOver: false,
-		};
-	}
-	if (listed.code !== 0)
-		return {
-			fail: `the pull request open could not read the factory branch from origin: ${commandFailureText(
-				listed,
-			)}`,
-			branchHandedOver: false,
-		};
-	const existedBefore = listed.stdout.trim() !== "";
+	const listed = await remoteBranchListed(ctx, plan.branch);
+	if (!listed.ok) return { fail: listed.reason, branchHandedOver: false };
 	// A branch the remote did not carry stands at its base: the create would
 	// answer "No commits between", and no retry of the create clears it. The
-	// hold commit gives the open a commit to stand on, before the push. The
-	// commit moves the factory branch by its name - the refs read, the empty
-	// commit built on it, the branch moved to it - and never the checkout's
-	// current branch, which the open runs from and owns no part of.
-	if (!existedBefore) {
-		let refs: CommandResult;
-		try {
-			refs = await ctx.runner.run("git", [
-				"-C",
-				ctx.checkout,
-				"rev-parse",
-				plan.branch,
-				`${plan.branch}^{tree}`,
-			]);
-		} catch (error) {
-			return {
-				fail: `the pull request open could not read the factory branch: ${errorMessage(error)}`,
-				branchHandedOver: false,
-			};
-		}
-		const refLines = refs.stdout
-			.split(/\r?\n/)
-			.map((line) => line.trim())
-			.filter((line) => line !== "");
-		if (refs.code !== 0 || refLines.length !== 2)
-			return {
-				fail: `the pull request open could not read the factory branch: ${commandFailureText(refs)}`,
-				branchHandedOver: false,
-			};
-		const [tip, tree] = refLines as [string, string];
-		let held: CommandResult;
-		try {
-			held = await ctx.runner.run("git", [
-				"-C",
-				ctx.checkout,
-				"commit-tree",
-				tree,
-				"-p",
-				tip,
-				"-m",
-				PULL_REQUEST_HOLD_COMMIT_MESSAGE,
-			]);
-		} catch (error) {
-			return {
-				fail: `the pull request open could not commit the hold: ${errorMessage(error)}`,
-				branchHandedOver: false,
-			};
-		}
-		const holdSha = held.stdout.trim();
-		if (held.code !== 0 || holdSha === "")
-			return {
-				fail: `the pull request open could not commit the hold: ${commandFailureText(held)}`,
-				branchHandedOver: false,
-			};
-		let moved: CommandResult;
-		try {
-			moved = await ctx.runner.run("git", [
-				"-C",
-				ctx.checkout,
-				"update-ref",
-				`refs/heads/${plan.branch}`,
-				holdSha,
-			]);
-		} catch (error) {
-			return {
-				fail: `the pull request open could not move the factory branch to the hold: ${errorMessage(
-					error,
-				)}`,
-				branchHandedOver: false,
-			};
-		}
-		if (moved.code !== 0)
-			return {
-				fail: `the pull request open could not move the factory branch to the hold: ${commandFailureText(
-					moved,
-				)}`,
-				branchHandedOver: false,
-			};
+	// hold commit gives the open a commit to stand on, before the push.
+	if (!listed.existedBefore) {
+		const held = await holdFreshBranch(ctx, plan.branch);
+		if (!held.ok) return { fail: held.reason, branchHandedOver: false };
 	}
-	let pushed: CommandResult;
-	try {
-		pushed = await ctx.runner.run("git", ["-C", ctx.checkout, "push", "origin", plan.branch], {
-			env: { GIT_TERMINAL_PROMPT: "0" },
-		});
-	} catch (error) {
-		return {
-			fail: `pushing the factory branch ${plan.branch} raised: ${errorMessage(error)}`,
-			// A push that raises may still have created the remote branch, and the
-			// local branch carries the hold commit either way: the answer hands the
-			// branch over, so the next Handoff reuses both copies instead of building
-			// a fresh branch the remote may then refuse.
-			branchHandedOver: true,
-		};
-	}
-	if (pushed.code !== 0)
-		return {
-			fail: `pushing the factory branch ${plan.branch} failed: ${commandFailureText(pushed)}`,
-			// A failed push created no remote branch, and the start still owns the
-			// local copy it created.
-			branchHandedOver: false,
-		};
-	// The push landed the branch on the remote, and from here the branch belongs
+	// The push lands the branch on the remote, and from here the branch belongs
 	// to the ticket's pull request, not to this start (issue #296). The answer
 	// states the handover; the start level drops the branch row out of its
 	// residue record, so a later failure keeps the local copy beside the remote
 	// one and the next Handoff's branch check finds the branch and opens the
 	// worktree on it instead of building a fresh one the remote then refuses.
+	const pushed = await pushFactoryBranch(ctx, plan.branch);
+	if (!pushed.ok) return { fail: pushed.reason, branchHandedOver: pushed.handedOver };
 	const handedOver = true as const;
 	// The source reads answer a raise with their own reason, but the read of a
 	// source's authentication stands outside those guards, and a CommandRunner
@@ -2192,6 +2130,175 @@ async function runPullRequestOpen(
 	// failure the answer carries: the push already landed, so it carries the
 	// handover too, and the start keeps the local copy of the branch beside the
 	// remote one the next Handoff reuses.
+	const opened = await openedPullRequestForBranch(ctx, plan);
+	if ("fail" in opened) return { fail: opened.fail, branchHandedOver: handedOver };
+	return { url: opened.url, number: opened.number, branchHandedOver: handedOver };
+}
+
+/** The remote's answer on whether the factory branch already stands. */
+async function remoteBranchListed(
+	ctx: HandoffContext,
+	branch: string,
+): Promise<{ ok: true; existedBefore: boolean } | { ok: false; reason: string }> {
+	let listed: CommandResult;
+	try {
+		listed = await ctx.runner.run(
+			"git",
+			["-C", ctx.checkout, "ls-remote", "--heads", "origin", branch],
+			{ env: { GIT_TERMINAL_PROMPT: "0" } },
+		);
+	} catch (error) {
+		return {
+			ok: false,
+			reason: `the pull request open could not read the factory branch from origin: ${errorMessage(
+				error,
+			)}`,
+		};
+	}
+	if (listed.code !== 0)
+		return {
+			ok: false,
+			reason: `the pull request open could not read the factory branch from origin: ${commandFailureText(
+				listed,
+			)}`,
+		};
+	return { ok: true, existedBefore: listed.stdout.trim() !== "" };
+}
+
+/** The factory branch's tip and tree, read before the hold commit. */
+async function branchTipAndTree(
+	ctx: HandoffContext,
+	branch: string,
+): Promise<{ ok: true; tip: string; tree: string } | { ok: false; reason: string }> {
+	let refs: CommandResult;
+	try {
+		refs = await ctx.runner.run("git", [
+			"-C",
+			ctx.checkout,
+			"rev-parse",
+			branch,
+			`${branch}^{tree}`,
+		]);
+	} catch (error) {
+		return {
+			ok: false,
+			reason: `the pull request open could not read the factory branch: ${errorMessage(error)}`,
+		};
+	}
+	const refLines = refs.stdout
+		.split(/\r?\n/)
+		.map((line) => line.trim())
+		.filter((line) => line !== "");
+	if (refs.code !== 0 || refLines.length !== 2)
+		return {
+			ok: false,
+			reason: `the pull request open could not read the factory branch: ${commandFailureText(refs)}`,
+		};
+	const [tip, tree] = refLines as [string, string];
+	return { ok: true, tip, tree };
+}
+
+/**
+ * The hold commit a fresh factory branch stands on before the push (ADR 0076):
+ * the commit moves the factory branch by its name - the empty commit built on
+ * the tip, the branch moved to it - and never the checkout's current branch,
+ * which the open runs from and owns no part of.
+ */
+async function holdFreshBranch(
+	ctx: HandoffContext,
+	branch: string,
+): Promise<{ ok: true } | { ok: false; reason: string }> {
+	const refs = await branchTipAndTree(ctx, branch);
+	if (!refs.ok) return refs;
+	const { tip, tree } = refs;
+	let held: CommandResult;
+	try {
+		held = await ctx.runner.run("git", [
+			"-C",
+			ctx.checkout,
+			"commit-tree",
+			tree,
+			"-p",
+			tip,
+			"-m",
+			PULL_REQUEST_HOLD_COMMIT_MESSAGE,
+		]);
+	} catch (error) {
+		return {
+			ok: false,
+			reason: `the pull request open could not commit the hold: ${errorMessage(error)}`,
+		};
+	}
+	const holdSha = held.stdout.trim();
+	if (held.code !== 0 || holdSha === "")
+		return {
+			ok: false,
+			reason: `the pull request open could not commit the hold: ${commandFailureText(held)}`,
+		};
+	let moved: CommandResult;
+	try {
+		moved = await ctx.runner.run("git", [
+			"-C",
+			ctx.checkout,
+			"update-ref",
+			`refs/heads/${branch}`,
+			holdSha,
+		]);
+	} catch (error) {
+		return {
+			ok: false,
+			reason: `the pull request open could not move the factory branch to the hold: ${errorMessage(
+				error,
+			)}`,
+		};
+	}
+	if (moved.code !== 0)
+		return {
+			ok: false,
+			reason: `the pull request open could not move the factory branch to the hold: ${commandFailureText(
+				moved,
+			)}`,
+		};
+	return { ok: true };
+}
+
+/** The branch push, and the handover a push that raises still leaves. */
+async function pushFactoryBranch(
+	ctx: HandoffContext,
+	branch: string,
+): Promise<{ ok: true } | { ok: false; reason: string; handedOver: boolean }> {
+	let pushed: CommandResult;
+	try {
+		pushed = await ctx.runner.run("git", ["-C", ctx.checkout, "push", "origin", branch], {
+			env: { GIT_TERMINAL_PROMPT: "0" },
+		});
+	} catch (error) {
+		return {
+			ok: false,
+			reason: `pushing the factory branch ${branch} raised: ${errorMessage(error)}`,
+			// A push that raises may still have created the remote branch, and the
+			// local branch carries the hold commit either way: the answer hands the
+			// branch over, so the next Handoff reuses both copies instead of building
+			// a fresh branch the remote may then refuse.
+			handedOver: true,
+		};
+	}
+	if (pushed.code !== 0)
+		return {
+			ok: false,
+			reason: `pushing the factory branch ${branch} failed: ${commandFailureText(pushed)}`,
+			// A failed push created no remote branch, and the start still owns the
+			// local copy it created.
+			handedOver: false,
+		};
+	return { ok: true };
+}
+
+/** The branch's standing pull request, or the draft the open creates. */
+async function openedPullRequestForBranch(
+	ctx: HandoffContext,
+	plan: PullRequestOpenPlan,
+): Promise<{ number: number; url: string } | { fail: string }> {
 	let records: OpenPullRequestRecord[] | { fail: string };
 	try {
 		records = await listOpenPullRequestsByHeadBranch(
@@ -2203,39 +2310,30 @@ async function runPullRequestOpen(
 	} catch (error) {
 		return {
 			fail: `the pull request open could not read the branch's pull requests: ${errorMessage(error)}`,
-			branchHandedOver: handedOver,
 		};
 	}
 	if ("fail" in records)
 		return {
 			fail: `the pull request open could not read the branch's pull requests: ${records.fail}`,
-			branchHandedOver: handedOver,
 		};
 	const standing = records[0];
-	if (standing !== undefined)
-		return { url: standing.url, number: standing.number, branchHandedOver: handedOver };
+	if (standing !== undefined) return { url: standing.url, number: standing.number };
 	let opened: { number: number; url: string } | { fail: string };
 	try {
-		opened = await openDraftPullRequest(
-			ctx.runner,
-			plan.source,
-			plan.ticket.repositoryRef,
-			plan.branch,
-			plan.ticket.title,
-			pullRequestBodyFor(plan.ticket),
-		);
+		opened = await openDraftPullRequest(ctx.runner, plan.source, {
+			repository: plan.ticket.repositoryRef,
+			branch: plan.branch,
+			title: plan.ticket.title,
+			body: pullRequestBodyFor(plan.ticket),
+		});
 	} catch (error) {
 		return {
 			fail: `the pull request open could not open the draft pull request: ${errorMessage(error)}`,
-			branchHandedOver: handedOver,
 		};
 	}
 	if ("fail" in opened)
-		return {
-			fail: `the pull request open could not open the draft pull request: ${opened.fail}`,
-			branchHandedOver: handedOver,
-		};
-	return { url: opened.url, number: opened.number, branchHandedOver: handedOver };
+		return { fail: `the pull request open could not open the draft pull request: ${opened.fail}` };
+	return opened;
 }
 
 /**
@@ -2334,14 +2432,15 @@ async function closeTab(tabId: string, ctx: HandoffContext): Promise<boolean> {
  * residue, and the new tab is where the work continues. A close failure
  * does not fail the handoff: the agent is running either way.
  */
-async function startAgentAndPrompt(
-	agent: FactoryConfig["agents"][string],
-	args: string[],
-	prompt: string,
-	ctx: HandoffContext,
-	handles: AgentHandles,
-	progress: StartProgress,
-): Promise<HandoffOutcome> {
+async function startAgentAndPrompt(fields: {
+	agent: FactoryConfig["agents"][string];
+	args: string[];
+	prompt: string;
+	ctx: HandoffContext;
+	handles: AgentHandles;
+	progress: StartProgress;
+}): Promise<HandoffOutcome> {
+	const { agent, args, prompt, ctx, handles, progress } = fields;
 	const attempt = await startAgentUnderAvailableName(agent, args, handles.paneId, ctx);
 	if (attempt.name === null) {
 		return failedNameUnusable(attempt, ctx);
@@ -2434,9 +2533,7 @@ async function startAgentUnderAvailableName(
 	for (let index = 0; index < candidates.length; index += 1) {
 		const name = candidates[index];
 		const startArgs = ["agent", "start", name, "--kind", agent.kind, "--pane", paneId];
-		if (args.length > 0) {
-			startArgs.push("--", ...args);
-		}
+		if (args.length > 0) startArgs.push("--", ...args);
 		result = await startAgentWhenPaneIsReady(startArgs, ctx.runner);
 		if (result.code === 0) {
 			return {
@@ -2449,26 +2546,39 @@ async function startAgentUnderAvailableName(
 		}
 		nameHeld = herdrErrorCode(result) === "agent_name_taken";
 		if (!nameHeld) break;
-		const holders = herdrNameHolders(result);
-		const own = nameIsOwnLeftover(ctx.names, holders);
-		collision = {
-			stableName: candidates[0],
-			// The refusal is about the name just asked for, and that is the name the
-			// holder holds - not necessarily the stable name the search started on.
-			heldName: name,
-			startedAs: null,
-			// The operator is sent to find the holder that matters: for an own
-			// collision, the one this ticket's handoffs recorded.
-			holder: own ? (ownHolder(ctx.names, holders) ?? holders[0] ?? null) : (holders[0] ?? null),
-			own,
-			reason: herdrFailureText(result),
-		};
+		collision = nameCollisionOf(ctx.names, candidates[0], name, result);
 		if (collision.own && ownCollision === undefined) ownCollision = collision;
 		// Another ticket's agent, or the last candidate spent: the collision
 		// stands, and no further name is asked for.
 		if (!collision.own || index + 1 === candidates.length) break;
 	}
 	return { name: null, result, nameHeld, ...collisionFields(collision, ownCollision) };
+}
+
+/**
+ * The collision one refused name stands: the holder that answers it, and the
+ * own fact the ticket's own leftovers carry.
+ */
+function nameCollisionOf(
+	names: NamePlan,
+	stableName: string,
+	name: string,
+	result: CommandResult,
+): NameCollision {
+	const holders = herdrNameHolders(result);
+	const own = nameIsOwnLeftover(names, holders);
+	return {
+		stableName,
+		// The refusal is about the name just asked for, and that is the name the
+		// holder holds - not necessarily the stable name the search started on.
+		heldName: name,
+		startedAs: null,
+		// The operator is sent to find the holder that matters: for an own
+		// collision, the one this ticket's handoffs recorded.
+		holder: own ? (ownHolder(names, holders) ?? holders[0] ?? null) : (holders[0] ?? null),
+		own,
+		reason: herdrFailureText(result),
+	};
 }
 
 /**
@@ -2722,56 +2832,74 @@ export async function closeHandoffEnvironment(
 	if (reach.scope === "none") {
 		return undefined;
 	}
-	if (reach.scope === "workspace") {
-		// The checkout on disk and the herdr workspace behind it: herdr
-		// worktree remove closes the workspace with the checkout and never
-		// deletes the branch, so pushed work and pull requests survive.
-		const removeArgs = ["worktree", "remove", "--workspace", reach.workspaceId];
-		if (force) {
-			removeArgs.push("--force");
-		}
-		const removed = await runner.run("herdr", removeArgs);
-		if (removed.code === 0) {
-			// The workspace closed with the checkout: the environment is gone.
-			// A close of a workspace the operator is not viewing leaves herdr's
-			// view alone, so no focus command follows it (ADR 0061).
-			return undefined;
-		}
-		const code = herdrErrorCode(removed);
-		if (code === "workspace_not_found") {
-			// The workspace is already gone: there is nothing to clean up.
-			return undefined;
-		}
-		if (code === "worktree_remove_failed") {
-			// The checkout is gone (deleted outside herdr): the workspace is
-			// what remains, so close it.
-			const closed = await runner.run("herdr", ["workspace", "close", reach.workspaceId]);
-			if (closed.code === 0 || herdrErrorCode(closed) === "workspace_not_found") {
-				return undefined;
-			}
-			return herdrFailureText(closed);
-		}
+	if (reach.scope === "workspace")
+		return closeWorkspaceEnvironment(runner, reach.workspaceId, force);
+	if (reach.scope === "tab") return closeTabEnvironment(runner, reach.tabId);
+	return undefined;
+}
+
+/** The close of a worktree environment: the workspace, with its checkout. */
+async function closeWorkspaceEnvironment(
+	runner: CommandRunner,
+	workspaceId: string,
+	force: boolean,
+): Promise<string | undefined> {
+	// The checkout on disk and the herdr workspace behind it: herdr
+	// worktree remove closes the workspace with the checkout and never
+	// deletes the branch, so pushed work and pull requests survive.
+	const removeArgs = ["worktree", "remove", "--workspace", workspaceId];
+	if (force) removeArgs.push("--force");
+	const removed = await runner.run("herdr", removeArgs);
+	if (removed.code === 0) {
+		// The workspace closed with the checkout: the environment is gone.
+		// A close of a workspace the operator is not viewing leaves herdr's
+		// view alone, so no focus command follows it (ADR 0061).
+		return undefined;
+	}
+	const code = herdrErrorCode(removed);
+	if (code === "workspace_not_found") {
+		// The workspace is already gone: there is nothing to clean up.
+		return undefined;
+	}
+	if (code !== "worktree_remove_failed") {
 		// The checkout is still there (for example dirty): leave the
 		// workspace open for the operator and report why the removal failed.
 		return herdrFailureText(removed);
 	}
-	if (reach.scope === "tab") {
-		// The tab close keeps the workspace and the tabs beside it, so herdr
-		// leaves the operator's view where it stood: the cleanup sends no
-		// focus command here either, and none follows a workspace close (ADR 0061).
-		const result = await runner.run("herdr", ["tab", "close", reach.tabId]);
-		if (result.code === 0) {
-			// The tab closed: the environment is gone.
-			return undefined;
-		}
-		if (herdrErrorCode(result) === "tab_not_found") {
-			// The tab is already gone (closed outside herdr): there is
-			// nothing left to clean up.
-			return undefined;
-		}
-		return herdrFailureText(result);
+	// The checkout is gone (deleted outside herdr): the workspace is
+	// what remains, so close it.
+	return closeWorkspaceFallback(runner, workspaceId);
+}
+
+/** The workspace close that stands when the worktree remove found no checkout. */
+async function closeWorkspaceFallback(
+	runner: CommandRunner,
+	workspaceId: string,
+): Promise<string | undefined> {
+	const closed = await runner.run("herdr", ["workspace", "close", workspaceId]);
+	if (closed.code === 0 || herdrErrorCode(closed) === "workspace_not_found") return undefined;
+	return herdrFailureText(closed);
+}
+
+/** The close of a live-worktree environment: the tab alone. */
+async function closeTabEnvironment(
+	runner: CommandRunner,
+	tabId: string,
+): Promise<string | undefined> {
+	// The tab close keeps the workspace and the tabs beside it, so herdr
+	// leaves the operator's view where it stood: the cleanup sends no
+	// focus command here either, and none follows a workspace close (ADR 0061).
+	const result = await runner.run("herdr", ["tab", "close", tabId]);
+	if (result.code === 0) {
+		// The tab closed: the environment is gone.
+		return undefined;
 	}
-	return undefined;
+	if (herdrErrorCode(result) === "tab_not_found") {
+		// The tab is already gone (closed outside herdr): there is
+		// nothing left to clean up.
+		return undefined;
+	}
+	return herdrFailureText(result);
 }
 
 /**
@@ -2932,10 +3060,9 @@ export function renderSettingArgs(template: string, value: string): string[] {
 export function renderPrompt(
 	template: string,
 	ticket: Ticket,
-	previousMessage = "",
-	reviewVerdict = "",
-	pullRequestUrl = "",
+	fills: { previousMessage?: string; reviewVerdict?: string; pullRequestUrl?: string } = {},
 ): string {
+	const { previousMessage = "", reviewVerdict = "", pullRequestUrl = "" } = fills;
 	const values: Record<string, string> = {
 		repository: ticket.repository,
 		title: ticket.title,
@@ -2998,22 +3125,27 @@ export function reviewVerdictFill(read: ReviewVerdictRead, scoreThreshold?: numb
  * the same read the score judgment runs at settle. A template without the
  * reference issues no read and renders the prompt as before.
  */
-async function renderTicketPrompt(
-	template: string,
-	ticket: Ticket,
-	runner: CommandRunner,
-	sources: readonly TicketSourceConfig[],
-	previousMessage = "",
-	pullRequestUrl = "",
-	scoreThreshold?: number,
-): Promise<string> {
+async function renderTicketPrompt(fields: {
+	template: string;
+	ticket: Ticket;
+	runner: CommandRunner;
+	sources: readonly TicketSourceConfig[];
+	previousMessage?: string;
+	pullRequestUrl?: string;
+	scoreThreshold?: number;
+}): Promise<string> {
+	const { template, ticket, runner, sources } = fields;
 	let reviewVerdict = "";
 	if (template.includes("{review-verdict}"))
 		reviewVerdict = reviewVerdictFill(
 			await readReviewVerdict(runner, sources, ticket),
-			scoreThreshold,
+			fields.scoreThreshold,
 		);
-	return renderPrompt(template, ticket, previousMessage, reviewVerdict, pullRequestUrl);
+	return renderPrompt(template, ticket, {
+		previousMessage: fields.previousMessage,
+		reviewVerdict,
+		pullRequestUrl: fields.pullRequestUrl,
+	});
 }
 
 /**

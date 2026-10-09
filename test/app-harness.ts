@@ -251,24 +251,35 @@ export function spanColors(setup: Setup, text: string): [number, number, number]
 		for (;;) {
 			const at = full.indexOf(text, from);
 			if (at < 0) break;
-			let spanStart = 0;
-			for (const span of line.spans) {
-				const spanEnd = spanStart + span.text.length;
-				const overlaps = spanEnd > at && spanStart < at + text.length;
-				if (overlaps) {
-					const [r, g, b] = span.fg.toInts();
-					const key = `${r},${g},${b}`;
-					if (!seen.has(key)) {
-						seen.add(key);
-						order.push([r, g, b]);
-					}
-				}
-				spanStart = spanEnd;
-			}
+			occurrenceColors(line, at, text.length, { order, seen });
 			from = at + text.length;
 		}
 	}
 	return order;
+}
+
+/** The colors one occurrence's overlapping spans paint, in first-paint order. */
+function occurrenceColors(
+	line: { spans: { text: string; fg: { toInts: () => readonly number[] } }[] },
+	at: number,
+	length: number,
+	fields: { order: [number, number, number][]; seen: Set<string> },
+): void {
+	const { order, seen } = fields;
+	let spanStart = 0;
+	for (const span of line.spans) {
+		const spanEnd = spanStart + span.text.length;
+		const overlaps = spanEnd > at && spanStart < at + length;
+		if (overlaps) {
+			const [r, g, b] = span.fg.toInts();
+			const key = `${r},${g},${b}`;
+			if (!seen.has(key)) {
+				seen.add(key);
+				order.push([r, g, b]);
+			}
+		}
+		spanStart = spanEnd;
+	}
 }
 
 /** A `#rrggbb` color as the `[r, g, b]` triplet `spanColors` reports. */
@@ -407,11 +418,14 @@ export async function bootApp(
  */
 export async function withApp(
 	body: (setup: AppSetup) => Promise<void>,
-	width = WIDTH,
-	height = HEIGHT,
-	props: Partial<AppProps> = {},
-	rendererOptions: { kittyKeyboard?: boolean } = {},
+	fields: {
+		width?: number;
+		height?: number;
+		props?: Partial<AppProps>;
+		rendererOptions?: { kittyKeyboard?: boolean };
+	} = {},
 ): Promise<void> {
+	const { width = WIDTH, height = HEIGHT, props = {}, rendererOptions = {} } = fields;
 	const setup = await bootApp(props, width, height, rendererOptions);
 	try {
 		await body(setup);
@@ -619,7 +633,13 @@ export async function awaitFrame(
 	what: string,
 	deadlineMs: number = FRAME_DEADLINE_MS,
 ): Promise<string> {
-	return awaitFrameChecking(setup, predicate, what, () => undefined, FRAME_POLL_MS, deadlineMs);
+	return awaitFrameChecking(setup, {
+		until: predicate,
+		what,
+		check: () => undefined,
+		pollMs: FRAME_POLL_MS,
+		deadlineMs,
+	});
 }
 
 /**
@@ -649,12 +669,15 @@ export async function awaitFrame(
  */
 export async function awaitFrameChecking(
 	setup: Setup,
-	until: (frame: string) => boolean,
-	what: string,
-	check: (frame: string) => void,
-	pollMs: number = FRAME_POLL_MS,
-	deadlineMs: number = FRAME_DEADLINE_MS,
+	fields: {
+		until: (frame: string) => boolean;
+		what: string;
+		check: (frame: string) => void;
+		pollMs?: number;
+		deadlineMs?: number;
+	},
 ): Promise<string> {
+	const { until, what, check, pollMs = FRAME_POLL_MS, deadlineMs = FRAME_DEADLINE_MS } = fields;
 	const deadline = Date.now() + deadlineMs;
 	let frame = setup.captureCharFrame();
 	for (;;) {
@@ -799,11 +822,14 @@ export async function mousePress(
 /** Send one terminal wheel or trackpad event through real hit testing. */
 export async function mouseWheel(
 	setup: Setup,
-	x: number,
-	y: number,
-	direction: "up" | "down" | "left" | "right",
-	shift = false,
+	event: {
+		x: number;
+		y: number;
+		direction: "up" | "down" | "left" | "right";
+		shift?: boolean;
+	},
 ): Promise<void> {
+	const { x, y, direction, shift = false } = event;
 	await setup.mockMouse.scroll(x, y, direction, { modifiers: shift ? { shift: true } : {} });
 }
 

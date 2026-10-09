@@ -27,10 +27,13 @@ describe("the turn end cause and the Dispatch pause", () => {
 	function settleCause(
 		state: State,
 		identity: string,
-		cause: "completed" | "failed" | "aborted" | "truncated" | "unknown",
-		at: string,
-		detail = "",
+		fields: {
+			cause: "completed" | "failed" | "aborted" | "truncated" | "unknown";
+			at: string;
+			detail?: string;
+		},
 	): string {
+		const { cause, at, detail = "" } = fields;
 		const claim = state.handoff.claimHandoff(identity, choice, "open");
 		if (!claim.ok) throw new Error(claim.reason);
 		state.handoff.settleHandoff(claim.claim.attemptId, true);
@@ -50,7 +53,11 @@ describe("the turn end cause and the Dispatch pause", () => {
 
 	test("a settled turn stores its cause and detail", () => {
 		const state = twoTicketState();
-		settleCause(state, t5, "failed", "2026-08-31T11:00:00Z", "the context is too large");
+		settleCause(state, t5, {
+			cause: "failed",
+			at: "2026-08-31T11:00:00Z",
+			detail: "the context is too large",
+		});
 		const completion = state.ticketWorkCycle.lastCompletion(t5);
 		expect(completion?.cause).toBe("failed");
 		expect(completion?.detail).toBe("the context is too large");
@@ -80,7 +87,11 @@ describe("the turn end cause and the Dispatch pause", () => {
 
 	test("a re-settle of the same pending turn overwrites its cause and detail", () => {
 		const state = twoTicketState();
-		const attempt = settleCause(state, t5, "failed", "2026-08-31T11:00:00Z", "first failure");
+		const attempt = settleCause(state, t5, {
+			cause: "failed",
+			at: "2026-08-31T11:00:00Z",
+			detail: "first failure",
+		});
 		state.ticketWorkCycle.settleTurn({
 			ticketIdentity: t5,
 			handoffId: attempt,
@@ -132,32 +143,32 @@ describe("the turn end cause and the Dispatch pause", () => {
 	test("a held failed trace pauses dispatch", () => {
 		const state = twoTicketState();
 		expect(state.ticketWorkCycle.dispatchPauseActive()).toBe(false);
-		settleCause(state, t5, "failed", "2026-08-31T11:00:00Z");
+		settleCause(state, t5, { cause: "failed", at: "2026-08-31T11:00:00Z" });
 		expect(state.ticketWorkCycle.dispatchPauseActive()).toBe(true);
 		state.close();
 	});
 
 	test("a completed settle after the held failed ends the pause", () => {
 		const state = twoTicketState();
-		settleCause(state, t5, "failed", "2026-08-31T11:00:00Z");
+		settleCause(state, t5, { cause: "failed", at: "2026-08-31T11:00:00Z" });
 		expect(state.ticketWorkCycle.dispatchPauseActive()).toBe(true);
-		settleCause(state, t6, "completed", "2026-08-31T11:05:00Z");
+		settleCause(state, t6, { cause: "completed", at: "2026-08-31T11:05:00Z" });
 		expect(state.ticketWorkCycle.dispatchPauseActive()).toBe(false);
 		state.close();
 	});
 
 	test("a held failed settle after a completed one keeps the pause", () => {
 		const state = twoTicketState();
-		settleCause(state, t5, "completed", "2026-08-31T11:00:00Z");
+		settleCause(state, t5, { cause: "completed", at: "2026-08-31T11:00:00Z" });
 		expect(state.ticketWorkCycle.dispatchPauseActive()).toBe(false);
-		settleCause(state, t6, "failed", "2026-08-31T11:05:00Z");
+		settleCause(state, t6, { cause: "failed", at: "2026-08-31T11:05:00Z" });
 		expect(state.ticketWorkCycle.dispatchPauseActive()).toBe(true);
 		state.close();
 	});
 
 	test("a decision on the held failed trace ends the pause", () => {
 		const state = twoTicketState();
-		const attempt = settleCause(state, t5, "failed", "2026-08-31T11:00:00Z");
+		const attempt = settleCause(state, t5, { cause: "failed", at: "2026-08-31T11:00:00Z" });
 		expect(state.ticketWorkCycle.dispatchPauseActive()).toBe(true);
 		expect(
 			state.ticketWorkCycle.applyCompletionDecision({
@@ -173,7 +184,7 @@ describe("the turn end cause and the Dispatch pause", () => {
 
 	test("a failed turn whose Agent works again is no Held turn, and no longer pauses", () => {
 		const state = twoTicketState();
-		const attempt = settleCause(state, t5, "failed", "2026-08-31T11:00:00Z");
+		const attempt = settleCause(state, t5, { cause: "failed", at: "2026-08-31T11:00:00Z" });
 		expect(state.ticketWorkCycle.dispatchPauseActive()).toBe(true);
 		// The Agent reports working again: the turn reopens (ADR 0016), the row
 		// leaves `awaiting` for `running`, and its `held` badge and its decision
@@ -189,7 +200,7 @@ describe("the turn end cause and the Dispatch pause", () => {
 
 	test("the reopened turn's next failed settle pauses again", () => {
 		const state = twoTicketState();
-		const attempt = settleCause(state, t5, "failed", "2026-08-31T11:00:00Z");
+		const attempt = settleCause(state, t5, { cause: "failed", at: "2026-08-31T11:00:00Z" });
 		expect(state.ticketWorkCycle.reopenTurn(t5, attempt)).toBe(true);
 		expect(state.ticketWorkCycle.dispatchPauseActive()).toBe(false);
 		// The same turn settles failed again: it rests held in `awaiting`, and the
@@ -211,7 +222,7 @@ describe("the turn end cause and the Dispatch pause", () => {
 
 	test("the operator's close of a failed turn's cycle does not keep the pause", () => {
 		const state = twoTicketState();
-		const attempt = settleCause(state, t5, "failed", "2026-08-31T11:00:00Z");
+		const attempt = settleCause(state, t5, { cause: "failed", at: "2026-08-31T11:00:00Z" });
 		expect(state.ticketWorkCycle.reopenTurn(t5, attempt)).toBe(true);
 		// The operator closes the in-flight cycle (ADR 0031). The pending trace
 		// stays undecided - the close ends the cycle, it lands no decision - and
@@ -225,9 +236,9 @@ describe("the turn end cause and the Dispatch pause", () => {
 
 	test("only a failed cause pauses: aborted and truncated hold but do not pause", () => {
 		const state = twoTicketState();
-		settleCause(state, t5, "aborted", "2026-08-31T11:00:00Z");
+		settleCause(state, t5, { cause: "aborted", at: "2026-08-31T11:00:00Z" });
 		expect(state.ticketWorkCycle.dispatchPauseActive()).toBe(false);
-		settleCause(state, t6, "truncated", "2026-08-31T11:01:00Z");
+		settleCause(state, t6, { cause: "truncated", at: "2026-08-31T11:01:00Z" });
 		expect(state.ticketWorkCycle.dispatchPauseActive()).toBe(false);
 		state.close();
 	});

@@ -346,9 +346,9 @@ function stubWorktreeLaunch(
 	runner: FakeRunner,
 	checkout: string,
 	id: string,
-	handles = LAUNCH,
-	displayName = "factory",
+	fields: { handles?: typeof LAUNCH; displayName?: string } = {},
 ): void {
+	const { handles = LAUNCH, displayName = "factory" } = fields;
 	const branch = consultationBranchName(id, "grill");
 	stubCheckout(runner, checkout, displayName);
 	runner.set("git", ["-C", checkout, "branch", "--list", branch], { stdout: "" });
@@ -2528,7 +2528,10 @@ describe("Consultation operations: Repository serialization", () => {
 			repository: fixture.otherRepository,
 		});
 		stubWorktreeLaunch(runner.inner, fixture.checkout, firstId);
-		stubWorktreeLaunch(runner.inner, fixture.otherCheckout, secondId, LAUNCH, "other");
+		stubWorktreeLaunch(runner.inner, fixture.otherCheckout, secondId, {
+			handles: LAUNCH,
+			displayName: "other",
+		});
 		runner.holdWhile(
 			(command) =>
 				command.startsWith("herdr worktree create") && command.includes(fixture.checkout),
@@ -2579,7 +2582,10 @@ describe("Consultation operations: Repository serialization", () => {
 			repository: fixture.otherRepository,
 		});
 		stubWorktreeLaunch(runner.inner, fixture.checkout, held);
-		stubWorktreeLaunch(runner.inner, fixture.otherCheckout, other, LAUNCH, "other");
+		stubWorktreeLaunch(runner.inner, fixture.otherCheckout, other, {
+			handles: LAUNCH,
+			displayName: "other",
+		});
 		runner.holdWhile(
 			(command) =>
 				command.startsWith("herdr worktree create") && command.includes(fixture.checkout),
@@ -2895,7 +2901,7 @@ describe("Consultation operations: the start line (issue #220)", () => {
 		id: string,
 		handles = LAUNCH,
 	): void {
-		stubWorktreeLaunch(runner.inner, fixture.checkout, id, handles);
+		stubWorktreeLaunch(runner.inner, fixture.checkout, id, { handles: handles });
 		runner.inner.set("herdr", ["agent", "prompt", agentOf(id), "/grill review auth"], { code: 0 });
 		stubPaneRead(runner.inner, handles.paneId, "Agent: opened");
 	}

@@ -1047,6 +1047,53 @@ describe("the shared control catalogue", () => {
 		expect(resume.barLabel?.(paused)).toBe("Resume queue");
 	});
 
+	/** The Ticket section's own order keys, refusing on the row that holds no Group header. */
+	function ticketOrderKeys(context: AvailabilityFacts, mode: InteractionMode): void {
+		// The Ticket section's own order keys: the Group move owns the
+		// key, and it refuses on a row that holds no Group header.
+		expect(controlForKey({ name: "+" }, context)?.id).toBe("group-move-up");
+		expect(controlForKey({ name: "=" }, context)?.id).toBe("group-move-up");
+		expect(controlForKey({ name: "-" }, context)?.id).toBe("group-move-down");
+		for (const key of ["+", "-"] as const) {
+			const control = controlForKey({ name: key }, context);
+			if (control === undefined) throw new Error(`${key} answers nothing in ${mode}`);
+			expect(availabilityFor(control, context)).toEqual({
+				available: false,
+				reason: "no Group header is under the cursor",
+			});
+		}
+	}
+
+	/** The queue's order keys, refusing in the section they do not reach. */
+	function queueOrderKeys(context: AvailabilityFacts, mode: InteractionMode): void {
+		for (const key of ["+", "-"] as const) {
+			const control = controlForKey({ name: key }, context);
+			const expected = key === "+" ? "queue-promote" : "queue-demote";
+			if (control === undefined || control.id !== expected)
+				throw new Error(`${key} does not resolve to ${expected} in ${mode}`);
+			expect(availabilityFor(control, context)).toEqual({
+				available: false,
+				reason: "this control is available only in the Work queue section",
+			});
+		}
+	}
+
+	/** The guide and the bar, naming none of the queue's order controls. */
+	function orderGuideHintWords(mode: InteractionMode, context: AvailabilityFacts): void {
+		// The guide still names none of the queue's order controls here; the
+		// brake's key stands in the plane group the guide lists in every mode.
+		const ids = guideControls(context).map(({ control }) => control.id);
+		expect(ids).toContain("queue-pause");
+		expect(ids).not.toContain("queue-promote");
+		expect(ids).not.toContain("queue-demote");
+		const hinted = actionBarControls(mode, context).map((control) => control.id);
+		// The brake is down, so its hint stands nowhere, and the order keys
+		// name no hint in a section they do not reach.
+		expect(hinted).not.toContain("queue-pause");
+		expect(hinted).not.toContain("queue-promote");
+		expect(hinted).not.toContain("queue-demote");
+	}
+
 	/**
 	 * Story 48 (ADR 0049, ADR 0052), amended by ADR 0111: the queue's order
 	 * keys still refuse outside the queue, in the queue's words. The pause's
@@ -1067,44 +1114,9 @@ describe("the shared control catalogue", () => {
 			if (pause === undefined || pause.id !== "queue-pause")
 				throw new Error(`p does not resolve to queue-pause in ${mode}`);
 			expect(availabilityFor(pause, context)).toEqual({ available: true });
-			if (mode === "ticket-list" || mode === "ticket-detail") {
-				// The Ticket section's own order keys: the Group move owns the
-				// key, and it refuses on a row that holds no Group header.
-				expect(controlForKey({ name: "+" }, context)?.id).toBe("group-move-up");
-				expect(controlForKey({ name: "=" }, context)?.id).toBe("group-move-up");
-				expect(controlForKey({ name: "-" }, context)?.id).toBe("group-move-down");
-				for (const key of ["+", "-"] as const) {
-					const control = controlForKey({ name: key }, context);
-					if (control === undefined) throw new Error(`${key} answers nothing in ${mode}`);
-					expect(availabilityFor(control, context)).toEqual({
-						available: false,
-						reason: "no Group header is under the cursor",
-					});
-				}
-			} else {
-				for (const key of ["+", "-"] as const) {
-					const control = controlForKey({ name: key }, context);
-					const expected = key === "+" ? "queue-promote" : "queue-demote";
-					if (control === undefined || control.id !== expected)
-						throw new Error(`${key} does not resolve to ${expected} in ${mode}`);
-					expect(availabilityFor(control, context)).toEqual({
-						available: false,
-						reason: "this control is available only in the Work queue section",
-					});
-				}
-			}
-			// The guide still names none of the queue's order controls here; the
-			// brake's key stands in the plane group the guide lists in every mode.
-			const ids = guideControls(context).map(({ control }) => control.id);
-			expect(ids).toContain("queue-pause");
-			expect(ids).not.toContain("queue-promote");
-			expect(ids).not.toContain("queue-demote");
-			const hinted = actionBarControls(mode, context).map((control) => control.id);
-			// The brake is down, so its hint stands nowhere, and the order keys
-			// name no hint in a section they do not reach.
-			expect(hinted).not.toContain("queue-pause");
-			expect(hinted).not.toContain("queue-promote");
-			expect(hinted).not.toContain("queue-demote");
+			if (mode === "ticket-list" || mode === "ticket-detail") ticketOrderKeys(context, mode);
+			else queueOrderKeys(context, mode);
+			orderGuideHintWords(mode, context);
 		}
 		// In the queue's own modes the keys keep their meanings: the pause is
 		// available, and the order moves answer with their own availability.

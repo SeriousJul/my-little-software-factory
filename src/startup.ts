@@ -120,30 +120,47 @@ export const USAGE = "usage: factory [--config <path>] [--world <path>] | factor
  * flag without a value, a repeated flag, or anything else is the usage line.
  */
 export function configPathFromArgs(args: readonly string[]): StartupArgsResult {
-	let configPath: string | undefined;
-	let worldPath: string | undefined;
+	const state: StartupArgState = { configPath: undefined, worldPath: undefined };
 	for (let i = 0; i < args.length; i += 1) {
-		const arg = args[i];
-		if (arg === "--config" || arg === "--world") {
-			const value = args[i + 1];
-			if (value === undefined || value === "") return { ok: false, reason: USAGE };
-			if (arg === "--config") {
-				if (configPath !== undefined) return { ok: false, reason: USAGE };
-				configPath = value;
-			} else {
-				if (worldPath !== undefined) return { ok: false, reason: USAGE };
-				worldPath = value;
-			}
-			i += 1;
-		} else {
-			return { ok: false, reason: USAGE };
-		}
+		const step = startupArgStep(args, i, state);
+		if (!step.ok) return { ok: false, reason: USAGE };
+		i += step.advance;
 	}
 	return {
 		ok: true,
-		configPath: configPath ?? defaultConfigPath(),
-		...(worldPath !== undefined ? { worldPath } : {}),
+		configPath: state.configPath ?? defaultConfigPath(),
+		...(state.worldPath !== undefined ? { worldPath: state.worldPath } : {}),
 	};
+}
+
+/** The config and world paths the argument list holds. */
+interface StartupArgState {
+	configPath: string | undefined;
+	worldPath: string | undefined;
+}
+
+/**
+ * The one argument of the startup list, written into the state, or the
+ * refusal the argument earns: an unknown argument, a flag without a value,
+ * or a flag the list already holds.
+ */
+function startupArgStep(
+	args: readonly string[],
+	i: number,
+	state: StartupArgState,
+): { ok: boolean; advance: number } {
+	const arg = args[i];
+	if (arg !== "--config" && arg !== "--world") return { ok: false, advance: 0 };
+	const value = args[i + 1];
+	if (value === undefined || value === "") return { ok: false, advance: 0 };
+	if (arg === "--config") {
+		if (state.configPath !== undefined) return { ok: false, advance: 0 };
+		state.configPath = value;
+		return { ok: true, advance: 1 };
+	}
+	if (state.worldPath !== undefined) return { ok: false, advance: 0 };
+	state.worldPath = value;
+	return { ok: true, advance: 1 };
 }
 
 /**
@@ -279,6 +296,32 @@ export function installStateShutdown(
 }
 
 /**
+ * The runner the boot runs on: the stub world on the real runner when the
+ * flag names one (issue #178, ADR 0073). The stub runner serves only the
+ * `gh` commands from the world and passes every other command to the real
+ * binaries. A world file that cannot be read is the boot's refusal.
+ */
+function stubRunnerGate(
+	realRunner: CommandRunner,
+	worldPath: string | undefined,
+	notes: string[],
+): { ok: true; runner: CommandRunner } | { ok: false; reason: string } {
+	if (worldPath === undefined) return { ok: true, runner: realRunner };
+	let world: StubWorldStore;
+	try {
+		world = StubWorldStore.load(worldPath);
+	} catch (error) {
+		const reason =
+			error instanceof StubWorldError
+				? error.message
+				: `the stub world could not be loaded: ${String(error)}`;
+		return { ok: false, reason };
+	}
+	notes.push(`the stub world answers the GitHub commands from ${worldPath}`);
+	return { ok: true, runner: createStubRunner(realRunner, world) };
+}
+
+/**
  * The whole startup: the config, the model list check, and the state open,
  * in the boot order.
  *
@@ -298,27 +341,12 @@ export async function runStartup(configPath: string, worldPath?: string): Promis
 
 	const statePath = statePathFor(loaded.config, configPath);
 	const logger = startupLogger(loaded.config, configPath);
-	// The Stub run (issue #178, ADR 0073): the world file flag wraps the real
-	// runner in the stub runner, which serves only the `gh` commands from the
-	// world and passes every other command to the real binaries. A world file
-	// that cannot be read stops the boot before it opens anything.
-	const realRunner = createChildProcessRunner();
-	let runner: CommandRunner = realRunner;
-	if (worldPath !== undefined) {
-		let world: StubWorldStore;
-		try {
-			world = StubWorldStore.load(worldPath);
-		} catch (error) {
-			const reason =
-				error instanceof StubWorldError
-					? error.message
-					: `the stub world could not be loaded: ${String(error)}`;
-			logger.error(`startup failed: ${reason}`);
-			return { ok: false, lines: [...notes, reason], exitCode: 1 };
-		}
-		runner = createStubRunner(realRunner, world);
-		notes.push(`the stub world answers the GitHub commands from ${worldPath}`);
+	const stub = stubRunnerGate(createChildProcessRunner(), worldPath, notes);
+	if (!stub.ok) {
+		logger.error(`startup failed: ${stub.reason}`);
+		return { ok: false, lines: [...notes, stub.reason], exitCode: 1 };
 	}
+	const runner = stub.runner;
 	// The config's model values, checked against what the agent runtimes
 	// actually offer. An unavailable list only warns: one agent kind that
 	// cannot answer must not block the control plane.

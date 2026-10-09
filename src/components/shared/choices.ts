@@ -15,6 +15,7 @@ import { padToWidth, truncateTailToWidth, truncateToWidth } from "../text.ts";
 import {
 	type ControlInk,
 	controlInk,
+	type InkRole,
 	MARKER_WIDTH,
 	markerText,
 	ownNoteCells,
@@ -111,55 +112,73 @@ export interface ChoiceRowProps {
 export function ChoiceRow(props: ChoiceRowProps): ReactElement {
 	const ink = props.ink ?? controlInk();
 	const empty = props.value === "";
-	const color =
-		props.warning === true
-			? ink.warning
-			: props.muted === true || empty
-				? ink.detail
-				: props.focused
-					? ink.focusedText
-					: ink.text;
+	const color = choiceValueInk(props, ink);
 	const valueWidth = Math.max(1, props.width);
 	const shown = empty ? (props.placeholder ?? "") : props.value;
 	const noteWidth = props.noteWidth ?? ownNoteCells(props.labelWidth, valueWidth);
+	const markerFg = props.focused ? (ink.focusedText.fg ?? undefined) : (ink.detail.fg ?? undefined);
 	return createElement(
 		Fragment,
 		{},
 		createElement(
 			"box",
 			{ key: "row", style: { flexDirection: "row", height: 1 } },
+			createElement("text", { fg: markerFg }, markerText(props.focused)),
 			createElement(
 				"text",
-				{ fg: props.focused ? (ink.focusedText.fg ?? undefined) : (ink.detail.fg ?? undefined) },
-				markerText(props.focused),
-			),
-			createElement(
-				"text",
-				{ fg: props.focused ? (ink.focusedText.fg ?? undefined) : (ink.detail.fg ?? undefined) },
+				{ fg: markerFg },
 				padToWidth(truncateToWidth(`${props.label} `, props.labelWidth), props.labelWidth),
 			),
 			createElement(
 				"text",
 				{ width: valueWidth, fg: color.fg ?? undefined },
-				props.clipTail === true && !empty
-					? truncateTailToWidth(shown, valueWidth)
-					: truncateToWidth(shown, valueWidth),
+				choiceValueText(props, shown, valueWidth),
 			),
 		),
-		props.error === null || props.error === undefined
-			? null
-			: createElement(
-					"text",
-					{ key: "error", style: { width: "100%", height: 1 }, fg: ink.error.fg ?? undefined },
-					truncateToWidth(`Error: ${props.label}: ${props.error}`, noteWidth),
-				),
-		props.hint === null || props.hint === undefined
-			? null
-			: createElement(
-					"text",
-					{ key: "hint", style: { width: "100%", height: 1 }, fg: ink.detail.fg ?? undefined },
-					truncateToWidth(props.hint, noteWidth),
-				),
+		choiceErrorNote(props, ink, noteWidth),
+		choiceHintNote(props, ink, noteWidth),
+	);
+}
+
+/** The ink one selector row's value cell paints in. */
+function choiceValueInk(props: ChoiceRowProps, ink: ControlInk): InkRole {
+	if (props.warning === true) return ink.warning;
+	if (props.muted === true || props.value === "") return ink.detail;
+	if (props.focused) return ink.focusedText;
+	return ink.text;
+}
+
+/** The one text one row's value cell paints, clipped the way the row asks. */
+function choiceValueText(props: ChoiceRowProps, shown: string, valueWidth: number): string {
+	if (props.clipTail === true && props.value !== "") return truncateTailToWidth(shown, valueWidth);
+	return truncateToWidth(shown, valueWidth);
+}
+
+/** The written error line under one row, when the row carries one. */
+function choiceErrorNote(
+	props: ChoiceRowProps,
+	ink: ControlInk,
+	noteWidth: number,
+): ReactElement | null {
+	if (props.error === null || props.error === undefined) return null;
+	return createElement(
+		"text",
+		{ key: "error", style: { width: "100%", height: 1 }, fg: ink.error.fg ?? undefined },
+		truncateToWidth(`Error: ${props.label}: ${props.error}`, noteWidth),
+	);
+}
+
+/** The written hint line under one row, when the row carries one. */
+function choiceHintNote(
+	props: ChoiceRowProps,
+	ink: ControlInk,
+	noteWidth: number,
+): ReactElement | null {
+	if (props.hint === null || props.hint === undefined) return null;
+	return createElement(
+		"text",
+		{ key: "hint", style: { width: "100%", height: 1 }, fg: ink.detail.fg ?? undefined },
+		truncateToWidth(props.hint, noteWidth),
 	);
 }
 

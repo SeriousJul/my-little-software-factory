@@ -163,9 +163,11 @@ describe("the reserved bottom rows at every size", () => {
 				expect(frame).toContain("Terminal too small: minimum 40 columns by 26 rows");
 				expect(actionBarRowOf(frame).trim()).toBe("? Help");
 			},
-			WIDTH,
-			HEIGHT,
-			{ config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				props: { config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+			},
 		);
 	});
 
@@ -192,9 +194,11 @@ describe("the reserved bottom rows at every size", () => {
 				await expectTextClearsItsSurface(setup, guide - 2, WIDTH);
 				await closeSurface(setup, /Key guide/);
 			},
-			WIDTH,
-			HEIGHT,
-			{ config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				props: { config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+			},
 		);
 	});
 
@@ -223,9 +227,11 @@ describe("the reserved bottom rows at every size", () => {
 
 				await closeSurface(setup, /Decision:/);
 			},
-			WIDTH,
-			HEIGHT,
-			{ config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				props: { config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+			},
 		);
 	});
 
@@ -259,9 +265,11 @@ describe("the reserved bottom rows at every size", () => {
 					// hold a row at all.
 					expect(frame).toMatch(/Override|Terminal too small/);
 				},
-				width,
-				height,
-				{ config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+				{
+					width: width,
+					height: height,
+					props: { config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+				},
 			);
 		}
 	});
@@ -284,9 +292,11 @@ describe("the reserved bottom rows at every size", () => {
 				setup.resize(WIDTH, HEIGHT);
 				await closeSurface(setup, /Decision:/);
 			},
-			WIDTH,
-			HEIGHT,
-			{ config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				props: { config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+			},
 		);
 	});
 
@@ -309,9 +319,11 @@ describe("the reserved bottom rows at every size", () => {
 					expect(frame).toMatch(/Key guide|Terminal too small/);
 					expect(actionBarRowOf(frame)).toMatch(/Close|Scroll/);
 				},
-				width,
-				height,
-				{ config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+				{
+					width: width,
+					height: height,
+					props: { config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+				},
 			);
 		}
 	});

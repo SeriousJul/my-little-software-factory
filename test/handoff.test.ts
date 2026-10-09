@@ -379,18 +379,18 @@ describe("renderPrompt", () => {
 	});
 
 	test("{previous-message} takes the last captured message, empty for open tickets", () => {
-		const prompt = renderPrompt("Prev: {previous-message}\n{description}", ticket, "settled");
+		const prompt = renderPrompt("Prev: {previous-message}\n{description}", ticket, {
+			previousMessage: "settled",
+		});
 		expect(prompt).toBe("Prev: settled\nAdd a retry policy.");
 		expect(renderPrompt("Prev: {previous-message}", ticket)).toBe("Prev: ");
 	});
 
 	test("{review-verdict} takes the verdict fill, empty for a plain render", () => {
-		const prompt = renderPrompt(
-			"Verdict: {review-verdict}\n{description}",
-			ticket,
-			"settled",
-			"Posted as a review at 2026-08-31T12:00:00Z:\n- **Score:** 85 / 100",
-		);
+		const prompt = renderPrompt("Verdict: {review-verdict}\n{description}", ticket, {
+			previousMessage: "settled",
+			reviewVerdict: "Posted as a review at 2026-08-31T12:00:00Z:\n- **Score:** 85 / 100",
+		});
 		expect(prompt).toBe(
 			"Verdict: Posted as a review at 2026-08-31T12:00:00Z:\n- **Score:** 85 / 100\nAdd a retry policy.",
 		);
@@ -4607,60 +4607,75 @@ class PrWorldRunner extends FakeRunner {
 	private answerFromWorld(command: string, args: readonly string[]): void {
 		const line = args.join(" ");
 		if (command === "git") {
-			if (line === `-C ${CHECKOUT} branch --list ${PR_BRANCH}`)
-				this.set(command, args, { stdout: this.localBranch ? `  ${PR_BRANCH}\n` : "" });
-			else if (line === `-C ${CHECKOUT} ls-remote --heads origin ${PR_BRANCH}`)
-				this.set(command, args, {
-					stdout: this.remoteBranch ? `abc123\trefs/heads/${PR_BRANCH}\n` : "",
-				});
-			else if (line === `-C ${CHECKOUT} fetch origin ${PR_BRANCH}:refs/heads/${PR_BRANCH}`) {
-				this.localBranch = true;
-				this.set(command, args, { stdout: "" });
-			} else if (line === `-C ${CHECKOUT} push origin ${PR_BRANCH}`) {
-				this.remoteBranch = true;
-				this.set(command, args, { stdout: "" });
-			} else if (line === `-C ${CHECKOUT} update-ref refs/heads/${PR_BRANCH} sha1111`) {
-				this.holdCommits += 1;
-				this.set(command, args, { stdout: "" });
-			} else if (line === `-C ${CHECKOUT} branch -D ${PR_BRANCH}`) {
-				this.localBranch = false;
-				this.set(command, args, { stdout: "" });
-			}
+			this.answerGitLine(line, command, args);
 			return;
 		}
 		if (command === "herdr" && args[0] === "worktree") {
-			// The create is asked for the branch by name and makes the worktree that
-			// holds it; the remove takes that worktree down and leaves the branch.
-			if (args[1] === "create" && args.includes("--branch")) {
-				if (this.blockedCreates > 0) {
-					this.blockedCreates -= 1;
-					this.set(command, args, worktreeCreateBlocked(ticketWorktreePath()));
-					return;
-				}
-				this.localBranch = true;
-				this.worktreeStanding = true;
-				this.set(command, args, { stdout: worktreeCreateJson("ws-wt", "pane-wt") });
-			} else if (args[1] === "remove") {
-				this.worktreeStanding = false;
-				this.set(command, args, { stdout: "" });
-			} else if (args[1] === "list") {
-				this.set(command, args, { stdout: this.worktreeList() });
-			} else if (args[1] === "open")
-				// herdr answers an open - by branch or by path - only once a worktree
-				// stands: its lookup lists the worktrees git holds, not the branches.
-				this.set(command, args, {
-					code: this.worktreeStanding ? 0 : 1,
-					stdout: this.worktreeStanding
-						? worktreeOpenJson("ws-wt", "pane-wt", {
-								alreadyOpen: false,
-								worktreePath: WORKTREE_PATH,
-							})
-						: "",
-					stderr: this.worktreeStanding ? "" : WORKTREE_NOT_FOUND_ERROR,
-				});
+			this.answerWorktreeCommand(command, args);
 			return;
 		}
 		if (command !== "gh") return;
+		this.answerGhCommand(command, args);
+	}
+
+	/** The branch-state git lines: the four facts the world holds. */
+	private answerGitLine(line: string, command: string, args: readonly string[]): void {
+		if (line === `-C ${CHECKOUT} branch --list ${PR_BRANCH}`)
+			this.set(command, args, { stdout: this.localBranch ? `  ${PR_BRANCH}\n` : "" });
+		else if (line === `-C ${CHECKOUT} ls-remote --heads origin ${PR_BRANCH}`)
+			this.set(command, args, {
+				stdout: this.remoteBranch ? `abc123\trefs/heads/${PR_BRANCH}\n` : "",
+			});
+		else if (line === `-C ${CHECKOUT} fetch origin ${PR_BRANCH}:refs/heads/${PR_BRANCH}`) {
+			this.localBranch = true;
+			this.set(command, args, { stdout: "" });
+		} else if (line === `-C ${CHECKOUT} push origin ${PR_BRANCH}`) {
+			this.remoteBranch = true;
+			this.set(command, args, { stdout: "" });
+		} else if (line === `-C ${CHECKOUT} update-ref refs/heads/${PR_BRANCH} sha1111`) {
+			this.holdCommits += 1;
+			this.set(command, args, { stdout: "" });
+		} else if (line === `-C ${CHECKOUT} branch -D ${PR_BRANCH}`) {
+			this.localBranch = false;
+			this.set(command, args, { stdout: "" });
+		}
+	}
+
+	/** The herdr worktree commands: create, remove, list, and open. */
+	private answerWorktreeCommand(command: string, args: readonly string[]): void {
+		// The create is asked for the branch by name and makes the worktree that
+		// holds it; the remove takes that worktree down and leaves the branch.
+		if (args[1] === "create" && args.includes("--branch")) {
+			if (this.blockedCreates > 0) {
+				this.blockedCreates -= 1;
+				this.set(command, args, worktreeCreateBlocked(ticketWorktreePath()));
+				return;
+			}
+			this.localBranch = true;
+			this.worktreeStanding = true;
+			this.set(command, args, { stdout: worktreeCreateJson("ws-wt", "pane-wt") });
+		} else if (args[1] === "remove") {
+			this.worktreeStanding = false;
+			this.set(command, args, { stdout: "" });
+		} else if (args[1] === "list") {
+			this.set(command, args, { stdout: this.worktreeList() });
+		} else if (args[1] === "open")
+			// herdr answers an open - by branch or by path - only once a worktree
+			// stands: its lookup lists the worktrees git holds, not the branches.
+			this.set(command, args, {
+				code: this.worktreeStanding ? 0 : 1,
+				stdout: this.worktreeStanding
+					? worktreeOpenJson("ws-wt", "pane-wt", {
+							alreadyOpen: false,
+							worktreePath: WORKTREE_PATH,
+						})
+					: "",
+				stderr: this.worktreeStanding ? "" : WORKTREE_NOT_FOUND_ERROR,
+			});
+	}
+
+	/** The gh commands: the draft pull request the branch carries. */
+	private answerGhCommand(command: string, args: readonly string[]): void {
 		if (args[0] === "api") {
 			// The read of the pull request the branch already carries.
 			this.set(command, args, {

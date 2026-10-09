@@ -384,9 +384,11 @@ describe("the section header counts", () => {
 					const header = rowsOf(frame).find((row) => row.includes("Tickets")) ?? "";
 					expect(header).toContain("open: 1");
 				},
-				WIDTH,
-				HEIGHT,
-				{ config: sourcesConfig, state, sources: [issuesSource, pullsSource] },
+				{
+					width: WIDTH,
+					height: HEIGHT,
+					props: { config: sourcesConfig, state, sources: [issuesSource, pullsSource] },
+				},
 			);
 		} finally {
 			state.close();

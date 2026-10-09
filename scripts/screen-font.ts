@@ -30,7 +30,7 @@
 
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { create, type Font } from "fontkit";
+import { create, type Font, type Path } from "fontkit";
 
 /** The font size the glyphs rasterize at, in device pixels. */
 const FONT_SIZE = 45;
@@ -72,13 +72,18 @@ interface Seg {
 function segmentsOf(codePoint: number, font: Font): Seg[] {
 	const glyph = font.glyphForCodePoint(codePoint);
 	// The path is in the font's design units, baseline at y = 0, y up.
-	const path = glyph.path;
 	const scale = FONT_SIZE / font.unitsPerEm;
 	// The baseline sits at the ascent; the cell y axis points down.
 	const baseY = (font.ascent * FONT_SIZE) / font.unitsPerEm;
-	const toX = (x: number) => x * scale;
-	const toY = (y: number) => baseY - y * scale;
+	return pathSegments(
+		glyph.path,
+		(x) => x * scale,
+		(y) => baseY - y * scale,
+	);
+}
 
+/** The path's commands, flattened to line segments the caller maps to cells. */
+function pathSegments(path: Path, toX: (x: number) => number, toY: (y: number) => number): Seg[] {
 	const segs: Seg[] = [];
 	let cx = 0;
 	let cy = 0;
@@ -90,7 +95,8 @@ function segmentsOf(codePoint: number, font: Font): Seg[] {
 		segs.push({ x0: toX(cx), y0: toY(cy), x1: toX(startX), y1: toY(startY) });
 		open = false;
 	};
-	const flattenCurve = (x1: number, y1: number, x2: number, y2: number, x3: number, y3: number) => {
+	const flattenCurve = (pts: readonly number[]) => {
+		const [x1, y1, x2, y2, x3, y3] = pts;
 		// De Casteljau subdivision into CURVE_PIECES pieces.
 		let px = cx;
 		let py = cy;
@@ -119,18 +125,18 @@ function segmentsOf(codePoint: number, font: Font): Seg[] {
 		} else if (cmd.command === "quadraticCurveTo") {
 			const [qx, qy, rx, ry] = cmd.args;
 			// Promote the quadratic to a cubic.
-			flattenCurve(
+			flattenCurve([
 				cx + (2 / 3) * (qx - cx),
 				cy + (2 / 3) * (qy - cy),
 				rx + (2 / 3) * (qx - rx),
 				ry + (2 / 3) * (qy - ry),
 				rx,
 				ry,
-			);
+			]);
 			cx = rx;
 			cy = ry;
 		} else if (cmd.command === "bezierCurveTo") {
-			flattenCurve(cmd.args[0], cmd.args[1], cmd.args[2], cmd.args[3], cmd.args[4], cmd.args[5]);
+			flattenCurve(cmd.args);
 			cx = cmd.args[4];
 			cy = cmd.args[5];
 		} else if (cmd.command === "closePath") {
@@ -155,40 +161,60 @@ function rasterize(segs: Seg[], cellW: number, cellH: number): Uint8Array {
 	const coverage = new Float32Array(gridW * gridH);
 	for (let gy = 0; gy < gridH; gy++) {
 		const y = (gy + 0.5) / SS;
-		const edges: { x: number; dir: number }[] = [];
-		for (const s of segs) {
-			const y0 = s.y0;
-			const y1 = s.y1;
-			if (y0 === y1) continue;
-			const below = Math.min(y0, y1);
-			const above = Math.max(y0, y1);
-			if (y <= below || y >= above) continue;
-			const t = (y - y0) / (y1 - y0);
-			edges.push({ x: s.x0 + t * (s.x1 - s.x0), dir: y1 > y0 ? 1 : -1 });
-		}
-		edges.sort((a, b) => a.x - b.x);
-		let winding = 0;
-		let e = 0;
-		for (let gx = 0; gx < gridW; gx++) {
-			const x = (gx + 0.5) / SS;
-			while (e < edges.length && edges[e].x <= x) {
-				winding += edges[e].dir;
-				e += 1;
-			}
-			coverage[gy * gridW + gx] = winding !== 0 ? 1 : 0;
-		}
+		scanlineRow(scanlineEdges(segs, y), gridW, coverage, gy);
 	}
 	// Reduce the supersample grid to one byte per cell pixel.
 	const out = new Uint8Array(cellW * cellH);
 	for (let y = 0; y < cellH; y++) {
 		for (let x = 0; x < cellW; x++) {
-			let sum = 0;
-			for (let sy = 0; sy < SS; sy++)
-				for (let sx = 0; sx < SS; sx++) sum += coverage[(y * SS + sy) * gridW + (x * SS + sx)];
-			out[y * cellW + x] = Math.round((sum / (SS * SS)) * 255);
+			out[y * cellW + x] = reduceSupersample(coverage, gridW, y, x);
 		}
 	}
 	return out;
+}
+
+/** The edges one scanline at `y` crosses, with their winding directions. */
+function scanlineEdges(segs: Seg[], y: number): { x: number; dir: number }[] {
+	const edges: { x: number; dir: number }[] = [];
+	for (const s of segs) {
+		const y0 = s.y0;
+		const y1 = s.y1;
+		if (y0 === y1) continue;
+		const below = Math.min(y0, y1);
+		const above = Math.max(y0, y1);
+		if (y <= below || y >= above) continue;
+		const t = (y - y0) / (y1 - y0);
+		edges.push({ x: s.x0 + t * (s.x1 - s.x0), dir: y1 > y0 ? 1 : -1 });
+	}
+	return edges;
+}
+
+/** The winding row one scanline's edges lay across the grid. */
+function scanlineRow(
+	edges: { x: number; dir: number }[],
+	gridW: number,
+	coverage: Float32Array,
+	gy: number,
+): void {
+	edges.sort((a, b) => a.x - b.x);
+	let winding = 0;
+	let e = 0;
+	for (let gx = 0; gx < gridW; gx++) {
+		const x = (gx + 0.5) / SS;
+		while (e < edges.length && edges[e].x <= x) {
+			winding += edges[e].dir;
+			e += 1;
+		}
+		coverage[gy * gridW + gx] = winding !== 0 ? 1 : 0;
+	}
+}
+
+/** The one cell one supersample block reduces to. */
+function reduceSupersample(coverage: Float32Array, gridW: number, y: number, x: number): number {
+	let sum = 0;
+	for (let sy = 0; sy < SS; sy++)
+		for (let sx = 0; sx < SS; sx++) sum += coverage[(y * SS + sy) * gridW + (x * SS + sx)];
+	return Math.round((sum / (SS * SS)) * 255);
 }
 
 /** The rasterized coverage, keyed by face and code point. */

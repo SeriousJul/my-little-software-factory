@@ -96,14 +96,14 @@ describe("consultationDetailTitle", () => {
 
 describe("consultationDetailLines", () => {
 	test("the Session view shows the operator's inputs, the agent's text, and one note per tool call", () => {
-		const lines = consultationDetailLines(
-			consultation("working"),
-			[],
-			[],
-			80,
-			"pane text",
-			session,
-		).map((line) => line.text);
+		const lines = consultationDetailLines({
+			consultation: consultation("working"),
+			turns: [],
+			snapshots: [],
+			width: 80,
+			liveOutput: "pane text",
+			sessionEntries: session,
+		}).map((line) => line.text);
 		expect(lines).toContain("Session view:");
 		const bodyStart = lines.indexOf("Session view:");
 		expect(lines.slice(bodyStart + 1)).toEqual([
@@ -116,53 +116,73 @@ describe("consultationDetailLines", () => {
 	});
 
 	test("a tool note without a target shows its name alone, and a failed note keeps its target", () => {
-		const lines = consultationDetailLines(consultation("working"), [], [], 80, null, [
-			{ kind: "tool", name: "mcp", target: "", failed: false },
-			{ kind: "tool", name: "bash", target: "npm test", failed: true },
-		]).map((line) => line.text);
+		const lines = consultationDetailLines({
+			consultation: consultation("working"),
+			turns: [],
+			snapshots: [],
+			width: 80,
+			liveOutput: null,
+			sessionEntries: [
+				{ kind: "tool", name: "mcp", target: "", failed: false },
+				{ kind: "tool", name: "bash", target: "npm test", failed: true },
+			],
+		}).map((line) => line.text);
 		expect(lines).toContain("▸ mcp");
 		expect(lines).toContain("▸ bash: npm test");
-		const failed = consultationDetailLines(consultation("working"), [], [], 80, null, [
-			{ kind: "tool", name: "bash", target: "npm test", failed: true },
-		]).find((line) => line.text === "▸ bash: npm test");
+		const failed = consultationDetailLines({
+			consultation: consultation("working"),
+			turns: [],
+			snapshots: [],
+			width: 80,
+			liveOutput: null,
+			sessionEntries: [{ kind: "tool", name: "bash", target: "npm test", failed: true }],
+		}).find((line) => line.text === "▸ bash: npm test");
 		expect(failed?.fg).not.toEqual(
-			consultationDetailLines(consultation("working"), [], [], 80, null, [
-				{ kind: "tool", name: "bash", target: "npm test", failed: false },
-			]).find((line) => line.text === "▸ bash: npm test")?.fg,
+			consultationDetailLines({
+				consultation: consultation("working"),
+				turns: [],
+				snapshots: [],
+				width: 80,
+				liveOutput: null,
+				sessionEntries: [{ kind: "tool", name: "bash", target: "npm test", failed: false }],
+			}).find((line) => line.text === "▸ bash: npm test")?.fg,
 		);
 	});
 
 	test("the terminal fallback keeps the Agent view body", () => {
-		const lines = consultationDetailLines(
-			consultation("working"),
-			[],
-			[],
-			80,
-			"Agent: reading src/auth.ts",
-			null,
-		).map((line) => line.text);
+		const lines = consultationDetailLines({
+			consultation: consultation("working"),
+			turns: [],
+			snapshots: [],
+			width: 80,
+			liveOutput: "Agent: reading src/auth.ts",
+		}).map((line) => line.text);
 		expect(lines).toContain("Agent view:");
 		expect(lines).toContain("Agent: reading src/auth.ts");
 	});
 
 	test("a closed Consultation without a readable record shows its captured history", () => {
-		const lines = consultationDetailLines(
-			consultation("closed"),
-			[],
-			[],
-			80,
-			"pane text",
-			null,
-		).map((line) => line.text);
+		const lines = consultationDetailLines({
+			consultation: consultation("closed"),
+			turns: [],
+			snapshots: [],
+			width: 80,
+			liveOutput: "pane text",
+		}).map((line) => line.text);
 		expect(lines).toContain("Captured history:");
 		expect(lines).not.toContain("pane text");
 	});
 
 	test("a long entry wraps within the width, and no line overflows it", () => {
 		const long = "word ".repeat(40).trim();
-		const lines = consultationDetailLines(consultation("working"), [], [], 40, null, [
-			{ kind: "input", text: long },
-		]);
+		const lines = consultationDetailLines({
+			consultation: consultation("working"),
+			turns: [],
+			snapshots: [],
+			width: 40,
+			liveOutput: null,
+			sessionEntries: [{ kind: "input", text: long }],
+		});
 		expect(lines.some((line) => line.text.startsWith("❯ word "))).toBe(true);
 		for (const line of lines) expect([...line.text].length).toBeLessThanOrEqual(40);
 	});
