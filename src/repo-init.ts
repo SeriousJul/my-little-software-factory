@@ -36,6 +36,7 @@ import domainTemplate from "../templates/agents/domain.md" with { type: "text" }
 import issueTrackerTemplate from "../templates/agents/issue-tracker.md" with { type: "text" };
 import triageLabelsTemplate from "../templates/agents/triage-labels.md" with { type: "text" };
 import type { TaskTypeConfig, TicketSourceConfig, WorkflowState } from "./config.ts";
+import { BYPASS_CONTRIBUTOR_PUSH_HOOK } from "./git-push.ts";
 import {
 	type CommandOptions,
 	type CommandResult,
@@ -807,7 +808,17 @@ async function commitAndPushInit(
 			ok: false,
 			reason: `reading the init commit failed: ${commandFailureText(commitSha)}`,
 		};
-	const push = await runner.run("git", ["-C", worktreePath, "push", "origin", `HEAD:${branch}`]);
+	// The bypass of the contributor pre-push hook (ADR 0127): the throwaway
+	// worktree holds no dependencies, so the hook's checks cannot run there, and
+	// the commit this push carries is the plane's own generated tree.
+	const push = await runner.run("git", [
+		"-C",
+		worktreePath,
+		"push",
+		...BYPASS_CONTRIBUTOR_PUSH_HOOK,
+		"origin",
+		`HEAD:${branch}`,
+	]);
 	if (push.code !== 0)
 		return {
 			ok: false,

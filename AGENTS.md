@@ -74,8 +74,10 @@ gate. A new ADR number is checked against `origin/main` after the rebase.
 `scripts/git-hooks/pre-push` runs lint and typecheck, and refuses a push on a
 branch behind `origin/main`. It is active only where
 `git config core.hooksPath scripts/git-hooks` has been set; the setup line is in
-[the commands page](docs/development/commands.md). Do not bypass it with
-`--no-verify`: CI runs the same checks.
+[the commands page](docs/development/commands.md). It gates your push of work:
+do not bypass it with `--no-verify`, because CI runs the same checks. The
+control plane's own pushes name the bypass, and they are the only pushes
+allowed to (ADR 0127).
 
 See [the quality gate](docs/development/quality-gate.md) for the probe rules,
 the reporting rules, and the measured costs, and

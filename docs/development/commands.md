@@ -64,6 +64,12 @@ The hook prints which check ran, and a refusal names the rule it enforced. Do no
 bypass it with `--no-verify`: CI runs the same checks, so a bypass only moves the
 failure to a red check on the pull request.
 
+The hook gates a contributor's push. The control plane's own pushes - the
+ticket's factory branch at the Handoff start, and a Repository init's first
+commit - name the bypass instead, because the hook reads the tree it stands in
+and would refuse them for a dependency the checkout never installed
+([ADR 0127](../adr/0127-the-plane-pushes-its-own-branches-outside-the-contributor-pre-push-hook.md)).
+
 ## Mutation testing
 
 `bun run mutate` rewrites one expression at a time in `src` and runs the suite

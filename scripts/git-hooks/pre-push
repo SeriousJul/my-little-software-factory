@@ -9,6 +9,11 @@
 #
 # A committed hook is not active by itself. It runs in a checkout that has set
 # it: `git config core.hooksPath scripts/git-hooks`.
+#
+# It gates a contributor's push of work. The control plane's own pushes name
+# `--no-verify` and never reach this file: the hook reads the tree it stands in,
+# and an uninstalled dependency in that tree must not stop a push whose only
+# content is the plane's own commit (ADR 0127).
 
 set -uo pipefail
 

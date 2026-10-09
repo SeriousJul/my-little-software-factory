@@ -15,6 +15,7 @@ import { join } from "node:path";
 import type { FactoryConfig, TicketSourceConfig } from "../src/config.ts";
 import type { Ticket } from "../src/domain/ticket.ts";
 import { withHeadBranch } from "../src/domain/ticket.ts";
+import { BYPASS_CONTRIBUTOR_PUSH_HOOK } from "../src/git-push.ts";
 import {
 	checkStart,
 	closeHandoffEnvironment,
@@ -4395,6 +4396,19 @@ const PR_CREATE_COMMAND = [
 ].join(" ");
 
 /**
+ * The plane's push of the ticket's factory branch. The bypass of the
+ * contributor pre-push hook rides in it (ADR 0127), and the flag is read from
+ * the constant the plane sends, so a change to the rule moves one place.
+ */
+function pushBranchArgs(): string[] {
+	return ["-C", CHECKOUT, "push", ...BYPASS_CONTRIBUTOR_PUSH_HOOK, "origin", PR_BRANCH];
+}
+
+function pushBranchCommand(): string {
+	return `git ${pushBranchArgs().join(" ")}`;
+}
+
+/**
  * Stub the hold commit the open steps a fresh branch onto: the refs read,
  * the empty commit built on them, and the branch moved to it.
  */
@@ -4431,7 +4445,7 @@ function stubPullRequestOpenStep(runner: FakeRunner, { standing = false } = {}):
 		stdout: standing ? `abc123\trefs/heads/${PR_BRANCH}\n` : "",
 	});
 	if (!standing) stubHoldCommit(runner);
-	runner.set("git", ["-C", CHECKOUT, "push", "origin", PR_BRANCH], { stdout: "" });
+	runner.set("git", pushBranchArgs(), { stdout: "" });
 	if (standing) {
 		runner.set("gh", PR_READ_ARGS, {
 			stdout: JSON.stringify([
@@ -4629,7 +4643,7 @@ class PrWorldRunner extends FakeRunner {
 		else if (line === `-C ${CHECKOUT} fetch origin ${PR_BRANCH}:refs/heads/${PR_BRANCH}`) {
 			this.localBranch = true;
 			this.set(command, args, { stdout: "" });
-		} else if (line === `-C ${CHECKOUT} push origin ${PR_BRANCH}`) {
+		} else if (line === pushBranchArgs().join(" ")) {
 			this.remoteBranch = true;
 			this.set(command, args, { stdout: "" });
 		} else if (line === `-C ${CHECKOUT} update-ref refs/heads/${PR_BRANCH} sha1111`) {
@@ -4774,7 +4788,7 @@ describe("handOffTicket: the pull request the plane opens (ADR 0076)", () => {
 			`git -C ${CHECKOUT} rev-parse ${PR_BRANCH} ${PR_BRANCH}^{tree}`,
 			`git -C ${CHECKOUT} commit-tree def456 -p abc123 -m factory: hold the branch for the pull request`,
 			`git -C ${CHECKOUT} update-ref refs/heads/${PR_BRANCH} sha1111`,
-			`git -C ${CHECKOUT} push origin ${PR_BRANCH}`,
+			pushBranchCommand(),
 			`gh ${PR_READ_ARGS.join(" ")}`,
 			PR_CREATE_COMMAND,
 			`herdr agent start ${AGENT} --kind pi --pane pane-wt`,
@@ -4789,7 +4803,7 @@ describe("handOffTicket: the pull request the plane opens (ADR 0076)", () => {
 			stdout: "",
 		});
 		stubHoldCommit(runner);
-		runner.set("git", ["-C", CHECKOUT, "push", "origin", PR_BRANCH], { stdout: "" });
+		runner.set("git", pushBranchArgs(), { stdout: "" });
 		runner.set("gh", PR_READ_ARGS, { stdout: "[]" });
 		runner.setSequence(
 			"gh",
@@ -5239,6 +5253,32 @@ describe("handOffTicket: the pull request the plane opens (ADR 0076)", () => {
 		expect(commands).toContain(`herdr workspace close ws-wt`);
 	});
 
+	test("the branch push bypasses the checkout's contributor pre-push hook", async () => {
+		const runner = new FakeRunner();
+		stubPrWorktreeHandoff(runner);
+		stubPullRequestOpenStep(runner);
+
+		const outcome = await handOffTicket(
+			PR_TICKET,
+			{ ...defaultChoice, environment: "worktree" },
+			{
+				claim: "open",
+				config: PR_CONFIG,
+				runner,
+				home: HOME,
+			},
+		);
+
+		expect(outcome.status).toBe("ok");
+		// The hook of ADR 0105 answers for the tree it stands in, and that tree is
+		// not the work the plane pushes: this push carries only the hold commit, and
+		// CI runs the same checks on the draft the push makes. So the argv names the
+		// bypass (ADR 0127), and a checkout with its dependencies not installed
+		// cannot stop the factory.
+		const push = runner.commands().find((command) => command.includes(" push "));
+		expect(push).toBe(pushBranchCommand());
+	});
+
 	test("a failed push leaves no residue of its own to clean up", async () => {
 		const runner = new FakeRunner();
 		stubPrWorktreeHandoff(runner);
@@ -5246,7 +5286,7 @@ describe("handOffTicket: the pull request the plane opens (ADR 0076)", () => {
 			stdout: "",
 		});
 		stubHoldCommit(runner);
-		runner.set("git", ["-C", CHECKOUT, "push", "origin", PR_BRANCH], {
+		runner.set("git", pushBranchArgs(), {
 			code: 128,
 			stderr: "fatal: unable to access: Network is down\n",
 		});
@@ -5283,7 +5323,7 @@ describe("handOffTicket: the pull request the plane opens (ADR 0076)", () => {
 		runner.set("git", ["-C", CHECKOUT, "ls-remote", "--heads", "origin", PR_BRANCH], {
 			stdout: "abc123\trefs/heads/factory/7-retry-policy-for-webhooks\n",
 		});
-		runner.set("git", ["-C", CHECKOUT, "push", "origin", PR_BRANCH], { stdout: "" });
+		runner.set("git", pushBranchArgs(), { stdout: "" });
 		runner.set("gh", PR_READ_ARGS, { stdout: "[]" });
 		runner.set(
 			"gh",
@@ -5418,7 +5458,7 @@ describe("handOffTicket: the pull request the plane opens (ADR 0076)", () => {
 		const commands = runner.commands();
 		// The raise lands after the push, so the answer carries the handover: the
 		// branch stands on both sides and the next Handoff reuses it.
-		expect(commands).toContain(`git -C ${CHECKOUT} push origin ${PR_BRANCH}`);
+		expect(commands).toContain(pushBranchCommand());
 		expectNoCommand(commands, `git -C ${CHECKOUT} branch -D ${PR_BRANCH}`);
 		expectNoCommand(commands, "gh pr close");
 		expectNoCommand(commands, `git -C ${CHECKOUT} push origin --delete ${PR_BRANCH}`);
@@ -5453,7 +5493,7 @@ describe("handOffTicket: the pull request the plane opens (ADR 0076)", () => {
 		// the render does: the local branch stands beside the remote one, and the
 		// next Handoff finds the branch instead of meeting a push that cannot land.
 		expect(commands).toContain(PR_CREATE_COMMAND);
-		expect(commands).toContain(`git -C ${CHECKOUT} push origin ${PR_BRANCH}`);
+		expect(commands).toContain(pushBranchCommand());
 		expectNoCommand(commands, `git -C ${CHECKOUT} branch -D ${PR_BRANCH}`);
 		expectNoCommand(commands, "gh pr close");
 		expectNoCommand(commands, `git -C ${CHECKOUT} push origin --delete ${PR_BRANCH}`);
@@ -5541,7 +5581,7 @@ describe("handOffTicket: the pull request the plane opens (ADR 0076)", () => {
 
 		expect(outcome.status).toBe("ok");
 		const commands = runner.commands();
-		expect(commands).not.toContain(`git -C ${CHECKOUT} push origin ${PR_BRANCH}`);
+		expect(commands).not.toContain(pushBranchCommand());
 		expect(commands).not.toContain(`gh ${PR_READ_ARGS.join(" ")}`);
 	});
 });

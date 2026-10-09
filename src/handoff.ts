@@ -90,6 +90,7 @@ import { nameHolderText } from "./domain/name-collision.ts";
 import type { EnvironmentKind, RepositoryRef, Ticket } from "./domain/ticket.ts";
 import { headBranchOf } from "./domain/ticket.ts";
 import { fileExists, movePath, readDirectoryNames } from "./fs.ts";
+import { BYPASS_CONTRIBUTOR_PUSH_HOOK } from "./git-push.ts";
 import { failureLine } from "./lines.ts";
 import {
 	branchNameFor,
@@ -2262,16 +2263,25 @@ async function holdFreshBranch(
 	return { ok: true };
 }
 
-/** The branch push, and the handover a push that raises still leaves. */
+/**
+ * The branch push, and the handover a push that raises still leaves.
+ *
+ * The push carries the bypass of the contributor pre-push hook (ADR 0127):
+ * the hook answers for the tree it stands in, and a shared checkout whose
+ * dependencies are not installed fails it and stops every Handoff, while the
+ * only commit this push carries is the plane's own hold commit.
+ */
 async function pushFactoryBranch(
 	ctx: HandoffContext,
 	branch: string,
 ): Promise<{ ok: true } | { ok: false; reason: string; handedOver: boolean }> {
 	let pushed: CommandResult;
 	try {
-		pushed = await ctx.runner.run("git", ["-C", ctx.checkout, "push", "origin", branch], {
-			env: { GIT_TERMINAL_PROMPT: "0" },
-		});
+		pushed = await ctx.runner.run(
+			"git",
+			["-C", ctx.checkout, "push", ...BYPASS_CONTRIBUTOR_PUSH_HOOK, "origin", branch],
+			{ env: { GIT_TERMINAL_PROMPT: "0" } },
+		);
 	} catch (error) {
 		return {
 			ok: false,

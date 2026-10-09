@@ -36,6 +36,7 @@ import {
 	withHeadBranch,
 	withIssueReferences,
 } from "../src/domain/ticket.ts";
+import { BYPASS_CONTRIBUTOR_PUSH_HOOK } from "../src/git-push.ts";
 import {
 	createHandoffDispatch,
 	type HandoffIntent,
@@ -1558,7 +1559,12 @@ describe("the bug position runs the diagnosis machine (issue #330, ADR 0116)", (
 				),
 			]);
 			const startCommands = runner.commands();
-			expect(startCommands).toContain(`git -C ${checkout} push origin ${ISSUE_FACTORY_BRANCH}`);
+			// The plane's own push, with the bypass of the contributor pre-push hook
+			// (ADR 0127): the hook reads the checkout it stands in, and the only
+			// commit here is the plane's hold commit.
+			expect(startCommands).toContain(
+				`git -C ${checkout} push ${BYPASS_CONTRIBUTOR_PUSH_HOOK.join(" ")} origin ${ISSUE_FACTORY_BRANCH}`,
+			);
 			expect(
 				startCommands.some((command) =>
 					command.startsWith(

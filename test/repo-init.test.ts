@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { repositoryInitPanel } from "../src/components/repository-init-panel.ts";
 import type { FactoryConfig, TaskTypeConfig, WorkflowState } from "../src/config.ts";
+import { BYPASS_CONTRIBUTOR_PUSH_HOOK } from "../src/git-push.ts";
 import {
 	AGENT_SKILLS_HEADING,
 	agentSkillsBlock,
@@ -41,6 +42,16 @@ function tempDir(prefix: string): string {
 	const dir = mkdtempSync(join(tmpdir(), prefix));
 	paths.push(dir);
 	return dir;
+}
+
+/**
+ * The Repository init's push of its first commit (ADR 0075). The bypass of the
+ * contributor pre-push hook rides in it (ADR 0127): the throwaway worktree the
+ * init pushes from holds no `node_modules`, so the hook's own checks cannot run
+ * there.
+ */
+function pushInitArgs(worktree: string): string[] {
+	return ["-C", worktree, "push", ...BYPASS_CONTRIBUTOR_PUSH_HOOK, "origin", "HEAD:main"];
 }
 
 /** The factory's own workflow machine, in the shape the config parser yields. */
@@ -378,7 +389,7 @@ describe("the Repository init act (ADR 0075)", () => {
 		expect(commands).toContain(`git -C ${checkout} fetch origin main`);
 		expect(commands).toContain(`git -C ${checkout} worktree add --detach ${worktree} origin/main`);
 		expect(commands).toContain(`git -C ${worktree} add -A`);
-		expect(commands).toContain(`git -C ${worktree} push origin HEAD:main`);
+		expect(commands).toContain(`git ${pushInitArgs(worktree).join(" ")}`);
 		expect(commands).toContain(`git -C ${checkout} worktree remove --force ${worktree}`);
 		expect(commands).toContain(
 			`gh label create ready-for-agent --repo ${identity} --color 0e8a16 --description Ready for an agent`,
@@ -517,7 +528,7 @@ describe("the Repository init act (ADR 0075)", () => {
 		const runner = runnerWith("main", []);
 		runner.set("git", ["-C", worktree, "status", "--porcelain"], { stdout: "A AGENTS.md\n" });
 		runner.set("git", ["-C", worktree, "rev-parse", "HEAD"], { stdout: "abc123\n" });
-		runner.set("git", ["-C", worktree, "push", "origin", "HEAD:main"], {
+		runner.set("git", pushInitArgs(worktree), {
 			code: 1,
 			stderr: "protected branch\n",
 		});

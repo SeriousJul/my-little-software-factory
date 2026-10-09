@@ -129,6 +129,15 @@ git config core.hooksPath scripts/git-hooks
 Do not bypass it with `--no-verify`. CI runs the same checks, and a bypass only
 moves the failure to a red check on the pull request.
 
+That rule governs a contributor's push of work. The control plane's own pushes
+name the bypass, and they are the only pushes allowed to
+([ADR 0127](../adr/0127-the-plane-pushes-its-own-branches-outside-the-contributor-pre-push-hook.md)):
+the hook reads the tree it stands in, so an uninstalled dependency in the Shared
+checkout, or a throwaway worktree with no `node_modules` at all, refuses a push
+whose only content is the plane's own commit. `src/git-push.ts` holds the one
+constant, `test/git-push-architecture.test.ts` refuses a plane push written
+without it, and CI still runs all three checks on the draft that push creates.
+
 ## A claim a document makes is a claim the code keeps
 
 Every sentence written into `docs/`, `GLOSSARY.md`, an ADR, or a module header
