@@ -17,7 +17,7 @@ after every edit is the cost that makes an agent skip a check.
 
 | Command | What it covers | Measured cost |
 | --- | --- | --- |
-| `bun run audit` | The type check, Biome, jscpd, and the code-scanning read, in the Quality audit's one payload | 1.0 s at head 30d603c4 (three runs: 1.04 s, 1.01 s, 1.09 s) |
+| `bun run audit` | The type check, Biome, jscpd, and the code-scanning read, in the Quality audit's one payload | 1.1 s at head f2f221fe (three runs: 1.08 s, 1.12 s, 1.11 s) |
 | `bun test <file>` | The suite of the file you changed | 0.16 s for a static check over the tree; 13.8 s for the 22 frame tests in `test/action-bar.test.ts`; 21.9 s for the 58 in `test/consultation-frame.test.ts`; about 10.7 s for the guide screenshots in `test/screenshot-drift.test.ts`, re-measured on 2026-10-08 (three runs: 10.66 s, 10.68 s, 10.92 s), against 10.6 s for the same case on the pre-change tree |
 | `bun run test:changed` | The test files the current changes can affect | near zero when nothing changed |
 
@@ -32,13 +32,14 @@ belong in the loop either way.
 ## The Quality audit
 
 `bun run audit` is the one command this repository runs to check itself
-(ADR 0120, ADR 0121). It runs the type check, Biome over `src scripts bin
-test` with the audit's config, jscpd over `src scripts bin`, and one `gh api`
-read of the open code-scanning alerts, and prints one payload on stdout: a
-status line, one count per metric, then the findings as `  path:line rule
-message`. It runs no test suite, and it writes nothing inside the worktree:
-jscpd's JSON report lands in a temp directory outside the repository and is
-removed.
+(ADR 0120, ADR 0121, ADR 0135). It runs the type check, Biome over `src
+scripts bin test` with the audit's config, jscpd once per duplication scope
+- over `src scripts bin` and over `test` - and one `gh api` read of the open
+code-scanning alerts, and prints one payload on stdout: a status line, one
+count per metric, then the findings as `  path:line rule message`. It runs
+no test suite, and it writes nothing inside the worktree: each jscpd run's
+JSON report lands in its own subdirectory of a temp directory outside the
+repository and is removed.
 
 | Metric | Tool | Where the value stands |
 | --- | --- | --- |
@@ -49,6 +50,7 @@ removed.
 | Function length | Biome `complexity/noExcessiveLinesPerFunction`, `maxLines: 50`, `skipBlankLines: true`, off for `test/**` | `.quality/biome.json` |
 | Parameter count | Biome `complexity/useMaxParams`, default 4 | `.quality/biome.json` |
 | Duplication | jscpd 5.4.0, `minTokens: 100`, `minLines: 5`, over `src scripts bin` | `.jscpd.json` |
+| Test duplication | jscpd 5.4.0, `minTokens: 100`, `minLines: 5`, over `test` | `.jscpd.json` |
 | SAST | CodeQL, read through one `gh api` call over the open alerts | the repository's code scanning |
 
 No threshold stands in the audit script. `.quality.json` states the metric
@@ -72,26 +74,36 @@ count, and 11 duplication clones at head 30d603c4, where the audit landed.
 Issue #353 landed between the spec's measurement at head b4c305e6 and this
 head, and it added the one function-length finding that moves 86 to 87.
 
-Measured at head 30d603c4: the audit costs 1.0 s (three runs: 1.04 s, 1.01 s,
-1.09 s), of which the type check is 0.42 s (three runs: 0.422 s, 0.424 s,
-0.429 s), the Biome run is 0.21 s (three runs: 203 ms, 208 ms, 207 ms), and
-jscpd is 0.04 s (three runs: 39 ms, 40 ms, 43 ms), plus one `gh api` call.
+Measured at head f2f221fe: the audit costs 1.1 s (three runs: 1.08 s, 1.12 s,
+1.11 s), of which the type check is 0.36 s (three runs: 357 ms, 362 ms,
+360 ms), the Biome run is 0.21 s (three runs: 205 ms, 207 ms, 209 ms), the
+`src scripts bin` jscpd run is 0.03 s (three runs: 23 ms, 28 ms, 25 ms), and
+the `test` jscpd run is 0.03 s (three runs: 31 ms, 40 ms, 31 ms), plus one
+`gh api` call.
 
 ### The audit's probes
 
 The probes the branch's tests claim, each re-run on the head that is pushed:
 
 1. The duplication teeth: paste a block of at least 100 tokens that already
-   stands elsewhere in `src` into a function of `src`. The `duplicates` count
-   grows by one and the audit exits non-zero.
-2. The cognitive teeth: raise one function's cognitive score past 15 by
-   nesting an `if` in a body that already stands over 15. The `cognitive`
-   count grows by one and the audit exits non-zero.
-3. The ratchet: lower one count in `.quality-baseline.json` below the count
-   the tree stands at. The audit exits non-zero and prints that count below
-   its baseline.
+   stands elsewhere in `src` into a file of `src` as a new top-level
+   function. The `duplicates` count grows by one and the audit exits
+   non-zero.
+2. The cognitive teeth: add a function to a file of `src` whose body nests
+   its way to a cognitive score of 21. The `cognitive` count grows by one
+   and the audit exits non-zero.
+3. The ratchet: lower the `test-dup` count in `.quality-baseline.json` below
+   the count the tree stands at. The audit exits non-zero and prints that
+   count below its baseline.
 4. The secrets rule: plant a high-entropy 32-character token in a file under
    `src`. The `secrets` count grows by one and the audit exits non-zero.
+5. The suite's duplication teeth: paste a block of at least 100 tokens that
+   already stands elsewhere in `test` into a file of `test`. The `test-dup`
+   count grows by one and the audit exits non-zero.
+6. The independence of the two counts: the paste of probe 5 leaves the
+   `duplicates` count at 0, and the paste of probe 1 grows `duplicates`
+   while the `test-dup` count stands. The two counts move on their own
+   baselines.
 
 ## The push gate
 
