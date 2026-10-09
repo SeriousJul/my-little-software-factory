@@ -786,6 +786,22 @@ It resolves a Control catalogue id to the key the Action bar states on the curre
 A test names a control and an outcome; it names no key, no frame predicate, and no deadline. The frame poll, the passive-effect flush, a surface's key ownership, and the deadline all stand behind the interface.
 _Avoid_: test harness, frame harness, UI test helper, key presser
 
+**Seeded plane**:
+The test module that opens one whole control plane standing behind one interface: the state file, the config file, the home and checkout directories, the Command runner double, the Ticket source double, the clock, and the Plane boot the control plane runs from.
+A test names the standing it drives; it does not name the aggregates, the directories, or the props that build it.
+It reaches no operator path, and it holds no rule of the plane: where a standing needs a rule, it calls the module that owns the rule.
+_Avoid_: test fixture, test world, harness, seeded app
+
+**Plane boot**:
+The one record the control plane boots from: the validated config, the Command runner, the config file path, the home directory, the state aggregates, the bound Ticket sources, and the file logger. Every field stands; none is left out.
+The production entry fills it from the startup module's result, and a test fills it from the Seeded plane. The two differ by the Loop policy they name, never by a field one of them omits.
+_Avoid_: app props, boot options, partial boot
+
+**Loop policy**:
+The fact of which background loops a run starts: production polls the Ticket sources and the Agent observation at the config's interval, a held run starts neither, and a polled run starts both at an interval the test rig names.
+The policy stands in the Plane boot, so a run never settles its loops by which fields were left out.
+_Avoid_: poll interval flag, no-state mode, projection mode
+
 **Documentation site**:
 The static site that GitHub Pages publishes from the `docs/` folder.
 It shows the published subset (the ADRs, the standards, and the guides) and keeps the agent instruction, verification, and research folders out of the build.

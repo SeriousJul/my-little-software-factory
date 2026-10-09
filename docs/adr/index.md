@@ -137,3 +137,4 @@ body states the context, the decision, and the consequences.
 - [ADR 0126: The Attention band reads the row's standing, and the machine's gate waits for the read](./0126-the-attention-band-reads-the-rows-own-standing-and-the-machines-gate-waits-for-the-read.md)
 - [ADR 0127: The plane pushes its own branches outside the contributor pre-push hook](./0127-the-plane-pushes-its-own-branches-outside-the-contributor-pre-push-hook.md)
 - [ADR 0128: The frame rig runs controls, not keys](./0128-the-frame-rig-runs-controls-not-keys.md)
+- [ADR 0129: The control plane boots from one Plane boot record](./0129-the-control-plane-boots-from-one-plane-boot-record.md)
