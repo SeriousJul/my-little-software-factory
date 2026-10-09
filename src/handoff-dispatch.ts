@@ -2512,7 +2512,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 		claimed: ClaimedHandoff,
 		onStarted?: (started: DispatchResult) => void,
 	): void {
-		const { ticket, choice, origin, claim, previousMessage } = claimed;
+		const { ticket, claim } = claimed;
 		let reported = false;
 		const reportStarted = (started: DispatchResult): void => {
 			if (reported) return;

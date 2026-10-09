@@ -492,9 +492,7 @@ function chainRig(options: ChainRigOptions = {}): Chain {
 			// stood, so the ask crosses the mark and the dispatch's guard is
 			// what answers it (issue #352).
 			planeActionRunInFlight: (ticketIdentity) =>
-				options.markReadStale === true
-					? false
-					: dispatch.planeActionRunInFlight(ticketIdentity),
+				options.markReadStale === true ? false : dispatch.planeActionRunInFlight(ticketIdentity),
 			pickupWorkQueue: () => dispatch.pickupWorkQueue(),
 			closeCleanup: async () => undefined,
 		},

@@ -271,7 +271,7 @@ export class StubWorldStore {
 			return this.refusal(args, `a host the world does not serve: ${hostname ?? ""}`);
 		// The query the direct read rides on (ADR 0076): the state and head
 		// filters of the pull request list, read off the endpoint.
-		const query = this.apiParseQuery(endpoint, args);
+		const query = this.apiParseQuery(endpoint);
 		if (!query.ok) return this.refusal(args, `an unreadable query in the endpoint: ${query.pair}`);
 		const path = apiEndpointPath(endpoint);
 		if (path === "graphql") return this.answerSearch(fields, args);
@@ -300,7 +300,6 @@ export class StubWorldStore {
 
 	private apiParseQuery(
 		endpoint: string,
-		args: readonly string[],
 	): { ok: true; query: Map<string, string> } | { ok: false; pair: string } {
 		const queryIndex = endpoint.indexOf("?");
 		const query = new Map<string, string>();

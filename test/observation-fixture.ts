@@ -9,36 +9,30 @@
  * them, and the fixture only records the calls the cycle crosses and the
  * lines the module and the cycle leave.
  */
-import { rmSync } from "node:fs";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 
 import { afterEach } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { FactoryConfig, TransitionOutcome } from "../src/config.ts";
 import type { HandoffIntent, PlaneActionIntent } from "../src/handoff-dispatch.ts";
 import { createHandoffDispatch, type HandoffDispatch } from "../src/handoff-dispatch.ts";
 import type { HerdrAgent } from "../src/herdr.ts";
-import { NOOP_LOGGER, type Logger } from "../src/logging.ts";
+import type { Logger } from "../src/logging.ts";
 import {
 	type AgentReader,
 	type AgentWaitResult,
 	ObservationCoordinator,
 	stripAnsi,
-	type TurnLogSource,
 } from "../src/observation.ts";
 import type { HandoffTicket } from "../src/state/handoff.ts";
 import type { FactoryState } from "../src/state.ts";
 import { openFactoryState } from "../src/state.ts";
 import type { SessionTurnRead } from "../src/turn-log.ts";
+import { fireTransition, type RefiredSkip, refireRecordedSkips } from "../src/workflow.ts";
 import {
-	type RefiredSkip,
-	fireTransition,
-	refireRecordedSkips,
-} from "../src/workflow.ts";
-import {
-	FakeRunner,
 	agentListJson,
+	FakeRunner,
 	tabCreateJson,
 	workspaceCreateJson,
 	workspaceListJson,
@@ -61,9 +55,13 @@ function stubDefaultHerdr(runner: FakeRunner, checkout: string): void {
 	runner.set("herdr", ["workspace", "create", "--cwd", checkout, "--no-focus"], {
 		stdout: workspaceCreateJson("ws-fixture", "pane-root"),
 	});
-	runner.set("herdr", ["tab", "create", "--workspace", "ws-fixture", "--cwd", checkout, "--no-focus"], {
-		stdout: tabCreateJson("pane-agent", "tab-agent"),
-	});
+	runner.set(
+		"herdr",
+		["tab", "create", "--workspace", "ws-fixture", "--cwd", checkout, "--no-focus"],
+		{
+			stdout: tabCreateJson("pane-agent", "tab-agent"),
+		},
+	);
 	// The answer any command without a named response gives: a quiet success.
 	runner.setDefault({ code: 0, stdout: "" });
 }
@@ -90,7 +88,11 @@ export interface RigOptions {
 	/** The wake wait the reader answers; absent: the poll-only standing. */
 	waitAgent?: (target: string, budgetMs: number) => Promise<AgentWaitResult>;
 	/** The settled turn's log reader; absent: no session to read. */
-	turnLogs?: (kind: string, sessionId: string, startedAt: string | null) => Promise<SessionTurnRead>;
+	turnLogs?: (
+		kind: string,
+		sessionId: string,
+		startedAt: string | null,
+	) => Promise<SessionTurnRead>;
 	/** The cycle's record lines; absent: the fixture's own record. */
 	log?: Logger;
 	/** The transition fire the cycle settles a completed turn with; absent: the real fire. */
@@ -182,13 +184,9 @@ export interface Rig {
 }
 
 /** Build one fixture: the real module, the real state file, the pinned clock. */
-export function rig(
-	options: RigOptions,
-	baseConfig: FactoryConfig,
-): Rig {
+export function rig(options: RigOptions, baseConfig: FactoryConfig): Rig {
 	const nowMs = { current: PINNED_EPOCH };
-	const agents =
-		typeof options.agents === "function" ? [] : [...(options.agents ?? [])];
+	const agents = typeof options.agents === "function" ? [] : [...(options.agents ?? [])];
 	// A function form answers the probe itself, so a test can count its calls
 	// the way the wake tests do.
 	const agentsFn = typeof options.agents === "function" ? options.agents : null;
@@ -294,8 +292,7 @@ export function rig(
 				planeAsks.push(intent);
 				return dispatch.dispatchPlaneAction(intent);
 			},
-			planeActionRunInFlight: (ticketIdentity) =>
-				dispatch.planeActionRunInFlight(ticketIdentity),
+			planeActionRunInFlight: (ticketIdentity) => dispatch.planeActionRunInFlight(ticketIdentity),
 			pickupWorkQueue: async () => {
 				order.push("pickup");
 				return dispatch.pickupWorkQueue();
@@ -328,7 +325,8 @@ export function rig(
 		turnLogs: {
 			read: options.turnLogs ?? (async () => ({ kind: "unavailable" })),
 		},
-		fireCompleted: options.fireCompleted ??
+		fireCompleted:
+			options.fireCompleted ??
 			((ticket) =>
 				fireTransition({
 					config,
@@ -337,8 +335,8 @@ export function rig(
 					ticketIdentity: ticket.ticketIdentity,
 					taskType: ticket.taskType,
 				})),
-		refireRecordedSkips: options.refireRecordedSkips ??
-			(() => refireRecordedSkips({ config, state, runner })),
+		refireRecordedSkips:
+			options.refireRecordedSkips ?? (() => refireRecordedSkips({ config, state, runner })),
 		onStatus: (kind, text) => {
 			statuses.push({ kind, text });
 		},
@@ -356,9 +354,7 @@ export function rig(
 			await innerCoordinator.tick();
 			const end = Date.now() + 5_000;
 			for (;;) {
-				const open = state.handoff
-					.openAttemptTickets()
-					.filter((id) => !before.has(id));
+				const open = state.handoff.openAttemptTickets().filter((id) => !before.has(id));
 				if (open.length === 0) return;
 				if (Date.now() > end) throw new Error("the module's starts never settled");
 				await new Promise((resolve) => setTimeout(resolve, 1));

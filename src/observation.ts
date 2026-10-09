@@ -113,7 +113,6 @@ import {
 } from "./domain/top-up.ts";
 import { baseChoice, resolveHandoffChoice } from "./handoff.ts";
 import {
-	type DispatchResult,
 	type HandoffIntent,
 	type ObservationDispatch,
 	type PlaneActionIntent,
@@ -2304,8 +2303,7 @@ export class ObservationCoordinator {
 				// abandon answers. The brake is the designed silence: the gate holds
 				// without stating a fact.
 				operatorDecides: operatorDecidesType(config.taskTypes, ticket.taskType),
-					pastStartupGrace:
-						this.clock.now() - Date.parse(ticket.startedAt) >= this.startupGraceMs,
+				pastStartupGrace: this.clock.now() - Date.parse(ticket.startedAt) >= this.startupGraceMs,
 				hasPane: ticket.paneId !== null,
 				// The one missing-Agent rule, read the way the in-flight pass reads it.
 				agentMissing:

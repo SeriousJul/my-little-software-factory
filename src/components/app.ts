@@ -108,7 +108,7 @@ import {
 	type StoredHandoffFacts,
 } from "../handoff-dispatch.ts";
 import type { HerdrAgent } from "../herdr.ts";
-import { NOOP_LOGGER, type Logger } from "../logging.ts";
+import { type Logger, NOOP_LOGGER } from "../logging.ts";
 import {
 	HerdrAgentReader,
 	matchConsultationAgent,

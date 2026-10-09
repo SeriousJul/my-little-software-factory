@@ -1,15 +1,13 @@
-import { join } from "node:path";
-
 import { describe, expect, mock, test } from "bun:test";
+import { join } from "node:path";
 
 import type { FactoryConfig, TransitionOutcome } from "../src/config.ts";
 import type { FetchedTicket } from "../src/domain/ticket.ts";
-import type { DispatchResult, HandoffIntent } from "../src/handoff-dispatch.ts";
+import type { HandoffIntent } from "../src/handoff-dispatch.ts";
 import type { HerdrAgent } from "../src/herdr.ts";
-import { NOOP_LOGGER, type Logger } from "../src/logging.ts";
+import { NOOP_LOGGER } from "../src/logging.ts";
 import { agentNameFor } from "../src/naming.ts";
 import {
-	type AgentReader,
 	type AgentWaitResult,
 	type AwaitingDecision,
 	HerdrAgentReader,
@@ -22,11 +20,15 @@ import type { ConsultationState } from "../src/state/consultation-record.ts";
 import type { HandoffOrigin } from "../src/state/handoff.ts";
 import type { FactoryState } from "../src/state.ts";
 import { openFactoryState } from "../src/state.ts";
-import type { SessionTurnRead, TurnEndCause, TurnLogEntry } from "../src/turn-log.ts";
+import type { TurnEndCause, TurnLogEntry } from "../src/turn-log.ts";
 import { BASE_CONFIG } from "./base-config.ts";
 import { FakeRunner, tabCreateJson, worktreeOpenJson } from "./fake-runner.ts";
+import {
+	type RigOptions,
+	rig as rigFixture,
+	settleFor as settleDispatch,
+} from "./observation-fixture.ts";
 import { infoLine, type RecordedLine, recordLogger } from "./record-logger.ts";
-import { rig as rigFixture, type RigOptions, settleFor as settleDispatch } from "./observation-fixture.ts";
 
 const source = { name: "issues", kind: "github-issues" };
 const choice = {
@@ -140,22 +142,6 @@ function success(tickets: FetchedTicket[]) {
 	return { status: "success" as const, fetchedAt: "2026-08-31T10:01:00Z", tickets };
 }
 
-function reader(
-	agents: () => HerdrAgent[],
-	readPane?: (paneId: string, lines: number) => Promise<string | null>,
-	waitAgent?: (target: string, budgetMs: number) => Promise<AgentWaitResult>,
-): AgentReader {
-	return {
-		listAgents: async () => ({ kind: "ok", agents: agents() }),
-		// The AgentReader contract: pane output comes back ANSI stripped.
-		readPane:
-			readPane ?? (async (paneId) => stripAnsi(`\u001b[1mDone.\u001b[0m message of ${paneId}`)),
-		// Absent by default: the loop the tests drive is the poll-only ADR
-		// 0006 standing, and the wake tests opt in with their own wait.
-		...(waitAgent === undefined ? {} : { waitAgent }),
-	};
-}
-
 function agent(
 	paneId: string,
 	fields: { status?: string; sessionId?: string; stableSessionId?: string; name?: string } = {},
@@ -227,7 +213,7 @@ async function untilStatus(
 	const end = Date.now() + 5_000;
 	for (;;) {
 		if (statuses.some((status) => status.text === text)) return;
-		if (Date.now() > end) throw new Error("the line never landed: " + text);
+		if (Date.now() > end) throw new Error(`the line never landed: ${text}`);
 		await new Promise((resolve) => setTimeout(resolve, 1));
 	}
 }
@@ -3381,8 +3367,7 @@ describe("the open dispatch", () => {
 		await coordinator.tick();
 		expect(statuses).toContainEqual({
 			kind: "warning",
-			text:
-				'work queue top-up could not restart "Persist source facts": handoff recovery is required before another handoff',
+			text: 'work queue top-up could not restart "Persist source facts": handoff recovery is required before another handoff',
 		});
 		state.close();
 	});
@@ -3391,7 +3376,7 @@ describe("the open dispatch", () => {
 	// ask answers the stop, and the cycle ends its walk without a line. A
 	// warning per cycle would pin the Message line while the run ends.
 	test("the top-up's stopped dispatch is a stop, not a refusal", async () => {
-		const { state, dispatch, coordinator, statuses, settle } = rig({ autoOn: true, agents: [] });
+		const { state, dispatch, coordinator, statuses } = rig({ autoOn: true, agents: [] });
 		state.sourceFact.applyFetch(source, success([fetched()]));
 		// The teardown's stop, on the module the cycle crosses.
 		dispatch.stop();
@@ -3439,7 +3424,15 @@ describe("the open dispatch", () => {
 		const worktreePath = join(accepted.checkout, "wt");
 		accepted.runner.set(
 			"herdr",
-			["worktree", "open", "--cwd", accepted.checkout, "--branch", "factory/5-persist-source-facts", "--no-focus"],
+			[
+				"worktree",
+				"open",
+				"--cwd",
+				accepted.checkout,
+				"--branch",
+				"factory/5-persist-source-facts",
+				"--no-focus",
+			],
 			{ stdout: worktreeOpenJson("ws-1", "pane-wt", { alreadyOpen: true, worktreePath }) },
 		);
 		accepted.runner.set(
@@ -3475,7 +3468,15 @@ describe("the open dispatch", () => {
 		});
 		runner.set(
 			"herdr",
-			["worktree", "open", "--cwd", checkout, "--branch", "factory/5-persist-source-facts", "--no-focus"],
+			[
+				"worktree",
+				"open",
+				"--cwd",
+				checkout,
+				"--branch",
+				"factory/5-persist-source-facts",
+				"--no-focus",
+			],
 			{ code: 1, stderr: "Preparing worktree: the worktree path already exists" },
 		);
 		handOut(state, "github:github.com:I_5");
@@ -3488,8 +3489,7 @@ describe("the open dispatch", () => {
 		expect(statuses).toContainEqual(
 			expect.objectContaining({
 				kind: "warning",
-				text:
-					'queued handoff for "Persist source facts" was not run: Preparing worktree: the worktree path already exists',
+				text: 'queued handoff for "Persist source facts" was not run: Preparing worktree: the worktree path already exists',
 			}),
 		);
 		// The failed start settles a handoff that holds no pane, so the restart
@@ -3807,7 +3807,7 @@ describe("the open dispatch", () => {
 		await coordinator.tick();
 		// The pickup claimed the operator's item and its start runs on behind
 		// the walk: the row stands until the start answers, so this cycle's
-		// top-up holds on the waiting row the pickup holds.
+		// top-up holds on the waiting row the pickup holds (issue #371).
 		expect(order).toEqual(["pickup"]);
 		expect(intents).toEqual([]);
 		// The start answers, the row leaves with it, and the queue that is
@@ -6300,9 +6300,6 @@ describe("the failed Handoff start's hold (ADR 0077 as extended by ADR 0101, iss
 		});
 	}
 
-	const refusalLines = (statuses: Rig["statuses"]) =>
-		statuses.filter((status) => status.text.includes("could not hand off"));
-
 	test("the failed start holds the next cycle's ask, and the source's re-read releases it", async () => {
 		const { state, intents, coordinator, settle } = failedStartRig();
 		await coordinator.tick();
@@ -6408,7 +6405,15 @@ describe("the failed Handoff start's hold (ADR 0077 as extended by ADR 0101, iss
 		// The restart reopens the ticket's branch, and herdr refuses the open.
 		runner.set(
 			"herdr",
-			["worktree", "open", "--cwd", checkout, "--branch", "factory/5-persist-source-facts", "--no-focus"],
+			[
+				"worktree",
+				"open",
+				"--cwd",
+				checkout,
+				"--branch",
+				"factory/5-persist-source-facts",
+				"--no-focus",
+			],
 			{ code: 1, stderr: failure },
 		);
 		handOut(state, "github:github.com:I_5");
@@ -6828,7 +6833,9 @@ describe("the Agent name collision holds the Top-up out (issue #299)", () => {
 	test("the collision speaks before the Failed-start park (issue #299)", async () => {
 		// Both facts stand on the same ledger, and the collision is the one the
 		// operator can act on: the walk names it, and the park stays silent.
-		const { state, coordinator, intents, lines, settle } = collisionRig({ maxHandoffsPerTicket: 2 });
+		const { state, coordinator, intents, lines, settle } = collisionRig({
+			maxHandoffsPerTicket: 2,
+		});
 		await coordinator.tick();
 		await settle();
 		standCollision(state);
