@@ -6,6 +6,7 @@
  */
 import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, test } from "bun:test";
+import { holdsDecision } from "../../src/domain/ticket.ts";
 import { openFactoryState } from "../../src/state.ts";
 import { choice, cleanup, fetched, sourceA, statePath, success, textLog } from "./harness.ts";
 
@@ -230,6 +231,41 @@ describe("the turn end cause and the Dispatch pause", () => {
 		// trace a decision. A pause that kept reading it would have no release.
 		expect(state.ticketWorkCycle.closeWorkCycle(t5)).toBe(true);
 		expect(state.ticketWorkCycle.ticketState(t5)).toBe("open");
+		expect(state.ticketWorkCycle.dispatchPauseActive()).toBe(false);
+		state.close();
+	});
+
+	test("a failed turn the Ticket's next turn supersedes no longer pauses", () => {
+		const state = twoTicketState();
+		const first = settleCause(state, t5, { cause: "failed", at: "2026-08-31T11:00:00Z" });
+		expect(state.ticketWorkCycle.dispatchPauseActive()).toBe(true);
+		// The Agent reports working again: the turn reopens, the row leaves
+		// `awaiting` for `running`, and the pause stands down (issue #338).
+		expect(state.ticketWorkCycle.reopenTurn(t5, first)).toBe(true);
+		expect(state.ticketWorkCycle.dispatchPauseActive()).toBe(false);
+		// The missing Agent's restart starts a second turn in the same cycle, and
+		// its settle reads no session record: the cause fails open to `unknown`.
+		const restart = state.handoff.claimHandoff(t5, choice, "restart");
+		if (!restart.ok) throw new Error(restart.reason);
+		state.handoff.settleHandoff(restart.claim.attemptId, true);
+		state.ticketWorkCycle.settleTurn({
+			ticketIdentity: t5,
+			handoffId: restart.claim.attemptId,
+			taskType: "implement",
+			agentType: "pi",
+			message: "the restarted turn",
+			turnLog: textLog("the restarted turn"),
+			completedAt: "2026-08-31T11:05:00Z",
+			cause: "unknown",
+			detail: "",
+		});
+		// The row wears no `held` badge: the Ticket's newest turn ended `unknown`,
+		// which fails open. The older undecided `failed` trace is no longer the
+		// decision the operator owes, so it answers no Held turn: the pause and the
+		// badge agree, and the factory keeps dispatching (ADR 0016, issue #351).
+		const listed = state.ticketWorkCycle.ticketListViews([], "implement", "active").rows;
+		expect(listed.filter(holdsDecision)).toHaveLength(0);
+		expect(state.ticketWorkCycle.lastCompletion(t5)?.cause).toBe("unknown");
 		expect(state.ticketWorkCycle.dispatchPauseActive()).toBe(false);
 		state.close();
 	});

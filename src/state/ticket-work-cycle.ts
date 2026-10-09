@@ -620,16 +620,23 @@ export class TicketWorkCycleModule implements TicketWorkCycleAggregate {
 	 * undecided `failed` trace that still stands as the decision the operator
 	 * owes - the Ticket rests `awaiting` on the cycle the trace belongs to.
 	 *
-	 * The two guards are what keep the pause releasable (issue #338). An Agent
-	 * that reports working again reopens its turn (ADR 0016): the row leaves
-	 * `awaiting` for `running`, and its `held` badge, its `held` count, and its
-	 * Decision screen leave with the state, so no surface can land a decision on
-	 * that trace until the Agent settles again. A cycle the operator closes
+	 * The three guards are what keep the pause releasable (issue #338, issue #351).
+	 * An Agent that reports working again reopens its turn (ADR 0016): the row
+	 * leaves `awaiting` for `running`, and its `held` badge, its `held` count, and
+	 * its Decision screen leave with the state, so no surface can land a decision
+	 * on that trace until the Agent settles again. A cycle the operator closes
 	 * (ADR 0031) leaves the pending trace behind in the closed cycle, where no
-	 * surface offers it one either. The pause holds every automatic start, and a
-	 * `completed` settle is the only release besides the operator's decision, so
-	 * a pause that read a trace neither of them can answer never releases: the
-	 * factory stops on a fact the operator cannot see and cannot decide.
+	 * surface offers it one either. And the trace must be the Ticket's newest
+	 * turn: a turn that starts after the held one - the missing Agent's restart,
+	 * for one - supersedes it as the Ticket's last settled turn, so the row wears
+	 * no `held` badge and no Decision screen offers that trace a decision, even
+	 * while the Ticket rests `awaiting` on the cycle the trace belongs to. The
+	 * pause holds every automatic start, and a `completed` settle is the only
+	 * release besides the operator's decision, so a pause that read a trace none
+	 * of them can answer never releases: the factory stops on a fact the operator
+	 * cannot see and cannot decide. Together the guards are the `held` badge's
+	 * display rule narrowed to the `failed` cause, so the pause and the badge
+	 * never disagree on a Ticket.
 	 */
 	private heldFailureTrace(): CompletionTraceOrder | null {
 		const row = this.db
@@ -638,6 +645,9 @@ export class TicketWorkCycleModule implements TicketWorkCycleAggregate {
 				 JOIN tickets k ON k.identity = t.ticket_identity
 				 WHERE t.cause = 'failed' AND t.decision IS NULL
 				   AND k.state = 'awaiting' AND k.work_cycle = t.work_cycle
+				   AND t.rowid = (SELECT n.rowid FROM completion_traces n
+				                    WHERE n.ticket_identity = t.ticket_identity
+				                    ORDER BY n.completed_at DESC, n.rowid DESC LIMIT 1)
 				 ORDER BY t.completed_at DESC, t.rowid DESC LIMIT 1`,
 			)
 			.get() as { completed_at: string; rowid: number } | null;
