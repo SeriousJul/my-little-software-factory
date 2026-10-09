@@ -21,7 +21,7 @@ import { widthOf } from "../src/components/text.ts";
 import type { FactoryConfig } from "../src/config.ts";
 import type { Ticket } from "../src/domain/ticket.ts";
 import type { FactoryState } from "../src/state.ts";
-import type { AppSetup, Setup } from "./app-harness.ts";
+import type { AppSetup } from "./app-harness.ts";
 import {
 	actionBarRowOf,
 	awaitFrame,

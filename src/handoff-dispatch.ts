@@ -368,12 +368,20 @@ export interface HandoffDispatchOptions extends HandoffDispatchReports {
 }
 
 /**
- * The small interface shared by operator and observation callers.
+ * The narrow port the observation cycle crosses into the Handoff dispatch
+ * module: the calls the cycle may make, and nothing the operator owns alone.
+ *
+ * The dispatch interface extends this, so every dispatch module already
+ * satisfies it: the App passes its module through unchanged, and the cycle's
+ * reach is bounded by the type, not by a convention. The cycle cannot
+ * force-dispatch a row, remove a row, remove a Consultation row, close an
+ * unsettled cycle, read the active fact, or stop the module - those calls
+ * stand on the dispatch interface alone.
  *
  * A dispatch result answers only whether the claim was accepted. The optional
  * intent report answers later whether an agent actually started.
  */
-export interface HandoffDispatch {
+export interface ObservationDispatch {
 	/**
 	 * Every Handoff origin: open, workflow, restart, observation loop.
 	 *
@@ -395,6 +403,54 @@ export interface HandoffDispatch {
 	 * auto-dispatch, and the queue pause (ADR 0052) holds the drain.
 	 */
 	pickupWorkQueue(): Promise<number>;
+	/**
+	 * The Close cleanup of one ended cycle. Returns the failure reason, or
+	 * undefined. `end` stays on the seam so manual and observation callers share
+	 * the same operation shape; the caller owns the wording of the answer.
+	 */
+	closeCleanup(
+		identity: string,
+		handoff: StoredHandoffFacts,
+		end: "closed" | "abandoned",
+	): Promise<string | undefined>;
+	/**
+	 * The plane action's ask (ADR 0068): the merge of the ticket's pull
+	 * request, entered in the Work queue like every other start. The item
+	 * takes no seat from the Parallel limit: the action holds no agent, and
+	 * the pickup's walk runs it when it reaches it, whatever the cap bounds.
+	 * The ask's gates are the
+	 * route's: the ticket still holds the state the ask asked from, the one
+	 * item per ticket rule holds, and the task type must carry the action
+	 * form the registry names. The decision word lands at the ask, the way
+	 * the route's does: `merged` for the operator's confirm, `auto-merged`
+	 * for the top-up's. Returns whether the ask enqueued; the run's answer
+	 * arrives on the intent's `onStarted`.
+	 */
+	dispatchPlaneAction(intent: PlaneActionIntent): Promise<DispatchResult>;
+	/**
+	 * Whether this Ticket's Plane action run stands in the module (ADR 0104):
+	 * its claim took the Work queue row out and its command is still out.
+	 *
+	 * The mark is the module's fact, so the module answers for it. The automatic
+	 * walks read it as a standing gate before they ask, beside the Work queue's
+	 * own row, so one merge earns one ask (issue #352). The ask's own
+	 * guard stays behind that read: an ask that crosses the mark between the
+	 * gate and the enqueue is still refused before it enqueues.
+	 *
+	 * The mark is keyed by the Ticket alone, not by the task type: the Plane
+	 * action set holds only the merge, and the glossary says so. A second action
+	 * type on the same Ticket reads this Ticket's running merge as standing work,
+	 * and that is the fact to re-open here when the set grows (ADR 0133).
+	 */
+	planeActionRunInFlight(ticketIdentity: string): boolean;
+}
+
+/**
+ * The small interface shared by operator and observation callers: the
+ * observation-facing port the cycle crosses, beside the operator-only calls
+ * the cycle cannot reach.
+ */
+export interface HandoffDispatch extends ObservationDispatch {
 	/**
 	 * The force-dispatch of one Work queue item (issue #89, ADR 0034): starts
 	 * the item now, even when the Parallel limit is full. The claim re-runs
@@ -455,46 +511,6 @@ export interface HandoffDispatch {
 	 * keep, the refusal's record state, and the release.
 	 */
 	readonly checkoutHold: ConsultationCheckoutHold;
-	/**
-	 * The Close cleanup of one ended cycle. Returns the failure reason, or
-	 * undefined. `end` stays on the seam so manual and observation callers share
-	 * the same operation shape; the caller owns the wording of the answer.
-	 */
-	closeCleanup(
-		identity: string,
-		handoff: StoredHandoffFacts,
-		end: "closed" | "abandoned",
-	): Promise<string | undefined>;
-	/**
-	 * The plane action's ask (ADR 0068): the merge of the ticket's pull
-	 * request, entered in the Work queue like every other start. The item
-	 * takes no seat from the Parallel limit: the action holds no agent, and
-	 * the pickup's walk runs it when it reaches it, whatever the cap bounds.
-	 * The ask's gates are the
-	 * route's: the ticket still holds the state the ask asked from, the one
-	 * item per ticket rule holds, and the task type must carry the action
-	 * form the registry names. The decision word lands at the ask, the way
-	 * the route's does: `merged` for the operator's confirm, `auto-merged`
-	 * for the top-up's. Returns whether the ask enqueued; the run's answer
-	 * arrives on the intent's `onStarted`.
-	 */
-	dispatchPlaneAction(intent: PlaneActionIntent): Promise<DispatchResult>;
-	/**
-	 * Whether this Ticket's Plane action run stands in the module (ADR 0104):
-	 * its claim took the Work queue row out and its command is still out.
-	 *
-	 * The mark is the module's fact, so the module answers for it. The automatic
-	 * walks read it as a standing gate before they ask, beside the Work queue's
-	 * own row, so one merge earns one ask (issue #352). The ask's own
-	 * guard stays behind that read: an ask that crosses the mark between the
-	 * gate and the enqueue is still refused before it enqueues.
-	 *
-	 * The mark is keyed by the Ticket alone, not by the task type: the Plane
-	 * action set holds only the merge, and the glossary says so. A second action
-	 * type on the same Ticket reads this Ticket's running merge as standing work,
-	 * and that is the fact to re-open here when the set grows (ADR 0133).
-	 */
-	planeActionRunInFlight(ticketIdentity: string): boolean;
 	/**
 	 * Close the work cycle of a ticket whose turn never settled (ADR 0031).
 	 *
@@ -2496,7 +2512,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 		claimed: ClaimedHandoff,
 		onStarted?: (started: DispatchResult) => void,
 	): void {
-		const { ticket, choice, origin, claim, previousMessage } = claimed;
+		const { ticket, claim } = claimed;
 		let reported = false;
 		const reportStarted = (started: DispatchResult): void => {
 			if (reported) return;

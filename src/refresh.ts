@@ -3,12 +3,19 @@ import type { Logger } from "./logging.ts";
 import type { SourceDefinition, SourceFactAggregate } from "./state/source-fact.ts";
 import type { FetchOutcome, TicketSource } from "./ticket-source.ts";
 
+/**
+ * The one time seam of the plane: the clock answers its own time and the
+ * scheduling it runs on it. The state file, the refresh coordinator, and
+ * the observation cycle take the same object, so the state's timestamps and
+ * the cycle's scheduling cannot disagree.
+ */
 export interface RefreshClock {
+	now(): number;
 	setTimeout(callback: () => void, milliseconds: number): ReturnType<typeof setTimeout>;
 	clearTimeout(handle: ReturnType<typeof setTimeout>): void;
 }
 
-export const SYSTEM_CLOCK: RefreshClock = { setTimeout, clearTimeout };
+export const SYSTEM_CLOCK: RefreshClock = { now: () => Date.now(), setTimeout, clearTimeout };
 
 /** The aggregates the refresh coordinator reads, as a list (issue #202). */
 export interface RefreshAggregates {

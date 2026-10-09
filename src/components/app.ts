@@ -108,11 +108,12 @@ import {
 	type StoredHandoffFacts,
 } from "../handoff-dispatch.ts";
 import type { HerdrAgent } from "../herdr.ts";
-import type { Logger } from "../logging.ts";
+import { type Logger, NOOP_LOGGER } from "../logging.ts";
 import {
 	HerdrAgentReader,
 	matchConsultationAgent,
 	ObservationCoordinator,
+	SESSION_TURN_LOGS,
 	STARTUP_GRACE_MS,
 } from "../observation.ts";
 import {
@@ -131,7 +132,7 @@ import {
 	planeActionSettingOf,
 } from "../plane-action-registry.ts";
 import { closeCycleEndDraftPullRequest } from "../pull-request.ts";
-import { RefreshCoordinator } from "../refresh.ts";
+import { RefreshCoordinator, SYSTEM_CLOCK } from "../refresh.ts";
 import type { RepositoryMapping } from "../repo.ts";
 import { repositoryInitCheckoutPath } from "../repo.ts";
 import {
@@ -5693,34 +5694,34 @@ function observationCoordinatorBase(
 	f: AppObservationFields,
 	state: AppAggregates,
 	dispatch: HandoffDispatch,
-): Omit<AppObservationOptions, "cleanup"> {
+): Omit<AppObservationOptions, "fireCompleted" | "refireRecordedSkips"> {
 	return {
 		state,
 		herdr: new HerdrAgentReader(f.commandRunner),
 		config: () => f.configRef.current,
-		dispatch: (intent) => dispatch.dispatch(intent),
-		// The plane action's ask (ADR 0068): the top-up's walks cross it for
-		// the positions their task type resolves on the plane action.
-		dispatchPlaneAction: (intent) => dispatch.dispatchPlaneAction(intent),
-		// The Plane action's run mark (ADR 0104, issue #352): the dispatch owns it,
-		// and the top-up's walks read it as a standing gate before they ask, beside
-		// the Work queue's own row, which the cycle reads from the state.
-		planeActionRunInFlight: (ticketIdentity) => dispatch.planeActionRunInFlight(ticketIdentity),
-		// The Work queue's pickup (ADR 0034): the cycle starts the waiting
-		// manual starts before auto-dispatch, in queue order.
-		pickupWorkQueue: () => dispatch.pickupWorkQueue(),
-		now: () => Date.now(),
-		mode: () => f.autoModeRef.current,
-		// The Ticket header's seat count and the cycle's gates share this
-		// grace, so the booting seats they count agree.
-		startupGraceMs: STARTUP_GRACE_MS,
-		intervalMs: f.pollIntervalMs ?? f.configRef.current.agentPollIntervalSeconds * 1000,
+		// The Handoff dispatch module the cycle runs: the claim and its hard
+		// start checks, the Work queue's pickup, the plane action's ask, and
+		// the Close cleanup, through the narrow port the cycle may cross.
+		dispatch,
+		// The one time seam of the run: the state file, the refresh
+		// coordinator, and the cycle answer from the same clock.
+		clock: SYSTEM_CLOCK,
+		// The frame seam's poll override: the config's poll interval stands
+		// where the override is absent, and the cycle derives it each cycle.
+		pollIntervalMs: f.pollIntervalMs,
+		// The cycle's end may have changed the ticket's source item (a merged
+		// pull request, a closed issue): re-read the sources now, so the
+		// ticket is re-verified - or drops off the list - before the next
+		// automatic dispatch of it.
+		onCycleEnd: (identity) => {
+			f.refreshTicketSources(identity);
+			f.closeCycleEndDraft(identity);
+		},
 		onChanged: () => {
 			f.replaceTickets();
 			f.replaceConsultations();
 		},
 		onAgents: (agents) => f.setAgents(agents),
-		onConsultationsChanged: f.replaceConsultations,
 		onConsultationAttention: (_id) => {
 			// The flash stays here; the bell write and its attention-bell gate
 			// live in the shared attention service (ADR 0080).
@@ -5728,10 +5729,14 @@ function observationCoordinatorBase(
 			setTimeout(() => f.setBell(false), 250);
 			f.attention.ring();
 		},
-		reconcileOnly: true,
 		// The cycle's record lines: each hold its automatic walks take
-		// (issue #223).
-		log: f.logger,
+		// (issue #223). The App supplies the adapter it holds: a run with no
+		// logging table hands the noop logger, so the module never defaults
+		// an adapter of its own.
+		log: f.logger ?? NOOP_LOGGER,
+		// The settled turn's log: the session record reader, supplied here
+		// rather than constructed inside the cycle.
+		turnLogs: SESSION_TURN_LOGS,
 		onStatus: (kind, text, topic) => {
 			// Both sections read the same observation events: an outcome is
 			// a fact for the one Message line, whichever section is expanded.
@@ -5748,12 +5753,11 @@ function observationCoordinatorBase(
 	};
 }
 
-/** The coordinator's transition flows: fire, re-fire, cycle end, cleanup. */
+/** The coordinator's transition flows: the fire and the re-fire. */
 function observationCoordinatorFlows(
 	f: AppObservationFields,
 	state: AppAggregates,
-	dispatch: HandoffDispatch,
-): Pick<AppObservationOptions, "cleanup" | "fireCompleted" | "refireRecordedSkips" | "onCycleEnd"> {
+): Pick<AppObservationOptions, "fireCompleted" | "refireRecordedSkips"> {
 	return {
 		// The transition fire of a completed settle (ADR 0027): pull the
 		// pull request sources fresh - the agent's new pull request must
@@ -5784,29 +5788,6 @@ function observationCoordinatorFlows(
 				runner: f.commandRunner,
 				refresh: f.refreshPullRequestSources,
 			}),
-		// The cycle's end may have changed the ticket's source item (a merged
-		// pull request, a closed issue): re-read the sources now, so the
-		// ticket is re-verified - or drops off the list - before the next
-		// automatic dispatch of it.
-		onCycleEnd: (identity) => {
-			f.refreshTicketSources(identity);
-			f.closeCycleEndDraft(identity);
-		},
-		// The Close cleanup of an auto-ended cycle: the environment of the
-		// handoff the decision ends. A cleanup that cannot remove the
-		// checkout leaves a leftover the ticket carries as a fact, so the
-		// operator sees it and has one action to end it (ADR 0012).
-		cleanup: (handoff, end) =>
-			dispatch.closeCleanup(
-				handoff.ticketIdentity,
-				{
-					handoffId: handoff.handoffAttemptId,
-					environment: handoff.environment,
-					tabId: handoff.tabId,
-					workspaceId: handoff.workspaceId,
-				},
-				end,
-			),
 	};
 }
 
@@ -5822,7 +5803,7 @@ function appObservationCoordinator(f: AppObservationFields): (() => void) | unde
 	const state = f.state;
 	const coordinator = new ObservationCoordinator({
 		...observationCoordinatorBase(f, state, dispatch),
-		...observationCoordinatorFlows(f, state, dispatch),
+		...observationCoordinatorFlows(f, state),
 	});
 
 	f.observationRef.current = coordinator;
@@ -6294,8 +6275,6 @@ function appCancelOverride(f: AppTicketOpsFields): void {
  */
 function appToggleAutoHandoff(f: AppTicketOpsFields): void {
 	const next = !f.autoModeRef.current;
-	f.autoModeRef.current = next;
-	f.setAutoMode(next);
 	const modeLine = `mode: auto-handoff is ${next ? "on" : "off"}`;
 	const sessionOnly = `auto-handoff is ${next ? "on" : "off"} for this session only`;
 	// The mode decides every automatic walk in the run, so the record names it
@@ -6305,18 +6284,23 @@ function appToggleAutoHandoff(f: AppTicketOpsFields): void {
 	// Both session-only lines carry `warn`, the level the configuration reference
 	// states for them, so a run filtered to `warn` keeps the news that the next
 	// run reads nothing back.
+	// The state write lands first, and the ref and the render follow it: the
+	// observation cycle reads the mode from the state file, and the ref the
+	// UI renders from follows that state instead of standing beside it.
 	if (f.state === undefined) {
 		f.logger?.warn(`${modeLine} for this session only: the plane runs with no state file`);
-		return;
+	} else {
+		try {
+			f.state.handoff.setAutoHandoffMode(next);
+			f.logger?.info(modeLine);
+		} catch (error) {
+			const reason = errorMessage(error);
+			f.logger?.warn(`${modeLine} for this session only: ${reason}`);
+			f.setErrorMessage(`${sessionOnly}: ${reason}`);
+		}
 	}
-	try {
-		f.state.handoff.setAutoHandoffMode(next);
-		f.logger?.info(modeLine);
-	} catch (error) {
-		const reason = errorMessage(error);
-		f.logger?.warn(`${modeLine} for this session only: ${reason}`);
-		f.setErrorMessage(`${sessionOnly}: ${reason}`);
-	}
+	f.autoModeRef.current = next;
+	f.setAutoMode(next);
 }
 
 /**

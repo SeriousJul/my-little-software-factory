@@ -1,13 +1,13 @@
 import { describe, expect, mock, test } from "bun:test";
+import { join } from "node:path";
 
 import type { FactoryConfig, TransitionOutcome } from "../src/config.ts";
 import type { FetchedTicket } from "../src/domain/ticket.ts";
-import type { DispatchResult, HandoffIntent } from "../src/handoff-dispatch.ts";
+import type { HandoffIntent } from "../src/handoff-dispatch.ts";
 import type { HerdrAgent } from "../src/herdr.ts";
-import type { Logger } from "../src/logging.ts";
+import { NOOP_LOGGER } from "../src/logging.ts";
 import { agentNameFor } from "../src/naming.ts";
 import {
-	type AgentReader,
 	type AgentWaitResult,
 	type AwaitingDecision,
 	HerdrAgentReader,
@@ -20,9 +20,14 @@ import type { ConsultationState } from "../src/state/consultation-record.ts";
 import type { HandoffOrigin } from "../src/state/handoff.ts";
 import type { FactoryState } from "../src/state.ts";
 import { openFactoryState } from "../src/state.ts";
-import type { SessionTurnRead, TurnEndCause, TurnLogEntry } from "../src/turn-log.ts";
+import type { TurnEndCause, TurnLogEntry } from "../src/turn-log.ts";
 import { BASE_CONFIG } from "./base-config.ts";
-import { FakeRunner } from "./fake-runner.ts";
+import { FakeRunner, tabCreateJson, worktreeOpenJson } from "./fake-runner.ts";
+import {
+	type RigOptions,
+	rig as rigFixture,
+	settleFor as settleDispatch,
+} from "./observation-fixture.ts";
 import { infoLine, type RecordedLine, recordLogger } from "./record-logger.ts";
 
 const source = { name: "issues", kind: "github-issues" };
@@ -137,22 +142,6 @@ function success(tickets: FetchedTicket[]) {
 	return { status: "success" as const, fetchedAt: "2026-08-31T10:01:00Z", tickets };
 }
 
-function reader(
-	agents: () => HerdrAgent[],
-	readPane?: (paneId: string, lines: number) => Promise<string | null>,
-	waitAgent?: (target: string, budgetMs: number) => Promise<AgentWaitResult>,
-): AgentReader {
-	return {
-		listAgents: async () => ({ kind: "ok", agents: agents() }),
-		// The AgentReader contract: pane output comes back ANSI stripped.
-		readPane:
-			readPane ?? (async (paneId) => stripAnsi(`\u001b[1mDone.\u001b[0m message of ${paneId}`)),
-		// Absent by default: the loop the tests drive is the poll-only ADR
-		// 0006 standing, and the wake tests opt in with their own wait.
-		...(waitAgent === undefined ? {} : { waitAgent }),
-	};
-}
-
 function agent(
 	paneId: string,
 	fields: { status?: string; sessionId?: string; stableSessionId?: string; name?: string } = {},
@@ -170,258 +159,10 @@ function agent(
 	};
 }
 
-interface Rig {
-	state: FactoryState;
-	intents: HandoffIntent[];
-	/** The attempt ids of the claims the dispatching rig made, in dispatch order. */
-	claims: string[];
-	/** Report the start of the oldest dispatch still waiting for one. */
-	reportStart: (started?: DispatchResult) => void;
-	/** The loop's own calls and dispatches in order, when the rig records them. */
-	order: string[] | undefined;
-	statuses: Array<{ kind: "info" | "warning" | "error"; text: string }>;
-	cleanups: Array<{ paneId: string | null; tabId: string | null; workspaceId: string | null }>;
-	coordinator: ObservationCoordinator;
-	/** Advance the clock the state and the loop share. */
-	advance: (ms: number) => void;
-	/** Move the Auto-handoff mode the cycle reads, the way the operator's key does. */
-	setAutoMode: (next: boolean) => void;
-	/** Swap the agent list the next probe returns. */
-	setAgents: (next: HerdrAgent[]) => void;
-}
+type Rig = ReturnType<typeof rigFixture>;
 
-function rig(options: {
-	autoOn?: boolean;
-	/** Override a config knob the awaiting and dispatch rules read. */
-	config?: Partial<FactoryConfig>;
-	agents?: HerdrAgent[] | (() => HerdrAgent[]);
-	readPane?: (paneId: string, lines: number) => Promise<string | null>;
-	/** The turn log the fake session reader returns. Null: no session log. */
-	turnLogs?: (
-		kind: string,
-		sessionId: string,
-		startedAt: string | null,
-	) => Promise<SessionTurnRead>;
-	/** The cycle-end report the loop answers to, the way the app does. */
-	onCycleEnd?: (ticketIdentity: string) => void;
-	/**
-	 * Claim in the state, the way the app's dispatch does, so a dispatched
-	 * handoff is in progress until a test settles it. Off by default: the
-	 * loop-level tests drive the state by hand.
-	 */
-	dispatchClaims?: boolean;
-	/**
-	 * Refuse every ask with this reason, the way the dispatch seam's hard
-	 * checks do at the enqueue: the top-up hears the refusal, reports it, and
-	 * no item enters the queue.
-	 */
-	refuseDispatch?: string;
-	/**
-	 * The ask ran and its start never reached an Agent (issue #217): the seam
-	 * claims the Handoff in the state, settles it `failed` with this reason the
-	 * way the pickup's failed start does, and answers the ask with the refusal.
-	 * The attempt row it leaves is what the failed start's hold reads.
-	 */
-	startFails?: string;
-	/**
-	 * The Work queue's pickup (ADR 0034): the number of waiting starts this
-	 * cycle's free seats take. The coordinator calls it before auto-dispatch
-	 * and holds each picked claim's seat against the later dispatches of the
-	 * same cycle. Absent by default, the way an app without a queue is.
-	 */
-	pickupWorkQueue?: () => Promise<number>;
-	/**
-	 * The loop's own calls and dispatches in order, so a test can see where
-	 * the queue step sits in the cycle.
-	 */
-	order?: string[];
-	startupGraceMs?: number;
-	/**
-	 * The transition fire seam (ADR 0027). The app injects the real one; a
-	 * test holds its own seam to watch when the loop fires a completed turn
-	 * and what it stores on the trace.
-	 */
-	fireCompleted?: (ticket: {
-		ticketIdentity: string;
-		handoffAttemptId: string;
-		taskType: string;
-		agentType: string;
-	}) => Promise<TransitionOutcome | null>;
-	/**
-	 * The wake wait the reader answers (ADR 0084). Absent: the loop is
-	 * poll-only, and the wake arm stands down.
-	 */
-	waitAgent?: (target: string, budgetMs: number) => Promise<AgentWaitResult>;
-	/**
-	 * The cycle's record lines (issue #223). Absent: the cycle writes no file, the
-	 * way a run with no `[logging]` table does.
-	 */
-	log?: Logger;
-}): Rig {
-	let nowMs = Date.parse("2026-08-31T11:00:00Z");
-	let agents = typeof options.agents === "function" ? [] : [...(options.agents ?? [])];
-	// A function form answers the probe itself, so a test can count its
-	// calls the way the wake tests do.
-	const agentsFn = typeof options.agents === "function" ? options.agents : null;
-	const probeAgents = (): HerdrAgent[] => (agentsFn !== null ? agentsFn() : agents);
-	// The state and the loop share the clock, so a handoff's age is
-	// deterministic: advance() ages it.
-	const state = openFactoryState(":memory:", () => nowMs);
-	state.sourceFact.initializeSources([source]);
-	state.sourceFact.applyFetch(source, success([fetched()]));
-	const intents: HandoffIntent[] = [];
-	const claims: string[] = [];
-	const order = options.order;
-	const pickup = options.pickupWorkQueue;
-	// The start reports the dispatches still owe the loop. The app answers a
-	// claim first and reports the start when its external work settles, so
-	// the rig holds each report back until a test fires it.
-	const pending: Array<(started: DispatchResult) => void> = [];
-	const statuses: Rig["statuses"] = [];
-	const cleanups: Rig["cleanups"] = [];
-	// The mode the cycle reads, movable the way the operator's key moves it.
-	let autoOn = options.autoOn ?? false;
-	/** The refusal the seam's start-failure option settles on the state. */
-	const refuseStart = (intent: HandoffIntent): DispatchResult | null => {
-		if (options.startFails === undefined) return null;
-		// The claim the pickup's pass made, and the settle herdr's refusal
-		// wrote on it: an attempt row with no Handoff under it.
-		const claim = state.handoff.claimHandoff(intent.ticketIdentity, intent.choice, intent.origin);
-		if (claim.ok) state.handoff.settleHandoff(claim.claim.attemptId, false, options.startFails);
-		return { ok: false, reason: options.startFails };
-	};
-	/** The route's decision the ask lands on the settled turn's trace. */
-	const recordRouteDecision = (intent: HandoffIntent): void => {
-		// The route's decision lands at the ask (ADR 0064): the module
-		// records it on the settled turn's trace at the enqueue, so the rig
-		// mirrors the fact the walk and the frame read beside the queue.
-		if (intent.origin === "workflow" && intent.routeFromIdentity !== undefined) {
-			const previous = state.handoff.latestHandoff(intent.routeFromIdentity);
-			if (previous !== null)
-				state.ticketWorkCycle.applyCompletionDecision({
-					ticketIdentity: intent.routeFromIdentity,
-					handoffId: previous.handoffId,
-					decision: intent.automatic === true ? "auto-handed-off" : "handed-off",
-					decidedAt: new Date(nowMs).toISOString(),
-				});
-		}
-	};
-	/** The claim the seam's claim-watch option records on the state. */
-	const recordClaim = (intent: HandoffIntent): void => {
-		if (options.dispatchClaims !== true) return;
-		const claim = state.handoff.claimHandoff(intent.ticketIdentity, intent.choice, intent.origin);
-		if (claim.ok) claims.push(claim.claim.attemptId);
-	};
-	/** The outcome one dispatch ask lands in the state, past the seam's refusals. */
-	const dispatchOutcome = (intent: HandoffIntent): DispatchResult => {
-		const refused = refuseStart(intent);
-		if (refused !== null) return refused;
-		const enqueued = state.workQueue.enqueueWork({
-			ticketIdentity: intent.ticketIdentity,
-			routeFromIdentity: intent.routeFromIdentity ?? null,
-			origin: intent.origin,
-			choice: intent.choice,
-			previousMessage: intent.previousMessage,
-			automatic: intent.automatic === true,
-		});
-		if (enqueued.ok !== true) return { ok: false, reason: enqueued.reason };
-		recordRouteDecision(intent);
-		recordClaim(intent);
-		if (intent.onStarted !== undefined) pending.push(intent.onStarted);
-		return { ok: true };
-	};
-	const coordinator = new ObservationCoordinator({
-		state,
-		herdr: reader(probeAgents, options.readPane, options.waitAgent),
-		turnLogs: {
-			read: options.turnLogs ?? (async () => ({ kind: "unavailable" })),
-		},
-		config: () => ({ ...config, ...options.config }),
-		onCycleEnd: options.onCycleEnd,
-		// The dispatch seam enqueues the way the app's module does (ADR
-		// 0049): the hard checks run at the enqueue, the item rests in the
-		// queue, and the pickup is the only starter. The queue's depth is
-		// the top-up's pace, so the rig mirrors it: an add lands in the
-		// state's queue and blocks the next cycle's add.
-		dispatch: async (intent) => {
-			order?.push(`dispatch:${intent.origin}`);
-			intents.push(intent);
-			if (options.refuseDispatch !== undefined)
-				return { ok: false, reason: options.refuseDispatch };
-			return dispatchOutcome(intent);
-		},
-		// The plane action's ask rides the same rig seam (ADR 0068): the walk's
-		// add lands in the state's queue, the way the handoff's add does.
-		dispatchPlaneAction: async (intent) => {
-			order?.push(`dispatch-plane-action:${intent.origin}`);
-			if (options.refuseDispatch !== undefined)
-				return { ok: false, reason: options.refuseDispatch };
-			const enqueued = state.workQueue.enqueuePlaneActionWork({
-				ticketIdentity: intent.ticketIdentity,
-				routeFromIdentity: intent.routeFromIdentity ?? null,
-				origin: intent.origin,
-				taskType: intent.taskType,
-				automatic: intent.automatic === true,
-			});
-			if (enqueued.ok !== true) return { ok: false, reason: enqueued.reason };
-			if (intent.onStarted !== undefined) pending.push(intent.onStarted);
-			return { ok: true };
-		},
-		// The run's mark (ADR 0104): this rig's ask lands a Work queue row and no
-		// pickup ever runs it, so no Plane action run ever stands. The mark's walk
-		// gate is measured on `test/auto-handoff-chain.test.ts`, on the real
-		// dispatch module.
-		planeActionRunInFlight: () => false,
-		pickupWorkQueue:
-			pickup === undefined
-				? undefined
-				: async () => {
-						order?.push("pickup");
-						return await pickup();
-					},
-		cleanup: async (handoff) => {
-			cleanups.push({
-				paneId: handoff.paneId,
-				tabId: handoff.tabId,
-				workspaceId: handoff.workspaceId,
-			});
-			return undefined;
-		},
-		...(options.fireCompleted === undefined ? {} : { fireCompleted: options.fireCompleted }),
-		now: () => nowMs,
-		mode: () => autoOn,
-		...(options.log === undefined ? {} : { log: options.log }),
-		startupGraceMs: options.startupGraceMs,
-		intervalMs: 60_000,
-		onChanged: () => {},
-		onStatus: (kind, text) => {
-			statuses.push({ kind, text });
-		},
-	});
-	return {
-		state,
-		intents,
-		claims,
-		reportStart: (started: DispatchResult = { ok: true }) => {
-			const next = pending.shift();
-			if (next === undefined) throw new Error("no dispatch is waiting to report a start");
-			next(started);
-		},
-		order,
-		statuses,
-		cleanups,
-		coordinator,
-		advance: (ms: number) => {
-			nowMs += ms;
-		},
-		setAutoMode: (next: boolean) => {
-			autoOn = next;
-		},
-		setAgents: (next: HerdrAgent[]) => {
-			agents = next;
-		},
-	};
-}
+/** The suite's rig: the shared fixture over this file's base config. */
+const rig = (options: RigOptions = {}): Rig => rigFixture(options, config);
 
 /** Hand an in-flight ticket out so its pane is known to the loop. */
 function handOut(state: FactoryState, identity: string, taskType = "implement"): string {
@@ -458,6 +199,23 @@ function settleFor(
 		...(transition === null ? {} : { transition }),
 	});
 	return attempt;
+}
+
+/**
+ * Wait for a line on the cycle's status record: the module's background
+ * pickup runs on behind the ask, and its settle lands a few turns after the
+ * tick the test reads.
+ */
+async function untilStatus(
+	statuses: readonly { kind: string; text: string }[],
+	text: string,
+): Promise<void> {
+	const end = Date.now() + 5_000;
+	for (;;) {
+		if (statuses.some((status) => status.text === text)) return;
+		if (Date.now() > end) throw new Error(`the line never landed: ${text}`);
+		await new Promise((resolve) => setTimeout(resolve, 1));
+	}
 }
 
 /** Hand a ticket out and settle its turn with an explicit cause, so it can rest held. */
@@ -1159,13 +917,21 @@ describe("the observation cycle", () => {
 				readPane: async () => null,
 			},
 			config: () => config,
-			dispatch: mock().mockResolvedValue({ ok: true }),
-			dispatchPlaneAction: mock().mockResolvedValue({ ok: true }),
-			planeActionRunInFlight: () => false,
-			cleanup: async () => undefined,
-			now: () => Date.parse("2026-08-31T11:00:00Z"),
-			mode: () => true,
-			intervalMs: 60_000,
+			dispatch: {
+				dispatch: mock().mockResolvedValue({ ok: true }),
+				dispatchPlaneAction: mock().mockResolvedValue({ ok: true }),
+				planeActionRunInFlight: () => false,
+				pickupWorkQueue: mock().mockResolvedValue(0),
+				closeCleanup: mock().mockResolvedValue(undefined),
+			},
+			clock: {
+				now: () => Date.parse("2026-08-31T11:00:00Z"),
+				setTimeout,
+				clearTimeout,
+			},
+			onCycleEnd: () => undefined,
+			log: NOOP_LOGGER,
+			turnLogs: { read: async () => ({ kind: "unavailable" }) },
 			onChanged: () => {
 				changes += 1;
 			},
@@ -1515,7 +1281,14 @@ describe("missing agents", () => {
 		// No restart: the ticket is abandoned, its environment is closed, and
 		// the auto mode may hand the now-open ticket out again.
 		expect(intents.every((intent) => intent.origin !== "restart")).toBe(true);
-		expect(cleanups).toEqual([{ paneId: "pane-implement", tabId: "tab-1", workspaceId: "ws-1" }]);
+		expect(cleanups).toEqual([
+			{
+				handoffId: claim.claim.attemptId,
+				tabId: "tab-1",
+				workspaceId: "ws-1",
+				end: "abandoned",
+			},
+		]);
 		const [ticket] = state.ticketWorkCycle.ticketListViews([], "implement").rows;
 		// Back to open, at its handoff limit, never restarted.
 		expect(ticket).toEqual(expect.objectContaining({ state: "open", handoffCount: 2 }));
@@ -1599,24 +1372,14 @@ describe("missing agents", () => {
 	});
 
 	test("a started agent inside the startup grace is booting, not missing", async () => {
-		const { state, intents, claims, coordinator } = rig({
-			autoOn: true,
-			agents: [],
-			dispatchClaims: true,
-		});
-		await coordinator.tick();
-		// The one open ticket dispatched; the limit of two still has room.
-		expect(intents).toHaveLength(1);
-		// The agent started, but herdr has not listed it yet.
-		state.handoff.settleHandoff(claims[0], true, undefined, {
-			paneId: "pane-fresh",
-			tabId: "tab-1",
-			workspaceId: "ws-1",
-		});
+		const { state, intents, coordinator } = rig({ autoOn: true, agents: [] });
+		// The agent started, but herdr has not listed it yet: the start settled
+		// on the pinned clock, so the grace runs from now.
+		handOut(state, "github:github.com:I_5");
 		await coordinator.tick();
 		// Inside the startup grace the agent is booting, not missing: a
 		// restart would double-start the turn even though the limit has room.
-		expect(intents).toHaveLength(1);
+		expect(intents.filter((intent) => intent.origin === "restart")).toHaveLength(0);
 		state.close();
 	});
 
@@ -2071,7 +1834,7 @@ describe("the awaiting rule", () => {
 		 * the one-item-per-ticket rule is what refuses the add.
 		 */
 		test("a standing row does not hold the continuation, and the position's own waiting row refuses the add", async () => {
-			const { state, intents, statuses, coordinator } = continuationRig();
+			const { state, intents, statuses, lines, coordinator } = continuationRig();
 			expect(
 				state.workQueue.enqueueWork({
 					ticketIdentity: "github:github.com:I_6",
@@ -2094,12 +1857,15 @@ describe("the awaiting rule", () => {
 					return [item.ticketIdentity, item.origin, item.automatic];
 				}),
 			).toEqual([["github:github.com:I_6", "open", false]]);
+			// The standing row is a hold, not a start that could not run (issue
+			// #327): the record states the fact, and the Message line stays
+			// clear.
 			expect(
-				statuses.some(
-					(status) =>
-						status.kind === "warning" &&
-						status.text.includes("could not route") &&
-						status.text.includes("already has a waiting queue item"),
+				statuses.some((status) => status.text.includes("already has a waiting queue item")),
+			).toBe(false);
+			expect(
+				lines.some((line) =>
+					line.message.includes("the Work queue already holds an item for the Ticket"),
 				),
 			).toBe(true);
 			state.close();
@@ -2688,7 +2454,8 @@ describe("the awaiting rule", () => {
 			// reserved (ADR 0108), and the Decision screen's key is the operator's.
 			r.state.sourceFact.applyFetch(source, success([{ ...fetched(), labels: ["ready-to-ship"] }]));
 			await r.coordinator.tick();
-			expect(r.order).toEqual([]);
+			// The cycle's own pickup pass runs, and the walk asks nothing.
+			expect(r.order).toEqual(["pickup"]);
 			expect(r.state.workQueue.items()).toHaveLength(0);
 			expect(r.state.ticketWorkCycle.ticketState("github:github.com:I_5")).toBe("open");
 			r.state.close();
@@ -2720,7 +2487,8 @@ describe("the awaiting rule", () => {
 				outcome({ positionTaskType: "merge", positionTicketIdentity: "github:github.com:I_5" }),
 			);
 			await r.coordinator.tick();
-			expect(r.order).toEqual([]);
+			// The cycle's own pickup pass runs, and the walk asks nothing.
+			expect(r.order).toEqual(["pickup"]);
 			expect(r.state.workQueue.items()).toHaveLength(0);
 			expect(r.state.ticketWorkCycle.ticketState("github:github.com:I_5")).toBe("awaiting");
 			expect(r.state.ticketWorkCycle.lastCompletion("github:github.com:I_5")?.decision).toBeNull();
@@ -2815,7 +2583,7 @@ describe("the awaiting rule", () => {
 		}
 
 		test("implement routes review, and review routes the merge, with no keypress", async () => {
-			const { state, intents, coordinator } = rig({
+			const { state, intents, planeAsks, statuses, coordinator } = rig({
 				autoOn: true,
 				agents: [],
 				config: chainConfig,
@@ -2845,12 +2613,23 @@ describe("the awaiting rule", () => {
 			settleFor(state, "github:github.com:I_5", "review", reviewFire());
 			wearLabels(state, ["ready-to-ship"]);
 			await coordinator.tick();
-			// The chain's last hop is a Plane action, and it took the queue with no
-			// keypress from the operator.
+			// The chain's last hop is a Plane action: the ask took the queue with
+			// no keypress from the operator, and the decision landed at the ask.
 			expect(intents).toHaveLength(1);
-			expect(state.workQueue.items()).toEqual([
-				expect.objectContaining({ kind: "plane-action", origin: "workflow", taskType: "merge" }),
+			expect(planeAsks).toEqual([
+				expect.objectContaining({ origin: "workflow", taskType: "merge" }),
 			]);
+			expect(state.ticketWorkCycle.lastCompletion("github:github.com:I_5")?.decision).toBe(
+				"auto-merged",
+			);
+			// The module's own pickup took the item on behind the ask, and the
+			// merge run finds no pull request in this feed: the drop's line
+			// stands, and the queue is empty again.
+			await untilStatus(
+				statuses,
+				'the merge of "Persist source facts" was not run: no linked pull request was found for the ticket',
+			);
+			expect(state.workQueue.items()).toEqual([]);
 			state.close();
 		});
 
@@ -3441,10 +3220,13 @@ test("the open dispatch hands off nothing on a parking state", async () => {
 
 describe("the open dispatch", () => {
 	test("the top-up adds one open ticket per cycle, in the list order", async () => {
+		// One free seat, so the ask's own pickup pass starts the item the
+		// walk adds, the way the module's pickup does.
+		const seats = { current: 1 };
 		const { state, intents, coordinator } = rig({
 			autoOn: true,
 			agents: [],
-			dispatchClaims: true,
+			seatCount: () => seats.current,
 		});
 		state.sourceFact.applyFetch(
 			source,
@@ -3466,8 +3248,10 @@ describe("the open dispatch", () => {
 				}),
 			}),
 		]);
-		// The queue drains: the next empty-queue cycle adds the next ticket.
-		state.workQueue.removeWorkItem("github:github.com:I_5");
+		// The ask's pickup pass starts the item on the free seat: the row
+		// leaves, and the ticket's state leaves the open walk's candidates.
+		await settleDispatch(state);
+		// The next empty-queue cycle adds the next ticket.
 		await coordinator.tick();
 		expect(intents).toHaveLength(2);
 		expect(intents[1]).toEqual(
@@ -3563,16 +3347,27 @@ describe("the open dispatch", () => {
 	});
 
 	test("the top-up's refusal line names the walk and the dispatch's reason", async () => {
-		const { state, coordinator, statuses } = rig({
+		// The open walk's row gate holds a Ticket that carries an unsettled claim
+		// before it ever reaches the ask, so the refusal the walk states is the
+		// one the restart walk can send: the in-flight Ticket the claim stands on.
+		const { state, coordinator, statuses, advance } = rig({
 			autoOn: true,
 			agents: [],
-			refuseDispatch: "the ticket is now running",
+			config: { maxHandoffsPerTicket: 20 },
 		});
 		state.sourceFact.applyFetch(source, success([fetched()]));
+		// A start that reached its Agent: the Ticket is in flight, and the Agent
+		// is gone, so the restart walk owes it the re-ask.
+		handOut(state, "github:github.com:I_5");
+		advance(STARTUP_GRACE_MS + 1);
+		// A second claim the module never settled: the recovery the claim's gate
+		// refuses on, so the ask the walk sends is the refusal.
+		const claim = state.handoff.claimHandoff("github:github.com:I_5", choice, "restart");
+		if (!claim.ok) throw new Error(claim.reason);
 		await coordinator.tick();
 		expect(statuses).toContainEqual({
 			kind: "warning",
-			text: 'work queue top-up could not hand off "Persist source facts": the ticket is now running',
+			text: 'work queue top-up could not restart "Persist source facts": handoff recovery is required before another handoff',
 		});
 		state.close();
 	});
@@ -3581,12 +3376,10 @@ describe("the open dispatch", () => {
 	// ask answers the stop, and the cycle ends its walk without a line. A
 	// warning per cycle would pin the Message line while the run ends.
 	test("the top-up's stopped dispatch is a stop, not a refusal", async () => {
-		const { state, coordinator, statuses } = rig({
-			autoOn: true,
-			agents: [],
-			refuseDispatch: "the dispatch has been stopped",
-		});
+		const { state, dispatch, coordinator, statuses } = rig({ autoOn: true, agents: [] });
 		state.sourceFact.applyFetch(source, success([fetched()]));
+		// The teardown's stop, on the module the cycle crosses.
+		dispatch.stop();
 		await coordinator.tick();
 		expect(statuses).not.toContainEqual(expect.objectContaining({ kind: "warning" }));
 		expect(statuses).not.toContainEqual(
@@ -3605,8 +3398,18 @@ describe("the open dispatch", () => {
 	 * restart that actually started keeps its mark until the episode ends.
 	 */
 	test("a refused top-up restart is asked again, a started one is not", async () => {
-		const refused = rig({ autoOn: true, agents: [], refuseDispatch: "the ledger is unclear" });
+		const refused = rig({
+			autoOn: true,
+			agents: [],
+			// The planted claim counts on the Ticket, so the claim's gate - not
+			// the Handoff limit - is the refusal the walk hears.
+			config: { maxHandoffsPerTicket: 20 },
+		});
 		handOut(refused.state, "github:github.com:I_5");
+		// A claim the module never settled: the recovery gate refuses the
+		// restart ask, and the refusal clears the episode mark with it.
+		const planted = refused.state.handoff.claimHandoff("github:github.com:I_5", choice, "restart");
+		if (!planted.ok) throw new Error(planted.reason);
 		refused.advance(STARTUP_GRACE_MS + 1);
 		await refused.coordinator.tick();
 		await refused.coordinator.tick();
@@ -3614,62 +3417,102 @@ describe("the open dispatch", () => {
 		expect(refused.intents.filter((intent) => intent.origin === "restart")).toHaveLength(2);
 		refused.state.close();
 
-		const accepted = rig({ autoOn: true, agents: [] });
+		const seats = { current: 1 };
+		const accepted = rig({ autoOn: true, agents: [], seatCount: () => seats.current });
+		// The restart reopens the ticket's own branch: herdr answers the open
+		// with the stored workspace held, and a fresh tab in it.
+		const worktreePath = join(accepted.checkout, "wt");
+		accepted.runner.set(
+			"herdr",
+			[
+				"worktree",
+				"open",
+				"--cwd",
+				accepted.checkout,
+				"--branch",
+				"factory/5-persist-source-facts",
+				"--no-focus",
+			],
+			{ stdout: worktreeOpenJson("ws-1", "pane-wt", { alreadyOpen: true, worktreePath }) },
+		);
+		accepted.runner.set(
+			"herdr",
+			["tab", "create", "--workspace", "ws-1", "--cwd", worktreePath, "--no-focus"],
+			{ stdout: tabCreateJson("pane-agent", "tab-agent") },
+		);
 		handOut(accepted.state, "github:github.com:I_5");
 		accepted.advance(STARTUP_GRACE_MS + 1);
 		await accepted.coordinator.tick();
 		expect(accepted.intents.filter((intent) => intent.origin === "restart")).toHaveLength(1);
-		// The start landed: the episode mark stands, and the ticket is not
-		// restarted again while it holds the episode.
-		accepted.reportStart({ ok: true });
-		accepted.state.workQueue.removeWorkItem("github:github.com:I_5");
+		// The free seat ran the start on behind the ask: the row leaves the
+		// queue, and the episode mark stands for the started restart.
+		await accepted.settle();
 		await accepted.coordinator.tick();
 		expect(accepted.intents.filter((intent) => intent.origin === "restart")).toHaveLength(1);
 		accepted.state.close();
 	});
 
-	test("a top-up restart the pickup dropped is asked again", async () => {
-		const { state, intents, coordinator, advance, reportStart } = rig({
+	test("a top-up restart the pickup dropped holds no automatic re-ask (issue #370)", async () => {
+		// A free seat runs the restart's start on behind the ask, and herdr
+		// refuses the worktree open: the pickup's drop, ADR 0049. The old rig's
+		// seam drop recorded no failed attempt, so its newest handoff kept a
+		// pane and the walk re-asked; the real module's drop settles the
+		// attempt pane-less, and the restart walk's pane gate holds the
+		// ticket out (issue #370).
+		const seats = { current: 1 };
+		const { state, intents, statuses, coordinator, advance, runner, checkout } = rig({
 			autoOn: true,
 			agents: [],
+			config: { maxHandoffsPerTicket: 20 },
+			seatCount: () => seats.current,
 		});
+		runner.set(
+			"herdr",
+			[
+				"worktree",
+				"open",
+				"--cwd",
+				checkout,
+				"--branch",
+				"factory/5-persist-source-facts",
+				"--no-focus",
+			],
+			{ code: 1, stderr: "Preparing worktree: the worktree path already exists" },
+		);
 		handOut(state, "github:github.com:I_5");
 		advance(STARTUP_GRACE_MS + 1);
 		await coordinator.tick();
 		expect(intents.filter((intent) => intent.origin === "restart")).toHaveLength(1);
-		// The seat refused the start: this is ADR 0049's drop, and the ask
-		// hears it through its own start report. The episode mark leaves with
-		// the row, so story 24's re-entry stands for a restart as it does for
-		// the other three adds.
-		reportStart({ ok: false, reason: "the source is not healthy" });
-		state.workQueue.removeWorkItem("github:github.com:I_5");
+		// The drop: the row leaves with the warning that names the refusal, and
+		// the ticket keeps the state it wore while it waited.
+		expect(state.workQueue.hasWorkItem("github:github.com:I_5")).toBe(false);
+		expect(statuses).toContainEqual(
+			expect.objectContaining({
+				kind: "warning",
+				text: 'queued handoff for "Persist source facts" was not run: Preparing worktree: the worktree path already exists',
+			}),
+		);
+		// The failed start settles a handoff that holds no pane, so the restart
+		// walk's pane gate holds the ticket out: no automatic re-ask, and the
+		// hold states nothing. The operator's Restart in the Missing modal is
+		// the path that answers it.
+		advance(STARTUP_GRACE_MS + 1);
 		await coordinator.tick();
-		expect(intents.filter((intent) => intent.origin === "restart")).toHaveLength(2);
+		expect(intents.filter((intent) => intent.origin === "restart")).toHaveLength(1);
 		state.close();
 	});
 
 	test("a started handoff leaves the open walk's candidates", async () => {
-		const { state, intents, claims, coordinator } = rig({
-			autoOn: true,
-			agents: [],
-			dispatchClaims: true,
-		});
+		const { state, intents, coordinator } = rig({ autoOn: true, agents: [] });
 		state.sourceFact.applyFetch(
 			source,
 			success([fetched("github:github.com:I_6"), fetched("github:github.com:I_7"), fetched()]),
 		);
 		await coordinator.tick();
-		// The one open ticket added; the claim moved it out of the open walk.
+		// The one open ticket added; the queue holds the rest until it drains.
 		expect(intents).toHaveLength(1);
-		// The start settles but herdr has not listed the agent yet: the
-		// ticket is in flight, so the open walk has no candidate, and the
-		// queue's item holds the next add until it drains.
-		if (claims[0] === undefined) throw new Error("missing claim");
-		state.handoff.settleHandoff(claims[0], true, undefined, {
-			paneId: "pane-fresh",
-			tabId: "tab-1",
-			workspaceId: "ws-1",
-		});
+		// The item waits for a seat the pickup does not free, so the queue's
+		// row holds the next add and the open walk adds no second ticket.
 		await coordinator.tick();
 		expect(intents).toHaveLength(1);
 		state.close();
@@ -3919,7 +3762,6 @@ describe("the open dispatch", () => {
 		const { state, intents, coordinator } = rig({
 			autoOn: true,
 			agents: [],
-			pickupWorkQueue: async () => 0,
 			order,
 		});
 		state.sourceFact.applyFetch(source, success([fetched("github:github.com:I_6"), fetched()]));
@@ -3943,35 +3785,37 @@ describe("the open dispatch", () => {
 
 	test("a queue that drains in the pickup's pass leaves the top-up free to add", async () => {
 		const order: string[] = [];
-		const { state, intents, coordinator } = rig({
+		const seats = { current: 1 };
+		const { state, intents, coordinator, settle } = rig({
 			autoOn: true,
 			agents: [],
-			pickupWorkQueue: async () => {
-				// The pickup's pass: the items take their seats and leave.
-				const items = state.workQueue.items();
-				for (const item of items) {
-					if (item.kind === "consultation")
-						state.consultationRecord.removeConsultationWorkItem(item.consultationId);
-					else state.workQueue.removeWorkItem(item.ticketIdentity);
-				}
-				return items.length;
-			},
+			seatCount: () => seats.current,
 			order,
 		});
 		state.sourceFact.applyFetch(source, success([fetched("github:github.com:I_6"), fetched()]));
+		// The operator's start waits in the queue, and the pickup's pass takes
+		// the one free seat it holds: the live-worktree build runs on the
+		// fixture's herdr, and the row leaves with the start.
 		expect(
 			state.workQueue.enqueueWork({
 				ticketIdentity: "github:github.com:I_6",
 				origin: "open",
-				choice,
+				choice: { ...choice, environment: "live-worktree" },
 				previousMessage: "",
 			}),
 		).toEqual({ ok: true });
 		await coordinator.tick();
-		// The pickup drained the operator's item, and the queue that is empty
-		// again leaves the top-up free to add in the same cycle: the
+		// The pickup claimed the operator's item and its start runs on behind
+		// the walk: the row stands until the start answers, so this cycle's
+		// top-up holds on the waiting row the pickup holds (issue #371).
+		expect(order).toEqual(["pickup"]);
+		expect(intents).toEqual([]);
+		// The start answers, the row leaves with it, and the queue that is
+		// empty again leaves the next cycle's top-up free to add: the
 		// operator's staging starts before the factory's.
-		expect(order).toEqual(["pickup", "dispatch:open"]);
+		await settle();
+		await coordinator.tick();
+		expect(order).toEqual(["pickup", "pickup", "dispatch:open"]);
 		expect(intents).toEqual([
 			expect.objectContaining({
 				origin: "open",
@@ -3986,7 +3830,6 @@ describe("the open dispatch", () => {
 		const { state, intents, coordinator } = rig({
 			autoOn: true,
 			agents: [],
-			pickupWorkQueue: async () => 0,
 			order,
 		});
 		state.sourceFact.applyFetch(
@@ -4076,7 +3919,6 @@ describe("the open dispatch", () => {
 		const { state, intents, coordinator } = rig({
 			autoOn: false,
 			agents: [],
-			pickupWorkQueue: async () => 1,
 			order,
 		});
 		// Two open tickets, and a settled awaiting ticket whose type would route
@@ -4551,6 +4393,10 @@ describe("the injectable clock", () => {
 		private nextId = 1;
 		private readonly live = new Map<number, { delay: number; callback: () => void }>();
 
+		now(): number {
+			return Date.parse("2026-08-31T11:00:00Z");
+		}
+
 		setTimeout(callback: () => void, milliseconds: number): ReturnType<typeof setTimeout> {
 			const id = this.nextId++;
 			this.live.set(id, { delay: milliseconds, callback });
@@ -4597,14 +4443,18 @@ describe("the injectable clock", () => {
 				readPane: async () => null,
 			},
 			config: () => config,
-			dispatch: async () => ({ ok: true }),
-			dispatchPlaneAction: async () => ({ ok: true }),
-			planeActionRunInFlight: () => false,
-			cleanup: async () => undefined,
-			now: () => Date.parse("2026-08-31T11:00:00Z"),
-			mode: () => false,
-			intervalMs: 5_000,
+			dispatch: {
+				dispatch: async () => ({ ok: true }),
+				dispatchPlaneAction: async () => ({ ok: true }),
+				planeActionRunInFlight: () => false,
+				pickupWorkQueue: async () => 0,
+				closeCleanup: async () => undefined,
+			},
 			clock,
+			pollIntervalMs: 5_000,
+			onCycleEnd: () => undefined,
+			log: NOOP_LOGGER,
+			turnLogs: { read: async () => ({ kind: "unavailable" }) },
 			onChanged: () => undefined,
 			onStatus: () => undefined,
 		});
@@ -4663,7 +4513,6 @@ describe("the Consultation parallel seats", () => {
 		const { state, intents, coordinator } = rig({
 			autoOn: true,
 			agents: [agent("pane-consult", { status: "working" })],
-			dispatchClaims: true,
 		});
 		try {
 			consultationIn(state, "consultation-working", "pane-consult", "working");
@@ -4708,7 +4557,6 @@ describe("the Consultation parallel seats", () => {
 		const { state, intents, coordinator } = rig({
 			autoOn: true,
 			agents: [agent("pane-consult", { status: "working" })],
-			dispatchClaims: true,
 		});
 		try {
 			consultationIn(state, "consultation-awaiting", "pane-consult", "awaiting-response");
@@ -5422,13 +5270,21 @@ describe("an agent that outlives its work cycle", () => {
 				readPane: async () => null,
 			},
 			config: () => config,
-			dispatch: async () => ({ ok: true }),
-			dispatchPlaneAction: async () => ({ ok: true }),
-			planeActionRunInFlight: () => false,
-			cleanup: async () => undefined,
-			now: () => Date.parse("2026-08-31T11:05:00Z"),
-			mode: () => false,
-			intervalMs: 60_000,
+			dispatch: {
+				dispatch: async () => ({ ok: true }),
+				dispatchPlaneAction: async () => ({ ok: true }),
+				planeActionRunInFlight: () => false,
+				pickupWorkQueue: async () => 0,
+				closeCleanup: async () => undefined,
+			},
+			clock: {
+				now: () => Date.parse("2026-08-31T11:05:00Z"),
+				setTimeout,
+				clearTimeout,
+			},
+			onCycleEnd: () => undefined,
+			log: NOOP_LOGGER,
+			turnLogs: { read: async () => ({ kind: "unavailable" }) },
 			onChanged: () => {},
 			onStatus: (kind, text) => {
 				statuses.push({ kind, text });
@@ -5586,7 +5442,7 @@ describe("the re-fired skip's route (ADR 0042)", () => {
 	});
 
 	test("the route runs in auto mode too", async () => {
-		const { state, intents, coordinator } = rig({ autoOn: true, agents: [], dispatchClaims: true });
+		const { state, intents, coordinator } = rig({ autoOn: true, agents: [] });
 		landPulls(state, pullTicket());
 		refiredCycle(state, refiredOutcome());
 		await coordinator.tick();
@@ -6288,10 +6144,13 @@ describe("the open dispatch: the pull request group (ADR 0088)", () => {
 	}
 
 	test("the top-up moves open pull request tickets before fresh open tickets", async () => {
+		// One free seat, so each ask's own pickup pass starts the item the
+		// walk adds, the way the module's pickup does.
+		const seats = { current: 1 };
 		const { state, intents, coordinator } = rig({
 			autoOn: true,
 			agents: [],
-			dispatchClaims: true,
+			seatCount: () => seats.current,
 		});
 		state.sourceFact.initializeSources([source, pullSource]);
 		state.sourceFact.applyFetch(source, success([fetched()]));
@@ -6311,7 +6170,9 @@ describe("the open dispatch: the pull request group (ADR 0088)", () => {
 				choice: expect.objectContaining({ taskType: "review" }),
 			}),
 		]);
-		state.workQueue.removeWorkItem("github:github.com:P_2");
+		// The ask's pickup pass starts the review on the free seat: the row
+		// leaves, and the ticket's state leaves the group's candidates.
+		await settleDispatch(state);
 		await coordinator.tick();
 		// The group's second ticket adds before the fresh one: the walk
 		// before the split took the issue #5 in this seat, the number order
@@ -6324,7 +6185,7 @@ describe("the open dispatch: the pull request group (ADR 0088)", () => {
 				choice: expect.objectContaining({ taskType: "review" }),
 			}),
 		);
-		state.workQueue.removeWorkItem("github:github.com:P_100");
+		await settleDispatch(state);
 		await coordinator.tick();
 		// The group drains, and the fresh ticket adds on its own.
 		expect(intents[2]).toEqual(
@@ -6339,10 +6200,13 @@ describe("the open dispatch: the pull request group (ADR 0088)", () => {
 	});
 
 	test("a held pull request rests, and the walk falls to the fresh ticket", async () => {
+		// One free seat, so the ask's own pickup pass starts the item the
+		// walk adds, the way the module's pickup does.
+		const seats = { current: 1 };
 		const { state, intents, coordinator } = rig({
 			autoOn: true,
 			agents: [],
-			dispatchClaims: true,
+			seatCount: () => seats.current,
 		});
 		state.sourceFact.initializeSources([source, pullSource]);
 		state.sourceFact.applyFetch(source, success([fetched(), fetched("github:github.com:I_6")]));
@@ -6368,7 +6232,9 @@ describe("the open dispatch: the pull request group (ADR 0088)", () => {
 				ticketIdentity: "github:github.com:I_5",
 			}),
 		);
-		state.workQueue.removeWorkItem("github:github.com:I_5");
+		// The ask's pickup pass starts the fresh ticket on the free seat:
+		// the row leaves, and the ticket's state leaves the walk's candidates.
+		await settleDispatch(state);
 		state.sourceFact.applyFetch(
 			pullSource,
 			successPulls([prFetched(100, ["ready-for-review"])], "2026-08-31T11:01:00Z"),
@@ -6380,7 +6246,7 @@ describe("the open dispatch: the pull request group (ADR 0088)", () => {
 		);
 		await coordinator.tick();
 		// The hold rests the pull request, and the walk falls to the next
-		// fresh ticket: I_5 stands claimed from its add, so I_6 adds.
+		// fresh ticket: I_5 stands started from its add, so I_6 adds.
 		expect(intents).toHaveLength(2);
 		expect(intents[1]).toEqual(
 			expect.objectContaining({
@@ -6398,9 +6264,9 @@ describe("the open dispatch: the pull request group (ADR 0088)", () => {
  *
  * The development install recorded this shape on three Tickets: one start that
  * never reached its Agent, asked again on every observation cycle, 9,365 times
- * over five days on Ticket #37. The rig's `startFails` seam is that start: the
- * claim ran, herdr refused the Agent, and the attempt settled `failed` with no
- * Handoff under it.
+ * over five days on Ticket #37. The fixture's herdr refuses the start's
+ * environment build: the claim ran, herdr refused the Agent, and the attempt
+ * settled `failed` with no Handoff under it.
  */
 describe("the failed Handoff start's hold (ADR 0077 as extended by ADR 0101, issue #217)", () => {
 	const failure = "Preparing worktree: the worktree path already exists";
@@ -6410,12 +6276,19 @@ describe("the failed Handoff start's hold (ADR 0077 as extended by ADR 0101, iss
 		// The Handoff limit stands well above the run these tests build: the Failed-
 		// start park holds the ask at half the limit (ADR 0106), and these tests are
 		// about the Attempt hold's one-refresh wait, which the park sits behind.
-		return rig({
+		const r = rig({
 			autoOn: true,
 			agents: [],
-			startFails: failure,
 			config: { maxHandoffsPerTicket: 20, ...over.config },
+			// One free seat, so the ask's own pickup pass runs the start.
+			seatCount: () => 1,
 		});
+		// The start's environment build is what herdr refuses.
+		r.runner.set("herdr", ["workspace", "create", "--cwd", r.checkout, "--no-focus"], {
+			code: 1,
+			stderr: failure,
+		});
+		return r;
 	}
 
 	/** The re-read that carries the Ticket's current facts, one refresh later. */
@@ -6427,14 +6300,14 @@ describe("the failed Handoff start's hold (ADR 0077 as extended by ADR 0101, iss
 		});
 	}
 
-	const refusalLines = (statuses: Rig["statuses"]) =>
-		statuses.filter((status) => status.text.includes("could not hand off"));
-
 	test("the failed start holds the next cycle's ask, and the source's re-read releases it", async () => {
-		const { state, intents, coordinator } = failedStartRig();
+		const { state, intents, coordinator, settle } = failedStartRig();
 		await coordinator.tick();
-		// The ask that ran and failed: the attempt row it left is the hold's fact.
 		expect(intents).toHaveLength(1);
+		// The ask's pickup pass ran on behind it; the test waits on the
+		// settled ledger before it reads it.
+		await settle();
+		// The ask that ran and failed: the attempt row it left is the hold's fact.
 		expect(state.handoff.handoffBlockedUnrefreshed("github:github.com:I_5")).toBe(true);
 		// The cycles that follow ask nothing. Every other gate still reads clear -
 		// the Ticket stands open and actionable, the queue stands empty - so the
@@ -6454,62 +6327,100 @@ describe("the failed Handoff start's hold (ADR 0077 as extended by ADR 0101, iss
 				ticketIdentity: "github:github.com:I_5",
 			}),
 		);
+		// The re-ask's own pickup pass runs its start on behind the ask; the
+		// test waits on the settled ledger before the state goes.
+		await settle();
 		state.close();
 	});
 
 	test("the hold is silent: the refusal line stands once, not once per cycle", async () => {
-		const { state, coordinator, statuses } = failedStartRig();
+		const { state, coordinator, statuses, settle } = failedStartRig();
 		await coordinator.tick();
-		expect(refusalLines(statuses)).toHaveLength(1);
+		await settle();
+		// The ask ran, and the pickup's drop states the refusal once.
+		const dropLines = () => statuses.filter((status) => status.text.includes("was not run"));
+		expect(dropLines()).toHaveLength(1);
 		await coordinator.tick();
 		await coordinator.tick();
 		await coordinator.tick();
 		// The held re-ask says nothing: the walk moved on to its next candidate,
 		// and the Message line carries no copy of a hold that changed nothing.
-		expect(refusalLines(statuses)).toHaveLength(1);
+		expect(dropLines()).toHaveLength(1);
 		expect(statuses.filter((status) => status.kind === "warning")).toHaveLength(1);
 		// The re-ask on the refresh is the expected path, so its refusal is a line
 		// again: the ask ran, and the hold did not.
 		refresh(state);
 		await coordinator.tick();
-		expect(refusalLines(statuses)).toHaveLength(2);
+		await settle();
+		expect(dropLines()).toHaveLength(2);
 		state.close();
 	});
 
 	test("the hold covers the continuation walk's position", async () => {
-		const { state, intents, coordinator } = rig({
+		const { state, intents, coordinator, runner, checkout, settle } = rig({
 			autoOn: true,
 			agents: [],
-			startFails: failure,
 			config: { maxHandoffsPerTicket: 20 },
+			// One free seat, so the ask's own pickup pass runs the start.
+			seatCount: () => 1,
+		});
+		// The start's environment build is what herdr refuses.
+		runner.set("herdr", ["workspace", "create", "--cwd", checkout, "--no-focus"], {
+			code: 1,
+			stderr: failure,
 		});
 		state.sourceFact.applyFetch(source, success([fetched("github:github.com:I_6"), fetched()]));
 		// A settled turn whose Next step stands on the open position I_6.
 		settleFor(state, "github:github.com:I_5", "route", routeOutcome("github:github.com:I_6"));
+		const asks = (identity: string) =>
+			intents.filter((intent) => intent.ticketIdentity === identity);
 		await coordinator.tick();
-		expect(intents.filter((intent) => intent.origin === "workflow")).toHaveLength(1);
+		expect(asks("github:github.com:I_6")).toHaveLength(1);
+		// The ask's pickup pass ran the start on behind it; the test waits on
+		// the settled ledger before it reads it.
+		await settle();
 		await coordinator.tick();
+		await settle();
 		await coordinator.tick();
-		// The route is still owed, and the step still stands: the position the
-		// route starts on is the Ticket the failed start holds.
-		expect(intents.filter((intent) => intent.origin === "workflow")).toHaveLength(1);
+		// The position the route starts on is the Ticket the failed start holds:
+		// the hold covers it, and the walks move to their next candidates.
+		expect(asks("github:github.com:I_6")).toHaveLength(1);
 		refresh(state, "github:github.com:I_6");
 		await coordinator.tick();
-		expect(intents.filter((intent) => intent.origin === "workflow")).toHaveLength(2);
+		expect(asks("github:github.com:I_6")).toHaveLength(2);
+		// The re-ask's own pickup pass runs its start on behind the ask; the
+		// test waits on the settled ledger before the state goes.
+		await settle();
 		state.close();
 	});
 
 	test("the hold covers the restart walk", async () => {
-		const { state, intents, coordinator, setAgents, advance } = rig({
+		const { state, intents, coordinator, setAgents, advance, runner, checkout, settle } = rig({
 			autoOn: true,
 			agents: [agent("pane-implement")],
-			startFails: failure,
 			config: { maxHandoffsPerTicket: 5 },
+			// One free seat, so the ask's own pickup pass runs the start.
+			seatCount: () => 1,
 		});
+		// The restart reopens the ticket's branch, and herdr refuses the open.
+		runner.set(
+			"herdr",
+			[
+				"worktree",
+				"open",
+				"--cwd",
+				checkout,
+				"--branch",
+				"factory/5-persist-source-facts",
+				"--no-focus",
+			],
+			{ code: 1, stderr: failure },
+		);
 		handOut(state, "github:github.com:I_5");
 		setAgents([]);
 		advance(STARTUP_GRACE_MS + 1);
 		await coordinator.tick();
+		await settle();
 		expect(intents.filter((intent) => intent.origin === "restart")).toHaveLength(1);
 		await coordinator.tick();
 		await coordinator.tick();
@@ -6517,12 +6428,18 @@ describe("the failed Handoff start's hold (ADR 0077 as extended by ADR 0101, iss
 		refresh(state);
 		await coordinator.tick();
 		expect(intents.filter((intent) => intent.origin === "restart")).toHaveLength(2);
+		// The re-ask's own pickup pass runs its start on behind the ask; the
+		// test waits on the settled ledger before the state goes.
+		await settle();
 		state.close();
 	});
 
 	test("the hold gates the automatic ask, not the claim the operator's ask runs", async () => {
-		const { state, intents, coordinator } = failedStartRig();
+		const { state, intents, coordinator, settle } = failedStartRig();
 		await coordinator.tick();
+		// The ask's pickup pass ran on behind it; the test waits on the
+		// settled ledger before it reads it.
+		await settle();
 		// The failed start stands, unrefreshed. The gate the hold owns is the
 		// top-up's ask; the claim check the operator's confirm and the pickup run
 		// answers clear, the way it answers past the Handoff limit and the
@@ -6538,34 +6455,39 @@ describe("the failed Handoff start's hold (ADR 0077 as extended by ADR 0101, iss
 		// The shape the development install actually ran (issue #217). The
 		// automatic ask only enqueues, so it answers "added" before any start has
 		// failed; the failure lands later, at the pickup, when herdr refuses the
-		// Agent. The rig's pickup mirrors that walk (ADR 0049): the claim runs the
+		// start. The module's pickup runs that walk (ADR 0049): the claim runs the
 		// hard checks, the start fails, the attempt settles `failed` with no Handoff
 		// under it, and the item drops. That row is what the hold reads, and no
 		// earlier test in this file covers this order.
 		const identity = "github:github.com:I_5";
-		const { state, intents, coordinator } = rig({
+		const seats = { current: 2 };
+		const { state, intents, coordinator, runner, checkout, settle } = rig({
 			autoOn: true,
 			agents: [],
 			config: { maxHandoffsPerTicket: 20 },
-			pickupWorkQueue: async () => {
-				const [item] = state.workQueue.items();
-				if (item === undefined || item.kind !== "handoff") return 0;
-				const claim = state.handoff.claimHandoff(item.ticketIdentity, item.choice, item.origin);
-				if (claim.ok) state.handoff.settleHandoff(claim.claim.attemptId, false, failure);
-				state.workQueue.removeWorkItem(item.ticketIdentity);
-				return 1;
-			},
+			seatCount: () => seats.current,
 		});
-		// Cycle 1: the ask lands in the queue. Nothing has failed, so nothing is
-		// held, and the queue's one-item rule ends the cycle's fresh work.
+		// The start's environment build is what herdr refuses.
+		runner.set("herdr", ["workspace", "create", "--cwd", checkout, "--no-focus"], {
+			code: 1,
+			stderr: failure,
+		});
+		// Cycle 1: the ask lands in the queue. The seats stand full, so the
+		// ask's own pickup pass takes nothing: nothing has failed, so nothing
+		// is held, and the queue's one-item rule ends the cycle's fresh work.
 		await coordinator.tick();
 		expect(intents).toHaveLength(1);
 		expect(state.workQueue.hasWorkItem(identity)).toBe(true);
 		expect(state.handoff.handoffBlockedUnrefreshed(identity)).toBe(false);
-		// Cycle 2: the pickup takes the row and herdr refuses the start. The failed
-		// attempt is now the Ticket's newest attempt, and the ask in this same
-		// cycle - the cycle that would have re-asked it - is held.
+		// Cycle 2: the freed seat lets the pickup take the row, and herdr
+		// refuses the start. The pickup runs ahead of the walk in the cycle,
+		// so the failed attempt stands when the walk reads it: the ask in
+		// this same cycle - the one that would have re-asked it - is held.
+		seats.current = 1;
 		await coordinator.tick();
+		// The pickup's start runs on behind the cycle; the test waits on the
+		// settled ledger before it reads it.
+		await settle();
 		expect(state.workQueue.hasWorkItem(identity)).toBe(false);
 		expect(state.handoff.handoffBlockedUnrefreshed(identity)).toBe(true);
 		expect(intents).toHaveLength(1);
@@ -6579,6 +6501,9 @@ describe("the failed Handoff start's hold (ADR 0077 as extended by ADR 0101, iss
 		refresh(state);
 		await coordinator.tick();
 		expect(intents).toHaveLength(2);
+		// The re-ask's own pickup pass runs its start on behind the ask; the
+		// test waits on the settled ledger before the state goes.
+		await settle();
 		state.close();
 	});
 });
@@ -6607,9 +6532,15 @@ describe("the Failed-start park holds a Ticket whose starts keep failing (issue 
 		const r = rig({
 			autoOn: true,
 			agents: [],
-			startFails: failure,
 			config: { maxHandoffsPerTicket: PARK_LIMIT },
+			// One free seat, so each ask's own pickup pass runs the start.
+			seatCount: () => 1,
 			log: recordLogger(lines),
+		});
+		// The start's environment build is what herdr refuses.
+		r.runner.set("herdr", ["workspace", "create", "--cwd", r.checkout, "--no-focus"], {
+			code: 1,
+			stderr: failure,
 		});
 		return { ...r, lines };
 	}
@@ -6631,6 +6562,9 @@ describe("the Failed-start park holds a Ticket whose starts keep failing (issue 
 	async function failStarts(state: FactoryState, coordinator: Rig["coordinator"], streak: number) {
 		for (let i = 0; i < streak; i += 1) {
 			await coordinator.tick();
+			// The ask's pickup pass ran the start on behind it; the re-read lands
+			// after the failed start settled, the way the hold waits for it.
+			await settleDispatch(state);
 			refresh(state);
 		}
 		await coordinator.tick();
@@ -6825,12 +6759,19 @@ describe("the Agent name collision holds the Top-up out (issue #299)", () => {
 		const r = rig({
 			autoOn: true,
 			agents: [],
-			startFails: REFUSAL,
 			// The rig's default Handoff limit of 2 parks a Ticket at one failed start.
 			// These tests want the collision alone in front of them, so the limit sits
 			// high; the test that wants both facts names its own.
 			config: { maxHandoffsPerTicket: 10, ...config },
+			// One free seat, so the ask's own pickup pass runs the start.
+			seatCount: () => 1,
 			log: recordLogger(lines),
+		});
+		// The start's environment build is what herdr refuses, with the refusal
+		// the collision fact names.
+		r.runner.set("herdr", ["workspace", "create", "--cwd", r.checkout, "--no-focus"], {
+			code: 1,
+			stderr: REFUSAL,
 		});
 		return { ...r, lines };
 	}
@@ -6859,10 +6800,11 @@ describe("the Agent name collision holds the Top-up out (issue #299)", () => {
 		lines.filter((line) => line.message.startsWith("automatic walks hold: another pane holds"));
 
 	test("the collision holds the Top-up out, and the walk stops asking", async () => {
-		const { state, coordinator, intents, statuses, advance, lines } = collisionRig();
-		// The first ask runs and herdr refuses the name: the attempt settles failed.
+		const { state, coordinator, intents, statuses, advance, lines, settle } = collisionRig();
+		// The first ask runs and herdr refuses the start: the attempt settles failed.
 		await coordinator.tick();
 		expect(intents).toHaveLength(1);
+		await settle();
 		standCollision(state);
 		// The source re-reads the Ticket, so the Attempt hold releases - and the
 		// collision takes the gate: the walk adds nothing, however long it waits.
@@ -6891,8 +6833,11 @@ describe("the Agent name collision holds the Top-up out (issue #299)", () => {
 	test("the collision speaks before the Failed-start park (issue #299)", async () => {
 		// Both facts stand on the same ledger, and the collision is the one the
 		// operator can act on: the walk names it, and the park stays silent.
-		const { state, coordinator, intents, lines } = collisionRig({ maxHandoffsPerTicket: 2 });
+		const { state, coordinator, intents, lines, settle } = collisionRig({
+			maxHandoffsPerTicket: 2,
+		});
 		await coordinator.tick();
+		await settle();
 		standCollision(state);
 		refresh(state);
 		await coordinator.tick();
@@ -6905,8 +6850,9 @@ describe("the Agent name collision holds the Top-up out (issue #299)", () => {
 	});
 
 	test("the operator's own Handoff that takes the name ends the hold", async () => {
-		const { state, coordinator, intents, advance } = collisionRig();
+		const { state, coordinator, intents, advance, settle } = collisionRig();
 		await coordinator.tick();
+		await settle();
 		standCollision(state);
 		refresh(state);
 		await coordinator.tick();
@@ -6926,8 +6872,9 @@ describe("the Agent name collision holds the Top-up out (issue #299)", () => {
 	});
 
 	test("the ignore answers the refusal, and un-ignoring states it again", async () => {
-		const { state, coordinator, lines } = collisionRig();
+		const { state, coordinator, lines, settle } = collisionRig();
 		await coordinator.tick();
+		await settle();
 		standCollision(state);
 		refresh(state);
 		await coordinator.tick();
@@ -6948,8 +6895,9 @@ describe("the Agent name collision holds the Top-up out (issue #299)", () => {
 	});
 
 	test("the fact leaves the record when the source closes the Ticket", async () => {
-		const { state, coordinator, lines } = collisionRig();
+		const { state, coordinator, lines, settle } = collisionRig();
 		await coordinator.tick();
+		await settle();
 		standCollision(state);
 		refresh(state);
 		await coordinator.tick();
