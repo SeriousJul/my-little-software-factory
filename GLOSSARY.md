@@ -549,7 +549,7 @@ _Avoid_: turn counter, dispatch budget
 
 **Dispatch pause**:
 The condition in which Auto-handoff mode starts no agent by itself, because the newest Held turn settled `failed`, no turn has settled `completed` since it, and the trace still stands as the decision the operator owes - the Ticket rests `awaiting` on the cycle the trace belongs to (issue #338).
-It is derived from the completion traces on every cycle, never stored, so it survives a restart and cannot drift from the fact it describes. It ends at the next `completed` settle, when the operator decides the Held turn that started it, or when the trace stops standing as a Held turn: the Agent of the held turn reports working again and the turn reopens, or the operator closes the in-flight cycle the trace stands in (ADR 0031). It never blocks a manual Handoff or a route the operator confirms, and it holds only the automatic adds of the auto top-up: the continuation, the restart, and the open ticket (ADR 0051).
+It is derived from the completion traces on every cycle, never stored, so it survives a restart and cannot drift from the fact it describes. It ends at the next `completed` settle, when the operator decides the Held turn that started it, or when the trace stops standing as a Held turn: the Agent of the held turn reports working again and the turn reopens, the operator closes the in-flight cycle the trace stands in (ADR 0031), or a later turn of the same Ticket takes its newest settled turn - the restart of a missing agent, for one (issue #351). The settle that takes the Ticket's turn decides the trace it supersedes, so the record closes it and no trace stands undecided with no surface that can decide it (ADR 0134). It never blocks a manual Handoff or a route the operator confirms, and it holds only the automatic adds of the auto top-up: the continuation, the restart, and the open ticket (ADR 0051).
 The auto cell's corner word for it is `held` (ADR 0111), and the word `paused` belongs to the queue pause alone.
 It is distinct from the queue pause, the operator's brake on the queue itself (ADR 0052).
 _Avoid_: circuit breaker, cooldown, backoff
@@ -615,6 +615,7 @@ _Avoid_: auto advance, auto-advance, next task
 **Completion decision**:
 The choice made on a settled agent turn: close the cycle, go to the agent, or run the task the ticket's new position offers: a handoff when the task type is a prompt task, a Plane action when it is an action task (ADR 0068).
 On a task type that carries a Transition, the Transition has written its label facts before this choice.
+The settle that takes a Ticket's newest settled turn decides the trace it supersedes: `superseded` ends no cycle, routes nothing, and states the fact that the turn was replaced, so the record keeps the failure the trace recorded with the decision that closed it (ADR 0134).
 _Avoid_: verdict, outcome
 
 **Operator-decides**:

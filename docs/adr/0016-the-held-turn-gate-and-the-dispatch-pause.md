@@ -4,6 +4,7 @@ Status: accepted
 Date: 2026-09-02
 Superseded in part by ADR 0051: the Dispatch pause's hold of the automatic route in manual mode no longer stands, because manual mode no longer routes by itself. Its held turn gate and its hold of the top-up's adds stand.
 Amended by ADR 0111: the Dispatch pause's corner word is `held`, and the word `paused` belongs to the Queue pause alone.
+Amended by ADR 0134: the settle that takes a Ticket's newest settled turn decides the trace it supersedes, so the trace the supersede stand-down leaves no longer stands undecided. The stand-down's newest-turn guard stands as the read's second defense.
 
 ## Context
 
@@ -139,12 +140,13 @@ The considered alternatives:
   settles `failed` again re-arms the pause: the settle refreshes the same
   trace, and the Ticket rests `awaiting` on its cycle once more.
 - The supersede stand-down drops the failure signal from every surface: the
-  superseded `failed` trace keeps no decision forever, and the badge, the
-  detail pane, the Decision screen, and the ignore refusal read only the
-  Ticket's newest settled turn, so the operator's view is left with no decision
-  to land on that failure and the factory keeps dispatching. Owning that signal
-  - deciding the superseded trace, or keeping the owed decision on the row - is
-  issue #359, not this decision.
+  badge, the detail pane, the Decision screen, and the ignore refusal read
+  only the Ticket's newest settled turn, so the operator's view is left with
+  no decision to land on the superseded failure and the factory keeps
+  dispatching. Amended by ADR 0134: the settle that takes the Ticket's turn
+  decides the superseded trace `superseded`, so the record closes the failure
+  once and no trace stands undecided with no surface that can decide it
+  (issue #359).
 - A turn the control plane could not read is never held: `unknown` fails open
   (ADR 0015), so a runtime that changes its record format holds nothing.
 - The pause is never stored. It is recomputed from the completion traces each

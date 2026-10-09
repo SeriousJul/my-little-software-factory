@@ -21,11 +21,20 @@
  * turn - and the one-way `completed` release ADR 0016 keeps. Check 1 alone
  * guards none of them: it reads the row's `held` badge through
  * `holdsDecision()`, the same predicate the badge wears, so the pause and the
- * badge could drift together and check 1 would see nothing. Measured on this
- * walk, each guard removed from `heldFailureTrace()` turns check 2 red inside
- * the first sequence: the newest-turn guard at step 62, that guard read
- * globally instead of per Ticket at step 67, the `awaiting` guard at step 78,
- * and the current-cycle guard at step 52.
+ * badge could drift together and check 1 would see nothing. The ledger records
+ * every trace the write path lands: the superseded decision the settling write
+ * decides (ADR 0134), and the second trace the abandon's branch inserts for a
+ * handoff whose trace already wears a decision - no cause, the turn never
+ * settled - so the oracle and the production read take one fact of every
+ * trace. Measured on this walk,
+ * removing the `awaiting` guard from `heldFailureTrace()` turns check 2 red at
+ * step 78 of the first sequence, reading the newest-turn guard globally instead
+ * of per Ticket turns it red at step 67, and removing the current-cycle guard
+ * turns it red at step 52. Removing the newest-turn guard no longer turns the
+ * walk red: the supersede write decides the trace the guard would have left
+ * out, so the `decision IS NULL` clause already excludes it, and the guard
+ * stands as the read's second defense - a state file that predates the
+ * supersede decision still carries the pending trace the guard was added for.
  *
  * What the walk does not guard is the meaning of the words. The named single
  * cases stand in `test/state/turnCause.test.ts`, which owns the cross-ticket
@@ -57,10 +66,10 @@ const OPERATIONS = 80;
  * maintainer to re-derive a magic constant to continue. The guarantee wanted is
  * that the walk still reaches the pause it guards, and a bound gives it.
  *
- * Measured at this head over the 24,000 steps: 4379 steps leave the pause
- * standing; 1074 leave a held `failed` turn standing in the ledger while a
+ * Measured at this head over the 24,000 steps: 4398 steps leave the pause
+ * standing; 1094 leave a held `failed` turn standing in the ledger while a
  * newer `completed` trace on another Ticket releases the pause, the one-way
- * direction ADR 0016 keeps; and 47 leave the current-cycle guard deciding the
+ * direction ADR 0016 keeps; and 41 leave the current-cycle guard deciding the
  * pause, the case a trace a cycle close leaves behind reaches only when a later
  * turn settles with an older stamp.
  */
@@ -127,11 +136,16 @@ function traceOrderIsLater(left: CompletionTraceOrder, right: CompletionTraceOrd
 	);
 }
 
-/** One settled turn the walk wrote, as the walk remembers it. */
+/** One trace the walk's operations wrote, as the walk remembers it. */
 interface TraceFact extends CompletionTraceOrder {
 	/** The Handoff attempt whose settle wrote it. */
 	attempt: string;
-	cause: string;
+	/** The cause the settle stored; null for the abandon's own trace, which the writer inserts for a turn that never settled. */
+	cause: string | null;
+	/**
+	 * True once a decision has landed on the trace: the walk's own decision,
+	 * or the superseded decision the settling write lands (ADR 0134).
+	 */
 	decided: boolean;
 	/** The work cycle the trace was written on, which a later cycle leaves behind. */
 	cycle: number;
@@ -288,6 +302,12 @@ class Walk {
 				cycle: ticket.pendingCycle,
 			});
 		}
+		// The settle decides the traces it supersedes (ADR 0134): every other
+		// undecided trace of this Ticket is no longer the turn the row shows, so
+		// the record closes it. The newest settled trace stays undecided, and the
+		// order the newest is read by is the one the reads share, not the clock.
+		const newest = this.newestTrace(ticket);
+		for (const trace of ticket.traces) if (trace !== newest && !trace.decided) trace.decided = true;
 		this.note("settle", identity, cause);
 	}
 
@@ -297,15 +317,36 @@ class Walk {
 		if (attempt === null) return;
 		const decision = pick(DECISIONS, this.next());
 		this.traceTime += 60_000;
+		const decidedAt = new Date(this.traceTime).toISOString();
 		const applied = this.state.ticketWorkCycle.applyCompletionDecision({
 			ticketIdentity: identity,
 			handoffId: attempt,
 			decision,
-			decidedAt: new Date(this.traceTime).toISOString(),
+			decidedAt,
 		});
 		if (applied) {
 			const trace = ticket.traces.find((each) => each.attempt === attempt && !each.decided);
-			if (trace !== undefined) trace.decided = true;
+			if (trace !== undefined) {
+				trace.decided = true;
+			} else if (decision === "abandoned") {
+				// The turn's trace already wears a decision - the supersede the
+				// settling write lands (ADR 0134) - so the writer's abandon
+				// branch inserts a second trace for the handoff, once: no cause,
+				// the turn never settled, and the decision it asked for, on the
+				// cycle the handoff was claimed on. The ledger records it the
+				// way the write does, so the oracle holds one fact of every
+				// trace the write path lands.
+				const settled = ticket.traces.find((each) => each.attempt === attempt);
+				this.traceRow += 1;
+				ticket.traces.push({
+					attempt,
+					completedAt: decidedAt,
+					rowId: this.traceRow,
+					cause: null,
+					decided: true,
+					cycle: settled?.cycle ?? ticket.cycle,
+				});
+			}
 			ticket.owed = null;
 			// The close, the abandon, and the route each end the cycle; the route
 			// ends it only from the resting state.
