@@ -266,6 +266,58 @@ describe("the turn end cause and the Dispatch pause", () => {
 		const listed = state.ticketWorkCycle.ticketListViews([], "implement", "active").rows;
 		expect(listed.filter(holdsDecision)).toHaveLength(0);
 		expect(state.ticketWorkCycle.lastCompletion(t5)?.cause).toBe("unknown");
+		// The other Ticket never owed a decision, so it holds no row out and
+		// answers no pause of its own.
+		expect(state.ticketWorkCycle.lastCompletion(t6)).toBeNull();
+		expect(state.ticketWorkCycle.dispatchPauseActive()).toBe(false);
+		state.close();
+	});
+
+	test("a superseded failed turn on one Ticket leaves another's held failure standing", () => {
+		const state = twoTicketState();
+		// Both Tickets owe a held `failed` turn, and the pause stands on the newer.
+		const superseded = settleCause(state, t5, { cause: "failed", at: "2026-08-31T11:00:00Z" });
+		const owed = settleCause(state, t6, { cause: "failed", at: "2026-08-31T11:02:00Z" });
+		expect(state.ticketWorkCycle.dispatchPauseActive()).toBe(true);
+		// t5 moves past its failure: its Agent works again, and the restart's turn
+		// settles `unknown`, so t5's newest settled turn is no longer a Held turn
+		// and its row wears no `held` badge (issue #351).
+		expect(state.ticketWorkCycle.reopenTurn(t5, superseded)).toBe(true);
+		const restart = state.handoff.claimHandoff(t5, choice, "restart");
+		if (!restart.ok) throw new Error(restart.reason);
+		state.handoff.settleHandoff(restart.claim.attemptId, true);
+		state.ticketWorkCycle.settleTurn({
+			ticketIdentity: t5,
+			handoffId: restart.claim.attemptId,
+			taskType: "implement",
+			agentType: "pi",
+			message: "the restarted turn",
+			turnLog: textLog("the restarted turn"),
+			completedAt: "2026-08-31T11:04:00Z",
+			cause: "unknown",
+			detail: "",
+		});
+		// The guard is per Ticket inside a read that spans every Ticket. t5's
+		// failure is superseded and answers nothing, but t6 still owes its held
+		// `failed` turn: the pause stands, and the row that answers it is in the
+		// list (ADR 0016, issue #351).
+		const held = state.ticketWorkCycle
+			.ticketListViews([], "implement", "active")
+			.rows.filter(holdsDecision);
+		expect(held.map((row) => row.identity)).toEqual([t6]);
+		expect(state.ticketWorkCycle.lastCompletion(t5)?.cause).toBe("unknown");
+		expect(state.ticketWorkCycle.lastCompletion(t6)?.cause).toBe("failed");
+		expect(state.ticketWorkCycle.dispatchPauseActive()).toBe(true);
+		// And the pause releases the way the held turn always releases: the
+		// operator decides t6's turn.
+		expect(
+			state.ticketWorkCycle.applyCompletionDecision({
+				ticketIdentity: t6,
+				handoffId: owed,
+				decision: "closed",
+				decidedAt: "2026-08-31T11:10:00Z",
+			}),
+		).toBe(true);
 		expect(state.ticketWorkCycle.dispatchPauseActive()).toBe(false);
 		state.close();
 	});
