@@ -1459,7 +1459,7 @@ these numbers at `f2f221fe`.
 
 ### The backlog, as the campaign will inherit it at `498db20d`
 
-The 20 largest clones, at `minTokens: 100`, `minLines: 5:
+The 20 largest clones, at `minTokens: 100`, `minLines: 5`:
 
 | First block | Second block | Tokens | Lines |
 | --- | --- | --- | --- |
@@ -1546,6 +1546,12 @@ before the runs, and every check below ran on the tree of `c019d37c`.
 | `bun run audit` | OK: type 0, lint 0, secrets 0, cognitive 0 / baseline 0, function 0 / baseline 0, params 0 / baseline 0, duplicates 0 / baseline 0, test-dup 282 / baseline 282, and 6 open code-scanning alerts |
 | `bun run test`, once | 3241 pass / 0 fail across 147 files in 40.42 s (16,626 `expect()` calls). Load average 2.53 before the run and 1.99 after, 32 CPUs, and no other `bun test` process ran on this machine |
 | `bun run docs:build` | complete in 1.57 s |
+
+The cheap checks were re-run on the record commit `cd4d3971`: `bun run
+lint` clean over 320 files (148 ms), `bun run typecheck` clean, `bun run
+audit` OK with `test-dup` at 282 / baseline 282, and `bun run docs:build`
+complete in 1.72 s. The only change after that run is this record's own
+wording.
 
 ### What this change did not measure
 
