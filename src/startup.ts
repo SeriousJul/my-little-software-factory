@@ -271,16 +271,25 @@ export interface ShutdownProcess {
  * installs this stays stoppable by `kill`. The close is idempotent, so the
  * signal path and the exit hook together still close once.
  *
+ * The app's background loops stop before the state closes, on every path
+ * that ends the run. A Handoff settlement lands asynchronously, and one that
+ * settles after the state closes reads a closed database, so the stop the
+ * entry wires in runs first on the signal path and the exit hook alike. The
+ * stop is idempotent, and a clean quit has already stopped the loops on its
+ * own, so the second stop changes nothing.
+ *
  * Install it after the renderer exists. The renderer listens for the same
  * signals to put the terminal back, and a run ends its listeners in the order
  * they were written, so the terminal comes back before the exit.
  */
 export function installStateShutdown(
-	state: FactoryState,
+	state: { close(): void },
 	target: ShutdownProcess = process,
 	logger?: Logger,
+	stopApp?: () => void,
 ): void {
 	const terminate = () => {
+		stopApp?.();
 		state.close();
 		target.exit(0);
 	};
@@ -289,6 +298,7 @@ export function installStateShutdown(
 	// runs it directly.
 	target.on("exit", () => {
 		logger?.info("run ended");
+		stopApp?.();
 		state.close();
 	});
 	target.on("SIGTERM", terminate);
