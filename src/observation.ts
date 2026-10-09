@@ -2759,7 +2759,7 @@ export class ObservationCoordinator {
 	 * then the blocked attempt's hold, and only then it asks. The first fact
 	 * that stands wins the line, the way the cycle's other gate reads do; the
 	 * three are exclusive in time in the normal run, and the order is what the
-	 * record states when they are not (ADR 0128).
+	 * record states when they are not (ADR 0133).
 	 */
 	private async topUpPlaneActionAsk(
 		intent: PlaneActionIntent,

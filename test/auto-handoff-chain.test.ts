@@ -986,7 +986,7 @@ describe("the merge run that stands (issue #327, ADR 0104, issue #352)", () => {
 });
 
 /**
- * The merge row that stands in the Work queue (issue #352, ADR 0128).
+ * The merge row that stands in the Work queue (issue #352, ADR 0133).
  *
  * The run's mark covers the window from the claim to the settle. Before the
  * claim the merge is a Work queue row, and the queue's one-item-per-ticket rule
@@ -997,7 +997,7 @@ describe("the merge run that stands (issue #327, ADR 0104, issue #352)", () => {
  * standing ahead of it - earned one ask and one `merge refused:` line per cycle
  * from the continuation walks. The ask step reads the row for all three walks.
  */
-describe("the merge row that stands in the queue (issue #352, ADR 0128)", () => {
+describe("the merge row that stands in the queue (issue #352, ADR 0133)", () => {
 	test("the continuation walk holds on the standing merge row and asks for it once", async () => {
 		const chain = chainRig({ maxParallelAgents: 1, liveSeats: true });
 		const { state, coordinator, lines } = chain;

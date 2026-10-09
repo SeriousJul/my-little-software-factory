@@ -9,6 +9,11 @@ cycle reads the Auto-handoff mode from the state it already holds and keeps one
 clock for its facts and its scheduling, and that the observation suite drives the
 real Handoff dispatch module instead of restating its rules. It moves no control,
 changes no key, rewords no hint, decides no gate, and touches no surface.
+Amended by ADR 0133: the port's call set gains a fifth call,
+`planeActionRunInFlight`, the Plane action's run mark (ADR 0104), which the
+cycle's ask step reads as a standing gate before it asks (issue #352). The
+mark's read rides with the other seams in the port's implementation, and does
+not drop when the port lands. The four calls it names stand.
 
 ## Context
 

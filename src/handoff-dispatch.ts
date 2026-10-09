@@ -492,7 +492,7 @@ export interface HandoffDispatch {
 	 * The mark is keyed by the Ticket alone, not by the task type: the Plane
 	 * action set holds only the merge, and the glossary says so. A second action
 	 * type on the same Ticket reads this Ticket's running merge as standing work,
-	 * and that is the fact to re-open here when the set grows (ADR 0128).
+	 * and that is the fact to re-open here when the set grows (ADR 0133).
 	 */
 	planeActionRunInFlight(ticketIdentity: string): boolean;
 	/**

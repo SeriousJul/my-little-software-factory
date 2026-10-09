@@ -1,4 +1,4 @@
-# ADR 0128: The automatic walks read the merge's standing work before they ask
+# ADR 0133: The automatic walks read the merge's standing work before they ask
 
 Status: accepted
 Date: 2026-10-09
@@ -145,3 +145,10 @@ issue is the merge the plane asked for itself.
 The verification record names the seams that measure the walk's reads - the gate,
 and the ask that crosses the mark and takes the guard's refusal - and the
 configuration reference states when a `merge refused:` line lands.
+
+ADR 0130's port names the four calls the cycle may make - `dispatch`,
+`dispatchPlaneAction`, `pickupWorkQueue`, and `closeCleanup`. When it lands, the
+port's call set gains a fifth call, `planeActionRunInFlight`, the Plane
+action's run mark (ADR 0104) that this ADR's gate reads beside the Work queue's
+row. The port's implementation carries the mark's read with the other seams, and
+does not drop it.

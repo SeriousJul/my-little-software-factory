@@ -643,7 +643,7 @@ operator's own ask still reads the refusal on the Message line.
 For the merge the automatic walks ask, neither refusal is what they reach: the
 walks' ask step reads the Work queue's row for the Ticket, then the run's mark,
 as gates before it asks, so one merge earns one ask across its whole life and the
-walk states its hold instead (issue #352, ADR 0128). Each of the two
+walk states its hold instead (issue #352, ADR 0133). Each of the two
 `merge refused:` lines above answers an ask that crossed one of those facts -
 your own confirm, a force-dispatch, or the ask that lands between one walk's read
 and the row's claim.
@@ -807,7 +807,7 @@ walk reads the run before it asks and holds (issue #327, issue #352). The
 Work queue's row for the Ticket, the line above it, is the same shape one step
 earlier: the merge stands as a row and the walk holds on it. The Plane action's
 ask step reads both for every automatic walk, so the continuation walks hold on a
-standing merge row the way the fresh-work walk does (issue #352, ADR 0128).
+standing merge row the way the fresh-work walk does (issue #352, ADR 0133).
 
 The Operator-decides brake keeps its designed silence (ADR 0117): the walk
 holds the Ticket it reaches, and it states no fact for it.
