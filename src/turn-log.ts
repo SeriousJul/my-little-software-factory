@@ -212,18 +212,64 @@ function assistantEntries(
 		if (!isRecord(part)) continue;
 		if (part.type === "text" && typeof part.text === "string" && part.text.trim() !== "") {
 			entries.push({ kind: "text", text: part.text });
-		} else if (part.type === "toolCall" && typeof part.name === "string") {
-			const entry: ToolEntry = {
-				kind: "tool",
-				name: part.name,
-				target: toolTarget(part.name, isRecord(part.arguments) ? part.arguments : {}),
-				failed: false,
-			};
-			entries.push(entry);
-			if (typeof part.id === "string") toolById.set(part.id, entry);
+			continue;
 		}
+		if (part.type !== "toolCall") continue;
+		assistantToolEntry(part, entries, toolById);
 		// thinking parts are the agent's inner notes: not part of the work.
 	}
+}
+
+/** The one tool call the assistant message's part holds, and its note. */
+function assistantToolEntry(
+	part: Record<string, unknown>,
+	entries: TurnLogEntry[],
+	toolById: Map<string, ToolEntry>,
+): void {
+	if (typeof part.name !== "string") return;
+	const entry: ToolEntry = {
+		kind: "tool",
+		name: part.name,
+		target: toolTarget(part.name, isRecord(part.arguments) ? part.arguments : {}),
+		failed: false,
+	};
+	entries.push(entry);
+	if (typeof part.id === "string") toolById.set(part.id, entry);
+}
+
+/** The facts one pi session line leaves the scan holding. */
+interface PiScanFacts {
+	sawMessage: boolean;
+	lastStop: string | undefined;
+	lastError: string | undefined;
+	lastTs: number | null;
+}
+
+/** The one message record the scan reads into its entries and its stop facts. */
+function piScanLine(
+	record: Record<string, unknown>,
+	facts: PiScanFacts,
+	entries: TurnLogEntry[],
+	toolById: Map<string, ToolEntry>,
+): void {
+	if (record.type !== "message") return;
+	const message = isRecord(record.message) ? record.message : undefined;
+	if (message === undefined || typeof message.role !== "string") return;
+	facts.sawMessage = true;
+	if (message.role === "assistant") {
+		facts.lastStop = typeof message.stopReason === "string" ? message.stopReason : undefined;
+		facts.lastError = typeof message.errorMessage === "string" ? message.errorMessage : undefined;
+		facts.lastTs = parseTimestamp(record.timestamp ?? message.timestamp) ?? facts.lastTs;
+		assistantEntries(message, entries, toolById);
+		return;
+	}
+	if (message.role !== "toolResult") return;
+	// The result follows the call: mark the matching note failed when the
+	// runtime reports an error.
+	const callId = typeof message.toolCallId === "string" ? message.toolCallId : "";
+	if (message.isError !== true) return;
+	const entry = toolById.get(callId);
+	if (entry !== undefined) entry.failed = true;
 }
 
 /** The session's lines, read into the turn's entries and its stop facts. */
@@ -239,35 +285,26 @@ function piSessionScan(jsonl: string):
 	  } {
 	const entries: TurnLogEntry[] = [];
 	const toolById = new Map<string, ToolEntry>();
-	let sawMessage = false;
-	let lastStop: string | undefined;
-	let lastError: string | undefined;
-	let lastTs: number | null = null;
+	const facts: PiScanFacts = {
+		sawMessage: false,
+		lastStop: undefined,
+		lastError: undefined,
+		lastTs: null,
+	};
 	for (const line of jsonl.split("\n")) {
 		const record = jsonlLine(line);
 		if (record === "unavailable") return { kind: "unavailable" };
 		if (record === null) continue;
-		if (record.type !== "message") continue;
-		const message = isRecord(record.message) ? record.message : undefined;
-		if (message === undefined || typeof message.role !== "string") continue;
-		sawMessage = true;
-		if (message.role === "assistant") {
-			lastStop = typeof message.stopReason === "string" ? message.stopReason : undefined;
-			lastError = typeof message.errorMessage === "string" ? message.errorMessage : undefined;
-			lastTs = parseTimestamp(record.timestamp ?? message.timestamp) ?? lastTs;
-			assistantEntries(message, entries, toolById);
-		} else if (message.role === "toolResult") {
-			// The result follows the call: mark the matching note failed when
-			// the runtime reports an error.
-			const callId = typeof message.toolCallId === "string" ? message.toolCallId : "";
-			if (message.isError === true) {
-				const entry = toolById.get(callId);
-				if (entry !== undefined) entry.failed = true;
-			}
-		}
+		piScanLine(record, facts, entries, toolById);
 	}
-	if (!sawMessage) return { kind: "no-turn" };
-	return { kind: "scanned", entries, lastStop, lastError, lastTs };
+	if (!facts.sawMessage) return { kind: "no-turn" };
+	return {
+		kind: "scanned",
+		entries,
+		lastStop: facts.lastStop,
+		lastError: facts.lastError,
+		lastTs: facts.lastTs,
+	};
 }
 
 /** The cause and detail the last assistant message's stop reason states. */
@@ -344,62 +381,110 @@ export function codexAbortCause(reason: string | undefined): TurnEndCause {
  * A record without a turn-end event yields `no-turn`; a malformed line
  * yields `unavailable`.
  */
+/** The text of a codex `agent_message` event, or no text. */
+function codexMessageOf(payload: Record<string, unknown>): string | null {
+	const message = payload.message;
+	return typeof message === "string" && message.trim() !== "" ? message : null;
+}
+
+/**
+ * The cause, detail, and time one codex turn-end event states, or null when
+ * the event is not a turn end.
+ *
+ * `task_complete` is `completed` unless it carries an error (the provider
+ * rejected the request), in which case it is `failed` with the error's
+ * message as the detail; `stream_error` is `failed`; `turn_aborted` maps by
+ * its own reason, and its reason is the detail: the agent's own text of why
+ * the turn died, kept verbatim so the operator reads it instead of a
+ * category label.
+ */
+function codexTurnEndFacts(
+	payload: Record<string, unknown>,
+	ts: number | null,
+): { cause: TurnEndCause; detail: string; ts: number | null } | null {
+	if (payload.type === "task_complete") {
+		const error = isRecord(payload.error) ? payload.error : undefined;
+		if (error !== undefined) {
+			return {
+				cause: "failed",
+				detail: typeof error.message === "string" ? error.message : "",
+				ts,
+			};
+		}
+		return { cause: "completed", detail: "", ts };
+	}
+	if (payload.type === "stream_error") {
+		return { cause: "failed", detail: codexStreamErrorDetail(payload), ts };
+	}
+	if (payload.type !== "turn_aborted") return null;
+	const reason = typeof payload.reason === "string" ? payload.reason : undefined;
+	return { cause: codexAbortCause(reason), detail: reason ?? "", ts };
+}
+
+/**
+ * The detail one codex `stream_error` event carries: the error's message when
+ * it holds one, else the event's own message, else none.
+ */
+function codexStreamErrorDetail(payload: Record<string, unknown>): string {
+	const error = isRecord(payload.error) ? payload.error : undefined;
+	if (error !== undefined && typeof error.message === "string") return error.message;
+	if (typeof payload.message === "string") return payload.message;
+	return "";
+}
+
+/** The facts one codex record line leaves the scan holding. */
+interface CodexScanFacts {
+	sawTurnEnd: boolean;
+	cause: TurnEndCause;
+	detail: string;
+	lastTs: number | null;
+}
+
+function codexScanLine(
+	record: Record<string, unknown>,
+	facts: CodexScanFacts,
+	entries: TurnLogEntry[],
+): void {
+	const payload = isRecord(record.payload) ? record.payload : undefined;
+	if (payload === undefined || typeof payload.type !== "string") return;
+	if (payload.type === "agent_message") {
+		const message = codexMessageOf(payload);
+		if (message !== null) entries.push({ kind: "text", text: message });
+		return;
+	}
+	const ts = parseTimestamp(record.timestamp ?? payload.completed_at) ?? null;
+	const turnEnd = codexTurnEndFacts(payload, ts);
+	if (turnEnd === null) return;
+	facts.sawTurnEnd = true;
+	facts.lastTs = turnEnd.ts ?? facts.lastTs;
+	facts.cause = turnEnd.cause;
+	facts.detail = turnEnd.detail;
+}
+
+/**
+ * Parse a codex session record (JSONL rollout) into the log, the turn end
+ * cause, and its detail.
+ *
+ * The record is a stream of events. The agent's `agent_message` events are
+ * the log. The turn end is the last of the turn-end events. A record without
+ * a turn-end event yields `no-turn`; a malformed line yields `unavailable`.
+ */
 export function turnEndFromCodexSession(jsonl: string, startedAt: string | null): SessionTurnRead {
 	const entries: TurnLogEntry[] = [];
-	let sawTurnEnd = false;
-	let cause: TurnEndCause = "unknown";
-	let detail = "";
-	let lastTs: number | null = null;
+	const facts: CodexScanFacts = { sawTurnEnd: false, cause: "unknown", detail: "", lastTs: null };
 	for (const line of jsonl.split("\n")) {
 		const record = jsonlLine(line);
 		if (record === "unavailable") return { kind: "unavailable" };
 		if (record === null) continue;
-		const payload = isRecord(record.payload) ? record.payload : undefined;
-		if (payload === undefined || typeof payload.type !== "string") continue;
-		if (payload.type === "agent_message") {
-			if (typeof payload.message === "string" && payload.message.trim() !== "") {
-				entries.push({ kind: "text", text: payload.message });
-			}
-			continue;
-		}
-		const ts = parseTimestamp(record.timestamp ?? payload.completed_at) ?? null;
-		if (payload.type === "task_complete") {
-			sawTurnEnd = true;
-			lastTs = ts ?? lastTs;
-			const error = isRecord(payload.error) ? payload.error : undefined;
-			if (error !== undefined) {
-				cause = "failed";
-				detail = typeof error.message === "string" ? error.message : "";
-			} else {
-				cause = "completed";
-				detail = "";
-			}
-		} else if (payload.type === "stream_error") {
-			sawTurnEnd = true;
-			lastTs = ts ?? lastTs;
-			cause = "failed";
-			const error = isRecord(payload.error) ? payload.error : undefined;
-			detail =
-				error !== undefined && typeof error.message === "string"
-					? error.message
-					: typeof payload.message === "string"
-						? payload.message
-						: "";
-		} else if (payload.type === "turn_aborted") {
-			sawTurnEnd = true;
-			lastTs = ts ?? lastTs;
-			const reason = typeof payload.reason === "string" ? payload.reason : undefined;
-			cause = codexAbortCause(reason);
-			detail = reason ?? "";
-		}
+		codexScanLine(record, facts, entries);
 	}
-	if (!sawTurnEnd) return { kind: "no-turn" };
+	if (!facts.sawTurnEnd) return { kind: "no-turn" };
 	return {
 		kind: "ended",
 		turnEnd: {
 			log: entries,
-			cause: applyStalenessGuard(cause, lastTs, startedAt),
-			detail: capDetail(detail),
+			cause: applyStalenessGuard(facts.cause, facts.lastTs, startedAt),
+			detail: capDetail(facts.detail),
 		},
 	};
 }
@@ -431,53 +516,86 @@ function claudeErrorText(record: Record<string, unknown>): string {
  * turn end. A record without a turn end yields `no-turn`; a malformed line
  * yields `unavailable`.
  */
+/**
+ * The cause one claude stop reason states, and the time the record carries,
+ * or null where the stop is mid-turn.
+ *
+ * A real message stopped on its output token limit (`max_tokens`) is
+ * `truncated`; an end of turn or stop sequence is `completed`. A `tool_use`
+ * stop is mid-turn, not a turn end.
+ */
+function claudeStopFacts(
+	message: Record<string, unknown>,
+	ts: number | null,
+): { cause: TurnEndCause; ts: number | null } | null {
+	const stopReason = typeof message.stop_reason === "string" ? message.stop_reason : undefined;
+	if (stopReason === "end_turn" || stopReason === "stop_sequence")
+		return { cause: "completed", ts };
+	if (stopReason !== "max_tokens") return null;
+	return { cause: "truncated", ts };
+}
+
+/** The facts one claude record line leaves the scan holding. */
+interface ClaudeScanFacts {
+	sawTurnEnd: boolean;
+	cause: TurnEndCause;
+	detail: string;
+	lastTs: number | null;
+}
+
+function claudeScanLine(
+	record: Record<string, unknown>,
+	facts: ClaudeScanFacts,
+	entries: TurnLogEntry[],
+): void {
+	if (record.type !== "assistant") return;
+	const message = isRecord(record.message) ? record.message : undefined;
+	if (message === undefined) return;
+	const content = Array.isArray(message.content) ? message.content : [];
+	for (const part of content) {
+		if (isRecord(part) && part.type === "text" && typeof part.text === "string")
+			entries.push({ kind: "text", text: part.text });
+	}
+	const ts = parseTimestamp(record.timestamp) ?? null;
+	if (record.isApiErrorMessage === true) {
+		facts.sawTurnEnd = true;
+		facts.lastTs = ts ?? facts.lastTs;
+		facts.cause = "failed";
+		facts.detail = claudeErrorText(record);
+		return;
+	}
+	const stop = claudeStopFacts(message, ts);
+	if (stop === null) return;
+	facts.sawTurnEnd = true;
+	facts.lastTs = stop.ts ?? facts.lastTs;
+	facts.cause = stop.cause;
+}
+
+/**
+ * Parse a claude session record (JSONL) into the log, the turn end cause,
+ * and its detail.
+ *
+ * The record stores the conversation in order. The agent's text in the
+ * assistant messages is the log. An API error message (`isApiErrorMessage`)
+ * is `failed`, with the message's own text as the detail. A record without a
+ * turn end yields `no-turn`; a malformed line yields `unavailable`.
+ */
 export function turnEndFromClaudeSession(jsonl: string, startedAt: string | null): SessionTurnRead {
 	const entries: TurnLogEntry[] = [];
-	let sawTurnEnd = false;
-	let cause: TurnEndCause = "unknown";
-	let detail = "";
-	let lastTs: number | null = null;
+	const facts: ClaudeScanFacts = { sawTurnEnd: false, cause: "unknown", detail: "", lastTs: null };
 	for (const line of jsonl.split("\n")) {
 		const record = jsonlLine(line);
 		if (record === "unavailable") return { kind: "unavailable" };
 		if (record === null) continue;
-		if (record.type !== "assistant") continue;
-		const message = isRecord(record.message) ? record.message : undefined;
-		if (message === undefined) continue;
-		const content = Array.isArray(message.content) ? message.content : [];
-		for (const part of content) {
-			if (isRecord(part) && part.type === "text" && typeof part.text === "string")
-				entries.push({ kind: "text", text: part.text });
-		}
-		const ts = parseTimestamp(record.timestamp) ?? null;
-		if (record.isApiErrorMessage === true) {
-			sawTurnEnd = true;
-			lastTs = ts ?? lastTs;
-			cause = "failed";
-			detail = claudeErrorText(record);
-			continue;
-		}
-		const stopReason = typeof message.stop_reason === "string" ? message.stop_reason : undefined;
-		if (stopReason === "end_turn" || stopReason === "stop_sequence") {
-			sawTurnEnd = true;
-			lastTs = ts ?? lastTs;
-			cause = "completed";
-			detail = "";
-		} else if (stopReason === "max_tokens") {
-			sawTurnEnd = true;
-			lastTs = ts ?? lastTs;
-			cause = "truncated";
-			detail = "";
-		}
-		// `tool_use` is mid-turn: the agent called a tool and the turn goes on.
+		claudeScanLine(record, facts, entries);
 	}
-	if (!sawTurnEnd) return { kind: "no-turn" };
+	if (!facts.sawTurnEnd) return { kind: "no-turn" };
 	return {
 		kind: "ended",
 		turnEnd: {
 			log: entries,
-			cause: applyStalenessGuard(cause, lastTs, startedAt),
-			detail: capDetail(detail),
+			cause: applyStalenessGuard(facts.cause, facts.lastTs, startedAt),
+			detail: capDetail(facts.detail),
 		},
 	};
 }
@@ -533,43 +651,83 @@ export function sessionFromPiSession(jsonl: string): SessionExchangeRead {
 		if (record.type !== "message") continue;
 		const message = isRecord(record.message) ? record.message : undefined;
 		if (message === undefined || typeof message.role !== "string") continue;
-		const content = Array.isArray(message.content) ? message.content : [];
-		if (message.role === "user") {
-			for (const part of content) {
-				if (
-					isRecord(part) &&
-					part.type === "text" &&
-					typeof part.text === "string" &&
-					part.text.trim() !== ""
-				)
-					entries.push({ kind: "input", text: capEntryText(part.text) });
-			}
-		} else if (message.role === "assistant") {
-			for (const part of content) {
-				if (!isRecord(part)) continue;
-				if (part.type === "text" && typeof part.text === "string" && part.text.trim() !== "")
-					entries.push({ kind: "text", text: capEntryText(part.text) });
-				else if (part.type === "toolCall" && typeof part.name === "string") {
-					const note: Extract<SessionEntry, { kind: "tool" }> = {
-						kind: "tool",
-						name: part.name,
-						target: toolTarget(part.name, isRecord(part.arguments) ? part.arguments : {}),
-						failed: false,
-					};
-					entries.push(note);
-					if (typeof part.id === "string") toolById.set(part.id, note);
-				}
-			}
-		} else if (message.role === "toolResult") {
-			if (message.isError !== true) continue;
-			const note =
-				typeof message.toolCallId === "string" ? toolById.get(message.toolCallId) : undefined;
-			if (note !== undefined) note.failed = true;
-		}
+		piSessionMessageEntries(message, entries, toolById);
 	}
 	if (entries.length > SESSION_ENTRY_COUNT_CAP)
 		entries.splice(0, entries.length - SESSION_ENTRY_COUNT_CAP);
 	return { kind: "readable", entries };
+}
+
+/** The entries one message record of a pi session carries, in role order. */
+function piSessionMessageEntries(
+	message: Record<string, unknown>,
+	entries: SessionEntry[],
+	toolById: Map<string, Extract<SessionEntry, { kind: "tool" }>>,
+): void {
+	const content = Array.isArray(message.content) ? message.content : [];
+	if (message.role === "user") {
+		for (const part of content) {
+			if (
+				isRecord(part) &&
+				part.type === "text" &&
+				typeof part.text === "string" &&
+				part.text.trim() !== ""
+			)
+				entries.push({ kind: "input", text: capEntryText(part.text) });
+		}
+		return;
+	}
+	if (message.role === "assistant") {
+		piAssistantPartEntries(content, entries, toolById);
+		return;
+	}
+	if (message.role !== "toolResult") return;
+	piToolResultError(message, toolById);
+}
+
+/** The entries the assistant parts of a pi session message carry. */
+function piAssistantPartEntries(
+	content: readonly unknown[],
+	entries: SessionEntry[],
+	toolById: Map<string, Extract<SessionEntry, { kind: "tool" }>>,
+): void {
+	for (const part of content) {
+		if (!isRecord(part)) continue;
+		if (part.type === "text" && typeof part.text === "string" && part.text.trim() !== "") {
+			entries.push({ kind: "text", text: capEntryText(part.text) });
+			continue;
+		}
+		if (part.type !== "toolCall") continue;
+		piToolCallNote(part, entries, toolById);
+	}
+}
+
+/** The one tool call the assistant part holds, and its note. */
+function piToolCallNote(
+	part: Record<string, unknown>,
+	entries: SessionEntry[],
+	toolById: Map<string, Extract<SessionEntry, { kind: "tool" }>>,
+): void {
+	if (typeof part.name !== "string") return;
+	const note: Extract<SessionEntry, { kind: "tool" }> = {
+		kind: "tool",
+		name: part.name,
+		target: toolTarget(part.name, isRecord(part.arguments) ? part.arguments : {}),
+		failed: false,
+	};
+	entries.push(note);
+	if (typeof part.id === "string") toolById.set(part.id, note);
+}
+
+/** The failed note one errored tool result marks, when the call id names one. */
+function piToolResultError(
+	message: Record<string, unknown>,
+	toolById: Map<string, Extract<SessionEntry, { kind: "tool" }>>,
+): void {
+	if (message.isError !== true) return;
+	const note =
+		typeof message.toolCallId === "string" ? toolById.get(message.toolCallId) : undefined;
+	if (note !== undefined) note.failed = true;
 }
 
 /** Cap one entry's text at the record's reading bound, cut at the end. */
@@ -607,25 +765,46 @@ export function readSessionExchange(kind: string, sessionPath: string): SessionE
  * so a call the factory does not name still shows its own words.
  */
 export function toolTarget(name: string, args: Record<string, unknown>): string {
-	if (
-		(name === "bash" || name === "exec" || name === "shell") &&
-		(typeof args.command === "string" || typeof args.cmd === "string")
-	) {
-		return String(args.command ?? args.cmd);
-	}
-	if (
-		(name === "read" || name === "write" || name === "edit" || name === "apply_patch") &&
-		(typeof args.path === "string" || typeof args.file_path === "string")
-	) {
-		return String(args.path ?? args.file_path);
-	}
-	if (name === "mcp" && typeof args.tool === "string") {
-		return args.tool;
-	}
+	const named = namedToolTarget(name, args);
+	if (named !== null) return named;
 	for (const value of Object.values(args)) {
 		if (typeof value === "string" && value.trim() !== "") return value;
 	}
 	return "";
+}
+
+/**
+ * The target the tool name names: the command of a shell call, the path of a
+ * file call, the tool of an MCP call.
+ */
+function namedToolTarget(name: string, args: Record<string, unknown>): string | null {
+	if (isShellTool(name)) return stringArgPair(args, "command", "cmd");
+	if (isFileTool(name)) return stringArgPair(args, "path", "file_path");
+	if (name !== "mcp") return null;
+	return typeof args.tool === "string" ? args.tool : null;
+}
+
+/** A shell tool by the names the factory calls it. */
+function isShellTool(name: string): boolean {
+	return name === "bash" || name === "exec" || name === "shell";
+}
+
+/** A file tool by the names the factory calls it. */
+function isFileTool(name: string): boolean {
+	return name === "read" || name === "write" || name === "edit" || name === "apply_patch";
+}
+
+/**
+ * The argument the tool acts on, the primary key with the fallback key
+ * beside it, held the way the named target reads it.
+ */
+function stringArgPair(
+	args: Record<string, unknown>,
+	primary: string,
+	fallback: string,
+): string | null {
+	if (typeof args[primary] !== "string" && typeof args[fallback] !== "string") return null;
+	return String(args[primary] ?? args[fallback]);
 }
 
 /** The agent's final text of a turn log, for the trace's last message. */

@@ -251,24 +251,35 @@ export function spanColors(setup: Setup, text: string): [number, number, number]
 		for (;;) {
 			const at = full.indexOf(text, from);
 			if (at < 0) break;
-			let spanStart = 0;
-			for (const span of line.spans) {
-				const spanEnd = spanStart + span.text.length;
-				const overlaps = spanEnd > at && spanStart < at + text.length;
-				if (overlaps) {
-					const [r, g, b] = span.fg.toInts();
-					const key = `${r},${g},${b}`;
-					if (!seen.has(key)) {
-						seen.add(key);
-						order.push([r, g, b]);
-					}
-				}
-				spanStart = spanEnd;
-			}
+			occurrenceColors(line, at, text.length, { order, seen });
 			from = at + text.length;
 		}
 	}
 	return order;
+}
+
+/** The colors one occurrence's overlapping spans paint, in first-paint order. */
+function occurrenceColors(
+	line: { spans: { text: string; fg: { toInts: () => readonly number[] } }[] },
+	at: number,
+	length: number,
+	fields: { order: [number, number, number][]; seen: Set<string> },
+): void {
+	const { order, seen } = fields;
+	let spanStart = 0;
+	for (const span of line.spans) {
+		const spanEnd = spanStart + span.text.length;
+		const overlaps = spanEnd > at && spanStart < at + length;
+		if (overlaps) {
+			const [r, g, b] = span.fg.toInts();
+			const key = `${r},${g},${b}`;
+			if (!seen.has(key)) {
+				seen.add(key);
+				order.push([r, g, b]);
+			}
+		}
+		spanStart = spanEnd;
+	}
 }
 
 /** A `#rrggbb` color as the `[r, g, b]` triplet `spanColors` reports. */

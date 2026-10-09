@@ -103,6 +103,31 @@ const contentOf = (row: string): string =>
 		.replace(/\s+/g, " ")
 		.trim();
 
+/** The windows one guide walk shows, from the top to the real bottom. */
+async function guideWindows(
+	width: number,
+	frame: string,
+	rangeOf: (frame: string) => { top: number; end: number; total: number } | undefined,
+	stepDown: (from: { top: number; end: number; total: number }) => Promise<string>,
+): Promise<string[]> {
+	const windows: string[] = [];
+	for (;;) {
+		windows.push(
+			rowsOf(frame)
+				.map((row) => contentOf(row).replace(/\s+/g, ""))
+				.join(""),
+		);
+		const range = rangeOf(frame);
+		if (range === undefined) throw new Error(`the guide's bar holds no range at ${width} columns`);
+		// One step down; the bottom window holds the last rows,
+		// so the range holds on the next step and the walk ends
+		// instead of spinning on the last row.
+		if (range.top > range.total - (range.end - range.top + 1)) break;
+		frame = await stepDown(range);
+	}
+	return windows;
+}
+
 /** The guide's own range indicator, or undefined when the bar holds no range. */
 const guideRangeOf = (frame: string): { top: number; total: number } | undefined => {
 	const match = actionBarRowOf(frame).match(/(\d+)-(\d+)\/(\d+)/);
@@ -692,23 +717,8 @@ describe("the in-app Key guide", () => {
 					// the walk shows is read. The cells of each window, not its
 					// lines, are compared: a narrow guide breaks a long word
 					// across rows, and every cell of a reason must still be there.
-					let frame = await settle(setup);
-					const windows: string[] = [];
-					for (;;) {
-						windows.push(
-							rowsOf(frame)
-								.map((row) => contentOf(row).replace(/\s+/g, ""))
-								.join(""),
-						);
-						const range = rangeOf(frame);
-						if (range === undefined)
-							throw new Error(`the guide's bar holds no range at ${width} columns`);
-						// One step down; the bottom window holds the last rows,
-						// so the range holds on the next step and the walk ends
-						// instead of spinning on the last row.
-						if (range.top > range.total - (range.end - range.top + 1)) break;
-						frame = await stepDown(range);
-					}
+					const frame = await settle(setup);
+					const windows = await guideWindows(width, frame, rangeOf, stepDown);
 					// The windows meet at their rows, so a reason that stands in
 					// no single window can never read as whole: the "|" keeps the
 					// windows apart in the joined text.

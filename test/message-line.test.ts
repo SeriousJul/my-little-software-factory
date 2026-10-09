@@ -764,6 +764,14 @@ describe("the permanent Message line", () => {
 		);
 	});
 
+	/** The Close hint one bar of this width must name, or none when no key fits. */
+	function closeBarWord(width: number): string {
+		if (width >= 12) return "Esc/F2 Close";
+		if (width >= 3) return "Esc";
+		if (width === 2) return "F2";
+		return "";
+	}
+
 	test("its bar names the Close control down to one whole key", async () => {
 		const runner = new FakeRunner();
 		stubCheckout(runner);
@@ -785,10 +793,9 @@ describe("the permanent Message line", () => {
 					const rows = rowsOf(await settle(setup));
 					for (const row of rows) expect(widthOf(row)).toBe(width);
 					const bar = barRowOf(rows);
-					if (width >= 12) expect(bar).toContain("Esc/F2 Close");
-					else if (width >= 3) expect(bar).toContain("Esc");
-					else if (width === 2) expect(bar).toContain("F2");
-					else expect(bar).toBe("");
+					const word = closeBarWord(width);
+					if (word === "") expect(bar).toBe("");
+					else expect(bar).toContain(word);
 				}
 				// The row is the surface's own again at a usable width.
 				setup.resize(30, 8);

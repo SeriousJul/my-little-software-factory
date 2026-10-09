@@ -47,12 +47,22 @@ export function translateAgentKey(
 		return null;
 	// AltGr is reported as Meta by some layouts but still carries literal
 	// Unicode text. Preserve that text instead of turning it into a US key.
-	if (key.meta && !key.ctrl && isLiteralText(key.name) && key.name.length > 0)
-		return { kind: "text", text: name === "space" ? " " : key.name };
-	if (key.ctrl || key.meta) {
-		if (name.length === 1 && /[a-z]/.test(name)) return { kind: "key", key: `ctrl+${name}` };
-		return null;
+	if (key.meta && !key.ctrl) {
+		const text = literalTextOf(name, key.name);
+		if (text !== null) return { kind: "text", text };
 	}
+	if (key.ctrl || key.meta) {
+		return singleLetterControlKey(name);
+	}
+	const semantic = semanticKeyName(name);
+	if (semantic !== null) return { kind: "key", key: semantic };
+	const text = literalTextOf(name, key.name);
+	if (text !== null) return { kind: "text", text };
+	return null;
+}
+
+/** The semantic key one outer key name carries, if it carries one. */
+function semanticKeyName(name: string): AgentKeyName | null {
 	const semantic = new Set([
 		"up",
 		"down",
@@ -68,11 +78,20 @@ export function translateAgentKey(
 		"pageup",
 		"pagedown",
 	]);
-	if (semantic.has(name))
-		return { kind: "key", key: (name === "return" ? "enter" : name) as AgentKeyName };
-	if (/^f\d+$/.test(name)) return { kind: "key", key: name as AgentKeyName };
-	if ([...key.name].length > 0 && isLiteralText(key.name))
-		return { kind: "text", text: name === "space" ? " " : key.name };
+	if (semantic.has(name)) return (name === "return" ? "enter" : name) as AgentKeyName;
+	if (/^f\d+$/.test(name)) return name as AgentKeyName;
+	return null;
+}
+
+/** The literal text one outer key name carries, if it carries any. */
+function literalTextOf(name: string, raw: string): string | null {
+	if ([...raw].length > 0 && isLiteralText(raw)) return name === "space" ? " " : raw;
+	return null;
+}
+
+/** The control key one single letter names under Ctrl or Meta, if any. */
+function singleLetterControlKey(name: string): AgentInputEvent | null {
+	if (name.length === 1 && /[a-z]/.test(name)) return { kind: "key", key: `ctrl+${name}` };
 	return null;
 }
 

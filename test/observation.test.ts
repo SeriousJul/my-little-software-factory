@@ -281,6 +281,55 @@ function rig(options: {
 	const cleanups: Rig["cleanups"] = [];
 	// The mode the cycle reads, movable the way the operator's key moves it.
 	let autoOn = options.autoOn ?? false;
+	/** The refusal the seam's start-failure option settles on the state. */
+	const refuseStart = (intent: HandoffIntent): DispatchResult | null => {
+		if (options.startFails === undefined) return null;
+		// The claim the pickup's pass made, and the settle herdr's refusal
+		// wrote on it: an attempt row with no Handoff under it.
+		const claim = state.handoff.claimHandoff(intent.ticketIdentity, intent.choice, intent.origin);
+		if (claim.ok) state.handoff.settleHandoff(claim.claim.attemptId, false, options.startFails);
+		return { ok: false, reason: options.startFails };
+	};
+	/** The route's decision the ask lands on the settled turn's trace. */
+	const recordRouteDecision = (intent: HandoffIntent): void => {
+		// The route's decision lands at the ask (ADR 0064): the module
+		// records it on the settled turn's trace at the enqueue, so the rig
+		// mirrors the fact the walk and the frame read beside the queue.
+		if (intent.origin === "workflow" && intent.routeFromIdentity !== undefined) {
+			const previous = state.handoff.latestHandoff(intent.routeFromIdentity);
+			if (previous !== null)
+				state.ticketWorkCycle.applyCompletionDecision({
+					ticketIdentity: intent.routeFromIdentity,
+					handoffId: previous.handoffId,
+					decision: intent.automatic === true ? "auto-handed-off" : "handed-off",
+					decidedAt: new Date(nowMs).toISOString(),
+				});
+		}
+	};
+	/** The claim the seam's claim-watch option records on the state. */
+	const recordClaim = (intent: HandoffIntent): void => {
+		if (options.dispatchClaims !== true) return;
+		const claim = state.handoff.claimHandoff(intent.ticketIdentity, intent.choice, intent.origin);
+		if (claim.ok) claims.push(claim.claim.attemptId);
+	};
+	/** The outcome one dispatch ask lands in the state, past the seam's refusals. */
+	const dispatchOutcome = (intent: HandoffIntent): DispatchResult => {
+		const refused = refuseStart(intent);
+		if (refused !== null) return refused;
+		const enqueued = state.workQueue.enqueueWork({
+			ticketIdentity: intent.ticketIdentity,
+			routeFromIdentity: intent.routeFromIdentity ?? null,
+			origin: intent.origin,
+			choice: intent.choice,
+			previousMessage: intent.previousMessage,
+			automatic: intent.automatic === true,
+		});
+		if (enqueued.ok !== true) return { ok: false, reason: enqueued.reason };
+		recordRouteDecision(intent);
+		recordClaim(intent);
+		if (intent.onStarted !== undefined) pending.push(intent.onStarted);
+		return { ok: true };
+	};
 	const coordinator = new ObservationCoordinator({
 		state,
 		herdr: reader(probeAgents, options.readPane, options.waitAgent),
@@ -299,49 +348,7 @@ function rig(options: {
 			intents.push(intent);
 			if (options.refuseDispatch !== undefined)
 				return { ok: false, reason: options.refuseDispatch };
-			if (options.startFails !== undefined) {
-				// The claim the pickup's pass made, and the settle herdr's refusal
-				// wrote on it: an attempt row with no Handoff under it.
-				const claim = state.handoff.claimHandoff(
-					intent.ticketIdentity,
-					intent.choice,
-					intent.origin,
-				);
-				if (claim.ok) state.handoff.settleHandoff(claim.claim.attemptId, false, options.startFails);
-				return { ok: false, reason: options.startFails };
-			}
-			const enqueued = state.workQueue.enqueueWork({
-				ticketIdentity: intent.ticketIdentity,
-				routeFromIdentity: intent.routeFromIdentity ?? null,
-				origin: intent.origin,
-				choice: intent.choice,
-				previousMessage: intent.previousMessage,
-				automatic: intent.automatic === true,
-			});
-			if (enqueued.ok !== true) return { ok: false, reason: enqueued.reason };
-			// The route's decision lands at the ask (ADR 0064): the module
-			// records it on the settled turn's trace at the enqueue, so the rig
-			// mirrors the fact the walk and the frame read beside the queue.
-			if (intent.origin === "workflow" && intent.routeFromIdentity !== undefined) {
-				const previous = state.handoff.latestHandoff(intent.routeFromIdentity);
-				if (previous !== null)
-					state.ticketWorkCycle.applyCompletionDecision({
-						ticketIdentity: intent.routeFromIdentity,
-						handoffId: previous.handoffId,
-						decision: intent.automatic === true ? "auto-handed-off" : "handed-off",
-						decidedAt: new Date(nowMs).toISOString(),
-					});
-			}
-			if (options.dispatchClaims) {
-				const claim = state.handoff.claimHandoff(
-					intent.ticketIdentity,
-					intent.choice,
-					intent.origin,
-				);
-				if (claim.ok) claims.push(claim.claim.attemptId);
-			}
-			if (intent.onStarted !== undefined) pending.push(intent.onStarted);
-			return { ok: true };
+			return dispatchOutcome(intent);
 		},
 		// The plane action's ask rides the same rig seam (ADR 0068): the walk's
 		// add lands in the state's queue, the way the handoff's add does.

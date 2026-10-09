@@ -431,24 +431,7 @@ export function groupedRows<T>(
 	grouping: GroupingOf<T>,
 ): readonly ListedRow<T>[] {
 	if (grouping.axis === "none") return items.map((item): ListedRow<T> => ({ kind: "item", item }));
-	interface Running {
-		value: string;
-		items: T[];
-		held: number;
-	}
-	const byValue = new Map<string, Running>();
-	const groups: Running[] = [];
-	for (const item of items) {
-		const value = grouping.keyOf(item);
-		let group = byValue.get(value);
-		if (group === undefined) {
-			group = { value, items: [], held: 0 };
-			byValue.set(value, group);
-			groups.push(group);
-		}
-		group.items.push(item);
-		if (grouping.heldOf(item)) group.held += 1;
-	}
+	const groups = runningGroupsOf(items, grouping);
 	// A Group with no tickets cannot come from the rows, so no stale header
 	// ever stands: the header set is derived from the rows on every read
 	// (story 26, story 64). The order the Groups stand in is the order the axis
@@ -462,27 +445,56 @@ export function groupedRows<T>(
 	const slot = new Map(order.map((value, index) => [value, index]));
 	groups.sort((left, right) => (slot.get(left.value) ?? 0) - (slot.get(right.value) ?? 0));
 	const rows: ListedRow<T>[] = [];
-	for (const group of groups) {
-		const collapsed = grouping.isFolded(group.value);
-		const marker = grouping.groupMarker?.(group.value) ?? null;
-		// One blank row parts a Group from the one above it, and none stands
-		// above the first: the list opens on its header exactly as it did before
-		// the spacing, and every Group keeps the same air at its head.
-		if (rows.length > 0) rows.push({ kind: "gap" });
-		rows.push({
-			kind: "group",
-			group: {
-				value: group.value,
-				count: group.items.length,
-				held: group.held,
-				collapsed,
-				...(marker === null ? {} : { marker }),
-			},
-		});
-		if (collapsed) continue;
-		for (const item of group.items) rows.push({ kind: "item", item });
-	}
+	for (const group of groups) groupRowsOf(rows, group, grouping);
 	return rows;
+}
+
+/** The running groups one flat list accumulates, in first-seen order. */
+function runningGroupsOf<T>(
+	items: readonly T[],
+	grouping: GroupingOf<T>,
+): Array<{ value: string; items: T[]; held: number }> {
+	type Running = { value: string; items: T[]; held: number };
+	const byValue = new Map<string, Running>();
+	const groups: Running[] = [];
+	for (const item of items) {
+		const value = grouping.keyOf(item);
+		let group = byValue.get(value);
+		if (group === undefined) {
+			group = { value, items: [], held: 0 };
+			byValue.set(value, group);
+			groups.push(group);
+		}
+		group.items.push(item);
+		if (grouping.heldOf(item)) group.held += 1;
+	}
+	return groups;
+}
+
+/** The row one Group's run lands in the list's rows. */
+function groupRowsOf<T>(
+	rows: ListedRow<T>[],
+	group: { value: string; items: T[]; held: number },
+	grouping: GroupingOf<T>,
+): void {
+	const collapsed = grouping.isFolded(group.value);
+	const marker = grouping.groupMarker?.(group.value) ?? null;
+	// One blank row parts a Group from the one above it, and none stands
+	// above the first: the list opens on its header exactly as it did before
+	// the spacing, and every Group keeps the same air at its head.
+	if (rows.length > 0) rows.push({ kind: "gap" });
+	rows.push({
+		kind: "group",
+		group: {
+			value: group.value,
+			count: group.items.length,
+			held: group.held,
+			collapsed,
+			...(marker === null ? {} : { marker }),
+		},
+	});
+	if (collapsed) return;
+	for (const item of group.items) rows.push({ kind: "item", item });
 }
 
 /**

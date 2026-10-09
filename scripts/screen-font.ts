@@ -161,40 +161,60 @@ function rasterize(segs: Seg[], cellW: number, cellH: number): Uint8Array {
 	const coverage = new Float32Array(gridW * gridH);
 	for (let gy = 0; gy < gridH; gy++) {
 		const y = (gy + 0.5) / SS;
-		const edges: { x: number; dir: number }[] = [];
-		for (const s of segs) {
-			const y0 = s.y0;
-			const y1 = s.y1;
-			if (y0 === y1) continue;
-			const below = Math.min(y0, y1);
-			const above = Math.max(y0, y1);
-			if (y <= below || y >= above) continue;
-			const t = (y - y0) / (y1 - y0);
-			edges.push({ x: s.x0 + t * (s.x1 - s.x0), dir: y1 > y0 ? 1 : -1 });
-		}
-		edges.sort((a, b) => a.x - b.x);
-		let winding = 0;
-		let e = 0;
-		for (let gx = 0; gx < gridW; gx++) {
-			const x = (gx + 0.5) / SS;
-			while (e < edges.length && edges[e].x <= x) {
-				winding += edges[e].dir;
-				e += 1;
-			}
-			coverage[gy * gridW + gx] = winding !== 0 ? 1 : 0;
-		}
+		scanlineRow(scanlineEdges(segs, y), gridW, coverage, gy);
 	}
 	// Reduce the supersample grid to one byte per cell pixel.
 	const out = new Uint8Array(cellW * cellH);
 	for (let y = 0; y < cellH; y++) {
 		for (let x = 0; x < cellW; x++) {
-			let sum = 0;
-			for (let sy = 0; sy < SS; sy++)
-				for (let sx = 0; sx < SS; sx++) sum += coverage[(y * SS + sy) * gridW + (x * SS + sx)];
-			out[y * cellW + x] = Math.round((sum / (SS * SS)) * 255);
+			out[y * cellW + x] = reduceSupersample(coverage, gridW, y, x);
 		}
 	}
 	return out;
+}
+
+/** The edges one scanline at `y` crosses, with their winding directions. */
+function scanlineEdges(segs: Seg[], y: number): { x: number; dir: number }[] {
+	const edges: { x: number; dir: number }[] = [];
+	for (const s of segs) {
+		const y0 = s.y0;
+		const y1 = s.y1;
+		if (y0 === y1) continue;
+		const below = Math.min(y0, y1);
+		const above = Math.max(y0, y1);
+		if (y <= below || y >= above) continue;
+		const t = (y - y0) / (y1 - y0);
+		edges.push({ x: s.x0 + t * (s.x1 - s.x0), dir: y1 > y0 ? 1 : -1 });
+	}
+	return edges;
+}
+
+/** The winding row one scanline's edges lay across the grid. */
+function scanlineRow(
+	edges: { x: number; dir: number }[],
+	gridW: number,
+	coverage: Float32Array,
+	gy: number,
+): void {
+	edges.sort((a, b) => a.x - b.x);
+	let winding = 0;
+	let e = 0;
+	for (let gx = 0; gx < gridW; gx++) {
+		const x = (gx + 0.5) / SS;
+		while (e < edges.length && edges[e].x <= x) {
+			winding += edges[e].dir;
+			e += 1;
+		}
+		coverage[gy * gridW + gx] = winding !== 0 ? 1 : 0;
+	}
+}
+
+/** The one cell one supersample block reduces to. */
+function reduceSupersample(coverage: Float32Array, gridW: number, y: number, x: number): number {
+	let sum = 0;
+	for (let sy = 0; sy < SS; sy++)
+		for (let sx = 0; sx < SS; sx++) sum += coverage[(y * SS + sy) * gridW + (x * SS + sx)];
+	return Math.round((sum / (SS * SS)) * 255);
 }
 
 /** The rasterized coverage, keyed by face and code point. */

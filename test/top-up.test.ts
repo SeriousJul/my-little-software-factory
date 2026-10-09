@@ -270,6 +270,16 @@ describe("each automatic-walk hold names itself in the record (issue #223)", () 
 	});
 
 	test("the rule answers only reasons the words cover", () => {
+		freshWorkHoldWords();
+		// The per-candidate gates answer only the candidate's own words (issue #231):
+		// a gate that answers a word outside the set names a fact the words do not
+		// cover, and a word the set holds that no gate answers is wording nothing
+		// writes.
+		candidateGateWords();
+	});
+
+	/** The word one fresh-work hold answers must have. */
+	function freshWorkHoldWords(): void {
 		for (const facts of [
 			cycle({ modeOn: false }),
 			cycle({ queuePaused: true }),
@@ -280,10 +290,10 @@ describe("each automatic-walk hold names itself in the record (issue #223)", () 
 			if (hold === null) throw new Error("the gate holds nothing for these facts");
 			expect(AUTOMATIC_HOLD_LINES[hold.reason]).not.toBeUndefined();
 		}
-		// The per-candidate gates answer only the candidate's own words (issue #231):
-		// a gate that answers a word outside the set names a fact the words do not
-		// cover, and a word the set holds that no gate answers is wording nothing
-		// writes.
+	}
+
+	/** The word one per-candidate gate answers must have. */
+	function candidateGateWords(): void {
 		const candidateWords = new Set<string>([...AUTOMATIC_CANDIDATE_HOLD_REASONS, ""]);
 		const restartGates: readonly RestartCandidateGate[] =
 			restartAnswers().map(restartCandidateGate);
@@ -293,7 +303,7 @@ describe("each automatic-walk hold names itself in the record (issue #223)", () 
 			if (!gate.stands) expect(candidateWords.has(gate.hold ?? "")).toBe(true);
 		for (const word of waitAnswers().map(openTicketWaitsHold))
 			expect(candidateWords.has(word ?? "")).toBe(true);
-	});
+	}
 
 	/**
 	 * The row the walk waits behind is part of the line (issue #223 review). A run

@@ -473,54 +473,63 @@ export async function loadConfigFile(path: string): Promise<LoadedConfig> {
 	} catch (error) {
 		throw new ConfigError(`cannot read ${path}: ${String(error)}`);
 	}
-	let note: string | undefined;
 	let data: unknown;
 	try {
 		data = parse(text);
 	} catch (error) {
 		throw new ConfigError(`invalid TOML in ${path}: ${readableParseError(error)}`);
 	}
-	if (hasOldWorkflowMachineKeys(data)) {
-		try {
-			// The mode the operator's file carries is the mode the migration
-			// leaves behind, on the backup and the report as much as on the
-			// config: a 0600 file stays 0600 through the rewrite.
-			const mode = (await stat(path)).mode;
-			const shippedText = await readShippedDefaultConfigText();
-			const migration = migrateWorkflowMachineConfig(
-				path,
-				data as Record<string, unknown>,
-				shippedText,
-			);
-			// The migrated text must validate before the migration writes
-			// anything: a broken migration stops the plane with the file
-			// unchanged and the reason named.
-			validateConfig(parse(migration.configText));
-			await writeMigrationFiles(path, text, migration, mode);
-			note = migration.noteText;
-			text = migration.configText;
-		} catch (error) {
-			if (error instanceof ConfigError || error instanceof ConfigMigrationError) {
-				throw new ConfigError(
-					`config migration failed for ${path}: ${error instanceof ConfigMigrationError ? error.message : String(error.message)}; the config was not changed`,
-				);
-			}
-			throw error;
-		}
-	}
+	const migrated = await migrateIfPresent(path, data, text);
 	try {
-		const config = validateConfig(parse(text));
+		const config = validateConfig(parse(migrated.text));
 		return {
 			config,
 			fromFile: true,
 			...(seeded ? { seeded: true } : {}),
-			...(note === undefined ? {} : { note }),
+			...(migrated.note === undefined ? {} : { note: migrated.note }),
 		};
 	} catch (error) {
 		if (error instanceof ConfigError) {
 			throw error;
 		}
 		throw new ConfigError(`invalid TOML in ${path}: ${readableParseError(error)}`);
+	}
+}
+
+/**
+ * The text and note a load carries through the old-workflow-machine
+ * migration, or the load's own text when the file holds no old keys.
+ *
+ * The mode the operator's file carries is the mode the migration leaves
+ * behind, on the backup and the report as much as on the config: a 0600 file
+ * stays 0600 through the rewrite. The migrated text must validate before the
+ * migration writes anything: a broken migration stops the plane with the file
+ * unchanged and the reason named.
+ */
+async function migrateIfPresent(
+	path: string,
+	data: unknown,
+	text: string,
+): Promise<{ text: string; note?: string }> {
+	if (!hasOldWorkflowMachineKeys(data)) return { text };
+	try {
+		const mode = (await stat(path)).mode;
+		const shippedText = await readShippedDefaultConfigText();
+		const migration = migrateWorkflowMachineConfig(
+			path,
+			data as Record<string, unknown>,
+			shippedText,
+		);
+		validateConfig(parse(migration.configText));
+		await writeMigrationFiles(path, text, migration, mode);
+		return { text: migration.configText, note: migration.noteText };
+	} catch (error) {
+		if (error instanceof ConfigError || error instanceof ConfigMigrationError) {
+			throw new ConfigError(
+				`config migration failed for ${path}: ${error instanceof ConfigMigrationError ? error.message : String(error.message)}; the config was not changed`,
+			);
+		}
+		throw error;
 	}
 }
 
@@ -840,39 +849,57 @@ function validateAgents(value: unknown): Record<string, AgentTypeConfig> {
 		throw new ConfigError("config: at least one agent is required under [agents]");
 	const out: Record<string, AgentTypeConfig> = {};
 	for (const [name, raw] of Object.entries(agents)) {
-		if (!isRecord(raw)) throw new ConfigError(`config: agents.${name}: must be a table`);
-		const agent: AgentTypeConfig = { kind: stringField(raw, "kind", `agents.${name}`) };
-		const model = optionalStringField(raw, "model", `agents.${name}`);
-		const thinking = optionalStringField(raw, "thinking", `agents.${name}`);
-		const contextWindow = optionalStringField(raw, "context-window", `agents.${name}`);
-		if (model !== undefined) agent.model = settingTemplate(model, `agents.${name}.model`);
-		if (thinking !== undefined)
-			agent.thinking = settingTemplate(thinking, `agents.${name}.thinking`);
-		if (contextWindow !== undefined)
-			agent.contextWindow = settingTemplate(contextWindow, `agents.${name}.context-window`);
-		if ("thinking-values" in raw) {
-			agent.thinkingValues = validateThinkingValues(raw["thinking-values"], name);
-		}
-		if (agent.thinking !== undefined && agent.thinkingValues === undefined) {
-			// Free-text thinking is retired: the panel offers, and the fit check
-			// tests against, the levels the agent declares.
-			throw new ConfigError(
-				`config: agents.${name}.thinking-values: an agent that maps thinking must declare the levels it supports (${thinkingLevelList()})`,
-			);
-		}
-		if (agent.thinking === undefined && agent.thinkingValues !== undefined) {
-			throw new ConfigError(
-				`config: agents.${name}.thinking-values: the agent maps no thinking setting, so it has no levels to declare`,
-			);
-		}
-		for (const key of Object.keys(raw)) {
-			if (!new Set(["kind", "model", "thinking", "thinking-values", "context-window"]).has(key)) {
-				throw new ConfigError(`config: agents.${name}: unknown key "${key}"`);
-			}
-		}
-		out[name] = agent;
+		out[name] = validateAgentEntry(name, raw);
 	}
 	return out;
+}
+
+/** One agent block, validated on its own keys, its fit, and its pairing. */
+function validateAgentEntry(name: string, raw: unknown): AgentTypeConfig {
+	const where = `agents.${name}`;
+	if (!isRecord(raw)) throw new ConfigError(`config: ${where}: must be a table`);
+	const agent: AgentTypeConfig = { kind: stringField(raw, "kind", where) };
+	const model = optionalStringField(raw, "model", where);
+	const thinking = optionalStringField(raw, "thinking", where);
+	const contextWindow = optionalStringField(raw, "context-window", where);
+	if (model !== undefined) agent.model = settingTemplate(model, `${where}.model`);
+	if (thinking !== undefined) agent.thinking = settingTemplate(thinking, `${where}.thinking`);
+	if (contextWindow !== undefined)
+		agent.contextWindow = settingTemplate(contextWindow, `${where}.context-window`);
+	if ("thinking-values" in raw) {
+		agent.thinkingValues = validateThinkingValues(raw["thinking-values"], name);
+	}
+	checkThinkingPairing(agent, name);
+	checkAgentKeys(raw, name);
+	return agent;
+}
+
+/**
+ * The pairing an agent's thinking setting and declared levels must hold.
+ *
+ * Free-text thinking is retired: the panel offers, and the fit check tests
+ * against, the levels the agent declares, so a setting without levels and
+ * levels without a setting are both config errors.
+ */
+function checkThinkingPairing(agent: AgentTypeConfig, name: string): void {
+	if (agent.thinking !== undefined && agent.thinkingValues === undefined) {
+		throw new ConfigError(
+			`config: agents.${name}.thinking-values: an agent that maps thinking must declare the levels it supports (${thinkingLevelList()})`,
+		);
+	}
+	if (agent.thinking === undefined && agent.thinkingValues !== undefined) {
+		throw new ConfigError(
+			`config: agents.${name}.thinking-values: the agent maps no thinking setting, so it has no levels to declare`,
+		);
+	}
+}
+
+/** The keys an agent block may carry, in the form the config names them. */
+function checkAgentKeys(raw: Record<string, unknown>, name: string): void {
+	const keys = new Set(["kind", "model", "thinking", "thinking-values", "context-window"]);
+	for (const key of Object.keys(raw)) {
+		if (!keys.has(key)) throw new ConfigError(`config: agents.${name}: unknown key "${key}"`);
+	}
 }
 
 /**
@@ -934,24 +961,40 @@ function tokenizeSearchFilter(filter: string): { tokens: string[]; quotesOpen: b
 	let current = "";
 	let quote: string | undefined;
 	for (const char of filter) {
-		if (quote === undefined) {
-			if (char === '"' || char === "'") {
-				quote = char;
-				current += char;
-				continue;
-			}
-			if (/\s/.test(char)) {
-				if (current !== "") tokens.push(current);
-				current = "";
-				continue;
-			}
-		} else if (char === quote) {
-			quote = undefined;
-		}
-		current += char;
+		const step = stepToken(char, quote, current);
+		quote = step.quote;
+		current = step.current;
+		tokens.push(...step.flushed);
 	}
 	if (current !== "") tokens.push(current);
 	return { tokens, quotesOpen: quote !== undefined };
+}
+
+/**
+ * The one character the token walk takes: the quote it leaves open, the text
+ * it holds, and the tokens the character flushes.
+ */
+function stepToken(
+	char: string,
+	quote: string | undefined,
+	current: string,
+): { quote: string | undefined; current: string; flushed: string[] } {
+	if (quote === undefined) {
+		if (char === '"' || char === "'") {
+			return { quote: char, current: current + char, flushed: [] };
+		}
+		if (/\s/.test(char)) {
+			return {
+				quote: undefined,
+				current: "",
+				flushed: current === "" ? [] : [current],
+			};
+		}
+	}
+	if (quote !== undefined && char === quote) {
+		return { quote: undefined, current: current + char, flushed: [] };
+	}
+	return { quote, current: current + char, flushed: [] };
 }
 
 const PROMPT_PLACEHOLDERS = [
@@ -1183,52 +1226,83 @@ function validateConsultationTypes(
 	const types = tableField(value === undefined ? {} : value, "consultation-types");
 	const out: Record<string, ConsultationTypeConfig> = {};
 	for (const [name, raw] of Object.entries(types)) {
-		if (/\s/.test(name) || name === "")
-			throw new ConfigError(`config: consultation-types.${name}: must be a one-word name`);
-		if (!isRecord(raw))
-			throw new ConfigError(`config: consultation-types.${name}: must be a table`);
-		for (const key of Object.keys(raw))
-			if (
-				!["agent", "environment", "template", "model", "thinking", "context-window"].includes(key)
-			)
-				throw new ConfigError(`config: consultation-types.${name}: unknown key "${key}"`);
-		const where = `consultation-types.${name}`;
-		const agentName = stringField(raw, "agent", where);
-		const agentConfig = agents[agentName];
-		if (agentConfig === undefined)
-			throw new ConfigError(`${where}.agent: unknown agent "${agentName}"`);
-		const agent: ResolvedAgentType = { agentType: agentName, agent: agentConfig };
-		// A type that names no environment starts in an isolated worktree, not
-		// in the operator's live checkout.
-		const environment =
-			raw.environment === undefined ? "worktree" : stringField(raw, "environment", where);
-		if (!(HANDOFF_ENVIRONMENT_KINDS as readonly string[]).includes(environment))
-			throw new ConfigError(
-				`${where}.environment: must be one of: ${HANDOFF_ENVIRONMENT_KINDS.join(", ")}`,
-			);
-		const template = stringField(raw, "template", where);
-		validateConsultationTemplate(template, `${where}.template`);
-		const model = optionalStringField(raw, "model", where);
-		if (model !== undefined) {
-			const verdict = modelSettingFit(agent, model);
-			if (!verdict.ok) throw new ConfigError(`${where}.model: ${verdict.reason}`);
-		}
-		const thinking = validateThinkingLevel(
-			raw.thinking === undefined ? undefined : stringField(raw, "thinking", where),
-			agent,
-			`${where}.thinking`,
-		);
-		const contextWindow = tokenCountField(raw, "context-window", where, agent);
-		out[name] = {
-			agent: agentName,
-			environment: environment as EnvironmentKind,
-			template,
-			...(model === undefined ? {} : { model }),
-			...(thinking === undefined ? {} : { thinking }),
-			...(contextWindow === undefined ? {} : { contextWindow }),
-		};
+		out[name] = validateConsultationType(name, raw, agents);
 	}
 	return out;
+}
+
+/** One Consultation type block, validated on its own keys and fit. */
+function validateConsultationType(
+	name: string,
+	raw: unknown,
+	agents: Record<string, AgentTypeConfig>,
+): ConsultationTypeConfig {
+	if (/\s/.test(name) || name === "")
+		throw new ConfigError(`config: consultation-types.${name}: must be a one-word name`);
+	if (!isRecord(raw)) throw new ConfigError(`config: consultation-types.${name}: must be a table`);
+	checkConsultationKeys(raw, name);
+	const where = `consultation-types.${name}`;
+	const agentName = stringField(raw, "agent", where);
+	const agentConfig = agents[agentName];
+	if (agentConfig === undefined)
+		throw new ConfigError(`${where}.agent: unknown agent "${agentName}"`);
+	const agent: ResolvedAgentType = { agentType: agentName, agent: agentConfig };
+	const environment = consultEnvironmentOf(raw, where);
+	const template = stringField(raw, "template", where);
+	validateConsultationTemplate(template, `${where}.template`);
+	const model = consultModelOf(raw, where, agent);
+	const thinking = validateThinkingLevel(
+		raw.thinking === undefined ? undefined : stringField(raw, "thinking", where),
+		agent,
+		`${where}.thinking`,
+	);
+	const contextWindow = tokenCountField(raw, "context-window", where, agent);
+	return {
+		agent: agentName,
+		environment,
+		template,
+		...(model === undefined ? {} : { model }),
+		...(thinking === undefined ? {} : { thinking }),
+		...(contextWindow === undefined ? {} : { contextWindow }),
+	};
+}
+
+/** The keys a Consultation type block may carry, in the form the config names them. */
+function checkConsultationKeys(raw: Record<string, unknown>, name: string): void {
+	const keys = ["agent", "environment", "template", "model", "thinking", "context-window"];
+	for (const key of Object.keys(raw)) {
+		if (!keys.includes(key))
+			throw new ConfigError(`config: consultation-types.${name}: unknown key "${key}"`);
+	}
+}
+
+/**
+ * The environment a Consultation type starts in.
+ *
+ * A type that names no environment starts in an isolated worktree, not in
+ * the operator's live checkout.
+ */
+function consultEnvironmentOf(raw: Record<string, unknown>, where: string): EnvironmentKind {
+	const environment =
+		raw.environment === undefined ? "worktree" : stringField(raw, "environment", where);
+	if (!(HANDOFF_ENVIRONMENT_KINDS as readonly string[]).includes(environment))
+		throw new ConfigError(
+			`${where}.environment: must be one of: ${HANDOFF_ENVIRONMENT_KINDS.join(", ")}`,
+		);
+	return environment as EnvironmentKind;
+}
+
+/** The model a Consultation type maps, fit-checked against its agent. */
+function consultModelOf(
+	raw: Record<string, unknown>,
+	where: string,
+	agent: ResolvedAgentType,
+): string | undefined {
+	const model = optionalStringField(raw, "model", where);
+	if (model === undefined) return undefined;
+	const verdict = modelSettingFit(agent, model);
+	if (!verdict.ok) throw new ConfigError(`${where}.model: ${verdict.reason}`);
+	return model;
 }
 
 /** Consultation templates have one input slot and no silent placeholders. */
@@ -1281,26 +1355,34 @@ function validateWorkflowStates(
 	if (!Array.isArray(value))
 		throw new ConfigError("config: states: must be a list of [[states]] tables");
 	const names = new Set<string>();
-	return value.map((raw, index) => {
-		const where = `states[${index}]`;
-		if (!isRecord(raw)) throw new ConfigError(`config: ${where}: must be a table`);
-		for (const key of Object.keys(raw))
-			if (!new Set(["name", "match", "task-type"]).has(key))
-				throw new ConfigError(`config: ${where}: unknown key "${key}"`);
-		const name = stringField(raw, "name", where);
-		if (names.has(name)) throw new ConfigError(`config: duplicate state name "${name}"`);
-		names.add(name);
-		if (!isRecord(raw.match))
-			throw new ConfigError(`config: ${where}.match: must be a [states.match] table`);
-		const match = validateStateMatch(raw.match, where);
-		let taskType: string | undefined;
-		if (raw["task-type"] !== undefined) {
-			taskType = stringField(raw, "task-type", where);
-			if (!(taskType in taskTypes))
-				throw new ConfigError(`config: ${where}.task-type: unknown task type "${taskType}"`);
-		}
-		return { name, match, ...(taskType === undefined ? {} : { taskType }) };
-	});
+	return value.map((raw, index) => validateWorkflowState(raw, index, names, taskTypes));
+}
+
+/** One workflow State table, validated against the names and types it names. */
+function validateWorkflowState(
+	raw: unknown,
+	index: number,
+	names: Set<string>,
+	taskTypes: Record<string, TaskTypeConfig>,
+): WorkflowState {
+	const where = `states[${index}]`;
+	if (!isRecord(raw)) throw new ConfigError(`config: ${where}: must be a table`);
+	const keys = new Set(["name", "match", "task-type"]);
+	for (const key of Object.keys(raw))
+		if (!keys.has(key)) throw new ConfigError(`config: ${where}: unknown key "${key}"`);
+	const name = stringField(raw, "name", where);
+	if (names.has(name)) throw new ConfigError(`config: duplicate state name "${name}"`);
+	names.add(name);
+	if (!isRecord(raw.match))
+		throw new ConfigError(`config: ${where}.match: must be a [states.match] table`);
+	const match = validateStateMatch(raw.match, where);
+	let taskType: string | undefined;
+	if (raw["task-type"] !== undefined) {
+		taskType = stringField(raw, "task-type", where);
+		if (!(taskType in taskTypes))
+			throw new ConfigError(`config: ${where}.task-type: unknown task type "${taskType}"`);
+	}
+	return { name, match, ...(taskType === undefined ? {} : { taskType }) };
 }
 
 function validateStateMatch(raw: Record<string, unknown>, where: string): StateMatch {
@@ -1443,18 +1525,30 @@ function parseTransitionPins(
 	agents: Record<string, AgentTypeConfig>,
 	where: string,
 ): { agent: string | undefined; environment: EnvironmentKind | undefined } {
+	return transitionPins(value, agents, `${where}.transition`);
+}
+
+/**
+ * The agent and environment pins a transition or one of its branches holds,
+ * each validated against the config's agents and environments.
+ */
+function transitionPins(
+	value: Record<string, unknown>,
+	agents: Record<string, AgentTypeConfig>,
+	where: string,
+): { agent: string | undefined; environment: EnvironmentKind | undefined } {
 	let agent: string | undefined;
 	if (value.agent !== undefined) {
-		agent = stringField(value, "agent", `${where}.transition`);
+		agent = stringField(value, "agent", where);
 		if (!(agent in agents))
-			throw new ConfigError(`config: ${where}.transition.agent: unknown agent "${agent}"`);
+			throw new ConfigError(`config: ${where}.agent: unknown agent "${agent}"`);
 	}
 	let environment: EnvironmentKind | undefined;
 	if (value.environment !== undefined) {
-		const kind = stringField(value, "environment", `${where}.transition`);
+		const kind = stringField(value, "environment", where);
 		if (!(HANDOFF_ENVIRONMENT_KINDS as readonly string[]).includes(kind)) {
 			throw new ConfigError(
-				`config: ${where}.transition.environment: must be one of: ${HANDOFF_ENVIRONMENT_KINDS.join(", ")}`,
+				`config: ${where}.environment: must be one of: ${HANDOFF_ENVIRONMENT_KINDS.join(", ")}`,
 			);
 		}
 		environment = kind as EnvironmentKind;
@@ -1505,20 +1599,8 @@ function validateTransitionBranch(fields: {
 	agents: Record<string, AgentTypeConfig>;
 }): TransitionBranch {
 	const { rawBranch, branchWhere, agents } = fields;
-	for (const key of Object.keys(rawBranch)) {
-		if (key === RETIRED_AUTO_ADVANCE_KEY) throw new ConfigError(retiredAutoAdvance(branchWhere));
-		if (!["when", "ticket-facts", "pull-request-facts", "agent", "environment"].includes(key))
-			throw new ConfigError(`config: ${branchWhere}: unknown key "${key}"`);
-	}
-	let when: TransitionJudgment | undefined;
-	if (rawBranch.when !== undefined) {
-		const judgment = stringField(rawBranch, "when", branchWhere);
-		if (!(TRANSITION_JUDGMENTS as readonly string[]).includes(judgment))
-			throw new ConfigError(
-				`config: ${branchWhere}.when: must be one of: ${TRANSITION_JUDGMENTS.join(", ")}`,
-			);
-		when = judgment as TransitionJudgment;
-	}
+	checkBranchKeys(rawBranch, branchWhere);
+	const when = branchWhenOf(rawBranch, branchWhere);
 	const ticketFacts = transitionBranchFactsList({
 		raw: rawBranch,
 		where: branchWhere,
@@ -1529,29 +1611,37 @@ function validateTransitionBranch(fields: {
 		where: branchWhere,
 		key: "pull-request-facts",
 	});
-	let agent: string | undefined;
-	if (rawBranch.agent !== undefined) {
-		agent = stringField(rawBranch, "agent", branchWhere);
-		if (!(agent in agents))
-			throw new ConfigError(`config: ${branchWhere}.agent: unknown agent "${agent}"`);
-	}
-	let environment: EnvironmentKind | undefined;
-	if (rawBranch.environment !== undefined) {
-		const kind = stringField(rawBranch, "environment", branchWhere);
-		if (!(HANDOFF_ENVIRONMENT_KINDS as readonly string[]).includes(kind)) {
-			throw new ConfigError(
-				`config: ${branchWhere}.environment: must be one of: ${HANDOFF_ENVIRONMENT_KINDS.join(", ")}`,
-			);
-		}
-		environment = kind as EnvironmentKind;
-	}
+	const pins = transitionPins(rawBranch, agents, branchWhere);
 	return {
 		...(when === undefined ? {} : { when }),
 		...(ticketFacts === undefined ? {} : { ticketFacts }),
 		...(pullRequestFacts === undefined ? {} : { pullRequestFacts }),
-		...(agent === undefined ? {} : { agent }),
-		...(environment === undefined ? {} : { environment }),
+		...(pins.agent === undefined ? {} : { agent: pins.agent }),
+		...(pins.environment === undefined ? {} : { environment: pins.environment }),
 	};
+}
+
+/** The keys one branch may carry, and the retired key the config refuses. */
+function checkBranchKeys(rawBranch: Record<string, unknown>, branchWhere: string): void {
+	const keys = ["when", "ticket-facts", "pull-request-facts", "agent", "environment"];
+	for (const key of Object.keys(rawBranch)) {
+		if (key === RETIRED_AUTO_ADVANCE_KEY) throw new ConfigError(retiredAutoAdvance(branchWhere));
+		if (!keys.includes(key)) throw new ConfigError(`config: ${branchWhere}: unknown key "${key}"`);
+	}
+}
+
+/** The judgment one branch waits on, or undefined where the branch names none. */
+function branchWhenOf(
+	rawBranch: Record<string, unknown>,
+	branchWhere: string,
+): TransitionJudgment | undefined {
+	if (rawBranch.when === undefined) return undefined;
+	const judgment = stringField(rawBranch, "when", branchWhere);
+	if (!(TRANSITION_JUDGMENTS as readonly string[]).includes(judgment))
+		throw new ConfigError(
+			`config: ${branchWhere}.when: must be one of: ${TRANSITION_JUDGMENTS.join(", ")}`,
+		);
+	return judgment as TransitionJudgment;
 }
 
 /** One branch's fact list, or undefined where the branch names none. */
@@ -1884,24 +1974,24 @@ function agentsToToml(agents: Record<string, AgentTypeConfig>): Record<string, u
 /** The [task-types] table, one block per type, the form it carries. */
 function taskTypesToToml(taskTypes: Record<string, TaskTypeConfig>): Record<string, unknown> {
 	return Object.fromEntries(
-		Object.entries(taskTypes).map(([name, task]) => [
-			name,
-			{
-				...(task.template === undefined ? {} : { template: task.template }),
-				...(task.action === undefined ? {} : { action: task.action }),
-				...(task.method === undefined ? {} : { method: task.method }),
-				...(task.agent === undefined ? {} : { agent: task.agent }),
-				...(task.model === undefined ? {} : { model: task.model }),
-				...(task.thinking === undefined ? {} : { thinking: task.thinking }),
-				...(task.contextWindow === undefined ? {} : { "context-window": task.contextWindow }),
-				...(task.opensPullRequest === undefined
-					? {}
-					: { "opens-pull-request": task.opensPullRequest }),
-				...(task.operatorDecides === undefined ? {} : { "operator-decides": task.operatorDecides }),
-				...(task.transition === undefined ? {} : { transition: transitionToToml(task.transition) }),
-			},
-		]),
+		Object.entries(taskTypes).map(([name, task]) => [name, taskToTomlEntry(task)]),
 	);
+}
+
+/** The one block a task type stands as in the file. */
+function taskToTomlEntry(task: TaskTypeConfig): Record<string, unknown> {
+	return {
+		...(task.template === undefined ? {} : { template: task.template }),
+		...(task.action === undefined ? {} : { action: task.action }),
+		...(task.method === undefined ? {} : { method: task.method }),
+		...(task.agent === undefined ? {} : { agent: task.agent }),
+		...(task.model === undefined ? {} : { model: task.model }),
+		...(task.thinking === undefined ? {} : { thinking: task.thinking }),
+		...(task.contextWindow === undefined ? {} : { "context-window": task.contextWindow }),
+		...(task.opensPullRequest === undefined ? {} : { "opens-pull-request": task.opensPullRequest }),
+		...(task.operatorDecides === undefined ? {} : { "operator-decides": task.operatorDecides }),
+		...(task.transition === undefined ? {} : { transition: transitionToToml(task.transition) }),
+	};
 }
 
 /** The [consultation-types] table, one block per type. */

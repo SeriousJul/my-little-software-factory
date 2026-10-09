@@ -51,27 +51,34 @@ export async function validateConfiguredModels(
 	const warned = new Set<string>();
 	for (const check of checks) {
 		const kind = check.agent.agent.kind;
-		const staticVerdict = modelSettingFit(check.agent, check.value);
-		if (!staticVerdict.ok) {
-			errors.push(`config: ${check.key}: ${staticVerdict.reason}`);
-			continue;
-		}
-
-		const list = lists.get(kind);
-		if (list === undefined) continue;
-		if (!list.ok) {
-			if (!warned.has(kind)) {
-				warned.add(kind);
-				warnings.push(
-					`agent kind "${kind}": its model list is unavailable (${list.reason}), so the configured model values were not checked`,
-				);
-			}
-			continue;
-		}
-		const verdict = settingFit.modelInList(check.agent, check.value, list.models);
-		if (!verdict.ok) errors.push(`config: ${check.key}: ${verdict.reason}`);
+		validateModelCheck(check, lists.get(kind), { kind, errors, warnings, warned });
 	}
 	return { errors, warnings };
+}
+
+/** The verdicts one configured Model value earns: its static fit, then its list fit. */
+function validateModelCheck(
+	check: ModelCheck,
+	list: ModelListResult | undefined,
+	outcome: { kind: string; errors: string[]; warnings: string[]; warned: Set<string> },
+): void {
+	const staticVerdict = modelSettingFit(check.agent, check.value);
+	if (!staticVerdict.ok) {
+		outcome.errors.push(`config: ${check.key}: ${staticVerdict.reason}`);
+		return;
+	}
+	if (list === undefined) return;
+	if (!list.ok) {
+		if (!outcome.warned.has(outcome.kind)) {
+			outcome.warned.add(outcome.kind);
+			outcome.warnings.push(
+				`agent kind "${outcome.kind}": its model list is unavailable (${list.reason}), so the configured model values were not checked`,
+			);
+		}
+		return;
+	}
+	const verdict = settingFit.modelInList(check.agent, check.value, list.models);
+	if (!verdict.ok) outcome.errors.push(`config: ${check.key}: ${verdict.reason}`);
 }
 
 /** Every Model value the config resolves onto a determinate Agent type. */

@@ -1,5 +1,6 @@
 import type { MouseEvent } from "@opentui/core";
 import { createElement } from "@opentui/react";
+import type { ReactElement } from "react";
 import type { AutoHandoffCell } from "../domain/section-facts.ts";
 import { parallelSeatText } from "../parallel.ts";
 import { LAMP_GLYPHS } from "./shared/presentation.ts";
@@ -167,12 +168,8 @@ export function planHeaderRow(
 	// `running` while the brake is down, the unlit lamp and the word `paused`
 	// while it stands. The Auto-handoff lamp follows it one space of room on,
 	// so the two cells stand beside each other without touching.
-	const queue =
-		mode === null
-			? ""
-			: ` ${queuePaused ? LAMP_GLYPHS.off : LAMP_GLYPHS.on} ${queuePaused ? "paused" : "running"} `;
-	const lamp =
-		mode === null ? "" : `${mode.mode === "auto" ? LAMP_GLYPHS.off : LAMP_GLYPHS.on} ${mode.mode}`;
+	const queue = mode === null ? "" : queuePauseCell(queuePaused);
+	const lamp = mode === null ? "" : modeLampCell(mode);
 	const seats = mode === null ? "" : ` ${parallelSeatText(mode.seats, mode.limit)}`;
 	const pause = mode === null || !mode.dispatchPaused ? "" : " held";
 	// The forms the corner can wear, widest first. A part the corner does not
@@ -270,25 +267,19 @@ export function SectionHeader({
 	// machine's own order: the held count and the bell that rings on it come
 	// before the pile and the ledger, so a short row drops the operator's view
 	// fact first and never a decision the operator owes (ADR 0060).
-	const cells: string[] =
-		section === "tickets"
-			? wide
-				? [`open: ${open}`, `running: ${running}`, `awaiting: ${awaiting}`]
-				: [`open ${open}`, `running ${running}`, `awaiting ${awaiting}`]
-			: section === "work"
-				? [wide ? `waiting: ${waiting}` : `waiting ${waiting}`]
-				: wide
-					? [`awaiting response: ${awaitingResponse}`, `recovery: ${recovery}`]
-					: [`awaiting ${awaitingResponse}`, `recovery ${recovery}`];
-	if (section === "tickets") {
-		if (held > 0) cells.push(wide ? `held: ${held}` : `held ${held}`);
-		if (heldBell) cells.push("!!!");
-		if (ignored > 0) cells.push(wide ? `ignored: ${ignored}` : `ignored ${ignored}`);
-		if (muted > 0) cells.push(wide ? `muted: ${muted}` : `muted ${muted}`);
-	} else if (section === "consultations") {
-		if (bell) cells.push("!!!");
-		if (newOutput) cells.push("new output");
-	}
+	const cells = [
+		...sectionCountCells({
+			section,
+			wide,
+			open,
+			running,
+			awaiting,
+			waiting,
+			awaitingResponse,
+			recovery,
+		}),
+		...conditionalCells({ section, wide, held, heldBell, ignored, muted, bell, newOutput }),
+	];
 	const name = section === "tickets" ? "Tickets" : section === "work" ? "Work" : "Consultations";
 	const lead = `${expanded ? "▾" : "▸"} ${name}`;
 	// The ladder the row lays itself out at, measured on the row's own width and
@@ -309,20 +300,8 @@ export function SectionHeader({
 	];
 	// The row paints exactly the parts the plan named, so a part the row had no
 	// room for is absent from the frame, not cut inside it.
-	if (mode !== null && plan.lamp !== "") {
-		// The Queue pause's lamp reads the fact from the standing read it shares
-		// with the key that sets it (issue #319, ADR 0111): the lit lamp in the
-		// running state's color while the brake is down, the unlit lamp in the
-		// error color while it stands, and the written word either way.
-		parts.push(createElement(face, { key: "queue", fg: queuePauseColor(queuePaused) }, plan.queue));
-		parts.push(createElement(face, { key: "lamp", fg: autoHandoffColor(mode.mode) }, plan.lamp));
-		if (plan.seats !== "") {
-			parts.push(createElement(face, { key: "seats", fg: seatColor(mode.overLimit) }, plan.seats));
-		}
-		if (plan.pause !== "") {
-			parts.push(createElement(face, { key: "pause", fg: headerInk }, plan.pause));
-		}
-	}
+	if (mode !== null && plan.lamp !== "")
+		modeCellParts({ parts, face, mode, plan, headerInk, queuePaused });
 	const handleMouse = (event: MouseEvent) => {
 		if (!active) return;
 		if (event.type === "down" && event.button === 0) onToggle(section);
@@ -335,4 +314,93 @@ export function SectionHeader({
 		},
 		createElement("text", { style: { width: "100%", height: 1 }, fg: headerInk }, ...parts),
 	);
+}
+
+/** The Queue pause's cell: the lit or unlit lamp beside its word (issue #319). */
+function queuePauseCell(queuePaused: boolean): string {
+	return ` ${queuePaused ? LAMP_GLYPHS.off : LAMP_GLYPHS.on} ${queuePaused ? "paused" : "running"} `;
+}
+
+/** The one mode's lamp cell: the lit or unlit lamp beside the mode word. */
+function modeLampCell(mode: AutoHandoffCell): string {
+	return `${mode.mode === "auto" ? LAMP_GLYPHS.off : LAMP_GLYPHS.on} ${mode.mode}`;
+}
+
+/** The steady count cells one section reports, in the row's own order. */
+function sectionCountCells(fields: {
+	section: MainSection;
+	wide: boolean;
+	open: number;
+	running: number;
+	awaiting: number;
+	waiting: number;
+	awaitingResponse: number;
+	recovery: number;
+}): string[] {
+	const { section, wide, open, running, awaiting, waiting, awaitingResponse, recovery } = fields;
+	if (section === "tickets")
+		return wide
+			? [`open: ${open}`, `running: ${running}`, `awaiting: ${awaiting}`]
+			: [`open ${open}`, `running ${running}`, `awaiting ${awaiting}`];
+	if (section === "work") return [wide ? `waiting: ${waiting}` : `waiting ${waiting}`];
+	return wide
+		? [`awaiting response: ${awaitingResponse}`, `recovery: ${recovery}`]
+		: [`awaiting ${awaitingResponse}`, `recovery ${recovery}`];
+}
+
+/** The conditional cells one section owes the row, in the machine's own order. */
+function conditionalCells(fields: {
+	section: MainSection;
+	wide: boolean;
+	held: number;
+	heldBell: boolean;
+	ignored: number;
+	muted: number;
+	bell: boolean;
+	newOutput: boolean;
+}): string[] {
+	const { section, wide, held, heldBell, ignored, muted, bell, newOutput } = fields;
+	const cells: string[] = [];
+	if (section === "tickets") {
+		// The held count and the bell that rings on it come before the pile and
+		// the ledger, so a short row drops the operator's view fact first and
+		// never a decision the operator owes (ADR 0060).
+		countCell(cells, wide, held, "held");
+		if (heldBell) cells.push("!!!");
+		countCell(cells, wide, ignored, "ignored");
+		countCell(cells, wide, muted, "muted");
+	} else if (section === "consultations") {
+		if (bell) cells.push("!!!");
+		if (newOutput) cells.push("new output");
+	}
+	return cells;
+}
+
+/** The one count cell one fact owes the row, when it owes one. */
+function countCell(cells: string[], wide: boolean, count: number, word: string): void {
+	if (count > 0) cells.push(wide ? `${word}: ${count}` : `${word} ${count}`);
+}
+
+/** The mode cell parts one row plan names for its corner. */
+function modeCellParts(fields: {
+	parts: ReactElement[];
+	face: string;
+	mode: AutoHandoffCell;
+	plan: HeaderRowPlan;
+	headerInk: string | undefined;
+	queuePaused: boolean;
+}): void {
+	const { parts, face, mode, plan, headerInk, queuePaused } = fields;
+	// The Queue pause's lamp reads the fact from the standing read it shares
+	// with the key that sets it (issue #319, ADR 0111): the lit lamp in the
+	// running state's color while the brake is down, the unlit lamp in the
+	// error color while it stands, and the written word either way.
+	parts.push(createElement(face, { key: "queue", fg: queuePauseColor(queuePaused) }, plan.queue));
+	parts.push(createElement(face, { key: "lamp", fg: autoHandoffColor(mode.mode) }, plan.lamp));
+	if (plan.seats !== "") {
+		parts.push(createElement(face, { key: "seats", fg: seatColor(mode.overLimit) }, plan.seats));
+	}
+	if (plan.pause !== "") {
+		parts.push(createElement(face, { key: "pause", fg: headerInk }, plan.pause));
+	}
 }

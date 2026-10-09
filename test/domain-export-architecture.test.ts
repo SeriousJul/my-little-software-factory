@@ -114,17 +114,7 @@ function importsOf(source: string): Import[] {
 			if (!entry) {
 				continue;
 			}
-			const bits = entry.split(/\s+as\s+/);
-			const exported = (bits[0] ?? "").trim().replace(/^type\s+/, "");
-			const local = (bits[bits.length - 1] ?? "").trim().replace(/^type\s+/, "");
-			if (exported) {
-				names.add(exported);
-			}
-			// `import { a as b }` binds `b`, and the file may read the value
-			// through that name alone.
-			if (bits.length > 1 && local) {
-				names.add(local);
-			}
+			for (const name of importPartNames(entry)) names.add(name);
 		}
 		found.push({ specifier: match[2], names });
 	}
@@ -134,6 +124,23 @@ function importsOf(source: string): Import[] {
 		found.push({ specifier: match[1], names: null });
 	}
 	return found;
+}
+
+/** The names one import clause part asks for, with `type` and `as` resolved. */
+function importPartNames(entry: string): string[] {
+	const names: string[] = [];
+	const bits = entry.split(/\s+as\s+/);
+	const exported = (bits[0] ?? "").trim().replace(/^type\s+/, "");
+	const local = (bits[bits.length - 1] ?? "").trim().replace(/^type\s+/, "");
+	if (exported) {
+		names.push(exported);
+	}
+	// `import { a as b }` binds `b`, and the file may read the value
+	// through that name alone.
+	if (bits.length > 1 && local) {
+		names.push(local);
+	}
+	return names;
 }
 
 /** Whether an import specifier, resolved against its file, names `module`. */
@@ -187,77 +194,103 @@ describe("a domain export is read, or it is not an export", () => {
 
 	test("no domain value export stands unread by the plane and its tests", () => {
 		const offenders: string[] = [];
-		for (const module of domainFiles) {
-			const { src, test, namespace } = readersOf(module);
-			if (namespace) {
-				continue;
-			}
-			for (const exp of exportsOf(readFileSync(module, "utf8"))) {
-				if (!VALUE_KINDS.has(exp.kind)) {
-					continue;
-				}
-				if (!src.has(exp.name) && !test.has(exp.name)) {
-					offenders.push(`${module} :: ${exp.name} (${exp.kind})`);
-				}
-			}
-		}
+		for (const module of domainFiles) offenders.push(...unreadValueOffenders(module));
 		expect(offenders).toEqual([]);
 	});
 
+	/** The domain value exports one module leaves unread by the plane and its tests. */
+	function unreadValueOffenders(module: string): string[] {
+		const offenders: string[] = [];
+		const { src, test, namespace } = readersOf(module);
+		if (namespace) {
+			return offenders;
+		}
+		for (const exp of exportsOf(readFileSync(module, "utf8"))) {
+			if (!VALUE_KINDS.has(exp.kind)) {
+				continue;
+			}
+			if (!src.has(exp.name) && !test.has(exp.name)) {
+				offenders.push(`${module} :: ${exp.name} (${exp.kind})`);
+			}
+		}
+		return offenders;
+	}
+
 	test("no domain export is an alias of another export of its own module", () => {
 		const offenders: string[] = [];
-		for (const module of domainFiles) {
-			const source = readFileSync(module, "utf8");
-			const own = new Set(exportsOf(source).map((exp) => exp.name));
-			for (const exp of exportsOf(source)) {
-				// `export const held = freshWorkHold;` and
-				// `export { freshWorkHold as held };` are one question with two
-				// answers, whatever name either one carries.
-				const valueAlias = new RegExp(
-					`^export\\s+const\\s+${exp.name}\\s*(?::[^=]+)?=\\s*([A-Za-z_$][\\w$]*)\\s*;?$`,
-				).exec(exp.line);
-				if (valueAlias && own.has(valueAlias[1]) && valueAlias[1] !== exp.name) {
-					offenders.push(`${module} :: ${exp.name} aliases ${valueAlias[1]}`);
-				}
-				for (const match of source.matchAll(/^export\s*\{([^}]*)\}/gm)) {
-					for (const part of match[1].split(",")) {
-						const bits = part.trim().split(/\s+as\s+/);
-						if (
-							bits.length === 2 &&
-							bits[0].trim() === exp.name &&
-							own.has(bits[1].trim()) &&
-							bits[0].trim() !== bits[1].trim()
-						) {
-							offenders.push(`${module} :: ${bits[1].trim()} aliases ${bits[0].trim()}`);
-						}
-					}
+		for (const module of domainFiles) offenders.push(...moduleAliasOffenders(module));
+		expect(offenders).toEqual([]);
+	});
+
+	/** The domain exports one module aliases onto its own exports. */
+	function moduleAliasOffenders(module: string): string[] {
+		const offenders: string[] = [];
+		const source = readFileSync(module, "utf8");
+		const own = new Set(exportsOf(source).map((exp) => exp.name));
+		for (const exp of exportsOf(source)) {
+			// `export const held = freshWorkHold;` and
+			// `export { freshWorkHold as held };` are one question with two
+			// answers, whatever name either one carries.
+			const valueAlias = new RegExp(
+				`^export\\s+const\\s+${exp.name}\\s*(?::[^=]+)?=\\s*([A-Za-z_$][\\w$]*)\\s*;?$`,
+			).exec(exp.line);
+			if (valueAlias && own.has(valueAlias[1]) && valueAlias[1] !== exp.name) {
+				offenders.push(`${module} :: ${exp.name} aliases ${valueAlias[1]}`);
+			}
+			reExportAliasOffenders(module, source, own, { name: exp.name, offenders });
+		}
+		return offenders;
+	}
+
+	/** The re-exports one module's braces alias onto its own exports. */
+	function reExportAliasOffenders(
+		module: string,
+		source: string,
+		own: Set<string>,
+		fields: { name: string; offenders: string[] },
+	): void {
+		const { name, offenders } = fields;
+		for (const match of source.matchAll(/^export\s*\{([^}]*)\}/gm)) {
+			for (const part of match[1].split(",")) {
+				const bits = part.trim().split(/\s+as\s+/);
+				if (
+					bits.length === 2 &&
+					bits[0].trim() === name &&
+					own.has(bits[1].trim()) &&
+					bits[0].trim() !== bits[1].trim()
+				) {
+					offenders.push(`${module} :: ${bits[1].trim()} aliases ${bits[0].trim()}`);
 				}
 			}
 		}
-		expect(offenders).toEqual([]);
-	});
+	}
 
 	test("the unread domain types stay the list the check already holds", () => {
 		// The list stands empty since issue #301, so this is the strict form of the
 		// ratchet: a domain type neither side names is refused, and a name written
 		// into the list that has a reader is refused the other way.
 		const unread: string[] = [];
-		for (const module of domainFiles) {
-			const { src, test, namespace } = readersOf(module);
-			if (namespace) {
-				continue;
-			}
-			for (const exp of exportsOf(readFileSync(module, "utf8"))) {
-				if (!TYPE_KINDS.has(exp.kind)) {
-					continue;
-				}
-				if (!src.has(exp.name) && !test.has(exp.name)) {
-					unread.push(`${module} :: ${exp.name} (${exp.kind})`);
-				}
-			}
-		}
+		for (const module of domainFiles) unread.push(...unreadTypeNames(module));
 		expect(unread.sort()).toEqual(UNREAD_TYPE_BASELINE.map((entry) => entry.name).sort());
 	});
+
+	/** The domain type exports one module leaves unread by the plane and its tests. */
+	function unreadTypeNames(module: string): string[] {
+		const unread: string[] = [];
+		const { src, test, namespace } = readersOf(module);
+		if (namespace) {
+			return unread;
+		}
+		for (const exp of exportsOf(readFileSync(module, "utf8"))) {
+			if (!TYPE_KINDS.has(exp.kind)) {
+				continue;
+			}
+			if (!src.has(exp.name) && !test.has(exp.name)) {
+				unread.push(`${module} :: ${exp.name} (${exp.kind})`);
+			}
+		}
+		return unread;
+	}
 
 	test("every baseline entry states the reason it stays exported", () => {
 		// The reason is a field the check reads, not a comment beside the name: an

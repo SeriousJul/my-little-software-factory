@@ -201,58 +201,47 @@ export class StubWorldStore {
 	// set the walk keeps. A repository the world does not know is refused.
 	private answerLabel(args: readonly string[]): Answer {
 		const verb = args[1];
-		if (verb === "list") {
-			// The list takes the repository on the `--repo` flag, the way the
-			// act's read issues it.
-			let repositoryIdentity: string | null = null;
-			for (let i = 2; i < args.length; i += 1) {
-				if (args[i] === "--repo") {
-					if (i + 1 >= args.length) return this.refusal(args, "the repo flag has no value");
-					repositoryIdentity = args[i + 1];
-					i += 1;
-				}
-			}
-			const repository =
-				repositoryIdentity === null ? null : this.repositoryOfIdentity(repositoryIdentity);
-			if (repository === null)
-				return this.refusal(
-					args,
-					`the world does not know the repository: ${repositoryIdentity ?? ""}`,
-				);
-			// The act's read takes `--json name` and parses the array of name
-			// objects, so the answer is the real `gh` JSON shape, not one name per line.
-			return {
-				code: 0,
-				stdout: JSON.stringify((repository.labels ?? []).map((name) => ({ name }))),
-				stderr: "",
-			};
-		}
-		if (verb === "create") {
-			const name = args[2];
-			let repositoryIdentity: string | null = null;
-			for (let i = 3; i < args.length; i += 1) {
-				if (args[i] === "--repo") {
-					if (i + 1 >= args.length) return this.refusal(args, "the repo flag has no value");
-					repositoryIdentity = args[i + 1];
-					i += 1;
-				}
-				// The `-y` flag and any other flag the act passes are accepted and ignored.
-			}
-			if (name === undefined || name === "") return this.refusal(args, "no label name");
-			const repository =
-				repositoryIdentity === null ? null : this.repositoryOfIdentity(repositoryIdentity);
-			if (repository === null)
-				return this.refusal(
-					args,
-					`the world does not know the repository: ${repositoryIdentity ?? ""}`,
-				);
-			if (repository.labels === undefined) repository.labels = [];
-			const labels = repository.labels;
-			if (!labels.some((entry) => entry.toLowerCase() === name.toLowerCase())) labels.push(name);
-			this.save();
-			return { code: 0, stdout: `created ${name}\n`, stderr: "" };
-		}
+		if (verb === "list") return this.labelList(args);
+		if (verb === "create") return this.labelCreate(args);
 		return this.refusal(args, `an unknown label command: ${verb ?? ""}`);
+	}
+
+	private labelList(args: readonly string[]): Answer {
+		// The list takes the repository on the `--repo` flag, the way the
+		// act's read issues it.
+		const flag = repoFlagFrom(args, 2);
+		if (flag.missing) return this.refusal(args, "the repo flag has no value");
+		const repository = flag.identity === null ? null : this.repositoryOfIdentity(flag.identity);
+		if (repository === null)
+			return this.refusal(args, `the world does not know the repository: ${flag.identity ?? ""}`);
+		// The act's read takes `--json name` and parses the array of name
+		// objects, so the answer is the real `gh` JSON shape, not one name per line.
+		return {
+			code: 0,
+			stdout: JSON.stringify((repository.labels ?? []).map((name) => ({ name }))),
+			stderr: "",
+		};
+	}
+
+	private labelCreate(args: readonly string[]): Answer {
+		const name = args[2];
+		const flag = repoFlagFrom(args, 3);
+		if (flag.missing) return this.refusal(args, "the repo flag has no value");
+		// The `-y` flag and any other flag the act passes are accepted and ignored.
+		if (name === undefined || name === "") return this.refusal(args, "no label name");
+		const repository = flag.identity === null ? null : this.repositoryOfIdentity(flag.identity);
+		if (repository === null)
+			return this.refusal(args, `the world does not know the repository: ${flag.identity ?? ""}`);
+		this.addLabelToRepository(repository, name);
+		return { code: 0, stdout: `created ${name}\n`, stderr: "" };
+	}
+
+	/** The label joins the repository's set when it holds it not. */
+	private addLabelToRepository(repository: StubRepository, name: string): void {
+		if (repository.labels === undefined) repository.labels = [];
+		const labels = repository.labels;
+		if (!labels.some((entry) => entry.toLowerCase() === name.toLowerCase())) labels.push(name);
+		this.save();
 	}
 
 	// The auth token: the stub configuration names no auth, so the plane
@@ -275,57 +264,59 @@ export class StubWorldStore {
 	// hostname, the method, the pagination, and the form fields.
 	private answerApi(args: readonly string[]): Answer {
 		const tokens = args.slice(1);
-		let endpoint: string | null = null;
-		let hostname: string | null = null;
-		const fields = new Map<string, string>();
-		for (let i = 0; i < tokens.length; i += 1) {
-			const token = tokens[i];
-			if (token === "--hostname") {
-				if (i + 1 >= tokens.length) return this.refusal(args, "the hostname flag has no value");
-				i += 1;
-				hostname = tokens[i];
-			} else if (token === "--paginate" || token === "--method") {
-				if (token === "--method" && i + 1 >= tokens.length)
-					return this.refusal(args, "the method flag has no value");
-				if (token === "--method") i += 1;
-			} else if (token === "-f") {
-				if (i + 1 >= tokens.length) return this.refusal(args, "the field flag has no value");
-				const value = tokens[i + 1];
-				const cut = value.indexOf("=");
-				if (cut <= 0) return this.refusal(args, `an unreadable field: ${value}`);
-				fields.set(value.slice(0, cut), value.slice(cut + 1));
-				i += 1;
-			} else if (token.startsWith("-")) {
-				return this.refusal(args, `an unknown api flag: ${token}`);
-			} else {
-				if (endpoint !== null) return this.refusal(args, "two endpoints on one call");
-				endpoint = token;
-			}
-		}
-		if (endpoint === null) return this.refusal(args, "no endpoint");
+		const parsed = this.apiParseTokens(tokens, args);
+		if ("code" in parsed) return parsed;
+		const { endpoint, hostname, fields } = parsed;
 		if (hostname !== this.world.host)
 			return this.refusal(args, `a host the world does not serve: ${hostname ?? ""}`);
 		// The query the direct read rides on (ADR 0076): the state and head
 		// filters of the pull request list, read off the endpoint.
+		const query = this.apiParseQuery(endpoint, args);
+		if (!query.ok) return this.refusal(args, `an unreadable query in the endpoint: ${query.pair}`);
+		const path = apiEndpointPath(endpoint);
+		if (path === "graphql") return this.answerSearch(fields, args);
+		if (path.startsWith("repos/")) return this.answerRepo(args, path, fields, query.query);
+		return this.refusal(args, `an endpoint the world does not know: ${path}`);
+	}
+
+	private apiParseTokens(
+		tokens: string[],
+		args: readonly string[],
+	): { endpoint: string; hostname: string | null; fields: Map<string, string> } | Answer {
+		let endpoint: string | null = null;
+		let hostname: string | null = null;
+		const fields = new Map<string, string>();
+		for (let i = 0; i < tokens.length; i += 1) {
+			const step = apiTokenStep(tokens[i], tokens, i, endpoint);
+			if (step.reason !== undefined) return this.refusal(args, step.reason);
+			if (step.endpoint !== undefined) endpoint = step.endpoint;
+			if (step.hostname !== undefined) hostname = step.hostname;
+			if (step.field !== undefined) fields.set(step.field[0], step.field[1]);
+			i += step.advance;
+		}
+		if (endpoint === null) return this.refusal(args, "no endpoint");
+		return { endpoint, hostname, fields };
+	}
+
+	private apiParseQuery(
+		endpoint: string,
+		args: readonly string[],
+	): { ok: true; query: Map<string, string> } | { ok: false; pair: string } {
 		const queryIndex = endpoint.indexOf("?");
-		const path = queryIndex === -1 ? endpoint : endpoint.slice(0, queryIndex);
 		const query = new Map<string, string>();
-		if (queryIndex !== -1) {
-			for (const pair of endpoint.slice(queryIndex + 1).split("&")) {
-				if (pair === "") continue;
-				const equals = pair.indexOf("=");
-				const key = equals === -1 ? pair : pair.slice(0, equals);
-				const value = equals === -1 ? "" : pair.slice(equals + 1);
-				try {
-					query.set(decodeURIComponent(key), decodeURIComponent(value));
-				} catch {
-					return this.refusal(args, `an unreadable query in the endpoint: ${pair}`);
-				}
+		if (queryIndex === -1) return { ok: true, query };
+		for (const pair of endpoint.slice(queryIndex + 1).split("&")) {
+			if (pair === "") continue;
+			const equals = pair.indexOf("=");
+			const key = equals === -1 ? pair : pair.slice(0, equals);
+			const value = equals === -1 ? "" : pair.slice(equals + 1);
+			try {
+				query.set(decodeURIComponent(key), decodeURIComponent(value));
+			} catch {
+				return { ok: false, pair };
 			}
 		}
-		if (path === "graphql") return this.answerSearch(fields, args);
-		if (path.startsWith("repos/")) return this.answerRepo(args, path, fields, query);
-		return this.refusal(args, `an endpoint the world does not know: ${path}`);
+		return { ok: true, query };
 	}
 
 	// The GraphQL search the sources fetch: the fixed document, the search
@@ -364,57 +355,64 @@ export class StubWorldStore {
 	 * world refuses instead of guessing.
 	 */
 	private searchNodes(searchQuery: string): unknown[] | null {
-		let kind: "issue" | "pr" | null = null;
-		let repositoryName: string | null = null;
-		let state: "open" | "closed" | null = null;
-		let draft: boolean | null = null;
-		const required: string[] = [];
-		const excluded: string[] = [];
-		for (const token of searchQuery.split(/\s+/)) {
-			if (token === "") continue;
-			if (token === "is:issue") {
-				if (kind !== null) return null;
-				kind = "issue";
-			} else if (token === "is:pr") {
-				if (kind !== null) return null;
-				kind = "pr";
-			} else if (token === "is:open") state = "open";
-			else if (token === "is:closed") state = "closed";
-			else if (token === "is:draft") draft = true;
-			else if (token === "no:draft") draft = false;
-			else if (token.startsWith("repo:")) repositoryName = token.slice("repo:".length);
-			else if (token.startsWith("-label:")) excluded.push(token.slice("-label:".length));
-			else if (token.startsWith("label:")) required.push(token.slice("label:".length));
-			else return null;
-		}
+		const filters = parseSearchFilters(searchQuery);
+		if (filters === null) return null;
 		const matchLabels = (labels: readonly string[]): boolean => {
 			const lower = labels.map((item) => item.toLowerCase());
 			return (
-				required.every((label) => lower.includes(label.toLowerCase())) &&
-				excluded.every((label) => !lower.includes(label.toLowerCase()))
+				filters.required.every((label) => lower.includes(label.toLowerCase())) &&
+				filters.excluded.every((label) => !lower.includes(label.toLowerCase()))
 			);
 		};
 		const nodes: unknown[] = [];
 		for (const repository of this.world.repositories) {
-			const full = `${this.world.owner}/${repository.name}`.toLowerCase();
-			if (repositoryName !== null && repositoryName.toLowerCase() !== full) continue;
-			if (kind === "issue" || kind === null) {
-				for (const issue of repository.issues) {
-					if (state !== null && issue.state !== state) continue;
-					if (!matchLabels(issue.labels)) continue;
-					nodes.push(this.issueNode(repository, issue));
-				}
-			}
-			if (kind === "pr" || kind === null) {
-				for (const pull of repository.pullRequests) {
-					if (state !== null && pull.state !== state) continue;
-					if (draft !== null && pull.draft !== draft) continue;
-					if (!matchLabels(pull.labels)) continue;
-					nodes.push(this.pullNode(repository, pull));
-				}
-			}
+			nodes.push(...this.searchNodesOf(repository, filters, matchLabels));
 		}
 		return nodes;
+	}
+
+	/** The nodes the filters hold in one repository. */
+	private searchNodesOf(
+		repository: StubRepository,
+		filters: SearchFilters,
+		matchLabels: (labels: readonly string[]) => boolean,
+	): unknown[] {
+		const nodes: unknown[] = [];
+		const full = `${this.world.owner}/${repository.name}`.toLowerCase();
+		if (filters.repositoryName !== null && filters.repositoryName.toLowerCase() !== full)
+			return nodes;
+		if (filters.kind === "issue" || filters.kind === null)
+			this.searchIssuesOf(repository, filters, matchLabels, nodes);
+		if (filters.kind === "pr" || filters.kind === null)
+			this.searchPullsOf(repository, filters, matchLabels, nodes);
+		return nodes;
+	}
+
+	private searchIssuesOf(
+		repository: StubRepository,
+		filters: SearchFilters,
+		matchLabels: (labels: readonly string[]) => boolean,
+		nodes: unknown[],
+	): void {
+		for (const issue of repository.issues) {
+			if (filters.state !== null && issue.state !== filters.state) continue;
+			if (!matchLabels(issue.labels)) continue;
+			nodes.push(this.issueNode(repository, issue));
+		}
+	}
+
+	private searchPullsOf(
+		repository: StubRepository,
+		filters: SearchFilters,
+		matchLabels: (labels: readonly string[]) => boolean,
+		nodes: unknown[],
+	): void {
+		for (const pull of repository.pullRequests) {
+			if (filters.state !== null && pull.state !== filters.state) continue;
+			if (filters.draft !== null && pull.draft !== filters.draft) continue;
+			if (!matchLabels(pull.labels)) continue;
+			nodes.push(this.pullNode(repository, pull));
+		}
 	}
 
 	private issueNode(repository: StubRepository, issue: StubIssue): Record<string, unknown> {
@@ -720,35 +718,19 @@ export class StubWorldStore {
 				};
 		  }
 		| { ok: false; reason: string } {
-		let repositoryIdentity: string | null = null;
-		let head: string | null = null;
-		let draft = false;
-		let title = "";
-		let body = "";
+		const facts: PullCreateFacts = {
+			repositoryIdentity: null,
+			head: null,
+			draft: false,
+			title: "",
+			body: "",
+		};
 		for (let i = 0; i < rest.length; i += 1) {
-			const token = rest[i];
-			if (token === "--repo") {
-				if (i + 1 >= rest.length) return { ok: false, reason: "the repo flag has no value" };
-				repositoryIdentity = rest[i + 1];
-				i += 1;
-			} else if (token === "--head") {
-				if (i + 1 >= rest.length) return { ok: false, reason: "the head flag has no value" };
-				head = rest[i + 1];
-				i += 1;
-			} else if (token === "--draft") {
-				draft = true;
-			} else if (token === "--title") {
-				if (i + 1 >= rest.length) return { ok: false, reason: "the title flag has no value" };
-				title = rest[i + 1];
-				i += 1;
-			} else if (token === "--body") {
-				if (i + 1 >= rest.length) return { ok: false, reason: "the body flag has no value" };
-				body = rest[i + 1];
-				i += 1;
-			} else {
-				return { ok: false, reason: `an unknown create flag: ${token}` };
-			}
+			const step = pullCreateTokenStep(rest, i, facts);
+			if (step.reason !== undefined) return { ok: false, reason: step.reason };
+			i += step.advance;
 		}
+		const { repositoryIdentity, head, title, body, draft } = facts;
 		if (repositoryIdentity === null || head === null || title === "")
 			return { ok: false, reason: "no repository, no head, or no title" };
 		return { ok: true, facts: { repositoryIdentity, head, draft, title, body } };
@@ -860,46 +842,73 @@ export class StubWorldStore {
 		const { number, repositoryIdentity, added, removed } = parsed.facts;
 		if (number === null || repositoryIdentity === null)
 			return this.refusal(rest, "no item or no repository");
-		const repository = this.repositoryOfIdentity(repositoryIdentity);
-		if (repository === null)
-			return {
-				code: 1,
-				stdout: "",
-				stderr: `GraphQL: Could not resolve to ${kind === "pr" ? "a PullRequest" : "an Issue"} with the number of ${number}.\n`,
-			};
-		const item =
-			kind === "issue"
-				? repository.issues.find((entry) => entry.number === number)
-				: repository.pullRequests.find((entry) => entry.number === number);
-		if (item === undefined)
-			return {
-				code: 1,
-				stdout: "",
-				stderr: `GraphQL: Could not resolve to ${kind === "pr" ? "a PullRequest" : "an Issue"} with the number of ${number}.\n`,
-			};
+		const found = this.editItemOf(kind, repositoryIdentity, number);
+		if (found === null) return this.editItemRefusal(kind, number);
 		// A label the repository's set does not hold is refused before any change
 		// (ADR 0075, the init act's label seam): the machine labels the transitions
 		// write stand in the set the init created, so a label the operator has not
 		// made stands nowhere. Where the set is unset the world takes any label, the
 		// way it did before the seam.
+		const labelGate = this.editLabelGate(found.repository, added);
+		if (labelGate !== null) return labelGate;
+		this.applyEditLabels(found.item, added, removed);
+		found.item.updatedAt = now();
+		this.save();
+		return { code: 0, stdout: this.itemUrl(found.repository, kind, number), stderr: "" };
+	}
+
+	/** The item the edit acts on, in its repository, or none. */
+	private editItemOf(
+		kind: "issue" | "pr",
+		repositoryIdentity: string,
+		number: number,
+	): { repository: StubRepository; item: StubIssue | StubPullRequest } | null {
+		const repository = this.repositoryOfIdentity(repositoryIdentity);
+		if (repository === null) return null;
+		const item =
+			kind === "issue"
+				? repository.issues.find((entry) => entry.number === number)
+				: repository.pullRequests.find((entry) => entry.number === number);
+		if (item === undefined) return null;
+		return { repository, item };
+	}
+
+	/** The refusal the edit earns when the repository or the item is missing. */
+	private editItemRefusal(kind: "issue" | "pr", number: number): Answer {
+		return {
+			code: 1,
+			stdout: "",
+			stderr: `GraphQL: Could not resolve to ${kind === "pr" ? "a PullRequest" : "an Issue"} with the number of ${number}.\n`,
+		};
+	}
+
+	/** The refusal one added label earns when the repository's set does not hold it. */
+	private editLabelGate(repository: StubRepository, added: string[]): Answer | null {
 		const labelSet = repository.labels;
-		if (labelSet !== undefined)
-			for (const label of added)
-				if (!labelSet.some((entry) => entry.toLowerCase() === label.toLowerCase()))
-					return {
-						code: 1,
-						stdout: "",
-						stderr: `the repository does not hold the label: ${label}\n`,
-					};
+		if (labelSet === undefined) return null;
+		for (const label of added) {
+			if (!labelSet.some((entry) => entry.toLowerCase() === label.toLowerCase()))
+				return {
+					code: 1,
+					stdout: "",
+					stderr: `the repository does not hold the label: ${label}\n`,
+				};
+		}
+		return null;
+	}
+
+	/** The labels the edit writes on the item: the additions, then the removals. */
+	private applyEditLabels(
+		item: StubIssue | StubPullRequest,
+		added: string[],
+		removed: string[],
+	): void {
 		for (const label of added)
 			if (!item.labels.some((entry) => entry.toLowerCase() === label.toLowerCase()))
 				item.labels.push(label);
 		item.labels = item.labels.filter(
 			(label) => !removed.some((entry) => entry.toLowerCase() === label.toLowerCase()),
 		);
-		item.updatedAt = now();
-		this.save();
-		return { code: 0, stdout: this.itemUrl(repository, kind, number), stderr: "" };
 	}
 
 	/**
@@ -918,28 +927,21 @@ export class StubWorldStore {
 		  }
 		| { ok: false; reason: string } {
 		const number = externalKeyNumber(rest[0]);
-		let repositoryIdentity: string | null = null;
-		const added: string[] = [];
-		const removed: string[] = [];
+		const facts: EditFlagFacts = { repositoryIdentity: null, added: [], removed: [] };
 		for (let i = 1; i < rest.length; i += 1) {
-			const token = rest[i];
-			if (token === "--repo") {
-				if (i + 1 >= rest.length) return { ok: false, reason: "the repo flag has no value" };
-				repositoryIdentity = rest[i + 1];
-				i += 1;
-			} else if (token === "--add-label") {
-				if (i + 1 >= rest.length) return { ok: false, reason: "the label flag has no value" };
-				added.push(...rest[i + 1].split(",").filter((item) => item !== ""));
-				i += 1;
-			} else if (token === "--remove-label") {
-				if (i + 1 >= rest.length) return { ok: false, reason: "the label flag has no value" };
-				removed.push(...rest[i + 1].split(",").filter((item) => item !== ""));
-				i += 1;
-			} else {
-				return { ok: false, reason: `an unknown edit flag: ${token}` };
-			}
+			const step = editFlagStep(rest, i, facts);
+			if (step.reason !== undefined) return { ok: false, reason: step.reason };
+			i += step.advance;
 		}
-		return { ok: true, facts: { number, repositoryIdentity, added, removed } };
+		return {
+			ok: true,
+			facts: {
+				number,
+				repositoryIdentity: facts.repositoryIdentity,
+				added: facts.added,
+				removed: facts.removed,
+			},
+		};
 	}
 
 	private answerMerge(rest: string[]): Answer {
@@ -1044,6 +1046,229 @@ export class StubWorldStore {
 }
 
 /** The number an external key carries, `#12` as `12`. */
+/** The `--repo` flag the commands share, read from `from` on in the args. */
+function repoFlagFrom(
+	args: readonly string[],
+	from: number,
+): { identity: string | null; missing: boolean } {
+	let identity: string | null = null;
+	for (let i = from; i < args.length; i += 1) {
+		if (args[i] !== "--repo") continue;
+		if (i + 1 >= args.length) return { identity: null, missing: true };
+		identity = args[i + 1];
+		i += 1;
+	}
+	return { identity, missing: false };
+}
+
+/** The endpoint path of one `gh api` endpoint, its query dropped. */
+function apiEndpointPath(endpoint: string): string {
+	const queryIndex = endpoint.indexOf("?");
+	return queryIndex === -1 ? endpoint : endpoint.slice(0, queryIndex);
+}
+
+/** The tokens one flag consumes after itself: `--paginate` none, `--method` one. */
+function apiFlagSkip(token: string): number | null {
+	if (token === "--paginate") return 0;
+	if (token === "--method") return 1;
+	return null;
+}
+
+/**
+ * The one token of a `gh api` call, read into the facts the walk holds, or
+ * the refusal the token earns.
+ */
+function apiTokenStep(
+	token: string,
+	tokens: string[],
+	i: number,
+	endpoint: string | null,
+): {
+	advance: number;
+	endpoint?: string;
+	hostname?: string;
+	field?: [string, string];
+	reason?: string;
+} {
+	if (token === "--hostname") {
+		if (i + 1 >= tokens.length) return { advance: 0, reason: "the hostname flag has no value" };
+		return { advance: 1, hostname: tokens[i + 1] };
+	}
+	const skip = apiFlagSkip(token);
+	if (skip !== null) {
+		if (token === "--method" && i + 1 >= tokens.length)
+			return { advance: 0, reason: "the method flag has no value" };
+		return { advance: skip };
+	}
+	if (token === "-f") {
+		if (i + 1 >= tokens.length) return { advance: 0, reason: "the field flag has no value" };
+		const value = tokens[i + 1];
+		const cut = value.indexOf("=");
+		if (cut <= 0) return { advance: 0, reason: `an unreadable field: ${value}` };
+		return { advance: 1, field: [value.slice(0, cut), value.slice(cut + 1)] };
+	}
+	if (token.startsWith("-")) return { advance: 0, reason: `an unknown api flag: ${token}` };
+	if (endpoint !== null) return { advance: 0, reason: "two endpoints on one call" };
+	return { advance: 0, endpoint: token };
+}
+
+/** The filters one search query string names. */
+interface SearchFilters {
+	kind: "issue" | "pr" | null;
+	repositoryName: string | null;
+	state: "open" | "closed" | null;
+	draft: boolean | null;
+	required: string[];
+	excluded: string[];
+}
+
+/** The item kind one search token names, or none. */
+function kindFilterOf(token: string): "issue" | "pr" | null {
+	if (token === "is:issue") return "issue";
+	if (token === "is:pr") return "pr";
+	return null;
+}
+
+/**
+ * The one token of a search query string, written into the filters, or false
+ * when the token is a qualifier the world does not support.
+ */
+function searchFilterToken(token: string, filters: SearchFilters): boolean {
+	if (token === "") return true;
+	const kind = kindFilterOf(token);
+	if (kind !== null) {
+		if (filters.kind !== null) return false;
+		filters.kind = kind;
+		return true;
+	}
+	if (token === "is:open") {
+		filters.state = "open";
+		return true;
+	}
+	if (token === "is:closed") {
+		filters.state = "closed";
+		return true;
+	}
+	if (token === "is:draft") {
+		filters.draft = true;
+		return true;
+	}
+	if (token === "no:draft") {
+		filters.draft = false;
+		return true;
+	}
+	if (token.startsWith("repo:")) {
+		filters.repositoryName = token.slice("repo:".length);
+		return true;
+	}
+	if (token.startsWith("-label:")) {
+		filters.excluded.push(token.slice("-label:".length));
+		return true;
+	}
+	if (token.startsWith("label:")) {
+		filters.required.push(token.slice("label:".length));
+		return true;
+	}
+	return false;
+}
+
+/** The filters the search query string names, or null where one token is unknown. */
+function parseSearchFilters(searchQuery: string): SearchFilters | null {
+	const filters: SearchFilters = {
+		kind: null,
+		repositoryName: null,
+		state: null,
+		draft: null,
+		required: [],
+		excluded: [],
+	};
+	for (const token of searchQuery.split(/\s+/)) {
+		if (!searchFilterToken(token, filters)) return null;
+	}
+	return filters;
+}
+
+/** The facts one pull request create call carries. */
+interface PullCreateFacts {
+	repositoryIdentity: string | null;
+	head: string | null;
+	draft: boolean;
+	title: string;
+	body: string;
+}
+
+const PULL_CREATE_FLAGS: Record<string, "repo" | "head" | "title" | "body" | undefined> = {
+	"--repo": "repo",
+	"--head": "head",
+	"--title": "title",
+	"--body": "body",
+};
+
+/**
+ * The one token of a pull request create call, written into the facts, or
+ * the refusal the token earns.
+ */
+function pullCreateTokenStep(
+	rest: readonly string[],
+	i: number,
+	facts: PullCreateFacts,
+): { advance: number; reason?: string } {
+	const token = rest[i];
+	if (token === "--draft") {
+		facts.draft = true;
+		return { advance: 0 };
+	}
+	const flag = PULL_CREATE_FLAGS[token];
+	if (flag === undefined) return { advance: 0, reason: `an unknown create flag: ${token}` };
+	if (i + 1 >= rest.length) return { advance: 0, reason: `the ${flag} flag has no value` };
+	assignPullCreateFact(facts, flag, rest[i + 1]);
+	return { advance: 1 };
+}
+
+/** The fact one create flag names, written with its value. */
+function assignPullCreateFact(facts: PullCreateFacts, flag: string, value: string): void {
+	if (flag === "repo") facts.repositoryIdentity = value;
+	else if (flag === "head") facts.head = value;
+	else if (flag === "title") facts.title = value;
+	else facts.body = value;
+}
+
+/** The facts one item edit call carries. */
+interface EditFlagFacts {
+	repositoryIdentity: string | null;
+	added: string[];
+	removed: string[];
+}
+
+/** The label list one edit flag writes, or none when the flag is not a label flag. */
+function editLabelListOf(token: string, facts: EditFlagFacts): string[] | undefined {
+	if (token === "--add-label") return facts.added;
+	if (token === "--remove-label") return facts.removed;
+	return undefined;
+}
+
+/**
+ * The one token of an item edit call, written into the facts, or the refusal
+ * the token earns.
+ */
+function editFlagStep(
+	rest: readonly string[],
+	i: number,
+	facts: EditFlagFacts,
+): { advance: number; reason?: string } {
+	const token = rest[i];
+	if (token === "--repo") {
+		if (i + 1 >= rest.length) return { advance: 0, reason: "the repo flag has no value" };
+		facts.repositoryIdentity = rest[i + 1];
+		return { advance: 1 };
+	}
+	const list = editLabelListOf(token, facts);
+	if (list === undefined) return { advance: 0, reason: `an unknown edit flag: ${token}` };
+	if (i + 1 >= rest.length) return { advance: 0, reason: "the label flag has no value" };
+	list.push(...rest[i + 1].split(",").filter((item) => item !== ""));
+	return { advance: 1 };
+}
+
 function externalKeyNumber(key: string | undefined): number | null {
 	if (key === undefined) return null;
 	const trimmed = key.trim();

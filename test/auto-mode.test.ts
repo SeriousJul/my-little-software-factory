@@ -235,43 +235,51 @@ function seed(
 	state.grouping.setGroupingAxis("tickets", "none");
 	state.sourceFact.initializeSources([source]);
 	state.sourceFact.applyFetch(source, outcome);
-	if (shape !== "open") {
-		const message = detail.message ?? "The turn is done.";
-		const claim = state.handoff.claimHandoff(
-			identity,
-			{
-				agentType: "pi",
-				environment,
-				taskType: detail.taskType ?? "implement",
-				model: detail.model ?? "",
-				thinking: detail.thinking ?? "",
-				contextWindow: detail.contextWindow ?? "",
-			},
-			"open",
-		);
-		if (!claim.ok) throw new Error(claim.reason);
-		state.handoff.settleHandoff(claim.claim.attemptId, true, undefined, {
-			paneId: "pane-1",
-			tabId: "tab-1",
-			workspaceId: "ws-1",
-		});
-		if (shape === "awaiting") {
-			state.ticketWorkCycle.settleTurn({
-				ticketIdentity: identity,
-				handoffId: claim.claim.attemptId,
-				taskType: detail.taskType ?? "implement",
-				agentType: "pi",
-				message,
-				turnLog: detail.turnLog ?? [{ kind: "text", text: message }],
-				completedAt: "2026-08-31T11:00:00Z",
-				cause: detail.cause,
-				...(detail.transition === undefined || detail.transition === null
-					? {}
-					: { transition: detail.transition }),
-			});
-		}
-	}
+	if (shape !== "open") seedStoredHandoff(state, shape, environment, detail);
 	return state;
+}
+
+/** The stored handoff one non-open shape claims, settles, and settles the turn for. */
+function seedStoredHandoff(
+	state: FactoryState,
+	shape: "in-flight" | "awaiting",
+	environment: "live-worktree" | "worktree",
+	detail: SeedDetail,
+): void {
+	const message = detail.message ?? "The turn is done.";
+	const claim = state.handoff.claimHandoff(
+		identity,
+		{
+			agentType: "pi",
+			environment,
+			taskType: detail.taskType ?? "implement",
+			model: detail.model ?? "",
+			thinking: detail.thinking ?? "",
+			contextWindow: detail.contextWindow ?? "",
+		},
+		"open",
+	);
+	if (!claim.ok) throw new Error(claim.reason);
+	state.handoff.settleHandoff(claim.claim.attemptId, true, undefined, {
+		paneId: "pane-1",
+		tabId: "tab-1",
+		workspaceId: "ws-1",
+	});
+	if (shape === "awaiting") {
+		state.ticketWorkCycle.settleTurn({
+			ticketIdentity: identity,
+			handoffId: claim.claim.attemptId,
+			taskType: detail.taskType ?? "implement",
+			agentType: "pi",
+			message,
+			turnLog: detail.turnLog ?? [{ kind: "text", text: message }],
+			completedAt: "2026-08-31T11:00:00Z",
+			cause: detail.cause,
+			...(detail.transition === undefined || detail.transition === null
+				? {}
+				: { transition: detail.transition }),
+		});
+	}
 }
 
 interface SeededApp {

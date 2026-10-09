@@ -248,10 +248,7 @@ export async function openPty(
 					return output();
 				}
 				if (Date.now() >= deadline) {
-					const state =
-						requireChange && !changed
-							? `no frame was painted at all, in ${output().length} bytes`
-							: `the output never settled for ${stableMs} ms`;
+					const state = stableTimeoutState(requireChange, changed, stableMs, output);
 					throw new Error(
 						`timed out waiting for ${what}: ${state} within ${timeoutMs} ms\ncaptured output:\n${preview(output())}`,
 					);
@@ -354,6 +351,18 @@ function isNoPendingData(error: unknown): boolean {
 function preview(out: Buffer): string {
 	const text = out.toString("utf8");
 	return text.length > 2000 ? `...${text.slice(-2000)}` : text;
+}
+
+/** The state one stable wait timed out holding, in the words the error carries. */
+function stableTimeoutState(
+	requireChange: boolean,
+	changed: boolean,
+	stableMs: number,
+	output: () => Buffer,
+): string {
+	return requireChange && !changed
+		? `no frame was painted at all, in ${output().length} bytes`
+		: `the output never settled for ${stableMs} ms`;
 }
 
 /** A clean environment: no operator home, XDG state, or GitHub credentials. */

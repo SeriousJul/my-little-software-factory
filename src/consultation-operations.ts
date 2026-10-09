@@ -984,43 +984,47 @@ export class ConsultationOperations {
 		const probe = await new HerdrAgentReader(this.runner).listAgents();
 		if (probe.kind === "error")
 			throw new Error(`cannot verify the Consultation Agent's identity: ${probe.reason}`);
-		const byName = probe.agents.filter((agent) => agent.name === consultation.agentName);
+		const agents = probe.agents;
+		const byName = agents.filter((agent) => agent.name === consultation.agentName);
 		if (byName.length === 1) {
 			const agent = byName[0];
-			if (
-				agent.stableSessionId !== undefined &&
-				consultation.sessionId !== null &&
-				agent.stableSessionId !== consultation.sessionId
-			)
+			if (sessionIdentityContradicts(agent, consultation))
 				throw new Error("the Agent's session identity is ambiguous; the close needs recovery");
 			return { kind: "agent", agent };
 		}
 		if (byName.length > 1)
 			throw new Error("the Agent's name is held by more than one Agent; the close needs recovery");
-		if (consultation.sessionId !== null) {
-			const bySession = probe.agents.filter(
-				(agent) => agent.stableSessionId === consultation.sessionId,
-			);
-			if (bySession.length === 1) return { kind: "agent", agent: bySession[0] };
-			if (bySession.length > 1)
-				throw new Error("the Agent's session identity is ambiguous; the close needs recovery");
-		}
-		const anyNamed = probe.agents.some((agent) => agent.name !== undefined);
-		if (!anyNamed && consultation.paneId !== null) {
-			const inStoredPane = probe.agents.find((agent) => agent.paneId === consultation.paneId);
-			if (inStoredPane !== undefined) {
-				// A contradicting session says the stored pane holds a foreign
-				// Agent: the Consultation's own is not listed, so it is gone.
-				if (
-					consultation.sessionId !== null &&
-					inStoredPane.stableSessionId !== undefined &&
-					inStoredPane.stableSessionId !== consultation.sessionId
-				)
-					return { kind: "none" };
-				return { kind: "agent", agent: inStoredPane };
-			}
-		}
-		return { kind: "none" };
+		const bySession = this.identifyByStoredSession(agents, consultation);
+		if (bySession !== null) return bySession;
+		return this.identifyInStoredPane(agents, consultation);
+	}
+
+	/** The one Agent one stored session id lists, or none for an ambiguous or missing id. */
+	private identifyByStoredSession(
+		agents: readonly HerdrAgent[],
+		consultation: Consultation,
+	): { kind: "agent"; agent: HerdrAgent } | null {
+		if (consultation.sessionId === null) return null;
+		const bySession = agents.filter((agent) => agent.stableSessionId === consultation.sessionId);
+		if (bySession.length === 1) return { kind: "agent", agent: bySession[0] };
+		if (bySession.length > 1)
+			throw new Error("the Agent's session identity is ambiguous; the close needs recovery");
+		return null;
+	}
+
+	/** The Agent one stored pane still holds, if the herdr lists no named Agent at all. */
+	private identifyInStoredPane(
+		agents: readonly HerdrAgent[],
+		consultation: Consultation,
+	): { kind: "agent"; agent: HerdrAgent } | { kind: "none" } {
+		const anyNamed = agents.some((agent) => agent.name !== undefined);
+		if (anyNamed || consultation.paneId === null) return { kind: "none" };
+		const inStoredPane = agents.find((agent) => agent.paneId === consultation.paneId);
+		if (inStoredPane === undefined) return { kind: "none" };
+		// A contradicting session says the stored pane holds a foreign
+		// Agent: the Consultation's own is not listed, so it is gone.
+		if (sessionIdentityContradicts(inStoredPane, consultation)) return { kind: "none" };
+		return { kind: "agent", agent: inStoredPane };
 	}
 
 	/**
@@ -1493,6 +1497,15 @@ async function workspaceTopology(
 	} catch {
 		return { known: false, workspaceExclusive: false, ownedTabExclusive: false };
 	}
+}
+
+/** Whether a listed Agent's session id contradicts the Consultation's stored one. */
+function sessionIdentityContradicts(agent: HerdrAgent, consultation: Consultation): boolean {
+	return (
+		agent.stableSessionId !== undefined &&
+		consultation.sessionId !== null &&
+		agent.stableSessionId !== consultation.sessionId
+	);
 }
 
 function isRecordValue(value: unknown): value is Record<string, unknown> {

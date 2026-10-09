@@ -86,43 +86,61 @@ export async function listOpenPullRequestsByHeadBranch(
 		return { fail: `the pull request read raised: ${errorMessage(error)}` };
 	}
 	if (result.code !== 0) return { fail: firstNonEmptyLine(result.stderr) ?? `exit ${result.code}` };
-	let list: unknown;
-	try {
-		list = JSON.parse(result.stdout);
-	} catch {
-		return { fail: "the pull request read answered no list" };
-	}
-	if (!Array.isArray(list)) return { fail: "the pull request read answered no list" };
+	const list = parsePullList(result.stdout);
+	if (list === null) return { fail: "the pull request read answered no list" };
 	const records: OpenPullRequestRecord[] = [];
 	for (const item of list) {
-		const record = item as Record<string, unknown>;
-		if (
-			typeof record.number !== "number" ||
-			typeof record.state !== "string" ||
-			typeof record.draft !== "boolean" ||
-			typeof record.html_url !== "string"
-		)
-			return { fail: "the pull request read answered an unreadable pull request" };
-		const head = record.head as { ref?: unknown } | undefined;
-		const base = record.base as { ref?: unknown } | undefined;
-		if (typeof head?.ref !== "string" || typeof base?.ref !== "string")
-			return { fail: "the pull request read answered a pull request with no head or base" };
-		const labels = Array.isArray(record.labels)
-			? (record.labels as Array<{ name?: unknown }>)
-					.map((label) => label.name)
-					.filter((name): name is string => typeof name === "string")
-			: [];
-		records.push({
+		const parsed = pullRecordOf(item);
+		if ("fail" in parsed) return parsed;
+		records.push(parsed.record);
+	}
+	return records;
+}
+
+/** The list the read answers, or none. */
+function parsePullList(stdout: string): unknown[] | null {
+	let list: unknown;
+	try {
+		list = JSON.parse(stdout);
+	} catch {
+		return null;
+	}
+	return Array.isArray(list) ? list : null;
+}
+
+/** The one pull request record of the list, and its failure. */
+function pullRecordOf(item: unknown): { record: OpenPullRequestRecord } | { fail: string } {
+	const record = item as Record<string, unknown>;
+	if (
+		typeof record.number !== "number" ||
+		typeof record.state !== "string" ||
+		typeof record.draft !== "boolean" ||
+		typeof record.html_url !== "string"
+	)
+		return { fail: "the pull request read answered an unreadable pull request" };
+	const head = record.head as { ref?: unknown } | undefined;
+	const base = record.base as { ref?: unknown } | undefined;
+	if (typeof head?.ref !== "string" || typeof base?.ref !== "string")
+		return { fail: "the pull request read answered a pull request with no head or base" };
+	return {
+		record: {
 			number: record.number,
 			state: record.state,
 			draft: record.draft,
 			url: record.html_url,
 			headBranch: head.ref,
 			baseBranch: base.ref,
-			labels,
-		});
-	}
-	return records;
+			labels: pullLabelsOf(record),
+		},
+	};
+}
+
+/** The labels one pull request record carries. */
+function pullLabelsOf(record: Record<string, unknown>): string[] {
+	if (!Array.isArray(record.labels)) return [];
+	return (record.labels as Array<{ name?: unknown }>)
+		.map((label) => label.name)
+		.filter((name): name is string => typeof name === "string");
 }
 
 /**

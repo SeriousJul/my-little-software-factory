@@ -190,37 +190,46 @@ const MODULE_INNERS = /(?:^|\/)state\/(store|graph|tables|schema|batch|json)\.ts
 function sqlLiterals(source: string): string[] {
 	const literals: string[] = [];
 	let index = 0;
-	while (index < source.length) {
-		const char = source[index];
-		if (char === "/" && source[index + 1] === "/") {
-			while (index < source.length && source[index] !== "\n") index++;
-			continue;
-		}
-		if (char === "/" && source[index + 1] === "*") {
-			const end = source.indexOf("*/", index + 2);
-			index = end < 0 ? source.length : end + 2;
-			continue;
-		}
-		if (char === '"' || char === "'" || char === "`") {
-			let end = index + 1;
-			while (end < source.length) {
-				if (source[end] === "\\") {
-					end += 2;
-					continue;
-				}
-				if (source[end] === char) {
-					end += 1;
-					break;
-				}
-				end += 1;
-			}
-			literals.push(source.slice(index + 1, end - 1));
-			index = end;
-			continue;
-		}
-		index += 1;
-	}
+	while (index < source.length) index = sqlLiteralStep(source, index, literals);
 	return literals;
+}
+
+/** The index one scan character consumes, recording the literal it opens. */
+function sqlLiteralStep(source: string, index: number, literals: string[]): number {
+	const char = source[index];
+	if (char === "/" && source[index + 1] === "/") return lineCommentEnd(source, index);
+	if (char === "/" && source[index + 1] === "*") {
+		const end = source.indexOf("*/", index + 2);
+		return end < 0 ? source.length : end + 2;
+	}
+	if (char === '"' || char === "'" || char === "`")
+		return quotedLiteralStep(source, index, literals);
+	return index + 1;
+}
+
+/** The index one line comment consumes. */
+function lineCommentEnd(source: string, index: number): number {
+	while (index < source.length && source[index] !== "\n") index++;
+	return index;
+}
+
+/** The index one quoted literal consumes, after it records its text. */
+function quotedLiteralStep(source: string, index: number, literals: string[]): number {
+	const char = source[index];
+	let end = index + 1;
+	while (end < source.length) {
+		if (source[end] === "\\") {
+			end += 2;
+			continue;
+		}
+		if (source[end] === char) {
+			end += 1;
+			break;
+		}
+		end += 1;
+	}
+	literals.push(source.slice(index + 1, end - 1));
+	return end;
 }
 
 /**
@@ -272,45 +281,58 @@ function tableReaches(source: string): string[] {
  * call is not a call.
  */
 function codeOnly(source: string): string {
-	let code = "";
+	const out: string[] = [];
 	let index = 0;
-	while (index < source.length) {
-		const char = source[index];
-		if (char === "/" && source[index + 1] === "/") {
-			while (index < source.length && source[index] !== "\n") {
-				code += " ";
-				index += 1;
-			}
-			continue;
-		}
-		if (char === "/" && source[index + 1] === "*") {
-			const end = source.indexOf("*/", index + 2);
-			const stop = end < 0 ? source.length : end + 2;
-			for (const char of source.slice(index, stop)) code += char === "\n" ? "\n" : " ";
-			index = stop;
-			continue;
-		}
-		if (char === '"' || char === "'" || char === "`") {
-			let end = index + 1;
-			while (end < source.length) {
-				if (source[end] === "\\") {
-					end += 2;
-					continue;
-				}
-				if (source[end] === char) {
-					end += 1;
-					break;
-				}
-				end += 1;
-			}
-			code += source.slice(index, end);
-			index = end;
-			continue;
-		}
-		code += char;
+	while (index < source.length) index = codeOnlyStep(source, index, out);
+	return out.join("");
+}
+
+/** The text one scan character contributes, and the index it passes to. */
+function codeOnlyStep(source: string, index: number, out: string[]): number {
+	const char = source[index];
+	if (char === "/" && source[index + 1] === "/") return lineCommentTextStep(source, index, out);
+	if (char === "/" && source[index + 1] === "*") {
+		const end = source.indexOf("*/", index + 2);
+		const stop = end < 0 ? source.length : end + 2;
+		blockCommentStep(source, index, stop, out);
+		return stop;
+	}
+	if (char === '"' || char === "'" || char === "`") return quotedTextStep(source, index, out);
+	out.push(char);
+	return index + 1;
+}
+
+/** The text one line comment contributes, and the index it passes to. */
+function lineCommentTextStep(source: string, index: number, out: string[]): number {
+	while (index < source.length && source[index] !== "\n") {
+		out.push(" ");
 		index += 1;
 	}
-	return code;
+	return index;
+}
+
+/** The text one block comment contributes, with its newlines kept. */
+function blockCommentStep(source: string, index: number, stop: number, out: string[]): void {
+	for (const c of source.slice(index, stop)) out.push(c === "\n" ? "\n" : " ");
+}
+
+/** The index one quoted region consumes, after it keeps its own text. */
+function quotedTextStep(source: string, index: number, out: string[]): number {
+	const char = source[index];
+	let end = index + 1;
+	while (end < source.length) {
+		if (source[end] === "\\") {
+			end += 2;
+			continue;
+		}
+		if (source[end] === char) {
+			end += 1;
+			break;
+		}
+		end += 1;
+	}
+	out.push(source.slice(index, end));
+	return end;
 }
 
 /** The words that open a control, not a declaration. */
@@ -349,25 +371,34 @@ function declaredNames(source: string): Set<string> {
 		const before = source.slice(0, match.index).trimEnd();
 		if (before.endsWith(".") || before.endsWith("this")) continue;
 		// Walk the parameter list to its close, then read what follows it.
-		let index = match.index + match[0].length;
-		let depth = 1;
-		while (index < source.length && depth > 0) {
-			const char = source[index];
-			if (char === "(") depth += 1;
-			else if (char === ")") depth -= 1;
-			else if (char === '"' || char === "'" || char === "`") {
-				index += 1;
-				while (index < source.length && source[index] !== char) {
-					if (source[index] === "\\") index += 1;
-					index += 1;
-				}
-			}
-			index += 1;
-		}
+		const index = paramListEnd(source, match.index + match[0].length);
 		const after = source.slice(index, index + 40).trimStart();
 		if (/^[{:]|^=>/.test(after)) names.add(name);
 	}
 	return names;
+}
+
+/** The index one parameter list walk reaches: the close, or the end. */
+function paramListEnd(source: string, index: number): number {
+	let depth = 1;
+	while (index < source.length && depth > 0) {
+		const char = source[index];
+		if (char === "(") depth += 1;
+		else if (char === ")") depth -= 1;
+		else if (char === '"' || char === "'" || char === "`")
+			index = paramQuoteEnd(source, index + 1, char);
+		index += 1;
+	}
+	return index;
+}
+
+/** The index one string literal consumes, from the character after its open. */
+function paramQuoteEnd(source: string, index: number, char: string): number {
+	while (index < source.length && source[index] !== char) {
+		if (source[index] === "\\") index += 1;
+		index += 1;
+	}
+	return index;
 }
 
 /** The names a caller imports from the state module's aggregate files. */
@@ -446,45 +477,57 @@ function namingOffenders(file: string, source: string, shapes: AggregateShape[])
 					`${file} calls ${shape.key}.${method} without naming ${shape.interfaceName}`,
 				);
 		}
-		// The method name alone is a read too. A caller that holds the
-		// aggregate under a name of its own - `this.sf`, a destructured
-		// entry, a deps object, a function's return value - calls
-		// `this.sf.initializeSources(...)`: the aggregate's name is gone from
-		// the file, and the method is the only fact left that says whose it
-		// is. Every call of one of the aggregate's own methods has to stand
-		// behind the aggregate's name, or the file is named for reading the
-		// aggregate without it.
-		for (const method of shape.interfaceMethods) {
-			const bare = countMatches(source, new RegExp(`\\.${method}\\s*\\(`, "gu"));
-			if (bare === 0) continue;
-			// A call chain may break the line between the aggregate and its
-			// method, so the two names may have whitespace between them.
-			const through = countMatches(
-				source,
-				new RegExp(`\\b${shape.key}\\s*\\.\\s*${method}\\s*\\(`, "gu"),
-			);
-			if (bare === through) continue;
-			reads.add(`${file} reads ${shape.key}`);
-			if (owned.has(method)) {
-				allowed.add(`${file} ${shape.key}.${method}`);
-				continue;
-			}
-			const allowance = `${file} ${shape.key}.${method}`;
-			if (NAME_ALLOWANCE[allowance] !== undefined) {
-				allowed.add(allowance);
-				continue;
-			}
-			if (!named.has(shape.interfaceName))
-				offenders.push(
-					`${file} calls ${shape.key}.${method} through another name without naming ${shape.interfaceName}`,
-				);
-			else
-				offenders.push(
-					`${file} calls ${shape.key}.${method} through a name that is not ${shape.key}`,
-				);
-		}
+		bareNameOffenders(file, shape, { source, owned, named }, { offenders, reads, allowed });
 	}
 	return { offenders, reads, allowed };
+}
+
+/** The bare-name reads one aggregate's methods leave, and the offenders they make. */
+function bareNameOffenders(
+	file: string,
+	shape: AggregateShape,
+	looks: { source: string; owned: Set<string>; named: Set<string> },
+	facts: NamingFacts,
+): void {
+	const { source, owned, named } = looks;
+	const { offenders, reads, allowed } = facts;
+	// The method name alone is a read too. A caller that holds the
+	// aggregate under a name of its own - `this.sf`, a destructured
+	// entry, a deps object, a function's return value - calls
+	// `this.sf.initializeSources(...)`: the aggregate's name is gone from
+	// the file, and the method is the only fact left that says whose it
+	// is. Every call of one of the aggregate's own methods has to stand
+	// behind the aggregate's name, or the file is named for reading the
+	// aggregate without it.
+	for (const method of shape.interfaceMethods) {
+		const bare = countMatches(source, new RegExp(`\\.${method}\\s*\\(`, "gu"));
+		if (bare === 0) continue;
+		// A call chain may break the line between the aggregate and its
+		// method, so the two names may have whitespace between them.
+		const through = countMatches(
+			source,
+			new RegExp(`\\b${shape.key}\\s*\\.\\s*${method}\\s*\\(`, "gu"),
+		);
+		if (bare === through) continue;
+		reads.add(`${file} reads ${shape.key}`);
+		if (owned.has(method)) {
+			allowed.add(`${file} ${shape.key}.${method}`);
+			continue;
+		}
+		const allowance = `${file} ${shape.key}.${method}`;
+		if (NAME_ALLOWANCE[allowance] !== undefined) {
+			allowed.add(allowance);
+			continue;
+		}
+		if (!named.has(shape.interfaceName))
+			offenders.push(
+				`${file} calls ${shape.key}.${method} through another name without naming ${shape.interfaceName}`,
+			);
+		else
+			offenders.push(
+				`${file} calls ${shape.key}.${method} through a name that is not ${shape.key}`,
+			);
+	}
 }
 
 /** Rule 3: a caller holds an aggregate under the aggregate's own name. */
@@ -507,6 +550,29 @@ function aliasOffenders(
 	const path = "(?:[A-Za-z_$][\\w$]*\\.)*";
 	const offenders: string[] = [];
 	const held = new Set<string>();
+	const fields = { file, source, shapes, offenders, held, root, path, keys };
+	bindOffenders(fields);
+	destructureOffenders(fields);
+	declaredOffenders(fields);
+	pulledOffenders(fields);
+	fromAggregateOffenders(fields);
+	return { offenders, held };
+}
+
+interface AliasFields {
+	file: string;
+	source: string;
+	shapes: AggregateShape[];
+	offenders: string[];
+	held: Set<string>;
+	root: string;
+	path: string;
+	keys: string;
+}
+
+/** The bindings one source holds an aggregate under another name. */
+function bindOffenders(fields: AliasFields): void {
+	const { file, source, shapes, offenders, root, path, keys } = fields;
 	// A binding whose value is the aggregate itself: the value is a plain
 	// path from the composition to the aggregate's name and nothing is
 	// called through it. A chain that goes on - `.ticketWorkCycle` with a
@@ -524,6 +590,11 @@ function aliasOffenders(
 		if (key === undefined || bound === "" || bound === key.key) continue;
 		offenders.push(`${file} binds the ${key.key} aggregate to ${bound}`);
 	}
+}
+
+/** The destructured entries one source holds an aggregate under another name. */
+function destructureOffenders(fields: AliasFields): void {
+	const { file, source, shapes, offenders } = fields;
 	// A destructured entry: `const { handoff, sourceFact: sf } = state`.
 	for (const match of source.matchAll(
 		/\b(?:const|let|var)\s*\{([^}]*)\}\s*=[^\n]*\b(?:state|deps|aggregates|composition)\b/gu,
@@ -543,6 +614,11 @@ function aliasOffenders(
 				offenders.push(`${file} destructures ${key.key} without naming ${key.interfaceName}`);
 		}
 	}
+}
+
+/** The declarations one source holds an aggregate interface under another name. */
+function declaredOffenders(fields: AliasFields): void {
+	const { file, source, shapes, offenders, held } = fields;
 	// A declaration that carries an aggregate interface under another name: a
 	// field, a variable, a parameter, a getter, or a function's return value.
 	// The return value is the hand-over the call rules cannot see: the aggregate
@@ -558,6 +634,11 @@ function aliasOffenders(
 			offenders.push(`${file} holds ${shape.interfaceName} under the name ${match[1]}`);
 		}
 	}
+}
+
+/** The methods one source pulls out of the aggregate and moves as a value. */
+function pulledOffenders(fields: AliasFields): void {
+	const { file, source, shapes, offenders, root, path, keys } = fields;
 	// A method pulled out of the aggregate and moved as a value: a destructured
 	// entry, a `.bind`, or a method handed to a function as an argument. The call
 	// rules read `.<aggregate>.<method>(`; a method that leaves the aggregate as
@@ -580,6 +661,11 @@ function aliasOffenders(
 			continue;
 		offenders.push(`${file} takes ${shape.key}.${method} out of the aggregate as a value`);
 	}
+}
+
+/** The destructured entries one source takes out of the aggregate as bare names. */
+function fromAggregateOffenders(fields: AliasFields): void {
+	const { file, source, shapes, offenders, root, path, keys } = fields;
 	// The same pull read from the other end: a destructuring whose source is the
 	// aggregate hands the aggregate's methods over as bare names.
 	const fromAggregate = new RegExp(
@@ -599,7 +685,6 @@ function aliasOffenders(
 			offenders.push(`${file} takes ${shape.key}.${name} out of the aggregate as a value`);
 		}
 	}
-	return { offenders, held };
 }
 
 /** Rule 6: no caller outside the module imports its plumbing. */
@@ -725,60 +810,72 @@ function transactionOffenders(
 	read: (file: string) => string = moduleSource,
 	shapes: AggregateShape[] = aggregateShapes(),
 ): TransactionFacts {
-	const acrossOffenders: string[] = [];
-	const publishedOffenders: string[] = [];
-	const acrossCovered = new Set<string>();
-	const publishedCovered = new Set<string>();
-	const acrossUnresolved = new Set<string>();
-	const publishedUnresolved = new Set<string>();
-	const acrossResolved = new Set<string>();
-	const publishedResolved = new Set<string>();
+	const facts = {
+		acrossOffenders: [] as string[],
+		publishedOffenders: [] as string[],
+		acrossCovered: new Set<string>(),
+		publishedCovered: new Set<string>(),
+		acrossUnresolved: new Set<string>(),
+		publishedUnresolved: new Set<string>(),
+		acrossResolved: new Set<string>(),
+		publishedResolved: new Set<string>(),
+	};
 	for (const shape of shapes) {
 		const callerSource = read(shape.file);
-		// The published operations are not the only cross-aggregate calls: some
-		// of them land on a method the interface declares, so the rule reads the
-		// call graph and not one list of names (issue #202 review).
-		for (const match of callerSource.matchAll(
-			/\bgraph\(\)\.([A-Za-z_$][\w$]*)\.([A-Za-z_$][\w$]*)\s*\(/gu,
-		)) {
-			acrossCovered.add(`${match[1]}.${match[2]}`);
-			for (const reached of methodReaches(match[1], match[2], read, {
-				seen: new Set<string>(),
-				unresolved: acrossUnresolved,
-			})) {
-				acrossResolved.add(reached.id);
-				if (!/\btransaction\s*\(/u.test(reached.body)) continue;
-				acrossOffenders.push(
-					`${shapeByKey().get(match[1])?.file ?? match[1]} opens a transaction in ${reached.id}, reached from ${shape.key} by ${match[2]}`,
-				);
-			}
-		}
-		// A published operation, and the private method it can call, both run
-		// inside whoever opened the write (issue #202, ADR 0095).
-		for (const method of [...shape.internalMethods, ...shape.privateMethods]) {
-			publishedCovered.add(`${shape.key}.${method}`);
-			for (const reached of methodReaches(shape.key, method, read, {
-				seen: new Set<string>(),
-				unresolved: publishedUnresolved,
-			})) {
-				publishedResolved.add(reached.id);
-				if (!/\btransaction\s*\(/u.test(reached.body)) continue;
-				publishedOffenders.push(
-					`${shape.file} opens a transaction in ${reached.id}, reached from ${method}, an operation the module publishes`,
-				);
-			}
+		acrossLoop(shape, callerSource, read, facts);
+		publishedLoop(shape, read, facts);
+	}
+	return facts;
+}
+
+/** The graph() calls one caller makes, and the transaction the reach opens. */
+function acrossLoop(
+	shape: AggregateShape,
+	callerSource: string,
+	read: (file: string) => string,
+	facts: TransactionFacts,
+): void {
+	// The published operations are not the only cross-aggregate calls: some
+	// of them land on a method the interface declares, so the rule reads the
+	// call graph and not one list of names (issue #202 review).
+	for (const match of callerSource.matchAll(
+		/\bgraph\(\)\.([A-Za-z_$][\w$]*)\.([A-Za-z_$][\w$]*)\s*\(/gu,
+	)) {
+		facts.acrossCovered.add(`${match[1]}.${match[2]}`);
+		for (const reached of methodReaches(match[1], match[2], read, {
+			seen: new Set<string>(),
+			unresolved: facts.acrossUnresolved,
+		})) {
+			facts.acrossResolved.add(reached.id);
+			if (!/\btransaction\s*\(/u.test(reached.body)) continue;
+			facts.acrossOffenders.push(
+				`${shapeByKey().get(match[1])?.file ?? match[1]} opens a transaction in ${reached.id}, reached from ${shape.key} by ${match[2]}`,
+			);
 		}
 	}
-	return {
-		acrossOffenders,
-		publishedOffenders,
-		acrossCovered,
-		publishedCovered,
-		acrossUnresolved,
-		publishedUnresolved,
-		acrossResolved,
-		publishedResolved,
-	};
+}
+
+/** The published operations one module runs inside whoever opened the write. */
+function publishedLoop(
+	shape: AggregateShape,
+	read: (file: string) => string,
+	facts: TransactionFacts,
+): void {
+	// A published operation, and the private method it can call, both run
+	// inside whoever opened the write (issue #202, ADR 0095).
+	for (const method of [...shape.internalMethods, ...shape.privateMethods]) {
+		facts.publishedCovered.add(`${shape.key}.${method}`);
+		for (const reached of methodReaches(shape.key, method, read, {
+			seen: new Set<string>(),
+			unresolved: facts.publishedUnresolved,
+		})) {
+			facts.publishedResolved.add(reached.id);
+			if (!/\btransaction\s*\(/u.test(reached.body)) continue;
+			facts.publishedOffenders.push(
+				`${shape.file} opens a transaction in ${reached.id}, reached from ${method}, an operation the module publishes`,
+			);
+		}
+	}
 }
 
 /** Rule 9: every interface method is reached by a caller or by the tests. */
@@ -947,9 +1044,24 @@ describe("the state module's boundary", () => {
 		).map((row) => row.name);
 		database.close();
 		expect(created.length).toBeGreaterThan(20);
+		const claimed = claimedTables();
+		const unclaimed = unclaimedTables(claimed, created);
+		// A table claimed twice is a table two aggregates can write.
+		const shared = sharedTables(claimed);
+		expect([...new Set(unclaimed)]).toEqual([]);
+		expect(shared).toEqual([]);
+	});
+
+	/** The tables one owner map claims, keyed by the owner that claims them. */
+	function claimedTables(): Map<string, string> {
 		const claimed = new Map<string, string>();
 		for (const [key, tables] of Object.entries(OWNED))
 			for (const table of tables) claimed.set(table, key);
+		return claimed;
+	}
+
+	/** The tables the schema creates and no owner claims, with the seam ones out. */
+	function unclaimedTables(claimed: Map<string, string>, created: string[]): string[] {
 		const unclaimed: string[] = [];
 		for (const table of created) {
 			if (claimed.has(table)) continue;
@@ -957,15 +1069,17 @@ describe("the state module's boundary", () => {
 			if ((RETIRED_TABLES as readonly string[]).includes(table)) continue;
 			unclaimed.push(`${table} is created by the schema and claimed by no aggregate`);
 		}
-		// A table claimed twice is a table two aggregates can write.
-		const shared = [...claimed.keys()].filter(
+		return unclaimed;
+	}
+
+	/** The tables the schema claims twice, minus the ones the schema retires. */
+	function sharedTables(claimed: Map<string, string>): string[] {
+		return [...claimed.keys()].filter(
 			(table) =>
 				Object.values(OWNED).filter((set) => set.has(table)).length > 1 &&
 				!(RETIRED_TABLES as readonly string[]).includes(table),
 		);
-		expect([...new Set(unclaimed)]).toEqual([]);
-		expect(shared).toEqual([]);
-	});
+	}
 
 	test("an aggregate's internal operations stay inside the module", () => {
 		const offenders: string[] = [];
@@ -1195,6 +1309,18 @@ describe("the state module's boundary", () => {
 		// queue's `items`, the same read the cycle gate already pays for its depth.
 		// The open-ticket walk reads the start count off the row it holds.
 		const source = codeOnly(readFileSync("src/observation.ts", "utf8"));
+		const offenders = topUpWalkOffenders(source);
+		// The fresh-work walk names the two batched answers it takes in their place.
+		const walk = memberChunk(source, "topUpFreshWork") ?? "";
+		if (!/\.handoff\.handoffCountsFor\s*\(/u.test(walk))
+			offenders.push("src/observation.ts topUpFreshWork names no handoffCountsFor read");
+		if (!/\.workQueue\.items\s*\(/u.test(walk))
+			offenders.push("src/observation.ts topUpFreshWork names no workQueue items read");
+		expect(offenders).toEqual([]);
+	});
+
+	/** The per-Ticket facts one top-up walk asks of the aggregate. */
+	function topUpWalkOffenders(source: string): string[] {
 		const offenders: string[] = [];
 		for (const member of ["topUpFreshWork", "topUpOpenTicket", "askContinuations"]) {
 			const body = memberChunk(source, member);
@@ -1209,14 +1335,8 @@ describe("the state module's boundary", () => {
 				);
 			}
 		}
-		// The fresh-work walk names the two batched answers it takes in their place.
-		const walk = memberChunk(source, "topUpFreshWork") ?? "";
-		if (!/\.handoff\.handoffCountsFor\s*\(/u.test(walk))
-			offenders.push("src/observation.ts topUpFreshWork names no handoffCountsFor read");
-		if (!/\.workQueue\.items\s*\(/u.test(walk))
-			offenders.push("src/observation.ts topUpFreshWork names no workQueue items read");
-		expect(offenders).toEqual([]);
-	});
+		return offenders;
+	}
 
 	test("every method an aggregate's interface answers is reached", () => {
 		// An interface method is either a caller's contract or the aggregate's test

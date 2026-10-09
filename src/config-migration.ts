@@ -192,17 +192,12 @@ function migrateStates(fields: {
 	const stateLines: string[] = [];
 	const installedParks: string[] = [];
 	for (const rule of rules) {
-		const taskType = rule["task-type"];
-		if (typeof taskType !== "string" || taskType === "") {
-			throw new ConfigMigrationError("a [[task-rules]] entry has no task-type string");
-		}
-		const match = isRecord(rule.when) ? rule.when : {};
-		let name = taskType;
-		for (let suffix = 2; stateNames.has(name); suffix++) name = `${taskType}-${suffix}`;
-		stateNames.add(name);
-		stateForTask.set(taskType, { name, match });
-		states.push({ name, "task-type": taskType, match: { ...match } });
-		stateLines.push(`- \`${name}\`: task \`${taskType}\`, matches ${matchDescription(match)}.`);
+		const state = ruleStateEntry(rule, stateNames);
+		stateForTask.set(state.taskType, { name: state.name, match: state.match });
+		states.push({ name: state.name, "task-type": state.taskType, match: { ...state.match } });
+		stateLines.push(
+			`- \`${state.name}\`: task \`${state.taskType}\`, matches ${matchDescription(state.match)}.`,
+		);
 	}
 	// The shipped machine's parking states come over with the migration. The
 	// default source list carries an open pull request before it holds a label,
@@ -221,6 +216,24 @@ function migrateStates(fields: {
 		);
 	}
 	return { states, stateNames, stateForTask, stateLines, installedParks };
+}
+
+/** The one state row one task rule carries into the new machine. */
+function ruleStateEntry(
+	rule: Record<string, unknown>,
+	stateNames: Set<string>,
+): { taskType: string; name: string; match: Record<string, unknown> } {
+	// One state per rule: the state is named for the rule's task type, and
+	// its match is the rule's when table, carried over verbatim.
+	const taskType = rule["task-type"];
+	if (typeof taskType !== "string" || taskType === "") {
+		throw new ConfigMigrationError("a [[task-rules]] entry has no task-type string");
+	}
+	const match = isRecord(rule.when) ? rule.when : {};
+	let name = taskType;
+	for (let suffix = 2; stateNames.has(name); suffix++) name = `${taskType}-${suffix}`;
+	stateNames.add(name);
+	return { taskType, name, match };
 }
 
 /** One transition per expressible edge, and the edges it drops, named. */
@@ -342,6 +355,42 @@ function migrateTaskTypes(fields: {
 }
 
 /** One task type, carried over with its retired keys and seed template judged. */
+/** The one raw key one task type's row carries into its new row. */
+function migrateTaskTypeKey(
+	key: string,
+	value: unknown,
+	draft: { task: Record<string, unknown>; seedTemplateMatched: boolean },
+	one: {
+		name: string;
+		shippedTaskTypes: Record<string, unknown>;
+		templateLines: string[];
+		autoCloseLines: string[];
+	},
+): void {
+	if (key === "auto-close") {
+		if (value === true) {
+			one.autoCloseLines.push(
+				`\`auto-close = true\` on \`${one.name}\`: dropped. Auto-handoff mode decides the route from the settled turn's Next step, so no flag replaces it.`,
+			);
+		}
+		return;
+	}
+	if (key === "template" && typeof value === "string") {
+		const replacement = seedTemplateReplacement(one.name, value, one.shippedTaskTypes);
+		draft.task.template = replacement.template;
+		draft.seedTemplateMatched = replacement.replaced;
+		if (OLD_SEED_TEMPLATES[one.name] !== undefined) {
+			one.templateLines.push(
+				replacement.replaced
+					? `\`${one.name}\`: replaced with the clean seed template (the pre-migration template matched the seed exactly).`
+					: `\`${one.name}\`: left untouched (the template does not match the pre-migration seed). Its own label prose is the only writer of the labels this type's turns leave behind.`,
+			);
+		}
+		return;
+	}
+	draft.task[key] = value;
+}
+
 function migrateTaskType(fields: {
 	name: string;
 	rawTask: Record<string, unknown>;
@@ -361,31 +410,16 @@ function migrateTaskType(fields: {
 		autoCloseLines,
 	} = fields;
 	const task: Record<string, unknown> = {};
-	let seedTemplateMatched = false;
+	const draft = { task, seedTemplateMatched: false };
 	for (const [key, value] of Object.entries(rawTask)) {
-		if (key === "auto-close") {
-			if (value === true) {
-				autoCloseLines.push(
-					`\`auto-close = true\` on \`${name}\`: dropped. Auto-handoff mode decides the route from the settled turn's Next step, so no flag replaces it.`,
-				);
-			}
-			continue;
-		}
-		if (key === "template" && typeof value === "string") {
-			const replacement = seedTemplateReplacement(name, value, shippedTaskTypes);
-			task.template = replacement.template;
-			seedTemplateMatched = replacement.replaced;
-			if (OLD_SEED_TEMPLATES[name] !== undefined) {
-				templateLines.push(
-					replacement.replaced
-						? `\`${name}\`: replaced with the clean seed template (the pre-migration template matched the seed exactly).`
-						: `\`${name}\`: left untouched (the template does not match the pre-migration seed). Its own label prose is the only writer of the labels this type's turns leave behind.`,
-				);
-			}
-			continue;
-		}
-		task[key] = value;
+		migrateTaskTypeKey(key, value, draft, {
+			name,
+			shippedTaskTypes,
+			templateLines,
+			autoCloseLines,
+		});
 	}
+	const seedTemplateMatched = draft.seedTemplateMatched;
 	const actionFormReplaced = applyMergeActionForm({ task, name, shippedTaskTypes, templateLines });
 	if (transition !== undefined) {
 		task.transition = transition.transition;

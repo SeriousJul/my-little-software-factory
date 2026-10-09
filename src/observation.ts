@@ -217,6 +217,69 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+/**
+ * The one item of the herdr agent list, or null when the item names no pane
+ * and no agent the plane can hold.
+ */
+function herdrAgentOf(item: unknown): HerdrAgent | null {
+	const record = item as Record<string, unknown>;
+	if (typeof record.pane_id !== "string" || record.pane_id === "") return null;
+	if (typeof record.agent !== "string" || record.agent === "") return null;
+	const session = isRecord(record.agent_session) ? record.agent_session : undefined;
+	const sequence = firstNumberField(record, [
+		"sequence",
+		"seq",
+		"state_change_sequence",
+		"state_change_seq",
+	]);
+	const checkoutPath = firstStringField(record, ["checkout_path", "cwd", "working_directory"]);
+	const stableSessionId = firstStringField(record, ["session_id", "agent_session_id"]);
+	const name = typeof record.name === "string" && record.name !== "" ? record.name : undefined;
+	return {
+		paneId: record.pane_id,
+		tabId: typeof record.tab_id === "string" ? record.tab_id : "",
+		workspaceId: typeof record.workspace_id === "string" ? record.workspace_id : "",
+		...(sequence === undefined ? {} : { sequence }),
+		agent: record.agent,
+		...(checkoutPath === undefined ? {} : { checkoutPath }),
+		...(stableSessionId === undefined ? {} : { stableSessionId }),
+		...(name === undefined ? {} : { name }),
+		status: typeof record.agent_status === "string" ? record.agent_status : "unknown",
+		sessionId: sessionPathValue(session),
+	};
+}
+
+/** The first numeric field a record holds under one of the keys, in key order. */
+function firstNumberField(
+	record: Record<string, unknown>,
+	keys: readonly string[],
+): number | undefined {
+	for (const key of keys) {
+		const value = record[key];
+		if (typeof value === "number") return value;
+	}
+	return undefined;
+}
+
+/** The first string field a record holds under one of the keys, in key order. */
+function firstStringField(
+	record: Record<string, unknown>,
+	keys: readonly string[],
+): string | undefined {
+	for (const key of keys) {
+		const value = record[key];
+		if (typeof value === "string") return value;
+	}
+	return undefined;
+}
+
+/** The session path a path-shaped agent session record carries, or no session. */
+function sessionPathValue(session: Record<string, unknown> | undefined): string {
+	return session !== undefined && session.kind === "path" && typeof session.value === "string"
+		? session.value
+		: "";
+}
+
 /** A reader that runs the pinned herdr commands through the command runner. */
 export class HerdrAgentReader implements AgentReader {
 	private readonly runner: CommandRunner;
@@ -240,43 +303,8 @@ export class HerdrAgentReader implements AgentReader {
 		const raw = Array.isArray(result_?.agents) ? (result_?.agents as unknown[]) : [];
 		const agents: HerdrAgent[] = [];
 		for (const item of raw) {
-			const record = item as Record<string, unknown>;
-			if (typeof record.pane_id !== "string" || record.pane_id === "") continue;
-			if (typeof record.agent !== "string" || record.agent === "") continue;
-			const session = isRecord(record.agent_session) ? record.agent_session : undefined;
-			agents.push({
-				paneId: record.pane_id,
-				tabId: typeof record.tab_id === "string" ? record.tab_id : "",
-				workspaceId: typeof record.workspace_id === "string" ? record.workspace_id : "",
-				...(typeof record.sequence === "number"
-					? { sequence: record.sequence }
-					: typeof record.seq === "number"
-						? { sequence: record.seq }
-						: typeof record.state_change_sequence === "number"
-							? { sequence: record.state_change_sequence }
-							: typeof record.state_change_seq === "number"
-								? { sequence: record.state_change_seq }
-								: {}),
-				agent: record.agent,
-				...(typeof record.checkout_path === "string"
-					? { checkoutPath: record.checkout_path }
-					: typeof record.cwd === "string"
-						? { checkoutPath: record.cwd }
-						: typeof record.working_directory === "string"
-							? { checkoutPath: record.working_directory }
-							: {}),
-				...(typeof record.session_id === "string"
-					? { stableSessionId: record.session_id }
-					: typeof record.agent_session_id === "string"
-						? { stableSessionId: record.agent_session_id }
-						: {}),
-				...(typeof record.name === "string" && record.name !== "" ? { name: record.name } : {}),
-				status: typeof record.agent_status === "string" ? record.agent_status : "unknown",
-				sessionId:
-					session !== undefined && session.kind === "path" && typeof session.value === "string"
-						? session.value
-						: "",
-			});
+			const agent = herdrAgentOf(item);
+			if (agent !== null) agents.push(agent);
 		}
 		return { kind: "ok", agents };
 	}
@@ -782,35 +810,38 @@ export class ObservationCoordinator {
 				inFlightNames.get(ticket.ticketIdentity) ?? "",
 			);
 			if (own === null) {
+				// The missing path is the auto mode's: manual mode leaves the
+				// missing ticket for the operator's panel.
 				if (autoOn) {
 					changed = (await this.handleMissing(ticket)) || changed;
-					if (this.stopped) return changed;
 				}
-				continue;
+			} else {
+				changed = (await this.settlePhase(ticket, own)) || changed;
 			}
-			const status = normalizeAgentStatus(own.status);
-			// A state correction on read: herdr owns the fact of whether the
-			// agent is working, so the poll corrects the stored state to
-			// match it, and the list shows reality without the control plane
-			// ever writing to herdr.
-			if (
-				status === "working" &&
-				this.state.ticketWorkCycle.markTicketRunning(ticket.ticketIdentity)
-			) {
-				changed = true;
-			}
-			if (status === "done" || status === "idle") {
-				// One read serves the decision and the trace: the same session
-				// read that settles the turn supplies its log, cause, and
-				// detail (ADR 0015).
-				const turnEnd = await this.maybeReadTurnEnd(ticket, own);
-				if (this.maybeSettles(ticket, turnEnd)) {
-					changed = (await this.settle(ticket, own, turnEnd)) || changed;
-					if (this.stopped) return changed;
-				}
-			}
+			if (this.stopped) return changed;
 		}
 		return changed;
+	}
+
+	/**
+	 * The settle phase of one in-flight ticket: the state correction on read,
+	 * and the settle when the agent's report settles the turn.
+	 *
+	 * A state correction on read: herdr owns the fact of whether the agent is
+	 * working, so the poll corrects the stored state to match it, and the list
+	 * shows reality without the control plane ever writing to herdr.
+	 */
+	private async settlePhase(ticket: HandoffTicket, own: HerdrAgent): Promise<boolean> {
+		const status = normalizeAgentStatus(own.status);
+		if (status === "working") {
+			return this.state.ticketWorkCycle.markTicketRunning(ticket.ticketIdentity);
+		}
+		if (status !== "done" && status !== "idle") return false;
+		// One read serves the decision and the trace: the same session read
+		// that settles the turn supplies its log, cause, and detail (ADR 0015).
+		const turnEnd = await this.maybeReadTurnEnd(ticket, own);
+		if (!this.maybeSettles(ticket, turnEnd)) return false;
+		return await this.settle(ticket, own, turnEnd);
 	}
 
 	/** The walk over the awaiting tickets: a working Agent resumes the pending turn. */
@@ -942,13 +973,13 @@ export class ObservationCoordinator {
 		}
 
 		let changed = reclaimed;
-		changed = (await this.walkInFlight(byPane, inFlightNames, autoOn)) || changed;
-		if (this.stopped) return;
+		changed = await this.runCycleStep(changed, () =>
+			this.walkInFlight(byPane, inFlightNames, autoOn),
+		);
 
 		// An awaiting ticket that reports working again resumes its still-pending
 		// turn. It holds a slot and its next settle refreshes the same trace.
-		changed = (await this.resumeAwaitingTurns(byPane)) || changed;
-		if (this.stopped) return;
+		changed = await this.runCycleStep(changed, () => this.resumeAwaitingTurns(byPane));
 
 		// The re-fire of the recorded skips (ADR 0042): a refresh that found
 		// the fixing pull request re-fires the transition the ticket's newest
@@ -957,8 +988,7 @@ export class ObservationCoordinator {
 		// cycle settled re-fires in the same cycle the pull request already
 		// lists, and before the top-up, so the re-fired skip's route is the
 		// top-up's continuation candidate in this same cycle (ADR 0051).
-		changed = (await this.refireSkips()) || changed;
-		if (this.stopped) return;
+		changed = await this.runCycleStep(changed, () => this.refireSkips());
 
 		// The awaiting walk resolves the completions the machine closes (ADR
 		// 0051): a routable completion rests in awaiting, and its route is the
@@ -966,10 +996,19 @@ export class ObservationCoordinator {
 		// derivations (ADR 0092): the walk reads the pile once, and re-reads it
 		// only after a close moved a row another turn's derivation reads. Manual
 		// mode runs no automatic rule, so it reads no pile for one.
-		changed = (await this.walkAwaitingRows(autoOn)) || changed;
-		if (this.stopped) return;
+		changed = await this.runCycleStep(changed, () => this.walkAwaitingRows(autoOn));
 
 		await this.finishCycle(probe.agents, byPane, changed);
+	}
+
+	/**
+	 * One step of the cycle: the step's change joins the cycle's, and a stop
+	 * during the step ends the cycle before the next step touches state.
+	 */
+	private async runCycleStep(changed: boolean, step: () => Promise<boolean>): Promise<boolean> {
+		const moved = await step();
+		if (this.stopped) return changed;
+		return moved || changed;
 	}
 
 	/**
@@ -1030,24 +1069,29 @@ export class ObservationCoordinator {
 		// finished turn settles without waiting out the interval. The poll
 		// keeps its standing: a wake only runs the same cycle on the same facts.
 		this.armAgentWaits(byPane);
-		// The Dispatch pause is derived from the traces each cycle and never
-		// stored (ADR 0016). The Message line reports it when it trips and when
-		// it clears, so the operator hears about the factory stopping and
-		// resuming dispatch on the line it already watches, in any mode: the
-		// pause holds the transition routes in manual mode too. The
-		// mode cell wears it `paused` in auto mode, the state it names.
-		const effectivePause = this.state.ticketWorkCycle.dispatchPauseActive();
-		if (effectivePause !== this.pauseActive) {
-			this.pauseActive = effectivePause;
-			this.onStatus(
-				effectivePause ? "warning" : "info",
-				effectivePause
-					? "Dispatch pause: a held failed turn is blocking automatic dispatch"
-					: "Dispatch pause cleared: automatic dispatch resumes",
-			);
-		}
+		this.reportDispatchPause();
 		if (walked) this.onChanged();
 		this.onAgents?.(agents);
+	}
+
+	/**
+	 * The Dispatch pause is derived from the traces each cycle and never
+	 * stored (ADR 0016). The Message line reports it when it trips and when
+	 * it clears, so the operator hears about the factory stopping and
+	 * resuming dispatch on the line it already watches, in any mode: the
+	 * pause holds the transition routes in manual mode too. The mode cell
+	 * wears it `paused` in auto mode, the state it names.
+	 */
+	private reportDispatchPause(): void {
+		const effectivePause = this.state.ticketWorkCycle.dispatchPauseActive();
+		if (effectivePause === this.pauseActive) return;
+		this.pauseActive = effectivePause;
+		this.onStatus(
+			effectivePause ? "warning" : "info",
+			effectivePause
+				? "Dispatch pause: a held failed turn is blocking automatic dispatch"
+				: "Dispatch pause cleared: automatic dispatch resumes",
+		);
 	}
 
 	/**
@@ -1081,6 +1125,11 @@ export class ObservationCoordinator {
 			if (own === null || normalizeAgentStatus(own.status) !== "working") continue;
 			this.armAgentWait(name);
 		}
+		this.armConsultationWaits(byPane);
+	}
+
+	/** The wake arm over the working Consultations, the ticket arm's sibling. */
+	private armConsultationWaits(byPane: Map<string, HerdrAgent>): void {
 		for (const consultation of this.state.consultationRecord.consultationsByState(["working"])) {
 			const name = consultation.agentName;
 			if (name === "") continue;
@@ -1172,31 +1221,7 @@ export class ObservationCoordinator {
 	 * Returns whether the factory state changed.
 	 */
 	private reclaimLiveAgents(byPane: ReadonlyMap<string, HerdrAgent>): boolean {
-		const held = new Set<string>();
-		// A routed open ticket's recorded pane is held the way any non-open
-		// ticket's is (ADR 0072): the ticket still names the handoff that ran
-		// its settled turn, and the pane is not handed to a stranger while the
-		// route stands on its Work queue's item.
-		for (const ticket of this.state.ticketWorkCycle.ticketsByState([
-			"handed-off",
-			"running",
-			"awaiting",
-		])) {
-			if (ticket.paneId !== null) held.add(ticket.paneId);
-		}
-		for (const ticket of this.state.ticketWorkCycle.ticketsByState(["open"])) {
-			if (ticket.paneId === null) continue;
-			const decision =
-				this.state.ticketWorkCycle.lastCompletion(ticket.ticketIdentity)?.decision ?? null;
-			if (
-				decision === "handed-off" ||
-				decision === "auto-handed-off" ||
-				decision === "merged" ||
-				decision === "auto-merged"
-			) {
-				held.add(ticket.paneId);
-			}
-		}
+		const held = this.heldPanesOf();
 		let changed = false;
 		const restingTickets = this.state.ticketWorkCycle.ticketsByState(["open"]);
 		const restingNames = this.agentNames(restingTickets);
@@ -1205,18 +1230,8 @@ export class ObservationCoordinator {
 			if (ticket.paneId === null || held.has(ticket.paneId)) continue;
 			const agent = byPane.get(ticket.paneId);
 			if (agent === undefined) continue;
-			const status = normalizeAgentStatus(agent.status);
-			if (status !== "working" && status !== "blocked") continue;
-			// The pane id of a closed pane is handed out again: a Consultation
-			// or another ticket's agent can hold the id this ticket's last
-			// handoff recorded. Only the agent that runs under the ticket's
-			// own name is the ticket's own; anything else is not reclaimed.
-			const name = agent.name;
-			if (
-				name === undefined ||
-				identifyHandoffAgentName(name, restingNames.get(ticket.ticketIdentity) ?? "") !== "own"
-			)
-				continue;
+			const name = this.reclaimNameOf(ticket, agent, restingNames);
+			if (name === null) continue;
 			const claimed = this.state.handoff.reclaimHandoff(ticket.ticketIdentity, {
 				paneId: agent.paneId,
 				tabId: agent.tabId,
@@ -1234,63 +1249,143 @@ export class ObservationCoordinator {
 		return changed;
 	}
 
+	/**
+	 * The panes the reclaim walk leaves alone.
+	 *
+	 * A routed open ticket's recorded pane is held the way any non-open
+	 * ticket's is (ADR 0072): the ticket still names the handoff that ran
+	 * its settled turn, and the pane is not handed to a stranger while the
+	 * route stands on its Work queue's item.
+	 */
+	private heldPanesOf(): Set<string> {
+		const held = new Set<string>();
+		for (const ticket of this.state.ticketWorkCycle.ticketsByState([
+			"handed-off",
+			"running",
+			"awaiting",
+		])) {
+			if (ticket.paneId !== null) held.add(ticket.paneId);
+		}
+		const routedDecisions = ["handed-off", "auto-handed-off", "merged", "auto-merged"];
+		for (const ticket of this.state.ticketWorkCycle.ticketsByState(["open"])) {
+			if (ticket.paneId === null) continue;
+			const decision =
+				this.state.ticketWorkCycle.lastCompletion(ticket.ticketIdentity)?.decision ?? null;
+			if (decision !== null && routedDecisions.includes(decision)) held.add(ticket.paneId);
+		}
+		return held;
+	}
+
+	/**
+	 * The name the live agent holds when the resting ticket reclaims it.
+	 *
+	 * Only a working or blocked agent is reclaimed: an idle, done, or unknown
+	 * report says nothing about live work. The pane id of a closed pane is
+	 * handed out again: a Consultation or another ticket's agent can hold the
+	 * id this ticket's last handoff recorded. Only the agent that runs under
+	 * the ticket's own name is the ticket's own; anything else is not
+	 * reclaimed.
+	 */
+	private reclaimNameOf(
+		ticket: HandoffTicket,
+		agent: HerdrAgent,
+		restingNames: Map<string, string>,
+	): string | null {
+		const status = normalizeAgentStatus(agent.status);
+		if (status !== "working" && status !== "blocked") return null;
+		const name = agent.name;
+		if (name === undefined) return null;
+		const own = identifyHandoffAgentName(name, restingNames.get(ticket.ticketIdentity) ?? "");
+		return own === "own" ? name : null;
+	}
+
 	/** Reconcile durable Consultations from the same Agent list as Tickets. */
 	private async observeConsultations(agents: readonly HerdrAgent[]): Promise<boolean> {
+		let changed = false;
 		const consultations = this.state.consultationRecord.consultationsByState([
 			"opening",
 			"working",
 			"awaiting-response",
 		]);
-		let changed = false;
 		for (const consultation of consultations) {
 			if (this.stopped) return changed;
-			const match = matchConsultationAgent(consultation, agents);
-			if (match === "ambiguous" || match === undefined) {
-				changed = this.consultationUnmatched(consultation, match) || changed;
-				continue;
-			}
-			if (consultation.state === "opening") {
-				changed = this.consultationOpening(consultation, match) || changed;
-				continue;
-			}
-			if (
-				consultation.paneId !== match.paneId ||
-				consultation.tabId !== match.tabId ||
-				consultation.workspaceId !== match.workspaceId
-			) {
-				this.state.consultationRecord.updateConsultationAgentHandles(consultation.id, {
-					paneId: match.paneId,
-					tabId: match.tabId,
-					workspaceId: match.workspaceId,
-					sessionId: match.stableSessionId ?? consultation.sessionId,
-				});
-				changed = true;
-			}
-			const status = normalizeAgentStatus(match.status);
-			if (status === "unknown") {
-				if (consultation.warning !== "Agent status is unknown") {
-					this.state.consultationRecord.setConsultationWarning(
-						consultation.id,
-						"Agent status is unknown",
-					);
-					this.onStatus(
-						"warning",
-						`Agent status is unknown for Consultation ${consultation.id.slice(0, 8)}`,
-					);
-					changed = true;
-				}
-				continue;
-			}
-			if (consultation.warning === "Agent status is unknown") {
-				this.state.consultationRecord.setConsultationWarning(consultation.id, null);
-				changed = true;
-			}
-			changed = (await this.consultationExternalTurn(consultation, match)) || changed;
-			const current = this.state.consultationRecord.consultation(consultation.id);
-			if (current?.state !== "working" || status === "working") continue;
-			changed = (await this.settleWorkingConsultation(consultation, match, status)) || changed;
+			changed = (await this.observeOneConsultation(consultation, agents)) || changed;
 		}
 		return changed;
+	}
+
+	/**
+	 * The one durable Consultation the poll reconciles: its match, its handles,
+	 * its status, and its working turn.
+	 */
+	private async observeOneConsultation(
+		consultation: Consultation,
+		agents: readonly HerdrAgent[],
+	): Promise<boolean> {
+		const match = matchConsultationAgent(consultation, agents);
+		if (match === "ambiguous" || match === undefined) {
+			return this.consultationUnmatched(consultation, match);
+		}
+		if (consultation.state === "opening") {
+			return this.consultationOpening(consultation, match);
+		}
+		let moved = this.refreshConsultationHandles(consultation, match);
+		const status = normalizeAgentStatus(match.status);
+		if (status === "unknown") {
+			return this.consultUnknownStatus(consultation) || moved;
+		}
+		if (consultation.warning === "Agent status is unknown") {
+			this.state.consultationRecord.setConsultationWarning(consultation.id, null);
+			moved = true;
+		}
+		return (await this.consultWorkingTurn(consultation, match, status)) || moved;
+	}
+
+	/**
+	 * The durable handles a verified Agent carries when they differ from the
+	 * record's: the write is the change the reconciler reports.
+	 */
+	private refreshConsultationHandles(consultation: Consultation, match: HerdrAgent): boolean {
+		if (
+			consultation.paneId === match.paneId &&
+			consultation.tabId === match.tabId &&
+			consultation.workspaceId === match.workspaceId
+		) {
+			return false;
+		}
+		this.state.consultationRecord.updateConsultationAgentHandles(consultation.id, {
+			paneId: match.paneId,
+			tabId: match.tabId,
+			workspaceId: match.workspaceId,
+			sessionId: match.stableSessionId ?? consultation.sessionId,
+		});
+		return true;
+	}
+
+	/** The warning one Consultation takes when its Agent's status is unknown. */
+	private consultUnknownStatus(consultation: Consultation): boolean {
+		if (consultation.warning === "Agent status is unknown") return false;
+		this.state.consultationRecord.setConsultationWarning(
+			consultation.id,
+			"Agent status is unknown",
+		);
+		this.onStatus(
+			"warning",
+			`Agent status is unknown for Consultation ${consultation.id.slice(0, 8)}`,
+		);
+		return true;
+	}
+
+	/** The working Consultation's external turn, and its settle when the turn ends. */
+	private async consultWorkingTurn(
+		consultation: Consultation,
+		match: HerdrAgent,
+		status: string,
+	): Promise<boolean> {
+		const moved = await this.consultationExternalTurn(consultation, match);
+		const current = this.state.consultationRecord.consultation(consultation.id);
+		if (current?.state !== "working" || status === "working") return moved;
+		return (await this.settleWorkingConsultation(consultation, match, status)) || moved;
 	}
 
 	/**
@@ -1449,47 +1544,67 @@ export class ObservationCoordinator {
 		turnRead: SessionTurnRead,
 	): Promise<boolean> {
 		const turnEnd: TurnEnd | null = turnRead.kind === "ended" ? turnRead.turnEnd : null;
-		let turnLog: TurnLogEntry[] = turnEnd?.log ?? [];
 		const cause: TurnEndCause =
 			turnEnd?.cause ?? (turnRead.kind === "no-turn" ? "no-turn" : "unknown");
 		const detail: string = turnEnd?.detail ?? "";
-		let message = lastMessageFromLog(turnLog);
-		if (turnLog.length === 0) {
-			const capture =
-				(await this.herdr.readPane(agent.paneId, this.config().completionMessageLines)) ?? "";
-			turnLog = turnLogFromCapture(capture);
-			message = capture;
-		} else if (message === "") {
-			// The log holds no final text: the capture stands in for the
-			// message, the session log stays.
-			message =
-				(await this.herdr.readPane(agent.paneId, this.config().completionMessageLines)) ?? "";
-		}
+		const resolved = await this.settleMessage(turnEnd?.log ?? [], agent);
 		if (this.stopped) return true;
 		// The transition fires on a `completed` settle, before the completion
 		// decision, in manual mode and in auto mode alike (ADR 0027): it
 		// writes the label facts and the trace stores its outcome, so the
 		// decision the operator or the loop makes next reads the facts the
 		// plane wrote, not a re-read of the source.
-		let transition: TransitionOutcome | null;
+		let transition: TransitionOutcome | null = null;
 		if (cause === "completed" && this.fireCompleted !== undefined) {
 			transition = (await this.fireCompleted(ticket)) ?? null;
 			if (this.stopped) return true;
-		} else {
-			transition = null;
 		}
 		this.state.ticketWorkCycle.settleTurn({
 			ticketIdentity: ticket.ticketIdentity,
 			handoffId: ticket.handoffAttemptId,
 			taskType: ticket.taskType,
 			agentType: ticket.agentType,
-			message,
-			turnLog,
+			message: resolved.message,
+			turnLog: resolved.turnLog,
 			cause,
 			detail,
 			completedAt: new Date(this.now()).toISOString(),
 			...(transition === null ? {} : { transition }),
 		});
+		this.reportSettleStatus(ticket, cause, detail, transition);
+		return true;
+	}
+
+	/**
+	 * The settle's message and its log: the session log when it holds a final
+	 * text, the terminal capture when it does not.
+	 *
+	 * The log holds no final text: the capture stands in for the
+	 * message, the session log stays.
+	 */
+	private async settleMessage(
+		turnLog: TurnLogEntry[],
+		agent: HerdrAgent,
+	): Promise<{ turnLog: TurnLogEntry[]; message: string }> {
+		const message = lastMessageFromLog(turnLog);
+		if (turnLog.length === 0) {
+			const capture =
+				(await this.herdr.readPane(agent.paneId, this.config().completionMessageLines)) ?? "";
+			return { turnLog: turnLogFromCapture(capture), message: capture };
+		}
+		if (message !== "") return { turnLog, message };
+		const capture =
+			(await this.herdr.readPane(agent.paneId, this.config().completionMessageLines)) ?? "";
+		return { turnLog, message: capture };
+	}
+
+	/** The settle's facts on the Message line, held or settled, and the label failure. */
+	private reportSettleStatus(
+		ticket: HandoffTicket,
+		cause: TurnEndCause,
+		detail: string,
+		transition: TransitionOutcome | null,
+	): void {
 		// The Message line reports the hold at the moment it happens (user story
 		// 29): a held settle is a warning that names the ticket and the cause,
 		// with the detail truncated to the line and readable in full in the
@@ -1500,9 +1615,9 @@ export class ObservationCoordinator {
 				"warning",
 				`ticket ${ticket.ticketIdentity} held (${cause})${detail === "" ? "" : `: ${detail}`}`,
 			);
-		} else {
-			this.onStatus("info", `agent settled a turn on ticket ${ticket.ticketIdentity}`);
+			return;
 		}
+		this.onStatus("info", `agent settled a turn on ticket ${ticket.ticketIdentity}`);
 		// The failed label write is loud on the line the operator already watches
 		// (ADR 0092): the turn parks for the operator, the machine routes nothing
 		// from labels it did not write, and the reason stands on the cycle that
@@ -1515,7 +1630,6 @@ export class ObservationCoordinator {
 				`ticket ${ticket.ticketIdentity} settled, and its label write failed: ${transition.writeFailure}`,
 			);
 		}
-		return true;
 	}
 
 	/**
@@ -2018,34 +2132,46 @@ export class ObservationCoordinator {
 			this.log.info(automaticHoldLine(hold, (identity) => this.ticketName(identity)));
 		}
 		const reported = new Map(this.automaticHolds);
-		if (!freshWorkWalkRan) {
-			// `queue-row-standing` is the fact only the fresh-work walk states: the
-			// continuation walk answers its own queue rule (ADR 0094), and the mode,
-			// the pause, and the Dispatch pause are noted by both walks. So the carry-
-			// over names one reason, and it is the one the skipped walk owns.
-			for (const [key, hold] of this.automaticHoldsReported)
-				if (hold.reason === "queue-row-standing") reported.set(key, hold);
-		}
-		if (!modeOn) {
-			// `next-step-held` is the fact only the awaiting walk states (ADR 0092),
-			// and the walk reads no held step while the mode is off: the skip is the
-			// cycle's own choice, not the fact leaving, so a hold that stood through
-			// the toggle is carried the way the skipped walk's row is, and the mode
-			// returning to a still-standing hold is not a new fact (issue #232).
-			for (const [key, hold] of this.automaticHoldsReported)
-				if (hold.reason === "next-step-held") reported.set(key, hold);
-		}
-		// The fresh-work walk's per-candidate facts (issue #231) carry per candidate,
-		// not per walk: the walk read the candidates its gate left standing, and the
-		// ones it stopped before keep the facts the last line stated - the stop is the
-		// cycle's own choice, not the fact leaving. A candidate the walk read retires
-		// every fact it stands on and stands whatever the gate answers now.
+		// `queue-row-standing` is the fact only the fresh-work walk states: the
+		// continuation walk answers its own queue rule (ADR 0094), and the mode,
+		// the pause, and the Dispatch pause are noted by both walks. So the carry-
+		// over names one reason, and it is the one the skipped walk owns.
+		if (!freshWorkWalkRan) this.carryReasonHolds(reported, "queue-row-standing");
+		// `next-step-held` is the fact only the awaiting walk states (ADR 0092),
+		// and the walk reads no held step while the mode is off: the skip is the
+		// cycle's own choice, not the fact leaving, so a hold that stood through
+		// the toggle is carried the way the skipped walk's row is, and the mode
+		// returning to a still-standing hold is not a new fact (issue #232).
+		if (!modeOn) this.carryReasonHolds(reported, "next-step-held");
+		this.carryCandidateHolds(reported);
+		this.automaticHoldsReported = reported;
+		this.automaticHolds = new Map();
+	}
+
+	/**
+	 * The reported hold that carries one reason forward, when that walk skipped.
+	 *
+	 * The hold the skipped walk owns keeps standing: the skip is the cycle's
+	 * own choice, not the fact leaving.
+	 */
+	private carryReasonHolds(reported: Map<string, AutomaticHold>, reason: string): void {
+		for (const [key, hold] of this.automaticHoldsReported)
+			if (hold.reason === reason) reported.set(key, hold);
+	}
+
+	/**
+	 * The fresh-work walk's per-candidate facts (issue #231), carried per
+	 * candidate, not per walk: the walk read the candidates its gate left
+	 * standing, and the ones it stopped before keep the facts the last line
+	 * stated - the stop is the cycle's own choice, not the fact leaving. A
+	 * candidate the walk read retires every fact it stands on and stands
+	 * whatever the gate answers now.
+	 */
+	private carryCandidateHolds(reported: Map<string, AutomaticHold>): void {
 		for (const [key, hold] of this.automaticHoldsReported) {
 			if (hold.candidate === undefined) continue;
 			if (!this.freshWorkCandidatesRead.has(hold.candidate)) reported.set(key, hold);
 		}
-		this.automaticHoldsReported = reported;
-		this.automaticHolds = new Map();
 	}
 
 	/**

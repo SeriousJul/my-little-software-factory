@@ -21,7 +21,7 @@ import { widthOf } from "../src/components/text.ts";
 import type { FactoryConfig } from "../src/config.ts";
 import type { Ticket } from "../src/domain/ticket.ts";
 import type { FactoryState } from "../src/state.ts";
-import type { AppSetup } from "./app-harness.ts";
+import type { AppSetup, Setup } from "./app-harness.ts";
 import {
 	actionBarRowOf,
 	awaitFrame,
@@ -367,6 +367,39 @@ describe("the contextual Action bar", () => {
 		}
 	});
 
+	/** The bar one ladder width holds: the hints kept, and the ones removed. */
+	async function ladderStep(setup: AppSetup, width: number, kept: string[]): Promise<void> {
+		setup.resize(width, HEIGHT);
+		const rows = rowsOf(await settle(setup));
+		for (const row of rows) expect(widthOf(row)).toBe(width);
+		const bar = rows.at(-1) ?? "";
+		for (const hint of kept) expect(bar).toContain(hint);
+		expect(bar.trimEnd().endsWith("? Help")).toBe(true);
+		for (const gone of [
+			"Detail",
+			"Hand off",
+			"Goto",
+			"Section",
+			"Launch",
+			"Close",
+			"Override",
+			"Refresh",
+			"Ignore",
+			"Mute",
+			"Filter",
+		]) {
+			if (!kept.some((hint) => hint.includes(gone))) expect(bar).not.toContain(gone);
+		}
+	}
+
+	/** The bar one width below the minimum holds: Help, left-aligned. */
+	async function compactStep(setup: AppSetup, width: number): Promise<void> {
+		setup.resize(width, HEIGHT);
+		const rows = rowsOf(await settle(setup));
+		for (const row of rows) expect(widthOf(row)).toBe(width);
+		expect(rows.at(-1)?.trimEnd()).toBe("? Help");
+	}
+
 	test("narrow widths remove complete low-priority hints, and Help is the last kept", async () => {
 		const runner = new FakeRunner();
 		await withApp(
@@ -437,36 +470,9 @@ describe("the contextual Action bar", () => {
 					[45, ["↑↓/jk Move", "→/l Detail", "? Help"]],
 					[40, ["↑↓/jk Move", "→/l Detail", "? Help"]],
 				];
-				for (const [width, kept] of ladder) {
-					setup.resize(width, HEIGHT);
-					const rows = rowsOf(await settle(setup));
-					for (const row of rows) expect(widthOf(row)).toBe(width);
-					const bar = rows.at(-1) ?? "";
-					for (const hint of kept) expect(bar).toContain(hint);
-					expect(bar.trimEnd().endsWith("? Help")).toBe(true);
-					for (const gone of [
-						"Detail",
-						"Hand off",
-						"Goto",
-						"Section",
-						"Launch",
-						"Close",
-						"Override",
-						"Refresh",
-						"Ignore",
-						"Mute",
-						"Filter",
-					]) {
-						if (!kept.some((hint) => hint.includes(gone))) expect(bar).not.toContain(gone);
-					}
-				}
+				for (const [width, kept] of ladder) await ladderStep(setup, width, kept);
 				// Below the minimum size the compact frame keeps Help, left-aligned.
-				for (const width of [39, 30, 10]) {
-					setup.resize(width, HEIGHT);
-					const rows = rowsOf(await settle(setup));
-					for (const row of rows) expect(widthOf(row)).toBe(width);
-					expect(rows.at(-1)?.trimEnd()).toBe("? Help");
-				}
+				for (const width of [39, 30, 10]) await compactStep(setup, width);
 				// Below the full hint's width, only the key cell of Help remains.
 				setup.resize(4, HEIGHT);
 				const tinyRows = rowsOf(await settle(setup));

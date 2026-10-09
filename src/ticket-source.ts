@@ -241,33 +241,36 @@ class GitHubTicketSource implements TicketSource {
 					reason: "GitHub search has 1,000 or more results and is incomplete",
 				};
 			}
-			if (page.cost === undefined) costComplete = false;
-			else costPoints += page.cost;
-			for (const node of page.nodes) {
-				const normalized = normalizeGitHubNode(node, this.config);
-				if (!normalized.ok) return { status: "failed", reason: normalized.reason };
-				// An issue blocked by an unclosed issue is not handoff work. The
-				// source drops it the way the `blocked` label does, so the app
-				// never sees it at all.
-				if (normalized.blocked) continue;
-				// A node the search index still lists but that has stopped being
-				// open - a pull request merged or an issue closed a moment ago,
-				// the index lag the `is:open` scope cannot express - is no work.
-				// The node's own state carries the fact, and the source drops it
-				// the way the blocked link does: the snapshot is the live open
-				// list alone, and a merged ticket the plane just retired does not
-				// reappear on the refresh that follows.
-				if (!normalized.open) continue;
-				tickets.push(normalized.ticket);
-			}
-			if (!page.hasNextPage)
-				return costComplete
-					? { status: "success", tickets, costPoints }
-					: { status: "success", tickets };
+			[costPoints, costComplete] = pageCostOf(page, costPoints, costComplete);
+			const failure = this.ticketsFromNodes(page.nodes, tickets);
+			if (failure !== null) return { status: "failed", reason: failure };
+			if (!page.hasNextPage) return querySuccessOf(tickets, costPoints, costComplete);
 			if (page.endCursor === undefined)
 				return { status: "failed", reason: "GitHub returned a next page without a cursor" };
 			cursor = page.endCursor;
 		}
+	}
+
+	/** The tickets one page's nodes hold, and the failure one node earns. */
+	private ticketsFromNodes(nodes: readonly unknown[], tickets: FetchedTicket[]): string | null {
+		for (const node of nodes) {
+			const normalized = normalizeGitHubNode(node, this.config);
+			if (!normalized.ok) return normalized.reason;
+			// An issue blocked by an unclosed issue is not handoff work. The
+			// source drops it the way the `blocked` label does, so the app
+			// never sees it at all.
+			if (normalized.blocked) continue;
+			// A node the search index still lists but that has stopped being
+			// open - a pull request merged or an issue closed a moment ago,
+			// the index lag the `is:open` scope cannot express - is no work.
+			// The node's own state carries the fact, and the source drops it
+			// the way the blocked link does: the snapshot is the live open
+			// list alone, and a merged ticket the plane just retired does not
+			// reappear on the refresh that follows.
+			if (!normalized.open) continue;
+			tickets.push(normalized.ticket);
+		}
+		return null;
 	}
 
 	/**
@@ -396,6 +399,25 @@ type QueryResult =
 			costPoints?: number;
 	  }
 	| { status: "failed"; reason: string };
+
+/** The page's cost added to the query's running cost and completeness. */
+function pageCostOf(
+	page: Extract<Page, { ok: true }>,
+	costPoints: number,
+	costComplete: boolean,
+): [number, boolean] {
+	if (page.cost === undefined) return [costPoints, false];
+	return [costPoints + page.cost, costComplete];
+}
+
+/** The query's success, the cost it carries when every page read one. */
+function querySuccessOf(
+	tickets: FetchedTicket[],
+	costPoints: number,
+	costComplete: boolean,
+): QueryResult {
+	return costComplete ? { status: "success", tickets, costPoints } : { status: "success", tickets };
+}
 
 /** The labels of one node's label connection, or undefined when unreadable. */
 function labelNamesOf(raw: unknown): string[] | undefined {

@@ -21,6 +21,7 @@ import type { TicketSourceConfig } from "../src/config.ts";
 import { loadConfigFile } from "../src/config.ts";
 import type { Ticket } from "../src/domain/ticket.ts";
 import { runMergePullRequest } from "../src/plane-actions.ts";
+import type { CommandRunner } from "../src/runner.ts";
 import { worldCli } from "../src/stub/cli.ts";
 import { createStubRunner } from "../src/stub/runner.ts";
 import { renderStubConfig, stubWorldSeed } from "../src/stub/seed.ts";
@@ -693,6 +694,22 @@ describe("the plane action's merge run, the real module over the world", () => {
 	});
 });
 
+/** The fetch answers one source kind gets, with the meter the stub path stands in. */
+async function sourceFetchFor(
+	runner: CommandRunner,
+	kind: TicketSourceConfig["kind"],
+): Promise<void> {
+	const result = await createTicketSource(source(kind), runner).fetch();
+	expect(result.status).toBe("success");
+	if (result.status !== "success") return;
+	// The meter stands in the stub path with the metered query: the search
+	// sources report the points their snapshot read cost, and the REST
+	// feeds read no GraphQL and leave the field absent.
+	if (kind === "github-issues" || kind === "github-pull-requests")
+		expect(result.costPoints).toBeTypeOf("number");
+	else expect(result).not.toHaveProperty("costPoints");
+}
+
 describe("the closed surface", () => {
 	test("the real command shapes the plane issues meet no refusal", async () => {
 		const dir = tempDir();
@@ -708,17 +725,7 @@ describe("the closed surface", () => {
 			"github-dependabot-alerts",
 			"github-secret-scanning-alerts",
 		];
-		for (const kind of kinds) {
-			const result = await createTicketSource(source(kind), runner).fetch();
-			expect(result.status).toBe("success");
-			if (result.status !== "success") continue;
-			// The meter stands in the stub path with the metered query: the search
-			// sources report the points their snapshot read cost, and the REST
-			// feeds read no GraphQL and leave the field absent.
-			if (kind === "github-issues" || kind === "github-pull-requests")
-				expect(result.costPoints).toBeTypeOf("number");
-			else expect(result).not.toHaveProperty("costPoints");
-		}
+		for (const kind of kinds) await sourceFetchFor(runner, kind);
 
 		// The verdict reads the score Judgment walks, on the seed's items.
 		for (const repository of store.world.repositories) {

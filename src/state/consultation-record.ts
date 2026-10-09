@@ -1049,41 +1049,46 @@ export class ConsultationRecordModule implements ConsultationRecordAggregate {
 	}
 	updateConsultationAgentHandles(id: string, details: ConsultationAgentDetails): void {
 		this.db.transaction(() => {
-			const current = this.consultation(id);
-			if (current == null) return;
-			const moves: Array<[string, string | null, string | null]> = [
-				["pane", current.paneId, details.paneId],
-				["tab", current.tabId, details.tabId ?? null],
-				["workspace", current.workspaceId, details.workspaceId ?? null],
-			];
-			for (const [kind, from, to] of moves) {
-				if (from === null || to === null || from === to) continue;
-				this.db
-					.prepare(
-						"UPDATE consultation_resources SET resource_id = ?, details = REPLACE(details, ?, ?) WHERE consultation_id = ? AND kind = ? AND resource_id = ? AND owned = 1 AND confirmed_closed = 0",
-					)
-					.run(to, from, to, id, kind, from);
-			}
-			if (current.paneId !== null && current.paneId !== details.paneId)
-				this.db
-					.prepare(
-						"UPDATE consultation_resources SET details = REPLACE(details, ?, ?) WHERE consultation_id = ? AND kind = 'agent' AND owned = 1 AND confirmed_closed = 0",
-					)
-					.run(details.paneId, current.paneId, id);
-			// Follow-up handle writes are bookkeeping and, like the launch's,
-			// do not advance the record's activity time.
+			this.applyAgentHandleMoves(id, details);
+		});
+	}
+
+	/** The one agent-handle move set a follow-up launch writes. */
+	private applyAgentHandleMoves(id: string, details: ConsultationAgentDetails): void {
+		const current = this.consultation(id);
+		if (current == null) return;
+		const moves: Array<[string, string | null, string | null]> = [
+			["pane", current.paneId, details.paneId],
+			["tab", current.tabId, details.tabId ?? null],
+			["workspace", current.workspaceId, details.workspaceId ?? null],
+		];
+		for (const [kind, from, to] of moves) {
+			if (from === null || to === null || from === to) continue;
 			this.db
 				.prepare(
-					"UPDATE consultations SET pane_id = ?, tab_id = ?, workspace_id = ?, session_id = ? WHERE id = ?",
+					"UPDATE consultation_resources SET resource_id = ?, details = REPLACE(details, ?, ?) WHERE consultation_id = ? AND kind = ? AND resource_id = ? AND owned = 1 AND confirmed_closed = 0",
 				)
-				.run(
-					details.paneId,
-					details.tabId ?? null,
-					details.workspaceId ?? null,
-					details.sessionId ?? current.sessionId,
-					id,
-				);
-		});
+				.run(to, from, to, id, kind, from);
+		}
+		if (current.paneId !== null && current.paneId !== details.paneId)
+			this.db
+				.prepare(
+					"UPDATE consultation_resources SET details = REPLACE(details, ?, ?) WHERE consultation_id = ? AND kind = 'agent' AND owned = 1 AND confirmed_closed = 0",
+				)
+				.run(details.paneId, current.paneId, id);
+		// Follow-up handle writes are bookkeeping and, like the launch's,
+		// do not advance the record's activity time.
+		this.db
+			.prepare(
+				"UPDATE consultations SET pane_id = ?, tab_id = ?, workspace_id = ?, session_id = ? WHERE id = ?",
+			)
+			.run(
+				details.paneId,
+				details.tabId ?? null,
+				details.workspaceId ?? null,
+				details.sessionId ?? current.sessionId,
+				id,
+			);
 	}
 	fillConsultationSnapshot(
 		id: string,

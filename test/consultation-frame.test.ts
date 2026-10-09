@@ -31,6 +31,7 @@ import type {
 import { workQueueIdentityOf } from "../src/state/work-queue.ts";
 import type { FactoryState } from "../src/state.ts";
 import { openFactoryState } from "../src/state.ts";
+import type { AppSetup } from "./app-harness.ts";
 import {
 	actionBarRowOf,
 	awaitFrame,
@@ -95,6 +96,63 @@ const FAILED_DIRECT_ID = uid("d");
 const CLOSED_DIRECT_ID = uid("e");
 const CONFIRM_GONE_ID = uid("f");
 const LIVE_CLOSE_ID = uid("g");
+
+/** The settled frames walk: the waits line never stands over an empty Work queue. */
+async function pickupFrameWalk(setup: AppSetup, state: FactoryState): Promise<void> {
+	let sawWorking = false;
+	for (let step = 0; step < 25; step += 1) {
+		const frame = setup.captureCharFrame();
+		if (detailPaneText(frame).includes("State: working")) sawWorking = true;
+		if (state.workQueue.items().length === 0) {
+			expect(messageRowOf(frame)).not.toContain("waits in the Work queue");
+		}
+		await settle(setup, 50);
+		if (sawWorking && step > 10) break;
+	}
+}
+
+/** One Consultation's close, from the selected Agent to the settled status line. */
+async function closeConsultationStep(
+	setup: AppSetup,
+	i: number,
+	state: FactoryState,
+): Promise<string> {
+	const selected = await awaitFrame(
+		setup,
+		(f) => /Agent: pi \(consultation-[0-9a-f]{8}\)/.test(detailPaneText(f)),
+		`a working Consultation ${i + 1} of 3 to be selected`,
+	);
+	const id8 = detailPaneText(selected).match(/Agent: pi \(consultation-([0-9a-f]{8})\)/)?.[1];
+	if (id8 === undefined) throw new Error("no Consultation agent selected");
+	if (i === 0) {
+		const current = state.consultationRecord
+			.consultations("open")
+			.find((item) => item.id.slice(0, 8) === id8);
+		if (current === undefined) throw new Error(`no record for ${id8}`);
+		// The confirmation names the live Agent and the work the
+		// close keeps; a cancel leaves the state unchanged.
+		await openConsultationPanel(setup, "delete", "the close confirmation", (f) =>
+			f.includes("Close Consultation"),
+		);
+		const dialog = await settle(setup);
+		expect(dialog).toContain(
+			current.state === "opening" ? "The Agent is still opening" : "The Agent is working",
+		);
+		expect(dialog).toContain("Close stops the Agent. The worktree and branch stay.");
+		await press(setup, "escape", "the panel to close", (f) => !f.includes("Close Consultation"));
+		expect(state.consultationRecord.consultation(current.id)?.state).toBe(current.state);
+		// Reopen the dialog for the confirm.
+		await openConsultationPanel(setup, "delete", "the close confirmation", (f) =>
+			f.includes("Close Consultation"),
+		);
+	} else {
+		await openConsultationPanel(setup, "delete", "the close panel", (f) =>
+			f.includes("Close Consultation"),
+		);
+	}
+	await confirmPanel(setup, `the close status for ${id8}`, (f) => f.includes(`${id8} closed`));
+	return id8;
+}
 
 let home = "";
 let checkout = "";
@@ -1389,52 +1447,8 @@ describe("Consultation close and cleanup through the UI", () => {
 						detailPaneText(f).includes("State: "),
 					);
 					const closedIds: string[] = [];
-					for (let i = 0; i < 3; i += 1) {
-						const selected = await awaitFrame(
-							setup,
-							(f) => /Agent: pi \(consultation-[0-9a-f]{8}\)/.test(detailPaneText(f)),
-							`a working Consultation ${i + 1} of 3 to be selected`,
-						);
-						const id8 = detailPaneText(selected).match(
-							/Agent: pi \(consultation-([0-9a-f]{8})\)/,
-						)?.[1];
-						if (id8 === undefined) throw new Error("no Consultation agent selected");
-						if (i === 0) {
-							const current = state.consultationRecord
-								.consultations("open")
-								.find((item) => item.id.slice(0, 8) === id8);
-							if (current === undefined) throw new Error(`no record for ${id8}`);
-							// The confirmation names the live Agent and the work the
-							// close keeps; a cancel leaves the state unchanged.
-							await openConsultationPanel(setup, "delete", "the close confirmation", (f) =>
-								f.includes("Close Consultation"),
-							);
-							const dialog = await settle(setup);
-							expect(dialog).toContain(
-								current.state === "opening" ? "The Agent is still opening" : "The Agent is working",
-							);
-							expect(dialog).toContain("Close stops the Agent. The worktree and branch stay.");
-							await press(
-								setup,
-								"escape",
-								"the panel to close",
-								(f) => !f.includes("Close Consultation"),
-							);
-							expect(state.consultationRecord.consultation(current.id)?.state).toBe(current.state);
-							// Reopen the dialog for the confirm.
-							await openConsultationPanel(setup, "delete", "the close confirmation", (f) =>
-								f.includes("Close Consultation"),
-							);
-						} else {
-							await openConsultationPanel(setup, "delete", "the close panel", (f) =>
-								f.includes("Close Consultation"),
-							);
-						}
-						await confirmPanel(setup, `the close status for ${id8}`, (f) =>
-							f.includes(`${id8} closed`),
-						);
-						closedIds.push(id8);
-					}
+					for (let i = 0; i < 3; i += 1)
+						closedIds.push(await closeConsultationStep(setup, i, state));
 					expect(closedIds.sort()).toEqual([a, b, c].sort());
 					const commands = runner.commands();
 					expect(commands).toContain(`herdr workspace close ws-${a}`);
@@ -3379,16 +3393,7 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 					// with a free seat could claim a wait the queue no longer held. Walk
 					// the settled frames and hold the invariant the user saw broken -
 					// the waits line never stands over an empty Work queue.
-					let sawWorking = false;
-					for (let step = 0; step < 25; step += 1) {
-						const frame = setup.captureCharFrame();
-						if (detailPaneText(frame).includes("State: working")) sawWorking = true;
-						if (state.workQueue.items().length === 0) {
-							expect(messageRowOf(frame)).not.toContain("waits in the Work queue");
-						}
-						await settle(setup, 50);
-						if (sawWorking && step > 10) break;
-					}
+					await pickupFrameWalk(setup, state);
 					// The line that stands once the record works is the pickup's, not
 					// a waits line the queue no longer holds.
 					const settledFrame = setup.captureCharFrame();

@@ -64,30 +64,39 @@ function inlineSegments(text: string, base: string): MdSpan[] {
 		const index = match.index ?? 0;
 		if (index > cursor) spans.push({ text: text.slice(cursor, index), fg: base });
 		const full = match[0];
-		if (match[1] !== undefined) {
-			// Inline code: dim, the backticks drop.
-			spans.push({ text: full.slice(1, -1), fg: "dim" });
-		} else if (match[2] !== undefined || match[3] !== undefined || match[4] !== undefined) {
-			// Bold: bright. ***triple*** cuts three marks, **double** and
-			// __double__ cut two.
-			const depth = match[2] === undefined ? 2 : 3;
-			spans.push({ text: full.slice(depth, -depth), fg: "bright" });
-		} else if (match[5] !== undefined || match[6] !== undefined) {
-			// Italic: the line's voice, the mark drops.
-			spans.push({ text: full.slice(1, -1), fg: base });
-		} else if (match[7] !== undefined) {
-			// Image: the alt text stays, the URL and the marks drop.
-			spans.push({ text: full.slice(2, full.indexOf("](")), fg: base });
-		} else if (match[8] !== undefined) {
-			// Link: the label stays, the URL drops.
-			spans.push({ text: full.slice(1, full.indexOf("](")), fg: base });
-		} else {
-			spans.push({ text: full, fg: base });
-		}
+		spans.push(inlineSpan(match, base));
 		cursor = index + full.length;
 	}
 	if (cursor < text.length) spans.push({ text: text.slice(cursor), fg: base });
 	return spans;
+}
+
+/** The span one inline match's text carries. */
+function inlineSpan(match: RegExpMatchArray, base: string): MdSpan {
+	const full = match[0];
+	if (match[1] !== undefined) {
+		// Inline code: dim, the backticks drop.
+		return { text: full.slice(1, -1), fg: "dim" };
+	}
+	if (match[2] !== undefined || match[3] !== undefined || match[4] !== undefined) {
+		// Bold: bright. ***triple*** cuts three marks, **double** and
+		// __double__ cut two.
+		const depth = match[2] === undefined ? 2 : 3;
+		return { text: full.slice(depth, -depth), fg: "bright" };
+	}
+	if (match[5] !== undefined || match[6] !== undefined) {
+		// Italic: the line's voice, the mark drops.
+		return { text: full.slice(1, -1), fg: base };
+	}
+	if (match[7] !== undefined) {
+		// Image: the alt text stays, the URL and the marks drop.
+		return { text: full.slice(2, full.indexOf("](")), fg: base };
+	}
+	if (match[8] !== undefined) {
+		// Link: the label stays, the URL drops.
+		return { text: full.slice(1, full.indexOf("](")), fg: base };
+	}
+	return { text: full, fg: base };
 }
 
 /** Cut one word to pieces of at most `width` cells, on grapheme boundaries. */
@@ -116,47 +125,61 @@ function hardCut(word: string, width: number): string[] {
  */
 function wrapStyled(segments: readonly MdSpan[], width: number): MdSpan[][] {
 	if (width < 1) return [];
+	const words = wrapWords(segments);
+	const lines: MdSpan[][] = [];
+	const state: { current: MdSpan[]; width: number } = { current: [], width: 0 };
+	const flush = (): void => {
+		if (state.current.length > 0) {
+			lines.push(state.current);
+			state.current = [];
+			state.width = 0;
+		}
+	};
+	for (const word of words) placeWord({ word, width, state, flush });
+	if (state.current.length > 0) {
+		lines.push(state.current);
+	} else if (lines.length === 0) {
+		lines.push([]);
+	}
+	return lines;
+}
+
+/** The pieces one word's cut places on the line the wrap builds. */
+function placeWord(fields: {
+	word: MdSpan;
+	width: number;
+	state: { current: MdSpan[]; width: number };
+	flush: () => void;
+}): void {
+	const { word, width, state, flush } = fields;
+	for (const piece of hardCut(word.text, width)) {
+		const pieceWidth = widthOf(piece);
+		if (state.width === 0) {
+			state.current.push({ text: piece, fg: word.fg });
+			state.width = pieceWidth;
+			if (state.width >= width) flush();
+		} else if (state.width + 1 + pieceWidth <= width) {
+			state.current.push({ text: " ", fg: word.fg });
+			state.current.push({ text: piece, fg: word.fg });
+			state.width += 1 + pieceWidth;
+		} else {
+			flush();
+			state.current.push({ text: piece, fg: word.fg });
+			state.width = pieceWidth;
+			if (state.width >= width) flush();
+		}
+	}
+}
+
+/** The words one line's segments flatten to, keeping each word's voice. */
+function wrapWords(segments: readonly MdSpan[]): MdSpan[] {
 	const words: MdSpan[] = [];
 	for (const span of segments) {
 		for (const part of span.text.replace(/ {2,}/g, " ").split(" ")) {
 			if (part !== "") words.push({ text: part, fg: span.fg });
 		}
 	}
-	const lines: MdSpan[][] = [];
-	let current: MdSpan[] = [];
-	let currentWidth = 0;
-	const flush = (): void => {
-		if (current.length > 0) {
-			lines.push(current);
-			current = [];
-			currentWidth = 0;
-		}
-	};
-	for (const word of words) {
-		for (const piece of hardCut(word.text, width)) {
-			const pieceWidth = widthOf(piece);
-			if (currentWidth === 0) {
-				current.push({ text: piece, fg: word.fg });
-				currentWidth = pieceWidth;
-				if (currentWidth >= width) flush();
-			} else if (currentWidth + 1 + pieceWidth <= width) {
-				current.push({ text: " ", fg: word.fg });
-				current.push({ text: piece, fg: word.fg });
-				currentWidth += 1 + pieceWidth;
-			} else {
-				flush();
-				current.push({ text: piece, fg: word.fg });
-				currentWidth = pieceWidth;
-				if (currentWidth >= width) flush();
-			}
-		}
-	}
-	if (current.length > 0) {
-		lines.push(current);
-	} else if (lines.length === 0) {
-		lines.push([]);
-	}
-	return lines;
+	return words;
 }
 
 /**
@@ -184,20 +207,12 @@ export function renderMarkdown(source: string, width: number, colors: MdColors):
 			continue;
 		}
 		if (inCode) {
-			for (const line of wrapStyled([{ text: raw, fg: "dim" }], width - 2)) {
-				out.push(
-					line.length === 0
-						? [{ text: "  ", fg: "dim" }]
-						: [{ text: `  ${line[0].text}`, fg: line[0].fg }, ...line.slice(1)],
-				);
-			}
+			out.push(...codeBlockLines(raw, width));
 			continue;
 		}
 		const heading = raw.match(/^(#{1,6})\s+(.*)$/);
 		if (heading !== null) {
-			for (const line of wrapStyled(inlineSegments(heading[2], "bright"), width)) {
-				out.push(line);
-			}
+			out.push(...headingLines(heading[2], width));
 			continue;
 		}
 		if (raw.trim() !== "" && /^\s*([-*_])\s*(?:\1\s*){2,}$/.test(raw)) {
@@ -211,21 +226,48 @@ export function renderMarkdown(source: string, width: number, colors: MdColors):
 			indent = Math.min(Math.floor(item[1].replace(/\t/g, "  ").length / 2), 3) * 2;
 			text = `${item[2]} ${item[3]}`;
 		}
-		for (const line of wrapStyled(inlineSegments(text, "normal"), width - indent)) {
-			if (indent === 0) {
-				out.push(line);
-			} else {
-				out.push(
-					line.map((span, index) =>
-						index === 0 && span.text !== ""
-							? { text: " ".repeat(indent) + span.text, fg: span.fg }
-							: span,
-					),
-				);
-			}
-		}
+		out.push(...indentedLines(text, indent, width));
 	}
 	return out.map((line) => line.map((span) => paint(span, colors)));
+}
+
+/** The lines one code block line wraps into, indented two cells. */
+function codeBlockLines(raw: string, width: number): MdLine[] {
+	const out: MdLine[] = [];
+	for (const line of wrapStyled([{ text: raw, fg: "dim" }], width - 2)) {
+		out.push(
+			line.length === 0
+				? [{ text: "  ", fg: "dim" }]
+				: [{ text: `  ${line[0].text}`, fg: line[0].fg }, ...line.slice(1)],
+		);
+	}
+	return out;
+}
+
+/** The lines one heading wraps into, in the heading's voice. */
+function headingLines(heading: string, width: number): MdLine[] {
+	const out: MdLine[] = [];
+	for (const line of wrapStyled(inlineSegments(heading, "bright"), width)) out.push(line);
+	return out;
+}
+
+/** The lines one prose line wraps into, indented the level it stands at. */
+function indentedLines(text: string, indent: number, width: number): MdLine[] {
+	const out: MdLine[] = [];
+	for (const line of wrapStyled(inlineSegments(text, "normal"), width - indent)) {
+		if (indent === 0) {
+			out.push(line);
+		} else {
+			out.push(
+				line.map((span, index) =>
+					index === 0 && span.text !== ""
+						? { text: " ".repeat(indent) + span.text, fg: span.fg }
+						: span,
+				),
+			);
+		}
+	}
+	return out;
 }
 
 /**

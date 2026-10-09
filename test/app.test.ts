@@ -1628,14 +1628,15 @@ describe("the control plane", () => {
 					let indexOf = (needle: string) => rows.findIndex((row) => row.includes(needle));
 					const seen: string[] = [];
 					const noteSections = (): void => {
-						for (const row of rowsOf(setup.captureCharFrame())) {
-							for (const section of [
-								"Current interaction mode",
-								"Global controls",
-								"Control plane controls",
-							]) {
-								if (row.includes(section) && !seen.includes(section)) seen.push(section);
-							}
+						for (const row of rowsOf(setup.captureCharFrame())) noteRow(row);
+					};
+					const noteRow = (row: string): void => {
+						for (const section of [
+							"Current interaction mode",
+							"Global controls",
+							"Control plane controls",
+						]) {
+							if (row.includes(section) && !seen.includes(section)) seen.push(section);
 						}
 					};
 					const modeIdx = indexOf("Current interaction mode");

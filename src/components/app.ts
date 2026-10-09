@@ -1827,38 +1827,40 @@ function useAppPanelDecision(prev: AppOpenPanelStage) {
 	// the factory waits for the operator, the missing box when the pane is
 	// gone, and closed when the ticket leaves the in-flight states or leaves the
 	// work cycle the view opened on.
-	const liveMode: "stream" | "decision" | "missing" | "closed" =
-		panel?.kind === "live" &&
-		panelTicket !== undefined &&
-		// The cycle the view opened on is the cycle it shows. The write that ends
-		// a cycle moves the ticket to `open` and to the next cycle in one step, and
-		// the queued start of the route moves it on again before the plane next
-		// reads it, so the `open` frame is a moment the plane may never be handed:
-		// a surface that waited for that moment alone can be given the next
-		// cycle's frame first and then wait for a screen change that no longer
-		// comes. The cycle number is the durable form of the same fact (ADR 0110).
-		panelTicket.workCycle === panel.workCycle
-			? panelTicket.state === "open"
-				? // The route confirm ends the ticket's cycle on its own surface and
-					// the screen reads the list when the ticket leaves the stream's
-					// states (ADR 0072, ADR 0110).
-					"closed"
-				: panelTicket.state === "awaiting"
-					? // Auto-handoff mode decides the settled turn on its own, so
-						// the ticket keeps streaming; manual mode waits for the
-						// operator's hand (ADR 0092).
-						autoMode
-						? "stream"
-						: "decision"
-					: factsFor(panelTicket).failure === "missing"
-						? "missing"
-						: "stream"
-			: "closed";
+	const liveMode = livePanelMode({ panel, panelTicket, autoMode, factsFor });
 	const liveDecision =
 		panelTicket !== undefined && liveMode === "decision" ? decisionFor(panelTicket) : undefined;
 	return { ...prev, decision, liveMode, liveDecision };
 }
 type AppPanelDecisionStage = ReturnType<typeof useAppPanelDecision>;
+
+/** The mode one open Live panel shows, from the ticket's current facts. */
+function livePanelMode(fields: {
+	panel: Panel;
+	panelTicket: Ticket | undefined;
+	autoMode: boolean;
+	factsFor: (ticket: Ticket) => TicketRowFacts;
+}): "stream" | "decision" | "missing" | "closed" {
+	const { panel, panelTicket, autoMode, factsFor } = fields;
+	if (panel === null || panel.kind !== "live" || panelTicket === undefined) return "closed";
+	// The cycle the view opened on is the cycle it shows. The write that ends
+	// a cycle moves the ticket to `open` and to the next cycle in one step, and
+	// the queued start of the route moves it on again before the plane next
+	// reads it, so the `open` frame is a moment the plane may never be handed:
+	// a surface that waited for that moment alone can be given the next
+	// cycle's frame first and then wait for a screen change that no longer
+	// comes. The cycle number is the durable form of the same fact (ADR 0110).
+	if (panelTicket.workCycle !== panel.workCycle) return "closed";
+	// The route confirm ends the ticket's cycle on its own surface and
+	// the screen reads the list when the ticket leaves the stream's
+	// states (ADR 0072, ADR 0110).
+	if (panelTicket.state === "open") return "closed";
+	// Auto-handoff mode decides the settled turn on its own, so
+	// the ticket keeps streaming; manual mode waits for the
+	// operator's hand (ADR 0092).
+	if (panelTicket.state === "awaiting") return autoMode ? "stream" : "decision";
+	return factsFor(panelTicket).failure === "missing" ? "missing" : "stream";
+}
 
 /** The Consultation panel's release note and the guard that drops a panel that has nothing to show. */
 function useAppPanelRelease(prev: AppPanelDecisionStage) {
@@ -1989,33 +1991,62 @@ function useAppRenderMessages(props: AppProps, prev: AppLivePanelStage) {
 	const emptyMessage =
 		state === undefined
 			? undefined
-			: groupingEmptyMessage(
-					config.sources.length === 0
-						? "no ticket sources configured"
-						: healths.length === 0 || healths.some((health) => health.health === "loading")
-							? "loading tickets..."
-							: // A hidden pile is not an idle factory (ADR 0060, widened by ADR 0070):
-								// the empty active view points at the key that shows the rows the
-								// flags took away, and a filtered view with no rows names the view the
-								// operator is in. Each number is its ledger itself, the same one its
-								// header cell names: where the active view stands empty, every flagged
-								// row is out of it, because a row with live work or a decision owed
-								// stays in.
-								(ignoredCount > 0 || mutedCount > 0) && ticketFilter === "active"
-								? `no active Tickets; ${[
-										...(ignoredCount > 0 ? [`${ignoredCount} ignored`] : []),
-										...(mutedCount > 0 ? [`${mutedCount} muted`] : []),
-									].join(", ")} - press f`
-								: ticketFilter === "ignored"
-									? "no ignored Tickets - press f"
-									: ticketFilter === "muted"
-										? "no muted Tickets - press f"
-										: "no tickets match the configured sources",
+			: emptyTicketMessage({
+					sourceCount: config.sources.length,
+					healthCount: healths.length,
+					anyLoading: healths.some((health) => health.health === "loading"),
+					ignoredCount,
+					mutedCount,
+					ticketFilter,
 					groupingAxis,
-				);
+				});
 	return { ...prev, state, emptyMessage };
 }
 type AppRenderMessagesStage = ReturnType<typeof useAppRenderMessages>;
+
+/** The one message one empty ticket list stands under. */
+function emptyTicketMessage(fields: {
+	sourceCount: number;
+	healthCount: number;
+	anyLoading: boolean;
+	ignoredCount: number;
+	mutedCount: number;
+	ticketFilter: TicketListFilter;
+	groupingAxis: GroupingAxis;
+}): string {
+	const {
+		sourceCount,
+		healthCount,
+		anyLoading,
+		ignoredCount,
+		mutedCount,
+		ticketFilter,
+		groupingAxis,
+	} = fields;
+	if (sourceCount === 0) return groupingEmptyMessage("no ticket sources configured", groupingAxis);
+	if (healthCount === 0 || anyLoading)
+		return groupingEmptyMessage("loading tickets...", groupingAxis);
+	// A hidden pile is not an idle factory (ADR 0060, widened by ADR 0070):
+	// the empty active view points at the key that shows the rows the
+	// flags took away, and a filtered view with no rows names the view the
+	// operator is in. Each number is its ledger itself, the same one its
+	// header cell names: where the active view stands empty, every flagged
+	// row is out of it, because a row with live work or a decision owed
+	// stays in.
+	if ((ignoredCount > 0 || mutedCount > 0) && ticketFilter === "active")
+		return groupingEmptyMessage(
+			`no active Tickets; ${[
+				...(ignoredCount > 0 ? [`${ignoredCount} ignored`] : []),
+				...(mutedCount > 0 ? [`${mutedCount} muted`] : []),
+			].join(", ")} - press f`,
+			groupingAxis,
+		);
+	if (ticketFilter === "ignored")
+		return groupingEmptyMessage("no ignored Tickets - press f", groupingAxis);
+	if (ticketFilter === "muted")
+		return groupingEmptyMessage("no muted Tickets - press f", groupingAxis);
+	return groupingEmptyMessage("no tickets match the configured sources", groupingAxis);
+}
 
 /** The launcher's form: the Replacement context it opened on, or the fresh form's start. */
 function useAppRenderLaunch(props: AppProps, prev: AppRenderMessagesStage) {
@@ -3690,24 +3721,39 @@ function cursorMovePage(fields: AppCursorFields, direction: 1 | -1): void {
 
 function cursorMoveEdge(fields: AppCursorFields, edge: "start" | "end"): void {
 	if (fields.selectionRef.current === "queue") {
-		if (fields.focusedPaneRef.current === "detail")
-			fields.setWorkQueueDetailScroll(edge === "start" ? 0 : fields.workQueueDetailMaxScroll);
-		else if (fields.workExpandedRef.current)
-			cursorSelectWorkQueue(fields, edge === "start" ? 0 : fields.workQueueRef.current.length - 1);
+		queueEdgeMove(fields, edge);
 		return;
 	}
 	if (fields.selectionRef.current === "consultation") {
-		if (fields.focusedPaneRef.current === "detail") {
-			fields.consultationFollowRef.current = edge === "end";
-			fields.setConsultationScroll(edge === "start" ? 0 : 999999);
-			if (edge === "end") fields.setNewOutput(false);
-		} else if (fields.consultationsExpandedRef.current)
-			cursorSelectConsultation(
-				fields,
-				edge === "start" ? 0 : fields.consultationsRef.current.length - 1,
-			);
+		consultationEdgeMove(fields, edge);
 		return;
 	}
+	ticketEdgeMove(fields, edge);
+}
+
+/** The one edge one queue section's selection moves to. */
+function queueEdgeMove(fields: AppCursorFields, edge: "start" | "end"): void {
+	if (fields.focusedPaneRef.current === "detail")
+		fields.setWorkQueueDetailScroll(edge === "start" ? 0 : fields.workQueueDetailMaxScroll);
+	else if (fields.workExpandedRef.current)
+		cursorSelectWorkQueue(fields, edge === "start" ? 0 : fields.workQueueRef.current.length - 1);
+}
+
+/** The one edge one consultation section's selection moves to. */
+function consultationEdgeMove(fields: AppCursorFields, edge: "start" | "end"): void {
+	if (fields.focusedPaneRef.current === "detail") {
+		fields.consultationFollowRef.current = edge === "end";
+		fields.setConsultationScroll(edge === "start" ? 0 : 999999);
+		if (edge === "end") fields.setNewOutput(false);
+	} else if (fields.consultationsExpandedRef.current)
+		cursorSelectConsultation(
+			fields,
+			edge === "start" ? 0 : fields.consultationsRef.current.length - 1,
+		);
+}
+
+/** The one edge one ticket section's selection moves to. */
+function ticketEdgeMove(fields: AppCursorFields, edge: "start" | "end"): void {
 	if (fields.focusedPaneRef.current === "detail") {
 		if (edge === "start") fields.detailRef.current?.toStart();
 		else fields.detailRef.current?.toEnd();
@@ -3917,13 +3963,7 @@ function groupMoveAtCursor(fields: AppGroupOpsFields, direction: "up" | "down"):
 	// The neighbor is the next visible Group header in the direction, the
 	// way the cursor itself crosses the blank rows between the Groups.
 	const step = direction === "up" ? -1 : 1;
-	let cursor = fields.selectedIndexRef.current + step;
-	while (cursor >= 0 && cursor < rows.length) {
-		const candidate = rows[cursor];
-		if (candidate !== undefined && candidate.kind === "group" && candidate.group.value !== value)
-			break;
-		cursor += step;
-	}
+	const cursor = neighborGroupCursor(rows, fields.selectedIndexRef.current, step, value);
 	const neighborRow = cursor >= 0 && cursor < rows.length ? rows[cursor] : undefined;
 	if (neighborRow === undefined || neighborRow.kind !== "group") {
 		fields.setWarningMessage(
@@ -3940,6 +3980,33 @@ function groupMoveAtCursor(fields: AppGroupOpsFields, direction: "up" | "down"):
 		neighbor: neighborRow.group.value,
 	});
 	if (moved === null) return;
+	groupMoveWrites(fields, axis, value, moved);
+}
+
+/** The row cursor the next visible Group header in the direction stands at. */
+function neighborGroupCursor(
+	rows: readonly ListedRow<TicketRowFacts>[],
+	index: number,
+	step: number,
+	value: string,
+): number {
+	let cursor = index + step;
+	while (cursor >= 0 && cursor < rows.length) {
+		const candidate = rows[cursor];
+		if (candidate !== undefined && candidate.kind === "group" && candidate.group.value !== value)
+			break;
+		cursor += step;
+	}
+	return cursor;
+}
+
+/** The state and view writes one group move lands, and the save failure it names. */
+function groupMoveWrites(
+	fields: AppGroupOpsFields,
+	axis: SplitGroupingAxis,
+	value: string,
+	moved: readonly string[],
+): void {
 	const writeFailure =
 		fields.state === undefined ? undefined : saveGroupOrder(fields.state, axis, moved);
 	if (fields.state === undefined)
@@ -4679,17 +4746,39 @@ function mainFactsListCanMove(f: AppMainFactsFields): boolean {
 		// one stands: a direct click on the Work header can land the cursor on
 		// the only row of a queue the Consultation cursor never touched.
 		const crossUp = cOpen || tOpen;
-		return (
-			(wOpen && (w > 1 || (f.workQueueIndexRef.current === 0 && crossUp))) || (!wOpen && crossUp)
-		);
+		return sectionCanMove({
+			open: wOpen,
+			stops: w,
+			canStepInside: f.workQueueIndexRef.current === 0,
+			canCross: crossUp,
+		});
 	}
 	if (f.selectionRef.current === "consultation")
-		return (
-			(cOpen && (c > 1 || (f.consultationIndexRef.current === 0 && tOpen))) || (!cOpen && tOpen)
-		);
-	return (
-		(tOpen && (tStops > 1 || (cOpen && f.selectedIndexRef.current >= t - 1))) || (!tOpen && cOpen)
-	);
+		return sectionCanMove({
+			open: cOpen,
+			stops: c,
+			canStepInside: f.consultationIndexRef.current === 0,
+			canCross: tOpen,
+		});
+	return sectionCanMove({
+		open: tOpen,
+		stops: tStops,
+		canStepInside: f.selectedIndexRef.current >= t - 1,
+		canCross: cOpen,
+	});
+}
+
+/** Whether the cursor on one open section can step, past its edge or into the open section it touches. */
+function sectionCanMove(fields: {
+	open: boolean;
+	stops: number;
+	canStepInside: boolean;
+	canCross: boolean;
+}): boolean {
+	const { open, stops, canStepInside, canCross } = fields;
+	if (!open) return canCross;
+	if (stops > 1) return true;
+	return canStepInside && canCross;
 }
 
 /** The queue item that waits under the row the cursor holds (ADR 0049). */
@@ -7601,17 +7690,18 @@ function appCurrentBaseMode(f: {
 		? "consultation-interaction"
 		: f.responseEditor
 			? "form-field"
-			: f.selectionRef.current === "consultation"
-				? f.focusedPaneRef.current === "list"
-					? "consultation-list"
-					: "consultation-detail"
-				: f.selectionRef.current === "queue"
-					? f.focusedPaneRef.current === "list"
-						? "work-queue-list"
-						: "work-queue-detail"
-					: f.focusedPaneRef.current === "list"
-						? "ticket-list"
-						: "ticket-detail";
+			: sectionBaseMode(f.selectionRef.current, f.focusedPaneRef.current);
+}
+
+/** The Interaction mode one open section's panes run in. */
+function sectionBaseMode(
+	section: "ticket" | "consultation" | "queue",
+	pane: Pane,
+): InteractionMode {
+	if (section === "consultation")
+		return pane === "list" ? "consultation-list" : "consultation-detail";
+	if (section === "queue") return pane === "list" ? "work-queue-list" : "work-queue-detail";
+	return pane === "list" ? "ticket-list" : "ticket-detail";
 }
 
 type AppCursorBundle = ReturnType<typeof useAppCursor>;
@@ -9010,7 +9100,6 @@ function layoutSectionBoxRows(
 	sectionOpen: Record<"tickets" | "consultations" | "work", boolean>,
 	selection: "ticket" | "consultation" | "queue",
 ): { tickets: number; consultations: number; work: number } {
-	const MIN_SECTION_BOX_ROWS = 7;
 	const openKeys = (["tickets", "consultations", "work"] as const).filter(
 		(key) => sectionOpen[key],
 	);
@@ -9018,36 +9107,47 @@ function layoutSectionBoxRows(
 	let consultationsBoxRows = 0;
 	let workBoxRows = 0;
 	if (openKeys.length > 0) {
-		// The section under the cursor takes the remaining rows after the
-		// other open sections claim their minimum; at the minimum frame
-		// every open section holds its minimum.
 		const total = Math.max(0, bodyRows - 3);
 		const cursorKey =
 			selection === "ticket" ? "tickets" : selection === "consultation" ? "consultations" : "work";
-		const take: Partial<Record<"tickets" | "consultations" | "work", number>> = {};
-		let remaining = total;
-		for (const key of openKeys) {
-			if (key === cursorKey) continue;
-			const claim = Math.min(
-				MIN_SECTION_BOX_ROWS,
-				Math.max(0, Math.floor(remaining / openKeys.length)),
-			);
-			take[key] = claim;
-			remaining -= claim;
-		}
-		if (openKeys.includes(cursorKey)) {
-			take[cursorKey] = Math.max(0, remaining);
-		} else {
-			// The cursor's section is not open (the queue emptied under
-			// the cursor): the last open section takes the remainder.
-			const last = openKeys[openKeys.length - 1];
-			take[last] = (take[last] ?? 0) + Math.max(0, remaining);
-		}
+		const take = sectionBoxTake(openKeys, cursorKey, total);
 		ticketsBoxRows = take.tickets ?? 0;
 		consultationsBoxRows = take.consultations ?? 0;
 		workBoxRows = take.work ?? 0;
 	}
 	return { tickets: ticketsBoxRows, consultations: consultationsBoxRows, work: workBoxRows };
+}
+
+/** The rows each open section claims, and the remainder the cursor's section takes. */
+function sectionBoxTake(
+	openKeys: readonly ("tickets" | "consultations" | "work")[],
+	cursorKey: "tickets" | "consultations" | "work",
+	total: number,
+): Partial<Record<"tickets" | "consultations" | "work", number>> {
+	const MIN_SECTION_BOX_ROWS = 7;
+	// The section under the cursor takes the remaining rows after the
+	// other open sections claim their minimum; at the minimum frame
+	// every open section holds its minimum.
+	const take: Partial<Record<"tickets" | "consultations" | "work", number>> = {};
+	let remaining = total;
+	for (const key of openKeys) {
+		if (key === cursorKey) continue;
+		const claim = Math.min(
+			MIN_SECTION_BOX_ROWS,
+			Math.max(0, Math.floor(remaining / openKeys.length)),
+		);
+		take[key] = claim;
+		remaining -= claim;
+	}
+	if (openKeys.includes(cursorKey)) {
+		take[cursorKey] = Math.max(0, remaining);
+	} else {
+		// The cursor's section is not open (the queue emptied under
+		// the cursor): the last open section takes the remainder.
+		const last = openKeys[openKeys.length - 1];
+		take[last] = (take[last] ?? 0) + Math.max(0, remaining);
+	}
+	return take;
 }
 function clamp(value: number, min: number, max: number): number {
 	return Math.max(min, Math.min(value, max));

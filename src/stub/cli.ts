@@ -252,31 +252,7 @@ function setAutoScore(store: StubWorldStore, args: ParsedArgs): WorldCliResult {
 	const off = args.booleans.has("off");
 	const inherit = args.booleans.has("inherit");
 	const target = args.flags.get("pr")?.[0];
-	if (target !== undefined) {
-		const cut = target.lastIndexOf(":");
-		const numberPart = cut > 0 ? target.slice(cut + 1) : "";
-		if (cut <= 0 || !/^\d+$/.test(numberPart))
-			throw new Error("the --pr target has the form owner/name:N");
-		const parts = target.slice(0, cut).split("/");
-		if (parts.length !== 2 || parts[0] === "" || parts[1] === "")
-			throw new Error("the --pr target has the form owner/name:N");
-		const repository =
-			parts[0].toLowerCase() === store.world.owner.toLowerCase()
-				? repoOf(store, parts[1])
-				: undefined;
-		const number = Number(numberPart);
-		const pull = repository?.pullRequests.find((item) => item.number === number);
-		if (repository === undefined || pull === undefined)
-			throw new Error(`no pull request ${target} in the world`);
-		if (inherit) delete pull.autoScore;
-		else if (on) pull.autoScore = true;
-		else if (off) pull.autoScore = false;
-		else throw new Error("the --pr target needs --on, --off, or --inherit");
-		store.save();
-		return ok([
-			`the auto score rule of pull request ${target} is ${inherit ? "inherited" : on ? "on" : "off"}`,
-		]);
-	}
+	if (target !== undefined) return setAutoScorePull(store, target, { on, off, inherit });
 	if (on === off) throw new Error("the verb needs --on or --off");
 	store.world.autoScore.enabled = on;
 	if (args.flags.has("score")) {
@@ -287,6 +263,38 @@ function setAutoScore(store: StubWorldStore, args: ParsedArgs): WorldCliResult {
 	store.save();
 	return ok([
 		`the world's auto score is ${on ? "on" : "off"}, ${store.world.autoScore.score} / 100`,
+	]);
+}
+
+/** The one world write one auto-score pull-request target lands. */
+function setAutoScorePull(
+	store: StubWorldStore,
+	target: string,
+	verbs: { on: boolean; off: boolean; inherit: boolean },
+): WorldCliResult {
+	const { on, off, inherit } = verbs;
+	const cut = target.lastIndexOf(":");
+	const numberPart = cut > 0 ? target.slice(cut + 1) : "";
+	if (cut <= 0 || !/^\d+$/.test(numberPart))
+		throw new Error("the --pr target has the form owner/name:N");
+	const parts = target.slice(0, cut).split("/");
+	if (parts.length !== 2 || parts[0] === "" || parts[1] === "")
+		throw new Error("the --pr target has the form owner/name:N");
+	const repository =
+		parts[0].toLowerCase() === store.world.owner.toLowerCase()
+			? repoOf(store, parts[1])
+			: undefined;
+	const number = Number(numberPart);
+	const pull = repository?.pullRequests.find((item) => item.number === number);
+	if (repository === undefined || pull === undefined)
+		throw new Error(`no pull request ${target} in the world`);
+	if (inherit) delete pull.autoScore;
+	else if (on) pull.autoScore = true;
+	else if (off) pull.autoScore = false;
+	else throw new Error("the --pr target needs --on, --off, or --inherit");
+	store.save();
+	return ok([
+		`the auto score rule of pull request ${target} is ${inherit ? "inherited" : on ? "on" : "off"}`,
 	]);
 }
 

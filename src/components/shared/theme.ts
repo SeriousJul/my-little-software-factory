@@ -156,34 +156,37 @@ export function parseThemeColor(value: string): ThemeRoleValue | null {
 	if (raw === "reset" || raw === "default" || raw === "none" || raw === "transparent") {
 		return "reset";
 	}
-	if (raw.startsWith("#")) {
-		const hex = raw.slice(1);
-		if (hex.length === 6 && /^[0-9a-f]{6}$/.test(hex)) return `#${hex}`;
-		if (hex.length === 3 && /^[0-9a-f]{3}$/.test(hex)) {
-			const [r, g, b] = [hex[0], hex[1], hex[2]].map((c) =>
-				(Number.parseInt(c, 16) * 17).toString(16).padStart(2, "0"),
-			);
-			return `#${r}${g}${b}`;
-		}
-		return null;
-	}
-	if (raw.startsWith("rgb(") && raw.endsWith(")")) {
-		const parts = raw
-			.slice(4, -1)
-			.split(",")
-			.map((part) => part.trim());
-		if (parts.length === 3) {
-			const channels = parts.map((part) => (/^\d+$/.test(part) ? Number(part) : NaN));
-			if (
-				channels.every((channel) => Number.isInteger(channel) && channel >= 0 && channel <= 255)
-			) {
-				return `#${channels.map((channel) => channel.toString(16).padStart(2, "0")).join("")}`;
-			}
-		}
-		return null;
-	}
+	if (raw.startsWith("#")) return parseHexColor(raw);
+	if (raw.startsWith("rgb(") && raw.endsWith(")")) return parseRgbColor(raw);
 	const slot = ANSI_NAMES[raw];
 	return slot === undefined ? null : ANSI16_RGB[slot];
+}
+
+/** The one value one hex color value carries, if the grammar takes it. */
+function parseHexColor(raw: string): string | null {
+	const hex = raw.slice(1);
+	if (hex.length === 6 && /^[0-9a-f]{6}$/.test(hex)) return `#${hex}`;
+	if (hex.length === 3 && /^[0-9a-f]{3}$/.test(hex)) {
+		const [r, g, b] = [hex[0], hex[1], hex[2]].map((c) =>
+			(Number.parseInt(c, 16) * 17).toString(16).padStart(2, "0"),
+		);
+		return `#${r}${g}${b}`;
+	}
+	return null;
+}
+
+/** The one value one rgb color value carries, if the grammar takes it. */
+function parseRgbColor(raw: string): string | null {
+	const parts = raw
+		.slice(4, -1)
+		.split(",")
+		.map((part) => part.trim());
+	if (parts.length !== 3) return null;
+	const channels = parts.map((part) => (/^\d+$/.test(part) ? Number(part) : NaN));
+	if (channels.every((channel) => Number.isInteger(channel) && channel >= 0 && channel <= 255)) {
+		return `#${channels.map((channel) => channel.toString(16).padStart(2, "0")).join("")}`;
+	}
+	return null;
 }
 
 /**
@@ -696,16 +699,22 @@ export function resolveTheme(configText: string | null, inHerdr: boolean): Theme
 
 	const base = BUILTIN_THEMES[canonical];
 	const roles: Record<ThemeRole, ThemeRoleValue> = { ...base.roles };
-	const custom = asTable(themeSection.custom);
-	if (custom !== null) {
-		for (const role of THEME_ROLES) {
-			const value = custom[role];
-			if (typeof value !== "string") continue;
-			const parsed = parseThemeColor(value);
-			if (parsed !== null) roles[role] = parsed;
-			// A value the grammar does not take drops only that token: the
-			// base theme's value stands for it.
-		}
-	}
+	applyCustomOverrides(roles, asTable(themeSection.custom));
 	return { theme: { name: canonical, appearance: base.appearance, roles }, warning: null };
+}
+
+/** The role values one custom override table writes onto the base theme's roles. */
+function applyCustomOverrides(
+	roles: Record<ThemeRole, ThemeRoleValue>,
+	custom: Record<string, unknown> | null,
+): void {
+	if (custom === null) return;
+	for (const role of THEME_ROLES) {
+		const value = custom[role];
+		if (typeof value !== "string") continue;
+		const parsed = parseThemeColor(value);
+		if (parsed !== null) roles[role] = parsed;
+		// A value the grammar does not take drops only that token: the
+		// base theme's value stands for it.
+	}
 }

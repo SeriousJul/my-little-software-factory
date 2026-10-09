@@ -26,7 +26,7 @@ import {
 	type InteractionMode,
 	keyLabelFor,
 } from "./controls.ts";
-import { controlInk } from "./shared/presentation.ts";
+import { type ControlInk, controlInk } from "./shared/presentation.ts";
 import { padToWidth, truncateToWidth, widthOf } from "./text.ts";
 
 interface ActionBarProps {
@@ -90,14 +90,7 @@ function packActionBar(
 		keyLabel: keyLabelFor(facts.mode, control, facts),
 		availability: availabilityFor(control, facts),
 	}));
-	// Where a bar carries two anchors, the one that outranks the rest holds the
-	// cells: a utility overlay's Close beats its Help, because it ends the
-	// screen the operator is already on.
-	let anchor: PackedControl | undefined;
-	for (const entry of entries) {
-		if (entry.control.barAnchor !== true) continue;
-		if (anchor === undefined || entry.control.priority > anchor.control.priority) anchor = entry;
-	}
+	const anchor = anchorOf(entries);
 	// The compact row states the anchor alone: on a frame this broken nothing
 	// else is a control the operator can act on.
 	const candidates = options.anchorOnly === true ? [] : entries.filter((entry) => entry !== anchor);
@@ -112,14 +105,7 @@ function packActionBar(
 		return itemWidth + gaps + indicatorWidth <= availableWidth;
 	};
 	const selected = [...candidates];
-	while (range !== undefined && !fits(selected, true)) range = undefined;
-	while (!fits(selected, false) && selected.length > 0) {
-		let removeAt = 0;
-		for (let i = 1; i < selected.length; i += 1) {
-			if (selected[i].control.priority < selected[removeAt].control.priority) removeAt = i;
-		}
-		selected.splice(removeAt, 1);
-	}
+	range = shrinkToFit(selected, fits, range);
 	const leftWidth =
 		selected.reduce((total, entry) => total + widthOfHint(entry), 0) +
 		Math.max(0, selected.length - 1) * GAP +
@@ -161,11 +147,7 @@ export function ActionBar({ mode, facts, width, rangeIndicator, compactAnchor }:
 	// as still names a key, and states nothing else: this is the row a compact
 	// frame shows, and the row no packing may leave the anchor off.
 	if (anchor !== undefined && widthOf(anchorText) > width)
-		return createElement(
-			"text",
-			{ style: { width: "100%", height: 1 } },
-			padToWidth(truncateToWidth(fitAnchorHint(anchor, mode, width, facts), width), width),
-		);
+		return compactAnchorRow(anchor, mode, width, facts);
 	// The compact row left-aligns its one hint; a full bar keeps the anchor in
 	// its own cells at the right end of the row.
 	const leftWidth = packed.leftWidth;
@@ -174,6 +156,46 @@ export function ActionBar({ mode, facts, width, rangeIndicator, compactAnchor }:
 			? leftWidth
 			: Math.max(leftWidth + (leftWidth > 0 ? GAP : 0), width - widthOf(anchorText));
 	const children: ReactElement[] = [];
+	const rangePlaced = pushLeftHints(children, packed, ink);
+	if (!rangePlaced) pushTrailingRange(children, packed, ink);
+	const anchorRoom = pushAnchorSpan(children, anchor, { anchorStart, leftWidth, anchorText });
+	const used = anchorStart + anchorRoom;
+	if (used < width) children.push(createElement("span", { key: "tail" }, " ".repeat(width - used)));
+	return createElement("text", { style: { width: "100%", height: 1 } }, ...children);
+}
+
+/** The control one bar's catalogue anchors the row on, the one that outranks the rest. */
+function anchorOf(entries: readonly PackedControl[]): PackedControl | undefined {
+	// Where a bar carries two anchors, the one that outranks the rest holds the
+	// cells: a utility overlay's Close beats its Help, because it ends the
+	// screen the operator is already on.
+	let anchor: PackedControl | undefined;
+	for (const entry of entries) {
+		if (entry.control.barAnchor !== true) continue;
+		if (anchor === undefined || entry.control.priority > anchor.control.priority) anchor = entry;
+	}
+	return anchor;
+}
+
+/** The entries one bar keeps after the width's cuts, and the range that survived them. */
+function shrinkToFit(
+	selected: PackedControl[],
+	fits: (items: readonly PackedControl[], includeRange: boolean) => boolean,
+	range: string | undefined,
+): string | undefined {
+	while (range !== undefined && !fits(selected, true)) range = undefined;
+	while (!fits(selected, false) && selected.length > 0) {
+		let removeAt = 0;
+		for (let i = 1; i < selected.length; i += 1) {
+			if (selected[i].control.priority < selected[removeAt].control.priority) removeAt = i;
+		}
+		selected.splice(removeAt, 1);
+	}
+	return range;
+}
+
+/** The spans one packed bar's left hints and its in-row range place, and whether the row placed the range. */
+function pushLeftHints(children: ReactElement[], packed: PackedBar, ink: ControlInk): boolean {
 	let rangePlaced = false;
 	for (let i = 0; i < packed.left.length; i += 1) {
 		if (i > 0) children.push(createElement("span", { key: `gap-${i}` }, " ".repeat(GAP)));
@@ -186,21 +208,44 @@ export function ActionBar({ mode, facts, width, rangeIndicator, compactAnchor }:
 			rangePlaced = true;
 		}
 	}
-	if (packed.range !== undefined && !rangePlaced) {
-		if (packed.left.length > 0)
-			children.push(createElement("span", { key: "range-gap" }, " ".repeat(GAP)));
-		children.push(
-			createElement("span", { key: "range", fg: ink.detail.fg ?? undefined }, packed.range),
-		);
-	}
-	if (anchor !== undefined) {
-		const gap = Math.max(0, anchorStart - leftWidth);
-		if (gap > 0) children.push(createElement("span", { key: "anchor-gap" }, " ".repeat(gap)));
-		children.push(...hintSpans(anchor, "anchor"));
-	}
-	const used = anchorStart + (anchor === undefined ? 0 : widthOf(anchorText));
-	if (used < width) children.push(createElement("span", { key: "tail" }, " ".repeat(width - used)));
-	return createElement("text", { style: { width: "100%", height: 1 } }, ...children);
+	return rangePlaced;
+}
+
+/** The span one packed bar's trailing range places in the row, when the hints did not. */
+function pushTrailingRange(children: ReactElement[], packed: PackedBar, ink: ControlInk): void {
+	if (packed.range === undefined) return;
+	if (packed.left.length > 0)
+		children.push(createElement("span", { key: "range-gap" }, " ".repeat(GAP)));
+	children.push(
+		createElement("span", { key: "range", fg: ink.detail.fg ?? undefined }, packed.range),
+	);
+}
+
+/** The element one row states when the frame holds only the anchor's keys. */
+function compactAnchorRow(
+	anchor: PackedControl,
+	mode: InteractionMode,
+	width: number,
+	facts: AvailabilityFacts,
+): ReactElement {
+	return createElement(
+		"text",
+		{ style: { width: "100%", height: 1 } },
+		padToWidth(truncateToWidth(fitAnchorHint(anchor, mode, width, facts), width), width),
+	);
+}
+
+/** The span one packed bar's anchor places in the row, and the room it takes. */
+function pushAnchorSpan(
+	children: ReactElement[],
+	anchor: PackedControl | undefined,
+	fields: { anchorStart: number; leftWidth: number; anchorText: string },
+): number {
+	if (anchor === undefined) return 0;
+	const gap = Math.max(0, fields.anchorStart - fields.leftWidth);
+	if (gap > 0) children.push(createElement("span", { key: "anchor-gap" }, " ".repeat(gap)));
+	children.push(...hintSpans(anchor, "anchor"));
+	return widthOf(fields.anchorText);
 }
 
 function hintSpans(entry: PackedControl, key: string): ReactElement[] {

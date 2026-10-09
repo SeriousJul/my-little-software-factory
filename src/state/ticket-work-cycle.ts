@@ -838,125 +838,135 @@ export class TicketWorkCycleModule implements TicketWorkCycleAggregate {
 	}
 	settleTurn(input: SettleTurnInput): void {
 		this.db.transaction(() => {
-			// A settle without a read cause is stored as `unknown`, the fail-open
-			// cause: it neither holds a turn nor pauses dispatch.
-			const cause = input.cause ?? "unknown";
-			const detail = input.detail ?? "";
-			this.db
-				.prepare(
-					"UPDATE tickets SET state = 'awaiting' WHERE identity = ? AND state IN ('handed-off', 'running', 'awaiting')",
-				)
-				.run(input.ticketIdentity);
-			const handoff = this.graph().handoff.handoffRecord(input.handoffId);
-			const pending = this.db
-				.prepare("SELECT id FROM completion_traces WHERE handoff_id = ? AND decision IS NULL")
-				.get(input.handoffId) as { id: string } | undefined;
-			if (handoff == null) return;
-			const choice = handoff.choice;
-			if (pending != null) {
-				// A reopened turn settles again: the same trace is refreshed, its
-				// cause and detail overwritten, so a recovered turn reads as the
-				// turn it became.
-				this.db
-					.prepare(
-						"UPDATE completion_traces SET last_message = ?, turn_log_json = ?, completed_at = ?, cause = ?, detail = ?, transition_json = ? WHERE id = ?",
-					)
-					.run(
-						input.message,
-						JSON.stringify(input.turnLog),
-						input.completedAt,
-						cause,
-						detail,
-						input.transition == null ? null : JSON.stringify(input.transition),
-						pending.id,
-					);
-			} else {
-				this.db
-					.prepare(
-						"INSERT INTO completion_traces(id, handoff_id, ticket_identity, work_cycle, task_type, agent_type, agent_name, model, thinking, context_window, completed_at, last_message, turn_log_json, cause, detail, transition_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-					)
-					.run(
-						randomUUID(),
-						input.handoffId,
-						input.ticketIdentity,
-						handoff.workCycle,
-						input.taskType,
-						input.agentType,
-						this.agentNameForTicket(input.ticketIdentity),
-						choice?.model ?? "",
-						choice?.thinking ?? "",
-						choice?.contextWindow ?? "",
-						input.completedAt,
-						input.message,
-						JSON.stringify(input.turnLog),
-						cause,
-						detail,
-						input.transition == null ? null : JSON.stringify(input.transition),
-					);
-			}
+			this.settleTurnWrites(input);
 		});
 	}
-	applyCompletionDecision(input: CompletionDecisionInput): boolean {
-		return this.db.transaction(() => {
-			const decided = this.db
-				.prepare(
-					"UPDATE completion_traces SET decision = ?, decided_at = ? WHERE handoff_id = ? AND decision IS NULL",
-				)
-				.run(input.decision, input.decidedAt, input.handoffId);
-			if (Number(decided.changes) > 0) {
-				this.applyDecisionStateChange(input);
-				return true;
-			}
-			// A cycle-end decision on a turn that already decided: this close
-			// ends the cycle the decision left. The recorded decision stands -
-			// a fact is not rewritten - but the cycle still ends. The move runs
-			// only from the resting state the decision leaves, so a repeated
-			// close changes nothing. A routed ticket's cycle already ended at
-			// the ask (ADR 0072), so a close on it moves nothing here.
-			if (input.decision === "closed" || input.decision === "auto-closed") {
-				const ended = this.db
-					.prepare(
-						"UPDATE tickets SET state = 'open', work_cycle = work_cycle + 1 WHERE identity = ? AND state = 'awaiting'",
-					)
-					.run(input.ticketIdentity);
-				if (Number(ended.changes) > 0) return true;
-			}
-			// No pending row: the turn never settled. Abandon records its
-			// decision anyway, once per handoff, so the trace stays complete
-			// and the cycle number moves exactly once.
-			if (input.decision !== "abandoned") return false;
-			const existing = this.db
-				.prepare(
-					"SELECT COUNT(*) AS count FROM completion_traces WHERE handoff_id = ? AND decision = ?",
-				)
-				.get(input.handoffId, input.decision) as { count: number };
-			if (existing.count > 0) return false;
-			const handoff = this.graph().handoff.handoffRecord(input.handoffId);
-			if (handoff == null) return false;
-			const choice = handoff.choice;
+
+	/** The one settle write set a settled turn lands. */
+	private settleTurnWrites(input: SettleTurnInput): void {
+		// A settle without a read cause is stored as `unknown`, the fail-open
+		// cause: it neither holds a turn nor pauses dispatch.
+		const cause = input.cause ?? "unknown";
+		const detail = input.detail ?? "";
+		this.db
+			.prepare(
+				"UPDATE tickets SET state = 'awaiting' WHERE identity = ? AND state IN ('handed-off', 'running', 'awaiting')",
+			)
+			.run(input.ticketIdentity);
+		const handoff = this.graph().handoff.handoffRecord(input.handoffId);
+		const pending = this.db
+			.prepare("SELECT id FROM completion_traces WHERE handoff_id = ? AND decision IS NULL")
+			.get(input.handoffId) as { id: string } | undefined;
+		if (handoff == null) return;
+		const choice = handoff.choice;
+		if (pending != null) {
+			// A reopened turn settles again: the same trace is refreshed, its
+			// cause and detail overwritten, so a recovered turn reads as the
+			// turn it became.
 			this.db
 				.prepare(
-					"INSERT INTO completion_traces(id, handoff_id, ticket_identity, work_cycle, task_type, agent_type, agent_name, model, thinking, context_window, completed_at, last_message, decision, decided_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+					"UPDATE completion_traces SET last_message = ?, turn_log_json = ?, completed_at = ?, cause = ?, detail = ?, transition_json = ? WHERE id = ?",
+				)
+				.run(
+					input.message,
+					JSON.stringify(input.turnLog),
+					input.completedAt,
+					cause,
+					detail,
+					input.transition == null ? null : JSON.stringify(input.transition),
+					pending.id,
+				);
+		} else {
+			this.db
+				.prepare(
+					"INSERT INTO completion_traces(id, handoff_id, ticket_identity, work_cycle, task_type, agent_type, agent_name, model, thinking, context_window, completed_at, last_message, turn_log_json, cause, detail, transition_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
 				)
 				.run(
 					randomUUID(),
 					input.handoffId,
 					input.ticketIdentity,
 					handoff.workCycle,
-					choice?.taskType ?? "",
-					choice?.agentType ?? "",
+					input.taskType,
+					input.agentType,
 					this.agentNameForTicket(input.ticketIdentity),
 					choice?.model ?? "",
 					choice?.thinking ?? "",
 					choice?.contextWindow ?? "",
-					input.decidedAt,
-					"",
-					input.decision,
-					input.decidedAt,
+					input.completedAt,
+					input.message,
+					JSON.stringify(input.turnLog),
+					cause,
+					detail,
+					input.transition == null ? null : JSON.stringify(input.transition),
 				);
+		}
+	}
+	applyCompletionDecision(input: CompletionDecisionInput): boolean {
+		return this.db.transaction(() => {
+			return this.applyCompletionDecisionWrites(input);
+		});
+	}
+
+	/** The one completion-decision write set a decided turn lands. */
+	private applyCompletionDecisionWrites(input: CompletionDecisionInput): boolean {
+		const decided = this.db
+			.prepare(
+				"UPDATE completion_traces SET decision = ?, decided_at = ? WHERE handoff_id = ? AND decision IS NULL",
+			)
+			.run(input.decision, input.decidedAt, input.handoffId);
+		if (Number(decided.changes) > 0) {
 			this.applyDecisionStateChange(input);
 			return true;
-		});
+		}
+		// A cycle-end decision on a turn that already decided: this close
+		// ends the cycle the decision left. The recorded decision stands -
+		// a fact is not rewritten - but the cycle still ends. The move runs
+		// only from the resting state the decision leaves, so a repeated
+		// close changes nothing. A routed ticket's cycle already ended at
+		// the ask (ADR 0072), so a close on it moves nothing here.
+		if (input.decision === "closed" || input.decision === "auto-closed") {
+			const ended = this.db
+				.prepare(
+					"UPDATE tickets SET state = 'open', work_cycle = work_cycle + 1 WHERE identity = ? AND state = 'awaiting'",
+				)
+				.run(input.ticketIdentity);
+			if (Number(ended.changes) > 0) return true;
+		}
+		// No pending row: the turn never settled. Abandon records its
+		// decision anyway, once per handoff, so the trace stays complete
+		// and the cycle number moves exactly once.
+		if (input.decision !== "abandoned") return false;
+		const existing = this.db
+			.prepare(
+				"SELECT COUNT(*) AS count FROM completion_traces WHERE handoff_id = ? AND decision = ?",
+			)
+			.get(input.handoffId, input.decision) as { count: number };
+		if (existing.count > 0) return false;
+		const handoff = this.graph().handoff.handoffRecord(input.handoffId);
+		if (handoff == null) return false;
+		const choice = handoff.choice;
+		this.db
+			.prepare(
+				"INSERT INTO completion_traces(id, handoff_id, ticket_identity, work_cycle, task_type, agent_type, agent_name, model, thinking, context_window, completed_at, last_message, decision, decided_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+			)
+			.run(
+				randomUUID(),
+				input.handoffId,
+				input.ticketIdentity,
+				handoff.workCycle,
+				choice?.taskType ?? "",
+				choice?.agentType ?? "",
+				this.agentNameForTicket(input.ticketIdentity),
+				choice?.model ?? "",
+				choice?.thinking ?? "",
+				choice?.contextWindow ?? "",
+				input.decidedAt,
+				"",
+				input.decision,
+				input.decidedAt,
+			);
+		this.applyDecisionStateChange(input);
+		return true;
 	}
 	private applyDecisionStateChange(input: CompletionDecisionInput): void {
 		if (

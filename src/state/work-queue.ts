@@ -77,6 +77,15 @@ export function normalizeRouteFromIdentity(
 	return routeFromIdentity === ticketIdentity ? null : routeFromIdentity;
 }
 
+/** The decision word one removed workflow route marks on its trace (ADR 0064). */
+export function routeRemovedDecisionOf(
+	actionTaskType: string | null,
+	isAutomatic: number,
+): "auto-merged" | "merged" | "auto-handed-off" | "handed-off" {
+	if (actionTaskType === null) return isAutomatic === 1 ? "auto-handed-off" : "handed-off";
+	return isAutomatic === 1 ? "auto-merged" : "merged";
+}
+
 export interface WorkQueueAggregate {
 	queuePaused(): boolean;
 	setQueuePaused(paused: boolean): void;
@@ -387,38 +396,36 @@ export class WorkQueueModule implements WorkQueueAggregate {
 	}
 	cancelWorkItem(ticketIdentity: string): boolean {
 		return this.db.transaction(() => {
-			const row = this.db
-				.prepare(
-					"SELECT origin, route_from_identity, is_automatic, action_task_type FROM work_queue WHERE ticket_identity = ?",
-				)
-				.get(ticketIdentity) as {
-				origin: string | null;
-				route_from_identity: string | null;
-				is_automatic: number;
-				action_task_type: string | null;
-			} | null;
-			if (row === null) return false;
-			this.db.prepare("DELETE FROM work_queue WHERE ticket_identity = ?").run(ticketIdentity);
-			this.repackWorkQueuePositions();
-			if (row.origin === "workflow") {
-				// The source the route routed from: the item's route from, or the
-				// item's own ticket for a route onto the ticket's own position.
-				const source = row.route_from_identity ?? ticketIdentity;
-				// The decision word the item's ask landed on its trace (ADR 0064):
-				// the mark answers the same decision, so a turn that settled
-				// behind the wait takes no mark from the removal.
-				const decision =
-					row.action_task_type !== null
-						? row.is_automatic === 1
-							? "auto-merged"
-							: "merged"
-						: row.is_automatic === 1
-							? "auto-handed-off"
-							: "handed-off";
-				this.graph().ticketWorkCycle.recordRouteRemovedMark(source, decision);
-			}
-			return true;
+			return this.cancelWorkItemWrites(ticketIdentity);
 		});
+	}
+
+	/** The one cancel write set a removed work item lands. */
+	private cancelWorkItemWrites(ticketIdentity: string): boolean {
+		const row = this.db
+			.prepare(
+				"SELECT origin, route_from_identity, is_automatic, action_task_type FROM work_queue WHERE ticket_identity = ?",
+			)
+			.get(ticketIdentity) as {
+			origin: string | null;
+			route_from_identity: string | null;
+			is_automatic: number;
+			action_task_type: string | null;
+		} | null;
+		if (row === null) return false;
+		this.db.prepare("DELETE FROM work_queue WHERE ticket_identity = ?").run(ticketIdentity);
+		this.repackWorkQueuePositions();
+		if (row.origin === "workflow") {
+			// The source the route routed from: the item's route from, or the
+			// item's own ticket for a route onto the ticket's own position.
+			const source = row.route_from_identity ?? ticketIdentity;
+			// The decision word the item's ask landed on its trace (ADR 0064):
+			// the mark answers the same decision, so a turn that settled
+			// behind the wait takes no mark from the removal.
+			const decision = routeRemovedDecisionOf(row.action_task_type, row.is_automatic);
+			this.graph().ticketWorkCycle.recordRouteRemovedMark(source, decision);
+		}
+		return true;
 	}
 	removeWorkflowRouteItem(ticketIdentity: string): number {
 		return this.db.transaction(() => {

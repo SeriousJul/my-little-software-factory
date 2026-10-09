@@ -29,6 +29,7 @@ import {
 	externalKeyNumber,
 	handoffLimitReached,
 	headBranchOf,
+	type IssueReference,
 	issueReferencesOf,
 	operatorDecidesType,
 	type SourceMembership,
@@ -139,20 +140,31 @@ export function evaluateTransition(
 		return effective(branch, transition, branch.when);
 	}
 	if (fallback !== undefined) return fallback;
+	return { ...base, reason: noBranchReason(input, branches) };
+}
+
+/**
+ * The reason no branch held: the score the judgment read was absent, the
+ * pull request the judgment read was absent, or no judgment held.
+ */
+function noBranchReason(
+	input: TransitionJudgmentInput,
+	branches: readonly TransitionBranch[],
+): string {
 	const tested = new Set(branches.map((branch) => branch.when));
 	if (
 		input.score === null &&
 		(tested.has("score-above-threshold") || tested.has("score-below-threshold"))
 	) {
-		return { ...base, reason: "the pull request carries no review score" };
+		return "the pull request carries no review score";
 	}
 	if (
 		input.pullRequestOpen === null &&
 		(tested.has("pull-request-open") || tested.has("pull-request-closed"))
 	) {
-		return { ...base, reason: "no pull request was found for the ticket" };
+		return "no pull request was found for the ticket";
 	}
-	return { ...base, reason: "no judgment held" };
+	return "no judgment held";
 }
 
 /** One judgment against its inputs. */
@@ -296,35 +308,47 @@ export function scoreFromMessage(message: string): number | null {
 	const lines = message.split("\n");
 	for (let i = 0; i < lines.length; i += 1) {
 		const line = withoutMarkdown(lines[i]);
-		for (const match of line.matchAll(SCORE_LINE)) {
-			const value = scoredValue(
-				Number(match[1]),
-				match[2] === undefined ? undefined : Number(match[2]),
-			);
-			if (value !== null) score = value;
-		}
+		score = scoreMatchesOf(line, score);
 		// The verdict under its label line (ADR 0063): the line is the label
 		// alone, and the number the next spoken line opens carries its own
 		// scale. Blank lines part the pair; a spoken line between the label
 		// and its number breaks it. The pair decides on its number line, so
 		// the last verdict in the body stands in either shape.
-		if (SCORE_LABEL_LINE.test(line)) {
-			for (let j = i + 1; j < lines.length; j += 1) {
-				const next = withoutMarkdown(lines[j]);
-				if (next.trim() === "") continue;
-				const match = SCORE_NUMBER_LINE.exec(next);
-				if (match !== null) {
-					const value = scoredValue(
-						Number(match[1]),
-						match[2] === undefined ? undefined : Number(match[2]),
-					);
-					if (value !== null) score = value;
-				}
-				break;
-			}
-		}
+		if (SCORE_LABEL_LINE.test(line)) score = labelLineScoreOf(lines, i, score);
 	}
 	return score === null || Number.isInteger(score) ? score : Math.round(score);
+}
+
+/** The score the fixed score lines of one posted line report, the last standing. */
+function scoreMatchesOf(line: string, score: number | null): number | null {
+	for (const match of line.matchAll(SCORE_LINE)) {
+		const value = scoredValue(Number(match[1]), scoreDenominatorOf(match[2]));
+		if (value !== null) score = value;
+	}
+	return score;
+}
+
+/** The denominator of one scored number's scale, read from its match. */
+function scoreDenominatorOf(raw: string | undefined): number | undefined {
+	return raw === undefined ? undefined : Number(raw);
+}
+
+/**
+ * The score the number line under a label line carries, the last standing,
+ * where the next spoken line opens with its number and its own scale.
+ */
+function labelLineScoreOf(lines: string[], i: number, score: number | null): number | null {
+	for (let j = i + 1; j < lines.length; j += 1) {
+		const next = withoutMarkdown(lines[j]);
+		if (next.trim() === "") continue;
+		const match = SCORE_NUMBER_LINE.exec(next);
+		if (match !== null) {
+			const value = scoredValue(Number(match[1]), scoreDenominatorOf(match[2]));
+			if (value !== null) score = value;
+		}
+		break;
+	}
+	return score;
 }
 
 /** Whether the transition's branches test a score judgment. */
@@ -688,16 +712,38 @@ export function pullRequestFixesTicket(pullRequest: Ticket, ticket: Ticket): boo
 	}
 	for (const membership of pullRequest.memberships) {
 		for (const reference of issueReferencesOf(membership.attributes)) {
-			if (reference.identity !== null && reference.identity === ticket.identity) return true;
-			if (
-				reference.identity === null &&
-				ticketNumbers.get(membership.repository.identity.toLowerCase()) === reference.number
-			)
+			if (referenceFixesTicket(reference, ticket, ticketNumbers, membership.repository.identity))
 				return true;
 		}
 	}
 	const headBranch = headBranchOf(newestMembershipOf(pullRequest).attributes);
 	if (headBranch === null) return false;
+	return pullHeadBranchFixesTicket(pullRequest, ticket, headBranch);
+}
+
+/**
+ * Whether the pull request's reference fixes the ticket: the ticket's own
+ * identity, or the ticket's number in the membership's repository.
+ */
+function referenceFixesTicket(
+	reference: IssueReference,
+	ticket: Ticket,
+	ticketNumbers: Map<string, number>,
+	repositoryIdentity: string,
+): boolean {
+	if (reference.identity !== null) return reference.identity === ticket.identity;
+	return ticketNumbers.get(repositoryIdentity.toLowerCase()) === reference.number;
+}
+
+/**
+ * Whether the pull request's head branch fixes the ticket: the same
+ * repository, and the branch the ticket's key names.
+ */
+function pullHeadBranchFixesTicket(
+	pullRequest: Ticket,
+	ticket: Ticket,
+	headBranch: string,
+): boolean {
 	return (
 		newestMembershipOf(pullRequest).repository.identity.toLowerCase() ===
 			newestMembershipOf(ticket).repository.identity.toLowerCase() &&
@@ -906,31 +952,39 @@ async function resolveFirePullRequest(
 		ticket.sourceKind !== "github-pull-request";
 	let emptyOwnPullRequest = false;
 	if (opensPullRequest) {
-		const own = await readTicketOwnPullRequest(request.runner, request.config.sources, ticket);
-		const ownHead = own === null ? null : headBranchOf(own.memberships[0]?.attributes ?? {});
-		const ownBase = own === null ? null : (own.memberships[0]?.attributes.baseBranch ?? null);
-		// The checkout by the plane's own resolution rule: the case-insensitive
-		// lookup over the identity and the display name the handoff and the
-		// init read, so a key the operator wrote in another case than the
-		// canonical identity still names its checkout.
-		const checkout = lookupRepositoryMapping(request.config.repos, [
-			ticket.repositoryRef.identity,
-			ticket.repositoryRef.displayName,
-		]);
-		const work =
-			own === null || ownHead === null || ownBase === null || checkout === undefined
-				? null
-				: await pullRequestCarriesWork(request.runner, checkout, ownHead, ownBase);
-		if (own === null) {
-			pullRequest = null;
-		} else if (work !== true) {
-			emptyOwnPullRequest = true;
-			pullRequest = null;
-		} else {
-			pullRequest = own;
-		}
+		const own = await ownPullResolution(request, ticket);
+		if (own.pullRequest === null) emptyOwnPullRequest = own.emptyOwnPullRequest;
+		pullRequest = own.pullRequest;
 	}
 	return { pullRequest, emptyOwnPullRequest, opensPullRequest };
+}
+
+/**
+ * The ticket's own draft through the direct head-branch read, and the
+ * empty-draft fact when it stands without work against its base.
+ */
+async function ownPullResolution(
+	request: FireTransitionRequest,
+	ticket: Ticket,
+): Promise<{ pullRequest: Ticket | null; emptyOwnPullRequest: boolean }> {
+	const own = await readTicketOwnPullRequest(request.runner, request.config.sources, ticket);
+	if (own === null) return { pullRequest: null, emptyOwnPullRequest: false };
+	const ownHead = headBranchOf(own.memberships[0]?.attributes ?? {});
+	const ownBase = own.memberships[0]?.attributes.baseBranch ?? null;
+	// The checkout by the plane's own resolution rule: the case-insensitive
+	// lookup over the identity and the display name the handoff and the
+	// init read, so a key the operator wrote in another case than the
+	// canonical identity still names its checkout.
+	const checkout = lookupRepositoryMapping(request.config.repos, [
+		ticket.repositoryRef.identity,
+		ticket.repositoryRef.displayName,
+	]);
+	const work =
+		ownHead === null || ownBase === null || checkout === undefined
+			? null
+			: await pullRequestCarriesWork(request.runner, checkout, ownHead, ownBase);
+	if (work !== true) return { pullRequest: null, emptyOwnPullRequest: true };
+	return { pullRequest: own, emptyOwnPullRequest: false };
 }
 
 /** The outcome the evaluation answers with, before the fire writes anything. */
@@ -1294,49 +1348,73 @@ export async function refireRecordedSkips(
 	);
 	const refired: RefiredSkip[] = [];
 	for (const ticket of tickets) {
-		const completion = ticket.lastCompletion;
-		const skip = completion?.transition ?? null;
-		if (completion === null || skip === null) continue;
-		if (
-			skip.fired !== true ||
-			(skip.reason !== NO_LINKED_PULL_REQUEST_SKIP && skip.reason !== EMPTY_PULL_REQUEST_SKIP)
-		)
-			continue;
-		// A pull request ticket is its own fixing pull request: its fire can
-		// never record the skip, and the re-fire reads the issue side of the
-		// link only.
-		if (ticket.sourceKind === "github-pull-request") continue;
-		// The awaiting walk keeps the row of a ticket that left every source,
-		// so the sweep checks the snapshot itself: the re-fire refuses a
-		// ticket its source no longer lists, the way the fire refuses a
-		// ticket that left the list.
-		if (!request.state.sourceFact.stillListed(ticket.identity)) continue;
-		if (request.config.taskTypes[completion.taskType]?.opensPullRequest === true) {
-			// The sweep's existence check is the direct head-branch read for a
-			// task type that opens a pull request (ADR 0076): a draft with
-			// commits still never stands in any projection, labeled or not.
-			const own = await readTicketOwnPullRequest(request.runner, request.config.sources, ticket);
-			if (own === null) continue;
-		} else {
-			// The machine acts on the newest non-draft open pull request that
-			// fixes the ticket: without one standing now, the skip stands as
-			// recorded.
-			if (findFixingPullRequest(tickets, ticket) === null) continue;
-		}
-		const outcome = await fireTransition({
-			config: request.config,
-			state: request.state,
-			runner: request.runner,
-			ticketIdentity: ticket.identity,
-			taskType: completion.taskType,
-			refresh: request.refresh,
-		});
-		if (outcome === null) continue;
-		const recorded: TransitionOutcome = { ...outcome, refired: true };
-		if (request.state.ticketWorkCycle.recordSkipRefire(ticket.identity, recorded))
-			refired.push({ ticketIdentity: ticket.identity, outcome: recorded });
+		const refiredSkip = await refireTicketSkip(request, tickets, ticket);
+		if (refiredSkip !== null) refired.push(refiredSkip);
 	}
 	return refired;
+}
+
+/** The re-fire of the skip one ticket recorded, or none when the ticket stands no re-fire. */
+async function refireTicketSkip(
+	request: RefireRecordedSkipsRequest,
+	tickets: readonly Ticket[],
+	ticket: Ticket,
+): Promise<RefiredSkip | null> {
+	const completion = ticket.lastCompletion;
+	if (completion === null) return null;
+	const skip = completion.transition;
+	if (skip === null) return null;
+	if (
+		skip.fired !== true ||
+		(skip.reason !== NO_LINKED_PULL_REQUEST_SKIP && skip.reason !== EMPTY_PULL_REQUEST_SKIP)
+	)
+		return null;
+	// A pull request ticket is its own fixing pull request: its fire can
+	// never record the skip, and the re-fire reads the issue side of the
+	// link only.
+	if (ticket.sourceKind === "github-pull-request") return null;
+	// The awaiting walk keeps the row of a ticket that left every source,
+	// so the sweep checks the snapshot itself: the re-fire refuses a
+	// ticket its source no longer lists, the way the fire refuses a
+	// ticket that left the list.
+	if (!request.state.sourceFact.stillListed(ticket.identity)) return null;
+	const stands = await refireTargetStands(request, tickets, ticket, completion.taskType);
+	if (!stands) return null;
+	const outcome = await fireTransition({
+		config: request.config,
+		state: request.state,
+		runner: request.runner,
+		ticketIdentity: ticket.identity,
+		taskType: completion.taskType,
+		refresh: request.refresh,
+	});
+	if (outcome === null) return null;
+	const recorded: TransitionOutcome = { ...outcome, refired: true };
+	if (!request.state.ticketWorkCycle.recordSkipRefire(ticket.identity, recorded)) return null;
+	return { ticketIdentity: ticket.identity, outcome: recorded };
+}
+
+/**
+ * Whether the ticket's re-fire target stands: the task type's pull request
+ * target, or its newest open fixing pull request.
+ */
+async function refireTargetStands(
+	request: RefireRecordedSkipsRequest,
+	tickets: readonly Ticket[],
+	ticket: Ticket,
+	taskType: string,
+): Promise<boolean> {
+	if (request.config.taskTypes[taskType]?.opensPullRequest === true) {
+		// The sweep's existence check is the direct head-branch read for a
+		// task type that opens a pull request (ADR 0076): a draft with
+		// commits still never stands in any projection, labeled or not.
+		const own = await readTicketOwnPullRequest(request.runner, request.config.sources, ticket);
+		return own !== null;
+	}
+	// The machine acts on the newest non-draft open pull request that
+	// fixes the ticket: without one standing now, the skip stands as
+	// recorded.
+	return findFixingPullRequest(tickets, ticket) !== null;
 }
 
 /**

@@ -806,10 +806,7 @@ function rowsFor(choice: HandoffChoice, surface: PanelSurface): PanelRow[] {
 		options: surface.taskTypes,
 	};
 	const taskPlacement = surface.taskPlacements?.[choice.taskType];
-	if (taskPlacement?.kind === "placement")
-		taskRow.placement = `places the ticket on state ${taskPlacement.state.name}`;
-	else if (taskPlacement?.kind === "infeasible")
-		taskRow.unfit = { ok: false, reason: taskPlacement.reason, placement: true };
+	taskPlacementNote(taskRow, taskPlacement);
 	const rows: PanelRow[] = [
 		{ label: "Agent", key: "agentType", kind: "list", options: Object.keys(surface.agents) },
 		{ label: "Environment", key: "environment", kind: "list", options: surface.environments },
@@ -819,27 +816,10 @@ function rowsFor(choice: HandoffChoice, surface: PanelSurface): PanelRow[] {
 	// warning the shared verdict gives, while it carries a value the Agent
 	// cannot take: hiding it would strand that value where no key can reach it,
 	// and the panel must never show something other than what the handoff sends.
-	if (agent.agent.model !== undefined) {
-		rows.push(modelRow(surface.modelStatus, modelVerdict));
-	} else if (choice.model !== "") {
-		rows.push({ label: "Model", key: "model", kind: "text", unfit: unfitVerdict(modelVerdict) });
-	}
-	if (agent.agent.thinking !== undefined) {
-		rows.push({
-			label: "Thinking",
-			key: "thinking",
-			kind: "list",
-			options: agent.agent.thinkingValues ?? [],
-			unfit: unfitVerdict(staticVerdicts.thinking),
-		});
-	} else if (choice.thinking !== "") {
-		rows.push({
-			label: "Thinking",
-			key: "thinking",
-			kind: "text",
-			unfit: unfitVerdict(staticVerdicts.thinking),
-		});
-	}
+	const modelRowRow = modelSettingRow(agent, choice, surface.modelStatus, modelVerdict);
+	if (modelRowRow !== null) rows.push(modelRowRow);
+	const thinkingRow = thinkingSettingRow(agent, choice, staticVerdicts.thinking);
+	if (thinkingRow !== null) rows.push(thinkingRow);
 	// The token row reads the same way as the model row: its Agent's
 	// capability opens it, and a value the Agent cannot take keeps it open so
 	// the operator can clear it.
@@ -856,21 +836,65 @@ function rowsFor(choice: HandoffChoice, surface: PanelSurface): PanelRow[] {
 	// values on the setting rows ride on the ask and go unrun, so the Task
 	// row states the fact and every setting row wears the written refusal the
 	// decision screen's edit key states.
-	if (surface.planeActionTaskTypes?.includes(choice.taskType) === true) {
-		// The plane action runs no placement write, so the Task row's own
-		// placement note and refusal give way to the fact that the start runs
-		// no Agent at all.
-		taskRow.unfit = undefined;
-		taskRow.placement = PLANE_ACTION_SETTINGS;
-		for (const row of rows) {
-			if (row.key !== "taskType")
-				row.unfit = { ok: false, reason: PLANE_ACTION_SETTINGS, plane: true };
-		}
-	}
+	const plane = surface.planeActionTaskTypes?.includes(choice.taskType) === true;
+	if (plane) planeActionRefusal(rows, taskRow);
 	return rows;
 }
 
 /** The failing verdict a row carries, or nothing when the value fits. */
+/** The placement note one choice's task type owes the Task row. */
+function taskPlacementNote(row: PanelRow, taskPlacement: PlacementEvaluation | undefined): void {
+	if (taskPlacement?.kind === "placement")
+		row.placement = `places the ticket on state ${taskPlacement.state.name}`;
+	else if (taskPlacement?.kind === "infeasible")
+		row.unfit = { ok: false, reason: taskPlacement.reason, placement: true };
+}
+
+/** The row one choice's model setting owes the panel, when it owes one. */
+function modelSettingRow(
+	agent: ResolvedAgentType,
+	choice: HandoffChoice,
+	status: ModelListStatus,
+	verdict: FitVerdict,
+): PanelRow | null {
+	if (agent.agent.model !== undefined) return modelRow(status, verdict);
+	if (choice.model !== "")
+		return { label: "Model", key: "model", kind: "text", unfit: unfitVerdict(verdict) };
+	return null;
+}
+
+/** The row one choice's thinking setting owes the panel, when it owes one. */
+function thinkingSettingRow(
+	agent: ResolvedAgentType,
+	choice: HandoffChoice,
+	verdict: FitVerdict,
+): PanelRow | null {
+	if (agent.agent.thinking !== undefined)
+		return {
+			label: "Thinking",
+			key: "thinking",
+			kind: "list",
+			options: agent.agent.thinkingValues ?? [],
+			unfit: unfitVerdict(verdict),
+		};
+	if (choice.thinking !== "")
+		return { label: "Thinking", key: "thinking", kind: "text", unfit: unfitVerdict(verdict) };
+	return null;
+}
+
+/** The written refusal one start on a plane action's task type states. */
+function planeActionRefusal(rows: PanelRow[], taskRow: PanelRow): void {
+	// The plane action runs no placement write, so the Task row's own
+	// placement note and refusal give way to the fact that the start runs
+	// no Agent at all.
+	taskRow.unfit = undefined;
+	taskRow.placement = PLANE_ACTION_SETTINGS;
+	for (const row of rows) {
+		if (row.key !== "taskType")
+			row.unfit = { ok: false, reason: PLANE_ACTION_SETTINGS, plane: true };
+	}
+}
+
 function unfitVerdict(verdict: FitVerdict): UnfitVerdict | undefined {
 	return verdict.ok ? undefined : verdict;
 }

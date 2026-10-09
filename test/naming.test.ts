@@ -438,22 +438,31 @@ describe("pullRequestBranchFor (ADR 0112)", () => {
 		for (const headBranch of [null, "fork:feature", "factory/5-persist-source-facts"]) {
 			for (const standsInCheckout of [true, false]) {
 				for (const standsOnOrigin of [true, false]) {
-					const answer = pullRequestBranchFor({
-						factoryBranch,
-						headBranch,
-						headStandsInCheckout: standsInCheckout,
-						headStandsOnOrigin: standsOnOrigin,
-					});
-					// The answer always names a branch, and never refuses.
-					expect(answer.branch).not.toBe("");
-					// The fallback stands only where the head branch cannot work.
-					const headWorks = headBranch !== null && (standsInCheckout || standsOnOrigin);
-					expect(answer.fallback === null).toBe(headWorks);
-					expect(answer.branch).toBe(headWorks ? headBranch : factoryBranch);
+					branchAnswerFacts(headBranch, standsInCheckout, standsOnOrigin);
 				}
 			}
 		}
 	});
+
+	/** The branch one head fact stands on, answered the way the rule answers it. */
+	function branchAnswerFacts(
+		headBranch: string | null,
+		standsInCheckout: boolean,
+		standsOnOrigin: boolean,
+	): void {
+		const answer = pullRequestBranchFor({
+			factoryBranch,
+			headBranch,
+			headStandsInCheckout: standsInCheckout,
+			headStandsOnOrigin: standsOnOrigin,
+		});
+		// The answer always names a branch, and never refuses.
+		expect(answer.branch).not.toBe("");
+		// The fallback stands only where the head branch cannot work.
+		const headWorks = headBranch !== null && (standsInCheckout || standsOnOrigin);
+		expect(answer.fallback === null).toBe(headWorks);
+		expect(answer.branch).toBe(headWorks ? headBranch : factoryBranch);
+	}
 
 	describe("pullRequestBranchFallbackLine", () => {
 		test("names the missing fact and the branch the start works", () => {

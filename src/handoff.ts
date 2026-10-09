@@ -1174,34 +1174,7 @@ async function runHandoffStart(request: HandoffStartRequest): Promise<HandoffOut
 	// makes, the answer names the branch the builder works, and the fallback it
 	// takes is the start's own note. The builder keeps its one reuse policy over
 	// whatever branch the statement names, and learns nothing.
-	if (request.branch.pullRequestHeadBranch !== undefined) {
-		const headBranch = request.branch.pullRequestHeadBranch;
-		let headStandsInCheckout = false;
-		let headStandsOnOrigin = false;
-		if (headBranch !== null) {
-			const listed = await ctx.runner.run("git", ["-C", checkout, "branch", "--list", headBranch]);
-			if (listed.code === 0 && listed.stdout.trim() !== "") {
-				headStandsInCheckout = true;
-			} else {
-				headStandsOnOrigin = await remoteBranchStands(checkout, headBranch, ctx);
-			}
-		}
-		const answer = pullRequestBranchFor({
-			factoryBranch: request.branch.name,
-			headBranch,
-			headStandsInCheckout,
-			headStandsOnOrigin,
-		});
-		request.branch.name = answer.branch;
-		if (answer.fallback !== null)
-			ctx.notes = {
-				...ctx.notes,
-				branchFallback: pullRequestBranchFallbackLine(answer.fallback, headBranch, answer.branch),
-			};
-		// The pull request open stands on the branch the start works, so the
-		// open and the Environment never name two branches for one start.
-		if (ctx.pullRequestOpen !== undefined) ctx.pullRequestOpen.branch = answer.branch;
-	}
+	await resolvePullRequestBranch(request, ctx, checkout);
 	// What this start creates, and what it has already put into the world, stand
 	// outside its steps. A command that raises in the middle of a start therefore
 	// still leaves the start able to name what it made and what it must not roll
@@ -1222,6 +1195,54 @@ async function runHandoffStart(request: HandoffStartRequest): Promise<HandoffOut
 		await removeResidue(ctx, residue);
 	}
 	return outcome;
+}
+
+/**
+ * The branch the start works, resolved for a pull request ticket: the
+ * head-branch fact against the checkout and origin, the answer, and the
+ * fallback note the start carries when the answer fell back.
+ */
+async function resolvePullRequestBranch(
+	request: HandoffStartRequest,
+	ctx: HandoffContext,
+	checkout: string,
+): Promise<void> {
+	if (request.branch.pullRequestHeadBranch === undefined) return;
+	const headBranch = request.branch.pullRequestHeadBranch;
+	const stands = await headBranchStands(checkout, headBranch, ctx);
+	const answer = pullRequestBranchFor({
+		factoryBranch: request.branch.name,
+		headBranch,
+		headStandsInCheckout: stands.inCheckout,
+		headStandsOnOrigin: stands.onOrigin,
+	});
+	request.branch.name = answer.branch;
+	if (answer.fallback !== null)
+		ctx.notes = {
+			...ctx.notes,
+			branchFallback: pullRequestBranchFallbackLine(answer.fallback, headBranch, answer.branch),
+		};
+	// The pull request open stands on the branch the start works, so the
+	// open and the Environment never name two branches for one start.
+	if (ctx.pullRequestOpen !== undefined) ctx.pullRequestOpen.branch = answer.branch;
+}
+
+/** The places one head branch stands: in the checkout, and on origin. */
+async function headBranchStands(
+	checkout: string,
+	headBranch: string | null,
+	ctx: HandoffContext,
+): Promise<{ inCheckout: boolean; onOrigin: boolean }> {
+	let inCheckout = false;
+	let onOrigin = false;
+	if (headBranch === null) return { inCheckout, onOrigin };
+	const listed = await ctx.runner.run("git", ["-C", checkout, "branch", "--list", headBranch]);
+	if (listed.code === 0 && listed.stdout.trim() !== "") {
+		inCheckout = true;
+	} else {
+		onOrigin = await remoteBranchStands(checkout, headBranch, ctx);
+	}
+	return { inCheckout, onOrigin };
 }
 
 /**
@@ -1475,31 +1496,52 @@ function recordResource(
  * the operator's Close has to be able to reach it.
  */
 async function removeResidue(ctx: HandoffContext, residue: Residue): Promise<void> {
-	if (residue.tab !== null && (await closeTab(residue.tab.resourceId, ctx)))
-		confirmRemoved(ctx, residue.tab);
+	await removeResidueTab(ctx, residue);
+	await removeResidueCheckout(ctx, residue);
+	await removeResidueBranch(ctx, residue);
+}
+
+/** The tab half of the start's residue, closed when it still stands. */
+async function removeResidueTab(ctx: HandoffContext, residue: Residue): Promise<void> {
+	if (residue.tab === null) return;
+	if (!(await closeTab(residue.tab.resourceId, ctx))) return;
+	confirmRemoved(ctx, residue.tab);
+}
+
+/** The checkout half of the start's residue: the worktree, or the workspace alone. */
+async function removeResidueCheckout(ctx: HandoffContext, residue: Residue): Promise<void> {
 	if (residue.worktree !== null) {
 		if (await removeWorktreeCheckout(residue.worktree.resourceId, ctx)) {
 			// `worktree remove` takes the workspace herdr created together with its
 			// checkout, and the root tab between them, so all three rows go.
 			confirmRemoved(ctx, residue.worktree);
 			if (residue.workspace !== null) confirmRemoved(ctx, residue.workspace);
-			if (residue.rootTab !== null) confirmRemoved(ctx, residue.rootTab);
+			confirmResidueRootTab(ctx, residue);
 		}
-	} else if (residue.workspace !== null) {
-		if (await closeWorkspace(residue.workspace.resourceId, ctx)) {
-			confirmRemoved(ctx, residue.workspace);
-			if (residue.rootTab !== null) confirmRemoved(ctx, residue.rootTab);
-		}
+		return;
 	}
-	if (residue.branch !== null) {
-		// A branch delete is cleanup like every other half of this rule: a command
-		// that raises is answered the way a refusal is, so it cannot escape the
-		// start and take the rest of the cleanup with it.
-		try {
-			await ctx.runner.run("git", ["-C", ctx.checkout, "branch", "-D", residue.branch]);
-		} catch {
-			// Best effort.
-		}
+	if (residue.workspace === null) return;
+	if (await closeWorkspace(residue.workspace.resourceId, ctx)) {
+		confirmRemoved(ctx, residue.workspace);
+		confirmResidueRootTab(ctx, residue);
+	}
+}
+
+/** The root tab half of the start's residue, gone with the checkout that held it. */
+function confirmResidueRootTab(ctx: HandoffContext, residue: Residue): void {
+	if (residue.rootTab !== null) confirmRemoved(ctx, residue.rootTab);
+}
+
+/** The branch half of the start's residue, deleted best effort. */
+async function removeResidueBranch(ctx: HandoffContext, residue: Residue): Promise<void> {
+	if (residue.branch === null) return;
+	// A branch delete is cleanup like every other half of this rule: a command
+	// that raises is answered the way a refusal is, so it cannot escape the
+	// start and take the rest of the cleanup with it.
+	try {
+		await ctx.runner.run("git", ["-C", ctx.checkout, "branch", "-D", residue.branch]);
+	} catch {
+		// Best effort.
 	}
 }
 
@@ -2491,9 +2533,7 @@ async function startAgentUnderAvailableName(
 	for (let index = 0; index < candidates.length; index += 1) {
 		const name = candidates[index];
 		const startArgs = ["agent", "start", name, "--kind", agent.kind, "--pane", paneId];
-		if (args.length > 0) {
-			startArgs.push("--", ...args);
-		}
+		if (args.length > 0) startArgs.push("--", ...args);
 		result = await startAgentWhenPaneIsReady(startArgs, ctx.runner);
 		if (result.code === 0) {
 			return {
@@ -2506,26 +2546,39 @@ async function startAgentUnderAvailableName(
 		}
 		nameHeld = herdrErrorCode(result) === "agent_name_taken";
 		if (!nameHeld) break;
-		const holders = herdrNameHolders(result);
-		const own = nameIsOwnLeftover(ctx.names, holders);
-		collision = {
-			stableName: candidates[0],
-			// The refusal is about the name just asked for, and that is the name the
-			// holder holds - not necessarily the stable name the search started on.
-			heldName: name,
-			startedAs: null,
-			// The operator is sent to find the holder that matters: for an own
-			// collision, the one this ticket's handoffs recorded.
-			holder: own ? (ownHolder(ctx.names, holders) ?? holders[0] ?? null) : (holders[0] ?? null),
-			own,
-			reason: herdrFailureText(result),
-		};
+		collision = nameCollisionOf(ctx.names, candidates[0], name, result);
 		if (collision.own && ownCollision === undefined) ownCollision = collision;
 		// Another ticket's agent, or the last candidate spent: the collision
 		// stands, and no further name is asked for.
 		if (!collision.own || index + 1 === candidates.length) break;
 	}
 	return { name: null, result, nameHeld, ...collisionFields(collision, ownCollision) };
+}
+
+/**
+ * The collision one refused name stands: the holder that answers it, and the
+ * own fact the ticket's own leftovers carry.
+ */
+function nameCollisionOf(
+	names: NamePlan,
+	stableName: string,
+	name: string,
+	result: CommandResult,
+): NameCollision {
+	const holders = herdrNameHolders(result);
+	const own = nameIsOwnLeftover(names, holders);
+	return {
+		stableName,
+		// The refusal is about the name just asked for, and that is the name the
+		// holder holds - not necessarily the stable name the search started on.
+		heldName: name,
+		startedAs: null,
+		// The operator is sent to find the holder that matters: for an own
+		// collision, the one this ticket's handoffs recorded.
+		holder: own ? (ownHolder(names, holders) ?? holders[0] ?? null) : (holders[0] ?? null),
+		own,
+		reason: herdrFailureText(result),
+	};
 }
 
 /**
@@ -2779,56 +2832,74 @@ export async function closeHandoffEnvironment(
 	if (reach.scope === "none") {
 		return undefined;
 	}
-	if (reach.scope === "workspace") {
-		// The checkout on disk and the herdr workspace behind it: herdr
-		// worktree remove closes the workspace with the checkout and never
-		// deletes the branch, so pushed work and pull requests survive.
-		const removeArgs = ["worktree", "remove", "--workspace", reach.workspaceId];
-		if (force) {
-			removeArgs.push("--force");
-		}
-		const removed = await runner.run("herdr", removeArgs);
-		if (removed.code === 0) {
-			// The workspace closed with the checkout: the environment is gone.
-			// A close of a workspace the operator is not viewing leaves herdr's
-			// view alone, so no focus command follows it (ADR 0061).
-			return undefined;
-		}
-		const code = herdrErrorCode(removed);
-		if (code === "workspace_not_found") {
-			// The workspace is already gone: there is nothing to clean up.
-			return undefined;
-		}
-		if (code === "worktree_remove_failed") {
-			// The checkout is gone (deleted outside herdr): the workspace is
-			// what remains, so close it.
-			const closed = await runner.run("herdr", ["workspace", "close", reach.workspaceId]);
-			if (closed.code === 0 || herdrErrorCode(closed) === "workspace_not_found") {
-				return undefined;
-			}
-			return herdrFailureText(closed);
-		}
+	if (reach.scope === "workspace")
+		return closeWorkspaceEnvironment(runner, reach.workspaceId, force);
+	if (reach.scope === "tab") return closeTabEnvironment(runner, reach.tabId);
+	return undefined;
+}
+
+/** The close of a worktree environment: the workspace, with its checkout. */
+async function closeWorkspaceEnvironment(
+	runner: CommandRunner,
+	workspaceId: string,
+	force: boolean,
+): Promise<string | undefined> {
+	// The checkout on disk and the herdr workspace behind it: herdr
+	// worktree remove closes the workspace with the checkout and never
+	// deletes the branch, so pushed work and pull requests survive.
+	const removeArgs = ["worktree", "remove", "--workspace", workspaceId];
+	if (force) removeArgs.push("--force");
+	const removed = await runner.run("herdr", removeArgs);
+	if (removed.code === 0) {
+		// The workspace closed with the checkout: the environment is gone.
+		// A close of a workspace the operator is not viewing leaves herdr's
+		// view alone, so no focus command follows it (ADR 0061).
+		return undefined;
+	}
+	const code = herdrErrorCode(removed);
+	if (code === "workspace_not_found") {
+		// The workspace is already gone: there is nothing to clean up.
+		return undefined;
+	}
+	if (code !== "worktree_remove_failed") {
 		// The checkout is still there (for example dirty): leave the
 		// workspace open for the operator and report why the removal failed.
 		return herdrFailureText(removed);
 	}
-	if (reach.scope === "tab") {
-		// The tab close keeps the workspace and the tabs beside it, so herdr
-		// leaves the operator's view where it stood: the cleanup sends no
-		// focus command here either, and none follows a workspace close (ADR 0061).
-		const result = await runner.run("herdr", ["tab", "close", reach.tabId]);
-		if (result.code === 0) {
-			// The tab closed: the environment is gone.
-			return undefined;
-		}
-		if (herdrErrorCode(result) === "tab_not_found") {
-			// The tab is already gone (closed outside herdr): there is
-			// nothing left to clean up.
-			return undefined;
-		}
-		return herdrFailureText(result);
+	// The checkout is gone (deleted outside herdr): the workspace is
+	// what remains, so close it.
+	return closeWorkspaceFallback(runner, workspaceId);
+}
+
+/** The workspace close that stands when the worktree remove found no checkout. */
+async function closeWorkspaceFallback(
+	runner: CommandRunner,
+	workspaceId: string,
+): Promise<string | undefined> {
+	const closed = await runner.run("herdr", ["workspace", "close", workspaceId]);
+	if (closed.code === 0 || herdrErrorCode(closed) === "workspace_not_found") return undefined;
+	return herdrFailureText(closed);
+}
+
+/** The close of a live-worktree environment: the tab alone. */
+async function closeTabEnvironment(
+	runner: CommandRunner,
+	tabId: string,
+): Promise<string | undefined> {
+	// The tab close keeps the workspace and the tabs beside it, so herdr
+	// leaves the operator's view where it stood: the cleanup sends no
+	// focus command here either, and none follows a workspace close (ADR 0061).
+	const result = await runner.run("herdr", ["tab", "close", tabId]);
+	if (result.code === 0) {
+		// The tab closed: the environment is gone.
+		return undefined;
 	}
-	return undefined;
+	if (herdrErrorCode(result) === "tab_not_found") {
+		// The tab is already gone (closed outside herdr): there is
+		// nothing left to clean up.
+		return undefined;
+	}
+	return herdrFailureText(result);
 }
 
 /**

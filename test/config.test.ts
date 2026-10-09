@@ -563,6 +563,13 @@ describe("validateConfig", () => {
 			for (const source of config.sources) {
 				expect(source.host).toBe("github.com");
 				expect(source.auth).toBeUndefined();
+				sourceShapeExpectations(source, feedNames);
+			}
+			/** The shape one development source holds, feed or init-registered. */
+			function sourceShapeExpectations(
+				source: (typeof config.sources)[number],
+				feedNames: Set<string>,
+			): void {
 				if (feedNames.has(source.name)) {
 					// Normal gh authentication and no explicit filter: the feed
 					// reads neither an auth table nor a filter, so no token is
@@ -573,33 +580,37 @@ describe("validateConfig", () => {
 					);
 					expect(source.repositories).toContain("SeriousJul/my-little-software-factory");
 					expect(source.filter).toBeUndefined();
-				} else {
-					// The init flow's naming (ADR 0075): one issues feed per label the
-					// machine gates issues on, in state order (ADR 0115), and one pull
-					// request feed on the source's own default policy.
-					const gates = issueGateLabels(config.workflowStates);
-					const match = source.name.match(/^(.+)-(issues|pull-requests)(?:-([^/]+))?$/);
-					expect(match, `${source.name} follows the init source naming`).not.toBeNull();
-					if (match === null) continue;
-					const repository = match[1];
-					const isIssues = match[2] === "issues";
-					expect(source.kind).toBe(isIssues ? "github-issues" : "github-pull-requests");
-					expect(source.refreshIntervalSeconds, `${source.name} keeps its refresh interval`).toBe(
-						60,
-					);
-					expect(source.repositories).toEqual([repository]);
-					if (!isIssues) {
-						expect(source.filter).toBeUndefined();
-						continue;
-					}
-					// The plain `-issues` feed carries the machine's first gate, and a
-					// feed named for a label carries that one: no query needs a union
-					// GitHub search cannot express.
-					const gate = match[3] ?? gates[0];
-					expect(gates, `${source.name} names a gate the machine holds`).toContain(gate);
-					expect(source.filter).toBe(`label:${gate}`);
+					return;
 				}
+				initSourceExpectations(source);
 			}
+
+			/** The shape one source registered by init holds, named for the machine's gates. */
+			function initSourceExpectations(source: (typeof config.sources)[number]): void {
+				// The init flow's naming (ADR 0075): one issues feed per label the
+				// machine gates issues on, in state order (ADR 0115), and one pull
+				// request feed on the source's own default policy.
+				const gates = issueGateLabels(config.workflowStates);
+				const match = source.name.match(/^(.+)-(issues|pull-requests)(?:-([^/]+))?$/);
+				expect(match, `${source.name} follows the init source naming`).not.toBeNull();
+				if (match === null) return;
+				const repository = match[1];
+				const isIssues = match[2] === "issues";
+				expect(source.kind).toBe(isIssues ? "github-issues" : "github-pull-requests");
+				expect(source.refreshIntervalSeconds, `${source.name} keeps its refresh interval`).toBe(60);
+				expect(source.repositories).toEqual([repository]);
+				if (!isIssues) {
+					expect(source.filter).toBeUndefined();
+					return;
+				}
+				// The plain `-issues` feed carries the machine's first gate, and a
+				// feed named for a label carries that one: no query needs a union
+				// GitHub search cannot express.
+				const gate = match[3] ?? gates[0];
+				expect(gates, `${source.name} names a gate the machine holds`).toContain(gate);
+				expect(source.filter).toBe(`label:${gate}`);
+			}
+
 			// The dev path records its run in a log the git tree ignores.
 			expect(config.logging).toMatchObject({
 				level: "debug",

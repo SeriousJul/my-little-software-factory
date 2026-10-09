@@ -120,30 +120,47 @@ export const USAGE = "usage: factory [--config <path>] [--world <path>] | factor
  * flag without a value, a repeated flag, or anything else is the usage line.
  */
 export function configPathFromArgs(args: readonly string[]): StartupArgsResult {
-	let configPath: string | undefined;
-	let worldPath: string | undefined;
+	const state: StartupArgState = { configPath: undefined, worldPath: undefined };
 	for (let i = 0; i < args.length; i += 1) {
-		const arg = args[i];
-		if (arg === "--config" || arg === "--world") {
-			const value = args[i + 1];
-			if (value === undefined || value === "") return { ok: false, reason: USAGE };
-			if (arg === "--config") {
-				if (configPath !== undefined) return { ok: false, reason: USAGE };
-				configPath = value;
-			} else {
-				if (worldPath !== undefined) return { ok: false, reason: USAGE };
-				worldPath = value;
-			}
-			i += 1;
-		} else {
-			return { ok: false, reason: USAGE };
-		}
+		const step = startupArgStep(args, i, state);
+		if (!step.ok) return { ok: false, reason: USAGE };
+		i += step.advance;
 	}
 	return {
 		ok: true,
-		configPath: configPath ?? defaultConfigPath(),
-		...(worldPath !== undefined ? { worldPath } : {}),
+		configPath: state.configPath ?? defaultConfigPath(),
+		...(state.worldPath !== undefined ? { worldPath: state.worldPath } : {}),
 	};
+}
+
+/** The config and world paths the argument list holds. */
+interface StartupArgState {
+	configPath: string | undefined;
+	worldPath: string | undefined;
+}
+
+/**
+ * The one argument of the startup list, written into the state, or the
+ * refusal the argument earns: an unknown argument, a flag without a value,
+ * or a flag the list already holds.
+ */
+function startupArgStep(
+	args: readonly string[],
+	i: number,
+	state: StartupArgState,
+): { ok: boolean; advance: number } {
+	const arg = args[i];
+	if (arg !== "--config" && arg !== "--world") return { ok: false, advance: 0 };
+	const value = args[i + 1];
+	if (value === undefined || value === "") return { ok: false, advance: 0 };
+	if (arg === "--config") {
+		if (state.configPath !== undefined) return { ok: false, advance: 0 };
+		state.configPath = value;
+		return { ok: true, advance: 1 };
+	}
+	if (state.worldPath !== undefined) return { ok: false, advance: 0 };
+	state.worldPath = value;
+	return { ok: true, advance: 1 };
 }
 
 /**

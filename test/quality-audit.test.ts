@@ -243,7 +243,7 @@ describe("the dotfiles state the audit's values", () => {
 		const baseline = JSON.parse(
 			readFileSync(join(ROOT, ".quality-baseline.json"), "utf8"),
 		) as BaselineFile;
-		expect(baseline.cognitive).toBe(135);
+		expect(baseline.cognitive).toBe(0);
 		expect(baseline.function).toBe(0);
 		expect(baseline.params).toBe(0);
 		expect(baseline.duplicates).toBe(0);

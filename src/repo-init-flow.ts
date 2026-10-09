@@ -159,12 +159,9 @@ export async function commitRepositoryInit(
 		input.workflowStates,
 	);
 	const configured = input.config.sources ?? [];
-	for (const source of sources) {
-		for (const held of configured) {
-			if (held.name === source.name && !isPlaneInitSource(held, source))
-				return { ok: false, reason: `a source named ${source.name} is already configured` };
-		}
-	}
+	const colliding = collidingSourceName(sources, configured);
+	if (colliding !== null)
+		return { ok: false, reason: `a source named ${colliding} is already configured` };
 	// The coverage split (issue 195): a planned source an existing source on
 	// the same host and of the same kind already lists the repository under,
 	// and already reads the same query branch, is not registered again, so the
@@ -204,32 +201,76 @@ export async function commitRepositoryInit(
 	// the config the operator's pane shows gains no duplicate row. The coverage
 	// test subsumes the plane-source test: a plane-registered source covers
 	// itself, so the re-init's split stands on one rule.
+	const { newSources, skippedSources } = splitInitSources(sources, configured);
+	const labels = outcome.labelsCreated.length;
+	const changed = input.plan.fileActions.filter((file) => file.action !== "unchanged").length;
+	return {
+		ok: true,
+		message: repositoryInitMessage({
+			displayName: input.repository.displayName,
+			pushedCommit: outcome.pushedCommit,
+			targetBranch: outcome.targetBranch,
+			labels,
+			changed,
+			skippedSources,
+		}),
+		newSources,
+		skippedSources,
+	};
+}
+
+/**
+ * The name one planned source takes that an operator-configured source holds
+ * for its own, and the plane init does not own, or none.
+ */
+function collidingSourceName(
+	sources: readonly TicketSourceConfig[],
+	configured: readonly TicketSourceConfig[],
+): string | null {
+	for (const source of sources) {
+		for (const held of configured) {
+			if (held.name === source.name && !isPlaneInitSource(held, source)) return source.name;
+		}
+	}
+	return null;
+}
+
+/** The sources the init registers and the ones a covering source already holds. */
+function splitInitSources(
+	sources: readonly TicketSourceConfig[],
+	configured: readonly TicketSourceConfig[],
+): { newSources: TicketSourceConfig[]; skippedSources: SkippedInitSource[] } {
 	const newSources: TicketSourceConfig[] = [];
 	const skippedSources: SkippedInitSource[] = [];
 	for (const source of sources) {
 		const cover = configured.find((held) => sourceCovers(held, source));
-		if (cover !== undefined) {
-			skippedSources.push({ name: source.name, coveredBy: cover.name });
-		} else {
-			newSources.push(source);
-		}
+		if (cover !== undefined) skippedSources.push({ name: source.name, coveredBy: cover.name });
+		else newSources.push(source);
 	}
-	const labels = outcome.labelsCreated.length;
-	const changed = input.plan.fileActions.filter((file) => file.action !== "unchanged").length;
-	const skipped =
-		skippedSources.length === 0
-			? ""
-			: `, skipped ${skippedSources
-					.map((skipped) => `${skipped.name} (covered by ${skipped.coveredBy})`)
-					.join(", ")}`;
-	return {
-		ok: true,
-		message: `${input.repository.displayName}: pushed ${outcome.pushedCommit} to ${outcome.targetBranch}, created ${labels} label${
-			labels === 1 ? "" : "s"
-		}, changed ${changed} file${changed === 1 ? "" : "s"}${skipped}`,
-		newSources,
-		skippedSources,
-	};
+	return { newSources, skippedSources };
+}
+
+/** The words the init answer carries: the push, the labels, the files, the skips. */
+function repositoryInitMessage(facts: {
+	displayName: string;
+	pushedCommit: string;
+	targetBranch: string;
+	labels: number;
+	changed: number;
+	skippedSources: SkippedInitSource[];
+}): string {
+	const skipped = skippedSourcesText(facts.skippedSources);
+	return `${facts.displayName}: pushed ${facts.pushedCommit} to ${facts.targetBranch}, created ${facts.labels} label${
+		facts.labels === 1 ? "" : "s"
+	}, changed ${facts.changed} file${facts.changed === 1 ? "" : "s"}${skipped}`;
+}
+
+/** The skipped sources of the answer, or none. */
+function skippedSourcesText(skippedSources: SkippedInitSource[]): string {
+	if (skippedSources.length === 0) return "";
+	return `, skipped ${skippedSources
+		.map((skipped) => `${skipped.name} (covered by ${skipped.coveredBy})`)
+		.join(", ")}`;
 }
 
 /**

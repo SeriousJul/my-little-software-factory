@@ -101,21 +101,24 @@ export function downloadNote(version, targetId) {
  * fact is absent, so its absence is the musl answer.
  */
 export function targetIdFor(facts) {
-	const { platform, arch } = facts;
-	if (platform === "linux") {
-		if (arch === "x64") return facts.glibc ? "linux-x64" : "linux-x64-musl";
-		if (arch === "arm64") return facts.glibc ? "linux-arm64" : "linux-arm64-musl";
-		return null;
-	}
+	if (facts.platform === "linux") return linuxTargetId(facts.arch, facts.glibc);
+	return fixedTargetId(facts.platform, facts.arch);
+}
+
+/** The target id one linux arch names, by the glibc fact the machine carries. */
+function linuxTargetId(arch, glibc) {
+	if (arch === "x64") return glibc ? "linux-x64" : "linux-x64-musl";
+	if (arch === "arm64") return glibc ? "linux-arm64" : "linux-arm64-musl";
+	return null;
+}
+
+/** The target id one non-linux platform and arch name. */
+function fixedTargetId(platform, arch) {
 	if (platform === "darwin") {
 		if (arch === "x64") return "darwin-x64";
 		if (arch === "arm64") return "darwin-arm64";
-		return null;
 	}
-	if (platform === "win32") {
-		if (arch === "x64") return "windows-x64";
-		return null;
-	}
+	if (platform === "win32" && arch === "x64") return "windows-x64";
 	return null;
 }
 

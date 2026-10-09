@@ -79,6 +79,24 @@ export async function listInitableRepositories(
 	}
 }
 
+/** The repositories one organization node of the viewer answer carries, added through `add`. */
+function parseViewerOrganizations(
+	organizations: unknown,
+	add: (nodes: unknown, where: string) => string | undefined,
+): string | undefined {
+	if (organizations === undefined) return undefined;
+	if (!Array.isArray(organizations)) return "GitHub returned no organization list";
+	for (const org of organizations) {
+		const login = stringOf((org as Record<string, unknown>)?.login) ?? "an organization";
+		const failure = add(
+			((org as Record<string, unknown>)?.repositories as { nodes?: unknown } | undefined)?.nodes,
+			`the organization ${login}`,
+		);
+		if (failure !== undefined) return failure;
+	}
+	return undefined;
+}
+
 /** The string one thrown error states, in one line. */
 function readableError(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
@@ -127,18 +145,8 @@ export function parseViewerRepositories(text: string, host: string): RepositoryL
 	const own = add((viewer.repositories as { nodes?: unknown } | undefined)?.nodes, "the account");
 	if (own !== undefined) return { status: "failed", reason: own };
 	const organizations = (viewer.organizations as { nodes?: unknown } | undefined)?.nodes;
-	if (organizations !== undefined) {
-		if (!Array.isArray(organizations))
-			return { status: "failed", reason: "GitHub returned no organization list" };
-		for (const org of organizations) {
-			const login = stringOf((org as Record<string, unknown>)?.login) ?? "an organization";
-			const failure = add(
-				((org as Record<string, unknown>)?.repositories as { nodes?: unknown } | undefined)?.nodes,
-				`the organization ${login}`,
-			);
-			if (failure !== undefined) return { status: "failed", reason: failure };
-		}
-	}
+	const failure = parseViewerOrganizations(organizations, add);
+	if (failure !== undefined) return { status: "failed", reason: failure };
 	return { status: "success", repositories };
 }
 

@@ -92,25 +92,30 @@ function missingPathClaims(doc: string): string[] {
 			if (!isPathClaim(token)) {
 				continue;
 			}
-			if (token.includes("/")) {
-				const target = join(repo, token.replace(/\/$/, ""));
-				if (!existsSync(target)) {
-					missing.push(`${token} (entry ${entry.root}) names no file or directory`);
-				}
-				continue;
-			}
-			const scope =
-				existsSync(join(repo, entry.root)) && statSync(join(repo, entry.root)).isDirectory()
-					? join(repo, entry.root)
-					: join(repo, "src");
-			if (!standsUnder(scope, token)) {
-				missing.push(
-					`${token} (entry ${entry.root}) stands nowhere under ${scope.replace(`${repo}/`, "")}`,
-				);
-			}
+			const missingClaim = missingPathClaim(entry, token);
+			if (missingClaim !== null) missing.push(missingClaim);
 		}
 	}
 	return missing;
+}
+
+/** The claim one path token leaves missing, when the tree does not hold it. */
+function missingPathClaim(entry: { root: string; body: string }, token: string): string | null {
+	if (token.includes("/")) {
+		const target = join(repo, token.replace(/\/$/, ""));
+		if (!existsSync(target)) {
+			return `${token} (entry ${entry.root}) names no file or directory`;
+		}
+		return null;
+	}
+	const scope =
+		existsSync(join(repo, entry.root)) && statSync(join(repo, entry.root)).isDirectory()
+			? join(repo, entry.root)
+			: join(repo, "src");
+	if (!standsUnder(scope, token)) {
+		return `${token} (entry ${entry.root}) stands nowhere under ${scope.replace(`${repo}/`, "")}`;
+	}
+	return null;
 }
 
 describe("the module map names paths the tree holds", () => {
