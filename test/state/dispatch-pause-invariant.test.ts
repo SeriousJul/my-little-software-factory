@@ -22,8 +22,11 @@
  * guards none of them: it reads the row's `held` badge through
  * `holdsDecision()`, the same predicate the badge wears, so the pause and the
  * badge could drift together and check 1 would see nothing. The ledger records
- * the superseded decision the settling write lands (ADR 0134), so the oracle
- * and the production read take one fact of every trace. Measured on this walk,
+ * every trace the write path lands: the superseded decision the settling write
+ * decides (ADR 0134), and the second trace the abandon's branch inserts for a
+ * handoff whose trace already wears a decision - no cause, the turn never
+ * settled - so the oracle and the production read take one fact of every
+ * trace. Measured on this walk,
  * removing the `awaiting` guard from `heldFailureTrace()` turns check 2 red at
  * step 78 of the first sequence, reading the newest-turn guard globally instead
  * of per Ticket turns it red at step 67, and removing the current-cycle guard
@@ -133,11 +136,12 @@ function traceOrderIsLater(left: CompletionTraceOrder, right: CompletionTraceOrd
 	);
 }
 
-/** One settled turn the walk wrote, as the walk remembers it. */
+/** One trace the walk's operations wrote, as the walk remembers it. */
 interface TraceFact extends CompletionTraceOrder {
 	/** The Handoff attempt whose settle wrote it. */
 	attempt: string;
-	cause: string;
+	/** The cause the settle stored; null for the abandon's own trace, which the writer inserts for a turn that never settled. */
+	cause: string | null;
 	/**
 	 * True once a decision has landed on the trace: the walk's own decision,
 	 * or the superseded decision the settling write lands (ADR 0134).
@@ -313,15 +317,36 @@ class Walk {
 		if (attempt === null) return;
 		const decision = pick(DECISIONS, this.next());
 		this.traceTime += 60_000;
+		const decidedAt = new Date(this.traceTime).toISOString();
 		const applied = this.state.ticketWorkCycle.applyCompletionDecision({
 			ticketIdentity: identity,
 			handoffId: attempt,
 			decision,
-			decidedAt: new Date(this.traceTime).toISOString(),
+			decidedAt,
 		});
 		if (applied) {
 			const trace = ticket.traces.find((each) => each.attempt === attempt && !each.decided);
-			if (trace !== undefined) trace.decided = true;
+			if (trace !== undefined) {
+				trace.decided = true;
+			} else if (decision === "abandoned") {
+				// The turn's trace already wears a decision - the supersede the
+				// settling write lands (ADR 0134) - so the writer's abandon
+				// branch inserts a second trace for the handoff, once: no cause,
+				// the turn never settled, and the decision it asked for, on the
+				// cycle the handoff was claimed on. The ledger records it the
+				// way the write does, so the oracle holds one fact of every
+				// trace the write path lands.
+				const settled = ticket.traces.find((each) => each.attempt === attempt);
+				this.traceRow += 1;
+				ticket.traces.push({
+					attempt,
+					completedAt: decidedAt,
+					rowId: this.traceRow,
+					cause: null,
+					decided: true,
+					cycle: settled?.cycle ?? ticket.cycle,
+				});
+			}
 			ticket.owed = null;
 			// The close, the abandon, and the route each end the cycle; the route
 			// ends it only from the resting state.

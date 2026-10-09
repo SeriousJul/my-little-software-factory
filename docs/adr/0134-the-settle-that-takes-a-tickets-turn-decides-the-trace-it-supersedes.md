@@ -50,10 +50,17 @@ puts ahead of the settle's, alike.
 
 The pause, the badge, the detail pane, the Decision screen, and the ignore
 refusal read nothing new: they keep reading the Ticket's newest settled turn,
-and a superseded trace is no longer one. The pause's newest-turn guard stands
-as the read's second defense: a state file that predates this decision still
-carries the pending trace the guard was added for, and the guard is what keeps
-the pause out of it.
+and a superseded trace is no longer one. The Same-type hold's read changes
+with the write: the supersede puts the first decided trace in the current
+cycle beside the newest one, and a decided trace wears a `decided_at` stamp
+the newest undecided one does not, so the hold's current-cycle branch now
+names the cycle's newest settled turn by the order the badge's reads share
+(`newestTraceOrder`) - the stamp-sorted read would have answered the
+superseded trace and cleared the hold on the very completed turn that just
+settled (ADR 0093). The pause's newest-turn guard stands as the read's second
+defense: a state file that predates this decision still carries the pending
+trace the guard was added for, and the guard is what keeps the pause out of
+it.
 
 ## Considered options
 
@@ -93,12 +100,13 @@ the pause out of it.
   no second time: the row, the detail pane, the Decision screen, and the
   ignore refusal keep reading the Ticket's newest settled turn, which is never
   superseded, and the factory keeps dispatching.
-- After a settle, the undecided traces a Ticket holds are its newest settled
-  turn - the one the row shows and the Decision screen offers - and, until the
-  next settle, the pending traces a closed cycle left behind. A closed
-  cycle's pending trace that no later turn supersedes stands undecided in the
-  record: the operator ended the cycle it stands in, the ticket rests open,
-  and the next turn's settle decides it the way this decision states.
+- After every settle, a Ticket holds at most one undecided trace, and it is
+  the newest: the one the row shows and the Decision screen offers. The
+  settle's write decides every other undecided trace the Ticket holds, the
+  closed cycle's pending trace among them. Between a close and the next
+  settle, that pending trace stands undecided in the record: the operator
+  ended the cycle it stands in, the ticket rests open, and the next turn's
+  settle decides it the way this decision states.
 - The Dispatch pause is unchanged. Its read still takes the undecided `failed`
   trace only while it stands as the decision the operator owes, and a
   superseded trace is no longer one; the newest-turn guard stands as the

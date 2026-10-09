@@ -1099,6 +1099,20 @@ export class TicketWorkCycleModule implements TicketWorkCycleAggregate {
 	 * closed cycle instead holds the rework on the ticket forever, and the review
 	 * and rework loop Auto-handoff mode runs unattended never runs.
 	 *
+	 * The current cycle's branch names that turn by the shared order
+	 * (`newestTraceOrder`), not by the decision's stamp. The supersede (ADR 0134)
+	 * puts the first decided trace in the current cycle beside the newest one,
+	 * and a decided trace wears a `decided_at` stamp the newest undecided one
+	 * does not: in a stamp-sorted order a stamp sorts ahead of no stamp, so the
+	 * read would answer the superseded trace instead of the turn the ticket is
+	 * on, and the hold would clear on the very completed turn that just settled.
+	 * The order also answers what an exclusion cannot: when the settling clock
+	 * puts the turn a settle supersedes ahead of the settle itself, the newest
+	 * settled turn is the superseded trace, and the hold still reads the newest
+	 * settled turn (ADR 0093). The closed cycle's branch holds at most one row -
+	 * the decision that ended it - so the same shared order settles that branch
+	 * on the row the cycle-end read answers.
+	 *
 	 * The window stays two cycles wide, the way the cycle-end read is: a cycle
 	 * that settled no turn - the in-flight Close (ADR 0031), an abandon over a
 	 * turn that never settled - asserts nothing and clears the hold, and the read
@@ -1117,7 +1131,7 @@ export class TicketWorkCycleModule implements TicketWorkCycleAggregate {
 				       AND decided_at IS NOT NULL
 				     )
 				   )
-				 ORDER BY work_cycle DESC, decided_at DESC, rowid DESC LIMIT 1`,
+				 ORDER BY work_cycle DESC, ${newestTraceOrder()} LIMIT 1`,
 			)
 			.get(identity, identity, identity) as { task_type: string; cause: string | null } | undefined;
 		if (row == null) return null;

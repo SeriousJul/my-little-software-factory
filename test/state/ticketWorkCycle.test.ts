@@ -507,6 +507,131 @@ describe("the ticketWorkCycle aggregate", () => {
 		).toBe(false);
 		state.close();
 	});
+	test("the hold reads the restart's completed turn, not the superseded failure behind it", () => {
+		// ADR 0093 over ADR 0134, on the issue #351 flow that completes: the
+		// first turn settles `failed`, the Agent works again, and the restart's
+		// settle settles `completed` on the same cycle. That settle decides the
+		// failed trace `superseded`, so the cycle now holds the superseded
+		// failure beside the completed turn the ticket is on. The hold takes the
+		// cycle's newest settled turn, so it stands on the completed turn and
+		// holds the re-dispatch of the work it just finished - the case ADR 0093
+		// names: a turn whose Transition moved no label, so the position still
+		// offers the very task that turn ran.
+		const path = statePath();
+		const state = openFactoryState(path);
+		state.sourceFact.initializeSources([sourceA]);
+		state.sourceFact.applyFetch(sourceA, success([fetched()]));
+		const identity = "github:github.com:I_5";
+		const first = state.handoff.claimHandoff(identity, choice, "open");
+		if (!first.ok) throw new Error(first.reason);
+		state.handoff.settleHandoff(first.claim.attemptId, true);
+		state.ticketWorkCycle.settleTurn({
+			ticketIdentity: identity,
+			handoffId: first.claim.attemptId,
+			taskType: "implement",
+			agentType: "pi",
+			message: "the failed turn",
+			turnLog: textLog("the failed turn"),
+			completedAt: "2026-08-31T11:00:00Z",
+			cause: "failed",
+		});
+		expect(state.ticketWorkCycle.reopenTurn(identity, first.claim.attemptId)).toBe(true);
+		const second = state.handoff.claimHandoff(identity, choice, "restart");
+		if (!second.ok) throw new Error(second.reason);
+		state.handoff.settleHandoff(second.claim.attemptId, true);
+		state.ticketWorkCycle.settleTurn({
+			ticketIdentity: identity,
+			handoffId: second.claim.attemptId,
+			taskType: "implement",
+			agentType: "pi",
+			message: "the restarted turn",
+			turnLog: textLog("the restarted turn"),
+			completedAt: "2026-08-31T11:05:00Z",
+			cause: "completed",
+		});
+		// The record closed the failure: the failed trace wears the superseded
+		// decision, and the completed turn the ticket is on stays undecided
+		// beside it.
+		const db = new Database(path);
+		const traces = db
+			.prepare(
+				"SELECT cause, decision FROM completion_traces WHERE ticket_identity = ? ORDER BY rowid",
+			)
+			.all(identity) as Array<{ cause: string | null; decision: string | null }>;
+		db.close();
+		expect(traces).toEqual([
+			{ cause: "failed", decision: "superseded" },
+			{ cause: "completed", decision: null },
+		]);
+		// The hold reads the newest settled turn: the completed turn, not the
+		// superseded failure. It stands on the task the completed turn ran, and
+		// it answers no other task.
+		expect(state.ticketWorkCycle.lastCompletion(identity)?.cause).toBe("completed");
+		expect(state.ticketWorkCycle.sameTypeHoldActive(identity, "implement")).toBe(true);
+		expect(state.ticketWorkCycle.sameTypeHoldActive(identity, "review")).toBe(false);
+		state.close();
+	});
+	test("the hold reads the newest settled turn when the settling clock puts it ahead of the turn it supersedes", () => {
+		// The older-stamp case ADR 0134 names: the restart's settle lands with
+		// an older stamp than the failed turn it supersedes, so the shared order
+		// names the failed trace the cycle's newest settled turn, and the
+		// restart's own trace is the one the settle supersedes. The hold still
+		// reads the newest settled turn (ADR 0093): it is the failure, the row
+		// shows it, and the pause stands on it the way a held failure always
+		// does.
+		const path = statePath();
+		const state = openFactoryState(path);
+		state.sourceFact.initializeSources([sourceA]);
+		state.sourceFact.applyFetch(sourceA, success([fetched()]));
+		const identity = "github:github.com:I_5";
+		const first = state.handoff.claimHandoff(identity, choice, "open");
+		if (!first.ok) throw new Error(first.reason);
+		state.handoff.settleHandoff(first.claim.attemptId, true);
+		state.ticketWorkCycle.settleTurn({
+			ticketIdentity: identity,
+			handoffId: first.claim.attemptId,
+			taskType: "implement",
+			agentType: "pi",
+			message: "the failed turn",
+			turnLog: textLog("the failed turn"),
+			completedAt: "2026-08-31T11:10:00Z",
+			cause: "failed",
+		});
+		expect(state.ticketWorkCycle.reopenTurn(identity, first.claim.attemptId)).toBe(true);
+		const second = state.handoff.claimHandoff(identity, choice, "restart");
+		if (!second.ok) throw new Error(second.reason);
+		state.handoff.settleHandoff(second.claim.attemptId, true);
+		state.ticketWorkCycle.settleTurn({
+			ticketIdentity: identity,
+			handoffId: second.claim.attemptId,
+			taskType: "implement",
+			agentType: "pi",
+			message: "the restarted turn",
+			turnLog: textLog("the restarted turn"),
+			completedAt: "2026-08-31T11:05:00Z",
+			cause: "completed",
+		});
+		// The shared order names the failed trace the newest settled turn, so
+		// the settle supersedes the completed one instead: the failure stays
+		// undecided, and the completed trace wears the decision.
+		const db = new Database(path);
+		const traces = db
+			.prepare(
+				"SELECT cause, decision FROM completion_traces WHERE ticket_identity = ? ORDER BY rowid",
+			)
+			.all(identity) as Array<{ cause: string | null; decision: string | null }>;
+		db.close();
+		expect(traces).toEqual([
+			{ cause: "failed", decision: null },
+			{ cause: "completed", decision: "superseded" },
+		]);
+		// The hold reads the newest settled turn: the failure. It holds no
+		// task, the row shows the failure, and the pause stands on it.
+		expect(state.ticketWorkCycle.lastCompletion(identity)?.cause).toBe("failed");
+		expect(state.ticketWorkCycle.sameTypeHoldActive(identity, "implement")).toBe(false);
+		expect(state.ticketWorkCycle.dispatchPauseActive()).toBe(true);
+		state.close();
+	});
 	test("the route ask ends the cycle, and a close on the decided turn stands a no-op", () => {
 		const state = openFactoryState(":memory:");
 		state.sourceFact.initializeSources([sourceA]);
