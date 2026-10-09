@@ -802,8 +802,9 @@ _Avoid_: test harness, frame harness, UI test helper, key presser
 
 **Seeded plane**:
 The test module that opens one whole control plane standing behind one interface: the state file, the config file, the home and checkout directories, the Command runner double, the Ticket source double, the clock, and the Plane boot the control plane runs from.
-A test names the standing it drives; it does not name the aggregates, the directories, or the props that build it.
+A test names the standing it drives - `open`, `in-flight`, `awaiting`, or a closed cycle - in the domain's own words; it names no aggregate call, no directory, and no Plane boot field.
 It reaches no operator path, and it holds no rule of the plane: where a standing needs a rule, it calls the module that owns the rule.
+The state module's own suites stand outside it, because a fixture in front of the seam a test exists to read would hide that seam.
 _Avoid_: test fixture, test world, harness, seeded app
 
 **Plane boot**:
