@@ -256,6 +256,19 @@ export interface TicketWorkCycleAggregate {
 /** The completion trace cells a read maps into a `Completion`. */
 const COMPLETION_COLUMNS =
 	"task_type, agent_type, agent_name, model, thinking, context_window, completed_at, last_message, turn_log_json, cause, detail, decision, transition_json";
+/**
+ * The trace table's own newest-first order: the completion time, then the row.
+ * Every read that asks which trace is the newest settled turn sorts by this one
+ * fragment - the `held` badge's read (`lastCompletion`, `lastCompletionsFor`),
+ * the reads that take a newest trace's transition, and the Dispatch pause's
+ * per-Ticket guard (`heldFailureTrace`) - so the badge's rule and the pause's
+ * guard cannot drift apart (issue #351). The domain's `completionTraceOrder`
+ * compares the same pair in the same direction. `alias` is the query's table
+ * prefix, empty for a read of the bare table.
+ */
+function newestTraceOrder(alias = ""): string {
+	return `${alias}completed_at DESC, ${alias}rowid DESC`;
+}
 interface CompletionRow {
 	task_type: string;
 	agent_type: string;
@@ -528,7 +541,7 @@ export class TicketWorkCycleModule implements TicketWorkCycleAggregate {
 	lastCompletion(identity: string): Completion | null {
 		const row = this.db
 			.prepare(
-				`SELECT ${COMPLETION_COLUMNS} FROM completion_traces WHERE ticket_identity = ? ORDER BY completed_at DESC, rowid DESC LIMIT 1`,
+				`SELECT ${COMPLETION_COLUMNS} FROM completion_traces WHERE ticket_identity = ? ORDER BY ${newestTraceOrder()} LIMIT 1`,
 			)
 			.get(identity) as CompletionRow | undefined;
 		return row == null ? null : completionFromRow(row);
@@ -544,7 +557,7 @@ export class TicketWorkCycleModule implements TicketWorkCycleAggregate {
 		for (const chunk of identityChunks(identities)) {
 			const rows = this.db
 				.prepare(
-					`SELECT ticket_identity, ${COMPLETION_COLUMNS} FROM completion_traces WHERE ticket_identity IN (${placeholders(chunk.length)}) ORDER BY ticket_identity, completed_at DESC, rowid DESC`,
+					`SELECT ticket_identity, ${COMPLETION_COLUMNS} FROM completion_traces WHERE ticket_identity IN (${placeholders(chunk.length)}) ORDER BY ticket_identity, ${newestTraceOrder()}`,
 				)
 				.all(...chunk) as unknown as Array<CompletionRow & { ticket_identity: string }>;
 			for (const row of rows) {
@@ -558,7 +571,7 @@ export class TicketWorkCycleModule implements TicketWorkCycleAggregate {
 		return this.db.transaction(() => {
 			const row = this.db
 				.prepare(
-					"SELECT id, transition_json FROM completion_traces WHERE ticket_identity = ? ORDER BY completed_at DESC, rowid DESC LIMIT 1",
+					`SELECT id, transition_json FROM completion_traces WHERE ticket_identity = ? ORDER BY ${newestTraceOrder()} LIMIT 1`,
 				)
 				.get(ticketIdentity) as { id: string; transition_json: string | null } | null;
 			if (row == null || row.transition_json === null) return false;
@@ -581,7 +594,7 @@ export class TicketWorkCycleModule implements TicketWorkCycleAggregate {
 	recordedTransitionJson(ticketIdentity: string): string | null {
 		const row = this.db
 			.prepare(
-				"SELECT transition_json FROM completion_traces WHERE ticket_identity = ? ORDER BY completed_at DESC, rowid DESC LIMIT 1",
+				`SELECT transition_json FROM completion_traces WHERE ticket_identity = ? ORDER BY ${newestTraceOrder()} LIMIT 1`,
 			)
 			.get(ticketIdentity) as { transition_json: string | null } | undefined;
 		return row?.transition_json ?? null;
@@ -594,7 +607,7 @@ export class TicketWorkCycleModule implements TicketWorkCycleAggregate {
 		return this.db.transaction(() => {
 			const row = this.db
 				.prepare(
-					"SELECT id, transition_json FROM completion_traces WHERE ticket_identity = ? ORDER BY completed_at DESC, rowid DESC LIMIT 1",
+					`SELECT id, transition_json FROM completion_traces WHERE ticket_identity = ? ORDER BY ${newestTraceOrder()} LIMIT 1`,
 				)
 				.get(ticketIdentity) as { id: string; transition_json: string | null } | null;
 			if (row == null || row.transition_json !== recordedJson) return false;
@@ -620,16 +633,26 @@ export class TicketWorkCycleModule implements TicketWorkCycleAggregate {
 	 * undecided `failed` trace that still stands as the decision the operator
 	 * owes - the Ticket rests `awaiting` on the cycle the trace belongs to.
 	 *
-	 * The two guards are what keep the pause releasable (issue #338). An Agent
-	 * that reports working again reopens its turn (ADR 0016): the row leaves
-	 * `awaiting` for `running`, and its `held` badge, its `held` count, and its
-	 * Decision screen leave with the state, so no surface can land a decision on
-	 * that trace until the Agent settles again. A cycle the operator closes
+	 * The three guards are what keep the pause releasable (issue #338, issue #351).
+	 * An Agent that reports working again reopens its turn (ADR 0016): the row
+	 * leaves `awaiting` for `running`, and its `held` badge, its `held` count, and
+	 * its Decision screen leave with the state, so no surface can land a decision
+	 * on that trace until the Agent settles again. A cycle the operator closes
 	 * (ADR 0031) leaves the pending trace behind in the closed cycle, where no
-	 * surface offers it one either. The pause holds every automatic start, and a
-	 * `completed` settle is the only release besides the operator's decision, so
-	 * a pause that read a trace neither of them can answer never releases: the
-	 * factory stops on a fact the operator cannot see and cannot decide.
+	 * surface offers it one either. And the trace must be the Ticket's newest
+	 * turn: a turn that starts after the held one - the missing Agent's restart,
+	 * for one - supersedes it as the Ticket's last settled turn, so the row wears
+	 * no `held` badge and no Decision screen offers that trace a decision, even
+	 * while the Ticket rests `awaiting` on the cycle the trace belongs to. The
+	 * pause holds every automatic start, and a `completed` settle is the only
+	 * release besides the operator's decision, so a pause that read a trace none
+	 * of them can answer never releases: the factory stops on a fact the operator
+	 * cannot see and cannot decide. Together the guards are the `held` badge's
+	 * display rule narrowed to the `failed` cause, and the newest-turn guard sorts
+	 * by `newestTraceOrder`, the order the badge's own read takes, so the two
+	 * cannot drift apart. The direction is one-way: the `completed` read spans
+	 * every Ticket, so a `completed` settle on another Ticket releases the pause
+	 * while this Ticket still wears its `held` badge.
 	 */
 	private heldFailureTrace(): CompletionTraceOrder | null {
 		const row = this.db
@@ -638,7 +661,10 @@ export class TicketWorkCycleModule implements TicketWorkCycleAggregate {
 				 JOIN tickets k ON k.identity = t.ticket_identity
 				 WHERE t.cause = 'failed' AND t.decision IS NULL
 				   AND k.state = 'awaiting' AND k.work_cycle = t.work_cycle
-				 ORDER BY t.completed_at DESC, t.rowid DESC LIMIT 1`,
+				   AND t.rowid = (SELECT n.rowid FROM completion_traces n
+				                    WHERE n.ticket_identity = t.ticket_identity
+				                    ORDER BY ${newestTraceOrder("n.")} LIMIT 1)
+				 ORDER BY ${newestTraceOrder("t.")} LIMIT 1`,
 			)
 			.get() as { completed_at: string; rowid: number } | null;
 		return row == null ? null : { completedAt: row.completed_at, rowId: row.rowid };
@@ -647,7 +673,7 @@ export class TicketWorkCycleModule implements TicketWorkCycleAggregate {
 	private newestCompletedTrace(): CompletionTraceOrder | null {
 		const row = this.db
 			.prepare(
-				"SELECT completed_at, rowid FROM completion_traces WHERE cause = 'completed' ORDER BY completed_at DESC, rowid DESC LIMIT 1",
+				`SELECT completed_at, rowid FROM completion_traces WHERE cause = 'completed' ORDER BY ${newestTraceOrder()} LIMIT 1`,
 			)
 			.get() as { completed_at: string; rowid: number } | null;
 		return row == null ? null : { completedAt: row.completed_at, rowId: row.rowid };
@@ -764,7 +790,7 @@ export class TicketWorkCycleModule implements TicketWorkCycleAggregate {
 	recordRouteRemovedMark(ticketIdentity: string, decision: string): boolean {
 		const row = this.db
 			.prepare(
-				"SELECT id, transition_json FROM completion_traces WHERE ticket_identity = ? AND decision = ? ORDER BY completed_at DESC, rowid DESC LIMIT 1",
+				`SELECT id, transition_json FROM completion_traces WHERE ticket_identity = ? AND decision = ? ORDER BY ${newestTraceOrder()} LIMIT 1`,
 			)
 			.get(ticketIdentity, decision) as { id: string; transition_json: string | null } | null;
 		if (row == null || row.transition_json === null) return false;

@@ -59,15 +59,23 @@ detail included.
 **The Dispatch pause.** The pause is on when the newest held turn settled
 `failed`, no turn has settled `completed` since it, and the trace still stands
 as the decision the operator owes: the Ticket rests `awaiting` on the cycle
-the trace belongs to. The guard is the `held` badge's display rule narrowed to
-the `failed` cause, so the pause and the badge never disagree on a trace
-(issue #338). It is derived from the completion traces on every cycle and
-never stored, so it survives a restart and cannot drift from the fact it
-describes. While it is on, auto-handoff mode starts no agent by itself. It
+the trace belongs to, and the trace is that Ticket's newest settled turn. The
+guards are the `held` badge's display rule narrowed to the `failed` cause, so
+the pause never stands while the ticket list holds no `held` row to answer it
+(issue #338, issue #351). The direction is one-way: the `completed` read spans
+every ticket, so a `completed` settle on one ticket ends the pause while
+another still rests held. It is derived from the completion traces on every
+cycle and never stored, so it survives a restart and cannot drift from the fact
+it describes. While it is on, auto-handoff mode starts no agent by itself. It
 ends at the next `completed` settle, the moment the operator decides the held
 turn that started it, or the moment the trace stops standing as a held turn:
-the Agent of the held turn reports working again and the turn reopens, or the
-operator closes the in-flight cycle the trace stands in (ADR 0031).
+the Agent of the held turn reports working again and the turn reopens, the
+operator closes the in-flight cycle the trace stands in (ADR 0031), or a later
+turn of the same Ticket takes its newest settled turn - the restart of a
+missing agent, for one, whose own settle supersedes the held trace as the turn
+the row shows and the decision lands on (issue #351). The newest-turn guard is
+per Ticket inside a read that spans every Ticket, so one Ticket moving past its
+failure never releases a pause another Ticket's held failure still stands on.
 
 The pause holds only the three automatic origins: the open handoff, the
 workflow route, and the restart of a missing agent. It never blocks a manual
@@ -121,10 +129,22 @@ The considered alternatives:
   manual handoff always starts.
 - A trace that stops standing as a held turn ends the pause without a
   decision: the Agent of the held turn reports working again and the turn
-  reopens, or the operator closes the in-flight cycle the trace stands in,
-  leaving the pending trace in the closed cycle. A reopened turn that settles
-  `failed` again re-arms the pause: the settle refreshes the same trace, and
-  the Ticket rests `awaiting` on its cycle once more.
+  reopens, the operator closes the in-flight cycle the trace stands in,
+  leaving the pending trace in the closed cycle, or a later turn of the same
+  Ticket takes its newest settled turn - the restart of a missing agent, for
+  one (issue #351). Each of the three leaves a trace no surface can decide:
+  the row wears no `held` badge and offers no decision row, and the pause
+  holds the very starts whose `completed` settle is its only other release, so
+  a pause that kept reading such a trace never clears. A reopened turn that
+  settles `failed` again re-arms the pause: the settle refreshes the same
+  trace, and the Ticket rests `awaiting` on its cycle once more.
+- The supersede stand-down drops the failure signal from every surface: the
+  superseded `failed` trace keeps no decision forever, and the badge, the
+  detail pane, the Decision screen, and the ignore refusal read only the
+  Ticket's newest settled turn, so the operator's view is left with no decision
+  to land on that failure and the factory keeps dispatching. Owning that signal
+  - deciding the superseded trace, or keeping the owed decision on the row - is
+  issue #359, not this decision.
 - A turn the control plane could not read is never held: `unknown` fails open
   (ADR 0015), so a runtime that changes its record format holds nothing.
 - The pause is never stored. It is recomputed from the completion traces each

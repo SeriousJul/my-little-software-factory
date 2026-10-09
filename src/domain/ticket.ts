@@ -121,10 +121,11 @@ function completionTraceOrder(left: CompletionTraceOrder, right: CompletionTrace
  *
  * The held failure the aggregate answers is a Held turn, not any undecided
  * `failed` row: the trace must still stand as the decision the operator owes,
- * the Ticket resting `awaiting` on its cycle. A reopened turn and a trace of a
- * closed cycle have no surface that can decide them, and the pause holds the
- * starts whose settle is its only other release, so reading them would leave
- * the pause with no way out (issue #338).
+ * the Ticket resting `awaiting` on its cycle, and the Ticket's newest settled
+ * turn. A reopened turn, a trace of a closed cycle, and a trace a later turn
+ * supersedes all wear no `held` badge and have no surface that can decide them,
+ * and the pause holds the starts whose settle is its only other release, so
+ * reading them would leave the pause with no way out (issue #338, issue #351).
  */
 export function dispatchPauseHolds(
 	heldFailure: CompletionTraceOrder | null,
