@@ -791,7 +791,8 @@ _Avoid_: init modal, setup popup
 
 **Command runner**:
 The single egress for external commands: the control plane runs every herdr, git, GitHub CLI, and agent model list command through it.
-The automated tests inject a fake runner that records safe command facts, so no test touches a real herdr session, repository, ticket source, or agent runtime.
+The automated tests inject a double at that seam that records safe command facts, so no test touches a real herdr session, repository, ticket source, or agent runtime.
+Two doubles stand there: the fake command runner answers a command the test pins, and the Stub herdr world answers from a standing world (ADR 0132).
 _Avoid_: executor, spawner
 
 **Frame rig**:
@@ -841,6 +842,14 @@ It holds the stub repositories and their issues and pull requests, the labels, t
 The plane's own label writes, merges, and comments mutate it, and a restart reads it back.
 The world file is the source of truth of the Stub run, and the seed is its initial content.
 _Avoid_: mock server, fake GitHub, test double
+
+**Stub herdr world**:
+The automated suite's double for the herdr and git side of the Command runner seam (ADR 0132).
+It holds the checkouts and what each holds, the default branch, the branches and worktrees, the workspaces, tabs, panes, and standing Agents, and it answers every herdr and git command the plane builds from that state.
+A create adds to it, a close removes from it, and a start stands an Agent in a pane, so a later read agrees with the command that came before it.
+It answers only the command shapes the plane builds and refuses every other one, and it refuses what it does not hold with herdr's own code.
+It stands behind the Seeded plane's runner, and it is in memory: no operator edits it, so it holds no file.
+_Avoid_: herdr mock, fake herdr, herdr stub, command stub table
 
 **Quality audit**:
 The one command this repository runs to check itself: `bun run audit` runs the type check, Biome, jscpd, and the code-scanning read, and prints one payload on stdout - a status line, one count per metric, then the findings as `path:line rule message`.
