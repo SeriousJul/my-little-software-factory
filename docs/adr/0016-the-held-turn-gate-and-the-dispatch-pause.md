@@ -138,6 +138,13 @@ The considered alternatives:
   a pause that kept reading such a trace never clears. A reopened turn that
   settles `failed` again re-arms the pause: the settle refreshes the same
   trace, and the Ticket rests `awaiting` on its cycle once more.
+- The supersede stand-down drops the failure signal from every surface: the
+  superseded `failed` trace keeps no decision forever, and the badge, the
+  detail pane, the Decision screen, and the ignore refusal read only the
+  Ticket's newest settled turn, so the operator's view is left with no decision
+  to land on that failure and the factory keeps dispatching. Owning that signal
+  - deciding the superseded trace, or keeping the owed decision on the row - is
+  issue #359, not this decision.
 - A turn the control plane could not read is never held: `unknown` fails open
   (ADR 0015), so a runtime that changes its record format holds nothing.
 - The pause is never stored. It is recomputed from the completion traces each
