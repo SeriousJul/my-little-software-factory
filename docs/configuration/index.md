@@ -640,6 +640,14 @@ warning there reads as a merge that failed over a merge that is landing (issue
 #327). The refusal line above still lands once per standing fact, and the
 operator's own ask still reads the refusal on the Message line.
 
+For the merge the automatic walks ask, neither refusal is what they reach: the
+walks' ask step reads the Work queue's row for the Ticket, then the run's mark,
+as gates before it asks, so one merge earns one ask across its whole life and the
+walk states its hold instead (issue #352, ADR 0133). Each of the two
+`merge refused:` lines above answers an ask that crossed one of those facts -
+your own confirm, a force-dispatch, or the ask that lands between one walk's read
+and the row's claim.
+
 A `waits:` line is not a refusal: the row stays in the Work queue, keeps its
 place and its `queued` badge, and starts on a later pickup. Its prefix names the
 waiting start's channel: `handoff waits:` for a Handoff, and the Plane action's
@@ -793,10 +801,13 @@ automatic walks hold: the Same-type hold stands ("Watch agent turns")
 automatic walks hold: the Ticket's merge is already running ("Watch agent turns")
 ```
 
-The last of these is the Plane action's run mark (ADR 0104): the walk re-asked a
-merge whose row left the queue at its claim and whose command is still out, so
-the merge is entered and the walk holds instead of warning (issue #327). The
-same walk holds on the Work queue's row for the Ticket above it.
+The last of these is the Plane action's run mark (ADR 0104): the merge the walk
+asks for left the Work queue at its claim and its command is still out, so the
+walk reads the run before it asks and holds (issue #327, issue #352). The
+Work queue's row for the Ticket, the line above it, is the same shape one step
+earlier: the merge stands as a row and the walk holds on it. The Plane action's
+ask step reads both for every automatic walk, so the continuation walks hold on a
+standing merge row the way the fresh-work walk does (issue #352, ADR 0133).
 
 The Operator-decides brake keeps its designed silence (ADR 0117): the walk
 holds the Ticket it reaches, and it states no fact for it.

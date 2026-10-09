@@ -481,6 +481,17 @@ interface ObservationOptions {
 	 */
 	dispatchPlaneAction: (intent: PlaneActionIntent) => Promise<DispatchResult>;
 	/**
+	 * Whether the Plane action run of this Ticket stands in the dispatch module
+	 * (ADR 0104): its claim took the Work queue row out and its command is still
+	 * out. The dispatch owns the mark, so the cycle reads it through the dispatch
+	 * seam and never holds a copy of it.
+	 *
+	 * Required beside `dispatchPlaneAction`: a rig that wires the ask without the
+	 * mark's read silently goes back to the pre-issue #352 shape, where every
+	 * cycle re-asks the merge it is running and the ask's guard refuses it.
+	 */
+	planeActionRunInFlight: (ticketIdentity: string) => boolean;
+	/**
 	 * The Work queue's pickup (ADR 0034): the queue items the free seats take
 	 * this cycle, run before auto-dispatch, in queue order. Returns the items
 	 * that claimed a seat. Absent where the app has no Work queue.
@@ -577,6 +588,7 @@ export class ObservationCoordinator {
 	private readonly config: () => FactoryConfig;
 	private readonly dispatch: (intent: HandoffIntent) => Promise<DispatchResult>;
 	private readonly dispatchPlaneAction: (intent: PlaneActionIntent) => Promise<DispatchResult>;
+	private readonly planeActionRunInFlight: (ticketIdentity: string) => boolean;
 	private readonly pickupWorkQueue?: () => Promise<number>;
 	private readonly onCycleEnd?: (ticketIdentity: string) => void;
 	private readonly cleanup: (
@@ -707,6 +719,7 @@ export class ObservationCoordinator {
 		this.config = options.config;
 		this.dispatch = options.dispatch;
 		this.dispatchPlaneAction = options.dispatchPlaneAction;
+		this.planeActionRunInFlight = options.planeActionRunInFlight;
 		this.pickupWorkQueue = options.pickupWorkQueue;
 		this.onCycleEnd = options.onCycleEnd;
 		this.cleanup = options.cleanup;
@@ -2579,8 +2592,8 @@ export class ObservationCoordinator {
 	}
 
 	/**
-	 * The hold the walks take for a refusal that stands for work the plane
-	 * already holds (issue #327).
+	 * The hold the walks take for work the plane already entered (issue #327,
+	 * issue #352).
 	 *
 	 * `queue-row` is the Work queue's one-item-per-ticket rule (ADR 0049) and
 	 * `merge-run` the Plane action's run mark (ADR 0104): either way the start
@@ -2588,6 +2601,12 @@ export class ObservationCoordinator {
 	 * other standing gate. The record states the fact once while it stands, in
 	 * the holds' own voice, and the Message line stays clear: a warning there
 	 * reads as a merge that failed, over a merge that is landing.
+	 *
+	 * Each of the two facts arrives on two paths: the walk's ask step reads both
+	 * marks before it asks (issue #352), and the ask's own guards still answer
+	 * the ask that crosses either mark between the read and the enqueue. Both
+	 * paths state the one fact under the one key, so the record reads the same
+	 * whichever reached it.
 	 */
 	private noteStandingWorkHold(stands: StandingWorkFact, ticketIdentity: string): void {
 		this.noteAutomaticHold({
@@ -2732,12 +2751,43 @@ export class ObservationCoordinator {
 	 * dispatch, the refusal warning on a rejected ask, and the add line on the
 	 * Message when the item took its place. The answer says what the cycle
 	 * does next, the way the handoff's answer does.
+	 *
+	 * All three automatic walks cross this one step, so the standing gates the
+	 * merge earns are read here and not in the walks (issue #352). The step
+	 * reads them in the order the work's own life has them: the Work queue's row
+	 * for the Ticket, then the run's mark the claim took over from that row,
+	 * then the blocked attempt's hold, and only then it asks. The first fact
+	 * that stands wins the line, the way the cycle's other gate reads do; the
+	 * three are exclusive in time in the normal run, and the order is what the
+	 * record states when they are not (ADR 0133).
 	 */
 	private async topUpPlaneActionAsk(
 		intent: PlaneActionIntent,
 		addedLine: string,
 		refusedPrefix: string,
 	): Promise<"added" | "refused" | "stopped"> {
+		// The Work queue's own row, read before the ask (ADR 0049, issue #352): the
+		// merge this walk asks for already stands as a row. The fresh-work walk
+		// reads this wait above its own add; the two continuation walks enter a
+		// queue that holds a row (ADR 0094), so the read lives here, where all three
+		// walks cross it. A row at the head of the queue stands one pickup; a row the
+		// Shared checkout hold (issue #297) or a seat-bound row ahead of it holds for
+		// many cycles earns no ask per cycle. The ask's own guard stands behind this
+		// read for the ask that crosses the row.
+		if (this.state.workQueue.hasWorkItem(intent.ticketIdentity)) {
+			this.noteStandingWorkHold("queue-row", intent.ticketIdentity);
+			return "refused";
+		}
+		// The run's mark, read before the ask (ADR 0104, issue #352): the merge this
+		// walk asks for left the Work queue at its claim and its command is still
+		// out, so the work is entered. The walk holds on it the way it holds on every
+		// other standing gate, so one merge earns one ask and the record states the
+		// hold instead of a refusal. The ask's own guard stands behind this read for
+		// the ask that crosses the mark between the gate and the enqueue.
+		if (this.planeActionRunInFlight(intent.ticketIdentity)) {
+			this.noteStandingWorkHold("merge-run", intent.ticketIdentity);
+			return "refused";
+		}
 		// The blocked attempt's hold (ADR 0077): the ticket's newest plane
 		// action attempt blocked, and not every active source has re-read the
 		// ticket since the attempt ran. The attempt's fire wrote the block's labels on

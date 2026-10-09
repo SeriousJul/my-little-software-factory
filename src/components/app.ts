@@ -5702,6 +5702,10 @@ function observationCoordinatorBase(
 		// The plane action's ask (ADR 0068): the top-up's walks cross it for
 		// the positions their task type resolves on the plane action.
 		dispatchPlaneAction: (intent) => dispatch.dispatchPlaneAction(intent),
+		// The Plane action's run mark (ADR 0104, issue #352): the dispatch owns it,
+		// and the top-up's walks read it as a standing gate before they ask, beside
+		// the Work queue's own row, which the cycle reads from the state.
+		planeActionRunInFlight: (ticketIdentity) => dispatch.planeActionRunInFlight(ticketIdentity),
 		// The Work queue's pickup (ADR 0034): the cycle starts the waiting
 		// manual starts before auto-dispatch, in queue order.
 		pickupWorkQueue: () => dispatch.pickupWorkQueue(),
