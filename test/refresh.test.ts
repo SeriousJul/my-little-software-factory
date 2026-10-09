@@ -41,6 +41,10 @@ class FakeClock implements RefreshClock {
 	private nextId = 1;
 	private readonly live = new Map<number, { delay: number; callback: () => void }>();
 
+	now(): number {
+		return Date.now();
+	}
+
 	setTimeout(callback: () => void, milliseconds: number): ReturnType<typeof setTimeout> {
 		const id = this.nextId++;
 		this.live.set(id, { delay: milliseconds, callback });

@@ -355,6 +355,8 @@ function chainRig(options: ChainRigOptions = {}): Chain {
 	paths.push(dir);
 	const nowMs = Date.parse("2026-08-31T11:00:00Z");
 	const state = openFactoryState(join(dir, "state.sqlite"), () => nowMs);
+	// The mode the cycle reads from the state: the chain's run is automatic.
+	state.handoff.setAutoHandoffMode(true);
 	state.sourceFact.initializeSources([issuesSource, pullsSource]);
 	state.grouping.setGroupingAxis("tickets", "none");
 	const runner = new FakeRunner();
@@ -471,21 +473,38 @@ function chainRig(options: ChainRigOptions = {}): Chain {
 			readPane: async () => null,
 		},
 		config: () => config,
-		dispatch: (intent) => {
-			handoffAsks.push(intent);
-			return dispatch.dispatch(intent);
+		// The observation cycle crosses the module through the shared port, and
+		// the rig records the asks it crosses: the claim checks run at the
+		// enqueue, and the pickup is the only starter.
+		dispatch: {
+			dispatch: (intent) => {
+				handoffAsks.push(intent);
+				return dispatch.dispatch(intent);
+			},
+			// The plane action's ask is observed the same way (ADR 0068): the
+			// mark stands and the ask never runs twice.
+			dispatchPlaneAction: (intent) => {
+				planeAsks.push(intent);
+				return dispatch.dispatchPlaneAction(intent);
+			},
+			// The seam the App wires: the run's mark belongs to the dispatch
+			// module. With `markReadStale` the read answers as if no run
+			// stood, so the ask crosses the mark and the dispatch's guard is
+			// what answers it (issue #352).
+			planeActionRunInFlight: (ticketIdentity) =>
+				options.markReadStale === true
+					? false
+					: dispatch.planeActionRunInFlight(ticketIdentity),
+			pickupWorkQueue: () => dispatch.pickupWorkQueue(),
+			closeCleanup: async () => undefined,
 		},
-		dispatchPlaneAction: (intent) => {
-			planeAsks.push(intent);
-			return dispatch.dispatchPlaneAction(intent);
+		clock: {
+			now: () => nowMs,
+			setTimeout,
+			clearTimeout,
 		},
-		// The seam the App wires: the run's mark belongs to the dispatch module.
-		// With `markReadStale` the read answers as if no run stood, so the ask
-		// crosses the mark and the dispatch's guard is what answers it (issue #352).
-		planeActionRunInFlight: (ticketIdentity) =>
-			options.markReadStale === true ? false : dispatch.planeActionRunInFlight(ticketIdentity),
-		pickupWorkQueue: () => dispatch.pickupWorkQueue(),
-		cleanup: async () => undefined,
+		onCycleEnd: () => undefined,
+		turnLogs: { read: async () => ({ kind: "unavailable" }) },
 		// The app's own fire seam: the task type's Transition, through the
 		// command runner, on the state's projection.
 		fireCompleted: (ticket) =>
@@ -496,9 +515,6 @@ function chainRig(options: ChainRigOptions = {}): Chain {
 				ticketIdentity: ticket.ticketIdentity,
 				taskType: ticket.taskType,
 			}),
-		now: () => nowMs,
-		mode: () => true,
-		intervalMs: 60_000,
 		onChanged: () => undefined,
 		onStatus: (kind, text) => {
 			statuses.push({ kind, text });

@@ -115,15 +115,16 @@ import { baseChoice, resolveHandoffChoice } from "./handoff.ts";
 import {
 	type DispatchResult,
 	type HandoffIntent,
+	type ObservationDispatch,
 	type PlaneActionIntent,
 	STOPPED_DISPATCH_REASON,
 	type StandingWorkFact,
 } from "./handoff-dispatch.ts";
 import type { HerdrAgent } from "./herdr.ts";
-import { type Logger, NOOP_LOGGER } from "./logging.ts";
+import type { Logger } from "./logging.ts";
 import { identifyHandoffAgentName } from "./naming.ts";
 import { isPlaneActionTaskType } from "./plane-action-registry.ts";
-import { type RefreshClock, SYSTEM_CLOCK } from "./refresh.ts";
+import type { RefreshClock } from "./refresh.ts";
 import { type CommandRunner, commandFailureText } from "./runner.ts";
 import type { Consultation, ConsultationRecordAggregate } from "./state/consultation-record.ts";
 import type { HandoffAggregate, HandoffTicket } from "./state/handoff.ts";
@@ -468,55 +469,41 @@ interface ObservationOptions {
 	/** The config, read at each cycle: a runtime write-back stays visible. */
 	config: () => FactoryConfig;
 	/**
-	 * The app's handoff path: claim, external work, settle, refresh. The
-	 * returned result answers the claim; the intent's `onStarted` answers the
-	 * start the claim only reserves.
+	 * The Handoff dispatch module the cycle runs: the claim and its hard start
+	 * checks, the Work queue's pickup, the plane action's ask, the Plane
+	 * action's run mark, and the Close cleanup, through the narrow port the
+	 * cycle may cross. The module that owns the Work queue's rules stands in
+	 * the cycle's place, so the cycle's starts are the plane's: a refusal the
+	 * claim runs is the refusal the queue's own rules run, the route's decision
+	 * lands at the ask (ADR 0064), and the start's report is the module's.
 	 */
-	dispatch: (intent: HandoffIntent) => Promise<DispatchResult>;
-	/**
-	 * The app's plane action path (ADR 0068): the merge of the ticket's pull
-	 * request, entered in the Work queue like every other start. The top-up's
-	 * walks cross it for the positions their task type resolves on the plane
-	 * action instead of an agent.
-	 */
-	dispatchPlaneAction: (intent: PlaneActionIntent) => Promise<DispatchResult>;
-	/**
-	 * Whether the Plane action run of this Ticket stands in the dispatch module
-	 * (ADR 0104): its claim took the Work queue row out and its command is still
-	 * out. The dispatch owns the mark, so the cycle reads it through the dispatch
-	 * seam and never holds a copy of it.
-	 *
-	 * Required beside `dispatchPlaneAction`: a rig that wires the ask without the
-	 * mark's read silently goes back to the pre-issue #352 shape, where every
-	 * cycle re-asks the merge it is running and the ask's guard refuses it.
-	 */
-	planeActionRunInFlight: (ticketIdentity: string) => boolean;
-	/**
-	 * The Work queue's pickup (ADR 0034): the queue items the free seats take
-	 * this cycle, run before auto-dispatch, in queue order. Returns the items
-	 * that claimed a seat. Absent where the app has no Work queue.
-	 */
-	pickupWorkQueue?: () => Promise<number>;
+	dispatch: ObservationDispatch;
 	/**
 	 * A cycle of this ticket ended: a close or abandon landed, and the ticket
 	 * returned to open. The agent of the ended cycle may have changed the
 	 * source item, so the app re-reads the ticket's sources now: the ticket
 	 * stays unverified against new dispatches until the re-read lands.
 	 */
-	onCycleEnd?: (ticketIdentity: string) => void;
+	onCycleEnd: (ticketIdentity: string) => void;
 	/**
-	 * The Close cleanup of an auto-ended cycle: the worktree workspace is
-	 * removed or the live tab is closed. Returns a failure reason. The end
-	 * tells the dispatch seam which completion path closed the cycle.
+	 * The one time seam of the run: the cycle's scheduling clock and its fact
+	 * clock answer from the same object, the same seam the state file and the
+	 * refresh coordinator take, so the state's timestamps and the cycle's
+	 * scheduling cannot disagree.
 	 */
-	cleanup: (handoff: HandoffTicket, end: "closed" | "abandoned") => Promise<string | undefined>;
-	now: () => number;
-	/** The auto-handoff mode, read at the start of each cycle. */
-	mode: () => boolean;
-	intervalMs: number;
-	/** The startup grace a fresh handoff's idle agent waits out. */
+	clock: RefreshClock;
+	/**
+	 * The poll interval, in milliseconds, overriding the config's
+	 * agentPollIntervalSeconds each cycle derives it from. The App seam's
+	 * frame suites name it; a cycle that names none follows the config.
+	 */
+	pollIntervalMs?: number;
+	/**
+	 * The startup grace a fresh handoff's idle agent waits out, overriding the
+	 * module's own Startup grace. A test that names a zero grace names it here.
+	 */
 	startupGraceMs?: number;
-	/** One UI frame changed. */
+	/** One UI frame changed: the tickets and the Consultations re-read. */
 	onChanged: () => void;
 	/**
 	 * The agent list of a completed cycle: the probe's list on success, null
@@ -536,24 +523,18 @@ interface ObservationOptions {
 	 * The Message line is gone by the time anyone reads the file, so the facts
 	 * the cycle acts on that reach no start line leave their record here: each
 	 * hold the automatic walks take, stated once while the fact stands
-	 * (issue #223). Defaults to NOOP_LOGGER: a cycle with no file to write.
+	 * (issue #223). The App supplies the adapter it holds: a run with no file
+	 * to write hands the noop logger.
 	 */
-	log?: Logger;
+	log: Logger;
 	/** Optional Consultation side of the shared monitor. */
 	onConsultationAttention?: (consultationId: string) => void;
-	onConsultationsChanged?: () => void;
-	/** Suppress attention bells while startup reconciliation is running. */
-	reconcileOnly?: boolean;
 	/**
-	 * The scheduling clock, the same injectable interface the refresh
-	 * coordinator takes. Defaults to the system clock.
+	 * The settled turn's log, from the agent's session record. The App
+	 * supplies the reader it holds: a cycle that reads no session hands the
+	 * module's own real reader.
 	 */
-	clock?: RefreshClock;
-	/**
-	 * The settled turn's log, from the agent's session record. Defaults to
-	 * the real reader.
-	 */
-	turnLogs?: TurnLogSource;
+	turnLogs: TurnLogSource;
 	/**
 	 * The transition fire of a completed turn (ADR 0027): the app's seam
 	 * writes the task type's label facts through the command runner and
@@ -586,24 +567,14 @@ export class ObservationCoordinator {
 	private readonly state: ObservationAggregates;
 	private readonly herdr: AgentReader;
 	private readonly config: () => FactoryConfig;
-	private readonly dispatch: (intent: HandoffIntent) => Promise<DispatchResult>;
-	private readonly dispatchPlaneAction: (intent: PlaneActionIntent) => Promise<DispatchResult>;
-	private readonly planeActionRunInFlight: (ticketIdentity: string) => boolean;
-	private readonly pickupWorkQueue?: () => Promise<number>;
-	private readonly onCycleEnd?: (ticketIdentity: string) => void;
-	private readonly cleanup: (
-		handoff: HandoffTicket,
-		end: "closed" | "abandoned",
-	) => Promise<string | undefined>;
-	private readonly now: () => number;
-	private readonly mode: () => boolean;
-	private readonly intervalMs: number;
+	private readonly dispatch: ObservationDispatch;
+	private readonly onCycleEnd: (ticketIdentity: string) => void;
+	private readonly clock: RefreshClock;
+	private readonly pollIntervalMs?: number;
 	private readonly startupGraceMs: number;
 	private readonly onChanged: () => void;
 	private readonly onAgents?: (agents: readonly HerdrAgent[] | null) => void;
 	private readonly onConsultationAttention?: (consultationId: string) => void;
-	private readonly onConsultationsChanged?: () => void;
-	private readonly reconcileOnly: boolean;
 	private startupReconciliation = true;
 	private suppressConsultationAttention = false;
 	private readonly onStatus: (
@@ -612,7 +583,6 @@ export class ObservationCoordinator {
 		topic?: ObservationStatusTopic,
 	) => void;
 	private readonly log: Logger;
-	private readonly clock: RefreshClock;
 	private readonly turnLogs: TurnLogSource;
 	private readonly fireCompleted?: (ticket: HandoffTicket) => Promise<TransitionOutcome | null>;
 	private readonly refireRecordedSkips?: () => Promise<RefiredSkip[]>;
@@ -718,26 +688,40 @@ export class ObservationCoordinator {
 		this.herdr = options.herdr;
 		this.config = options.config;
 		this.dispatch = options.dispatch;
-		this.dispatchPlaneAction = options.dispatchPlaneAction;
-		this.planeActionRunInFlight = options.planeActionRunInFlight;
-		this.pickupWorkQueue = options.pickupWorkQueue;
 		this.onCycleEnd = options.onCycleEnd;
-		this.cleanup = options.cleanup;
-		this.now = options.now;
-		this.mode = options.mode;
-		this.intervalMs = options.intervalMs;
+		this.clock = options.clock;
+		this.pollIntervalMs = options.pollIntervalMs;
 		this.startupGraceMs = options.startupGraceMs ?? STARTUP_GRACE_MS;
 		this.onChanged = options.onChanged;
 		this.onAgents = options.onAgents;
 		this.onConsultationAttention = options.onConsultationAttention;
-		this.onConsultationsChanged = options.onConsultationsChanged;
-		this.reconcileOnly = options.reconcileOnly ?? false;
 		this.onStatus = options.onStatus;
-		this.log = options.log ?? NOOP_LOGGER;
-		this.clock = options.clock ?? SYSTEM_CLOCK;
-		this.turnLogs = options.turnLogs ?? SESSION_TURN_LOGS;
+		this.log = options.log;
+		this.turnLogs = options.turnLogs;
 		this.fireCompleted = options.fireCompleted;
 		this.refireRecordedSkips = options.refireRecordedSkips;
+	}
+
+	/**
+	 * The Close cleanup of an auto-ended cycle, through the dispatch module:
+	 * the ticket's stored handles go across the seam beside the identity the
+	 * ticket holds, and the projection of the ticket onto those facts stands
+	 * here, at the call the cycle owns, so no caller re-states the fields.
+	 */
+	private closeCleanup(
+		handoff: HandoffTicket,
+		end: "closed" | "abandoned",
+	): Promise<string | undefined> {
+		return this.dispatch.closeCleanup(
+			handoff.ticketIdentity,
+			{
+				handoffId: handoff.handoffAttemptId,
+				environment: handoff.environment,
+				tabId: handoff.tabId,
+				workspaceId: handoff.workspaceId,
+			},
+			end,
+		);
 	}
 
 	/** Begin polling. The first cycle runs immediately. */
@@ -750,7 +734,10 @@ export class ObservationCoordinator {
 	/** Schedule the next cycle on the clock; a stopped loop schedules none. */
 	private scheduleNext(): void {
 		if (this.stopped || this.timer !== null) return;
-		this.timer = this.clock.setTimeout(this.nextCycle, this.intervalMs);
+		// The interval the config's poll setting derives each cycle, so a
+		// runtime write-back stays visible, the way the config itself does.
+		const intervalMs = this.pollIntervalMs ?? this.config().agentPollIntervalSeconds * 1000;
+		this.timer = this.clock.setTimeout(this.nextCycle, intervalMs);
 	}
 
 	private nextCycle = (): void => {
@@ -953,7 +940,9 @@ export class ObservationCoordinator {
 			return;
 		}
 		this.lastAgentsList = probe.agents;
-		this.suppressConsultationAttention = this.reconcileOnly && this.startupReconciliation;
+		// The startup reconciliation's attention silence is the module's own
+		// standing: the App, the cycle's only caller, always runs reconcile-only.
+		this.suppressConsultationAttention = this.startupReconciliation;
 		this.startupReconciliation = false;
 		if (this.holdingHerdrError) {
 			this.holdingHerdrError = false;
@@ -961,7 +950,10 @@ export class ObservationCoordinator {
 			this.onChanged();
 		}
 
-		const autoOn = this.mode();
+		// The Auto-handoff mode is factory state on the state file (ADR 0036): the
+		// cycle reads it from the Handoff aggregate it already holds, the same
+		// fact the operator's key writes.
+		const autoOn = this.state.handoff.autoHandoffMode();
 		const byPane = new Map<string, HerdrAgent>();
 		for (const agent of probe.agents) byPane.set(agent.paneId, agent);
 
@@ -1045,11 +1037,11 @@ export class ObservationCoordinator {
 		// The Work queue's pickup (ADR 0051): the items the free seats take, in
 		// queue order. It runs in auto or manual mode alike, and the queue pause
 		// holds it (ADR 0052).
-		if (this.pickupWorkQueue !== undefined) {
-			const picked = await this.pickupWorkQueue();
-			if (this.stopped) return;
-			if (picked > 0) walked = true;
-		}
+		// The dispatch module the cycle holds always owns a queue: a cycle with
+		// no queue is an app that does not exist, so the pickup always runs.
+		const picked = await this.dispatch.pickupWorkQueue();
+		if (this.stopped) return;
+		if (picked > 0) walked = true;
 
 		// The fresh-work adds (ADR 0051): with Auto-handoff on, the queue empty,
 		// the queue pause down, and the Dispatch pause clear, the cycle adds one
@@ -1061,7 +1053,7 @@ export class ObservationCoordinator {
 		if (freshWorkWalkRan) walked = (await this.topUpFreshWork(agents)) || walked;
 		if (this.stopped) return;
 		// The holds the walks took, stated once each for as long as they stand.
-		this.reportAutomaticHolds(freshWorkWalkRan, this.mode());
+		this.reportAutomaticHolds(freshWorkWalkRan, this.state.handoff.autoHandoffMode());
 		// The Failed-start parks that no longer stand, retired from the report so the
 		// next run of failures states itself again (issue #298, ADR 0106).
 		this.retireFailedStartParks();
@@ -1203,7 +1195,7 @@ export class ObservationCoordinator {
 		// does not lift the grace (ADR 0017): herdr's view of the pane is not
 		// evidence the turn ran, and a booted agent that flaps working while
 		// it parks must not settle early. The grace, the clock, decides.
-		return this.now() - Date.parse(ticket.startedAt) >= this.startupGraceMs;
+		return this.clock.now() - Date.parse(ticket.startedAt) >= this.startupGraceMs;
 	}
 
 	/**
@@ -1466,7 +1458,7 @@ export class ObservationCoordinator {
 				this.state.consultationRecord.recordExternalConsultationTurn(
 					consultation.id,
 					match.sequence,
-					new Date(this.now()).toISOString(),
+					new Date(this.clock.now()).toISOString(),
 				) || changed;
 		const before = this.state.consultationRecord.consultation(consultation.id);
 		if (
@@ -1480,7 +1472,7 @@ export class ObservationCoordinator {
 				this.state.consultationRecord.fillConsultationSnapshot(consultation.id, output)
 			) {
 				changed = true;
-				this.onConsultationsChanged?.();
+				this.onChanged();
 			}
 		}
 		return changed;
@@ -1519,13 +1511,13 @@ export class ObservationCoordinator {
 			output,
 			{
 				settledStatus: status,
-				capturedAt: new Date(this.now()).toISOString(),
+				capturedAt: new Date(this.clock.now()).toISOString(),
 				cause: endCause,
 				detail: endDetail,
 			},
 		);
 		if (!settled) return false;
-		this.onConsultationsChanged?.();
+		this.onChanged();
 		if (!this.suppressConsultationAttention) this.onConsultationAttention?.(consultation.id);
 		// A turn that failed or aborted is named on the Message line, so the
 		// operator reads why it did not answer. Any other cause settles quiet.
@@ -1581,7 +1573,7 @@ export class ObservationCoordinator {
 			turnLog: resolved.turnLog,
 			cause,
 			detail,
-			completedAt: new Date(this.now()).toISOString(),
+			completedAt: new Date(this.clock.now()).toISOString(),
 			...(transition === null ? {} : { transition }),
 		});
 		this.reportSettleStatus(ticket, cause, detail, transition);
@@ -1666,19 +1658,19 @@ export class ObservationCoordinator {
 	 */
 	private async handleMissing(ticket: HandoffTicket): Promise<boolean> {
 		const config = this.config();
-		if (this.now() - Date.parse(ticket.startedAt) < this.startupGraceMs) return false;
+		if (this.clock.now() - Date.parse(ticket.startedAt) < this.startupGraceMs) return false;
 		const handoffCount = this.state.handoff.handoffCount(ticket.ticketIdentity);
 		if (handoffLimitReached(handoffCount, config.maxHandoffsPerTicket)) {
 			const applied = this.state.ticketWorkCycle.applyCompletionDecision({
 				ticketIdentity: ticket.ticketIdentity,
 				handoffId: ticket.handoffAttemptId,
 				decision: "abandoned",
-				decidedAt: new Date(this.now()).toISOString(),
+				decidedAt: new Date(this.clock.now()).toISOString(),
 			});
 			this.restarted.delete(ticket.ticketIdentity);
 			if (!applied) return false;
-			this.onCycleEnd?.(ticket.ticketIdentity);
-			const failure = await this.cleanup(ticket, "abandoned");
+			this.onCycleEnd(ticket.ticketIdentity);
+			const failure = await this.closeCleanup(ticket, "abandoned");
 			if (this.stopped) return true;
 			this.onStatus(
 				failure === undefined ? "warning" : "error",
@@ -1733,7 +1725,7 @@ export class ObservationCoordinator {
 			return false;
 		}
 		if (rule.decision !== "close") return false;
-		const decidedAt = new Date(this.now()).toISOString();
+		const decidedAt = new Date(this.clock.now()).toISOString();
 		const applied = this.state.ticketWorkCycle.applyCompletionDecision({
 			ticketIdentity: ticket.ticketIdentity,
 			handoffId: ticket.handoffAttemptId,
@@ -1741,8 +1733,8 @@ export class ObservationCoordinator {
 			decidedAt,
 		});
 		if (!applied) return false;
-		this.onCycleEnd?.(ticket.ticketIdentity);
-		const failure = await this.cleanup(ticket, "closed");
+		this.onCycleEnd(ticket.ticketIdentity);
+		const failure = await this.closeCleanup(ticket, "closed");
 		if (this.stopped) return true;
 		this.onStatus(
 			failure === undefined ? "info" : "error",
@@ -2080,7 +2072,7 @@ export class ObservationCoordinator {
 	 */
 	private cycleFacts(): Omit<TopUpCycleFacts, "queueDepth"> {
 		return {
-			modeOn: this.mode(),
+			modeOn: this.state.handoff.autoHandoffMode(),
 			queuePaused: this.state.workQueue.queuePaused(),
 			dispatchPauseActive: this.state.ticketWorkCycle.dispatchPauseActive(),
 		};
@@ -2312,7 +2304,8 @@ export class ObservationCoordinator {
 				// abandon answers. The brake is the designed silence: the gate holds
 				// without stating a fact.
 				operatorDecides: operatorDecidesType(config.taskTypes, ticket.taskType),
-				pastStartupGrace: this.now() - Date.parse(ticket.startedAt) >= this.startupGraceMs,
+					pastStartupGrace:
+						this.clock.now() - Date.parse(ticket.startedAt) >= this.startupGraceMs,
 				hasPane: ticket.paneId !== null,
 				// The one missing-Agent rule, read the way the in-flight pass reads it.
 				agentMissing:
@@ -2571,7 +2564,7 @@ export class ObservationCoordinator {
 			);
 			return "refused";
 		}
-		const result = await this.dispatch(intent);
+		const result = await this.dispatch.dispatch(intent);
 		if (this.stopped) return "stopped";
 		if (!result.ok) {
 			// The stopped dispatch is the teardown's fact, not a handoff
@@ -2784,7 +2777,7 @@ export class ObservationCoordinator {
 		// other standing gate, so one merge earns one ask and the record states the
 		// hold instead of a refusal. The ask's own guard stands behind this read for
 		// the ask that crosses the mark between the gate and the enqueue.
-		if (this.planeActionRunInFlight(intent.ticketIdentity)) {
+		if (this.dispatch.planeActionRunInFlight(intent.ticketIdentity)) {
 			this.noteStandingWorkHold("merge-run", intent.ticketIdentity);
 			return "refused";
 		}
@@ -2800,7 +2793,7 @@ export class ObservationCoordinator {
 		// report, and the walk moves on to its next candidate.
 		if (this.state.planeAction.planeActionBlockedUnrefreshed(intent.ticketIdentity))
 			return "refused";
-		const result = await this.dispatchPlaneAction(intent);
+		const result = await this.dispatch.dispatchPlaneAction(intent);
 		if (this.stopped) return "stopped";
 		if (!result.ok) {
 			// The stopped dispatch is the teardown's fact, not a merge refusal
