@@ -1403,6 +1403,165 @@ The gate on the rework head, the merged tree (level with `origin/main` at
 | The double load beyond the 30 iterations measured | Not run. The 30 green iterations stand on the same rig the 25 red ones did, and the record does not extend the claim past that count |
 | The live terminal walk, the screen-reader path | Open, as [the shared control record](./shared-controls.md) states. The fix changes when a surface's keys are live, and the walk has not been re-run on that change |
 
+## Issue #360: the test suite's duplication stands as its own metric (2026-10-09, the landing)
+
+The Quality audit runs jscpd once per duplication scope: the run over
+`src scripts bin` stands as `duplicates`, and the run over `test` stands as
+`test-dup`, with its own baseline count (ADR 0135). This section states what
+was measured, on what head, and what was not measured.
+
+### What was measured
+
+| Piece | Value |
+| --- | --- |
+| Heads | `498db20d`, the head the metric lands on, and `f2f221fe`, the commit that adds the metric. `498db20d` stands level with `origin/main` at `95dfd69a` plus the branch's hold commit, and its `test/` stands byte-identical to the landing tree's `test/` |
+| jscpd | 5.4.0, pinned as a devDependency, run with the settings `.jscpd.json` holds (`minTokens: 100`, `minLines: 5`) |
+| The `test` scope, at `498db20d` | **282 clones**, 5,657 duplicated lines, 4.92% of the suite's TypeScript lines: 44 cross-file and 238 intra-file |
+| The `src scripts bin` scope, at `498db20d` | 0 clones |
+| The combined run, at `498db20d` | one jscpd run over `src scripts bin test` finds 282 clones, exactly the sum of the two scoped runs (0 + 282), and no clone spans the two scopes. Recorded as a measurement on this head, not as a permanent property |
+| The baseline counts | `test-dup` lands at 282 in `.quality-baseline.json`, beside `measured-on` 498db20d. The other four counts stand at 0 on that head and on the landing tree, and the audit prints `OK` there |
+
+The spec's 267-clone count was measured at head `3f5c7662`. The tree moved
+between that head and the landing head, and the count the metric lands on
+is the one the landing head stands at: 282.
+
+### The threshold curve, measured over `test` at `498db20d`
+
+`minLines` stands at 5, the pinned binary, one run per threshold:
+
+| `minTokens` | Clones | Duplicated lines | Share of `test` | Cross-file | Intra-file |
+| --- | --- | --- | --- | --- | --- |
+| 35 | 3,088 | 31,428 | 27.30% | 620 | 2,468 |
+| 50 | 1,666 | 20,379 | 17.70% | 294 | 1,372 |
+| 70 | 773 | 11,691 | 10.16% | 115 | 658 |
+| **100** (adopted) | **282** | **5,657** | **4.92%** | **44** | **238** |
+| 120 | 162 | 3,744 | 3.26% | 22 | 140 |
+| 150 | 81 | 2,186 | 1.90% | 10 | 71 |
+| 200 | 18 | 683 | 0.60% | 2 | 16 |
+
+`minTokens: 100` is the value ADR 0120 adopted for `src`. The flood ADR 0120
+refused does not stand at the adopted threshold, and 282 is the same order
+of backlog issue #356 already cleared to zero.
+
+### The costs, measured at `f2f221fe`
+
+| Run | Cost, three runs |
+| --- | --- |
+| `bun run audit`, whole | 1,082 ms, 1,119 ms, 1,113 ms |
+| the type check | 357 ms, 362 ms, 360 ms |
+| the Biome run | 205 ms, 207 ms, 209 ms |
+| jscpd over `src scripts bin` | 23 ms, 28 ms, 25 ms |
+| jscpd over `test` | 31 ms, 40 ms, 31 ms |
+
+The second run adds a measured fraction of a second to the audit, and the
+cost rows on [the quality gate page](../development/quality-gate.md) carry
+these numbers at `f2f221fe`.
+
+### The backlog, as the campaign will inherit it at `498db20d`
+
+The 20 largest clones, at `minTokens: 100`, `minLines: 5`:
+
+| First block | Second block | Tokens | Lines |
+| --- | --- | --- | --- |
+| `test/ignored-ticket.test.ts:1009-1064` | `test/ignored-ticket.test.ts:1100-1150` | 338 | 56 |
+| `test/auto-mode.test.ts:1993-2030` | `test/auto-mode.test.ts:2048-2085` | 310 | 38 |
+| `test/app.test.ts:109-165` | `test/app.test.ts:215-269` | 251 | 57 |
+| `test/config.test.ts:136-193` | `test/config.test.ts:697-758` | 246 | 58 |
+| `test/observation.test.ts:4549-4582` | `test/refresh.test.ts:39-72` | 240 | 34 |
+| `test/plane-action-merge.test.ts:1869-1908` | `test/plane-action-merge.test.ts:1960-2000` | 238 | 40 |
+| `test/live-view.test.ts:981-1014` | `test/live-view.test.ts:1092-1121` | 219 | 34 |
+| `test/auto-mode.test.ts:2008-2030` | `test/auto-mode.test.ts:2391-2413` | 214 | 23 |
+| `test/app.test.ts:330-379` | `test/app.test.ts:446-495` | 212 | 50 |
+| `test/live-view.test.ts:1015-1046` | `test/live-view.test.ts:1285-1309` | 212 | 32 |
+| `test/consultation-frame.test.ts:3554-3585` | `test/consultation-frame.test.ts:3639-3670` | 207 | 32 |
+| `test/ignored-ticket.test.ts:913-936` | `test/muted-source.test.ts:432-456` | 205 | 24 |
+| `test/repository-select-panel.test.ts:514-541` | `test/repository-select-panel.test.ts:582-609` | 205 | 28 |
+| `test/plane-action-merge.test.ts:1061-1097` | `test/plane-action-merge.test.ts:1125-1163` | 204 | 37 |
+| `test/live-view.test.ts:425-453` | `test/live-view.test.ts:460-487` | 199 | 29 |
+| `test/live-view.test.ts:425-453` | `test/live-view.test.ts:502-529` | 199 | 29 |
+| `test/plane-action-merge.test.ts:2150-2171` | `test/plane-action-merge.test.ts:2505-2529` | 199 | 22 |
+| `test/state/ticketWorkCycle.test.ts:635-660` | `test/state/ticketWorkCycle.test.ts:683-708` | 195 | 26 |
+| `test/handoff-dispatch.test.ts:2752-2794` | `test/handoff-dispatch.test.ts:2808-2851` | 194 | 43 |
+| `test/handoff-dispatch.test.ts:4565-4581` | `test/handoff-dispatch.test.ts:4604-4618` | 192 | 17 |
+
+The 44 cross-file clones (784 lines) concentrate in 23 pairs, and the ten
+largest pairs hold 31 of the 44 clones and 604 of the 784 lines. Those pairs
+are where a shared fixture removes the most at once:
+
+| Pair | Clones | Lines |
+| --- | --- | --- |
+| `test/ignored-ticket.test.ts` <-> `test/muted-source.test.ts` | 9 | 195 |
+| `test/state/handoff.test.ts` <-> `test/state/ticketWorkCycle.test.ts` | 8 | 98 |
+| `test/state/handoff.test.ts` <-> `test/state/sourceFact.test.ts` | 5 | 58 |
+| `test/state/consultationRecord.test.ts` <-> `test/state/handoff.test.ts` | 2 | 58 |
+| `test/auto-mode.test.ts` <-> `test/live-view.test.ts` | 2 | 37 |
+| `test/repo-init-stub.test.ts` <-> `test/repo-init.test.ts` | 1 | 38 |
+| `test/security-source.test.ts` <-> `test/ticket-source.test.ts` | 1 | 37 |
+| `test/observation.test.ts` <-> `test/refresh.test.ts` | 1 | 34 |
+| `test/fake-source.ts` <-> `test/source-frame.test.ts` | 1 | 27 |
+| `test/action-bar.test.ts` <-> `test/handoff-frame.test.ts` | 1 | 22 |
+| 13 further pairs | 13 | 180 |
+
+### The probes, re-run on the tree of `f2f221fe`
+
+Each probe planted its block, ran `bun run audit`, and was reverted; a
+`git status` came back clean after every probe. The tree of `f2f221fe`
+stands byte-identical to the tree the landing commit pushes, over every
+scope the audit reads.
+
+| Probe | Result |
+| --- | --- |
+| 1, the duplication teeth: the `piScanLine` block of `src/turn-log.ts` pasted into the same file as a new top-level function | `duplicates` 0 to 1, `test-dup` stands at 282, exit 1, the finding `src/turn-log.ts:249 duplicate of src/turn-log.ts:830, 213 tokens` |
+| 2, the cognitive teeth: a function in `src/turn-log.ts` whose body nests its way to a cognitive score of 21 | `cognitive` 0 to 1, exit 1, the finding `src/turn-log.ts:830 cognitive 21 over 15` |
+| 3, the ratchet: `test-dup` lowered to 281 in `.quality-baseline.json` | exit 1, the count line `test-dup 282 / baseline 281` |
+| 4, the secrets rule: a planted 32-character base64 token in `src/turn-log.ts` | `secrets` 0 to 1, exit 1, the finding `src/turn-log.ts:830 secrets Potential secret found.` |
+| 5, the suite's duplication teeth: the `withholdFrameEvents` block of `test/app-harness.ts` pasted into the same file as a new top-level function | `test-dup` 282 to 283, `duplicates` stands at 0, exit 1 |
+| 6, the independence of the two counts: the paste of probe 5 leaves `duplicates` at 0, and the paste of probe 1 grows `duplicates` while `test-dup` stands | the two counts move on their own baselines, one per probe |
+| The narrowing, with probe 5's paste in place, `bun run audit --changed` | exactly one `test-dup` finding, `test/app-harness.ts:463 duplicate of test/app-harness.ts:1465, 161 tokens`, and the count line still states the whole count, `test-dup 283 / baseline 282` |
+
+The plant of probe 5 chose a block with no existing clone partner, so the
+paste adds exactly one clone, and the plants of probes 1, 2, and 4 keep the
+other counts at 0, so each probe moves the one count it claims.
+
+### The documentation check
+
+The **Quality audit** and **Quality baseline** entries in `GLOSSARY.md`
+were re-read against the code path that produces the behavior, as the
+gate's "a claim a document makes is a claim the code keeps" rule requires:
+neither entry names a scope, and both stand unchanged. The
+`bun run audit` row in `docs/development/commands.md` names the checks, not
+their scopes, and needs no wording change. No new ADR number collision:
+`0135` is checked against `origin/main` at `95dfd69a`, where `0134` is the
+highest number that stands.
+
+### The gate on this branch
+
+The branch was level with `origin/main` at `95dfd69a` (0 behind, 3 ahead)
+before the runs, and every check below ran on the tree of `c019d37c`.
+
+| Check | Result |
+| --- | --- |
+| `bun run lint` | clean over 320 files (143 ms), no fixes; the five standing warnings stand in files this change does not touch |
+| `bun run typecheck` | clean (`tsc`, no output) |
+| `bun run audit` | OK: type 0, lint 0, secrets 0, cognitive 0 / baseline 0, function 0 / baseline 0, params 0 / baseline 0, duplicates 0 / baseline 0, test-dup 282 / baseline 282, and 6 open code-scanning alerts |
+| `bun run test`, once | 3241 pass / 0 fail across 147 files in 40.42 s (16,626 `expect()` calls). Load average 2.53 before the run and 1.99 after, 32 CPUs, and no other `bun test` process ran on this machine |
+| `bun run docs:build` | complete in 1.57 s |
+
+The cheap checks were re-run on the record commit `cd4d3971`: `bun run
+lint` clean over 320 files (148 ms), `bun run typecheck` clean, `bun run
+audit` OK with `test-dup` at 282 / baseline 282, and `bun run docs:build`
+complete in 1.72 s. The only change after that run is this record's own
+wording.
+
+### What this change did not measure
+
+| Item | State |
+| --- | --- |
+| Whether the two scoped runs ever miss a cross-scope clone | Measured at 0 at `498db20d` and recorded as a measurement on that head, not as a permanent property. A clone that ever appears is filed, not pre-built for |
+| The audit's cost on another machine | Measured on this machine only, the way the page's other cost rows stand |
+| The lowering of the 282 | Out of scope: the campaign that drives the count down is its own issue, in the shape of #350, and it works one metric at a time |
+| The CI load flake on the frame tests, and `bun run mutate` | Open and outside the gate, as the standing records state |
+
 ## What was not measured
 
 | Item | State |

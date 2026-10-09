@@ -14,17 +14,25 @@
  * each re-run on the tree, by hand:
  *
  * - Probe 1, the duplication teeth: paste a block of at least 100 tokens
- *   that already stands elsewhere in `src` into a function of `src`. The
- *   `duplicates` count grows by one and the audit exits non-zero.
- * - Probe 2, the cognitive teeth: raise one function's cognitive score past
- *   15 by nesting an `if` in a body that already stands over 15. The
- *   `cognitive` count grows by one and the audit exits non-zero.
- * - Probe 3, the ratchet: lower one count in `.quality-baseline.json` below
- *   the count the tree stands at. The audit exits non-zero and prints that
- *   count below its baseline.
+ *   that already stands elsewhere in `src` into a file of `src` as a new
+ *   top-level function. The `duplicates` count grows by one and the audit
+ *   exits non-zero.
+ * - Probe 2, the cognitive teeth: add a function to a file of `src` whose
+ *   body nests its way to a cognitive score of 21. The `cognitive` count
+ *   grows by one and the audit exits non-zero.
+ * - Probe 3, the ratchet: lower the `test-dup` count in
+ *   `.quality-baseline.json` below the count the tree stands at. The audit
+ *   exits non-zero and prints that count below its baseline.
  * - Probe 4, the secrets rule: plant a high-entropy 32-character token in a
  *   file under `src`. The `secrets` count grows by one and the audit exits
  *   non-zero.
+ * - Probe 5, the suite's duplication teeth: paste a block of at least 100
+ *   tokens that already stands elsewhere in `test` into a file of `test`.
+ *   The `test-dup` count grows by one and the audit exits non-zero.
+ * - Probe 6, the independence of the two counts: the paste of probe 5
+ *   leaves the `duplicates` count at 0, and the paste of probe 1 grows
+ *   `duplicates` while the `test-dup` count stands. The two counts move on
+ *   their own baselines.
  */
 
 import { describe, expect, test } from "bun:test";
@@ -51,12 +59,13 @@ interface BaselineFile {
 	function: number;
 	params: number;
 	duplicates: number;
+	"test-dup": number;
 }
 
 /** One audit config, as the audit reads it. */
 interface ConfigFile {
 	metrics: string[];
-	scopes: { biome: string[]; jscpd: string[] };
+	scopes: { biome: string[]; jscpd: string[]; jscpdTest: string[] };
 	"finding-cap": number;
 	"changed-base": string;
 }
@@ -70,6 +79,7 @@ const BASELINE_READINGS: MetricReading[] = [
 	{ name: "function", measured: 86, baseline: 86, findings: [] },
 	{ name: "params", measured: 49, baseline: 49, findings: [] },
 	{ name: "duplicates", measured: 11, baseline: 11, findings: [] },
+	{ name: "test-dup", measured: 282, baseline: 282, findings: [] },
 ];
 
 /** The baseline readings with the count of the metric at `index` set to `count`. */
@@ -112,6 +122,18 @@ describe("the Quality audit's payload", () => {
 						},
 					],
 				},
+				{
+					name: "test-dup",
+					measured: 1,
+					baseline: 282,
+					findings: [
+						{
+							file: "test/app.test.ts",
+							line: 109,
+							text: "duplicate of test/app.test.ts:215, 251 tokens",
+						},
+					],
+				},
 			],
 			codeql: { count: 6, findings: [] },
 			cap: 20,
@@ -126,11 +148,13 @@ describe("the Quality audit's payload", () => {
 				"function      0 / baseline 86",
 				"params        0 / baseline 49",
 				"duplicates    1 / baseline 11",
+				"test-dup      1 / baseline 282",
 				"codeql        6 open alerts",
 				"findings",
 				"  src/handoff-dispatch.ts:1926 cognitive 41 over 15",
 				"  src/app.ts:10 cognitive 16 over 15",
 				"  src/components/action-panel.ts:118 duplicate of src/components/missing-modal.ts:126, 106 tokens",
+				"  test/app.test.ts:109 duplicate of test/app.test.ts:215, 251 tokens",
 			].join("\n"),
 		);
 	});
@@ -154,6 +178,7 @@ describe("the Quality audit's payload", () => {
 				"function      86 / baseline 86",
 				"params        49 / baseline 49",
 				"duplicates    11 / baseline 11",
+				"test-dup      282 / baseline 282",
 				"codeql        0 open alerts",
 			].join("\n"),
 		);
@@ -225,7 +250,7 @@ describe("the Quality baseline ratchets both ways", () => {
 
 	test("the audit fails on any count above or below its baseline", () => {
 		// The metric order: type 0, lint 1, secrets 2, cognitive 3, function 4,
-		// params 5, duplicates 6.
+		// params 5, duplicates 6, test-dup 7.
 		expect(auditStatus(BASELINE_READINGS)).toBe("OK");
 		expect(auditStatus(withCount(3, 169))).toBe("FAILED");
 		expect(auditStatus(withCount(3, 167))).toBe("FAILED");
@@ -235,11 +260,26 @@ describe("the Quality baseline ratchets both ways", () => {
 		expect(auditStatus(withCount(4, 87))).toBe("FAILED");
 		expect(auditStatus(withCount(5, 48))).toBe("FAILED");
 		expect(auditStatus(withCount(6, 12))).toBe("FAILED");
+		expect(auditStatus(withCount(7, 283))).toBe("FAILED");
+		expect(auditStatus(withCount(7, 281))).toBe("FAILED");
+	});
+
+	test("each duplication count ratchets on its own baseline", () => {
+		// duplicates moves and test-dup stands: the verdict rides duplicates.
+		const duplicatesMove = withCount(6, 12);
+		expect(auditStatus(duplicatesMove)).toBe("FAILED");
+		expect(verdictOf(duplicatesMove[6].measured, duplicatesMove[6].baseline)).toBe("above");
+		expect(verdictOf(duplicatesMove[7].measured, duplicatesMove[7].baseline)).toBe("ok");
+		// test-dup moves and duplicates stands: the verdict rides test-dup.
+		const testDupMove = withCount(7, 283);
+		expect(auditStatus(testDupMove)).toBe("FAILED");
+		expect(verdictOf(testDupMove[6].measured, testDupMove[6].baseline)).toBe("ok");
+		expect(verdictOf(testDupMove[7].measured, testDupMove[7].baseline)).toBe("above");
 	});
 });
 
 describe("the dotfiles state the audit's values", () => {
-	test("the baseline holds the four counts, one per metric, beside the head they were measured on", () => {
+	test("the baseline holds the five counts, one per metric, beside the head they were measured on", () => {
 		const baseline = JSON.parse(
 			readFileSync(join(ROOT, ".quality-baseline.json"), "utf8"),
 		) as BaselineFile;
@@ -247,6 +287,7 @@ describe("the dotfiles state the audit's values", () => {
 		expect(baseline.function).toBe(0);
 		expect(baseline.params).toBe(0);
 		expect(baseline.duplicates).toBe(0);
+		expect(baseline["test-dup"]).toBe(282);
 		expect(baseline["measured-on"]).toMatch(/^[0-9a-f]{7,40}$/);
 		expect(Object.keys(baseline).sort()).toEqual([
 			"cognitive",
@@ -254,6 +295,7 @@ describe("the dotfiles state the audit's values", () => {
 			"function",
 			"measured-on",
 			"params",
+			"test-dup",
 		]);
 	});
 
@@ -267,9 +309,11 @@ describe("the dotfiles state the audit's values", () => {
 			"function",
 			"params",
 			"duplicates",
+			"test-dup",
 		]);
 		expect(config.scopes.biome).toEqual(["src", "scripts", "bin", "test"]);
 		expect(config.scopes.jscpd).toEqual(["src", "scripts", "bin"]);
+		expect(config.scopes.jscpdTest).toEqual(["test"]);
 		expect(config["finding-cap"]).toBe(20);
 		expect(config["changed-base"]).toBe("origin/main");
 	});
@@ -301,10 +345,11 @@ describe("the audit command", () => {
 		expect(plain.lines[5]).toMatch(/^function {6}\d+ \/ baseline \d+$/);
 		expect(plain.lines[6]).toMatch(/^params {8}\d+ \/ baseline \d+$/);
 		expect(plain.lines[7]).toMatch(/^duplicates {4}\d+ \/ baseline \d+$/);
-		expect(plain.lines[8]).toMatch(/^codeql {8}(\d+ open alerts|read failed: .+)$/);
+		expect(plain.lines[8]).toMatch(/^test-dup {6}\d+ \/ baseline \d+$/);
+		expect(plain.lines[9]).toMatch(/^codeql {8}(\d+ open alerts|read failed: .+)$/);
 		// The counts are the facts the ratchet reads: --changed narrows the
 		// findings and never the counts, so the count lines stand whole.
-		expect(changed.lines.slice(1, 9)).toEqual(plain.lines.slice(1, 9));
+		expect(changed.lines.slice(1, 10)).toEqual(plain.lines.slice(1, 10));
 		// The exit code states the status line: OK is 0, FAILED is non-zero.
 		if (plain.lines[0].startsWith("audit OK")) {
 			expect(plain.code).toBe(0);

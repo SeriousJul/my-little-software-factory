@@ -7,6 +7,12 @@ Amended by ADR 0123: the generated screen font table that this record's
 `noSecrets` override names no longer exists, and that override leaves with it.
 Every other decision here stands.
 
+Amended by ADR 0135: the jscpd scope sentence "Tests stay out of the scope
+for the measured reason above" is superseded for the jscpd scope: the
+Quality audit counts the test suite's duplication as its own metric,
+`test-dup`, beside the one this record already settled (issue #360). Every
+other decision here stands.
+
 ## Context
 
 Issue #340 arrived as a guide for a SonarQube-like local stack: `tsc --noEmit`, ESLint with
