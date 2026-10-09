@@ -640,6 +640,13 @@ warning there reads as a merge that failed over a merge that is landing (issue
 #327). The refusal line above still lands once per standing fact, and the
 operator's own ask still reads the refusal on the Message line.
 
+For the merge whose command is still out, the automatic walks do not reach that
+refusal at all: they read the run's mark as a gate before they ask, so one merge
+earns one ask and the walk states its hold instead (issue #352, ADR 0128). The
+`merge refused:` line of that fact answers the ask that crossed the mark - your
+own confirm, a force-dispatch, or the ask that lands between the walk's read and
+the run's claim.
+
 A `waits:` line is not a refusal: the row stays in the Work queue, keeps its
 place and its `queued` badge, and starts on a later pickup. Its prefix names the
 waiting start's channel: `handoff waits:` for a Handoff, and the Plane action's
@@ -793,9 +800,9 @@ automatic walks hold: the Same-type hold stands ("Watch agent turns")
 automatic walks hold: the Ticket's merge is already running ("Watch agent turns")
 ```
 
-The last of these is the Plane action's run mark (ADR 0104): the walk re-asked a
-merge whose row left the queue at its claim and whose command is still out, so
-the merge is entered and the walk holds instead of warning (issue #327). The
+The last of these is the Plane action's run mark (ADR 0104): the merge the walk
+asks for left the Work queue at its claim and its command is still out, so the
+walk reads the run before it asks and holds (issue #327, issue #352). The
 same walk holds on the Work queue's row for the Ticket above it.
 
 The Operator-decides brake keeps its designed silence (ADR 0117): the walk

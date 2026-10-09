@@ -141,3 +141,4 @@ body states the context, the decision, and the consequences.
 - [ADR 0130: The observation cycle holds the Handoff dispatch through one port](./0130-the-observation-cycle-holds-the-handoff-dispatch-through-one-port.md)
 - [ADR 0131: The Seeded plane opens one whole standing behind one interface](./0131-the-seeded-plane-opens-one-whole-standing-behind-one-interface.md)
 - [ADR 0132: The Stub herdr world answers herdr and git from one standing world](./0132-the-stub-herdr-world-answers-herdr-and-git-from-one-standing-world.md)
+- [ADR 0128: The automatic walks read the Plane action's run mark before they ask](./0128-the-automatic-walks-read-the-plane-actions-run-mark-before-they-ask.md)

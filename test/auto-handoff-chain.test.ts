@@ -472,6 +472,8 @@ function chainRig(options: ChainRigOptions = {}): Chain {
 			planeAsks.push(intent);
 			return dispatch.dispatchPlaneAction(intent);
 		},
+		// The seam the App wires: the run's mark belongs to the dispatch module.
+		planeActionRunInFlight: (ticketIdentity) => dispatch.planeActionRunInFlight(ticketIdentity),
 		pickupWorkQueue: () => dispatch.pickupWorkQueue(),
 		cleanup: async () => undefined,
 		// The app's own fire seam: the task type's Transition, through the
@@ -839,9 +841,16 @@ describe("the ADR 0092 chain runs unattended (issue #208)", () => {
  * pull request - and the walk answered it with a failure: a warning on the
  * Message line, and the Desktop notification a standing warning carries, over a
  * merge that was landing.
+ *
+ * The refusal is no longer the plane's answer (issue #352): the walks read the
+ * run's mark as a standing gate before they ask, the way they read every other
+ * standing gate, so one merge earns one ask and the record carries the hold and
+ * no refusal. The ask's own guard stands behind that read for the ask that
+ * crosses the mark between the gate and the enqueue, and
+ * `test/plane-action-merge.test.ts` measures that guard at the module.
  */
-describe("the merge run that stands (issue #327, ADR 0104)", () => {
-	test("the walk re-asks a merge already in flight, holds on the refusal, and states no failure", async () => {
+describe("the merge run that stands (issue #327, ADR 0104, issue #352)", () => {
+	test("the walk holds on the merge that is running and asks for it once", async () => {
 		const chain = chainRig({ gateMerge: true });
 		const { state, runner, coordinator, lines, statuses } = chain;
 		chain.refresh(issueTicket(), pullTicket());
@@ -870,27 +879,24 @@ describe("the merge run that stands (issue #327, ADR 0104)", () => {
 		await chain.awaitMergeInFlight();
 		expect(state.workQueue.items()).toEqual([]);
 
-		// The cycles that follow re-ask the same position, the way the poll and
+		// The cycles that follow re-read the same position, the way the poll and
 		// every source fetch do on the shipped machine.
 		await coordinator.tick();
 		await coordinator.tick();
-		// Every cycle asks again: the ask's count is not the fact, the refusal's
-		// one line is.
-		expect(chain.planeAsks.length).toBeGreaterThan(1);
+		// One ask for one merge: the run's mark holds the walks out before they ask,
+		// so the plane never asks a second time for the merge it is running
+		// (issue #352).
+		expect(chain.planeAsks).toHaveLength(1);
 
 		// The Message line carries nothing about a merge that is landing: the
-		// refusal is a hold on work the plane already entered, not a start that
-		// could not run.
+		// merge is entered, not failing.
 		expect(statuses.filter((status) => status.text.includes("could not merge"))).toEqual([]);
-		// The refusal still reaches the record, once for the run that stands, in
-		// the one shape every refusal line wears (issue #223, ADR 0104).
-		expect(lines.filter((line) => line.message.startsWith("merge refused:"))).toEqual([
-			warnLine(
-				'merge refused: "Persist source facts in state" (already has a merge running; the first run stands)',
-			),
-		]);
-		// The walk takes the refusal as a standing gate, the way it takes the rest:
-		// the record states the hold in the holds' own voice.
+		// The record carries no refusal either: nothing was refused, because
+		// nothing was asked twice (issue #352).
+		expect(lines.filter((line) => line.message.startsWith("merge refused:"))).toEqual([]);
+		// The walk still says why it asked for nothing: the hold, once, in the
+		// holds' own voice - the same word the refusal path states, so one standing
+		// fact has one line whichever path reached it.
 		expect(lines).toContainEqual(
 			infoLine(
 				'automatic walks hold: the Ticket\'s merge is already running ("Persist source facts in state")',

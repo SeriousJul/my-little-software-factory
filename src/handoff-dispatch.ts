@@ -480,6 +480,17 @@ export interface HandoffDispatch {
 	 */
 	dispatchPlaneAction(intent: PlaneActionIntent): Promise<DispatchResult>;
 	/**
+	 * Whether this Ticket's Plane action run stands in the module (ADR 0104):
+	 * its claim took the Work queue row out and its command is still out.
+	 *
+	 * The mark is the module's fact, so the module answers for it. The automatic
+	 * walks read it as a standing gate before they ask, the way they read the
+	 * queue's own row, so one merge earns one ask (issue #352). The ask's own
+	 * guard stays behind that read: an ask that crosses the mark between the
+	 * gate and the enqueue is still refused before it enqueues.
+	 */
+	planeActionRunInFlight(ticketIdentity: string): boolean;
+	/**
 	 * Close the work cycle of a ticket whose turn never settled (ADR 0031).
 	 *
 	 * The cycle's end and the Close cleanup of the environment it ran in are one
@@ -730,6 +741,11 @@ class HandoffDispatchModule implements HandoffDispatch {
 
 	handoffActive(): boolean {
 		return this.inFlight;
+	}
+
+	/** The run mark of one Ticket (ADR 0104): claimed, not settled. */
+	planeActionRunInFlight(ticketIdentity: string): boolean {
+		return this.planeActionRunsInFlight.has(ticketIdentity);
 	}
 
 	stop(): void {
