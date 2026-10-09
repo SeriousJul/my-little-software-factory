@@ -330,6 +330,11 @@ _Avoid_: pi view, transcript, chat
 The Interaction mode that shows an Agent's terminal and forwards operator input to it while reserving a configurable, keyboard-layout-independent control to return keyboard ownership to the control plane.
 _Avoid_: terminal handoff, attach mode
 
+**Observation cycle**:
+The poll the control plane runs over its own in-flight work: it reads the Agents herdr lists, settles the turns the Agent's session record shows ended, fires each completed turn's Transition, decides each settled turn, runs the Work queue's Pickup, and makes the one automatic Top-up add.
+It runs whether Auto-handoff mode stands or not: the mode decides what the cycle may start, never whether it runs. Its own brakes - the Dispatch pause, the Startup grace, the Attempt hold, the Failed-start park - are derived on every cycle and never stored.
+_Avoid_: observation loop, agent poll, watcher, scheduler
+
 **Blocked**:
 The observation that an Agent shows an approval or question UI.
 A Ticket stays `running`; a Consultation moves to `awaiting-response`.
@@ -459,6 +464,15 @@ The condition in which a Ticket's newest Handoff attempts, in one unbroken run, 
 The Attempt hold waits out one failure for the source read that carries the Ticket's current facts. That is the right wait for one failure and the wrong one for a cause outside the Ticket: the read lands on every refresh and says nothing about the failure, so the hold is one refresh of delay and the loop runs one failed start per refresh until the Handoff limit stops the Top-up and leaves the Ticket open with no fact saying why. The park is the second brake, and it is a standing fact rather than a silent skip: while it stands the Top-up adds no automatic start for the Ticket, the row and the detail name it, the record names the hold once, and the Message line states it once as the standing warning the Desktop notification carries (ADR 0080). It arrives before the Handoff limit, so the operator meets the loop while the cap that ends a work cycle still stands behind it, and the cap stays the one number the operator sets.
 Any Handoff attempt that settled otherwise, or one still in flight, ends the run: a start that reaches its Agent clears the park and the automatic adds resume on the same rule, while a manual start that fails extends the run, because the refusal it met is the refusal the park names. The operator's own act on the Ticket - its ignore, or the mute of one of its sources - answers the failure and takes the fact off the row. Like the Attempt hold, it gates the automatic adds only: the operator's confirm, the pickup's claim, and a force-dispatch pass it.
 _Avoid_: failure backoff, circuit breaker, dead letter, retry budget
+
+**Handoff dispatch**:
+The module that owns every start: the claim and its hard start checks, the Work queue's enqueue and Pickup, a Plane action's ask, the external work that builds the Environment and starts the Agent, the settle, and the Close cleanup of an ended cycle.
+Every start reaches it through one ask, whatever asked: the operator's key, a route the operator confirms, a Restart, or the Observation cycle (ADR 0049, ADR 0097). It owns the start lines the record carries, and it asks for the seat reading the Parallel limit owns rather than deriving its own.
+_Avoid_: dispatcher, dispatch loop, start handler
+
+**Observation dispatch port**:
+The four calls the Observation cycle may make of the Handoff dispatch: the Handoff ask, the Plane action's ask, the Work queue's Pickup, and the Close cleanup. The Handoff dispatch interface extends it, so the cycle holds the module and still cannot reach the operator's calls - a force-dispatch, a row's removal, the close of a cycle whose turn never settled - or the run's teardown.
+_Avoid_: dispatch callbacks, dispatch hooks, observation adapter
 
 **Auto-handoff mode**:
 The mode of the factory in which the control plane tops up the Work queue by itself and decides its settled turns without the operator, within the configured limits: a continuation first, then a restart, then an eligible open ticket, one item at a time, the continuation asked before the pickup and the rest only into an empty queue (ADR 0051, with the step order ADR 0094 sets).
