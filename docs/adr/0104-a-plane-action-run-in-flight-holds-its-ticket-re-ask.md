@@ -5,6 +5,9 @@ Date: 2026-10-04
 Amends ADR 0068's Plane action start: the claim of its Work queue row now also
 takes a mark that stands until the run settles. It does not change ADR 0068's
 rule that no durable attempt row stands before the external change.
+Amended by ADR 0128: the automatic walks read that mark as a standing gate before
+they ask, so the run's refusal answers only the ask that crosses the mark. The
+mark, its guard, and its refusal stand.
 
 ## Context
 

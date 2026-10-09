@@ -484,10 +484,15 @@ export interface HandoffDispatch {
 	 * its claim took the Work queue row out and its command is still out.
 	 *
 	 * The mark is the module's fact, so the module answers for it. The automatic
-	 * walks read it as a standing gate before they ask, the way they read the
-	 * queue's own row, so one merge earns one ask (issue #352). The ask's own
+	 * walks read it as a standing gate before they ask, beside the Work queue's
+	 * own row, so one merge earns one ask (issue #352). The ask's own
 	 * guard stays behind that read: an ask that crosses the mark between the
 	 * gate and the enqueue is still refused before it enqueues.
+	 *
+	 * The mark is keyed by the Ticket alone, not by the task type: the Plane
+	 * action set holds only the merge, and the glossary says so. A second action
+	 * type on the same Ticket reads this Ticket's running merge as standing work,
+	 * and that is the fact to re-open here when the set grows (ADR 0128).
 	 */
 	planeActionRunInFlight(ticketIdentity: string): boolean;
 	/**

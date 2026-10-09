@@ -367,6 +367,11 @@ function rig(options: {
 			if (intent.onStarted !== undefined) pending.push(intent.onStarted);
 			return { ok: true };
 		},
+		// The run's mark (ADR 0104): this rig's ask lands a Work queue row and no
+		// pickup ever runs it, so no Plane action run ever stands. The mark's walk
+		// gate is measured on `test/auto-handoff-chain.test.ts`, on the real
+		// dispatch module.
+		planeActionRunInFlight: () => false,
 		pickupWorkQueue:
 			pickup === undefined
 				? undefined
@@ -1156,6 +1161,7 @@ describe("the observation cycle", () => {
 			config: () => config,
 			dispatch: mock().mockResolvedValue({ ok: true }),
 			dispatchPlaneAction: mock().mockResolvedValue({ ok: true }),
+			planeActionRunInFlight: () => false,
 			cleanup: async () => undefined,
 			now: () => Date.parse("2026-08-31T11:00:00Z"),
 			mode: () => true,
@@ -4593,6 +4599,7 @@ describe("the injectable clock", () => {
 			config: () => config,
 			dispatch: async () => ({ ok: true }),
 			dispatchPlaneAction: async () => ({ ok: true }),
+			planeActionRunInFlight: () => false,
 			cleanup: async () => undefined,
 			now: () => Date.parse("2026-08-31T11:00:00Z"),
 			mode: () => false,
@@ -5417,6 +5424,7 @@ describe("an agent that outlives its work cycle", () => {
 			config: () => config,
 			dispatch: async () => ({ ok: true }),
 			dispatchPlaneAction: async () => ({ ok: true }),
+			planeActionRunInFlight: () => false,
 			cleanup: async () => undefined,
 			now: () => Date.parse("2026-08-31T11:05:00Z"),
 			mode: () => false,

@@ -5,6 +5,10 @@ Date: 2026-10-07
 Amends ADR 0104's consequence that the merge run's refusal "reaches the
 automatic walks' warning line", and ADR 0049's one-item-per-ticket refusal
 beside it. It changes no refusal, no record line, and no operator's ask.
+Amended by ADR 0128: the automatic walks read the Work queue's row and the run's
+mark before they ask, so a standing row or a standing run earns one ask and one
+hold line, not one per cycle. The hold's words, and the refusal's answer to an
+ask that crosses either mark, stand.
 
 ## Context
 
