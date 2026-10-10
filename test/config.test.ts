@@ -652,7 +652,7 @@ describe("validateConfig", () => {
 			// the operator, a high thinking level, and no transition.
 			expect(config.taskTypes.analyze).toEqual({
 				template: expect.stringContaining("/skill:grill-with-docs"),
-				model: "strata/qwen3.8-flash-next-iq3_s",
+				model: "llama-swap/qwen3.8-flash-next-iq3_s",
 				thinking: "xhigh",
 				operatorDecides: true,
 			});

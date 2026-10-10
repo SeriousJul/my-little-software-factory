@@ -170,7 +170,7 @@ Description:
 Repository: {repository}
 
 Previous session message (empty on a first session): {previous-message}"""
-model = "strata/qwen3.8-flash-next-iq3_s"
+model = "llama-swap/qwen3.8-flash-next-iq3_s"
 thinking = "xhigh"
 operator-decides = true
 
@@ -444,7 +444,7 @@ pull-request-facts = [ "ready-for-review" ]
 agent = "pi"
 environment = "worktree"
 template = "/skill:grill-with-docs {input}"
-model = "strata/qwen3.8-flash-next-iq3_s"
+model = "llama-swap/qwen3.8-flash-next-iq3_s"
 thinking = "xhigh"
 
 # The diagnose Consultation type runs the bug-diagnosis loop by hand (issue
