@@ -87,7 +87,7 @@ verification's change.
 | Check | Why it could not run | Recorded as |
 | --- | --- | --- |
 | The answer-shape tracing to a recorded herdr 0.8.2 answer | it needs a live herdr binary to record the real answers; the contributor instructions keep the automated suite at the unit layer | Incomplete, with the shape table above as the acceptance target |
-| A scoped Stryker campaign over the Handoff dispatch and the observation | not run in this change | Incomplete |
+| A scoped Stryker campaign over the Handoff dispatch and the observation | Stryker's TypeScript preprocessor crashes under Bun (`ts.parseConfigFileTextToJson is not a function`), so no campaign - scoped or full - can start here; scoping to `src/handoff.ts` does not avoid it | Incomplete, with the crash recorded as the blocker |
 | The auto-mode suite's move onto the world | its pinned flows need a per-test rework that is its own step | Incomplete, recorded in the migration table above |
 | The screen-reader path of the surfaces the suites touch | not verified in this branch's scope | Incomplete |
 | The machine state beside the full suite | the full `bun run test` ran on the merged tree with the plane's own processes live | The suite passed; one test that failed in one full run and passed alone and in the two full runs beside it is named as a load flake |
