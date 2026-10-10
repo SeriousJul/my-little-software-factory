@@ -27,7 +27,7 @@ import type { AppProps } from "../src/components/app.ts";
 import type { FactoryConfig, TransitionOutcome } from "../src/config.ts";
 import type { FetchedTicket } from "../src/domain/ticket.ts";
 import { agentNameFor } from "../src/naming.ts";
-import type { CommandResult, CommandRunner } from "../src/runner.ts";
+import type { CommandRunner } from "../src/runner.ts";
 import type { FactoryState } from "../src/state.ts";
 import { openFactoryState } from "../src/state.ts";
 import type { FetchOutcome } from "../src/ticket-source.ts";
@@ -48,23 +48,10 @@ import {
 	withApp,
 } from "./app-harness.ts";
 import { BASE_CONFIG } from "./base-config.ts";
-import {
-	agentListJson,
-	tabCreateJson,
-	workspaceCreateJson,
-	workspaceListJson,
-} from "./fake-runner.ts";
+import { agentListJson, tabCreateJson, workspaceListJson } from "./fake-runner.ts";
 import { FakeSource } from "./fake-source.ts";
 import { type GatedRunner, gatedRunner } from "./gated-runner.ts";
 import { type HerdrWorldDescription, type StubHerdrWorld, stubHerdrWorld } from "./herdr-world.ts";
-
-/**
- * The egress double the starting-face suites inject: the fake command runner
- * and the Stub herdr world both stand it.
- */
-interface CommandDouble extends CommandRunner {
-	set(command: string, args: readonly string[], result: Partial<CommandResult>): void;
-}
 
 import "./theme-isolation.ts";
 
@@ -116,21 +103,6 @@ function worldCheckout(checkout: string): HerdrWorldDescription {
 			},
 		],
 	};
-}
-
-/** The standing the pinned live handoff leaves behind, stated as a world. */
-function liveHandoffWorld(checkout: string): HerdrWorldDescription {
-	const world = worldCheckout(checkout);
-	world.workspaces = [{ id: "ws-1", checkoutPath: checkout }];
-	world.tabs = [
-		{ id: "tab-ws-1", workspaceId: "ws-1", cwd: checkout },
-		{ id: "tab-1", workspaceId: "ws-1", cwd: checkout },
-	];
-	world.panes = [
-		{ id: "pane-w", tabId: "tab-ws-1", workspaceId: "ws-1" },
-		{ id: "pane-1", tabId: "tab-1", workspaceId: "ws-1" },
-	];
-	return world;
 }
 
 /** The standing the pinned auto restart leaves behind, stated as a world. */
@@ -223,7 +195,7 @@ interface SeededApp {
 }
 
 /** The world standing the seeded app's world holds. */
-type WorldStanding = "checkout" | "live-handoff" | "restart";
+type WorldStanding = "checkout" | "restart";
 
 /** A seeded state plus the app props that match it. */
 function seededApp(
@@ -248,13 +220,7 @@ function seededApp(
 		repos: { [repoIdentity]: repo },
 		...extra,
 	};
-	const runner = stubHerdrWorld(
-		standing === "live-handoff"
-			? liveHandoffWorld(repo)
-			: standing === "restart"
-				? restartWorld(repo)
-				: worldCheckout(repo),
-	);
+	const runner = stubHerdrWorld(standing === "restart" ? restartWorld(repo) : worldCheckout(repo));
 	const src = new FakeSource("issues", "github-issues", success);
 	return { state, config, runner, configPath, src };
 }
@@ -292,17 +258,6 @@ const badgeRow = (frame: string): string => listHalfOf(selectedRow(frame));
 /** How many faces stand in the frame: the list row's, and the detail header's. */
 const faceCount = (frame: string): number => (frame.match(/ starting/g) ?? []).length;
 
-/** Stub a successful live-worktree handoff at the convention checkout. */
-function stubLiveHandoff(runner: CommandDouble, checkout: string): void {
-	runner.set("herdr", ["workspace", "list"], { stdout: workspaceListJson([]) });
-	runner.set("herdr", ["workspace", "create", "--cwd", checkout, "--no-focus"], {
-		stdout: workspaceCreateJson("ws-1"),
-	});
-	runner.set("herdr", ["tab", "create", "--workspace", "ws-1", "--cwd", checkout, "--no-focus"], {
-		stdout: tabCreateJson("pane-1"),
-	});
-}
-
 /** Hold the agent's start itself, so the claim stands in flight on screen. */
 const gateStart = (runner: CommandRunner): GatedRunner =>
 	gatedRunner(runner, (command) => command.includes("agent start"));
@@ -321,10 +276,15 @@ const releaseHeld = async (gate: GatedRunner): Promise<void> => {
 	gate.release();
 };
 
-/** The herdr agent list where pane-1 works. */
+/**
+ * The herdr agent list where the handoff's Agent works.
+ *
+ * The live-worktree handoff makes a fresh tab in the workspace it finds or
+ * creates, so the Agent sits in that tab's pane, the world's second pane.
+ */
 const workingList = () =>
 	agentListJson([
-		{ paneId: "pane-1", tabId: "tab-1", workspaceId: "ws-1", agent: "pi", status: "working" },
+		{ paneId: "pane-2", tabId: "tab-2", workspaceId: "ws-1", agent: "pi", status: "working" },
 	]);
 
 /**
@@ -374,8 +334,7 @@ const gatePoll = (runner: CommandRunner): GatedRunner =>
 
 describe("the Starting window's timeline", () => {
 	test("the manual hand-off wears the face from the keypress to the first observation", async () => {
-		const app = seededApp("open", {}, {}, "live-handoff");
-		stubLiveHandoff(app.runner, checkoutOf(app.config));
+		const app = seededApp("open");
 		app.runner.set("herdr", ["agent", "list"], { stdout: workingList() });
 		const gate = gateStart(app.runner);
 		await withApp(
@@ -412,7 +371,6 @@ describe("the Starting window's timeline", () => {
 
 	test("a failed start drops the face and returns the row to its state", async () => {
 		const app = seededApp("open");
-		stubLiveHandoff(app.runner, checkoutOf(app.config));
 		// The workspace create is the failing step: the gate holds it while
 		// the claim stands in flight, and the failure lands on the release.
 		app.runner.set(
@@ -454,8 +412,7 @@ describe("the Starting window's timeline", () => {
 	});
 
 	test("the auto hand-off wears the face while its start stands", async () => {
-		const app = seededApp("open", {}, { autoMode: true }, "live-handoff");
-		stubLiveHandoff(app.runner, checkoutOf(app.config));
+		const app = seededApp("open", {}, { autoMode: true });
 		app.runner.set("herdr", ["agent", "list"], { stdout: workingList() });
 		const gate = gateStart(app.runner);
 		await withApp(
