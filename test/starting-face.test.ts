@@ -27,6 +27,7 @@ import type { AppProps } from "../src/components/app.ts";
 import type { FactoryConfig, TransitionOutcome } from "../src/config.ts";
 import type { FetchedTicket } from "../src/domain/ticket.ts";
 import { agentNameFor } from "../src/naming.ts";
+import type { CommandRunner } from "../src/runner.ts";
 import type { FactoryState } from "../src/state.ts";
 import { openFactoryState } from "../src/state.ts";
 import type { FetchOutcome } from "../src/ticket-source.ts";
@@ -47,15 +48,11 @@ import {
 	withApp,
 } from "./app-harness.ts";
 import { BASE_CONFIG } from "./base-config.ts";
-import {
-	agentListJson,
-	FakeRunner,
-	tabCreateJson,
-	workspaceCreateJson,
-	workspaceListJson,
-} from "./fake-runner.ts";
+import { agentListJson, tabCreateJson, workspaceListJson } from "./fake-runner.ts";
 import { FakeSource } from "./fake-source.ts";
 import { type GatedRunner, gatedRunner } from "./gated-runner.ts";
+import { type HerdrWorldDescription, type StubHerdrWorld, stubHerdrWorld } from "./herdr-world.ts";
+
 import "./theme-isolation.ts";
 
 const paths: string[] = [];
@@ -95,12 +92,26 @@ const success: FetchOutcome = {
 	tickets: [fetched()],
 };
 
-/** Stub the git answers for the checkout the config maps to. */
-function stubCheckout(runner: FakeRunner, checkout: string): void {
-	runner.set("git", ["-C", checkout, "rev-parse", "--git-dir"], { stdout: ".git\n" });
-	runner.set("git", ["-C", checkout, "remote", "get-url", "origin"], {
-		stdout: `https://${repoIdentity}.git\n`,
-	});
+/** The checkout the config maps to, stated as a world. */
+function worldCheckout(checkout: string): HerdrWorldDescription {
+	return {
+		checkouts: [
+			{
+				path: checkout,
+				cloneUrl: `https://${repoIdentity}.git`,
+				defaultBranch: "main",
+			},
+		],
+	};
+}
+
+/** The standing the pinned auto restart leaves behind, stated as a world. */
+function restartWorld(checkout: string): HerdrWorldDescription {
+	const world = worldCheckout(checkout);
+	world.workspaces = [{ id: "ws-1", checkoutPath: checkout }];
+	world.tabs = [{ id: "tab-2", workspaceId: "ws-1", cwd: checkout }];
+	world.panes = [{ id: "pane-2", tabId: "tab-2", workspaceId: "ws-1" }];
+	return world;
 }
 
 /** The checkout directory the seeded config maps the ticket's repository to. */
@@ -178,16 +189,20 @@ function seed(shape: "open" | "in-flight" | "awaiting", detail: SeedDetail = {})
 interface SeededApp {
 	state: FactoryState;
 	config: FactoryConfig;
-	runner: FakeRunner;
+	runner: StubHerdrWorld;
 	configPath: string;
 	src: FakeSource;
 }
+
+/** The world standing the seeded app's world holds. */
+type WorldStanding = "checkout" | "restart";
 
 /** A seeded state plus the app props that match it. */
 function seededApp(
 	shape: "open" | "in-flight" | "awaiting",
 	extra: Partial<FactoryConfig> = {},
 	detail: SeedDetail = {},
+	standing: WorldStanding = "checkout",
 ): SeededApp {
 	const state = seed(shape, detail);
 	// The operator's choice of the Auto-handoff mode is a fact of the state
@@ -205,7 +220,7 @@ function seededApp(
 		repos: { [repoIdentity]: repo },
 		...extra,
 	};
-	const runner = new FakeRunner();
+	const runner = stubHerdrWorld(standing === "restart" ? restartWorld(repo) : worldCheckout(repo));
 	const src = new FakeSource("issues", "github-issues", success);
 	return { state, config, runner, configPath, src };
 }
@@ -243,19 +258,8 @@ const badgeRow = (frame: string): string => listHalfOf(selectedRow(frame));
 /** How many faces stand in the frame: the list row's, and the detail header's. */
 const faceCount = (frame: string): number => (frame.match(/ starting/g) ?? []).length;
 
-/** Stub a successful live-worktree handoff at the convention checkout. */
-function stubLiveHandoff(runner: FakeRunner, checkout: string): void {
-	runner.set("herdr", ["workspace", "list"], { stdout: workspaceListJson([]) });
-	runner.set("herdr", ["workspace", "create", "--cwd", checkout, "--no-focus"], {
-		stdout: workspaceCreateJson("ws-1"),
-	});
-	runner.set("herdr", ["tab", "create", "--workspace", "ws-1", "--cwd", checkout, "--no-focus"], {
-		stdout: tabCreateJson("pane-1"),
-	});
-}
-
 /** Hold the agent's start itself, so the claim stands in flight on screen. */
-const gateStart = (runner: FakeRunner): GatedRunner =>
+const gateStart = (runner: CommandRunner): GatedRunner =>
 	gatedRunner(runner, (command) => command.includes("agent start"));
 
 /**
@@ -272,10 +276,15 @@ const releaseHeld = async (gate: GatedRunner): Promise<void> => {
 	gate.release();
 };
 
-/** The herdr agent list where pane-1 works. */
+/**
+ * The herdr agent list where the handoff's Agent works.
+ *
+ * The live-worktree handoff makes a fresh tab in the workspace it finds or
+ * creates, so the Agent sits in that tab's pane, the world's second pane.
+ */
 const workingList = () =>
 	agentListJson([
-		{ paneId: "pane-1", tabId: "tab-1", workspaceId: "ws-1", agent: "pi", status: "working" },
+		{ paneId: "pane-2", tabId: "tab-2", workspaceId: "ws-1", agent: "pi", status: "working" },
 	]);
 
 /**
@@ -320,14 +329,12 @@ const settledList = () =>
  * Hold the observation loop's one herdr read, so the frame the test reads
  * stands still until the test lets the next poll land.
  */
-const gatePoll = (runner: FakeRunner): GatedRunner =>
+const gatePoll = (runner: CommandRunner): GatedRunner =>
 	gatedRunner(runner, (command) => command === "herdr agent list");
 
 describe("the Starting window's timeline", () => {
 	test("the manual hand-off wears the face from the keypress to the first observation", async () => {
 		const app = seededApp("open");
-		stubCheckout(app.runner, checkoutOf(app.config));
-		stubLiveHandoff(app.runner, checkoutOf(app.config));
 		app.runner.set("herdr", ["agent", "list"], { stdout: workingList() });
 		const gate = gateStart(app.runner);
 		await withApp(
@@ -364,8 +371,6 @@ describe("the Starting window's timeline", () => {
 
 	test("a failed start drops the face and returns the row to its state", async () => {
 		const app = seededApp("open");
-		stubCheckout(app.runner, checkoutOf(app.config));
-		stubLiveHandoff(app.runner, checkoutOf(app.config));
 		// The workspace create is the failing step: the gate holds it while
 		// the claim stands in flight, and the failure lands on the release.
 		app.runner.set(
@@ -408,8 +413,6 @@ describe("the Starting window's timeline", () => {
 
 	test("the auto hand-off wears the face while its start stands", async () => {
 		const app = seededApp("open", {}, { autoMode: true });
-		stubCheckout(app.runner, checkoutOf(app.config));
-		stubLiveHandoff(app.runner, checkoutOf(app.config));
 		app.runner.set("herdr", ["agent", "list"], { stdout: workingList() });
 		const gate = gateStart(app.runner);
 		await withApp(
@@ -464,7 +467,6 @@ describe("the Starting window's timeline", () => {
 			},
 			{ cause: "failed", transition: outcome },
 		);
-		stubCheckout(app.runner, checkoutOf(app.config));
 		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
 		// The stored workspace still holds: the route reuses it in a new tab,
 		// and the start itself fails on the release.
@@ -538,8 +540,8 @@ describe("the Starting window's timeline", () => {
 				stateNow: () => Date.now() - 60_000,
 				autoMode: true,
 			},
+			"restart",
 		);
-		stubCheckout(app.runner, checkoutOf(app.config));
 		// The new pane the restart lands in stands in the list: unknown while
 		// the start stands, working once it answers, so the markers and the
 		// step to running both come from the list.
@@ -595,7 +597,6 @@ describe("the Starting window's timeline", () => {
 
 	test("a turn that settles under a handed-off ticket ends the face and takes its resting badge", async () => {
 		const app = seededApp("in-flight");
-		stubCheckout(app.runner, checkoutOf(app.config));
 		// The turn's end sits in the agent's session record, so the settle
 		// needs no startup grace (ADR 0017), and the agent is alive in the
 		// poll, so no recovery fact closes the window.
@@ -629,7 +630,6 @@ describe("the Starting window's timeline", () => {
 
 	test("a blocked agent's marker outranks the face on the first observation", async () => {
 		const app = seededApp("in-flight");
-		stubCheckout(app.runner, checkoutOf(app.config));
 		// A blocked agent works no turn, so the settle path never runs: the
 		// ticket stays `handed-off` under the marker the operator must act on.
 		app.runner.set("herdr", ["agent", "list"], {
@@ -667,7 +667,6 @@ describe("the Starting window's timeline", () => {
 
 	test("an awaiting ticket rests on its own face: the window closed", async () => {
 		const app = seededApp("awaiting");
-		stubCheckout(app.runner, checkoutOf(app.config));
 		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
 		await withApp(
 			async (setup) => {
