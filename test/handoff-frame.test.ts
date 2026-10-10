@@ -52,12 +52,23 @@ import { BASE_CONFIG } from "./base-config.ts";
 import { expectNoCommand } from "./command-assertions.ts";
 import {
 	FakeRunner,
+	type RecordedCommand,
 	tabCreateJson,
 	workspaceCreateJson,
 	workspaceListJson,
 	worktreeCreateJson,
 } from "./fake-runner.ts";
+import { type HerdrWorldDescription, stubHerdrWorld } from "./herdr-world.ts";
 import { SAMPLE_TICKETS } from "./sample-tickets.ts";
+
+/**
+ * The egress double the handoff suites inject: the fake command runner and
+ * the Stub herdr world both stand it.
+ */
+interface CommandDouble extends CommandRunner {
+	commands(): string[];
+	set(command: string, args: readonly string[], result: Partial<CommandResult>): void;
+}
 
 /**
  * The runner's commands with the desktop notification's of one standing
@@ -65,7 +76,7 @@ import { SAMPLE_TICKETS } from "./sample-tickets.ts";
  * ride along with the handoff's, and the pinned sequence is the other
  * commands, whatever platform the sender branch picked.
  */
-function handoffCommands(runner: FakeRunner): string[] {
+function handoffCommands(runner: { calls: readonly RecordedCommand[] }): string[] {
 	return runner.calls
 		.filter(
 			(call) =>
@@ -105,17 +116,48 @@ const firstSlug = "retry-policy-for-webhooks";
 const firstAgent = agentNameFor(first);
 const firstPrompt = renderPrompt(templateOf(BASE_CONFIG.taskTypes.implement), first);
 
-/** Stub the git answers for a healthy convention checkout. */
-function stubCheckout(runner: FakeRunner): void {
+/** The healthy convention checkout, stated as a world. */
+function worldCheckout(): HerdrWorldDescription {
+	return {
+		checkouts: [
+			{
+				path: checkout(),
+				cloneUrl: "https://github.com/acme/billing.git",
+				defaultBranch: "main",
+			},
+		],
+	};
+}
+
+/** The standing the pinned live handoff leaves behind, stated as a world. */
+function liveHandoffWorld(): HerdrWorldDescription {
+	const world = worldCheckout();
 	const path = checkout();
-	runner.set("git", ["-C", path, "rev-parse", "--git-dir"], { stdout: ".git\n" });
-	runner.set("git", ["-C", path, "remote", "get-url", "origin"], {
-		stdout: "https://github.com/acme/billing.git\n",
-	});
+	world.workspaces = [{ id: "ws-1", checkoutPath: path }];
+	world.tabs = [
+		{ id: "tab-ws-1", workspaceId: "ws-1", cwd: path },
+		{ id: "tab-1", workspaceId: "ws-1", cwd: path },
+	];
+	world.panes = [
+		{ id: "pane-w", tabId: "tab-ws-1", workspaceId: "ws-1" },
+		{ id: "pane-1", tabId: "tab-1", workspaceId: "ws-1" },
+	];
+	return world;
+}
+
+/** The standing the pinned worktree handoff leaves behind, stated as a world. */
+function worktreeHandoffWorld(): HerdrWorldDescription {
+	const world = worldCheckout();
+	const branch = `factory/${first.externalKey.slice(1)}-${firstSlug}`;
+	const worktreePath = join(home, "worktrees", "billing", branch.replaceAll("/", "-"));
+	world.workspaces = [{ id: "ws-wt", checkoutPath: worktreePath, isWorktree: true }];
+	world.tabs = [{ id: "tab-ws-wt", workspaceId: "ws-wt" }];
+	world.panes = [{ id: "pane-wt", tabId: "tab-ws-wt", workspaceId: "ws-wt" }];
+	return world;
 }
 
 /** Stub a successful live-worktree handoff at the convention checkout. */
-function stubLiveHandoff(runner: FakeRunner): void {
+function stubLiveHandoff(runner: CommandDouble): void {
 	const path = checkout();
 	runner.set("herdr", ["workspace", "list"], { stdout: workspaceListJson([]) });
 	runner.set("herdr", ["workspace", "create", "--cwd", path, "--no-focus"], {
@@ -127,7 +169,7 @@ function stubLiveHandoff(runner: FakeRunner): void {
 }
 
 /** Stub a successful worktree handoff at the convention checkout. */
-function stubWorktreeHandoff(runner: FakeRunner): void {
+function stubWorktreeHandoff(runner: CommandDouble): void {
 	const path = checkout();
 	runner.set(
 		"git",
@@ -162,9 +204,9 @@ function stubWorktreeHandoff(runner: FakeRunner): void {
 /** A runner that delays its first call, so the in-flight state is visible. */
 class DelayedRunner implements CommandRunner {
 	private done = false;
-	private inner: FakeRunner;
+	private inner: CommandRunner;
 	private delayMs: number;
-	constructor(inner: FakeRunner, delayMs: number) {
+	constructor(inner: CommandRunner, delayMs: number) {
 		this.inner = inner;
 		this.delayMs = delayMs;
 	}
@@ -420,8 +462,7 @@ async function pressEnterToHandoff(setup: Setup): Promise<string> {
 
 describe("the Enter handoff", () => {
 	test("hands the selected ticket off with the defaults, settles it, and records the command sequence", async () => {
-		const runner = new FakeRunner();
-		stubCheckout(runner);
+		const runner = stubHerdrWorld(liveHandoffWorld());
 		stubLiveHandoff(runner);
 		const props = { config: BASE_CONFIG, runner, home, configPath };
 		await withApp(
@@ -456,8 +497,7 @@ describe("the Enter handoff", () => {
 		);
 	});
 	test("a failed herdr step leaves the ticket open and shows the reason", async () => {
-		const runner = new FakeRunner();
-		stubCheckout(runner);
+		const runner = stubHerdrWorld(worldCheckout());
 		runner.set("herdr", ["workspace", "list"], {
 			code: 1,
 			stderr: "error: herdr is not running\n",
@@ -484,8 +524,7 @@ describe("the Enter handoff", () => {
 		);
 	});
 	test("an unreadable workspace list fails with a reason and creates no workspace", async () => {
-		const runner = new FakeRunner();
-		stubCheckout(runner);
+		const runner = stubHerdrWorld(worldCheckout());
 		runner.set("herdr", ["workspace", "list"], { stdout: "not a workspace list\n" });
 		const props = { config: BASE_CONFIG, runner, home, configPath };
 		await withApp(
@@ -619,8 +658,7 @@ describe("the Enter handoff", () => {
 
 describe("the in-flight guard", () => {
 	test("a second Enter while a handoff is in flight starts nothing", async () => {
-		const runner = new FakeRunner();
-		stubCheckout(runner);
+		const runner = stubHerdrWorld(liveHandoffWorld());
 		stubLiveHandoff(runner);
 		const slow = new DelayedRunner(runner, 400);
 		const props = { config: BASE_CONFIG, runner: slow, home, configPath };
@@ -641,8 +679,7 @@ describe("the in-flight guard", () => {
 		);
 	});
 	test("two Enters in one tick start one handoff", async () => {
-		const runner = new FakeRunner();
-		stubCheckout(runner);
+		const runner = stubHerdrWorld(liveHandoffWorld());
 		stubLiveHandoff(runner);
 		const slow = new DelayedRunner(runner, 400);
 		const props = { config: BASE_CONFIG, runner: slow, home, configPath };
@@ -661,8 +698,7 @@ describe("the in-flight guard", () => {
 		);
 	});
 	test("j and k keep moving the selection while a handoff is in flight", async () => {
-		const runner = new FakeRunner();
-		stubCheckout(runner);
+		const runner = stubHerdrWorld(liveHandoffWorld());
 		stubLiveHandoff(runner);
 		const slow = new DelayedRunner(runner, 400);
 		const props = { config: BASE_CONFIG, runner: slow, home, configPath };
@@ -694,8 +730,7 @@ describe("the in-flight guard", () => {
 
 describe("the override panel", () => {
 	test("`e` opens the panel, right changes options, enter confirms the handoff", async () => {
-		const runner = new FakeRunner();
-		stubCheckout(runner);
+		const runner = stubHerdrWorld(worktreeHandoffWorld());
 		stubWorktreeHandoff(runner);
 		const props = { config: BASE_CONFIG, runner, home, configPath };
 		await withApp(
@@ -750,8 +785,7 @@ describe("the override panel", () => {
 		);
 	});
 	test("an override that differs from the suggestion rides on the handoff", async () => {
-		const runner = new FakeRunner();
-		stubCheckout(runner);
+		const runner = stubHerdrWorld(liveHandoffWorld());
 		stubLiveHandoff(runner);
 		// The delay holds the pipeline before agent start, so the in-flight
 		// handoff is visible while it is not yet recorded.
@@ -810,8 +844,7 @@ describe("the override panel", () => {
 		);
 	});
 	test("a failure after agent start keeps the actual task type on the row", async () => {
-		const runner = new FakeRunner();
-		stubCheckout(runner);
+		const runner = stubHerdrWorld(liveHandoffWorld());
 		stubLiveHandoff(runner);
 		const fixPrompt = renderPrompt(templateOf(BASE_CONFIG.taskTypes.fix), first);
 		runner.set("herdr", ["agent", "prompt", firstAgent, fixPrompt], {
@@ -880,8 +913,7 @@ describe("the override panel", () => {
 	});
 
 	test("a task profile prefills the detail and panel, then starts its agent with all settings", async () => {
-		const runner = new FakeRunner();
-		stubCheckout(runner);
+		const runner = stubHerdrWorld(liveHandoffWorld());
 		stubLiveHandoff(runner);
 		const config: FactoryConfig = {
 			...BASE_CONFIG,
@@ -945,8 +977,7 @@ describe("the override panel", () => {
 	});
 
 	test("an open ticket of a second work cycle shows what Enter starts, not its last cycle", async () => {
-		const runner = new FakeRunner();
-		stubCheckout(runner);
+		const runner = stubHerdrWorld(liveHandoffWorld());
 		stubLiveHandoff(runner);
 		// The cycle that closed ran on an agent that maps every setting; the
 		// profile the ticket now resolves takes another agent and names none of
@@ -1027,8 +1058,7 @@ describe("the override panel", () => {
 	});
 
 	test("a model rejected by the profiled agent fails and leaves the ticket open", async () => {
-		const runner = new FakeRunner();
-		stubCheckout(runner);
+		const runner = stubHerdrWorld(liveHandoffWorld());
 		stubLiveHandoff(runner);
 		runner.set(
 			"herdr",
@@ -1075,8 +1105,7 @@ describe("the override panel", () => {
 	});
 
 	test("clearing a profiled Model row leaves it to the agent", async () => {
-		const runner = new FakeRunner();
-		stubCheckout(runner);
+		const runner = stubHerdrWorld(liveHandoffWorld());
 		stubLiveHandoff(runner);
 		const config: FactoryConfig = {
 			...BASE_CONFIG,
@@ -1116,8 +1145,7 @@ describe("the override panel", () => {
 	});
 
 	test("clearing a profiled Thinking list row leaves it to the agent", async () => {
-		const runner = new FakeRunner();
-		stubCheckout(runner);
+		const runner = stubHerdrWorld(liveHandoffWorld());
 		stubLiveHandoff(runner);
 		const config: FactoryConfig = {
 			...BASE_CONFIG,
@@ -1154,8 +1182,7 @@ describe("the override panel", () => {
 	});
 
 	test("a model no agent argument can carry fails the handoff and keeps the ticket open", async () => {
-		const runner = new FakeRunner();
-		stubCheckout(runner);
+		const runner = stubHerdrWorld(liveHandoffWorld());
 		stubLiveHandoff(runner);
 		// The profile sends its handoffs to an agent that maps no setting, and
 		// the default model still resolves onto it.
@@ -1190,8 +1217,7 @@ describe("the override panel", () => {
 	});
 
 	test("the panel keeps an unmappable model in reach, and clearing it starts the handoff", async () => {
-		const runner = new FakeRunner();
-		stubCheckout(runner);
+		const runner = stubHerdrWorld(liveHandoffWorld());
 		stubLiveHandoff(runner);
 		const config: FactoryConfig = {
 			...BASE_CONFIG,
@@ -1255,8 +1281,7 @@ describe("the override panel", () => {
 	});
 
 	test("a task type thinking default shows in the panel and rides on the start", async () => {
-		const runner = new FakeRunner();
-		stubCheckout(runner);
+		const runner = stubHerdrWorld(liveHandoffWorld());
 		stubLiveHandoff(runner);
 		const config: FactoryConfig = {
 			...BASE_CONFIG,
@@ -1298,8 +1323,7 @@ describe("the override panel", () => {
 		);
 	});
 	test("switching the task type re-derives an untouched thinking row", async () => {
-		const runner = new FakeRunner();
-		stubCheckout(runner);
+		const runner = stubHerdrWorld(liveHandoffWorld());
 		stubLiveHandoff(runner);
 		const config: FactoryConfig = {
 			...BASE_CONFIG,
@@ -1351,8 +1375,7 @@ describe("the override panel", () => {
 		);
 	});
 	test("a touched thinking row survives a task type switch", async () => {
-		const runner = new FakeRunner();
-		stubCheckout(runner);
+		const runner = stubHerdrWorld(liveHandoffWorld());
 		stubLiveHandoff(runner);
 		const config: FactoryConfig = {
 			...BASE_CONFIG,
@@ -1513,8 +1536,7 @@ describe("the override panel", () => {
 	});
 
 	test("switching the task type re-derives an untouched Context row", async () => {
-		const runner = new FakeRunner();
-		stubCheckout(runner);
+		const runner = stubHerdrWorld(liveHandoffWorld());
 		stubLiveHandoff(runner);
 		// A second profile on the same agent, naming another count: the row
 		// follows the task type instead of hiding behind an agent.
@@ -1581,8 +1603,7 @@ describe("the override panel", () => {
 	});
 
 	test("the Context row carries the profile's count and takes digits only", async () => {
-		const runner = new FakeRunner();
-		stubCheckout(runner);
+		const runner = stubHerdrWorld(liveHandoffWorld());
 		stubLiveHandoff(runner);
 		const props = { config: contextProfileConfig, runner, home, configPath };
 
@@ -1650,8 +1671,7 @@ describe("the override panel", () => {
 	});
 
 	test("the Context row folds a typed count to one spelling, the way the config does", async () => {
-		const runner = new FakeRunner();
-		stubCheckout(runner);
+		const runner = stubHerdrWorld(liveHandoffWorld());
 		stubLiveHandoff(runner);
 		const props = { config: contextProfileConfig, runner, home, configPath };
 
@@ -1691,8 +1711,7 @@ describe("the override panel", () => {
 	});
 
 	test("a Context row that holds no count says so, and the handoff refuses it", async () => {
-		const runner = new FakeRunner();
-		stubCheckout(runner);
+		const runner = stubHerdrWorld(liveHandoffWorld());
 		stubLiveHandoff(runner);
 		const props = { config: contextProfileConfig, runner, home, configPath };
 
@@ -1740,8 +1759,7 @@ describe("the override panel", () => {
 	});
 
 	test("a Context row survives an Agent that cannot map it until it is cleared", async () => {
-		const runner = new FakeRunner();
-		stubCheckout(runner);
+		const runner = stubHerdrWorld(liveHandoffWorld());
 		stubLiveHandoff(runner);
 		// pi maps no context window, so the count the profile names has no argv
 		// to ride on: the handoff would fail on it.
@@ -1838,8 +1856,7 @@ describe("the override panel", () => {
 	});
 
 	test("a Thinking level the chosen Agent does not offer warns on its row, and fails the handoff", async () => {
-		const runner = new FakeRunner();
-		stubCheckout(runner);
+		const runner = stubHerdrWorld(liveHandoffWorld());
 		stubLiveHandoff(runner);
 		// "minimal" is legal for pi, the profile's own agent, so the panel opens
 		// on it. zed maps a thinking template but offers only two other levels:
@@ -1948,8 +1965,7 @@ describe("the override panel", () => {
 	});
 
 	test("the free-text model row accepts typed text and confirms the handoff", async () => {
-		const runner = new FakeRunner();
-		stubCheckout(runner);
+		const runner = stubHerdrWorld(liveHandoffWorld());
 		stubLiveHandoff(runner);
 		const props = { config: BASE_CONFIG, runner, home, configPath };
 		await withApp(
@@ -2014,8 +2030,7 @@ describe("the override panel", () => {
 		);
 	});
 	test("a non-ASCII model name types into the free-text row and rides on the start", async () => {
-		const runner = new FakeRunner();
-		stubCheckout(runner);
+		const runner = stubHerdrWorld(liveHandoffWorld());
 		stubLiveHandoff(runner);
 		const props = { config: BASE_CONFIG, runner, home, configPath };
 		await withApp(
@@ -2164,8 +2179,7 @@ describe("the override panel", () => {
 		);
 	});
 	test("e opens the Override panel while a handoff is in flight (ADR 0064)", async () => {
-		const runner = new FakeRunner();
-		stubCheckout(runner);
+		const runner = stubHerdrWorld(liveHandoffWorld());
 		stubLiveHandoff(runner);
 		const slow = new DelayedRunner(runner, 400);
 		const props = { config: BASE_CONFIG, runner: slow, home, configPath };
@@ -2230,8 +2244,7 @@ describe("the override panel", () => {
 		);
 	});
 	test("j, k, h, and l type into the selected free-text row", async () => {
-		const runner = new FakeRunner();
-		stubCheckout(runner);
+		const runner = stubHerdrWorld(liveHandoffWorld());
 		stubLiveHandoff(runner);
 		const props = { config: BASE_CONFIG, runner, home, configPath };
 		await withApp(
@@ -2274,8 +2287,7 @@ describe("the override panel", () => {
 		);
 	});
 	test("the free-text row moves the caret and inserts at it", async () => {
-		const runner = new FakeRunner();
-		stubCheckout(runner);
+		const runner = stubHerdrWorld(liveHandoffWorld());
 		stubLiveHandoff(runner);
 		const props = { config: BASE_CONFIG, runner, home, configPath };
 		await withApp(
@@ -2318,8 +2330,7 @@ describe("the override panel", () => {
 		);
 	});
 	test("the free-text row jumps to the ends with Home and End", async () => {
-		const runner = new FakeRunner();
-		stubCheckout(runner);
+		const runner = stubHerdrWorld(liveHandoffWorld());
 		stubLiveHandoff(runner);
 		const props = { config: BASE_CONFIG, runner, home, configPath };
 		await withApp(
@@ -2364,8 +2375,7 @@ describe("the override panel", () => {
 		);
 	});
 	test("the free-text row deletes with backspace and forward delete", async () => {
-		const runner = new FakeRunner();
-		stubCheckout(runner);
+		const runner = stubHerdrWorld(liveHandoffWorld());
 		stubLiveHandoff(runner);
 		const props = { config: BASE_CONFIG, runner, home, configPath };
 		await withApp(
@@ -2414,8 +2424,7 @@ describe("the override panel", () => {
 		);
 	});
 	test("the free-text row deletes a caret selection", async () => {
-		const runner = new FakeRunner();
-		stubCheckout(runner);
+		const runner = stubHerdrWorld(liveHandoffWorld());
 		stubLiveHandoff(runner);
 		const props = { config: BASE_CONFIG, runner, home, configPath };
 		await withApp(
@@ -2459,8 +2468,7 @@ describe("the override panel", () => {
 		);
 	});
 	test("the free-text row undoes with Ctrl+Z and redoes with Ctrl+Y", async () => {
-		const runner = new FakeRunner();
-		stubCheckout(runner);
+		const runner = stubHerdrWorld(liveHandoffWorld());
 		stubLiveHandoff(runner);
 		const props = { config: BASE_CONFIG, runner, home, configPath };
 		await withApp(
@@ -2514,8 +2522,7 @@ describe("the override panel", () => {
 		);
 	});
 	test("bracketed paste works in the free-text Model row of a kind with no model list", async () => {
-		const runner = new FakeRunner();
-		stubCheckout(runner);
+		const runner = stubHerdrWorld(liveHandoffWorld());
 		stubLiveHandoff(runner);
 		const props = { config: BASE_CONFIG, runner, home, configPath };
 		await withApp(
@@ -2557,8 +2564,7 @@ describe("the override panel", () => {
 		);
 	});
 	test("a bracketed paste is sanitized of ANSI escapes and line breaks", async () => {
-		const runner = new FakeRunner();
-		stubCheckout(runner);
+		const runner = stubHerdrWorld(liveHandoffWorld());
 		stubLiveHandoff(runner);
 		const props = { config: BASE_CONFIG, runner, home, configPath };
 		await withApp(
@@ -2639,8 +2645,7 @@ describe("the override panel", () => {
 		);
 	});
 	test("a long free-text value scrolls in its column and hands off whole", async () => {
-		const runner = new FakeRunner();
-		stubCheckout(runner);
+		const runner = stubHerdrWorld(liveHandoffWorld());
 		stubLiveHandoff(runner);
 		const props = { config: BASE_CONFIG, runner, home, configPath };
 		// biome-ignore lint/security/noSecrets: a fixed test fixture, not a credential
@@ -2742,8 +2747,7 @@ describe("the override panel", () => {
 		);
 	});
 	test("typing and confirming in one tick hands off the complete value", async () => {
-		const runner = new FakeRunner();
-		stubCheckout(runner);
+		const runner = stubHerdrWorld(liveHandoffWorld());
 		stubLiveHandoff(runner);
 		const props = { config: BASE_CONFIG, runner, home, configPath };
 		await withApp(
@@ -2966,8 +2970,7 @@ describe("the override panel", () => {
 	 */
 	function modelListRowScenarios(size: PanelSize): void {
 		test(`the Model search names the first model that holds its text (${size.width}x${size.height})`, async () => {
-			const runner = new FakeRunner();
-			stubCheckout(runner);
+			const runner = stubHerdrWorld(liveHandoffWorld());
 			stubLiveHandoff(runner);
 			// The panel keeps the order the agent reported: pi sorts the list itself.
 			runner.setModelList("pi", [
@@ -3008,8 +3011,7 @@ describe("the override panel", () => {
 			);
 		});
 		test(`a query that matches nothing keeps its text and says so (${size.width}x${size.height})`, async () => {
-			const runner = new FakeRunner();
-			stubCheckout(runner);
+			const runner = stubHerdrWorld(liveHandoffWorld());
 			stubLiveHandoff(runner);
 			runner.setModelList("pi", [
 				"anthropic/claude-sonnet-4-5",
@@ -3063,8 +3065,7 @@ describe("the override panel", () => {
 			);
 		});
 		test(`Delete on an empty search gives the Model back to the agent (${size.width}x${size.height})`, async () => {
-			const runner = new FakeRunner();
-			stubCheckout(runner);
+			const runner = stubHerdrWorld(liveHandoffWorld());
 			stubLiveHandoff(runner);
 			runner.setModelList("pi", ["anthropic/claude-sonnet-4-5", "openai/gpt-5.1"]);
 			const props = { config: BASE_CONFIG, runner, home, configPath };
@@ -3099,8 +3100,7 @@ describe("the override panel", () => {
 		});
 		test(`an unset Model is not a warning with any available list (${size.width}x${size.height})`, async () => {
 			for (const models of [["anthropic/claude-sonnet-4-5"], []] as const) {
-				const runner = new FakeRunner();
-				stubCheckout(runner);
+				const runner = stubHerdrWorld(liveHandoffWorld());
 				stubLiveHandoff(runner);
 				runner.setModelList("pi", [...models]);
 				const props = { config: BASE_CONFIG, runner, home, configPath };
@@ -3122,8 +3122,7 @@ describe("the override panel", () => {
 			}
 		});
 		test(`the Model row holds a loading marker while the control plane fetches the list (${size.width}x${size.height})`, async () => {
-			const runner = new FakeRunner();
-			stubCheckout(runner);
+			const runner = stubHerdrWorld(liveHandoffWorld());
 			stubLiveHandoff(runner);
 			runner.setModelList("pi", ["anthropic/claude-sonnet-4-5"]);
 			runner.holdModelLists();
@@ -3167,8 +3166,7 @@ describe("the override panel", () => {
 			);
 		});
 		test(`the Model row says so when the agent reports no models (${size.width}x${size.height})`, async () => {
-			const runner = new FakeRunner();
-			stubCheckout(runner);
+			const runner = stubHerdrWorld(liveHandoffWorld());
 			stubLiveHandoff(runner);
 			runner.setModelList("pi", []);
 			const props = { config: BASE_CONFIG, runner, home, configPath };
@@ -3191,8 +3189,7 @@ describe("the override panel", () => {
 			);
 		});
 		test(`a Model the selected agent cannot run shows in the warning color (${size.width}x${size.height})`, async () => {
-			const runner = new FakeRunner();
-			stubCheckout(runner);
+			const runner = stubHerdrWorld(liveHandoffWorld());
 			stubLiveHandoff(runner);
 			runner.setModelList("pi", ["anthropic/claude-sonnet-4-5"]);
 			const config: FactoryConfig = {
@@ -3233,8 +3230,7 @@ describe("the override panel", () => {
 			);
 		});
 		test(`a Model the config prefilled is not judged while its list loads (${size.width}x${size.height})`, async () => {
-			const runner = new FakeRunner();
-			stubCheckout(runner);
+			const runner = stubHerdrWorld(liveHandoffWorld());
 			stubLiveHandoff(runner);
 			runner.setModelList("pi", ["anthropic/claude-sonnet-4-5", "openai/gpt-4o"]);
 			runner.holdModelLists();
@@ -3282,8 +3278,7 @@ describe("the override panel", () => {
 			);
 		});
 		test(`a Thinking level the selected agent does not declare shows in the warning color (${size.width}x${size.height})`, async () => {
-			const runner = new FakeRunner();
-			stubCheckout(runner);
+			const runner = stubHerdrWorld(liveHandoffWorld());
 			stubLiveHandoff(runner);
 			runner.setModelList("pi", ["anthropic/claude-sonnet-4-5"]);
 			const config: FactoryConfig = {
@@ -3325,8 +3320,7 @@ describe("the override panel", () => {
 			);
 		});
 		test(`switching the agent keeps an untouched Model and queries the new agent's list (${size.width}x${size.height})`, async () => {
-			const runner = new FakeRunner();
-			stubCheckout(runner);
+			const runner = stubHerdrWorld(liveHandoffWorld());
 			stubLiveHandoff(runner);
 			runner.setModelList("pi", ["anthropic/claude-sonnet-4-5"]);
 			const config: FactoryConfig = {
@@ -3353,8 +3347,7 @@ describe("the override panel", () => {
 			);
 		});
 		test(`switching the task type re-derives an untouched Model row (${size.width}x${size.height})`, async () => {
-			const runner = new FakeRunner();
-			stubCheckout(runner);
+			const runner = stubHerdrWorld(liveHandoffWorld());
 			stubLiveHandoff(runner);
 			runner.setModelList("pi", ["anthropic/claude-sonnet-4-5", "openai/gpt-5.1"]);
 			const config: FactoryConfig = {
@@ -3410,8 +3403,7 @@ describe("the override panel", () => {
 			);
 		});
 		test(`a Model wider than its column shows its end and rides on whole (${size.width}x${size.height})`, async () => {
-			const runner = new FakeRunner();
-			stubCheckout(runner);
+			const runner = stubHerdrWorld(liveHandoffWorld());
 			stubLiveHandoff(runner);
 			// A real agent list carries one long provider in front of many models:
 			// the head of the value says nothing the neighbour's head does not.
@@ -3443,8 +3435,7 @@ describe("the override panel", () => {
 			);
 		});
 		test(`a failed model list query falls the Model row back to free text (${size.width}x${size.height})`, async () => {
-			const runner = new FakeRunner();
-			stubCheckout(runner);
+			const runner = stubHerdrWorld(liveHandoffWorld());
 			stubLiveHandoff(runner);
 			runner.setModelListFailure("pi", "network unreachable");
 			const props = { config: BASE_CONFIG, runner, home, configPath };
@@ -3465,8 +3456,7 @@ describe("the override panel", () => {
 			);
 		});
 		test(`a Model row the agent's kind cannot list names that cause (${size.width}x${size.height})`, async () => {
-			const runner = new FakeRunner();
-			stubCheckout(runner);
+			const runner = stubHerdrWorld(liveHandoffWorld());
 			stubLiveHandoff(runner);
 			const config: FactoryConfig = { ...BASE_CONFIG, defaultAgent: "codex" };
 			const props = { config, runner, home, configPath };
@@ -3485,8 +3475,7 @@ describe("the override panel", () => {
 			);
 		});
 		test(`a Model the operator typed survives a task type switch (${size.width}x${size.height})`, async () => {
-			const runner = new FakeRunner();
-			stubCheckout(runner);
+			const runner = stubHerdrWorld(liveHandoffWorld());
 			stubLiveHandoff(runner);
 			runner.setModelList("pi", ["anthropic/claude-sonnet-4-5", "openai/gpt-5.1"]);
 			const config: FactoryConfig = {
@@ -3533,8 +3522,7 @@ describe("the override panel", () => {
 			);
 		});
 		test(`a Model the operator cleared survives a task type switch (${size.width}x${size.height})`, async () => {
-			const runner = new FakeRunner();
-			stubCheckout(runner);
+			const runner = stubHerdrWorld(liveHandoffWorld());
 			stubLiveHandoff(runner);
 			runner.setModelList("pi", ["anthropic/claude-sonnet-4-5", "openai/gpt-5.1"]);
 			// A list that arrives late shows why an untouched row alone is not enough:
@@ -3588,8 +3576,7 @@ describe("the override panel", () => {
 			);
 		});
 		test(`switching the task type re-derives an untouched Agent row (${size.width}x${size.height})`, async () => {
-			const runner = new FakeRunner();
-			stubCheckout(runner);
+			const runner = stubHerdrWorld(liveHandoffWorld());
 			stubLiveHandoff(runner);
 			runner.setModelList("pi", ["anthropic/claude-sonnet-4-5"]);
 			const config: FactoryConfig = {
@@ -3668,12 +3655,10 @@ describe("the override panel", () => {
 		// 24 columns leaves a row's value six cells, so every hint is cut. A cut
 		// hint keeps its front: the cut marker says "the end of a longer name",
 		// and a hint is not a name.
-		const none = new FakeRunner();
-		stubCheckout(none);
+		const none = stubHerdrWorld(liveHandoffWorld());
 		stubLiveHandoff(none);
 		none.setModelList("pi", []);
-		const held = new FakeRunner();
-		stubCheckout(held);
+		const held = stubHerdrWorld(liveHandoffWorld());
 		stubLiveHandoff(held);
 		held.setModelList("pi", ["anthropic/claude-sonnet-4-5"]);
 		held.holdModelLists();
@@ -3705,8 +3690,7 @@ describe("the override panel", () => {
 		);
 	});
 	test("the Thinking row offers the selected agent's levels, and backspace clears it", async () => {
-		const runner = new FakeRunner();
-		stubCheckout(runner);
+		const runner = stubHerdrWorld(liveHandoffWorld());
 		stubLiveHandoff(runner);
 		const config: FactoryConfig = { ...BASE_CONFIG, defaultAgent: "claude" };
 		const props = { config, runner, home, configPath };
@@ -3743,8 +3727,7 @@ describe("the override panel", () => {
 		);
 	});
 	test("a failed worktree handoff removes its residue and keeps the ticket open", async () => {
-		const runner = new FakeRunner();
-		stubCheckout(runner);
+		const runner = stubHerdrWorld(worktreeHandoffWorld());
 		stubWorktreeHandoff(runner);
 		runner.set("herdr", ["agent", "start", firstAgent, "--kind", "pi", "--pane", "pane-wt"], {
 			code: 1,

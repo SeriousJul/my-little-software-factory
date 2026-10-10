@@ -25,6 +25,7 @@ import type { KeyEvent } from "@opentui/core";
 import type { AppProps } from "../src/components/app.ts";
 import type { FactoryConfig } from "../src/config.ts";
 import type { FetchedTicket } from "../src/domain/ticket.ts";
+import type { CommandResult, CommandRunner } from "../src/runner.ts";
 import type { FactoryState } from "../src/state.ts";
 import { openFactoryState } from "../src/state.ts";
 import type { FetchOutcome } from "../src/ticket-source.ts";
@@ -62,6 +63,7 @@ import {
 	workspaceListJson,
 } from "./fake-runner.ts";
 import { FakeSource } from "./fake-source.ts";
+import { type HerdrWorldDescription, stubHerdrWorld } from "./herdr-world.ts";
 import { flushPassiveNow } from "./passive-flush-hold.ts";
 import { SAMPLE_TICKETS } from "./sample-tickets.ts";
 
@@ -144,19 +146,46 @@ const success: FetchOutcome = {
 	tickets: [fetched()],
 };
 
-/** Stub the git answers for the checkout the config maps to. */
-function stubCheckout(app: SeededApp): void {
-	const path = Object.values(app.config.repos)[0];
-	app.runner.set("git", ["-C", path, "rev-parse", "--git-dir"], { stdout: ".git\n" });
-	app.runner.set("git", ["-C", path, "remote", "get-url", "origin"], {
-		stdout: `https://${repoIdentity}.git\n`,
-	});
+/** The checkout the config maps to, stated as a world. */
+function worldCheckout(path: string): HerdrWorldDescription {
+	return {
+		checkouts: [
+			{
+				path,
+				cloneUrl: `https://${repoIdentity}.git`,
+				defaultBranch: "main",
+			},
+		],
+	};
+}
+
+/** The standing the routed handoff's pinned launch leaves behind. */
+function routeWorld(path: string): HerdrWorldDescription {
+	const world = worldCheckout(path);
+	world.workspaces = [{ id: "ws-1", checkoutPath: path }];
+	world.tabs = [
+		{ id: "tab-1", workspaceId: "ws-1", cwd: path },
+		{ id: "tab-9", workspaceId: "ws-1", cwd: path },
+	];
+	world.panes = [
+		{ id: "pane-1", tabId: "tab-1", workspaceId: "ws-1" },
+		{ id: "pane-9", tabId: "tab-9", workspaceId: "ws-1" },
+	];
+	return world;
+}
+
+/** The runner the seeded app holds: the world when a test states one, the
+ * pin table when it does not.
+ */
+interface SeededRunner extends CommandRunner {
+	commands(): string[];
+	set(command: string, args: readonly string[], result: Partial<CommandResult>): void;
 }
 
 interface SeededApp {
 	state: FactoryState;
 	config: FactoryConfig;
-	runner: FakeRunner;
+	runner: SeededRunner;
 	configPath: string;
 	src: FakeSource;
 }
@@ -201,7 +230,10 @@ function seedInFlight(): FactoryState {
 }
 
 /** A seeded in-flight state plus the app props that match it. */
-function seededApp(extra: Partial<FactoryConfig> = {}): SeededApp {
+function seededApp(
+	extra: Partial<FactoryConfig> = {},
+	world: ((path: string) => HerdrWorldDescription) | undefined = undefined,
+): SeededApp {
 	const state = seedInFlight();
 	const path = mkdtempSync(join(tmpdir(), "factory-live-checkout-"));
 	paths.push(path);
@@ -226,7 +258,7 @@ function seededApp(extra: Partial<FactoryConfig> = {}): SeededApp {
 		},
 		...extra,
 	};
-	const runner = new FakeRunner();
+	const runner = world === undefined ? new FakeRunner() : stubHerdrWorld(world(path));
 	const src = new FakeSource("issues", "github-issues", success);
 	return { state, config, runner, configPath, src };
 }
@@ -979,8 +1011,7 @@ describe("the Live view against a running factory", () => {
 	});
 
 	test("a routed handoff from the decision sub-mode falls back to the list, and the Live view follows the new pane (ADR 0072)", async () => {
-		const app = seededApp();
-		stubCheckout(app);
+		const app = seededApp({}, (p) => routeWorld(p));
 		const checkoutPath = Object.values(app.config.repos)[0];
 		// The settled agent's pane and the new agent's pane, both live, so
 		// the stream can move to the new pane the moment the handoff settles.
@@ -1010,6 +1041,13 @@ describe("the Live view against a running factory", () => {
 		app.runner.set("herdr", ["tab", "create", "--workspace", "ws-1", "--no-focus"], {
 			stdout: tabCreateJson("pane-9", "tab-9"),
 		});
+		// The settled ticket's label write goes through the GitHub side, which the
+		// world does not hold: the pin stands it.
+		app.runner.set(
+			"gh",
+			["issue", "edit", "#5", "--repo", repoIdentity, "--add-label", "ready-for-review"],
+			{ code: 0 },
+		);
 		app.runner.set("herdr", [...READ("pane-1")], {
 			stdout: "the implementer is finishing\n",
 		});
@@ -1090,8 +1128,7 @@ describe("the Live view against a running factory", () => {
 	}
 
 	test("an Enter in the window between the Live view's last frame and its key release runs no stale behavior (issue #317)", async () => {
-		const app = seededApp();
-		stubCheckout(app);
+		const app = seededApp({}, (p) => routeWorld(p));
 		const checkoutPath = Object.values(app.config.repos)[0];
 		const list = (status1: string, status9: string) =>
 			agentListJson([
@@ -1118,6 +1155,13 @@ describe("the Live view against a running factory", () => {
 		app.runner.set("herdr", ["tab", "create", "--workspace", "ws-1", "--no-focus"], {
 			stdout: tabCreateJson("pane-9", "tab-9"),
 		});
+		// The settled ticket's label write goes through the GitHub side, which the
+		// world does not hold: the pin stands it.
+		app.runner.set(
+			"gh",
+			["issue", "edit", "#5", "--repo", repoIdentity, "--add-label", "ready-for-review"],
+			{ code: 0 },
+		);
 		app.runner.set("herdr", [...READ("pane-1")], { stdout: "the implementer is finishing\n" });
 		app.runner.set("herdr", [...READ("pane-9")], { stdout: "the reviewer is on it\n" });
 
@@ -1254,8 +1298,7 @@ describe("the Live view against a running factory", () => {
 	});
 
 	test("a route confirmed through the override falls back to the list, and the Live view follows the new pane (ADR 0072)", async () => {
-		const app = seededApp();
-		stubCheckout(app);
+		const app = seededApp({}, (p) => routeWorld(p));
 		const checkoutPath = Object.values(app.config.repos)[0];
 		const list = (implementerStatus: string, reviewerStatus: string) =>
 			agentListJson([
@@ -1282,6 +1325,13 @@ describe("the Live view against a running factory", () => {
 		app.runner.set("herdr", ["tab", "create", "--workspace", "ws-1", "--no-focus"], {
 			stdout: tabCreateJson("pane-9", "tab-9"),
 		});
+		// The settled ticket's label write goes through the GitHub side, which the
+		// world does not hold: the pin stands it.
+		app.runner.set(
+			"gh",
+			["issue", "edit", "#5", "--repo", repoIdentity, "--add-label", "ready-for-review"],
+			{ code: 0 },
+		);
 		app.runner.set("herdr", [...READ("pane-1")], { stdout: "the implementer is finishing\n" });
 		app.runner.set("herdr", [...READ("pane-9")], { stdout: "the reviewer is on it\n" });
 
