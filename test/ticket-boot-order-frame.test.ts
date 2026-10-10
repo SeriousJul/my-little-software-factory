@@ -124,6 +124,7 @@ describe("the Ticket list's order through the boot", () => {
 		// healthy, the same three Tickets this run's fetches answer with.
 		const planeRecord = await plane({
 			config,
+			groupingAxis: "none",
 			sources: [
 				{
 					config: issuesConfig,
