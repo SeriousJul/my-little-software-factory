@@ -11,29 +11,20 @@
  * spawns none.
  */
 
-import { afterEach, describe, expect, spyOn, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { describe, expect, spyOn, test } from "bun:test";
 import { join } from "node:path";
 
 import { AttentionService, DESKTOP_NOTIFICATION_APP_NAME } from "../src/attention.ts";
-import type { FactoryConfig } from "../src/config.ts";
+import type { FactoryConfig, TicketSourceConfig } from "../src/config.ts";
 import type { FetchedTicket } from "../src/domain/ticket.ts";
 import type { CommandOptions, CommandResult, CommandRunner } from "../src/runner.ts";
-import { openFactoryState } from "../src/state.ts";
 import type { FetchOutcome } from "../src/ticket-source.ts";
-import { awaitFrame, HEIGHT, messageRowOf, press, settle, WIDTH, withApp } from "./app-harness.ts";
+import { awaitFrame, HEIGHT, messageRowOf, press, settle, waitSourceHealthy, WIDTH, withApp } from "./app-harness.ts";
 import { BASE_CONFIG } from "./base-config.ts";
-import { agentListJson, FakeRunner, type RecordedCommand } from "./fake-runner.ts";
+import { FakeRunner, type RecordedCommand } from "./fake-runner.ts";
 import { FakeSource } from "./fake-source.ts";
-import { SAMPLE_TICKETS } from "./sample-tickets.ts";
-import { cleanupStateFixtures } from "./state-fixture.ts";
-
-const home = mkdtempSync(join(tmpdir(), "factory-attention-"));
-afterEach(() => {
-	cleanupStateFixtures();
-	rmSync(home, { recursive: true, force: true });
-});
+import { plane, ticketOf } from "./seeded-plane.ts";
+import { success } from "./state-fixture.ts";
 
 /** Let a fire-and-forget send settle through the fake runner. */
 const flush = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
@@ -81,7 +72,6 @@ function makeService(
  * hold so the ask the park holds is the one that runs.
  */
 const PARK_IDENTITY = "github:github.com:I_5";
-const parkSource = { name: "issues", kind: "github-issues" };
 const parkTicket: FetchedTicket = {
 	identity: PARK_IDENTITY,
 	sourceKind: "github-issue",
@@ -121,19 +111,47 @@ const parkChoice = {
 };
 
 /** The failing-handoff stubs: the handoff dies on its workspace list. */
-function failingHandoffRunner(): FakeRunner {
-	const runner = new FakeRunner();
+function failingHandoffCommands(fake: FakeRunner, home: string): void {
 	const path = join(home, "src", "billing");
-	runner.set("git", ["-C", path, "rev-parse", "--git-dir"], { stdout: ".git\n" });
-	runner.set("git", ["-C", path, "remote", "get-url", "origin"], {
+	fake.set("git", ["-C", path, "rev-parse", "--git-dir"], { stdout: ".git\n" });
+	fake.set("git", ["-C", path, "remote", "get-url", "origin"], {
 		stdout: "https://github.com/acme/billing.git\n",
 	});
-	runner.set("herdr", ["workspace", "list"], {
+	fake.set("herdr", ["workspace", "list"], {
 		code: 1,
 		stderr: "error: the daemon is down\n",
 	});
-	return runner;
 }
+
+/**
+ * The one open Ticket the handoff-key tests stand the plane on: the first sample
+ * row, under its own source with its repository mapped.
+ */
+const singleTicket: FetchedTicket = {
+	identity: "github:github.com:I_1",
+	sourceKind: "github-issue",
+	externalKey: "#1",
+	sourceState: "open",
+	url: "https://github.com/acme/billing/issues/1",
+	title: "Retry policy for webhooks",
+	description:
+		"Webhooks dropped during the outage were never redelivered. Add an exponential-backoff retry policy to the dispatcher, with a dead-letter queue for payloads that exhaust their retries.",
+	labels: ["ready-for-agent"],
+	externalUpdatedAt: "2026-08-31T10:00:00Z",
+	repository: {
+		identity: "github.com/acme/billing",
+		displayName: "acme/billing",
+		cloneUrl: "https://github.com/acme/billing.git",
+	},
+	attributes: {},
+};
+const singleTicketConfig: TicketSourceConfig = {
+	name: "issues",
+	kind: "github-issues",
+	refreshIntervalSeconds: 60,
+	repositories: ["acme/billing"],
+	host: "github.com",
+};
 
 describe("the desktop notification's per-platform send", () => {
 	test("Linux: notify-send with the app name, the fixed title, and the full text", () => {
@@ -375,71 +393,87 @@ describe("the Message line's fact to the desktop", () => {
 		// result of a clean refresh stands on the line as nothing at all:
 		// neither is a standing warning or error fact, so the desktop stays
 		// quiet.
-		const state = openFactoryState(join(home, "state.sqlite"));
 		const empty = {
 			status: "success" as const,
 			fetchedAt: "2026-10-01T10:00:00.000Z",
 			tickets: [],
 		};
-		const source = new FakeSource("tickets", "test", empty);
-		const runner = new FakeRunner();
-		// The observation loop's own read stays hermetic: a readable agent
-		// list, so its only fact is the one with no state change at all.
-		runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
-		try {
-			await withApp(
-				async (setup) => {
-					// The boot's own refresh runs first; settle it, so the manual
-					// refresh the key starts is the one the test drives.
-					const deadline = Date.now() + 4000;
-					while (source.calls < 1) {
-						if (Date.now() >= deadline) throw new Error("timed out: the initial refresh to start");
-						await new Promise((resolve) => setTimeout(resolve, 5));
-					}
-					source.settle(empty);
-					// The `r` control writes the refresh's Working line...
-					await press(setup, "r", "the refresh's working line", (f) =>
-						f.includes("refreshing 1 sources"),
-					);
-					expect(notificationCalls(runner)).toHaveLength(0);
-					// ...and the clean result leaves no standing fact at all.
-					source.settle(empty);
-					await awaitFrame(setup, (f) => !f.includes("refreshing"), "the working line to clear");
-					expect(notificationCalls(runner)).toHaveLength(0);
+		const planeRecord = await plane({
+			groupingAxis: "none",
+			sources: [{
+				config: {
+					name: "tickets",
+					kind: "github-issues",
+					refreshIntervalSeconds: 60,
+					repositories: [],
+					host: "github.com",
 				},
-				{
-					width: WIDTH,
-					height: HEIGHT,
-					props: { config: BASE_CONFIG, runner, state, sources: [source] },
-				},
-			);
-		} finally {
-			state.close();
-		}
-	});
-
-	test("a fault error fact sends one notification, the identical standing fact none", async () => {
-		// The fault split (ADR 0118): the fact the plane met on its own sends,
-		// and the standing-fact rule keeps the second copy of it quiet.
-		const runner = failingHandoffRunner();
+				tickets: [],
+			}],
+		});
+		const source = planeRecord.sources[0] as FakeSource;
+		const runner = planeRecord.fakeRunner;
 		await withApp(
 			async (setup) => {
-				await press(setup, "return", "the fault", (f) =>
-					messageRowOf(f).includes("the daemon is down"),
+				// The boot's own refresh runs first; settle it, so the manual
+				// refresh the key starts is the one the test drives.
+				const deadline = Date.now() + 4000;
+				while (source.calls < 1) {
+					if (Date.now() >= deadline) throw new Error("timed out: the initial refresh to start");
+					await new Promise((resolve) => setTimeout(resolve, 5));
+				}
+				source.settle(empty);
+				// The `r` control writes the refresh's Working line...
+				await press(setup, "r", "the refresh's working line", (f) =>
+					f.includes("refreshing 1 sources"),
 				);
-				const calls = notificationCalls(runner);
-				expect(calls).toHaveLength(1);
-				expect(calls[0].args.join(" ")).toContain("Factory: error");
-				expect(calls[0].args.join(" ")).toContain("the daemon is down");
-				// The same fault stands again from the next attempt: no second send.
-				setup.mockInput.pressEnter();
-				await settle(setup);
-				expect(notificationCalls(runner)).toHaveLength(1);
+				expect(notificationCalls(runner)).toHaveLength(0);
+				// ...and the clean result leaves no standing fact at all.
+				source.settle(empty);
+				await awaitFrame(setup, (f) => !f.includes("refreshing"), "the working line to clear");
+				expect(notificationCalls(runner)).toHaveLength(0);
 			},
 			{
 				width: WIDTH,
 				height: HEIGHT,
-				props: { config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+				plane: planeRecord,
+				loopPolicy: { kind: "held" },
+			},
+		);
+	});
+
+	test("a handoff fault sends its two facts, the error and the queued start", async () => {
+		// The fault split (ADR 0118): the machine operation that failed is the
+		// error fact, and the queued start that never ran is the warning fact;
+		// each is a fact the plane met on its own, so each leaves the terminal.
+		const planeRecord = await plane({
+			groupingAxis: "none",
+			sources: [{ config: singleTicketConfig, tickets: [ticketOf(singleTicket)] }],
+			repos: { "github.com/acme/billing": "src/billing" },
+			commands: failingHandoffCommands,
+		});
+		const source = planeRecord.sources[0] as FakeSource;
+		const runner = planeRecord.fakeRunner;
+		await withApp(
+			async (setup) => {
+				source.settle(success([singleTicket]));
+				await waitSourceHealthy(planeRecord.state);
+				await press(setup, "return", "the fault", (f) =>
+					messageRowOf(f).includes("the daemon is down"),
+				);
+				const calls = notificationCalls(runner);
+				expect(calls).toHaveLength(2);
+				expect(calls[0].args.join(" ")).toContain("Factory: error");
+				expect(calls[0].args.join(" ")).toContain("the daemon is down");
+				expect(calls[1].args.join(" ")).toContain("Factory: warning");
+				expect(calls[1].args.join(" ")).toContain("was not run");
+				expect(calls[1].args.join(" ")).toContain("the daemon is down");
+			},
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				plane: planeRecord,
+				loopPolicy: { kind: "held" },
 			},
 		);
 	});
@@ -448,71 +482,112 @@ describe("the Message line's fact to the desktop", () => {
 		// The fault split (ADR 0118): the answer to a key writes its line only.
 		// It neither sends nor touches the standing-fact rule: the fault that
 		// takes the line sends once, and the refusal that stands again sends
-		// nothing.
-		const runner = failingHandoffRunner();
+		// nothing. The refusal this plane meets is the refresh already in
+		// flight: the boot's own read, held by the fake until the test settles
+		// it.
+		const planeRecord = await plane({
+			groupingAxis: "none",
+			sources: [{ config: singleTicketConfig, tickets: [ticketOf(singleTicket)] }],
+			repos: { "github.com/acme/billing": "src/billing" },
+			commands: failingHandoffCommands,
+		});
+		const source = planeRecord.sources[0] as FakeSource;
+		const runner = planeRecord.fakeRunner;
 		await withApp(
 			async (setup) => {
 				// The refusal the key meets: line only, no send.
 				await press(setup, "r", "the refusal", (f) =>
-					messageRowOf(f).includes("no Ticket sources exist"),
+					messageRowOf(f).includes("every Ticket source is already refreshing"),
 				);
 				expect(notificationCalls(runner)).toHaveLength(0);
 				// The failing handoff's fault takes the line: a different fact,
 				// and it sends.
+				source.settle(success([singleTicket]));
+				await waitSourceHealthy(planeRecord.state);
 				await press(setup, "return", "the fault", (f) =>
 					messageRowOf(f).includes("the daemon is down"),
 				);
 				const afterError = notificationCalls(runner);
-				expect(afterError.length).toBe(1);
-				expect(afterError.at(-1)?.args.join(" ")).toContain("Factory: error");
+				expect(afterError.length).toBe(2);
+				expect(afterError[0].args.join(" ")).toContain("Factory: error");
+				expect(afterError.at(-1)?.args.join(" ")).toContain("Factory: warning");
 				expect(afterError.at(-1)?.args.join(" ")).toContain("the daemon is down");
 				// The refusal stands again after a different fact: still line only.
+				// It is written under the working line its own refresh opens, and
+				// the settle is what lifts the working line to reveal it.
 				setup.mockInput.pressKey("r");
+				await awaitFrame(setup, (f) => f.includes("refreshing"), "the refresh to start");
+				setup.mockInput.pressKey("r");
+				source.settle(success([singleTicket]));
 				await awaitFrame(
 					setup,
-					(f) => messageRowOf(f).includes("no Ticket sources exist"),
+					(f) => messageRowOf(f).includes("every Ticket source is already refreshing"),
 					"the refusal to stand again",
 				);
-				expect(notificationCalls(runner)).toHaveLength(1);
+				expect(notificationCalls(runner)).toHaveLength(2);
 			},
 			{
 				width: WIDTH,
 				height: HEIGHT,
-				props: { config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+				plane: planeRecord,
+				loopPolicy: { kind: "held" },
 			},
 		);
 	});
 
 	test("the notification carries the full text the line truncates", async () => {
 		const line = `error: the daemon refused the request after the outage. ${"x".repeat(240)}`;
-		const runner = new FakeRunner();
-		const path = join(home, "src", "billing");
-		runner.set("git", ["-C", path, "rev-parse", "--git-dir"], { stdout: ".git\n" });
-		runner.set("git", ["-C", path, "remote", "get-url", "origin"], {
-			stdout: "https://github.com/acme/billing.git\n",
+		const planeRecord = await plane({
+			groupingAxis: "none",
+			sources: [{ config: singleTicketConfig, tickets: [ticketOf(singleTicket)] }],
+			repos: { "github.com/acme/billing": "src/billing" },
+			commands: (fake, home) => {
+				const path = join(home, "src", "billing");
+				fake.set("git", ["-C", path, "rev-parse", "--git-dir"], { stdout: ".git\n" });
+				fake.set("git", ["-C", path, "remote", "get-url", "origin"], {
+					stdout: "https://github.com/acme/billing.git\n",
+				});
+				fake.set("herdr", ["workspace", "list"], { code: 1, stderr: `${line}\n` });
+			},
 		});
-		runner.set("herdr", ["workspace", "list"], { code: 1, stderr: `${line}\n` });
+		const source = planeRecord.sources[0] as FakeSource;
+		const runner = planeRecord.fakeRunner;
 		await withApp(
 			async (setup) => {
-				await press(setup, "return", "the error", (f) => messageRowOf(f).startsWith("Error: "));
+				source.settle(success([singleTicket]));
+				await waitSourceHealthy(planeRecord.state);
+				// The fault stands on the queued start's warning, which carries the
+				// command's own reason after its prefix.
+				await press(setup, "return", "the error", (f) =>
+					messageRowOf(f).includes("the daemon refused"),
+				);
 				const frame = await settle(setup);
 				// The line cuts at the terminal edge...
 				expect(messageRowOf(frame).length).toBeLessThanOrEqual(WIDTH);
-				// ...and the notification carries the whole fact.
+				// ...and the error notification carries the whole fact.
 				const calls = notificationCalls(runner);
-				const sent = calls.find((call) => call.args.join(" ").includes("the daemon refused"));
+				const sent = calls.find((call) =>
+					call.args.join(" ").includes("Factory: error") &&
+					call.args.join(" ").includes("the daemon refused"),
+				);
 				expect(sent?.args.join(" ")).toContain(line);
 			},
 			{
 				width: WIDTH,
 				height: HEIGHT,
-				props: { config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+				plane: planeRecord,
+				loopPolicy: { kind: "held" },
 			},
 		);
 	});
 
 	test("a config-off run writes the fact and spawns no notification", async () => {
-		const runner = new FakeRunner();
+		const planeRecord = await plane({
+			groupingAxis: "none",
+			config: { desktopNotification: false },
+			sources: [],
+		});
+		const runner = planeRecord.fakeRunner;
 		await withApp(
 			async (setup) => {
 				await press(setup, "r", "the warning", (f) =>
@@ -524,11 +599,8 @@ describe("the Message line's fact to the desktop", () => {
 			{
 				width: WIDTH,
 				height: HEIGHT,
-				props: {
-					config: { ...BASE_CONFIG, desktopNotification: false },
-					runner,
-					initialTickets: SAMPLE_TICKETS,
-				},
+				plane: planeRecord,
+				loopPolicy: { kind: "held" },
 			},
 		);
 	});
@@ -538,31 +610,40 @@ describe("the Message line's fact to the desktop", () => {
 		// answering two ways, so the fact read away from the terminal was not the
 		// fact read at the key. One pre-flight writes the reason; this test carries
 		// that same reason from the Message line to the notification command.
-		const runner = new FakeRunner();
+		const planeRecord = await plane({
+			groupingAxis: "none",
+			config: { defaultAgent: "nope" },
+			sources: [{ config: singleTicketConfig, tickets: [ticketOf(singleTicket)] }],
+			repos: { "github.com/acme/billing": "src/billing" },
+		});
+		const source = planeRecord.sources[0] as FakeSource;
+		const runner = planeRecord.fakeRunner;
 		await withApp(
 			async (setup) => {
+				source.settle(success([singleTicket]));
+				await waitSourceHealthy(planeRecord.state);
 				await press(setup, "return", "the refusal", (f) =>
 					messageRowOf(f).includes("unknown agent type: nope"),
 				);
 				const frame = await settle(setup);
 				expect(messageRowOf(frame)).toContain("unknown agent type: nope");
+				// The refusal stands on two facts: the claim's own error, and the
+				// queued start that never ran, each carrying the reason.
 				const calls = notificationCalls(runner);
-				expect(calls.at(-1)?.args.join(" ")).toContain("Factory: error");
-				expect(calls.at(-1)?.args.join(" ")).toContain("unknown agent type: nope");
-				// A bad choice is refused before the start resolves a repository, so
-				// the handoff ran no external step at all.
-				expect(
-					runner.calls.filter((call) => call.command === "herdr" || call.command === "git"),
-				).toHaveLength(0);
+				expect(calls).toHaveLength(2);
+				expect(calls[0].args.join(" ")).toContain("Factory: error");
+				expect(calls[0].args.join(" ")).toContain("unknown agent type: nope");
+				expect(calls[1].args.join(" ")).toContain("Factory: warning");
+				expect(calls[1].args.join(" ")).toContain("unknown agent type: nope");
+				// A bad choice dies before the start starts an Agent: the handoff
+				// ran no herdr step at all.
+				expect(runner.calls.filter((call) => call.command === "herdr")).toHaveLength(0);
 			},
 			{
 				width: WIDTH,
 				height: HEIGHT,
-				props: {
-					config: { ...BASE_CONFIG, defaultAgent: "nope" },
-					runner,
-					initialTickets: SAMPLE_TICKETS,
-				},
+				plane: planeRecord,
+				loopPolicy: { kind: "held" },
 			},
 		);
 	});
@@ -574,15 +655,26 @@ describe("the Message line's fact to the desktop", () => {
 		// the cycle's warning fact, the Message line's warning slot, and the send that
 		// slot makes, with the park's own line - the run's count included - carried end
 		// to end through the real app and the real observation loop.
-		const state = openFactoryState(join(home, "park-state.sqlite"));
-		state.sourceFact.initializeSources([parkSource]);
-		state.sourceFact.applyFetch(parkSource, parkFetch);
+		const planeRecord = await plane({
+			groupingAxis: "none",
+			sources: [{
+				config: {
+					name: "issues",
+					kind: "github-issues",
+					refreshIntervalSeconds: 60,
+					repositories: ["acme/factory"],
+					host: "github.com",
+				},
+				tickets: [ticketOf(parkTicket)],
+			}],
+			config: { maxHandoffsPerTicket: 4, agentPollIntervalSeconds: 60 },
+		});
 		// Two starts that reached no Agent at a Handoff limit of 4: the park's count,
 		// and still one start short of the cap that ends the work cycle.
 		for (let i = 0; i < 2; i += 1) {
-			const claim = state.handoff.claimHandoff(PARK_IDENTITY, parkChoice, "open");
+			const claim = planeRecord.state.handoff.claimHandoff(PARK_IDENTITY, parkChoice, "open");
 			if (!claim.ok) throw new Error(claim.reason);
-			state.handoff.settleHandoff(
+			planeRecord.state.handoff.settleHandoff(
 				claim.claim.attemptId,
 				false,
 				"Preparing worktree: the worktree path already exists",
@@ -590,43 +682,34 @@ describe("the Message line's fact to the desktop", () => {
 		}
 		// The mode is factory state (ADR 0036), and the park stands on the walk only
 		// the mode runs.
-		state.handoff.setAutoHandoffMode(true);
+		planeRecord.state.handoff.setAutoHandoffMode(true);
 
-		const runner = new FakeRunner();
-		runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+		const runner = planeRecord.fakeRunner;
 		// The source re-reads the Ticket after its failed starts, so the Attempt hold
 		// is released and the ask the park holds is the one that runs.
-		const src = new FakeSource("issues", "github-issues", parkFetch);
-		try {
-			await withApp(
-				async (setup) => {
-					src.settle(parkRefresh);
-					await awaitFrame(
+		const src = planeRecord.sources[0] as FakeSource;
+		await withApp(
+			async (setup) => {
+				src.settle(parkRefresh);
+				await waitSourceHealthy(planeRecord.state);
+				await awaitFrame(
 						setup,
 						(f) => messageRowOf(f).includes("handoff failure park:"),
 						"the park's standing warning",
 					);
-					await flush();
-					const calls = notificationCalls(runner);
-					expect(calls.at(-1)?.args.join(" ")).toContain("Factory: warning");
-					expect(calls.at(-1)?.args.join(" ")).toContain(
-						'handoff failure park: "Persist source facts" (2 Handoff starts in a row never reached an Agent)',
-					);
-				},
-				{
-					width: WIDTH,
-					height: HEIGHT,
-					props: {
-						config: { ...BASE_CONFIG, maxHandoffsPerTicket: 4 },
-						runner,
-						state,
-						sources: [src],
-						pollIntervalMs: 60_000,
-					},
-				},
-			);
-		} finally {
-			state.close();
-		}
+				await flush();
+				const calls = notificationCalls(runner);
+				expect(calls.at(-1)?.args.join(" ")).toContain("Factory: warning");
+				expect(calls.at(-1)?.args.join(" ")).toContain(
+					'handoff failure park: "Persist source facts" (2 Handoff starts in a row never reached an Agent)',
+				);
+			},
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				plane: planeRecord,
+				loopPolicy: { kind: "polled", intervalMs: 60_000 },
+			},
+		);
 	});
 });
