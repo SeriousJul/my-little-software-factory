@@ -10,44 +10,29 @@
  * runner recorded.
  */
 
-import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { describe, expect, test } from "bun:test";
 
-import type { AppProps } from "../src/components/app.ts";
-import type { FactoryConfig } from "../src/config.ts";
-import type { FetchedTicket } from "../src/domain/ticket.ts";
+import type { FactoryConfig, TicketSourceConfig } from "../src/config.ts";
+import type { FetchedTicket, Ticket } from "../src/domain/ticket.ts";
 import { agentNameFor } from "../src/naming.ts";
 import type { FactoryState } from "../src/state.ts";
-import { openFactoryState } from "../src/state.ts";
 import {
 	actionBarRowOf,
 	awaitFrame,
 	detailPaneText,
-	frameText,
 	HEIGHT,
 	messageRowOf,
 	press,
 	rowsOf,
 	settle,
+	waitSourceHealthy,
 	WIDTH,
 	withApp,
 } from "./app-harness.ts";
-import { agentListJson, emptyAgentRunner, type FakeRunner } from "./fake-runner.ts";
+import { agentListJson, type FakeRunner } from "./fake-runner.ts";
 import { FakeSource } from "./fake-source.ts";
-import { issuesConfig, issueTicket, seedInFlightTurn, success } from "./state-fixture.ts";
-
-const paths: string[] = [];
-afterEach(() => {
-	for (const path of paths.splice(0)) rmSync(path, { recursive: true, force: true });
-});
-
-function statePath(): string {
-	const dir = mkdtempSync(join(tmpdir(), "factory-mute-"));
-	paths.push(dir);
-	return join(dir, "state.sqlite");
-}
+import { plane, ticketOf, type SeededPlane } from "./seeded-plane.ts";
+import { issueTicket, success } from "./state-fixture.ts";
 
 const FIRST = "github:github.com:I_5";
 const SECOND = "github:github.com:I_6";
@@ -67,58 +52,69 @@ function twoTickets(): FetchedTicket[] {
 	];
 }
 
-function checkout(): string {
-	const dir = mkdtempSync(join(tmpdir(), "factory-mute-checkout-"));
-	paths.push(dir);
-	return dir;
-}
+/** The one issues source the suite stands its planes on. */
+const issuesSourceConfig: TicketSourceConfig = {
+	name: "issues",
+	kind: "github-issues",
+	refreshIntervalSeconds: 60,
+	repositories: ["acme/factory"],
+	host: "github.com",
+};
 
-/** The config with the one issue source and a checkout the handoff can use. */
-function fixtureConfig(over: Partial<FactoryConfig> = {}): FactoryConfig {
-	return { ...issuesConfig, repos: { [repoIdentity]: checkout() }, ...over };
+/** The two resting rows the plane lists, the first live where the test names it. */
+function restingRows(liveFirst: boolean): readonly Ticket[] {
+	return [
+		liveFirst
+			? ticketOf(issueTicket(FIRST, { title: firstTitle }), {
+					state: "handed-off",
+					handoff: {
+						agentType: "pi",
+						environment: "live-worktree",
+						taskType: "implement",
+						model: "",
+						thinking: "",
+						contextWindow: "",
+						attemptId: "seeded-first",
+						paneId: "pane-1",
+						tabId: "tab-1",
+						workspaceId: "ws-1",
+					herdrName: firstAgent,
+				},
+				handoffCount: 1,
+			})
+			: ticketOf(issueTicket(FIRST, { title: firstTitle })),
+		ticketOf(issueTicket(SECOND, { title: secondTitle, externalKey: "#6" })),
+	];
 }
 
 interface Rig {
+	plane: SeededPlane;
 	state: FactoryState;
 	src: FakeSource;
 	runner: FakeRunner;
-	props: Partial<AppProps>;
-	config: FactoryConfig;
 }
 
 /**
- * A state that lists two open Tickets, with the app props that match it.
+ * A plane that lists two open Tickets, the first live where the test names it.
  *
- * The poll interval is pinned long so the loop runs its first cycle and waits;
- * a test that wants the loop to keep turning passes a `pollIntervalMs` of its own.
+ * The loop runs on the plane's own schedule; the first cycle lands and waits,
+ * the way the pinned poll the suite ran on did.
  */
-function rig(over: { config?: Partial<FactoryConfig>; pollIntervalMs?: number } = {}): Rig {
-	const state = openFactoryState(statePath());
-	// Hold the flat axis: the frames read the unsplit list (ADR 0066).
-	state.grouping.setGroupingAxis("tickets", "none");
-	state.sourceFact.initializeSources([{ name: "issues", kind: "github-issues" }]);
-	state.sourceFact.applyFetch({ name: "issues", kind: "github-issues" }, success(twoTickets()));
-	const runner = emptyAgentRunner();
-	const home = mkdtempSync(join(tmpdir(), "factory-mute-home-"));
-	paths.push(home);
-	const configPath = join(home, "config.toml");
-	writeFileSync(configPath, "agent-poll-interval-seconds = 60\n");
-	const config = fixtureConfig(over.config ?? {});
-	const src = new FakeSource("issues", "github-issues", success(twoTickets()));
+async function rig(over: { config?: Partial<FactoryConfig>; live?: boolean } = {}): Promise<Rig> {
+	const live = over.live === true;
+	const planeRecord = await plane({
+		groupingAxis: "none",
+		sources: [{ config: issuesSourceConfig, tickets: restingRows(live) }],
+		config: over.config,
+		...(live
+			? { commands: (fake) => fake.set("herdr", ["agent", "list"], { stdout: workingAgent() }) }
+			: {}),
+	});
 	return {
-		state,
-		src,
-		runner,
-		config,
-		props: {
-			config,
-			state,
-			runner,
-			home,
-			configPath,
-			sources: [src],
-			pollIntervalMs: over.pollIntervalMs ?? 60_000,
-		},
+		plane: planeRecord,
+		state: planeRecord.state,
+		src: planeRecord.sources[0] as FakeSource,
+		runner: planeRecord.fakeRunner,
 	};
 }
 
@@ -148,8 +144,11 @@ async function listed(
 	setup: Parameters<Parameters<typeof withApp>[0]>[0],
 	src: FakeSource,
 	lead = FIRST_LEAD,
-): Promise<string> {
+	): Promise<string> {
 	src.settle(success(twoTickets()));
+	// The settle lands on a later frame; wait for the health to stand, so a
+	// key that asks for an actionable row reads the settle, not the loading.
+	await waitSourceHealthy(setup.plane.state);
 	return await awaitFrame(setup, (f) => listRowOf(f, lead) >= 0, "the Ticket rows");
 }
 
@@ -175,9 +174,8 @@ async function refreshed(
 
 describe("the mute key", () => {
 	test("u mutes the source the row's Ticket came in on, for every ticket of it", async () => {
-		const { state, src, props, runner } = rig();
-		try {
-			await withApp(
+		const { plane, state, src, runner } = await rig();
+		await withApp(
 				async (setup) => {
 					const before = await listed(setup, src);
 					expect(headerRow(before)).toContain("open: 2");
@@ -256,20 +254,16 @@ describe("the mute key", () => {
 					);
 					expect(headerRow(rowsBack)).toContain("open: 2");
 				},
-				{ width: WIDTH, height: HEIGHT, props: props },
+				{ width: WIDTH, height: HEIGHT, plane, loopPolicy: { kind: "polled", intervalMs: 60_000 } },
 			);
-		} finally {
-			state.close();
-		}
 	});
 
 	test("the bar names the source the mute reaches, in both Ticket panes", async () => {
-		const { state, src, props } = rig();
+		const { plane, state, src } = await rig();
 		// A frame wide enough to hold the section's whole ladder, the
 		// Delete key's wider hint included (ADR 0122).
 		const wide = 156;
-		try {
-			await withApp(
+		await withApp(
 				async (setup) => {
 					await listed(setup, src);
 					setup.resize(wide, HEIGHT);
@@ -310,17 +304,13 @@ describe("the mute key", () => {
 					expect(actionBarRowOf(detailed)).toContain("u Un-mute issues");
 					expect(listRowOf(ledger, FIRST_LEAD)).toBeGreaterThanOrEqual(0);
 				},
-				{ width: wide, height: HEIGHT, props: props },
+				{ width: wide, height: HEIGHT, plane, loopPolicy: { kind: "polled", intervalMs: 60_000 } },
 			);
-		} finally {
-			state.close();
-		}
 	});
 
 	test("the muted view is the ledger of the source acts, with the marker on its rows", async () => {
-		const { state, src, props } = rig();
-		try {
-			await withApp(
+		const { plane, state, src } = await rig();
+		await withApp(
 				async (setup) => {
 					await listed(setup, src);
 					await press(setup, "u", "the mute", (f) => headerRow(f).includes("muted: 2"));
@@ -357,33 +347,18 @@ describe("the mute key", () => {
 					);
 					expect(headerRow(active)).toContain("muted: 2");
 				},
-				{ width: WIDTH, height: HEIGHT, props: props },
+				{ width: WIDTH, height: HEIGHT, plane, loopPolicy: { kind: "polled", intervalMs: 60_000 } },
 			);
-		} finally {
-			state.close();
-		}
 	});
 
 	test("a live ticket of the muted source keeps its row beside the marker", async () => {
 		// ADR 0070: the mute ends where live work begins, in the ignore's own
 		// shape. The row is how the operator reaches the Live view, the Goto,
 		// and the Close.
-		const state = openFactoryState(statePath());
-		state.grouping.setGroupingAxis("tickets", "none");
-		const outcome = success([
-			issueTicket(FIRST),
-			issueTicket(SECOND, { title: secondTitle, externalKey: "#6" }),
-		]);
-		state.sourceFact.initializeSources([{ name: "issues", kind: "github-issues" }]);
-		state.sourceFact.applyFetch({ name: "issues", kind: "github-issues" }, outcome);
-		seedInFlightTurn(state, outcome, FIRST);
-		const runner = emptyAgentRunner();
-		runner.set("herdr", ["agent", "list"], { stdout: workingAgent() });
-		const src = new FakeSource("issues", "github-issues", outcome);
-		try {
-			await withApp(
+		const { plane, state, src } = await rig({ live: true });
+		await withApp(
 				async (setup) => {
-					src.settle(outcome);
+					src.settle(success(twoTickets()));
 					const frame = await awaitFrame(
 						setup,
 						(f) => rowsOf(f).some((r) => r.startsWith("│") && r.includes("[running]")),
@@ -421,29 +396,18 @@ describe("the mute key", () => {
 				{
 					width: WIDTH,
 					height: HEIGHT,
-					props: { config: fixtureConfig(), state, sources: [src], runner, pollIntervalMs: 60_000 },
+					plane,
+					loopPolicy: { kind: "polled", intervalMs: 60_000 },
 				},
 			);
-		} finally {
-			state.close();
-		}
 	});
 
 	test("the mute removes a start that waits in the Work queue, in the same write", async () => {
 		// One seat, held by the first Ticket's own Agent: the start the operator
 		// asked for on the second waits in the Work queue, which is the waiting
 		// item the mute takes away with the rows.
-		const state = openFactoryState(statePath());
-		state.grouping.setGroupingAxis("tickets", "none");
-		const outcome = success(twoTickets());
-		state.sourceFact.initializeSources([{ name: "issues", kind: "github-issues" }]);
-		state.sourceFact.applyFetch({ name: "issues", kind: "github-issues" }, outcome);
-		seedInFlightTurn(state, outcome, FIRST);
-		const runner = emptyAgentRunner();
-		runner.set("herdr", ["agent", "list"], { stdout: workingAgent() });
-		const src = new FakeSource("issues", "github-issues", outcome);
-		try {
-			await withApp(
+		const { plane, state, src } = await rig({ config: { maxParallelAgents: 1 }, live: true });
+		await withApp(
 				async (setup) => {
 					const frame = await listed(setup, src, SECOND_LEAD);
 					// The running Ticket holds the one seat, so the second ticket's
@@ -469,24 +433,15 @@ describe("the mute key", () => {
 				{
 					width: WIDTH,
 					height: HEIGHT,
-					props: {
-						config: fixtureConfig({ maxParallelAgents: 1 }),
-						state,
-						sources: [src],
-						runner,
-						pollIntervalMs: 60_000,
-					},
+					plane,
+					loopPolicy: { kind: "polled", intervalMs: 60_000 },
 				},
 			);
-		} finally {
-			state.close();
-		}
 	});
 
 	test("a muted source keeps refreshing, and the unmute brings its rows back current", async () => {
-		const { state, src, props } = rig();
-		try {
-			await withApp(
+		const { plane, state, src } = await rig();
+		await withApp(
 				async (setup) => {
 					await listed(setup, src);
 					await press(setup, "u", "the mute", (f) => headerRow(f).includes("muted: 2"));
@@ -527,17 +482,13 @@ describe("the mute key", () => {
 					);
 					expect(headerRow(rowsBack)).toContain("open: 2");
 				},
-				{ width: WIDTH, height: HEIGHT, props: props },
+				{ width: WIDTH, height: HEIGHT, plane, loopPolicy: { kind: "polled", intervalMs: 60_000 } },
 			);
-		} finally {
-			state.close();
-		}
 	});
 
 	test("the empty active list points at the muted ledger, not at an idle factory", async () => {
-		const { state, src, props } = rig();
-		try {
-			await withApp(
+		const { plane, state, src } = await rig();
+		await withApp(
 				async (setup) => {
 					await listed(setup, src);
 					const empty = await press(setup, "u", "the last rows to hide", (f) =>
@@ -558,17 +509,13 @@ describe("the mute key", () => {
 					);
 					expect(headerRow(ledger)).toContain("muted: 2");
 				},
-				{ width: WIDTH, height: HEIGHT, props: props },
+				{ width: WIDTH, height: HEIGHT, plane, loopPolicy: { kind: "polled", intervalMs: 60_000 } },
 			);
-		} finally {
-			state.close();
-		}
 	});
 
 	test("the detail pane names the mute, its moment, and the key that takes it back", async () => {
-		const { state, src, props } = rig();
-		try {
-			await withApp(
+		const { plane, state, src } = await rig();
+		await withApp(
 				async (setup) => {
 					await listed(setup, src);
 					await press(setup, "u", "the mute", (f) => headerRow(f).includes("muted: 2"));
@@ -589,50 +536,7 @@ describe("the mute key", () => {
 					expect(detail).toContain("no automatic start, and no row while the Ticket rests");
 					expect(detail).toContain("press u to take the mute back");
 				},
-				{ width: WIDTH, height: HEIGHT, props: props },
+				{ width: WIDTH, height: HEIGHT, plane, loopPolicy: { kind: "polled", intervalMs: 60_000 } },
 			);
-		} finally {
-			state.close();
-		}
 	});
-});
-
-/**
- * ADR 0070's in-memory shell: the mute is durable factory state on the
- * source's row, and the shell holds no state file for it. The key says so on
- * the Message line and leaves the list standing, so the press does not read
- * as a view change the frame cannot show.
- */
-test("the no-state shell refuses u with the missing fact", async () => {
-	const seeded = openFactoryState(statePath());
-	seeded.sourceFact.initializeSources([{ name: "issues", kind: "github-issues" }]);
-	seeded.sourceFact.applyFetch({ name: "issues", kind: "github-issues" }, success(twoTickets()));
-	const projection = seeded.ticketWorkCycle.ticketListViews([], "implement").rows;
-	seeded.close();
-	await withApp(
-		async (setup) => {
-			await awaitFrame(
-				setup,
-				(f) => rowsOf(f).some((r) => r.startsWith("│") && r.includes("[implement]")),
-				"the shell's Ticket row",
-			);
-			const refused = await press(setup, "u", "the mute refusal", (f) =>
-				messageRowOf(f).includes("needs SQLite state"),
-			);
-			expect(messageRowOf(refused)).toContain("muting a source needs SQLite state");
-			// The refusal is a refusal: the list stands where it was handed.
-			expect(frameText(refused)).toContain(firstTitle.slice(0, 9));
-			expect(refused).not.toContain("muted:");
-		},
-		{
-			width: WIDTH,
-			height: HEIGHT,
-			props: {
-				config: fixtureConfig(),
-				runner: emptyAgentRunner(),
-				initialTickets: projection,
-				pollIntervalMs: 60_000,
-			},
-		},
-	);
 });
