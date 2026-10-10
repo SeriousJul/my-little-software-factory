@@ -65,6 +65,8 @@ walk records the real answers and the world is checked against them.
 | The checkout verification | the auto-mode suite | its `stubCheckout` copy | Held on the pin table |
 | The live-worktree Handoff | the Starting face and the Handoff frame's live-worktree Handoff tests | their `stubLiveHandoff` builders | Moved |
 | The live-worktree Handoff | the Handoff frame's worktree Handoff tests and its pin-table tests | - | Out of this flow: the worktree Handoff is the next flow, and the pin-table tests stay |
+| The worktree Handoff and its Worktree base read | the Handoff frame's worktree Handoff tests | its `stubWorktreeHandoff` builder | Moved |
+| The worktree Handoff and its Worktree base read | the suites whose standing builders also pin the base read (the checkout hold, the auto-handoff chain, the herdr view frame, the repository select panel) | - | Their builders stand a live-worktree environment plus the base read for their own subject (the hold, the chain, the view, the panel); they are not the worktree Handoff's builder, and they stay |
 
 The auto-mode suite is held because its tests' subjects are the auto dispatch,
 the Decision modal, the route, and the leftover environment, not the checkout
