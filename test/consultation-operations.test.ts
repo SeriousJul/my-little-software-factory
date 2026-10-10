@@ -72,6 +72,12 @@ const uid = (lead: string) => `${lead.repeat(8)}-1111-4111-8111-111111111111`;
 /** The herdr name the seed gives a Consultation with that id. */
 const agentOf = (id: string) => `consultation-${id.slice(0, 8)}`;
 /** The pane, tab, and workspace handles a launched worktree Consultation takes. */
+/**
+ * The world's worktree-launch handles: a `worktree create` makes the workspace,
+ * its one tab, and the Agent's pane together, so the Agent sits in the first pane.
+ */
+const WORKTREE_LAUNCH = { workspaceId: "ws-1", tabId: "tab-1", paneId: "pane-1" };
+/** The standing the pinned launch leaves behind, named by the pin table. */
 const LAUNCH = { workspaceId: "ws-new", tabId: "tab-ws-new", paneId: "pane-c1" };
 const WORKTREE_HEAD = "deadbeef";
 
@@ -402,6 +408,20 @@ function worktreeLaunchWorld(
 	return world;
 }
 
+/**
+ * The standing a world-run worktree launch starts from: the checkout and its
+ * worktrees root, no workspace. The world's own `worktree create` builds the
+ * workspace, the tab, and the Agent's pane.
+ */
+function worktreeLaunchStanding(repository: ConsultationRepositoryOption): HerdrWorldDescription {
+	const world = worldCheckout(repository);
+	world.checkouts[0].worktreesRoot = join(
+		repository.path.slice(0, repository.path.lastIndexOf("/")),
+		"worktrees",
+	);
+	return world;
+}
+
 /** The standing a pinned live launch leaves behind, stated as a world. */
 function liveLaunchWorld(
 	repository: ConsultationRepositoryOption,
@@ -656,11 +676,10 @@ describe("Consultation operations: launch", () => {
 
 	test("launches a worktree Consultation, reports every stage, and owns its resources", async () => {
 		const fixture = makeFixture();
-		const runner = new LifecycleRunner(stubHerdrWorld(worktreeLaunchWorld(fixture.repository)));
+		const runner = new LifecycleRunner(stubHerdrWorld(worktreeLaunchStanding(fixture.repository)));
 		const id = uid("2");
 		const consultation = seed(fixture.state, fixture, id);
-		stubWorktreeLaunch(runner.inner, fixture.checkout, id);
-		stubPaneRead(runner.inner, LAUNCH.paneId, "Agent: opened");
+		stubPaneRead(runner.inner, WORKTREE_LAUNCH.paneId, "Agent: opened");
 		const harness = makeHarness(fixture, runner);
 
 		await harness.operations.launch(consultation);
@@ -668,9 +687,9 @@ describe("Consultation operations: launch", () => {
 		const started = current(fixture.state, id);
 		expect(started).toMatchObject({
 			state: "working",
-			paneId: LAUNCH.paneId,
-			tabId: LAUNCH.tabId,
-			workspaceId: LAUNCH.workspaceId,
+			paneId: WORKTREE_LAUNCH.paneId,
+			tabId: WORKTREE_LAUNCH.tabId,
+			workspaceId: WORKTREE_LAUNCH.workspaceId,
 		});
 		expect(stages(harness.progress)).toEqual([
 			"resolving-repository",
@@ -686,11 +705,16 @@ describe("Consultation operations: launch", () => {
 			`git -C ${fixture.checkout} symbolic-ref refs/remotes/origin/HEAD`,
 			`git -C ${fixture.checkout} fetch origin main`,
 			`herdr worktree create --cwd ${fixture.checkout} --branch ${consultationBranchName(id, "grill")} --base origin/main --no-focus`,
-			`herdr agent start ${agentOf(id)} --kind pi --pane ${LAUNCH.paneId}`,
+			`herdr agent start ${agentOf(id)} --kind pi --pane ${WORKTREE_LAUNCH.paneId}`,
 			`herdr agent prompt ${agentOf(id)} /grill review auth`,
 		]);
 		expect(current(fixture.state, id).resources.map((resource) => resource.resourceId)).toEqual(
-			expect.arrayContaining([LAUNCH.workspaceId, LAUNCH.tabId, LAUNCH.paneId, agentOf(id)]),
+			expect.arrayContaining([
+				WORKTREE_LAUNCH.workspaceId,
+				WORKTREE_LAUNCH.tabId,
+				WORKTREE_LAUNCH.paneId,
+				agentOf(id),
+			]),
 		);
 		expect(harness.changes).toBeGreaterThan(0);
 	});
@@ -866,10 +890,9 @@ describe("Consultation operations: launch", () => {
 
 	test("reports an already in-progress opening instead of racing it", async () => {
 		const fixture = makeFixture();
-		const runner = new LifecycleRunner(stubHerdrWorld(worktreeLaunchWorld(fixture.repository)));
+		const runner = new LifecycleRunner(stubHerdrWorld(worktreeLaunchStanding(fixture.repository)));
 		const id = uid("4");
 		const consultation = seed(fixture.state, fixture, id);
-		stubWorktreeLaunch(runner.inner, fixture.checkout, id);
 		runner.holdWhile((command) => command.startsWith("herdr worktree create"));
 		const harness = makeHarness(fixture, runner);
 
@@ -1473,10 +1496,9 @@ describe("Consultation operations: recovery", () => {
 
 	test("re-runs an opening that left no Agent handles behind", async () => {
 		const fixture = makeFixture();
-		const runner = new LifecycleRunner(stubHerdrWorld(worktreeLaunchWorld(fixture.repository)));
+		const runner = new LifecycleRunner(stubHerdrWorld(worktreeLaunchStanding(fixture.repository)));
 		const id = uid("b");
 		const consultation = seed(fixture.state, fixture, id);
-		stubWorktreeLaunch(runner.inner, fixture.checkout, id);
 		const harness = makeHarness(fixture, runner);
 
 		await harness.operations.recover(consultation);
@@ -2320,7 +2342,7 @@ describe("Consultation operations: replacement and deletion", () => {
 
 	test("launches a Replacement the same way it launches a new Consultation", async () => {
 		const fixture = makeFixture();
-		const runner = new LifecycleRunner(stubHerdrWorld(worktreeLaunchWorld(fixture.repository)));
+		const runner = new LifecycleRunner(stubHerdrWorld(worktreeLaunchStanding(fixture.repository)));
 		const id = uid("2");
 		const replaced = seedFailedWithHistory(fixture, id);
 		const harness = makeHarness(fixture, runner);
@@ -2330,7 +2352,6 @@ describe("Consultation operations: replacement and deletion", () => {
 			initialInput: "continue the review",
 		});
 		if (replacement === undefined) throw new Error("the Replacement was refused");
-		stubWorktreeLaunch(runner.inner, fixture.checkout, replacement.id);
 
 		await harness.operations.launch(replacement);
 
@@ -3374,7 +3395,7 @@ describe("Consultation operations: the Shared checkout gate (issue #315, ADR 010
 
 	test("a pickup that crosses a free gate takes the hold, and the settle lets it go", async () => {
 		const fixture = makeFixture();
-		const runner = new LifecycleRunner(stubHerdrWorld(worktreeLaunchWorld(fixture.repository)));
+		const runner = new LifecycleRunner(stubHerdrWorld(worktreeLaunchStanding(fixture.repository)));
 		const hold = holdStub(() => ({ ok: true, checkoutKey: "github.com/acme/factory" }));
 		const harness = makeHarness(fixture, runner, { checkoutHold: hold.stub });
 		const consultation = harness.operations.create({
@@ -3384,8 +3405,7 @@ describe("Consultation operations: the Shared checkout gate (issue #315, ADR 010
 			queued: true,
 		});
 		if (consultation === undefined) throw new Error("the queued submit created no record");
-		stubWorktreeLaunch(runner.inner, fixture.checkout, consultation.id);
-		stubPaneRead(runner.inner, LAUNCH.paneId, "Agent: opened");
+		stubPaneRead(runner.inner, WORKTREE_LAUNCH.paneId, "Agent: opened");
 		const outcome = await harness.operations.pickup(consultation.id, "pickup");
 		expect(outcome).toEqual({ kind: "started" });
 		// The take ran in the claim's own step, with the gate's key.
@@ -3481,7 +3501,7 @@ describe("Consultation operations: the Shared checkout gate (issue #315, ADR 010
 
 	test("a recovery that crosses a free gate takes the hold, and the settle lets it go", async () => {
 		const fixture = makeFixture();
-		const runner = new LifecycleRunner(stubHerdrWorld(worktreeLaunchWorld(fixture.repository)));
+		const runner = new LifecycleRunner(stubHerdrWorld(worktreeLaunchStanding(fixture.repository)));
 		const hold = holdStub(() => ({ ok: true, checkoutKey: "github.com/acme/factory" }));
 		const harness = makeHarness(fixture, runner, { checkoutHold: hold.stub });
 		const consultation = harness.operations.create({
@@ -3495,8 +3515,7 @@ describe("Consultation operations: the Shared checkout gate (issue #315, ADR 010
 			paneId: null,
 			sessionId: null,
 		});
-		stubWorktreeLaunch(runner.inner, fixture.checkout, consultation.id);
-		stubPaneRead(runner.inner, LAUNCH.paneId, "Agent: opened");
+		stubPaneRead(runner.inner, WORKTREE_LAUNCH.paneId, "Agent: opened");
 		await harness.operations.recover(consultation);
 		// The take ran in the recovery's own step, with the gate's key, before the
 		// re-run reached its first command.
