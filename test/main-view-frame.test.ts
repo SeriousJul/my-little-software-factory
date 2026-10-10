@@ -17,12 +17,11 @@ import { mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { widthOf } from "../src/components/text.ts";
-import type { FactoryConfig } from "../src/config.ts";
+import type { AppLoopPolicy } from "../src/components/app.ts";
+import type { FactoryConfig, TicketSourceConfig } from "../src/config.ts";
 import type { Ticket } from "../src/domain/ticket.ts";
-import type { CommandRunner } from "../src/runner.ts";
 import type { FactoryState } from "../src/state.ts";
 import { openFactoryState } from "../src/state.ts";
-import type { TicketSource } from "../src/ticket-source.ts";
 import {
 	actionBarRowOf,
 	awaitFrame,
@@ -48,8 +47,9 @@ import {
 	withholdFrameEvents,
 } from "./app-harness.ts";
 import { BASE_CONFIG } from "./base-config.ts";
-import { emptyAgentRunner, FakeRunner } from "./fake-runner.ts";
+import { FakeRunner } from "./fake-runner.ts";
 import { FakeSource } from "./fake-source.ts";
+import { plane, type SeededPlane } from "./seeded-plane.ts";
 import { SAMPLE_TICKETS } from "./sample-tickets.ts";
 
 let home = "";
@@ -77,6 +77,15 @@ const config: FactoryConfig = {
 	consultationTypes: {
 		grill: { agent: "pi", environment: "worktree", template: "/grill {input}" },
 	},
+};
+
+/** The issues source config the suite's planes carry. */
+const issuesSource: TicketSourceConfig = {
+	name: "issues",
+	kind: "github-issues",
+	refreshIntervalSeconds: 60,
+	repositories: ["acme/factory"],
+	host: "github.com",
 };
 
 /** The source outcome that carries the sample Ticket facts. */
@@ -306,35 +315,30 @@ const consultMarkerRowOf = (frame: string): number => {
 };
 
 /**
- * Boot the Main view on a state.
+ * Boot the Main view on a plane.
  *
- * Tickets are deterministic only where the test holds them: a test that
- * asserts the steady counts boots stateless with `initialTickets`, and a
- * test that walks the rows seeds a FakeSource that settles the sample
- * facts into the state projection.
+ * The plane owns the state, the config, the home and the egress double.
+ * The fields name only the frame geometry and the observation loop the
+ * test wants.
  */
 const booted = (
 	body: Parameters<typeof withApp>[0],
-	state: FactoryState,
-	fields: {
-		options?: { sources?: readonly TicketSource[]; config?: FactoryConfig };
-		width?: number;
-		height?: number;
-		runner?: CommandRunner;
-	} = {},
+	planeRecord: SeededPlane,
+	fields: { width?: number; height?: number; loopPolicy?: AppLoopPolicy } = {},
 ): Promise<void> => {
-	const { options = {}, width = WIDTH, height = 32, runner = emptyAgentRunner() } = fields;
-	return withApp(body, { width, height, props: { state, config, home, runner, ...options } });
+	const { width = WIDTH, height = 32, loopPolicy = { kind: "production" } } = fields;
+	return withApp(body, { width, height, plane: planeRecord, loopPolicy });
 };
 
 describe("the merged Main view", () => {
 	test("one frame holds both sections, one shared detail pane, and the steady Ticket counts", async () => {
+		const planeRecord = await plane({ groupingAxis: "none" });
 		await withApp(
 			async (setup) => {
 				const frame = await settle(setup);
-				// Stateless: the Ticket header leads, with its steady counts,
-				// then the Ticket list, then the Consultation header, and then
-				// the Consultation list: all of it in one frame.
+				// The Ticket header leads, with its steady counts, then the
+				// Ticket list, then the Consultation header, and then the
+				// Consultation list: all of it in one frame.
 				const rows = rowsOf(frame);
 				expect(rows[0]).toContain("▾ Tickets  open: 5  running: 2  awaiting: 1");
 				expect(headerOf(frame, "Tickets").startsWith("▾")).toBe(true);
@@ -345,10 +349,13 @@ describe("the merged Main view", () => {
 				// above zero.
 				expect(paneTopRows(frame)).toBe(3);
 				expect(headerOf(frame, "Tickets")).not.toContain("held");
+				// The mode corner stands in the stateful world: the queue's lamp
+				// and the auto-handoff lamp with the seat reading.
+				expect(headerOf(frame, "Tickets")).toContain("● running ● manual 2/2");
 				// One detail pane answers for the section under the cursor:
-				// it shows the selected Ticket while the cursor is in the
-				// Ticket section.
-				expect(detailPaneText(frame)).toContain("Retry policy for webhooks");
+				// it shows the Ticket under the cursor, which the attention
+				// order puts first - the awaiting ticket.
+				expect(detailPaneText(frame)).toContain("Drop the legacy auth shim");
 				// The frame's own Message line and Action bar sit below, and
 				// the bar names the toggle.
 				expect(actionBarRowOf(frame)).toContain("x Section");
@@ -356,11 +363,8 @@ describe("the merged Main view", () => {
 			{
 				width: WIDTH,
 				height: 32,
-				props: {
-					config: BASE_CONFIG,
-					runner: emptyAgentRunner(),
-					initialTickets: SAMPLE_TICKETS,
-				},
+				plane: planeRecord,
+				loopPolicy: { kind: "production" },
 			},
 		);
 	});
@@ -369,21 +373,20 @@ describe("the merged Main view", () => {
 		// The sample carries no held turn: ticket #4 waits on a decision, but
 		// its completion ended completed, so the held count stays off the
 		// header even though a ticket is awaiting.
+		const planeRecord = await plane({ groupingAxis: "none" });
 		await withApp(
 			async (setup) => {
 				await awaitFrame(setup, (f) => f.includes("▾ Tickets"), "the Tickets");
-				expect(headerOf(setup.captureCharFrame(), "Tickets")).toBe(
+				expect(headerOf(setup.captureCharFrame(), "Tickets")).toContain(
 					"▾ Tickets  open: 5  running: 2  awaiting: 1",
 				);
+				expect(headerOf(setup.captureCharFrame(), "Tickets")).not.toContain("held");
 			},
 			{
 				width: WIDTH,
 				height: 32,
-				props: {
-					config: BASE_CONFIG,
-					runner: emptyAgentRunner(),
-					initialTickets: SAMPLE_TICKETS,
-				},
+				plane: planeRecord,
+				loopPolicy: { kind: "production" },
 			},
 		);
 		// The same ticket with a held turn (a failed end, no decision yet) is
@@ -394,21 +397,27 @@ describe("the merged Main view", () => {
 			...SAMPLE_TICKETS[3],
 			lastCompletion: { ...heldLast, cause: "failed" },
 		};
+		const heldPlane = await plane({
+			sources: [
+				{
+					config: issuesSource,
+					tickets: [...SAMPLE_TICKETS.slice(0, 3), held, ...SAMPLE_TICKETS.slice(4)],
+				},
+			],
+			groupingAxis: "none",
+		});
 		await withApp(
 			async (setup) => {
 				await awaitFrame(setup, (f) => f.includes("▾ Tickets"), "the Tickets");
-				expect(headerOf(setup.captureCharFrame(), "Tickets")).toBe(
+				expect(headerOf(setup.captureCharFrame(), "Tickets")).toContain(
 					"▾ Tickets  open: 5  running: 2  awaiting: 1  held: 1",
 				);
 			},
 			{
 				width: WIDTH,
 				height: 32,
-				props: {
-					config: BASE_CONFIG,
-					runner: emptyAgentRunner(),
-					initialTickets: [...SAMPLE_TICKETS.slice(0, 3), held, ...SAMPLE_TICKETS.slice(4)],
-				},
+				plane: heldPlane,
+				loopPolicy: { kind: "production" },
 			},
 		);
 	});
@@ -416,71 +425,91 @@ describe("the merged Main view", () => {
 	test("the Ticket header uses the narrow count form below sixty columns", async () => {
 		// The header owns the terminal's full width on its row, so below
 		// sixty columns it carries the narrow form - no colons - whole, and
-		// on the minimum frame the form is the row's full width (user
-		// stories 11 to 14, 29).
+		// on the minimum frame the row holds what fits beside the mode
+		// corner (user stories 11 to 14, 29).
+		const planeRecord = await plane({ groupingAxis: "none" });
 		await withApp(
 			async (setup) => {
 				await awaitFrame(setup, (f) => f.includes("▾ Tickets"), "the Tickets");
-				expect(headerOf(setup.captureCharFrame(), "Tickets")).toBe(
+				expect(headerOf(setup.captureCharFrame(), "Tickets")).toContain(
 					"▾ Tickets  open 5  running 2  awaiting 1",
 				);
+				expect(headerOf(setup.captureCharFrame(), "Tickets")).toContain("● running ● manual");
 			},
 			{
 				width: 59,
 				height: 27,
-				props: {
-					config: BASE_CONFIG,
-					runner: emptyAgentRunner(),
-					initialTickets: SAMPLE_TICKETS,
-				},
+				plane: planeRecord,
+				loopPolicy: { kind: "production" },
 			},
 		);
-		// At the minimum frame the same row holds the same text, edge to
-		// edge: the counts are the longest text the frame keeps.
+		// At the minimum frame the counts give their cells away whole to the
+		// mode corner: the row holds the widest counts that fit beside it.
 		await withApp(
 			async (setup) => {
 				await awaitFrame(setup, (f) => f.includes("▾ Tickets"), "the Tickets");
-				expect(rowsOf(setup.captureCharFrame())[0]).toBe(
-					"▾ Tickets  open 5  running 2  awaiting 1",
-				);
+				expect(rowsOf(setup.captureCharFrame())[0]).toContain("▾ Tickets  open 5");
+				expect(rowsOf(setup.captureCharFrame())[0]).toContain("● running ● manual 2/2");
 			},
 			{
 				width: 40,
 				height: 27,
-				props: {
-					config: BASE_CONFIG,
-					runner: emptyAgentRunner(),
-					initialTickets: SAMPLE_TICKETS,
-				},
+				plane: planeRecord,
+				loopPolicy: { kind: "production" },
 			},
 		);
 	});
 
-	test("the Ticket header keeps the held count whole in the narrow form", async () => {
-		// A held turn on a terminal under sixty columns: the held count rides
-		// the narrow form. The bell stays off at boot - it means the count
-		// rose while this app ran, and the held turn's flow asserts it.
+	test("the Ticket header yields the held count to the mode corner in the narrow form", async () => {
+		// A held turn on a terminal under sixty columns: the mode corner
+		// stands before the held count, and the held count gives its cell
+		// away whole. Where the row holds the wide form - above sixty
+		// columns - the held count rides it whole.
 		const heldLast = SAMPLE_TICKETS[3].lastCompletion;
 		if (heldLast === null) throw new Error("the held sample ticket has no last completion");
 		const held: Ticket = {
 			...SAMPLE_TICKETS[3],
 			lastCompletion: { ...heldLast, cause: "failed" },
 		};
+		const heldPlane = await plane({
+			sources: [
+				{
+					config: issuesSource,
+					tickets: [...SAMPLE_TICKETS.slice(0, 3), held, ...SAMPLE_TICKETS.slice(4)],
+				},
+			],
+			groupingAxis: "none",
+		});
 		await withApp(
 			async (setup) => {
 				await awaitFrame(setup, (f) => f.includes("▾ Tickets"), "the Tickets");
-				expect(headerOf(setup.captureCharFrame(), "Tickets")).toBe(
-					"▾ Tickets  open 5  running 2  awaiting 1  held 1",
+				expect(headerOf(setup.captureCharFrame(), "Tickets")).toContain(
+					"▾ Tickets  open 5  running 2  awaiting 1",
 				);
+				expect(headerOf(setup.captureCharFrame(), "Tickets")).not.toContain("held");
+				expect(headerOf(setup.captureCharFrame(), "Tickets")).toContain("● running ● manual");
 			},
 			{
 				width: 59,
 				height: 27,
-				props: {
-					config: BASE_CONFIG,
-					runner: emptyAgentRunner(),
-					initialTickets: [...SAMPLE_TICKETS.slice(0, 3), held, ...SAMPLE_TICKETS.slice(4)],
-				},
+				plane: heldPlane,
+				loopPolicy: { kind: "production" },
+			},
+		);
+		// Above sixty columns the wide form holds the held count whole beside
+		// the mode corner.
+		await withApp(
+			async (setup) => {
+				await awaitFrame(setup, (f) => f.includes("▾ Tickets"), "the Tickets");
+				expect(headerOf(setup.captureCharFrame(), "Tickets")).toContain(
+					"▾ Tickets  open: 5  running: 2  awaiting: 1  held: 1",
+				);
+			},
+			{
+				width: 72,
+				height: 27,
+				plane: heldPlane,
+				loopPolicy: { kind: "production" },
 			},
 		);
 	});
@@ -489,21 +518,23 @@ describe("the merged Main view", () => {
 		// An empty pipeline keeps the header's shape: all three counts
 		// render, as zero, and the held count stays off the row (user
 		// stories 14, 25).
+		const planeRecord = await plane({
+			sources: [{ config: issuesSource, tickets: [] }],
+			groupingAxis: "none",
+		});
 		await withApp(
 			async (setup) => {
 				await awaitFrame(setup, (f) => f.includes("▾ Tickets"), "the Tickets");
-				expect(headerOf(setup.captureCharFrame(), "Tickets")).toBe(
+				expect(headerOf(setup.captureCharFrame(), "Tickets")).toContain(
 					"▾ Tickets  open: 0  running: 0  awaiting: 0",
 				);
+				expect(headerOf(setup.captureCharFrame(), "Tickets")).toContain("● running ● manual 0/2");
 			},
 			{
 				width: WIDTH,
 				height: 32,
-				props: {
-					config: BASE_CONFIG,
-					runner: emptyAgentRunner(),
-					initialTickets: [],
-				},
+				plane: planeRecord,
+				loopPolicy: { kind: "production" },
 			},
 		);
 	});
@@ -513,65 +544,61 @@ describe("the merged Main view", () => {
 		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
 		state.grouping.setGroupingAxis("tickets", "none");
 		seedConsultation(state, uid("c"));
-		const source = new FakeSource("issues", "github-issues", sampleOutcome());
-		try {
-			await booted(
-				async (setup) => {
-					source.settle(sampleOutcome());
-					await awaitFrame(setup, (f) => f.includes("Retry policy"), "the Tickets");
-					// The collapse keeps the detail on the retained Ticket: the
-					// section gives up its box rows, not its selection.
-					const collapsed = await press(setup, "x", "the Ticket section to collapse", (f) =>
-						headerOf(f, "Tickets").startsWith("▸"),
-					);
-					expect(headerOf(collapsed, "Consultations").startsWith("▾")).toBe(true);
-					// The Consultation box and the always-visible Work box both
-					// stand while the Ticket section is collapsed.
-					expect(paneTopRows(collapsed)).toBe(2);
-					expect(detailPaneText(collapsed)).toContain("Retry policy for webhooks");
-					// The step out of the collapsed section crosses to the first
-					// visible Consultation.
-					const across = await press(setup, "j", "the cursor to cross to the Consultation", (f) =>
-						detailPaneText(f).includes("consultation-cccccccc"),
-					);
-					expect(across).toContain("❯ Consultations");
-					// The toggle now answers the Consultation section, and once
-					// more restores its box on the retained row.
-					const collapsedAgain = await press(
-						setup,
-						"x",
-						"the Consultation section to collapse",
-						(f) => headerOf(f, "Consultations").startsWith("▸"),
-					);
-					// The Consultation section is collapsed now: its header
-					// stays, its box is gone, and the detail keeps the retained
-					// row. The Work box stands always visible (ADR 0049).
-					expect(headerOf(collapsedAgain, "Tickets").startsWith("▸")).toBe(true);
-					expect(paneTopRows(collapsedAgain)).toBe(1);
-					expect(detailPaneText(collapsedAgain)).toContain("consultation-cccccccc");
-					const restored = await press(
-						setup,
-						"x",
-						"the Consultation section to expand again",
-						(f) => headerOf(f, "Consultations").startsWith("▾"),
-					);
-					// The Ticket section stayed collapsed: only the Consultation
-					// box came back, beside the always-visible Work box.
-					expect(paneTopRows(restored)).toBe(2);
-					expect(restored).toContain("┌─❯ Consultations");
-				},
-				state,
-				{
-					options: { sources: [source] },
-					width: WIDTH,
-					height: 32,
-					runner: liveConsultationAgents([uid("c")]),
-				},
-			);
-		} finally {
-			source.settle(sampleOutcome());
-			state.close();
-		}
+		const planeRecord = await plane({
+			existing: state,
+			sources: [{ config: issuesSource, tickets: [] }],
+			config,
+			runner: () => liveConsultationAgents([uid("c")]),
+		});
+		const source = planeRecord.sources[0] as FakeSource;
+		await booted(
+			async (setup) => {
+				source.settle(sampleOutcome());
+				await awaitFrame(setup, (f) => f.includes("Retry policy"), "the Tickets");
+				// The collapse keeps the detail on the retained Ticket: the
+				// section gives up its box rows, not its selection.
+				const collapsed = await press(setup, "x", "the Ticket section to collapse", (f) =>
+					headerOf(f, "Tickets").startsWith("▸"),
+				);
+				expect(headerOf(collapsed, "Consultations").startsWith("▾")).toBe(true);
+				// The Consultation box and the always-visible Work box both
+				// stand while the Ticket section is collapsed.
+				expect(paneTopRows(collapsed)).toBe(2);
+				expect(detailPaneText(collapsed)).toContain("Retry policy for webhooks");
+				// The step out of the collapsed section crosses to the first
+				// visible Consultation.
+				const across = await press(setup, "j", "the cursor to cross to the Consultation", (f) =>
+					detailPaneText(f).includes("consultation-cccccccc"),
+				);
+				expect(across).toContain("❯ Consultations");
+				// The toggle now answers the Consultation section, and once
+				// more restores its box on the retained row.
+				const collapsedAgain = await press(
+					setup,
+					"x",
+					"the Consultation section to collapse",
+					(f) => headerOf(f, "Consultations").startsWith("▸"),
+				);
+				// The Consultation section is collapsed now: its header
+				// stays, its box is gone, and the detail keeps the retained
+				// row. The Work box stands always visible (ADR 0049).
+				expect(headerOf(collapsedAgain, "Tickets").startsWith("▸")).toBe(true);
+				expect(paneTopRows(collapsedAgain)).toBe(1);
+				expect(detailPaneText(collapsedAgain)).toContain("consultation-cccccccc");
+				const restored = await press(
+					setup,
+					"x",
+					"the Consultation section to expand again",
+					(f) => headerOf(f, "Consultations").startsWith("▾"),
+				);
+				// The Ticket section stayed collapsed: only the Consultation
+				// box came back, beside the always-visible Work box.
+				expect(paneTopRows(restored)).toBe(2);
+				expect(restored).toContain("┌─❯ Consultations");
+			},
+			planeRecord,
+			{ width: WIDTH, height: 32 },
+		);
 	});
 
 	test("a step past the last visible row crosses the section boundary", async () => {
@@ -581,51 +608,47 @@ describe("the merged Main view", () => {
 		const ids = [uid("c"), uid("d")];
 		seedConsultation(state, ids[0], "2026-09-01T10:00:00.000Z");
 		seedConsultation(state, ids[1], "2026-09-01T10:01:00.000Z");
-		const source = new FakeSource("issues", "github-issues", sampleOutcome());
-		try {
-			await booted(
-				async (setup) => {
-					source.settle(sampleOutcome());
-					await awaitFrame(setup, (f) => f.includes("Retry policy"), "the Tickets");
-					// The walk crosses the boundary: the detail follows the
-					// cursor into the Consultation section, and a key after the
-					// cross uses the Consultation list.
-					await crossToConsultations(setup);
-					const second = await press(setup, "j", "the second Consultation", (f) =>
-						detailPaneText(f).includes("consultation-dddddddd"),
-					);
-					expect(detailPaneText(second)).toContain("consultation-dddddddd");
-					// The auto-handoff key is plane-wide (issue #319, ADR 0111): it
-					// flips the mode even from the Consultation section, and the
-					// Ticket header's corner reads the flip.
-					setup.mockInput.pressKey("a");
-					const afterAuto = await settle(setup);
-					expect(afterAuto).toContain("○ auto");
-					expect(afterAuto).not.toContain("● manual");
-					// The walk back lands on the last visible Ticket, and the
-					// next step moves the Ticket list, not the Consultation
-					// detail left behind.
-					await crossToTickets(setup);
-					const back = await settle(setup);
-					expect(back).toContain("Ticket id in the agent name");
-					expect(back).toContain("❯ Tickets");
-					const moved = await press(setup, "k", "the previous Ticket", (f) =>
-						f.includes("Run the container env"),
-					);
-					expect(markerRowOf(moved)).toBe(9);
-				},
-				state,
-				{
-					options: { sources: [source] },
-					width: WIDTH,
-					height: 32,
-					runner: liveConsultationAgents(ids),
-				},
-			);
-		} finally {
-			source.settle(sampleOutcome());
-			state.close();
-		}
+		const planeRecord = await plane({
+			existing: state,
+			sources: [{ config: issuesSource, tickets: [] }],
+			config,
+			runner: () => liveConsultationAgents(ids),
+		});
+		const source = planeRecord.sources[0] as FakeSource;
+		await booted(
+			async (setup) => {
+				source.settle(sampleOutcome());
+				await awaitFrame(setup, (f) => f.includes("Retry policy"), "the Tickets");
+				// The walk crosses the boundary: the detail follows the
+				// cursor into the Consultation section, and a key after the
+				// cross uses the Consultation list.
+				await crossToConsultations(setup);
+				const second = await press(setup, "j", "the second Consultation", (f) =>
+					detailPaneText(f).includes("consultation-dddddddd"),
+				);
+				expect(detailPaneText(second)).toContain("consultation-dddddddd");
+				// The auto-handoff key is plane-wide (issue #319, ADR 0111): it
+				// flips the mode even from the Consultation section, and the
+				// Ticket header's corner reads the flip.
+				setup.mockInput.pressKey("a");
+				const afterAuto = await settle(setup);
+				expect(afterAuto).toContain("○ auto");
+				expect(afterAuto).not.toContain("● manual");
+				// The walk back lands on the last visible Ticket, and the
+				// next step moves the Ticket list, not the Consultation
+				// detail left behind.
+				await crossToTickets(setup);
+				const back = await settle(setup);
+				expect(back).toContain("Ticket id in the agent name");
+				expect(back).toContain("❯ Tickets");
+				const moved = await press(setup, "k", "the previous Ticket", (f) =>
+					f.includes("Run the container env"),
+				);
+				expect(markerRowOf(moved)).toBe(9);
+			},
+			planeRecord,
+			{ width: WIDTH, height: 32 },
+		);
 	});
 
 	test("a key after a cross uses the newly focused list", async () => {
@@ -635,40 +658,36 @@ describe("the merged Main view", () => {
 		const ids = [uid("c"), uid("d")];
 		seedConsultation(state, ids[0], "2026-09-01T10:00:00.000Z");
 		seedConsultation(state, ids[1], "2026-09-01T10:01:00.000Z");
-		const source = new FakeSource("issues", "github-issues", sampleOutcome());
-		try {
-			await booted(
-				async (setup) => {
-					source.settle(sampleOutcome());
-					await awaitFrame(setup, (f) => f.includes("Retry policy"), "the Tickets");
-					await crossToConsultations(setup);
-					// A key through the detail and back answers the Consultation
-					// list the cursor just entered, not the Ticket list left
-					// behind.
-					await press(setup, "l", "the Agent view to take focus", (f) =>
-						f.includes("┌─❯ Agent view"),
-					);
-					setup.mockInput.pressKey("h");
-					setup.mockInput.pressKey("j");
-					const moved = await awaitFrame(
-						setup,
-						(f) => detailPaneText(f).includes("consultation-dddddddd"),
-						"the second Consultation after the immediate navigation",
-					);
-					expect(consultMarkerRowOf(moved)).toBe(12);
-				},
-				state,
-				{
-					options: { sources: [source] },
-					width: WIDTH,
-					height: 32,
-					runner: liveConsultationAgents(ids),
-				},
-			);
-		} finally {
-			source.settle(sampleOutcome());
-			state.close();
-		}
+		const planeRecord = await plane({
+			existing: state,
+			sources: [{ config: issuesSource, tickets: [] }],
+			config,
+			runner: () => liveConsultationAgents(ids),
+		});
+		const source = planeRecord.sources[0] as FakeSource;
+		await booted(
+			async (setup) => {
+				source.settle(sampleOutcome());
+				await awaitFrame(setup, (f) => f.includes("Retry policy"), "the Tickets");
+				await crossToConsultations(setup);
+				// A key through the detail and back answers the Consultation
+				// list the cursor just entered, not the Ticket list left
+				// behind.
+				await press(setup, "l", "the Agent view to take focus", (f) =>
+					f.includes("┌─❯ Agent view"),
+				);
+				setup.mockInput.pressKey("h");
+				setup.mockInput.pressKey("j");
+				const moved = await awaitFrame(
+					setup,
+					(f) => detailPaneText(f).includes("consultation-dddddddd"),
+					"the second Consultation after the immediate navigation",
+				);
+				expect(consultMarkerRowOf(moved)).toBe(12);
+			},
+			planeRecord,
+			{ width: WIDTH, height: 32 },
+		);
 	});
 
 	test("a click on a section header toggles that section", async () => {
@@ -676,39 +695,40 @@ describe("the merged Main view", () => {
 		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
 		state.grouping.setGroupingAxis("tickets", "none");
 		seedConsultation(state, uid("d"));
-		try {
-			await booted(async (setup) => {
-				await press(setup, "x", "the Ticket section to collapse", (f) =>
-					headerOf(f, "Tickets").startsWith("▸"),
-				);
-				// The Consultation box and the always-visible Work box both
-				// stand while the Ticket section is collapsed.
-				expect(paneTopRows(setup.captureCharFrame())).toBe(2);
-				// The Ticket header holds its own row above its box: the
-				// collapsed header is the body's first row.
-				await mouseClick(setup, 10, 0);
-				const frame = await awaitFrame(
-					setup,
-					(candidate) => headerOf(candidate, "Tickets").startsWith("▾"),
-					"the Ticket section to expand on click",
-				);
-				// The click lands the cursor back on the expanded section's
-				// own list.
-				expect(frame).toContain("┌─❯ Tickets");
-				// A click on the expanded Consultation header collapses the
-				// section, and the cursor stays on the row it held.
-				await mouseClick(setup, 10, 15);
-				const collapsed = await awaitFrame(
-					setup,
-					(candidate) => headerOf(candidate, "Consultations").startsWith("▸"),
-					"the Consultation section to collapse on click",
-				);
-				expect(collapsed).toContain("▸ Consultations");
-				expect(collapsed).toContain("┌─❯ Tickets");
-			}, state);
-		} finally {
-			state.close();
-		}
+		const planeRecord = await plane({
+			existing: state,
+			sources: [],
+			config,
+		});
+		await booted(async (setup) => {
+			await press(setup, "x", "the Ticket section to collapse", (f) =>
+				headerOf(f, "Tickets").startsWith("▸"),
+			);
+			// The Consultation box and the always-visible Work box both
+			// stand while the Ticket section is collapsed.
+			expect(paneTopRows(setup.captureCharFrame())).toBe(2);
+			// The Ticket header holds its own row above its box: the
+			// collapsed header is the body's first row.
+			await mouseClick(setup, 10, 0);
+			const frame = await awaitFrame(
+				setup,
+				(candidate) => headerOf(candidate, "Tickets").startsWith("▾"),
+				"the Ticket section to expand on click",
+			);
+			// The click lands the cursor back on the expanded section's
+			// own list.
+			expect(frame).toContain("┌─❯ Tickets");
+			// A click on the expanded Consultation header collapses the
+			// section, and the cursor stays on the row it held.
+			await mouseClick(setup, 10, 15);
+			const collapsed = await awaitFrame(
+				setup,
+				(candidate) => headerOf(candidate, "Consultations").startsWith("▸"),
+				"the Consultation section to collapse on click",
+			);
+			expect(collapsed).toContain("▸ Consultations");
+			expect(collapsed).toContain("┌─❯ Tickets");
+		}, planeRecord);
 	});
 
 	test("refresh reports a readable no-op when no Ticket source exists", async () => {
@@ -719,22 +739,22 @@ describe("the merged Main view", () => {
 		// The config names no feed: the plane's live source set follows the
 		// config, so this is the case with nothing to refresh.
 		const noSource: FactoryConfig = { ...config, sources: [] };
-		try {
-			await booted(
-				async (setup) => {
-					// Refresh answers for the whole plane from either section: no
-					// section switch is needed to reach the Ticket sources.
-					const refreshed = await press(setup, "r", "the no-op refresh", (f) =>
-						messageRowOf(f).includes("no Ticket sources exist"),
-					);
-					expect(messageRowOf(refreshed)).not.toContain("refreshing 0 sources");
-				},
-				state,
-				{ options: { config: noSource } },
-			);
-		} finally {
-			state.close();
-		}
+		const planeRecord = await plane({
+			existing: state,
+			sources: [],
+			config: noSource,
+		});
+		await booted(
+			async (setup) => {
+				// Refresh answers for the whole plane from either section: no
+				// section switch is needed to reach the Ticket sources.
+				const refreshed = await press(setup, "r", "the no-op refresh", (f) =>
+					messageRowOf(f).includes("no Ticket sources exist"),
+				);
+				expect(messageRowOf(refreshed)).not.toContain("refreshing 0 sources");
+			},
+			planeRecord,
+		);
 	});
 
 	test("refresh reports an in-flight Ticket source without fake progress", async () => {
@@ -742,24 +762,23 @@ describe("the merged Main view", () => {
 		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
 		state.grouping.setGroupingAxis("tickets", "none");
 		seedConsultation(state, uid("o"));
-		const source = new FakeSource("issues", "github-issues", sampleOutcome());
-		try {
-			await booted(
-				async (setup) => {
-					await awaitFrame(setup, () => source.calls === 1, "the Ticket source refresh");
-					const refused = await press(setup, "r", "the in-flight refresh refusal", (f) =>
-						messageRowOf(f).includes("every Ticket source is already refreshing"),
-					);
-					expect(messageRowOf(refused)).not.toContain("refreshing 0 sources");
-					source.settle(sampleOutcome());
-				},
-				state,
-				{ options: { sources: [source] } },
-			);
-		} finally {
-			source.settle(sampleOutcome());
-			state.close();
-		}
+		const planeRecord = await plane({
+			existing: state,
+			sources: [{ config: issuesSource, tickets: [] }],
+			config,
+		});
+		const source = planeRecord.sources[0] as FakeSource;
+		await booted(
+			async (setup) => {
+				await awaitFrame(setup, () => source.calls === 1, "the Ticket source refresh");
+				const refused = await press(setup, "r", "the in-flight refresh refusal", (f) =>
+					messageRowOf(f).includes("every Ticket source is already refreshing"),
+				);
+				expect(messageRowOf(refused)).not.toContain("refreshing 0 sources");
+				source.settle(sampleOutcome());
+			},
+			planeRecord,
+		);
 	});
 
 	test("the Consultation header carries the attention facts, and adds no row", async () => {
@@ -767,32 +786,33 @@ describe("the merged Main view", () => {
 		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
 		state.grouping.setGroupingAxis("tickets", "none");
 		seedConsultation(state, uid("e"));
-		try {
-			await booted(async (setup) => {
-				// The observation reports the Consultation's own state on the
-				// header: here the Agent pane is gone, so it needs recovery.
-				// The counts ride on the section's own row and never add one
-				// of their own.
-				const frame = await awaitFrame(
-					setup,
-					(f) => headerOf(f, "Consultations").includes("recovery: 1"),
-					"the recovery count on the header",
-				);
-				expect(headerOf(frame, "Consultations")).toBe(
-					"▾ Consultations  awaiting response: 0  recovery: 1",
-				);
-				expect(rowsOf(frame)).toHaveLength(32);
-				// The facts ride the header whichever section is collapsed:
-				// the row the section gives up is its box, not its header.
-				const collapsed = await press(setup, "x", "the Ticket section to collapse", (f) =>
-					headerOf(f, "Tickets").startsWith("▸"),
-				);
-				expect(headerOf(collapsed, "Consultations")).toContain("recovery: 1");
-				expect(rowsOf(collapsed)).toHaveLength(32);
-			}, state);
-		} finally {
-			state.close();
-		}
+		const planeRecord = await plane({
+			existing: state,
+			sources: [],
+			config,
+		});
+		await booted(async (setup) => {
+			// The observation reports the Consultation's own state on the
+			// header: here the Agent pane is gone, so it needs recovery.
+			// The counts ride on the section's own row and never add one
+			// of their own.
+			const frame = await awaitFrame(
+				setup,
+				(f) => headerOf(f, "Consultations").includes("recovery: 1"),
+				"the recovery count on the header",
+			);
+			expect(headerOf(frame, "Consultations")).toBe(
+				"▾ Consultations  awaiting response: 0  recovery: 1",
+			);
+			expect(rowsOf(frame)).toHaveLength(32);
+			// The facts ride the header whichever section is collapsed:
+			// the row the section gives up is its box, not its header.
+			const collapsed = await press(setup, "x", "the Ticket section to collapse", (f) =>
+				headerOf(f, "Tickets").startsWith("▸"),
+			);
+			expect(headerOf(collapsed, "Consultations")).toContain("recovery: 1");
+			expect(rowsOf(collapsed)).toHaveLength(32);
+		}, planeRecord);
 	});
 
 	test("a Consultation header too short for its counts drops whole cells and adds no row", async () => {
@@ -804,22 +824,23 @@ describe("the merged Main view", () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
 		state.grouping.setGroupingAxis("tickets", "none");
 		seedConsultation(state, uid("k"));
-		try {
-			await booted(
-				async (setup) => {
-					const frame = await settle(setup);
-					expect(headerOf(frame, "Consultations")).toBe("▾ Consultations");
-					expect(headerOf(frame, "Consultations")).not.toContain("recovery");
-					// The Work header's one count cell still stands in the same pane.
-					expect(headerOf(frame, "Work")).toContain("waiting: 0");
-					expect(rowsOf(frame)).toHaveLength(32);
-				},
-				state,
-				{ options: {}, width: 64, height: 32 },
-			);
-		} finally {
-			state.close();
-		}
+		const planeRecord = await plane({
+			existing: state,
+			sources: [],
+			config,
+		});
+		await booted(
+			async (setup) => {
+				const frame = await settle(setup);
+				expect(headerOf(frame, "Consultations")).toBe("▾ Consultations");
+				expect(headerOf(frame, "Consultations")).not.toContain("recovery");
+				// The Work header's one count cell still stands in the same pane.
+				expect(headerOf(frame, "Work")).toContain("waiting: 0");
+				expect(rowsOf(frame)).toHaveLength(32);
+			},
+			planeRecord,
+			{ width: 64, height: 32 },
+		);
 	});
 
 	test("the Consultation header's counts read the machine, not the History filter", async () => {
@@ -827,41 +848,42 @@ describe("the merged Main view", () => {
 		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
 		state.grouping.setGroupingAxis("tickets", "none");
 		seedConsultation(state, uid("h"));
-		try {
-			await booted(async (setup) => {
-				const frame = await awaitFrame(
-					setup,
-					(f) => headerOf(f, "Consultations").includes("recovery: 1"),
-					"the recovery count on the header",
-				);
-				expect(headerOf(frame, "Consultations")).toBe(
-					"▾ Consultations  awaiting response: 0  recovery: 1",
-				);
-				// `f` in the Consultation list cycles the section's History filter.
-				// The header's counts read the records the machine holds, so the
-				// closed view - the one that draws no row at all - still names the
-				// recovery need, and the count never moves on the cycle (issue #201,
-				// story 14).
-				await crossToConsultations(setup);
-				const closed = await press(setup, "f", "the closed history filter", (f) =>
-					f.includes("no closed Consultations"),
-				);
-				expect(headerOf(closed, "Consultations")).toBe(
-					"▾ Consultations  awaiting response: 0  recovery: 1",
-				);
-				const all = await press(
-					setup,
-					"f",
-					"the all history filter",
-					(f) => f.includes("grill") && !f.includes("no closed Consultations"),
-				);
-				expect(headerOf(all, "Consultations")).toBe(
-					"▾ Consultations  awaiting response: 0  recovery: 1",
-				);
-			}, state);
-		} finally {
-			state.close();
-		}
+		const planeRecord = await plane({
+			existing: state,
+			sources: [],
+			config,
+		});
+		await booted(async (setup) => {
+			const frame = await awaitFrame(
+				setup,
+				(f) => headerOf(f, "Consultations").includes("recovery: 1"),
+				"the recovery count on the header",
+			);
+			expect(headerOf(frame, "Consultations")).toBe(
+				"▾ Consultations  awaiting response: 0  recovery: 1",
+			);
+			// `f` in the Consultation list cycles the section's History filter.
+			// The header's counts read the records the machine holds, so the
+			// closed view - the one that draws no row at all - still names the
+			// recovery need, and the count never moves on the cycle (issue #201,
+			// story 14).
+			await crossToConsultations(setup);
+			const closed = await press(setup, "f", "the closed history filter", (f) =>
+				f.includes("no closed Consultations"),
+			);
+			expect(headerOf(closed, "Consultations")).toBe(
+				"▾ Consultations  awaiting response: 0  recovery: 1",
+			);
+			const all = await press(
+				setup,
+				"f",
+				"the all history filter",
+				(f) => f.includes("grill") && !f.includes("no closed Consultations"),
+			);
+			expect(headerOf(all, "Consultations")).toBe(
+				"▾ Consultations  awaiting response: 0  recovery: 1",
+			);
+		}, planeRecord);
 	});
 
 	test("the Message line survives a cross, and m reads it in full", async () => {
@@ -873,49 +895,44 @@ describe("the merged Main view", () => {
 		// than this frame holds, so the Message line truncates and the Message
 		// view is the only way to read the whole of it.
 		const narrowConfig: FactoryConfig = { ...config, consultationTypes: {} };
-		const source = new FakeSource("issues", "github-issues", sampleOutcome());
-		try {
-			await withApp(
-				async (setup) => {
-					source.settle(sampleOutcome());
-					await crossToConsultations(setup);
-					const refused = await press(setup, "c", "the refusal", (f) =>
-						messageRowOf(f).includes("no Consultation types configured"),
-					);
-					// The line holds what fits, and no more.
-					expect(widthOf(messageRowOf(refused))).toBeLessThanOrEqual(60);
-					// The same Message answers after the walk back: it is the
-					// frame's line, not a section's.
-					await crossToTickets(setup);
-					const tickets = await settle(setup);
-					expect(messageRowOf(tickets)).toContain("no Consultation types configured");
-					// The bar offers the Message view because the line is cut.
-					expect(actionBarRowOf(tickets)).toContain("m Message");
-					await press(setup, "m", "the Message view", (f) => f.includes("Message view"));
-					const view = await settle(setup);
-					// The view shows the whole message, wrapped at the pane width
-					// the row's time and chip columns leave.
-					expect(view).toContain("no Consultation types");
-					expect(view).toContain("configured; add");
-					expect(view).toContain("[consultation-types.");
-					expect(view).toContain("to the config file");
-				},
-				{
-					width: 60,
-					height: 27,
-					props: {
-						state,
-						config: narrowConfig,
-						home,
-						runner: emptyAgentRunner(),
-						sources: [source],
-					},
-				},
-			);
-		} finally {
-			source.settle(sampleOutcome());
-			state.close();
-		}
+		const planeRecord = await plane({
+			existing: state,
+			sources: [{ config: issuesSource, tickets: [] }],
+			config: narrowConfig,
+		});
+		const source = planeRecord.sources[0] as FakeSource;
+		await withApp(
+			async (setup) => {
+				source.settle(sampleOutcome());
+				await crossToConsultations(setup);
+				const refused = await press(setup, "c", "the refusal", (f) =>
+					messageRowOf(f).includes("no Consultation types configured"),
+				);
+				// The line holds what fits, and no more.
+				expect(widthOf(messageRowOf(refused))).toBeLessThanOrEqual(60);
+				// The same Message answers after the walk back: it is the
+				// frame's line, not a section's.
+				await crossToTickets(setup);
+				const tickets = await settle(setup);
+				expect(messageRowOf(tickets)).toContain("no Consultation types configured");
+				// The bar offers the Message view because the line is cut.
+				expect(actionBarRowOf(tickets)).toContain("m Message");
+				await press(setup, "m", "the Message view", (f) => f.includes("Message view"));
+				const view = await settle(setup);
+				// The view shows the whole message, wrapped at the pane width
+				// the row's time and chip columns leave.
+				expect(view).toContain("no Consultation types");
+				expect(view).toContain("configured; add");
+				expect(view).toContain("[consultation-types.");
+				expect(view).toContain("to the config file");
+			},
+			{
+				width: 60,
+				height: 27,
+				plane: planeRecord,
+				loopPolicy: { kind: "production" },
+			},
+		);
 	});
 
 	test("the frame answers its controls at the minimum size", async () => {
@@ -923,39 +940,40 @@ describe("the merged Main view", () => {
 		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
 		state.grouping.setGroupingAxis("tickets", "none");
 		seedConsultation(state, uid("1"));
-		try {
-			await booted(
-				async (setup) => {
-					// At the minimum size both headers, the Message line and the
-					// Action bar stay permanent, and both sections still hold a
-					// real list box.
-					const frame = await settle(setup);
-					expect(rowsOf(frame)).toHaveLength(26);
-					expect(rowsOf(frame)[0]).toContain("Tickets");
-					expect(rowsOf(frame)[0]).toContain("● manual");
-					expect(rowsOf(frame)[11]).toContain("Consultations");
-					expect(paneTopRows(frame)).toBe(3);
-					expect(actionBarRowOf(frame)).toContain("? Help");
-					expect(messageRowOf(frame)).not.toBe(actionBarRowOf(frame));
-					// The toggle answers at the minimum size, and the room the
-					// collapsed section frees goes to the ones that stay.
-					const collapsed = await press(setup, "x", "the Ticket section to collapse", (f) =>
-						headerOf(f, "Tickets").startsWith("▸"),
-					);
-					expect(rowsOf(collapsed)).toHaveLength(26);
-					expect(paneTopRows(collapsed)).toBe(2);
-					// The collapsed Ticket section keeps its header row, so the
-					// Consultation header and box rise one row.
-					expect(rowsOf(collapsed)[1]).toContain("Consultations");
-					expect(rowsOf(collapsed)[2]).toContain("┌─");
-					expect(rowsOf(collapsed).at(-3)).toContain("└─");
-				},
-				state,
-				{ options: undefined, width: 40, height: 26 },
-			);
-		} finally {
-			state.close();
-		}
+		const planeRecord = await plane({
+			existing: state,
+			sources: [],
+			config,
+		});
+		await booted(
+			async (setup) => {
+				// At the minimum size both headers, the Message line and the
+				// Action bar stay permanent, and both sections still hold a
+				// real list box.
+				const frame = await settle(setup);
+				expect(rowsOf(frame)).toHaveLength(26);
+				expect(rowsOf(frame)[0]).toContain("Tickets");
+				expect(rowsOf(frame)[0]).toContain("● manual");
+				expect(rowsOf(frame)[11]).toContain("Consultations");
+				expect(paneTopRows(frame)).toBe(3);
+				expect(actionBarRowOf(frame)).toContain("? Help");
+				expect(messageRowOf(frame)).not.toBe(actionBarRowOf(frame));
+				// The toggle answers at the minimum size, and the room the
+				// collapsed section frees goes to the ones that stay.
+				const collapsed = await press(setup, "x", "the Ticket section to collapse", (f) =>
+					headerOf(f, "Tickets").startsWith("▸"),
+				);
+				expect(rowsOf(collapsed)).toHaveLength(26);
+				expect(paneTopRows(collapsed)).toBe(2);
+				// The collapsed Ticket section keeps its header row, so the
+				// Consultation header and box rise one row.
+				expect(rowsOf(collapsed)[1]).toContain("Consultations");
+				expect(rowsOf(collapsed)[2]).toContain("┌─");
+				expect(rowsOf(collapsed).at(-3)).toContain("└─");
+			},
+			planeRecord,
+			{ width: 40, height: 26 },
+		);
 	});
 
 	test("the Consultation panes answer the mouse as the Ticket panes do", async () => {
@@ -964,39 +982,40 @@ describe("the merged Main view", () => {
 		state.grouping.setGroupingAxis("tickets", "none");
 		seedConsultation(state, uid("5"));
 		seedConsultation(state, uid("6"));
-		try {
-			await booted(async (setup) => {
-				// The row stands under the ask and the repository, the state word
-				// beside them: the repository is the row's own identity word at
-				// boot, before the observation demotes the record.
-				await awaitFrame(setup, (f) => f.includes("acme/factory"), "the Consultation list");
-				// The Consultation header and box sit below the Ticket
-				// section's: at this size the Ticket section holds the cursor,
-				// so the Consultation box keeps its minimum of three content
-				// rows, and the second seeded row sits on frame row 19. The
-				// click takes the row and grows the Consultation box to the
-				// remaining rows, so the Consultation header rises to row 8 and
-				// the selected row rests on 12.
-				await mouseClick(setup, 10, 19);
-				const selected = await awaitFrame(
-					setup,
-					(f) => rowsOf(f)[12]?.includes("❯ ") === true,
-					"the clicked Consultation to become selected",
-				);
-				expect(selected).toContain("┌─❯ Consultations");
-				// A click inside the Agent view moves the pane focus, and the
-				// Action bar follows with the detail's own hints.
-				await mouseClick(setup, 70, 4);
-				const detailed = await awaitFrame(
-					setup,
-					(f) => f.includes("┌─❯ Agent view"),
-					"the Agent view to take focus",
-				);
-				expect(actionBarRowOf(detailed)).toContain("←/h List");
-			}, state);
-		} finally {
-			state.close();
-		}
+		const planeRecord = await plane({
+			existing: state,
+			sources: [],
+			config,
+		});
+		await booted(async (setup) => {
+			// The row stands under the ask and the repository, the state word
+			// beside them: the repository is the row's own identity word at
+			// boot, before the observation demotes the record.
+			await awaitFrame(setup, (f) => f.includes("acme/factory"), "the Consultation list");
+			// The Consultation header and box sit below the Ticket
+			// section's: at this size the Ticket section holds the cursor,
+			// so the Consultation box keeps its minimum of three content
+			// rows, and the second seeded row sits on frame row 19. The
+			// click takes the row and grows the Consultation box to the
+			// remaining rows, so the Consultation header rises to row 8 and
+			// the selected row rests on 12.
+			await mouseClick(setup, 10, 19);
+			const selected = await awaitFrame(
+				setup,
+				(f) => rowsOf(f)[12]?.includes("❯ ") === true,
+				"the clicked Consultation to become selected",
+			);
+			expect(selected).toContain("┌─❯ Consultations");
+			// A click inside the Agent view moves the pane focus, and the
+			// Action bar follows with the detail's own hints.
+			await mouseClick(setup, 70, 4);
+			const detailed = await awaitFrame(
+				setup,
+				(f) => f.includes("┌─❯ Agent view"),
+				"the Agent view to take focus",
+			);
+			expect(actionBarRowOf(detailed)).toContain("←/h List");
+		}, planeRecord);
 	});
 
 	test("a refusal names the state that is missing, in the section that owns it", async () => {
@@ -1004,70 +1023,67 @@ describe("the merged Main view", () => {
 		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
 		state.grouping.setGroupingAxis("tickets", "none");
 		seedConsultation(state, uid("r"));
-		try {
-			await booted(
-				async (setup) => {
-					// The Delete key is the plane's one destructive key (ADR 0122):
-					// in the Ticket section it answers the Ticket's own Close, and a
-					// Ticket-section key answers the Consultation section the same
-					// way: the key states what is missing, and nothing changes. The
-					// frame holds the proof: every row of both sections, and both
-					// list selections, come back unchanged after each press.
-					const consultationSection = (frame: string) =>
-						rowsOf(frame).filter(
-							(row) => row.includes("Consultations") || row.includes("acme/factory"),
-						);
-					const ticketSection = (frame: string) => {
-						const rows = rowsOf(frame);
-						const header = rows.findIndex((row) => row.includes("Tickets"));
-						const below = rows.findIndex((row) => row.includes("Consultations"));
-						return stillFrame(rows.slice(header, below).join("\n"));
-					};
-					const unchanged = (before: string, after: string, what: string) => {
-						expect(markerRowOf(after), what).toBe(markerRowOf(before));
-						expect(ticketSection(after), what).toBe(ticketSection(before));
-						expect(consultationSection(after), what).toEqual(consultationSection(before));
-					};
-					// The Ticket list refuses first: the list holds no Ticket for
-					// the Delete key's Close, and the Consultation section's own
-					// Delete acts do not reach the Ticket section.
-					const listBefore = await settle(setup);
-					let refusal = await press(setup, "delete", "the close refusal", (f) =>
-						messageRowOf(f).includes("no Ticket is selected"),
+		const planeRecord = await plane({
+			existing: state,
+			sources: [],
+			config,
+			runner: () => liveConsultationAgents([uid("r")]),
+		});
+		await booted(
+			async (setup) => {
+				// The Delete key is the plane's one destructive key (ADR 0122):
+				// in the Ticket section it answers the Ticket's own Close, and a
+				// Ticket-section key answers the Consultation section the same
+				// way: the key states what is missing, and nothing changes. The
+				// frame holds the proof: every row of both sections, and both
+				// list selections, come back unchanged after each press.
+				const consultationSection = (frame: string) =>
+					rowsOf(frame).filter(
+						(row) => row.includes("Consultations") || row.includes("acme/factory"),
 					);
-					expect(messageRowOf(refusal)).toContain("no Ticket is selected");
-					unchanged(listBefore, refusal, "after Delete in the Ticket list");
-					// ...and the Ticket detail pane carries the same refusal, the
-					// seeded Consultation untouched by the key.
-					await focusDetail(setup);
-					const detailBefore = await settle(setup);
-					refusal = await press(setup, "delete", "the close refusal on the detail pane", (f) =>
-						messageRowOf(f).includes("no Ticket is selected"),
-					);
-					expect(messageRowOf(refusal)).toContain("no Ticket is selected");
-					// The refusal changes no Consultation state: the section's header
-					// facts and its rows come back exactly as they were.
-					unchanged(detailBefore, refusal, "after Delete on the Ticket detail pane");
+				const ticketSection = (frame: string) => {
+					const rows = rowsOf(frame);
+					const header = rows.findIndex((row) => row.includes("Tickets"));
+					const below = rows.findIndex((row) => row.includes("Consultations"));
+					return stillFrame(rows.slice(header, below).join("\n"));
+				};
+				const unchanged = (before: string, after: string, what: string) => {
+					expect(markerRowOf(after), what).toBe(markerRowOf(before));
+					expect(ticketSection(after), what).toBe(ticketSection(before));
+					expect(consultationSection(after), what).toEqual(consultationSection(before));
+				};
+				// The Ticket list refuses first: the list holds no Ticket for
+				// the Delete key's Close, and the Consultation section's own
+				// Delete acts do not reach the Ticket section.
+				const listBefore = await settle(setup);
+				let refusal = await press(setup, "delete", "the close refusal", (f) =>
+					messageRowOf(f).includes("no Ticket is selected"),
+				);
+				expect(messageRowOf(refusal)).toContain("no Ticket is selected");
+				unchanged(listBefore, refusal, "after Delete in the Ticket list");
+				// ...and the Ticket detail pane carries the same refusal, the
+				// seeded Consultation untouched by the key.
+				await focusDetail(setup);
+				const detailBefore = await settle(setup);
+				refusal = await press(setup, "delete", "the close refusal on the detail pane", (f) =>
+					messageRowOf(f).includes("no Ticket is selected"),
+				);
+				expect(messageRowOf(refusal)).toContain("no Ticket is selected");
+				// The refusal changes no Consultation state: the section's header
+				// facts and its rows come back exactly as they were.
+				unchanged(detailBefore, refusal, "after Delete on the Ticket detail pane");
 
-					// A Ticket-section control answers the same way in the
-					// Consultation section: the key states what is missing.
-					await crossToConsultations(setup);
-					const ticketRefusal = await press(setup, "e", "the override refusal", (f) =>
-						messageRowOf(f).includes("only in the Ticket section"),
-					);
-					expect(messageRowOf(ticketRefusal)).toContain("only in the Ticket section");
-				},
-				state,
-				{
-					options: undefined,
-					width: WIDTH,
-					height: 32,
-					runner: liveConsultationAgents([uid("r")]),
-				},
-			);
-		} finally {
-			state.close();
-		}
+				// A Ticket-section control answers the same way in the
+				// Consultation section: the key states what is missing.
+				await crossToConsultations(setup);
+				const ticketRefusal = await press(setup, "e", "the override refusal", (f) =>
+					messageRowOf(f).includes("only in the Ticket section"),
+				);
+				expect(messageRowOf(ticketRefusal)).toContain("only in the Ticket section");
+			},
+			planeRecord,
+			{ width: WIDTH, height: 32 },
+		);
 	});
 
 	test("the mode cell, the panes and the bar keep their rows in both sections", async () => {
@@ -1075,55 +1091,56 @@ describe("the merged Main view", () => {
 		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
 		state.grouping.setGroupingAxis("tickets", "none");
 		seedConsultation(state, uid("2"));
-		try {
-			await booted(async (setup) => {
-				// The row stands under the ask and the repository, the state word
-				// beside them: the repository is the row's own identity word at
-				// boot, before the observation demotes the record.
-				const frame = await awaitFrame(
-					setup,
-					(f) => f.includes("acme/factory"),
-					"the Consultation list",
-				);
-				const rows = rowsOf(frame);
-				// The Ticket header with its mode cell, then the headers and the
-				// boxes, then the Message line and the Action bar: one frame, in
-				// that order, in both sections.
-				expect(rows[0]).toContain("● manual");
-				expect(rows[0]).toContain("Tickets");
-				expect(rows[15]).toContain("Consultations");
-				expect(rows[1]).toContain("┌─");
-				expect(rows.at(-3)).toContain("└─");
-				expect(actionBarRowOf(frame)).toContain("x Section");
-				// The bar follows the section under the cursor, and the
-				// Consultation section's History keeps its bar hint there.
-				await crossToConsultations(setup);
-				const across = await settle(setup);
-				expect(rowsOf(across)[0]).toContain("● manual");
-				expect(actionBarRowOf(across)).toContain("f History");
-				// The packing at this width drops the four lowest-priority hints -
-				// Delete (35), Launch (40), Section (45), and Close (50) - once
-				// the Message hint the recorded facts put on the bar (ADR 0119)
-				// takes its cells, and the Key guide keeps every key. The Ticket
-				// bar above still shows its own Section hint.
-				expect(actionBarRowOf(across)).not.toContain("x Section");
-				expect(actionBarRowOf(across)).not.toContain("Delete");
-				expect(actionBarRowOf(across)).not.toContain("Close");
-				// The corner's ink comes from the Theme the environment resolved:
-				// the mode's own role for the lamp and its word, and the room color
-				// for the seat reading under the cap (ADR 0024, ADR 0034).
-				expect(spanColorAt(setup, 0, "● manual")).toEqual(rgb(roleColor("green")));
-				expect(spanColorAt(setup, 0, "0/2")).toEqual(rgb(roleColor("green")));
-				// Turning auto-handoff on moves the lamp and its word to the
-				// warning color while the counts keep the header's own ink.
-				await crossToTickets(setup);
-				await press(setup, "a", "auto-handoff to turn on", (f) => f.includes("○ auto"));
-				expect(spanColorAt(setup, 0, "○ auto")).toEqual(rgb(roleColor("yellow")));
-				expect(spanColorAt(setup, 0, "Tickets")).toEqual(rgb(roleColor("text")));
-			}, state);
-		} finally {
-			state.close();
-		}
+		const planeRecord = await plane({
+			existing: state,
+			sources: [],
+			config,
+		});
+		await booted(async (setup) => {
+			// The row stands under the ask and the repository, the state word
+			// beside them: the repository is the row's own identity word at
+			// boot, before the observation demotes the record.
+			const frame = await awaitFrame(
+				setup,
+				(f) => f.includes("acme/factory"),
+				"the Consultation list",
+			);
+			const rows = rowsOf(frame);
+			// The Ticket header with its mode cell, then the headers and the
+			// boxes, then the Message line and the Action bar: one frame, in
+			// that order, in both sections.
+			expect(rows[0]).toContain("● manual");
+			expect(rows[0]).toContain("Tickets");
+			expect(rows[15]).toContain("Consultations");
+			expect(rows[1]).toContain("┌─");
+			expect(rows.at(-3)).toContain("└─");
+			expect(actionBarRowOf(frame)).toContain("x Section");
+			// The bar follows the section under the cursor, and the
+			// Consultation section's History keeps its bar hint there.
+			await crossToConsultations(setup);
+			const across = await settle(setup);
+			expect(rowsOf(across)[0]).toContain("● manual");
+			expect(actionBarRowOf(across)).toContain("f History");
+			// The packing at this width drops the four lowest-priority hints -
+			// Delete (35), Launch (40), Section (45), and Close (50) - once
+			// the Message hint the recorded facts put on the bar (ADR 0119)
+			// takes its cells, and the Key guide keeps every key. The Ticket
+			// bar above still shows its own Section hint.
+			expect(actionBarRowOf(across)).not.toContain("x Section");
+			expect(actionBarRowOf(across)).not.toContain("Delete");
+			expect(actionBarRowOf(across)).not.toContain("Close");
+			// The corner's ink comes from the Theme the environment resolved:
+			// the mode's own role for the lamp and its word, and the room color
+			// for the seat reading under the cap (ADR 0024, ADR 0034).
+			expect(spanColorAt(setup, 0, "● manual")).toEqual(rgb(roleColor("green")));
+			expect(spanColorAt(setup, 0, "0/2")).toEqual(rgb(roleColor("green")));
+			// Turning auto-handoff on moves the lamp and its word to the
+			// warning color while the counts keep the header's own ink.
+			await crossToTickets(setup);
+			await press(setup, "a", "auto-handoff to turn on", (f) => f.includes("○ auto"));
+			expect(spanColorAt(setup, 0, "○ auto")).toEqual(rgb(roleColor("yellow")));
+			expect(spanColorAt(setup, 0, "Tickets")).toEqual(rgb(roleColor("text")));
+		}, planeRecord);
 	});
 
 	test("the Key guide from a Consultation mode names the section controls once", async () => {
@@ -1131,65 +1148,62 @@ describe("the merged Main view", () => {
 		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
 		state.grouping.setGroupingAxis("tickets", "none");
 		seedConsultation(state, uid("3"));
-		try {
-			await booted(
-				async (setup) => {
-					await crossToConsultations(setup);
-					await press(setup, "?", "the Key guide", (f) =>
-						f.includes("Key guide - Consultation list"),
-					);
-					const rows = overlayRows(await settle(setup));
-					// The Consultation controls the merged Main view reached for,
-					// each named once with the key the section accepts. The section's
-					// own tail sits past the first window, so the scroll step below
-					// reads it: the Recovery row of Enter joins the two live meanings,
-					// and the refresh keeps the last row of the group.
-					for (const hint of [
-						"c Launch",
-						"f History",
-						"Delete Close",
-						"s Schedule",
-						"Enter Start now",
-						"Enter Recovery",
-						"Enter Respond",
-						"x Section",
-					])
-						expect(rows.filter((row) => row.includes(hint))).toHaveLength(1);
-					// The Delete key carries the section's two other acts, each
-					// with its own row (ADR 0122): the queue's removal, which
-					// takes the row the cursor's record waits with, and the record's
-					// removal, which takes the record and its history.
-					expect(rows.filter((row) => row.includes("Delete Remove"))).toHaveLength(2);
-					// The guide states no second Message or Help control: the
-					// frame holds one of each, whatever section is expanded. The
-					// Consultation section runs past the first window (Goto, ADR
-					// 0025, and the unscheduled actions, issue #91), so scroll
-					// steps bring its tail into view.
-					let window = rows;
-					const seen = new Set<string>();
-					for (let step = 0; step < 10; step += 1) {
-						for (const row of window) seen.add(row);
-						if (window.some((row) => row.includes("m/F2 Message"))) break;
-						setup.mockInput.pressKey("j");
-						window = overlayRows(await settle(setup));
-					}
-					// The refresh keeps the last row of the group, and the guide
-					// names it once across every window the scroll passed.
-					expect([...seen].filter((row) => row.includes("r Refresh"))).toHaveLength(1);
-					expect(window.filter((row) => row.includes("m/F2 Message"))).toHaveLength(1);
-					expect(window.filter((row) => row.includes("? Help"))).toHaveLength(1);
-				},
-				state,
-				{
-					options: undefined,
-					width: WIDTH,
-					height: 32,
-					runner: liveConsultationAgents([uid("3")]),
-				},
-			);
-		} finally {
-			state.close();
-		}
+		const planeRecord = await plane({
+			existing: state,
+			sources: [],
+			config,
+			runner: () => liveConsultationAgents([uid("3")]),
+		});
+		await booted(
+			async (setup) => {
+				await crossToConsultations(setup);
+				await press(setup, "?", "the Key guide", (f) =>
+					f.includes("Key guide - Consultation list"),
+				);
+				const rows = overlayRows(await settle(setup));
+				// The Consultation controls the merged Main view reached for,
+				// each named once with the key the section accepts. The section's
+				// own tail sits past the first window, so the scroll step below
+				// reads it: the Recovery row of Enter joins the two live meanings,
+				// and the refresh keeps the last row of the group.
+				for (const hint of [
+					"c Launch",
+					"f History",
+					"Delete Close",
+					"s Schedule",
+					"Enter Start now",
+					"Enter Recovery",
+					"Enter Respond",
+					"x Section",
+				])
+					expect(rows.filter((row) => row.includes(hint))).toHaveLength(1);
+				// The Delete key carries the section's two other acts, each
+				// with its own row (ADR 0122): the queue's removal, which
+				// takes the row the cursor's record waits with, and the record's
+				// removal, which takes the record and its history.
+				expect(rows.filter((row) => row.includes("Delete Remove"))).toHaveLength(2);
+				// The guide states no second Message or Help control: the
+				// frame holds one of each, whatever section is expanded. The
+				// Consultation section runs past the first window (Goto, ADR
+				// 0025, and the unscheduled actions, issue #91), so scroll
+				// steps bring its tail into view.
+				let window = rows;
+				const seen = new Set<string>();
+				for (let step = 0; step < 10; step += 1) {
+					for (const row of window) seen.add(row);
+					if (window.some((row) => row.includes("m/F2 Message"))) break;
+					setup.mockInput.pressKey("j");
+					window = overlayRows(await settle(setup));
+				}
+				// The refresh keeps the last row of the group, and the guide
+				// names it once across every window the scroll passed.
+				expect([...seen].filter((row) => row.includes("r Refresh"))).toHaveLength(1);
+				expect(window.filter((row) => row.includes("m/F2 Message"))).toHaveLength(1);
+				expect(window.filter((row) => row.includes("? Help"))).toHaveLength(1);
+			},
+			planeRecord,
+			{ width: WIDTH, height: 32 },
+		);
 	});
 
 	test("a collapsed section keeps its selection, and re-expanding returns to it", async () => {
@@ -1197,32 +1211,31 @@ describe("the merged Main view", () => {
 		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
 		state.grouping.setGroupingAxis("tickets", "none");
 		seedConsultation(state, uid("4"));
-		const source = new FakeSource("issues", "github-issues", sampleOutcome());
-		try {
-			await booted(
-				async (setup) => {
-					source.settle(sampleOutcome());
-					await awaitFrame(setup, (f) => f.includes("Retry policy"), "the Tickets");
-					// Move the Ticket selection, then collapse the section.
-					await press(setup, "j", "the next Ticket", (f) => markerRowOf(f) === 4);
-					await press(setup, "x", "the Ticket section to collapse", (f) =>
-						headerOf(f, "Tickets").startsWith("▸"),
-					);
-					// Coming back finds the same Ticket selected: the collapse
-					// kept the section's state rather than rebuilding it.
-					const back = await press(setup, "x", "the Ticket section to expand", (f) =>
-						headerOf(f, "Tickets").startsWith("▾"),
-					);
-					expect(markerRowOf(back)).toBe(4);
-					expect(back).toContain("Fix pan drift");
-				},
-				state,
-				{ options: { sources: [source] } },
-			);
-		} finally {
-			source.settle(sampleOutcome());
-			state.close();
-		}
+		const planeRecord = await plane({
+			existing: state,
+			sources: [{ config: issuesSource, tickets: [] }],
+			config,
+		});
+		const source = planeRecord.sources[0] as FakeSource;
+		await booted(
+			async (setup) => {
+				source.settle(sampleOutcome());
+				await awaitFrame(setup, (f) => f.includes("Retry policy"), "the Tickets");
+				// Move the Ticket selection, then collapse the section.
+				await press(setup, "j", "the next Ticket", (f) => markerRowOf(f) === 4);
+				await press(setup, "x", "the Ticket section to collapse", (f) =>
+					headerOf(f, "Tickets").startsWith("▸"),
+				);
+				// Coming back finds the same Ticket selected: the collapse
+				// kept the section's state rather than rebuilding it.
+				const back = await press(setup, "x", "the Ticket section to expand", (f) =>
+					headerOf(f, "Tickets").startsWith("▾"),
+				);
+				expect(markerRowOf(back)).toBe(4);
+				expect(back).toContain("Fix pan drift");
+			},
+			planeRecord,
+		);
 	});
 
 	/**
@@ -1319,29 +1332,27 @@ describe("the merged Main view", () => {
 		return { resumed, next };
 	}
 
-	const bootedScrollRoundTrip = (body: (setup: Setup) => Promise<void>) => {
+	const bootedScrollRoundTrip = async (body: (setup: Setup) => Promise<void>) => {
 		const state = openFactoryState(join(home, "state.sqlite"));
 		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
 		state.grouping.setGroupingAxis("tickets", "none");
 		seedConsultation(state, uid("t"));
 		const outcome = longDetailOutcome();
-		const source = new FakeSource("issues", "github-issues", outcome);
+		const planeRecord = await plane({
+			existing: state,
+			sources: [{ config: issuesSource, tickets: [] }],
+			config,
+			runner: () => liveConsultationAgents([uid("t")]),
+		});
+		const source = planeRecord.sources[0] as FakeSource;
 		return booted(
 			async (setup) => {
 				source.settle(outcome);
 				await body(setup);
 			},
-			state,
-			{
-				options: { sources: [source] },
-				width: WIDTH,
-				height: 27,
-				runner: liveConsultationAgents([uid("t")]),
-			},
-		).finally(() => {
-			source.settle(outcome);
-			state.close();
-		});
+			planeRecord,
+			{ width: WIDTH, height: 27 },
+		);
 	};
 
 	test("the Ticket detail keeps its scroll across a round trip through the other section", async () => {
@@ -1374,46 +1385,48 @@ describe("the merged Main view", () => {
 		runner.set("herdr", ["agent", "list"], { stdout: agents("working", 1, "working", 1) });
 		runner.set("herdr", paneReadArgs(a.paneId), { stdout: paneOutput("alpha") });
 		runner.set("herdr", paneReadArgs(b.paneId), { stdout: paneOutput("beta") });
-		try {
-			await withApp(
-				async (setup) => {
-					const booted = await settle(setup);
-					expect(headerOf(booted, "Consultations")).not.toContain("!!!");
-					// A settles while its section is expanded: the header row is
-					// the section's fact row, and the bell rides on it.
-					runner.set("herdr", ["agent", "list"], { stdout: agents("idle", 2, "working", 1) });
-					const expandedBell = await awaitFrame(
-						setup,
-						(f) => headerOf(f, "Consultations").includes("!!!"),
-						"the bell on the expanded header",
-					);
-					expect(headerOf(expandedBell, "Consultations").startsWith("▾")).toBe(true);
-					expect(messageRowOf(expandedBell)).toContain("awaits a response");
-					// Let A's bell expire, so the next one belongs to B.
-					await awaitFrame(
-						setup,
-						(f) => !headerOf(f, "Consultations").includes("!!!"),
-						"the first bell to expire",
-					);
-					// The same fact on the collapsed header: B settles after the
-					// cursor crosses to its section and collapses it.
-					await crossToConsultations(setup);
-					await press(setup, "x", "the Consultation section to collapse", (f) =>
-						headerOf(f, "Consultations").startsWith("▸"),
-					);
-					runner.set("herdr", ["agent", "list"], { stdout: agents("idle", 2, "idle", 2) });
-					const collapsedBell = await awaitFrame(
-						setup,
-						(f) => headerOf(f, "Consultations").includes("!!!"),
-						"the bell on the collapsed header",
-					);
-					expect(headerOf(collapsedBell, "Consultations").startsWith("▸")).toBe(true);
-				},
-				{ width: WIDTH, height: 32, props: { state, config, home, runner, pollIntervalMs: 50 } },
-			);
-		} finally {
-			state.close();
-		}
+		const planeRecord = await plane({
+			existing: state,
+			sources: [],
+			config,
+			runner: () => runner,
+		});
+		await withApp(
+			async (setup) => {
+				const booted = await settle(setup);
+				expect(headerOf(booted, "Consultations")).not.toContain("!!!");
+				// A settles while its section is expanded: the header row is
+				// the section's fact row, and the bell rides on it.
+				runner.set("herdr", ["agent", "list"], { stdout: agents("idle", 2, "working", 1) });
+				const expandedBell = await awaitFrame(
+					setup,
+					(f) => headerOf(f, "Consultations").includes("!!!"),
+					"the bell on the expanded header",
+				);
+				expect(headerOf(expandedBell, "Consultations").startsWith("▾")).toBe(true);
+				expect(messageRowOf(expandedBell)).toContain("awaits a response");
+				// Let A's bell expire, so the next one belongs to B.
+				await awaitFrame(
+					setup,
+					(f) => !headerOf(f, "Consultations").includes("!!!"),
+					"the first bell to expire",
+				);
+				// The same fact on the collapsed header: B settles after the
+				// cursor crosses to its section and collapses it.
+				await crossToConsultations(setup);
+				await press(setup, "x", "the Consultation section to collapse", (f) =>
+					headerOf(f, "Consultations").startsWith("▸"),
+				);
+				runner.set("herdr", ["agent", "list"], { stdout: agents("idle", 2, "idle", 2) });
+				const collapsedBell = await awaitFrame(
+					setup,
+					(f) => headerOf(f, "Consultations").includes("!!!"),
+					"the bell on the collapsed header",
+				);
+				expect(headerOf(collapsedBell, "Consultations").startsWith("▸")).toBe(true);
+			},
+			{ width: WIDTH, height: 32, plane: planeRecord, loopPolicy: { kind: "polled", intervalMs: 50 } },
+		);
 	});
 
 	test("the new output fact shows on the Consultation header, collapsed and expanded", async () => {
@@ -1422,49 +1435,51 @@ describe("the merged Main view", () => {
 		state.grouping.setGroupingAxis("tickets", "none");
 		const { paneId, sessionId } = seedWorking(state, uid("u"));
 		const runner = observationRunner(paneId, sessionId, paneOutput("gamma"));
-		try {
-			await withApp(
-				async (setup) => {
-					await crossToConsultations(setup);
-					await press(setup, "l", "the Agent view to take focus", (f) =>
-						f.includes("┌─❯ Agent view"),
-					);
-					await awaitFrame(
-						setup,
-						(f) => detailPaneText(f).includes("gamma output line 30"),
-						"the Agent output at the follow end",
-					);
-					// Scroll off the follow: the detail keeps its place, so new
-					// output can no longer pull it down.
-					await pressScrollKey(
-						setup,
-						"home",
-						"the Agent view at its start",
-						(f) =>
-							detailPaneText(f).includes("State: working") &&
-							!detailPaneText(f).includes("gamma output line 30"),
-					);
-					// The next refresh reads different output while the detail is
-					// not following: the header states the fact.
-					runner.set("herdr", paneReadArgs(paneId), { stdout: paneOutput("delta") });
-					const newOutput = await awaitFrame(
-						setup,
-						(f) => headerOf(f, "Consultations").includes("new output"),
-						"the new output fact on the header",
-						5000,
-					);
-					expect(headerOf(newOutput, "Consultations").startsWith("▾")).toBe(true);
-					// The collapsed header keeps the fact: the fact belongs to
-					// the selected Consultation, not to the section's room.
-					const collapsed = await press(setup, "x", "the Consultation section to collapse", (f) =>
-						headerOf(f, "Consultations").startsWith("▸"),
-					);
-					expect(headerOf(collapsed, "Consultations")).toContain("new output");
-				},
-				{ width: 160, height: 32, props: { state, config, home, runner } },
-			);
-		} finally {
-			state.close();
-		}
+		const planeRecord = await plane({
+			existing: state,
+			sources: [],
+			config,
+			runner: () => runner,
+		});
+		await withApp(
+			async (setup) => {
+				await crossToConsultations(setup);
+				await press(setup, "l", "the Agent view to take focus", (f) =>
+					f.includes("┌─❯ Agent view"),
+				);
+				await awaitFrame(
+					setup,
+					(f) => detailPaneText(f).includes("gamma output line 30"),
+					"the Agent output at the follow end",
+				);
+				// Scroll off the follow: the detail keeps its place, so new
+				// output can no longer pull it down.
+				await pressScrollKey(
+					setup,
+					"home",
+					"the Agent view at its start",
+					(f) =>
+						detailPaneText(f).includes("State: working") &&
+						!detailPaneText(f).includes("gamma output line 30"),
+				);
+				// The next refresh reads different output while the detail is
+				// not following: the header states the fact.
+				runner.set("herdr", paneReadArgs(paneId), { stdout: paneOutput("delta") });
+				const newOutput = await awaitFrame(
+					setup,
+					(f) => headerOf(f, "Consultations").includes("new output"),
+					"the new output fact on the header",
+					5000,
+				);
+				expect(headerOf(newOutput, "Consultations").startsWith("▾")).toBe(true);
+				// The collapsed header keeps the fact: the fact belongs to
+				// the selected Consultation, not to the section's room.
+				const collapsed = await press(setup, "x", "the Consultation section to collapse", (f) =>
+					headerOf(f, "Consultations").startsWith("▸"),
+				);
+				expect(headerOf(collapsed, "Consultations")).toContain("new output");
+			},
+			{ width: 160, height: 32, plane: planeRecord, loopPolicy: { kind: "production" } },
+		);
 	});
 });
