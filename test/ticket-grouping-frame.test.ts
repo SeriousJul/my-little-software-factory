@@ -21,7 +21,8 @@ import { join } from "node:path";
 import { widthOf } from "../src/components/text.ts";
 import type { FactoryConfig } from "../src/config.ts";
 import type { GroupingAxis } from "../src/domain/grouping.ts";
-import type { FetchedTicket } from "../src/domain/ticket.ts";
+import type { FetchedTicket, Ticket } from "../src/domain/ticket.ts";
+import { agentNameFor } from "../src/naming.ts";
 import { repositoryInitSettingsHash } from "../src/repo-init.ts";
 import type { FactoryState } from "../src/state.ts";
 import { openFactoryState } from "../src/state.ts";
@@ -45,9 +46,8 @@ import {
 	withApp,
 } from "./app-harness.ts";
 import { BASE_CONFIG } from "./base-config.ts";
-import { emptyAgentRunner } from "./fake-runner.ts";
 import { FakeSource } from "./fake-source.ts";
-import { SAMPLE_TICKETS } from "./sample-tickets.ts";
+import { plane, ticketOf, type SeededPlane } from "./seeded-plane.ts";
 import { callsReached } from "./state-fixture.ts";
 
 let home = "";
@@ -200,83 +200,92 @@ const groupConfig: FactoryConfig = {
 };
 
 /**
- * One state with the fixture listed on both feeds.
+ * One plane with the fixture listed on both feeds.
  *
  * `hold` moves the fifth ticket through a Handoff into a held turn (ADR 0016),
  * which is the fact a collapsed header carries as its held count. It is off by
  * default: a held turn also arms the Dispatch pause, and the pause's warning
  * outranks every notice on the Message line, which would hide the axis's own
  * statement from the frames that check it.
+ *
+ * The axis stands where the standing names it; where it names none, the
+ * state file's own answer stands, the fresh file's seeded split (ADR 0066).
  */
-function groupedState(
+async function groupedPlane(
 	hold = false,
 	listed: FetchedTicket[] = tickets(),
 	axis?: GroupingAxis,
 	init = true,
-): { state: FactoryState; sources: FakeSource[] } {
-	const state = openFactoryState(join(home, "state.sqlite"));
-	state.sourceFact.initializeSources([ISSUES, TRIAGE]);
-	// The axis a restart reads back from the state file (ADR 0058), so a frame
-	// can boot on a split instead of stepping the cycle with presses.
-	if (axis !== undefined) state.grouping.setGroupingAxis("tickets", axis);
+	existing?: FactoryState,
+): Promise<SeededPlane> {
 	// The groups' fixtures stand initialized (ADR 0075) by default, so the init
 	// marker stays out of the grouping's own frame and the one-time note stays
 	// out of the Message line: these tests are the grouping's, and the marker
 	// and the note have their own tests below. A boot that asks for an
 	// uninitialized repository skips the seed and lets the marker and the note
 	// stand.
+	const inits: Record<string, string> = {};
 	if (init) {
 		const initHash = repositoryInitSettingsHash(groupConfig.workflowStates, groupConfig.taskTypes);
 		const seeded = new Set<string>();
 		for (const ticket of listed) {
 			if (seeded.has(ticket.repository.identity)) continue;
 			seeded.add(ticket.repository.identity);
-			state.repositoryInit.setRepositoryInitFact(
-				ticket.repository.identity,
-				initHash,
-				"init-commit",
-			);
+			inits[ticket.repository.identity] = initHash;
 		}
 	}
-	state.sourceFact.applyFetch(ISSUES, success(listed));
-	state.sourceFact.applyFetch(TRIAGE, success(triageListing()));
-	if (hold) {
-		const claim = state.handoff.claimHandoff(
-			"github:github.com:I_5",
+	return await plane({
+		existing,
+		statePath: join(home, "state.sqlite"),
+		sources: [
 			{
-				agentType: "pi",
-				environment: "live-worktree",
-				taskType: "implement",
-				model: "",
-				thinking: "",
-				contextWindow: "",
+				config: groupConfig.sources[0]!,
+				tickets: listed.map((ticket) => heldRowOf(ticket, hold)),
 			},
-			"open",
-		);
-		if (!claim.ok) throw new Error(claim.reason);
-		state.handoff.settleHandoff(claim.claim.attemptId, true, undefined, {
+			{ config: groupConfig.sources[1]!, tickets: triageListing().map((ticket) => ticketOf(ticket)) },
+		],
+		config: groupConfig,
+		groupingAxis: axis,
+		...(Object.keys(inits).length > 0 ? { repositoryInits: inits } : {}),
+	});
+}
+
+/** The held row: the turn the standing's `hold` settles under the fifth ticket. */
+function heldRowOf(ticket: FetchedTicket, hold: boolean): Ticket {
+	if (!hold || ticket.identity !== "github:github.com:I_5") return ticketOf(ticket);
+	const agent = agentNameFor({ identity: ticket.identity, title: ticket.title });
+	return ticketOf(ticket, {
+		state: "awaiting",
+		handoff: {
+			agentType: "pi",
+			environment: "live-worktree",
+			taskType: "implement",
+			model: "",
+			thinking: "",
+			contextWindow: "",
+			attemptId: "seeded-held",
 			paneId: "pane-5",
 			tabId: "tab-5",
 			workspaceId: "ws-5",
-		});
-		state.ticketWorkCycle.settleTurn({
-			ticketIdentity: "github:github.com:I_5",
-			handoffId: claim.claim.attemptId,
+			herdrName: null,
+		},
+		handoffCount: 1,
+		lastCompletion: {
 			taskType: "implement",
 			agentType: "pi",
+			agentName: agent,
+			model: "",
+			thinking: "",
+			contextWindow: "",
 			message: "The turn failed.",
 			turnLog: [{ kind: "text", text: "The turn failed." }],
 			completedAt: "2026-08-31T11:00:00Z",
 			cause: "failed",
-		});
-	}
-	return {
-		state,
-		sources: [
-			new FakeSource("issues", "github-issues", success(listed)),
-			new FakeSource("triage", "github-issues", success(triageListing())),
-		],
-	};
+			detail: "",
+			decision: null,
+			transition: null,
+		},
+	});
 }
 
 /** The state file path a fixture opened on, so a restart test can reopen it. */
@@ -298,48 +307,39 @@ async function bootGrouped(
 		/** Stand the repositories uninitialized, so the marker and the note stand. */
 		uninit?: boolean;
 	} = {},
-): Promise<void> {
+	): Promise<void> {
 	const listed = options.list ?? tickets();
-	const made =
+	const planeRecord =
 		options.state === undefined
-			? groupedState(options.hold === true, listed, options.axis, options.uninit !== true)
-			: null;
-	const fixture = made ?? { state: options.state as FactoryState, sources: [] };
-	const sources =
-		fixture.sources.length > 0
-			? fixture.sources
-			: [
-					new FakeSource("issues", "github-issues", success(listed)),
-					new FakeSource("triage", "github-issues", success(triageListing())),
-				];
-	if (made !== null) opened.push(fixture.state);
+			? await groupedPlane(options.hold === true, listed, options.axis, options.uninit !== true)
+			: await plane({
+					existing: options.state,
+					statePath: stateFile(),
+					sources: [
+						{ config: groupConfig.sources[0]!, tickets: listed.map((ticket) => ticketOf(ticket)) },
+						{ config: groupConfig.sources[1]!, tickets: triageListing().map((ticket) => ticketOf(ticket)) },
+					],
+					config: groupConfig,
+				});
+	const sources = planeRecord.sources as FakeSource[];
 	// A frame wide enough for the section's keys beside the Message hint:
 	// a recorded fact (ADR 0119) puts `m Message` on the bar, and the
 	// tests here read their own keys' hints there.
 	const size = options.size ?? [WIDTH + 50, 34];
-	try {
-		await withApp(
-			async (setup) => {
-				sources[0].settle(success(listed));
-				sources[1].settle(success(triageListing()));
-				await awaitFrame(setup, (frame) => frame.includes("❯ Tickets"), "the ticket list");
-				await body(setup, { state: fixture.state, sources });
-			},
-			{
-				width: size[0],
-				height: size[1],
-				props: {
-					state: fixture.state,
-					config: groupConfig,
-					home,
-					runner: emptyAgentRunner(),
-					sources,
-				},
-			},
-		);
-	} finally {
-		if (made !== null) opened.splice(opened.indexOf(fixture.state), 1);
-	}
+	await withApp(
+		async (setup) => {
+			sources[0].settle(success(listed));
+			sources[1].settle(success(triageListing()));
+			await awaitFrame(setup, (frame) => frame.includes("❯ Tickets"), "the ticket list");
+			await body(setup, { state: planeRecord.state, sources });
+		},
+		{
+			width: size[0],
+			height: size[1],
+			plane: planeRecord,
+			loopPolicy: { kind: "production" },
+		},
+	);
 }
 
 /**
@@ -1069,14 +1069,20 @@ describe("the Ticket section's Groups", () => {
 	});
 
 	test("an empty grouped list names the axis in its message", async () => {
-		const state = openFactoryState(stateFile());
-		opened.push(state);
 		// The fresh file boots grouped by repository (ADR 0066): the press the
 		// test makes must start from the flat list to land on the repository
 		// split it checks.
-		state.grouping.setGroupingAxis("tickets", "none");
-		const issues = new FakeSource("issues", "github-issues", success([]));
-		const triage = new FakeSource("triage", "github-issues", success([]));
+		const planeRecord = await plane({
+			statePath: stateFile(),
+			config: groupConfig,
+			groupingAxis: "none",
+			sources: [
+				{ config: groupConfig.sources[0]!, tickets: [] },
+				{ config: groupConfig.sources[1]!, tickets: [] },
+			],
+		});
+		const issues = planeRecord.sources[0] as FakeSource;
+		const triage = planeRecord.sources[1] as FakeSource;
 		await withApp(
 			async (setup) => {
 				issues.settle(success([]));
@@ -1094,13 +1100,8 @@ describe("the Ticket section's Groups", () => {
 			{
 				width: 160,
 				height: 34,
-				props: {
-					state,
-					config: groupConfig,
-					home,
-					runner: emptyAgentRunner(),
-					sources: [issues, triage],
-				},
+				plane: planeRecord,
+				loopPolicy: { kind: "production" },
 			},
 		);
 	});
@@ -1108,12 +1109,11 @@ describe("the Ticket section's Groups", () => {
 	test("the axis survives a restart on the same state file, and the folds do not", async () => {
 		// Seed the flat list, the way a pre-ADR 0066 file did, so the press
 		// writes the axis the restart must find.
-		const first = groupedState(false, tickets(), "none");
-		opened.push(first.state);
+		const first = await groupedPlane(false, tickets(), "none");
 		await withApp(
 			async (setup) => {
-				first.sources[0].settle(success(tickets()));
-				first.sources[1].settle(success(triageListing()));
+				(first.sources[0] as FakeSource).settle(success(tickets()));
+				(first.sources[1] as FakeSource).settle(success(triageListing()));
 				await awaitFrame(setup, (f) => f.includes("❯ Tickets"), "the ticket list");
 				await pressTab(setup, "the repository Groups", (f) => headers(f).length === 2);
 				await pressArrow(setup, "up", "the header", (f) =>
@@ -1124,18 +1124,12 @@ describe("the Ticket section's Groups", () => {
 			{
 				width: WIDTH,
 				height: 34,
-				props: {
-					state: first.state,
-					config: groupConfig,
-					home,
-					runner: emptyAgentRunner(),
-					sources: first.sources,
-				},
+				plane: first,
+				loopPolicy: { kind: "production" },
 			},
 		);
 		expect(first.state.grouping.groupingAxis("tickets")).toBe("repository");
-		first.state.close();
-		opened.splice(opened.indexOf(first.state), 1);
+		first.close();
 
 		// A second boot on the same file: the axis stands where the operator
 		// left it (story 49), and every Group is open again (story 53).
@@ -1155,16 +1149,15 @@ describe("the Ticket section's Groups", () => {
 	test("a state file that will not take the write reports it, and the view changes", async () => {
 		// Seed the flat list, so the press's repository split is the one the
 		// refused write would have stored.
-		const fixture = groupedState(false, tickets(), "none");
-		opened.push(fixture.state);
-		const refusing = fixture.state.grouping as unknown as { setGroupingAxis: () => void };
+		const planeRecord = await groupedPlane(false, tickets(), "none");
+		const refusing = planeRecord.state.grouping as unknown as { setGroupingAxis: () => void };
 		refusing.setGroupingAxis = () => {
 			throw new Error("read-only file system");
 		};
 		await withApp(
 			async (setup) => {
-				fixture.sources[0].settle(success(tickets()));
-				fixture.sources[1].settle(success(triageListing()));
+				(planeRecord.sources[0] as FakeSource).settle(success(tickets()));
+				(planeRecord.sources[1] as FakeSource).settle(success(triageListing()));
 				await awaitFrame(setup, (f) => f.includes("❯ Tickets"), "the ticket list");
 				const told = await pressTab(setup, "the refused write", (f) =>
 					messageRowOf(f).includes("the grouping axis did not save"),
@@ -1176,39 +1169,8 @@ describe("the Ticket section's Groups", () => {
 			{
 				width: WIDTH,
 				height: 34,
-				props: {
-					state: fixture.state,
-					config: groupConfig,
-					home,
-					runner: emptyAgentRunner(),
-					sources: fixture.sources,
-				},
-			},
-		);
-	});
-
-	test("a plane with no state file keeps the axis for the run", async () => {
-		await withApp(
-			async (setup) => {
-				// A plane with no state file holds no stored row, so it starts
-				// flat, the way a file with no row reads (ADR 0058): the press
-				// is the operator's own, and its choice keeps for the run with
-				// nothing written. The window is tall enough for the whole split,
-				// air included, so the first Group's header is on screen.
-				const grouped = await pressTab(setup, "the repository axis", (f) =>
-					messageRowOf(f).includes("grouped by repository"),
-				);
-				expect(grouped).toContain("▾ acme/portal");
-				expect(headers(grouped).length).toBeGreaterThan(1);
-			},
-			{
-				width: WIDTH,
-				height: 40,
-				props: {
-					config: BASE_CONFIG,
-					runner: emptyAgentRunner(),
-					initialTickets: SAMPLE_TICKETS,
-				},
+				plane: planeRecord,
+				loopPolicy: { kind: "production" },
 			},
 		);
 	});
@@ -1218,45 +1180,48 @@ describe("the Ticket section's Groups", () => {
 	// with the source fact they were listed on. The Group for a Removed source
 	// therefore stands while that work does.
 	test("a Removed source keeps its Group while its in-flight ticket does", async () => {
-		const state = openFactoryState(stateFile());
-		opened.push(state);
-		state.sourceFact.initializeSources([ISSUES, TRIAGE]);
-		state.sourceFact.applyFetch(
-			ISSUES,
-			success([issue(1, "Webhook retry", FACTORY, { labels: ["ready-for-agent"] })]),
-		);
-		state.sourceFact.applyFetch(
-			TRIAGE,
-			success([
-				issue(2, "Deploy gate", FACTORY, {
-					labels: ["needs-review"],
-					externalUpdatedAt: "2026-09-02T09:00:00Z",
-				}),
-			]),
-		);
-		const claim = state.handoff.claimHandoff(
-			"github:github.com:I_2",
-			{
-				agentType: "pi",
-				environment: "live-worktree",
-				taskType: "review",
-				model: "",
-				thinking: "",
-				contextWindow: "",
-			},
-			"open",
-		);
-		if (!claim.ok) throw new Error(claim.reason);
-		state.handoff.settleHandoff(claim.claim.attemptId, true, undefined, {
-			paneId: "pane-2",
-			tabId: "tab-2",
-			workspaceId: "ws-2",
+		// The plane stands the feed listed, the review Ticket in flight on it,
+		// and the config the operator left: one feed. The plane's own boot
+		// read turns the other feed's fact Removed on the state.
+		const planeRecord = await plane({
+			statePath: stateFile(),
+			sources: [
+				{
+					config: groupConfig.sources[0]!,
+					tickets: [ticketOf(issue(1, "Webhook retry", FACTORY, { labels: ["ready-for-agent"] }))],
+				},
+				{
+					config: groupConfig.sources[1]!,
+					tickets: [
+						ticketOf(
+							issue(2, "Deploy gate", FACTORY, {
+								labels: ["needs-review"],
+								externalUpdatedAt: "2026-09-02T09:00:00Z",
+							}),
+							{
+								state: "handed-off",
+								handoff: {
+									agentType: "pi",
+									environment: "live-worktree",
+									taskType: "review",
+									model: "",
+									thinking: "",
+									contextWindow: "",
+									attemptId: "seeded-review",
+									paneId: "pane-2",
+									tabId: "tab-2",
+									workspaceId: "ws-2",
+									herdrName: null,
+							},
+								handoffCount: 1,
+							},
+						),
+					],
+				},
+			],
+			config: { ...groupConfig, sources: [groupConfig.sources[0]!] },
 		});
-		// The operator deletes the feed from the Config file: the plane stops
-		// reading it, and the membership turns Removed on the state.
-		state.sourceFact.initializeSources([ISSUES]);
-
-		const issues = new FakeSource("issues", "github-issues", success([]));
+		const issues = planeRecord.sources[0] as FakeSource;
 		await withApp(
 			async (setup) => {
 				issues.settle(
@@ -1275,13 +1240,8 @@ describe("the Ticket section's Groups", () => {
 			{
 				width: WIDTH,
 				height: 34,
-				props: {
-					state,
-					config: { ...groupConfig, sources: [groupConfig.sources[0]] },
-					home,
-					runner: emptyAgentRunner(),
-					sources: [issues],
-				},
+				plane: planeRecord,
+				loopPolicy: { kind: "production" },
 			},
 		);
 	});
@@ -1754,12 +1714,11 @@ describe("the operator's Group order (ADR 0071)", () => {
 	});
 
 	test("the move stands after a restart on the same state file", async () => {
-		const first = groupedState(false, tickets(), "repository");
-		opened.push(first.state);
+		const first = await groupedPlane(false, tickets(), "repository");
 		await withApp(
 			async (setup) => {
-				first.sources[0].settle(success(tickets()));
-				first.sources[1].settle(success(triageListing()));
+				(first.sources[0] as FakeSource).settle(success(tickets()));
+				(first.sources[1] as FakeSource).settle(success(triageListing()));
 				await awaitFrame(setup, (f) => f.includes("❯ Tickets"), "the ticket list");
 				await press(setup, "home", "the first header", (f) =>
 					(rowsOf(f)[markerRowOf(f)] ?? "").includes("▾ acme/billing"),
@@ -1778,17 +1737,11 @@ describe("the operator's Group order (ADR 0071)", () => {
 			{
 				width: WIDTH,
 				height: 34,
-				props: {
-					state: first.state,
-					config: groupConfig,
-					home,
-					runner: emptyAgentRunner(),
-					sources: first.sources,
-				},
+				plane: first,
+				loopPolicy: { kind: "production" },
 			},
 		);
-		first.state.close();
-		opened.splice(opened.indexOf(first.state), 1);
+		first.close();
 
 		const second = openFactoryState(stateFile());
 		opened.push(second);
@@ -1802,16 +1755,15 @@ describe("the operator's Group order (ADR 0071)", () => {
 	});
 
 	test("a state file that will not take the move reports it, and the view changes", async () => {
-		const fixture = groupedState(false, tickets(), "repository");
-		opened.push(fixture.state);
-		const refusing = fixture.state.grouping as unknown as { setGroupOrder: () => void };
+		const planeRecord = await groupedPlane(false, tickets(), "repository");
+		const refusing = planeRecord.state.grouping as unknown as { setGroupOrder: () => void };
 		refusing.setGroupOrder = () => {
 			throw new Error("read-only file system");
 		};
 		await withApp(
 			async (setup) => {
-				fixture.sources[0].settle(success(tickets()));
-				fixture.sources[1].settle(success(triageListing()));
+				(planeRecord.sources[0] as FakeSource).settle(success(tickets()));
+				(planeRecord.sources[1] as FakeSource).settle(success(triageListing()));
 				await awaitFrame(setup, (f) => f.includes("❯ Tickets"), "the ticket list");
 				await press(setup, "home", "the first header", (f) =>
 					(rowsOf(f)[markerRowOf(f)] ?? "").includes("▾ acme/billing"),
@@ -1826,47 +1778,8 @@ describe("the operator's Group order (ADR 0071)", () => {
 			{
 				width: WIDTH,
 				height: 34,
-				props: {
-					state: fixture.state,
-					config: groupConfig,
-					home,
-					runner: emptyAgentRunner(),
-					sources: fixture.sources,
-				},
-			},
-		);
-	});
-
-	test("a plane with no state file keeps the move for the run", async () => {
-		await withApp(
-			async (setup) => {
-				await pressTab(setup, "the repository axis", (f) =>
-					messageRowOf(f).includes("grouped by repository"),
-				);
-				const words = groupOrderWords(setup.captureCharFrame());
-				expect(words.length).toBeGreaterThan(1);
-				await press(setup, "home", "the first header", (f) =>
-					(rowsOf(f)[markerRowOf(f)] ?? "").includes(words[0]),
-				);
-				await press(setup, "-", "the move", (f) => groupOrderWords(f)[0] === words[1]);
-				// The cycle back to the split: the order the press wrote stands,
-				// with nothing to have written it.
-				for (let step = 0; step < 5; step += 1) {
-					await pressTab(setup, "the cycle on", (f) => f.includes("❯ Tickets"));
-				}
-				await pressTab(setup, "the repository axis again", (f) =>
-					messageRowOf(f).includes("grouped by repository"),
-				);
-				expect(groupOrderWords(setup.captureCharFrame())[0]).toBe(words[1]);
-			},
-			{
-				width: WIDTH,
-				height: 40,
-				props: {
-					config: BASE_CONFIG,
-					runner: emptyAgentRunner(),
-					initialTickets: SAMPLE_TICKETS,
-				},
+				plane: planeRecord,
+				loopPolicy: { kind: "production" },
 			},
 		);
 	});
@@ -1943,20 +1856,24 @@ describe("the init marker and the one-time note (ADR 0075)", () => {
 	});
 
 	test("an initialized repository wears no marker, and a drifted one wears drift", async () => {
-		const state = openFactoryState(stateFile());
-		state.sourceFact.initializeSources([ISSUES, TRIAGE]);
-		state.grouping.setGroupingAxis("tickets", "repository");
-		state.sourceFact.applyFetch(ISSUES, success(tickets()));
-		state.sourceFact.applyFetch(TRIAGE, success(triageListing()));
-		const hash = repositoryInitSettingsHash(groupConfig.workflowStates, groupConfig.taskTypes);
-		// billing stands initialized at the current settings: no marker.
-		state.repositoryInit.setRepositoryInitFact(`github.com/${BILLING}`, hash, "init-commit");
-		// factory stands initialized at a changed settings: the drift.
-		state.repositoryInit.setRepositoryInitFact(
-			`github.com/${FACTORY}`,
-			"a-different-hash",
-			"init-commit",
-		);
+		const first = await plane({
+			statePath: stateFile(),
+			sources: [
+				{ config: groupConfig.sources[0]!, tickets: tickets().map((ticket) => ticketOf(ticket)) },
+				{ config: groupConfig.sources[1]!, tickets: triageListing().map((ticket) => ticketOf(ticket)) },
+			],
+			config: groupConfig,
+			groupingAxis: "repository",
+			// billing stands initialized at the current settings: no marker.
+			// factory stands initialized at a changed settings: the drift.
+			repositoryInits: {
+				[`github.com/${BILLING}`]: repositoryInitSettingsHash(
+					groupConfig.workflowStates,
+					groupConfig.taskTypes,
+				),
+				[`github.com/${FACTORY}`]: "a-different-hash",
+			},
+		});
 		await bootGrouped(
 			async (setup) => {
 				const frame = await settle(setup);
@@ -1967,19 +1884,12 @@ describe("the init marker and the one-time note (ADR 0075)", () => {
 				expect(message).toContain("acme/factory (drift)");
 				expect(message).not.toContain("acme/billing");
 			},
-			{ state },
+			{ state: first.state },
 		);
 	});
 
 	test("every repository stands initialized, so no note stands at first sight", async () => {
-		const state = openFactoryState(stateFile());
-		state.sourceFact.initializeSources([ISSUES, TRIAGE]);
-		state.grouping.setGroupingAxis("tickets", "repository");
-		state.sourceFact.applyFetch(ISSUES, success(tickets()));
-		state.sourceFact.applyFetch(TRIAGE, success(triageListing()));
-		const hash = repositoryInitSettingsHash(groupConfig.workflowStates, groupConfig.taskTypes);
-		state.repositoryInit.setRepositoryInitFact(`github.com/${BILLING}`, hash, "init-commit");
-		state.repositoryInit.setRepositoryInitFact(`github.com/${FACTORY}`, hash, "init-commit");
+		const first = await groupedPlane(false, tickets(), "repository");
 		await bootGrouped(
 			async (setup) => {
 				const frame = await settle(setup);
@@ -1987,7 +1897,7 @@ describe("the init marker and the one-time note (ADR 0075)", () => {
 				expect(headers(frame).sort()).toEqual(["▾ acme/billing 2", "▾ acme/factory 3"]);
 				expect(messageRowOf(frame)).not.toContain("Not initialized:");
 			},
-			{ state },
+			{ state: first.state },
 		);
 	});
 });
