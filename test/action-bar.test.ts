@@ -54,14 +54,9 @@ import {
 } from "./app-harness.ts";
 import { BASE_CONFIG } from "./base-config.ts";
 import { DelayedRunner } from "./delayed-runner.ts";
-import {
-	agentListJson,
-	FakeRunner,
-	tabCreateJson,
-	workspaceCreateJson,
-	workspaceListJson,
-} from "./fake-runner.ts";
+import { agentListJson, FakeRunner } from "./fake-runner.ts";
 import { FakeSource } from "./fake-source.ts";
+import { type HerdrWorldDescription, stubHerdrWorld } from "./herdr-world.ts";
 import { SAMPLE_TICKETS } from "./sample-tickets.ts";
 import {
 	callsReached,
@@ -90,25 +85,9 @@ afterEach(() => {
 
 const checkout = () => join(home, "src", "billing");
 
-/** Stub the git answers for a healthy convention checkout. */
-function stubCheckout(runner: FakeRunner): void {
-	const path = checkout();
-	runner.set("git", ["-C", path, "rev-parse", "--git-dir"], { stdout: ".git\n" });
-	runner.set("git", ["-C", path, "remote", "get-url", "origin"], {
-		stdout: "https://github.com/acme/billing.git\n",
-	});
-}
-
-/** Stub a successful live-worktree handoff at the convention checkout. */
-function stubLiveHandoff(runner: FakeRunner): void {
-	const path = checkout();
-	runner.set("herdr", ["workspace", "list"], { stdout: workspaceListJson([]) });
-	runner.set("herdr", ["workspace", "create", "--cwd", path, "--no-focus"], {
-		stdout: workspaceCreateJson("ws-1"),
-	});
-	runner.set("herdr", ["tab", "create", "--workspace", "ws-1", "--cwd", path, "--no-focus"], {
-		stdout: tabCreateJson("pane-1"),
-	});
+/** The healthy convention checkout, stated as a world. */
+function worldCheckout(): HerdrWorldDescription {
+	return { checkouts: [{ path: checkout(), cloneUrl: "https://github.com/acme/billing.git" }] };
 }
 
 describe("the contextual Action bar", () => {
@@ -562,8 +541,7 @@ describe("the contextual Action bar", () => {
 	});
 
 	test("wide Unicode never breaks a row width", async () => {
-		const runner = new FakeRunner();
-		stubCheckout(runner);
+		const runner = stubHerdrWorld(worldCheckout());
 		runner.set("herdr", ["workspace", "list"], {
 			code: 1,
 			stderr: `error: 无法连接 herdr 守护进程，请检查会话状态。${"重".repeat(80)}\n`,
@@ -585,9 +563,7 @@ describe("the contextual Action bar", () => {
 	});
 
 	test("every displayed base alias runs its stated control", async () => {
-		const runner = new FakeRunner();
-		stubCheckout(runner);
-		stubLiveHandoff(runner);
+		const runner = stubHerdrWorld(worldCheckout());
 		const props = {
 			config: BASE_CONFIG,
 			runner,
@@ -693,8 +669,7 @@ describe("the contextual Action bar", () => {
 		);
 
 		// During an active Handoff: q explains itself instead of quitting.
-		const inner = new FakeRunner();
-		stubCheckout(inner);
+		const inner = stubHerdrWorld(worldCheckout());
 		inner.set("herdr", ["workspace", "list"], {
 			code: 1,
 			stderr: "error: the daemon is down\n",
@@ -799,8 +774,7 @@ describe("the contextual Action bar", () => {
 			{ width: WIDTH, height: HEIGHT, props: props },
 		);
 		// Message view, over a truncated failure.
-		const failing = new FakeRunner();
-		stubCheckout(failing);
+		const failing = stubHerdrWorld(worldCheckout());
 		failing.set("herdr", ["workspace", "list"], {
 			code: 1,
 			stderr: `error: the daemon refused the request: ${"x".repeat(150)}\n`,
@@ -1170,9 +1144,7 @@ describe("the contextual Action bar", () => {
 	});
 
 	test("an in-flight handoff keeps its hints, and the second ask refuses once (ADR 0064)", async () => {
-		const runner = new FakeRunner();
-		stubCheckout(runner);
-		stubLiveHandoff(runner);
+		const runner = stubHerdrWorld(worldCheckout());
 		const slow = new DelayedRunner(runner, 2000);
 		const props = {
 			config: BASE_CONFIG,

@@ -71,7 +71,17 @@ import {
 	worktreeCreateJson,
 } from "./fake-runner.ts";
 import { FakeSource } from "./fake-source.ts";
+import { type HerdrWorldDescription, stubHerdrWorld } from "./herdr-world.ts";
 import { issueTicket, success } from "./state-fixture.ts";
+
+/**
+ * The egress double the Consultation suites inject: the fake command runner
+ * and the Stub herdr world both stand it.
+ */
+interface CommandDouble extends CommandRunner {
+	commands(): string[];
+	set(command: string, args: readonly string[], result: Partial<CommandResult>): void;
+}
 
 /** The canonical ids ConsultationRunner rewrites random launch ids to. */
 const AGENT = "consultation-00000000";
@@ -291,16 +301,52 @@ function seedResources(state: FactoryState, id: string): void {
 	});
 }
 
-/** Stub the git answers for a healthy, verified convention checkout. */
-function stubCheckout(runner: FakeRunner): void {
-	runner.set("git", ["-C", checkout, "rev-parse", "--git-dir"], { stdout: ".git\n" });
-	runner.set("git", ["-C", checkout, "remote", "get-url", "origin"], {
-		stdout: "https://github.com/acme/factory.git\n",
-	});
+/** The healthy, verified convention checkout, stated as a world. */
+function worldCheckout(dirty = false): HerdrWorldDescription {
+	return {
+		checkouts: [
+			{
+				path: checkout,
+				cloneUrl: "https://github.com/acme/factory.git",
+				defaultBranch: "main",
+				dirty,
+			},
+		],
+	};
+}
+
+/** The path the pinned worktree launch answers its worktree at. */
+function launchedWorktreePath(): string {
+	return join(home, "worktrees", "factory", BRANCH.replaceAll("/", "-"));
+}
+
+/** The standing the pinned worktree launch leaves behind, stated as a world. */
+function launchedWorktreeWorld(status: "working" | "idle" = "working"): HerdrWorldDescription {
+	const world = worldCheckout();
+	world.workspaces = [{ id: "ws-new", checkoutPath: launchedWorktreePath() }];
+	world.tabs = [{ id: "tab-ws-new", workspaceId: "ws-new" }];
+	world.panes = [{ id: "pane-c1", tabId: "tab-ws-new", workspaceId: "ws-new" }];
+	world.agents = [{ name: AGENT, kind: "pi", status, paneId: "pane-c1" }];
+	return world;
+}
+
+/** The standing the pinned live launch leaves behind, stated as a world. */
+function launchedLiveWorld(
+	existing: boolean,
+	status: "working" | "idle" = "working",
+	dirty = false,
+): HerdrWorldDescription {
+	const world = worldCheckout(dirty);
+	const workspaceId = existing ? "ws-live" : "ws-new";
+	world.workspaces = [{ id: workspaceId, checkoutPath: checkout }];
+	world.tabs = [{ id: "tab-c1", workspaceId, cwd: checkout }];
+	world.panes = [{ id: "pane-c1", tabId: "tab-c1", workspaceId }];
+	world.agents = [{ name: AGENT, kind: "pi", status, paneId: "pane-c1" }];
+	return world;
 }
 
 /** Stub the full worktree launch sequence at the verified checkout. */
-function stubWorktreeLaunch(runner: FakeRunner, branch = BRANCH): void {
+function stubWorktreeLaunch(runner: CommandDouble, branch = BRANCH): void {
 	runner.set("git", ["-C", checkout, "branch", "--list", branch], { stdout: "" });
 	// The worktree base rule: the origin/HEAD symref names the default
 	// branch and the fetch of its single ref succeeds, so the base is the
@@ -330,7 +376,7 @@ function stubWorktreeLaunch(runner: FakeRunner, branch = BRANCH): void {
 }
 
 /** Stub the plain-text pane read the output refresh timer issues. */
-function stubPaneReadText(runner: FakeRunner, paneId: string, output: string): void {
+function stubPaneReadText(runner: CommandDouble, paneId: string, output: string): void {
 	runner.set(
 		"herdr",
 		["agent", "read", paneId, "--lines", "200", "--source", "recent-unwrapped", "--format", "text"],
@@ -339,7 +385,7 @@ function stubPaneReadText(runner: FakeRunner, paneId: string, output: string): v
 }
 
 /** Stub the visible ANSI pane read Agent interaction mode issues. */
-function stubPaneReadAnsi(runner: FakeRunner, paneId: string, output: string): void {
+function stubPaneReadAnsi(runner: CommandDouble, paneId: string, output: string): void {
 	runner.set(
 		"herdr",
 		["agent", "read", paneId, "--lines", "200", "--source", "visible", "--format", "ansi"],
@@ -349,7 +395,7 @@ function stubPaneReadAnsi(runner: FakeRunner, paneId: string, output: string): v
 
 /** Stub the workspace topology: which tabs and panes herdr reports. */
 function stubTopology(
-	runner: FakeRunner,
+	runner: CommandDouble,
 	workspaceId: string,
 	tabs: string[],
 	panes: Array<{ pane_id: string; tab_id: string }>,
@@ -391,10 +437,10 @@ class GatedRunner implements CommandRunner {
 }
 
 class ConsultationRunner implements CommandRunner {
-	private readonly inner: FakeRunner;
+	private readonly inner: CommandDouble;
 	agentListJson: string;
 
-	constructor(inner: FakeRunner, agentListJson: string) {
+	constructor(inner: CommandDouble, agentListJson: string) {
 		this.inner = inner;
 		this.agentListJson = agentListJson;
 	}
@@ -487,16 +533,8 @@ function liveConfigFor(): FactoryConfig {
 	};
 }
 
-/** Stub the git answers for a verified live checkout, optionally dirty. */
-function stubLiveCheckout(runner: FakeRunner, dirty: boolean): void {
-	stubCheckout(runner);
-	runner.set("git", ["-C", checkout, "status", "--porcelain", "--untracked-files=all"], {
-		stdout: dirty ? " M src/app.ts\n" : "",
-	});
-}
-
 /** Stub the live launch into a workspace herdr already holds at the checkout. */
-function stubLiveLaunchExisting(runner: FakeRunner): void {
+function stubLiveLaunchExisting(runner: CommandDouble): void {
 	runner.set("herdr", ["workspace", "list"], {
 		stdout: workspaceListJson([{ id: "ws-live", checkoutPath: checkout }]),
 	});
@@ -512,7 +550,7 @@ function stubLiveLaunchExisting(runner: FakeRunner): void {
 }
 
 /** Stub the live launch that creates a workspace at the checkout. */
-function stubLiveLaunchNew(runner: FakeRunner): void {
+function stubLiveLaunchNew(runner: CommandDouble): void {
 	runner.set("herdr", ["workspace", "list"], { stdout: workspaceListJson([]) });
 	runner.set("herdr", ["workspace", "create", "--cwd", checkout, "--no-focus"], {
 		stdout: workspaceCreateJson("ws-new", "pane-c1"),
@@ -617,8 +655,7 @@ describe("Consultation launch and monitoring through the UI", () => {
 		state.sourceFact.initializeSources([ticketSource]);
 		state.sourceFact.applyFetch(ticketSource, ticketOutcome);
 		const source = new FakeSource(ticketSource.name, ticketSource.kind, ticketOutcome);
-		const inner = new FakeRunner();
-		stubCheckout(inner);
+		const inner = stubHerdrWorld(launchedWorktreeWorld());
 		stubWorktreeLaunch(inner);
 		stubPaneReadText(inner, "pane-c1", "Agent: auth review");
 		const runner = new ConsultationRunner(inner, agentListJson([]));
@@ -806,8 +843,7 @@ describe("Consultation recovery and replacement through the UI", () => {
 	test("an interrupted opening recovers with r", async () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
 		seed(state, OPENING_ID, { agent: false });
-		const inner = new FakeRunner();
-		stubCheckout(inner);
+		const inner = stubHerdrWorld(launchedWorktreeWorld());
 		stubWorktreeLaunch(inner);
 		stubPaneReadText(inner, "pane-c1", "Agent: reviewing");
 		const runner = new ConsultationRunner(inner, agentListJson([]));
@@ -888,8 +924,7 @@ describe("Consultation recovery and replacement through the UI", () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
 		seed(state, FAILED_ID, { agent: false });
 		state.consultationRecord.failConsultationOpening(FAILED_ID, "herdr refused the launch");
-		const inner = new FakeRunner();
-		stubCheckout(inner);
+		const inner = stubHerdrWorld(launchedWorktreeWorld());
 		stubWorktreeLaunch(inner);
 		stubPaneReadText(inner, "pane-c1", "Agent: reviewing");
 		const runner = new ConsultationRunner(inner, agentListJson([]));
@@ -969,8 +1004,7 @@ describe("Consultation Enter reaches the recovery surface its state needs", () =
 	test("Enter on an opening Consultation opens the recovery panel, and Recover retries it", async () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
 		seed(state, OPENING_ID, { agent: false });
-		const inner = new FakeRunner();
-		stubCheckout(inner);
+		const inner = stubHerdrWorld(launchedWorktreeWorld());
 		stubWorktreeLaunch(inner);
 		stubPaneReadText(inner, "pane-c1", "Agent: reviewing");
 		const runner = new ConsultationRunner(inner, agentListJson([]));
@@ -1053,8 +1087,7 @@ describe("Consultation Enter reaches the recovery surface its state needs", () =
 		const state = openFactoryState(join(home, "state.sqlite"));
 		seed(state, MISSING_ID, { agent: false });
 		state.consultationRecord.setConsultationState(MISSING_ID, "missing", "the Agent pane is gone");
-		const inner = new FakeRunner();
-		stubCheckout(inner);
+		const inner = stubHerdrWorld(launchedWorktreeWorld());
 		stubWorktreeLaunch(inner);
 		stubPaneReadText(inner, "pane-c1", "Agent: reviewing");
 		const runner = new ConsultationRunner(inner, agentListJson([]));
@@ -1992,8 +2025,7 @@ describe("Consultation attention through the UI", () => {
 describe("Consultation live-worktree launch through the UI", () => {
 	test("an existing checkout workspace receives the Consultation in a fresh tab", async () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
-		const inner = new FakeRunner();
-		stubLiveCheckout(inner, false);
+		const inner = stubHerdrWorld(launchedLiveWorld(true));
 		stubLiveLaunchExisting(inner);
 		stubPaneReadText(inner, "pane-c1", "Agent: live answer");
 		const runner = new ConsultationRunner(inner, agentListJson([]));
@@ -2032,8 +2064,7 @@ describe("Consultation live-worktree launch through the UI", () => {
 
 	test("a Consultation type's context window rides on its agent start", async () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
-		const inner = new FakeRunner();
-		stubLiveCheckout(inner, false);
+		const inner = stubHerdrWorld(launchedLiveWorld(true));
 		stubLiveLaunchExisting(inner);
 		// The count is part of the argv, so the stub that answers the start
 		// names it: a Consultation that loses its context window never reaches
@@ -2092,8 +2123,7 @@ describe("Consultation live-worktree launch through the UI", () => {
 
 	test("a missing checkout workspace is created and uses its root pane", async () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
-		const inner = new FakeRunner();
-		stubLiveCheckout(inner, false);
+		const inner = stubHerdrWorld(launchedLiveWorld(false));
 		stubLiveLaunchNew(inner);
 		stubPaneReadText(inner, "pane-c1", "Agent: live answer");
 		const runner = new ConsultationRunner(inner, agentListJson([]));
@@ -2131,8 +2161,7 @@ describe("Consultation live-worktree launch through the UI", () => {
 	 */
 	test("every live checkout conflict is named whatever the List filter draws", async () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
-		const inner = new FakeRunner();
-		stubLiveCheckout(inner, false);
+		const inner = stubHerdrWorld(launchedLiveWorld(true));
 		stubLiveLaunchExisting(inner);
 		stubPaneReadText(inner, "pane-c1", "Agent: live answer");
 		// Two Tickets work in this exact checkout: the judged-out one and the one
@@ -2250,8 +2279,7 @@ describe("Consultation live-worktree launch through the UI", () => {
 	 */
 	test("the repository catalog holds every Ticket's repository across a filter cycle", async () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
-		const inner = new FakeRunner();
-		stubLiveCheckout(inner, false);
+		const inner = stubHerdrWorld(worldCheckout());
 		// Two repositories the config does not name, so the catalog can only learn
 		// them from a Ticket's own row: one on a judged-out Ticket with live work,
 		// one on a settled Ticket the pile leaves out.
@@ -2347,8 +2375,7 @@ describe("Consultation live-worktree launch through the UI", () => {
 
 	test("a live checkout conflict blocks the launch until one explicit confirm", async () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
-		const inner = new FakeRunner();
-		stubLiveCheckout(inner, false);
+		const inner = stubHerdrWorld(launchedLiveWorld(true));
 		stubLiveLaunchExisting(inner);
 		stubPaneReadText(inner, "pane-c1", "Agent: live answer");
 		// A Herdr agent already works in this exact checkout.
@@ -2430,8 +2457,7 @@ describe("Consultation live-worktree launch through the UI", () => {
 	 */
 	test("an unfit Model refuses the submit before the record or any external step", async () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
-		const inner = new FakeRunner();
-		stubLiveCheckout(inner, false);
+		const inner = stubHerdrWorld(launchedLiveWorld(true));
 		stubLiveLaunchExisting(inner);
 		// pi reports a list the Consultation type's Model is not in.
 		inner.setModelList("pi", ["anthropic/claude-sonnet-4-5"]);
@@ -2494,8 +2520,7 @@ describe("Consultation live-worktree launch through the UI", () => {
 
 	test("a dirty live checkout warns but never blocks the launch", async () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
-		const inner = new FakeRunner();
-		stubLiveCheckout(inner, true);
+		const inner = stubHerdrWorld(launchedLiveWorld(false, "working", true));
 		stubLiveLaunchNew(inner);
 		stubPaneReadText(inner, "pane-c1", "Agent: live answer");
 		const runner = new ConsultationRunner(inner, agentListJson([]));
@@ -2791,8 +2816,7 @@ for (const exitCase of interactionExitCases) {
 describe("The full Consultation operator flow", () => {
 	test("launch, settle, respond, blocked interaction, settle, close, and inspect the history", async () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
-		const inner = new FakeRunner();
-		stubCheckout(inner);
+		const inner = stubHerdrWorld(launchedWorktreeWorld());
 		stubWorktreeLaunch(inner);
 		stubPaneReadText(inner, "pane-c1", "Agent: answer one");
 		stubPaneReadAnsi(inner, "pane-c1", "agent: typing...");
@@ -2919,8 +2943,7 @@ describe("The full Consultation operator flow", () => {
 		const t = (minutes: number) => new Date(Date.now() + minutes * 60_000).toISOString();
 		seed(state, MISSING_ID, { agent: true, createdAt: t(1) });
 		state.consultationRecord.setConsultationState(MISSING_ID, "missing", "the Agent pane is gone");
-		const inner = new FakeRunner();
-		stubCheckout(inner);
+		const inner = stubHerdrWorld(launchedWorktreeWorld());
 		stubWorktreeLaunch(inner);
 		stubPaneReadText(inner, "pane-c1", "Agent: answer one");
 		inner.set("herdr", ["agent", "prompt", AGENT, "answer one"], { code: 0 });
@@ -2975,8 +2998,7 @@ describe("The full Consultation operator flow", () => {
 		state.sourceFact.initializeSources([ticketSource]);
 		state.sourceFact.applyFetch(ticketSource, outcome);
 		const source = new FakeSource(ticketSource.name, ticketSource.kind, outcome);
-		const inner = new FakeRunner();
-		stubCheckout(inner);
+		const inner = stubHerdrWorld(launchedWorktreeWorld());
 		stubWorktreeLaunch(inner);
 		// The Consultation's own herdr command never answers, so the Consultation
 		// stays in flight and its progress line holds the Message line. The
@@ -3252,8 +3274,7 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 		const state = openFactoryState(join(home, "state.sqlite"));
 		seed(state, seatId);
 		const paneId = `pane-${seatId.slice(0, 8)}`;
-		const inner = new FakeRunner();
-		stubCheckout(inner);
+		const inner = stubHerdrWorld(worldCheckout());
 		const runner = new ConsultationRunner(
 			inner,
 			agentListJson([{ pane: paneId, status: "working" }]),
@@ -3343,8 +3364,7 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 	 */
 	test("a launch with a free seat starts the Consultation and stands no waits line", async () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
-		const inner = new FakeRunner();
-		stubCheckout(inner);
+		const inner = stubHerdrWorld(launchedWorktreeWorld());
 		stubWorktreeLaunch(inner);
 		stubPaneReadText(inner, "pane-c1", "Agent: opened");
 		const runner = new ConsultationRunner(
@@ -3427,8 +3447,7 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 	test("the queue pause holds a Consultation's item with a free seat, and the submit says why", async () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
 		// No seeded Consultation: nothing holds the one seat.
-		const inner = new FakeRunner();
-		stubCheckout(inner);
+		const inner = stubHerdrWorld(worldCheckout());
 		const runner = new ConsultationRunner(inner, agentListJson([]));
 		state.workQueue.setQueuePaused(true);
 		try {
@@ -3489,8 +3508,7 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 		const state = openFactoryState(join(home, "state.sqlite"));
 		seed(state, seatId);
 		const paneId = `pane-${seatId.slice(0, 8)}`;
-		const inner = new FakeRunner();
-		stubCheckout(inner);
+		const inner = stubHerdrWorld(worldCheckout());
 		const runner = new ConsultationRunner(
 			inner,
 			agentListJson([{ pane: paneId, status: "working" }]),
@@ -3555,8 +3573,7 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 		const state = openFactoryState(join(home, "state.sqlite"));
 		seed(state, seatId);
 		const seatPane = `pane-${seatId.slice(0, 8)}`;
-		const inner = new FakeRunner();
-		stubCheckout(inner);
+		const inner = stubHerdrWorld(launchedWorktreeWorld());
 		stubWorktreeLaunch(inner);
 		stubPaneReadText(inner, "pane-c1", "Agent: opened");
 		const runner = new ConsultationRunner(
@@ -3640,8 +3657,7 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 		const state = openFactoryState(join(home, "state.sqlite"));
 		seed(state, seatId);
 		const seatPane = `pane-${seatId.slice(0, 8)}`;
-		const inner = new FakeRunner();
-		stubCheckout(inner);
+		const inner = stubHerdrWorld(launchedWorktreeWorld());
 		stubWorktreeLaunch(inner);
 		stubPaneReadText(inner, "pane-c1", "Agent: opened");
 		const runner = new ConsultationRunner(
@@ -3789,8 +3805,7 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 	test("removing the queue item unschedules the record, and the record keeps standing", async () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
 		seed(state, seatId);
-		const inner = new FakeRunner();
-		stubCheckout(inner);
+		const inner = stubHerdrWorld(worldCheckout());
 		const runner = new ConsultationRunner(inner, agentListJson([]));
 		try {
 			await withApp(
@@ -3825,8 +3840,7 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 	test("the Consultation section schedules the unscheduled record back into the queue", async () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
 		seed(state, seatId);
-		const inner = new FakeRunner();
-		stubCheckout(inner);
+		const inner = stubHerdrWorld(worldCheckout());
 		const runner = new ConsultationRunner(inner, agentListJson([]));
 		try {
 			await withApp(
@@ -3895,8 +3909,7 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 		const state = openFactoryState(join(home, "state.sqlite"));
 		seed(state, seatId);
 		const seatPane = `pane-${seatId.slice(0, 8)}`;
-		const inner = new FakeRunner();
-		stubCheckout(inner);
+		const inner = stubHerdrWorld(launchedWorktreeWorld());
 		stubWorktreeLaunch(inner);
 		stubPaneReadText(inner, "pane-c1", "Agent: opened");
 		const runner = new ConsultationRunner(
@@ -3959,8 +3972,7 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 		const state = openFactoryState(join(home, "state.sqlite"));
 		seed(state, seatId);
 		const seatPane = `pane-${seatId.slice(0, 8)}`;
-		const inner = new FakeRunner();
-		stubCheckout(inner);
+		const inner = stubHerdrWorld(launchedWorktreeWorld());
 		stubWorktreeLaunch(inner);
 		stubPaneReadText(inner, "pane-c1", "Agent: opened");
 		const runner = new ConsultationRunner(
@@ -4031,8 +4043,7 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 	test("the Consultation section deletes the unscheduled record", async () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
 		seed(state, seatId);
-		const inner = new FakeRunner();
-		stubCheckout(inner);
+		const inner = stubHerdrWorld(worldCheckout());
 		const runner = new ConsultationRunner(inner, agentListJson([]));
 		try {
 			await withApp(

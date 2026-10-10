@@ -16,6 +16,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { padToWidth, truncateToWidth, widthOf } from "../src/components/text.ts";
+import type { CommandRunner } from "../src/runner.ts";
 import {
 	actionBarRowOf,
 	awaitFrame,
@@ -46,6 +47,7 @@ import {
 	workspaceListJson,
 } from "./fake-runner.ts";
 import { FakeSource } from "./fake-source.ts";
+import { type HerdrWorldDescription, stubHerdrWorld } from "./herdr-world.ts";
 import { SAMPLE_TICKETS } from "./sample-tickets.ts";
 import {
 	callsReached,
@@ -65,18 +67,22 @@ afterEach(() => {
 
 const home = mkdtempSync(join(tmpdir(), "factory-message-line-"));
 
-function stubCheckout(runner: FakeRunner): void {
-	const path = join(home, "src", "billing");
-	runner.set("git", ["-C", path, "rev-parse", "--git-dir"], { stdout: ".git\n" });
-	runner.set("git", ["-C", path, "remote", "get-url", "origin"], {
-		stdout: "https://github.com/acme/billing.git\n",
-	});
+/** The healthy convention checkout, stated as a world. */
+function worldCheckout(): HerdrWorldDescription {
+	return {
+		checkouts: [
+			{
+				path: join(home, "src", "billing"),
+				cloneUrl: "https://github.com/acme/billing.git",
+				defaultBranch: "main",
+			},
+		],
+	};
 }
 
 /** The failing-handoff stubs: the handoff dies on its workspace list. */
-function failingHandoffRunner(): FakeRunner {
-	const runner = new FakeRunner();
-	stubCheckout(runner);
+function failingHandoffRunner(): CommandRunner {
+	const runner = stubHerdrWorld(worldCheckout());
 	runner.set("herdr", ["workspace", "list"], {
 		code: 1,
 		stderr: "error: the daemon is down\n",
@@ -111,9 +117,8 @@ function historyTimeOf(row: string): string {
 /** A handoff that fails on a deliberately long stderr line. */
 const LONG_LINE = `error: the daemon refused the request after the outage. ${"x".repeat(240)}`;
 
-function longLineHandoffRunner(): FakeRunner {
-	const runner = new FakeRunner();
-	stubCheckout(runner);
+function longLineHandoffRunner(): CommandRunner {
+	const runner = stubHerdrWorld(worldCheckout());
 	runner.set("herdr", ["workspace", "list"], { code: 1, stderr: `${LONG_LINE}\n` });
 	return runner;
 }
@@ -340,8 +345,7 @@ describe("the permanent Message line", () => {
 	test("runs the facts in priority order, and covered warnings return", async () => {
 		const state = freshState();
 		const source = new FakeSource("issues", "github-issues", success([issueTicket()]));
-		const inner = new FakeRunner();
-		stubCheckout(inner);
+		const inner = stubHerdrWorld(worldCheckout());
 		inner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
 		inner.set("herdr", ["workspace", "list"], {
 			code: 1,
@@ -696,8 +700,7 @@ describe("the permanent Message line", () => {
 	});
 
 	test("wraps, scrolls with a range, and closes on Esc and F2", async () => {
-		const runner = new FakeRunner();
-		stubCheckout(runner);
+		const runner = stubHerdrWorld(worldCheckout());
 		const line = `error: the daemon refused the request after the outage. ${"x".repeat(2000)}`;
 		runner.set("herdr", ["workspace", "list"], { code: 1, stderr: `${line}\n` });
 		await withApp(
@@ -773,8 +776,7 @@ describe("the permanent Message line", () => {
 	}
 
 	test("its bar names the Close control down to one whole key", async () => {
-		const runner = new FakeRunner();
-		stubCheckout(runner);
+		const runner = stubHerdrWorld(worldCheckout());
 		runner.set("herdr", ["workspace", "list"], { code: 1, stderr: `${LONG_LINE}\n` });
 		await withApp(
 			async (setup) => {
