@@ -31,6 +31,7 @@ import {
 	press,
 	pressArrow,
 	pressEnterQuiet,
+	waitSourceHealthy,
 	WIDTH,
 	withApp,
 } from "./app-harness.ts";
@@ -581,9 +582,13 @@ describe("the environment a handoff builds stays out of the view", () => {
 		const source = planeRecord.sources[0] as FakeSource;
 		const checkout = checkoutOf(planeRecord.home);
 		await withApp(
-			async (setup) => {
-				source.settle(outcome);
+				async (setup) => {
+					source.settle(outcome);
 					await awaitFrame(setup, (f) => f.includes("[open]"), "the open ticket");
+					// The boot read settles on the seeded snapshot; wait for its
+					// health to stand before the handoff, so the claim's
+					// actionability gate reads the settle, not the loading it left.
+					await waitSourceHealthy(state);
 					// Enter hands the row under the cursor off with the defaults.
 					await pressEnterQuiet(setup, "the handoff to run", () =>
 						runner.commands().some((c) => c.startsWith("herdr agent prompt")),
