@@ -23,6 +23,7 @@ import {
 	rgb,
 	rowSelected,
 	spanColors,
+	waitSourceHealthy,
 	WIDTH,
 	withApp,
 } from "./app-harness.ts";
@@ -126,6 +127,7 @@ describe("the Task row's placement note", () => {
 				// healthy, and a healthy membership is what makes the ticket
 				// actionable.
 				app.src.settle(success);
+				await waitSourceHealthy(app.plane.state);
 				await press(setup, "e", "the override panel", (f) => f.includes("Override"));
 				await press(setup, "j", "the Environment row", (f) => rowSelected(f, "Environment"));
 				await press(setup, "j", "the Task type row", (f) => rowSelected(f, "Task type"));
@@ -164,6 +166,7 @@ describe("the Task row's placement note", () => {
 				// healthy, and a healthy membership is what makes the ticket
 				// actionable.
 				app.src.settle(success);
+				await waitSourceHealthy(app.plane.state);
 				await press(setup, "e", "the override panel", (f) => f.includes("Override"));
 				await press(setup, "j", "the Environment row", (f) => rowSelected(f, "Environment"));
 				await press(setup, "j", "the Task type row", (f) => rowSelected(f, "Task type"));
@@ -198,6 +201,7 @@ describe("the Task row's placement note", () => {
 				// healthy, and a healthy membership is what makes the ticket
 				// actionable.
 				app.src.settle(success);
+				await waitSourceHealthy(app.plane.state);
 				await press(setup, "e", "the override panel", (f) => f.includes("Override"));
 				await press(setup, "j", "the Environment row", (f) => rowSelected(f, "Environment"));
 				const implement = await press(setup, "j", "the Task type row", (f) =>
