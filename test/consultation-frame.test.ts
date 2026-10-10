@@ -64,11 +64,8 @@ import { expectNoCommand } from "./command-assertions.ts";
 import {
 	FakeRunner,
 	herdrFocusCommands,
-	tabCreateJson,
-	workspaceCreateJson,
 	workspaceGetJson,
 	workspaceListJson,
-	worktreeCreateJson,
 } from "./fake-runner.ts";
 import { FakeSource } from "./fake-source.ts";
 import { type HerdrWorldDescription, stubHerdrWorld } from "./herdr-world.ts";
@@ -315,64 +312,26 @@ function worldCheckout(dirty = false): HerdrWorldDescription {
 	};
 }
 
-/** The path the pinned worktree launch answers its worktree at. */
-function launchedWorktreePath(): string {
-	return join(home, "worktrees", "factory", BRANCH.replaceAll("/", "-"));
-}
-
-/** The standing the pinned worktree launch leaves behind, stated as a world. */
-function launchedWorktreeWorld(status: "working" | "idle" = "working"): HerdrWorldDescription {
+/**
+ * The standing a world-run worktree launch starts from: the checkout and its
+ * worktrees root, no workspace. The world's own `worktree create` builds the
+ * workspace, the tab, and the Agent's pane.
+ */
+function worktreeLaunchStanding(): HerdrWorldDescription {
 	const world = worldCheckout();
-	world.workspaces = [{ id: "ws-new", checkoutPath: launchedWorktreePath() }];
-	world.tabs = [{ id: "tab-ws-new", workspaceId: "ws-new" }];
-	world.panes = [{ id: "pane-c1", tabId: "tab-ws-new", workspaceId: "ws-new" }];
-	world.agents = [{ name: AGENT, kind: "pi", status, paneId: "pane-c1" }];
+	world.checkouts[0].worktreesRoot = join(home, "worktrees", "factory");
 	return world;
 }
 
-/** The standing the pinned live launch leaves behind, stated as a world. */
-function launchedLiveWorld(
-	existing: boolean,
-	status: "working" | "idle" = "working",
-	dirty = false,
-): HerdrWorldDescription {
+/**
+ * The standing a world-run live launch starts from: the operator's workspace,
+ * no tab of its own. The world's own `tab create` makes the Agent's tab and
+ * pane, so the Agent sits in the world's first pane.
+ */
+function liveLaunchStanding(existing: boolean, dirty = false): HerdrWorldDescription {
 	const world = worldCheckout(dirty);
-	const workspaceId = existing ? "ws-live" : "ws-new";
-	world.workspaces = [{ id: workspaceId, checkoutPath: checkout }];
-	world.tabs = [{ id: "tab-c1", workspaceId, cwd: checkout }];
-	world.panes = [{ id: "pane-c1", tabId: "tab-c1", workspaceId }];
-	world.agents = [{ name: AGENT, kind: "pi", status, paneId: "pane-c1" }];
+	world.workspaces = [{ id: existing ? "ws-live" : "ws-new", checkoutPath: checkout }];
 	return world;
-}
-
-/** Stub the full worktree launch sequence at the verified checkout. */
-function stubWorktreeLaunch(runner: CommandDouble, branch = BRANCH): void {
-	runner.set("git", ["-C", checkout, "branch", "--list", branch], { stdout: "" });
-	// The worktree base rule: the origin/HEAD symref names the default
-	// branch and the fetch of its single ref succeeds, so the base is the
-	// fetched remote ref.
-	runner.set("git", ["-C", checkout, "symbolic-ref", "refs/remotes/origin/HEAD"], {
-		stdout: "refs/remotes/origin/main\n",
-	});
-	runner.set(
-		"herdr",
-		[
-			"worktree",
-			"create",
-			"--cwd",
-			checkout,
-			"--branch",
-			branch,
-			"--base",
-			"origin/main",
-			"--no-focus",
-		],
-		{ stdout: worktreeCreateJson("ws-new", "pane-c1") },
-	);
-	runner.set("herdr", ["agent", "start", AGENT, "--kind", "pi", "--pane", "pane-c1"], {
-		stdout: JSON.stringify({ result: { agent: { session_id: "sess-c1" } } }),
-	});
-	runner.set("herdr", ["agent", "prompt", AGENT, "/grill review auth"], { code: 0 });
 }
 
 /** Stub the plain-text pane read the output refresh timer issues. */
@@ -520,7 +479,7 @@ const agentListJson = (
 	});
 
 /** The full-flow launch's agent list entry, matched to its recorded handles. */
-const launchedAgent = { pane: "pane-c1", tab: "tab-ws-new", ws: "ws-new", sess: "sess-c1" };
+const launchedAgent = { pane: "pane-1", tab: "tab-1", ws: "ws-1", sess: "sess-c1" };
 
 /** A configuration with a live-worktree Consultation type. */
 function liveConfigFor(): FactoryConfig {
@@ -531,34 +490,6 @@ function liveConfigFor(): FactoryConfig {
 			"grill-live": { agent: "pi", environment: "live-worktree", template: "/grill {input}" },
 		},
 	};
-}
-
-/** Stub the live launch into a workspace herdr already holds at the checkout. */
-function stubLiveLaunchExisting(runner: CommandDouble): void {
-	runner.set("herdr", ["workspace", "list"], {
-		stdout: workspaceListJson([{ id: "ws-live", checkoutPath: checkout }]),
-	});
-	runner.set(
-		"herdr",
-		["tab", "create", "--workspace", "ws-live", "--cwd", checkout, "--no-focus"],
-		{ stdout: tabCreateJson("pane-c1", "tab-c1") },
-	);
-	runner.set("herdr", ["agent", "start", AGENT, "--kind", "pi", "--pane", "pane-c1"], {
-		stdout: JSON.stringify({ result: { agent: { session_id: "sess-c1" } } }),
-	});
-	runner.set("herdr", ["agent", "prompt", AGENT, "/grill review auth"], { code: 0 });
-}
-
-/** Stub the live launch that creates a workspace at the checkout. */
-function stubLiveLaunchNew(runner: CommandDouble): void {
-	runner.set("herdr", ["workspace", "list"], { stdout: workspaceListJson([]) });
-	runner.set("herdr", ["workspace", "create", "--cwd", checkout, "--no-focus"], {
-		stdout: workspaceCreateJson("ws-new", "pane-c1"),
-	});
-	runner.set("herdr", ["agent", "start", AGENT, "--kind", "pi", "--pane", "pane-c1"], {
-		stdout: JSON.stringify({ result: { agent: { session_id: "sess-c1" } } }),
-	});
-	runner.set("herdr", ["agent", "prompt", AGENT, "/grill review auth"], { code: 0 });
 }
 
 /** Count the attention-bell bytes the app writes to the terminal. */
@@ -655,9 +586,8 @@ describe("Consultation launch and monitoring through the UI", () => {
 		state.sourceFact.initializeSources([ticketSource]);
 		state.sourceFact.applyFetch(ticketSource, ticketOutcome);
 		const source = new FakeSource(ticketSource.name, ticketSource.kind, ticketOutcome);
-		const inner = stubHerdrWorld(launchedWorktreeWorld());
-		stubWorktreeLaunch(inner);
-		stubPaneReadText(inner, "pane-c1", "Agent: auth review");
+		const inner = stubHerdrWorld(worktreeLaunchStanding());
+		stubPaneReadText(inner, "pane-1", "Agent: auth review");
 		const runner = new ConsultationRunner(inner, agentListJson([]));
 		try {
 			await withApp(
@@ -675,7 +605,7 @@ describe("Consultation launch and monitoring through the UI", () => {
 						runner,
 						[
 							`herdr worktree create --cwd ${checkout} --branch ${BRANCH} --base origin/main --no-focus`,
-							`herdr agent start ${AGENT} --kind pi --pane pane-c1`,
+							`herdr agent start ${AGENT} --kind pi --pane pane-1`,
 							`herdr agent prompt ${AGENT} /grill review auth`,
 						],
 						"the launch command sequence",
@@ -684,7 +614,7 @@ describe("Consultation launch and monitoring through the UI", () => {
 					const started = state.consultationRecord.consultations("open");
 					expect(started).toHaveLength(1);
 					expect(started[0].state).toBe("working");
-					expect(started[0].paneId).toBe("pane-c1");
+					expect(started[0].paneId).toBe("pane-1");
 					expect(state.consultationRecord.consultation(started[0].id)?.pendingResponse).toBeNull();
 				},
 				{
@@ -843,9 +773,8 @@ describe("Consultation recovery and replacement through the UI", () => {
 	test("an interrupted opening recovers with r", async () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
 		seed(state, OPENING_ID, { agent: false });
-		const inner = stubHerdrWorld(launchedWorktreeWorld());
-		stubWorktreeLaunch(inner);
-		stubPaneReadText(inner, "pane-c1", "Agent: reviewing");
+		const inner = stubHerdrWorld(worktreeLaunchStanding());
+		stubPaneReadText(inner, "pane-1", "Agent: reviewing");
 		const runner = new ConsultationRunner(inner, agentListJson([]));
 		try {
 			await withApp(
@@ -924,9 +853,8 @@ describe("Consultation recovery and replacement through the UI", () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
 		seed(state, FAILED_ID, { agent: false });
 		state.consultationRecord.failConsultationOpening(FAILED_ID, "herdr refused the launch");
-		const inner = stubHerdrWorld(launchedWorktreeWorld());
-		stubWorktreeLaunch(inner);
-		stubPaneReadText(inner, "pane-c1", "Agent: reviewing");
+		const inner = stubHerdrWorld(worktreeLaunchStanding());
+		stubPaneReadText(inner, "pane-1", "Agent: reviewing");
 		const runner = new ConsultationRunner(inner, agentListJson([]));
 		const expectedInput = state.consultationRecord.replacementInput(FAILED_ID);
 		try {
@@ -1004,9 +932,8 @@ describe("Consultation Enter reaches the recovery surface its state needs", () =
 	test("Enter on an opening Consultation opens the recovery panel, and Recover retries it", async () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
 		seed(state, OPENING_ID, { agent: false });
-		const inner = stubHerdrWorld(launchedWorktreeWorld());
-		stubWorktreeLaunch(inner);
-		stubPaneReadText(inner, "pane-c1", "Agent: reviewing");
+		const inner = stubHerdrWorld(worktreeLaunchStanding());
+		stubPaneReadText(inner, "pane-1", "Agent: reviewing");
 		const runner = new ConsultationRunner(inner, agentListJson([]));
 		try {
 			await withApp(
@@ -1087,9 +1014,8 @@ describe("Consultation Enter reaches the recovery surface its state needs", () =
 		const state = openFactoryState(join(home, "state.sqlite"));
 		seed(state, MISSING_ID, { agent: false });
 		state.consultationRecord.setConsultationState(MISSING_ID, "missing", "the Agent pane is gone");
-		const inner = stubHerdrWorld(launchedWorktreeWorld());
-		stubWorktreeLaunch(inner);
-		stubPaneReadText(inner, "pane-c1", "Agent: reviewing");
+		const inner = stubHerdrWorld(worktreeLaunchStanding());
+		stubPaneReadText(inner, "pane-1", "Agent: reviewing");
 		const runner = new ConsultationRunner(inner, agentListJson([]));
 		const expectedInput = state.consultationRecord.replacementInput(MISSING_ID);
 		try {
@@ -2025,9 +1951,8 @@ describe("Consultation attention through the UI", () => {
 describe("Consultation live-worktree launch through the UI", () => {
 	test("an existing checkout workspace receives the Consultation in a fresh tab", async () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
-		const inner = stubHerdrWorld(launchedLiveWorld(true));
-		stubLiveLaunchExisting(inner);
-		stubPaneReadText(inner, "pane-c1", "Agent: live answer");
+		const inner = stubHerdrWorld(liveLaunchStanding(true));
+		stubPaneReadText(inner, "pane-1", "Agent: live answer");
 		const runner = new ConsultationRunner(inner, agentListJson([]));
 		try {
 			await withApp(
@@ -2045,14 +1970,14 @@ describe("Consultation live-worktree launch through the UI", () => {
 						[
 							"herdr workspace list",
 							`herdr tab create --workspace ws-live --cwd ${checkout} --no-focus`,
-							`herdr agent start ${AGENT} --kind pi --pane pane-c1`,
+							`herdr agent start ${AGENT} --kind pi --pane pane-1`,
 							`herdr agent prompt ${AGENT} /grill review auth`,
 						],
 						"the live launch sequence",
 					);
 					const [consultation] = state.consultationRecord.consultations("open");
 					expect(consultation.state).toBe("working");
-					expect(consultation.paneId).toBe("pane-c1");
+					expect(consultation.paneId).toBe("pane-1");
 					expect(consultation.workspaceId).toBe("ws-live");
 				},
 				{ width: WIDTH, height: 32, props: { state, runner, config: liveConfigFor(), home } },
@@ -2064,17 +1989,16 @@ describe("Consultation live-worktree launch through the UI", () => {
 
 	test("a Consultation type's context window rides on its agent start", async () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
-		const inner = stubHerdrWorld(launchedLiveWorld(true));
-		stubLiveLaunchExisting(inner);
+		const inner = stubHerdrWorld(liveLaunchStanding(true));
 		// The count is part of the argv, so the stub that answers the start
 		// names it: a Consultation that loses its context window never reaches
 		// this answer and the launch below fails.
 		inner.set(
 			"herdr",
-			["agent", "start", AGENT, "--kind", "pi", "--pane", "pane-c1", "--", "--context", "131072"],
+			["agent", "start", AGENT, "--kind", "pi", "--pane", "pane-1", "--", "--context", "131072"],
 			{ stdout: JSON.stringify({ result: { agent: { session_id: "sess-c1" } } }) },
 		);
-		stubPaneReadText(inner, "pane-c1", "Agent: live answer");
+		stubPaneReadText(inner, "pane-1", "Agent: live answer");
 		const runner = new ConsultationRunner(inner, agentListJson([]));
 		const config: FactoryConfig = {
 			...liveConfigFor(),
@@ -2106,7 +2030,7 @@ describe("Consultation live-worktree launch through the UI", () => {
 					await awaitFrame(setup, (f) => f.includes("State: working"), "the working state");
 					await waitForCommands(
 						runner,
-						[`herdr agent start ${AGENT} --kind pi --pane pane-c1 -- --context 131072`],
+						[`herdr agent start ${AGENT} --kind pi --pane pane-1 -- --context 131072`],
 						"the live start with the count",
 					);
 					// The record keeps the count the Agent started with, so a
@@ -2123,9 +2047,8 @@ describe("Consultation live-worktree launch through the UI", () => {
 
 	test("a missing checkout workspace is created and uses its root pane", async () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
-		const inner = stubHerdrWorld(launchedLiveWorld(false));
-		stubLiveLaunchNew(inner);
-		stubPaneReadText(inner, "pane-c1", "Agent: live answer");
+		const inner = stubHerdrWorld(liveLaunchStanding(false));
+		stubPaneReadText(inner, "pane-1", "Agent: live answer");
 		const runner = new ConsultationRunner(inner, agentListJson([]));
 		try {
 			await withApp(
@@ -2140,7 +2063,7 @@ describe("Consultation live-worktree launch through the UI", () => {
 					await awaitFrame(setup, (f) => f.includes("State: working"), "the working state");
 					const [consultation] = state.consultationRecord.consultations("open");
 					expect(consultation.state).toBe("working");
-					expect(consultation.paneId).toBe("pane-c1");
+					expect(consultation.paneId).toBe("pane-1");
 					expect(consultation.workspaceId).toBe("ws-new");
 				},
 				{ width: WIDTH, height: 32, props: { state, runner, config: liveConfigFor(), home } },
@@ -2161,9 +2084,8 @@ describe("Consultation live-worktree launch through the UI", () => {
 	 */
 	test("every live checkout conflict is named whatever the List filter draws", async () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
-		const inner = stubHerdrWorld(launchedLiveWorld(true));
-		stubLiveLaunchExisting(inner);
-		stubPaneReadText(inner, "pane-c1", "Agent: live answer");
+		const inner = stubHerdrWorld(liveLaunchStanding(true));
+		stubPaneReadText(inner, "pane-1", "Agent: live answer");
 		// Two Tickets work in this exact checkout: the judged-out one and the one
 		// the operator left in the list. Both Agents are live; neither row's place
 		// in the filter decides whether the safety read names it.
@@ -2375,9 +2297,8 @@ describe("Consultation live-worktree launch through the UI", () => {
 
 	test("a live checkout conflict blocks the launch until one explicit confirm", async () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
-		const inner = stubHerdrWorld(launchedLiveWorld(true));
-		stubLiveLaunchExisting(inner);
-		stubPaneReadText(inner, "pane-c1", "Agent: live answer");
+		const inner = stubHerdrWorld(liveLaunchStanding(true));
+		stubPaneReadText(inner, "pane-1", "Agent: live answer");
 		// A Herdr agent already works in this exact checkout.
 		const conflictList = JSON.stringify({
 			result: {
@@ -2422,7 +2343,7 @@ describe("Consultation live-worktree launch through the UI", () => {
 					await waitForCommands(
 						runner,
 						[
-							`herdr agent start ${AGENT} --kind pi --pane pane-c1`,
+							`herdr agent start ${AGENT} --kind pi --pane pane-1`,
 							`herdr agent prompt ${AGENT} /grill review auth`,
 						],
 						"the confirmed launch sequence",
@@ -2457,8 +2378,7 @@ describe("Consultation live-worktree launch through the UI", () => {
 	 */
 	test("an unfit Model refuses the submit before the record or any external step", async () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
-		const inner = stubHerdrWorld(launchedLiveWorld(true));
-		stubLiveLaunchExisting(inner);
+		const inner = stubHerdrWorld(liveLaunchStanding(true));
 		// pi reports a list the Consultation type's Model is not in.
 		inner.setModelList("pi", ["anthropic/claude-sonnet-4-5"]);
 		const runner = new ConsultationRunner(inner, agentListJson([]));
@@ -2520,9 +2440,8 @@ describe("Consultation live-worktree launch through the UI", () => {
 
 	test("a dirty live checkout warns but never blocks the launch", async () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
-		const inner = stubHerdrWorld(launchedLiveWorld(false, "working", true));
-		stubLiveLaunchNew(inner);
-		stubPaneReadText(inner, "pane-c1", "Agent: live answer");
+		const inner = stubHerdrWorld(liveLaunchStanding(false, true));
+		stubPaneReadText(inner, "pane-1", "Agent: live answer");
 		const runner = new ConsultationRunner(inner, agentListJson([]));
 		try {
 			await withApp(
@@ -2816,13 +2735,12 @@ for (const exitCase of interactionExitCases) {
 describe("The full Consultation operator flow", () => {
 	test("launch, settle, respond, blocked interaction, settle, close, and inspect the history", async () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
-		const inner = stubHerdrWorld(launchedWorktreeWorld());
-		stubWorktreeLaunch(inner);
-		stubPaneReadText(inner, "pane-c1", "Agent: answer one");
-		stubPaneReadAnsi(inner, "pane-c1", "agent: typing...");
-		stubTopology(inner, "ws-new", ["tab-ws-new"], [{ pane_id: "pane-c1", tab_id: "tab-ws-new" }]);
+		const inner = stubHerdrWorld(worktreeLaunchStanding());
+		stubPaneReadText(inner, "pane-1", "Agent: answer one");
+		stubPaneReadAnsi(inner, "pane-1", "agent: typing...");
+		stubTopology(inner, "ws-1", ["tab-1"], [{ pane_id: "pane-1", tab_id: "tab-1" }]);
 		inner.set("herdr", ["agent", "prompt", AGENT, "answer one"], { code: 0 });
-		inner.set("herdr", ["workspace", "close", "ws-new"], { code: 0 });
+		inner.set("herdr", ["workspace", "close", "ws-1"], { code: 0 });
 		const runner = new ConsultationRunner(
 			inner,
 			agentListJson([{ ...launchedAgent, status: "working", seq: 1 }]),
@@ -2879,7 +2797,7 @@ describe("The full Consultation operator flow", () => {
 						f.includes("F12 Exit interaction"),
 					);
 					setup.mockInput.pressKey("h");
-					await waitForCommands(runner, [`herdr pane send-text pane-c1 h`], "the forwarded key");
+					await waitForCommands(runner, [`herdr pane send-text pane-1 h`], "the forwarded key");
 					await pressF12(setup, "the exit from interaction mode", (f) =>
 						f.includes("left Agent interaction mode"),
 					);
@@ -2908,7 +2826,7 @@ describe("The full Consultation operator flow", () => {
 					await confirmPanel(setup, "the closing status", (f) =>
 						f.includes(`${id.slice(0, 8)} closed`),
 					);
-					await waitForCommands(runner, ["herdr workspace close ws-new"], "the workspace cleanup");
+					await waitForCommands(runner, ["herdr workspace close ws-1"], "the workspace cleanup");
 					expect(state.consultationRecord.consultation(id)?.state).toBe("closed");
 					// The captured history keeps every turn in order.
 					await press(setup, "f", "the closed history", (f) => f.includes("State: closed"));
@@ -2943,9 +2861,8 @@ describe("The full Consultation operator flow", () => {
 		const t = (minutes: number) => new Date(Date.now() + minutes * 60_000).toISOString();
 		seed(state, MISSING_ID, { agent: true, createdAt: t(1) });
 		state.consultationRecord.setConsultationState(MISSING_ID, "missing", "the Agent pane is gone");
-		const inner = stubHerdrWorld(launchedWorktreeWorld());
-		stubWorktreeLaunch(inner);
-		stubPaneReadText(inner, "pane-c1", "Agent: answer one");
+		const inner = stubHerdrWorld(worktreeLaunchStanding());
+		stubPaneReadText(inner, "pane-1", "Agent: answer one");
 		inner.set("herdr", ["agent", "prompt", AGENT, "answer one"], { code: 0 });
 		const runner = new ConsultationRunner(
 			inner,
@@ -2998,8 +2915,7 @@ describe("The full Consultation operator flow", () => {
 		state.sourceFact.initializeSources([ticketSource]);
 		state.sourceFact.applyFetch(ticketSource, outcome);
 		const source = new FakeSource(ticketSource.name, ticketSource.kind, outcome);
-		const inner = stubHerdrWorld(launchedWorktreeWorld());
-		stubWorktreeLaunch(inner);
+		const inner = stubHerdrWorld(worktreeLaunchStanding());
 		// The Consultation's own herdr command never answers, so the Consultation
 		// stays in flight and its progress line holds the Message line. The
 		// source's refresh runs on its own, so the two operations overlap.
@@ -3364,12 +3280,11 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 	 */
 	test("a launch with a free seat starts the Consultation and stands no waits line", async () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
-		const inner = stubHerdrWorld(launchedWorktreeWorld());
-		stubWorktreeLaunch(inner);
-		stubPaneReadText(inner, "pane-c1", "Agent: opened");
+		const inner = stubHerdrWorld(worktreeLaunchStanding());
+		stubPaneReadText(inner, "pane-1", "Agent: opened");
 		const runner = new ConsultationRunner(
 			inner,
-			agentListJson([{ pane: "pane-c1", status: "working", sess: "sess-c1" }]),
+			agentListJson([{ pane: "pane-1", status: "working", sess: "sess-c1" }]),
 		);
 		try {
 			await withApp(
@@ -3394,7 +3309,7 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 						runner,
 						[
 							`herdr worktree create --cwd ${checkout} --branch ${BRANCH} --base origin/main --no-focus`,
-							`herdr agent start ${AGENT} --kind pi --pane pane-c1`,
+							`herdr agent start ${AGENT} --kind pi --pane pane-1`,
 							`herdr agent prompt ${AGENT} /grill review auth`,
 						],
 						"the pickup's launch sequence",
@@ -3573,9 +3488,8 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 		const state = openFactoryState(join(home, "state.sqlite"));
 		seed(state, seatId);
 		const seatPane = `pane-${seatId.slice(0, 8)}`;
-		const inner = stubHerdrWorld(launchedWorktreeWorld());
-		stubWorktreeLaunch(inner);
-		stubPaneReadText(inner, "pane-c1", "Agent: opened");
+		const inner = stubHerdrWorld(worktreeLaunchStanding());
+		stubPaneReadText(inner, "pane-1", "Agent: opened");
 		const runner = new ConsultationRunner(
 			inner,
 			agentListJson([{ pane: seatPane, status: "working" }]),
@@ -3604,7 +3518,7 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 					// pickup's start verifies on the next cycle.
 					runner.agentListJson = agentListJson([
 						{ pane: seatPane, status: "working" },
-						{ pane: "pane-c1", status: "working", sess: "sess-c1" },
+						{ pane: "pane-1", status: "working", sess: "sess-c1" },
 					]);
 					// Free the seat: the record leaves the states that hold one.
 					state.consultationRecord.setConsultationState(seatId, "awaiting-response");
@@ -3620,7 +3534,7 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 						runner,
 						[
 							`herdr worktree create --cwd ${checkout} --branch ${BRANCH} --base origin/main --no-focus`,
-							`herdr agent start ${AGENT} --kind pi --pane pane-c1`,
+							`herdr agent start ${AGENT} --kind pi --pane pane-1`,
 							`herdr agent prompt ${AGENT} /grill review auth`,
 						],
 						"the pickup's launch sequence",
@@ -3657,9 +3571,8 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 		const state = openFactoryState(join(home, "state.sqlite"));
 		seed(state, seatId);
 		const seatPane = `pane-${seatId.slice(0, 8)}`;
-		const inner = stubHerdrWorld(launchedWorktreeWorld());
-		stubWorktreeLaunch(inner);
-		stubPaneReadText(inner, "pane-c1", "Agent: opened");
+		const inner = stubHerdrWorld(worktreeLaunchStanding());
+		stubPaneReadText(inner, "pane-1", "Agent: opened");
 		const runner = new ConsultationRunner(
 			inner,
 			agentListJson([{ pane: seatPane, status: "working" }]),
@@ -3709,7 +3622,7 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 						runner,
 						[
 							`herdr worktree create --cwd ${checkout} --branch ${BRANCH} --base origin/main --no-focus`,
-							`herdr agent start ${AGENT} --kind pi --pane pane-c1`,
+							`herdr agent start ${AGENT} --kind pi --pane pane-1`,
 							`herdr agent prompt ${AGENT} /grill review auth`,
 						],
 						"the force-dispatch's launch sequence",
@@ -3909,9 +3822,8 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 		const state = openFactoryState(join(home, "state.sqlite"));
 		seed(state, seatId);
 		const seatPane = `pane-${seatId.slice(0, 8)}`;
-		const inner = stubHerdrWorld(launchedWorktreeWorld());
-		stubWorktreeLaunch(inner);
-		stubPaneReadText(inner, "pane-c1", "Agent: opened");
+		const inner = stubHerdrWorld(worktreeLaunchStanding());
+		stubPaneReadText(inner, "pane-1", "Agent: opened");
 		const runner = new ConsultationRunner(
 			inner,
 			agentListJson([{ pane: seatPane, status: "working" }]),
@@ -3936,7 +3848,7 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 						runner,
 						[
 							`herdr worktree create --cwd ${checkout} --branch ${BRANCH} --base origin/main --no-focus`,
-							`herdr agent start ${AGENT} --kind pi --pane pane-c1`,
+							`herdr agent start ${AGENT} --kind pi --pane pane-1`,
 							`herdr agent prompt ${AGENT} /grill review auth`,
 						],
 						"the start-now launch sequence",
@@ -3972,9 +3884,8 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 		const state = openFactoryState(join(home, "state.sqlite"));
 		seed(state, seatId);
 		const seatPane = `pane-${seatId.slice(0, 8)}`;
-		const inner = stubHerdrWorld(launchedWorktreeWorld());
-		stubWorktreeLaunch(inner);
-		stubPaneReadText(inner, "pane-c1", "Agent: opened");
+		const inner = stubHerdrWorld(worktreeLaunchStanding());
+		stubPaneReadText(inner, "pane-1", "Agent: opened");
 		const runner = new ConsultationRunner(
 			inner,
 			agentListJson([{ pane: seatPane, status: "working" }]),
@@ -4008,7 +3919,7 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 						runner,
 						[
 							`herdr worktree create --cwd ${checkout} --branch ${BRANCH} --base origin/main --no-focus`,
-							`herdr agent start ${AGENT} --kind pi --pane pane-c1`,
+							`herdr agent start ${AGENT} --kind pi --pane pane-1`,
 							`herdr agent prompt ${AGENT} /grill review auth`,
 						],
 						"the start-now launch sequence",
