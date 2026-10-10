@@ -22,7 +22,6 @@
  * toggles the section under the cursor, and one Message line, one Action bar,
  * and one control catalog answer for all three.
  */
-import os from "node:os";
 import type { KeyEvent, Selection } from "@opentui/core";
 import { createElement, useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/react";
 import {
@@ -37,7 +36,6 @@ import {
 } from "react";
 import { AttentionService } from "../attention.ts";
 import {
-	defaultConfigPath,
 	type FactoryConfig,
 	type GitHubAuthentication,
 	type TransitionOutcome,
@@ -76,7 +74,6 @@ import { heldBellRang, sectionFacts } from "../domain/section-facts.ts";
 import {
 	flagWithholdsRow,
 	HANDOFF_ENVIRONMENT_KINDS,
-	type Handoff,
 	handoffLimitReached,
 	nextTicketListFilter,
 	type Ticket,
@@ -91,24 +88,16 @@ import {
 	ticketRowFacts,
 } from "../domain/ticket-facts.ts";
 import { fileExists } from "../fs.ts";
-import {
-	baseChoice,
-	type HandoffChoice,
-	type HandoffOutcome,
-	handOffTicket,
-	resolveHandoffChoice,
-	type StartedAgent,
-} from "../handoff.ts";
+import { baseChoice, type HandoffChoice, resolveHandoffChoice } from "../handoff.ts";
 import {
 	createHandoffDispatch,
 	type HandoffDispatch,
 	type HandoffDispatchAggregates,
 	type HandoffDispatchOptions,
-	reportHandoffOutcome,
 	type StoredHandoffFacts,
 } from "../handoff-dispatch.ts";
 import type { HerdrAgent } from "../herdr.ts";
-import { type Logger, NOOP_LOGGER } from "../logging.ts";
+import type { Logger } from "../logging.ts";
 import {
 	HerdrAgentReader,
 	matchConsultationAgent,
@@ -152,7 +141,6 @@ import type { CommandOptions } from "../runner.ts";
 import {
 	type CommandRunner,
 	commandFailureText,
-	createChildProcessRunner,
 	errorMessage,
 	supportsModelList,
 } from "../runner.ts";
@@ -170,7 +158,6 @@ import type { PlaneActionAggregate } from "../state/plane-action.ts";
 import type { RepositoryInitAggregate } from "../state/repository-init.ts";
 import type { SourceFactAggregate } from "../state/source-fact.ts";
 import type { TicketListViews, TicketWorkCycleAggregate } from "../state/ticket-work-cycle.ts";
-import { inMemoryTicketViews } from "../state/ticket-work-cycle.ts";
 import type { WorkQueueAggregate, WorkQueueItem } from "../state/work-queue.ts";
 import { workQueueIdentityOf } from "../state/work-queue.ts";
 import { currentThemeResolution } from "../theme-source.ts";
@@ -401,8 +388,7 @@ type Utility =
 /**
  * The aggregates the app shell reads, as a list (issue #202), and the clock it
  * hands to the modules it builds. The shell never reaches the state file: it
- * reads through these interfaces only, and a plane with no state file has none
- * of them.
+ * reads through these interfaces only.
  */
 export interface AppAggregates {
 	consultationRecord: ConsultationRecordAggregate;
@@ -417,51 +403,64 @@ export interface AppAggregates {
 	now(): number;
 }
 
+/**
+ * The plane's loop policy (issue #366).
+ *
+ * The policy is a named fact the boot record carries, so a frame test's
+ * frozen loops and a production run's polls are stated by the caller, never
+ * inferred from an absent field:
+ *
+ * - `production` runs the plane's own loops: the refresh schedule the config
+ *   names, and the observation poll the config's agent-poll-interval-seconds
+ *   names.
+ * - `held` starts no loop at all. A frame test wants the deterministic
+ *   frame: nothing moves until a key press or a settle does.
+ * - `polled` runs the observation loop on the named interval in
+ *   milliseconds, a frame test that wants the poll itself.
+ */
+export type AppLoopPolicy =
+	| { kind: "production" }
+	| { kind: "held" }
+	| { kind: "polled"; intervalMs: number };
+
+/**
+ * The boot record the shell takes (issue #366).
+ *
+ * Every field is required, and the shell reads each one from the record it
+ * was given: it holds no default of its own for a field it could have been
+ * passed, and no state file it was not given. The production entry fills the
+ * record from the startup decision, and the test harness fills it from the
+ * Seeded plane the suite asked for.
+ */
 export interface AppProps {
-	/**
-	 * The validated config. The production entry always supplies it from the
-	 * config load seam; the test harness fills a base config when a suite
-	 * omits it.
-	 */
+	/** The validated config. */
 	config: FactoryConfig;
-	runner?: CommandRunner;
-	home?: string;
-	configPath?: string;
-	/** SQLite state. The factory entry module owns its process lease. */
-	state?: AppAggregates;
-	/** Bound sources. Tests inject deterministic sources here. */
-	sources?: readonly TicketSource[];
-	/** Test-only deterministic ticket projection. It has no production caller. */
-	initialTickets?: readonly Ticket[];
+	/** The Command runner the plane runs on. */
+	runner: CommandRunner;
+	/** The home directory the plane's paths live under. */
+	home: string;
+	/** The config file the plane reads and writes. */
+	configPath: string;
+	/** The SQLite state. The factory entry module owns its process lease. */
+	state: AppAggregates;
+	/** The bound sources, in the config's source order. */
+	sources: readonly TicketSource[];
+	/** The plane's logger: the file logger, or the no-op logger. */
+	logger: Logger;
+	/** The loop policy: the named fact that decides which loops run. */
+	loopPolicy: AppLoopPolicy;
 	/**
-	 * Test-only observation poll interval in milliseconds. Production reads
-	 * it from the config's agent-poll-interval-seconds.
+	 * Receives the teardown handle once the app is mounted, on every boot.
+	 * The owner calls stop before closing the state: the background loops
+	 * must not outlive it. The handle stands even where no loop ran: its stop
+	 * then changes nothing, and the owner's ordering stays one rule.
 	 */
-	pollIntervalMs?: number;
-	/**
-	 * Receives the teardown handle once the app is mounted. The owner calls
-	 * stop before closing the state: the background loops must not outlive
-	 * it. Production relies on process exit instead.
-	 */
-	onReady?: (ready: AppTeardown) => void;
-	/**
-	 * The plane's file logger. The refresh and handoff loops leave their lines
-	 * in the record it owns. Absent in tests and the gallery, where the loops
-	 * stay silent.
-	 */
-	logger?: Logger;
+	onReady: (ready: AppTeardown) => void;
 }
 
 export interface AppTeardown {
 	/** Stops the refresh and observation loops. Safe to call twice. */
 	stop: () => void;
-}
-
-const EMPTY_SOURCES: readonly TicketSource[] = [];
-let lazyRealRunner: CommandRunner | undefined;
-function realRunner(): CommandRunner {
-	lazyRealRunner ??= createChildProcessRunner();
-	return lazyRealRunner;
 }
 
 /** The Work queue's cursor sync: a queue that drains empties the selection, and the index clamps to the last row. */
@@ -567,7 +566,6 @@ function useAppTicketReplace(props: AppProps, prev: AppHeldBellStage) {
 		ticketsRef: prev.ticketsRef,
 	};
 	const replaceTickets = useCallback(() => {
-		if (state === undefined) return;
 		const fields = ticketReplaceFieldsRef.current;
 		if (fields === null) return;
 		const read = appTicketProjectionRead(state, fields);
@@ -655,7 +653,6 @@ function useAppConsultationReplace(props: AppProps, prev: AppTicketReplaceStage)
 		setSessionEntries,
 	} = prev;
 	const replaceConsultations = useCallback(() => {
-		if (state === undefined) return;
 		const filter = historyFilterRef.current;
 		const next = state.consultationRecord.consultations(filter);
 		// The header's counts read the machine's records, not the drawn list
@@ -761,7 +758,7 @@ function useAppGroupOpsShell(props: AppProps, prev: AppCursorShellStage) {
 		setGroupOrderList: prev.setGroupOrderList,
 		groupFoldsRef: prev.groupFoldsRef,
 		setGroupFolds: prev.setGroupFolds,
-		groupOrdersForRunRef: prev.groupOrdersForRunRef,
+
 		positionOrderOf: prev.positionOrderOf,
 		factRows: prev.factRows,
 		ticketsRef: prev.ticketsRef,
@@ -908,7 +905,6 @@ function useAppStanding(prev: AppDispatchesStage) {
 		coordinatorRef,
 		handoffDispatch,
 		liveSources,
-		noStateHandoffInFlightRef,
 	} = prev;
 	/**
 	 * The plane's standing facts, stated once per render (ADR 0014).
@@ -922,7 +918,7 @@ function useAppStanding(prev: AppDispatchesStage) {
 	 * values in the same frame.
 	 */
 	const standing: StandingFacts = {
-		handoffActive: handoffDispatch?.handoffActive() ?? noStateHandoffInFlightRef.current,
+		handoffActive: handoffDispatch?.handoffActive() ?? false,
 		messageRecorded: prev.messageRecorded,
 		consultationTypesConfigured: Object.keys(config.consultationTypes).length > 0,
 		sourceCount: liveSources.length,
@@ -1017,7 +1013,6 @@ type AppHandoffCallbacksStage = ReturnType<typeof useAppHandoffCallbacks>;
 /** The ticket operations' fields: the ops fields plus the ticket surface's own state and callbacks. */
 function useAppTicketOpsFields(prev: AppHandoffCallbacksStage) {
 	const { ticketOpsFieldsRef } = prev;
-	const finishOutcome = (outcome: HandoffOutcome) => appFinishOutcome(ticketOpsFields, outcome);
 
 	const ticketOpsFields: AppTicketOpsFields = {
 		...prev.opsFields,
@@ -1046,7 +1041,7 @@ function useAppTicketOpsFields(prev: AppHandoffCallbacksStage) {
 		refireInFlightRef: prev.refireInFlightRef,
 	};
 	ticketOpsFieldsRef.current = ticketOpsFields;
-	return { ...prev, finishOutcome, ticketOpsFields };
+	return { ...prev, ticketOpsFields };
 }
 type AppTicketOpsFieldsStage = ReturnType<typeof useAppTicketOpsFields>;
 
@@ -1084,24 +1079,13 @@ function useAppTicketOpsActions(prev: AppTicketOpsFieldsStage) {
 }
 type AppTicketOpsActionsStage = ReturnType<typeof useAppTicketOpsActions>;
 
-/** The handoff start's fields: the dispatch, the standing facts, and the writes the start makes. */
+/** The handoff start's fields: the dispatch, the standing facts, and the write the start makes. */
 function useAppHandoffStartFields(prev: AppTicketOpsActionsStage) {
 	const { handoffStartFieldsRef } = prev;
 	const handoffStartFields: AppHandoffStartFields = {
 		handoffDispatch: prev.handoffDispatch,
 		mainFacts: prev.mainFacts,
 		setWarningMessage: prev.setWarningMessage,
-		noStateHandoffInFlightRef: prev.noStateHandoffInFlightRef,
-		setStartingTickets: prev.setStartingTickets,
-		setWorkingMessage: prev.setWorkingMessage,
-		setFaultErrorMessage: prev.setFaultErrorMessage,
-		config: prev.config,
-		commandRunner: prev.commandRunner,
-		homeDir: prev.homeDir,
-		finishOutcome: prev.finishOutcome,
-		setListViews: prev.setListViews,
-		listViewsRef: prev.listViewsRef,
-		ticketsRef: prev.ticketsRef,
 	};
 	handoffStartFieldsRef.current = handoffStartFields;
 	return { ...prev, handoffStartFields };
@@ -1523,8 +1507,7 @@ function useAppObservationFields(props: AppProps, prev: AppSessionRefreshStage) 
 		() => ({
 			state: props.state,
 			handoffDispatch: prev.handoffDispatch,
-			initialTickets: props.initialTickets,
-			pollIntervalMs: props.pollIntervalMs,
+			loopPolicy: props.loopPolicy,
 			commandRunner: prev.commandRunner,
 			configRef: prev.configRef,
 			autoModeRef: prev.autoModeRef,
@@ -1547,8 +1530,7 @@ function useAppObservationFields(props: AppProps, prev: AppSessionRefreshStage) 
 		[
 			props.state,
 			prev.handoffDispatch,
-			props.initialTickets,
-			props.pollIntervalMs,
+			props.loopPolicy,
 			prev.commandRunner,
 			prev.configRef,
 			prev.autoModeRef,
@@ -1587,7 +1569,6 @@ function useAppInitBoot(props: AppProps, prev: AppObservationStage) {
 	// A state may already hold tickets when the app boots: read them once at
 	// mount, before any refresh or observation cycle runs.
 	useEffect(() => {
-		if (state === undefined) return;
 		replaceTickets();
 		replaceConsultations();
 		// The queue pause is factory state (ADR 0052): a restart finds the
@@ -1612,7 +1593,6 @@ function useAppInitNote(props: AppProps, prev: AppInitBootStage) {
 	useEffect(() => {
 		if (
 			initNoteShownRef.current ||
-			state === undefined ||
 			machineTickets.length === 0 ||
 			groupingAxis !== "repository"
 		)
@@ -1711,7 +1691,6 @@ function useAppCoordinator(props: AppProps, prev: AppCatalogStage) {
 	// A ref lets the key handler use the startup coordinator without making
 	// React recreate keyboard subscriptions on each frame.
 	useEffect(() => {
-		if (state === undefined) return;
 		const coordinator = new RefreshCoordinator(
 			liveSources,
 			state,
@@ -1989,17 +1968,14 @@ function useAppRenderMessages(props: AppProps, prev: AppLivePanelStage) {
 	const { state } = props;
 	// An empty grouped list names the axis in its message, so "no tickets" says
 	// which view the operator is reading (issue #159, user story 9).
-	const emptyMessage =
-		state === undefined
-			? undefined
-			: emptyTicketMessage({
-					sourceCount: config.sources.length,
-					healthCount: healths.length,
-					anyLoading: healths.some((health) => health.health === "loading"),
-					ignoredCount,
-					mutedCount,
-					ticketFilter,
-					groupingAxis,
+	const emptyMessage = emptyTicketMessage({
+			sourceCount: config.sources.length,
+			healthCount: healths.length,
+			anyLoading: healths.some((health) => health.health === "loading"),
+			ignoredCount,
+			mutedCount,
+			ticketFilter,
+			groupingAxis,
 				});
 	return { ...prev, state, emptyMessage };
 }
@@ -2064,7 +2040,7 @@ function useAppRenderLaunch(props: AppProps, prev: AppRenderMessagesStage) {
 	const launcherDraft =
 		launcherForm !== null && launcherForm.owner === launcherOwner
 			? launcherForm.draft
-			: replacementConsultation !== undefined && state !== undefined
+			: replacementConsultation !== undefined
 				? // A Replacement starts from the durable recovery context, never from
 					// a draft another screen left behind.
 					{
@@ -2467,9 +2443,7 @@ function appConsultationsList(o: AppRenderModesStage): React.ReactElement | fals
 				cursor.selectConsultation(consultationIndexRef.current + delta);
 			},
 			emptyMessage:
-				state === undefined
-					? "Consultations require SQLite state"
-					: historyFilter === "closed"
+					historyFilter === "closed"
 						? "no closed Consultations"
 						: historyFilter === "all"
 							? "no Consultations"
@@ -2590,7 +2564,7 @@ function appTicketDetail(o: AppRenderModesStage): React.ReactElement {
 		onFocus: () => cursor.focusPane("detail"),
 		scrollSlot: detailScrollSlot,
 		mergeAttempt:
-			selectedTicket === undefined || state === undefined
+			selectedTicket === undefined
 				? null
 				: state.planeAction.latestPlaneActionAttempt(selectedTicket.identity),
 	});
@@ -3104,7 +3078,7 @@ function appConsultationSafetyPanel(o: AppRenderModesStage): React.ReactElement 
 				setPanel(null);
 				setConsultationSafety(null);
 				if (key === "confirm") {
-					const current = state?.consultationRecord.consultation(panelConsultation.id);
+					const current = state.consultationRecord.consultation(panelConsultation.id);
 					if (current !== undefined && consultationSafety !== null)
 						void consultationOperations?.confirmSafetyConflict(
 							current,
@@ -3239,7 +3213,6 @@ function appConsultationForcePanel(o: AppRenderModesStage): React.ReactElement |
 		panel !== null &&
 		panel.kind === "consultation-force" &&
 		panelConsultation !== undefined &&
-		state !== undefined &&
 		createElement(ActionPanel, {
 			message: visibleMessage,
 			standing,
@@ -3812,14 +3785,13 @@ function useAppCursor(fields: AppCursorFields) {
 
 /** The fields the Group operations read and write. */
 interface AppGroupOpsFields {
-	state: AppAggregates | undefined;
+	state: AppAggregates;
 	groupingAxisRef: RefObject<GroupingAxis>;
 	setGroupingAxis: (axis: GroupingAxis) => void;
 	groupOrderListRef: RefObject<string[]>;
 	setGroupOrderList: (order: string[]) => void;
 	groupFoldsRef: RefObject<GroupFolds>;
 	setGroupFolds: (folds: GroupFolds) => void;
-	groupOrdersForRunRef: RefObject<Partial<Record<SplitGroupingAxis, string[]>>>;
 	positionOrderOf: () => string[];
 	factRows: (tickets: readonly Ticket[]) => readonly TicketRowFacts[];
 	ticketsRef: RefObject<readonly Ticket[]>;
@@ -3858,8 +3830,7 @@ function saveGroupOrder(
 function groupCycleAxis(fields: AppGroupOpsFields): void {
 	const { setGroupingAxis } = fields;
 	const next = nextGroupingAxis(fields.groupingAxisRef.current);
-	const writeFailure =
-		fields.state === undefined ? undefined : saveGroupingAxis(fields.state, next);
+	const writeFailure = saveGroupingAxis(fields.state, next);
 	const anchor = rowAnchorOf(fields.ticketRowsRef.current, fields.selectedIndexRef.current);
 	const nextOrder = next === "none" ? [] : fields.storedGroupOrderOf(next);
 	const nextFacts = fields.factRows(fields.ticketsRef.current);
@@ -4008,13 +3979,7 @@ function groupMoveWrites(
 	value: string,
 	moved: readonly string[],
 ): void {
-	const writeFailure =
-		fields.state === undefined ? undefined : saveGroupOrder(fields.state, axis, moved);
-	if (fields.state === undefined)
-		fields.groupOrdersForRunRef.current = {
-			...fields.groupOrdersForRunRef.current,
-			[axis]: [...moved],
-		};
+	const writeFailure = saveGroupOrder(fields.state, axis, moved);
 	const nextRows = ticketRows(fields.factRows(fields.ticketsRef.current), axis, {
 		folds: fields.groupFoldsRef.current,
 		storedOrder: moved,
@@ -4243,11 +4208,6 @@ async function repoInitSelectFor(
 	fields: AppRepoInitFields,
 	choice: InitableRepository,
 ): Promise<void> {
-	if (fields.state === undefined) {
-		fields.setWarningMessage("the repository init needs SQLite state");
-		repoInitAdvanceQueue(fields, "failed");
-		return;
-	}
 	// The plan runs async with the base view's keyboard live (ADR 0083):
 	// the marker holds until the panel stands or a refusal lands, so no
 	// second init starts the first would then overwrite.
@@ -4484,118 +4444,17 @@ function useAppRepoInit(fields: AppRepoInitFields) {
 
 /** The fields the handoff start reads and writes. */
 interface AppHandoffStartFields {
-	handoffDispatch: HandoffDispatch | undefined;
+	handoffDispatch: HandoffDispatch;
 	mainFacts: () => AvailabilityFacts;
 	setWarningMessage: (message: string) => void;
-	noStateHandoffInFlightRef: RefObject<boolean>;
-	setStartingTickets: Dispatch<SetStateAction<ReadonlySet<string>>>;
-	setWorkingMessage: (message: string, owner: WorkingOwner) => void;
-	setFaultErrorMessage: (message: string) => void;
-	config: FactoryConfig;
-	commandRunner: CommandRunner;
-	homeDir: string;
-	finishOutcome: (outcome: HandoffOutcome) => Promise<void>;
-	setListViews: Dispatch<SetStateAction<TicketListViews>>;
-	listViewsRef: RefObject<TicketListViews>;
-	ticketsRef: RefObject<readonly Ticket[]>;
-}
-
-/** Add the ticket to the Starting window, the no-state start's in-flight face. */
-function startHandoffAddStarting(fields: AppHandoffStartFields, ticket: Ticket): void {
-	fields.setStartingTickets((current) => {
-		if (current.has(ticket.identity)) return current;
-		const next = new Set(current);
-		next.add(ticket.identity);
-		return next;
-	});
-}
-
-/** Drop the ticket from the Starting window, the no-state start's settle. */
-function startHandoffDropStarting(fields: AppHandoffStartFields, ticket: Ticket): void {
-	fields.setStartingTickets((current) => {
-		if (!current.has(ticket.identity)) return current;
-		const next = new Set(current);
-		next.delete(ticket.identity);
-		return next;
-	});
-}
-
-/** The in-memory handoff fact the no-state settle writes to the row. */
-function noStateHandoffFact(
-	choice: HandoffChoice,
-	outcome: Extract<HandoffOutcome, { agent: StartedAgent }>,
-): Handoff {
-	return {
-		agentType: choice.agentType,
-		environment: choice.environment,
-		taskType: choice.taskType,
-		model: choice.model,
-		thinking: choice.thinking,
-		contextWindow: choice.contextWindow,
-		attemptId: "manual",
-		paneId: outcome.agent.paneId,
-		tabId: outcome.agent.tabId,
-		workspaceId: outcome.agent.workspaceId,
-		herdrName: outcome.agent.name,
-	};
 }
 
 /**
- * The no-state settle's list patch: the ticket's face moves to
- * `handed-off` with the fact, and every view of the list rule re-derives.
- */
-function startHandoffPatchHandedOff(
-	fields: AppHandoffStartFields,
-	ticket: Ticket,
-	handoff: Handoff,
-): void {
-	// The in-memory shell holds one array and derives every view from
-	// it, so a patch lands once and no view of the list rule is
-	// remembered by hand here.
-	fields.setListViews((current) => {
-		const next = inMemoryTicketViews(
-			current.projection.rows.map((row: Ticket) =>
-				row.identity === ticket.identity ? { ...row, state: "handed-off" as const, handoff } : row,
-			),
-		);
-		fields.listViewsRef.current = next;
-		fields.ticketsRef.current = next.rows;
-		return next;
-	});
-}
-
-/** The no-state start's settle: the face leaves, the outcome reports. */
-async function startHandoffSettle(
-	fields: AppHandoffStartFields,
-	ticket: Ticket,
-	choice: HandoffChoice,
-	outcome: HandoffOutcome,
-): Promise<void> {
-	startHandoffDropStarting(fields, ticket);
-	if (outcome.status !== "failed")
-		startHandoffPatchHandedOff(fields, ticket, noStateHandoffFact(choice, outcome));
-	await fields.finishOutcome(outcome);
-	fields.noStateHandoffInFlightRef.current = false;
-}
-
-/** The no-state start's failure: the face leaves, the Fault reports. */
-function startHandoffCatch(fields: AppHandoffStartFields, ticket: Ticket, error: unknown): void {
-	startHandoffDropStarting(fields, ticket);
-	fields.setFaultErrorMessage(`handoff failed: ${errorMessage(error)}`);
-	fields.noStateHandoffInFlightRef.current = false;
-}
-
-/**
- * Start the handoff on the Ticket under the cursor: the state-backed claim
- * runs through the dispatch module, and the no-state test projection runs
- * the act itself and patches the list by hand (ADR 0064).
- *
- * The no-state projection holds no attempt ledger, so the ref plays the
- * ledger's role: the shell refuses a second start while one stands in
- * flight, the way the state-backed claim refuses it. The Starting window
- * (ADR 0030) is the in-flight handoff itself here: the add lands on the
- * keypress, and the settle leaves the face to the `handed-off` state on a
- * start and drops it on a failure.
+ * Start the handoff on the Ticket under the cursor: the claim runs through
+ * the dispatch module (ADR 0064), and the Starting window (ADR 0030) is the
+ * in-flight handoff itself: the add lands on the claim, and the settle
+ * leaves the face to the `handed-off` state on a start and drops it on a
+ * failure.
  */
 function startHandoffTicket(
 	fields: AppHandoffStartFields,
@@ -4607,34 +4466,16 @@ function startHandoffTicket(
 		fields.setWarningMessage(refusalReason(controlById("handoff"), fields.mainFacts()));
 		return;
 	}
-	if (fields.handoffDispatch !== undefined) {
-		void fields.handoffDispatch
-			.dispatch({
-				origin: "open",
-				ticketIdentity: ticket.identity,
-				choice,
-				previousMessage: "",
-			})
-			.then((result) => {
-				if (!result.ok) fields.setWarningMessage(result.reason);
-			});
-		return;
-	}
-	if (fields.noStateHandoffInFlightRef.current) {
-		fields.setWarningMessage("handoff in flight");
-		return;
-	}
-	fields.noStateHandoffInFlightRef.current = true;
-	startHandoffAddStarting(fields, ticket);
-	fields.setWorkingMessage(`handing off "${ticket.title}"...`, "handoff");
-	void handOffTicket(ticket, choice, {
-		config: fields.config,
-		runner: fields.commandRunner,
-		home: fields.homeDir,
-		claim: "open",
-	})
-		.then(async (outcome) => startHandoffSettle(fields, ticket, choice, outcome))
-		.catch((error) => startHandoffCatch(fields, ticket, error));
+	void fields.handoffDispatch
+		.dispatch({
+			origin: "open",
+			ticketIdentity: ticket.identity,
+			choice,
+			previousMessage: "",
+		})
+		.then((result) => {
+			if (!result.ok) fields.setWarningMessage(result.reason);
+		});
 }
 
 /** The fields the Main view's mode facts read. */
@@ -4649,7 +4490,7 @@ interface AppMainFactsFields {
 	selectionRef: RefObject<"ticket" | "consultation" | "queue">;
 	consultationsRef: RefObject<readonly Consultation[]>;
 	consultationIndexRef: RefObject<number>;
-	state: AppAggregates | undefined;
+	state: AppAggregates;
 	selectedConsultationAgentStatus: AgentStatus | null;
 	selectedConsultationPaneAlive: boolean;
 	ticketRowsRef: RefObject<readonly ListedRow<TicketRowFacts>[]>;
@@ -4709,7 +4550,7 @@ function mainFactsConsultationCursor(f: AppMainFactsFields) {
 			f.selectionRef.current === "consultation"
 				? f.consultationsRef.current[f.consultationIndexRef.current]
 				: undefined,
-		consultationRefreshAvailable: f.state !== undefined,
+		consultationRefreshAvailable: true,
 		consultationAgentStatus: f.selectedConsultationAgentStatus,
 		consultationPaneAlive: f.selectedConsultationPaneAlive,
 	};
@@ -5157,13 +4998,6 @@ function appKeyTicketHandlers(f: AppKeyHandlerFields): Record<string, ControlHan
 			if (!ticketSectionFacts(facts)) return;
 			const ticket = facts.selectedTicket;
 			if (ticket === undefined) return;
-			if (f.state === undefined) {
-				// A work cycle is durable factory state: the projection the App
-				// holds in memory has none to end, and the key says so instead of
-				// opening a dialog that could run nothing.
-				f.setWarningMessage("closing a Ticket needs SQLite state");
-				return;
-			}
 			f.setPanel({ kind: "ticket-close", identity: ticket.identity });
 		},
 		quit: () => f.renderer.destroy(),
@@ -5536,7 +5370,7 @@ function appKeyHandler(f: AppKeyHandlerFields, key: KeyEvent): void {
 
 /** The fields the Consultation session refresh effect reads and writes. */
 interface AppConsultationSessionFields {
-	state: AppAggregates | undefined;
+	state: AppAggregates;
 	selection: "ticket" | "consultation" | "queue";
 	selectedConsultation: Consultation | undefined;
 	setLiveOutput: (value: string | null) => void;
@@ -5623,7 +5457,6 @@ async function consultationPaneRefresh(
  */
 function appConsultationSessionRefresh(f: AppConsultationSessionFields): (() => void) | undefined {
 	if (
-		f.state === undefined ||
 		f.selection !== "consultation" ||
 		f.selectedConsultation === undefined
 	) {
@@ -5661,10 +5494,9 @@ function appConsultationSessionRefresh(f: AppConsultationSessionFields): (() => 
 
 /** The fields the observation coordinator effect reads and writes. */
 interface AppObservationFields {
-	state: AppAggregates | undefined;
+	state: AppAggregates;
 	handoffDispatch: HandoffDispatch | undefined;
-	initialTickets: readonly Ticket[] | undefined;
-	pollIntervalMs: number | undefined;
+	loopPolicy: AppLoopPolicy;
 	commandRunner: CommandRunner;
 	configRef: RefObject<FactoryConfig>;
 	autoModeRef: RefObject<boolean>;
@@ -5673,13 +5505,13 @@ interface AppObservationFields {
 	setAgents: Dispatch<SetStateAction<readonly HerdrAgent[] | null>>;
 	setBell: (value: boolean) => void;
 	attention: AttentionService;
-	onReady: ((ready: AppTeardown) => void) | undefined;
+	onReady: (ready: AppTeardown) => void;
 	clearOperationMessage: (owner: ProgressOwner) => void;
 	setStatus: (next: StatusMessage | null) => void;
 	refreshTicketSources: (identity: string) => void;
 	closeCycleEndDraft: (identity: string) => void;
 	refreshPullRequestSources: () => Promise<void>;
-	logger: Logger | undefined;
+	logger: Logger;
 	observationRef: RefObject<ObservationCoordinator | undefined>;
 	coordinatorRef: RefObject<RefreshCoordinator | undefined>;
 	handoffDispatchRef: RefObject<
@@ -5706,9 +5538,10 @@ function observationCoordinatorBase(
 		// The one time seam of the run: the state file, the refresh
 		// coordinator, and the cycle answer from the same clock.
 		clock: SYSTEM_CLOCK,
-		// The frame seam's poll override: the config's poll interval stands
-		// where the override is absent, and the cycle derives it each cycle.
-		pollIntervalMs: f.pollIntervalMs,
+		// The loop policy's poll: the named interval where the policy names one,
+		// and the config's agent-poll-interval-seconds otherwise, and the cycle
+		// derives it each cycle.
+		pollIntervalMs: f.loopPolicy.kind === "polled" ? f.loopPolicy.intervalMs : undefined,
 		// The cycle's end may have changed the ticket's source item (a merged
 		// pull request, a closed issue): re-read the sources now, so the
 		// ticket is re-verified - or drops off the list - before the next
@@ -5730,10 +5563,10 @@ function observationCoordinatorBase(
 			f.attention.ring();
 		},
 		// The cycle's record lines: each hold its automatic walks take
-		// (issue #223). The App supplies the adapter it holds: a run with no
-		// logging table hands the noop logger, so the module never defaults
-		// an adapter of its own.
-		log: f.logger ?? NOOP_LOGGER,
+		// (issue #223). The App supplies the adapter it holds, the boot record's
+		// logger: the file logger in production, and the no-op logger where the
+		// boot keeps the loops silent.
+		log: f.logger,
 		// The settled turn's log: the session record reader, supplied here
 		// rather than constructed inside the cycle.
 		turnLogs: SESSION_TURN_LOGS,
@@ -5792,23 +5625,21 @@ function observationCoordinatorFlows(
 }
 
 /**
- * The observation loop runs only on the real projection: a test
- * projection has no agents to observe, and a deterministic frame test
- * must not race a poll.
+ * The observation loop, and the teardown handle every boot hands the owner.
+ *
+ * The loop runs on `production` and `polled` alone: `held` is the
+ * deterministic frame, where nothing moves until a key press or a settle
+ * does, and a frame test must not race a poll. The poll interval stands
+ * where the policy names one, and the config's agent-poll-interval-seconds
+ * elsewhere, the way the base options state it.
+ *
+ * The teardown handle stands on every branch, the held one included: the
+ * owner's shutdown ordering - stop before the state closes - is one rule,
+ * and a stop that runs where no loop started changes nothing. The handle
+ * lands once per mount, and the owner's second boot replaces it.
  */
 function appObservationCoordinator(f: AppObservationFields): (() => void) | undefined {
-	const dispatch = f.handoffDispatch;
-	if (f.state === undefined || dispatch === undefined || f.initialTickets !== undefined)
-		return undefined;
-	const state = f.state;
-	const coordinator = new ObservationCoordinator({
-		...observationCoordinatorBase(f, state, dispatch),
-		...observationCoordinatorFlows(f, state),
-	});
-
-	f.observationRef.current = coordinator;
-	coordinator.start();
-	f.onReady?.({
+	f.onReady({
 		stop: () => {
 			f.coordinatorRef.current?.stop();
 			f.observationRef.current?.stop();
@@ -5818,6 +5649,16 @@ function appObservationCoordinator(f: AppObservationFields): (() => void) | unde
 			f.handoffDispatchRef.current?.dispatch.stop();
 		},
 	});
+	if (f.loopPolicy.kind === "held") return undefined;
+	const dispatch = f.handoffDispatch;
+	if (dispatch === undefined) return undefined;
+	const state = f.state;
+	const coordinator = new ObservationCoordinator({
+		...observationCoordinatorBase(f, state, dispatch),
+		...observationCoordinatorFlows(f, state),
+	});
+	f.observationRef.current = coordinator;
+	coordinator.start();
 	return () => {
 		// Only the loop this run made. The dispatch module outlives it: the
 		// effect re-runs on a config write-back, and a stopped module is a
@@ -5829,13 +5670,13 @@ function appObservationCoordinator(f: AppObservationFields): (() => void) | unde
 
 /** The fields the App's operations read and write. */
 interface AppOpsFields {
-	state: AppAggregates | undefined;
+	state: AppAggregates;
 	configRef: RefObject<FactoryConfig>;
 	setConfig: (config: FactoryConfig) => void;
 	commandRunner: CommandRunner;
 	homeDir: string;
 	configFile: string;
-	logger: Logger | undefined;
+	logger: Logger;
 	modelListRequest: RefObject<number>;
 	setModelList: Dispatch<SetStateAction<AgentModelList>>;
 	configWriteQueue: RefObject<Promise<void>>;
@@ -6023,7 +5864,7 @@ function appConsultationOperations(f: AppOpsFields): void {
 	// runs first on purpose (issue #315, ADR 0109): the operations cross the
 	// dispatch's Shared checkout hold through the seam it exposes, and the
 	// dispatch is built on this same state.
-	if (f.consultationOperationsRef.current !== undefined || f.state === undefined) return;
+	if (f.consultationOperationsRef.current !== undefined) return;
 	const state = f.state;
 	f.consultationOperationsRef.current = createConsultationOperations({
 		state,
@@ -6072,20 +5913,20 @@ function appConsultationOperations(f: AppOpsFields): void {
  */
 function appHandoffDispatches(f: AppOpsFields): {
 	consultationOperations: ConsultationOperations | undefined;
-	handoffDispatch: HandoffDispatch | undefined;
+	handoffDispatch: HandoffDispatch;
 } {
-	if (f.state === undefined) f.handoffDispatchRef.current = undefined;
-	else if (f.handoffDispatchRef.current?.state !== f.state) {
-		const state = f.state;
-		f.handoffDispatchRef.current = {
-			state,
-			dispatch: createHandoffDispatch(appHandoffDispatchOptions(f, state)),
+	let entry = f.handoffDispatchRef.current;
+	if (entry?.state !== f.state) {
+		entry = {
+			state: f.state,
+			dispatch: createHandoffDispatch(appHandoffDispatchOptions(f, f.state)),
 		};
+		f.handoffDispatchRef.current = entry;
 	}
 	appConsultationOperations(f);
 	return {
 		consultationOperations: f.consultationOperationsRef.current,
-		handoffDispatch: f.handoffDispatchRef.current?.dispatch,
+		handoffDispatch: entry.dispatch,
 	};
 }
 
@@ -6132,7 +5973,7 @@ interface AppTicketOpsFields extends AppOpsFields {
 	autoModeRef: RefObject<boolean>;
 	setAutoMode: (value: boolean) => void;
 	setQueuePaused: (value: boolean) => void;
-	handoffDispatch: HandoffDispatch | undefined;
+	handoffDispatch: HandoffDispatch;
 	agentsRef: RefObject<readonly HerdrAgent[] | null>;
 	coordinatorRef: RefObject<RefreshCoordinator | undefined>;
 	mainFacts: () => AvailabilityFacts;
@@ -6148,33 +5989,11 @@ interface AppTicketOpsFields extends AppOpsFields {
 /** Re-read the sources that list one ticket, now. */
 function appRefreshTicketSources(f: AppTicketOpsFields, identity: string): void {
 	const state = f.state;
-	if (state === undefined) return;
 	const coordinator = f.coordinatorRef.current;
 	if (coordinator === undefined) return;
 	for (const sourceName of state.sourceFact.membershipSourceNames(identity)) {
 		coordinator.refreshNow(sourceName);
 	}
-}
-
-/**
- * Report the outcome of the handoffs that stayed in the App: the no-state
- * test projection. State-backed Ticket handoffs report through the dispatch
- * module, and both cross the one shared wording in `reportHandoffOutcome`,
- * so the parts of the line and the channel each one belongs on have one
- * owner.
- */
-function appFinishOutcome(f: AppTicketOpsFields, outcome: HandoffOutcome): Promise<void> {
-	return reportHandoffOutcome(
-		outcome,
-		{
-			clearWorking: () => f.clearWorkingMessage("handoff"),
-			// The outcome of a start the plane ran: a Fault (ADR 0118), the
-			// way the state-backed dispatch reports it.
-			faultWarning: f.setFaultWarningMessage,
-			faultError: f.setFaultErrorMessage,
-		},
-		(mapping) => appPersistMapping(f, mapping),
-	);
 }
 
 /**
@@ -6278,26 +6097,21 @@ function appToggleAutoHandoff(f: AppTicketOpsFields): void {
 	const modeLine = `mode: auto-handoff is ${next ? "on" : "off"}`;
 	const sessionOnly = `auto-handoff is ${next ? "on" : "off"} for this session only`;
 	// The mode decides every automatic walk in the run, so the record names it
-	// when it moves. A plane with no state file has nothing to persist, and the
-	// record says so: a file that claims the mode moved while no run reads it back
-	// is the same untrustworthy line a refused write leaves (issue #223 review).
-	// Both session-only lines carry `warn`, the level the configuration reference
-	// states for them, so a run filtered to `warn` keeps the news that the next
-	// run reads nothing back.
+	// when it moves. A refused write leaves the same untrustworthy line a
+	// file that claims the mode moved while no run reads it back would leave
+	// (issue #223 review): a session-only line that carries `warn`, the level
+	// the configuration reference states for it, so a run filtered to `warn`
+	// keeps the news that the next run reads nothing back.
 	// The state write lands first, and the ref and the render follow it: the
 	// observation cycle reads the mode from the state file, and the ref the
 	// UI renders from follows that state instead of standing beside it.
-	if (f.state === undefined) {
-		f.logger?.warn(`${modeLine} for this session only: the plane runs with no state file`);
-	} else {
-		try {
-			f.state.handoff.setAutoHandoffMode(next);
-			f.logger?.info(modeLine);
-		} catch (error) {
-			const reason = errorMessage(error);
-			f.logger?.warn(`${modeLine} for this session only: ${reason}`);
-			f.setErrorMessage(`${sessionOnly}: ${reason}`);
-		}
+	try {
+		f.state.handoff.setAutoHandoffMode(next);
+		f.logger.info(modeLine);
+	} catch (error) {
+		const reason = errorMessage(error);
+		f.logger.warn(`${modeLine} for this session only: ${reason}`);
+		f.setErrorMessage(`${sessionOnly}: ${reason}`);
 	}
 	f.autoModeRef.current = next;
 	f.setAutoMode(next);
@@ -6323,7 +6137,6 @@ function appToggleAutoHandoff(f: AppTicketOpsFields): void {
  */
 function appToggleQueuePause(f: AppTicketOpsFields): void {
 	const { state, setQueuePaused } = f;
-	if (state === undefined) return;
 	const next = !state.workQueue.queuePaused();
 	try {
 		state.workQueue.setQueuePaused(next);
@@ -6427,7 +6240,7 @@ function appDecisionFor(
 	// screen resolves it from the state, and the fact module states the gate
 	// that holds it beside the row the operator can confirm.
 	const nextStep =
-		f.state === undefined || outcome === null
+		outcome === null
 			? null
 			: deriveNextStep(
 					f.configRef.current,
@@ -6442,16 +6255,13 @@ function appDecisionFor(
 		position: {
 			ticket: f.findTicket(positionIdentity),
 			stillListed:
-				f.state === undefined ||
 				outcome?.positionTicketIdentity === null ||
 				f.state.sourceFact.stillListed(positionIdentity),
 			isPlaneAction:
 				outcome?.positionTaskType != null &&
 				isPlaneActionTaskType(f.configRef.current.taskTypes, outcome.positionTaskType),
 			latestAttempt:
-				f.state === undefined
-					? null
-					: f.state.planeAction.latestPlaneActionAttempt(positionIdentity),
+				f.state.planeAction.latestPlaneActionAttempt(positionIdentity),
 		},
 		nextStepGate: nextStep === null ? null : nextStep.gate,
 		defaultTaskType: f.configRef.current.defaultTaskType,
@@ -6561,7 +6371,6 @@ function appRunDecisionAction(f: AppTicketOpsFields, ticket: Ticket, key: string
 	if (!(f.panel?.kind === "live" && (key === "route" || key === "merge")) && key !== "refire") {
 		f.setPanel(null);
 	}
-	if (f.state === undefined) return;
 	if (key === "close") {
 		appCloseDecidedCycle(f, ticket);
 		return;
@@ -6633,7 +6442,6 @@ function appRefireFireOptions(
 async function appRunRefire(f: AppTicketOpsFields, ticket: Ticket): Promise<void> {
 	const state = f.state;
 	if (
-		state === undefined ||
 		ticket.lastCompletion === null ||
 		ticket.lastCompletion.transition === null
 	) {
@@ -6708,7 +6516,6 @@ async function appRunRefire(f: AppTicketOpsFields, ticket: Ticket): Promise<void
  */
 function appCloseDecidedCycle(f: AppTicketOpsFields, ticket: Ticket): void {
 	const state = f.state;
-	if (state === undefined) return;
 	const applied = state.ticketWorkCycle.applyCompletionDecision({
 		ticketIdentity: ticket.identity,
 		handoffId: ticket.handoff?.attemptId ?? "",
@@ -7021,7 +6828,6 @@ async function appConsultationEnqueue(
 	input: string,
 ): Promise<void> {
 	const state = f.state;
-	if (state === undefined) return;
 	const replaced =
 		f.replacementConsultationId === null
 			? undefined
@@ -7086,7 +6892,7 @@ function appSubmitConsultation(
 	repository: ConsultationRepositoryOption,
 	input: string,
 ): void {
-	if (f.state === undefined || f.consultationOperations === undefined) {
+	if (f.consultationOperations === undefined) {
 		f.setWarningMessage("Consultations require durable SQLite state");
 		return;
 	}
@@ -7180,8 +6986,7 @@ function appBeginResponse(f: AppConsultationOpsFields, consultation: Consultatio
 function appSubmitResponse(f: AppConsultationOpsFields): void {
 	const state = f.state;
 	const selected = f.selectedConsultation;
-	if (state === undefined || selected === undefined || f.consultationOperations === undefined)
-		return;
+	if (selected === undefined || f.consultationOperations === undefined) return;
 	const consultation = selected;
 	const draft = f.responseDraftRef.current;
 	// Keep this UI-side check so an invalid draft leaves the editor open;
@@ -7216,7 +7021,7 @@ function appStoreResponseDraft(f: AppConsultationOpsFields, text: string): void 
 	const selected = f.selectedConsultation;
 	f.responseDraftRef.current = text;
 	f.setResponseDraft(text);
-	if (state !== undefined && selected !== undefined && text !== selected.draft)
+	if (selected !== undefined && text !== selected.draft)
 		state.consultationRecord.setConsultationDraft(selected.id, text);
 }
 
@@ -7232,7 +7037,7 @@ function appDiscardResponseDraft(f: AppConsultationOpsFields): void {
 	const selected = f.selectedConsultation;
 	f.responseDraftRef.current = "";
 	f.setResponseDraft("");
-	if (state !== undefined && selected !== undefined)
+	if (selected !== undefined)
 		state.consultationRecord.setConsultationDraft(selected.id, "");
 	f.setResponseEditor(false);
 	f.setNoticeMessage("the saved Response draft was discarded", "info");
@@ -7269,8 +7074,7 @@ function appSelectConsultationById(f: AppConsultationOpsFields, id: string): voi
 	f.historyFilterRef.current = "open";
 	f.setHistoryFilter("open");
 	f.replaceConsultations();
-	const index =
-		f.state === undefined ? -1 : f.consultationsRef.current.findIndex((item) => item.id === id);
+	const index = f.consultationsRef.current.findIndex((item) => item.id === id);
 	if (index < 0) return;
 	f.consultationIndexRef.current = index;
 	f.setConsultationIndex(index);
@@ -7289,15 +7093,6 @@ function appSelectConsultationById(f: AppConsultationOpsFields, id: string): voi
  * filter's cycle does.
  */
 function appCycleTicketFilter(f: AppConsultationOpsFields): void {
-	if (f.state === undefined) {
-		// The reveal shows the rows the list rule withholds, and the in-memory
-		// projection runs no list rule at all: every view is the rows it was
-		// handed, so the key has no pile to show. It says so in the same words
-		// `i` says the missing fact in, rather than moving a filter the frame
-		// cannot see (ADR 0060).
-		f.setWarningMessage("the Ticket list filter needs SQLite state");
-		return;
-	}
 	const next = nextTicketListFilter(f.ticketFilterRef.current);
 	f.ticketFilterRef.current = next;
 	f.setTicketFilter(next);
@@ -7362,13 +7157,6 @@ function appToggleTicketIgnore(f: AppConsultationOpsFields): void {
 	const ticket = f.ticketAtCursor();
 	if (ticket === undefined) return;
 	const state = f.state;
-	if (state === undefined) {
-		// The ignore is durable factory state: the in-memory projection this
-		// shell holds has nowhere to keep it, so the key says so instead of
-		// acting as a view switch the operator would read as an ignore.
-		f.setWarningMessage("ignoring a Ticket needs SQLite state");
-		return;
-	}
 	const ignored = !ticket.ignored;
 	const result = state.ticketWorkCycle.setTicketIgnored(
 		ticket.identity,
@@ -7417,14 +7205,6 @@ function appToggleSourceMute(f: AppConsultationOpsFields): void {
 	const ticket = f.ticketAtCursor();
 	if (ticket === undefined) return;
 	const state = f.state;
-	if (state === undefined) {
-		// The mute is durable factory state on the source's row: the
-		// in-memory projection this shell holds has nowhere to keep it, so
-		// the key says so instead of acting as a view switch the operator
-		// would read as a mute (ADR 0070).
-		f.setWarningMessage("muting a source needs SQLite state");
-		return;
-	}
 	const sources = [
 		...new Set(ticket.memberships.map((membership) => membership.sourceName)),
 	].sort();
@@ -7498,7 +7278,6 @@ function appRunMissingAction(f: AppConsultationOpsFields, ticket: Ticket, key: s
 	// it returns to the stream when the restarted agent is back.
 	if (!(f.panel?.kind === "live" && key === "restart")) f.setPanel(null);
 	const state = f.state;
-	if (state === undefined) return;
 	if (key === "abandon") {
 		const applied = state.ticketWorkCycle.applyCompletionDecision({
 			ticketIdentity: ticket.identity,
@@ -7553,7 +7332,6 @@ function appMoveQueueItem(
 	direction: "up" | "down",
 	item: WorkQueueItem | null,
 ): void {
-	if (f.state === undefined) return;
 	// The item is the queue module's own fact for the row under the cursor,
 	// the same one the catalogue gated the key on.
 	if (item === null) return;
@@ -7712,26 +7490,20 @@ function useAppConfigState(props: AppProps, chrome: AppChromeStage) {
 	const [config, setConfig] = useState<FactoryConfig>(() => configProp);
 	const configRef = useRef(config);
 	configRef.current = config;
-	const commandRunner = runner ?? realRunner();
-	const homeDir = home ?? os.homedir();
-	const configFile = configPath ?? defaultConfigPath();
+	const commandRunner = runner;
+	const homeDir = home;
+	const configFile = configPath;
 	const profiles: Record<string, TaskProfileStart> = taskProfilesOf(config);
 	return { ...chrome, config, setConfig, configRef, commandRunner, homeDir, configFile, profiles };
 }
 type AppConfigStage = ReturnType<typeof useAppConfigState>;
 
 function useAppListViews(props: AppProps, cfg: AppConfigStage) {
-	const { state, initialTickets } = props;
+	const { state } = props;
 	const { config } = cfg;
-	const [listViews, setListViews] = useState<TicketListViews>(() => {
-		if (state !== undefined)
-			return state.ticketWorkCycle.ticketListViews(
-				config.workflowStates,
-				config.defaultTaskType,
-				"active",
-			);
-		return inMemoryTicketViews(initialTickets ?? []);
-	});
+	const [listViews, setListViews] = useState<TicketListViews>(() =>
+		state.ticketWorkCycle.ticketListViews(config.workflowStates, config.defaultTaskType, "active"),
+	);
 	const tickets = listViews.rows;
 	/**
 	 * The rows the machine reads (ADR 0060): the active view of the Ticket
@@ -7755,11 +7527,10 @@ function useAppGroupingState(props: AppProps, prev: AppListViewsStage) {
 	 *
 	 * It is factory state (ADR 0058): the shell reads the operator's last choice
 	 * back from the state file at boot, so a restart and a dev reload find the
-	 * list split the way they left it. A plane with no state file has nothing
-	 * durable to read, keeps the axis for the run, and writes nothing.
+	 * list split the way they left it.
 	 */
 	const [groupingAxis, setGroupingAxis] = useState<GroupingAxis>(
-		() => state?.grouping.groupingAxis(TICKET_GROUP_SECTION) ?? DEFAULT_GROUPING_AXIS,
+		() => state.grouping.groupingAxis(TICKET_GROUP_SECTION),
 	);
 	const groupingAxisRef = useRef(groupingAxis);
 	// The one-time init note stands once per run (ADR 0075, story 20): the flag
@@ -7777,28 +7548,17 @@ function useAppGroupingState(props: AppProps, prev: AppListViewsStage) {
 	 * file stands for the run keep in the run map below.
 	 */
 	const [groupOrderList, setGroupOrderList] = useState<string[]>(() =>
-		state !== undefined && groupingAxis !== "none"
-			? state.grouping.groupOrder(TICKET_GROUP_SECTION, groupingAxis)
-			: [],
+		groupingAxis !== "none" ? state.grouping.groupOrder(TICKET_GROUP_SECTION, groupingAxis) : [],
 	);
 	const groupOrderListRef = useRef(groupOrderList);
-	/**
-	 * The stored orders of this run for the axes the plane does not read back
-	 * from a state file (ADR 0071): a plane with no state file keeps its group
-	 * orders for the run, the way it keeps its axis, and a move on an axis the
-	 * operator visits twice comes back where they left it.
-	 */
-	const groupOrdersForRunRef = useRef<Partial<Record<SplitGroupingAxis, string[]>>>({});
 	/** The Workflow's own order of its positions, the `position` axis' default order. */
 	const positionOrderOf = useCallback(
 		(): string[] => config.workflowStates.map((w) => w.name),
 		[config],
 	);
-	/** The stored order of one axis: the run map's where there is no state file, the file's where there is one. */
+	/** The stored order of one axis, the file's read at the axis. */
 	const storedGroupOrderOf = (axis: SplitGroupingAxis): string[] =>
-		state === undefined
-			? (groupOrdersForRunRef.current[axis] ?? [])
-			: state.grouping.groupOrder(TICKET_GROUP_SECTION, axis);
+		state.grouping.groupOrder(TICKET_GROUP_SECTION, axis);
 	return {
 		...prev,
 		groupingAxis,
@@ -7808,7 +7568,6 @@ function useAppGroupingState(props: AppProps, prev: AppListViewsStage) {
 		groupOrderList,
 		setGroupOrderList,
 		groupOrderListRef,
-		groupOrdersForRunRef,
 		positionOrderOf,
 		storedGroupOrderOf,
 	};
@@ -7869,14 +7628,14 @@ function useAppSelectionState(props: AppProps, prev: AppFoldsStage) {
 	const workQueueDetailScrollRef = useRef(0);
 	/** The Consultation section's drawn records, in the history filter's view. */
 	const [consultations, setConsultations] = useState<Consultation[]>(
-		() => state?.consultationRecord.consultations("open") ?? [],
+		() => state.consultationRecord.consultations("open"),
 	);
 	/**
 	 * The machine's own Consultation read (story 14): the `open` list the
 	 * header's counts and the seat reads take, never the operator's filter.
 	 */
 	const [machineConsultations, setMachineConsultations] = useState<Consultation[]>(
-		() => state?.consultationRecord.consultations("open") ?? [],
+		() => state.consultationRecord.consultations("open"),
 	);
 	const consultationsRef = useRef(consultations);
 	const [consultationIndex, setConsultationIndex] = useState(0);
@@ -8079,7 +7838,7 @@ function useAppWorkQueueState(props: AppProps, prev: AppSectionSyncsStage) {
 	// App's own re-read for the reorder and the cancel the operator asked for.
 	// The render never queries the state.
 	const [workQueue, setWorkQueue] = useState<readonly WorkQueueItem[]>(
-		() => state?.workQueue.items() ?? [],
+		() => state.workQueue.items(),
 	);
 	const workQueueRef = useRef<readonly WorkQueueItem[]>(workQueue);
 	workQueueRef.current = workQueue;
@@ -8159,7 +7918,7 @@ function useAppDetailRefs(props: AppProps, prev: AppWorkQueueStateStage) {
 	const overrideRef = useRef<PendingOverride | null>(null);
 	overrideRef.current = override;
 	const [utility, setUtility] = useState<Utility>(null);
-	const [healths, setHealths] = useState(() => state?.sourceFact.sourceHealths() ?? []);
+	const [healths, setHealths] = useState(() => state.sourceFact.sourceHealths());
 	const [panel, setPanel] = useState<Panel>(null);
 	return {
 		...prev,
@@ -8197,10 +7956,9 @@ function useAppFactoryRefs(props: AppProps, prev: AppDetailRefsStage) {
 	const [liveStream, setLiveStream] = useState<AppLiveStream>(null);
 	// The Auto-handoff mode is factory state (ADR 0036): the plane reads the
 	// operator's last choice back from the state file, so a restart or a dev
-	// reload finds the mode where it was left. A plane with no state has no
-	// durable mode to read, and starts with the mode off.
+	// reload finds the mode where it was left.
 	const [autoMode, setAutoMode] = useState<boolean>(
-		() => state?.handoff.autoHandoffMode() ?? false,
+		() => state.handoff.autoHandoffMode(),
 	);
 	const autoModeRef = useRef(autoMode);
 	const [agents, setAgents] = useState<readonly HerdrAgent[] | null>(null);
@@ -8259,14 +8017,10 @@ function useAppSeatFacts(props: AppProps, prev: AppFactoryRefsStage) {
 	 * unresolved claims, the Consultation seats, and the latest herdr poll.
 	 */
 	const parallelSeatFacts = (): ParallelSeatFacts => {
-		const inFlight =
-			state === undefined ? [] : state.ticketWorkCycle.ticketsByState(TICKET_SEAT_STATES);
-		const names =
-			state === undefined
-				? new Map<string, string>()
-				: state.ticketWorkCycle.agentNamesForTickets(
-						inFlight.map((ticket) => ticket.ticketIdentity),
-					);
+		const inFlight = state.ticketWorkCycle.ticketsByState(TICKET_SEAT_STATES);
+		const names = state.ticketWorkCycle.agentNamesForTickets(
+			inFlight.map((ticket) => ticket.ticketIdentity),
+		);
 		return {
 			tickets: inFlight.map((ticket) => ({
 				ticketIdentity: ticket.ticketIdentity,
@@ -8274,13 +8028,10 @@ function useAppSeatFacts(props: AppProps, prev: AppFactoryRefsStage) {
 				startedAt: ticket.startedAt,
 				agentName: names.get(ticket.ticketIdentity) ?? "",
 			})),
-			handoffAttemptTickets: state === undefined ? [] : state.handoff.openAttemptTickets(),
-			consultations:
-				state === undefined
-					? []
-					: state.consultationRecord
-							.consultationsByState(CONSULTATION_SEAT_STATES)
-							.map((consultation) => ({ state: consultation.state })),
+			handoffAttemptTickets: state.handoff.openAttemptTickets(),
+			consultations: state.consultationRecord
+					.consultationsByState(CONSULTATION_SEAT_STATES)
+					.map((consultation) => ({ state: consultation.state })),
 			agents: observationRef.current?.lastAgents() ?? null,
 			now: Date.now(),
 			startupGraceMs: STARTUP_GRACE_MS,
@@ -8308,7 +8059,7 @@ function useAppSeatTickets(props: AppProps, prev: AppSeatFactsStage) {
 	 * is the seat that starves every other start in the queue.
 	 */
 	const currentMissingSeatTickets = (): string[] => {
-		if (state === undefined || !autoModeRef.current) return [];
+		if (!autoModeRef.current) return [];
 		const facts = parallelSeatFacts();
 		const missing = parallelSeatAccount(facts).missingTickets;
 		if (missing.length === 0) return [];
@@ -8325,13 +8076,6 @@ function useAppSeatTickets(props: AppProps, prev: AppSeatFactsStage) {
 			)
 			.map((ticket) => ticket.ticketIdentity);
 	};
-	// The herdr seat: one external change to a ticket's environment at a time.
-	// A handoff holds it while herdr builds the environment and starts the
-	// agent. Close cleanups queue behind that work, and a queued cleanup
-	// reserves the seat until every earlier cleanup ends.
-	// The no-state test projection has no durable claim or queue. The real
-	// dispatch module owns the seat for every state-backed app.
-	const noStateHandoffInFlightRef = useRef(false);
 	// The tickets this run claimed and has not yet settled in a handoff
 	// (ADR 0030): the Starting window the row's spinner face reads. The
 	// dispatch module reports the add on the claim and the remove on the
@@ -8345,7 +8089,6 @@ function useAppSeatTickets(props: AppProps, prev: AppSeatFactsStage) {
 	return {
 		...prev,
 		currentMissingSeatTickets,
-		noStateHandoffInFlightRef,
 		startingTickets,
 		setStartingTickets,
 		startingTicketsRef,
@@ -8397,7 +8140,7 @@ type AppFactReadsStage = ReturnType<typeof useAppFactReads>;
  * list's order, which is the list exactly as it stood before grouping.
  */
 function appTicketListFacts(input: {
-	state: AppAggregates | undefined;
+	state: AppAggregates;
 	config: FactoryConfig;
 	tickets: readonly Ticket[];
 	rowFacts: readonly TicketRowFacts[];
@@ -8427,8 +8170,7 @@ function appTicketListFacts(input: {
 		if (input.groupingAxis !== "repository") return null;
 		const ticket = input.tickets.find((item) => item.repository === value);
 		const identity = ticket?.repositoryRef.identity ?? value;
-		const fact =
-			input.state === undefined ? null : input.state.repositoryInit.repositoryInitFact(identity);
+		const fact = input.state.repositoryInit.repositoryInitFact(identity);
 		return repositoryInitStanding(fact, currentInitHash);
 	};
 	const ticketRowsState = ticketRows(input.rowFacts, input.groupingAxis, {
@@ -8498,7 +8240,7 @@ type AppTicketFactsStage = ReturnType<typeof useAppTicketFacts>;
 /** The sources this run polls, and their stale facts. */
 function useAppSourceFacts(props: AppProps, prev: AppTicketFactsStage) {
 	const { logger } = props;
-	const sources = props.sources ?? EMPTY_SOURCES;
+	const sources = props.sources;
 	const { config, configRef, commandRunner, healths } = prev;
 	/**
 	 * The Ticket sources this run polls.
@@ -8651,19 +8393,16 @@ function useAppHeaderFacts(props: AppProps, prev: AppMessageStateStage) {
 	const liveCount = currentSeatCount();
 	// The Dispatch pause (ADR 0016): a held failed trace holds the automatic
 	// handoffs, routes, and restarts until it is decided or a turn completes.
-	const dispatchPause = state?.ticketWorkCycle.dispatchPauseActive() ?? false;
-	const autoHandoffCell =
-		state === undefined
-			? null
-			: {
-					mode: autoMode ? ("auto" as const) : ("manual" as const),
-					seats: liveCount,
-					limit: config.maxParallelAgents,
-					// The gate's answer, from the one rule the dispatch gates read: the header's
-					// seat color and a force-dispatch refusal cannot disagree about the cap.
-					overLimit: overParallelLimit(config.maxParallelAgents, liveCount),
-					dispatchPaused: autoMode && dispatchPause,
-				};
+	const dispatchPause = state.ticketWorkCycle.dispatchPauseActive();
+	const autoHandoffCell = {
+		mode: autoMode ? ("auto" as const) : ("manual" as const),
+		seats: liveCount,
+		limit: config.maxParallelAgents,
+		// The gate's answer, from the one rule the dispatch gates read: the header's
+		// seat color and a force-dispatch refusal cannot disagree about the cap.
+		overLimit: overParallelLimit(config.maxParallelAgents, liveCount),
+		dispatchPaused: autoMode && dispatchPause,
+	};
 	// The held turns (ADR 0016, ADR 0017): the awaiting tickets whose last turn
 	// ended failed, aborted, truncated, or no-turn with no decision, read
 	// through the domain's one rule so this count and a Group header's agree.
@@ -8832,7 +8571,7 @@ function useAppSelectionFactsTicket(props: AppProps, prev: AppLayoutFactsStage) 
 			visibleRows: detailGeometry.visibleRows,
 			handoffLimit: config.maxHandoffsPerTicket,
 			mergeAttempt:
-				detailTicket === undefined || state === undefined
+				detailTicket === undefined
 					? null
 					: state.planeAction.latestPlaneActionAttempt(detailTicket.identity),
 		},
@@ -8917,22 +8656,21 @@ type AppSelectionFactsConsultationStage = ReturnType<typeof useAppSelectionFacts
  * replacement's ids, and the remaining resources of a closed record.
  */
 function appConsultationRecordReads(
-	state: AppAggregates | undefined,
+	state: AppAggregates,
 	consultation: Consultation | undefined,
 ) {
-	const closed =
-		consultation !== undefined && state !== undefined && consultation.state === "closed";
+	const closed = consultation !== undefined && consultation.state === "closed";
 	return {
 		turns:
-			consultation === undefined || state === undefined
+			consultation === undefined
 				? []
 				: state.consultationRecord.consultationTurns(consultation.id),
 		snapshots:
-			consultation === undefined || state === undefined
+			consultation === undefined
 				? []
 				: state.consultationRecord.consultationSnapshots(consultation.id),
 		replacementIds:
-			consultation === undefined || state === undefined
+			consultation === undefined
 				? []
 				: state.consultationRecord
 						.consultations("all")

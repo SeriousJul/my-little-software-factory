@@ -9,9 +9,7 @@
  * an Agent.
  */
 
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
 
 import {
@@ -27,30 +25,27 @@ import {
 	withApp,
 } from "./app-harness.ts";
 import type { FakeRunner } from "./fake-runner.ts";
-import { launcherConfig, launcherRunner } from "./launcher-fixtures.ts";
-
-/** The checkout the fixtures map, created once for the file's tests. */
-let checkout: string;
-beforeAll(() => {
-	checkout = mkdtempSync(join(tmpdir(), "factory-fields-"));
-});
-afterAll(() => {
-	rmSync(checkout, { recursive: true, force: true });
-});
+import { LAUNCHER_IDENTITY, launcherAnswers, launcherConfig } from "./launcher-fixtures.ts";
+import { plane } from "./seeded-plane.ts";
 
 /** Boot one launcher flow at the real app seam, with its own fake runner. */
 async function withLauncher(
 	body: (setup: Setup, runner: FakeRunner) => Promise<void>,
 ): Promise<void> {
-	const runner = launcherRunner(checkout);
+	const planeRecord = await plane({
+		config: launcherConfig(""),
+		sources: [],
+		repos: { [LAUNCHER_IDENTITY]: "checkout" },
+		commands: (fake, home) => launcherAnswers(fake, join(home, "checkout")),
+	});
 	await withApp(
 		async (setup) => {
-			await body(setup, runner);
+			await body(setup, setup.plane.fakeRunner);
 		},
 		{
 			width: WIDTH,
 			height: HEIGHT,
-			props: { config: launcherConfig(checkout), runner, initialTickets: [] },
+			plane: planeRecord,
 		},
 	);
 }

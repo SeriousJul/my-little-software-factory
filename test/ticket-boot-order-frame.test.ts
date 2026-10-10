@@ -14,34 +14,16 @@
  * from the order the boot started with.
  */
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { describe, expect, test } from "bun:test";
 
-import type { FactoryConfig } from "../src/config.ts";
+import type { FactoryConfig, TicketSourceConfig } from "../src/config.ts";
 import type { FetchedTicket } from "../src/domain/ticket.ts";
-import type { FactoryState } from "../src/state.ts";
-import { openFactoryState } from "../src/state.ts";
 import type { FetchOutcome } from "../src/ticket-source.ts";
 import { type AppSetup, listHalfOf, rowsOf, settle, sleep, withApp } from "./app-harness.ts";
 import { BASE_CONFIG } from "./base-config.ts";
-import { emptyAgentRunner } from "./fake-runner.ts";
-import { FakeSource } from "./fake-source.ts";
+import type { FakeSource } from "./fake-source.ts";
 import { callsReached } from "./state-fixture.ts";
-
-let home = "";
-const opened: FactoryState[] = [];
-
-beforeEach(() => {
-	home = join(tmpdir(), `factory-boot-order-${Math.random().toString(36).slice(2)}`);
-	mkdirSync(home, { recursive: true });
-});
-
-afterEach(() => {
-	for (const state of opened.splice(0)) state.close();
-	rmSync(home, { recursive: true, force: true });
-});
+import { plane, ticketOf } from "./seeded-plane.ts";
 
 /**
  * Three open Tickets whose numbers interleave across the two feeds: the Issue
@@ -108,25 +90,23 @@ const PULL_SNAPSHOT: FetchOutcome = {
 	tickets: [pullRequest(8)],
 };
 
-const config: FactoryConfig = {
-	...BASE_CONFIG,
-	sources: [
-		{
-			name: "issues",
-			kind: "github-issues",
-			refreshIntervalSeconds: 60,
-			repositories: ["acme/factory"],
-			host: "github.com",
-		},
-		{
-			name: "pulls",
-			kind: "github-pull-requests",
-			refreshIntervalSeconds: 60,
-			repositories: ["acme/factory"],
-			host: "github.com",
-		},
-	],
+const issuesConfig: TicketSourceConfig = {
+	name: "issues",
+	kind: "github-issues",
+	refreshIntervalSeconds: 60,
+	repositories: ["acme/factory"],
+	host: "github.com",
 };
+
+const pullsConfig: TicketSourceConfig = {
+	name: "pulls",
+	kind: "github-pull-requests",
+	refreshIntervalSeconds: 60,
+	repositories: ["acme/factory"],
+	host: "github.com",
+};
+
+const config: FactoryConfig = { ...BASE_CONFIG, sources: [issuesConfig, pullsConfig] };
 
 /** The titles the Ticket list holds, top row first. */
 function paintedOrder(frame: string): string[] {
@@ -140,25 +120,25 @@ function paintedOrder(frame: string): string[] {
 
 describe("the Ticket list's order through the boot", () => {
 	test("the first source read does not reorder the list", async () => {
-		const state = openFactoryState(join(home, "state.sqlite"));
-		opened.push(state);
-		// The flat axis: the walk reads the list order itself, with no Group
-		// header between the rows.
-		state.grouping.setGroupingAxis("tickets", "none");
-		// The projection the previous run left: both feeds, healthy, the same
-		// three Tickets this run's fetches answer with.
-		state.sourceFact.initializeSources([
-			{ name: "issues", kind: "github-issues" },
-			{ name: "pulls", kind: "github-pull-requests" },
-		]);
-		state.sourceFact.applyFetch({ name: "issues", kind: "github-issues" }, ISSUE_SNAPSHOT);
-		state.sourceFact.applyFetch({ name: "pulls", kind: "github-pull-requests" }, PULL_SNAPSHOT);
-
-		const issues = new FakeSource("issues", "github-issues", ISSUE_SNAPSHOT);
-		const pulls = new FakeSource("pulls", "github-pull-requests", PULL_SNAPSHOT);
+		// The plane stands the projection the previous run left: both feeds,
+		// healthy, the same three Tickets this run's fetches answer with.
+		const planeRecord = await plane({
+			config,
+			sources: [
+				{
+					config: issuesConfig,
+					tickets: [ticketOf(issue(3)), ticketOf(issue(10))],
+				},
+				{
+					config: pullsConfig,
+					tickets: [ticketOf(pullRequest(8))],
+				},
+			],
+		});
 
 		await withApp(
 			async (setup: AppSetup) => {
+				const [issues, pulls] = setup.plane.sources as readonly FakeSource[];
 				const orders: { at: number; order: string[] }[] = [];
 				const started = Date.now();
 				const record = () => {
@@ -205,13 +185,8 @@ describe("the Ticket list's order through the boot", () => {
 			{
 				width: 120,
 				height: 30,
-				props: {
-					config,
-					state,
-					sources: [issues, pulls],
-					runner: emptyAgentRunner(),
-					pollIntervalMs: 5000,
-				},
+				plane: planeRecord,
+				loopPolicy: { kind: "polled", intervalMs: 5000 },
 			},
 		);
 	});

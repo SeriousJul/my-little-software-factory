@@ -94,10 +94,12 @@ createRoot(renderer).render(
 	createElement(App, {
 		config: startup.config,
 		runner: startup.runner,
+		home: startup.home,
 		configPath: startup.configPath,
 		state: startup.state,
 		sources: startup.sources,
 		logger: startup.logger,
+		loopPolicy: { kind: "production" },
 		onReady: (ready) => {
 			appStop.current = ready.stop;
 		},

@@ -5,24 +5,20 @@
  * start under the cursor, and the emptied section keeps its header with its
  * count.
  *
- * The tests boot the real app against a temporary state with a FakeSource,
- * and they seed the queue straight into the state the way a refused manual
- * start leaves it. No test starts an Agent: a queue item is a start waiting
- * to run, and these frames verify the waiting, not the running.
+ * The tests boot the real app around the one-seat plane the fixture stands
+ * on: the queue is seeded straight into the plane's state the way a refused
+ * manual start leaves it. No test starts an Agent: a queue item is a start
+ * waiting to run, and these frames verify the waiting, not the running.
  */
 
 import { Database } from "bun:sqlite";
-import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
-import { mkdirSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { describe, expect, spyOn, test } from "bun:test";
 import { join } from "node:path";
-import type { FactoryConfig } from "../src/config.ts";
+import type { Ticket } from "../src/domain/ticket.ts";
 import { baseChoice } from "../src/handoff.ts";
 import type { Logger } from "../src/logging.ts";
-import type { CommandRunner } from "../src/runner.ts";
+import type { TicketSourceConfig } from "../src/config.ts";
 import { workQueueIdentityOf } from "../src/state/work-queue.ts";
-import type { FactoryState } from "../src/state.ts";
-import { openFactoryState } from "../src/state.ts";
 import {
 	actionBarRowOf,
 	awaitFrame,
@@ -44,8 +40,6 @@ import {
 } from "./app-harness.ts";
 import {
 	agentListJson,
-	emptyAgentRunner,
-	FakeRunner,
 	tabCreateJson,
 	workspaceCreateJson,
 	workspaceListJson,
@@ -54,12 +48,11 @@ import { FakeSource } from "./fake-source.ts";
 import { infoLine, type RecordedLine, recordLogger } from "./record-logger.ts";
 import {
 	DEFAULT_AGENT_NAME,
-	issuesConfig,
 	issueTicket,
 	seedAwaitingTurn,
-	seedInFlightTurn,
 	success,
 } from "./state-fixture.ts";
+import { plane, ticketOf, type SeededPlane } from "./seeded-plane.ts";
 
 const FIRST = "github:github.com:I_5";
 const SECOND = "github:github.com:I_6";
@@ -70,19 +63,41 @@ const HELD = FIRST;
 /** The open ticket whose start the force-dispatch frames ask for. */
 const FORCED = SECOND;
 
-/** The checkout the forced handoff runs in, under the app's home. */
-const forceCheckout = () => join(home, "src", "billing");
+/** The issues source these frames stand on. */
+const issuesSourceConfig: TicketSourceConfig = {
+	name: "issues",
+	kind: "github-issues",
+	refreshIntervalSeconds: 60,
+	repositories: ["acme/factory"],
+	host: "github.com",
+};
+
+/** The one-seat cap these frames boot under. */
+const oneSeat = { maxParallelAgents: 1, agentPollIntervalSeconds: 60 };
+
+/** The two tickets the queue in these frames waits to start. */
+function twoTickets() {
+	return [
+		issueTicket(FIRST),
+		issueTicket(SECOND, {
+			externalKey: "#6",
+			url: "https://github.com/acme/factory/issues/6",
+			title: "Close the stale deploy branch",
+		}),
+	];
+}
+
+/** The two resting rows those tickets stand on. */
+const twoTicketRows = (): readonly Ticket[] =>
+	twoTickets().map((ticket) => ticketOf(ticket));
 
 /**
- * The one-seat state the force-dispatch frames boot on (issue #89): the held
+ * The one-seat plane the force-dispatch frames boot on (issue #89): the held
  * ticket owns the factory's only seat behind a live agent, so the cap is full
  * the moment the app boots and no cycle can pick the forced item up out from
- * under a test. The caller owns the state and closes it.
+ * under a test.
  */
-function forcedFixture() {
-	const state = openFactoryState(join(home, "state.sqlite"));
-	// Hold the flat axis: the frames read the unsplit list (ADR 0066).
-	state.grouping.setGroupingAxis("tickets", "none");
+async function forcedFixture() {
 	const heldTicket = issueTicket(HELD);
 	const forcedTicket = issueTicket(FORCED, {
 		externalKey: "#6",
@@ -90,51 +105,74 @@ function forcedFixture() {
 		title: "Close the stale deploy branch",
 	});
 	const outcome = success([heldTicket, forcedTicket]);
-	// The held seat: a real in-flight handoff with a live agent in the list.
-	seedInFlightTurn(state, outcome, HELD);
-	const runner = new FakeRunner();
-	runner.set("herdr", ["agent", "list"], {
-		stdout: agentListJson([
-			{
-				paneId: "pane-1",
-				tabId: "tab-1",
-				workspaceId: "ws-1",
-				agent: DEFAULT_AGENT_NAME,
-				status: "working",
-			},
-		]),
-	});
-	// The forced start crosses these steps on the item's own captured choice.
-	const checkout = forceCheckout();
-	mkdirSync(checkout, { recursive: true });
-	runner.set("git", ["-C", checkout, "rev-parse", "--git-dir"], { stdout: ".git\n" });
-	runner.set("git", ["-C", checkout, "remote", "get-url", "origin"], {
-		stdout: "https://github.com/acme/factory.git\n",
-	});
-	runner.set("herdr", ["workspace", "list"], { stdout: workspaceListJson([]) });
-	runner.set("herdr", ["workspace", "create", "--cwd", checkout, "--no-focus"], {
-		stdout: workspaceCreateJson("ws-2"),
-	});
-	runner.set("herdr", ["tab", "create", "--workspace", "ws-2", "--cwd", checkout, "--no-focus"], {
-		stdout: tabCreateJson("pane-2", "tab-2"),
+	// The held seat: a settled handoff whose live agent stands working in the
+	// list, so the cap is full from the boot.
+	const planeRecord = await plane({
+		groupingAxis: "none",
+		sources: [{
+			config: issuesSourceConfig,
+			tickets: [
+				ticketOf(heldTicket, {
+					state: "handed-off",
+					handoff: {
+						agentType: "pi",
+						environment: "live-worktree",
+						taskType: "implement",
+						model: "",
+						thinking: "",
+						contextWindow: "",
+						attemptId: "seeded-held",
+						paneId: "pane-1",
+						tabId: "tab-1",
+						workspaceId: "ws-1",
+						herdrName: null,
+					},
+					handoffCount: 1,
+				}),
+				ticketOf(forcedTicket),
+			],
+		}],
+		config: oneSeat,
+		repos: { "github.com/acme/factory": "src/billing" },
+		commands: (fake, home) => {
+			const checkout = join(home, "src/billing");
+			fake.set("herdr", ["agent", "list"], {
+				stdout: agentListJson([
+					{
+						paneId: "pane-1",
+							tabId: "tab-1",
+							workspaceId: "ws-1",
+							agent: DEFAULT_AGENT_NAME,
+							status: "working",
+						},
+					]),
+				});
+			// The forced start crosses these steps on the item's own captured choice.
+			fake.set("git", ["-C", checkout, "rev-parse", "--git-dir"], { stdout: ".git\n" });
+			fake.set("git", ["-C", checkout, "remote", "get-url", "origin"], {
+				stdout: "https://github.com/acme/factory.git\n",
+			});
+			fake.set("herdr", ["workspace", "list"], { stdout: workspaceListJson([]) });
+			fake.set("herdr", ["workspace", "create", "--cwd", checkout, "--no-focus"], {
+				stdout: workspaceCreateJson("ws-2"),
+			});
+			fake.set("herdr", ["tab", "create", "--workspace", "ws-2", "--cwd", checkout, "--no-focus"], {
+				stdout: tabCreateJson("pane-2", "tab-2"),
+			});
+		},
 	});
 	return {
-		state,
+		state: planeRecord.state,
 		outcome,
-		source: new FakeSource("issues", "github-issues", outcome),
-		runner,
-		config: {
-			...issuesConfig,
-			maxParallelAgents: 1,
-			agentPollIntervalSeconds: 60,
-			repos: { "github.com/acme/factory": checkout },
-		} satisfies FactoryConfig,
+		source: planeRecord.sources[0] as FakeSource,
+		runner: planeRecord.fakeRunner,
+		plane: planeRecord,
 	};
 }
 
 /** Put one waiting item in the queue and boot the app around it. */
-function forceDispatchApp(fixture: ReturnType<typeof forcedFixture>) {
-	const { state, source, runner, config } = fixture;
+function forceDispatchApp(fixture: Awaited<ReturnType<typeof forcedFixture>>) {
+	const { state, plane: planeRecord } = fixture;
 	const enqueue = (
 		ticketIdentity: string,
 		origin: "open" | "workflow" | "restart" = "open",
@@ -153,51 +191,41 @@ function forceDispatchApp(fixture: ReturnType<typeof forcedFixture>) {
 		withApp(body, {
 			width: WIDTH,
 			height: 34,
-			props: { state, config, home, runner, sources: [source] },
+			plane: planeRecord,
+			loopPolicy: { kind: "production" },
 		});
 	return { enqueue, boot };
 }
 
-let home = "";
-
-beforeEach(() => {
-	home = join(tmpdir(), `factory-work-queue-${Math.random().toString(36).slice(2)}`);
-	mkdirSync(home, { recursive: true });
-});
-
-afterEach(() => {
-	rmSync(home, { recursive: true, force: true });
-});
-
-/** The two tickets the queue in these frames waits to start. */
-function twoTickets() {
-	return [
-		issueTicket(FIRST),
-		issueTicket(SECOND, {
-			externalKey: "#6",
-			url: "https://github.com/acme/factory/issues/6",
-			title: "Close the stale deploy branch",
-		}),
-	];
-}
-
 /**
- * One state with the queue the test enqueues, plus the source that settles it.
+ * The one-seat plane with the queue the test names, plus the source that
+ * settles it.
  *
  * The one seat is held from boot: a durable claim on the second ticket keeps
  * the free-seat figure at zero, so the observation's pickup never runs and
  * the frame the test reads is the resting one. A test that claims the
  * second ticket itself boots with the seat free.
  */
-function queuedFixture(state: FactoryState, holdSeat = true) {
-	const tickets = twoTickets();
-	const source = new FakeSource("issues", "github-issues", success(tickets));
+async function queuedFixture(holdSeat = true) {
+	const planeRecord = await plane({
+		groupingAxis: "none",
+		sources: [{ config: issuesSourceConfig, tickets: twoTicketRows() }],
+		config: oneSeat,
+	});
+	if (holdSeat) {
+		const held = planeRecord.state.handoff.claimHandoff(
+			SECOND,
+			baseChoice("pi", "live-worktree", "implement"),
+			"open",
+		);
+		if (!held.ok) throw new Error(held.reason);
+	}
 	const enqueue = (
 		ticketIdentity: string,
 		origin: "open" | "workflow" | "restart" = "open",
 		automatic = false,
 	) => {
-		const result = state.workQueue.enqueueWork({
+		const result = planeRecord.state.workQueue.enqueueWork({
 			ticketIdentity,
 			origin,
 			choice: baseChoice("pi", "live-worktree", "implement"),
@@ -206,18 +234,13 @@ function queuedFixture(state: FactoryState, holdSeat = true) {
 		});
 		if (!result.ok) throw new Error(result.reason);
 	};
-	const runner: CommandRunner = emptyAgentRunner();
-	if (holdSeat) {
-		state.sourceFact.initializeSources([{ name: "issues", kind: "github-issues" }]);
-		state.sourceFact.applyFetch({ name: "issues", kind: "github-issues" }, success(tickets));
-		const held = state.handoff.claimHandoff(
-			SECOND,
-			baseChoice("pi", "live-worktree", "implement"),
-			"open",
-		);
-		if (!held.ok) throw new Error(held.reason);
-	}
-	return { state, source, enqueue, runner };
+	return {
+		state: planeRecord.state,
+		source: planeRecord.sources[0] as FakeSource,
+		enqueue,
+		runner: planeRecord.fakeRunner,
+		plane: planeRecord,
+	};
 }
 
 // These frames show the waiting, never a running start, so nothing may pick
@@ -229,29 +252,18 @@ function queuedFixture(state: FactoryState, holdSeat = true) {
 // ticket; it holds the seat the same way a live agent would, and the ticket
 // keeps its open state, so the counts and the badge the test reads are the
 // resting ones.
-const zeroSeatConfig: FactoryConfig = {
-	...issuesConfig,
-	maxParallelAgents: 1,
-	agentPollIntervalSeconds: 60,
-};
-
 const booted = (
 	body: Parameters<typeof withApp>[0],
-	state: FactoryState,
-	fields: { source: FakeSource; runner: CommandRunner; logger?: Logger; width?: number },
+	planeRecord: SeededPlane,
+	fields: { logger?: Logger; width?: number } = {},
 ): Promise<void> => {
-	const { source, runner, logger, width = WIDTH } = fields;
+	const { logger, width = WIDTH } = fields;
 	return withApp(body, {
 		width,
 		height: 34,
-		props: {
-			state,
-			config: zeroSeatConfig,
-			home,
-			runner,
-			sources: [source],
-			...(logger === undefined ? {} : { logger }),
-		},
+		plane: planeRecord,
+		loopPolicy: { kind: "production" },
+		...(logger === undefined ? {} : { logger }),
 	});
 };
 
@@ -311,14 +323,10 @@ describe("the Work queue section", () => {
 	 * the factory's adds marked where they stand.
 	 */
 	test("the detail says whose start a waiting row is", async () => {
-		const state = openFactoryState(join(home, "state.sqlite"));
-		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
-		state.grouping.setGroupingAxis("tickets", "none");
-		const { source, enqueue, runner } = queuedFixture(state);
+		const { state, source, enqueue, runner, plane: planeRecord } = await queuedFixture();
 		enqueue(FIRST, "workflow", true);
 		enqueue(SECOND, "workflow");
-		try {
-			await booted(
+		await booted(
 				async (setup) => {
 					source.settle(success(twoTickets()));
 					await awaitFrame(setup, (f) => f.includes("waiting: 2"), "the Work header");
@@ -338,12 +346,9 @@ describe("the Work queue section", () => {
 					);
 					expect(detailPaneText(setup.captureCharFrame())).toContain("Origin: workflow");
 				},
-				state,
-				{ source: source, runner: runner },
+				planeRecord,
+				{}
 			);
-		} finally {
-			state.close();
-		}
 	});
 
 	/**
@@ -354,13 +359,9 @@ describe("the Work queue section", () => {
 	 * facts of one kind must not fail two ways.
 	 */
 	test("p reports a state file that will not take the write, and moves nothing", async () => {
-		const state = openFactoryState(join(home, "state.sqlite"));
-		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
-		state.grouping.setGroupingAxis("tickets", "none");
-		const { source, enqueue, runner } = queuedFixture(state);
+		const { state, source, enqueue, runner, plane: planeRecord } = await queuedFixture();
 		enqueue(FIRST);
-		try {
-			await booted(
+		await booted(
 				async (setup) => {
 					source.settle(success(twoTickets()));
 					await awaitFrame(setup, (f) => queueRowIndex(f, firstRowLead) >= 0, "the queued start");
@@ -382,22 +383,15 @@ describe("the Work queue section", () => {
 					expect(state.workQueue.queuePaused()).toBe(false);
 					pauseSpy.mockRestore();
 				},
-				state,
-				{ source: source, runner: runner },
+				planeRecord,
+				{}
 			);
-		} finally {
-			state.close();
-		}
 	});
 
 	test("p pauses the queue's drain, and p again resumes it", async () => {
-		const state = openFactoryState(join(home, "state.sqlite"));
-		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
-		state.grouping.setGroupingAxis("tickets", "none");
-		const { source, enqueue, runner } = queuedFixture(state);
+		const { state, source, enqueue, runner, plane: planeRecord } = await queuedFixture();
 		enqueue(FIRST);
-		try {
-			await booted(
+		await booted(
 				async (setup) => {
 					source.settle(success(twoTickets()));
 					await awaitFrame(setup, (f) => queueRowIndex(f, firstRowLead) >= 0, "the queued start");
@@ -441,11 +435,8 @@ describe("the Work queue section", () => {
 					// resume wrote the off back: the store reads it either way.
 					expect(state.workQueue.queuePaused()).toBe(false);
 				},
-				state,
+				planeRecord,
 				{
-					source: source,
-					runner: runner,
-					logger: undefined,
 					width: // Wide enough for the queue's keys beside the Message hint: the
 						// pause's own outcome is a recorded fact (ADR 0119), so the bar
 						// carries `m Message` with it, and this test reads its key's
@@ -453,9 +444,6 @@ describe("the Work queue section", () => {
 						170,
 				},
 			);
-		} finally {
-			state.close();
-		}
 	});
 
 	/**
@@ -465,14 +453,10 @@ describe("the Work queue section", () => {
 	 * a held run from a broken one.
 	 */
 	test("p and its resume each leave one line in the record", async () => {
-		const state = openFactoryState(join(home, "state.sqlite"));
-		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
-		state.grouping.setGroupingAxis("tickets", "none");
-		const { source, enqueue, runner } = queuedFixture(state);
+		const { state, source, enqueue, runner, plane: planeRecord } = await queuedFixture();
 		enqueue(FIRST);
 		const lines: RecordedLine[] = [];
-		try {
-			await booted(
+		await booted(
 				async (setup) => {
 					source.settle(success(twoTickets()));
 					await awaitFrame(setup, (f) => queueRowIndex(f, firstRowLead) >= 0, "the queued start");
@@ -493,12 +477,9 @@ describe("the Work queue section", () => {
 						infoLine("queue: the Work queue resumed"),
 					]);
 				},
-				state,
-				{ source: source, runner: runner, logger: recordLogger(lines) },
+				planeRecord,
+				{ logger: recordLogger(lines) }
 			);
-		} finally {
-			state.close();
-		}
 	});
 
 	/**
@@ -512,14 +493,10 @@ describe("the Work queue section", () => {
 	 * will not read back carries.
 	 */
 	test("a queue pause the state file refuses leaves its warn line", async () => {
-		const state = openFactoryState(join(home, "state.sqlite"));
-		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
-		state.grouping.setGroupingAxis("tickets", "none");
-		const { source, enqueue, runner } = queuedFixture(state);
+		const { state, source, enqueue, runner, plane: planeRecord } = await queuedFixture();
 		enqueue(FIRST);
 		const lines: RecordedLine[] = [];
-		try {
-			await booted(
+		await booted(
 				async (setup) => {
 					source.settle(success(twoTickets()));
 					await awaitFrame(setup, (f) => queueRowIndex(f, firstRowLead) >= 0, "the queued start");
@@ -548,12 +525,9 @@ describe("the Work queue section", () => {
 					expect(stated[0]?.message).toContain("queue: the Work queue pause did not move:");
 					expect(stated[0]?.message).toContain(state.path);
 				},
-				state,
-				{ source: source, runner: runner, logger: recordLogger(lines) },
+				planeRecord,
+				{ logger: recordLogger(lines) }
 			);
-		} finally {
-			state.close();
-		}
 	});
 
 	/**
@@ -567,13 +541,9 @@ describe("the Work queue section", () => {
 	 * not an accident of the slot order.
 	 */
 	test("p behind a standing warning keeps the warning on the line and the pause on the header", async () => {
-		const state = openFactoryState(join(home, "state.sqlite"));
-		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
-		state.grouping.setGroupingAxis("tickets", "none");
-		const { source, enqueue, runner } = queuedFixture(state);
+		const { state, source, enqueue, runner, plane: planeRecord } = await queuedFixture();
 		enqueue(FIRST);
-		try {
-			await booted(
+		await booted(
 				async (setup) => {
 					source.settle(success(twoTickets()));
 					await awaitFrame(setup, (f) => queueRowIndex(f, firstRowLead) >= 0, "the queued start");
@@ -604,12 +574,9 @@ describe("the Work queue section", () => {
 					expect(messageRowOf(paused)).not.toContain("Work queue paused");
 					expect(state.workQueue.queuePaused()).toBe(true);
 				},
-				state,
-				{ source: source, runner: runner },
+				planeRecord,
+				{}
 			);
-		} finally {
-			state.close();
-		}
 	});
 
 	/**
@@ -618,13 +585,9 @@ describe("the Work queue section", () => {
 	 * section is always on the Main view, and only its list leaves.
 	 */
 	test("x collapses the Work section, and the header keeps its count", async () => {
-		const state = openFactoryState(join(home, "state.sqlite"));
-		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
-		state.grouping.setGroupingAxis("tickets", "none");
-		const { source, enqueue, runner } = queuedFixture(state);
+		const { state, source, enqueue, runner, plane: planeRecord } = await queuedFixture();
 		enqueue(FIRST);
-		try {
-			await booted(
+		await booted(
 				async (setup) => {
 					source.settle(success(twoTickets()));
 					await awaitFrame(setup, (f) => queueRowIndex(f, firstRowLead) >= 0, "the queued start");
@@ -648,12 +611,9 @@ describe("the Work queue section", () => {
 					);
 					expect(expanded).toContain("▾ Work");
 				},
-				state,
-				{ source: source, runner: runner },
+				planeRecord,
+				{}
 			);
-		} finally {
-			state.close();
-		}
 	});
 
 	/**
@@ -662,14 +622,10 @@ describe("the Work queue section", () => {
 	 * mode: no dispatch, no Message line, no queue movement.
 	 */
 	test("a stray u press is silent in the queue and in the Ticket list", async () => {
-		const state = openFactoryState(join(home, "state.sqlite"));
-		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
-		state.grouping.setGroupingAxis("tickets", "none");
-		const { source, enqueue, runner } = queuedFixture(state);
+		const { state, source, enqueue, runner, plane: planeRecord } = await queuedFixture();
 		enqueue(FIRST);
 		enqueue(SECOND, "workflow");
-		try {
-			await booted(
+		await booted(
 				async (setup) => {
 					source.settle(success(twoTickets()));
 					await awaitFrame(setup, (f) => queueRowIndex(f, firstRowLead) >= 0, "the queued start");
@@ -684,21 +640,14 @@ describe("the Work queue section", () => {
 					expect(queueRowsOf(pressed)).toEqual(queueRowsOf(before));
 					expect(messageRowOf(pressed)).toBe(messageRowOf(before));
 				},
-				state,
-				{ source: source, runner: runner },
+				planeRecord,
+				{}
 			);
-		} finally {
-			state.close();
-		}
 	});
 
 	test("an idle factory keeps the three-section frame", async () => {
-		const state = openFactoryState(join(home, "state.sqlite"));
-		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
-		state.grouping.setGroupingAxis("tickets", "none");
-		const { source, runner } = queuedFixture(state);
-		try {
-			await booted(
+		const { state, source, runner, plane: planeRecord } = await queuedFixture();
+		await booted(
 				async (setup) => {
 					source.settle(success(twoTickets()));
 					const frame = await awaitFrame(
@@ -712,12 +661,9 @@ describe("the Work queue section", () => {
 					expect(workHeaderRow(frame)).toBeGreaterThanOrEqual(0);
 					expect(frameText(frame)).toContain("waiting: 0");
 				},
-				state,
-				{ source: source, runner: runner },
+				planeRecord,
+				{}
 			);
-		} finally {
-			state.close();
-		}
 	});
 
 	/**
@@ -729,12 +675,8 @@ describe("the Work queue section", () => {
 	 * is selected.
 	 */
 	test("the cursor crosses into the empty Work queue, and the focus stays", async () => {
-		const state = openFactoryState(join(home, "state.sqlite"));
-		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
-		state.grouping.setGroupingAxis("tickets", "none");
-		const { source, runner } = queuedFixture(state);
-		try {
-			await booted(
+		const { state, source, runner, plane: planeRecord } = await queuedFixture();
+		await booted(
 				async (setup) => {
 					source.settle(success(twoTickets()));
 					await awaitFrame(setup, (f) => f.includes("waiting: 0"), "the empty queue's header");
@@ -753,12 +695,9 @@ describe("the Work queue section", () => {
 					expect(settled).toContain("┌─❯ Work queue");
 					expect(detailPaneText(settled)).toContain("no queue item is selected");
 				},
-				state,
-				{ source: source, runner: runner },
+				planeRecord,
+				{}
 			);
-		} finally {
-			state.close();
-		}
 	});
 
 	/**
@@ -768,13 +707,9 @@ describe("the Work queue section", () => {
 	 * cursor's box keeps the marker.
 	 */
 	test("a Delete that empties the queue sends the selection home", async () => {
-		const state = openFactoryState(join(home, "state.sqlite"));
-		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
-		state.grouping.setGroupingAxis("tickets", "none");
-		const { source, enqueue, runner } = queuedFixture(state);
+		const { state, source, enqueue, runner, plane: planeRecord } = await queuedFixture();
 		enqueue(FIRST);
-		try {
-			await booted(
+		await booted(
 				async (setup) => {
 					source.settle(success(twoTickets()));
 					await awaitFrame(setup, (f) => f.includes("waiting: 1"), "the queue's wait");
@@ -800,12 +735,9 @@ describe("the Work queue section", () => {
 					expect(settled).toContain("┌─❯ Tickets");
 					expect(settled).not.toContain("┌─❯ Work queue");
 				},
-				state,
-				{ source: source, runner: runner },
+				planeRecord,
+				{}
 			);
-		} finally {
-			state.close();
-		}
 	});
 
 	/**
@@ -817,13 +749,9 @@ describe("the Work queue section", () => {
 	 * Ticket keeps the state it wears behind the row it loses.
 	 */
 	test("w states nothing, and Delete takes the open Ticket's waiting start from the Ticket list, and the Ticket stays open", async () => {
-		const state = openFactoryState(join(home, "state.sqlite"));
-		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
-		state.grouping.setGroupingAxis("tickets", "none");
-		const { source, enqueue, runner } = queuedFixture(state);
+		const { state, source, enqueue, runner, plane: planeRecord } = await queuedFixture();
 		enqueue(FIRST);
-		try {
-			await booted(
+		await booted(
 				async (setup) => {
 					source.settle(success(twoTickets()));
 					await awaitFrame(setup, (f) => f.includes("waiting: 1"), "the queue's wait");
@@ -873,12 +801,9 @@ describe("the Work queue section", () => {
 						.rows.find((candidate) => candidate.identity === FIRST);
 					expect(ticket?.state).toBe("open");
 				},
-				state,
-				{ source: source, runner: runner },
+				planeRecord,
+				{}
 			);
-		} finally {
-			state.close();
-		}
 	});
 
 	/**
@@ -889,13 +814,9 @@ describe("the Work queue section", () => {
 	 * open state.
 	 */
 	test("Delete takes the open Ticket's waiting start from the Ticket detail, and the Ticket stays open", async () => {
-		const state = openFactoryState(join(home, "state.sqlite"));
-		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
-		state.grouping.setGroupingAxis("tickets", "none");
-		const { source, enqueue, runner } = queuedFixture(state);
+		const { state, source, enqueue, runner, plane: planeRecord } = await queuedFixture();
 		enqueue(FIRST);
-		try {
-			await booted(
+		await booted(
 				async (setup) => {
 					source.settle(success(twoTickets()));
 					await awaitFrame(setup, (f) => f.includes("waiting: 1"), "the queue's wait");
@@ -928,12 +849,9 @@ describe("the Work queue section", () => {
 						.rows.find((candidate) => candidate.identity === FIRST);
 					expect(ticket?.state).toBe("open");
 				},
-				state,
-				{ source: source, runner: runner },
+				planeRecord,
+				{}
 			);
-		} finally {
-			state.close();
-		}
 	});
 
 	/**
@@ -944,14 +862,10 @@ describe("the Work queue section", () => {
 	 * depth.
 	 */
 	test("Delete in the Work queue detail takes the item under the cursor out of the queue", async () => {
-		const state = openFactoryState(join(home, "state.sqlite"));
-		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
-		state.grouping.setGroupingAxis("tickets", "none");
-		const { source, enqueue, runner } = queuedFixture(state);
+		const { state, source, enqueue, runner, plane: planeRecord } = await queuedFixture();
 		enqueue(FIRST);
 		enqueue(SECOND, "workflow");
-		try {
-			await booted(
+		await booted(
 				async (setup) => {
 					source.settle(success(twoTickets()));
 					await awaitFrame(setup, (f) => f.includes("waiting: 2"), "the Work header");
@@ -989,23 +903,16 @@ describe("the Work queue section", () => {
 					// route's item keeps its place.
 					expect(state.workQueue.items().map(workQueueIdentityOf)).toEqual([SECOND]);
 				},
-				state,
-				{ source: source, runner: runner },
+				planeRecord,
+				{}
 			);
-		} finally {
-			state.close();
-		}
 	});
 
 	test("the Work header appears with its count, and the rows carry the task type and the title", async () => {
-		const state = openFactoryState(join(home, "state.sqlite"));
-		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
-		state.grouping.setGroupingAxis("tickets", "none");
-		const { source, enqueue, runner } = queuedFixture(state);
+		const { state, source, enqueue, runner, plane: planeRecord } = await queuedFixture();
 		enqueue(FIRST);
 		enqueue(SECOND, "workflow");
-		try {
-			await booted(
+		await booted(
 				async (setup) => {
 					source.settle(success(twoTickets()));
 					const frame = await awaitFrame(
@@ -1034,12 +941,9 @@ describe("the Work queue section", () => {
 					expect(detailPaneText(expanded)).toContain("Origin: open");
 					expect(detailPaneText(expanded)).toContain("place 1 of 2");
 				},
-				state,
-				{ source: source, runner: runner },
+				planeRecord,
+				{}
 			);
-		} finally {
-			state.close();
-		}
 	});
 
 	/**
@@ -1050,10 +954,7 @@ describe("the Work queue section", () => {
 	 * keeps its origin, and the cancel gives the open badge back.
 	 */
 	test("the waiting ticket wears the queued badge in row and detail, and the cancel gives the open badge back", async () => {
-		const state = openFactoryState(join(home, "state.sqlite"));
-		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
-		state.grouping.setGroupingAxis("tickets", "none");
-		const { source, enqueue, runner } = queuedFixture(state, false);
+		const { state, source, enqueue, runner, plane: planeRecord } = await queuedFixture(false);
 		// Seed the tickets into the state before the app boots, then hold the
 		// one seat with this test's own durable claim for the second ticket.
 		// The claim keeps the free-seat figure at zero, so the observation's
@@ -1069,8 +970,7 @@ describe("the Work queue section", () => {
 		);
 		if (!held.ok) throw new Error(held.reason);
 		enqueue(FIRST);
-		try {
-			await booted(
+		await booted(
 				async (setup) => {
 					source.settle(outcome);
 					// The frame the counts hold: the source has settled, so the
@@ -1118,12 +1018,9 @@ describe("the Work queue section", () => {
 					expect(stripAnsi(returned)).not.toContain("[queued]");
 					expect(frameText(returned)).toContain("open: 2 running: 0 awaiting: 0");
 				},
-				state,
-				{ source: source, runner: runner },
+				planeRecord,
+				{}
 			);
-		} finally {
-			state.close();
-		}
 	});
 
 	/**
@@ -1134,10 +1031,7 @@ describe("the Work queue section", () => {
 	 * open ticket's waiting start already does.
 	 */
 	test("the route's wait wears the queued badge on the position's row (ADR 0072)", async () => {
-		const state = openFactoryState(join(home, "state.sqlite"));
-		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
-		state.grouping.setGroupingAxis("tickets", "none");
-		const { source, runner } = queuedFixture(state, false);
+		const { state, source, runner, plane: planeRecord } = await queuedFixture(false);
 		const outcome = success(twoTickets());
 		// The first ticket's turn settles and routes to the second's position:
 		// the decision records at the ask and ends the source's cycle in the
@@ -1166,8 +1060,7 @@ describe("the Work queue section", () => {
 			previousMessage: "the turn is done",
 		});
 		if (!enqueued.ok) throw new Error(enqueued.reason);
-		try {
-			await booted(
+		await booted(
 				async (setup) => {
 					source.settle(outcome);
 					const frame = await awaitFrame(
@@ -1185,23 +1078,16 @@ describe("the Work queue section", () => {
 					const positionRow = rows.find((row) => row.includes("Close the stale"));
 					expect(positionRow).toContain("[queued]");
 				},
-				state,
-				{ source: source, runner: runner },
+				planeRecord,
+				{}
 			);
-		} finally {
-			state.close();
-		}
 	});
 
 	test("+ and - reorder the waiting starts, and the captured choice stays put", async () => {
-		const state = openFactoryState(join(home, "state.sqlite"));
-		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
-		state.grouping.setGroupingAxis("tickets", "none");
-		const { source, enqueue, runner } = queuedFixture(state);
+		const { state, source, enqueue, runner, plane: planeRecord } = await queuedFixture();
 		enqueue(FIRST);
 		enqueue(SECOND, "workflow");
-		try {
-			await booted(
+		await booted(
 				async (setup) => {
 					source.settle(success(twoTickets()));
 					await awaitFrame(
@@ -1231,23 +1117,16 @@ describe("the Work queue section", () => {
 					);
 					expect(detailPaneText(restored)).toContain("place 1 of 2");
 				},
-				state,
-				{ source: source, runner: runner },
+				planeRecord,
+				{}
 			);
-		} finally {
-			state.close();
-		}
 	});
 
 	test("Delete cancels the waiting start, and the Message line names the ticket", async () => {
-		const state = openFactoryState(join(home, "state.sqlite"));
-		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
-		state.grouping.setGroupingAxis("tickets", "none");
-		const { source, enqueue, runner } = queuedFixture(state);
+		const { state, source, enqueue, runner, plane: planeRecord } = await queuedFixture();
 		enqueue(FIRST);
 		enqueue(SECOND, "workflow");
-		try {
-			await booted(
+		await booted(
 				async (setup) => {
 					source.settle(success(twoTickets()));
 					await awaitFrame(
@@ -1273,12 +1152,9 @@ describe("the Work queue section", () => {
 					// cursor follows the row that took the place.
 					expect(detailPaneText(frame)).toContain("Origin: workflow");
 				},
-				state,
-				{ source: source, runner: runner },
+				planeRecord,
+				{}
 			);
-		} finally {
-			state.close();
-		}
 	});
 
 	/**
@@ -1290,10 +1166,7 @@ describe("the Work queue section", () => {
 	 * and the decision the ask recorded.
 	 */
 	test("Delete on the route item takes the item and marks the turn (ADR 0072)", async () => {
-		const state = openFactoryState(join(home, "state.sqlite"));
-		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
-		state.grouping.setGroupingAxis("tickets", "none");
-		const { source, runner } = queuedFixture(state, false);
+		const { state, source, runner, plane: planeRecord } = await queuedFixture(false);
 		const outcome = success(twoTickets());
 		// The first ticket's turn settles and routes to the second's position:
 		// the decision records at the ask and ends the source's cycle in the
@@ -1340,8 +1213,7 @@ describe("the Work queue section", () => {
 			previousMessage: "the turn is done",
 		});
 		if (!enqueued.ok) throw new Error(enqueued.reason);
-		try {
-			await booted(
+		await booted(
 				async (setup) => {
 					source.settle(outcome);
 					const waiting = await awaitFrame(
@@ -1388,12 +1260,9 @@ describe("the Work queue section", () => {
 					expect(state.ticketWorkCycle.lastCompletion(FIRST)?.decision).toBe("handed-off");
 					expect(state.ticketWorkCycle.lastCompletion(FIRST)?.transition?.routeRemoved).toBe(true);
 				},
-				state,
-				{ source: source, runner: runner },
+				planeRecord,
+				{}
 			);
-		} finally {
-			state.close();
-		}
 	});
 
 	/**
@@ -1405,14 +1274,10 @@ describe("the Work queue section", () => {
 	 * its order, and its cursor, and the Consultation section is untouched.
 	 */
 	test("the Consultation's keys refuse in both Work queue modes, and nothing moves", async () => {
-		const state = openFactoryState(join(home, "state.sqlite"));
-		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
-		state.grouping.setGroupingAxis("tickets", "none");
-		const { source, enqueue, runner } = queuedFixture(state);
+		const { state, source, enqueue, runner, plane: planeRecord } = await queuedFixture();
 		enqueue(FIRST);
 		enqueue(SECOND, "workflow");
-		try {
-			await booted(
+		await booted(
 				async (setup) => {
 					source.settle(success(twoTickets()));
 					await awaitFrame(
@@ -1467,13 +1332,10 @@ describe("the Work queue section", () => {
 					// The queue still holds both starts at the same depth.
 					expect(frameText(silent)).toContain("waiting: 2");
 				},
-				state,
-				{ source: source, runner: runner },
+				planeRecord,
+				{},
 			);
 			expect(state.workQueue.items().length).toBe(2);
-		} finally {
-			state.close();
-		}
 	});
 
 	/**
@@ -1487,14 +1349,10 @@ describe("the Work queue section", () => {
 	 * never made instead of claiming one.
 	 */
 	test("a cancel that meets a row its pickup already took claims no removal", async () => {
-		const state = openFactoryState(join(home, "state.sqlite"));
-		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
-		state.grouping.setGroupingAxis("tickets", "none");
-		const { source, enqueue, runner } = queuedFixture(state);
+		const { state, source, enqueue, runner, plane: planeRecord } = await queuedFixture();
 		enqueue(FIRST);
 		enqueue(SECOND, "workflow");
-		try {
-			await booted(
+		await booted(
 				async (setup) => {
 					source.settle(success(twoTickets()));
 					await awaitFrame(
@@ -1518,12 +1376,9 @@ describe("the Work queue section", () => {
 					expect(frameText(frame)).toMatch(/implement\s+Close the stale deploy branch/);
 					expect(state.workQueue.items().map(workQueueIdentityOf)).toEqual([SECOND]);
 				},
-				state,
-				{ source: source, runner: runner },
+				planeRecord,
+				{}
 			);
-		} finally {
-			state.close();
-		}
 	});
 
 	/**
@@ -1537,63 +1392,100 @@ describe("the Work queue section", () => {
 	 * cycle's first pass back, so no pickup races the modal walk.
 	 */
 	test("a decision-row route at a full cap waits in the Work queue with its choice", async () => {
-		const state = openFactoryState(join(home, "state.sqlite"));
-		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
-		state.grouping.setGroupingAxis("tickets", "none");
 		const tickets = twoTickets();
 		const outcome = success(tickets);
-		// The first ticket ends its turn and awaits its route; the second holds the
-		// factory's one seat with a live agent.
-		// The settled turn's transition wrote the review position on this
-		// ticket: the decision modal offers the handoff from it (ADR 0027).
-		seedAwaitingTurn(state, outcome, {
-			identity: FIRST,
-			transition: {
-				fired: true,
-				when: null,
-				reason: "",
-				ticketFacts: [],
-				pullRequestFacts: [],
-				ticketWrite: null,
-				pullRequestWrite: null,
-				pullRequestIdentity: null,
-				pullRequestKey: null,
-				writeFailure: "",
-				positionTaskType: "review",
-				positionTicketIdentity: FIRST,
+		const planeRecord = await plane({
+			groupingAxis: "none",
+			sources: [{
+				config: issuesSourceConfig,
+				tickets: [
+					// The first ticket ends its turn and awaits its route. The settled
+					// turn's transition wrote the review position on this ticket: the
+					// decision modal offers the handoff from it (ADR 0027).
+					ticketOf(tickets[0], {
+						state: "awaiting",
+						handoff: {
+							agentType: "pi",
+							environment: "live-worktree",
+							taskType: "implement",
+							model: "",
+							thinking: "",
+							contextWindow: "",
+							attemptId: "seeded-first",
+							paneId: "pane-1",
+							tabId: "tab-1",
+							workspaceId: "ws-1",
+							herdrName: null,
+						},
+						handoffCount: 1,
+						lastCompletion: {
+							taskType: "implement",
+							agentType: "pi",
+							agentName: DEFAULT_AGENT_NAME,
+							model: "",
+							thinking: "",
+							contextWindow: "",
+							message: "The turn is done.",
+							turnLog: [{ kind: "text", text: "The turn is done." }],
+							completedAt: "2026-08-31T11:00:00Z",
+							cause: "unknown",
+							detail: "",
+							decision: null,
+							transition: {
+								fired: true,
+								when: null,
+								reason: "",
+								ticketFacts: [],
+								pullRequestFacts: [],
+								ticketWrite: null,
+								pullRequestWrite: null,
+								pullRequestIdentity: null,
+								pullRequestKey: null,
+								writeFailure: "",
+								positionTaskType: "review",
+								positionTicketIdentity: FIRST,
+							},
+						},
+					}),
+					// The second ticket holds the factory's one seat behind a live agent.
+					ticketOf(tickets[1], {
+						state: "handed-off",
+						handoff: {
+							agentType: "pi",
+							environment: "live-worktree",
+							taskType: "implement",
+							model: "",
+							thinking: "",
+							contextWindow: "",
+							attemptId: "seeded-held",
+							paneId: "pane-9",
+							tabId: "tab-9",
+							workspaceId: "ws-9",
+							herdrName: null,
+						},
+						handoffCount: 1,
+					}),
+				],
+			}],
+			config: oneSeat,
+			commands: (fake) => {
+				fake.set("herdr", ["agent", "list"], {
+					stdout: agentListJson([
+						{
+							paneId: "pane-9",
+							tabId: "tab-9",
+							workspaceId: "ws-9",
+							agent: "close-the-stale-deploy-branch",
+							status: "working",
+						},
+					]),
+					});
 			},
 		});
-		const held = state.handoff.claimHandoff(
-			SECOND,
-			{ ...baseChoice("pi", "live-worktree", "implement") },
-			"open",
-		);
-		if (!held.ok) throw new Error(held.reason);
-		state.handoff.settleHandoff(held.claim.attemptId, true, undefined, {
-			paneId: "pane-9",
-			tabId: "tab-9",
-			workspaceId: "ws-9",
-		});
-		const runner = new FakeRunner();
-		runner.set("herdr", ["agent", "list"], {
-			stdout: agentListJson([
-				{
-					paneId: "pane-9",
-					tabId: "tab-9",
-					workspaceId: "ws-9",
-					agent: "close-the-stale-deploy-branch",
-					status: "working",
-				},
-			]),
-		});
-		const source = new FakeSource("issues", "github-issues", outcome);
-		const config: FactoryConfig = {
-			...issuesConfig,
-			maxParallelAgents: 1,
-			agentPollIntervalSeconds: 60,
-		};
-		try {
-			await withApp(
+		const state = planeRecord.state;
+		const source = planeRecord.sources[0] as FakeSource;
+		const runner = planeRecord.fakeRunner;
+		await withApp(
 				async (setup) => {
 					source.settle(outcome);
 					await awaitFrame(setup, (f) => f.includes("[awaiting]"), "the awaiting ticket");
@@ -1624,11 +1516,8 @@ describe("the Work queue section", () => {
 					// the queue, not when a seat frees it.
 					expect(state.ticketWorkCycle.lastCompletion(FIRST)?.decision).toBe("handed-off");
 				},
-				{ width: WIDTH, height: 34, props: { state, config, home, runner, sources: [source] } },
+				{ width: WIDTH, height: 34, plane: planeRecord, loopPolicy: { kind: "production" } },
 			);
-		} finally {
-			state.close();
-		}
 	});
 
 	/**
@@ -1638,17 +1527,17 @@ describe("the Work queue section", () => {
 	 * boot, and the frames verify the start, its seat, and the failures' ends.
 	 */
 	test("Enter force-dispatches the item over a full cap, and the seat stands over it", async () => {
-		const fixture = forcedFixture();
+		const fixture = await forcedFixture();
 		const { enqueue, boot } = forceDispatchApp(fixture);
 		enqueue(FORCED);
 		try {
 			await boot(async (setup) => {
 				fixture.source.settle(fixture.outcome);
-				await awaitFrame(
-					setup,
-					(f) => f.includes("Work") && f.includes("waiting: 1"),
-					"the Work header",
-				);
+			await awaitFrame(
+				setup,
+				(f) => f.includes("Work") && f.includes("waiting: 1"),
+				"the Work header",
+			);
 				await clickWorkHeader(setup);
 				await awaitFrame(
 					setup,
@@ -1681,7 +1570,7 @@ describe("the Work queue section", () => {
 	});
 
 	test("a force-dispatch that fails its start leaves the item and the queue with its warning", async () => {
-		const fixture = forcedFixture();
+		const fixture = await forcedFixture();
 		// The herdr the start meets is down: the first external step fails with
 		// herdr's own refusal, before it creates anything.
 		fixture.runner.set("herdr", ["workspace", "list"], {
@@ -1719,7 +1608,7 @@ describe("the Work queue section", () => {
 	});
 
 	test("a force-dispatch the claim refuses leaves the item and the queue with the warning", async () => {
-		const fixture = forcedFixture();
+		const fixture = await forcedFixture();
 		const { enqueue, boot } = forceDispatchApp(fixture);
 		// The item's origin requires the open state; the ticket holds an
 		// in-flight state on its seat: the claim the dispatch re-runs refuses
@@ -1756,14 +1645,10 @@ describe("the Work queue section", () => {
 	});
 
 	test("the emptied section keeps its header with its count, and down crosses into it while it stands", async () => {
-		const state = openFactoryState(join(home, "state.sqlite"));
-		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
-		state.grouping.setGroupingAxis("tickets", "none");
-		const { source, enqueue, runner } = queuedFixture(state);
+		const { state, source, enqueue, runner, plane: planeRecord } = await queuedFixture();
 		enqueue(FIRST);
 		enqueue(SECOND, "workflow");
-		try {
-			await booted(
+		await booted(
 				async (setup) => {
 					source.settle(success(twoTickets()));
 					await awaitFrame(
@@ -1797,12 +1682,9 @@ describe("the Work queue section", () => {
 					);
 					expect(workHeaderRow(empty)).toBeGreaterThanOrEqual(0);
 				},
-				state,
-				{ source: source, runner: runner },
+				planeRecord,
+				{}
 			);
-		} finally {
-			state.close();
-		}
 	});
 
 	/**
@@ -1812,13 +1694,9 @@ describe("the Work queue section", () => {
 	 * of it. The row count alone used to hold the answer, so that up refused.
 	 */
 	test("a one-row queue still crosses up after a direct click on its header", async () => {
-		const state = openFactoryState(join(home, "state.sqlite"));
-		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
-		state.grouping.setGroupingAxis("tickets", "none");
-		const { source, enqueue, runner } = queuedFixture(state);
+		const { state, source, enqueue, runner, plane: planeRecord } = await queuedFixture();
 		enqueue(FIRST);
-		try {
-			await booted(
+		await booted(
 				async (setup) => {
 					source.settle(success(twoTickets()));
 					await awaitFrame(
@@ -1834,11 +1712,8 @@ describe("the Work queue section", () => {
 					expect(up).toContain("❯ Consultations");
 					expect(frameText(up)).not.toContain("nowhere to move");
 				},
-				state,
-				{ source: source, runner: runner },
+				planeRecord,
+				{}
 			);
-		} finally {
-			state.close();
-		}
 	});
 });

@@ -37,13 +37,11 @@ export function launcherConfig(checkout: string): FactoryConfig {
 	};
 }
 
-/** A runner that verifies the mapped checkout and holds no herdr agent. */
-export function launcherRunner(checkout: string): FakeRunner {
-	const runner = new FakeRunner();
+/** The answers of one runner: the mapped checkout verified, no herdr agent held. */
+export function launcherAnswers(runner: FakeRunner, checkout: string): void {
 	runner.set("herdr", ["agent", "list"], { stdout: '{"agents":[]}' });
 	runner.set("git", ["-C", checkout, "rev-parse", "--git-dir"], { stdout: ".git\n" });
 	runner.set("git", ["-C", checkout, "remote", "get-url", "origin"], {
 		stdout: "https://github.com/acme/repo.git\n",
 	});
-	return runner;
 }

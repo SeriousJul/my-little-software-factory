@@ -10,17 +10,11 @@
  * full app paints: a seeded ticket, the real machine, the panel opened on the
  * ticket, the row the operator selects.
  */
-import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { describe, expect, test } from "bun:test";
 
-import type { AppProps } from "../src/components/app.ts";
 import { controlInk } from "../src/components/shared/presentation.ts";
-import type { FactoryConfig, WorkflowState } from "../src/config.ts";
+import type { TicketSourceConfig, WorkflowState } from "../src/config.ts";
 import type { FetchedTicket } from "../src/domain/ticket.ts";
-import type { FactoryState } from "../src/state.ts";
-import { openFactoryState } from "../src/state.ts";
 import type { FetchOutcome } from "../src/ticket-source.ts";
 import {
 	frameText,
@@ -32,21 +26,19 @@ import {
 	WIDTH,
 	withApp,
 } from "./app-harness.ts";
-import { BASE_CONFIG } from "./base-config.ts";
-import { FakeRunner } from "./fake-runner.ts";
 import { FakeSource } from "./fake-source.ts";
+import { plane, ticketOf, type SeededPlane } from "./seeded-plane.ts";
 import "./theme-isolation.ts";
 
-const paths: string[] = [];
-const openStates: FactoryState[] = [];
-afterEach(() => {
-	for (const state of openStates.splice(0)) state.close();
-	for (const path of paths.splice(0)) rmSync(path, { recursive: true, force: true });
-});
-
-const source = { name: "issues", kind: "github-issues" };
-const identity = "github:github.com:I_5";
 const repoIdentity = "github.com/acme/factory";
+const identity = "github:github.com:I_5";
+const source: TicketSourceConfig = {
+	name: "issues",
+	kind: "github-issues",
+	refreshIntervalSeconds: 60,
+	repositories: ["acme/factory"],
+	host: "github.com",
+};
 
 function fetched(): FetchedTicket {
 	return {
@@ -93,49 +85,26 @@ const issueMachine: WorkflowState[] = [
 ];
 
 interface Seeded {
-	state: FactoryState;
-	runner: FakeRunner;
+	plane: SeededPlane;
 	src: FakeSource;
-	props: Partial<AppProps>;
 }
 
-/** A seeded open ticket on the named machine, with the app props that match it. */
-function seeded(machine: WorkflowState[] | null): Seeded {
-	const dir = mkdtempSync(join(tmpdir(), "factory-placement-panel-state-"));
-	paths.push(dir);
-	const state = openFactoryState(join(dir, "state.sqlite"));
-	openStates.push(state);
+/** A seeded open ticket on the named machine, with the plane that matches it. */
+async function seeded(machine: WorkflowState[] | null): Promise<Seeded> {
 	// The frames assert the unsplit list: a fresh file opens grouped by
 	// repository (ADR 0066), so the fixture holds the flat axis.
-	state.grouping.setGroupingAxis("tickets", "none");
-	state.sourceFact.initializeSources([source]);
-	state.sourceFact.applyFetch(source, success);
-	const home = mkdtempSync(join(tmpdir(), "factory-placement-panel-home-"));
-	paths.push(home);
-	const repo = mkdtempSync(join(tmpdir(), "factory-placement-panel-repo-"));
-	paths.push(repo);
-	const configPath = join(home, "config.toml");
-	writeFileSync(configPath, "agent-poll-interval-seconds = 60\n");
-	const config: FactoryConfig = {
-		...BASE_CONFIG,
-		repos: { [repoIdentity]: repo },
-		...(machine === null ? {} : { workflowStates: machine }),
-	};
-	const runner = new FakeRunner();
-	const src = new FakeSource("issues", "github-issues", success);
-	return {
-		state,
-		runner,
-		src,
-		props: {
-			config,
-			state,
-			runner,
-			configPath,
-			sources: [src],
-			pollIntervalMs: 40,
+	const planeRecord = await plane({
+		groupingAxis: "none",
+		sources: [{
+			config: source,
+			tickets: [ticketOf(fetched())],
+		}],
+		repos: { [repoIdentity]: "checkout" },
+		config: {
+			...(machine === null ? {} : { workflowStates: machine }),
 		},
-	};
+	});
+	return { plane: planeRecord, src: planeRecord.sources[0] as FakeSource };
 }
 
 /** The color one ink role paints in the ink the panel paints in. */
@@ -149,7 +118,7 @@ function tone(
 
 describe("the Task row's placement note", () => {
 	test("a task the ticket does not offer yet names the state the placement puts it on", async () => {
-		const app = seeded(issueMachine);
+		const app = await seeded(issueMachine);
 		await withApp(
 			async (setup) => {
 				// The source fetch the app opened on its mount is held by the fake
@@ -180,12 +149,12 @@ describe("the Task row's placement note", () => {
 				// the note writes carries no third, warning, paint.
 				expect(spanColors(setup, "review")).toEqual([tone("focusedText"), tone("detail")]);
 			},
-			{ width: WIDTH, height: 30, props: app.props },
+			{ width: WIDTH, height: 30, plane: app.plane, loopPolicy: { kind: "polled", intervalMs: 40 } },
 		);
 	});
 
 	test("a task no state that matches the ticket offers wears the warning with the reason the confirm would refuse with", async () => {
-		const app = seeded(null);
+		const app = await seeded(null);
 		const reason =
 			"task type review is not offered by any state that matches a github-issue ticket";
 		await withApp(
@@ -216,12 +185,12 @@ describe("the Task row's placement note", () => {
 				// the reason it writes.
 				expect(spanColors(setup, "review")).toEqual([tone("warning"), tone("error")]);
 			},
-			{ width: 220, height: 30, props: app.props },
+			{ width: 220, height: 30, plane: app.plane, loopPolicy: { kind: "polled", intervalMs: 40 } },
 		);
 	});
 
 	test("the task the ticket's suggestion offers stands plain, with no note and no warning", async () => {
-		const app = seeded(issueMachine);
+		const app = await seeded(issueMachine);
 		await withApp(
 			async (setup) => {
 				// The source fetch the app opened on its mount is held by the fake
@@ -242,7 +211,7 @@ describe("the Task row's placement note", () => {
 				expect(frameText(implement)).not.toContain("not offered by any state");
 				expect(spanColors(setup, "implement")).toEqual([tone("focusedText")]);
 			},
-			{ width: WIDTH, height: 30, props: app.props },
+			{ width: WIDTH, height: 30, plane: app.plane, loopPolicy: { kind: "polled", intervalMs: 40 } },
 		);
 	});
 });

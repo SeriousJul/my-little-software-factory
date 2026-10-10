@@ -9,9 +9,7 @@
  * guide must name the editing keys a field owns.
  */
 
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
 
 import type { FactoryConfig } from "../src/config.ts";
@@ -27,12 +25,11 @@ import {
 	withApp,
 } from "./app-harness.ts";
 import { FakeRunner } from "./fake-runner.ts";
-import { cleanupStateFixtures, freshState } from "./state-fixture.ts";
+import { plane } from "./seeded-plane.ts";
 
 const IDENTITY = "github.com/acme/repo";
-let checkout: string;
 
-function launcherConfig(): FactoryConfig {
+function launcherConfig(): Partial<FactoryConfig> {
 	return {
 		defaultAgent: "demo",
 		defaultEnvironment: "live-worktree",
@@ -52,30 +49,9 @@ function launcherConfig(): FactoryConfig {
 		maxHandoffsPerTicket: 3,
 		scroll: { speed: 2, acceleration: 0, maximumSpeed: 4 },
 		workflowStates: [],
-		repos: { [IDENTITY]: checkout },
 		sources: [],
 	};
 }
-
-/** A runner that verifies the mapped checkout and holds no herdr agent. */
-function launcherRunner(): FakeRunner {
-	const runner = new FakeRunner();
-	runner.set("herdr", ["agent", "list"], { stdout: '{"agents":[]}' });
-	runner.set("git", ["-C", checkout, "rev-parse", "--git-dir"], { stdout: ".git\n" });
-	runner.set("git", ["-C", checkout, "remote", "get-url", "origin"], {
-		stdout: "https://github.com/acme/repo.git\n",
-	});
-	return runner;
-}
-
-beforeAll(() => {
-	checkout = mkdtempSync(join(tmpdir(), "factory-launcher-"));
-});
-
-afterAll(() => {
-	rmSync(checkout, { recursive: true, force: true });
-	cleanupStateFixtures();
-});
 
 /** Tab `count` slots forward and wait for the frame to name the new one. */
 async function tabUntil(setup: Setup, count: number, what: string): Promise<string> {
@@ -92,16 +68,33 @@ async function focusDraft(setup: Setup): Promise<void> {
 async function withLauncher(
 	body: (setup: Setup & { runner: FakeRunner; state: FactoryState }) => Promise<void>,
 ): Promise<void> {
-	const runner = launcherRunner();
-	const state = freshState();
+	const planeRecord = await plane({
+		config: launcherConfig(),
+		sources: [],
+		repos: { [IDENTITY]: "checkout" },
+		commands: (fake, home) => {
+			const checkout = join(home, "checkout");
+			fake.set("git", ["-C", checkout, "rev-parse", "--git-dir"], {
+				stdout: ".git\n",
+			});
+			fake.set("git", ["-C", checkout, "remote", "get-url", "origin"], {
+				stdout: "https://github.com/acme/repo.git\n",
+			});
+		},
+	});
 	await withApp(
 		async (setup) => {
-			await body(Object.assign(setup, { runner, state }));
+			await body(
+				Object.assign(setup, {
+					runner: setup.plane.fakeRunner,
+					state: setup.plane.state,
+				}),
+			);
 		},
 		{
 			width: WIDTH,
 			height: HEIGHT,
-			props: { config: launcherConfig(), runner, initialTickets: [], state },
+			plane: planeRecord,
 		},
 	);
 }

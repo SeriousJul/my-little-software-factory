@@ -41,9 +41,9 @@ import type {
 import type { HandoffOrigin } from "../src/state/handoff.ts";
 import type { FactoryState } from "../src/state.ts";
 import { openFactoryState } from "../src/state.ts";
-import type { FetchOutcome } from "../src/ticket-source.ts";
+import type { FetchOutcome, TicketSource } from "../src/ticket-source.ts";
 import { BASE_CONFIG } from "./base-config.ts";
-import { FakeRunner } from "./fake-runner.ts";
+import { agentListJson, FakeRunner } from "./fake-runner.ts";
 import { FakeSource } from "./fake-source.ts";
 import { SAMPLE_TICKETS } from "./sample-tickets.ts";
 
@@ -125,6 +125,12 @@ export interface SeededPlaneStanding {
 	sources?: readonly SeededSource[];
 	/** The config, as an override of the base config the suite shares. */
 	config?: Partial<FactoryConfig>;
+	/**
+	 * The `[repos]` mapping the plane's config carries: the checkout paths
+	 * relative to the plane's home, absolute paths standing as given. The
+	 * directories the mapping names are made, the way the plane makes its home.
+	 */
+	repos?: Record<string, string>;
 	/** The Consultation records the standing seeds. */
 	consultations?: readonly ConsultationSeed[];
 	/** The Work queue rows the standing seeds. */
@@ -142,7 +148,21 @@ export interface SeededPlaneStanding {
 	/** The egress double the plane runs on. The default is the FakeRunner. */
 	runner?: (fake: FakeRunner) => CommandRunner;
 	/** The per-case Command runner answers, run over the FakeRunner. */
-	commands?: (fake: FakeRunner) => void;
+	commands?: (fake: FakeRunner, home: string) => void;
+	/**
+	 * The preparation of the plane once its home exists, for the standing that
+	 * needs the home's own paths before it can name itself: the checkout the
+	 * suite builds, the config file the suite writes verbatim, the source the
+	 * suite binds over its own runner. The answers stand beside the standing's
+	 * own fields, over them where they name one.
+	 */
+	prepare?: (home: string) => Promise<{
+		config?: Partial<FactoryConfig>;
+		/** The config file text written to the plane's config path. */
+		configFileText?: string;
+		/** The bound source doubles, in place of the plane's FakeSources. */
+		boundSources?: readonly TicketSource[];
+	}>;
 }
 
 /**
@@ -163,7 +183,15 @@ export interface SeededPlane {
 	/** The FakeRunner the answers and the command record stand on. */
 	fakeRunner: FakeRunner;
 	/** The bound source doubles, in the config's source order. */
-	sources: TicketSource[];
+	sources: readonly TicketSource[];
+	/**
+	 * Settle every bound source's first fetch with the snapshot it stands
+	 * on: the App's boot read answers, the source health stands healthy, and
+	 * the list rule answers the rows actionable. A suite that drives its
+	 * first read of a source on its own settles that one itself, and this
+	 * call stands beside it.
+	 */
+	settleFirstFetch(): void;
 	/**
 	 * Close the state file and remove the directories the plane made. Safe to
 	 * call twice: the state's own close is idempotent, and the directories
@@ -203,6 +231,46 @@ function defaultSources(): readonly SeededSource[] {
 			tickets: SAMPLE_TICKETS,
 		},
 	];
+}
+
+/**
+ * One fetched row as the resting Ticket row it stands for: the open state, no
+ * Handoff, and the list facts the open row wears. A standing that wants a
+ * live row names the handoff and the state beside it.
+ */
+export function ticketOf(fetched: FetchedTicket, over: Partial<Ticket> = {}): Ticket {
+	return {
+		identity: fetched.identity,
+		title: fetched.title,
+		repository: fetched.repository.displayName,
+		repositoryRef: fetched.repository,
+		state: "open",
+		handoff: null,
+		workCycle: 1,
+		description: fetched.description,
+		sourceKind: fetched.sourceKind,
+		externalKey: fetched.externalKey,
+		sourceState: fetched.sourceState,
+		url: fetched.url,
+		labels: [...fetched.labels],
+		externalUpdatedAt: fetched.externalUpdatedAt,
+		memberships: [],
+		suggestedTaskType: "implement",
+		matchedStateName: null,
+		actionable: true,
+		listActionable: true,
+		handoffRecoveryRequired: false,
+		handoffCount: 0,
+		failedStartStreak: 0,
+		lastCompletion: null,
+		ignored: false,
+		ignoredAt: null,
+		muted: false,
+		mutedAt: null,
+		leftover: null,
+		nameCollision: null,
+		...over,
+	};
 }
 
 /** The fetched row the state module's source facts seed from one listed row. */
@@ -367,16 +435,43 @@ function seedConsultation(state: FactoryState, seed: ConsultationSeed): void {
  * the home and checkout directories, the runner double, and the source
  * doubles all come from here, and `close` takes them all back.
  */
-export function plane(standing: SeededPlaneStanding = {}): SeededPlane {
+export async function plane(
+	standing: SeededPlaneStanding = {},
+): Promise<SeededPlane> {
 	const sources = standing.sources ?? defaultSources();
+	const home = mkdtempSync(join(tmpdir(), "factory-seeded-plane-"));
+	// The checkout mapping: a relative path stands under the home, an
+	// absolute path stands as given. The config's own mapping, where it names
+	// one, stands beside it.
+	const repos: Record<string, string> = {
+		...(standing.config?.repos ?? {}),
+		...Object.fromEntries(
+			Object.entries(standing.repos ?? {}).map(([repo, path]) => [
+				repo,
+				path.startsWith("/") ? path : join(home, path),
+			]),
+		),
+	};
+	// The preparation runs once the home exists, so the standing can name
+	// paths under it and write its own config file over the plane's.
+	let preparedConfig: Partial<FactoryConfig> | undefined;
+	let configFileText: string | undefined;
+	let boundSources: readonly TicketSource[] | undefined;
+	if (standing.prepare !== undefined) {
+		const prepared = await standing.prepare(home);
+		preparedConfig = prepared.config;
+		configFileText = prepared.configFileText;
+		boundSources = prepared.boundSources;
+	}
 	const config: FactoryConfig = {
 		...BASE_CONFIG,
 		sources: sources.map((source) => source.config),
 		...standing.config,
+		...preparedConfig,
+		...(Object.keys(repos).length > 0 ? { repos } : {}),
 	};
-	const home = mkdtempSync(join(tmpdir(), "factory-seeded-plane-"));
 	const configPath = join(home, "config.toml");
-	writeFileSync(configPath, configToToml(config));
+	writeFileSync(configPath, configFileText ?? configToToml(config));
 	const state = openFactoryState(join(home, "state.sqlite"), standing.now);
 	state.grouping.setGroupingAxis("tickets", standing.groupingAxis ?? "none");
 	state.sourceFact.initializeSources(
@@ -434,17 +529,21 @@ export function plane(standing: SeededPlaneStanding = {}): SeededPlane {
 		mkdirSync(path, { recursive: true });
 		checkouts.push(path);
 	}
+	// The default runner is the empty-agent one the frame suites ran on: no
+	// agent in the list, and the standing's commands and runner stand over it
+	// where they name their own.
 	const fakeRunner = new FakeRunner();
-	standing.commands?.(fakeRunner);
+	fakeRunner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+	standing.commands?.(fakeRunner, home);
 	const runner = standing.runner?.(fakeRunner) ?? fakeRunner;
-	const sourceDoubles = sources.map(
-		(source) =>
-			new FakeSource(source.config.name, source.config.kind, {
-				status: "success",
-				fetchedAt: "2026-01-01T00:01:00Z",
-				tickets: source.tickets.map(fetchedOf),
-			}),
+	const fakeDoubles: readonly FakeSource[] = sources.map((source) =>
+		new FakeSource(source.config.name, source.config.kind, {
+			status: "success",
+			fetchedAt: "2026-01-01T00:01:00Z",
+			tickets: source.tickets.map(fetchedOf),
+		}),
 	);
+	const sourceDoubles: readonly TicketSource[] = boundSources ?? fakeDoubles;
 	const registrationsEntry: PlaneRegistration = {
 		plane: {
 			state,
@@ -454,6 +553,9 @@ export function plane(standing: SeededPlaneStanding = {}): SeededPlane {
 			runner,
 			fakeRunner,
 			sources: sourceDoubles,
+			settleFirstFetch: () => {
+				for (const double of fakeDoubles) double.settleCurrent();
+			},
 			close: () => {
 				state.close();
 				rmSync(home, { recursive: true, force: true });
@@ -473,7 +575,7 @@ export async function withPlane<T>(
 	standing: SeededPlaneStanding,
 	body: (plane: SeededPlane) => Promise<T>,
 ): Promise<T> {
-	const opened = plane(standing);
+	const opened = await plane(standing);
 	try {
 		return await body(opened);
 	} finally {

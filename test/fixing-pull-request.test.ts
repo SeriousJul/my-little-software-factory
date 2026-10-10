@@ -20,8 +20,9 @@ import { openFactoryState } from "../src/state.ts";
 import { isCoveredByFixingPullRequest } from "../src/workflow.ts";
 import { awaitFrame, HEIGHT, rowsOf, WIDTH, withApp } from "./app-harness.ts";
 import { BASE_CONFIG } from "./base-config.ts";
-import { FakeSource } from "./fake-source.ts";
+import type { FakeSource } from "./fake-source.ts";
 import { issueTicket, success } from "./state-fixture.ts";
+import { plane } from "./seeded-plane.ts";
 
 const paths: string[] = [];
 afterEach(() => {
@@ -356,20 +357,16 @@ describe("the section header counts", () => {
 	};
 
 	test("exclude a covered ticket, and the list shows the pull request for it", async () => {
-		const state = openFactoryState(statePath());
-		const issuesSource = new FakeSource(
-			"issues",
-			"github-issues",
-			success([issueTicket(issueIdentity)]),
-		);
-		const pullsSource = new FakeSource(
-			"pulls",
-			"github-pull-requests",
-			success([closingPullTicket({ title: "Persist source facts" })]),
-		);
-		try {
-			await withApp(
+		const planeRecord = await plane({
+			config: sourcesConfig,
+			sources: [
+				{ config: sourcesConfig.sources[0], tickets: [] },
+				{ config: sourcesConfig.sources[1], tickets: [] },
+			],
+		});
+		await withApp(
 				async (setup) => {
+					const [issuesSource, pullsSource] = setup.plane.sources as readonly FakeSource[];
 					issuesSource.settle(success([issueTicket(issueIdentity)]));
 					pullsSource.settle(success([closingPullTicket({ title: "Persist source facts" })]));
 					const frame = await awaitFrame(
@@ -387,11 +384,8 @@ describe("the section header counts", () => {
 				{
 					width: WIDTH,
 					height: HEIGHT,
-					props: { config: sourcesConfig, state, sources: [issuesSource, pullsSource] },
+					plane: planeRecord,
 				},
 			);
-		} finally {
-			state.close();
-		}
 	});
 });

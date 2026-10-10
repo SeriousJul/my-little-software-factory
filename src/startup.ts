@@ -17,6 +17,8 @@
  * before it opens anything, so the operator fixes the file instead of losing
  * a ticket to an agent that dies inside its own terminal.
  */
+import { homedir } from "node:os";
+
 import type { FactoryConfig } from "./config.ts";
 import {
 	ConfigError,
@@ -85,11 +87,13 @@ export type StartupResult =
 			config: FactoryConfig;
 			configPath: string;
 			statePath: string;
-			state: FactoryState;
-			runner: CommandRunner;
-			sources: TicketSource[];
-			/** The plane's file logger; the no-op logger where the config carries no [logging]. */
-			logger: Logger;
+		state: FactoryState;
+		runner: CommandRunner;
+		sources: TicketSource[];
+		/** The home directory the plane's paths live under, resolved once here. */
+		home: string;
+		/** The plane's file logger; the no-op logger where the config carries no [logging]. */
+		logger: Logger;
 			/** Non-fatal operator lines: the missing-config note and model warnings. */
 			notes: string[];
 	  };
@@ -406,6 +410,9 @@ export async function runStartup(configPath: string, worldPath?: string): Promis
 	}
 
 	const sources = loaded.config.sources.map((source) => createTicketSource(source, runner));
+	// The home directory the plane's checkout paths live under, resolved once
+	// at the boot: the entry hands it in beside the paths it already resolves.
+	const home = homedir();
 	logger.info(
 		`boot: bun ${typeof Bun !== "undefined" ? Bun.version : "unknown"}, config ${configPath}, world ${worldPath ?? "none"}, state ${statePath}, sources ${sources.length}`,
 	);
@@ -417,6 +424,7 @@ export async function runStartup(configPath: string, worldPath?: string): Promis
 		state: opened.state,
 		runner,
 		sources,
+		home,
 		logger,
 		notes,
 	};

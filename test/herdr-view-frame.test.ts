@@ -19,13 +19,11 @@
  * `docs/verification/shared-controls.md`.
  */
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
-import type { FactoryConfig } from "../src/config.ts";
-import { baseChoice } from "../src/handoff.ts";
-import { openFactoryState } from "../src/state.ts";
+import type { TransitionOutcome } from "../src/config.ts";
+import type { EnvironmentKind, FetchedTicket, Ticket } from "../src/domain/ticket.ts";
+import type { TicketSourceConfig } from "../src/config.ts";
 import {
 	awaitFrame,
 	frameText,
@@ -47,15 +45,25 @@ import {
 import { FakeSource } from "./fake-source.ts";
 import {
 	DEFAULT_AGENT_NAME,
-	issuesConfig,
 	issueTicket,
-	seedAwaitingTurn,
-	seedInFlightTurn,
 	success,
 } from "./state-fixture.ts";
+import { plane, ticketOf } from "./seeded-plane.ts";
 
 const FIRST = "github:github.com:I_5";
 const SECOND = "github:github.com:I_6";
+
+/** The issues source the route frames stand on. */
+const issuesSourceConfig: TicketSourceConfig = {
+	name: "issues",
+	kind: "github-issues",
+	refreshIntervalSeconds: 60,
+	repositories: ["acme/factory"],
+	host: "github.com",
+};
+
+/** The checkout the handoffs run in, under the plane's home. */
+const checkoutOf = (home: string): string => join(home, "src/factory");
 
 /** The settled turn's review position: the route the Decision screen offers. */
 const reviewRoute = {
@@ -76,21 +84,8 @@ const reviewRoute = {
 	positionTicketIdentity: FIRST,
 };
 
-let home = "";
-let checkout = "";
-
 /** A terminal wide enough to hold one whole warning line at once. */
 const WIDE_STATUS = 240;
-
-beforeEach(() => {
-	home = join(tmpdir(), `factory-herdr-view-${Math.random().toString(36).slice(2)}`);
-	checkout = join(home, "src", "factory");
-	mkdirSync(checkout, { recursive: true });
-});
-
-afterEach(() => {
-	rmSync(home, { recursive: true, force: true });
-});
 
 /** The two tickets the route frames walk: a settled one and a seat holder. */
 function twoTickets() {
@@ -114,8 +109,8 @@ function twoTickets() {
  * branch the naming rule gives the ticket, and no worktree holds it here, so
  * the fresh workspace is the one `worktree open` attaches.
  */
-function routeRunner(): FakeRunner {
-	const runner = new FakeRunner();
+/** The answers the route's handoff runs against, under the plane's home. */
+function routeAnswers(runner: FakeRunner, checkout: string): void {
 	runner.set("git", ["-C", checkout, "rev-parse", "--git-dir"], { stdout: ".git\n" });
 	runner.set("git", ["-C", checkout, "remote", "get-url", "origin"], {
 		stdout: "https://github.com/acme/factory.git\n",
@@ -138,32 +133,96 @@ function routeRunner(): FakeRunner {
 	runner.set("herdr", ["agent", "start", DEFAULT_AGENT_NAME, "--kind", "pi"], {
 		stdout: JSON.stringify({ result: { agent: { session_id: "sess-route" } } }),
 	});
-	return runner;
 }
 
-/** The config the route frames boot on: one seat, no source clock. */
-function routeConfig(): FactoryConfig {
-	return { ...issuesConfig, repos: { "github.com/acme/factory": checkout } };
+/** The resting row of a settled turn awaiting its decision. */
+function awaitingRow(
+	fetched: FetchedTicket,
+	fields: { environment?: EnvironmentKind; transition?: TransitionOutcome | null } = {},
+): Ticket {
+	const { environment = "live-worktree", transition = null } = fields;
+	return ticketOf(fetched, {
+		state: "awaiting",
+		handoff: {
+			agentType: "pi",
+			environment,
+			taskType: "implement",
+			model: "",
+			thinking: "",
+			contextWindow: "",
+			attemptId: "seeded",
+			paneId: "pane-1",
+			tabId: "tab-1",
+			workspaceId: "ws-1",
+			herdrName: null,
+		},
+		handoffCount: 1,
+		lastCompletion: {
+			taskType: "implement",
+			agentType: "pi",
+			agentName: DEFAULT_AGENT_NAME,
+			model: "",
+			thinking: "",
+			contextWindow: "",
+			message: "The turn is done.",
+			turnLog: [{ kind: "text", text: "The turn is done." }],
+			completedAt: "2026-08-31T11:00:00Z",
+			cause: "unknown",
+			detail: "",
+			decision: null,
+			transition: transition,
+		},
+	});
+}
+
+/** The resting row of an in-flight handoff: settled with its herdr handles. */
+function inFlightRow(
+	fetched: FetchedTicket,
+	environment: EnvironmentKind = "live-worktree",
+): Ticket {
+	return ticketOf(fetched, {
+		state: "handed-off",
+		handoff: {
+			agentType: "pi",
+			environment,
+			taskType: "implement",
+			model: "",
+			thinking: "",
+			contextWindow: "",
+			attemptId: "seeded",
+			paneId: "pane-1",
+			tabId: "tab-1",
+			workspaceId: "ws-1",
+			herdrName: null,
+		},
+		handoffCount: 1,
+	});
 }
 
 describe("the route close moves no view", () => {
 	test("the Decision screen's route closes the settled workspace and sends no focus", async () => {
-		const state = openFactoryState(join(home, "state.sqlite"));
-		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
-		state.grouping.setGroupingAxis("tickets", "none");
-		const outcome = success([issueTicket(FIRST)]);
-		seedAwaitingTurn(state, outcome, {
-			identity: FIRST,
-			transition: reviewRoute,
-			environment: "worktree",
+		const planeRecord = await plane({
+			groupingAxis: "none",
+			sources: [{
+				config: issuesSourceConfig,
+				tickets: [
+					awaitingRow(issueTicket(FIRST), { transition: reviewRoute, environment: "worktree" }),
+				],
+			}],
+			repos: { "github.com/acme/factory": "src/factory" },
+			commands: (fake, home) => {
+				routeAnswers(fake, checkoutOf(home));
+				fake.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+			},
 		});
-		const runner = routeRunner();
-		runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
-		const source = new FakeSource("issues", "github-issues", outcome);
-		try {
-			await withApp(
-				async (setup) => {
-					source.settle(outcome);
+		const outcome = success([issueTicket(FIRST)]);
+		const state = planeRecord.state;
+		const runner = planeRecord.fakeRunner;
+		const source = planeRecord.sources[0] as FakeSource;
+		const checkout = checkoutOf(planeRecord.home);
+		await withApp(
+			async (setup) => {
+				source.settle(outcome);
 					await awaitFrame(setup, (f) => f.includes("[awaiting]"), "the awaiting ticket");
 					await press(setup, "return", "the decision modal", (f) => f.includes("Decision:"));
 					await pressArrow(setup, "down", "the Goto row", (f) => frameText(f).includes("❯ Goto"));
@@ -191,62 +250,73 @@ describe("the route close moves no view", () => {
 				{
 					width: WIDTH,
 					height: 34,
-					props: { state, config: routeConfig(), home, runner, sources: [source] },
+					plane: planeRecord,
+					loopPolicy: { kind: "production" },
 				},
 			);
-		} finally {
-			state.close();
-		}
 	});
 
 	test("a route that waited in the Work queue closes at the seat with no focus", async () => {
 		// The worst case has no keypress beside it: the close runs when a seat
 		// frees, so the view must be untouchable at that moment.
-		const state = openFactoryState(join(home, "state.sqlite"), () => Date.now() - 600_000);
-		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
-		state.grouping.setGroupingAxis("tickets", "none");
 		const outcome = success(twoTickets());
-		seedAwaitingTurn(state, outcome, {
-			identity: FIRST,
-			transition: reviewRoute,
-			environment: "worktree",
-		});
 		// The second ticket holds the factory's one seat with a live agent. Its
 		// handoff is aged past the Startup grace, so the seat is the agent's own:
 		// when herdr stops listing it, the seat frees and the queue drains.
-		const held = state.handoff.claimHandoff(
-			SECOND,
-			{ ...baseChoice("pi", "live-worktree", "implement") },
-			"open",
-		);
-		if (!held.ok) throw new Error(held.reason);
-		state.handoff.settleHandoff(held.claim.attemptId, true, undefined, {
-			paneId: "pane-9",
-			tabId: "tab-9",
-			workspaceId: "ws-9",
+		const planeRecord = await plane({
+			groupingAxis: "none",
+			now: () => Date.now() - 600_000,
+			sources: [{
+				config: issuesSourceConfig,
+				tickets: [
+					awaitingRow(issueTicket(FIRST), { transition: reviewRoute, environment: "worktree" }),
+					ticketOf(issueTicket(SECOND, {
+						externalKey: "#6",
+						url: "https://github.com/acme/factory/issues/6",
+						title: "Close the stale deploy branch",
+					}), {
+						state: "handed-off",
+						handoff: {
+							agentType: "pi",
+							environment: "live-worktree",
+							taskType: "implement",
+							model: "",
+							thinking: "",
+							contextWindow: "",
+							attemptId: "seeded-held",
+							paneId: "pane-9",
+							tabId: "tab-9",
+							workspaceId: "ws-9",
+							herdrName: null,
+						},
+						handoffCount: 1,
+					}),
+				],
+			}],
+			config: { maxParallelAgents: 1, agentPollIntervalSeconds: 60 },
+			repos: { "github.com/acme/factory": "src/factory" },
+			commands: (fake, home) => {
+				routeAnswers(fake, checkoutOf(home));
+				fake.set("herdr", ["agent", "list"], {
+					stdout: agentListJson([
+						{
+							paneId: "pane-9",
+							tabId: "tab-9",
+							workspaceId: "ws-9",
+							agent: "close-the-stale-deploy-branch",
+							status: "working",
+						},
+					]),
+					});
+			},
 		});
-		const runner = routeRunner();
-		runner.set("herdr", ["agent", "list"], {
-			stdout: agentListJson([
-				{
-					paneId: "pane-9",
-					tabId: "tab-9",
-					workspaceId: "ws-9",
-					agent: "close-the-stale-deploy-branch",
-					status: "working",
-				},
-			]),
-		});
-		const source = new FakeSource("issues", "github-issues", outcome);
-		const config: FactoryConfig = {
-			...routeConfig(),
-			maxParallelAgents: 1,
-			agentPollIntervalSeconds: 60,
-		};
-		try {
-			await withApp(
-				async (setup) => {
-					source.settle(outcome);
+		const state = planeRecord.state;
+		const runner = planeRecord.fakeRunner;
+		const source = planeRecord.sources[0] as FakeSource;
+		const checkout = checkoutOf(planeRecord.home);
+		await withApp(
+			async (setup) => {
+				source.settle(outcome);
 					await awaitFrame(setup, (f) => f.includes("[awaiting]"), "the awaiting ticket");
 					await press(setup, "return", "the decision modal", (f) => f.includes("Decision:"));
 					await pressArrow(setup, "down", "the Goto row", (f) => frameText(f).includes("❯ Goto"));
@@ -287,31 +357,35 @@ describe("the route close moves no view", () => {
 				{
 					width: WIDTH,
 					height: 34,
-					props: { state, config, home, runner, sources: [source], pollIntervalMs: 100 },
+					plane: planeRecord,
+					loopPolicy: { kind: "polled", intervalMs: 100 },
 				},
 			);
-		} finally {
-			state.close();
-		}
 	});
 });
 
 describe("the Close cleanup moves no view", () => {
 	test("the Close action on a worktree cycle removes the checkout and sends no focus", async () => {
-		const state = openFactoryState(join(home, "state.sqlite"));
-		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
-		state.grouping.setGroupingAxis("tickets", "none");
+		const planeRecord = await plane({
+			groupingAxis: "none",
+			sources: [{
+				config: issuesSourceConfig,
+				tickets: [inFlightRow(issueTicket(FIRST), "worktree")],
+			}],
+			repos: { "github.com/acme/factory": "src/factory" },
+			commands: (fake) => {
+				// No Agent in the recorded pane: the close is the way out of the cycle,
+				// and the cleanup is the work ADR 0061 is about.
+				fake.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+			},
+		});
 		const outcome = success([issueTicket(FIRST)]);
-		seedInFlightTurn(state, outcome, FIRST, "worktree");
-		const runner = new FakeRunner();
-		// No Agent in the recorded pane: the close is the way out of the cycle,
-		// and the cleanup is the work ADR 0061 is about.
-		runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
-		const source = new FakeSource("issues", "github-issues", outcome);
-		try {
-			await withApp(
-				async (setup) => {
-					source.settle(outcome);
+		const state = planeRecord.state;
+		const runner = planeRecord.fakeRunner;
+		const source = planeRecord.sources[0] as FakeSource;
+		await withApp(
+			async (setup) => {
+				source.settle(outcome);
 					await awaitFrame(setup, (f) => f.includes("missing"), "the in-flight ticket");
 					await press(setup, "delete", "the Close confirmation", (f) =>
 						f.includes("Close: Add a webhook retry policy"),
@@ -329,35 +403,39 @@ describe("the Close cleanup moves no view", () => {
 				{
 					width: WIDTH,
 					height: 34,
-					props: { state, config: routeConfig(), home, runner, sources: [source] },
+					plane: planeRecord,
+					loopPolicy: { kind: "production" },
 				},
 			);
-		} finally {
-			state.close();
-		}
 	});
 
 	test("a herdr refusal of the close reports on the line and records the leftover", async () => {
 		// Dropping the focus call costs no bookkeeping (story 9): a refusal is
 		// still one line on the Message line and a surviving environment on the
 		// ticket's facts.
-		const state = openFactoryState(join(home, "state.sqlite"));
-		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
-		state.grouping.setGroupingAxis("tickets", "none");
-		const outcome = success([issueTicket(FIRST)]);
-		seedInFlightTurn(state, outcome, FIRST, "worktree");
-		const runner = new FakeRunner();
-		runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
-		runner.set("herdr", ["worktree", "remove", "--workspace", "ws-1"], {
-			code: 1,
-			stderr:
-				'{"error":{"code":"dirty_worktree_requires_force","message":"fatal: the worktree contains modified or untracked files, use --force to delete it"},"id":"cli:worktree:remove"}\n',
+		const planeRecord = await plane({
+			groupingAxis: "none",
+			sources: [{
+				config: issuesSourceConfig,
+				tickets: [inFlightRow(issueTicket(FIRST), "worktree")],
+			}],
+			repos: { "github.com/acme/factory": "src/factory" },
+			commands: (fake) => {
+				fake.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+				fake.set("herdr", ["worktree", "remove", "--workspace", "ws-1"], {
+					code: 1,
+					stderr:
+						'{"error":{"code":"dirty_worktree_requires_force","message":"fatal: the worktree contains modified or untracked files, use --force to delete it"},"id":"cli:worktree:remove"}\n',
+				});
+			},
 		});
-		const source = new FakeSource("issues", "github-issues", outcome);
-		try {
-			await withApp(
-				async (setup) => {
-					source.settle(outcome);
+		const outcome = success([issueTicket(FIRST)]);
+		const state = planeRecord.state;
+		const runner = planeRecord.fakeRunner;
+		const source = planeRecord.sources[0] as FakeSource;
+		await withApp(
+			async (setup) => {
+				source.settle(outcome);
 					await awaitFrame(setup, (f) => f.includes("missing"), "the in-flight ticket");
 					await press(setup, "delete", "the Close confirmation", (f) =>
 						f.includes("Close: Add a webhook retry policy"),
@@ -384,12 +462,10 @@ describe("the Close cleanup moves no view", () => {
 				{
 					width: WIDE_STATUS,
 					height: 34,
-					props: { state, config: routeConfig(), home, runner, sources: [source] },
+					plane: planeRecord,
+					loopPolicy: { kind: "production" },
 				},
 			);
-		} finally {
-			state.close();
-		}
 	});
 });
 
@@ -398,41 +474,43 @@ describe("Goto stays the one focus move", () => {
 		// The exception to the rule runs at the operator's key (ADR 0033,
 		// ADR 0061): the Goto is the plane's only focus command, and its
 		// confirmation still names the workspace it moved the view into.
-		const state = openFactoryState(join(home, "state.sqlite"));
-		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
-		state.grouping.setGroupingAxis("tickets", "none");
+		const planeRecord = await plane({
+			groupingAxis: "none",
+			sources: [{
+				config: issuesSourceConfig,
+				tickets: [awaitingRow(issueTicket(FIRST), { transition: null, environment: "worktree" })],
+			}],
+			repos: { "github.com/acme/factory": "src/factory" },
+			commands: (fake) => {
+				fake.set("herdr", ["agent", "list"], {
+					stdout: agentListJson([
+						{
+							paneId: "pane-1",
+							tabId: "tab-1",
+							workspaceId: "ws-1",
+							agent: "pi",
+							status: "idle",
+							name: DEFAULT_AGENT_NAME,
+						},
+					]),
+					});
+				fake.set("herdr", ["workspace", "get", "ws-1"], {
+					stdout: JSON.stringify({
+						result: {
+							type: "workspace_info",
+							workspace: { focused: false, label: "retry", workspace_id: "ws-1" },
+						},
+					}),
+					});
+			},
+		});
 		const outcome = success([issueTicket(FIRST)]);
-		seedAwaitingTurn(state, outcome, {
-			identity: FIRST,
-			transition: null,
-			environment: "worktree",
-		});
-		const runner = new FakeRunner();
-		runner.set("herdr", ["agent", "list"], {
-			stdout: agentListJson([
-				{
-					paneId: "pane-1",
-					tabId: "tab-1",
-					workspaceId: "ws-1",
-					agent: "pi",
-					status: "idle",
-					name: DEFAULT_AGENT_NAME,
-				},
-			]),
-		});
-		runner.set("herdr", ["workspace", "get", "ws-1"], {
-			stdout: JSON.stringify({
-				result: {
-					type: "workspace_info",
-					workspace: { focused: false, label: "retry", workspace_id: "ws-1" },
-				},
-			}),
-		});
-		const source = new FakeSource("issues", "github-issues", outcome);
-		try {
-			await withApp(
-				async (setup) => {
-					source.settle(outcome);
+		const state = planeRecord.state;
+		const runner = planeRecord.fakeRunner;
+		const source = planeRecord.sources[0] as FakeSource;
+		await withApp(
+			async (setup) => {
+				source.settle(outcome);
 					await awaitFrame(setup, (f) => f.includes("[awaiting]"), "the awaiting ticket");
 					const frame = await press(setup, "g", "the Goto confirmation", (f) =>
 						messageRowOf(f).includes("focused the agent"),
@@ -448,12 +526,10 @@ describe("Goto stays the one focus move", () => {
 				{
 					width: WIDTH,
 					height: 34,
-					props: { state, config: routeConfig(), home, runner, sources: [source] },
+					plane: planeRecord,
+					loopPolicy: { kind: "production" },
 				},
 			);
-		} finally {
-			state.close();
-		}
 	});
 });
 
@@ -461,39 +537,52 @@ describe("the environment a handoff builds stays out of the view", () => {
 	test("a handoff builds its environment asking for no focus, and moves none", async () => {
 		// herdr's changelog records the create-focus default regressing once
 		// (#3766, v0.9.1), so the flag is a contract, not noise (story 13).
-		const state = openFactoryState(join(home, "state.sqlite"));
-		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
-		state.grouping.setGroupingAxis("tickets", "none");
+		const planeRecord = await plane({
+			groupingAxis: "none",
+			sources: [{
+				config: issuesSourceConfig,
+				tickets: [ticketOf(issueTicket(SECOND, {
+					externalKey: "#6",
+						url: "https://github.com/acme/factory/issues/6",
+						title: "Close the stale deploy branch",
+					}))],
+			}],
+			repos: { "github.com/acme/factory": "src/factory" },
+			commands: (fake, home) => {
+				const checkout = checkoutOf(home);
+				fake.set("git", ["-C", checkout, "rev-parse", "--git-dir"], { stdout: ".git\n" });
+				fake.set("git", ["-C", checkout, "remote", "get-url", "origin"], {
+					stdout: "https://github.com/acme/factory.git\n",
+				});
+				fake.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+				fake.set("herdr", ["workspace", "list"], { stdout: workspaceListJson([]) });
+				fake.set("herdr", ["workspace", "create", "--cwd", checkout, "--no-focus"], {
+					stdout: JSON.stringify({
+						result: {
+							workspace: { workspace_id: "ws-build" },
+							tab: { tab_id: "tab-build" },
+							root_pane: { pane_id: "pane-build" },
+						},
+					}),
+					});
+				fake.set(
+					"herdr",
+					["tab", "create", "--workspace", "ws-build", "--cwd", checkout, "--no-focus"],
+					{ stdout: tabCreateJson("pane-agent", "tab-agent") },
+				);
+				fake.set("herdr", ["agent", "start", "close-the-stale-deploy-branch", "--kind", "pi"], {
+					stdout: JSON.stringify({ result: { agent: { session_id: "sess-build" } } }),
+				});
+			},
+		});
 		const outcome = success([issueTicket(SECOND)]);
-		const runner = new FakeRunner();
-		runner.set("git", ["-C", checkout, "rev-parse", "--git-dir"], { stdout: ".git\n" });
-		runner.set("git", ["-C", checkout, "remote", "get-url", "origin"], {
-			stdout: "https://github.com/acme/factory.git\n",
-		});
-		runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
-		runner.set("herdr", ["workspace", "list"], { stdout: workspaceListJson([]) });
-		runner.set("herdr", ["workspace", "create", "--cwd", checkout, "--no-focus"], {
-			stdout: JSON.stringify({
-				result: {
-					workspace: { workspace_id: "ws-build" },
-					tab: { tab_id: "tab-build" },
-					root_pane: { pane_id: "pane-build" },
-				},
-			}),
-		});
-		runner.set(
-			"herdr",
-			["tab", "create", "--workspace", "ws-build", "--cwd", checkout, "--no-focus"],
-			{ stdout: tabCreateJson("pane-agent", "tab-agent") },
-		);
-		runner.set("herdr", ["agent", "start", "close-the-stale-deploy-branch", "--kind", "pi"], {
-			stdout: JSON.stringify({ result: { agent: { session_id: "sess-build" } } }),
-		});
-		const source = new FakeSource("issues", "github-issues", outcome);
-		try {
-			await withApp(
-				async (setup) => {
-					source.settle(outcome);
+		const state = planeRecord.state;
+		const runner = planeRecord.fakeRunner;
+		const source = planeRecord.sources[0] as FakeSource;
+		const checkout = checkoutOf(planeRecord.home);
+		await withApp(
+			async (setup) => {
+				source.settle(outcome);
 					await awaitFrame(setup, (f) => f.includes("[open]"), "the open ticket");
 					// Enter hands the row under the cursor off with the defaults.
 					await pressEnterQuiet(setup, "the handoff to run", () =>
@@ -518,11 +607,9 @@ describe("the environment a handoff builds stays out of the view", () => {
 				{
 					width: WIDTH,
 					height: 34,
-					props: { state, config: routeConfig(), home, runner, sources: [source] },
+					plane: planeRecord,
+					loopPolicy: { kind: "production" },
 				},
 			);
-		} finally {
-			state.close();
-		}
 	});
 });

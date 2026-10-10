@@ -12,6 +12,8 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
 import { loadConfigFile } from "../src/config.ts";
+import { workQueueIdentityOf } from "../src/state/work-queue.ts";
+import { FakeRunner } from "./fake-runner.ts";
 import { SAMPLE_TICKETS } from "./sample-tickets.ts";
 import { plane, type SeededPlane, type SeededPlaneStanding, withPlane } from "./seeded-plane.ts";
 
@@ -27,8 +29,8 @@ function viewsOf(p: SeededPlane) {
 }
 
 describe("the default standing", () => {
-	test("the list the plane stands on is the state module's own rule over the sample rows", () => {
-		const p = plane();
+	test("the list the plane stands on is the state module's own rule over the sample rows", async () => {
+		const p = await plane();
 		const views = viewsOf(p);
 		// The flat axis is the default, and the rule orders the sample rows:
 		// the live bands first - awaiting, running, handed-off - and the open
@@ -49,8 +51,8 @@ describe("the default standing", () => {
 		p.close();
 	});
 
-	test("the live rows stand on their stored handoffs", () => {
-		const p = plane();
+	test("the live rows stand on their stored handoffs", async () => {
+		const p = await plane();
 		const views = viewsOf(p);
 		const handedOff = views.rows.find((row) => row.identity === "github:github.com:I_2");
 		expect(handedOff?.state).toBe("handed-off");
@@ -64,8 +66,8 @@ describe("the default standing", () => {
 		p.close();
 	});
 
-	test("the awaiting row stands on its settled turn, named by the handoff that settled it", () => {
-		const p = plane();
+	test("the awaiting row stands on its settled turn, named by the handoff that settled it", async () => {
+		const p = await plane();
 		const views = viewsOf(p);
 		const awaiting = views.rows.find((row) => row.identity === "github:github.com:I_4");
 		expect(awaiting?.state).toBe("awaiting");
@@ -78,7 +80,7 @@ describe("the default standing", () => {
 	});
 
 	test("the config file on disk carries the plane's config", async () => {
-		const p = plane();
+		const p = await plane();
 		expect(existsSync(p.configPath)).toBe(true);
 		const loaded = await loadConfigFile(p.configPath);
 		expect(loaded.config).toEqual(p.config);
@@ -87,15 +89,15 @@ describe("the default standing", () => {
 });
 
 describe("the named standings", () => {
-	test("an empty standing names no tickets and no sources", () => {
-		const p = plane({ sources: [] });
+	test("an empty standing names no tickets and no sources", async () => {
+		const p = await plane({ sources: [] });
 		expect(p.sources).toHaveLength(0);
 		expect(viewsOf(p).rows).toHaveLength(0);
 		p.close();
 	});
 
-	test("a muted source stands in the muted view, and its resting rows leave the list", () => {
-		const p = plane({ mutedSources: ["issues"] });
+	test("a muted source stands in the muted view, and its resting rows leave the list", async () => {
+		const p = await plane({ mutedSources: ["issues"] });
 		const views = viewsOf(p);
 		// The muted view is the ledger of the source act: every ticket of the
 		// muted source, live and resting alike.
@@ -110,8 +112,8 @@ describe("the named standings", () => {
 		p.close();
 	});
 
-	test("an ignored ticket stands in the ignored view", () => {
-		const p = plane({
+	test("an ignored ticket stands in the ignored view", async () => {
+		const p = await plane({
 			sources: [
 				{
 					config: {
@@ -131,13 +133,13 @@ describe("the named standings", () => {
 		p.close();
 	});
 
-	test("a resting row with a closed cycle rests past it", () => {
+	test("a resting row with a closed cycle rests past it", async () => {
 		const resting = {
 			...SAMPLE_TICKETS[4],
 			handoff: SAMPLE_TICKETS[1].handoff,
 			handoffCount: 1,
 		};
-		const p = plane({
+		const p = await plane({
 			sources: [
 				{
 					config: {
@@ -159,21 +161,21 @@ describe("the named standings", () => {
 		p.close();
 	});
 
-	test("the named grouping axis is the axis the plane stands on", () => {
-		const p = plane({ groupingAxis: "repository" });
+	test("the named grouping axis is the axis the plane stands on", async () => {
+		const p = await plane({ groupingAxis: "repository" });
 		expect(p.state.grouping.groupingAxis("tickets")).toBe("repository");
 		p.close();
 	});
 
-	test("the named clock is the clock the state writes from", () => {
+	test("the named clock is the clock the state writes from", async () => {
 		const now = () => 1_000_000;
-		const p = plane({ now });
+		const p = await plane({ now });
 		expect(p.state.now()).toBe(1_000_000);
 		p.close();
 	});
 
-	test("a Consultation standing stands in the record the plane's own read reports", () => {
-		const p = plane({
+	test("a Consultation standing stands in the record the plane's own read reports", async () => {
+		const p = await plane({
 			config: {
 				consultationTypes: {
 					grill: { agent: "pi", environment: "worktree", template: "/grill {input}" },
@@ -206,8 +208,8 @@ describe("the named standings", () => {
 		p.close();
 	});
 
-	test("a queue standing stands in the queue the plane's own read reports", () => {
-		const p = plane({
+	test("a queue standing stands in the queue the plane's own read reports", async () => {
+		const p = await plane({
 			queue: [
 				{
 					kind: "handoff",
@@ -225,8 +227,9 @@ describe("the named standings", () => {
 				},
 			],
 		});
-		expect(p.state.workQueue.items()).toHaveLength(1);
-		expect(p.state.workQueue.items()[0].ticketIdentity).toBe("github:github.com:I_1");
+		const items = p.state.workQueue.items();
+		expect(items).toHaveLength(1);
+		expect(workQueueIdentityOf(items[0])).toBe("github:github.com:I_1");
 		p.close();
 	});
 });
@@ -245,7 +248,7 @@ describe("the plane's close", () => {
 	});
 
 	test("a close the test runs on its own leaves nothing for the cleanup to do", async () => {
-		const p = plane({});
+		const p = await plane({});
 		p.close();
 		expect(existsSync(p.home)).toBe(false);
 		// The close is idempotent: the registry's pass over the same plane
@@ -253,12 +256,12 @@ describe("the plane's close", () => {
 		expect(() => p.close()).not.toThrow();
 	});
 
-	test("the standing's commands run over the FakeRunner the plane hands out", () => {
-		const p = plane({
+	test("the standing's commands run over the FakeRunner the plane hands out", async () => {
+		const p = await plane({
 			commands: (fake) =>
 				fake.set("git", ["-C", "/checkout", "rev-parse", "--git-dir"], { stdout: ".git\n" }),
 		});
-		expect(p.fakeRunner).toBe(p.runner);
+		expect(p.fakeRunner).toBe(p.runner as FakeRunner);
 		p.close();
 	});
 });
