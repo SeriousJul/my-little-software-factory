@@ -141,8 +141,27 @@ export interface SeededPlaneStanding {
 	autoHandoffMode?: boolean;
 	/** The Work queue's brake, where the operator left it. */
 	queuePaused?: boolean;
-	/** The Grouping axis of the Ticket section. The default is the flat axis. */
+	/**
+	 * The Grouping axis of the Ticket section. A named standing writes it; a
+	 * standing that names no axis leaves the file's own answer standing - the
+	 * fresh file's seeded split (ADR 0066) where the plane opens a new file,
+	 * and the stored axis where the standing wraps one. The default standing,
+	 * the sample rows with no sources named, stands flat, the list the
+	 * no-state plane drew.
+	 */
 	groupingAxis?: GroupingAxis;
+	/**
+	 * The state file already open on the standing's home, in place of the one
+	 * the plane opens: the boot that reopens a file the earlier run left.
+	 */
+	existing?: FactoryState;
+	/** The state file's path, in place of the one beside the plane's home. */
+	statePath?: string;
+	/**
+	 * The Repositories the plane stands initialized: the identity to the
+	 * settings hash that made the init commit, the commit standing as named.
+	 */
+	repositoryInits?: Record<string, string>;
 	/** The clock the state file writes from. The default is the machine clock. */
 	now?: () => number;
 	/** The egress double the plane runs on. The default is the FakeRunner. */
@@ -150,19 +169,31 @@ export interface SeededPlaneStanding {
 	/** The per-case Command runner answers, run over the FakeRunner. */
 	commands?: (fake: FakeRunner, home: string) => void;
 	/**
+	 * The state's own fetch of the standing's rows. The default stands it
+	 * through the state module, the way the suites' own fixtures did before
+	 * the plane. A suite that drives its first fetch from a loading boot -
+	 * the frame suites that watch the loading line - holds it, and the state
+	 * stands without the source rows the fetch would have written.
+	 */
+	applyFetch?: boolean;
+	/**
 	 * The preparation of the plane once its home exists, for the standing that
 	 * needs the home's own paths before it can name itself: the checkout the
 	 * suite builds, the config file the suite writes verbatim, the source the
 	 * suite binds over its own runner. The answers stand beside the standing's
-	 * own fields, over them where they name one.
+	 * own fields, over them where they name one. A standing that builds the
+	 * home for its own sake names nothing and returns undefined.
 	 */
-	prepare?: (home: string) => Promise<{
-		config?: Partial<FactoryConfig>;
-		/** The config file text written to the plane's config path. */
-		configFileText?: string;
-		/** The bound source doubles, in place of the plane's FakeSources. */
-		boundSources?: readonly TicketSource[];
-	}>;
+	prepare?: (home: string) => Promise<
+		| {
+				config?: Partial<FactoryConfig>;
+				/** The config file text written to the plane's config path. */
+				configFileText?: string;
+				/** The bound source doubles, in place of the plane's FakeSources. */
+				boundSources?: readonly TicketSource[];
+		  }
+		| undefined
+	>;
 }
 
 /**
@@ -435,9 +466,7 @@ function seedConsultation(state: FactoryState, seed: ConsultationSeed): void {
  * the home and checkout directories, the runner double, and the source
  * doubles all come from here, and `close` takes them all back.
  */
-export async function plane(
-	standing: SeededPlaneStanding = {},
-): Promise<SeededPlane> {
+export async function plane(standing: SeededPlaneStanding = {}): Promise<SeededPlane> {
 	const sources = standing.sources ?? defaultSources();
 	const home = mkdtempSync(join(tmpdir(), "factory-seeded-plane-"));
 	// The checkout mapping: a relative path stands under the home, an
@@ -459,9 +488,11 @@ export async function plane(
 	let boundSources: readonly TicketSource[] | undefined;
 	if (standing.prepare !== undefined) {
 		const prepared = await standing.prepare(home);
-		preparedConfig = prepared.config;
-		configFileText = prepared.configFileText;
-		boundSources = prepared.boundSources;
+		if (prepared !== undefined) {
+			preparedConfig = prepared.config;
+			configFileText = prepared.configFileText;
+			boundSources = prepared.boundSources;
+		}
 	}
 	const config: FactoryConfig = {
 		...BASE_CONFIG,
@@ -472,20 +503,37 @@ export async function plane(
 	};
 	const configPath = join(home, "config.toml");
 	writeFileSync(configPath, configFileText ?? configToToml(config));
-	const state = openFactoryState(join(home, "state.sqlite"), standing.now);
-	state.grouping.setGroupingAxis("tickets", standing.groupingAxis ?? "none");
+	const state =
+		standing.existing ??
+		openFactoryState(standing.statePath ?? join(home, "state.sqlite"), standing.now);
+	// The axis the standing names stands; where it names none, the file's own
+	// answer stands: the fresh file's seeded split (ADR 0066), or the axis a
+	// wrapped file holds. The default standing names the flat axis: the list
+	// the no-state plane drew, the standing those frames were written against.
+	const axis = standing.groupingAxis ?? (standing.sources === undefined ? "none" : undefined);
+	if (axis !== undefined) state.grouping.setGroupingAxis("tickets", axis);
 	state.sourceFact.initializeSources(
 		config.sources.map((source) => ({ name: source.name, kind: source.kind })),
 	);
-	for (const source of sources) {
-		const outcome: FetchOutcome = {
-			status: "success",
-			fetchedAt: "2026-01-01T00:01:00Z",
-			tickets: source.tickets.map(fetchedOf),
-		};
-		state.sourceFact.applyFetch({ name: source.config.name, kind: source.config.kind }, outcome);
+	// The source rows a wrapped state already holds stand: re-applying a
+	// standing's snapshot would clear a membership the state's own fetch
+	// wrote, and re-seeding a handoff would owe the state a second cycle.
+	// A fresh state takes the standing's rows through the state module's own
+	// calls, the way an operator's own fetch and acts would have written them.
+	if (standing.existing === undefined && standing.applyFetch !== false) {
+		for (const source of sources) {
+			const outcome: FetchOutcome = {
+				status: "success",
+				fetchedAt: "2026-01-01T00:01:00Z",
+				tickets: source.tickets.map(fetchedOf),
+			};
+			state.sourceFact.applyFetch({ name: source.config.name, kind: source.config.kind }, outcome);
+		}
+		for (const row of sources.flatMap((source) => source.tickets)) seedTicket(state, row);
 	}
-	for (const row of sources.flatMap((source) => source.tickets)) seedTicket(state, row);
+	for (const [identity, settingsHash] of Object.entries(standing.repositoryInits ?? {})) {
+		state.repositoryInit.setRepositoryInitFact(identity, settingsHash, "init-commit");
+	}
 	for (const name of standing.mutedSources ?? []) {
 		const result = state.sourceFact.setSourceMuted(name, true);
 		if (!result.ok) throw new Error(`cannot seed the mute for ${name}: ${result.reason}`);
@@ -536,12 +584,13 @@ export async function plane(
 	fakeRunner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
 	standing.commands?.(fakeRunner, home);
 	const runner = standing.runner?.(fakeRunner) ?? fakeRunner;
-	const fakeDoubles: readonly FakeSource[] = sources.map((source) =>
-		new FakeSource(source.config.name, source.config.kind, {
-			status: "success",
-			fetchedAt: "2026-01-01T00:01:00Z",
-			tickets: source.tickets.map(fetchedOf),
-		}),
+	const fakeDoubles: readonly FakeSource[] = sources.map(
+		(source) =>
+			new FakeSource(source.config.name, source.config.kind, {
+				status: "success",
+				fetchedAt: "2026-01-01T00:01:00Z",
+				tickets: source.tickets.map(fetchedOf),
+			}),
 	);
 	const sourceDoubles: readonly TicketSource[] = boundSources ?? fakeDoubles;
 	const registrationsEntry: PlaneRegistration = {
