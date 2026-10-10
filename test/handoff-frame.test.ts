@@ -56,19 +56,9 @@ import {
 	tabCreateJson,
 	workspaceCreateJson,
 	workspaceListJson,
-	worktreeCreateJson,
 } from "./fake-runner.ts";
 import { type HerdrWorldDescription, stubHerdrWorld } from "./herdr-world.ts";
 import { SAMPLE_TICKETS } from "./sample-tickets.ts";
-
-/**
- * The egress double the handoff suites inject: the fake command runner and
- * the Stub herdr world both stand it.
- */
-interface CommandDouble extends CommandRunner {
-	commands(): string[];
-	set(command: string, args: readonly string[], result: Partial<CommandResult>): void;
-}
 
 /**
  * The runner's commands with the desktop notification's of one standing
@@ -124,53 +114,10 @@ function worldCheckout(): HerdrWorldDescription {
 				path: checkout(),
 				cloneUrl: "https://github.com/acme/billing.git",
 				defaultBranch: "main",
+				worktreesRoot: join(home, "worktrees", "billing"),
 			},
 		],
 	};
-}
-
-/** The standing the pinned worktree handoff leaves behind, stated as a world. */
-function worktreeHandoffWorld(): HerdrWorldDescription {
-	const world = worldCheckout();
-	const branch = `factory/${first.externalKey.slice(1)}-${firstSlug}`;
-	const worktreePath = join(home, "worktrees", "billing", branch.replaceAll("/", "-"));
-	world.workspaces = [{ id: "ws-wt", checkoutPath: worktreePath, isWorktree: true }];
-	world.tabs = [{ id: "tab-ws-wt", workspaceId: "ws-wt" }];
-	world.panes = [{ id: "pane-wt", tabId: "tab-ws-wt", workspaceId: "ws-wt" }];
-	return world;
-}
-
-/** Stub a successful worktree handoff at the convention checkout. */
-function stubWorktreeHandoff(runner: CommandDouble): void {
-	const path = checkout();
-	runner.set(
-		"git",
-		["-C", path, "branch", "--list", `factory/${first.externalKey.slice(1)}-${firstSlug}`],
-		{
-			stdout: "",
-		},
-	);
-	// The worktree base rule: the origin/HEAD symref names the default
-	// branch and the fetch of its single ref succeeds, so the base is the
-	// fetched remote ref.
-	runner.set("git", ["-C", path, "symbolic-ref", "refs/remotes/origin/HEAD"], {
-		stdout: "refs/remotes/origin/main\n",
-	});
-	runner.set(
-		"herdr",
-		[
-			"worktree",
-			"create",
-			"--cwd",
-			path,
-			"--branch",
-			`factory/${first.externalKey.slice(1)}-${firstSlug}`,
-			"--base",
-			"origin/main",
-			"--no-focus",
-		],
-		{ stdout: worktreeCreateJson("ws-wt", "pane-wt") },
-	);
 }
 
 /** A runner that delays its first call, so the in-flight state is visible. */
@@ -697,8 +644,7 @@ describe("the in-flight guard", () => {
 
 describe("the override panel", () => {
 	test("`e` opens the panel, right changes options, enter confirms the handoff", async () => {
-		const runner = stubHerdrWorld(worktreeHandoffWorld());
-		stubWorktreeHandoff(runner);
+		const runner = stubHerdrWorld(worldCheckout());
 		const props = { config: BASE_CONFIG, runner, home, configPath };
 		await withApp(
 			async (setup) => {
@@ -745,7 +691,7 @@ describe("the override panel", () => {
 					`herdr worktree create --cwd ${checkout()} --branch factory/${first.externalKey.slice(1)}-${firstSlug} --base origin/main --no-focus`,
 				);
 				expect(runner.commands()).toContain(
-					`herdr agent start ${firstAgent} --kind codex --pane pane-wt`,
+					`herdr agent start ${firstAgent} --kind codex --pane pane-1`,
 				);
 			},
 			{ width: WIDTH, height: HEIGHT, props: props },
@@ -3643,9 +3589,8 @@ describe("the override panel", () => {
 		);
 	});
 	test("a failed worktree handoff removes its residue and keeps the ticket open", async () => {
-		const runner = stubHerdrWorld(worktreeHandoffWorld());
-		stubWorktreeHandoff(runner);
-		runner.set("herdr", ["agent", "start", firstAgent, "--kind", "pi", "--pane", "pane-wt"], {
+		const runner = stubHerdrWorld(worldCheckout());
+		runner.set("herdr", ["agent", "start", firstAgent, "--kind", "pi", "--pane", "pane-1"], {
 			code: 1,
 			stderr: "agent name is already used\n",
 		});
@@ -3672,7 +3617,7 @@ describe("the override panel", () => {
 				// The residue is removed: the worktree and the branch, so a
 				// retry can run.
 				const commands = runner.commands();
-				expect(commands).toContain("herdr worktree remove --workspace ws-wt");
+				expect(commands).toContain("herdr worktree remove --workspace ws-1");
 				expect(commands).toContain(
 					`git -C ${checkout()} branch -D factory/${first.externalKey.slice(1)}-${firstSlug}`,
 				);
