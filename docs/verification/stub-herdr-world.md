@@ -63,6 +63,8 @@ walk records the real answers and the world is checked against them.
 | --- | --- | --- | --- |
 | The checkout verification | the Action bar, the Consultation frame, the Consultation operations, the Handoff frame, the Key guide, the Live view, the Message line, the Starting face | their eight local `stubCheckout` copies | Moved |
 | The checkout verification | the auto-mode suite | its `stubCheckout` copy | Held on the pin table |
+| The live-worktree Handoff | the Starting face and the Handoff frame's live-worktree Handoff tests | their `stubLiveHandoff` builders | Moved |
+| The live-worktree Handoff | the Handoff frame's worktree Handoff tests and its pin-table tests | - | Out of this flow: the worktree Handoff is the next flow, and the pin-table tests stay |
 
 The auto-mode suite is held because its tests' subjects are the auto dispatch,
 the Decision modal, the route, and the leftover environment, not the checkout
