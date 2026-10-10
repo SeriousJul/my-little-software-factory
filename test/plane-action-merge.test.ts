@@ -18,7 +18,6 @@ import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { AppProps } from "../src/components/app.ts";
 import {
 	type FactoryConfig,
 	type TaskTypeConfig,
@@ -60,6 +59,7 @@ import {
 } from "./fake-runner.ts";
 import { FakeSource } from "./fake-source.ts";
 import { gatedRunner } from "./gated-runner.ts";
+import { plane, type SeededPlane } from "./seeded-plane.ts";
 import { infoLine, type RecordedLine, recordLogger, warnLine } from "./record-logger.ts";
 
 const paths: string[] = [];
@@ -2126,25 +2126,18 @@ const mergeRowFocused = (frame: string): boolean =>
 	rowsOf(frame).some((row) => row.includes("❯") && row.includes("Merge pull request"));
 
 describe("the decision screen's merge", () => {
-	/** The props the decision tests boot on: the pull request, seeded. */
-	function decisionProps(
+	/** The plane the decision tests boot on: the pull request, seeded. */
+	async function decisionPlane(
 		state: FactoryState,
 		runner: FakeRunner,
-		src: FakeSource,
 		extra: Partial<FactoryConfig> = {},
-	): AppProps {
-		const home = mkdtempSync(join(tmpdir(), "factory-plane-home-"));
-		paths.push(home);
-		const configPath = join(home, "config.toml");
-		writeFileSync(configPath, "agent-poll-interval-seconds = 60\n");
-		return {
+	): Promise<SeededPlane> {
+		return await plane({
+			existing: state,
+			sources: [{ config: pullsConfig, tickets: [] }],
 			config: { ...PLANE_CONFIG, ...extra },
-			state,
-			runner,
-			configPath,
-			sources: [src],
-			pollIntervalMs: 60_000,
-		};
+			runner: () => runner,
+		});
 	}
 
 	test("the confirm runs the merge with no agent and no worktree, and the record stands", async () => {
@@ -2154,8 +2147,7 @@ describe("the decision screen's merge", () => {
 		runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
 		stubReadSequence(runner, [{ state: "open" }, { merged: true }]);
 		stubMerge(runner, 0);
-		const src = new FakeSource("pulls", "github-pull-requests", pullSuccess());
-		const props = decisionProps(state, runner, src);
+				const planeRecord = await decisionPlane(state, runner);
 
 		await withApp(
 			async (setup) => {
@@ -2175,7 +2167,7 @@ describe("the decision screen's merge", () => {
 					messageRowOf(f).includes(`the merge of "${pullTitle}" ran from the Work queue`),
 				);
 			},
-			{ width: WIDTH, height: 30, props: props },
+			{ width: WIDTH, height: 30, plane: planeRecord, loopPolicy: { kind: "polled", intervalMs: 60_000 } },
 		);
 
 		// The record: the operator's decision word, the merged outcome, and
@@ -2191,7 +2183,7 @@ describe("the decision screen's merge", () => {
 				.commands()
 				.filter((command) => command.includes("agent start") || command.includes("workspace")),
 		).toEqual([]);
-		state.close();
+		
 	});
 
 	test("a flagged merge stands its held Next step beside the row, and the operator's key still runs it", async () => {
@@ -2205,8 +2197,7 @@ describe("the decision screen's merge", () => {
 		runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
 		stubReadSequence(runner, [{ state: "open" }, { merged: true }]);
 		stubMerge(runner, 0);
-		const src = new FakeSource("pulls", "github-pull-requests", pullSuccess());
-		const props = decisionProps(state, runner, src, {
+				const planeRecord = await decisionPlane(state, runner, {
 			taskTypes: {
 				...PLANE_TASK_TYPES,
 				merge: { ...PLANE_TASK_TYPES.merge, operatorDecides: true },
@@ -2230,7 +2221,7 @@ describe("the decision screen's merge", () => {
 					messageRowOf(f).includes(`the merge of "${pullTitle}" ran from the Work queue`),
 				);
 			},
-			{ width: WIDTH, height: 30, props: props },
+			{ width: WIDTH, height: 30, plane: planeRecord, loopPolicy: { kind: "polled", intervalMs: 60_000 } },
 		);
 
 		// The record stands the way the operator's merge always does: the
@@ -2239,7 +2230,7 @@ describe("the decision screen's merge", () => {
 		expect(attempt?.outcome).toBe("merged");
 		expect(attempt?.decision).toBe("merged");
 		expect(runner.commands()).toContain("gh pr merge #12 --squash --repo github.com/acme/factory");
-		state.close();
+		
 	});
 
 	test(
@@ -2253,8 +2244,7 @@ describe("the decision screen's merge", () => {
 			// the fire's fresh read still reads it open: the needs-work branch holds.
 			stubReadSequence(runner, [{ state: "open" }, { state: "open" }]);
 			stubMerge(runner, 1, "GraphQL: PullRequest is not mergeable.\n");
-			const src = new FakeSource("pulls", "github-pull-requests", pullSuccess());
-			const props = decisionProps(state, runner, src);
+						const planeRecord = await decisionPlane(state, runner);
 
 			await withApp(
 				async (setup) => {
@@ -2285,7 +2275,7 @@ describe("the decision screen's merge", () => {
 						"the attempt's line",
 					);
 				},
-				{ width: WIDTH, height: 30, props: props },
+				{ width: WIDTH, height: 30, plane: planeRecord, loopPolicy: { kind: "polled", intervalMs: 60_000 } },
 			);
 
 			// The line the pane painted is the block the run recorded: the record
@@ -2294,7 +2284,7 @@ describe("the decision screen's merge", () => {
 			expect(attempt?.outcome).toBe("blocked");
 			expect(attempt?.reason).toBe("GraphQL: PullRequest is not mergeable.");
 			expect(attempt?.decision).toBe("merged");
-			state.close();
+			
 		},
 		{ timeout: 25_000 },
 	);
@@ -2304,8 +2294,7 @@ describe("the decision screen's merge", () => {
 		seed(state, "awaiting", mergeRoute());
 		const runner = new FakeRunner();
 		runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
-		const src = new FakeSource("pulls", "github-pull-requests", pullSuccess());
-		const props = decisionProps(state, runner, src);
+				const planeRecord = await decisionPlane(state, runner);
 
 		await withApp(
 			async (setup) => {
@@ -2317,9 +2306,9 @@ describe("the decision screen's merge", () => {
 					messageRowOf(f).includes("the plane action holds no settings"),
 				);
 			},
-			{ width: WIDTH, height: 30, props: props },
+			{ width: WIDTH, height: 30, plane: planeRecord, loopPolicy: { kind: "polled", intervalMs: 60_000 } },
 		);
-		state.close();
+		
 	});
 
 	test("a blocked attempt from an earlier turn does not hold the row the newer turn offers", async () => {
@@ -2338,8 +2327,7 @@ describe("the decision screen's merge", () => {
 		});
 		const runner = new FakeRunner();
 		runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
-		const src = new FakeSource("pulls", "github-pull-requests", pullSuccess());
-		const props = decisionProps(state, runner, src);
+				const planeRecord = await decisionPlane(state, runner);
 
 		await withApp(
 			async (setup) => {
@@ -2354,9 +2342,9 @@ describe("the decision screen's merge", () => {
 				);
 				expect(frame).not.toContain("the merge was blocked");
 			},
-			{ width: WIDTH, height: 30, props: props },
+			{ width: WIDTH, height: 30, plane: planeRecord, loopPolicy: { kind: "polled", intervalMs: 60_000 } },
 		);
-		state.close();
+		
 	});
 
 	test("the operator's confirm passes the Handoff limit the top-up's ask obeys", async () => {
@@ -2376,8 +2364,7 @@ describe("the decision screen's merge", () => {
 		runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
 		stubReadSequence(runner, [{ state: "open" }, { merged: true }]);
 		stubMerge(runner, 0);
-		const src = new FakeSource("pulls", "github-pull-requests", pullSuccess());
-		const props = decisionProps(state, runner, src, { maxHandoffsPerTicket: 1 });
+				const planeRecord = await decisionPlane(state, runner, { maxHandoffsPerTicket: 1 });
 
 		await withApp(
 			async (setup) => {
@@ -2396,7 +2383,7 @@ describe("the decision screen's merge", () => {
 					messageRowOf(f).includes(`the merge of "${pullTitle}" ran from the Work queue`),
 				);
 			},
-			{ width: WIDTH, height: 30, props: props },
+			{ width: WIDTH, height: 30, plane: planeRecord, loopPolicy: { kind: "polled", intervalMs: 60_000 } },
 		);
 
 		// The confirm passed the full count: the run's attempt stands as the
@@ -2404,7 +2391,7 @@ describe("the decision screen's merge", () => {
 		const attempt = state.planeAction.latestPlaneActionAttempt(pullIdentity);
 		expect(attempt?.outcome).toBe("merged");
 		expect(attempt?.decision).toBe("merged");
-		state.close();
+		
 	});
 
 	test(
@@ -2442,8 +2429,7 @@ describe("the decision screen's merge", () => {
 			// each take one read, in that order.
 			stubReadSequence(runner, [{ state: "open" }, { merged: true }]);
 			stubMerge(runner, 0);
-			const src = new FakeSource("pulls", "github-pull-requests", pullSuccess());
-			const props = decisionProps(state, runner, src);
+						const planeRecord = await decisionPlane(state, runner);
 
 			await withApp(
 				async (setup) => {
@@ -2489,7 +2475,7 @@ describe("the decision screen's merge", () => {
 					const list = await settle(setup);
 					expect(list).not.toContain("Decision:");
 				},
-				{ width: WIDTH, height: 30, props: props },
+				{ width: WIDTH, height: 30, plane: planeRecord, loopPolicy: { kind: "polled", intervalMs: 60_000 } },
 			);
 
 			// The record stands for the outcome the screen read: the operator's
@@ -2497,7 +2483,7 @@ describe("the decision screen's merge", () => {
 			const attempt = state.planeAction.latestPlaneActionAttempt(pullIdentity);
 			expect(attempt?.outcome).toBe("merged");
 			expect(attempt?.decision).toBe("merged");
-			state.close();
+			
 		},
 		{ timeout: 20_000 },
 	);
@@ -2512,8 +2498,7 @@ describe("the decision screen's merge", () => {
 		// each take one read, in that order.
 		stubReadSequence(runner, [{ state: "open" }, { merged: true }]);
 		stubMerge(runner, 0);
-		const src = new FakeSource("pulls", "github-pull-requests", pullSuccess());
-		const props = decisionProps(state, runner, src);
+				const planeRecord = await decisionPlane(state, runner);
 
 		await withApp(
 			async (setup) => {
@@ -2539,7 +2524,7 @@ describe("the decision screen's merge", () => {
 				expect(naming).toHaveLength(1);
 				expect(naming[0]).toContain("ran from the Work queue");
 			},
-			{ width: WIDTH, height: 30, props: props },
+			{ width: WIDTH, height: 30, plane: planeRecord, loopPolicy: { kind: "polled", intervalMs: 60_000 } },
 		);
 
 		// The record stands for the outcome the line read: the operator's
@@ -2554,7 +2539,7 @@ describe("the decision screen's merge", () => {
 				.ticketListViews(PLANE_WORKFLOW_STATES, PLANE_CONFIG.defaultTaskType)
 				.rows.find((candidate) => candidate.identity === pullIdentity),
 		).toBeUndefined();
-		state.close();
+		
 	});
 });
 
@@ -2572,31 +2557,27 @@ describe("the auto top-up merge", () => {
 		prep(state, runner);
 		state.handoff.setAutoHandoffMode(true);
 		stub(runner);
-		const src = new FakeSource("pulls", "github-pull-requests", pullSuccess());
-		const props: AppProps = {
+		const planeRecord = await plane({
+			existing: state,
+			sources: [{ config: pullsConfig, tickets: [] }],
 			config: { ...PLANE_CONFIG, ...extra },
-			state,
-			runner,
-			// Fast cycles: the add and the run ride two observation cycles
-			// apart, and the wait gives them both room.
-			pollIntervalMs: 20,
-			configPath: (() => {
-				const home = mkdtempSync(join(tmpdir(), "factory-plane-home-"));
-				paths.push(home);
-				const configPath = join(home, "config.toml");
-				writeFileSync(configPath, "agent-poll-interval-seconds = 60\n");
-				return configPath;
-			})(),
-			sources: [src],
-		};
+			runner: () => runner,
+		});
+		// Fast cycles: the add and the run ride two observation cycles
+		// apart, and the wait gives them both room.
 		await withApp(
 			async (setup) => {
 				// The poll's in-flight fetch settles to the ticket's facts, so
 				// the membership reads healthy and the ticket stands actionable.
-				src.settle(pullSuccess());
+				(planeRecord.sources[0] as FakeSource).settle(pullSuccess());
 				await body(setup);
 			},
-			{ width: WIDTH, height: 34, props: props },
+			{
+				width: WIDTH,
+				height: 34,
+				plane: planeRecord,
+				loopPolicy: { kind: "polled", intervalMs: 20 },
+			},
 		);
 		return { state, runner };
 	}
@@ -2632,7 +2613,7 @@ describe("the auto top-up merge", () => {
 				.ticketListViews(PLANE_WORKFLOW_STATES, PLANE_CONFIG.defaultTaskType)
 				.rows.find((candidate) => candidate.identity === pullIdentity),
 		).toBeUndefined();
-		state.close();
+		
 	});
 
 	test("a blocked merge posts its comment, takes the needs-work path, and rings no bell", async () => {
@@ -2696,7 +2677,7 @@ describe("the auto top-up merge", () => {
 			// the block ran no retirement, so the ticket stays listed.
 			expect(state.ticketWorkCycle.ticketState(pullIdentity)).toBe("open");
 			expect(position).toBeDefined();
-			state.close();
+			
 		} finally {
 			bellSpy.mockRestore();
 		}
@@ -2784,7 +2765,7 @@ describe("the auto top-up merge", () => {
 			.rows.find((candidate) => candidate.identity === pullIdentity);
 		expect(position?.labels).toEqual(["ready-to-ship"]);
 		expect(position?.suggestedTaskType).toBe("merge");
-		state.close();
+		
 	});
 
 	test("the Handoff limit counts the merge attempts, and a full count holds the top-up", async () => {
@@ -2815,7 +2796,7 @@ describe("the auto top-up merge", () => {
 		expect(state.planeAction.latestPlaneActionAttempt(pullIdentity)?.at).toBe(
 			"2026-08-31T11:00:00Z",
 		);
-		state.close();
+		
 	});
 
 	test("the queue pause holds the merge item standing, and the row and detail name the action", async () => {
@@ -2866,7 +2847,7 @@ describe("the auto top-up merge", () => {
 		);
 		// The pause held the pickup: no command ran on the item.
 		expect(state.planeAction.latestPlaneActionAttempt(pullIdentity)).toBeNull();
-		state.close();
+		
 	});
 
 	test("the merge's wait wears the queued badge on the position's row (ADR 0072)", async () => {
@@ -2924,7 +2905,7 @@ describe("the auto top-up merge", () => {
 		// position kept the open state the ask left it.
 		expect(state.planeAction.latestPlaneActionAttempt(pullIdentity)).toBeNull();
 		expect(state.ticketWorkCycle.ticketState(pullIdentity)).toBe("open");
-		state.close();
+		
 	});
 
 	test("the Dispatch pause holds the automatic merge add, and the release runs it", async () => {
@@ -3007,6 +2988,6 @@ describe("the auto top-up merge", () => {
 		expect(attempt?.outcome).toBe("merged");
 		expect(attempt?.decision).toBe("auto-merged");
 		expect(state.ticketWorkCycle.dispatchPauseActive()).toBe(false);
-		state.close();
+		
 	});
 });
