@@ -8,11 +8,12 @@
  * carries the Missing modal; a routed handoff keeps the screen and streams
  * the new pane.
  *
- * The list-level tests run the real app on the sample projection, with a
- * fake command runner standing in for herdr. The factory-level tests seed a
- * real SQLite state through the state API and run the observation loop on a
- * pinned poll interval, so the settles, the markers, and the transforms
- * happen the way they happen in production.
+ * The list-level tests run the real app on the Seeded plane's standing -
+ * the sample tickets, the flat list, the held loop - with a fake command
+ * runner standing in for herdr. The factory-level tests stand one in-flight
+ * ticket through the state API and run the observation loop on a pinned
+ * poll interval, so the settles, the markers, and the transforms happen the
+ * way they happen in production.
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
@@ -22,13 +23,8 @@ import { join } from "node:path";
 
 import type { KeyEvent } from "@opentui/core";
 
-import type { AppProps } from "../src/components/app.ts";
 import type { FactoryConfig } from "../src/config.ts";
 import type { FetchedTicket } from "../src/domain/ticket.ts";
-import type { CommandResult, CommandRunner } from "../src/runner.ts";
-import type { FactoryState } from "../src/state.ts";
-import { openFactoryState } from "../src/state.ts";
-import type { FetchOutcome } from "../src/ticket-source.ts";
 import {
 	type AppSetup,
 	awaitBaseKeyHandlers,
@@ -38,6 +34,7 @@ import {
 	frameText,
 	HEIGHT,
 	keyHandlerListeners,
+	markerRowOf,
 	openGuide,
 	openPanel,
 	press,
@@ -62,10 +59,8 @@ import {
 	workspaceGetJson,
 	workspaceListJson,
 } from "./fake-runner.ts";
-import { FakeSource } from "./fake-source.ts";
-import { type HerdrWorldDescription, stubHerdrWorld } from "./herdr-world.ts";
 import { flushPassiveNow } from "./passive-flush-hold.ts";
-import { SAMPLE_TICKETS } from "./sample-tickets.ts";
+import { plane, type SeededPlane, ticketOf } from "./seeded-plane.ts";
 
 /** The pane read the Live view's stream runs, for a pane and its tail. */
 const READ = (pane: string) =>
@@ -140,139 +135,75 @@ function fetched(index = 5, title = "Persist source facts"): FetchedTicket {
 	};
 }
 
-const success: FetchOutcome = {
-	status: "success",
-	fetchedAt: "2026-08-31T10:01:00Z",
-	tickets: [fetched()],
+/** Stub the git answers for the checkout the plane's config maps to. */
+function stubCheckoutInto(fake: FakeRunner, home: string): void {
+	const path = join(home, "src", "factory");
+	fake.set("git", ["-C", path, "rev-parse", "--git-dir"], { stdout: ".git\n" });
+	fake.set("git", ["-C", path, "remote", "get-url", "origin"], {
+		stdout: `https://${repoIdentity}.git\n`,
+	});
+}
+
+/** The source config the standing lists its ticket on. */
+const sourceConfig = {
+	name: "issues",
+	kind: "github-issues" as const,
+	refreshIntervalSeconds: 60,
+	repositories: [repoIdentity],
+	host: "github.com",
 };
 
-/** The checkout the config maps to, stated as a world. */
-function worldCheckout(path: string): HerdrWorldDescription {
-	return {
-		checkouts: [
-			{
-				path,
-				cloneUrl: `https://${repoIdentity}.git`,
-				defaultBranch: "main",
-			},
-		],
-	};
-}
-
-/** The standing the routed handoff's pinned launch leaves behind. */
-function routeWorld(path: string): HerdrWorldDescription {
-	const world = worldCheckout(path);
-	world.workspaces = [{ id: "ws-1", checkoutPath: path }];
-	world.tabs = [
-		{ id: "tab-1", workspaceId: "ws-1", cwd: path },
-		{ id: "tab-9", workspaceId: "ws-1", cwd: path },
-	];
-	world.panes = [
-		{ id: "pane-1", tabId: "tab-1", workspaceId: "ws-1" },
-		{ id: "pane-9", tabId: "tab-9", workspaceId: "ws-1" },
-	];
-	return world;
-}
-
-/** The runner the seeded app holds: the world when a test states one, the
- * pin table when it does not.
- */
-interface SeededRunner extends CommandRunner {
-	commands(): string[];
-	set(command: string, args: readonly string[], result: Partial<CommandResult>): void;
-}
-
-interface SeededApp {
-	state: FactoryState;
-	config: FactoryConfig;
-	runner: SeededRunner;
-	configPath: string;
-	src: FakeSource;
-}
-
 /**
- * A state with the ticket in flight: claimed, settled to the stored herdr
- * handles, and resting in handed-off.
+ * The plane the factory-level tests stand on: the ticket in flight -
+ * claimed, settled to the stored herdr handles, and resting in handed-off -
+ * on the flat Grouping axis, under the config the case names over the base,
+ * on the pinned clock the fixture day writes from. The handoff starts inside
+ * the fixture day, so a session record stamped on it is this run's, not the
+ * run before: the staleness guard keeps the settle's `completed` cause.
  */
-function seedInFlight(): FactoryState {
-	const dir = mkdtempSync(join(tmpdir(), "factory-live-state-"));
-	paths.push(dir);
-	// The handoff starts inside the fixture day, so a session record stamped
-	// on it is this run's, not the run before: the staleness guard keeps the
-	// settle's `completed` cause.
-	const state = openFactoryState(join(dir, "state.sqlite"), () =>
-		Date.parse("2026-08-31T10:30:00Z"),
-	);
-	// The frames assert the unsplit list: a fresh file opens grouped by
-	// repository (ADR 0066), so the fixture holds the flat axis.
-	state.grouping.setGroupingAxis("tickets", "none");
-	state.sourceFact.initializeSources([source]);
-	state.sourceFact.applyFetch(source, success);
-	const claim = state.handoff.claimHandoff(
-		identity,
-		{
+async function seededPlane(extra: Partial<FactoryConfig> = {}): Promise<SeededPlane> {
+	const ticket = ticketOf(fetched(), {
+		state: "handed-off",
+		workCycle: 2,
+		handoff: {
 			agentType: "pi",
 			environment: "live-worktree",
 			taskType: "implement",
 			model: "",
 			thinking: "",
 			contextWindow: "",
+			attemptId: "attempt-implement",
+			paneId: "pane-1",
+			tabId: "tab-1",
+			workspaceId: "ws-1",
+			herdrName: "persist-source-facts",
 		},
-		"open",
-	);
-	if (!claim.ok) throw new Error(claim.reason);
-	state.handoff.settleHandoff(claim.claim.attemptId, true, undefined, {
-		paneId: "pane-1",
-		tabId: "tab-1",
-		workspaceId: "ws-1",
 	});
-	return state;
-}
-
-/** A seeded in-flight state plus the app props that match it. */
-function seededApp(
-	extra: Partial<FactoryConfig> = {},
-	world: ((path: string) => HerdrWorldDescription) | undefined = undefined,
-): SeededApp {
-	const state = seedInFlight();
-	const path = mkdtempSync(join(tmpdir(), "factory-live-checkout-"));
-	paths.push(path);
-	const home = mkdtempSync(join(tmpdir(), "factory-live-home-"));
-	paths.push(home);
-	const configPath = join(home, "config.toml");
-	writeFileSync(configPath, "agent-poll-interval-seconds = 60\n");
-	const config = {
-		...BASE_CONFIG,
-		repos: { [repoIdentity]: path },
-		// The issue-side machine these tests fire: the implement transition
-		// writes the review fact, and the state it lands on offers the review.
-		workflowStates: [
-			{ name: "ready-for-review", taskType: "review", match: { labelsAny: ["ready-for-review"] } },
-		],
-		taskTypes: {
-			...BASE_CONFIG.taskTypes,
-			implement: {
-				...BASE_CONFIG.taskTypes.implement,
-				transition: { ticketFacts: ["ready-for-review"], pullRequestFacts: [] },
+	return await plane({
+		groupingAxis: "none",
+		now: () => Date.parse("2026-08-31T10:30:00Z"),
+		sources: [{ config: sourceConfig, tickets: [ticket] }],
+		repos: { [repoIdentity]: "src/factory" },
+		config: {
+			// The issue-side machine these tests fire: the implement transition
+			// writes the review fact, and the state it lands on offers the review.
+			workflowStates: [
+				{
+					name: "ready-for-review",
+					taskType: "review",
+					match: { labelsAny: ["ready-for-review"] },
+				},
+			],
+			taskTypes: {
+				...BASE_CONFIG.taskTypes,
+				implement: {
+					...BASE_CONFIG.taskTypes.implement,
+					transition: { ticketFacts: ["ready-for-review"], pullRequestFacts: [] },
+				},
 			},
+			...extra,
 		},
-		...extra,
-	};
-	const runner = world === undefined ? new FakeRunner() : stubHerdrWorld(world(path));
-	const src = new FakeSource("issues", "github-issues", success);
-	return { state, config, runner, configPath, src };
-}
-
-/** The app props for a seeded app, polling fast enough for the tests. */
-function propsOf(app: SeededApp): AppProps {
-	return {
-		config: app.config,
-		state: app.state,
-		runner: app.runner,
-		configPath: app.configPath,
-		sources: [app.src],
-		pollIntervalMs: 20,
-	};
+	});
 }
 
 /** Enter through the real key path, then wait for its effect. */
@@ -339,35 +270,41 @@ async function awaitFallbackToTheList(setup: AppSetup, base: BaseKeyHandlers): P
 
 describe("the Live view on the ticket list", () => {
 	test("g on an open ticket refuses with the Consultation section's words", async () => {
-		const runner = new FakeRunner();
+		const fake = new FakeRunner();
+		const planeRecord = await plane({ runner: () => fake });
 
 		await withApp(
 			async (setup) => {
-				// The first sample ticket is open: it holds no agent and no
+				// The walk lands on the open ticket: it holds no agent and no
 				// pane, so `g` states the Consultation section's own refusal
 				// on the Message line and focuses nothing.
+				await press(setup, "j", "the running ticket", (f) => markerRowOf(f) === 4);
+				await press(setup, "j", "the starting ticket", (f) => markerRowOf(f) === 5);
+				await press(setup, "j", "the open ticket", (f) => markerRowOf(f) === 6);
 				const frame = await press(setup, "g", "the refusal", (f) =>
 					f.includes("the Agent's pane is not alive in the last poll"),
 				);
 				expect(frame).toContain("Warning:");
-				expect(runner.commands()).not.toContain("herdr agent focus");
+				expect(fake.commands()).not.toContain("herdr agent focus");
 			},
-			{ width: WIDTH, height: HEIGHT, props: { config: BASE_CONFIG, runner } },
+			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: { kind: "held" } },
 		);
 	});
 
 	test("enter on an in-flight ticket opens the Live view above the list", async () => {
-		const runner = new FakeRunner();
-		runner.set("herdr", [...READ("pane-implement")], {
+		const fake = new FakeRunner();
+		fake.set("herdr", [...READ("pane-implement")], {
 			stdout: "the layout math is off by one\n",
 		});
+		const planeRecord = await plane({ runner: () => fake });
 
 		await withApp(
 			async (setup) => {
-				// The second sample ticket is already handed off.
-				await press(setup, "j", "the selection to move to the second ticket", (f) =>
-					f.includes("Fix pan drift in split panes"),
-				);
+				// The walk lands on the Starting ticket: its handoff already
+				// records the pane the Live view streams.
+				await press(setup, "j", "the running ticket", (f) => markerRowOf(f) === 4);
+				await press(setup, "j", "the starting ticket", (f) => markerRowOf(f) === 5);
+
 				await pressEnterQuiet(setup, "the Live view", (f) =>
 					f.includes("Live: Fix pan drift in split panes"),
 				);
@@ -387,21 +324,22 @@ describe("the Live view on the ticket list", () => {
 				expect(frame).toContain("Agent view");
 				expect(frame).toContain("Enter Goto");
 			},
-			{ width: WIDTH, height: HEIGHT, props: { config: BASE_CONFIG, runner } },
+			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: { kind: "held" } },
 		);
 	});
 
 	test("the stream shows the agent's output as plain text", async () => {
-		const runner = new FakeRunner();
-		runner.set("herdr", [...READ("pane-implement")], {
+		const fake = new FakeRunner();
+		fake.set("herdr", [...READ("pane-implement")], {
 			stdout: "line one of the agent work\nline two of the agent work\n",
 		});
+		const planeRecord = await plane({ runner: () => fake });
 
 		await withApp(
 			async (setup) => {
-				await press(setup, "j", "the selection to move", (f) =>
-					f.includes("Fix pan drift in split panes"),
-				);
+				await press(setup, "j", "the running ticket", (f) => markerRowOf(f) === 4);
+				await press(setup, "j", "the starting ticket", (f) => markerRowOf(f) === 5);
+
 				await pressEnterQuiet(setup, "the Live view", (f) =>
 					f.includes("Live: Fix pan drift in split panes"),
 				);
@@ -418,13 +356,13 @@ describe("the Live view on the ticket list", () => {
 					rgb(roleColor("text")),
 				);
 			},
-			{ width: WIDTH, height: HEIGHT, props: { config: BASE_CONFIG, runner } },
+			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: { kind: "held" } },
 		);
 	});
 
 	test("the stream refreshes on the one-second cadence", async () => {
-		const runner = new FakeRunner();
-		runner.setSequence(
+		const fake = new FakeRunner();
+		fake.setSequence(
 			"herdr",
 			[...READ("pane-implement")],
 			[
@@ -433,12 +371,13 @@ describe("the Live view on the ticket list", () => {
 				{ stdout: "first tick\nsecond tick\n" },
 			],
 		);
+		const planeRecord = await plane({ runner: () => fake });
 
 		await withApp(
 			async (setup) => {
-				await press(setup, "j", "the selection to move", (f) =>
-					f.includes("Fix pan drift in split panes"),
-				);
+				await press(setup, "j", "the running ticket", (f) => markerRowOf(f) === 4);
+				await press(setup, "j", "the starting ticket", (f) => markerRowOf(f) === 5);
+
 				await pressEnterQuiet(setup, "the Live view", (f) =>
 					f.includes("Live: Fix pan drift in split panes"),
 				);
@@ -447,28 +386,29 @@ describe("the Live view on the ticket list", () => {
 				// without any key press.
 				await awaitFrame(setup, (f) => f.includes("second tick"), "the refresh");
 				expect(
-					runner.commands().filter((c) => c === READ_COMMAND("pane-implement")).length,
+					fake.commands().filter((c) => c === READ_COMMAND("pane-implement")).length,
 				).toBeGreaterThanOrEqual(2);
 			},
-			{ width: WIDTH, height: HEIGHT, props: { config: BASE_CONFIG, runner } },
+			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: { kind: "held" } },
 		);
 	});
 
 	test("new output pins the stream to the bottom", async () => {
 		const many = (count: number) =>
 			Array.from({ length: count }, (_, i) => `tick ${String(i + 1).padStart(2, "0")}`).join("\n");
-		const runner = new FakeRunner();
-		runner.setSequence(
+		const fake = new FakeRunner();
+		fake.setSequence(
 			"herdr",
 			[...READ("pane-implement")],
 			[{ stdout: `${many(30)}\n` }, { stdout: `${many(35)}\n` }, { stdout: `${many(35)}\n` }],
 		);
+		const planeRecord = await plane({ runner: () => fake });
 
 		await withApp(
 			async (setup) => {
-				await press(setup, "j", "the selection to move", (f) =>
-					f.includes("Fix pan drift in split panes"),
-				);
+				await press(setup, "j", "the running ticket", (f) => markerRowOf(f) === 4);
+				await press(setup, "j", "the starting ticket", (f) => markerRowOf(f) === 5);
+
 				await pressEnterQuiet(setup, "the Live view", (f) =>
 					f.includes("Live: Fix pan drift in split panes"),
 				);
@@ -485,25 +425,26 @@ describe("the Live view on the ticket list", () => {
 				await awaitFrame(setup, (f) => f.includes("tick 35"), "the next read");
 				expect(frameText(setup.captureCharFrame())).not.toContain("tick 10");
 			},
-			{ width: WIDTH, height: HEIGHT, props: { config: BASE_CONFIG, runner } },
+			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: { kind: "held" } },
 		);
 	});
 
 	test("a manual scroll releases the bottom pin", async () => {
 		const many = (count: number) =>
 			Array.from({ length: count }, (_, i) => `tick ${String(i + 1).padStart(2, "0")}`).join("\n");
-		const runner = new FakeRunner();
-		runner.setSequence(
+		const fake = new FakeRunner();
+		fake.setSequence(
 			"herdr",
 			[...READ("pane-implement")],
 			[{ stdout: `${many(30)}\n` }, { stdout: `${many(35)}\n` }, { stdout: `${many(35)}\n` }],
 		);
+		const planeRecord = await plane({ runner: () => fake });
 
 		await withApp(
 			async (setup) => {
-				await press(setup, "j", "the selection to move", (f) =>
-					f.includes("Fix pan drift in split panes"),
-				);
+				await press(setup, "j", "the running ticket", (f) => markerRowOf(f) === 4);
+				await press(setup, "j", "the starting ticket", (f) => markerRowOf(f) === 5);
+
 				await pressEnterQuiet(setup, "the Live view", (f) =>
 					f.includes("Live: Fix pan drift in split panes"),
 				);
@@ -523,29 +464,30 @@ describe("the Live view on the ticket list", () => {
 				// holds where the operator put it.
 				await sleep(1300);
 				expect(
-					runner.commands().filter((c) => c === READ_COMMAND("pane-implement")).length,
+					fake.commands().filter((c) => c === READ_COMMAND("pane-implement")).length,
 				).toBeGreaterThanOrEqual(2);
 				expect(frameText(setup.captureCharFrame())).not.toContain("tick 35");
 			},
-			{ width: WIDTH, height: HEIGHT, props: { config: BASE_CONFIG, runner } },
+			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: { kind: "held" } },
 		);
 	});
 
 	test("reaching the bottom by key re-pins the stream", async () => {
 		const many = (count: number) =>
 			Array.from({ length: count }, (_, i) => `tick ${String(i + 1).padStart(2, "0")}`).join("\n");
-		const runner = new FakeRunner();
-		runner.setSequence(
+		const fake = new FakeRunner();
+		fake.setSequence(
 			"herdr",
 			[...READ("pane-implement")],
 			[{ stdout: `${many(30)}\n` }, { stdout: `${many(35)}\n` }, { stdout: `${many(35)}\n` }],
 		);
+		const planeRecord = await plane({ runner: () => fake });
 
 		await withApp(
 			async (setup) => {
-				await press(setup, "j", "the selection to move", (f) =>
-					f.includes("Fix pan drift in split panes"),
-				);
+				await press(setup, "j", "the running ticket", (f) => markerRowOf(f) === 4);
+				await press(setup, "j", "the starting ticket", (f) => markerRowOf(f) === 5);
+
 				await pressEnterQuiet(setup, "the Live view", (f) =>
 					f.includes("Live: Fix pan drift in split panes"),
 				);
@@ -568,13 +510,13 @@ describe("the Live view on the ticket list", () => {
 				await awaitFrame(setup, (f) => f.includes("tick 35"), "the re-pinned stream");
 				expect(frameText(setup.captureCharFrame())).not.toContain("tick 01");
 			},
-			{ width: WIDTH, height: HEIGHT, props: { config: BASE_CONFIG, runner } },
+			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: { kind: "held" } },
 		);
 	});
 
 	test("a failed read keeps the last lines under the stale note", async () => {
-		const runner = new FakeRunner();
-		runner.setSequence(
+		const fake = new FakeRunner();
+		fake.setSequence(
 			"herdr",
 			[...READ("pane-implement")],
 			[
@@ -583,12 +525,13 @@ describe("the Live view on the ticket list", () => {
 				{ code: 1, stderr: "the pane is gone" },
 			],
 		);
+		const planeRecord = await plane({ runner: () => fake });
 
 		await withApp(
 			async (setup) => {
-				await press(setup, "j", "the selection to move", (f) =>
-					f.includes("Fix pan drift in split panes"),
-				);
+				await press(setup, "j", "the running ticket", (f) => markerRowOf(f) === 4);
+				await press(setup, "j", "the starting ticket", (f) => markerRowOf(f) === 5);
+
 				await pressEnterQuiet(setup, "the Live view", (f) =>
 					f.includes("Live: Fix pan drift in split panes"),
 				);
@@ -602,19 +545,19 @@ describe("the Live view on the ticket list", () => {
 				expect(frame).toContain("last good lines");
 				expect(spanColors(setup, "Stale Agent output")).toContainEqual(rgb(roleColor("subtext0")));
 			},
-			{ width: WIDTH, height: HEIGHT, props: { config: BASE_CONFIG, runner } },
+			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: { kind: "held" } },
 		);
 	});
 
 	test("esc closes the Live view without side effects", async () => {
-		const runner = new FakeRunner();
-		runner.set("herdr", [...READ("pane-implement")], { stdout: "the agent works\n" });
+		const fake = new FakeRunner();
+		fake.set("herdr", [...READ("pane-implement")], { stdout: "the agent works\n" });
+		const planeRecord = await plane({ runner: () => fake });
 
 		await withApp(
 			async (setup) => {
-				await press(setup, "j", "the selection to move", (f) =>
-					f.includes("Fix pan drift in split panes"),
-				);
+				await press(setup, "j", "the running ticket", (f) => markerRowOf(f) === 4);
+				await press(setup, "j", "the starting ticket", (f) => markerRowOf(f) === 5);
 				await pressEnterQuiet(setup, "the Live view", (f) =>
 					f.includes("Live: Fix pan drift in split panes"),
 				);
@@ -623,59 +566,63 @@ describe("the Live view on the ticket list", () => {
 				// Its `handed-off` state wears the Starting window's face
 				// (ADR 0030), the badge itself never drawn.
 				expect(startingFaceOf(frame)).not.toBeNull();
-				expect(runner.commands().join("\n")).not.toContain("agent focus");
-				expect(runner.commands().every((c) => c === READ_COMMAND("pane-implement"))).toBe(true);
+				expect(fake.commands().join("\n")).not.toContain("agent focus");
+				expect(fake.commands().every((c) => c === READ_COMMAND("pane-implement"))).toBe(true);
 			},
-			{ width: WIDTH, height: HEIGHT, props: { config: BASE_CONFIG, runner } },
+			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: { kind: "held" } },
 		);
 	});
 
 	test("a ticket without a recorded pane shows the note and reads nothing", async () => {
-		const runner = new FakeRunner();
+		const planeRecord = await plane({
+			groupingAxis: "none",
+			sources: [{ config: sourceConfig, tickets: [ticketOf(fetched())] }],
+		});
+		// The handoff is claimed and settled with no herdr handles: the ticket
+		// rests in flight with no pane to read.
+		const claim = planeRecord.state.handoff.claimHandoff(
+			identity,
+			{
+				agentType: "pi",
+				environment: "live-worktree",
+				taskType: "implement",
+				model: "",
+				thinking: "",
+				contextWindow: "",
+			},
+			"open",
+		);
+		if (!claim.ok) throw new Error(claim.reason);
+		planeRecord.state.handoff.settleHandoff(claim.claim.attemptId, true, undefined, undefined);
 
 		await withApp(
 			async (setup) => {
-				// Two rows down: the running ticket, with no handoff stored.
-				await press(setup, "j", "the selection to move", (f) =>
-					f.includes("Fix pan drift in split panes"),
-				);
-				await press(setup, "j", "the selection to the running ticket", (f) =>
-					f.includes("Migrate scheduler to clock"),
-				);
 				const frame = await pressEnterQuiet(setup, "the Live view", (f) =>
-					f.includes("Live: Migrate scheduler to clock"),
+					f.includes("Live: Persist source facts"),
 				);
 				expect(frame).toContain("no agent pane is recorded for this ticket");
 				// The context line names the repository, the task type, and the
-				// agent: with no handoff stored, the agent is the question mark.
-				expect(frame).toContain("acme/ingest · implement · ?");
+				// agent: the handoff's own choice stands behind the row.
+				expect(frame).toContain("acme/factory · implement · pi");
 				// The bar names the Goto confirm, once.
 				expect(frame.match(/Goto/g)?.length).toBe(1);
 				expect(frame).toContain("Enter Goto");
 				// No pane to read: the runner was never asked for one.
-				expect(runner.calls).toHaveLength(0);
+				expect(planeRecord.fakeRunner.calls).toHaveLength(0);
 			},
-			{
-				width: WIDTH,
-				height: HEIGHT,
-				props: {
-					config: BASE_CONFIG,
-					runner,
-					initialTickets: [...SAMPLE_TICKETS.slice(0, 2), { ...SAMPLE_TICKETS[2], handoff: null }],
-				},
-			},
+			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: { kind: "held" } },
 		);
 	});
 
 	test("the Key guide names the live-view mode and its controls", async () => {
-		const runner = new FakeRunner();
-		runner.set("herdr", [...READ("pane-implement")], { stdout: "the agent works\n" });
+		const fake = new FakeRunner();
+		fake.set("herdr", [...READ("pane-implement")], { stdout: "the agent works\n" });
+		const planeRecord = await plane({ runner: () => fake });
 
 		await withApp(
 			async (setup) => {
-				await press(setup, "j", "the selection to move", (f) =>
-					f.includes("Fix pan drift in split panes"),
-				);
+				await press(setup, "j", "the running ticket", (f) => markerRowOf(f) === 4);
+				await press(setup, "j", "the starting ticket", (f) => markerRowOf(f) === 5);
 				await pressEnterQuiet(setup, "the Live view", (f) =>
 					f.includes("Live: Fix pan drift in split panes"),
 				);
@@ -696,7 +643,7 @@ describe("the Live view on the ticket list", () => {
 					"Enter Goto - the Agent's pane is not alive in the last poll",
 				]);
 			},
-			{ width: WIDTH, height: HEIGHT, props: { config: BASE_CONFIG, runner } },
+			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: { kind: "held" } },
 		);
 	});
 });
@@ -723,8 +670,8 @@ async function pressEscape(
 
 describe("the Live view against a running factory", () => {
 	test("goto from the Live view focuses the pane and records no decision", async () => {
-		const app = seededApp();
-		app.runner.set("herdr", ["agent", "list"], {
+		const planeRecord = await seededPlane();
+		planeRecord.fakeRunner.set("herdr", ["agent", "list"], {
 			stdout: agentListJson([
 				{
 					paneId: "pane-1",
@@ -735,14 +682,14 @@ describe("the Live view against a running factory", () => {
 				},
 			]),
 		});
-		app.runner.set("herdr", [...READ("pane-1")], { stdout: "working on the layout\n" });
-		app.runner.set("herdr", ["workspace", "get", "ws-1"], {
+		planeRecord.fakeRunner.set("herdr", [...READ("pane-1")], { stdout: "working on the layout\n" });
+		planeRecord.fakeRunner.set("herdr", ["workspace", "get", "ws-1"], {
 			stdout: workspaceGetJson("ws-1", "live-worktree"),
 		});
 
 		await withApp(
 			async (setup) => {
-				app.src.settle(success);
+				planeRecord.settleFirstFetch();
 				await awaitFrame(setup, (f) => f.includes("Persist source facts"), "the ticket row");
 				await pressReturn(setup, "the Live view", (f) => f.includes("Live: Persist source facts"));
 				// Enter confirms the Goto: the focus runs, the view closes. The
@@ -753,22 +700,27 @@ describe("the Live view against a running factory", () => {
 					f.includes("in workspace live-worktree"),
 				);
 				expect(frame).toContain(`Info: focused the agent of ticket ${identity}`);
-				expect(app.runner.commands()).toContain("herdr agent focus pane-1");
+				expect(planeRecord.fakeRunner.commands()).toContain("herdr agent focus pane-1");
 				// The focus is pure: no completion trace exists, and the
 				// ticket is still in flight under its badge.
-				expect(app.state.ticketWorkCycle.lastCompletion(identity)).toBeNull();
-				expect(app.state.ticketWorkCycle.ticketsByState(["awaiting"])).toHaveLength(0);
+				expect(planeRecord.state.ticketWorkCycle.lastCompletion(identity)).toBeNull();
+				expect(planeRecord.state.ticketWorkCycle.ticketsByState(["awaiting"])).toHaveLength(0);
 				expect(frame).not.toContain("Live:");
 				expect(inFlightFace(ticketRow(await settle(setup)))).toBe(true);
 			},
-			{ width: WIDTH, height: HEIGHT, props: propsOf(app) },
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				plane: planeRecord,
+				loopPolicy: { kind: "polled", intervalMs: 20 },
+			},
 		);
-		app.state.close();
+		planeRecord.state.close();
 	});
 
 	test("g in the Ticket base mode focuses the pane and moves no state", async () => {
-		const app = seededApp();
-		app.runner.set("herdr", ["agent", "list"], {
+		const planeRecord = await seededPlane();
+		planeRecord.fakeRunner.set("herdr", ["agent", "list"], {
 			stdout: agentListJson([
 				{
 					paneId: "pane-1",
@@ -779,14 +731,14 @@ describe("the Live view against a running factory", () => {
 				},
 			]),
 		});
-		app.runner.set("herdr", [...READ("pane-1")], { stdout: "working on the layout\n" });
-		app.runner.set("herdr", ["workspace", "get", "ws-1"], {
+		planeRecord.fakeRunner.set("herdr", [...READ("pane-1")], { stdout: "working on the layout\n" });
+		planeRecord.fakeRunner.set("herdr", ["workspace", "get", "ws-1"], {
 			stdout: workspaceGetJson("ws-1", "live-worktree"),
 		});
 
 		await withApp(
 			async (setup) => {
-				app.src.settle(success);
+				planeRecord.settleFirstFetch();
 				await awaitFrame(setup, (f) => f.includes("Persist source facts"), "the ticket row");
 				// `g` is the base-mode Goto (ADR 0033): it focuses the agent's
 				// pane without opening a surface, and the ticket stays in flight
@@ -795,20 +747,25 @@ describe("the Live view against a running factory", () => {
 					f.includes("in workspace live-worktree"),
 				);
 				expect(frame).toContain(`Info: focused the agent of ticket ${identity}`);
-				expect(app.runner.commands()).toContain("herdr agent focus pane-1");
-				expect(app.state.ticketWorkCycle.lastCompletion(identity)).toBeNull();
-				expect(app.state.ticketWorkCycle.ticketsByState(["awaiting"])).toHaveLength(0);
+				expect(planeRecord.fakeRunner.commands()).toContain("herdr agent focus pane-1");
+				expect(planeRecord.state.ticketWorkCycle.lastCompletion(identity)).toBeNull();
+				expect(planeRecord.state.ticketWorkCycle.ticketsByState(["awaiting"])).toHaveLength(0);
 				expect(frame).not.toContain("Live:");
 				expect(inFlightFace(ticketRow(await settle(setup)))).toBe(true);
 			},
-			{ width: WIDTH, height: HEIGHT, props: propsOf(app) },
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				plane: planeRecord,
+				loopPolicy: { kind: "polled", intervalMs: 20 },
+			},
 		);
-		app.state.close();
+		planeRecord.state.close();
 	});
 
 	test("the view turns into the Decision modal when the turn settles", async () => {
-		const app = seededApp();
-		app.runner.set("herdr", ["agent", "list"], {
+		const planeRecord = await seededPlane();
+		planeRecord.fakeRunner.set("herdr", ["agent", "list"], {
 			stdout: agentListJson([
 				{
 					paneId: "pane-1",
@@ -820,19 +777,19 @@ describe("the Live view against a running factory", () => {
 				},
 			]),
 		});
-		app.runner.set("herdr", [...READ("pane-1")], {
+		planeRecord.fakeRunner.set("herdr", [...READ("pane-1")], {
 			stdout: "The fix is in the layout math.\n",
 		});
 
 		await withApp(
 			async (setup) => {
-				app.src.settle(success);
+				planeRecord.settleFirstFetch();
 				await awaitFrame(setup, (f) => f.includes("Persist source facts"), "the ticket row");
 				await pressReturn(setup, "the Live view", (f) => f.includes("Live: Persist source facts"));
 				await awaitFrame(setup, (f) => f.includes("The fix is in the layout math."), "the stream");
 				// The agent reports done: the observation settles the turn,
 				// and the same box turns into the decision.
-				app.runner.set("herdr", ["agent", "list"], {
+				planeRecord.fakeRunner.set("herdr", ["agent", "list"], {
 					stdout: agentListJson([
 						{
 							paneId: "pane-1",
@@ -862,10 +819,10 @@ describe("the Live view against a running factory", () => {
 				// settle fired the implement transition through the command
 				// runner, converged the ticket to its facts, and the review
 				// row stands on the position those labels derived.
-				expect(app.runner.commands()).toContain(
+				expect(planeRecord.fakeRunner.commands()).toContain(
 					"gh issue edit #5 --repo github.com/acme/factory --add-label ready-for-review",
 				);
-				const stored = app.state.ticketWorkCycle.lastCompletion(identity)?.transition;
+				const stored = planeRecord.state.ticketWorkCycle.lastCompletion(identity)?.transition;
 				expect(stored).toEqual(
 					expect.objectContaining({
 						fired: true,
@@ -882,9 +839,14 @@ describe("the Live view against a running factory", () => {
 				await pressReturn(setup, "the close", (f) => f.includes("[open]"));
 				expect(ticketRow(await settle(setup))).toContain("[open]");
 			},
-			{ width: WIDTH, height: HEIGHT, props: propsOf(app) },
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				plane: planeRecord,
+				loopPolicy: { kind: "polled", intervalMs: 20 },
+			},
 		);
-		app.state.close();
+		planeRecord.state.close();
 	});
 
 	test("a settled turn Auto-handoff mode parks for the operator keeps streaming", async () => {
@@ -894,7 +856,7 @@ describe("the Live view against a running factory", () => {
 		// turn rests awaiting with its decision unwritten. Auto-handoff mode owns
 		// the Live view's body (ADR 0092): the stream stands where the operator
 		// left it, and no decision row appears.
-		const app = seededApp({
+		const planeRecord = await seededPlane({
 			taskTypes: {
 				...BASE_CONFIG.taskTypes,
 				implement: {
@@ -907,8 +869,8 @@ describe("the Live view against a running factory", () => {
 				},
 			},
 		});
-		app.state.handoff.setAutoHandoffMode(true);
-		app.runner.set("herdr", ["agent", "list"], {
+		planeRecord.state.handoff.setAutoHandoffMode(true);
+		planeRecord.fakeRunner.set("herdr", ["agent", "list"], {
 			stdout: agentListJson([
 				{
 					paneId: "pane-1",
@@ -920,17 +882,19 @@ describe("the Live view against a running factory", () => {
 				},
 			]),
 		});
-		app.runner.set("herdr", [...READ("pane-1")], { stdout: "the agent is finishing up\n" });
+		planeRecord.fakeRunner.set("herdr", [...READ("pane-1")], {
+			stdout: "the agent is finishing up\n",
+		});
 
 		await withApp(
 			async (setup) => {
-				app.src.settle(success);
+				planeRecord.settleFirstFetch();
 				await awaitFrame(setup, (f) => f.includes("Persist source facts"), "the ticket row");
 				await pressReturn(setup, "the Live view", (f) => f.includes("Live: Persist source facts"));
 				// The agent reports done. The turn settles, and the factory decides
 				// nothing for it: the Operator-decides flag parks the completion
 				// ahead of every outcome check, so the ticket rests awaiting.
-				app.runner.set("herdr", ["agent", "list"], {
+				planeRecord.fakeRunner.set("herdr", ["agent", "list"], {
 					stdout: agentListJson([
 						{
 							paneId: "pane-1",
@@ -944,12 +908,12 @@ describe("the Live view against a running factory", () => {
 				});
 				const deadline = Date.now() + 2000;
 				while (
-					app.state.ticketWorkCycle.ticketState(identity) !== "awaiting" &&
+					planeRecord.state.ticketWorkCycle.ticketState(identity) !== "awaiting" &&
 					Date.now() < deadline
 				) {
 					await sleep(20);
 				}
-				expect(app.state.ticketWorkCycle.ticketState(identity)).toBe("awaiting");
+				expect(planeRecord.state.ticketWorkCycle.ticketState(identity)).toBe("awaiting");
 				const frame = setup.captureCharFrame();
 				// The mode owns the body, not the outcome: the stream stands where
 				// the operator left it, and no decision rows appear at all while the
@@ -957,16 +921,21 @@ describe("the Live view against a running factory", () => {
 				expect(frame).toContain("Live: Persist source facts");
 				expect(frame).toContain("the agent is finishing up");
 				expect(frame).not.toContain("Handoff: review");
-				expect(app.state.ticketWorkCycle.lastCompletion(identity)?.decision).toBeNull();
-				expect(app.state.workQueue.items()).toEqual([]);
+				expect(planeRecord.state.ticketWorkCycle.lastCompletion(identity)?.decision).toBeNull();
+				expect(planeRecord.state.workQueue.items()).toEqual([]);
 			},
-			{ width: WIDTH, height: HEIGHT, props: propsOf(app) },
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				plane: planeRecord,
+				loopPolicy: { kind: "polled", intervalMs: 20 },
+			},
 		);
-		app.state.close();
+		planeRecord.state.close();
 	});
 
 	test("the view turns into the Missing modal when the agent leaves herdr", async () => {
-		const app = seededApp();
+		const planeRecord = await seededPlane();
 		const list = (status: string) =>
 			agentListJson([
 				{
@@ -977,17 +946,17 @@ describe("the Live view against a running factory", () => {
 					status,
 				},
 			]);
-		app.runner.set("herdr", ["agent", "list"], { stdout: list("working") });
-		app.runner.set("herdr", [...READ("pane-1")], { stdout: "the agent works\n" });
+		planeRecord.fakeRunner.set("herdr", ["agent", "list"], { stdout: list("working") });
+		planeRecord.fakeRunner.set("herdr", [...READ("pane-1")], { stdout: "the agent works\n" });
 
 		await withApp(
 			async (setup) => {
-				app.src.settle(success);
+				planeRecord.settleFirstFetch();
 				await awaitFrame(setup, (f) => f.includes("Persist source facts"), "the ticket row");
 				await pressReturn(setup, "the Live view", (f) => f.includes("Live: Persist source facts"));
 				await awaitFrame(setup, (f) => f.includes("the agent works"), "the stream");
 				// The agent leaves herdr: the box carries the missing modal.
-				app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+				planeRecord.fakeRunner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
 				const frame = await awaitFrame(
 					setup,
 					(f) => f.includes("Missing: Persist source facts"),
@@ -997,22 +966,28 @@ describe("the Live view against a running factory", () => {
 				expect(frame).toContain("Abandon");
 				// The agent is back in the list: the stream returns in the
 				// same screen.
-				app.runner.set("herdr", ["agent", "list"], { stdout: list("working") });
+				planeRecord.fakeRunner.set("herdr", ["agent", "list"], { stdout: list("working") });
 				await awaitFrame(
 					setup,
 					(f) => f.includes("Live: Persist source facts") && !f.includes("Missing:"),
 					"the stream to return",
 				);
-				expect(app.state.ticketWorkCycle.ticketState(identity)).toBe("running");
+				expect(planeRecord.state.ticketWorkCycle.ticketState(identity)).toBe("running");
 			},
-			{ width: WIDTH, height: HEIGHT, props: propsOf(app) },
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				plane: planeRecord,
+				loopPolicy: { kind: "polled", intervalMs: 20 },
+			},
 		);
-		app.state.close();
+		planeRecord.state.close();
 	});
 
 	test("a routed handoff from the decision sub-mode falls back to the list, and the Live view follows the new pane (ADR 0072)", async () => {
-		const app = seededApp({}, (p) => routeWorld(p));
-		const checkoutPath = Object.values(app.config.repos)[0];
+		const planeRecord = await seededPlane();
+		stubCheckoutInto(planeRecord.fakeRunner, planeRecord.home);
+		const checkoutPath = join(planeRecord.home, "src", "factory");
 		// The settled agent's pane and the new agent's pane, both live, so
 		// the stream can move to the new pane the moment the handoff settles.
 		const list = (status1: string, status9: string) =>
@@ -1033,29 +1008,22 @@ describe("the Live view against a running factory", () => {
 					status: status9,
 				},
 			]);
-		app.runner.set("herdr", ["agent", "list"], { stdout: list("working", "working") });
+		planeRecord.fakeRunner.set("herdr", ["agent", "list"], { stdout: list("working", "working") });
 		// The stored workspace still holds: the route reuses it in a new tab.
-		app.runner.set("herdr", ["workspace", "list"], {
+		planeRecord.fakeRunner.set("herdr", ["workspace", "list"], {
 			stdout: workspaceListJson([{ id: "ws-1", checkoutPath }]),
 		});
-		app.runner.set("herdr", ["tab", "create", "--workspace", "ws-1", "--no-focus"], {
+		planeRecord.fakeRunner.set("herdr", ["tab", "create", "--workspace", "ws-1", "--no-focus"], {
 			stdout: tabCreateJson("pane-9", "tab-9"),
 		});
-		// The settled ticket's label write goes through the GitHub side, which the
-		// world does not hold: the pin stands it.
-		app.runner.set(
-			"gh",
-			["issue", "edit", "#5", "--repo", repoIdentity, "--add-label", "ready-for-review"],
-			{ code: 0 },
-		);
-		app.runner.set("herdr", [...READ("pane-1")], {
+		planeRecord.fakeRunner.set("herdr", [...READ("pane-1")], {
 			stdout: "the implementer is finishing\n",
 		});
-		app.runner.set("herdr", [...READ("pane-9")], { stdout: "the reviewer is on it\n" });
+		planeRecord.fakeRunner.set("herdr", [...READ("pane-9")], { stdout: "the reviewer is on it\n" });
 
 		await withApp(
 			async (setup) => {
-				app.src.settle(success);
+				planeRecord.settleFirstFetch();
 				await awaitFrame(setup, (f) => f.includes("Persist source facts"), "the ticket row");
 				// The base mode's key handlers, taken at rest on the list before this
 				// walk mounts anything, which is the only place a base means something:
@@ -1066,7 +1034,7 @@ describe("the Live view against a running factory", () => {
 				await awaitFrame(setup, (f) => f.includes("the implementer is finishing"), "the stream");
 				// The agent reports done: the same box turns into the decision,
 				// the border re-titled in place.
-				app.runner.set("herdr", ["agent", "list"], { stdout: list("done", "working") });
+				planeRecord.fakeRunner.set("herdr", ["agent", "list"], { stdout: list("done", "working") });
 				await awaitFrame(
 					setup,
 					(f) => f.includes("Decision: Persist source facts") && f.includes("Handoff: review"),
@@ -1090,7 +1058,9 @@ describe("the Live view against a running factory", () => {
 				);
 				const listFrame = await awaitFallbackToTheList(setup, baseHandlers);
 				expect(listFrame).not.toContain("Live: Persist source facts");
-				expect(app.state.ticketWorkCycle.lastCompletion(identity)?.decision).toBe("handed-off");
+				expect(planeRecord.state.ticketWorkCycle.lastCompletion(identity)?.decision).toBe(
+					"handed-off",
+				);
 				// No Ticket-state line stands here. The fallback lands at the ask,
 				// before the queue's pickup claims the next cycle, so the state the
 				// frame is drawn over is a window (`open`, then `handed-off`, then
@@ -1104,12 +1074,17 @@ describe("the Live view against a running factory", () => {
 					"the Live view again",
 					(f) => f.includes("Live: Persist source facts") && f.includes("the reviewer is on it"),
 				);
-				expect(app.runner.commands()).toContain(READ_COMMAND("pane-9"));
-				expect(app.runner.commands().join("\n")).not.toContain("agent focus");
+				expect(planeRecord.fakeRunner.commands()).toContain(READ_COMMAND("pane-9"));
+				expect(planeRecord.fakeRunner.commands().join("\n")).not.toContain("agent focus");
 			},
-			{ width: WIDTH, height: HEIGHT, props: propsOf(app) },
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				plane: planeRecord,
+				loopPolicy: { kind: "polled", intervalMs: 20 },
+			},
 		);
-		app.state.close();
+		planeRecord.state.close();
 	});
 
 	/**
@@ -1128,8 +1103,9 @@ describe("the Live view against a running factory", () => {
 	}
 
 	test("an Enter in the window between the Live view's last frame and its key release runs no stale behavior (issue #317)", async () => {
-		const app = seededApp({}, (p) => routeWorld(p));
-		const checkoutPath = Object.values(app.config.repos)[0];
+		const planeRecord = await seededPlane();
+		stubCheckoutInto(planeRecord.fakeRunner, planeRecord.home);
+		const checkoutPath = join(planeRecord.home, "src", "factory");
 		const list = (status1: string, status9: string) =>
 			agentListJson([
 				{
@@ -1148,33 +1124,28 @@ describe("the Live view against a running factory", () => {
 					status: status9,
 				},
 			]);
-		app.runner.set("herdr", ["agent", "list"], { stdout: list("working", "working") });
-		app.runner.set("herdr", ["workspace", "list"], {
+		planeRecord.fakeRunner.set("herdr", ["agent", "list"], { stdout: list("working", "working") });
+		planeRecord.fakeRunner.set("herdr", ["workspace", "list"], {
 			stdout: workspaceListJson([{ id: "ws-1", checkoutPath }]),
 		});
-		app.runner.set("herdr", ["tab", "create", "--workspace", "ws-1", "--no-focus"], {
+		planeRecord.fakeRunner.set("herdr", ["tab", "create", "--workspace", "ws-1", "--no-focus"], {
 			stdout: tabCreateJson("pane-9", "tab-9"),
 		});
-		// The settled ticket's label write goes through the GitHub side, which the
-		// world does not hold: the pin stands it.
-		app.runner.set(
-			"gh",
-			["issue", "edit", "#5", "--repo", repoIdentity, "--add-label", "ready-for-review"],
-			{ code: 0 },
-		);
-		app.runner.set("herdr", [...READ("pane-1")], { stdout: "the implementer is finishing\n" });
-		app.runner.set("herdr", [...READ("pane-9")], { stdout: "the reviewer is on it\n" });
+		planeRecord.fakeRunner.set("herdr", [...READ("pane-1")], {
+			stdout: "the implementer is finishing\n",
+		});
+		planeRecord.fakeRunner.set("herdr", [...READ("pane-9")], { stdout: "the reviewer is on it\n" });
 
 		await withApp(
 			async (setup) => {
-				app.src.settle(success);
+				planeRecord.settleFirstFetch();
 				await awaitFrame(setup, (f) => f.includes("Persist source facts"), "the ticket row");
 				// The base mode's key handlers, taken at rest on the list before this
 				// walk mounts anything, the release wait's witness.
 				const base = baseKeyHandlers(setup);
 				await pressReturn(setup, "the Live view", (f) => f.includes("Live: Persist source facts"));
 				await awaitFrame(setup, (f) => f.includes("the implementer is finishing"), "the stream");
-				app.runner.set("herdr", ["agent", "list"], { stdout: list("done", "working") });
+				planeRecord.fakeRunner.set("herdr", ["agent", "list"], { stdout: list("done", "working") });
 				await awaitFrame(
 					setup,
 					(f) => f.includes("Decision: Persist source facts") && f.includes("Handoff: review"),
@@ -1221,16 +1192,23 @@ describe("the Live view against a running factory", () => {
 				expect(frame).not.toContain("already decided");
 				expect(frame).toContain("┌─❯ Tickets");
 				expect(frame).not.toContain("Live: Persist source facts");
-				expect(app.state.ticketWorkCycle.lastCompletion(identity)?.decision).toBe("handed-off");
+				expect(planeRecord.state.ticketWorkCycle.lastCompletion(identity)?.decision).toBe(
+					"handed-off",
+				);
 			},
-			{ width: WIDTH, height: HEIGHT, props: propsOf(app) },
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				plane: planeRecord,
+				loopPolicy: { kind: "polled", intervalMs: 20 },
+			},
 		);
-		app.state.close();
+		planeRecord.state.close();
 	});
 
 	test("esc on the override returns to the Live view, not the decision modal", async () => {
-		const app = seededApp();
-		app.runner.set("herdr", ["agent", "list"], {
+		const planeRecord = await seededPlane();
+		planeRecord.fakeRunner.set("herdr", ["agent", "list"], {
 			stdout: agentListJson([
 				{
 					paneId: "pane-1",
@@ -1242,15 +1220,17 @@ describe("the Live view against a running factory", () => {
 				},
 			]),
 		});
-		app.runner.set("herdr", [...READ("pane-1")], { stdout: "the implementer is finishing\n" });
+		planeRecord.fakeRunner.set("herdr", [...READ("pane-1")], {
+			stdout: "the implementer is finishing\n",
+		});
 
 		await withApp(
 			async (setup) => {
-				app.src.settle(success);
+				planeRecord.settleFirstFetch();
 				await awaitFrame(setup, (f) => f.includes("Persist source facts"), "the ticket row");
 				await pressReturn(setup, "the Live view", (f) => f.includes("Live: Persist source facts"));
 				// The agent reports done: the same box turns into the decision.
-				app.runner.set("herdr", ["agent", "list"], {
+				planeRecord.fakeRunner.set("herdr", ["agent", "list"], {
 					stdout: agentListJson([
 						{
 							paneId: "pane-1",
@@ -1288,18 +1268,24 @@ describe("the Live view against a running factory", () => {
 				expect(frame).toContain("Turn log");
 				// Only the edit is dropped: the turn is still undecided, and no
 				// handoff was claimed.
-				expect(app.state.ticketWorkCycle.ticketState(identity)).toBe("awaiting");
-				expect(app.state.ticketWorkCycle.lastCompletion(identity)?.decision).toBe(null);
-				expect(app.state.handoff.handoffCount(identity)).toBe(1);
+				expect(planeRecord.state.ticketWorkCycle.ticketState(identity)).toBe("awaiting");
+				expect(planeRecord.state.ticketWorkCycle.lastCompletion(identity)?.decision).toBe(null);
+				expect(planeRecord.state.handoff.handoffCount(identity)).toBe(1);
 			},
-			{ width: WIDTH, height: HEIGHT, props: propsOf(app) },
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				plane: planeRecord,
+				loopPolicy: { kind: "polled", intervalMs: 20 },
+			},
 		);
-		app.state.close();
+		planeRecord.state.close();
 	});
 
 	test("a route confirmed through the override falls back to the list, and the Live view follows the new pane (ADR 0072)", async () => {
-		const app = seededApp({}, (p) => routeWorld(p));
-		const checkoutPath = Object.values(app.config.repos)[0];
+		const planeRecord = await seededPlane();
+		stubCheckoutInto(planeRecord.fakeRunner, planeRecord.home);
+		const checkoutPath = join(planeRecord.home, "src", "factory");
 		const list = (implementerStatus: string, reviewerStatus: string) =>
 			agentListJson([
 				{
@@ -1318,33 +1304,28 @@ describe("the Live view against a running factory", () => {
 					status: reviewerStatus,
 				},
 			]);
-		app.runner.set("herdr", ["agent", "list"], { stdout: list("working", "working") });
-		app.runner.set("herdr", ["workspace", "list"], {
+		planeRecord.fakeRunner.set("herdr", ["agent", "list"], { stdout: list("working", "working") });
+		planeRecord.fakeRunner.set("herdr", ["workspace", "list"], {
 			stdout: workspaceListJson([{ id: "ws-1", checkoutPath }]),
 		});
-		app.runner.set("herdr", ["tab", "create", "--workspace", "ws-1", "--no-focus"], {
+		planeRecord.fakeRunner.set("herdr", ["tab", "create", "--workspace", "ws-1", "--no-focus"], {
 			stdout: tabCreateJson("pane-9", "tab-9"),
 		});
-		// The settled ticket's label write goes through the GitHub side, which the
-		// world does not hold: the pin stands it.
-		app.runner.set(
-			"gh",
-			["issue", "edit", "#5", "--repo", repoIdentity, "--add-label", "ready-for-review"],
-			{ code: 0 },
-		);
-		app.runner.set("herdr", [...READ("pane-1")], { stdout: "the implementer is finishing\n" });
-		app.runner.set("herdr", [...READ("pane-9")], { stdout: "the reviewer is on it\n" });
+		planeRecord.fakeRunner.set("herdr", [...READ("pane-1")], {
+			stdout: "the implementer is finishing\n",
+		});
+		planeRecord.fakeRunner.set("herdr", [...READ("pane-9")], { stdout: "the reviewer is on it\n" });
 
 		await withApp(
 			async (setup) => {
-				app.src.settle(success);
+				planeRecord.settleFirstFetch();
 				await awaitFrame(setup, (f) => f.includes("Persist source facts"), "the ticket row");
 				// The base mode's key handlers for the same release wait, taken at the
 				// same place: at rest on the list, before this walk mounts anything.
 				const baseHandlers = baseKeyHandlers(setup);
 				await pressReturn(setup, "the Live view", (f) => f.includes("Live: Persist source facts"));
 				await awaitFrame(setup, (f) => f.includes("the implementer is finishing"), "the stream");
-				app.runner.set("herdr", ["agent", "list"], { stdout: list("done", "working") });
+				planeRecord.fakeRunner.set("herdr", ["agent", "list"], { stdout: list("done", "working") });
 				await awaitFrame(
 					setup,
 					(f) => f.includes("Decision: Persist source facts") && f.includes("Handoff: review"),
@@ -1373,7 +1354,9 @@ describe("the Live view against a running factory", () => {
 				const listFrame = await awaitFallbackToTheList(setup, baseHandlers);
 				expect(listFrame).not.toContain("Live: Persist source facts");
 				expect(listFrame).not.toContain("Edit handoff");
-				expect(app.state.ticketWorkCycle.lastCompletion(identity)?.decision).toBe("handed-off");
+				expect(planeRecord.state.ticketWorkCycle.lastCompletion(identity)?.decision).toBe(
+					"handed-off",
+				);
 				// No Ticket-state line, for the reason the case above states: the
 				// state at the fallback is a window, the decision is the fact.
 				// The Live view reopens on the row and streams the new pane.
@@ -1382,11 +1365,16 @@ describe("the Live view against a running factory", () => {
 					"the Live view again",
 					(f) => f.includes("Live: Persist source facts") && f.includes("the reviewer is on it"),
 				);
-				expect(app.runner.commands()).toContain(READ_COMMAND("pane-9"));
+				expect(planeRecord.fakeRunner.commands()).toContain(READ_COMMAND("pane-9"));
 			},
-			{ width: WIDTH, height: HEIGHT, props: propsOf(app) },
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				plane: planeRecord,
+				loopPolicy: { kind: "polled", intervalMs: 20 },
+			},
 		);
-		app.state.close();
+		planeRecord.state.close();
 	});
 
 	test("the view ends on the work cycle it opened on, with no frame holding the open state (ADR 0110)", async () => {
@@ -1396,8 +1384,8 @@ describe("the Live view against a running factory", () => {
 		// at all (issue #304). The two writes run here by hand, with no projection
 		// read between them, and the view still has to end: the cycle it opened on
 		// is the fact it ends on, not the state a frame happens to catch.
-		const app = seededApp();
-		app.runner.set("herdr", ["agent", "list"], {
+		const planeRecord = await seededPlane();
+		planeRecord.fakeRunner.set("herdr", ["agent", "list"], {
 			stdout: agentListJson([
 				{
 					paneId: "pane-1",
@@ -1409,19 +1397,19 @@ describe("the Live view against a running factory", () => {
 				},
 			]),
 		});
-		app.runner.set("herdr", [...READ("pane-1")], {
+		planeRecord.fakeRunner.set("herdr", [...READ("pane-1")], {
 			stdout: "the implementer is finishing\n",
 		});
 
 		await withApp(
 			async (setup) => {
-				app.src.settle(success);
+				planeRecord.settleFirstFetch();
 				await awaitFrame(setup, (f) => f.includes("Persist source facts"), "the ticket row");
 				await pressReturn(setup, "the Live view", (f) => f.includes("Live: Persist source facts"));
 				await awaitFrame(setup, (f) => f.includes("the implementer is finishing"), "the stream");
 				// The turn settles, so the Ticket rests awaiting with the ask owed:
 				// the state the route's ask ends.
-				app.runner.set("herdr", ["agent", "list"], {
+				planeRecord.fakeRunner.set("herdr", ["agent", "list"], {
 					stdout: agentListJson([
 						{
 							paneId: "pane-1",
@@ -1438,11 +1426,11 @@ describe("the Live view against a running factory", () => {
 					(f) => f.includes("Decision: Persist source facts") && f.includes("Handoff: review"),
 					"the decision",
 				);
-				const attempt = app.state.handoff.latestHandoff(identity);
+				const attempt = planeRecord.state.handoff.latestHandoff(identity);
 				expect(attempt).not.toBeNull();
 				// The ask's write: the decision lands and the cycle ends with it.
 				expect(
-					app.state.ticketWorkCycle.applyCompletionDecision({
+					planeRecord.state.ticketWorkCycle.applyCompletionDecision({
 						ticketIdentity: identity,
 						handoffId: attempt?.handoffId ?? "",
 						decision: "handed-off",
@@ -1452,7 +1440,7 @@ describe("the Live view against a running factory", () => {
 				// The pickup's claim, in the same turn of the event loop: the Ticket
 				// goes straight from its settled turn to the next cycle's in-flight
 				// state, and no read of the projection can stand between them.
-				const claim = app.state.handoff.claimHandoff(
+				const claim = planeRecord.state.handoff.claimHandoff(
 					identity,
 					{
 						agentType: "pi",
@@ -1465,16 +1453,16 @@ describe("the Live view against a running factory", () => {
 					"open",
 				);
 				if (!claim.ok) throw new Error(claim.reason);
-				app.state.handoff.settleHandoff(claim.claim.attemptId, true, undefined, {
+				planeRecord.state.handoff.settleHandoff(claim.claim.attemptId, true, undefined, {
 					paneId: "pane-9",
 					tabId: "tab-9",
 					workspaceId: "ws-1",
 				});
-				expect(app.state.ticketWorkCycle.ticketState(identity)).toBe("handed-off");
+				expect(planeRecord.state.ticketWorkCycle.ticketState(identity)).toBe("handed-off");
 				// The new agent is live in herdr, so the observation reports it and
 				// the plane reads the projection again: the first read that can see
 				// the Ticket at all finds it in the next cycle, in flight.
-				app.runner.set("herdr", ["agent", "list"], {
+				planeRecord.fakeRunner.set("herdr", ["agent", "list"], {
 					stdout: agentListJson([
 						{
 							paneId: "pane-9",
@@ -1485,7 +1473,9 @@ describe("the Live view against a running factory", () => {
 						},
 					]),
 				});
-				app.runner.set("herdr", [...READ("pane-9")], { stdout: "the reviewer is on it\n" });
+				planeRecord.fakeRunner.set("herdr", [...READ("pane-9")], {
+					stdout: "the reviewer is on it\n",
+				});
 				// The screen ends on the cycle, so the list is drawn again with the
 				// Ticket's own row on it.
 				const frame = await awaitFrame(
@@ -1495,9 +1485,14 @@ describe("the Live view against a running factory", () => {
 				);
 				expect(frameText(frame)).toContain("Persist source facts");
 			},
-			{ width: WIDTH, height: HEIGHT, props: propsOf(app) },
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				plane: planeRecord,
+				loopPolicy: { kind: "polled", intervalMs: 20 },
+			},
 		);
-		app.state.close();
+		planeRecord.state.close();
 	});
 
 	test("the cycle ending while the view is open closes the screen", async () => {
@@ -1505,7 +1500,7 @@ describe("the Live view against a running factory", () => {
 		// derives no Next step, so the turn can only end the cycle, never hand
 		// off. The machine decides a settled turn only in Auto mode (ADR 0051,
 		// ADR 0092), so the mode stands on when the view opens.
-		const app = seededApp({
+		const planeRecord = await seededPlane({
 			taskTypes: {
 				...BASE_CONFIG.taskTypes,
 				implement: {
@@ -1514,8 +1509,8 @@ describe("the Live view against a running factory", () => {
 				},
 			},
 		});
-		app.state.handoff.setAutoHandoffMode(true);
-		app.runner.set("herdr", ["agent", "list"], {
+		planeRecord.state.handoff.setAutoHandoffMode(true);
+		planeRecord.fakeRunner.set("herdr", ["agent", "list"], {
 			stdout: agentListJson([
 				{
 					paneId: "pane-1",
@@ -1527,18 +1522,20 @@ describe("the Live view against a running factory", () => {
 				},
 			]),
 		});
-		app.runner.set("herdr", [...READ("pane-1")], { stdout: "the agent is wrapping up\n" });
+		planeRecord.fakeRunner.set("herdr", [...READ("pane-1")], {
+			stdout: "the agent is wrapping up\n",
+		});
 
 		await withApp(
 			async (setup) => {
-				app.src.settle(success);
+				planeRecord.settleFirstFetch();
 				await awaitFrame(setup, (f) => f.includes("Persist source facts"), "the ticket row");
 				await pressReturn(setup, "the Live view", (f) => f.includes("Live: Persist source facts"));
 				await awaitFrame(setup, (f) => f.includes("the agent is wrapping up"), "the stream");
 				// The agent reports done. The turn settles, the auto-close type
 				// decides for the factory, and the cycle ends while the operator
 				// watches: the screen closes on its own.
-				app.runner.set("herdr", ["agent", "list"], {
+				planeRecord.fakeRunner.set("herdr", ["agent", "list"], {
 					stdout: agentListJson([
 						{
 							paneId: "pane-1",
@@ -1558,11 +1555,18 @@ describe("the Live view against a running factory", () => {
 				// The factory decided the turn, and the screen is gone with the
 				// cycle: no choice rows, no box.
 				expect(frame).not.toContain("Handoff: review");
-				expect(app.state.ticketWorkCycle.lastCompletion(identity)?.decision).toBe("auto-closed");
-				expect(app.state.ticketWorkCycle.ticketState(identity)).toBe("open");
+				expect(planeRecord.state.ticketWorkCycle.lastCompletion(identity)?.decision).toBe(
+					"auto-closed",
+				);
+				expect(planeRecord.state.ticketWorkCycle.ticketState(identity)).toBe("open");
 			},
-			{ width: WIDTH, height: HEIGHT, props: propsOf(app) },
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				plane: planeRecord,
+				loopPolicy: { kind: "polled", intervalMs: 20 },
+			},
 		);
-		app.state.close();
+		planeRecord.state.close();
 	});
 });
