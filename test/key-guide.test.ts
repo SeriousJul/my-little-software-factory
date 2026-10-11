@@ -11,9 +11,7 @@
  * sees a key.
  */
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { afterEach, describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import { widthOf } from "../src/components/text.ts";
 import type { FactoryConfig } from "../src/config.ts";
@@ -44,11 +42,9 @@ import {
 	WIDTH,
 	withApp,
 } from "./app-harness.ts";
-import { BASE_CONFIG } from "./base-config.ts";
 import { agentListJson, FakeRunner } from "./fake-runner.ts";
-import { FakeSource } from "./fake-source.ts";
-import { type HerdrWorldDescription, stubHerdrWorld } from "./herdr-world.ts";
-import { SAMPLE_TICKETS } from "./sample-tickets.ts";
+import type { FakeSource } from "./fake-source.ts";
+import { plane, ticketOf } from "./seeded-plane.ts";
 import {
 	cleanupStateFixtures,
 	freshState,
@@ -57,31 +53,17 @@ import {
 	success,
 } from "./state-fixture.ts";
 
-let home = "";
-let configPath = "";
-
-beforeEach(() => {
-	home = join(tmpdir(), `factory-guide-${Math.random().toString(36).slice(2)}`);
-	configPath = join(home, "factory", "config.toml");
-	mkdirSync(join(home, "src", "billing"), { recursive: true });
-});
-
 afterEach(() => {
-	rmSync(home, { recursive: true, force: true });
 	cleanupStateFixtures();
 });
 
-/** The healthy convention checkout, stated as a world. */
-function worldCheckout(): HerdrWorldDescription {
-	return {
-		checkouts: [
-			{
-				path: join(home, "src", "billing"),
-				cloneUrl: "https://github.com/acme/billing.git",
-				defaultBranch: "main",
-			},
-		],
-	};
+/** Stub the git answers for a healthy convention checkout under the home. */
+function stubCheckout(runner: FakeRunner, home: string): void {
+	const path = join(home, "src", "billing");
+	runner.set("git", ["-C", path, "rev-parse", "--git-dir"], { stdout: ".git\n" });
+	runner.set("git", ["-C", path, "remote", "get-url", "origin"], {
+		stdout: "https://github.com/acme/billing.git\n",
+	});
 }
 
 /** Press a guide scroll key and wait for the new range in the guide's bar. */
@@ -174,6 +156,7 @@ async function allGuideRows(setup: Setup): Promise<string[]> {
 describe("the in-app Key guide", () => {
 	test("does not open by itself; ? and F1 open and close it from the Ticket list", async () => {
 		const runner = new FakeRunner();
+		const planeRecord = await plane({ runner: () => runner });
 		await withApp(
 			async (setup) => {
 				expect(await settle(setup)).not.toContain("Key guide");
@@ -188,15 +171,20 @@ describe("the in-app Key guide", () => {
 			{
 				width: WIDTH,
 				height: HEIGHT,
-				props: { config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+				plane: planeRecord,
+				loopPolicy: { kind: "held" },
 			},
 		);
 	});
 
 	test("names the mode it was opened from, in every mode", async () => {
 		const runner = new FakeRunner();
+		const planeRecord = await plane({ runner: () => runner });
 		await withApp(
 			async (setup) => {
+				// The handoff and the override stand on actionable Tickets, so
+				// the boot fetch settles first.
+				planeRecord.settleFirstFetch();
 				// Ticket list.
 				await openGuide(setup, "?", "Key guide - Ticket list");
 				await closeOverlay(setup, "Key guide", "the guide to close");
@@ -204,8 +192,18 @@ describe("the in-app Key guide", () => {
 				await focusDetail(setup);
 				await openGuide(setup, "?", "Key guide - Ticket detail");
 				await closeOverlay(setup, "Key guide", "the guide to close");
-				// Override list row.
+				// Override list row: the override stands on an open ticket, so
+				// walk the selection down from the awaiting one that boots.
 				await focusList(setup);
+				await press(setup, "j", "the selection past the running ticket", (f) =>
+					rowsOf(f)[markerRowOf(f)].includes("Migrat"),
+				);
+				await press(setup, "j", "the selection past the starting ticket", (f) =>
+					rowsOf(f)[markerRowOf(f)].includes("Fix pan drift"),
+				);
+				await press(setup, "j", "the selection onto the open ticket", (f) =>
+					rowsOf(f)[markerRowOf(f)].includes("Retry polic"),
+				);
 				await openPanel(setup);
 				await openGuide(setup, "?", "Key guide - Override list row");
 				await closeOverlay(setup, "Key guide", "the guide to close");
@@ -218,15 +216,15 @@ describe("the in-app Key guide", () => {
 				// The bar keeps the e Override hint forever, so the panel's box
 				// title is the close signal.
 				await closeOverlay(setup, "┌─Override", "the panel to close");
-				// Decision modal: select the awaiting ticket. The list truncates
-				// titles, so the checks use short stable prefixes.
-				await press(setup, "j", "the handed-off ticket", (f) =>
+				// Decision modal: walk back up to the awaiting ticket. The list
+				// truncates titles, so the checks use short stable prefixes.
+				await press(setup, "k", "the starting ticket", (f) =>
 					rowsOf(f)[markerRowOf(f)].includes("Fix pan drift"),
 				);
-				await press(setup, "j", "the running ticket", (f) =>
+				await press(setup, "k", "the running ticket", (f) =>
 					rowsOf(f)[markerRowOf(f)].includes("Migrate scheduler"),
 				);
-				await press(setup, "j", "the awaiting ticket", (f) =>
+				await press(setup, "k", "the awaiting ticket", (f) =>
 					rowsOf(f)[markerRowOf(f)].includes("Drop the legacy"),
 				);
 				await openSurface(setup, "return", "the decision panel", (f) => f.includes("Decision:"));
@@ -238,7 +236,8 @@ describe("the in-app Key guide", () => {
 			{
 				width: WIDTH,
 				height: HEIGHT,
-				props: { config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+				plane: planeRecord,
+				loopPolicy: { kind: "held" },
 			},
 		);
 
@@ -250,7 +249,6 @@ describe("the in-app Key guide", () => {
 			try {
 				const missingRunner = new FakeRunner();
 				missingRunner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
-				const source = new FakeSource("issues", "github-issues", success([issueTicket()]));
 				const sourceDef = { name: "issues", kind: "github-issues" };
 				state.sourceFact.initializeSources([sourceDef]);
 				state.sourceFact.applyFetch(sourceDef, success([issueTicket()]));
@@ -272,10 +270,17 @@ describe("the in-app Key guide", () => {
 					tabId: "tab-1",
 					workspaceId: "ws-1",
 				});
+				const planeRecord = await plane({
+					existing: state,
+					sources: [{ config: issuesConfig.sources[0]!, tickets: [ticketOf(issueTicket())] }],
+					config: issuesConfig,
+					applyFetch: false,
+					runner: () => missingRunner,
+				});
 
 				await withApp(
 					async (setup) => {
-						source.settle(success([issueTicket()]));
+						(planeRecord.sources[0] as FakeSource).settle(success([issueTicket()]));
 						await awaitFrame(
 							setup,
 							(f) => rowsOf(f)[markerRowOf(f)].includes("missing"),
@@ -303,13 +308,8 @@ describe("the in-app Key guide", () => {
 					{
 						width: WIDTH,
 						height: HEIGHT,
-						props: {
-							config: issuesConfig,
-							state,
-							sources: [source],
-							runner: missingRunner,
-							pollIntervalMs: 60_000,
-						},
+						plane: planeRecord,
+						loopPolicy: { kind: "polled", intervalMs: 60_000 },
 					},
 				);
 			} finally {
@@ -338,7 +338,6 @@ describe("the in-app Key guide", () => {
 			if (!enqueued.ok) throw new Error(enqueued.reason);
 			const runner = new FakeRunner();
 			const tickets = [issueTicket()];
-			const source = new FakeSource("issues", "github-issues", success(tickets));
 			// These frames read the waiting item, never a running start. A zero
 			// Parallel limit keeps the cap gate off, and the long poll interval holds
 			// the observation cycle back: at an unlimited cap `pickupWorkQueue` runs
@@ -349,9 +348,16 @@ describe("the in-app Key guide", () => {
 				maxParallelAgents: 0,
 				agentPollIntervalSeconds: 60,
 			};
+			const planeRecord = await plane({
+				existing: state,
+				sources: [{ config: issuesConfig.sources[0]!, tickets: [] }],
+				config: zeroSeatConfig,
+				applyFetch: false,
+				runner: () => runner,
+			});
 			await withApp(
 				async (setup) => {
-					source.settle(success(tickets));
+					(planeRecord.sources[0] as FakeSource).settle(success(tickets));
 					// The Work header stands with its count; it starts expanded (ADR 0049).
 					// Wait for the source's title to reach the queue row as well: the
 					// row holds the raw ticket identity until the first source poll.
@@ -478,7 +484,8 @@ describe("the in-app Key guide", () => {
 				{
 					width: WIDTH,
 					height: 34,
-					props: { config: zeroSeatConfig, state, sources: [source], runner },
+					plane: planeRecord,
+					loopPolicy: { kind: "production" },
 				},
 			);
 		} finally {
@@ -488,6 +495,7 @@ describe("the in-app Key guide", () => {
 
 	test("lists the sections in order, with every control once and all valid aliases", async () => {
 		const runner = new FakeRunner();
+		const planeRecord = await plane({ runner: () => runner });
 		await withApp(
 			async (setup) => {
 				await openGuide(setup, "?");
@@ -523,8 +531,8 @@ describe("the in-app Key guide", () => {
 					}
 				};
 				note(await settle(setup));
-				const ladder = Array.from({ length: 48 }, (_, step) => step + 2).map(
-					(row) => `${row}-${row + 18}/67`,
+				const ladder = Array.from({ length: 49 }, (_, step) => step + 2).map(
+					(row) => `${row}-${row + 18}/68`,
 				);
 				for (const range of ladder) note(await scrollGuide(setup, "j", range));
 				// The Control plane section names the merged Main view's controls -
@@ -547,18 +555,18 @@ describe("the in-app Key guide", () => {
 					"↑↓/jk Move",
 					"→/l Detail",
 					"Enter Queue item - the selected row has no waiting queue item",
-					"Enter Hand off",
+					"Enter Hand off - only an open Ticket can be handed off",
 					"Enter Live view - only an in-flight Ticket has a Live view",
-					"Enter Decide - the selected Ticket has no completion to decide",
-					"g Goto - the Agent's pane is not alive in the last poll",
+					"Enter Decide - opens the decision on a settled Ticket",
+					"g Goto",
 					// The Delete key's Close sits beside Goto: the key that ends the
-					// work cycle, refused here with the open Ticket's own reason
-					// (ADR 0031, ADR 0122).
-					"Delete Close - the selected Ticket is open: no work is in flight to close",
+					// work cycle, available here because the awaiting Ticket's cycle
+					// stands settled (ADR 0031, ADR 0122).
+					"Delete Close",
 					// The ignore and the List filter name the Ticket section's own
 					// two keys (ADR 0060); the section's guide holds them and the
 					// Consultation section's guide holds nothing of either.
-					"i Ignore - hides a resting row and stops every automatic start",
+					"i Ignore - the selected Ticket cannot be ignored: it awaits a decision",
 					// The init's select list names its own key (ADR 0082): the
 					// bootstrap path for a repository with no ticket and no source.
 					"o Select repository",
@@ -576,16 +584,20 @@ describe("the in-app Key guide", () => {
 					"x Section - collapses the section the cursor is in, or expands it back",
 					// The queue's removal answers the Delete key in the Ticket section
 					// too (ADR 0122): it takes the row the cursor's Ticket waits with,
-					// and here it refuses with the open Ticket's row fact.
-					"Delete Remove - the selected Ticket has no waiting queue item",
+					// and here it refuses with the awaiting Ticket's own fact.
+					"Delete Remove - the selected Ticket is not open: Delete closes its work cycle",
 					// The reason is the longest in the guide: the label column
 					// is sized to its content, and what still does not fit
 					// flows onto its own continuation row rather than being
 					// cut.
 					"c Launch - no Consultation types configured; add",
 					"[consultation-types.<name>] to the config file",
-					"e Override",
-					"r Refresh - no Ticket sources exist",
+					// The override refuses on the awaiting Ticket with the path the
+					// catalog names: the decision first, the edit behind it. The
+					// reason wraps on this width, the way the axis note does.
+					"e Override - awaiting ticket: press Enter, then e on a Handoff row to edit",
+					"its settings",
+					"r Refresh - every Ticket source is already refreshing",
 					"F1/? Help",
 					"m/F2 Message - no message has been recorded yet",
 				]);
@@ -624,8 +636,10 @@ describe("the in-app Key guide", () => {
 					"Enter Respond",
 					"Enter Interact",
 					// Goto is cataloged behind Interact: navigation between the
-					// Consultation and the Agent's pane, ADR 0025.
-					"g Goto",
+					// Consultation and the Agent's pane, ADR 0025. The current section's
+					// own Goto stands reason-free on the awaiting Ticket, so the
+					// walk's dedup read it once there, the way the "Esc Cancel" note
+					// below reads the override's cancel once.
 					"r Recover",
 					"a Toggle auto-handoff",
 				]);
@@ -662,7 +676,8 @@ describe("the in-app Key guide", () => {
 			{
 				width: WIDTH,
 				height: HEIGHT,
-				props: { config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+				plane: planeRecord,
+				loopPolicy: { kind: "held" },
 			},
 		);
 	});
@@ -678,6 +693,7 @@ describe("the in-app Key guide", () => {
 	] as const) {
 		test(`keeps every reason in full at ${width} columns`, async () => {
 			const runner = new FakeRunner();
+			const planeRecord = await plane({ runner: () => runner });
 			await withApp(
 				async (setup) => {
 					setup.resize(width, height);
@@ -740,7 +756,8 @@ describe("the in-app Key guide", () => {
 				{
 					width: width,
 					height: height,
-					props: { config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+					plane: planeRecord,
+					loopPolicy: { kind: "held" },
 				},
 			);
 		});
@@ -748,10 +765,17 @@ describe("the in-app Key guide", () => {
 
 	test("catalogs the three meanings of Enter, and runs only one", async () => {
 		const runner = new FakeRunner();
+		const planeRecord = await plane({ runner: () => runner });
 		await withApp(
 			async (setup) => {
 				const rowOf = (rows: string[], needle: string) =>
 					rows.find((row) => norm(row).includes(needle)) ?? "";
+
+				// Walk to the open Ticket: the selection boots on the awaiting
+				// one, and the first part reads the open Ticket's meanings.
+				await press(setup, "j", "the running ticket", (f) => markerRowOf(f) === 4);
+				await press(setup, "j", "the starting ticket", (f) => markerRowOf(f) === 5);
+				await press(setup, "j", "the open ticket", (f) => markerRowOf(f) === 6);
 
 				// The selected Ticket is open, so Enter hands it off. The bar
 				// names that meaning alone: a hint whose key runs the other one
@@ -783,9 +807,9 @@ describe("the in-app Key guide", () => {
 				// keeps Hand off in its current section with the settled fact, so
 				// the operator reading the catalog is never asked to guess what
 				// Enter does there.
-				await press(setup, "j", "the handed-off ticket", (f) => markerRowOf(f) === 4);
-				await press(setup, "j", "the running ticket", (f) => markerRowOf(f) === 5);
-				await press(setup, "j", "the awaiting ticket", (f) => markerRowOf(f) === 6);
+				await press(setup, "k", "the starting ticket", (f) => markerRowOf(f) === 5);
+				await press(setup, "k", "the running ticket", (f) => markerRowOf(f) === 4);
+				await press(setup, "k", "the awaiting ticket", (f) => markerRowOf(f) === 3);
 				await openGuide(setup, "?");
 				rows = rowsOf(await settle(setup));
 				expect(rowOf(rows, "Enter Hand off")).toContain("only an open Ticket can be handed off");
@@ -804,7 +828,7 @@ describe("the in-app Key guide", () => {
 				// The running Ticket answers for one meaning, and the guide says
 				// the rest rather than dropping a row: every key carries its own
 				// reason or note, and the bar states the one Enter runs.
-				await press(setup, "k", "the running ticket", (f) => markerRowOf(f) === 5);
+				await press(setup, "j", "the running ticket", (f) => markerRowOf(f) === 4);
 				await openGuide(setup, "?");
 				rows = rowsOf(await settle(setup));
 				expect(rowOf(rows, "Enter Hand off")).toContain("only an open Ticket can be handed off");
@@ -830,18 +854,19 @@ describe("the in-app Key guide", () => {
 			{
 				width: WIDTH,
 				height: HEIGHT,
-				props: { config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+				plane: planeRecord,
+				loopPolicy: { kind: "held" },
 			},
 		);
 	});
 
 	test("puts decision-modal controls in the current interaction mode", async () => {
 		const runner = new FakeRunner();
+		const planeRecord = await plane({ runner: () => runner });
 		await withApp(
 			async (setup) => {
-				await press(setup, "j", "the handed-off ticket", (f) => markerRowOf(f) === 4);
-				await press(setup, "j", "the running ticket", (f) => markerRowOf(f) === 5);
-				await press(setup, "j", "the awaiting ticket", (f) => markerRowOf(f) === 6);
+				// The selection stands on the awaiting Ticket at boot: the
+				// decision opens straight from it.
 				await openSurface(setup, "return", "the decision panel", (f) => f.includes("Decision:"));
 				await openGuide(setup, "?", "Key guide - Decision modal");
 				const rows = rowsOf(await settle(setup));
@@ -861,13 +886,15 @@ describe("the in-app Key guide", () => {
 			{
 				width: WIDTH,
 				height: HEIGHT,
-				props: { config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+				plane: planeRecord,
+				loopPolicy: { kind: "held" },
 			},
 		);
 	});
 
 	test("marks this mode's unavailability on the current rows only, with the recovery note on Emergency exit", async () => {
 		const runner = new FakeRunner();
+		const planeRecord = await plane({ runner: () => runner });
 		await withApp(
 			async (setup) => {
 				await openGuide(setup, "?");
@@ -876,9 +903,9 @@ describe("the in-app Key guide", () => {
 				const rows = await allGuideRows(setup);
 				const rowOf = (needle: string) => rows.find((row) => norm(row).includes(needle)) ?? "";
 
-				// No sources exist, and nothing has been recorded: both current
-				// controls carry their reason, in the catalogue's words.
-				expect(rowOf("r Refresh")).toContain("no Ticket sources exist");
+				// The boot fetch is in flight, so Refresh carries its reason;
+				// nothing has been recorded, so the Message row carries its own.
+				expect(rowOf("r Refresh")).toContain("every Ticket source is already refreshing");
 				expect(rowOf("m/F2 Message")).toContain("no message has been recorded yet");
 
 				// The recovery note rides the always-available Emergency exit.
@@ -907,13 +934,15 @@ describe("the in-app Key guide", () => {
 			{
 				width: WIDTH,
 				height: HEIGHT,
-				props: { config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+				plane: planeRecord,
+				loopPolicy: { kind: "held" },
 			},
 		);
 	});
 
 	test("paints availability on the guide rows", async () => {
 		const runner = new FakeRunner();
+		const planeRecord = await plane({ runner: () => runner });
 		await withApp(
 			async (setup) => {
 				await openGuide(setup, "?");
@@ -929,7 +958,7 @@ describe("the in-app Key guide", () => {
 				// The mute and the move rows pushed Refresh below the opening
 				// window: step the guide down until its row is on screen, then
 				// read it.
-				for (let step = 0; step < 5; step += 1) {
+				for (let step = 0; step < 12; step += 1) {
 					setup.mockInput.pressKey("j");
 					if ((await settle(setup)).includes("r Refresh")) break;
 				}
@@ -938,13 +967,13 @@ describe("the in-app Key guide", () => {
 				const refreshRow = rowOf("r Refresh");
 				expect(spanColorAt(setup, refreshRow, "r")).toEqual(rgb(roleColor("subtext0")));
 				expect(spanColorAt(setup, refreshRow, "Refresh")).toEqual(rgb(roleColor("subtext0")));
-				expect(spanColorAt(setup, refreshRow, "no Ticket sources exist")).toEqual(
+				expect(spanColorAt(setup, refreshRow, "every Ticket source is already refreshing")).toEqual(
 					rgb(roleColor("subtext0")),
 				);
 
 				// The Global section sits below the first fold: step the guide
 				// down until its rows can be color-checked.
-				for (let step = 0; step < 10; step += 1) {
+				for (let step = 0; step < 20; step += 1) {
 					setup.mockInput.pressKey("j");
 					if ((await settle(setup)).includes("Emergency exit")) break;
 				}
@@ -961,15 +990,21 @@ describe("the in-app Key guide", () => {
 			{
 				width: WIDTH,
 				height: HEIGHT,
-				props: { config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+				plane: planeRecord,
+				loopPolicy: { kind: "held" },
 			},
 		);
 	});
 
 	test("updates availability live while open", async () => {
 		const state = freshState();
-		const source = new FakeSource("issues", "github-issues", success([issueTicket()]));
 		try {
+			const planeRecord = await plane({
+				existing: state,
+				sources: [{ config: issuesConfig.sources[0]!, tickets: [] }],
+				config: issuesConfig,
+				applyFetch: false,
+			});
 			await withApp(
 				async (setup) => {
 					// While the first fetch runs, every source is refreshing:
@@ -991,7 +1026,7 @@ describe("the in-app Key guide", () => {
 
 					// The fetch settles while the guide is open: the reason
 					// leaves and the key takes the focus color, live.
-					source.settle(success([issueTicket()]));
+					(planeRecord.sources[0] as FakeSource).settle(success([issueTicket()]));
 					await awaitFrame(
 						setup,
 						(f) =>
@@ -1016,7 +1051,7 @@ describe("the in-app Key guide", () => {
 						"no Ticket is selected",
 					);
 				},
-				{ width: WIDTH, height: HEIGHT, props: { config: issuesConfig, state, sources: [source] } },
+				{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: { kind: "production" } },
 			);
 		} finally {
 			state.close();
@@ -1025,39 +1060,45 @@ describe("the in-app Key guide", () => {
 
 	test("scrolls with a range and no-ops at the boundaries", async () => {
 		const runner = new FakeRunner();
+		const planeRecord = await plane({ runner: () => runner });
 		await withApp(
 			async (setup) => {
 				await openGuide(setup, "?");
-				expect(actionBarRowOf(await settle(setup))).toContain("1-19/67");
+				expect(actionBarRowOf(await settle(setup))).toContain("1-19/68");
 
-				await scrollGuide(setup, "j", "2-20/67");
-				await scrollGuide(setup, "j", "3-21/67");
-				await scrollGuide(setup, "k", "2-20/67");
-				await scrollGuide(setup, "k", "1-19/67");
+				await scrollGuide(setup, "j", "2-20/68");
+				await scrollGuide(setup, "j", "3-21/68");
+				await scrollGuide(setup, "k", "2-20/68");
+				await scrollGuide(setup, "k", "1-19/68");
 				// Top boundary: k holds the range.
 				setup.mockInput.pressKey("k");
-				expect(await settle(setup, 500)).toContain("1-19/67");
+				expect(await settle(setup, 500)).toContain("1-19/68");
 				// Walk to the bottom, one step per frame.
-				const ladder = Array.from({ length: 48 }, (_, step) => step + 2).map(
-					(row) => `${row}-${row + 18}/67`,
+				const ladder = Array.from({ length: 49 }, (_, step) => step + 2).map(
+					(row) => `${row}-${row + 18}/68`,
 				);
 				for (const range of ladder) await scrollGuide(setup, "j", range);
 				// Bottom boundary: j holds the range.
 				setup.mockInput.pressKey("j");
-				expect(await settle(setup, 500)).toContain("49-67/67");
+				expect(await settle(setup, 500)).toContain("50-68/68");
 			},
 			{
 				width: WIDTH,
 				height: HEIGHT,
-				props: { config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+				plane: planeRecord,
+				loopPolicy: { kind: "held" },
 			},
 		);
 	});
 
 	test("restores the exact base state on close", async () => {
 		const runner = new FakeRunner();
+		const planeRecord = await plane({ runner: () => runner });
 		await withApp(
 			async (setup) => {
+				// The override stands on an actionable Ticket, so the boot
+				// fetch settles first.
+				planeRecord.settleFirstFetch();
 				// The selection.
 				await press(setup, "j", "the selection to move on", (f) => markerRowOf(f) === 4);
 				const selectedBefore = rowsOf(setup.captureCharFrame())[
@@ -1102,10 +1143,11 @@ describe("the in-app Key guide", () => {
 
 				// The override panel's row and typed text. The detail kept the
 				// focus through the guide, so the list takes it back first. The
-				// selection sits on the handed-off ticket, which refuses an
-				// override: back to the open one.
+				// selection sits on the running ticket, which refuses an
+				// override: walk to the open one.
 				await focusList(setup);
-				await press(setup, "k", "the open ticket", (f) => markerRowOf(f) === 3);
+				await press(setup, "j", "the starting ticket", (f) => markerRowOf(f) === 5);
+				await press(setup, "j", "the open ticket", (f) => markerRowOf(f) === 6);
 				await openPanel(setup);
 				await press(setup, "j", "the environment row", (f) => f.includes("❯ Environment"));
 				await press(setup, "j", "the task type row", (f) => f.includes("❯ Task type"));
@@ -1120,13 +1162,15 @@ describe("the in-app Key guide", () => {
 			{
 				width: WIDTH,
 				height: HEIGHT,
-				props: { config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+				plane: planeRecord,
+				loopPolicy: { kind: "held" },
 			},
 		);
 	});
 
 	test("closes on Esc, F1, and ?", async () => {
 		const runner = new FakeRunner();
+		const planeRecord = await plane({ runner: () => runner });
 		await withApp(
 			async (setup) => {
 				await openGuide(setup, "?");
@@ -1138,13 +1182,15 @@ describe("the in-app Key guide", () => {
 			{
 				width: WIDTH,
 				height: HEIGHT,
-				props: { config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+				plane: planeRecord,
+				loopPolicy: { kind: "held" },
 			},
 		);
 	});
 
 	test("ignores the base keys while open", async () => {
 		const runner = new FakeRunner();
+		const planeRecord = await plane({ runner: () => runner });
 		await withApp(
 			async (setup) => {
 				const before = await settle(setup);
@@ -1155,7 +1201,7 @@ describe("the in-app Key guide", () => {
 				setup.mockInput.pressKey("j");
 				await awaitFrame(
 					setup,
-					(f) => actionBarRowOf(f).includes("2-20/67"),
+					(f) => actionBarRowOf(f).includes("2-20/68"),
 					"the guide to scroll",
 				);
 				// e opens no panel, r warns no refresh, q quits nothing,
@@ -1180,15 +1226,24 @@ describe("the in-app Key guide", () => {
 			{
 				width: WIDTH,
 				height: HEIGHT,
-				props: { config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+				plane: planeRecord,
+				loopPolicy: { kind: "held" },
 			},
 		);
 	});
 
 	test("types ? and q into the override text row, and F1 opens the guide there", async () => {
 		const runner = new FakeRunner();
+		const planeRecord = await plane({ runner: () => runner });
 		await withApp(
 			async (setup) => {
+				// The override stands on an actionable open ticket: the boot
+				// fetch settles, and the selection walks down from the awaiting
+				// one that boots.
+				planeRecord.settleFirstFetch();
+				await press(setup, "j", "the running ticket", (f) => markerRowOf(f) === 4);
+				await press(setup, "j", "the starting ticket", (f) => markerRowOf(f) === 5);
+				await press(setup, "j", "the open ticket", (f) => markerRowOf(f) === 6);
 				await openPanel(setup);
 				await press(setup, "j", "the environment row", (f) => f.includes("❯ Environment"));
 				await press(setup, "j", "the task type row", (f) => f.includes("❯ Task type"));
@@ -1208,22 +1263,48 @@ describe("the in-app Key guide", () => {
 			{
 				width: WIDTH,
 				height: HEIGHT,
-				props: { config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+				plane: planeRecord,
+				loopPolicy: { kind: "held" },
 			},
 		);
 	});
 
 	test("excludes the Message view while one is open: F2 goes, F1 returns", async () => {
-		const runner = stubHerdrWorld(worldCheckout());
+		const runner = new FakeRunner();
+		const planeRecord = await plane({
+			runner: () => runner,
+			repos: { "github.com/acme/billing": "src/billing" },
+			// The standing holds two seats (the starting and the running
+			// tickets); the test wants the attempt to run, so a seat stands
+			// free.
+			config: { maxParallelAgents: 3 },
+		});
+		stubCheckout(runner, planeRecord.home);
 		runner.set("herdr", ["workspace", "list"], {
 			code: 1,
 			stderr: `error: the daemon refused the request after the outage. ${"x".repeat(240)}\n`,
 		});
 		await withApp(
 			async (setup) => {
-				// A truncated error: the bar offers m Message.
+				// The handoff attempt stands on an actionable open ticket, so
+				// the boot fetch settles, and the selection walks to an open
+				// one from the awaiting ticket that boots.
+				planeRecord.settleFirstFetch();
+				const selectedRow = (f: string) => rowsOf(f).find((row) => row.startsWith("│ ❯")) ?? "";
+				await press(setup, "j", "the selection past the running ticket", (f) =>
+					selectedRow(f).includes("Migrat"),
+				);
+				await press(setup, "j", "the selection past the Starting window", (f) =>
+					selectedRow(f).includes("Fix pan"),
+				);
+				await press(setup, "j", "the selection onto the open ticket", (f) =>
+					selectedRow(f).includes("Retry polic"),
+				);
+				// The attempt rides the queue and fails on the refused daemon:
+				// the truncated warning stands on the Message line, and the bar
+				// offers m Message.
 				await press(setup, "return", "the failure to land", (f) =>
-					messageRowOf(f).startsWith("Error: error: the daemon refused"),
+					messageRowOf(f).includes("was not run: error: the daemon refused"),
 				);
 				expect(actionBarRowOf(setup.captureCharFrame())).toContain("m Message");
 
@@ -1249,13 +1330,15 @@ describe("the in-app Key guide", () => {
 			{
 				width: WIDTH,
 				height: HEIGHT,
-				props: { config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS, home, configPath },
+				plane: planeRecord,
+				loopPolicy: { kind: "held" },
 			},
 		);
 	});
 
 	test("shows only reachable hints in its Action bar", async () => {
 		const runner = new FakeRunner();
+		const planeRecord = await plane({ runner: () => runner });
 		await withApp(
 			async (setup) => {
 				// The message fits: the bar names Scroll and Close only. F1
@@ -1263,7 +1346,7 @@ describe("the in-app Key guide", () => {
 				await openGuide(setup, "?");
 				const bar = actionBarRowOf(await settle(setup));
 				expect(bar).toContain("↑↓/jk Scroll");
-				expect(bar).toContain("1-19/67");
+				expect(bar).toContain("1-19/68");
 				expect(bar).toContain("Esc/F1/? Close");
 				expect(bar).not.toContain("Help");
 				expect(bar).not.toContain("Message");
@@ -1271,17 +1354,19 @@ describe("the in-app Key guide", () => {
 			{
 				width: WIDTH,
 				height: HEIGHT,
-				props: { config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+				plane: planeRecord,
+				loopPolicy: { kind: "held" },
 			},
 		);
 	});
 
 	test("shrinks with the terminal and keeps its scroll", async () => {
 		const runner = new FakeRunner();
+		const planeRecord = await plane({ runner: () => runner });
 		await withApp(
 			async (setup) => {
 				await openGuide(setup, "?");
-				expect(actionBarRowOf(await settle(setup))).toContain("1-19/67");
+				expect(actionBarRowOf(await settle(setup))).toContain("1-19/68");
 
 				// A short, wide terminal: four visible rows, the full title
 				// still fitting, and more total rows because the reason column is
@@ -1294,13 +1379,13 @@ describe("the in-app Key guide", () => {
 				// reason, the Grouping axis note, and the Recovery note wrap on
 				// this narrow terminal, so the guide runs longer than at the full
 				// width.
-				expect(actionBarRowOf(frame)).toContain("1-4/106");
+				expect(actionBarRowOf(frame)).toContain("1-4/105");
 
-				await scrollGuide(setup, "j", "2-5/106");
+				await scrollGuide(setup, "j", "2-5/105");
 				// Back to size: the scroll the terminal gave back is kept.
 				setup.resize(WIDTH, HEIGHT);
 				frame = await settle(setup);
-				expect(actionBarRowOf(frame)).toContain("2-20/67");
+				expect(actionBarRowOf(frame)).toContain("2-20/68");
 
 				// Below the useful size the terminal takes its compact frame:
 				// the modal caps at the terminal, the title falls back to the
@@ -1319,12 +1404,13 @@ describe("the in-app Key guide", () => {
 				setup.resize(WIDTH, HEIGHT);
 				frame = await settle(setup);
 				expect(frame).toContain("Key guide - Ticket list");
-				expect(actionBarRowOf(frame)).toContain("2-20/67");
+				expect(actionBarRowOf(frame)).toContain("2-20/68");
 			},
 			{
 				width: WIDTH,
 				height: HEIGHT,
-				props: { config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+				plane: planeRecord,
+				loopPolicy: { kind: "held" },
 			},
 		);
 	});
