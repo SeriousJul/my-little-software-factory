@@ -51,7 +51,7 @@ describe("theme inheritance", () => {
 				const borderRow = rows.findIndex((row) => row.includes("┌"));
 				expect(spanColorAt(setup, borderRow, "─")).toEqual([0xbd, 0x93, 0xf9]);
 				// ...the selected row's marker wears its text...
-				const markerRow = rows.findIndex((row) => row.includes("❯ [open]"));
+				const markerRow = rows.findIndex((row) => row.includes("❯ [awaiting]"));
 				expect(spanColorAt(setup, markerRow, "❯")).toEqual([0xf8, 0xf8, 0xf2]);
 				// ...and the Starting window's face wears the theme's detail
 				// tone, in place of the badge it replaced (ADR 0030).
@@ -121,7 +121,7 @@ describe("theme inheritance", () => {
 				const borderRow = rows.findIndex((row) => row.includes("┌"));
 				expect(spanColorAt(setup, borderRow, "─")).toEqual([0x40, 0x78, 0xf2]);
 				// ...the selected row's marker wears the light theme's dark text...
-				const markerRow = rows.findIndex((row) => row.includes("❯ [open]"));
+				const markerRow = rows.findIndex((row) => row.includes("❯ [awaiting]"));
 				expect(spanColorAt(setup, markerRow, "❯")).toEqual([0x38, 0x3a, 0x42]);
 				// ...and the Starting window's face keeps its written word in
 				// the light theme's detail tone. No surface of the plane stays on
@@ -187,7 +187,7 @@ describe("the no-color presentation", () => {
 				// own default: nothing in the frame carries a meaning in color.
 				const borderRow = rows.findIndex((row) => row.includes("┌"));
 				expect(spanColorAt(setup, borderRow, "─")).toEqual([255, 255, 255]);
-				const markerRow = rows.findIndex((row) => row.includes("❯ [open]"));
+				const markerRow = rows.findIndex((row) => row.includes("❯ [awaiting]"));
 				expect(spanColorAt(setup, markerRow, "❯")).toEqual([255, 255, 255]);
 				// The Starting window's face paints no color either (ADR 0030):
 				// the written word stays, the color drops.
