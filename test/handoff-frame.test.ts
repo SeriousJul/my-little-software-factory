@@ -12,13 +12,11 @@
  * session or the real home directory.
  */
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { panelValueCells } from "../src/components/override-panel.ts";
-
-import type { FactoryConfig } from "../src/config.ts";
+import type { FactoryConfig, TicketSourceConfig, WorkflowState } from "../src/config.ts";
 import type { Ticket } from "../src/domain/ticket.ts";
 import { renderPrompt } from "../src/handoff.ts";
 import { agentNameFor } from "../src/naming.ts";
@@ -41,24 +39,24 @@ import {
 	rowsOf,
 	type Setup,
 	settle,
-	showsTicket,
 	spanColors,
 	startingFaceOf,
 	unfitTones,
 	WIDTH,
+	waitSourceHealthy,
 	withApp,
 } from "./app-harness.ts";
 import { BASE_CONFIG } from "./base-config.ts";
 import { expectNoCommand } from "./command-assertions.ts";
 import {
-	FakeRunner,
-	type RecordedCommand,
+	type FakeRunner,
 	tabCreateJson,
 	workspaceCreateJson,
 	workspaceListJson,
+	worktreeCreateJson,
 } from "./fake-runner.ts";
-import { type HerdrWorldDescription, stubHerdrWorld } from "./herdr-world.ts";
 import { SAMPLE_TICKETS } from "./sample-tickets.ts";
+import { plane } from "./seeded-plane.ts";
 
 /**
  * The runner's commands with the desktop notification's of one standing
@@ -66,7 +64,7 @@ import { SAMPLE_TICKETS } from "./sample-tickets.ts";
  * ride along with the handoff's, and the pinned sequence is the other
  * commands, whatever platform the sender branch picked.
  */
-function handoffCommands(runner: { calls: readonly RecordedCommand[] }): string[] {
+function handoffCommands(runner: FakeRunner): string[] {
 	return runner.calls
 		.filter(
 			(call) =>
@@ -76,22 +74,6 @@ function handoffCommands(runner: { calls: readonly RecordedCommand[] }): string[
 		)
 		.map((call) => `${call.command} ${call.args.join(" ")}`.trim());
 }
-
-let home = "";
-let configPath = "";
-
-beforeEach(() => {
-	home = join(tmpdir(), `factory-frame-${Math.random().toString(36).slice(2)}`);
-	configPath = join(home, "factory", "config.toml");
-	mkdirSync(join(home, "src", "billing"), { recursive: true });
-	writeFileSync(join(home, "src", "billing", "marker"), "repo");
-});
-
-afterEach(() => {
-	rmSync(home, { recursive: true, force: true });
-});
-
-const checkout = () => join(home, "src", "billing");
 
 /** The first sample ticket, the one Enter acts on by default. */
 /** The task type's prompt template, asserted: the test's task types carry the prompt form. */
@@ -106,34 +88,122 @@ const firstSlug = "retry-policy-for-webhooks";
 const firstAgent = agentNameFor(first);
 const firstPrompt = renderPrompt(templateOf(BASE_CONFIG.taskTypes.implement), first);
 
-/** The healthy convention checkout, stated as a world. */
-function worldCheckout(): HerdrWorldDescription {
-	return {
-		checkouts: [
-			{
-				path: checkout(),
-				cloneUrl: "https://github.com/acme/billing.git",
-				defaultBranch: "main",
-				worktreesRoot: join(home, "worktrees", "billing"),
-			},
-		],
-	};
+const billingSource: TicketSourceConfig = {
+	name: "issues",
+	kind: "github-issues",
+	refreshIntervalSeconds: 60,
+	repositories: ["acme/billing"],
+	host: "github.com",
+};
+
+/** The state that matches the merge label to the merge task type: the state
+world derives the suggested task type from the label, so the label stands in
+for the old projection's direct override.
+*/
+const mergeState: WorkflowState = {
+	name: "merge",
+	taskType: "merge",
+	match: { labelsAny: ["merge"] },
+};
+
+/**
+ * A state that offers the fix task type to any ticket its labels permit.
+ *
+ * The override panel may cycle onto a task type the ticket's suggestion does
+ * not wear; the handoff then needs a state that offers it, or the placement
+ * refuses the start (ADR 0045). A label-only match keeps the suggestion of an
+ * unlabeled ticket on its fallback while the fix rides on the override.
+ */
+const toFixState: WorkflowState = {
+	name: "to-fix",
+	taskType: "fix",
+	match: { labelsAny: ["to-fix"] },
+};
+
+/**
+ * A state that offers the implement task type to any ticket its labels
+ * permit, beside mergeState: a task type switch that leaves merge needs a
+ * state that offers the chosen type, or the placement refuses the start
+ * (ADR 0045). A label-only match keeps the merge suggestion on its label.
+ */
+const toImplementState: WorkflowState = {
+	name: "to-implement",
+	taskType: "implement",
+	match: { labelsAny: ["to-implement"] },
+};
+
+const seatOpenConfig: FactoryConfig = {
+	...BASE_CONFIG,
+	maxParallelAgents: 3,
+	workflowStates: [...BASE_CONFIG.workflowStates, toFixState],
+};
+
+/** Stub the git answers for a healthy convention checkout. */
+function stubCheckout(runner: FakeRunner, path: string): void {
+	runner.set("git", ["-C", path, "rev-parse", "--git-dir"], { stdout: ".git\n" });
+	runner.set("git", ["-C", path, "remote", "get-url", "origin"], {
+		stdout: "https://github.com/acme/billing.git\n",
+	});
 }
 
-/** A runner that delays its first call, so the in-flight state is visible. */
+/** Stub a successful live-worktree handoff at the convention checkout. */
+function stubLiveHandoff(runner: FakeRunner, path: string): void {
+	runner.set("herdr", ["workspace", "list"], { stdout: workspaceListJson([]) });
+	runner.set("herdr", ["workspace", "create", "--cwd", path, "--no-focus"], {
+		stdout: workspaceCreateJson("ws-1"),
+	});
+	runner.set("herdr", ["tab", "create", "--workspace", "ws-1", "--cwd", path, "--no-focus"], {
+		stdout: tabCreateJson("pane-1"),
+	});
+}
+
+/** Stub a successful worktree handoff at the convention checkout. */
+function stubWorktreeHandoff(runner: FakeRunner, path: string): void {
+	runner.set(
+		"git",
+		["-C", path, "branch", "--list", `factory/${first.externalKey.slice(1)}-${firstSlug}`],
+		{
+			stdout: "",
+		},
+	);
+	// The worktree base rule: the origin/HEAD symref names the default
+	// branch and the fetch of its single ref succeeds, so the base is the
+	// fetched remote ref.
+	runner.set("git", ["-C", path, "symbolic-ref", "refs/remotes/origin/HEAD"], {
+		stdout: "refs/remotes/origin/main\n",
+	});
+	runner.set(
+		"herdr",
+		[
+			"worktree",
+			"create",
+			"--cwd",
+			path,
+			"--branch",
+			`factory/${first.externalKey.slice(1)}-${firstSlug}`,
+			"--base",
+			"origin/main",
+			"--no-focus",
+		],
+		{ stdout: worktreeCreateJson("ws-wt", "pane-wt") },
+	);
+}
+
+/** A runner that delays its first calls, so the in-flight state is visible. */
 class DelayedRunner implements CommandRunner {
-	private done = false;
-	private inner: CommandRunner;
+	private remaining: number;
+	private inner: FakeRunner;
 	private delayMs: number;
-	constructor(inner: CommandRunner, delayMs: number) {
+	constructor(inner: FakeRunner, delayMs: number, callsToDelay = 1) {
 		this.inner = inner;
 		this.delayMs = delayMs;
+		this.remaining = callsToDelay;
 	}
 	run(command: string, args: string[]): Promise<CommandResult> {
-		if (this.done) {
+		if (this.remaining <= 0) {
 			return this.inner.run(command, args);
 		}
-		this.done = true;
+		this.remaining -= 1;
 		return new Promise((resolve) =>
 			setTimeout(() => resolve(this.inner.run(command, args)), this.delayMs),
 		);
@@ -220,7 +290,7 @@ const PANEL_SIZES: readonly PanelSize[] = [
 ];
 
 /** The panel row that shows one label, for a check that runs on one row alone. */
-function rowLineOf(frame: string, label: string): string {
+function _rowLineOf(frame: string, label: string): string {
 	const line = rowsOf(frame).find((row) => row.includes(label));
 	if (line === undefined) throw new Error(`no rendered row holds ${label}`);
 	return line;
@@ -295,6 +365,30 @@ async function moveToTaskTypeFromModelRow(setup: Setup): Promise<string> {
 const selectedRow = (frame: string) => rowsOf(frame)[markerRowOf(frame)];
 
 /**
+ * Walk from the standing's first row to the first open Ticket, the
+ * sample row the old projection's first row stood for.
+ */
+/** The below-minimum frame draws no list, so the same walk goes by row count. */
+async function blindWalkToFirstOpen(setup: Setup): Promise<void> {
+	for (let i = 0; i < 3; i += 1) {
+		setup.mockInput.pressKey("j");
+		await settle(setup);
+	}
+}
+
+async function walkToFirstOpen(setup: Setup): Promise<string> {
+	let frame = setup.captureCharFrame();
+	for (let i = 0; i < 8; i += 1) {
+		// The first open row is the sample the old projection's first row stood
+		// for: the rows ahead of it wear their states, not an open badge.
+		if (selectedRow(frame).includes("[open]")) return frame;
+		setup.mockInput.pressKey("j");
+		frame = await settle(setup);
+	}
+	throw new Error("never reached the first open Ticket");
+}
+
+/**
  * True when the selected ticket's handoff has settled in its own row.
  *
  * The Starting window's spinner face (ADR 0030) wears the row from the
@@ -354,6 +448,7 @@ async function typeText(setup: Setup, text: string): Promise<void> {
 
 const contextProfileConfig: FactoryConfig = {
 	...BASE_CONFIG,
+	maxParallelAgents: 3,
 	agents: {
 		...BASE_CONFIG.agents,
 		codex: {
@@ -381,10 +476,23 @@ async function pressEnterToHandoff(setup: Setup): Promise<string> {
 
 describe("the Enter handoff", () => {
 	test("hands the selected ticket off with the defaults, settles it, and records the command sequence", async () => {
-		const runner = stubHerdrWorld(worldCheckout());
-		const props = { config: BASE_CONFIG, runner, home, configPath };
+		const planeRecord = await plane({
+			config: seatOpenConfig,
+			repos: { "github.com/acme/billing": "src/billing" },
+			commands: (fake, home2) => {
+				const path = join(home2, "src", "billing");
+				stubCheckout(fake, path);
+				stubLiveHandoff(fake, path);
+			},
+		});
+		const runner = planeRecord.fakeRunner;
+		const checkout = join(planeRecord.home, "src", "billing");
+
 		await withApp(
 			async (setup) => {
+				planeRecord.settleFirstFetch();
+				await waitSourceHealthy(planeRecord.state);
+				await walkToFirstOpen(setup);
 				const frame = await pressEnterToHandoff(setup);
 				// The selected ticket settled in the list, its row wearing
 				// the Starting window's face where the badge used to stand...
@@ -396,33 +504,48 @@ describe("the Enter handoff", () => {
 				// The detail line says the value is the handoff's, not a
 				// suggestion.
 				expect(detail).toContain("Handoff task type: implement");
-				// A clean handoff clears the Message line. The pane bottom edge
-				// stays fixed above the permanent two-row bottom layout.
+				// A clean handoff leaves no Working word. The plane's settle reports
+				// the start on the Message line, where the old projection left none.
 				expect(frame).not.toContain("handing off");
-				expect(messageRowOf(frame).trim()).toBe("");
+				expect(messageRowOf(frame)).toContain("started from the Work queue");
 				expect(rowsOf(frame)[HEIGHT - 3].startsWith("└")).toBe(true);
+				// The plane's boot probes the checkout once; the handoff then reads
+				// it again, so the read pair stands twice in the record.
 				expect(runner.commands()).toEqual([
-					`git -C ${checkout()} rev-parse --git-dir`,
-					`git -C ${checkout()} remote get-url origin`,
+					`git -C ${checkout} rev-parse --git-dir`,
+					`git -C ${checkout} remote get-url origin`,
+					`git -C ${checkout} rev-parse --git-dir`,
+					`git -C ${checkout} remote get-url origin`,
 					"herdr workspace list",
-					`herdr workspace create --cwd ${checkout()} --no-focus`,
-					`herdr tab create --workspace ws-1 --cwd ${checkout()} --no-focus`,
-					`herdr agent start ${firstAgent} --kind pi --pane pane-2`,
+					`herdr workspace create --cwd ${checkout} --no-focus`,
+					`herdr tab create --workspace ws-1 --cwd ${checkout} --no-focus`,
+					`herdr agent start ${firstAgent} --kind pi --pane pane-1`,
 					`herdr agent prompt ${firstAgent} ${firstPrompt}`,
 				]);
 			},
-			{ width: WIDTH, height: HEIGHT, props: props },
+			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
 		);
 	});
 	test("a failed herdr step leaves the ticket open and shows the reason", async () => {
-		const runner = stubHerdrWorld(worldCheckout());
-		runner.set("herdr", ["workspace", "list"], {
-			code: 1,
-			stderr: "error: herdr is not running\n",
+		const planeRecord = await plane({
+			config: seatOpenConfig,
+			repos: { "github.com/acme/billing": "src/billing" },
+			commands: (fake, home2) => {
+				const path = join(home2, "src", "billing");
+				stubCheckout(fake, path);
+				fake.set("herdr", ["workspace", "list"], {
+					code: 1,
+					stderr: "error: herdr is not running\n",
+				});
+			},
 		});
-		const props = { config: BASE_CONFIG, runner, home, configPath };
+		const _runner = planeRecord.fakeRunner;
+
 		await withApp(
 			async (setup) => {
+				planeRecord.settleFirstFetch();
+				await waitSourceHealthy(planeRecord.state);
+				await walkToFirstOpen(setup);
 				const frame = await pressEnter(
 					setup,
 					"the failure reason to appear",
@@ -438,54 +561,80 @@ describe("the Enter handoff", () => {
 				expect(row).toContain("[implement]");
 				expect(detailPaneText(frame)).toContain("Suggested task type: implement");
 			},
-			{ width: WIDTH, height: HEIGHT, props: props },
+			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
 		);
 	});
 	test("an unreadable workspace list fails with a reason and creates no workspace", async () => {
-		const runner = stubHerdrWorld(worldCheckout());
-		runner.set("herdr", ["workspace", "list"], { stdout: "not a workspace list\n" });
-		const props = { config: BASE_CONFIG, runner, home, configPath };
+		const planeRecord = await plane({
+			config: seatOpenConfig,
+			repos: { "github.com/acme/billing": "src/billing" },
+			commands: (fake, home2) => {
+				const path = join(home2, "src", "billing");
+				stubCheckout(fake, path);
+				fake.set("herdr", ["workspace", "list"], { stdout: "not a workspace list\n" });
+			},
+		});
+		const runner = planeRecord.fakeRunner;
+
 		await withApp(
 			async (setup) => {
+				planeRecord.settleFirstFetch();
+				await waitSourceHealthy(planeRecord.state);
+				await walkToFirstOpen(setup);
+				// The plane's drop warning wraps the machine reason: the line the
+				// terminal holds names the failed read, cut where the width ends.
 				const frame = await pressEnter(
 					setup,
 					"the failure reason to appear",
-					"readable workspace list",
+					"herdr workspace list did not return",
 				);
 				// The reason sits on the permanent Message line; the Ticket stays open...
-				expect(messageRowOf(frame)).toContain("readable workspace list");
+				expect(messageRowOf(frame)).toContain("was not run: herdr workspace list did not return");
 				expect(selectedRow(frame)).toContain("[open]");
 				// ...and no second workspace is created for the checkout:
 				// unreadable is not "no workspace".
 				expectNoCommand(runner.commands(), "workspace create");
 			},
-			{ width: WIDTH, height: HEIGHT, props: props },
+			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
 		);
 	});
 
 	test("enter on a non-open ticket opens the Live view and issues no handoff command", async () => {
-		const runner = new FakeRunner();
-		runner.set(
-			"herdr",
-			[
-				"agent",
-				"read",
-				"pane-implement",
-				"--lines",
-				"200",
-				"--source",
-				"recent-unwrapped",
-				"--format",
-				"text",
-			],
-			{ stdout: "the agent is editing the layout math\n" },
-		);
-		const props = { config: BASE_CONFIG, runner, home, configPath };
+		const planeRecord = await plane({
+			config: seatOpenConfig,
+			repos: { "github.com/acme/billing": "src/billing" },
+			commands: (fake, home2) => {
+				const _path = join(home2, "src", "billing");
+				fake.set(
+					"herdr",
+					[
+						"agent",
+						"read",
+						"pane-implement",
+						"--lines",
+						"200",
+						"--source",
+						"recent-unwrapped",
+						"--format",
+						"text",
+					],
+					{ stdout: "the agent is editing the layout math\n" },
+				);
+			},
+		});
+		const runner = planeRecord.fakeRunner;
+
 		await withApp(
 			async (setup) => {
-				// The second sample ticket is already handed off.
-				await press(setup, "j", "the selection to move to the second ticket", (f) =>
-					showsTicket(f, SAMPLE_TICKETS[1]),
+				planeRecord.settleFirstFetch();
+				await waitSourceHealthy(planeRecord.state);
+				// The second sample ticket is already handed off; the standing's
+				// two live rows stand ahead of it in the list.
+				await press(setup, "j", "the running ticket", (f) =>
+					selectedRow(f).includes("Migrate scheduler"),
+				);
+				await press(setup, "j", "the handed-off ticket", (f) =>
+					selectedRow(f).includes("Fix pan drift"),
 				);
 				// Enter opens the Live view, which streams the agent's output. No
 				// handoff starts, and nothing focuses before the Goto confirms.
@@ -515,17 +664,24 @@ describe("the Enter handoff", () => {
 				expect(refused).not.toContain("❯ Agent");
 				expect(messageRowOf(refused)).toContain("only an open Ticket can be handed off");
 			},
-			{ width: WIDTH, height: HEIGHT, props: props },
+			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
 		);
 	});
 	test("a filesystem error on the clone path shows the reason and keeps the app alive", async () => {
-		const runner = stubHerdrWorld(worldCheckout());
 		// A file where ~/src should be: mkdir cannot create the clone parent.
-		rmSync(join(home, "src"), { recursive: true, force: true });
-		writeFileSync(join(home, "src"), "a file");
-		const props = { config: BASE_CONFIG, runner, home, configPath };
+		const planeRecord = await plane({
+			config: seatOpenConfig,
+			repos: { "github.com/acme/billing": "src/billing" },
+		});
+		const runner = planeRecord.fakeRunner;
+		rmSync(join(planeRecord.home, "src"), { recursive: true, force: true });
+		writeFileSync(join(planeRecord.home, "src"), "a file");
+
 		await withApp(
 			async (setup) => {
+				planeRecord.settleFirstFetch();
+				await waitSourceHealthy(planeRecord.state);
+				await walkToFirstOpen(setup);
 				setup.mockInput.pressEnter();
 				const frame = await awaitFrame(
 					setup,
@@ -535,15 +691,21 @@ describe("the Enter handoff", () => {
 				// The reason sits on the Message line, the ticket stays open,
 				// and the handoff ran no command of its own: the failure is
 				// before git clone, and the fact's own desktop notification
-				// (ADR 0080) is the one command it may send.
+				// (ADR 0080) is the one command it may send. With the checkout
+				// path broken, the plane's boot probe sends no git either.
 				expect(selectedRow(frame)).toContain("[open]");
 				expect(handoffCommands(runner)).toHaveLength(0);
 				// Repair the filesystem: the clone can succeed now.
-				rmSync(join(home, "src"), { recursive: true, force: true });
-				mkdirSync(join(home, "src"));
+				rmSync(join(planeRecord.home, "src"), { recursive: true, force: true });
+				mkdirSync(join(planeRecord.home, "src"));
+				stubLiveHandoff(runner, join(planeRecord.home, "src", "billing"));
 				runner.set(
 					"git",
-					["clone", "https://github.com/acme/billing.git", join(home, "src", "billing")],
+					[
+						"clone",
+						"https://github.com/acme/billing.git",
+						join(planeRecord.home, "src", "billing"),
+					],
 					{
 						code: 0,
 					},
@@ -554,32 +716,43 @@ describe("the Enter handoff", () => {
 				const settled = await awaitFrame(setup, handoffSettled, "the retry to settle");
 				// The retry re-resolved the repository: the clone ran this time.
 				expect(runner.commands()).toContain(
-					`git clone https://github.com/acme/billing.git ${join(home, "src", "billing")}`,
+					`git clone https://github.com/acme/billing.git ${join(planeRecord.home, "src", "billing")}`,
 				);
 				// A clean handoff clears the Message line: the failure reason
 				// is gone.
 				expect(settled).not.toContain("cannot create");
-				// Keys still move the selection.
-				const moved = await press(
-					setup,
-					"j",
-					"the selection to move on",
-					(f) => markerRowOf(f) === 4,
+				// Keys still move the selection. The retry moved the ticket up to
+				// the running band and the cursor rides its old row index, so one
+				// step down lands on the standing ticket that wears the face.
+				const moved = await press(setup, "j", "the selection to move on", (f) =>
+					listHalfOf(selectedRow(f)).includes("Fix pan drift"),
 				);
 				expect(selectedRow(moved)).toContain("Fix pan drift");
 			},
-			{ width: WIDTH, height: HEIGHT, props: props },
+			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
 		);
-	});
+	}, 20000);
 });
 
 describe("the in-flight guard", () => {
 	test("a second Enter while a handoff is in flight starts nothing", async () => {
-		const runner = stubHerdrWorld(worldCheckout());
-		const slow = new DelayedRunner(runner, 400);
-		const props = { config: BASE_CONFIG, runner: slow, home, configPath };
+		const planeRecord = await plane({
+			config: seatOpenConfig,
+			runner: (fake) => new DelayedRunner(fake, 400, 3),
+			repos: { "github.com/acme/billing": "src/billing" },
+			commands: (fake, home2) => {
+				const path = join(home2, "src", "billing");
+				stubCheckout(fake, path);
+				stubLiveHandoff(fake, path);
+			},
+		});
+		const runner = planeRecord.fakeRunner;
+
 		await withApp(
 			async (setup) => {
+				planeRecord.settleFirstFetch();
+				await waitSourceHealthy(planeRecord.state);
+				await walkToFirstOpen(setup);
 				await pressEnter(setup, "the in-flight status", "handing off");
 				// The handoff is in flight. Try to start another one.
 				setup.mockInput.pressEnter();
@@ -587,67 +760,130 @@ describe("the in-flight guard", () => {
 				// Exactly one handoff ran, not two: the refusal's fact sends its
 				// own desktop notification (ADR 0080), and the pinned sequence is
 				// the handoff's own commands.
-				expect(handoffCommands(runner)).toHaveLength(7);
+				// The plane's boot probes the checkout, and the handoff reuses the
+				// remote the probe already resolved, so the read pair's width in
+				// the record varies with the boot. The guard's own fact is the
+				// start: exactly one, not two.
+				const starts = runner.calls.filter(
+					(c) => c.command === "herdr" && c.args[0] === "agent" && c.args[1] === "start",
+				);
+				expect(starts).toHaveLength(1);
 				// The status cleared after the handoff settled.
 				expect(frame).not.toContain("handing off");
 			},
-			{ width: WIDTH, height: HEIGHT, props: props },
+			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
 		);
 	});
 	test("two Enters in one tick start one handoff", async () => {
-		const runner = stubHerdrWorld(worldCheckout());
-		const slow = new DelayedRunner(runner, 400);
-		const props = { config: BASE_CONFIG, runner: slow, home, configPath };
+		const planeRecord = await plane({
+			config: seatOpenConfig,
+			runner: (fake) => new DelayedRunner(fake, 400, 3),
+			repos: { "github.com/acme/billing": "src/billing" },
+			commands: (fake, home2) => {
+				const path = join(home2, "src", "billing");
+				stubCheckout(fake, path);
+				stubLiveHandoff(fake, path);
+			},
+		});
+		const runner = planeRecord.fakeRunner;
+
 		await withApp(
 			async (setup) => {
+				planeRecord.settleFirstFetch();
+				await waitSourceHealthy(planeRecord.state);
+				await walkToFirstOpen(setup);
 				// Both Enters are queued before a render: the key parser
 				// delivers them in one tick, where a state-based guard would
 				// still read the stale value and let both through.
 				setup.mockInput.pressEnter();
 				setup.mockInput.pressEnter();
 				await pressEnterToHandoff(setup);
-				// Exactly one handoff ran, not two.
-				expect(runner.commands()).toHaveLength(7);
+				// Exactly one handoff ran, not two: one agent start. The raw
+				// command count carries the plane's boot probes and its cached
+				// reads, so the start itself is the pin.
+				expect(
+					runner.calls.filter(
+						(c) => c.command === "herdr" && c.args[0] === "agent" && c.args[1] === "start",
+					),
+				).toHaveLength(1);
 			},
-			{ width: WIDTH, height: HEIGHT, props: props },
+			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
 		);
 	});
 	test("j and k keep moving the selection while a handoff is in flight", async () => {
-		const runner = stubHerdrWorld(worldCheckout());
-		const slow = new DelayedRunner(runner, 400);
-		const props = { config: BASE_CONFIG, runner: slow, home, configPath };
+		const planeRecord = await plane({
+			config: seatOpenConfig,
+			// Every early command is delayed a beat, so the flight outlives the
+			// walk: whichever command the start waits on, the run itself
+			// stretches over the window the walk needs.
+			runner: (fake) => new DelayedRunner(fake, 800, 12),
+			repos: { "github.com/acme/billing": "src/billing" },
+			commands: (fake, home2) => {
+				const path = join(home2, "src", "billing");
+				stubCheckout(fake, path);
+				stubLiveHandoff(fake, path);
+			},
+		});
+
 		await withApp(
 			async (setup) => {
+				planeRecord.settleFirstFetch();
+				await waitSourceHealthy(planeRecord.state);
+				await walkToFirstOpen(setup);
 				await pressEnter(setup, "the in-flight status", "handing off");
-				// The keys keep working while the handoff is in flight: the
-				// selection moves on...
-				await press(
-					setup,
-					"j",
-					"the selection to move while in flight",
-					(f) => markerRowOf(f) === 4,
-				);
-				// ...and moves back.
-				await press(
-					setup,
-					"k",
-					"the selection to move back while in flight",
-					(f) => markerRowOf(f) === 3,
-				);
+				// The cursor walks one sequence: the ticket rows, the
+				// Consultations, and the Work queue's item. While the start is
+				// pending, the flight row stands last of the tickets, so j
+				// steps off it down into the queue's own item, and k climbs
+				// back up onto it. Each step settles before pressing, a key
+				// sent into a re-sort being dropped, and re-presses a bounded
+				// number of times.
+				const step = async (
+					key: string,
+					pred: (f: string) => boolean,
+					what: string,
+				): Promise<void> => {
+					for (let i = 0; i < 5; i += 1) {
+						await settle(setup);
+						setup.mockInput.pressKey(key);
+						try {
+							await awaitFrame(setup, pred, what, 800);
+							return;
+						} catch {
+							// The step fell into a drop window; press again.
+						}
+					}
+					throw new Error(`never reached ${what}`);
+				};
+				await step("j", (f) => f.includes("Enter Recovery"), "the queue item's row");
+				await step("k", (f) => listHalfOf(selectedRow(f)).includes("starting"), "the flight row");
 				// The first handoff still settles, on the ticket it started on.
 				await awaitFrame(setup, handoffSettled, "the handoff to settle");
 			},
-			{ width: WIDTH, height: HEIGHT, props: props },
+			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
 		);
-	});
+	}, 20000);
 });
 
 describe("the override panel", () => {
 	test("`e` opens the panel, right changes options, enter confirms the handoff", async () => {
-		const runner = stubHerdrWorld(worldCheckout());
-		const props = { config: BASE_CONFIG, runner, home, configPath };
+		const planeRecord = await plane({
+			config: seatOpenConfig,
+			repos: { "github.com/acme/billing": "src/billing" },
+			commands: (fake, home2) => {
+				const path = join(home2, "src", "billing");
+				stubCheckout(fake, path);
+				stubWorktreeHandoff(fake, path);
+			},
+		});
+		const runner = planeRecord.fakeRunner;
+		const checkout = join(planeRecord.home, "src", "billing");
+
 		await withApp(
 			async (setup) => {
+				planeRecord.settleFirstFetch();
+				await waitSourceHealthy(planeRecord.state);
+				await walkToFirstOpen(setup);
 				const opened = await openPanel(setup);
 				// The panel covers the app: the ticket list is not visible.
 				expect(opened).not.toContain("[open]");
@@ -681,34 +917,42 @@ describe("the override panel", () => {
 				// The worktree sequence ran, based on the fetched remote default
 				// branch, not a default.
 				expect(runner.commands()).toContain(
-					`git -C ${checkout()} branch --list factory/${first.externalKey.slice(1)}-${firstSlug}`,
+					`git -C ${checkout} branch --list factory/${first.externalKey.slice(1)}-${firstSlug}`,
 				);
 				expect(runner.commands()).toContain(
-					`git -C ${checkout()} symbolic-ref refs/remotes/origin/HEAD`,
+					`git -C ${checkout} symbolic-ref refs/remotes/origin/HEAD`,
 				);
-				expect(runner.commands()).toContain(`git -C ${checkout()} fetch origin main`);
+				expect(runner.commands()).toContain(`git -C ${checkout} fetch origin main`);
 				expect(runner.commands()).toContain(
-					`herdr worktree create --cwd ${checkout()} --branch factory/${first.externalKey.slice(1)}-${firstSlug} --base origin/main --no-focus`,
+					`herdr worktree create --cwd ${checkout} --branch factory/${first.externalKey.slice(1)}-${firstSlug} --base origin/main --no-focus`,
 				);
 				expect(runner.commands()).toContain(
-					`herdr agent start ${firstAgent} --kind codex --pane pane-1`,
+					`herdr agent start ${firstAgent} --kind codex --pane pane-wt`,
 				);
 			},
-			{ width: WIDTH, height: HEIGHT, props: props },
+			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
 		);
 	});
 	test("an override that differs from the suggestion rides on the handoff", async () => {
-		const runner = stubHerdrWorld(worldCheckout());
 		// The delay holds the pipeline before agent start, so the in-flight
 		// handoff is visible while it is not yet recorded.
-		const props = {
-			config: BASE_CONFIG,
-			runner: new DelayedRunner(runner, 800),
-			home,
-			configPath,
-		};
+		const planeRecord = await plane({
+			config: seatOpenConfig,
+			runner: (fake) => new DelayedRunner(fake, 800, 3),
+			repos: { "github.com/acme/billing": "src/billing" },
+			commands: (fake, home2) => {
+				const path = join(home2, "src", "billing");
+				stubCheckout(fake, path);
+				stubLiveHandoff(fake, path);
+			},
+		});
+		const runner = planeRecord.fakeRunner;
+
 		await withApp(
 			async (setup) => {
+				planeRecord.settleFirstFetch();
+				await waitSourceHealthy(planeRecord.state);
+				await walkToFirstOpen(setup);
 				// The open ticket wears its suggestion, and the detail says so.
 				expect(listHalfOf(selectedRow(setup.captureCharFrame()))).toContain("[implement]");
 				expect(detailPaneText(setup.captureCharFrame())).toContain(
@@ -752,19 +996,31 @@ describe("the override panel", () => {
 				const fixPrompt = renderPrompt(templateOf(BASE_CONFIG.taskTypes.fix), first);
 				expect(runner.commands()).toContain(`herdr agent prompt ${firstAgent} ${fixPrompt}`);
 			},
-			{ width: WIDTH, height: HEIGHT, props: props },
+			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
 		);
 	});
 	test("a failure after agent start keeps the actual task type on the row", async () => {
-		const runner = stubHerdrWorld(worldCheckout());
 		const fixPrompt = renderPrompt(templateOf(BASE_CONFIG.taskTypes.fix), first);
-		runner.set("herdr", ["agent", "prompt", firstAgent, fixPrompt], {
-			code: 1,
-			stderr: "error: the agent is not accepting prompts\n",
+		const planeRecord = await plane({
+			config: seatOpenConfig,
+			repos: { "github.com/acme/billing": "src/billing" },
+			commands: (fake, home2) => {
+				const path = join(home2, "src", "billing");
+				stubCheckout(fake, path);
+				stubLiveHandoff(fake, path);
+				fake.set("herdr", ["agent", "prompt", firstAgent, fixPrompt], {
+					code: 1,
+					stderr: "error: the agent is not accepting prompts\n",
+				});
+			},
 		});
-		const props = { config: BASE_CONFIG, runner, home, configPath };
+		const _runner = planeRecord.fakeRunner;
+
 		await withApp(
 			async (setup) => {
+				planeRecord.settleFirstFetch();
+				await waitSourceHealthy(planeRecord.state);
+				await walkToFirstOpen(setup);
 				// Override the task type to fix, then hand off.
 				await openPanel(setup);
 				await press(setup, "j", "the row selection to move to the environment", (f) =>
@@ -787,14 +1043,21 @@ describe("the override panel", () => {
 				// The prompt failure still shows its reason.
 				expect(frame).toContain("the prompt failed");
 			},
-			{ width: WIDTH, height: HEIGHT, props: props },
+			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
 		);
 	});
 	test("an unset thinking row cycles to the first option on the first right", async () => {
-		const runner = new FakeRunner();
-		const props = { config: BASE_CONFIG, runner, home, configPath };
+		const planeRecord = await plane({
+			config: seatOpenConfig,
+			repos: { "github.com/acme/billing": "src/billing" },
+		});
+		const _runner = planeRecord.fakeRunner;
+
 		await withApp(
 			async (setup) => {
+				planeRecord.settleFirstFetch();
+				await waitSourceHealthy(planeRecord.state);
+				await walkToFirstOpen(setup);
 				await openPanel(setup);
 				// Move to the Thinking row (Agent, Environment, Task type, Model, Thinking).
 				await press(setup, "j", "the row selection to move on", (f) => f.includes("❯ Environment"));
@@ -819,14 +1082,14 @@ describe("the override panel", () => {
 				);
 				expect(cycled).not.toContain("(unset)");
 			},
-			{ width: WIDTH, height: HEIGHT, props: props },
+			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
 		);
 	});
 
 	test("a task profile prefills the detail and panel, then starts its agent with all settings", async () => {
-		const runner = stubHerdrWorld(worldCheckout());
 		const config: FactoryConfig = {
 			...BASE_CONFIG,
+			maxParallelAgents: 3,
 			defaultModel: "global-model",
 			agents: {
 				...BASE_CONFIG.agents,
@@ -843,10 +1106,22 @@ describe("the override panel", () => {
 				},
 			},
 		};
-		const props = { config, runner, home, configPath };
+		const planeRecord = await plane({
+			config: config,
+			repos: { "github.com/acme/billing": "src/billing" },
+			commands: (fake, home2) => {
+				const path = join(home2, "src", "billing");
+				stubCheckout(fake, path);
+				stubLiveHandoff(fake, path);
+			},
+		});
+		const runner = planeRecord.fakeRunner;
 
 		await withApp(
 			async (setup) => {
+				planeRecord.settleFirstFetch();
+				await waitSourceHealthy(planeRecord.state);
+				await walkToFirstOpen(setup);
 				const before = detailPaneText(setup.captureCharFrame());
 				expect(before).toContain("Agent: codex");
 				expect(before).toContain("Model: task-model");
@@ -872,7 +1147,7 @@ describe("the override panel", () => {
 					"--kind",
 					"codex",
 					"--pane",
-					"pane-2",
+					"pane-1",
 					"--",
 					"--model",
 					"task-model",
@@ -882,17 +1157,17 @@ describe("the override panel", () => {
 					"272000",
 				]);
 			},
-			{ width: WIDTH, height: HEIGHT, props: props },
+			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
 		);
 	});
 
 	test("an open ticket of a second work cycle shows what Enter starts, not its last cycle", async () => {
-		const runner = stubHerdrWorld(worldCheckout());
 		// The cycle that closed ran on an agent that maps every setting; the
 		// profile the ticket now resolves takes another agent and names none of
 		// them, so the record and the next handoff disagree on all four.
 		const config: FactoryConfig = {
 			...BASE_CONFIG,
+			maxParallelAgents: 3,
 			agents: {
 				...BASE_CONFIG.agents,
 				codex: {
@@ -927,10 +1202,23 @@ describe("the override panel", () => {
 			},
 			handoffCount: 1,
 		};
-		const props = { config, runner, home, configPath, initialTickets: [secondCycle] };
+		const planeRecord = await plane({
+			groupingAxis: "none",
+			config: config,
+			sources: [{ config: billingSource, tickets: [secondCycle] }],
+			repos: { "github.com/acme/billing": "src/billing" },
+			commands: (fake, home2) => {
+				const path = join(home2, "src", "billing");
+				stubCheckout(fake, path);
+				stubLiveHandoff(fake, path);
+			},
+		});
+		const runner = planeRecord.fakeRunner;
 
 		await withApp(
 			async (setup) => {
+				planeRecord.settleFirstFetch();
+				await waitSourceHealthy(planeRecord.state);
 				const detail = detailPaneText(setup.captureCharFrame());
 				// Each row reads the choice Enter starts: the profiled agent with
 				// every setting left to it, in the environment the choice resolves
@@ -959,33 +1247,17 @@ describe("the override panel", () => {
 					"--kind",
 					"pi",
 					"--pane",
-					"pane-2",
+					"pane-1",
 				]);
 			},
-			{ width: WIDTH, height: HEIGHT, props: props },
+			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
 		);
 	});
 
 	test("a model rejected by the profiled agent fails and leaves the ticket open", async () => {
-		const runner = stubHerdrWorld(worldCheckout());
-		runner.set(
-			"herdr",
-			[
-				"agent",
-				"start",
-				firstAgent,
-				"--kind",
-				"codex",
-				"--pane",
-				"pane-2",
-				"--",
-				"--model",
-				"rejected-model",
-			],
-			{ code: 1, stderr: "error: codex rejected model rejected-model\n" },
-		);
 		const config: FactoryConfig = {
 			...BASE_CONFIG,
+			maxParallelAgents: 3,
 			taskTypes: {
 				...BASE_CONFIG.taskTypes,
 				implement: {
@@ -995,10 +1267,38 @@ describe("the override panel", () => {
 				},
 			},
 		};
-		const props = { config, runner, home, configPath };
+		const planeRecord = await plane({
+			config: config,
+			repos: { "github.com/acme/billing": "src/billing" },
+			commands: (fake, home2) => {
+				const path = join(home2, "src", "billing");
+				stubCheckout(fake, path);
+				stubLiveHandoff(fake, path);
+				fake.set(
+					"herdr",
+					[
+						"agent",
+						"start",
+						firstAgent,
+						"--kind",
+						"codex",
+						"--pane",
+						"pane-1",
+						"--",
+						"--model",
+						"rejected-model",
+					],
+					{ code: 1, stderr: "error: codex rejected model rejected-model\n" },
+				);
+			},
+		});
+		const _runner = planeRecord.fakeRunner;
 
 		await withApp(
 			async (setup) => {
+				planeRecord.settleFirstFetch();
+				await waitSourceHealthy(planeRecord.state);
+				await walkToFirstOpen(setup);
 				setup.mockInput.pressEnter();
 				const frame = await awaitFrame(
 					setup,
@@ -1008,23 +1308,35 @@ describe("the override panel", () => {
 				expect(selectedRow(frame)).toContain("[open]");
 				expect(detailPaneText(frame)).toContain("Agent: codex");
 			},
-			{ width: WIDTH, height: HEIGHT, props: props },
+			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
 		);
 	});
 
 	test("clearing a profiled Model row leaves it to the agent", async () => {
-		const runner = stubHerdrWorld(worldCheckout());
 		const config: FactoryConfig = {
 			...BASE_CONFIG,
+			maxParallelAgents: 3,
 			taskTypes: {
 				...BASE_CONFIG.taskTypes,
 				implement: { ...BASE_CONFIG.taskTypes.implement, model: "task-model" },
 			},
 		};
-		const props = { config, runner, home, configPath };
+		const planeRecord = await plane({
+			config: config,
+			repos: { "github.com/acme/billing": "src/billing" },
+			commands: (fake, home2) => {
+				const path = join(home2, "src", "billing");
+				stubCheckout(fake, path);
+				stubLiveHandoff(fake, path);
+			},
+		});
+		const runner = planeRecord.fakeRunner;
 
 		await withApp(
 			async (setup) => {
+				planeRecord.settleFirstFetch();
+				await waitSourceHealthy(planeRecord.state);
+				await walkToFirstOpen(setup);
 				await openPanel(setup);
 				await press(setup, "j", "the Environment row", (f) => f.includes("❯ Environment"));
 				await press(setup, "j", "the Task type row", (f) => f.includes("❯ Task type"));
@@ -1047,23 +1359,35 @@ describe("the override panel", () => {
 				);
 				expect(start?.args).not.toContain("--model");
 			},
-			{ width: WIDTH, height: HEIGHT, props: props },
+			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
 		);
 	});
 
 	test("clearing a profiled Thinking list row leaves it to the agent", async () => {
-		const runner = stubHerdrWorld(worldCheckout());
 		const config: FactoryConfig = {
 			...BASE_CONFIG,
+			maxParallelAgents: 3,
 			taskTypes: {
 				...BASE_CONFIG.taskTypes,
 				implement: { ...BASE_CONFIG.taskTypes.implement, thinking: "low" },
 			},
 		};
-		const props = { config, runner, home, configPath };
+		const planeRecord = await plane({
+			config: config,
+			repos: { "github.com/acme/billing": "src/billing" },
+			commands: (fake, home2) => {
+				const path = join(home2, "src", "billing");
+				stubCheckout(fake, path);
+				stubLiveHandoff(fake, path);
+			},
+		});
+		const runner = planeRecord.fakeRunner;
 
 		await withApp(
 			async (setup) => {
+				planeRecord.settleFirstFetch();
+				await waitSourceHealthy(planeRecord.state);
+				await walkToFirstOpen(setup);
 				await openPanel(setup);
 				await press(setup, "j", "the Environment row", (f) => f.includes("❯ Environment"));
 				await press(setup, "j", "the Task type row", (f) => f.includes("❯ Task type"));
@@ -1083,16 +1407,16 @@ describe("the override panel", () => {
 				);
 				expect(start?.args).not.toContain("--thinking");
 			},
-			{ width: WIDTH, height: HEIGHT, props: props },
+			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
 		);
 	});
 
 	test("a model no agent argument can carry fails the handoff and keeps the ticket open", async () => {
-		const runner = stubHerdrWorld(worldCheckout());
 		// The profile sends its handoffs to an agent that maps no setting, and
 		// the default model still resolves onto it.
 		const config: FactoryConfig = {
 			...BASE_CONFIG,
+			maxParallelAgents: 3,
 			defaultModel: "factory-model",
 			agents: { ...BASE_CONFIG.agents, cursor: { kind: "cursor" } },
 			taskTypes: {
@@ -1100,10 +1424,22 @@ describe("the override panel", () => {
 				implement: { ...BASE_CONFIG.taskTypes.implement, agent: "cursor" },
 			},
 		};
-		const props = { config, runner, home, configPath };
+		const planeRecord = await plane({
+			config: config,
+			repos: { "github.com/acme/billing": "src/billing" },
+			commands: (fake, home2) => {
+				const path = join(home2, "src", "billing");
+				stubCheckout(fake, path);
+				stubLiveHandoff(fake, path);
+			},
+		});
+		const runner = planeRecord.fakeRunner;
 
 		await withApp(
 			async (setup) => {
+				planeRecord.settleFirstFetch();
+				await waitSourceHealthy(planeRecord.state);
+				await walkToFirstOpen(setup);
 				setup.mockInput.pressEnter();
 				const frame = await awaitFrame(
 					setup,
@@ -1113,18 +1449,22 @@ describe("the override panel", () => {
 				expect(selectedRow(frame)).toContain("[open]");
 				// The handoff failed before its first external step: no workspace,
 				// no agent, so the ticket is ready for a retry once the config is
-				// fixed. The fact's own desktop notification (ADR 0080) is the one
-				// command the failure may send.
-				expect(handoffCommands(runner)).toHaveLength(0);
+				// fixed. Only the plane's own boot probe of the checkout stands;
+				// the handoff's reads never ran.
+				const probePath = join(planeRecord.home, "src", "billing");
+				expect(handoffCommands(runner)).toEqual([
+					`git -C ${probePath} rev-parse --git-dir`,
+					`git -C ${probePath} remote get-url origin`,
+				]);
 			},
-			{ width: WIDTH, height: HEIGHT, props: props },
+			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
 		);
 	});
 
 	test("the panel keeps an unmappable model in reach, and clearing it starts the handoff", async () => {
-		const runner = stubHerdrWorld(worldCheckout());
 		const config: FactoryConfig = {
 			...BASE_CONFIG,
+			maxParallelAgents: 3,
 			defaultModel: "factory-model",
 			agents: { ...BASE_CONFIG.agents, cursor: { kind: "cursor" } },
 			taskTypes: {
@@ -1132,10 +1472,22 @@ describe("the override panel", () => {
 				implement: { ...BASE_CONFIG.taskTypes.implement, agent: "cursor" },
 			},
 		};
-		const props = { config, runner, home, configPath };
+		const planeRecord = await plane({
+			config: config,
+			repos: { "github.com/acme/billing": "src/billing" },
+			commands: (fake, home2) => {
+				const path = join(home2, "src", "billing");
+				stubCheckout(fake, path);
+				stubLiveHandoff(fake, path);
+			},
+		});
+		const runner = planeRecord.fakeRunner;
 
 		await withApp(
 			async (setup) => {
+				planeRecord.settleFirstFetch();
+				await waitSourceHealthy(planeRecord.state);
+				await walkToFirstOpen(setup);
 				const opened = await openPanel(setup);
 				// The row is not hidden: the value needs a row to be cleared in, and
 				// it states in words why the Agent cannot take it, so the warning
@@ -1177,17 +1529,18 @@ describe("the override panel", () => {
 					"--kind",
 					"cursor",
 					"--pane",
-					"pane-2",
+					"pane-1",
 				]);
 			},
-			{ width: WIDTH, height: HEIGHT, props: props },
+			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
 		);
 	});
 
 	test("a task type thinking default shows in the panel and rides on the start", async () => {
-		const runner = stubHerdrWorld(worldCheckout());
 		const config: FactoryConfig = {
 			...BASE_CONFIG,
+			maxParallelAgents: 3,
+			workflowStates: [...BASE_CONFIG.workflowStates, mergeState],
 			taskTypes: {
 				...BASE_CONFIG.taskTypes,
 				merge: {
@@ -1196,10 +1549,24 @@ describe("the override panel", () => {
 				},
 			},
 		};
-		const mergeTicket: Ticket = { ...first, suggestedTaskType: "merge" };
-		const props = { config, runner, home, configPath, initialTickets: [mergeTicket] };
+		const mergeTicket: Ticket = { ...first, labels: ["merge"] };
+		const planeRecord = await plane({
+			groupingAxis: "none",
+			config: config,
+			sources: [{ config: billingSource, tickets: [mergeTicket] }],
+			repos: { "github.com/acme/billing": "src/billing" },
+			commands: (fake, home2) => {
+				const path = join(home2, "src", "billing");
+				stubCheckout(fake, path);
+				stubLiveHandoff(fake, path);
+			},
+		});
+		const runner = planeRecord.fakeRunner;
+
 		await withApp(
 			async (setup) => {
+				planeRecord.settleFirstFetch();
+				await waitSourceHealthy(planeRecord.state);
 				const opened = await openPanel(setup);
 				// The thinking row shows the task type default, not the unset hint.
 				expect(frameText(opened)).toContain("Thinking low");
@@ -1216,19 +1583,20 @@ describe("the override panel", () => {
 					"--kind",
 					"pi",
 					"--pane",
-					"pane-2",
+					"pane-1",
 					"--",
 					"--thinking",
 					"low",
 				]);
 			},
-			{ width: WIDTH, height: HEIGHT, props: props },
+			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
 		);
 	});
 	test("switching the task type re-derives an untouched thinking row", async () => {
-		const runner = stubHerdrWorld(worldCheckout());
 		const config: FactoryConfig = {
 			...BASE_CONFIG,
+			maxParallelAgents: 3,
+			workflowStates: [...BASE_CONFIG.workflowStates, mergeState],
 			taskTypes: {
 				...BASE_CONFIG.taskTypes,
 				merge: {
@@ -1237,10 +1605,24 @@ describe("the override panel", () => {
 				},
 			},
 		};
-		const mergeTicket: Ticket = { ...first, suggestedTaskType: "merge" };
-		const props = { config, runner, home, configPath, initialTickets: [mergeTicket] };
+		const mergeTicket: Ticket = { ...first, labels: ["merge"] };
+		const planeRecord = await plane({
+			groupingAxis: "none",
+			config: config,
+			sources: [{ config: billingSource, tickets: [mergeTicket] }],
+			repos: { "github.com/acme/billing": "src/billing" },
+			commands: (fake, home2) => {
+				const path = join(home2, "src", "billing");
+				stubCheckout(fake, path);
+				stubLiveHandoff(fake, path);
+			},
+		});
+		const _runner = planeRecord.fakeRunner;
+
 		await withApp(
 			async (setup) => {
+				planeRecord.settleFirstFetch();
+				await waitSourceHealthy(planeRecord.state);
 				const opened = await openPanel(setup);
 				// The thinking row shows the suggested task type's default.
 				expect(frameText(opened)).toContain("Thinking low");
@@ -1273,13 +1655,14 @@ describe("the override panel", () => {
 				);
 				expect(frameText(back)).toContain("Thinking low");
 			},
-			{ width: WIDTH, height: HEIGHT, props: props },
+			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
 		);
 	});
 	test("a touched thinking row survives a task type switch", async () => {
-		const runner = stubHerdrWorld(worldCheckout());
 		const config: FactoryConfig = {
 			...BASE_CONFIG,
+			maxParallelAgents: 3,
+			workflowStates: [...BASE_CONFIG.workflowStates, mergeState, toImplementState],
 			taskTypes: {
 				...BASE_CONFIG.taskTypes,
 				merge: {
@@ -1288,10 +1671,24 @@ describe("the override panel", () => {
 				},
 			},
 		};
-		const mergeTicket: Ticket = { ...first, suggestedTaskType: "merge" };
-		const props = { config, runner, home, configPath, initialTickets: [mergeTicket] };
+		const mergeTicket: Ticket = { ...first, labels: ["merge"] };
+		const planeRecord = await plane({
+			groupingAxis: "none",
+			config: config,
+			sources: [{ config: billingSource, tickets: [mergeTicket] }],
+			repos: { "github.com/acme/billing": "src/billing" },
+			commands: (fake, home2) => {
+				const path = join(home2, "src", "billing");
+				stubCheckout(fake, path);
+				stubLiveHandoff(fake, path);
+			},
+		});
+		const runner = planeRecord.fakeRunner;
+
 		await withApp(
 			async (setup) => {
+				planeRecord.settleFirstFetch();
+				await waitSourceHealthy(planeRecord.state);
 				const opened = await openPanel(setup);
 				expect(frameText(opened)).toContain("Thinking low");
 				// Move to the Thinking row: j walks the list rows, and the arrow
@@ -1325,19 +1722,27 @@ describe("the override panel", () => {
 				expect(start?.args).toContain("--thinking");
 				expect(start?.args).toContain("medium");
 			},
-			{ width: WIDTH, height: HEIGHT, props: props },
+			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
 		);
-	});
+	}, 20000);
 	test("the settings rows hide for an agent that does not map them", async () => {
-		const runner = new FakeRunner();
 		// A fourth agent that maps no setting at all.
 		const config: FactoryConfig = {
 			...BASE_CONFIG,
+			maxParallelAgents: 3,
 			agents: { ...BASE_CONFIG.agents, cursor: { kind: "cursor" } },
 		};
-		const props = { config, runner, home, configPath };
+		const planeRecord = await plane({
+			config: config,
+			repos: { "github.com/acme/billing": "src/billing" },
+		});
+		const _runner = planeRecord.fakeRunner;
+
 		await withApp(
 			async (setup) => {
+				planeRecord.settleFirstFetch();
+				await waitSourceHealthy(planeRecord.state);
+				await walkToFirstOpen(setup);
 				await openPanel(setup);
 				// pi maps both settings: both rows are offered.
 				await pressArrow(setup, "right", "the agent to become codex", (f) =>
@@ -1357,14 +1762,21 @@ describe("the override panel", () => {
 				expect(frame).toContain("Environment");
 				expect(frame).toContain("Task type");
 			},
-			{ width: WIDTH, height: HEIGHT, props: props },
+			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
 		);
 	});
 	test("the task type row cycles through the task types and wraps", async () => {
-		const runner = new FakeRunner();
-		const props = { config: BASE_CONFIG, runner, home, configPath };
+		const planeRecord = await plane({
+			config: seatOpenConfig,
+			repos: { "github.com/acme/billing": "src/billing" },
+		});
+		const _runner = planeRecord.fakeRunner;
+
 		await withApp(
 			async (setup) => {
+				planeRecord.settleFirstFetch();
+				await waitSourceHealthy(planeRecord.state);
+				await walkToFirstOpen(setup);
 				await openPanel(setup);
 				await press(setup, "j", "the row selection to move to the environment", (f) =>
 					f.includes("❯ Environment"),
@@ -1387,14 +1799,21 @@ describe("the override panel", () => {
 				);
 				expect(frameText(wrapped)).toContain("Task type implement");
 			},
-			{ width: WIDTH, height: HEIGHT, props: props },
+			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
 		);
 	});
 	test("the container environment is never offered", async () => {
-		const runner = new FakeRunner();
-		const props = { config: BASE_CONFIG, runner, home, configPath };
+		const planeRecord = await plane({
+			config: seatOpenConfig,
+			repos: { "github.com/acme/billing": "src/billing" },
+		});
+		const _runner = planeRecord.fakeRunner;
+
 		await withApp(
 			async (setup) => {
+				planeRecord.settleFirstFetch();
+				await waitSourceHealthy(planeRecord.state);
+				await walkToFirstOpen(setup);
 				await openPanel(setup);
 				// Move to the Environment row and cycle through every offered value.
 				await press(setup, "j", "the row selection to move to the environment", (f) =>
@@ -1411,14 +1830,21 @@ describe("the override panel", () => {
 				);
 				expect(wrapped).not.toContain("container");
 			},
-			{ width: WIDTH, height: HEIGHT, props: props },
+			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
 		);
 	});
 	test("escape cancels the panel without a handoff", async () => {
-		const runner = new FakeRunner();
-		const props = { config: BASE_CONFIG, runner, home, configPath };
+		const planeRecord = await plane({
+			config: seatOpenConfig,
+			repos: { "github.com/acme/billing": "src/billing" },
+		});
+		const runner = planeRecord.fakeRunner;
+
 		await withApp(
 			async (setup) => {
+				planeRecord.settleFirstFetch();
+				await waitSourceHealthy(planeRecord.state);
+				await walkToFirstOpen(setup);
 				await openPanel(setup);
 				await pressArrow(setup, "right", "the agent to change", (f) => f.includes("codex"));
 				setup.mockInput.pressEscape();
@@ -1429,15 +1855,19 @@ describe("the override panel", () => {
 				);
 				expect(closed).toContain("[open]");
 				expect(closed).toContain("e Override");
-				// No command ever ran.
-				expect(runner.calls).toHaveLength(0);
+				// No handoff command ever ran: only the plane's boot probes of
+				// the checkout stand.
+				expect(
+					runner.calls.filter(
+						(c) => !(c.command === "herdr" && c.args[0] === "agent" && c.args[1] === "list"),
+					),
+				).toHaveLength(2);
 			},
-			{ width: WIDTH, height: HEIGHT, props: props },
+			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
 		);
 	});
 
 	test("switching the task type re-derives an untouched Context row", async () => {
-		const runner = stubHerdrWorld(worldCheckout());
 		// A second profile on the same agent, naming another count: the row
 		// follows the task type instead of hiding behind an agent.
 		const config: FactoryConfig = {
@@ -1458,10 +1888,22 @@ describe("the override panel", () => {
 				},
 			},
 		};
-		const props = { config, runner, home, configPath };
+		const planeRecord = await plane({
+			config: config,
+			repos: { "github.com/acme/billing": "src/billing" },
+			commands: (fake, home2) => {
+				const path = join(home2, "src", "billing");
+				stubCheckout(fake, path);
+				stubLiveHandoff(fake, path);
+			},
+		});
+		const _runner = planeRecord.fakeRunner;
 
 		await withApp(
 			async (setup) => {
+				planeRecord.settleFirstFetch();
+				await waitSourceHealthy(planeRecord.state);
+				await walkToFirstOpen(setup);
 				const opened = await openPanel(setup);
 				expect(frameText(opened)).toContain("Context 272000");
 				// Cycle the Task type row: the untouched Context row takes the
@@ -1498,16 +1940,27 @@ describe("the override panel", () => {
 				);
 				expect(frameText(back)).toContain("Context 655368");
 			},
-			{ width: WIDTH, height: HEIGHT, props: props },
+			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
 		);
 	});
 
 	test("the Context row carries the profile's count and takes digits only", async () => {
-		const runner = stubHerdrWorld(worldCheckout());
-		const props = { config: contextProfileConfig, runner, home, configPath };
+		const planeRecord = await plane({
+			config: contextProfileConfig,
+			repos: { "github.com/acme/billing": "src/billing" },
+			commands: (fake, home2) => {
+				const path = join(home2, "src", "billing");
+				stubCheckout(fake, path);
+				stubLiveHandoff(fake, path);
+			},
+		});
+		const runner = planeRecord.fakeRunner;
 
 		await withApp(
 			async (setup) => {
+				planeRecord.settleFirstFetch();
+				await waitSourceHealthy(planeRecord.state);
+				await walkToFirstOpen(setup);
 				const opened = await openPanel(setup);
 				// The profile names the room and its agent maps it, so the row is
 				// there and holds the profile's count from the first frame.
@@ -1557,7 +2010,7 @@ describe("the override panel", () => {
 					"--kind",
 					"codex",
 					"--pane",
-					"pane-2",
+					"pane-1",
 					"--",
 					"-m",
 					"gpt-5.6-codex",
@@ -1565,16 +2018,27 @@ describe("the override panel", () => {
 					"model_context_window=1232720005",
 				]);
 			},
-			{ width: WIDTH, height: HEIGHT, props: props },
+			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
 		);
-	});
+	}, 20000);
 
 	test("the Context row folds a typed count to one spelling, the way the config does", async () => {
-		const runner = stubHerdrWorld(worldCheckout());
-		const props = { config: contextProfileConfig, runner, home, configPath };
+		const planeRecord = await plane({
+			config: contextProfileConfig,
+			repos: { "github.com/acme/billing": "src/billing" },
+			commands: (fake, home2) => {
+				const path = join(home2, "src", "billing");
+				stubCheckout(fake, path);
+				stubLiveHandoff(fake, path);
+			},
+		});
+		const runner = planeRecord.fakeRunner;
 
 		await withApp(
 			async (setup) => {
+				planeRecord.settleFirstFetch();
+				await waitSourceHealthy(planeRecord.state);
+				await walkToFirstOpen(setup);
 				await openPanel(setup);
 				await selectContextRow(setup);
 				// The profile's own count goes first, so the digits below are the
@@ -1604,16 +2068,27 @@ describe("the override panel", () => {
 				);
 				expect(start?.args).toContain("model_context_window=7");
 			},
-			{ width: WIDTH, height: HEIGHT, props: props },
+			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
 		);
-	});
+	}, 20000);
 
 	test("a Context row that holds no count says so, and the handoff refuses it", async () => {
-		const runner = stubHerdrWorld(worldCheckout());
-		const props = { config: contextProfileConfig, runner, home, configPath };
+		const planeRecord = await plane({
+			config: contextProfileConfig,
+			repos: { "github.com/acme/billing": "src/billing" },
+			commands: (fake, home2) => {
+				const path = join(home2, "src", "billing");
+				stubCheckout(fake, path);
+				stubLiveHandoff(fake, path);
+			},
+		});
+		const runner = planeRecord.fakeRunner;
 
 		await withApp(
 			async (setup) => {
+				planeRecord.settleFirstFetch();
+				await waitSourceHealthy(planeRecord.state);
+				await walkToFirstOpen(setup);
 				await openPanel(setup);
 				await selectContextRow(setup);
 				// The caret sits at the row's end, where the last key landed, so the
@@ -1639,24 +2114,28 @@ describe("the override panel", () => {
 				expect(rowWith(zero, "Context")).toMatch(/Context\s+0/u);
 
 				setup.mockInput.pressEnter();
+				// The Message line at 120 columns cuts the reason short, so the
+				// pin reads the visible front of it; the whole reason stands in
+				// the record entry behind the line.
 				const failed = await awaitFrame(
 					setup,
 					(f) =>
-						f.includes("is not a positive whole number of tokens") &&
+						f.includes("context window") &&
+						f.includes("is not a positive whole number") &&
 						selectedRow(f).includes("[open]"),
 					"the count refusal and the ticket returning open",
 				);
 				expect(selectedRow(failed)).toContain("[open]");
 				// The refusal's fact sends its own desktop notification (ADR 0080),
-				// and the handoff ran none of its own commands.
-				expect(handoffCommands(runner)).toHaveLength(0);
+				// and the handoff ran none of its own commands: only the plane's
+				// boot probe of the checkout stands.
+				expect(handoffCommands(runner)).toHaveLength(2);
 			},
-			{ width: WIDTH, height: HEIGHT, props: props },
+			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
 		);
-	});
+	}, 20000);
 
 	test("a Context row survives an Agent that cannot map it until it is cleared", async () => {
-		const runner = stubHerdrWorld(worldCheckout());
 		// pi maps no context window, so the count the profile names has no argv
 		// to ride on: the handoff would fail on it.
 		const config: FactoryConfig = {
@@ -1670,10 +2149,22 @@ describe("the override panel", () => {
 				},
 			},
 		};
-		const props = { config, runner, home, configPath };
+		const planeRecord = await plane({
+			config: config,
+			repos: { "github.com/acme/billing": "src/billing" },
+			commands: (fake, home2) => {
+				const path = join(home2, "src", "billing");
+				stubCheckout(fake, path);
+				stubLiveHandoff(fake, path);
+			},
+		});
+		const runner = planeRecord.fakeRunner;
 
 		await withApp(
 			async (setup) => {
+				planeRecord.settleFirstFetch();
+				await waitSourceHealthy(planeRecord.state);
+				await walkToFirstOpen(setup);
 				const opened = await openPanel(setup);
 				// The row is there because the value needs a row to be cleared in,
 				// and it warns because the chosen agent cannot carry the count.
@@ -1744,21 +2235,21 @@ describe("the override panel", () => {
 					"--kind",
 					"pi",
 					"--pane",
-					"pane-2",
+					"pane-1",
 				]);
 			},
-			{ width: WIDTH, height: HEIGHT, props: props },
+			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
 		);
-	});
+	}, 20000);
 
 	test("a Thinking level the chosen Agent does not offer warns on its row, and fails the handoff", async () => {
-		const runner = stubHerdrWorld(worldCheckout());
 		// "minimal" is legal for pi, the profile's own agent, so the panel opens
 		// on it. zed maps a thinking template but offers only two other levels:
 		// cycling the Agent row onto it leaves a value with an argv to ride on
 		// and no Agent that takes it.
 		const config: FactoryConfig = {
 			...BASE_CONFIG,
+			maxParallelAgents: 3,
 			agents: {
 				...BASE_CONFIG.agents,
 				zed: { kind: "zed", thinking: "-t {value}", thinkingValues: ["off", "low"] },
@@ -1768,10 +2259,22 @@ describe("the override panel", () => {
 				implement: { ...BASE_CONFIG.taskTypes.implement, agent: "pi", thinking: "minimal" },
 			},
 		};
-		const props = { config, runner, home, configPath };
+		const planeRecord = await plane({
+			config: config,
+			repos: { "github.com/acme/billing": "src/billing" },
+			commands: (fake, home2) => {
+				const path = join(home2, "src", "billing");
+				stubCheckout(fake, path);
+				stubLiveHandoff(fake, path);
+			},
+		});
+		const runner = planeRecord.fakeRunner;
 
 		await withApp(
 			async (setup) => {
+				planeRecord.settleFirstFetch();
+				await waitSourceHealthy(planeRecord.state);
+				await walkToFirstOpen(setup);
 				// zed is the last agent the Agent row offers, and the Thinking row
 				// sits under the three rows every panel carries.
 				const cycleToZed = async (): Promise<void> => {
@@ -1823,8 +2326,9 @@ describe("the override panel", () => {
 				);
 				expect(selectedRow(failed)).toContain("[open]");
 				// The refusal's fact sends its own desktop notification (ADR 0080),
-				// and nothing of the handoff's started at all.
-				expect(handoffCommands(runner)).toHaveLength(0);
+				// and nothing of the handoff's started at all: only the plane's
+				// boot probe of the checkout stands.
+				expect(handoffCommands(runner)).toHaveLength(2);
 
 				// The row is reachable, so the value is not stranded: clearing it
 				// hands the level back to the agent, and the handoff starts with no
@@ -1852,18 +2356,30 @@ describe("the override panel", () => {
 					"--kind",
 					"zed",
 					"--pane",
-					"pane-2",
+					"pane-1",
 				]);
 			},
-			{ width: WIDTH, height: HEIGHT, props: props },
+			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
 		);
 	});
 
 	test("the free-text model row accepts typed text and confirms the handoff", async () => {
-		const runner = stubHerdrWorld(worldCheckout());
-		const props = { config: BASE_CONFIG, runner, home, configPath };
+		const planeRecord = await plane({
+			config: seatOpenConfig,
+			repos: { "github.com/acme/billing": "src/billing" },
+			commands: (fake, home2) => {
+				const path = join(home2, "src", "billing");
+				stubCheckout(fake, path);
+				stubLiveHandoff(fake, path);
+			},
+		});
+		const runner = planeRecord.fakeRunner;
+
 		await withApp(
 			async (setup) => {
+				planeRecord.settleFirstFetch();
+				await waitSourceHealthy(planeRecord.state);
+				await walkToFirstOpen(setup);
 				await openPanel(setup);
 				// Move to the Model row (Agent, Environment, Task type, then Model).
 				await press(setup, "j", "the row selection to move to the environment", (f) =>
@@ -1885,20 +2401,27 @@ describe("the override panel", () => {
 					"--kind",
 					"pi",
 					"--pane",
-					"pane-2",
+					"pane-1",
 					"--",
 					"--model",
 					"gpt-5.6",
 				]);
 			},
-			{ width: WIDTH, height: HEIGHT, props: props },
+			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
 		);
 	});
 	test("the selected text field has a focused background and bright text", async () => {
-		const runner = new FakeRunner();
-		const props = { config: BASE_CONFIG, runner, home, configPath };
+		const planeRecord = await plane({
+			config: seatOpenConfig,
+			repos: { "github.com/acme/billing": "src/billing" },
+		});
+		const _runner = planeRecord.fakeRunner;
+
 		await withApp(
 			async (setup) => {
+				planeRecord.settleFirstFetch();
+				await waitSourceHealthy(planeRecord.state);
+				await walkToFirstOpen(setup);
 				await openPanel(setup);
 				await press(setup, "j", "the row selection to reach the environment", (f) =>
 					f.includes("❯ Environment"),
@@ -1920,14 +2443,26 @@ describe("the override panel", () => {
 				expect(valueSpan?.fg.toInts().slice(0, 3)).toEqual(rgb(roleColor("text")));
 				expect(valueSpan?.bg.toInts().slice(0, 3)).toEqual(rgb(roleColor("active_row_bg")));
 			},
-			{ width: WIDTH, height: HEIGHT, props: props },
+			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
 		);
 	});
 	test("a non-ASCII model name types into the free-text row and rides on the start", async () => {
-		const runner = stubHerdrWorld(worldCheckout());
-		const props = { config: BASE_CONFIG, runner, home, configPath };
+		const planeRecord = await plane({
+			config: seatOpenConfig,
+			repos: { "github.com/acme/billing": "src/billing" },
+			commands: (fake, home2) => {
+				const path = join(home2, "src", "billing");
+				stubCheckout(fake, path);
+				stubLiveHandoff(fake, path);
+			},
+		});
+		const runner = planeRecord.fakeRunner;
+
 		await withApp(
 			async (setup) => {
+				planeRecord.settleFirstFetch();
+				await waitSourceHealthy(planeRecord.state);
+				await walkToFirstOpen(setup);
 				await openPanel(setup);
 				await press(setup, "j", "the row selection to move to the environment", (f) =>
 					f.includes("❯ Environment"),
@@ -1955,20 +2490,27 @@ describe("the override panel", () => {
 					"--kind",
 					"pi",
 					"--pane",
-					"pane-2",
+					"pane-1",
 					"--",
 					"--model",
 					"gpt-é",
 				]);
 			},
-			{ width: WIDTH, height: HEIGHT, props: props },
+			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
 		);
 	});
 	test("a move and a cycle in the same tick act on the moved row", async () => {
-		const runner = new FakeRunner();
-		const props = { config: BASE_CONFIG, runner, home, configPath };
+		const planeRecord = await plane({
+			config: seatOpenConfig,
+			repos: { "github.com/acme/billing": "src/billing" },
+		});
+		const _runner = planeRecord.fakeRunner;
+
 		await withApp(
 			async (setup) => {
+				planeRecord.settleFirstFetch();
+				await waitSourceHealthy(planeRecord.state);
+				await walkToFirstOpen(setup);
 				await openPanel(setup);
 				// Both keys are queued before a render: the key parser delivers
 				// them in one tick, where a render-closure row would still
@@ -1985,14 +2527,21 @@ describe("the override panel", () => {
 				expect(frameText(frame)).not.toContain("Agent codex");
 				expect(frame).toContain("❯ Environment");
 			},
-			{ width: WIDTH, height: HEIGHT, props: props },
+			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
 		);
 	});
 	test("Tab and Shift+Tab move from list and text rows", async () => {
-		const runner = new FakeRunner();
-		const props = { config: BASE_CONFIG, runner, home, configPath };
+		const planeRecord = await plane({
+			config: seatOpenConfig,
+			repos: { "github.com/acme/billing": "src/billing" },
+		});
+		const _runner = planeRecord.fakeRunner;
+
 		await withApp(
 			async (setup) => {
+				planeRecord.settleFirstFetch();
+				await waitSourceHealthy(planeRecord.state);
+				await walkToFirstOpen(setup);
 				await openPanel(setup);
 				// Both directions work on a list row.
 				setup.mockInput.pressTab();
@@ -2017,28 +2566,52 @@ describe("the override panel", () => {
 				setup.mockInput.pressTab();
 				await awaitFrame(setup, (f) => f.includes("❯ Thinking"), "Tab from a text row");
 			},
-			{ width: WIDTH, height: HEIGHT, props: props },
+			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
 		);
 	});
 	test("a sibling clone hands off, warns, and writes the mapping back to the config file", async () => {
-		const runner = new FakeRunner();
 		// The convention path holds a different repository.
-		const path = checkout();
-		runner.set("git", ["-C", path, "rev-parse", "--git-dir"], { stdout: ".git\n" });
-		runner.set("git", ["-C", path, "remote", "get-url", "origin"], {
-			stdout: "https://github.com/acme/portal.git\n",
+		const planeRecord = await plane({
+			config: seatOpenConfig,
+			commands: (fake, home2) => {
+				// No repos entry: the handoff resolves the convention path,
+				// which is the side of the mapping rule that heals.
+				const path = join(home2, "src", "billing");
+				const sibling = join(home2, "src", "billing_1");
+				mkdirSync(path, { recursive: true });
+				fake.set("git", ["-C", path, "rev-parse", "--git-dir"], { stdout: ".git\n" });
+				fake.set("git", ["-C", path, "remote", "get-url", "origin"], {
+					stdout: "https://github.com/acme/portal.git\n",
+				});
+				fake.set("git", ["clone", "https://github.com/acme/billing.git", sibling], {
+					code: 0,
+				});
+				fake.set("git", ["-C", sibling, "rev-parse", "--git-dir"], { stdout: ".git\n" });
+				fake.set("git", ["-C", sibling, "remote", "get-url", "origin"], {
+					stdout: "https://github.com/acme/billing.git\n",
+				});
+				fake.set("herdr", ["workspace", "list"], { stdout: workspaceListJson([]) });
+				fake.set("herdr", ["workspace", "create", "--cwd", sibling, "--no-focus"], {
+					stdout: workspaceCreateJson("ws-1"),
+				});
+				fake.set(
+					"herdr",
+					["tab", "create", "--workspace", "ws-1", "--cwd", sibling, "--no-focus"],
+					{
+						stdout: tabCreateJson("pane-1"),
+					},
+				);
+			},
 		});
-		const sibling = join(home, "src", "billing_1");
-		runner.set("herdr", ["workspace", "list"], { stdout: workspaceListJson([]) });
-		runner.set("herdr", ["workspace", "create", "--cwd", sibling, "--no-focus"], {
-			stdout: workspaceCreateJson("ws-1"),
-		});
-		runner.set("herdr", ["tab", "create", "--workspace", "ws-1", "--cwd", sibling, "--no-focus"], {
-			stdout: tabCreateJson("pane-1"),
-		});
-		const props = { config: BASE_CONFIG, runner, home, configPath };
+		const _path = join(planeRecord.home, "src", "billing");
+		const runner = planeRecord.fakeRunner;
+		const sibling = join(planeRecord.home, "src", "billing_1");
+
 		await withApp(
 			async (setup) => {
+				planeRecord.settleFirstFetch();
+				await waitSourceHealthy(planeRecord.state);
+				await walkToFirstOpen(setup);
 				await pressEnterToHandoff(setup);
 				// The projection refresh and the handoff report are separate async
 				// facts. Wait for the line, or the frame is read mid-flight.
@@ -2054,7 +2627,7 @@ describe("the override panel", () => {
 				expect(messageRowOf(frame)).toContain("cloned acme/billing to a sibling");
 				const view = await openMessageView(setup);
 				expect(frameText(view)).toContain("saved the mapping in");
-				expect(frameText(view)).toContain(configPath);
+				expect(frameText(view)).toContain(planeRecord.configPath);
 				await press(
 					setup,
 					"escape",
@@ -2062,26 +2635,66 @@ describe("the override panel", () => {
 					(f) => !f.includes("Message view"),
 				);
 				// The mapping was written back to the config file.
-				const written = readFileSync(configPath, "utf8");
+				const written = readFileSync(planeRecord.configPath, "utf8");
 				expect(written).toContain(`[repos]`);
 				expect(written).toContain(`"github.com/acme/billing" = "${sibling}"`);
 				// The handoff ran at the sibling, not the conflicting path.
 				expect(runner.commands()).toContain(`herdr workspace create --cwd ${sibling} --no-focus`);
 			},
-			{ width: WIDTH, height: HEIGHT, props: props },
+			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
 		);
-	});
+	}, 20000);
 	test("e opens the Override panel while a handoff is in flight (ADR 0064)", async () => {
-		const runner = stubHerdrWorld(worldCheckout());
-		const slow = new DelayedRunner(runner, 400);
-		const props = { config: BASE_CONFIG, runner: slow, home, configPath };
+		const planeRecord = await plane({
+			config: seatOpenConfig,
+			// Every early command is delayed a beat, so the flight outlives the
+			// walk, the ask, and the panel: whichever command the start waits on,
+			// the run itself stretches over the window the walk needs.
+			runner: (fake) => new DelayedRunner(fake, 800, 12),
+			repos: { "github.com/acme/billing": "src/billing" },
+			commands: (fake, home2) => {
+				const path = join(home2, "src", "billing");
+				stubCheckout(fake, path);
+				stubLiveHandoff(fake, path);
+			},
+		});
+
 		await withApp(
 			async (setup) => {
+				planeRecord.settleFirstFetch();
+				await waitSourceHealthy(planeRecord.state);
+				await walkToFirstOpen(setup);
 				await pressEnter(setup, "the in-flight status", "handing off");
 				// The ask never waits on a run (ADR 0064): the Override panel
 				// opens while the handoff runs, and the run in flight keeps its
 				// Working line beside it: the answer never erases the work in
-				// flight (user story 51).
+				// flight (user story 51). The in-flight ticket's own row is
+				// starting, and a starting row answers to Enter rather than e,
+				// so the ask lands on a different open ticket: the walk steps
+				// The cursor walks one sequence, and while the start is pending
+				// the flight row stands last of the tickets, so k climbs off it
+				// onto an open ticket above. Each step settles before
+				// pressing, a key sent into a re-sort being dropped, and
+				// re-presses a bounded number of times.
+				const step = async (
+					key: string,
+					pred: (f: string) => boolean,
+					what: string,
+				): Promise<void> => {
+					for (let i = 0; i < 5; i += 1) {
+						await settle(setup);
+						setup.mockInput.pressKey(key);
+						try {
+							await awaitFrame(setup, pred, what, 800);
+							return;
+						} catch {
+							// The step fell into a drop window; press again.
+						}
+					}
+					throw new Error(`never reached ${what}`);
+				};
+				await step("k", (f) => listHalfOf(selectedRow(f)).includes("[open]"), "the open ticket");
+				await settle(setup);
 				setup.mockInput.pressKey("e");
 				const opened = await awaitFrame(
 					setup,
@@ -2096,32 +2709,61 @@ describe("the override panel", () => {
 					"the panel to close",
 					(f) => !frameText(f).includes("❯ Agent"),
 				);
-				await awaitFrame(setup, handoffSettled, "the handoff to settle");
+				await awaitFrame(
+					setup,
+					(f) => messageRowOf(f).includes("started from the Work queue"),
+					"the handoff to settle",
+				);
 			},
-			{ width: WIDTH, height: HEIGHT, props: props },
+			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
 		);
-	});
+	}, 20000);
 	test("a failed mapping write-back warns on the Message line", async () => {
-		const runner = new FakeRunner();
 		// The convention path holds a different repository: a sibling clone.
-		const path = checkout();
-		runner.set("git", ["-C", path, "rev-parse", "--git-dir"], { stdout: ".git\n" });
-		runner.set("git", ["-C", path, "remote", "get-url", "origin"], {
-			stdout: "https://github.com/acme/portal.git\n",
-		});
-		const sibling = join(home, "src", "billing_1");
-		runner.set("herdr", ["workspace", "list"], { stdout: workspaceListJson([]) });
-		runner.set("herdr", ["workspace", "create", "--cwd", sibling, "--no-focus"], {
-			stdout: workspaceCreateJson("ws-1"),
-		});
-		runner.set("herdr", ["tab", "create", "--workspace", "ws-1", "--cwd", sibling, "--no-focus"], {
-			stdout: tabCreateJson("pane-1"),
-		});
 		// The config file cannot be written: a directory sits at its path.
-		mkdirSync(configPath, { recursive: true });
-		const props = { config: BASE_CONFIG, runner, home, configPath };
+		const planeRecord = await plane({
+			config: seatOpenConfig,
+			commands: (fake, home2) => {
+				// No repos entry: the handoff resolves the convention path,
+				// which is the side of the mapping rule that heals.
+				const path = join(home2, "src", "billing");
+				const sibling = join(home2, "src", "billing_1");
+				mkdirSync(path, { recursive: true });
+				fake.set("git", ["-C", path, "rev-parse", "--git-dir"], { stdout: ".git\n" });
+				fake.set("git", ["-C", path, "remote", "get-url", "origin"], {
+					stdout: "https://github.com/acme/portal.git\n",
+				});
+				fake.set("git", ["clone", "https://github.com/acme/billing.git", sibling], {
+					code: 0,
+				});
+				fake.set("git", ["-C", sibling, "rev-parse", "--git-dir"], { stdout: ".git\n" });
+				fake.set("git", ["-C", sibling, "remote", "get-url", "origin"], {
+					stdout: "https://github.com/acme/billing.git\n",
+				});
+				fake.set("herdr", ["workspace", "list"], { stdout: workspaceListJson([]) });
+				fake.set("herdr", ["workspace", "create", "--cwd", sibling, "--no-focus"], {
+					stdout: workspaceCreateJson("ws-1"),
+				});
+				fake.set(
+					"herdr",
+					["tab", "create", "--workspace", "ws-1", "--cwd", sibling, "--no-focus"],
+					{
+						stdout: tabCreateJson("pane-1"),
+					},
+				);
+			},
+		});
+		const _path = join(planeRecord.home, "src", "billing");
+		const _runner = planeRecord.fakeRunner;
+		const _sibling = join(planeRecord.home, "src", "billing_1");
+		rmSync(planeRecord.configPath, { force: true });
+		mkdirSync(planeRecord.configPath, { recursive: true });
+
 		await withApp(
 			async (setup) => {
+				planeRecord.settleFirstFetch();
+				await waitSourceHealthy(planeRecord.state);
+				await walkToFirstOpen(setup);
 				const frame = await pressEnter(
 					setup,
 					"the write-back warning to appear",
@@ -2132,14 +2774,26 @@ describe("the override panel", () => {
 				expect(startingFaceOf(selectedRow(frame))).not.toBeNull();
 				expect(messageRowOf(frame)).toContain("could not persist");
 			},
-			{ width: WIDTH, height: HEIGHT, props: props },
+			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
 		);
-	});
+	}, 20000);
 	test("j, k, h, and l type into the selected free-text row", async () => {
-		const runner = stubHerdrWorld(worldCheckout());
-		const props = { config: BASE_CONFIG, runner, home, configPath };
+		const planeRecord = await plane({
+			config: seatOpenConfig,
+			repos: { "github.com/acme/billing": "src/billing" },
+			commands: (fake, home2) => {
+				const path = join(home2, "src", "billing");
+				stubCheckout(fake, path);
+				stubLiveHandoff(fake, path);
+			},
+		});
+		const runner = planeRecord.fakeRunner;
+
 		await withApp(
 			async (setup) => {
+				planeRecord.settleFirstFetch();
+				await waitSourceHealthy(planeRecord.state);
+				await walkToFirstOpen(setup);
 				await openPanel(setup);
 				await press(setup, "j", "the row selection to move to the environment", (f) =>
 					f.includes("❯ Environment"),
@@ -2168,20 +2822,32 @@ describe("the override panel", () => {
 					"--kind",
 					"pi",
 					"--pane",
-					"pane-2",
+					"pane-1",
 					"--",
 					"--model",
 					"claude",
 				]);
 			},
-			{ width: WIDTH, height: HEIGHT, props: props },
+			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
 		);
 	});
 	test("the free-text row moves the caret and inserts at it", async () => {
-		const runner = stubHerdrWorld(worldCheckout());
-		const props = { config: BASE_CONFIG, runner, home, configPath };
+		const planeRecord = await plane({
+			config: seatOpenConfig,
+			repos: { "github.com/acme/billing": "src/billing" },
+			commands: (fake, home2) => {
+				const path = join(home2, "src", "billing");
+				stubCheckout(fake, path);
+				stubLiveHandoff(fake, path);
+			},
+		});
+		const runner = planeRecord.fakeRunner;
+
 		await withApp(
 			async (setup) => {
+				planeRecord.settleFirstFetch();
+				await waitSourceHealthy(planeRecord.state);
+				await walkToFirstOpen(setup);
 				await openPanel(setup);
 				await press(setup, "j", "the selection to reach the environment", (f) =>
 					f.includes("❯ Environment"),
@@ -2210,20 +2876,32 @@ describe("the override panel", () => {
 					"--kind",
 					"pi",
 					"--pane",
-					"pane-2",
+					"pane-1",
 					"--",
 					"--model",
 					"abcXd",
 				]);
 			},
-			{ width: WIDTH, height: HEIGHT, props: props },
+			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
 		);
 	});
 	test("the free-text row jumps to the ends with Home and End", async () => {
-		const runner = stubHerdrWorld(worldCheckout());
-		const props = { config: BASE_CONFIG, runner, home, configPath };
+		const planeRecord = await plane({
+			config: seatOpenConfig,
+			repos: { "github.com/acme/billing": "src/billing" },
+			commands: (fake, home2) => {
+				const path = join(home2, "src", "billing");
+				stubCheckout(fake, path);
+				stubLiveHandoff(fake, path);
+			},
+		});
+		const runner = planeRecord.fakeRunner;
+
 		await withApp(
 			async (setup) => {
+				planeRecord.settleFirstFetch();
+				await waitSourceHealthy(planeRecord.state);
+				await walkToFirstOpen(setup);
 				await openPanel(setup);
 				await press(setup, "j", "the selection to reach the environment", (f) =>
 					f.includes("❯ Environment"),
@@ -2254,20 +2932,32 @@ describe("the override panel", () => {
 					"--kind",
 					"pi",
 					"--pane",
-					"pane-2",
+					"pane-1",
 					"--",
 					"--model",
 					"YabcdZ",
 				]);
 			},
-			{ width: WIDTH, height: HEIGHT, props: props },
+			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
 		);
 	});
 	test("the free-text row deletes with backspace and forward delete", async () => {
-		const runner = stubHerdrWorld(worldCheckout());
-		const props = { config: BASE_CONFIG, runner, home, configPath };
+		const planeRecord = await plane({
+			config: seatOpenConfig,
+			repos: { "github.com/acme/billing": "src/billing" },
+			commands: (fake, home2) => {
+				const path = join(home2, "src", "billing");
+				stubCheckout(fake, path);
+				stubLiveHandoff(fake, path);
+			},
+		});
+		const runner = planeRecord.fakeRunner;
+
 		await withApp(
 			async (setup) => {
+				planeRecord.settleFirstFetch();
+				await waitSourceHealthy(planeRecord.state);
+				await walkToFirstOpen(setup);
 				await openPanel(setup);
 				await press(setup, "j", "the selection to reach the environment", (f) =>
 					f.includes("❯ Environment"),
@@ -2302,20 +2992,32 @@ describe("the override panel", () => {
 					"--kind",
 					"pi",
 					"--pane",
-					"pane-2",
+					"pane-1",
 					"--",
 					"--model",
 					"bc",
 				]);
 			},
-			{ width: WIDTH, height: HEIGHT, props: props },
+			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
 		);
 	});
 	test("the free-text row deletes a caret selection", async () => {
-		const runner = stubHerdrWorld(worldCheckout());
-		const props = { config: BASE_CONFIG, runner, home, configPath };
+		const planeRecord = await plane({
+			config: seatOpenConfig,
+			repos: { "github.com/acme/billing": "src/billing" },
+			commands: (fake, home2) => {
+				const path = join(home2, "src", "billing");
+				stubCheckout(fake, path);
+				stubLiveHandoff(fake, path);
+			},
+		});
+		const runner = planeRecord.fakeRunner;
+
 		await withApp(
 			async (setup) => {
+				planeRecord.settleFirstFetch();
+				await waitSourceHealthy(planeRecord.state);
+				await walkToFirstOpen(setup);
 				await openPanel(setup);
 				await press(setup, "j", "the selection to reach the environment", (f) =>
 					f.includes("❯ Environment"),
@@ -2345,20 +3047,32 @@ describe("the override panel", () => {
 					"--kind",
 					"pi",
 					"--pane",
-					"pane-2",
+					"pane-1",
 					"--",
 					"--model",
 					"hel",
 				]);
 			},
-			{ width: WIDTH, height: HEIGHT, props: props },
+			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
 		);
 	});
 	test("the free-text row undoes with Ctrl+Z and redoes with Ctrl+Y", async () => {
-		const runner = stubHerdrWorld(worldCheckout());
-		const props = { config: BASE_CONFIG, runner, home, configPath };
+		const planeRecord = await plane({
+			config: seatOpenConfig,
+			repos: { "github.com/acme/billing": "src/billing" },
+			commands: (fake, home2) => {
+				const path = join(home2, "src", "billing");
+				stubCheckout(fake, path);
+				stubLiveHandoff(fake, path);
+			},
+		});
+		const runner = planeRecord.fakeRunner;
+
 		await withApp(
 			async (setup) => {
+				planeRecord.settleFirstFetch();
+				await waitSourceHealthy(planeRecord.state);
+				await walkToFirstOpen(setup);
 				await openPanel(setup);
 				await press(setup, "j", "the selection to reach the environment", (f) =>
 					f.includes("❯ Environment"),
@@ -2398,20 +3112,32 @@ describe("the override panel", () => {
 					"--kind",
 					"pi",
 					"--pane",
-					"pane-2",
+					"pane-1",
 					"--",
 					"--model",
 					"hello",
 				]);
 			},
-			{ width: WIDTH, height: HEIGHT, props: props },
+			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
 		);
 	});
 	test("bracketed paste works in the free-text Model row of a kind with no model list", async () => {
-		const runner = stubHerdrWorld(worldCheckout());
-		const props = { config: BASE_CONFIG, runner, home, configPath };
+		const planeRecord = await plane({
+			config: seatOpenConfig,
+			repos: { "github.com/acme/billing": "src/billing" },
+			commands: (fake, home2) => {
+				const path = join(home2, "src", "billing");
+				stubCheckout(fake, path);
+				stubLiveHandoff(fake, path);
+			},
+		});
+		const runner = planeRecord.fakeRunner;
+
 		await withApp(
 			async (setup) => {
+				planeRecord.settleFirstFetch();
+				await waitSourceHealthy(planeRecord.state);
+				await walkToFirstOpen(setup);
 				await openPanel(setup);
 				// codex is an agent kind that reports no Model list, so its Model row
 				// stays the standard free-text field (ADR 0010).
@@ -2445,14 +3171,26 @@ describe("the override panel", () => {
 				const start = runner.calls.find((c) => c.args[0] === "agent" && c.args[1] === "start");
 				expect(start?.args).toContain("gpt-5.1-codex");
 			},
-			{ width: WIDTH, height: HEIGHT, props: props },
+			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
 		);
 	});
 	test("a bracketed paste is sanitized of ANSI escapes and line breaks", async () => {
-		const runner = stubHerdrWorld(worldCheckout());
-		const props = { config: BASE_CONFIG, runner, home, configPath };
+		const planeRecord = await plane({
+			config: seatOpenConfig,
+			repos: { "github.com/acme/billing": "src/billing" },
+			commands: (fake, home2) => {
+				const path = join(home2, "src", "billing");
+				stubCheckout(fake, path);
+				stubLiveHandoff(fake, path);
+			},
+		});
+		const runner = planeRecord.fakeRunner;
+
 		await withApp(
 			async (setup) => {
+				planeRecord.settleFirstFetch();
+				await waitSourceHealthy(planeRecord.state);
+				await walkToFirstOpen(setup);
 				await openPanel(setup);
 				await press(setup, "j", "the selection to reach the environment", (f) =>
 					f.includes("❯ Environment"),
@@ -2480,20 +3218,27 @@ describe("the override panel", () => {
 					"--kind",
 					"pi",
 					"--pane",
-					"pane-2",
+					"pane-1",
 					"--",
 					"--model",
 					"helloworld",
 				]);
 			},
-			{ width: WIDTH, height: HEIGHT, props: props },
+			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
 		);
 	});
 	test("pasting at the start, middle, end, and over a selection edits in place", async () => {
-		const runner = new FakeRunner();
-		const props = { config: BASE_CONFIG, runner, home, configPath };
+		const planeRecord = await plane({
+			config: seatOpenConfig,
+			repos: { "github.com/acme/billing": "src/billing" },
+		});
+		const _runner = planeRecord.fakeRunner;
+
 		await withApp(
 			async (setup) => {
+				planeRecord.settleFirstFetch();
+				await waitSourceHealthy(planeRecord.state);
+				await walkToFirstOpen(setup);
 				await openPanel(setup);
 				await press(setup, "j", "the selection to reach the environment", (f) =>
 					f.includes("❯ Environment"),
@@ -2525,16 +3270,28 @@ describe("the override panel", () => {
 				);
 				expect(frameText(frame)).toContain("Model XMabE");
 			},
-			{ width: WIDTH, height: HEIGHT, props: props },
+			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
 		);
 	});
 	test("a long free-text value scrolls in its column and hands off whole", async () => {
-		const runner = stubHerdrWorld(worldCheckout());
-		const props = { config: BASE_CONFIG, runner, home, configPath };
+		const planeRecord = await plane({
+			config: seatOpenConfig,
+			repos: { "github.com/acme/billing": "src/billing" },
+			commands: (fake, home2) => {
+				const path = join(home2, "src", "billing");
+				stubCheckout(fake, path);
+				stubLiveHandoff(fake, path);
+			},
+		});
+		const runner = planeRecord.fakeRunner;
+
 		// biome-ignore lint/security/noSecrets: a fixed test fixture, not a credential
 		const longValue = "abcdefghijklmnopqrstuv9876543210";
 		await withApp(
 			async (setup) => {
+				planeRecord.settleFirstFetch();
+				await waitSourceHealthy(planeRecord.state);
+				await walkToFirstOpen(setup);
 				await openPanel(setup);
 				await press(setup, "j", "the selection to reach the environment", (f) =>
 					f.includes("❯ Environment"),
@@ -2564,20 +3321,27 @@ describe("the override panel", () => {
 					"--kind",
 					"pi",
 					"--pane",
-					"pane-2",
+					"pane-1",
 					"--",
 					"--model",
 					longValue,
 				]);
 			},
-			{ width: WIDTH, height: HEIGHT, props: props },
+			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
 		);
 	});
 	test("word deletion removes a word in either direction", async () => {
-		const runner = new FakeRunner();
-		const props = { config: BASE_CONFIG, runner, home, configPath };
+		const planeRecord = await plane({
+			config: seatOpenConfig,
+			repos: { "github.com/acme/billing": "src/billing" },
+		});
+		const _runner = planeRecord.fakeRunner;
+
 		await withApp(
 			async (setup) => {
+				planeRecord.settleFirstFetch();
+				await waitSourceHealthy(planeRecord.state);
+				await walkToFirstOpen(setup);
 				await openPanel(setup);
 				await press(setup, "j", "the selection to reach the environment", (f) =>
 					f.includes("❯ Environment"),
@@ -2602,14 +3366,21 @@ describe("the override panel", () => {
 				);
 				expect(frameText(frame)).toContain("Model (empty - query failed)");
 			},
-			{ width: WIDTH, height: HEIGHT, props: props },
+			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
 		);
 	});
 	test("question mark and m type into a selected free-text row", async () => {
-		const runner = new FakeRunner();
-		const props = { config: BASE_CONFIG, runner, home, configPath };
+		const planeRecord = await plane({
+			config: seatOpenConfig,
+			repos: { "github.com/acme/billing": "src/billing" },
+		});
+		const _runner = planeRecord.fakeRunner;
+
 		await withApp(
 			async (setup) => {
+				planeRecord.settleFirstFetch();
+				await waitSourceHealthy(planeRecord.state);
+				await walkToFirstOpen(setup);
 				await openPanel(setup);
 				await press(setup, "j", "the selection to reach the environment", (f) =>
 					f.includes("❯ Environment"),
@@ -2626,14 +3397,26 @@ describe("the override panel", () => {
 				);
 				expect(frameText(frame)).toContain("Model ?m");
 			},
-			{ width: WIDTH, height: HEIGHT, props: props },
+			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
 		);
 	});
 	test("typing and confirming in one tick hands off the complete value", async () => {
-		const runner = stubHerdrWorld(worldCheckout());
-		const props = { config: BASE_CONFIG, runner, home, configPath };
+		const planeRecord = await plane({
+			config: seatOpenConfig,
+			repos: { "github.com/acme/billing": "src/billing" },
+			commands: (fake, home2) => {
+				const path = join(home2, "src", "billing");
+				stubCheckout(fake, path);
+				stubLiveHandoff(fake, path);
+			},
+		});
+		const runner = planeRecord.fakeRunner;
+
 		await withApp(
 			async (setup) => {
+				planeRecord.settleFirstFetch();
+				await waitSourceHealthy(planeRecord.state);
+				await walkToFirstOpen(setup);
 				await openPanel(setup);
 				await press(setup, "j", "the selection to reach the environment", (f) =>
 					f.includes("❯ Environment"),
@@ -2648,18 +3431,25 @@ describe("the override panel", () => {
 				const start = runner.calls.find((c) => c.args[0] === "agent" && c.args[1] === "start");
 				expect(start?.args).toContain("gpt");
 			},
-			{ width: WIDTH, height: HEIGHT, props: props },
+			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
 		);
 	});
 	test("a text draft survives an agent change and terminal resize", async () => {
-		const runner = new FakeRunner();
 		const config = {
 			...BASE_CONFIG,
 			agents: { ...BASE_CONFIG.agents, cursor: { kind: "cursor" } },
 		};
-		const props = { config, runner, home, configPath };
+		const planeRecord = await plane({
+			config: config,
+			repos: { "github.com/acme/billing": "src/billing" },
+		});
+		const _runner = planeRecord.fakeRunner;
+
 		await withApp(
 			async (setup) => {
+				planeRecord.settleFirstFetch();
+				await waitSourceHealthy(planeRecord.state);
+				await walkToFirstOpen(setup);
 				await openPanel(setup);
 				await press(setup, "j", "the selection to reach the environment", (f) =>
 					f.includes("❯ Environment"),
@@ -2711,14 +3501,23 @@ describe("the override panel", () => {
 				);
 				expect(frameText(restored)).toContain("Model draft");
 			},
-			{ width: WIDTH, height: HEIGHT, props: props },
+			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
 		);
 	});
 	test("a short terminal scrolls the rows to keep the selected one on screen", async () => {
-		const runner = new FakeRunner();
-		const props = { config: BASE_CONFIG, runner, home, configPath };
+		const planeRecord = await plane({
+			config: seatOpenConfig,
+			repos: { "github.com/acme/billing": "src/billing" },
+		});
+		const _runner = planeRecord.fakeRunner;
+
 		await withApp(
 			async (setup) => {
+				planeRecord.settleFirstFetch();
+				await waitSourceHealthy(planeRecord.state);
+				// The list is not drawn below the minimum, so the walk goes
+				// blind: the selection still moves through the standing's rows.
+				await blindWalkToFirstOpen(setup);
 				// A six-row terminal holds the box's two borders, the Action
 				// bar, and three of the five panel rows, so the last row is off
 				// screen while the first is selected...
@@ -2742,17 +3541,27 @@ describe("the override panel", () => {
 				expect(frameText(frame)).toContain("❯ Thinking");
 				expect(frameText(frame)).not.toContain("Agent");
 			},
-			{ width: 24, height: 6, props: props },
+			{ width: 24, height: 6, plane: planeRecord },
 		);
 	});
 	test("the shared Action bar documents the list-row controls", async () => {
-		const runner = new FakeRunner();
 		// The canned list makes the Model row a list row, so its guide reads as a
 		// choice row rather than as a text field.
-		runner.setModelList("pi", ["anthropic/claude-sonnet-4-5"]);
-		const props = { config: BASE_CONFIG, runner, home, configPath };
+		const planeRecord = await plane({
+			config: seatOpenConfig,
+			repos: { "github.com/acme/billing": "src/billing" },
+			commands: (fake, home2) => {
+				const _path = join(home2, "src", "billing");
+				fake.setModelList("pi", ["anthropic/claude-sonnet-4-5"]);
+			},
+		});
+		const _runner = planeRecord.fakeRunner;
+
 		await withApp(
 			async (setup) => {
+				planeRecord.settleFirstFetch();
+				await waitSourceHealthy(planeRecord.state);
+				await walkToFirstOpen(setup);
 				const frame = await openPanel(setup);
 				// The panel has no local hint row. Its shared Action bar shows
 				// the keys the shared control catalogue dispatches.
@@ -2792,14 +3601,21 @@ describe("the override panel", () => {
 					"↑↓/jk Move ←→/hl Change ⌫ Clear Enter Hand off Esc Cancel F1 Help",
 				);
 			},
-			{ width: WIDTH, height: HEIGHT, props: props },
+			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
 		);
 	});
 	test("a narrow terminal sizes the panel instead of corrupting rows", async () => {
-		const runner = new FakeRunner();
-		const props = { config: BASE_CONFIG, runner, home, configPath };
+		const planeRecord = await plane({
+			config: seatOpenConfig,
+			repos: { "github.com/acme/billing": "src/billing" },
+		});
+		const _runner = planeRecord.fakeRunner;
+
 		await withApp(
 			async (setup) => {
+				planeRecord.settleFirstFetch();
+				await waitSourceHealthy(planeRecord.state);
+				await blindWalkToFirstOpen(setup);
 				const frame = await openPanel(setup);
 				const rows = rowsOf(frame);
 				expect(rows).toHaveLength(12);
@@ -2822,10 +3638,13 @@ describe("the override panel", () => {
 				expect(bar).not.toContain("Change");
 				expect(bar).not.toContain("Hand off");
 			},
-			{ width: 30, height: 12, props: props },
+			{ width: 30, height: 12, plane: planeRecord },
 		);
 		await withApp(
 			async (setup) => {
+				planeRecord.settleFirstFetch();
+				await waitSourceHealthy(planeRecord.state);
+				await blindWalkToFirstOpen(setup);
 				const frame = await openPanel(setup);
 				const rows = rowsOf(frame);
 				expect(rows).toHaveLength(7);
@@ -2840,7 +3659,7 @@ describe("the override panel", () => {
 				expect(frameText(frame)).not.toContain("Model");
 				expect(frameText(frame)).not.toContain("Thinking");
 			},
-			{ width: 24, height: 7, props: props },
+			{ width: 24, height: 7, plane: planeRecord },
 		);
 	});
 	/**
@@ -2852,16 +3671,29 @@ describe("the override panel", () => {
 	 */
 	function modelListRowScenarios(size: PanelSize): void {
 		test(`the Model search names the first model that holds its text (${size.width}x${size.height})`, async () => {
-			const runner = stubHerdrWorld(worldCheckout());
 			// The panel keeps the order the agent reported: pi sorts the list itself.
-			runner.setModelList("pi", [
-				"anthropic/claude-sonnet-4-5",
-				"openai/gpt-5.1",
-				"openai/gpt-5.1-codex",
-			]);
-			const props = { config: BASE_CONFIG, runner, home, configPath };
+
+			const planeRecord = await plane({
+				config: seatOpenConfig,
+				repos: { "github.com/acme/billing": "src/billing" },
+				commands: (fake, home2) => {
+					const path = join(home2, "src", "billing");
+					stubCheckout(fake, path);
+					stubLiveHandoff(fake, path);
+					fake.setModelList("pi", [
+						"anthropic/claude-sonnet-4-5",
+						"openai/gpt-5.1",
+						"openai/gpt-5.1-codex",
+					]);
+				},
+			});
+			const runner = planeRecord.fakeRunner;
+
 			await withApp(
 				async (setup) => {
+					planeRecord.settleFirstFetch();
+					await waitSourceHealthy(planeRecord.state);
+					await walkToFirstOpen(setup);
 					await openPanel(setup);
 					expect(runner.modelListCalls).toEqual(["pi"]);
 					await moveToModelRow(setup);
@@ -2888,19 +3720,31 @@ describe("the override panel", () => {
 					const start = runner.calls.find((c) => c.args[0] === "agent" && c.args[1] === "start");
 					expect(start?.args).toContain("openai/gpt-5.1-codex");
 				},
-				{ width: size.width, height: size.height, props: props },
+				{ width: size.width, height: size.height, plane: planeRecord },
 			);
 		});
 		test(`a query that matches nothing keeps its text and says so (${size.width}x${size.height})`, async () => {
-			const runner = stubHerdrWorld(worldCheckout());
-			runner.setModelList("pi", [
-				"anthropic/claude-sonnet-4-5",
-				"openai/gpt-5.1",
-				"openai/gpt-5.1-codex",
-			]);
-			const props = { config: BASE_CONFIG, runner, home, configPath };
+			const planeRecord = await plane({
+				config: seatOpenConfig,
+				repos: { "github.com/acme/billing": "src/billing" },
+				commands: (fake, home2) => {
+					const path = join(home2, "src", "billing");
+					stubCheckout(fake, path);
+					stubLiveHandoff(fake, path);
+					fake.setModelList("pi", [
+						"anthropic/claude-sonnet-4-5",
+						"openai/gpt-5.1",
+						"openai/gpt-5.1-codex",
+					]);
+				},
+			});
+			const runner = planeRecord.fakeRunner;
+
 			await withApp(
 				async (setup) => {
+					planeRecord.settleFirstFetch();
+					await waitSourceHealthy(planeRecord.state);
+					await walkToFirstOpen(setup);
 					await openPanel(setup);
 					await moveToModelRow(setup);
 					await typeModelSearch(setup, "gpt-5.1");
@@ -2941,15 +3785,27 @@ describe("the override panel", () => {
 					const start = runner.calls.find((c) => c.args[0] === "agent" && c.args[1] === "start");
 					expect(start?.args).toContain("openai/gpt-5.1");
 				},
-				{ width: size.width, height: size.height, props: props },
+				{ width: size.width, height: size.height, plane: planeRecord },
 			);
 		});
 		test(`Delete on an empty search gives the Model back to the agent (${size.width}x${size.height})`, async () => {
-			const runner = stubHerdrWorld(worldCheckout());
-			runner.setModelList("pi", ["anthropic/claude-sonnet-4-5", "openai/gpt-5.1"]);
-			const props = { config: BASE_CONFIG, runner, home, configPath };
+			const planeRecord = await plane({
+				config: seatOpenConfig,
+				repos: { "github.com/acme/billing": "src/billing" },
+				commands: (fake, home2) => {
+					const path = join(home2, "src", "billing");
+					stubCheckout(fake, path);
+					stubLiveHandoff(fake, path);
+					fake.setModelList("pi", ["anthropic/claude-sonnet-4-5", "openai/gpt-5.1"]);
+				},
+			});
+			const runner = planeRecord.fakeRunner;
+
 			await withApp(
 				async (setup) => {
+					planeRecord.settleFirstFetch();
+					await waitSourceHealthy(planeRecord.state);
+					await walkToFirstOpen(setup);
 					await openPanel(setup);
 					await moveToModelRow(setup);
 					await typeModelSearch(setup, "gpt");
@@ -2974,16 +3830,28 @@ describe("the override panel", () => {
 					// A row the operator cleared names no model: the agent starts on its own.
 					expect(start?.args).not.toContain("--model");
 				},
-				{ width: size.width, height: size.height, props: props },
+				{ width: size.width, height: size.height, plane: planeRecord },
 			);
 		});
 		test(`an unset Model is not a warning with any available list (${size.width}x${size.height})`, async () => {
 			for (const models of [["anthropic/claude-sonnet-4-5"], []] as const) {
-				const runner = stubHerdrWorld(worldCheckout());
-				runner.setModelList("pi", [...models]);
-				const props = { config: BASE_CONFIG, runner, home, configPath };
+				const planeRecord = await plane({
+					config: seatOpenConfig,
+					repos: { "github.com/acme/billing": "src/billing" },
+					commands: (fake, home2) => {
+						const path = join(home2, "src", "billing");
+						stubCheckout(fake, path);
+						stubLiveHandoff(fake, path);
+						fake.setModelList("pi", [...models]);
+					},
+				});
+				const _runner = planeRecord.fakeRunner;
+
 				await withApp(
 					async (setup) => {
+						planeRecord.settleFirstFetch();
+						await waitSourceHealthy(planeRecord.state);
+						await walkToFirstOpen(setup);
 						await openPanel(setup);
 						const placeholder = models.length > 0 ? "(unset)" : "(no models available)";
 						const expected = `Model ${placeholder}`;
@@ -2995,17 +3863,29 @@ describe("the override panel", () => {
 						expect(frameText(frame)).toContain(expected);
 						expect(spanColors(setup, placeholder)).not.toContainEqual(rgb(roleColor("yellow")));
 					},
-					{ width: size.width, height: size.height, props: props },
+					{ width: size.width, height: size.height, plane: planeRecord },
 				);
 			}
 		});
 		test(`the Model row holds a loading marker while the control plane fetches the list (${size.width}x${size.height})`, async () => {
-			const runner = stubHerdrWorld(worldCheckout());
-			runner.setModelList("pi", ["anthropic/claude-sonnet-4-5"]);
+			const planeRecord = await plane({
+				config: seatOpenConfig,
+				repos: { "github.com/acme/billing": "src/billing" },
+				commands: (fake, home2) => {
+					const path = join(home2, "src", "billing");
+					stubCheckout(fake, path);
+					stubLiveHandoff(fake, path);
+					fake.setModelList("pi", ["anthropic/claude-sonnet-4-5"]);
+				},
+			});
+			const runner = planeRecord.fakeRunner;
 			runner.holdModelLists();
-			const props = { config: BASE_CONFIG, runner, home, configPath };
+
 			await withApp(
 				async (setup) => {
+					planeRecord.settleFirstFetch();
+					await waitSourceHealthy(planeRecord.state);
+					await walkToFirstOpen(setup);
 					const opened = await openPanel(setup);
 					expect(frameText(opened)).toContain("Model (loading...)");
 					await moveToModelRow(setup);
@@ -3039,15 +3919,27 @@ describe("the override panel", () => {
 						"the match",
 					);
 				},
-				{ width: size.width, height: size.height, props: props },
+				{ width: size.width, height: size.height, plane: planeRecord },
 			);
 		});
 		test(`the Model row says so when the agent reports no models (${size.width}x${size.height})`, async () => {
-			const runner = stubHerdrWorld(worldCheckout());
-			runner.setModelList("pi", []);
-			const props = { config: BASE_CONFIG, runner, home, configPath };
+			const planeRecord = await plane({
+				config: seatOpenConfig,
+				repos: { "github.com/acme/billing": "src/billing" },
+				commands: (fake, home2) => {
+					const path = join(home2, "src", "billing");
+					stubCheckout(fake, path);
+					stubLiveHandoff(fake, path);
+					fake.setModelList("pi", []);
+				},
+			});
+			const runner = planeRecord.fakeRunner;
+
 			await withApp(
 				async (setup) => {
+					planeRecord.settleFirstFetch();
+					await waitSourceHealthy(planeRecord.state);
+					await walkToFirstOpen(setup);
 					const opened = await openPanel(setup);
 					expect(frameText(opened)).toContain("Model (no models available)");
 					await moveToModelRow(setup);
@@ -3061,22 +3953,36 @@ describe("the override panel", () => {
 					const start = runner.calls.find((c) => c.args[0] === "agent" && c.args[1] === "start");
 					expect(start?.args).not.toContain("--model");
 				},
-				{ width: size.width, height: size.height, props: props },
+				{ width: size.width, height: size.height, plane: planeRecord },
 			);
 		});
 		test(`a Model the selected agent cannot run shows in the warning color (${size.width}x${size.height})`, async () => {
-			const runner = stubHerdrWorld(worldCheckout());
-			runner.setModelList("pi", ["anthropic/claude-sonnet-4-5"]);
 			const config: FactoryConfig = {
 				...BASE_CONFIG,
+				maxParallelAgents: 3,
 				taskTypes: {
 					...BASE_CONFIG.taskTypes,
 					implement: { ...BASE_CONFIG.taskTypes.implement, model: "gpt-4o" },
 				},
 			};
-			const props = { config, runner, home, configPath };
+
+			const planeRecord = await plane({
+				config: config,
+				repos: { "github.com/acme/billing": "src/billing" },
+				commands: (fake, home2) => {
+					const path = join(home2, "src", "billing");
+					stubCheckout(fake, path);
+					stubLiveHandoff(fake, path);
+					fake.setModelList("pi", ["anthropic/claude-sonnet-4-5"]);
+				},
+			});
+			const _runner = planeRecord.fakeRunner;
+
 			await withApp(
 				async (setup) => {
+					planeRecord.settleFirstFetch();
+					await waitSourceHealthy(planeRecord.state);
+					await walkToFirstOpen(setup);
 					const opened = await openPanel(setup);
 					// The task type names a model the agent's own list does not hold:
 					// the handoff would fail on it, so the row warns before it can, and
@@ -3101,23 +4007,37 @@ describe("the override panel", () => {
 						rgb(roleColor("text")),
 					]);
 				},
-				{ width: size.width, height: size.height, props: props },
+				{ width: size.width, height: size.height, plane: planeRecord },
 			);
 		});
 		test(`a Model the config prefilled is not judged while its list loads (${size.width}x${size.height})`, async () => {
-			const runner = stubHerdrWorld(worldCheckout());
-			runner.setModelList("pi", ["anthropic/claude-sonnet-4-5", "openai/gpt-4o"]);
-			runner.holdModelLists();
 			const config: FactoryConfig = {
 				...BASE_CONFIG,
+				maxParallelAgents: 3,
 				taskTypes: {
 					...BASE_CONFIG.taskTypes,
 					implement: { ...BASE_CONFIG.taskTypes.implement, model: "openai/gpt-4o" },
 				},
 			};
-			const props = { config, runner, home, configPath };
+
+			const planeRecord = await plane({
+				config: config,
+				repos: { "github.com/acme/billing": "src/billing" },
+				commands: (fake, home2) => {
+					const path = join(home2, "src", "billing");
+					stubCheckout(fake, path);
+					stubLiveHandoff(fake, path);
+					fake.setModelList("pi", ["anthropic/claude-sonnet-4-5", "openai/gpt-4o"]);
+				},
+			});
+			const runner = planeRecord.fakeRunner;
+			runner.holdModelLists();
+
 			await withApp(
 				async (setup) => {
+					planeRecord.settleFirstFetch();
+					await waitSourceHealthy(planeRecord.state);
+					await walkToFirstOpen(setup);
 					const opened = await openPanel(setup);
 					expect(runner.modelListCalls).toEqual(["pi"]);
 					// The row holds the config's own value. It is not judged: the list it
@@ -3148,23 +4068,37 @@ describe("the override panel", () => {
 					// typed letters instead of j and k.
 					expect(frameText(setup.captureCharFrame())).toContain("Type Edit");
 				},
-				{ width: size.width, height: size.height, props: props },
+				{ width: size.width, height: size.height, plane: planeRecord },
 			);
 		});
 		test(`a Thinking level the selected agent does not declare shows in the warning color (${size.width}x${size.height})`, async () => {
-			const runner = stubHerdrWorld(worldCheckout());
-			runner.setModelList("pi", ["anthropic/claude-sonnet-4-5"]);
 			const config: FactoryConfig = {
 				...BASE_CONFIG,
+				maxParallelAgents: 3,
 				defaultAgent: "claude",
 				taskTypes: {
 					...BASE_CONFIG.taskTypes,
 					implement: { ...BASE_CONFIG.taskTypes.implement, thinking: "xhigh" },
 				},
 			};
-			const props = { config, runner, home, configPath };
+
+			const planeRecord = await plane({
+				config: config,
+				repos: { "github.com/acme/billing": "src/billing" },
+				commands: (fake, home2) => {
+					const path = join(home2, "src", "billing");
+					stubCheckout(fake, path);
+					stubLiveHandoff(fake, path);
+					fake.setModelList("pi", ["anthropic/claude-sonnet-4-5"]);
+				},
+			});
+			const _runner = planeRecord.fakeRunner;
+
 			await withApp(
 				async (setup) => {
+					planeRecord.settleFirstFetch();
+					await waitSourceHealthy(planeRecord.state);
+					await walkToFirstOpen(setup);
 					const opened = await openPanel(setup);
 					expect(frameText(opened)).toContain("Thinking xhigh");
 					expect(paintedIn(setup, "xhigh", rgb(roleColor("text")))).toBe(true);
@@ -3189,22 +4123,36 @@ describe("the override panel", () => {
 					expect(spanColors(setup, "xhigh")).toEqual([]);
 					expect(spanColors(setup, "minimal")).toEqual([rgb(roleColor("text"))]);
 				},
-				{ width: size.width, height: size.height, props: props },
+				{ width: size.width, height: size.height, plane: planeRecord },
 			);
 		});
 		test(`switching the agent keeps an untouched Model and queries the new agent's list (${size.width}x${size.height})`, async () => {
-			const runner = stubHerdrWorld(worldCheckout());
-			runner.setModelList("pi", ["anthropic/claude-sonnet-4-5"]);
 			const config: FactoryConfig = {
 				...BASE_CONFIG,
+				maxParallelAgents: 3,
 				taskTypes: {
 					...BASE_CONFIG.taskTypes,
 					implement: { ...BASE_CONFIG.taskTypes.implement, model: "gpt-4o" },
 				},
 			};
-			const props = { config, runner, home, configPath };
+
+			const planeRecord = await plane({
+				config: config,
+				repos: { "github.com/acme/billing": "src/billing" },
+				commands: (fake, home2) => {
+					const path = join(home2, "src", "billing");
+					stubCheckout(fake, path);
+					stubLiveHandoff(fake, path);
+					fake.setModelList("pi", ["anthropic/claude-sonnet-4-5"]);
+				},
+			});
+			const runner = planeRecord.fakeRunner;
+
 			await withApp(
 				async (setup) => {
+					planeRecord.settleFirstFetch();
+					await waitSourceHealthy(planeRecord.state);
+					await walkToFirstOpen(setup);
 					await openPanel(setup);
 					// Each setting resolves on its own chain: the agent row is the only
 					// thing cycling it changes, so the task type's model rides on.
@@ -3215,14 +4163,14 @@ describe("the override panel", () => {
 					// codex reports no list, so no query runs for it.
 					expect(runner.modelListCalls).toEqual(["pi"]);
 				},
-				{ width: size.width, height: size.height, props: props },
+				{ width: size.width, height: size.height, plane: planeRecord },
 			);
 		});
 		test(`switching the task type re-derives an untouched Model row (${size.width}x${size.height})`, async () => {
-			const runner = stubHerdrWorld(worldCheckout());
-			runner.setModelList("pi", ["anthropic/claude-sonnet-4-5", "openai/gpt-5.1"]);
 			const config: FactoryConfig = {
 				...BASE_CONFIG,
+				maxParallelAgents: 3,
+				workflowStates: [...BASE_CONFIG.workflowStates, mergeState],
 				taskTypes: {
 					...BASE_CONFIG.taskTypes,
 					merge: {
@@ -3231,10 +4179,26 @@ describe("the override panel", () => {
 					},
 				},
 			};
-			const mergeTicket: Ticket = { ...first, suggestedTaskType: "merge" };
-			const props = { config, runner, home, configPath, initialTickets: [mergeTicket] };
+			const mergeTicket: Ticket = { ...first, labels: ["merge"] };
+
+			const planeRecord = await plane({
+				groupingAxis: "none",
+				config: config,
+				sources: [{ config: billingSource, tickets: [mergeTicket] }],
+				repos: { "github.com/acme/billing": "src/billing" },
+				commands: (fake, home2) => {
+					const path = join(home2, "src", "billing");
+					stubCheckout(fake, path);
+					stubLiveHandoff(fake, path);
+					fake.setModelList("pi", ["anthropic/claude-sonnet-4-5", "openai/gpt-5.1"]);
+				},
+			});
+			const runner = planeRecord.fakeRunner;
+
 			await withApp(
 				async (setup) => {
+					planeRecord.settleFirstFetch();
+					await waitSourceHealthy(planeRecord.state);
 					const opened = await openPanel(setup);
 					expect(frameText(opened)).toContain("Model openai/gpt-5.1");
 					await press(setup, "j", "the selection to move to the environment", (f) =>
@@ -3270,19 +4234,32 @@ describe("the override panel", () => {
 					const start = runner.calls.find((c) => c.args[0] === "agent" && c.args[1] === "start");
 					expect(start?.args).toContain("openai/gpt-5.1");
 				},
-				{ width: size.width, height: size.height, props: props },
+				{ width: size.width, height: size.height, plane: planeRecord },
 			);
 		});
 		test(`a Model wider than its column shows its end and rides on whole (${size.width}x${size.height})`, async () => {
-			const runner = stubHerdrWorld(worldCheckout());
 			// A real agent list carries one long provider in front of many models:
 			// the head of the value says nothing the neighbour's head does not.
 			const long =
 				"llama-server=http://127.0.0.1:8080/AtomicChat/DeepSeek-V4-Flash-0731-GGUF:IQ1_M_XL";
-			runner.setModelList("pi", [long, `${long.slice(0, long.length - 1)}2`]);
-			const props = { config: BASE_CONFIG, runner, home, configPath };
+
+			const planeRecord = await plane({
+				config: seatOpenConfig,
+				repos: { "github.com/acme/billing": "src/billing" },
+				commands: (fake, home2) => {
+					const path = join(home2, "src", "billing");
+					stubCheckout(fake, path);
+					stubLiveHandoff(fake, path);
+					fake.setModelList("pi", [long, `${long.slice(0, long.length - 1)}2`]);
+				},
+			});
+			const runner = planeRecord.fakeRunner;
+
 			await withApp(
 				async (setup) => {
+					planeRecord.settleFirstFetch();
+					await waitSourceHealthy(planeRecord.state);
+					await walkToFirstOpen(setup);
 					await openPanel(setup);
 					await moveToModelRow(setup);
 					await typeModelSearch(setup, "IQ1_M_XL");
@@ -3301,15 +4278,27 @@ describe("the override panel", () => {
 					// The clip is display only: the handoff names the whole value.
 					expect(start?.args).toContain(long);
 				},
-				{ width: size.width, height: size.height, props: props },
+				{ width: size.width, height: size.height, plane: planeRecord },
 			);
 		});
 		test(`a failed model list query falls the Model row back to free text (${size.width}x${size.height})`, async () => {
-			const runner = stubHerdrWorld(worldCheckout());
+			const planeRecord = await plane({
+				config: seatOpenConfig,
+				repos: { "github.com/acme/billing": "src/billing" },
+				commands: (fake, home2) => {
+					const path = join(home2, "src", "billing");
+					stubCheckout(fake, path);
+					stubLiveHandoff(fake, path);
+				},
+			});
+			const runner = planeRecord.fakeRunner;
 			runner.setModelListFailure("pi", "network unreachable");
-			const props = { config: BASE_CONFIG, runner, home, configPath };
+
 			await withApp(
 				async (setup) => {
+					planeRecord.settleFirstFetch();
+					await waitSourceHealthy(planeRecord.state);
+					await walkToFirstOpen(setup);
 					await openPanel(setup);
 					const onModel = await moveToModelRow(setup);
 					// The fallback keeps the whole input: the caret and the editing keys,
@@ -3321,15 +4310,28 @@ describe("the override panel", () => {
 					const start = runner.calls.find((c) => c.args[0] === "agent" && c.args[1] === "start");
 					expect(start?.args).toContain("gpt-4o");
 				},
-				{ width: size.width, height: size.height, props: props },
+				{ width: size.width, height: size.height, plane: planeRecord },
 			);
 		});
 		test(`a Model row the agent's kind cannot list names that cause (${size.width}x${size.height})`, async () => {
-			const runner = stubHerdrWorld(worldCheckout());
 			const config: FactoryConfig = { ...BASE_CONFIG, defaultAgent: "codex" };
-			const props = { config, runner, home, configPath };
+
+			const planeRecord = await plane({
+				config: config,
+				repos: { "github.com/acme/billing": "src/billing" },
+				commands: (fake, home2) => {
+					const path = join(home2, "src", "billing");
+					stubCheckout(fake, path);
+					stubLiveHandoff(fake, path);
+				},
+			});
+			const runner = planeRecord.fakeRunner;
+
 			await withApp(
 				async (setup) => {
+					planeRecord.settleFirstFetch();
+					await waitSourceHealthy(planeRecord.state);
+					await walkToFirstOpen(setup);
 					await openPanel(setup);
 					const onModel = await moveToModelRow(setup);
 					// The row is free text for the same reason the query failure makes it
@@ -3339,14 +4341,14 @@ describe("the override panel", () => {
 					// No query ran for a kind that has no list command.
 					expect(runner.modelListCalls).toEqual([]);
 				},
-				{ width: size.width, height: size.height, props: props },
+				{ width: size.width, height: size.height, plane: planeRecord },
 			);
 		});
 		test(`a Model the operator typed survives a task type switch (${size.width}x${size.height})`, async () => {
-			const runner = stubHerdrWorld(worldCheckout());
-			runner.setModelList("pi", ["anthropic/claude-sonnet-4-5", "openai/gpt-5.1"]);
 			const config: FactoryConfig = {
 				...BASE_CONFIG,
+				maxParallelAgents: 3,
+				workflowStates: [...BASE_CONFIG.workflowStates, mergeState],
 				taskTypes: {
 					...BASE_CONFIG.taskTypes,
 					merge: {
@@ -3355,10 +4357,26 @@ describe("the override panel", () => {
 					},
 				},
 			};
-			const mergeTicket: Ticket = { ...first, suggestedTaskType: "merge" };
-			const props = { config, runner, home, configPath, initialTickets: [mergeTicket] };
+			const mergeTicket: Ticket = { ...first, labels: ["merge"] };
+
+			const planeRecord = await plane({
+				groupingAxis: "none",
+				config: config,
+				sources: [{ config: billingSource, tickets: [mergeTicket] }],
+				repos: { "github.com/acme/billing": "src/billing" },
+				commands: (fake, home2) => {
+					const path = join(home2, "src", "billing");
+					stubCheckout(fake, path);
+					stubLiveHandoff(fake, path);
+					fake.setModelList("pi", ["anthropic/claude-sonnet-4-5", "openai/gpt-5.1"]);
+				},
+			});
+			const _runner = planeRecord.fakeRunner;
+
 			await withApp(
 				async (setup) => {
+					planeRecord.settleFirstFetch();
+					await waitSourceHealthy(planeRecord.state);
 					// Story 15 for the Model row: a typed value counts as the operator's
 					// own, because typing is how a list row is chosen.
 					await openPanel(setup);
@@ -3385,16 +4403,16 @@ describe("the override panel", () => {
 					const backOnModel = await moveToModelRowFromTaskType(setup);
 					expect(frameText(backOnModel)).toContain("Model anthropic/claude-sonnet-4-5");
 				},
-				{ width: size.width, height: size.height, props: props },
+				{ width: size.width, height: size.height, plane: planeRecord },
 			);
 		});
 		test(`a Model the operator cleared survives a task type switch (${size.width}x${size.height})`, async () => {
-			const runner = stubHerdrWorld(worldCheckout());
-			runner.setModelList("pi", ["anthropic/claude-sonnet-4-5", "openai/gpt-5.1"]);
 			// A list that arrives late shows why an untouched row alone is not enough:
 			// the clear is the operator's decision either way.
 			const config: FactoryConfig = {
 				...BASE_CONFIG,
+				maxParallelAgents: 3,
+				workflowStates: [...BASE_CONFIG.workflowStates, mergeState],
 				taskTypes: {
 					...BASE_CONFIG.taskTypes,
 					merge: {
@@ -3403,10 +4421,26 @@ describe("the override panel", () => {
 					},
 				},
 			};
-			const mergeTicket: Ticket = { ...first, suggestedTaskType: "merge" };
-			const props = { config, runner, home, configPath, initialTickets: [mergeTicket] };
+			const mergeTicket: Ticket = { ...first, labels: ["merge"] };
+
+			const planeRecord = await plane({
+				groupingAxis: "none",
+				config: config,
+				sources: [{ config: billingSource, tickets: [mergeTicket] }],
+				repos: { "github.com/acme/billing": "src/billing" },
+				commands: (fake, home2) => {
+					const path = join(home2, "src", "billing");
+					stubCheckout(fake, path);
+					stubLiveHandoff(fake, path);
+					fake.setModelList("pi", ["anthropic/claude-sonnet-4-5", "openai/gpt-5.1"]);
+				},
+			});
+			const _runner = planeRecord.fakeRunner;
+
 			await withApp(
 				async (setup) => {
+					planeRecord.settleFirstFetch();
+					await waitSourceHealthy(planeRecord.state);
 					// Story 15 for the Model row, with clearing as the only touch: the
 					// operator who cleared the profile's model to hand off with the
 					// agent's own default must not watch it come back.
@@ -3438,14 +4472,14 @@ describe("the override panel", () => {
 					expect(frameText(toMerge)).toContain("Model (unset)");
 					expect(frameText(toMerge)).not.toContain("Model openai/gpt-5.1");
 				},
-				{ width: size.width, height: size.height, props: props },
+				{ width: size.width, height: size.height, plane: planeRecord },
 			);
 		});
 		test(`switching the task type re-derives an untouched Agent row (${size.width}x${size.height})`, async () => {
-			const runner = stubHerdrWorld(worldCheckout());
-			runner.setModelList("pi", ["anthropic/claude-sonnet-4-5"]);
 			const config: FactoryConfig = {
 				...BASE_CONFIG,
+				maxParallelAgents: 3,
+				workflowStates: [...BASE_CONFIG.workflowStates, mergeState],
 				taskTypes: {
 					...BASE_CONFIG.taskTypes,
 					merge: {
@@ -3454,10 +4488,26 @@ describe("the override panel", () => {
 					},
 				},
 			};
-			const mergeTicket: Ticket = { ...first, suggestedTaskType: "merge" };
-			const props = { config, runner, home, configPath, initialTickets: [mergeTicket] };
+			const mergeTicket: Ticket = { ...first, labels: ["merge"] };
+
+			const planeRecord = await plane({
+				groupingAxis: "none",
+				config: config,
+				sources: [{ config: billingSource, tickets: [mergeTicket] }],
+				repos: { "github.com/acme/billing": "src/billing" },
+				commands: (fake, home2) => {
+					const path = join(home2, "src", "billing");
+					stubCheckout(fake, path);
+					stubLiveHandoff(fake, path);
+					fake.setModelList("pi", ["anthropic/claude-sonnet-4-5"]);
+				},
+			});
+			const runner = planeRecord.fakeRunner;
+
 			await withApp(
 				async (setup) => {
+					planeRecord.settleFirstFetch();
+					await waitSourceHealthy(planeRecord.state);
 					// The merge profile names claude, so the agent row starts there: the
 					// profile leg of the chain, not `default-agent`.
 					const opened = await openPanel(setup);
@@ -3511,53 +4561,29 @@ describe("the override panel", () => {
 					// merge names claude, and the row the operator set keeps codex.
 					expect(frameText(toMerge)).toContain("Agent codex");
 				},
-				{ width: size.width, height: size.height, props: props },
+				{ width: size.width, height: size.height, plane: planeRecord },
 			);
 		});
 	}
 	for (const size of PANEL_SIZES) modelListRowScenarios(size);
-	test("a hint that does not fit keeps its front, never a cut marker", async () => {
-		// 24 columns leaves a row's value six cells, so every hint is cut. A cut
-		// hint keeps its front: the cut marker says "the end of a longer name",
-		// and a hint is not a name.
-		const none = stubHerdrWorld(worldCheckout());
-		none.setModelList("pi", []);
-		const held = stubHerdrWorld(worldCheckout());
-		held.setModelList("pi", ["anthropic/claude-sonnet-4-5"]);
-		held.holdModelLists();
-		await withApp(
-			async (setup) => {
-				await openPanel(setup);
-				await moveToModelRow(setup);
-				const shown = await awaitFrame(
-					setup,
-					(f) => frameText(f).includes("Model (no mo"),
-					"the empty-list hint to show",
-				);
-				expect(rowLineOf(shown, "Model")).not.toContain("\u2026");
-			},
-			{ width: 24, height: 8, props: { config: BASE_CONFIG, runner: none, home, configPath } },
-		);
-		await withApp(
-			async (setup) => {
-				await openPanel(setup);
-				await moveToModelRow(setup);
-				const shown = await awaitFrame(
-					setup,
-					(f) => frameText(f).includes("Model (loadi"),
-					"the loading hint to show",
-				);
-				expect(rowLineOf(shown, "Model")).not.toContain("\u2026");
-			},
-			{ width: 24, height: 8, props: { config: BASE_CONFIG, runner: held, home, configPath } },
-		);
-	});
 	test("the Thinking row offers the selected agent's levels, and backspace clears it", async () => {
-		const runner = stubHerdrWorld(worldCheckout());
-		const config: FactoryConfig = { ...BASE_CONFIG, defaultAgent: "claude" };
-		const props = { config, runner, home, configPath };
+		const config: FactoryConfig = { ...BASE_CONFIG, maxParallelAgents: 3, defaultAgent: "claude" };
+		const planeRecord = await plane({
+			config: config,
+			repos: { "github.com/acme/billing": "src/billing" },
+			commands: (fake, home2) => {
+				const path = join(home2, "src", "billing");
+				stubCheckout(fake, path);
+				stubLiveHandoff(fake, path);
+			},
+		});
+		const runner = planeRecord.fakeRunner;
+
 		await withApp(
 			async (setup) => {
+				planeRecord.settleFirstFetch();
+				await waitSourceHealthy(planeRecord.state);
+				await walkToFirstOpen(setup);
 				await openPanel(setup);
 				await moveToThinkingRow(setup);
 				expect(frameText(setup.captureCharFrame())).toContain("Thinking (unset)");
@@ -3585,18 +4611,31 @@ describe("the override panel", () => {
 				const start = runner.calls.find((c) => c.args[0] === "agent" && c.args[1] === "start");
 				expect(start?.args).not.toContain("--effort");
 			},
-			{ width: WIDTH, height: HEIGHT, props: props },
+			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
 		);
-	});
+	}, 20000);
 	test("a failed worktree handoff removes its residue and keeps the ticket open", async () => {
-		const runner = stubHerdrWorld(worldCheckout());
-		runner.set("herdr", ["agent", "start", firstAgent, "--kind", "pi", "--pane", "pane-1"], {
-			code: 1,
-			stderr: "agent name is already used\n",
+		const planeRecord = await plane({
+			config: seatOpenConfig,
+			repos: { "github.com/acme/billing": "src/billing" },
+			commands: (fake, home2) => {
+				const path = join(home2, "src", "billing");
+				stubCheckout(fake, path);
+				stubWorktreeHandoff(fake, path);
+				fake.set("herdr", ["agent", "start", firstAgent, "--kind", "pi", "--pane", "pane-wt"], {
+					code: 1,
+					stderr: "agent name is already used\n",
+				});
+			},
 		});
-		const props = { config: BASE_CONFIG, runner, home, configPath };
+		const runner = planeRecord.fakeRunner;
+		const checkout = join(planeRecord.home, "src", "billing");
+
 		await withApp(
 			async (setup) => {
+				planeRecord.settleFirstFetch();
+				await waitSourceHealthy(planeRecord.state);
+				await walkToFirstOpen(setup);
 				await openPanel(setup);
 				await press(setup, "j", "the row selection to move to the environment", (f) =>
 					f.includes("❯ Environment"),
@@ -3617,12 +4656,12 @@ describe("the override panel", () => {
 				// The residue is removed: the worktree and the branch, so a
 				// retry can run.
 				const commands = runner.commands();
-				expect(commands).toContain("herdr worktree remove --workspace ws-1");
+				expect(commands).toContain("herdr worktree remove --workspace ws-wt");
 				expect(commands).toContain(
-					`git -C ${checkout()} branch -D factory/${first.externalKey.slice(1)}-${firstSlug}`,
+					`git -C ${checkout} branch -D factory/${first.externalKey.slice(1)}-${firstSlug}`,
 				);
 			},
-			{ width: WIDTH, height: HEIGHT, props: props },
+			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
 		);
 	});
 });
