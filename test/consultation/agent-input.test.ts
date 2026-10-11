@@ -2,12 +2,35 @@
  * The Agent input module, read through its interface (issue #203).
  *
  * The key translation is a pure read over one key event. The input queue is
- * tested against the fake command runner, the suite's stand-in for the external
- * `herdr` call, so no test reaches a real pane.
+ * tested against the Stub herdr world (ADR 0132), so every send the queue
+ * issues reaches the pane the world holds and the test reads what the pane
+ * received instead of the command that carried it.
  */
 import { describe, expect, test } from "bun:test";
 import { ConsultationInputQueue, translateAgentKey } from "../../src/consultation/agent-input.ts";
-import { FakeRunner } from "../fake-runner.ts";
+import { DelayedRunner } from "../delayed-runner.ts";
+import { type HerdrWorldDescription, stubHerdrWorld } from "../herdr-world.ts";
+
+const CHECKOUT = "/home/jul/src/factory";
+
+/**
+ * The standing the queue writes into: one workspace, its tab, and the pane
+ * the Agent holds in it. The queue never reads the world; it only sends.
+ */
+function queueStanding(): HerdrWorldDescription {
+	return {
+		checkouts: [
+			{
+				path: CHECKOUT,
+				cloneUrl: "https://github.com/acme/factory.git",
+				defaultBranch: "main",
+			},
+		],
+		workspaces: [{ id: "ws-1", checkoutPath: CHECKOUT }],
+		tabs: [{ id: "tab-1", workspaceId: "ws-1" }],
+		panes: [{ id: "pane-1", tabId: "tab-1", workspaceId: "ws-1" }],
+	};
+}
 
 describe("the Agent input module's key translation", () => {
 	test("maps semantic keys and lets AltGr text pass through", () => {
@@ -33,61 +56,77 @@ describe("the Agent input module's key translation", () => {
 });
 
 describe("the Agent input queue", () => {
-	test("batches consecutive literal text into one send-text", async () => {
-		const runner = new FakeRunner();
-		const queue = new ConsultationInputQueue(runner);
+	test("batches consecutive literal text into one send", async () => {
+		const world = stubHerdrWorld(queueStanding());
+		const queue = new ConsultationInputQueue(world);
 		await Promise.all([
 			queue.enqueue("pane-1", { kind: "text", text: "hel" }),
 			queue.enqueue("pane-1", { kind: "text", text: "lo" }),
 		]);
 		await queue.flush();
-		expect(runner.commands()).toEqual(["herdr pane send-text pane-1 hello"]);
+		expect(world.sentTextFor("pane-1")).toEqual(["hello"]);
+		expect(world.sentKeysFor("pane-1")).toEqual([]);
 	});
 
 	test("flushes literal text before a semantic key", async () => {
-		const runner = new FakeRunner();
-		const queue = new ConsultationInputQueue(runner);
+		const world = stubHerdrWorld(queueStanding());
+		const queue = new ConsultationInputQueue(world);
 		queue.enqueue("pane-1", { kind: "text", text: "hello" });
 		await queue.enqueue("pane-1", { kind: "key", key: "enter" });
 		await queue.flush();
-		expect(runner.commands()).toEqual([
+		// The subject here is the order of the two sends, and the only place
+		// that order stands is the world's recording.
+		expect(world.commands()).toEqual([
 			"herdr pane send-text pane-1 hello",
 			"herdr pane send-keys pane-1 enter",
 		]);
 	});
 
 	test("keeps UTF-8 batches within the byte bound without splitting characters", async () => {
-		const runner = new FakeRunner();
-		const queue = new ConsultationInputQueue(runner, 8);
+		const world = stubHerdrWorld(queueStanding());
+		const queue = new ConsultationInputQueue(world, 8);
 		const text = "aé😀😀"; // 3 + 4 + 4 = 11 bytes
 		queue.enqueue("pane-1", { kind: "text", text });
 		await queue.flush();
-		const parts = runner.commands().map((command) => command.split(" ").slice(4).join(" "));
+		const parts = world.sentTextFor("pane-1");
 		expect(parts.join("")).toBe(text);
 		for (const part of parts) expect(Buffer.byteLength(part, "utf8")).toBeLessThanOrEqual(8);
 	});
 
 	test("runs commands in enqueue order, never concurrently", async () => {
-		// Every command holds for a moment, so an overlap would show up as two
-		// commands running at once.
-		const runner = new FakeRunner();
-		runner.setDefaultDelay(10);
-		const queue = new ConsultationInputQueue(runner);
+		// Every send holds open until the release, so a queue that did not
+		// serialize would issue all three beside the held first, and the peak
+		// would name it.
+		const world = stubHerdrWorld(queueStanding());
+		const sends: string[][] = [
+			["pane", "send-text", "pane-1", "one"],
+			["pane", "send-keys", "pane-1", "enter"],
+			["pane", "send-keys", "pane-1", "up"],
+		];
+		for (const args of sends) world.hold("herdr", args);
+		const queue = new ConsultationInputQueue(world);
 		queue.enqueue("pane-1", { kind: "text", text: "one" });
-		await queue.enqueue("pane-1", { kind: "key", key: "enter" });
-		await queue.enqueue("pane-1", { kind: "key", key: "up" });
-		await queue.flush();
-		expect(runner.commands()).toEqual([
+		queue.enqueue("pane-1", { kind: "key", key: "enter" });
+		queue.enqueue("pane-1", { kind: "key", key: "up" });
+		const flushed = queue.flush();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		// A queue that did not serialize would already show all three beside
+		// the held first.
+		expect(world.commands()).toEqual(["herdr pane send-text pane-1 one"]);
+		expect(world.peakConcurrency()).toBe(1);
+		for (const args of sends) world.release("herdr", args);
+		await flushed;
+		expect(world.commands()).toEqual([
 			"herdr pane send-text pane-1 one",
 			"herdr pane send-keys pane-1 enter",
 			"herdr pane send-keys pane-1 up",
 		]);
-		expect(runner.peakConcurrency()).toBe(1);
+		expect(world.peakConcurrency()).toBe(1);
 	});
 
 	test("flush waits until every queued command settles", async () => {
-		const runner = new FakeRunner();
-		runner.setDefaultDelay(15);
+		const world = stubHerdrWorld(queueStanding());
+		const runner = new DelayedRunner(world, 15, Number.POSITIVE_INFINITY);
 		const queue = new ConsultationInputQueue(runner);
 		await Promise.all([
 			queue.enqueue("pane-1", { kind: "text", text: "a" }),
@@ -96,7 +135,7 @@ describe("the Agent input queue", () => {
 		await queue.flush();
 		// The commands were issued before the flush resolved; what the flush
 		// waits for is the answer to each one.
-		expect(runner.settledCommands()).toEqual(runner.commands());
-		expect(runner.commands().length).toBe(2);
+		expect(world.settledCommands()).toEqual(world.commands());
+		expect(world.commands().length).toBe(2);
 	});
 });

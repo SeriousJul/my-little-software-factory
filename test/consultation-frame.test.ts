@@ -61,14 +61,9 @@ import {
 } from "./app-harness.ts";
 import { BASE_CONFIG } from "./base-config.ts";
 import { expectNoCommand } from "./command-assertions.ts";
-import {
-	FakeRunner,
-	herdrFocusCommands,
-	workspaceGetJson,
-	workspaceListJson,
-} from "./fake-runner.ts";
+import { FakeRunner, herdrFocusCommands, workspaceGetJson } from "./fake-runner.ts";
 import { FakeSource } from "./fake-source.ts";
-import { type HerdrWorldDescription, stubHerdrWorld } from "./herdr-world.ts";
+import { type HerdrWorldDescription, type StubHerdrWorld, stubHerdrWorld } from "./herdr-world.ts";
 import { issueTicket, success } from "./state-fixture.ts";
 
 /**
@@ -334,6 +329,23 @@ function liveLaunchStanding(existing: boolean, dirty = false): HerdrWorldDescrip
 	return world;
 }
 
+/**
+ * The standing the interaction test writes into: the workspace, the tab, and
+ * the pane the seeded Consultation's Agent holds. The pane's standing content
+ * answers a read the test did not pin; the pinned reads answer from the
+ * world's own `set` surface.
+ */
+function interactionStanding(paneId: string): HerdrWorldDescription {
+	const short = INTERACTION_ID.slice(0, 8);
+	const world = worldCheckout();
+	world.workspaces = [{ id: `ws-${short}`, checkoutPath: checkout }];
+	world.tabs = [{ id: `tab-${short}`, workspaceId: `ws-${short}` }];
+	world.panes = [
+		{ id: paneId, tabId: `tab-${short}`, workspaceId: `ws-${short}`, content: "Agent: working" },
+	];
+	return world;
+}
+
 /** Stub the plain-text pane read the output refresh timer issues. */
 function stubPaneReadText(runner: CommandDouble, paneId: string, output: string): void {
 	runner.set(
@@ -538,6 +550,17 @@ async function waitForCommands(runner: ConsultationRunner, needles: string[], wh
 		if (needles.every((needle) => recorded.includes(needle))) return;
 		if (Date.now() >= deadline)
 			throw new Error(`timed out waiting for ${what}:\n${runner.commands().join("\n")}`);
+		await sleep(25);
+	}
+}
+
+/** Wait until the world's send records hold a text send and a key send for the pane. */
+async function waitForSends(world: StubHerdrWorld, paneId: string, what: string): Promise<void> {
+	const deadline = Date.now() + 4000;
+	for (;;) {
+		if (world.sentTextFor(paneId).length > 0 && world.sentKeysFor(paneId).length > 0) return;
+		if (Date.now() >= deadline)
+			throw new Error(`timed out waiting for ${what}:\n${world.commands().join("\n")}`);
 		await sleep(25);
 	}
 }
@@ -1301,7 +1324,7 @@ describe("Agent interaction through the UI", () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
 		seed(state, INTERACTION_ID);
 		const paneId = `pane-${INTERACTION_ID.slice(0, 8)}`;
-		const inner = new FakeRunner();
+		const inner = stubHerdrWorld(interactionStanding(paneId));
 		stubPaneReadText(inner, paneId, "Agent: working");
 		stubPaneReadAnsi(inner, paneId, "\u001b[31mERROR: authz\u001b[0m and more");
 		const runner = new ConsultationRunner(inner, agentListJson([]));
@@ -1331,16 +1354,11 @@ describe("Agent interaction through the UI", () => {
 					await pressEnter(setup, "the frame to stay in interaction", (f) =>
 						f.includes("F12 Exit interaction"),
 					);
-					await waitForCommands(
-						runner,
-						[`herdr pane send-text ${paneId} h\u00e9`, `herdr pane send-keys ${paneId} enter`],
-						"the serialized interaction input",
-					);
-					const commands = runner.commands();
-					const textAt = commands.indexOf(`herdr pane send-text ${paneId} h\u00e9`);
-					const keyAt = commands.indexOf(`herdr pane send-keys ${paneId} enter`);
-					expect(textAt).toBeGreaterThan(-1);
-					expect(keyAt).toBeGreaterThan(textAt);
+					// The sends reach the pane the world holds; the test reads
+					// what the pane received, not the commands that carried it.
+					await waitForSends(inner, paneId, "the serialized interaction input");
+					expect(inner.sentTextFor(paneId)).toEqual(["h\u00e9"]);
+					expect(inner.sentKeysFor(paneId)).toEqual(["enter"]);
 					// The configured exit key leaves the mode.
 					await pressF12(setup, "the exit from interaction mode", (f) =>
 						f.includes("left Agent interaction mode"),
