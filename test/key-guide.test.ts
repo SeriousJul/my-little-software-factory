@@ -47,6 +47,7 @@ import {
 import { BASE_CONFIG } from "./base-config.ts";
 import { agentListJson, FakeRunner } from "./fake-runner.ts";
 import { FakeSource } from "./fake-source.ts";
+import { type HerdrWorldDescription, stubHerdrWorld } from "./herdr-world.ts";
 import { SAMPLE_TICKETS } from "./sample-tickets.ts";
 import {
 	cleanupStateFixtures,
@@ -70,13 +71,17 @@ afterEach(() => {
 	cleanupStateFixtures();
 });
 
-/** Stub the git answers for a healthy convention checkout. */
-function stubCheckout(runner: FakeRunner): void {
-	const path = join(home, "src", "billing");
-	runner.set("git", ["-C", path, "rev-parse", "--git-dir"], { stdout: ".git\n" });
-	runner.set("git", ["-C", path, "remote", "get-url", "origin"], {
-		stdout: "https://github.com/acme/billing.git\n",
-	});
+/** The healthy convention checkout, stated as a world. */
+function worldCheckout(): HerdrWorldDescription {
+	return {
+		checkouts: [
+			{
+				path: join(home, "src", "billing"),
+				cloneUrl: "https://github.com/acme/billing.git",
+				defaultBranch: "main",
+			},
+		],
+	};
 }
 
 /** Press a guide scroll key and wait for the new range in the guide's bar. */
@@ -1209,8 +1214,7 @@ describe("the in-app Key guide", () => {
 	});
 
 	test("excludes the Message view while one is open: F2 goes, F1 returns", async () => {
-		const runner = new FakeRunner();
-		stubCheckout(runner);
+		const runner = stubHerdrWorld(worldCheckout());
 		runner.set("herdr", ["workspace", "list"], {
 			code: 1,
 			stderr: `error: the daemon refused the request after the outage. ${"x".repeat(240)}\n`,
