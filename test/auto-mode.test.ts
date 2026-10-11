@@ -203,6 +203,45 @@ function stubCheckout(app: SeededApp): void {
 	});
 }
 
+/** The standing a live-worktree route reuses: the stored workspace, the fresh tab, no agent standing. */
+function stubRouteReuse(app: SeededApp): void {
+	app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+	app.runner.set("herdr", ["workspace", "list"], {
+		stdout: workspaceListJson([{ id: "ws-1", checkoutPath: Object.values(app.config.repos)[0] }]),
+	});
+	app.runner.set("herdr", ["tab", "create", "--workspace", "ws-1", "--no-focus"], {
+		stdout: tabCreateJson("pane-9", "tab-9"),
+	});
+}
+
+/** The standing a fresh live-worktree launch makes: the new workspace and tab at the convention checkout. */
+function stubFreshLaunch(app: SeededApp): void {
+	app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+	app.runner.set("herdr", ["workspace", "list"], { stdout: workspaceListJson([]) });
+	app.runner.set(
+		"herdr",
+		["workspace", "create", "--cwd", Object.values(app.config.repos)[0], "--no-focus"],
+		{
+			stdout: workspaceCreateJson("ws-1", "pane-1"),
+		},
+	);
+	app.runner.set(
+		"herdr",
+		[
+			"tab",
+			"create",
+			"--workspace",
+			"ws-1",
+			"--cwd",
+			Object.values(app.config.repos)[0],
+			"--no-focus",
+		],
+		{
+			stdout: tabCreateJson("pane-1"),
+		},
+	);
+}
+
 /** The settled handoff's turn facts, and the clock the state writes with. */
 interface SeedDetail {
 	/** The transition outcome to store on the settled turn; no transition when absent. */
@@ -2005,13 +2044,7 @@ describe("the decision modal", () => {
 			detail: { transition: reviewRoute() },
 		});
 		stubCheckout(app);
-		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
-		app.runner.set("herdr", ["workspace", "list"], {
-			stdout: workspaceListJson([{ id: "ws-1", checkoutPath: Object.values(app.config.repos)[0] }]),
-		});
-		app.runner.set("herdr", ["tab", "create", "--workspace", "ws-1", "--no-focus"], {
-			stdout: tabCreateJson("pane-9", "tab-9"),
-		});
+		stubRouteReuse(app);
 		// The previous agent holds the stable name. The routed handoff starts
 		// under its cycle name, then closes the predecessor tab that held it.
 		app.runner.set("herdr", ["agent", "start", AGENT, "--kind", "pi", "--pane", "pane-9"], {
@@ -2061,13 +2094,7 @@ describe("the decision modal", () => {
 			},
 		});
 		stubCheckout(app);
-		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
-		app.runner.set("herdr", ["workspace", "list"], {
-			stdout: workspaceListJson([{ id: "ws-1", checkoutPath: Object.values(app.config.repos)[0] }]),
-		});
-		app.runner.set("herdr", ["tab", "create", "--workspace", "ws-1", "--no-focus"], {
-			stdout: tabCreateJson("pane-9", "tab-9"),
-		});
+		stubRouteReuse(app);
 
 		const planeRecord = await planeOf(app);
 		await withApp(
@@ -2117,13 +2144,7 @@ describe("the decision modal", () => {
 			},
 		});
 		stubCheckout(app);
-		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
-		app.runner.set("herdr", ["workspace", "list"], {
-			stdout: workspaceListJson([{ id: "ws-1", checkoutPath: Object.values(app.config.repos)[0] }]),
-		});
-		app.runner.set("herdr", ["tab", "create", "--workspace", "ws-1", "--no-focus"], {
-			stdout: tabCreateJson("pane-9", "tab-9"),
-		});
+		stubRouteReuse(app);
 
 		const planeRecord = await planeOf(app);
 		await withApp(
@@ -2183,13 +2204,7 @@ describe("the decision modal", () => {
 			detail: { transition: reviewRoute({ agent: "pi" }) },
 		});
 		stubCheckout(app);
-		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
-		app.runner.set("herdr", ["workspace", "list"], {
-			stdout: workspaceListJson([{ id: "ws-1", checkoutPath: Object.values(app.config.repos)[0] }]),
-		});
-		app.runner.set("herdr", ["tab", "create", "--workspace", "ws-1", "--no-focus"], {
-			stdout: tabCreateJson("pane-9", "tab-9"),
-		});
+		stubRouteReuse(app);
 
 		const planeRecord = await planeOf(app);
 		await withApp(
@@ -2288,13 +2303,7 @@ describe("the decision modal", () => {
 			detail: { transition: reviewRoute({ agent: "claude" }) },
 		});
 		stubCheckout(app);
-		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
-		app.runner.set("herdr", ["workspace", "list"], {
-			stdout: workspaceListJson([{ id: "ws-1", checkoutPath: Object.values(app.config.repos)[0] }]),
-		});
-		app.runner.set("herdr", ["tab", "create", "--workspace", "ws-1", "--no-focus"], {
-			stdout: tabCreateJson("pane-9", "tab-9"),
-		});
+		stubRouteReuse(app);
 
 		const planeRecord = await planeOf(app);
 		await withApp(
@@ -2445,13 +2454,7 @@ describe("the decision modal", () => {
 		});
 		stubCheckout(app);
 		app.runner.setModelList("pi", ["anthropic/claude-review-4"]);
-		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
-		app.runner.set("herdr", ["workspace", "list"], {
-			stdout: workspaceListJson([{ id: "ws-1", checkoutPath: Object.values(app.config.repos)[0] }]),
-		});
-		app.runner.set("herdr", ["tab", "create", "--workspace", "ws-1", "--no-focus"], {
-			stdout: tabCreateJson("pane-9", "tab-9"),
-		});
+		stubRouteReuse(app);
 
 		const planeRecord = await planeOf(app);
 		await withApp(
@@ -2502,13 +2505,7 @@ describe("the decision modal", () => {
 			detail: { transition: reviewRoute({ agent: "codex", environment: "worktree" }) },
 		});
 		stubCheckout(app);
-		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
-		app.runner.set("herdr", ["workspace", "list"], {
-			stdout: workspaceListJson([{ id: "ws-1", checkoutPath: Object.values(app.config.repos)[0] }]),
-		});
-		app.runner.set("herdr", ["tab", "create", "--workspace", "ws-1", "--no-focus"], {
-			stdout: tabCreateJson("pane-9", "tab-9"),
-		});
+		stubRouteReuse(app);
 
 		const planeRecord = await planeOf(app);
 		await withApp(
@@ -3617,14 +3614,7 @@ describe("the auto dispatch", () => {
 		const app = seededAppInAutoMode("open");
 		stubCheckout(app);
 		const path = Object.values(app.config.repos)[0];
-		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
-		app.runner.set("herdr", ["workspace", "list"], { stdout: workspaceListJson([]) });
-		app.runner.set("herdr", ["workspace", "create", "--cwd", path, "--no-focus"], {
-			stdout: workspaceCreateJson("ws-1", "pane-1"),
-		});
-		app.runner.set("herdr", ["tab", "create", "--workspace", "ws-1", "--cwd", path, "--no-focus"], {
-			stdout: tabCreateJson("pane-1"),
-		});
+		stubFreshLaunch(app);
 
 		const planeRecord = await planeOf(app);
 		await withApp(
@@ -3667,15 +3657,7 @@ describe("the auto dispatch", () => {
 			},
 		});
 		stubCheckout(app);
-		const path = Object.values(app.config.repos)[0];
-		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
-		app.runner.set("herdr", ["workspace", "list"], { stdout: workspaceListJson([]) });
-		app.runner.set("herdr", ["workspace", "create", "--cwd", path, "--no-focus"], {
-			stdout: workspaceCreateJson("ws-1", "pane-1"),
-		});
-		app.runner.set("herdr", ["tab", "create", "--workspace", "ws-1", "--cwd", path, "--no-focus"], {
-			stdout: tabCreateJson("pane-1"),
-		});
+		stubFreshLaunch(app);
 
 		const planeRecord = await planeOf(app);
 		await withApp(
@@ -3735,15 +3717,7 @@ describe("the auto dispatch", () => {
 	test("two open tickets dispatch one per top-up cycle, in list order", async () => {
 		const app = seededAppInAutoMode("open", { extra: {}, outcome: pairSuccess });
 		stubCheckout(app);
-		const path = Object.values(app.config.repos)[0];
-		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
-		app.runner.set("herdr", ["workspace", "list"], { stdout: workspaceListJson([]) });
-		app.runner.set("herdr", ["workspace", "create", "--cwd", path, "--no-focus"], {
-			stdout: workspaceCreateJson("ws-1", "pane-1"),
-		});
-		app.runner.set("herdr", ["tab", "create", "--workspace", "ws-1", "--cwd", path, "--no-focus"], {
-			stdout: tabCreateJson("pane-1"),
-		});
+		stubFreshLaunch(app);
 
 		const planeRecord = await planeOf(app);
 		await withApp(
@@ -3888,15 +3862,7 @@ describe("the auto dispatch", () => {
 			},
 		});
 		stubCheckout(app);
-		const path = Object.values(app.config.repos)[0];
-		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
-		app.runner.set("herdr", ["workspace", "list"], { stdout: workspaceListJson([]) });
-		app.runner.set("herdr", ["workspace", "create", "--cwd", path, "--no-focus"], {
-			stdout: workspaceCreateJson("ws-1", "pane-1"),
-		});
-		app.runner.set("herdr", ["tab", "create", "--workspace", "ws-1", "--cwd", path, "--no-focus"], {
-			stdout: tabCreateJson("pane-1"),
-		});
+		stubFreshLaunch(app);
 
 		const planeRecord = await planeOf(app);
 		await withApp(
@@ -5310,15 +5276,7 @@ describe("the re-fire of a recorded skip (ADR 0042)", () => {
 		const pull = app.pullSrc;
 		if (pull === undefined) throw new Error("the pull source is missing");
 		stubCheckout(app);
-		const path = Object.values(app.config.repos)[0];
-		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
-		app.runner.set("herdr", ["workspace", "list"], { stdout: workspaceListJson([]) });
-		app.runner.set("herdr", ["workspace", "create", "--cwd", path, "--no-focus"], {
-			stdout: workspaceCreateJson("ws-1", "pane-1"),
-		});
-		app.runner.set("herdr", ["tab", "create", "--workspace", "ws-1", "--cwd", path, "--no-focus"], {
-			stdout: tabCreateJson("pane-1"),
-		});
+		stubFreshLaunch(app);
 
 		const planeRecord = await planeOf(app);
 		await withApp(

@@ -111,6 +111,49 @@ function settledSession(text: string): string {
 	return file;
 }
 
+/**
+ * The settled implementer's pane and the new agent's pane, both live, so a
+ * stream can move to the new pane the moment its handoff settles.
+ */
+function twoPaneAgentList(status1: string, status9: string): string {
+	return agentListJson([
+		{
+			paneId: "pane-1",
+			tabId: "tab-1",
+			workspaceId: "ws-1",
+			agent: "persist-source-facts",
+			status: status1,
+			sessionId: settledSession("the implementer is finishing"),
+		},
+		{
+			paneId: "pane-9",
+			tabId: "tab-9",
+			workspaceId: "ws-1",
+			agent: "persist-source-facts",
+			status: status9,
+		},
+	]);
+}
+
+/** The route standing: the stored workspace, the new tab, and both panes' first reads. */
+function stubRouteStanding(fake: FakeRunner, checkoutPath: string): void {
+	fake.set("herdr", ["workspace", "list"], {
+		stdout: workspaceListJson([{ id: "ws-1", checkoutPath }]),
+	});
+	fake.set("herdr", ["tab", "create", "--workspace", "ws-1", "--no-focus"], {
+		stdout: tabCreateJson("pane-9", "tab-9"),
+	});
+	fake.set("herdr", [...READ("pane-1")], { stdout: "the implementer is finishing\n" });
+	fake.set("herdr", [...READ("pane-9")], { stdout: "the reviewer is on it\n" });
+}
+
+/** The tick lines a pane read stands. */
+function tickLines(count: number): string {
+	return Array.from({ length: count }, (_, i) => `tick ${String(i + 1).padStart(2, "0")}`).join(
+		"\n",
+	);
+}
+
 const _source = { name: "issues", kind: "github-issues" };
 const identity = "github:github.com:I_5";
 const repoIdentity = "github.com/acme/factory";
@@ -394,8 +437,7 @@ describe("the Live view on the ticket list", () => {
 	});
 
 	test("new output pins the stream to the bottom", async () => {
-		const many = (count: number) =>
-			Array.from({ length: count }, (_, i) => `tick ${String(i + 1).padStart(2, "0")}`).join("\n");
+		const many = tickLines;
 		const fake = new FakeRunner();
 		fake.setSequence(
 			"herdr",
@@ -430,8 +472,7 @@ describe("the Live view on the ticket list", () => {
 	});
 
 	test("a manual scroll releases the bottom pin", async () => {
-		const many = (count: number) =>
-			Array.from({ length: count }, (_, i) => `tick ${String(i + 1).padStart(2, "0")}`).join("\n");
+		const many = tickLines;
 		const fake = new FakeRunner();
 		fake.setSequence(
 			"herdr",
@@ -473,8 +514,7 @@ describe("the Live view on the ticket list", () => {
 	});
 
 	test("reaching the bottom by key re-pins the stream", async () => {
-		const many = (count: number) =>
-			Array.from({ length: count }, (_, i) => `tick ${String(i + 1).padStart(2, "0")}`).join("\n");
+		const many = tickLines;
 		const fake = new FakeRunner();
 		fake.setSequence(
 			"herdr",
@@ -990,36 +1030,9 @@ describe("the Live view against a running factory", () => {
 		const checkoutPath = join(planeRecord.home, "src", "factory");
 		// The settled agent's pane and the new agent's pane, both live, so
 		// the stream can move to the new pane the moment the handoff settles.
-		const list = (status1: string, status9: string) =>
-			agentListJson([
-				{
-					paneId: "pane-1",
-					tabId: "tab-1",
-					workspaceId: "ws-1",
-					agent: "persist-source-facts",
-					status: status1,
-					sessionId: settledSession("the implementer is finishing"),
-				},
-				{
-					paneId: "pane-9",
-					tabId: "tab-9",
-					workspaceId: "ws-1",
-					agent: "persist-source-facts",
-					status: status9,
-				},
-			]);
+		const list = (a: string, b: string) => twoPaneAgentList(a, b);
 		planeRecord.fakeRunner.set("herdr", ["agent", "list"], { stdout: list("working", "working") });
-		// The stored workspace still holds: the route reuses it in a new tab.
-		planeRecord.fakeRunner.set("herdr", ["workspace", "list"], {
-			stdout: workspaceListJson([{ id: "ws-1", checkoutPath }]),
-		});
-		planeRecord.fakeRunner.set("herdr", ["tab", "create", "--workspace", "ws-1", "--no-focus"], {
-			stdout: tabCreateJson("pane-9", "tab-9"),
-		});
-		planeRecord.fakeRunner.set("herdr", [...READ("pane-1")], {
-			stdout: "the implementer is finishing\n",
-		});
-		planeRecord.fakeRunner.set("herdr", [...READ("pane-9")], { stdout: "the reviewer is on it\n" });
+		stubRouteStanding(planeRecord.fakeRunner, checkoutPath);
 
 		await withApp(
 			async (setup) => {
@@ -1106,35 +1119,9 @@ describe("the Live view against a running factory", () => {
 		const planeRecord = await seededPlane();
 		stubCheckoutInto(planeRecord.fakeRunner, planeRecord.home);
 		const checkoutPath = join(planeRecord.home, "src", "factory");
-		const list = (status1: string, status9: string) =>
-			agentListJson([
-				{
-					paneId: "pane-1",
-					tabId: "tab-1",
-					workspaceId: "ws-1",
-					agent: "persist-source-facts",
-					status: status1,
-					sessionId: settledSession("the implementer is finishing"),
-				},
-				{
-					paneId: "pane-9",
-					tabId: "tab-9",
-					workspaceId: "ws-1",
-					agent: "persist-source-facts",
-					status: status9,
-				},
-			]);
+		const list = (a: string, b: string) => twoPaneAgentList(a, b);
 		planeRecord.fakeRunner.set("herdr", ["agent", "list"], { stdout: list("working", "working") });
-		planeRecord.fakeRunner.set("herdr", ["workspace", "list"], {
-			stdout: workspaceListJson([{ id: "ws-1", checkoutPath }]),
-		});
-		planeRecord.fakeRunner.set("herdr", ["tab", "create", "--workspace", "ws-1", "--no-focus"], {
-			stdout: tabCreateJson("pane-9", "tab-9"),
-		});
-		planeRecord.fakeRunner.set("herdr", [...READ("pane-1")], {
-			stdout: "the implementer is finishing\n",
-		});
-		planeRecord.fakeRunner.set("herdr", [...READ("pane-9")], { stdout: "the reviewer is on it\n" });
+		stubRouteStanding(planeRecord.fakeRunner, checkoutPath);
 
 		await withApp(
 			async (setup) => {
@@ -1286,35 +1273,9 @@ describe("the Live view against a running factory", () => {
 		const planeRecord = await seededPlane();
 		stubCheckoutInto(planeRecord.fakeRunner, planeRecord.home);
 		const checkoutPath = join(planeRecord.home, "src", "factory");
-		const list = (implementerStatus: string, reviewerStatus: string) =>
-			agentListJson([
-				{
-					paneId: "pane-1",
-					tabId: "tab-1",
-					workspaceId: "ws-1",
-					agent: "persist-source-facts",
-					status: implementerStatus,
-					sessionId: settledSession("the implementer is finishing"),
-				},
-				{
-					paneId: "pane-9",
-					tabId: "tab-9",
-					workspaceId: "ws-1",
-					agent: "persist-source-facts",
-					status: reviewerStatus,
-				},
-			]);
+		const list = (a: string, b: string) => twoPaneAgentList(a, b);
 		planeRecord.fakeRunner.set("herdr", ["agent", "list"], { stdout: list("working", "working") });
-		planeRecord.fakeRunner.set("herdr", ["workspace", "list"], {
-			stdout: workspaceListJson([{ id: "ws-1", checkoutPath }]),
-		});
-		planeRecord.fakeRunner.set("herdr", ["tab", "create", "--workspace", "ws-1", "--no-focus"], {
-			stdout: tabCreateJson("pane-9", "tab-9"),
-		});
-		planeRecord.fakeRunner.set("herdr", [...READ("pane-1")], {
-			stdout: "the implementer is finishing\n",
-		});
-		planeRecord.fakeRunner.set("herdr", [...READ("pane-9")], { stdout: "the reviewer is on it\n" });
+		stubRouteStanding(planeRecord.fakeRunner, checkoutPath);
 
 		await withApp(
 			async (setup) => {
