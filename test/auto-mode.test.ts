@@ -393,6 +393,30 @@ async function planeOf(app: SeededApp, runner?: CommandRunner): Promise<SeededPl
 }
 
 /**
+ * A seeded app and the plane it boots from.
+ *
+ * The boot's agent list reads answer with the empty list unless the test has
+ * named its own answer: the boot's observation tick would otherwise read the
+ * fallback the suite does not pin.
+ */
+async function bootedApp(
+	shape: "open" | "in-flight" | "awaiting",
+	fields: {
+		extra?: Partial<FactoryConfig>;
+		outcome?: FetchOutcome;
+		environment?: "live-worktree" | "worktree";
+		detail?: SeedDetail;
+		pullOutcome?: FetchOutcome;
+	} = {},
+): Promise<{ app: SeededApp; planeRecord: SeededPlane }> {
+	const app = seededApp(shape, fields);
+	if (!app.runner.hasStub("herdr", ["agent", "list"])) {
+		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+	}
+	return { app, planeRecord: await planeOf(app) };
+}
+
+/**
  * The loop policy the old fixture's boot carried: the observation loop on
  * its pinned interval, which a test's own settles drive instead of a clock.
  */
@@ -565,10 +589,7 @@ describe("the mode cell and the a key", () => {
 	test("a fresh state file starts with auto off", async () => {
 		// The mode has no config default (ADR 0036): the state file answers for
 		// it, and a file the plane has just created holds the mode off.
-		const app = seededApp("open");
-		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
-
-		const planeRecord = await planeOf(app);
+		const { app, planeRecord } = await bootedApp("open");
 		await withApp(
 			async (setup) => {
 				app.src.settle(success);
@@ -797,7 +818,7 @@ describe("the failure markers", () => {
 	});
 
 	test("a missing agent gets the missing marker and the missing modal", async () => {
-		const app = seededApp("in-flight", {
+		const { app, planeRecord } = await bootedApp("in-flight", {
 			extra: {},
 			outcome: success,
 			environment: "live-worktree",
@@ -806,9 +827,6 @@ describe("the failure markers", () => {
 				// holds no seat.
 				{ stateNow: () => Date.now() - 600_000 },
 		});
-		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
-
-		const planeRecord = await planeOf(app);
 		await withApp(
 			async (setup) => {
 				app.src.settle(success);
@@ -892,10 +910,7 @@ describe("the failure markers", () => {
 	});
 
 	test("abandon in the Missing modal closes the cycle and increments its durable number", async () => {
-		const app = seededApp("in-flight");
-		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
-
-		const planeRecord = await planeOf(app);
+		const { app, planeRecord } = await bootedApp("in-flight");
 		await withApp(
 			async (setup) => {
 				app.src.settle(success);
@@ -988,10 +1003,7 @@ describe("the failure markers", () => {
 	});
 
 	test("esc on the missing modal closes it and leaves the ticket in flight", async () => {
-		const app = seededApp("in-flight");
-		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
-
-		const planeRecord = await planeOf(app);
+		const { app, planeRecord } = await bootedApp("in-flight");
 		await withApp(
 			async (setup) => {
 				app.src.settle(success);
@@ -1012,10 +1024,9 @@ describe("the failure markers", () => {
 	});
 
 	test("a ticket at the handoff limit wears the trailing marker on its row", async () => {
-		const app = seededApp("in-flight", { extra: { maxHandoffsPerTicket: 1 } });
-		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
-
-		const planeRecord = await planeOf(app);
+		const { app, planeRecord } = await bootedApp("in-flight", {
+			extra: { maxHandoffsPerTicket: 1 },
+		});
 		await withApp(
 			async (setup) => {
 				app.src.settle(success);
@@ -1077,10 +1088,11 @@ describe("the Ticket Close key", () => {
 	});
 
 	test("the Delete key on an in-flight Ticket asks first, and Cancel changes nothing", async () => {
-		const app = seededApp("in-flight", { extra: {}, outcome: success, environment: "worktree" });
-		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
-
-		const planeRecord = await planeOf(app);
+		const { app, planeRecord } = await bootedApp("in-flight", {
+			extra: {},
+			outcome: success,
+			environment: "worktree",
+		});
 		await withApp(
 			async (setup) => {
 				app.src.settle(success);
@@ -1135,10 +1147,11 @@ describe("the Ticket Close key", () => {
 	// The control is a base-mode control of the section, so the Detail pane
 	// answers it exactly as the list does (ADR 0031).
 	test("w closes from the detail pane too, with the same confirmation", async () => {
-		const app = seededApp("in-flight", { extra: {}, outcome: success, environment: "worktree" });
-		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
-
-		const planeRecord = await planeOf(app);
+		const { app, planeRecord } = await bootedApp("in-flight", {
+			extra: {},
+			outcome: success,
+			environment: "worktree",
+		});
 		await withApp(
 			async (setup) => {
 				app.src.settle(success);
@@ -1161,10 +1174,7 @@ describe("the Ticket Close key", () => {
 	});
 
 	test("the confirmation names the live-worktree tab, not the worktree checkout", async () => {
-		const app = seededApp("in-flight");
-		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
-
-		const planeRecord = await planeOf(app);
+		const { app, planeRecord } = await bootedApp("in-flight");
 		await withApp(
 			async (setup) => {
 				app.src.settle(success);
@@ -1302,10 +1312,11 @@ describe("the Ticket Close key", () => {
 	});
 
 	test("confirming an in-flight close ends the cycle with no trace and stops the Agent", async () => {
-		const app = seededApp("in-flight", { extra: {}, outcome: success, environment: "worktree" });
-		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
-
-		const planeRecord = await planeOf(app);
+		const { app, planeRecord } = await bootedApp("in-flight", {
+			extra: {},
+			outcome: success,
+			environment: "worktree",
+		});
 		await withApp(
 			async (setup) => {
 				app.src.settle(success);
@@ -1449,14 +1460,11 @@ describe("the Ticket Close key", () => {
 	});
 
 	test("confirming an awaiting close records the closed decision, the modal's own row", async () => {
-		const app = seededApp("awaiting", {
+		const { app, planeRecord } = await bootedApp("awaiting", {
 			extra: {},
 			outcome: success,
 			environment: "live-worktree",
 		});
-		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
-
-		const planeRecord = await planeOf(app);
 		await withApp(
 			async (setup) => {
 				app.src.settle(success);
@@ -1481,10 +1489,7 @@ describe("the Ticket Close key", () => {
 
 describe("the detail pane", () => {
 	test("shows the handoff count and the last completion of the ticket", async () => {
-		const app = seededApp("awaiting");
-		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
-
-		const planeRecord = await planeOf(app);
+		const { app, planeRecord } = await bootedApp("awaiting");
 		await withApp(
 			async (setup) => {
 				app.src.settle(success);
@@ -2367,10 +2372,7 @@ describe("the decision modal", () => {
 	});
 
 	test("e alone on an awaiting ticket points at the decision instead of a panel", async () => {
-		const app = seededApp("awaiting");
-		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
-
-		const planeRecord = await planeOf(app);
+		const { app, planeRecord } = await bootedApp("awaiting");
 		await withApp(
 			async (setup) => {
 				app.src.settle(success);
@@ -2390,7 +2392,7 @@ describe("the decision modal", () => {
 	});
 
 	test("the route row shows the arriving task profile's effective agent", async () => {
-		const app = seededApp("awaiting", {
+		const { app, planeRecord } = await bootedApp("awaiting", {
 			extra: {
 				taskTypes: {
 					...BASE_CONFIG.taskTypes,
@@ -2401,9 +2403,6 @@ describe("the decision modal", () => {
 			environment: "live-worktree",
 			detail: { transition: reviewRoute() },
 		});
-		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
-
-		const planeRecord = await planeOf(app);
 		await withApp(
 			async (setup) => {
 				app.src.settle(success);
@@ -2605,10 +2604,7 @@ describe("the decision modal", () => {
 	});
 
 	test("goto focuses the stored pane and leaves the handoff open", async () => {
-		const app = seededApp("awaiting");
-		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
-
-		const planeRecord = await planeOf(app);
+		const { app, planeRecord } = await bootedApp("awaiting");
 		await withApp(
 			async (setup) => {
 				app.src.settle(success);
@@ -2641,10 +2637,7 @@ describe("the decision modal", () => {
 	});
 
 	test("g in the base mode focuses the stored pane of an awaiting ticket and moves nothing", async () => {
-		const app = seededApp("awaiting");
-		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
-
-		const planeRecord = await planeOf(app);
+		const { app, planeRecord } = await bootedApp("awaiting");
 		await withApp(
 			async (setup) => {
 				app.src.settle(success);
@@ -2742,10 +2735,7 @@ describe("the decision modal", () => {
 	});
 
 	test("esc closes the panel and leaves the ticket awaiting", async () => {
-		const app = seededApp("awaiting");
-		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
-
-		const planeRecord = await planeOf(app);
+		const { app, planeRecord } = await bootedApp("awaiting");
 		await withApp(
 			async (setup) => {
 				app.src.settle(success);
@@ -2768,7 +2758,7 @@ describe("the decision modal", () => {
 
 	test("the modal shows the border title, the context line, and the log's notes", async () => {
 		const conclusion = "## Result\n\n**All 142 tests pass.**";
-		const app = seededApp("awaiting", {
+		const { app, planeRecord } = await bootedApp("awaiting", {
 			extra: {},
 			outcome: success,
 			environment: "live-worktree",
@@ -2782,9 +2772,6 @@ describe("the decision modal", () => {
 				],
 			},
 		});
-		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
-
-		const planeRecord = await planeOf(app);
 		await withApp(
 			async (setup) => {
 				app.src.settle(success);
@@ -2826,15 +2813,12 @@ describe("the decision modal", () => {
 			{ length: 40 },
 			(_, i) => `log ${String(i + 1).padStart(3, "0")}`,
 		).join("\n");
-		const app = seededApp("awaiting", {
+		const { app, planeRecord } = await bootedApp("awaiting", {
 			extra: {},
 			outcome: success,
 			environment: "live-worktree",
 			detail: { message: lines },
 		});
-		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
-
-		const planeRecord = await planeOf(app);
 		await withApp(
 			async (setup) => {
 				app.src.settle(success);
@@ -2901,10 +2885,11 @@ describe("the herdr-unreachable line", () => {
 
 describe("the Close cleanup", () => {
 	test("close on a worktree handoff removes the checkout and the herdr workspace", async () => {
-		const app = seededApp("awaiting", { extra: {}, outcome: success, environment: "worktree" });
-		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
-
-		const planeRecord = await planeOf(app);
+		const { app, planeRecord } = await bootedApp("awaiting", {
+			extra: {},
+			outcome: success,
+			environment: "worktree",
+		});
 		await withApp(
 			async (setup) => {
 				app.src.settle(success);
@@ -2933,10 +2918,7 @@ describe("the Close cleanup", () => {
 	});
 
 	test("close on a live worktree handoff closes only the tab it made", async () => {
-		const app = seededApp("awaiting");
-		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
-
-		const planeRecord = await planeOf(app);
+		const { app, planeRecord } = await bootedApp("awaiting");
 		await withApp(
 			async (setup) => {
 				app.src.settle(success);
@@ -2955,10 +2937,11 @@ describe("the Close cleanup", () => {
 	});
 
 	test("abandon on a worktree handoff removes the checkout and the herdr workspace", async () => {
-		const app = seededApp("in-flight", { extra: {}, outcome: success, environment: "worktree" });
-		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
-
-		const planeRecord = await planeOf(app);
+		const { app, planeRecord } = await bootedApp("in-flight", {
+			extra: {},
+			outcome: success,
+			environment: "worktree",
+		});
 		await withApp(
 			async (setup) => {
 				app.src.settle(success);
@@ -2984,10 +2967,7 @@ describe("the Close cleanup", () => {
 	});
 
 	test("abandon on a live worktree handoff closes only the tab it made", async () => {
-		const app = seededApp("in-flight");
-		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
-
-		const planeRecord = await planeOf(app);
+		const { app, planeRecord } = await bootedApp("in-flight");
 		await withApp(
 			async (setup) => {
 				app.src.settle(success);
@@ -3994,10 +3974,7 @@ describe("the auto dispatch", () => {
 	});
 
 	test("manual mode leaves the open ticket alone", async () => {
-		const app = seededApp("open");
-		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
-
-		const planeRecord = await planeOf(app);
+		const { app, planeRecord } = await bootedApp("open");
 		await withApp(
 			async (setup) => {
 				app.src.settle(success);

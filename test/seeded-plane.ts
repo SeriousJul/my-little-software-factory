@@ -466,13 +466,12 @@ function seedConsultation(state: FactoryState, seed: ConsultationSeed): void {
  * the home and checkout directories, the runner double, and the source
  * doubles all come from here, and `close` takes them all back.
  */
-export async function plane(standing: SeededPlaneStanding = {}): Promise<SeededPlane> {
-	const sources = standing.sources ?? defaultSources();
-	const home = mkdtempSync(join(tmpdir(), "factory-seeded-plane-"));
-	// The checkout mapping: a relative path stands under the home, an
-	// absolute path stands as given. The config's own mapping, where it names
-	// one, stands beside it.
-	const repos: Record<string, string> = {
+/**
+ * The checkout mapping the standing's config and repos stand over the home:
+ * a relative path stands under the home, an absolute path stands as given.
+ */
+function reposFor(standing: SeededPlaneStanding, home: string): Record<string, string> {
+	return {
 		...(standing.config?.repos ?? {}),
 		...Object.fromEntries(
 			Object.entries(standing.repos ?? {}).map(([repo, path]) => [
@@ -481,107 +480,186 @@ export async function plane(standing: SeededPlaneStanding = {}): Promise<SeededP
 			]),
 		),
 	};
-	// The preparation runs once the home exists, so the standing can name
-	// paths under it and write its own config file over the plane's.
-	let preparedConfig: Partial<FactoryConfig> | undefined;
-	let configFileText: string | undefined;
-	let boundSources: readonly TicketSource[] | undefined;
-	if (standing.prepare !== undefined) {
-		const prepared = await standing.prepare(home);
-		if (prepared !== undefined) {
-			preparedConfig = prepared.config;
-			configFileText = prepared.configFileText;
-			boundSources = prepared.boundSources;
-		}
+}
+
+/**
+ * The preparation the standing names, run once the home exists so it can
+ * name paths under it and write its own config file over the plane's.
+ */
+async function preparedStanding(
+	standing: SeededPlaneStanding,
+	home: string,
+): Promise<{
+	config?: Partial<FactoryConfig>;
+	configFileText?: string;
+	boundSources?: readonly TicketSource[];
+}> {
+	if (standing.prepare === undefined) return {};
+	return (await standing.prepare(home)) ?? {};
+}
+
+/**
+ * The standing's rows into a fresh state, through the state module's own
+ * calls, the way an operator's own fetch and acts would have written them.
+ */
+function seedSourceRows(state: FactoryState, sources: readonly SeededSource[]): void {
+	for (const source of sources) {
+		const outcome: FetchOutcome = {
+			status: "success",
+			fetchedAt: "2026-01-01T00:01:00Z",
+			tickets: source.tickets.map(fetchedOf),
+		};
+		state.sourceFact.applyFetch({ name: source.config.name, kind: source.config.kind }, outcome);
 	}
-	const config: FactoryConfig = {
+	for (const row of sources.flatMap((source) => source.tickets)) seedTicket(state, row);
+}
+
+function seedMutes(state: FactoryState, muted: readonly string[]): void {
+	for (const name of muted) {
+		const result = state.sourceFact.setSourceMuted(name, true);
+		if (!result.ok) throw new Error(`cannot seed the mute for ${name}: ${result.reason}`);
+	}
+}
+
+function enqueueHandoffWork(
+	state: FactoryState,
+	seed: Extract<WorkQueueSeed, { kind: "handoff" }>,
+): void {
+	const result = state.workQueue.enqueueWork({
+		ticketIdentity: seed.ticketIdentity,
+		...(seed.routeFromIdentity === undefined ? {} : { routeFromIdentity: seed.routeFromIdentity }),
+		origin: seed.origin,
+		choice: seed.choice,
+		previousMessage: seed.previousMessage,
+		...(seed.automatic === undefined ? {} : { automatic: seed.automatic }),
+	});
+	if (!result.ok)
+		throw new Error(`cannot seed the queue row for ${seed.ticketIdentity}: ${result.reason}`);
+}
+
+function enqueuePlaneActionWork(
+	state: FactoryState,
+	seed: Extract<WorkQueueSeed, { kind: "plane-action" }>,
+): void {
+	const result = state.workQueue.enqueuePlaneActionWork({
+		ticketIdentity: seed.ticketIdentity,
+		...(seed.routeFromIdentity === undefined ? {} : { routeFromIdentity: seed.routeFromIdentity }),
+		origin: seed.origin,
+		taskType: seed.taskType,
+		...(seed.automatic === undefined ? {} : { automatic: seed.automatic }),
+	});
+	if (!result.ok)
+		throw new Error(`cannot seed the action row for ${seed.ticketIdentity}: ${result.reason}`);
+}
+
+function seedQueue(state: FactoryState, queue: readonly WorkQueueSeed[]): void {
+	for (const seed of queue) {
+		if (seed.kind === "handoff") enqueueHandoffWork(state, seed);
+		else enqueuePlaneActionWork(state, seed);
+	}
+}
+
+/** The checkout directories the config maps, on disk for the plane's git reads. */
+function checkoutDirs(config: FactoryConfig): string[] {
+	const checkouts: string[] = [];
+	for (const path of new Set(Object.values(config.repos))) {
+		mkdirSync(path, { recursive: true });
+		checkouts.push(path);
+	}
+	return checkouts;
+}
+
+/**
+ * The FakeRunner the frame suites ran on: no agent in the list, the
+ * standing's commands and runner standing over it where they name their own.
+ */
+function defaultFakeRunner(): FakeRunner {
+	const fakeRunner = new FakeRunner();
+	fakeRunner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+	return fakeRunner;
+}
+
+/**
+ * The plane's config: the base, the standing's sources and config, the
+ * preparation's, and the checkout mapping where it maps one.
+ */
+function configFor(
+	standing: SeededPlaneStanding,
+	repos: Record<string, string>,
+	sources: readonly SeededSource[],
+	preparedConfig?: Partial<FactoryConfig>,
+): FactoryConfig {
+	return {
 		...BASE_CONFIG,
 		sources: sources.map((source) => source.config),
 		...standing.config,
 		...preparedConfig,
 		...(Object.keys(repos).length > 0 ? { repos } : {}),
 	};
-	const configPath = join(home, "config.toml");
-	writeFileSync(configPath, configFileText ?? configToToml(config));
-	const state =
+}
+
+function stateFor(standing: SeededPlaneStanding, home: string): FactoryState {
+	return (
 		standing.existing ??
-		openFactoryState(standing.statePath ?? join(home, "state.sqlite"), standing.now);
-	// The axis the standing names stands; where it names none, the file's own
-	// answer stands: the fresh file's seeded split (ADR 0066), or the axis a
-	// wrapped file holds. The default standing names the flat axis: the list
-	// the no-state plane drew, the standing those frames were written against.
+		openFactoryState(standing.statePath ?? join(home, "state.sqlite"), standing.now)
+	);
+}
+
+/**
+ * The axis the standing names stands; where it names none, the file's own
+ * answer stands: the fresh file's seeded split (ADR 0066), or the axis a
+ * wrapped file holds. The default standing names the flat axis: the list
+ * the no-state plane drew, the standing those frames were written against.
+ */
+function applyGroupingAxis(state: FactoryState, standing: SeededPlaneStanding): void {
 	const axis = standing.groupingAxis ?? (standing.sources === undefined ? "none" : undefined);
 	if (axis !== undefined) state.grouping.setGroupingAxis("tickets", axis);
+}
+
+/**
+ * The source rows a wrapped state already holds stand: re-applying a
+ * standing's snapshot would clear a membership the state's own fetch
+ * wrote, and re-seeding a handoff would owe the state a second cycle. A
+ * fresh state takes the standing's rows through the state module's own
+ * calls, the way an operator's own fetch and acts would have written them.
+ */
+function seedRowsIfFresh(
+	state: FactoryState,
+	standing: SeededPlaneStanding,
+	sources: readonly SeededSource[],
+): void {
+	if (standing.existing === undefined && standing.applyFetch !== false) {
+		seedSourceRows(state, sources);
+	}
+}
+
+export async function plane(standing: SeededPlaneStanding = {}): Promise<SeededPlane> {
+	const sources = standing.sources ?? defaultSources();
+	const home = mkdtempSync(join(tmpdir(), "factory-seeded-plane-"));
+	const repos = reposFor(standing, home);
+	const prepared = await preparedStanding(standing, home);
+	const config = configFor(standing, repos, sources, prepared.config);
+	const configPath = join(home, "config.toml");
+	writeFileSync(configPath, prepared.configFileText ?? configToToml(config));
+	const state = stateFor(standing, home);
+	applyGroupingAxis(state, standing);
 	state.sourceFact.initializeSources(
 		config.sources.map((source) => ({ name: source.name, kind: source.kind })),
 	);
-	// The source rows a wrapped state already holds stand: re-applying a
-	// standing's snapshot would clear a membership the state's own fetch
-	// wrote, and re-seeding a handoff would owe the state a second cycle.
-	// A fresh state takes the standing's rows through the state module's own
-	// calls, the way an operator's own fetch and acts would have written them.
-	if (standing.existing === undefined && standing.applyFetch !== false) {
-		for (const source of sources) {
-			const outcome: FetchOutcome = {
-				status: "success",
-				fetchedAt: "2026-01-01T00:01:00Z",
-				tickets: source.tickets.map(fetchedOf),
-			};
-			state.sourceFact.applyFetch({ name: source.config.name, kind: source.config.kind }, outcome);
-		}
-		for (const row of sources.flatMap((source) => source.tickets)) seedTicket(state, row);
-	}
+	seedRowsIfFresh(state, standing, sources);
 	for (const [identity, settingsHash] of Object.entries(standing.repositoryInits ?? {})) {
 		state.repositoryInit.setRepositoryInitFact(identity, settingsHash, "init-commit");
 	}
-	for (const name of standing.mutedSources ?? []) {
-		const result = state.sourceFact.setSourceMuted(name, true);
-		if (!result.ok) throw new Error(`cannot seed the mute for ${name}: ${result.reason}`);
-	}
+	seedMutes(state, standing.mutedSources ?? []);
 	for (const seed of standing.consultations ?? []) seedConsultation(state, seed);
-	for (const seed of standing.queue ?? []) {
-		if (seed.kind === "handoff") {
-			const result = state.workQueue.enqueueWork({
-				ticketIdentity: seed.ticketIdentity,
-				...(seed.routeFromIdentity === undefined
-					? {}
-					: { routeFromIdentity: seed.routeFromIdentity }),
-				origin: seed.origin,
-				choice: seed.choice,
-				previousMessage: seed.previousMessage,
-				...(seed.automatic === undefined ? {} : { automatic: seed.automatic }),
-			});
-			if (!result.ok)
-				throw new Error(`cannot seed the queue row for ${seed.ticketIdentity}: ${result.reason}`);
-		} else {
-			const result = state.workQueue.enqueuePlaneActionWork({
-				ticketIdentity: seed.ticketIdentity,
-				...(seed.routeFromIdentity === undefined
-					? {}
-					: { routeFromIdentity: seed.routeFromIdentity }),
-				origin: seed.origin,
-				taskType: seed.taskType,
-				...(seed.automatic === undefined ? {} : { automatic: seed.automatic }),
-			});
-			if (!result.ok)
-				throw new Error(`cannot seed the action row for ${seed.ticketIdentity}: ${result.reason}`);
-		}
-	}
+	seedQueue(state, standing.queue ?? []);
 	if (standing.autoHandoffMode === true) state.handoff.setAutoHandoffMode(true);
 	if (standing.queuePaused === true) state.workQueue.setQueuePaused(true);
 	// The checkout the config maps a repository to: a directory on disk the
 	// plane's own git reads can land in. The answers themselves are the
 	// runner's, named by the case.
-	const checkouts: string[] = [];
-	for (const path of new Set(Object.values(config.repos))) {
-		mkdirSync(path, { recursive: true });
-		checkouts.push(path);
-	}
-	// The default runner is the empty-agent one the frame suites ran on: no
-	// agent in the list, and the standing's commands and runner stand over it
-	// where they name their own.
-	const fakeRunner = new FakeRunner();
-	fakeRunner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+	const checkouts = checkoutDirs(config);
+	const fakeRunner = defaultFakeRunner();
 	standing.commands?.(fakeRunner, home);
 	const runner = standing.runner?.(fakeRunner) ?? fakeRunner;
 	const fakeDoubles: readonly FakeSource[] = sources.map(
@@ -592,7 +670,7 @@ export async function plane(standing: SeededPlaneStanding = {}): Promise<SeededP
 				tickets: source.tickets.map(fetchedOf),
 			}),
 	);
-	const sourceDoubles: readonly TicketSource[] = boundSources ?? fakeDoubles;
+	const sourceDoubles: readonly TicketSource[] = prepared.boundSources ?? fakeDoubles;
 	const registrationsEntry: PlaneRegistration = {
 		plane: {
 			state,

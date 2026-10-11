@@ -214,12 +214,19 @@ const groupConfig: FactoryConfig = {
  * state file's own answer stands, the fresh file's seeded split (ADR 0066).
  */
 async function groupedPlane(
-	hold = false,
-	listed: FetchedTicket[] = tickets(),
-	axis?: GroupingAxis,
-	init = true,
-	existing?: FactoryState,
+	options: {
+		hold?: boolean;
+		listed?: FetchedTicket[];
+		axis?: GroupingAxis;
+		init?: boolean;
+		existing?: FactoryState;
+	} = {},
 ): Promise<SeededPlane> {
+	const hold = options.hold === true;
+	const listed = options.listed ?? tickets();
+	const axis = options.axis;
+	const init = options.init !== false;
+	const existing = options.existing;
 	// The groups' fixtures stand initialized (ADR 0075) by default, so the init
 	// marker stays out of the grouping's own frame and the one-time note stays
 	// out of the Message line: these tests are the grouping's, and the marker
@@ -316,7 +323,12 @@ async function bootGrouped(
 	const listed = options.list ?? tickets();
 	const planeRecord =
 		options.state === undefined
-			? await groupedPlane(options.hold === true, listed, options.axis, options.uninit !== true)
+			? await groupedPlane({
+					hold: options.hold === true,
+					listed,
+					axis: options.axis,
+					init: options.uninit !== true,
+				})
 			: await plane({
 					existing: options.state,
 					statePath: stateFile(),
@@ -1117,7 +1129,7 @@ describe("the Ticket section's Groups", () => {
 	test("the axis survives a restart on the same state file, and the folds do not", async () => {
 		// Seed the flat list, the way a pre-ADR 0066 file did, so the press
 		// writes the axis the restart must find.
-		const first = await groupedPlane(false, tickets(), "none");
+		const first = await groupedPlane({ axis: "none" });
 		await withApp(
 			async (setup) => {
 				(first.sources[0] as FakeSource).settle(success(tickets()));
@@ -1157,7 +1169,7 @@ describe("the Ticket section's Groups", () => {
 	test("a state file that will not take the write reports it, and the view changes", async () => {
 		// Seed the flat list, so the press's repository split is the one the
 		// refused write would have stored.
-		const planeRecord = await groupedPlane(false, tickets(), "none");
+		const planeRecord = await groupedPlane({ axis: "none" });
 		const refusing = planeRecord.state.grouping as unknown as { setGroupingAxis: () => void };
 		refusing.setGroupingAxis = () => {
 			throw new Error("read-only file system");
@@ -1722,7 +1734,7 @@ describe("the operator's Group order (ADR 0071)", () => {
 	});
 
 	test("the move stands after a restart on the same state file", async () => {
-		const first = await groupedPlane(false, tickets(), "repository");
+		const first = await groupedPlane({ axis: "repository" });
 		await withApp(
 			async (setup) => {
 				(first.sources[0] as FakeSource).settle(success(tickets()));
@@ -1763,7 +1775,7 @@ describe("the operator's Group order (ADR 0071)", () => {
 	});
 
 	test("a state file that will not take the move reports it, and the view changes", async () => {
-		const planeRecord = await groupedPlane(false, tickets(), "repository");
+		const planeRecord = await groupedPlane({ axis: "repository" });
 		const refusing = planeRecord.state.grouping as unknown as { setGroupOrder: () => void };
 		refusing.setGroupOrder = () => {
 			throw new Error("read-only file system");
@@ -1900,7 +1912,7 @@ describe("the init marker and the one-time note (ADR 0075)", () => {
 	});
 
 	test("every repository stands initialized, so no note stands at first sight", async () => {
-		const first = await groupedPlane(false, tickets(), "repository");
+		const first = await groupedPlane({ axis: "repository" });
 		await bootGrouped(
 			async (setup) => {
 				const frame = await settle(setup);

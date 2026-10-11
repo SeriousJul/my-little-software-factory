@@ -189,6 +189,25 @@ function stubWorktreeHandoff(runner: FakeRunner, path: string): void {
 	);
 }
 
+/** The mapping the handoff frames stand on: the billing checkout under the home. */
+const BILLING_REPOS: Record<string, string> = { "github.com/acme/billing": "src/billing" };
+
+/**
+ * The billing checkout the frames map, stubbed under the home; the path it
+ * returns stands beside the handoff stubs that take it.
+ */
+function stubBillingCheckout(fake: FakeRunner, home: string): string {
+	const path = join(home, "src", "billing");
+	stubCheckout(fake, path);
+	return path;
+}
+
+/** The live handoff beside the billing checkout. */
+function liveBillingCheckout(fake: FakeRunner, home: string): void {
+	const path = stubBillingCheckout(fake, home);
+	stubLiveHandoff(fake, path);
+}
+
 /** A runner that delays its first calls, so the in-flight state is visible. */
 class DelayedRunner implements CommandRunner {
 	private remaining: number;
@@ -478,12 +497,8 @@ describe("the Enter handoff", () => {
 	test("hands the selected ticket off with the defaults, settles it, and records the command sequence", async () => {
 		const planeRecord = await plane({
 			config: seatOpenConfig,
-			repos: { "github.com/acme/billing": "src/billing" },
-			commands: (fake, home2) => {
-				const path = join(home2, "src", "billing");
-				stubCheckout(fake, path);
-				stubLiveHandoff(fake, path);
-			},
+			repos: BILLING_REPOS,
+			commands: liveBillingCheckout,
 		});
 		const runner = planeRecord.fakeRunner;
 		const checkout = join(planeRecord.home, "src", "billing");
@@ -529,10 +544,9 @@ describe("the Enter handoff", () => {
 	test("a failed herdr step leaves the ticket open and shows the reason", async () => {
 		const planeRecord = await plane({
 			config: seatOpenConfig,
-			repos: { "github.com/acme/billing": "src/billing" },
+			repos: BILLING_REPOS,
 			commands: (fake, home2) => {
-				const path = join(home2, "src", "billing");
-				stubCheckout(fake, path);
+				stubBillingCheckout(fake, home2);
 				fake.set("herdr", ["workspace", "list"], {
 					code: 1,
 					stderr: "error: herdr is not running\n",
@@ -567,10 +581,9 @@ describe("the Enter handoff", () => {
 	test("an unreadable workspace list fails with a reason and creates no workspace", async () => {
 		const planeRecord = await plane({
 			config: seatOpenConfig,
-			repos: { "github.com/acme/billing": "src/billing" },
+			repos: BILLING_REPOS,
 			commands: (fake, home2) => {
-				const path = join(home2, "src", "billing");
-				stubCheckout(fake, path);
+				stubBillingCheckout(fake, home2);
 				fake.set("herdr", ["workspace", "list"], { stdout: "not a workspace list\n" });
 			},
 		});
@@ -602,7 +615,7 @@ describe("the Enter handoff", () => {
 	test("enter on a non-open ticket opens the Live view and issues no handoff command", async () => {
 		const planeRecord = await plane({
 			config: seatOpenConfig,
-			repos: { "github.com/acme/billing": "src/billing" },
+			repos: BILLING_REPOS,
 			commands: (fake, home2) => {
 				const _path = join(home2, "src", "billing");
 				fake.set(
@@ -671,7 +684,7 @@ describe("the Enter handoff", () => {
 		// A file where ~/src should be: mkdir cannot create the clone parent.
 		const planeRecord = await plane({
 			config: seatOpenConfig,
-			repos: { "github.com/acme/billing": "src/billing" },
+			repos: BILLING_REPOS,
 		});
 		const runner = planeRecord.fakeRunner;
 		rmSync(join(planeRecord.home, "src"), { recursive: true, force: true });
@@ -739,12 +752,8 @@ describe("the in-flight guard", () => {
 		const planeRecord = await plane({
 			config: seatOpenConfig,
 			runner: (fake) => new DelayedRunner(fake, 400, 3),
-			repos: { "github.com/acme/billing": "src/billing" },
-			commands: (fake, home2) => {
-				const path = join(home2, "src", "billing");
-				stubCheckout(fake, path);
-				stubLiveHandoff(fake, path);
-			},
+			repos: BILLING_REPOS,
+			commands: liveBillingCheckout,
 		});
 		const runner = planeRecord.fakeRunner;
 
@@ -778,12 +787,8 @@ describe("the in-flight guard", () => {
 		const planeRecord = await plane({
 			config: seatOpenConfig,
 			runner: (fake) => new DelayedRunner(fake, 400, 3),
-			repos: { "github.com/acme/billing": "src/billing" },
-			commands: (fake, home2) => {
-				const path = join(home2, "src", "billing");
-				stubCheckout(fake, path);
-				stubLiveHandoff(fake, path);
-			},
+			repos: BILLING_REPOS,
+			commands: liveBillingCheckout,
 		});
 		const runner = planeRecord.fakeRunner;
 
@@ -817,12 +822,8 @@ describe("the in-flight guard", () => {
 			// walk: whichever command the start waits on, the run itself
 			// stretches over the window the walk needs.
 			runner: (fake) => new DelayedRunner(fake, 800, 12),
-			repos: { "github.com/acme/billing": "src/billing" },
-			commands: (fake, home2) => {
-				const path = join(home2, "src", "billing");
-				stubCheckout(fake, path);
-				stubLiveHandoff(fake, path);
-			},
+			repos: BILLING_REPOS,
+			commands: liveBillingCheckout,
 		});
 
 		await withApp(
@@ -869,11 +870,10 @@ describe("the override panel", () => {
 	test("`e` opens the panel, right changes options, enter confirms the handoff", async () => {
 		const planeRecord = await plane({
 			config: seatOpenConfig,
-			repos: { "github.com/acme/billing": "src/billing" },
+			repos: BILLING_REPOS,
 			commands: (fake, home2) => {
-				const path = join(home2, "src", "billing");
-				stubCheckout(fake, path);
-				stubWorktreeHandoff(fake, path);
+				const p = stubBillingCheckout(fake, home2);
+				stubWorktreeHandoff(fake, p);
 			},
 		});
 		const runner = planeRecord.fakeRunner;
@@ -939,12 +939,8 @@ describe("the override panel", () => {
 		const planeRecord = await plane({
 			config: seatOpenConfig,
 			runner: (fake) => new DelayedRunner(fake, 800, 3),
-			repos: { "github.com/acme/billing": "src/billing" },
-			commands: (fake, home2) => {
-				const path = join(home2, "src", "billing");
-				stubCheckout(fake, path);
-				stubLiveHandoff(fake, path);
-			},
+			repos: BILLING_REPOS,
+			commands: liveBillingCheckout,
 		});
 		const runner = planeRecord.fakeRunner;
 
@@ -1003,11 +999,9 @@ describe("the override panel", () => {
 		const fixPrompt = renderPrompt(templateOf(BASE_CONFIG.taskTypes.fix), first);
 		const planeRecord = await plane({
 			config: seatOpenConfig,
-			repos: { "github.com/acme/billing": "src/billing" },
+			repos: BILLING_REPOS,
 			commands: (fake, home2) => {
-				const path = join(home2, "src", "billing");
-				stubCheckout(fake, path);
-				stubLiveHandoff(fake, path);
+				liveBillingCheckout(fake, home2);
 				fake.set("herdr", ["agent", "prompt", firstAgent, fixPrompt], {
 					code: 1,
 					stderr: "error: the agent is not accepting prompts\n",
@@ -1049,7 +1043,7 @@ describe("the override panel", () => {
 	test("an unset thinking row cycles to the first option on the first right", async () => {
 		const planeRecord = await plane({
 			config: seatOpenConfig,
-			repos: { "github.com/acme/billing": "src/billing" },
+			repos: BILLING_REPOS,
 		});
 		const _runner = planeRecord.fakeRunner;
 
@@ -1108,12 +1102,8 @@ describe("the override panel", () => {
 		};
 		const planeRecord = await plane({
 			config: config,
-			repos: { "github.com/acme/billing": "src/billing" },
-			commands: (fake, home2) => {
-				const path = join(home2, "src", "billing");
-				stubCheckout(fake, path);
-				stubLiveHandoff(fake, path);
-			},
+			repos: BILLING_REPOS,
+			commands: liveBillingCheckout,
 		});
 		const runner = planeRecord.fakeRunner;
 
@@ -1206,12 +1196,8 @@ describe("the override panel", () => {
 			groupingAxis: "none",
 			config: config,
 			sources: [{ config: billingSource, tickets: [secondCycle] }],
-			repos: { "github.com/acme/billing": "src/billing" },
-			commands: (fake, home2) => {
-				const path = join(home2, "src", "billing");
-				stubCheckout(fake, path);
-				stubLiveHandoff(fake, path);
-			},
+			repos: BILLING_REPOS,
+			commands: liveBillingCheckout,
 		});
 		const runner = planeRecord.fakeRunner;
 
@@ -1269,11 +1255,9 @@ describe("the override panel", () => {
 		};
 		const planeRecord = await plane({
 			config: config,
-			repos: { "github.com/acme/billing": "src/billing" },
+			repos: BILLING_REPOS,
 			commands: (fake, home2) => {
-				const path = join(home2, "src", "billing");
-				stubCheckout(fake, path);
-				stubLiveHandoff(fake, path);
+				liveBillingCheckout(fake, home2);
 				fake.set(
 					"herdr",
 					[
@@ -1323,12 +1307,8 @@ describe("the override panel", () => {
 		};
 		const planeRecord = await plane({
 			config: config,
-			repos: { "github.com/acme/billing": "src/billing" },
-			commands: (fake, home2) => {
-				const path = join(home2, "src", "billing");
-				stubCheckout(fake, path);
-				stubLiveHandoff(fake, path);
-			},
+			repos: BILLING_REPOS,
+			commands: liveBillingCheckout,
 		});
 		const runner = planeRecord.fakeRunner;
 
@@ -1374,12 +1354,8 @@ describe("the override panel", () => {
 		};
 		const planeRecord = await plane({
 			config: config,
-			repos: { "github.com/acme/billing": "src/billing" },
-			commands: (fake, home2) => {
-				const path = join(home2, "src", "billing");
-				stubCheckout(fake, path);
-				stubLiveHandoff(fake, path);
-			},
+			repos: BILLING_REPOS,
+			commands: liveBillingCheckout,
 		});
 		const runner = planeRecord.fakeRunner;
 
@@ -1426,12 +1402,8 @@ describe("the override panel", () => {
 		};
 		const planeRecord = await plane({
 			config: config,
-			repos: { "github.com/acme/billing": "src/billing" },
-			commands: (fake, home2) => {
-				const path = join(home2, "src", "billing");
-				stubCheckout(fake, path);
-				stubLiveHandoff(fake, path);
-			},
+			repos: BILLING_REPOS,
+			commands: liveBillingCheckout,
 		});
 		const runner = planeRecord.fakeRunner;
 
@@ -1474,12 +1446,8 @@ describe("the override panel", () => {
 		};
 		const planeRecord = await plane({
 			config: config,
-			repos: { "github.com/acme/billing": "src/billing" },
-			commands: (fake, home2) => {
-				const path = join(home2, "src", "billing");
-				stubCheckout(fake, path);
-				stubLiveHandoff(fake, path);
-			},
+			repos: BILLING_REPOS,
+			commands: liveBillingCheckout,
 		});
 		const runner = planeRecord.fakeRunner;
 
@@ -1554,12 +1522,8 @@ describe("the override panel", () => {
 			groupingAxis: "none",
 			config: config,
 			sources: [{ config: billingSource, tickets: [mergeTicket] }],
-			repos: { "github.com/acme/billing": "src/billing" },
-			commands: (fake, home2) => {
-				const path = join(home2, "src", "billing");
-				stubCheckout(fake, path);
-				stubLiveHandoff(fake, path);
-			},
+			repos: BILLING_REPOS,
+			commands: liveBillingCheckout,
 		});
 		const runner = planeRecord.fakeRunner;
 
@@ -1610,12 +1574,8 @@ describe("the override panel", () => {
 			groupingAxis: "none",
 			config: config,
 			sources: [{ config: billingSource, tickets: [mergeTicket] }],
-			repos: { "github.com/acme/billing": "src/billing" },
-			commands: (fake, home2) => {
-				const path = join(home2, "src", "billing");
-				stubCheckout(fake, path);
-				stubLiveHandoff(fake, path);
-			},
+			repos: BILLING_REPOS,
+			commands: liveBillingCheckout,
 		});
 		const _runner = planeRecord.fakeRunner;
 
@@ -1676,12 +1636,8 @@ describe("the override panel", () => {
 			groupingAxis: "none",
 			config: config,
 			sources: [{ config: billingSource, tickets: [mergeTicket] }],
-			repos: { "github.com/acme/billing": "src/billing" },
-			commands: (fake, home2) => {
-				const path = join(home2, "src", "billing");
-				stubCheckout(fake, path);
-				stubLiveHandoff(fake, path);
-			},
+			repos: BILLING_REPOS,
+			commands: liveBillingCheckout,
 		});
 		const runner = planeRecord.fakeRunner;
 
@@ -1734,7 +1690,7 @@ describe("the override panel", () => {
 		};
 		const planeRecord = await plane({
 			config: config,
-			repos: { "github.com/acme/billing": "src/billing" },
+			repos: BILLING_REPOS,
 		});
 		const _runner = planeRecord.fakeRunner;
 
@@ -1768,7 +1724,7 @@ describe("the override panel", () => {
 	test("the task type row cycles through the task types and wraps", async () => {
 		const planeRecord = await plane({
 			config: seatOpenConfig,
-			repos: { "github.com/acme/billing": "src/billing" },
+			repos: BILLING_REPOS,
 		});
 		const _runner = planeRecord.fakeRunner;
 
@@ -1805,7 +1761,7 @@ describe("the override panel", () => {
 	test("the container environment is never offered", async () => {
 		const planeRecord = await plane({
 			config: seatOpenConfig,
-			repos: { "github.com/acme/billing": "src/billing" },
+			repos: BILLING_REPOS,
 		});
 		const _runner = planeRecord.fakeRunner;
 
@@ -1836,7 +1792,7 @@ describe("the override panel", () => {
 	test("escape cancels the panel without a handoff", async () => {
 		const planeRecord = await plane({
 			config: seatOpenConfig,
-			repos: { "github.com/acme/billing": "src/billing" },
+			repos: BILLING_REPOS,
 		});
 		const runner = planeRecord.fakeRunner;
 
@@ -1890,12 +1846,8 @@ describe("the override panel", () => {
 		};
 		const planeRecord = await plane({
 			config: config,
-			repos: { "github.com/acme/billing": "src/billing" },
-			commands: (fake, home2) => {
-				const path = join(home2, "src", "billing");
-				stubCheckout(fake, path);
-				stubLiveHandoff(fake, path);
-			},
+			repos: BILLING_REPOS,
+			commands: liveBillingCheckout,
 		});
 		const _runner = planeRecord.fakeRunner;
 
@@ -1947,12 +1899,8 @@ describe("the override panel", () => {
 	test("the Context row carries the profile's count and takes digits only", async () => {
 		const planeRecord = await plane({
 			config: contextProfileConfig,
-			repos: { "github.com/acme/billing": "src/billing" },
-			commands: (fake, home2) => {
-				const path = join(home2, "src", "billing");
-				stubCheckout(fake, path);
-				stubLiveHandoff(fake, path);
-			},
+			repos: BILLING_REPOS,
+			commands: liveBillingCheckout,
 		});
 		const runner = planeRecord.fakeRunner;
 
@@ -2025,12 +1973,8 @@ describe("the override panel", () => {
 	test("the Context row folds a typed count to one spelling, the way the config does", async () => {
 		const planeRecord = await plane({
 			config: contextProfileConfig,
-			repos: { "github.com/acme/billing": "src/billing" },
-			commands: (fake, home2) => {
-				const path = join(home2, "src", "billing");
-				stubCheckout(fake, path);
-				stubLiveHandoff(fake, path);
-			},
+			repos: BILLING_REPOS,
+			commands: liveBillingCheckout,
 		});
 		const runner = planeRecord.fakeRunner;
 
@@ -2075,12 +2019,8 @@ describe("the override panel", () => {
 	test("a Context row that holds no count says so, and the handoff refuses it", async () => {
 		const planeRecord = await plane({
 			config: contextProfileConfig,
-			repos: { "github.com/acme/billing": "src/billing" },
-			commands: (fake, home2) => {
-				const path = join(home2, "src", "billing");
-				stubCheckout(fake, path);
-				stubLiveHandoff(fake, path);
-			},
+			repos: BILLING_REPOS,
+			commands: liveBillingCheckout,
 		});
 		const runner = planeRecord.fakeRunner;
 
@@ -2151,12 +2091,8 @@ describe("the override panel", () => {
 		};
 		const planeRecord = await plane({
 			config: config,
-			repos: { "github.com/acme/billing": "src/billing" },
-			commands: (fake, home2) => {
-				const path = join(home2, "src", "billing");
-				stubCheckout(fake, path);
-				stubLiveHandoff(fake, path);
-			},
+			repos: BILLING_REPOS,
+			commands: liveBillingCheckout,
 		});
 		const runner = planeRecord.fakeRunner;
 
@@ -2261,12 +2197,8 @@ describe("the override panel", () => {
 		};
 		const planeRecord = await plane({
 			config: config,
-			repos: { "github.com/acme/billing": "src/billing" },
-			commands: (fake, home2) => {
-				const path = join(home2, "src", "billing");
-				stubCheckout(fake, path);
-				stubLiveHandoff(fake, path);
-			},
+			repos: BILLING_REPOS,
+			commands: liveBillingCheckout,
 		});
 		const runner = planeRecord.fakeRunner;
 
@@ -2366,12 +2298,8 @@ describe("the override panel", () => {
 	test("the free-text model row accepts typed text and confirms the handoff", async () => {
 		const planeRecord = await plane({
 			config: seatOpenConfig,
-			repos: { "github.com/acme/billing": "src/billing" },
-			commands: (fake, home2) => {
-				const path = join(home2, "src", "billing");
-				stubCheckout(fake, path);
-				stubLiveHandoff(fake, path);
-			},
+			repos: BILLING_REPOS,
+			commands: liveBillingCheckout,
 		});
 		const runner = planeRecord.fakeRunner;
 
@@ -2413,7 +2341,7 @@ describe("the override panel", () => {
 	test("the selected text field has a focused background and bright text", async () => {
 		const planeRecord = await plane({
 			config: seatOpenConfig,
-			repos: { "github.com/acme/billing": "src/billing" },
+			repos: BILLING_REPOS,
 		});
 		const _runner = planeRecord.fakeRunner;
 
@@ -2449,12 +2377,8 @@ describe("the override panel", () => {
 	test("a non-ASCII model name types into the free-text row and rides on the start", async () => {
 		const planeRecord = await plane({
 			config: seatOpenConfig,
-			repos: { "github.com/acme/billing": "src/billing" },
-			commands: (fake, home2) => {
-				const path = join(home2, "src", "billing");
-				stubCheckout(fake, path);
-				stubLiveHandoff(fake, path);
-			},
+			repos: BILLING_REPOS,
+			commands: liveBillingCheckout,
 		});
 		const runner = planeRecord.fakeRunner;
 
@@ -2502,7 +2426,7 @@ describe("the override panel", () => {
 	test("a move and a cycle in the same tick act on the moved row", async () => {
 		const planeRecord = await plane({
 			config: seatOpenConfig,
-			repos: { "github.com/acme/billing": "src/billing" },
+			repos: BILLING_REPOS,
 		});
 		const _runner = planeRecord.fakeRunner;
 
@@ -2533,7 +2457,7 @@ describe("the override panel", () => {
 	test("Tab and Shift+Tab move from list and text rows", async () => {
 		const planeRecord = await plane({
 			config: seatOpenConfig,
-			repos: { "github.com/acme/billing": "src/billing" },
+			repos: BILLING_REPOS,
 		});
 		const _runner = planeRecord.fakeRunner;
 
@@ -2651,12 +2575,8 @@ describe("the override panel", () => {
 			// walk, the ask, and the panel: whichever command the start waits on,
 			// the run itself stretches over the window the walk needs.
 			runner: (fake) => new DelayedRunner(fake, 800, 12),
-			repos: { "github.com/acme/billing": "src/billing" },
-			commands: (fake, home2) => {
-				const path = join(home2, "src", "billing");
-				stubCheckout(fake, path);
-				stubLiveHandoff(fake, path);
-			},
+			repos: BILLING_REPOS,
+			commands: liveBillingCheckout,
 		});
 
 		await withApp(
@@ -2780,12 +2700,8 @@ describe("the override panel", () => {
 	test("j, k, h, and l type into the selected free-text row", async () => {
 		const planeRecord = await plane({
 			config: seatOpenConfig,
-			repos: { "github.com/acme/billing": "src/billing" },
-			commands: (fake, home2) => {
-				const path = join(home2, "src", "billing");
-				stubCheckout(fake, path);
-				stubLiveHandoff(fake, path);
-			},
+			repos: BILLING_REPOS,
+			commands: liveBillingCheckout,
 		});
 		const runner = planeRecord.fakeRunner;
 
@@ -2834,12 +2750,8 @@ describe("the override panel", () => {
 	test("the free-text row moves the caret and inserts at it", async () => {
 		const planeRecord = await plane({
 			config: seatOpenConfig,
-			repos: { "github.com/acme/billing": "src/billing" },
-			commands: (fake, home2) => {
-				const path = join(home2, "src", "billing");
-				stubCheckout(fake, path);
-				stubLiveHandoff(fake, path);
-			},
+			repos: BILLING_REPOS,
+			commands: liveBillingCheckout,
 		});
 		const runner = planeRecord.fakeRunner;
 
@@ -2888,12 +2800,8 @@ describe("the override panel", () => {
 	test("the free-text row jumps to the ends with Home and End", async () => {
 		const planeRecord = await plane({
 			config: seatOpenConfig,
-			repos: { "github.com/acme/billing": "src/billing" },
-			commands: (fake, home2) => {
-				const path = join(home2, "src", "billing");
-				stubCheckout(fake, path);
-				stubLiveHandoff(fake, path);
-			},
+			repos: BILLING_REPOS,
+			commands: liveBillingCheckout,
 		});
 		const runner = planeRecord.fakeRunner;
 
@@ -2944,12 +2852,8 @@ describe("the override panel", () => {
 	test("the free-text row deletes with backspace and forward delete", async () => {
 		const planeRecord = await plane({
 			config: seatOpenConfig,
-			repos: { "github.com/acme/billing": "src/billing" },
-			commands: (fake, home2) => {
-				const path = join(home2, "src", "billing");
-				stubCheckout(fake, path);
-				stubLiveHandoff(fake, path);
-			},
+			repos: BILLING_REPOS,
+			commands: liveBillingCheckout,
 		});
 		const runner = planeRecord.fakeRunner;
 
@@ -3004,12 +2908,8 @@ describe("the override panel", () => {
 	test("the free-text row deletes a caret selection", async () => {
 		const planeRecord = await plane({
 			config: seatOpenConfig,
-			repos: { "github.com/acme/billing": "src/billing" },
-			commands: (fake, home2) => {
-				const path = join(home2, "src", "billing");
-				stubCheckout(fake, path);
-				stubLiveHandoff(fake, path);
-			},
+			repos: BILLING_REPOS,
+			commands: liveBillingCheckout,
 		});
 		const runner = planeRecord.fakeRunner;
 
@@ -3059,12 +2959,8 @@ describe("the override panel", () => {
 	test("the free-text row undoes with Ctrl+Z and redoes with Ctrl+Y", async () => {
 		const planeRecord = await plane({
 			config: seatOpenConfig,
-			repos: { "github.com/acme/billing": "src/billing" },
-			commands: (fake, home2) => {
-				const path = join(home2, "src", "billing");
-				stubCheckout(fake, path);
-				stubLiveHandoff(fake, path);
-			},
+			repos: BILLING_REPOS,
+			commands: liveBillingCheckout,
 		});
 		const runner = planeRecord.fakeRunner;
 
@@ -3124,12 +3020,8 @@ describe("the override panel", () => {
 	test("bracketed paste works in the free-text Model row of a kind with no model list", async () => {
 		const planeRecord = await plane({
 			config: seatOpenConfig,
-			repos: { "github.com/acme/billing": "src/billing" },
-			commands: (fake, home2) => {
-				const path = join(home2, "src", "billing");
-				stubCheckout(fake, path);
-				stubLiveHandoff(fake, path);
-			},
+			repos: BILLING_REPOS,
+			commands: liveBillingCheckout,
 		});
 		const runner = planeRecord.fakeRunner;
 
@@ -3177,12 +3069,8 @@ describe("the override panel", () => {
 	test("a bracketed paste is sanitized of ANSI escapes and line breaks", async () => {
 		const planeRecord = await plane({
 			config: seatOpenConfig,
-			repos: { "github.com/acme/billing": "src/billing" },
-			commands: (fake, home2) => {
-				const path = join(home2, "src", "billing");
-				stubCheckout(fake, path);
-				stubLiveHandoff(fake, path);
-			},
+			repos: BILLING_REPOS,
+			commands: liveBillingCheckout,
 		});
 		const runner = planeRecord.fakeRunner;
 
@@ -3230,7 +3118,7 @@ describe("the override panel", () => {
 	test("pasting at the start, middle, end, and over a selection edits in place", async () => {
 		const planeRecord = await plane({
 			config: seatOpenConfig,
-			repos: { "github.com/acme/billing": "src/billing" },
+			repos: BILLING_REPOS,
 		});
 		const _runner = planeRecord.fakeRunner;
 
@@ -3276,12 +3164,8 @@ describe("the override panel", () => {
 	test("a long free-text value scrolls in its column and hands off whole", async () => {
 		const planeRecord = await plane({
 			config: seatOpenConfig,
-			repos: { "github.com/acme/billing": "src/billing" },
-			commands: (fake, home2) => {
-				const path = join(home2, "src", "billing");
-				stubCheckout(fake, path);
-				stubLiveHandoff(fake, path);
-			},
+			repos: BILLING_REPOS,
+			commands: liveBillingCheckout,
 		});
 		const runner = planeRecord.fakeRunner;
 
@@ -3333,7 +3217,7 @@ describe("the override panel", () => {
 	test("word deletion removes a word in either direction", async () => {
 		const planeRecord = await plane({
 			config: seatOpenConfig,
-			repos: { "github.com/acme/billing": "src/billing" },
+			repos: BILLING_REPOS,
 		});
 		const _runner = planeRecord.fakeRunner;
 
@@ -3372,7 +3256,7 @@ describe("the override panel", () => {
 	test("question mark and m type into a selected free-text row", async () => {
 		const planeRecord = await plane({
 			config: seatOpenConfig,
-			repos: { "github.com/acme/billing": "src/billing" },
+			repos: BILLING_REPOS,
 		});
 		const _runner = planeRecord.fakeRunner;
 
@@ -3403,12 +3287,8 @@ describe("the override panel", () => {
 	test("typing and confirming in one tick hands off the complete value", async () => {
 		const planeRecord = await plane({
 			config: seatOpenConfig,
-			repos: { "github.com/acme/billing": "src/billing" },
-			commands: (fake, home2) => {
-				const path = join(home2, "src", "billing");
-				stubCheckout(fake, path);
-				stubLiveHandoff(fake, path);
-			},
+			repos: BILLING_REPOS,
+			commands: liveBillingCheckout,
 		});
 		const runner = planeRecord.fakeRunner;
 
@@ -3441,7 +3321,7 @@ describe("the override panel", () => {
 		};
 		const planeRecord = await plane({
 			config: config,
-			repos: { "github.com/acme/billing": "src/billing" },
+			repos: BILLING_REPOS,
 		});
 		const _runner = planeRecord.fakeRunner;
 
@@ -3507,7 +3387,7 @@ describe("the override panel", () => {
 	test("a short terminal scrolls the rows to keep the selected one on screen", async () => {
 		const planeRecord = await plane({
 			config: seatOpenConfig,
-			repos: { "github.com/acme/billing": "src/billing" },
+			repos: BILLING_REPOS,
 		});
 		const _runner = planeRecord.fakeRunner;
 
@@ -3549,7 +3429,7 @@ describe("the override panel", () => {
 		// choice row rather than as a text field.
 		const planeRecord = await plane({
 			config: seatOpenConfig,
-			repos: { "github.com/acme/billing": "src/billing" },
+			repos: BILLING_REPOS,
 			commands: (fake, home2) => {
 				const _path = join(home2, "src", "billing");
 				fake.setModelList("pi", ["anthropic/claude-sonnet-4-5"]);
@@ -3607,7 +3487,7 @@ describe("the override panel", () => {
 	test("a narrow terminal sizes the panel instead of corrupting rows", async () => {
 		const planeRecord = await plane({
 			config: seatOpenConfig,
-			repos: { "github.com/acme/billing": "src/billing" },
+			repos: BILLING_REPOS,
 		});
 		const _runner = planeRecord.fakeRunner;
 
@@ -3675,11 +3555,9 @@ describe("the override panel", () => {
 
 			const planeRecord = await plane({
 				config: seatOpenConfig,
-				repos: { "github.com/acme/billing": "src/billing" },
+				repos: BILLING_REPOS,
 				commands: (fake, home2) => {
-					const path = join(home2, "src", "billing");
-					stubCheckout(fake, path);
-					stubLiveHandoff(fake, path);
+					liveBillingCheckout(fake, home2);
 					fake.setModelList("pi", [
 						"anthropic/claude-sonnet-4-5",
 						"openai/gpt-5.1",
@@ -3726,11 +3604,9 @@ describe("the override panel", () => {
 		test(`a query that matches nothing keeps its text and says so (${size.width}x${size.height})`, async () => {
 			const planeRecord = await plane({
 				config: seatOpenConfig,
-				repos: { "github.com/acme/billing": "src/billing" },
+				repos: BILLING_REPOS,
 				commands: (fake, home2) => {
-					const path = join(home2, "src", "billing");
-					stubCheckout(fake, path);
-					stubLiveHandoff(fake, path);
+					liveBillingCheckout(fake, home2);
 					fake.setModelList("pi", [
 						"anthropic/claude-sonnet-4-5",
 						"openai/gpt-5.1",
@@ -3791,11 +3667,9 @@ describe("the override panel", () => {
 		test(`Delete on an empty search gives the Model back to the agent (${size.width}x${size.height})`, async () => {
 			const planeRecord = await plane({
 				config: seatOpenConfig,
-				repos: { "github.com/acme/billing": "src/billing" },
+				repos: BILLING_REPOS,
 				commands: (fake, home2) => {
-					const path = join(home2, "src", "billing");
-					stubCheckout(fake, path);
-					stubLiveHandoff(fake, path);
+					liveBillingCheckout(fake, home2);
 					fake.setModelList("pi", ["anthropic/claude-sonnet-4-5", "openai/gpt-5.1"]);
 				},
 			});
@@ -3837,11 +3711,9 @@ describe("the override panel", () => {
 			for (const models of [["anthropic/claude-sonnet-4-5"], []] as const) {
 				const planeRecord = await plane({
 					config: seatOpenConfig,
-					repos: { "github.com/acme/billing": "src/billing" },
+					repos: BILLING_REPOS,
 					commands: (fake, home2) => {
-						const path = join(home2, "src", "billing");
-						stubCheckout(fake, path);
-						stubLiveHandoff(fake, path);
+						liveBillingCheckout(fake, home2);
 						fake.setModelList("pi", [...models]);
 					},
 				});
@@ -3870,11 +3742,9 @@ describe("the override panel", () => {
 		test(`the Model row holds a loading marker while the control plane fetches the list (${size.width}x${size.height})`, async () => {
 			const planeRecord = await plane({
 				config: seatOpenConfig,
-				repos: { "github.com/acme/billing": "src/billing" },
+				repos: BILLING_REPOS,
 				commands: (fake, home2) => {
-					const path = join(home2, "src", "billing");
-					stubCheckout(fake, path);
-					stubLiveHandoff(fake, path);
+					liveBillingCheckout(fake, home2);
 					fake.setModelList("pi", ["anthropic/claude-sonnet-4-5"]);
 				},
 			});
@@ -3925,11 +3795,9 @@ describe("the override panel", () => {
 		test(`the Model row says so when the agent reports no models (${size.width}x${size.height})`, async () => {
 			const planeRecord = await plane({
 				config: seatOpenConfig,
-				repos: { "github.com/acme/billing": "src/billing" },
+				repos: BILLING_REPOS,
 				commands: (fake, home2) => {
-					const path = join(home2, "src", "billing");
-					stubCheckout(fake, path);
-					stubLiveHandoff(fake, path);
+					liveBillingCheckout(fake, home2);
 					fake.setModelList("pi", []);
 				},
 			});
@@ -3968,11 +3836,9 @@ describe("the override panel", () => {
 
 			const planeRecord = await plane({
 				config: config,
-				repos: { "github.com/acme/billing": "src/billing" },
+				repos: BILLING_REPOS,
 				commands: (fake, home2) => {
-					const path = join(home2, "src", "billing");
-					stubCheckout(fake, path);
-					stubLiveHandoff(fake, path);
+					liveBillingCheckout(fake, home2);
 					fake.setModelList("pi", ["anthropic/claude-sonnet-4-5"]);
 				},
 			});
@@ -4022,11 +3888,9 @@ describe("the override panel", () => {
 
 			const planeRecord = await plane({
 				config: config,
-				repos: { "github.com/acme/billing": "src/billing" },
+				repos: BILLING_REPOS,
 				commands: (fake, home2) => {
-					const path = join(home2, "src", "billing");
-					stubCheckout(fake, path);
-					stubLiveHandoff(fake, path);
+					liveBillingCheckout(fake, home2);
 					fake.setModelList("pi", ["anthropic/claude-sonnet-4-5", "openai/gpt-4o"]);
 				},
 			});
@@ -4084,11 +3948,9 @@ describe("the override panel", () => {
 
 			const planeRecord = await plane({
 				config: config,
-				repos: { "github.com/acme/billing": "src/billing" },
+				repos: BILLING_REPOS,
 				commands: (fake, home2) => {
-					const path = join(home2, "src", "billing");
-					stubCheckout(fake, path);
-					stubLiveHandoff(fake, path);
+					liveBillingCheckout(fake, home2);
 					fake.setModelList("pi", ["anthropic/claude-sonnet-4-5"]);
 				},
 			});
@@ -4138,11 +4000,9 @@ describe("the override panel", () => {
 
 			const planeRecord = await plane({
 				config: config,
-				repos: { "github.com/acme/billing": "src/billing" },
+				repos: BILLING_REPOS,
 				commands: (fake, home2) => {
-					const path = join(home2, "src", "billing");
-					stubCheckout(fake, path);
-					stubLiveHandoff(fake, path);
+					liveBillingCheckout(fake, home2);
 					fake.setModelList("pi", ["anthropic/claude-sonnet-4-5"]);
 				},
 			});
@@ -4185,11 +4045,9 @@ describe("the override panel", () => {
 				groupingAxis: "none",
 				config: config,
 				sources: [{ config: billingSource, tickets: [mergeTicket] }],
-				repos: { "github.com/acme/billing": "src/billing" },
+				repos: BILLING_REPOS,
 				commands: (fake, home2) => {
-					const path = join(home2, "src", "billing");
-					stubCheckout(fake, path);
-					stubLiveHandoff(fake, path);
+					liveBillingCheckout(fake, home2);
 					fake.setModelList("pi", ["anthropic/claude-sonnet-4-5", "openai/gpt-5.1"]);
 				},
 			});
@@ -4245,11 +4103,9 @@ describe("the override panel", () => {
 
 			const planeRecord = await plane({
 				config: seatOpenConfig,
-				repos: { "github.com/acme/billing": "src/billing" },
+				repos: BILLING_REPOS,
 				commands: (fake, home2) => {
-					const path = join(home2, "src", "billing");
-					stubCheckout(fake, path);
-					stubLiveHandoff(fake, path);
+					liveBillingCheckout(fake, home2);
 					fake.setModelList("pi", [long, `${long.slice(0, long.length - 1)}2`]);
 				},
 			});
@@ -4284,12 +4140,8 @@ describe("the override panel", () => {
 		test(`a failed model list query falls the Model row back to free text (${size.width}x${size.height})`, async () => {
 			const planeRecord = await plane({
 				config: seatOpenConfig,
-				repos: { "github.com/acme/billing": "src/billing" },
-				commands: (fake, home2) => {
-					const path = join(home2, "src", "billing");
-					stubCheckout(fake, path);
-					stubLiveHandoff(fake, path);
-				},
+				repos: BILLING_REPOS,
+				commands: liveBillingCheckout,
 			});
 			const runner = planeRecord.fakeRunner;
 			runner.setModelListFailure("pi", "network unreachable");
@@ -4318,12 +4170,8 @@ describe("the override panel", () => {
 
 			const planeRecord = await plane({
 				config: config,
-				repos: { "github.com/acme/billing": "src/billing" },
-				commands: (fake, home2) => {
-					const path = join(home2, "src", "billing");
-					stubCheckout(fake, path);
-					stubLiveHandoff(fake, path);
-				},
+				repos: BILLING_REPOS,
+				commands: liveBillingCheckout,
 			});
 			const runner = planeRecord.fakeRunner;
 
@@ -4363,11 +4211,9 @@ describe("the override panel", () => {
 				groupingAxis: "none",
 				config: config,
 				sources: [{ config: billingSource, tickets: [mergeTicket] }],
-				repos: { "github.com/acme/billing": "src/billing" },
+				repos: BILLING_REPOS,
 				commands: (fake, home2) => {
-					const path = join(home2, "src", "billing");
-					stubCheckout(fake, path);
-					stubLiveHandoff(fake, path);
+					liveBillingCheckout(fake, home2);
 					fake.setModelList("pi", ["anthropic/claude-sonnet-4-5", "openai/gpt-5.1"]);
 				},
 			});
@@ -4427,11 +4273,9 @@ describe("the override panel", () => {
 				groupingAxis: "none",
 				config: config,
 				sources: [{ config: billingSource, tickets: [mergeTicket] }],
-				repos: { "github.com/acme/billing": "src/billing" },
+				repos: BILLING_REPOS,
 				commands: (fake, home2) => {
-					const path = join(home2, "src", "billing");
-					stubCheckout(fake, path);
-					stubLiveHandoff(fake, path);
+					liveBillingCheckout(fake, home2);
 					fake.setModelList("pi", ["anthropic/claude-sonnet-4-5", "openai/gpt-5.1"]);
 				},
 			});
@@ -4494,11 +4338,9 @@ describe("the override panel", () => {
 				groupingAxis: "none",
 				config: config,
 				sources: [{ config: billingSource, tickets: [mergeTicket] }],
-				repos: { "github.com/acme/billing": "src/billing" },
+				repos: BILLING_REPOS,
 				commands: (fake, home2) => {
-					const path = join(home2, "src", "billing");
-					stubCheckout(fake, path);
-					stubLiveHandoff(fake, path);
+					liveBillingCheckout(fake, home2);
 					fake.setModelList("pi", ["anthropic/claude-sonnet-4-5"]);
 				},
 			});
@@ -4570,12 +4412,8 @@ describe("the override panel", () => {
 		const config: FactoryConfig = { ...BASE_CONFIG, maxParallelAgents: 3, defaultAgent: "claude" };
 		const planeRecord = await plane({
 			config: config,
-			repos: { "github.com/acme/billing": "src/billing" },
-			commands: (fake, home2) => {
-				const path = join(home2, "src", "billing");
-				stubCheckout(fake, path);
-				stubLiveHandoff(fake, path);
-			},
+			repos: BILLING_REPOS,
+			commands: liveBillingCheckout,
 		});
 		const runner = planeRecord.fakeRunner;
 
@@ -4617,10 +4455,9 @@ describe("the override panel", () => {
 	test("a failed worktree handoff removes its residue and keeps the ticket open", async () => {
 		const planeRecord = await plane({
 			config: seatOpenConfig,
-			repos: { "github.com/acme/billing": "src/billing" },
+			repos: BILLING_REPOS,
 			commands: (fake, home2) => {
-				const path = join(home2, "src", "billing");
-				stubCheckout(fake, path);
+				const path = stubBillingCheckout(fake, home2);
 				stubWorktreeHandoff(fake, path);
 				fake.set("herdr", ["agent", "start", firstAgent, "--kind", "pi", "--pane", "pane-wt"], {
 					code: 1,

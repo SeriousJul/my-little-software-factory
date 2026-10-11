@@ -473,6 +473,58 @@ function stubLiveLaunchNew(runner: FakeRunner, checkout: string): void {
 	});
 	runner.set("herdr", ["agent", "prompt", AGENT, "/grill review auth"], { code: 0 });
 }
+/**
+ * The recovery tests' standard worktree launch: the factory's checkout, its
+ * worktree launch, and the Agent's pane reporting the review.
+ */
+function stubReviewingCheckout(fake: FakeRunner, home: string): void {
+	const checkout = join(home, "src", "factory");
+	stubCheckout(fake, checkout);
+	stubWorktreeLaunch(fake, checkout);
+	stubPaneReadText(fake, "pane-c1", "Agent: reviewing");
+}
+
+/** The pickup tests' worktree launch: the checkout, the launch, the open pane. */
+function stubOpenedCheckout(fake: FakeRunner, home: string): void {
+	const checkout = join(home, "src", "factory");
+	stubCheckout(fake, checkout);
+	stubWorktreeLaunch(fake, checkout);
+	stubPaneReadText(fake, "pane-c1", "Agent: opened");
+}
+
+/** The live tests' existing-checkout launch: the clean live checkout and its tab. */
+function stubLiveExistingCheckout(fake: FakeRunner, home: string): void {
+	const checkout = join(home, "src", "factory");
+	stubLiveCheckout(fake, checkout, false);
+	stubLiveLaunchExisting(fake, checkout);
+	stubPaneReadText(fake, "pane-c1", "Agent: live answer");
+}
+
+/**
+ * The Consultation plane's boot: a fresh state where the test names none, the
+ * grill types, and the factory checkout standing, with the test naming the
+ * checkout's command stubs and the agent list runner it captures.
+ */
+async function consultationBoot(
+	options: {
+		state?: FactoryState;
+		config?: Partial<FactoryConfig>;
+		commands?: (fake: FakeRunner, home: string) => void;
+		runner?: (fake: FakeRunner) => ConsultationRunner;
+	} = {},
+): Promise<{ state: FactoryState; planeRecord: Awaited<ReturnType<typeof plane>> }> {
+	const { state = freshState(), config = {}, commands, runner } = options;
+	const planeRecord = await plane({
+		existing: state,
+		sources: [],
+		config: { consultationTypes: grillTypes, ...config },
+		repos: { "github.com/acme/factory": "src/factory" },
+		commands,
+		runner,
+	});
+	return { state, planeRecord };
+}
+
 /** Count the attention-bell bytes the app writes to the terminal. */
 function countBells(): { count: () => number; restore: () => void } {
 	let bells = 0;
@@ -598,11 +650,8 @@ describe("Consultation launch and monitoring through the UI", () => {
 		let runner: ConsultationRunner;
 		const state = freshState();
 		const paneId = `pane-${WORKING_ID.slice(0, 8)}`;
-		const planeRecord = await plane({
-			existing: state,
-			sources: [],
-			config: { consultationTypes: grillTypes },
-			repos: { "github.com/acme/factory": "src/factory" },
+		const { planeRecord } = await consultationBoot({
+			state,
 			commands: (fake, home) => {
 				const _checkout = join(home, "src", "factory");
 				stubPaneReadText(fake, paneId, "Agent: auth review looks sound");
@@ -762,18 +811,8 @@ test("the mode cell counts the ticket seat and the Consultation seat against one
 describe("Consultation recovery and replacement through the UI", () => {
 	test("an interrupted opening recovers with r", async () => {
 		let runner: ConsultationRunner;
-		const state = freshState();
-		const planeRecord = await plane({
-			existing: state,
-			sources: [],
-			config: { consultationTypes: grillTypes },
-			repos: { "github.com/acme/factory": "src/factory" },
-			commands: (fake, home) => {
-				const checkout = join(home, "src", "factory");
-				stubCheckout(fake, checkout);
-				stubWorktreeLaunch(fake, checkout);
-				stubPaneReadText(fake, "pane-c1", "Agent: reviewing");
-			},
+		const { state, planeRecord } = await consultationBoot({
+			commands: stubReviewingCheckout,
 			runner: (fake) => (runner = new ConsultationRunner(fake, agentListJson([]))),
 		});
 		const checkout = join(planeRecord.home, "src", "factory");
@@ -813,11 +852,8 @@ describe("Consultation recovery and replacement through the UI", () => {
 		// stored count is the one thing that can refuse this recovery: pi maps no
 		// context window setting.
 		const short = OPENING_ID.slice(0, 8);
-		const planeRecord = await plane({
-			existing: state,
-			sources: [],
-			config: { consultationTypes: grillTypes },
-			repos: { "github.com/acme/factory": "src/factory" },
+		const { planeRecord } = await consultationBoot({
+			state,
 			runner: (fake) => (runner = new ConsultationRunner(fake, agentListJson([]))),
 		});
 		const checkout = join(planeRecord.home, "src", "factory");
@@ -858,18 +894,8 @@ describe("Consultation recovery and replacement through the UI", () => {
 	});
 	test("a failed Consultation refuses r and opens a Replacement launcher from c", async () => {
 		let runner: ConsultationRunner;
-		const state = freshState();
-		const planeRecord = await plane({
-			existing: state,
-			sources: [],
-			config: { consultationTypes: grillTypes },
-			repos: { "github.com/acme/factory": "src/factory" },
-			commands: (fake, home) => {
-				const checkout = join(home, "src", "factory");
-				stubCheckout(fake, checkout);
-				stubWorktreeLaunch(fake, checkout);
-				stubPaneReadText(fake, "pane-c1", "Agent: reviewing");
-			},
+		const { state, planeRecord } = await consultationBoot({
+			commands: stubReviewingCheckout,
 			runner: (fake) => (runner = new ConsultationRunner(fake, agentListJson([]))),
 		});
 		const checkout = join(planeRecord.home, "src", "factory");
@@ -949,18 +975,8 @@ describe("Consultation recovery and replacement through the UI", () => {
 describe("Consultation Enter reaches the recovery surface its state needs", () => {
 	test("Enter on an opening Consultation opens the recovery panel, and Recover retries it", async () => {
 		let runner: ConsultationRunner;
-		const state = freshState();
-		const planeRecord = await plane({
-			existing: state,
-			sources: [],
-			config: { consultationTypes: grillTypes },
-			repos: { "github.com/acme/factory": "src/factory" },
-			commands: (fake, home) => {
-				const checkout = join(home, "src", "factory");
-				stubCheckout(fake, checkout);
-				stubWorktreeLaunch(fake, checkout);
-				stubPaneReadText(fake, "pane-c1", "Agent: reviewing");
-			},
+		const { state, planeRecord } = await consultationBoot({
+			commands: stubReviewingCheckout,
 			runner: (fake) => (runner = new ConsultationRunner(fake, agentListJson([]))),
 		});
 		const checkout = join(planeRecord.home, "src", "factory");
@@ -1003,12 +1019,7 @@ describe("Consultation Enter reaches the recovery surface its state needs", () =
 	});
 	test("the recovery panel's Close takes an opening Consultation through its dialog", async () => {
 		let runner: ConsultationRunner;
-		const state = freshState();
-		const planeRecord = await plane({
-			existing: state,
-			sources: [],
-			config: { consultationTypes: grillTypes },
-			repos: { "github.com/acme/factory": "src/factory" },
+		const { state, planeRecord } = await consultationBoot({
 			runner: (fake) => (runner = new ConsultationRunner(fake, agentListJson([]))),
 		});
 		const checkout = join(planeRecord.home, "src", "factory");
@@ -1048,18 +1059,8 @@ describe("Consultation Enter reaches the recovery surface its state needs", () =
 	});
 	test("Enter on a missing Consultation opens the recovery panel, and Replace links its replacement", async () => {
 		let runner: ConsultationRunner;
-		const state = freshState();
-		const planeRecord = await plane({
-			existing: state,
-			sources: [],
-			config: { consultationTypes: grillTypes },
-			repos: { "github.com/acme/factory": "src/factory" },
-			commands: (fake, home) => {
-				const checkout = join(home, "src", "factory");
-				stubCheckout(fake, checkout);
-				stubWorktreeLaunch(fake, checkout);
-				stubPaneReadText(fake, "pane-c1", "Agent: reviewing");
-			},
+		const { state, planeRecord } = await consultationBoot({
+			commands: stubReviewingCheckout,
 			runner: (fake) => (runner = new ConsultationRunner(fake, agentListJson([]))),
 		});
 		const checkout = join(planeRecord.home, "src", "factory");
@@ -1114,11 +1115,8 @@ describe("Consultation Enter reaches the recovery surface its state needs", () =
 		let runner: ConsultationRunner;
 		const state = freshState();
 		const short = FAILED_ID.slice(0, 8);
-		const planeRecord = await plane({
-			existing: state,
-			sources: [],
-			config: { consultationTypes: grillTypes },
-			repos: { "github.com/acme/factory": "src/factory" },
+		const { planeRecord } = await consultationBoot({
+			state,
 			runner: (fake) => (runner = new ConsultationRunner(fake, agentListJson([]))),
 		});
 		const checkout = join(planeRecord.home, "src", "factory");
@@ -1152,12 +1150,7 @@ describe("Consultation Enter reaches the recovery surface its state needs", () =
 	});
 	test("Enter on a closing Consultation opens the close panel's Retry and Force-close", async () => {
 		let runner: ConsultationRunner;
-		const state = freshState();
-		const planeRecord = await plane({
-			existing: state,
-			sources: [],
-			config: { consultationTypes: grillTypes },
-			repos: { "github.com/acme/factory": "src/factory" },
+		const { state, planeRecord } = await consultationBoot({
 			runner: (fake) => (runner = new ConsultationRunner(fake, agentListJson([]))),
 		});
 		const checkout = join(planeRecord.home, "src", "factory");
@@ -1188,12 +1181,7 @@ describe("Consultation Enter reaches the recovery surface its state needs", () =
 	});
 	test("Enter on a closed Consultation says the record is already closed", async () => {
 		let runner: ConsultationRunner;
-		const state = freshState();
-		const planeRecord = await plane({
-			existing: state,
-			sources: [],
-			config: { consultationTypes: grillTypes },
-			repos: { "github.com/acme/factory": "src/factory" },
+		const { state, planeRecord } = await consultationBoot({
 			runner: (fake) => (runner = new ConsultationRunner(fake, agentListJson([]))),
 		});
 		const checkout = join(planeRecord.home, "src", "factory");
@@ -1225,12 +1213,7 @@ describe("Consultation Enter reaches the recovery surface its state needs", () =
 describe("Consultation responses through the UI", () => {
 	test("a response becomes a turn only after Herdr accepts the prompt", async () => {
 		let runner: ConsultationRunner;
-		const state = freshState();
-		const planeRecord = await plane({
-			existing: state,
-			sources: [],
-			config: { consultationTypes: grillTypes },
-			repos: { "github.com/acme/factory": "src/factory" },
+		const { state, planeRecord } = await consultationBoot({
 			commands: (fake, home) => {
 				const _checkout = join(home, "src", "factory");
 				stubPaneReadText(fake, `pane-${RESPONSE_ID.slice(0, 8)}`, "Agent: waiting");
@@ -1276,12 +1259,7 @@ describe("Consultation responses through the UI", () => {
 	});
 	test("a rejected prompt keeps the draft and leaves no pending delivery", async () => {
 		let runner: ConsultationRunner;
-		const state = freshState();
-		const planeRecord = await plane({
-			existing: state,
-			sources: [],
-			config: { consultationTypes: grillTypes },
-			repos: { "github.com/acme/factory": "src/factory" },
+		const { state, planeRecord } = await consultationBoot({
 			commands: (fake, home) => {
 				const _checkout = join(home, "src", "factory");
 				fake.set("herdr", ["agent", "prompt", AGENT, "follow up"], {
@@ -1329,11 +1307,8 @@ describe("Consultation responses through the UI", () => {
 		let runner: ConsultationRunner;
 		const state = freshState();
 		const paneId = `pane-${RESPONSE_ID.slice(0, 8)}`;
-		const planeRecord = await plane({
-			existing: state,
-			sources: [],
-			config: { consultationTypes: grillTypes },
-			repos: { "github.com/acme/factory": "src/factory" },
+		const { planeRecord } = await consultationBoot({
+			state,
 			commands: (fake, home) => {
 				const _checkout = join(home, "src", "factory");
 				stubPaneReadText(fake, paneId, "Agent: the design holds");
@@ -1397,11 +1372,8 @@ describe("Agent interaction through the UI", () => {
 		let runner: ConsultationRunner;
 		const state = freshState();
 		const paneId = `pane-${INTERACTION_ID.slice(0, 8)}`;
-		const planeRecord = await plane({
-			existing: state,
-			sources: [],
-			config: { consultationTypes: grillTypes },
-			repos: { "github.com/acme/factory": "src/factory" },
+		const { planeRecord } = await consultationBoot({
+			state,
 			commands: (fake, home) => {
 				const _checkout = join(home, "src", "factory");
 				stubPaneReadText(fake, paneId, "Agent: working");
@@ -1468,11 +1440,8 @@ describe("Consultation close and cleanup through the UI", () => {
 		const c = CLOSE_C_ID.slice(0, 8);
 		// The close verifies each Agent's identity before it takes anything
 		// down, so the list holds all three at their recorded panes.
-		const planeRecord = await plane({
-			existing: state,
-			sources: [],
-			config: { consultationTypes: grillTypes },
-			repos: { "github.com/acme/factory": "src/factory" },
+		const { planeRecord } = await consultationBoot({
+			state,
 			commands: (fake, home) => {
 				const _checkout = join(home, "src", "factory");
 				stubPaneReadText(fake, `pane-${a}`, "Agent: done a");
@@ -1557,11 +1526,8 @@ describe("Consultation close and cleanup through the UI", () => {
 		const short = FORCE_ID.slice(0, 8);
 		// The close verifies the Agent's identity before it takes the workspace
 		// down, so the list holds the record's Agent at its recorded pane.
-		const planeRecord = await plane({
-			existing: state,
-			sources: [],
-			config: { consultationTypes: grillTypes },
-			repos: { "github.com/acme/factory": "src/factory" },
+		const { planeRecord } = await consultationBoot({
+			state,
 			commands: (fake, home) => {
 				const _checkout = join(home, "src", "factory");
 				stubPaneReadText(fake, `pane-${short}`, "Agent: closing output");
@@ -1642,11 +1608,8 @@ describe("Consultation close and cleanup through the UI", () => {
 		// Neither record holds an Agent, so the close has nothing to confirm.
 		const missing8 = MISSING_DIRECT_ID.slice(0, 8);
 		const failed8 = FAILED_DIRECT_ID.slice(0, 8);
-		const planeRecord = await plane({
-			existing: state,
-			sources: [],
-			config: { consultationTypes: grillTypes },
-			repos: { "github.com/acme/factory": "src/factory" },
+		const { planeRecord } = await consultationBoot({
+			state,
 			runner: (fake) => (runner = new ConsultationRunner(fake, agentListJson([]))),
 		});
 		const checkout = join(planeRecord.home, "src", "factory");
@@ -1698,12 +1661,7 @@ describe("Consultation close and cleanup through the UI", () => {
 	});
 	test("the Delete key on a closed Consultation removes it behind the confirmation", async () => {
 		let runner: ConsultationRunner;
-		const state = freshState();
-		const planeRecord = await plane({
-			existing: state,
-			sources: [],
-			config: { consultationTypes: grillTypes },
-			repos: { "github.com/acme/factory": "src/factory" },
+		const { state, planeRecord } = await consultationBoot({
 			runner: (fake) => (runner = new ConsultationRunner(fake, agentListJson([]))),
 		});
 		const checkout = join(planeRecord.home, "src", "factory");
@@ -1748,11 +1706,8 @@ describe("Consultation close and cleanup through the UI", () => {
 		// so the Consultation stays working until the list loses it.
 		// The workspace of the dead Agent holds the Consultation's own tab and
 		// pane alone, so the direct close takes the pane down and finishes.
-		const planeRecord = await plane({
-			existing: state,
-			sources: [],
-			config: { consultationTypes: grillTypes },
-			repos: { "github.com/acme/factory": "src/factory" },
+		const { planeRecord } = await consultationBoot({
+			state,
 			commands: (fake, home) => {
 				const _checkout = join(home, "src", "factory");
 				fake.set("herdr", ["tab", "list", "--workspace", `ws-${gone8}`], {
@@ -1819,12 +1774,7 @@ describe("Consultation close and cleanup through the UI", () => {
 describe("Consultation geometry, privacy, and history through the UI", () => {
 	test("a narrow terminal keeps the Consultation list beside the detail", async () => {
 		let runner: ConsultationRunner;
-		const state = freshState();
-		const planeRecord = await plane({
-			existing: state,
-			sources: [],
-			config: { consultationTypes: grillTypes },
-			repos: { "github.com/acme/factory": "src/factory" },
+		const { state, planeRecord } = await consultationBoot({
 			commands: (fake, home) => {
 				const _checkout = join(home, "src", "factory");
 				stubPaneReadText(fake, `pane-${WORKING_ID.slice(0, 8)}`, "Agent: working");
@@ -1857,12 +1807,7 @@ describe("Consultation geometry, privacy, and history through the UI", () => {
 	});
 	test("consultation history stays out of the ticket view and delete removes it", async () => {
 		let runner: ConsultationRunner;
-		const state = freshState();
-		const planeRecord = await plane({
-			existing: state,
-			sources: [],
-			config: { consultationTypes: grillTypes },
-			repos: { "github.com/acme/factory": "src/factory" },
+		const { state, planeRecord } = await consultationBoot({
 			runner: (fake) => (runner = new ConsultationRunner(fake, agentListJson([]))),
 		});
 		const checkout = join(planeRecord.home, "src", "factory");
@@ -1917,11 +1862,8 @@ describe("Consultation attention through the UI", () => {
 		const paneId = `pane-${WORKING_ID.slice(0, 8)}`;
 		// The startup cycle finds the Agent still working: nothing settles.
 		const bells = countBells();
-		const planeRecord = await plane({
-			existing: state,
-			sources: [],
-			config: { consultationTypes: grillTypes },
-			repos: { "github.com/acme/factory": "src/factory" },
+		const { planeRecord } = await consultationBoot({
+			state,
 			commands: (fake, home) => {
 				const _checkout = join(home, "src", "factory");
 				stubPaneReadText(fake, paneId, "Agent: answer one");
@@ -1989,11 +1931,8 @@ describe("Consultation attention through the UI", () => {
 		const paneId = `pane-${WORKING_ID.slice(0, 8)}`;
 		// The startup cycle finds the Agent already settled.
 		const bells = countBells();
-		const planeRecord = await plane({
-			existing: state,
-			sources: [],
-			config: { consultationTypes: grillTypes },
-			repos: { "github.com/acme/factory": "src/factory" },
+		const { planeRecord } = await consultationBoot({
+			state,
 			commands: (fake, home) => {
 				const _checkout = join(home, "src", "factory");
 				stubPaneReadText(fake, paneId, "Agent: answer one");
@@ -2045,11 +1984,8 @@ describe("Consultation attention through the UI", () => {
 		// transitions (now) stay older than every seeded created_at.
 		const t = (minutes: number) => new Date(Date.now() + minutes * 60_000).toISOString();
 		await sleep(20);
-		const planeRecord = await plane({
-			existing: state,
-			sources: [],
-			config: { consultationTypes: grillTypes },
-			repos: { "github.com/acme/factory": "src/factory" },
+		const { planeRecord } = await consultationBoot({
+			state,
 			runner: (fake) => (runner = new ConsultationRunner(fake, agentListJson([]))),
 		});
 		const checkout = join(planeRecord.home, "src", "factory");
@@ -2104,11 +2040,8 @@ describe("Consultation attention through the UI", () => {
 		let runner: ConsultationRunner;
 		const state = freshState();
 		const paneId = `pane-${AWAITING_ID.slice(0, 8)}`;
-		const planeRecord = await plane({
-			existing: state,
-			sources: [],
-			config: { consultationTypes: grillTypes },
-			repos: { "github.com/acme/factory": "src/factory" },
+		const { planeRecord } = await consultationBoot({
+			state,
 			commands: (fake, home) => {
 				const _checkout = join(home, "src", "factory");
 				stubPaneReadText(fake, paneId, "Agent: waiting");
@@ -2151,18 +2084,9 @@ describe("Consultation attention through the UI", () => {
 describe("Consultation live-worktree launch through the UI", () => {
 	test("an existing checkout workspace receives the Consultation in a fresh tab", async () => {
 		let runner: ConsultationRunner;
-		const state = freshState();
-		const planeRecord = await plane({
-			existing: state,
-			sources: [],
+		const { state, planeRecord } = await consultationBoot({
 			config: { consultationTypes: liveGrillTypes },
-			repos: { "github.com/acme/factory": "src/factory" },
-			commands: (fake, home) => {
-				const checkout = join(home, "src", "factory");
-				stubLiveCheckout(fake, checkout, false);
-				stubLiveLaunchExisting(fake, checkout);
-				stubPaneReadText(fake, "pane-c1", "Agent: live answer");
-			},
+			commands: stubLiveExistingCheckout,
 			runner: (fake) => (runner = new ConsultationRunner(fake, agentListJson([]))),
 		});
 		const checkout = join(planeRecord.home, "src", "factory");
@@ -2277,12 +2201,8 @@ describe("Consultation live-worktree launch through the UI", () => {
 	});
 	test("a missing checkout workspace is created and uses its root pane", async () => {
 		let runner: ConsultationRunner;
-		const state = freshState();
-		const planeRecord = await plane({
-			existing: state,
-			sources: [],
+		const { state, planeRecord } = await consultationBoot({
 			config: { consultationTypes: liveGrillTypes },
-			repos: { "github.com/acme/factory": "src/factory" },
 			commands: (fake, home) => {
 				const checkout = join(home, "src", "factory");
 				stubLiveCheckout(fake, checkout, false);
@@ -2387,12 +2307,7 @@ describe("Consultation live-worktree launch through the UI", () => {
 			],
 			config: { consultationTypes: liveGrillTypes, maxParallelAgents: 4 },
 			repos: { "github.com/acme/factory": "src/factory" },
-			commands: (fake, home) => {
-				const checkout = join(home, "src", "factory");
-				stubLiveCheckout(fake, checkout, false);
-				stubLiveLaunchExisting(fake, checkout);
-				stubPaneReadText(fake, "pane-c1", "Agent: live answer");
-			},
+			commands: stubLiveExistingCheckout,
 			runner: (fake) => (runner = new ConsultationRunner(fake, agentListJson([]))),
 		});
 		const checkout = join(planeRecord.home, "src", "factory");
@@ -2609,18 +2524,9 @@ describe("Consultation live-worktree launch through the UI", () => {
 	});
 	test("a live checkout conflict blocks the launch until one explicit confirm", async () => {
 		let runner!: ConsultationRunner;
-		const state = freshState();
-		const planeRecord = await plane({
-			existing: state,
-			sources: [],
+		const { state, planeRecord } = await consultationBoot({
 			config: { consultationTypes: liveGrillTypes },
-			repos: { "github.com/acme/factory": "src/factory" },
-			commands: (fake, home) => {
-				const checkout = join(home, "src", "factory");
-				stubLiveCheckout(fake, checkout, false);
-				stubLiveLaunchExisting(fake, checkout);
-				stubPaneReadText(fake, "pane-c1", "Agent: live answer");
-			},
+			commands: stubLiveExistingCheckout,
 			runner: (fake) => (runner = new ConsultationRunner(fake, agentListJson([]))),
 		});
 		const checkout = join(planeRecord.home, "src", "factory");
@@ -2771,12 +2677,8 @@ describe("Consultation live-worktree launch through the UI", () => {
 	});
 	test("a dirty live checkout warns but never blocks the launch", async () => {
 		let runner: ConsultationRunner;
-		const state = freshState();
-		const planeRecord = await plane({
-			existing: state,
-			sources: [],
+		const { state, planeRecord } = await consultationBoot({
 			config: { consultationTypes: liveGrillTypes },
-			repos: { "github.com/acme/factory": "src/factory" },
 			commands: (fake, home) => {
 				const checkout = join(home, "src", "factory");
 				stubLiveCheckout(fake, checkout, true);
@@ -2816,11 +2718,9 @@ describe("Consultation live-worktree launch through the UI", () => {
 		// not the worktree and branch a worktree Consultation keeps.
 		// The Agent is alive at the recorded pane: the observation loop keeps
 		// the record working while the dialog stands.
-		const planeRecord = await plane({
-			existing: state,
-			sources: [],
+		const { planeRecord } = await consultationBoot({
+			state,
 			config: { consultationTypes: liveGrillTypes },
-			repos: { "github.com/acme/factory": "src/factory" },
 			runner: (fake) =>
 				(runner = new ConsultationRunner(
 					fake,
@@ -2871,11 +2771,8 @@ describe("Consultation response gating by observed Agent status", () => {
 		let runner: ConsultationRunner;
 		const state = freshState();
 		const paneId = `pane-${INTERACTION_ID.slice(0, 8)}`;
-		const planeRecord = await plane({
-			existing: state,
-			sources: [],
-			config: { consultationTypes: grillTypes },
-			repos: { "github.com/acme/factory": "src/factory" },
+		const { planeRecord } = await consultationBoot({
+			state,
 			commands: (fake, home) => {
 				const _checkout = join(home, "src", "factory");
 				stubPaneReadText(fake, paneId, "Agent: blocked on approval");
@@ -2939,11 +2836,8 @@ describe("Consultation response gating by observed Agent status", () => {
 		const state = freshState();
 		// The last settled turn was blocked, but the Agent itself is idle now.
 		const paneId = `pane-${INTERACTION_ID.slice(0, 8)}`;
-		const planeRecord = await plane({
-			existing: state,
-			sources: [],
-			config: { consultationTypes: grillTypes },
-			repos: { "github.com/acme/factory": "src/factory" },
+		const { planeRecord } = await consultationBoot({
+			state,
 			commands: (fake, home) => {
 				const _checkout = join(home, "src", "factory");
 				stubPaneReadText(fake, paneId, "Agent: now idle");
@@ -2997,11 +2891,8 @@ describe("Consultation response gating by observed Agent status", () => {
 		let runner: ConsultationRunner;
 		const state = freshState();
 		const paneId = `pane-${INTERACTION_ID.slice(0, 8)}`;
-		const planeRecord = await plane({
-			existing: state,
-			sources: [],
-			config: { consultationTypes: grillTypes },
-			repos: { "github.com/acme/factory": "src/factory" },
+		const { planeRecord } = await consultationBoot({
+			state,
 			commands: (fake, home) => {
 				const _checkout = join(home, "src", "factory");
 				stubPaneReadText(fake, paneId, "Agent: working");
@@ -3125,11 +3016,8 @@ describe("The full Consultation operator flow", () => {
 		let runner: ConsultationRunner;
 		const state = freshState();
 		const bells = countBells();
-		const planeRecord = await plane({
-			existing: state,
-			sources: [],
-			config: { consultationTypes: grillTypes },
-			repos: { "github.com/acme/factory": "src/factory" },
+		const { planeRecord } = await consultationBoot({
+			state,
 			commands: (fake, home) => {
 				const checkout = join(home, "src", "factory");
 				stubCheckout(fake, checkout);
@@ -3266,11 +3154,8 @@ describe("The full Consultation operator flow", () => {
 		// not jump the view onto it: the operator is watching the one it
 		// just created.
 		const t = (minutes: number) => new Date(Date.now() + minutes * 60_000).toISOString();
-		const planeRecord = await plane({
-			existing: state,
-			sources: [],
-			config: { consultationTypes: grillTypes },
-			repos: { "github.com/acme/factory": "src/factory" },
+		const { planeRecord } = await consultationBoot({
+			state,
 			commands: (fake, home) => {
 				const checkout = join(home, "src", "factory");
 				stubCheckout(fake, checkout);
@@ -3437,11 +3322,8 @@ describe("the Consultation detail reads the Agent's session record (ADR 0025)", 
 		const state = freshState();
 		const paneId = `pane-${WORKING_ID.slice(0, 8)}`;
 		const { dir, path } = seedRecord(WORKING_ID);
-		const planeRecord = await plane({
-			existing: state,
-			sources: [],
-			config: { consultationTypes: grillTypes },
-			repos: { "github.com/acme/factory": "src/factory" },
+		const { planeRecord } = await consultationBoot({
+			state,
 			runner: (fake) =>
 				(runner = new ConsultationRunner(
 					fake,
@@ -3502,11 +3384,8 @@ describe("the Consultation detail reads the Agent's session record (ADR 0025)", 
 		const workspaceId = `ws-${short}`;
 		const label = "factory-consultation-11111111";
 		const { dir, path } = seedRecord(WORKING_ID);
-		const planeRecord = await plane({
-			existing: state,
-			sources: [],
-			config: { consultationTypes: grillTypes },
-			repos: { "github.com/acme/factory": "src/factory" },
+		const { planeRecord } = await consultationBoot({
+			state,
 			commands: (fake, home) => {
 				const _checkout = join(home, "src", "factory");
 				fake.set("herdr", ["workspace", "get", workspaceId], {
@@ -3560,11 +3439,8 @@ describe("the Consultation detail reads the Agent's session record (ADR 0025)", 
 		const { dir, path } = seedRecord(closedId);
 		// herdr still lists the Agent as done, with the record it wrote:
 		// the closed detail can read it for the after-the-fact review.
-		const planeRecord = await plane({
-			existing: state,
-			sources: [],
-			config: { consultationTypes: grillTypes },
-			repos: { "github.com/acme/factory": "src/factory" },
+		const { planeRecord } = await consultationBoot({
+			state,
 			runner: (fake) =>
 				(runner = new ConsultationRunner(
 					fake,
@@ -3629,11 +3505,9 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 		let runner: ConsultationRunner;
 		const state = freshState();
 		const paneId = `pane-${seatId.slice(0, 8)}`;
-		const planeRecord = await plane({
-			existing: state,
-			sources: [],
-			config: { consultationTypes: grillTypes, maxParallelAgents: 1 },
-			repos: { "github.com/acme/factory": "src/factory" },
+		const { planeRecord } = await consultationBoot({
+			state,
+			config: { maxParallelAgents: 1 },
 			commands: (fake, home) => {
 				const checkout = join(home, "src", "factory");
 				stubCheckout(fake, checkout);
@@ -3722,18 +3596,9 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 	 */
 	test("a launch with a free seat starts the Consultation and stands no waits line", async () => {
 		let runner: ConsultationRunner;
-		const state = freshState();
-		const planeRecord = await plane({
-			existing: state,
-			sources: [],
-			config: { consultationTypes: grillTypes, maxParallelAgents: 1 },
-			repos: { "github.com/acme/factory": "src/factory" },
-			commands: (fake, home) => {
-				const checkout = join(home, "src", "factory");
-				stubCheckout(fake, checkout);
-				stubWorktreeLaunch(fake, checkout);
-				stubPaneReadText(fake, "pane-c1", "Agent: opened");
-			},
+		const { state, planeRecord } = await consultationBoot({
+			config: { maxParallelAgents: 1 },
+			commands: stubOpenedCheckout,
 			runner: (fake) =>
 				(runner = new ConsultationRunner(
 					fake,
@@ -3812,11 +3677,9 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 		const state = freshState();
 		// No seeded Consultation: nothing holds the one seat.
 		state.workQueue.setQueuePaused(true);
-		const planeRecord = await plane({
-			existing: state,
-			sources: [],
-			config: { consultationTypes: grillTypes, maxParallelAgents: 1 },
-			repos: { "github.com/acme/factory": "src/factory" },
+		const { planeRecord } = await consultationBoot({
+			state,
+			config: { maxParallelAgents: 1 },
 			commands: (fake, home) => {
 				const checkout = join(home, "src", "factory");
 				stubCheckout(fake, checkout);
@@ -3875,11 +3738,9 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 		let runner: ConsultationRunner;
 		const state = freshState();
 		const paneId = `pane-${seatId.slice(0, 8)}`;
-		const planeRecord = await plane({
-			existing: state,
-			sources: [],
-			config: { consultationTypes: grillTypes, maxParallelAgents: 1 },
-			repos: { "github.com/acme/factory": "src/factory" },
+		const { planeRecord } = await consultationBoot({
+			state,
+			config: { maxParallelAgents: 1 },
 			commands: (fake, home) => {
 				const checkout = join(home, "src", "factory");
 				stubCheckout(fake, checkout);
@@ -3945,17 +3806,10 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 		let runner: ConsultationRunner;
 		const state = freshState();
 		const seatPane = `pane-${seatId.slice(0, 8)}`;
-		const planeRecord = await plane({
-			existing: state,
-			sources: [],
-			config: { consultationTypes: grillTypes, maxParallelAgents: 1 },
-			repos: { "github.com/acme/factory": "src/factory" },
-			commands: (fake, home) => {
-				const checkout = join(home, "src", "factory");
-				stubCheckout(fake, checkout);
-				stubWorktreeLaunch(fake, checkout);
-				stubPaneReadText(fake, "pane-c1", "Agent: opened");
-			},
+		const { planeRecord } = await consultationBoot({
+			state,
+			config: { maxParallelAgents: 1 },
+			commands: stubOpenedCheckout,
 			runner: (fake) =>
 				(runner = new ConsultationRunner(
 					fake,
@@ -4035,17 +3889,10 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 		let runner: ConsultationRunner;
 		const state = freshState();
 		const seatPane = `pane-${seatId.slice(0, 8)}`;
-		const planeRecord = await plane({
-			existing: state,
-			sources: [],
-			config: { consultationTypes: grillTypes, maxParallelAgents: 1 },
-			repos: { "github.com/acme/factory": "src/factory" },
-			commands: (fake, home) => {
-				const checkout = join(home, "src", "factory");
-				stubCheckout(fake, checkout);
-				stubWorktreeLaunch(fake, checkout);
-				stubPaneReadText(fake, "pane-c1", "Agent: opened");
-			},
+		const { planeRecord } = await consultationBoot({
+			state,
+			config: { maxParallelAgents: 1 },
+			commands: stubOpenedCheckout,
 			runner: (fake) =>
 				(runner = new ConsultationRunner(
 					fake,
@@ -4179,12 +4026,8 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 	}
 	test("removing the queue item unschedules the record, and the record keeps standing", async () => {
 		let runner: ConsultationRunner;
-		const state = freshState();
-		const planeRecord = await plane({
-			existing: state,
-			sources: [],
-			config: { consultationTypes: grillTypes, maxParallelAgents: 1 },
-			repos: { "github.com/acme/factory": "src/factory" },
+		const { state, planeRecord } = await consultationBoot({
+			config: { maxParallelAgents: 1 },
 			commands: (fake, home) => {
 				const checkout = join(home, "src", "factory");
 				stubCheckout(fake, checkout);
@@ -4216,12 +4059,8 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 	});
 	test("the Consultation section schedules the unscheduled record back into the queue", async () => {
 		let runner: ConsultationRunner;
-		const state = freshState();
-		const planeRecord = await plane({
-			existing: state,
-			sources: [],
-			config: { consultationTypes: grillTypes, maxParallelAgents: 1 },
-			repos: { "github.com/acme/factory": "src/factory" },
+		const { state, planeRecord } = await consultationBoot({
+			config: { maxParallelAgents: 1 },
 			commands: (fake, home) => {
 				const checkout = join(home, "src", "factory");
 				stubCheckout(fake, checkout);
@@ -4290,17 +4129,10 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 		let runner: ConsultationRunner;
 		const state = freshState();
 		const seatPane = `pane-${seatId.slice(0, 8)}`;
-		const planeRecord = await plane({
-			existing: state,
-			sources: [],
-			config: { consultationTypes: grillTypes, maxParallelAgents: 1 },
-			repos: { "github.com/acme/factory": "src/factory" },
-			commands: (fake, home) => {
-				const checkout = join(home, "src", "factory");
-				stubCheckout(fake, checkout);
-				stubWorktreeLaunch(fake, checkout);
-				stubPaneReadText(fake, "pane-c1", "Agent: opened");
-			},
+		const { planeRecord } = await consultationBoot({
+			state,
+			config: { maxParallelAgents: 1 },
+			commands: stubOpenedCheckout,
 			runner: (fake) =>
 				(runner = new ConsultationRunner(
 					fake,
@@ -4351,17 +4183,10 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 		let runner: ConsultationRunner;
 		const state = freshState();
 		const seatPane = `pane-${seatId.slice(0, 8)}`;
-		const planeRecord = await plane({
-			existing: state,
-			sources: [],
-			config: { consultationTypes: grillTypes, maxParallelAgents: 1 },
-			repos: { "github.com/acme/factory": "src/factory" },
-			commands: (fake, home) => {
-				const checkout = join(home, "src", "factory");
-				stubCheckout(fake, checkout);
-				stubWorktreeLaunch(fake, checkout);
-				stubPaneReadText(fake, "pane-c1", "Agent: opened");
-			},
+		const { planeRecord } = await consultationBoot({
+			state,
+			config: { maxParallelAgents: 1 },
+			commands: stubOpenedCheckout,
 			runner: (fake) =>
 				(runner = new ConsultationRunner(
 					fake,
@@ -4419,12 +4244,8 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 	});
 	test("the Consultation section deletes the unscheduled record", async () => {
 		let runner: ConsultationRunner;
-		const state = freshState();
-		const planeRecord = await plane({
-			existing: state,
-			sources: [],
-			config: { consultationTypes: grillTypes, maxParallelAgents: 1 },
-			repos: { "github.com/acme/factory": "src/factory" },
+		const { state, planeRecord } = await consultationBoot({
+			config: { maxParallelAgents: 1 },
 			commands: (fake, home) => {
 				const checkout = join(home, "src", "factory");
 				stubCheckout(fake, checkout);

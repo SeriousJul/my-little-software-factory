@@ -336,6 +336,41 @@ function stubRunnerGate(
 }
 
 /**
+ * The ends of the starts the dead run made, beside the lines it wrote.
+ *
+ * A claim the previous run left unsettled settles `failed` at the open
+ * (ADR 0041), and that attempt is a start the factory made that never reached
+ * its Agent. The dead run wrote its `handoff started:` line and nothing after
+ * it, so this boot states the ending beside it: the record for one Ticket then
+ * answers how many starts were made and why each one ended (issue #295).
+ *
+ * The names come off one projection read (ADR 0093): the stored rows are the
+ * last titles the sources left in the state file, since the run that starts
+ * has fetched nothing yet and the starts these lines name belong to the run
+ * that ended. The name rule is the shared one, so the boot names a Ticket the
+ * way the dispatch named it in the line the dead run wrote (issue #295 review).
+ */
+function recoveredAttemptLines(
+	logger: Logger,
+	opened: Extract<StartupStateResult, { ok: true }>,
+	config: FactoryConfig,
+): void {
+	if (opened.recovered.length === 0) return;
+	const projection = opened.state.ticketWorkCycle.ticketProjection(
+		config.workflowStates,
+		config.defaultTaskType,
+	);
+	for (const attempt of opened.recovered) {
+		logger.warn(
+			handoffStartFailedLine(
+				recordTicketName(projection, attempt.ticketIdentity),
+				attempt.failureReason,
+			),
+		);
+	}
+}
+
+/**
  * The whole startup: the config, the model list check, and the state open,
  * in the boot order.
  *
@@ -383,31 +418,7 @@ export async function runStartup(configPath: string, worldPath?: string): Promis
 	// The recovery note lands after the warnings: it is the last of the boot's
 	// findings, and the state it opens already carries the repair.
 	for (const note of opened.notes) notes.push(note);
-	// A claim the previous run left unsettled settles `failed` at the open
-	// (ADR 0041), and that attempt is a start the factory made that never reached
-	// its Agent. The dead run wrote its `handoff started:` line and nothing after
-	// it, so this boot states the ending beside it: the record for one Ticket then
-	// answers how many starts were made and why each one ended (issue #295).
-	//
-	// The names come off one projection read (ADR 0093): the stored rows are the
-	// last titles the sources left in the state file, since the run that starts
-	// has fetched nothing yet and the starts these lines name belong to the run
-	// that ended. The name rule is the shared one, so the boot names a Ticket the
-	// way the dispatch named it in the line the dead run wrote (issue #295 review).
-	if (opened.recovered.length > 0) {
-		const projection = opened.state.ticketWorkCycle.ticketProjection(
-			loaded.config.workflowStates,
-			loaded.config.defaultTaskType,
-		);
-		for (const attempt of opened.recovered) {
-			logger.warn(
-				handoffStartFailedLine(
-					recordTicketName(projection, attempt.ticketIdentity),
-					attempt.failureReason,
-				),
-			);
-		}
-	}
+	recoveredAttemptLines(logger, opened, loaded.config);
 
 	const sources = loaded.config.sources.map((source) => createTicketSource(source, runner));
 	// The home directory the plane's checkout paths live under, resolved once
