@@ -504,6 +504,21 @@ describe("the live side", () => {
 		expect(herdrCode(closed)).toBe("tab_not_found");
 	});
 
+	test("a pane close takes the Agents it held, the way the other closes do", async () => {
+		const world = healthyWorld();
+		const closed = await world.run("herdr", ["pane", "close", "pane-1"]);
+		expect(closed.code).toBe(0);
+		const agents = await world.run("herdr", ["agent", "list"]);
+		const names = resultOf<{ agents: AgentRow[] }>(agents.stdout).agents.map((agent) => agent.name);
+		expect(names).not.toContain("worker-1");
+		// The Agent in a pane the close did not touch stands.
+		expect(names).toContain("settler-1");
+		// The cascade takes the empty tab and the empty workspace with the pane.
+		const listed = await world.run("herdr", ["pane", "list", "--workspace", "ws-1"]);
+		expect(listed.code).toBe(1);
+		expect(herdrCode(listed)).toBe("workspace_not_found");
+	});
+
 	test("a tab in a workspace the world does not hold is refused", async () => {
 		const world = healthyWorld();
 		const created = await world.run("herdr", [
@@ -709,7 +724,7 @@ describe("the Agent side", () => {
 		expect(missing.code).toBe(1);
 	});
 
-	test("an agent wait settles at a settle state and holds for every other target", async () => {
+	test("an agent wait settles at a settle state and holds for an Agent that has not settled", async () => {
 		const world = healthyWorld();
 		const settled = await world.run("herdr", [
 			"agent",
@@ -724,7 +739,7 @@ describe("the Agent side", () => {
 		]);
 		expect(settled.code).toBe(0);
 		// The working Agent holds, the way the real command blocks: the command
-		// is recorded, and it never settles.
+		// is recorded, and it does not settle until a settle move.
 		const held = world.run("herdr", [
 			"agent",
 			"wait",
@@ -744,6 +759,51 @@ describe("the Agent side", () => {
 			"herdr agent wait worker-1 --until idle --until done --until blocked",
 		);
 		void held;
+	});
+
+	test("a settle move releases the held wait, the way the real block ends", async () => {
+		const world = healthyWorld();
+		const waiting = world.run("herdr", [
+			"agent",
+			"wait",
+			"worker-1",
+			"--until",
+			"idle",
+			"--until",
+			"done",
+			"--until",
+			"blocked",
+		]);
+		await Promise.resolve();
+		expect(world.settledCommands()).not.toContain(
+			"herdr agent wait worker-1 --until idle --until done --until blocked",
+		);
+		world.setAgentStatus("worker-1", "done");
+		const waited = await waiting;
+		expect(waited.code).toBe(0);
+		expect(world.settledCommands()).toContain(
+			"herdr agent wait worker-1 --until idle --until done --until blocked",
+		);
+	});
+
+	test("a wait for a target the world does not hold is refused, never a hold", async () => {
+		const world = healthyWorld();
+		const refused = await world.run("herdr", [
+			"agent",
+			"wait",
+			"worker-gone",
+			"--until",
+			"idle",
+			"--until",
+			"done",
+			"--until",
+			"blocked",
+		]);
+		expect(refused.code).toBe(1);
+		expect(herdrCode(refused)).toBe("agent_not_found");
+		expect(world.settledCommands()).toContain(
+			"herdr agent wait worker-gone --until idle --until done --until blocked",
+		);
 	});
 
 	test("a setAgentStatus move stands the next list and the wait the plane reads", async () => {
@@ -1260,6 +1320,30 @@ describe("the closed surface", () => {
 		expect(fresh).toBeDefined();
 		const workspaceId = fresh?.open_workspace_id as string;
 		await settled("herdr", ["worktree", "remove", "--workspace", workspaceId]);
+
+		// The held `agent wait` is not a refusal: it is recorded, and it does
+		// not settle while the target has not settled, the way the real
+		// command blocks. It walks before the closes, because a close of the
+		// target's pane removes the Agent and the wait holds on.
+		const heldWait = world.run("herdr", [
+			"agent",
+			"wait",
+			"worker-1",
+			"--until",
+			"idle",
+			"--until",
+			"done",
+			"--until",
+			"blocked",
+		]);
+		await Promise.resolve();
+		expect(world.commands()).toContain(
+			"herdr agent wait worker-1 --until idle --until done --until blocked",
+		);
+		expect(world.settledCommands()).not.toContain(
+			"herdr agent wait worker-1 --until idle --until done --until blocked",
+		);
+
 		await settled("herdr", ["tab", "close", "tab-1"]);
 		await settled("herdr", ["workspace", "close", "ws-1"]);
 
@@ -1349,23 +1433,9 @@ describe("the closed surface", () => {
 		await settled("git", ["-C", CHECKOUT, "show", "origin/main:docs/agents/issue-tracker.md"]);
 		await settled("git", ["clone", CLONE_URL, "/home/jul/src/factory_2"]);
 
-		// The held `agent wait` is not a refusal: it is recorded, and it does
-		// not settle, the way the real command blocks.
-		const heldWait = world.run("herdr", [
-			"agent",
-			"wait",
-			"worker-1",
-			"--until",
-			"idle",
-			"--until",
-			"done",
-			"--until",
-			"blocked",
-		]);
-		await Promise.resolve();
-		expect(world.commands()).toContain(
-			"herdr agent wait worker-1 --until idle --until done --until blocked",
-		);
+		// The held wait of the herdr walk still holds: its target left the
+		// world without a settle move, the way a vanished Agent holds its
+		// real block.
 		expect(world.settledCommands()).not.toContain(
 			"herdr agent wait worker-1 --until idle --until done --until blocked",
 		);

@@ -14,7 +14,10 @@
  * never a code-zero fallback. The one behaviour kept from the fake command
  * runner is the held `agent wait`, because a real `agent wait` blocks until
  * its state match and a code-zero answer would wake the observation cycle on
- * every armed Agent.
+ * every armed Agent. A wait the world holds answers code zero the moment
+ * `setAgentStatus` moves its target to a settle state, and a wait for a
+ * target the world does not hold is a refusal, the way the real command
+ * refuses it.
  *
  * The recording keeps the fake runner's shape: the recorded command list, the
  * settled command list, and the peak concurrency stand exactly as the fake
@@ -36,6 +39,10 @@ import type {
 
 /** The settle states a pinned `agent wait` answers at once. */
 const WAIT_SETTLE_STATES = ["idle", "done", "blocked"] as const;
+
+/** Whether one status is a settle state the pinned `agent wait` answers on. */
+const isSettleState = (status: string): boolean =>
+	WAIT_SETTLE_STATES.includes(status as (typeof WAIT_SETTLE_STATES)[number]);
 
 // ---------------------------------------------------------------------------
 // The world description: the standing a test names.
@@ -299,6 +306,8 @@ export interface StubHerdrWorld extends CommandRunner {
 	 * Move the standing of one Agent the world holds: the status the next
 	 * `agent list` reports, and the session record path the turn log reads
 	 * from. A name the world does not hold is a refusal, not a quiet add.
+	 * A move to a settle state releases every `agent wait` the world holds
+	 * on that Agent, the way the real block ends on its state match.
 	 */
 	setAgentStatus(name: string, status: string, sessionId?: string): void;
 	/** The text chunks a `pane send-text` reached one pane, in send order. */
@@ -430,6 +439,21 @@ export function stubHerdrWorld(description: HerdrWorldDescription): StubHerdrWor
 	const sentText = new Map<string, string[]>();
 	const sentKeys = new Map<string, string[]>();
 
+	/**
+	 * The held `agent wait`s, by target name: each resolver settles its
+	 * caller the moment `setAgentStatus` moves the target to a settle state,
+	 * the way the real block ends on its state match.
+	 */
+	const heldWaits = new Map<string, Array<() => void>>();
+
+	/** Release every held `agent wait` on one target, with its code-zero answer. */
+	const releaseHeldWaits = (name: string): void => {
+		const resolvers = heldWaits.get(name);
+		if (resolvers === undefined) return;
+		heldWaits.delete(name);
+		for (const resolve of resolvers) resolve();
+	};
+
 	const key = (command: string, args: readonly string[]): string =>
 		[command, ...args].join("\u0000");
 
@@ -550,7 +574,7 @@ export function stubHerdrWorld(description: HerdrWorldDescription): StubHerdrWor
 		return { code: 1, stdout: "", stderr: `${JSON.stringify(envelope)}\n` };
 	};
 
-	const answerHerdr = (args: readonly string[]): CommandResult | "hold" => {
+	const answerHerdr = (args: readonly string[]): CommandResult | Promise<CommandResult> => {
 		const verb = args[0];
 		switch (verb) {
 			case "agent":
@@ -568,7 +592,7 @@ export function stubHerdrWorld(description: HerdrWorldDescription): StubHerdrWor
 		}
 	};
 
-	const answerAgent = (args: readonly string[]): CommandResult | "hold" => {
+	const answerAgent = (args: readonly string[]): CommandResult | Promise<CommandResult> => {
 		const sub = args[1];
 		switch (sub) {
 			case "list":
@@ -618,17 +642,20 @@ export function stubHerdrWorld(description: HerdrWorldDescription): StubHerdrWor
 
 	/**
 	 * The pinned `agent wait`: the one block the fake runner's fallback models.
-	 * A settle state the world holds answers at once, and every other target
-	 * holds, the way the real command blocks.
+	 * A settle state the world holds answers at once, a target the world does
+	 * not hold is a refusal, and every other target holds, the way the real
+	 * command blocks, until `setAgentStatus` moves it to a settle state.
 	 */
-	const answerAgentWait = (target: string | undefined): CommandResult | "hold" => {
-		const agent = target !== undefined ? agents.get(target) : undefined;
-		if (
-			agent !== undefined &&
-			WAIT_SETTLE_STATES.includes(agent.status as (typeof WAIT_SETTLE_STATES)[number])
-		)
-			return { code: 0, stdout: "", stderr: "" };
-		return "hold";
+	const answerAgentWait = (target: string | undefined): CommandResult | Promise<CommandResult> => {
+		if (target === undefined) return unmodelled("herdr agent wait");
+		const agent = agents.get(target);
+		if (agent === undefined) return herdrError("agent_not_found", `no agent named ${target}`);
+		if (isSettleState(agent.status)) return { code: 0, stdout: "", stderr: "" };
+		return new Promise<CommandResult>((resolve) => {
+			const waiters = heldWaits.get(target) ?? [];
+			waiters.push(() => resolve({ code: 0, stdout: "", stderr: "" }));
+			heldWaits.set(target, waiters);
+		});
 	};
 
 	const answerAgentRead = (paneId: string | undefined): CommandResult => {
@@ -724,12 +751,16 @@ export function stubHerdrWorld(description: HerdrWorldDescription): StubHerdrWor
 		return unmodelled(`herdr pane ${sub}`);
 	};
 
-	/** `pane close`: the pane goes away, and its empty tab or workspace with it. */
+	/**
+	 * `pane close`: the pane goes away, and the Agents it held, its empty
+	 * tab, and its empty workspace with it, the way the other closes run.
+	 */
 	const answerPaneClose = (paneId: string): CommandResult => {
 		const pane = panes.get(paneId);
 		if (pane === undefined)
 			return herdrError("pane_not_found", `pane ${paneId} not found`, "cli:pane:close");
 		panes.delete(paneId);
+		removeAgentsInPanes(new Set([paneId]));
 		const tab = tabs.get(pane.tabId);
 		if (tab !== undefined && ![...panes.values()].some((item) => item.tabId === tab.id)) {
 			tabs.delete(tab.id);
@@ -1387,8 +1418,14 @@ export function stubHerdrWorld(description: HerdrWorldDescription): StubHerdrWor
 		stderr: `the Stub herdr world answers no ${name}\n`,
 	});
 
-	/** The world's own answer for one command, or the hold for the `agent wait`. */
-	const worldAnswer = (command: string, args: readonly string[]): CommandResult | "hold" => {
+	/**
+	 * The world's own answer for one command, or the held promise for an
+	 * `agent wait` whose target has not settled yet.
+	 */
+	const worldAnswer = (
+		command: string,
+		args: readonly string[],
+	): CommandResult | Promise<CommandResult> => {
 		if (command === "herdr") return answerHerdr(args);
 		if (command === "git") return answerGit(args);
 		return unmodelled(`${command} ${args.join(" ")}`);
@@ -1414,10 +1451,14 @@ export function stubHerdrWorld(description: HerdrWorldDescription): StubHerdrWor
 			const next = sequence !== undefined && sequence.length > 0 ? sequence.shift() : undefined;
 			const override = next ?? overrides.get(k);
 			const answer = override ?? worldAnswer(command, args);
-			if (answer === "hold") {
-				// The held `agent wait`: it stays counted as running, the way the
-				// fake's blocking fallback does.
-				return new Promise<CommandResult>(() => undefined);
+			if (answer instanceof Promise) {
+				// The held `agent wait`: it stays counted as running, the way
+				// the fake's blocking fallback does, until the settle move
+				// releases it.
+				const result = await answer;
+				running -= 1;
+				settled.push({ command, args });
+				return result;
 			}
 			running -= 1;
 			settled.push({ command, args });
@@ -1503,6 +1544,7 @@ export function stubHerdrWorld(description: HerdrWorldDescription): StubHerdrWor
 			if (agent === undefined) throw new Error(`the world holds no agent named ${name}`);
 			agent.status = status;
 			agent.sessionId = sessionId;
+			if (isSettleState(status)) releaseHeldWaits(name);
 		},
 		sentTextFor(paneId: string): string[] {
 			return [...(sentText.get(paneId) ?? [])];
