@@ -903,14 +903,14 @@ queue: the Work queue resumed
 
 A mode flip the state file refused states itself as what it is - the line lands
 beside the Message line that names the state file it could not write, and the
-next run reads the mode the file still holds. A plane running with no state file
-states the same limit, because nothing will read the flip back. A queue pause
-the state file refused leaves its line beside its Message line the same way, and
-the brake stays where it stood (issue #223 review):
+next run reads the mode the file still holds. The plane always runs on a state
+file now (issue #366), so a write the state file refused is the session-only
+limit's only cause. A queue pause the state file refused leaves its line
+beside its Message line the same way, and the brake stays where it stood
+(issue #223 review):
 
 ```text
 mode: auto-handoff is on for this session only: cannot store the Auto-handoff mode at /path/to/state.sqlite: Error: no such table: auto_handoff_mode
-mode: auto-handoff is on for this session only: the plane runs with no state file
 queue: the Work queue pause did not move: cannot store the queue pause at /path/to/state.sqlite: Error: no such table: queue_pause
 ```
 

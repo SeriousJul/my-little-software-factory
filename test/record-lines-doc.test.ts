@@ -297,8 +297,10 @@ describe("the record lines the configuration reference states", () => {
 				guide: "queue: the Work queue pause did not move:",
 			},
 			{
-				code: " for this session only: the plane runs with no state file",
-				guide: "for this session only: the plane runs with no state file",
+				// The plane always runs on a state file now (issue #366), so the
+				// session-only line stands beside a refused write's reason alone.
+				code: " for this session only: ",
+				guide: "for this session only: ",
 			},
 		];
 		for (const { code, guide: line } of keyFactLines) {
